@@ -29,3 +29,28 @@ feasible under the +8%/week cap.
 
 ### Current training volume
 - ~16,800 m/week at onboarding.
+
+### Training history (context for load management)
+- **Feb 2025:** started from minimal fitness / injury recovery.
+- **Feb → late Dec 2025:** ramped heavily.
+- **late Dec 2025 → Feb 2026:** illness stalled training.
+- **Feb → mid-May 2026:** ramped again, ending with an injury/illness —
+  **anaphylactic shock**.
+- **June 2026 → now:** restarted the ramp (~6 weeks of rebuild at onboarding).
+
+**Coaching implication:** two significant interruptions in ~18 months and a
+recent (May 2026) anaphylaxis mean the current 16,800 m/week is a *freshly
+rebuilt* base, not a durable one. Bias toward consistency over heroics; respect
+the +8%/week cap strictly; treat large single-session spikes (e.g. the 7/9
+5-hour swim) as real injury/illness risk per the Garmin single-session finding;
+ensure emergency meds/support on open-water swims given the anaphylaxis history.
+
+### 2026-07-05 — Week 28/29 rebuilt around real events
+- **W28** rewritten: the **Thu 7/9 Lucky Peak 5-hour swim** is the week's long
+  swim (~15k, easy Z2, fueling rehearsal), replacing the engine's default
+  Saturday 6.1k. Fri–Sun weighted to recovery; coached Friday pool flagged
+  easy/optional. Week total ~25,500 m (a deliberate milestone spike).
+- **W29** built as a mini-taper into the **Sat 7/18 Bear Lake Monster 10K**
+  (B race) — treated as a Greece dress rehearsal (kayak support, fueling,
+  sighting, negative-split), not an all-out effort. Week total ~17,500 m.
+- Rationale for each is stored in the week files' `adaptation_rationale`.

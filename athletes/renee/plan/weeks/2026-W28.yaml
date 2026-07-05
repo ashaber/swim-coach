@@ -1,95 +1,96 @@
 schema_version: 1
-id: a90f13d9-9071-47bd-b594-18bd331138fd
+id: 07471bad-e8c4-4243-80c5-7ecb8dbdd726
 athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
 iso_week: 2026-W28
 meso_block: base
-focus: aerobic base
-target_volume_m: 18540
+focus: "aerobic base \u2014 anchored by the 5-hour Lucky Peak milestone swim"
+target_volume_m: 25500
 sessions:
 - schema_version: 1
-  id: 0256bad0-216b-4f73-bac3-f10737c7903e
+  id: c15def1d-7d78-4b78-91ae-33e71c0530c3
   athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
   date: '2026-07-06'
   sport: swim_pool
   source: pool_coach
-  duration_min: 75.0
+  duration_min: 90.0
   distance_m: 3500
   intensity:
     anchor: rpe
-  purpose: "coached pool practice \u2014 content assigned by pool coach after session"
+  purpose: "coached USMS pool \u2014 content assigned by coach"
   structure: null
   status: planned
 - schema_version: 1
-  id: f08aacd4-eb81-4d1c-8f5d-1311a4234681
-  athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
-  date: '2026-07-08'
-  sport: swim_pool
-  source: pool_coach
-  duration_min: 75.0
-  distance_m: 3500
-  intensity:
-    anchor: rpe
-  purpose: "coached pool practice \u2014 content assigned by pool coach after session"
-  structure: null
-  status: planned
-- schema_version: 1
-  id: f92b3fbf-4819-471e-80e3-9e4ce39bbf16
-  athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
-  date: '2026-07-10'
-  sport: swim_pool
-  source: pool_coach
-  duration_min: 75.0
-  distance_m: 3500
-  intensity:
-    anchor: rpe
-  purpose: "coached pool practice \u2014 content assigned by pool coach after session"
-  structure: null
-  status: planned
-- schema_version: 1
-  id: 295c164b-7c3a-4993-acbf-2ed9c792a499
-  athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
-  date: '2026-07-11'
-  sport: swim_ow
-  source: ai_coach
-  duration_min: 98.6
-  distance_m: 6100
-  intensity:
-    zone: Z2
-    anchor: css_pace
-  purpose: "long open-water swim \u2014 endurance and fueling-practice anchor of the\
-    \ week"
-  structure: null
-  status: planned
-- schema_version: 1
-  id: de746bbc-6539-431b-bd5a-a4fee6f2be39
+  id: bd09171e-d74b-4914-9588-be30929299cd
   athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
   date: '2026-07-07'
   sport: strength
   source: ai_coach
-  duration_min: 45.0
+  duration_min: 40.0
   distance_m: null
   intensity:
     anchor: rpe
-  purpose: "dryland shoulder strength \u2014 reduces shoulder injury/pain risk (ROADMAP.md\
-    \ research sources: dryland shoulder work)"
+  purpose: "dryland shoulder strength \u2014 moderate (2 days before the 5-hour swim)"
   structure: null
   status: planned
 - schema_version: 1
-  id: c80ff43c-4da5-4a28-8f61-8ad2cb8c320a
+  id: 269ba5eb-b2bc-438e-b247-1e0bef499b4c
+  athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
+  date: '2026-07-08'
+  sport: swim_pool
+  source: pool_coach
+  duration_min: 90.0
+  distance_m: 3500
+  intensity:
+    anchor: rpe
+  purpose: "coached USMS pool \u2014 request EASY, day before the 5-hour swim"
+  structure: null
+  status: planned
+- schema_version: 1
+  id: 1d5bf027-3110-42a0-ba09-b058815e4193
   athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
   date: '2026-07-09'
-  sport: strength
+  sport: swim_ow
   source: ai_coach
-  duration_min: 45.0
-  distance_m: null
+  duration_min: 300.0
+  distance_m: 15000
+  intensity:
+    zone: Z2
+    anchor: css_pace
+  purpose: "Lucky Peak 5-HOUR swim \u2014 fueling & durability rehearsal for Greece"
+  structure: "Easy Z2 (~2:00/100m). Feed every 20-30 min, 60-90g carb/hr (2:1 glu:fru).\
+    \ Cap by TIME (5h) not distance. Abort on chest/breathing symptoms, disorientation,\
+    \ or hives (anaphylaxis history) \u2014 carry meds/support."
+  status: planned
+- schema_version: 1
+  id: 8db1ca00-a722-4c02-832e-cccfccf1ac57
+  athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
+  date: '2026-07-10'
+  sport: swim_pool
+  source: pool_coach
+  duration_min: 90.0
+  distance_m: 3500
   intensity:
     anchor: rpe
-  purpose: "dryland shoulder strength \u2014 reduces shoulder injury/pain risk (ROADMAP.md\
-    \ research sources: dryland shoulder work)"
+  purpose: "coached USMS pool \u2014 ATTEND EASY or substitute recovery (day after\
+    \ 5-hour swim)"
   structure: null
   status: planned
 - schema_version: 1
-  id: cc1ca026-a357-4202-8436-63ea28c721ac
+  id: 56e62c0c-c217-402c-8e4d-235e7e32efc6
+  athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
+  date: '2026-07-11'
+  sport: recovery
+  source: ai_coach
+  duration_min: 30.0
+  distance_m: null
+  intensity:
+    zone: Z1
+    anchor: rpe
+  purpose: "easy mobility / light movement \u2014 recover from the 5-hour swim"
+  structure: null
+  status: planned
+- schema_version: 1
+  id: d821fe76-ecbd-473c-a096-2b634a80f22e
   athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
   date: '2026-07-12'
   sport: recovery
@@ -99,22 +100,15 @@ sessions:
   intensity:
     zone: Z1
     anchor: rpe
-  purpose: mobility / full rest
+  purpose: full rest or gentle mobility
   structure: null
   status: planned
-- schema_version: 1
-  id: 61326b83-553b-4131-ae46-adc761b64a96
-  athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
-  date: '2026-07-06'
-  sport: swim_ow
-  source: ai_coach
-  duration_min: 31.4
-  distance_m: 1940
-  intensity:
-    zone: Z2
-    anchor: css_pace
-  purpose: additional pool-independent aerobic volume
-  structure: null
-  status: planned
-adaptation_rationale: null
+adaptation_rationale: "Rebuilt around real events. Thursday 7/9 Lucky Peak 5-hour\
+  \ swim is THIS week's long swim (~15k, easy Z2 ~2:00/100m) and a fueling/durability\
+  \ rehearsal for Greece \u2014 NOT the engine's default Saturday 6.1k. This is a\
+  \ large single-session spike (~90% of a normal week's volume in one swim); given\
+  \ the Feb-2025 injury restart, Dec-2025 illness, and May-2026 anaphylaxis, cap by\
+  \ TIME not distance, keep pace genuinely easy, fuel 60-90g carb/hr every 20-30 min,\
+  \ and abort on any concerning symptom. Fri-Sun weighted to recovery; coached Friday\
+  \ pool should be easy or skipped."
 draft: false

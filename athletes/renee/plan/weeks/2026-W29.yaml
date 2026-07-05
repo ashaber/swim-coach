@@ -1,0 +1,109 @@
+schema_version: 1
+id: b1195ce5-3f83-45aa-ae51-e00e499d0981
+athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
+iso_week: 2026-W29
+meso_block: base
+focus: mini-taper into Bear Lake Monster 10K (B race / Greece dress rehearsal)
+target_volume_m: 17500
+sessions:
+- schema_version: 1
+  id: 062349eb-ec93-4a8e-a9aa-8f4f5c51a276
+  athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
+  date: '2026-07-13'
+  sport: swim_pool
+  source: pool_coach
+  duration_min: 90.0
+  distance_m: 3000
+  intensity:
+    anchor: rpe
+  purpose: "coached USMS pool \u2014 EASY, recovering from the 5-hour swim + race\
+    \ week"
+  structure: null
+  status: planned
+- schema_version: 1
+  id: 553efbb6-2759-4119-abdb-017513b2dfd1
+  athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
+  date: '2026-07-14'
+  sport: strength
+  source: ai_coach
+  duration_min: 30.0
+  distance_m: null
+  intensity:
+    anchor: rpe
+  purpose: "dryland shoulder strength \u2014 light, race week"
+  structure: null
+  status: planned
+- schema_version: 1
+  id: 38c603f1-fdf4-491f-bf42-62cb9b8f86af
+  athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
+  date: '2026-07-15'
+  sport: swim_pool
+  source: pool_coach
+  duration_min: 90.0
+  distance_m: 3000
+  intensity:
+    anchor: rpe
+  purpose: "coached USMS pool \u2014 moderate, a few race-pace 100s"
+  structure: null
+  status: planned
+- schema_version: 1
+  id: 2b0e9244-b930-4c39-9276-08f951ff7a7d
+  athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
+  date: '2026-07-16'
+  sport: swim_ow
+  source: ai_coach
+  duration_min: 30.0
+  distance_m: 1500
+  intensity:
+    zone: Z2
+    anchor: css_pace
+  purpose: "easy open-water shakeout \u2014 sighting practice, open-water feel"
+  structure: null
+  status: planned
+- schema_version: 1
+  id: 551d03bc-b93e-404b-a91f-bc5ea3f63f79
+  athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
+  date: '2026-07-17'
+  sport: recovery
+  source: ai_coach
+  duration_min: 20.0
+  distance_m: null
+  intensity:
+    zone: Z1
+    anchor: rpe
+  purpose: rest / travel / short pre-race activation
+  structure: null
+  status: planned
+- schema_version: 1
+  id: c79999f8-61cf-455d-908e-bf5f843cf97e
+  athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
+  date: '2026-07-18'
+  sport: swim_ow
+  source: ai_coach
+  duration_min: 180.0
+  distance_m: 10000
+  intensity:
+    anchor: rpe
+  purpose: "Bear Lake Monster 10K (B race) \u2014 dress rehearsal: negative-split,\
+    \ practice fueling + kayak support, controlled effort"
+  structure: null
+  status: planned
+- schema_version: 1
+  id: c599bcb5-1760-4758-8d87-3bd33fabbc8e
+  athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
+  date: '2026-07-19'
+  sport: recovery
+  source: ai_coach
+  duration_min: 30.0
+  distance_m: null
+  intensity:
+    zone: Z1
+    anchor: rpe
+  purpose: recovery / easy mobility post-race
+  structure: null
+  status: planned
+adaptation_rationale: "B-race week. Bear Lake 10K on Sat 7/18 is a low-priority tune-up\
+  \ \u2014 treat it as a dress rehearsal for Greece (kayak support, fueling, sighting,\
+  \ negative-split), not an all-out race. Short taper (a few easy days) rather than\
+  \ a full one; volume kept modest coming off last week's 5-hour swim."
+draft: false
