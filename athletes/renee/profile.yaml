@@ -1,0 +1,50 @@
+schema_version: 1
+id: 19250c9f-945e-4578-b6c7-550a89553577
+slug: renee
+name: Renee
+css_pace_s_per_100m: 90.0
+zones:
+  Z1:
+    name: Z1
+    lo_offset: 10.0
+    hi_offset: null
+    pace_lo_s: 100.0
+    pace_hi_s: null
+  Z2:
+    name: Z2
+    lo_offset: 5.0
+    hi_offset: 9.0
+    pace_lo_s: 95.0
+    pace_hi_s: 99.0
+  Z3:
+    name: Z3
+    lo_offset: 2.0
+    hi_offset: 4.0
+    pace_lo_s: 92.0
+    pace_hi_s: 94.0
+  Z4:
+    name: Z4
+    lo_offset: -1.0
+    hi_offset: 1.0
+    pace_lo_s: 89.0
+    pace_hi_s: 91.0
+  Z5:
+    name: Z5
+    lo_offset: null
+    hi_offset: -2.0
+    pace_lo_s: null
+    pace_hi_s: 88.0
+constraints:
+  hrv_source: Oura ring
+  coached_pool: USMS, coach-planned, 90 min, Mon/Wed/Fri
+  event_suit_decision: 'undecided: sleeveless wetsuit vs skinsuit vs naked (skins)'
+pool_schedule:
+- day: monday
+  duration_min: 90
+  source: USMS coached
+- day: wednesday
+  duration_min: 90
+  source: USMS coached
+- day: friday
+  duration_min: 90
+  source: USMS coached
