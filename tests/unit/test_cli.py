@@ -330,3 +330,27 @@ def test_plan_week_refuses_overwrite_without_force(athlete_tree, capsys):
         "--force",
     )
     assert code == 0
+
+
+def test_plan_week_uses_event_format_from_events_yaml(athlete_tree, capsys):
+    # The fixture event defaults to event_format="single_day"; flip it to
+    # multi_day_stage and confirm plan-week picks that up from events.yaml
+    # (via the macro's event_id) rather than hard-defaulting to single_day.
+    store = athlete_tree["store"]
+    slug = athlete_tree["slug"]
+    events = store.load_events(slug)
+    events[0].event_format = "multi_day_stage"
+    store.save_events(slug, events)
+
+    macro = _scaffold(athlete_tree, capsys)
+    week_start = macro.blocks[0].start_date
+    iso_week = _iso_week(week_start)
+
+    code = _run(
+        athlete_tree["base_dir"], "plan-week", "--athlete", slug, "--week", iso_week
+    )
+    assert code == 0
+    capsys.readouterr()
+    week = store.load_week(slug, iso_week)
+    long_swims = [s for s in week.sessions if s.sport == "swim_ow"]
+    assert {s.date.weekday() for s in long_swims} == {5, 6}

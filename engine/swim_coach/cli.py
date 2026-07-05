@@ -202,6 +202,21 @@ def _cmd_scaffold_macro(args: argparse.Namespace, store: FileStore) -> int:
     return 0
 
 
+def _event_format_for_macro(store: FileStore, slug: str, macro) -> str:
+    """Look up the macro's Event and return its event_format, defaulting to
+    "single_day" if the event can't be found (e.g. deleted from events.yaml
+    after the macro was scaffolded) -- never let a lookup miss crash
+    plan-week, since single_day is also Event's own model default."""
+    try:
+        events = store.load_events(slug)
+    except Exception:  # noqa: BLE001
+        return "single_day"
+    for event in events:
+        if event.id == macro.event_id:
+            return event.event_format
+    return "single_day"
+
+
 def _cmd_plan_week(args: argparse.Namespace, store: FileStore) -> int:
     slug = args.athlete
     try:
@@ -228,8 +243,9 @@ def _cmd_plan_week(args: argparse.Namespace, store: FileStore) -> int:
             f"week {args.week} already exists and is not a draft; pass --force to overwrite"
         )
 
+    event_format = _event_format_for_macro(store, slug, macro)
     try:
-        week = generate_week(athlete, macro, args.week, week_start)
+        week = generate_week(athlete, macro, args.week, week_start, event_format=event_format)
     except ValueError as exc:
         return _error(str(exc))
 
