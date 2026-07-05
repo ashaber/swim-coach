@@ -17,14 +17,23 @@ import argparse
 import json
 from datetime import date
 from pathlib import Path
+from uuid import uuid4
 
 import yaml
+from pydantic import ValidationError
 
 from swim_coach.models import Event, Wellness, WeekPlan, Workout
 from swim_coach.parse_coach_text import parse_coach_text
+from swim_coach.parse_files import parse_csv, parse_fit, parse_tcx
 from swim_coach.plan import generate_week, scaffold_macro
 from swim_coach.store import FileStore
 from swim_coach.zones import css_from_test, zone_table
+
+_INGEST_PARSERS_BY_EXT = {
+    ".tcx": parse_tcx,
+    ".csv": parse_csv,
+    ".fit": parse_fit,
+}
 
 
 def parse_time_to_s(value: str) -> float:
@@ -284,6 +293,65 @@ def _cmd_parse_coach_text(args: argparse.Namespace, store: FileStore) -> int:
     return 0
 
 
+def _cmd_ingest(args: argparse.Namespace, store: FileStore) -> int:
+    slug = args.athlete
+    path = Path(args.file)
+    parser_fn = _INGEST_PARSERS_BY_EXT.get(path.suffix.lower())
+    if parser_fn is None:
+        return _error(
+            f"unsupported file extension {path.suffix!r}; expected one of "
+            f"{sorted(_INGEST_PARSERS_BY_EXT)}"
+        )
+
+    try:
+        draft = parser_fn(path)
+    except (OSError, ValueError) as exc:
+        return _error(str(exc), file=str(path))
+
+    if args.date:
+        draft.date = date.fromisoformat(args.date)
+    if args.rpe is not None:
+        draft.rpe = args.rpe
+    if args.sport:
+        draft.sport = args.sport
+
+    output: dict[str, object] = {"athlete": slug, **draft.model_dump(mode="json")}
+
+    if args.save:
+        try:
+            athlete = store.load_athlete(slug)
+        except Exception as exc:  # noqa: BLE001
+            return _error_from_exception(store.base_dir / slug / "profile.yaml", exc)
+
+        try:
+            workout = Workout(
+                id=uuid4(),
+                athlete_id=athlete.id,
+                date=draft.date,
+                sport=draft.sport,
+                source=draft.source,
+                distance_m=draft.distance_m,
+                duration_min=draft.duration_min,
+                avg_pace_s_per_100m=draft.avg_pace_s_per_100m,
+                rpe=draft.rpe,
+                sets=draft.sets,
+                planned_session_id=draft.planned_session_id,
+                raw_ref=draft.raw_ref,
+                notes=draft.notes,
+            )
+        except ValidationError as exc:
+            return _error(str(exc))
+
+        store.save_workout(slug, workout)
+        output["saved"] = True
+        output["workout_id"] = str(workout.id)
+    else:
+        output["saved"] = False
+
+    print(json.dumps(output))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m swim_coach.cli")
     parser.add_argument("--base-dir", default="athletes", help="athlete data root (default: athletes)")
@@ -319,6 +387,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_parse_coach_text.add_argument("--date", help="YYYY-MM-DD, default today")
     p_parse_coach_text.add_argument("--force", action="store_true")
 
+    p_ingest = subparsers.add_parser(
+        "ingest", help="parse a .tcx/.csv/.fit workout export into a draft, optionally save it"
+    )
+    p_ingest.add_argument("--athlete", required=True)
+    p_ingest.add_argument("--file", required=True)
+    p_ingest.add_argument("--date", help="YYYY-MM-DD, overrides the parsed date")
+    p_ingest.add_argument("--rpe", type=int, help="1-10, overrides/sets the parsed rpe")
+    p_ingest.add_argument(
+        "--sport", choices=["swim_pool", "swim_ow", "strength", "recovery"], help="overrides the parsed sport"
+    )
+    p_ingest.add_argument("--save", action="store_true", help="persist the draft as a Workout")
+
     return parser
 
 
@@ -328,6 +408,7 @@ _COMMANDS = {
     "scaffold-macro": _cmd_scaffold_macro,
     "plan-week": _cmd_plan_week,
     "parse-coach-text": _cmd_parse_coach_text,
+    "ingest": _cmd_ingest,
 }
 
 

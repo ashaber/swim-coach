@@ -9,11 +9,14 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import date, timedelta
+from pathlib import Path
 
 import yaml
 
 from swim_coach.cli import main, parse_time_to_s
 from swim_coach.models import Workout
+
+FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
 def _run(base_dir, *args):
@@ -442,3 +445,110 @@ def test_parse_coach_text_defaults_date_to_today(athlete_tree, capsys, tmp_path)
         / f"{date.today().isoformat()}.md"
     )
     assert saved_path.exists()
+
+
+# --- ingest ------------------------------------------------------------------------------
+
+
+def test_ingest_tcx_prints_draft_without_saving(athlete_tree, capsys):
+    tcx_path = FIXTURES_DIR / "tcx" / "sample_pool_swim.tcx"
+    code = _run(
+        athlete_tree["base_dir"], "ingest", "--athlete", athlete_tree["slug"], "--file", str(tcx_path)
+    )
+    assert code == 0
+    result = _out(capsys)
+    assert result["source"] == "tcx"
+    assert result["distance_m"] == 600
+    assert result["saved"] is False
+
+    workouts_dir = athlete_tree["base_dir"] / athlete_tree["slug"] / "logs" / "workouts"
+    assert not workouts_dir.exists() or list(workouts_dir.glob("*.yaml")) == []
+
+
+def test_ingest_csv_with_save_persists_workout(athlete_tree, capsys):
+    csv_path = FIXTURES_DIR / "csv" / "sample_garmin_export.csv"
+    code = _run(
+        athlete_tree["base_dir"],
+        "ingest",
+        "--athlete",
+        athlete_tree["slug"],
+        "--file",
+        str(csv_path),
+        "--rpe",
+        "6",
+        "--save",
+    )
+    assert code == 0
+    result = _out(capsys)
+    assert result["saved"] is True
+    assert "workout_id" in result
+
+    workouts = athlete_tree["store"].list_workouts(athlete_tree["slug"])
+    assert len(workouts) == 1
+    assert workouts[0].source == "csv"
+    assert workouts[0].distance_m == 2500
+    assert workouts[0].rpe == 6
+    assert workouts[0].athlete_id == athlete_tree["athlete"].id
+
+
+def test_ingest_overrides_date_and_sport(athlete_tree, capsys):
+    csv_path = FIXTURES_DIR / "csv" / "sample_garmin_export.csv"
+    code = _run(
+        athlete_tree["base_dir"],
+        "ingest",
+        "--athlete",
+        athlete_tree["slug"],
+        "--file",
+        str(csv_path),
+        "--date",
+        "2026-05-05",
+        "--sport",
+        "swim_ow",
+    )
+    assert code == 0
+    result = _out(capsys)
+    assert result["date"] == "2026-05-05"
+    assert result["sport"] == "swim_ow"
+
+
+def test_ingest_unsupported_extension_errors(athlete_tree, capsys, tmp_path):
+    bogus = tmp_path / "workout.json"
+    bogus.write_text("{}", encoding="utf-8")
+    code = _run(
+        athlete_tree["base_dir"], "ingest", "--athlete", athlete_tree["slug"], "--file", str(bogus)
+    )
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+
+
+def test_ingest_missing_file_errors(athlete_tree, capsys):
+    code = _run(
+        athlete_tree["base_dir"],
+        "ingest",
+        "--athlete",
+        athlete_tree["slug"],
+        "--file",
+        "/no/such/file.tcx",
+    )
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+
+
+def test_ingest_invalid_rpe_errors_on_save(athlete_tree, capsys):
+    csv_path = FIXTURES_DIR / "csv" / "sample_garmin_export.csv"
+    code = _run(
+        athlete_tree["base_dir"],
+        "ingest",
+        "--athlete",
+        athlete_tree["slug"],
+        "--file",
+        str(csv_path),
+        "--rpe",
+        "99",
+        "--save",
+    )
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
