@@ -330,3 +330,115 @@ def test_plan_week_refuses_overwrite_without_force(athlete_tree, capsys):
         "--force",
     )
     assert code == 0
+
+
+# --- parse-coach-text ----------------------------------------------------------------
+
+
+def test_parse_coach_text_saves_verbatim_and_prints_parse(athlete_tree, capsys, tmp_path):
+    coach_text_file = tmp_path / "coach_text.txt"
+    coach_text_file.write_text("8x100 @ 1:40\n300 warm up\n", encoding="utf-8")
+
+    code = _run(
+        athlete_tree["base_dir"],
+        "parse-coach-text",
+        "--athlete",
+        athlete_tree["slug"],
+        "--file",
+        str(coach_text_file),
+        "--date",
+        "2026-02-01",
+    )
+    assert code == 0
+    result = _out(capsys)
+    assert result["athlete"] == athlete_tree["slug"]
+    assert result["total_distance_m"] == 1100
+    assert result["unparsed_lines"] == []
+    assert len(result["sets"]) == 2
+
+    saved_path = (
+        athlete_tree["base_dir"] / athlete_tree["slug"] / "logs" / "coach-texts" / "2026-02-01.md"
+    )
+    assert saved_path.exists()
+    assert saved_path.read_text(encoding="utf-8") == "8x100 @ 1:40\n300 warm up\n"
+
+
+def test_parse_coach_text_refuses_silent_overwrite(athlete_tree, capsys, tmp_path):
+    coach_text_file = tmp_path / "coach_text.txt"
+    coach_text_file.write_text("8x100 @ 1:40\n", encoding="utf-8")
+
+    _run(
+        athlete_tree["base_dir"],
+        "parse-coach-text",
+        "--athlete",
+        athlete_tree["slug"],
+        "--file",
+        str(coach_text_file),
+        "--date",
+        "2026-02-01",
+    )
+    capsys.readouterr()
+
+    code = _run(
+        athlete_tree["base_dir"],
+        "parse-coach-text",
+        "--athlete",
+        athlete_tree["slug"],
+        "--file",
+        str(coach_text_file),
+        "--date",
+        "2026-02-01",
+    )
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+
+    code = _run(
+        athlete_tree["base_dir"],
+        "parse-coach-text",
+        "--athlete",
+        athlete_tree["slug"],
+        "--file",
+        str(coach_text_file),
+        "--date",
+        "2026-02-01",
+        "--force",
+    )
+    assert code == 0
+
+
+def test_parse_coach_text_missing_file_errors(athlete_tree, capsys):
+    code = _run(
+        athlete_tree["base_dir"],
+        "parse-coach-text",
+        "--athlete",
+        athlete_tree["slug"],
+        "--file",
+        "/no/such/file.txt",
+    )
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+
+
+def test_parse_coach_text_defaults_date_to_today(athlete_tree, capsys, tmp_path):
+    coach_text_file = tmp_path / "coach_text.txt"
+    coach_text_file.write_text("1 x 100 Freestyle\n", encoding="utf-8")
+
+    code = _run(
+        athlete_tree["base_dir"],
+        "parse-coach-text",
+        "--athlete",
+        athlete_tree["slug"],
+        "--file",
+        str(coach_text_file),
+    )
+    assert code == 0
+    saved_path = (
+        athlete_tree["base_dir"]
+        / athlete_tree["slug"]
+        / "logs"
+        / "coach-texts"
+        / f"{date.today().isoformat()}.md"
+    )
+    assert saved_path.exists()

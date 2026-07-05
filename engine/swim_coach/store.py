@@ -7,6 +7,7 @@ Behind a small interface (`StoreInterface`) so Phase 2 can swap in a
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from datetime import date
 from pathlib import Path
 
 import yaml
@@ -85,6 +86,18 @@ class StoreInterface(ABC):
     @abstractmethod
     def save_wellness(self, slug: str, wellness: Wellness) -> None: ...
 
+    @abstractmethod
+    def coach_text_exists(self, slug: str, day: date) -> bool: ...
+
+    @abstractmethod
+    def save_coach_text(self, slug: str, day: date, text: str, *, force: bool = False) -> str:
+        """Persist the verbatim coach text and return its location (a path
+        string for FileStore; Phase 2's DbStore would return a storage
+        key). Raises FileExistsError if one already exists for this date
+        and `force` is False -- callers must not silently clobber a
+        previously logged coach text."""
+        ...
+
 
 class FileStore(StoreInterface):
     """Reads/writes the athletes/<slug>/ YAML tree described in ROADMAP.md.
@@ -96,6 +109,7 @@ class FileStore(StoreInterface):
         <slug>/plan/weeks/<iso_week>.yaml
         <slug>/logs/workouts/<date>-<sport>-<workout id[:8]>.yaml
         <slug>/logs/wellness/<date>.yaml
+        <slug>/logs/coach-texts/<date>.md (verbatim, Markdown not YAML)
     """
 
     def __init__(self, base_dir: str | Path = "athletes") -> None:
@@ -200,3 +214,21 @@ class FileStore(StoreInterface):
         directory = self._athlete_dir(slug) / "logs" / "wellness"
         path = directory / f"{wellness.date.isoformat()}.yaml"
         _write_yaml(path, _dump_model(wellness))
+
+    # --- Coach texts (verbatim Markdown, saved BEFORE parsing) --------------------
+
+    def _coach_text_path(self, slug: str, day: date) -> Path:
+        return self._athlete_dir(slug) / "logs" / "coach-texts" / f"{day.isoformat()}.md"
+
+    def coach_text_exists(self, slug: str, day: date) -> bool:
+        return self._coach_text_path(slug, day).exists()
+
+    def save_coach_text(self, slug: str, day: date, text: str, *, force: bool = False) -> str:
+        path = self._coach_text_path(slug, day)
+        if path.exists() and not force:
+            raise FileExistsError(
+                f"coach text already exists at {path}; pass --force to overwrite"
+            )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return str(path)

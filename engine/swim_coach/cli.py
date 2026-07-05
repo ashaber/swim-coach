@@ -21,6 +21,7 @@ from pathlib import Path
 import yaml
 
 from swim_coach.models import Event, Wellness, WeekPlan, Workout
+from swim_coach.parse_coach_text import parse_coach_text
 from swim_coach.plan import generate_week, scaffold_macro
 from swim_coach.store import FileStore
 from swim_coach.zones import css_from_test, zone_table
@@ -259,6 +260,30 @@ def _cmd_plan_week(args: argparse.Namespace, store: FileStore) -> int:
     return 0
 
 
+def _cmd_parse_coach_text(args: argparse.Namespace, store: FileStore) -> int:
+    slug = args.athlete
+    path = Path(args.file)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return _error(str(exc), file=str(path))
+
+    day = date.fromisoformat(args.date) if args.date else date.today()
+
+    # Save the verbatim text BEFORE parsing (CLAUDE.md: "Coach text is
+    # saved verbatim to logs/coach-texts/ BEFORE any parsing").
+    try:
+        saved_path = store.save_coach_text(slug, day, text, force=args.force)
+    except FileExistsError as exc:
+        return _error(str(exc))
+
+    result = parse_coach_text(text)
+    output = {"athlete": slug, "saved_to": saved_path}
+    output.update(result.model_dump(mode="json"))
+    print(json.dumps(output))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m swim_coach.cli")
     parser.add_argument("--base-dir", default="athletes", help="athlete data root (default: athletes)")
@@ -285,6 +310,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_plan_week.add_argument("--week", required=True, help="ISO week, e.g. 2026-W28")
     p_plan_week.add_argument("--force", action="store_true")
 
+    p_parse_coach_text = subparsers.add_parser(
+        "parse-coach-text",
+        help="save a pool-coach workout text verbatim and deterministically parse it",
+    )
+    p_parse_coach_text.add_argument("--athlete", required=True)
+    p_parse_coach_text.add_argument("--file", required=True)
+    p_parse_coach_text.add_argument("--date", help="YYYY-MM-DD, default today")
+    p_parse_coach_text.add_argument("--force", action="store_true")
+
     return parser
 
 
@@ -293,6 +327,7 @@ _COMMANDS = {
     "zones": _cmd_zones,
     "scaffold-macro": _cmd_scaffold_macro,
     "plan-week": _cmd_plan_week,
+    "parse-coach-text": _cmd_parse_coach_text,
 }
 
 
