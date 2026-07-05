@@ -22,6 +22,5 @@ jobs:
       - name: Run unit tests
         run: pytest tests/unit -v
 
-      # TODO(Day 2): once engine/swim_coach/cli.py exists, add
-      # `python -m swim_coach.cli validate --athlete <slug>` against the real
-      # athlete tree so CI fails on invalid athlete data.
+      - name: Validate all athlete data trees
+        run: python scripts/validate_all.py
