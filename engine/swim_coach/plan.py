@@ -25,10 +25,13 @@ from __future__ import annotations
 import math
 import warnings
 from datetime import date, timedelta
+from typing import Literal
 from uuid import uuid4
 
 from swim_coach.models import Athlete, Event, MacroBlock, MacroPlan, Session, WeekPlan
 from swim_coach.zones import zone_table
+
+EventFormat = Literal["single_day", "multi_day_stage"]
 
 # --- Macro block allocation constants ---------------------------------------
 
@@ -325,7 +328,7 @@ def generate_week(
     macro: MacroPlan,
     iso_week: str,
     week_start: date,
-    event_format: str = "single_day",
+    event_format: EventFormat = "single_day",
 ) -> WeekPlan:
     """Generate one week's sessions.
 
