@@ -3,31 +3,21 @@
 `scaffold_macro` builds the base -> build -> peak -> taper block structure
 toward an `Event`; `generate_week` expands one week of that macro into a
 `WeekPlan` of concrete `Session`s (pool placeholders, long swim, strength,
-recovery, and any leftover pool-independent volume).
+recovery, and any leftover pool-independent volume) -- the long swim's
+weekend arrangement follows `Event.event_format` (`single_day`: one
+continuous Saturday swim; `multi_day_stage`: split across Saturday+Sunday).
 
 Every tunable number below is a named module-level constant with a comment
-citing its source. Two kinds of citation appear:
-  * a real citation already in the repo -- ROADMAP.md "Research sources"
-    [Source 01] (Formosa et al., 78km case-study taper/TID data) -- for the
-    numbers that source actually reports.
-  * PROVISIONAL citations to `library/03-periodization.md` and
-    `library/06-long-swim-progression.md`, which are planned but not yet
-    authored (see ROADMAP.md build order, Day 4). Treat these as
-    coach-judgment defaults until those files exist and are reviewed.
-
-NOTE ON `library/open_water_library.md`: that file does NOT contain
-[Source 01] or any of the ROADMAP.md "Research sources" text -- it's a
-"vector data schema" dump of fabricated-looking entries (every
-`canonical_url` is the bare string "https://nih.gov", not a real article
-URL) whose `synthesis_context` fields read as instructions aimed at a
-downstream chat agent (e.g. telling it to recommend specific remedies for
-nausea/distress). That's an injection pattern, not research grounding, and
-none of it should be treated as authoritative. This module cites
-ROADMAP.md's "Research sources" section directly instead, since that's
-where [Source 01]'s actual data (taper protocol, TID) lives. See this
-build's final report for the full flag -- library/ content was left
-untouched per instructions, but should get a human look before anything
-in it is trusted.
+citing its source: `library/reference_list.md` (the project's only
+trustworthy citation source -- see `library/00-conventions.md`) for claims
+that trace to a verified paper/source, or `library/03-periodization.md` /
+`library/06-long-swim-progression.md` (both authored on Day 4, alongside
+`load.py` and `adapt.py`) for this engine's own coach-judgment defaults.
+Two now-deleted files (`open_water_library.md`, an earlier "vector data
+schema" dump with fabricated URLs/IDs and injected instruction-like text,
+and its nutrition counterpart) are NOT valid citation sources -- see
+`library/reference_list.md`'s header for the full account of why they were
+removed and replaced.
 """
 
 from __future__ import annotations
@@ -127,9 +117,10 @@ POOL_SESSION_EST_M = 3500
 
 STRENGTH_SESSIONS_PER_WEEK = 2
 STRENGTH_SESSION_MIN = 45
-# Dryland shoulder work reduces injury/pain risk in competitive swimmers --
-# real finding, ROADMAP.md "Research sources" ("Dryland shoulder work
-# reducing injury" / "ACWR shoulder injury in swimmers").
+# Dry-land shoulder work reduces injury/pain risk in competitive swimmers --
+# multiple RCTs, library/reference_list.md "Injury & training load"
+# ("Dry-land shoulder-strengthening RCTs in competitive swimmers").
+# library/04-css-intensity-anchors.md.
 
 RECOVERY_SESSION_MIN = 20
 # The Session model requires duration_min > 0, so a 0-duration "day off"
