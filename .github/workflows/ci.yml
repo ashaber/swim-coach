@@ -24,3 +24,44 @@ jobs:
 
       - name: Validate all athlete data trees
         run: python scripts/validate_all.py
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install engine (with dev extras)
+        run: pip install -e "engine/[dev]"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Run vitest unit tests
+        working-directory: web
+        run: npm run test
+
+      - name: Build (exports plan JSON via the engine, then vite build)
+        working-directory: web
+        run: npm run build
+
+      - name: Install Playwright browsers
+        working-directory: web
+        run: |
+          pip install -r tests/e2e/requirements.txt
+          playwright install chromium webkit --with-deps
+
+      - name: Run Playwright e2e (chromium + webkit)
+        working-directory: web
+        run: pytest tests/e2e/ -v
