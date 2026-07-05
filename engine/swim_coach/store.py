@@ -94,7 +94,7 @@ class FileStore(StoreInterface):
         <slug>/events.yaml
         <slug>/plan/macro.yaml
         <slug>/plan/weeks/<iso_week>.yaml
-        <slug>/logs/workouts/<date>-<sport>.yaml
+        <slug>/logs/workouts/<date>-<sport>-<workout id[:8]>.yaml
         <slug>/logs/wellness/<date>.yaml
     """
 
@@ -170,8 +170,17 @@ class FileStore(StoreInterface):
         return workouts
 
     def save_workout(self, slug: str, workout: Workout) -> None:
+        # Filename includes the first 8 chars of the workout id so that two
+        # same-sport workouts logged on the same date (double pool days are
+        # common) don't overwrite each other. `list_workouts` globs
+        # `*.yaml` so no read-side change is needed.
+        #
+        # Idempotence note: re-saving a workout with the *same* id overwrites
+        # only that workout's own file — this is desired (e.g. correcting a
+        # previously logged workout's notes/rpe), not a collision.
         directory = self._athlete_dir(slug) / "logs" / "workouts"
-        path = directory / f"{workout.date.isoformat()}-{workout.sport}.yaml"
+        short_id = str(workout.id)[:8]
+        path = directory / f"{workout.date.isoformat()}-{workout.sport}-{short_id}.yaml"
         _write_yaml(path, _dump_model(workout))
 
     # --- Wellness ------------------------------------------------------------

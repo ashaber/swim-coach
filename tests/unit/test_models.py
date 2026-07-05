@@ -311,7 +311,13 @@ def test_file_store_workout_round_trip(tmp_path):
     store = FileStore(base_dir=tmp_path)
     workout = make_workout()
     store.save_workout("wife", workout)
-    expected_path = tmp_path / "wife" / "logs" / "workouts" / "2026-07-06-swim_pool.yaml"
+    expected_path = (
+        tmp_path
+        / "wife"
+        / "logs"
+        / "workouts"
+        / f"2026-07-06-swim_pool-{str(workout.id)[:8]}.yaml"
+    )
     assert expected_path.exists()
     loaded = store.list_workouts("wife")
     assert loaded == [workout]
@@ -325,6 +331,46 @@ def test_file_store_wellness_round_trip(tmp_path):
     assert expected_path.exists()
     loaded = store.list_wellness("wife")
     assert loaded == [wellness]
+
+
+def test_file_store_two_same_sport_same_date_workouts_both_persist(tmp_path):
+    # Double pool days: two swim_pool workouts logged on the same date must
+    # not overwrite each other. Filename includes the first 8 chars of the
+    # workout id precisely to disambiguate this case.
+    store = FileStore(base_dir=tmp_path)
+    morning = make_workout(notes="morning session")
+    afternoon = make_workout(id=uuid.uuid4(), notes="afternoon session")
+    store.save_workout("wife", morning)
+    store.save_workout("wife", afternoon)
+    directory = tmp_path / "wife" / "logs" / "workouts"
+    yaml_files = sorted(p.name for p in directory.glob("*.yaml"))
+    assert yaml_files == sorted(
+        [
+            f"2026-07-06-swim_pool-{str(morning.id)[:8]}.yaml",
+            f"2026-07-06-swim_pool-{str(afternoon.id)[:8]}.yaml",
+        ]
+    )
+    loaded = store.list_workouts("wife")
+    assert len(loaded) == 2
+    assert {w.notes for w in loaded} == {"morning session", "afternoon session"}
+
+
+def test_file_store_resaving_same_workout_id_overwrites_its_own_file(tmp_path):
+    # Idempotence: re-saving a workout with the same id overwrites only that
+    # workout's own file (not a sibling same-day/same-sport workout) — this
+    # is desired behavior, e.g. correcting a logged workout's notes/rpe.
+    store = FileStore(base_dir=tmp_path)
+    workout = make_workout(notes="first pass", rpe=5)
+    store.save_workout("wife", workout)
+    corrected = make_workout(id=workout.id, notes="corrected", rpe=6)
+    store.save_workout("wife", corrected)
+    directory = tmp_path / "wife" / "logs" / "workouts"
+    yaml_files = list(directory.glob("*.yaml"))
+    assert len(yaml_files) == 1
+    loaded = store.list_workouts("wife")
+    assert len(loaded) == 1
+    assert loaded[0].notes == "corrected"
+    assert loaded[0].rpe == 6
 
 
 def test_file_store_load_missing_athlete_raises(tmp_path):
