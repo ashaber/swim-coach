@@ -13,7 +13,7 @@ from datetime import date, timedelta
 import yaml
 
 from swim_coach.cli import main, parse_time_to_s
-from swim_coach.models import Workout
+from swim_coach.models import Wellness, Workout
 
 
 def _run(base_dir, *args):
@@ -328,6 +328,168 @@ def test_plan_week_refuses_overwrite_without_force(athlete_tree, capsys):
         "--week",
         iso_week,
         "--force",
+    )
+    assert code == 0
+
+
+# --- summarize ---------------------------------------------------------------------
+
+
+def test_summarize_reports_compact_rollup(athlete_tree, capsys):
+    slug = athlete_tree["slug"]
+    store = athlete_tree["store"]
+    athlete = athlete_tree["athlete"]
+    as_of = date(2026, 2, 2)  # a Monday
+
+    store.save_workout(
+        slug,
+        Workout(
+            id=uuid.uuid4(),
+            athlete_id=athlete.id,
+            date=as_of - timedelta(days=1),
+            sport="swim_pool",
+            source="manual",
+            distance_m=3000,
+            duration_min=60.0,
+            rpe=5,
+        ),
+    )
+    store.save_wellness(
+        slug,
+        Wellness(
+            id=uuid.uuid4(),
+            athlete_id=athlete.id,
+            date=as_of - timedelta(days=1),
+            sleep_quality=4,
+            sleep_hours=7.5,
+            stress=2,
+            soreness=2,
+            motivation=4,
+        ),
+    )
+
+    code = _run(
+        athlete_tree["base_dir"],
+        "summarize",
+        "--athlete",
+        slug,
+        "--weeks",
+        "4",
+        "--as-of",
+        as_of.isoformat(),
+    )
+    assert code == 0
+    result = _out(capsys)
+    assert result["athlete"] == slug
+    assert result["as_of"] == as_of.isoformat()
+    assert result["weeks"] == 4
+    assert len(result["volume_m"]) == 4
+    assert result["srpe_load_by_day"]
+    assert "load_ratio_7d_28d" in result
+    assert "monotony" in result
+    assert len(result["wellness_trend"]) == 1
+    assert result["wellness_trend"][0][0] == (as_of - timedelta(days=1)).isoformat()
+
+
+def test_summarize_missing_athlete_returns_1(tmp_path, capsys):
+    code = _run(tmp_path, "summarize", "--athlete", "nobody")
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+
+
+def test_summarize_defaults_weeks_to_four(athlete_tree, capsys):
+    code = _run(
+        athlete_tree["base_dir"],
+        "summarize",
+        "--athlete",
+        athlete_tree["slug"],
+        "--as-of",
+        "2026-02-02",
+    )
+    assert code == 0
+    result = _out(capsys)
+    assert result["weeks"] == 4
+
+
+# --- adapt ---------------------------------------------------------------------------
+
+
+def test_adapt_generates_draft_week_and_saves(athlete_tree, capsys):
+    macro = _scaffold(athlete_tree, capsys)
+    slug = athlete_tree["slug"]
+    week1_start = macro.blocks[0].start_date
+    week1_iso = _iso_week(week1_start)
+
+    code = _run(athlete_tree["base_dir"], "plan-week", "--athlete", slug, "--week", week1_iso)
+    assert code == 0
+    capsys.readouterr()
+
+    week2_start = week1_start + timedelta(weeks=1)
+    week2_iso = _iso_week(week2_start)
+
+    code = _run(athlete_tree["base_dir"], "adapt", "--athlete", slug, "--week", week2_iso)
+    assert code == 0
+    result = _out(capsys)
+    assert result["athlete"] == slug
+    assert result["iso_week"] == week2_iso
+    assert result["draft"] is True
+    assert result["rationale"]["action"] in ("cut", "repeat", "hold", "advance")
+
+    saved = athlete_tree["store"].load_week(slug, week2_iso)
+    assert saved.draft is True
+    assert saved.adaptation_rationale is not None
+
+
+def test_adapt_without_macro_errors(athlete_tree, capsys):
+    code = _run(
+        athlete_tree["base_dir"], "adapt", "--athlete", athlete_tree["slug"], "--week", "2026-W02"
+    )
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+
+
+def test_adapt_without_current_week_errors(athlete_tree, capsys):
+    macro = _scaffold(athlete_tree, capsys)
+    week1_start = macro.blocks[0].start_date
+    week2_start = week1_start + timedelta(weeks=1)
+    week2_iso = _iso_week(week2_start)
+
+    # No plan-week was ever run for week1 -- adapt has nothing to adapt from.
+    code = _run(athlete_tree["base_dir"], "adapt", "--athlete", athlete_tree["slug"], "--week", week2_iso)
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+
+
+def test_adapt_refuses_overwrite_without_force(athlete_tree, capsys):
+    macro = _scaffold(athlete_tree, capsys)
+    slug = athlete_tree["slug"]
+    week1_start = macro.blocks[0].start_date
+    week1_iso = _iso_week(week1_start)
+    _run(athlete_tree["base_dir"], "plan-week", "--athlete", slug, "--week", week1_iso)
+    capsys.readouterr()
+
+    week2_start = week1_start + timedelta(weeks=1)
+    week2_iso = _iso_week(week2_start)
+
+    # First adapt run creates a draft week2.
+    code = _run(athlete_tree["base_dir"], "adapt", "--athlete", slug, "--week", week2_iso)
+    assert code == 0
+    capsys.readouterr()
+
+    # Finalize it (non-draft) by running plan-week --force over it.
+    _run(athlete_tree["base_dir"], "plan-week", "--athlete", slug, "--week", week2_iso, "--force")
+    capsys.readouterr()
+
+    code = _run(athlete_tree["base_dir"], "adapt", "--athlete", slug, "--week", week2_iso)
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+
+    code = _run(
+        athlete_tree["base_dir"], "adapt", "--athlete", slug, "--week", week2_iso, "--force"
     )
     assert code == 0
 
