@@ -11,7 +11,6 @@ import pytest
 
 from swim_coach.models import Athlete, Event
 from swim_coach.plan import (
-    LONG_SWIM_SHARE,
     STRENGTH_SESSIONS_PER_WEEK,
     WEEKLY_VOLUME_RAMP_CAP,
     generate_week,

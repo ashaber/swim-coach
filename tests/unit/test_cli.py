@@ -7,9 +7,9 @@ network, no subprocess -- just argparse + FileStore + models.
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import date, timedelta
 
-import pytest
 import yaml
 
 from swim_coach.cli import main, parse_time_to_s
@@ -79,7 +79,7 @@ def test_validate_counts_workouts_and_wellness(athlete_tree, capsys):
     store = athlete_tree["store"]
     slug = athlete_tree["slug"]
     workout = Workout(
-        id=__import__("uuid").uuid4(),
+        id=uuid.uuid4(),
         athlete_id=athlete_tree["athlete"].id,
         date=date(2026, 1, 6),
         sport="swim_pool",
@@ -296,7 +296,7 @@ def test_plan_week_generates_and_saves(athlete_tree, capsys):
 
 
 def test_plan_week_invalid_iso_week_format_errors(athlete_tree, capsys):
-    macro = _scaffold(athlete_tree, capsys)
+    _scaffold(athlete_tree, capsys)
     code = _run(
         athlete_tree["base_dir"], "plan-week", "--athlete", athlete_tree["slug"], "--week", "nope"
     )
