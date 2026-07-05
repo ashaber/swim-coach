@@ -1,0 +1,120 @@
+schema_version: 1
+id: a90f13d9-9071-47bd-b594-18bd331138fd
+athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
+iso_week: 2026-W28
+meso_block: base
+focus: aerobic base
+target_volume_m: 18540
+sessions:
+- schema_version: 1
+  id: 0256bad0-216b-4f73-bac3-f10737c7903e
+  athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
+  date: '2026-07-06'
+  sport: swim_pool
+  source: pool_coach
+  duration_min: 75.0
+  distance_m: 3500
+  intensity:
+    anchor: rpe
+  purpose: "coached pool practice \u2014 content assigned by pool coach after session"
+  structure: null
+  status: planned
+- schema_version: 1
+  id: f08aacd4-eb81-4d1c-8f5d-1311a4234681
+  athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
+  date: '2026-07-08'
+  sport: swim_pool
+  source: pool_coach
+  duration_min: 75.0
+  distance_m: 3500
+  intensity:
+    anchor: rpe
+  purpose: "coached pool practice \u2014 content assigned by pool coach after session"
+  structure: null
+  status: planned
+- schema_version: 1
+  id: f92b3fbf-4819-471e-80e3-9e4ce39bbf16
+  athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
+  date: '2026-07-10'
+  sport: swim_pool
+  source: pool_coach
+  duration_min: 75.0
+  distance_m: 3500
+  intensity:
+    anchor: rpe
+  purpose: "coached pool practice \u2014 content assigned by pool coach after session"
+  structure: null
+  status: planned
+- schema_version: 1
+  id: 295c164b-7c3a-4993-acbf-2ed9c792a499
+  athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
+  date: '2026-07-11'
+  sport: swim_ow
+  source: ai_coach
+  duration_min: 98.6
+  distance_m: 6100
+  intensity:
+    zone: Z2
+    anchor: css_pace
+  purpose: "long open-water swim \u2014 endurance and fueling-practice anchor of the\
+    \ week"
+  structure: null
+  status: planned
+- schema_version: 1
+  id: de746bbc-6539-431b-bd5a-a4fee6f2be39
+  athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
+  date: '2026-07-07'
+  sport: strength
+  source: ai_coach
+  duration_min: 45.0
+  distance_m: null
+  intensity:
+    anchor: rpe
+  purpose: "dryland shoulder strength \u2014 reduces shoulder injury/pain risk (ROADMAP.md\
+    \ research sources: dryland shoulder work)"
+  structure: null
+  status: planned
+- schema_version: 1
+  id: c80ff43c-4da5-4a28-8f61-8ad2cb8c320a
+  athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
+  date: '2026-07-09'
+  sport: strength
+  source: ai_coach
+  duration_min: 45.0
+  distance_m: null
+  intensity:
+    anchor: rpe
+  purpose: "dryland shoulder strength \u2014 reduces shoulder injury/pain risk (ROADMAP.md\
+    \ research sources: dryland shoulder work)"
+  structure: null
+  status: planned
+- schema_version: 1
+  id: cc1ca026-a357-4202-8436-63ea28c721ac
+  athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
+  date: '2026-07-12'
+  sport: recovery
+  source: ai_coach
+  duration_min: 20.0
+  distance_m: null
+  intensity:
+    zone: Z1
+    anchor: rpe
+  purpose: mobility / full rest
+  structure: null
+  status: planned
+- schema_version: 1
+  id: 61326b83-553b-4131-ae46-adc761b64a96
+  athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
+  date: '2026-07-06'
+  sport: swim_ow
+  source: ai_coach
+  duration_min: 31.4
+  distance_m: 1940
+  intensity:
+    zone: Z2
+    anchor: css_pace
+  purpose: additional pool-independent aerobic volume
+  structure: null
+  status: planned
+adaptation_rationale: null
+draft: false

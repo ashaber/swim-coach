@@ -1,0 +1,25 @@
+schema_version: 1
+id: 1517d3d3-4ab1-427b-a2ff-00571ed3a042
+athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
+event_id: ca818b3d-618e-4517-bfd1-020a585c4350
+blocks:
+- name: base
+  start_date: '2026-07-06'
+  end_date: '2026-08-02'
+  weekly_volume_target_m: 22660
+  focus: aerobic base
+- name: build
+  start_date: '2026-08-03'
+  end_date: '2026-08-16'
+  weekly_volume_target_m: 26659
+  focus: race-specific build
+- name: peak
+  start_date: '2026-08-17'
+  end_date: '2026-08-30'
+  weekly_volume_target_m: 26659
+  focus: peak volume
+- name: taper
+  start_date: '2026-08-31'
+  end_date: '2026-09-13'
+  weekly_volume_target_m: 13330
+  focus: taper
