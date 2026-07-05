@@ -38,6 +38,9 @@ constraints:
   hrv_source: Oura ring
   coached_pool: USMS, coach-planned, 90 min, Mon/Wed/Fri
   event_suit_decision: 'undecided: sleeveless wetsuit vs skinsuit vs naked (skins)'
+  greece_format: single_day (current choice); may switch to 4-day stage if long-swim
+    ladder isn't on track by mid-Aug
+  december_event: TBD event in Dec 2026; format (single vs multi-day) undecided
 pool_schedule:
 - day: monday
   duration_min: 90

@@ -54,3 +54,19 @@ ensure emergency meds/support on open-water swims given the anaphylaxis history.
   (B race) — treated as a Greece dress rehearsal (kayak support, fueling,
   sighting, negative-split), not an all-out effort. Week total ~17,500 m.
 - Rationale for each is stored in the week files' `adaptation_rationale`.
+
+### 2026-07-05 — Greece format: SINGLE-DAY (with switch option)
+- Renee's current choice for Greece is the **single-day 33.3 km continuous** option
+  (not the 4-day stage). Advantage: no multi-day recovery/refuel/sleep protocol.
+  Disadvantage: one 10–13 hr effort, very depleted at the finish.
+- **Training implication:** the plan's spine becomes a **long-swim ladder** — the
+  7/9 5-hour/15 k swim is rung one, building to a peak continuous swim of ~20–23 km
+  (60–70% of 33.3 k) ~3–4 weeks before Sept 18, each milestone followed by 3–5 easy
+  days. Long-swim share of weekly volume climbs to ~55–65% in peak weeks. One
+  full-duration (7–8 hr) fueling rehearsal required. Macro *block volumes* are
+  unchanged (runway/ramp-cap limited either way) — only weekly composition differs.
+- **Switch option:** if the ladder isn't tracking by ~mid-Aug, fall back to the
+  4-day stage (materially safer for this 10-week runway + post-anaphylaxis rebuild).
+- **December event:** a second event is on the calendar for Dec 2026; format
+  (single vs multi-day) still undecided — the engine's new `event_format` parameter
+  will handle both cheaply.

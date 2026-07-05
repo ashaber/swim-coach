@@ -1,7 +1,7 @@
 - schema_version: 1
   id: ca818b3d-618e-4517-bfd1-020a585c4350
   athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
-  name: "UltraSwim 33.3 Greece (Skopelos, 4-day stage) \u2014 Mamma Mia Edition"
+  name: "UltraSwim 33.3 Greece (Skopelos) \u2014 single-day 33.3 km continuous"
   event_date: '2026-09-18'
   distance_m: 33300
   water_temp_c: 24.0

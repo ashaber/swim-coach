@@ -194,6 +194,13 @@ https://www.purplepatchfitness.com/freetrainingtips/triathlon-open-water-swimmin
 - Pool-coach sessions are fixed constraints: engine budgets remaining load around their *actual* delivered load and balances intensity distribution (80/20 across total swim time).
 - `/adapt` skill reviews the draft with judgment (may not exceed engine caps), finalizes, appends rationale to notes/decisions.md.
 
+### Event format parameter + long-swim progression (added 2026-07-05)
+`Event` gains an `event_format: single_day | multi_day_stage` field (default `single_day`), threaded through `scaffold_macro` and weekly generation. It does **not** change the macro block volumes (those are runway- and ramp-cap-limited regardless) — it changes **weekly composition**, chiefly the long-swim treatment:
+- **`single_day`** (e.g. Renee's 33.3 km continuous Greece choice): long-swim progression is first-class. `plan.py`/`adapt.py` build an escalating ladder of single continuous swims toward a peak of ~60–70% of event distance (cite `library/06`), each milestone swim followed by 3–5 mandated easy/recovery days (Garmin single-session finding + channel-swim guidance). Long-swim share of weekly volume rises to ~55–65% in peak weeks. One full-duration fueling rehearsal required.
+- **`multi_day_stage`** (e.g. UltraSwim 33.3's 4-day option): back-to-back weekend long swims (Sat+Sun), longest single swim tops out ~30–40% of total distance, plus inter-day recovery/refuel emphasis. No single monster swim.
+- The A event may **switch formats** if the single-day long-swim ladder isn't on track (Renee's is flagged switchable by mid-Aug), and the Dec event's format is TBD — so format must be a cheap re-scaffold, not a rebuild.
+- New model field is backward-compatible (default preserves current behavior); `library/06-long-swim-progression.md` is authored alongside so the ladder constants have a citation home.
+
 ### Skills
 | Skill | Behavior |
 |---|---|
