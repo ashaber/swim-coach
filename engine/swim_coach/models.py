@@ -47,6 +47,13 @@ class Event(BaseModel):
     water_temp_c: float | None = None
     wetsuit: bool = False
     priority: str
+    event_format: Literal["single_day", "multi_day_stage"] = "single_day"
+    # Default preserves current (pre-Day-4) behavior: every existing Event
+    # YAML file with no event_format key validates as "single_day", and
+    # plan.py's/adapt.py's single-continuous-long-swim ladder is exactly what
+    # generate_week already produced before this field existed. See
+    # ROADMAP.md "Event format parameter + long-swim progression" and
+    # library/06-long-swim-progression.md.
 
 
 class Session(BaseModel):
