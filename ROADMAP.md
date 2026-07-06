@@ -12,6 +12,50 @@ Andrew is building a coaching system for open-water swimmers training for ultra-
 
 **Formats**: YAML (pydantic-validated, `schema_version` field) for plans/logs/profiles — human-readable from mobile, diff-friendly, machine-parseable. Markdown for the library and verbatim coach texts.
 
+---
+
+## Status & current roadmap (updated 2026-07-06)
+
+The sections from "Phase 1" down are the original approved build plan, kept as the build record. This section is the live status and the near-term direction.
+
+### Done — shipped and live
+
+- **Phase 1 engine (Days 1–4): complete.** `engine/swim_coach/` owns all plan math — models/store (YAML `FileStore` behind a swappable interface), CSS zones + open-water pace inference, macro scaffold + weekly generation, sRPE/ACWR/monotony load, deterministic adaptation rules, `.fit`/`.tcx`/`.csv` + coach-text parsers, and the `cli` (validate/zones/scaffold-macro/plan-week/ingest/parse-coach-text/summarize/adapt). Skills wired: `/onboard-athlete /plan-week /log-workout /check-in /adapt /coach`. Library files 00/INDEX/03–06 ground the engine constants; citations are title-only (fabricated URLs/IDs stripped). Test suite green.
+- **Renee onboarded.** `athletes/renee/`: profile (CSS 1:30/100m, M/W/F USMS pool, Oura HRV), events (Greece UltraSwim 33.3 — single-day 33.3k, Sep 18 2026; Bear Lake Monster 10K B-race, Jul 18 2026), macro toward Greece, W28/W29 hand-tuned around the Thu 7/9 Lucky Peak 5-hour swim. `event_format` is a first-class parameter (single-day ↔ 4-day stage switchable by mid-Aug; a second event in Dec is TBD format).
+- **Phase 2 coach chat: LIVE.** FastAPI backend on GCP Cloud Run (scale-to-zero), model `claude-opus-4-8`, adaptive thinking, prompt-cached stable prefix, SSE streaming, bearer auth + CORS + rate limit. The coach grounds in library + plan + engine `summarize` and can call `/adapt` as a tool; IDEA 005 "I don't know" + research-question logging + expert-mode. **Backend:** https://swim-coach-api-901329634103.us-central1.run.app — **PWA:** https://ashaber.github.io/swim-coach/ (tabs Plan / Coach / Settings; Settings pre-defaults the backend URL so the athlete only pastes her token). Secrets in GCP Secret Manager; the image is secret-free. Verified end-to-end with a real grounded response.
+
+### Now — simmer on real usage (~days to a couple of weeks)
+
+Load real data and let the system run before building more. Goal: real inputs into the coach + first genuine `/adapt`, and honest feedback on the UX.
+
+- Log Renee's real swims (Mon 2–3 hr, Thu 5 hr Lucky Peak, and pool-coach texts) via `/log-workout`; capture wellness via `/check-in`.
+- Run the first real `/adapt` off real data (not hand-tuned weeks).
+- Get Renee actually using the PWA (share URL + token; single-athlete / single-token for now) and collect what's confusing, wrong, or missing.
+- **Known limitation to work around during the simmer:** the live backend reads the `athletes/` tree baked into the image at deploy time. Logging a workout to the repo updates the **Plan** tab on the next Pages deploy, but the **coach chat** won't see it until the backend is redeployed. Redeploy after a data load when the coach needs current data. Phase 2.5 removes this limitation.
+
+### Phase 2.5 — Supabase/DB layer, built during the simmer (careful, non-disruptive)
+
+Build the database while the system simmers, without disrupting Renee's live usage. This also fixes the data-freshness limitation above: the coach and PWA read **live** data instead of a baked snapshot.
+
+- **Behind the existing seam.** Add `DbStore` implementing the same interface as `FileStore` (the seam built in Phase 1). `FileStore` keeps working throughout — no rewrite, a packaging change.
+- **Supabase, managed** (per the architecture principles — do not self-host Postgres). psycopg3 against the transaction pooler; explicit SQL migrations in `supabase/migrations/`. Tables per the Phase 2 plan below (athletes, events, macro/week plans, sessions, workouts, coach_texts, wellness, chat_messages, uploaded_files — UUID PKs, `athlete_id` FK, timestamps, `schema_version`). RLS deferred (service-role from backend) until real auth in Phase 3.
+- **Migrate cautiously.** One-shot `scripts/migrate_files_to_db.py` copies the current file tree → Supabase; the file tree stays as archive/source-of-truth until the DB is validated. Shadow/dual-read to compare before cutover. Cut the backend over to `DbStore` behind a config flag so rollback is instant; do the cutover during low usage. The PWA and coach stay up the whole time.
+- **Payoff:** logged workouts and check-ins reach the live coach with no redeploy, and multi-athlete becomes structurally possible.
+
+### UI design pass (parallelizable — optional, candidate now)
+
+A Claude design pass to tighten the PWA UI. Low-risk and independent of the DB work, so it can run alongside the simmer.
+
+- Design pass on the existing tabs: visual system, spacing, mobile polish, both light/dark themes — consistent with the hosted plan-artifact design language.
+- Fill in the remaining IDEA 003 tabs as the data endpoints land (Daily Check-in → wellness; Load workout → workout-log; Library; Athlete/Settings).
+- Dragonfly branding (IDEA 001): logo + PWA icons.
+
+### Phase 3 — later (unchanged in intent)
+
+Strava OAuth webhook sync first (Garmin Health API if approved); Supabase Auth magic-link + RLS, retiring the shared bearer token; PWA onboarding wizard (CSS-test) + per-athlete spend caps; multi-swimmer onboarding.
+
+---
+
 ## Phase 1 — Repo-first coaching engine (usable in days)
 
 ### Repo structure
