@@ -15,13 +15,22 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from uuid import uuid4
 
 import yaml
 from pydantic import ValidationError
 
+from swim_coach.adapt import adapt_week
+from swim_coach.load import (
+    acute_chronic_ratio,
+    compliance as compute_compliance,
+    daily_loads,
+    monotony,
+    weekly_volume_m,
+    wellness_trend,
+)
 from swim_coach.models import Event, Wellness, WeekPlan, Workout
 from swim_coach.parse_coach_text import parse_coach_text
 from swim_coach.parse_files import parse_csv, parse_fit, parse_tcx
@@ -34,6 +43,11 @@ _INGEST_PARSERS_BY_EXT = {
     ".csv": parse_csv,
     ".fit": parse_fit,
 }
+
+
+def _iso_week(d: date) -> str:
+    year, week, _ = d.isocalendar()
+    return f"{year}-W{week:02d}"
 
 
 def parse_time_to_s(value: str) -> float:
@@ -212,6 +226,21 @@ def _cmd_scaffold_macro(args: argparse.Namespace, store: FileStore) -> int:
     return 0
 
 
+def _event_format_for_macro(store: FileStore, slug: str, macro) -> str:
+    """Look up the macro's Event and return its event_format, defaulting to
+    "single_day" if the event can't be found (e.g. deleted from events.yaml
+    after the macro was scaffolded) -- never let a lookup miss crash
+    plan-week, since single_day is also Event's own model default."""
+    try:
+        events = store.load_events(slug)
+    except Exception:  # noqa: BLE001
+        return "single_day"
+    for event in events:
+        if event.id == macro.event_id:
+            return event.event_format
+    return "single_day"
+
+
 def _cmd_plan_week(args: argparse.Namespace, store: FileStore) -> int:
     slug = args.athlete
     try:
@@ -238,8 +267,9 @@ def _cmd_plan_week(args: argparse.Namespace, store: FileStore) -> int:
             f"week {args.week} already exists and is not a draft; pass --force to overwrite"
         )
 
+    event_format = _event_format_for_macro(store, slug, macro)
     try:
-        week = generate_week(athlete, macro, args.week, week_start)
+        week = generate_week(athlete, macro, args.week, week_start, event_format=event_format)
     except ValueError as exc:
         return _error(str(exc))
 
@@ -263,6 +293,151 @@ def _cmd_plan_week(args: argparse.Namespace, store: FileStore) -> int:
                     }
                     for session in week.sessions
                 ],
+            }
+        )
+    )
+    return 0
+
+
+def _cmd_summarize(args: argparse.Namespace, store: FileStore) -> int:
+    """Compact JSON training-load/wellness/compliance rollup over the
+    trailing `--weeks` weeks (default 4), ending at `--as-of` (default
+    today). Reused by `/adapt`'s Sunday ritual and, per ROADMAP.md, by
+    Phase 2's chat context assembler.
+    """
+    slug = args.athlete
+    try:
+        store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return _error_from_exception(store.base_dir / slug / "profile.yaml", exc)
+
+    if args.as_of:
+        try:
+            as_of = date.fromisoformat(args.as_of)
+        except ValueError:
+            return _error(f"invalid --as-of {args.as_of!r}; expected 'YYYY-MM-DD'")
+    else:
+        as_of = date.today()
+
+    weeks = args.weeks
+    as_of_monday = as_of - timedelta(days=as_of.weekday())
+    week_starts = [as_of_monday - timedelta(weeks=i) for i in range(weeks - 1, -1, -1)]
+    span_start = week_starts[0]
+    span_end = as_of_monday + timedelta(days=6)
+
+    workouts = store.list_workouts(slug)
+    wellness = store.list_wellness(slug)
+
+    volume_by_week = {_iso_week(ws): weekly_volume_m(workouts, ws) for ws in week_starts}
+
+    loads = daily_loads(workouts)
+    window_loads = {d: v for d, v in loads.items() if span_start <= d <= span_end}
+    monotony_value = monotony(window_loads)
+    load_ratio = acute_chronic_ratio(workouts, as_of)
+
+    window_wellness = [w for w in wellness if span_start <= w.date <= span_end]
+    trend = wellness_trend(window_wellness)
+
+    planned_sessions = []
+    for ws in week_starts:
+        week_plan = store.load_week(slug, _iso_week(ws))
+        if week_plan is not None:
+            planned_sessions.extend(week_plan.sessions)
+    window_workouts = [w for w in workouts if span_start <= w.date <= span_end]
+    compliance_pct = compute_compliance(planned_sessions, window_workouts) if planned_sessions else None
+
+    print(
+        json.dumps(
+            {
+                "athlete": slug,
+                "as_of": as_of.isoformat(),
+                "weeks": weeks,
+                "volume_m": volume_by_week,
+                "srpe_load_by_day": {d.isoformat(): v for d, v in sorted(window_loads.items())},
+                "load_ratio_7d_28d": load_ratio,
+                "monotony": monotony_value,
+                "wellness_trend": [[d.isoformat(), v] for d, v in trend],
+                "compliance_pct": compliance_pct,
+            }
+        )
+    )
+    return 0
+
+
+def _cmd_adapt(args: argparse.Namespace, store: FileStore) -> int:
+    """Run the deterministic adaptation draft for `--week` and write it as a
+    draft WeekPlan (`draft: true`) -- see `swim_coach.adapt.adapt_week`.
+    Refuses to overwrite an existing non-draft week without `--force`."""
+    slug = args.athlete
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return _error_from_exception(store.base_dir / slug / "profile.yaml", exc)
+
+    try:
+        macro = store.load_macro(slug)
+    except Exception as exc:  # noqa: BLE001
+        return _error_from_exception(store.base_dir / slug / "plan" / "macro.yaml", exc)
+    if macro is None:
+        return _error("no macro plan for this athlete; run scaffold-macro first")
+
+    try:
+        events = store.load_events(slug)
+    except Exception as exc:  # noqa: BLE001
+        return _error_from_exception(store.base_dir / slug / "events.yaml", exc)
+    event = next((e for e in events if e.id == macro.event_id), None)
+    if event is None:
+        return _error(f"macro's event_id {macro.event_id} not found in events.yaml")
+
+    try:
+        year_str, week_str = args.week.split("-W")
+        week_start = date.fromisocalendar(int(year_str), int(week_str), 1)
+    except (ValueError, IndexError):
+        return _error(f"invalid --week {args.week!r}; expected format 'YYYY-Wnn'")
+
+    existing = store.load_week(slug, args.week)
+    if existing is not None and not existing.draft and not args.force:
+        return _error(
+            f"week {args.week} already exists and is not a draft; pass --force to overwrite"
+        )
+
+    current_week_start = week_start - timedelta(days=7)
+    current_iso = _iso_week(current_week_start)
+    current_week = store.load_week(slug, current_iso)
+    if current_week is None:
+        return _error(
+            f"no existing week plan for {current_iso!r} (the week before --week) to adapt from"
+        )
+
+    workouts = store.list_workouts(slug)
+    wellness = store.list_wellness(slug)
+    as_of = week_start - timedelta(days=1)
+
+    try:
+        week = adapt_week(
+            athlete,
+            event,
+            macro,
+            args.week,
+            week_start,
+            current_week,
+            workouts,
+            wellness,
+            as_of,
+            days_since_last_milestone=args.days_since_last_milestone,
+        )
+    except ValueError as exc:
+        return _error(str(exc))
+
+    store.save_week(slug, week)
+    print(
+        json.dumps(
+            {
+                "athlete": slug,
+                "iso_week": week.iso_week,
+                "draft": week.draft,
+                "target_volume_m": week.target_volume_m,
+                "rationale": json.loads(week.adaptation_rationale),
             }
         )
     )
@@ -378,6 +553,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_plan_week.add_argument("--week", required=True, help="ISO week, e.g. 2026-W28")
     p_plan_week.add_argument("--force", action="store_true")
 
+    p_summarize = subparsers.add_parser(
+        "summarize", help="compact JSON training-load/wellness/compliance rollup"
+    )
+    p_summarize.add_argument("--athlete", required=True)
+    p_summarize.add_argument("--weeks", type=int, default=4)
+    p_summarize.add_argument("--as-of", dest="as_of", help="YYYY-MM-DD, default today")
+
+    p_adapt = subparsers.add_parser(
+        "adapt", help="run the deterministic adaptation draft for one week"
+    )
+    p_adapt.add_argument("--athlete", required=True)
+    p_adapt.add_argument("--week", required=True, help="ISO week, e.g. 2026-W29")
+    p_adapt.add_argument("--force", action="store_true")
+    p_adapt.add_argument(
+        "--days-since-last-milestone",
+        dest="days_since_last_milestone",
+        type=int,
+        default=None,
+        help="days since the last long-swim milestone, to gate the mandated recovery window",
+    )
+
     p_parse_coach_text = subparsers.add_parser(
         "parse-coach-text",
         help="save a pool-coach workout text verbatim and deterministically parse it",
@@ -407,6 +603,8 @@ _COMMANDS = {
     "zones": _cmd_zones,
     "scaffold-macro": _cmd_scaffold_macro,
     "plan-week": _cmd_plan_week,
+    "summarize": _cmd_summarize,
+    "adapt": _cmd_adapt,
     "parse-coach-text": _cmd_parse_coach_text,
     "ingest": _cmd_ingest,
 }

@@ -187,6 +187,38 @@ def test_event_rejects_bad_distance_type():
         make_event(distance_m="a lot")
 
 
+def test_event_format_defaults_to_single_day():
+    event = make_event()
+    assert event.event_format == "single_day"
+
+
+def test_event_format_accepts_multi_day_stage():
+    event = make_event(event_format="multi_day_stage")
+    assert event.event_format == "multi_day_stage"
+
+
+def test_event_rejects_bad_event_format():
+    with pytest.raises(ValidationError):
+        make_event(event_format="two_day_sprint")
+
+
+def test_event_format_omitted_from_dict_still_defaults():
+    # Backward compatibility: a YAML file written before event_format existed
+    # (no key at all) must still validate, defaulting to "single_day".
+    data = dict(
+        id=uuid.uuid4(),
+        athlete_id=ATHLETE_ID,
+        name="Legacy Event",
+        event_date=date(2026, 8, 15),
+        distance_m=10000,
+        water_temp_c=18.0,
+        wetsuit=False,
+        priority="A",
+    )
+    event = Event(**data)
+    assert event.event_format == "single_day"
+
+
 def test_week_plan_rejects_bad_iso_week():
     with pytest.raises(ValidationError):
         make_week(iso_week="not-a-week")

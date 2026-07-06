@@ -312,6 +312,89 @@ def test_generate_week_handles_dict_and_string_pool_schedule_entries():
     assert {s.date.weekday() for s in pool_sessions} == {0, 2, 4}  # mon, wed, fri
 
 
+# --- event_format: multi_day_stage --------------------------------------------------
+
+
+def test_generate_week_defaults_to_single_day_format(short_macro):
+    athlete, macro = short_macro
+    week_start = macro.blocks[0].start_date
+    week_default = generate_week(athlete, macro, _iso_week(week_start), week_start)
+    week_explicit = generate_week(
+        athlete, macro, _iso_week(week_start), week_start, event_format="single_day"
+    )
+    # Same sessions modulo random ids -- compare the shape, not identity.
+    assert [(s.sport, s.date, s.distance_m) for s in week_default.sessions] == [
+        (s.sport, s.date, s.distance_m) for s in week_explicit.sessions
+    ]
+
+
+def test_generate_week_rejects_unknown_event_format(short_macro):
+    athlete, macro = short_macro
+    week_start = macro.blocks[0].start_date
+    with pytest.raises(ValueError):
+        generate_week(
+            athlete, macro, _iso_week(week_start), week_start, event_format="two_day_sprint"
+        )
+
+
+def test_generate_week_stage_format_splits_across_saturday_and_sunday(short_macro):
+    athlete, macro = short_macro
+    week_start = macro.blocks[0].start_date
+    week = generate_week(
+        athlete, macro, _iso_week(week_start), week_start, event_format="multi_day_stage"
+    )
+
+    long_swims = [s for s in week.sessions if s.sport == "swim_ow"]
+    assert {s.date.weekday() for s in long_swims} == {5, 6}  # Saturday, Sunday
+    saturday = next(s for s in long_swims if s.date.weekday() == 5)
+    sunday = next(s for s in long_swims if s.date.weekday() == 6)
+    # Saturday gets the larger (or equal) share of the two stage swims.
+    assert saturday.distance_m >= sunday.distance_m
+    for s in long_swims:
+        assert s.intensity == {"zone": "Z2", "anchor": "css_pace"}
+
+
+def test_generate_week_stage_format_has_no_sunday_recovery_session(short_macro):
+    athlete, macro = short_macro
+    week_start = macro.blocks[0].start_date
+    week = generate_week(
+        athlete, macro, _iso_week(week_start), week_start, event_format="multi_day_stage"
+    )
+    recovery = [s for s in week.sessions if s.sport == "recovery"]
+    assert recovery == []
+
+
+def test_generate_week_stage_format_total_long_swim_volume_matches_single_day(short_macro):
+    # Splitting across the weekend shouldn't change the total long-swim
+    # volume vs. the single_day continuous-swim total for the same week.
+    athlete, macro = short_macro
+    week_start = macro.blocks[0].start_date
+    single = generate_week(athlete, macro, _iso_week(week_start), week_start, event_format="single_day")
+    stage = generate_week(athlete, macro, _iso_week(week_start), week_start, event_format="multi_day_stage")
+
+    single_total = sum(s.distance_m for s in single.sessions if s.sport == "swim_ow")
+    stage_total = sum(s.distance_m for s in stage.sessions if s.sport == "swim_ow")
+    assert stage_total == pytest.approx(single_total, abs=100)
+
+
+def test_generate_week_stage_format_still_validates_and_stays_in_tolerance(short_macro):
+    athlete, macro = short_macro
+    for block in macro.blocks:
+        weeks_in_block = (block.end_date - block.start_date).days // 7 + 1
+        for i in range(weeks_in_block):
+            week_start = block.start_date + timedelta(weeks=i)
+            week = generate_week(
+                athlete, macro, _iso_week(week_start), week_start, event_format="multi_day_stage"
+            )
+            total_swim = sum(
+                s.distance_m or 0 for s in week.sessions if s.sport in ("swim_pool", "swim_ow")
+            )
+            if week.target_volume_m == 0:
+                continue
+            deviation = abs(total_swim - week.target_volume_m) / week.target_volume_m
+            assert deviation <= 0.10
+
+
 # --- round-trip through FileStore -------------------------------------------------
 
 

@@ -65,9 +65,13 @@ territory — this rule is for acute/alarming symptoms only.)
    what you'd change and why, then hand off: "run `/adapt` (or tell me to) to
    apply that." Only edit files if the athlete explicitly says to.
 
-## TODO (wire up on Day 4)
+## Day 4 update
 
-- `library/INDEX.md` and the topic files (03–06 etc.) don't exist yet — until
-  they do, ground answers in `library/reference_list.md` and coach judgment.
-- `cli summarize` lands with `load.py` on Day 4; use it for load/wellness/
-  compliance context once available.
+- `library/INDEX.md` and topic files `00`, `03`-`06` now exist (routing
+  table + periodization/CSS/OW-pace/long-swim grounding for the engine
+  constants in `zones.py`/`plan.py`/`load.py`/`adapt.py`). Topic files
+  `01`, `02`, `07`-`12` are still gaps — see `INDEX.md`'s "Known gaps"
+  section; say so plainly rather than improvising a citation for those.
+- `cli summarize --athlete <slug> --weeks N` now exists (`load.py`/`cli.py`)
+  — prefer it over eyeballing raw logs for load/wellness/compliance
+  context, per the "Pull the athlete's context" step above.
