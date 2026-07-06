@@ -25,6 +25,28 @@ jobs:
       - name: Validate all athlete data trees
         run: python scripts/validate_all.py
 
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install engine (with dev extras)
+        run: pip install -e "engine/[dev]"
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Run backend API tests (Anthropic client mocked -- no real API calls)
+        run: pytest tests/api -v
+        env:
+          ANTHROPIC_API_KEY: sk-ant-ci-placeholder-not-real
+          API_TOKEN: ci-placeholder-token-not-real
+
   web:
     runs-on: ubuntu-latest
     steps:
