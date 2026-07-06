@@ -29,6 +29,15 @@ export default defineConfig({
         // load along with the rest of the app shell.
         globPatterns: ['**/*.{js,css,html,ico,png,svg,json}'],
         navigateFallback: 'index.html',
+        // The Coach tab's /api/chat and /health calls go to a configurable,
+        // usually cross-origin backend URL (see src/api.js) and must never
+        // be served from cache -- chat needs a live network round trip
+        // every time. runtimeCaching stays empty (no route matches /api/*,
+        // so those requests just pass through the service worker
+        // untouched) and navigateFallback is explicitly scoped away from
+        // /api/ as a second line of defense in case the backend is ever
+        // same-origin.
+        navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [],
       },
     }),

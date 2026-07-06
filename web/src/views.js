@@ -6,6 +6,7 @@ import {
   parseIsoDate, sessionsByDay, classifySession, sessionDisplay, sessionDotColorVar,
   pickCurrentAndNextWeek, daysUntil, priorityEvent, currentBlockIndex, longSwimLadder,
 } from './plan.js';
+import { TOOL_LABELS } from './chat.js';
 
 function esc(value) {
   if (value === null || value === undefined) return '';
@@ -255,4 +256,131 @@ export function renderLoading() {
 
 export function renderError(message) {
   return `<div class="wrap"><div class="load-error">Couldn't load the plan: ${esc(message)}</div></div>`;
+}
+
+// --- Tab bar ---------------------------------------------------------------
+// Only 3 tabs exist today (IDEA 003's Checkin/Load/Library/Athlete tabs have
+// no backend yet); adding one later is just another entry in TABS plus a
+// case in main.js's tab-content switch -- nothing here needs to change.
+const TABS = [
+  { id: 'plan', label: 'Plan', icon: '📋' },
+  { id: 'coach', label: 'Coach', icon: '💬' },
+  { id: 'settings', label: 'Settings', icon: '⚙️' },
+];
+
+export function renderTabBar(activeTab) {
+  return `
+    <nav class="tabbar" aria-label="Main">
+      ${TABS.map((tab) => `
+        <button type="button" class="tab-btn${tab.id === activeTab ? ' active' : ''}" data-a="tab:${tab.id}" aria-current="${tab.id === activeTab ? 'page' : 'false'}">
+          <span class="tab-icon" aria-hidden="true">${tab.icon}</span>
+          <span class="tab-label">${esc(tab.label)}</span>
+        </button>`).join('')}
+    </nav>`;
+}
+
+// --- Coach chat tab ----------------------------------------------------------
+
+function renderChatMessage(msg) {
+  const roleClass = msg.role === 'user' ? 'me' : 'coach';
+  const chips = (msg.toolCalls || [])
+    .map((t) => `<span class="chat-chip">${esc(TOOL_LABELS[t.name] || t.name)}</span>`)
+    .join('');
+
+  let bubbleHtml;
+  if (msg.status === 'error') {
+    bubbleHtml = `<div class="chat-bubble is-error">${esc(msg.error || 'Something went wrong.')}</div>`;
+  } else if (msg.status === 'refusal') {
+    bubbleHtml = `<div class="chat-bubble is-refusal">${esc(msg.content)}</div>`;
+  } else {
+    const cursor = msg.status === 'streaming' ? '<span class="chat-cursor">▍</span>' : '';
+    bubbleHtml = `<div class="chat-bubble">${esc(msg.content)}${cursor}</div>`;
+  }
+
+  return `
+    <div class="chat-row ${roleClass}">
+      ${chips ? `<div class="chat-chips">${chips}</div>` : ''}
+      ${bubbleHtml}
+    </div>`;
+}
+
+function renderChatEmptyState(backendConfigured) {
+  if (!backendConfigured) {
+    return `
+      <div class="chat-empty">
+        <p>Coach Chat needs a backend URL and token before it can talk to the AI coach.</p>
+        <button type="button" class="btn" data-a="tab:settings">Go to Settings</button>
+      </div>`;
+  }
+  return `
+    <div class="chat-empty">
+      <p>Ask anything about training, pacing, fueling, recovery, or how this week is shaped.</p>
+    </div>`;
+}
+
+export function renderCoachTab({ messages, expertMode, sending, backendConfigured, online }) {
+  const showComposer = backendConfigured;
+  return `
+    <div class="wrap chat-wrap">
+      <header class="mast chat-mast">
+        <div>
+          <span class="mark">swim-coach · coach chat</span>
+          <h1>Ask your coach</h1>
+          <p class="sub">Grounded in Renee's plan and the research library.</p>
+        </div>
+        <label class="expert-toggle">
+          <input type="checkbox" data-a="chat:expert-toggle" ${expertMode ? 'checked' : ''}>
+          <span>Expert mode<small>physiologist / coach input</small></span>
+        </label>
+      </header>
+
+      ${!online ? '<div class="chat-banner">Offline -- Coach Chat needs a connection. The Plan tab still works offline.</div>' : ''}
+
+      ${!backendConfigured || messages.length === 0
+        ? renderChatEmptyState(backendConfigured)
+        : `
+        <div class="chat-messages" id="chat-messages">
+          ${messages.map(renderChatMessage).join('')}
+        </div>`}
+
+      ${showComposer ? `
+        <div class="chat-composer">
+          <textarea id="chat-input" class="chat-input" placeholder="Ask your coach…" rows="2" ${sending || !online ? 'disabled' : ''}></textarea>
+          <div class="chat-composer-row">
+            <button type="button" class="btn-ghost" data-a="chat:clear" ${messages.length === 0 ? 'disabled' : ''}>New conversation</button>
+            <button type="button" class="btn" data-a="chat:send" ${sending || !online ? 'disabled' : ''}>${sending ? 'Sending…' : 'Send'}</button>
+          </div>
+        </div>` : ''}
+    </div>`;
+}
+
+// --- Settings tab ------------------------------------------------------------
+
+export function renderSettingsTab({ baseUrl, token, testStatus }) {
+  return `
+    <div class="wrap settings-wrap">
+      <header class="mast" style="border-bottom:none;padding-bottom:0;">
+        <div>
+          <span class="mark">swim-coach · settings</span>
+          <h1>Backend connection</h1>
+          <p class="sub">Point the app at your coach-chat backend.</p>
+        </div>
+      </header>
+      <div class="panel settings-panel">
+        <label class="field">
+          <span>Backend URL</span>
+          <input type="url" id="settings-base-url" placeholder="https://coach-api.example.com" value="${esc(baseUrl)}" inputmode="url" autocomplete="off" spellcheck="false">
+        </label>
+        <label class="field">
+          <span>Bearer token</span>
+          <input type="password" id="settings-token" placeholder="paste your token" value="${esc(token)}" autocomplete="off" spellcheck="false">
+        </label>
+        <p class="field-hint">Stored only in this browser's local storage -- never sent anywhere except the backend URL above.</p>
+        <div class="settings-actions">
+          <button type="button" class="btn" data-a="settings:save">Save</button>
+          <button type="button" class="btn-ghost" data-a="settings:test">Test connection</button>
+        </div>
+        ${testStatus ? `<div class="conn-result ${testStatus.ok ? 'ok' : 'fail'}">${esc(testStatus.message)}</div>` : ''}
+      </div>
+    </div>`;
 }
