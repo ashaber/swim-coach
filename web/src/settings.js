@@ -5,17 +5,23 @@
 
 const STORAGE_KEY = 'swimcoach_settings';
 
+// Pre-fills the live Cloud Run backend on first run so the athlete only
+// has to paste their bearer token -- still fully editable/clearable in
+// Settings, and once anything is explicitly saved (even back to '') that
+// choice is respected instead of re-defaulting.
+export const DEFAULT_BASE_URL = 'https://swim-coach-api-901329634103.us-central1.run.app';
+
 export function loadSettings(storage = localStorage) {
   try {
     const raw = storage.getItem(STORAGE_KEY);
-    if (!raw) return { baseUrl: '', token: '' };
+    if (!raw) return { baseUrl: DEFAULT_BASE_URL, token: '' };
     const parsed = JSON.parse(raw);
     return {
-      baseUrl: typeof parsed.baseUrl === 'string' ? parsed.baseUrl : '',
+      baseUrl: typeof parsed.baseUrl === 'string' ? parsed.baseUrl : DEFAULT_BASE_URL,
       token: typeof parsed.token === 'string' ? parsed.token : '',
     };
   } catch {
-    return { baseUrl: '', token: '' };
+    return { baseUrl: DEFAULT_BASE_URL, token: '' };
   }
 }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { loadSettings, saveSettings, isConfigured } from '../../src/settings.js';
+import { loadSettings, saveSettings, isConfigured, DEFAULT_BASE_URL } from '../../src/settings.js';
 
 function makeFakeStorage() {
   const store = new Map();
@@ -16,8 +16,13 @@ describe('settings persistence', () => {
     storage = makeFakeStorage();
   });
 
-  it('defaults to empty strings when nothing is stored', () => {
-    expect(loadSettings(storage)).toEqual({ baseUrl: '', token: '' });
+  it('defaults to the live Cloud Run backend URL and an empty token when nothing is stored', () => {
+    expect(loadSettings(storage)).toEqual({ baseUrl: DEFAULT_BASE_URL, token: '' });
+  });
+
+  it('respects an explicitly saved empty base URL instead of re-defaulting', () => {
+    saveSettings({ baseUrl: '', token: 't' }, storage);
+    expect(loadSettings(storage)).toEqual({ baseUrl: '', token: 't' });
   });
 
   it('round-trips a trimmed base URL and token', () => {
@@ -32,7 +37,7 @@ describe('settings persistence', () => {
 
   it('recovers from corrupt stored JSON', () => {
     storage.setItem('swimcoach_settings', '{{{not json');
-    expect(loadSettings(storage)).toEqual({ baseUrl: '', token: '' });
+    expect(loadSettings(storage)).toEqual({ baseUrl: DEFAULT_BASE_URL, token: '' });
   });
 });
 
