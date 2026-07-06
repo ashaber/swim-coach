@@ -1,0 +1,22 @@
+{
+  "name": "swim-coach-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "predev": "python3 ../scripts/export_plan_json.py --base-dir ../athletes --out public/data",
+    "dev": "vite",
+    "prebuild": "python3 ../scripts/export_plan_json.py --base-dir ../athletes --out public/data",
+    "build": "vite build",
+    "preview": "vite preview",
+    "gen-icons": "node scripts/gen-icons.js",
+    "test": "vitest run",
+    "test:e2e": "../.venv/bin/pytest tests/e2e/"
+  },
+  "devDependencies": {
+    "sharp": "^0.35.2",
+    "vite": "^6.0.0",
+    "vite-plugin-pwa": "^1.3.0",
+    "vitest": "^3.0.0"
+  }
+}

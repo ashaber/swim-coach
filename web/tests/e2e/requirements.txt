@@ -1,0 +1,3 @@
+pytest>=8.0
+playwright>=1.44
+# After pip install: run `playwright install chromium webkit`
