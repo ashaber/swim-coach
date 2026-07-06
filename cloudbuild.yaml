@@ -1,0 +1,15 @@
+# Cloud Build config for the swim-coach backend image.
+# The Dockerfile lives at backend/Dockerfile but needs the repo root as its
+# build context (it COPYs engine/, library/, athletes/, scripts/), so a plain
+# `gcloud builds submit --tag` (which expects ./Dockerfile) won't work — this
+# config points the build at the right Dockerfile with the root as context.
+#
+# Usage:
+#   gcloud builds submit --config cloudbuild.yaml \
+#     --substitutions=_IMAGE=us-central1-docker.pkg.dev/PROJECT/swim-coach/api:latest .
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "-f", "backend/Dockerfile", "-t", "${_IMAGE}", "."]
+images: ["${_IMAGE}"]
+options:
+  logging: CLOUD_LOGGING_ONLY
