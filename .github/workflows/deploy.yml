@@ -3,6 +3,18 @@ name: Deploy
 on:
   push:
     branches: [main]
+    # Only deploy when something that affects the published site changes.
+    # Engine-internal logic (adapt/load/plan/cli/zones) doesn't alter the
+    # built artifact, so those merges no longer trigger a (no-op, sometimes
+    # flaky) Pages deploy. Use the manual trigger below to force a redeploy.
+    paths:
+      - 'web/**'
+      - 'athletes/**'
+      - 'library/**'
+      - 'scripts/export_plan_json.py'
+      - 'engine/swim_coach/models.py'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
