@@ -1,0 +1,395 @@
+"""Context assembly for the coach chat endpoint, built for prompt caching.
+
+Layout (stable -> volatile, per ROADMAP.md "Chat context assembly" and this
+build's task spec):
+
+  System block A (cacheable, byte-stable): coach persona + hard rules
+    (grounding/citation/safety, adapted from `.claude/skills/coach/SKILL.md`)
+    + full text of `library/00-conventions.md` + `library/INDEX.md`. No
+    per-request data ever enters this block -- `build_system_blocks` takes
+    no per-request argument at all, which is what guarantees byte-stability
+    by construction rather than by convention.
+
+  System block B (cacheable): `library/reference_list.md` (INDEX.md's own
+    rule: "always load reference_list.md alongside for citations", so it's
+    treated as a routing constant, not a routed file) plus 1-3 topic files
+    selected by deterministic keyword-bucket routing against INDEX.md's
+    routing table. Same message (or any message landing in the same
+    keyword bucket) always produces byte-identical block B text, so common
+    topics share a cache entry.
+
+  Per-request (uncached): athlete profile + zones, current + next week
+  plan, and the engine's `summarize` rollup (via `summarize_rollup`, which
+  calls straight into `swim_coach.load`'s functions -- the same ones
+  `cli.py`'s `summarize` command uses -- never recomputed in prose). This
+  is merged into the *first* message of the conversation (the first
+  `history` entry if there is one, else the new `message`) rather than
+  inserted as a separate message, because the Anthropic Messages API
+  requires strictly alternating user/assistant roles -- a lone synthetic
+  "user" message in front of history's own first (user) message would be
+  two user turns in a row and get rejected.
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import date, timedelta
+from pathlib import Path
+from typing import Any, TypedDict
+
+from swim_coach.load import (
+    acute_chronic_ratio,
+    compliance as compute_compliance,
+    daily_loads,
+    monotony,
+    weekly_volume_m,
+    wellness_trend,
+)
+from swim_coach.store import FileStore
+
+# --- system block A: persona + hard rules -----------------------------------
+
+# Adapted from `.claude/skills/coach/SKILL.md` (Phase 1's /coach skill) --
+# same persona, same safety-first override, same grounding rules -- so
+# Phase 1 and Phase 2 coaching voice/behavior stay identical. Byte-stable:
+# no template variables, no timestamps.
+PERSONA_AND_RULES = """\
+You are the swim-coach AI coaching agent: conversational coaching grounded in
+`library/` (a curated research library) and the athlete's own plan/history.
+You explain and advise; you do not silently change the athlete's training
+plan. Structural plan changes go through the deterministic adaptation engine
+(the `propose_adaptation` tool) and require the athlete's or Andrew's
+explicit confirmation before anything is persisted -- you can propose and
+discuss a draft, you cannot finalize one.
+
+## Safety first -- acute medical symptoms override everything
+
+If the athlete describes acute physical distress -- chest tightness/pain,
+heart palpitations, fainting, or symptoms of heat stroke or hypothermia
+(confusion, stopping shivering, slurred speech, severe cramping) -- stop
+coaching immediately and respond with ONLY this, nothing else:
+
+> **CRITICAL SAFETY WARNING:** The symptoms you're describing need immediate
+> medical evaluation. Pause training, alert your support crew or emergency
+> services, and consult a qualified healthcare professional. Do not rely on
+> an automated training tool for acute physical distress.
+
+Do not synthesize training advice, pacing, or fueling around an acute-symptom
+report. This is not medical advice software; it is a coaching aid for
+healthy training. Ordinary training soreness, fatigue, or a niggle is normal
+coaching territory -- this override is for acute/alarming symptoms only.
+
+## Grounding rules
+
+1. Cite by title + author + year (e.g. "per Wakayoshi et al. (1992)"), never
+   by URL or PubMed/PMC ID -- `library/reference_list.md` is the only
+   trustworthy citation source in this repository; older sources elsewhere
+   in this project contained fabricated identifiers.
+2. Surface the evidence level plainly. Claims tagged `[EVIDENCE: swim-ultra]`
+   or `[EVIDENCE: swim]` are direct evidence; `[ADAPTED: cycling|running|tri|
+   general-endurance]` claims are inferred across disciplines and carry a
+   `Confidence: high|medium|low` + a `Test:` line -- say so ("this is
+   adapted from cycling research, medium confidence, worth testing against
+   your own data"), don't present adapted guidance as settled swimming
+   science. `Coach judgment:` claims are engineering/coaching decisions, not
+   evidence -- label them as such too.
+3. If the library doesn't cover a question, say "I don't know" plainly
+   rather than improvising an unsourced answer, give your best coach
+   judgment labeled as such if you have one, and call the
+   `log_open_question` tool so the gap gets followed up on. This applies
+   whether the asker is the athlete or, in expert mode, a professional
+   coach/physiologist proposing something the library doesn't yet cover --
+   log those too (the tool call's context carries the expert-mode flag
+   automatically; you don't need to set it yourself).
+4. Never hand-compute zones, loads, or volumes in chat, and never exceed the
+   deterministic engine's caps (ramp-cap, long-swim-ladder step cap,
+   adaptation rule table). Read the athlete's computed values from the
+   context below, or call `get_plan_summary` / `propose_adaptation` for
+   anything not already provided.
+5. Read-only by default: if the conversation concludes the plan should
+   change, say what you'd change and why, call `propose_adaptation` to show
+   a concrete draft grounded in the engine's own rule table, and hand off
+   for confirmation ("tell me to go ahead and I'll note it for /adapt" or
+   "run /adapt to finalize this") -- you never persist a plan change
+   yourself.
+
+## Answering
+
+Recommendation first, then the reasoning and citation/evidence level. Keep
+it to what was asked. The per-request context below (profile, zones,
+current/next week, 28-day load/wellness/compliance rollup) is the athlete's
+current ground truth -- prefer it over asking the athlete to restate
+numbers you already have.
+"""
+
+
+def _read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def build_system_blocks(library_dir: Path) -> list[dict[str, Any]]:
+    """System block A: persona + rules + 00-conventions.md + INDEX.md, as a
+    single cacheable text block. Takes no per-request argument -- this is
+    what makes it byte-stable across every request regardless of what the
+    athlete asks."""
+    conventions = _read_text(library_dir / "00-conventions.md")
+    index = _read_text(library_dir / "INDEX.md")
+    text = (
+        f"{PERSONA_AND_RULES}\n\n"
+        f"---\n\n# library/00-conventions.md\n\n{conventions}\n\n"
+        f"---\n\n# library/INDEX.md\n\n{index}"
+    )
+    return [
+        {
+            "type": "text",
+            "text": text,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+
+# --- system block B: routed library topic files -----------------------------
+
+# Mirrors library/INDEX.md's "Topic -> file routing table" as fixed keyword
+# buckets rather than parsing the table at request time -- deterministic,
+# fast, and the buckets are exactly what INDEX.md documents. If INDEX.md's
+# routing table changes, update this dict in the same change (same
+# discipline library/00-conventions.md asks of engine-constant citations).
+_LIBRARY_FILES_IN_PRIORITY_ORDER = [
+    "03-periodization.md",
+    "04-css-intensity-anchors.md",
+    "05-open-water-pace-inference.md",
+    "06-long-swim-progression.md",
+]
+
+_KEYWORD_ROUTES: dict[str, set[str]] = {
+    "volume": {"03-periodization.md", "06-long-swim-progression.md"},
+    "cut": {"03-periodization.md"},
+    "repeat": {"03-periodization.md"},
+    "advance": {"03-periodization.md"},
+    "periodization": {"03-periodization.md"},
+    "monoton": {"03-periodization.md"},
+    "acwr": {"03-periodization.md"},
+    "load": {"03-periodization.md"},
+    "compliance": {"03-periodization.md"},
+    "consisten": {"03-periodization.md"},
+    "taper": {"03-periodization.md"},
+    "pace": {"04-css-intensity-anchors.md"},
+    "zone": {"04-css-intensity-anchors.md"},
+    "css": {"04-css-intensity-anchors.md"},
+    "critical swim speed": {"04-css-intensity-anchors.md"},
+    "negative split": {"04-css-intensity-anchors.md"},
+    "dryland": {"04-css-intensity-anchors.md"},
+    "strength": {"04-css-intensity-anchors.md"},
+    "wetsuit": {"05-open-water-pace-inference.md"},
+    "open water": {"05-open-water-pace-inference.md"},
+    "open-water": {"05-open-water-pace-inference.md"},
+    "chop": {"05-open-water-pace-inference.md"},
+    "cold": {"05-open-water-pace-inference.md"},
+    "current": {"05-open-water-pace-inference.md"},
+    "tide": {"05-open-water-pace-inference.md"},
+    "milestone": {"06-long-swim-progression.md"},
+    "long swim": {"06-long-swim-progression.md"},
+    "long-swim": {"06-long-swim-progression.md"},
+    "stage": {"06-long-swim-progression.md"},
+    "single-day": {"06-long-swim-progression.md"},
+    "single day": {"06-long-swim-progression.md"},
+    "recovery": {"06-long-swim-progression.md", "03-periodization.md"},
+}
+
+# Deterministic fallback bucket when no keyword matches -- "why is the plan
+# what it is" is the single most common ungrounded question shape, so this
+# maximizes cache-hit odds for whatever doesn't match a specific keyword.
+DEFAULT_ROUTE_FILES = ["03-periodization.md", "06-long-swim-progression.md"]
+
+MAX_ROUTED_FILES = 3
+
+
+def route_library_files(message: str, *, max_files: int = MAX_ROUTED_FILES) -> list[str]:
+    """Deterministically route `message` to up to `max_files` topic files
+    (not counting reference_list.md, which is always included separately).
+
+    Order is fixed by `_LIBRARY_FILES_IN_PRIORITY_ORDER`, not by keyword
+    match order, so any two messages that hit the same bucket produce the
+    same file list in the same order -- required for the resulting text
+    block to be byte-identical (and thus cache-shareable).
+    """
+    lower = message.lower()
+    matched: set[str] = set()
+    for keyword, files in _KEYWORD_ROUTES.items():
+        if keyword in lower:
+            matched |= files
+    if not matched:
+        matched = set(DEFAULT_ROUTE_FILES)
+    ordered = [f for f in _LIBRARY_FILES_IN_PRIORITY_ORDER if f in matched]
+    return ordered[:max_files]
+
+
+def build_routed_block(library_dir: Path, message: str) -> list[dict[str, Any]]:
+    """System block B: reference_list.md (always included -- INDEX.md's own
+    "always load alongside for citations" rule) plus the routed topic
+    files for `message`, as a single cacheable text block."""
+    filenames = ["reference_list.md", *route_library_files(message)]
+    parts = []
+    for filename in filenames:
+        content = _read_text(library_dir / filename)
+        parts.append(f"# library/{filename}\n\n{content}")
+    text = "\n\n---\n\n".join(parts)
+    return [
+        {
+            "type": "text",
+            "text": text,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+
+def build_system(library_dir: Path, message: str) -> list[dict[str, Any]]:
+    """The full `system` param: block A then block B, each its own cache
+    breakpoint (stable prefix first, per Anthropic's prompt-caching rules --
+    a cache_control block also implicitly caches everything before it)."""
+    return build_system_blocks(library_dir) + build_routed_block(library_dir, message)
+
+
+# --- engine reuse: summarize rollup -----------------------------------------
+
+
+def iso_week_str(d: date) -> str:
+    year, week, _ = d.isocalendar()
+    return f"{year}-W{week:02d}"
+
+
+def summarize_rollup(
+    store: FileStore, slug: str, *, weeks: int = 4, as_of: date | None = None
+) -> dict[str, Any]:
+    """The compact training-load/wellness/compliance rollup, computed with
+    the exact same `swim_coach.load` functions `cli.py`'s `summarize`
+    command uses (see `_cmd_summarize` in `swim_coach/cli.py`) -- this is
+    "reuse the engine" in the literal sense: the math lives in `load.py`,
+    this function only assembles the same window/rollup shape around it, it
+    never recomputes a formula. Used both for the per-request chat context
+    and for the `get_plan_summary` tool.
+    """
+    as_of = date.today() if as_of is None else as_of
+    as_of_monday = as_of - timedelta(days=as_of.weekday())
+    week_starts = [as_of_monday - timedelta(weeks=i) for i in range(weeks - 1, -1, -1)]
+    span_start = week_starts[0]
+    span_end = as_of_monday + timedelta(days=6)
+
+    workouts = store.list_workouts(slug)
+    wellness = store.list_wellness(slug)
+
+    volume_by_week = {iso_week_str(ws): weekly_volume_m(workouts, ws) for ws in week_starts}
+
+    loads = daily_loads(workouts)
+    window_loads = {d: v for d, v in loads.items() if span_start <= d <= span_end}
+    monotony_value = monotony(window_loads)
+    load_ratio = acute_chronic_ratio(workouts, as_of)
+
+    window_wellness = [w for w in wellness if span_start <= w.date <= span_end]
+    trend = wellness_trend(window_wellness)
+
+    planned_sessions = []
+    for ws in week_starts:
+        week_plan = store.load_week(slug, iso_week_str(ws))
+        if week_plan is not None:
+            planned_sessions.extend(week_plan.sessions)
+    window_workouts = [w for w in workouts if span_start <= w.date <= span_end]
+    compliance_pct = (
+        compute_compliance(planned_sessions, window_workouts) if planned_sessions else None
+    )
+
+    return {
+        "athlete": slug,
+        "as_of": as_of.isoformat(),
+        "weeks": weeks,
+        "volume_m": volume_by_week,
+        "srpe_load_by_day": {d.isoformat(): v for d, v in sorted(window_loads.items())},
+        "load_ratio_7d_28d": load_ratio,
+        "monotony": monotony_value,
+        "wellness_trend": [[d.isoformat(), v] for d, v in trend],
+        "compliance_pct": compliance_pct,
+    }
+
+
+# --- per-request context -----------------------------------------------------
+
+
+def _week_or_none(store: FileStore, slug: str, iso_week: str) -> dict[str, Any] | None:
+    week = store.load_week(slug, iso_week)
+    return week.model_dump(mode="json") if week is not None else None
+
+
+def build_per_request_context(store: FileStore, slug: str, *, expert_mode: bool) -> str:
+    """The uncached, per-request text block: athlete profile + zones,
+    current + next week plan, and the 28-day summarize rollup. Deliberately
+    plain text/JSON, not prose -- the model reads it as ground truth, it
+    doesn't need to be narrated."""
+    today = date.today()
+    current_iso = iso_week_str(today)
+    next_iso = iso_week_str(today + timedelta(days=7))
+
+    athlete = store.load_athlete(slug)
+    rollup = summarize_rollup(store, slug, weeks=4, as_of=today)
+
+    parts = [
+        "## Athlete context (assembled per-request, not cached)",
+        f"Asker mode: {'expert (professional coach/physiologist)' if expert_mode else 'athlete'}",
+        f"Today: {today.isoformat()} (current week {current_iso}, next week {next_iso})",
+        "",
+        "### Profile",
+        json.dumps(athlete.model_dump(mode="json"), indent=2),
+        "",
+        f"### Current week plan ({current_iso})",
+        json.dumps(_week_or_none(store, slug, current_iso), indent=2),
+        "",
+        f"### Next week plan ({next_iso})",
+        json.dumps(_week_or_none(store, slug, next_iso), indent=2),
+        "",
+        "### 28-day training-load / wellness / compliance rollup",
+        json.dumps(rollup, indent=2),
+    ]
+    return "\n".join(parts)
+
+
+class HistoryTurn(TypedDict):
+    role: str
+    content: str
+
+
+def build_messages(
+    store: FileStore,
+    slug: str,
+    *,
+    message: str,
+    history: list[HistoryTurn],
+    expert_mode: bool,
+) -> list[dict[str, Any]]:
+    """The `messages` param: per-request context merged into the first
+    message of the conversation, then the rest of `history` verbatim, then
+    the new `message`.
+
+    The context is merged into (not inserted before) the first message
+    because the Messages API requires strictly alternating user/assistant
+    roles -- prepending a standalone synthetic "user" message in front of
+    `history[0]` (itself a "user" turn, by convention: conversations always
+    open with the athlete) would be two user turns back to back and the API
+    would reject it. Merging into history[0]'s content keeps alternation
+    intact. When `history` is empty, the new `message` *is* the first
+    message, so the context merges there instead.
+    """
+    context_text = build_per_request_context(store, slug, expert_mode=expert_mode)
+    messages: list[dict[str, Any]] = []
+
+    if history:
+        first = history[0]
+        messages.append(
+            {"role": first["role"], "content": f"{context_text}\n\n---\n\n{first['content']}"}
+        )
+        for turn in history[1:]:
+            messages.append({"role": turn["role"], "content": turn["content"]})
+        messages.append({"role": "user", "content": message})
+    else:
+        messages.append({"role": "user", "content": f"{context_text}\n\n---\n\n{message}"})
+
+    return messages

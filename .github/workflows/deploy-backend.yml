@@ -1,0 +1,65 @@
+# Manual (workflow_dispatch) deploy for the coach-chat backend to Cloud Run.
+#
+# Manual on purpose: pushing an image needs Andrew's GCP Artifact Registry +
+# Cloud Run + Secret Manager credentials (GCP_WORKLOAD_IDENTITY_PROVIDER /
+# GCP_SERVICE_ACCOUNT repo secrets, or a GCP_SA_KEY, depending on which auth
+# method Andrew sets up), which don't exist yet as of this build. The FIRST
+# deploy is done manually from Andrew's machine (build + push + `gcloud run
+# deploy`, plus creating the `anthropic-api-key`/`api-token` secrets in
+# Secret Manager and granting the Cloud Run service account access to them)
+# -- this workflow is for repeatable redeploys after that.
+
+name: Deploy backend
+
+on:
+  workflow_dispatch:
+
+env:
+  GCP_REGION: us-central1
+  ARTIFACT_REPO: swim-coach
+  IMAGE_NAME: swim-coach-api
+  SERVICE_NAME: swim-coach-api
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev
+
+      - name: Build image
+        run: |
+          docker build \
+            -f backend/Dockerfile \
+            -t ${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            .
+
+      - name: Push image
+        run: |
+          docker push ${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --image ${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            --region ${{ env.GCP_REGION }} \
+            --platform managed \
+            --min-instances=0 \
+            --max-instances=2 \
+            --allow-unauthenticated \
+            --set-secrets=ANTHROPIC_API_KEY=anthropic-api-key:latest,API_TOKEN=api-token:latest \
+            --set-env-vars=CLAUDE_MODEL=claude-sonnet-5,CLAUDE_THINKING=adaptive,ALLOWED_ORIGINS=https://ashaber.github.io,CHAT_RATE_PER_MIN=20
