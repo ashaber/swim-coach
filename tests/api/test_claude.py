@@ -34,10 +34,12 @@ def _settings(**overrides) -> Settings:
     return Settings(**base)
 
 
-def test_build_request_kwargs_omits_thinking_when_adaptive() -> None:
+def test_build_request_kwargs_adaptive_thinking_is_explicit() -> None:
     settings = _settings(claude_thinking="adaptive")
     kwargs = build_request_kwargs(settings, system=[], messages=[])
-    assert "thinking" not in kwargs
+    # Explicit, not omitted -- omission means "off" on the Opus line.
+    assert kwargs["thinking"] == {"type": "adaptive"}
+    assert "budget_tokens" not in kwargs["thinking"]
     assert "temperature" not in kwargs
     assert "top_p" not in kwargs
     assert "top_k" not in kwargs

@@ -84,7 +84,7 @@ class Settings:
         return cls(
             anthropic_api_key=os.environ["ANTHROPIC_API_KEY"],
             api_token_hash=_sha256_hex(os.environ["API_TOKEN"]),
-            claude_model=os.environ.get("CLAUDE_MODEL", "claude-sonnet-5"),
+            claude_model=os.environ.get("CLAUDE_MODEL", "claude-opus-4-8"),
             claude_thinking=claude_thinking,
             allowed_origins=allowed_origins,
             athletes_dir=athletes_dir,

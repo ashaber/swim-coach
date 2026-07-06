@@ -41,7 +41,7 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
 
     settings = Settings.from_env()
 
-    assert settings.claude_model == "claude-sonnet-5"
+    assert settings.claude_model == "claude-opus-4-8"
     assert settings.claude_thinking == "adaptive"
     assert settings.allowed_origins == ["https://ashaber.github.io"]
     assert settings.port == 8000

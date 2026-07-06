@@ -8,9 +8,10 @@ checked patterns):
     yields text deltas, `stream.get_final_message()` returns the full
     message (content blocks, stop_reason, usage) once the stream ends.
   - Never pass `temperature`, `top_p`, or `top_k` -- 400 on Sonnet 5.
-  - `thinking` is omitted entirely for CLAUDE_THINKING=adaptive (Sonnet 5's
-    own adaptive-reasoning default); passed as exactly `{"type": "disabled"}`
-    for CLAUDE_THINKING=disabled. Never `budget_tokens`.
+  - `thinking` is passed EXPLICITLY: `{"type": "adaptive"}` for
+    CLAUDE_THINKING=adaptive, `{"type": "disabled"}` for disabled. Never
+    omitted (omission means adaptive on Sonnet 5 but OFF on Opus 4.7/4.8) and
+    never `budget_tokens` (400 on the current models).
   - `stop_reason == "refusal"` is checked before any content is read.
   - `usage.cache_read_input_tokens` / `cache_creation_input_tokens` are
     logged every turn so cache hits are verifiable from the logs.
@@ -51,7 +52,14 @@ def build_request_kwargs(
         kwargs["tools"] = tools
     if settings.claude_thinking == "disabled":
         kwargs["thinking"] = {"type": "disabled"}
-    # settings.claude_thinking == "adaptive" -> `thinking` omitted entirely.
+    else:
+        # "adaptive": pass it EXPLICITLY, never omit. Omitting is
+        # model-dependent -- Sonnet 5 runs adaptive when `thinking` is
+        # absent, but the Opus line (4.7/4.8) runs with NO thinking when it's
+        # absent. An explicit {"type": "adaptive"} means adaptive on every
+        # current model, so the config knob behaves the same regardless of
+        # CLAUDE_MODEL.
+        kwargs["thinking"] = {"type": "adaptive"}
     return kwargs
 
 
