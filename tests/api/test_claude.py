@@ -107,3 +107,27 @@ def test_run_streaming_unknown_tool_reports_error_result() -> None:
     second_call_messages = client.messages.calls[1]["messages"]
     tool_result = second_call_messages[-1]["content"][0]
     assert "unknown tool" in tool_result["content"]
+
+
+def test_replayed_assistant_content_drops_sdk_only_null_fields() -> None:
+    # D1: a text block emitted alongside a tool_use carries SDK-only null
+    # fields (parsed_output/citations). When the assistant turn is replayed on
+    # the follow-up request, those must not be sent back or the API 400s with
+    # "text.parsed_output: Extra inputs are not permitted".
+    settings = _settings()
+    text = make_text_block("logging a question for research...")
+    tool_use = make_tool_use_block("t1", "log_open_question", {"question": "fueling?"})
+    turn_1 = make_final_message([text, tool_use], "tool_use")
+    turn_2 = make_final_message([make_text_block("done")], "end_turn")
+    client = FakeAnthropicClient([([], turn_1), (["done"], turn_2)])
+    chat = ClaudeChat(settings, client=client)
+
+    list(chat.run_streaming([], [], [], {"log_open_question": lambda _in: {"ok": True}}))
+
+    replayed = client.messages.calls[1]["messages"]
+    assistant_turn = next(m for m in replayed if m["role"] == "assistant")
+    text_blocks = [b for b in assistant_turn["content"] if b["type"] == "text"]
+    assert text_blocks, "the assistant's text block must be replayed"
+    for block in assistant_turn["content"]:
+        assert "parsed_output" not in block
+        assert "citations" not in block

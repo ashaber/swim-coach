@@ -136,7 +136,13 @@ class ClaudeChat:
                 yield _sse({"type": "done", "stop_reason": final.stop_reason})
                 return
 
-            assistant_content = [block.model_dump() for block in final.content]
+            # exclude_none drops SDK-only null fields (a response TextBlock
+            # carries parsed_output/citations that are None in ordinary chat);
+            # replaying them verbatim makes the API reject the follow-up request
+            # ("text.parsed_output: Extra inputs are not permitted"). Non-null
+            # blocks -- text, tool_use, and thinking (which must be replayed on
+            # thinking models mid-tool-use) -- are preserved intact.
+            assistant_content = [block.model_dump(exclude_none=True) for block in final.content]
             messages.append({"role": "assistant", "content": assistant_content})
 
             tool_results = []
