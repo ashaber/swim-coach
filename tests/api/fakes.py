@@ -25,7 +25,15 @@ def auth_headers(token: str = TEST_API_TOKEN) -> dict[str, str]:
 
 
 def make_text_block(text: str) -> SimpleNamespace:
-    return SimpleNamespace(type="text", text=text, model_dump=lambda: {"type": "text", "text": text})
+    # Mirrors the real SDK TextBlock: model_dump() carries SDK-only fields
+    # (parsed_output, citations) that are None in ordinary chat. exclude_none
+    # must drop them, or replaying the block back to the API 400s
+    # ("text.parsed_output: Extra inputs are not permitted") -- see D1.
+    def _dump(exclude_none: bool = False) -> dict[str, Any]:
+        d = {"type": "text", "text": text, "citations": None, "parsed_output": None}
+        return {k: v for k, v in d.items() if not (exclude_none and v is None)}
+
+    return SimpleNamespace(type="text", text=text, model_dump=_dump)
 
 
 def make_tool_use_block(block_id: str, name: str, tool_input: dict[str, Any]) -> SimpleNamespace:
@@ -34,7 +42,12 @@ def make_tool_use_block(block_id: str, name: str, tool_input: dict[str, Any]) ->
         id=block_id,
         name=name,
         input=tool_input,
-        model_dump=lambda: {"type": "tool_use", "id": block_id, "name": name, "input": tool_input},
+        model_dump=lambda exclude_none=False: {
+            "type": "tool_use",
+            "id": block_id,
+            "name": name,
+            "input": tool_input,
+        },
     )
 
 
