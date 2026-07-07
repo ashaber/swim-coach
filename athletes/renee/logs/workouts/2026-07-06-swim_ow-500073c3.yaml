@@ -1,0 +1,16 @@
+schema_version: 1
+id: 500073c3-f6af-460e-83a2-19e2404cdbed
+athlete_id: 19250c9f-945e-4578-b6c7-550a89553577
+date: '2026-07-06'
+sport: swim_ow
+source: manual
+distance_m: 6989
+duration_min: 181.07
+avg_pace_s_per_100m: 155.4
+rpe: 4
+sets: []
+planned_session_id: null
+raw_ref: logs/activities/2026-07-06-lucky-peak.md
+notes: 'Lucky Peak OW, no boat support. Glass out, minor headwind back. Water 65F.
+  Felt good; very visible per fishermen. Avg HR 118 / max 148. Garmin Swim 2. Strava
+  Relative Effort 40. RPE=4 estimated -- confirm. Raw: logs/activities/2026-07-06-lucky-peak.md'
