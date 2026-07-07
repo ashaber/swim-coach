@@ -312,6 +312,20 @@ class DbStore(StoreInterface):
                 {**row, "data": self._Jsonb(row["data"])},
             )
 
+    def list_week_ids(self, slug: str) -> list[str]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                select w.iso_week from week_plans w
+                join athletes a on a.athlete_id = w.athlete_id
+                where a.slug = %s
+                order by w.iso_week
+                """,
+                (slug,),
+            )
+            rows = cur.fetchall()
+        return [r["iso_week"] for r in rows]
+
     # --- Workouts -------------------------------------------------------
 
     def list_workouts(self, slug: str) -> list[Workout]:

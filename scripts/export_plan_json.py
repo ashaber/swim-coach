@@ -30,7 +30,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from swim_coach.store import FileStore
+from swim_coach.store import FileStore, StoreInterface
 
 
 def discover_slugs(base_dir: Path) -> list[str]:
@@ -42,14 +42,7 @@ def discover_slugs(base_dir: Path) -> list[str]:
     )
 
 
-def _iso_weeks_on_disk(base_dir: Path, slug: str) -> list[str]:
-    weeks_dir = base_dir / slug / "plan" / "weeks"
-    if not weeks_dir.exists():
-        return []
-    return sorted(p.stem for p in weeks_dir.glob("*.yaml"))
-
-
-def export_athlete(store: FileStore, slug: str) -> dict:
+def export_athlete(store: StoreInterface, slug: str) -> dict:
     """Load one athlete's full tree and return a single JSON-able dict.
 
     Weeks are sorted by iso_week (lexicographic sort matches chronological
@@ -59,7 +52,7 @@ def export_athlete(store: FileStore, slug: str) -> dict:
     athlete = store.load_athlete(slug)
     events = store.load_events(slug)
     macro = store.load_macro(slug)
-    iso_weeks = _iso_weeks_on_disk(store.base_dir, slug)
+    iso_weeks = store.list_week_ids(slug)
     weeks = [store.load_week(slug, iso_week) for iso_week in iso_weeks]
 
     return {
