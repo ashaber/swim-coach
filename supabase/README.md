@@ -9,7 +9,7 @@ the live service runs on `FileStore` and is unchanged until Andrew flips the fla
 ```
 supabase/
   migrations/
-    0001_init.sql   # initial schema: all tables, indexes, reserved stubs
+    20260706000000_init.sql   # initial schema: all tables, indexes, reserved stubs
   README.md         # this file
 ```
 
@@ -35,7 +35,7 @@ Row-Level Security is **not** enabled yet. Phase 2.5 access is service-role only
 from the backend — the shared bearer token gates the API, not the DB. Real
 per-athlete RLS lands with Supabase Auth in **Phase 3**, when every table gets
 `ENABLE ROW LEVEL SECURITY` + policies keyed on `auth.uid() -> athlete_id`. This
-is noted at the top of `0001_init.sql` too.
+is noted at the top of `20260706000000_init.sql` too.
 
 ## Running the migration
 
@@ -43,17 +43,30 @@ is noted at the top of `0001_init.sql` too.
 
 ```bash
 # Against the DIRECT connection (port 5432), not the pooler, for DDL:
-psql "postgresql://postgres:<pw>@<host>:5432/postgres" -f supabase/migrations/0001_init.sql
+psql "postgresql://postgres:<pw>@<host>:5432/postgres" -f supabase/migrations/20260706000000_init.sql
 ```
 
-### Option B — Supabase CLI
+### Option B — Supabase CLI (recommended)
+
+Tracks which migrations have been applied (in a `supabase_migrations` table),
+so the repo and the DB never silently desync as more migrations land. Prefer
+this over Option A once there's more than one migration.
 
 ```bash
-supabase db push        # applies supabase/migrations/* to the linked project
+brew install supabase/tap/supabase   # or: npm i -g supabase
+supabase login
+supabase link --project-ref <REF>    # prompts for the DB password; writes supabase/config.toml (commit it)
+supabase db push                     # applies supabase/migrations/* to the linked project
 ```
 
+Migration files are named with the CLI's `<YYYYMMDDHHMMSS>_<name>.sql`
+convention so `db push` orders and tracks them correctly. Do **not** use the
+GitHub auto-deploy integration here — it runs DDL against the live DB on every
+merge to `main`, which is exactly the disruption we're avoiding while Renee is
+using the system; run `db push` deliberately instead.
+
 Migrations are plain SQL and idempotent-ish (`create table if not exists` /
-`create index if not exists`), so re-applying `0001_init.sql` is safe.
+`create index if not exists`), so re-applying `20260706000000_init.sql` is safe.
 
 ## Connection string (`DATABASE_URL`)
 
@@ -96,7 +109,7 @@ unless `SWIM_COACH_TEST_DB_URL` points at a **throwaway** schema (the fixture
 
 ```bash
 export SWIM_COACH_TEST_DB_URL="postgresql://postgres:pw@localhost:5432/testdb"
-psql "$SWIM_COACH_TEST_DB_URL" -f supabase/migrations/0001_init.sql
+psql "$SWIM_COACH_TEST_DB_URL" -f supabase/migrations/20260706000000_init.sql
 pip install -e "engine/[db]"          # psycopg
 pytest tests/integration -v
 ```

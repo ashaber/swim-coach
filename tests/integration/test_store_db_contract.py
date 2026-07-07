@@ -9,7 +9,7 @@ if collected, skips cleanly (never errors) when the env var is absent.
 To run:
     export SWIM_COACH_TEST_DB_URL=postgresql://user:pw@host:5432/testdb
     # apply the schema once:
-    psql "$SWIM_COACH_TEST_DB_URL" -f supabase/migrations/0001_init.sql
+    psql "$SWIM_COACH_TEST_DB_URL" -f supabase/migrations/20260706000000_init.sql
     pytest tests/integration -v
 
 Each test starts from an empty set of tables (the `store` fixture truncates

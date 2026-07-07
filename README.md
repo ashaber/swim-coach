@@ -121,7 +121,7 @@ Phase 3 (service-role access only from the backend for now).
 
 1. **Build** the DB layer (this phase) — additive, nothing deployed.
 2. **Provision Supabase**, then apply the schema:
-   `psql "<direct-5432-url>" -f supabase/migrations/0001_init.sql`.
+   `psql "<direct-5432-url>" -f supabase/migrations/20260706000000_init.sql`.
 3. **Migrate** the current file tree in (idempotent, never deletes files):
    `python scripts/migrate_files_to_db.py --dry-run` then
    `DATABASE_URL=<pooler-6543-url> python scripts/migrate_files_to_db.py`.
