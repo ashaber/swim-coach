@@ -29,6 +29,8 @@ def _settings(**overrides) -> Settings:
         research_dir=None,
         port=8000,
         chat_rate_per_min=20,
+        store_backend="file",
+        database_url=None,
     )
     base.update(overrides)
     return Settings(**base)

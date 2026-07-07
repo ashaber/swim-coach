@@ -14,11 +14,11 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from swim_coach.store import FileStore
 
 from app.auth import require_auth, require_chat_rate_limit
 from app.claude import ClaudeChat
 from app.context import build_messages, build_system
+from app.store_factory import make_store
 from app.tools import TOOLS_SCHEMA, build_tool_handlers
 
 router = APIRouter()
@@ -59,7 +59,7 @@ async def chat(
     settings = request.app.state.settings
     require_chat_rate_limit(request, token)
 
-    store = FileStore(base_dir=settings.athletes_dir)
+    store = make_store(settings)
     system = build_system(settings.library_dir, payload.message)
     history = [{"role": h.role, "content": h.content} for h in payload.history]
     messages = build_messages(

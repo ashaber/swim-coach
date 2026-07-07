@@ -17,6 +17,12 @@ dependencies = [
 dev = [
     "pytest>=8",
 ]
+# Postgres/Supabase backend for DbStore (store_db.py). Optional: the engine
+# core, FileStore, and the CLI all import and run WITHOUT this. Only
+# constructing a DbStore needs it. Install with `pip install swim-coach-engine[db]`.
+db = [
+    "psycopg[binary]>=3.1",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["swim_coach"]

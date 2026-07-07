@@ -25,6 +25,7 @@ except ImportError:  # pragma: no cover - python-dotenv is a listed dependency
 
 _REQUIRED_VARS = ("ANTHROPIC_API_KEY", "API_TOKEN")
 _VALID_THINKING_MODES = ("adaptive", "disabled")
+_VALID_STORE_BACKENDS = ("file", "db")
 
 
 class ConfigError(RuntimeError):
@@ -54,6 +55,8 @@ class Settings:
     research_dir: Path
     port: int
     chat_rate_per_min: int
+    store_backend: str  # "file" | "db"
+    database_url: str | None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -68,6 +71,22 @@ class Settings:
         if claude_thinking not in _VALID_THINKING_MODES:
             raise ConfigError(
                 f"CLAUDE_THINKING must be one of {_VALID_THINKING_MODES}, got {claude_thinking!r}"
+            )
+
+        # Store backend cutover flag. Defaults to "file" so the live backend is
+        # UNCHANGED until Andrew provisions Supabase and flips this to "db".
+        # "db" additionally requires DATABASE_URL -- fail fast if it's missing
+        # rather than 500 on the first request.
+        store_backend = os.environ.get("STORE_BACKEND", "file")
+        if store_backend not in _VALID_STORE_BACKENDS:
+            raise ConfigError(
+                f"STORE_BACKEND must be one of {_VALID_STORE_BACKENDS}, got {store_backend!r}"
+            )
+        database_url = os.environ.get("DATABASE_URL") or None
+        if store_backend == "db" and not database_url:
+            raise ConfigError(
+                "STORE_BACKEND=db requires DATABASE_URL (the Supabase transaction-pooler "
+                "connection string) -- see .env.example"
             )
 
         athletes_dir = Path(os.environ.get("ATHLETES_DIR", "../athletes"))
@@ -92,6 +111,8 @@ class Settings:
             research_dir=research_dir,
             port=int(os.environ.get("PORT", "8000")),
             chat_rate_per_min=int(os.environ.get("CHAT_RATE_PER_MIN", "20")),
+            store_backend=store_backend,
+            database_url=database_url,
         )
 
     def token_matches(self, provided_token: str) -> bool:
