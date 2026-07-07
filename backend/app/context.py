@@ -19,15 +19,20 @@ build's task spec):
     topics share a cache entry.
 
   Per-request (uncached): athlete profile + zones, current + next week
-  plan, and the engine's `summarize` rollup (via `summarize_rollup`, which
-  calls straight into `swim_coach.load`'s functions -- the same ones
-  `cli.py`'s `summarize` command uses -- never recomputed in prose). This
-  is merged into the *first* message of the conversation (the first
-  `history` entry if there is one, else the new `message`) rather than
-  inserted as a separate message, because the Anthropic Messages API
-  requires strictly alternating user/assistant roles -- a lone synthetic
-  "user" message in front of history's own first (user) message would be
-  two user turns in a row and get rejected.
+  plan, the exact logged sessions from the trailing ~28 days (each session
+  keeps its own `sport`, `distance_m`, `duration_min`, `rpe`,
+  `avg_pace_s_per_100m` -- ground truth, not narrated), events/races with
+  `days_until`, and the engine's `summarize` rollup -- explicitly labelled
+  as an AGGREGATE derived from those same sessions, so exact-vs-aggregate is
+  unambiguous to the model (via `summarize_rollup`, which calls straight
+  into `swim_coach.load`'s functions -- the same ones `cli.py`'s
+  `summarize` command uses -- never recomputed in prose). This is merged
+  into the *first* message of the conversation (the first `history` entry
+  if there is one, else the new `message`) rather than inserted as a
+  separate message, because the Anthropic Messages API requires strictly
+  alternating user/assistant roles -- a lone synthetic "user" message in
+  front of history's own first (user) message would be two user turns in a
+  row and get rejected.
 """
 
 from __future__ import annotations
@@ -45,6 +50,7 @@ from swim_coach.load import (
     weekly_volume_m,
     wellness_trend,
 )
+from swim_coach.models import Event, Workout
 from swim_coach.store import StoreInterface
 
 # --- system block A: persona + hard rules -----------------------------------
@@ -117,9 +123,14 @@ coaching territory -- this override is for acute/alarming symptoms only.
 
 Recommendation first, then the reasoning and citation/evidence level. Keep
 it to what was asked. The per-request context below (profile, zones,
-current/next week, 28-day load/wellness/compliance rollup) is the athlete's
-current ground truth -- prefer it over asking the athlete to restate
-numbers you already have.
+current/next week plan, exact logged sessions with their sport, events/races
+with dates, and the 28-day AGGREGATE load/wellness/compliance rollup) is the
+athlete's current ground truth -- prefer it over asking the athlete to
+restate numbers you already have. The exact-session and events sections are
+individual facts (e.g. a specific session's sport, or a race's date); the
+AGGREGATE rollup is a derived summary of those same sessions -- don't
+confuse the two, and don't call a session by the wrong sport when its exact
+row is right there.
 """
 
 
@@ -259,8 +270,26 @@ def iso_week_str(d: date) -> str:
     return f"{year}-W{week:02d}"
 
 
+def _rollup_window(as_of: date, weeks: int) -> tuple[date, date, list[date]]:
+    """The Monday-to-Sunday span covering the trailing `weeks` ISO weeks
+    (inclusive of the current, in-progress week). Shared by `summarize_rollup`
+    and `build_per_request_context` so the "exact logged sessions" list and
+    the aggregate rollup derived from it always cover the identical window --
+    a session that appears in one always counts in the other."""
+    as_of_monday = as_of - timedelta(days=as_of.weekday())
+    week_starts = [as_of_monday - timedelta(weeks=i) for i in range(weeks - 1, -1, -1)]
+    span_start = week_starts[0]
+    span_end = as_of_monday + timedelta(days=6)
+    return span_start, span_end, week_starts
+
+
 def summarize_rollup(
-    store: StoreInterface, slug: str, *, weeks: int = 4, as_of: date | None = None
+    store: StoreInterface,
+    slug: str,
+    *,
+    weeks: int = 4,
+    as_of: date | None = None,
+    workouts: list[Workout] | None = None,
 ) -> dict[str, Any]:
     """The compact training-load/wellness/compliance rollup, computed with
     the exact same `swim_coach.load` functions `cli.py`'s `summarize`
@@ -269,14 +298,16 @@ def summarize_rollup(
     this function only assembles the same window/rollup shape around it, it
     never recomputes a formula. Used both for the per-request chat context
     and for the `get_plan_summary` tool.
+
+    `workouts` lets a caller that already fetched the athlete's workouts
+    (e.g. `build_per_request_context`, which also renders them as exact
+    sessions) pass them in rather than triggering a second `list_workouts`
+    round trip; defaults to fetching them here when omitted.
     """
     as_of = date.today() if as_of is None else as_of
-    as_of_monday = as_of - timedelta(days=as_of.weekday())
-    week_starts = [as_of_monday - timedelta(weeks=i) for i in range(weeks - 1, -1, -1)]
-    span_start = week_starts[0]
-    span_end = as_of_monday + timedelta(days=6)
+    span_start, span_end, week_starts = _rollup_window(as_of, weeks)
 
-    workouts = store.list_workouts(slug)
+    workouts = store.list_workouts(slug) if workouts is None else workouts
     wellness = store.list_wellness(slug)
 
     volume_by_week = {iso_week_str(ws): weekly_volume_m(workouts, ws) for ws in week_starts}
@@ -320,17 +351,71 @@ def _week_or_none(store: StoreInterface, slug: str, iso_week: str) -> dict[str, 
     return week.model_dump(mode="json") if week is not None else None
 
 
+def _render_recent_sessions(workouts: list[Workout], span_start: date, span_end: date) -> str:
+    """Compact, chronological, one-row-per-workout rendering of every
+    exactly-logged session in `[span_start, span_end]` -- each row keeps its
+    own `sport`, which is exactly what the aggregate rollup below throws
+    away. This is what lets the model tell a `swim_ow` session from a
+    `swim_pool` one instead of guessing from volume alone."""
+    window = sorted(
+        (w for w in workouts if span_start <= w.date <= span_end), key=lambda w: w.date
+    )
+    if not window:
+        return "(none logged in this window)"
+    rows = [
+        json.dumps(
+            {
+                "date": w.date.isoformat(),
+                "sport": w.sport,
+                "distance_m": w.distance_m,
+                "duration_min": w.duration_min,
+                "rpe": w.rpe,
+                "avg_pace_s_per_100m": w.avg_pace_s_per_100m,
+            }
+        )
+        for w in window
+    ]
+    return "\n".join(rows)
+
+
+def _render_events(events: list[Event], today: date) -> str:
+    """Compact, chronological rendering of every event on file, each with
+    `days_until` computed relative to `today` -- fixes the coach not
+    knowing race dates."""
+    if not events:
+        return "(no events on file)"
+    ordered = sorted(events, key=lambda e: e.event_date)
+    rows = [
+        json.dumps(
+            {
+                "name": e.name,
+                "event_date": e.event_date.isoformat(),
+                "distance_m": e.distance_m,
+                "event_format": e.event_format,
+                "days_until": (e.event_date - today).days,
+            }
+        )
+        for e in ordered
+    ]
+    return "\n".join(rows)
+
+
 def build_per_request_context(store: StoreInterface, slug: str, *, expert_mode: bool) -> str:
     """The uncached, per-request text block: athlete profile + zones,
-    current + next week plan, and the 28-day summarize rollup. Deliberately
-    plain text/JSON, not prose -- the model reads it as ground truth, it
-    doesn't need to be narrated."""
+    current + next week plan, the last ~28 days' exact logged sessions
+    (each with its own sport -- ground truth), events/races with dates, and
+    the 28-day aggregate rollup derived from those same sessions.
+    Deliberately plain text/JSON, not prose -- the model reads it as ground
+    truth, it doesn't need to be narrated."""
     today = date.today()
     current_iso = iso_week_str(today)
     next_iso = iso_week_str(today + timedelta(days=7))
 
     athlete = store.load_athlete(slug)
-    rollup = summarize_rollup(store, slug, weeks=4, as_of=today)
+    workouts = store.list_workouts(slug)
+    events = store.load_events(slug)
+    span_start, span_end, _ = _rollup_window(today, weeks=4)
+    rollup = summarize_rollup(store, slug, weeks=4, as_of=today, workouts=workouts)
 
     parts = [
         "## Athlete context (assembled per-request, not cached)",
@@ -346,7 +431,13 @@ def build_per_request_context(store: StoreInterface, slug: str, *, expert_mode: 
         f"### Next week plan ({next_iso})",
         json.dumps(_week_or_none(store, slug, next_iso), indent=2),
         "",
-        "### 28-day training-load / wellness / compliance rollup",
+        "### Exact logged sessions (last 28 days) -- ground truth, each with its sport",
+        _render_recent_sessions(workouts, span_start, span_end),
+        "",
+        "### Events / races",
+        _render_events(events, today),
+        "",
+        "### 28-day AGGREGATE rollup (derived from the sessions above)",
         json.dumps(rollup, indent=2),
     ]
     return "\n".join(parts)
