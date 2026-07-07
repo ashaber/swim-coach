@@ -100,15 +100,27 @@ def base_url(web_root: str) -> str:
     httpd.shutdown()
 
 
+def _launch(pw, cfg):
+    try:
+        browser = getattr(pw, cfg['name']).launch()
+    except Exception as e:
+        pytest.skip(f'{cfg["name"]} unavailable in this environment: {e}')
+    ctx = browser.new_context(viewport=cfg['vp'])
+    return browser, ctx
+
+
+def _assert_no_real_errors(js_errors: list[str]) -> None:
+    real_errors = [e for e in js_errors
+                   if 'sw.js load failed' not in e
+                   and 'Importing a module script failed' not in e]
+    assert not real_errors, f'Uncaught JS errors: {real_errors}'
+
+
 @pytest.fixture(params=BROWSERS)
 def page(request, base_url: str, web_root: str):
     cfg = request.param
     with sync_playwright() as pw:
-        try:
-            browser = getattr(pw, cfg['name']).launch()
-        except Exception as e:
-            pytest.skip(f'{cfg["name"]} unavailable in this environment: {e}')
-        ctx = browser.new_context(viewport=cfg['vp'])
+        browser, ctx = _launch(pw, cfg)
         # This base `page` fixture (used by test_app.py) starts fully signed
         # in and configured, with a mocked live /api/plan -- test_app.py is
         # about Plan-tab rendering of real data, not the identity gate itself
@@ -122,10 +134,63 @@ def page(request, base_url: str, web_root: str):
         pg.goto(base_url)
         try:
             yield pg
-            real_errors = [e for e in js_errors
-                           if 'sw.js load failed' not in e
-                           and 'Importing a module script failed' not in e]
-            assert not real_errors, f'Uncaught JS errors: {real_errors}'
+            _assert_no_real_errors(js_errors)
+        finally:
+            ctx.close()
+            browser.close()
+
+
+# Renee's demo plan (athletes/renee/plan/weeks/) only has two weeks right
+# now: 2026-W28 (Mon Jul 6 - Sun Jul 12), which has the 5-hour swim_ow
+# milestone ("Lucky Peak"), and 2026-W29 after it. The Plan view's
+# "This week" card is `pickCurrentAndNextWeek(weeks)` in src/plan.js,
+# called with no explicit `now` (defaults to `new Date()`) -- so it
+# renders whichever of those two weeks contains the real wall-clock
+# "today", and once the real clock passes Jul 12 2026, "This week" would
+# silently become W29, which has no milestone. Pinning the browser clock
+# with `add_init_script` (verified to genuinely propagate all the way
+# through the render -- `pickCurrentAndNextWeek`'s `new Date()` default
+# picks it up like any other code path, the same way `mock_plan_route`
+# mocks the network instead of a real backend) keeps that assertion
+# deterministic regardless of the day CI happens to run on.
+FROZEN_TODAY_ISO = '2026-07-09T12:00:00'  # the milestone swim's own date, well inside W28
+
+_FREEZE_DATE_INIT_SCRIPT = f"""
+(() => {{
+  const FROZEN_MS = new Date('{FROZEN_TODAY_ISO}').getTime();
+  const RealDate = Date;
+  class FrozenDate extends RealDate {{
+    constructor(...args) {{
+      if (args.length === 0) super(FROZEN_MS);
+      else super(...args);
+    }}
+    static now() {{ return FROZEN_MS; }}
+  }}
+  window.Date = FrozenDate;
+}})();
+"""
+
+
+@pytest.fixture(params=BROWSERS)
+def frozen_page(request, base_url: str, web_root: str):
+    """Like `page`, but with the browser clock pinned to FROZEN_TODAY_ISO,
+    so assertions about which week is "This week" are independent of the
+    real wall clock. Use this (instead of `page`) for any assertion that
+    depends on which week is current."""
+    cfg = request.param
+    with sync_playwright() as pw:
+        browser, ctx = _launch(pw, cfg)
+        ctx.add_init_script(_FREEZE_DATE_INIT_SCRIPT)
+        seed_identity(ctx)
+        seed_settings(ctx)
+        mock_plan_route(ctx, web_root)
+        pg = ctx.new_page()
+        js_errors: list[str] = []
+        pg.on('pageerror', lambda e: js_errors.append(str(e)))
+        pg.goto(base_url)
+        try:
+            yield pg
+            _assert_no_real_errors(js_errors)
         finally:
             ctx.close()
             browser.close()

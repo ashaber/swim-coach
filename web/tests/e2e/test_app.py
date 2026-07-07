@@ -5,6 +5,12 @@ via the `page` fixture in conftest.py, against the real built dist/ and the
 real exported Renee data (data/renee.json), not a stub -- this is the
 DoD's "visually matches the mockup and renders Renee's real data" check
 plus the four minimum e2e cases from CLAUDE.md / ROADMAP.md.
+
+Tests whose assertions depend on which week is "This week" use the
+`frozen_page` fixture (also in conftest.py) instead of `page` -- it pins
+the browser clock to a fixed date inside Renee's demo-plan week that has
+the milestone swim, so those assertions don't drift with the real wall
+clock (see FROZEN_TODAY_ISO in conftest.py for why).
 """
 
 import pytest
@@ -16,7 +22,8 @@ def test_app_loads_at_root(page):
     assert 'swim-coach' in page.title()
 
 
-def test_renees_plan_renders_with_real_data(page):
+def test_renees_plan_renders_with_real_data(frozen_page):
+    page = frozen_page
     # A known session title derived from the real plan.yaml purpose text --
     # if this ever hardcodes instead of reading data/renee.json, it breaks.
     page.wait_for_selector('.count .n')
@@ -32,7 +39,8 @@ def test_renees_plan_renders_with_real_data(page):
     assert 'days to' in label_text
 
 
-def test_week_cards_and_macro_render(page):
+def test_week_cards_and_macro_render(frozen_page):
+    page = frozen_page
     page.wait_for_selector('.week')
     assert page.locator('.week').count() >= 1
     assert page.locator('.macro').count() == 1
@@ -57,7 +65,11 @@ def test_theme_toggle_stamps_data_theme(page):
     assert after != before
 
 
-def test_offline_load_works(page):
+def test_offline_load_works(frozen_page):
+    # Same "Lucky Peak" wall-clock coupling as test_renees_plan_renders_with_real_data
+    # above -- use the frozen fixture so this doesn't flake once the real
+    # clock passes Renee's W28.
+    page = frozen_page
     page.wait_for_selector('.count .n')
     try:
         page.wait_for_function('() => navigator.serviceWorker.controller !== null', timeout=15000)
