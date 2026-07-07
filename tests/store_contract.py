@@ -233,6 +233,18 @@ class StoreContractTests:
         assert store.load_week(SLUG, "2026-W28") is not None
         assert store.load_week(SLUG, "2026-W29") is not None
 
+    def test_list_week_ids_empty_when_none(self, store):
+        store.save_athlete(_athlete())
+        assert store.list_week_ids(SLUG) == []
+
+    def test_list_week_ids_returns_saved_weeks_sorted(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        # save out of order -- list_week_ids must return them chronologically
+        store.save_week(SLUG, _week(athlete.id, "2026-W29"))
+        store.save_week(SLUG, _week(athlete.id, "2026-W28"))
+        assert store.list_week_ids(SLUG) == ["2026-W28", "2026-W29"]
+
     # --- workouts --------------------------------------------------------
 
     def test_workout_round_trip(self, store):

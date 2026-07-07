@@ -9,7 +9,7 @@ const STORAGE_KEY = 'swimcoach_settings';
 // has to paste their bearer token -- still fully editable/clearable in
 // Settings, and once anything is explicitly saved (even back to '') that
 // choice is respected instead of re-defaulting.
-export const DEFAULT_BASE_URL = 'https://swim-coach-api-901329634103.us-central1.run.app';
+export const DEFAULT_BASE_URL = 'https://swim-coach-api-445273334913.us-central1.run.app';
 
 export function loadSettings(storage = localStorage) {
   try {

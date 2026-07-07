@@ -82,7 +82,13 @@ class Settings:
             raise ConfigError(
                 f"STORE_BACKEND must be one of {_VALID_STORE_BACKENDS}, got {store_backend!r}"
             )
-        database_url = os.environ.get("DATABASE_URL") or None
+        # .strip() every secret read from the environment. Secret managers and
+        # `printf`/`echo` pipelines routinely leave a trailing newline on a
+        # secret's value; an unstripped newline silently corrupts whatever the
+        # value feeds -- a newline in the API key breaks the x-api-key header
+        # ("Connection error."), one in DATABASE_URL breaks psycopg's URI parse,
+        # one in API_TOKEN changes its hash so every request 401s.
+        database_url = (os.environ.get("DATABASE_URL") or "").strip() or None
         if store_backend == "db" and not database_url:
             raise ConfigError(
                 "STORE_BACKEND=db requires DATABASE_URL (the Supabase transaction-pooler "
@@ -101,8 +107,8 @@ class Settings:
         allowed_origins = [o.strip() for o in allowed_origins_raw.split(",") if o.strip()]
 
         return cls(
-            anthropic_api_key=os.environ["ANTHROPIC_API_KEY"],
-            api_token_hash=_sha256_hex(os.environ["API_TOKEN"]),
+            anthropic_api_key=os.environ["ANTHROPIC_API_KEY"].strip(),
+            api_token_hash=_sha256_hex(os.environ["API_TOKEN"].strip()),
             claude_model=os.environ.get("CLAUDE_MODEL", "claude-opus-4-8"),
             claude_thinking=claude_thinking,
             allowed_origins=allowed_origins,

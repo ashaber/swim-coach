@@ -75,6 +75,14 @@ class StoreInterface(ABC):
     def save_week(self, slug: str, week: WeekPlan) -> None: ...
 
     @abstractmethod
+    def list_week_ids(self, slug: str) -> list[str]:
+        """Every ISO-week id (e.g. "2026-W28") this athlete has a week plan
+        for, sorted chronologically. Enumerating weeks is a first-class
+        store capability -- callers (e.g. the plan exporter) must not reach
+        past this interface to a filesystem to discover them."""
+        ...
+
+    @abstractmethod
     def list_workouts(self, slug: str) -> list[Workout]: ...
 
     @abstractmethod
@@ -169,6 +177,14 @@ class FileStore(StoreInterface):
     def save_week(self, slug: str, week: WeekPlan) -> None:
         path = self._athlete_dir(slug) / "plan" / "weeks" / f"{week.iso_week}.yaml"
         _write_yaml(path, _dump_model(week))
+
+    def list_week_ids(self, slug: str) -> list[str]:
+        weeks_dir = self._athlete_dir(slug) / "plan" / "weeks"
+        if not weeks_dir.exists():
+            return []
+        # Filename stem is the iso_week ("2026-W28.yaml" -> "2026-W28"); the
+        # "YYYY-Wnn" format sorts lexicographically into chronological order.
+        return sorted(path.stem for path in weeks_dir.glob("*.yaml"))
 
     # --- Workouts ------------------------------------------------------------
 

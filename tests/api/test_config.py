@@ -60,3 +60,20 @@ def test_token_matches_is_hash_based_and_correct(monkeypatch: pytest.MonkeyPatch
     # the raw token is never stored -- only its sha256 hex digest.
     assert settings.api_token_hash != "correct-token"
     assert len(settings.api_token_hash) == 64
+
+
+def test_secret_env_vars_are_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Secret managers / printf|echo pipelines often leave a trailing newline;
+    # a stray newline in the key breaks the x-api-key header, in DATABASE_URL
+    # breaks psycopg's URI parse, in API_TOKEN changes its hash. from_env must
+    # strip all three.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test\n")
+    monkeypatch.setenv("API_TOKEN", "  correct-token\n")
+    monkeypatch.setenv("STORE_BACKEND", "db")
+    monkeypatch.setenv("DATABASE_URL", "\npostgresql://u:p@h:6543/db\n")
+    settings = Settings.from_env()
+
+    assert settings.anthropic_api_key == "sk-ant-test"
+    assert settings.database_url == "postgresql://u:p@h:6543/db"
+    # the stripped token hashes to the stripped value, so a clean token matches
+    assert settings.token_matches("correct-token") is True
