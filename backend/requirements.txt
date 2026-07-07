@@ -2,3 +2,8 @@ fastapi>=0.115,<1.0
 uvicorn[standard]>=0.32,<1.0
 anthropic>=0.40,<1.0
 python-dotenv>=1.0,<2.0
+# DbStore's driver (Phase 2.5). Present but DORMANT: unused while
+# STORE_BACKEND=file (the default). Shipped in the image so the file->DB
+# cutover is a config-flag flip + redeploy, not a dependency change. Same
+# package as the engine's optional [db] extra.
+psycopg[binary]>=3.1,<4.0

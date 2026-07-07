@@ -45,7 +45,7 @@ from swim_coach.load import (
     weekly_volume_m,
     wellness_trend,
 )
-from swim_coach.store import FileStore
+from swim_coach.store import StoreInterface
 
 # --- system block A: persona + hard rules -----------------------------------
 
@@ -260,7 +260,7 @@ def iso_week_str(d: date) -> str:
 
 
 def summarize_rollup(
-    store: FileStore, slug: str, *, weeks: int = 4, as_of: date | None = None
+    store: StoreInterface, slug: str, *, weeks: int = 4, as_of: date | None = None
 ) -> dict[str, Any]:
     """The compact training-load/wellness/compliance rollup, computed with
     the exact same `swim_coach.load` functions `cli.py`'s `summarize`
@@ -315,12 +315,12 @@ def summarize_rollup(
 # --- per-request context -----------------------------------------------------
 
 
-def _week_or_none(store: FileStore, slug: str, iso_week: str) -> dict[str, Any] | None:
+def _week_or_none(store: StoreInterface, slug: str, iso_week: str) -> dict[str, Any] | None:
     week = store.load_week(slug, iso_week)
     return week.model_dump(mode="json") if week is not None else None
 
 
-def build_per_request_context(store: FileStore, slug: str, *, expert_mode: bool) -> str:
+def build_per_request_context(store: StoreInterface, slug: str, *, expert_mode: bool) -> str:
     """The uncached, per-request text block: athlete profile + zones,
     current + next week plan, and the 28-day summarize rollup. Deliberately
     plain text/JSON, not prose -- the model reads it as ground truth, it
@@ -358,7 +358,7 @@ class HistoryTurn(TypedDict):
 
 
 def build_messages(
-    store: FileStore,
+    store: StoreInterface,
     slug: str,
     *,
     message: str,
