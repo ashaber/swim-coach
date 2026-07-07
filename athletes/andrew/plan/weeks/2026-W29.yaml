@@ -1,0 +1,93 @@
+schema_version: 1
+id: a0019057-046b-4683-8e08-22bdadf1232e
+athlete_id: 8a4969c2-757f-4dc7-8a68-6a773881df42
+iso_week: 2026-W29
+meso_block: base
+focus: aerobic base
+target_volume_m: 8990
+sessions:
+- schema_version: 1
+  id: 1c726362-21a8-48d3-9087-dd5380e011b5
+  athlete_id: 8a4969c2-757f-4dc7-8a68-6a773881df42
+  date: '2026-07-14'
+  sport: swim_pool
+  source: pool_coach
+  duration_min: 75.0
+  distance_m: 3500
+  intensity:
+    anchor: rpe
+  purpose: "coached pool practice \u2014 content assigned by pool coach after session"
+  structure: null
+  status: planned
+- schema_version: 1
+  id: a6353e66-1085-45ad-8e32-e9981ba33de8
+  athlete_id: 8a4969c2-757f-4dc7-8a68-6a773881df42
+  date: '2026-07-16'
+  sport: swim_pool
+  source: pool_coach
+  duration_min: 75.0
+  distance_m: 3500
+  intensity:
+    anchor: rpe
+  purpose: "coached pool practice \u2014 content assigned by pool coach after session"
+  structure: null
+  status: planned
+- schema_version: 1
+  id: 7080863f-5389-4069-96cb-3c7b5196ef91
+  athlete_id: 8a4969c2-757f-4dc7-8a68-6a773881df42
+  date: '2026-07-18'
+  sport: swim_ow
+  source: ai_coach
+  duration_min: 35.5
+  distance_m: 1990
+  intensity:
+    zone: Z2
+    anchor: css_pace
+  purpose: "long open-water swim \u2014 endurance and fueling-practice anchor of the\
+    \ week"
+  structure: null
+  status: planned
+- schema_version: 1
+  id: 86b70961-718f-4a23-a0c7-57f48bd13cff
+  athlete_id: 8a4969c2-757f-4dc7-8a68-6a773881df42
+  date: '2026-07-13'
+  sport: strength
+  source: ai_coach
+  duration_min: 45.0
+  distance_m: null
+  intensity:
+    anchor: rpe
+  purpose: "dryland shoulder strength \u2014 reduces shoulder injury/pain risk (ROADMAP.md\
+    \ research sources: dryland shoulder work)"
+  structure: null
+  status: planned
+- schema_version: 1
+  id: 052076ee-c5fe-42a5-a7fd-3a6dd8b02975
+  athlete_id: 8a4969c2-757f-4dc7-8a68-6a773881df42
+  date: '2026-07-15'
+  sport: strength
+  source: ai_coach
+  duration_min: 45.0
+  distance_m: null
+  intensity:
+    anchor: rpe
+  purpose: "dryland shoulder strength \u2014 reduces shoulder injury/pain risk (ROADMAP.md\
+    \ research sources: dryland shoulder work)"
+  structure: null
+  status: planned
+- schema_version: 1
+  id: 03e55529-d17d-431e-bae8-b8a58ed1ae95
+  athlete_id: 8a4969c2-757f-4dc7-8a68-6a773881df42
+  date: '2026-07-19'
+  sport: recovery
+  source: ai_coach
+  duration_min: 20.0
+  distance_m: null
+  intensity:
+    zone: Z1
+    anchor: rpe
+  purpose: mobility / full rest
+  structure: null
+  status: planned
+adaptation_rationale: null
+draft: false

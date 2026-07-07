@@ -1,0 +1,46 @@
+schema_version: 1
+id: 8a4969c2-757f-4dc7-8a68-6a773881df42
+slug: andrew
+name: Andrew
+css_pace_s_per_100m: 100.0
+zones:
+  Z1:
+    name: Z1
+    lo_offset: 10.0
+    hi_offset: null
+    pace_lo_s: 110.0
+    pace_hi_s: null
+  Z2:
+    name: Z2
+    lo_offset: 5.0
+    hi_offset: 9.0
+    pace_lo_s: 105.0
+    pace_hi_s: 109.0
+  Z3:
+    name: Z3
+    lo_offset: 2.0
+    hi_offset: 4.0
+    pace_lo_s: 102.0
+    pace_hi_s: 104.0
+  Z4:
+    name: Z4
+    lo_offset: -1.0
+    hi_offset: 1.0
+    pace_lo_s: 99.0
+    pace_hi_s: 101.0
+  Z5:
+    name: Z5
+    lo_offset: null
+    hi_offset: -2.0
+    pace_lo_s: null
+    pace_hi_s: 98.0
+constraints:
+  note: sandbox/test athlete for evaluating coach context
+  coached_pool: self-coached (placeholder)
+pool_schedule:
+- day: tuesday
+  duration_min: 60
+  source: self-coached
+- day: thursday
+  duration_min: 60
+  source: self-coached

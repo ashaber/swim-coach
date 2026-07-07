@@ -1,0 +1,10 @@
+- schema_version: 1
+  id: 61f890be-becb-486e-9df0-740fb9d2771c
+  athlete_id: 8a4969c2-757f-4dc7-8a68-6a773881df42
+  name: Andrew Test Goal 10K
+  event_date: '2026-10-03'
+  distance_m: 10000
+  water_temp_c: 18.0
+  wetsuit: true
+  priority: A
+  event_format: single_day

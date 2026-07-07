@@ -1,0 +1,14 @@
+schema_version: 1
+id: f9ddc9a0-063b-4412-a39c-3b1861aa9944
+athlete_id: 8a4969c2-757f-4dc7-8a68-6a773881df42
+date: '2026-07-05'
+sport: swim_ow
+source: manual
+distance_m: 5000
+duration_min: 95.0
+avg_pace_s_per_100m: 114.0
+rpe: 5
+sets: []
+planned_session_id: null
+raw_ref: null
+notes: Sandbox test OW swim, lake, wetsuit.

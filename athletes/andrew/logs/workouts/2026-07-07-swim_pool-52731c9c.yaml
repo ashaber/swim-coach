@@ -1,0 +1,14 @@
+schema_version: 1
+id: 52731c9c-c2af-4c89-ba80-bdc7ad413bd1
+athlete_id: 8a4969c2-757f-4dc7-8a68-6a773881df42
+date: '2026-07-07'
+sport: swim_pool
+source: manual
+distance_m: 3000
+duration_min: 60.0
+avg_pace_s_per_100m: 110.0
+rpe: 6
+sets: []
+planned_session_id: null
+raw_ref: null
+notes: Sandbox test pool session, intervals.
