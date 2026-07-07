@@ -19,16 +19,16 @@ import log from './log.js';
 const STORAGE_KEY = 'swimcoach_identity';
 const GSI_SCRIPT_SRC = 'https://accounts.google.com/gsi/client';
 
-// TODO(andrew): replace with Renee's real Google account email, then remove
-// this comment. Until it's replaced, no one can sign in as her -- the
-// placeholder string below is never a real Google account.
-const RENEE_EMAIL_PLACEHOLDER = 'renee_email_placeholder@gmail.com';
-
 /** email (lowercase) -> {athlete, role}. Looked up by `resolveIdentity`
- * after lowercase-normalizing whatever email the ID token contains. */
+ * after lowercase-normalizing whatever email the ID token contains.
+ *
+ * Both users are role 'athlete' for now: Andrew wants to experience the
+ * system as an athlete in his own sandbox ('andrew'), separate from Renee's
+ * data. A 'coach' role -- with cross-athlete access -- is a deliberate later
+ * addition (the expert-mode toggle already keys off role === 'coach'). */
 const EMAIL_IDENTITY_MAP = {
-  'andrewshaber@gmail.com': { athlete: 'andrew', role: 'coach' },
-  [RENEE_EMAIL_PLACEHOLDER]: { athlete: 'renee', role: 'athlete' },
+  'andrewshaber@gmail.com': { athlete: 'andrew', role: 'athlete' },
+  'kline.renee@gmail.com': { athlete: 'renee', role: 'athlete' },
 };
 
 /**

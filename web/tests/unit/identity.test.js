@@ -54,19 +54,19 @@ describe('decodeJwtPayload', () => {
 describe('resolveIdentity', () => {
   it('resolves a known email to its mapped athlete + role', () => {
     expect(resolveIdentity('andrewshaber@gmail.com')).toEqual({
-      email: 'andrewshaber@gmail.com', athlete: 'andrew', role: 'coach',
+      email: 'andrewshaber@gmail.com', athlete: 'andrew', role: 'athlete',
     });
   });
 
   it('is case-insensitive', () => {
     expect(resolveIdentity('AndrewShaber@Gmail.com')).toEqual({
-      email: 'andrewshaber@gmail.com', athlete: 'andrew', role: 'coach',
+      email: 'andrewshaber@gmail.com', athlete: 'andrew', role: 'athlete',
     });
   });
 
   it('trims surrounding whitespace', () => {
     expect(resolveIdentity('  andrewshaber@gmail.com  ')).toEqual({
-      email: 'andrewshaber@gmail.com', athlete: 'andrew', role: 'coach',
+      email: 'andrewshaber@gmail.com', athlete: 'andrew', role: 'athlete',
     });
   });
 
