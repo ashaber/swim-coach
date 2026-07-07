@@ -1,12 +1,17 @@
-// Network layer for the Phase-2 chat backend. Everything here does real
-// I/O (fetch) so it isn't unit-tested directly -- e2e tests mock `fetch`
-// at the browser level instead. The one piece of real logic (parsing the
-// `text/event-stream` body) is factored out to sse.js's `feedSSEBuffer`,
-// which *is* unit-tested.
+// Network layer for the Phase-2 backend: coach chat plus the write/list
+// endpoints for workouts and wellness check-ins. `streamChat` does real
+// streaming I/O so it isn't unit-tested directly -- e2e tests mock `fetch`
+// at the browser level instead; the one piece of its real logic (parsing
+// the `text/event-stream` body) is factored out to sse.js's
+// `feedSSEBuffer`, which *is* unit-tested. The non-streaming
+// `apiRequest`-based functions below (`postWorkout`/`listWorkouts`/
+// `postWellness`/`listWellness`) are simple enough (one fetch, one JSON
+// body) to unit-test directly against a mocked `global.fetch` -- see
+// tests/unit/api.test.js.
 //
-// Deliberately uses fetch + a streaming body reader, not EventSource --
-// EventSource can't send a POST body or an Authorization header, and the
-// chat endpoint needs both.
+// Deliberately uses fetch + a streaming body reader for chat, not
+// EventSource -- EventSource can't send a POST body or an Authorization
+// header, and the chat endpoint needs both.
 
 import log from './log.js';
 import { feedSSEBuffer } from './sse.js';
@@ -81,6 +86,67 @@ async function safeErrorMessage(response) {
   if (response.status === 401) return 'Backend rejected the token -- check Settings.';
   if (response.status === 429) return 'Too many messages -- wait a moment and try again.';
   return `Backend error (${response.status}).`;
+}
+
+/**
+ * Shared plumbing for the (non-streaming) write/list endpoints below.
+ * Normalizes every failure mode (network failure, non-2xx, unparsable body)
+ * into `{ ok: false, error }` so callers only ever need one branch -- same
+ * convention as `testConnection`. Success returns `{ ok: true, data }`.
+ */
+async function apiRequest({ baseUrl, token, path, method = 'GET', body }) {
+  let response;
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+  } catch (err) {
+    log.error('api.request_failed', { path, error: err.message });
+    return { ok: false, error: 'Could not reach the coach backend. Check your connection and Settings.' };
+  }
+
+  if (!response.ok) {
+    const message = await safeErrorMessage(response);
+    log.error('api.response_not_ok', { path, status: response.status, error: message });
+    return { ok: false, error: message };
+  }
+
+  try {
+    const data = await response.json();
+    return { ok: true, data };
+  } catch (err) {
+    log.error('api.parse_failed', { path, error: err.message });
+    return { ok: false, error: 'Unexpected response from backend.' };
+  }
+}
+
+/** POST {baseUrl}/api/workouts?athlete=<slug> -- logs a completed workout. */
+export async function postWorkout({ baseUrl, token, athlete = 'renee', payload }) {
+  return apiRequest({
+    baseUrl, token, path: `/api/workouts?athlete=${encodeURIComponent(athlete)}`, method: 'POST', body: payload,
+  });
+}
+
+/** GET {baseUrl}/api/workouts?athlete=<slug> -- lists logged workouts. */
+export async function listWorkouts({ baseUrl, token, athlete = 'renee' }) {
+  return apiRequest({ baseUrl, token, path: `/api/workouts?athlete=${encodeURIComponent(athlete)}` });
+}
+
+/** POST {baseUrl}/api/wellness?athlete=<slug> -- logs a daily check-in. */
+export async function postWellness({ baseUrl, token, athlete = 'renee', payload }) {
+  return apiRequest({
+    baseUrl, token, path: `/api/wellness?athlete=${encodeURIComponent(athlete)}`, method: 'POST', body: payload,
+  });
+}
+
+/** GET {baseUrl}/api/wellness?athlete=<slug> -- lists logged check-ins. */
+export async function listWellness({ baseUrl, token, athlete = 'renee' }) {
+  return apiRequest({ baseUrl, token, path: `/api/wellness?athlete=${encodeURIComponent(athlete)}` });
 }
 
 /** GET {baseUrl}/health -- used by the Settings tab's "Test connection". */

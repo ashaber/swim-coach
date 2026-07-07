@@ -259,11 +259,14 @@ export function renderError(message) {
 }
 
 // --- Tab bar ---------------------------------------------------------------
-// Only 3 tabs exist today (IDEA 003's Checkin/Load/Library/Athlete tabs have
-// no backend yet); adding one later is just another entry in TABS plus a
-// case in main.js's tab-content switch -- nothing here needs to change.
+// 5 tabs now that the write endpoints (IDEA 003's Log/Checkin) have a
+// backend; Library/Athlete still don't. Adding one later is just another
+// entry in TABS plus a case in main.js's tab-content switch -- nothing here
+// needs to change.
 const TABS = [
   { id: 'plan', label: 'Plan', icon: '📋' },
+  { id: 'log', label: 'Log', icon: '📝' },
+  { id: 'checkin', label: 'Check-in', icon: '🌙' },
   { id: 'coach', label: 'Coach', icon: '💬' },
   { id: 'settings', label: 'Settings', icon: '⚙️' },
 ];
@@ -351,6 +354,135 @@ export function renderCoachTab({ messages, expertMode, sending, backendConfigure
             <button type="button" class="btn" data-a="chat:send" ${sending || !online ? 'disabled' : ''}>${sending ? 'Sending…' : 'Send'}</button>
           </div>
         </div>` : ''}
+    </div>`;
+}
+
+// --- Log tab (workout logging) ------------------------------------------------
+
+const SPORT_OPTIONS = [
+  { value: 'swim_pool', label: 'Pool swim' },
+  { value: 'swim_ow', label: 'Open water swim' },
+  { value: 'strength', label: 'Strength' },
+  { value: 'recovery', label: 'Recovery' },
+];
+
+function renderBackendNeededNotice(message) {
+  return `
+    <div class="chat-empty">
+      <p>${esc(message)}</p>
+      <button type="button" class="btn" data-a="tab:settings">Go to Settings</button>
+    </div>`;
+}
+
+function renderSubmitResult(submit) {
+  return submit.message
+    ? `<div class="conn-result ${submit.status === 'success' ? 'ok' : 'fail'}">${esc(submit.message)}</div>`
+    : '';
+}
+
+export function renderLogTab({ form, submit, backendConfigured, online }) {
+  return `
+    <div class="wrap settings-wrap">
+      <header class="mast" style="border-bottom:none;padding-bottom:0;">
+        <div>
+          <span class="mark">swim-coach · log</span>
+          <h1>Log a swim</h1>
+          <p class="sub">Record a completed session so your coach sees it.</p>
+        </div>
+      </header>
+      ${!online ? '<div class="chat-banner">Offline -- logging needs a connection.</div>' : ''}
+      ${!backendConfigured ? renderBackendNeededNotice('Logging a swim needs a backend URL and token first.') : `
+      <div class="panel settings-panel">
+        <label class="field">
+          <span>Date</span>
+          <input type="date" data-form="log" data-field="date" value="${esc(form.date)}">
+        </label>
+        <label class="field">
+          <span>Sport</span>
+          <select data-form="log" data-field="sport">
+            ${SPORT_OPTIONS.map((opt) => `<option value="${opt.value}"${form.sport === opt.value ? ' selected' : ''}>${esc(opt.label)}</option>`).join('')}
+          </select>
+        </label>
+        <label class="field">
+          <span>Distance (m)</span>
+          <input type="number" min="0" step="1" inputmode="numeric" data-form="log" data-field="distance_m" value="${esc(form.distance_m)}">
+        </label>
+        <label class="field">
+          <span>Duration (min)</span>
+          <input type="number" min="0" step="0.5" inputmode="decimal" data-form="log" data-field="duration_min" value="${esc(form.duration_min)}">
+        </label>
+        <label class="field">
+          <span>RPE (effort) &middot; <output id="log-rpe-out">${esc(form.rpe)}</output>/10</span>
+          <input type="range" min="1" max="10" step="1" data-form="log" data-field="rpe" data-slider-out="log-rpe-out" value="${esc(form.rpe)}">
+        </label>
+        <label class="field">
+          <span>Notes</span>
+          <textarea rows="3" data-form="log" data-field="notes" placeholder="How did it feel?">${esc(form.notes)}</textarea>
+        </label>
+        <div class="settings-actions">
+          <button type="button" class="btn" data-a="log:submit" ${submit.status === 'submitting' || !online ? 'disabled' : ''}>${submit.status === 'submitting' ? 'Saving…' : 'Save'}</button>
+        </div>
+        ${renderSubmitResult(submit)}
+      </div>`}
+    </div>`;
+}
+
+// --- Check-in tab (daily wellness) ---------------------------------------------
+
+export function renderCheckinTab({ form, submit, backendConfigured, online }) {
+  return `
+    <div class="wrap settings-wrap">
+      <header class="mast" style="border-bottom:none;padding-bottom:0;">
+        <div>
+          <span class="mark">swim-coach · check-in</span>
+          <h1>How are you feeling?</h1>
+          <p class="sub">A quick daily check-in -- sleep, stress, soreness, motivation.</p>
+        </div>
+      </header>
+      ${!online ? '<div class="chat-banner">Offline -- check-in needs a connection.</div>' : ''}
+      ${!backendConfigured ? renderBackendNeededNotice('Checking in needs a backend URL and token first.') : `
+      <div class="panel settings-panel">
+        <label class="field">
+          <span>Date</span>
+          <input type="date" data-form="checkin" data-field="date" value="${esc(form.date)}">
+        </label>
+        <label class="field">
+          <span>Sleep quality &middot; <output id="checkin-sleep_quality-out">${esc(form.sleep_quality)}</output>/5</span>
+          <input type="range" min="1" max="5" step="1" data-form="checkin" data-field="sleep_quality" data-slider-out="checkin-sleep_quality-out" value="${esc(form.sleep_quality)}">
+        </label>
+        <label class="field">
+          <span>Sleep hours</span>
+          <input type="number" min="0" step="0.25" inputmode="decimal" data-form="checkin" data-field="sleep_hours" value="${esc(form.sleep_hours)}">
+        </label>
+        <label class="field">
+          <span>Stress &middot; <output id="checkin-stress-out">${esc(form.stress)}</output>/5</span>
+          <input type="range" min="1" max="5" step="1" data-form="checkin" data-field="stress" data-slider-out="checkin-stress-out" value="${esc(form.stress)}">
+        </label>
+        <label class="field">
+          <span>Soreness &middot; <output id="checkin-soreness-out">${esc(form.soreness)}</output>/5</span>
+          <input type="range" min="1" max="5" step="1" data-form="checkin" data-field="soreness" data-slider-out="checkin-soreness-out" value="${esc(form.soreness)}">
+        </label>
+        <label class="field">
+          <span>Motivation &middot; <output id="checkin-motivation-out">${esc(form.motivation)}</output>/5</span>
+          <input type="range" min="1" max="5" step="1" data-form="checkin" data-field="motivation" data-slider-out="checkin-motivation-out" value="${esc(form.motivation)}">
+        </label>
+        <label class="field">
+          <span>Resting HR (optional)</span>
+          <input type="number" min="0" step="1" inputmode="numeric" data-form="checkin" data-field="resting_hr" value="${esc(form.resting_hr)}">
+        </label>
+        <label class="field">
+          <span>HRV (optional)</span>
+          <input type="number" min="0" step="0.1" inputmode="decimal" data-form="checkin" data-field="hrv" value="${esc(form.hrv)}">
+        </label>
+        <label class="field">
+          <span>Notes</span>
+          <textarea rows="3" data-form="checkin" data-field="notes" placeholder="Anything else going on?">${esc(form.notes)}</textarea>
+        </label>
+        <div class="settings-actions">
+          <button type="button" class="btn" data-a="checkin:submit" ${submit.status === 'submitting' || !online ? 'disabled' : ''}>${submit.status === 'submitting' ? 'Saving…' : 'Save'}</button>
+        </div>
+        ${renderSubmitResult(submit)}
+      </div>`}
     </div>`;
 }
 

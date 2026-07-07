@@ -49,11 +49,22 @@ key is *present* at startup; an invalid key surfaces on the first `/api/chat`.)
 | `GET /health` | none | `{"status":"ok"}` |
 | `GET /api/plan?athlete=renee` | bearer | exported plan JSON |
 | `POST /api/chat` | bearer | streamed (SSE) coach reply |
+| `POST /api/workouts?athlete=renee` | bearer | logs a completed workout; body matches `Workout` (date, sport, distance_m, duration_min, rpe, notes, …) minus server-assigned fields; returns the created object |
+| `GET /api/workouts?athlete=renee` | bearer | lists logged workouts, newest-last |
+| `POST /api/wellness?athlete=renee` | bearer | logs a daily check-in; body matches `Wellness` (date, sleep_quality, sleep_hours, stress, soreness, motivation, resting_hr, hrv, notes) minus server-assigned fields; returns the created object |
+| `GET /api/wellness?athlete=renee` | bearer | lists logged check-ins, newest-last |
 
 Authed endpoints require `Authorization: Bearer <API_TOKEN>`. `POST /api/chat`
 body: `{"message": str, "history": [{"role","content"}], "athlete": "renee",
 "expert_mode": bool}`; the response streams `data: {json}` events of type
 `text` / `tool_use` / `done` / `refusal` / `error`.
+
+The four workout/wellness endpoints assign `id`/`athlete_id`/`schema_version`
+server-side, validate the body by constructing the pydantic model (422
+`{"error": ...}` on failure), and persist via `make_store(settings)` — the
+same `FileStore`/`DbStore` seam `GET /api/plan` reads through. In production
+(`STORE_BACKEND=db`) a logged workout or check-in reaches the live coach
+immediately, with no redeploy.
 
 ```bash
 TOKEN=$(grep '^API_TOKEN=' .env | cut -d= -f2-)
