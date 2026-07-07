@@ -10,7 +10,7 @@ different origin, exactly like the real GitHub Pages / Cloud Run split).
 import pytest
 from playwright.sync_api import sync_playwright
 
-from conftest import BROWSERS
+from conftest import BROWSERS, seed_identity
 
 BASE_URL = 'https://coach-api.test'
 TOKEN = 'test-token-123'
@@ -33,6 +33,10 @@ def _cors_route(status, content_type, body):
 
 @pytest.fixture(params=BROWSERS)
 def page(request, base_url):
+    """Seeds a signed-in identity (past the Phase 2.5 sign-in gate) but
+    deliberately NOT a configured backend -- see test_coach_chat.py's `page`
+    fixture docstring; same reasoning applies here (the "unconfigured" tests
+    below need that empty state)."""
     cfg = request.param
     with sync_playwright() as pw:
         try:
@@ -40,6 +44,7 @@ def page(request, base_url):
         except Exception as e:
             pytest.skip(f'{cfg["name"]} unavailable in this environment: {e}')
         ctx = browser.new_context(viewport=cfg['vp'], service_workers='block')
+        seed_identity(ctx)
         pg = ctx.new_page()
         js_errors: list[str] = []
         pg.on('pageerror', lambda e: js_errors.append(str(e)))

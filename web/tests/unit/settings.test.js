@@ -42,13 +42,20 @@ describe('settings persistence', () => {
 });
 
 describe('isConfigured', () => {
-  it('is false when either field is missing', () => {
-    expect(isConfigured({ baseUrl: '', token: '' })).toBe(false);
-    expect(isConfigured({ baseUrl: 'http://x', token: '' })).toBe(false);
-    expect(isConfigured({ baseUrl: '', token: 't' })).toBe(false);
+  const identity = { email: 'andrewshaber@gmail.com', athlete: 'andrew', role: 'coach' };
+
+  it('is false when either the base URL or token is missing, even with an identity', () => {
+    expect(isConfigured({ baseUrl: '', token: '' }, identity)).toBe(false);
+    expect(isConfigured({ baseUrl: 'http://x', token: '' }, identity)).toBe(false);
+    expect(isConfigured({ baseUrl: '', token: 't' }, identity)).toBe(false);
   });
 
-  it('is true once both are set', () => {
-    expect(isConfigured({ baseUrl: 'http://x', token: 't' })).toBe(true);
+  it('is false without a signed-in identity, even with a base URL and token', () => {
+    expect(isConfigured({ baseUrl: 'http://x', token: 't' }, null)).toBe(false);
+    expect(isConfigured({ baseUrl: 'http://x', token: 't' })).toBe(false);
+  });
+
+  it('is true once the base URL, token, and a signed-in identity are all set', () => {
+    expect(isConfigured({ baseUrl: 'http://x', token: 't' }, identity)).toBe(true);
   });
 });

@@ -19,7 +19,7 @@ enforces CORS strictly even against a fulfilled/mocked response) -- see
 import pytest
 from playwright.sync_api import sync_playwright
 
-from conftest import BROWSERS
+from conftest import BROWSERS, seed_identity
 
 BASE_URL = 'https://coach-api.test'
 TOKEN = 'test-token-123'
@@ -37,6 +37,11 @@ def page(request, base_url):
     Since these tests rely on route interception to mock the backend, the
     service worker is disabled here; it isn't needed to exercise the tab
     bar / chat / settings UI.
+
+    Seeds a signed-in identity (so tests land past the Phase 2.5 sign-in
+    gate) but deliberately NOT a configured backend -- several tests below
+    exercise the "not configured yet" empty state and drive Settings
+    themselves via `_configure_backend`.
     """
     cfg = request.param
     with sync_playwright() as pw:
@@ -45,6 +50,7 @@ def page(request, base_url):
         except Exception as e:
             pytest.skip(f'{cfg["name"]} unavailable in this environment: {e}')
         ctx = browser.new_context(viewport=cfg['vp'], service_workers='block')
+        seed_identity(ctx)
         pg = ctx.new_page()
         js_errors = []
         pg.on('pageerror', lambda e: js_errors.append(str(e)))
@@ -97,9 +103,20 @@ def test_tab_bar_switches_between_plan_coach_settings(page):
     assert 'Ask your coach' in page.content()
     assert page.locator('.tab-btn.active').get_attribute('data-a') == 'tab:coach'
 
+    # The Plan tab now needs a configured backend (see main.js's loadPlan) --
+    # mock GET /api/plan before driving Settings so the tab actually renders
+    # rather than showing the "needs setup" notice.
+    page.route(
+        '**/api/plan*',
+        _cors_route(
+            200, 'application/json',
+            '{"slug":"renee","athlete":{"name":"Renee"},"events":[],"weeks":[],"macro":{"blocks":[]}}',
+        ),
+    )
     page.click('[data-a="tab:settings"]')
     page.wait_for_selector('.settings-wrap')
     assert 'Backend connection' in page.content()
+    _configure_backend(page)
 
     page.click('[data-a="tab:plan"]')
     page.wait_for_selector('.mast h1')

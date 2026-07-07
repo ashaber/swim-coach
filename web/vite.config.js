@@ -32,13 +32,29 @@ export default defineConfig({
         // The Coach tab's /api/chat and /health calls go to a configurable,
         // usually cross-origin backend URL (see src/api.js) and must never
         // be served from cache -- chat needs a live network round trip
-        // every time. runtimeCaching stays empty (no route matches /api/*,
-        // so those requests just pass through the service worker
-        // untouched) and navigateFallback is explicitly scoped away from
-        // /api/ as a second line of defense in case the backend is ever
+        // every time. navigateFallback is explicitly scoped away from /api/
+        // as a second line of defense in case the backend is ever
         // same-origin.
         navigateFallbackDenylist: [/^\/api\//],
-        runtimeCaching: [],
+        // /api/plan is the one exception: the Plan tab now fetches the live
+        // per-identity plan (see main.js's loadPlan / api.js's fetchPlan)
+        // instead of a static baked data/<slug>.json, so it needs its own
+        // cache to keep the offline-first Plan tab working. NetworkFirst
+        // always tries the network first (so a signed-in athlete gets their
+        // current plan) and only falls back to the last cached response when
+        // offline -- unlike /api/chat, this is safe to cache since a stale
+        // plan is still useful and a fresh fetch is preferred whenever
+        // there's a connection.
+        runtimeCaching: [
+          {
+            urlPattern: /\/api\/plan(\?.*)?$/,
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'api-plan-cache',
+              networkTimeoutSeconds: 6,
+            },
+          },
+        ],
       },
     }),
   ],

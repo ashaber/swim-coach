@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { postWorkout, listWorkouts, postWellness, listWellness } from '../../src/api.js';
+import {
+  postWorkout, listWorkouts, postWellness, listWellness, fetchPlan,
+} from '../../src/api.js';
 
 function fakeFetch(body, { ok = true, status = 200 } = {}) {
   return vi.fn().mockResolvedValue({
@@ -107,5 +109,35 @@ describe('listWellness', () => {
     expect(url).toBe('https://api.example.com/api/wellness?athlete=renee');
     expect(init.headers.Authorization).toBe('Bearer tok');
     expect(result).toEqual({ ok: true, data: items });
+  });
+});
+
+describe('fetchPlan', () => {
+  it('GETs /api/plan with the athlete query param and bearer header, no body', async () => {
+    const plan = { slug: 'andrew', athlete: { name: 'Andrew' }, events: [], weeks: [], macro: { blocks: [] } };
+    global.fetch = fakeFetch(plan);
+
+    const result = await fetchPlan({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'andrew' });
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/plan?athlete=andrew');
+    expect(init.method === 'GET' || init.method === undefined).toBe(true);
+    expect(init.body).toBeUndefined();
+    expect(init.headers.Authorization).toBe('Bearer tok');
+    expect(result).toEqual({ ok: true, data: plan });
+  });
+
+  it('targets whichever athlete slug it is given, not a hardcoded default', async () => {
+    global.fetch = fakeFetch({});
+    await fetchPlan({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee' });
+    const [url] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/plan?athlete=renee');
+  });
+
+  it('returns a normalized error on a non-2xx response', async () => {
+    global.fetch = fakeFetch({ error: 'no such athlete' }, { ok: false, status: 404 });
+    const result = await fetchPlan({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'ghost' });
+    expect(result).toEqual({ ok: false, error: 'no such athlete' });
   });
 });

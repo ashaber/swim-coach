@@ -57,6 +57,14 @@ jobs:
         run: npm run build
         env:
           GITHUB_PAGES: 'true'
+          # Google OAuth Client ID for Sign-In (public, not a secret -- see
+          # web/src/identity.js). Set the `VITE_GOOGLE_CLIENT_ID` repository
+          # *variable* (not secret) under Settings -> Secrets and variables ->
+          # Actions -> Variables once registered at
+          # https://console.cloud.google.com/apis/credentials. Falls back to
+          # a clearly-labeled placeholder if unset, so the build still
+          # succeeds -- Google Sign-In just won't work until this is set.
+          VITE_GOOGLE_CLIENT_ID: ${{ vars.VITE_GOOGLE_CLIENT_ID }}
 
       - uses: actions/configure-pages@v4
       - uses: actions/upload-pages-artifact@v3
