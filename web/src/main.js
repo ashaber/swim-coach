@@ -1,21 +1,25 @@
 import log from './log.js';
 import {
   renderApp, renderLoading, renderError, renderTabBar, renderCoachTab, renderSettingsTab,
-  renderLogTab, renderCheckinTab,
+  renderLogTab, renderCheckinTab, renderBackendNeededNotice,
 } from './views.js';
 import {
   loadChatSession, saveChatSession, clearChatStorage,
   appendUserMessage, applyStreamEvent, isStreaming, setExpertMode, clearMessages, toApiHistory,
 } from './chat.js';
 import { loadSettings, saveSettings, isConfigured } from './settings.js';
-import { streamChat, testConnection, postWorkout, postWellness } from './api.js';
+import {
+  streamChat, testConnection, postWorkout, postWellness, fetchPlan,
+} from './api.js';
 import { serializeWorkoutForm, serializeWellnessForm } from './forms.js';
+import { currentIdentity, signIn, signOut } from './identity.js';
 
-const base = import.meta.env.BASE_URL;
 const appEl = document.getElementById('app');
 const ACTIVE_TAB_KEY = 'swimcoach_active_tab';
 const KNOWN_TABS = ['plan', 'log', 'checkin', 'coach', 'settings'];
-const DEFAULT_ATHLETE_SLUG = 'renee';
+// Chat sessions are keyed per-athlete in localStorage (see chat.js); this is
+// just the storage key used before any real identity has ever signed in.
+const SIGNED_OUT_CHAT_KEY = 'signed-out';
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
@@ -32,13 +36,24 @@ function createCheckinForm() {
   };
 }
 
+const initialIdentity = currentIdentity();
+
 // Central app state. main.js owns this; views.js stays pure (data in,
 // markup out) and chat.js/settings.js own their own reducers/persistence
 // so this object is mostly just "which slice is currently loaded".
+//
+// `identity` (see src/identity.js) is the signed-in Google account resolved
+// to {email, athlete, role} -- it drives which athlete every API call
+// targets. It's UX-only, not a security boundary: the backend still just
+// checks the shared bearer token in settingsForm. Signed out (identity ===
+// null), the app forces the Settings tab (the sign-in gate) instead of
+// defaulting to any particular athlete.
 const state = {
-  tab: loadActiveTab(),
-  plan: { status: 'loading', data: null, error: null },
-  chat: loadChatSession(DEFAULT_ATHLETE_SLUG),
+  tab: initialIdentity ? loadActiveTab() : 'settings',
+  identity: initialIdentity,
+  identityError: null,
+  plan: { status: 'idle', data: null, error: null },
+  chat: loadChatSession(initialIdentity?.athlete || SIGNED_OUT_CHAT_KEY),
   settingsForm: loadSettings(),
   connectionTest: null,
   online: navigator.onLine,
@@ -49,7 +64,7 @@ const state = {
 };
 
 function athleteSlug() {
-  return state.plan.data?.slug || DEFAULT_ATHLETE_SLUG;
+  return state.identity?.athlete || null;
 }
 
 function loadActiveTab() {
@@ -72,19 +87,24 @@ function saveActiveTab(tab) {
 // --- Rendering ---------------------------------------------------------------
 
 function renderTabContent() {
+  // Folds both "backend URL + token saved" and "signed in" into one flag --
+  // see settings.js's isConfigured. Every write/chat/plan feature needs both,
+  // and either gap is fixed the same way (visit Settings), so one generic
+  // notice covers both cases (see the message text in views.js).
+  const backendConfigured = isConfigured(state.settingsForm, state.identity);
   switch (state.tab) {
     case 'log':
       return renderLogTab({
         form: state.logForm,
         submit: state.logSubmit,
-        backendConfigured: isConfigured(state.settingsForm),
+        backendConfigured,
         online: state.online,
       });
     case 'checkin':
       return renderCheckinTab({
         form: state.checkinForm,
         submit: state.checkinSubmit,
-        backendConfigured: isConfigured(state.settingsForm),
+        backendConfigured,
         online: state.online,
       });
     case 'coach':
@@ -92,18 +112,24 @@ function renderTabContent() {
         messages: state.chat.messages,
         expertMode: state.chat.expertMode,
         sending: isStreaming(state.chat),
-        backendConfigured: isConfigured(state.settingsForm),
+        backendConfigured,
         online: state.online,
+        role: state.identity?.role,
       });
     case 'settings':
       return renderSettingsTab({
         baseUrl: state.settingsForm.baseUrl,
         token: state.settingsForm.token,
         testStatus: state.connectionTest,
+        identity: state.identity,
+        identityError: state.identityError,
       });
     case 'plan':
     default:
-      if (state.plan.status === 'loading') return renderLoading();
+      if (!backendConfigured) {
+        return renderBackendNeededNotice('The Plan tab needs you to sign in and set a backend URL and token in Settings.');
+      }
+      if (state.plan.status === 'loading' || state.plan.status === 'idle') return renderLoading();
       if (state.plan.status === 'error') return renderError(state.plan.error);
       return renderApp(state.plan.data);
   }
@@ -112,6 +138,48 @@ function renderTabContent() {
 function render() {
   appEl.innerHTML = `${renderTabContent()}${renderTabBar(state.tab)}`;
   if (state.tab === 'coach') stickChatScrollToBottom();
+  if (state.tab === 'settings' && !state.identity) mountGoogleSignIn();
+}
+
+// Mounts (or re-mounts, on every Settings re-render while signed out) the
+// real Google Sign-In button into the placeholder div views.js renders. This
+// is the one bit of DOM glue identity.js's signIn() needs from main.js --
+// see identity.js for why the actual GIS init/decode/resolve logic lives
+// there instead, kept unit-testable and separate from this DOM wiring.
+function mountGoogleSignIn() {
+  const buttonEl = document.getElementById('google-signin-btn');
+  if (!buttonEl) return;
+  signIn({ buttonEl, onIdentity: handleIdentityResolved });
+}
+
+function handleIdentityResolved(identity) {
+  if (!identity) {
+    state.identityError = "Signed in, but that Google account isn't an authorized user of this app.";
+    render();
+    return;
+  }
+  state.identity = identity;
+  state.identityError = null;
+  state.chat = loadChatSession(identity.athlete);
+  // Left idle rather than eagerly fetched here -- setTab('plan') lazily
+  // loads it (or retries) the moment the Plan tab is actually visited, which
+  // is also what covers the "just saved settings, now ready" case, so there
+  // isn't a second load-triggering path to keep in sync with this one.
+  state.plan = { status: 'idle', data: null, error: null };
+  log.info('identity.resolved', { athlete: identity.athlete, role: identity.role });
+  render();
+}
+
+function handleSignOut() {
+  signOut();
+  state.identity = null;
+  state.identityError = null;
+  state.chat = loadChatSession(SIGNED_OUT_CHAT_KEY);
+  state.plan = { status: 'idle', data: null, error: null };
+  state.tab = 'settings';
+  saveActiveTab('settings');
+  log.info('identity.signed_out', {});
+  render();
 }
 
 function stickChatScrollToBottom() {
@@ -119,41 +187,36 @@ function stickChatScrollToBottom() {
   if (list) list.scrollTop = list.scrollHeight;
 }
 
-// --- Plan tab (unchanged data flow, now feeding into the shared shell) ------
-
-async function fetchJson(path) {
-  const res = await fetch(path);
-  if (!res.ok) throw new Error(`${path} responded ${res.status}`);
-  return res.json();
-}
+// --- Plan tab ----------------------------------------------------------------
+// Fetches the live GET /api/plan?athlete=<slug> from the backend (see
+// api.js's fetchPlan) instead of the static baked data/<slug>.json, so each
+// signed-in identity sees their own (live) plan. The service worker's
+// NetworkFirst runtimeCaching entry for /api/plan (see vite.config.js) keeps
+// this working offline after the first successful load.
 
 async function loadPlan() {
-  try {
-    const index = await fetchJson(`${base}data/index.json`);
-    if (!Array.isArray(index) || index.length === 0) {
-      throw new Error('no athletes in data/index.json');
-    }
-    const params = new URLSearchParams(location.search);
-    const wanted = params.get('athlete');
-    const entry = index.find((a) => a.slug === wanted) || index[0];
+  const settings = state.settingsForm;
+  const identity = state.identity;
+  if (!isConfigured(settings, identity)) {
+    state.plan = { status: 'idle', data: null, error: null };
+    render();
+    return;
+  }
 
-    const data = await fetchJson(`${base}data/${entry.slug}.json`);
+  state.plan = { status: 'loading', data: state.plan.data, error: null };
+  render();
+
+  const result = await fetchPlan({ baseUrl: settings.baseUrl, token: settings.token, athlete: identity.athlete });
+  if (result.ok) {
     log.info('app.plan.loaded', {
-      athlete_slug: data.slug,
-      weeks: data.weeks.length,
-      events: data.events.length,
+      athlete_slug: result.data.slug,
+      weeks: result.data.weeks?.length ?? 0,
+      events: result.data.events?.length ?? 0,
     });
-    state.plan = { status: 'ready', data, error: null };
-    // The chat session was initially loaded under DEFAULT_ATHLETE_SLUG
-    // before the real plan (and its athlete slug) was known -- reload it
-    // under the real slug now, in case they ever differ (today there's
-    // only one athlete, so this is a no-op in practice).
-    if (data.slug && data.slug !== DEFAULT_ATHLETE_SLUG) {
-      state.chat = loadChatSession(data.slug);
-    }
-  } catch (err) {
-    log.error('app.plan.load_failed', { error: err.message });
-    state.plan = { status: 'error', data: null, error: err.message };
+    state.plan = { status: 'ready', data: result.data, error: null };
+  } else {
+    log.error('app.plan.load_failed', { error: result.error });
+    state.plan = { status: 'error', data: null, error: result.error };
   }
   render();
 }
@@ -169,7 +232,7 @@ function handleSendChat() {
   if (!text) return;
 
   const settings = state.settingsForm;
-  if (!isConfigured(settings)) {
+  if (!isConfigured(settings, state.identity)) {
     state.tab = 'settings';
     saveActiveTab(state.tab);
     render();
@@ -231,6 +294,10 @@ function handleSaveSettings() {
   state.connectionTest = null;
   log.info('settings.saved', { has_base_url: !!state.settingsForm.baseUrl, has_token: !!state.settingsForm.token });
   render();
+  // No eager (re)fetch of the plan here -- setTab('plan') lazily loads it
+  // (or retries a previous error) the moment the Plan tab is actually
+  // visited, so saving Settings from any other tab never fires an
+  // unsolicited /api/plan request.
 }
 
 async function handleTestConnection() {
@@ -255,7 +322,7 @@ async function handleTestConnection() {
 async function handleSubmitLog() {
   if (state.logSubmit.status === 'submitting') return;
   const settings = state.settingsForm;
-  if (!isConfigured(settings)) {
+  if (!isConfigured(settings, state.identity)) {
     state.tab = 'settings';
     saveActiveTab(state.tab);
     render();
@@ -286,7 +353,7 @@ async function handleSubmitLog() {
 async function handleSubmitCheckin() {
   if (state.checkinSubmit.status === 'submitting') return;
   const settings = state.settingsForm;
-  if (!isConfigured(settings)) {
+  if (!isConfigured(settings, state.identity)) {
     state.tab = 'settings';
     saveActiveTab(state.tab);
     render();
@@ -319,6 +386,14 @@ function setTab(tab) {
   state.tab = tab;
   saveActiveTab(tab);
   log.info('tab.switch', { tab });
+  // Lazily (re)loads the plan the moment the Plan tab is actually visited,
+  // rather than eagerly on every settings-save / sign-in -- covers both
+  // "never loaded yet" (idle) and "let's retry" (a previous fetch errored).
+  if (tab === 'plan' && (state.plan.status === 'idle' || state.plan.status === 'error')
+    && isConfigured(state.settingsForm, state.identity)) {
+    loadPlan(); // calls render() itself
+    return;
+  }
   render();
 }
 
@@ -343,6 +418,7 @@ function onAppClick(e) {
     case 'settings:test': handleTestConnection(); break;
     case 'log:submit': handleSubmitLog(); break;
     case 'checkin:submit': handleSubmitCheckin(); break;
+    case 'identity:signout': handleSignOut(); break;
     default: break;
   }
 }

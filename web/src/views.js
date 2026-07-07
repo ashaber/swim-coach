@@ -311,7 +311,7 @@ function renderChatEmptyState(backendConfigured) {
   if (!backendConfigured) {
     return `
       <div class="chat-empty">
-        <p>Coach Chat needs a backend URL and token before it can talk to the AI coach.</p>
+        <p>Coach Chat needs you to sign in and set a backend URL and token before it can talk to the AI coach.</p>
         <button type="button" class="btn" data-a="tab:settings">Go to Settings</button>
       </div>`;
   }
@@ -321,20 +321,27 @@ function renderChatEmptyState(backendConfigured) {
     </div>`;
 }
 
-export function renderCoachTab({ messages, expertMode, sending, backendConfigured, online }) {
+export function renderCoachTab({
+  messages, expertMode, sending, backendConfigured, online, role,
+}) {
   const showComposer = backendConfigured;
+  // Expert mode (physiologist/coach-facing detail) is gated to the coach
+  // role -- it's not tied to a security boundary (see identity.js), just
+  // keeps the athlete-facing UI from surfacing a toggle that isn't for them.
+  const showExpertToggle = role === 'coach';
   return `
     <div class="wrap chat-wrap">
       <header class="mast chat-mast">
         <div>
           <span class="mark">swim-coach · coach chat</span>
           <h1>Ask your coach</h1>
-          <p class="sub">Grounded in Renee's plan and the research library.</p>
+          <p class="sub">Grounded in your plan and the research library.</p>
         </div>
+        ${showExpertToggle ? `
         <label class="expert-toggle">
           <input type="checkbox" data-a="chat:expert-toggle" ${expertMode ? 'checked' : ''}>
           <span>Expert mode<small>physiologist / coach input</small></span>
-        </label>
+        </label>` : ''}
       </header>
 
       ${!online ? '<div class="chat-banner">Offline -- Coach Chat needs a connection. The Plan tab still works offline.</div>' : ''}
@@ -366,7 +373,7 @@ const SPORT_OPTIONS = [
   { value: 'recovery', label: 'Recovery' },
 ];
 
-function renderBackendNeededNotice(message) {
+export function renderBackendNeededNotice(message) {
   return `
     <div class="chat-empty">
       <p>${esc(message)}</p>
@@ -391,7 +398,7 @@ export function renderLogTab({ form, submit, backendConfigured, online }) {
         </div>
       </header>
       ${!online ? '<div class="chat-banner">Offline -- logging needs a connection.</div>' : ''}
-      ${!backendConfigured ? renderBackendNeededNotice('Logging a swim needs a backend URL and token first.') : `
+      ${!backendConfigured ? renderBackendNeededNotice('Logging a swim needs you to sign in and set a backend URL and token first.') : `
       <div class="panel settings-panel">
         <label class="field">
           <span>Date</span>
@@ -440,7 +447,7 @@ export function renderCheckinTab({ form, submit, backendConfigured, online }) {
         </div>
       </header>
       ${!online ? '<div class="chat-banner">Offline -- check-in needs a connection.</div>' : ''}
-      ${!backendConfigured ? renderBackendNeededNotice('Checking in needs a backend URL and token first.') : `
+      ${!backendConfigured ? renderBackendNeededNotice('Checking in needs you to sign in and set a backend URL and token first.') : `
       <div class="panel settings-panel">
         <label class="field">
           <span>Date</span>
@@ -488,7 +495,9 @@ export function renderCheckinTab({ form, submit, backendConfigured, online }) {
 
 // --- Settings tab ------------------------------------------------------------
 
-export function renderSettingsTab({ baseUrl, token, testStatus }) {
+export function renderSettingsTab({
+  baseUrl, token, testStatus, identity, identityError,
+}) {
   return `
     <div class="wrap settings-wrap">
       <header class="mast" style="border-bottom:none;padding-bottom:0;">
@@ -498,6 +507,17 @@ export function renderSettingsTab({ baseUrl, token, testStatus }) {
           <p class="sub">Point the app at your coach-chat backend.</p>
         </div>
       </header>
+      <div class="panel settings-panel">
+        <h3 style="margin:0 0 12px;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);">Sign in</h3>
+        ${identity ? `
+        <p class="field-hint" style="margin:0 0 14px;">Signed in as <b>${esc(identity.email)}</b> &rarr; athlete <b>${esc(identity.athlete)}</b> (role <b>${esc(identity.role)}</b>).</p>
+        <div class="settings-actions">
+          <button type="button" class="btn-ghost" data-a="identity:signout">Sign out</button>
+        </div>` : `
+        <p class="field-hint" style="margin:0 0 14px;">Sign in with Google to load your own plan. This is client-side identity only -- the shared bearer token below still does the real authenticating to the backend.</p>
+        <div id="google-signin-btn"></div>
+        ${identityError ? `<div class="conn-result fail">${esc(identityError)}</div>` : ''}`}
+      </div>
       <div class="panel settings-panel">
         <label class="field">
           <span>Backend URL</span>

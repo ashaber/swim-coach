@@ -149,6 +149,14 @@ export async function listWellness({ baseUrl, token, athlete = 'renee' }) {
   return apiRequest({ baseUrl, token, path: `/api/wellness?athlete=${encodeURIComponent(athlete)}` });
 }
 
+/** GET {baseUrl}/api/plan?athlete=<slug> -- the live per-athlete plan. Used
+ * by the Plan tab instead of the static baked data/<slug>.json now that the
+ * athlete comes from the signed-in identity (src/identity.js) rather than a
+ * build-time default -- see main.js's loadPlan(). */
+export async function fetchPlan({ baseUrl, token, athlete }) {
+  return apiRequest({ baseUrl, token, path: `/api/plan?athlete=${encodeURIComponent(athlete)}` });
+}
+
 /** GET {baseUrl}/health -- used by the Settings tab's "Test connection". */
 export async function testConnection({ baseUrl, token }) {
   try {

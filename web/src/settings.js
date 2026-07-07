@@ -38,6 +38,10 @@ export function saveSettings(settings, storage = localStorage) {
   return clean;
 }
 
-export function isConfigured(settings) {
-  return !!(settings?.baseUrl && settings?.token);
+// Requires a signed-in identity (see src/identity.js) in addition to the
+// backend URL + token -- identity isn't a security boundary (the backend
+// still only checks the shared bearer token), but the UI shouldn't let
+// anyone act as an athlete before Google Sign-In has resolved one.
+export function isConfigured(settings, identity) {
+  return !!(settings?.baseUrl && settings?.token && identity);
 }
