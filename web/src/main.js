@@ -1,17 +1,36 @@
 import log from './log.js';
-import { renderApp, renderLoading, renderError, renderTabBar, renderCoachTab, renderSettingsTab } from './views.js';
+import {
+  renderApp, renderLoading, renderError, renderTabBar, renderCoachTab, renderSettingsTab,
+  renderLogTab, renderCheckinTab,
+} from './views.js';
 import {
   loadChatSession, saveChatSession, clearChatStorage,
   appendUserMessage, applyStreamEvent, isStreaming, setExpertMode, clearMessages, toApiHistory,
 } from './chat.js';
 import { loadSettings, saveSettings, isConfigured } from './settings.js';
-import { streamChat, testConnection } from './api.js';
+import { streamChat, testConnection, postWorkout, postWellness } from './api.js';
+import { serializeWorkoutForm, serializeWellnessForm } from './forms.js';
 
 const base = import.meta.env.BASE_URL;
 const appEl = document.getElementById('app');
 const ACTIVE_TAB_KEY = 'swimcoach_active_tab';
-const KNOWN_TABS = ['plan', 'coach', 'settings'];
+const KNOWN_TABS = ['plan', 'log', 'checkin', 'coach', 'settings'];
 const DEFAULT_ATHLETE_SLUG = 'renee';
+
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function createLogForm() {
+  return { date: todayIso(), sport: 'swim_pool', distance_m: '', duration_min: '', rpe: 5, notes: '' };
+}
+
+function createCheckinForm() {
+  return {
+    date: todayIso(), sleep_quality: 3, sleep_hours: '', stress: 3, soreness: 3, motivation: 3,
+    resting_hr: '', hrv: '', notes: '',
+  };
+}
 
 // Central app state. main.js owns this; views.js stays pure (data in,
 // markup out) and chat.js/settings.js own their own reducers/persistence
@@ -23,6 +42,10 @@ const state = {
   settingsForm: loadSettings(),
   connectionTest: null,
   online: navigator.onLine,
+  logForm: createLogForm(),
+  logSubmit: { status: 'idle', message: null },
+  checkinForm: createCheckinForm(),
+  checkinSubmit: { status: 'idle', message: null },
 };
 
 function athleteSlug() {
@@ -50,6 +73,20 @@ function saveActiveTab(tab) {
 
 function renderTabContent() {
   switch (state.tab) {
+    case 'log':
+      return renderLogTab({
+        form: state.logForm,
+        submit: state.logSubmit,
+        backendConfigured: isConfigured(state.settingsForm),
+        online: state.online,
+      });
+    case 'checkin':
+      return renderCheckinTab({
+        form: state.checkinForm,
+        submit: state.checkinSubmit,
+        backendConfigured: isConfigured(state.settingsForm),
+        online: state.online,
+      });
     case 'coach':
       return renderCoachTab({
         messages: state.chat.messages,
@@ -213,6 +250,68 @@ async function handleTestConnection() {
   render();
 }
 
+// --- Log tab (workout logging) ------------------------------------------------
+
+async function handleSubmitLog() {
+  if (state.logSubmit.status === 'submitting') return;
+  const settings = state.settingsForm;
+  if (!isConfigured(settings)) {
+    state.tab = 'settings';
+    saveActiveTab(state.tab);
+    render();
+    return;
+  }
+
+  const payload = serializeWorkoutForm(state.logForm);
+  state.logSubmit = { status: 'submitting', message: null };
+  render();
+  log.info('log.submit', { athlete: athleteSlug(), sport: payload.sport });
+
+  const result = await postWorkout({
+    baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), payload,
+  });
+  if (result.ok) {
+    log.info('log.submit_success', { athlete: athleteSlug() });
+    state.logForm = createLogForm();
+    state.logSubmit = { status: 'success', message: 'Saved.' };
+  } else {
+    log.error('log.submit_failed', { athlete: athleteSlug(), error: result.error });
+    state.logSubmit = { status: 'error', message: result.error };
+  }
+  render();
+}
+
+// --- Check-in tab (daily wellness) ---------------------------------------------
+
+async function handleSubmitCheckin() {
+  if (state.checkinSubmit.status === 'submitting') return;
+  const settings = state.settingsForm;
+  if (!isConfigured(settings)) {
+    state.tab = 'settings';
+    saveActiveTab(state.tab);
+    render();
+    return;
+  }
+
+  const payload = serializeWellnessForm(state.checkinForm);
+  state.checkinSubmit = { status: 'submitting', message: null };
+  render();
+  log.info('checkin.submit', { athlete: athleteSlug() });
+
+  const result = await postWellness({
+    baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), payload,
+  });
+  if (result.ok) {
+    log.info('checkin.submit_success', { athlete: athleteSlug() });
+    state.checkinForm = createCheckinForm();
+    state.checkinSubmit = { status: 'success', message: 'Saved.' };
+  } else {
+    log.error('checkin.submit_failed', { athlete: athleteSlug(), error: result.error });
+    state.checkinSubmit = { status: 'error', message: result.error };
+  }
+  render();
+}
+
 // --- Tab switching ------------------------------------------------------------
 
 function setTab(tab) {
@@ -242,6 +341,8 @@ function onAppClick(e) {
     case 'chat:clear': handleClearChat(); break;
     case 'settings:save': handleSaveSettings(); break;
     case 'settings:test': handleTestConnection(); break;
+    case 'log:submit': handleSubmitLog(); break;
+    case 'checkin:submit': handleSubmitCheckin(); break;
     default: break;
   }
 }
@@ -249,6 +350,29 @@ function onAppClick(e) {
 function onAppChange(e) {
   if (e.target.matches('[data-a="chat:expert-toggle"]')) {
     handleToggleExpertMode(e.target.checked);
+  }
+}
+
+// Log/Check-in form fields carry `data-form`/`data-field` instead of feeding
+// through full state + render() on every keystroke -- a full re-render on
+// every keystroke would tear out focus and slider drag position (the DOM
+// under #app is fully replaced each render()). Instead this handler mutates
+// `state.logForm`/`state.checkinForm` directly (read back on submit) and,
+// for range sliders, updates their `data-slider-out` <output> label in
+// place -- no render() call here.
+function onAppInput(e) {
+  const el = e.target;
+  const formName = el.dataset.form;
+  const field = el.dataset.field;
+  if (!formName || !field) return;
+
+  if (formName === 'log') state.logForm[field] = el.value;
+  else if (formName === 'checkin') state.checkinForm[field] = el.value;
+
+  const outId = el.dataset.sliderOut;
+  if (outId) {
+    const out = document.getElementById(outId);
+    if (out) out.textContent = el.value;
   }
 }
 
@@ -289,6 +413,7 @@ window.addEventListener('offline', updateOnlineState);
 
 appEl.addEventListener('click', onAppClick);
 appEl.addEventListener('change', onAppChange);
+appEl.addEventListener('input', onAppInput);
 appEl.addEventListener('keydown', onAppKeydown);
 
 log.info('app.init', { version: __APP_VERSION__ ?? 'dev' });
