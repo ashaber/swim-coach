@@ -4,6 +4,9 @@ and keyword routing must pick sensible library files."""
 
 from __future__ import annotations
 
+import uuid
+from datetime import date, timedelta
+
 from swim_coach.store import FileStore
 
 from app.context import (
@@ -14,6 +17,7 @@ from app.context import (
     build_system_blocks,
     route_library_files,
 )
+from fakes import make_event, make_workout
 
 
 def test_system_block_a_is_byte_identical_regardless_of_message(library_dir) -> None:
@@ -119,3 +123,109 @@ def test_per_request_context_includes_summarize_rollup(app_env) -> None:
     text = build_per_request_context(store, "renee", expert_mode=False)
     assert "compliance_pct" in text
     assert "load_ratio_7d_28d" in text
+
+
+def test_per_request_context_labels_rollup_as_aggregate(app_env) -> None:
+    # Andrew flagged that it wasn't clear what/how much was aggregate --
+    # the rollup header must say so explicitly so the model can't confuse
+    # it with the exact per-session facts above it.
+    store = FileStore(base_dir=app_env)
+    text = build_per_request_context(store, "renee", expert_mode=False)
+    assert "AGGREGATE" in text
+    assert "derived from the sessions above" in text
+
+
+def test_per_request_context_lists_exact_sessions_with_distinct_sports(app_env) -> None:
+    # The production bug this build fixes: the coach called a logged
+    # swim_ow session a "pool" session because it could only see an
+    # aggregate rollup, never an individual workout's sport.
+    store = FileStore(base_dir=app_env)
+    today = date.today()
+    ow_workout = make_workout(
+        date=today - timedelta(days=2),
+        sport="swim_ow",
+        distance_m=8000,
+        duration_min=150.0,
+        rpe=5,
+        avg_pace_s_per_100m=112.5,
+    )
+    pool_workout = make_workout(
+        date=today - timedelta(days=4),
+        sport="swim_pool",
+        distance_m=3200,
+        duration_min=65.0,
+        rpe=6,
+        avg_pace_s_per_100m=95.0,
+    )
+    store.save_workout("renee", ow_workout)
+    store.save_workout("renee", pool_workout)
+
+    text = build_per_request_context(store, "renee", expert_mode=False)
+
+    assert "### Exact logged sessions (last 28 days)" in text
+    assert "ground truth" in text
+    assert '"sport": "swim_ow"' in text
+    assert '"sport": "swim_pool"' in text
+    assert '"distance_m": 8000' in text
+    assert '"distance_m": 3200' in text
+    # chronological order: the older (pool) workout's row precedes the
+    # newer (open-water) workout's row.
+    assert text.index('"sport": "swim_pool"') < text.index('"sport": "swim_ow"')
+
+
+def test_per_request_context_excludes_stale_sessions_outside_window(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    today = date.today()
+    stale_workout = make_workout(
+        date=today - timedelta(days=90),
+        sport="swim_pool",
+        distance_m=1234,
+    )
+    store.save_workout("renee", stale_workout)
+
+    text = build_per_request_context(store, "renee", expert_mode=False)
+    assert '"distance_m": 1234' not in text
+
+
+def test_per_request_context_has_no_sessions_message_when_none_logged(app_env, tmp_path) -> None:
+    # A freshly onboarded athlete with no logged workouts yet -- the
+    # section must say so plainly rather than rendering an empty/ambiguous
+    # block.
+    from swim_coach.models import Athlete
+
+    empty_dir = tmp_path / "athletes_empty"
+    store = FileStore(base_dir=empty_dir)
+    store.save_athlete(Athlete(id=uuid.uuid4(), slug="newbie", name="Newbie"))
+
+    text = build_per_request_context(store, "newbie", expert_mode=False)
+    assert "### Exact logged sessions (last 28 days)" in text
+    assert "none logged" in text.lower()
+
+
+def test_per_request_context_lists_events_with_dates_and_days_until(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    today = date.today()
+    event = make_event(
+        name="UltraSwim 33.3 Greece",
+        event_date=today + timedelta(days=45),
+        distance_m=33300,
+        event_format="single_day",
+    )
+    store.save_events("renee", [event])
+
+    text = build_per_request_context(store, "renee", expert_mode=False)
+
+    assert "### Events / races" in text
+    assert '"name": "UltraSwim 33.3 Greece"' in text
+    assert f'"event_date": "{(today + timedelta(days=45)).isoformat()}"' in text
+    assert '"days_until": 45' in text
+    assert '"distance_m": 33300' in text
+
+
+def test_per_request_context_no_events_message_when_none_on_file(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    store.save_events("renee", [])
+
+    text = build_per_request_context(store, "renee", expert_mode=False)
+    assert "### Events / races" in text
+    assert "no events on file" in text.lower()

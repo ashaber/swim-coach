@@ -14,14 +14,58 @@ named module for anything test files import directly.
 
 from __future__ import annotations
 
+import uuid
+from datetime import date
 from types import SimpleNamespace
 from typing import Any
+
+from swim_coach.models import Event, Workout
 
 TEST_API_TOKEN = "test-token-please-ignore"  # noqa: S105 - test fixture, not a real secret
 
 
 def auth_headers(token: str = TEST_API_TOKEN) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+def make_workout(**overrides: Any) -> Workout:
+    """A completed-workout fixture, `swim_pool` by default. Used by
+    test_context.py to prove the per-request context surfaces each logged
+    session's exact `sport` (the production bug this build fixes: the coach
+    calling a logged `swim_ow` session a "pool" session because it could
+    only see an aggregate rollup, never the workout itself)."""
+    data: dict[str, Any] = dict(
+        id=uuid.uuid4(),
+        athlete_id=uuid.uuid4(),
+        date=date(2026, 7, 1),
+        sport="swim_pool",
+        source="manual",
+        distance_m=3000,
+        duration_min=60.0,
+        rpe=6,
+        avg_pace_s_per_100m=98.0,
+    )
+    data.update(overrides)
+    return Workout(**data)
+
+
+def make_event(**overrides: Any) -> Event:
+    """A target-event fixture. Used by test_context.py to prove the
+    per-request context surfaces race dates (`event_date`/`days_until`),
+    fixing the coach not knowing when the athlete's races are."""
+    data: dict[str, Any] = dict(
+        id=uuid.uuid4(),
+        athlete_id=uuid.uuid4(),
+        name="Test Ultra Swim",
+        event_date=date(2026, 9, 1),
+        distance_m=10000,
+        water_temp_c=20.0,
+        wetsuit=False,
+        priority="A",
+        event_format="single_day",
+    )
+    data.update(overrides)
+    return Event(**data)
 
 
 def make_text_block(text: str) -> SimpleNamespace:
