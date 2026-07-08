@@ -193,7 +193,7 @@ def test_tool_loop_propose_adaptation_does_not_persist(client, fake_claude_chat_
     assert not week_file.exists()
 
 
-def test_tool_loop_log_open_question_writes_jsonl(
+def test_tool_loop_log_open_question_persists_feedback(
     client, fake_claude_chat_factory, athletes_dir, run_tag
 ) -> None:
     question = f"does cold-water acclimation change fueling needs? [{run_tag}]"
@@ -215,12 +215,13 @@ def test_tool_loop_log_open_question_writes_jsonl(
     )
     assert response.status_code == 200
 
-    research_dir = athletes_dir.parent / "research"
-    log_path = research_dir / "open-questions.jsonl"
-    assert log_path.exists()
-    lines = [json.loads(line) for line in log_path.read_text().splitlines()]
-    matching = [entry for entry in lines if run_tag in entry["question"]]
+    from swim_coach.store import FileStore
+
+    store = FileStore(base_dir=athletes_dir)
+    entries = store.list_feedback(athlete="renee")
+    matching = [e for e in entries if run_tag in e.body]
     assert len(matching) == 1
-    assert matching[0]["topic"] == "nutrition"
-    assert matching[0]["athlete"] == "renee"
-    assert matching[0]["expert_mode"] is True
+    assert matching[0].type == "research_question"
+    assert matching[0].source == "coach"
+    assert matching[0].context["topic"] == "nutrition"
+    assert matching[0].context["expert_mode"] is True

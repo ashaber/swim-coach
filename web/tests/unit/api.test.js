@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
-  postWorkout, listWorkouts, postWellness, listWellness, fetchPlan,
+  postWorkout, listWorkouts, postWellness, listWellness, fetchPlan, postFeedback, listFeedback,
 } from '../../src/api.js';
 
 function fakeFetch(body, { ok = true, status = 200 } = {}) {
@@ -139,5 +139,50 @@ describe('fetchPlan', () => {
     global.fetch = fakeFetch({ error: 'no such athlete' }, { ok: false, status: 404 });
     const result = await fetchPlan({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'ghost' });
     expect(result).toEqual({ ok: false, error: 'no such athlete' });
+  });
+});
+
+describe('postFeedback', () => {
+  it('POSTs to /api/feedback with the athlete query param, bearer header, and JSON body', async () => {
+    const created = { id: 'f1', type: 'feature_request', body: 'add a pace calculator' };
+    global.fetch = fakeFetch(created);
+    const payload = { type: 'feature_request', body: 'add a pace calculator' };
+
+    const result = await postFeedback({
+      baseUrl: 'https://api.example.com', token: 'tok123', athlete: 'renee', payload,
+    });
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/feedback?athlete=renee');
+    expect(init.method).toBe('POST');
+    expect(init.headers.Authorization).toBe('Bearer tok123');
+    expect(JSON.parse(init.body)).toEqual(payload);
+    expect(result).toEqual({ ok: true, data: created });
+  });
+
+  it('returns a normalized error on a non-2xx response', async () => {
+    global.fetch = fakeFetch({ error: 'research_question is coach-only' }, { ok: false, status: 422 });
+    const result = await postFeedback({
+      baseUrl: 'https://api.example.com', token: 't', athlete: 'renee', payload: {},
+    });
+    expect(result).toEqual({ ok: false, error: 'research_question is coach-only' });
+  });
+});
+
+describe('listFeedback', () => {
+  it('GETs /api/feedback with the athlete query param and bearer header, no body', async () => {
+    const items = [{ id: 'f1' }, { id: 'f2' }];
+    global.fetch = fakeFetch(items);
+
+    const result = await listFeedback({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee' });
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/feedback?athlete=renee');
+    expect(init.method === 'GET' || init.method === undefined).toBe(true);
+    expect(init.body).toBeUndefined();
+    expect(init.headers.Authorization).toBe('Bearer tok');
+    expect(result).toEqual({ ok: true, data: items });
   });
 });

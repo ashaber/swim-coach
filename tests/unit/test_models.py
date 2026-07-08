@@ -5,7 +5,7 @@ round-trips against tmp_path.
 """
 
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 
 import pytest
 import yaml
@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from swim_coach.models import (
     Athlete,
     Event,
+    Feedback,
     MacroBlock,
     MacroPlan,
     Session,
@@ -127,6 +128,21 @@ def make_workout(**overrides):
     )
     data.update(overrides)
     return Workout(**data)
+
+
+def make_feedback(**overrides):
+    data = dict(
+        id=uuid.uuid4(),
+        athlete_id=ATHLETE_ID,
+        type="feature_request",
+        source="athlete",
+        body="Would love a swim-cap-color-coded interval clock.",
+        context={},
+        status="open",
+        created_at=datetime(2026, 7, 7, 12, 0, 0, tzinfo=timezone.utc),
+    )
+    data.update(overrides)
+    return Feedback(**data)
 
 
 def make_wellness(**overrides):
@@ -253,6 +269,53 @@ def test_week_plan_draft_defaults_false():
 
 
 # --- schema_version + athlete_id presence ---
+
+
+# --- Feedback ---------------------------------------------------------------
+
+
+def test_feedback_carries_schema_version_and_defaults():
+    feedback = make_feedback()
+    assert feedback.schema_version == 1
+    assert feedback.status == "open"
+    assert feedback.context == {}
+
+
+def test_feedback_athlete_id_may_be_none():
+    # A coach research question or general feedback may not be tied to a
+    # specific athlete's row.
+    feedback = make_feedback(athlete_id=None)
+    assert feedback.athlete_id is None
+
+
+def test_feedback_rejects_bad_type():
+    with pytest.raises(ValidationError):
+        make_feedback(type="not-a-real-type")
+
+
+def test_feedback_rejects_bad_source():
+    with pytest.raises(ValidationError):
+        make_feedback(source="pool_coach")
+
+
+def test_feedback_accepts_all_valid_types():
+    for feedback_type in ("research_question", "feature_request", "comment", "bug"):
+        feedback = make_feedback(type=feedback_type)
+        assert feedback.type == feedback_type
+
+
+def test_feedback_context_carries_arbitrary_dict():
+    feedback = make_feedback(context={"topic": "taper", "expert_mode": True})
+    assert feedback.context == {"topic": "taper", "expert_mode": True}
+
+
+def test_feedback_round_trip_through_yaml():
+    original = make_feedback()
+    dumped = yaml.safe_dump(original.model_dump(mode="json"))
+    loaded_data = yaml.safe_load(dumped)
+    restored = Feedback.model_validate(loaded_data)
+    assert restored == original
+    assert isinstance(loaded_data["id"], str)
 
 
 @pytest.mark.parametrize(

@@ -5,18 +5,22 @@ brief): `propose_adaptation` calls `swim_coach.adapt.adapt_week` directly --
 the same function `cli.py`'s `adapt` command and the `/adapt` skill call --
 and returns the draft for discussion without persisting it. `get_plan_summary`
 reuses `context.summarize_rollup` (itself a thin reassembly of `load.py`'s
-functions). `log_open_question` implements IDEA 005.
+functions). `log_open_question` implements IDEA 005, persisting through the
+durable `store.save_feedback` seam (engine/swim_coach/models.Feedback)
+instead of the old ephemeral `research/open-questions.jsonl` file, which was
+silently wiped every time Cloud Run scaled to zero.
 """
 
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any, Callable
 
 from swim_coach.adapt import adapt_week
-from swim_coach.store import FileStore
+from swim_coach.models import Feedback
+from swim_coach.store import StoreInterface
 
 from app.context import iso_week_str, summarize_rollup
 from app.logging_config import get_logger
@@ -95,7 +99,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
 ]
 
 
-def _handle_propose_adaptation(input_data: dict[str, Any], *, store: FileStore, slug: str) -> dict[str, Any]:
+def _handle_propose_adaptation(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
     iso_week = input_data.get("iso_week")
     if not iso_week:
         return {"error": "iso_week is required"}
@@ -170,7 +174,7 @@ def _handle_propose_adaptation(input_data: dict[str, Any], *, store: FileStore, 
     }
 
 
-def _handle_get_plan_summary(input_data: dict[str, Any], *, store: FileStore, slug: str) -> dict[str, Any]:
+def _handle_get_plan_summary(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
     weeks = input_data.get("weeks") or 4
     try:
         weeks = int(weeks)
@@ -180,31 +184,37 @@ def _handle_get_plan_summary(input_data: dict[str, Any], *, store: FileStore, sl
 
 
 def _handle_log_open_question(
-    input_data: dict[str, Any], *, research_dir: Path, slug: str, expert_mode: bool
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str, expert_mode: bool
 ) -> dict[str, Any]:
     question = input_data.get("question")
     topic = input_data.get("topic")
     if not question or not topic:
         return {"error": "question and topic are both required"}
 
-    entry = {
-        "ts": datetime.now(timezone.utc).isoformat(),
-        "athlete": slug,
-        "question": question,
-        "topic": topic,
-        "expert_mode": expert_mode,
-    }
-    research_dir.mkdir(parents=True, exist_ok=True)
-    path = research_dir / "open-questions.jsonl"
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(entry) + "\n")
+    try:
+        athlete_id = store.load_athlete(slug).id
+    except Exception:  # noqa: BLE001 - a research question must still log even if the
+        # athlete profile can't be resolved for some reason; it just goes in unlinked.
+        athlete_id = None
+
+    entry = Feedback(
+        id=uuid.uuid4(),
+        athlete_id=athlete_id,
+        type="research_question",
+        source="coach",
+        body=question,
+        context={"topic": topic, "expert_mode": expert_mode},
+        status="open",
+        created_at=datetime.now(timezone.utc),
+    )
+    store.save_feedback(entry)
 
     log.info("open question logged", athlete=slug, topic=topic, expert_mode=expert_mode)
-    return {"logged": True, "path": str(path)}
+    return {"logged": True, "id": str(entry.id)}
 
 
 def build_tool_handlers(
-    store: FileStore, *, slug: str, research_dir: Path, expert_mode: bool
+    store: StoreInterface, *, slug: str, expert_mode: bool
 ) -> dict[str, ToolHandler]:
     """Binds the request's athlete slug / expert_mode / store into closures
     over the tool handlers above, so the tool schema the model sees never
@@ -218,6 +228,6 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "log_open_question": lambda input_data: _handle_log_open_question(
-            input_data, research_dir=research_dir, slug=slug, expert_mode=expert_mode
+            input_data, store=store, slug=slug, expert_mode=expert_mode
         ),
     }

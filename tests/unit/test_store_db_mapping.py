@@ -10,11 +10,12 @@ connection. They assert two things per entity:
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 
 from swim_coach.models import (
     Athlete,
     Event,
+    Feedback,
     MacroBlock,
     MacroPlan,
     Session,
@@ -26,9 +27,11 @@ from swim_coach.store_db import (
     athlete_to_row,
     coach_text_storage_key,
     event_to_row,
+    feedback_to_row,
     macro_to_row,
     row_to_athlete,
     row_to_event,
+    row_to_feedback,
     row_to_macro,
     row_to_week,
     row_to_wellness,
@@ -170,6 +173,42 @@ def test_wellness_mapping_round_trip():
     assert row["id"] == w.id
     assert row["date"] == w.date
     assert row_to_wellness(row) == w
+
+
+def _feedback(**overrides) -> Feedback:
+    data: dict = dict(
+        id=uuid.uuid4(),
+        athlete_id=AID,
+        type="feature_request",
+        source="athlete",
+        body="add a pace calculator",
+        context={"screen": "log"},
+        status="open",
+        created_at=datetime(2026, 7, 7, 12, 0, 0, tzinfo=timezone.utc),
+    )
+    data.update(overrides)
+    return Feedback(**data)
+
+
+def test_feedback_mapping_round_trip():
+    f = _feedback()
+    row = feedback_to_row(f)
+    assert row["id"] == f.id
+    assert row["athlete_id"] == f.athlete_id
+    assert row["type"] == f.type
+    assert row["source"] == f.source
+    assert row["body"] == f.body
+    assert row["context"] == f.context
+    assert row["status"] == f.status
+    assert row["created_at"] == f.created_at
+    assert row_to_feedback(row) == f
+
+
+def test_feedback_mapping_round_trip_with_null_athlete_id():
+    f = _feedback(athlete_id=None, type="research_question", source="coach")
+    row = feedback_to_row(f)
+    assert row["athlete_id"] is None
+    assert row_to_feedback(row) == f
 
 
 def test_coach_text_storage_key_shape():
