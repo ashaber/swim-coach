@@ -42,6 +42,16 @@ def page(request, base_url):
     gate) but deliberately NOT a configured backend -- several tests below
     exercise the "not configured yet" empty state and drive Settings
     themselves via `_configure_backend`.
+
+    Also gives every test in this file a default mocked `GET /api/athlete`
+    response: the Settings tab's profile-edit section (Phase 2.5) fetches it
+    the moment the backend becomes configured (see main.js's
+    maybeLoadProfile), and every test here that calls `_configure_backend`
+    lands back on the Settings tab -- without this, that fetch would hit the
+    real (mocked-origin, unmocked-path) backend and fail on CORS, which
+    surfaces as exactly the kind of uncaught error this fixture's teardown
+    asserts against. Tests that care about the profile section's own
+    behavior live in test_profile_edit.py instead.
     """
     cfg = request.param
     with sync_playwright() as pw:
@@ -51,6 +61,10 @@ def page(request, base_url):
             pytest.skip(f'{cfg["name"]} unavailable in this environment: {e}')
         ctx = browser.new_context(viewport=cfg['vp'], service_workers='block')
         seed_identity(ctx)
+        ctx.route(
+            '**/api/athlete*',
+            _cors_route(200, 'application/json', '{"slug": "renee", "name": "Renee"}'),
+        )
         pg = ctx.new_page()
         js_errors = []
         pg.on('pageerror', lambda e: js_errors.append(str(e)))

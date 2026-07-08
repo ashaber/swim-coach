@@ -9,9 +9,13 @@ import {
 } from './chat.js';
 import { loadSettings, saveSettings, isConfigured } from './settings.js';
 import {
-  streamChat, testConnection, postWorkout, postWellness, fetchPlan, postFeedback, listFeedback,
+  streamChat, testConnection, postWorkout, postWellness, fetchPlan, getAthlete, patchAthlete,
+  postFeedback, listFeedback,
 } from './api.js';
-import { serializeWorkoutForm, serializeWellnessForm, serializeFeedbackForm } from './forms.js';
+import {
+  serializeWorkoutForm, serializeWellnessForm, profileFormFromAthlete, serializeProfileForm,
+  serializeFeedbackForm,
+} from './forms.js';
 import { currentIdentity, signIn, signOut } from './identity.js';
 
 const appEl = document.getElementById('app');
@@ -33,6 +37,15 @@ function createCheckinForm() {
   return {
     date: todayIso(), sleep_quality: 3, sleep_hours: '', stress: 3, soreness: 3, motivation: 3,
     resting_hr: '', hrv: '', notes: '',
+  };
+}
+
+function createProfileForm() {
+  return {
+    name: '', dob: '', sex: '', heightFeet: '', heightInches: '', weightLb: '', cssPace: '',
+    poolDays: {
+      monday: false, tuesday: false, wednesday: false, thursday: false, friday: false, saturday: false, sunday: false,
+    },
   };
 }
 
@@ -65,6 +78,9 @@ const state = {
   logSubmit: { status: 'idle', message: null },
   checkinForm: createCheckinForm(),
   checkinSubmit: { status: 'idle', message: null },
+  profileForm: createProfileForm(),
+  profileLoad: { status: 'idle', error: null },
+  profileSubmit: { status: 'idle', message: null },
   feedbackForm: createFeedbackForm(),
   feedbackSubmit: { status: 'idle', message: null },
   feedbackEntries: { status: 'idle', data: [] },
@@ -139,6 +155,10 @@ function renderTabContent() {
         testStatus: state.connectionTest,
         identity: state.identity,
         identityError: state.identityError,
+        backendConfigured,
+        profileForm: state.profileForm,
+        profileLoad: state.profileLoad,
+        profileSubmit: state.profileSubmit,
       });
     case 'plan':
     default:
@@ -182,10 +202,14 @@ function handleIdentityResolved(identity) {
   // is also what covers the "just saved settings, now ready" case, so there
   // isn't a second load-triggering path to keep in sync with this one.
   state.plan = { status: 'idle', data: null, error: null };
+  state.profileForm = createProfileForm();
+  state.profileLoad = { status: 'idle', error: null };
+  state.profileSubmit = { status: 'idle', message: null };
   // Same lazy-load convention for the Feedback tab's list (see setTab).
   state.feedbackEntries = { status: 'idle', data: [] };
   log.info('identity.resolved', { athlete: identity.athlete, role: identity.role });
   render();
+  maybeLoadProfile();
 }
 
 function handleSignOut() {
@@ -194,6 +218,9 @@ function handleSignOut() {
   state.identityError = null;
   state.chat = loadChatSession(SIGNED_OUT_CHAT_KEY);
   state.plan = { status: 'idle', data: null, error: null };
+  state.profileForm = createProfileForm();
+  state.profileLoad = { status: 'idle', error: null };
+  state.profileSubmit = { status: 'idle', message: null };
   state.feedbackEntries = { status: 'idle', data: [] };
   state.tab = 'settings';
   saveActiveTab('settings');
@@ -316,7 +343,10 @@ function handleSaveSettings() {
   // No eager (re)fetch of the plan here -- setTab('plan') lazily loads it
   // (or retries a previous error) the moment the Plan tab is actually
   // visited, so saving Settings from any other tab never fires an
-  // unsolicited /api/plan request.
+  // unsolicited /api/plan request. The profile section, though, lives on
+  // this same tab -- becoming "configured" right here is exactly the moment
+  // it should fetch, so maybeLoadProfile() is called explicitly.
+  maybeLoadProfile();
 }
 
 async function handleTestConnection() {
@@ -398,6 +428,36 @@ async function handleSubmitCheckin() {
   render();
 }
 
+// --- Profile edit (Settings tab section) --------------------------------------
+// Self-service profile editing (Phase 2.5): GET /api/athlete prefills the
+// form the moment the Settings tab is opened (or becomes configured), PATCH
+// saves it. Lazy-loaded the same way loadPlan() is -- see setTab() below --
+// rather than eagerly fetched on every identity/settings change.
+
+async function loadProfile() {
+  const settings = state.settingsForm;
+  const identity = state.identity;
+  if (!isConfigured(settings, identity)) {
+    state.profileLoad = { status: 'idle', error: null };
+    render();
+    return;
+  }
+
+  state.profileLoad = { status: 'loading', error: null };
+  render();
+
+  const result = await getAthlete({ baseUrl: settings.baseUrl, token: settings.token, athlete: identity.athlete });
+  if (result.ok) {
+    log.info('profile.loaded', { athlete: identity.athlete });
+    state.profileForm = profileFormFromAthlete(result.data);
+    state.profileLoad = { status: 'ready', error: null };
+  } else {
+    log.error('profile.load_failed', { athlete: identity.athlete, error: result.error });
+    state.profileLoad = { status: 'error', error: result.error };
+  }
+  render();
+}
+
 // --- Feedback tab (durable feedback log) ---------------------------------------
 
 async function loadFeedback() {
@@ -419,6 +479,41 @@ async function loadFeedback() {
   } else {
     log.error('feedback.list_load_failed', { error: result.error });
     state.feedbackEntries = { status: 'error', data: [] };
+  }
+  render();
+}
+
+// Triggers loadProfile() only when it's actually useful: on the Settings tab,
+// backend+identity configured, and not already loading/loaded. Safe to call
+// from anywhere (identity resolution, settings save, tab switch) without
+// double-fetching or fetching while the athlete is looking at another tab.
+function maybeLoadProfile() {
+  if (state.tab !== 'settings') return;
+  if (!isConfigured(state.settingsForm, state.identity)) return;
+  if (state.profileLoad.status === 'loading' || state.profileLoad.status === 'ready') return;
+  loadProfile();
+}
+
+async function handleSubmitProfile() {
+  if (state.profileSubmit.status === 'submitting') return;
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) return;
+
+  const payload = serializeProfileForm(state.profileForm);
+  state.profileSubmit = { status: 'submitting', message: null };
+  render();
+  log.info('profile.submit', { athlete: athleteSlug() });
+
+  const result = await patchAthlete({
+    baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), payload,
+  });
+  if (result.ok) {
+    log.info('profile.submit_success', { athlete: athleteSlug() });
+    state.profileForm = profileFormFromAthlete(result.data);
+    state.profileSubmit = { status: 'success', message: 'Saved.' };
+  } else {
+    log.error('profile.submit_failed', { athlete: athleteSlug(), error: result.error });
+    state.profileSubmit = { status: 'error', message: result.error };
   }
   render();
 }
@@ -480,6 +575,7 @@ function setTab(tab) {
     return;
   }
   render();
+  maybeLoadProfile();
 }
 
 // --- Event delegation ---------------------------------------------------------
@@ -503,6 +599,7 @@ function onAppClick(e) {
     case 'settings:test': handleTestConnection(); break;
     case 'log:submit': handleSubmitLog(); break;
     case 'checkin:submit': handleSubmitCheckin(); break;
+    case 'profile:submit': handleSubmitProfile(); break;
     case 'feedback:submit': handleSubmitFeedback(); break;
     case 'identity:signout': handleSignOut(); break;
     default: break;
@@ -530,6 +627,17 @@ function onAppInput(e) {
 
   if (formName === 'log') state.logForm[field] = el.value;
   else if (formName === 'checkin') state.checkinForm[field] = el.value;
+  else if (formName === 'profile') {
+    if (field === 'pool_days') {
+      // Each pool-day checkbox carries data-day (see views.js's
+      // POOL_DAY_LABELS) instead of a distinct data-field, since they all
+      // toggle keys within the same profileForm.poolDays map.
+      const day = el.dataset.day;
+      if (day) state.profileForm.poolDays[day] = el.checked;
+    } else {
+      state.profileForm[field] = el.value;
+    }
+  }
   else if (formName === 'feedback') state.feedbackForm[field] = el.value;
 
   const outId = el.dataset.sliderOut;
@@ -584,3 +692,4 @@ updateOfflineBanner();
 initTheme();
 render();
 loadPlan();
+maybeLoadProfile();

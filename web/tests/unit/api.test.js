@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
-  postWorkout, listWorkouts, postWellness, listWellness, fetchPlan, postFeedback, listFeedback,
+  postWorkout, listWorkouts, postWellness, listWellness, fetchPlan, getAthlete, patchAthlete,
+  postFeedback, listFeedback,
 } from '../../src/api.js';
 
 function fakeFetch(body, { ok = true, status = 200 } = {}) {
@@ -139,6 +140,58 @@ describe('fetchPlan', () => {
     global.fetch = fakeFetch({ error: 'no such athlete' }, { ok: false, status: 404 });
     const result = await fetchPlan({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'ghost' });
     expect(result).toEqual({ ok: false, error: 'no such athlete' });
+  });
+});
+
+describe('getAthlete', () => {
+  it('GETs /api/athlete with the athlete query param and bearer header, no body', async () => {
+    const profile = { slug: 'andrew', name: 'Andrew', css_pace_s_per_100m: 100.0 };
+    global.fetch = fakeFetch(profile);
+
+    const result = await getAthlete({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'andrew' });
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/athlete?athlete=andrew');
+    expect(init.method === 'GET' || init.method === undefined).toBe(true);
+    expect(init.body).toBeUndefined();
+    expect(init.headers.Authorization).toBe('Bearer tok');
+    expect(result).toEqual({ ok: true, data: profile });
+  });
+
+  it('returns a normalized error on a non-2xx response', async () => {
+    global.fetch = fakeFetch({ error: 'no such athlete' }, { ok: false, status: 404 });
+    const result = await getAthlete({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'ghost' });
+    expect(result).toEqual({ ok: false, error: 'no such athlete' });
+  });
+});
+
+describe('patchAthlete', () => {
+  it('PATCHes /api/athlete with the athlete query param, bearer header, and JSON body', async () => {
+    const updated = { slug: 'andrew', name: 'Andrew Shaber' };
+    global.fetch = fakeFetch(updated);
+    const payload = { name: 'Andrew Shaber' };
+
+    const result = await patchAthlete({
+      baseUrl: 'https://api.example.com', token: 'tok123', athlete: 'andrew', payload,
+    });
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/athlete?athlete=andrew');
+    expect(init.method).toBe('PATCH');
+    expect(init.headers.Authorization).toBe('Bearer tok123');
+    expect(init.headers['Content-Type']).toBe('application/json');
+    expect(JSON.parse(init.body)).toEqual(payload);
+    expect(result).toEqual({ ok: true, data: updated });
+  });
+
+  it('returns a normalized error on a 422', async () => {
+    global.fetch = fakeFetch({ error: 'invalid sex' }, { ok: false, status: 422 });
+    const result = await patchAthlete({
+      baseUrl: 'https://api.example.com', token: 'tok', athlete: 'andrew', payload: {},
+    });
+    expect(result).toEqual({ ok: false, error: 'invalid sex' });
   });
 });
 

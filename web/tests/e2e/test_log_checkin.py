@@ -36,7 +36,13 @@ def page(request, base_url):
     """Seeds a signed-in identity (past the Phase 2.5 sign-in gate) but
     deliberately NOT a configured backend -- see test_coach_chat.py's `page`
     fixture docstring; same reasoning applies here (the "unconfigured" tests
-    below need that empty state)."""
+    below need that empty state).
+
+    Also mocks a default `GET /api/athlete` response -- see
+    test_coach_chat.py's `page` fixture docstring for why (the Settings
+    tab's profile-edit section fetches it as soon as `_configure_backend`
+    lands back on that tab). test_profile_edit.py covers that section's own
+    behavior."""
     cfg = request.param
     with sync_playwright() as pw:
         try:
@@ -45,6 +51,10 @@ def page(request, base_url):
             pytest.skip(f'{cfg["name"]} unavailable in this environment: {e}')
         ctx = browser.new_context(viewport=cfg['vp'], service_workers='block')
         seed_identity(ctx)
+        ctx.route(
+            '**/api/athlete*',
+            _cors_route(200, 'application/json', '{"slug": "renee", "name": "Renee"}'),
+        )
         pg = ctx.new_page()
         js_errors: list[str] = []
         pg.on('pageerror', lambda e: js_errors.append(str(e)))
