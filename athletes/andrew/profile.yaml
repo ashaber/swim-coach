@@ -44,3 +44,7 @@ pool_schedule:
 - day: thursday
   duration_min: 60
   source: self-coached
+dob: '1975-04-07'
+sex: male
+height_cm: 182.88
+weight_kg: 72.6
