@@ -4,8 +4,7 @@ against the isolated per-test athlete tree copy."""
 
 from __future__ import annotations
 
-import json
-
+from fakes import SpyFeedbackStore
 from swim_coach.store import FileStore
 
 from app.tools import build_tool_handlers
@@ -13,9 +12,7 @@ from app.tools import build_tool_handlers
 
 def test_propose_adaptation_returns_draft_without_persisting(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(
-        store, slug="renee", research_dir=athletes_dir.parent / "research", expert_mode=False
-    )
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
 
     result = handlers["propose_adaptation"]({"iso_week": "2026-W30"})
 
@@ -32,9 +29,7 @@ def test_propose_adaptation_returns_draft_without_persisting(athletes_dir) -> No
 
 def test_propose_adaptation_missing_current_week_is_an_error(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(
-        store, slug="renee", research_dir=athletes_dir.parent / "research", expert_mode=False
-    )
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
 
     # 2026-W50 has no week plan for W49 to adapt from.
     result = handlers["propose_adaptation"]({"iso_week": "2026-W50"})
@@ -43,18 +38,14 @@ def test_propose_adaptation_missing_current_week_is_an_error(athletes_dir) -> No
 
 def test_propose_adaptation_invalid_iso_week_is_an_error(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(
-        store, slug="renee", research_dir=athletes_dir.parent / "research", expert_mode=False
-    )
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
     result = handlers["propose_adaptation"]({"iso_week": "not-a-week"})
     assert "error" in result
 
 
 def test_get_plan_summary_matches_engine_summarize_shape(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(
-        store, slug="renee", research_dir=athletes_dir.parent / "research", expert_mode=False
-    )
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
     result = handlers["get_plan_summary"]({"weeks": 4})
     assert result["athlete"] == "renee"
     assert result["weeks"] == 4
@@ -62,30 +53,28 @@ def test_get_plan_summary_matches_engine_summarize_shape(athletes_dir) -> None:
     assert "compliance_pct" in result
 
 
-def test_log_open_question_appends_jsonl_entry(athletes_dir, run_tag) -> None:
-    research_dir = athletes_dir.parent / "research"
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(
-        store, slug="renee", research_dir=research_dir, expert_mode=True
-    )
+def test_log_open_question_calls_save_feedback_with_research_question_shape(
+    athletes_dir, run_tag
+) -> None:
+    spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir))
+    handlers = build_tool_handlers(spy, slug="renee", expert_mode=True)
 
     question = f"is there swim-specific taper research beyond the swim-adapted cycling data? [{run_tag}]"
     result = handlers["log_open_question"]({"question": question, "topic": "taper"})
 
     assert result["logged"] is True
-    path = research_dir / "open-questions.jsonl"
-    assert path.exists()
-    entries = [json.loads(line) for line in path.read_text().splitlines()]
-    matching = [e for e in entries if run_tag in e["question"]]
-    assert len(matching) == 1
-    assert matching[0]["expert_mode"] is True
-    assert matching[0]["topic"] == "taper"
+    assert len(spy.saved) == 1
+    entry = spy.saved[0]
+    assert entry.type == "research_question"
+    assert entry.source == "coach"
+    assert entry.body == question
+    assert entry.context == {"topic": "taper", "expert_mode": True}
+    assert entry.athlete_id == spy.load_athlete("renee").id
 
 
 def test_log_open_question_requires_question_and_topic(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(
-        store, slug="renee", research_dir=athletes_dir.parent / "research", expert_mode=False
-    )
+    spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir))
+    handlers = build_tool_handlers(spy, slug="renee", expert_mode=False)
     result = handlers["log_open_question"]({"question": "", "topic": ""})
     assert "error" in result
+    assert spy.saved == []

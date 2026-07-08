@@ -149,6 +149,23 @@ export async function listWellness({ baseUrl, token, athlete = 'renee' }) {
   return apiRequest({ baseUrl, token, path: `/api/wellness?athlete=${encodeURIComponent(athlete)}` });
 }
 
+/** POST {baseUrl}/api/feedback?athlete=<slug> -- submits a feature request,
+ * comment, or bug report (the coach's own research-gap questions are
+ * logged separately, server-side, via the chat tool loop -- see
+ * backend/app/tools.py's log_open_question). */
+export async function postFeedback({ baseUrl, token, athlete = 'renee', payload }) {
+  return apiRequest({
+    baseUrl, token, path: `/api/feedback?athlete=${encodeURIComponent(athlete)}`, method: 'POST', body: payload,
+  });
+}
+
+/** GET {baseUrl}/api/feedback?athlete=<slug> -- lists the durable feedback
+ * log (most recent first), including the coach's auto-logged research
+ * questions. */
+export async function listFeedback({ baseUrl, token, athlete = 'renee' }) {
+  return apiRequest({ baseUrl, token, path: `/api/feedback?athlete=${encodeURIComponent(athlete)}` });
+}
+
 /** GET {baseUrl}/api/plan?athlete=<slug> -- the live per-athlete plan. Used
  * by the Plan tab instead of the static baked data/<slug>.json now that the
  * athlete comes from the signed-in identity (src/identity.js) rather than a

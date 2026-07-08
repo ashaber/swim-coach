@@ -72,7 +72,6 @@ async def chat(
     tool_handlers = build_tool_handlers(
         store,
         slug=payload.athlete,
-        research_dir=settings.research_dir,
         expert_mode=payload.expert_mode,
     )
 

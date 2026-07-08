@@ -19,7 +19,7 @@ from datetime import date
 from types import SimpleNamespace
 from typing import Any
 
-from swim_coach.models import Event, Workout
+from swim_coach.models import Event, Feedback, Workout
 
 TEST_API_TOKEN = "test-token-please-ignore"  # noqa: S105 - test fixture, not a real secret
 
@@ -66,6 +66,25 @@ def make_event(**overrides: Any) -> Event:
     )
     data.update(overrides)
     return Event(**data)
+
+
+class SpyFeedbackStore:
+    """Wraps a real StoreInterface, delegating every call to it (so real
+    engine tests -- propose_adaptation/get_plan_summary -- work unchanged)
+    but also recording every `save_feedback` call in `.saved`, so
+    test_tools.py can assert what `_handle_log_open_question` persisted
+    without depending on jsonl-file mechanics."""
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+        self.saved: list[Feedback] = []
+
+    def save_feedback(self, entry: Feedback) -> None:
+        self.saved.append(entry)
+        self._inner.save_feedback(entry)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
 
 
 def make_text_block(text: str) -> SimpleNamespace:

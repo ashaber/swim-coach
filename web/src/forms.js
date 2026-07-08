@@ -46,3 +46,15 @@ export function serializeWellnessForm(form) {
     notes: toNullableText(form.notes),
   };
 }
+
+/** Serializes the Feedback tab's form state into a `POST /api/feedback` body.
+ * `type` is one of feature_request/comment/bug (research_question is
+ * coach-only -- see backend/app/routes/feedback.py); `body` is trimmed (not
+ * nulled when blank -- the backend rejects an empty body as a 422, same as
+ * any other required-field validation failure). */
+export function serializeFeedbackForm(form) {
+  return {
+    type: form.type,
+    body: (form.body ?? '').trim(),
+  };
+}

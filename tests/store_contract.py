@@ -21,13 +21,14 @@ here saves the athlete before its children, so that requirement is satisfied.
 from __future__ import annotations
 
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
 from swim_coach.models import (
     Athlete,
     Event,
+    Feedback,
     MacroBlock,
     MacroPlan,
     Session,
@@ -119,6 +120,21 @@ def _workout(athlete_id: uuid.UUID, d: date, sport: str = "swim_pool") -> Workou
         duration_min=75.0,
         rpe=6,
     )
+
+
+def _feedback(athlete_id: uuid.UUID | None, **overrides) -> Feedback:
+    data: dict = dict(
+        id=uuid.uuid4(),
+        athlete_id=athlete_id,
+        type="feature_request",
+        source="athlete",
+        body="Would love a swim-cap-color-coded interval clock.",
+        context={},
+        status="open",
+        created_at=datetime.now(timezone.utc),
+    )
+    data.update(overrides)
+    return Feedback(**data)
 
 
 def _wellness(athlete_id: uuid.UUID, d: date) -> Wellness:
@@ -322,6 +338,70 @@ class StoreContractTests:
         loaded = store.list_wellness(SLUG)
         assert len(loaded) == 1
         assert loaded[0].motivation == 1
+
+    # --- feedback ----------------------------------------------------------
+
+    def test_feedback_round_trip(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        entry = _feedback(athlete.id, body="please add a pace calculator")
+        store.save_feedback(entry)
+        loaded = store.list_feedback(athlete=SLUG)
+        assert len(loaded) == 1
+        assert loaded[0] == entry
+
+    def test_list_feedback_empty_when_none(self, store):
+        store.save_athlete(_athlete())
+        assert store.list_feedback(athlete=SLUG) == []
+
+    def test_list_feedback_most_recent_first(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        older = _feedback(
+            athlete.id, body="older", created_at=datetime(2026, 7, 1, tzinfo=timezone.utc)
+        )
+        newer = _feedback(
+            athlete.id, body="newer", created_at=datetime(2026, 7, 5, tzinfo=timezone.utc)
+        )
+        store.save_feedback(older)
+        store.save_feedback(newer)
+        loaded = store.list_feedback(athlete=SLUG)
+        assert [f.body for f in loaded] == ["newer", "older"]
+
+    def test_list_feedback_filters_by_athlete(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        other = Athlete(id=uuid.uuid4(), slug="other-athlete", name="Other")
+        store.save_athlete(other)
+        store.save_feedback(_feedback(athlete.id, body="for renee"))
+        store.save_feedback(_feedback(other.id, body="for other"))
+        loaded = store.list_feedback(athlete=SLUG)
+        assert [f.body for f in loaded] == ["for renee"]
+
+    def test_list_feedback_respects_limit(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        for i in range(3):
+            store.save_feedback(
+                _feedback(
+                    athlete.id,
+                    body=f"entry {i}",
+                    created_at=datetime(2026, 7, 1 + i, tzinfo=timezone.utc),
+                )
+            )
+        loaded = store.list_feedback(athlete=SLUG, limit=2)
+        assert len(loaded) == 2
+        assert loaded[0].body == "entry 2"
+
+    def test_list_feedback_unknown_athlete_raises(self, store):
+        with pytest.raises(FileNotFoundError):
+            store.list_feedback(athlete="nobody")
+
+    def test_save_feedback_allows_null_athlete_id(self, store):
+        entry = _feedback(None, type="research_question", source="coach", body="taper research?")
+        store.save_feedback(entry)
+        loaded = store.list_feedback()
+        assert any(f.id == entry.id for f in loaded)
 
     # --- coach texts -----------------------------------------------------
 

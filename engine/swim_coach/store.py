@@ -6,6 +6,7 @@ Behind a small interface (`StoreInterface`) so Phase 2 can swap in a
 
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
 from datetime import date
 from pathlib import Path
@@ -16,6 +17,7 @@ from pydantic import BaseModel
 from swim_coach.models import (
     Athlete,
     Event,
+    Feedback,
     MacroPlan,
     Wellness,
     WeekPlan,
@@ -93,6 +95,24 @@ class StoreInterface(ABC):
 
     @abstractmethod
     def save_wellness(self, slug: str, wellness: Wellness) -> None: ...
+
+    @abstractmethod
+    def save_feedback(self, entry: Feedback) -> None:
+        """Append one durable feedback-log entry (coach research questions,
+        athlete feature requests/comments/bugs -- see models.Feedback).
+        Never overwrites or deletes a previous entry."""
+        ...
+
+    @abstractmethod
+    def list_feedback(
+        self, *, athlete: str | None = None, limit: int | None = None
+    ) -> list[Feedback]:
+        """Every feedback entry, most-recent-first. `athlete`, if given, must
+        be a known athlete slug (raises FileNotFoundError otherwise, matching
+        `load_athlete`) and restricts the list to entries tied to that
+        athlete's id; omitted, every entry (across all athletes, plus any
+        with no athlete_id) is returned. `limit` caps the number returned."""
+        ...
 
     @abstractmethod
     def coach_text_exists(self, slug: str, day: date) -> bool: ...
@@ -230,6 +250,43 @@ class FileStore(StoreInterface):
         directory = self._athlete_dir(slug) / "logs" / "wellness"
         path = directory / f"{wellness.date.isoformat()}.yaml"
         _write_yaml(path, _dump_model(wellness))
+
+    # --- Feedback (durable, replaces research/open-questions.jsonl) --------
+
+    def _feedback_path(self) -> Path:
+        # Deliberately a single file directly under base_dir (a sibling of
+        # every athlete's own slug directory), not per-athlete -- a
+        # feedback entry may have no athlete_id at all (see models.Feedback),
+        # and this is the local/dev analogue of DbStore's single `feedback`
+        # table shared across all athletes.
+        return self.base_dir / "feedback.jsonl"
+
+    def save_feedback(self, entry: Feedback) -> None:
+        path = self._feedback_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry.model_dump(mode="json")) + "\n")
+
+    def list_feedback(
+        self, *, athlete: str | None = None, limit: int | None = None
+    ) -> list[Feedback]:
+        path = self._feedback_path()
+        entries: list[Feedback] = []
+        if path.exists():
+            with path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line:
+                        entries.append(Feedback.model_validate(json.loads(line)))
+
+        if athlete is not None:
+            athlete_id = self.load_athlete(athlete).id  # raises FileNotFoundError if unknown
+            entries = [e for e in entries if e.athlete_id == athlete_id]
+
+        entries.sort(key=lambda e: e.created_at, reverse=True)
+        if limit is not None:
+            entries = entries[:limit]
+        return entries
 
     # --- Coach texts (verbatim Markdown, saved BEFORE parsing) --------------------
 
