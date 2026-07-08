@@ -1,7 +1,7 @@
 import log from './log.js';
 import {
   renderApp, renderLoading, renderError, renderTabBar, renderCoachTab, renderSettingsTab,
-  renderLogTab, renderCheckinTab, renderBackendNeededNotice,
+  renderLogTab, renderCheckinTab, renderBackendNeededNotice, renderFeedbackTab,
 } from './views.js';
 import {
   loadChatSession, saveChatSession, clearChatStorage,
@@ -10,15 +10,17 @@ import {
 import { loadSettings, saveSettings, isConfigured } from './settings.js';
 import {
   streamChat, testConnection, postWorkout, postWellness, fetchPlan, getAthlete, patchAthlete,
+  postFeedback, listFeedback,
 } from './api.js';
 import {
   serializeWorkoutForm, serializeWellnessForm, profileFormFromAthlete, serializeProfileForm,
+  serializeFeedbackForm,
 } from './forms.js';
 import { currentIdentity, signIn, signOut } from './identity.js';
 
 const appEl = document.getElementById('app');
 const ACTIVE_TAB_KEY = 'swimcoach_active_tab';
-const KNOWN_TABS = ['plan', 'log', 'checkin', 'coach', 'settings'];
+const KNOWN_TABS = ['plan', 'log', 'checkin', 'coach', 'feedback', 'settings'];
 // Chat sessions are keyed per-athlete in localStorage (see chat.js); this is
 // just the storage key used before any real identity has ever signed in.
 const SIGNED_OUT_CHAT_KEY = 'signed-out';
@@ -45,6 +47,10 @@ function createProfileForm() {
       monday: false, tuesday: false, wednesday: false, thursday: false, friday: false, saturday: false, sunday: false,
     },
   };
+}
+
+function createFeedbackForm() {
+  return { type: 'feature_request', body: '' };
 }
 
 const initialIdentity = currentIdentity();
@@ -75,6 +81,9 @@ const state = {
   profileForm: createProfileForm(),
   profileLoad: { status: 'idle', error: null },
   profileSubmit: { status: 'idle', message: null },
+  feedbackForm: createFeedbackForm(),
+  feedbackSubmit: { status: 'idle', message: null },
+  feedbackEntries: { status: 'idle', data: [] },
 };
 
 function athleteSlug() {
@@ -129,6 +138,15 @@ function renderTabContent() {
         backendConfigured,
         online: state.online,
         role: state.identity?.role,
+      });
+    case 'feedback':
+      return renderFeedbackTab({
+        form: state.feedbackForm,
+        submit: state.feedbackSubmit,
+        entries: state.feedbackEntries.data,
+        entriesStatus: state.feedbackEntries.status,
+        backendConfigured,
+        online: state.online,
       });
     case 'settings':
       return renderSettingsTab({
@@ -187,6 +205,8 @@ function handleIdentityResolved(identity) {
   state.profileForm = createProfileForm();
   state.profileLoad = { status: 'idle', error: null };
   state.profileSubmit = { status: 'idle', message: null };
+  // Same lazy-load convention for the Feedback tab's list (see setTab).
+  state.feedbackEntries = { status: 'idle', data: [] };
   log.info('identity.resolved', { athlete: identity.athlete, role: identity.role });
   render();
   maybeLoadProfile();
@@ -201,6 +221,7 @@ function handleSignOut() {
   state.profileForm = createProfileForm();
   state.profileLoad = { status: 'idle', error: null };
   state.profileSubmit = { status: 'idle', message: null };
+  state.feedbackEntries = { status: 'idle', data: [] };
   state.tab = 'settings';
   saveActiveTab('settings');
   log.info('identity.signed_out', {});
@@ -437,6 +458,31 @@ async function loadProfile() {
   render();
 }
 
+// --- Feedback tab (durable feedback log) ---------------------------------------
+
+async function loadFeedback() {
+  const settings = state.settingsForm;
+  const identity = state.identity;
+  if (!isConfigured(settings, identity)) {
+    state.feedbackEntries = { status: 'idle', data: [] };
+    render();
+    return;
+  }
+
+  state.feedbackEntries = { status: 'loading', data: state.feedbackEntries.data };
+  render();
+
+  const result = await listFeedback({ baseUrl: settings.baseUrl, token: settings.token, athlete: identity.athlete });
+  if (result.ok) {
+    log.info('feedback.list_loaded', { athlete: identity.athlete, count: result.data.length });
+    state.feedbackEntries = { status: 'ready', data: result.data };
+  } else {
+    log.error('feedback.list_load_failed', { error: result.error });
+    state.feedbackEntries = { status: 'error', data: [] };
+  }
+  render();
+}
+
 // Triggers loadProfile() only when it's actually useful: on the Settings tab,
 // backend+identity configured, and not already loading/loaded. Safe to call
 // from anywhere (identity resolution, settings save, tab switch) without
@@ -472,6 +518,42 @@ async function handleSubmitProfile() {
   render();
 }
 
+async function handleSubmitFeedback() {
+  if (state.feedbackSubmit.status === 'submitting') return;
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) {
+    state.tab = 'settings';
+    saveActiveTab(state.tab);
+    render();
+    return;
+  }
+
+  const payload = serializeFeedbackForm(state.feedbackForm);
+  if (!payload.body) {
+    state.feedbackSubmit = { status: 'error', message: 'Add some details first.' };
+    render();
+    return;
+  }
+
+  state.feedbackSubmit = { status: 'submitting', message: null };
+  render();
+  log.info('feedback.submit', { athlete: athleteSlug(), type: payload.type });
+
+  const result = await postFeedback({
+    baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), payload,
+  });
+  if (result.ok) {
+    log.info('feedback.submit_success', { athlete: athleteSlug() });
+    state.feedbackForm = createFeedbackForm();
+    state.feedbackSubmit = { status: 'success', message: 'Saved.' };
+    loadFeedback(); // calls render() itself
+  } else {
+    log.error('feedback.submit_failed', { athlete: athleteSlug(), error: result.error });
+    state.feedbackSubmit = { status: 'error', message: result.error };
+    render();
+  }
+}
+
 // --- Tab switching ------------------------------------------------------------
 
 function setTab(tab) {
@@ -485,6 +567,11 @@ function setTab(tab) {
   if (tab === 'plan' && (state.plan.status === 'idle' || state.plan.status === 'error')
     && isConfigured(state.settingsForm, state.identity)) {
     loadPlan(); // calls render() itself
+    return;
+  }
+  if (tab === 'feedback' && (state.feedbackEntries.status === 'idle' || state.feedbackEntries.status === 'error')
+    && isConfigured(state.settingsForm, state.identity)) {
+    loadFeedback(); // calls render() itself
     return;
   }
   render();
@@ -513,6 +600,7 @@ function onAppClick(e) {
     case 'log:submit': handleSubmitLog(); break;
     case 'checkin:submit': handleSubmitCheckin(); break;
     case 'profile:submit': handleSubmitProfile(); break;
+    case 'feedback:submit': handleSubmitFeedback(); break;
     case 'identity:signout': handleSignOut(); break;
     default: break;
   }
@@ -550,6 +638,7 @@ function onAppInput(e) {
       state.profileForm[field] = el.value;
     }
   }
+  else if (formName === 'feedback') state.feedbackForm[field] = el.value;
 
   const outId = el.dataset.sliderOut;
   if (outId) {

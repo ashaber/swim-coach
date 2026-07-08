@@ -31,6 +31,7 @@ from uuid import UUID
 from swim_coach.models import (
     Athlete,
     Event,
+    Feedback,
     MacroPlan,
     Wellness,
     WeekPlan,
@@ -129,6 +130,37 @@ def wellness_to_row(wellness: Wellness) -> dict[str, Any]:
 
 def row_to_wellness(row: dict[str, Any]) -> Wellness:
     return Wellness.model_validate(row["data"])
+
+
+def feedback_to_row(feedback: Feedback) -> dict[str, Any]:
+    """Unlike the other `*_to_row` mappers, `feedback` has no `data` JSONB
+    blob -- every Feedback field maps directly onto its own column (the
+    migration's literal spec), so `row_to_feedback` reconstructs the model
+    from those columns rather than from a single JSON payload."""
+    return {
+        "id": feedback.id,
+        "athlete_id": feedback.athlete_id,
+        "type": feedback.type,
+        "source": feedback.source,
+        "body": feedback.body,
+        "context": feedback.context,
+        "status": feedback.status,
+        "created_at": feedback.created_at,
+    }
+
+
+def row_to_feedback(row: dict[str, Any]) -> Feedback:
+    return Feedback(
+        schema_version=1,
+        id=row["id"],
+        athlete_id=row["athlete_id"],
+        type=row["type"],
+        source=row["source"],
+        body=row["body"],
+        context=row["context"] or {},
+        status=row["status"],
+        created_at=row["created_at"],
+    )
 
 
 def coach_text_storage_key(slug: str, day: date) -> str:
@@ -400,6 +432,37 @@ class DbStore(StoreInterface):
                 """,
                 row,
             )
+
+    # --- Feedback (durable, replaces research/open-questions.jsonl) -----
+
+    def save_feedback(self, entry: Feedback) -> None:
+        row = feedback_to_row(entry)
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                insert into feedback (id, athlete_id, type, source, body, context, status, created_at)
+                values (%(id)s, %(athlete_id)s, %(type)s, %(source)s, %(body)s, %(context)s, %(status)s, %(created_at)s)
+                """,
+                {**row, "context": self._Jsonb(row["context"])},
+            )
+
+    def list_feedback(
+        self, *, athlete: str | None = None, limit: int | None = None
+    ) -> list[Feedback]:
+        with self._connect() as conn, conn.cursor() as cur:
+            params: list[Any] = []
+            query = "select * from feedback"
+            if athlete is not None:
+                athlete_id = self._athlete_id(cur, athlete)  # raises FileNotFoundError if unknown
+                query += " where athlete_id = %s"
+                params.append(athlete_id)
+            query += " order by created_at desc"
+            if limit is not None:
+                query += " limit %s"
+                params.append(limit)
+            cur.execute(query, params)
+            rows = cur.fetchall()
+        return [row_to_feedback(r) for r in rows]
 
     # --- Coach texts (verbatim, saved BEFORE parsing) -------------------
 

@@ -21,6 +21,7 @@ from app.config import Settings
 from app.logging_config import get_logger
 from app.routes.athlete import router as athlete_router
 from app.routes.chat import router as chat_router
+from app.routes.feedback import router as feedback_router
 from app.routes.plan import router as plan_router
 from app.routes.wellness import router as wellness_router
 from app.routes.workouts import router as workouts_router
@@ -87,6 +88,7 @@ def create_app() -> FastAPI:
     app.include_router(workouts_router)
     app.include_router(wellness_router)
     app.include_router(athlete_router)
+    app.include_router(feedback_router)
 
     log.info(
         "service start",

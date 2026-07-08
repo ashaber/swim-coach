@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  serializeWorkoutForm, serializeWellnessForm,
+  serializeWorkoutForm, serializeWellnessForm, serializeFeedbackForm,
   parsePaceToSeconds, formatSecondsToPace,
   cmToFeetInches, feetInchesToCm,
   kgToLb, lbToKg,
@@ -276,5 +276,20 @@ describe('serializeProfileForm', () => {
 
     const blankNameForm = { ...form, name: '   ' };
     expect(serializeProfileForm(blankNameForm).name).toBeUndefined();
+  });
+});
+
+describe('serializeFeedbackForm', () => {
+  it('passes through type and trims body', () => {
+    const form = { type: 'feature_request', body: '  add a pace calculator  ' };
+    expect(serializeFeedbackForm(form)).toEqual({
+      type: 'feature_request',
+      body: 'add a pace calculator',
+    });
+  });
+
+  it('supports comment and bug types', () => {
+    expect(serializeFeedbackForm({ type: 'comment', body: 'nice app' }).type).toBe('comment');
+    expect(serializeFeedbackForm({ type: 'bug', body: 'plan tab crashed' }).type).toBe('bug');
   });
 });

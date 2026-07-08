@@ -9,7 +9,7 @@ so future migrations have a field to branch on.
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
@@ -166,6 +166,38 @@ class Workout(BaseModel):
     planned_session_id: UUID | None = None
     raw_ref: str | None = None
     notes: str | None = None
+
+
+FeedbackType = Literal["research_question", "feature_request", "comment", "bug"]
+FeedbackSource = Literal["coach", "athlete"]
+
+
+class Feedback(BaseModel):
+    """A durable feedback-log entry.
+
+    Replaces the ephemeral `research/open-questions.jsonl` file (IDEA 005,
+    the coach's `log_open_question` tool) -- Cloud Run's disk is wiped on
+    scale-to-zero, so a plain file was silently losing every logged research
+    gap. Generalized here to also carry athlete-submitted feature requests,
+    comments, and bug reports from the app's Feedback tab.
+
+    `athlete_id` is nullable: a research question logged by the coach about
+    the athlete's own session is still tied to that athlete, but feedback
+    isn't required to be athlete-scoped in general. `context` is a free-form
+    bag for type-specific extras (e.g. `{"topic": "taper", "expert_mode":
+    true}` for a research_question) -- see backend/app/tools.py and
+    backend/app/routes/feedback.py for what each type puts there.
+    """
+
+    schema_version: int = 1
+    id: UUID
+    athlete_id: UUID | None = None
+    type: FeedbackType
+    source: FeedbackSource
+    body: str
+    context: dict = Field(default_factory=dict)
+    status: str = "open"
+    created_at: datetime
 
 
 class Wellness(BaseModel):

@@ -259,15 +259,16 @@ export function renderError(message) {
 }
 
 // --- Tab bar ---------------------------------------------------------------
-// 5 tabs now that the write endpoints (IDEA 003's Log/Checkin) have a
-// backend; Library/Athlete still don't. Adding one later is just another
-// entry in TABS plus a case in main.js's tab-content switch -- nothing here
-// needs to change.
+// 6 tabs now that the write endpoints (IDEA 003's Log/Checkin, and this
+// build's Feedback log) have a backend; Library/Athlete still don't. Adding
+// one later is just another entry in TABS plus a case in main.js's
+// tab-content switch -- nothing here needs to change.
 const TABS = [
   { id: 'plan', label: 'Plan', icon: '📋' },
   { id: 'log', label: 'Log', icon: '📝' },
   { id: 'checkin', label: 'Check-in', icon: '🌙' },
   { id: 'coach', label: 'Coach', icon: '💬' },
+  { id: 'feedback', label: 'Feedback', icon: '💡' },
   { id: 'settings', label: 'Settings', icon: '⚙️' },
 ];
 
@@ -576,6 +577,83 @@ function renderProfilePanel({ form, load, submit }) {
         <button type="button" class="btn" data-a="profile:submit" ${submit.status === 'submitting' ? 'disabled' : ''}>${submit.status === 'submitting' ? 'Saving…' : 'Save'}</button>
       </div>
       ${renderSubmitResult(submit)}
+    </div>`;
+}
+
+// --- Feedback tab (durable feedback log) ---------------------------------
+
+const FEEDBACK_TYPE_OPTIONS = [
+  { value: 'feature_request', label: 'Feature request' },
+  { value: 'comment', label: 'Comment' },
+  { value: 'bug', label: 'Bug' },
+];
+
+const FEEDBACK_TYPE_LABELS = {
+  research_question: 'Research question',
+  feature_request: 'Feature request',
+  comment: 'Comment',
+  bug: 'Bug',
+};
+
+function formatFeedbackDate(isoString) {
+  const d = new Date(isoString);
+  return Number.isNaN(d.getTime()) ? isoString : d.toLocaleString();
+}
+
+function renderFeedbackEntry(entry) {
+  return `
+    <div class="panel feedback-entry">
+      <div class="feedback-entry-head">
+        <span class="chat-chip">${esc(FEEDBACK_TYPE_LABELS[entry.type] || entry.type)}</span>
+        ${entry.source === 'coach' ? '<span class="chat-chip">coach-logged</span>' : ''}
+        <span class="feedback-entry-date mono">${esc(formatFeedbackDate(entry.created_at))}</span>
+      </div>
+      <p class="feedback-entry-body">${esc(entry.body)}</p>
+      <div class="feedback-entry-status mono">${esc(entry.status)}</div>
+    </div>`;
+}
+
+function renderFeedbackList(entries) {
+  if (!entries || entries.length === 0) {
+    return '<p class="sub">Nothing logged yet.</p>';
+  }
+  return entries.map(renderFeedbackEntry).join('');
+}
+
+export function renderFeedbackTab({
+  form, submit, entries, entriesStatus, backendConfigured, online,
+}) {
+  return `
+    <div class="wrap settings-wrap">
+      <header class="mast" style="border-bottom:none;padding-bottom:0;">
+        <div>
+          <span class="mark">swim-coach · feedback</span>
+          <h1>Feedback</h1>
+          <p class="sub">Feature requests, comments, bugs -- plus the coach's own logged research gaps.</p>
+        </div>
+      </header>
+      ${!online ? '<div class="chat-banner">Offline -- feedback needs a connection.</div>' : ''}
+      ${!backendConfigured ? renderBackendNeededNotice('Feedback needs you to sign in and set a backend URL and token first.') : `
+      <div class="panel settings-panel">
+        <label class="field">
+          <span>Type</span>
+          <select data-form="feedback" data-field="type">
+            ${FEEDBACK_TYPE_OPTIONS.map((opt) => `<option value="${opt.value}"${form.type === opt.value ? ' selected' : ''}>${esc(opt.label)}</option>`).join('')}
+          </select>
+        </label>
+        <label class="field">
+          <span>Details</span>
+          <textarea rows="4" data-form="feedback" data-field="body" placeholder="What's on your mind?">${esc(form.body)}</textarea>
+        </label>
+        <div class="settings-actions">
+          <button type="button" class="btn" data-a="feedback:submit" ${submit.status === 'submitting' || !online ? 'disabled' : ''}>${submit.status === 'submitting' ? 'Saving…' : 'Send'}</button>
+        </div>
+        ${renderSubmitResult(submit)}
+      </div>
+      <section>
+        <div class="s-head"><h2>Logged so far</h2></div>
+        ${entriesStatus === 'loading' ? '<p class="sub">Loading…</p>' : renderFeedbackList(entries)}
+      </section>`}
     </div>`;
 }
 
