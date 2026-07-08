@@ -33,6 +33,16 @@ class Athlete(BaseModel):
     zones: dict | None = None
     constraints: dict = Field(default_factory=dict)
     pool_schedule: list[str | dict] = Field(default_factory=list)
+    # Demographic fields: all optional, defaulting to None, so every
+    # existing profile.yaml (with none of these keys) keeps validating
+    # unchanged -- additive, no schema_version bump needed. Store dob, not
+    # age, so age stays correct as time passes rather than going stale the
+    # day after it's recorded; callers derive age from dob relative to
+    # `date.today()` (see backend/app/context.py).
+    dob: date | None = None
+    sex: Literal["male", "female", "other"] | None = None
+    height_cm: float | None = Field(default=None, gt=0)
+    weight_kg: float | None = Field(default=None, gt=0)
 
 
 class Event(BaseModel):

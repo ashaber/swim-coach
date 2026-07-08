@@ -110,6 +110,42 @@ def test_build_messages_shape_without_history(app_env) -> None:
     assert messages[0]["content"].endswith("hello coach")
 
 
+def test_per_request_context_computes_age_and_shows_sex_when_dob_set(app_env) -> None:
+    # The production bug this build fixes: with no demographic fields on
+    # Athlete at all, the coach guessed an age/sex from nothing. Once a real
+    # dob/sex is on file, the rendered context must show a computed age (not
+    # a stored one -- age drifts, dob doesn't) and the sex, as fact.
+    store = FileStore(base_dir=app_env)
+    athlete = store.load_athlete("renee")
+    athlete = athlete.model_copy(
+        update={"dob": date(1969, 3, 14), "sex": "female", "height_cm": 168.0, "weight_kg": 63.5}
+    )
+    store.save_athlete(athlete)
+
+    text = build_per_request_context(store, "renee", expert_mode=False)
+    profile_section = text.split("### Profile")[1].split("### Current week plan")[0]
+
+    expected_age = (
+        date.today().year
+        - 1969
+        - ((date.today().month, date.today().day) < (3, 14))
+    )
+    assert f'"age": {expected_age}' in profile_section
+    assert '"sex": "female"' in profile_section
+    assert '"height_cm": 168.0' in profile_section
+    assert '"weight_kg": 63.5' in profile_section
+
+
+def test_per_request_context_omits_age_when_no_dob(app_env) -> None:
+    # Renee's real profile.yaml (as committed) carries none of the new
+    # demographic fields -- must render without crashing and without a
+    # fabricated age.
+    store = FileStore(base_dir=app_env)
+    text = build_per_request_context(store, "renee", expert_mode=False)
+    profile_section = text.split("### Profile")[1].split("### Current week plan")[0]
+    assert '"age"' not in profile_section
+
+
 def test_per_request_context_reflects_expert_mode(app_env) -> None:
     store = FileStore(base_dir=app_env)
     expert_text = build_per_request_context(store, "renee", expert_mode=True)

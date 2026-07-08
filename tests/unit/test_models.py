@@ -270,6 +270,44 @@ def test_athlete_carries_schema_version():
     assert athlete.schema_version == 1
 
 
+def test_athlete_demographic_fields_default_to_none():
+    # Existing-style profiles (Renee's, Andrew's) carry none of these keys --
+    # must keep validating unchanged.
+    athlete = make_athlete()
+    assert athlete.dob is None
+    assert athlete.sex is None
+    assert athlete.height_cm is None
+    assert athlete.weight_kg is None
+
+
+def test_athlete_demographic_fields_round_trip_when_set():
+    athlete = make_athlete(
+        dob=date(1969, 3, 14),
+        sex="female",
+        height_cm=168.0,
+        weight_kg=63.5,
+    )
+    assert athlete.dob == date(1969, 3, 14)
+    assert athlete.sex == "female"
+    assert athlete.height_cm == 168.0
+    assert athlete.weight_kg == 63.5
+
+
+def test_athlete_rejects_bad_sex():
+    with pytest.raises(ValidationError):
+        make_athlete(sex="nonbinary-typo")
+
+
+def test_athlete_rejects_non_positive_height():
+    with pytest.raises(ValidationError):
+        make_athlete(height_cm=0)
+
+
+def test_athlete_rejects_non_positive_weight():
+    with pytest.raises(ValidationError):
+        make_athlete(weight_kg=-5)
+
+
 # --- round-trip tests: model -> yaml -> model ---
 
 
@@ -306,6 +344,17 @@ def test_file_store_athlete_round_trip(tmp_path):
     assert expected_path.exists()
     loaded = store.load_athlete("wife")
     assert loaded == athlete
+
+
+def test_file_store_athlete_round_trip_with_demographics(tmp_path):
+    store = FileStore(base_dir=tmp_path)
+    athlete = make_athlete(
+        dob=date(1969, 3, 14), sex="female", height_cm=168.0, weight_kg=63.5
+    )
+    store.save_athlete(athlete)
+    loaded = store.load_athlete("wife")
+    assert loaded == athlete
+    assert loaded.dob == date(1969, 3, 14)
 
 
 def test_file_store_events_round_trip(tmp_path):
