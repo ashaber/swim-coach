@@ -493,10 +493,96 @@ export function renderCheckinTab({ form, submit, backendConfigured, online }) {
     </div>`;
 }
 
+// --- Profile edit (Settings tab section) --------------------------------------
+// Self-service profile editing (Phase 2.5) -- an athlete edits name/dob/sex/
+// height/weight/CSS pace/pool days themselves instead of Fable hand-loading
+// YAML. Lives as a section within the Settings tab (rather than its own tab)
+// to minimize nav churn -- see main.js's loadProfile/handleSubmitProfile and
+// forms.js's profileFormFromAthlete/serializeProfileForm for the data side.
+
+const SEX_OPTIONS = [
+  { value: '', label: 'Prefer not to say' },
+  { value: 'male', label: 'Male' },
+  { value: 'female', label: 'Female' },
+  { value: 'other', label: 'Other' },
+];
+
+const POOL_DAY_LABELS = [
+  { value: 'monday', label: 'Mon' },
+  { value: 'tuesday', label: 'Tue' },
+  { value: 'wednesday', label: 'Wed' },
+  { value: 'thursday', label: 'Thu' },
+  { value: 'friday', label: 'Fri' },
+  { value: 'saturday', label: 'Sat' },
+  { value: 'sunday', label: 'Sun' },
+];
+
+function renderProfilePanel({ form, load, submit }) {
+  if (load.status === 'loading' || load.status === 'idle') {
+    return `
+      <div class="panel settings-panel">
+        <h3 style="margin:0 0 12px;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);">Your profile</h3>
+        <p class="sub">Loading your profile&hellip;</p>
+      </div>`;
+  }
+
+  const loadError = load.status === 'error'
+    ? `<div class="conn-result fail">Couldn't load your profile: ${esc(load.error)}</div>` : '';
+
+  return `
+    <div class="panel settings-panel">
+      <h3 style="margin:0 0 12px;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);">Your profile</h3>
+      ${loadError}
+      <label class="field">
+        <span>Name</span>
+        <input type="text" data-form="profile" data-field="name" value="${esc(form.name)}">
+      </label>
+      <label class="field">
+        <span>Date of birth</span>
+        <input type="date" data-form="profile" data-field="dob" value="${esc(form.dob)}">
+      </label>
+      <label class="field">
+        <span>Sex</span>
+        <select data-form="profile" data-field="sex">
+          ${SEX_OPTIONS.map((opt) => `<option value="${opt.value}"${form.sex === opt.value ? ' selected' : ''}>${esc(opt.label)}</option>`).join('')}
+        </select>
+      </label>
+      <label class="field">
+        <span>Height</span>
+        <div style="display:flex;gap:8px;">
+          <input type="number" min="0" step="1" inputmode="numeric" placeholder="ft" style="width:5em;" data-form="profile" data-field="heightFeet" value="${esc(form.heightFeet)}">
+          <input type="number" min="0" max="11" step="1" inputmode="numeric" placeholder="in" style="width:5em;" data-form="profile" data-field="heightInches" value="${esc(form.heightInches)}">
+        </div>
+      </label>
+      <label class="field">
+        <span>Weight (lb)</span>
+        <input type="number" min="0" step="0.1" inputmode="decimal" data-form="profile" data-field="weightLb" value="${esc(form.weightLb)}">
+      </label>
+      <label class="field">
+        <span>CSS pace (per 100m, mm:ss)</span>
+        <input type="text" placeholder="1:40" data-form="profile" data-field="cssPace" value="${esc(form.cssPace)}">
+      </label>
+      <label class="field">
+        <span>Pool days</span>
+        <div class="pool-days">
+          ${POOL_DAY_LABELS.map((day) => `
+            <label class="pool-day">
+              <input type="checkbox" data-form="profile" data-field="pool_days" data-day="${day.value}" ${form.poolDays?.[day.value] ? 'checked' : ''}>
+              <span>${day.label}</span>
+            </label>`).join('')}
+        </div>
+      </label>
+      <div class="settings-actions">
+        <button type="button" class="btn" data-a="profile:submit" ${submit.status === 'submitting' ? 'disabled' : ''}>${submit.status === 'submitting' ? 'Saving…' : 'Save'}</button>
+      </div>
+      ${renderSubmitResult(submit)}
+    </div>`;
+}
+
 // --- Settings tab ------------------------------------------------------------
 
 export function renderSettingsTab({
-  baseUrl, token, testStatus, identity, identityError,
+  baseUrl, token, testStatus, identity, identityError, backendConfigured, profileForm, profileLoad, profileSubmit,
 }) {
   return `
     <div class="wrap settings-wrap">
@@ -534,5 +620,6 @@ export function renderSettingsTab({
         </div>
         ${testStatus ? `<div class="conn-result ${testStatus.ok ? 'ok' : 'fail'}">${esc(testStatus.message)}</div>` : ''}
       </div>
+      ${backendConfigured ? renderProfilePanel({ form: profileForm, load: profileLoad, submit: profileSubmit }) : ''}
     </div>`;
 }

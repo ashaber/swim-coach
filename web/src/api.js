@@ -157,6 +157,20 @@ export async function fetchPlan({ baseUrl, token, athlete }) {
   return apiRequest({ baseUrl, token, path: `/api/plan?athlete=${encodeURIComponent(athlete)}` });
 }
 
+/** GET {baseUrl}/api/athlete?athlete=<slug> -- fetches the athlete's own
+ * profile, to prefill the Settings tab's profile-edit form. */
+export async function getAthlete({ baseUrl, token, athlete }) {
+  return apiRequest({ baseUrl, token, path: `/api/athlete?athlete=${encodeURIComponent(athlete)}` });
+}
+
+/** PATCH {baseUrl}/api/athlete?athlete=<slug> -- saves edited profile fields
+ * (see forms.js's serializeProfileForm for the payload shape). */
+export async function patchAthlete({ baseUrl, token, athlete, payload }) {
+  return apiRequest({
+    baseUrl, token, path: `/api/athlete?athlete=${encodeURIComponent(athlete)}`, method: 'PATCH', body: payload,
+  });
+}
+
 /** GET {baseUrl}/health -- used by the Settings tab's "Test connection". */
 export async function testConnection({ baseUrl, token }) {
   try {

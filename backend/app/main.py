@@ -19,6 +19,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.auth import ChatRateLimiter
 from app.config import Settings
 from app.logging_config import get_logger
+from app.routes.athlete import router as athlete_router
 from app.routes.chat import router as chat_router
 from app.routes.plan import router as plan_router
 from app.routes.wellness import router as wellness_router
@@ -43,7 +44,14 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.allowed_origins,
         allow_credentials=False,
-        allow_methods=["GET", "POST", "OPTIONS"],
+        # PATCH added for /api/athlete (Phase 2.5 profile-edit screen) --
+        # without it here, the browser's CORS preflight for the PATCH itself
+        # gets rejected (400) before the request ever reaches the route,
+        # even though the route handler is otherwise correct. Caught by
+        # driving the real (unmocked) backend through a real browser -- the
+        # e2e suite's Playwright route-mocking fulfills the OPTIONS
+        # preflight itself, so it never exercises this middleware.
+        allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type"],
     )
 
@@ -78,6 +86,7 @@ def create_app() -> FastAPI:
     app.include_router(plan_router)
     app.include_router(workouts_router)
     app.include_router(wellness_router)
+    app.include_router(athlete_router)
 
     log.info(
         "service start",
