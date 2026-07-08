@@ -50,7 +50,7 @@ from swim_coach.load import (
     weekly_volume_m,
     wellness_trend,
 )
-from swim_coach.models import Event, Workout
+from swim_coach.models import Athlete, Event, Workout
 from swim_coach.store import StoreInterface
 
 # --- system block A: persona + hard rules -----------------------------------
@@ -378,6 +378,32 @@ def _render_recent_sessions(workouts: list[Workout], span_start: date, span_end:
     return "\n".join(rows)
 
 
+def _compute_age(dob: date, today: date) -> int:
+    """Whole years elapsed from `dob` to `today` -- the ordinary "birthday
+    hasn't happened yet this year" adjustment."""
+    return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+
+
+def _render_demographics(athlete: Athlete, today: date) -> str | None:
+    """A compact derived-facts line so the model reads age/sex/height/weight
+    as ground truth instead of guessing (the production bug this build
+    fixes). Age is computed from `dob` relative to `today` rather than
+    stored, so it never goes stale. Returns None when nothing is on file so
+    the caller can omit the line entirely rather than render an empty one."""
+    facts: dict[str, Any] = {}
+    if athlete.dob is not None:
+        facts["age"] = _compute_age(athlete.dob, today)
+    if athlete.sex is not None:
+        facts["sex"] = athlete.sex
+    if athlete.height_cm is not None:
+        facts["height_cm"] = athlete.height_cm
+    if athlete.weight_kg is not None:
+        facts["weight_kg"] = athlete.weight_kg
+    if not facts:
+        return None
+    return json.dumps(facts)
+
+
 def _render_events(events: list[Event], today: date) -> str:
     """Compact, chronological rendering of every event on file, each with
     `days_until` computed relative to `today` -- fixes the coach not
@@ -416,6 +442,7 @@ def build_per_request_context(store: StoreInterface, slug: str, *, expert_mode: 
     events = store.load_events(slug)
     span_start, span_end, _ = _rollup_window(today, weeks=4)
     rollup = summarize_rollup(store, slug, weeks=4, as_of=today, workouts=workouts)
+    demographics = _render_demographics(athlete, today)
 
     parts = [
         "## Athlete context (assembled per-request, not cached)",
@@ -424,6 +451,15 @@ def build_per_request_context(store: StoreInterface, slug: str, *, expert_mode: 
         "",
         "### Profile",
         json.dumps(athlete.model_dump(mode="json"), indent=2),
+    ]
+    if demographics is not None:
+        parts += [
+            "",
+            "Demographics (derived facts -- age computed from dob as of today, "
+            "not stored -- ground truth, do not infer/guess these):",
+            demographics,
+        ]
+    parts += [
         "",
         f"### Current week plan ({current_iso})",
         json.dumps(_week_or_none(store, slug, current_iso), indent=2),
