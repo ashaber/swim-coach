@@ -108,9 +108,9 @@ cites multiple dry-land shoulder-strengthening RCTs in competitive swimmers
 showing reduced shoulder pain/injury incidence and improved rotator-cuff
 strength balance — the direct evidence behind planning 2x/week strength
 sessions regardless of macro block. Confidence: high (multiple RCTs, direct
-swim population). A dedicated strength-programming topic file (`07-*`, not
-yet authored) would be the fuller home for exercise selection/dosing; this
-file only grounds the *frequency* constant.
+swim population). `07-strength-dryland.md` is the fuller home for exercise
+selection/dosing, placement, and cut-week/taper handling; this file only
+grounds the *frequency* constant.
 
 ## Open questions / not yet covered here
 

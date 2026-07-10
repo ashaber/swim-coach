@@ -123,7 +123,9 @@ STRENGTH_SESSION_MIN = 45
 # Dry-land shoulder work reduces injury/pain risk in competitive swimmers --
 # multiple RCTs, library/reference_list.md "Injury & training load"
 # ("Dry-land shoulder-strengthening RCTs in competitive swimmers").
-# library/04-css-intensity-anchors.md.
+# Frequency grounded in library/04-css-intensity-anchors.md; full
+# programming detail (duration, placement, cut-week/taper handling) in
+# library/07-strength-dryland.md.
 
 RECOVERY_SESSION_MIN = 20
 # The Session model requires duration_min > 0, so a 0-duration "day off"
@@ -492,7 +494,7 @@ def generate_week(
                 intensity={"anchor": "rpe"},
                 purpose=(
                     "dryland shoulder strength — reduces shoulder injury/pain "
-                    "risk (ROADMAP.md research sources: dryland shoulder work)"
+                    "risk (library/07-strength-dryland.md)"
                 ),
                 structure=None,
                 status="planned",
