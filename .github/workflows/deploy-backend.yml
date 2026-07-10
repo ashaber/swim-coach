@@ -61,5 +61,5 @@ jobs:
             --min-instances=0 \
             --max-instances=2 \
             --allow-unauthenticated \
-            --set-secrets=ANTHROPIC_API_KEY=anthropic-api-key:latest,API_TOKEN=api-token:latest \
+            --set-secrets=ANTHROPIC_API_KEY=anthropic-api-key:latest,API_TOKEN=swim-coach-api-token:latest \
             --set-env-vars=CLAUDE_MODEL=claude-sonnet-5,CLAUDE_THINKING=adaptive,ALLOWED_ORIGINS=https://ashaber.github.io,CHAT_RATE_PER_MIN=20
