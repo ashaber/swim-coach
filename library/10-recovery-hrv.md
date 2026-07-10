@@ -1,0 +1,221 @@
+# Recovery & HRV
+
+**UNREVIEWED** — agent-authored per `00-conventions.md`'s workflow; needs
+Andrew's human review before being treated as settled grounding truth.
+
+Grounds `engine/swim_coach/adapt.py`'s post-milestone recovery window
+(`RECOVERY_DAYS_AFTER_MILESTONE_MIN/MAX = 3/5`) with recovery-science
+support — `06-long-swim-progression.md` stays that constant's primary
+citation home; this file adds *why* 3-5 days is a defensible recovery
+window, not just where the number comes from. It also grounds
+`load.py`/`adapt.py`'s subjective `wellness_composite` (`WELLNESS_RED_
+THRESHOLD = 2.0` over `WELLNESS_WINDOW_DAYS = 7`) as a legitimate primary
+monitoring signal rather than a lesser substitute for objective/HRV data,
+and lays forward-looking groundwork for HRV-guided daily adjustment and a
+between-events mini-taper — neither implemented in the engine today. See
+`00-conventions.md` for the tagging scheme and `reference_list.md` for full
+citations.
+
+**Concrete trigger for this file:** Renee's actual W28/W29 (per
+`athletes/renee/notes/decisions.md`) — a ~5-hour Lucky Peak open-water swim
+with kayak support on Thu 7/9, followed by the Bear Lake Monster 10K
+(B-priority, kayak-supported) on Sat 7/18, roughly nine days later. That's
+the real scenario this file is written against, not a hypothetical.
+
+## Recovery windows between hard efforts (5-10 days)
+
+**Coach judgment**, informed by `Driller & Leabeater (2023)`'s narrative
+review, which classifies recovery modalities by evidence strength and
+concludes that **sleep, nutrition, and periodization are the evidence-backed
+foundation** — newer recovery devices (foam rolling, cryotherapy,
+photobiomodulation) lack strong support and shouldn't be prioritized over
+those fundamentals. `Braun-Trocchio et al. (2022)`'s 264-athlete survey
+across 11 endurance sports is consistent with this: hydration, nutrition,
+sleep, and rest are what practitioners actually use and trust most — useful
+as color for what to prioritize, not as efficacy evidence (it's a survey of
+practice, not a trial).
+
+No engine constant exists yet for a fixed "short-turnaround between two
+hard efforts" window — `RECOVERY_DAYS_AFTER_MILESTONE_MIN/MAX` in `adapt.py`
+is tuned for the long-swim ladder's milestone-then-build pattern
+(`06-long-swim-progression.md`), not a fixed B-event-to-A-event gap. A
+9-day gap between two open-water efforts is a candidate for a future,
+distinct `MINI_TAPER_*` constant (see the mini-taper section below), not a
+direct application of the milestone-recovery window.
+
+## Nutrition for the refeed window
+
+**[ADAPTED: cycling] Confidence: high.** `Ivy et al. (1988)`: 12 cyclists,
+immediate (vs. 2h-delayed) carbohydrate ingestion (2 g/kg) roughly doubled
+glycogen resynthesis rate over the first 4h. `Burke et al. (2011)`'s review
+backs ~1.0-1.2 g/kg/h carbohydrate in the first 4h post-exercise, with
+intake highest-priority in the first 1-2h. **Test:** on the day after a long
+swim/kayak effort, confirm carbohydrate intake started within ~30-60 min
+rather than delayed, and check whether next-day sRPE for an easy session is
+lower (better) on early-refeed days vs. delayed-refeed days in Renee's own
+log history.
+
+**[ADAPTED: running] Confidence: high.** `Kato et al. (2016)` — six
+endurance-trained runners, indicator amino acid oxidation method — derived
+an Estimated Average Requirement of **1.65 g/kg/day** protein and a
+Recommended (safe) intake of **1.83 g/kg/day**, well above the general
+population's 0.8 g/kg/day RDA. This is a whole-day target, not a
+post-exercise-window dose; no engine constant currently cites a protein
+g/kg figure to check this against. **Test:** compare self-reported recovery/
+soreness on days protein intake sits above vs. below ~1.6 g/kg in Renee's
+own logs — exploratory, not powered, but checkable.
+
+**[ADAPTED: general-endurance] Confidence: medium-high.** `Koopman et al.
+(2004)`: 8 endurance athletes doing 6h of mixed-modality exercise at 50%
+VO2max; carbohydrate+protein co-ingestion (0.7 g/kg/h CHO + 0.25 g/kg/h
+protein) every 30 min kept whole-body protein balance positive/less-negative
+vs. carbohydrate-only, which stayed negative throughout. Directly relevant
+to a combined long-swim-plus-kayak day like 7/9: offering a carb+protein
+feed *during* the effort, not just after, is the practical takeaway. This
+sits at the edge of this file's scope — full during-exercise fueling belongs
+in the not-yet-authored `08-*` ultra-feeding file; it's included here only
+because it bears on the *recovery* outcome of the same day.
+
+## Sleep: the highest-leverage lever available in a short window
+
+**[ADAPTED: general-endurance] Confidence: high** for the lead citation.
+`Bonnar et al. (2018)`'s systematic review of sleep interventions in
+athletes found sleep **extension** the most consistently beneficial
+intervention for performance/recovery outcomes, with napping and sleep-
+hygiene education producing mixed results by comparison. `Mah et al.
+(2011)` is the illustrative underlying study (medium confidence alone —
+single small-n team-sport study, not endurance-specific): 11 basketball
+players extending sleep toward ~10h/night for 5-7 weeks saw improved sprint
+speed, shooting accuracy, reaction time, and mood.
+
+`load.py`'s `wellness_composite` already includes a sleep-quality term
+(equal-weighted with stress/soreness/motivation, per `03-periodization.md`)
+— this section documents *why* sleep earns that weight, without adding a
+standalone sleep-duration threshold the engine doesn't currently model.
+**Test:** in a short-turnaround window, if sleep can be extended toward
+8.5-9.5h/night, check whether Renee's wellness-composite energy/soreness
+sub-scores trend upward relative to her own recent baseline.
+
+## Modality tier list: comfort vs. performance-recovery
+
+**[ADAPTED: general-endurance] Confidence: medium-high.** `Moore et al.
+(2022)`'s meta-analysis found cold-water immersion (CWI) improved muscular-
+power recovery, perceived soreness, and creatine-kinase markers after
+eccentric/high-intensity exercise — but was **not effective** at improving
+recovery of *endurance* performance specifically, at either 24h or 48h
+post-exercise. For an athlete whose limiter nine days out is aerobic/
+endurance capacity, not power, this matters: CWI is a soreness/comfort
+tool here, not a proven endurance-recovery accelerant. `Hill et al.
+(2014)`'s meta-analysis on compression garments found a similar pattern —
+small-to-moderate soreness/strength benefit, weaker/inconsistent effect on
+objective performance measures (Confidence: low-medium — verified by
+consistent secondary citation listings, not an individually fetched
+full-text read).
+
+**Practical framing, not a rule:** offer CWI/compression as comfort-tier
+recovery support in the days after 7/9, but don't treat either as a
+substitute for sleep or refeeding, and don't expect either to measurably
+move endurance readiness for 7/18. **Test:** if CWI is used, track whether
+Renee's perceived-soreness wellness sub-score improves without a
+corresponding change in matched-effort session pace/RPE — if pace/RPE
+doesn't move with CWI use, that's consistent with Moore et al.'s
+endurance-null finding and supports treating it as comfort-only going
+forward.
+
+## HRV- and wellness-guided load adjustment
+
+**[ADAPTED: general-endurance/multi-sport] Confidence: high.** `Saw, Main
+& Gastin (2016)`'s 56-study systematic review found subjective and
+objective training-response measures generally didn't correlate with each
+other, and **subjective self-report showed greater sensitivity and
+consistency** than the objective measures tested. This is the strongest
+citation in this file for an *already-implemented* engine constant: it
+directly supports treating `wellness_composite` (`WELLNESS_RED_THRESHOLD =
+2.0` over `WELLNESS_WINDOW_DAYS = 7` in `adapt.py`) as a legitimate primary
+signal, not a fallback for when HRV/objective data is unavailable.
+
+**[ADAPTED: running/cycling] Confidence: medium.** Three independent-lab
+RCTs converge on the same mechanism: `Kiviniemi et al. (2007)` (26 males, 4
+weeks) found HRV-guided training — hard only on stable/rising-HRV mornings,
+easy/rest below a rolling threshold — improved max running velocity more
+than a fixed program; `Vesterinen et al. (2016)` (40 runners, 8 weeks) and
+`Javaloyes et al. (2020)` (20 cyclists, 8 weeks) each found the same
+directional result in their own populations. None of these tested an
+8-10-day single-athlete window specifically — all are multi-week blocks in
+runners/cyclists — so the mechanism is well-evidenced and cheap to apply,
+but the *exact scenario* (a short taper-in window before a B-then-A event
+pair) is not what was tested.
+
+**Athlete context, stated plainly:** Renee's profile (`athletes/renee/
+profile.yaml`) lists `hrv_source: Oura ring` — the device exists — but no
+wellness log entry currently populates the `Wellness` model's optional
+`hrv` field (`engine/swim_coach/models.py`). This section is forward-
+looking grounding for a rule the engine doesn't implement yet, not a
+description of an active constant. **Test:** once HRV values start
+appearing in daily check-ins, apply the same "hard day only if HRV stable-
+or-rising vs. the trailing baseline, else easy/rest" rule as a layer on top
+of (not a replacement for) `wellness_composite`, and check whether that
+layered signal catches anything the subjective composite alone misses over
+a few weeks — if it never disagrees with wellness_composite, that's a
+signal the added complexity isn't earning its keep for this athlete.
+
+## Swimming-specific recovery-load monitoring
+
+**[EVIDENCE: swim] Confidence: high** for population/question match (n=5 is
+small). `Collette et al. (2018)` monitored 5 elite female swimmers over 17
+weeks using session-RPE load metrics and the Acute Recovery and Stress
+Scale: session-RPE (particularly a distance-weighted variant) tracked
+recovery-stress state more strongly than acute:chronic workload ratio
+(ACWR), and individual baselines outperformed group-level thresholds. This
+is swim-specific corroboration for a claim `03-periodization.md` currently
+sources only from the running Garmin-RunSafe cohort — cross-reference that
+file's ACWR-is-a-weak-predictor section rather than duplicating it here.
+Practical takeaway for this file: an individualized, sRPE/wellness-led read
+on Renee's own recovery-stress state between 7/9 and 7/18 is better-
+evidenced, in swimmers specifically, than leaning on `adapt.py`'s ACWR
+red-flag threshold (`LOAD_RATIO_RED_THRESHOLD = 1.4`) alone.
+
+## Mini-taper for a B-event ~1 week out
+
+**[ADAPTED: general-endurance] Confidence: medium-high.** `Mujika &
+Padilla (2003)`'s foundational taper review recommends maintaining
+intensity while cutting volume 60-90% and frequency by no more than ~20%,
+with progressive non-linear tapers outperforming step tapers.
+`Wang et al. (2023)`'s 14-study meta-analysis found ≤21-day tapers with
+41-60% volume reduction (intensity/frequency roughly held) generally
+effective, and — the closest finding to Renee's actual situation — **tapers
+of ≤7 days still produced a positive effect**, though the 8-14-day band
+showed the largest gains overall.
+
+Applied to the 7/9-to-7/18 window: this supports treating W29 as a
+short taper-in — volume down, intensity and session frequency held close to
+normal — rather than a normal training week, which is exactly what
+`athletes/renee/notes/decisions.md` already records for W29 (~17,500m,
+framed as a Greece dress rehearsal, not an all-out effort). **State the gap
+honestly:** neither source tested a "B-event, then a second hard event ~9
+days later" design — both study tapering into a single peak event. No
+direct evidence exists for recovery between two ultra-distance open-water
+swims (or a swim-plus-kayak day and a swim) roughly a week apart; this is a
+coach-judgment gap, not a solved problem. **Test:** track whether Renee's
+post-Bear-Lake perceived freshness / RPE-at-pace differs from a matched
+no-taper week in her history, if one exists, as a weak local check on
+whether this treatment is earning its keep for her specifically.
+
+This is also the clearest candidate in this file for a future engine
+constant: a `MINI_TAPER_*` rule distinct from `03-periodization.md`'s
+macro-block taper (`TAPER_WEEKS_LONG/SHORT`, itself citation-debt-flagged),
+since 8-10 days is shorter than any macro taper the engine currently
+models. **Not implemented today** — flagged here as a design candidate,
+`UNREVIEWED`, pending a human decision on the actual volume-cut number for
+this specific short window.
+
+## What's still a gap
+
+- No swim-specific or kayak-cross-fatigue evidence exists for the exact
+  7/9-to-7/18 scenario; every citation above is adjacent, not direct.
+- No engine constant yet for post-exercise carbohydrate/protein timing,
+  a fixed short-turnaround recovery window distinct from milestone
+  recovery, or a mini-taper volume cut — this file documents the evidence
+  base for adding one, not an implemented rule.
+- HRV-guided adjustment is fully forward-looking: the device exists in
+  Renee's profile, but no HRV data has been logged yet.
