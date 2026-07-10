@@ -1,0 +1,20 @@
+schema_version: 1
+id: 37b8230c-2f35-47de-903f-2634616f1655
+athlete_id: 8a4969c2-757f-4dc7-8a68-6a773881df42
+date: '2026-03-14'
+sport: swim_pool
+source: fit
+distance_m: 1623
+duration_min: 54.0
+avg_pace_s_per_100m: 199.62533732579206
+rpe: null
+sets:
+- reps: null
+  distance_m: 1623
+  interval: null
+  target_pace: null
+  stroke: mixed
+  description: 3240s
+planned_session_id: null
+raw_ref: athletes/andrew/logs/files/AndrewSwimPool_ACTIVITY.fit
+notes: null

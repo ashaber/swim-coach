@@ -1,0 +1,20 @@
+schema_version: 1
+id: 304383da-f22c-4c59-972e-e6fea989fd6d
+athlete_id: 8a4969c2-757f-4dc7-8a68-6a773881df42
+date: '2026-07-09'
+sport: cross_train
+source: fit
+distance_m: 11494
+duration_min: 303.3
+avg_pace_s_per_100m: 158.30958541334257
+rpe: 4
+sets:
+- reps: null
+  distance_m: 11494
+  interval: null
+  target_pace: null
+  stroke: null
+  description: 18197s
+planned_session_id: null
+raw_ref: athletes/andrew/logs/files/AndrewKayak_ACTIVITY.fit
+notes: null
