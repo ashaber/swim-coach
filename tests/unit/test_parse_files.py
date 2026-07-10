@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from swim_coach.parse_files import WorkoutDraft, parse_csv, parse_fit, parse_tcx
+from swim_coach.parse_files import WorkoutDraft, _fit_sport, parse_csv, parse_fit, parse_tcx
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 TCX_FIXTURE = FIXTURES_DIR / "tcx" / "sample_pool_swim.tcx"
@@ -112,6 +112,36 @@ def test_parse_csv_infers_open_water_from_activity_type(tmp_path):
 
 
 # --- parse_fit ---------------------------------------------------------------------------
+
+
+def test_fit_sport_open_water_sub_sport_wins():
+    warnings: list[str] = []
+    assert _fit_sport("swimming", "open_water", warnings) == "swim_ow"
+    assert warnings == []
+
+
+def test_fit_sport_swimming_maps_to_pool():
+    warnings: list[str] = []
+    assert _fit_sport("swimming", "lap_swimming", warnings) == "swim_pool"
+    assert warnings == []
+
+
+def test_fit_sport_missing_defaults_to_pool_with_warning():
+    warnings: list[str] = []
+    assert _fit_sport(None, None, warnings) == "swim_pool"
+    assert len(warnings) == 1
+    assert "assumed swim_pool" in warnings[0]
+
+
+def test_fit_sport_non_swim_maps_to_cross_train_with_warning():
+    # A kayak/paddle/run/ride .fit must never be silently logged as a swim --
+    # it would pollute swim-volume math (first real .fit file, 2026-07-09,
+    # was a kayak session the old code labeled swim_pool with no warning).
+    warnings: list[str] = []
+    assert _fit_sport("kayaking", None, warnings) == "cross_train"
+    assert len(warnings) == 1
+    assert "kayaking" in warnings[0]
+    assert "cross_train" in warnings[0]
 
 
 def test_parse_fit_missing_file_raises():

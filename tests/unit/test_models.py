@@ -181,6 +181,12 @@ def test_session_rejects_bad_sport():
         make_session(sport="cycling")
 
 
+def test_workout_accepts_cross_train_sport():
+    # non-swim logged activity (kayak, run, ride) imported from a .fit file
+    workout = make_workout(sport="cross_train", distance_m=11494, duration_min=303.0)
+    assert workout.sport == "cross_train"
+
+
 def test_workout_rejects_rpe_out_of_range():
     with pytest.raises(ValidationError):
         make_workout(rpe=11)

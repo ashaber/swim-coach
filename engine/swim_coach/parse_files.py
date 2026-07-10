@@ -311,6 +311,28 @@ def _fit_value(frame: "fitdecode.FitDataMessage", name: str) -> object | None:
     return frame.get_value(name, fallback=None)
 
 
+def _fit_sport(session_sport: object | None, session_sub_sport: object | None, warnings: list[str]) -> Sport:
+    """Map a FIT session's sport/sub_sport to this engine's Sport values.
+
+    Anything that isn't recognizably swimming maps to cross_train with a
+    warning -- a kayak/run/ride file must never be silently logged as a swim
+    (it would pollute swim-volume math; the first real .fit ingested,
+    2026-07-09, was a kayak session).
+    """
+    if session_sub_sport is not None and "open" in str(session_sub_sport).lower():
+        return "swim_ow"
+    if session_sport is None:
+        warnings.append("no session.sport field found; assumed swim_pool")
+        return "swim_pool"
+    if "swim" in str(session_sport).lower():
+        return "swim_pool"
+    warnings.append(
+        f"non-swim FIT sport '{session_sport}' mapped to cross_train "
+        "(counts toward sRPE load, not swim volume)"
+    )
+    return "cross_train"
+
+
 def parse_fit(path: str | Path) -> WorkoutDraft:
     """Parse a Garmin .fit file's session + lap data into a WorkoutDraft.
 
@@ -372,11 +394,7 @@ def parse_fit(path: str | Path) -> WorkoutDraft:
         )
         session_duration_s = 0.0
 
-    sport: Sport = "swim_pool"
-    if session_sub_sport is not None and "open" in str(session_sub_sport).lower():
-        sport = "swim_ow"
-    elif session_sport is None:
-        warnings.append("no session.sport field found; assumed swim_pool")
+    sport = _fit_sport(session_sport, session_sub_sport, warnings)
 
     if isinstance(session_start_time, datetime):
         workout_date = session_start_time.date()
