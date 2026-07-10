@@ -15,7 +15,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
-Sport = Literal["swim_pool", "swim_ow", "strength", "recovery"]
+# cross_train: logged non-swim endurance activity (kayak, run, ride, ...).
+# Counts toward sRPE load (load.py is sport-agnostic there) but never toward
+# swim volume (load.py's volume filters allowlist {swim_pool, swim_ow}).
+# The planner never schedules it; it exists so real .fit imports of non-swim
+# activities aren't mislabeled as swims.
+Sport = Literal["swim_pool", "swim_ow", "strength", "recovery", "cross_train"]
 
 _ISO_WEEK_RE = re.compile(r"^\d{4}-W\d{2}$")
 _VALID_ZONES = {"Z1", "Z2", "Z3", "Z4", "Z5"}

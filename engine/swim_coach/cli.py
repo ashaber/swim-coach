@@ -591,7 +591,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest.add_argument("--date", help="YYYY-MM-DD, overrides the parsed date")
     p_ingest.add_argument("--rpe", type=int, help="1-10, overrides/sets the parsed rpe")
     p_ingest.add_argument(
-        "--sport", choices=["swim_pool", "swim_ow", "strength", "recovery"], help="overrides the parsed sport"
+        "--sport",
+        choices=["swim_pool", "swim_ow", "strength", "recovery", "cross_train"],
+        help="overrides the parsed sport",
     )
     p_ingest.add_argument("--save", action="store_true", help="persist the draft as a Workout")
 

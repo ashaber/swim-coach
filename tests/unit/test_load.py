@@ -111,6 +111,29 @@ def test_weekly_volume_m_excludes_non_swim_sports():
     assert weekly_volume_m(workouts, week_start) == 3000
 
 
+def test_weekly_volume_m_excludes_cross_train_distance():
+    # A cross_train session (kayak, run, ride) may carry a real distance_m
+    # from a .fit import; that distance must never count as swim volume.
+    week_start = date(2026, 7, 6)
+    workouts = [
+        make_workout(date=week_start, sport="swim_pool", distance_m=3000),
+        make_workout(date=week_start, sport="cross_train", distance_m=11494, duration_min=303.0),
+    ]
+    assert weekly_volume_m(workouts, week_start) == 3000
+
+
+def test_daily_loads_includes_cross_train_srpe():
+    # sRPE load is sport-agnostic: a 5-hour paddle at RPE 4 is real stress
+    # the load math must see even though it adds no swim volume.
+    d = date(2026, 7, 6)
+    workouts = [
+        make_workout(date=d, duration_min=60.0, rpe=5),
+        make_workout(date=d, duration_min=303.0, rpe=4, sport="cross_train", distance_m=11494),
+    ]
+    loads = daily_loads(workouts)
+    assert loads[d] == 60.0 * 5 + 303.0 * 4
+
+
 # --- daily_loads -------------------------------------------------------------------
 
 
