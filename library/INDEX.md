@@ -14,6 +14,7 @@ load `00-conventions.md` once per session to know how to read the tags.
 | `04-css-intensity-anchors.md` | CSS derivation (Wakayoshi et al. 1992) and the Z1-Z5 zone-offset table; negative-split pacing evidence; dry-land strength frequency. |
 | `05-open-water-pace-inference.md` | Why open-water pace needs correcting from pool CSS, and the (all-provisional, athlete-calibration-pending) wetsuit/conditions/cold-water correction constants. |
 | `06-long-swim-progression.md` | The Garmin-RunSafe single-session-spike evidence underpinning the long-swim ladder; the `single_day` escalating-ladder format (peak share, step cap, milestone recovery) vs. the `multi_day_stage` back-to-back-weekend format (longest-day cap); pool-placeholder sizing. |
+| `07-strength-dryland.md` | Dry-land shoulder-strengthening RCT evidence behind the 2x/week strength frequency (fuller home; `04` grounds only the frequency number); session duration, placement rule (pool-free weekdays, never weekend), the low-confidence run/bike strength-transfer adaptation, total-load caution when ramping strength alongside swim volume, the cut-week strength->recovery trade-off, and taper's (currently absent) strength handling. **UNREVIEWED**, pending human review. |
 | `reference_list.md` | **The canonical citation source.** Every claim in every file above resolves to an entry here (title + author + year), never a URL/ID — see its own header for why. |
 | `sample_pool_workout_traditional.md` | A real logged pool-coach workout sample (traditional/technique-focused notation) — reference material for `/log-workout`'s coach-text parser, not a research citation. |
 | `sample_pool_workout_openwater_focus.md` | A real logged pool-coach workout sample (open-water-focused notation) — same purpose as above. |
@@ -31,16 +32,18 @@ load `00-conventions.md` once per session to know how to read the tags.
 | "Is my training load too high / monotonous?" | `03-periodization.md` (monotony, ACWR + its criticized-methodology caveat) |
 | "How am I doing on compliance / consistency?" | `03-periodization.md` (compliance definition + thresholds) |
 | Fueling, feeding intervals, carb targets | Not yet authored (`07`-tier "ultra feeding" file per ROADMAP.md's repo-structure sketch) — until it exists, cite `reference_list.md`'s "Swimming — physiology & nutrition" section directly (Martinez-Sanz 2024, Shaw 2014 IJSNEM review, Jeukendrup 2014) and mark any synthesized answer `Coach judgment` / `UNREVIEWED`. |
-| Strength/dryland programming detail (beyond the 2x/week frequency) | `04-css-intensity-anchors.md` cites the frequency; full programming detail is not yet authored (`07`-tier "strength" file per ROADMAP.md). |
+| Strength/dryland programming detail (beyond the 2x/week frequency) | `07-strength-dryland.md` (full programming detail: duration, placement, cut-week/taper handling); `04-css-intensity-anchors.md` cites only the frequency constant. |
 | Heat/cold acclimation, HRV/recovery interpretation, taper execution, race-day pacing | Not yet authored (`08`-`11`-tier files per ROADMAP.md's repo-structure sketch). Until then: give coach judgment labeled as such, and offer to draft a new `UNREVIEWED` section rather than presenting an unsourced answer as settled. |
 | Acute physical distress (chest pain, palpitations, fainting, heat-stroke/hypothermia signs) | **Not a library-routing question.** Stop and use the `/coach` skill's safety-first override — no file in this library should be consulted before that. |
 
 ## Known gaps (as of Day 4)
 
 Per ROADMAP.md's repo-structure sketch, topic files `01` (physiology),
-`02` (polarized/80-20 training), and `07`-`12` (strength, ultra feeding,
-heat/cold, recovery/HRV, taper, race execution) are **not yet authored**.
-Day 4 authored only the files that ground existing engine constants (`00`,
-`03`-`06`) per this build's scope. `/coach` should say plainly when a
-question falls in one of these gaps rather than improvising a citation that
+`02` (polarized/80-20 training), and `08`-`12` (ultra feeding, heat/cold,
+recovery/HRV, taper, race execution) are **not yet authored**. `07`
+(strength/dryland) was authored after Day 4 and is `UNREVIEWED` pending
+human review. Day 4 authored only the files that ground existing engine
+constants (`00`, `03`-`06`) per this build's scope; `07` extends that to
+the strength constants. `/coach` should say plainly when a question falls
+in one of the remaining gaps rather than improvising a citation that
 doesn't exist yet.
