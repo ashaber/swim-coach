@@ -94,7 +94,7 @@ Deps: `pydantic>=2.7`, `PyYAML>=6`, `fitdecode>=0.10`; dev `pytest>=8`. Python 3
 
 ### Library evidence discipline (library/00-conventions.md)
 - Claims tagged `[EVIDENCE: swim-ultra]` / `[EVIDENCE: swim]` / `[ADAPTED: cycling|running|tri|general-endurance]`.
-- Every `[ADAPTED]` block carries `Confidence: high|medium|low` + a `Test:` line — a concrete check against this athlete's data (e.g., "Z2 at CSS+6s/100 should show RPE drift-down over 6 wks; if not, re-anchor zones").
+- Every `[ADAPTED]` block carries `Confidence: high|medium-high|medium|low-medium|low` + a `Test:` line — a concrete check against this athlete's data (e.g., "Z2 at CSS+6s/100 should show RPE drift-down over 6 wks; if not, re-anchor zones").
 - Numbered citations per file; unsourced statements labeled `Coach judgment:`.
 - Files ≤ ~2,500 words so any 3 fit in context. Agent-authored via web research; human-review checkbox per file in ROADMAP before treated as grounding truth.
 

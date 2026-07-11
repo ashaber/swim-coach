@@ -78,19 +78,37 @@ Known, already-reported content issues
 This module's checks found a few genuine pre-existing issues in library/
 content. Rather than silently "fixing" them (most require an editorial
 judgment call this module can't make) or silently widening an allowlist to
-paper over them, they are recorded explicitly in ``KNOWN_INVALID_TAGS`` and
+paper over them, they were recorded explicitly in ``KNOWN_INVALID_TAGS`` and
 ``KNOWN_ADAPTED_MISSING_TEST`` below, with a reason, and a companion test
-(``test_known_violations_still_reproduce``) asserts they still exist -- so
-if someone fixes the content, that test fails and forces the stale entry to
-be removed, rather than the exception silently living forever. See the PR
-description for the full list.
+(``test_known_violations_still_reproduce``) asserted they still existed --
+so that if someone fixed the content, that test would fail and force the
+stale entry to be removed, rather than the exception silently living
+forever. See past PR descriptions (#29 and its predecessors) for the full
+history.
 
-``KNOWN_ADAPTED_MISSING_TEST`` is currently empty: the two `Test:` lines it
-used to grandfather (10-recovery-hrv.md:64 and :123) were written and the
-entries removed, so rule 2 (every ``[ADAPTED]`` block carries ``Confidence:``
-and ``Test:``) now enforces with zero exceptions. The dict and its
-companion-test loop are left in place, not deleted, so a future genuine
-gap has somewhere to go without re-deriving this mechanism from scratch.
+Both dicts are now empty: every previously-grandfathered gap has been
+fixed at the content level instead of permanently allowlisted.
+``KNOWN_ADAPTED_MISSING_TEST``'s two `Test:` lines (10-recovery-hrv.md:64
+and :123) were written in. ``KNOWN_INVALID_TAGS``'s last entry
+(05-open-water-pace-inference.md:64, an ``[ADAPTED: general open-water
+coaching guidance]`` tag with no matching allowed value) was resolved by
+re-tagging the claim ``[EVIDENCE: swim]`` -- Andrew's editorial call that
+the source (PurplePatch Fitness's OW pacing guide) is swim coaching
+guidance itself, not borrowed from an adjacent discipline, so it was never
+really an ADAPTED claim; see 05's own text for the reasoning and the
+discounted ``Confidence: low-medium`` grade. Every gate rule in this module
+now enforces with zero allowlisted exceptions.
+
+Both dicts and their companion-test loops (in
+``test_known_violations_still_reproduce``) are left in place, not deleted,
+so a future genuine gap has somewhere to go without re-deriving this
+mechanism from scratch. With both dicts empty, those loops are no-ops by
+construction (an empty dict's ``.items()`` never executes the loop body) --
+that's the intended, verified end state, not a silent gap: the underlying
+checkers (``find_invalid_tags``, ``find_adapted_blocks``) are independently
+exercised against inline fixtures by the negative tests below, so their
+ability to bite is proven without depending on real library/ content
+currently containing a violation.
 """
 
 from __future__ import annotations
@@ -163,24 +181,23 @@ LIBRARY_REF_RE = re.compile(r"library/([A-Za-z0-9_.\*-]+\.md)")
 # --- Known, already-reported violations (see module + PR body) -------------
 # (filename, line) -> human-readable reason. Deliberately NOT folded into
 # the allowlists above -- see test_known_violations_still_reproduce.
-KNOWN_INVALID_TAGS = {
-    ("05-open-water-pace-inference.md", 64): (
-        "[ADAPTED: general open-water coaching guidance] is not a real "
-        "ADAPTED value (PurplePatch Fitness's OW pacing guide isn't from "
-        "an adjacent discipline -- it's swim coaching guidance itself, so "
-        "ADAPTED's own definition doesn't fit). It's structurally the same "
-        "situation 06-long-swim-progression.md's Santa Barbara citation "
-        "handles with `[EVIDENCE: swim-ultra]` (fixed in this PR from "
-        "`[EVIDENCE: swim-ultra, practical]`), but recategorizing this one "
-        "to EVIDENCE changes its epistemic framing (from 'adapted, weakly' "
-        "to 'direct evidence') and that's an editorial call, not a syntax "
-        "fix -- left for Andrew."
-    ),
-}
-# Empty: both previously-grandfathered gaps (10-recovery-hrv.md:64 and
-# :123) now have real Test: lines -- see module docstring. Kept as a live
-# mechanism (not deleted) for any future genuine gap; test_known_violations_
-# still_reproduce's loop over this dict is a no-op while it's empty.
+KNOWN_INVALID_TAGS: dict[tuple[str, int], str] = {}
+# Empty: 05-open-water-pace-inference.md:64's
+# `[ADAPTED: general open-water coaching guidance]` -- the last remaining
+# entry -- was re-tagged `[EVIDENCE: swim]` (Andrew's call: PurplePatch's OW
+# pacing guide is swim coaching guidance itself, not borrowed from an
+# adjacent discipline, so it was never really an ADAPTED claim; it's the
+# same situation 06-long-swim-progression.md's Santa Barbara citation
+# handles, discounted to `Confidence: low-medium` since it's a practitioner
+# resource rather than a peer-reviewed study). Both allowlists in this
+# module are now empty -- see module docstring. Kept as a live mechanism
+# (not deleted) for any future genuine gap; test_known_violations_still_
+# reproduce's loops over these dicts are no-ops while they're empty, which
+# is the desired end state, not a hidden gap in the mechanism (the dicts'
+# types are still exercised by the two `test_...tag_value_is_flagged` /
+# `test_adapted_block_missing_test_is_flagged` negative tests above, which
+# prove the underlying checkers still bite against fixtures independent of
+# whether real library/ content currently has any violations).
 KNOWN_ADAPTED_MISSING_TEST: dict[tuple[str, int], str] = {}
 
 
@@ -632,6 +649,17 @@ def test_library_ref_exists_handles_glob() -> None:
 
 
 def test_known_violations_still_reproduce() -> None:
+    # Both loops below are no-ops today -- KNOWN_INVALID_TAGS and
+    # KNOWN_ADAPTED_MISSING_TEST are both empty (see module docstring). That
+    # is the desired end state (every gate rule enforces with zero
+    # allowlisted exceptions), not a silently-broken mechanism: the
+    # assertion right after the loops pins the "both empty" state itself,
+    # so this test still fails (rather than vacuously passing) if either
+    # dict is ever repopulated without this assertion being updated, and
+    # the checkers' ability to bite at all is independently proven by the
+    # negative tests above (e.g. test_invalid_adapted_tag_value_is_flagged,
+    # test_adapted_block_missing_test_is_flagged), which don't depend on
+    # real library/ content containing a violation.
     for (filename, expected_line), reason in KNOWN_INVALID_TAGS.items():
         text = (LIBRARY_DIR / filename).read_text(encoding="utf-8")
         lines = [ln for (ln, _kind, _raw) in find_invalid_tags(text)]
@@ -651,3 +679,11 @@ def test_known_violations_still_reproduce() -> None:
             f"reproduces -- remove this stale entry from "
             f"KNOWN_ADAPTED_MISSING_TEST in tests/unit/test_library_discipline.py."
         )
+
+    assert KNOWN_INVALID_TAGS == {} and KNOWN_ADAPTED_MISSING_TEST == {}, (
+        "Both allowlists are expected to be empty -- every gate rule should "
+        "enforce with zero allowlisted exceptions. If you've added a new "
+        "entry, that's a regression in gate strictness unless it's a "
+        "genuinely new, reviewed exception; update this assertion "
+        "deliberately, don't just let it fail."
+    )
