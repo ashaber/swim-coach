@@ -1,13 +1,27 @@
 # Manual (workflow_dispatch) deploy for the coach-chat backend to Cloud Run.
 #
-# Manual on purpose: pushing an image needs Andrew's GCP Artifact Registry +
-# Cloud Run + Secret Manager credentials (GCP_WORKLOAD_IDENTITY_PROVIDER /
-# GCP_SERVICE_ACCOUNT repo secrets, or a GCP_SA_KEY, depending on which auth
-# method Andrew sets up), which don't exist yet as of this build. The FIRST
-# deploy is done manually from Andrew's machine (build + push + `gcloud run
-# deploy`, plus creating the `anthropic-api-key`/`api-token` secrets in
-# Secret Manager and granting the Cloud Run service account access to them)
-# -- this workflow is for repeatable redeploys after that.
+# Manual on purpose: this ships a new image and swaps production traffic to
+# it, so it stays an explicit human trigger rather than firing on every push.
+#
+# WIF (Workload Identity Federation) auth is set up as of 2026-07-11 —
+# GCP_WORKLOAD_IDENTITY_PROVIDER / GCP_SERVICE_ACCOUNT / GCP_PROJECT_ID repo
+# secrets exist and this workflow authenticates with them.
+#
+# REAL PRODUCTION is the GCP project `open-swim-coach-ashaber` (project
+# number 445273334913) — this is the project GCP_PROJECT_ID must point at,
+# and the URL `web/src/settings.js` defaults to.
+#
+# `ashaber-open-brain` (project number 901329634103) hosts a STALE DUPLICATE
+# `swim-coach-api` Cloud Run service with no DATABASE_URL secret and
+# different env vars. It must NOT be targeted by this workflow — deploying
+# against it would ship a backend with no database.
+#
+# The image is built and pushed tagged both with the commit SHA (for
+# traceable rollbacks) and `latest` (the running service's spec pins
+# `:latest` for manual `gcloud run deploy` from Andrew's machine, so this
+# workflow keeps that tag current too). The Cloud Run deploy itself targets
+# the SHA tag explicitly so each deploy is pinned to a specific, inspectable
+# image rather than a floating tag.
 
 name: Deploy backend
 
@@ -16,8 +30,8 @@ on:
 
 env:
   GCP_REGION: us-central1
-  ARTIFACT_REPO: swim-coach
-  IMAGE_NAME: swim-coach-api
+  ARTIFACT_REPO: swim-coach-repo
+  IMAGE_NAME: api
   SERVICE_NAME: swim-coach-api
 
 jobs:
@@ -46,11 +60,13 @@ jobs:
           docker build \
             -f backend/Dockerfile \
             -t ${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            -t ${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:latest \
             .
 
       - name: Push image
         run: |
           docker push ${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:latest
 
       - name: Deploy to Cloud Run
         run: |
@@ -61,5 +77,5 @@ jobs:
             --min-instances=0 \
             --max-instances=2 \
             --allow-unauthenticated \
-            --set-secrets=ANTHROPIC_API_KEY=anthropic-api-key:latest,API_TOKEN=swim-coach-api-token:latest \
-            --set-env-vars=CLAUDE_MODEL=claude-sonnet-5,CLAUDE_THINKING=adaptive,ALLOWED_ORIGINS=https://ashaber.github.io,CHAT_RATE_PER_MIN=20
+            --set-env-vars=CLAUDE_MODEL=claude-opus-4-8,ALLOWED_ORIGINS=https://ashaber.github.io,ATHLETES_DIR=/app/athletes,LIBRARY_DIR=/app/library,STORE_BACKEND=db \
+            --set-secrets=ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest,API_TOKEN=API_TOKEN:latest,DATABASE_URL=DATABASE_URL:latest
