@@ -61,8 +61,8 @@ and has zero wall push-off assistance, hence a nonzero penalty even at the
 best end of the scale. Confidence: low across all three tiers until
 calibrated per-athlete.
 
-**[ADAPTED: general open-water coaching guidance]** `reference_list.md`'s
-"Practical / non-journal resources" includes PurplePatch Fitness's
+**[EVIDENCE: swim] Confidence: low-medium.** `reference_list.md`'s
+"Practical / non-journal resources" section includes PurplePatch Fitness's
 open-water pacing guide, which documents an "Environmental Pace Decay
 Curve" moving from pool baseline through flat-lake to ocean-with-waves,
 with each environment carrying a wider anticipated pace range and shifting
@@ -70,11 +70,29 @@ the athlete's primary pacing reference from clock time toward stroke
 rate/length and perceived effort. This supports the *direction and ordering*
 of the three tiers (calm < moderate < rough penalty) even though the exact
 second-values in `zones.py` aren't drawn line-for-line from that source.
-Confidence: low-medium; Test: log conditions (calm/moderate/rough) alongside
-every OW swim's RPE and actual pace, and check whether actual pace deltas
-preserve the same ordering as fitness improves — if rough-water swims stop
-being meaningfully slower than moderate, the "rough" tier may be
-over-penalizing.
+This is a web practical resource (not a peer-reviewed study) — practitioner
+guidance from an open-water/triathlon coaching business, not a research
+paper — which is why it's cited at low-medium rather than a higher grade
+despite being swim-specific and directly on-point: it backs the *ordering*
+claim, not the *magnitude* of any of `zones.py`'s specific second-values.
+
+**Test:** once the athlete has 3+ logged `sport: swim_ow` workouts
+(`logs/workouts/*.yaml`, `avg_pace_s_per_100m` populated), compute
+`infer_ow_pace()`'s prediction for each swim from her `css_pace_s_per_100m`
+(`profile.yaml`) plus that day's actual wetsuit/conditions/water-temp
+inputs, and compare against the logged pace. As of this writing she has one
+logged OW swim (2026-07-06, Lucky Peak, 6989m/181min, avg_pace
+155.4s/100m, skins, ~18.3°C water, calm conditions per notes) against a
+predicted ~92s/100m (CSS 90.0 + calm +2.0) — a large gap, but expected with
+n=1: it can't yet distinguish "the correction constants need re-anchoring"
+from "a continuous multi-hour swim simply isn't paced anywhere near CSS."
+Once 3+ swims exist, check whether the residual (actual minus predicted) is
+roughly consistent across swims of similar distance/duration and whether
+rougher-tier swims show a larger residual than calmer ones in the same rank
+order the source claims; if the residual is wildly inconsistent, or a
+rougher swim isn't actually slower than a calmer one at comparable effort,
+that's a signal to re-anchor the constants rather than lean further on this
+source for tier ordering.
 
 ## Cold-water correction: `COLD_WATER_THRESHOLD_C = 16.0`, `COLD_WATER_ADJ_S = 2.0`
 

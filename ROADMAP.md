@@ -54,6 +54,112 @@ A Claude design pass to tighten the PWA UI. Low-risk and independent of the DB w
 
 Strava OAuth webhook sync first (Garmin Health API if approved); Supabase Auth magic-link + RLS, retiring the shared bearer token; PWA onboarding wizard (CSS-test) + per-athlete spend caps; multi-swimmer onboarding.
 
+### PROPOSED — feedback-triggered library research loop (design only, not yet built)
+
+Design worked out 2026-07-11; nothing below is implemented. Goal: close the
+loop from "the coach couldn't answer" to "the library has a reviewed answer,"
+without reintroducing the fabrication failure the library evidence discipline
+exists to prevent (see `library/00-conventions.md`'s account of the
+Gemini-fabricated URLs/PubMed IDs). Depends on the CI library-evidence gate
+being built on branch `ci/library-evidence-gate` — see step 4.
+
+1. **Trigger — already exists.** The chat coach's IDEA-005 "I don't know"
+   behavior calls the `log_open_question` tool (`backend/app/tools.py`)
+   whenever a library gap blocks an answer, which writes a
+   `swim_coach.models.Feedback` row via `store.save_feedback` with
+   `type="research_question"`, `source="coach"`, `body` = the question
+   verbatim, `context={"topic": ..., "expert_mode": ...}`, `status="open"`.
+   PR #20 made this durable (`GET/POST /api/feedback`, `backend/app/routes/
+   feedback.py`) — it previously wrote to `research/open-questions.jsonl`,
+   an ephemeral file Cloud Run silently wiped on every scale-to-zero.
+   Athlete-submitted feedback (`type` = `feature_request` / `comment` / `bug`,
+   `source="athlete"`, via the PWA Feedback tab) is a **separate stream, not
+   a research trigger** — `routes/feedback.py` explicitly rejects athletes
+   submitting `type="research_question"` since only the coach tool logs that
+   type.
+2. **Batched, rate-limited drafting — not one run per question.** A scheduled
+   job (weekly) sweeps `Feedback` rows with `type="research_question"` and
+   `status="open"`, clusters related ones by topic, and drafts at most a
+   small number of library sections/files per run.
+   - *Rationale:* per-question drafting would outrun the human reviewer and
+     turn review into rubber-stamping — which defeats the entire point of
+     the review gate (step 5). Batching also gives clustering a chance to
+     merge overlapping questions into one section instead of one per
+     question.
+3. **The drafting recipe — already proven manually 3×** (strength/`07`,
+   recovery/`10`, the Oura device-trust amendment to `10`). A research pass
+   produces a **verified dossier**: each candidate source confirmed to exist
+   by title+author web search and recorded as title + author + year +
+   journal — **never a URL or PubMed/PMC/DOI ID**, since a prior Gemini-
+   assisted pass fabricated exactly those and poisoned the repo (the reason
+   `reference_list.md` is now the only trustworthy citation source). Sources
+   carry ✓/~/⚠ verification markers through to the dossier; summaries are
+   honest 2–4 sentences with no embellishment; conflicts of interest are
+   preserved rather than smoothed over (e.g. the Oura dossier flags sources
+   authored by Oura employees). The dossier commits to
+   `library/research-dossiers/` as provenance — raw input, explicitly
+   **not itself citable** (see the header note in the two existing dossiers).
+   From the dossier: sources go into `reference_list.md`; claims go into the
+   routed topic file with mandatory tags (`[EVIDENCE: swim-ultra|swim]` /
+   `[ADAPTED: cycling|running|tri|general-endurance]` + `Confidence:` +
+   `Test:`, or `Coach judgment:`); the changed section is marked
+   `UNREVIEWED`; `INDEX.md`'s routing table is updated to point at it.
+4. **Precondition: the CI library-evidence gate** (being built now on branch
+   `ci/library-evidence-gate` — this section depends on it, doesn't
+   implement or duplicate it). It machine-enforces the invariants step 3
+   currently only holds by careful prompting: no fabricated-ID-shaped
+   citations, every `[ADAPTED]` block carries `Confidence:` + `Test:`, tag
+   values are valid, topic files stay ≤2,500 words, citations resolve to
+   `reference_list.md`, and engine-constant library references point at real
+   files.
+   - *Principle:* automated drafting is only safe once the evidence
+     discipline is an **invariant the system enforces**, not a convention a
+     careful prompter follows. Without the gate, a drafting agent scales up
+     the repo's original fabrication failure instead of preventing its
+     recurrence — this loop does not go live before that gate is merged.
+5. **Human review is a hard gate — and must be a human.** The drafting job
+   opens a PR (new/changed topic file + dossier + `reference_list.md` +
+   `INDEX.md` diffs); a human with domain judgment (Andrew, or a real coach)
+   reviews it and removes `UNREVIEWED`. Never auto-merge.
+   - *Trap to avoid stating obliquely:* an AI reviewing an AI's draft is a
+     mirror, not a gate — it will pattern-match agreement, not catch a bad
+     inference. The PR is the sign-off record; the reviewer is the control,
+     not another model.
+6. **Release + loop closure.** Merging is not enough by itself: `library/`
+   is baked into the backend container image at `/app/library` (see "Known
+   limitation" above), so the **live chat coach** only sees the new text
+   after a redeploy (`gh workflow run deploy-backend.yml --ref main`) — repo-
+   side Claude Code skills see the merged file immediately, the deployed
+   coach doesn't. Recommend, as a follow-up, a path-filtered auto-deploy
+   trigger (`paths: ['library/**', 'engine/**', 'backend/**']` on
+   `deploy-backend.yml`) to remove that manual step — same class of fix as
+   the Phase 2.5 DB-freshness limitation, different layer. After the deploy,
+   mark the originating `Feedback` rows `status="resolved"`, linking the
+   merged file, so the same gap isn't independently re-researched next
+   sweep.
+7. **Why the library stays in git, not a DB or vector store — recorded
+   here as a decision, not left implicit.** Even fully built out (files
+   `01`–`12` at the ≤2,500-word cap), the corpus is ~30–35k tokens — the
+   *entire* library fits in one context window, so RAG/vector retrieval
+   solves a problem this project doesn't have. `INDEX.md`'s hand-curated
+   routing table beats embedding similarity over ~12 documents: it encodes
+   judgment ("this claim actually belongs under `10`, not `06`") that
+   similarity search can't. More importantly, baking library + engine from
+   the same git commit into the same container image makes production drift
+   **impossible by construction** — the deployed engine constant and the
+   library file that justifies it are always the same version
+   (`00-conventions.md`'s code/library-drift rule, enforced at the artifact
+   level rather than by convention). The draft → review → release state
+   machine described above **is** branch → PR → merge; provenance, diff, and
+   rollback come for free from git instead of being rebuilt. Triggers that
+   would reopen this decision: library writes becoming routine (more than
+   weekly), or a reviewer who can't use GitHub — and even then the fix is a
+   PWA review screen calling the GitHub API to merge the PR, keeping git as
+   source of truth, **not** moving the library into Postgres. Separately:
+   the *unbounded* corpora (raw coach texts, workout logs) are a plausible
+   future home for embedding search — the curated, human-reviewed library
+   is not, and shouldn't be conflated with them.
+
 ---
 
 ## Phase 1 — Repo-first coaching engine (usable in days)
@@ -94,7 +200,7 @@ Deps: `pydantic>=2.7`, `PyYAML>=6`, `fitdecode>=0.10`; dev `pytest>=8`. Python 3
 
 ### Library evidence discipline (library/00-conventions.md)
 - Claims tagged `[EVIDENCE: swim-ultra]` / `[EVIDENCE: swim]` / `[ADAPTED: cycling|running|tri|general-endurance]`.
-- Every `[ADAPTED]` block carries `Confidence: high|medium|low` + a `Test:` line — a concrete check against this athlete's data (e.g., "Z2 at CSS+6s/100 should show RPE drift-down over 6 wks; if not, re-anchor zones").
+- Every `[ADAPTED]` block carries `Confidence: high|medium-high|medium|low-medium|low` + a `Test:` line — a concrete check against this athlete's data (e.g., "Z2 at CSS+6s/100 should show RPE drift-down over 6 wks; if not, re-anchor zones").
 - Numbered citations per file; unsourced statements labeled `Coach judgment:`.
 - Files ≤ ~2,500 words so any 3 fit in context. Agent-authored via web research; human-review checkbox per file in ROADMAP before treated as grounding truth.
 

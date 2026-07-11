@@ -21,6 +21,10 @@ from swim_coach.models import (
     Wellness,
     WeekPlan,
     Workout,
+    WorkoutAnalytics,
+    WorkoutLap,
+    WorkoutLength,
+    WorkoutPause,
     WorkoutSet,
 )
 from swim_coach.store import FileStore
@@ -334,6 +338,106 @@ def test_entities_carry_athlete_id_and_schema_version(factory):
     assert entity.schema_version == 1
 
 
+# --- Workout analytics fields (additive, .fit workout-analytics Slice 1) ----
+
+
+def test_workout_analytics_fields_default_empty():
+    # Existing-style Workout YAML (manual/tcx/csv logs with none of these
+    # keys) must keep validating unchanged -- additive, no schema_version bump.
+    workout = make_workout()
+    assert workout.avg_hr is None
+    assert workout.max_hr is None
+    assert workout.laps == []
+    assert workout.lengths == []
+    assert workout.pauses == []
+    assert workout.analytics is None
+    assert workout.series_ref is None
+
+
+def test_workout_lap_requires_only_index_and_duration():
+    lap = WorkoutLap(index=0, duration_s=120.5)
+    assert lap.start_offset_s is None
+    assert lap.distance_m is None
+    assert lap.avg_hr is None
+
+
+def test_workout_length_swolf_and_defaults():
+    length = WorkoutLength(index=0, duration_s=25.0, strokes=11, stroke="freestyle")
+    assert length.swolf is None  # caller computes swolf, not the model
+    assert length.lap_index is None
+
+
+def test_workout_pause_rejects_bad_source():
+    with pytest.raises(ValidationError):
+        WorkoutPause(start_offset_s=10.0, duration_s=5.0, source="nap")
+
+
+def test_workout_pause_accepts_all_sources():
+    for source in ("timer", "gap", "idle_length"):
+        pause = WorkoutPause(start_offset_s=0.0, duration_s=1.0, source=source)
+        assert pause.source == source
+
+
+def test_workout_analytics_split_label_rejects_bad_value():
+    with pytest.raises(ValidationError):
+        WorkoutAnalytics(split_label="sideways")
+
+
+def test_workout_with_full_analytics_round_trip_through_yaml():
+    workout = make_workout(
+        avg_hr=132,
+        max_hr=161,
+        laps=[
+            WorkoutLap(
+                index=0,
+                start_offset_s=0.0,
+                duration_s=1800.0,
+                distance_m=1500.0,
+                avg_hr=130,
+                max_hr=155,
+                avg_pace_s_per_100m=120.0,
+                stroke="freestyle",
+                num_lengths=60,
+            )
+        ],
+        lengths=[
+            WorkoutLength(index=0, lap_index=0, duration_s=25.0, strokes=11, stroke="freestyle", swolf=36.0)
+        ],
+        pauses=[WorkoutPause(start_offset_s=900.0, duration_s=45.0, source="timer")],
+        analytics=WorkoutAnalytics(
+            cardiac_drift_pct=4.2,
+            split_label="negative",
+            first_half_pace_s_per_100m=121.0,
+            second_half_pace_s_per_100m=119.0,
+            elapsed_min=58.0,
+            moving_min=57.2,
+            pause_total_min=0.75,
+            pause_count=1,
+            swolf_first_quarter=35.0,
+            swolf_last_quarter=38.0,
+            swolf_degradation_pct=8.6,
+        ),
+        series_ref="athletes/wife/logs/series/2026-07-06-swim_pool-abcd1234.json",
+    )
+    dumped = yaml.safe_dump(workout.model_dump(mode="json"))
+    loaded_data = yaml.safe_load(dumped)
+    restored = Workout.model_validate(loaded_data)
+    assert restored == workout
+
+
+def test_file_store_workout_with_analytics_round_trip(tmp_path):
+    store = FileStore(base_dir=tmp_path)
+    workout = make_workout(
+        avg_hr=140,
+        laps=[WorkoutLap(index=0, duration_s=600.0)],
+        analytics=WorkoutAnalytics(cardiac_drift_pct=3.1),
+    )
+    store.save_workout("wife", workout)
+    loaded = store.list_workouts("wife")
+    assert loaded == [workout]
+    assert loaded[0].analytics.cardiac_drift_pct == 3.1
+
+
 def test_athlete_carries_schema_version():
     athlete = make_athlete()
     assert athlete.schema_version == 1
@@ -521,6 +625,63 @@ def test_file_store_resaving_same_workout_id_overwrites_its_own_file(tmp_path):
     assert len(loaded) == 1
     assert loaded[0].notes == "corrected"
     assert loaded[0].rpe == 6
+
+
+# --- FileStore.save_series / save_raw_file (.fit workout-analytics Slice 1) --------
+
+
+def test_file_store_save_series_writes_json(tmp_path):
+    store = FileStore(base_dir=tmp_path)
+    workout = make_workout()
+    series = {"t_s": [0.0, 1.0, 2.0], "hr": [100, 101, 102]}
+    ref = store.save_series("wife", workout.date, workout.sport, workout.id, series)
+    expected_path = (
+        tmp_path
+        / "wife"
+        / "logs"
+        / "series"
+        / f"2026-07-06-swim_pool-{str(workout.id)[:8]}.json"
+    )
+    assert expected_path.exists()
+    assert ref == str(expected_path)
+    import json
+
+    assert json.loads(expected_path.read_text(encoding="utf-8")) == series
+
+
+def test_file_store_save_raw_file_copies_into_files_dir(tmp_path):
+    store = FileStore(base_dir=tmp_path)
+    src = tmp_path / "incoming.fit"
+    src.write_bytes(b"fake-fit-bytes")
+
+    ref = store.save_raw_file("wife", src)
+    expected_path = tmp_path / "wife" / "logs" / "files" / "incoming.fit"
+    assert expected_path.exists()
+    assert expected_path.read_bytes() == b"fake-fit-bytes"
+    assert ref == str(expected_path)
+
+
+def test_file_store_save_raw_file_is_noop_if_identical(tmp_path):
+    store = FileStore(base_dir=tmp_path)
+    src = tmp_path / "incoming.fit"
+    src.write_bytes(b"fake-fit-bytes")
+
+    ref1 = store.save_raw_file("wife", src)
+    ref2 = store.save_raw_file("wife", src)
+    assert ref1 == ref2
+
+
+def test_file_store_save_raw_file_refuses_silent_overwrite_of_different_content(tmp_path):
+    store = FileStore(base_dir=tmp_path)
+    src1 = tmp_path / "incoming.fit"
+    src1.write_bytes(b"version-one")
+    store.save_raw_file("wife", src1)
+
+    src2 = tmp_path / "other" / "incoming.fit"
+    src2.parent.mkdir()
+    src2.write_bytes(b"version-two-different-bytes")
+    with pytest.raises(FileExistsError):
+        store.save_raw_file("wife", src2)
 
 
 def test_file_store_load_missing_athlete_raises(tmp_path):

@@ -41,8 +41,16 @@ tagged with exactly one of:
   from an adjacent endurance discipline and is being applied to open-water
   ultra-swimming by inference, not direct evidence. **Every `[ADAPTED]`
   block must carry two more things:**
-  - `Confidence: high|medium|low` — how much the adaptation-across-disciplines
-    inference should be trusted.
+  - `Confidence: high|medium-high|medium|low-medium|low` — how much the
+    adaptation-across-disciplines inference should be trusted. Reach for an
+    intermediate grade (`medium-high`/`low-medium`) when a single "high" or
+    "medium" would misrepresent a mixed picture — e.g. the Oura HRV
+    device-validity work (`10-recovery-hrv.md`): nightly rMSSD correlates
+    strongly with chest-ECG reference in independent validation studies
+    (genuinely high-confidence on its own), but the training-guidance
+    thresholds it feeds were calibrated on a different measurement protocol
+    (morning orthostatic, not overnight) than Oura uses — so `medium-high`
+    is the honest tier, not a rounding to either neighbor.
   - `Test:` — one concrete, checkable-against-this-athlete's-own-data
     statement that would falsify or support the claim (e.g. "flag any single
     long swim that exceeds the athlete's longest swim of the prior 30 days by

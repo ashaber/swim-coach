@@ -2,22 +2,21 @@
 
 Grounds `engine/swim_coach/adapt.py`'s post-milestone recovery window
 (`RECOVERY_DAYS_AFTER_MILESTONE_MIN/MAX = 3/5`) with recovery-science
-support — `06-long-swim-progression.md` stays that constant's primary
-citation home; this file adds *why* 3-5 days is a defensible recovery
-window, not just where the number comes from. It also grounds
-`load.py`/`adapt.py`'s subjective `wellness_composite` (`WELLNESS_RED_
-THRESHOLD = 2.0` over `WELLNESS_WINDOW_DAYS = 7`) as a legitimate primary
-monitoring signal rather than a lesser substitute for objective/HRV data,
-and lays forward-looking groundwork for HRV-guided daily adjustment and a
-between-events mini-taper — neither implemented in the engine today. See
-`00-conventions.md` for the tagging scheme and `reference_list.md` for full
-citations.
+support — `06-long-swim-progression.md` stays the constant's primary
+citation home; this file adds *why* 3-5 days is defensible, not just where
+the number comes from. It also grounds `load.py`/`adapt.py`'s subjective
+`wellness_composite` (`WELLNESS_RED_THRESHOLD = 2.0` over
+`WELLNESS_WINDOW_DAYS = 7`) as a legitimate primary monitoring signal, not
+a substitute for objective/HRV data, and lays groundwork for HRV-guided
+daily adjustment and a between-events mini-taper — neither implemented
+yet. See `00-conventions.md` for the tagging scheme and `reference_list.md`
+for citations.
 
 **Concrete trigger for this file:** Renee's actual W28/W29 (per
 `athletes/renee/notes/decisions.md`) — a ~5-hour Lucky Peak open-water swim
 with kayak support on Thu 7/9, followed by the Bear Lake Monster 10K
-(B-priority, kayak-supported) on Sat 7/18, roughly nine days later. That's
-the real scenario this file is written against, not a hypothetical.
+(B-priority, kayak-supported) on Sat 7/18, roughly nine days later — the
+real scenario this file is written against, not a hypothetical.
 
 ## Recovery windows between hard efforts (5-10 days)
 
@@ -27,18 +26,17 @@ concludes that **sleep, nutrition, and periodization are the evidence-backed
 foundation** — newer recovery devices (foam rolling, cryotherapy,
 photobiomodulation) lack strong support and shouldn't be prioritized over
 those fundamentals. `Braun-Trocchio et al. (2022)`'s 264-athlete survey
-across 11 endurance sports is consistent with this: hydration, nutrition,
-sleep, and rest are what practitioners actually use and trust most — useful
-as color for what to prioritize, not as efficacy evidence (it's a survey of
-practice, not a trial).
+across 11 endurance sports is consistent: hydration, nutrition, sleep, and
+rest are what practitioners actually use and trust most — useful as color
+for what to prioritize, not as efficacy evidence.
 
 No engine constant exists yet for a fixed "short-turnaround between two
 hard efforts" window — `RECOVERY_DAYS_AFTER_MILESTONE_MIN/MAX` in `adapt.py`
 is tuned for the long-swim ladder's milestone-then-build pattern
-(`06-long-swim-progression.md`), not a fixed B-event-to-A-event gap. A
-9-day gap between two open-water efforts is a candidate for a future,
-distinct `MINI_TAPER_*` constant (see the mini-taper section below), not a
-direct application of the milestone-recovery window.
+(`06-long-swim-progression.md`), not a B-event-to-A-event gap. A 9-day gap
+between two open-water efforts is a candidate for a future `MINI_TAPER_*`
+constant (see the mini-taper section below), not a direct application of
+the milestone-recovery window.
 
 ## Nutrition for the refeed window
 
@@ -71,7 +69,12 @@ to a combined long-swim-plus-kayak day like 7/9: offering a carb+protein
 feed *during* the effort, not just after, is the practical takeaway. This
 sits at the edge of this file's scope — full during-exercise fueling belongs
 in the not-yet-authored `08-*` ultra-feeding file; it's included here only
-because it bears on the *recovery* outcome of the same day.
+because it bears on the *recovery* outcome of the same day. **Test:** after
+long (>3h) efforts where the feed included protein alongside carbohydrate,
+compare next-day wellness-composite/soreness recovery against carbohydrate-
+only efforts of similar duration in Renee's own logs — if enough paired
+cases show no difference, drop the co-ingestion emphasis from her
+during-effort fueling.
 
 ## Sleep: the highest-leverage lever available in a short window
 
@@ -88,7 +91,7 @@ speed, shooting accuracy, reaction time, and mood.
 `load.py`'s `wellness_composite` already includes a sleep-quality term
 (equal-weighted with stress/soreness/motivation, per `03-periodization.md`)
 — this section documents *why* sleep earns that weight, without adding a
-standalone sleep-duration threshold the engine doesn't currently model.
+sleep-duration threshold the engine doesn't model.
 **Test:** in a short-turnaround window, if sleep can be extended toward
 8.5-9.5h/night, check whether Renee's wellness-composite energy/soreness
 sub-scores trend upward relative to her own recent baseline.
@@ -100,24 +103,22 @@ sub-scores trend upward relative to her own recent baseline.
 power recovery, perceived soreness, and creatine-kinase markers after
 eccentric/high-intensity exercise — but was **not effective** at improving
 recovery of *endurance* performance specifically, at either 24h or 48h
-post-exercise. For an athlete whose limiter nine days out is aerobic/
-endurance capacity, not power, this matters: CWI is a soreness/comfort
-tool here, not a proven endurance-recovery accelerant. `Hill et al.
-(2014)`'s meta-analysis on compression garments found a similar pattern —
+post-exercise. For an athlete whose limiter nine days out is aerobic
+capacity, not power, this matters: CWI is a soreness/comfort tool here,
+not a proven endurance-recovery accelerant. `Hill et al. (2014)`'s
+meta-analysis on compression garments found a similar pattern —
 small-to-moderate soreness/strength benefit, weaker/inconsistent effect on
-objective performance measures (Confidence: low-medium — verified by
-consistent secondary citation listings, not an individually fetched
-full-text read).
+objective performance (Confidence: low-medium — verified by consistent
+secondary citation listings, not an individually fetched full-text read).
 
 **Practical framing, not a rule:** offer CWI/compression as comfort-tier
-recovery support in the days after 7/9, but don't treat either as a
-substitute for sleep or refeeding, and don't expect either to measurably
-move endurance readiness for 7/18. **Test:** if CWI is used, track whether
-Renee's perceived-soreness wellness sub-score improves without a
-corresponding change in matched-effort session pace/RPE — if pace/RPE
-doesn't move with CWI use, that's consistent with Moore et al.'s
-endurance-null finding and supports treating it as comfort-only going
-forward.
+recovery support after 7/9, but don't treat either as a substitute for
+sleep or refeeding, and don't expect either to move endurance readiness
+for 7/18. **Test:** if CWI is used, track whether Renee's perceived-
+soreness wellness sub-score improves without a corresponding change in
+matched-effort session pace/RPE — if pace/RPE doesn't move with CWI use,
+that's consistent with Moore et al.'s endurance-null finding and supports
+treating it as comfort-only going forward.
 
 ## HRV- and wellness-guided load adjustment
 
@@ -129,7 +130,11 @@ consistency** than the objective measures tested. This is the strongest
 citation in this file for an *already-implemented* engine constant: it
 directly supports treating `wellness_composite` (`WELLNESS_RED_THRESHOLD =
 2.0` over `WELLNESS_WINDOW_DAYS = 7` in `adapt.py`) as a legitimate primary
-signal, not a fallback for when HRV/objective data is unavailable.
+signal, not a fallback for when HRV/objective data is unavailable. **Test:**
+on days both exist, check whether Renee's wellness-composite tracks (or
+leads) her Oura HRV/RHR trend; if the composite consistently diverges from
+the objective signals over a training block, stop treating it as the
+primary go/no-go signal and re-weight toward the device data.
 
 **[ADAPTED: running/cycling] Confidence: medium.** Three independent-lab
 RCTs converge on the same mechanism: `Kiviniemi et al. (2007)` (26 males, 4
@@ -137,11 +142,11 @@ weeks) found HRV-guided training — hard only on stable/rising-HRV mornings,
 easy/rest below a rolling threshold — improved max running velocity more
 than a fixed program; `Vesterinen et al. (2016)` (40 runners, 8 weeks) and
 `Javaloyes et al. (2020)` (20 cyclists, 8 weeks) each found the same
-directional result in their own populations. None of these tested an
-8-10-day single-athlete window specifically — all are multi-week blocks in
-runners/cyclists — so the mechanism is well-evidenced and cheap to apply,
-but the *exact scenario* (a short taper-in window before a B-then-A event
-pair) is not what was tested.
+directional result in their own populations. None tested an 8-10-day
+single-athlete window — all are multi-week blocks in runners/cyclists —
+so the mechanism is well-evidenced and cheap to apply, but the *exact
+scenario* (a short taper-in window before a B-then-A event pair) wasn't
+tested.
 
 A second, independent reason this stays **medium, not high**: all three
 RCTs measured HRV each **morning**, post-waking, via an orthostatic
@@ -149,13 +154,13 @@ protocol — not **overnight**, the way Oura measures. `Nuuttila et al.
 (2024)` directly compared both protocols in the same runners under a
 training-load increase and found morning and nocturnal HRV **diverge in
 their response to training**, despite correlating at baseline; the
-overnight-style signal actually tracked the load increase and subsequent
-3000m performance change *better* than the morning protocol did — reassuring
-about the underlying mechanism (hard day only on stable/rising HRV plausibly
-transfers to an overnight-measuring device), but it means the specific
-thresholds these three RCTs calibrated — e.g. Kiviniemi's "1 SD below a
-rolling 10-day baseline" — were never validated on overnight data and must
-not be imported into an engine rule as-is. **Test:** once Renee's Oura
+overnight-style signal tracked the load increase and subsequent 3000m
+performance change *better* than the morning protocol did — reassuring for
+the underlying mechanism (hard day only on stable/rising HRV plausibly
+transfers to an overnight-measuring device), but the specific thresholds
+these three RCTs calibrated — e.g. Kiviniemi's "1 SD below a rolling
+10-day baseline" — were never validated on overnight data and shouldn't be
+imported into an engine rule as-is. **Test:** once Renee's Oura
 rMSSD accumulates a rolling baseline, check whether a "hard day only if
 last night's rMSSD sits at/above a trailing 7-10-day mean" rule flags the
 same easy/rest days her `wellness_composite` already flags — frequent
@@ -165,10 +170,9 @@ these three studies' numbers directly.
 
 **Athlete context, stated plainly:** Renee's profile (`athletes/renee/
 profile.yaml`) lists `hrv_source: Oura ring` — the device exists — but no
-wellness log entry currently populates the `Wellness` model's optional
-`hrv` field (`engine/swim_coach/models.py`). This section is forward-
-looking grounding for a rule the engine doesn't implement yet, not a
-description of an active constant. **Test:** once HRV values start
+wellness log entry populates the `Wellness` model's optional `hrv` field
+(`engine/swim_coach/models.py`). This section is grounding for a rule not
+yet implemented, not a description of an active constant. **Test:** once HRV values start
 appearing in daily check-ins, apply the same "hard day only if HRV stable-
 or-rising vs. the trailing baseline, else easy/rest" rule as a layer on top
 of (not a replacement for) `wellness_composite`, and check whether that
@@ -179,8 +183,8 @@ signal the added complexity isn't earning its keep for this athlete.
 ## Oura device trust: how much to believe each signal
 
 Before any Oura-derived number is trusted enough to influence coaching,
-here's how much each signal this device reports should be believed, per
-`reference_list.md`'s "Wearables & device validity" sources.
+here's how much each signal should be believed, per `reference_list.md`'s
+"Wearables & device validity" sources.
 
 **Resting heart rate — high confidence.** `[ADAPTED: general-endurance]
 Confidence: high.` `Cao et al. (2022)` (n=35, chest-ECG reference) and
@@ -196,7 +200,7 @@ only.** `[ADAPTED: general-endurance] Confidence: medium-high.` The same
 two studies found whole-night rMSSD correlating with chest ECG at
 r≈0.92-0.99 (Cao et al. 2022, n=35; Liang et al. 2024, n=114) — strong
 enough to treat a *sustained* rMSSD trend as real. Two caveats keep this
-below "high": accuracy degrades in short/noisy windows and in older adults
+below "high": accuracy degrades in short/noisy windows and older adults
 (Liang et al. found >10% error at the 5-minute level in over half their
 45-68y subgroup), and the data-quality filter that preserves accuracy
 silently **drops ~30-35% of nights**. **Test:** don't act on a single
@@ -206,12 +210,11 @@ any night the app flags as low signal quality.
 **Sleep staging — medium for total sleep time, low-medium for stage
 detail.** `[ADAPTED: general-endurance] Confidence: low-medium.`
 `de Zambotti et al. (2017)` found total sleep time within a clinically
-acceptable band on 88% of nights, but deep sleep significantly
-underestimated and REM overestimated — on **first-generation** ring
-hardware. A newer Gen3 study (`Svensson et al. 2024`) reports qualitatively
-"good agreement," but its exact numbers were paywalled and could not be
-independently confirmed here — treat that as unverified pending full-text
-access, not a settled figure. **Test:** trust total-sleep-time for trend
+acceptable band on 88% of nights, but deep sleep underestimated and REM
+overestimated — on **first-generation** ring hardware. A newer Gen3 study
+(`Svensson et al. 2024`) reports "good agreement," but its exact numbers
+were paywalled and couldn't be independently confirmed — treat that as
+unverified pending full-text access, not a settled figure. **Test:** trust total-sleep-time for trend
 purposes; don't base a coaching call on a specific light/deep/REM split
 until the Gen3 numbers are confirmed.
 
@@ -222,16 +225,16 @@ manufacturers (Oura's Readiness/Resilience included) found none publish
 their scoring weights, and no reviewed composite score had independent
 peer-reviewed validation. **Coach judgment:** the engine and `/coach`
 should read the *raw* HRV/RHR/sleep trend, never the blended 0-100
-Readiness number, if either is to inform a plan decision. **Test:** if
+Readiness number, when informing a plan decision. **Test:** if
 Readiness and the raw trend ever disagree, trust the raw trend — that's a
 reason to distrust Readiness further, not the reverse.
 
 **Employee-authored sources, flagged distinctly:** `Kinnunen et al.
-(2020)` (Oura's then-Chief Scientific Officer as author; specific accuracy
-numbers could not be independently confirmed — paywalled) and `Thigpen,
-Patel & Zhang (2025)` (all three authors Oura employees; self-reported
-reference standard) are manufacturer-affiliated — real and peer-reviewed,
-but a lower trust tier than the independent studies above; neither is
+(2020)` (Oura's then-Chief Scientific Officer; accuracy numbers could not
+be independently confirmed — paywalled) and `Thigpen, Patel & Zhang
+(2025)` (all three authors Oura employees; self-reported reference
+standard) are manufacturer-affiliated — real and peer-reviewed, but
+lower-trust-tier than the independent studies above; neither is
 load-bearing for the ratings above.
 
 **Open gap:** no Oura-specific validation exists for alcohol use,
@@ -245,13 +248,13 @@ weeks using session-RPE load metrics and the Acute Recovery and Stress
 Scale: session-RPE (particularly a distance-weighted variant) tracked
 recovery-stress state more strongly than acute:chronic workload ratio
 (ACWR), and individual baselines outperformed group-level thresholds. This
-is swim-specific corroboration for a claim `03-periodization.md` currently
-sources only from the running Garmin-RunSafe cohort — cross-reference that
-file's ACWR-is-a-weak-predictor section rather than duplicating it here.
-Practical takeaway for this file: an individualized, sRPE/wellness-led read
-on Renee's own recovery-stress state between 7/9 and 7/18 is better-
-evidenced, in swimmers specifically, than leaning on `adapt.py`'s ACWR
-red-flag threshold (`LOAD_RATIO_RED_THRESHOLD = 1.4`) alone.
+is swim-specific corroboration for a claim `03-periodization.md` sources
+only from the running Garmin-RunSafe cohort — cross-reference that file's
+ACWR-is-a-weak-predictor section rather than duplicating it here. Practical
+takeaway: an individualized sRPE/wellness read on Renee's recovery-stress
+state between 7/9 and 7/18 is better-evidenced in swimmers than leaning on
+`adapt.py`'s ACWR red-flag threshold (`LOAD_RATIO_RED_THRESHOLD = 1.4`)
+alone.
 
 ## Mini-taper for a B-event ~1 week out
 
@@ -265,37 +268,36 @@ effective, and — the closest finding to Renee's actual situation — **tapers
 of ≤7 days still produced a positive effect**, though the 8-14-day band
 showed the largest gains overall.
 
-Applied to the 7/9-to-7/18 window: this supports treating W29 as a
-short taper-in — volume down, intensity and session frequency held close to
-normal — rather than a normal training week, which is exactly what
-`athletes/renee/notes/decisions.md` already records for W29 (~17,500m,
-framed as a Greece dress rehearsal, not an all-out effort). **State the gap
-honestly:** neither source tested a "B-event, then a second hard event ~9
-days later" design — both study tapering into a single peak event. No
-direct evidence exists for recovery between two ultra-distance open-water
-swims (or a swim-plus-kayak day and a swim) roughly a week apart; this is a
-coach-judgment gap, not a solved problem. **Test:** track whether Renee's
-post-Bear-Lake perceived freshness / RPE-at-pace differs from a matched
-no-taper week in her history, if one exists, as a weak local check on
-whether this treatment is earning its keep for her specifically.
+Applied to the 7/9-to-7/18 window: this supports treating W29 as a short
+taper-in — volume down, intensity/frequency held close to normal — rather
+than a normal training week, which is exactly what `athletes/renee/notes/
+decisions.md` already records for W29 (~17,500m, a Greece dress rehearsal,
+not an all-out effort). **State the gap honestly:** neither source tested
+a "B-event, then a second hard event ~9 days later" design — both study
+tapering into a single peak event. No direct evidence exists for recovery
+between two ultra-distance open-water swims (or a swim-plus-kayak day and
+a swim) roughly a week apart; this is a coach-judgment gap, not a solved
+problem. **Test:** track whether Renee's post-Bear-Lake perceived freshness
+/ RPE-at-pace differs from a matched no-taper week in her history, if one
+exists, as a weak local check on whether this treatment earns its keep for
+her specifically.
 
-This is also the clearest candidate in this file for a future engine
-constant: a `MINI_TAPER_*` rule distinct from `03-periodization.md`'s
-macro-block taper (`TAPER_WEEKS_LONG/SHORT`, itself citation-debt-flagged),
-since 8-10 days is shorter than any macro taper the engine currently
-models. **Not implemented today**
+The clearest candidate here for a future engine constant: a `MINI_TAPER_*`
+rule distinct from `03-periodization.md`'s macro-block taper
+(`TAPER_WEEKS_LONG/SHORT`, itself citation-debt-flagged), since 8-10 days
+is shorter than any macro taper the engine models. **Not implemented
+today**
 
 ## What's still a gap
 
 - No swim-specific or kayak-cross-fatigue evidence exists for the exact
   7/9-to-7/18 scenario; every citation above is adjacent, not direct.
 - No engine constant yet for post-exercise carbohydrate/protein timing,
-  a fixed short-turnaround recovery window distinct from milestone
-  recovery, or a mini-taper volume cut — this file documents the evidence
-  base for adding one, not an implemented rule.
+  a short-turnaround recovery window distinct from milestone recovery, or
+  a mini-taper volume cut — this file documents the evidence base for
+  adding one, not an implemented rule.
 - HRV-guided adjustment is fully forward-looking: the device exists in
-  Renee's profile, but no HRV data has been logged yet. This is now a
-  narrower gap than "we don't know if the device can be trusted" — device-
-  accuracy evidence exists (see "Oura device trust" above, including the
-  alcohol/arrhythmia/illness gap) — the actual gap is that no rolling
-  baseline exists on her own data yet.
+  Renee's profile, but no HRV data has been logged yet. That's narrower
+  than "can the device be trusted" — accuracy evidence exists (see "Oura
+  device trust" above, including the alcohol/arrhythmia/illness gap) — the
+  gap is that no rolling baseline exists on her own data yet.

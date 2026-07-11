@@ -10,13 +10,14 @@ import {
 import { loadSettings, saveSettings, isConfigured } from './settings.js';
 import {
   streamChat, testConnection, postWorkout, postWellness, fetchPlan, getAthlete, patchAthlete,
-  postFeedback, listFeedback, uploadWorkoutFile,
+  postFeedback, listFeedback, uploadWorkoutFile, listWorkouts,
 } from './api.js';
 import {
   serializeWorkoutForm, serializeWellnessForm, profileFormFromAthlete, serializeProfileForm,
   serializeFeedbackForm, logFormFromDraft,
 } from './forms.js';
 import { currentIdentity, signIn, signOut } from './identity.js';
+import { sortWorkoutsNewestFirst, HISTORY_DISPLAY_CAP } from './workouts.js';
 
 const appEl = document.getElementById('app');
 const ACTIVE_TAB_KEY = 'swimcoach_active_tab';
@@ -96,6 +97,7 @@ const state = {
   logForm: createLogForm(),
   logSubmit: { status: 'idle', message: null },
   logIngest: createLogIngest(),
+  workoutHistory: { status: 'idle', data: [], error: null },
   checkinForm: createCheckinForm(),
   checkinSubmit: { status: 'idle', message: null },
   profileForm: createProfileForm(),
@@ -143,6 +145,7 @@ function renderTabContent() {
         ingest: state.logIngest,
         backendConfigured,
         online: state.online,
+        history: state.workoutHistory,
       });
     case 'checkin':
       return renderCheckinTab({
@@ -228,6 +231,7 @@ function handleIdentityResolved(identity) {
   state.profileSubmit = { status: 'idle', message: null };
   // Same lazy-load convention for the Feedback tab's list (see setTab).
   state.feedbackEntries = { status: 'idle', data: [] };
+  state.workoutHistory = { status: 'idle', data: [], error: null };
   log.info('identity.resolved', { athlete: identity.athlete, role: identity.role });
   render();
   maybeLoadProfile();
@@ -243,6 +247,7 @@ function handleSignOut() {
   state.profileLoad = { status: 'idle', error: null };
   state.profileSubmit = { status: 'idle', message: null };
   state.feedbackEntries = { status: 'idle', data: [] };
+  state.workoutHistory = { status: 'idle', data: [], error: null };
   state.tab = 'settings';
   saveActiveTab('settings');
   log.info('identity.signed_out', {});
@@ -412,9 +417,48 @@ async function handleSubmitLog() {
     state.logForm = createLogForm();
     state.logIngest = createLogIngest();
     state.logSubmit = { status: 'success', message: 'Saved.' };
+    loadHistory(); // refreshes the history list to include the just-logged workout; calls render() itself
   } else {
     log.error('log.submit_failed', { athlete: athleteSlug(), error: result.error });
     state.logSubmit = { status: 'error', message: result.error };
+    render();
+  }
+}
+
+// --- Workout history (Log tab section) ------------------------------------------
+// Fetches the same GET /api/workouts?athlete=<slug> that postWorkout has
+// always POSTed to (see api.js's listWorkouts, which existed but nothing
+// called it) -- so imported .fit/.tcx/.csv/coach-text workouts, previously
+// invisible in the app, now show up alongside manually-logged ones. Lazy-
+// loaded on Log-tab open the same way loadFeedback() is on Feedback-tab open
+// (see setTab) -- not eagerly on every identity/settings change.
+
+async function loadHistory() {
+  const settings = state.settingsForm;
+  const identity = state.identity;
+  if (!isConfigured(settings, identity)) {
+    state.workoutHistory = { status: 'idle', data: [], error: null };
+    render();
+    return;
+  }
+
+  state.workoutHistory = { status: 'loading', data: state.workoutHistory.data, error: null };
+  render();
+
+  const result = await listWorkouts({ baseUrl: settings.baseUrl, token: settings.token, athlete: identity.athlete });
+  if (result.ok && Array.isArray(result.data)) {
+    const sorted = sortWorkoutsNewestFirst(result.data).slice(0, HISTORY_DISPLAY_CAP);
+    log.info('history.loaded', { athlete: identity.athlete, count: sorted.length });
+    state.workoutHistory = { status: 'ready', data: sorted, error: null };
+  } else if (result.ok) {
+    // Defensive: an unexpected (non-array) 2xx body shouldn't crash the
+    // history section -- treat it the same as "nothing to show" rather than
+    // throwing on the array-only helpers in workouts.js.
+    log.warn('history.unexpected_response_shape', { athlete: identity.athlete });
+    state.workoutHistory = { status: 'ready', data: [], error: null };
+  } else {
+    log.error('history.load_failed', { athlete: identity.athlete, error: result.error });
+    state.workoutHistory = { status: 'error', data: state.workoutHistory.data, error: result.error };
   }
   render();
 }
@@ -656,6 +700,14 @@ function setTab(tab) {
     loadFeedback(); // calls render() itself
     return;
   }
+  // Same lazy-load convention, gated on `online` too (see the task brief:
+  // history fetches only when configured *and* online -- offline just shows
+  // whatever's already cached in state, or a quiet notice if nothing is).
+  if (tab === 'log' && (state.workoutHistory.status === 'idle' || state.workoutHistory.status === 'error')
+    && isConfigured(state.settingsForm, state.identity) && state.online) {
+    loadHistory(); // calls render() itself
+    return;
+  }
   render();
   maybeLoadProfile();
 }
@@ -683,6 +735,7 @@ function onAppClick(e) {
     case 'checkin:submit': handleSubmitCheckin(); break;
     case 'profile:submit': handleSubmitProfile(); break;
     case 'feedback:submit': handleSubmitFeedback(); break;
+    case 'history:retry': loadHistory(); break;
     case 'identity:signout': handleSignOut(); break;
     default: break;
   }

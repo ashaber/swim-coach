@@ -7,6 +7,9 @@ import {
   pickCurrentAndNextWeek, daysUntil, priorityEvent, currentBlockIndex, longSwimLadder,
 } from './plan.js';
 import { TOOL_LABELS } from './chat.js';
+import {
+  sportLabel, sourceBadge, formatWorkoutDistance, formatAnalyticsLine,
+} from './workouts.js';
 
 function esc(value) {
   if (value === null || value === undefined) return '';
@@ -477,8 +480,90 @@ export function renderLogTab({
         </div>
         <p class="field-hint" id="log-rpe-hint"${rpeMissing ? '' : ' hidden'}>Set an effort (RPE) before saving.</p>
         ${renderSubmitResult(submit)}
-      </div>`}
+      </div>
+      ${renderHistorySection({ ...history, online })}`}
     </div>`;
+}
+
+// --- Workout history (Log tab section) ----------------------------------
+// Renders whatever's already been logged/imported -- manual entries plus
+// .fit/.tcx/.csv/coach-text imports, which previously had no UI at all (see
+// api.js's listWorkouts, which existed but nothing called). Kept as its own
+// section/render function (rather than folded into renderLogTab's markup
+// inline) so it's cheaply unit-testable on its own -- see
+// tests/unit/views.test.js.
+
+function renderWorkoutRow(workout) {
+  const metaParts = [formatDuration(workout.duration_min)];
+  const distance = formatWorkoutDistance(workout.distance_m);
+  if (distance) metaParts.push(distance);
+  const pace = formatPace(workout.avg_pace_s_per_100m);
+  if (pace) metaParts.push(`${pace} /100m`);
+
+  const badge = sourceBadge(workout.source);
+  const analyticsLine = formatAnalyticsLine(workout.analytics);
+
+  return `
+    <div class="hist-row">
+      <div class="hist-date mono">${esc(formatShortDate(parseIsoDate(workout.date.slice(0, 10))))}</div>
+      <div class="hist-body">
+        <div class="hist-title">
+          <span>${esc(sportLabel(workout.sport))}</span>
+          ${badge ? `<span class="chat-chip">${esc(badge)}</span>` : ''}
+          ${workout.rpe !== null && workout.rpe !== undefined ? `<span class="chat-chip">RPE ${esc(workout.rpe)}</span>` : ''}
+        </div>
+        <div class="hist-meta mono">${metaParts.join(' · ')}</div>
+        ${analyticsLine ? `<div class="hist-analytics mono">${esc(analyticsLine)}</div>` : ''}
+      </div>
+    </div>`;
+}
+
+function renderHistoryList(workouts) {
+  return `<div class="hist-list">${workouts.map(renderWorkoutRow).join('')}</div>`;
+}
+
+/** `history` is `{ status, data, error }` (see main.js's state.workoutHistory)
+ * plus `online` folded in -- status is one of idle/loading/ready/error, same
+ * convention as plan/profile/feedback in main.js. */
+export function renderHistorySection({
+  status, data, error, online,
+}) {
+  const hasData = data && data.length > 0;
+
+  if (status === 'error') {
+    return `
+      <section class="hist-section">
+        <div class="s-head"><h2>Recent workouts</h2></div>
+        ${hasData ? renderHistoryList(data) : ''}
+        <div class="hist-error">Couldn't load your workout history: ${esc(error)}</div>
+        <div class="settings-actions"><button type="button" class="btn-ghost" data-a="history:retry">Retry</button></div>
+      </section>`;
+  }
+
+  if (status === 'loading' && !hasData) {
+    return `
+      <section class="hist-section">
+        <div class="s-head"><h2>Recent workouts</h2></div>
+        <p class="sub">Loading history…</p>
+      </section>`;
+  }
+
+  if (!hasData) {
+    const notice = !online
+      ? '<p class="sub">History needs a connection -- reconnect to load it.</p>'
+      : '<p class="sub">No workouts logged yet.</p>';
+    return `
+      <section class="hist-section">
+        <div class="s-head"><h2>Recent workouts</h2></div>
+        ${notice}
+      </section>`;
+  }
+
+  return `
+    <section class="hist-section">
+      <div class="s-head"><h2>Recent workouts</h2></div>
+      ${renderHistoryList(data)}
+    </section>`;
 }
 
 // --- Check-in tab (daily wellness) ---------------------------------------------

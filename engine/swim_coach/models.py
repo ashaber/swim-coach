@@ -154,6 +154,67 @@ class WorkoutSet(BaseModel):
     description: str | None = None
 
 
+class WorkoutLap(BaseModel):
+    """One device lap/interval, from a FIT `lap` frame.
+
+    Distinct from `WorkoutSet` (which comes from coach-text parsing or a
+    generic lap-as-set fallback): a `WorkoutLap` is numeric device telemetry
+    (duration/distance/HR/pace), not a free-text description.
+    """
+
+    index: int
+    start_offset_s: float | None = None
+    duration_s: float
+    distance_m: float | None = None
+    avg_hr: int | None = None
+    max_hr: int | None = None
+    avg_pace_s_per_100m: float | None = None
+    stroke: str | None = None
+    num_lengths: int | None = None
+
+
+class WorkoutLength(BaseModel):
+    """One active pool length, from a FIT `length` frame
+    (`length_type == "active"` only -- idle lengths become a `WorkoutPause`
+    instead, see `parse_files.parse_fit`)."""
+
+    index: int
+    lap_index: int | None = None
+    duration_s: float
+    strokes: int | None = None
+    stroke: str | None = None
+    swolf: float | None = None
+
+
+class WorkoutPause(BaseModel):
+    """A stopped/idle span within a workout, from one of three sources:
+    a FIT `event` timer stop->start pair (`"timer"`), a `record`-frame
+    timestamp gap exceeding `analytics.GAP_THRESHOLD_S` (`"gap"`), or an
+    idle pool length (`"idle_length"`)."""
+
+    start_offset_s: float
+    duration_s: float
+    source: Literal["timer", "gap", "idle_length"]
+
+
+class WorkoutAnalytics(BaseModel):
+    """Derived workout analytics computed at ingest time by
+    `swim_coach.analytics.compute_analytics` -- see that module for the
+    pure functions and their library/ citations."""
+
+    cardiac_drift_pct: float | None = None
+    split_label: Literal["negative", "even", "positive"] | None = None
+    first_half_pace_s_per_100m: float | None = None
+    second_half_pace_s_per_100m: float | None = None
+    elapsed_min: float | None = None
+    moving_min: float | None = None
+    pause_total_min: float | None = None
+    pause_count: int | None = None
+    swolf_first_quarter: float | None = None
+    swolf_last_quarter: float | None = None
+    swolf_degradation_pct: float | None = None
+
+
 class Workout(BaseModel):
     """A completed workout, logged manually or ingested from a file/coach text."""
 
@@ -171,6 +232,19 @@ class Workout(BaseModel):
     planned_session_id: UUID | None = None
     raw_ref: str | None = None
     notes: str | None = None
+    # Additive fields for the .fit workout-analytics feature (Slice 1).
+    # All optional/defaulted so every existing Workout YAML (with none of
+    # these keys) keeps validating unchanged -- no schema_version bump.
+    avg_hr: int | None = None
+    max_hr: int | None = None
+    laps: list[WorkoutLap] = Field(default_factory=list)
+    lengths: list[WorkoutLength] = Field(default_factory=list)
+    pauses: list[WorkoutPause] = Field(default_factory=list)
+    analytics: WorkoutAnalytics | None = None
+    # Repo-relative path to the columnar time-series sidecar JSON (see
+    # store.FileStore.save_series), NOT the Workout YAML itself -- keeps
+    # committed YAML human-readable per CLAUDE.md.
+    series_ref: str | None = None
 
 
 FeedbackType = Literal["research_question", "feature_request", "comment", "bug"]

@@ -737,3 +737,198 @@ def test_ingest_invalid_rpe_errors_on_save(athlete_tree, capsys):
     assert code == 1
     result = _out(capsys)
     assert "error" in result
+
+    # No orphaned raw-file copy or files/ dir left behind on a failed save.
+    files_dir = athlete_tree["base_dir"] / athlete_tree["slug"] / "logs" / "files"
+    assert not files_dir.exists() or list(files_dir.glob("*")) == []
+
+
+# --- ingest .fit + analyze (.fit workout-analytics Slice 1) --------------------------
+
+FIT_KAYAK = FIXTURES_DIR / "fit" / "real_kayak.fit"
+FIT_POOL = FIXTURES_DIR / "fit" / "real_swim.fit"
+
+
+def test_ingest_fit_with_save_copies_raw_file_and_computes_analytics(athlete_tree, capsys):
+    code = _run(
+        athlete_tree["base_dir"],
+        "ingest",
+        "--athlete",
+        athlete_tree["slug"],
+        "--file",
+        str(FIT_KAYAK),
+        "--save",
+    )
+    assert code == 0
+    result = _out(capsys)
+    assert result["saved"] is True
+    assert "series" not in result  # never dumped to stdout
+
+    raw_ref = Path(result["raw_ref"])
+    assert raw_ref.exists()
+    assert raw_ref == (
+        athlete_tree["base_dir"] / athlete_tree["slug"] / "logs" / "files" / FIT_KAYAK.name
+    )
+
+    series_ref = Path(result["series_ref"])
+    assert series_ref.exists()
+    import json as _json
+
+    series = _json.loads(series_ref.read_text(encoding="utf-8"))
+    assert "hr" in series
+    assert len(series["t_s"]) > 4000
+
+    assert result["analytics"]["pause_count"] == 0
+    assert "summary" in result
+
+    workouts = athlete_tree["store"].list_workouts(athlete_tree["slug"])
+    assert len(workouts) == 1
+    saved = workouts[0]
+    assert saved.sport == "cross_train"
+    assert saved.avg_hr is not None
+    assert saved.series_ref == result["series_ref"]
+    assert saved.analytics is not None
+
+
+def test_ingest_fit_pool_swim_has_lengths_and_no_sidecar(athlete_tree, capsys):
+    code = _run(
+        athlete_tree["base_dir"],
+        "ingest",
+        "--athlete",
+        athlete_tree["slug"],
+        "--file",
+        str(FIT_POOL),
+        "--save",
+    )
+    assert code == 0
+    result = _out(capsys)
+    assert result["saved"] is True
+    assert result["series_ref"] is None
+
+    workouts = athlete_tree["store"].list_workouts(athlete_tree["slug"])
+    assert len(workouts) == 1
+    saved = workouts[0]
+    assert len(saved.lengths) == 71
+    assert saved.avg_hr is None
+    assert saved.series_ref is None
+
+
+def test_ingest_fit_without_save_does_not_copy_raw_file(athlete_tree, capsys):
+    code = _run(
+        athlete_tree["base_dir"],
+        "ingest",
+        "--athlete",
+        athlete_tree["slug"],
+        "--file",
+        str(FIT_KAYAK),
+    )
+    assert code == 0
+    result = _out(capsys)
+    assert result["saved"] is False
+    assert "series" not in result
+
+    files_dir = athlete_tree["base_dir"] / athlete_tree["slug"] / "logs" / "files"
+    assert not files_dir.exists()
+
+
+def _ingest_fit(athlete_tree, capsys, fit_path):
+    code = _run(
+        athlete_tree["base_dir"],
+        "ingest",
+        "--athlete",
+        athlete_tree["slug"],
+        "--file",
+        str(fit_path),
+        "--save",
+    )
+    assert code == 0
+    result = _out(capsys)
+    return result["workout_id"]
+
+
+def test_analyze_all_recomputes_and_updates_existing_workout(athlete_tree, capsys):
+    workout_id = _ingest_fit(athlete_tree, capsys, FIT_KAYAK)
+    capsys.readouterr()
+
+    # Blow away the analytics-derived fields to prove --all actually
+    # recomputes rather than trivially matching what's already there.
+    store = athlete_tree["store"]
+    slug = athlete_tree["slug"]
+    workout = next(w for w in store.list_workouts(slug) if str(w.id) == workout_id)
+    workout.analytics = None
+    workout.laps = []
+    store.save_workout(slug, workout)
+
+    code = _run(athlete_tree["base_dir"], "analyze", "--athlete", slug, "--all")
+    assert code == 0
+    result = _out(capsys)
+    assert result["analyzed"] == 1
+    assert result["skipped"] == 0
+
+    reloaded = next(w for w in store.list_workouts(slug) if str(w.id) == workout_id)
+    assert reloaded.analytics is not None
+    assert len(reloaded.laps) == 1
+    # Untouched fields preserved.
+    assert reloaded.id == workout.id
+    assert reloaded.date == workout.date
+    assert reloaded.sport == workout.sport
+
+
+def test_analyze_workout_id_prefix_matches(athlete_tree, capsys):
+    workout_id = _ingest_fit(athlete_tree, capsys, FIT_POOL)
+    capsys.readouterr()
+
+    code = _run(
+        athlete_tree["base_dir"],
+        "analyze",
+        "--athlete",
+        athlete_tree["slug"],
+        "--workout-id",
+        workout_id[:8],
+    )
+    assert code == 0
+    result = _out(capsys)
+    assert result["analyzed"] == 1
+    assert result["results"][0]["n_lengths"] == 71
+
+
+def test_analyze_missing_raw_file_warns_and_skips(athlete_tree, capsys):
+    workout_id = _ingest_fit(athlete_tree, capsys, FIT_KAYAK)
+    capsys.readouterr()
+
+    store = athlete_tree["store"]
+    slug = athlete_tree["slug"]
+    # Simulate the raw file having been deleted/moved out from under us.
+    raw_path = Path(next(w for w in store.list_workouts(slug) if str(w.id) == workout_id).raw_ref)
+    raw_path.unlink()
+
+    code = _run(athlete_tree["base_dir"], "analyze", "--athlete", slug, "--all")
+    assert code == 0
+    result = _out(capsys)
+    assert result["analyzed"] == 0
+    assert result["skipped"] == 1
+    assert "skipped" in result["results"][0]
+
+    # Workout file must still exist -- analyze never deletes.
+    assert len(store.list_workouts(slug)) == 1
+
+
+def test_analyze_unknown_workout_id_errors(athlete_tree, capsys):
+    code = _run(
+        athlete_tree["base_dir"],
+        "analyze",
+        "--athlete",
+        athlete_tree["slug"],
+        "--workout-id",
+        "deadbeef",
+    )
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+
+
+def test_analyze_requires_workout_id_or_all(athlete_tree):
+    import pytest as _pytest
+
+    with _pytest.raises(SystemExit):
+        _run(athlete_tree["base_dir"], "analyze", "--athlete", athlete_tree["slug"])

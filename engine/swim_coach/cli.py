@@ -23,6 +23,7 @@ import yaml
 from pydantic import ValidationError
 
 from swim_coach.adapt import adapt_week
+from swim_coach.analytics import CARDIAC_DRIFT_FLAG_PCT, compute_analytics
 from swim_coach.load import (
     acute_chronic_ratio,
     compliance as compute_compliance,
@@ -33,7 +34,7 @@ from swim_coach.load import (
 )
 from swim_coach.models import Event, Wellness, WeekPlan, Workout
 from swim_coach.parse_coach_text import parse_coach_text
-from swim_coach.parse_files import PARSERS_BY_EXTENSION
+from swim_coach.parse_files import WorkoutDraft, parse_csv, parse_fit, parse_tcx
 from swim_coach.plan import generate_week, scaffold_macro
 from swim_coach.store import FileStore
 from swim_coach.zones import css_from_test, zone_table
@@ -462,6 +463,56 @@ def _cmd_parse_coach_text(args: argparse.Namespace, store: FileStore) -> int:
     return 0
 
 
+def _analytics_summary_text(analytics) -> str:
+    """Short human-readable line for a WorkoutAnalytics -- drift, splits,
+    pauses, SWOLF when present. Used by both `ingest` and `analyze`."""
+    if analytics is None:
+        return "no analytics available"
+    parts: list[str] = []
+    if analytics.cardiac_drift_pct is not None:
+        flag = " [flagged]" if analytics.cardiac_drift_pct >= CARDIAC_DRIFT_FLAG_PCT else ""
+        parts.append(f"cardiac drift {analytics.cardiac_drift_pct:+.1f}%{flag}")
+    if analytics.split_label is not None:
+        parts.append(
+            f"{analytics.split_label} split "
+            f"({analytics.first_half_pace_s_per_100m:.1f}s -> "
+            f"{analytics.second_half_pace_s_per_100m:.1f}s per 100m)"
+        )
+    if analytics.pause_count:
+        parts.append(f"{analytics.pause_count} pause(s) totaling {analytics.pause_total_min:.1f}min")
+    else:
+        parts.append("no pauses detected")
+    if analytics.swolf_degradation_pct is not None:
+        parts.append(
+            f"SWOLF {analytics.swolf_first_quarter:.1f} -> {analytics.swolf_last_quarter:.1f} "
+            f"({analytics.swolf_degradation_pct:+.1f}%)"
+        )
+    return "; ".join(parts) if parts else "no analytics available"
+
+
+def _build_workout_from_draft(draft: WorkoutDraft, athlete_id, *, raw_ref: str | None) -> Workout:
+    return Workout(
+        id=uuid4(),
+        athlete_id=athlete_id,
+        date=draft.date,
+        sport=draft.sport,
+        source=draft.source,
+        distance_m=draft.distance_m,
+        duration_min=draft.duration_min,
+        avg_pace_s_per_100m=draft.avg_pace_s_per_100m,
+        rpe=draft.rpe,
+        sets=draft.sets,
+        planned_session_id=draft.planned_session_id,
+        raw_ref=raw_ref,
+        notes=draft.notes,
+        avg_hr=draft.avg_hr,
+        max_hr=draft.max_hr,
+        laps=draft.laps,
+        lengths=draft.lengths,
+        pauses=draft.pauses,
+    )
+
+
 def _cmd_ingest(args: argparse.Namespace, store: FileStore) -> int:
     slug = args.athlete
     path = Path(args.file)
@@ -484,7 +535,13 @@ def _cmd_ingest(args: argparse.Namespace, store: FileStore) -> int:
     if args.sport:
         draft.sport = args.sport
 
-    output: dict[str, object] = {"athlete": slug, **draft.model_dump(mode="json")}
+    draft_dump = draft.model_dump(mode="json")
+    # `series` (a per-record time-series payload -- thousands of samples for
+    # a multi-hour .fit) is never printed: it's an ingest-time-only value,
+    # not part of the CLI's JSON summary contract, and would dwarf every
+    # other command's output.
+    draft_dump.pop("series", None)
+    output: dict[str, object] = {"athlete": slug, **draft_dump}
 
     if args.save:
         try:
@@ -493,31 +550,138 @@ def _cmd_ingest(args: argparse.Namespace, store: FileStore) -> int:
             return _error_from_exception(store.base_dir / slug / "profile.yaml", exc)
 
         try:
-            workout = Workout(
-                id=uuid4(),
-                athlete_id=athlete.id,
-                date=draft.date,
-                sport=draft.sport,
-                source=draft.source,
-                distance_m=draft.distance_m,
-                duration_min=draft.duration_min,
-                avg_pace_s_per_100m=draft.avg_pace_s_per_100m,
-                rpe=draft.rpe,
-                sets=draft.sets,
-                planned_session_id=draft.planned_session_id,
-                raw_ref=draft.raw_ref,
-                notes=draft.notes,
-            )
+            workout = _build_workout_from_draft(draft, athlete.id, raw_ref=draft.raw_ref)
         except ValidationError as exc:
             return _error(str(exc))
+
+        # Only copy/persist once validation above succeeded -- an invalid
+        # draft (e.g. bad --rpe) must not leave an orphaned raw-file copy or
+        # sidecar with no corresponding saved Workout.
+        try:
+            raw_ref = store.save_raw_file(slug, path)
+        except FileExistsError as exc:
+            return _error(str(exc))
+        workout.raw_ref = raw_ref
+
+        series_ref = None
+        if draft.series is not None:
+            series_ref = store.save_series(slug, workout.date, workout.sport, workout.id, draft.series)
+        workout.series_ref = series_ref
+
+        workout.analytics = compute_analytics(
+            laps=workout.laps,
+            lengths=workout.lengths,
+            pauses=workout.pauses,
+            series=draft.series,
+            elapsed_min=draft.elapsed_min,
+            moving_min=workout.duration_min,
+        )
 
         store.save_workout(slug, workout)
         output["saved"] = True
         output["workout_id"] = str(workout.id)
+        output["raw_ref"] = raw_ref
+        output["series_ref"] = series_ref
+        output["analytics"] = workout.analytics.model_dump(mode="json")
+        output["summary"] = _analytics_summary_text(workout.analytics)
     else:
         output["saved"] = False
 
     print(json.dumps(output))
+    return 0
+
+
+def _cmd_analyze(args: argparse.Namespace, store: FileStore) -> int:
+    """Re-parse a workout's already-ingested raw .fit file and recompute
+    laps/lengths/pauses/series/analytics in place -- for when analytics.py's
+    math changes after the original ingest, or Slice-1 ships after some
+    workouts were already logged. Never deletes a workout file; a workout
+    with no raw_ref, a missing raw file, or a non-.fit raw file is reported
+    as skipped, not an error."""
+    slug = args.athlete
+    try:
+        store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return _error_from_exception(store.base_dir / slug / "profile.yaml", exc)
+
+    workouts = store.list_workouts(slug)
+    if args.workout_id:
+        query = args.workout_id.strip().lower()
+        targets = [w for w in workouts if str(w.id).lower().startswith(query)]
+        if not targets:
+            return _error(f"no workout matching id {args.workout_id!r}")
+    else:
+        targets = [w for w in workouts if w.raw_ref]
+
+    results = []
+    for workout in targets:
+        entry: dict[str, object] = {"workout_id": str(workout.id), "date": workout.date.isoformat()}
+        if not workout.raw_ref:
+            entry["skipped"] = "no raw_ref on this workout"
+            results.append(entry)
+            continue
+        raw_path = Path(workout.raw_ref)
+        if not raw_path.exists():
+            entry["skipped"] = f"raw file missing: {raw_path}"
+            results.append(entry)
+            continue
+        if raw_path.suffix.lower() != ".fit":
+            entry["skipped"] = f"not a .fit file: {raw_path}"
+            results.append(entry)
+            continue
+
+        try:
+            draft = parse_fit(raw_path)
+        except (OSError, ValueError) as exc:
+            entry["skipped"] = f"parse error: {exc}"
+            results.append(entry)
+            continue
+
+        # Recompute the analytics-related fields only -- id/date/sport/rpe/
+        # notes/planned_session_id/sets (and distance_m/duration_min/
+        # avg_pace_s_per_100m/source/raw_ref) stay exactly as already
+        # persisted from the original ingest.
+        workout.avg_hr = draft.avg_hr
+        workout.max_hr = draft.max_hr
+        workout.laps = draft.laps
+        workout.lengths = draft.lengths
+        workout.pauses = draft.pauses
+
+        series_ref = None
+        if draft.series is not None:
+            series_ref = store.save_series(slug, workout.date, workout.sport, workout.id, draft.series)
+        workout.series_ref = series_ref
+
+        workout.analytics = compute_analytics(
+            laps=workout.laps,
+            lengths=workout.lengths,
+            pauses=workout.pauses,
+            series=draft.series,
+            elapsed_min=draft.elapsed_min,
+            moving_min=workout.duration_min,
+        )
+
+        store.save_workout(slug, workout)
+        entry["sport"] = workout.sport
+        entry["n_laps"] = len(workout.laps)
+        entry["n_lengths"] = len(workout.lengths)
+        entry["n_pauses"] = len(workout.pauses)
+        entry["series_ref"] = series_ref
+        entry["analytics"] = workout.analytics.model_dump(mode="json")
+        entry["summary"] = _analytics_summary_text(workout.analytics)
+        results.append(entry)
+
+    skipped_count = sum(1 for r in results if "skipped" in r)
+    print(
+        json.dumps(
+            {
+                "athlete": slug,
+                "analyzed": len(results) - skipped_count,
+                "skipped": skipped_count,
+                "results": results,
+            }
+        )
+    )
     return 0
 
 
@@ -591,6 +755,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_ingest.add_argument("--save", action="store_true", help="persist the draft as a Workout")
 
+    p_analyze = subparsers.add_parser(
+        "analyze",
+        help="re-parse an already-ingested workout's raw .fit and recompute laps/lengths/pauses/series/analytics in place",
+    )
+    p_analyze.add_argument("--athlete", required=True)
+    analyze_target = p_analyze.add_mutually_exclusive_group(required=True)
+    analyze_target.add_argument("--workout-id", dest="workout_id", help="UUID or 8-char prefix")
+    analyze_target.add_argument("--all", action="store_true", help="re-analyze every workout with a raw_ref")
+
     return parser
 
 
@@ -603,6 +776,7 @@ _COMMANDS = {
     "adapt": _cmd_adapt,
     "parse-coach-text": _cmd_parse_coach_text,
     "ingest": _cmd_ingest,
+    "analyze": _cmd_analyze,
 }
 
 
