@@ -6,10 +6,13 @@ Behind a small interface (`StoreInterface`) so Phase 2 can swap in a
 
 from __future__ import annotations
 
+import filecmp
 import json
+import shutil
 from abc import ABC, abstractmethod
 from datetime import date
 from pathlib import Path
+from uuid import UUID
 
 import yaml
 from pydantic import BaseModel
@@ -19,6 +22,7 @@ from swim_coach.models import (
     Event,
     Feedback,
     MacroPlan,
+    Sport,
     Wellness,
     WeekPlan,
     Workout,
@@ -305,3 +309,44 @@ class FileStore(StoreInterface):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
         return str(path)
+
+    # --- Series sidecar + raw file (.fit workout-analytics Slice 1) -----------
+
+    def save_series(
+        self, slug: str, day: date, sport: Sport, workout_id: UUID, series: dict
+    ) -> str:
+        """Write a workout's columnar time-series sidecar JSON and return its
+        path. Filename mirrors save_workout's own naming convention
+        (date-sport-id[:8]) so the two files are trivially pairable by eye.
+        Unconditionally overwrites -- callers (cli.py's `ingest`/`analyze`)
+        always re-derive the sidecar from a freshly parsed .fit, so there is
+        no "don't clobber prior data" concern here the way there is for
+        save_coach_text's verbatim human input."""
+        path = self._athlete_dir(slug) / "logs" / "series" / f"{day.isoformat()}-{sport}-{str(workout_id)[:8]}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(series), encoding="utf-8")
+        return str(path)
+
+    def save_raw_file(self, slug: str, src_path: str | Path) -> str:
+        """Copy a raw device export (.fit/.tcx/.csv) into
+        athletes/<slug>/logs/files/<original filename>, and return the
+        managed copy's path as `raw_ref`.
+
+        Idempotent by content: re-ingesting the same file (same bytes) is a
+        no-op. Raises FileExistsError if a *different* file already sits at
+        that destination filename -- callers must not silently clobber a
+        previously ingested raw file with same-named-but-different content
+        (e.g. two different Garmin exports both named "ACTIVITY.fit")."""
+        src_path = Path(src_path)
+        directory = self._athlete_dir(slug) / "logs" / "files"
+        directory.mkdir(parents=True, exist_ok=True)
+        dest_path = directory / src_path.name
+        if dest_path.exists():
+            if filecmp.cmp(src_path, dest_path, shallow=False):
+                return str(dest_path)
+            raise FileExistsError(
+                f"{dest_path} already exists with different content than {src_path}; "
+                "refusing to silently overwrite a previously ingested raw file"
+            )
+        shutil.copyfile(src_path, dest_path)
+        return str(dest_path)

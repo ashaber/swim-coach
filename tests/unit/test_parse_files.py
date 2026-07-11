@@ -19,6 +19,7 @@ TCX_FIXTURE = FIXTURES_DIR / "tcx" / "sample_pool_swim.tcx"
 TCX_NO_LAPS_FIXTURE = FIXTURES_DIR / "tcx" / "no_laps.tcx"
 CSV_FIXTURE = FIXTURES_DIR / "csv" / "sample_garmin_export.csv"
 FIT_FIXTURE = FIXTURES_DIR / "fit" / "real_swim.fit"
+FIT_KAYAK_FIXTURE = FIXTURES_DIR / "fit" / "real_kayak.fit"
 
 
 # --- WorkoutDraft shape --------------------------------------------------------------
@@ -163,3 +164,98 @@ def test_parse_fit_real_fixture_extracts_session_and_laps():
     assert draft.distance_m > 0
     assert draft.duration_min > 0
     assert len(draft.sets) > 0
+
+
+# --- parse_fit: real pool-swim fixture (lengths, SWOLF, no HR, no series) -------------
+
+
+@pytest.mark.skipif(not FIT_FIXTURE.exists(), reason="no real pool .fit fixture")
+def test_parse_fit_pool_extracts_71_active_lengths():
+    draft = parse_fit(FIT_FIXTURE)
+    assert draft.sport == "swim_pool"
+    assert len(draft.lengths) == 71
+    assert all(length.stroke is not None for length in draft.lengths)
+
+
+@pytest.mark.skipif(not FIT_FIXTURE.exists(), reason="no real pool .fit fixture")
+def test_parse_fit_pool_lengths_carry_swolf_when_strokes_and_duration_present():
+    draft = parse_fit(FIT_FIXTURE)
+    swolf_values = [length.swolf for length in draft.lengths if length.swolf is not None]
+    assert len(swolf_values) == 71
+    assert all(v > 0 for v in swolf_values)
+
+
+@pytest.mark.skipif(not FIT_FIXTURE.exists(), reason="no real pool .fit fixture")
+def test_parse_fit_pool_has_no_heart_rate():
+    # Verified via fitdecode against the raw file: the pool swim's record
+    # frames carry only temperature+timestamp (see fixtures/fit/README.md).
+    draft = parse_fit(FIT_FIXTURE)
+    assert draft.avg_hr is None
+    assert draft.max_hr is None
+    if draft.series is not None:
+        assert "hr" not in draft.series
+
+
+@pytest.mark.skipif(not FIT_FIXTURE.exists(), reason="no real pool .fit fixture")
+def test_parse_fit_pool_produces_no_sidecar_series():
+    # No hr/speed/dist/lat/lng in this pool file's record frames (only
+    # temperature+timestamp) -- no sidecar should be produced.
+    draft = parse_fit(FIT_FIXTURE)
+    assert draft.series is None
+
+
+@pytest.mark.skipif(not FIT_FIXTURE.exists(), reason="no real pool .fit fixture")
+def test_parse_fit_pool_captures_one_lap_with_num_lengths():
+    draft = parse_fit(FIT_FIXTURE)
+    assert len(draft.laps) == 1
+    assert draft.laps[0].num_lengths == 71
+    assert draft.laps[0].stroke == "mixed"
+
+
+# --- parse_fit: real kayak fixture (HR/GPS/distance series, cross_train) -------------
+
+
+@pytest.mark.skipif(not FIT_KAYAK_FIXTURE.exists(), reason="no real kayak .fit fixture")
+def test_parse_fit_kayak_maps_to_cross_train():
+    draft = parse_fit(FIT_KAYAK_FIXTURE)
+    assert draft.sport == "cross_train"
+    assert any("cross_train" in w for w in draft.warnings)
+
+
+@pytest.mark.skipif(not FIT_KAYAK_FIXTURE.exists(), reason="no real kayak .fit fixture")
+def test_parse_fit_kayak_series_has_hr_and_distance_channels_over_4000_samples():
+    draft = parse_fit(FIT_KAYAK_FIXTURE)
+    assert draft.series is not None
+    assert "hr" in draft.series
+    assert "dist_m" in draft.series
+    assert "lat" in draft.series
+    assert "lng" in draft.series
+    assert len(draft.series["t_s"]) > 4000
+    assert any(v is not None for v in draft.series["hr"])
+    # First record has no GPS lock (see fixtures/fit/README.md) -- lat/lng
+    # must tolerate a leading None rather than crash or drop the sample.
+    assert draft.series["lat"][0] is None
+
+
+@pytest.mark.skipif(not FIT_KAYAK_FIXTURE.exists(), reason="no real kayak .fit fixture")
+def test_parse_fit_kayak_session_avg_hr_present():
+    draft = parse_fit(FIT_KAYAK_FIXTURE)
+    assert draft.avg_hr is not None
+    assert draft.max_hr is not None
+
+
+@pytest.mark.skipif(not FIT_KAYAK_FIXTURE.exists(), reason="no real kayak .fit fixture")
+def test_parse_fit_kayak_pauses_are_deterministic():
+    # Pinned, not just "some number": the real kayak export has no idle
+    # lengths, no timer stop/start event pair, and no record-timestamp gap
+    # over GAP_THRESHOLD_S (max observed gap ~19s, smart-recording variance)
+    # -- so zero pauses is the correct, deterministic answer for this file,
+    # not a gap in the detector.
+    draft = parse_fit(FIT_KAYAK_FIXTURE)
+    assert draft.pauses == []
+
+
+@pytest.mark.skipif(not FIT_KAYAK_FIXTURE.exists(), reason="no real kayak .fit fixture")
+def test_parse_fit_kayak_has_no_lengths():
+    draft = parse_fit(FIT_KAYAK_FIXTURE)
+    assert draft.lengths == []

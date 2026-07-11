@@ -36,7 +36,15 @@ from context):
 4. **HRV / recovery device.** Oura, Garmin, Whoop, none? This determines
    what `/check-in` can capture (resting HR, HRV) beyond the core subjective
    fields (sleep, stress, soreness, motivation).
-5. **Target event(s).** For each: name, date, distance (meters), water
+5. **Device-file consent.** Tell the athlete plainly: uploading a `.fit`/
+   `.tcx` device file to this system means the athlete accepts that raw
+   file (which may contain precise GPS location data — e.g. open-water/
+   outdoor session start/end/route coordinates) is committed to this repo
+   and visible to Andrew and any Claude agent working in it, not just the
+   derived workout summary. Note the answer in `notes/decisions.md` if it's
+   anything other than an unqualified yes (e.g. "no GPS uploads," "pool-only
+   files fine, no open-water route files").
+6. **Target event(s).** For each: name, date, distance (meters), water
    temp if known, wetsuit-legal or not, priority (A/B/C), and critically
    **`event_format`**:
    - `single_day` — one continuous swim (e.g. a channel/marathon swim). The
@@ -51,7 +59,7 @@ from context):
    choice and the switch condition in `constraints`/`notes/decisions.md` —
    `event_format` is a cheap re-scaffold later (`cli scaffold-macro` again
    with the corrected event; see ROADMAP.md "Event format parameter").
-6. **Current training volume.** Approximate current weekly swim
+7. **Current training volume.** Approximate current weekly swim
    distance (meters) — this becomes `scaffold-macro`'s `--current-volume`
    and anchors the ramp-cap math; also ask about **recent training
    history/interruptions** (injury, illness, layoffs) — this doesn't feed

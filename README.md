@@ -5,6 +5,13 @@ deterministic Python engine (`engine/swim_coach/`) that owns all plan math —
 zones, load, progression, adaptation — validated against typed YAML athlete
 data. See `ROADMAP.md` for the full plan and `CLAUDE.md` for standing rules.
 
+**Privacy note:** ingested `.fit`/`.tcx` device files are committed to this
+repo verbatim under `athletes/<slug>/logs/files/` (policy as of the .fit
+workout-analytics feature — see `.gitignore`). These raw files may contain
+precise GPS coordinates for open-water/outdoor sessions; uploading one means
+accepting that data is visible in the repo history to Andrew and any Claude
+agent working in it, not just the derived workout summary.
+
 ## Setup
 
 ```bash
