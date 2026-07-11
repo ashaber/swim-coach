@@ -7,7 +7,7 @@ citation home; this file adds *why* 3-5 days is a defensible recovery
 window, not just where the number comes from. It also grounds
 `load.py`/`adapt.py`'s subjective `wellness_composite` (`WELLNESS_RED_
 THRESHOLD = 2.0` over `WELLNESS_WINDOW_DAYS = 7`) as a legitimate primary
-monitoring signal rather than a lesser substitute for objective/HRV data,
+monitoring signal rather than a substitute for objective/HRV data,
 and lays forward-looking groundwork for HRV-guided daily adjustment and a
 between-events mini-taper — neither implemented in the engine today. See
 `00-conventions.md` for the tagging scheme and `reference_list.md` for full
@@ -29,8 +29,7 @@ photobiomodulation) lack strong support and shouldn't be prioritized over
 those fundamentals. `Braun-Trocchio et al. (2022)`'s 264-athlete survey
 across 11 endurance sports is consistent with this: hydration, nutrition,
 sleep, and rest are what practitioners actually use and trust most — useful
-as color for what to prioritize, not as efficacy evidence (it's a survey of
-practice, not a trial).
+as color for what to prioritize, not as efficacy evidence.
 
 No engine constant exists yet for a fixed "short-turnaround between two
 hard efforts" window — `RECOVERY_DAYS_AFTER_MILESTONE_MIN/MAX` in `adapt.py`
@@ -279,7 +278,7 @@ post-Bear-Lake perceived freshness / RPE-at-pace differs from a matched
 no-taper week in her history, if one exists, as a weak local check on
 whether this treatment is earning its keep for her specifically.
 
-This is also the clearest candidate in this file for a future engine
+This is the clearest candidate in this file for a future engine
 constant: a `MINI_TAPER_*` rule distinct from `03-periodization.md`'s
 macro-block taper (`TAPER_WEEKS_LONG/SHORT`, itself citation-debt-flagged),
 since 8-10 days is shorter than any macro taper the engine currently

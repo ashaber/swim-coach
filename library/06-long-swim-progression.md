@@ -75,7 +75,7 @@ a single continuous swim that escalates over the build, peak-ing at
 (`SINGLE_DAY_PEAK_SHARE_MIN = 0.60` marks the advisory low end of the
 target range, not separately enforced as a floor).
 
-**[EVIDENCE: swim-ultra, practical] Confidence: medium.** The Santa Barbara
+**[EVIDENCE: swim-ultra] Confidence: medium.** The Santa Barbara
 Channel Swimming Association's published training guidance
 (`reference_list.md`'s "Practical / non-journal resources") recommends, for
 a 33km swim specifically, peak training swims of 20-23km — 60-70% of target
