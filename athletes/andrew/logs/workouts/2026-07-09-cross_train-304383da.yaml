@@ -18,3 +18,30 @@ sets:
 planned_session_id: null
 raw_ref: athletes/andrew/logs/files/AndrewKayak_ACTIVITY.fit
 notes: null
+avg_hr: 74
+max_hr: 103
+laps:
+- index: 0
+  start_offset_s: 0.0
+  duration_s: 18196.642
+  distance_m: 11494.34
+  avg_hr: 74
+  max_hr: 103
+  avg_pace_s_per_100m: 158.30958541334257
+  stroke: null
+  num_lengths: null
+lengths: []
+pauses: []
+analytics:
+  cardiac_drift_pct: -13.772016466040515
+  split_label: null
+  first_half_pace_s_per_100m: null
+  second_half_pace_s_per_100m: null
+  elapsed_min: 303.27736666666664
+  moving_min: 303.3
+  pause_total_min: 0.0
+  pause_count: 0
+  swolf_first_quarter: null
+  swolf_last_quarter: null
+  swolf_degradation_pct: null
+series_ref: athletes/andrew/logs/series/2026-07-09-cross_train-304383da.json

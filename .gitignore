@@ -12,7 +12,3 @@ web/public/data/*.json
 
 # Supabase CLI local cache
 supabase/.temp/
-
-# raw device exports (.fit/.tcx/.csv) -- may contain GPS; the YAML logs
-# in athletes/<slug>/logs/ are the committed record, not these raw files
-athletes/*/logs/files/
