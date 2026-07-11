@@ -1,8 +1,5 @@
 # Recovery & HRV
 
-**UNREVIEWED** — agent-authored per `00-conventions.md`'s workflow; needs
-Andrew's human review before being treated as settled grounding truth.
-
 Grounds `engine/swim_coach/adapt.py`'s post-milestone recovery window
 (`RECOVERY_DAYS_AFTER_MILESTONE_MIN/MAX = 3/5`) with recovery-science
 support — `06-long-swim-progression.md` stays that constant's primary
@@ -146,6 +143,26 @@ runners/cyclists — so the mechanism is well-evidenced and cheap to apply,
 but the *exact scenario* (a short taper-in window before a B-then-A event
 pair) is not what was tested.
 
+A second, independent reason this stays **medium, not high**: all three
+RCTs measured HRV each **morning**, post-waking, via an orthostatic
+protocol — not **overnight**, the way Oura measures. `Nuuttila et al.
+(2024)` directly compared both protocols in the same runners under a
+training-load increase and found morning and nocturnal HRV **diverge in
+their response to training**, despite correlating at baseline; the
+overnight-style signal actually tracked the load increase and subsequent
+3000m performance change *better* than the morning protocol did — reassuring
+about the underlying mechanism (hard day only on stable/rising HRV plausibly
+transfers to an overnight-measuring device), but it means the specific
+thresholds these three RCTs calibrated — e.g. Kiviniemi's "1 SD below a
+rolling 10-day baseline" — were never validated on overnight data and must
+not be imported into an engine rule as-is. **Test:** once Renee's Oura
+rMSSD accumulates a rolling baseline, check whether a "hard day only if
+last night's rMSSD sits at/above a trailing 7-10-day mean" rule flags the
+same easy/rest days her `wellness_composite` already flags — frequent
+disagreement means the morning-protocol threshold doesn't transfer as-is
+and needs recalibrating from her own overnight baseline, not imported from
+these three studies' numbers directly.
+
 **Athlete context, stated plainly:** Renee's profile (`athletes/renee/
 profile.yaml`) lists `hrv_source: Oura ring` — the device exists — but no
 wellness log entry currently populates the `Wellness` model's optional
@@ -158,6 +175,67 @@ of (not a replacement for) `wellness_composite`, and check whether that
 layered signal catches anything the subjective composite alone misses over
 a few weeks — if it never disagrees with wellness_composite, that's a
 signal the added complexity isn't earning its keep for this athlete.
+
+## Oura device trust: how much to believe each signal
+
+Before any Oura-derived number is trusted enough to influence coaching,
+here's how much each signal this device reports should be believed, per
+`reference_list.md`'s "Wearables & device validity" sources.
+
+**Resting heart rate — high confidence.** `[ADAPTED: general-endurance]
+Confidence: high.` `Cao et al. (2022)` (n=35, chest-ECG reference) and
+`Liang et al. (2024)` (n=114, current-generation ring) both found
+whole-night-average HR correlating with ECG at r≈0.99; `Dial et al.
+(2025)`'s small independent multi-device comparison (13 adults, 536
+nights) found Oura the most accurate RHR tracker of the five tested,
+ahead of WHOOP/Garmin/Polar. **Test:** if the engine or coach ever flags
+an RHR trend as elevated, treat it as a real physiological signal first.
+
+**HRV nightly rMSSD — medium-high confidence, as a multi-night trend
+only.** `[ADAPTED: general-endurance] Confidence: medium-high.` The same
+two studies found whole-night rMSSD correlating with chest ECG at
+r≈0.92-0.99 (Cao et al. 2022, n=35; Liang et al. 2024, n=114) — strong
+enough to treat a *sustained* rMSSD trend as real. Two caveats keep this
+below "high": accuracy degrades in short/noisy windows and in older adults
+(Liang et al. found >10% error at the 5-minute level in over half their
+45-68y subgroup), and the data-quality filter that preserves accuracy
+silently **drops ~30-35% of nights**. **Test:** don't act on a single
+night's dip — check it holds across 3+ consecutive nights, and discount
+any night the app flags as low signal quality.
+
+**Sleep staging — medium for total sleep time, low-medium for stage
+detail.** `[ADAPTED: general-endurance] Confidence: low-medium.`
+`de Zambotti et al. (2017)` found total sleep time within a clinically
+acceptable band on 88% of nights, but deep sleep significantly
+underestimated and REM overestimated — on **first-generation** ring
+hardware. A newer Gen3 study (`Svensson et al. 2024`) reports qualitatively
+"good agreement," but its exact numbers were paywalled and could not be
+independently confirmed here — treat that as unverified pending full-text
+access, not a settled figure. **Test:** trust total-sleep-time for trend
+purposes; don't base a coaching call on a specific light/deep/REM split
+until the Gen3 numbers are confirmed.
+
+**Readiness score (0-100 composite) — low confidence; must not drive plan
+changes.** `[ADAPTED: general-endurance] Confidence: low.` `Doherty et al.
+(2025)`'s cross-brand review of 14 composite scores across 10 wearable
+manufacturers (Oura's Readiness/Resilience included) found none publish
+their scoring weights, and no reviewed composite score had independent
+peer-reviewed validation. **Coach judgment:** the engine and `/coach`
+should read the *raw* HRV/RHR/sleep trend, never the blended 0-100
+Readiness number, if either is to inform a plan decision. **Test:** if
+Readiness and the raw trend ever disagree, trust the raw trend — that's a
+reason to distrust Readiness further, not the reverse.
+
+**Employee-authored sources, flagged distinctly:** `Kinnunen et al.
+(2020)` (Oura's then-Chief Scientific Officer as author; specific accuracy
+numbers could not be independently confirmed — paywalled) and `Thigpen,
+Patel & Zhang (2025)` (all three authors Oura employees; self-reported
+reference standard) are manufacturer-affiliated — real and peer-reviewed,
+but a lower trust tier than the independent studies above; neither is
+load-bearing for the ratings above.
+
+**Open gap:** no Oura-specific validation exists for alcohol use,
+arrhythmia, or illness — a real gap, not a resolved low-risk.
 
 ## Swimming-specific recovery-load monitoring
 
@@ -205,9 +283,7 @@ This is also the clearest candidate in this file for a future engine
 constant: a `MINI_TAPER_*` rule distinct from `03-periodization.md`'s
 macro-block taper (`TAPER_WEEKS_LONG/SHORT`, itself citation-debt-flagged),
 since 8-10 days is shorter than any macro taper the engine currently
-models. **Not implemented today** — flagged here as a design candidate,
-`UNREVIEWED`, pending a human decision on the actual volume-cut number for
-this specific short window.
+models. **Not implemented today**
 
 ## What's still a gap
 
@@ -218,4 +294,8 @@ this specific short window.
   recovery, or a mini-taper volume cut — this file documents the evidence
   base for adding one, not an implemented rule.
 - HRV-guided adjustment is fully forward-looking: the device exists in
-  Renee's profile, but no HRV data has been logged yet.
+  Renee's profile, but no HRV data has been logged yet. This is now a
+  narrower gap than "we don't know if the device can be trusted" — device-
+  accuracy evidence exists (see "Oura device trust" above, including the
+  alcohol/arrhythmia/illness gap) — the actual gap is that no rolling
+  baseline exists on her own data yet.
