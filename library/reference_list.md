@@ -247,6 +247,20 @@ contained fabricated URLs and embedded agent-directive text.
   weeks; HRV-guided group improved VO2max, peak power, ventilatory
   thresholds, and 40-min TT more than block periodization. `[ADAPTED:
   cycling]`, Confidence: medium.
+- **✓ Nuuttila O.-P., Kyröläinen H., Kokkonen V.-P., Uusitalo A. (2024)** —
+  "Morning versus nocturnal heart rate and heart rate variability
+  responses to intensified training in recreational runners" — *Sports
+  Medicine - Open*, 10:120. 24 recreational runners, 3-week baseline plus
+  a 2-week ~80%-training-load-increase block; compared a **morning
+  orthostatic** HRV protocol (the same style Kiviniemi/Vesterinen/
+  Javaloyes above used) against **nocturnal PPG-wearable** HRV in the same
+  athletes. The two correlated at baseline but **diverged in their
+  response to the training-load increase**; only the nocturnal signal
+  correlated with subsequent 3000m performance change (r=0.63 HR,
+  r=-0.50 LnRMSSD). `[ADAPTED: running]`, Confidence: medium — the key
+  citation establishing that the Kiviniemi/Vesterinen/Javaloyes trio's
+  morning-protocol thresholds were never validated on overnight
+  (Oura-style) data; see `10-recovery-hrv.md`'s HRV-guided-load section.
 - **✓ Saw A.E., Main L.C., Gastin P.B. (2016)** — "Monitoring the athlete
   training response: subjective self-reported measures trump commonly used
   objective measures: a systematic review" — *British Journal of Sports
@@ -269,6 +283,131 @@ contained fabricated URLs and embedded agent-directive text.
   exact population and question) — swim-specific corroboration for
   `03-periodization.md`'s ACWR-is-weak caveat, currently sourced only from
   the running Garmin-RunSafe cohort.
+
+## Wearables & device validity
+
+Oura-ring-specific validation research, curated for `10-recovery-hrv.md`'s
+"Oura device trust" section. `Nuuttila et al. (2024)` (morning-vs-overnight
+HRV protocol comparison) is grouped above with the HRV-guided-training
+sources instead, since it's more directly a companion to Kiviniemi/
+Vesterinen/Javaloyes than a device-accuracy study.
+
+- **✓ Cao R., Azimi I., Sarhaddi F., Niela-Vilén H., Axelin A., Liljeberg
+  P., Rahmani A.M. (2022)** — "Accuracy Assessment of Oura Ring Nocturnal
+  Heart Rate and Heart Rate Variability in Comparison With
+  Electrocardiography in Time and Frequency Domains: Comprehensive
+  Analysis" — *Journal of Medical Internet Research*, 24(1):e27487. 35
+  healthy adults, one home overnight recording each vs. a Shimmer3 chest-
+  ECG reference; whole-night-average HR and rMSSD correlations both
+  approached 1.0 (5-minute-window HR r=0.993, rMSSD r=0.915). Independent
+  academic authorship (Turku/UC Irvine), no Oura affiliation found.
+  Confidence: high for the whole-night-average unit specifically; authors
+  themselves flag single-night, healthy-adults-only sample as a
+  generalizability limit.
+- **✓⚠ Kinnunen H., Rantanen A., Kenttä T., Koskimäki H. (2020)** —
+  "Feasible assessment of recovery and cardiovascular health: accuracy of
+  nocturnal HR and HRV assessed via ring PPG in comparison to medical
+  grade ECG" — *Physiological Measurement*, 41:04NT01. **Conflict of
+  interest:** Kinnunen was Oura's Chief Scientific Officer (2014-2021) at
+  publication — manufacturer-affiliated research. Full text paywalled;
+  specific effect sizes circulating online (r²=0.996 HR / r²=0.980 HRV)
+  are **not confirmed** here and should not be cited as fact without a
+  full-text read. Cite as corroborating-but-lower-weight only.
+- **✓ Liang T., Yilmaz G., Soon C.-S. (2024)** — "Deriving Accurate
+  Nocturnal Heart Rate, rMSSD and Frequency HRV from the Oura Ring" —
+  *Sensors*, 24(23):7475. 114 participants (Oura Gen3), SOMNOtouch ECG
+  reference, in-lab sleep studies, split younger (20-44y, n=92) vs. older
+  (45-68y, n=22). At an 80% data-quality threshold: HR r=0.992-0.994;
+  rMSSD r=0.979 (younger)/0.937 (older). Over half of older participants
+  exceeded 10% HRV error at the 5-minute level; the 80% quality filter
+  rejected ~30-35% of nights outright. Independent academic authorship.
+  Confidence: high for whole-night rMSSD as a trend signal; explicitly
+  flags age-related and short-window accuracy degradation.
+- **✓ Dial M.B., Hollander M.E., Vatne E.A., Emerson A.M., Edwards N.A.,
+  Hagen J.A. (2025)** — "Validation of nocturnal resting heart rate and
+  heart rate variability in consumer wearables" — *Physiological
+  Reports*, 13(16):e70527. 13 healthy adults, 536 nights, head-to-head:
+  Oura Gen3/Gen4, Polar Grit X Pro, Garmin Fenix 6, WHOOP 4.0 vs. a Polar
+  H10 chest-strap reference. Oura was the best-performing device tested
+  for both RHR (CCC 0.97-0.98) and HRV (CCC 0.97-0.99) — ahead of WHOOP
+  and well ahead of the Garmin/Polar watches. Independent, multi-night,
+  small n. Confidence: medium-high (small n, but only source found
+  benchmarking Oura head-to-head against direct competitors).
+- **✓⚠ de Zambotti M., Rosas L., Colrain I.M., Baker F.C. (2017)** — "The
+  Sleep of the Ring: Comparison of the ŌURA Sleep Tracker Against
+  Polysomnography" — *Behavioral Sleep Medicine*, 17(2):124-136. 41
+  healthy adolescents/young adults, single in-lab PSG night, **first-
+  generation Oura ring**. Total sleep time bias -1.3±21.7 min (88% of
+  nights within a clinically satisfactory band); deep sleep significantly
+  underestimated (~20 min, p=.004), REM significantly overestimated
+  (~17 min, p=.034); specificity to detect wake only 48%. Independent
+  (SRI International/Stanford-affiliated). **Major caveat:** superseded
+  hardware generation — stage-detail findings should not be assumed to
+  transfer unchanged to current rings.
+- **✓⚠ Svensson T., Madhawa K., NT H., Chung U., Kishi Svensson A.
+  (2024)** — "Validity and reliability of the Oura Ring Generation 3
+  (Gen3) with Oura sleep staging algorithm 2.0 (OSSA 2.0) when compared
+  to multi-night ambulatory polysomnography" — *Sleep Medicine* (2024).
+  96 participants, ages 20-70, multi-night ambulatory PSG, current
+  hardware + algorithm. Title/authors/journal corroborated (a published
+  comment-and-response pair confirms the study drew scientific scrutiny),
+  but full text paywalled — secondary sources describe "good agreement
+  with PSG for global sleep measures and light/deep sleep," recorded here
+  as an **unverified qualitative characterization only**, not a confirmed
+  figure.
+- **✓⚠ Maijala A., Kinnunen H., Koskimäki H., Jämsä T., Kangas M.
+  (2019)** — "Nocturnal finger skin temperature in menstrual cycle
+  tracking: ambulatory pilot study using a wearable Oura ring" — *BMC
+  Women's Health*, 19:150. Small pilot (n=22 women); nocturnal skin
+  temperature differed 0.30°C between follicular/luteal phases (vs.
+  0.23°C oral-thermometer, skin-vs-oral r=0.563); best ovulation-detection
+  variant ~83% sensitivity within a fertile window. **Conflict of
+  interest:** Kinnunen (Oura's then-CSO) co-authored. Authors themselves
+  call it a pilot needing larger validation.
+- **✓⚠ Thigpen N., Patel S., Zhang X. (2025)** — "Oura Ring as a Tool for
+  Ovulation Detection: Validation Analysis" — *Journal of Medical
+  Internet Research*, 27:e60667. **Conflict of interest — significant:**
+  all three authors are Oura Health employees (disclosed in the paper);
+  reference standard is self-reported home LH-test results from Oura's
+  own commercial user base, not a lab-confirmed standard. 1,155 ovulatory
+  cycles, 964 users; temperature-based algorithm detected 96.4% of
+  ovulations at 1.26-day average error vs. 3.44 days for calendar-based
+  estimation. Treat direction as plausible, heavily discount precision of
+  the specific percentages given the conflict of interest.
+- **✓ Alzueta E., de Zambotti M., Javitz H., et al. (2022)** — "Tracking
+  Sleep, Temperature, Heart Rate, and Daily Symptoms Across the Menstrual
+  Cycle with the Oura Ring in Healthy Women" — *International Journal of
+  Women's Health*, 14:491-503. 26 healthy women, one full cycle each;
+  nocturnal HR rose mid-/late-luteal (p=.001), distal skin temperature
+  showed the expected biphasic pattern (p=.05). Independent (de Zambotti
+  group, no Oura employees). Observational/descriptive — no hormone assay
+  collected — not a diagnostic-accuracy validation.
+- **✓ Doherty C., Baldwin M., Lambe R., Burke D., Altini M. (2025)** —
+  "Readiness, recovery, and strain: an evaluation of composite health
+  scores in consumer wearables" — *Translational Exercise Biomedicine*,
+  2(2):128-144. Systematic review of 14 composite readiness/recovery/
+  strain scores across 10 wearable manufacturers (Oura's Readiness/
+  Resilience, Garmin's Body Battery/Training Readiness, WHOOP's Recovery/
+  Strain, Polar's Nightly Recharge, and others included). Found none of
+  the manufacturers publish exact scoring formulas/weights, and this
+  class of proprietary composite score generally lacks independent
+  peer-reviewed validation. Title/authors/journal corroborated across
+  three independent listings; full publisher text not directly fetched,
+  so the characterization above is drawn from consistent secondary
+  summaries. **Informs directly:** `10-recovery-hrv.md`'s Readiness-score
+  section — the composite should not drive plan decisions; use raw
+  HRV/RHR/sleep instead.
+
+**Rejected/unverifiable, not cited above:** Oura's own marketing blog post
+summarizing Dial et al. 2025 (cite Dial directly, not the blog); an
+aggregator claim linking Oura temperature deviation to Kinsa QuickCare
+oral-thermometer readings (untraceable to a primary source); Marco Altini's
+Substack commentary on motion-artifact HRV (Altini is a legitimate
+researcher and a Doherty et al. 2025 co-author, but a Substack post isn't a
+citable primary source — the underlying point is already covered by Cao
+2022 and Liang 2024's own discussion sections); viral "15.6%/74% HRV drop
+after drinking" figures attributed to Oura/WHOOP user data (no traceable
+primary study found).
 
 ## Practical / non-journal resources
 
