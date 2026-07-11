@@ -84,6 +84,13 @@ paper over them, they are recorded explicitly in ``KNOWN_INVALID_TAGS`` and
 if someone fixes the content, that test fails and forces the stale entry to
 be removed, rather than the exception silently living forever. See the PR
 description for the full list.
+
+``KNOWN_ADAPTED_MISSING_TEST`` is currently empty: the two `Test:` lines it
+used to grandfather (10-recovery-hrv.md:64 and :123) were written and the
+entries removed, so rule 2 (every ``[ADAPTED]`` block carries ``Confidence:``
+and ``Test:``) now enforces with zero exceptions. The dict and its
+companion-test loop are left in place, not deleted, so a future genuine
+gap has somewhere to go without re-deriving this mechanism from scratch.
 """
 
 from __future__ import annotations
@@ -123,18 +130,15 @@ ADAPTED_ALLOWED = {
 }
 
 # --- Rule 4: allowed confidence values ---------------------------------------
-# 00-conventions.md's literal text: "Confidence: high|medium|low". In
-# practice, library content (10-recovery-hrv.md, 05-open-water-pace-
-# inference.md, and reference_list.md itself) also uses "medium-high" and
-# "low-medium" as a genuine, consistently-used intermediate grade (9
-# occurrences across 3 files -- not a one-off typo). Per the same "accept
-# what's genuinely used rather than breaking existing green files"
-# principle the task specifies for rule 3's ADAPTED combined forms, this
-# module accepts the 5-tier scale actually in use. This IS a discrepancy
-# between 00-conventions.md's literal three-tier text and real content --
-# flagged explicitly in the PR body; 00-conventions.md's prose arguably
-# ought to be updated to document the 5-tier scale it already uses in
-# practice.
+# 00-conventions.md documents the 5-tier scale: "Confidence:
+# high|medium-high|medium|low-medium|low", with guidance on when an
+# intermediate grade (medium-high/low-medium) is the honest choice rather
+# than a rounding to either neighbor. This module enforces exactly that
+# documented scale -- it is not a tolerated deviation from 00-conventions.md;
+# library content (10-recovery-hrv.md, 05-open-water-pace-inference.md, and
+# reference_list.md itself) already used "medium-high"/"low-medium" as a
+# genuine, consistently-used intermediate grade before the prose was
+# updated to match.
 CONFIDENCE_ALLOWED = {"high", "medium", "low", "low-medium", "medium-high"}
 
 FABRICATED_ID_RE = re.compile(r"\bPMC\d+\b|\bPubMed\s*:\s*\d+|\bdoi\s*:", re.IGNORECASE)
@@ -173,20 +177,11 @@ KNOWN_INVALID_TAGS = {
         "fix -- left for Andrew."
     ),
 }
-KNOWN_ADAPTED_MISSING_TEST = {
-    ("10-recovery-hrv.md", 64): (
-        "[ADAPTED: general-endurance] Confidence: medium-high (Koopman et "
-        "al. 2004, carb+protein co-ingestion) has no Test: line -- unlike "
-        "every other ADAPTED block in this file. Writing a good falsifiable "
-        "Test: requires domain judgment this gate can't supply."
-    ),
-    ("10-recovery-hrv.md", 123): (
-        "[ADAPTED: general-endurance/multi-sport] Confidence: high (Saw, "
-        "Main & Gastin 2016) has no Test: line of its own -- the nearby "
-        "Test: at line 157 belongs to the following, unrelated HRV-morning-"
-        "vs-overnight block, not this one."
-    ),
-}
+# Empty: both previously-grandfathered gaps (10-recovery-hrv.md:64 and
+# :123) now have real Test: lines -- see module docstring. Kept as a live
+# mechanism (not deleted) for any future genuine gap; test_known_violations_
+# still_reproduce's loop over this dict is a no-op while it's empty.
+KNOWN_ADAPTED_MISSING_TEST: dict[tuple[str, int], str] = {}
 
 
 # ============================================================================
@@ -403,7 +398,8 @@ def test_adapted_blocks_have_confidence_and_test(path: Path) -> None:
         f"{path.relative_to(REPO_ROOT)} has [ADAPTED: ...] block(s) missing "
         f"required field(s): {problems}. Per library/00-conventions.md, "
         f"'Every [ADAPTED] block must carry two more things: Confidence: "
-        f"high|medium|low, and Test: <falsifiable statement>.'"
+        f"high|medium-high|medium|low-medium|low, and Test: <falsifiable "
+        f"statement>.'"
     )
 
 
@@ -433,8 +429,8 @@ def test_tags_use_allowed_values(path: Path) -> None:
 
 
 # ============================================================================
-# Rule 4: Confidence: values are high|medium|low (plus the in-use 5-tier
-# extension -- see CONFIDENCE_ALLOWED's comment).
+# Rule 4: Confidence: values match the documented 5-tier scale --
+# high|medium-high|medium|low-medium|low (see CONFIDENCE_ALLOWED's comment).
 # ============================================================================
 
 
