@@ -236,6 +236,19 @@
     .conn-result.ok { color: var(--c-ow); background: color-mix(in srgb, var(--c-ow) 14%, var(--paper)); }
     .conn-result.fail { color: var(--c-signal); background: var(--c-signal-wash); }
 
+    /* workout history (Log tab section) */
+    .hist-section { margin-top: 28px; }
+    .hist-list { display: flex; flex-direction: column; gap: 8px; }
+    .hist-row { display: flex; gap: 12px; padding: 11px 14px; background: var(--paper);
+      border: 1px solid var(--line); border-radius: 10px; }
+    .hist-date { flex: none; width: 56px; font-size: 12px; color: var(--ink-faint); padding-top: 1px; }
+    .hist-body { min-width: 0; flex: 1; }
+    .hist-title { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 14px; font-weight: 650; }
+    .hist-meta { font-size: 12px; color: var(--ink-faint); margin-top: 2px; }
+    .hist-analytics { font-size: 12px; color: var(--ink-soft); margin-top: 3px; }
+    .hist-error { margin-top: 14px; font-size: 13px; font-weight: 650; padding: 8px 12px;
+      border-radius: 10px; color: var(--c-signal); background: var(--c-signal-wash); }
+
     /* feedback tab */
     .feedback-entry { margin-top: 12px; }
     .feedback-entry-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
