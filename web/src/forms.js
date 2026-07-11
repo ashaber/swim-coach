@@ -20,15 +20,43 @@ function toNullableText(value) {
   return trimmed ? trimmed : null;
 }
 
-/** Serializes the Log tab's form state into a `POST /api/workouts` body. */
+/** Serializes the Log tab's form state into a `POST /api/workouts` body.
+ * `source` is included only when the form carries one (i.e. it came from a
+ * confirmed file-upload draft -- see `logFormFromDraft` below); an ordinary
+ * manual entry omits it entirely and the backend defaults to `"manual"`. */
 export function serializeWorkoutForm(form) {
-  return {
+  const payload = {
     date: form.date,
     sport: form.sport,
     distance_m: toNumberOrZero(form.distance_m),
     duration_min: toNumberOrZero(form.duration_min),
     rpe: toNullableNumber(form.rpe),
     notes: toNullableText(form.notes),
+  };
+  if (form.source) payload.source = form.source;
+  return payload;
+}
+
+/** Maps a parsed `WorkoutDraft` (the response body of `POST
+ * /api/workouts/ingest` -- see api.js's `uploadWorkoutFile`) into the Log
+ * tab's form state, so the review card pre-fills exactly what the file
+ * parser read. `rpe` is deliberately reset to `''` rather than kept at
+ * whatever the manual-entry default was -- a file never carries effort, so
+ * the athlete must explicitly set it before Save is enabled (see
+ * views.js's `renderLogTab`, which disables Save while `rpe` is blank).
+ * `source`/`warnings` ride along on the form object purely for the review
+ * UI: `source` feeds back into `serializeWorkoutForm` above at confirm time,
+ * `warnings` is read directly by views.js and never sent to the backend. */
+export function logFormFromDraft(draft, existingForm) {
+  return {
+    ...existingForm,
+    date: draft.date || existingForm.date,
+    sport: draft.sport || existingForm.sport,
+    distance_m: draft.distance_m != null ? String(draft.distance_m) : existingForm.distance_m,
+    duration_min: draft.duration_min != null ? String(draft.duration_min) : existingForm.duration_min,
+    rpe: '',
+    source: draft.source || null,
+    warnings: draft.warnings || [],
   };
 }
 

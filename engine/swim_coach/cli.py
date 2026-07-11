@@ -33,16 +33,10 @@ from swim_coach.load import (
 )
 from swim_coach.models import Event, Wellness, WeekPlan, Workout
 from swim_coach.parse_coach_text import parse_coach_text
-from swim_coach.parse_files import parse_csv, parse_fit, parse_tcx
+from swim_coach.parse_files import PARSERS_BY_EXTENSION
 from swim_coach.plan import generate_week, scaffold_macro
 from swim_coach.store import FileStore
 from swim_coach.zones import css_from_test, zone_table
-
-_INGEST_PARSERS_BY_EXT = {
-    ".tcx": parse_tcx,
-    ".csv": parse_csv,
-    ".fit": parse_fit,
-}
 
 
 def _iso_week(d: date) -> str:
@@ -471,11 +465,11 @@ def _cmd_parse_coach_text(args: argparse.Namespace, store: FileStore) -> int:
 def _cmd_ingest(args: argparse.Namespace, store: FileStore) -> int:
     slug = args.athlete
     path = Path(args.file)
-    parser_fn = _INGEST_PARSERS_BY_EXT.get(path.suffix.lower())
+    parser_fn = PARSERS_BY_EXTENSION.get(path.suffix.lower())
     if parser_fn is None:
         return _error(
             f"unsupported file extension {path.suffix!r}; expected one of "
-            f"{sorted(_INGEST_PARSERS_BY_EXT)}"
+            f"{sorted(PARSERS_BY_EXTENSION)}"
         )
 
     try:

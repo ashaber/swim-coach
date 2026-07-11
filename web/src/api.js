@@ -125,6 +125,55 @@ async function apiRequest({ baseUrl, token, path, method = 'GET', body }) {
   }
 }
 
+/**
+ * POST {baseUrl}/api/workouts/ingest?athlete=<slug> -- multipart upload of a
+ * .fit/.tcx/.csv watch export. The backend parses it *in memory* and
+ * returns the resulting WorkoutDraft (including `warnings`); it never saves
+ * anything (see forms.js's `logFormFromDraft` and main.js's
+ * `handleSubmitLog` for the separate confirm step that actually persists it
+ * via `postWorkout`, with `source` carried through from the draft).
+ *
+ * Deliberately not built on the shared `apiRequest` helper above: that
+ * helper always sends a JSON body with an explicit `Content-Type:
+ * application/json` header, but a multipart upload needs the browser to set
+ * `Content-Type: multipart/form-data; boundary=...` itself from the
+ * FormData body -- setting it manually breaks the boundary. Error handling
+ * (network failure / non-2xx / unparsable body) mirrors `apiRequest`'s same
+ * three-branch normalization so callers get the same `{ok, error}` /
+ * `{ok, data}` shape either way.
+ */
+export async function uploadWorkoutFile({ baseUrl, token, athlete = 'renee', file }) {
+  const path = `/api/workouts/ingest?athlete=${encodeURIComponent(athlete)}`;
+  const formData = new FormData();
+  formData.append('file', file);
+
+  let response;
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData,
+    });
+  } catch (err) {
+    log.error('api.upload_failed', { path, error: err.message });
+    return { ok: false, error: 'Could not reach the coach backend. Check your connection and Settings.' };
+  }
+
+  if (!response.ok) {
+    const message = await safeErrorMessage(response);
+    log.error('api.response_not_ok', { path, status: response.status, error: message });
+    return { ok: false, error: message };
+  }
+
+  try {
+    const data = await response.json();
+    return { ok: true, data };
+  } catch (err) {
+    log.error('api.parse_failed', { path, error: err.message });
+    return { ok: false, error: 'Unexpected response from backend.' };
+  }
+}
+
 /** POST {baseUrl}/api/workouts?athlete=<slug> -- logs a completed workout. */
 export async function postWorkout({ baseUrl, token, athlete = 'renee', payload }) {
   return apiRequest({

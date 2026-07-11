@@ -106,3 +106,53 @@ def test_list_workouts_unknown_athlete_is_404(client) -> None:
     response = client.get("/api/workouts?athlete=nobody", headers=auth_headers())
     assert response.status_code == 404
     assert "error" in response.json()
+
+
+# --- client-settable `source` (Phase 3: the confirm step of the two-step
+# .fit/.tcx/.csv upload -- see routes/workouts.py's ingest_workout -- saves
+# through this same endpoint with the draft's real source, not a fabricated
+# "manual") -----------------------------------------------------------------
+
+
+def test_create_workout_accepts_fit_source(client) -> None:
+    response = client.post(
+        "/api/workouts?athlete=renee",
+        json=_valid_payload(source="fit"),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+    assert response.json()["source"] == "fit"
+
+
+def test_create_workout_accepts_tcx_and_csv_source(client) -> None:
+    for source in ("tcx", "csv"):
+        response = client.post(
+            "/api/workouts?athlete=renee",
+            json=_valid_payload(source=source),
+            headers=auth_headers(),
+        )
+        assert response.status_code == 200
+        assert response.json()["source"] == source
+
+
+def test_create_workout_rejects_coach_text_source(client) -> None:
+    # coach_text is still CLI/skill-only (see engine/swim_coach/cli.py's
+    # `_cmd_ingest`) -- a client of this JSON endpoint can't claim it, even
+    # though Workout.source's Literal type would otherwise accept it.
+    response = client.post(
+        "/api/workouts?athlete=renee",
+        json=_valid_payload(source="coach_text"),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 422
+    assert "error" in response.json()
+
+
+def test_create_workout_rejects_bogus_source(client) -> None:
+    response = client.post(
+        "/api/workouts?athlete=renee",
+        json=_valid_payload(source="not_a_real_source"),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 422
+    assert "error" in response.json()

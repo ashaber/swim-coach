@@ -372,6 +372,13 @@ const SPORT_OPTIONS = [
   { value: 'swim_ow', label: 'Open water swim' },
   { value: 'strength', label: 'Strength' },
   { value: 'recovery', label: 'Recovery' },
+  // Added for Phase 3 file upload: a non-swim FIT session (e.g. a kayak)
+  // parses to this sport (see engine/swim_coach/parse_files.py's
+  // _fit_sport) -- without this option, the <select> would silently fall
+  // back to its first option (swim_pool) the moment a cross_train draft
+  // pre-filled the form, corrupting exactly the swim-volume math the
+  // two-step review/confirm design exists to protect.
+  { value: 'cross_train', label: 'Cross-training' },
 ];
 
 export function renderBackendNeededNotice(message) {
@@ -388,7 +395,36 @@ function renderSubmitResult(submit) {
     : '';
 }
 
-export function renderLogTab({ form, submit, backendConfigured, online }) {
+const SOURCE_LABELS = { fit: '.fit', tcx: '.tcx', csv: '.csv' };
+
+// Renders the "here's what the file said" review card that appears once a
+// file upload has parsed successfully -- see main.js's handleLogFileSelected
+// (sets state.logIngest) and forms.js's logFormFromDraft (pre-fills
+// state.logForm from the same WorkoutDraft this reads `warnings` off of).
+// Warnings are surfaced prominently (not buried) per the Phase 3 design:
+// a parsed file can be wrong (a kayak mapped to cross_train; a bad date),
+// so the athlete needs to actually see the parser's caveats before saving.
+function renderIngestSummary(ingest, form) {
+  const warnings = form.warnings || [];
+  const sportLabel = SPORT_OPTIONS.find((opt) => opt.value === form.sport)?.label || form.sport;
+  return `
+    <div class="conn-result ok">
+      Parsed <b>${esc(ingest.fileName)}</b> (${esc(SOURCE_LABELS[form.source] || form.source)}) -- ${esc(sportLabel)}, ${esc(form.distance_m)} m, ${esc(form.duration_min)} min. Review the fields below, set your effort (RPE -- files never include it), then save.
+    </div>
+    ${warnings.length > 0 ? `
+    <div class="conn-result fail">
+      <b>${warnings.length === 1 ? 'Heads up' : `Heads up (${warnings.length})`}:</b>
+      <ul style="margin:6px 0 0;padding-left:18px;">
+        ${warnings.map((w) => `<li>${esc(w)}</li>`).join('')}
+      </ul>
+    </div>` : ''}`;
+}
+
+export function renderLogTab({
+  form, submit, ingest, backendConfigured, online,
+}) {
+  const rpeMissing = form.rpe === '' || form.rpe === null || form.rpe === undefined;
+  const uploading = ingest.status === 'uploading';
   return `
     <div class="wrap settings-wrap">
       <header class="mast" style="border-bottom:none;padding-bottom:0;">
@@ -400,6 +436,15 @@ export function renderLogTab({ form, submit, backendConfigured, online }) {
       </header>
       ${!online ? '<div class="chat-banner">Offline -- logging needs a connection.</div>' : ''}
       ${!backendConfigured ? renderBackendNeededNotice('Logging a swim needs you to sign in and set a backend URL and token first.') : `
+      <div class="panel settings-panel">
+        <label class="field">
+          <span>Import from your watch (.fit, .tcx, .csv)</span>
+          <input type="file" accept=".fit,.tcx,.csv" data-a="log:file-select" ${uploading || !online ? 'disabled' : ''}>
+        </label>
+        ${uploading ? '<p class="sub">Parsing&hellip;</p>' : ''}
+        ${ingest.status === 'error' ? `<div class="conn-result fail">${esc(ingest.error)}</div>` : ''}
+        ${ingest.status === 'ready' ? renderIngestSummary(ingest, form) : ''}
+      </div>
       <div class="panel settings-panel">
         <label class="field">
           <span>Date</span>
@@ -420,16 +465,17 @@ export function renderLogTab({ form, submit, backendConfigured, online }) {
           <input type="number" min="0" step="0.5" inputmode="decimal" data-form="log" data-field="duration_min" value="${esc(form.duration_min)}">
         </label>
         <label class="field">
-          <span>RPE (effort) &middot; <output id="log-rpe-out">${esc(form.rpe)}</output>/10</span>
-          <input type="range" min="1" max="10" step="1" data-form="log" data-field="rpe" data-slider-out="log-rpe-out" value="${esc(form.rpe)}">
+          <span>RPE (effort) &middot; <output id="log-rpe-out">${rpeMissing ? '&ndash;' : esc(form.rpe)}</output>/10 <b id="log-rpe-required-badge"${rpeMissing ? '' : ' hidden'}>(required)</b></span>
+          <input type="range" min="1" max="10" step="1" data-form="log" data-field="rpe" data-slider-out="log-rpe-out"${rpeMissing ? '' : ` value="${esc(form.rpe)}"`}>
         </label>
         <label class="field">
           <span>Notes</span>
           <textarea rows="3" data-form="log" data-field="notes" placeholder="How did it feel?">${esc(form.notes)}</textarea>
         </label>
         <div class="settings-actions">
-          <button type="button" class="btn" data-a="log:submit" ${submit.status === 'submitting' || !online ? 'disabled' : ''}>${submit.status === 'submitting' ? 'Saving…' : 'Save'}</button>
+          <button type="button" class="btn" data-a="log:submit" ${submit.status === 'submitting' || !online || rpeMissing ? 'disabled' : ''}>${submit.status === 'submitting' ? 'Saving…' : (form.source ? 'Confirm & save' : 'Save')}</button>
         </div>
+        <p class="field-hint" id="log-rpe-hint"${rpeMissing ? '' : ' hidden'}>Set an effort (RPE) before saving.</p>
         ${renderSubmitResult(submit)}
       </div>`}
     </div>`;

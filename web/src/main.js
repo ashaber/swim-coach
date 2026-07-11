@@ -10,11 +10,11 @@ import {
 import { loadSettings, saveSettings, isConfigured } from './settings.js';
 import {
   streamChat, testConnection, postWorkout, postWellness, fetchPlan, getAthlete, patchAthlete,
-  postFeedback, listFeedback,
+  postFeedback, listFeedback, uploadWorkoutFile,
 } from './api.js';
 import {
   serializeWorkoutForm, serializeWellnessForm, profileFormFromAthlete, serializeProfileForm,
-  serializeFeedbackForm,
+  serializeFeedbackForm, logFormFromDraft,
 } from './forms.js';
 import { currentIdentity, signIn, signOut } from './identity.js';
 
@@ -30,8 +30,27 @@ function todayIso() {
 }
 
 function createLogForm() {
-  return { date: todayIso(), sport: 'swim_pool', distance_m: '', duration_min: '', rpe: 5, notes: '' };
+  return {
+    date: todayIso(), sport: 'swim_pool', distance_m: '', duration_min: '', rpe: 5, notes: '',
+    // Set by logFormFromDraft (forms.js) once a file has been parsed -- see
+    // handleLogFileSelected. `source` (fit/tcx/csv) rides along to the
+    // confirm-save POST /api/workouts call; `warnings` is read by
+    // views.js's renderLogTab review card and never sent to the backend.
+    source: null,
+    warnings: [],
+  };
 }
+
+function createLogIngest() {
+  return { status: 'idle', fileName: null, error: null };
+}
+
+// The single source of truth for "which file extensions the Log tab's
+// upload accepts," checked client-side before ever making a network call --
+// the backend (see backend/app/routes/workouts.py's PARSERS_BY_EXTENSION)
+// enforces the same allowlist independently, so a stale/bypassed client
+// check can never let an unsupported file actually get ingested.
+const SUPPORTED_INGEST_EXTENSIONS = ['.fit', '.tcx', '.csv'];
 
 function createCheckinForm() {
   return {
@@ -76,6 +95,7 @@ const state = {
   online: navigator.onLine,
   logForm: createLogForm(),
   logSubmit: { status: 'idle', message: null },
+  logIngest: createLogIngest(),
   checkinForm: createCheckinForm(),
   checkinSubmit: { status: 'idle', message: null },
   profileForm: createProfileForm(),
@@ -120,6 +140,7 @@ function renderTabContent() {
       return renderLogTab({
         form: state.logForm,
         submit: state.logSubmit,
+        ingest: state.logIngest,
         backendConfigured,
         online: state.online,
       });
@@ -387,12 +408,73 @@ async function handleSubmitLog() {
     baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), payload,
   });
   if (result.ok) {
-    log.info('log.submit_success', { athlete: athleteSlug() });
+    log.info('log.submit_success', { athlete: athleteSlug(), source: payload.source || 'manual' });
     state.logForm = createLogForm();
+    state.logIngest = createLogIngest();
     state.logSubmit = { status: 'success', message: 'Saved.' };
   } else {
     log.error('log.submit_failed', { athlete: athleteSlug(), error: result.error });
     state.logSubmit = { status: 'error', message: result.error };
+  }
+  render();
+}
+
+// --- Log tab: file upload (Phase 3 -- .fit/.tcx/.csv from the athlete's
+// watch) -------------------------------------------------------------------
+// Two-step design: this parses the file and pre-fills state.logForm as a
+// *draft* (never saves); handleSubmitLog above does the actual save once
+// the athlete has reviewed the fields, added RPE (never in the file), and
+// clicked Save/Confirm. See api.js's uploadWorkoutFile and forms.js's
+// logFormFromDraft for the two halves of that mapping.
+
+async function handleLogFileSelected(file) {
+  if (!file) return;
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) {
+    state.tab = 'settings';
+    saveActiveTab(state.tab);
+    render();
+    return;
+  }
+
+  const lastDot = file.name.lastIndexOf('.');
+  const ext = lastDot >= 0 ? file.name.slice(lastDot).toLowerCase() : '';
+  if (!SUPPORTED_INGEST_EXTENSIONS.includes(ext)) {
+    state.logIngest = {
+      status: 'error',
+      fileName: file.name,
+      error: `Unsupported file type${ext ? ` "${ext}"` : ''} -- use .fit, .tcx, or .csv.`,
+    };
+    log.warn('log.file_unsupported_type', { athlete: athleteSlug(), ext });
+    render();
+    return;
+  }
+
+  state.logIngest = { status: 'uploading', fileName: file.name, error: null };
+  render();
+  // Filename isn't logged (an athlete-chosen filename can carry PII, e.g.
+  // "Renee_swim.fit") -- only the extension and size, per the global
+  // logging standard's "never log secrets or PII."
+  log.info('log.file_upload_start', { athlete: athleteSlug(), ext, size_bytes: file.size });
+
+  const result = await uploadWorkoutFile({
+    baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), file,
+  });
+
+  if (result.ok) {
+    const draft = result.data;
+    log.info('log.file_parsed', {
+      athlete: athleteSlug(),
+      source: draft.source,
+      sport: draft.sport,
+      distance_m: draft.distance_m,
+      warning_count: (draft.warnings || []).length,
+    });
+    state.logForm = logFormFromDraft(draft, state.logForm);
+    state.logIngest = { status: 'ready', fileName: file.name, error: null };
+  } else {
+    log.error('log.file_parse_failed', { athlete: athleteSlug(), error: result.error });
+    state.logIngest = { status: 'error', fileName: file.name, error: result.error };
   }
   render();
 }
@@ -609,6 +691,8 @@ function onAppClick(e) {
 function onAppChange(e) {
   if (e.target.matches('[data-a="chat:expert-toggle"]')) {
     handleToggleExpertMode(e.target.checked);
+  } else if (e.target.matches('[data-a="log:file-select"]')) {
+    handleLogFileSelected(e.target.files?.[0]);
   }
 }
 
@@ -645,6 +729,21 @@ function onAppInput(e) {
     const out = document.getElementById(outId);
     if (out) out.textContent = el.value;
   }
+
+  // The Log tab's Save button is gated on RPE being set (see
+  // views.js's renderLogTab `rpeMissing` -- a file upload resets rpe to ''
+  // so the athlete must move the slider at least once). That gate has to
+  // update live as the slider is dragged, but this handler deliberately
+  // avoids a full render() on every input event (see comment above) to not
+  // interrupt an in-progress drag -- so patch just the affected elements
+  // directly instead.
+  if (formName === 'log' && field === 'rpe') {
+    const rpeMissing = state.logForm.rpe === '' || state.logForm.rpe === null || state.logForm.rpe === undefined;
+    const saveBtn = document.querySelector('[data-a="log:submit"]');
+    if (saveBtn) saveBtn.disabled = rpeMissing || state.logSubmit.status === 'submitting' || !state.online;
+    document.getElementById('log-rpe-required-badge')?.toggleAttribute('hidden', !rpeMissing);
+    document.getElementById('log-rpe-hint')?.toggleAttribute('hidden', !rpeMissing);
+  }
 }
 
 function onAppKeydown(e) {
@@ -661,10 +760,19 @@ function updateOfflineBanner() {
   if (banner) banner.classList.toggle('show', !navigator.onLine);
 }
 
+// Tabs whose own tab-content markup depends on `online` (a `.chat-banner`
+// notice, and inputs/buttons disabled while offline) -- re-rendered so that
+// content actually reflects the new state rather than only the always-in-DOM
+// #offline-banner updating. Every other tab either doesn't touch `online` in
+// its render function or isn't worth a re-render on a background
+// connectivity change (Plan/Settings/Feedback keep whatever they last
+// rendered until the athlete next interacts with them).
+const TABS_SENSITIVE_TO_ONLINE_STATE = ['coach', 'log', 'checkin'];
+
 function updateOnlineState() {
   state.online = navigator.onLine;
   updateOfflineBanner();
-  if (state.tab === 'coach') render();
+  if (TABS_SENSITIVE_TO_ONLINE_STATE.includes(state.tab)) render();
 }
 
 function initTheme() {
