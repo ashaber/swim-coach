@@ -19,7 +19,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
 
 from swim_coach.adapt import adapt_week
-from swim_coach.models import Feedback
+from swim_coach.models import Feedback, Workout
 from swim_coach.store import StoreInterface
 
 from app.context import iso_week_str, summarize_rollup
@@ -28,6 +28,13 @@ from app.logging_config import get_logger
 log = get_logger(__name__)
 
 ToolHandler = Callable[[dict[str, Any]], dict[str, Any]]
+
+# get_workouts caps how many sessions it returns to the coach in one call --
+# a broad date range on a long-tenured athlete could otherwise dump hundreds
+# of full-ish workout summaries into the (uncached, per-turn) tool-result
+# context. Matches the PWA history list's own display cap
+# (web/src/workouts.js's HISTORY_DISPLAY_CAP).
+GET_WORKOUTS_CAP = 20
 
 TOOLS_SCHEMA: list[dict[str, Any]] = [
     {
@@ -93,6 +100,40 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
             },
             "required": ["question", "topic"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "get_workouts",
+        "description": (
+            "Fetch logged workouts for a date range OLDER than what's already "
+            "in context -- the per-request context above only includes the "
+            "trailing ~28 days of exact sessions, so call this when the "
+            "athlete asks about a specific past workout or date range outside "
+            "that window (e.g. \"what did I do in January?\"). Do NOT call "
+            "this for recent sessions -- they're already in context. Results "
+            f"are capped at {GET_WORKOUTS_CAP} workouts (sorted oldest-first "
+            "within the range; check `truncated` and narrow the range if "
+            "true). Each result is a compact summary (distance, duration, "
+            "pace, RPE, HR, analytics, and lap/length/pause counts) -- not "
+            "the full per-lap/per-length telemetry."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "start_date": {
+                    "type": "string",
+                    "description": "Start of the date range, 'YYYY-MM-DD'.",
+                },
+                "end_date": {
+                    "type": "string",
+                    "description": (
+                        "End of the date range (inclusive), 'YYYY-MM-DD'. "
+                        "Omit for a single-day query -- defaults to start_date."
+                    ),
+                },
+            },
+            "required": ["start_date"],
             "additionalProperties": False,
         },
     },
@@ -213,6 +254,65 @@ def _handle_log_open_question(
     return {"logged": True, "id": str(entry.id)}
 
 
+def _summarize_workout(w: Workout) -> dict[str, Any]:
+    """The compact per-workout shape `get_workouts` returns -- deliberately
+    excludes the unbounded `laps`/`lengths`/`pauses` arrays (a multi-hour
+    .fit can carry dozens to hundreds of entries) in favor of counts, same
+    spirit as `get_plan_summary` returning an aggregate rather than raw
+    rows. `analytics` is small (a handful of scalar fields) so it's passed
+    through in full."""
+    return {
+        "date": w.date.isoformat(),
+        "sport": w.sport,
+        "source": w.source,
+        "distance_m": w.distance_m,
+        "duration_min": w.duration_min,
+        "avg_pace_s_per_100m": w.avg_pace_s_per_100m,
+        "rpe": w.rpe,
+        "notes": w.notes,
+        "avg_hr": w.avg_hr,
+        "max_hr": w.max_hr,
+        "analytics": w.analytics.model_dump(mode="json") if w.analytics is not None else None,
+        "lap_count": len(w.laps),
+        "length_count": len(w.lengths),
+        "pause_count": len(w.pauses),
+    }
+
+
+def _handle_get_workouts(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    start_str = input_data.get("start_date")
+    if not start_str:
+        return {"error": "start_date is required"}
+    end_str = input_data.get("end_date") or start_str
+
+    try:
+        start = date.fromisoformat(start_str)
+    except ValueError:
+        return {"error": f"invalid start_date {start_str!r}; expected format 'YYYY-MM-DD'"}
+    try:
+        end = date.fromisoformat(end_str)
+    except ValueError:
+        return {"error": f"invalid end_date {end_str!r}; expected format 'YYYY-MM-DD'"}
+    if end < start:
+        return {"error": f"end_date {end_str!r} is before start_date {start_str!r}"}
+
+    # list_workouts returns [] for an athlete tree with no logs dir (or no
+    # such athlete at all) rather than raising -- same non-erroring
+    # unknown-athlete behavior get_plan_summary already has, so this stays
+    # consistent rather than special-casing it.
+    workouts = sorted(store.list_workouts(slug), key=lambda w: w.date)
+    matched = [w for w in workouts if start <= w.date <= end]
+
+    truncated = len(matched) > GET_WORKOUTS_CAP
+    matched = matched[:GET_WORKOUTS_CAP]
+
+    return {
+        "workouts": [_summarize_workout(w) for w in matched],
+        "count": len(matched),
+        "truncated": truncated,
+    }
+
+
 def build_tool_handlers(
     store: StoreInterface, *, slug: str, expert_mode: bool
 ) -> dict[str, ToolHandler]:
@@ -229,5 +329,8 @@ def build_tool_handlers(
         ),
         "log_open_question": lambda input_data: _handle_log_open_question(
             input_data, store=store, slug=slug, expert_mode=expert_mode
+        ),
+        "get_workouts": lambda input_data: _handle_get_workouts(
+            input_data, store=store, slug=slug
         ),
     }

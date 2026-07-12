@@ -48,7 +48,12 @@ def test_request_shape_includes_tools(client, fake_claude_chat_factory) -> None:
 
     tools = chat.client.messages.calls[0]["tools"]
     tool_names = {t["name"] for t in tools}
-    assert tool_names == {"propose_adaptation", "get_plan_summary", "log_open_question"}
+    assert tool_names == {
+        "propose_adaptation",
+        "get_plan_summary",
+        "log_open_question",
+        "get_workouts",
+    }
 
 
 def test_request_shape_system_is_two_cacheable_blocks(client, fake_claude_chat_factory) -> None:

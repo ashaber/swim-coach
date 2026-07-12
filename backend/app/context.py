@@ -131,7 +131,10 @@ restate numbers you already have. The exact-session and events sections are
 individual facts (e.g. a specific session's sport, or a race's date); the
 AGGREGATE rollup is a derived summary of those same sessions -- don't
 confuse the two, and don't call a session by the wrong sport when its exact
-row is right there.
+row is right there. That per-request context only reaches back ~28 days --
+if the athlete asks about a specific past workout or date range older than
+that, call the `get_workouts` tool rather than saying you have no record of
+it; don't call it for recent sessions, they're already above.
 """
 
 
