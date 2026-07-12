@@ -145,6 +145,35 @@ def test_fit_sport_non_swim_maps_to_cross_train_with_warning():
     assert "cross_train" in warnings[0]
 
 
+def test_fit_sport_training_sub_sport_strength_maps_to_strength():
+    # Garmin encodes a logged strength workout as session.sport="training",
+    # sub_sport="strength_training" (surfaces in intervals.icu as
+    # "WeightTraining"). This must land on the engine's own "strength" Sport,
+    # not cross_train, so it doesn't get lumped in with kayak/run/ride
+    # sessions -- it still counts toward sRPE load, never swim volume,
+    # exactly like cross_train does.
+    warnings: list[str] = []
+    assert _fit_sport("training", "strength_training", warnings) == "strength"
+    assert warnings == []
+
+
+def test_fit_sport_training_no_sub_sport_maps_to_strength():
+    # session.sport=="training" alone (no sub_sport) is unambiguous enough
+    # on its own -- Garmin doesn't use "training" for anything else.
+    warnings: list[str] = []
+    assert _fit_sport("training", None, warnings) == "strength"
+    assert warnings == []
+
+
+def test_fit_sport_rowing_still_maps_to_cross_train_with_warning():
+    # Non-training, non-swim sports are unaffected by the strength carve-out.
+    warnings: list[str] = []
+    assert _fit_sport("rowing", None, warnings) == "cross_train"
+    assert len(warnings) == 1
+    assert "rowing" in warnings[0]
+    assert "cross_train" in warnings[0]
+
+
 def test_parse_fit_missing_file_raises():
     with pytest.raises(FileNotFoundError):
         parse_fit(FIXTURES_DIR / "fit" / "does_not_exist.fit")

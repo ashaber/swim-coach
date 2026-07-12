@@ -52,7 +52,20 @@ A Claude design pass to tighten the PWA UI. Low-risk and independent of the DB w
 
 ### Phase 3 — later (unchanged in intent)
 
-Strava OAuth webhook sync first (Garmin Health API if approved); Supabase Auth magic-link + RLS, retiring the shared bearer token; PWA onboarding wizard (CSS-test) + per-athlete spend caps; multi-swimmer onboarding.
+**Ingest: intervals.icu pull (Garmin push partner) — built.** Both athletes
+already have Garmin-connected intervals.icu accounts; a Cloud Run scheduled
+job (`backend/app/sync.py`) pulls each athlete's trailing-14-day activity
+list via their personal intervals.icu API key and downloads the *original*
+device `.fit` (never intervals.icu's lossy `/fit-file` re-encode — see
+`backend/README.md`). Rejected alternatives: **Garmin's official Connect
+Developer Program** — enterprise-only, individuals can't self-authorize
+their own accounts; **Strava** — no original-FIT download (loses SWOLF/
+length frames) and requires a paid subscription for API access beyond the
+basics; **`garminconnect`/`garth`** (unofficial) — ToS-gray and requires
+storing real Garmin credentials, kept as the documented fallback only if
+intervals.icu's FIT proxying ever starts losing frames.
+
+Supabase Auth magic-link + RLS, retiring the shared bearer token; PWA onboarding wizard (CSS-test) + per-athlete spend caps; multi-swimmer onboarding.
 
 ### PROPOSED — feedback-triggered library research loop (design only, not yet built)
 
@@ -256,7 +269,9 @@ Python 3.12 → `pip install -e engine .[dev]` → `pytest tests/unit -v` → `c
 - **CI additions**: backend-unit (pytest + TestClient w/ fake store); api-integration per global standards — `tests/api/` with `requests`, per-run `run_tag` UUID on created rows, delete-by-tag teardown, exit-code discipline; Playwright e2e reusing mtb-skills conftest.py against `web/dist` with a stub API.
 
 ## Phase 3 (sketch)
-Strava OAuth webhook sync first (far easier API access than Garmin), Garmin Health API if approved; Supabase Auth magic-link + RLS policies + retire api_tokens; PWA onboarding flow (CSS test wizard) + per-athlete spend caps.
+**Ingest — built**: intervals.icu pull, see "Phase 3 — later" above for the
+decision and rejected alternatives (Garmin official API, Strava, garminconnect).
+Supabase Auth magic-link + RLS policies + retire api_tokens; PWA onboarding flow (CSS test wizard) + per-athlete spend caps.
 
 ## Phase 1 build order (test-first)
 1. **Day 1**: scaffolding (pyproject, gitignore, README, CLAUDE.md, CI) → `test_models.py`→`models.py`+`store.py` YAML round-trip → `test_zones.py`→`zones.py`.

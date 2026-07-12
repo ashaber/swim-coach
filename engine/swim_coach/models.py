@@ -245,6 +245,13 @@ class Workout(BaseModel):
     # store.FileStore.save_series), NOT the Workout YAML itself -- keeps
     # committed YAML human-readable per CLAUDE.md.
     series_ref: str | None = None
+    # Dedupe key for auto-ingested workouts, e.g. "intervals:i132013445"
+    # (backend/app/sync.py, the intervals.icu -> Garmin auto-sync job).
+    # Additive/optional so every existing Workout YAML (with no external_id
+    # key) keeps validating unchanged -- no schema_version bump. None for
+    # manually logged or CLI-ingested workouts; the sync job is the only
+    # writer of a non-None value today.
+    external_id: str | None = None
 
 
 FeedbackType = Literal["research_question", "feature_request", "comment", "bug"]

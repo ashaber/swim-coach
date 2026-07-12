@@ -49,11 +49,11 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from pydantic import ValidationError
-from swim_coach.analytics import compute_analytics
 from swim_coach.models import Workout
 from swim_coach.parse_files import PARSERS_BY_EXTENSION
 
 from app.auth import require_auth
+from app.enrich import enrich_draft
 from app.logging_config import get_logger
 from app.store_factory import make_store
 
@@ -198,44 +198,12 @@ async def ingest_workout(
         # and derived analytics a CLI ingest gets -- computed once here so
         # `POST /api/workouts` (confirm) doesn't need the original bytes
         # again, since the browser's file input can't hand them back.
-        #
-        # Raw-file/series persistence is FileStore-only until Phase 2.5's
-        # uploaded_files table + Supabase Storage land (ROADMAP.md) -- a
-        # db-backed deploy (STORE_BACKEND=db) has nowhere durable to put the
-        # bytes, so it skips both refs rather than 500ing, tells the athlete
-        # via `warnings`, and still computes analytics (pure functions over
-        # the in-memory parse).
-        if hasattr(store, "save_raw_file"):
-            try:
-                draft.raw_ref = store.save_raw_file(athlete, tmp_path)
-            except FileExistsError as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
-        else:
-            log.warn("workouts.ingest_raw_ref_skipped", athlete=athlete, store=type(store).__name__)
-            # The parser pre-fills raw_ref with its source path -- here that's
-            # the about-to-be-deleted temp file, a meaningless server path that
-            # must not reach the client.
-            draft.raw_ref = None
-            draft.warnings.append(
-                "This backend doesn't retain the original file yet -- keep your export; analytics were still computed."
-            )
-
-        if draft.series is not None and hasattr(store, "save_series"):
-            # No Workout id exists yet (nothing is saved until confirm) --
-            # save_series only needs *a* UUID to build a recognizable sidecar
-            # filename (see its docstring), so a fresh one here is fine; it
-            # doesn't have to match the id the confirmed Workout eventually
-            # gets.
-            draft.series_ref = store.save_series(athlete, draft.date, draft.sport, uuid4(), draft.series)
-
-        draft.analytics = compute_analytics(
-            laps=draft.laps,
-            lengths=draft.lengths,
-            pauses=draft.pauses,
-            series=draft.series,
-            elapsed_min=draft.elapsed_min,
-            moving_min=draft.duration_min,
-        )
+        # `enrich_draft` (app/enrich.py) is shared with backend/app/sync.py
+        # (the intervals.icu auto-sync job) so both paths enrich identically.
+        try:
+            enrich_draft(draft, store=store, athlete=athlete, tmp_path=tmp_path)
+        except FileExistsError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
