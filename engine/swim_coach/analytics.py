@@ -49,6 +49,16 @@ SWOLF_OUTLIER_DURATION_X = 3.0
 # length -- excluded from the SWOLF trend. library/11-workout-analytics.md
 # ("SWOLF as a stroke-efficiency proxy").
 
+STATIONARY_SPEED_MPS = 0.5
+# Coach judgment: a speed-series sample below this is treated as "not
+# moving" for the stationary-pause detector below. library/11-workout-
+# analytics.md ("Stationary-speed pause detection").
+
+STATIONARY_MIN_S = 30.0
+# Coach judgment: a sub-STATIONARY_SPEED_MPS span must last at least this
+# long to count as a real stop, not slow/technical-terrain riding.
+# library/11-workout-analytics.md ("Stationary-speed pause detection").
+
 
 # --- cardiac drift ----------------------------------------------------------------
 
@@ -158,6 +168,68 @@ def cardiac_drift(
     if first == 0:
         return None
     return (second / first - 1) * 100
+
+
+# --- stationary-speed pause detection ------------------------------------------------
+
+
+def stationary_pauses(series: dict) -> list[WorkoutPause]:
+    """Real stops a device with auto-pause off never records as a timer
+    event or a `record`-frame timestamp gap (see library/11-workout-
+    analytics.md, "Stationary-speed pause detection"): every sustained span
+    where `speed_mps` stays below `STATIONARY_SPEED_MPS` for at least
+    `STATIONARY_MIN_S` becomes a `WorkoutPause(source="stationary")`.
+
+    Boundary conventions (both deliberate, not incidental):
+    - A sample is "stationary" only when it is *strictly* below the
+      threshold -- a sample sitting exactly at 0.5 m/s still counts as
+      moving.
+    - A span qualifies once its duration is `>= STATIONARY_MIN_S` -- a span
+      lasting exactly 30.0s counts (mirrors the brief's own framing,
+      "sustained >= 30s"; `GAP_THRESHOLD_S`'s check next door is a strict
+      `>`, but that's a different kind of measurement -- a single gap
+      between two samples, not a summed span -- so the two thresholds
+      aren't required to share an operator).
+
+    A `None` speed sample (a gap in the channel) ends any span in progress
+    rather than being assumed stationary -- there's no signal to confirm it
+    either way, and assuming the wrong direction either silently drops a
+    real stop or silently invents one.
+
+    Returns `[]` if the series carries no `speed_mps` channel at all (e.g.
+    a pool swim with no GPS/speed record data). Deliberately does not know
+    about, or drop, spans that duplicate a timer/gap/idle_length pause --
+    that dedup happens one layer up in `parse_files._merge_pauses`, which
+    treats `"stationary"` as the lowest-precedence source (see its
+    docstring). Also deliberately does not know which *sport* it's being
+    run against -- `parse_files.parse_fit` only calls this for sports
+    calibrated against real data (cycling; see the pool/kayak reconciliation
+    note in library/11-workout-analytics.md), keeping this function itself
+    a plain, reusable scan over any speed series.
+    """
+    t_s = series.get("t_s")
+    speed = series.get("speed_mps")
+    if not t_s or not speed:
+        return []
+
+    pauses: list[WorkoutPause] = []
+    span_start: float | None = None
+    for t, s in zip(t_s, speed):
+        is_stationary = s is not None and s < STATIONARY_SPEED_MPS
+        if is_stationary and span_start is None:
+            span_start = t
+        elif not is_stationary and span_start is not None:
+            _append_stationary_span(pauses, span_start, t)
+            span_start = None
+    if span_start is not None:
+        _append_stationary_span(pauses, span_start, t_s[-1])
+    return pauses
+
+
+def _append_stationary_span(pauses: list[WorkoutPause], start: float, end: float) -> None:
+    duration_s = end - start
+    if duration_s >= STATIONARY_MIN_S:
+        pauses.append(WorkoutPause(start_offset_s=start, duration_s=duration_s, source="stationary"))
 
 
 # --- splits -------------------------------------------------------------------------

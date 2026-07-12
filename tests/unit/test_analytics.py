@@ -14,10 +14,13 @@ from swim_coach.analytics import (
     CARDIAC_DRIFT_FLAG_PCT,
     GAP_THRESHOLD_S,
     SPLIT_EVEN_BAND_PCT,
+    STATIONARY_MIN_S,
+    STATIONARY_SPEED_MPS,
     cardiac_drift,
     pause_summary,
     projected_stop_time_min,
     split_analysis,
+    stationary_pauses,
     swolf_trend,
 )
 from swim_coach.models import WorkoutLap, WorkoutPause
@@ -188,6 +191,77 @@ def test_swolf_trend_excludes_duration_outlier_lengths():
     assert degradation_pct == pytest.approx(0.0)
 
 
+# --- stationary_pauses ----------------------------------------------------------------
+
+
+def _speed_series(samples: list[tuple[float, float | None]]) -> dict:
+    return {"t_s": [t for t, _ in samples], "speed_mps": [s for _, s in samples]}
+
+
+def test_stationary_pauses_no_speed_channel_returns_empty():
+    assert stationary_pauses({}) == []
+    assert stationary_pauses({"t_s": [0, 1], "hr": [100, 101]}) == []
+
+
+def test_stationary_pauses_span_at_exactly_min_duration_counts():
+    # Boundary: a span lasting exactly STATIONARY_MIN_S (30.0s) counts --
+    # this function's ">=" convention mirrors the brief's own framing,
+    # "sustained >= 30s" (see stationary_pauses' docstring).
+    samples = [(0.0, 0.2), (30.0, 2.0), (31.0, 2.0)]
+    pauses = stationary_pauses(_speed_series(samples))
+    assert len(pauses) == 1
+    assert pauses[0].start_offset_s == 0.0
+    assert pauses[0].duration_s == pytest.approx(30.0)
+    assert pauses[0].source == "stationary"
+
+
+def test_stationary_pauses_span_one_second_under_floor_does_not_count():
+    samples = [(0.0, 0.2), (29.0, 2.0), (30.0, 2.0)]
+    assert stationary_pauses(_speed_series(samples)) == []
+
+
+def test_stationary_pauses_speed_exactly_at_threshold_does_not_count_as_stationary():
+    # Boundary: a sample sitting exactly at STATIONARY_SPEED_MPS (0.5 m/s)
+    # is still "moving" (strictly-below convention) -- held there for 40s
+    # produces no pause at all.
+    samples = [(0.0, STATIONARY_SPEED_MPS), (40.0, STATIONARY_SPEED_MPS), (41.0, 2.0)]
+    assert stationary_pauses(_speed_series(samples)) == []
+
+
+def test_stationary_pauses_back_to_back_spans_separated_by_spike_stay_separate():
+    samples = [
+        (0.0, 0.1), (40.0, 0.1),  # first qualifying span
+        (41.0, 2.0),  # brief speed spike -- breaks the span
+        (42.0, 0.1), (82.0, 0.1),  # second qualifying span
+        (83.0, 2.0),
+    ]
+    pauses = stationary_pauses(_speed_series(samples))
+    assert len(pauses) == 2
+    assert pauses[0].start_offset_s == 0.0
+    assert pauses[0].duration_s == pytest.approx(41.0)
+    assert pauses[1].start_offset_s == 42.0
+    assert pauses[1].duration_s == pytest.approx(41.0)
+
+
+def test_stationary_pauses_none_sample_ends_span_without_assuming_either_way():
+    # A None speed sample (a gap in the channel) must not be assumed
+    # stationary -- it ends whatever span was in progress, producing two
+    # separate pauses rather than one continuous one spanning the gap.
+    samples = [(0.0, 0.1), (35.0, None), (36.0, 0.1), (70.0, 2.0)]
+    pauses = stationary_pauses(_speed_series(samples))
+    assert len(pauses) == 2
+    assert pauses[0].duration_s == pytest.approx(35.0)
+    assert pauses[1].duration_s == pytest.approx(34.0)
+
+
+def test_stationary_pauses_trailing_span_at_end_of_series_counts():
+    samples = [(0.0, 2.0), (5.0, 0.1), (40.0, 0.1)]
+    pauses = stationary_pauses(_speed_series(samples))
+    assert len(pauses) == 1
+    assert pauses[0].start_offset_s == 5.0
+    assert pauses[0].duration_s == pytest.approx(35.0)
+
+
 # --- constants exist and are the documented values ------------------------------------
 
 
@@ -195,3 +269,5 @@ def test_constants_have_expected_values():
     assert SPLIT_EVEN_BAND_PCT == 2.0
     assert GAP_THRESHOLD_S == 30.0
     assert CARDIAC_DRIFT_FLAG_PCT == 5.0
+    assert STATIONARY_SPEED_MPS == 0.5
+    assert STATIONARY_MIN_S == 30.0
