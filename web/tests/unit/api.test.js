@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   postWorkout, listWorkouts, postWellness, listWellness, fetchPlan, getAthlete, patchAthlete,
-  postFeedback, listFeedback,
+  postFeedback, listFeedback, uploadWorkoutFile,
 } from '../../src/api.js';
 
 function fakeFetch(body, { ok = true, status = 200 } = {}) {
@@ -220,6 +220,69 @@ describe('postFeedback', () => {
       baseUrl: 'https://api.example.com', token: 't', athlete: 'renee', payload: {},
     });
     expect(result).toEqual({ ok: false, error: 'research_question is coach-only' });
+  });
+});
+
+describe('uploadWorkoutFile', () => {
+  it('POSTs multipart FormData to /api/workouts/ingest with the athlete query param and bearer header, no Content-Type override', async () => {
+    const draft = {
+      date: '2026-03-14', sport: 'swim_pool', source: 'fit', distance_m: 1623, duration_min: 54, warnings: [],
+    };
+    global.fetch = fakeFetch(draft);
+    const file = new File(['fake fit bytes'], 'workout.fit', { type: 'application/octet-stream' });
+
+    const result = await uploadWorkoutFile({
+      baseUrl: 'https://api.example.com', token: 'tok123', athlete: 'renee', file,
+    });
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/workouts/ingest?athlete=renee');
+    expect(init.method).toBe('POST');
+    expect(init.headers.Authorization).toBe('Bearer tok123');
+    // No explicit Content-Type -- fetch must set the multipart boundary itself.
+    expect(init.headers['Content-Type']).toBeUndefined();
+    expect(init.body).toBeInstanceOf(FormData);
+    expect(init.body.get('file')).toBe(file);
+    expect(result).toEqual({ ok: true, data: draft });
+  });
+
+  it('defaults to athlete=renee when not given', async () => {
+    global.fetch = fakeFetch({});
+    const file = new File(['x'], 'a.csv', { type: 'text/csv' });
+    await uploadWorkoutFile({ baseUrl: 'https://api.example.com', token: 't', file });
+    const [url] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/workouts/ingest?athlete=renee');
+  });
+
+  it('returns a normalized error on a 415 unsupported-type response', async () => {
+    global.fetch = fakeFetch({ error: "unsupported file extension '.gpx'" }, { ok: false, status: 415 });
+    const file = new File(['x'], 'a.gpx', { type: 'application/octet-stream' });
+    const result = await uploadWorkoutFile({ baseUrl: 'https://api.example.com', token: 't', file });
+    expect(result).toEqual({ ok: false, error: "unsupported file extension '.gpx'" });
+  });
+
+  it('returns a normalized error on a 413 too-large response', async () => {
+    global.fetch = fakeFetch({ error: 'file too large; max 10 MB' }, { ok: false, status: 413 });
+    const file = new File(['x'], 'huge.fit', { type: 'application/octet-stream' });
+    const result = await uploadWorkoutFile({ baseUrl: 'https://api.example.com', token: 't', file });
+    expect(result).toEqual({ ok: false, error: 'file too large; max 10 MB' });
+  });
+
+  it('returns a normalized error on a 422 parse-failure response', async () => {
+    global.fetch = fakeFetch({ error: 'could not parse corrupt.fit: bad header' }, { ok: false, status: 422 });
+    const file = new File(['garbage'], 'corrupt.fit', { type: 'application/octet-stream' });
+    const result = await uploadWorkoutFile({ baseUrl: 'https://api.example.com', token: 't', file });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/could not parse/);
+  });
+
+  it('returns a normalized error when fetch itself rejects (offline)', async () => {
+    global.fetch = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    const file = new File(['x'], 'a.fit', { type: 'application/octet-stream' });
+    const result = await uploadWorkoutFile({ baseUrl: 'https://api.example.com', token: 't', file });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/connection|reach/i);
   });
 });
 

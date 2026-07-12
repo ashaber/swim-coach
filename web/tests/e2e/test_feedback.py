@@ -102,6 +102,11 @@ def test_feedback_submit_success_shows_saved_and_resets_form(page):
     _configure_backend(page)
     page.click('[data-a="tab:feedback"]')
     page.wait_for_selector('[data-form="feedback"][data-field="body"]')
+    # Wait for the entries fetch to settle before typing: its re-render
+    # replaces the form, so a fill in flight lands on a detached node and its
+    # input events never reach the delegated listener (same race as
+    # test_workout_upload.py's _open_log_tab).
+    page.wait_for_selector('text=Nothing logged yet.')
     page.fill('[data-form="feedback"][data-field="body"]', 'a pace calculator')
     page.click('[data-a="feedback:submit"]')
 
@@ -123,6 +128,8 @@ def test_feedback_submit_failure_shows_error_message(page):
     _configure_backend(page)
     page.click('[data-a="tab:feedback"]')
     page.wait_for_selector('[data-form="feedback"][data-field="body"]')
+    # Same settle-before-fill as the success test above.
+    page.wait_for_selector('text=Nothing logged yet.')
     page.fill('[data-form="feedback"][data-field="body"]', 'a bug report')
     page.click('[data-a="feedback:submit"]')
 

@@ -42,6 +42,17 @@ def page(request, base_url):
     test_coach_chat.py's `page` fixture docstring for why (the Settings
     tab's profile-edit section fetches it as soon as `_configure_backend`
     lands back on that tab). test_profile_edit.py covers that section's own
+    behavior.
+
+    Likewise mocks a default empty `GET /api/workouts` -- opening the Log
+    tab while configured fires that fetch for the history section (see
+    main.js's loadHistory), and unmocked it fails against this file's fake
+    backend origin, which WebKit reports as an uncaught pageerror that trips
+    this fixture's teardown assertion (same fix as test_workout_upload.py's
+    fixture). Registered at the *context* level so the submit tests' own
+    page.route('**/api/workouts*', ...) handlers still take precedence, and
+    the glob's trailing '*' never crosses '/', so ingest-style subpaths are
+    unaffected. test_workout_history.py covers the history section's own
     behavior."""
     cfg = request.param
     with sync_playwright() as pw:
@@ -54,6 +65,10 @@ def page(request, base_url):
         ctx.route(
             '**/api/athlete*',
             _cors_route(200, 'application/json', '{"slug": "renee", "name": "Renee"}'),
+        )
+        ctx.route(
+            '**/api/workouts*',
+            _cors_route(200, 'application/json', '[]'),
         )
         pg = ctx.new_page()
         js_errors: list[str] = []

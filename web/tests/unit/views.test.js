@@ -104,8 +104,10 @@ describe('renderLogTab', () => {
   const baseArgs = {
     form: { date: '2026-07-11', sport: 'swim_pool', distance_m: '', duration_min: '', rpe: 5, notes: '' },
     submit: { status: 'idle', message: null },
+    ingest: { status: 'idle', fileName: null, error: null },
     backendConfigured: true,
     online: true,
+    history: { status: 'idle', data: [], error: null },
   };
 
   it('includes the history section when backend is configured', () => {

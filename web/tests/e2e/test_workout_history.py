@@ -134,7 +134,10 @@ def test_history_shows_empty_state_when_no_workouts_logged(page):
     page.route('**/api/workouts*', _cors_route(200, 'application/json', '[]'))
     _configure_backend(page)
     page.click('[data-a="tab:log"]')
-    page.wait_for_selector('.hist-section')
+    # .hist-section alone also matches the "Loading history…" render, so wait
+    # for the settled empty state -- asserting right after the bare selector
+    # races the (mocked) fetch on slow runners.
+    page.wait_for_selector('.hist-section:has-text("No workouts logged yet.")')
     assert 'No workouts logged yet.' in page.content()
 
 
@@ -173,7 +176,10 @@ def test_history_refreshes_after_a_successful_manual_log_submit(page):
 
     _configure_backend(page)
     page.click('[data-a="tab:log"]')
-    page.wait_for_selector('.hist-section')
+    # Settled empty state, not the bare section (which matches the loading
+    # render too) -- also ensures the history fetch's re-render has landed
+    # before the fills below, so they can't hit a detached form node.
+    page.wait_for_selector('.hist-section:has-text("No workouts logged yet.")')
     assert 'No workouts logged yet.' in page.content()
 
     page.fill('[data-form="log"][data-field="distance_m"]', '3000')

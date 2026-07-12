@@ -6,6 +6,7 @@ import {
   kgToLb, lbToKg,
   poolScheduleToDayMap, dayMapToPoolSchedule,
   profileFormFromAthlete, serializeProfileForm,
+  logFormFromDraft,
 } from '../../src/forms.js';
 
 describe('serializeWorkoutForm', () => {
@@ -37,6 +38,41 @@ describe('serializeWorkoutForm', () => {
     const result = serializeWorkoutForm(form);
     expect(result.distance_m).toBe(0);
     expect(result.duration_min).toBe(0);
+  });
+
+  it('omits source for an ordinary manual entry', () => {
+    const form = {
+      date: '2026-07-07', sport: 'swim_pool', distance_m: '3000', duration_min: '60', rpe: '6', notes: '',
+    };
+    expect(serializeWorkoutForm(form)).not.toHaveProperty('source');
+  });
+
+  it('passes through source when the form came from a parsed file (Phase 3 upload confirm step)', () => {
+    const form = {
+      date: '2026-07-07', sport: 'swim_ow', distance_m: '1623', duration_min: '54', rpe: '7', notes: '', source: 'fit',
+    };
+    expect(serializeWorkoutForm(form).source).toBe('fit');
+  });
+
+  it('passes through raw_ref/series_ref/analytics/laps when the form carries them (confirming a file-upload draft), so the saved workout gets the same enrichment the ingest step already computed', () => {
+    const form = {
+      date: '2026-07-09', sport: 'cross_train', distance_m: '5000', duration_min: '180', rpe: '6', notes: '', source: 'fit',
+      raw_ref: 'athletes/andrew/logs/files/AndrewKayak_ACTIVITY.fit',
+      series_ref: 'athletes/andrew/logs/series/2026-07-09-cross_train-abc12345.json',
+      analytics: { cardiac_drift_pct: -13.77, pause_count: 0 },
+      laps: [{ lap_index: 1 }],
+      lengths: [],
+      pauses: [],
+      avg_hr: 128,
+      max_hr: 161,
+    };
+    const result = serializeWorkoutForm(form);
+    expect(result.raw_ref).toBe(form.raw_ref);
+    expect(result.series_ref).toBe(form.series_ref);
+    expect(result.analytics).toEqual(form.analytics);
+    expect(result.laps).toEqual(form.laps);
+    expect(result.avg_hr).toBe(128);
+    expect(result.max_hr).toBe(161);
   });
 });
 
@@ -291,5 +327,66 @@ describe('serializeFeedbackForm', () => {
   it('supports comment and bug types', () => {
     expect(serializeFeedbackForm({ type: 'comment', body: 'nice app' }).type).toBe('comment');
     expect(serializeFeedbackForm({ type: 'bug', body: 'plan tab crashed' }).type).toBe('bug');
+  });
+});
+
+describe('logFormFromDraft', () => {
+  const existingForm = {
+    date: '2026-07-01', sport: 'swim_pool', distance_m: '', duration_min: '', rpe: 5, notes: '', source: null, warnings: [],
+  };
+
+  it('pre-fills date/sport/distance/duration from a parsed WorkoutDraft', () => {
+    const draft = {
+      date: '2026-03-14', sport: 'swim_pool', source: 'fit', distance_m: 1623, duration_min: 54, warnings: [],
+    };
+    const result = logFormFromDraft(draft, existingForm);
+    expect(result.date).toBe('2026-03-14');
+    expect(result.sport).toBe('swim_pool');
+    expect(result.distance_m).toBe('1623');
+    expect(result.duration_min).toBe('54');
+    expect(result.source).toBe('fit');
+  });
+
+  it('resets RPE to blank -- a file never carries effort, so it must be explicitly re-entered', () => {
+    const draft = { date: '2026-03-14', sport: 'swim_pool', source: 'fit', distance_m: 1623, duration_min: 54, warnings: [] };
+    const result = logFormFromDraft(draft, { ...existingForm, rpe: 8 });
+    expect(result.rpe).toBe('');
+  });
+
+  it('carries warnings through onto the form for the review card to render', () => {
+    const draft = {
+      date: '2026-07-09', sport: 'cross_train', source: 'fit', distance_m: 5000, duration_min: 180,
+      warnings: ["non-swim FIT sport 'kayaking' mapped to cross_train (counts toward sRPE load, not swim volume)"],
+    };
+    const result = logFormFromDraft(draft, existingForm);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatch(/kayaking/);
+  });
+
+  it('preserves notes already typed before the file was picked', () => {
+    const draft = { date: '2026-07-09', sport: 'swim_pool', source: 'csv', distance_m: 2500, duration_min: 45, warnings: [] };
+    const result = logFormFromDraft(draft, { ...existingForm, notes: 'pre-existing note' });
+    expect(result.notes).toBe('pre-existing note');
+  });
+
+  it('carries the ingest-computed raw_ref/series_ref/analytics/laps through onto the form invisibly, so confirm can send them on', () => {
+    const draft = {
+      date: '2026-07-09', sport: 'cross_train', source: 'fit', distance_m: 5000, duration_min: 180, warnings: [],
+      raw_ref: 'athletes/andrew/logs/files/AndrewKayak_ACTIVITY.fit',
+      series_ref: 'athletes/andrew/logs/series/2026-07-09-cross_train-abc12345.json',
+      analytics: { cardiac_drift_pct: -13.77, pause_count: 0 },
+      laps: [{ lap_index: 1 }],
+      lengths: [],
+      pauses: [],
+      avg_hr: 128,
+      max_hr: 161,
+    };
+    const result = logFormFromDraft(draft, existingForm);
+    expect(result.raw_ref).toBe(draft.raw_ref);
+    expect(result.series_ref).toBe(draft.series_ref);
+    expect(result.analytics).toEqual(draft.analytics);
+    expect(result.laps).toEqual(draft.laps);
+    expect(result.avg_hr).toBe(128);
+    expect(result.max_hr).toBe(161);
   });
 });

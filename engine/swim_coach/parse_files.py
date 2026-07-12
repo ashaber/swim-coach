@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import csv
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
 from typing import Literal
@@ -772,3 +773,17 @@ def parse_fit(path: str | Path) -> WorkoutDraft:
         series=series,
         elapsed_min=session_elapsed_s / 60 if session_elapsed_s is not None else None,
     )
+
+
+# --- shared extension -> parser dispatch table -------------------------------------------
+# The single source of truth for "which file extensions this system can
+# ingest," keyed lowercase-with-dot. Both `cli.py`'s `ingest` subcommand and
+# the backend's `POST /api/workouts/ingest` route (Phase 3, athlete-facing
+# upload) dispatch through this same table rather than each keeping their own
+# copy, so adding/removing a supported extension is a one-line change in one
+# place.
+PARSERS_BY_EXTENSION: dict[str, Callable[[str | Path], WorkoutDraft]] = {
+    ".tcx": parse_tcx,
+    ".csv": parse_csv,
+    ".fit": parse_fit,
+}
