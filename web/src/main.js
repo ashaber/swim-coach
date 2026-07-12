@@ -446,13 +446,32 @@ async function handleSubmitLog() {
 function handleOpenHistoryDetail(id) {
   if (!id) return;
   state.workoutDetailId = id;
+  // Pushes an in-app history entry so hardware/gesture back (which fires a
+  // `popstate`, handled below) closes the detail instead of navigating the
+  // PWA away entirely -- see handlePopState and onAppClick's `history:back`
+  // case, which now goes through `history.back()` rather than calling
+  // handleCloseHistoryDetail() directly, keeping browser history and app
+  // state symmetric either way the detail gets closed.
+  history.pushState({ workoutDetail: id }, '');
   log.info('history.detail_opened', { athlete: athleteSlug(), workout_id: id });
   render();
 }
 
 function handleCloseHistoryDetail() {
+  if (!state.workoutDetailId) return; // avoids a redundant render on popstate re-entrancy
   state.workoutDetailId = null;
   render();
+}
+
+// Closes the detail view on a hardware/gesture back press. Deliberately
+// does NOT call history.back()/pushState itself -- it's the *target* of a
+// popstate that already happened, so doing either here would create a
+// pushState/popstate loop. handleCloseHistoryDetail's own guard makes this
+// safe to call unconditionally on every popstate, including ones unrelated
+// to the detail view (e.g. none currently exist, but this stays inert if
+// one is added later).
+function handlePopState() {
+  handleCloseHistoryDetail();
 }
 
 /** Clears a stale detail selection after a history refresh whose new data
@@ -463,6 +482,20 @@ function pruneDetailIdIfMissing(workouts) {
   if (state.workoutDetailId && !workouts.some((w) => w.id === state.workoutDetailId)) {
     state.workoutDetailId = null;
   }
+}
+
+/** Shared "should loadHistory() fire right now?" check -- used both by
+ * setTab's Log-tab branch (a real tab switch) and by the boot sequence at
+ * the bottom of this file (the active tab already being 'log' on a fresh
+ * page load, e.g. reopening the PWA -- see that call site's comment for
+ * why setTab alone doesn't cover that case). Covers "never loaded yet"
+ * (idle) and "let's retry" (a previous fetch errored), gated on `online`
+ * too: history fetches only when configured *and* online -- offline just
+ * shows whatever's already cached in state, or a quiet notice if nothing
+ * is. */
+function shouldLoadHistoryNow() {
+  return (state.workoutHistory.status === 'idle' || state.workoutHistory.status === 'error')
+    && isConfigured(state.settingsForm, state.identity) && state.online;
 }
 
 async function loadHistory() {
@@ -720,7 +753,18 @@ function setTab(tab) {
   if (!KNOWN_TABS.includes(tab) || tab === state.tab) return;
   // Leaving the Log tab always drops any open workout-detail view -- coming
   // back to Log should land on the list, not wherever the athlete last was.
-  if (state.tab === 'log') state.workoutDetailId = null;
+  if (state.tab === 'log' && state.workoutDetailId) {
+    state.workoutDetailId = null;
+    // Consumes the pushState entry handleOpenHistoryDetail added (see
+    // there), keeping browser history symmetric with app state -- without
+    // this, a dangling entry would sit in the stack and silently swallow
+    // the athlete's *next* hardware/gesture back press instead of doing
+    // anything visible. Safe: handlePopState's handleCloseHistoryDetail()
+    // call is a no-op once workoutDetailId is already null (set above), so
+    // this can't re-trigger any state change when the resulting popstate
+    // fires.
+    history.back();
+  }
   state.tab = tab;
   saveActiveTab(tab);
   log.info('tab.switch', { tab });
@@ -737,11 +781,9 @@ function setTab(tab) {
     loadFeedback(); // calls render() itself
     return;
   }
-  // Same lazy-load convention, gated on `online` too (see the task brief:
-  // history fetches only when configured *and* online -- offline just shows
-  // whatever's already cached in state, or a quiet notice if nothing is).
-  if (tab === 'log' && (state.workoutHistory.status === 'idle' || state.workoutHistory.status === 'error')
-    && isConfigured(state.settingsForm, state.identity) && state.online) {
+  // Same lazy-load convention as Plan/Feedback above -- see
+  // shouldLoadHistoryNow()'s doc comment.
+  if (tab === 'log' && shouldLoadHistoryNow()) {
     loadHistory(); // calls render() itself
     return;
   }
@@ -774,7 +816,10 @@ function onAppClick(e) {
     case 'feedback:submit': handleSubmitFeedback(); break;
     case 'history:retry': loadHistory(); break;
     case 'history:open': handleOpenHistoryDetail(el.dataset.id); break;
-    case 'history:back': handleCloseHistoryDetail(); break;
+    // Goes through history.back() (not handleCloseHistoryDetail() directly)
+    // so the in-app "back" affordance and a hardware/gesture back press
+    // close the detail via the exact same path -- see handlePopState.
+    case 'history:back': history.back(); break;
     case 'identity:signout': handleSignOut(); break;
     default: break;
   }
@@ -881,6 +926,9 @@ function initTheme() {
 
 window.addEventListener('online', updateOnlineState);
 window.addEventListener('offline', updateOnlineState);
+// See handleOpenHistoryDetail/handleCloseHistoryDetail/setTab for the rest
+// of the detail-view <-> browser-history wiring this closes the loop on.
+window.addEventListener('popstate', handlePopState);
 
 appEl.addEventListener('click', onAppClick);
 appEl.addEventListener('change', onAppChange);
@@ -893,3 +941,16 @@ initTheme();
 render();
 loadPlan();
 maybeLoadProfile();
+// loadPlan() above self-gates on isConfigured and is otherwise unconditional
+// at boot; loadHistory() has no such caller-independent self-gate -- until
+// now the only caller was setTab's Log-tab branch, so history stayed stuck
+// on 'idle' forever if the athlete reopened the PWA with Log already the
+// persisted active tab (state.tab restores from localStorage without ever
+// calling setTab, since no navigation happened). Covers that case the same
+// way setTab does -- see shouldLoadHistoryNow(). state.identity is already
+// resolved synchronously above (identity.js's currentIdentity() is a plain
+// localStorage read, no network round trip -- see initialIdentity at the
+// top of this file), so this reads the same populated state setTab would.
+if (state.tab === 'log' && shouldLoadHistoryNow()) {
+  loadHistory();
+}
