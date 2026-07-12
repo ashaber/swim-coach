@@ -424,7 +424,7 @@ function renderIngestSummary(ingest, form) {
 }
 
 export function renderLogTab({
-  form, submit, ingest, backendConfigured, online,
+  form, submit, ingest, backendConfigured, online, history,
 }) {
   const rpeMissing = form.rpe === '' || form.rpe === null || form.rpe === undefined;
   const uploading = ingest.status === 'uploading';

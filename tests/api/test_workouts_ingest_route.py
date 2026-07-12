@@ -4,16 +4,26 @@ Phase 3: the parsers in `swim_coach.parse_files` previously had no
 athlete-reachable path (CLI-only, on Andrew's machine). This route lets the
 PWA's Log tab upload a watch export, get back a parsed `WorkoutDraft`
 (including any `warnings`), and review it before a *separate* confirm step
-saves it via the existing `POST /api/workouts`. This endpoint itself never
-persists anything -- it's pure parse-and-return, so these tests assert both
-"the draft looks right" and "nothing was saved as a side effect."
+saves a `Workout` record via the existing `POST /api/workouts`. This
+endpoint itself never saves a `Workout` -- it's parse-and-return, so several
+tests below assert both "the draft looks right" and "no Workout was saved as
+a side effect." It DOES, however, run the same enrichment `swim_coach.cli`'s
+`ingest --save` does (durable raw-file copy, series sidecar, analytics) --
+see `backend/app/routes/workouts.py`'s module docstring for why that happens
+here rather than at confirm time, and the real-fixture tests below for
+coverage of it.
 
 Boundary-validation tests (extension allowlist, size cap, parse failure,
 auth) matter more here than deep parser-correctness -- that's
 `tests/unit/test_parse_files.py`'s job. This module double-checks the wiring
-plus the one real-file case (mirroring that module's own
+plus the real-file cases (mirroring that module's own
 `FIT_FIXTURE.exists()` skip pattern) since a real .fit is the file type most
-likely to surprise the route (multipart handling, tempfile round-trip).
+likely to surprise the route (multipart handling, tempfile round-trip, and
+now the raw-file/series-sidecar enrichment) -- `real_swim.fit` (a pool swim,
+no continuous series -- see `tests/unit/test_cli.py`'s
+`test_ingest_fit_pool_swim_has_lengths_and_no_sidecar`) and `real_kayak.fit`
+(cross_train, has a continuous HR series) between them exercise both the
+with-series and without-series enrichment paths.
 """
 
 from __future__ import annotations
@@ -24,6 +34,7 @@ from fakes import auth_headers
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIT_FIXTURE = REPO_ROOT / "tests" / "unit" / "fixtures" / "fit" / "real_swim.fit"
+FIT_KAYAK_FIXTURE = REPO_ROOT / "tests" / "unit" / "fixtures" / "fit" / "real_kayak.fit"
 TCX_FIXTURE = REPO_ROOT / "tests" / "unit" / "fixtures" / "tcx" / "sample_pool_swim.tcx"
 CSV_FIXTURE = REPO_ROOT / "tests" / "unit" / "fixtures" / "csv" / "sample_garmin_export.csv"
 
@@ -129,7 +140,11 @@ def _fit_missing() -> bool:
     return not FIT_FIXTURE.exists()
 
 
-def test_ingest_parses_real_fit_fixture(client) -> None:
+def _fit_kayak_missing() -> bool:
+    return not FIT_KAYAK_FIXTURE.exists()
+
+
+def test_ingest_parses_real_fit_fixture(client, athletes_dir) -> None:
     if _fit_missing():
         import pytest
 
@@ -140,3 +155,51 @@ def test_ingest_parses_real_fit_fixture(client) -> None:
     assert body["source"] == "fit"
     assert body["distance_m"] > 0
     assert body["duration_min"] > 0
+
+    # Enrichment (mirrors swim_coach.cli's `ingest --save`, see the module
+    # docstring): a durable raw-file copy always happens, even for a fixture
+    # like this one whose parse produces no continuous series.
+    assert "series" not in body  # never sent over the wire (see the route)
+    assert body["raw_ref"] is not None
+    raw_path = Path(body["raw_ref"])
+    assert raw_path.exists()
+    assert raw_path == athletes_dir / "renee" / "logs" / "files" / FIT_FIXTURE.name
+    assert body["series_ref"] is None  # pool swim -- no continuous series
+    assert body["analytics"] is not None
+    assert len(body["lengths"]) > 0
+
+
+def test_ingest_real_fit_kayak_fixture_gets_series_and_analytics(client, athletes_dir) -> None:
+    if _fit_kayak_missing():
+        import pytest
+
+        pytest.skip("no real .fit fixture at tests/unit/fixtures/fit/real_kayak.fit")
+    response = _upload(client, FIT_KAYAK_FIXTURE, content_type="application/octet-stream")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "fit"
+    assert body["sport"] == "cross_train"
+
+    assert "id" not in body  # still never persisted as a Workout here
+
+    raw_path = Path(body["raw_ref"])
+    assert raw_path.exists()
+    assert raw_path == athletes_dir / "renee" / "logs" / "files" / FIT_KAYAK_FIXTURE.name
+
+    assert body["series_ref"] is not None
+    series_path = Path(body["series_ref"])
+    assert series_path.exists()
+    import json as _json
+
+    series = _json.loads(series_path.read_text(encoding="utf-8"))
+    assert "hr" in series
+
+    assert body["analytics"] is not None
+    assert body["analytics"]["pause_count"] == 0
+
+    # Never persisted server-side -- ingest is still parse-and-enrich-only,
+    # not save (see module docstring); confirming is a separate
+    # POST /api/workouts call.
+    after = client.get("/api/workouts?athlete=renee", headers=auth_headers())
+    assert after.status_code == 200
+    assert all(w.get("raw_ref") != body["raw_ref"] for w in after.json())

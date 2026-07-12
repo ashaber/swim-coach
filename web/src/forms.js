@@ -20,10 +20,26 @@ function toNullableText(value) {
   return trimmed ? trimmed : null;
 }
 
+// Fields a parsed file (Phase 3 upload) can populate beyond the plain manual
+// entry ones -- carried from `logFormFromDraft` through to
+// `serializeWorkoutForm` below only when present, so an ordinary manual
+// entry's payload is unaffected. See `backend/app/routes/workouts.py`'s
+// `POST /api/workouts/ingest` (which computes these via the same enrichment
+// `swim_coach.cli`'s `ingest --save` does) and `engine/swim_coach/models.py`'s
+// `Workout` (which accepts every one of these as an optional field).
+const DRAFT_ENRICHMENT_FIELDS = [
+  'raw_ref', 'series_ref', 'analytics', 'laps', 'lengths', 'pauses', 'avg_hr', 'max_hr',
+];
+
 /** Serializes the Log tab's form state into a `POST /api/workouts` body.
  * `source` is included only when the form carries one (i.e. it came from a
  * confirmed file-upload draft -- see `logFormFromDraft` below); an ordinary
- * manual entry omits it entirely and the backend defaults to `"manual"`. */
+ * manual entry omits it entirely and the backend defaults to `"manual"`.
+ * Likewise, `DRAFT_ENRICHMENT_FIELDS` (raw_ref/series_ref/analytics/laps/
+ * lengths/pauses/avg_hr/max_hr) are included only when the form actually
+ * carries them -- so a confirmed file-upload persists with the exact same
+ * laps/pauses/analytics the ingest step already computed, while a manual
+ * entry's payload is untouched. */
 export function serializeWorkoutForm(form) {
   const payload = {
     date: form.date,
@@ -34,6 +50,9 @@ export function serializeWorkoutForm(form) {
     notes: toNullableText(form.notes),
   };
   if (form.source) payload.source = form.source;
+  DRAFT_ENRICHMENT_FIELDS.forEach((field) => {
+    if (form[field] !== undefined) payload[field] = form[field];
+  });
   return payload;
 }
 
@@ -46,9 +65,12 @@ export function serializeWorkoutForm(form) {
  * views.js's `renderLogTab`, which disables Save while `rpe` is blank).
  * `source`/`warnings` ride along on the form object purely for the review
  * UI: `source` feeds back into `serializeWorkoutForm` above at confirm time,
- * `warnings` is read directly by views.js and never sent to the backend. */
+ * `warnings` is read directly by views.js and never sent to the backend.
+ * `DRAFT_ENRICHMENT_FIELDS` also ride along, invisibly to the review UI, so
+ * confirming doesn't lose the raw-file/series/analytics the ingest step
+ * already computed -- see serializeWorkoutForm above. */
 export function logFormFromDraft(draft, existingForm) {
-  return {
+  const form = {
     ...existingForm,
     date: draft.date || existingForm.date,
     sport: draft.sport || existingForm.sport,
@@ -58,6 +80,10 @@ export function logFormFromDraft(draft, existingForm) {
     source: draft.source || null,
     warnings: draft.warnings || [],
   };
+  DRAFT_ENRICHMENT_FIELDS.forEach((field) => {
+    if (draft[field] !== undefined) form[field] = draft[field];
+  });
+  return form;
 }
 
 /** Serializes the Check-in tab's form state into a `POST /api/wellness` body. */

@@ -53,6 +53,27 @@ describe('serializeWorkoutForm', () => {
     };
     expect(serializeWorkoutForm(form).source).toBe('fit');
   });
+
+  it('passes through raw_ref/series_ref/analytics/laps when the form carries them (confirming a file-upload draft), so the saved workout gets the same enrichment the ingest step already computed', () => {
+    const form = {
+      date: '2026-07-09', sport: 'cross_train', distance_m: '5000', duration_min: '180', rpe: '6', notes: '', source: 'fit',
+      raw_ref: 'athletes/andrew/logs/files/AndrewKayak_ACTIVITY.fit',
+      series_ref: 'athletes/andrew/logs/series/2026-07-09-cross_train-abc12345.json',
+      analytics: { cardiac_drift_pct: -13.77, pause_count: 0 },
+      laps: [{ lap_index: 1 }],
+      lengths: [],
+      pauses: [],
+      avg_hr: 128,
+      max_hr: 161,
+    };
+    const result = serializeWorkoutForm(form);
+    expect(result.raw_ref).toBe(form.raw_ref);
+    expect(result.series_ref).toBe(form.series_ref);
+    expect(result.analytics).toEqual(form.analytics);
+    expect(result.laps).toEqual(form.laps);
+    expect(result.avg_hr).toBe(128);
+    expect(result.max_hr).toBe(161);
+  });
 });
 
 describe('serializeWellnessForm', () => {
@@ -346,5 +367,26 @@ describe('logFormFromDraft', () => {
     const draft = { date: '2026-07-09', sport: 'swim_pool', source: 'csv', distance_m: 2500, duration_min: 45, warnings: [] };
     const result = logFormFromDraft(draft, { ...existingForm, notes: 'pre-existing note' });
     expect(result.notes).toBe('pre-existing note');
+  });
+
+  it('carries the ingest-computed raw_ref/series_ref/analytics/laps through onto the form invisibly, so confirm can send them on', () => {
+    const draft = {
+      date: '2026-07-09', sport: 'cross_train', source: 'fit', distance_m: 5000, duration_min: 180, warnings: [],
+      raw_ref: 'athletes/andrew/logs/files/AndrewKayak_ACTIVITY.fit',
+      series_ref: 'athletes/andrew/logs/series/2026-07-09-cross_train-abc12345.json',
+      analytics: { cardiac_drift_pct: -13.77, pause_count: 0 },
+      laps: [{ lap_index: 1 }],
+      lengths: [],
+      pauses: [],
+      avg_hr: 128,
+      max_hr: 161,
+    };
+    const result = logFormFromDraft(draft, existingForm);
+    expect(result.raw_ref).toBe(draft.raw_ref);
+    expect(result.series_ref).toBe(draft.series_ref);
+    expect(result.analytics).toEqual(draft.analytics);
+    expect(result.laps).toEqual(draft.laps);
+    expect(result.avg_hr).toBe(128);
+    expect(result.max_hr).toBe(161);
   });
 });

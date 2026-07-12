@@ -14,7 +14,7 @@ handler `app.main` already installs for every other route).
 Two-step upload (Phase 3, "make .fit upload actually reachable by the
 athlete"): `POST /api/workouts/ingest` parses an uploaded file **in memory**
 and returns the resulting `WorkoutDraft` (including `warnings`) WITHOUT
-saving anything -- a parsed file can be wrong (a kayak mapped to
+saving a `Workout` record -- a parsed file can be wrong (a kayak mapped to
 cross_train; a bad date) and RPE is never knowable from the file, so
 auto-saving would risk silently corrupting the athlete's training log. The
 PWA renders the draft as a review card, the athlete adds RPE/notes and
@@ -24,10 +24,23 @@ fabricated "manual". `source` is therefore no longer server-hardcoded; it's
 client-settable but restricted to `_CLIENT_SETTABLE_SOURCES` (excludes
 `coach_text`, which is still CLI/skill-only -- see `_cmd_ingest` in
 `engine/swim_coach/cli.py`).
+
+Even though the ingest step itself doesn't save a `Workout`, it DOES run the
+same enrichment `swim_coach.cli`'s `ingest --save` does -- a durable raw-file
+copy (`FileStore.save_raw_file`), a time-series sidecar when the parser
+produced one (`FileStore.save_series`), and `swim_coach.analytics.
+compute_analytics` -- and folds `raw_ref`/`series_ref`/`analytics` into the
+returned draft. `web/src/forms.js`'s `logFormFromDraft` carries those fields
+through the review form, so the confirm-time `POST /api/workouts` call below
+(which passes arbitrary draft fields straight into the `Workout` model)
+persists a workout with the exact same laps/pauses/analytics an equivalent
+CLI ingest would have produced -- a web-uploaded .fit is never a
+second-class citizen next to one ingested on Andrew's machine.
 """
 
 from __future__ import annotations
 
+import shutil
 import tempfile
 import time
 from pathlib import Path
@@ -36,6 +49,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from pydantic import ValidationError
+from swim_coach.analytics import compute_analytics
 from swim_coach.models import Workout
 from swim_coach.parse_files import PARSERS_BY_EXTENSION
 
@@ -109,20 +123,24 @@ async def ingest_workout(
     athlete: str = Query("renee"),
     _token: str = Depends(require_auth),
 ) -> dict:
-    """Parses an uploaded `.fit`/`.tcx`/`.csv` file in memory and returns the
-    resulting `WorkoutDraft` as JSON. Never persists anything -- see module
-    docstring for the two-step upload/review/confirm rationale.
+    """Parses an uploaded `.fit`/`.tcx`/`.csv` file, enriches it exactly like
+    `swim_coach.cli`'s `ingest` command does, and returns the resulting
+    `WorkoutDraft` as JSON. Never saves a `Workout` record -- see module
+    docstring for the two-step upload/review/confirm rationale, and for why
+    the enrichment (raw-file copy, series sidecar, analytics) still happens
+    here rather than waiting for confirm.
 
     Validation at the boundary, in order: auth -> known athlete -> extension
     allowlist (case-insensitive, matched off the client-supplied filename --
     never used as a filesystem path, only to look up an extension) -> size
-    cap -> non-empty -> parse. The raw file is written to a `NamedTemporaryFile`
-    only because `parse_fit`/`parse_tcx`/`parse_csv` take a path (fitdecode
-    in particular needs to seek); the temp file lives only for the duration
-    of the parse call and is always removed in a `finally`, even on parse
-    failure. The uploaded bytes are never written anywhere else -- raw-file
-    archival (so a re-parse is possible after a parser bugfix) is a real gap,
-    documented as a known limitation rather than solved here.
+    cap -> non-empty -> parse. The raw file is written into a dedicated temp
+    directory (rather than `NamedTemporaryFile`) under its own basename --
+    `parse_fit`/`parse_tcx`/`parse_csv` need a real path (fitdecode in
+    particular seeks), and `store.save_raw_file` copies by path too, so
+    giving the temp file the athlete's own (sanitized) filename means the
+    durable copy under `athletes/<slug>/logs/files/` is one a human can
+    recognize, the same way a CLI ingest's copy is. The temp directory is
+    always removed in a `finally`, even on parse/enrichment failure.
     """
     start = time.monotonic()
     settings = request.app.state.settings
@@ -150,29 +168,67 @@ async def ingest_workout(
     if not contents:
         raise HTTPException(status_code=400, detail="uploaded file is empty")
 
-    tmp_path: Path | None = None
+    # `Path(...).name` drops any directory components a hostile filename
+    # might carry, matching the "never used as a filesystem path" property
+    # the extension lookup above already relies on.
+    safe_name = Path(filename).name or f"upload{ext}"
+    tmp_dir = Path(tempfile.mkdtemp(prefix="swimcoach-ingest-"))
+    tmp_path = tmp_dir / safe_name
     try:
-        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
-            tmp.write(contents)
-            tmp_path = Path(tmp.name)
-        draft = parser_fn(tmp_path)
-    except Exception as exc:  # noqa: BLE001 - parse_files' parsers are best-effort
-        # against real-world exports and have only ever been validated
-        # against two real files (see parse_files.py's module docstring and
-        # the PR that added this route) -- a malformed/unexpected file must
-        # come back as a clean, specific 4xx, never a raw traceback and
-        # never a generic 500. File contents/GPS data are never logged, only
-        # the failure and the extension.
-        log.warn(
-            "workouts.ingest_parse_failed",
-            athlete=athlete,
-            ext=ext,
-            error=str(exc),
+        tmp_path.write_bytes(contents)
+        try:
+            draft = parser_fn(tmp_path)
+        except Exception as exc:  # noqa: BLE001 - parse_files' parsers are best-effort
+            # against real-world exports and have only ever been validated
+            # against two real files (see parse_files.py's module docstring and
+            # the PR that added this route) -- a malformed/unexpected file must
+            # come back as a clean, specific 4xx, never a raw traceback and
+            # never a generic 500. File contents/GPS data are never logged, only
+            # the failure and the extension.
+            log.warn(
+                "workouts.ingest_parse_failed",
+                athlete=athlete,
+                ext=ext,
+                error=str(exc),
+            )
+            raise HTTPException(status_code=422, detail=f"could not parse {filename or 'file'}: {exc}") from exc
+
+        # Mirror `_cmd_ingest`'s save path (engine/swim_coach/cli.py) so an
+        # uploaded .fit gets the same durable raw-file copy, series sidecar,
+        # and derived analytics a CLI ingest gets -- computed once here so
+        # `POST /api/workouts` (confirm) doesn't need the original bytes
+        # again, since the browser's file input can't hand them back.
+        try:
+            draft.raw_ref = store.save_raw_file(athlete, tmp_path)
+        except FileExistsError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        if draft.series is not None:
+            # No Workout id exists yet (nothing is saved until confirm) --
+            # save_series only needs *a* UUID to build a recognizable sidecar
+            # filename (see its docstring), so a fresh one here is fine; it
+            # doesn't have to match the id the confirmed Workout eventually
+            # gets.
+            draft.series_ref = store.save_series(athlete, draft.date, draft.sport, uuid4(), draft.series)
+
+        draft.analytics = compute_analytics(
+            laps=draft.laps,
+            lengths=draft.lengths,
+            pauses=draft.pauses,
+            series=draft.series,
+            elapsed_min=draft.elapsed_min,
+            moving_min=draft.duration_min,
         )
-        raise HTTPException(status_code=422, detail=f"could not parse {filename or 'file'}: {exc}") from exc
     finally:
-        if tmp_path is not None:
-            tmp_path.unlink(missing_ok=True)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    draft_dump = draft.model_dump(mode="json")
+    # `series` (a per-record time-series payload -- thousands of samples for
+    # a multi-hour .fit) is never returned over the wire, same convention as
+    # cli.py's `ingest` command -- it's already been persisted to the series
+    # sidecar above (series_ref) and would otherwise dwarf every other field
+    # in this response.
+    draft_dump.pop("series", None)
 
     duration_ms = round((time.monotonic() - start) * 1000, 2)
     log.info(
@@ -183,9 +239,10 @@ async def ingest_workout(
         distance_m=draft.distance_m,
         duration_min=draft.duration_min,
         warning_count=len(draft.warnings),
+        has_analytics=draft.analytics is not None,
         duration_ms=duration_ms,
     )
-    return draft.model_dump(mode="json")
+    return draft_dump
 
 
 @router.get("/api/workouts")

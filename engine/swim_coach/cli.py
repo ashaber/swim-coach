@@ -34,7 +34,7 @@ from swim_coach.load import (
 )
 from swim_coach.models import Event, Wellness, WeekPlan, Workout
 from swim_coach.parse_coach_text import parse_coach_text
-from swim_coach.parse_files import WorkoutDraft, parse_csv, parse_fit, parse_tcx
+from swim_coach.parse_files import PARSERS_BY_EXTENSION, WorkoutDraft, parse_fit
 from swim_coach.plan import generate_week, scaffold_macro
 from swim_coach.store import FileStore
 from swim_coach.zones import css_from_test, zone_table
