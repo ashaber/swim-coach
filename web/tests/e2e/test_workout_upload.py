@@ -43,7 +43,17 @@ def page(request, base_url):
     """Same shape as test_log_checkin.py's `page` fixture: signed in, but
     deliberately NOT a configured backend (the "unconfigured" test needs
     that empty state), plus a default mocked GET /api/athlete for the
-    Settings tab's profile section."""
+    Settings tab's profile section and a default empty GET /api/workouts
+    for the Log tab's history section (see main.js's loadHistory, which
+    fetches it the moment the Log tab opens -- unmocked, that fetch fails
+    against this file's fake backend origin, and WebKit reports the failed
+    cross-origin request as an uncaught pageerror that trips this fixture's
+    teardown assertion). Registered at the *context* level so a test's own
+    page.route('**/api/workouts*', ...) handler still takes precedence
+    (page routes win over context routes), mirroring how
+    test_workout_history.py mocks the same endpoint per-test; and the glob's
+    trailing '*' never crosses a '/', so this default does NOT match
+    /api/workouts/ingest -- each test's own ingest mock is unaffected."""
     cfg = request.param
     with sync_playwright() as pw:
         try:
@@ -55,6 +65,10 @@ def page(request, base_url):
         ctx.route(
             '**/api/athlete*',
             _cors_route(200, 'application/json', '{"slug": "renee", "name": "Renee"}'),
+        )
+        ctx.route(
+            '**/api/workouts*',
+            _cors_route(200, 'application/json', '[]'),
         )
         pg = ctx.new_page()
         js_errors: list[str] = []
@@ -77,6 +91,23 @@ def _configure_backend(page, base_url=BASE_URL, token=TOKEN):
     page.fill('#settings-base-url', base_url)
     page.fill('#settings-token', token)
     page.click('[data-a="settings:save"]')
+
+
+def _open_log_tab(page):
+    """Opens the Log tab and waits for the history section's fetch to settle
+    (every test in this file sees an empty list -- the fixture's default
+    workouts mock or the test's own -- so settled always means the
+    empty-state message). The settle matters, not just the file input:
+    opening the tab fires GET /api/workouts (main.js's loadHistory), and its
+    completion render replaces the whole #app subtree via innerHTML -- a
+    file input resolved before that render can be detached mid-
+    set_input_files, and a change event fired on a detached node never
+    bubbles to #app's delegated listener, silently swallowing the upload
+    (the intermittent chromium timeout in CI: no .conn-result ever
+    renders)."""
+    page.click('[data-a="tab:log"]')
+    page.wait_for_selector('[data-a="log:file-select"]')
+    page.wait_for_selector('text=No workouts logged yet.')
 
 
 _DRAFT_WITH_WARNING = {
@@ -116,8 +147,7 @@ _DRAFT_TCX_CLEAN = {
 
 def test_log_tab_shows_file_input_when_configured(page):
     _configure_backend(page)
-    page.click('[data-a="tab:log"]')
-    page.wait_for_selector('[data-a="log:file-select"]')
+    _open_log_tab(page)
     assert page.locator('[data-a="log:file-select"]').count() == 1
 
 
@@ -125,8 +155,7 @@ def test_log_upload_prefills_form_and_shows_warnings(page):
     page.route('**/api/workouts/ingest*', _cors_route(200, 'application/json', json.dumps(_DRAFT_WITH_WARNING)))
 
     _configure_backend(page)
-    page.click('[data-a="tab:log"]')
-    page.wait_for_selector('[data-a="log:file-select"]')
+    _open_log_tab(page)
     page.set_input_files(
         '[data-a="log:file-select"]',
         files=[{'name': 'kayak.fit', 'mimeType': 'application/octet-stream', 'buffer': b'fake fit bytes'}],
@@ -145,8 +174,7 @@ def test_log_upload_requires_rpe_before_save_is_enabled(page):
     page.route('**/api/workouts/ingest*', _cors_route(200, 'application/json', json.dumps(_DRAFT_TCX_CLEAN)))
 
     _configure_backend(page)
-    page.click('[data-a="tab:log"]')
-    page.wait_for_selector('[data-a="log:file-select"]')
+    _open_log_tab(page)
     page.set_input_files(
         '[data-a="log:file-select"]',
         files=[{'name': 'swim.tcx', 'mimeType': 'application/octet-stream', 'buffer': b'<fake/>'}],
@@ -175,8 +203,7 @@ def test_log_upload_confirm_save_sends_parsed_source_and_rpe(page):
     page.route('**/api/workouts*', capture_and_save)
 
     _configure_backend(page)
-    page.click('[data-a="tab:log"]')
-    page.wait_for_selector('[data-a="log:file-select"]')
+    _open_log_tab(page)
     page.set_input_files(
         '[data-a="log:file-select"]',
         files=[{'name': 'swim.tcx', 'mimeType': 'application/octet-stream', 'buffer': b'<fake/>'}],
@@ -196,8 +223,7 @@ def test_log_upload_unsupported_file_type_shows_error_without_network_call(page)
     page.route('**/api/workouts/ingest*', lambda route: (ingest_calls.append(1), route.abort())[-1])
 
     _configure_backend(page)
-    page.click('[data-a="tab:log"]')
-    page.wait_for_selector('[data-a="log:file-select"]')
+    _open_log_tab(page)
     page.set_input_files(
         '[data-a="log:file-select"]',
         files=[{'name': 'photo.heic', 'mimeType': 'image/heic', 'buffer': b'not a workout'}],
@@ -215,8 +241,7 @@ def test_log_upload_parse_failure_shows_backend_error_message(page):
     )
 
     _configure_backend(page)
-    page.click('[data-a="tab:log"]')
-    page.wait_for_selector('[data-a="log:file-select"]')
+    _open_log_tab(page)
     page.set_input_files(
         '[data-a="log:file-select"]',
         files=[{'name': 'corrupt.fit', 'mimeType': 'application/octet-stream', 'buffer': b'garbage'}],
@@ -233,8 +258,7 @@ def test_log_upload_file_too_large_shows_backend_error_message(page):
     )
 
     _configure_backend(page)
-    page.click('[data-a="tab:log"]')
-    page.wait_for_selector('[data-a="log:file-select"]')
+    _open_log_tab(page)
     page.set_input_files(
         '[data-a="log:file-select"]',
         files=[{'name': 'huge.csv', 'mimeType': 'text/csv', 'buffer': b'x' * 1024}],
@@ -246,8 +270,7 @@ def test_log_upload_file_too_large_shows_backend_error_message(page):
 
 def test_log_tab_offline_disables_file_input(page):
     _configure_backend(page)
-    page.click('[data-a="tab:log"]')
-    page.wait_for_selector('[data-a="log:file-select"]')
+    _open_log_tab(page)
 
     ctx = page.context
     ctx.set_offline(True)
