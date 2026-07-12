@@ -171,6 +171,26 @@ def test_back_returns_to_list(page):
     assert 'Open water swim' in page.content()  # back in the list row
 
 
+def test_hardware_back_closes_detail_not_app(page):
+    # Reproduces the athlete's second reported bug: opening a workout detail
+    # and then pressing the phone's hardware/gesture back button used to
+    # navigate the PWA away entirely (no in-app history entry existed for
+    # the detail view) instead of just closing the detail. page.go_back()
+    # is Playwright's proxy for that hardware/gesture back press.
+    _open_log_tab_with_workouts(page, [RICH_FIT_WORKOUT])
+    page.click('.hist-row')
+    page.wait_for_selector('[data-a="history:back"]')
+
+    page.go_back()
+    page.wait_for_selector('.hist-row')
+    assert page.locator('[data-a="history:back"]').count() == 0
+    assert 'Open water swim' in page.content()  # back in the list row
+    # Prove the app didn't navigate away entirely -- the tab bar (and the
+    # rest of the app chrome) must still be there, not a blank/exited page.
+    assert page.locator('.tabbar').count() == 1
+    assert page.locator('[data-a="tab:log"]').count() == 1
+
+
 def test_bare_manual_workout_renders_without_analytics_or_laps_sections(page):
     _open_log_tab_with_workouts(page, [BARE_MANUAL_WORKOUT])
     page.click('.hist-row')
@@ -244,13 +264,44 @@ def test_reload_returns_to_list_without_errors(page):
     page.reload()
     # Fresh in-memory state on reload -- workoutDetailId resets to null, so
     # the Log tab (persisted as the active tab via ACTIVE_TAB_KEY) lands back
-    # on the list, not the detail view. History itself isn't auto-refetched
-    # on init (only a tab *switch* triggers the lazy loadHistory() -- see
-    # main.js's setTab), so the settled state here is the idle notice, same
-    # as test_workout_history.py's own empty/idle-state waits.
-    page.wait_for_selector('.hist-section:has-text("No workouts logged yet.")')
+    # on the list, not the detail view. The boot sequence now also lazily
+    # loads history itself (see main.js's boot-time shouldLoadHistoryNow()
+    # check) since the persisted active tab is 'log' and settings/identity
+    # are already configured -- so the settled state here is the list
+    # (re-fetched via the still-registered **/api/workouts* route), not the
+    # idle/empty notice.
+    page.wait_for_selector('.hist-row')
     assert page.locator('[data-a="history:back"]').count() == 0
     assert page.locator('table.laps-table').count() == 0
+    assert 'Open water swim' in page.content()
+
+
+def test_history_loads_at_boot_without_tab_switch(page):
+    # Reproduces the athlete's first reported bug: reopening the PWA while
+    # the Log tab was the last-active tab used to leave history stuck on
+    # "idle" forever, because only a tab *switch* (setTab) ever triggered
+    # loadHistory() -- and a page reload restores the persisted tab without
+    # going through setTab at all. The whole point of this test is that
+    # history must render WITHOUT clicking the Log tab again after reload.
+    page.route(
+        '**/api/plan*',
+        _cors_route(
+            200, 'application/json',
+            '{"slug":"renee","athlete":{"name":"Renee"},"events":[],"weeks":[],"macro":{"blocks":[]}}',
+        ),
+    )
+    _open_log_tab_with_workouts(page, [RICH_FIT_WORKOUT])
+    # active tab ('log') is now persisted in localStorage (ACTIVE_TAB_KEY),
+    # same as the real app after any tab click -- see main.js's setTab.
+
+    page.reload()
+    # No `page.click('[data-a="tab:log"]')` here -- that's the whole point.
+    # Settings/identity are already configured (persisted in localStorage
+    # from _configure_backend), and the persisted active tab is 'log', so
+    # the boot sequence itself must lazily load history.
+    page.wait_for_selector('.hist-row')
+    assert 'Open water swim' in page.content()
+    assert page.locator('.tabbar').count() == 1
 
 
 def test_detail_view_has_no_horizontal_overflow_on_narrow_viewport(page):
