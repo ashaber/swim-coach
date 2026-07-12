@@ -380,6 +380,32 @@ def test_file_store_workout_external_id_round_trip(tmp_path):
     assert loaded[0].external_id == "intervals:i132013445"
 
 
+def test_workout_sport_detail_defaults_to_none():
+    # Existing-style Workout YAML (predating this feature) carries no
+    # sport_detail key -- must keep validating unchanged, no schema_version
+    # bump.
+    workout = make_workout()
+    assert workout.sport_detail is None
+
+
+def test_workout_sport_detail_round_trip_through_yaml():
+    workout = make_workout(sport="cross_train", source="fit", sport_detail="cycling/mountain")
+    dumped = yaml.safe_dump(workout.model_dump(mode="json"))
+    loaded_data = yaml.safe_load(dumped)
+    restored = Workout.model_validate(loaded_data)
+    assert restored == workout
+    assert restored.sport_detail == "cycling/mountain"
+
+
+def test_file_store_workout_sport_detail_round_trip(tmp_path):
+    store = FileStore(base_dir=tmp_path)
+    workout = make_workout(sport="cross_train", source="fit", sport_detail="cycling/mountain")
+    store.save_workout("wife", workout)
+    loaded = store.list_workouts("wife")
+    assert loaded == [workout]
+    assert loaded[0].sport_detail == "cycling/mountain"
+
+
 def test_workout_lap_requires_only_index_and_duration():
     lap = WorkoutLap(index=0, duration_s=120.5)
     assert lap.start_offset_s is None
@@ -399,7 +425,7 @@ def test_workout_pause_rejects_bad_source():
 
 
 def test_workout_pause_accepts_all_sources():
-    for source in ("timer", "gap", "idle_length"):
+    for source in ("timer", "gap", "idle_length", "stationary"):
         pause = WorkoutPause(start_offset_s=0.0, duration_s=1.0, source=source)
         assert pause.source == source
 

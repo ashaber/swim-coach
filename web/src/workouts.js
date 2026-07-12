@@ -23,8 +23,40 @@ const SOURCE_BADGES = {
   coach_text: 'coach',
 };
 
-export function sportLabel(sport) {
-  return SPORT_LABELS[sport] || sport;
+// Pretty-print map for cross_train's sport_detail suffix (see
+// parse_files._sport_detail on the engine side, e.g. "cycling/mountain"),
+// keyed on the detail string's last segment (the sub_sport half) since
+// that's the part that actually varies within a sport family. Anything not
+// in this map falls back to the raw detail with underscores replaced by
+// spaces, title-cased -- readable without needing every possible FIT
+// sub_sport value enumerated here.
+const SPORT_DETAIL_PRETTY = {
+  mountain: 'MTB',
+  road: 'Road ride',
+  kayaking: 'Kayak',
+  walking: 'Walk',
+  cycling: 'Bike', // generic cycling, no useful sub-detail
+};
+
+function prettySportDetail(sportDetail) {
+  const lastSegment = sportDetail.split('/').pop();
+  if (SPORT_DETAIL_PRETTY[lastSegment]) return SPORT_DETAIL_PRETTY[lastSegment];
+  return lastSegment
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/** `sportDetail` is optional (undefined/null for every workout logged
+ * before this feature, and always for swim_pool/swim_ow) -- when present
+ * on a cross_train workout, it's appended as "Cross-train · <pretty>"
+ * (e.g. "Cross-train · MTB"). Every other sport, and cross_train with no
+ * detail, renders exactly as before. */
+export function sportLabel(sport, sportDetail) {
+  const base = SPORT_LABELS[sport] || sport;
+  if (sport === 'cross_train' && sportDetail) {
+    return `${base} · ${prettySportDetail(sportDetail)}`;
+  }
+  return base;
 }
 
 /** null for manual entries (no badge needed) -- a short label for anything

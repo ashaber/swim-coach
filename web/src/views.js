@@ -510,7 +510,7 @@ function renderWorkoutRow(workout) {
       <div class="hist-date mono">${esc(formatShortDate(parseIsoDate(workout.date.slice(0, 10))))}</div>
       <div class="hist-body">
         <div class="hist-title">
-          <span>${esc(sportLabel(workout.sport))}</span>
+          <span>${esc(sportLabel(workout.sport, workout.sport_detail))}</span>
           ${badge ? `<span class="chat-chip">${esc(badge)}</span>` : ''}
           ${workout.rpe !== null && workout.rpe !== undefined ? `<span class="chat-chip">RPE ${esc(workout.rpe)}</span>` : ''}
         </div>
@@ -639,7 +639,7 @@ function renderWorkoutDetail(workout) {
   const badge = sourceBadge(workout.source);
   return `
     <div class="detail-header">
-      <h3>${esc(sportLabel(workout.sport))}</h3>
+      <h3>${esc(sportLabel(workout.sport, workout.sport_detail))}</h3>
       <div class="hist-meta mono">${esc(formatLongDate(parseIsoDate(workout.date.slice(0, 10))))}${badge ? ` <span class="chat-chip">${esc(badge)}</span>` : ''}</div>
     </div>
     ${renderDetailStats(workout)}

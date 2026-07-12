@@ -187,14 +187,18 @@ class WorkoutLength(BaseModel):
 
 
 class WorkoutPause(BaseModel):
-    """A stopped/idle span within a workout, from one of three sources:
+    """A stopped/idle span within a workout, from one of four sources:
     a FIT `event` timer stop->start pair (`"timer"`), a `record`-frame
-    timestamp gap exceeding `analytics.GAP_THRESHOLD_S` (`"gap"`), or an
-    idle pool length (`"idle_length"`)."""
+    timestamp gap exceeding `analytics.GAP_THRESHOLD_S` (`"gap"`), an idle
+    pool length (`"idle_length"`), or a sustained sub-`analytics.
+    STATIONARY_SPEED_MPS` span in the speed series (`"stationary"` --
+    catches real stops a device with auto-pause off never records as a
+    timer event or gap; see `parse_files.parse_fit` and
+    `library/11-workout-analytics.md`)."""
 
     start_offset_s: float
     duration_s: float
-    source: Literal["timer", "gap", "idle_length"]
+    source: Literal["timer", "gap", "idle_length", "stationary"]
 
 
 class WorkoutAnalytics(BaseModel):
@@ -252,6 +256,14 @@ class Workout(BaseModel):
     # manually logged or CLI-ingested workouts; the sync job is the only
     # writer of a non-None value today.
     external_id: str | None = None
+    # Free-text FIT sport/sub_sport detail (e.g. "cycling/mountain",
+    # "paddling/kayaking", "walking") for a non-swim `.fit` ingest -- see
+    # `parse_files._fit_sport`/`parse_fit`. Additive/optional so every
+    # existing Workout YAML (with no sport_detail key) keeps validating
+    # unchanged -- no schema_version bump. Always None for swim_pool/
+    # swim_ow (the Sport enum already distinguishes pool/open-water, so a
+    # detail string there would be redundant).
+    sport_detail: str | None = None
 
 
 FeedbackType = Literal["research_question", "feature_request", "comment", "bug"]

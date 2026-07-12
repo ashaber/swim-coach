@@ -29,6 +29,7 @@ function toNullableText(value) {
 // `Workout` (which accepts every one of these as an optional field).
 const DRAFT_ENRICHMENT_FIELDS = [
   'raw_ref', 'series_ref', 'analytics', 'laps', 'lengths', 'pauses', 'avg_hr', 'max_hr',
+  'sport_detail',
 ];
 
 /** Serializes the Log tab's form state into a `POST /api/workouts` body.
@@ -36,10 +37,10 @@ const DRAFT_ENRICHMENT_FIELDS = [
  * confirmed file-upload draft -- see `logFormFromDraft` below); an ordinary
  * manual entry omits it entirely and the backend defaults to `"manual"`.
  * Likewise, `DRAFT_ENRICHMENT_FIELDS` (raw_ref/series_ref/analytics/laps/
- * lengths/pauses/avg_hr/max_hr) are included only when the form actually
- * carries them -- so a confirmed file-upload persists with the exact same
- * laps/pauses/analytics the ingest step already computed, while a manual
- * entry's payload is untouched. */
+ * lengths/pauses/avg_hr/max_hr/sport_detail) are included only when the
+ * form actually carries them -- so a confirmed file-upload persists with
+ * the exact same laps/pauses/analytics/sport_detail the ingest step already
+ * computed, while a manual entry's payload is untouched. */
 export function serializeWorkoutForm(form) {
   const payload = {
     date: form.date,

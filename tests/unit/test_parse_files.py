@@ -12,7 +12,17 @@ from pathlib import Path
 
 import pytest
 
-from swim_coach.parse_files import WorkoutDraft, _fit_sport, parse_csv, parse_fit, parse_tcx
+from swim_coach.models import WorkoutPause
+from swim_coach.parse_files import (
+    WorkoutDraft,
+    _fit_sport,
+    _is_cycling_sport,
+    _merge_pauses,
+    _sport_detail,
+    parse_csv,
+    parse_fit,
+    parse_tcx,
+)
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 TCX_FIXTURE = FIXTURES_DIR / "tcx" / "sample_pool_swim.tcx"
@@ -20,6 +30,8 @@ TCX_NO_LAPS_FIXTURE = FIXTURES_DIR / "tcx" / "no_laps.tcx"
 CSV_FIXTURE = FIXTURES_DIR / "csv" / "sample_garmin_export.csv"
 FIT_FIXTURE = FIXTURES_DIR / "fit" / "real_swim.fit"
 FIT_KAYAK_FIXTURE = FIXTURES_DIR / "fit" / "real_kayak.fit"
+FIT_MTB_RACE_FIXTURE = FIXTURES_DIR / "fit" / "real_mtb_race.fit"
+FIT_MTB_0709_FIXTURE = FIXTURES_DIR / "fit" / "real_mtb_0709.fit"
 
 
 # --- WorkoutDraft shape --------------------------------------------------------------
@@ -280,11 +292,190 @@ def test_parse_fit_kayak_pauses_are_deterministic():
     # over GAP_THRESHOLD_S (max observed gap ~19s, smart-recording variance)
     # -- so zero pauses is the correct, deterministic answer for this file,
     # not a gap in the detector.
+    #
+    # Reconciliation note (stationary-pause detector, PR2): this fixture
+    # DOES carry a speed_mps series, and running STATIONARY_SPEED_MPS/
+    # STATIONARY_MIN_S against it raw (before the cycling-only gate below
+    # existed) produced ~50 false-positive "stops" over the single 5-hour
+    # trip -- this kayak trip's average speed (11,494m / 18,196s = 0.63
+    # m/s) sits right at the 0.5 m/s threshold, so ordinary slow-paddling
+    # variance trips it constantly. Verified live against this exact file
+    # during development; see library/11-workout-analytics.md's
+    # "Stationary-speed pause detection" section for the full writeup. The
+    # fix is _is_cycling_sport (below): parse_fit only runs the stationary
+    # detector when the raw FIT session.sport is "cycling" (the only sport
+    # family this threshold is calibrated against), so this fixture
+    # (session.sport="kayaking") never reaches the detector and stays at
+    # zero pauses, same as before this feature existed.
     draft = parse_fit(FIT_KAYAK_FIXTURE)
     assert draft.pauses == []
+    assert draft.series is not None
+    assert "speed_mps" in draft.series
 
 
 @pytest.mark.skipif(not FIT_KAYAK_FIXTURE.exists(), reason="no real kayak .fit fixture")
 def test_parse_fit_kayak_has_no_lengths():
     draft = parse_fit(FIT_KAYAK_FIXTURE)
     assert draft.lengths == []
+
+
+@pytest.mark.skipif(not FIT_KAYAK_FIXTURE.exists(), reason="no real kayak .fit fixture")
+def test_parse_fit_kayak_sport_detail_is_kayaking_not_paddling_kayaking():
+    # Real fixture's raw FIT session frame carries sport="kayaking",
+    # sub_sport="generic" (verified via fitdecode against the actual file,
+    # not assumed) -- NOT "paddling"/"kayaking" as the brief's own example
+    # guessed before the real fixture was inspected. A generic sub_sport
+    # formats as the sport alone (see _sport_detail's docstring).
+    draft = parse_fit(FIT_KAYAK_FIXTURE)
+    assert draft.sport_detail == "kayaking"
+
+
+@pytest.mark.skipif(not FIT_FIXTURE.exists(), reason="no real pool .fit fixture")
+def test_parse_fit_pool_sport_detail_is_none():
+    # swim_pool/swim_ow always get sport_detail=None -- the Sport enum
+    # already distinguishes pool/open-water.
+    draft = parse_fit(FIT_FIXTURE)
+    assert draft.sport_detail is None
+
+
+# --- _sport_detail (pure function) -----------------------------------------------------
+
+
+def test_sport_detail_cycling_mountain():
+    assert _sport_detail("cycling", "mountain", "cross_train") == "cycling/mountain"
+
+
+def test_sport_detail_training_strength_training():
+    # Synthetic case (no real fixture): Garmin encodes a logged strength
+    # workout as session.sport="training", sub_sport="strength_training".
+    assert _sport_detail("training", "strength_training", "strength") == "training/strength_training"
+
+
+def test_sport_detail_generic_sub_sport_uses_sport_alone():
+    # Synthetic case: a "generic" sub_sport (no useful detail) formats as
+    # the sport alone, e.g. "walking" not "walking/generic".
+    assert _sport_detail("walking", "generic", "cross_train") == "walking"
+
+
+def test_sport_detail_missing_sub_sport_uses_sport_alone():
+    assert _sport_detail("walking", None, "cross_train") == "walking"
+
+
+def test_sport_detail_none_for_swim_pool_and_swim_ow():
+    assert _sport_detail("swimming", "lap_swimming", "swim_pool") is None
+    assert _sport_detail("swimming", "open_water", "swim_ow") is None
+
+
+def test_sport_detail_none_when_session_sport_missing():
+    assert _sport_detail(None, None, "cross_train") is None
+
+
+# --- _is_cycling_sport -----------------------------------------------------------------
+
+
+def test_is_cycling_sport_true_for_cycling_case_insensitive():
+    assert _is_cycling_sport("cycling") is True
+    assert _is_cycling_sport("Cycling") is True
+
+
+def test_is_cycling_sport_false_for_non_cycling_or_missing():
+    assert _is_cycling_sport("kayaking") is False
+    assert _is_cycling_sport("running") is False
+    assert _is_cycling_sport(None) is False
+
+
+# --- _merge_pauses: stationary is the lowest-precedence source -------------------------
+
+
+def test_merge_pauses_stationary_dropped_when_overlapping_timer_pause():
+    timer = [WorkoutPause(start_offset_s=100.0, duration_s=60.0, source="timer")]
+    stationary = [WorkoutPause(start_offset_s=110.0, duration_s=40.0, source="stationary")]
+    assert _merge_pauses(timer, [], [], stationary) == timer
+
+
+def test_merge_pauses_stationary_dropped_when_overlapping_gap_pause():
+    gap = [WorkoutPause(start_offset_s=100.0, duration_s=60.0, source="gap")]
+    stationary = [WorkoutPause(start_offset_s=90.0, duration_s=20.0, source="stationary")]
+    assert _merge_pauses([], gap, [], stationary) == gap
+
+
+def test_merge_pauses_stationary_dropped_when_overlapping_idle_length_pause():
+    idle = [WorkoutPause(start_offset_s=100.0, duration_s=60.0, source="idle_length")]
+    stationary = [WorkoutPause(start_offset_s=140.0, duration_s=30.0, source="stationary")]
+    assert _merge_pauses([], [], idle, stationary) == idle
+
+
+def test_merge_pauses_keeps_non_overlapping_stationary_pause():
+    timer = [WorkoutPause(start_offset_s=100.0, duration_s=60.0, source="timer")]
+    stationary = [WorkoutPause(start_offset_s=5000.0, duration_s=75.0, source="stationary")]
+    assert _merge_pauses(timer, [], [], stationary) == timer + stationary
+
+
+def test_merge_pauses_defaults_stationary_to_empty_for_back_compat():
+    # Existing 3-arg call sites (predating this feature) must keep working
+    # unchanged.
+    timer = [WorkoutPause(start_offset_s=0.0, duration_s=10.0, source="timer")]
+    assert _merge_pauses(timer, [], []) == timer
+
+
+# --- real MTB fixtures: stationary pauses + sport_detail --------------------------------
+
+
+@pytest.mark.skipif(
+    not FIT_MTB_RACE_FIXTURE.exists(),
+    reason="no real MTB race .fit fixture -- see fixtures/fit/README.md",
+)
+def test_parse_fit_mtb_race_sport_detail_is_cycling_mountain():
+    draft = parse_fit(FIT_MTB_RACE_FIXTURE)
+    assert draft.sport == "cross_train"
+    assert draft.sport_detail == "cycling/mountain"
+
+
+@pytest.mark.skipif(not FIT_MTB_RACE_FIXTURE.exists(), reason="no real MTB race .fit fixture")
+def test_parse_fit_mtb_race_has_no_timer_or_gap_pauses():
+    # This device records with auto-pause off: exactly one timer start/
+    # stop_all pair spanning the whole file, and record frames continue
+    # through every physical stop -- so the timer/gap detectors alone find
+    # zero pauses here, confirming the stationary detector below is doing
+    # real work, not duplicating what those already caught.
+    draft = parse_fit(FIT_MTB_RACE_FIXTURE)
+    assert not any(p.source in ("timer", "gap") for p in draft.pauses)
+
+
+@pytest.mark.skipif(not FIT_MTB_RACE_FIXTURE.exists(), reason="no real MTB race .fit fixture")
+def test_parse_fit_mtb_race_detects_stationary_bottle_stops():
+    # Calibrated against this real 2026-06-13 MTB race (10 laps): the start
+    # corral plus five per-lap bottle stops all show up as sustained
+    # sub-0.5 m/s spans. ">= 5 after the start corral" is the loose, robust
+    # assertion; the specific bottle-stop offset/duration below is the
+    # tight one, re-derived by actually running the parser against this
+    # file rather than trusted from the wall-clock labels in the task
+    # brief (which the brief itself flagged as approximate).
+    draft = parse_fit(FIT_MTB_RACE_FIXTURE)
+    stationary = [p for p in draft.pauses if p.source == "stationary"]
+    assert len(stationary) >= 5
+    assert all(p.duration_s >= 30.0 for p in stationary)
+
+    candidates = [p for p in stationary if abs(p.start_offset_s - 5172.0) <= 30.0]
+    assert len(candidates) == 1, stationary
+    assert candidates[0].duration_s == pytest.approx(75.0, abs=15.0)
+
+
+@pytest.mark.skipif(
+    not FIT_MTB_0709_FIXTURE.exists(),
+    reason="no real MTB 0709 .fit fixture -- see fixtures/fit/README.md",
+)
+def test_parse_fit_mtb_0709_sport_detail_is_cycling_mountain():
+    draft = parse_fit(FIT_MTB_0709_FIXTURE)
+    assert draft.sport == "cross_train"
+    assert draft.sport_detail == "cycling/mountain"
+
+
+@pytest.mark.skipif(not FIT_MTB_0709_FIXTURE.exists(), reason="no real MTB 0709 .fit fixture")
+def test_parse_fit_mtb_0709_detects_stationary_feed_stop():
+    # Calibrated against this real 2026-07-09 ride's one clean feed stop.
+    draft = parse_fit(FIT_MTB_0709_FIXTURE)
+    stationary = [p for p in draft.pauses if p.source == "stationary"]
+    candidates = [p for p in stationary if abs(p.start_offset_s - 1328.0) <= 30.0]
+    assert len(candidates) == 1, stationary
+    assert candidates[0].duration_s == pytest.approx(69.0, abs=15.0)

@@ -28,7 +28,7 @@ CORS_HEADERS = {
 CROSS_TRAIN_WORKOUT = {
     'id': 'w-cross', 'date': '2026-07-09', 'sport': 'cross_train', 'source': 'fit',
     'distance_m': None, 'duration_min': 303.3, 'avg_pace_s_per_100m': None, 'rpe': 6, 'notes': None,
-    'avg_hr': None, 'max_hr': None,
+    'avg_hr': None, 'max_hr': None, 'sport_detail': 'cycling/mountain',
     'analytics': {
         'cardiac_drift_pct': -13.77, 'split_label': None,
         'first_half_pace_s_per_100m': None, 'second_half_pace_s_per_100m': None,
@@ -116,8 +116,9 @@ def test_history_renders_workouts_including_analytics_line(page):
 
     content = page.content()
     assert 'Recent workouts' in content
-    # Sport labels for all three, including cross_train's label.
-    assert 'Cross-train' in content
+    # Sport labels for all three, including cross_train's label -- with its
+    # sport_detail pretty suffix (MTB, from raw "cycling/mountain").
+    assert 'Cross-train · MTB' in content
     assert 'Pool swim' in content
     # The cross_train workout's cardiac-drift analytics line.
     assert 'drift -13.8%' in content

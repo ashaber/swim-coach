@@ -510,6 +510,7 @@ def _build_workout_from_draft(draft: WorkoutDraft, athlete_id, *, raw_ref: str |
         laps=draft.laps,
         lengths=draft.lengths,
         pauses=draft.pauses,
+        sport_detail=draft.sport_detail,
     )
 
 

@@ -25,6 +25,7 @@ import fitdecode
 from pydantic import BaseModel, Field
 
 from swim_coach.analytics import GAP_THRESHOLD_S
+from swim_coach.analytics import stationary_pauses as _stationary_pauses
 from swim_coach.models import (
     Sport,
     WorkoutAnalytics,
@@ -80,6 +81,10 @@ class WorkoutDraft(BaseModel):
     # timer minutes) -- carried on the draft only long enough for the CLI to
     # pass both into swim_coach.analytics.compute_analytics.
     elapsed_min: float | None = None
+    # Mirrors Workout.sport_detail -- see that field's docstring in
+    # swim_coach.models. Set by parse_fit only (tcx/csv carry no sub-sport
+    # detail); always None for swim_pool/swim_ow.
+    sport_detail: str | None = None
 
 
 # --- shared helpers ------------------------------------------------------------------
@@ -373,6 +378,55 @@ def _fit_sport(session_sport: object | None, session_sub_sport: object | None, w
     return "cross_train"
 
 
+def _sport_detail(session_sport: object | None, session_sub_sport: object | None, sport: Sport) -> str | None:
+    """Free-text `f"{session_sport}/{session_sub_sport}"` detail carried
+    alongside the resolved engine `Sport` enum, e.g. `"cycling/mountain"`,
+    `"training/strength_training"`. Always `None` for `swim_pool`/`swim_ow`
+    -- the Sport enum already distinguishes pool/open-water, so a detail
+    string there would be redundant/confusing.
+
+    A missing or "generic" sub_sport formats as the sport alone (e.g.
+    `"walking"`, not `"walking/generic"`) -- verified against the real
+    kayak fixture (tests/unit/fixtures/fit/real_kayak.fit), whose raw FIT
+    session frame carries `sport="kayaking"`, `sub_sport="generic"`
+    (checked via fitdecode, not assumed): this resolves to `"kayaking"`,
+    not the `"paddling/kayaking"` guess an earlier draft of this feature
+    used before the real fixture was inspected.
+    """
+    if sport in ("swim_pool", "swim_ow"):
+        return None
+    if session_sport is None:
+        return None
+    sport_str = str(session_sport).strip().lower()
+    if not sport_str:
+        return None
+    sub_str = str(session_sub_sport).strip().lower() if session_sub_sport is not None else ""
+    if not sub_str or sub_str == "generic":
+        return sport_str
+    return f"{sport_str}/{sub_str}"
+
+
+def _is_cycling_sport(session_sport: object | None) -> bool:
+    """True for any FIT session.sport value in the cycling family (road,
+    mountain, gravel, etc. all share raw sport="cycling", distinguished
+    only by sub_sport).
+
+    Gates whether `parse_fit` runs the stationary-speed pause detector at
+    all (see `library/11-workout-analytics.md`, "Stationary-speed pause
+    detection" -- the pool/kayak reconciliation note). The detector is
+    calibrated against real evidence from exactly this sport family (two
+    real MTB `.fit` files); a real kayak fixture (tests/unit/fixtures/fit/
+    real_kayak.fit) proved the same flat 0.5 m/s threshold produces ~50
+    false-positive "stops" over a single 5-hour trip, because a kayak's
+    normal cruising speed (avg 0.63 m/s for that trip) sits right at the
+    threshold -- there is no "fast baseline, rare real stop" structure to
+    exploit for a naturally slow-moving sport, unlike cycling. Scoping to
+    cycling keeps the feature safe for the evidence it actually has,
+    without silently mis-flagging kayak/paddle/walk/swim sessions.
+    """
+    return session_sport is not None and str(session_sport).strip().lower() == "cycling"
+
+
 _SEMICIRCLE_TO_DEG = 180.0 / (2**31)
 # FIT stores lat/long as 32-bit semicircles; this is the Garmin FIT SDK's
 # documented conversion to degrees.
@@ -527,13 +581,31 @@ def _pause_overlaps(pause: WorkoutPause, others: list[WorkoutPause]) -> bool:
 
 
 def _merge_pauses(
-    timer_pauses: list[WorkoutPause], gap_pauses: list[WorkoutPause], idle_pauses: list[WorkoutPause]
+    timer_pauses: list[WorkoutPause],
+    gap_pauses: list[WorkoutPause],
+    idle_pauses: list[WorkoutPause],
+    stationary_pauses: list[WorkoutPause] | None = None,
 ) -> list[WorkoutPause]:
     """timer pauses always kept; gap/idle-length pauses that overlap a timer
-    pause's span are dropped as duplicates of the same real stop."""
+    pause's span are dropped as duplicates of the same real stop.
+
+    `stationary_pauses` (from the speed series -- see `analytics.
+    stationary_pauses`) is the lowest-precedence source: it's the only one
+    inferred purely from a coarse speed threshold rather than an explicit
+    device signal (a timer event, an intra-record timestamp gap, or an
+    idle pool length), so a stationary span that overlaps ANY of the other
+    three sources -- not just timer, unlike gap/idle above -- is dropped as
+    a duplicate of the same real stop those more precise signals already
+    captured. `stationary_pauses` defaults to `[]` (not required) so
+    existing callers/tests built around the original 3-source signature
+    keep working unchanged.
+    """
+    stationary_pauses = stationary_pauses or []
     merged = list(timer_pauses)
     merged.extend(p for p in gap_pauses if not _pause_overlaps(p, timer_pauses))
     merged.extend(p for p in idle_pauses if not _pause_overlaps(p, timer_pauses))
+    higher_precedence = timer_pauses + gap_pauses + idle_pauses
+    merged.extend(p for p in stationary_pauses if not _pause_overlaps(p, higher_precedence))
     merged.sort(key=lambda p: p.start_offset_s)
     return merged
 
@@ -761,8 +833,14 @@ def parse_fit(path: str | Path) -> WorkoutDraft:
     lengths, idle_pauses = _build_lengths(lengths_raw, laps_raw, t0)
     timer_pauses = _build_timer_pauses(events_raw, t0)
     gap_pauses = _build_gap_pauses(records_raw, t0)
-    pauses = _merge_pauses(timer_pauses, gap_pauses, idle_pauses)
     series = _build_series(records_raw, t0)
+    stationary = (
+        _stationary_pauses(series)
+        if series is not None and _is_cycling_sport(session_sport)
+        else []
+    )
+    pauses = _merge_pauses(timer_pauses, gap_pauses, idle_pauses, stationary)
+    detail = _sport_detail(session_sport, session_sub_sport, sport)
 
     return WorkoutDraft(
         date=workout_date,
@@ -781,6 +859,7 @@ def parse_fit(path: str | Path) -> WorkoutDraft:
         pauses=pauses,
         series=series,
         elapsed_min=session_elapsed_s / 60 if session_elapsed_s is not None else None,
+        sport_detail=detail,
     )
 
 

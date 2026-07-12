@@ -288,6 +288,7 @@ def _ingest_activity(
             analytics=draft.analytics,
             series_ref=draft.series_ref,
             external_id=f"intervals:{activity_id}",
+            sport_detail=draft.sport_detail,
         )
         store.save_workout(slug, workout)
         log.info(

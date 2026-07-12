@@ -17,6 +17,25 @@ describe('sportLabel', () => {
   it('falls back to the raw value for an unknown sport', () => {
     expect(sportLabel('kayak')).toBe('kayak');
   });
+  it('renders exactly as before for a cross_train workout with no sport_detail', () => {
+    // Back-compat: every workout logged before this feature has
+    // sport_detail undefined/null -- must not grow a suffix.
+    expect(sportLabel('cross_train', undefined)).toBe('Cross-train');
+    expect(sportLabel('cross_train', null)).toBe('Cross-train');
+  });
+  it('appends a pretty sport_detail suffix for cross_train', () => {
+    expect(sportLabel('cross_train', 'cycling/mountain')).toBe('Cross-train · MTB');
+    expect(sportLabel('cross_train', 'cycling/road')).toBe('Cross-train · Road ride');
+    expect(sportLabel('cross_train', 'kayaking')).toBe('Cross-train · Kayak');
+    expect(sportLabel('cross_train', 'walking')).toBe('Cross-train · Walk');
+    expect(sportLabel('cross_train', 'cycling')).toBe('Cross-train · Bike');
+  });
+  it('falls back to a title-cased, underscore-stripped detail when unmapped', () => {
+    expect(sportLabel('cross_train', 'training/strength_training')).toBe('Cross-train · Strength Training');
+  });
+  it('ignores sport_detail for non-cross_train sports', () => {
+    expect(sportLabel('swim_pool', 'cycling/mountain')).toBe('Pool swim');
+  });
 });
 
 describe('sourceBadge', () => {
