@@ -53,6 +53,7 @@ def test_request_shape_includes_tools(client, fake_claude_chat_factory) -> None:
         "get_plan_summary",
         "log_open_question",
         "get_workouts",
+        "sync_workouts",
     }
 
 

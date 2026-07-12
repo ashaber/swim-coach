@@ -260,6 +260,29 @@ def test_sync_athlete_unknown_athlete_is_a_clean_failure(athletes_dir: Path) -> 
     assert summary == {"listed": 0, "new": 0, "saved": 0, "skipped_duplicate": 0, "failed": 1}
 
 
+def test_sync_athlete_custom_window_days_changes_oldest_param(athletes_dir: Path) -> None:
+    # The coach chat tool (app.tools._handle_sync_workouts) calls this same
+    # function with a small on-demand window instead of the scheduled job's
+    # 14-day SYNC_WINDOW_DAYS default -- this proves the parameter actually
+    # reaches the `list_activities` call rather than being ignored.
+    store = FileStore(base_dir=athletes_dir)
+    cfg = IntervalsAthleteConfig(slug="renee", intervals_athlete_id="i999", api_key="test-key")
+    captured_params: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/activities"):
+            captured_params.update(dict(request.url.params))
+            return httpx.Response(200, json=[])
+        return httpx.Response(404, json={"error": "not found"})
+
+    summary = sync_athlete(cfg, store=store, client=_make_client(handler), window_days=2)
+
+    assert summary == {"listed": 0, "new": 0, "saved": 0, "skipped_duplicate": 0, "failed": 0}
+    oldest = date.fromisoformat(captured_params["oldest"])
+    newest = date.fromisoformat(captured_params["newest"])
+    assert (newest - oldest).days == 2
+
+
 # --- config parsing ----------------------------------------------------------
 
 

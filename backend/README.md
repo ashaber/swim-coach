@@ -39,6 +39,15 @@ dedupe (primarily `Workout.external_id`, e.g. `"intervals:i132013445"`; a
 secondary date+sport+duration heuristic catches manual uploads of the same
 session that carry no `external_id`) to make re-runs idempotent.
 
+The coach chat tool `sync_workouts` (`backend/app/tools.py`) calls the same
+`app.sync.sync_athlete` function on demand, scoped to whichever athlete is
+chatting and a small 2-day window, when the athlete says they just finished
+a workout or asks to sync — rather than waiting for the scheduled job's next
+run. This means the **API service** (`swim-coach-api`, not just the
+`swim-coach-sync` job) also needs `INTERVALS_SYNC_CONFIG` mounted; see its
+`--set-secrets` in `deploy-backend.yml`'s "Deploy to Cloud Run" step, which
+mounts the same `intervals-sync-config` secret created below.
+
 ### One-time setup (repo owner only)
 
 The job shares the API service's image (same `backend/Dockerfile`, command
@@ -96,7 +105,7 @@ written to the repo, logged, or handled by an agent session.
    ```bash
    gcloud scheduler jobs create http swim-coach-sync-trigger \
      --schedule="0 */6 * * *" \
-     --uri="https://us-central1-run.googleapis.com/apis/run.googleapis.io/v1/namespaces/open-swim-coach-ashaber/jobs/swim-coach-sync:run" \
+     --uri="https://us-central1-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/open-swim-coach-ashaber/jobs/swim-coach-sync:run" \
      --http-method=POST \
      --oauth-service-account-email=github-deployer@open-swim-coach-ashaber.iam.gserviceaccount.com \
      --location=us-central1 \
