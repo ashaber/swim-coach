@@ -307,13 +307,22 @@ def sync_athlete(
     *,
     store: StoreInterface,
     client: IntervalsClient | None = None,
+    window_days: int = SYNC_WINDOW_DAYS,
 ) -> dict[str, int]:
-    """Syncs one athlete's trailing `SYNC_WINDOW_DAYS` of intervals.icu
+    """Syncs one athlete's trailing `window_days` (default `SYNC_WINDOW_DAYS`,
+    the scheduled job's 14-day operational overlap) of intervals.icu
     activities into the store. Never raises for anything short of a
     programming error -- every failure mode (unknown athlete, list call
     failure, one activity's download/parse failure) is caught, logged, and
     reflected in the returned summary so the caller can always finish the
     run and log a final tally.
+
+    `window_days` lets a caller narrow the lookback -- e.g. the coach chat
+    tool (`app.tools._handle_sync_workouts`) passes a cheap 2-day window
+    (today's activity plus yesterday's, in case Garmin/intervals.icu hasn't
+    finished processing a just-finished session yet) for an on-demand sync,
+    rather than re-checking the job's full 14-day trailing window on every
+    chat turn.
 
     `client`, when given, is used as-is (and NOT closed by this function --
     the caller owns it, e.g. tests injecting a mocked transport). When
@@ -335,7 +344,7 @@ def sync_athlete(
 
     try:
         today = date.today()
-        oldest = today - timedelta(days=SYNC_WINDOW_DAYS)
+        oldest = today - timedelta(days=window_days)
         start = time.monotonic()
         try:
             activities = client.list_activities(oldest=oldest, newest=today)

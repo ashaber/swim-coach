@@ -79,7 +79,7 @@ jobs:
             --max-instances=2 \
             --allow-unauthenticated \
             --set-env-vars=CLAUDE_MODEL=claude-opus-4-8,ALLOWED_ORIGINS=https://ashaber.github.io,ATHLETES_DIR=/app/athletes,LIBRARY_DIR=/app/library,STORE_BACKEND=db \
-            --set-secrets=ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest,API_TOKEN=API_TOKEN:latest,DATABASE_URL=DATABASE_URL:latest
+            --set-secrets=ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest,API_TOKEN=API_TOKEN:latest,DATABASE_URL=DATABASE_URL:latest,INTERVALS_SYNC_CONFIG=intervals-sync-config:latest
 
       - name: Deploy sync job to Cloud Run
         # Keeps the intervals.icu auto-sync job (backend/app/sync.py, run on
