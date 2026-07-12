@@ -203,3 +203,43 @@ def test_ingest_real_fit_kayak_fixture_gets_series_and_analytics(client, athlete
     after = client.get("/api/workouts?athlete=renee", headers=auth_headers())
     assert after.status_code == 200
     assert all(w.get("raw_ref") != body["raw_ref"] for w in after.json())
+
+
+def test_ingest_with_store_lacking_raw_file_support_skips_refs_but_computes_analytics(client, monkeypatch) -> None:
+    """A db-backed deploy (STORE_BACKEND=db) has no save_raw_file/save_series
+    until Phase 2.5's Supabase Storage lands -- the route must skip both refs,
+    warn the athlete in the draft, and still compute analytics, never 500.
+    (The first production upload died on exactly this AttributeError: every
+    other test here runs against FileStore, which has the extra methods.)"""
+    if _fit_kayak_missing():
+        import pytest
+
+        pytest.skip("real_kayak.fit fixture not present")
+
+    import app.routes.workouts as workouts_module
+
+    real_make_store = workouts_module.make_store
+
+    class _StoreInterfaceOnly:
+        """Proxy hiding FileStore's raw-file/series extras, like DbStore."""
+
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __getattr__(self, name):
+            if name in ("save_raw_file", "save_series"):
+                raise AttributeError(name)
+            return getattr(self._inner, name)
+
+    monkeypatch.setattr(
+        workouts_module, "make_store", lambda settings: _StoreInterfaceOnly(real_make_store(settings))
+    )
+
+    response = _upload(client, FIT_KAYAK_FIXTURE)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["raw_ref"] is None
+    assert body["series_ref"] is None
+    assert body["analytics"] is not None
+    assert body["analytics"]["cardiac_drift_pct"] is not None
+    assert any("doesn't retain the original file" in w for w in body["warnings"])

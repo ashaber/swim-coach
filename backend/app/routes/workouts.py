@@ -198,12 +198,29 @@ async def ingest_workout(
         # and derived analytics a CLI ingest gets -- computed once here so
         # `POST /api/workouts` (confirm) doesn't need the original bytes
         # again, since the browser's file input can't hand them back.
-        try:
-            draft.raw_ref = store.save_raw_file(athlete, tmp_path)
-        except FileExistsError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        #
+        # Raw-file/series persistence is FileStore-only until Phase 2.5's
+        # uploaded_files table + Supabase Storage land (ROADMAP.md) -- a
+        # db-backed deploy (STORE_BACKEND=db) has nowhere durable to put the
+        # bytes, so it skips both refs rather than 500ing, tells the athlete
+        # via `warnings`, and still computes analytics (pure functions over
+        # the in-memory parse).
+        if hasattr(store, "save_raw_file"):
+            try:
+                draft.raw_ref = store.save_raw_file(athlete, tmp_path)
+            except FileExistsError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        else:
+            log.warn("workouts.ingest_raw_ref_skipped", athlete=athlete, store=type(store).__name__)
+            # The parser pre-fills raw_ref with its source path -- here that's
+            # the about-to-be-deleted temp file, a meaningless server path that
+            # must not reach the client.
+            draft.raw_ref = None
+            draft.warnings.append(
+                "This backend doesn't retain the original file yet -- keep your export; analytics were still computed."
+            )
 
-        if draft.series is not None:
+        if draft.series is not None and hasattr(store, "save_series"):
             # No Workout id exists yet (nothing is saved until confirm) --
             # save_series only needs *a* UUID to build a recognizable sidecar
             # filename (see its docstring), so a fresh one here is fine; it
