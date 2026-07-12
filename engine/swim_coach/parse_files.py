@@ -348,15 +348,24 @@ def _fit_sport(session_sport: object | None, session_sub_sport: object | None, w
     Anything that isn't recognizably swimming maps to cross_train with a
     warning -- a kayak/run/ride file must never be silently logged as a swim
     (it would pollute swim-volume math; the first real .fit ingested,
-    2026-07-09, was a kayak session).
+    2026-07-09, was a kayak session). The one carve-out: Garmin encodes a
+    logged strength workout as session.sport=="training" (sub_sport
+    typically "strength_training", surfaces in intervals.icu as
+    "WeightTraining") -- that maps to this engine's own "strength" Sport
+    instead of cross_train, unambiguous enough to need no warning, same as
+    the swim cases above. It still counts toward sRPE load, never swim
+    volume, exactly like cross_train does.
     """
     if session_sub_sport is not None and "open" in str(session_sub_sport).lower():
         return "swim_ow"
     if session_sport is None:
         warnings.append("no session.sport field found; assumed swim_pool")
         return "swim_pool"
-    if "swim" in str(session_sport).lower():
+    session_sport_lower = str(session_sport).lower()
+    if "swim" in session_sport_lower:
         return "swim_pool"
+    if session_sport_lower == "training" or "strength" in str(session_sub_sport or "").lower():
+        return "strength"
     warnings.append(
         f"non-swim FIT sport '{session_sport}' mapped to cross_train "
         "(counts toward sRPE load, not swim volume)"

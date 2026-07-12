@@ -354,6 +354,32 @@ def test_workout_analytics_fields_default_empty():
     assert workout.series_ref is None
 
 
+def test_workout_external_id_defaults_to_none():
+    # Existing-style Workout YAML (manual/tcx/csv/fit logs predating the
+    # intervals.icu sync job) carries no external_id key -- must keep
+    # validating unchanged, no schema_version bump.
+    workout = make_workout()
+    assert workout.external_id is None
+
+
+def test_workout_external_id_round_trip_through_yaml():
+    workout = make_workout(source="fit", external_id="intervals:i132013445")
+    dumped = yaml.safe_dump(workout.model_dump(mode="json"))
+    loaded_data = yaml.safe_load(dumped)
+    restored = Workout.model_validate(loaded_data)
+    assert restored == workout
+    assert restored.external_id == "intervals:i132013445"
+
+
+def test_file_store_workout_external_id_round_trip(tmp_path):
+    store = FileStore(base_dir=tmp_path)
+    workout = make_workout(source="fit", external_id="intervals:i132013445")
+    store.save_workout("wife", workout)
+    loaded = store.list_workouts("wife")
+    assert loaded == [workout]
+    assert loaded[0].external_id == "intervals:i132013445"
+
+
 def test_workout_lap_requires_only_index_and_duration():
     lap = WorkoutLap(index=0, duration_s=120.5)
     assert lap.start_offset_s is None

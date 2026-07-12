@@ -10,3 +10,7 @@ python-multipart>=0.0.9,<1.0
 # cutover is a config-flag flip + redeploy, not a dependency change. Same
 # package as the engine's optional [db] extra.
 psycopg[binary]>=3.1,<4.0
+# HTTP client for backend/app/sync.py (the intervals.icu auto-sync job) --
+# already an fastapi/starlette transitive dep for TestClient, but pinned
+# explicitly here since sync.py imports it directly.
+httpx>=0.27,<1.0

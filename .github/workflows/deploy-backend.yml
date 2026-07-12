@@ -33,6 +33,7 @@ env:
   ARTIFACT_REPO: swim-coach-repo
   IMAGE_NAME: api
   SERVICE_NAME: swim-coach-api
+  SYNC_JOB_NAME: swim-coach-sync
 
 jobs:
   deploy:
@@ -79,3 +80,18 @@ jobs:
             --allow-unauthenticated \
             --set-env-vars=CLAUDE_MODEL=claude-opus-4-8,ALLOWED_ORIGINS=https://ashaber.github.io,ATHLETES_DIR=/app/athletes,LIBRARY_DIR=/app/library,STORE_BACKEND=db \
             --set-secrets=ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest,API_TOKEN=API_TOKEN:latest,DATABASE_URL=DATABASE_URL:latest
+
+      - name: Deploy sync job to Cloud Run
+        # Keeps the intervals.icu auto-sync job (backend/app/sync.py, run on
+        # a Cloud Scheduler cron -- see backend/README.md) on the same image
+        # tag as the API service, every deploy. `continue-on-error` because
+        # the job doesn't exist until Andrew runs its one-time `gcloud run
+        # jobs create` (README setup) -- a fresh repo/environment shouldn't
+        # fail this whole workflow just because that hasn't happened yet.
+        continue-on-error: true
+        run: |
+          gcloud run jobs update ${{ env.SYNC_JOB_NAME }} \
+            --image ${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            --region ${{ env.GCP_REGION }} \
+            --project ${{ secrets.GCP_PROJECT_ID }} \
+          || echo "::warning::${{ env.SYNC_JOB_NAME }} job update failed or the job doesn't exist yet -- see backend/README.md's one-time setup section"
