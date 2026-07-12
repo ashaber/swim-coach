@@ -3,6 +3,7 @@ import {
   sportLabel, sourceBadge, formatWorkoutDistance, sortWorkoutsNewestFirst,
   formatDrift, formatSplit, formatPauses, formatSwolf, formatMovingVsElapsed,
   formatAnalyticsLine, HISTORY_DISPLAY_CAP,
+  formatOffset, formatClock, formatLengthsSummary,
 } from '../../src/workouts.js';
 
 describe('sportLabel', () => {
@@ -161,5 +162,46 @@ describe('formatAnalyticsLine', () => {
     expect(formatAnalyticsLine(analytics)).toBe(
       'drift +6.1% ⚠ · positive split (1:30 → 1:36) · 2 pauses · 5 min stopped',
     );
+  });
+});
+
+describe('formatOffset', () => {
+  it('always includes the hours component, even at zero', () => {
+    expect(formatOffset(754)).toBe('0:12:34');
+  });
+  it('formats offsets past an hour', () => {
+    expect(formatOffset(4520)).toBe('1:15:20');
+  });
+  it('returns null for a null/undefined offset', () => {
+    expect(formatOffset(null)).toBeNull();
+    expect(formatOffset(undefined)).toBeNull();
+  });
+});
+
+describe('formatClock', () => {
+  it('formats sub-hour durations as m:ss with no hours component', () => {
+    expect(formatClock(90)).toBe('1:30');
+    expect(formatClock(65)).toBe('1:05');
+  });
+  it('formats durations at/past an hour as h:mm:ss', () => {
+    expect(formatClock(3665)).toBe('1:01:05');
+  });
+  it('returns null for a null/undefined duration', () => {
+    expect(formatClock(null)).toBeNull();
+    expect(formatClock(undefined)).toBeNull();
+  });
+});
+
+describe('formatLengthsSummary', () => {
+  it('returns null for zero/null/undefined length counts', () => {
+    expect(formatLengthsSummary(0)).toBeNull();
+    expect(formatLengthsSummary(null)).toBeNull();
+    expect(formatLengthsSummary(undefined)).toBeNull();
+  });
+  it('uses singular "length" for a count of 1', () => {
+    expect(formatLengthsSummary(1)).toBe('1 length logged');
+  });
+  it('pluralizes for counts other than 1', () => {
+    expect(formatLengthsSummary(71)).toBe('71 lengths logged');
   });
 });

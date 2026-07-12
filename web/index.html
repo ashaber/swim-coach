@@ -240,7 +240,9 @@
     .hist-section { margin-top: 28px; }
     .hist-list { display: flex; flex-direction: column; gap: 8px; }
     .hist-row { display: flex; gap: 12px; padding: 11px 14px; background: var(--paper);
-      border: 1px solid var(--line); border-radius: 10px; }
+      border: 1px solid var(--line); border-radius: 10px;
+      width: 100%; text-align: left; font: inherit; color: inherit; cursor: pointer; }
+    .hist-row:hover, .hist-row:focus-visible { border-color: var(--accent); }
     .hist-date { flex: none; width: 56px; font-size: 12px; color: var(--ink-faint); padding-top: 1px; }
     .hist-body { min-width: 0; flex: 1; }
     .hist-title { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 14px; font-weight: 650; }
@@ -248,6 +250,29 @@
     .hist-analytics { font-size: 12px; color: var(--ink-soft); margin-top: 3px; }
     .hist-error { margin-top: 14px; font-size: 13px; font-weight: 650; padding: 8px 12px;
       border-radius: 10px; color: var(--c-signal); background: var(--c-signal-wash); }
+
+    /* workout detail view (Slice 2: tapping a history row) */
+    .detail-header { margin: 4px 0 14px; }
+    .detail-header h3 { font-size: 19px; font-weight: 750; letter-spacing: -.01em; }
+    .detail-header .hist-meta { margin-top: 4px; font-size: 13px; }
+    .detail-stats { display: flex; flex-wrap: wrap; gap: 14px 24px; padding: 14px 0;
+      border-bottom: 1px solid var(--line-soft); }
+    .detail-stat .l { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-faint); }
+    .detail-stat .v { font-size: 15px; font-weight: 650; margin-top: 2px; }
+    .detail-section { margin-top: 18px; }
+    .detail-section h4 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+      color: var(--ink-faint); font-weight: 700; margin-bottom: 8px; }
+    .detail-analytics-list { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--ink-soft); }
+    .laps-table-wrap { overflow-x: auto; max-height: 260px; overflow-y: auto;
+      border: 1px solid var(--line); border-radius: 10px; }
+    table.laps-table { width: 100%; min-width: 320px; border-collapse: collapse; font-size: 12px; }
+    table.laps-table th, table.laps-table td { padding: 6px 10px; text-align: right; white-space: nowrap; }
+    table.laps-table th:first-child, table.laps-table td:first-child { text-align: left; }
+    table.laps-table thead th { background: var(--paper-2); position: sticky; top: 0;
+      font-weight: 700; color: var(--ink-faint); text-transform: uppercase; font-size: 10px; letter-spacing: .05em; }
+    table.laps-table tbody tr:nth-child(even) { background: var(--paper-2); }
+    .pauses-list { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--ink-soft); }
+    .detail-notes { white-space: pre-wrap; font-size: 14px; margin-top: 4px; color: var(--ink); }
 
     /* feedback tab */
     .feedback-entry { margin-top: 12px; }

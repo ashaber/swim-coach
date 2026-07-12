@@ -25,6 +25,37 @@ const OLD_MANUAL_WORKOUT = {
   analytics: null,
 };
 
+// A rich .fit workout with laps + pauses + full analytics, for detail-view
+// tests -- distinct from CROSS_TRAIN_WORKOUT/POOL_SWIM_WORKOUT above (those
+// only carry `analytics`, no laps/pauses/lengths/avg_hr/max_hr).
+const RICH_FIT_WORKOUT = {
+  id: 'w-rich', date: '2026-06-01', sport: 'swim_ow', source: 'fit',
+  distance_m: 5000, duration_min: 95, avg_pace_s_per_100m: 114, rpe: 7,
+  notes: 'Choppy back half, felt strong.',
+  avg_hr: 132, max_hr: 158,
+  analytics: {
+    cardiac_drift_pct: 6.4, split_label: 'positive',
+    first_half_pace_s_per_100m: 108, second_half_pace_s_per_100m: 120,
+    elapsed_min: 98, moving_min: 95, pause_total_min: 3, pause_count: 2,
+    swolf_first_quarter: 38.2, swolf_last_quarter: 44.9, swolf_degradation_pct: 17.5,
+  },
+  laps: [
+    {
+      index: 0, start_offset_s: 0, duration_s: 1830, distance_m: 2500,
+      avg_hr: 128, max_hr: 145, avg_pace_s_per_100m: 108, stroke: 'freestyle', num_lengths: null,
+    },
+    {
+      index: 1, start_offset_s: 1830, duration_s: 1980, distance_m: 2500,
+      avg_hr: 136, max_hr: 158, avg_pace_s_per_100m: 120, stroke: 'freestyle', num_lengths: null,
+    },
+  ],
+  lengths: [],
+  pauses: [
+    { start_offset_s: 754, duration_s: 45, source: 'gap' },
+    { start_offset_s: 2600, duration_s: 90, source: 'timer' },
+  ],
+};
+
 describe('renderHistorySection', () => {
   it('renders a workout row with a compact analytics line when analytics has content', () => {
     const html = renderHistorySection({ status: 'ready', data: [CROSS_TRAIN_WORKOUT], error: null, online: true });
@@ -100,6 +131,109 @@ describe('renderHistorySection', () => {
   });
 });
 
+describe('renderHistorySection detail view (Slice 2: tap a row to open detail)', () => {
+  it('renders the detail view instead of the list when detailId matches a workout', () => {
+    const html = renderHistorySection({
+      status: 'ready', data: [RICH_FIT_WORKOUT, OLD_MANUAL_WORKOUT], error: null, online: true, detailId: 'w-rich',
+    });
+    expect(html).toContain('data-a="history:back"');
+    expect(html).not.toContain('data-a="history:open"');
+    // Header: sport, date, source badge.
+    expect(html).toContain('Open water swim');
+    expect(html).toContain('fit');
+  });
+
+  it('renders summary stats: distance, duration, pace, RPE, avg/max HR', () => {
+    const html = renderHistorySection({
+      status: 'ready', data: [RICH_FIT_WORKOUT], error: null, online: true, detailId: 'w-rich',
+    });
+    expect(html).toContain('5 km');
+    expect(html).toContain('1 h 35 min');
+    expect(html).toContain('1:54 /100m');
+    expect(html).toContain('7/10');
+    expect(html).toContain('132 bpm');
+    expect(html).toContain('158 bpm');
+  });
+
+  it('renders the full analytics block with drift warning, split, moving-vs-elapsed, pauses, and swolf', () => {
+    const html = renderHistorySection({
+      status: 'ready', data: [RICH_FIT_WORKOUT], error: null, online: true, detailId: 'w-rich',
+    });
+    expect(html).toContain('drift +6.4% ⚠');
+    expect(html).toContain('positive split (1:48 → 2:00)');
+    expect(html).toContain('1 h 35 min moving of 1 h 38 min');
+    expect(html).toContain('2 pauses · 3 min stopped');
+    expect(html).toContain('SWOLF 38.2→44.9 (+17.5%)');
+  });
+
+  it('renders a laps table with index, distance, duration, pace, and HR', () => {
+    const html = renderHistorySection({
+      status: 'ready', data: [RICH_FIT_WORKOUT], error: null, online: true, detailId: 'w-rich',
+    });
+    expect(html).toContain('laps-table');
+    expect(html).toContain('2.5 km');
+    expect(html).toContain('30:30'); // 1830s
+    expect(html).toContain('1:48'); // 108s/100m pace
+    expect(html).toContain('128'); // lap avg HR
+  });
+
+  it('renders a pauses list with offset (h:mm:ss), duration, and source', () => {
+    const html = renderHistorySection({
+      status: 'ready', data: [RICH_FIT_WORKOUT], error: null, online: true, detailId: 'w-rich',
+    });
+    expect(html).toContain('0:12:34'); // 754s offset
+    expect(html).toContain('gap');
+    expect(html).toContain('timer');
+  });
+
+  it('renders notes verbatim (escaped)', () => {
+    const html = renderHistorySection({
+      status: 'ready', data: [RICH_FIT_WORKOUT], error: null, online: true, detailId: 'w-rich',
+    });
+    expect(html).toContain('Choppy back half, felt strong.');
+  });
+
+  it('escapes malicious notes content in the detail view', () => {
+    const malicious = { ...RICH_FIT_WORKOUT, notes: '<img src=x onerror=alert(1)>' };
+    const html = renderHistorySection({
+      status: 'ready', data: [malicious], error: null, online: true, detailId: 'w-rich',
+    });
+    expect(html).not.toContain('<img src=x');
+    expect(html).toContain('&lt;img');
+  });
+
+  it('renders a bare manual workout (no laps/pauses/analytics) with clean summary stats only', () => {
+    const html = renderHistorySection({
+      status: 'ready', data: [OLD_MANUAL_WORKOUT], error: null, online: true, detailId: 'w-old',
+    });
+    expect(html).toContain('data-a="history:back"');
+    expect(html).toContain('Pool swim');
+    expect(html).toContain('2 km');
+    expect(html).toContain('40 min');
+    expect(html).toContain('easy recovery');
+    // No analytics/laps/pauses sections for a workout with none of those fields.
+    expect(html).not.toContain('laps-table');
+    expect(html).not.toContain('pauses-list');
+    expect(html).not.toContain('detail-analytics-list');
+  });
+
+  it('falls back to the list when detailId does not match any loaded workout', () => {
+    const html = renderHistorySection({
+      status: 'ready', data: [OLD_MANUAL_WORKOUT], error: null, online: true, detailId: 'no-such-id',
+    });
+    expect(html).not.toContain('data-a="history:back"');
+    expect(html).toContain('data-a="history:open"');
+  });
+
+  it('renders the list (not detail) when detailId is null', () => {
+    const html = renderHistorySection({
+      status: 'ready', data: [OLD_MANUAL_WORKOUT], error: null, online: true, detailId: null,
+    });
+    expect(html).not.toContain('data-a="history:back"');
+    expect(html).toContain('data-a="history:open"');
+  });
+});
+
 describe('renderLogTab', () => {
   const baseArgs = {
     form: { date: '2026-07-11', sport: 'swim_pool', distance_m: '', duration_min: '', rpe: 5, notes: '' },
@@ -123,5 +257,12 @@ describe('renderLogTab', () => {
       ...baseArgs, backendConfigured: false, history: { status: 'idle', data: [], error: null },
     });
     expect(html).not.toContain('Recent workouts');
+  });
+
+  it('passes detailId through to the history section, opening the detail view', () => {
+    const html = renderLogTab({
+      ...baseArgs, history: { status: 'ready', data: [CROSS_TRAIN_WORKOUT], error: null }, detailId: 'w-cross',
+    });
+    expect(html).toContain('data-a="history:back"');
   });
 });

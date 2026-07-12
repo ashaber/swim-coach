@@ -124,3 +124,43 @@ export function formatAnalyticsLine(analytics) {
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(' · ') : null;
 }
+
+// --- Workout detail view (Slice 2: tapping a history row) ------------------
+// Pure formatters for the fields the compact history row/analytics line
+// never surfaces: a pause's own start_offset_s/duration_s, a lap's own
+// duration_s, and the lengths array reduced to a count-only summary (never
+// a row-per-length table -- a long pool swim can have 70+ of them).
+
+/** "0:12:34" -- always includes the hours component, even at zero, so a
+ * pause's offset reads directly against the workout's own elapsed clock
+ * (distinct from formatClock below, which omits a zero hours component). */
+export function formatOffset(seconds) {
+  if (seconds === null || seconds === undefined) return null;
+  const total = Math.max(0, Math.round(seconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+/** "1:30", or "1:05:20" once the duration reaches an hour -- used for a
+ * lap's or pause's own duration_s, where second-level precision matters
+ * (unlike formatDuration's whole-minute rounding, which is appropriate for
+ * a whole workout but would lose a short lap/pause entirely). */
+export function formatClock(seconds) {
+  if (seconds === null || seconds === undefined) return null;
+  const total = Math.max(0, Math.round(seconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+/** "71 lengths logged" / "1 length logged" -- the lengths array reduced to
+ * a count-only summary line. Returns null for a zero/null/undefined count
+ * so the detail view can omit the whole section cleanly. */
+export function formatLengthsSummary(count) {
+  if (!count) return null;
+  return `${count} length${count === 1 ? '' : 's'} logged`;
+}
