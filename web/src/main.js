@@ -98,6 +98,11 @@ const state = {
   logSubmit: { status: 'idle', message: null },
   logIngest: createLogIngest(),
   workoutHistory: { status: 'idle', data: [], error: null },
+  // Slice 2: null shows the history list; a workout id opens that
+  // workout's in-tab detail view instead (see views.js's renderHistorySection).
+  // Reset on leaving the Log tab (setTab) and pruned in loadHistory if a
+  // refresh's new data no longer contains the id.
+  workoutDetailId: null,
   checkinForm: createCheckinForm(),
   checkinSubmit: { status: 'idle', message: null },
   profileForm: createProfileForm(),
@@ -146,6 +151,7 @@ function renderTabContent() {
         backendConfigured,
         online: state.online,
         history: state.workoutHistory,
+        detailId: state.workoutDetailId,
       });
     case 'checkin':
       return renderCheckinTab({
@@ -433,6 +439,32 @@ async function handleSubmitLog() {
 // loaded on Log-tab open the same way loadFeedback() is on Feedback-tab open
 // (see setTab) -- not eagerly on every identity/settings change.
 
+// --- Workout detail view (Slice 2: tap a history row) ----------------------
+// Renders from the workout dump already sitting in state.workoutHistory.data
+// -- no second API call (see views.js's renderHistorySection/renderWorkoutDetail).
+
+function handleOpenHistoryDetail(id) {
+  if (!id) return;
+  state.workoutDetailId = id;
+  log.info('history.detail_opened', { athlete: athleteSlug(), workout_id: id });
+  render();
+}
+
+function handleCloseHistoryDetail() {
+  state.workoutDetailId = null;
+  render();
+}
+
+/** Clears a stale detail selection after a history refresh whose new data
+ * no longer contains that workout id (e.g. it aged out past
+ * HISTORY_DISPLAY_CAP) -- called from loadHistory right after
+ * state.workoutHistory.data is replaced. */
+function pruneDetailIdIfMissing(workouts) {
+  if (state.workoutDetailId && !workouts.some((w) => w.id === state.workoutDetailId)) {
+    state.workoutDetailId = null;
+  }
+}
+
 async function loadHistory() {
   const settings = state.settingsForm;
   const identity = state.identity;
@@ -450,12 +482,14 @@ async function loadHistory() {
     const sorted = sortWorkoutsNewestFirst(result.data).slice(0, HISTORY_DISPLAY_CAP);
     log.info('history.loaded', { athlete: identity.athlete, count: sorted.length });
     state.workoutHistory = { status: 'ready', data: sorted, error: null };
+    pruneDetailIdIfMissing(sorted);
   } else if (result.ok) {
     // Defensive: an unexpected (non-array) 2xx body shouldn't crash the
     // history section -- treat it the same as "nothing to show" rather than
     // throwing on the array-only helpers in workouts.js.
     log.warn('history.unexpected_response_shape', { athlete: identity.athlete });
     state.workoutHistory = { status: 'ready', data: [], error: null };
+    pruneDetailIdIfMissing([]);
   } else {
     log.error('history.load_failed', { athlete: identity.athlete, error: result.error });
     state.workoutHistory = { status: 'error', data: state.workoutHistory.data, error: result.error };
@@ -684,6 +718,9 @@ async function handleSubmitFeedback() {
 
 function setTab(tab) {
   if (!KNOWN_TABS.includes(tab) || tab === state.tab) return;
+  // Leaving the Log tab always drops any open workout-detail view -- coming
+  // back to Log should land on the list, not wherever the athlete last was.
+  if (state.tab === 'log') state.workoutDetailId = null;
   state.tab = tab;
   saveActiveTab(tab);
   log.info('tab.switch', { tab });
@@ -736,6 +773,8 @@ function onAppClick(e) {
     case 'profile:submit': handleSubmitProfile(); break;
     case 'feedback:submit': handleSubmitFeedback(); break;
     case 'history:retry': loadHistory(); break;
+    case 'history:open': handleOpenHistoryDetail(el.dataset.id); break;
+    case 'history:back': handleCloseHistoryDetail(); break;
     case 'identity:signout': handleSignOut(); break;
     default: break;
   }

@@ -9,6 +9,8 @@ import {
 import { TOOL_LABELS } from './chat.js';
 import {
   sportLabel, sourceBadge, formatWorkoutDistance, formatAnalyticsLine,
+  formatDrift, formatSplit, formatPauses, formatSwolf, formatMovingVsElapsed,
+  formatOffset, formatClock, formatLengthsSummary,
 } from './workouts.js';
 
 function esc(value) {
@@ -424,7 +426,7 @@ function renderIngestSummary(ingest, form) {
 }
 
 export function renderLogTab({
-  form, submit, ingest, backendConfigured, online, history,
+  form, submit, ingest, backendConfigured, online, history, detailId,
 }) {
   const rpeMissing = form.rpe === '' || form.rpe === null || form.rpe === undefined;
   const uploading = ingest.status === 'uploading';
@@ -481,7 +483,7 @@ export function renderLogTab({
         <p class="field-hint" id="log-rpe-hint"${rpeMissing ? '' : ' hidden'}>Set an effort (RPE) before saving.</p>
         ${renderSubmitResult(submit)}
       </div>
-      ${renderHistorySection({ ...history, online })}`}
+      ${renderHistorySection({ ...history, online, detailId })}`}
     </div>`;
 }
 
@@ -504,7 +506,7 @@ function renderWorkoutRow(workout) {
   const analyticsLine = formatAnalyticsLine(workout.analytics);
 
   return `
-    <div class="hist-row">
+    <button type="button" class="hist-row" data-a="history:open" data-id="${esc(workout.id)}">
       <div class="hist-date mono">${esc(formatShortDate(parseIsoDate(workout.date.slice(0, 10))))}</div>
       <div class="hist-body">
         <div class="hist-title">
@@ -515,20 +517,162 @@ function renderWorkoutRow(workout) {
         <div class="hist-meta mono">${metaParts.join(' · ')}</div>
         ${analyticsLine ? `<div class="hist-analytics mono">${esc(analyticsLine)}</div>` : ''}
       </div>
-    </div>`;
+    </button>`;
 }
 
 function renderHistoryList(workouts) {
   return `<div class="hist-list">${workouts.map(renderWorkoutRow).join('')}</div>`;
 }
 
+// --- Workout detail view (tapping a history row) --------------------------
+// Renders from the already-fetched full workout dump in state -- no second
+// API call. Every section (summary stats, analytics, laps, pauses, lengths,
+// notes) is conditional on its own field(s) being present, so an old
+// manual-entry workout (none of laps/pauses/analytics) still renders a
+// clean summary-stats-only view instead of a half-empty one.
+
+function renderDetailStat(label, value) {
+  if (value === null || value === undefined || value === '') return '';
+  return `<div class="detail-stat"><div class="l">${esc(label)}</div><div class="v">${esc(value)}</div></div>`;
+}
+
+function renderDetailStats(workout) {
+  const pace = formatPace(workout.avg_pace_s_per_100m);
+  const hasRpe = workout.rpe !== null && workout.rpe !== undefined;
+  const hasAvgHr = workout.avg_hr !== null && workout.avg_hr !== undefined;
+  const hasMaxHr = workout.max_hr !== null && workout.max_hr !== undefined;
+  const stats = [
+    renderDetailStat('Distance', formatWorkoutDistance(workout.distance_m)),
+    renderDetailStat('Duration', formatDuration(workout.duration_min)),
+    renderDetailStat('Pace', pace ? `${pace} /100m` : null),
+    renderDetailStat('RPE', hasRpe ? `${workout.rpe}/10` : null),
+    renderDetailStat('Avg HR', hasAvgHr ? `${workout.avg_hr} bpm` : null),
+    renderDetailStat('Max HR', hasMaxHr ? `${workout.max_hr} bpm` : null),
+  ].join('');
+  return `<div class="detail-stats">${stats}</div>`;
+}
+
+/** The full (not compact-line) analytics block -- each of the same five
+ * sub-fields formatAnalyticsLine joins into one hist-row line, rendered
+ * here as its own row instead, still each conditional on its own presence
+ * (formatDrift/formatSplit/formatPauses/formatSwolf/formatMovingVsElapsed
+ * all already return null cleanly when their field is absent). */
+function renderDetailAnalytics(analytics) {
+  if (!analytics) return '';
+  const lines = [
+    formatDrift(analytics.cardiac_drift_pct),
+    formatSplit(analytics),
+    formatMovingVsElapsed(analytics),
+    formatPauses(analytics),
+    formatSwolf(analytics),
+  ].filter(Boolean);
+  if (lines.length === 0) return '';
+  return `
+    <section class="detail-section">
+      <h4>Analytics</h4>
+      <div class="detail-analytics-list">${lines.map((line) => `<div>${esc(line)}</div>`).join('')}</div>
+    </section>`;
+}
+
+function renderLapsTable(laps) {
+  if (!laps || laps.length === 0) return '';
+  const rows = laps.map((lap) => {
+    const distance = formatWorkoutDistance(lap.distance_m);
+    const duration = formatClock(lap.duration_s);
+    const pace = formatPace(lap.avg_pace_s_per_100m);
+    const hasHr = lap.avg_hr !== null && lap.avg_hr !== undefined;
+    return `
+      <tr>
+        <td>${esc(lap.index)}</td>
+        <td>${distance ? esc(distance) : '—'}</td>
+        <td>${duration ? esc(duration) : '—'}</td>
+        <td>${pace ? esc(pace) : '—'}</td>
+        <td>${hasHr ? esc(lap.avg_hr) : '—'}</td>
+      </tr>`;
+  }).join('');
+  return `
+    <section class="detail-section">
+      <h4>Laps (${laps.length})</h4>
+      <div class="laps-table-wrap">
+        <table class="laps-table">
+          <thead><tr><th>#</th><th>Dist</th><th>Time</th><th>Pace</th><th>HR</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </section>`;
+}
+
+function renderPausesList(pauses) {
+  if (!pauses || pauses.length === 0) return '';
+  const rows = pauses.map((pause) => {
+    const offset = formatOffset(pause.start_offset_s);
+    const duration = formatClock(pause.duration_s);
+    return `<div class="pause-row mono">${esc(offset)} · ${esc(duration)} · ${esc(pause.source)}</div>`;
+  }).join('');
+  return `
+    <section class="detail-section">
+      <h4>Pauses (${pauses.length})</h4>
+      <div class="pauses-list">${rows}</div>
+    </section>`;
+}
+
+function renderLengthsSummarySection(lengths) {
+  const summary = formatLengthsSummary(lengths?.length);
+  if (!summary) return '';
+  return `
+    <section class="detail-section">
+      <h4>Lengths</h4>
+      <p class="sub">${esc(summary)}</p>
+    </section>`;
+}
+
+function renderDetailNotes(notes) {
+  if (!notes) return '';
+  return `
+    <section class="detail-section">
+      <h4>Notes</h4>
+      <p class="detail-notes">${esc(notes)}</p>
+    </section>`;
+}
+
+function renderWorkoutDetail(workout) {
+  const badge = sourceBadge(workout.source);
+  return `
+    <div class="detail-header">
+      <h3>${esc(sportLabel(workout.sport))}</h3>
+      <div class="hist-meta mono">${esc(formatLongDate(parseIsoDate(workout.date.slice(0, 10))))}${badge ? ` <span class="chat-chip">${esc(badge)}</span>` : ''}</div>
+    </div>
+    ${renderDetailStats(workout)}
+    ${renderDetailAnalytics(workout.analytics)}
+    ${renderLapsTable(workout.laps)}
+    ${renderPausesList(workout.pauses)}
+    ${renderLengthsSummarySection(workout.lengths)}
+    ${renderDetailNotes(workout.notes)}`;
+}
+
 /** `history` is `{ status, data, error }` (see main.js's state.workoutHistory)
- * plus `online` folded in -- status is one of idle/loading/ready/error, same
- * convention as plan/profile/feedback in main.js. */
+ * plus `online` and `detailId` folded in -- status is one of
+ * idle/loading/ready/error, same convention as plan/profile/feedback in
+ * main.js. `detailId` (main.js's state.workoutDetailId) is null for the
+ * list view, or a workout id to show that workout's detail view instead --
+ * checked ahead of every status branch (using whatever `data` is already in
+ * state, stale-during-a-refresh included) so the detail view survives a
+ * background render() exactly like every other state-driven view here. */
 export function renderHistorySection({
-  status, data, error, online,
+  status, data, error, online, detailId,
 }) {
   const hasData = data && data.length > 0;
+
+  if (hasData && detailId) {
+    const workout = data.find((w) => w.id === detailId);
+    if (workout) {
+      return `
+        <section class="hist-section">
+          <div class="s-head"><button type="button" class="btn-ghost" data-a="history:back">&larr; Back to history</button></div>
+          ${renderWorkoutDetail(workout)}
+        </section>`;
+    }
+  }
 
   if (status === 'error') {
     return `
