@@ -58,6 +58,12 @@ describe('resolveIdentity', () => {
     });
   });
 
+  it('resolves tim (sandbox evaluator) to his own athlete slug', () => {
+    expect(resolveIdentity('curry.mtb@gmail.com')).toEqual({
+      email: 'curry.mtb@gmail.com', athlete: 'tim', role: 'athlete',
+    });
+  });
+
   it('is case-insensitive', () => {
     expect(resolveIdentity('AndrewShaber@Gmail.com')).toEqual({
       email: 'andrewshaber@gmail.com', athlete: 'andrew', role: 'athlete',

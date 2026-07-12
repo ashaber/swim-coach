@@ -29,6 +29,7 @@ const GSI_SCRIPT_SRC = 'https://accounts.google.com/gsi/client';
 const EMAIL_IDENTITY_MAP = {
   'andrewshaber@gmail.com': { athlete: 'andrew', role: 'athlete' },
   'kline.renee@gmail.com': { athlete: 'renee', role: 'athlete' },
+  'curry.mtb@gmail.com': { athlete: 'tim', role: 'athlete' },
 };
 
 /**
