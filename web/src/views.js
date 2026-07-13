@@ -495,12 +495,33 @@ export function renderLogTab({
 // inline) so it's cheaply unit-testable on its own -- see
 // tests/unit/views.test.js.
 
+// Bioluminescent Dusk treatment: pace-ish values read in the teal accent,
+// HR/attention values in amber -- see highlightDrift below for the drift
+// line's own warning-threshold coloring. Wrapping in a span here only adds
+// markup around text that's already rendered as-is (see the module doc
+// comment on renderWorkoutRow's metaParts, which were never esc()'d because
+// they're system-formatted, not user input) -- it doesn't change what text
+// ends up on the page, so it's safe alongside the exact-substring checks in
+// tests/unit/views.test.js and tests/e2e/test_workout_history.py.
+function highlightDrift(line) {
+  if (!line) return esc(line);
+  // formatAnalyticsLine always puts formatDrift's output first when present
+  // (see workouts.js), so the drift token -- if this line has one -- is
+  // always a prefix of the full string.
+  const match = /^(drift [+-]\d+\.\d+%( ⚠)?)/.exec(line);
+  if (!match) return esc(line);
+  const driftText = match[1];
+  const rest = line.slice(driftText.length);
+  const warn = Boolean(match[2]);
+  return `<span class="stat-drift${warn ? ' stat-drift--warn' : ''}">${esc(driftText)}</span>${esc(rest)}`;
+}
+
 function renderWorkoutRow(workout) {
   const metaParts = [formatDuration(workout.duration_min)];
   const distance = formatWorkoutDistance(workout.distance_m);
   if (distance) metaParts.push(distance);
   const pace = formatPace(workout.avg_pace_s_per_100m);
-  if (pace) metaParts.push(`${pace} /100m`);
+  if (pace) metaParts.push(`<span class="stat-pace">${esc(pace)} /100m</span>`);
 
   const badge = sourceBadge(workout.source);
   const analyticsLine = formatAnalyticsLine(workout.analytics);
@@ -515,7 +536,7 @@ function renderWorkoutRow(workout) {
           ${workout.rpe !== null && workout.rpe !== undefined ? `<span class="chat-chip">RPE ${esc(workout.rpe)}</span>` : ''}
         </div>
         <div class="hist-meta mono">${metaParts.join(' · ')}</div>
-        ${analyticsLine ? `<div class="hist-analytics mono">${esc(analyticsLine)}</div>` : ''}
+        ${analyticsLine ? `<div class="hist-analytics mono">${highlightDrift(analyticsLine)}</div>` : ''}
       </div>
     </button>`;
 }
@@ -531,9 +552,13 @@ function renderHistoryList(workouts) {
 // manual-entry workout (none of laps/pauses/analytics) still renders a
 // clean summary-stats-only view instead of a half-empty one.
 
-function renderDetailStat(label, value) {
+// `kind` is a purely visual hook (Bioluminescent Dusk: pace-ish values in
+// teal, HR/attention values in amber, see index.html's .stat-pace/.stat-hr)
+// -- optional and additive, doesn't change the existing markup shape.
+function renderDetailStat(label, value, kind) {
   if (value === null || value === undefined || value === '') return '';
-  return `<div class="detail-stat"><div class="l">${esc(label)}</div><div class="v">${esc(value)}</div></div>`;
+  const valueClass = kind ? ` stat-${kind}` : '';
+  return `<div class="detail-stat"><div class="l">${esc(label)}</div><div class="v${valueClass}">${esc(value)}</div></div>`;
 }
 
 function renderDetailStats(workout) {
@@ -544,10 +569,10 @@ function renderDetailStats(workout) {
   const stats = [
     renderDetailStat('Distance', formatWorkoutDistance(workout.distance_m)),
     renderDetailStat('Duration', formatDuration(workout.duration_min)),
-    renderDetailStat('Pace', pace ? `${pace} /100m` : null),
+    renderDetailStat('Pace', pace ? `${pace} /100m` : null, 'pace'),
     renderDetailStat('RPE', hasRpe ? `${workout.rpe}/10` : null),
-    renderDetailStat('Avg HR', hasAvgHr ? `${workout.avg_hr} bpm` : null),
-    renderDetailStat('Max HR', hasMaxHr ? `${workout.max_hr} bpm` : null),
+    renderDetailStat('Avg HR', hasAvgHr ? `${workout.avg_hr} bpm` : null, 'hr'),
+    renderDetailStat('Max HR', hasMaxHr ? `${workout.max_hr} bpm` : null, 'hr'),
   ].join('');
   return `<div class="detail-stats">${stats}</div>`;
 }
@@ -570,7 +595,7 @@ function renderDetailAnalytics(analytics) {
   return `
     <section class="detail-section">
       <h4>Analytics</h4>
-      <div class="detail-analytics-list">${lines.map((line) => `<div>${esc(line)}</div>`).join('')}</div>
+      <div class="detail-analytics-list">${lines.map((line) => `<div>${highlightDrift(line)}</div>`).join('')}</div>
     </section>`;
 }
 

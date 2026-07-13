@@ -1,3 +1,4 @@
+import './fonts.js';
 import log from './log.js';
 import {
   renderApp, renderLoading, renderError, renderTabBar, renderCoachTab, renderSettingsTab,

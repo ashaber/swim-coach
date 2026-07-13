@@ -31,8 +31,11 @@ export default defineConfig({
       workbox: {
         // data/*.json (the exported plan) lands in dist/data/ via public/ and
         // matches this glob (json extension), so it's precached for offline
-        // load along with the rest of the app shell.
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,json}'],
+        // load along with the rest of the app shell. woff2 added for the
+        // Bioluminescent Dusk restyle's bundled Manrope/Inter fonts (see
+        // src/fonts.js) -- offline-first means these must be precached too,
+        // not fetched from Google Fonts.
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,json,woff2}'],
         navigateFallback: 'index.html',
         // The Coach tab's /api/chat and /health calls go to a configurable,
         // usually cross-origin backend URL (see src/api.js) and must never
