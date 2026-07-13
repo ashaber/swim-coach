@@ -9,18 +9,23 @@ export default defineConfig({
   plugins: [
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['icon.svg', 'icon-192.png', 'icon-512.png'],
+      includeAssets: ['icon-192.png', 'icon-512.png', 'icon-maskable-192.png', 'icon-maskable-512.png'],
       manifest: {
         name: 'swim-coach',
         short_name: 'swim-coach',
         description: "Renee's training plan, read-only, on your phone.",
         display: 'standalone',
-        theme_color: '#0e7c86',
-        background_color: '#eef2f3',
+        theme_color: '#0f3138',
+        background_color: '#0f3138',
         start_url: '.',
+        // "any" icons are the design-handoff artwork verbatim (its own rounded
+        // tile); "maskable" ones re-seat the figure inside the 80% safe zone so
+        // Android's circle crop doesn't clip the wings/tail.
         icons: [
-          { src: 'icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any maskable' },
-          { src: 'icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+          { src: 'icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: 'icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          { src: 'icon-maskable-192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
+          { src: 'icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
       },
       workbox: {
