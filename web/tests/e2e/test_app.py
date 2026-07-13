@@ -55,16 +55,6 @@ def test_no_bare_console_errors(page):
     page.wait_for_selector('.mast h1')
 
 
-def test_theme_toggle_stamps_data_theme(page):
-    page.wait_for_selector('.themebtn')
-    root = page.locator('html')
-    before = root.get_attribute('data-theme')
-    page.click('#themebtn')
-    after = root.get_attribute('data-theme')
-    assert after in ('light', 'dark')
-    assert after != before
-
-
 def test_offline_load_works(frozen_page):
     # Same "Lucky Peak" wall-clock coupling as test_renees_plan_renders_with_real_data
     # above -- use the frozen fixture so this doesn't flake once the real

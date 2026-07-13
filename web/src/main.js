@@ -891,7 +891,7 @@ function onAppKeydown(e) {
   }
 }
 
-// --- Theme + offline (unchanged) ---------------------------------------------
+// --- Offline (unchanged) -------------------------------------------------
 
 function updateOfflineBanner() {
   const banner = document.getElementById('offline-banner');
@@ -913,18 +913,6 @@ function updateOnlineState() {
   if (TABS_SENSITIVE_TO_ONLINE_STATE.includes(state.tab)) render();
 }
 
-function initTheme() {
-  const btn = document.getElementById('themebtn');
-  btn?.addEventListener('click', () => {
-    const root = document.documentElement;
-    const current = root.getAttribute('data-theme')
-      || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-    const next = current === 'dark' ? 'light' : 'dark';
-    root.setAttribute('data-theme', next);
-    log.info('theme.toggle', { theme: next });
-  });
-}
-
 window.addEventListener('online', updateOnlineState);
 window.addEventListener('offline', updateOnlineState);
 // See handleOpenHistoryDetail/handleCloseHistoryDetail/setTab for the rest
@@ -938,7 +926,6 @@ appEl.addEventListener('keydown', onAppKeydown);
 
 log.info('app.init', { version: __APP_VERSION__ ?? 'dev' });
 updateOfflineBanner();
-initTheme();
 render();
 loadPlan();
 maybeLoadProfile();
