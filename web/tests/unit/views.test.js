@@ -242,6 +242,8 @@ describe('renderLogTab', () => {
     backendConfigured: true,
     online: true,
     history: { status: 'idle', data: [], error: null },
+    sync: { status: 'idle', message: null },
+    manualOpen: false,
   };
 
   it('includes the history section when backend is configured', () => {
@@ -264,5 +266,67 @@ describe('renderLogTab', () => {
       ...baseArgs, history: { status: 'ready', data: [CROSS_TRAIN_WORKOUT], error: null }, detailId: 'w-cross',
     });
     expect(html).toContain('data-a="history:back"');
+  });
+
+  // --- Phase 3: "Sync from watch" primary action, manual entry secondary ---
+
+  it('always shows the primary sync button ahead of the (collapsed) manual section', () => {
+    const html = renderLogTab(baseArgs);
+    const syncIdx = html.indexOf('data-a="sync:start"');
+    const toggleIdx = html.indexOf('data-a="log:toggle-manual"');
+    const historyIdx = html.indexOf('Recent workouts');
+    expect(syncIdx).toBeGreaterThan(-1);
+    expect(toggleIdx).toBeGreaterThan(syncIdx);
+    expect(historyIdx).toBeGreaterThan(toggleIdx);
+  });
+
+  it('shows "Sync from watch" idle label, enabled, when online and idle', () => {
+    const html = renderLogTab(baseArgs);
+    expect(html).toContain('Sync from watch');
+    const btnMatch = /<button[^>]*data-a="sync:start"[^>]*>/.exec(html);
+    expect(btnMatch[0]).not.toContain('disabled');
+  });
+
+  it('shows a busy "Syncing…" label and disables the button while syncing', () => {
+    const html = renderLogTab({ ...baseArgs, sync: { status: 'syncing', message: null } });
+    expect(html).toContain('Syncing');
+    const btnMatch = /<button[^>]*data-a="sync:start"[^>]*>/.exec(html);
+    expect(btnMatch[0]).toContain('disabled');
+  });
+
+  it('disables the sync button while offline', () => {
+    const html = renderLogTab({ ...baseArgs, online: false });
+    const btnMatch = /<button[^>]*data-a="sync:start"[^>]*>/.exec(html);
+    expect(btnMatch[0]).toContain('disabled');
+  });
+
+  it('shows a success result line with the ok treatment', () => {
+    const html = renderLogTab({
+      ...baseArgs, sync: { status: 'success', message: '2 new workouts synced' },
+    });
+    expect(html).toContain('conn-result ok');
+    expect(html).toContain('2 new workouts synced');
+  });
+
+  it('shows an error result line verbatim with the fail treatment', () => {
+    const html = renderLogTab({
+      ...baseArgs, sync: { status: 'error', message: 'sync not configured for this athlete' },
+    });
+    expect(html).toContain('conn-result fail');
+    expect(html).toContain('sync not configured for this athlete');
+  });
+
+  it('collapses the manual entry/upload section by default, showing only the toggle', () => {
+    const html = renderLogTab(baseArgs);
+    expect(html).toContain('Log manually / upload a file');
+    expect(html).not.toContain('data-a="log:file-select"');
+    expect(html).not.toContain('data-form="log" data-field="date"');
+  });
+
+  it('expands the manual form and upload input when manualOpen is true', () => {
+    const html = renderLogTab({ ...baseArgs, manualOpen: true });
+    expect(html).toContain('data-a="log:file-select"');
+    expect(html).toContain('data-form="log" data-field="date"');
+    expect(html).toContain('Hide manual entry');
   });
 });

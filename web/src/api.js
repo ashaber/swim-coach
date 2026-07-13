@@ -186,6 +186,19 @@ export async function listWorkouts({ baseUrl, token, athlete = 'renee' }) {
   return apiRequest({ baseUrl, token, path: `/api/workouts?athlete=${encodeURIComponent(athlete)}` });
 }
 
+/** POST {baseUrl}/api/workouts/sync?athlete=<slug> -- the Log tab's primary
+ * "Sync from watch" button. Runs an on-demand intervals.icu sync for the
+ * athlete and returns `{ listed, new, saved, failed }` on success. If sync
+ * isn't set up for this athlete, the backend returns 409 with a
+ * `{error}` body -- surfaced through the same `{ ok: false, error }` shape
+ * apiRequest already normalizes every other failure into, so main.js only
+ * needs one branch. */
+export async function syncWorkouts({ baseUrl, token, athlete = 'renee' }) {
+  return apiRequest({
+    baseUrl, token, path: `/api/workouts/sync?athlete=${encodeURIComponent(athlete)}`, method: 'POST',
+  });
+}
+
 /** POST {baseUrl}/api/wellness?athlete=<slug> -- logs a daily check-in. */
 export async function postWellness({ baseUrl, token, athlete = 'renee', payload }) {
   return apiRequest({

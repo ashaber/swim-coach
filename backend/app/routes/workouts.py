@@ -1,5 +1,9 @@
 """POST/GET /api/workouts -- logging and listing completed workouts, plus
-POST /api/workouts/ingest -- parsing a `.fit`/`.tcx`/`.csv` watch export.
+POST /api/workouts/ingest -- parsing a `.fit`/`.tcx`/`.csv` watch export, and
+POST /api/workouts/sync -- an on-demand intervals.icu sync for the Log tab's
+primary "Sync from watch" button (see `sync_workouts` below and
+`app.sync.sync_on_demand`, shared with the coach chat's own `sync_workouts`
+tool in `app.tools`).
 
 This is the write half of the seam `plan.py` reads through: everything goes
 via `make_store(settings)` (`FileStore` locally, `DbStore` in prod behind
@@ -56,6 +60,7 @@ from app.auth import require_auth
 from app.enrich import enrich_draft
 from app.logging_config import get_logger
 from app.store_factory import make_store
+from app.sync import ON_DEMAND_SYNC_WINDOW_DAYS, sync_on_demand
 
 router = APIRouter()
 log = get_logger("app.routes.workouts")
@@ -114,6 +119,47 @@ async def create_workout(
 
     store.save_workout(athlete, workout)
     return workout.model_dump(mode="json")
+
+
+@router.post("/api/workouts/sync")
+async def sync_workouts(
+    request: Request,
+    athlete: str = Query("renee"),
+    _token: str = Depends(require_auth),
+) -> dict:
+    """The Log tab's primary "Sync from watch" button: runs the same
+    on-demand intervals.icu sync the coach chat's `sync_workouts` tool uses
+    (`app.sync.sync_on_demand`, a small 2-day trailing window -- see that
+    function's docstring) for the given athlete right now, rather than
+    waiting for the scheduled sync job.
+
+    Returns plain counts: `{"listed", "new", "saved", "failed"}`. If
+    `INTERVALS_SYNC_CONFIG` is absent, malformed, or simply doesn't list this
+    athlete, returns 409 with a clear `{"error": ...}` -- never a 500, since
+    "sync isn't set up yet" is an expected, athlete-facing state, not a
+    server fault.
+    """
+    settings = request.app.state.settings
+    store = make_store(settings)
+    try:
+        store.load_athlete(athlete)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"no such athlete: {athlete}") from exc
+
+    result = sync_on_demand(store, athlete, window_days=ON_DEMAND_SYNC_WINDOW_DAYS)
+    if "error" in result:
+        log.warn("workouts.sync_not_configured", athlete=athlete)
+        raise HTTPException(status_code=409, detail=result["error"])
+
+    log.info(
+        "workouts.sync_completed",
+        athlete=athlete,
+        listed=result["listed"],
+        new=result["new"],
+        saved=result["saved"],
+        failed=result["failed"],
+    )
+    return result
 
 
 @router.post("/api/workouts/ingest")

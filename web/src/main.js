@@ -11,14 +11,14 @@ import {
 import { loadSettings, saveSettings, isConfigured } from './settings.js';
 import {
   streamChat, testConnection, postWorkout, postWellness, fetchPlan, getAthlete, patchAthlete,
-  postFeedback, listFeedback, uploadWorkoutFile, listWorkouts,
+  postFeedback, listFeedback, uploadWorkoutFile, listWorkouts, syncWorkouts,
 } from './api.js';
 import {
   serializeWorkoutForm, serializeWellnessForm, profileFormFromAthlete, serializeProfileForm,
   serializeFeedbackForm, logFormFromDraft,
 } from './forms.js';
 import { currentIdentity, signIn, signOut } from './identity.js';
-import { sortWorkoutsNewestFirst, HISTORY_DISPLAY_CAP } from './workouts.js';
+import { sortWorkoutsNewestFirst, HISTORY_DISPLAY_CAP, formatSyncResult } from './workouts.js';
 
 const appEl = document.getElementById('app');
 const ACTIVE_TAB_KEY = 'swimcoach_active_tab';
@@ -45,6 +45,10 @@ function createLogForm() {
 
 function createLogIngest() {
   return { status: 'idle', fileName: null, error: null };
+}
+
+function createLogSync() {
+  return { status: 'idle', message: null };
 }
 
 // The single source of truth for "which file extensions the Log tab's
@@ -98,6 +102,11 @@ const state = {
   logForm: createLogForm(),
   logSubmit: { status: 'idle', message: null },
   logIngest: createLogIngest(),
+  logSync: createLogSync(),
+  // Secondary manual-entry/upload section is collapsed by default (Phase 3:
+  // "Sync from watch" is the Log tab's primary action) -- reset on leaving
+  // the Log tab (setTab), same convention as workoutDetailId below.
+  logManualOpen: false,
   workoutHistory: { status: 'idle', data: [], error: null },
   // Slice 2: null shows the history list; a workout id opens that
   // workout's in-tab detail view instead (see views.js's renderHistorySection).
@@ -153,6 +162,8 @@ function renderTabContent() {
         online: state.online,
         history: state.workoutHistory,
         detailId: state.workoutDetailId,
+        sync: state.logSync,
+        manualOpen: state.logManualOpen,
       });
     case 'checkin':
       return renderCheckinTab({
@@ -430,6 +441,55 @@ async function handleSubmitLog() {
     state.logSubmit = { status: 'error', message: result.error };
     render();
   }
+}
+
+// --- Log tab: sync from watch (Phase 3 primary action) -----------------------
+// Calls POST /api/workouts/sync -- the same on-demand intervals.icu sync the
+// coach chat's sync_workouts tool triggers server-side (see
+// backend/app/sync.py's sync_on_demand, shared by both). Manual entry/upload
+// (handleSubmitLog/handleLogFileSelected below) is the secondary path now,
+// collapsed behind state.logManualOpen -- see handleToggleManualLog.
+
+async function handleSyncWorkouts() {
+  if (state.logSync.status === 'syncing') return;
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) {
+    state.tab = 'settings';
+    saveActiveTab(state.tab);
+    render();
+    return;
+  }
+
+  state.logSync = { status: 'syncing', message: null };
+  render();
+  log.info('sync.requested', { athlete: athleteSlug() });
+
+  const result = await syncWorkouts({ baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug() });
+  if (result.ok) {
+    log.info('sync.completed', {
+      athlete: athleteSlug(),
+      listed: result.data.listed,
+      new: result.data.new,
+      saved: result.data.saved,
+      failed: result.data.failed,
+    });
+    state.logSync = { status: 'success', message: formatSyncResult(result.data) };
+    if (result.data.saved > 0) {
+      loadHistory(); // refreshes the history list to include the synced workout(s); calls render() itself
+    } else {
+      render();
+    }
+  } else {
+    log.error('sync.failed', { athlete: athleteSlug(), error: result.error });
+    state.logSync = { status: 'error', message: result.error };
+    render();
+  }
+}
+
+function handleToggleManualLog() {
+  state.logManualOpen = !state.logManualOpen;
+  log.info('log.manual_toggle', { open: state.logManualOpen });
+  render();
 }
 
 // --- Workout history (Log tab section) ------------------------------------------
@@ -752,6 +812,12 @@ async function handleSubmitFeedback() {
 
 function setTab(tab) {
   if (!KNOWN_TABS.includes(tab) || tab === state.tab) return;
+  // Leaving the Log tab always collapses the secondary manual-entry/upload
+  // section back down -- coming back to Log should land on the primary sync
+  // button, not wherever the athlete last left the secondary section.
+  if (state.tab === 'log') {
+    state.logManualOpen = false;
+  }
   // Leaving the Log tab always drops any open workout-detail view -- coming
   // back to Log should land on the list, not wherever the athlete last was.
   if (state.tab === 'log' && state.workoutDetailId) {
@@ -812,6 +878,8 @@ function onAppClick(e) {
     case 'settings:save': handleSaveSettings(); break;
     case 'settings:test': handleTestConnection(); break;
     case 'log:submit': handleSubmitLog(); break;
+    case 'sync:start': handleSyncWorkouts(); break;
+    case 'log:toggle-manual': handleToggleManualLog(); break;
     case 'checkin:submit': handleSubmitCheckin(); break;
     case 'profile:submit': handleSubmitProfile(); break;
     case 'feedback:submit': handleSubmitFeedback(); break;

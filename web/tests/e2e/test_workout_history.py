@@ -183,6 +183,10 @@ def test_history_refreshes_after_a_successful_manual_log_submit(page):
     page.wait_for_selector('.hist-section:has-text("No workouts logged yet.")')
     assert 'No workouts logged yet.' in page.content()
 
+    # Phase 3: the manual form is collapsed behind a secondary toggle now
+    # ("Sync from watch" is the primary action) -- expand it before filling.
+    page.click('[data-a="log:toggle-manual"]')
+    page.wait_for_selector('[data-form="log"][data-field="distance_m"]')
     page.fill('[data-form="log"][data-field="distance_m"]', '3000')
     page.fill('[data-form="log"][data-field="duration_min"]', '60')
     page.click('[data-a="log:submit"]')
@@ -206,10 +210,14 @@ def test_log_tab_still_loads_offline_with_a_quiet_history_notice(page):
         page.wait_for_function('() => !navigator.onLine')
         page.click('[data-a="tab:log"]')
         page.wait_for_selector('.hist-section')
-        content = page.content()
-        # The app itself keeps working offline (form still renders); history
-        # just quietly declines to claim "no workouts" when it never fetched.
+        # The primary sync action is disabled offline (Phase 3) -- and the
+        # manual form still renders fine once expanded; history just
+        # quietly declines to claim "no workouts" when it never fetched.
+        assert page.locator('[data-a="sync:start"]').is_disabled()
+        page.click('[data-a="log:toggle-manual"]')
+        page.wait_for_selector('[data-form="log"][data-field="distance_m"]')
         assert page.locator('[data-form="log"][data-field="distance_m"]').count() == 1
+        content = page.content()
         assert 'reconnect' in content.lower()
         assert 'No workouts logged yet.' not in content
     finally:
