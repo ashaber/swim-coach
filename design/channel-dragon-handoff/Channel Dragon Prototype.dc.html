@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { margin:0; background:#e7e2da; font-family:'Inter',sans-serif; display:flex; align-items:flex-start; justify-content:center; padding:40px; }
+    a { color:#2ab0ba; }
+    a:hover { color:#6fd3da; }
+    ::-webkit-scrollbar { width:0; height:0; }
+  </style>
+</helmet>
+
+<div style="display:flex; flex-direction:column; align-items:center; gap:14px;">
+  <div style="font-family:'Manrope',sans-serif; font-weight:700; font-size:13px; color:#47585f; text-align:center; max-width:390px;">Tap through the flow — stat drill-ins, the (i) explainer into coach chat, and the plan discuss → adapt → accept/discuss/cancel loop.</div>
+
+  <div style="width:390px; height:844px; border-radius:44px; background:#14181f; box-shadow:0 30px 60px rgba(10,10,20,.35); overflow:hidden; border:6px solid #0a0d12; position:relative; font-family:'Inter',sans-serif; color:#eef7f8;">
+
+    <div style="height:calc(100% - 74px); overflow-y:auto;">
+
+      <!-- ============ LOG TAB ============ -->
+      <sc-if value="{{ isTabLog }}" hint-placeholder-val="{{ true }}">
+
+        <!-- Log > workout detail -->
+        <sc-if value="{{ isLogDetail }}" hint-placeholder-val="{{ true }}">
+          <div style="padding:22px 20px 24px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:18px;">
+              <span style="font-size:20px; color:#9cc7cf;">←</span>
+              <span style="font-family:'Manrope',sans-serif; font-weight:700; font-size:13px; letter-spacing:.08em; text-transform:uppercase; background:linear-gradient(90deg,#45afc6,#a3e4d7,#f49342); -webkit-background-clip:text; background-clip:text; color:transparent;">Workout</span>
+              <span style="font-size:18px;">⋯</span>
+            </div>
+            <div style="font-family:'Manrope',sans-serif; font-weight:800; font-size:22px; letter-spacing:-.02em;">Open water · long swim</div>
+            <div style="font-size:12.5px; color:#7fa8b0; margin-top:4px;">Tue Jul 7 · Half Moon Bay</div>
+
+            <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:20px;">
+              <div onClick="{{ openDrillPace }}" style="background:#1c2530; border:1px solid #2a3542; border-radius:14px; padding:12px 10px; position:relative; cursor:pointer;">
+                <div style="font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:#7fa8b0;">Pace /100m</div>
+                <div style="font-family:'Manrope',sans-serif; font-weight:800; font-size:19px; margin-top:4px; color:#45afc6;">1:38</div>
+                <span style="position:absolute; top:10px; right:10px; font-size:12px; color:#4a7480;">›</span>
+              </div>
+              <div style="background:#1c2530; border:1px solid #2a3542; border-radius:14px; padding:12px 10px; position:relative;">
+                <div onClick="{{ openDrillDecoupling }}" style="display:flex; align-items:center; gap:4px; cursor:pointer; font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:#7fa8b0;">HR decoupling
+                  <span onClick="{{ openExplain }}" style="display:inline-flex; align-items:center; justify-content:center; width:13px; height:13px; border-radius:50%; border:1px solid #556; font-size:9px; color:#9cc7cf; font-weight:700; cursor:pointer;">i</span>
+                </div>
+                <div onClick="{{ openDrillDecoupling }}" style="font-family:'Manrope',sans-serif; font-weight:800; font-size:19px; margin-top:4px; color:#f49342; cursor:pointer;">4.2%</div>
+                <span onClick="{{ openDrillDecoupling }}" style="position:absolute; top:10px; right:10px; font-size:12px; color:#4a7480; cursor:pointer;">›</span>
+              </div>
+              <div onClick="{{ openDrillDistance }}" style="background:#1c2530; border:1px solid #2a3542; border-radius:14px; padding:12px 10px; position:relative; cursor:pointer;">
+                <div style="font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:#7fa8b0;">Distance</div>
+                <div style="font-family:'Manrope',sans-serif; font-weight:800; font-size:19px; margin-top:4px;">3,800m</div>
+                <span style="position:absolute; top:10px; right:10px; font-size:12px; color:#4a7480;">›</span>
+              </div>
+            </div>
+            <div style="margin-top:8px; font-size:11px; color:#6d95a0;">Tap any stat to drill in · tap the <span style="display:inline-flex; align-items:center; justify-content:center; width:12px; height:12px; border-radius:50%; border:1px solid #556; font-size:8px; vertical-align:middle;">i</span> to have your coach explain it</div>
+
+            <div style="margin-top:20px; background:#1c2530; border:1px solid #2a3542; border-radius:16px; padding:16px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                <span style="font-family:'Manrope',sans-serif; font-weight:700; font-size:13px;">Pace &amp; HR over time</span>
+                <span style="font-size:11px; color:#7fa8b0;">last 62 min</span>
+              </div>
+              <svg width="100%" height="86" viewBox="0 0 340 86" style="display:block;">
+                <polyline points="0,60 40,55 80,50 120,44 160,50 200,58 240,52 280,46 320,40 340,38" fill="none" stroke="url(#g1)" stroke-width="3" stroke-linecap="round"></polyline>
+                <polyline points="0,20 40,22 80,25 120,24 160,30 200,34 240,30 280,33 320,36 340,37" fill="none" stroke="#4a7480" stroke-width="2" stroke-dasharray="4 4"></polyline>
+                <defs><linearGradient id="g1" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0%" stop-color="#45afc6"></stop><stop offset="50%" stop-color="#a3e4d7"></stop><stop offset="100%" stop-color="#f49342"></stop>
+                </linearGradient></defs>
+              </svg>
+              <div style="display:flex; gap:14px; margin-top:6px; font-size:11px; color:#7fa8b0;">
+                <span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#45afc6;margin-right:5px;"></span>Pace</span>
+                <span><span style="display:inline-block;width:8px;height:2px;background:#4a7480;margin-right:5px;vertical-align:middle;"></span>HR drift</span>
+              </div>
+            </div>
+
+            <div style="margin-top:18px; display:flex; align-items:flex-start; gap:10px; background:#0e3a44; border:1px solid #1c6478; border-radius:14px; padding:12px 14px;">
+              <div style="width:26px; height:26px; border-radius:50%; background:linear-gradient(135deg,#45afc6,#a3e4d7,#f49342); flex:none;"></div>
+              <div>
+                <div style="font-size:11px; font-weight:700; color:#a3e4d7; text-transform:uppercase; letter-spacing:.06em;">Coach note</div>
+                <div style="font-size:13.5px; margin-top:3px; line-height:1.5; color:#eef7f8;">Even split, decoupling stayed under 5% — this pace is holding. Nice work.</div>
+              </div>
+            </div>
+
+            <div style="margin-top:20px; border-top:1px solid #242f3a; padding-top:14px;">
+              <div style="font-size:11px; font-weight:700; color:#7fa8b0; text-transform:uppercase; letter-spacing:.07em; margin-bottom:8px;">Ask about this swim</div>
+              <div onClick="{{ openWorkoutChat }}" style="background:#1c2530; border:1px solid #2a3542; border-radius:12px; padding:10px 14px; font-size:13px; color:#7fa8b0; cursor:pointer;">Ask about pace, HR, how it felt…</div>
+            </div>
+          </div>
+        </sc-if>
+
+        <!-- Log > stat drill-in -->
+        <sc-if value="{{ isLogDrill }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:22px 20px 24px;">
+            <div onClick="{{ backToDetail }}" style="display:flex; align-items:center; gap:6px; cursor:pointer; color:#9cc7cf; font-size:13px; font-weight:600;">
+              <span style="font-size:18px;">←</span> Back to workout
+            </div>
+
+            <sc-if value="{{ isDrillPace }}" hint-placeholder-val="{{ false }}">
+              <div style="font-family:'Manrope',sans-serif; font-weight:800; font-size:20px; margin-top:16px;">Pace by 100m split</div>
+              <div style="font-size:12.5px; color:#7fa8b0; margin-top:4px;">Even pacing, no fade — target was 1:40</div>
+              <div style="margin-top:16px; display:flex; flex-direction:column; gap:6px;">
+                <sc-for list="{{ splits }}" as="s" hint-placeholder-count="6">
+                  <div style="display:flex; align-items:center; gap:10px; background:#1c2530; border:1px solid #2a3542; border-radius:10px; padding:9px 13px;">
+                    <span style="width:26px; font-size:12px; color:#7fa8b0;">{{ s.n }}</span>
+                    <span style="flex:1; height:6px; border-radius:3px; background:#1d2740; position:relative; overflow:hidden;"><span style="position:absolute; inset:0; width:{{ s.pct }}%; background:linear-gradient(90deg,#45afc6,#a3e4d7);"></span></span>
+                    <span style="font-family:'Manrope',sans-serif; font-weight:700; font-size:13px; color:#45afc6;">{{ s.pace }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ isDrillDecoupling }}" hint-placeholder-val="{{ false }}">
+              <div style="font-family:'Manrope',sans-serif; font-weight:800; font-size:20px; margin-top:16px;">HR decoupling: 4.2%</div>
+              <div style="font-size:12.5px; color:#7fa8b0; margin-top:4px; line-height:1.6;">The rise in heart rate relative to pace between the first and second half of the swim. Under ~5% suggests good aerobic durability at this effort.</div>
+              <div style="margin-top:16px; display:flex; gap:10px;">
+                <div style="flex:1; background:#1c2530; border:1px solid #2a3542; border-radius:14px; padding:14px;">
+                  <div style="font-size:10px; text-transform:uppercase; color:#7fa8b0;">First half</div>
+                  <div style="font-family:'Manrope',sans-serif; font-weight:800; font-size:20px; margin-top:6px;">137 bpm</div>
+                  <div style="font-size:11px; color:#7fa8b0; margin-top:2px;">1:37 /100m</div>
+                </div>
+                <div style="flex:1; background:#1c2530; border:1px solid #2a3542; border-radius:14px; padding:14px;">
+                  <div style="font-size:10px; text-transform:uppercase; color:#7fa8b0;">Second half</div>
+                  <div style="font-family:'Manrope',sans-serif; font-weight:800; font-size:20px; margin-top:6px; color:#f49342;">147 bpm</div>
+                  <div style="font-size:11px; color:#7fa8b0; margin-top:2px;">1:39 /100m</div>
+                </div>
+              </div>
+              <button onClick="{{ askCoachAboutDecoupling }}" style="margin-top:18px; width:100%; background:#45afc6; color:#ffffff; border:none; border-radius:12px; padding:13px; font-family:'Manrope',sans-serif; font-weight:800; font-size:13.5px; cursor:pointer;">Ask coach to explain further →</button>
+            </sc-if>
+
+            <sc-if value="{{ isDrillDistance }}" hint-placeholder-val="{{ false }}">
+              <div style="font-family:'Manrope',sans-serif; font-weight:800; font-size:20px; margin-top:16px;">Laps &amp; distance</div>
+              <div style="font-size:12.5px; color:#7fa8b0; margin-top:4px;">3,800m total, open water (GPS-estimated) · full lap-by-lap breakdown below</div>
+              <div style="margin-top:16px; display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                <div style="background:#1c2530; border:1px solid #2a3542; border-radius:14px; padding:14px;"><div style="font-size:10px; text-transform:uppercase; color:#7fa8b0;">Moving time</div><div style="font-family:'Manrope',sans-serif; font-weight:800; font-size:18px; margin-top:6px;">61:40</div></div>
+                <div style="background:#1c2530; border:1px solid #2a3542; border-radius:14px; padding:14px;"><div style="font-size:10px; text-transform:uppercase; color:#7fa8b0;">Elapsed time</div><div style="font-family:'Manrope',sans-serif; font-weight:800; font-size:18px; margin-top:6px;">63:05</div></div>
+              </div>
+
+              <div style="margin-top:18px; font-size:11px; font-weight:700; color:#7fa8b0; text-transform:uppercase; letter-spacing:.07em;">Lap table</div>
+              <div style="margin-top:8px; max-height:180px; overflow-y:auto; border:1px solid #2a3542; border-radius:12px;">
+                <table style="width:100%; border-collapse:collapse; font-size:11.5px;">
+                  <thead>
+                    <tr style="position:sticky; top:0; background:#1c2530;">
+                      <th style="text-align:left; padding:7px 10px; color:#7fa8b0; font-weight:700; text-transform:uppercase; font-size:9.5px; letter-spacing:.04em;">Lap</th>
+                      <th style="text-align:right; padding:7px 10px; color:#7fa8b0; font-weight:700; text-transform:uppercase; font-size:9.5px; letter-spacing:.04em;">Dist</th>
+                      <th style="text-align:right; padding:7px 10px; color:#7fa8b0; font-weight:700; text-transform:uppercase; font-size:9.5px; letter-spacing:.04em;">Time</th>
+                      <th style="text-align:right; padding:7px 10px; color:#7fa8b0; font-weight:700; text-transform:uppercase; font-size:9.5px; letter-spacing:.04em;">Pace</th>
+                      <th style="text-align:right; padding:7px 10px; color:#7fa8b0; font-weight:700; text-transform:uppercase; font-size:9.5px; letter-spacing:.04em;">HR</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <sc-for list="{{ laps }}" as="l" hint-placeholder-count="6">
+                      <tr style="border-top:1px solid #242f3a;">
+                        <td style="padding:7px 10px; color:#eef7f8;">{{ l.n }}</td>
+                        <td style="padding:7px 10px; text-align:right; color:#eef7f8;">{{ l.dist }}</td>
+                        <td style="padding:7px 10px; text-align:right; color:#eef7f8;">{{ l.time }}</td>
+                        <td style="padding:7px 10px; text-align:right; color:#45afc6;">{{ l.pace }}</td>
+                        <td style="padding:7px 10px; text-align:right; color:#eef7f8;">{{ l.hr }}</td>
+                      </tr>
+                    </sc-for>
+                  </tbody>
+                </table>
+              </div>
+
+              <div style="margin-top:18px; font-size:11px; font-weight:700; color:#7fa8b0; text-transform:uppercase; letter-spacing:.07em;">Pauses / transitions</div>
+              <div style="margin-top:8px; display:flex; flex-direction:column; gap:6px;">
+                <sc-for list="{{ pauses }}" as="p" hint-placeholder-count="2">
+                  <div style="display:flex; justify-content:space-between; background:#1c2530; border:1px solid #2a3542; border-radius:10px; padding:9px 13px; font-size:12px;">
+                    <span style="color:#7fa8b0;">at {{ p.offset }}</span>
+                    <span style="color:#eef7f8;">{{ p.duration }} · {{ p.reason }}</span>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="margin-top:14px; font-size:11.5px; color:#6d95a0; line-height:1.5;">This view scales with whatever your watch records — stroke rate, swolf, and elevation/current data slot in the same way as more sources connect.</div>
+            </sc-if>
+          </div>
+        </sc-if>
+
+        <!-- Log > coach-explain bottom sheet -->
+        <sc-if value="{{ isLogExplain }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:22px 20px 24px;">
+            <div onClick="{{ backToDetail }}" style="display:flex; align-items:center; gap:6px; cursor:pointer; color:#9cc7cf; font-size:13px; font-weight:600;">
+              <span style="font-size:18px;">←</span> Back to workout
+            </div>
+            <div style="margin-top:22px; background:#1c2530; border:1px solid #2a3542; border-radius:16px; padding:18px;">
+              <div style="font-family:'Manrope',sans-serif; font-weight:700; font-size:14px; color:#f49342;">What's HR decoupling?</div>
+              <div style="font-size:13.5px; margin-top:8px; line-height:1.6; color:#eef7f8;">It compares heart rate to pace across the first vs. second half of a swim. A small rise (yours: 4.2%) means your effort stayed efficient as you fatigued — a strong sign for the channel crossing.</div>
+            </div>
+            <button onClick="{{ askCoachAboutDecoupling }}" style="margin-top:16px; width:100%; background:none; border:1px solid #33414f; color:#bcd6dc; border-radius:12px; padding:13px; font-family:'Manrope',sans-serif; font-weight:700; font-size:13px; cursor:pointer;">Ask coach a follow-up →</button>
+          </div>
+        </sc-if>
+
+        <!-- Log > embedded workout chat -->
+        <sc-if value="{{ isLogChat }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:22px 20px 0; display:flex; flex-direction:column; height:100%;">
+            <div onClick="{{ backToDetail }}" style="display:flex; align-items:center; gap:6px; cursor:pointer; color:#9cc7cf; font-size:13px; font-weight:600; margin-bottom:14px;">
+              <span style="font-size:18px;">←</span> Back to workout
+            </div>
+            <div style="font-size:11px; font-weight:700; color:#7fa8b0; text-transform:uppercase; letter-spacing:.07em; margin-bottom:10px;">About: Tue's long swim</div>
+            <div style="display:flex; flex-direction:column; gap:10px;">
+              <div style="align-self:flex-start; max-width:85%; background:#1c2530; border:1px solid #2a3542; border-radius:14px 14px 14px 4px; padding:9px 13px; font-size:13px; line-height:1.5;">Want me to break down the decoupling number?</div>
+              <sc-for list="{{ workoutChatMessages }}" as="m" hint-placeholder-count="0">
+                <div style="align-self:{{ m.align }}; max-width:85%; background:{{ m.bg }}; border-radius:{{ m.radius }}; padding:9px 13px; font-size:13px; line-height:1.5;">{{ m.text }}</div>
+              </sc-for>
+            </div>
+            <div style="margin-top:auto; padding:14px 0 20px; display:flex; gap:8px; align-items:center;">
+              <input value="{{ workoutDraft }}" onInput="{{ onWorkoutDraftInput }}" placeholder="Type a question…" style="flex:1; background:#1c2530; border:1px solid #2a3542; border-radius:12px; padding:10px 14px; font-size:13px; color:#eef7f8;"></input>
+              <div onClick="{{ sendWorkoutMsg }}" style="width:34px; height:34px; border-radius:10px; background:#45afc6; flex:none; display:flex; align-items:center; justify-content:center; font-size:14px; color:#ffffff; cursor:pointer;">↑</div>
+            </div>
+          </div>
+        </sc-if>
+      </sc-if>
+
+      <!-- ============ PLAN TAB ============ -->
+      <sc-if value="{{ isTabPlan }}" hint-placeholder-val="{{ false }}">
+
+        <sc-if value="{{ isPlanToday }}" hint-placeholder-val="{{ true }}">
+          <div style="padding:22px 20px 24px;">
+            <div style="font-family:'Manrope',sans-serif; font-weight:700; font-size:13px; letter-spacing:.08em; text-transform:uppercase; background:linear-gradient(90deg,#45afc6,#a3e4d7,#f49342); -webkit-background-clip:text; background-clip:text; color:transparent;">Today's plan</div>
+            <div style="font-family:'Manrope',sans-serif; font-weight:800; font-size:22px; margin-top:6px;">Wed · Build week 3</div>
+
+            <sc-if value="{{ isOriginalPlan }}" hint-placeholder-val="{{ true }}">
+              <div style="margin-top:18px; background:#1c2530; border:1px solid #2a3542; border-radius:14px; padding:16px;">
+                <div style="display:flex; justify-content:space-between; align-items:baseline;">
+                  <div style="font-weight:800; font-size:15px; font-family:'Manrope',sans-serif;">Open water · steady endurance</div>
+                  <div style="font-size:11px; color:#7fa8b0;">4,800m · ~85 min</div>
+                </div>
+                <div style="margin-top:12px; display:flex; flex-direction:column; gap:9px;">
+                  <div>
+                    <div style="font-size:10px; text-transform:uppercase; letter-spacing:.07em; color:#7fa8b0; font-weight:700;">Warm-up</div>
+                    <div style="font-size:13px; margin-top:2px; color:#eef7f8;">400m easy free, last 100m w/ paddles</div>
+                  </div>
+                  <div>
+                    <div style="font-size:10px; text-transform:uppercase; letter-spacing:.07em; color:#7fa8b0; font-weight:700;">Main set</div>
+                    <div style="font-size:13px; margin-top:2px; color:#eef7f8;">6 × 800m steady, Z3 · sight every 4th stroke · :20 rest between</div>
+                  </div>
+                  <div>
+                    <div style="font-size:10px; text-transform:uppercase; letter-spacing:.07em; color:#7fa8b0; font-weight:700;">Cool-down</div>
+                    <div style="font-size:13px; margin-top:2px; color:#eef7f8;">200m easy, any stroke</div>
+                  </div>
+                </div>
+                <div style="margin-top:12px; padding-top:12px; border-top:1px solid #2a3542; display:flex; gap:8px; align-items:flex-start;">
+                  <span style="font-size:11px; color:#a3e4d7; font-weight:700; text-transform:uppercase; letter-spacing:.05em; flex:none;">Focus</span>
+                  <span style="font-size:12.5px; color:#bfe3da; line-height:1.5;">Efficient turns · full glide and catch on freestyle, especially as fatigue sets in</span>
+                </div>
+                <a href="#" style="margin-top:10px; display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#a3e4d7; text-decoration:none;">▶ Catch &amp; glide technique reference</a>
+              </div>
+              <div style="margin-top:14px; font-size:12.5px; color:#7fa8b0; line-height:1.6;">Life get in the way, or feeling off? Tell your coach and get a plan that fits today.</div>
+              <button onClick="{{ discussPlan }}" style="margin-top:14px; width:100%; background:none; border:1px solid #33414f; color:#bcd6dc; border-radius:12px; padding:13px; font-family:'Manrope',sans-serif; font-weight:700; font-size:13.5px; cursor:pointer;">Discuss today's session →</button>
+
+              <div style="margin-top:24px; padding-top:18px; border-top:1px solid #242f3a;">
+                <div style="font-size:11px; font-weight:700; color:#6d95a0; text-transform:uppercase; letter-spacing:.07em; margin-bottom:10px;">Coming up · Thu, dryland strength</div>
+                <div style="background:#1c2530; border:1px solid #2a3542; border-radius:14px; padding:14px 16px; display:flex; flex-direction:column; gap:10px;">
+                  <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <span style="font-size:13px; color:#eef7f8;">Single-arm cable pulldown</span>
+                    <span style="font-size:12px; color:#7fa8b0; font-family:'Manrope',sans-serif; font-weight:700;">4×10</span>
+                  </div>
+                  <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <span style="font-size:13px; color:#eef7f8;">Prone Y-T-W raises</span>
+                    <span style="font-size:12px; color:#7fa8b0; font-family:'Manrope',sans-serif; font-weight:700;">3×12</span>
+                  </div>
+                  <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <span style="font-size:13px; color:#eef7f8;">Pallof press</span>
+                    <span style="font-size:12px; color:#7fa8b0; font-family:'Manrope',sans-serif; font-weight:700;">3×12/side</span>
+                  </div>
+                  <a href="#" style="margin-top:2px; display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#a3e4d7; text-decoration:none;">▶ Full session with exercise videos</a>
+                </div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ isAdjustedPlan }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top:18px; background:#0e3a44; border:1px solid #45afc6; border-radius:14px; padding:16px;">
+                <div style="font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:#a3e4d7; font-weight:700;">Adjusted with your coach</div>
+                <div style="display:flex; justify-content:space-between; align-items:baseline; margin-top:6px;">
+                  <div style="font-weight:800; font-size:15px; font-family:'Manrope',sans-serif;">Open water · easy + technique</div>
+                  <div style="font-size:11px; color:#bfe3da;">2,400m · ~55 min</div>
+                </div>
+                <div style="margin-top:12px; display:flex; flex-direction:column; gap:9px;">
+                  <div>
+                    <div style="font-size:10px; text-transform:uppercase; letter-spacing:.07em; color:#a3e4d7; font-weight:700;">Warm-up</div>
+                    <div style="font-size:13px; margin-top:2px; color:#eef7f8;">300m easy free</div>
+                  </div>
+                  <div>
+                    <div style="font-size:10px; text-transform:uppercase; letter-spacing:.07em; color:#a3e4d7; font-weight:700;">Main set</div>
+                    <div style="font-size:13px; margin-top:2px; color:#eef7f8;">4 × 600m easy, Z2, alternate 200m catch-up drill / 400m swim</div>
+                  </div>
+                  <div>
+                    <div style="font-size:10px; text-transform:uppercase; letter-spacing:.07em; color:#a3e4d7; font-weight:700;">Cool-down</div>
+                    <div style="font-size:13px; margin-top:2px; color:#eef7f8;">200m easy</div>
+                  </div>
+                </div>
+                <div style="margin-top:12px; padding-top:12px; border-top:1px solid #2a3542; display:flex; gap:8px; align-items:flex-start;">
+                  <span style="font-size:11px; color:#a3e4d7; font-weight:700; text-transform:uppercase; letter-spacing:.05em; flex:none;">Focus</span>
+                  <span style="font-size:12.5px; color:#bfe3da; line-height:1.5;">Low shoulder load · long glide, patient catch — technique over tempo today</span>
+                </div>
+              </div>
+            </sc-if>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isPlanChat }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:22px 20px 0; display:flex; flex-direction:column; height:100%;">
+            <div onClick="{{ backToPlanToday }}" style="display:flex; align-items:center; gap:6px; cursor:pointer; color:#9cc7cf; font-size:13px; font-weight:600; margin-bottom:14px;">
+              <span style="font-size:18px;">←</span> Back to plan
+            </div>
+            <div style="font-size:11px; font-weight:700; color:#7fa8b0; text-transform:uppercase; letter-spacing:.07em; margin-bottom:10px;">About: today's planned session</div>
+            <div style="display:flex; flex-direction:column; gap:10px;">
+              <div style="align-self:flex-start; max-width:85%; background:#1c2530; border:1px solid #2a3542; border-radius:14px 14px 14px 4px; padding:9px 13px; font-size:13px; line-height:1.5;">What's going on — schedule, energy, something else?</div>
+              <div style="align-self:flex-end; max-width:85%; background:linear-gradient(120deg,#1c4a52,#1c2530); border-radius:14px 14px 4px 14px; padding:9px 13px; font-size:13px; line-height:1.5;">Barely slept and my shoulder's sore. Can we go easier today?</div>
+              <div style="align-self:flex-start; max-width:85%; background:#1c2530; border:1px solid #2a3542; border-radius:14px 14px 14px 4px; padding:9px 13px; font-size:13px; line-height:1.5;">Makes sense — I've put together a lighter, drill-focused option instead.</div>
+            </div>
+            <div style="margin-top:auto; padding:14px 0 20px;">
+              <button onClick="{{ viewAdjusted }}" style="width:100%; background:#45afc6; color:#ffffff; border:none; border-radius:12px; padding:13px; font-family:'Manrope',sans-serif; font-weight:800; font-size:13.5px; cursor:pointer;">View adjusted session →</button>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isPlanProposal }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:22px 20px 24px;">
+            <div onClick="{{ backToPlanChat }}" style="display:flex; align-items:center; gap:6px; cursor:pointer; color:#9cc7cf; font-size:13px; font-weight:600;">
+              <span style="font-size:18px;">←</span> Back to discussion
+            </div>
+            <div style="font-family:'Manrope',sans-serif; font-weight:800; font-size:20px; margin-top:16px;">Wednesday, adjusted</div>
+
+            <div style="margin-top:16px; background:#1c2530; border:1px solid #2a3542; border-radius:14px; padding:14px 16px; opacity:.55; text-decoration:line-through; text-decoration-color:#5a3a3a;">
+              <div style="font-weight:700; font-size:14px;">Open water · steady endurance</div>
+              <div style="font-size:12px; color:#7fa8b0; margin-top:3px;">6×800m Z3 · 4,800m · ~85 min</div>
+            </div>
+
+            <div style="text-align:center; margin:12px 0; color:#45afc6; font-size:18px;">↓</div>
+
+            <div style="background:#0e3a44; border:1px solid #45afc6; border-radius:16px; padding:16px;">
+              <div style="font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:#a3e4d7; font-weight:700;">Proposed change</div>
+              <div style="font-family:'Manrope',sans-serif; font-weight:800; font-size:16px; margin-top:6px;">Open water · easy + technique</div>
+              <div style="font-size:12.5px; color:#bfe3da; margin-top:4px;">2,400m · ~55 min &nbsp;·&nbsp; <span style="color:#45afc6;">−2,400m vs plan</span></div>
+              <div style="margin-top:12px; display:flex; flex-direction:column; gap:8px;">
+                <div><span style="font-size:10px; text-transform:uppercase; letter-spacing:.07em; color:#a3e4d7; font-weight:700;">Warm-up</span> <span style="font-size:12.5px; color:#eef7f8;">300m easy free</span></div>
+                <div><span style="font-size:10px; text-transform:uppercase; letter-spacing:.07em; color:#a3e4d7; font-weight:700;">Main set</span> <span style="font-size:12.5px; color:#eef7f8;">4×600m Z2, alt. 200m catch-up drill / 400m swim</span></div>
+                <div><span style="font-size:10px; text-transform:uppercase; letter-spacing:.07em; color:#a3e4d7; font-weight:700;">Cool-down</span> <span style="font-size:12.5px; color:#eef7f8;">200m easy</span></div>
+                <div style="padding-top:6px; border-top:1px solid #2a3542;"><span style="font-size:10px; text-transform:uppercase; letter-spacing:.07em; color:#a3e4d7; font-weight:700;">Focus</span> <span style="font-size:12.5px; color:#bfe3da;">Low shoulder load, patient catch</span></div>
+              </div>
+            </div>
+
+            <div style="display:flex; gap:10px; margin-top:18px;">
+              <button onClick="{{ acceptPlan }}" style="flex:1; background:#45afc6; color:#ffffff; border:none; border-radius:12px; padding:13px; font-family:'Manrope',sans-serif; font-weight:800; font-size:13.5px; cursor:pointer;">Accept</button>
+              <button onClick="{{ backToPlanChat }}" style="flex:1; background:none; border:1px solid #33414f; color:#bcd6dc; border-radius:12px; padding:13px; font-family:'Manrope',sans-serif; font-weight:700; font-size:13.5px; cursor:pointer;">Discuss</button>
+              <button onClick="{{ cancelPlan }}" style="flex:1; background:none; border:1px solid #33414f; color:#7fa8b0; border-radius:12px; padding:13px; font-family:'Manrope',sans-serif; font-weight:700; font-size:13.5px; cursor:pointer;">Cancel</button>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isPlanAccepted }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:60px 24px; text-align:center;">
+            <div style="width:56px; height:56px; border-radius:50%; background:linear-gradient(135deg,#45afc6,#a3e4d7,#f49342); margin:0 auto 18px; display:flex; align-items:center; justify-content:center; font-size:24px; color:#08131a;">✓</div>
+            <div style="font-family:'Manrope',sans-serif; font-weight:800; font-size:19px;">Plan updated</div>
+            <div style="font-size:13px; color:#7fa8b0; margin-top:8px; line-height:1.6;">Wednesday now reads 4×600m OW easy, Z2 + drill set. Your coach will keep the rest of the week in mind.</div>
+            <button onClick="{{ backToPlanToday }}" style="margin-top:22px; width:100%; background:none; border:1px solid #33414f; color:#bcd6dc; border-radius:12px; padding:13px; font-family:'Manrope',sans-serif; font-weight:700; font-size:13.5px; cursor:pointer;">Back to plan</button>
+          </div>
+        </sc-if>
+      </sc-if>
+
+      <!-- ============ COACH TAB ============ -->
+      <sc-if value="{{ isTabCoach }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex; flex-direction:column; height:100%;">
+          <div style="padding:22px 20px 12px; border-bottom:1px solid #242f3a; display:flex; align-items:center; gap:10px;">
+            <div style="width:34px; height:34px; border-radius:50%; background:linear-gradient(135deg,#45afc6,#a3e4d7,#f49342); flex:none;"></div>
+            <div>
+              <div style="font-family:'Manrope',sans-serif; font-weight:700; font-size:14.5px;">Coach</div>
+              <div style="font-size:11px; color:#45afc6;">● grounded in your plan</div>
+            </div>
+          </div>
+          <div style="flex:1; overflow-y:auto; padding:16px 18px; display:flex; flex-direction:column; gap:12px;">
+            <div style="align-self:flex-start; max-width:78%; background:#1c2530; border:1px solid #2a3542; border-radius:16px 16px 16px 4px; padding:10px 14px; font-size:13.5px; line-height:1.5;">How'd Tuesday's long swim feel — legs or shoulders more?</div>
+            <div style="align-self:flex-end; max-width:78%; background:linear-gradient(120deg,#1c4a52,#1c2530); border-radius:16px 16px 4px 16px; padding:10px 14px; font-size:13.5px; line-height:1.5;">Shoulders, a bit. Slept only 5.5hrs too.</div>
+            <div style="align-self:flex-start; max-width:78%; display:flex; flex-direction:column; gap:6px;">
+              <div style="background:#1c2530; border:1px solid #2a3542; border-radius:16px 16px 16px 4px; padding:10px 14px; font-size:13.5px; line-height:1.5;">Got it — that tracks with a heavier week. I'll ease tomorrow and lean on drill work so the shoulder gets a break.</div>
+              <a href="#" style="align-self:flex-start; font-size:11px; color:#a3e4d7; background:#1c2530; border:1px solid #2a3542; border-radius:999px; padding:4px 10px; text-decoration:none;">📄 source: recovery &amp; load management</a>
+            </div>
+            <sc-for list="{{ coachChatMessages }}" as="m" hint-placeholder-count="0">
+              <div style="align-self:{{ m.align }}; max-width:78%; background:{{ m.bg }}; border-radius:{{ m.radius }}; padding:10px 14px; font-size:13.5px; line-height:1.5;">{{ m.text }}</div>
+            </sc-for>
+          </div>
+          <div style="padding:12px 16px 18px; border-top:1px solid #242f3a; display:flex; gap:8px; align-items:center;">
+            <input value="{{ coachDraft }}" onInput="{{ onCoachDraftInput }}" placeholder="Ask your coach…" style="flex:1; background:#1c2530; border:1px solid #2a3542; border-radius:12px; padding:10px 14px; font-size:13px; color:#eef7f8;"></input>
+            <div onClick="{{ sendCoachMsg }}" style="width:34px; height:34px; border-radius:10px; background:#45afc6; flex:none; display:flex; align-items:center; justify-content:center; font-size:14px; color:#ffffff; cursor:pointer;">↑</div>
+          </div>
+        </div>
+      </sc-if>
+    </div>
+
+    <!-- tab bar -->
+    <div style="position:absolute; bottom:0; left:0; right:0; height:74px; background:#10141b; border-top:1px solid #242f3a; display:flex;">
+      <div onClick="{{ goTabPlan }}" style="flex:1; text-align:center; padding-top:14px; font-size:10.5px; font-weight:700; cursor:pointer; color:{{ planTabColor }};">Plan</div>
+      <div onClick="{{ goTabLog }}" style="flex:1; text-align:center; padding-top:14px; font-size:10.5px; font-weight:700; cursor:pointer; color:{{ logTabColor }};">Log</div>
+      <div onClick="{{ goTabCoach }}" style="flex:1; text-align:center; padding-top:14px; font-size:10.5px; font-weight:700; cursor:pointer; color:{{ coachTabColor }};">Coach</div>
+      <div style="flex:1; text-align:center; padding-top:14px; font-size:10.5px; color:#5a8a94;">Settings</div>
+    </div>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = {
+    tab: 'log',
+    logScreen: 'detail',
+    drillStat: 'pace',
+    planScreen: 'today',
+    planStatus: 'original',
+    workoutChatMessages: [],
+    coachChatMessages: [],
+    workoutDraft: '',
+    coachDraft: '',
+  };
+
+  splits = [
+    { n: 1, pace: '1:36', pct: 96 },
+    { n: 2, pace: '1:37', pct: 97 },
+    { n: 3, pace: '1:38', pct: 98 },
+    { n: 4, pace: '1:39', pct: 99 },
+    { n: 5, pace: '1:38', pct: 98 },
+    { n: 6, pace: '1:40', pct: 100 },
+  ];
+
+  laps = [
+    { n: 1, dist: '800m', time: '10:16', pace: '1:17', hr: 133 },
+    { n: 2, dist: '800m', time: '10:20', pace: '1:17', hr: 136 },
+    { n: 3, dist: '800m', time: '10:24', pace: '1:18', hr: 139 },
+    { n: 4, dist: '800m', time: '10:22', pace: '1:18', hr: 141 },
+    { n: 5, dist: '400m', time: '5:14', pace: '1:19', hr: 144 },
+    { n: 6, dist: '200m', time: '2:40', pace: '1:20', hr: 138 },
+  ];
+
+  pauses = [
+    { offset: '32:10', duration: '0:45', reason: 'sighting / feed' },
+    { offset: '54:40', duration: '0:20', reason: 'gear adjust' },
+  ];
+
+  goTabLog = () => this.setState({ tab: 'log' });
+  goTabPlan = () => this.setState({ tab: 'plan' });
+  goTabCoach = () => this.setState({ tab: 'coach' });
+
+  backToDetail = () => this.setState({ logScreen: 'detail' });
+  openDrillPace = () => this.setState({ logScreen: 'drill', drillStat: 'pace' });
+  openDrillDecoupling = () => this.setState({ logScreen: 'drill', drillStat: 'decoupling' });
+  openDrillDistance = () => this.setState({ logScreen: 'drill', drillStat: 'distance' });
+  openExplain = () => this.setState({ logScreen: 'explain' });
+  openWorkoutChat = () => this.setState({ logScreen: 'chat' });
+
+  askCoachAboutDecoupling = () => {
+    this.setState({
+      tab: 'coach',
+      coachChatMessages: [
+        { align: 'flex-end', bg: 'linear-gradient(120deg,#1c4a52,#1c2530)', radius: '16px 16px 4px 16px', text: "Can you explain the HR decoupling on Tuesday's swim a bit more?" },
+        { align: 'flex-start', bg: '#1c2530', radius: '16px 16px 16px 4px', text: "Sure — your HR rose about 4.2% relative to pace from the first to second half. That's a small, healthy drift; anything under 5% at this distance means your aerobic engine is holding up well for the crossing pace." },
+      ],
+    });
+  };
+
+  onWorkoutDraftInput = (e) => this.setState({ workoutDraft: e.target.value });
+  sendWorkoutMsg = () => {
+    const text = this.state.workoutDraft.trim();
+    if (!text) return;
+    this.setState((s) => ({
+      workoutChatMessages: [
+        ...s.workoutChatMessages,
+        { align: 'flex-end', bg: 'linear-gradient(120deg,#1c4a52,#1c2530)', radius: '14px 14px 4px 14px', text },
+        { align: 'flex-start', bg: '#1c2530', radius: '14px 14px 14px 4px', text: "Good question — it means your effort stayed efficient as you fatigued. I'd call this one a strong pacing execution." },
+      ],
+      workoutDraft: '',
+    }));
+  };
+
+  onCoachDraftInput = (e) => this.setState({ coachDraft: e.target.value });
+  sendCoachMsg = () => {
+    const text = this.state.coachDraft.trim();
+    if (!text) return;
+    this.setState((s) => ({
+      coachChatMessages: [
+        ...s.coachChatMessages,
+        { align: 'flex-end', bg: 'linear-gradient(120deg,#1c4a52,#1c2530)', radius: '16px 16px 4px 16px', text },
+        { align: 'flex-start', bg: '#1c2530', radius: '16px 16px 16px 4px', text: "Noted — I'll factor that in for what's next." },
+      ],
+      coachDraft: '',
+    }));
+  };
+
+  discussPlan = () => this.setState({ planScreen: 'chat' });
+  backToPlanChat = () => this.setState({ planScreen: 'chat' });
+  backToPlanToday = () => this.setState({ planScreen: 'today' });
+  viewAdjusted = () => this.setState({ planScreen: 'proposal' });
+  acceptPlan = () => this.setState({ planScreen: 'accepted', planStatus: 'adjusted' });
+  cancelPlan = () => this.setState({ planScreen: 'today', planStatus: 'original' });
+
+  renderVals() {
+    const s = this.state;
+    return {
+      isTabLog: s.tab === 'log',
+      isTabPlan: s.tab === 'plan',
+      isTabCoach: s.tab === 'coach',
+      planTabColor: s.tab === 'plan' ? '#45afc6' : '#5a8a94',
+      logTabColor: s.tab === 'log' ? '#45afc6' : '#5a8a94',
+      coachTabColor: s.tab === 'coach' ? '#45afc6' : '#5a8a94',
+
+      isLogDetail: s.logScreen === 'detail',
+      isLogDrill: s.logScreen === 'drill',
+      isLogExplain: s.logScreen === 'explain',
+      isLogChat: s.logScreen === 'chat',
+      isDrillPace: s.drillStat === 'pace',
+      isDrillDecoupling: s.drillStat === 'decoupling',
+      isDrillDistance: s.drillStat === 'distance',
+      splits: this.splits,
+      laps: this.laps,
+      pauses: this.pauses,
+      workoutChatMessages: s.workoutChatMessages,
+      workoutDraft: s.workoutDraft,
+
+      isPlanToday: s.planScreen === 'today',
+      isPlanChat: s.planScreen === 'chat',
+      isPlanProposal: s.planScreen === 'proposal',
+      isPlanAccepted: s.planScreen === 'accepted',
+      isOriginalPlan: s.planStatus === 'original',
+      isAdjustedPlan: s.planStatus === 'adjusted',
+
+      coachChatMessages: s.coachChatMessages,
+      coachDraft: s.coachDraft,
+
+      goTabLog: this.goTabLog,
+      goTabPlan: this.goTabPlan,
+      goTabCoach: this.goTabCoach,
+      backToDetail: this.backToDetail,
+      openDrillPace: this.openDrillPace,
+      openDrillDecoupling: this.openDrillDecoupling,
+      openDrillDistance: this.openDrillDistance,
+      openExplain: this.openExplain,
+      openWorkoutChat: this.openWorkoutChat,
+      askCoachAboutDecoupling: this.askCoachAboutDecoupling,
+      onWorkoutDraftInput: this.onWorkoutDraftInput,
+      sendWorkoutMsg: this.sendWorkoutMsg,
+      onCoachDraftInput: this.onCoachDraftInput,
+      sendCoachMsg: this.sendCoachMsg,
+      discussPlan: this.discussPlan,
+      backToPlanChat: this.backToPlanChat,
+      backToPlanToday: this.backToPlanToday,
+      viewAdjusted: this.viewAdjusted,
+      acceptPlan: this.acceptPlan,
+      cancelPlan: this.cancelPlan,
+    };
+  }
+}
+</script>
+</body>
+</html>
