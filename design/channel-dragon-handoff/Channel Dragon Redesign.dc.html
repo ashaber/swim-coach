@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+
+<helmet>
+  <meta name="design_doc_mode" content="canvas">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { margin:0; background:#e7e2da; font-family:'Inter',sans-serif; }
+    a { color:#2ab0ba; }
+    a:hover { color:#6fd3da; }
+  </style>
+</helmet>
+
+<div style="padding:40px; display:flex; flex-direction:column; gap:18px; min-width:1400px;">
+
+  <div style="display:flex; align-items:baseline; gap:14px;">
+    <span style="font-family:'Manrope',sans-serif; font-weight:800; font-size:13px; letter-spacing:.14em; text-transform:uppercase; background:#191033; color:#c9b8ff; padding:4px 12px; border-radius:999px;">Selected direction</span>
+    <h2 style="font-family:'Manrope',sans-serif; font-size:22px; margin:0; color:#10242b;">Bioluminescent Dusk — dark mode, iridescent dragonfly accents</h2>
+  </div>
+  <p style="max-width:900px; color:#47585f; font-size:14px; line-height:1.6; margin:0 0 10px;">
+    Workout detail with drill-in stats + an embedded, workout-scoped chat; the plan-adapt discuss→accept flow; and coach chat with a calmer, source-credited tone.
+  </p>
+
+  <div style="display:flex; gap:22px;">
+
+    <!-- Screen 1: Workout Detail -->
+    <div style="width:390px; height:844px; border-radius:44px; background:#0f3138; box-shadow:0 30px 60px rgba(10,10,20,.35); overflow:hidden; border:6px solid #082329; position:relative; font-family:'Inter',sans-serif;">
+      <div style="height:100%; overflow-y:auto; padding:22px 20px 100px; color:#eef7f8;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:18px;">
+          <span style="font-size:20px; color:#9cc7cf;">←</span>
+          <span style="font-family:'Manrope',sans-serif; font-weight:700; font-size:13px; letter-spacing:.08em; text-transform:uppercase; background:linear-gradient(90deg,#45afc6,#a3e4d7,#f49342); -webkit-background-clip:text; background-clip:text; color:transparent;">Workout</span>
+          <span style="font-size:18px;">⋯</span>
+        </div>
+        <div style="font-family:'Manrope',sans-serif; font-weight:800; font-size:22px; letter-spacing:-.02em;">Open water · long swim</div>
+        <div style="font-size:12.5px; color:#7fa8b0; margin-top:4px;">Tue Jul 7 · Half Moon Bay</div>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:20px;">
+          <div style="background:#123f4a; border:1px solid #1c525d; border-radius:14px; padding:12px 10px; position:relative;">
+            <div style="font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:#7fa8b0;">Pace /100m</div>
+            <div style="font-family:'Manrope',sans-serif; font-weight:800; font-size:19px; margin-top:4px; color:#45afc6;">1:38</div>
+            <span style="position:absolute; top:10px; right:10px; font-size:12px; color:#4a7480;">›</span>
+          </div>
+          <div style="background:#123f4a; border:1px solid #1c525d; border-radius:14px; padding:12px 10px; position:relative;">
+            <div style="font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:#7fa8b0; display:flex; align-items:center; gap:4px;">HR decoupling <span style="display:inline-flex; align-items:center; justify-content:center; width:13px; height:13px; border-radius:50%; border:1px solid #556; font-size:9px; color:#9cc7cf; font-weight:700;">i</span></div>
+            <div style="font-family:'Manrope',sans-serif; font-weight:800; font-size:19px; margin-top:4px; color:#f49342;">4.2%</div>
+            <span style="position:absolute; top:10px; right:10px; font-size:12px; color:#4a7480;">›</span>
+          </div>
+          <div style="background:#123f4a; border:1px solid #1c525d; border-radius:14px; padding:12px 10px; position:relative;">
+            <div style="font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:#7fa8b0;">Distance</div>
+            <div style="font-family:'Manrope',sans-serif; font-weight:800; font-size:19px; margin-top:4px;">3,800m</div>
+            <span style="position:absolute; top:10px; right:10px; font-size:12px; color:#4a7480;">›</span>
+          </div>
+        </div>
+        <div style="margin-top:8px; font-size:11px; color:#6d95a0;">Tap any stat to drill into detail · tap <span style="display:inline-flex; align-items:center; justify-content:center; width:12px; height:12px; border-radius:50%; border:1px solid #556; font-size:8px; vertical-align:middle;">i</span> to have your coach explain it</div>
+
+        <div style="margin-top:20px; background:#123f4a; border:1px solid #1c525d; border-radius:16px; padding:16px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+            <span style="font-family:'Manrope',sans-serif; font-weight:700; font-size:13px;">Pace &amp; HR over time</span>
+            <span style="font-size:11px; color:#7fa8b0;">last 62 min</span>
+          </div>
+          <svg width="100%" height="86" viewBox="0 0 340 86" style="display:block;">
+            <polyline points="0,60 40,55 80,50 120,44 160,50 200,58 240,52 280,46 320,40 340,38" fill="none" stroke="url(#g1)" stroke-width="3" stroke-linecap="round"/>
+            <polyline points="0,20 40,22 80,25 120,24 160,30 200,34 240,30 280,33 320,36 340,37" fill="none" stroke="#4a7480" stroke-width="2" stroke-dasharray="4 4"/>
+            <defs><linearGradient id="g1" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stop-color="#45afc6"/><stop offset="50%" stop-color="#a3e4d7"/><stop offset="100%" stop-color="#f49342"/>
+            </linearGradient></defs>
+          </svg>
+          <div style="display:flex; gap:14px; margin-top:6px; font-size:11px; color:#7fa8b0;">
+            <span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#45afc6;margin-right:5px;"></span>Pace</span>
+            <span><span style="display:inline-block;width:8px;height:2px;background:#4a7480;margin-right:5px;vertical-align:middle;"></span>HR drift</span>
+          </div>
+        </div>
+
+        <div style="margin-top:18px; display:flex; align-items:flex-start; gap:10px; background:#123f4a; border:1px solid #1c525d; border-radius:14px; padding:12px 14px;">
+          <div style="width:26px; height:26px; border-radius:50%; background:linear-gradient(135deg,#45afc6,#a3e4d7,#f49342); flex:none;"></div>
+          <div>
+            <div style="font-size:11px; font-weight:700; color:#a3e4d7; text-transform:uppercase; letter-spacing:.06em;">Coach note</div>
+            <div style="font-size:13.5px; margin-top:3px; line-height:1.5; color:#eef7f8;">Even split, decoupling stayed under 5% — this pace is holding. Nice work.</div>
+          </div>
+        </div>
+
+        <!-- inline contextual chat, scoped to this workout -->
+        <div style="margin-top:20px; border-top:1px solid #1a4550; padding-top:14px;">
+          <div style="font-size:11px; font-weight:700; color:#7fa8b0; text-transform:uppercase; letter-spacing:.07em; margin-bottom:8px;">Ask about this swim</div>
+          <div style="display:flex; flex-direction:column; gap:10px;">
+            <div style="align-self:flex-start; max-width:85%; background:#123f4a; border:1px solid #1c525d; border-radius:14px 14px 14px 4px; padding:9px 13px; font-size:13px; line-height:1.5;">Want me to break down the decoupling number?</div>
+          </div>
+        </div>
+      </div>
+      <div style="position:absolute; bottom:0; left:0; right:0; background:#0a2f38; border-top:1px solid #1a4550;">
+        <div style="padding:10px 16px; display:flex; gap:8px; align-items:center;">
+          <div style="flex:1; background:#123f4a; border:1px solid #1c525d; border-radius:12px; padding:10px 14px; font-size:13px; color:#7fa8b0;">Ask about pace, HR, how it felt…</div>
+          <div style="width:34px; height:34px; border-radius:10px; background:linear-gradient(135deg,#45afc6,#a3e4d7,#f49342); flex:none; display:flex; align-items:center; justify-content:center; font-size:14px; color:#08131a;">↑</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Screen 2: Adapt / Accept flow -->
+    <div style="width:390px; height:844px; border-radius:44px; background:#0f3138; box-shadow:0 30px 60px rgba(10,10,20,.35); overflow:hidden; border:6px solid #082329; position:relative;">
+      <div style="height:100%; overflow-y:auto; padding:22px 20px 100px; color:#eef7f8; font-family:'Inter',sans-serif;">
+        <div style="font-family:'Manrope',sans-serif; font-weight:700; font-size:13px; letter-spacing:.08em; text-transform:uppercase; background:linear-gradient(90deg,#45afc6,#a3e4d7,#f49342); -webkit-background-clip:text; background-clip:text; color:transparent;">Today's plan</div>
+        <div style="font-family:'Manrope',sans-serif; font-weight:800; font-size:22px; margin-top:6px;">Wed · Build week 3</div>
+
+        <div style="margin-top:16px; background:#123f4a; border:1px solid #1c525d; border-radius:14px; padding:14px 16px; opacity:.55; text-decoration:line-through; text-decoration-color:#5a3a3a;">
+          <div style="font-weight:700; font-size:14px;">6x800m OW steady, Z3</div>
+          <div style="font-size:12px; color:#7fa8b0; margin-top:3px;">4,800m · ~85 min</div>
+        </div>
+
+        <div style="margin-top:14px; display:flex; gap:8px; align-items:flex-start;">
+          <div style="width:24px; height:24px; border-radius:50%; background:linear-gradient(135deg,#45afc6,#a3e4d7,#f49342); flex:none;"></div>
+          <div style="background:#123f4a; border:1px solid #1c525d; border-radius:14px; padding:10px 13px; font-size:13px; line-height:1.5;">You flagged short sleep + sore shoulder this morning. Here's an adjusted session — lower volume, easier zone, more drill work.</div>
+        </div>
+
+        <div style="margin-top:16px; background:#123f4a; border:1px solid #45afc6; border-radius:16px; padding:16px;">
+          <div style="font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:#a3e4d7; font-weight:700;">Proposed change</div>
+          <div style="font-family:'Manrope',sans-serif; font-weight:800; font-size:16px; margin-top:6px;">4x600m OW easy, Z2 + drill set</div>
+          <div style="font-size:12.5px; color:#bfe3da; margin-top:4px;">2,400m · ~55 min &nbsp;·&nbsp; <span style="color:#45afc6;">−2,400m vs plan</span></div>
+        </div>
+
+        <div style="display:flex; gap:10px; margin-top:18px;">
+          <button style="flex:1; background:linear-gradient(90deg,#45afc6,#a3e4d7); color:#08131a; border:none; border-radius:12px; padding:13px; font-family:'Manrope',sans-serif; font-weight:800; font-size:13.5px;">Accept</button>
+          <button style="flex:1; background:none; border:1px solid #2c3650; color:#aebbd6; border-radius:12px; padding:13px; font-family:'Manrope',sans-serif; font-weight:700; font-size:13.5px;">Discuss</button>
+          <button style="flex:1; background:none; border:1px solid #2c3650; color:#7fa8b0; border-radius:12px; padding:13px; font-family:'Manrope',sans-serif; font-weight:700; font-size:13.5px;">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Screen 3: Coach Chat -->
+    <div style="width:390px; height:844px; border-radius:44px; background:#0f3138; box-shadow:0 30px 60px rgba(10,10,20,.35); overflow:hidden; border:6px solid #082329; position:relative;">
+      <div style="height:100%; display:flex; flex-direction:column; color:#eef7f8; font-family:'Inter',sans-serif;">
+        <div style="padding:22px 20px 12px; border-bottom:1px solid #1a4550; display:flex; align-items:center; gap:10px;">
+          <div style="width:34px; height:34px; border-radius:50%; background:linear-gradient(135deg,#45afc6,#a3e4d7,#f49342); flex:none;"></div>
+          <div>
+            <div style="font-family:'Manrope',sans-serif; font-weight:700; font-size:14.5px;">Coach</div>
+            <div style="font-size:11px; color:#45afc6;">● grounded in your plan</div>
+          </div>
+        </div>
+        <div style="flex:1; overflow-y:auto; padding:16px 18px; display:flex; flex-direction:column; gap:12px;">
+          <div style="align-self:flex-start; max-width:78%; background:#123f4a; border:1px solid #1c525d; border-radius:16px 16px 16px 4px; padding:10px 14px; font-size:13.5px; line-height:1.5;">How'd Tuesday's long swim feel — legs or shoulders more?</div>
+          <div style="align-self:flex-end; max-width:78%; background:linear-gradient(120deg,#1c4a52,#123f4a); border-radius:16px 16px 4px 16px; padding:10px 14px; font-size:13.5px; line-height:1.5;">Shoulders, a bit. Slept only 5.5hrs too.</div>
+          <div style="align-self:flex-start; max-width:78%; display:flex; flex-direction:column; gap:6px;">
+            <div style="background:#123f4a; border:1px solid #1c525d; border-radius:16px 16px 16px 4px; padding:10px 14px; font-size:13.5px; line-height:1.5;">Got it — that tracks with a heavier week. I'll ease tomorrow and lean on drill work so the shoulder gets a break.</div>
+            <a href="#" style="align-self:flex-start; font-size:11px; color:#a3e4d7; background:#123f4a; border:1px solid #1c525d; border-radius:999px; padding:4px 10px; text-decoration:none;">📄 source: recovery &amp; load management</a>
+          </div>
+        </div>
+        <div style="padding:14px 16px 20px; border-top:1px solid #1a4550;">
+          <div style="background:#123f4a; border:1px solid #1c525d; border-radius:14px; padding:10px 14px; font-size:13px; color:#7fa8b0;">Ask your coach…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</x-dc>
+</body>
+</html>
