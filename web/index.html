@@ -7,67 +7,17 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="theme-color" content="#0f3138">
+  <meta name="color-scheme" content="dark">
   <meta name="description" content="Renee's training plan — read-only view of the swim-coach engine's plan for the current athlete.">
   <link rel="icon" type="image/png" href="icon-192.png">
   <link rel="apple-touch-icon" href="icon-192.png">
   <title>swim-coach</title>
   <style>
     /* Bioluminescent Dusk design tokens (see design_handoff_channel_dragon/
-       README.md's "Design Tokens" section). Dark theme reproduces the
-       handoff's literal values; light theme is the owner's derived
-       equal-care companion palette on the same brand (Soft Light Aqua bg,
-       Deep Teal ink, same teal/mint/amber accents) -- see PR description
-       for the full old -> new token mapping table. */
+       README.md's "Design Tokens" section). The app is dark-only (owner
+       decision) -- these are the handoff's literal dark values, and they
+       ARE :root now; there is no light theme and no toggle. */
     :root {
-      /* light (default) */
-      --ground: #f0f9fa; --paper: #ffffff; --paper-2: #e7f4f3;
-      --ink: #0e3a44; --ink-soft: #3c6470; --ink-faint: #6b8d96;
-      --line: #cdeae6; --line-soft: #e0f2f0;
-      --accent: #45afc6; --accent-ink: #0f7c8c;
-      --mint: #a3e4d7; --amber: #f49342;
-      --c-pool: #2f8fa6; --c-ow: #1fa38c; --c-strength: #f49342; --c-recovery: #7fbbae;
-      --c-attn: #f49342;
-      --c-signal: #d14848; --c-signal-wash: #fbeaea;
-      --brand-gradient: linear-gradient(135deg, #45afc6, #a3e4d7, #f49342);
-      --bubble-out-bg: #45afc6; --bubble-out-ink: #ffffff; --bubble-out-border: #45afc6;
-      --note-bg: #e3f3f1; --note-border: #9fd9ce; --note-label: #0f7c8c;
-      --tab-active: #45afc6; --tab-inactive: #6f97a0;
-      --shadow: 0 1px 2px rgba(14,58,68,.06), 0 8px 24px rgba(14,58,68,.08);
-      --radius: 14px; --radius-pill: 999px; --radius-lg: 16px; --radius-sm: 12px; --radius-xs: 10px;
-    }
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --ground:#0f3138; --paper:#123f4a; --paper-2:#164652;
-        --ink:#eef7f8; --ink-soft:#7fa8b0; --ink-faint:#6d95a0;
-        --line:#1c525d; --line-soft:#1a4550;
-        --accent:#45afc6; --accent-ink:#a3e4d7;
-        --mint:#a3e4d7; --amber:#f49342;
-        --c-pool:#57a8ce; --c-ow:#2fc2ab; --c-strength:#f49342; --c-recovery:#6c9a90;
-        --c-attn:#f49342;
-        --c-signal:#e5534b; --c-signal-wash:#2a1614;
-        --brand-gradient: linear-gradient(135deg, #45afc6, #a3e4d7, #f49342);
-        --bubble-out-bg: linear-gradient(120deg,#1c4a52,#123f4a); --bubble-out-ink:#eef7f8; --bubble-out-border:#1c525d;
-        --note-bg:#0e3a44; --note-border:#1c6478; --note-label:#a3e4d7;
-        --tab-active: #45afc6; --tab-inactive: #5a8a94;
-        --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.28);
-      }
-    }
-    :root[data-theme="light"] {
-      --ground: #f0f9fa; --paper: #ffffff; --paper-2: #e7f4f3;
-      --ink: #0e3a44; --ink-soft: #3c6470; --ink-faint: #6b8d96;
-      --line: #cdeae6; --line-soft: #e0f2f0;
-      --accent: #45afc6; --accent-ink: #0f7c8c;
-      --mint: #a3e4d7; --amber: #f49342;
-      --c-pool: #2f8fa6; --c-ow: #1fa38c; --c-strength: #f49342; --c-recovery: #7fbbae;
-      --c-attn: #f49342;
-      --c-signal: #d14848; --c-signal-wash: #fbeaea;
-      --brand-gradient: linear-gradient(135deg, #45afc6, #a3e4d7, #f49342);
-      --bubble-out-bg: #45afc6; --bubble-out-ink: #ffffff; --bubble-out-border: #45afc6;
-      --note-bg: #e3f3f1; --note-border: #9fd9ce; --note-label: #0f7c8c;
-      --tab-active: #45afc6; --tab-inactive: #6f97a0;
-      --shadow: 0 1px 2px rgba(14,58,68,.06), 0 8px 24px rgba(14,58,68,.08);
-    }
-    :root[data-theme="dark"] {
       --ground:#0f3138; --paper:#123f4a; --paper-2:#164652;
       --ink:#eef7f8; --ink-soft:#7fa8b0; --ink-faint:#6d95a0;
       --line:#1c525d; --line-soft:#1a4550;
@@ -81,6 +31,7 @@
       --note-bg:#0e3a44; --note-border:#1c6478; --note-label:#a3e4d7;
       --tab-active: #45afc6; --tab-inactive: #5a8a94;
       --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.28);
+      --radius: 14px; --radius-pill: 999px; --radius-lg: 16px; --radius-sm: 12px; --radius-xs: 10px;
     }
 
     * { box-sizing: border-box; }
@@ -182,9 +133,6 @@
     .zrow .p { color: var(--ink-soft); }
 
     .disc { margin-top: 22px; font-size: 12px; color: var(--ink-faint); text-align: center; line-height: 1.6; }
-    .themebtn { position: fixed; top: 12px; right: 12px; z-index: 10; font-family: var(--display); font-size:12px; font-weight:700;
-      background: var(--paper); color: var(--ink-soft); border: 1px solid var(--line); border-radius: var(--radius-pill); padding: 6px 12px; cursor: pointer; box-shadow: var(--shadow); }
-    .themebtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
     .offline-banner { display: none; background: var(--c-strength); color: #1a1206; font-size: 12.5px; font-weight: 700;
       text-align: center; padding: 6px 12px; }
@@ -330,7 +278,6 @@
 </head>
 <body>
   <div id="offline-banner" class="offline-banner">Offline — showing last downloaded plan</div>
-  <button class="themebtn" id="themebtn" type="button" aria-label="Toggle light or dark theme">◐ Theme</button>
   <div id="app">
     <div class="wrap"><div class="loading">Loading plan…</div></div>
   </div>
