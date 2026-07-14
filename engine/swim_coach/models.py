@@ -298,6 +298,58 @@ class Feedback(BaseModel):
     created_at: datetime
 
 
+class AllowedEmail(BaseModel):
+    """One entry in the server-side beta allowlist (Slice 1 "verified
+    identity" -- see backend/app/routes/auth.py).
+
+    A signed-in Google email that isn't in this list gets `403 {"error":
+    "request access"}` from `POST /api/auth/google` and never gets a session
+    or an athlete created -- adding a beta user is purely a data change (this
+    row), never a code deploy (see `swim_coach.cli`'s `invite`/`list-invites`/
+    `revoke-invite` commands).
+
+    `email` is always the normalized (stripped, lowercased) form -- callers
+    never see or store the original casing. `athlete_slug` (not `athlete_id`)
+    is the identifier here, matching every other StoreInterface method's
+    convention (`slug: str` in/out); DbStore's `allowed_emails` table stores
+    the FK column (`athlete_id`) underneath and resolves slug<->id at the SQL
+    layer via a join, same as `list_feedback`'s `athlete` filter does.
+    """
+
+    schema_version: int = 1
+    email: str
+    athlete_slug: str
+    note: str | None = None
+    created_at: datetime
+
+
+class AuthSession(BaseModel):
+    """One opaque server-side session (Slice 1 "verified identity").
+
+    Minted by `POST /api/auth/google` after a verified Google ID token
+    resolves to an `AllowedEmail`; `token_hash` is the sha256 hex digest of
+    the raw session token (the raw token itself is never persisted -- same
+    discipline as `Settings.api_token_hash` for the legacy shared token, see
+    backend/app/config.py). `require_auth` (backend/app/auth.py) treats a
+    session as valid only when `revoked_at is None` and `expires_at` is in
+    the future -- both checks happen at the auth layer, not here, so the
+    store stays a dumb read/write and the notion of "now" never needs to be
+    injected into it.
+
+    Named `AuthSession`, and the DbStore table is `auth_sessions` -- NOT
+    `Session`/`sessions` -- because those names are already taken by the
+    unrelated WeekPlan-session concept (`Session` above, and the RESERVED
+    `sessions` table stub in `supabase/migrations/20260706000000_init.sql`).
+    """
+
+    schema_version: int = 1
+    token_hash: str
+    athlete_slug: str
+    created_at: datetime
+    expires_at: datetime
+    revoked_at: datetime | None = None
+
+
 class Wellness(BaseModel):
     """A daily wellness check-in."""
 
