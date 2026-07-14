@@ -44,7 +44,7 @@ already tracked by the bold marker earlier in the file, not a new claim.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 # --- files excluded from item-scanning (see module docstring) --------------
