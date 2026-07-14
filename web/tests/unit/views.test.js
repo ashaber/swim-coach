@@ -234,6 +234,93 @@ describe('renderHistorySection detail view (Slice 2: tap a row to open detail)',
   });
 });
 
+describe('renderHistorySection embedded workout chat (Phase C slice 1)', () => {
+  const openDetailArgs = {
+    status: 'ready', data: [RICH_FIT_WORKOUT], error: null, online: true, detailId: 'w-rich',
+  };
+
+  it('renders the scoped chat section with the "About:" label when workoutChat matches the open detail', () => {
+    const html = renderHistorySection({
+      ...openDetailArgs, workoutChat: { workoutId: 'w-rich', messages: [] },
+    });
+    expect(html).toContain('Ask your coach about this workout');
+    expect(html).toContain('About: Jun 1 Open water swim');
+    expect(html).toContain('id="workout-chat-input"');
+    expect(html).toContain('data-a="workout-chat:send"');
+  });
+
+  it('omits the chat section entirely when workoutChat is null', () => {
+    const html = renderHistorySection({ ...openDetailArgs, workoutChat: null });
+    expect(html).not.toContain('Ask your coach about this workout');
+    expect(html).not.toContain('workout-chat-input');
+  });
+
+  it('omits the chat section when workoutChat belongs to a different workout', () => {
+    const html = renderHistorySection({
+      ...openDetailArgs, workoutChat: { workoutId: 'w-other', messages: [] },
+    });
+    expect(html).not.toContain('Ask your coach about this workout');
+  });
+
+  it('renders thread messages with the coach-tab bubble classes', () => {
+    const html = renderHistorySection({
+      ...openDetailArgs,
+      workoutChat: {
+        workoutId: 'w-rich',
+        messages: [
+          { role: 'user', content: 'how did this swim go?', status: 'done' },
+          { role: 'assistant', content: 'A strong effort with a positive split.', status: 'done' },
+        ],
+      },
+    });
+    expect(html).toContain('chat-row me');
+    expect(html).toContain('chat-row coach');
+    expect(html).toContain('how did this swim go?');
+    expect(html).toContain('A strong effort with a positive split.');
+  });
+
+  it('shows the streaming cursor and disables input/send while a reply streams', () => {
+    const html = renderHistorySection({
+      ...openDetailArgs,
+      workoutChat: {
+        workoutId: 'w-rich',
+        messages: [
+          { role: 'user', content: 'thoughts?', status: 'done' },
+          { role: 'assistant', content: 'Looking at it', status: 'streaming', toolCalls: [] },
+        ],
+      },
+    });
+    expect(html).toContain('chat-cursor');
+    expect(html).toContain('Sending…');
+    const inputMatch = /<textarea[^>]*id="workout-chat-input"[^>]*>/.exec(html);
+    expect(inputMatch[0]).toContain('disabled');
+  });
+
+  it('disables the chat input with an offline notice when offline', () => {
+    const html = renderHistorySection({
+      ...openDetailArgs, online: false, workoutChat: { workoutId: 'w-rich', messages: [] },
+    });
+    expect(html).toContain('chat-banner');
+    expect(html.toLowerCase()).toContain('offline');
+    const inputMatch = /<textarea[^>]*id="workout-chat-input"[^>]*>/.exec(html);
+    expect(inputMatch[0]).toContain('disabled');
+    const btnMatch = /<button[^>]*data-a="workout-chat:send"[^>]*>/.exec(html);
+    expect(btnMatch[0]).toContain('disabled');
+  });
+
+  it('escapes malicious chat message content', () => {
+    const html = renderHistorySection({
+      ...openDetailArgs,
+      workoutChat: {
+        workoutId: 'w-rich',
+        messages: [{ role: 'user', content: '<img src=x onerror=alert(1)>', status: 'done' }],
+      },
+    });
+    expect(html).not.toContain('<img src=x');
+    expect(html).toContain('&lt;img');
+  });
+});
+
 describe('renderLogTab', () => {
   const baseArgs = {
     form: { date: '2026-07-11', sport: 'swim_pool', distance_m: '', duration_min: '', rpe: 5, notes: '' },

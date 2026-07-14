@@ -113,6 +113,13 @@ const state = {
   // Reset on leaving the Log tab (setTab) and pruned in loadHistory if a
   // refresh's new data no longer contains the id.
   workoutDetailId: null,
+  // The detail view's embedded scoped chat (Phase C slice 1):
+  // {workoutId, messages} while a detail is open, null otherwise.
+  // Deliberately EPHEMERAL -- in-memory only, never persisted, cleared
+  // whenever the detail closes (closeWorkoutChat) -- a scoped thread about
+  // one workout isn't a durable conversation worth carrying across
+  // sessions the way the Coach tab's chat is (chat.js's localStorage).
+  workoutChat: null,
   checkinForm: createCheckinForm(),
   checkinSubmit: { status: 'idle', message: null },
   profileForm: createProfileForm(),
@@ -164,6 +171,7 @@ function renderTabContent() {
         detailId: state.workoutDetailId,
         sync: state.logSync,
         manualOpen: state.logManualOpen,
+        workoutChat: state.workoutChat,
       });
     case 'checkin':
       return renderCheckinTab({
@@ -216,6 +224,7 @@ function renderTabContent() {
 function render() {
   appEl.innerHTML = `${renderTabContent()}${renderTabBar(state.tab)}`;
   if (state.tab === 'coach') stickChatScrollToBottom();
+  if (state.tab === 'log' && state.workoutChat) stickWorkoutChatScrollToBottom();
   if (state.tab === 'settings' && !state.identity) mountGoogleSignIn();
 }
 
@@ -250,6 +259,8 @@ function handleIdentityResolved(identity) {
   // Same lazy-load convention for the Feedback tab's list (see setTab).
   state.feedbackEntries = { status: 'idle', data: [] };
   state.workoutHistory = { status: 'idle', data: [], error: null };
+  state.workoutDetailId = null;
+  closeWorkoutChat();
   log.info('identity.resolved', { athlete: identity.athlete, role: identity.role });
   render();
   maybeLoadProfile();
@@ -266,6 +277,8 @@ function handleSignOut() {
   state.profileSubmit = { status: 'idle', message: null };
   state.feedbackEntries = { status: 'idle', data: [] };
   state.workoutHistory = { status: 'idle', data: [], error: null };
+  state.workoutDetailId = null;
+  closeWorkoutChat();
   state.tab = 'settings';
   saveActiveTab('settings');
   log.info('identity.signed_out', {});
@@ -274,6 +287,11 @@ function handleSignOut() {
 
 function stickChatScrollToBottom() {
   const list = document.getElementById('chat-messages');
+  if (list) list.scrollTop = list.scrollHeight;
+}
+
+function stickWorkoutChatScrollToBottom() {
+  const list = document.getElementById('workout-chat-messages');
   if (list) list.scrollTop = list.scrollHeight;
 }
 
@@ -507,6 +525,9 @@ function handleToggleManualLog() {
 function handleOpenHistoryDetail(id) {
   if (!id) return;
   state.workoutDetailId = id;
+  // A fresh, empty scoped chat thread for this workout (see
+  // closeWorkoutChat for the matching teardown on every close path).
+  state.workoutChat = { workoutId: id, messages: [] };
   // Pushes an in-app history entry so hardware/gesture back (which fires a
   // `popstate`, handled below) closes the detail instead of navigating the
   // PWA away entirely -- see handlePopState and onAppClick's `history:back`
@@ -518,9 +539,20 @@ function handleOpenHistoryDetail(id) {
   render();
 }
 
+/** Tears down the detail view's EPHEMERAL scoped chat -- aborts any
+ * in-flight stream (its onEvent guard also drops late events, see
+ * handleSendWorkoutChat) and drops the thread. Called from every path that
+ * closes/loses the detail view: explicit close, tab leave, and the
+ * stale-id prune. */
+function closeWorkoutChat() {
+  if (isStreaming(state.workoutChat || { messages: [] })) workoutChatAbortController?.abort();
+  state.workoutChat = null;
+}
+
 function handleCloseHistoryDetail() {
   if (!state.workoutDetailId) return; // avoids a redundant render on popstate re-entrancy
   state.workoutDetailId = null;
+  closeWorkoutChat();
   render();
 }
 
@@ -542,7 +574,62 @@ function handlePopState() {
 function pruneDetailIdIfMissing(workouts) {
   if (state.workoutDetailId && !workouts.some((w) => w.id === state.workoutDetailId)) {
     state.workoutDetailId = null;
+    closeWorkoutChat();
   }
+}
+
+// --- Embedded workout chat (detail view's "Ask your coach" section) --------
+// Reuses the Coach tab's exact send/stream plumbing (chat.js reducers +
+// api.js streamChat) against state.workoutChat instead of state.chat -- the
+// reducers only touch `.messages` and spread the rest, so workoutId rides
+// along untouched. Differences from the Coach tab, all deliberate:
+// scoped via `workoutId` (backend injects that workout's full detail into
+// context), never persisted (see state.workoutChat's comment), and no
+// expert-mode toggle (a scoped "how did this workout go" thread is
+// athlete-voice by definition).
+
+let workoutChatAbortController = null;
+
+function handleSendWorkoutChat() {
+  const chat = state.workoutChat;
+  if (!chat || isStreaming(chat)) return;
+  const input = document.getElementById('workout-chat-input');
+  const text = input?.value.trim();
+  if (!text) return;
+
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) return;
+
+  const workoutId = chat.workoutId;
+  const history = toApiHistory(chat.messages);
+  state.workoutChat = appendUserMessage(chat, text);
+  if (input) input.value = '';
+  render();
+
+  workoutChatAbortController = new AbortController();
+  log.info('workout_chat.send', { athlete: athleteSlug(), workout_id: workoutId });
+
+  streamChat({
+    baseUrl: settings.baseUrl,
+    token: settings.token,
+    athlete: athleteSlug(),
+    message: text,
+    history,
+    expertMode: false,
+    workoutId,
+    signal: workoutChatAbortController.signal,
+    onEvent: (event) => {
+      // The detail (and its thread) may have closed mid-stream -- a late
+      // event must not resurrect state or apply to a different workout's
+      // fresh thread.
+      if (!state.workoutChat || state.workoutChat.workoutId !== workoutId) return;
+      state.workoutChat = applyStreamEvent(state.workoutChat, event);
+      if (event.type === 'done' || event.type === 'refusal' || event.type === 'error') {
+        log.info('workout_chat.turn_complete', { workout_id: workoutId, type: event.type });
+      }
+      render();
+    },
+  });
 }
 
 /** Shared "should loadHistory() fire right now?" check -- used both by
@@ -822,6 +909,7 @@ function setTab(tab) {
   // back to Log should land on the list, not wherever the athlete last was.
   if (state.tab === 'log' && state.workoutDetailId) {
     state.workoutDetailId = null;
+    closeWorkoutChat();
     // Consumes the pushState entry handleOpenHistoryDetail added (see
     // there), keeping browser history symmetric with app state -- without
     // this, a dangling entry would sit in the stack and silently swallow
@@ -875,6 +963,7 @@ function onAppClick(e) {
   switch (action) {
     case 'chat:send': handleSendChat(); break;
     case 'chat:clear': handleClearChat(); break;
+    case 'workout-chat:send': handleSendWorkoutChat(); break;
     case 'settings:save': handleSaveSettings(); break;
     case 'settings:test': handleTestConnection(); break;
     case 'log:submit': handleSubmitLog(); break;
@@ -956,6 +1045,10 @@ function onAppKeydown(e) {
   if (e.target.id === 'chat-input' && e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     handleSendChat();
+  }
+  if (e.target.id === 'workout-chat-input' && e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    handleSendWorkoutChat();
   }
 }
 

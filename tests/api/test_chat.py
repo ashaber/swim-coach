@@ -231,3 +231,93 @@ def test_tool_loop_log_open_question_persists_feedback(
     assert matching[0].source == "coach"
     assert matching[0].context["topic"] == "nutrition"
     assert matching[0].context["expert_mode"] is True
+
+
+# --- workout-scoped chat (optional workout_id in the request body) ----------
+
+
+def _save_rich_workout(athletes_dir):
+    from swim_coach.models import WorkoutAnalytics, WorkoutLap, WorkoutPause
+    from swim_coach.store import FileStore
+
+    from fakes import make_workout
+
+    store = FileStore(base_dir=athletes_dir)
+    profile = store.load_athlete("renee")
+    workout = make_workout(
+        athlete_id=profile.id,
+        sport="swim_ow",
+        source="fit",
+        distance_m=5000,
+        duration_min=95.0,
+        avg_hr=132,
+        analytics=WorkoutAnalytics(cardiac_drift_pct=6.4, split_label="positive"),
+        laps=[WorkoutLap(index=0, duration_s=1830.0, distance_m=2500.0)],
+        pauses=[WorkoutPause(start_offset_s=754.0, duration_s=45.0, source="gap")],
+    )
+    store.save_workout("renee", workout)
+    return workout
+
+
+def test_workout_id_injects_focused_block_into_messages(
+    client, fake_claude_chat_factory, athletes_dir
+) -> None:
+    workout = _save_rich_workout(athletes_dir)
+    final = make_final_message([make_text_block("Nice negative effort out there.")], "end_turn")
+    chat = fake_claude_chat_factory([(["Nice negative effort out there."], final)])
+
+    response = client.post(
+        "/api/chat",
+        json=_chat_payload(message="how did this swim go?", workout_id=str(workout.id)),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+
+    first_message = chat.client.messages.calls[0]["messages"][0]["content"]
+    assert "specific workout the athlete is asking about" in first_message
+    assert str(workout.id) in first_message
+    assert '"cardiac_drift_pct": 6.4' in first_message
+    assert '"source": "gap"' in first_message
+
+
+def test_workout_id_prefix_also_resolves(client, fake_claude_chat_factory, athletes_dir) -> None:
+    workout = _save_rich_workout(athletes_dir)
+    final = make_final_message([make_text_block("ok")], "end_turn")
+    chat = fake_claude_chat_factory([(["ok"], final)])
+
+    response = client.post(
+        "/api/chat",
+        json=_chat_payload(message="thoughts?", workout_id=str(workout.id)[:8]),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+    first_message = chat.client.messages.calls[0]["messages"][0]["content"]
+    assert str(workout.id) in first_message
+
+
+def test_no_workout_id_means_no_focused_block(client, fake_claude_chat_factory) -> None:
+    final = make_final_message([make_text_block("ok")], "end_turn")
+    chat = fake_claude_chat_factory([(["ok"], final)])
+
+    response = client.post("/api/chat", json=_chat_payload(), headers=auth_headers())
+    assert response.status_code == 200
+
+    first_message = chat.client.messages.calls[0]["messages"][0]["content"]
+    assert "specific workout the athlete is asking about" not in first_message
+
+
+def test_unknown_workout_id_is_a_404_error_not_a_crash(
+    client, fake_claude_chat_factory
+) -> None:
+    chat = fake_claude_chat_factory([])
+
+    response = client.post(
+        "/api/chat",
+        json=_chat_payload(workout_id="ffffffff-0000-0000-0000-000000000000"),
+        headers=auth_headers(),
+    )
+
+    assert response.status_code == 404
+    assert "error" in response.json()
+    # Resolved (and rejected) before any model call or stream ever started.
+    assert chat.client.messages.calls == []

@@ -4,6 +4,7 @@ import {
   formatDrift, formatSplit, formatPauses, formatSwolf, formatMovingVsElapsed,
   formatAnalyticsLine, HISTORY_DISPLAY_CAP,
   formatOffset, formatClock, formatLengthsSummary, formatSyncResult,
+  formatWorkoutChatLabel,
 } from '../../src/workouts.js';
 
 describe('sportLabel', () => {
@@ -243,5 +244,22 @@ describe('formatSyncResult', () => {
   });
   it('appends a failure count even when nothing was saved at all', () => {
     expect(formatSyncResult({ listed: 1, new: 1, saved: 0, failed: 1 })).toBe('Everything up to date (1 failed)');
+  });
+});
+
+describe('formatWorkoutChatLabel', () => {
+  it('formats "About: <short date> <sport label>" per the design handoff', () => {
+    const workout = { date: '2026-06-01', sport: 'swim_ow' };
+    expect(formatWorkoutChatLabel(workout)).toBe('About: Jun 1 Open water swim');
+  });
+
+  it('includes cross_train sport_detail in the label, same as the history rows', () => {
+    const workout = { date: '2026-07-09', sport: 'cross_train', sport_detail: 'cycling/mountain' };
+    expect(formatWorkoutChatLabel(workout)).toBe('About: Jul 9 Cross-train · MTB');
+  });
+
+  it('handles a full ISO timestamp date by using only its date part', () => {
+    const workout = { date: '2026-06-01T06:30:00', sport: 'swim_pool' };
+    expect(formatWorkoutChatLabel(workout)).toBe('About: Jun 1 Pool swim');
   });
 });

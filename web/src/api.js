@@ -24,8 +24,16 @@ import { feedSSEBuffer } from './sse.js';
  * JSON `{error}` body, never as SSE, since the stream never starts) are
  * normalized into a single synthetic `{type:'error', error}` event so
  * callers only ever need one error-handling path.
+ *
+ * `workoutId`, when given (the workout detail view's embedded scoped chat),
+ * rides along as `workout_id` -- the backend injects that workout's full
+ * detail into the per-request context (see backend/app/routes/chat.py).
+ * Omitted entirely for the ordinary Coach tab so its request body is
+ * byte-identical to before this feature existed.
  */
-export async function streamChat({ baseUrl, token, athlete, message, history, expertMode, onEvent, signal }) {
+export async function streamChat({
+  baseUrl, token, athlete, message, history, expertMode, workoutId, onEvent, signal,
+}) {
   let response;
   try {
     response = await fetch(`${baseUrl}/api/chat`, {
@@ -34,7 +42,10 @@ export async function streamChat({ baseUrl, token, athlete, message, history, ex
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ message, history, athlete, expert_mode: !!expertMode }),
+      body: JSON.stringify({
+        message, history, athlete, expert_mode: !!expertMode,
+        ...(workoutId ? { workout_id: workoutId } : {}),
+      }),
       signal,
     });
   } catch (err) {

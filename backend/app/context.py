@@ -430,13 +430,100 @@ def _render_events(events: list[Event], today: date) -> str:
     return "\n".join(rows)
 
 
-def build_per_request_context(store: StoreInterface, slug: str, *, expert_mode: bool) -> str:
+# --- focused workout (Log tab's embedded workout chat) ----------------------
+# A scoped chat tied to one already-logged workout (the detail view's "Ask
+# your coach about this workout" section) needs the model to see that ONE
+# workout's full detail -- not just whatever compact facts happen to fall
+# out of the ordinary 28-day exact-sessions list above (which omits laps/
+# pauses/full analytics, and won't even include it at all if it's older than
+# 28 days). This section stays per-request (uncached), same as the rest of
+# `build_per_request_context` -- never in the byte-stable system prefix
+# (`build_system_blocks`/`build_routed_block` above), since it's specific to
+# one request's workout_id and would otherwise poison the cache key for
+# every other request.
+
+# A long open-water swim can log dozens to hundreds of GPS-derived laps;
+# this bounds the table the same way the coach's get_workouts tool bounds
+# workout counts (app.tools.GET_WORKOUTS_CAP) -- the model doesn't need
+# per-lap-beyond-this granularity to discuss the session, and an unbounded
+# table would dwarf the rest of the per-request context.
+FOCUSED_WORKOUT_LAPS_CAP = 30
+
+
+def find_workout_by_id(workouts: list[Workout], workout_id: str) -> Workout | None:
+    """Matches `workout_id` against `workouts` by case-insensitive exact id
+    or prefix -- the same convention `engine/swim_coach/cli.py`'s
+    `_cmd_analyze` uses for its own `--workout-id` argument. Returns the
+    first match (an ambiguous short prefix matching more than one workout is
+    vanishingly unlikely with UUIDs, and the PWA always sends a full id
+    anyway) or `None` if nothing matches."""
+    query = workout_id.strip().lower()
+    if not query:
+        return None
+    for w in workouts:
+        if str(w.id).lower().startswith(query):
+            return w
+    return None
+
+
+def render_focused_workout(workout: Workout) -> str:
+    """Full detail block for the one workout a scoped chat is about --
+    summary (including analytics + sport_detail), a bounded laps table, and
+    every pause (rarely more than a handful, so no cap needed there).
+    Labeled distinctly from the ordinary 28-day exact-sessions list so the
+    model doesn't conflate "every recent session, in brief" with "the ONE
+    workout under discussion, in full."."""
+    summary = {
+        "id": str(workout.id),
+        "date": workout.date.isoformat(),
+        "sport": workout.sport,
+        "sport_detail": workout.sport_detail,
+        "source": workout.source,
+        "distance_m": workout.distance_m,
+        "duration_min": workout.duration_min,
+        "avg_pace_s_per_100m": workout.avg_pace_s_per_100m,
+        "rpe": workout.rpe,
+        "notes": workout.notes,
+        "avg_hr": workout.avg_hr,
+        "max_hr": workout.max_hr,
+        "analytics": workout.analytics.model_dump(mode="json") if workout.analytics is not None else None,
+    }
+    laps = workout.laps[:FOCUSED_WORKOUT_LAPS_CAP]
+    laps_truncated = len(workout.laps) > FOCUSED_WORKOUT_LAPS_CAP
+    laps_header = f"### Laps ({len(laps)} of {len(workout.laps)} shown"
+    laps_header += ", truncated)" if laps_truncated else ")"
+
+    parts = [
+        "## The specific workout the athlete is asking about "
+        "(NOT the same as the 28-day exact-sessions list above)",
+        json.dumps(summary, indent=2),
+        "",
+        laps_header,
+        json.dumps([lap.model_dump(mode="json") for lap in laps], indent=2) if laps else "(no laps recorded)",
+        "",
+        f"### Pauses ({len(workout.pauses)})",
+        (
+            json.dumps([p.model_dump(mode="json") for p in workout.pauses], indent=2)
+            if workout.pauses
+            else "(no pauses recorded)"
+        ),
+    ]
+    return "\n".join(parts)
+
+
+def build_per_request_context(
+    store: StoreInterface, slug: str, *, expert_mode: bool, focused_workout: Workout | None = None
+) -> str:
     """The uncached, per-request text block: athlete profile + zones,
     current + next week plan, the last ~28 days' exact logged sessions
     (each with its own sport -- ground truth), events/races with dates, and
     the 28-day aggregate rollup derived from those same sessions.
     Deliberately plain text/JSON, not prose -- the model reads it as ground
-    truth, it doesn't need to be narrated."""
+    truth, it doesn't need to be narrated.
+
+    `focused_workout`, when given (the Log tab's embedded workout chat),
+    appends `render_focused_workout`'s block -- still per-request/uncached,
+    never the stable system prefix (see that function's docstring)."""
     today = date.today()
     current_iso = iso_week_str(today)
     next_iso = iso_week_str(today + timedelta(days=7))
@@ -480,6 +567,8 @@ def build_per_request_context(store: StoreInterface, slug: str, *, expert_mode: 
         "### 28-day AGGREGATE rollup (derived from the sessions above)",
         json.dumps(rollup, indent=2),
     ]
+    if focused_workout is not None:
+        parts += ["", render_focused_workout(focused_workout)]
     return "\n".join(parts)
 
 
@@ -495,6 +584,7 @@ def build_messages(
     message: str,
     history: list[HistoryTurn],
     expert_mode: bool,
+    focused_workout: Workout | None = None,
 ) -> list[dict[str, Any]]:
     """The `messages` param: per-request context merged into the first
     message of the conversation, then the rest of `history` verbatim, then
@@ -508,8 +598,16 @@ def build_messages(
     would reject it. Merging into history[0]'s content keeps alternation
     intact. When `history` is empty, the new `message` *is* the first
     message, so the context merges there instead.
+
+    `focused_workout` (the Log tab's embedded workout chat -- see
+    `render_focused_workout`) is threaded straight through to
+    `build_per_request_context`; the caller (app.routes.chat) is responsible
+    for resolving a `workout_id` to a `Workout` (or a 404) before calling
+    this.
     """
-    context_text = build_per_request_context(store, slug, expert_mode=expert_mode)
+    context_text = build_per_request_context(
+        store, slug, expert_mode=expert_mode, focused_workout=focused_workout
+    )
     messages: list[dict[str, Any]] = []
 
     if history:
