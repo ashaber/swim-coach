@@ -135,3 +135,91 @@ def test_list_feedback_unknown_athlete_is_404(client) -> None:
     response = client.get("/api/feedback?athlete=nobody", headers=auth_headers())
     assert response.status_code == 404
     assert "error" in response.json()
+
+
+def _create(client, **overrides) -> dict:
+    response = client.post(
+        "/api/feedback?athlete=renee",
+        json=_valid_payload(**overrides),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+def test_patch_feedback_requires_auth(client) -> None:
+    created = _create(client)
+    response = client.patch(f"/api/feedback/{created['id']}", json={"status": "resolved"})
+    assert response.status_code == 401
+
+
+def test_patch_feedback_updates_status(client) -> None:
+    created = _create(client)
+    response = client.patch(
+        f"/api/feedback/{created['id']}",
+        json={"status": "resolved"},
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == created["id"]
+    assert body["status"] == "resolved"
+
+
+def test_patch_feedback_merges_context_without_clobbering(client) -> None:
+    created = _create(
+        client,
+        type="comment",
+        body="taper research question",
+        context={"topic": "taper", "n": 1},
+    )
+    response = client.patch(
+        f"/api/feedback/{created['id']}",
+        json={"status": "resolved", "context": {"n": 2, "resolution": "see 03-periodization.md"}},
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "resolved"
+    assert body["context"] == {
+        "topic": "taper",
+        "n": 2,
+        "resolution": "see 03-periodization.md",
+    }
+
+
+def test_patch_feedback_unknown_id_is_404(client) -> None:
+    response = client.patch(
+        "/api/feedback/00000000-0000-0000-0000-000000000000",
+        json={"status": "resolved"},
+        headers=auth_headers(),
+    )
+    assert response.status_code == 404
+    assert "error" in response.json()
+
+
+def test_patch_feedback_invalid_status_type_is_422(client) -> None:
+    created = _create(client)
+    response = client.patch(
+        f"/api/feedback/{created['id']}",
+        json={"status": 12345},
+        headers=auth_headers(),
+    )
+    assert response.status_code == 422
+    assert "error" in response.json()
+
+
+def test_patch_feedback_does_not_disturb_other_entries(client) -> None:
+    keep = _create(client, body="leave me alone")
+    target = _create(client, body="patch me")
+    response = client.patch(
+        f"/api/feedback/{target['id']}",
+        json={"status": "resolved"},
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+
+    listing = client.get("/api/feedback?athlete=renee", headers=auth_headers())
+    by_id = {f["id"]: f for f in listing.json()}
+    assert by_id[keep["id"]]["status"] == "open"
+    assert by_id[target["id"]]["status"] == "resolved"

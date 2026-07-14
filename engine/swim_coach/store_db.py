@@ -464,6 +464,39 @@ class DbStore(StoreInterface):
             rows = cur.fetchall()
         return [row_to_feedback(r) for r in rows]
 
+    def get_feedback(self, feedback_id: UUID) -> Feedback | None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute("select * from feedback where id = %s", [feedback_id])
+            row = cur.fetchone()
+        return row_to_feedback(row) if row is not None else None
+
+    def update_feedback(
+        self, feedback_id: UUID, *, status: str | None = None, context: dict | None = None
+    ) -> Feedback | None:
+        # `context = context || %(context)s` is Postgres jsonb's shallow-merge
+        # operator -- new keys added, overlapping keys take the new value,
+        # everything else in the existing context is preserved. Matches
+        # StoreInterface.update_feedback's documented "merge, never clobber"
+        # contract.
+        sets = []
+        params: dict[str, Any] = {"id": feedback_id}
+        if status is not None:
+            sets.append("status = %(status)s")
+            params["status"] = status
+        if context is not None:
+            sets.append("context = coalesce(context, '{}'::jsonb) || %(context)s")
+            params["context"] = self._Jsonb(context)
+        with self._connect() as conn, conn.cursor() as cur:
+            if sets:
+                cur.execute(
+                    f"update feedback set {', '.join(sets)} where id = %(id)s returning *",
+                    params,
+                )
+            else:
+                cur.execute("select * from feedback where id = %(id)s", params)
+            row = cur.fetchone()
+        return row_to_feedback(row) if row is not None else None
+
     # --- Coach texts (verbatim, saved BEFORE parsing) -------------------
 
     def coach_text_exists(self, slug: str, day: date) -> bool:

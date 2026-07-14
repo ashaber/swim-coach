@@ -212,6 +212,8 @@ _LIBRARY_FILES_IN_PRIORITY_ORDER = [
     "04-css-intensity-anchors.md",
     "05-open-water-pace-inference.md",
     "06-long-swim-progression.md",
+    "08-ultra-feeding.md",
+    "13-reds-energy-availability.md",
 ]
 
 _KEYWORD_ROUTES: dict[str, set[str]] = {
@@ -247,6 +249,34 @@ _KEYWORD_ROUTES: dict[str, set[str]] = {
     "single-day": {"06-long-swim-progression.md"},
     "single day": {"06-long-swim-progression.md"},
     "recovery": {"06-long-swim-progression.md", "03-periodization.md"},
+    # 08-ultra-feeding.md -- acute in-session fuelling, hydration, EAH safety.
+    "fuel": {"08-ultra-feeding.md"},
+    "feeding": {"08-ultra-feeding.md"},
+    "feed": {"08-ultra-feeding.md"},
+    "carb": {"08-ultra-feeding.md"},
+    "glycogen": {"08-ultra-feeding.md"},
+    "hydration": {"08-ultra-feeding.md"},
+    "hydrate": {"08-ultra-feeding.md"},
+    "sodium": {"08-ultra-feeding.md"},
+    "electrolyte": {"08-ultra-feeding.md"},
+    "hyponatremia": {"08-ultra-feeding.md"},
+    "cramp": {"08-ultra-feeding.md"},
+    "wall": {"08-ultra-feeding.md"},
+    "bonk": {"08-ultra-feeding.md"},
+    "gel": {"08-ultra-feeding.md"},
+    # 13-reds-energy-availability.md -- chronic energy availability / RED-S.
+    "energy availability": {"13-reds-energy-availability.md"},
+    "red-s": {"13-reds-energy-availability.md"},
+    "reds": {"13-reds-energy-availability.md"},
+    "relative energy deficiency": {"13-reds-energy-availability.md"},
+    "bone density": {"13-reds-energy-availability.md"},
+    "bone health": {"13-reds-energy-availability.md"},
+    "under-fuel": {"13-reds-energy-availability.md"},
+    "underfuel": {"13-reds-energy-availability.md"},
+    "under-eating": {"13-reds-energy-availability.md"},
+    "appetite": {"13-reds-energy-availability.md"},
+    "amenorrhea": {"13-reds-energy-availability.md"},
+    "menstrual": {"13-reds-energy-availability.md"},
 }
 
 # Deterministic fallback bucket when no keyword matches -- "why is the plan

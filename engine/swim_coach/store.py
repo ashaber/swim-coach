@@ -119,6 +119,23 @@ class StoreInterface(ABC):
         ...
 
     @abstractmethod
+    def get_feedback(self, feedback_id: UUID) -> Feedback | None:
+        """Single feedback entry by id (across all athletes), or None if no
+        entry has that id."""
+        ...
+
+    @abstractmethod
+    def update_feedback(
+        self, feedback_id: UUID, *, status: str | None = None, context: dict | None = None
+    ) -> Feedback | None:
+        """Patch an existing feedback entry: `status`, if given, replaces the
+        current value; `context`, if given, is shallow-merged into the
+        existing context dict (new keys added, overlapping keys overwritten,
+        untouched keys preserved) -- never a wholesale clobber. Returns the
+        updated entry, or None if `feedback_id` doesn't match any entry."""
+        ...
+
+    @abstractmethod
     def coach_text_exists(self, slug: str, day: date) -> bool: ...
 
     @abstractmethod
@@ -291,6 +308,48 @@ class FileStore(StoreInterface):
         if limit is not None:
             entries = entries[:limit]
         return entries
+
+    def _load_all_feedback(self) -> list[Feedback]:
+        """Every feedback entry, file order (not sorted) -- the internal
+        helper `get_feedback`/`update_feedback` use to avoid re-implementing
+        the jsonl read loop `list_feedback` already has above."""
+        path = self._feedback_path()
+        entries: list[Feedback] = []
+        if path.exists():
+            with path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line:
+                        entries.append(Feedback.model_validate(json.loads(line)))
+        return entries
+
+    def get_feedback(self, feedback_id: UUID) -> Feedback | None:
+        for entry in self._load_all_feedback():
+            if entry.id == feedback_id:
+                return entry
+        return None
+
+    def update_feedback(
+        self, feedback_id: UUID, *, status: str | None = None, context: dict | None = None
+    ) -> Feedback | None:
+        entries = self._load_all_feedback()
+        updated: Feedback | None = None
+        for i, entry in enumerate(entries):
+            if entry.id != feedback_id:
+                continue
+            new_status = status if status is not None else entry.status
+            new_context = {**entry.context, **context} if context is not None else entry.context
+            updated = entry.model_copy(update={"status": new_status, "context": new_context})
+            entries[i] = updated
+            break
+        if updated is None:
+            return None
+        path = self._feedback_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as fh:
+            for entry in entries:
+                fh.write(json.dumps(entry.model_dump(mode="json")) + "\n")
+        return updated
 
     # --- Coach texts (verbatim Markdown, saved BEFORE parsing) --------------------
 
