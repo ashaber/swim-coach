@@ -32,6 +32,18 @@ from swim_coach.load import (
     weekly_volume_m,
     wellness_trend,
 )
+from swim_coach.library_review import (
+    MECHANICAL,
+    NEEDS_JUDGMENT,
+    all_item_ids,
+    mark_index_reviewed,
+    render_html,
+    render_text,
+    scan_file,
+    scan_library,
+    sort_for_review,
+    strip_marker,
+)
 from swim_coach.models import Event, Wellness, WeekPlan, Workout
 from swim_coach.parse_coach_text import parse_coach_text
 from swim_coach.parse_files import PARSERS_BY_EXTENSION, WorkoutDraft, parse_fit
@@ -742,9 +754,150 @@ def _cmd_revoke_invite(args: argparse.Namespace, store: FileStore) -> int:
     return 0
 
 
+def _cmd_review_queue(args: argparse.Namespace, store: FileStore) -> int:
+    """Print the library/ review queue -- every claim covered by an
+    UNREVIEWED marker, needs-judgment first. Human-readable by default;
+    `--json` for the machine-readable form. See swim_coach.library_review
+    for the marker-scope/claim-block parsing this reports."""
+    library_dir = Path(args.library_dir)
+    if not library_dir.exists():
+        return _error(f"library dir not found: {library_dir}")
+
+    items = scan_library(library_dir)
+    if args.file:
+        items = [item for item in items if item.file == args.file]
+
+    html_written_to = None
+    if args.html:
+        html_path = Path(args.html)
+        html_path.write_text(render_html(items), encoding="utf-8")
+        html_written_to = str(html_path)
+
+    ordered = sort_for_review(items)
+    needs = [item for item in ordered if item.classification == NEEDS_JUDGMENT]
+    mechanical = [item for item in ordered if item.classification == MECHANICAL]
+
+    if args.json:
+        output: dict[str, object] = {
+            "needs_judgment": [item.as_dict() for item in needs],
+            "mechanical": [item.as_dict() for item in mechanical],
+            "counts": {
+                "needs_judgment": len(needs),
+                "mechanical": len(mechanical),
+                "weak_sourced": len([i for i in needs if i.weak_sources]),
+                "total": len(items),
+            },
+        }
+        if html_written_to is not None:
+            output["html_written_to"] = html_written_to
+        print(json.dumps(output))
+        return 0
+
+    print(render_text(items))
+    if html_written_to is not None:
+        print(f"HTML written to {html_written_to}")
+    return 0
+
+
+def _cmd_review_accept(args: argparse.Namespace, store: FileStore) -> int:
+    """Strip the UNREVIEWED marker governing one or more review-queue ids,
+    leaving all surrounding prose byte-identical (see
+    swim_coach.library_review.strip_marker). Idempotent: accepting an
+    already-accepted id is a clear no-op, not an error. When a file's last
+    pending item clears, its INDEX.md row is updated to "Human-reviewed."
+
+    A claim covered by a *file-level* marker has no marker of its own to
+    strip -- accepting it individually is refused, pointing at the id that
+    does own that marker (accepting which clears every claim it covered).
+    That keeps acceptance honest: the marker is the unit of review, and the
+    queue's job is to show the human every claim it covers first.
+    """
+    library_dir = Path(args.library_dir)
+    if not library_dir.exists():
+        return _error(f"library dir not found: {library_dir}")
+    dossiers_dir = library_dir / "research-dossiers"
+
+    results: list[dict[str, object]] = []
+    errors: list[str] = []
+    touched_files: set[str] = set()
+
+    for item_id in args.ids:
+        filename, sep, _slug = item_id.partition("#")
+        path = library_dir / filename
+        if not sep or not path.exists():
+            errors.append(f"{item_id}: no such library file")
+            results.append({"id": item_id, "status": "unknown-id"})
+            continue
+
+        # Re-read + re-scan fresh per id (not a cached snapshot) so an
+        # earlier id in this same call that already edited this file is
+        # reflected before we look at the next one.
+        text = path.read_text(encoding="utf-8")
+        pending = {item.id: item for item in scan_file(filename, text, [], dossiers_dir)}
+        match = pending.get(item_id)
+
+        if match is None:
+            # A real id whose marker is already gone is a clean no-op; an id
+            # that this file could never produce is a typo.
+            if item_id in all_item_ids(filename, text):
+                results.append({"id": item_id, "status": "already-accepted"})
+            else:
+                errors.append(f"{item_id}: not a review-queue id in {filename}")
+                results.append({"id": item_id, "status": "unknown-id"})
+            continue
+
+        if not match.owns_marker:
+            owner = next(
+                (
+                    item.id
+                    for item in pending.values()
+                    if item.owns_marker and item.marker_start == match.marker_start
+                ),
+                None,
+            )
+            errors.append(
+                f"{item_id}: covered by a {match.marker_scope}-level marker it doesn't own; "
+                f"accept {owner!r} to clear the marker (and every claim it covers)"
+            )
+            results.append({"id": item_id, "status": "not-marker-owner", "marker_owner": owner})
+            continue
+
+        cleared = [
+            item.id
+            for item in pending.values()
+            if item.marker_start == match.marker_start and item.id != item_id
+        ]
+        path.write_text(strip_marker(text, match.marker_start, match.marker_end), encoding="utf-8")
+        touched_files.add(filename)
+        results.append({"id": item_id, "status": "accepted", "also_cleared": cleared})
+
+    if errors:
+        return _error("; ".join(errors), results=results)
+
+    index_path = library_dir / "INDEX.md"
+    index_updated: list[str] = []
+    if index_path.exists():
+        index_text = index_path.read_text(encoding="utf-8")
+        for filename in sorted(touched_files):
+            remaining = scan_file(
+                filename, (library_dir / filename).read_text(encoding="utf-8"), [], dossiers_dir
+            )
+            if remaining:
+                continue
+            index_text, changed = mark_index_reviewed(index_text, filename)
+            if changed:
+                index_updated.append(filename)
+        if index_updated:
+            index_path.write_text(index_text, encoding="utf-8")
+
+    print(json.dumps({"results": results, "index_updated": index_updated}))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m swim_coach.cli")
     parser.add_argument("--base-dir", default="athletes", help="athlete data root (default: athletes)")
+    parser.add_argument("--library-dir", default="library", help="research library root (default: library)")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     p_validate = subparsers.add_parser("validate", help="validate an athlete's whole data tree")
@@ -835,6 +988,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_revoke.add_argument("email", help="the Google account email to remove")
 
+    p_review_queue = subparsers.add_parser(
+        "review-queue", help="print the library/ review queue, needs-judgment first"
+    )
+    p_review_queue.add_argument("--file", help="restrict to one library/ filename, e.g. 07-strength-dryland.md")
+    p_review_queue.add_argument("--html", help="write a self-contained HTML review page to this path")
+    p_review_queue.add_argument(
+        "--json", action="store_true", help="print the machine-readable JSON form instead of the terminal report"
+    )
+
+    p_review_accept = subparsers.add_parser(
+        "review-accept", help="strip the UNREVIEWED marker governing one or more review-queue ids"
+    )
+    p_review_accept.add_argument(
+        "ids", nargs="+", help="review-queue item id(s), e.g. 07-strength-dryland.md#session-duration-45-minutes"
+    )
+
     return parser
 
 
@@ -851,6 +1020,8 @@ _COMMANDS = {
     "invite": _cmd_invite,
     "list-invites": _cmd_list_invites,
     "revoke-invite": _cmd_revoke_invite,
+    "review-queue": _cmd_review_queue,
+    "review-accept": _cmd_review_accept,
 }
 
 
