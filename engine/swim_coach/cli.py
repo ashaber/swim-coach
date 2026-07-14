@@ -35,11 +35,13 @@ from swim_coach.load import (
 from swim_coach.library_review import (
     MECHANICAL,
     NEEDS_JUDGMENT,
-    file_heading_ids,
+    all_item_ids,
     mark_index_reviewed,
     render_html,
+    render_text,
     scan_file,
     scan_library,
+    sort_for_review,
     strip_marker,
 )
 from swim_coach.models import Event, Wellness, WeekPlan, Workout
@@ -697,9 +699,10 @@ def _cmd_analyze(args: argparse.Namespace, store: FileStore) -> int:
 
 
 def _cmd_review_queue(args: argparse.Namespace, store: FileStore) -> int:
-    """List library/ review-pending ("UNREVIEWED") items, needs-judgment
-    first -- see swim_coach.library_review for the parsing/classification
-    this reports."""
+    """Print the library/ review queue -- every claim covered by an
+    UNREVIEWED marker, needs-judgment first. Human-readable by default;
+    `--json` for the machine-readable form. See swim_coach.library_review
+    for the marker-scope/claim-block parsing this reports."""
     library_dir = Path(args.library_dir)
     if not library_dir.exists():
         return _error(f"library dir not found: {library_dir}")
@@ -714,70 +717,106 @@ def _cmd_review_queue(args: argparse.Namespace, store: FileStore) -> int:
         html_path.write_text(render_html(items), encoding="utf-8")
         html_written_to = str(html_path)
 
-    needs = [item.as_dict() for item in items if item.classification == NEEDS_JUDGMENT]
-    mechanical = [item.as_dict() for item in items if item.classification == MECHANICAL]
+    ordered = sort_for_review(items)
+    needs = [item for item in ordered if item.classification == NEEDS_JUDGMENT]
+    mechanical = [item for item in ordered if item.classification == MECHANICAL]
 
-    output: dict[str, object] = {
-        "needs_judgment": needs,
-        "mechanical": mechanical,
-        "counts": {
-            "needs_judgment": len(needs),
-            "mechanical": len(mechanical),
-            "total": len(items),
-        },
-    }
+    if args.json:
+        output: dict[str, object] = {
+            "needs_judgment": [item.as_dict() for item in needs],
+            "mechanical": [item.as_dict() for item in mechanical],
+            "counts": {
+                "needs_judgment": len(needs),
+                "mechanical": len(mechanical),
+                "weak_sourced": len([i for i in needs if i.weak_sources]),
+                "total": len(items),
+            },
+        }
+        if html_written_to is not None:
+            output["html_written_to"] = html_written_to
+        print(json.dumps(output))
+        return 0
+
+    print(render_text(items))
     if html_written_to is not None:
-        output["html_written_to"] = html_written_to
-    print(json.dumps(output))
+        print(f"HTML written to {html_written_to}")
     return 0
 
 
 def _cmd_review_accept(args: argparse.Namespace, store: FileStore) -> int:
-    """Strip the UNREVIEWED marker from one or more review-queue ids,
+    """Strip the UNREVIEWED marker governing one or more review-queue ids,
     leaving all surrounding prose byte-identical (see
     swim_coach.library_review.strip_marker). Idempotent: accepting an
     already-accepted id is a clear no-op, not an error. When a file's last
     pending item clears, its INDEX.md row is updated to "Human-reviewed."
+
+    A claim covered by a *file-level* marker has no marker of its own to
+    strip -- accepting it individually is refused, pointing at the id that
+    does own that marker (accepting which clears every claim it covered).
+    That keeps acceptance honest: the marker is the unit of review, and the
+    queue's job is to show the human every claim it covers first.
     """
     library_dir = Path(args.library_dir)
     if not library_dir.exists():
         return _error(f"library dir not found: {library_dir}")
     dossiers_dir = library_dir / "research-dossiers"
 
-    results: list[dict[str, str]] = []
-    unknown: list[str] = []
+    results: list[dict[str, object]] = []
+    errors: list[str] = []
     touched_files: set[str] = set()
 
     for item_id in args.ids:
         filename, sep, _slug = item_id.partition("#")
         path = library_dir / filename
         if not sep or not path.exists():
-            unknown.append(item_id)
+            errors.append(f"{item_id}: no such library file")
             results.append({"id": item_id, "status": "unknown-id"})
             continue
 
-        text = path.read_text(encoding="utf-8")
-        if item_id not in file_heading_ids(filename, text):
-            unknown.append(item_id)
-            results.append({"id": item_id, "status": "unknown-id"})
-            continue
-
-        # Re-read + re-scan fresh on every id (not a cached snapshot) so an
+        # Re-read + re-scan fresh per id (not a cached snapshot) so an
         # earlier id in this same call that already edited this file is
-        # reflected before we look for the next one.
+        # reflected before we look at the next one.
+        text = path.read_text(encoding="utf-8")
         pending = {item.id: item for item in scan_file(filename, text, [], dossiers_dir)}
         match = pending.get(item_id)
+
         if match is None:
-            results.append({"id": item_id, "status": "already-accepted"})
+            # A real id whose marker is already gone is a clean no-op; an id
+            # that this file could never produce is a typo.
+            if item_id in all_item_ids(filename, text):
+                results.append({"id": item_id, "status": "already-accepted"})
+            else:
+                errors.append(f"{item_id}: not a review-queue id in {filename}")
+                results.append({"id": item_id, "status": "unknown-id"})
             continue
 
-        new_text = strip_marker(text, match.marker_start, match.marker_end)
-        path.write_text(new_text, encoding="utf-8")
-        touched_files.add(filename)
-        results.append({"id": item_id, "status": "accepted"})
+        if not match.owns_marker:
+            owner = next(
+                (
+                    item.id
+                    for item in pending.values()
+                    if item.owns_marker and item.marker_start == match.marker_start
+                ),
+                None,
+            )
+            errors.append(
+                f"{item_id}: covered by a {match.marker_scope}-level marker it doesn't own; "
+                f"accept {owner!r} to clear the marker (and every claim it covers)"
+            )
+            results.append({"id": item_id, "status": "not-marker-owner", "marker_owner": owner})
+            continue
 
-    if unknown:
-        return _error(f"unknown review-queue id(s): {unknown}", results=results)
+        cleared = [
+            item.id
+            for item in pending.values()
+            if item.marker_start == match.marker_start and item.id != item_id
+        ]
+        path.write_text(strip_marker(text, match.marker_start, match.marker_end), encoding="utf-8")
+        touched_files.add(filename)
+        results.append({"id": item_id, "status": "accepted", "also_cleared": cleared})
+
+    if errors:
+        return _error("; ".join(errors), results=results)
 
     index_path = library_dir / "INDEX.md"
     index_updated: list[str] = []
@@ -880,16 +919,19 @@ def build_parser() -> argparse.ArgumentParser:
     analyze_target.add_argument("--all", action="store_true", help="re-analyze every workout with a raw_ref")
 
     p_review_queue = subparsers.add_parser(
-        "review-queue", help="list library/ review-pending items, needs-judgment first"
+        "review-queue", help="print the library/ review queue, needs-judgment first"
     )
     p_review_queue.add_argument("--file", help="restrict to one library/ filename, e.g. 07-strength-dryland.md")
     p_review_queue.add_argument("--html", help="write a self-contained HTML review page to this path")
+    p_review_queue.add_argument(
+        "--json", action="store_true", help="print the machine-readable JSON form instead of the terminal report"
+    )
 
     p_review_accept = subparsers.add_parser(
-        "review-accept", help="strip the UNREVIEWED marker from one or more review-queue ids"
+        "review-accept", help="strip the UNREVIEWED marker governing one or more review-queue ids"
     )
     p_review_accept.add_argument(
-        "ids", nargs="+", help="review-queue item id(s), e.g. 07-strength-dryland.md#session-duration"
+        "ids", nargs="+", help="review-queue item id(s), e.g. 07-strength-dryland.md#session-duration-45-minutes"
     )
 
     return parser
