@@ -45,6 +45,58 @@ def test_system_block_a_has_cache_control(library_dir) -> None:
     assert "Research Reference List" not in blocks[0]["text"]
 
 
+def test_system_block_a_preserves_safety_and_grounding_invariants(library_dir) -> None:
+    # The coach-voice softening pass (backend/coach-voice) must not touch a
+    # single word of these -- the safety override and rules 3/4/5 are the
+    # invariants that make this a coaching aid, not a chatbot. Asserted by
+    # content fragments so a wording tweak elsewhere in the block can't
+    # accidentally satisfy the test without the substance surviving.
+    text = build_system_blocks(library_dir)[0]["text"]
+    # Safety override, verbatim in substance.
+    assert "CRITICAL SAFETY WARNING" in text
+    assert "acute physical distress" in text
+    assert "Pause training, alert your support crew" in text
+    # Rule 3: "I don't know" + log_open_question -- the whole research queue
+    # depends on this never softening into improvisation.
+    assert '"I don\'t know"' in text
+    assert "log_open_question" in text
+    # Rule 4: never hand-compute, never exceed engine caps.
+    assert "Never hand-compute zones, loads, or volumes" in text
+    assert "ramp-cap" in text
+    # Rule 5: read-only, propose_adaptation, never persist.
+    assert "Read-only by default" in text
+    assert "propose_adaptation" in text
+    assert "you never persist a plan change" in text
+
+
+def test_system_block_a_has_voice_section_with_warmth_and_firmness(library_dir) -> None:
+    text = build_system_blocks(library_dir)[0]["text"]
+    assert "## Voice" in text
+    # Warmth.
+    assert "warm" in text.lower()
+    # Firmness/guidance -- not just encouragement.
+    assert "Encouraging does not mean soft" in text
+    assert "NEVER soften a real warning" in text
+
+
+def test_system_block_a_rule_2_covers_both_asker_modes(library_dir) -> None:
+    # Evidence-surfacing is asker-mode-conditional, but the conditioning
+    # lives entirely inside the byte-stable system text (it references the
+    # existing per-request "Asker mode" line rather than the system block
+    # being forked per request) -- so the SAME stable block must describe
+    # both branches.
+    text = build_system_blocks(library_dir)[0]["text"]
+    assert "Athlete mode" in text
+    assert "Expert mode" in text
+    assert "Asker mode" in text
+    # Athlete-mode guidance: no raw tag strings in chat prose.
+    assert "no raw tag strings like" in text or "don't recite it" in text
+    # Expert-mode guidance: unchanged full rigor, tags/confidence named.
+    assert "[EVIDENCE: swim-ultra]" in text
+    assert "Confidence:" in text
+    assert "Test:" in text
+
+
 def test_full_system_is_byte_identical_across_two_different_questions_in_same_bucket(
     library_dir,
 ) -> None:
