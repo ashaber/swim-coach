@@ -82,17 +82,19 @@ written to the repo, logged, or handled by an agent session.
      --image us-central1-docker.pkg.dev/open-swim-coach-ashaber/swim-coach-repo/api:latest \
      --region us-central1 \
      --project open-swim-coach-ashaber \
-     --set-env-vars=ATHLETES_DIR=/app/athletes,LIBRARY_DIR=/app/library,STORE_BACKEND=db \
+     --set-env-vars=ATHLETES_DIR=/app/athletes,LIBRARY_DIR=/app/library,STORE_BACKEND=db,GOOGLE_CLIENT_ID=<the public OAuth client id> \
      --set-secrets=ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest,API_TOKEN=API_TOKEN:latest,DATABASE_URL=DATABASE_URL:latest,INTERVALS_SYNC_CONFIG=intervals-sync-config:latest \
      --command=python \
      --args=-m,app.sync
    ```
 
-   (`ANTHROPIC_API_KEY`/`API_TOKEN` aren't actually used by `sync.py`, but
-   `app.config.Settings.from_env()` — reused here for `STORE_BACKEND`/
-   `DATABASE_URL` handling — still requires them at startup; mounting the
-   same secrets the API service already uses is simpler than forking the
-   config loader.)
+   (`ANTHROPIC_API_KEY`/`API_TOKEN`/`GOOGLE_CLIENT_ID` aren't actually used
+   by `sync.py`, but `app.config.Settings.from_env()` — reused here for
+   `STORE_BACKEND`/`DATABASE_URL` handling — still requires them at startup;
+   mounting the same values the API service already uses is simpler than
+   forking the config loader. `GOOGLE_CLIENT_ID` is not a secret — it's the
+   same public OAuth client id the frontend bakes in as
+   `VITE_GOOGLE_CLIENT_ID` — so it's a plain env var, not a mounted secret.)
 
    From then on, `.github/workflows/deploy-backend.yml`'s manual dispatch
    updates this job's image tag alongside the API service's on every deploy
