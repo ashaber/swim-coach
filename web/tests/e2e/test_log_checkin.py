@@ -93,16 +93,35 @@ def _configure_backend(page, base_url=BASE_URL, token=TOKEN):
     page.click('[data-a="settings:save"]')
 
 
+def _open_manual_log(page):
+    """Opens the Log tab, waits for the history section's fetch to settle,
+    then expands the secondary "Log manually / upload a file" section
+    (Phase 3: "Sync from watch" is now the primary action; the manual form
+    is collapsed by default -- see main.js's state.logManualOpen) before
+    waiting for a form field, so a fill()/click() below never races a
+    detached pre-toggle node."""
+    page.click('[data-a="tab:log"]')
+    page.wait_for_selector('.hist-section')
+    page.click('[data-a="log:toggle-manual"]')
+    page.wait_for_selector('[data-form="log"][data-field="date"]')
+
+
 def test_log_tab_shows_backend_needed_notice_when_unconfigured(page):
     page.click('[data-a="tab:log"]')
     page.wait_for_selector('.chat-empty')
     assert 'backend URL and token' in page.content()
 
 
-def test_log_tab_renders_form_fields_when_configured(page):
+def test_log_tab_shows_sync_button_when_configured(page):
     _configure_backend(page)
     page.click('[data-a="tab:log"]')
-    page.wait_for_selector('[data-form="log"][data-field="date"]')
+    page.wait_for_selector('[data-a="sync:start"]')
+    assert 'Sync from watch' in page.content()
+
+
+def test_log_tab_renders_form_fields_when_configured(page):
+    _configure_backend(page)
+    _open_manual_log(page)
     assert page.locator('[data-form="log"][data-field="sport"]').count() == 1
     assert page.locator('[data-form="log"][data-field="distance_m"]').count() == 1
     assert page.locator('[data-form="log"][data-field="duration_min"]').count() == 1
@@ -113,8 +132,7 @@ def test_log_submit_success_shows_saved_and_resets_form(page):
     page.route('**/api/workouts*', _cors_route(200, 'application/json', '{"id": "w1", "date": "2026-07-07"}'))
 
     _configure_backend(page)
-    page.click('[data-a="tab:log"]')
-    page.wait_for_selector('[data-form="log"][data-field="distance_m"]')
+    _open_manual_log(page)
     page.fill('[data-form="log"][data-field="distance_m"]', '3000')
     page.fill('[data-form="log"][data-field="duration_min"]', '60')
     page.fill('[data-form="log"][data-field="notes"]', 'felt smooth')
@@ -130,8 +148,7 @@ def test_log_submit_failure_shows_error_message(page):
     page.route('**/api/workouts*', _cors_route(422, 'application/json', '{"error": "invalid sport"}'))
 
     _configure_backend(page)
-    page.click('[data-a="tab:log"]')
-    page.wait_for_selector('[data-form="log"][data-field="distance_m"]')
+    _open_manual_log(page)
     page.fill('[data-form="log"][data-field="distance_m"]', '3000')
     page.fill('[data-form="log"][data-field="duration_min"]', '60')
     page.click('[data-a="log:submit"]')

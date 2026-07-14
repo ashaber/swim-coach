@@ -196,3 +196,18 @@ export function formatLengthsSummary(count) {
   if (!count) return null;
   return `${count} length${count === 1 ? '' : 's'} logged`;
 }
+
+// --- Log tab: "Sync from watch" (Phase 3 primary action) --------------------
+
+/** Formats the Log tab sync button's result line from `POST
+ * /api/workouts/sync`'s `{listed, new, saved, failed}` counts (see
+ * api.js's syncWorkouts). "new workouts synced" when at least one was
+ * actually saved; "Everything up to date" when intervals.icu had nothing
+ * new (or everything new was a probable duplicate, so nothing was saved);
+ * a parenthetical failure count is appended whenever any activity failed
+ * to download/parse, so a partial failure is never silently indistinguishable
+ * from a clean "up to date" run. */
+export function formatSyncResult({ saved, failed }) {
+  const base = saved > 0 ? `${saved} new workout${saved === 1 ? '' : 's'} synced` : 'Everything up to date';
+  return failed > 0 ? `${base} (${failed} failed)` : base;
+}

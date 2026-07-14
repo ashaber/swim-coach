@@ -3,7 +3,7 @@ import {
   sportLabel, sourceBadge, formatWorkoutDistance, sortWorkoutsNewestFirst,
   formatDrift, formatSplit, formatPauses, formatSwolf, formatMovingVsElapsed,
   formatAnalyticsLine, HISTORY_DISPLAY_CAP,
-  formatOffset, formatClock, formatLengthsSummary,
+  formatOffset, formatClock, formatLengthsSummary, formatSyncResult,
 } from '../../src/workouts.js';
 
 describe('sportLabel', () => {
@@ -222,5 +222,26 @@ describe('formatLengthsSummary', () => {
   });
   it('pluralizes for counts other than 1', () => {
     expect(formatLengthsSummary(71)).toBe('71 lengths logged');
+  });
+});
+
+describe('formatSyncResult', () => {
+  it('reports "Everything up to date" when nothing was saved', () => {
+    expect(formatSyncResult({ listed: 0, new: 0, saved: 0, failed: 0 })).toBe('Everything up to date');
+  });
+  it('reports "up to date" even when activities were listed but none were new/saved (dedupe)', () => {
+    expect(formatSyncResult({ listed: 3, new: 0, saved: 0, failed: 0 })).toBe('Everything up to date');
+  });
+  it('uses singular phrasing for exactly one saved workout', () => {
+    expect(formatSyncResult({ listed: 1, new: 1, saved: 1, failed: 0 })).toBe('1 new workout synced');
+  });
+  it('pluralizes for more than one saved workout', () => {
+    expect(formatSyncResult({ listed: 3, new: 3, saved: 3, failed: 0 })).toBe('3 new workouts synced');
+  });
+  it('appends a failure count when some activities failed', () => {
+    expect(formatSyncResult({ listed: 3, new: 3, saved: 2, failed: 1 })).toBe('2 new workouts synced (1 failed)');
+  });
+  it('appends a failure count even when nothing was saved at all', () => {
+    expect(formatSyncResult({ listed: 1, new: 1, saved: 0, failed: 1 })).toBe('Everything up to date (1 failed)');
   });
 });

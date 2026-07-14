@@ -75,6 +75,24 @@ SYNC_WINDOW_DAYS = 14
 # loose rather than an exact match.
 _DUPLICATE_DURATION_TOLERANCE_MIN = 1.0
 
+# On-demand sync window (as opposed to the scheduled job's 14-day
+# SYNC_WINDOW_DAYS above) -- shared by both on-demand callers: the coach
+# chat's `sync_workouts` tool (app.tools) and the PWA Log tab's "Sync from
+# watch" button (POST /api/workouts/sync, app.routes.workouts). The athlete
+# just finished a session and wants it pulled in now, not a full re-check of
+# two weeks of history -- today + yesterday is cheap and covers the case
+# where Garmin/intervals.icu hasn't finished processing yet at the moment of
+# the request (tz-safe by construction -- matches this module's own
+# date.today() usage rather than doing timezone math).
+ON_DEMAND_SYNC_WINDOW_DAYS = 2
+
+# Friendly, caller-facing-safe error for "this athlete has no working
+# intervals.icu sync set up" -- covers both "INTERVALS_SYNC_CONFIG itself is
+# missing/malformed" and "the env var is fine but doesn't list this athlete"
+# without ever leaking env var names or raw config contents to a chat model
+# or an HTTP client.
+SYNC_NOT_CONFIGURED_ERROR = "sync not configured for this athlete"
+
 
 class SyncConfigError(ConfigError):
     """Raised when INTERVALS_SYNC_CONFIG is missing or malformed."""
@@ -405,6 +423,44 @@ def sync_athlete(
     finally:
         if owns_client:
             client.close()
+
+
+def sync_on_demand(
+    store: StoreInterface, slug: str, *, window_days: int = ON_DEMAND_SYNC_WINDOW_DAYS
+) -> dict[str, Any]:
+    """Single-athlete, on-demand sync shared by the coach chat's
+    `sync_workouts` tool (`app.tools._handle_sync_workouts`) and the PWA's
+    `POST /api/workouts/sync` (`app.routes.workouts`) -- both just want "run
+    this one athlete's sync right now, with a small window, and give me a
+    friendly reason if it's not set up" rather than the scheduled job's
+    multi-athlete `main()` loop below.
+
+    Looks up `slug` in `INTERVALS_SYNC_CONFIG` (via `load_sync_config`) and,
+    if found, runs `sync_athlete` with `window_days`. Returns
+    `{"error": SYNC_NOT_CONFIGURED_ERROR}` if the config is missing/
+    malformed OR simply doesn't list this athlete -- both collapse to the
+    same message (see that constant's docstring). On success, returns just
+    the plain counts (`listed`/`new`/`saved`/`failed`) -- `skipped_duplicate`
+    is an implementation detail neither caller's response shape includes.
+    """
+    try:
+        configs = load_sync_config()
+    except ConfigError as exc:
+        log.error("sync_on_demand.config_error", slug=slug, error=str(exc))
+        return {"error": SYNC_NOT_CONFIGURED_ERROR}
+
+    cfg = next((c for c in configs if c.slug == slug), None)
+    if cfg is None:
+        log.error("sync_on_demand.athlete_not_configured", slug=slug)
+        return {"error": SYNC_NOT_CONFIGURED_ERROR}
+
+    summary = sync_athlete(cfg, store=store, window_days=window_days)
+    return {
+        "listed": summary["listed"],
+        "new": summary["new"],
+        "saved": summary["saved"],
+        "failed": summary["failed"],
+    }
 
 
 def main() -> int:

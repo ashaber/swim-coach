@@ -22,10 +22,9 @@ from swim_coach.adapt import adapt_week
 from swim_coach.models import Feedback, Workout
 from swim_coach.store import StoreInterface
 
-from app.config import ConfigError
 from app.context import iso_week_str, summarize_rollup
 from app.logging_config import get_logger
-from app.sync import load_sync_config, sync_athlete
+from app.sync import ON_DEMAND_SYNC_WINDOW_DAYS, sync_on_demand
 
 log = get_logger(__name__)
 
@@ -38,14 +37,11 @@ ToolHandler = Callable[[dict[str, Any]], dict[str, Any]]
 # (web/src/workouts.js's HISTORY_DISPLAY_CAP).
 GET_WORKOUTS_CAP = 20
 
-# sync_workouts uses a small on-demand window instead of the scheduled sync
-# job's 14-day SYNC_WINDOW_DAYS (app.sync) -- the athlete just finished a
-# session and wants it pulled in now, not a full re-check of two weeks of
-# history on every chat turn. Today + yesterday: cheap, and covers the case
-# where Garmin/intervals.icu hasn't finished processing yet at the moment of
-# the request (tz-safe by construction -- see app.sync's own date.today()
-# usage, which this matches rather than doing timezone math).
-SYNC_WORKOUTS_WINDOW_DAYS = 2
+# sync_workouts uses the same small on-demand window as the PWA Log tab's
+# "Sync from watch" button (POST /api/workouts/sync) -- see
+# app.sync.ON_DEMAND_SYNC_WINDOW_DAYS's docstring for why. Re-exported under
+# this name for backward compatibility (existing tests import it from here).
+SYNC_WORKOUTS_WINDOW_DAYS = ON_DEMAND_SYNC_WINDOW_DAYS
 
 TOOLS_SCHEMA: list[dict[str, Any]] = [
     {
@@ -350,34 +346,12 @@ def _handle_get_workouts(input_data: dict[str, Any], *, store: StoreInterface, s
     }
 
 
-_SYNC_NOT_CONFIGURED_ERROR = "sync not configured for this athlete"
-
-
 def _handle_sync_workouts(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
-    """Looks up the bound request's athlete (never a model-supplied slug --
-    see `build_tool_handlers`) in `INTERVALS_SYNC_CONFIG` and, if found, runs
-    `sync_athlete` with a small on-demand window. Both "the env var itself is
-    missing/malformed" and "the env var is fine but doesn't list this
-    athlete" collapse to the same friendly, athlete-facing-safe error --
-    neither should leak env var names or raw config contents to the model."""
-    try:
-        configs = load_sync_config()
-    except ConfigError as exc:
-        log.error("sync_workouts.config_error", slug=slug, error=str(exc))
-        return {"error": _SYNC_NOT_CONFIGURED_ERROR}
-
-    cfg = next((c for c in configs if c.slug == slug), None)
-    if cfg is None:
-        log.error("sync_workouts.athlete_not_configured", slug=slug)
-        return {"error": _SYNC_NOT_CONFIGURED_ERROR}
-
-    summary = sync_athlete(cfg, store=store, window_days=SYNC_WORKOUTS_WINDOW_DAYS)
-    return {
-        "listed": summary["listed"],
-        "new": summary["new"],
-        "saved": summary["saved"],
-        "failed": summary["failed"],
-    }
+    """Delegates to `app.sync.sync_on_demand` (shared with the PWA's `POST
+    /api/workouts/sync` route) for the bound request's athlete (never a
+    model-supplied slug -- see `build_tool_handlers`), with this tool's own
+    2-day on-demand window."""
+    return sync_on_demand(store, slug, window_days=SYNC_WORKOUTS_WINDOW_DAYS)
 
 
 def build_tool_handlers(

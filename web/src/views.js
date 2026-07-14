@@ -10,7 +10,7 @@ import { TOOL_LABELS } from './chat.js';
 import {
   sportLabel, sourceBadge, formatWorkoutDistance, formatAnalyticsLine,
   formatDrift, formatSplit, formatPauses, formatSwolf, formatMovingVsElapsed,
-  formatOffset, formatClock, formatLengthsSummary,
+  formatOffset, formatClock, formatLengthsSummary, formatSyncResult,
 } from './workouts.js';
 
 function esc(value) {
@@ -425,11 +425,88 @@ function renderIngestSummary(ingest, form) {
     </div>` : ''}`;
 }
 
-export function renderLogTab({
-  form, submit, ingest, backendConfigured, online, history, detailId,
+// --- Sync from watch (Phase 3 primary Log-tab action) -----------------------
+// Calls POST /api/workouts/sync (main.js's handleSyncWorkouts) -- the same
+// on-demand intervals.icu sync the coach chat's sync_workouts tool uses.
+// Teal `.btn` primary treatment per the design handoff; manual entry/upload
+// below is demoted to a secondary, collapsed-by-default action (see
+// renderManualLogSection).
+function renderSyncSection(sync, online) {
+  const syncing = sync.status === 'syncing';
+  return `
+    <div class="panel settings-panel">
+      <button type="button" class="btn" data-a="sync:start" style="width:100%;" ${syncing || !online ? 'disabled' : ''}>
+        ${syncing ? 'Syncing…' : 'Sync from watch'}
+      </button>
+      ${sync.message ? `<div class="conn-result ${sync.status === 'error' ? 'fail' : 'ok'}">${esc(sync.message)}</div>` : ''}
+    </div>`;
+}
+
+// --- Manual entry / file upload (Phase 3 secondary Log-tab action) ----------
+// Demoted behind a collapsed-by-default toggle (state.logManualOpen, see
+// main.js) -- the form/upload markup itself is unchanged from before this
+// restructure once expanded.
+function renderManualLogSection({
+  form, submit, ingest, online, open,
 }) {
+  const toggleLabel = open ? 'Hide manual entry' : 'Log manually / upload a file';
+  const toggleButton = `
+    <div class="panel settings-panel">
+      <button type="button" class="btn-ghost" data-a="log:toggle-manual" style="width:100%;" aria-expanded="${open ? 'true' : 'false'}">${toggleLabel}</button>
+    </div>`;
+  if (!open) return toggleButton;
+
   const rpeMissing = form.rpe === '' || form.rpe === null || form.rpe === undefined;
   const uploading = ingest.status === 'uploading';
+  return `
+    ${toggleButton}
+    <div class="panel settings-panel">
+      <label class="field">
+        <span>Import from your watch (.fit, .tcx, .csv)</span>
+        <input type="file" accept=".fit,.tcx,.csv" data-a="log:file-select" ${uploading || !online ? 'disabled' : ''}>
+      </label>
+      ${uploading ? '<p class="sub">Parsing&hellip;</p>' : ''}
+      ${ingest.status === 'error' ? `<div class="conn-result fail">${esc(ingest.error)}</div>` : ''}
+      ${ingest.status === 'ready' ? renderIngestSummary(ingest, form) : ''}
+    </div>
+    <div class="panel settings-panel">
+      <label class="field">
+        <span>Date</span>
+        <input type="date" data-form="log" data-field="date" value="${esc(form.date)}">
+      </label>
+      <label class="field">
+        <span>Sport</span>
+        <select data-form="log" data-field="sport">
+          ${SPORT_OPTIONS.map((opt) => `<option value="${opt.value}"${form.sport === opt.value ? ' selected' : ''}>${esc(opt.label)}</option>`).join('')}
+        </select>
+      </label>
+      <label class="field">
+        <span>Distance (m)</span>
+        <input type="number" min="0" step="1" inputmode="numeric" data-form="log" data-field="distance_m" value="${esc(form.distance_m)}">
+      </label>
+      <label class="field">
+        <span>Duration (min)</span>
+        <input type="number" min="0" step="0.5" inputmode="decimal" data-form="log" data-field="duration_min" value="${esc(form.duration_min)}">
+      </label>
+      <label class="field">
+        <span>RPE (effort) &middot; <output id="log-rpe-out">${rpeMissing ? '&ndash;' : esc(form.rpe)}</output>/10 <b id="log-rpe-required-badge"${rpeMissing ? '' : ' hidden'}>(required)</b></span>
+        <input type="range" min="1" max="10" step="1" data-form="log" data-field="rpe" data-slider-out="log-rpe-out"${rpeMissing ? '' : ` value="${esc(form.rpe)}"`}>
+      </label>
+      <label class="field">
+        <span>Notes</span>
+        <textarea rows="3" data-form="log" data-field="notes" placeholder="How did it feel?">${esc(form.notes)}</textarea>
+      </label>
+      <div class="settings-actions">
+        <button type="button" class="btn" data-a="log:submit" ${submit.status === 'submitting' || !online || rpeMissing ? 'disabled' : ''}>${submit.status === 'submitting' ? 'Saving…' : (form.source ? 'Confirm & save' : 'Save')}</button>
+      </div>
+      <p class="field-hint" id="log-rpe-hint"${rpeMissing ? '' : ' hidden'}>Set an effort (RPE) before saving.</p>
+      ${renderSubmitResult(submit)}
+    </div>`;
+}
+
+export function renderLogTab({
+  form, submit, ingest, backendConfigured, online, history, detailId, sync, manualOpen,
+}) {
   return `
     <div class="wrap settings-wrap">
       <header class="mast" style="border-bottom:none;padding-bottom:0;">
@@ -441,48 +518,10 @@ export function renderLogTab({
       </header>
       ${!online ? '<div class="chat-banner">Offline -- logging needs a connection.</div>' : ''}
       ${!backendConfigured ? renderBackendNeededNotice('Logging a swim needs you to sign in and set a backend URL and token first.') : `
-      <div class="panel settings-panel">
-        <label class="field">
-          <span>Import from your watch (.fit, .tcx, .csv)</span>
-          <input type="file" accept=".fit,.tcx,.csv" data-a="log:file-select" ${uploading || !online ? 'disabled' : ''}>
-        </label>
-        ${uploading ? '<p class="sub">Parsing&hellip;</p>' : ''}
-        ${ingest.status === 'error' ? `<div class="conn-result fail">${esc(ingest.error)}</div>` : ''}
-        ${ingest.status === 'ready' ? renderIngestSummary(ingest, form) : ''}
-      </div>
-      <div class="panel settings-panel">
-        <label class="field">
-          <span>Date</span>
-          <input type="date" data-form="log" data-field="date" value="${esc(form.date)}">
-        </label>
-        <label class="field">
-          <span>Sport</span>
-          <select data-form="log" data-field="sport">
-            ${SPORT_OPTIONS.map((opt) => `<option value="${opt.value}"${form.sport === opt.value ? ' selected' : ''}>${esc(opt.label)}</option>`).join('')}
-          </select>
-        </label>
-        <label class="field">
-          <span>Distance (m)</span>
-          <input type="number" min="0" step="1" inputmode="numeric" data-form="log" data-field="distance_m" value="${esc(form.distance_m)}">
-        </label>
-        <label class="field">
-          <span>Duration (min)</span>
-          <input type="number" min="0" step="0.5" inputmode="decimal" data-form="log" data-field="duration_min" value="${esc(form.duration_min)}">
-        </label>
-        <label class="field">
-          <span>RPE (effort) &middot; <output id="log-rpe-out">${rpeMissing ? '&ndash;' : esc(form.rpe)}</output>/10 <b id="log-rpe-required-badge"${rpeMissing ? '' : ' hidden'}>(required)</b></span>
-          <input type="range" min="1" max="10" step="1" data-form="log" data-field="rpe" data-slider-out="log-rpe-out"${rpeMissing ? '' : ` value="${esc(form.rpe)}"`}>
-        </label>
-        <label class="field">
-          <span>Notes</span>
-          <textarea rows="3" data-form="log" data-field="notes" placeholder="How did it feel?">${esc(form.notes)}</textarea>
-        </label>
-        <div class="settings-actions">
-          <button type="button" class="btn" data-a="log:submit" ${submit.status === 'submitting' || !online || rpeMissing ? 'disabled' : ''}>${submit.status === 'submitting' ? 'Saving…' : (form.source ? 'Confirm & save' : 'Save')}</button>
-        </div>
-        <p class="field-hint" id="log-rpe-hint"${rpeMissing ? '' : ' hidden'}>Set an effort (RPE) before saving.</p>
-        ${renderSubmitResult(submit)}
-      </div>
+      ${renderSyncSection(sync, online)}
+      ${renderManualLogSection({
+        form, submit, ingest, online, open: !!manualOpen,
+      })}
       ${renderHistorySection({ ...history, online, detailId })}`}
     </div>`;
 }
