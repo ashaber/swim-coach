@@ -3,7 +3,9 @@
 // unit-testable without a jsdom environment -- see tests/unit/workouts.test.js.
 // Mirrors plan.js's separation of pure logic from views.js's render functions.
 
-import { formatDuration, formatPace } from './plan.js';
+import {
+  formatDuration, formatPace, formatShortDate, parseIsoDate,
+} from './plan.js';
 
 /** How many most-recent workouts the Log tab's history section shows. */
 export const HISTORY_DISPLAY_CAP = 20;
@@ -210,4 +212,15 @@ export function formatLengthsSummary(count) {
 export function formatSyncResult({ saved, failed }) {
   const base = saved > 0 ? `${saved} new workout${saved === 1 ? '' : 's'} synced` : 'Everything up to date';
   return failed > 0 ? `${base} (${failed} failed)` : base;
+}
+
+// --- Embedded workout chat (detail view's "Ask your coach" section) ---------
+
+/** "About: Jun 1 Open water swim" -- the scoped-chat label per the design
+ * handoff's "Log tab -> Embedded workout chat" ("About: <workout>"). Same
+ * short-date + sport-label building blocks the history rows already use, so
+ * the label always names the workout the way the list did. */
+export function formatWorkoutChatLabel(workout) {
+  const date = formatShortDate(parseIsoDate(workout.date.slice(0, 10)));
+  return `About: ${date} ${sportLabel(workout.sport, workout.sport_detail)}`;
 }

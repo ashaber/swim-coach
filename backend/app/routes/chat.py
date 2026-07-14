@@ -11,13 +11,13 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.auth import require_auth, require_chat_rate_limit
 from app.claude import ClaudeChat
-from app.context import build_messages, build_system
+from app.context import build_messages, build_system, find_workout_by_id
 from app.store_factory import make_store
 from app.tools import TOOLS_SCHEMA, build_tool_handlers
 
@@ -34,6 +34,12 @@ class ChatRequest(BaseModel):
     history: list[HistoryMessage] = Field(default_factory=list)
     athlete: str = "renee"
     expert_mode: bool = False
+    # Scopes this chat to one already-logged workout (the Log tab's embedded
+    # workout chat -- see context.render_focused_workout): when present, that
+    # workout's full detail is injected into the per-request context block.
+    # Matched by exact id or case-insensitive prefix (same convention as the
+    # CLI's --workout-id); an unknown id is a 404 before any streaming starts.
+    workout_id: str | None = None
 
 
 def get_claude_chat(request: Request) -> ClaudeChat:
@@ -60,6 +66,21 @@ async def chat(
     require_chat_rate_limit(request, token)
 
     store = make_store(settings)
+
+    # Resolve the scoped workout (if any) BEFORE the stream starts -- an
+    # unknown workout_id must be an ordinary 404 {"error": ...} JSON
+    # response, never a mid-stream crash (once StreamingResponse has begun,
+    # a raised exception can't become a clean error status any more).
+    focused_workout = None
+    if payload.workout_id is not None:
+        focused_workout = find_workout_by_id(
+            store.list_workouts(payload.athlete), payload.workout_id
+        )
+        if focused_workout is None:
+            raise HTTPException(
+                status_code=404, detail=f"no workout matching id {payload.workout_id!r}"
+            )
+
     system = build_system(settings.library_dir, payload.message)
     history = [{"role": h.role, "content": h.content} for h in payload.history]
     messages = build_messages(
@@ -68,6 +89,7 @@ async def chat(
         message=payload.message,
         history=history,
         expert_mode=payload.expert_mode,
+        focused_workout=focused_workout,
     )
     tool_handlers = build_tool_handlers(
         store,

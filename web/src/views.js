@@ -11,6 +11,7 @@ import {
   sportLabel, sourceBadge, formatWorkoutDistance, formatAnalyticsLine,
   formatDrift, formatSplit, formatPauses, formatSwolf, formatMovingVsElapsed,
   formatOffset, formatClock, formatLengthsSummary, formatSyncResult,
+  formatWorkoutChatLabel,
 } from './workouts.js';
 
 function esc(value) {
@@ -505,7 +506,7 @@ function renderManualLogSection({
 }
 
 export function renderLogTab({
-  form, submit, ingest, backendConfigured, online, history, detailId, sync, manualOpen,
+  form, submit, ingest, backendConfigured, online, history, detailId, sync, manualOpen, workoutChat,
 }) {
   return `
     <div class="wrap settings-wrap">
@@ -522,7 +523,7 @@ export function renderLogTab({
       ${renderManualLogSection({
         form, submit, ingest, online, open: !!manualOpen,
       })}
-      ${renderHistorySection({ ...history, online, detailId })}`}
+      ${renderHistorySection({ ...history, online, detailId, workoutChat })}`}
     </div>`;
 }
 
@@ -699,7 +700,39 @@ function renderDetailNotes(notes) {
     </section>`;
 }
 
-function renderWorkoutDetail(workout) {
+// --- Embedded workout chat (Phase C slice 1, per the design handoff's
+// "Log tab -> Embedded workout chat") ---------------------------------------
+// A scoped chat tied to the ONE workout the detail view shows -- same bubble/
+// composer classes as the Coach tab (PR #43's chat treatment), its own
+// message thread (main.js's state.workoutChat, EPHEMERAL: in-memory only,
+// cleared when the detail closes). `chat` is {workoutId, messages} or null
+// (defensive: renders nothing if it doesn't match this workout).
+
+function renderWorkoutChatSection({ workout, chat, online }) {
+  if (!chat || chat.workoutId !== workout.id) return '';
+  const messages = chat.messages || [];
+  const last = messages[messages.length - 1];
+  const sending = !!last && last.role === 'assistant' && last.status === 'streaming';
+  return `
+    <section class="detail-section" id="workout-chat">
+      <h4>Ask your coach about this workout</h4>
+      <p class="sub">${esc(formatWorkoutChatLabel(workout))} · this thread isn't saved -- it clears when you leave this workout.</p>
+      ${!online ? '<div class="chat-banner">Offline -- chatting about this workout needs a connection.</div>' : ''}
+      ${messages.length > 0 ? `
+      <div class="chat-messages" id="workout-chat-messages">
+        ${messages.map(renderChatMessage).join('')}
+      </div>` : ''}
+      <div class="chat-composer">
+        <textarea id="workout-chat-input" class="chat-input" placeholder="Ask about this workout…" rows="2" ${sending || !online ? 'disabled' : ''}></textarea>
+        <div class="chat-composer-row">
+          <span></span>
+          <button type="button" class="btn" data-a="workout-chat:send" ${sending || !online ? 'disabled' : ''}>${sending ? 'Sending…' : 'Send'}</button>
+        </div>
+      </div>
+    </section>`;
+}
+
+function renderWorkoutDetail(workout, { chat, online } = {}) {
   const badge = sourceBadge(workout.source);
   return `
     <div class="detail-header">
@@ -711,7 +744,8 @@ function renderWorkoutDetail(workout) {
     ${renderLapsTable(workout.laps)}
     ${renderPausesList(workout.pauses)}
     ${renderLengthsSummarySection(workout.lengths)}
-    ${renderDetailNotes(workout.notes)}`;
+    ${renderDetailNotes(workout.notes)}
+    ${renderWorkoutChatSection({ workout, chat, online })}`;
 }
 
 /** `history` is `{ status, data, error }` (see main.js's state.workoutHistory)
@@ -721,9 +755,11 @@ function renderWorkoutDetail(workout) {
  * list view, or a workout id to show that workout's detail view instead --
  * checked ahead of every status branch (using whatever `data` is already in
  * state, stale-during-a-refresh included) so the detail view survives a
- * background render() exactly like every other state-driven view here. */
+ * background render() exactly like every other state-driven view here.
+ * `workoutChat` (main.js's state.workoutChat -- {workoutId, messages} or
+ * null) feeds the detail view's embedded scoped chat section. */
 export function renderHistorySection({
-  status, data, error, online, detailId,
+  status, data, error, online, detailId, workoutChat,
 }) {
   const hasData = data && data.length > 0;
 
@@ -733,7 +769,7 @@ export function renderHistorySection({
       return `
         <section class="hist-section">
           <div class="s-head"><button type="button" class="btn-ghost" data-a="history:back">&larr; Back to history</button></div>
-          ${renderWorkoutDetail(workout)}
+          ${renderWorkoutDetail(workout, { chat: workoutChat, online })}
         </section>`;
     }
   }

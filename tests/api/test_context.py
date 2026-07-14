@@ -9,12 +9,17 @@ from datetime import date, timedelta
 
 from swim_coach.store import FileStore
 
+from swim_coach.models import WorkoutAnalytics, WorkoutLap, WorkoutPause
+
 from app.context import (
+    FOCUSED_WORKOUT_LAPS_CAP,
     build_messages,
     build_per_request_context,
     build_routed_block,
     build_system,
     build_system_blocks,
+    find_workout_by_id,
+    render_focused_workout,
     route_library_files,
 )
 from fakes import make_event, make_workout
@@ -265,3 +270,130 @@ def test_per_request_context_no_events_message_when_none_on_file(app_env) -> Non
     text = build_per_request_context(store, "renee", expert_mode=False)
     assert "### Events / races" in text
     assert "no events on file" in text.lower()
+
+
+# --- focused workout (Log tab's embedded workout chat) -----------------------
+
+
+def _rich_workout(**overrides):
+    """A .fit-shaped workout with laps/pauses/analytics/sport_detail -- the
+    fields render_focused_workout exists to surface (the ordinary 28-day
+    exact-sessions list deliberately omits all of them)."""
+    data = dict(
+        sport="cross_train",
+        sport_detail="cycling/mountain",
+        source="fit",
+        avg_hr=132,
+        max_hr=158,
+        analytics=WorkoutAnalytics(cardiac_drift_pct=6.4, split_label="positive"),
+        laps=[
+            WorkoutLap(index=0, duration_s=1830.0, distance_m=2500.0, avg_hr=128),
+            WorkoutLap(index=1, duration_s=1980.0, distance_m=2500.0, avg_hr=136),
+        ],
+        pauses=[
+            WorkoutPause(start_offset_s=754.0, duration_s=45.0, source="gap"),
+            WorkoutPause(start_offset_s=2600.0, duration_s=90.0, source="timer"),
+        ],
+        notes="Choppy back half.",
+    )
+    data.update(overrides)
+    return make_workout(**data)
+
+
+def test_find_workout_by_id_matches_exact_and_prefix_case_insensitively() -> None:
+    w1 = make_workout()
+    w2 = make_workout()
+    workouts = [w1, w2]
+
+    assert find_workout_by_id(workouts, str(w2.id)) is w2
+    assert find_workout_by_id(workouts, str(w2.id)[:8]) is w2
+    assert find_workout_by_id(workouts, str(w2.id)[:8].upper()) is w2
+
+
+def test_find_workout_by_id_unknown_or_empty_is_none() -> None:
+    workouts = [make_workout()]
+    assert find_workout_by_id(workouts, "ffffffff-0000-0000-0000-000000000000") is None
+    assert find_workout_by_id(workouts, "") is None
+    assert find_workout_by_id(workouts, "   ") is None
+
+
+def test_render_focused_workout_includes_summary_analytics_laps_pauses_sport_detail() -> None:
+    workout = _rich_workout()
+    text = render_focused_workout(workout)
+
+    assert "specific workout the athlete is asking about" in text
+    assert str(workout.id) in text
+    assert '"sport_detail": "cycling/mountain"' in text
+    assert '"cardiac_drift_pct": 6.4' in text
+    assert '"split_label": "positive"' in text
+    assert '"avg_hr": 132' in text
+    assert "Choppy back half." in text
+    # Laps table (both laps) and pauses (both, with their sources).
+    assert "### Laps (2 of 2 shown)" in text
+    assert '"duration_s": 1830.0' in text
+    assert "### Pauses (2)" in text
+    assert '"source": "gap"' in text
+    assert '"source": "timer"' in text
+
+
+def test_render_focused_workout_caps_laps_and_labels_truncation() -> None:
+    laps = [WorkoutLap(index=i, duration_s=60.0, distance_m=100.0) for i in range(50)]
+    workout = _rich_workout(laps=laps)
+
+    text = render_focused_workout(workout)
+
+    assert f"### Laps ({FOCUSED_WORKOUT_LAPS_CAP} of 50 shown, truncated)" in text
+    assert f'"index": {FOCUSED_WORKOUT_LAPS_CAP - 1}' in text
+    assert f'"index": {FOCUSED_WORKOUT_LAPS_CAP}' not in text
+
+
+def test_render_focused_workout_bare_manual_workout_renders_cleanly() -> None:
+    workout = make_workout()  # no laps/pauses/analytics/sport_detail
+    text = render_focused_workout(workout)
+
+    assert "specific workout the athlete is asking about" in text
+    assert "(no laps recorded)" in text
+    assert "(no pauses recorded)" in text
+    assert '"analytics": null' in text
+
+
+def test_per_request_context_appends_focused_workout_only_when_given(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    workout = _rich_workout()
+
+    without = build_per_request_context(store, "renee", expert_mode=False)
+    with_focus = build_per_request_context(
+        store, "renee", expert_mode=False, focused_workout=workout
+    )
+
+    assert "specific workout the athlete is asking about" not in without
+    assert "specific workout the athlete is asking about" in with_focus
+    assert str(workout.id) in with_focus
+    # Appended after the aggregate rollup -- still per-request, never system.
+    assert with_focus.index("AGGREGATE") < with_focus.index("specific workout")
+
+
+def test_build_messages_threads_focused_workout_into_first_message(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    workout = _rich_workout()
+
+    messages = build_messages(
+        store,
+        "renee",
+        message="how did this one go?",
+        history=[],
+        expert_mode=False,
+        focused_workout=workout,
+    )
+
+    assert len(messages) == 1
+    assert "specific workout the athlete is asking about" in messages[0]["content"]
+    assert messages[0]["content"].endswith("how did this one go?")
+
+
+def test_system_prefix_untouched_by_focused_workout(library_dir) -> None:
+    # The workout block is per-request only -- the byte-stable system prefix
+    # (build_system) takes no workout argument at all, so scoped and unscoped
+    # chats about the same message share the same cache entry by construction.
+    message = "how did this workout go?"
+    assert build_system(library_dir, message) == build_system(library_dir, message)
