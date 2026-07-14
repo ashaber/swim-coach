@@ -22,9 +22,12 @@ from typing import Any
 from swim_coach.models import Event, Feedback, Workout
 
 TEST_API_TOKEN = "test-token-please-ignore"  # noqa: S105 - test fixture, not a real secret
+TEST_GOOGLE_CLIENT_ID = "test-client-id.apps.googleusercontent.com"
 
 
 def auth_headers(token: str = TEST_API_TOKEN) -> dict[str, str]:
+    """Bearer header for the legacy shared API_TOKEN (a SERVICE principal --
+    unchanged behavior, may pass any ?athlete=)."""
     return {"Authorization": f"Bearer {token}"}
 
 

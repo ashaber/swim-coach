@@ -31,6 +31,9 @@ def _settings(**overrides) -> Settings:
         chat_rate_per_min=20,
         store_backend="file",
         database_url=None,
+        google_client_id="test-client-id.apps.googleusercontent.com",
+        session_ttl_days=30,
+        chat_daily_cap_per_athlete=50,
     )
     base.update(overrides)
     return Settings(**base)

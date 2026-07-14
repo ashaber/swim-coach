@@ -192,6 +192,7 @@ async def ingest_workout(
     """
     start = time.monotonic()
     settings = request.app.state.settings
+    athlete = resolve_athlete(principal, athlete)
     store = make_store(settings)
     try:
         store.load_athlete(athlete)
@@ -281,10 +282,11 @@ async def ingest_workout(
 @router.get("/api/workouts")
 async def list_workouts(
     request: Request,
-    athlete: str = Query("renee"),
-    _token: str = Depends(require_auth),
+    athlete: str | None = Query(None),
+    principal: Principal = Depends(require_auth),
 ) -> list[dict]:
     settings = request.app.state.settings
+    athlete = resolve_athlete(principal, athlete)
     store = make_store(settings)
     try:
         store.load_athlete(athlete)

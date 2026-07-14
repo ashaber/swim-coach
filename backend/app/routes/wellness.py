@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import ValidationError
 from swim_coach.models import Wellness
 
-from app.auth import require_auth
+from app.auth import Principal, require_auth, resolve_athlete
 from app.store_factory import make_store
 
 router = APIRouter()
@@ -28,10 +28,11 @@ _SERVER_ASSIGNED_FIELDS = {"id", "athlete_id", "schema_version"}
 async def create_wellness(
     payload: dict[str, Any],
     request: Request,
-    athlete: str = Query("renee"),
-    _token: str = Depends(require_auth),
+    athlete: str | None = Query(None),
+    principal: Principal = Depends(require_auth),
 ) -> dict:
     settings = request.app.state.settings
+    athlete = resolve_athlete(principal, athlete)
     store = make_store(settings)
     try:
         profile = store.load_athlete(athlete)
@@ -56,10 +57,11 @@ async def create_wellness(
 @router.get("/api/wellness")
 async def list_wellness(
     request: Request,
-    athlete: str = Query("renee"),
-    _token: str = Depends(require_auth),
+    athlete: str | None = Query(None),
+    principal: Principal = Depends(require_auth),
 ) -> list[dict]:
     settings = request.app.state.settings
+    athlete = resolve_athlete(principal, athlete)
     store = make_store(settings)
     try:
         store.load_athlete(athlete)
