@@ -1,4 +1,4 @@
-"""POST/GET /api/feedback -- the durable feedback log.
+"""POST/GET/PATCH /api/feedback -- the durable feedback log.
 
 Generalizes IDEA 005's coach `log_open_question` tool (see app/tools.py) into
 a durable log that also holds athlete-submitted feature requests, comments,
@@ -19,13 +19,21 @@ tagged `source="coach"`, automatically) -- this endpoint always sets
 `source="athlete"` and explicitly rejects that type before it ever reaches
 model construction, since `Feedback`'s own `type` field accepts it as a
 valid literal value.
+
+`PATCH /api/feedback/{id}` closes the research loop: without it, a coach-
+logged `research_question` (or an athlete's feature_request/comment/bug) has
+no way to be marked resolved once acted on -- e.g. once a library topic file
+answers a logged gap -- so the same gap would otherwise be re-researched
+indefinitely. Same auth gate as the rest of this module; merges `context`
+into the existing entry (via `store.update_feedback`) rather than clobbering
+it, and 404s on an unknown id.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import ValidationError
@@ -103,3 +111,27 @@ async def list_feedback(
         raise HTTPException(status_code=404, detail=f"no such athlete: {athlete}") from exc
 
     return [f.model_dump(mode="json") for f in entries]
+
+
+@router.patch("/api/feedback/{feedback_id}")
+async def update_feedback(
+    feedback_id: UUID,
+    payload: dict[str, Any],
+    request: Request,
+    _token: str = Depends(require_auth),
+) -> dict:
+    settings = request.app.state.settings
+    store = make_store(settings)
+
+    status = payload.get("status")
+    context = payload.get("context")
+    if status is not None and not isinstance(status, str):
+        raise HTTPException(status_code=422, detail="status must be a string")
+    if context is not None and not isinstance(context, dict):
+        raise HTTPException(status_code=422, detail="context must be an object")
+
+    updated = store.update_feedback(feedback_id, status=status, context=context)
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"no such feedback entry: {feedback_id}")
+
+    return updated.model_dump(mode="json")

@@ -403,6 +403,61 @@ class StoreContractTests:
         loaded = store.list_feedback()
         assert any(f.id == entry.id for f in loaded)
 
+    def test_get_feedback_returns_matching_entry(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        entry = _feedback(athlete.id, body="please add a pace calculator")
+        store.save_feedback(entry)
+        found = store.get_feedback(entry.id)
+        assert found == entry
+
+    def test_get_feedback_returns_none_for_unknown_id(self, store):
+        store.save_athlete(_athlete())
+        assert store.get_feedback(uuid.uuid4()) is None
+
+    def test_update_feedback_status_only(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        entry = _feedback(athlete.id, body="mark this resolved", context={"topic": "taper"})
+        store.save_feedback(entry)
+        updated = store.update_feedback(entry.id, status="resolved")
+        assert updated is not None
+        assert updated.status == "resolved"
+        assert updated.context == {"topic": "taper"}  # untouched
+        assert store.get_feedback(entry.id).status == "resolved"
+
+    def test_update_feedback_merges_context_without_clobbering(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        entry = _feedback(athlete.id, body="taper question", context={"topic": "taper", "n": 1})
+        store.save_feedback(entry)
+        updated = store.update_feedback(
+            entry.id, status="resolved", context={"n": 2, "resolution": "see 03-periodization.md"}
+        )
+        assert updated is not None
+        assert updated.status == "resolved"
+        # "topic" survives, "n" is overwritten, "resolution" is added.
+        assert updated.context == {
+            "topic": "taper",
+            "n": 2,
+            "resolution": "see 03-periodization.md",
+        }
+
+    def test_update_feedback_returns_none_for_unknown_id(self, store):
+        store.save_athlete(_athlete())
+        assert store.update_feedback(uuid.uuid4(), status="resolved") is None
+
+    def test_update_feedback_does_not_disturb_other_entries(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        keep = _feedback(athlete.id, body="leave me alone")
+        target = _feedback(athlete.id, body="patch me")
+        store.save_feedback(keep)
+        store.save_feedback(target)
+        store.update_feedback(target.id, status="resolved")
+        untouched = store.get_feedback(keep.id)
+        assert untouched == keep
+
     # --- coach texts -----------------------------------------------------
 
     def test_coach_text_save_and_exists(self, store):
