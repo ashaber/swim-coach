@@ -17,8 +17,6 @@ from __future__ import annotations
 from typing import Callable
 
 from fastapi import Request
-from google.auth.transport import requests as google_requests
-from google.oauth2 import id_token as google_id_token
 
 # A verifier is `raw_id_token -> claims dict`. Raises ValueError (the
 # google-auth library's own exception type for any verification failure --
@@ -30,7 +28,18 @@ def verify_google_id_token(raw_token: str, *, client_id: str) -> dict:
     """Verifies signature (against Google's JWKS), `aud == client_id`,
     issuer, and expiry. Returns the decoded claims dict (includes `email`,
     `email_verified`, `sub`, `exp`, ...) on success; raises ValueError on any
-    failure -- callers turn that into a 401, never a 500."""
+    failure -- callers turn that into a 401, never a 500.
+
+    The google-auth transport (`google.auth.transport.requests`, which pulls
+    in the `requests` HTTP library to fetch Google's JWKS) is imported
+    LAZILY, inside this function, for the same reason DbStore imports psycopg
+    lazily: the whole test suite overrides `get_google_verifier` with an
+    offline fake and never calls this, so importing `app.google_auth` (and
+    therefore building the app) must not hard-require the real transport --
+    only actually verifying a token does."""
+    from google.auth.transport import requests as google_requests
+    from google.oauth2 import id_token as google_id_token
+
     return google_id_token.verify_oauth2_token(
         raw_token, google_requests.Request(), client_id
     )
