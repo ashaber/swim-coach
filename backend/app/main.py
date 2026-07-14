@@ -16,10 +16,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.auth import ChatRateLimiter
+from app.auth import ChatRateLimiter, DailyChatLimiter
 from app.config import Settings
 from app.logging_config import get_logger
 from app.routes.athlete import router as athlete_router
+from app.routes.auth import router as auth_router
 from app.routes.chat import router as chat_router
 from app.routes.feedback import router as feedback_router
 from app.routes.plan import router as plan_router
@@ -39,6 +40,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="swim-coach-api")
     app.state.settings = settings
     app.state.chat_rate_limiter = ChatRateLimiter(settings.chat_rate_per_min)
+    app.state.chat_daily_limiter = DailyChatLimiter(settings.chat_daily_cap_per_athlete)
     app.state.claude_chat = None  # lazily built by routes.chat.get_claude_chat
 
     app.add_middleware(
@@ -89,6 +91,7 @@ def create_app() -> FastAPI:
     app.include_router(wellness_router)
     app.include_router(athlete_router)
     app.include_router(feedback_router)
+    app.include_router(auth_router)
 
     log.info(
         "service start",

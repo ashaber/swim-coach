@@ -25,7 +25,7 @@ from pydantic import ValidationError
 from swim_coach.models import Athlete
 from swim_coach.zones import zone_table
 
-from app.auth import require_auth
+from app.auth import Principal, require_auth, resolve_athlete
 from app.store_factory import make_store
 
 router = APIRouter()
@@ -39,10 +39,11 @@ _SERVER_OWNED_FIELDS = {"id", "slug", "schema_version", "zones"}
 @router.get("/api/athlete")
 async def get_athlete(
     request: Request,
-    athlete: str = Query("renee"),
-    _token: str = Depends(require_auth),
+    athlete: str | None = Query(None),
+    principal: Principal = Depends(require_auth),
 ) -> dict:
     settings = request.app.state.settings
+    athlete = resolve_athlete(principal, athlete)
     store = make_store(settings)
     try:
         profile = store.load_athlete(athlete)
@@ -55,10 +56,11 @@ async def get_athlete(
 async def patch_athlete(
     payload: dict[str, Any],
     request: Request,
-    athlete: str = Query("renee"),
-    _token: str = Depends(require_auth),
+    athlete: str | None = Query(None),
+    principal: Principal = Depends(require_auth),
 ) -> dict:
     settings = request.app.state.settings
+    athlete = resolve_athlete(principal, athlete)
     store = make_store(settings)
     try:
         current = store.load_athlete(athlete)
