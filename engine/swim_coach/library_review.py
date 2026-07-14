@@ -64,7 +64,12 @@ MARKER_RE = re.compile(r"\*\*([^*\n]*\bUNREVIEWED\b[^*\n]*)\*\*")
 HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*$", re.MULTILINE)
 
 TAG_RE = re.compile(r"\[(EVIDENCE|ADAPTED):\s*([^\]]*)\]")
-CONFIDENCE_RE = re.compile(r"Confidence:\**\s*([A-Za-z]+(?:-[A-Za-z]+)*)")
+# Negative lookbehind for a backtick: a backtick-wrapped `` `Confidence: X` ``
+# is always an inline-code *reference* to some other section's rating (seen
+# in 07-strength-dryland.md's intro, citing 04's grade), never this block's
+# own -- a real confidence assertion is always bare or **bold**, never
+# backtick-wrapped (grepped, not assumed).
+CONFIDENCE_RE = re.compile(r"(?<!`)Confidence:\**\s*([A-Za-z]+(?:-[A-Za-z]+)*)")
 TEST_RE = re.compile(r"\*{0,2}Test:\*{0,2}\s*(.+?)(?=\n\n|\Z)", re.DOTALL)
 COACH_JUDGMENT_RE = re.compile(r"Coach judgment", re.IGNORECASE)
 
@@ -357,6 +362,28 @@ def scan_library(library_dir: Path) -> list[ReviewItem]:
 
 
 # --- marker stripping (review-accept) ----------------------------------------
+
+
+INDEX_UNREVIEWED_SUFFIX = "**UNREVIEWED**, pending human review."
+INDEX_REVIEWED_SUFFIX = "Human-reviewed."
+
+
+def mark_index_reviewed(index_text: str, filename: str) -> tuple[str, bool]:
+    """If `INDEX.md`'s row for `filename` still ends with the UNREVIEWED
+    status sentence, replace it with "Human-reviewed." Returns
+    `(new_text, changed)`. Scoped to that file's own row (matched by its
+    backtick-quoted filename at the row's start) so this can never touch
+    another file's status by accident, and is a no-op if the row already
+    says something else (e.g. already reviewed)."""
+    row_prefix = f"| `{filename}` |"
+    lines = index_text.split("\n")
+    changed = False
+    for i, line in enumerate(lines):
+        if line.startswith(row_prefix) and INDEX_UNREVIEWED_SUFFIX in line:
+            lines[i] = line.replace(INDEX_UNREVIEWED_SUFFIX, INDEX_REVIEWED_SUFFIX)
+            changed = True
+            break
+    return "\n".join(lines), changed
 
 
 def strip_marker(text: str, marker_start: int, marker_end: int) -> str:
