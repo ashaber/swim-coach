@@ -31,7 +31,7 @@ def test_request_shape_no_temperature_top_p_top_k(client, fake_claude_chat_facto
 
     assert len(chat.client.messages.calls) == 1
     kwargs = chat.client.messages.calls[0]
-    assert kwargs["model"] == "claude-opus-4-8"
+    assert kwargs["model"] == "claude-sonnet-5"
     assert kwargs["max_tokens"] == 2048
     for forbidden in ("temperature", "top_p", "top_k"):
         assert forbidden not in kwargs
