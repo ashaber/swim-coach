@@ -22,6 +22,14 @@ def test_missing_api_token_fails_fast(monkeypatch: pytest.MonkeyPatch) -> None:
         Settings.from_env()
 
 
+def test_missing_google_client_id_fails_fast(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("API_TOKEN", "some-token")
+    monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
+    with pytest.raises(ConfigError, match="GOOGLE_CLIENT_ID"):
+        Settings.from_env()
+
+
 def test_invalid_claude_thinking_fails_fast(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     monkeypatch.setenv("API_TOKEN", "some-token")

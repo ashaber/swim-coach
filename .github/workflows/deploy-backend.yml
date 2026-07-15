@@ -78,7 +78,7 @@ jobs:
             --min-instances=0 \
             --max-instances=2 \
             --allow-unauthenticated \
-            --set-env-vars=CLAUDE_MODEL=claude-opus-4-8,ALLOWED_ORIGINS=https://ashaber.github.io,ATHLETES_DIR=/app/athletes,LIBRARY_DIR=/app/library,STORE_BACKEND=db \
+            --set-env-vars=CLAUDE_MODEL=claude-opus-4-8,ALLOWED_ORIGINS=https://ashaber.github.io,ATHLETES_DIR=/app/athletes,LIBRARY_DIR=/app/library,STORE_BACKEND=db,GOOGLE_CLIENT_ID=${{ vars.VITE_GOOGLE_CLIENT_ID }} \
             --set-secrets=ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest,API_TOKEN=API_TOKEN:latest,DATABASE_URL=DATABASE_URL:latest,INTERVALS_SYNC_CONFIG=intervals-sync-config:latest
 
       - name: Deploy sync job to Cloud Run
@@ -88,10 +88,19 @@ jobs:
         # the job doesn't exist until Andrew runs its one-time `gcloud run
         # jobs create` (README setup) -- a fresh repo/environment shouldn't
         # fail this whole workflow just because that hasn't happened yet.
+        #
+        # --update-env-vars=GOOGLE_CLIENT_ID: sync.py reuses
+        # app.config.Settings.from_env(), which now requires GOOGLE_CLIENT_ID
+        # at startup (verified-identity API). It's not used BY the sync job,
+        # but the shared config loader fails fast without it, so every deploy
+        # keeps the job's env current (idempotent; doesn't disturb the job's
+        # other env vars/secrets). Not a secret -- same public client id the
+        # frontend uses via VITE_GOOGLE_CLIENT_ID.
         continue-on-error: true
         run: |
           gcloud run jobs update ${{ env.SYNC_JOB_NAME }} \
             --image ${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
             --region ${{ env.GCP_REGION }} \
             --project ${{ secrets.GCP_PROJECT_ID }} \
+            --update-env-vars=GOOGLE_CLIENT_ID=${{ vars.VITE_GOOGLE_CLIENT_ID }} \
           || echo "::warning::${{ env.SYNC_JOB_NAME }} job update failed or the job doesn't exist yet -- see backend/README.md's one-time setup section"

@@ -24,12 +24,14 @@ simplicity win. A pool can be dropped in behind `_connect` later if needed.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
 from swim_coach.models import (
+    AllowedEmail,
     Athlete,
+    AuthSession,
     Event,
     Feedback,
     MacroPlan,
@@ -160,6 +162,31 @@ def row_to_feedback(row: dict[str, Any]) -> Feedback:
         context=row["context"] or {},
         status=row["status"],
         created_at=row["created_at"],
+    )
+
+
+def row_to_allowed_email(row: dict[str, Any]) -> AllowedEmail:
+    """Unlike the other `row_to_*` mappers, this expects a JOINED row (`ae.*`
+    + `a.slug as athlete_slug`) -- `allowed_emails` itself only has an
+    `athlete_id` FK column, never the slug. See DbStore.get_allowed_email/
+    list_allowed_emails, the only callers that build such a row."""
+    return AllowedEmail(
+        email=row["email"],
+        athlete_slug=row["athlete_slug"],
+        note=row["note"],
+        created_at=row["created_at"],
+    )
+
+
+def row_to_auth_session(row: dict[str, Any]) -> AuthSession:
+    """Same joined-row convention as row_to_allowed_email above (`s.*` + `a.slug
+    as athlete_slug`) -- `auth_sessions` itself only has an `athlete_id` FK."""
+    return AuthSession(
+        token_hash=row["token_hash"],
+        athlete_slug=row["athlete_slug"],
+        created_at=row["created_at"],
+        expires_at=row["expires_at"],
+        revoked_at=row["revoked_at"],
     )
 
 
@@ -544,3 +571,114 @@ class DbStore(StoreInterface):
                     (uuid.uuid4(), athlete_id, day, text, key),
                 )
         return key
+
+    # --- Verified identity (Slice 1: allowed_emails + auth_sessions) -----
+    #
+    # Both tables store only an `athlete_id` FK (see supabase/migrations/
+    # 20260714000000_identity.sql) -- every read here joins back to
+    # `athletes` to resolve the slug the rest of StoreInterface works in,
+    # same join pattern `list_week_ids`/`list_workouts`/etc. already use.
+
+    def add_allowed_email(
+        self, slug: str, email: str, *, note: str | None = None
+    ) -> AllowedEmail:
+        normalized = email.strip().lower()
+        with self._connect() as conn, conn.cursor() as cur:
+            athlete_id = self._athlete_id(cur, slug)
+            cur.execute(
+                """
+                insert into allowed_emails (email, athlete_id, note)
+                values (%s, %s, %s)
+                on conflict (email) do update set
+                    athlete_id = excluded.athlete_id,
+                    note = excluded.note
+                returning created_at
+                """,
+                (normalized, athlete_id, note),
+            )
+            row = cur.fetchone()
+        return AllowedEmail(
+            email=normalized, athlete_slug=slug, note=note, created_at=row["created_at"]
+        )
+
+    def get_allowed_email(self, email: str) -> AllowedEmail | None:
+        normalized = email.strip().lower()
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                select ae.email, a.slug as athlete_slug, ae.note, ae.created_at
+                from allowed_emails ae
+                join athletes a on a.athlete_id = ae.athlete_id
+                where ae.email = %s
+                """,
+                (normalized,),
+            )
+            row = cur.fetchone()
+        return row_to_allowed_email(row) if row is not None else None
+
+    def list_allowed_emails(self) -> list[AllowedEmail]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                select ae.email, a.slug as athlete_slug, ae.note, ae.created_at
+                from allowed_emails ae
+                join athletes a on a.athlete_id = ae.athlete_id
+                order by ae.created_at, ae.email
+                """
+            )
+            rows = cur.fetchall()
+        return [row_to_allowed_email(r) for r in rows]
+
+    def remove_allowed_email(self, email: str) -> bool:
+        normalized = email.strip().lower()
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "delete from allowed_emails where email = %s returning email", (normalized,)
+            )
+            row = cur.fetchone()
+        return row is not None
+
+    def create_session(self, slug: str, token_hash: str, *, expires_at: datetime) -> AuthSession:
+        with self._connect() as conn, conn.cursor() as cur:
+            athlete_id = self._athlete_id(cur, slug)
+            cur.execute(
+                """
+                insert into auth_sessions (token_hash, athlete_id, expires_at)
+                values (%s, %s, %s)
+                returning created_at
+                """,
+                (token_hash, athlete_id, expires_at),
+            )
+            row = cur.fetchone()
+        return AuthSession(
+            token_hash=token_hash,
+            athlete_slug=slug,
+            created_at=row["created_at"],
+            expires_at=expires_at,
+            revoked_at=None,
+        )
+
+    def get_session(self, token_hash: str) -> AuthSession | None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                select s.token_hash, a.slug as athlete_slug, s.created_at,
+                       s.expires_at, s.revoked_at
+                from auth_sessions s
+                join athletes a on a.athlete_id = s.athlete_id
+                where s.token_hash = %s
+                """,
+                (token_hash,),
+            )
+            row = cur.fetchone()
+        return row_to_auth_session(row) if row is not None else None
+
+    def revoke_session(self, token_hash: str) -> bool:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "update auth_sessions set revoked_at = now() where token_hash = %s "
+                "returning token_hash",
+                (token_hash,),
+            )
+            row = cur.fetchone()
+        return row is not None

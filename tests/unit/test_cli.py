@@ -932,3 +932,67 @@ def test_analyze_requires_workout_id_or_all(athlete_tree):
 
     with _pytest.raises(SystemExit):
         _run(athlete_tree["base_dir"], "analyze", "--athlete", athlete_tree["slug"])
+
+
+# --- invite / list-invites / revoke-invite (Slice 1: verified identity) ------
+
+
+def test_invite_adds_allowlist_entry(athlete_tree, capsys):
+    slug = athlete_tree["slug"]
+    code = _run(
+        athlete_tree["base_dir"],
+        "invite",
+        "Beta.User@Example.COM",
+        "--athlete",
+        slug,
+        "--note",
+        "first tester",
+    )
+    assert code == 0
+    result = _out(capsys)
+    assert result["invited"] == "beta.user@example.com"  # normalized
+    assert result["athlete"] == slug
+    assert result["note"] == "first tester"
+    # persisted, and readable back through the store
+    assert athlete_tree["store"].get_allowed_email("beta.user@example.com") is not None
+
+
+def test_invite_unknown_athlete_errors(athlete_tree, capsys):
+    code = _run(
+        athlete_tree["base_dir"], "invite", "x@example.com", "--athlete", "nobody"
+    )
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+    # no entry was created for the bad athlete
+    assert athlete_tree["store"].list_allowed_emails() == []
+
+
+def test_list_invites_round_trip(athlete_tree, capsys):
+    slug = athlete_tree["slug"]
+    _run(athlete_tree["base_dir"], "invite", "a@example.com", "--athlete", slug)
+    _run(athlete_tree["base_dir"], "invite", "b@example.com", "--athlete", slug)
+    capsys.readouterr()  # drop the invite output
+    code = _run(athlete_tree["base_dir"], "list-invites")
+    assert code == 0
+    result = _out(capsys)
+    assert result["count"] == 2
+    assert {i["email"] for i in result["invites"]} == {"a@example.com", "b@example.com"}
+
+
+def test_revoke_invite_removes_entry(athlete_tree, capsys):
+    slug = athlete_tree["slug"]
+    _run(athlete_tree["base_dir"], "invite", "gone@example.com", "--athlete", slug)
+    capsys.readouterr()
+    code = _run(athlete_tree["base_dir"], "revoke-invite", "GONE@example.com")
+    assert code == 0
+    result = _out(capsys)
+    assert result["revoked"] == "gone@example.com"
+    assert athlete_tree["store"].get_allowed_email("gone@example.com") is None
+
+
+def test_revoke_invite_absent_email_errors(athlete_tree, capsys):
+    code = _run(athlete_tree["base_dir"], "revoke-invite", "never@example.com")
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result

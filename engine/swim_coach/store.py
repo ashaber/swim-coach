@@ -10,7 +10,7 @@ import filecmp
 import json
 import shutil
 from abc import ABC, abstractmethod
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
@@ -18,7 +18,9 @@ import yaml
 from pydantic import BaseModel
 
 from swim_coach.models import (
+    AllowedEmail,
     Athlete,
+    AuthSession,
     Event,
     Feedback,
     MacroPlan,
@@ -145,6 +147,63 @@ class StoreInterface(ABC):
         key). Raises FileExistsError if one already exists for this date
         and `force` is False -- callers must not silently clobber a
         previously logged coach text."""
+        ...
+
+    # --- Verified identity (Slice 1: allowed_emails + sessions) -----------
+
+    @abstractmethod
+    def add_allowed_email(
+        self, slug: str, email: str, *, note: str | None = None
+    ) -> AllowedEmail:
+        """Add (or re-invite -- upsert keyed by normalized email) a beta
+        user. Raises FileNotFoundError if `slug` doesn't match a known
+        athlete (same convention as every other slug-taking method here).
+        `email` is normalized (stripped, lowercased) before storage; a
+        second call with the same email (any casing/whitespace) updates the
+        existing entry's athlete/note rather than creating a duplicate."""
+        ...
+
+    @abstractmethod
+    def get_allowed_email(self, email: str) -> AllowedEmail | None:
+        """Normalized-email lookup, or None if not allowlisted. Never
+        raises -- an absent entry is an expected, athlete-facing "request
+        access" state, not an error."""
+        ...
+
+    @abstractmethod
+    def list_allowed_emails(self) -> list[AllowedEmail]:
+        """Every allowlist entry, oldest-invited-first (ties broken by
+        email) -- what `swim_coach.cli`'s `list-invites` prints."""
+        ...
+
+    @abstractmethod
+    def remove_allowed_email(self, email: str) -> bool:
+        """Revoke one invite. Returns True if an entry existed and was
+        removed, False if the (normalized) email wasn't allowlisted."""
+        ...
+
+    @abstractmethod
+    def create_session(self, slug: str, token_hash: str, *, expires_at: datetime) -> AuthSession:
+        """Mint a new session row for an already-verified sign-in. Raises
+        FileNotFoundError if `slug` doesn't match a known athlete.
+        `token_hash` is the sha256 hex digest of the raw session token --
+        the raw token itself is never passed to or stored by the store."""
+        ...
+
+    @abstractmethod
+    def get_session(self, token_hash: str) -> AuthSession | None:
+        """Looks up a session by its token's sha256 hex digest, or None if
+        no such session exists. Returned AS-IS -- expiry/revocation are
+        deliberately NOT evaluated here (no notion of "now" at the store
+        layer); `require_auth` (backend/app/auth.py) checks `expires_at`/
+        `revoked_at` against the current time itself."""
+        ...
+
+    @abstractmethod
+    def revoke_session(self, token_hash: str) -> bool:
+        """Marks a session revoked (idempotent -- revoking an
+        already-revoked session is a no-op success). Returns True if a
+        session with that token_hash existed at all, False otherwise."""
         ...
 
 
@@ -409,3 +468,94 @@ class FileStore(StoreInterface):
             )
         shutil.copyfile(src_path, dest_path)
         return str(dest_path)
+
+    # --- Verified identity (Slice 1: allowed_emails + sessions) -----------
+    #
+    # Local/dev analogue of DbStore's two tables: a single JSON dict per
+    # concern, directly under base_dir (siblings of every athlete's own slug
+    # directory), same rationale as _feedback_path -- these aren't
+    # per-athlete data, they're small cross-athlete lookup tables.
+
+    def _allowed_emails_path(self) -> Path:
+        return self.base_dir / "allowed_emails.json"
+
+    def _read_json_dict(self, path: Path) -> dict:
+        if not path.exists():
+            return {}
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def _write_json_dict(self, path: Path, data: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+
+    def add_allowed_email(
+        self, slug: str, email: str, *, note: str | None = None
+    ) -> AllowedEmail:
+        self.load_athlete(slug)  # raises FileNotFoundError if unknown
+        normalized = email.strip().lower()
+        path = self._allowed_emails_path()
+        data = self._read_json_dict(path)
+        existing = data.get(normalized)
+        created_at = (
+            AllowedEmail.model_validate(existing).created_at
+            if existing is not None
+            else datetime.now(timezone.utc)
+        )
+        entry = AllowedEmail(email=normalized, athlete_slug=slug, note=note, created_at=created_at)
+        data[normalized] = entry.model_dump(mode="json")
+        self._write_json_dict(path, data)
+        return entry
+
+    def get_allowed_email(self, email: str) -> AllowedEmail | None:
+        normalized = email.strip().lower()
+        row = self._read_json_dict(self._allowed_emails_path()).get(normalized)
+        return AllowedEmail.model_validate(row) if row is not None else None
+
+    def list_allowed_emails(self) -> list[AllowedEmail]:
+        data = self._read_json_dict(self._allowed_emails_path())
+        entries = [AllowedEmail.model_validate(row) for row in data.values()]
+        entries.sort(key=lambda e: (e.created_at, e.email))
+        return entries
+
+    def remove_allowed_email(self, email: str) -> bool:
+        normalized = email.strip().lower()
+        path = self._allowed_emails_path()
+        data = self._read_json_dict(path)
+        if normalized not in data:
+            return False
+        del data[normalized]
+        self._write_json_dict(path, data)
+        return True
+
+    def _sessions_path(self) -> Path:
+        return self.base_dir / "sessions.json"
+
+    def create_session(self, slug: str, token_hash: str, *, expires_at: datetime) -> AuthSession:
+        self.load_athlete(slug)  # raises FileNotFoundError if unknown
+        path = self._sessions_path()
+        data = self._read_json_dict(path)
+        entry = AuthSession(
+            token_hash=token_hash,
+            athlete_slug=slug,
+            created_at=datetime.now(timezone.utc),
+            expires_at=expires_at,
+            revoked_at=None,
+        )
+        data[token_hash] = entry.model_dump(mode="json")
+        self._write_json_dict(path, data)
+        return entry
+
+    def get_session(self, token_hash: str) -> AuthSession | None:
+        row = self._read_json_dict(self._sessions_path()).get(token_hash)
+        return AuthSession.model_validate(row) if row is not None else None
+
+    def revoke_session(self, token_hash: str) -> bool:
+        path = self._sessions_path()
+        data = self._read_json_dict(path)
+        row = data.get(token_hash)
+        if row is None:
+            return False
+        row["revoked_at"] = datetime.now(timezone.utc).isoformat()
+        data[token_hash] = row
+        self._write_json_dict(path, data)
+        return True

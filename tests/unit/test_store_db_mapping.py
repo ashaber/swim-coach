@@ -13,7 +13,9 @@ import uuid
 from datetime import date, datetime, timezone
 
 from swim_coach.models import (
+    AllowedEmail,
     Athlete,
+    AuthSession,
     Event,
     Feedback,
     MacroBlock,
@@ -29,7 +31,9 @@ from swim_coach.store_db import (
     event_to_row,
     feedback_to_row,
     macro_to_row,
+    row_to_allowed_email,
     row_to_athlete,
+    row_to_auth_session,
     row_to_event,
     row_to_feedback,
     row_to_macro,
@@ -214,6 +218,43 @@ def test_feedback_mapping_round_trip_with_null_athlete_id():
 def test_coach_text_storage_key_shape():
     key = coach_text_storage_key("renee", date(2026, 7, 6))
     assert key == "db://coach_texts/renee/2026-07-06"
+
+
+def test_allowed_email_mapping_round_trip_from_joined_row():
+    # allowed_emails has no slug column of its own -- row_to_allowed_email
+    # expects the caller's SQL to have already joined athletes.slug in as
+    # "athlete_slug" (see DbStore.get_allowed_email/list_allowed_emails).
+    created = datetime(2026, 7, 6, 12, 0, 0, tzinfo=timezone.utc)
+    row = {
+        "email": "renee@example.com",
+        "athlete_slug": "renee",
+        "note": "beta",
+        "created_at": created,
+    }
+    entry = row_to_allowed_email(row)
+    assert entry == AllowedEmail(
+        email="renee@example.com", athlete_slug="renee", note="beta", created_at=created
+    )
+
+
+def test_auth_session_mapping_round_trip_from_joined_row():
+    created = datetime(2026, 7, 6, 12, 0, 0, tzinfo=timezone.utc)
+    expires = datetime(2026, 8, 5, 12, 0, 0, tzinfo=timezone.utc)
+    row = {
+        "token_hash": "deadbeef",
+        "athlete_slug": "tim",
+        "created_at": created,
+        "expires_at": expires,
+        "revoked_at": None,
+    }
+    session = row_to_auth_session(row)
+    assert session == AuthSession(
+        token_hash="deadbeef",
+        athlete_slug="tim",
+        created_at=created,
+        expires_at=expires,
+        revoked_at=None,
+    )
 
 
 def test_data_column_is_json_serializable_primitives():

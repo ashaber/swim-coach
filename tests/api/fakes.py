@@ -22,9 +22,12 @@ from typing import Any
 from swim_coach.models import Event, Feedback, Workout
 
 TEST_API_TOKEN = "test-token-please-ignore"  # noqa: S105 - test fixture, not a real secret
+TEST_GOOGLE_CLIENT_ID = "test-client-id.apps.googleusercontent.com"
 
 
 def auth_headers(token: str = TEST_API_TOKEN) -> dict[str, str]:
+    """Bearer header for the legacy shared API_TOKEN (a SERVICE principal --
+    unchanged behavior, may pass any ?athlete=)."""
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -174,3 +177,22 @@ class FakeMessagesAPI:
 class FakeAnthropicClient:
     def __init__(self, turns: list[tuple[list[str], Any]]) -> None:
         self.messages = FakeMessagesAPI(turns)
+
+
+def fake_google_verify(raw_token: str) -> dict:
+    """Stand-in for app.google_auth's real verify (which makes an HTTPS call
+    to Google's JWKS -- forbidden in tests). Convention: a raw_token shaped
+    `valid:<email>` verifies to that email's claims; ANYTHING else raises
+    ValueError, exactly as google-auth's verify_oauth2_token does for a
+    tampered/wrong-audience/expired/wrong-issuer token. Tests inject this via
+    `app.dependency_overrides[get_google_verifier] = lambda: fake_google_verify`.
+    """
+    if not raw_token.startswith("valid:"):
+        raise ValueError("fake verifier: token did not verify")
+    email = raw_token[len("valid:") :]
+    return {"email": email, "email_verified": True, "sub": "fake-google-sub"}
+
+
+def google_token_for(email: str) -> str:
+    """The id_token string the fake verifier above accepts for `email`."""
+    return f"valid:{email}"
