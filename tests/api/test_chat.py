@@ -32,7 +32,9 @@ def test_request_shape_no_temperature_top_p_top_k(client, fake_claude_chat_facto
     assert len(chat.client.messages.calls) == 1
     kwargs = chat.client.messages.calls[0]
     assert kwargs["model"] == "claude-sonnet-5"
-    assert kwargs["max_tokens"] == 2048
+    # 16384, not 2048: max_tokens covers adaptive thinking + text on Sonnet 5,
+    # and 2048 produced empty replies in prod (thinking consumed it all).
+    assert kwargs["max_tokens"] == 16384
     for forbidden in ("temperature", "top_p", "top_k"):
         assert forbidden not in kwargs
     # adaptive (the default) is passed explicitly -- omission would mean

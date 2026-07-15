@@ -3,7 +3,7 @@ manual tool loop, streams text back to the caller as SSE-framed chunks.
 
 Verified-current API usage (see this build's task brief for the exact,
 checked patterns):
-  - `client.messages.stream(model=..., max_tokens=2048, system=[...],
+  - `client.messages.stream(model=..., max_tokens=MAX_TOKENS, system=[...],
     messages=[...], tools=[...])` as a context manager; `stream.text_stream`
     yields text deltas, `stream.get_final_message()` returns the full
     message (content blocks, stop_reason, usage) once the stream ends.
@@ -31,7 +31,14 @@ from app.tools import ToolHandler
 log = get_logger(__name__)
 
 MAX_TOOL_ITERATIONS = 5
-MAX_TOKENS = 2048
+# max_tokens caps thinking + text COMBINED. On Sonnet 5 with adaptive
+# thinking, a hard question can spend >2048 tokens thinking alone, leaving
+# zero text (seen in prod 2026-07-15: coach_smoke prompts b/c returned empty
+# replies with stop_reason=max_tokens at exactly 2048 output tokens; Opus 4.8
+# never hit this because omitted/disabled thinking left the full budget to
+# text). 16384 leaves generous thinking headroom while still bounding the
+# worst-case per-message output spend.
+MAX_TOKENS = 16384
 
 
 def build_request_kwargs(
