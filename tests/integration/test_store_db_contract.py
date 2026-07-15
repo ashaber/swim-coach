@@ -40,6 +40,8 @@ _TABLES = [
     "api_tokens",
     "uploaded_files",
     "sessions",
+    "auth_sessions",
+    "allowed_emails",
     "feedback",
     "coach_texts",
     "wellness_checkins",

@@ -23,7 +23,7 @@ try:
 except ImportError:  # pragma: no cover - python-dotenv is a listed dependency
     pass
 
-_REQUIRED_VARS = ("ANTHROPIC_API_KEY", "API_TOKEN")
+_REQUIRED_VARS = ("ANTHROPIC_API_KEY", "API_TOKEN", "GOOGLE_CLIENT_ID")
 _VALID_THINKING_MODES = ("adaptive", "disabled")
 _VALID_STORE_BACKENDS = ("file", "db")
 
@@ -57,6 +57,23 @@ class Settings:
     chat_rate_per_min: int
     store_backend: str  # "file" | "db"
     database_url: str | None
+    # Verified-identity API (Slice 1, backend/app/routes/auth.py). The public
+    # OAuth client id Google ID tokens must carry as `aud` -- NOT a secret
+    # (same value the frontend already bakes into its build as
+    # VITE_GOOGLE_CLIENT_ID, see web/src/identity.js), but still required at
+    # startup: without it, verify_oauth2_token has no audience to check
+    # against, which would silently accept a token minted for a DIFFERENT
+    # OAuth client. Fail fast rather than start up unable to safely verify
+    # sign-ins.
+    google_client_id: str
+    # How long a minted session token stays valid before an athlete has to
+    # sign in again (backend/app/routes/auth.py's POST /api/auth/google).
+    session_ttl_days: int
+    # Daily cap on /api/chat per athlete SESSION (never applied to the
+    # legacy shared API_TOKEN service credential -- see app/auth.py's
+    # require_daily_chat_cap). Exists because the Anthropic key is Andrew's
+    # own; once other people can chat, they spend his credits.
+    chat_daily_cap_per_athlete: int
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -119,6 +136,11 @@ class Settings:
             chat_rate_per_min=int(os.environ.get("CHAT_RATE_PER_MIN", "20")),
             store_backend=store_backend,
             database_url=database_url,
+            google_client_id=os.environ["GOOGLE_CLIENT_ID"].strip(),
+            session_ttl_days=int(os.environ.get("SESSION_TTL_DAYS", "30")),
+            chat_daily_cap_per_athlete=int(
+                os.environ.get("CHAT_DAILY_CAP_PER_ATHLETE", "50")
+            ),
         )
 
     def token_matches(self, provided_token: str) -> bool:

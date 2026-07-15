@@ -26,7 +26,7 @@ from typing import Any
 
 import pytest
 
-from fakes import FakeAnthropicClient, TEST_API_TOKEN
+from fakes import FakeAnthropicClient, TEST_API_TOKEN, TEST_GOOGLE_CLIENT_ID
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_DIR = REPO_ROOT / "backend"
@@ -45,6 +45,7 @@ import os  # noqa: E402
 
 os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-import-placeholder-not-real")
 os.environ.setdefault("API_TOKEN", "import-placeholder-token-not-real")
+os.environ.setdefault("GOOGLE_CLIENT_ID", "import-placeholder-client-id.apps.googleusercontent.com")
 
 
 @pytest.fixture
@@ -74,6 +75,7 @@ def app_env(monkeypatch: pytest.MonkeyPatch, athletes_dir: Path, library_dir: Pa
     `athletes_dir` for convenience (tests that need the isolated tree)."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-not-real")
     monkeypatch.setenv("API_TOKEN", TEST_API_TOKEN)
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", TEST_GOOGLE_CLIENT_ID)
     monkeypatch.setenv("ATHLETES_DIR", str(athletes_dir))
     monkeypatch.setenv("LIBRARY_DIR", str(library_dir))
     monkeypatch.setenv("ALLOWED_ORIGINS", "https://ashaber.github.io,http://localhost:5173")

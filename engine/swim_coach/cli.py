@@ -698,6 +698,62 @@ def _cmd_analyze(args: argparse.Namespace, store: FileStore) -> int:
     return 0
 
 
+def _cmd_invite(args: argparse.Namespace, store: FileStore) -> int:
+    """Add (or re-invite) a beta user to the server-side allowlist
+    (allowed_emails). Adding a beta user is a DATA change -- this row -- never
+    a code deploy. The email is normalized (stripped/lowercased) by the
+    store; a mismatched athlete slug is a clean error, not a traceback."""
+    try:
+        entry = store.add_allowed_email(args.athlete, args.email, note=args.note)
+    except FileNotFoundError:
+        return _error(f"no such athlete: {args.athlete}")
+    print(
+        json.dumps(
+            {
+                "invited": entry.email,
+                "athlete": entry.athlete_slug,
+                "note": entry.note,
+                "created_at": entry.created_at.isoformat(),
+            }
+        )
+    )
+    return 0
+
+
+def _cmd_list_invites(args: argparse.Namespace, store: FileStore) -> int:
+    """List every allowlisted beta user, oldest-invited first."""
+    entries = store.list_allowed_emails()
+    print(
+        json.dumps(
+            {
+                "count": len(entries),
+                "invites": [
+                    {
+                        "email": e.email,
+                        "athlete": e.athlete_slug,
+                        "note": e.note,
+                        "created_at": e.created_at.isoformat(),
+                    }
+                    for e in entries
+                ],
+            }
+        )
+    )
+    return 0
+
+
+def _cmd_revoke_invite(args: argparse.Namespace, store: FileStore) -> int:
+    """Remove a beta user from the allowlist. Existing sessions are NOT
+    revoked here (that's a separate concern); this only stops future
+    sign-ins for that email. Reports whether an entry was actually removed."""
+    removed = store.remove_allowed_email(args.email)
+    normalized = args.email.strip().lower()
+    if not removed:
+        return _error(f"not on the allowlist: {normalized}")
+    print(json.dumps({"revoked": normalized}))
+    return 0
+
+
 def _cmd_review_queue(args: argparse.Namespace, store: FileStore) -> int:
     """Print the library/ review queue -- every claim covered by an
     UNREVIEWED marker, needs-judgment first. Human-readable by default;
@@ -918,6 +974,20 @@ def build_parser() -> argparse.ArgumentParser:
     analyze_target.add_argument("--workout-id", dest="workout_id", help="UUID or 8-char prefix")
     analyze_target.add_argument("--all", action="store_true", help="re-analyze every workout with a raw_ref")
 
+    p_invite = subparsers.add_parser(
+        "invite", help="allowlist a beta user's Google email (server-side identity)"
+    )
+    p_invite.add_argument("email", help="the Google account email to allow")
+    p_invite.add_argument("--athlete", required=True, help="athlete slug this email signs in as")
+    p_invite.add_argument("--note", help="optional freeform note")
+
+    subparsers.add_parser("list-invites", help="list every allowlisted beta user")
+
+    p_revoke = subparsers.add_parser(
+        "revoke-invite", help="remove a beta user from the allowlist"
+    )
+    p_revoke.add_argument("email", help="the Google account email to remove")
+
     p_review_queue = subparsers.add_parser(
         "review-queue", help="print the library/ review queue, needs-judgment first"
     )
@@ -947,6 +1017,9 @@ _COMMANDS = {
     "parse-coach-text": _cmd_parse_coach_text,
     "ingest": _cmd_ingest,
     "analyze": _cmd_analyze,
+    "invite": _cmd_invite,
+    "list-invites": _cmd_list_invites,
+    "revoke-invite": _cmd_revoke_invite,
     "review-queue": _cmd_review_queue,
     "review-accept": _cmd_review_accept,
 }

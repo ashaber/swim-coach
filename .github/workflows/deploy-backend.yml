@@ -88,10 +88,19 @@ jobs:
         # the job doesn't exist until Andrew runs its one-time `gcloud run
         # jobs create` (README setup) -- a fresh repo/environment shouldn't
         # fail this whole workflow just because that hasn't happened yet.
+        #
+        # --update-env-vars=GOOGLE_CLIENT_ID: sync.py reuses
+        # app.config.Settings.from_env(), which now requires GOOGLE_CLIENT_ID
+        # at startup (verified-identity API). It's not used BY the sync job,
+        # but the shared config loader fails fast without it, so every deploy
+        # keeps the job's env current (idempotent; doesn't disturb the job's
+        # other env vars/secrets). Not a secret -- same public client id the
+        # frontend uses via VITE_GOOGLE_CLIENT_ID.
         continue-on-error: true
         run: |
           gcloud run jobs update ${{ env.SYNC_JOB_NAME }} \
             --image ${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
             --region ${{ env.GCP_REGION }} \
             --project ${{ secrets.GCP_PROJECT_ID }} \
+            --update-env-vars=GOOGLE_CLIENT_ID=${{ vars.VITE_GOOGLE_CLIENT_ID }} \
           || echo "::warning::${{ env.SYNC_JOB_NAME }} job update failed or the job doesn't exist yet -- see backend/README.md's one-time setup section"

@@ -491,3 +491,110 @@ class StoreContractTests:
         store.save_coach_text(SLUG, d2, "tuesday")
         assert store.coach_text_exists(SLUG, d1) is True
         assert store.coach_text_exists(SLUG, d2) is True
+
+    # --- allowed_emails (Slice 1: verified identity) ----------------------
+
+    def test_add_and_get_allowed_email(self, store):
+        store.save_athlete(_athlete())
+        entry = store.add_allowed_email(SLUG, "Renee@Example.COM", note="beta")
+        assert entry.email == "renee@example.com"  # normalized
+        assert entry.athlete_slug == SLUG
+        assert entry.note == "beta"
+        found = store.get_allowed_email("  Renee@Example.com ")
+        assert found is not None
+        assert found.email == "renee@example.com"
+        assert found.created_at == entry.created_at
+
+    def test_get_allowed_email_returns_none_when_absent(self, store):
+        store.save_athlete(_athlete())
+        assert store.get_allowed_email("nobody@example.com") is None
+
+    def test_add_allowed_email_unknown_athlete_raises(self, store):
+        with pytest.raises(FileNotFoundError):
+            store.add_allowed_email("nobody", "someone@example.com")
+
+    def test_add_allowed_email_upserts_by_normalized_email(self, store):
+        store.save_athlete(_athlete())
+        other = Athlete(id=uuid.uuid4(), slug="other-athlete", name="Other")
+        store.save_athlete(other)
+
+        first = store.add_allowed_email(SLUG, "person@example.com", note="first")
+        second = store.add_allowed_email("other-athlete", "PERSON@example.com", note="second")
+
+        assert second.athlete_slug == "other-athlete"
+        assert second.note == "second"
+        # created_at is preserved across the upsert, not reset
+        assert second.created_at == first.created_at
+        entries = store.list_allowed_emails()
+        assert len(entries) == 1
+
+    def test_list_allowed_emails_sorted_oldest_first(self, store):
+        store.save_athlete(_athlete())
+        store.add_allowed_email(SLUG, "b@example.com")
+        store.add_allowed_email(SLUG, "a@example.com")
+        entries = store.list_allowed_emails()
+        assert [e.email for e in entries] == ["b@example.com", "a@example.com"]
+
+    def test_list_allowed_emails_empty_when_none(self, store):
+        store.save_athlete(_athlete())
+        assert store.list_allowed_emails() == []
+
+    def test_remove_allowed_email(self, store):
+        store.save_athlete(_athlete())
+        store.add_allowed_email(SLUG, "gone@example.com")
+        assert store.remove_allowed_email("GONE@example.com") is True
+        assert store.get_allowed_email("gone@example.com") is None
+        assert store.list_allowed_emails() == []
+
+    def test_remove_allowed_email_returns_false_when_absent(self, store):
+        store.save_athlete(_athlete())
+        assert store.remove_allowed_email("nobody@example.com") is False
+
+    # --- sessions (Slice 1: verified identity) ----------------------------
+
+    def test_create_and_get_session(self, store):
+        store.save_athlete(_athlete())
+        expires = datetime(2026, 8, 6, tzinfo=timezone.utc)
+        created = store.create_session(SLUG, "hash-abc123", expires_at=expires)
+        assert created.athlete_slug == SLUG
+        assert created.expires_at == expires
+        assert created.revoked_at is None
+
+        found = store.get_session("hash-abc123")
+        assert found is not None
+        assert found.athlete_slug == SLUG
+        assert found.expires_at == expires
+        assert found.revoked_at is None
+
+    def test_get_session_returns_none_when_absent(self, store):
+        store.save_athlete(_athlete())
+        assert store.get_session("no-such-hash") is None
+
+    def test_create_session_unknown_athlete_raises(self, store):
+        with pytest.raises(FileNotFoundError):
+            store.create_session(
+                "nobody", "hash-xyz", expires_at=datetime(2026, 8, 6, tzinfo=timezone.utc)
+            )
+
+    def test_revoke_session_marks_revoked(self, store):
+        store.save_athlete(_athlete())
+        store.create_session(
+            SLUG, "hash-revoke-me", expires_at=datetime(2026, 8, 6, tzinfo=timezone.utc)
+        )
+        assert store.revoke_session("hash-revoke-me") is True
+        found = store.get_session("hash-revoke-me")
+        assert found is not None
+        assert found.revoked_at is not None
+
+    def test_revoke_session_returns_false_when_absent(self, store):
+        store.save_athlete(_athlete())
+        assert store.revoke_session("no-such-hash") is False
+
+    def test_two_sessions_for_same_athlete_are_independent(self, store):
+        store.save_athlete(_athlete())
+        expires = datetime(2026, 8, 6, tzinfo=timezone.utc)
+        store.create_session(SLUG, "hash-one", expires_at=expires)
+        store.create_session(SLUG, "hash-two", expires_at=expires)
+        store.revoke_session("hash-one")
+        assert store.get_session("hash-one").revoked_at is not None
+        assert store.get_session("hash-two").revoked_at is None

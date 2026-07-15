@@ -15,7 +15,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.auth import require_auth, require_chat_rate_limit
+from app.auth import (
+    Principal,
+    require_auth,
+    require_chat_rate_limit,
+    require_daily_chat_cap,
+    resolve_athlete,
+)
 from app.claude import ClaudeChat
 from app.context import build_messages, build_system, find_workout_by_id
 from app.store_factory import make_store
@@ -59,11 +65,19 @@ def get_claude_chat(request: Request) -> ClaudeChat:
 async def chat(
     payload: ChatRequest,
     request: Request,
-    token: str = Depends(require_auth),
+    principal: Principal = Depends(require_auth),
     claude_chat: ClaudeChat = Depends(get_claude_chat),
 ) -> StreamingResponse:
     settings = request.app.state.settings
-    require_chat_rate_limit(request, token)
+    # Athlete-session scoping: the session's athlete wins; a mismatched
+    # `athlete` in the body is a 403 (the cross-athlete guarantee). A service
+    # principal passes through unchanged -- the live PWA (shared token) still
+    # sends `athlete` in the body and reaches whichever athlete it names.
+    athlete = resolve_athlete(principal, payload.athlete)
+    # Per-minute limiter keys off the raw token (per athlete-session now);
+    # the per-athlete daily cap is a no-op for a service principal.
+    require_chat_rate_limit(request, principal.token)
+    require_daily_chat_cap(request, principal)
 
     store = make_store(settings)
 
@@ -74,7 +88,7 @@ async def chat(
     focused_workout = None
     if payload.workout_id is not None:
         focused_workout = find_workout_by_id(
-            store.list_workouts(payload.athlete), payload.workout_id
+            store.list_workouts(athlete), payload.workout_id
         )
         if focused_workout is None:
             raise HTTPException(
@@ -85,7 +99,7 @@ async def chat(
     history = [{"role": h.role, "content": h.content} for h in payload.history]
     messages = build_messages(
         store,
-        payload.athlete,
+        athlete,
         message=payload.message,
         history=history,
         expert_mode=payload.expert_mode,
@@ -93,7 +107,7 @@ async def chat(
     )
     tool_handlers = build_tool_handlers(
         store,
-        slug=payload.athlete,
+        slug=athlete,
         expert_mode=payload.expert_mode,
     )
 

@@ -56,7 +56,7 @@ from pydantic import ValidationError
 from swim_coach.models import Workout
 from swim_coach.parse_files import PARSERS_BY_EXTENSION
 
-from app.auth import require_auth
+from app.auth import Principal, require_auth, resolve_athlete
 from app.enrich import enrich_draft
 from app.logging_config import get_logger
 from app.store_factory import make_store
@@ -88,10 +88,11 @@ _MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 async def create_workout(
     payload: dict[str, Any],
     request: Request,
-    athlete: str = Query("renee"),
-    _token: str = Depends(require_auth),
+    athlete: str | None = Query(None),
+    principal: Principal = Depends(require_auth),
 ) -> dict:
     settings = request.app.state.settings
+    athlete = resolve_athlete(principal, athlete)
     store = make_store(settings)
     try:
         profile = store.load_athlete(athlete)
@@ -124,8 +125,8 @@ async def create_workout(
 @router.post("/api/workouts/sync")
 async def sync_workouts(
     request: Request,
-    athlete: str = Query("renee"),
-    _token: str = Depends(require_auth),
+    athlete: str | None = Query(None),
+    principal: Principal = Depends(require_auth),
 ) -> dict:
     """The Log tab's primary "Sync from watch" button: runs the same
     on-demand intervals.icu sync the coach chat's `sync_workouts` tool uses
@@ -140,6 +141,7 @@ async def sync_workouts(
     server fault.
     """
     settings = request.app.state.settings
+    athlete = resolve_athlete(principal, athlete)
     store = make_store(settings)
     try:
         store.load_athlete(athlete)
@@ -166,8 +168,8 @@ async def sync_workouts(
 async def ingest_workout(
     request: Request,
     file: UploadFile = File(...),
-    athlete: str = Query("renee"),
-    _token: str = Depends(require_auth),
+    athlete: str | None = Query(None),
+    principal: Principal = Depends(require_auth),
 ) -> dict:
     """Parses an uploaded `.fit`/`.tcx`/`.csv` file, enriches it exactly like
     `swim_coach.cli`'s `ingest` command does, and returns the resulting
@@ -190,6 +192,7 @@ async def ingest_workout(
     """
     start = time.monotonic()
     settings = request.app.state.settings
+    athlete = resolve_athlete(principal, athlete)
     store = make_store(settings)
     try:
         store.load_athlete(athlete)
@@ -279,10 +282,11 @@ async def ingest_workout(
 @router.get("/api/workouts")
 async def list_workouts(
     request: Request,
-    athlete: str = Query("renee"),
-    _token: str = Depends(require_auth),
+    athlete: str | None = Query(None),
+    principal: Principal = Depends(require_auth),
 ) -> list[dict]:
     settings = request.app.state.settings
+    athlete = resolve_athlete(principal, athlete)
     store = make_store(settings)
     try:
         store.load_athlete(athlete)

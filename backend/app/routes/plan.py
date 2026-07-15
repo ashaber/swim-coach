@@ -19,7 +19,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from app.auth import require_auth
+from app.auth import Principal, require_auth, resolve_athlete
 from app.store_factory import make_store
 
 _REPO_ROOT_SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts"
@@ -34,10 +34,11 @@ router = APIRouter()
 @router.get("/api/plan")
 async def get_plan(
     request: Request,
-    athlete: str = Query("renee"),
-    _token: str = Depends(require_auth),
+    athlete: str | None = Query(None),
+    principal: Principal = Depends(require_auth),
 ) -> dict:
     settings = request.app.state.settings
+    athlete = resolve_athlete(principal, athlete)
     store = make_store(settings)
     try:
         return export_athlete(store, athlete)

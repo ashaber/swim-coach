@@ -46,6 +46,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: sk-ant-ci-placeholder-not-real
           API_TOKEN: ci-placeholder-token-not-real
+          GOOGLE_CLIENT_ID: ci-placeholder-client-id.apps.googleusercontent.com
 
   web:
     runs-on: ubuntu-latest

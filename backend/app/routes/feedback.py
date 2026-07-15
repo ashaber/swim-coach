@@ -39,7 +39,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import ValidationError
 from swim_coach.models import Feedback
 
-from app.auth import require_auth
+from app.auth import Principal, require_auth, resolve_athlete
 from app.store_factory import make_store
 
 router = APIRouter()
@@ -60,10 +60,11 @@ _ATHLETE_SUBMITTABLE_TYPES = {"feature_request", "comment", "bug"}
 async def create_feedback(
     payload: dict[str, Any],
     request: Request,
-    athlete: str = Query("renee"),
-    _token: str = Depends(require_auth),
+    athlete: str | None = Query(None),
+    principal: Principal = Depends(require_auth),
 ) -> dict:
     settings = request.app.state.settings
+    athlete = resolve_athlete(principal, athlete)
     store = make_store(settings)
     try:
         profile = store.load_athlete(athlete)
@@ -100,10 +101,11 @@ async def create_feedback(
 @router.get("/api/feedback")
 async def list_feedback(
     request: Request,
-    athlete: str = Query("renee"),
-    _token: str = Depends(require_auth),
+    athlete: str | None = Query(None),
+    principal: Principal = Depends(require_auth),
 ) -> list[dict]:
     settings = request.app.state.settings
+    athlete = resolve_athlete(principal, athlete)
     store = make_store(settings)
     try:
         entries = store.list_feedback(athlete=athlete)
@@ -118,7 +120,7 @@ async def update_feedback(
     feedback_id: UUID,
     payload: dict[str, Any],
     request: Request,
-    _token: str = Depends(require_auth),
+    principal: Principal = Depends(require_auth),
 ) -> dict:
     settings = request.app.state.settings
     store = make_store(settings)
@@ -129,6 +131,21 @@ async def update_feedback(
         raise HTTPException(status_code=422, detail="status must be a string")
     if context is not None and not isinstance(context, dict):
         raise HTTPException(status_code=422, detail="context must be an object")
+
+    # This route addresses a feedback entry by id, with no `athlete` param to
+    # scope -- so unlike its siblings it can't lean on `resolve_athlete`. An
+    # athlete-session principal may therefore only patch entries tied to its
+    # OWN athlete_id; anything else is a 403 (the same cross-athlete
+    # guarantee the ?athlete= routes get). A SERVICE principal is unrestricted
+    # here, exactly as before this PR -- the coach's research-question loop and
+    # Andrew's CLI both patch entries across athletes.
+    if principal.kind == "athlete" and principal.athlete is not None:
+        existing = store.get_feedback(feedback_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail=f"no such feedback entry: {feedback_id}")
+        own_id = store.load_athlete(principal.athlete).id
+        if existing.athlete_id != own_id:
+            raise HTTPException(status_code=403, detail="athlete mismatch")
 
     updated = store.update_feedback(feedback_id, status=status, context=context)
     if updated is None:
