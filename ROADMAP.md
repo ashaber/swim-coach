@@ -65,7 +65,7 @@ basics; **`garminconnect`/`garth`** (unofficial) — ToS-gray and requires
 storing real Garmin credentials, kept as the documented fallback only if
 intervals.icu's FIT proxying ever starts losing frames.
 
-Supabase Auth magic-link + RLS, retiring the shared bearer token; PWA onboarding wizard (CSS-test) + per-athlete spend caps; multi-swimmer onboarding.
+Supabase Auth magic-link + RLS, retiring the shared bearer token; PWA onboarding wizard (CSS-test) + per-athlete spend caps; multi-swimmer onboarding — design proposal in `docs/design-self-service-onboarding.md`.
 
 ### PROPOSED — feedback-triggered library research loop (design only, not yet built)
 
