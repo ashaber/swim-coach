@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from datetime import date, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -48,7 +49,7 @@ from swim_coach.models import Event, Wellness, WeekPlan, Workout
 from swim_coach.parse_coach_text import parse_coach_text
 from swim_coach.parse_files import PARSERS_BY_EXTENSION, WorkoutDraft, parse_fit
 from swim_coach.plan import generate_week, scaffold_macro
-from swim_coach.store import FileStore
+from swim_coach.store import FileStore, StoreInterface
 from swim_coach.zones import css_from_test, zone_table
 
 
@@ -698,11 +699,16 @@ def _cmd_analyze(args: argparse.Namespace, store: FileStore) -> int:
     return 0
 
 
-def _cmd_invite(args: argparse.Namespace, store: FileStore) -> int:
+def _cmd_invite(args: argparse.Namespace, store: StoreInterface) -> int:
     """Add (or re-invite) a beta user to the server-side allowlist
     (allowed_emails). Adding a beta user is a DATA change -- this row -- never
     a code deploy. The email is normalized (stripped/lowercased) by the
-    store; a mismatched athlete slug is a clean error, not a traceback."""
+    store; a mismatched athlete slug is a clean error, not a traceback.
+
+    `store` is a FileStore unless --database-url/$DATABASE_URL routed this
+    invocation at a DbStore (see `_select_store`) -- against a DbStore, the
+    athlete row must already exist in that database (allowed_emails.athlete_id
+    is a FK to athletes), so this can't provision a brand-new athlete."""
     try:
         entry = store.add_allowed_email(args.athlete, args.email, note=args.note)
     except FileNotFoundError:
@@ -720,7 +726,7 @@ def _cmd_invite(args: argparse.Namespace, store: FileStore) -> int:
     return 0
 
 
-def _cmd_list_invites(args: argparse.Namespace, store: FileStore) -> int:
+def _cmd_list_invites(args: argparse.Namespace, store: StoreInterface) -> int:
     """List every allowlisted beta user, oldest-invited first."""
     entries = store.list_allowed_emails()
     print(
@@ -742,7 +748,7 @@ def _cmd_list_invites(args: argparse.Namespace, store: FileStore) -> int:
     return 0
 
 
-def _cmd_revoke_invite(args: argparse.Namespace, store: FileStore) -> int:
+def _cmd_revoke_invite(args: argparse.Namespace, store: StoreInterface) -> int:
     """Remove a beta user from the allowlist. Existing sessions are NOT
     revoked here (that's a separate concern); this only stops future
     sign-ins for that email. Reports whether an entry was actually removed."""
@@ -894,6 +900,27 @@ def _cmd_review_accept(args: argparse.Namespace, store: FileStore) -> int:
     return 0
 
 
+def _add_database_url_arg(subparser: argparse.ArgumentParser) -> None:
+    """Shared --database-url flag for the invite-family subcommands.
+
+    Without it (and without $DATABASE_URL), these commands write the local
+    FileStore tree only -- that does NOT reach the deployed backend, which
+    resolves the allowlist from the Supabase DB. With it, they write straight
+    to that DB via DbStore. The athlete row must already exist there
+    (allowed_emails.athlete_id is a FK to athletes) -- this does not create
+    athletes."""
+    subparser.add_argument(
+        "--database-url",
+        default=None,
+        help=(
+            "Supabase/Postgres DSN to write this allowlist change straight to "
+            "prod (default: $DATABASE_URL). Omit to only touch the local "
+            "--base-dir file tree. The --athlete slug must already exist in "
+            "that database -- this command never creates athletes."
+        ),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m swim_coach.cli")
     parser.add_argument("--base-dir", default="athletes", help="athlete data root (default: athletes)")
@@ -980,13 +1007,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_invite.add_argument("email", help="the Google account email to allow")
     p_invite.add_argument("--athlete", required=True, help="athlete slug this email signs in as")
     p_invite.add_argument("--note", help="optional freeform note")
+    _add_database_url_arg(p_invite)
 
-    subparsers.add_parser("list-invites", help="list every allowlisted beta user")
+    p_list_invites = subparsers.add_parser("list-invites", help="list every allowlisted beta user")
+    _add_database_url_arg(p_list_invites)
 
     p_revoke = subparsers.add_parser(
         "revoke-invite", help="remove a beta user from the allowlist"
     )
     p_revoke.add_argument("email", help="the Google account email to remove")
+    _add_database_url_arg(p_revoke)
 
     p_review_queue = subparsers.add_parser(
         "review-queue", help="print the library/ review queue, needs-judgment first"
@@ -1025,10 +1055,38 @@ _COMMANDS = {
 }
 
 
+# Commands that may target the prod DB directly instead of the local
+# FileStore tree -- see `_add_database_url_arg`/`_select_store`. Every other
+# command is unaffected by --database-url/$DATABASE_URL and always uses
+# FileStore, unchanged from before this slice.
+_DB_CAPABLE_COMMANDS = {"invite", "list-invites", "revoke-invite"}
+
+
+def _select_store(args: argparse.Namespace) -> StoreInterface:
+    """FileStore by default. For the invite family, DbStore instead when a
+    database URL is available (the --database-url flag, else $DATABASE_URL)
+    -- that's what lets `invite`/`list-invites`/`revoke-invite` write the
+    Supabase DB the deployed backend actually reads, instead of only the
+    local file tree. Never prints/logs the DSN -- it carries a password."""
+    if args.command in _DB_CAPABLE_COMMANDS:
+        database_url = getattr(args, "database_url", None) or os.environ.get("DATABASE_URL")
+        if database_url:
+            # Imported here, not at module top, so the rest of the CLI keeps
+            # working without the optional 'db' extra (psycopg) installed.
+            from swim_coach.store_db import DbStore
+
+            return DbStore(dsn=database_url)
+    return FileStore(base_dir=args.base_dir)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    store = FileStore(base_dir=args.base_dir)
+
+    try:
+        store = _select_store(args)
+    except Exception as exc:  # noqa: BLE001 - never let the CLI crash with a traceback
+        return _error(f"unexpected error: {exc}")
 
     handler = _COMMANDS[args.command]
     try:

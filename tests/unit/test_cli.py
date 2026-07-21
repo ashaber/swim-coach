@@ -8,14 +8,25 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
+import pytest
 import yaml
 
 from swim_coach.cli import main, parse_time_to_s
-from swim_coach.models import Wellness, Workout
+from swim_coach.models import AllowedEmail, Wellness, Workout
 from pathlib import Path
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture(autouse=True)
+def _no_database_url_env(monkeypatch):
+    """Guarantee every CLI test is isolated from any real DATABASE_URL
+    exported in the host/CI shell -- otherwise a dev machine or runner with
+    Supabase creds set in the environment would silently route the
+    invite/list-invites/revoke-invite tests at a real database instead of
+    the tmp_path FileStore they're built around."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
 
 
 def _run(base_dir, *args):
@@ -996,3 +1007,175 @@ def test_revoke_invite_absent_email_errors(athlete_tree, capsys):
     assert code == 1
     result = _out(capsys)
     assert "error" in result
+
+
+# --- invite / list-invites / revoke-invite target DbStore with --database-url --
+
+
+class _FakeDbStore:
+    """Stands in for swim_coach.store_db.DbStore so these tests never need a
+    real Postgres -- they only assert *which* store the CLI constructed and
+    called, not DbStore's own SQL (that's tests/integration's job)."""
+
+    instances: list["_FakeDbStore"] = []
+
+    def __init__(self, dsn):
+        self.dsn = dsn
+        self.calls: list[tuple] = []
+        _FakeDbStore.instances.append(self)
+
+    def add_allowed_email(self, slug, email, *, note=None):
+        normalized = email.strip().lower()
+        self.calls.append(("add_allowed_email", slug, normalized, note))
+        return AllowedEmail(
+            email=normalized, athlete_slug=slug, note=note, created_at=datetime.now(timezone.utc)
+        )
+
+    def list_allowed_emails(self):
+        self.calls.append(("list_allowed_emails",))
+        return [
+            AllowedEmail(
+                email=e, athlete_slug="wife", note=None, created_at=datetime.now(timezone.utc)
+            )
+            for e in getattr(self, "_seed_emails", [])
+        ]
+
+    def remove_allowed_email(self, email):
+        normalized = email.strip().lower()
+        self.calls.append(("remove_allowed_email", normalized))
+        return getattr(self, "_remove_result", True)
+
+
+@pytest.fixture(autouse=True)
+def _reset_fake_dbstore_instances():
+    _FakeDbStore.instances.clear()
+    yield
+    _FakeDbStore.instances.clear()
+
+
+def test_invite_uses_dbstore_when_database_url_flag_given(monkeypatch, capsys):
+    monkeypatch.setattr("swim_coach.store_db.DbStore", _FakeDbStore)
+    code = main(
+        [
+            "invite",
+            "Beta@Example.com",
+            "--athlete",
+            "wife",
+            "--database-url",
+            "postgresql://user:s3cret@host/db",
+        ]
+    )
+    assert code == 0
+    assert len(_FakeDbStore.instances) == 1
+    fake = _FakeDbStore.instances[0]
+    assert fake.dsn == "postgresql://user:s3cret@host/db"
+    assert fake.calls == [("add_allowed_email", "wife", "beta@example.com", None)]
+    result = _out(capsys)
+    assert result["invited"] == "beta@example.com"
+    # the DSN (it carries a password) must never be echoed back
+    assert "s3cret" not in capsys.readouterr().out
+
+
+def test_invite_uses_dbstore_from_database_url_env_var(monkeypatch, capsys):
+    monkeypatch.setattr("swim_coach.store_db.DbStore", _FakeDbStore)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pw@host/db")
+    code = main(["invite", "env@example.com", "--athlete", "wife"])
+    assert code == 0
+    assert len(_FakeDbStore.instances) == 1
+    assert _FakeDbStore.instances[0].dsn == "postgresql://user:pw@host/db"
+
+
+def test_invite_database_url_flag_overrides_env(monkeypatch):
+    monkeypatch.setattr("swim_coach.store_db.DbStore", _FakeDbStore)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://envuser@envhost/db")
+    main(
+        [
+            "invite",
+            "x@example.com",
+            "--athlete",
+            "wife",
+            "--database-url",
+            "postgresql://flaguser@flaghost/db",
+        ]
+    )
+    assert _FakeDbStore.instances[0].dsn == "postgresql://flaguser@flaghost/db"
+
+
+def test_invite_without_database_url_uses_filestore_not_dbstore(athlete_tree, monkeypatch, capsys):
+    monkeypatch.setattr("swim_coach.store_db.DbStore", _FakeDbStore)
+    code = _run(
+        athlete_tree["base_dir"], "invite", "x@example.com", "--athlete", athlete_tree["slug"]
+    )
+    assert code == 0
+    assert _FakeDbStore.instances == []
+    # actually landed in the FileStore tree
+    assert athlete_tree["store"].get_allowed_email("x@example.com") is not None
+
+
+def test_non_invite_command_ignores_database_url_env(athlete_tree, monkeypatch, capsys):
+    """--database-url/$DATABASE_URL only affects the invite family -- every
+    other command (validate here) must keep using FileStore untouched."""
+    monkeypatch.setattr("swim_coach.store_db.DbStore", _FakeDbStore)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pw@host/db")
+    code = _run(athlete_tree["base_dir"], "validate", "--athlete", athlete_tree["slug"])
+    assert code == 0
+    assert _FakeDbStore.instances == []
+
+
+def test_list_invites_uses_dbstore_and_prints_its_entries(monkeypatch, capsys):
+    class _SeededDbStore(_FakeDbStore):
+        def __init__(self, dsn):
+            super().__init__(dsn)
+            self._seed_emails = ["a@example.com", "b@example.com"]
+
+    monkeypatch.setattr("swim_coach.store_db.DbStore", _SeededDbStore)
+    code = main(["list-invites", "--database-url", "postgresql://x/db"])
+    assert code == 0
+    result = _out(capsys)
+    assert result["count"] == 2
+    assert {i["email"] for i in result["invites"]} == {"a@example.com", "b@example.com"}
+
+
+def test_revoke_invite_uses_dbstore(monkeypatch, capsys):
+    monkeypatch.setattr("swim_coach.store_db.DbStore", _FakeDbStore)
+    code = main(["revoke-invite", "x@example.com", "--database-url", "postgresql://x/db"])
+    assert code == 0
+    result = _out(capsys)
+    assert result["revoked"] == "x@example.com"
+    assert _FakeDbStore.instances[0].calls == [("remove_allowed_email", "x@example.com")]
+
+
+def test_revoke_invite_dbstore_absent_email_errors(monkeypatch, capsys):
+    class _EmptyDbStore(_FakeDbStore):
+        def __init__(self, dsn):
+            super().__init__(dsn)
+            self._remove_result = False
+
+    monkeypatch.setattr("swim_coach.store_db.DbStore", _EmptyDbStore)
+    code = main(["revoke-invite", "never@example.com", "--database-url", "postgresql://x/db"])
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+
+
+def test_invite_dbstore_construction_error_returns_json_not_traceback(monkeypatch, capsys):
+    class _BoomDbStore:
+        def __init__(self, dsn):
+            raise ValueError("boom")
+
+    monkeypatch.setattr("swim_coach.store_db.DbStore", _BoomDbStore)
+    code = main(
+        ["invite", "x@example.com", "--athlete", "wife", "--database-url", "postgresql://x/db"]
+    )
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+    assert "postgresql://x/db" not in result["error"]
+
+
+def test_invite_help_documents_database_url_flag(capsys):
+    with pytest.raises(SystemExit):
+        main(["invite", "--help"])
+    out = capsys.readouterr().out
+    assert "--database-url" in out
+    assert "DATABASE_URL" in out
