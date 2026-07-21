@@ -48,6 +48,60 @@ jobs:
           API_TOKEN: ci-placeholder-token-not-real
           GOOGLE_CLIENT_ID: ci-placeholder-client-id.apps.googleusercontent.com
 
+  db:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      SWIM_COACH_TEST_DB_URL: postgresql://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install engine (with dev extras)
+        run: pip install -e "engine/[dev]"
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Install psql client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Apply migrations (first pass)
+        run: |
+          for f in supabase/migrations/*.sql; do
+            echo "Applying $f"
+            psql "$SWIM_COACH_TEST_DB_URL" -v ON_ERROR_STOP=1 -f "$f"
+          done
+
+      - name: Apply migrations again (idempotency check)
+        run: |
+          for f in supabase/migrations/*.sql; do
+            echo "Re-applying $f"
+            psql "$SWIM_COACH_TEST_DB_URL" -v ON_ERROR_STOP=1 -f "$f"
+          done
+
+      - name: Run DbStore contract suite against the migrated schema
+        run: pytest tests/integration -v
+
   web:
     runs-on: ubuntu-latest
     steps:
