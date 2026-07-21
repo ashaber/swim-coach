@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   postWorkout, listWorkouts, postWellness, listWellness, fetchPlan, getAthlete, patchAthlete,
-  postFeedback, listFeedback, uploadWorkoutFile,
+  postFeedback, listFeedback, uploadWorkoutFile, exchangeGoogleToken, RequestAccessError, logout,
 } from '../../src/api.js';
 
 function fakeFetch(body, { ok = true, status = 200 } = {}) {
@@ -46,13 +46,14 @@ describe('postWorkout', () => {
   it('returns a normalized error on a non-2xx response', async () => {
     global.fetch = fakeFetch({ error: 'bad sport' }, { ok: false, status: 422 });
     const result = await postWorkout({ baseUrl: 'https://api.example.com', token: 't', payload: {} });
-    expect(result).toEqual({ ok: false, error: 'bad sport' });
+    expect(result).toEqual({ ok: false, error: 'bad sport', status: 422 });
   });
 
-  it('returns a normalized error on a 401', async () => {
+  it('returns a normalized error (with status 401) on a 401 -- main.js uses this to treat the session as expired', async () => {
     global.fetch = fakeFetch({}, { ok: false, status: 401 });
     const result = await postWorkout({ baseUrl: 'https://api.example.com', token: 'bad', payload: {} });
     expect(result.ok).toBe(false);
+    expect(result.status).toBe(401);
     expect(result.error).toMatch(/token/i);
   });
 
@@ -139,7 +140,7 @@ describe('fetchPlan', () => {
   it('returns a normalized error on a non-2xx response', async () => {
     global.fetch = fakeFetch({ error: 'no such athlete' }, { ok: false, status: 404 });
     const result = await fetchPlan({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'ghost' });
-    expect(result).toEqual({ ok: false, error: 'no such athlete' });
+    expect(result).toEqual({ ok: false, error: 'no such athlete', status: 404 });
   });
 });
 
@@ -162,7 +163,7 @@ describe('getAthlete', () => {
   it('returns a normalized error on a non-2xx response', async () => {
     global.fetch = fakeFetch({ error: 'no such athlete' }, { ok: false, status: 404 });
     const result = await getAthlete({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'ghost' });
-    expect(result).toEqual({ ok: false, error: 'no such athlete' });
+    expect(result).toEqual({ ok: false, error: 'no such athlete', status: 404 });
   });
 });
 
@@ -191,7 +192,7 @@ describe('patchAthlete', () => {
     const result = await patchAthlete({
       baseUrl: 'https://api.example.com', token: 'tok', athlete: 'andrew', payload: {},
     });
-    expect(result).toEqual({ ok: false, error: 'invalid sex' });
+    expect(result).toEqual({ ok: false, error: 'invalid sex', status: 422 });
   });
 });
 
@@ -219,7 +220,7 @@ describe('postFeedback', () => {
     const result = await postFeedback({
       baseUrl: 'https://api.example.com', token: 't', athlete: 'renee', payload: {},
     });
-    expect(result).toEqual({ ok: false, error: 'research_question is coach-only' });
+    expect(result).toEqual({ ok: false, error: 'research_question is coach-only', status: 422 });
   });
 });
 
@@ -259,14 +260,14 @@ describe('uploadWorkoutFile', () => {
     global.fetch = fakeFetch({ error: "unsupported file extension '.gpx'" }, { ok: false, status: 415 });
     const file = new File(['x'], 'a.gpx', { type: 'application/octet-stream' });
     const result = await uploadWorkoutFile({ baseUrl: 'https://api.example.com', token: 't', file });
-    expect(result).toEqual({ ok: false, error: "unsupported file extension '.gpx'" });
+    expect(result).toEqual({ ok: false, error: "unsupported file extension '.gpx'", status: 415 });
   });
 
   it('returns a normalized error on a 413 too-large response', async () => {
     global.fetch = fakeFetch({ error: 'file too large; max 10 MB' }, { ok: false, status: 413 });
     const file = new File(['x'], 'huge.fit', { type: 'application/octet-stream' });
     const result = await uploadWorkoutFile({ baseUrl: 'https://api.example.com', token: 't', file });
-    expect(result).toEqual({ ok: false, error: 'file too large; max 10 MB' });
+    expect(result).toEqual({ ok: false, error: 'file too large; max 10 MB', status: 413 });
   });
 
   it('returns a normalized error on a 422 parse-failure response', async () => {
@@ -300,5 +301,66 @@ describe('listFeedback', () => {
     expect(init.body).toBeUndefined();
     expect(init.headers.Authorization).toBe('Bearer tok');
     expect(result).toEqual({ ok: true, data: items });
+  });
+});
+
+describe('exchangeGoogleToken', () => {
+  it('POSTs the Google ID token to /api/auth/google and returns the minted session JSON', async () => {
+    const session = {
+      token: 'session-abc', athlete: 'renee', name: 'Renee', role: 'athlete', expires_at: '2026-08-01T00:00:00Z',
+    };
+    global.fetch = fakeFetch(session);
+
+    const result = await exchangeGoogleToken({ baseUrl: 'https://api.example.com', idToken: 'google-id-token' });
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/auth/google');
+    expect(init.method).toBe('POST');
+    expect(init.headers['Content-Type']).toBe('application/json');
+    expect(JSON.parse(init.body)).toEqual({ id_token: 'google-id-token' });
+    expect(result).toEqual(session);
+  });
+
+  it('throws a RequestAccessError on a 403 (email not allowlisted)', async () => {
+    global.fetch = fakeFetch({ error: 'request access' }, { ok: false, status: 403 });
+    await expect(exchangeGoogleToken({ baseUrl: 'https://api.example.com', idToken: 'x' }))
+      .rejects.toBeInstanceOf(RequestAccessError);
+  });
+
+  it('throws a generic error on a 401 (bad/expired Google ID token)', async () => {
+    global.fetch = fakeFetch({ error: 'invalid Google ID token' }, { ok: false, status: 401 });
+    await expect(exchangeGoogleToken({ baseUrl: 'https://api.example.com', idToken: 'x' }))
+      .rejects.toThrow(/invalid google id token/i);
+  });
+
+  it('throws a generic error when fetch itself rejects (offline)', async () => {
+    global.fetch = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    await expect(exchangeGoogleToken({ baseUrl: 'https://api.example.com', idToken: 'x' }))
+      .rejects.toThrow(/connection|reach/i);
+  });
+});
+
+describe('logout', () => {
+  it('POSTs to /api/auth/logout with the bearer header', async () => {
+    global.fetch = fakeFetch({ ok: true });
+
+    await logout({ baseUrl: 'https://api.example.com', token: 'session-abc' });
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/auth/logout');
+    expect(init.method).toBe('POST');
+    expect(init.headers.Authorization).toBe('Bearer session-abc');
+  });
+
+  it('never throws, even when the request fails -- sign-out must proceed locally regardless', async () => {
+    global.fetch = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    await expect(logout({ baseUrl: 'https://api.example.com', token: 't' })).resolves.toBeUndefined();
+  });
+
+  it('never throws on a non-2xx response either', async () => {
+    global.fetch = fakeFetch({ error: 'nope' }, { ok: false, status: 500 });
+    await expect(logout({ baseUrl: 'https://api.example.com', token: 't' })).resolves.toBeUndefined();
   });
 });

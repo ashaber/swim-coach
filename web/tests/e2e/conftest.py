@@ -17,22 +17,30 @@ BROWSERS = [
 
 # A signed-in identity pre-seeded into localStorage (under the same
 # 'swimcoach_identity' key src/identity.js itself writes after a real Google
-# Sign-In) so most e2e tests exercise the app in its normal signed-in state
-# rather than the sign-in gate added in Phase 2.5 -- this is a *test*
-# fixture, not real auth (see identity.js's module docstring: identity is
-# client-side-only / UX, never a security boundary). 'renee' is used here
+# sign-in exchange) so most e2e tests exercise the app in its normal
+# signed-in state rather than the sign-in gate added in Phase 2.5 -- this is
+# a *test* fixture, not real auth (the real flow -- POST /api/auth/google --
+# needs the real Google Identity Services script, deliberately not exercised
+# here, see test_identity_gate.py's module docstring). 'renee' is used here
 # (not 'andrew') so it lines up with the real exported plan data
 # (public/data/renee.json / dist/data/renee.json) that test_app.py asserts
-# against.
-MOCK_IDENTITY = {'email': 'renee_email_placeholder@gmail.com', 'athlete': 'renee', 'role': 'athlete'}
+# against. {name, athlete, role} matches the shape identity.js now persists
+# (email is no longer part of it -- see api.js's exchangeGoogleToken, whose
+# backend response never includes one).
+MOCK_IDENTITY = {'name': 'Renee', 'athlete': 'renee', 'role': 'athlete'}
 
-# A pre-configured backend, seeded the same way. Only the base `page` fixture
-# below seeds this by default -- test_coach_chat.py / test_log_checkin.py
-# override `page` and deliberately do NOT seed settings, so their
-# "unconfigured" test cases (no backend URL/token yet) still exercise that
-# empty state; they configure it themselves via the real Settings UI
+# A pre-configured backend, seeded the same way. `token` here stands in for
+# a Google-minted SESSION token (see settings.js's module docstring) --
+# tests seed it directly since driving a real Google sign-in needs the real
+# GSI script. `version` must match settings.js's SETTINGS_SCHEMA_VERSION --
+# without it, loadSettings() treats this as a stale pre-cutover value and
+# drops the token (see that module's migration doc comment). Only the base
+# `page` fixture below seeds this by default -- test_coach_chat.py /
+# test_log_checkin.py override `page` and deliberately do NOT seed settings,
+# so their "unconfigured" test cases (no backend URL/session yet) still
+# exercise that empty state; they configure it themselves
 # (`_configure_backend`) when a test needs it.
-MOCK_SETTINGS = {'baseUrl': 'https://mock-backend.test', 'token': 'test-e2e-token'}
+MOCK_SETTINGS = {'baseUrl': 'https://mock-backend.test', 'token': 'test-e2e-token', 'version': 2}
 
 
 def _web_root(config: pytest.Config) -> str:

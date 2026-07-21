@@ -201,6 +201,35 @@ def test_unknown_bearer_token_is_401(client, allowlist):
     assert client.get("/api/me", headers=_bearer("not-a-real-session-token")).status_code == 401
 
 
+# --- POST /api/auth/logout --------------------------------------------------
+
+
+def test_logout_revokes_session_then_401(client, allowlist, google):
+    token = _sign_in(client, RENEE_EMAIL).json()["token"]
+    headers = _bearer(token)
+    assert client.get("/api/me", headers=headers).status_code == 200
+
+    resp = client.post("/api/auth/logout", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+
+    # The now-revoked session token no longer resolves anywhere.
+    assert client.get("/api/me", headers=headers).status_code == 401
+
+
+def test_logout_without_auth_is_401(client):
+    assert client.post("/api/auth/logout").status_code == 401
+
+
+def test_logout_with_service_token_does_not_500(client, allowlist):
+    # A service credential isn't a session -- hashing it and calling
+    # revoke_session on a hash that matches no session row is a harmless
+    # no-op; logout must not misbehave for a service token.
+    resp = client.post("/api/auth/logout", headers=auth_headers())
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+
+
 # --- cross-athlete denial (THE regression guarantee) -----------------------
 
 # Every athlete-scoped route, expressed as a request that names ?athlete=renee
