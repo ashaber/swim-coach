@@ -37,10 +37,8 @@ log = get_logger("app.routes.auth")
 
 # Every athlete minted through this endpoint is role "athlete" today -- the
 # allowed_emails table (supabase/migrations/20260714000000_identity.sql) has
-# no role column yet, matching web/src/identity.js's own EMAIL_IDENTITY_MAP,
-# where all three seeded users are role "athlete". A "coach" role (with
-# cross-athlete access) is a deliberate later addition, same as that file's
-# own comment says -- not invented here.
+# no role column yet; all three seeded beta users are role "athlete". A
+# "coach" role (with cross-athlete access) is a deliberate later addition.
 _DEFAULT_ROLE = "athlete"
 
 
@@ -113,3 +111,22 @@ async def get_me(request: Request, principal: Principal = Depends(require_auth))
         "role": _DEFAULT_ROLE,
         "expires_at": principal.expires_at.isoformat() if principal.expires_at else None,
     }
+
+
+@router.post("/api/auth/logout")
+async def logout(request: Request, principal: Principal = Depends(require_auth)) -> dict:
+    """Revokes the calling session so its token 401s on every subsequent
+    request -- there is no refresh endpoint by design (see web/src/
+    identity.js), so the frontend's only way back in after a sign-out is a
+    fresh Google sign-in. Still returns 200 for a service-token principal:
+    hashing it and revoking finds no matching session row (a service token
+    was never minted as a session), so it's a harmless no-op rather than an
+    error -- logout is only ever meaningful for athlete sessions, and
+    callers never need a separate code path to know which kind of token
+    they're holding.
+    """
+    settings = request.app.state.settings
+    store = make_store(settings)
+    store.revoke_session(hash_token(principal.token))
+    log.info("auth.logout", kind=principal.kind, athlete=principal.athlete)
+    return {"ok": True}
