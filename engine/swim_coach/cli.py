@@ -45,10 +45,11 @@ from swim_coach.library_review import (
     sort_for_review,
     strip_marker,
 )
-from swim_coach.models import Event, Wellness, WeekPlan, Workout
+from swim_coach.models import Athlete, Event, Wellness, WeekPlan, Workout
 from swim_coach.parse_coach_text import parse_coach_text
 from swim_coach.parse_files import PARSERS_BY_EXTENSION, WorkoutDraft, parse_fit
 from swim_coach.plan import generate_week, scaffold_macro
+from swim_coach.provision import provision_athlete
 from swim_coach.store import FileStore, StoreInterface
 from swim_coach.zones import css_from_test, zone_table
 
@@ -760,6 +761,139 @@ def _cmd_revoke_invite(args: argparse.Namespace, store: StoreInterface) -> int:
     return 0
 
 
+def _cmd_onboard(args: argparse.Namespace, store: StoreInterface) -> int:
+    """Provision a brand-new athlete straight to `store` from LOCAL
+    (uncommitted) YAML files -- profile + zones + macro scaffold + first
+    week + allowlist entry, in one command (GitHub issue #61 "Tier C"). No
+    repo commit; no manual `scripts/migrate_files_to_db.py` run afterward.
+
+    A THIN wrapper: all orchestration -- and the FK-safe write order -- lives
+    in `swim_coach.provision.provision_athlete`, reused as-is so a future
+    in-app onboarding route can call the exact same function. This command's
+    own job is only: parse local YAML into the same `Athlete`/`Event`
+    pydantic models the FileStore path already validates against, resolve
+    the CLI-only conveniences (fuzzy `--event` matching via the same
+    `_find_event` `scaffold-macro` uses; `--test-400`/`--test-200` CSS-test
+    parsing via the same `zones.css_from_test`/`parse_time_to_s` the `zones`
+    subcommand uses), and format the JSON summary.
+
+    `--profile` need not include an `id` -- if omitted, an existing athlete
+    at that `slug` (if any, in the target `store`) is reused (an idempotent
+    re-run updates that athlete rather than minting a duplicate); otherwise
+    a fresh UUID is minted. See `provision_athlete`'s docstring for exactly
+    what re-running does and doesn't do.
+    """
+    profile_path = Path(args.profile)
+    try:
+        profile_data = _load_yaml_file(profile_path)
+    except OSError as exc:
+        return _error(str(exc), file=str(profile_path))
+    if not isinstance(profile_data, dict):
+        return _error(f"{profile_path} must contain a YAML mapping (an athlete profile)")
+
+    slug = profile_data.get("slug")
+    if not slug:
+        return _error(f"{profile_path} is missing required field 'slug'")
+
+    if not profile_data.get("id"):
+        try:
+            profile_data["id"] = str(store.load_athlete(slug).id)
+        except FileNotFoundError:
+            profile_data["id"] = str(uuid4())
+
+    if bool(args.test_400) != bool(args.test_200):
+        return _error("--test-400 and --test-200 must be provided together")
+    if args.test_400 and args.test_200:
+        try:
+            t400 = parse_time_to_s(args.test_400)
+            t200 = parse_time_to_s(args.test_200)
+            profile_data["css_pace_s_per_100m"] = css_from_test(t400, t200)
+        except ValueError as exc:
+            return _error(str(exc))
+
+    try:
+        profile = Athlete.model_validate(profile_data)
+    except ValidationError as exc:
+        return _error(str(exc), file=str(profile_path))
+
+    events: list[Event] = []
+    if args.events:
+        events_path = Path(args.events)
+        try:
+            events_data = _load_yaml_file(events_path)
+        except OSError as exc:
+            return _error(str(exc), file=str(events_path))
+        if events_data is None:
+            events_data = []
+        if not isinstance(events_data, list):
+            return _error(f"{events_path} must contain a YAML list of events")
+        for item in events_data:
+            if not isinstance(item, dict):
+                return _error(f"{events_path} must contain a YAML list of event mappings")
+            item.setdefault("id", str(uuid4()))
+            item.setdefault("athlete_id", str(profile.id))
+            try:
+                events.append(Event.model_validate(item))
+            except ValidationError as exc:
+                return _error(str(exc), file=str(events_path))
+
+    target_event: Event | None = None
+    if args.event:
+        target_event = _find_event(events, args.event)
+        if target_event is None:
+            return _error(f"no event matching {args.event!r} in {args.events!r}")
+    elif len(events) == 1:
+        target_event = events[0]
+    elif len(events) > 1:
+        return _error(
+            f"{args.events!r} has {len(events)} events; pass --event to pick which one "
+            "to scaffold the macro against"
+        )
+
+    macro_start = None
+    if args.start:
+        try:
+            macro_start = date.fromisoformat(args.start)
+        except ValueError:
+            return _error(f"invalid --start {args.start!r}; expected 'YYYY-MM-DD'")
+
+    try:
+        result = provision_athlete(
+            store,
+            profile=profile,
+            events=events,
+            email=args.email,
+            note=args.note,
+            target_event=target_event,
+            current_volume_m=args.current_volume,
+            peak_volume_m=args.peak_volume,
+            macro_start=macro_start,
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        return _error(str(exc))
+
+    print(
+        json.dumps(
+            {
+                "athlete": result.athlete.slug,
+                "athlete_id": str(result.athlete.id),
+                "created": {
+                    "profile": True,
+                    "zones": result.athlete.zones is not None,
+                    "events": len(result.events),
+                    "macro": result.macro is not None,
+                    "first_week": result.week.iso_week if result.week is not None else None,
+                },
+                "allowlisted_email": (
+                    result.allowed_email.email if result.allowed_email is not None else None
+                ),
+                "skipped": result.skipped,
+            }
+        )
+    )
+    return 0
+
+
 def _cmd_review_queue(args: argparse.Namespace, store: FileStore) -> int:
     """Print the library/ review queue -- every claim covered by an
     UNREVIEWED marker, needs-judgment first. Human-readable by default;
@@ -900,25 +1034,39 @@ def _cmd_review_accept(args: argparse.Namespace, store: FileStore) -> int:
     return 0
 
 
-def _add_database_url_arg(subparser: argparse.ArgumentParser) -> None:
-    """Shared --database-url flag for the invite-family subcommands.
+def _add_database_url_arg(subparser: argparse.ArgumentParser, *, creates_athlete: bool = False) -> None:
+    """Shared --database-url flag for the invite-family subcommands (and,
+    with `creates_athlete=True`, `onboard`).
 
     Without it (and without $DATABASE_URL), these commands write the local
     FileStore tree only -- that does NOT reach the deployed backend, which
     resolves the allowlist from the Supabase DB. With it, they write straight
-    to that DB via DbStore. The athlete row must already exist there
-    (allowed_emails.athlete_id is a FK to athletes) -- this does not create
-    athletes."""
-    subparser.add_argument(
-        "--database-url",
-        default=None,
-        help=(
+    to that DB via DbStore.
+
+    For the invite family (`creates_athlete=False`, the default): the
+    athlete row must already exist there (allowed_emails.athlete_id is a FK
+    to athletes) -- these commands never create athletes. `onboard` is the
+    one exception -- it creates the athlete row itself, first, in the same
+    call (see `_cmd_onboard`/`provision.provision_athlete`'s FK-safe write
+    order), so its --database-url target need NOT already have this
+    athlete."""
+    if creates_athlete:
+        help_text = (
+            "Supabase/Postgres DSN to provision this new athlete straight to "
+            "prod (default: $DATABASE_URL). Omit to only touch the local "
+            "--base-dir file tree. Unlike invite/list-invites/revoke-invite, "
+            "this command CREATES the athlete row itself first (FK-safe "
+            "order: athlete -> events -> macro -> first week -> allowlist), "
+            "so the athlete need NOT already exist at --database-url."
+        )
+    else:
+        help_text = (
             "Supabase/Postgres DSN to write this allowlist change straight to "
             "prod (default: $DATABASE_URL). Omit to only touch the local "
             "--base-dir file tree. The --athlete slug must already exist in "
             "that database -- this command never creates athletes."
-        ),
-    )
+        )
+    subparser.add_argument("--database-url", default=None, help=help_text)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1018,6 +1166,48 @@ def build_parser() -> argparse.ArgumentParser:
     p_revoke.add_argument("email", help="the Google account email to remove")
     _add_database_url_arg(p_revoke)
 
+    p_onboard = subparsers.add_parser(
+        "onboard",
+        help=(
+            "provision a brand-new athlete straight to the store (profile + zones + "
+            "macro scaffold + first week + allowlist) from local YAML -- no repo commit"
+        ),
+    )
+    p_onboard.add_argument(
+        "--profile", required=True, help="path to a local (uncommitted) profile.yaml, athlete-tree format"
+    )
+    p_onboard.add_argument(
+        "--events",
+        help=(
+            "path to a local events.yaml (athlete-tree format, a YAML list); omit to "
+            "skip the macro scaffold/first week (profile + zones + allowlist only)"
+        ),
+    )
+    p_onboard.add_argument(
+        "--event",
+        help=(
+            "name or id-prefix of the target event within --events to scaffold the macro "
+            "against; only required if --events has more than one event"
+        ),
+    )
+    p_onboard.add_argument(
+        "--current-volume",
+        dest="current_volume",
+        type=int,
+        help="current weekly swim volume in meters -- with a resolved target event, required to scaffold the macro/first week",
+    )
+    p_onboard.add_argument("--peak-volume", dest="peak_volume", type=int)
+    p_onboard.add_argument("--start", help="macro scaffold start date, YYYY-MM-DD, default today")
+    p_onboard.add_argument(
+        "--test-400",
+        dest="test_400",
+        help="400m CSS test time (MM:SS); with --test-200, overrides any css_pace_s_per_100m in --profile",
+    )
+    p_onboard.add_argument("--test-200", dest="test_200")
+    p_onboard.add_argument("--email", required=True, help="the Google account email to allowlist for this new athlete")
+    p_onboard.add_argument("--note", help="optional freeform note on the allowlist entry")
+    _add_database_url_arg(p_onboard, creates_athlete=True)
+
     p_review_queue = subparsers.add_parser(
         "review-queue", help="print the library/ review queue, needs-judgment first"
     )
@@ -1050,6 +1240,7 @@ _COMMANDS = {
     "invite": _cmd_invite,
     "list-invites": _cmd_list_invites,
     "revoke-invite": _cmd_revoke_invite,
+    "onboard": _cmd_onboard,
     "review-queue": _cmd_review_queue,
     "review-accept": _cmd_review_accept,
 }
@@ -1058,8 +1249,10 @@ _COMMANDS = {
 # Commands that may target the prod DB directly instead of the local
 # FileStore tree -- see `_add_database_url_arg`/`_select_store`. Every other
 # command is unaffected by --database-url/$DATABASE_URL and always uses
-# FileStore, unchanged from before this slice.
-_DB_CAPABLE_COMMANDS = {"invite", "list-invites", "revoke-invite"}
+# FileStore, unchanged from before this slice. `onboard` (unlike the rest of
+# this set) CREATES the athlete row itself -- see `_add_database_url_arg`'s
+# `creates_athlete=True` help text.
+_DB_CAPABLE_COMMANDS = {"invite", "list-invites", "revoke-invite", "onboard"}
 
 
 def _select_store(args: argparse.Namespace) -> StoreInterface:
