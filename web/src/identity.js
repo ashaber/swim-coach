@@ -1,36 +1,27 @@
-// Lightweight, CLIENT-SIDE-ONLY identity for the swim-coach PWA.
+// Google sign-in identity for the swim-coach PWA.
 //
-// This is IDENTITY FOR UX, NOT A SECURITY BOUNDARY. The backend still
-// accepts any `?athlete=<slug>` (and `athlete` in the chat body) behind the
-// single shared bearer token -- see web/src/api.js and CLAUDE.md/ROADMAP.md.
-// The Google ID token's *signature* is never verified here (no server round
-// trip, no crypto) -- we only base64url-decode its payload to read `email`
-// client-side. Real per-user enforcement (RLS, server-side token
-// verification) is deferred; do not treat this module as authorization.
+// Identity is now resolved SERVER-SIDE: the raw Google ID token GSI hands
+// back is sent to POST /api/auth/google (see api.js's exchangeGoogleToken),
+// which verifies its signature/audience/issuer/expiry and looks the email up
+// in the backend's own allowlist -- this module never decodes or trusts the
+// token itself. The backend's response (`{token, athlete, name, role,
+// expires_at}`) is the sole source of truth for {athlete, name, role}; the
+// minted session `token` is persisted into settings.js's storage (by
+// main.js), not here.
 //
 // Offline caveat: the *first* sign-in needs network (to load Google's GSI
-// script and obtain an ID token). The resolved identity is then persisted to
-// localStorage so subsequent app loads restore it (via `currentIdentity`)
-// without a network round trip -- the offline-first app keeps working after
-// that first sign-in.
+// script and exchange the ID token for a session). The resolved identity is
+// then persisted to localStorage so subsequent app loads restore it (via
+// `currentIdentity`) without a network round trip -- the offline-first app
+// keeps working after that first sign-in, until the session expires (there
+// is no refresh endpoint by design -- an expired session just prompts a
+// fresh Google sign-in, see main.js's handling of a 401 from any API call).
 
 import log from './log.js';
+import { exchangeGoogleToken, RequestAccessError } from './api.js';
 
 const STORAGE_KEY = 'swimcoach_identity';
 const GSI_SCRIPT_SRC = 'https://accounts.google.com/gsi/client';
-
-/** email (lowercase) -> {athlete, role}. Looked up by `resolveIdentity`
- * after lowercase-normalizing whatever email the ID token contains.
- *
- * Both users are role 'athlete' for now: Andrew wants to experience the
- * system as an athlete in his own sandbox ('andrew'), separate from Renee's
- * data. A 'coach' role -- with cross-athlete access -- is a deliberate later
- * addition (the expert-mode toggle already keys off role === 'coach'). */
-const EMAIL_IDENTITY_MAP = {
-  'andrewshaber@gmail.com': { athlete: 'andrew', role: 'athlete' },
-  'kline.renee@gmail.com': { athlete: 'renee', role: 'athlete' },
-  'curry.mtb@gmail.com': { athlete: 'tim', role: 'athlete' },
-};
 
 /**
  * Build-time public OAuth client ID for Google Identity Services. Client IDs
@@ -44,53 +35,22 @@ const EMAIL_IDENTITY_MAP = {
 export const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID
   || 'REPLACE_WITH_GOOGLE_OAUTH_CLIENT_ID.apps.googleusercontent.com';
 
-/**
- * Decodes (does NOT verify) the payload segment of a JWT / Google ID token.
- * There is no signature check here -- see the module-level warning above.
- * Returns null for anything that isn't a well-formed 3-segment token or that
- * doesn't decode to JSON (malformed tokens must never throw into caller code).
- */
-export function decodeJwtPayload(token) {
-  if (typeof token !== 'string') return null;
-  const parts = token.split('.');
-  if (parts.length !== 3 || !parts[1]) return null;
-  try {
-    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), '=');
-    const binary = atob(padded);
-    const percentEncoded = binary
-      .split('')
-      .map((c) => `%${c.charCodeAt(0).toString(16).padStart(2, '0')}`)
-      .join('');
-    return JSON.parse(decodeURIComponent(percentEncoded));
-  } catch (err) {
-    log.error('identity.jwt_decode_failed', { error: err.message });
-    return null;
-  }
-}
-
-/**
- * Maps a (lowercase-normalized) email to {email, athlete, role}, or null if
- * the email isn't in EMAIL_IDENTITY_MAP -- an unrecognized email is treated
- * as "not an authorized user", not as a fallback athlete.
- */
-export function resolveIdentity(email) {
-  if (typeof email !== 'string' || !email.trim()) return null;
-  const normalized = email.trim().toLowerCase();
-  const entry = EMAIL_IDENTITY_MAP[normalized];
-  if (!entry) return null;
-  return { email: normalized, athlete: entry.athlete, role: entry.role };
-}
-
 /** Restores a previously-resolved identity from localStorage, or null if
- * none is stored / the stored value is corrupt or missing required fields. */
+ * none is stored / the stored value is corrupt or missing required fields.
+ * `athlete` is the only field required to trust the stored value -- `name`
+ * defaults to '' and `role` to 'athlete' if either is missing, the same
+ * defensive posture as before. */
 export function loadIdentity(storage = localStorage) {
   try {
     const raw = storage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed.athlete !== 'string' || typeof parsed.email !== 'string') return null;
-    return { email: parsed.email, athlete: parsed.athlete, role: parsed.role ?? 'athlete' };
+    if (!parsed || typeof parsed.athlete !== 'string') return null;
+    return {
+      name: typeof parsed.name === 'string' ? parsed.name : '',
+      athlete: parsed.athlete,
+      role: parsed.role ?? 'athlete',
+    };
   } catch {
     return null;
   }
@@ -125,10 +85,10 @@ export function currentIdentity(storage = localStorage) {
 // Everything above is pure and unit-tested directly (tests/unit/identity.test.js).
 // Below is glue around Google Identity Services' script + button -- not
 // practical to unit test without a full GIS mock, so it's kept as small as
-// possible: load the script once, initialize with GOOGLE_CLIENT_ID, decode +
-// resolve the credential it hands back, persist on success, and call the
-// caller's `onIdentity` either way so the UI can react (including the
-// "not an authorized user" case, where `onIdentity(null)` fires).
+// possible: load the script once, initialize with GOOGLE_CLIENT_ID, exchange
+// the credential it hands back for a backend session (api.js's
+// exchangeGoogleToken), persist the resolved identity on success, and call
+// the caller's `onIdentity` either way so the UI can react.
 
 let scriptLoadPromise = null;
 
@@ -153,20 +113,26 @@ function loadGsiScript() {
 /**
  * Loads the GSI script, initializes it with GOOGLE_CLIENT_ID, and renders
  * the Sign-In button into `buttonEl` (if given). `onIdentity` fires once per
- * credential response with either the resolved {email, athlete, role} (and
- * the identity has already been persisted via saveIdentity by then) or null
- * when the signed-in Google account's email isn't in EMAIL_IDENTITY_MAP.
+ * credential response with one of:
+ *   - `{ ok: true, identity: {name, athlete, role}, token }` -- the identity
+ *     has already been persisted via saveIdentity by then; `token` is the
+ *     minted session token, for the caller (main.js) to persist into
+ *     settings.js's storage.
+ *   - `{ ok: false, requestAccess: true, message }` -- the Google account
+ *     authenticated fine but isn't allowlisted on the backend yet.
+ *   - `{ ok: false, requestAccess: false, message }` -- any other failure
+ *     (backend unreachable, bad/expired Google token, etc).
  *
  * `onIdentity` is deliberately NOT called if the GSI script itself never
  * loads (offline / blocked) -- that's not a user decision, so callers
  * calling signIn() again on every re-render (e.g. main.js's Settings tab,
  * signed out) must never turn a script-load failure into a repeating
- * onIdentity(null) -> render() -> signIn() -> onIdentity(null) loop. A
- * failed load is logged and just leaves the sign-in button inert; a real
- * "not an authorized user" is only ever reported from an actual credential
- * response below, which only happens once per real sign-in attempt.
+ * onIdentity(...) -> render() -> signIn() -> onIdentity(...) loop. A failed
+ * load is logged and just leaves the sign-in button inert; a real exchange
+ * outcome is only ever reported from an actual credential response below,
+ * which only happens once per real sign-in attempt.
  */
-export async function signIn({ buttonEl, onIdentity } = {}) {
+export async function signIn({ buttonEl, baseUrl, onIdentity } = {}) {
   try {
     await loadGsiScript();
   } catch (err) {
@@ -180,16 +146,18 @@ export async function signIn({ buttonEl, onIdentity } = {}) {
   }
   google.accounts.id.initialize({
     client_id: GOOGLE_CLIENT_ID,
-    callback: (response) => {
-      const payload = decodeJwtPayload(response.credential);
-      const identity = payload ? resolveIdentity(payload.email) : null;
-      if (identity) {
+    callback: async (response) => {
+      try {
+        const session = await exchangeGoogleToken({ baseUrl, idToken: response.credential });
+        const identity = { name: session.name, athlete: session.athlete, role: session.role };
         saveIdentity(identity);
         log.info('identity.sign_in_success', { athlete: identity.athlete, role: identity.role });
-      } else {
-        log.warn('identity.sign_in_unauthorized', {});
+        onIdentity?.({ ok: true, identity, token: session.token });
+      } catch (err) {
+        const requestAccess = err instanceof RequestAccessError;
+        log.warn('identity.sign_in_failed', { request_access: requestAccess, error: err.message });
+        onIdentity?.({ ok: false, requestAccess, message: err.message });
       }
-      onIdentity?.(identity);
     },
   });
   if (buttonEl) {
@@ -200,7 +168,10 @@ export async function signIn({ buttonEl, onIdentity } = {}) {
 }
 
 /** Clears the persisted identity and best-effort tells GIS to stop
- * auto-selecting the previous account on the next sign-in attempt. */
+ * auto-selecting the previous account on the next sign-in attempt. Does NOT
+ * revoke the backend session itself -- see api.js's `logout`, which main.js
+ * calls separately (it needs the session token, which lives in settings.js's
+ * storage, not here). */
 export function signOut(storage = localStorage) {
   clearIdentity(storage);
   try {

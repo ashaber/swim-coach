@@ -1,7 +1,15 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
-  decodeJwtPayload, resolveIdentity, loadIdentity, saveIdentity, clearIdentity, currentIdentity,
+  loadIdentity, saveIdentity, clearIdentity, currentIdentity,
 } from '../../src/identity.js';
+
+// Identity resolution (email -> athlete/role) is no longer client-side --
+// the backend's POST /api/auth/google does that now (see
+// backend/app/routes/auth.py and api.js's exchangeGoogleToken, tested in
+// tests/unit/api.test.js's `exchangeGoogleToken` describe block). This file
+// only covers the pure localStorage persistence identity.js still owns:
+// restoring a previously-resolved {name, athlete, role} across page loads
+// without a network round trip.
 
 function makeFakeStorage() {
   const store = new Map();
@@ -11,81 +19,6 @@ function makeFakeStorage() {
     removeItem: (key) => store.delete(key),
   };
 }
-
-function base64url(obj) {
-  const json = JSON.stringify(obj);
-  return Buffer.from(json, 'utf-8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-function fakeIdToken(payload) {
-  const header = base64url({ alg: 'RS256', typ: 'JWT' });
-  const body = base64url(payload);
-  // Signature is never checked by decodeJwtPayload -- any string will do.
-  return `${header}.${body}.not-a-real-signature`;
-}
-
-describe('decodeJwtPayload', () => {
-  it('decodes the payload segment of a sample unsigned token string', () => {
-    const token = fakeIdToken({ email: 'andrewshaber@gmail.com', name: 'Andrew', sub: '12345' });
-    expect(decodeJwtPayload(token)).toEqual({ email: 'andrewshaber@gmail.com', name: 'Andrew', sub: '12345' });
-  });
-
-  it('decodes non-ASCII characters correctly', () => {
-    const token = fakeIdToken({ email: 'x@example.com', name: 'Renée' });
-    expect(decodeJwtPayload(token)).toEqual({ email: 'x@example.com', name: 'Renée' });
-  });
-
-  it('returns null for a non-string input', () => {
-    expect(decodeJwtPayload(undefined)).toBeNull();
-    expect(decodeJwtPayload(null)).toBeNull();
-    expect(decodeJwtPayload(42)).toBeNull();
-  });
-
-  it('returns null for a token that does not have 3 segments', () => {
-    expect(decodeJwtPayload('not-a-jwt')).toBeNull();
-    expect(decodeJwtPayload('only.two')).toBeNull();
-  });
-
-  it('returns null for a token whose payload segment is not valid base64/JSON', () => {
-    expect(decodeJwtPayload('header.!!!not-base64!!!.sig')).toBeNull();
-  });
-});
-
-describe('resolveIdentity', () => {
-  it('resolves a known email to its mapped athlete + role', () => {
-    expect(resolveIdentity('andrewshaber@gmail.com')).toEqual({
-      email: 'andrewshaber@gmail.com', athlete: 'andrew', role: 'athlete',
-    });
-  });
-
-  it('resolves tim (sandbox evaluator) to his own athlete slug', () => {
-    expect(resolveIdentity('curry.mtb@gmail.com')).toEqual({
-      email: 'curry.mtb@gmail.com', athlete: 'tim', role: 'athlete',
-    });
-  });
-
-  it('is case-insensitive', () => {
-    expect(resolveIdentity('AndrewShaber@Gmail.com')).toEqual({
-      email: 'andrewshaber@gmail.com', athlete: 'andrew', role: 'athlete',
-    });
-  });
-
-  it('trims surrounding whitespace', () => {
-    expect(resolveIdentity('  andrewshaber@gmail.com  ')).toEqual({
-      email: 'andrewshaber@gmail.com', athlete: 'andrew', role: 'athlete',
-    });
-  });
-
-  it('returns null for an email not in the map ("not an authorized user")', () => {
-    expect(resolveIdentity('someone-else@gmail.com')).toBeNull();
-  });
-
-  it('returns null for empty/missing input', () => {
-    expect(resolveIdentity('')).toBeNull();
-    expect(resolveIdentity(undefined)).toBeNull();
-    expect(resolveIdentity(null)).toBeNull();
-  });
-});
 
 describe('identity persistence', () => {
   let storage;
@@ -99,14 +32,14 @@ describe('identity persistence', () => {
   });
 
   it('round-trips a saved identity', () => {
-    const identity = { email: 'andrewshaber@gmail.com', athlete: 'andrew', role: 'coach' };
+    const identity = { name: 'Andrew', athlete: 'andrew', role: 'coach' };
     saveIdentity(identity, storage);
     expect(loadIdentity(storage)).toEqual(identity);
     expect(currentIdentity(storage)).toEqual(identity);
   });
 
   it('clears a saved identity', () => {
-    saveIdentity({ email: 'andrewshaber@gmail.com', athlete: 'andrew', role: 'coach' }, storage);
+    saveIdentity({ name: 'Andrew', athlete: 'andrew', role: 'coach' }, storage);
     clearIdentity(storage);
     expect(loadIdentity(storage)).toBeNull();
   });
@@ -116,8 +49,13 @@ describe('identity persistence', () => {
     expect(loadIdentity(storage)).toBeNull();
   });
 
-  it('recovers from a stored value missing required fields', () => {
-    storage.setItem('swimcoach_identity', JSON.stringify({ athlete: 'andrew' }));
+  it('recovers from a stored value missing the required athlete field', () => {
+    storage.setItem('swimcoach_identity', JSON.stringify({ name: 'Andrew', role: 'athlete' }));
     expect(loadIdentity(storage)).toBeNull();
+  });
+
+  it('defaults name to empty string and role to athlete when either is missing', () => {
+    storage.setItem('swimcoach_identity', JSON.stringify({ athlete: 'renee' }));
+    expect(loadIdentity(storage)).toEqual({ name: '', athlete: 'renee', role: 'athlete' });
   });
 });

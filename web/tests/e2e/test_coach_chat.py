@@ -99,12 +99,24 @@ def _cors_route(status, content_type, body):
 
 
 def _configure_backend(page, base_url=BASE_URL, token=TOKEN):
-    """Drives the real Settings UI (not localStorage injection) so the
-    save path itself is exercised."""
+    """The '#settings-token' paste field is gone -- session tokens now come
+    only from a real Google sign-in exchange (see identity.js's signIn /
+    api.js's exchangeGoogleToken), which these tests don't drive (no real
+    Google script). Seeds the session token directly into localStorage the
+    way a real exchange would leave it (`version` stamped to match
+    settings.js's SETTINGS_SCHEMA_VERSION, or loadSettings() would treat it
+    as a stale pre-cutover value and drop it -- see that module's migration
+    doc comment), then reloads and drives the real Settings UI for the base
+    URL + Save button, same as before."""
+    page.evaluate(
+        "(t) => window.localStorage.setItem("
+        "'swimcoach_settings', JSON.stringify({baseUrl: '', token: t, version: 2}))",
+        token,
+    )
+    page.reload()
     page.click('[data-a="tab:settings"]')
     page.wait_for_selector('#settings-base-url')
     page.fill('#settings-base-url', base_url)
-    page.fill('#settings-token', token)
     page.click('[data-a="settings:save"]')
 
 
@@ -223,8 +235,8 @@ def test_coach_chat_refusal_renders_safety_message(page):
     assert 'coach' in page.content().lower() or 'clinician' in page.content().lower()
 
 
-def test_coach_chat_error_event_shows_error_state(page):
-    page.route('**/api/chat', _cors_route(401, 'application/json', '{"error": "invalid token"}'))
+def test_coach_chat_non_401_error_event_shows_error_state(page):
+    page.route('**/api/chat', _cors_route(422, 'application/json', '{"error": "malformed request"}'))
 
     _configure_backend(page)
     page.click('[data-a="tab:coach"]')
@@ -233,7 +245,30 @@ def test_coach_chat_error_event_shows_error_state(page):
     page.click('[data-a="chat:send"]')
 
     page.wait_for_selector('.chat-bubble.is-error')
-    assert 'token' in page.content().lower()
+    assert 'malformed request' in page.content().lower()
+
+
+def test_coach_chat_401_signs_out_and_shows_reauth_gate(page):
+    # A 401 means the session token is no longer valid (expired, or revoked
+    # elsewhere) -- main.js treats this as "session expired": clears
+    # identity + token and routes back to the sign-in gate, rather than
+    # showing an in-chat error bubble (there is no refresh endpoint by
+    # design, see identity.js). Blocks the real GSI script network -- once
+    # signed out, the Settings tab tries to mount the real sign-in button
+    # (see main.js's mountGoogleSignIn), and this test doesn't need it to
+    # actually load.
+    page.context.route('https://accounts.google.com/**', lambda route: route.abort())
+    page.route('**/api/chat', _cors_route(401, 'application/json', '{"error": "invalid token"}'))
+
+    _configure_backend(page)
+    page.click('[data-a="tab:coach"]')
+    page.wait_for_selector('#chat-input')
+    page.fill('#chat-input', 'hello')
+    page.click('[data-a="chat:send"]')
+
+    page.wait_for_selector('.settings-wrap')
+    assert page.locator('.tab-btn.active').get_attribute('data-a') == 'tab:settings'
+    assert 'expired' in page.content().lower()
 
 
 def test_coach_chat_new_conversation_clears_history(page):

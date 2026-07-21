@@ -57,7 +57,11 @@ export async function streamChat({
   if (!response.ok) {
     const message2 = await safeErrorMessage(response);
     log.error('chat.response_not_ok', { status: response.status, error: message2 });
-    onEvent({ type: 'error', error: message2 });
+    // `status` rides along so main.js can tell a 401 (session token no
+    // longer valid -- there's no refresh endpoint, see identity.js) apart
+    // from every other failure and route back to the sign-in gate instead
+    // of just showing an in-chat error bubble.
+    onEvent({ type: 'error', error: message2, status: response.status });
     return;
   }
 
@@ -124,7 +128,10 @@ async function apiRequest({ baseUrl, token, path, method = 'GET', body }) {
   if (!response.ok) {
     const message = await safeErrorMessage(response);
     log.error('api.response_not_ok', { path, status: response.status, error: message });
-    return { ok: false, error: message };
+    // `status` rides along so main.js can single out a 401 (session token
+    // no longer valid) and treat it as "session expired" -- see
+    // handleUnauthorized in main.js.
+    return { ok: false, error: message, status: response.status };
   }
 
   try {
@@ -132,7 +139,7 @@ async function apiRequest({ baseUrl, token, path, method = 'GET', body }) {
     return { ok: true, data };
   } catch (err) {
     log.error('api.parse_failed', { path, error: err.message });
-    return { ok: false, error: 'Unexpected response from backend.' };
+    return { ok: false, error: 'Unexpected response from backend.', status: response.status };
   }
 }
 
@@ -173,7 +180,7 @@ export async function uploadWorkoutFile({ baseUrl, token, athlete = 'renee', fil
   if (!response.ok) {
     const message = await safeErrorMessage(response);
     log.error('api.response_not_ok', { path, status: response.status, error: message });
-    return { ok: false, error: message };
+    return { ok: false, error: message, status: response.status };
   }
 
   try {
@@ -181,7 +188,7 @@ export async function uploadWorkoutFile({ baseUrl, token, athlete = 'renee', fil
     return { ok: true, data };
   } catch (err) {
     log.error('api.parse_failed', { path, error: err.message });
-    return { ok: false, error: 'Unexpected response from backend.' };
+    return { ok: false, error: 'Unexpected response from backend.', status: response.status };
   }
 }
 
@@ -276,5 +283,89 @@ export async function testConnection({ baseUrl, token }) {
   } catch (err) {
     log.error('settings.test_connection_failed', { error: err.message });
     return { ok: false, message: 'Could not reach that URL.' };
+  }
+}
+
+// --- Google sign-in session exchange -----------------------------------------
+// Unlike every function above, `exchangeGoogleToken` throws instead of
+// returning `{ok, ...}` -- identity.js's GSI callback awaits it directly in
+// a try/catch (see there), and a distinguishable error type is more useful
+// than a status code at that call site: "this email isn't allowlisted yet"
+// needs different UI copy than "the backend is unreachable," and `instanceof
+// RequestAccessError` is a cleaner check than comparing strings.
+
+/** Thrown by `exchangeGoogleToken` when the backend returns 403 -- the
+ * signed-in Google account authenticated fine but isn't in the
+ * `allowed_emails` allowlist yet (see backend/app/routes/auth.py). Callers
+ * (identity.js) use `instanceof RequestAccessError` to show "request
+ * access" copy instead of a generic failure message. */
+export class RequestAccessError extends Error {}
+
+/**
+ * POST {baseUrl}/api/auth/google with the raw Google ID token from GSI's
+ * credential callback. The backend verifies the token's signature/audience/
+ * issuer/expiry server-side (see backend/app/google_auth.py) -- this is the
+ * fix for identity.js's old "IDENTITY FOR UX, NOT A SECURITY BOUNDARY"
+ * caveat: the token itself is never decoded client-side anymore, just
+ * handed to the backend as-is.
+ *
+ * Resolves with the raw `{token, athlete, name, role, expires_at}` JSON on
+ * success (the minted per-user session token plus the identity the backend
+ * resolved it to). Throws `RequestAccessError` on a 403 (email not
+ * allowlisted) and a plain `Error` for every other failure (bad/expired
+ * token -> 401, network failure, unparsable response).
+ */
+export async function exchangeGoogleToken({ baseUrl, idToken }) {
+  let response;
+  try {
+    response = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id_token: idToken }),
+    });
+  } catch (err) {
+    log.error('auth.exchange_request_failed', { error: err.message });
+    throw new Error('Could not reach the coach backend. Check your connection and Settings.');
+  }
+
+  if (response.status === 403) {
+    log.warn('auth.exchange_forbidden', {});
+    throw new RequestAccessError('This Google account is not authorized yet -- request access from your coach.');
+  }
+
+  if (!response.ok) {
+    const message = await safeErrorMessage(response);
+    log.error('auth.exchange_rejected', { status: response.status, error: message });
+    throw new Error(message);
+  }
+
+  try {
+    return await response.json();
+  } catch (err) {
+    log.error('auth.exchange_parse_failed', { error: err.message });
+    throw new Error('Unexpected response from backend.');
+  }
+}
+
+/**
+ * POST {baseUrl}/api/auth/logout -- revokes the session token so it 401s on
+ * every subsequent request (see backend/app/routes/auth.py's logout route).
+ * Deliberately best-effort and never throws: sign-out is a local action
+ * (clear identity + token, per identity.js) that must complete regardless of
+ * whether the revoke call itself succeeds -- there is no refresh endpoint,
+ * so a failed revoke just leaves a stale session that will 401 on its own
+ * once it expires, not a security hole worth blocking the UI over.
+ */
+export async function logout({ baseUrl, token }) {
+  try {
+    const response = await fetch(`${baseUrl}/api/auth/logout`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      log.warn('auth.logout_failed', { status: response.status });
+    }
+  } catch (err) {
+    log.error('auth.logout_request_failed', { error: err.message });
   }
 }

@@ -11,7 +11,7 @@ import {
 import { loadSettings, saveSettings, isConfigured } from './settings.js';
 import {
   streamChat, testConnection, postWorkout, postWellness, fetchPlan, getAthlete, patchAthlete,
-  postFeedback, listFeedback, uploadWorkoutFile, listWorkouts, syncWorkouts,
+  postFeedback, listFeedback, uploadWorkoutFile, listWorkouts, syncWorkouts, logout,
 } from './api.js';
 import {
   serializeWorkoutForm, serializeWellnessForm, profileFormFromAthlete, serializeProfileForm,
@@ -85,10 +85,12 @@ const initialIdentity = currentIdentity();
 // so this object is mostly just "which slice is currently loaded".
 //
 // `identity` (see src/identity.js) is the signed-in Google account resolved
-// to {email, athlete, role} -- it drives which athlete every API call
-// targets. It's UX-only, not a security boundary: the backend still just
-// checks the shared bearer token in settingsForm. Signed out (identity ===
-// null), the app forces the Settings tab (the sign-in gate) instead of
+// to {name, athlete, role} -- it drives which athlete every API call
+// targets. The backend resolves and enforces this (POST /api/auth/google
+// mints a session bound to one athlete; require_auth/resolve_athlete 403 a
+// session requesting a different athlete) -- identity here is just the
+// frontend's copy of what the backend already decided. Signed out (identity
+// === null), the app forces the Settings tab (the sign-in gate) instead of
 // defaulting to any particular athlete.
 const state = {
   tab: initialIdentity ? loadActiveTab() : 'settings',
@@ -201,7 +203,6 @@ function renderTabContent() {
     case 'settings':
       return renderSettingsTab({
         baseUrl: state.settingsForm.baseUrl,
-        token: state.settingsForm.token,
         testStatus: state.connectionTest,
         identity: state.identity,
         identityError: state.identityError,
@@ -236,18 +237,27 @@ function render() {
 function mountGoogleSignIn() {
   const buttonEl = document.getElementById('google-signin-btn');
   if (!buttonEl) return;
-  signIn({ buttonEl, onIdentity: handleIdentityResolved });
+  signIn({ buttonEl, baseUrl: state.settingsForm.baseUrl, onIdentity: handleIdentityResolved });
 }
 
-function handleIdentityResolved(identity) {
-  if (!identity) {
-    state.identityError = "Signed in, but that Google account isn't an authorized user of this app.";
+// Fired once per real Google sign-in attempt with the outcome of the
+// exchange (see identity.js's signIn doc comment for the exact shape). On
+// success, the session token identity.js's exchange minted is persisted
+// into settingsForm here (not in identity.js -- token storage is
+// settings.js's job) so every existing api.js call site keeps reading
+// settingsForm.token exactly as before; only *where* that token comes from
+// has changed.
+function handleIdentityResolved(outcome) {
+  if (!outcome?.ok) {
+    state.identityError = outcome?.message
+      || "Signed in, but that Google account isn't an authorized user of this app.";
     render();
     return;
   }
-  state.identity = identity;
+  state.identity = outcome.identity;
   state.identityError = null;
-  state.chat = loadChatSession(identity.athlete);
+  state.settingsForm = saveSettings({ baseUrl: state.settingsForm.baseUrl, token: outcome.token });
+  state.chat = loadChatSession(outcome.identity.athlete);
   // Left idle rather than eagerly fetched here -- setTab('plan') lazily
   // loads it (or retries) the moment the Plan tab is actually visited, which
   // is also what covers the "just saved settings, now ready" case, so there
@@ -261,15 +271,21 @@ function handleIdentityResolved(identity) {
   state.workoutHistory = { status: 'idle', data: [], error: null };
   state.workoutDetailId = null;
   closeWorkoutChat();
-  log.info('identity.resolved', { athlete: identity.athlete, role: identity.role });
+  log.info('identity.resolved', { athlete: outcome.identity.athlete, role: outcome.identity.role });
   render();
   maybeLoadProfile();
 }
 
-function handleSignOut() {
-  signOut();
+/** Resets every identity-scoped slice of state back to signed-out and
+ * routes to the Settings tab (the sign-in gate) -- the common tail shared by
+ * an explicit sign-out (handleSignOut) and an involuntary one (a 401 from
+ * any API call, see handleSessionExpired). Does NOT touch settingsForm or
+ * call identity.js's signOut()/api.js's logout() -- callers do that
+ * themselves first, since they differ (an expired session has nothing valid
+ * left to revoke). */
+function resetToSignedOut({ identityError = null } = {}) {
   state.identity = null;
-  state.identityError = null;
+  state.identityError = identityError;
   state.chat = loadChatSession(SIGNED_OUT_CHAT_KEY);
   state.plan = { status: 'idle', data: null, error: null };
   state.profileForm = createProfileForm();
@@ -281,7 +297,39 @@ function handleSignOut() {
   closeWorkoutChat();
   state.tab = 'settings';
   saveActiveTab('settings');
+}
+
+function handleSignOut() {
+  const { baseUrl, token } = state.settingsForm;
+  // Best-effort revoke (see api.js's logout doc comment for why it never
+  // throws) -- fired before clearing local state so it still has the token
+  // to send, but not awaited: sign-out is a local action that must complete
+  // immediately regardless of network.
+  if (token) logout({ baseUrl, token });
+  signOut();
+  state.settingsForm = saveSettings({ baseUrl, token: '' });
+  resetToSignedOut();
   log.info('identity.signed_out', {});
+  render();
+}
+
+/** Every api.js call site funnels its result through this before doing its
+ * own ok/error branching -- a 401 means the session token is no longer
+ * valid (expired, or revoked by a sign-out elsewhere), and there is no
+ * refresh endpoint by design (see identity.js), so the only way forward is
+ * a fresh Google sign-in. Returns true (caller should bail out, having
+ * already rendered) when it handled a 401; false otherwise. */
+function handleUnauthorized(result) {
+  if (result?.status !== 401) return false;
+  handleSessionExpired();
+  return true;
+}
+
+function handleSessionExpired() {
+  signOut();
+  state.settingsForm = saveSettings({ baseUrl: state.settingsForm.baseUrl, token: '' });
+  resetToSignedOut({ identityError: 'Your session expired -- sign in again.' });
+  log.warn('identity.session_expired', {});
   render();
 }
 
@@ -315,6 +363,7 @@ async function loadPlan() {
   render();
 
   const result = await fetchPlan({ baseUrl: settings.baseUrl, token: settings.token, athlete: identity.athlete });
+  if (handleUnauthorized(result)) return;
   if (result.ok) {
     log.info('app.plan.loaded', {
       athlete_slug: result.data.slug,
@@ -365,6 +414,10 @@ function handleSendChat() {
     expertMode: state.chat.expertMode,
     signal: chatAbortController.signal,
     onEvent: (event) => {
+      if (event.type === 'error' && event.status === 401) {
+        handleSessionExpired();
+        return;
+      }
       state.chat = applyStreamEvent(state.chat, event);
       if (event.type === 'done' || event.type === 'refusal' || event.type === 'error') {
         persistChat();
@@ -395,12 +448,17 @@ function persistChat() {
 
 // --- Settings tab ------------------------------------------------------------
 
+// Only the backend URL is athlete-editable here now -- the session token
+// (settingsForm.token) is machine-set by handleIdentityResolved/
+// handleSignOut/handleSessionExpired, never typed in (see views.js's
+// renderSettingsTab: the old '#settings-token' paste field is gone). Saving
+// preserves whatever token is already in state rather than reading one from
+// a field that no longer exists.
 function handleSaveSettings() {
   const baseUrl = document.getElementById('settings-base-url')?.value ?? '';
-  const token = document.getElementById('settings-token')?.value ?? '';
-  state.settingsForm = saveSettings({ baseUrl, token });
+  state.settingsForm = saveSettings({ baseUrl, token: state.settingsForm.token });
   state.connectionTest = null;
-  log.info('settings.saved', { has_base_url: !!state.settingsForm.baseUrl, has_token: !!state.settingsForm.token });
+  log.info('settings.saved', { has_base_url: !!state.settingsForm.baseUrl });
   render();
   // No eager (re)fetch of the plan here -- setTab('plan') lazily loads it
   // (or retries a previous error) the moment the Plan tab is actually
@@ -412,9 +470,10 @@ function handleSaveSettings() {
 }
 
 async function handleTestConnection() {
-  // Test whatever is currently in the fields (may not be saved yet).
+  // Test whatever base URL is currently in the field (may not be saved
+  // yet), with whatever session token is already signed in -- there's no
+  // token field to read separately anymore (see handleSaveSettings).
   const baseUrl = (document.getElementById('settings-base-url')?.value ?? '').trim().replace(/\/+$/, '');
-  const token = (document.getElementById('settings-token')?.value ?? '').trim();
   if (!baseUrl) {
     state.connectionTest = { ok: false, message: 'Enter a backend URL first.' };
     render();
@@ -422,7 +481,7 @@ async function handleTestConnection() {
   }
   state.connectionTest = { ok: false, message: 'Testing…', pending: true };
   render();
-  const result = await testConnection({ baseUrl, token });
+  const result = await testConnection({ baseUrl, token: state.settingsForm.token });
   log.info('settings.test_connection', { ok: result.ok });
   state.connectionTest = result;
   render();
@@ -448,6 +507,7 @@ async function handleSubmitLog() {
   const result = await postWorkout({
     baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), payload,
   });
+  if (handleUnauthorized(result)) return;
   if (result.ok) {
     log.info('log.submit_success', { athlete: athleteSlug(), source: payload.source || 'manual' });
     state.logForm = createLogForm();
@@ -483,6 +543,7 @@ async function handleSyncWorkouts() {
   log.info('sync.requested', { athlete: athleteSlug() });
 
   const result = await syncWorkouts({ baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug() });
+  if (handleUnauthorized(result)) return;
   if (result.ok) {
     log.info('sync.completed', {
       athlete: athleteSlug(),
@@ -619,6 +680,10 @@ function handleSendWorkoutChat() {
     workoutId,
     signal: workoutChatAbortController.signal,
     onEvent: (event) => {
+      if (event.type === 'error' && event.status === 401) {
+        handleSessionExpired();
+        return;
+      }
       // The detail (and its thread) may have closed mid-stream -- a late
       // event must not resurrect state or apply to a different workout's
       // fresh thread.
@@ -659,6 +724,7 @@ async function loadHistory() {
   render();
 
   const result = await listWorkouts({ baseUrl: settings.baseUrl, token: settings.token, athlete: identity.athlete });
+  if (handleUnauthorized(result)) return;
   if (result.ok && Array.isArray(result.data)) {
     const sorted = sortWorkoutsNewestFirst(result.data).slice(0, HISTORY_DISPLAY_CAP);
     log.info('history.loaded', { athlete: identity.athlete, count: sorted.length });
@@ -720,6 +786,7 @@ async function handleLogFileSelected(file) {
     baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), file,
   });
 
+  if (handleUnauthorized(result)) return;
   if (result.ok) {
     const draft = result.data;
     log.info('log.file_parsed', {
@@ -758,6 +825,7 @@ async function handleSubmitCheckin() {
   const result = await postWellness({
     baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), payload,
   });
+  if (handleUnauthorized(result)) return;
   if (result.ok) {
     log.info('checkin.submit_success', { athlete: athleteSlug() });
     state.checkinForm = createCheckinForm();
@@ -788,6 +856,7 @@ async function loadProfile() {
   render();
 
   const result = await getAthlete({ baseUrl: settings.baseUrl, token: settings.token, athlete: identity.athlete });
+  if (handleUnauthorized(result)) return;
   if (result.ok) {
     log.info('profile.loaded', { athlete: identity.athlete });
     state.profileForm = profileFormFromAthlete(result.data);
@@ -814,6 +883,7 @@ async function loadFeedback() {
   render();
 
   const result = await listFeedback({ baseUrl: settings.baseUrl, token: settings.token, athlete: identity.athlete });
+  if (handleUnauthorized(result)) return;
   if (result.ok) {
     log.info('feedback.list_loaded', { athlete: identity.athlete, count: result.data.length });
     state.feedbackEntries = { status: 'ready', data: result.data };
@@ -848,6 +918,7 @@ async function handleSubmitProfile() {
   const result = await patchAthlete({
     baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), payload,
   });
+  if (handleUnauthorized(result)) return;
   if (result.ok) {
     log.info('profile.submit_success', { athlete: athleteSlug() });
     state.profileForm = profileFormFromAthlete(result.data);
@@ -883,6 +954,7 @@ async function handleSubmitFeedback() {
   const result = await postFeedback({
     baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), payload,
   });
+  if (handleUnauthorized(result)) return;
   if (result.ok) {
     log.info('feedback.submit_success', { athlete: athleteSlug() });
     state.feedbackForm = createFeedbackForm();

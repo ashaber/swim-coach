@@ -39,10 +39,35 @@ describe('settings persistence', () => {
     storage.setItem('swimcoach_settings', '{{{not json');
     expect(loadSettings(storage)).toEqual({ baseUrl: DEFAULT_BASE_URL, token: '' });
   });
+
+  it('keeps a token saved under the current schema version (round-trip via saveSettings)', () => {
+    saveSettings({ baseUrl: 'https://api.example.com', token: 'session-tok' }, storage);
+    expect(loadSettings(storage)).toEqual({ baseUrl: 'https://api.example.com', token: 'session-tok' });
+  });
+
+  it('drops a stale pre-cutover token (no version field) but keeps the base URL', () => {
+    // Simulates a browser that still has the OLD manually-pasted shared
+    // bearer token cached from before the Google-sign-in switch -- see
+    // settings.js's SETTINGS_SCHEMA_VERSION doc comment for why this must
+    // not silently keep authenticating as that legacy credential.
+    storage.setItem(
+      'swimcoach_settings',
+      JSON.stringify({ baseUrl: 'https://old.example.com', token: 'old-shared-token' }),
+    );
+    expect(loadSettings(storage)).toEqual({ baseUrl: 'https://old.example.com', token: '' });
+  });
+
+  it('drops a token saved under an older explicit schema version too', () => {
+    storage.setItem(
+      'swimcoach_settings',
+      JSON.stringify({ baseUrl: 'https://old.example.com', token: 'old-shared-token', version: 1 }),
+    );
+    expect(loadSettings(storage)).toEqual({ baseUrl: 'https://old.example.com', token: '' });
+  });
 });
 
 describe('isConfigured', () => {
-  const identity = { email: 'andrewshaber@gmail.com', athlete: 'andrew', role: 'coach' };
+  const identity = { name: 'Andrew', athlete: 'andrew', role: 'coach' };
 
   it('is false when either the base URL or token is missing, even with an identity', () => {
     expect(isConfigured({ baseUrl: '', token: '' }, identity)).toBe(false);

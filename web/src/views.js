@@ -1035,7 +1035,7 @@ export function renderFeedbackTab({
 // --- Settings tab ------------------------------------------------------------
 
 export function renderSettingsTab({
-  baseUrl, token, testStatus, identity, identityError, backendConfigured, profileForm, profileLoad, profileSubmit,
+  baseUrl, testStatus, identity, identityError, backendConfigured, profileForm, profileLoad, profileSubmit,
 }) {
   return `
     <div class="wrap settings-wrap">
@@ -1049,11 +1049,11 @@ export function renderSettingsTab({
       <div class="panel settings-panel">
         <h3 style="margin:0 0 12px;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);">Sign in</h3>
         ${identity ? `
-        <p class="field-hint" style="margin:0 0 14px;">Signed in as <b>${esc(identity.email)}</b> &rarr; athlete <b>${esc(identity.athlete)}</b> (role <b>${esc(identity.role)}</b>).</p>
+        <p class="field-hint" style="margin:0 0 14px;">Signed in as <b>${esc(identity.name || identity.athlete)}</b> &rarr; athlete <b>${esc(identity.athlete)}</b> (role <b>${esc(identity.role)}</b>).</p>
         <div class="settings-actions">
           <button type="button" class="btn-ghost" data-a="identity:signout">Sign out</button>
         </div>` : `
-        <p class="field-hint" style="margin:0 0 14px;">Sign in with Google to load your own plan. This is client-side identity only -- the shared bearer token below still does the real authenticating to the backend.</p>
+        <p class="field-hint" style="margin:0 0 14px;">Sign in with Google to load your own plan. The backend verifies your Google account and mints a session for it -- there's no token to paste.</p>
         <div id="google-signin-btn"></div>
         ${identityError ? `<div class="conn-result fail">${esc(identityError)}</div>` : ''}`}
       </div>
@@ -1062,11 +1062,7 @@ export function renderSettingsTab({
           <span>Backend URL</span>
           <input type="url" id="settings-base-url" placeholder="https://coach-api.example.com" value="${esc(baseUrl)}" inputmode="url" autocomplete="off" spellcheck="false">
         </label>
-        <label class="field">
-          <span>Bearer token</span>
-          <input type="password" id="settings-token" placeholder="paste your token" value="${esc(token)}" autocomplete="off" spellcheck="false">
-        </label>
-        <p class="field-hint">Stored only in this browser's local storage -- never sent anywhere except the backend URL above.</p>
+        <p class="field-hint">Stored only in this browser's local storage.</p>
         <div class="settings-actions">
           <button type="button" class="btn" data-a="settings:save">Save</button>
           <button type="button" class="btn-ghost" data-a="settings:test">Test connection</button>

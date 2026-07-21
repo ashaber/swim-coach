@@ -68,10 +68,23 @@ def page(request, base_url):
 
 
 def _configure_backend(page, base_url=BASE_URL, token=TOKEN):
+    """The '#settings-token' paste field is gone -- session tokens now come
+    only from a real Google sign-in exchange (see identity.js's signIn /
+    api.js's exchangeGoogleToken), which these tests don't drive (no real
+    Google script). Seeds the session token directly into localStorage the
+    way a real exchange would leave it (`version` stamped to match
+    settings.js's SETTINGS_SCHEMA_VERSION, or loadSettings() would treat it
+    as a stale pre-cutover value and drop it), then reloads and drives the
+    real Settings UI for the base URL + Save button, same as before."""
+    page.evaluate(
+        "(t) => window.localStorage.setItem("
+        "'swimcoach_settings', JSON.stringify({baseUrl: '', token: t, version: 2}))",
+        token,
+    )
+    page.reload()
     page.click('[data-a="tab:settings"]')
     page.wait_for_selector('#settings-base-url')
     page.fill('#settings-base-url', base_url)
-    page.fill('#settings-token', token)
     page.click('[data-a="settings:save"]')
 
 
