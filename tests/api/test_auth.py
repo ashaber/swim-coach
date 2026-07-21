@@ -43,6 +43,24 @@ def test_chat_with_correct_token_succeeds(client, fake_claude_chat_factory) -> N
     assert "hi there" in response.text
 
 
+def test_session_lookup_failure_is_401_not_500(client, monkeypatch) -> None:
+    # Defense in depth: prod hit a 500 here when auth_sessions was missing
+    # (UndefinedTable propagated out of require_auth's store.get_session
+    # call). Any store failure on the session-lookup fallback must fail
+    # closed to 401, never leak a 500/traceback.
+    class RaisingStore:
+        def get_session(self, token_hash: str):
+            raise RuntimeError('relation "auth_sessions" does not exist')
+
+    monkeypatch.setattr("app.auth.make_store", lambda settings: RaisingStore())
+
+    response = client.post(
+        "/api/chat", json=_chat_payload(), headers=auth_headers("not-the-service-token")
+    )
+    assert response.status_code == 401
+    assert response.json() == {"error": "invalid token"}
+
+
 def test_chat_rate_limit_triggers(client, fake_claude_chat_factory) -> None:
     # app_env sets CHAT_RATE_PER_MIN=3.
     def make_turn():
