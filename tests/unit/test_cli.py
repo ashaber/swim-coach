@@ -1179,3 +1179,398 @@ def test_invite_help_documents_database_url_flag(capsys):
     out = capsys.readouterr().out
     assert "--database-url" in out
     assert "DATABASE_URL" in out
+
+
+# --- onboard (Tier C: one-command athlete provisioning, #61) -----------------
+
+
+def _write_profile_yaml(path, **overrides):
+    data = {
+        "slug": "newkid",
+        "name": "New Kid",
+        "css_pace_s_per_100m": 95.0,
+        "pool_schedule": ["tue", "thu", "fri"],
+        "constraints": {},
+    }
+    data.update(overrides)
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    return data
+
+
+def _write_events_yaml(path, events):
+    path.write_text(yaml.safe_dump(events, sort_keys=False), encoding="utf-8")
+
+
+def _future_event(**overrides):
+    event = {
+        "name": "Catalina Channel",
+        "event_date": (date.today() + timedelta(weeks=24)).isoformat(),
+        "distance_m": 20000,
+        "water_temp_c": 18.0,
+        "wetsuit": False,
+        "priority": "A",
+    }
+    event.update(overrides)
+    return event
+
+
+def test_onboard_full_inputs_creates_complete_athlete(tmp_path, capsys):
+    profile_path = tmp_path / "profile.yaml"
+    events_path = tmp_path / "events.yaml"
+    _write_profile_yaml(profile_path)
+    _write_events_yaml(events_path, [_future_event()])
+    base_dir = tmp_path / "store"
+
+    code = _run(
+        base_dir,
+        "onboard",
+        "--profile",
+        str(profile_path),
+        "--events",
+        str(events_path),
+        "--current-volume",
+        "6000",
+        "--email",
+        "New.Athlete@Example.COM",
+        "--note",
+        "first tester",
+    )
+    assert code == 0
+    result = _out(capsys)
+    assert result["athlete"] == "newkid"
+    uuid.UUID(result["athlete_id"])  # a real UUID was minted
+    assert result["created"]["zones"] is True
+    assert result["created"]["events"] == 1
+    assert result["created"]["macro"] is True
+    assert result["created"]["first_week"] is not None
+    assert result["allowlisted_email"] == "new.athlete@example.com"
+    assert result["skipped"] == []
+
+    from swim_coach.store import FileStore
+
+    store = FileStore(base_dir=base_dir)
+    athlete = store.load_athlete("newkid")
+    assert athlete.zones is not None
+    assert store.load_macro("newkid") is not None
+    assert store.get_allowed_email("new.athlete@example.com") is not None
+
+    # the local input file itself is untouched (no id injected back into it)
+    assert "id" not in yaml.safe_load(profile_path.read_text(encoding="utf-8"))
+
+
+def test_onboard_generates_a_fresh_id_when_profile_omits_one(tmp_path, capsys):
+    profile_path = tmp_path / "profile.yaml"
+    _write_profile_yaml(profile_path, slug="freshid")
+    base_dir = tmp_path / "store"
+
+    code = _run(
+        base_dir, "onboard", "--profile", str(profile_path), "--email", "x@example.com"
+    )
+    assert code == 0
+    result = _out(capsys)
+    uuid.UUID(result["athlete_id"])
+
+
+def test_onboard_rerun_reuses_existing_athlete_id(tmp_path, capsys):
+    profile_path = tmp_path / "profile.yaml"
+    _write_profile_yaml(profile_path, slug="rerunner")
+    base_dir = tmp_path / "store"
+
+    code = _run(base_dir, "onboard", "--profile", str(profile_path), "--email", "a@example.com")
+    assert code == 0
+    first_id = _out(capsys)["athlete_id"]
+
+    code = _run(base_dir, "onboard", "--profile", str(profile_path), "--email", "b@example.com")
+    assert code == 0
+    second_id = _out(capsys)["athlete_id"]
+
+    assert first_id == second_id
+
+
+def test_onboard_without_events_degrades_but_still_creates_athlete(tmp_path, capsys):
+    profile_path = tmp_path / "profile.yaml"
+    _write_profile_yaml(profile_path, slug="bare")
+    base_dir = tmp_path / "store"
+
+    code = _run(base_dir, "onboard", "--profile", str(profile_path), "--email", "x@example.com")
+    assert code == 0
+    result = _out(capsys)
+    assert result["created"]["macro"] is False
+    assert result["created"]["first_week"] is None
+    assert result["skipped"]
+
+    from swim_coach.store import FileStore
+
+    store = FileStore(base_dir=base_dir)
+    assert store.load_athlete("bare").zones is not None
+    assert store.get_allowed_email("x@example.com") is not None
+
+
+def test_onboard_computes_css_from_test_times(tmp_path, capsys):
+    profile_path = tmp_path / "profile.yaml"
+    data = _write_profile_yaml(profile_path, slug="tested")
+    del data  # profile.yaml intentionally has a css_pace_s_per_100m already;
+    # --test-400/--test-200 must override it, same as the `zones` subcommand.
+    base_dir = tmp_path / "store"
+
+    code = _run(
+        base_dir,
+        "onboard",
+        "--profile",
+        str(profile_path),
+        "--email",
+        "x@example.com",
+        "--test-400",
+        "6:40",
+        "--test-200",
+        "2:55",
+    )
+    assert code == 0
+
+    from swim_coach.store import FileStore
+
+    store = FileStore(base_dir=base_dir)
+    assert store.load_athlete("tested").css_pace_s_per_100m == 112.5
+
+
+def test_onboard_multiple_events_without_event_flag_errors(tmp_path, capsys):
+    profile_path = tmp_path / "profile.yaml"
+    events_path = tmp_path / "events.yaml"
+    _write_profile_yaml(profile_path, slug="ambiguous")
+    _write_events_yaml(
+        events_path, [_future_event(name="Event A"), _future_event(name="Event B")]
+    )
+    base_dir = tmp_path / "store"
+
+    code = _run(
+        base_dir,
+        "onboard",
+        "--profile",
+        str(profile_path),
+        "--events",
+        str(events_path),
+        "--current-volume",
+        "6000",
+        "--email",
+        "x@example.com",
+    )
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+
+
+def test_onboard_event_flag_selects_among_multiple(tmp_path, capsys):
+    profile_path = tmp_path / "profile.yaml"
+    events_path = tmp_path / "events.yaml"
+    _write_profile_yaml(profile_path, slug="picksone")
+    _write_events_yaml(
+        events_path, [_future_event(name="Event A"), _future_event(name="Event B")]
+    )
+    base_dir = tmp_path / "store"
+
+    code = _run(
+        base_dir,
+        "onboard",
+        "--profile",
+        str(profile_path),
+        "--events",
+        str(events_path),
+        "--event",
+        "Event B",
+        "--current-volume",
+        "6000",
+        "--email",
+        "x@example.com",
+    )
+    assert code == 0
+    result = _out(capsys)
+    assert result["created"]["macro"] is True
+
+
+def test_onboard_unknown_event_query_errors(tmp_path, capsys):
+    profile_path = tmp_path / "profile.yaml"
+    events_path = tmp_path / "events.yaml"
+    _write_profile_yaml(profile_path, slug="noevent")
+    _write_events_yaml(events_path, [_future_event()])
+    base_dir = tmp_path / "store"
+
+    code = _run(
+        base_dir,
+        "onboard",
+        "--profile",
+        str(profile_path),
+        "--events",
+        str(events_path),
+        "--event",
+        "does not exist",
+        "--current-volume",
+        "6000",
+        "--email",
+        "x@example.com",
+    )
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+
+
+def test_onboard_missing_profile_file_errors(tmp_path, capsys):
+    base_dir = tmp_path / "store"
+    code = _run(
+        base_dir, "onboard", "--profile", str(tmp_path / "nope.yaml"), "--email", "x@example.com"
+    )
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+
+
+def test_onboard_profile_missing_slug_errors(tmp_path, capsys):
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text(yaml.safe_dump({"name": "No Slug"}), encoding="utf-8")
+    base_dir = tmp_path / "store"
+
+    code = _run(
+        base_dir, "onboard", "--profile", str(profile_path), "--email", "x@example.com"
+    )
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+
+
+def test_onboard_insufficient_runway_errors_but_athlete_already_provisioned(tmp_path, capsys):
+    profile_path = tmp_path / "profile.yaml"
+    events_path = tmp_path / "events.yaml"
+    _write_profile_yaml(profile_path, slug="tooclose")
+    _write_events_yaml(
+        events_path,
+        [_future_event(event_date=(date.today() + timedelta(weeks=3)).isoformat())],
+    )
+    base_dir = tmp_path / "store"
+
+    code = _run(
+        base_dir,
+        "onboard",
+        "--profile",
+        str(profile_path),
+        "--events",
+        str(events_path),
+        "--current-volume",
+        "6000",
+        "--email",
+        "x@example.com",
+    )
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+
+    from swim_coach.store import FileStore
+
+    store = FileStore(base_dir=base_dir)
+    assert store.load_athlete("tooclose") is not None
+
+
+def test_onboard_missing_email_errors():
+    with pytest.raises(SystemExit):
+        _run(Path("/tmp"), "onboard", "--profile", "/no/such/file.yaml")
+
+
+def test_onboard_help_documents_fk_self_sufficiency(capsys):
+    with pytest.raises(SystemExit):
+        main(["onboard", "--help"])
+    out = capsys.readouterr().out
+    assert "--database-url" in out
+    assert "DATABASE_URL" in out
+
+
+# --- onboard targets DbStore with --database-url ----------------------------
+
+
+class _FakeProvisionDbStore:
+    """Stands in for swim_coach.store_db.DbStore for onboard's DB-routing
+    tests -- implements just enough of StoreInterface for provision_athlete
+    to run against it, tracking calls so tests can assert the CLI actually
+    drove DbStore (not FileStore) without needing a real Postgres."""
+
+    instances: list["_FakeProvisionDbStore"] = []
+
+    def __init__(self, dsn):
+        self.dsn = dsn
+        self.calls: list[tuple] = []
+        self._athletes: dict[str, object] = {}
+        _FakeProvisionDbStore.instances.append(self)
+
+    def load_athlete(self, slug):
+        self.calls.append(("load_athlete", slug))
+        if slug in self._athletes:
+            return self._athletes[slug]
+        raise FileNotFoundError(f"no athlete with slug {slug!r}")
+
+    def save_athlete(self, athlete):
+        self.calls.append(("save_athlete", athlete.slug))
+        self._athletes[athlete.slug] = athlete
+
+    def save_events(self, slug, events):
+        self.calls.append(("save_events", slug, len(events)))
+
+    def save_macro(self, slug, macro):
+        self.calls.append(("save_macro", slug))
+
+    def save_week(self, slug, week):
+        self.calls.append(("save_week", slug, week.iso_week))
+
+    def add_allowed_email(self, slug, email, *, note=None):
+        normalized = email.strip().lower()
+        self.calls.append(("add_allowed_email", slug, normalized, note))
+        return AllowedEmail(
+            email=normalized, athlete_slug=slug, note=note, created_at=datetime.now(timezone.utc)
+        )
+
+
+@pytest.fixture(autouse=True)
+def _reset_fake_provision_dbstore_instances():
+    _FakeProvisionDbStore.instances.clear()
+    yield
+    _FakeProvisionDbStore.instances.clear()
+
+
+def test_onboard_uses_dbstore_when_database_url_flag_given(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr("swim_coach.store_db.DbStore", _FakeProvisionDbStore)
+    profile_path = tmp_path / "profile.yaml"
+    _write_profile_yaml(profile_path, slug="dbkid")
+
+    code = main(
+        [
+            "onboard",
+            "--profile",
+            str(profile_path),
+            "--email",
+            "x@example.com",
+            "--database-url",
+            "postgresql://user:s3cret@host/db",
+        ]
+    )
+    assert code == 0
+    assert len(_FakeProvisionDbStore.instances) == 1
+    fake = _FakeProvisionDbStore.instances[0]
+    assert fake.dsn == "postgresql://user:s3cret@host/db"
+    assert ("save_athlete", "dbkid") in fake.calls
+    assert ("add_allowed_email", "dbkid", "x@example.com", None) in fake.calls
+
+    out = capsys.readouterr().out
+    assert "s3cret" not in out
+
+
+def test_onboard_without_database_url_uses_filestore(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr("swim_coach.store_db.DbStore", _FakeProvisionDbStore)
+    profile_path = tmp_path / "profile.yaml"
+    _write_profile_yaml(profile_path, slug="filekid")
+    base_dir = tmp_path / "store"
+
+    code = _run(
+        base_dir, "onboard", "--profile", str(profile_path), "--email", "x@example.com"
+    )
+    assert code == 0
+    assert _FakeProvisionDbStore.instances == []
+
+    from swim_coach.store import FileStore
+
+    assert FileStore(base_dir=base_dir).load_athlete("filekid") is not None
