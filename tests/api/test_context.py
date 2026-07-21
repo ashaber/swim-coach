@@ -4,6 +4,7 @@ and keyword routing must pick sensible library files."""
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import date, timedelta
 
@@ -261,9 +262,21 @@ def test_per_request_context_lists_exact_sessions_with_distinct_sports(app_env) 
     assert '"sport": "swim_pool"' in text
     assert '"distance_m": 8000' in text
     assert '"distance_m": 3200' in text
-    # chronological order: the older (pool) workout's row precedes the
-    # newer (open-water) workout's row.
-    assert text.index('"sport": "swim_pool"') < text.index('"sport": "swim_ow"')
+    # Isolate the exact-logged-sessions section and parse its rows -- asserting on
+    # text.index() over the whole context is fragile (it collides with other
+    # in-window workouts that share a sport, e.g. renee's real 2026-07-06 swim_ow).
+    header = "### Exact logged sessions"
+    start = text.index(header)
+    end = text.index("\n### ", start + len(header))
+    rows = [json.loads(ln) for ln in text[start:end].splitlines() if ln.startswith("{")]
+    # ordering contract: rows are chronological (oldest-first), regardless of which
+    # other sessions fall in the window.
+    dates = [r["date"] for r in rows]
+    assert dates == sorted(dates)
+    # the two injected workouts specifically: older pool (3200m) precedes newer ow (8000m).
+    pool_i = next(i for i, r in enumerate(rows) if r["distance_m"] == 3200)
+    ow_i = next(i for i, r in enumerate(rows) if r["distance_m"] == 8000)
+    assert pool_i < ow_i
 
 
 def test_per_request_context_excludes_stale_sessions_outside_window(app_env) -> None:
