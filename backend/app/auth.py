@@ -92,7 +92,14 @@ async def require_auth(request: Request) -> Principal:
         return Principal(kind="service", athlete=None, token=provided)
 
     store = make_store(settings)
-    session = store.get_session(hash_token(provided))
+    try:
+        session = store.get_session(hash_token(provided))
+    except Exception as exc:
+        # Can't validate the presented token if the store itself is broken --
+        # fail closed to 401 rather than leak a 500/traceback (prod hit this
+        # via a missing auth_sessions table; DB is fixed, this is belt/suspenders).
+        log.error("auth.session_lookup_failed", error=str(exc))
+        raise HTTPException(status_code=401, detail="invalid token") from exc
     now = datetime.now(timezone.utc)
     if session is None or session.revoked_at is not None or session.expires_at <= now:
         raise HTTPException(status_code=401, detail="invalid token")
