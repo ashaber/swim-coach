@@ -191,6 +191,46 @@ against a real `DbStore`; it is **skipped** unless `SWIM_COACH_TEST_DB_URL`
 points at a throwaway schema. `pytest tests/unit -v` never needs a DB or network.
 See `supabase/README.md` for how to run it.
 
+## Onboarding a new athlete (alpha user)
+
+Invite-only. A single `cli onboard` command creates the athlete in the
+production DB **and** allowlists their Google email; they then sign in with
+Google. No repo commit, no manual migrate, no shared token.
+
+1. **Gather the athlete's data** (the `/onboard-athlete` skill guides the
+   interview): their Google account email, a CSS pace or a CSS test time
+   (400m and/or 200m), pool schedule, optional demographics (dob / sex /
+   height / weight), target event(s) (date + distance), and current + peak
+   weekly swim volume in meters.
+2. **Author a local, uncommitted `profile.yaml`** in the athlete-tree format
+   (plus an `events.yaml` if they have target races). Keep these as local
+   scratch files — do **not** commit them to the repo.
+3. **Run `onboard` against the production DB.** Writes go through the prod
+   `DATABASE_URL` — use the **direct 5432** connection (see *Storage backend*
+   above), not the pooler:
+   ```
+   .venv/bin/python -m swim_coach.cli onboard \
+     --profile ./their-profile.yaml \
+     --email them@gmail.com \
+     [--events ./their-events.yaml --event "<target event name>"] \
+     [--test-400 MM:SS] [--test-200 MM:SS] \
+     [--current-volume <meters> --peak-volume <meters> --start YYYY-MM-DD] \
+     --database-url "<prod-direct-DSN>"
+   ```
+   This writes the athlete + zones + macro scaffold + first week + the
+   allowlist row in one shot, and is **idempotent** (re-running updates the
+   same athlete). Zones come from the profile's CSS pace or the `--test-*`
+   times. The macro + first week are scaffolded only when a target event and
+   `--current-volume` are supplied; otherwise they're skipped and the athlete
+   is still created (fill them in with a later `plan-week`/`adapt`, or re-run
+   `onboard`). See `cli onboard --help` for the authoritative flag list.
+4. **The athlete signs in** at the PWA with Google (the email you onboarded).
+   Google verifies the email; they land on their own plan with nothing to
+   paste, and can only see their own data (per-athlete 403 isolation).
+
+To allowlist an email for an athlete that **already** exists (not create one),
+use `cli invite --email … --athlete <slug> --database-url …` instead.
+
 ## Research library (`library/`)
 
 Grounds engine constants and the `/coach` skill. See `library/00-conventions.md`
