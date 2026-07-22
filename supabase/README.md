@@ -9,7 +9,10 @@ the live service runs on `FileStore` and is unchanged until Andrew flips the fla
 ```
 supabase/
   migrations/
-    20260706000000_init.sql   # initial schema: all tables, indexes, reserved stubs
+    20260706000000_init.sql                       # initial schema: all tables, indexes, reserved stubs
+    20260707000000_feedback.sql                    # feedback table
+    20260714000000_identity.sql                    # allowed_emails + auth_sessions (Slice 1: verified identity)
+    20260722000000_onboarding_nullable_athlete.sql # nullable athlete_id on both identity tables (self-service onboarding, Slice 1)
   README.md         # this file
 ```
 

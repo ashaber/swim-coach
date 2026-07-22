@@ -138,7 +138,12 @@ async def update_feedback(
     # OWN athlete_id; anything else is a 403 (the same cross-athlete
     # guarantee the ?athlete= routes get). A SERVICE principal is unrestricted
     # here, exactly as before this PR -- the coach's research-question loop and
-    # Andrew's CLI both patch entries across athletes.
+    # Andrew's CLI both patch entries across athletes. An ONBOARDING
+    # principal has no athlete_id of its own to compare against, so it is
+    # ALWAYS 403 here -- same "no athlete to act as" guarantee
+    # `resolve_athlete` enforces on every other route.
+    if principal.kind == "onboarding":
+        raise HTTPException(status_code=403, detail="onboarding session has no athlete")
     if principal.kind == "athlete" and principal.athlete is not None:
         existing = store.get_feedback(feedback_id)
         if existing is None:

@@ -177,7 +177,7 @@ def provision_athlete(
             extra={"slug": athlete.slug, "n_blocks": len(macro.blocks), "first_week": iso_week},
         )
 
-    allowed_email = store.add_allowed_email(athlete.slug, email, note=note)
+    allowed_email = store.add_allowed_email(email, athlete=athlete.slug, note=note)
 
     log.info(
         "provisioned athlete",

@@ -48,9 +48,9 @@ def store(app_env: Path) -> FileStore:
 def allowlist(store: FileStore) -> FileStore:
     """Seed the three beta users into the allowlist, the way the migration
     seeds them in prod."""
-    store.add_allowed_email("andrew", ANDREW_EMAIL)
-    store.add_allowed_email("renee", RENEE_EMAIL)
-    store.add_allowed_email("tim", TIM_EMAIL)
+    store.add_allowed_email(ANDREW_EMAIL, athlete="andrew")
+    store.add_allowed_email(RENEE_EMAIL, athlete="renee")
+    store.add_allowed_email(TIM_EMAIL, athlete="tim")
     return store
 
 
@@ -306,6 +306,75 @@ def test_service_token_reaches_any_athlete_on_every_route(client, allowlist, any
     for label, resp in _scoped_requests(client, headers, target="tim"):
         assert resp.status_code != 403, f"service token WRONGLY denied at {label}"
         assert resp.status_code != 401, f"service token WRONGLY rejected at {label}"
+
+
+# --- onboarding sessions (Slice 1 of self-service onboarding) --------------
+#
+# The regression guarantee THIS slice exists to add: an email invited before
+# any athlete exists for it can sign in (mints an onboarding-scoped session,
+# no athlete bound) and reach GET /api/me -- but NOTHING else. This is the
+# same shape of guarantee as test_cross_athlete_denied_on_every_scoped_route
+# above, just for "no athlete" instead of "the wrong athlete" -- and it must
+# never regress to falling through to `default="renee"` data.
+
+ONBOARDING_EMAIL = "future.athlete@example.com"
+
+
+@pytest.fixture
+def pending_invite(store: FileStore) -> FileStore:
+    """Seed a PENDING (email-only, no athlete) allowlist entry -- the state
+    `cli invite <email>` (no --athlete) creates."""
+    store.add_allowed_email(ONBOARDING_EMAIL)
+    return store
+
+
+def test_onboarding_sign_in_mints_onboarding_session(client, pending_invite, google):
+    resp = _sign_in(client, ONBOARDING_EMAIL)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["athlete"] is None
+    assert body["onboarding"] is True
+    assert body["role"] == "onboarding"
+    assert "expires_at" in body
+    token = body["token"]
+    assert isinstance(token, str) and token
+
+
+def test_me_with_onboarding_session_is_200_onboarding_true(client, pending_invite, google):
+    token = _sign_in(client, ONBOARDING_EMAIL).json()["token"]
+    resp = client.get("/api/me", headers=_bearer(token))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["onboarding"] is True
+    assert body["athlete"] is None
+
+
+def test_onboarding_session_denied_on_every_scoped_route(
+    client, pending_invite, google, any_chat
+):
+    # THE guarantee: an onboarding session (no athlete bound at all) must
+    # never reach ANY athlete-scoped route -- not even the default athlete
+    # ("renee") that a service principal's omitted `?athlete=` falls through
+    # to. Reuses the same _scoped_requests helper as the cross-athlete test
+    # above, targeting the default athlete precisely because that's the
+    # failure mode this slice must prevent: falling through to default data.
+    token = _sign_in(client, ONBOARDING_EMAIL).json()["token"]
+    headers = _bearer(token)
+
+    failures = []
+    for label, resp in _scoped_requests(client, headers, target="renee"):
+        if resp.status_code != 403:
+            failures.append(f"{label} -> {resp.status_code} (expected 403)")
+    assert not failures, "onboarding session was NOT denied on:\n" + "\n".join(failures)
+
+
+def test_onboarding_session_denied_with_no_athlete_param_too(client, pending_invite, google):
+    # Same guarantee with ?athlete= omitted entirely -- an onboarding
+    # session must not silently resolve to a default athlete just because
+    # the caller didn't ask for one by name.
+    token = _sign_in(client, ONBOARDING_EMAIL).json()["token"]
+    resp = client.get("/api/workouts", headers=_bearer(token))
+    assert resp.status_code == 403
 
 
 # --- daily chat cap --------------------------------------------------------

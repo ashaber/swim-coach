@@ -169,7 +169,12 @@ def row_to_allowed_email(row: dict[str, Any]) -> AllowedEmail:
     """Unlike the other `row_to_*` mappers, this expects a JOINED row (`ae.*`
     + `a.slug as athlete_slug`) -- `allowed_emails` itself only has an
     `athlete_id` FK column, never the slug. See DbStore.get_allowed_email/
-    list_allowed_emails, the only callers that build such a row."""
+    list_allowed_emails, the only callers that build such a row.
+
+    `row["athlete_slug"]` is None for a PENDING/onboarding invite (Slice 1
+    self-service onboarding) -- DbStore's join is a LEFT JOIN precisely so a
+    row with `athlete_id IS NULL` still comes back (an INNER JOIN would drop
+    it silently)."""
     return AllowedEmail(
         email=row["email"],
         athlete_slug=row["athlete_slug"],
@@ -179,8 +184,10 @@ def row_to_allowed_email(row: dict[str, Any]) -> AllowedEmail:
 
 
 def row_to_auth_session(row: dict[str, Any]) -> AuthSession:
-    """Same joined-row convention as row_to_allowed_email above (`s.*` + `a.slug
-    as athlete_slug`) -- `auth_sessions` itself only has an `athlete_id` FK."""
+    """Same joined-row (LEFT JOIN) convention as row_to_allowed_email above
+    (`s.*` + `a.slug as athlete_slug`) -- `auth_sessions` itself only has an
+    `athlete_id` FK. `row["athlete_slug"]` is None for an onboarding
+    session."""
     return AuthSession(
         token_hash=row["token_hash"],
         athlete_slug=row["athlete_slug"],
@@ -580,11 +587,11 @@ class DbStore(StoreInterface):
     # same join pattern `list_week_ids`/`list_workouts`/etc. already use.
 
     def add_allowed_email(
-        self, slug: str, email: str, *, note: str | None = None
+        self, email: str, *, athlete: str | None = None, note: str | None = None
     ) -> AllowedEmail:
         normalized = email.strip().lower()
         with self._connect() as conn, conn.cursor() as cur:
-            athlete_id = self._athlete_id(cur, slug)
+            athlete_id = self._athlete_id(cur, athlete) if athlete is not None else None
             cur.execute(
                 """
                 insert into allowed_emails (email, athlete_id, note)
@@ -598,17 +605,19 @@ class DbStore(StoreInterface):
             )
             row = cur.fetchone()
         return AllowedEmail(
-            email=normalized, athlete_slug=slug, note=note, created_at=row["created_at"]
+            email=normalized, athlete_slug=athlete, note=note, created_at=row["created_at"]
         )
 
     def get_allowed_email(self, email: str) -> AllowedEmail | None:
+        # LEFT JOIN -- a pending/onboarding invite (athlete_id IS NULL) must
+        # still come back, not be silently dropped by an INNER JOIN.
         normalized = email.strip().lower()
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
                 """
                 select ae.email, a.slug as athlete_slug, ae.note, ae.created_at
                 from allowed_emails ae
-                join athletes a on a.athlete_id = ae.athlete_id
+                left join athletes a on a.athlete_id = ae.athlete_id
                 where ae.email = %s
                 """,
                 (normalized,),
@@ -622,7 +631,7 @@ class DbStore(StoreInterface):
                 """
                 select ae.email, a.slug as athlete_slug, ae.note, ae.created_at
                 from allowed_emails ae
-                join athletes a on a.athlete_id = ae.athlete_id
+                left join athletes a on a.athlete_id = ae.athlete_id
                 order by ae.created_at, ae.email
                 """
             )
@@ -638,9 +647,11 @@ class DbStore(StoreInterface):
             row = cur.fetchone()
         return row is not None
 
-    def create_session(self, slug: str, token_hash: str, *, expires_at: datetime) -> AuthSession:
+    def create_session(
+        self, token_hash: str, *, athlete: str | None = None, expires_at: datetime
+    ) -> AuthSession:
         with self._connect() as conn, conn.cursor() as cur:
-            athlete_id = self._athlete_id(cur, slug)
+            athlete_id = self._athlete_id(cur, athlete) if athlete is not None else None
             cur.execute(
                 """
                 insert into auth_sessions (token_hash, athlete_id, expires_at)
@@ -652,20 +663,22 @@ class DbStore(StoreInterface):
             row = cur.fetchone()
         return AuthSession(
             token_hash=token_hash,
-            athlete_slug=slug,
+            athlete_slug=athlete,
             created_at=row["created_at"],
             expires_at=expires_at,
             revoked_at=None,
         )
 
     def get_session(self, token_hash: str) -> AuthSession | None:
+        # LEFT JOIN -- an onboarding session (athlete_id IS NULL) must still
+        # resolve, not be silently dropped by an INNER JOIN.
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
                 """
                 select s.token_hash, a.slug as athlete_slug, s.created_at,
                        s.expires_at, s.revoked_at
                 from auth_sessions s
-                join athletes a on a.athlete_id = s.athlete_id
+                left join athletes a on a.athlete_id = s.athlete_id
                 where s.token_hash = %s
                 """,
                 (token_hash,),

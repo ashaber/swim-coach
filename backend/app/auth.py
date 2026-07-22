@@ -1,16 +1,27 @@
 """Auth: bearer-token dependency, now principal-aware (Slice 1: verified
-identity).
+identity + Slice 1 of self-service onboarding, docs/
+design-self-service-onboarding.md, PR #63).
 
-Two credential kinds resolve through the SAME `Authorization: Bearer
+THREE credential kinds resolve through the SAME `Authorization: Bearer
 <token>` header, so no route's request shape changes:
 
   - the legacy shared `API_TOKEN` (env var, `Settings.token_matches`) --
     resolves to a **service** principal (admin/CLI/sync-job/scripts). Its
     behavior is UNCHANGED from the pre-Slice-1 `require_auth`: it may still
     act as any athlete via `?athlete=`.
-  - a session token minted by `POST /api/auth/google` (`routes/auth.py`),
-    looked up (sha256-hashed) against the `sessions` store methods --
-    resolves to an **athlete** principal, bound to exactly one athlete.
+  - a session token minted by `POST /api/auth/google` (`routes/auth.py`) for
+    an athlete-bound allowlist entry, looked up (sha256-hashed) against the
+    `sessions` store methods -- resolves to an **athlete** principal, bound
+    to exactly one athlete.
+  - a session token minted by the SAME endpoint for a PENDING (self-service
+    onboarding) allowlist entry -- one with no athlete yet -- resolves to an
+    **onboarding** principal, bound to NO athlete. It exists solely so a
+    signed-in-but-not-yet-provisioned person can reach `GET /api/me` (to
+    learn they're in onboarding mode) and, in a later slice, the
+    provisioning endpoint. `resolve_athlete` below 403s it on every
+    athlete-scoped route -- see that function's docstring, this is THE
+    guarantee this principal kind exists to uphold: an onboarding session
+    has no athlete to act as and must never fall through to a default one.
 
 Design note (ROADMAP.md "Auth-lite"): the service-token path is the original
 v1 placeholder for a single-athlete deployment; Phase 3's "retire shared
@@ -57,9 +68,20 @@ class Principal:
     None here -- a service principal isn't bound to one athlete, it may act
     as any (existing CLI/scripts/sync-job behavior, unchanged).
 
-    `kind == "athlete"`: a live session minted by POST /api/auth/google.
-    `athlete` is that session's athlete slug; `expires_at` is carried along
-    so GET /api/me can report it without a second store round-trip.
+    `kind == "athlete"`: a live session minted by POST /api/auth/google for
+    an athlete-bound allowlist entry. `athlete` is that session's athlete
+    slug; `expires_at` is carried along so GET /api/me can report it without
+    a second store round-trip.
+
+    `kind == "onboarding"`: a live session minted by the SAME endpoint for a
+    PENDING allowlist entry (Slice 1 of self-service onboarding -- an email
+    invited before any athlete exists for it). `athlete` is always None
+    here, same as `service`, but the two must never be confused: a service
+    principal may act as ANY athlete via `?athlete=`/`default=`, an
+    onboarding principal may act as NONE -- `resolve_athlete` 403s it
+    unconditionally rather than falling through to a default athlete. This
+    is the load-bearing distinction the whole self-service-onboarding auth
+    foundation exists to make safely.
 
     `token` is the raw bearer token as presented (never the hash) -- kept
     only so `ChatRateLimiter`/`DailyChatLimiter` can key off it; it is never
@@ -67,7 +89,7 @@ class Principal:
     rules).
     """
 
-    kind: Literal["service", "athlete"]
+    kind: Literal["service", "athlete", "onboarding"]
     athlete: str | None
     token: str
     expires_at: datetime | None = None
@@ -104,8 +126,16 @@ async def require_auth(request: Request) -> Principal:
     if session is None or session.revoked_at is not None or session.expires_at <= now:
         raise HTTPException(status_code=401, detail="invalid token")
 
+    # session.athlete_slug is None for an onboarding session (Slice 1 of
+    # self-service onboarding -- a pending allowlist entry with no athlete
+    # yet) -- that resolves to kind="onboarding", never "athlete", so
+    # resolve_athlete's `assert principal.athlete is not None` invariant for
+    # kind="athlete" keeps holding.
+    kind: Literal["athlete", "onboarding"] = (
+        "athlete" if session.athlete_slug is not None else "onboarding"
+    )
     return Principal(
-        kind="athlete",
+        kind=kind,
         athlete=session.athlete_slug,
         token=provided,
         expires_at=session.expires_at,
@@ -128,9 +158,18 @@ def resolve_athlete(principal: Principal, requested: str | None, *, default: str
       DIFFERENT from the session's athlete is a 403 -- the one guarantee
       that must never regress: an athlete session can never read/write
       another athlete's data by changing the query param.
+    - Onboarding principal: ALWAYS a 403, regardless of `requested` (even if
+      omitted, even if it happens to equal `default`). An onboarding session
+      has no athlete to act as -- it must never fall through to `default`
+      the way a service principal's omitted `requested` does. This is the
+      cross-athlete-style guarantee for onboarding sessions: they reach
+      NO athlete-scoped route, ever (see tests/api/test_auth_identity.py's
+      `test_onboarding_session_denied_on_every_scoped_route`).
     """
     if principal.kind == "service":
         return requested if requested is not None else default
+    if principal.kind == "onboarding":
+        raise HTTPException(status_code=403, detail="onboarding session has no athlete")
     if requested is not None and requested != principal.athlete:
         raise HTTPException(status_code=403, detail="athlete mismatch")
     assert principal.athlete is not None  # invariant: every athlete principal has an athlete

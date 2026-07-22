@@ -257,6 +257,45 @@ def test_auth_session_mapping_round_trip_from_joined_row():
     )
 
 
+def test_allowed_email_mapping_tolerates_null_athlete_slug():
+    # A PENDING invite (Slice 1 of self-service onboarding): the LEFT JOIN
+    # DbStore.get_allowed_email/list_allowed_emails use returns
+    # athlete_slug=None instead of dropping the row (an INNER JOIN would).
+    created = datetime(2026, 7, 22, 12, 0, 0, tzinfo=timezone.utc)
+    row = {
+        "email": "pending@example.com",
+        "athlete_slug": None,
+        "note": None,
+        "created_at": created,
+    }
+    entry = row_to_allowed_email(row)
+    assert entry == AllowedEmail(
+        email="pending@example.com", athlete_slug=None, note=None, created_at=created
+    )
+
+
+def test_auth_session_mapping_tolerates_null_athlete_slug():
+    # An ONBOARDING session (Slice 1 of self-service onboarding): same LEFT
+    # JOIN tolerance as the allowed_email mapping above.
+    created = datetime(2026, 7, 22, 12, 0, 0, tzinfo=timezone.utc)
+    expires = datetime(2026, 8, 21, 12, 0, 0, tzinfo=timezone.utc)
+    row = {
+        "token_hash": "onboarding-hash",
+        "athlete_slug": None,
+        "created_at": created,
+        "expires_at": expires,
+        "revoked_at": None,
+    }
+    session = row_to_auth_session(row)
+    assert session == AuthSession(
+        token_hash="onboarding-hash",
+        athlete_slug=None,
+        created_at=created,
+        expires_at=expires,
+        revoked_at=None,
+    )
+
+
 def test_data_column_is_json_serializable_primitives():
     # `data` must be pure JSON types (str/int/float/list/dict/None) so it can
     # go straight into a JSONB column -- no UUID/date objects lurking inside.
