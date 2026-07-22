@@ -1,8 +1,9 @@
 import './fonts.js';
+import { registerSW } from 'virtual:pwa-register';
 import log from './log.js';
 import {
   renderApp, renderLoading, renderError, renderTabBar, renderCoachTab, renderSettingsTab,
-  renderLogTab, renderCheckinTab, renderBackendNeededNotice, renderFeedbackTab,
+  renderLogTab, renderCheckinTab, renderBackendNeededNotice, renderFeedbackTab, renderUpdateBanner,
 } from './views.js';
 import {
   loadChatSession, saveChatSession, clearChatStorage,
@@ -10,7 +11,7 @@ import {
 } from './chat.js';
 import { loadSettings, saveSettings, isConfigured } from './settings.js';
 import {
-  streamChat, testConnection, postWorkout, postWellness, fetchPlan, getAthlete, patchAthlete,
+  streamChat, postWorkout, postWellness, fetchPlan, getAthlete, patchAthlete,
   postFeedback, listFeedback, uploadWorkoutFile, listWorkouts, syncWorkouts, logout,
 } from './api.js';
 import {
@@ -19,6 +20,11 @@ import {
 } from './forms.js';
 import { currentIdentity, signIn, signOut } from './identity.js';
 import { sortWorkoutsNewestFirst, HISTORY_DISPLAY_CAP, formatSyncResult } from './workouts.js';
+import { performSignOut } from './session.js';
+import {
+  createPwaUpdateState, markNeedRefresh, markOfflineReady,
+  dismissNeedRefresh, dismissOfflineReady, triggerUpdate,
+} from './pwaUpdate.js';
 
 const appEl = document.getElementById('app');
 const ACTIVE_TAB_KEY = 'swimcoach_active_tab';
@@ -99,8 +105,11 @@ const state = {
   plan: { status: 'idle', data: null, error: null },
   chat: loadChatSession(initialIdentity?.athlete || SIGNED_OUT_CHAT_KEY),
   settingsForm: loadSettings(),
-  connectionTest: null,
   online: navigator.onLine,
+  // The "new version -- reload" prompt (see src/pwaUpdate.js / views.js's
+  // renderUpdateBanner) -- fed by registerSW()'s onNeedRefresh/onOfflineReady
+  // callbacks at the bottom of this file.
+  pwaUpdate: createPwaUpdateState(),
   logForm: createLogForm(),
   logSubmit: { status: 'idle', message: null },
   logIngest: createLogIngest(),
@@ -131,6 +140,11 @@ const state = {
   feedbackSubmit: { status: 'idle', message: null },
   feedbackEntries: { status: 'idle', data: [] },
 };
+
+// Set once at boot by registerSW() (see the bottom of this file) -- the
+// function it returns, which handleReloadForUpdate calls (via
+// pwaUpdate.js's triggerUpdate) to activate a waiting service worker.
+let updateSW = null;
 
 function athleteSlug() {
   return state.identity?.athlete || null;
@@ -202,8 +216,6 @@ function renderTabContent() {
       });
     case 'settings':
       return renderSettingsTab({
-        baseUrl: state.settingsForm.baseUrl,
-        testStatus: state.connectionTest,
         identity: state.identity,
         identityError: state.identityError,
         backendConfigured,
@@ -223,7 +235,7 @@ function renderTabContent() {
 }
 
 function render() {
-  appEl.innerHTML = `${renderTabContent()}${renderTabBar(state.tab)}`;
+  appEl.innerHTML = `${renderUpdateBanner(state.pwaUpdate)}${renderTabContent()}${renderTabBar(state.tab)}`;
   if (state.tab === 'coach') stickChatScrollToBottom();
   if (state.tab === 'log' && state.workoutChat) stickWorkoutChatScrollToBottom();
   if (state.tab === 'settings' && !state.identity) mountGoogleSignIn();
@@ -299,15 +311,18 @@ function resetToSignedOut({ identityError = null } = {}) {
   saveActiveTab('settings');
 }
 
-function handleSignOut() {
-  const { baseUrl, token } = state.settingsForm;
-  // Best-effort revoke (see api.js's logout doc comment for why it never
-  // throws) -- fired before clearing local state so it still has the token
-  // to send, but not awaited: sign-out is a local action that must complete
-  // immediately regardless of network.
-  if (token) logout({ baseUrl, token });
-  signOut();
-  state.settingsForm = saveSettings({ baseUrl, token: '' });
+/** Revokes the server session (best-effort -- see api.js's `logout` doc
+ * comment for why it never throws), clears the identity, and empties the
+ * stored session token (see session.js's `performSignOut` for the pure,
+ * unit-tested core of this) before resetting every identity-scoped slice of
+ * state and routing back to the sign-in gate. Awaited by the click handler
+ * (see onAppClick's `identity:signout` case) so the revoke call actually
+ * fires before this function returns -- sign-out itself still feels
+ * instant to the athlete since there's nothing else to wait on afterward. */
+async function handleSignOut() {
+  state.settingsForm = await performSignOut({
+    settingsForm: state.settingsForm, logout, saveSettings, signOut,
+  });
   resetToSignedOut();
   log.info('identity.signed_out', {});
   render();
@@ -330,6 +345,28 @@ function handleSessionExpired() {
   state.settingsForm = saveSettings({ baseUrl: state.settingsForm.baseUrl, token: '' });
   resetToSignedOut({ identityError: 'Your session expired -- sign in again.' });
   log.warn('identity.session_expired', {});
+  render();
+}
+
+// --- PWA update prompt ---------------------------------------------------
+// Thin wiring around src/pwaUpdate.js's pure reducers/predicate -- see that
+// module's doc comment for why the state logic lives there instead of here
+// (unit-testable without importing this file's `virtual:pwa-register`
+// import, a Vite build-time-only module). registerSW() itself is called
+// once, at boot, at the bottom of this file.
+
+function handleReloadForUpdate() {
+  log.info('pwa.update_reload', {});
+  triggerUpdate(updateSW);
+}
+
+function handleDismissNeedRefresh() {
+  state.pwaUpdate = dismissNeedRefresh(state.pwaUpdate);
+  render();
+}
+
+function handleDismissOfflineReady() {
+  state.pwaUpdate = dismissOfflineReady(state.pwaUpdate);
   render();
 }
 
@@ -444,47 +481,6 @@ function handleToggleExpertMode(checked) {
 
 function persistChat() {
   saveChatSession(athleteSlug(), state.chat);
-}
-
-// --- Settings tab ------------------------------------------------------------
-
-// Only the backend URL is athlete-editable here now -- the session token
-// (settingsForm.token) is machine-set by handleIdentityResolved/
-// handleSignOut/handleSessionExpired, never typed in (see views.js's
-// renderSettingsTab: the old '#settings-token' paste field is gone). Saving
-// preserves whatever token is already in state rather than reading one from
-// a field that no longer exists.
-function handleSaveSettings() {
-  const baseUrl = document.getElementById('settings-base-url')?.value ?? '';
-  state.settingsForm = saveSettings({ baseUrl, token: state.settingsForm.token });
-  state.connectionTest = null;
-  log.info('settings.saved', { has_base_url: !!state.settingsForm.baseUrl });
-  render();
-  // No eager (re)fetch of the plan here -- setTab('plan') lazily loads it
-  // (or retries a previous error) the moment the Plan tab is actually
-  // visited, so saving Settings from any other tab never fires an
-  // unsolicited /api/plan request. The profile section, though, lives on
-  // this same tab -- becoming "configured" right here is exactly the moment
-  // it should fetch, so maybeLoadProfile() is called explicitly.
-  maybeLoadProfile();
-}
-
-async function handleTestConnection() {
-  // Test whatever base URL is currently in the field (may not be saved
-  // yet), with whatever session token is already signed in -- there's no
-  // token field to read separately anymore (see handleSaveSettings).
-  const baseUrl = (document.getElementById('settings-base-url')?.value ?? '').trim().replace(/\/+$/, '');
-  if (!baseUrl) {
-    state.connectionTest = { ok: false, message: 'Enter a backend URL first.' };
-    render();
-    return;
-  }
-  state.connectionTest = { ok: false, message: 'Testing…', pending: true };
-  render();
-  const result = await testConnection({ baseUrl, token: state.settingsForm.token });
-  log.info('settings.test_connection', { ok: result.ok });
-  state.connectionTest = result;
-  render();
 }
 
 // --- Log tab (workout logging) ------------------------------------------------
@@ -1024,7 +1020,7 @@ function setTab(tab) {
 // render(), so delegation (rather than per-element listeners) is what
 // survives that.
 
-function onAppClick(e) {
+async function onAppClick(e) {
   const el = e.target.closest('[data-a]');
   if (!el) return;
   const action = el.dataset.a;
@@ -1036,8 +1032,6 @@ function onAppClick(e) {
     case 'chat:send': handleSendChat(); break;
     case 'chat:clear': handleClearChat(); break;
     case 'workout-chat:send': handleSendWorkoutChat(); break;
-    case 'settings:save': handleSaveSettings(); break;
-    case 'settings:test': handleTestConnection(); break;
     case 'log:submit': handleSubmitLog(); break;
     case 'sync:start': handleSyncWorkouts(); break;
     case 'log:toggle-manual': handleToggleManualLog(); break;
@@ -1050,7 +1044,13 @@ function onAppClick(e) {
     // so the in-app "back" affordance and a hardware/gesture back press
     // close the detail via the exact same path -- see handlePopState.
     case 'history:back': history.back(); break;
-    case 'identity:signout': handleSignOut(); break;
+    // Awaited (unlike every other handler above) so the server-side revoke
+    // this now does (see performSignOut) actually fires before this handler
+    // returns, rather than being fired-and-forgotten mid-click.
+    case 'identity:signout': await handleSignOut(); break;
+    case 'pwa:reload': handleReloadForUpdate(); break;
+    case 'pwa:dismiss-update': handleDismissNeedRefresh(); break;
+    case 'pwa:dismiss-offline-ready': handleDismissOfflineReady(); break;
     default: break;
   }
 }
@@ -1175,3 +1175,24 @@ maybeLoadProfile();
 if (state.tab === 'log' && shouldLoadHistoryNow()) {
   loadHistory();
 }
+
+// Registers the service worker with an explicit update *prompt* (see
+// vite.config.js's `registerType: 'prompt'`) instead of vite-plugin-pwa's
+// silent 'autoUpdate' -- onNeedRefresh fires once a new build has installed
+// and is waiting to activate; onOfflineReady fires once the first install
+// finishes precaching. Both just fold into state.pwaUpdate (src/pwaUpdate.js)
+// and re-render -- see views.js's renderUpdateBanner for the actual banner,
+// and handleReloadForUpdate/handleDismissNeedRefresh/
+// handleDismissOfflineReady above for the click handlers.
+updateSW = registerSW({
+  onNeedRefresh() {
+    log.info('pwa.need_refresh', {});
+    state.pwaUpdate = markNeedRefresh(state.pwaUpdate);
+    render();
+  },
+  onOfflineReady() {
+    log.info('pwa.offline_ready', {});
+    state.pwaUpdate = markOfflineReady(state.pwaUpdate);
+    render();
+  },
+});

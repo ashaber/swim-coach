@@ -28,7 +28,7 @@ file only covers what's cheap and valuable to check with real browsers:
 import pytest
 from playwright.sync_api import sync_playwright
 
-from conftest import BROWSERS, MOCK_SETTINGS, seed_settings
+from conftest import BROWSERS, MOCK_IDENTITY, MOCK_SETTINGS, seed_settings
 
 # Same CORS-preflight-aware mocking convention as test_coach_chat.py /
 # test_log_checkin.py (see their module docstrings): the mocked backend is a
@@ -49,6 +49,9 @@ def _cors_route(status, content_type, body):
             return
         route.fulfill(status=status, content_type=content_type, body=body, headers=CORS_HEADERS)
     return handler
+
+
+PLAN_STUB = '{"slug":"renee","athlete":{"name":"Renee"},"events":[],"weeks":[],"macro":{"blocks":[]}}'
 
 
 @pytest.fixture(params=BROWSERS)
@@ -196,3 +199,111 @@ def test_unauthorized_email_shows_request_access_and_stays_signed_out(fake_gsi_p
     page.click('[data-a="tab:plan"]')
     page.wait_for_selector('.chat-empty')
     assert 'sign in' in page.content().lower()
+
+
+# --- Sign-out revokes the session (post-login polish, part (a)) -------------
+# Previously handleSignOut only cleared the in-memory identity + GSI
+# auto-select state -- it never told the backend to revoke the session token
+# nor cleared that token from localStorage, so a signed-out-looking app could
+# still have a live, reusable session token sitting in swimcoach_settings.
+# See main.js's handleSignOut / src/session.js's performSignOut.
+
+@pytest.fixture(params=BROWSERS)
+def signed_in_page(request, base_url):
+    """A fresh context that's already signed in AND configured (MOCK_IDENTITY
+    / MOCK_SETTINGS), with the real Google script blocked and the service
+    worker disabled -- this file's own Playwright route interception (for
+    POST /api/auth/logout below) needs to reliably win over the service
+    worker on WebKit, same rationale as test_coach_chat.py's `page` fixture.
+
+    Deliberately seeds localStorage via a one-time `page.evaluate` (after an
+    initial goto) rather than `ctx.add_init_script` (what conftest's
+    seed_identity/seed_settings use) -- an init script re-runs on *every*
+    subsequent navigation in this context, which would silently re-seed the
+    identity this file's own sign-out test below just cleared, the moment it
+    reloads to check that the sign-out survives a reload. See
+    test_mocked_identity_targets_its_own_athlete_on_api_calls above for the
+    same one-time-seed-then-reload pattern applied to identity alone."""
+    cfg = request.param
+    with sync_playwright() as pw:
+        try:
+            browser = getattr(pw, cfg['name']).launch()
+        except Exception as e:
+            pytest.skip(f'{cfg["name"]} unavailable in this environment: {e}')
+        ctx = browser.new_context(viewport=cfg['vp'], service_workers='block')
+        ctx.route('https://accounts.google.com/**', lambda route: route.abort())
+        # Being "configured" means main.js's boot sequence eagerly fires
+        # GET /api/plan (loadPlan, unconditional at boot) and, once the
+        # Settings tab is visited, GET /api/athlete (maybeLoadProfile) --
+        # stub both with harmless CORS-safe responses so those background
+        # fetches don't surface as uncaught access-control errors in WebKit
+        # (this test doesn't care about their content).
+        ctx.route('**/api/plan*', _cors_route(200, 'application/json', PLAN_STUB))
+        ctx.route('**/api/athlete*', _cors_route(200, 'application/json', '{"slug": "renee", "name": "Renee"}'))
+        pg = ctx.new_page()
+        js_errors: list[str] = []
+        pg.on('pageerror', lambda e: js_errors.append(str(e)))
+        pg.goto(base_url)
+        pg.evaluate(
+            "(cfg) => { window.localStorage.setItem('swimcoach_identity', JSON.stringify(cfg.identity)); "
+            "window.localStorage.setItem('swimcoach_settings', JSON.stringify(cfg.settings)); }",
+            {'identity': MOCK_IDENTITY, 'settings': MOCK_SETTINGS},
+        )
+        pg.reload()
+        try:
+            yield pg
+            real_errors = [e for e in js_errors
+                           if 'sw.js load failed' not in e
+                           and 'Importing a module script failed' not in e]
+            assert not real_errors, f'Uncaught JS errors: {real_errors}'
+        finally:
+            ctx.close()
+            browser.close()
+
+
+def test_sign_out_revokes_session_clears_token_and_shows_gate(signed_in_page):
+    page = signed_in_page
+    logout_calls = []
+
+    def logout_handler(route):
+        if route.request.method == 'OPTIONS':
+            route.fulfill(status=204, headers=CORS_HEADERS)
+            return
+        logout_calls.append(route.request.headers.get('authorization'))
+        route.fulfill(status=200, content_type='application/json', body='{"ok": true}', headers=CORS_HEADERS)
+
+    page.route('**/api/auth/logout', logout_handler)
+
+    page.click('[data-a="tab:settings"]')
+    page.wait_for_selector('.settings-wrap')
+    assert 'Signed in as' in page.content()
+
+    page.click('[data-a="identity:signout"]')
+
+    # Back on the sign-in gate -- no identity left in the UI. (Not waiting on
+    # #google-signin-btn itself: the real GSI script is blocked above, so
+    # that placeholder div never gets a button rendered into it and stays at
+    # zero size -- same as test_signed_out_shows_sign_in_gate_not_an_athlete_
+    # default above, which asserts on .settings-wrap + content instead.)
+    page.wait_for_selector('.settings-wrap')
+    page.wait_for_function("() => !document.body.textContent.toLowerCase().includes('signed in as')")
+    assert page.locator('.tab-btn.active').get_attribute('data-a') == 'tab:settings'
+    assert 'signed in as' not in page.content().lower()
+
+    # The server-side revoke actually fired, carrying the session's bearer
+    # token (not e.g. an empty/already-cleared one).
+    assert len(logout_calls) == 1, 'expected sign-out to POST /api/auth/logout to revoke the session'
+    assert logout_calls[0] == f'Bearer {MOCK_SETTINGS["token"]}'
+
+    # The stored token is gone -- not just the in-memory identity.
+    token_after = page.evaluate(
+        "() => JSON.parse(window.localStorage.getItem('swimcoach_settings') || '{}').token",
+    )
+    assert token_after == ''
+
+    # A reload lands back on the sign-in gate with no usable session, rather
+    # than silently restoring a still-live token.
+    page.reload()
+    page.wait_for_selector('.settings-wrap')
+    assert page.locator('.tab-btn.active').get_attribute('data-a') == 'tab:settings'
+    assert 'signed in as' not in page.content().lower()

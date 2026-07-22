@@ -8,7 +8,12 @@ export default defineConfig({
   },
   plugins: [
     VitePWA({
-      registerType: 'autoUpdate',
+      // 'prompt' (not 'autoUpdate') -- an installed PWA must never silently
+      // sit a build behind; main.js wires registerSW's onNeedRefresh to an
+      // explicit "New version -- Reload" banner (see src/pwaUpdate.js /
+      // views.js's renderUpdateBanner) so a deploy actually reaches signed-
+      // in athletes' home-screen installs once they tap it.
+      registerType: 'prompt',
       includeAssets: ['icon-192.png', 'icon-512.png', 'icon-maskable-192.png', 'icon-maskable-512.png'],
       manifest: {
         name: 'swim-coach',
@@ -29,6 +34,18 @@ export default defineConfig({
         ],
       },
       workbox: {
+        // registerType: 'autoUpdate' used to get skipWaiting+clientsClaim
+        // for free (vite-plugin-pwa only auto-sets those for 'autoUpdate');
+        // clientsClaim is set explicitly here so the FIRST-ever install
+        // still immediately controls the tab that triggered it (offline
+        // then works without an extra reload -- see tests/e2e/test_app.py's
+        // test_offline_load_works, which otherwise skips rather than
+        // actually exercising the offline path). skipWaiting is
+        // deliberately left unset/false: that's what makes a real UPDATE
+        // wait in the background until the athlete taps "Reload" (see
+        // main.js's registerSW/onNeedRefresh wiring) instead of activating
+        // (and reloading) out from under them.
+        clientsClaim: true,
         // data/*.json (the exported plan) lands in dist/data/ via public/ and
         // matches this glob (json extension), so it's precached for offline
         // load along with the rest of the app shell. woff2 added for the

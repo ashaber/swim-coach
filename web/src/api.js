@@ -106,8 +106,8 @@ async function safeErrorMessage(response) {
 /**
  * Shared plumbing for the (non-streaming) write/list endpoints below.
  * Normalizes every failure mode (network failure, non-2xx, unparsable body)
- * into `{ ok: false, error }` so callers only ever need one branch -- same
- * convention as `testConnection`. Success returns `{ ok: true, data }`.
+ * into `{ ok: false, error }` so callers only ever need one branch. Success
+ * returns `{ ok: true, data }`.
  */
 async function apiRequest({ baseUrl, token, path, method = 'GET', body }) {
   let response;
@@ -266,24 +266,6 @@ export async function patchAthlete({ baseUrl, token, athlete, payload }) {
   return apiRequest({
     baseUrl, token, path: `/api/athlete?athlete=${encodeURIComponent(athlete)}`, method: 'PATCH', body: payload,
   });
-}
-
-/** GET {baseUrl}/health -- used by the Settings tab's "Test connection". */
-export async function testConnection({ baseUrl, token }) {
-  try {
-    const response = await fetch(`${baseUrl}/health`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-    if (!response.ok) {
-      return { ok: false, message: `Backend responded ${response.status}.` };
-    }
-    const body = await response.json();
-    if (body?.status === 'ok') return { ok: true, message: 'Connected.' };
-    return { ok: false, message: 'Unexpected response from backend.' };
-  } catch (err) {
-    log.error('settings.test_connection_failed', { error: err.message });
-    return { ok: false, message: 'Could not reach that URL.' };
-  }
 }
 
 // --- Google sign-in session exchange -----------------------------------------
