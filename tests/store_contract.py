@@ -496,7 +496,7 @@ class StoreContractTests:
 
     def test_add_and_get_allowed_email(self, store):
         store.save_athlete(_athlete())
-        entry = store.add_allowed_email(SLUG, "Renee@Example.COM", note="beta")
+        entry = store.add_allowed_email("Renee@Example.COM", athlete=SLUG, note="beta")
         assert entry.email == "renee@example.com"  # normalized
         assert entry.athlete_slug == SLUG
         assert entry.note == "beta"
@@ -511,15 +511,17 @@ class StoreContractTests:
 
     def test_add_allowed_email_unknown_athlete_raises(self, store):
         with pytest.raises(FileNotFoundError):
-            store.add_allowed_email("nobody", "someone@example.com")
+            store.add_allowed_email("someone@example.com", athlete="nobody")
 
     def test_add_allowed_email_upserts_by_normalized_email(self, store):
         store.save_athlete(_athlete())
         other = Athlete(id=uuid.uuid4(), slug="other-athlete", name="Other")
         store.save_athlete(other)
 
-        first = store.add_allowed_email(SLUG, "person@example.com", note="first")
-        second = store.add_allowed_email("other-athlete", "PERSON@example.com", note="second")
+        first = store.add_allowed_email("person@example.com", athlete=SLUG, note="first")
+        second = store.add_allowed_email(
+            "PERSON@example.com", athlete="other-athlete", note="second"
+        )
 
         assert second.athlete_slug == "other-athlete"
         assert second.note == "second"
@@ -530,8 +532,8 @@ class StoreContractTests:
 
     def test_list_allowed_emails_sorted_oldest_first(self, store):
         store.save_athlete(_athlete())
-        store.add_allowed_email(SLUG, "b@example.com")
-        store.add_allowed_email(SLUG, "a@example.com")
+        store.add_allowed_email("b@example.com", athlete=SLUG)
+        store.add_allowed_email("a@example.com", athlete=SLUG)
         entries = store.list_allowed_emails()
         assert [e.email for e in entries] == ["b@example.com", "a@example.com"]
 
@@ -541,7 +543,7 @@ class StoreContractTests:
 
     def test_remove_allowed_email(self, store):
         store.save_athlete(_athlete())
-        store.add_allowed_email(SLUG, "gone@example.com")
+        store.add_allowed_email("gone@example.com", athlete=SLUG)
         assert store.remove_allowed_email("GONE@example.com") is True
         assert store.get_allowed_email("gone@example.com") is None
         assert store.list_allowed_emails() == []
@@ -550,12 +552,48 @@ class StoreContractTests:
         store.save_athlete(_athlete())
         assert store.remove_allowed_email("nobody@example.com") is False
 
+    # --- pending / onboarding invites (Slice 1 of self-service onboarding) --
+
+    def test_add_allowed_email_with_no_athlete_creates_pending_invite(self, store):
+        # No store.save_athlete at all -- a pending invite requires NO
+        # athlete to exist yet, that's the whole point.
+        entry = store.add_allowed_email("future.athlete@example.com")
+        assert entry.athlete_slug is None
+        assert entry.email == "future.athlete@example.com"
+
+        found = store.get_allowed_email("future.athlete@example.com")
+        assert found is not None
+        assert found.athlete_slug is None
+
+    def test_pending_invite_appears_in_list_allowed_emails(self, store):
+        store.add_allowed_email("pending@example.com")
+        entries = store.list_allowed_emails()
+        assert len(entries) == 1
+        assert entries[0].athlete_slug is None
+
+    def test_pending_invite_upserts_to_athlete_bound_on_reinvite(self, store):
+        # The state transition IS the upsert -- re-inviting the same
+        # (normalized) email with an athlete now claims it, no separate
+        # "claim" method.
+        store.save_athlete(_athlete())
+        pending = store.add_allowed_email("claim.me@example.com")
+        assert pending.athlete_slug is None
+
+        claimed = store.add_allowed_email("CLAIM.ME@example.com", athlete=SLUG, note="claimed")
+        assert claimed.athlete_slug == SLUG
+        assert claimed.note == "claimed"
+        assert claimed.created_at == pending.created_at
+
+        entries = store.list_allowed_emails()
+        assert len(entries) == 1
+        assert entries[0].athlete_slug == SLUG
+
     # --- sessions (Slice 1: verified identity) ----------------------------
 
     def test_create_and_get_session(self, store):
         store.save_athlete(_athlete())
         expires = datetime(2026, 8, 6, tzinfo=timezone.utc)
-        created = store.create_session(SLUG, "hash-abc123", expires_at=expires)
+        created = store.create_session("hash-abc123", athlete=SLUG, expires_at=expires)
         assert created.athlete_slug == SLUG
         assert created.expires_at == expires
         assert created.revoked_at is None
@@ -573,13 +611,13 @@ class StoreContractTests:
     def test_create_session_unknown_athlete_raises(self, store):
         with pytest.raises(FileNotFoundError):
             store.create_session(
-                "nobody", "hash-xyz", expires_at=datetime(2026, 8, 6, tzinfo=timezone.utc)
+                "hash-xyz", athlete="nobody", expires_at=datetime(2026, 8, 6, tzinfo=timezone.utc)
             )
 
     def test_revoke_session_marks_revoked(self, store):
         store.save_athlete(_athlete())
         store.create_session(
-            SLUG, "hash-revoke-me", expires_at=datetime(2026, 8, 6, tzinfo=timezone.utc)
+            "hash-revoke-me", athlete=SLUG, expires_at=datetime(2026, 8, 6, tzinfo=timezone.utc)
         )
         assert store.revoke_session("hash-revoke-me") is True
         found = store.get_session("hash-revoke-me")
@@ -593,8 +631,23 @@ class StoreContractTests:
     def test_two_sessions_for_same_athlete_are_independent(self, store):
         store.save_athlete(_athlete())
         expires = datetime(2026, 8, 6, tzinfo=timezone.utc)
-        store.create_session(SLUG, "hash-one", expires_at=expires)
-        store.create_session(SLUG, "hash-two", expires_at=expires)
+        store.create_session("hash-one", athlete=SLUG, expires_at=expires)
+        store.create_session("hash-two", athlete=SLUG, expires_at=expires)
         store.revoke_session("hash-one")
         assert store.get_session("hash-one").revoked_at is not None
         assert store.get_session("hash-two").revoked_at is None
+
+    # --- onboarding sessions (Slice 1 of self-service onboarding) ---------
+
+    def test_create_session_with_no_athlete_creates_onboarding_session(self, store):
+        # No store.save_athlete -- an onboarding session requires NO athlete
+        # to exist yet, same as a pending invite.
+        expires = datetime(2026, 8, 6, tzinfo=timezone.utc)
+        created = store.create_session("hash-onboarding", athlete=None, expires_at=expires)
+        assert created.athlete_slug is None
+        assert created.revoked_at is None
+
+        found = store.get_session("hash-onboarding")
+        assert found is not None
+        assert found.athlete_slug is None
+        assert found.expires_at == expires

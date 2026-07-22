@@ -153,14 +153,21 @@ class StoreInterface(ABC):
 
     @abstractmethod
     def add_allowed_email(
-        self, slug: str, email: str, *, note: str | None = None
+        self, email: str, *, athlete: str | None = None, note: str | None = None
     ) -> AllowedEmail:
         """Add (or re-invite -- upsert keyed by normalized email) a beta
-        user. Raises FileNotFoundError if `slug` doesn't match a known
-        athlete (same convention as every other slug-taking method here).
-        `email` is normalized (stripped, lowercased) before storage; a
-        second call with the same email (any casing/whitespace) updates the
-        existing entry's athlete/note rather than creating a duplicate."""
+        user. Raises FileNotFoundError if `athlete` is given and doesn't
+        match a known athlete slug (same convention as every other
+        slug-taking method here). `email` is normalized (stripped,
+        lowercased) before storage; a second call with the same email (any
+        casing/whitespace) updates the existing entry's athlete/note rather
+        than creating a duplicate.
+
+        `athlete=None` (the default) creates a PENDING/onboarding invite --
+        an email allowlisted before any athlete exists for it (Slice 1 of
+        self-service onboarding). Re-inviting the same email later with an
+        `athlete` given upserts it from pending to athlete-bound -- the
+        state transition IS this upsert, no separate "claim" step."""
         ...
 
     @abstractmethod
@@ -183,11 +190,19 @@ class StoreInterface(ABC):
         ...
 
     @abstractmethod
-    def create_session(self, slug: str, token_hash: str, *, expires_at: datetime) -> AuthSession:
+    def create_session(
+        self, token_hash: str, *, athlete: str | None = None, expires_at: datetime
+    ) -> AuthSession:
         """Mint a new session row for an already-verified sign-in. Raises
-        FileNotFoundError if `slug` doesn't match a known athlete.
-        `token_hash` is the sha256 hex digest of the raw session token --
-        the raw token itself is never passed to or stored by the store."""
+        FileNotFoundError if `athlete` is given and doesn't match a known
+        athlete. `token_hash` is the sha256 hex digest of the raw session
+        token -- the raw token itself is never passed to or stored by the
+        store.
+
+        `athlete=None` (the default) mints an ONBOARDING session -- for an
+        allowlisted email with no athlete behind it yet (Slice 1 of
+        self-service onboarding). See `AuthSession.athlete_slug`'s
+        docstring."""
         ...
 
     @abstractmethod
@@ -489,9 +504,10 @@ class FileStore(StoreInterface):
         path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
 
     def add_allowed_email(
-        self, slug: str, email: str, *, note: str | None = None
+        self, email: str, *, athlete: str | None = None, note: str | None = None
     ) -> AllowedEmail:
-        self.load_athlete(slug)  # raises FileNotFoundError if unknown
+        if athlete is not None:
+            self.load_athlete(athlete)  # raises FileNotFoundError if unknown
         normalized = email.strip().lower()
         path = self._allowed_emails_path()
         data = self._read_json_dict(path)
@@ -501,7 +517,9 @@ class FileStore(StoreInterface):
             if existing is not None
             else datetime.now(timezone.utc)
         )
-        entry = AllowedEmail(email=normalized, athlete_slug=slug, note=note, created_at=created_at)
+        entry = AllowedEmail(
+            email=normalized, athlete_slug=athlete, note=note, created_at=created_at
+        )
         data[normalized] = entry.model_dump(mode="json")
         self._write_json_dict(path, data)
         return entry
@@ -530,13 +548,16 @@ class FileStore(StoreInterface):
     def _sessions_path(self) -> Path:
         return self.base_dir / "sessions.json"
 
-    def create_session(self, slug: str, token_hash: str, *, expires_at: datetime) -> AuthSession:
-        self.load_athlete(slug)  # raises FileNotFoundError if unknown
+    def create_session(
+        self, token_hash: str, *, athlete: str | None = None, expires_at: datetime
+    ) -> AuthSession:
+        if athlete is not None:
+            self.load_athlete(athlete)  # raises FileNotFoundError if unknown
         path = self._sessions_path()
         data = self._read_json_dict(path)
         entry = AuthSession(
             token_hash=token_hash,
-            athlete_slug=slug,
+            athlete_slug=athlete,
             created_at=datetime.now(timezone.utc),
             expires_at=expires_at,
             revoked_at=None,

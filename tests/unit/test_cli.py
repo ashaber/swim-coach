@@ -1009,6 +1009,41 @@ def test_revoke_invite_absent_email_errors(athlete_tree, capsys):
     assert "error" in result
 
 
+def test_invite_without_athlete_creates_pending_invite(athlete_tree, capsys):
+    # Slice 1 of self-service onboarding: --athlete is optional. With none
+    # given, no athlete needs to exist -- the invite is PENDING.
+    code = _run(
+        athlete_tree["base_dir"], "invite", "future.athlete@example.com", "--note", "beta wave 2"
+    )
+    assert code == 0
+    result = _out(capsys)
+    assert result["invited"] == "future.athlete@example.com"
+    assert result["athlete"] is None
+    assert result["pending"] is True
+    assert result["note"] == "beta wave 2"
+    entry = athlete_tree["store"].get_allowed_email("future.athlete@example.com")
+    assert entry is not None
+    assert entry.athlete_slug is None
+
+
+def test_list_invites_shows_pending_entry(athlete_tree, capsys):
+    slug = athlete_tree["slug"]
+    _run(athlete_tree["base_dir"], "invite", "bound@example.com", "--athlete", slug)
+    capsys.readouterr()
+    _run(athlete_tree["base_dir"], "invite", "pending@example.com")
+    capsys.readouterr()
+
+    code = _run(athlete_tree["base_dir"], "list-invites")
+    assert code == 0
+    result = _out(capsys)
+    assert result["count"] == 2
+    by_email = {i["email"]: i for i in result["invites"]}
+    assert by_email["bound@example.com"]["athlete"] == slug
+    assert by_email["bound@example.com"]["pending"] is False
+    assert by_email["pending@example.com"]["athlete"] is None
+    assert by_email["pending@example.com"]["pending"] is True
+
+
 # --- invite / list-invites / revoke-invite target DbStore with --database-url --
 
 
@@ -1024,11 +1059,14 @@ class _FakeDbStore:
         self.calls: list[tuple] = []
         _FakeDbStore.instances.append(self)
 
-    def add_allowed_email(self, slug, email, *, note=None):
+    def add_allowed_email(self, email, *, athlete=None, note=None):
         normalized = email.strip().lower()
-        self.calls.append(("add_allowed_email", slug, normalized, note))
+        self.calls.append(("add_allowed_email", athlete, normalized, note))
         return AllowedEmail(
-            email=normalized, athlete_slug=slug, note=note, created_at=datetime.now(timezone.utc)
+            email=normalized,
+            athlete_slug=athlete,
+            note=note,
+            created_at=datetime.now(timezone.utc),
         )
 
     def list_allowed_emails(self):
@@ -1517,11 +1555,14 @@ class _FakeProvisionDbStore:
     def save_week(self, slug, week):
         self.calls.append(("save_week", slug, week.iso_week))
 
-    def add_allowed_email(self, slug, email, *, note=None):
+    def add_allowed_email(self, email, *, athlete=None, note=None):
         normalized = email.strip().lower()
-        self.calls.append(("add_allowed_email", slug, normalized, note))
+        self.calls.append(("add_allowed_email", athlete, normalized, note))
         return AllowedEmail(
-            email=normalized, athlete_slug=slug, note=note, created_at=datetime.now(timezone.utc)
+            email=normalized,
+            athlete_slug=athlete,
+            note=note,
+            created_at=datetime.now(timezone.utc),
         )
 
 

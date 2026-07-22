@@ -706,12 +706,22 @@ def _cmd_invite(args: argparse.Namespace, store: StoreInterface) -> int:
     a code deploy. The email is normalized (stripped/lowercased) by the
     store; a mismatched athlete slug is a clean error, not a traceback.
 
+    `--athlete` is OPTIONAL (Slice 1 of self-service onboarding, see
+    docs/design-self-service-onboarding.md): with no `--athlete`, this
+    creates a PENDING invite -- an allowlisted email with no athlete behind
+    it yet. That person's first Google sign-in mints an onboarding-scoped
+    session (backend/app/routes/auth.py) rather than an athlete session;
+    provisioning the athlete (Slice 2) later upserts this same row from
+    pending to athlete-bound.
+
     `store` is a FileStore unless --database-url/$DATABASE_URL routed this
-    invocation at a DbStore (see `_select_store`) -- against a DbStore, the
-    athlete row must already exist in that database (allowed_emails.athlete_id
-    is a FK to athletes), so this can't provision a brand-new athlete."""
+    invocation at a DbStore (see `_select_store`) -- against a DbStore, a
+    NON-pending invite's athlete row must already exist in that database
+    (allowed_emails.athlete_id is a FK to athletes when set), so a
+    `--athlete`-bound invite still can't provision a brand-new athlete; a
+    pending (`--athlete`-less) invite has no such requirement."""
     try:
-        entry = store.add_allowed_email(args.athlete, args.email, note=args.note)
+        entry = store.add_allowed_email(args.email, athlete=args.athlete, note=args.note)
     except FileNotFoundError:
         return _error(f"no such athlete: {args.athlete}")
     print(
@@ -719,6 +729,7 @@ def _cmd_invite(args: argparse.Namespace, store: StoreInterface) -> int:
             {
                 "invited": entry.email,
                 "athlete": entry.athlete_slug,
+                "pending": entry.athlete_slug is None,
                 "note": entry.note,
                 "created_at": entry.created_at.isoformat(),
             }
@@ -728,7 +739,9 @@ def _cmd_invite(args: argparse.Namespace, store: StoreInterface) -> int:
 
 
 def _cmd_list_invites(args: argparse.Namespace, store: StoreInterface) -> int:
-    """List every allowlisted beta user, oldest-invited first."""
+    """List every allowlisted beta user, oldest-invited first. A PENDING
+    (onboarding) invite -- allowlisted with no athlete yet -- prints
+    `"athlete": null, "pending": true` rather than being omitted."""
     entries = store.list_allowed_emails()
     print(
         json.dumps(
@@ -738,6 +751,7 @@ def _cmd_list_invites(args: argparse.Namespace, store: StoreInterface) -> int:
                     {
                         "email": e.email,
                         "athlete": e.athlete_slug,
+                        "pending": e.athlete_slug is None,
                         "note": e.note,
                         "created_at": e.created_at.isoformat(),
                     }
@@ -1153,7 +1167,15 @@ def build_parser() -> argparse.ArgumentParser:
         "invite", help="allowlist a beta user's Google email (server-side identity)"
     )
     p_invite.add_argument("email", help="the Google account email to allow")
-    p_invite.add_argument("--athlete", required=True, help="athlete slug this email signs in as")
+    p_invite.add_argument(
+        "--athlete",
+        required=False,
+        default=None,
+        help=(
+            "athlete slug this email signs in as; omit for a PENDING "
+            "(self-service onboarding) invite with no athlete yet"
+        ),
+    )
     p_invite.add_argument("--note", help="optional freeform note")
     _add_database_url_arg(p_invite)
 

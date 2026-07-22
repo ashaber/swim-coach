@@ -314,11 +314,19 @@ class AllowedEmail(BaseModel):
     convention (`slug: str` in/out); DbStore's `allowed_emails` table stores
     the FK column (`athlete_id`) underneath and resolves slug<->id at the SQL
     layer via a join, same as `list_feedback`'s `athlete` filter does.
+
+    `athlete_slug is None` (Slice 1 self-service onboarding) means this email
+    was invited BEFORE an athlete exists for it -- a PENDING invite. The
+    `allowed_emails.athlete_id` column is nullable (`supabase/migrations/
+    <onboarding_nullable_athlete>.sql`) precisely so this state is
+    representable; `store.add_allowed_email(email)` with no `athlete` creates
+    one, and re-inviting the same (normalized) email with an `athlete` later
+    upserts it to athlete-bound, same upsert-by-email behavior as always.
     """
 
     schema_version: int = 1
     email: str
-    athlete_slug: str
+    athlete_slug: str | None = None
     note: str | None = None
     created_at: datetime
 
@@ -340,11 +348,19 @@ class AuthSession(BaseModel):
     `Session`/`sessions` -- because those names are already taken by the
     unrelated WeekPlan-session concept (`Session` above, and the RESERVED
     `sessions` table stub in `supabase/migrations/20260706000000_init.sql`).
+
+    `athlete_slug is None` (Slice 1 self-service onboarding) is an
+    ONBOARDING session: minted by `POST /api/auth/google` for an allowlisted
+    email with no athlete behind it yet. `require_auth` (backend/app/auth.py)
+    resolves such a session to a `Principal(kind="onboarding", athlete=None,
+    ...)` -- it can reach `GET /api/me` (so a future frontend can detect
+    onboarding mode) but `resolve_athlete` 403s it on every athlete-scoped
+    route, since it has no athlete to act as.
     """
 
     schema_version: int = 1
     token_hash: str
-    athlete_slug: str
+    athlete_slug: str | None = None
     created_at: datetime
     expires_at: datetime
     revoked_at: datetime | None = None

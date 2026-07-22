@@ -1,22 +1,36 @@
 """POST /api/auth/google + GET /api/me -- verified server-side identity
-(Slice 1 of the auth plan).
+(Slice 1 of the auth plan; also Slice 1 of self-service onboarding, docs/
+design-self-service-onboarding.md, PR #63).
 
-`POST /api/auth/google` is the new front door: it verifies a raw Google ID
+`POST /api/auth/google` is the front door: it verifies a raw Google ID
 token's signature/audience/issuer/expiry (never trusting an unverified
 client-side decode -- see web/src/identity.js's own docstring, "IDENTITY FOR
 UX, NOT A SECURITY BOUNDARY", which this endpoint exists to fix), looks the
 verified email up in the `allowed_emails` store, and on success mints an
-opaque session token bound to that email's athlete. On a non-allowlisted
-email it returns 403 `{"error": "request access"}` -- deliberately no
-session and no athlete row is ever created for an unrecognized email.
+opaque session token. On a non-allowlisted email it returns 403 `{"error":
+"request access"}` -- deliberately no session and no athlete row is ever
+created for an unrecognized email.
+
+TWO outcomes on success, distinguished by whether the allowlist entry has an
+athlete yet:
+  - athlete-bound entry -> ordinary athlete session, `{token, athlete, name,
+    role, expires_at}` (unchanged from before self-service onboarding).
+  - PENDING entry (`allowed.athlete_slug is None` -- invited before any
+    athlete exists for it) -> an ONBOARDING session, `{token, athlete: null,
+    onboarding: true, role: "onboarding", expires_at}`. This session can
+    reach GET /api/me (below) and, in a later slice, the endpoint that
+    provisions the athlete -- `require_auth`/`resolve_athlete`
+    (backend/app/auth.py) 403 it on every existing athlete-scoped route.
 
 `GET /api/me` is what a later frontend PR calls to resolve "who am I" from a
-bearer token -- only meaningful for an athlete-session principal (a service
-credential has no single identity to report).
+bearer token. An onboarding principal gets a 200 (`{onboarding: true,
+athlete: null, ...}`) -- the one read an onboarding session IS allowed, so a
+future frontend can detect onboarding mode -- a service credential still
+gets 403 (no single identity to report).
 
 This module is purely ADDITIVE: nothing here is on the request path of any
-existing route, and no existing behavior changes until an athlete actually
-signs in via Google.
+existing route, and no existing behavior changes for an already-provisioned
+athlete.
 """
 
 from __future__ import annotations
@@ -77,11 +91,28 @@ async def google_sign_in(
         log.info("auth.request_access", email_hash=hash_token(email))
         raise HTTPException(status_code=403, detail="request access")
 
-    athlete = store.load_athlete(allowed.athlete_slug)
-
     raw_token = secrets.token_urlsafe(32)
     expires_at = datetime.now(timezone.utc) + timedelta(days=settings.session_ttl_days)
-    store.create_session(allowed.athlete_slug, hash_token(raw_token), expires_at=expires_at)
+
+    if allowed.athlete_slug is None:
+        # PENDING invite (Slice 1 of self-service onboarding) -- allowlisted
+        # before any athlete exists for it. Mint an onboarding-scoped
+        # session (athlete=None) rather than loading an athlete that doesn't
+        # exist yet. See app/auth.py's Principal(kind="onboarding", ...).
+        store.create_session(hash_token(raw_token), athlete=None, expires_at=expires_at)
+        log.info("auth.onboarding_session_minted", email_hash=hash_token(email))
+        return {
+            "token": raw_token,
+            "athlete": None,
+            "onboarding": True,
+            "role": "onboarding",
+            "expires_at": expires_at.isoformat(),
+        }
+
+    athlete = store.load_athlete(allowed.athlete_slug)
+    store.create_session(
+        hash_token(raw_token), athlete=allowed.athlete_slug, expires_at=expires_at
+    )
 
     log.info("auth.session_minted", athlete=allowed.athlete_slug)
 
@@ -96,6 +127,16 @@ async def google_sign_in(
 
 @router.get("/api/me")
 async def get_me(request: Request, principal: Principal = Depends(require_auth)) -> dict:
+    if principal.kind == "onboarding":
+        # The one read an onboarding session IS allowed -- so a future
+        # frontend can detect "signed in, not yet provisioned" and route to
+        # the onboarding form instead of 403ing.
+        return {
+            "onboarding": True,
+            "athlete": None,
+            "role": "onboarding",
+            "expires_at": principal.expires_at.isoformat() if principal.expires_at else None,
+        }
     if principal.kind != "athlete" or principal.athlete is None:
         # A service credential (the legacy shared API_TOKEN) isn't bound to
         # one athlete -- there's no single identity to report.
