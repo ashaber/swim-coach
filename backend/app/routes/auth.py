@@ -99,7 +99,9 @@ async def google_sign_in(
         # before any athlete exists for it. Mint an onboarding-scoped
         # session (athlete=None) rather than loading an athlete that doesn't
         # exist yet. See app/auth.py's Principal(kind="onboarding", ...).
-        store.create_session(hash_token(raw_token), athlete=None, expires_at=expires_at)
+        store.create_session(
+            hash_token(raw_token), athlete=None, pending_email=email, expires_at=expires_at
+        )
         log.info("auth.onboarding_session_minted", email_hash=hash_token(email))
         return {
             "token": raw_token,

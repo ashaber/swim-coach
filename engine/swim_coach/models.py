@@ -356,11 +356,22 @@ class AuthSession(BaseModel):
     ...)` -- it can reach `GET /api/me` (so a future frontend can detect
     onboarding mode) but `resolve_athlete` 403s it on every athlete-scoped
     route, since it has no athlete to act as.
+
+    `pending_email` (Slice 2 of self-service onboarding, `supabase/
+    migrations/<onboarding_session_email>.sql`) is the verified Google email
+    this session belongs to -- set ONLY for an onboarding session
+    (`athlete_slug is None`); always `None` for an athlete-bound session,
+    which already knows who it is via `athlete_slug`. It's what lets
+    `POST /api/onboard` (backend/app/routes/onboard.py) know which PENDING
+    `allowed_emails` row it's completing without trusting anything the
+    client claims about its own identity -- the email is read off the
+    server-side session, never the request body.
     """
 
     schema_version: int = 1
     token_hash: str
     athlete_slug: str | None = None
+    pending_email: str | None = None
     created_at: datetime
     expires_at: datetime
     revoked_at: datetime | None = None

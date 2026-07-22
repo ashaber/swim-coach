@@ -243,6 +243,7 @@ def test_auth_session_mapping_round_trip_from_joined_row():
     row = {
         "token_hash": "deadbeef",
         "athlete_slug": "tim",
+        "pending_email": None,
         "created_at": created,
         "expires_at": expires,
         "revoked_at": None,
@@ -251,6 +252,7 @@ def test_auth_session_mapping_round_trip_from_joined_row():
     assert session == AuthSession(
         token_hash="deadbeef",
         athlete_slug="tim",
+        pending_email=None,
         created_at=created,
         expires_at=expires,
         revoked_at=None,
@@ -282,6 +284,7 @@ def test_auth_session_mapping_tolerates_null_athlete_slug():
     row = {
         "token_hash": "onboarding-hash",
         "athlete_slug": None,
+        "pending_email": "future.athlete@example.com",
         "created_at": created,
         "expires_at": expires,
         "revoked_at": None,
@@ -290,6 +293,7 @@ def test_auth_session_mapping_tolerates_null_athlete_slug():
     assert session == AuthSession(
         token_hash="onboarding-hash",
         athlete_slug=None,
+        pending_email="future.athlete@example.com",
         created_at=created,
         expires_at=expires,
         revoked_at=None,
