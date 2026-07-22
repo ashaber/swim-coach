@@ -23,6 +23,7 @@ from app.routes.athlete import router as athlete_router
 from app.routes.auth import router as auth_router
 from app.routes.chat import router as chat_router
 from app.routes.feedback import router as feedback_router
+from app.routes.onboard import router as onboard_router
 from app.routes.plan import router as plan_router
 from app.routes.wellness import router as wellness_router
 from app.routes.workouts import router as workouts_router
@@ -92,6 +93,7 @@ def create_app() -> FastAPI:
     app.include_router(athlete_router)
     app.include_router(feedback_router)
     app.include_router(auth_router)
+    app.include_router(onboard_router)
 
     log.info(
         "service start",

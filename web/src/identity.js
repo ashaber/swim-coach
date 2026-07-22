@@ -118,6 +118,17 @@ function loadGsiScript() {
  *     has already been persisted via saveIdentity by then; `token` is the
  *     minted session token, for the caller (main.js) to persist into
  *     settings.js's storage.
+ *   - `{ ok: true, onboarding: true, token }` -- the Google account is
+ *     allowlisted but has no athlete yet (self-service onboarding, see
+ *     backend/app/routes/auth.py's `allowed.athlete_slug is None` branch).
+ *     Deliberately NOT treated as a finished sign-in: nothing is saved via
+ *     saveIdentity (there's no {name, athlete, role} to save -- athlete is
+ *     null), so isConfigured(settings, identity) stays false and the app
+ *     can't mistake this for an ordinary signed-in session. `token` is the
+ *     onboarding-scoped session token; the caller (main.js) persists it and
+ *     switches into onboarding mode so the app shows the onboarding form
+ *     (src/onboarding.js / views.js's renderOnboardingForm) instead of the
+ *     gated tabs.
  *   - `{ ok: false, requestAccess: true, message }` -- the Google account
  *     authenticated fine but isn't allowlisted on the backend yet.
  *   - `{ ok: false, requestAccess: false, message }` -- any other failure
@@ -149,6 +160,16 @@ export async function signIn({ buttonEl, baseUrl, onIdentity } = {}) {
     callback: async (response) => {
       try {
         const session = await exchangeGoogleToken({ baseUrl, idToken: response.credential });
+        if (session.onboarding) {
+          // Allowlisted, no athlete yet -- see this function's doc comment's
+          // second onIdentity outcome. Never saveIdentity here: there's no
+          // real {name, athlete, role} to persist, and doing so would make
+          // isConfigured() falsely report this onboarding-only session as a
+          // fully signed-in athlete.
+          log.info('identity.onboarding_session', {});
+          onIdentity?.({ ok: true, onboarding: true, token: session.token });
+          return;
+        }
         const identity = { name: session.name, athlete: session.athlete, role: session.role };
         saveIdentity(identity);
         log.info('identity.sign_in_success', { athlete: identity.athlete, role: identity.role });

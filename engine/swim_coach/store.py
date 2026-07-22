@@ -191,7 +191,12 @@ class StoreInterface(ABC):
 
     @abstractmethod
     def create_session(
-        self, token_hash: str, *, athlete: str | None = None, expires_at: datetime
+        self,
+        token_hash: str,
+        *,
+        athlete: str | None = None,
+        pending_email: str | None = None,
+        expires_at: datetime,
     ) -> AuthSession:
         """Mint a new session row for an already-verified sign-in. Raises
         FileNotFoundError if `athlete` is given and doesn't match a known
@@ -202,6 +207,9 @@ class StoreInterface(ABC):
         `athlete=None` (the default) mints an ONBOARDING session -- for an
         allowlisted email with no athlete behind it yet (Slice 1 of
         self-service onboarding). See `AuthSession.athlete_slug`'s
+        docstring. `pending_email` (Slice 2 of self-service onboarding) is
+        the verified email that onboarding session belongs to -- callers pass
+        it only when `athlete` is None; see `AuthSession.pending_email`'s
         docstring."""
         ...
 
@@ -549,7 +557,12 @@ class FileStore(StoreInterface):
         return self.base_dir / "sessions.json"
 
     def create_session(
-        self, token_hash: str, *, athlete: str | None = None, expires_at: datetime
+        self,
+        token_hash: str,
+        *,
+        athlete: str | None = None,
+        pending_email: str | None = None,
+        expires_at: datetime,
     ) -> AuthSession:
         if athlete is not None:
             self.load_athlete(athlete)  # raises FileNotFoundError if unknown
@@ -558,6 +571,7 @@ class FileStore(StoreInterface):
         entry = AuthSession(
             token_hash=token_hash,
             athlete_slug=athlete,
+            pending_email=pending_email,
             created_at=datetime.now(timezone.utc),
             expires_at=expires_at,
             revoked_at=None,

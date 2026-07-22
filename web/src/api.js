@@ -329,6 +329,94 @@ export async function exchangeGoogleToken({ baseUrl, idToken }) {
   }
 }
 
+// --- Self-service onboarding (Slice 3) --------------------------------------
+// POST /api/onboard -- backend/app/routes/onboard.py. Only an ONBOARDING-
+// scoped session (minted by exchangeGoogleToken's `{onboarding: true}`
+// branch, see identity.js) can call this; it turns the onboarding form's
+// hard-data payload into a brand-new athlete and, on success, upgrades the
+// caller to an ordinary athlete-bound session token in one round trip.
+//
+// Throws instead of returning `{ok, ...}` -- same rationale as
+// exchangeGoogleToken above: main.js's handleOnboardSubmit wants
+// distinguishable failure modes (`instanceof OnboardForbiddenError` for a
+// dead/invalid onboarding session, `instanceof OnboardConflictError` for a
+// name/slug that's already taken) rather than just a status code to switch
+// on. Every thrown error also carries a `.status` (mirroring apiRequest's
+// `result.status`) so main.js can single out a 401 (session expired) the
+// same way handleUnauthorized does for every other endpoint, without a
+// fourth error subclass just for that one case.
+
+/** Thrown by `onboard` on a 403 -- the bearer token isn't (or is no longer)
+ * a live onboarding session: the invite backing it was revoked, or this
+ * route was called with an already-athlete-bound token (see onboard.py's
+ * two distinct 403 branches; both collapse to this one error class since
+ * the frontend's response is the same either way -- the form can't proceed
+ * with this session). */
+export class OnboardForbiddenError extends Error {}
+
+/** Thrown by `onboard` on a 409 -- either this invite already completed
+ * onboarding (e.g. a second tab), or the chosen/derived athlete slug
+ * collides with an existing athlete. The message (from the backend body)
+ * tells them which. */
+export class OnboardConflictError extends Error {}
+
+/**
+ * POST {baseUrl}/api/onboard with the onboarding form's payload (see
+ * src/onboarding.js's `onboardPayloadFromForm`, which mirrors
+ * backend/app/routes/onboard.py's `OnboardRequest` field-for-field).
+ * Resolves with the raw `{token, athlete, name, role, expires_at}` JSON on
+ * success -- the same athlete-bound session shape `exchangeGoogleToken`'s
+ * ordinary branch returns, so main.js swaps tokens/identity the same way
+ * either path produces one.
+ */
+export async function onboard({ baseUrl, token, payload }) {
+  let response;
+  try {
+    response = await fetch(`${baseUrl}/api/onboard`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    log.error('onboard.request_failed', { error: err.message });
+    throw new Error('Could not reach the coach backend. Check your connection and try again.');
+  }
+
+  if (response.status === 403) {
+    const message = await safeErrorMessage(response);
+    log.error('onboard.forbidden', { error: message });
+    const err = new OnboardForbiddenError(message || 'This session can no longer complete onboarding.');
+    err.status = 403;
+    throw err;
+  }
+
+  if (response.status === 409) {
+    const message = await safeErrorMessage(response);
+    log.warn('onboard.conflict', { error: message });
+    const err = new OnboardConflictError(message || 'That invite or athlete name is already in use.');
+    err.status = 409;
+    throw err;
+  }
+
+  if (!response.ok) {
+    const message = await safeErrorMessage(response);
+    log.error('onboard.rejected', { status: response.status, error: message });
+    const err = new Error(message);
+    err.status = response.status;
+    throw err;
+  }
+
+  try {
+    return await response.json();
+  } catch (err) {
+    log.error('onboard.parse_failed', { error: err.message });
+    throw new Error('Unexpected response from backend.');
+  }
+}
+
 /**
  * POST {baseUrl}/api/auth/logout -- revokes the session token so it 401s on
  * every subsequent request (see backend/app/routes/auth.py's logout route).

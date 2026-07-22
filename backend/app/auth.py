@@ -87,12 +87,22 @@ class Principal:
     only so `ChatRateLimiter`/`DailyChatLimiter` can key off it; it is never
     logged (see module docstring of the old auth.py and CLAUDE.md's logging
     rules).
+
+    `pending_email` (Slice 2 of self-service onboarding) is set ONLY for
+    `kind == "onboarding"` -- the verified Google email that session's
+    underlying `auth_sessions.pending_email` column carries (see
+    `swim_coach.models.AuthSession.pending_email`'s docstring). It's how
+    `POST /api/onboard` (routes/onboard.py) knows which PENDING
+    `allowed_emails` row it's completing without trusting anything the
+    request body claims -- the email comes from the server-side session,
+    never the client. Always `None` for `service`/`athlete` principals.
     """
 
     kind: Literal["service", "athlete", "onboarding"]
     athlete: str | None
     token: str
     expires_at: datetime | None = None
+    pending_email: str | None = None
 
 
 async def require_auth(request: Request) -> Principal:
@@ -139,6 +149,9 @@ async def require_auth(request: Request) -> Principal:
         athlete=session.athlete_slug,
         token=provided,
         expires_at=session.expires_at,
+        # Only ever set (and only ever meaningful) for an onboarding
+        # session -- see Principal.pending_email's docstring.
+        pending_email=session.pending_email if kind == "onboarding" else None,
     )
 
 
