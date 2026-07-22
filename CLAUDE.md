@@ -2,7 +2,7 @@
 
 AI coaching system + PWA for ultra-distance open-water swimmers. First athlete: Andrew's wife (slug chosen at onboarding).
 
-**The full approved plan is in `ROADMAP.md` — read it before doing anything.** Current status: Phase 1, nothing built yet. Start at "Phase 1 build order", Day 1, and work test-first (write the failing test, then the code).
+**The full approved plan is in `ROADMAP.md` — read it before doing anything.** Current status: the engine, FastAPI backend, PWA, and per-user Google auth are built and deployed (three athletes live). See ROADMAP's "Status & current roadmap" section for what's shipped and what's next. Still work test-first (write the failing test, then the code).
 
 ## Standing rules (from the approved plan)
 - Deterministic Python engine (`engine/swim_coach/`) owns ALL plan math — zones, load, progression, adaptation. Agent sessions call `python -m swim_coach.cli ...` and apply judgment; never hand-compute zones/loads/volumes in chat.
