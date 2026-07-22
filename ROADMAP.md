@@ -14,46 +14,33 @@ Andrew is building a coaching system for open-water swimmers training for ultra-
 
 ---
 
-## Status & current roadmap (updated 2026-07-06)
+## Status & current roadmap (updated 2026-07-22)
 
 The sections from "Phase 1" down are the original approved build plan, kept as the build record. This section is the live status and the near-term direction.
 
 ### Done — shipped and live
 
-- **Phase 1 engine (Days 1–4): complete.** `engine/swim_coach/` owns all plan math — models/store (YAML `FileStore` behind a swappable interface), CSS zones + open-water pace inference, macro scaffold + weekly generation, sRPE/ACWR/monotony load, deterministic adaptation rules, `.fit`/`.tcx`/`.csv` + coach-text parsers, and the `cli` (validate/zones/scaffold-macro/plan-week/ingest/parse-coach-text/summarize/adapt). Skills wired: `/onboard-athlete /plan-week /log-workout /check-in /adapt /coach`. Library files 00/INDEX/03–06 ground the engine constants; citations are title-only (fabricated URLs/IDs stripped). Test suite green.
-- **Renee onboarded.** `athletes/renee/`: profile (CSS 1:30/100m, M/W/F USMS pool, Oura HRV), events (Greece UltraSwim 33.3 — single-day 33.3k, Sep 18 2026; Bear Lake Monster 10K B-race, Jul 18 2026), macro toward Greece, W28/W29 hand-tuned around the Thu 7/9 Lucky Peak 5-hour swim. `event_format` is a first-class parameter (single-day ↔ 4-day stage switchable by mid-Aug; a second event in Dec is TBD format).
-- **Phase 2 coach chat: LIVE.** FastAPI backend on GCP Cloud Run (scale-to-zero), model `claude-opus-4-8`, adaptive thinking, prompt-cached stable prefix, SSE streaming, bearer auth + CORS + rate limit. The coach grounds in library + plan + engine `summarize` and can call `/adapt` as a tool; IDEA 005 "I don't know" + research-question logging + expert-mode. **Backend:** https://swim-coach-api-445273334913.us-central1.run.app — **PWA:** https://ashaber.github.io/swim-coach/ (tabs Plan / Coach / Settings; Settings pre-defaults the backend URL so the athlete only pastes her token). Secrets in GCP Secret Manager; the image is secret-free. Verified end-to-end with a real grounded response.
+- **Phase 1 engine: complete.** `engine/swim_coach/` owns all plan math — models/store (YAML `FileStore` behind a swappable `StoreInterface`), CSS zones + open-water pace inference, macro scaffold + weekly generation, sRPE/ACWR/monotony load, deterministic adaptation rules, `.fit`/`.tcx`/`.csv` + coach-text parsers, `.fit` time-series analytics (cardiac drift, split, pause detection, SWOLF), and the `cli` (validate/zones/scaffold-macro/plan-week/ingest/analyze/parse-coach-text/summarize/adapt/onboard/invite/review-queue/…). Skills wired: `/onboard-athlete /plan-week /log-workout /check-in /adapt /coach`. Library evidence discipline is CI-enforced (`ci/library-evidence-gate`, merged). Test suite green.
+- **Three athletes onboarded and live:** `renee` (primary, Greece UltraSwim 33.3 target), plus `andrew` and `tim`.
+- **Phase 2 coach chat: LIVE.** FastAPI backend on GCP Cloud Run (scale-to-zero), model `claude-sonnet-5`, adaptive thinking, prompt-cached stable prefix, SSE streaming, per-athlete rate limit + daily chat cap. The coach grounds in library + plan + engine `summarize`, can call `/adapt` and an on-demand intervals.icu sync as tools, and reads/writes the athlete's own profile and workout history. **Backend:** https://swim-coach-api-445273334913.us-central1.run.app — **PWA:** https://ashaber.github.io/swim-coach/ (tabs Plan / Log / Check-in / Coach / Feedback / Settings, bioluminescent-dusk theme, offline-first with a "new version" reload prompt). Secrets in GCP Secret Manager; the image is secret-free.
+- **Per-user Google login (server-verified identity).** `POST /api/auth/google` verifies a raw Google ID token server-side and mints a session bound to an athlete via the `allowed_emails` allowlist — now the sole identity source of truth. The old client-side `EMAIL_IDENTITY_MAP` and the paste-a-shared-token Settings flow are gone; the PWA's Settings tab is just Google sign-in / sign-out. `GET /api/me`, `POST /api/auth/logout` (revokes the session), and `resolve_athlete` enforce that an athlete session can never read/write another athlete's data (403 on mismatch). The legacy shared `API_TOKEN` still works as a service credential (CLI/scripts/sync job).
+- **DB-backed store cutover: done.** The deployed backend runs `STORE_BACKEND=db` — Supabase/Postgres, not the repo's `athletes/` file tree — so a logged workout or check-in reaches the live coach immediately, with no redeploy. Migrations in `supabase/migrations/` are applied manually; the `db` CI job only validates them against a throwaway Postgres and runs the `DbStore` contract suite.
+- **DB-native athlete provisioning.** `cli onboard` (issue #61 "Tier C") provisions a brand-new athlete — profile, zones, macro scaffold, first week, allowlist entry — straight to the prod DB in one idempotent command, via the reusable `engine/swim_coach/provision.py::provision_athlete`. `invite`/`list-invites`/`revoke-invite` are DB-capable via `--database-url`/`$DATABASE_URL` too. Still requires a locally-authored, uncommitted `profile.yaml` — **not** fully file-free yet (see Now/Next).
+- **Fit-file analytics + workout history UI.** `.fit`/`.tcx`/`.csv` upload from the PWA's Log tab, intervals.icu → Garmin auto-sync (scheduled job + on-demand coach tool + Log tab button), workout history with per-workout analytics detail, and chat scoped to an opened workout.
+- **Library review-queue tooling.** `cli review-queue`/`review-accept` (PR #50) surfaces every `UNREVIEWED`-marked claim for human sign-off without hand-grepping the library.
 
-### Now — simmer on real usage (~days to a couple of weeks)
+### Now / Next
 
-Load real data and let the system run before building more. Goal: real inputs into the coach + first genuine `/adapt`, and honest feedback on the UX.
-
-- Log Renee's real swims (Mon 2–3 hr, Thu 5 hr Lucky Peak, and pool-coach texts) via `/log-workout`; capture wellness via `/check-in`.
-- Run the first real `/adapt` off real data (not hand-tuned weeks).
-- Get Renee actually using the PWA (share URL + token; single-athlete / single-token for now) and collect what's confusing, wrong, or missing.
-- **Known limitation to work around during the simmer:** the live backend reads the `athletes/` tree baked into the image at deploy time. Logging a workout to the repo updates the **Plan** tab on the next Pages deploy, but the **coach chat** won't see it until the backend is redeployed. Redeploy after a data load when the coach needs current data. Phase 2.5 removes this limitation.
-
-### Phase 2.5 — Supabase/DB layer, built during the simmer (careful, non-disruptive)
-
-Build the database while the system simmers, without disrupting Renee's live usage. This also fixes the data-freshness limitation above: the coach and PWA read **live** data instead of a baked snapshot.
-
-- **Behind the existing seam.** Add `DbStore` implementing the same interface as `FileStore` (the seam built in Phase 1). `FileStore` keeps working throughout — no rewrite, a packaging change.
-- **Supabase, managed** (per the architecture principles — do not self-host Postgres). psycopg3 against the transaction pooler; explicit SQL migrations in `supabase/migrations/`. Tables per the Phase 2 plan below (athletes, events, macro/week plans, sessions, workouts, coach_texts, wellness, chat_messages, uploaded_files — UUID PKs, `athlete_id` FK, timestamps, `schema_version`). RLS deferred (service-role from backend) until real auth in Phase 3.
-- **Migrate cautiously.** One-shot `scripts/migrate_files_to_db.py` copies the current file tree → Supabase; the file tree stays as archive/source-of-truth until the DB is validated. Shadow/dual-read to compare before cutover. Cut the backend over to `DbStore` behind a config flag so rollback is instant; do the cutover during low usage. The PWA and coach stay up the whole time.
-- **Payoff:** logged workouts and check-ins reach the live coach with no redeploy, and multi-athlete becomes structurally possible.
-
-### UI design pass (parallelizable — optional, candidate now)
-
-A Claude design pass to tighten the PWA UI. Low-risk and independent of the DB work, so it can run alongside the simmer.
-
-- Design pass on the existing tabs: visual system, spacing, mobile polish, both light/dark themes — consistent with the hosted plan-artifact design language.
-- Fill in the remaining IDEA 003 tabs as the data endpoints land (Daily Check-in → wellness; Load workout → workout-log; Library; Athlete/Settings).
-- Dragonfly branding (IDEA 001): logo + PWA icons.
+- **Self-service in-app onboarding.** Design is done (`docs/design-self-service-onboarding.md`, PR #63) — replacing admin-run `cli onboard` with an invited user signing in, entering their own hard data, and being provisioned via the same `provision_athlete`. Not implemented; the doc lays out a 4-slice build (schema change for a pending/no-athlete-yet session, the `POST /api/onboarding/provision` endpoint, the frontend wizard, then optional chat-assisted param extraction).
+- **Fully file-free `cli onboard`.** Today's `onboard` still requires `--profile <uncommitted-yaml>` (see README's "Onboarding a new athlete" honesty note) — accepting profile fields as CLI flags directly (or superseding this with the in-app wizard above) is the remaining step to "no files at all."
+- **Exception-specificity refactor (issue #60, open, tech debt).** Audit broad `except Exception` catches above the CLI boundary (flagged: `backend/app/auth.py`'s `require_auth` session-lookup catch) and narrow them to specific exception types where a caller could meaningfully handle the error differently.
+- **Library-evidence CI gate follow-up.** The gate itself is merged (`ci/library-evidence-gate`); two branches with findings from applying it — `library/fix-05-tag` (retag a library/05 claim, empty the gate allowlists) and `library/close-gate-findings` (missing `Test:` lines, document the confidence scale) — are preserved unmerged and need a rebase onto current `main` before they can ship as PRs.
+- **UI design pass.** Ongoing/parallelizable — visual system, spacing, mobile polish (bioluminescent-dusk theme shipped; further polish as remaining tabs mature).
 
 ### Phase 3 — later (unchanged in intent)
 
-**Ingest: intervals.icu pull (Garmin push partner) — built.** Both athletes
-already have Garmin-connected intervals.icu accounts; a Cloud Run scheduled
+**Ingest: intervals.icu pull (Garmin push partner) — built.** Garmin-connected
+athletes have intervals.icu accounts; a Cloud Run scheduled
 job (`backend/app/sync.py`) pulls each athlete's trailing-14-day activity
 list via their personal intervals.icu API key and downloads the *original*
 device `.fit` (never intervals.icu's lossy `/fit-file` re-encode — see
@@ -65,7 +52,7 @@ basics; **`garminconnect`/`garth`** (unofficial) — ToS-gray and requires
 storing real Garmin credentials, kept as the documented fallback only if
 intervals.icu's FIT proxying ever starts losing frames.
 
-Supabase Auth magic-link + RLS, retiring the shared bearer token; PWA onboarding wizard (CSS-test) + per-athlete spend caps; multi-swimmer onboarding — design proposal in `docs/design-self-service-onboarding.md`.
+**Per-user auth — done, via Google sign-in, not Supabase Auth magic-link as originally sketched here** (see "Done" above); per-athlete spend caps also shipped (`CHAT_DAILY_CAP_PER_ATHLETE`). Still open: retiring the legacy shared `API_TOKEN` service credential entirely, real per-athlete RLS in Supabase (currently service-role-only from the backend), and self-service multi-swimmer onboarding — design proposal in `docs/design-self-service-onboarding.md` (PR #63; see "Now / Next" above).
 
 ### PROPOSED — feedback-triggered library research loop (design only, not yet built)
 
