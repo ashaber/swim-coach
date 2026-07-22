@@ -1035,15 +1035,15 @@ export function renderFeedbackTab({
 // --- Settings tab ------------------------------------------------------------
 
 export function renderSettingsTab({
-  baseUrl, testStatus, identity, identityError, backendConfigured, profileForm, profileLoad, profileSubmit,
+  identity, identityError, backendConfigured, profileForm, profileLoad, profileSubmit,
 }) {
   return `
     <div class="wrap settings-wrap">
       <header class="mast" style="border-bottom:none;padding-bottom:0;">
         <div>
           <span class="mark">swim-coach · settings</span>
-          <h1>Backend connection</h1>
-          <p class="sub">Point the app at your coach-chat backend.</p>
+          <h1>Settings</h1>
+          <p class="sub">Sign in with your Google account to load your plan.</p>
         </div>
       </header>
       <div class="panel settings-panel">
@@ -1057,18 +1057,37 @@ export function renderSettingsTab({
         <div id="google-signin-btn"></div>
         ${identityError ? `<div class="conn-result fail">${esc(identityError)}</div>` : ''}`}
       </div>
-      <div class="panel settings-panel">
-        <label class="field">
-          <span>Backend URL</span>
-          <input type="url" id="settings-base-url" placeholder="https://coach-api.example.com" value="${esc(baseUrl)}" inputmode="url" autocomplete="off" spellcheck="false">
-        </label>
-        <p class="field-hint">Stored only in this browser's local storage.</p>
-        <div class="settings-actions">
-          <button type="button" class="btn" data-a="settings:save">Save</button>
-          <button type="button" class="btn-ghost" data-a="settings:test">Test connection</button>
-        </div>
-        ${testStatus ? `<div class="conn-result ${testStatus.ok ? 'ok' : 'fail'}">${esc(testStatus.message)}</div>` : ''}
-      </div>
       ${backendConfigured ? renderProfilePanel({ form: profileForm, load: profileLoad, submit: profileSubmit }) : ''}
     </div>`;
+}
+
+// --- PWA update prompt -------------------------------------------------------
+// Renders from state.pwaUpdate (see src/pwaUpdate.js's pure reducers/
+// predicates, which main.js's thin `virtual:pwa-register` wiring feeds) --
+// prepended to every render() regardless of the active tab, same convention
+// as the always-present #offline-banner in index.html, except this one goes
+// through the normal state->render pipeline (so it's unit-testable here)
+// instead of a static DOM node toggled by class.
+
+export function renderUpdateBanner({ needRefresh, needRefreshDismissed, offlineReady, offlineReadyDismissed } = {}) {
+  const showReload = !!needRefresh && !needRefreshDismissed;
+  if (showReload) {
+    return `
+      <div class="update-banner" role="status">
+        <span>New version available.</span>
+        <div class="update-banner-actions">
+          <button type="button" class="btn" data-a="pwa:reload">Reload</button>
+          <button type="button" class="update-banner-dismiss" data-a="pwa:dismiss-update" aria-label="Dismiss">&times;</button>
+        </div>
+      </div>`;
+  }
+  const showOfflineReady = !!offlineReady && !offlineReadyDismissed;
+  if (showOfflineReady) {
+    return `
+      <div class="update-banner update-banner-subtle" role="status">
+        <span>Ready to work offline.</span>
+        <button type="button" class="update-banner-dismiss" data-a="pwa:dismiss-offline-ready" aria-label="Dismiss">&times;</button>
+      </div>`;
+  }
+  return '';
 }

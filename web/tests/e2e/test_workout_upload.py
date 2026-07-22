@@ -28,6 +28,8 @@ CORS_HEADERS = {
     'Access-Control-Allow-Headers': 'Authorization, Content-Type',
 }
 
+PLAN_STUB = '{"slug":"renee","athlete":{"name":"Renee"},"events":[],"weeks":[],"macro":{"blocks":[]}}'
+
 
 def _cors_route(status, content_type, body):
     def handler(route):
@@ -66,6 +68,13 @@ def page(request, base_url):
             '**/api/athlete*',
             _cors_route(200, 'application/json', '{"slug": "renee", "name": "Renee"}'),
         )
+        # Becoming "configured" (see _configure_backend) makes main.js's
+        # boot sequence eagerly fire GET /api/plan (loadPlan, unconditional
+        # at boot regardless of active tab) -- unmocked, that fetch fails
+        # against this file's fake backend origin and WebKit surfaces it as
+        # an uncaught pageerror that trips this fixture's teardown
+        # assertion. This file doesn't care about the plan's content.
+        ctx.route('**/api/plan*', _cors_route(200, 'application/json', PLAN_STUB))
         ctx.route(
             '**/api/workouts*',
             _cors_route(200, 'application/json', '[]'),
@@ -86,24 +95,29 @@ def page(request, base_url):
 
 
 def _configure_backend(page, base_url=BASE_URL, token=TOKEN):
-    """The '#settings-token' paste field is gone -- session tokens now come
-    only from a real Google sign-in exchange (see identity.js's signIn /
-    api.js's exchangeGoogleToken), which these tests don't drive (no real
-    Google script). Seeds the session token directly into localStorage the
-    way a real exchange would leave it (`version` stamped to match
-    settings.js's SETTINGS_SCHEMA_VERSION, or loadSettings() would treat it
-    as a stale pre-cutover value and drop it), then reloads and drives the
-    real Settings UI for the base URL + Save button, same as before."""
+    """The backend-URL/test-connection panel is gone from Settings (paste-
+    token-era leftover -- baseUrl now always defaults to prod internally,
+    see settings.js's DEFAULT_BASE_URL, with no UI to edit it). Seeds both
+    baseUrl and the session token directly into localStorage the way
+    settings.js's own storage schema expects (`version` stamped to match
+    SETTINGS_SCHEMA_VERSION, or loadSettings() would treat it as a stale
+    pre-cutover value and drop the token), then reloads so main.js's boot
+    picks it up -- the same pattern conftest.py's own seed_settings
+    init-script helper uses, just applied mid-test via page.evaluate instead
+    of before the first page load."""
     page.evaluate(
-        "(t) => window.localStorage.setItem("
-        "'swimcoach_settings', JSON.stringify({baseUrl: '', token: t, version: 2}))",
-        token,
+        "(cfg) => window.localStorage.setItem("
+        "'swimcoach_settings', JSON.stringify({baseUrl: cfg.baseUrl, token: cfg.token, version: 2}))",
+        {'baseUrl': base_url, 'token': token},
     )
     page.reload()
+    # Always ends on the Settings tab -- same invariant the old
+    # base-url-fill-and-save flow had (it necessarily drove the
+    # Settings UI to save), which several tests below rely on (e.g.
+    # the profile-edit section only renders on this tab, and
+    # visiting it is what triggers main.js's maybeLoadProfile()).
     page.click('[data-a="tab:settings"]')
-    page.wait_for_selector('#settings-base-url')
-    page.fill('#settings-base-url', base_url)
-    page.click('[data-a="settings:save"]')
+    page.wait_for_selector('.settings-wrap')
 
 
 def _open_log_tab(page):

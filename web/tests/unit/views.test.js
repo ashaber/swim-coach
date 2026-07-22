@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { renderHistorySection, renderLogTab } from '../../src/views.js';
+import {
+  renderHistorySection, renderLogTab, renderSettingsTab, renderUpdateBanner,
+} from '../../src/views.js';
 
 // Real fixture workouts from the task brief -- andrew's 2026-07-09
 // cross_train (analytics-rich, no distance/pace since it's not a swim) and
@@ -415,5 +417,90 @@ describe('renderLogTab', () => {
     expect(html).toContain('data-a="log:file-select"');
     expect(html).toContain('data-form="log" data-field="date"');
     expect(html).toContain('Hide manual entry');
+  });
+});
+
+describe('renderSettingsTab', () => {
+  const baseArgs = {
+    identity: null,
+    identityError: null,
+    backendConfigured: false,
+    profileForm: {},
+    profileLoad: { status: 'idle', error: null },
+    profileSubmit: { status: 'idle', message: null },
+  };
+
+  it('shows the Google sign-in button when signed out, with no backend-URL panel', () => {
+    const html = renderSettingsTab(baseArgs);
+    expect(html).toContain('google-signin-btn');
+    // The paste-token-era backend-URL + Test-connection panel is gone --
+    // this is the leftover this build removes (see CLAUDE.md's DOD).
+    expect(html).not.toContain('settings-base-url');
+    expect(html).not.toContain('data-a="settings:save"');
+    expect(html).not.toContain('data-a="settings:test"');
+    expect(html).not.toContain('Backend URL');
+  });
+
+  it('shows the signed-in identity and a Sign out button once signed in', () => {
+    const html = renderSettingsTab({
+      ...baseArgs,
+      identity: { name: 'Renee', athlete: 'renee', role: 'athlete' },
+    });
+    expect(html).toContain('Signed in as');
+    expect(html).toContain('data-a="identity:signout"');
+    expect(html).not.toContain('settings-base-url');
+  });
+
+  it('shows the identity error message when sign-in was rejected', () => {
+    const html = renderSettingsTab({ ...baseArgs, identityError: 'not authorized yet' });
+    expect(html).toContain('not authorized yet');
+  });
+});
+
+describe('renderUpdateBanner', () => {
+  it('renders nothing when there is no update and offline-readiness has not fired', () => {
+    expect(renderUpdateBanner({
+      needRefresh: false, needRefreshDismissed: false, offlineReady: false, offlineReadyDismissed: false,
+    })).toBe('');
+    expect(renderUpdateBanner()).toBe('');
+  });
+
+  it('renders the reload banner when needRefresh is set', () => {
+    const html = renderUpdateBanner({
+      needRefresh: true, needRefreshDismissed: false, offlineReady: false, offlineReadyDismissed: false,
+    });
+    expect(html).toContain('New version available');
+    expect(html).toContain('data-a="pwa:reload"');
+    expect(html).toContain('data-a="pwa:dismiss-update"');
+  });
+
+  it('renders nothing once the reload banner is dismissed', () => {
+    const html = renderUpdateBanner({
+      needRefresh: true, needRefreshDismissed: true, offlineReady: false, offlineReadyDismissed: false,
+    });
+    expect(html).toBe('');
+  });
+
+  it('renders the offline-ready note when offlineReady is set and needRefresh is not', () => {
+    const html = renderUpdateBanner({
+      needRefresh: false, needRefreshDismissed: false, offlineReady: true, offlineReadyDismissed: false,
+    });
+    expect(html).toContain('Ready to work offline');
+    expect(html).toContain('data-a="pwa:dismiss-offline-ready"');
+  });
+
+  it('renders nothing once the offline-ready note is dismissed', () => {
+    const html = renderUpdateBanner({
+      needRefresh: false, needRefreshDismissed: false, offlineReady: true, offlineReadyDismissed: true,
+    });
+    expect(html).toBe('');
+  });
+
+  it('prefers the reload banner over the offline-ready note when both are set', () => {
+    const html = renderUpdateBanner({
+      needRefresh: true, needRefreshDismissed: false, offlineReady: true, offlineReadyDismissed: false,
+    });
+    expect(html).toContain('New version available');
+    expect(html).not.toContain('Ready to work offline');
   });
 });

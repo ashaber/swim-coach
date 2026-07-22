@@ -138,6 +138,20 @@
       text-align: center; padding: 6px 12px; }
     .offline-banner.show { display: block; }
 
+    /* PWA "new version available" prompt (see src/pwaUpdate.js's state and
+       views.js's renderUpdateBanner) -- rendered inside #app, at the top of
+       every render() regardless of tab, so it uses the normal state->render
+       pipeline instead of the static #offline-banner's DOM-class toggle. */
+    .update-banner { display: flex; align-items: center; justify-content: center; gap: 14px;
+      background: var(--accent); color: #06262b; font-size: 12.5px; font-weight: 700;
+      text-align: center; padding: 8px 14px; }
+    .update-banner-subtle { background: var(--paper-2); color: var(--ink-soft); font-weight: 600; }
+    .update-banner-actions { display: flex; align-items: center; gap: 10px; }
+    .update-banner .btn { padding: 5px 12px; font-size: 12.5px; background: #06262b; border-color: #06262b; color: #fff; }
+    .update-banner-dismiss { background: none; border: none; color: inherit; font-size: 17px; line-height: 1;
+      cursor: pointer; padding: 2px 4px; opacity: .75; }
+    .update-banner-dismiss:hover { opacity: 1; }
+
     .loading, .load-error { padding: 60px 20px; text-align: center; color: var(--ink-faint); }
     .load-error { color: var(--c-signal); }
 

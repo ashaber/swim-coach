@@ -65,6 +65,13 @@ def page(request, base_url):
             '**/api/athlete*',
             _cors_route(200, 'application/json', '{"slug": "renee", "name": "Renee"}'),
         )
+        # Becoming "configured" (see _configure_backend) makes main.js's
+        # boot sequence eagerly fire GET /api/plan (loadPlan, unconditional
+        # at boot regardless of active tab) -- unmocked, that fetch fails
+        # against this file's fake backend origin and WebKit surfaces it as
+        # an uncaught pageerror that trips this fixture's teardown
+        # assertion. This file doesn't care about the plan's content.
+        ctx.route('**/api/plan*', _cors_route(200, 'application/json', PLAN_STUB))
         pg = ctx.new_page()
         js_errors = []
         pg.on('pageerror', lambda e: js_errors.append(str(e)))
@@ -85,6 +92,8 @@ CORS_HEADERS = {
     'Access-Control-Allow-Headers': 'Authorization, Content-Type',
 }
 
+PLAN_STUB = '{"slug":"renee","athlete":{"name":"Renee"},"events":[],"weeks":[],"macro":{"blocks":[]}}'
+
 
 def _cors_route(status, content_type, body):
     """Builds a Playwright route handler that answers the CORS preflight
@@ -99,25 +108,29 @@ def _cors_route(status, content_type, body):
 
 
 def _configure_backend(page, base_url=BASE_URL, token=TOKEN):
-    """The '#settings-token' paste field is gone -- session tokens now come
-    only from a real Google sign-in exchange (see identity.js's signIn /
-    api.js's exchangeGoogleToken), which these tests don't drive (no real
-    Google script). Seeds the session token directly into localStorage the
-    way a real exchange would leave it (`version` stamped to match
-    settings.js's SETTINGS_SCHEMA_VERSION, or loadSettings() would treat it
-    as a stale pre-cutover value and drop it -- see that module's migration
-    doc comment), then reloads and drives the real Settings UI for the base
-    URL + Save button, same as before."""
+    """The backend-URL/test-connection panel is gone from Settings (paste-
+    token-era leftover -- baseUrl now always defaults to prod internally,
+    see settings.js's DEFAULT_BASE_URL, with no UI to edit it). Seeds both
+    baseUrl and the session token directly into localStorage the way
+    settings.js's own storage schema expects (`version` stamped to match
+    SETTINGS_SCHEMA_VERSION, or loadSettings() would treat it as a stale
+    pre-cutover value and drop the token), then reloads so main.js's boot
+    picks it up -- the same pattern conftest.py's own seed_settings
+    init-script helper uses, just applied mid-test via page.evaluate instead
+    of before the first page load."""
     page.evaluate(
-        "(t) => window.localStorage.setItem("
-        "'swimcoach_settings', JSON.stringify({baseUrl: '', token: t, version: 2}))",
-        token,
+        "(cfg) => window.localStorage.setItem("
+        "'swimcoach_settings', JSON.stringify({baseUrl: cfg.baseUrl, token: cfg.token, version: 2}))",
+        {'baseUrl': base_url, 'token': token},
     )
     page.reload()
+    # Always ends on the Settings tab -- same invariant the old
+    # base-url-fill-and-save flow had (it necessarily drove the
+    # Settings UI to save), which several tests below rely on (e.g.
+    # the profile-edit section only renders on this tab, and
+    # visiting it is what triggers main.js's maybeLoadProfile()).
     page.click('[data-a="tab:settings"]')
-    page.wait_for_selector('#settings-base-url')
-    page.fill('#settings-base-url', base_url)
-    page.click('[data-a="settings:save"]')
+    page.wait_for_selector('.settings-wrap')
 
 
 def test_tab_bar_switches_between_plan_coach_settings(page):
@@ -141,7 +154,7 @@ def test_tab_bar_switches_between_plan_coach_settings(page):
     )
     page.click('[data-a="tab:settings"]')
     page.wait_for_selector('.settings-wrap')
-    assert 'Backend connection' in page.content()
+    assert 'Signed in as' in page.content()
     _configure_backend(page)
 
     page.click('[data-a="tab:plan"]')
@@ -163,26 +176,6 @@ def test_coach_tab_empty_state_links_to_settings_when_unconfigured(page):
     assert 'backend URL and token' in page.content()
     page.click('.chat-empty [data-a="tab:settings"]')
     page.wait_for_selector('.settings-wrap')
-
-
-def test_settings_save_and_mocked_health_check(page):
-    page.route('**/health', _cors_route(200, 'application/json', '{"status": "ok"}'))
-
-    _configure_backend(page)
-    page.wait_for_selector('#settings-base-url')
-    assert page.input_value('#settings-base-url') == BASE_URL
-
-    page.click('[data-a="settings:test"]')
-    page.wait_for_selector('.conn-result.ok')
-    assert 'Connected' in page.locator('.conn-result').inner_text()
-
-
-def test_settings_test_connection_reports_failure(page):
-    page.route('**/health', _cors_route(401, 'application/json', '{"error": "invalid token"}'))
-
-    _configure_backend(page)
-    page.click('[data-a="settings:test"]')
-    page.wait_for_selector('.conn-result.fail')
 
 
 def test_coach_chat_streams_mocked_reply_with_tool_chip(page):
