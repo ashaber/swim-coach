@@ -1032,6 +1032,170 @@ export function renderFeedbackTab({
     </div>`;
 }
 
+// --- Onboarding form (Slice 3 of self-service in-app onboarding) -----------
+// Full-screen, rendered instead of the tab bar + tab content entirely (see
+// main.js's render()) while state.onboarding.active is true -- there's
+// nothing else useful to navigate to yet (no athlete, no plan, no profile).
+// Reuses the exact panel/field/pool-days markup and CSS classes the
+// Settings tab's profile-edit form and the Log/Check-in tabs already use, so
+// this looks and behaves like the rest of the app rather than a bespoke
+// wizard screen. Every field maps 1:1 to backend/app/routes/onboard.py's
+// OnboardRequest via src/onboarding.js's onboardPayloadFromForm -- see that
+// module's doc comment for the exact mapping and which fields are optional.
+
+const CSS_MODE_OPTIONS = [
+  { value: 'pace', label: 'I know my CSS pace' },
+  { value: 'test', label: 'Time me (400m + 200m test)' },
+];
+
+const EVENT_FORMAT_OPTIONS = [
+  { value: 'single_day', label: 'Single day' },
+  { value: 'multi_day_stage', label: 'Multi-day / staged' },
+];
+
+function panelHeading(text) {
+  return `<h3 style="margin:0 0 12px;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);">${esc(text)}</h3>`;
+}
+
+export function renderOnboardingForm({ form, submitting, error }) {
+  const cssModeIsTest = form.cssMode === 'test';
+
+  return `
+    <div class="wrap settings-wrap">
+      <header class="mast" style="border-bottom:none;padding-bottom:0;">
+        <div>
+          <span class="mark">swim-coach · welcome</span>
+          <h1>Let's set up your plan</h1>
+          <p class="sub">A few hard-data questions, then your coach builds your first week.</p>
+        </div>
+      </header>
+
+      <div class="panel settings-panel">
+        ${panelHeading('About you')}
+        <label class="field">
+          <span>Name</span>
+          <input type="text" required data-form="onboard" data-field="name" value="${esc(form.name)}">
+        </label>
+        <label class="field">
+          <span>Date of birth (optional)</span>
+          <input type="date" data-form="onboard" data-field="dob" value="${esc(form.dob)}">
+        </label>
+        <label class="field">
+          <span>Sex (optional)</span>
+          <select data-form="onboard" data-field="sex">
+            ${SEX_OPTIONS.map((opt) => `<option value="${opt.value}"${form.sex === opt.value ? ' selected' : ''}>${esc(opt.label)}</option>`).join('')}
+          </select>
+        </label>
+        <label class="field">
+          <span>Height (optional)</span>
+          <div style="display:flex;gap:8px;">
+            <input type="number" min="0" step="1" inputmode="numeric" placeholder="ft" style="width:5em;" data-form="onboard" data-field="heightFeet" value="${esc(form.heightFeet)}">
+            <input type="number" min="0" max="11" step="1" inputmode="numeric" placeholder="in" style="width:5em;" data-form="onboard" data-field="heightInches" value="${esc(form.heightInches)}">
+          </div>
+        </label>
+        <label class="field">
+          <span>Weight in lb (optional)</span>
+          <input type="number" min="0" step="0.1" inputmode="decimal" data-form="onboard" data-field="weightLb" value="${esc(form.weightLb)}">
+        </label>
+      </div>
+
+      <div class="panel settings-panel">
+        ${panelHeading('Your swim fitness')}
+        <label class="field">
+          <span>How should we get your CSS pace?</span>
+          <select data-form="onboard" data-field="cssMode">
+            ${CSS_MODE_OPTIONS.map((opt) => `<option value="${opt.value}"${form.cssMode === opt.value ? ' selected' : ''}>${esc(opt.label)}</option>`).join('')}
+          </select>
+        </label>
+        ${cssModeIsTest ? `
+        <label class="field">
+          <span>400m time trial (mm:ss)</span>
+          <input type="text" placeholder="7:20" required data-form="onboard" data-field="test400" value="${esc(form.test400)}">
+        </label>
+        <label class="field">
+          <span>200m time trial (mm:ss)</span>
+          <input type="text" placeholder="3:20" required data-form="onboard" data-field="test200" value="${esc(form.test200)}">
+        </label>` : `
+        <label class="field">
+          <span>CSS pace (per 100m, mm:ss)</span>
+          <input type="text" placeholder="1:40" required data-form="onboard" data-field="cssPace" value="${esc(form.cssPace)}">
+        </label>`}
+      </div>
+
+      <div class="panel settings-panel">
+        ${panelHeading('Pool schedule')}
+        <label class="field">
+          <span>Which days do you swim with your pool coach? (optional)</span>
+          <div class="pool-days">
+            ${POOL_DAY_LABELS.map((day) => `
+              <label class="pool-day">
+                <input type="checkbox" data-form="onboard" data-field="pool_days" data-day="${day.value}" ${form.poolDays?.[day.value] ? 'checked' : ''}>
+                <span>${day.label}</span>
+              </label>`).join('')}
+          </div>
+        </label>
+      </div>
+
+      <div class="panel settings-panel">
+        ${panelHeading('Target event')}
+        <label class="field">
+          <span>Event name</span>
+          <input type="text" required data-form="onboard" data-field="eventName" value="${esc(form.eventName)}">
+        </label>
+        <label class="field">
+          <span>Event date</span>
+          <input type="date" required data-form="onboard" data-field="eventDate" value="${esc(form.eventDate)}">
+        </label>
+        <label class="field">
+          <span>Distance (m)</span>
+          <input type="number" min="1" step="1" inputmode="numeric" required data-form="onboard" data-field="eventDistanceM" value="${esc(form.eventDistanceM)}">
+        </label>
+        <label class="field">
+          <span>Format</span>
+          <select data-form="onboard" data-field="eventFormat">
+            ${EVENT_FORMAT_OPTIONS.map((opt) => `<option value="${opt.value}"${form.eventFormat === opt.value ? ' selected' : ''}>${esc(opt.label)}</option>`).join('')}
+          </select>
+        </label>
+      </div>
+
+      <div class="panel settings-panel">
+        ${panelHeading('Training volume')}
+        <label class="field">
+          <span>Current weekly volume, meters (optional)</span>
+          <input type="number" min="0" step="100" inputmode="numeric" data-form="onboard" data-field="currentVolumeM" value="${esc(form.currentVolumeM)}">
+        </label>
+        <label class="field">
+          <span>Peak weekly volume target, meters (optional)</span>
+          <input type="number" min="0" step="100" inputmode="numeric" data-form="onboard" data-field="peakVolumeM" value="${esc(form.peakVolumeM)}">
+        </label>
+        <label class="field">
+          <span>Plan start date (optional)</span>
+          <input type="date" data-form="onboard" data-field="macroStart" value="${esc(form.macroStart)}">
+        </label>
+      </div>
+
+      <div class="panel settings-panel">
+        <details>
+          <summary style="cursor:pointer;font-size:13px;font-weight:600;">Advanced</summary>
+          <label class="field" style="margin-top:12px;">
+            <span>Custom URL slug (optional)</span>
+            <input type="text" data-form="onboard" data-field="slug" value="${esc(form.slug)}">
+          </label>
+        </details>
+      </div>
+
+      <div class="panel settings-panel">
+        ${error ? `<div class="conn-result fail">${esc(error)}</div>` : ''}
+        <div class="settings-actions">
+          <button type="button" class="btn" data-a="onboard:submit" ${submitting ? 'disabled' : ''}>${submitting ? 'Setting up…' : 'Create my plan'}</button>
+        </div>
+        <div class="settings-actions" style="margin-top:8px;">
+          <button type="button" class="btn-ghost" data-a="identity:signout">Not you? Sign out</button>
+        </div>
+      </div>
+    </div>`;
+}
+
 // --- Settings tab ------------------------------------------------------------
 
 export function renderSettingsTab({
