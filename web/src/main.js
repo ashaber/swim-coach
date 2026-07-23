@@ -4,6 +4,7 @@ import log from './log.js';
 import {
   renderApp, renderLoading, renderError, renderTabBar, renderCoachTab, renderSettingsTab,
   renderLogTab, renderCheckinTab, renderBackendNeededNotice, renderFeedbackTab, renderUpdateBanner,
+  renderOnboardingForm,
 } from './views.js';
 import {
   loadChatSession, saveChatSession, clearChatStorage,
@@ -12,13 +13,17 @@ import {
 import { loadSettings, saveSettings, isConfigured } from './settings.js';
 import {
   streamChat, postWorkout, postWellness, fetchPlan, getAthlete, patchAthlete,
-  postFeedback, listFeedback, uploadWorkoutFile, listWorkouts, syncWorkouts, logout,
+  postFeedback, listFeedback, uploadWorkoutFile, listWorkouts, syncWorkouts, logout, onboard,
 } from './api.js';
 import {
   serializeWorkoutForm, serializeWellnessForm, profileFormFromAthlete, serializeProfileForm,
   serializeFeedbackForm, logFormFromDraft,
 } from './forms.js';
-import { currentIdentity, signIn, signOut } from './identity.js';
+import { currentIdentity, signIn, signOut, saveIdentity } from './identity.js';
+import {
+  createOnboardingState, validateOnboardForm, onboardPayloadFromForm,
+  loadOnboardingActive, saveOnboardingActive, startOnboardingSession, identityFromOnboardSession,
+} from './onboarding.js';
 import { sortWorkoutsNewestFirst, HISTORY_DISPLAY_CAP, formatSyncResult } from './workouts.js';
 import { performSignOut } from './session.js';
 import {
@@ -85,10 +90,21 @@ function createFeedbackForm() {
 }
 
 const initialIdentity = currentIdentity();
+const initialSettingsForm = loadSettings();
+// True only when there's no resolved athlete identity, an onboarding
+// session token is actually sitting in settings, AND the last thing this
+// browser did was start (not finish) onboarding -- see src/onboarding.js's
+// loadOnboardingActive doc comment for why this is a separate flag rather
+// than folded into identity.js's own storage. All three must hold: a signed
+// -out athlete with a stale flag (e.g. after a full sign-out cleared the
+// token but somehow not this flag) must never show the onboarding form with
+// no token to submit against.
+const initialOnboardingActive = !initialIdentity && !!initialSettingsForm.token && loadOnboardingActive();
 
 // Central app state. main.js owns this; views.js stays pure (data in,
-// markup out) and chat.js/settings.js own their own reducers/persistence
-// so this object is mostly just "which slice is currently loaded".
+// markup out) and chat.js/settings.js/onboarding.js own their own
+// reducers/persistence so this object is mostly just "which slice is
+// currently loaded".
 //
 // `identity` (see src/identity.js) is the signed-in Google account resolved
 // to {name, athlete, role} -- it drives which athlete every API call
@@ -98,13 +114,25 @@ const initialIdentity = currentIdentity();
 // frontend's copy of what the backend already decided. Signed out (identity
 // === null), the app forces the Settings tab (the sign-in gate) instead of
 // defaulting to any particular athlete.
+//
+// `onboarding` (see src/onboarding.js's createOnboardingState) is the third
+// state alongside "signed out" and "signed in as an athlete": allowlisted,
+// but no athlete exists yet. While `onboarding.active` is true, `identity`
+// stays null (there IS no athlete yet) and render() shows the onboarding
+// form instead of both the sign-in gate and the ordinary tabs -- see
+// handleIdentityResolved's onboarding branch and handleOnboardSubmit below.
 const state = {
   tab: initialIdentity ? loadActiveTab() : 'settings',
   identity: initialIdentity,
   identityError: null,
+  onboarding: {
+    ...createOnboardingState(),
+    active: initialOnboardingActive,
+    token: initialOnboardingActive ? initialSettingsForm.token : null,
+  },
   plan: { status: 'idle', data: null, error: null },
   chat: loadChatSession(initialIdentity?.athlete || SIGNED_OUT_CHAT_KEY),
-  settingsForm: loadSettings(),
+  settingsForm: initialSettingsForm,
   online: navigator.onLine,
   // The "new version -- reload" prompt (see src/pwaUpdate.js / views.js's
   // renderUpdateBanner) -- fed by registerSW()'s onNeedRefresh/onOfflineReady
@@ -235,6 +263,19 @@ function renderTabContent() {
 }
 
 function render() {
+  // Onboarding is a full-screen gate, same spirit as the sign-in gate but
+  // replacing the tab bar entirely rather than just one tab's content --
+  // there's nothing else useful to navigate to yet (no athlete, so no plan/
+  // log/checkin/coach/feedback/profile exists to show). See
+  // src/onboarding.js's createOnboardingState / handleOnboardingSessionStarted.
+  if (state.onboarding.active) {
+    appEl.innerHTML = `${renderUpdateBanner(state.pwaUpdate)}${renderOnboardingForm({
+      form: state.onboarding.form,
+      submitting: state.onboarding.submitting,
+      error: state.onboarding.error,
+    })}`;
+    return;
+  }
   appEl.innerHTML = `${renderUpdateBanner(state.pwaUpdate)}${renderTabContent()}${renderTabBar(state.tab)}`;
   if (state.tab === 'coach') stickChatScrollToBottom();
   if (state.tab === 'log' && state.workoutChat) stickWorkoutChatScrollToBottom();
@@ -252,24 +293,23 @@ function mountGoogleSignIn() {
   signIn({ buttonEl, baseUrl: state.settingsForm.baseUrl, onIdentity: handleIdentityResolved });
 }
 
-// Fired once per real Google sign-in attempt with the outcome of the
-// exchange (see identity.js's signIn doc comment for the exact shape). On
-// success, the session token identity.js's exchange minted is persisted
-// into settingsForm here (not in identity.js -- token storage is
-// settings.js's job) so every existing api.js call site keeps reading
-// settingsForm.token exactly as before; only *where* that token comes from
-// has changed.
-function handleIdentityResolved(outcome) {
-  if (!outcome?.ok) {
-    state.identityError = outcome?.message
-      || "Signed in, but that Google account isn't an authorized user of this app.";
-    render();
-    return;
-  }
-  state.identity = outcome.identity;
+/** Shared tail of "we now have a brand-new athlete-bound session" --
+ * fired from both an ordinary Google sign-in (handleIdentityResolved below)
+ * and a just-completed onboarding submit (handleOnboardSubmit) since both
+ * end up in the exact same place: a resolved {name, athlete, role} identity
+ * plus a fresh athlete-bound session token. Persists the token into
+ * settingsForm (not identity.js -- token storage is settings.js's job) so
+ * every existing api.js call site keeps reading settingsForm.token exactly
+ * as before; only *where* that token comes from differs between the two
+ * callers. Every identity-scoped slice of state resets to idle/empty the
+ * same way it does on any fresh sign-in -- a just-onboarded athlete has no
+ * cached plan/profile/history/feedback from a previous session to carry
+ * over. */
+function applyAthleteSession(identity, token) {
+  state.identity = identity;
   state.identityError = null;
-  state.settingsForm = saveSettings({ baseUrl: state.settingsForm.baseUrl, token: outcome.token });
-  state.chat = loadChatSession(outcome.identity.athlete);
+  state.settingsForm = saveSettings({ baseUrl: state.settingsForm.baseUrl, token });
+  state.chat = loadChatSession(identity.athlete);
   // Left idle rather than eagerly fetched here -- setTab('plan') lazily
   // loads it (or retries) the moment the Plan tab is actually visited, which
   // is also what covers the "just saved settings, now ready" case, so there
@@ -283,6 +323,22 @@ function handleIdentityResolved(outcome) {
   state.workoutHistory = { status: 'idle', data: [], error: null };
   state.workoutDetailId = null;
   closeWorkoutChat();
+}
+
+/** Fired once per real Google sign-in attempt with the outcome of the
+ * exchange (see identity.js's signIn doc comment for the exact shape). */
+function handleIdentityResolved(outcome) {
+  if (!outcome?.ok) {
+    state.identityError = outcome?.message
+      || "Signed in, but that Google account isn't an authorized user of this app.";
+    render();
+    return;
+  }
+  if (outcome.onboarding) {
+    handleOnboardingSessionStarted(outcome);
+    return;
+  }
+  applyAthleteSession(outcome.identity, outcome.token);
   log.info('identity.resolved', { athlete: outcome.identity.athlete, role: outcome.identity.role });
   render();
   maybeLoadProfile();
@@ -298,6 +354,8 @@ function handleIdentityResolved(outcome) {
 function resetToSignedOut({ identityError = null } = {}) {
   state.identity = null;
   state.identityError = identityError;
+  state.onboarding = createOnboardingState();
+  saveOnboardingActive(false);
   state.chat = loadChatSession(SIGNED_OUT_CHAT_KEY);
   state.plan = { status: 'idle', data: null, error: null };
   state.profileForm = createProfileForm();
@@ -346,6 +404,88 @@ function handleSessionExpired() {
   resetToSignedOut({ identityError: 'Your session expired -- sign in again.' });
   log.warn('identity.session_expired', {});
   render();
+}
+
+// --- Onboarding form (Slice 3 of self-service in-app onboarding) -----------
+// Fired from identity.js's signIn() when the Google exchange resolves to an
+// onboarding-scoped session (allowlisted, no athlete yet -- see that
+// module's doc comment), and from the form's own submit handler below. See
+// src/onboarding.js for the pure form-state/validation/payload logic this
+// wiring delegates to, and views.js's renderOnboardingForm for the markup.
+
+/** Enters onboarding mode: persists the onboarding-scoped token (settings.js
+ * storage, same as an ordinary session token -- every api.js call already
+ * reads settingsForm.token) and the "mid-onboarding" flag (see
+ * onboarding.js's saveOnboardingActive doc comment for why that's a
+ * separate flag from settingsForm/identity.js), then renders the form.
+ * state.identity stays null throughout -- there is no athlete yet. */
+function handleOnboardingSessionStarted(outcome) {
+  state.identity = null;
+  state.identityError = null;
+  const next = startOnboardingSession({ outcome, settingsForm: state.settingsForm, saveSettings });
+  state.settingsForm = next.settingsForm;
+  state.onboarding = next.onboarding;
+  saveOnboardingActive(true);
+  log.info('onboard.session_started', {});
+  render();
+}
+
+async function handleOnboardSubmit() {
+  if (state.onboarding.submitting) return;
+
+  const { valid, errors } = validateOnboardForm(state.onboarding.form);
+  if (!valid) {
+    state.onboarding = { ...state.onboarding, error: errors.join(' ') };
+    log.warn('onboard.validation_failed', { error_count: errors.length });
+    render();
+    return;
+  }
+
+  const payload = onboardPayloadFromForm(state.onboarding.form);
+  state.onboarding = { ...state.onboarding, submitting: true, error: null };
+  render();
+  log.info('onboard.submit', {});
+
+  try {
+    const session = await onboard({
+      baseUrl: state.settingsForm.baseUrl, token: state.onboarding.token, payload,
+    });
+    const identity = identityFromOnboardSession(session);
+    saveIdentity(identity);
+    applyAthleteSession(identity, session.token);
+    state.onboarding = createOnboardingState();
+    saveOnboardingActive(false);
+    // Unlike an ordinary Google sign-in (which happens FROM the Settings
+    // tab and just stays there -- see handleIdentityResolved), onboarding
+    // has no "tab" to fall back to: there was never a normal app underneath
+    // it (render() replaced the whole tab bar while onboarding.active was
+    // true). Land the newly-provisioned athlete straight on their plan
+    // rather than an empty Settings tab -- that's the whole point of
+    // finishing onboarding.
+    state.tab = 'plan';
+    saveActiveTab('plan');
+    log.info('onboard.success', { athlete: identity.athlete });
+    render();
+    loadPlan(); // calls render() itself
+    maybeLoadProfile();
+  } catch (err) {
+    // A 401 here means the onboarding session itself expired/was revoked
+    // mid-fill -- no amount of retrying the form will fix that, so route
+    // back to the sign-in gate the same way any other 401 does
+    // (handleUnauthorized/handleSessionExpired), rather than showing an
+    // inline error the athlete can't act on. Every other failure (403/409
+    // from api.js's onboard, 422 validation, network) is shown inline with
+    // the form's entered data left exactly as-is, so the athlete can fix
+    // the one field it complained about (e.g. a taken slug) and resubmit
+    // without retyping everything.
+    if (err.status === 401) {
+      handleSessionExpired();
+      return;
+    }
+    log.error('onboard.failed', { error: err.message, status: err.status });
+    state.onboarding = { ...state.onboarding, submitting: false, error: err.message };
+    render();
+  }
 }
 
 // --- PWA update prompt ---------------------------------------------------
@@ -1038,6 +1178,7 @@ async function onAppClick(e) {
     case 'checkin:submit': handleSubmitCheckin(); break;
     case 'profile:submit': handleSubmitProfile(); break;
     case 'feedback:submit': handleSubmitFeedback(); break;
+    case 'onboard:submit': handleOnboardSubmit(); break;
     case 'history:retry': loadHistory(); break;
     case 'history:open': handleOpenHistoryDetail(el.dataset.id); break;
     // Goes through history.back() (not handleCloseHistoryDetail() directly)
@@ -1090,6 +1231,24 @@ function onAppInput(e) {
     }
   }
   else if (formName === 'feedback') state.feedbackForm[field] = el.value;
+  else if (formName === 'onboard') {
+    if (field === 'pool_days') {
+      // Same data-day convention as the profile form's pool-day checkboxes
+      // (see views.js's POOL_DAY_LABELS) -- every checkbox shares the
+      // pool_days data-field and toggles its own key in the poolDays map.
+      const day = el.dataset.day;
+      if (day) state.onboarding.form.poolDays[day] = el.checked;
+    } else {
+      state.onboarding.form[field] = el.value;
+    }
+    // The CSS-mode select swaps which input(s) are visible (a CSS-pace
+    // field vs. two time-trial fields, see views.js's renderOnboardingForm)
+    // -- unlike every other field here, that's a structural change to the
+    // DOM, not just a value to read back on submit, so it needs a real
+    // render() rather than the direct-DOM-patch convention the rest of this
+    // handler uses to avoid disrupting an in-progress edit elsewhere.
+    if (field === 'cssMode') render();
+  }
 
   const outId = el.dataset.sliderOut;
   if (outId) {

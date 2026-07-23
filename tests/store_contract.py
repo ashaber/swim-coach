@@ -651,3 +651,29 @@ class StoreContractTests:
         assert found is not None
         assert found.athlete_slug is None
         assert found.expires_at == expires
+
+    # --- pending_email (Slice 2 of self-service onboarding) ---------------
+
+    def test_onboarding_session_carries_pending_email(self, store):
+        expires = datetime(2026, 8, 6, tzinfo=timezone.utc)
+        created = store.create_session(
+            "hash-pending-email",
+            athlete=None,
+            pending_email="future.athlete@example.com",
+            expires_at=expires,
+        )
+        assert created.athlete_slug is None
+        assert created.pending_email == "future.athlete@example.com"
+
+        found = store.get_session("hash-pending-email")
+        assert found is not None
+        assert found.pending_email == "future.athlete@example.com"
+
+    def test_athlete_bound_session_has_no_pending_email(self, store):
+        store.save_athlete(_athlete())
+        expires = datetime(2026, 8, 6, tzinfo=timezone.utc)
+        created = store.create_session("hash-athlete-bound", athlete=SLUG, expires_at=expires)
+        assert created.pending_email is None
+        found = store.get_session("hash-athlete-bound")
+        assert found is not None
+        assert found.pending_email is None

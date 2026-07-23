@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   postWorkout, listWorkouts, postWellness, listWellness, fetchPlan, getAthlete, patchAthlete,
   postFeedback, listFeedback, uploadWorkoutFile, exchangeGoogleToken, RequestAccessError, logout,
+  onboard, OnboardForbiddenError, OnboardConflictError,
 } from '../../src/api.js';
 
 function fakeFetch(body, { ok = true, status = 200 } = {}) {
@@ -337,6 +338,61 @@ describe('exchangeGoogleToken', () => {
   it('throws a generic error when fetch itself rejects (offline)', async () => {
     global.fetch = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
     await expect(exchangeGoogleToken({ baseUrl: 'https://api.example.com', idToken: 'x' }))
+      .rejects.toThrow(/connection|reach/i);
+  });
+});
+
+describe('onboard', () => {
+  it('POSTs the onboarding payload to /api/onboard with the onboarding bearer token, returns the athlete-bound session JSON', async () => {
+    const session = {
+      token: 'athlete-session-xyz', athlete: 'jamie', name: 'Jamie', role: 'athlete', expires_at: '2026-08-01T00:00:00Z',
+    };
+    global.fetch = fakeFetch(session);
+    const payload = { name: 'Jamie', css_pace_s_per_100m: 95, events: [{ name: 'Big Swim', event_date: '2027-06-01', distance_m: 33300 }] };
+
+    const result = await onboard({ baseUrl: 'https://api.example.com', token: 'onboard-tok', payload });
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/onboard');
+    expect(init.method).toBe('POST');
+    expect(init.headers.Authorization).toBe('Bearer onboard-tok');
+    expect(init.headers['Content-Type']).toBe('application/json');
+    expect(JSON.parse(init.body)).toEqual(payload);
+    expect(result).toEqual(session);
+  });
+
+  it('throws OnboardForbiddenError on a 403 (dead/invalid onboarding session)', async () => {
+    global.fetch = fakeFetch({ error: 'invite no longer valid' }, { ok: false, status: 403 });
+    await expect(onboard({ baseUrl: 'https://api.example.com', token: 't', payload: {} }))
+      .rejects.toBeInstanceOf(OnboardForbiddenError);
+  });
+
+  it('throws OnboardConflictError on a 409 (slug/invite already used)', async () => {
+    global.fetch = fakeFetch({ error: "athlete slug 'jamie' already exists" }, { ok: false, status: 409 });
+    await expect(onboard({ baseUrl: 'https://api.example.com', token: 't', payload: {} }))
+      .rejects.toBeInstanceOf(OnboardConflictError);
+  });
+
+  it('throws a generic error carrying the backend message on a 422 (bad input)', async () => {
+    global.fetch = fakeFetch({ error: 'insufficient runway before the target event' }, { ok: false, status: 422 });
+    await expect(onboard({ baseUrl: 'https://api.example.com', token: 't', payload: {} }))
+      .rejects.toThrow(/insufficient runway/i);
+  });
+
+  it('every thrown error carries the response status for main.js to single out a 401', async () => {
+    global.fetch = fakeFetch({ error: 'nope' }, { ok: false, status: 403 });
+    try {
+      await onboard({ baseUrl: 'https://api.example.com', token: 't', payload: {} });
+      throw new Error('expected onboard() to throw');
+    } catch (err) {
+      expect(err.status).toBe(403);
+    }
+  });
+
+  it('throws a generic error when fetch itself rejects (offline)', async () => {
+    global.fetch = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    await expect(onboard({ baseUrl: 'https://api.example.com', token: 't', payload: {} }))
       .rejects.toThrow(/connection|reach/i);
   });
 });

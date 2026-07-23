@@ -187,10 +187,13 @@ def row_to_auth_session(row: dict[str, Any]) -> AuthSession:
     """Same joined-row (LEFT JOIN) convention as row_to_allowed_email above
     (`s.*` + `a.slug as athlete_slug`) -- `auth_sessions` itself only has an
     `athlete_id` FK. `row["athlete_slug"]` is None for an onboarding
-    session."""
+    session; `row["pending_email"]` (Slice 2 of self-service onboarding) is
+    a plain column on `auth_sessions` itself, no join needed -- set only for
+    an onboarding session, always None for an athlete-bound one."""
     return AuthSession(
         token_hash=row["token_hash"],
         athlete_slug=row["athlete_slug"],
+        pending_email=row["pending_email"],
         created_at=row["created_at"],
         expires_at=row["expires_at"],
         revoked_at=row["revoked_at"],
@@ -648,22 +651,28 @@ class DbStore(StoreInterface):
         return row is not None
 
     def create_session(
-        self, token_hash: str, *, athlete: str | None = None, expires_at: datetime
+        self,
+        token_hash: str,
+        *,
+        athlete: str | None = None,
+        pending_email: str | None = None,
+        expires_at: datetime,
     ) -> AuthSession:
         with self._connect() as conn, conn.cursor() as cur:
             athlete_id = self._athlete_id(cur, athlete) if athlete is not None else None
             cur.execute(
                 """
-                insert into auth_sessions (token_hash, athlete_id, expires_at)
-                values (%s, %s, %s)
+                insert into auth_sessions (token_hash, athlete_id, pending_email, expires_at)
+                values (%s, %s, %s, %s)
                 returning created_at
                 """,
-                (token_hash, athlete_id, expires_at),
+                (token_hash, athlete_id, pending_email, expires_at),
             )
             row = cur.fetchone()
         return AuthSession(
             token_hash=token_hash,
             athlete_slug=athlete,
+            pending_email=pending_email,
             created_at=row["created_at"],
             expires_at=expires_at,
             revoked_at=None,
@@ -675,8 +684,8 @@ class DbStore(StoreInterface):
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                select s.token_hash, a.slug as athlete_slug, s.created_at,
-                       s.expires_at, s.revoked_at
+                select s.token_hash, a.slug as athlete_slug, s.pending_email,
+                       s.created_at, s.expires_at, s.revoked_at
                 from auth_sessions s
                 left join athletes a on a.athlete_id = s.athlete_id
                 where s.token_hash = %s

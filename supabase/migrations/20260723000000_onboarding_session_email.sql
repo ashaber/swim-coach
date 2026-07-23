@@ -1,0 +1,21 @@
+-- swim-coach Slice 2 of self-service in-app onboarding -- link an onboarding
+-- session to the invited email it belongs to.
+--
+-- Design: docs/design-self-service-onboarding.md, PR #63. Slice 1
+-- (20260722000000_onboarding_nullable_athlete.sql) let auth_sessions.athlete_id
+-- be NULL for an onboarding session, but that alone doesn't say WHICH pending
+-- allowed_emails row the session is completing -- POST /api/onboard (Slice 2,
+-- backend/app/routes/onboard.py) needs that email to know whose athlete it's
+-- creating and which pending allowlist row to complete. `pending_email`
+-- carries it: set only for an onboarding session (athlete_id IS NULL);
+-- always NULL for an athlete-bound session (its athlete_id already says who
+-- it is, so there's nothing pending about it).
+--
+-- IDEMPOTENT: `ADD COLUMN IF NOT EXISTS` is a no-op, not an error, on re-run
+-- -- safe for CI's apply-twice idempotency check (same convention as every
+-- migration in this directory).
+--
+-- RLS is still intentionally not enabled -- same rationale as every other
+-- migration in this directory.
+
+alter table auth_sessions add column if not exists pending_email text;
