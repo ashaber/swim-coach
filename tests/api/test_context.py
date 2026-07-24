@@ -80,6 +80,16 @@ def test_system_block_a_has_voice_section_with_warmth_and_firmness(library_dir) 
     assert "NEVER soften a real warning" in text
 
 
+def test_system_block_a_voice_bounds_response_length(library_dir) -> None:
+    # The athlete-facing replies must stay TLDR-scannable: bottom line first,
+    # a paragraph or two, not an essay -- with expert mode exempted so its
+    # full evidence trail isn't truncated.
+    text = build_system_blocks(library_dir)[0]["text"]
+    assert "phone between sets" in text
+    assert "not an essay" in text
+    assert "Expert mode is the exception" in text
+
+
 def test_system_block_a_rule_2_covers_both_asker_modes(library_dir) -> None:
     # Evidence-surfacing is asker-mode-conditional, but the conditioning
     # lives entirely inside the byte-stable system text (it references the
