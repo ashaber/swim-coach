@@ -56,6 +56,9 @@ def test_request_shape_includes_tools(client, fake_claude_chat_factory) -> None:
         "log_open_question",
         "get_workouts",
         "sync_workouts",
+        "create_event",
+        "draft_macro_plan",
+        "create_week_plan",
     }
 
 
