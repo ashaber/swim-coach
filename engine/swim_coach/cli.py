@@ -82,6 +82,18 @@ def _error_from_exception(path: Path, exc: Exception) -> int:
     return _error(str(exc), file=str(path))
 
 
+def _error_label(store: StoreInterface, slug: str, relative: str) -> str:
+    """Human-readable path/label for an error message about `slug`'s
+    `relative` file, for the `_error_from_exception` call sites that used to
+    reach into `store.base_dir` directly. Returns the real on-disk path for a
+    `FileStore`; falls back to a plain "slug/relative" string for any other
+    store (e.g. `DbStore`, which has no `base_dir`) so error reporting never
+    crashes with `AttributeError` just because STORE_BACKEND=db is set."""
+    if isinstance(store, FileStore):
+        return str(store.base_dir / slug / relative)
+    return f"{slug}/{relative}"
+
+
 def _validate_dir(directory: Path, model_cls, label: str, counts: dict) -> int | None:
     """Validate every *.yaml file in `directory` against `model_cls`.
 
@@ -100,48 +112,59 @@ def _validate_dir(directory: Path, model_cls, label: str, counts: dict) -> int |
     return None
 
 
-def _cmd_validate(args: argparse.Namespace, store: FileStore) -> int:
+def _cmd_validate(args: argparse.Namespace, store: StoreInterface) -> int:
     slug = args.athlete
-    athlete_dir = store.base_dir / slug
     counts: dict[str, int] = {}
 
     try:
         store.load_athlete(slug)
         counts["athlete"] = 1
     except Exception as exc:  # noqa: BLE001
-        return _error_from_exception(athlete_dir / "profile.yaml", exc)
+        return _error_from_exception(_error_label(store, slug, "profile.yaml"), exc)
 
     try:
         counts["events"] = len(store.load_events(slug))
     except Exception as exc:  # noqa: BLE001
-        return _error_from_exception(athlete_dir / "events.yaml", exc)
+        return _error_from_exception(_error_label(store, slug, "events.yaml"), exc)
 
     try:
         macro = store.load_macro(slug)
         counts["macro"] = 1 if macro is not None else 0
     except Exception as exc:  # noqa: BLE001
-        return _error_from_exception(athlete_dir / "plan" / "macro.yaml", exc)
+        return _error_from_exception(_error_label(store, slug, "plan/macro.yaml"), exc)
 
-    rc = _validate_dir(athlete_dir / "plan" / "weeks", WeekPlan, "weeks", counts)
-    if rc is not None:
-        return rc
-    rc = _validate_dir(athlete_dir / "logs" / "workouts", Workout, "workouts", counts)
-    if rc is not None:
-        return rc
-    rc = _validate_dir(athlete_dir / "logs" / "wellness", Wellness, "wellness", counts)
-    if rc is not None:
-        return rc
+    if isinstance(store, FileStore):
+        # Directory-glob validation of raw weeks/workouts/wellness YAML files
+        # is inherently a FileStore-tree concern (there's no directory to
+        # glob against a DbStore, and CLAUDE.md's own "validate before
+        # committing" rule is about the local tree anyway) -- report zero
+        # counts for a non-FileStore backend rather than reach for a
+        # base_dir that doesn't exist.
+        athlete_dir = store.base_dir / slug
+        rc = _validate_dir(athlete_dir / "plan" / "weeks", WeekPlan, "weeks", counts)
+        if rc is not None:
+            return rc
+        rc = _validate_dir(athlete_dir / "logs" / "workouts", Workout, "workouts", counts)
+        if rc is not None:
+            return rc
+        rc = _validate_dir(athlete_dir / "logs" / "wellness", Wellness, "wellness", counts)
+        if rc is not None:
+            return rc
+    else:
+        counts["weeks"] = 0
+        counts["workouts"] = 0
+        counts["wellness"] = 0
 
     print(json.dumps({"athlete": slug, "counts": counts}))
     return 0
 
 
-def _cmd_zones(args: argparse.Namespace, store: FileStore) -> int:
+def _cmd_zones(args: argparse.Namespace, store: StoreInterface) -> int:
     slug = args.athlete
     try:
         athlete = store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
-        return _error_from_exception(store.base_dir / slug / "profile.yaml", exc)
+        return _error_from_exception(_error_label(store, slug, "profile.yaml"), exc)
 
     if bool(args.test_400) != bool(args.test_200):
         return _error("--test-400 and --test-200 must be provided together")
@@ -182,17 +205,17 @@ def _find_event(events: list[Event], query: str) -> Event | None:
     return None
 
 
-def _cmd_scaffold_macro(args: argparse.Namespace, store: FileStore) -> int:
+def _cmd_scaffold_macro(args: argparse.Namespace, store: StoreInterface) -> int:
     slug = args.athlete
     try:
         athlete = store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
-        return _error_from_exception(store.base_dir / slug / "profile.yaml", exc)
+        return _error_from_exception(_error_label(store, slug, "profile.yaml"), exc)
 
     try:
         events = store.load_events(slug)
     except Exception as exc:  # noqa: BLE001
-        return _error_from_exception(store.base_dir / slug / "events.yaml", exc)
+        return _error_from_exception(_error_label(store, slug, "events.yaml"), exc)
 
     event = _find_event(events, args.event)
     if event is None:
@@ -235,7 +258,7 @@ def _cmd_scaffold_macro(args: argparse.Namespace, store: FileStore) -> int:
     return 0
 
 
-def _event_format_for_macro(store: FileStore, slug: str, macro) -> str:
+def _event_format_for_macro(store: StoreInterface, slug: str, macro) -> str:
     """Look up the macro's Event and return its event_format, defaulting to
     "single_day" if the event can't be found (e.g. deleted from events.yaml
     after the macro was scaffolded) -- never let a lookup miss crash
@@ -250,17 +273,17 @@ def _event_format_for_macro(store: FileStore, slug: str, macro) -> str:
     return "single_day"
 
 
-def _cmd_plan_week(args: argparse.Namespace, store: FileStore) -> int:
+def _cmd_plan_week(args: argparse.Namespace, store: StoreInterface) -> int:
     slug = args.athlete
     try:
         athlete = store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
-        return _error_from_exception(store.base_dir / slug / "profile.yaml", exc)
+        return _error_from_exception(_error_label(store, slug, "profile.yaml"), exc)
 
     try:
         macro = store.load_macro(slug)
     except Exception as exc:  # noqa: BLE001
-        return _error_from_exception(store.base_dir / slug / "plan" / "macro.yaml", exc)
+        return _error_from_exception(_error_label(store, slug, "plan/macro.yaml"), exc)
     if macro is None:
         return _error("no macro plan for this athlete; run scaffold-macro first")
 
@@ -308,7 +331,7 @@ def _cmd_plan_week(args: argparse.Namespace, store: FileStore) -> int:
     return 0
 
 
-def _cmd_summarize(args: argparse.Namespace, store: FileStore) -> int:
+def _cmd_summarize(args: argparse.Namespace, store: StoreInterface) -> int:
     """Compact JSON training-load/wellness/compliance rollup over the
     trailing `--weeks` weeks (default 4), ending at `--as-of` (default
     today). Reused by `/adapt`'s Sunday ritual and, per ROADMAP.md, by
@@ -318,7 +341,7 @@ def _cmd_summarize(args: argparse.Namespace, store: FileStore) -> int:
     try:
         store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
-        return _error_from_exception(store.base_dir / slug / "profile.yaml", exc)
+        return _error_from_exception(_error_label(store, slug, "profile.yaml"), exc)
 
     if args.as_of:
         try:
@@ -373,7 +396,7 @@ def _cmd_summarize(args: argparse.Namespace, store: FileStore) -> int:
     return 0
 
 
-def _cmd_adapt(args: argparse.Namespace, store: FileStore) -> int:
+def _cmd_adapt(args: argparse.Namespace, store: StoreInterface) -> int:
     """Run the deterministic adaptation draft for `--week` and write it as a
     draft WeekPlan (`draft: true`) -- see `swim_coach.adapt.adapt_week`.
     Refuses to overwrite an existing non-draft week without `--force`."""
@@ -381,19 +404,19 @@ def _cmd_adapt(args: argparse.Namespace, store: FileStore) -> int:
     try:
         athlete = store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
-        return _error_from_exception(store.base_dir / slug / "profile.yaml", exc)
+        return _error_from_exception(_error_label(store, slug, "profile.yaml"), exc)
 
     try:
         macro = store.load_macro(slug)
     except Exception as exc:  # noqa: BLE001
-        return _error_from_exception(store.base_dir / slug / "plan" / "macro.yaml", exc)
+        return _error_from_exception(_error_label(store, slug, "plan/macro.yaml"), exc)
     if macro is None:
         return _error("no macro plan for this athlete; run scaffold-macro first")
 
     try:
         events = store.load_events(slug)
     except Exception as exc:  # noqa: BLE001
-        return _error_from_exception(store.base_dir / slug / "events.yaml", exc)
+        return _error_from_exception(_error_label(store, slug, "events.yaml"), exc)
     event = next((e for e in events if e.id == macro.event_id), None)
     if event is None:
         return _error(f"macro's event_id {macro.event_id} not found in events.yaml")
@@ -453,7 +476,7 @@ def _cmd_adapt(args: argparse.Namespace, store: FileStore) -> int:
     return 0
 
 
-def _cmd_parse_coach_text(args: argparse.Namespace, store: FileStore) -> int:
+def _cmd_parse_coach_text(args: argparse.Namespace, store: StoreInterface) -> int:
     slug = args.athlete
     path = Path(args.file)
     try:
@@ -528,7 +551,7 @@ def _build_workout_from_draft(draft: WorkoutDraft, athlete_id, *, raw_ref: str |
     )
 
 
-def _cmd_ingest(args: argparse.Namespace, store: FileStore) -> int:
+def _cmd_ingest(args: argparse.Namespace, store: StoreInterface) -> int:
     slug = args.athlete
     path = Path(args.file)
     parser_fn = PARSERS_BY_EXTENSION.get(path.suffix.lower())
@@ -562,7 +585,7 @@ def _cmd_ingest(args: argparse.Namespace, store: FileStore) -> int:
         try:
             athlete = store.load_athlete(slug)
         except Exception as exc:  # noqa: BLE001
-            return _error_from_exception(store.base_dir / slug / "profile.yaml", exc)
+            return _error_from_exception(_error_label(store, slug, "profile.yaml"), exc)
 
         try:
             workout = _build_workout_from_draft(draft, athlete.id, raw_ref=draft.raw_ref)
@@ -606,7 +629,7 @@ def _cmd_ingest(args: argparse.Namespace, store: FileStore) -> int:
     return 0
 
 
-def _cmd_analyze(args: argparse.Namespace, store: FileStore) -> int:
+def _cmd_analyze(args: argparse.Namespace, store: StoreInterface) -> int:
     """Re-parse a workout's already-ingested raw .fit file and recompute
     laps/lengths/pauses/series/analytics in place -- for when analytics.py's
     math changes after the original ingest, or Slice-1 ships after some
@@ -617,7 +640,7 @@ def _cmd_analyze(args: argparse.Namespace, store: FileStore) -> int:
     try:
         store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
-        return _error_from_exception(store.base_dir / slug / "profile.yaml", exc)
+        return _error_from_exception(_error_label(store, slug, "profile.yaml"), exc)
 
     workouts = store.list_workouts(slug)
     if args.workout_id:
@@ -908,7 +931,7 @@ def _cmd_onboard(args: argparse.Namespace, store: StoreInterface) -> int:
     return 0
 
 
-def _cmd_review_queue(args: argparse.Namespace, store: FileStore) -> int:
+def _cmd_review_queue(args: argparse.Namespace, store: StoreInterface) -> int:
     """Print the library/ review queue -- every claim covered by an
     UNREVIEWED marker, needs-judgment first. Human-readable by default;
     `--json` for the machine-readable form. See swim_coach.library_review
@@ -953,7 +976,7 @@ def _cmd_review_queue(args: argparse.Namespace, store: FileStore) -> int:
     return 0
 
 
-def _cmd_review_accept(args: argparse.Namespace, store: FileStore) -> int:
+def _cmd_review_accept(args: argparse.Namespace, store: StoreInterface) -> int:
     """Strip the UNREVIEWED marker governing one or more review-queue ids,
     leaving all surrounding prose byte-identical (see
     swim_coach.library_review.strip_marker). Idempotent: accepting an
@@ -1269,20 +1292,38 @@ _COMMANDS = {
 
 
 # Commands that may target the prod DB directly instead of the local
-# FileStore tree -- see `_add_database_url_arg`/`_select_store`. Every other
-# command is unaffected by --database-url/$DATABASE_URL and always uses
-# FileStore, unchanged from before this slice. `onboard` (unlike the rest of
-# this set) CREATES the athlete row itself -- see `_add_database_url_arg`'s
+# FileStore tree via their own --database-url flag -- see
+# `_add_database_url_arg`/`_select_store`. `onboard` (unlike the rest of this
+# set) CREATES the athlete row itself -- see `_add_database_url_arg`'s
 # `creates_athlete=True` help text.
 _DB_CAPABLE_COMMANDS = {"invite", "list-invites", "revoke-invite", "onboard"}
 
 
 def _select_store(args: argparse.Namespace) -> StoreInterface:
-    """FileStore by default. For the invite family, DbStore instead when a
-    database URL is available (the --database-url flag, else $DATABASE_URL)
-    -- that's what lets `invite`/`list-invites`/`revoke-invite` write the
-    Supabase DB the deployed backend actually reads, instead of only the
-    local file tree. Never prints/logs the DSN -- it carries a password."""
+    """Pick the persistence backend for this invocation. Two independent
+    mechanisms, checked in this order:
+
+    1. The invite family's own --database-url flag (else $DATABASE_URL),
+       for `invite`/`list-invites`/`revoke-invite`/`onboard` only -- lets
+       those commands write the Supabase DB the deployed backend actually
+       reads, instead of only the local file tree, without affecting any
+       other command. Unchanged from before this slice.
+    2. STORE_BACKEND=db (with DATABASE_URL) -- a small, engine-side mirror of
+       `backend/app/store_factory.make_store`'s env vars/logic (the engine
+       can't import `app.*`; `store_db.py`'s own docstring already
+       anticipated engine-side DB consumers by keeping psycopg a lazy/
+       optional import). This applies to EVERY command, which is what
+       fixes the regression: production (`swim-coach-api`) has run with
+       STORE_BACKEND=db since Phase 2.5, but `validate`/`zones`/
+       `scaffold-macro`/`plan-week`/`summarize`/`adapt` -- the commands the
+       /plan-week, /adapt, and /onboard-athlete skills shell out to -- have
+       only ever constructed a FileStore, so every run against a
+       STORE_BACKEND=db deployment was silently writing to a local YAML
+       tree production never reads. Default (STORE_BACKEND unset, or
+       "file") is untouched: FileStore over --base-dir, byte-for-byte the
+       CLI's original, unconditional behavior.
+
+    Never prints/logs a DSN -- it carries a password."""
     if args.command in _DB_CAPABLE_COMMANDS:
         database_url = getattr(args, "database_url", None) or os.environ.get("DATABASE_URL")
         if database_url:
@@ -1291,6 +1332,21 @@ def _select_store(args: argparse.Namespace) -> StoreInterface:
             from swim_coach.store_db import DbStore
 
             return DbStore(dsn=database_url)
+
+    store_backend = os.environ.get("STORE_BACKEND", "file")
+    if store_backend == "db":
+        database_url = (os.environ.get("DATABASE_URL") or "").strip()
+        if not database_url:
+            raise RuntimeError(
+                "STORE_BACKEND=db requires DATABASE_URL (the Supabase "
+                "transaction-pooler connection string) -- see .env.example"
+            )
+        from swim_coach.store_db import DbStore
+
+        return DbStore(dsn=database_url)
+    if store_backend != "file":
+        raise RuntimeError(f"unknown STORE_BACKEND: {store_backend!r}")
+
     return FileStore(base_dir=args.base_dir)
 
 

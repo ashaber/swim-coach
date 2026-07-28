@@ -21,12 +21,13 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 @pytest.fixture(autouse=True)
 def _no_database_url_env(monkeypatch):
-    """Guarantee every CLI test is isolated from any real DATABASE_URL
-    exported in the host/CI shell -- otherwise a dev machine or runner with
-    Supabase creds set in the environment would silently route the
-    invite/list-invites/revoke-invite tests at a real database instead of
-    the tmp_path FileStore they're built around."""
+    """Guarantee every CLI test is isolated from any real DATABASE_URL/
+    STORE_BACKEND exported in the host/CI shell -- otherwise a dev machine
+    or runner with Supabase creds set in the environment would silently
+    route these tests at a real database instead of the tmp_path FileStore
+    they're built around."""
     monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("STORE_BACKEND", raising=False)
 
 
 def _run(base_dir, *args):
@@ -1615,3 +1616,117 @@ def test_onboard_without_database_url_uses_filestore(tmp_path, monkeypatch, caps
     from swim_coach.store import FileStore
 
     assert FileStore(base_dir=base_dir).load_athlete("filekid") is not None
+
+
+# --- STORE_BACKEND=db (engine-side mirror of app/store_factory.make_store) --
+#
+# Fixes the DB-blindness regression: production has run with STORE_BACKEND=db
+# since Phase 2.5, but validate/zones/scaffold-macro/plan-week/summarize/adapt
+# (what /plan-week, /adapt, /onboard-athlete shell out to) only ever
+# constructed a FileStore, so those skills were silently writing to a local
+# YAML tree production never reads. See `_select_store` in cli.py.
+
+
+class _RecordingDbStore:
+    """Minimal stand-in for swim_coach.store_db.DbStore -- only records its
+    constructor's dsn. Deliberately implements NONE of StoreInterface's real
+    methods: these tests only need to prove *which* store class main()
+    selected, not exercise DbStore's own SQL (that's tests/integration's
+    job), and a bare AttributeError from an unimplemented method is exactly
+    what proves `_error_label`'s non-FileStore fallback doesn't crash."""
+
+    instances: list["_RecordingDbStore"] = []
+
+    def __init__(self, dsn):
+        self.dsn = dsn
+        _RecordingDbStore.instances.append(self)
+
+
+@pytest.fixture(autouse=True)
+def _reset_recording_dbstore_instances():
+    _RecordingDbStore.instances.clear()
+    yield
+    _RecordingDbStore.instances.clear()
+
+
+def test_store_backend_db_selects_dbstore(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr("swim_coach.store_db.DbStore", _RecordingDbStore)
+    monkeypatch.setenv("STORE_BACKEND", "db")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:s3cret@host/db")
+
+    code = _run(tmp_path, "validate", "--athlete", "nobody")
+
+    assert len(_RecordingDbStore.instances) == 1
+    assert _RecordingDbStore.instances[0].dsn == "postgresql://user:s3cret@host/db"
+    # the stub has no load_athlete -- proves the CLI reports a clean JSON
+    # error (via _error_label's non-FileStore fallback) instead of crashing
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+    assert result["file"] == "nobody/profile.yaml"
+
+
+def test_store_backend_db_without_database_url_fails_fast(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("STORE_BACKEND", "db")
+
+    code = _run(tmp_path, "validate", "--athlete", "nobody")
+
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+    assert "DATABASE_URL" in result["error"]
+    assert "AttributeError" not in result["error"]
+    assert "KeyError" not in result["error"]
+
+
+def test_store_backend_unset_still_uses_filestore(monkeypatch, athlete_tree, capsys):
+    monkeypatch.setattr("swim_coach.store_db.DbStore", _RecordingDbStore)
+
+    code = _run(athlete_tree["base_dir"], "validate", "--athlete", athlete_tree["slug"])
+
+    assert code == 0
+    assert _RecordingDbStore.instances == []
+
+
+def test_store_backend_file_explicit_still_uses_filestore(monkeypatch, athlete_tree, capsys):
+    monkeypatch.setattr("swim_coach.store_db.DbStore", _RecordingDbStore)
+    monkeypatch.setenv("STORE_BACKEND", "file")
+
+    code = _run(athlete_tree["base_dir"], "validate", "--athlete", athlete_tree["slug"])
+
+    assert code == 0
+    assert _RecordingDbStore.instances == []
+
+
+def test_store_backend_db_applies_to_plan_week_too(monkeypatch, tmp_path, capsys):
+    """Not just `validate` -- the whole point of this slice is that every
+    command _select_store touches (plan-week, adapt, etc.) picks up
+    STORE_BACKEND=db, not only the invite family's own --database-url flag."""
+    monkeypatch.setattr("swim_coach.store_db.DbStore", _RecordingDbStore)
+    monkeypatch.setenv("STORE_BACKEND", "db")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pw@host/db")
+
+    _run(tmp_path, "plan-week", "--athlete", "nobody", "--week", "2026-W30")
+
+    assert len(_RecordingDbStore.instances) == 1
+    assert _RecordingDbStore.instances[0].dsn == "postgresql://user:pw@host/db"
+
+
+# --- _error_label -----------------------------------------------------------
+
+
+def test_error_label_filestore_returns_real_path(tmp_path):
+    from swim_coach.cli import _error_label
+    from swim_coach.store import FileStore
+
+    store = FileStore(base_dir=tmp_path)
+    assert _error_label(store, "renee", "profile.yaml") == str(
+        tmp_path / "renee" / "profile.yaml"
+    )
+
+
+def test_error_label_non_filestore_returns_plain_fallback():
+    from swim_coach.cli import _error_label
+
+    store = _RecordingDbStore(dsn="postgresql://user:pw@host/db")
+    assert _error_label(store, "renee", "profile.yaml") == "renee/profile.yaml"
