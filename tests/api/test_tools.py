@@ -17,6 +17,10 @@ from swim_coach.store import FileStore
 
 from app.tools import GET_WORKOUTS_CAP, SYNC_WORKOUTS_WINDOW_DAYS, build_tool_handlers
 
+# Fixed IDs/names from the real athletes/renee/ test tree (copied into
+# athletes_dir by conftest.py) -- see events.yaml/plan/macro.yaml.
+GREECE_EVENT_NAME = "UltraSwim 33.3 Greece (Skopelos) — single-day 33.3 km continuous"
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIT_FIXTURE = REPO_ROOT / "tests" / "unit" / "fixtures" / "fit" / "real_swim.fit"
 _no_fit_fixture = pytest.mark.skipif(
@@ -386,3 +390,318 @@ def test_sync_workouts_successful_sync_returns_counts(
     result = handlers["sync_workouts"]({})
 
     assert result == {"listed": 1, "new": 1, "saved": 1, "failed": 0}
+
+
+# --- create_event -------------------------------------------------------------
+
+
+def test_create_event_persists_and_returns_created_shape(athletes_dir, run_tag) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    name = f"Test New Event [{run_tag}]"
+
+    result = handlers["create_event"](
+        {
+            "name": name,
+            "event_date": "2027-06-01",
+            "distance_m": 15000,
+            "priority": "B",
+            "water_temp_c": 22.5,
+            "wetsuit": True,
+            "event_format": "multi_day_stage",
+        }
+    )
+
+    assert "error" not in result
+    assert result["created"] is True
+    assert result["name"] == name
+    assert result["event_date"] == "2027-06-01"
+    assert result["distance_m"] == 15000
+    assert result["priority"] == "B"
+    assert result["water_temp_c"] == 22.5
+    assert result["wetsuit"] is True
+    assert result["event_format"] == "multi_day_stage"
+
+    reloaded = FileStore(base_dir=athletes_dir).load_events("renee")
+    matching = [e for e in reloaded if e.name == name]
+    assert len(matching) == 1
+    assert str(matching[0].id) == result["id"]
+    assert matching[0].athlete_id == store.load_athlete("renee").id
+
+
+def test_create_event_defaults_and_optional_fields(athletes_dir, run_tag) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    name = f"Test Minimal Event [{run_tag}]"
+
+    result = handlers["create_event"](
+        {"name": name, "event_date": "2027-03-01", "distance_m": 5000, "priority": "A"}
+    )
+
+    assert "error" not in result
+    assert result["event_format"] == "single_day"
+    assert result["wetsuit"] is False
+    assert result["water_temp_c"] is None
+
+
+def test_create_event_appends_without_disturbing_existing_events(athletes_dir, run_tag) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    before = store.load_events("renee")
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    handlers["create_event"](
+        {
+            "name": f"Test Appended Event [{run_tag}]",
+            "event_date": "2027-04-01",
+            "distance_m": 8000,
+            "priority": "B",
+        }
+    )
+
+    after = FileStore(base_dir=athletes_dir).load_events("renee")
+    assert len(after) == len(before) + 1
+    before_ids = {e.id for e in before}
+    assert before_ids <= {e.id for e in after}
+
+
+@pytest.mark.parametrize(
+    "overrides,missing_field",
+    [
+        ({"name": ""}, "name"),
+        ({"event_date": ""}, "event_date"),
+        ({"distance_m": None}, "distance_m"),
+        ({"priority": ""}, "priority"),
+    ],
+)
+def test_create_event_missing_required_field_is_an_error(
+    athletes_dir, overrides: dict, missing_field: str
+) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    payload = {
+        "name": "Test Event",
+        "event_date": "2027-01-01",
+        "distance_m": 5000,
+        "priority": "A",
+    }
+    payload.update(overrides)
+
+    result = handlers["create_event"](payload)
+
+    assert "error" in result
+
+
+def test_create_event_invalid_event_date_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["create_event"](
+        {"name": "Test Event", "event_date": "not-a-date", "distance_m": 5000, "priority": "A"}
+    )
+    assert "error" in result
+
+
+def test_create_event_non_positive_distance_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["create_event"](
+        {"name": "Test Event", "event_date": "2027-01-01", "distance_m": 0, "priority": "A"}
+    )
+    assert "error" in result
+
+
+def test_create_event_invalid_event_format_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["create_event"](
+        {
+            "name": "Test Event",
+            "event_date": "2027-01-01",
+            "distance_m": 5000,
+            "priority": "A",
+            "event_format": "weekend_only",
+        }
+    )
+    assert "error" in result
+
+
+# --- draft_macro_plan -----------------------------------------------------------
+
+
+def test_draft_macro_plan_persists_new_macro_for_a_brand_new_event(athletes_dir, run_tag) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    name = f"Test Macro Event [{run_tag}]"
+    handlers["create_event"](
+        {"name": name, "event_date": "2027-06-01", "distance_m": 20000, "priority": "B"}
+    )
+
+    result = handlers["draft_macro_plan"](
+        {
+            "event_name": name,
+            "current_weekly_volume_m": 15000,
+            "start_date": "2027-01-01",
+        }
+    )
+
+    assert "error" not in result
+    assert result["created"] is True
+    assert result["event_name"] == name
+    assert len(result["blocks"]) == 4
+    block_names = [b["name"] for b in result["blocks"]]
+    assert block_names == ["base", "build", "peak", "taper"]
+    for block in result["blocks"]:
+        assert block["weekly_volume_target_m"] >= 0
+
+    reloaded_macro = FileStore(base_dir=athletes_dir).load_macro("renee")
+    assert reloaded_macro is not None
+    events = FileStore(base_dir=athletes_dir).load_events("renee")
+    new_event = next(e for e in events if e.name == name)
+    assert reloaded_macro.event_id == new_event.id
+
+
+def test_draft_macro_plan_refuses_when_macro_already_exists_for_event(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["draft_macro_plan"](
+        {"event_name": GREECE_EVENT_NAME, "current_weekly_volume_m": 15000}
+    )
+
+    assert "error" in result
+    assert "already exists" in result["error"]
+
+    # Untouched -- still the original macro tied to Greece.
+    macro = FileStore(base_dir=athletes_dir).load_macro("renee")
+    events = FileStore(base_dir=athletes_dir).load_events("renee")
+    greece = next(e for e in events if e.name == GREECE_EVENT_NAME)
+    assert macro.event_id == greece.id
+
+
+def test_draft_macro_plan_unknown_event_name_names_existing_events(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["draft_macro_plan"](
+        {"event_name": "No Such Event At All", "current_weekly_volume_m": 15000}
+    )
+
+    assert "error" in result
+    assert GREECE_EVENT_NAME in result["error"]
+    assert "Bear Lake Monster 10K (Garden City UT, point-to-point)" in result["error"]
+
+
+def test_draft_macro_plan_insufficient_runway_is_an_error(athletes_dir, run_tag) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    name = f"Test Sprint Event [{run_tag}]"
+    handlers["create_event"](
+        {"name": name, "event_date": "2027-01-15", "distance_m": 5000, "priority": "B"}
+    )
+
+    result = handlers["draft_macro_plan"](
+        {
+            "event_name": name,
+            "current_weekly_volume_m": 10000,
+            "start_date": "2027-01-01",
+        }
+    )
+
+    assert "error" in result
+    # No macro should have been persisted by a failed scaffold attempt.
+    assert FileStore(base_dir=athletes_dir).load_macro("renee") is not None
+
+
+def test_draft_macro_plan_missing_current_weekly_volume_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["draft_macro_plan"]({"event_name": GREECE_EVENT_NAME})
+    assert "error" in result
+
+
+def test_draft_macro_plan_missing_event_name_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["draft_macro_plan"]({"current_weekly_volume_m": 15000})
+    assert "error" in result
+
+
+# --- create_week_plan -----------------------------------------------------------
+
+
+def test_create_week_plan_persists_a_new_week_from_the_macro(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    # 2026-W30 falls inside the base block (2026-07-06 -> 2026-08-02) and has
+    # no existing week file (only W28/W29 exist in the test tree).
+    result = handlers["create_week_plan"]({"iso_week": "2026-W30"})
+
+    assert "error" not in result
+    assert result["created"] is True
+    assert result["iso_week"] == "2026-W30"
+    assert result["meso_block"] == "base"
+    assert result["target_volume_m"] > 0
+    assert len(result["sessions"]) > 0
+
+    reloaded = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W30")
+    assert reloaded is not None
+    assert reloaded.draft is False
+    assert reloaded.target_volume_m == result["target_volume_m"]
+
+
+def test_create_week_plan_refuses_when_week_already_exists(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["create_week_plan"]({"iso_week": "2026-W28"})
+
+    assert "error" in result
+    assert "propose_adaptation" in result["error"]
+
+
+def test_create_week_plan_no_macro_is_an_error(athletes_dir) -> None:
+    (athletes_dir / "renee" / "plan" / "macro.yaml").unlink()
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["create_week_plan"]({"iso_week": "2026-W30"})
+
+    assert "error" in result
+    assert "draft_macro_plan" in result["error"]
+
+
+def test_create_week_plan_invalid_iso_week_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["create_week_plan"]({"iso_week": "not-a-week"})
+    assert "error" in result
+
+
+def test_create_week_plan_missing_iso_week_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["create_week_plan"]({})
+    assert "error" in result
+
+
+def test_create_week_plan_missing_macro_event_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    events = store.load_events("renee")
+    remaining = [e for e in events if e.name != GREECE_EVENT_NAME]
+    store.save_events("renee", remaining)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["create_week_plan"]({"iso_week": "2026-W30"})
+
+    assert "error" in result
+    assert "not found in events.yaml" in result["error"]
+
+
+def test_create_week_plan_week_outside_macro_range_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    # Well past the macro's taper block (ends 2026-09-13).
+    result = handlers["create_week_plan"]({"iso_week": "2027-W01"})
+
+    assert "error" in result

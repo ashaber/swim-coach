@@ -9,6 +9,17 @@ functions). `log_open_question` implements IDEA 005, persisting through the
 durable `store.save_feedback` seam (engine/swim_coach/models.Feedback)
 instead of the old ephemeral `research/open-questions.jsonl` file, which was
 silently wiped every time Cloud Run scaled to zero.
+
+`create_event`/`draft_macro_plan`/`create_week_plan` are the "chat can create,
+not just adapt" tools: they call the exact same deterministic engine
+functions the CLI/skills already use (`swim_coach.plan.scaffold_macro`,
+`swim_coach.plan.generate_week`) and persist their output directly, rather
+than drafting. This is intentionally different from `propose_adaptation`'s
+draft-only contract -- these three only ever create content that doesn't
+exist yet (a new event, a first macro for an event, a missing week), so
+there's nothing already-active for a bad call to disrupt. Adapting an
+already-active week stays `propose_adaptation`'s job, unchanged: a human
+still confirms via `/adapt` before an active week's volume changes.
 """
 
 from __future__ import annotations
@@ -18,8 +29,11 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
 
+from pydantic import ValidationError
+
 from swim_coach.adapt import adapt_week
-from swim_coach.models import Feedback, Workout
+from swim_coach.models import Event, Feedback, Workout
+from swim_coach.plan import generate_week, scaffold_macro
 from swim_coach.store import StoreInterface
 
 from app.context import iso_week_str, summarize_rollup
@@ -167,6 +181,123 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "type": "object",
             "properties": {},
             "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "create_event",
+        "description": (
+            "Add a brand-new target event (a race or channel swim) to the "
+            "athlete's events list. Use when the athlete describes a new "
+            "event to train toward that isn't already on file -- this is "
+            "just metadata about a future goal, so unlike a plan change it "
+            "persists immediately (nothing existing to disrupt)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Event name."},
+                "event_date": {
+                    "type": "string",
+                    "description": "Event date, formatted 'YYYY-MM-DD'.",
+                },
+                "distance_m": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Event distance in meters.",
+                },
+                "priority": {
+                    "type": "string",
+                    "description": "Event priority, e.g. 'A' or 'B'.",
+                },
+                "water_temp_c": {
+                    "type": "number",
+                    "description": "Expected water temperature in Celsius (optional).",
+                },
+                "wetsuit": {
+                    "type": "boolean",
+                    "description": "Whether a wetsuit will be worn (default false).",
+                },
+                "event_format": {
+                    "type": "string",
+                    "enum": ["single_day", "multi_day_stage"],
+                    "description": (
+                        "'single_day' (one continuous swim) or 'multi_day_stage' "
+                        "(split across stage days). Default 'single_day'."
+                    ),
+                },
+            },
+            "required": ["name", "event_date", "distance_m", "priority"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "draft_macro_plan",
+        "description": (
+            "Scaffold a brand-new base->build->peak->taper macro periodization "
+            "plan toward an existing event, calling the exact same "
+            "swim_coach.plan.scaffold_macro function the CLI's scaffold-macro "
+            "command and /onboard-athlete use -- the 8%/week ramp cap and "
+            "taper/peak sizing are enforced inside that function, which is "
+            "why a brand-new macro is safe to persist immediately. Use when "
+            "the athlete has an event on file but no macro plan for it yet. "
+            "Refuses with an error if a macro plan already exists for that "
+            "event -- this tool is only for a brand-new macro, never for "
+            "revising an existing one."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "event_name": {
+                    "type": "string",
+                    "description": "Name of an existing event (must match exactly).",
+                },
+                "current_weekly_volume_m": {
+                    "type": "integer",
+                    "description": "The athlete's current real weekly swim volume in meters.",
+                },
+                "peak_weekly_volume_m": {
+                    "type": "integer",
+                    "description": (
+                        "Optional target peak weekly volume in meters. Defaults "
+                        "to event distance x 2.5, clamped by the ramp cap over "
+                        "the base+build weeks."
+                    ),
+                },
+                "start_date": {
+                    "type": "string",
+                    "description": "Macro start date, 'YYYY-MM-DD' (default today).",
+                },
+            },
+            "required": ["event_name", "current_weekly_volume_m"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "create_week_plan",
+        "description": (
+            "Generate and persist one brand-new WeekPlan from the athlete's "
+            "existing macro plan, via swim_coach.plan.generate_week -- the "
+            "same function /plan-week uses (pool-coach placeholders + a "
+            "weekend long open-water swim). Use when iso_week has no week "
+            "plan at all yet (e.g. filling a gap so propose_adaptation has "
+            "something to adapt from next). Refuses with an error if a week "
+            "plan already exists for iso_week -- use propose_adaptation (and "
+            "the /adapt skill's human confirmation) to change an existing "
+            "week instead. Not the right tool for a week that needs "
+            "hand-authored content (no pool coach on hand, real open-water "
+            "session structure needed) -- that's judgment-authored, not "
+            "generated."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "iso_week": {
+                    "type": "string",
+                    "description": "ISO week to create, formatted 'YYYY-Wnn', e.g. '2026-W30'.",
+                }
+            },
+            "required": ["iso_week"],
             "additionalProperties": False,
         },
     },
@@ -354,6 +485,262 @@ def _handle_sync_workouts(input_data: dict[str, Any], *, store: StoreInterface, 
     return sync_on_demand(store, slug, window_days=SYNC_WORKOUTS_WINDOW_DAYS)
 
 
+def _handle_create_event(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    """Appends a brand-new `Event` to `events.yaml` (`save_events` replaces
+    the whole list, hence load-append-save rather than any partial update).
+    Low-risk metadata about a future goal -- unlike a plan change, this
+    persists directly, no draft/confirm step needed."""
+    name = input_data.get("name")
+    if not name:
+        return {"error": "name is required"}
+    event_date_str = input_data.get("event_date")
+    if not event_date_str:
+        return {"error": "event_date is required"}
+    distance_m = input_data.get("distance_m")
+    if distance_m is None:
+        return {"error": "distance_m is required"}
+    priority = input_data.get("priority")
+    if not priority:
+        return {"error": "priority is required"}
+
+    try:
+        event_date = date.fromisoformat(event_date_str)
+    except (TypeError, ValueError):
+        return {"error": f"invalid event_date {event_date_str!r}; expected format 'YYYY-MM-DD'"}
+
+    try:
+        distance_m = int(distance_m)
+    except (TypeError, ValueError):
+        return {"error": f"invalid distance_m {distance_m!r}"}
+    if distance_m <= 0:
+        return {"error": f"distance_m must be > 0, got {distance_m!r}"}
+
+    water_temp_c = input_data.get("water_temp_c")
+    if water_temp_c is not None:
+        try:
+            water_temp_c = float(water_temp_c)
+        except (TypeError, ValueError):
+            return {"error": f"invalid water_temp_c {water_temp_c!r}"}
+
+    wetsuit = bool(input_data.get("wetsuit", False))
+    event_format = input_data.get("event_format") or "single_day"
+    if event_format not in ("single_day", "multi_day_stage"):
+        return {
+            "error": (
+                f"invalid event_format {event_format!r}; must be 'single_day' "
+                "or 'multi_day_stage'"
+            )
+        }
+
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load athlete profile: {exc}"}
+
+    try:
+        events = store.load_events(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load events: {exc}"}
+
+    try:
+        event = Event(
+            id=uuid.uuid4(),
+            athlete_id=athlete.id,
+            schema_version=1,
+            name=name,
+            event_date=event_date,
+            distance_m=distance_m,
+            water_temp_c=water_temp_c,
+            wetsuit=wetsuit,
+            priority=priority,
+            event_format=event_format,
+        )
+    except ValidationError as exc:
+        return {"error": str(exc)}
+
+    events.append(event)
+    store.save_events(slug, events)
+
+    log.info("event created", athlete=slug, event_name=event.name, event_id=str(event.id))
+    return {
+        "created": True,
+        "id": str(event.id),
+        "name": event.name,
+        "event_date": event.event_date.isoformat(),
+        "distance_m": event.distance_m,
+        "water_temp_c": event.water_temp_c,
+        "wetsuit": event.wetsuit,
+        "priority": event.priority,
+        "event_format": event.event_format,
+    }
+
+
+def _handle_draft_macro_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    """Calls `swim_coach.plan.scaffold_macro` directly (the same function
+    `cli.py`'s `scaffold-macro` command and the `/onboard-athlete` skill
+    use) -- its own ramp-cap/taper/peak sizing is exactly why a brand-new
+    macro is safe to persist immediately. Guarded against ever replacing an
+    existing macro tied to the same event: revising one is a separate,
+    not-yet-built concern."""
+    event_name = input_data.get("event_name")
+    if not event_name:
+        return {"error": "event_name is required"}
+    current_weekly_volume_m = input_data.get("current_weekly_volume_m")
+    if current_weekly_volume_m is None:
+        return {"error": "current_weekly_volume_m is required"}
+
+    try:
+        current_weekly_volume_m = int(current_weekly_volume_m)
+    except (TypeError, ValueError):
+        return {"error": f"invalid current_weekly_volume_m {current_weekly_volume_m!r}"}
+
+    peak_weekly_volume_m = input_data.get("peak_weekly_volume_m")
+    if peak_weekly_volume_m is not None:
+        try:
+            peak_weekly_volume_m = int(peak_weekly_volume_m)
+        except (TypeError, ValueError):
+            return {"error": f"invalid peak_weekly_volume_m {peak_weekly_volume_m!r}"}
+
+    start_str = input_data.get("start_date")
+    if start_str:
+        try:
+            start = date.fromisoformat(start_str)
+        except ValueError:
+            return {"error": f"invalid start_date {start_str!r}; expected format 'YYYY-MM-DD'"}
+    else:
+        start = date.today()
+
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load athlete profile: {exc}"}
+
+    try:
+        events = store.load_events(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load events: {exc}"}
+    event = next((e for e in events if e.name == event_name), None)
+    if event is None:
+        known_names = [e.name for e in events]
+        return {
+            "error": (
+                f"no event named {event_name!r} for this athlete; known "
+                f"event names: {known_names}"
+            )
+        }
+
+    try:
+        existing_macro = store.load_macro(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load macro plan: {exc}"}
+    if existing_macro is not None and existing_macro.event_id == event.id:
+        return {
+            "error": (
+                f"a macro plan already exists for {event_name!r}; "
+                "draft_macro_plan is only for a brand-new macro -- revising "
+                "an existing one isn't supported here"
+            )
+        }
+
+    try:
+        macro = scaffold_macro(athlete, event, start, current_weekly_volume_m, peak_weekly_volume_m)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    store.save_macro(slug, macro)
+
+    log.info("macro plan drafted", athlete=slug, event_name=event_name, macro_id=str(macro.id))
+    return {
+        "created": True,
+        "event_name": event_name,
+        "blocks": [
+            {
+                "name": block.name,
+                "start_date": block.start_date.isoformat(),
+                "end_date": block.end_date.isoformat(),
+                "weekly_volume_target_m": block.weekly_volume_target_m,
+                "focus": block.focus,
+            }
+            for block in macro.blocks
+        ],
+    }
+
+
+def _handle_create_week_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    """Calls `swim_coach.plan.generate_week` directly (the same function
+    `cli.py`'s `plan-week` command and the `/plan-week` skill use) and
+    persists the result -- only for a week that doesn't exist yet at all;
+    an already-active week stays `propose_adaptation`'s job, unchanged."""
+    iso_week = input_data.get("iso_week")
+    if not iso_week:
+        return {"error": "iso_week is required"}
+
+    try:
+        year_str, week_str = iso_week.split("-W")
+        week_start = date.fromisocalendar(int(year_str), int(week_str), 1)
+    except (ValueError, IndexError):
+        return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+
+    existing = store.load_week(slug, iso_week)
+    if existing is not None:
+        return {
+            "error": (
+                f"a week plan already exists for {iso_week!r}; use "
+                "propose_adaptation (and the /adapt skill) to change an "
+                "existing week instead"
+            )
+        }
+
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load athlete profile: {exc}"}
+
+    try:
+        macro = store.load_macro(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load macro plan: {exc}"}
+    if macro is None:
+        return {"error": "no macro plan for this athlete; use draft_macro_plan first"}
+
+    try:
+        events = store.load_events(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load events: {exc}"}
+    event = next((e for e in events if e.id == macro.event_id), None)
+    if event is None:
+        return {"error": f"macro's event_id {macro.event_id} not found in events.yaml"}
+
+    event_format = event.event_format or "single_day"
+
+    try:
+        week = generate_week(athlete, macro, iso_week, week_start, event_format)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    store.save_week(slug, week)
+
+    log.info("week plan created", athlete=slug, iso_week=iso_week)
+    return {
+        "created": True,
+        "iso_week": week.iso_week,
+        "meso_block": week.meso_block,
+        "focus": week.focus,
+        "target_volume_m": week.target_volume_m,
+        "sessions": [
+            {
+                "date": s.date.isoformat(),
+                "sport": s.sport,
+                "source": s.source,
+                "distance_m": s.distance_m,
+                "duration_min": s.duration_min,
+                "purpose": s.purpose,
+            }
+            for s in week.sessions
+        ],
+    }
+
+
 def build_tool_handlers(
     store: StoreInterface, *, slug: str, expert_mode: bool
 ) -> dict[str, ToolHandler]:
@@ -375,6 +762,15 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "sync_workouts": lambda input_data: _handle_sync_workouts(
+            input_data, store=store, slug=slug
+        ),
+        "create_event": lambda input_data: _handle_create_event(
+            input_data, store=store, slug=slug
+        ),
+        "draft_macro_plan": lambda input_data: _handle_draft_macro_plan(
+            input_data, store=store, slug=slug
+        ),
+        "create_week_plan": lambda input_data: _handle_create_week_plan(
             input_data, store=store, slug=slug
         ),
     }
