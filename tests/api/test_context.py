@@ -146,6 +146,16 @@ def test_route_library_files_default_bucket_when_no_keyword_matches() -> None:
     assert "03-periodization.md" in files
 
 
+def test_route_library_files_strength_question_reaches_07() -> None:
+    files = route_library_files("What exercises should I do for my dryland strength session?")
+    assert "07-strength-dryland.md" in files
+
+
+def test_route_library_files_set_structure_question_reaches_14() -> None:
+    files = route_library_files("What should my warm-up and main set look like today?")
+    assert "14-swim-set-structure.md" in files
+
+
 def test_routed_block_always_includes_reference_list(library_dir) -> None:
     block = build_routed_block(library_dir, "what pace should I swim at?")
     assert "library/reference_list.md" in block[0]["text"]
