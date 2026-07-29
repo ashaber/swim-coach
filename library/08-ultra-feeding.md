@@ -1,6 +1,6 @@
 # Ultra feeding: the 90-minute wall, in-swim carbohydrate, and rehydration
 
-**UNREVIEWED** — drafted from `library/research-dossiers/2026-07-13-ultra-feeding.md`
+**REVIEWED** — drafted from `library/research-dossiers/2026-07-13-ultra-feeding.md`
 (sources independently spot-verified); pending human review before treated
 as grounding truth, per `00-conventions.md`.
 
