@@ -177,6 +177,22 @@ export function priorityEvent(events) {
   return [...pool].sort((a, b) => a.event_date.localeCompare(b.event_date))[0];
 }
 
+/** The event the CURRENT macro plan is actually built toward, if one exists
+ * -- looked up by `macro.event_id`, not by priority/date. `priorityEvent`
+ * alone can silently diverge from the active macro (e.g. an athlete with
+ * several events on file where the soonest-dated one isn't what the macro
+ * targets), which showed up as the Plan tab's masthead displaying a
+ * completely different race than the one the plan was actually built
+ * around. Falls back to `priorityEvent` only when there's no macro at all
+ * (or its event_id doesn't resolve to a known event). */
+export function macroTargetEvent(macro, events) {
+  if (macro && macro.event_id) {
+    const matched = (events || []).find((e) => e.id === macro.event_id);
+    if (matched) return matched;
+  }
+  return priorityEvent(events);
+}
+
 /** The macro block containing `now`, or the nearest one (first if now is
  * before the whole plan, last if now is after it) -- there's always a
  * "you are here" marker to draw. */
