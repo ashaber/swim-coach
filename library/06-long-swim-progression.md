@@ -173,3 +173,18 @@ early-base/post-layoff-restart week (`target_volume_m` ~1000-1300m) with 2
 pool-schedule days previously produced `pool_total_m = 2 * POOL_SESSION_EST_M
 = 7000m`, ~6x the periodized target, because `POOL_SESSION_EST_M` was
 wrongly reused for this branch too.
+
+**Known residual edge case**: the floor only bounds, not eliminates, this
+class of bug. When `NO_COACH_POOL_SESSION_FLOOR_M * len(pool_schedule)`
+exceeds `target_volume_m` itself (a genuinely-early restart week combined
+with a near-daily, e.g. 5-day, `pool_schedule` -- within this project's
+documented 3-5 days/week pool attendance), the floor necessarily pushes
+`pool_total_m` back above `target_volume_m`. The long-swim reconciliation
+absorbs as much of this as it can (flooring the long swim at 0m) but cannot
+fully compensate once that floor is hit, so total swim volume can modestly
+exceed target in this corner case -- bounded by `floor * pool_days -
+target_volume_m`, not the old unbounded `POOL_SESSION_EST_M`-scale overage.
+Accepted as a deliberate trade-off (a sane per-session minimum matters more
+than exact target-tracking in an already-degenerate week); pinned by
+`test_generate_week_no_pool_coach_floor_can_still_modestly_exceed_target_with_many_pool_days`
+in `tests/unit/test_plan.py`.

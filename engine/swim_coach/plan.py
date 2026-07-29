@@ -131,6 +131,22 @@ NO_COACH_POOL_SESSION_FLOOR_M = 300
 # this floor only to keep a genuinely-early-restart week's session from
 # collapsing to 0m or an absurdly tiny distance. Deliberately much smaller
 # than POOL_SESSION_EST_M's scale. library/06-long-swim-progression.md.
+#
+# KNOWN EDGE CASE: when NO_COACH_POOL_SESSION_FLOOR_M * len(pool_schedule)
+# exceeds target_volume_m (a genuinely-early restart week combined with a
+# near-daily pool_schedule, e.g. 5 pool days at a ~1200m target), the floor
+# necessarily pushes pool_total_m back above target_volume_m -- a smaller,
+# bounded recurrence of the bug this constant was introduced to fix (bounded
+# by floor * pool_days, vs. the old unbounded POOL_SESSION_EST_M * pool_days
+# overage). The remainder/long-swim reconciliation below absorbs as much of
+# this as it can, flooring the long swim at 0m, but cannot fully compensate
+# once the long swim hits that floor -- total swim volume can still modestly
+# exceed target_volume_m in this corner case. Accepted as a deliberate
+# trade-off (a sane per-session minimum matters more than exact target
+# tracking in an already-degenerate week) rather than fixed further here --
+# see test_generate_week_no_pool_coach_floor_can_still_modestly_exceed_
+# target_with_many_pool_days in tests/unit/test_plan.py, which pins the
+# current bounded behavior so it can't silently regress.
 
 STRENGTH_SESSIONS_PER_WEEK = 2
 STRENGTH_SESSION_MIN = 45

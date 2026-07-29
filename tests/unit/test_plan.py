@@ -659,6 +659,58 @@ def test_generate_week_no_pool_coach_sessions_never_below_floor_or_nonpositive(s
                     assert s.duration_min > 0
 
 
+def test_generate_week_no_pool_coach_floor_can_still_modestly_exceed_target_with_many_pool_days():
+    # Known edge case (see NO_COACH_POOL_SESSION_FLOOR_M's comment in
+    # plan.py): when a genuinely-early restart week's target_volume_m is
+    # small enough that NO_COACH_POOL_SESSION_FLOOR_M * len(pool_schedule)
+    # exceeds it, the floor pushes pool_total_m back above target_volume_m
+    # -- a bounded, smaller-scale recurrence of the bug the floor-based fix
+    # otherwise resolves. Reproduces the same restart shape as
+    # test_generate_week_no_pool_coach_fixes_reported_bug_small_target_volume
+    # (current_weekly_volume_m=0, target_volume_m ends up 1213m) but with 5
+    # pool days -- within this project's documented 3-5 days/week pool
+    # attendance (CLAUDE.md) -- instead of 2, which is enough to trigger the
+    # floor for every pool day. This test pins the current, accepted,
+    # bounded behavior so a future change can't silently make the overage
+    # worse without a test failure calling it out.
+    athlete = make_athlete(pool_schedule=["mon", "tue", "wed", "thu", "fri"], has_pool_coach=False)
+    event = make_event(event_date=START + timedelta(weeks=12), distance_m=5000)
+    with pytest.warns(UserWarning, match="clamped"):
+        macro = scaffold_macro(athlete, event, START, current_weekly_volume_m=0)
+    base_block = next(b for b in macro.blocks if b.name == "base")
+    week_start = base_block.start_date
+    week = generate_week(athlete, macro, _iso_week(week_start), week_start)
+
+    assert week.target_volume_m == 1213
+
+    pool_sessions = [s for s in week.sessions if s.sport == "swim_pool"]
+    assert len(pool_sessions) == 5
+    for s in pool_sessions:
+        # every session sits right at the floor -- the raw formula-derived
+        # distance for this scenario is below it
+        assert s.distance_m == NO_COACH_POOL_SESSION_FLOOR_M
+
+    pool_total_m = sum(s.distance_m for s in pool_sessions)
+    assert pool_total_m == 5 * NO_COACH_POOL_SESSION_FLOOR_M  # 1500m
+
+    long_swims = [s for s in week.sessions if s.sport == "swim_ow"]
+    assert len(long_swims) == 1
+    # the remainder/long-swim reconciliation absorbs as much of the
+    # floor-driven overage as it can, flooring the long swim at 0m --
+    # confirms it's handled sanely (never negative) even though it can't
+    # fully compensate
+    assert long_swims[0].distance_m == 0
+
+    total_swim = sum(s.distance_m or 0 for s in week.sessions if s.sport in ("swim_pool", "swim_ow"))
+    # total swim volume modestly exceeds target_volume_m in this corner
+    # case (bounded overage: floor * pool_days - target, not the old
+    # unbounded POOL_SESSION_EST_M-scale overage) -- pin the exact bound so
+    # this can't silently regress further
+    assert total_swim == 1500
+    assert total_swim > week.target_volume_m
+    assert total_swim <= week.target_volume_m * 1.25
+
+
 # --- event_format: multi_day_stage --------------------------------------------------
 
 
