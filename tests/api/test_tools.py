@@ -1266,3 +1266,289 @@ def test_reschedule_session_missing_required_field_is_an_error(
     result = handlers["reschedule_session"](payload)
 
     assert "error" in result
+
+
+# --- replace_week_plan ---------------------------------------------------------
+# 2026-W28/W29 already have real week files in the test tree (base block,
+# 2026-07-06 .. 2026-08-02); 2026-W30 has none yet (same gap create_week_plan's
+# own tests use).
+
+
+def test_replace_week_plan_draft_mode_does_not_persist(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    original_week = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+
+    result = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+
+    assert "error" not in result
+    assert result["persisted"] is False
+    assert result["iso_week"] == "2026-W28"
+    assert result["target_volume_m"] > 0
+    assert len(result["sessions"]) > 0
+
+    # Untouched -- draft mode never calls save_week.
+    reloaded = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    assert reloaded == original_week
+
+
+def test_replace_week_plan_draft_mode_confirm_explicitly_false_also_does_not_persist(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    original_week = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+
+    result = handlers["replace_week_plan"]({"iso_week": "2026-W28", "confirm": False})
+
+    assert result["persisted"] is False
+    assert FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28") == original_week
+
+
+def test_replace_week_plan_draft_includes_comparison_against_current_week(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    original_week = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+
+    result = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+
+    assert "error" not in result
+    comparison = result["comparison"]
+    assert comparison is not None
+    assert comparison["old_target_volume_m"] == original_week.target_volume_m
+    assert comparison["old_session_count"] == len(original_week.sessions)
+    assert comparison["new_target_volume_m"] == result["target_volume_m"]
+    assert comparison["new_session_count"] == len(result["sessions"])
+
+
+def test_replace_week_plan_confirm_true_persists_and_overwrites_existing_week(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    original_week = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+
+    result = handlers["replace_week_plan"]({"iso_week": "2026-W28", "confirm": True})
+
+    assert "error" not in result
+    assert result["persisted"] is True
+
+    reloaded = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    assert reloaded is not None
+    # Overwritten -- a freshly generated week, not the original object on disk.
+    assert reloaded.id != original_week.id
+    assert reloaded.target_volume_m == result["target_volume_m"]
+    assert len(reloaded.sessions) == len(result["sessions"])
+
+
+def test_replace_week_plan_works_when_no_week_exists_yet(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    assert FileStore(base_dir=athletes_dir).load_week("renee", "2026-W30") is None
+
+    draft = handlers["replace_week_plan"]({"iso_week": "2026-W30"})
+    assert "error" not in draft
+    assert draft["persisted"] is False
+    assert draft["comparison"] is None  # nothing to compare against
+    assert FileStore(base_dir=athletes_dir).load_week("renee", "2026-W30") is None
+
+    confirmed = handlers["replace_week_plan"]({"iso_week": "2026-W30", "confirm": True})
+    assert confirmed["persisted"] is True
+    reloaded = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W30")
+    assert reloaded is not None
+    assert reloaded.iso_week == "2026-W30"
+
+
+def test_replace_week_plan_week_outside_macro_range_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    # Well past the macro's taper block (ends 2026-09-13) -- must return a
+    # calm {"error": ...}, never raise.
+    result = handlers["replace_week_plan"]({"iso_week": "2027-W01"})
+
+    assert "error" in result
+    # Nothing persisted for a week that was never on file.
+    assert FileStore(base_dir=athletes_dir).load_week("renee", "2027-W01") is None
+
+
+def test_replace_week_plan_no_macro_is_an_error(athletes_dir) -> None:
+    (athletes_dir / "renee" / "plan" / "macro.yaml").unlink()
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+
+    assert "error" in result
+    assert "draft_macro_plan" in result["error"]
+
+
+def test_replace_week_plan_invalid_iso_week_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["replace_week_plan"]({"iso_week": "not-a-week"})
+    assert "error" in result
+
+
+def test_replace_week_plan_missing_iso_week_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["replace_week_plan"]({})
+    assert "error" in result
+
+
+def test_replace_week_plan_end_to_end_pool_coach_status_change_regression(athletes_dir) -> None:
+    # This morning's real bug, end to end: 2026-W28's real fixture sessions
+    # are pool_coach-source placeholders (has_pool_coach defaults True).
+    # After the athlete says they no longer have a pool coach
+    # (set_pool_coach_status(False)), 2026-W28 is stuck with stale
+    # pool_coach placeholder content and no tool could regenerate it --
+    # create_week_plan refuses (week exists), propose_adaptation refuses (no
+    # valid prior week -- W27 doesn't exist). replace_week_plan is the fix:
+    # confirming it should produce ai_coach-authored real pool-session
+    # structure instead.
+    store = FileStore(base_dir=athletes_dir)
+    original_week = store.load_week("renee", "2026-W28")
+    original_pool_sessions = [s for s in original_week.sessions if s.sport == "swim_pool"]
+    assert original_pool_sessions, "fixture must have pool sessions to make this regression real"
+    assert all(s.source == "pool_coach" for s in original_pool_sessions)
+    assert all(s.structure is None for s in original_pool_sessions)
+
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    status_result = handlers["set_pool_coach_status"]({"has_pool_coach": False})
+    assert status_result == {"updated": True, "has_pool_coach": False}
+
+    confirmed = handlers["replace_week_plan"]({"iso_week": "2026-W28", "confirm": True})
+    assert "error" not in confirmed
+    assert confirmed["persisted"] is True
+
+    reloaded = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    new_pool_sessions = [s for s in reloaded.sessions if s.sport == "swim_pool"]
+    assert new_pool_sessions
+    for s in new_pool_sessions:
+        assert s.source == "ai_coach"
+        assert s.structure is not None
+        assert s.structure.strip() != ""
+
+
+# --- set_event_active_status ---------------------------------------------------
+
+
+def test_set_event_active_status_deactivate_then_reactivate_round_trips(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    original = next(e for e in store.load_events("renee") if e.name == GREECE_EVENT_NAME)
+    assert original.active is True  # default
+
+    deactivated = handlers["set_event_active_status"](
+        {"event_name": GREECE_EVENT_NAME, "active": False}
+    )
+    assert deactivated == {"updated": True, "event_name": GREECE_EVENT_NAME, "active": False}
+
+    reloaded_store = FileStore(base_dir=athletes_dir)
+    after_deactivate = next(e for e in reloaded_store.load_events("renee") if e.name == GREECE_EVENT_NAME)
+    assert after_deactivate.active is False
+    # Every other field on the event is untouched.
+    assert after_deactivate.id == original.id
+    assert after_deactivate.event_date == original.event_date
+    assert after_deactivate.distance_m == original.distance_m
+
+    reactivated = handlers["set_event_active_status"](
+        {"event_name": GREECE_EVENT_NAME, "active": True}
+    )
+    assert reactivated == {"updated": True, "event_name": GREECE_EVENT_NAME, "active": True}
+
+    final_store = FileStore(base_dir=athletes_dir)
+    after_reactivate = next(e for e in final_store.load_events("renee") if e.name == GREECE_EVENT_NAME)
+    assert after_reactivate.active is True
+
+
+def test_set_event_active_status_no_match_names_existing_events(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["set_event_active_status"](
+        {"event_name": "No Such Event At All", "active": False}
+    )
+
+    assert "error" in result
+    assert "found 0" in result["error"]
+    assert GREECE_EVENT_NAME in result["error"]
+
+
+def test_set_event_active_status_ambiguous_match_is_an_error(athletes_dir, run_tag) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    dup_name = f"Test Duplicate Event [{run_tag}]"
+    handlers["create_event"](
+        {"name": dup_name, "event_date": "2027-05-01", "distance_m": 5000, "priority": "B"}
+    )
+    handlers["create_event"](
+        {"name": dup_name, "event_date": "2027-06-01", "distance_m": 6000, "priority": "B"}
+    )
+
+    result = handlers["set_event_active_status"]({"event_name": dup_name, "active": False})
+
+    assert "error" in result
+    assert "found 2" in result["error"]
+
+
+def test_set_event_active_status_missing_fields_are_errors(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    assert "error" in handlers["set_event_active_status"]({"active": False})
+    assert "error" in handlers["set_event_active_status"]({"event_name": GREECE_EVENT_NAME})
+
+
+def test_set_event_active_status_non_boolean_active_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["set_event_active_status"](
+        {"event_name": GREECE_EVENT_NAME, "active": "yes"}
+    )
+    assert "error" in result
+
+
+def test_draft_macro_plan_can_resolve_and_build_toward_a_deactivated_event(athletes_dir, run_tag) -> None:
+    # Confirms no accidental active-filtering broke draft_macro_plan's own
+    # event-by-name lookup: a deactivated event must still resolve, since the
+    # athlete might reactivate it and (re)build a macro toward it, or an old
+    # macro might still reference it historically.
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    name = f"Test Deactivated Macro Event [{run_tag}]"
+    handlers["create_event"](
+        {"name": name, "event_date": "2027-06-01", "distance_m": 20000, "priority": "B"}
+    )
+    handlers["set_event_active_status"]({"event_name": name, "active": False})
+    event = next(e for e in store.load_events("renee") if e.name == name)
+    assert event.active is False
+
+    result = handlers["draft_macro_plan"](
+        {"event_name": name, "current_weekly_volume_m": 15000, "start_date": "2027-01-01"}
+    )
+
+    assert "error" not in result
+    assert result["created"] is True
+    reloaded_macro = FileStore(base_dir=athletes_dir).load_macro("renee")
+    assert reloaded_macro.event_id == event.id
+
+
+def test_replace_macro_plan_can_resolve_and_build_toward_a_deactivated_event(athletes_dir) -> None:
+    # Same confirmation as above, for replace_macro_plan's event lookup.
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    handlers["set_event_active_status"]({"event_name": GREECE_EVENT_NAME, "active": False})
+    event = next(e for e in store.load_events("renee") if e.name == GREECE_EVENT_NAME)
+    assert event.active is False
+
+    result = handlers["replace_macro_plan"](
+        {
+            "event_name": GREECE_EVENT_NAME,
+            "current_weekly_volume_m": 18000,
+            "start_date": "2026-01-05",
+            "confirm": True,
+        }
+    )
+
+    assert "error" not in result
+    assert result["persisted"] is True
+    reloaded_macro = FileStore(base_dir=athletes_dir).load_macro("renee")
+    assert reloaded_macro.event_id == event.id

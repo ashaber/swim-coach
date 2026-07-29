@@ -77,6 +77,17 @@ class Event(BaseModel):
     # generate_week already produced before this field existed. See
     # ROADMAP.md "Event format parameter + long-swim progression" and
     # library/06-long-swim-progression.md.
+    active: bool = True
+    # Soft delete/reactivate flag (backend/app/tools.py's
+    # set_event_active_status), NOT a hard delete -- a macro's event_id can
+    # still reference an event after the athlete has moved on, and
+    # hard-deleting risks orphaning that reference. Defaults True so every
+    # existing Event YAML (no active key) and every newly-created event via
+    # create_event validates/behaves unchanged -- purely additive, no
+    # schema_version bump. Existing event-by-id/-name lookups elsewhere
+    # (draft_macro_plan/replace_macro_plan/propose_adaptation) deliberately
+    # do NOT filter on this field -- it only changes how the coach *talks
+    # about* events in conversation, never which events those lookups find.
 
 
 class Session(BaseModel):
