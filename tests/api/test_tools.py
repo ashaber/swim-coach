@@ -6,13 +6,14 @@ from __future__ import annotations
 
 import base64
 import json
+import uuid
 from datetime import date, timedelta
 from pathlib import Path
 
 import httpx
 import pytest
 from fakes import SpyFeedbackStore, make_workout
-from swim_coach.models import WorkoutAnalytics, WorkoutLap, WorkoutPause
+from swim_coach.models import MacroBlock, MacroPlan, WorkoutAnalytics, WorkoutLap, WorkoutPause
 from swim_coach.store import FileStore
 
 from app.tools import GET_WORKOUTS_CAP, SYNC_WORKOUTS_WINDOW_DAYS, build_tool_handlers
@@ -622,6 +623,274 @@ def test_draft_macro_plan_missing_event_name_is_an_error(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
     result = handlers["draft_macro_plan"]({"current_weekly_volume_m": 15000})
+    assert "error" in result
+
+
+# --- replace_macro_plan ----------------------------------------------------------
+
+
+def test_replace_macro_plan_draft_mode_does_not_persist(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    original_macro = FileStore(base_dir=athletes_dir).load_macro("renee")
+
+    result = handlers["replace_macro_plan"](
+        {"event_name": GREECE_EVENT_NAME, "current_weekly_volume_m": 18000, "start_date": "2026-01-05"}
+    )
+
+    assert "error" not in result
+    assert result["persisted"] is False
+    assert len(result["blocks"]) == 4
+    assert [b["name"] for b in result["blocks"]] == ["base", "build", "peak", "taper"]
+
+    # Untouched -- draft mode never calls save_macro.
+    reloaded = FileStore(base_dir=athletes_dir).load_macro("renee")
+    assert reloaded == original_macro
+
+
+def test_replace_macro_plan_draft_mode_confirm_explicitly_false_also_does_not_persist(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    original_macro = FileStore(base_dir=athletes_dir).load_macro("renee")
+
+    result = handlers["replace_macro_plan"](
+        {
+            "event_name": GREECE_EVENT_NAME,
+            "current_weekly_volume_m": 18000,
+            "start_date": "2026-01-05",
+            "confirm": False,
+        }
+    )
+
+    assert result["persisted"] is False
+    assert FileStore(base_dir=athletes_dir).load_macro("renee") == original_macro
+
+
+def test_replace_macro_plan_draft_includes_comparison_against_current_macro(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["replace_macro_plan"](
+        {"event_name": GREECE_EVENT_NAME, "current_weekly_volume_m": 18000, "start_date": "2026-01-05"}
+    )
+
+    assert "error" not in result
+    comparison = result["comparison"]
+    assert comparison is not None
+    assert comparison["old_event_name"] == GREECE_EVENT_NAME
+    assert comparison["new_event_name"] == GREECE_EVENT_NAME
+    assert comparison["old_peak_weekly_volume_m"] == 26659  # athletes/renee/plan/macro.yaml
+    new_peak = next(b["weekly_volume_target_m"] for b in result["blocks"] if b["name"] == "peak")
+    assert comparison["new_peak_weekly_volume_m"] == new_peak
+
+
+def test_replace_macro_plan_confirm_true_persists_and_is_retrievable(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    original_macro = FileStore(base_dir=athletes_dir).load_macro("renee")
+
+    result = handlers["replace_macro_plan"](
+        {
+            "event_name": GREECE_EVENT_NAME,
+            "current_weekly_volume_m": 18000,
+            "start_date": "2026-01-05",
+            "confirm": True,
+        }
+    )
+
+    assert "error" not in result
+    assert result["persisted"] is True
+
+    reloaded = FileStore(base_dir=athletes_dir).load_macro("renee")
+    assert reloaded is not None
+    assert reloaded.id != original_macro.id
+    assert [b.weekly_volume_target_m for b in reloaded.blocks] == [
+        b["weekly_volume_target_m"] for b in result["blocks"]
+    ]
+
+
+def test_replace_macro_plan_works_with_no_prior_macro(athletes_dir) -> None:
+    (athletes_dir / "renee" / "plan" / "macro.yaml").unlink()
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    assert FileStore(base_dir=athletes_dir).load_macro("renee") is None
+
+    draft = handlers["replace_macro_plan"](
+        {"event_name": GREECE_EVENT_NAME, "current_weekly_volume_m": 18000, "start_date": "2026-01-05"}
+    )
+    assert "error" not in draft
+    assert draft["persisted"] is False
+    assert draft["comparison"] is None  # nothing to compare against
+    assert FileStore(base_dir=athletes_dir).load_macro("renee") is None
+
+    confirmed = handlers["replace_macro_plan"](
+        {
+            "event_name": GREECE_EVENT_NAME,
+            "current_weekly_volume_m": 18000,
+            "start_date": "2026-01-05",
+            "confirm": True,
+        }
+    )
+    assert confirmed["persisted"] is True
+    reloaded = FileStore(base_dir=athletes_dir).load_macro("renee")
+    assert reloaded is not None
+    events = FileStore(base_dir=athletes_dir).load_events("renee")
+    greece = next(e for e in events if e.name == GREECE_EVENT_NAME)
+    assert reloaded.event_id == greece.id
+
+
+def test_replace_macro_plan_fixes_a_broken_zero_volume_macro_end_to_end(athletes_dir, run_tag) -> None:
+    # End-to-end regression test for the reported bug + gap: before Part 1's
+    # fix, draft_macro_plan with current_weekly_volume_m=0 silently persisted
+    # an all-zero macro, and there was previously no way to fix it afterward
+    # (draft_macro_plan refuses once any macro exists). Since scaffold_macro
+    # itself can no longer produce that degenerate macro (that's the Part 1
+    # fix working), this test constructs a broken all-zero macro directly --
+    # standing in for one created by the pre-fix engine, e.g. Andrew's own
+    # already-broken Halloween Spook Swim macro -- and confirms
+    # replace_macro_plan is the self-service fix.
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    name = f"Test Broken Macro Event [{run_tag}]"
+    create_result = handlers["create_event"](
+        {"name": name, "event_date": "2027-06-01", "distance_m": 20000, "priority": "B"}
+    )
+    event_id = uuid.UUID(create_result["id"])
+    athlete_id = store.load_athlete("renee").id
+
+    broken_macro = MacroPlan(
+        id=uuid.uuid4(),
+        athlete_id=athlete_id,
+        event_id=event_id,
+        blocks=[
+            MacroBlock(
+                name="base", start_date=date(2027, 1, 4), end_date=date(2027, 3, 1),
+                weekly_volume_target_m=0, focus="aerobic base",
+            ),
+            MacroBlock(
+                name="build", start_date=date(2027, 3, 2), end_date=date(2027, 3, 29),
+                weekly_volume_target_m=0, focus="race-specific build",
+            ),
+            MacroBlock(
+                name="peak", start_date=date(2027, 3, 30), end_date=date(2027, 4, 19),
+                weekly_volume_target_m=0, focus="peak volume",
+            ),
+            MacroBlock(
+                name="taper", start_date=date(2027, 4, 20), end_date=date(2027, 5, 31),
+                weekly_volume_target_m=0, focus="taper",
+            ),
+        ],
+    )
+    store.save_macro("renee", broken_macro)
+    assert all(b.weekly_volume_target_m == 0 for b in broken_macro.blocks)  # confirmed broken
+
+    # draft_macro_plan can't touch it -- confirm the refusal points here.
+    refused = handlers["draft_macro_plan"](
+        {"event_name": name, "current_weekly_volume_m": 12000, "start_date": "2027-01-01"}
+    )
+    assert "error" in refused
+    assert "replace_macro_plan" in refused["error"]
+
+    # replace_macro_plan is the fix: draft first...
+    draft = handlers["replace_macro_plan"](
+        {"event_name": name, "current_weekly_volume_m": 12000, "start_date": "2027-01-01"}
+    )
+    assert "error" not in draft
+    assert draft["persisted"] is False
+    assert any(b["weekly_volume_target_m"] > 0 for b in draft["blocks"])
+    # Still broken on disk -- draft mode didn't touch it.
+    assert FileStore(base_dir=athletes_dir).load_macro("renee").blocks == broken_macro.blocks
+
+    # ...then confirm.
+    fixed = handlers["replace_macro_plan"](
+        {"event_name": name, "current_weekly_volume_m": 12000, "start_date": "2027-01-01", "confirm": True}
+    )
+    assert fixed["persisted"] is True
+    fixed_macro = FileStore(base_dir=athletes_dir).load_macro("renee")
+    assert fixed_macro is not None
+    assert any(b.weekly_volume_target_m > 0 for b in fixed_macro.blocks)
+    assert fixed_macro.event_id == event_id
+
+
+def test_replace_macro_plan_unknown_event_name_names_existing_events(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["replace_macro_plan"](
+        {"event_name": "No Such Event At All", "current_weekly_volume_m": 15000}
+    )
+
+    assert "error" in result
+    assert GREECE_EVENT_NAME in result["error"]
+
+
+def test_replace_macro_plan_insufficient_runway_is_an_error(athletes_dir, run_tag) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    name = f"Test Sprint Event Replace [{run_tag}]"
+    handlers["create_event"](
+        {"name": name, "event_date": "2027-01-15", "distance_m": 5000, "priority": "B"}
+    )
+
+    result = handlers["replace_macro_plan"](
+        {"event_name": name, "current_weekly_volume_m": 10000, "start_date": "2027-01-01"}
+    )
+
+    assert "error" in result
+
+
+def test_replace_macro_plan_missing_current_weekly_volume_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["replace_macro_plan"]({"event_name": GREECE_EVENT_NAME})
+    assert "error" in result
+
+
+def test_replace_macro_plan_missing_event_name_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["replace_macro_plan"]({"current_weekly_volume_m": 15000})
+    assert "error" in result
+
+
+# --- set_pool_coach_status -------------------------------------------------------
+
+
+def test_set_pool_coach_status_persists_false(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    assert store.load_athlete("renee").has_pool_coach is True  # default
+
+    result = handlers["set_pool_coach_status"]({"has_pool_coach": False})
+
+    assert result == {"updated": True, "has_pool_coach": False}
+    reloaded = FileStore(base_dir=athletes_dir).load_athlete("renee")
+    assert reloaded.has_pool_coach is False
+
+
+def test_set_pool_coach_status_persists_true(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    handlers["set_pool_coach_status"]({"has_pool_coach": False})
+
+    result = handlers["set_pool_coach_status"]({"has_pool_coach": True})
+
+    assert result == {"updated": True, "has_pool_coach": True}
+    reloaded = FileStore(base_dir=athletes_dir).load_athlete("renee")
+    assert reloaded.has_pool_coach is True
+
+
+def test_set_pool_coach_status_missing_field_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["set_pool_coach_status"]({})
+    assert "error" in result
+
+
+def test_set_pool_coach_status_non_boolean_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["set_pool_coach_status"]({"has_pool_coach": "yes"})
     assert "error" in result
 
 

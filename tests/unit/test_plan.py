@@ -12,6 +12,9 @@ import pytest
 
 from swim_coach.models import Athlete, Event
 from swim_coach.plan import (
+    DEFAULT_POOL_SESSION_MIN,
+    MIN_RAMP_SEED_VOLUME_M,
+    POOL_SESSION_EST_M,
     STRENGTH_CORE_EXERCISES,
     STRENGTH_SESSIONS_PER_WEEK,
     WEEKLY_VOLUME_RAMP_CAP,
@@ -165,6 +168,63 @@ def test_peak_volume_not_clamped_when_under_cap_and_explicit():
         )
     peak_block = next(b for b in macro.blocks if b.name == "peak")
     assert peak_block.weekly_volume_target_m == 20000
+
+
+# --- zero-volume ramp-cap bug fix (MIN_RAMP_SEED_VOLUME_M) ----------------------
+
+
+def test_scaffold_macro_zero_current_volume_produces_nonzero_ramped_macro():
+    # Regression test for the ramp-cap bug: current_weekly_volume_m=0 (a
+    # real, legitimate starting point -- a brand-new swimmer) used to zero
+    # out ramp_limited_max entirely (0 * anything == 0), so
+    # peak_volume = min(candidate_peak, ramp_limited_max) was always 0 and
+    # every block (base/build/peak) inherited it, regardless of the
+    # requested target. The fix seeds the ramp ceiling at
+    # MIN_RAMP_SEED_VOLUME_M instead of the raw (possibly zero) current
+    # volume -- this asserts the macro comes back non-zero and sensibly
+    # ramped instead.
+    athlete = make_athlete()
+    event = make_event(event_date=START + timedelta(weeks=24), distance_m=20000)
+    with pytest.warns(UserWarning, match="clamped"):
+        macro = scaffold_macro(athlete, event, START, current_weekly_volume_m=0)
+
+    base_block = next(b for b in macro.blocks if b.name == "base")
+    build_block = next(b for b in macro.blocks if b.name == "build")
+    peak_block = next(b for b in macro.blocks if b.name == "peak")
+    assert base_block.weekly_volume_target_m > 0
+    assert build_block.weekly_volume_target_m > 0
+    assert peak_block.weekly_volume_target_m > 0
+
+    ramp_weeks = next(
+        (b.end_date - b.start_date).days // 7 + 1 for b in macro.blocks if b.name == "base"
+    ) + next((b.end_date - b.start_date).days // 7 + 1 for b in macro.blocks if b.name == "build")
+    expected_ceiling = round(MIN_RAMP_SEED_VOLUME_M * (1 + WEEKLY_VOLUME_RAMP_CAP) ** ramp_weeks)
+    assert peak_block.weekly_volume_target_m == expected_ceiling
+
+
+def test_scaffold_macro_zero_current_volume_generates_a_usable_week():
+    # End-to-end: a zero-volume macro must be usable by generate_week too,
+    # not just non-zero at the MacroBlock level (this is the actual failure
+    # mode reported: the tool "succeeded" but every generated week had
+    # target_volume_m == 0).
+    athlete = make_athlete()
+    event = make_event(event_date=START + timedelta(weeks=10), distance_m=5000)
+    with pytest.warns(UserWarning, match="clamped"):
+        macro = scaffold_macro(athlete, event, START, current_weekly_volume_m=0)
+    week_start = macro.blocks[0].start_date
+    week = generate_week(athlete, macro, _iso_week(week_start), week_start)
+    assert week.target_volume_m > 0
+
+
+def test_scaffold_macro_near_zero_current_volume_also_seeded():
+    # A tiny-but-nonzero current volume (below the seed) must also be
+    # seeded up, not just literal zero -- max(current, seed) covers both.
+    athlete = make_athlete()
+    event = make_event(event_date=START + timedelta(weeks=24), distance_m=20000)
+    with pytest.warns(UserWarning, match="clamped"):
+        macro = scaffold_macro(athlete, event, START, current_weekly_volume_m=200)
+    peak_block = next(b for b in macro.blocks if b.name == "peak")
+    assert peak_block.weekly_volume_target_m > 0
 
 
 # --- taper decay ----------------------------------------------------------------
@@ -367,6 +427,94 @@ def test_generate_week_handles_dict_and_string_pool_schedule_entries():
     week = generate_week(athlete, macro, _iso_week(week_start), week_start)
     pool_sessions = [s for s in week.sessions if s.sport == "swim_pool" and s.source == "pool_coach"]
     assert {s.date.weekday() for s in pool_sessions} == {0, 2, 4}  # mon, wed, fri
+
+
+# --- has_pool_coach: no-coach pool sessions get real structure -------------------
+
+
+def test_generate_week_has_pool_coach_true_default_matches_pre_change_behavior(short_macro):
+    # Regression guard: has_pool_coach left at its default (True, field
+    # omitted at construction, same as every existing athlete) must produce
+    # byte-for-byte (modulo random ids) the same pool-session output as
+    # before this field existed -- content-less pool_coach placeholders.
+    athlete, macro = short_macro
+    assert athlete.has_pool_coach is True  # default, never set at construction
+    week_start = macro.blocks[0].start_date
+    week_default = generate_week(athlete, macro, _iso_week(week_start), week_start)
+
+    athlete_explicit_true = athlete.model_copy(update={"has_pool_coach": True})
+    week_explicit = generate_week(athlete_explicit_true, macro, _iso_week(week_start), week_start)
+
+    def _shape(week):
+        return [
+            (
+                s.sport,
+                s.source,
+                s.date,
+                s.distance_m,
+                s.duration_min,
+                s.intensity,
+                s.purpose,
+                s.structure,
+                s.status,
+            )
+            for s in week.sessions
+        ]
+
+    assert _shape(week_default) == _shape(week_explicit)
+
+    pool_sessions = [s for s in week_default.sessions if s.sport == "swim_pool"]
+    assert len(pool_sessions) == 3
+    for s in pool_sessions:
+        assert s.source == "pool_coach"
+        assert s.structure is None
+        assert s.intensity == {"anchor": "rpe"}
+        assert "pool coach" in s.purpose
+        assert s.distance_m == POOL_SESSION_EST_M
+        assert s.duration_min == DEFAULT_POOL_SESSION_MIN
+
+
+def test_generate_week_no_pool_coach_produces_real_structure(short_macro):
+    athlete, macro = short_macro
+    athlete = athlete.model_copy(update={"has_pool_coach": False})
+    week_start = macro.blocks[0].start_date
+    week = generate_week(athlete, macro, _iso_week(week_start), week_start)
+
+    pool_sessions = [s for s in week.sessions if s.sport == "swim_pool"]
+    assert len(pool_sessions) == 3
+    assert {s.date.weekday() for s in pool_sessions} == {1, 3, 4}  # tue, thu, fri
+    for s in pool_sessions:
+        assert s.source == "ai_coach"
+        assert s.status == "planned"
+        assert s.distance_m == POOL_SESSION_EST_M
+        assert s.duration_min == DEFAULT_POOL_SESSION_MIN
+        assert s.structure is not None
+        assert s.structure.strip() != ""
+        assert "Warm-up" in s.structure
+        assert "Main set" in s.structure
+        assert "Cool-down" in s.structure
+
+
+def test_generate_week_no_pool_coach_leaves_other_sessions_unaffected(short_macro):
+    # Only the pool_schedule sessions change -- long swim, strength, and
+    # recovery sessions (and pool_total_m's volume accounting) are identical
+    # regardless of has_pool_coach.
+    athlete, macro = short_macro
+    week_start = macro.blocks[0].start_date
+    week_with_coach = generate_week(athlete, macro, _iso_week(week_start), week_start)
+    week_without_coach = generate_week(
+        athlete.model_copy(update={"has_pool_coach": False}), macro, _iso_week(week_start), week_start
+    )
+
+    def _non_pool_shape(week):
+        return [
+            (s.sport, s.date, s.distance_m, s.duration_min, s.purpose)
+            for s in week.sessions
+            if s.sport != "swim_pool"
+        ]
+
+    assert _non_pool_shape(week_with_coach) == _non_pool_shape(week_without_coach)
+    assert week_with_coach.target_volume_m == week_without_coach.target_volume_m
 
 
 # --- event_format: multi_day_stage --------------------------------------------------
