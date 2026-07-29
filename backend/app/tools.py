@@ -36,6 +36,14 @@ masters coach on hand means `swim_coach.plan.generate_week` must author real
 pool-session content instead of a `pool_coach` placeholder). Low-risk status
 flag, not a plan/volume change, so -- like `create_event` -- it persists
 directly, no draft/confirm step.
+
+`reschedule_session` moves one already-planned `Session`'s `date` within the
+same ISO week (e.g. a Wednesday swim moved to Thursday for a scheduling
+conflict) -- everything else about the session is untouched, and it has no
+volume/training-load/safety-rail interaction at all, which is exactly why it
+persists directly rather than going through `propose_adaptation`'s
+draft-then-confirm shape: unlike an adaptation, there's no rule-table
+recompute for a bad call to have gotten wrong.
 """
 
 from __future__ import annotations
@@ -413,6 +421,56 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "reschedule_session",
+        "description": (
+            "Move an already-planned session to a different day within the "
+            "same week -- e.g. the athlete has a scheduling conflict (a "
+            "meeting, travel) and needs to move a Wednesday session to "
+            "Thursday. Changes only that one session's date -- sport, "
+            "distance, duration, intensity, structure, and purpose all stay "
+            "exactly as planned. This is a low-risk, single-field edit with "
+            "no volume/training-load/safety-rail interaction at all (unlike "
+            "propose_adaptation, which recomputes an entire week's volume "
+            "via the rule table -- the wrong tool for a simple day move), so "
+            "it persists immediately, no draft/confirm step. Only moves a "
+            "session within iso_week's own Monday-Sunday span -- refuses "
+            "and points at propose_adaptation instead if new_date falls in "
+            "a different week, since that's a real schedule/volume "
+            "decision, not a same-week day swap."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "iso_week": {
+                    "type": "string",
+                    "description": "ISO week the session belongs to, formatted 'YYYY-Wnn', e.g. '2026-W30'.",
+                },
+                "current_date": {
+                    "type": "string",
+                    "description": "The session's date as currently planned, 'YYYY-MM-DD'.",
+                },
+                "sport": {
+                    "type": "string",
+                    "description": (
+                        "The session's sport (e.g. 'swim_pool', 'swim_ow', "
+                        "'strength', 'recovery') -- disambiguates same-day "
+                        "sessions, since a day can have more than one (e.g. "
+                        "both a swim and a strength session)."
+                    ),
+                },
+                "new_date": {
+                    "type": "string",
+                    "description": (
+                        "The date to move the session to, 'YYYY-MM-DD' -- "
+                        "must fall within the same ISO week as current_date."
+                    ),
+                },
+            },
+            "required": ["iso_week", "current_date", "sport", "new_date"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -455,6 +513,48 @@ def _handle_propose_adaptation(input_data: dict[str, Any], *, store: StoreInterf
             "error": (
                 f"no existing week plan for {current_iso!r} (the week before "
                 f"{iso_week!r}) to adapt from"
+            )
+        }
+
+    # current_week loaded successfully, but that alone doesn't mean it's a
+    # valid adaptation baseline -- after replace_macro_plan moves the macro
+    # to a new event with a different (later) start date, the OLD week
+    # plans from before that start date are still sitting on disk. Without
+    # this check, they'd get silently adapted from as if still active,
+    # producing a draft that repeats a stale, since-replaced macro's target
+    # (confirmed in a live transcript). Same two-line range check
+    # plan.py's _find_block uses (block.start_date <= week_start <=
+    # block.end_date), applied across the macro's overall span rather than
+    # one block, since current_week_start just needs to fall somewhere
+    # inside the current macro, not in any particular block.
+    macro_start = macro.blocks[0].start_date
+    macro_end = macro.blocks[-1].end_date
+    if current_week_start < macro_start:
+        return {
+            "error": (
+                f"the week before {iso_week!r} ({current_iso!r}) predates the "
+                f"current macro (which starts {macro_start}) -- "
+                "expected right after a macro replacement or a fresh start, not a "
+                f"gap. Use create_week_plan for {iso_week!r} instead, since it's "
+                "effectively the first week of the current plan."
+            )
+        }
+    if current_week_start > macro_end:
+        # Distinct from the predates-start case above: here iso_week itself
+        # (not just the prior week) is also beyond macro_end, since
+        # current_week_start is iso_week's own week_start minus 7 days --
+        # create_week_plan would refuse for the same reason (it checks the
+        # same macro range), so pointing at it here would just trade one
+        # dead end for another. The real fix is a new macro for whatever
+        # comes next.
+        return {
+            "error": (
+                f"the week before {iso_week!r} ({current_iso!r}) falls after "
+                f"the current macro ends ({macro_end}) -- {iso_week!r} is "
+                "beyond this macro's plan entirely, not a gap within it. "
+                "Build a new macro (draft_macro_plan or replace_macro_plan) "
+                "for whatever comes next, then create_week_plan for its "
+                "first week."
             )
         }
 
@@ -995,6 +1095,99 @@ def _handle_create_week_plan(input_data: dict[str, Any], *, store: StoreInterfac
     }
 
 
+def _handle_reschedule_session(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    """Moves one already-planned Session's `date` field within the same ISO
+    week -- everything else about the session (sport, distance, duration,
+    intensity, structure, purpose) is untouched. No volume/training-load/
+    safety-rail interaction at all, unlike propose_adaptation -- a low-risk
+    single-field edit, so this persists directly via store.save_week, no
+    draft/confirm step, matching create_event's/set_pool_coach_status's
+    direct-persist convention."""
+    iso_week = input_data.get("iso_week")
+    if not iso_week:
+        return {"error": "iso_week is required"}
+    current_date_str = input_data.get("current_date")
+    if not current_date_str:
+        return {"error": "current_date is required"}
+    sport = input_data.get("sport")
+    if not sport:
+        return {"error": "sport is required"}
+    new_date_str = input_data.get("new_date")
+    if not new_date_str:
+        return {"error": "new_date is required"}
+
+    try:
+        year_str, week_str = iso_week.split("-W")
+        week_start = date.fromisocalendar(int(year_str), int(week_str), 1)
+    except (ValueError, IndexError):
+        return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+
+    try:
+        current_date = date.fromisoformat(current_date_str)
+    except ValueError:
+        return {"error": f"invalid current_date {current_date_str!r}; expected format 'YYYY-MM-DD'"}
+
+    try:
+        new_date = date.fromisoformat(new_date_str)
+    except ValueError:
+        return {"error": f"invalid new_date {new_date_str!r}; expected format 'YYYY-MM-DD'"}
+
+    week_end = week_start + timedelta(days=6)
+    if not (week_start <= new_date <= week_end):
+        return {
+            "error": (
+                f"new_date {new_date_str!r} falls outside {iso_week!r}'s own "
+                f"Monday-Sunday span ({week_start.isoformat()}..{week_end.isoformat()}); "
+                "reschedule_session only moves a session within the same week -- "
+                "use propose_adaptation instead to move something to a different "
+                "week"
+            )
+        }
+
+    week = store.load_week(slug, iso_week)
+    if week is None:
+        return {
+            "error": (
+                f"no existing week plan for {iso_week!r}; use create_week_plan if "
+                "it doesn't exist at all yet, or propose_adaptation if it needs a "
+                "volume/training-load change"
+            )
+        }
+
+    matches = [s for s in week.sessions if s.date == current_date and s.sport == sport]
+    if len(matches) != 1:
+        same_day = [
+            {"sport": s.sport, "date": s.date.isoformat()} for s in week.sessions if s.date == current_date
+        ]
+        return {
+            "error": (
+                f"expected exactly one session matching current_date "
+                f"{current_date_str!r} and sport {sport!r} in {iso_week!r}, found "
+                f"{len(matches)}; sessions on {current_date_str!r}: {same_day}"
+            )
+        }
+
+    session = matches[0]
+    session.date = new_date
+    store.save_week(slug, week)
+
+    log.info(
+        "session rescheduled",
+        athlete=slug,
+        iso_week=iso_week,
+        sport=sport,
+        previous_date=current_date_str,
+        new_date=new_date_str,
+    )
+    return {
+        "rescheduled": True,
+        "iso_week": iso_week,
+        "sport": sport,
+        "previous_date": current_date_str,
+        "new_date": new_date_str,
+    }
+
+
 def build_tool_handlers(
     store: StoreInterface, *, slug: str, expert_mode: bool
 ) -> dict[str, ToolHandler]:
@@ -1031,6 +1224,9 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "create_week_plan": lambda input_data: _handle_create_week_plan(
+            input_data, store=store, slug=slug
+        ),
+        "reschedule_session": lambda input_data: _handle_reschedule_session(
             input_data, store=store, slug=slug
         ),
     }

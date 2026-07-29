@@ -13,7 +13,14 @@ from pathlib import Path
 import httpx
 import pytest
 from fakes import SpyFeedbackStore, make_workout
-from swim_coach.models import MacroBlock, MacroPlan, WorkoutAnalytics, WorkoutLap, WorkoutPause
+from swim_coach.models import (
+    MacroBlock,
+    MacroPlan,
+    Session,
+    WorkoutAnalytics,
+    WorkoutLap,
+    WorkoutPause,
+)
 from swim_coach.store import FileStore
 
 from app.tools import GET_WORKOUTS_CAP, SYNC_WORKOUTS_WINDOW_DAYS, build_tool_handlers
@@ -60,6 +67,76 @@ def test_propose_adaptation_invalid_iso_week_is_an_error(athletes_dir) -> None:
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
     result = handlers["propose_adaptation"]({"iso_week": "not-a-week"})
     assert "error" in result
+
+
+def test_propose_adaptation_prior_week_predating_macro_is_a_calm_error(athletes_dir) -> None:
+    # Regression test for tonight's real bug: after replace_macro_plan moves
+    # the macro to a new event with a later start date, an OLD week plan
+    # from before that start date can still be sitting on disk. Simulate
+    # that here -- a week file at 2026-W27 (the real macro's base block
+    # starts 2026-07-06, i.e. W28) standing in for a stale/pre-replacement
+    # week -- and confirm propose_adaptation refuses with the new,
+    # non-alarming, action-directing message rather than silently adapting
+    # from it.
+    store = FileStore(base_dir=athletes_dir)
+    stale_week = store.load_week("renee", "2026-W28")
+    stale_week = stale_week.model_copy(update={"iso_week": "2026-W27"})
+    store.save_week("renee", stale_week)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["propose_adaptation"]({"iso_week": "2026-W28"})
+
+    assert "error" in result
+    assert "predates the current macro" in result["error"]
+    assert "2026-07-06" in result["error"]  # macro's actual start date
+    assert "create_week_plan" in result["error"]
+    assert "2026-W28" in result["error"]
+
+
+def test_propose_adaptation_prior_week_after_macro_end_points_at_a_new_macro(athletes_dir) -> None:
+    # Distinct from the predates-start case above: here the prior week (and
+    # therefore the target iso_week too, since it's only 7 days later) falls
+    # AFTER the current macro's own end date -- e.g. the athlete already
+    # raced and is asking about a week beyond the whole plan. Found during
+    # review: the original single-branch check reused the "predates" message
+    # verbatim for this case too, wrongly claiming the macro "starts
+    # 2026-07-06" and directing to create_week_plan -- which would itself
+    # refuse for the exact same range reason, trading one dead end for
+    # another. Confirm the message here is accurate (says the macro *ends*,
+    # not "predates"/"starts") and points at building a new macro instead.
+    store = FileStore(base_dir=athletes_dir)
+    macro = store.load_macro("renee")
+    macro_end = macro.blocks[-1].end_date
+    assert macro_end.isoformat() == "2026-09-13"
+
+    stale_week = store.load_week("renee", "2026-W28")
+    stale_week = stale_week.model_copy(update={"iso_week": "2026-W39"})
+    store.save_week("renee", stale_week)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["propose_adaptation"]({"iso_week": "2026-W40"})
+
+    assert "error" in result
+    assert "falls after" in result["error"]
+    assert "predates" not in result["error"]
+    assert "2026-09-13" in result["error"]  # macro's actual end date
+    assert "draft_macro_plan" in result["error"] or "replace_macro_plan" in result["error"]
+    assert "2026-W40" in result["error"]
+
+
+def test_propose_adaptation_in_range_prior_week_is_unaffected_by_the_new_check(athletes_dir) -> None:
+    # Regression check: the new out-of-range guard must not disturb the
+    # ordinary, already-correct in-range case -- 2026-W29 (the real prior
+    # week on file) falls inside the macro's base block, same as before
+    # Part 1's fix.
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["propose_adaptation"]({"iso_week": "2026-W30"})
+
+    assert "error" not in result
+    assert result["iso_week"] == "2026-W30"
+    assert result["persisted"] is False
 
 
 def test_get_plan_summary_matches_engine_summarize_shape(athletes_dir) -> None:
@@ -972,5 +1049,220 @@ def test_create_week_plan_week_outside_macro_range_is_an_error(athletes_dir) -> 
 
     # Well past the macro's taper block (ends 2026-09-13).
     result = handlers["create_week_plan"]({"iso_week": "2027-W01"})
+
+    assert "error" in result
+
+
+# --- reschedule_session -------------------------------------------------------
+# 2026-W28 (2026-07-06 .. 2026-07-12, real test-tree fixture) sessions by
+# date: 07-06 swim_pool, 07-07 strength, 07-08 swim_pool, 07-09 swim_ow,
+# 07-10 swim_pool, 07-11 recovery, 07-12 recovery.
+
+
+def test_reschedule_session_moves_date_and_leaves_rest_of_week_untouched(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    original = store.load_week("renee", "2026-W28")
+    original_by_id = {s.id: s for s in original.sessions}
+    moved_id = next(s.id for s in original.sessions if s.sport == "strength")
+
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["reschedule_session"](
+        {
+            "iso_week": "2026-W28",
+            "current_date": "2026-07-07",
+            "sport": "strength",
+            "new_date": "2026-07-12",
+        }
+    )
+
+    assert result == {
+        "rescheduled": True,
+        "iso_week": "2026-W28",
+        "sport": "strength",
+        "previous_date": "2026-07-07",
+        "new_date": "2026-07-12",
+    }
+
+    reloaded = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    assert len(reloaded.sessions) == len(original.sessions)
+
+    moved = next(s for s in reloaded.sessions if s.id == moved_id)
+    assert moved.date == date(2026, 7, 12)
+    # everything else about the moved session is untouched
+    original_moved = original_by_id[moved_id]
+    assert moved.sport == original_moved.sport
+    assert moved.distance_m == original_moved.distance_m
+    assert moved.duration_min == original_moved.duration_min
+    assert moved.purpose == original_moved.purpose
+    assert moved.structure == original_moved.structure
+
+    # every other session in the week is completely untouched
+    for session in reloaded.sessions:
+        if session.id == moved_id:
+            continue
+        original_session = original_by_id[session.id]
+        assert session.date == original_session.date
+        assert session.sport == original_session.sport
+        assert session.distance_m == original_session.distance_m
+        assert session.duration_min == original_session.duration_min
+        assert session.purpose == original_session.purpose
+
+
+def test_reschedule_session_ambiguous_match_lists_same_day_sessions(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    week = store.load_week("renee", "2026-W28")
+    athlete_id = store.load_athlete("renee").id
+    # Construct a genuine ambiguity: two "strength" sessions both dated
+    # 2026-07-07 (the fixture only ever has one session per sport per day,
+    # so this has to be built by hand).
+    duplicate = Session(
+        id=uuid.uuid4(),
+        athlete_id=athlete_id,
+        date=date(2026, 7, 7),
+        sport="strength",
+        source="ai_coach",
+        duration_min=45.0,
+        distance_m=None,
+        intensity={"anchor": "rpe"},
+        purpose="duplicate strength session for ambiguity test",
+        structure=None,
+        status="planned",
+    )
+    week.sessions.append(duplicate)
+    store.save_week("renee", week)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["reschedule_session"](
+        {
+            "iso_week": "2026-W28",
+            "current_date": "2026-07-07",
+            "sport": "strength",
+            "new_date": "2026-07-08",
+        }
+    )
+
+    assert "error" in result
+    assert "found 2" in result["error"]
+    assert "2026-07-07" in result["error"]
+
+    # untouched -- an ambiguous match must not silently pick one.
+    reloaded = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    assert sum(1 for s in reloaded.sessions if s.sport == "strength") == 2
+    assert all(s.date == date(2026, 7, 7) for s in reloaded.sessions if s.sport == "strength")
+
+
+def test_reschedule_session_no_match_lists_what_is_on_file_that_day(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    # 2026-07-07 is on file, but as "strength" not "swim_ow".
+    result = handlers["reschedule_session"](
+        {
+            "iso_week": "2026-W28",
+            "current_date": "2026-07-07",
+            "sport": "swim_ow",
+            "new_date": "2026-07-08",
+        }
+    )
+
+    assert "error" in result
+    assert "found 0" in result["error"]
+    assert "strength" in result["error"]
+
+
+def test_reschedule_session_cross_week_new_date_refuses(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    # 2026-07-15 falls in 2026-W29, not 2026-W28 -- a different-week move,
+    # out of scope for this tool.
+    result = handlers["reschedule_session"](
+        {
+            "iso_week": "2026-W28",
+            "current_date": "2026-07-07",
+            "sport": "strength",
+            "new_date": "2026-07-15",
+        }
+    )
+
+    assert "error" in result
+    assert "propose_adaptation" in result["error"]
+
+    # untouched
+    reloaded = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    strength = next(s for s in reloaded.sessions if s.sport == "strength")
+    assert strength.date == date(2026, 7, 7)
+
+
+def test_reschedule_session_week_does_not_exist_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    # 2026-W40 has no week file at all in the test tree; both dates fall
+    # within that same ISO week's own span (2026-09-28 .. 2026-10-04) so the
+    # cross-week guard doesn't mask the missing-week error.
+    result = handlers["reschedule_session"](
+        {
+            "iso_week": "2026-W40",
+            "current_date": "2026-09-28",
+            "sport": "swim_pool",
+            "new_date": "2026-09-29",
+        }
+    )
+
+    assert "error" in result
+    assert "2026-W40" in result["error"]
+
+
+def test_reschedule_session_invalid_iso_week_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["reschedule_session"](
+        {"iso_week": "not-a-week", "current_date": "2026-07-07", "sport": "strength", "new_date": "2026-07-08"}
+    )
+    assert "error" in result
+
+
+def test_reschedule_session_invalid_current_date_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["reschedule_session"](
+        {"iso_week": "2026-W28", "current_date": "not-a-date", "sport": "strength", "new_date": "2026-07-08"}
+    )
+    assert "error" in result
+
+
+def test_reschedule_session_invalid_new_date_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["reschedule_session"](
+        {"iso_week": "2026-W28", "current_date": "2026-07-07", "sport": "strength", "new_date": "not-a-date"}
+    )
+    assert "error" in result
+
+
+@pytest.mark.parametrize(
+    "overrides,missing_field",
+    [
+        ({"iso_week": ""}, "iso_week"),
+        ({"current_date": ""}, "current_date"),
+        ({"sport": ""}, "sport"),
+        ({"new_date": ""}, "new_date"),
+    ],
+)
+def test_reschedule_session_missing_required_field_is_an_error(
+    athletes_dir, overrides: dict, missing_field: str
+) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    payload = {
+        "iso_week": "2026-W28",
+        "current_date": "2026-07-07",
+        "sport": "strength",
+        "new_date": "2026-07-08",
+    }
+    payload.update(overrides)
+
+    result = handlers["reschedule_session"](payload)
 
     assert "error" in result

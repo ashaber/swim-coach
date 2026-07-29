@@ -111,6 +111,22 @@ def test_scaffold_macro_raises_if_under_min_weeks():
         scaffold_macro(athlete, event, START, current_weekly_volume_m=8000)
 
 
+def test_scaffold_macro_refuses_2k_per_week_athlete_signing_up_for_20k_next_week():
+    # Regression test for a real scenario Andrew explicitly named as
+    # intentional friction to preserve, not a bug to fix: an athlete
+    # currently swimming 2000m/week impulsively signs up for a 20000m event
+    # about a week out. MIN_MACRO_WEEKS (8 weeks minimum runway) must still
+    # refuse this outright -- there's no safe way to periodize a 20km swim
+    # in a single week regardless of current_weekly_volume_m or
+    # peak_weekly_volume_m. This isn't new behavior; the test exists purely
+    # so this exact, real-world-named shape never silently regresses.
+    athlete = make_athlete()
+    event = make_event(event_date=START + timedelta(weeks=1), distance_m=20000)
+
+    with pytest.raises(ValueError, match="need at least 8 to periodize"):
+        scaffold_macro(athlete, event, START, current_weekly_volume_m=2000)
+
+
 def test_scaffold_macro_start_snaps_to_next_monday():
     athlete = make_athlete()
     event = make_event(event_date=START + timedelta(weeks=10))
