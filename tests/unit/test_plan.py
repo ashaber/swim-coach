@@ -3,6 +3,7 @@
 No LLM calls, no network access -- pure arithmetic + model validation.
 """
 
+import re
 import uuid
 import warnings
 from datetime import date, timedelta
@@ -526,3 +527,21 @@ def test_additional_swim_structure_never_called_for_long_swim_sessions(short_mac
     text = _additional_swim_structure("build", 2000, athlete.css_pace_s_per_100m)
     assert text != "No additional pool-independent volume this week."
     assert "Warm-up" in text and "Cool-down" in text
+
+
+@pytest.mark.parametrize("macro_block_name", ["base", "build", "peak", "taper"])
+@pytest.mark.parametrize("distance_m", list(range(1000, 4001, 100)))
+def test_additional_swim_structure_sums_to_requested_distance(macro_block_name, distance_m):
+    # Regression guard: warm-up + main set (reps x rep length) + cool-down
+    # must sum exactly to distance_m -- a real rounding bug in an earlier
+    # version of this function let the printed main-set rep count drift
+    # from the warm-up/cool-down split, so the described session's total
+    # could silently overshoot or undershoot the session's actual
+    # distance_m by up to a full rep length (as much as 10% at the low end
+    # of realistic "additional swim" distances).
+    text = _additional_swim_structure(macro_block_name, distance_m, 95.0)
+    warm_up = int(re.search(r"Warm-up: (\d+)m", text).group(1))
+    cool_down = int(re.search(r"Cool-down: (\d+)m", text).group(1))
+    main_set = re.search(r"Main set: (\d+) x (\d+)m", text)
+    reps, rep_len = int(main_set.group(1)), int(main_set.group(2))
+    assert warm_up + reps * rep_len + cool_down == distance_m

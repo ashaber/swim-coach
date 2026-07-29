@@ -304,24 +304,46 @@ def _additional_swim_structure(macro_block_name: str, distance_m: int, css_pace_
     warm_up = max(
         ADDITIONAL_SWIM_MIN_WARM_UP_M, _round_100(distance_m * ADDITIONAL_SWIM_WARM_UP_SHARE)
     )
-    cool_down = max(
+    # Sized only to choose a sensible rep length / rep count below -- the
+    # actual cool-down (and therefore the session's true total) is
+    # reconciled after reps are picked, so warm-up + main set + cool-down
+    # always sums exactly to `distance_m` instead of drifting by a rep's
+    # worth of rounding (a real bug in an earlier version of this function:
+    # rounding `main_set_total / rep` to the nearest rep, without feeding
+    # that rounding back into the cool-down, could over- or under-state the
+    # printed session total by up to one rep length relative to distance_m).
+    cool_down_budget_estimate = max(
         ADDITIONAL_SWIM_MIN_COOL_DOWN_M, _round_100(distance_m * ADDITIONAL_SWIM_COOL_DOWN_SHARE)
     )
-    main_set_total = max(0, distance_m - warm_up - cool_down)
+    main_set_budget = max(0, distance_m - warm_up - cool_down_budget_estimate)
 
     z2_range = f"{_format_pace_s(z2['pace_lo_s'])}-{_format_pace_s(z2['pace_hi_s'])}/100m"
     lines = [f"Warm-up: {warm_up}m easy, building to Z2 pace ({z2_range}) by the end."]
 
     if macro_block_name == "base":
-        rep = ADDITIONAL_SWIM_BASE_BLOCK_REP_M if main_set_total >= 1200 else 200
-        reps = max(1, round(main_set_total / rep))
+        rep = ADDITIONAL_SWIM_BASE_BLOCK_REP_M if main_set_budget >= 1200 else 200
+    else:
+        rep = ADDITIONAL_SWIM_BUILD_BLOCK_REP_M if main_set_budget >= 800 else 100
+    reps = max(1, round(main_set_budget / rep))
+
+    remaining_for_cool_down = distance_m - warm_up - reps * rep
+    # If rounding pushed the main set to consume (almost) everything,
+    # give back one rep so the cool-down doesn't collapse toward 0m.
+    while (
+        reps > 1
+        and remaining_for_cool_down < ADDITIONAL_SWIM_MIN_COOL_DOWN_M
+        and remaining_for_cool_down + rep >= ADDITIONAL_SWIM_MIN_COOL_DOWN_M
+    ):
+        reps -= 1
+        remaining_for_cool_down += rep
+    cool_down = max(0, remaining_for_cool_down)
+
+    if macro_block_name == "base":
         lines.append(
             f"Main set: {reps} x {rep}m @ Z2 ({z2_range}), 15s rest -- continuous "
             "aerobic volume (base-block emphasis; library/14-swim-set-structure.md)."
         )
     else:
-        rep = ADDITIONAL_SWIM_BUILD_BLOCK_REP_M if main_set_total >= 800 else 100
-        reps = max(1, round(main_set_total / rep))
         z3_range = f"{_format_pace_s(z3['pace_lo_s'])}-{_format_pace_s(z3['pace_hi_s'])}/100m"
         z4_range = f"{_format_pace_s(z4['pace_lo_s'])}-{_format_pace_s(z4['pace_hi_s'])}/100m"
         lines.append(
