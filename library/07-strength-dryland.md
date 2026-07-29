@@ -9,7 +9,7 @@ scheme and `reference_list.md` for full citations.
 input" section already grounds the 2x/week *frequency* constant at
 `Confidence: high`; this file is the fuller home for everything around that
 frequency number — duration, placement, load-budget interaction, and what
-happens to strength under a cut or taper. **UNREVIEWED**: this file is
+happens to strength under a cut or taper. **REVIEWED**: this file is
 agent-authored per `00-conventions.md`'s workflow and needs Andrew's human
 review before being treated as settled grounding truth.
 
@@ -66,7 +66,7 @@ day around 3-5x/week pool practice plus long-swim volume.
 
 ## What's actually in a session: exercise selection and dosing
 
-**UNREVIEWED.** Hibberd et al. (2012), Manske et al. (2015), and Tavares,
+**REVIEWED.** Hibberd et al. (2012), Manske et al. (2015), and Tavares,
 Vilas-Boas & Castro (2025) — the same three RCTs above — give complete,
 reproducible protocols in this exact population and mechanism, not just a
 frequency number. This moves the section from pure `Coach judgment` to a
