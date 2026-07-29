@@ -13,24 +13,45 @@ happens to strength under a cut or taper. **UNREVIEWED**: this file is
 agent-authored per `00-conventions.md`'s workflow and needs Andrew's human
 review before being treated as settled grounding truth.
 
-## Why strength is in the plan at all: injury prevention, not performance
+## Why strength is in the plan at all: strength/balance improvement, not proven injury-incidence reduction
 
 **[EVIDENCE: swim]** `reference_list.md`'s "Injury & training load" section
-cites multiple dry-land shoulder-strengthening RCTs in competitive
-swimmers, showing reduced shoulder pain/injury incidence and improved
-rotator-cuff strength balance from structured dry-land rotator programs.
-Confidence: high — multiple RCTs, direct swim population, not an
-adaptation from another sport. This is the direct evidence behind
-`STRENGTH_SESSIONS_PER_WEEK = 2`: the frequency is chosen to match what
-those programs actually tested (structured dry-land work roughly twice
-weekly), not an arbitrary round number.
+cites three dry-land shoulder-strengthening RCTs in competitive swimmers —
+Hibberd et al. (2012), Manske et al. (2015), and Tavares, Vilas-Boas &
+Castro (2025) — showing improved rotator-cuff strength/functional balance
+and reduced in-season shoulder-rotational imbalance from structured
+dry-land rotator-cuff/scapular-stabilizer programs. Confidence: high for
+the strength/balance finding — three RCTs, direct swim population, not an
+adaptation from another sport.
 
-Framing matters here: this is an *injury-prevention* claim, not a
-performance claim. The RCT evidence supports strength work reducing
-shoulder pain and injury incidence in swimmers who train a lot of pool
-volume; it does not, by itself, claim strength work makes this athlete
-swim faster. That performance question is addressed separately below,
-with much weaker evidence.
+**Correction (2026-07-28):** this section previously said the RCTs showed
+"reduced shoulder pain/injury incidence." That overstates what these three
+verified trials individually report: Hibberd (2012) found no significant
+*between-group* strength difference, and Manske (2015) found shoulder
+soreness *not* significantly different between groups over 12 weeks —
+neither trial was powered as an injury-incidence study. The durable,
+well-supported claim is **rotator-cuff strength/balance improvement and
+in-season imbalance prevention**; injury/pain-incidence reduction is a
+plausible but *mixed*, weaker downstream inference that these three trials
+do not individually prove. Same honest-correction spirit as the Formosa
+citation-debt note (`03-periodization.md`/`06-long-swim-progression.md`) —
+flagged rather than quietly left overstated.
+
+Two of the three trials also independently corroborate
+`STRENGTH_SESSIONS_PER_WEEK = 2`: Tavares (2025) dosed twice weekly and
+Manske (2015) dosed 2-3x/week — the same studies that now supply the
+exercise selection below also ground the frequency constant, tightening
+`04-css-intensity-anchors.md`'s previously generic "multiple RCTs"
+reference.
+
+Framing matters here: this is a *strength/balance* claim, not a
+performance claim, and — per the correction above — not a settled
+*injury-incidence* claim either. The RCT evidence supports strength work
+improving rotator-cuff strength and reducing in-season imbalance in
+swimmers who train a lot of pool volume; it does not, by itself, prove
+reduced injury/pain incidence, and it does not claim strength work makes
+this athlete swim faster. That performance question is addressed
+separately below, with much weaker evidence.
 
 ## Session duration: 45 minutes
 
@@ -45,20 +66,69 @@ day around 3-5x/week pool practice plus long-swim volume.
 
 ## What's actually in a session: exercise selection and dosing
 
-**Coach judgment, UNREVIEWED.** Nothing in `reference_list.md` specifies
-exercise selection, sets/reps, load progression, or periodization of the
-strength work itself — the RCT citation above supports *that* dry-land
-rotator-cuff/scapular-stability work reduces injury risk, not *which*
-specific exercises, at what dosing. Until a human reviews and a more
-specific source is added, the practical default this file recommends is:
-external/internal rotation and scapular-stabilizer work (the movement
-patterns most directly implicated in the shoulder RCTs' injury-reduction
-mechanism) as the core of each session, with general full-body strength
-(legs, trunk, pulling) layered in as time allows within the 45-minute
-window. This is a reasonable inference from *why* the RCTs work
-(rotator-cuff balance), not a cited program — treat any specific
-exercise list generated from this file as a starting point pending
-Andrew's review, not a prescription.
+**UNREVIEWED.** Hibberd et al. (2012), Manske et al. (2015), and Tavares,
+Vilas-Boas & Castro (2025) — the same three RCTs above — give complete,
+reproducible protocols in this exact population and mechanism, not just a
+frequency number. This moves the section from pure `Coach judgment` to a
+mix of `[EVIDENCE: swim]`-grounded exercise selection and `Coach judgment`
+for the specific fixed dose this engine picks — but it is still a starting
+point pending Andrew's review, not a prescription (see the caveats below).
+
+**Core exercise list** `[EVIDENCE: swim]` (rotator-cuff/scapular-stabilizer
+movements appearing across two or more of the three trials):
+internal rotation at 90° abduction, external rotation at 90° abduction,
+scapular punches, scapular retraction ("Ts"), and retraction with upward
+rotation ("Ys"). Hibberd (2012) additionally used retraction with downward
+rotation ("Ws"), low rows, and shoulder flexion; Manske (2015) used the
+same movement pattern set as five resistance-band exercises (flexors,
+abductors, extensors, internal/external rotators).
+
+**Dosing** `[EVIDENCE: swim] Confidence: medium` for the *range*: across
+the three trials, volume converges loosely on 2-3 sets x 10-20 reps, but
+load does **not** converge — Manske (2015) used self-regulated elastic
+bands (RPE 6-10, progressed when RPE dropped below 6), Hibberd (2012) used
+resistance tubing without a tightly specified load, and Tavares (2025)
+used dumbbells at 75% 1RM with a 5s-concentric/5s-eccentric tempo. Do not
+collapse this into a single "high-rep, low-load rotator-cuff rule" — no
+such source was verified, and Tavares' 75% 1RM load contradicts a blanket
+low-load framing.
+
+**This engine's fixed default** (`plan.py`'s `_strength_session_structure`,
+`STRENGTH_CORE_EXERCISES`): 2 sets x 10 reps of the core five exercises
+above, following Tavares (2025) — the strongest/most recent of the three
+citations (blinded RCT, twice-weekly, matching `STRENGTH_SESSIONS_PER_WEEK`)
+— at a moderate/RPE-anchored load rather than a literal 1RM percentage
+(this athlete's 1RM isn't tested). `Coach judgment:` for collapsing the
+trials' divergent-load range to this one number, not itself a cited dose.
+The second weekly session additionally layers in general full-body work
+(squat, single-leg RDL, core hold) — `Coach judgment:`, since none of the
+three trials tested full-body additions; a reasonable, honestly-labelled,
+time-permitting extra, not evidence-graded.
+
+**Kettlebell equipment choice: `Coach judgment:`, no citation exists.** No
+swim-specific or defensibly adjacent endurance-transfer source was found
+for kettlebell programming — general kettlebell-strength reviews exist,
+but not in swimmers or a comparably adjacent population. If kettlebells
+are used, that is an equipment/exercise-selection choice, not a
+research-backed prescription.
+
+**Return-from-a-layoff progression: `Coach judgment:`, no citation
+exists.** Mujika & Padilla (2000, Parts I & II) verify how quickly
+training adaptations are *lost* during a layoff (`[ADAPTED:
+general-endurance] Confidence: high` for the detraining phenomenon itself)
+— useful framing for why an experienced lifter returning after months
+should start below prior capacity — but they prescribe no
+return-to-training ramp. Any specific return progression built on top of
+that framing is `Coach judgment:`, not a cited number. **Test:** if this
+athlete resumes strength work after a month-plus layoff and starts at
+full pre-layoff load rather than a reduced one, watch for
+disproportionate soreness/fatigue relative to the same exercises earlier
+in the season — that would support the detraining framing above, i.e.
+that capacity genuinely regressed and wasn't just deconditioning-in-name.
+
+Treat any specific exercise list or dose generated from this section as a
+starting point pending Andrew's review, not a prescription — same caveat
+this file has carried since before this rewrite.
 
 ## Does strength training improve swim performance, not just reduce injury?
 
@@ -156,11 +226,12 @@ they're the most flexible thing on the calendar to remove first when
 total load needs to drop.
 
 This trade-off deserves to be stated honestly, not presented as a free
-lunch: the injury-prevention evidence above is the reason strength is in
+lunch: the strength/balance evidence above is the reason strength is in
 the plan at all, and a cut week converting strength to recovery is
-explicitly *dropping injury-prevention work* at precisely the moment
-(elevated load, triggering a cut) when the athlete may be at *elevated*
-injury risk per the same load-monitoring logic. The counter-argument
+explicitly *dropping rotator-cuff strength/balance work* at precisely the
+moment (elevated load, triggering a cut) when the athlete may be at
+*elevated* shoulder-load risk per the same load-monitoring logic. The
+counter-argument
 `adapt.py` implicitly makes is that total stress reduction — the reason
 for the cut in the first place — outweighs losing one dryland session for
 a single week. This file doesn't resolve that tension; it flags it as a
@@ -194,8 +265,15 @@ an explicit rule.
 
 ## Open questions / not yet covered here
 
-- Exercise selection and dosing beyond the rotator-cuff/scapular-stability
-  default above is `UNREVIEWED` coach judgment, not evidence-backed.
+- The fixed 2x10 dose, the choice of moderate/RPE-anchored load over a
+  literal 1RM percentage, and the general full-body addition are all
+  `UNREVIEWED Coach judgment` — the exercise selection and the 2-3 sets x
+  10-20 rep range are `[EVIDENCE: swim]`, but collapsing that range to one
+  program for this athlete is an engineering choice, not itself evidenced.
+- Kettlebell equipment choice and a formal return-from-layoff progression
+  remain `Coach judgment` with no citable source found (see "What's
+  actually in a session" above) — not gaps to revisit expecting a
+  citation to appear, but honest, expected no-source outcomes.
 - Whether strength volume/intensity should scale with macro block (base
   vs. build vs. peak) the way swim volume does is not implemented and not
   evidenced here.

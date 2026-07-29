@@ -104,13 +104,20 @@ zone, but is grounded here because it's a training-load input that competes
 for the same weekly stress budget CSS-anchored zones are trying to manage.
 
 **[EVIDENCE: swim]** Reference_list.md's "Injury & training load" section
-cites multiple dry-land shoulder-strengthening RCTs in competitive swimmers
-showing reduced shoulder pain/injury incidence and improved rotator-cuff
-strength balance — the direct evidence behind planning 2x/week strength
-sessions regardless of macro block. Confidence: high (multiple RCTs, direct
-swim population). `07-strength-dryland.md` is the fuller home for exercise
-selection/dosing, placement, and cut-week/taper handling; this file only
-grounds the *frequency* constant.
+cites three dry-land shoulder-strengthening RCTs in competitive swimmers
+(Hibberd 2012, Manske 2015, Tavares et al. 2025) showing improved
+rotator-cuff strength/balance and reduced in-season shoulder-rotational
+imbalance — the direct evidence behind planning 2x/week strength sessions
+regardless of macro block, a frequency independently corroborated by
+Tavares' (twice weekly) and Manske's (2-3x/week) own protocols. Confidence:
+high (three RCTs, direct swim population). **Correction (2026-07-28):**
+this previously said "reduced shoulder pain/injury incidence" — see
+`07-strength-dryland.md`'s fuller correction note for why that overstates
+what these trials individually show (strength/balance improvement is the
+durable claim; injury-incidence reduction is a weaker, mixed inference).
+`07-strength-dryland.md` is the fuller home for exercise selection/dosing,
+placement, and cut-week/taper handling; this file only grounds the
+*frequency* constant.
 
 ## Open questions / not yet covered here
 
