@@ -20,6 +20,22 @@ exist yet (a new event, a first macro for an event, a missing week), so
 there's nothing already-active for a bad call to disrupt. Adapting an
 already-active week stays `propose_adaptation`'s job, unchanged: a human
 still confirms via `/adapt` before an active week's volume changes.
+
+`replace_macro_plan` handles the opposite case from `draft_macro_plan`: a
+macro that already exists (for the resolved event or a different one), the
+target event changing, or an existing macro that's broken/unusable (e.g. an
+all-zero-volume macro from the since-fixed zero-current-volume ramp-cap bug
+in `swim_coach.plan.scaffold_macro`). Because replacing an already-active
+macro can invalidate training the athlete has already done against it, this
+tool follows `propose_adaptation`'s draft-then-confirm shape rather than
+`draft_macro_plan`'s direct-persist one: `confirm=False` (default) only
+computes and returns the candidate, `confirm=True` persists.
+
+`set_pool_coach_status` flips `Athlete.has_pool_coach` (Part 3: no real
+masters coach on hand means `swim_coach.plan.generate_week` must author real
+pool-session content instead of a `pool_coach` placeholder). Low-risk status
+flag, not a plan/volume change, so -- like `create_event` -- it persists
+directly, no draft/confirm step.
 """
 
 from __future__ import annotations
@@ -242,8 +258,9 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "why a brand-new macro is safe to persist immediately. Use when "
             "the athlete has an event on file but no macro plan for it yet. "
             "Refuses with an error if a macro plan already exists for that "
-            "event -- this tool is only for a brand-new macro, never for "
-            "revising an existing one."
+            "event -- this tool is only for a brand-new macro; use "
+            "replace_macro_plan (draft-then-confirm) to revise or replace "
+            "an existing one instead."
         ),
         "input_schema": {
             "type": "object",
@@ -270,6 +287,101 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
             },
             "required": ["event_name", "current_weekly_volume_m"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "replace_macro_plan",
+        "description": (
+            "Replace the athlete's macro periodization plan by recomputing "
+            "swim_coach.plan.scaffold_macro -- the same engine function "
+            "draft_macro_plan uses. Unlike draft_macro_plan, this tool NEVER "
+            "refuses because a macro already exists -- that's exactly its "
+            "purpose: use it for the case draft_macro_plan's own error "
+            "message points at -- an existing macro for the resolved event, "
+            "the athlete changing target event, or an existing macro that's "
+            "broken/unusable (e.g. an all-zero-volume macro from the "
+            "since-fixed zero-current-volume ramp-cap bug). This can "
+            "invalidate an already-trained-against macro, so -- like "
+            "propose_adaptation -- it is draft-then-confirm, NOT "
+            "direct-persist: `confirm` defaults to false, which only "
+            "computes and returns the candidate replacement (plus a "
+            "comparison against the athlete's current macro, if one exists: "
+            "old vs. new target event, old vs. new peak weekly volume) as "
+            "JSON with `\"persisted\": false` -- it does NOT call "
+            "save_macro. Show this draft to the athlete and get their "
+            "explicit agreement before calling this tool again with "
+            "`confirm: true` -- only then does it persist "
+            "(store.save_macro), overwriting the athlete's active macro "
+            "plan. Never pass confirm=true on the first call for a given "
+            "request."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "event_name": {
+                    "type": "string",
+                    "description": "Name of an existing event (must match exactly).",
+                },
+                "current_weekly_volume_m": {
+                    "type": "integer",
+                    "description": "The athlete's current real weekly swim volume in meters.",
+                },
+                "peak_weekly_volume_m": {
+                    "type": "integer",
+                    "description": (
+                        "Optional target peak weekly volume in meters. Defaults "
+                        "to event distance x 2.5, clamped by the ramp cap over "
+                        "the base+build weeks."
+                    ),
+                },
+                "start_date": {
+                    "type": "string",
+                    "description": "Macro start date, 'YYYY-MM-DD' (default today).",
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "description": (
+                        "Default false: compute and return the candidate "
+                        "replacement macro as a draft only, never persisting. "
+                        "Set true ONLY after the athlete has explicitly agreed "
+                        "to the draft shown in a prior turn -- this then "
+                        "persists via store.save_macro, overwriting the "
+                        "athlete's current macro plan."
+                    ),
+                },
+            },
+            "required": ["event_name", "current_weekly_volume_m"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "set_pool_coach_status",
+        "description": (
+            "Set whether the athlete currently has a real masters/pool coach "
+            "handing out pool-day workout content, vs. needing the AI coach "
+            "to author real pool-session structure itself. Persists "
+            "immediately -- a low-risk status flag, not a plan/volume "
+            "change, so no draft/confirm step is needed. Use when the "
+            "athlete says they've started or stopped working with a pool "
+            "coach. Affects future generate_week/create_week_plan output "
+            "only -- it does not retroactively change already-generated "
+            "weeks."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "has_pool_coach": {
+                    "type": "boolean",
+                    "description": (
+                        "True if a real masters/pool coach hands out this "
+                        "athlete's pool-day workouts; false if there is no "
+                        "such coach and the AI coach should author real "
+                        "pool-session structure instead."
+                    ),
+                }
+            },
+            "required": ["has_pool_coach"],
             "additionalProperties": False,
         },
     },
@@ -637,8 +749,9 @@ def _handle_draft_macro_plan(input_data: dict[str, Any], *, store: StoreInterfac
         return {
             "error": (
                 f"a macro plan already exists for {event_name!r}; "
-                "draft_macro_plan is only for a brand-new macro -- revising "
-                "an existing one isn't supported here"
+                "draft_macro_plan is only for a brand-new macro -- use "
+                "replace_macro_plan (draft-then-confirm) to revise or "
+                "replace it instead"
             )
         }
 
@@ -664,6 +777,147 @@ def _handle_draft_macro_plan(input_data: dict[str, Any], *, store: StoreInterfac
             for block in macro.blocks
         ],
     }
+
+
+def _macro_blocks_json(macro) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": block.name,
+            "start_date": block.start_date.isoformat(),
+            "end_date": block.end_date.isoformat(),
+            "weekly_volume_target_m": block.weekly_volume_target_m,
+            "focus": block.focus,
+        }
+        for block in macro.blocks
+    ]
+
+
+def _handle_replace_macro_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    """Computes a candidate replacement macro via `scaffold_macro` (the same
+    engine function `draft_macro_plan` uses, now with the zero-current-
+    volume ramp-cap fix) for exactly the case `draft_macro_plan` refuses --
+    a macro already exists, whether for this event or a different one. No
+    guard against an existing macro: that's this tool's whole purpose.
+
+    Follows `propose_adaptation`'s draft-then-confirm shape rather than
+    `draft_macro_plan`'s direct-persist one, per Andrew's confirmed policy:
+    replacing an already-active macro can invalidate training the athlete
+    has already done against it, so `confirm=False` (default) only computes
+    and returns the candidate + a comparison against the current macro (if
+    any), never calling `store.save_macro`; `confirm=True` recomputes
+    identically (scaffold_macro is a pure function of its inputs, so this is
+    safe to re-run) and persists.
+    """
+    event_name = input_data.get("event_name")
+    if not event_name:
+        return {"error": "event_name is required"}
+    current_weekly_volume_m = input_data.get("current_weekly_volume_m")
+    if current_weekly_volume_m is None:
+        return {"error": "current_weekly_volume_m is required"}
+
+    try:
+        current_weekly_volume_m = int(current_weekly_volume_m)
+    except (TypeError, ValueError):
+        return {"error": f"invalid current_weekly_volume_m {current_weekly_volume_m!r}"}
+
+    peak_weekly_volume_m = input_data.get("peak_weekly_volume_m")
+    if peak_weekly_volume_m is not None:
+        try:
+            peak_weekly_volume_m = int(peak_weekly_volume_m)
+        except (TypeError, ValueError):
+            return {"error": f"invalid peak_weekly_volume_m {peak_weekly_volume_m!r}"}
+
+    start_str = input_data.get("start_date")
+    if start_str:
+        try:
+            start = date.fromisoformat(start_str)
+        except ValueError:
+            return {"error": f"invalid start_date {start_str!r}; expected format 'YYYY-MM-DD'"}
+    else:
+        start = date.today()
+
+    confirm = bool(input_data.get("confirm", False))
+
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load athlete profile: {exc}"}
+
+    try:
+        events = store.load_events(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load events: {exc}"}
+    event = next((e for e in events if e.name == event_name), None)
+    if event is None:
+        known_names = [e.name for e in events]
+        return {
+            "error": (
+                f"no event named {event_name!r} for this athlete; known "
+                f"event names: {known_names}"
+            )
+        }
+
+    try:
+        existing_macro = store.load_macro(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load macro plan: {exc}"}
+
+    try:
+        macro = scaffold_macro(athlete, event, start, current_weekly_volume_m, peak_weekly_volume_m)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    comparison = None
+    if existing_macro is not None:
+        old_event = next((e for e in events if e.id == existing_macro.event_id), None)
+        old_peak = next((b.weekly_volume_target_m for b in existing_macro.blocks if b.name == "peak"), None)
+        new_peak = next((b.weekly_volume_target_m for b in macro.blocks if b.name == "peak"), None)
+        comparison = {
+            "old_event_name": old_event.name if old_event is not None else None,
+            "old_peak_weekly_volume_m": old_peak,
+            "new_event_name": event_name,
+            "new_peak_weekly_volume_m": new_peak,
+        }
+
+    if not confirm:
+        return {
+            "event_name": event_name,
+            "blocks": _macro_blocks_json(macro),
+            "comparison": comparison,
+            "persisted": False,
+        }
+
+    store.save_macro(slug, macro)
+
+    log.info("macro plan replaced", athlete=slug, event_name=event_name, macro_id=str(macro.id))
+    return {
+        "event_name": event_name,
+        "blocks": _macro_blocks_json(macro),
+        "comparison": comparison,
+        "persisted": True,
+    }
+
+
+def _handle_set_pool_coach_status(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    """Flips `Athlete.has_pool_coach` (Part 3 -- see `swim_coach.plan.
+    generate_week`'s branch on it). Low-risk status flag, not a plan/volume
+    change -- persists directly via `store.save_athlete`, no confirm step."""
+    has_pool_coach = input_data.get("has_pool_coach")
+    if has_pool_coach is None:
+        return {"error": "has_pool_coach is required"}
+    if not isinstance(has_pool_coach, bool):
+        return {"error": f"invalid has_pool_coach {has_pool_coach!r}; must be a boolean"}
+
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load athlete profile: {exc}"}
+
+    athlete.has_pool_coach = has_pool_coach
+    store.save_athlete(athlete)
+
+    log.info("pool coach status set", athlete=slug, has_pool_coach=has_pool_coach)
+    return {"updated": True, "has_pool_coach": athlete.has_pool_coach}
 
 
 def _handle_create_week_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
@@ -768,6 +1022,12 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "draft_macro_plan": lambda input_data: _handle_draft_macro_plan(
+            input_data, store=store, slug=slug
+        ),
+        "replace_macro_plan": lambda input_data: _handle_replace_macro_plan(
+            input_data, store=store, slug=slug
+        ),
+        "set_pool_coach_status": lambda input_data: _handle_set_pool_coach_status(
             input_data, store=store, slug=slug
         ),
         "create_week_plan": lambda input_data: _handle_create_week_plan(

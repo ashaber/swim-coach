@@ -163,6 +163,16 @@ MIN_ADDITIONAL_SWIM_M = 1000
 # into the long swim rather than spawning a separate short session.
 # Coach judgment.
 
+MIN_RAMP_SEED_VOLUME_M = 1000
+# Coach judgment, engineering seed value (no citation needed, same footing
+# as MIN_ADDITIONAL_SWIM_M above) -- current_weekly_volume_m=0 is a real
+# starting point (a brand-new swimmer), but the ramp cap's job is to bound
+# growth from a REAL baseline; capping at literal zero is a degenerate
+# multiplication artifact, not the intended safety behavior. This seed
+# only affects the ramp CEILING calculation below, not any other reported
+# "current volume" -- an athlete's real current_weekly_volume_m is still 0
+# everywhere else it's used/reported.
+
 DEFAULT_CSS_PACE_S_PER_100M = 100.0
 # Fallback pace used only if an athlete has no css_pace_s_per_100m yet
 # (e.g. before their first CSS test), so session duration estimates stay
@@ -281,7 +291,11 @@ def _strength_session_structure(session_index: int) -> str:
 def _additional_swim_structure(macro_block_name: str, distance_m: int, css_pace_s: float) -> str:
     """Warm-up / main-set / cool-down text for the "additional"
     pool-independent aerobic swim_ow session (the `remainder >=
-    MIN_ADDITIONAL_SWIM_M` path in `generate_week`).
+    MIN_ADDITIONAL_SWIM_M` path in `generate_week`), and reused verbatim by
+    `generate_week`'s `athlete.has_pool_coach is False` branch to author
+    real content for weekday pool-slot sessions that would otherwise be a
+    content-less `pool_coach` placeholder (there's no masters coach handing
+    out that content post-hoc, so the engine authors it instead).
 
     This function must NEVER be called for the Saturday/stage long-swim
     session(s) -- those stay continuous/negative-split by design
@@ -409,7 +423,8 @@ def scaffold_macro(
 
     distance_driven_target = event.distance_m * PEAK_WEEKLY_VOLUME_X_EVENT_DISTANCE
     ramp_weeks = base_weeks + build_weeks
-    ramp_limited_max = current_weekly_volume_m * (1 + WEEKLY_VOLUME_RAMP_CAP) ** ramp_weeks
+    ramp_seed = max(current_weekly_volume_m, MIN_RAMP_SEED_VOLUME_M)
+    ramp_limited_max = ramp_seed * (1 + WEEKLY_VOLUME_RAMP_CAP) ** ramp_weeks
     candidate_peak = (
         peak_weekly_volume_m if peak_weekly_volume_m is not None else distance_driven_target
     )
@@ -496,7 +511,15 @@ def generate_week(
     volume exactly on the block's final week.
 
     Sessions emitted:
-      - one placeholder pool_coach session per athlete.pool_schedule entry
+      - one pool session per athlete.pool_schedule entry: when
+        `athlete.has_pool_coach` is True (the default), a content-less
+        `pool_coach` placeholder (unchanged pre-existing behavior -- a real
+        masters coach hands out that session's content post-hoc). When
+        False, an `ai_coach` session with real warm-up/main-set/cool-down
+        structure authored by `_additional_swim_structure` instead -- same
+        distance/duration assumption (POOL_SESSION_EST_M /
+        DEFAULT_POOL_SESSION_MIN), just with real content in place of the
+        placeholder.
       - the week's long-swim volume (LONG_SWIM_SHARE of weekly target,
         capped during taper -- see below), arranged per `event_format`:
           * "single_day" (default, matches `Event.event_format`'s default
@@ -552,21 +575,50 @@ def generate_week(
     sessions: list[Session] = []
     for entry in athlete.pool_schedule:
         offset = _pool_day_offset(entry)
-        sessions.append(
-            Session(
-                id=uuid4(),
-                athlete_id=athlete.id,
-                date=week_start + timedelta(days=offset),
-                sport="swim_pool",
-                source="pool_coach",
-                duration_min=DEFAULT_POOL_SESSION_MIN,
-                distance_m=POOL_SESSION_EST_M,
-                intensity={"anchor": "rpe"},
-                purpose="coached pool practice — content assigned by pool coach after session",
-                structure=None,
-                status="planned",
+        if athlete.has_pool_coach:
+            # Unchanged from before has_pool_coach existed -- a real masters
+            # coach hands out this session's content post-hoc, so the
+            # engine can only placeholder it (see module docstring).
+            sessions.append(
+                Session(
+                    id=uuid4(),
+                    athlete_id=athlete.id,
+                    date=week_start + timedelta(days=offset),
+                    sport="swim_pool",
+                    source="pool_coach",
+                    duration_min=DEFAULT_POOL_SESSION_MIN,
+                    distance_m=POOL_SESSION_EST_M,
+                    intensity={"anchor": "rpe"},
+                    purpose="coached pool practice — content assigned by pool coach after session",
+                    structure=None,
+                    status="planned",
+                )
             )
-        )
+        else:
+            # No masters coach on deck for this pool slot -- the engine
+            # authors real warm-up/main-set/cool-down structure itself,
+            # reusing the same generator the "additional" pool-independent
+            # session already uses (`_additional_swim_structure`), rather
+            # than leaving the session content-less. Same distance/duration
+            # assumption as the placeholder above (POOL_SESSION_EST_M /
+            # DEFAULT_POOL_SESSION_MIN) -- only the content is real now.
+            sessions.append(
+                Session(
+                    id=uuid4(),
+                    athlete_id=athlete.id,
+                    date=week_start + timedelta(days=offset),
+                    sport="swim_pool",
+                    source="ai_coach",
+                    duration_min=DEFAULT_POOL_SESSION_MIN,
+                    distance_m=POOL_SESSION_EST_M,
+                    intensity={"anchor": "rpe"},
+                    purpose="pool practice — no pool coach on hand, structure authored below",
+                    structure=_additional_swim_structure(
+                        block.name, POOL_SESSION_EST_M, css_pace_s
+                    ),
+                    status="planned",
+                )
+            )
     pool_total_m = len(athlete.pool_schedule) * POOL_SESSION_EST_M
 
     long_swim_distance = _round_100(target_volume_m * LONG_SWIM_SHARE)

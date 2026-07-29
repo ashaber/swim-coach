@@ -48,6 +48,14 @@ class Athlete(BaseModel):
     sex: Literal["male", "female", "other"] | None = None
     height_cm: float | None = Field(default=None, gt=0)
     weight_kg: float | None = Field(default=None, gt=0)
+    has_pool_coach: bool = True
+    # Defaults True -- zero behavior change for every existing profile.yaml
+    # (no key present) unless explicitly set False. True means a real
+    # masters/pool coach hands out this athlete's pool-day workout content
+    # post-hoc (the system's original, still-default assumption); False
+    # means no such coach is on deck, so `generate_week` (plan.py) must
+    # author real warm-up/main-set/cool-down structure for those pool-day
+    # sessions itself instead of emitting a content-less placeholder.
 
 
 class Event(BaseModel):

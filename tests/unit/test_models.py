@@ -533,6 +533,20 @@ def test_athlete_rejects_non_positive_weight():
         make_athlete(weight_kg=-5)
 
 
+def test_athlete_has_pool_coach_defaults_true():
+    # Existing-style profiles (Renee's, Andrew's) carry no has_pool_coach
+    # key at all -- must keep validating unchanged, and default to True
+    # (the system's original, still-default assumption: a real masters
+    # coach hands out pool-day content).
+    athlete = make_athlete()
+    assert athlete.has_pool_coach is True
+
+
+def test_athlete_has_pool_coach_round_trips_when_set_false():
+    athlete = make_athlete(has_pool_coach=False)
+    assert athlete.has_pool_coach is False
+
+
 # --- round-trip tests: model -> yaml -> model ---
 
 

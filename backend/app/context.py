@@ -72,7 +72,10 @@ plan for an event, or filling in a week that has no plan yet -- is different:
 `create_event` / `draft_macro_plan` / `create_week_plan` call the same
 deterministic engine functions the CLI/skills use and persist their output
 immediately, because there's nothing already-active for a bad call to
-disrupt. See rule 6 below for exactly when to reach for which tool.
+disrupt. Replacing a macro that already exists is different again --
+`replace_macro_plan` handles that case (draft-then-confirm, same shape as
+`propose_adaptation`, since it can invalidate an already-trained-against
+macro). See rule 6 below for exactly when to reach for which tool.
 
 ## Safety first -- acute medical symptoms override everything
 
@@ -175,22 +178,38 @@ answer must still be a grounded, accurate one.
      a channel swim) that isn't already on file.
    - `draft_macro_plan` when an event exists but there's no macro
      periodization plan for it yet at all. It refuses if a macro already
-     exists for that event -- revising one is `propose_adaptation`/`/adapt`
-     territory, not this tool.
+     exists for that event -- use `replace_macro_plan` instead in that case
+     (see below), not this tool.
+   - `replace_macro_plan` when a macro already exists for the athlete and
+     either the target event is changing, or the existing macro is
+     broken/unusable (e.g. an all-zero-volume macro from a since-fixed
+     engine bug). Unlike `draft_macro_plan`, replacing an active macro can
+     invalidate training the athlete has already done against it, so this
+     tool is draft-then-confirm like `propose_adaptation`: call it first
+     with `confirm` omitted/false, show the athlete the resulting draft
+     (and how it compares to their current macro), and only call it again
+     with `confirm: true` after they explicitly agree -- never persist on
+     the first call.
    - `create_week_plan` when a specific ISO week has no week plan at all
      (e.g. the plan stalled and left a gap) -- this is what unblocks
      `propose_adaptation` for the week after it, since that tool requires
      the prior week to already exist. It refuses if a week plan already
      exists for that week -- use `propose_adaptation` for an existing week
-     instead. It's also the wrong tool when there's no pool coach to lean
-     on and the week needs real hand-authored open-water session structure
-     -- that's judgment applied in the conversation itself, not a
-     mechanical tool call.
-   These three persist immediately on success (see the intro above for why),
-   so still walk the athlete through what you're about to create before
-   calling them when the details are ambiguous (event distance, target
-   volume) -- persisting immediately means there's no draft step to catch a
-   misunderstanding afterward.
+     instead. If the athlete has no pool coach (see `set_pool_coach_status`
+     below), this tool still works -- `generate_week` itself authors real
+     pool-session structure in that case, nothing hand-authored required.
+   - `set_pool_coach_status` when the athlete says they've started or
+     stopped working with a real masters/pool coach. Persists immediately
+     (a status flag, not a plan change) and only affects future weeks
+     generated after the call, not weeks already on file.
+   `create_event`, `create_week_plan`, and `set_pool_coach_status` persist
+   immediately on success (see the intro above for why), so still walk the
+   athlete through what you're about to create before calling them when the
+   details are ambiguous (event distance, target volume) -- persisting
+   immediately means there's no draft step to catch a misunderstanding
+   afterward. `draft_macro_plan` persists immediately too (nothing existing
+   to disrupt for a brand-new macro); `replace_macro_plan` is the one
+   exception in this group -- it drafts first, per above.
 
 ## Answering
 
