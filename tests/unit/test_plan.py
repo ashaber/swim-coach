@@ -13,13 +13,18 @@ import pytest
 from swim_coach.models import Athlete, Event
 from swim_coach.plan import (
     DEFAULT_POOL_SESSION_MIN,
+    LONG_SWIM_SHARE,
     MIN_RAMP_SEED_VOLUME_M,
+    NO_COACH_POOL_SESSION_FLOOR_M,
     POOL_SESSION_EST_M,
     STRENGTH_CORE_EXERCISES,
     STRENGTH_SESSIONS_PER_WEEK,
     WEEKLY_VOLUME_RAMP_CAP,
     _additional_swim_structure,
+    _duration_min_for_distance,
+    _round_100,
     _strength_session_structure,
+    _z2_pace_s_per_100m,
     generate_week,
     scaffold_macro,
 )
@@ -490,11 +495,48 @@ def test_generate_week_has_pool_coach_true_default_matches_pre_change_behavior(s
         assert s.duration_min == DEFAULT_POOL_SESSION_MIN
 
 
+def test_generate_week_has_pool_coach_true_unaffected_across_whole_macro(short_macro):
+    # Regression guard for the no-coach-pool-volume fix below: the
+    # has_pool_coach=True branch (and its POOL_SESSION_EST_M /
+    # DEFAULT_POOL_SESSION_MIN-based pool_total_m accounting) must stay
+    # byte-for-byte identical to pre-fix `main` for every week across the
+    # whole macro, not just one week -- this branch is not touched by the
+    # fix at all.
+    athlete, macro = short_macro
+    for block in macro.blocks:
+        weeks_in_block = (block.end_date - block.start_date).days // 7 + 1
+        for i in range(weeks_in_block):
+            week_start = block.start_date + timedelta(weeks=i)
+            week = generate_week(athlete, macro, _iso_week(week_start), week_start)
+            pool_sessions = [s for s in week.sessions if s.sport == "swim_pool"]
+            assert len(pool_sessions) == len(athlete.pool_schedule)
+            for s in pool_sessions:
+                assert s.source == "pool_coach"
+                assert s.distance_m == POOL_SESSION_EST_M
+                assert s.duration_min == DEFAULT_POOL_SESSION_MIN
+                assert s.structure is None
+                assert s.intensity == {"anchor": "rpe"}
+
+
 def test_generate_week_no_pool_coach_produces_real_structure(short_macro):
+    # Regression test for the reported bug: has_pool_coach=False pool-day
+    # sessions must scale with target_volume_m (reserve LONG_SWIM_SHARE for
+    # the long swim, split the rest across pool days), NOT reuse the
+    # pool-coach placeholder's fixed POOL_SESSION_EST_M estimate.
     athlete, macro = short_macro
     athlete = athlete.model_copy(update={"has_pool_coach": False})
     week_start = macro.blocks[0].start_date
     week = generate_week(athlete, macro, _iso_week(week_start), week_start)
+
+    expected_per_day = max(
+        NO_COACH_POOL_SESSION_FLOOR_M,
+        _round_100(
+            max(0.0, week.target_volume_m - week.target_volume_m * LONG_SWIM_SHARE)
+            / len(athlete.pool_schedule)
+        ),
+    )
+    pace_s = _z2_pace_s_per_100m(athlete)
+    expected_duration = max(_duration_min_for_distance(expected_per_day, pace_s), 15.0)
 
     pool_sessions = [s for s in week.sessions if s.sport == "swim_pool"]
     assert len(pool_sessions) == 3
@@ -502,8 +544,9 @@ def test_generate_week_no_pool_coach_produces_real_structure(short_macro):
     for s in pool_sessions:
         assert s.source == "ai_coach"
         assert s.status == "planned"
-        assert s.distance_m == POOL_SESSION_EST_M
-        assert s.duration_min == DEFAULT_POOL_SESSION_MIN
+        assert s.distance_m == expected_per_day
+        assert s.distance_m != POOL_SESSION_EST_M  # the bug being fixed
+        assert s.duration_min == expected_duration
         assert s.structure is not None
         assert s.structure.strip() != ""
         assert "Warm-up" in s.structure
@@ -511,10 +554,16 @@ def test_generate_week_no_pool_coach_produces_real_structure(short_macro):
         assert "Cool-down" in s.structure
 
 
-def test_generate_week_no_pool_coach_leaves_other_sessions_unaffected(short_macro):
-    # Only the pool_schedule sessions change -- long swim, strength, and
-    # recovery sessions (and pool_total_m's volume accounting) are identical
-    # regardless of has_pool_coach.
+def test_generate_week_no_pool_coach_leaves_strength_and_recovery_unaffected(short_macro):
+    # Strength and recovery sessions (which never carry distance_m) are
+    # identical regardless of has_pool_coach, and the week's target_volume_m
+    # itself is unaffected either way. The long swim (swim_ow) is NOT
+    # asserted identical here -- with the fix, pool_total_m now legitimately
+    # differs between the two branches (has_pool_coach=False pool sessions
+    # scale with target_volume_m instead of the fixed POOL_SESSION_EST_M
+    # placeholder), which cascades into the remainder/long-swim
+    # reconciliation. See test_generate_week_no_coach_total_volume_tracks_
+    # target below for the property that actually matters post-fix.
     athlete, macro = short_macro
     week_start = macro.blocks[0].start_date
     week_with_coach = generate_week(athlete, macro, _iso_week(week_start), week_start)
@@ -522,15 +571,92 @@ def test_generate_week_no_pool_coach_leaves_other_sessions_unaffected(short_macr
         athlete.model_copy(update={"has_pool_coach": False}), macro, _iso_week(week_start), week_start
     )
 
-    def _non_pool_shape(week):
+    def _shape(week, sport):
         return [
             (s.sport, s.date, s.distance_m, s.duration_min, s.purpose)
             for s in week.sessions
-            if s.sport != "swim_pool"
+            if s.sport == sport
         ]
 
-    assert _non_pool_shape(week_with_coach) == _non_pool_shape(week_without_coach)
+    assert _shape(week_with_coach, "strength") == _shape(week_without_coach, "strength")
+    assert _shape(week_with_coach, "recovery") == _shape(week_without_coach, "recovery")
     assert week_with_coach.target_volume_m == week_without_coach.target_volume_m
+
+
+def test_generate_week_no_pool_coach_fixes_reported_bug_small_target_volume():
+    # The exact reported bug (found via the coach's own dogfooding feedback
+    # log): an early-base/post-layoff-restart week with a small
+    # target_volume_m (~1000-1300m in the real scenario) and 2
+    # pool-schedule days used to size every pool session at the fixed
+    # POOL_SESSION_EST_M (3500m) regardless of target_volume_m --
+    # pool_total_m alone came out to 2 * 3500 = 7000m, ~6x the periodized
+    # target, no matter how many times the week was regenerated. This
+    # reproduces that shape (current_weekly_volume_m=0, a 10-week runway,
+    # 2 pool days) and asserts the fix keeps total week volume tracking
+    # target_volume_m instead of blowing past it by multiples.
+    athlete = make_athlete(pool_schedule=["tue", "thu"], has_pool_coach=False)
+    event = make_event(event_date=START + timedelta(weeks=12), distance_m=5000)
+    with pytest.warns(UserWarning, match="clamped"):
+        macro = scaffold_macro(athlete, event, START, current_weekly_volume_m=0)
+    base_block = next(b for b in macro.blocks if b.name == "base")
+    week_start = base_block.start_date
+    week = generate_week(athlete, macro, _iso_week(week_start), week_start)
+
+    # this exact construction reproduces the real reported scenario's
+    # target_volume_m precisely: 1213m
+    assert week.target_volume_m == 1213
+
+    pool_sessions = [s for s in week.sessions if s.sport == "swim_pool"]
+    assert len(pool_sessions) == 2
+    pool_total_m = sum(s.distance_m for s in pool_sessions)
+    # before the fix this would be 2 * POOL_SESSION_EST_M == 7000m, ~6x the
+    # target, regardless of target_volume_m
+    assert pool_total_m < POOL_SESSION_EST_M  # nowhere near the old 7000m total
+    for s in pool_sessions:
+        assert 0 < s.distance_m < POOL_SESSION_EST_M
+
+    total_swim = sum(
+        s.distance_m or 0 for s in week.sessions if s.sport in ("swim_pool", "swim_ow")
+    )
+    # total swim volume tracks target_volume_m -- generous tolerance for
+    # floors/rounding, but nowhere near the old ~6x overage
+    assert total_swim <= week.target_volume_m * 1.5
+    assert total_swim >= week.target_volume_m * 0.5
+
+
+def test_generate_week_no_pool_coach_large_target_volume_not_needlessly_floored(short_macro):
+    # A mid-build/peak-block week has plenty of volume budget -- per-day
+    # pool distances should reflect that (not collapse to the floor just
+    # because the floor exists).
+    athlete, macro = short_macro
+    athlete = athlete.model_copy(update={"has_pool_coach": False})
+    peak_block = next(b for b in macro.blocks if b.name == "peak")
+    week_start = peak_block.start_date
+    week = generate_week(athlete, macro, _iso_week(week_start), week_start)
+
+    pool_sessions = [s for s in week.sessions if s.sport == "swim_pool"]
+    assert len(pool_sessions) == 3
+    for s in pool_sessions:
+        assert s.distance_m > NO_COACH_POOL_SESSION_FLOOR_M * 2
+        assert s.duration_min > 15.0
+
+
+def test_generate_week_no_pool_coach_sessions_never_below_floor_or_nonpositive(short_macro):
+    # Property test across the whole macro: no has_pool_coach=False pool
+    # session should ever get a non-positive or sub-floor distance, even in
+    # low-volume weeks (e.g. early base).
+    athlete, macro = short_macro
+    athlete = athlete.model_copy(update={"has_pool_coach": False})
+    for block in macro.blocks:
+        weeks_in_block = (block.end_date - block.start_date).days // 7 + 1
+        for i in range(weeks_in_block):
+            week_start = block.start_date + timedelta(weeks=i)
+            week = generate_week(athlete, macro, _iso_week(week_start), week_start)
+            for s in week.sessions:
+                if s.sport == "swim_pool":
+                    assert s.distance_m >= NO_COACH_POOL_SESSION_FLOOR_M
+                    assert s.distance_m > 0
+                    assert s.duration_min > 0
 
 
 # --- event_format: multi_day_stage --------------------------------------------------

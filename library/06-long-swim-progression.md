@@ -159,4 +159,17 @@ know the periodization plan). `POOL_SESSION_EST_M` roughly matches the
 ~3,500-4,000m sample workouts collected as reference material
 (`library/sample_pool_workout_*.md`) and is treated as constant regardless
 of macro phase, since the pool coach's own volume doesn't scale with this
-project's periodization.
+project's periodization. This applies ONLY to `athlete.has_pool_coach=True`
+(a real masters coach on deck).
+
+When `athlete.has_pool_coach=False`, there is no independent real coach's
+volume to defer to -- the engine itself is authoring the pool-day content,
+so it must size it like everything else it authors: proportional to the
+week's `target_volume_m`. `NO_COACH_POOL_SESSION_FLOOR_M = 300` is a floor
+(not a target) on that computed per-day distance, used only so a
+genuinely-early-restart week's pool session never collapses to 0m or an
+absurdly tiny distance. Found via a real dogfooding bug: an
+early-base/post-layoff-restart week (`target_volume_m` ~1000-1300m) with 2
+pool-schedule days previously produced `pool_total_m = 2 * POOL_SESSION_EST_M
+= 7000m`, ~6x the periodized target, because `POOL_SESSION_EST_M` was
+wrongly reused for this branch too.
