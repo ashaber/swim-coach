@@ -456,13 +456,24 @@ def test_real_library_surfaces_per_claim_items_from_the_new_wave():
 
     # The new wave's files must each enumerate many needs-judgment CLAIM
     # items -- not one "mechanical" header item apiece (the defect pinned).
-    for filename in ("08-ultra-feeding.md", "13-reds-energy-availability.md"):
+    # 08-ultra-feeding.md and 07-strength-dryland.md were both reviewed and
+    # marked REVIEWED (2026-07-28/29) since this pin was written -- they're
+    # checked below instead, as a positive test that a reviewed file's
+    # claims correctly drop OUT of the queue. 13 remains UNREVIEWED and is
+    # still the live regression guard for "many claims enumerated".
+    for filename in ("13-reds-energy-availability.md",):
         file_needs = [i for i in needs if i.file == filename and i.item_kind == CLAIM]
         assert len(file_needs) >= 5, f"{filename} should enumerate its claims"
 
+    # Reviewed files carry no marker anymore, so they correctly surface no
+    # items at all -- this is the review lifecycle working, not a bug.
+    for filename in ("08-ultra-feeding.md", "07-strength-dryland.md"):
+        assert not any(i.file == filename for i in items), (
+            f"{filename} is REVIEWED and should have no queued items"
+        )
+
     # Existing debt still surfaces.
     assert "04-css-intensity-anchors.md#open-questions-not-yet-covered-here" in by_id
-    assert any(i.file == "07-strength-dryland.md" for i in items)
 
     # Sources resolve, and weak (~/⚠) sources are surfaced.
     assert any(i.sources for i in needs)
