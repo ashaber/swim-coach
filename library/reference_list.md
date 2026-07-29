@@ -70,6 +70,37 @@ contained fabricated URLs and embedded agent-directive text.
   Not individually verified.
 - **~ Psycharakis & Sanders** — stroke coordination & mechanics
   (~*J Sports Sci* 2010). Author pairing is real and published.
+- **✓ McGowan C.J., Pyne D.B., Thompson K.G., Rattray B. (2015)** —
+  "Warm-Up Strategies for Sport and Exercise: Mechanisms and Applications"
+  — *Sports Medicine*, 45(11):1523-1546. Narrative review: active warm-up
+  raises muscle/core temperature, elevates baseline VO2 and speeds VO2
+  kinetics, and can potentiate subsequent performance; swimming
+  applications discussed. `[ADAPTED: general-endurance]` leaning
+  swim-applicable — grounds *that* a warm-up belongs in a structured
+  session, not any specific warm-up volume/proportion. See
+  `14-swim-set-structure.md`.
+- **✓ González-Ravé J.M., Hermosilla F., González-Mohíno F., Casado A.,
+  Pyne D.B. (2021)** — "Training Intensity Distribution, Training Volume,
+  and Periodization Models in Elite Swimmers: A Systematic Review" —
+  *International Journal of Sports Physiology and Performance*,
+  16(7):913-926. Systematic review (9 studies): elite swimmers'
+  training-intensity distribution tracks event specialty and often shifts
+  pyramidal (general/preparatory phase) toward threshold/polarized
+  (specific/competitive phase) across the macrocycle, in wave-like
+  mesocycles; authors caution the evidence base is thin. `[EVIDENCE:
+  swim]` for the base->build shift in session emphasis; Confidence:
+  medium (systematic review, elite population, distribution-level not
+  session-geometry-level). See `14-swim-set-structure.md`.
+- **✓ Pla R., Le Meur Y., Aubry A., Toussaint J.F., Hellard P. (2019)** —
+  "Effects of a 6-Week Period of Polarized or Threshold Training on
+  Performance and Fatigue in Elite Swimmers" — *International Journal of
+  Sports Physiology and Performance*, 14(2):183-189. 6-week polarized
+  block produced small-to-moderately greater 100m improvement (~0.97% vs.
+  ~0.09%) and less perceived fatigue than a threshold block in elite
+  swimmers. `[EVIDENCE: swim]` for "block intensity emphasis affects
+  outcome"; Confidence: medium (small, elite, short, sprint-outcome — not
+  directly transferable to an ultra-distance aerobic session, cited only
+  for the principle). See `14-swim-set-structure.md`.
 
 ## Swimming — physiology & nutrition
 
@@ -553,10 +584,60 @@ raw research input, not itself citable).
 
 ## Injury & training load
 
-- **✓ Dry-land shoulder-strengthening RCTs in competitive swimmers** —
-  multiple studies show reduced shoulder pain / injury incidence and improved
-  rotator-cuff strength balance from dry-land rotator programs. This is the
-  evidence behind the engine's 2×/week strength sessions.
+- **✓ Hibberd E.E., Oyama S., Spang J.T., Prentice W.E., Myers J.B.
+  (2012)** — "Effect of a 6-Week Strengthening Program on Shoulder and
+  Scapular-Stabilizer Strength and Scapular Kinematics in Division I
+  Collegiate Swimmers" — *Journal of Sport Rehabilitation*, 21(3):253-265.
+  Resistance-tubing program, 3x/week/6wk (Ts, Ys, Ws, IR/ER at 90°
+  abduction, scapular punches, low rows, shoulder flexion + stretches).
+  Shoulder-extension/IR strength increased across all subjects; no
+  significant *between-group* difference — small n, not powered as an
+  injury-incidence trial.
+- **✓ Manske R.C., Lewis S., Wolff S., Smith B. (2015)** — "Effects of a
+  Dry-Land Strengthening Program in Competitive Adolescent Swimmers" —
+  *International Journal of Sports Physical Therapy*, 10(6):858-867. Five
+  resistance-band movements (flexors, abductors, extensors, internal/
+  external rotators), 2 sets x 15 reps, 2-3x/week/12wk, self-regulated
+  band load (RPE 6-10). Significantly greater external-rotation-strength
+  gain (23% vs. 11%, p=0.013); other muscle groups not significant between
+  groups; shoulder soreness **not** significantly different between groups
+  over 12 weeks.
+- **✓ Tavares N., Vilas-Boas J.P., Castro M.A. (2025)** — "Effect of
+  Preventive Exercise Programs for Swimmer's Shoulder Injury on Rotator
+  Cuff Torque and Balance in Competitive Swimmers: A Randomized Controlled
+  Trial" — *Healthcare (Basel)*, 13(5):538. Blinded 3-arm parallel RCT
+  (weights / elastic band / sham), swimmers 16-35. Five exercises (IR/ER
+  at 90° abduction, scapular punches, Ts, Ys), 2 sets x 10 reps at ~75%
+  1RM (reassessed at 6 weeks), 5s-concentric/5s-eccentric tempo, twice
+  weekly for 12 weeks. Both intervention arms largely preserved
+  rotator-cuff peak torque and kept less conventional/functional imbalance
+  than sham across a competitive season. The strongest single citation
+  here — recent, blinded RCT, exact population, twice-weekly frequency
+  matching the engine's `STRENGTH_SESSIONS_PER_WEEK`.
+  **Correction (2026-07-28):** these three entries replace a prior
+  generic "Dry-land shoulder-strengthening RCTs in competitive swimmers"
+  line that read "reduced shoulder pain / injury incidence." That
+  overstated what these trials individually show — Hibberd found no
+  between-group strength difference, and Manske found soreness not
+  significantly different between groups. The supported claim is
+  rotator-cuff strength/balance improvement and in-season imbalance
+  prevention; injury/pain-incidence reduction is a weaker, mixed
+  downstream inference. This is the evidence behind the engine's 2x/week
+  strength sessions (frequency corroborated independently by Tavares and
+  Manske above). See `07-strength-dryland.md` for the fuller programming
+  detail and `research-dossiers/2026-07-28-strength-programming.md`.
+- **✓ Mujika I., Padilla S. (2000)** — "Detraining: Loss of
+  Training-Induced Physiological and Performance Adaptations. Part I:
+  Short Term Insufficient Training Stimulus" — *Sports Medicine*,
+  30(2):79-87; **and Part II: Long Term Insufficient Training Stimulus** —
+  *Sports Medicine*, 30(3):145-154. Canonical two-part detraining review:
+  short-term (<4wk) insufficient stimulus already erodes some adaptations;
+  long-term (>4wk) detraining markedly reduces VO2max and
+  muscular/metabolic adaptations. `[ADAPTED: general-endurance]` — frames
+  why a returning-from-layoff lifter starts below prior capacity; does
+  **not** itself prescribe a return-to-training ramp (see
+  `07-strength-dryland.md`). Not to be confused with Mujika & Padilla
+  (2003) above, a different pair of papers on tapering, not detraining.
 - **✓⚠ Feijen S. et al. (2021)** — "Prediction of Shoulder Pain in Youth
   Competitive Swimmers" — *American Journal of Sports Medicine*. Acute:chronic
   workload ratio associated with shoulder pain, odds ratio ~4.31 — but in
@@ -873,3 +954,20 @@ Provenance of the fixes applied while curating this list:
    (Martinez-Sanz 2024, Shaw 2014, Wagner 2012, Cox 2002) added in the same
    pass, and the predatory-publisher caveat found nothing to rehabilitate
    the original entry.
+6. **Dry-land shoulder-strengthening RCTs (2026-07-28, "Injury & training
+   load")**: the generic "reduced shoulder pain / injury incidence" line
+   was replaced with three individually-verified, named RCTs (Hibberd
+   2012, Manske 2015, Tavares et al. 2025) and the wording corrected to
+   the more accurate framing these trials actually support: rotator-cuff
+   strength/balance improvement and in-season imbalance prevention, with
+   pain/injury-incidence reduction as a weaker, mixed downstream inference
+   (Hibberd found no between-group strength difference; Manske found
+   soreness not significantly different between groups) — same
+   honest-correction spirit as the Formosa note above. Also added Mujika &
+   Padilla (2000, Parts I & II) for the detraining/return-from-layoff
+   framing, and (in "Swimming — CSS, pacing & performance") McGowan et al.
+   (2015), González-Ravé et al. (2021), and Pla et al. (2019) for
+   `14-swim-set-structure.md`'s warm-up-efficacy and base->build
+   intensity-distribution claims. See
+   `research-dossiers/2026-07-28-strength-programming.md` and
+   `research-dossiers/2026-07-28-swim-set-structure.md`.

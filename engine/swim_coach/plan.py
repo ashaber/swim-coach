@@ -120,12 +120,38 @@ POOL_SESSION_EST_M = 3500
 
 STRENGTH_SESSIONS_PER_WEEK = 2
 STRENGTH_SESSION_MIN = 45
-# Dry-land shoulder work reduces injury/pain risk in competitive swimmers --
-# multiple RCTs, library/reference_list.md "Injury & training load"
-# ("Dry-land shoulder-strengthening RCTs in competitive swimmers").
-# Frequency grounded in library/04-css-intensity-anchors.md; full
-# programming detail (duration, placement, cut-week/taper handling) in
+# Dry-land shoulder work improves rotator-cuff strength/balance in
+# competitive swimmers -- three RCTs (Hibberd 2012, Manske 2015, Tavares
+# et al. 2025), library/reference_list.md "Injury & training load".
+# Frequency grounded in library/04-css-intensity-anchors.md, independently
+# corroborated by Tavares' (twice weekly) and Manske's (2-3x/week) own
+# protocols; full programming detail (exercise selection, dosing,
+# duration, placement, cut-week/taper handling) in
 # library/07-strength-dryland.md.
+
+STRENGTH_CORE_EXERCISES = (
+    "Internal rotation at 90° abduction",
+    "External rotation at 90° abduction",
+    "Scapular punches",
+    'Scapular retraction ("Ts")',
+    'Retraction with upward rotation ("Ys")',
+)
+# Rotator-cuff/scapular-stabilizer core, dosed 2 sets x 10 reps per
+# Tavares, Vilas-Boas & Castro (2025) -- the strongest/most recent of the
+# three swimmer-shoulder RCTs cited in library/07-strength-dryland.md's
+# "What's actually in a session" section. [EVIDENCE: swim] for the
+# exercise selection and the 2-3 sets x 10-20 rep range the three trials
+# collectively used; Coach judgment for collapsing that range to this one
+# fixed dose (the trials disagree on load -- bands at a self-regulated RPE
+# vs. dumbbells at 75% 1RM) -- see library/07-strength-dryland.md.
+
+STRENGTH_FULL_BODY_ADDITION = (
+    "3 x 10 goblet squat or bodyweight squat",
+    "3 x 10 per side single-leg Romanian deadlift (or bodyweight equivalent)",
+    "3 x 10 plank or dead-bug core hold (30-45s each side)",
+)
+# General full-body work layered in as time allows -- Coach judgment, no
+# swim-specific RCT tested this addition. library/07-strength-dryland.md.
 
 RECOVERY_SESSION_MIN = 20
 # The Session model requires duration_min > 0, so a 0-duration "day off"
@@ -141,6 +167,26 @@ DEFAULT_CSS_PACE_S_PER_100M = 100.0
 # Fallback pace used only if an athlete has no css_pace_s_per_100m yet
 # (e.g. before their first CSS test), so session duration estimates stay
 # computable. Not cited -- Coach judgment.
+
+ADDITIONAL_SWIM_WARM_UP_SHARE = 0.2
+ADDITIONAL_SWIM_COOL_DOWN_SHARE = 0.1
+ADDITIONAL_SWIM_MIN_WARM_UP_M = 200
+ADDITIONAL_SWIM_MIN_COOL_DOWN_M = 100
+# Coach judgment / practitioner convention -- library/14-swim-set-structure.md
+# ("Session skeleton" section) is explicit that no citable source fixes a
+# warm-up or cool-down proportion; McGowan et al. (2015) grounds only that a
+# warm-up is worthwhile, not its size. This governs ONLY the "additional"
+# pool-independent swim_ow session below -- the Saturday long-swim session
+# (library/06-long-swim-progression.md) stays continuous/negative-split and
+# is untouched by these constants.
+
+ADDITIONAL_SWIM_BASE_BLOCK_REP_M = 300
+ADDITIONAL_SWIM_BUILD_BLOCK_REP_M = 200
+# Coach judgment -- main-set rep length for the two main-set formats below.
+# library/14-swim-set-structure.md's "Main-set format menu" section is
+# explicit that no source ranks these formats; the base-vs-build/peak/taper
+# *emphasis* shift itself is [EVIDENCE: swim] (González-Ravé et al. 2021;
+# Pla et al. 2019), the concrete rep length is not.
 
 _WEEKDAY_OFFSETS = {
     "mon": 0,
@@ -200,6 +246,116 @@ def _pick_days(count: int, excluded: set[int]) -> list[int]:
         remaining = [d for d in order if d not in chosen]
         chosen.extend(remaining[: count - len(chosen)])
     return chosen[:count]
+
+
+def _format_pace_s(pace_s: float) -> str:
+    """Format a seconds-per-100m pace as M:SS (e.g. 92.3 -> '1:32')."""
+    total = int(round(pace_s))
+    minutes, seconds = divmod(total, 60)
+    return f"{minutes}:{seconds:02d}"
+
+
+def _strength_session_structure(session_index: int) -> str:
+    """Fixed default strength-session program text (not macro-block-aware
+    -- see library/07-strength-dryland.md's "Open questions" section for
+    why block/phase progression is explicitly out of scope here).
+
+    `session_index` (0-based) selects which of the week's
+    `STRENGTH_SESSIONS_PER_WEEK` strength sessions this is: session 0 is
+    the rotator-cuff/scapular-stability core only; odd-indexed sessions
+    add general full-body work layered in as time allows, matching
+    library/07-strength-dryland.md's "core of each session, general
+    full-body layered in" framing. Dosing (2 sets x 10 reps) follows
+    Tavares, Vilas-Boas & Castro (2025) -- see library/07-strength-dryland.md
+    for the full citation set (Hibberd 2012, Manske 2015, Tavares 2025) and
+    the dosing-range caveat.
+    """
+    lines = ["Rotator-cuff / scapular-stability core (2 sets x 10 reps each):"]
+    lines.extend(f"  - {exercise}" for exercise in STRENGTH_CORE_EXERCISES)
+    if session_index % 2 == 1:
+        lines.append("General full-body (layered in as time allows):")
+        lines.extend(f"  - {exercise}" for exercise in STRENGTH_FULL_BODY_ADDITION)
+    return "\n".join(lines)
+
+
+def _additional_swim_structure(macro_block_name: str, distance_m: int, css_pace_s: float) -> str:
+    """Warm-up / main-set / cool-down text for the "additional"
+    pool-independent aerobic swim_ow session (the `remainder >=
+    MIN_ADDITIONAL_SWIM_M` path in `generate_week`).
+
+    This function must NEVER be called for the Saturday/stage long-swim
+    session(s) -- those stay continuous/negative-split by design
+    (library/06-long-swim-progression.md) and are not touched here.
+
+    Warm-up/cool-down proportions and the choice of main-set format are
+    Coach judgment / practitioner convention (library/14-swim-set-structure.md);
+    the base-vs-build/peak/taper emphasis shift (continuous aerobic volume
+    vs. broken-distance, race-pace-adjacent work) is [EVIDENCE: swim] per
+    González-Ravé et al. (2021) and Pla et al. (2019), also cited in `14`.
+    Distances are rounded to the nearest 100m (main-set reps to the nearest
+    rep length) and are illustrative, not exact to the meter.
+    """
+    if distance_m <= 0:
+        return "No additional pool-independent volume this week."
+
+    zones = zone_table(css_pace_s)
+    z2, z3, z4 = zones["Z2"], zones["Z3"], zones["Z4"]
+
+    warm_up = max(
+        ADDITIONAL_SWIM_MIN_WARM_UP_M, _round_100(distance_m * ADDITIONAL_SWIM_WARM_UP_SHARE)
+    )
+    # Sized only to choose a sensible rep length / rep count below -- the
+    # actual cool-down (and therefore the session's true total) is
+    # reconciled after reps are picked, so warm-up + main set + cool-down
+    # always sums exactly to `distance_m` instead of drifting by a rep's
+    # worth of rounding (a real bug in an earlier version of this function:
+    # rounding `main_set_total / rep` to the nearest rep, without feeding
+    # that rounding back into the cool-down, could over- or under-state the
+    # printed session total by up to one rep length relative to distance_m).
+    cool_down_budget_estimate = max(
+        ADDITIONAL_SWIM_MIN_COOL_DOWN_M, _round_100(distance_m * ADDITIONAL_SWIM_COOL_DOWN_SHARE)
+    )
+    main_set_budget = max(0, distance_m - warm_up - cool_down_budget_estimate)
+
+    z2_range = f"{_format_pace_s(z2['pace_lo_s'])}-{_format_pace_s(z2['pace_hi_s'])}/100m"
+    lines = [f"Warm-up: {warm_up}m easy, building to Z2 pace ({z2_range}) by the end."]
+
+    if macro_block_name == "base":
+        rep = ADDITIONAL_SWIM_BASE_BLOCK_REP_M if main_set_budget >= 1200 else 200
+    else:
+        rep = ADDITIONAL_SWIM_BUILD_BLOCK_REP_M if main_set_budget >= 800 else 100
+    reps = max(1, round(main_set_budget / rep))
+
+    remaining_for_cool_down = distance_m - warm_up - reps * rep
+    # If rounding pushed the main set to consume (almost) everything,
+    # give back one rep so the cool-down doesn't collapse toward 0m.
+    while (
+        reps > 1
+        and remaining_for_cool_down < ADDITIONAL_SWIM_MIN_COOL_DOWN_M
+        and remaining_for_cool_down + rep >= ADDITIONAL_SWIM_MIN_COOL_DOWN_M
+    ):
+        reps -= 1
+        remaining_for_cool_down += rep
+    cool_down = max(0, remaining_for_cool_down)
+
+    if macro_block_name == "base":
+        lines.append(
+            f"Main set: {reps} x {rep}m @ Z2 ({z2_range}), 15s rest -- continuous "
+            "aerobic volume (base-block emphasis; library/14-swim-set-structure.md)."
+        )
+    else:
+        z3_range = f"{_format_pace_s(z3['pace_lo_s'])}-{_format_pace_s(z3['pace_hi_s'])}/100m"
+        z4_range = f"{_format_pace_s(z4['pace_lo_s'])}-{_format_pace_s(z4['pace_hi_s'])}/100m"
+        lines.append(
+            f"Main set: {reps} x {rep}m broken-distance, descend 1-{reps} from Z3 "
+            f"({z3_range}) toward Z4 ({z4_range}) on the last rep, negative-split "
+            f"each repeat -- race-pace-adjacent emphasis ({macro_block_name} block; "
+            "library/14-swim-set-structure.md, cross-referencing "
+            "04-css-intensity-anchors.md's negative-split evidence)."
+        )
+
+    lines.append(f"Cool-down: {cool_down}m easy choice of stroke.")
+    return "\n".join(lines)
 
 
 # --- macro scaffold -----------------------------------------------------------
@@ -391,6 +547,7 @@ def generate_week(
 
     pool_offsets = {_pool_day_offset(entry) for entry in athlete.pool_schedule}
     pace_s = _z2_pace_s_per_100m(athlete)
+    css_pace_s = athlete.css_pace_s_per_100m or DEFAULT_CSS_PACE_S_PER_100M
 
     sessions: list[Session] = []
     for entry in athlete.pool_schedule:
@@ -481,7 +638,7 @@ def generate_week(
     strength_offsets = _pick_days(
         STRENGTH_SESSIONS_PER_WEEK, excluded=pool_offsets | {_WEEKDAY_OFFSETS["sat"], _WEEKDAY_OFFSETS["sun"]}
     )
-    for offset in strength_offsets:
+    for session_index, offset in enumerate(strength_offsets):
         sessions.append(
             Session(
                 id=uuid4(),
@@ -493,10 +650,10 @@ def generate_week(
                 distance_m=None,
                 intensity={"anchor": "rpe"},
                 purpose=(
-                    "dryland shoulder strength — reduces shoulder injury/pain "
-                    "risk (library/07-strength-dryland.md)"
+                    "dryland shoulder strength — rotator-cuff/scapular-stability "
+                    "strength & balance (library/07-strength-dryland.md)"
                 ),
-                structure=None,
+                structure=_strength_session_structure(session_index),
                 status="planned",
             )
         )
@@ -538,7 +695,7 @@ def generate_week(
                 distance_m=additional_distance,
                 intensity={"zone": "Z2", "anchor": "css_pace"},
                 purpose="additional pool-independent aerobic volume",
-                structure=None,
+                structure=_additional_swim_structure(block.name, additional_distance, css_pace_s),
                 status="planned",
             )
         )

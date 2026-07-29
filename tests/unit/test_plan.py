@@ -3,6 +3,7 @@
 No LLM calls, no network access -- pure arithmetic + model validation.
 """
 
+import re
 import uuid
 import warnings
 from datetime import date, timedelta
@@ -11,8 +12,11 @@ import pytest
 
 from swim_coach.models import Athlete, Event
 from swim_coach.plan import (
+    STRENGTH_CORE_EXERCISES,
     STRENGTH_SESSIONS_PER_WEEK,
     WEEKLY_VOLUME_RAMP_CAP,
+    _additional_swim_structure,
+    _strength_session_structure,
     generate_week,
     scaffold_macro,
 )
@@ -255,6 +259,28 @@ def test_generate_week_long_swim_on_saturday(short_macro):
     assert long_swims[0].distance_m >= 0
 
 
+def test_generate_week_long_swim_structure_unchanged_regression(short_macro):
+    # Regression guard: the Saturday long swim (and, in multi_day_stage
+    # format, its Sunday stage counterpart) must stay continuous/
+    # negative-split per library/06-long-swim-progression.md -- this plan
+    # only adds structure to strength sessions and the separate
+    # "additional" swim_ow session, never to these weekend sessions.
+    athlete, macro = short_macro
+    week_start = macro.blocks[0].start_date
+
+    single = generate_week(athlete, macro, _iso_week(week_start), week_start, event_format="single_day")
+    single_weekend = [s for s in single.sessions if s.sport == "swim_ow" and s.date.weekday() in (5, 6)]
+    assert len(single_weekend) == 1
+    assert single_weekend[0].structure is None
+    assert single_weekend[0].purpose == "long open-water swim — endurance and fueling-practice anchor of the week"
+
+    stage = generate_week(athlete, macro, _iso_week(week_start), week_start, event_format="multi_day_stage")
+    stage_weekend = [s for s in stage.sessions if s.sport == "swim_ow" and s.date.weekday() in (5, 6)]
+    assert len(stage_weekend) == 2
+    for session in stage_weekend:
+        assert session.structure is None
+
+
 def test_generate_week_strength_and_recovery_counts(short_macro):
     athlete, macro = short_macro
     week_start = macro.blocks[0].start_date
@@ -270,6 +296,37 @@ def test_generate_week_strength_and_recovery_counts(short_macro):
     assert len(recovery) == 1
     assert recovery[0].duration_min > 0
     assert recovery[0].purpose == "mobility / full rest"
+
+
+def test_generate_week_strength_sessions_carry_real_structure(short_macro):
+    athlete, macro = short_macro
+    week_start = macro.blocks[0].start_date
+    week = generate_week(athlete, macro, _iso_week(week_start), week_start)
+
+    strength = sorted(
+        (s for s in week.sessions if s.sport == "strength"), key=lambda s: s.date
+    )
+    assert len(strength) == STRENGTH_SESSIONS_PER_WEEK
+    for session in strength:
+        assert session.structure is not None
+        assert session.structure.strip() != ""
+        # every session includes the rotator-cuff/scapular-stability core
+        for exercise in STRENGTH_CORE_EXERCISES:
+            assert exercise in session.structure
+
+    # the two sessions aren't identical -- the second layers in full-body work
+    assert strength[0].structure != strength[1].structure
+    assert "full-body" in strength[1].structure.lower()
+
+
+def test_strength_session_structure_matches_session_index():
+    session_0 = _strength_session_structure(0)
+    session_1 = _strength_session_structure(1)
+    for exercise in STRENGTH_CORE_EXERCISES:
+        assert exercise in session_0
+        assert exercise in session_1
+    assert "full-body" not in session_0.lower()
+    assert "full-body" in session_1.lower()
 
 
 def test_generate_week_volume_within_tolerance_across_macro(short_macro):
@@ -409,3 +466,82 @@ def test_generate_week_round_trips_through_file_store(tmp_path, short_macro):
     assert loaded == week
     for session in loaded.sessions:
         assert session.athlete_id == athlete.id
+
+
+# --- additional pool-independent swim session structure ---------------------------
+
+
+def test_generate_week_additional_swim_session_has_real_structure(short_macro):
+    # The "peak" block's first week for this fixture reliably produces a
+    # remainder >= MIN_ADDITIONAL_SWIM_M (verified by direct simulation):
+    # target 20000m - 3 pool sessions (10500m) - long swim (6600m) = 2900m.
+    athlete, macro = short_macro
+    peak_block = next(b for b in macro.blocks if b.name == "peak")
+    week_start = peak_block.start_date
+    week = generate_week(athlete, macro, _iso_week(week_start), week_start)
+
+    additional = [s for s in week.sessions if s.purpose == "additional pool-independent aerobic volume"]
+    assert len(additional) == 1
+    session = additional[0]
+    assert session.distance_m >= 1000
+    assert session.structure is not None
+    assert session.structure.strip() != ""
+    assert "Warm-up" in session.structure
+    assert "Main set" in session.structure
+    assert "Cool-down" in session.structure
+    assert "/100m" in session.structure  # real pace numbers, not vague filler
+    # a non-base block should use the broken-distance/negative-split format
+    assert "broken-distance" in session.structure
+
+
+def test_generate_week_additional_swim_structure_uses_continuous_format_in_base_block():
+    # A single pool day/week leaves enough pool-independent volume that the
+    # additional-swim remainder path triggers in every block, including
+    # base -- reliably exercising the base-block continuous-format branch
+    # (unlike short_macro's 3-day pool schedule, which never triggers it in
+    # base at these volumes).
+    athlete = make_athlete(pool_schedule=["tue"])
+    event = make_event(event_date=START + timedelta(weeks=10))
+    macro = scaffold_macro(athlete, event, START, current_weekly_volume_m=14000, peak_weekly_volume_m=20000)
+    base_block = next(b for b in macro.blocks if b.name == "base")
+    week_start = base_block.start_date
+    week = generate_week(athlete, macro, _iso_week(week_start), week_start)
+
+    additional = [s for s in week.sessions if s.purpose == "additional pool-independent aerobic volume"]
+    assert len(additional) == 1
+    assert "@ Z2" in additional[0].structure
+    assert "broken-distance" not in additional[0].structure
+
+
+def test_additional_swim_structure_handles_zero_distance():
+    assert _additional_swim_structure("base", 0, 95.0) == "No additional pool-independent volume this week."
+
+
+def test_additional_swim_structure_never_called_for_long_swim_sessions(short_macro):
+    # Direct regression guard on the helper itself: generate_week must never
+    # pass long-swim/stage-swim data through _additional_swim_structure --
+    # enforced structurally above (test_generate_week_long_swim_structure_
+    # unchanged_regression), this just confirms the function is usable
+    # standalone and produces distinct output from a None/continuous design.
+    athlete, macro = short_macro
+    text = _additional_swim_structure("build", 2000, athlete.css_pace_s_per_100m)
+    assert text != "No additional pool-independent volume this week."
+    assert "Warm-up" in text and "Cool-down" in text
+
+
+@pytest.mark.parametrize("macro_block_name", ["base", "build", "peak", "taper"])
+@pytest.mark.parametrize("distance_m", list(range(1000, 4001, 100)))
+def test_additional_swim_structure_sums_to_requested_distance(macro_block_name, distance_m):
+    # Regression guard: warm-up + main set (reps x rep length) + cool-down
+    # must sum exactly to distance_m -- a real rounding bug in an earlier
+    # version of this function let the printed main-set rep count drift
+    # from the warm-up/cool-down split, so the described session's total
+    # could silently overshoot or undershoot the session's actual
+    # distance_m by up to a full rep length (as much as 10% at the low end
+    # of realistic "additional swim" distances).
+    text = _additional_swim_structure(macro_block_name, distance_m, 95.0)
+    warm_up = int(re.search(r"Warm-up: (\d+)m", text).group(1))
+    cool_down = int(re.search(r"Cool-down: (\d+)m", text).group(1))
+    main_set = re.search(r"Main set: (\d+) x (\d+)m", text)
+    reps, rep_len = int(main_set.group(1)), int(main_set.group(2))
+    assert warm_up + reps * rep_len + cool_down == distance_m
