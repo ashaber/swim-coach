@@ -246,6 +246,8 @@ def build_system_blocks(library_dir: Path) -> list[dict[str, Any]]:
 _LIBRARY_FILES_IN_PRIORITY_ORDER = [
     "03-periodization.md",
     "04-css-intensity-anchors.md",
+    "07-strength-dryland.md",
+    "14-swim-set-structure.md",
     "05-open-water-pace-inference.md",
     "06-long-swim-progression.md",
     "08-ultra-feeding.md",
@@ -269,8 +271,25 @@ _KEYWORD_ROUTES: dict[str, set[str]] = {
     "css": {"04-css-intensity-anchors.md"},
     "critical swim speed": {"04-css-intensity-anchors.md"},
     "negative split": {"04-css-intensity-anchors.md"},
-    "dryland": {"04-css-intensity-anchors.md"},
-    "strength": {"04-css-intensity-anchors.md"},
+    "dryland": {"04-css-intensity-anchors.md", "07-strength-dryland.md"},
+    "strength": {"04-css-intensity-anchors.md", "07-strength-dryland.md"},
+    # 07-strength-dryland.md -- exercise selection/dosing detail beyond the
+    # frequency constant 04 grounds.
+    "exercise": {"07-strength-dryland.md"},
+    "kettlebell": {"07-strength-dryland.md"},
+    "rotator cuff": {"07-strength-dryland.md"},
+    "scapular": {"07-strength-dryland.md"},
+    # 14-swim-set-structure.md -- warm-up/main-set/cool-down composition for
+    # the additional pool-independent swim session (not the long swim).
+    "main set": {"14-swim-set-structure.md"},
+    "warm-up": {"14-swim-set-structure.md"},
+    "warm up": {"14-swim-set-structure.md"},
+    "cool-down": {"14-swim-set-structure.md"},
+    "cool down": {"14-swim-set-structure.md"},
+    "interval": {"14-swim-set-structure.md"},
+    "broken distance": {"14-swim-set-structure.md"},
+    "descending set": {"14-swim-set-structure.md"},
+    "set structure": {"14-swim-set-structure.md"},
     "wetsuit": {"05-open-water-pace-inference.md"},
     "open water": {"05-open-water-pace-inference.md"},
     "open-water": {"05-open-water-pace-inference.md"},
