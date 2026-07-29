@@ -357,6 +357,37 @@ def test_per_request_context_no_events_message_when_none_on_file(app_env) -> Non
     assert "no events on file" in text.lower()
 
 
+def test_per_request_context_events_include_active_status(app_env) -> None:
+    # Regression: PERSONA_AND_RULES instructs the model to treat
+    # `active: false` events as archived and not suggest them, but that's
+    # only followable if the per-request context actually surfaces the
+    # field -- confirm both an active and a deactivated event show their
+    # real `active` value in the rendered text.
+    store = FileStore(base_dir=app_env)
+    today = date.today()
+    live_event = make_event(
+        name="Live Event",
+        event_date=today + timedelta(days=30),
+        distance_m=10000,
+    )
+    archived_event = make_event(
+        name="Archived Event",
+        event_date=today + timedelta(days=60),
+        distance_m=20000,
+        active=False,
+    )
+    store.save_events("renee", [live_event, archived_event])
+
+    text = build_per_request_context(store, "renee", expert_mode=False)
+
+    assert '"name": "Live Event"' in text
+    assert '"name": "Archived Event"' in text
+    live_line = next(line for line in text.splitlines() if '"name": "Live Event"' in line)
+    archived_line = next(line for line in text.splitlines() if '"name": "Archived Event"' in line)
+    assert '"active": true' in live_line
+    assert '"active": false' in archived_line
+
+
 # --- focused workout (Log tab's embedded workout chat) -----------------------
 
 

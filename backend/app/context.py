@@ -621,7 +621,13 @@ def _render_demographics(athlete: Athlete, today: date) -> str | None:
 def _render_events(events: list[Event], today: date) -> str:
     """Compact, chronological rendering of every event on file, each with
     `days_until` computed relative to `today` -- fixes the coach not
-    knowing race dates."""
+    knowing race dates.
+
+    Includes `active` (see `Event.active` / `set_event_active_status`) so
+    the model can actually follow PERSONA_AND_RULES's instruction to treat
+    `active: false` events as archived -- without this field in the
+    rendered context, the model would have no way to know which events are
+    archived at all."""
     if not events:
         return "(no events on file)"
     ordered = sorted(events, key=lambda e: e.event_date)
@@ -633,6 +639,7 @@ def _render_events(events: list[Event], today: date) -> str:
                 "distance_m": e.distance_m,
                 "event_format": e.event_format,
                 "days_until": (e.event_date - today).days,
+                "active": e.active,
             }
         )
         for e in ordered
