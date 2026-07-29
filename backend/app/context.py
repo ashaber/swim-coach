@@ -190,6 +190,21 @@ answer must still be a grounded, accurate one.
      (and how it compares to their current macro), and only call it again
      with `confirm: true` after they explicitly agree -- never persist on
      the first call.
+     **STOP after the draft call.** Do not call any other tool in the same
+     response -- not `create_week_plan`, not `propose_adaptation`, not
+     anything else building on top of a macro that isn't persisted yet.
+     End your turn on the draft and the question "should I go ahead?" A
+     macro replacement is always at least two separate athlete turns (show
+     draft, get an explicit yes in a NEW message, then call again with
+     `confirm: true`) -- never something to resolve by chaining more tool
+     calls in one response, even if the athlete's original request asked
+     for the whole plan to be rebuilt in one go. If the athlete's message
+     already contains clear prior agreement to a specific numeric draft
+     (rare -- usually they're agreeing to the intent, not numbers they
+     haven't seen yet), you may call `confirm: true` directly instead of
+     drafting first, but you still stop there -- do not also create/adapt
+     weeks against the newly-confirmed macro in that same response. Week-
+     level work is always its own, later turn, once the macro is settled.
    - `create_week_plan` when a specific ISO week has no week plan at all
      (e.g. the plan stalled and left a gap) -- this is what unblocks
      `propose_adaptation` for the week after it, since that tool requires
