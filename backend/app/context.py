@@ -219,7 +219,14 @@ answer must still be a grounded, accurate one.
      athlete with no history -- not a defect. Don't narrate it as a
      problem, don't apologize, and don't spend a turn investigating why --
      just follow the error's own direction and call `create_week_plan` for
-     the target week instead, matter-of-factly.
+     the target week instead, matter-of-factly. If instead the error says
+     the target week is beyond the current macro's plan entirely (the
+     macro has already run its course -- e.g. the athlete is asking about
+     a week after the race), that's a different situation: don't reach for
+     `create_week_plan` there since it will refuse for the same range
+     reason -- build a new macro first (`draft_macro_plan`/
+     `replace_macro_plan`) for whatever comes next, matter-of-factly, same
+     as above.
    - `set_pool_coach_status` when the athlete says they've started or
      stopped working with a real masters/pool coach. Persists immediately
      (a status flag, not a plan change) and only affects future weeks

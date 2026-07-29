@@ -529,7 +529,7 @@ def _handle_propose_adaptation(input_data: dict[str, Any], *, store: StoreInterf
     # inside the current macro, not in any particular block.
     macro_start = macro.blocks[0].start_date
     macro_end = macro.blocks[-1].end_date
-    if not (macro_start <= current_week_start <= macro_end):
+    if current_week_start < macro_start:
         return {
             "error": (
                 f"the week before {iso_week!r} ({current_iso!r}) predates the "
@@ -537,6 +537,24 @@ def _handle_propose_adaptation(input_data: dict[str, Any], *, store: StoreInterf
                 "expected right after a macro replacement or a fresh start, not a "
                 f"gap. Use create_week_plan for {iso_week!r} instead, since it's "
                 "effectively the first week of the current plan."
+            )
+        }
+    if current_week_start > macro_end:
+        # Distinct from the predates-start case above: here iso_week itself
+        # (not just the prior week) is also beyond macro_end, since
+        # current_week_start is iso_week's own week_start minus 7 days --
+        # create_week_plan would refuse for the same reason (it checks the
+        # same macro range), so pointing at it here would just trade one
+        # dead end for another. The real fix is a new macro for whatever
+        # comes next.
+        return {
+            "error": (
+                f"the week before {iso_week!r} ({current_iso!r}) falls after "
+                f"the current macro ends ({macro_end}) -- {iso_week!r} is "
+                "beyond this macro's plan entirely, not a gap within it. "
+                "Build a new macro (draft_macro_plan or replace_macro_plan) "
+                "for whatever comes next, then create_week_plan for its "
+                "first week."
             )
         }
 

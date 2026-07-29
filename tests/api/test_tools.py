@@ -93,6 +93,37 @@ def test_propose_adaptation_prior_week_predating_macro_is_a_calm_error(athletes_
     assert "2026-W28" in result["error"]
 
 
+def test_propose_adaptation_prior_week_after_macro_end_points_at_a_new_macro(athletes_dir) -> None:
+    # Distinct from the predates-start case above: here the prior week (and
+    # therefore the target iso_week too, since it's only 7 days later) falls
+    # AFTER the current macro's own end date -- e.g. the athlete already
+    # raced and is asking about a week beyond the whole plan. Found during
+    # review: the original single-branch check reused the "predates" message
+    # verbatim for this case too, wrongly claiming the macro "starts
+    # 2026-07-06" and directing to create_week_plan -- which would itself
+    # refuse for the exact same range reason, trading one dead end for
+    # another. Confirm the message here is accurate (says the macro *ends*,
+    # not "predates"/"starts") and points at building a new macro instead.
+    store = FileStore(base_dir=athletes_dir)
+    macro = store.load_macro("renee")
+    macro_end = macro.blocks[-1].end_date
+    assert macro_end.isoformat() == "2026-09-13"
+
+    stale_week = store.load_week("renee", "2026-W28")
+    stale_week = stale_week.model_copy(update={"iso_week": "2026-W39"})
+    store.save_week("renee", stale_week)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["propose_adaptation"]({"iso_week": "2026-W40"})
+
+    assert "error" in result
+    assert "falls after" in result["error"]
+    assert "predates" not in result["error"]
+    assert "2026-09-13" in result["error"]  # macro's actual end date
+    assert "draft_macro_plan" in result["error"] or "replace_macro_plan" in result["error"]
+    assert "2026-W40" in result["error"]
+
+
 def test_propose_adaptation_in_range_prior_week_is_unaffected_by_the_new_check(athletes_dir) -> None:
     # Regression check: the new out-of-range guard must not disturb the
     # ordinary, already-correct in-range case -- 2026-W29 (the real prior
