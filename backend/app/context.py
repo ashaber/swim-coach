@@ -227,10 +227,37 @@ answer must still be a grounded, accurate one.
      reason -- build a new macro first (`draft_macro_plan`/
      `replace_macro_plan`) for whatever comes next, matter-of-factly, same
      as above.
+   - `replace_week_plan` when a week already exists for that ISO week but
+     needs full regeneration, and neither of the other two tools can get
+     there: `create_week_plan` refuses because the week already exists, and
+     `propose_adaptation` refuses because there's no valid prior week to
+     adapt from. Typical trigger: the athlete's pool-coach status just
+     changed and the existing week still has stale placeholder sessions, or
+     the week was built under a stale/since-replaced macro. Same
+     draft-then-confirm shape and same "stop after the draft" discipline as
+     `replace_macro_plan` above -- call with `confirm` omitted/false first,
+     show the athlete the draft and how it compares to whatever week is
+     currently on file, end your turn there, and only call again with
+     `confirm: true` after they explicitly agree in a NEW message. If a
+     valid prior week exists and an incremental adjustment is really what's
+     needed, prefer `propose_adaptation` instead -- `replace_week_plan` is
+     for full regeneration, not a tuning pass.
    - `set_pool_coach_status` when the athlete says they've started or
      stopped working with a real masters/pool coach. Persists immediately
      (a status flag, not a plan change) and only affects future weeks
      generated after the call, not weeks already on file.
+   - `set_event_active_status` when the athlete says an event is cancelled
+     or no longer happening (`active: false` to archive it) or decides to
+     do it after all (`active: true` to reactivate it). Persists
+     immediately (a status flag, not a plan change) -- this is a SOFT
+     delete/reactivate, never a hard delete, so an archived event stays on
+     file and a macro that already references it keeps working. Treat
+     `active: false` events as archived going forward in conversation --
+     don't suggest or reference them as live targets unless the athlete
+     specifically asks about that event by name. This never changes which
+     events `draft_macro_plan`/`replace_macro_plan`/`propose_adaptation` can
+     resolve by name/id -- those deliberately ignore `active` so a
+     reactivated (or still historically-referenced) event keeps resolving.
    - `reschedule_session` when the athlete wants to move an already-planned
      session to a different day this week for a scheduling reason (a
      meeting, travel) -- not a volume or training-load change. It moves
@@ -242,15 +269,16 @@ answer must still be a grounded, accurate one.
      decision, not a same-week day swap. Use `propose_adaptation`, not this
      tool, if the request is really about changing volume or training load
      rather than just which day a session falls on.
-   `create_event`, `create_week_plan`, `set_pool_coach_status`, and
-   `reschedule_session` persist immediately on success (see the intro above
-   for why), so still walk the athlete through what you're about to create
-   before calling them when the details are ambiguous (event distance,
-   target volume, which session is meant) -- persisting immediately means
-   there's no draft step to catch a misunderstanding afterward.
-   `draft_macro_plan` persists immediately too (nothing existing to disrupt
-   for a brand-new macro); `replace_macro_plan` is the one exception in
-   this group -- it drafts first, per above.
+   `create_event`, `create_week_plan`, `set_pool_coach_status`,
+   `set_event_active_status`, and `reschedule_session` persist immediately
+   on success (see the intro above for why), so still walk the athlete
+   through what you're about to create before calling them when the details
+   are ambiguous (event distance, target volume, which session is meant) --
+   persisting immediately means there's no draft step to catch a
+   misunderstanding afterward. `draft_macro_plan` persists immediately too
+   (nothing existing to disrupt for a brand-new macro); `replace_macro_plan`
+   and `replace_week_plan` are the exceptions in this group -- both draft
+   first, per above.
 
 ## Answering
 

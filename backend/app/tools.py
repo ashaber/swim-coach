@@ -44,6 +44,41 @@ volume/training-load/safety-rail interaction at all, which is exactly why it
 persists directly rather than going through `propose_adaptation`'s
 draft-then-confirm shape: unlike an adaptation, there's no rule-table
 recompute for a bad call to have gotten wrong.
+
+`replace_week_plan` closes a real structural dead end: `create_week_plan`
+refuses if iso_week already has a week on file ("use propose_adaptation
+instead"), and `propose_adaptation` refuses if there's no valid prior week to
+adapt from. When BOTH are true -- an existing week needs regenerating (e.g.
+`has_pool_coach` just changed, or the week was built under a stale/replaced
+macro) and there's no valid prior week to adapt from -- neither tool can
+touch it. `replace_week_plan` is the same shape as `replace_macro_plan`: it
+calls `swim_coach.plan.generate_week` (the same engine function
+`create_week_plan` uses) with NO guard against an existing week -- that's
+exactly its purpose -- and follows draft-then-confirm rather than
+direct-persist, since overwriting an already-active week can invalidate
+training the athlete has already done against it: `confirm=False` (default)
+only computes and returns the candidate (plus a comparison against whatever
+week is currently on file for that iso_week, if any) as JSON with
+`"persisted": false`, never calling `store.save_week`; `confirm=True`
+recomputes identically (generate_week is a pure function of its inputs, so
+this is safe to re-run) and persists, overwriting whatever was there.
+
+`set_event_active_status` is a soft delete/reactivate for an `Event`: flips
+`Event.active` (default `True`, purely additive) so a cancelled event can be
+archived from conversation without removing it from `events.yaml` -- a
+macro's `event_id` can still reference an event after the athlete has moved
+on, and hard-deleting risks orphaning that reference. Deliberately NOT a
+hard delete, and deliberately reactivatable: `active=False` then
+`active=True` again round-trips cleanly. Like `set_pool_coach_status`, this
+is a low-risk status flag, not a plan/volume change, so it persists directly
+via `store.save_events` (the whole list, matching that store method's
+replace-the-list contract) -- no draft/confirm step. Existing event-by-id
+lookups elsewhere in this file (`draft_macro_plan`/`replace_macro_plan`/
+`propose_adaptation`) deliberately do NOT filter by `active` -- an inactive
+event must still resolve if the athlete reactivates it or an old macro still
+references it historically. `active` only changes how the model *talks
+about* events in conversation (see PERSONA_AND_RULES), never which events
+existing engine/tool lookups can find.
 """
 
 from __future__ import annotations
@@ -468,6 +503,94 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
             },
             "required": ["iso_week", "current_date", "sport", "new_date"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "replace_week_plan",
+        "description": (
+            "Replace one week's plan by recomputing swim_coach.plan.generate_week "
+            "-- the same engine function create_week_plan uses. Unlike "
+            "create_week_plan, this tool NEVER refuses because a week already "
+            "exists for iso_week -- that's exactly its purpose: use it for the "
+            "structural dead end where create_week_plan refuses ('use "
+            "propose_adaptation instead') AND propose_adaptation also refuses "
+            "(no valid prior week to adapt from) -- e.g. the athlete's "
+            "has_pool_coach status just changed and the existing week still "
+            "has stale placeholder sessions, or the week was built under a "
+            "stale/since-replaced macro. This can invalidate an "
+            "already-trained-against week, so -- like replace_macro_plan -- it "
+            "is draft-then-confirm, NOT direct-persist: `confirm` defaults to "
+            "false, which only computes and returns the candidate replacement "
+            "(plus a comparison against whatever week is currently on file for "
+            "iso_week, if any: old vs. new target_volume_m, old vs. new "
+            "session count) as JSON with `\"persisted\": false` -- it does NOT "
+            "call save_week. Show this draft to the athlete and get their "
+            "explicit agreement before calling this tool again with "
+            "`confirm: true` -- only then does it persist (store.save_week), "
+            "overwriting whatever week plan is currently on file for iso_week. "
+            "Never pass confirm=true on the first call for a given request, "
+            "and never chain another tool call in the same response after the "
+            "draft -- stop and wait for the athlete's explicit agreement in a "
+            "new message, same discipline as replace_macro_plan."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "iso_week": {
+                    "type": "string",
+                    "description": "ISO week to replace, formatted 'YYYY-Wnn', e.g. '2026-W30'.",
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "description": (
+                        "Default false: compute and return the candidate "
+                        "replacement week as a draft only, never persisting. "
+                        "Set true ONLY after the athlete has explicitly agreed "
+                        "to the draft shown in a prior turn -- this then "
+                        "persists via store.save_week, overwriting whatever "
+                        "week plan is currently on file for iso_week."
+                    ),
+                },
+            },
+            "required": ["iso_week"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "set_event_active_status",
+        "description": (
+            "Soft delete/reactivate an event: set active=false to archive an "
+            "event that's no longer happening (cancelled, athlete changed "
+            "their mind), or active=true to reactivate one later. This is "
+            "deliberately NOT a hard delete -- a macro's event_id can still "
+            "reference an event after the athlete has moved on, and "
+            "hard-deleting risks orphaning that reference. Persists "
+            "immediately -- a status flag, not a plan/volume change, so no "
+            "draft/confirm step is needed. Treat active=false events as "
+            "archived in conversation: don't suggest or reference them as "
+            "live targets unless the athlete specifically asks about that "
+            "event by name. Does not affect draft_macro_plan/"
+            "replace_macro_plan/propose_adaptation's own event lookups -- "
+            "those still resolve an inactive event correctly by name/id if "
+            "the athlete wants to build or rebuild a macro toward it."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "event_name": {
+                    "type": "string",
+                    "description": "Name of an existing event (must match exactly).",
+                },
+                "active": {
+                    "type": "boolean",
+                    "description": (
+                        "False to archive/deactivate the event (cancelled or "
+                        "no longer a target); true to reactivate it."
+                    ),
+                },
+            },
+            "required": ["event_name", "active"],
             "additionalProperties": False,
         },
     },
@@ -1188,6 +1311,154 @@ def _handle_reschedule_session(input_data: dict[str, Any], *, store: StoreInterf
     }
 
 
+def _week_sessions_json(week) -> list[dict[str, Any]]:
+    return [
+        {
+            "date": s.date.isoformat(),
+            "sport": s.sport,
+            "source": s.source,
+            "distance_m": s.distance_m,
+            "duration_min": s.duration_min,
+            "purpose": s.purpose,
+        }
+        for s in week.sessions
+    ]
+
+
+def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    """Computes a candidate replacement week via `generate_week` (the same
+    engine function `create_week_plan` uses) for exactly the case
+    `create_week_plan` refuses -- a week already exists for iso_week. No
+    guard against an existing week: that's this tool's whole purpose, closing
+    the structural dead end where `create_week_plan` refuses AND
+    `propose_adaptation` also refuses (no valid prior week to adapt from).
+
+    Follows `replace_macro_plan`'s draft-then-confirm shape rather than
+    `create_week_plan`'s direct-persist one: overwriting an already-active
+    week can invalidate training the athlete has already done against it, so
+    `confirm=False` (default) only computes and returns the candidate + a
+    comparison against the week currently on file (if any), never calling
+    `store.save_week`; `confirm=True` recomputes identically (generate_week
+    is a pure function of its inputs, so this is safe to re-run) and
+    persists.
+    """
+    iso_week = input_data.get("iso_week")
+    if not iso_week:
+        return {"error": "iso_week is required"}
+
+    try:
+        year_str, week_str = iso_week.split("-W")
+        week_start = date.fromisocalendar(int(year_str), int(week_str), 1)
+    except (ValueError, IndexError):
+        return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+
+    confirm = bool(input_data.get("confirm", False))
+
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load athlete profile: {exc}"}
+
+    try:
+        macro = store.load_macro(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load macro plan: {exc}"}
+    if macro is None:
+        return {"error": "no macro plan for this athlete; use draft_macro_plan first"}
+
+    try:
+        events = store.load_events(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load events: {exc}"}
+    event = next((e for e in events if e.id == macro.event_id), None)
+    if event is None:
+        return {"error": f"macro's event_id {macro.event_id} not found in events.yaml"}
+
+    event_format = event.event_format or "single_day"
+
+    try:
+        existing_week = store.load_week(slug, iso_week)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load existing week plan: {exc}"}
+
+    try:
+        week = generate_week(athlete, macro, iso_week, week_start, event_format)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    comparison = None
+    if existing_week is not None:
+        comparison = {
+            "old_target_volume_m": existing_week.target_volume_m,
+            "old_session_count": len(existing_week.sessions),
+            "new_target_volume_m": week.target_volume_m,
+            "new_session_count": len(week.sessions),
+        }
+
+    if not confirm:
+        return {
+            "iso_week": week.iso_week,
+            "meso_block": week.meso_block,
+            "focus": week.focus,
+            "target_volume_m": week.target_volume_m,
+            "sessions": _week_sessions_json(week),
+            "comparison": comparison,
+            "persisted": False,
+        }
+
+    store.save_week(slug, week)
+
+    log.info("week plan replaced", athlete=slug, iso_week=iso_week)
+    return {
+        "iso_week": week.iso_week,
+        "meso_block": week.meso_block,
+        "focus": week.focus,
+        "target_volume_m": week.target_volume_m,
+        "sessions": _week_sessions_json(week),
+        "comparison": comparison,
+        "persisted": True,
+    }
+
+
+def _handle_set_event_active_status(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    """Flips one `Event.active` flag and persists via `store.save_events`
+    (the whole list, matching that store method's replace-the-list
+    contract). Soft delete/reactivate, not a hard delete -- a macro's
+    event_id can still reference an event after the athlete has moved on.
+    Low-risk status flag, not a plan/volume change -- persists directly, no
+    confirm step, same convention as set_pool_coach_status."""
+    event_name = input_data.get("event_name")
+    if not event_name:
+        return {"error": "event_name is required"}
+    active = input_data.get("active")
+    if active is None:
+        return {"error": "active is required"}
+    if not isinstance(active, bool):
+        return {"error": f"invalid active {active!r}; must be a boolean"}
+
+    try:
+        events = store.load_events(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load events: {exc}"}
+
+    matches = [e for e in events if e.name == event_name]
+    if len(matches) != 1:
+        known_names = [e.name for e in events]
+        return {
+            "error": (
+                f"expected exactly one event named {event_name!r}, found "
+                f"{len(matches)}; known event names: {known_names}"
+            )
+        }
+
+    event = matches[0]
+    event.active = active
+    store.save_events(slug, events)
+
+    log.info("event active status set", athlete=slug, event_name=event_name, active=active)
+    return {"updated": True, "event_name": event_name, "active": event.active}
+
+
 def build_tool_handlers(
     store: StoreInterface, *, slug: str, expert_mode: bool
 ) -> dict[str, ToolHandler]:
@@ -1227,6 +1498,12 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "reschedule_session": lambda input_data: _handle_reschedule_session(
+            input_data, store=store, slug=slug
+        ),
+        "replace_week_plan": lambda input_data: _handle_replace_week_plan(
+            input_data, store=store, slug=slug
+        ),
+        "set_event_active_status": lambda input_data: _handle_set_event_active_status(
             input_data, store=store, slug=slug
         ),
     }

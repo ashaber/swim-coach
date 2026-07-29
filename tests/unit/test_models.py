@@ -245,6 +245,35 @@ def test_event_format_omitted_from_dict_still_defaults():
     assert event.event_format == "single_day"
 
 
+def test_event_active_defaults_to_true():
+    event = make_event()
+    assert event.active is True
+
+
+def test_event_active_accepts_false():
+    event = make_event(active=False)
+    assert event.active is False
+
+
+def test_event_active_omitted_from_dict_still_defaults_true():
+    # Backward compatibility: a YAML file written before `active` existed (no
+    # key at all -- every real event on file today) must still validate,
+    # defaulting to True (soft-delete/reactivate, backend/app/tools.py's
+    # set_event_active_status -- see swim_coach.models.Event).
+    data = dict(
+        id=uuid.uuid4(),
+        athlete_id=ATHLETE_ID,
+        name="Legacy Event",
+        event_date=date(2026, 8, 15),
+        distance_m=10000,
+        water_temp_c=18.0,
+        wetsuit=False,
+        priority="A",
+    )
+    event = Event(**data)
+    assert event.active is True
+
+
 def test_week_plan_rejects_bad_iso_week():
     with pytest.raises(ValidationError):
         make_week(iso_week="not-a-week")

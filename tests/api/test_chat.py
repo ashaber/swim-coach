@@ -62,6 +62,8 @@ def test_request_shape_includes_tools(client, fake_claude_chat_factory) -> None:
         "set_pool_coach_status",
         "create_week_plan",
         "reschedule_session",
+        "replace_week_plan",
+        "set_event_active_status",
     }
 
 
