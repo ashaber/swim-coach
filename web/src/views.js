@@ -4,7 +4,7 @@
 import {
   formatShortDate, formatLongDate, formatDuration, formatDistance, formatPace,
   parseIsoDate, sessionsByDay, classifySession, sessionDisplay, sessionDotColorVar,
-  pickCurrentAndNextWeek, daysUntil, priorityEvent, currentBlockIndex, longSwimLadder,
+  pickCurrentAndNextWeek, daysUntil, macroTargetEvent, currentBlockIndex, longSwimLadder,
 } from './plan.js';
 import { TOOL_LABELS } from './chat.js';
 import {
@@ -29,8 +29,7 @@ const SESSION_LEGEND = [
   { colorVar: '--c-signal', label: 'Milestone / race' },
 ];
 
-function renderMasthead(athlete, events) {
-  const event = priorityEvent(events);
+function renderMasthead(athlete, event) {
   const days = event ? daysUntil(parseIsoDate(event.event_date)) : null;
 
   return `
@@ -241,11 +240,11 @@ function renderLegendPanel() {
 
 export function renderApp(data) {
   const { athlete, events, macro, weeks } = data;
-  const event = priorityEvent(events);
+  const event = macroTargetEvent(macro, events);
 
   return `
     <div class="wrap">
-      ${renderMasthead(athlete, events)}
+      ${renderMasthead(athlete, event)}
       ${renderWeeksSection(weeks)}
       ${renderMacroSection(macro, event, weeks)}
       <div class="foot">

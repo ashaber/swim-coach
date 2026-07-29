@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   isoWeekMonday, formatDuration, formatDistance, formatPace, splitPurpose,
   classifySession, sessionDisplay, pickCurrentAndNextWeek, daysUntil,
-  priorityEvent, currentBlockIndex, longSwimLadder, sessionsByDay,
+  priorityEvent, macroTargetEvent, currentBlockIndex, longSwimLadder, sessionsByDay,
 } from '../../src/plan.js';
 
 describe('isoWeekMonday', () => {
@@ -146,6 +146,32 @@ describe('priorityEvent', () => {
   });
   it('returns null for no events', () => {
     expect(priorityEvent([])).toBeNull();
+  });
+});
+
+describe('macroTargetEvent', () => {
+  const events = [
+    { id: 'warm-lake', name: 'Warm Lake Fall Breeze 3K', event_date: '2026-09-26', priority: 'B' },
+    { id: 'ten-k', name: 'Andrew Test Goal 10K', event_date: '2026-10-03', priority: 'B' },
+    { id: 'quinns', name: "Quinn's Halloween Spook Swim 4K", event_date: '2026-10-30', priority: 'A' },
+  ];
+
+  it('resolves the event the macro actually targets, even when it is not the soonest/priority-A pick', () => {
+    // Regression: replace_macro_plan moved the athlete's macro onto Quinn's
+    // (Oct 30, priority A), but the Plan tab masthead kept showing Warm Lake
+    // (Sep 26) because it derived the displayed event from priorityEvent()
+    // alone, ignoring macro.event_id entirely.
+    const macro = { event_id: 'quinns', blocks: [] };
+    expect(macroTargetEvent(macro, events).name).toBe("Quinn's Halloween Spook Swim 4K");
+  });
+
+  it('falls back to priorityEvent when there is no macro', () => {
+    expect(macroTargetEvent(null, events).id).toBe('quinns'); // priority A wins
+  });
+
+  it('falls back to priorityEvent when the macro event_id does not match any known event', () => {
+    const macro = { event_id: 'deleted-event', blocks: [] };
+    expect(macroTargetEvent(macro, events).id).toBe('quinns');
   });
 });
 
