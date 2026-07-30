@@ -397,6 +397,29 @@ describe('renderApp plan session detail view (click-to-detail)', () => {
     expect(html).not.toContain('>Pool practice<');
   });
 
+  it('regression: renderSession compact-row subtitle for a race-tagged session is unchanged -- still just the post-dash fragment, not the full purpose', () => {
+    // "race name — descriptive fragment" is the shape splitPurpose/detail
+    // was designed for; the compact week-view row has no room for a full
+    // sentence, so it must keep showing only the terse post-dash fragment
+    // here. This must NOT regress when renderPlanSessionDetail's Purpose
+    // section switches to the full, un-split purpose text.
+    const RACE_SESSION = {
+      id: 's-race',
+      date: dateKey(addDays(weekMonday, 4)),
+      sport: 'swim_ow',
+      source: 'ai_coach',
+      duration_min: 240,
+      distance_m: 10000,
+      intensity: { zone: 'Z2' },
+      purpose: 'Bear Lake Monster 10K (A race) — dress rehearsal, negative-split',
+      structure: null,
+    };
+    const data = { ...PLAN_DATA, weeks: [{ ...WEEK, sessions: [RACE_SESSION] }] };
+    const html = renderApp(data, null); // week view (compact rows), not detail view
+    expect(html).toContain('dress rehearsal, negative-split');
+    expect(html).not.toContain('Bear Lake Monster 10K (A race) — dress rehearsal');
+  });
+
   it('opens the full session detail (block-parsed structure + back button) when detailId matches', () => {
     const html = renderApp(PLAN_DATA, MAIN_SET_SESSION.id);
     expect(html).toContain('data-a="session:back"');
@@ -426,6 +449,32 @@ describe('renderApp plan session detail view (click-to-detail)', () => {
     expect(html).toContain('data-a="session:back"');
     expect(html).toContain('Coached USMS pool'); // falls back to the purpose-derived title
     expect(html).toContain('content assigned by coach'); // the post-dash purpose detail
+  });
+
+  it('detail view Purpose section shows the full, un-split purpose text for a single-statement purpose that contains an internal em-dash (not just the post-dash fragment)', () => {
+    // Real shape introduced by PR #83's _no_coach_pool_purpose(): one
+    // complete purpose statement that happens to use an em-dash as internal
+    // punctuation, not a "race name — descriptive fragment" pair. Splitting
+    // this on the dash (as sessionDisplay().detail does) leaves a meaningless
+    // fragment ("base-block emphasis") -- the detail view must show the
+    // whole sentence instead.
+    const NO_COACH_POOL_SESSION = {
+      id: 's-no-coach-pool',
+      date: dateKey(addDays(weekMonday, 3)),
+      sport: 'swim_pool',
+      source: 'ai_coach',
+      duration_min: 60,
+      distance_m: 2200,
+      intensity: { zone: 'Z2' },
+      purpose: 'Continuous aerobic volume — base-block emphasis',
+      structure: 'Warm-up: 400m easy.\n'
+        + 'Main set: 6 x 300m @ Z2 (1:35-1:39/100m), 15s rest -- continuous aerobic volume for the week.\n'
+        + 'Cool-down: 200m easy.',
+    };
+    const data = { ...PLAN_DATA, weeks: [{ ...WEEK, sessions: [NO_COACH_POOL_SESSION] }] };
+    const html = renderApp(data, NO_COACH_POOL_SESSION.id);
+    expect(html).toContain('<h4>Purpose</h4>');
+    expect(html).toContain('Continuous aerobic volume — base-block emphasis');
   });
 
   it('falls back to the ordinary week cards when detailId does not match any session', () => {

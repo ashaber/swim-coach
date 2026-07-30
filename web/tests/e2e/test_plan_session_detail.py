@@ -141,15 +141,18 @@ def test_open_main_set_session_shows_real_structure_not_the_old_dead_end(page):
     # the purpose detail with nothing actually shown below it -- the real
     # warm-up/main-set/cool-down content was dead code. Confirms the title is
     # still derived from the Main set line, and that the Purpose section now
-    # shows the real training-purpose detail text, not the old generic
-    # dev-note text ("no pool coach on hand, structure authored below").
-    # (The purpose string's convention is "title — detail"; the title half
-    # is superseded here by the Main-set-derived title in the header, so
-    # only the detail half -- "base-block emphasis" -- actually renders.)
+    # shows the real training-purpose text, not the old generic dev-note text
+    # ("no pool coach on hand, structure authored below").
+    # (The purpose string's convention is "title — detail" for race-tagged
+    # sessions, but `_no_coach_pool_purpose` purposes like this one are a
+    # SINGLE complete statement that merely contains an em-dash as internal
+    # punctuation -- the title in the header is Main-set-derived, not
+    # purpose-derived, so the Purpose section below renders the session's
+    # full, un-split purpose text, not just the post-dash fragment.)
     _open_session_detail(page, 's-main-set')
     content = page.content()
     assert '8 x 300m @ Z2 (1:35-1:39/100m)' in content  # derived title
-    assert 'base-block emphasis' in content  # real purpose detail
+    assert 'Continuous aerobic volume — base-block emphasis' in content  # full purpose, un-split
     assert 'no pool coach on hand' not in content  # old dev-note text, gone
     assert 'Warm-up' in content
     assert '600m easy, building to Z2 pace' in content

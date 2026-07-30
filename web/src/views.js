@@ -149,8 +149,23 @@ function renderStructureBlock(block) {
  * show even when this whole block is empty. */
 function renderPlanSessionDetail(session) {
   const classification = classifySession(session);
-  const { title, detail, structure } = sessionDisplay(session);
+  const { title, structure } = sessionDisplay(session);
   const dateLabel = formatLongDate(parseIsoDate(session.date));
+
+  // Use the session's full, un-split `purpose` here rather than
+  // `sessionDisplay().detail` -- `detail` is the post-em-dash fragment of
+  // `purpose`, which is only a complete thought for the older "race/event
+  // name — descriptive fragment" purpose shape. Newer purpose strings (see
+  // engine's `_no_coach_pool_purpose` and the strength session's purpose=,
+  // e.g. "Continuous aerobic volume — base-block emphasis") are a SINGLE
+  // complete statement that merely contains an em-dash as internal
+  // punctuation; splitting those left only the post-dash half ("base-block
+  // emphasis"), a meaningless fragment. This dedicated Purpose section has
+  // room for the whole sentence, so show it unsplit. (renderSession's
+  // compact-row subtitle intentionally keeps using `detail` -- that terse
+  // one-line spot is correct for the race-tagged shape and out of scope
+  // here.)
+  const { purpose } = session;
 
   return `
     <div class="detail-header">
@@ -159,10 +174,10 @@ function renderPlanSessionDetail(session) {
     </div>
     ${renderPlanSessionDetailStats(session)}
     ${structure ? parseStructureBlocks(structure).map(renderStructureBlock).join('') : ''}
-    ${detail ? `
+    ${purpose ? `
     <section class="detail-section">
       <h4>Purpose</h4>
-      <p class="detail-notes">${esc(detail)}</p>
+      <p class="detail-notes">${esc(purpose)}</p>
     </section>` : ''}`;
 }
 
