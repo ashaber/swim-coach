@@ -1006,8 +1006,8 @@ def test_additional_swim_structure_build_block_ladder_template():
     z4_range = f"{_format_pace_s(z4['pace_lo_s'])}-{_format_pace_s(z4['pace_hi_s'])}/100m"
     lines = text.splitlines()
     assert lines[1] == (
-        "Main set: broken-distance ladder -- 3 x (100m + 300m) climbing pairs, plus "
-        "1 x 200m capstone rep to finish, each pair negative-split from Z3 "
+        "Main set: 3 x (100m + 300m) climbing pairs, plus 1 x 200m capstone rep to "
+        "finish, broken-distance ladder, each pair negative-split from Z3 "
         f"({z3_range}) toward Z4 ({z4_range}) -- race-pace-adjacent emphasis (build block)."
     )
     assert "library/" not in text
@@ -1027,6 +1027,52 @@ def test_additional_swim_structure_build_block_straight_negative_split_template(
         "-- race-pace-adjacent emphasis (build block)."
     )
     assert "library/" not in text
+
+
+@pytest.mark.parametrize(
+    "distance_m,css_pace_s,expected_reps", [(300, 95.0, 1), (540, 120.0, 2)]
+)
+def test_additional_swim_structure_pyramid_degenerate_low_reps_no_self_contradiction(
+    distance_m, css_pace_s, expected_reps
+):
+    # Independent-review regression: no_coach_pool_distance_m's floor
+    # (NO_COACH_POOL_SESSION_FLOOR_M=300, see generate_week) is a real
+    # production path that can hand _additional_swim_structure a small
+    # enough distance_m to yield reps in {1, 2} for build/peak/taper
+    # blocks. The general pyramid formula `mid = reps // 2 + 1` makes the
+    # peak land ON the final rep whenever reps<=2, so the generic template
+    # text ("ramps ... at rep N of N and back down to Z3 by the final
+    # rep") was self-contradictory -- the final rep can't be both the peak
+    # AND the down-ramp. Confirm the degenerate branch (reps<=2) avoids
+    # that phrasing and still reports the expected rep count.
+    text = _additional_swim_structure("build", distance_m, css_pace_s, selector=1)
+    main_set_line = next(line for line in text.splitlines() if line.startswith("Main set:"))
+    m = re.search(r"Main set: (\d+) x (\d+)m", main_set_line)
+    assert int(m.group(1)) == expected_reps
+    assert "and back down" not in main_set_line
+    assert "at rep" not in main_set_line
+    assert "library/" not in text
+
+
+def test_additional_swim_structure_ladder_title_is_informative_via_ui_cut_rule():
+    # Independent-review regression: web/src/plan.js's deriveSessionTitle
+    # derives each session's compact title by cutting the "Main set: ..."
+    # line at whichever comes first, its first comma or its first " -- ".
+    # The ladder template originally led with "broken-distance ladder -- ",
+    # so the cut landed immediately after "ladder" and every ladder week
+    # showed the same generic "Broken-distance ladder" title with no
+    # reps/distance numbers to distinguish one week's plan from another's
+    # -- unlike the other three templates, whose numeric detail always
+    # precedes their first comma/dash. Confirm the numeric detail now
+    # survives the same cut rule the UI actually applies.
+    text = _additional_swim_structure("build", 2000, 95.0, selector=2)
+    main_set_line = next(line for line in text.splitlines() if line.startswith("Main set:"))
+    content = main_set_line[len("Main set: ") :]
+    comma_idx = content.find(",")
+    dash_idx = content.find(" -- ")
+    candidates = [i for i in (comma_idx, dash_idx) if i != -1]
+    cut = content[: min(candidates)] if candidates else content
+    assert re.search(r"\d", cut), f"derived title has no numeric detail: {cut!r}"
 
 
 @pytest.mark.parametrize("macro_block_name", ["build", "peak", "taper"])
@@ -1069,7 +1115,7 @@ def test_additional_swim_structure_build_block_rotation_selects_multiple_templat
     assert len(set(texts)) == 4
     assert "descend 1-" in texts[0]
     assert "pyramid" in texts[1]
-    assert "ladder --" in texts[2]
+    assert "broken-distance ladder" in texts[2]
     assert "no descend-across-reps" in texts[3]
 
 
@@ -1138,8 +1184,8 @@ def test_additional_swim_structure_ladder_sums_to_requested_distance(macro_block
     warm_up = int(re.search(r"Warm-up: (\d+)m", text).group(1))
     cool_down = int(re.search(r"Cool-down: (\d+)m", text).group(1))
     ladder = re.search(
-        r"Main set: broken-distance ladder -- (\d+) x \((\d+)m \+ (\d+)m\) climbing pairs"
-        r"(, plus 1 x (\d+)m capstone rep to finish)?",
+        r"Main set: (\d+) x \((\d+)m \+ (\d+)m\) climbing pairs"
+        r"(, plus 1 x (\d+)m capstone rep to finish)?, broken-distance ladder",
         text,
     )
     num_pairs, rep_short, rep_long = int(ladder.group(1)), int(ladder.group(2)), int(ladder.group(3))

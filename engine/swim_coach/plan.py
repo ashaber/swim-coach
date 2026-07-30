@@ -499,12 +499,28 @@ def _additional_swim_structure(
             # set's middle rep and eases back -- a pyramid shape built from
             # intensity, not varying rep distance.
             mid = reps // 2 + 1
-            lines.append(
-                f"Main set: {reps} x {rep}m broken-distance pyramid, effort ramps "
-                f"from Z3 ({z3_range}) up to Z4 ({z4_range}) at rep {mid} of {reps} "
-                "and back down to Z3 by the final rep, each repeat negative-split "
-                f"-- race-pace-adjacent emphasis ({macro_block_name} block)."
-            )
+            if reps <= 2:
+                # A true pyramid needs a rep AFTER the peak to ease back on;
+                # with reps<=2, `mid` computes to reps itself (the peak IS
+                # the final rep), which made the "ramps up ... and back down
+                # to Z3 by the final rep" phrasing self-contradictory (the
+                # final rep can't be both the peak and the down-ramp).
+                # Reachable in production: no_coach_pool_distance_m's floor
+                # (NO_COACH_POOL_SESSION_FLOOR_M=300) yields reps in {1,2}
+                # for build/peak/taper at small distances. Fall back to a
+                # simple build-to-peak framing instead.
+                lines.append(
+                    f"Main set: {reps} x {rep}m broken-distance, building from Z3 "
+                    f"({z3_range}) to Z4 ({z4_range}) by the final rep, each repeat "
+                    f"negative-split -- race-pace-adjacent emphasis ({macro_block_name} block)."
+                )
+            else:
+                lines.append(
+                    f"Main set: {reps} x {rep}m broken-distance pyramid, effort ramps "
+                    f"from Z3 ({z3_range}) up to Z4 ({z4_range}) at rep {mid} of {reps} "
+                    "and back down to Z3 by the final rep, each repeat negative-split "
+                    f"-- race-pace-adjacent emphasis ({macro_block_name} block)."
+                )
         elif build_template == 2:
             # Broken-distance ladder: the same total volume (reps * rep)
             # regrouped into climbing (shorter, longer) pairs -- exact by
@@ -516,10 +532,22 @@ def _additional_swim_structure(
             rep_short = rep // 2
             rep_long = rep + rep_short
             tail = f", plus 1 x {rep}m capstone rep to finish" if leftover else ""
+            # NOTE: "broken-distance ladder" is placed AFTER the numeric
+            # detail (not "Main set: broken-distance ladder -- Nx(...)")
+            # deliberately -- web/src/plan.js's deriveSessionTitle derives
+            # each session's compact title by cutting this line at whichever
+            # comes first, its first comma or its first " -- ". Leading with
+            # "broken-distance ladder -- " put the cut before any of the
+            # reps/distance numbers, so every ladder week showed the same
+            # generic "Broken-distance ladder" title with nothing to
+            # distinguish one week from another -- unlike the other three
+            # templates, whose numeric detail always precedes their first
+            # comma/dash. This ordering keeps the numbers first so the
+            # derived title stays informative, matching the other templates.
             lines.append(
-                f"Main set: broken-distance ladder -- {num_pairs} x ({rep_short}m + "
-                f"{rep_long}m) climbing pairs{tail}, each pair negative-split from "
-                f"Z3 ({z3_range}) toward Z4 ({z4_range}) -- race-pace-adjacent "
+                f"Main set: {num_pairs} x ({rep_short}m + {rep_long}m) climbing "
+                f"pairs{tail}, broken-distance ladder, each pair negative-split "
+                f"from Z3 ({z3_range}) toward Z4 ({z4_range}) -- race-pace-adjacent "
                 f"emphasis ({macro_block_name} block)."
             )
         else:
