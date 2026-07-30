@@ -228,6 +228,22 @@ ADDITIONAL_SWIM_BUILD_BLOCK_REP_M = 200
 # *emphasis* shift itself is [EVIDENCE: swim] (González-Ravé et al. 2021;
 # Pla et al. 2019), the concrete rep length is not.
 
+ADDITIONAL_SWIM_BASE_BLOCK_TEMPLATE_COUNT = 2
+ADDITIONAL_SWIM_BUILD_BLOCK_TEMPLATE_COUNT = 4
+# Size of each block-category's main-set format menu in
+# _additional_swim_structure -- base gets {straight Z2 reps, broken-
+# distance-lite split reps}; build/peak/taper get {uniform descend,
+# pyramid effort, broken-distance ladder, straight negative-split}. All
+# format *choices* are Coach judgment per library/14-swim-set-structure.md's
+# "Main-set format menu" section ("straight aerobic repeats, descending
+# sets, broken-distance/pyramid sets, and negative-split segments are the
+# shared vocabulary of pool coaching ... offered as legitimate, standard
+# coaching options" -- that file is explicit no source ranks one format as
+# superior). `_additional_swim_structure`'s `selector` picks among these via
+# `selector % <count>`, deterministically -- same block + same selector
+# always yields the same template, forever (no random/global state), which
+# is what makes this rotation safe to unit-test and audit.
+
 _WEEKDAY_OFFSETS = {
     "mon": 0,
     "tue": 1,
@@ -327,7 +343,9 @@ def _strength_session_structure(session_index: int) -> str:
     return "\n".join(lines)
 
 
-def _additional_swim_structure(macro_block_name: str, distance_m: int, css_pace_s: float) -> str:
+def _additional_swim_structure(
+    macro_block_name: str, distance_m: int, css_pace_s: float, selector: int = 0
+) -> str:
     """Warm-up / main-set / cool-down text for the "additional"
     pool-independent aerobic swim_ow session (the `remainder >=
     MIN_ADDITIONAL_SWIM_M` path in `generate_week`), and reused verbatim by
@@ -340,19 +358,55 @@ def _additional_swim_structure(macro_block_name: str, distance_m: int, css_pace_
     session(s) -- those stay continuous/negative-split by design
     (library/06-long-swim-progression.md) and are not touched here.
 
-    Warm-up/cool-down proportions and the choice of main-set format are
-    Coach judgment / practitioner convention (library/14-swim-set-structure.md);
-    the base-vs-build/peak/taper emphasis shift (continuous aerobic volume
-    vs. broken-distance, race-pace-adjacent work) is [EVIDENCE: swim] per
-    González-Ravé et al. (2021) and Pla et al. (2019), also cited in `14`.
-    Distances are rounded to the nearest 100m (main-set reps to the nearest
-    rep length) and are illustrative, not exact to the meter.
+    Warm-up/cool-down proportions are Coach judgment / practitioner
+    convention (library/14-swim-set-structure.md); the base-vs-build/peak/
+    taper emphasis shift (continuous aerobic volume vs. broken-distance,
+    race-pace-adjacent work) is [EVIDENCE: swim] per González-Ravé et al.
+    (2021) and Pla et al. (2019), also cited in `14`. Distances are rounded
+    to the nearest 100m (main-set reps to the nearest rep length) and are
+    illustrative, not exact to the meter.
+
+    Main-set format menu and rotation: `selector` (typically the week's
+    0-based index within its macro block -- see `generate_week`'s
+    `week_index_in_block`) deterministically picks one template from the
+    block-category's menu via `selector % <template count>` -- the same
+    `(macro_block_name, selector)` pair always renders the same template,
+    every time, so the whole rotation stays reproducible/auditable (no
+    random or global state involved). This does NOT change the function's
+    total-volume or zone-math contract -- warm-up + main set + cool-down
+    still sum exactly to `distance_m` for every template, only the main
+    set's internal SHAPE differs:
+      - `base` block (`ADDITIONAL_SWIM_BASE_BLOCK_TEMPLATE_COUNT` = 2):
+        (0) straight continuous Z2 reps (original/default); (1) the same
+        total Z2 volume split into two shorter aerobic segments per rep
+        with brief rest between them ("broken-distance-lite") for textural
+        variety -- both stay strictly Z2/continuous-aerobic, never Z3/Z4,
+        preserving the base-block aerobic-emphasis principle
+        (library/03-periodization.md, library/14-swim-set-structure.md).
+      - `build`/`peak`/`taper` blocks
+        (`ADDITIONAL_SWIM_BUILD_BLOCK_TEMPLATE_COUNT` = 4): (0) uniform
+        reps descending Z3->Z4 across the set (original/default); (1) a
+        pyramid -- same uniform reps, effort ramps Z3->Z4 at the set's
+        middle rep and eases back to Z3 by the last rep; (2) a
+        broken-distance ladder -- the same total volume paired into
+        climbing (shorter, longer) rungs; (3) a straight negative-split
+        set -- uniform reps at a fixed Z3 anchor, each rep individually
+        negative-split to Z4, no descend-across-reps progression. All four
+        are drawn from library/14-swim-set-structure.md's "Main-set format
+        menu" (an explicitly open menu -- "No verified source in this pass
+        ranks one format as superior"); the base-vs-build/peak/taper
+        *emphasis* shift is the only piece of this with real evidence
+        (González-Ravé et al. 2021; Pla et al. 2019), and it applies
+        identically no matter which of the four templates a given
+        block/rotation lands on.
 
     Returns a final `Why: ...` line (athlete-facing rationale, no internal
     `library/` paths) instead of citing internal file paths on the Main-set
     line itself: base block gets a Coach-judgment framing (no citation
     oversold where none exists); build/peak/taper gets the real citation
-    (González-Ravé et al. 2021; Pla et al. 2019) backing the phase shift.
+    (González-Ravé et al. 2021; Pla et al. 2019) backing the phase shift --
+    identical wording regardless of which template within the block was
+    selected.
     """
     if distance_m <= 0:
         return "No additional pool-independent volume this week."
@@ -398,18 +452,87 @@ def _additional_swim_structure(macro_block_name: str, distance_m: int, css_pace_
     cool_down = max(0, remaining_for_cool_down)
 
     if macro_block_name == "base":
-        lines.append(
-            f"Main set: {reps} x {rep}m @ Z2 ({z2_range}), 15s rest -- continuous "
-            "aerobic volume (base-block emphasis)."
-        )
+        # Template menu: library/14-swim-set-structure.md's "Main-set format
+        # menu" ("straight aerobic repeats ... broken-distance ... are the
+        # shared vocabulary of pool coaching ... offered as legitimate,
+        # standard coaching options"). Both templates below stay strictly
+        # Z2/continuous-aerobic -- no Z3/Z4 language -- per the base-block
+        # aerobic-emphasis principle (library/03-periodization.md).
+        base_template = selector % ADDITIONAL_SWIM_BASE_BLOCK_TEMPLATE_COUNT
+        if base_template == 0:
+            lines.append(
+                f"Main set: {reps} x {rep}m @ Z2 ({z2_range}), 15s rest -- continuous "
+                "aerobic volume (base-block emphasis)."
+            )
+        else:
+            # Broken-distance-lite: same total rep volume, split into two
+            # shorter aerobic segments with brief rest between them for
+            # textural variety -- library/14-swim-set-structure.md's menu
+            # includes "broken-distance" as a legitimate format; here it's
+            # applied within the aerobic/Z2 envelope, not the race-pace one.
+            segment = rep // 2
+            lines.append(
+                f"Main set: {reps} x ({segment}m + {segment}m) @ Z2 ({z2_range}), "
+                "10s rest between segments / 15s between reps -- broken-distance-lite "
+                "aerobic volume, same total distance and pace as straight reps "
+                "(base-block emphasis)."
+            )
     else:
         z3_range = f"{_format_pace_s(z3['pace_lo_s'])}-{_format_pace_s(z3['pace_hi_s'])}/100m"
         z4_range = f"{_format_pace_s(z4['pace_lo_s'])}-{_format_pace_s(z4['pace_hi_s'])}/100m"
-        lines.append(
-            f"Main set: {reps} x {rep}m broken-distance, descend 1-{reps} from Z3 "
-            f"({z3_range}) toward Z4 ({z4_range}) on the last rep, negative-split "
-            f"each repeat -- race-pace-adjacent emphasis ({macro_block_name} block)."
-        )
+        # Template menu: library/14-swim-set-structure.md's "Main-set format
+        # menu" -- descending sets, pyramid sets, broken-distance/ladder
+        # sets, and negative-split segments are all named there as
+        # "legitimate, standard coaching options" with "[n]o verified source
+        # ... rank[ing] one format as superior." All four templates below
+        # keep the same reps/rep-length numbers (same total main-set volume)
+        # computed above; only the narrative shape differs.
+        build_template = selector % ADDITIONAL_SWIM_BUILD_BLOCK_TEMPLATE_COUNT
+        if build_template == 0:
+            lines.append(
+                f"Main set: {reps} x {rep}m broken-distance, descend 1-{reps} from Z3 "
+                f"({z3_range}) toward Z4 ({z4_range}) on the last rep, negative-split "
+                f"each repeat -- race-pace-adjacent emphasis ({macro_block_name} block)."
+            )
+        elif build_template == 1:
+            # Pyramid: same uniform reps, effort ramps to a peak at the
+            # set's middle rep and eases back -- a pyramid shape built from
+            # intensity, not varying rep distance.
+            mid = reps // 2 + 1
+            lines.append(
+                f"Main set: {reps} x {rep}m broken-distance pyramid, effort ramps "
+                f"from Z3 ({z3_range}) up to Z4 ({z4_range}) at rep {mid} of {reps} "
+                "and back down to Z3 by the final rep, each repeat negative-split "
+                f"-- race-pace-adjacent emphasis ({macro_block_name} block)."
+            )
+        elif build_template == 2:
+            # Broken-distance ladder: the same total volume (reps * rep)
+            # regrouped into climbing (shorter, longer) pairs -- exact by
+            # construction: num_pairs*(rep_short+rep_long) + leftover*rep
+            # == num_pairs*2*rep + leftover*rep == reps*rep, since
+            # rep_short + rep_long == 2*rep and num_pairs*2 + leftover ==
+            # reps.
+            num_pairs, leftover = divmod(reps, 2)
+            rep_short = rep // 2
+            rep_long = rep + rep_short
+            tail = f", plus 1 x {rep}m capstone rep to finish" if leftover else ""
+            lines.append(
+                f"Main set: broken-distance ladder -- {num_pairs} x ({rep_short}m + "
+                f"{rep_long}m) climbing pairs{tail}, each pair negative-split from "
+                f"Z3 ({z3_range}) toward Z4 ({z4_range}) -- race-pace-adjacent "
+                f"emphasis ({macro_block_name} block)."
+            )
+        else:
+            # Straight negative-split: same uniform reps at a fixed Z3
+            # anchor, each rep individually negative-split toward Z4 --
+            # explicitly no descend-across-reps progression (that's
+            # template 0's job).
+            lines.append(
+                f"Main set: {reps} x {rep}m @ Z3 ({z3_range}), each rep negative-split "
+                f"building to Z4 ({z4_range}) by the finish, no descend-across-reps "
+                "progression, 10s rest -- race-pace-adjacent emphasis "
+                f"({macro_block_name} block)."
+            )
 
     lines.append(f"Cool-down: {cool_down}m easy choice of stroke.")
 
@@ -701,7 +824,7 @@ def generate_week(
                     intensity={"anchor": "rpe"},
                     purpose=_no_coach_pool_purpose(block.name),
                     structure=_additional_swim_structure(
-                        block.name, no_coach_pool_distance_m, css_pace_s
+                        block.name, no_coach_pool_distance_m, css_pace_s, week_index_in_block
                     ),
                     status="planned",
                 )
@@ -837,7 +960,9 @@ def generate_week(
                 distance_m=additional_distance,
                 intensity={"zone": "Z2", "anchor": "css_pace"},
                 purpose="additional pool-independent aerobic volume",
-                structure=_additional_swim_structure(block.name, additional_distance, css_pace_s),
+                structure=_additional_swim_structure(
+                    block.name, additional_distance, css_pace_s, week_index_in_block
+                ),
                 status="planned",
             )
         )
