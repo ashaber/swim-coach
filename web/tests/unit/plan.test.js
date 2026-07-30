@@ -131,6 +131,24 @@ describe('deriveSessionTitle', () => {
     const session = { purpose: 'Bear Lake Monster 10K (B race) — dress rehearsal, negative-split', structure: null };
     expect(deriveSessionTitle(session)).toBe('Bear Lake Monster 10K');
   });
+
+  it('does not crash on a "Main set:" line with unusual punctuation (no comma, no " -- ")', () => {
+    const session = { purpose: 'pool practice — structure authored below', structure: 'Main set: 6 x 200m descend 1-6\nCool-down: 200m easy.' };
+    expect(deriveSessionTitle(session)).toBe('6 x 200m descend 1-6');
+  });
+
+  it('does not crash on a bare strength-format first line with no "(" at all', () => {
+    const session = { purpose: 'dryland strength — core work', structure: 'Core stability circuit\n  - plank x 3\n  - dead bug x 10' };
+    expect(deriveSessionTitle(session)).toBe('Core stability circuit');
+  });
+
+  it('falls back to the purpose-derived title rather than a blank one when the structure first line starts with "("', () => {
+    // Not producible by either real generator today (see the doc comment
+    // above), but the format isn't guaranteed either -- a derived title that
+    // slices to empty must never surface as a blank title in the UI.
+    const session = { purpose: 'dryland strength — optional mobility flow', structure: '(optional) mobility flow\n  - hip circles' };
+    expect(deriveSessionTitle(session)).toBe('Dryland strength');
+  });
 });
 
 describe('findSessionById', () => {

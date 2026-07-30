@@ -132,21 +132,32 @@ function cutAtFirstBoundary(text) {
  *   core".
  * - No structure at all (pool-coach placeholders, recovery, the long
  *   open-water swim): falls back to today's existing purpose-derived title,
- *   unchanged. */
+ *   unchanged.
+ * - Defensive edge case: if a structure string is shaped unlike either format
+ *   above closely enough that the cut leaves nothing (e.g. a strength-style
+ *   first line that starts with "(" itself, cutting to an empty string
+ *   before its first paren) -- not producible by either real generator
+ *   today, but not guaranteed by the format either -- falls back to the same
+ *   purpose-derived title rather than surfacing a blank one. */
 export function deriveSessionTitle(session) {
+  const purposeTitle = () => {
+    const { title } = splitPurpose(session.purpose);
+    return capitalize(title.replace(RACE_TAG_RE, '').replace(/\s{2,}/g, ' ').trim());
+  };
   const { structure } = session;
   if (structure) {
     const mainSetMatch = structure.match(MAIN_SET_RE);
     if (mainSetMatch) {
-      return capitalize(cutAtFirstBoundary(mainSetMatch[1]).trim());
+      const derived = capitalize(cutAtFirstBoundary(mainSetMatch[1]).trim());
+      return derived || purposeTitle();
     }
     const firstLine = structure.split('\n')[0];
     const parenIdx = firstLine.indexOf('(');
     const text = parenIdx !== -1 ? firstLine.slice(0, parenIdx) : firstLine;
-    return capitalize(text.trim());
+    const derived = capitalize(text.trim());
+    return derived || purposeTitle();
   }
-  const { title } = splitPurpose(session.purpose);
-  return capitalize(title.replace(RACE_TAG_RE, '').replace(/\s{2,}/g, ' ').trim());
+  return purposeTitle();
 }
 
 /** Derive a display title/detail/structure for a session. `structure` (the
