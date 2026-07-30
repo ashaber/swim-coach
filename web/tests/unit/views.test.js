@@ -451,6 +451,23 @@ describe('renderApp plan session detail view (click-to-detail)', () => {
     expect(html).toContain('content assigned by coach'); // the post-dash purpose detail
   });
 
+  it('regression: detail view Purpose section for a structure-less session shows ONLY the post-dash detail fragment, never the full purpose -- avoids duplicating the purpose-derived header title', () => {
+    // When `structure` is absent, deriveSessionTitle's purposeTitle()
+    // fallback makes the header title the PRE-dash half of `purpose`
+    // itself (e.g. "Coached USMS pool"). If the Purpose section below were
+    // to show the full, un-split purpose ("coached USMS pool -- content
+    // assigned by coach"), it would literally repeat the header title as a
+    // prefix. This must stay split to the post-dash fragment only, exactly
+    // as it behaved before the full-purpose fix landed for structure-
+    // bearing sessions.
+    const html = renderApp(PLAN_DATA, NO_STRUCTURE_SESSION.id);
+    const purposeMatch = html.match(/<h4>Purpose<\/h4>\s*<p class="detail-notes">(.*?)<\/p>/s);
+    expect(purposeMatch).not.toBeNull();
+    expect(purposeMatch[1]).toBe('content assigned by coach');
+    expect(purposeMatch[1]).not.toContain('Coached USMS pool');
+    expect(purposeMatch[1]).not.toContain('coached USMS pool');
+  });
+
   it('detail view Purpose section shows the full, un-split purpose text for a single-statement purpose that contains an internal em-dash (not just the post-dash fragment)', () => {
     // Real shape introduced by PR #83's _no_coach_pool_purpose(): one
     // complete purpose statement that happens to use an em-dash as internal
