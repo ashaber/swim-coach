@@ -519,6 +519,15 @@ function handleDismissOfflineReady() {
   render();
 }
 
+/** Scrolls the page back to its top -- called right after a detail view
+ * (session or workout) renders, so the athlete lands on the content they
+ * just tapped instead of wherever the page happened to be scrolled before
+ * (e.g. down near the macro section). The page body itself scrolls (no
+ * dedicated scroll container on #app), so `window` is the right target. */
+function scrollToTop() {
+  window.scrollTo(0, 0);
+}
+
 function stickChatScrollToBottom() {
   const list = document.getElementById('chat-messages');
   if (list) list.scrollTop = list.scrollHeight;
@@ -583,6 +592,9 @@ function handleOpenSessionDetail(id) {
   history.pushState({ planSessionDetail: id }, '');
   log.info('plan.session_detail_opened', { athlete: athleteSlug(), session_id: id });
   render();
+  scrollToTop(); // land on the detail content -- was a gap in both this and
+  // handleOpenHistoryDetail (neither scrolled), so the page previously
+  // stayed wherever it was scrolled (e.g. down near the macro section).
 }
 
 function handleCloseSessionDetail() {
@@ -780,6 +792,8 @@ function handleOpenHistoryDetail(id) {
   history.pushState({ workoutDetail: id }, '');
   log.info('history.detail_opened', { athlete: athleteSlug(), workout_id: id });
   render();
+  scrollToTop(); // see handleOpenSessionDetail's matching call -- was a gap
+  // in both handlers, not just the Plan tab's.
 }
 
 /** Tears down the detail view's EPHEMERAL scoped chat -- aborts any

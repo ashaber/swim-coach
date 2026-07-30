@@ -4,6 +4,7 @@ import {
   classifySession, sessionDisplay, deriveSessionTitle, findSessionById,
   pickCurrentAndNextWeek, daysUntil,
   priorityEvent, macroTargetEvent, currentBlockIndex, longSwimLadder, sessionsByDay,
+  parseStructureBlocks, parseMainSetIntervals,
 } from '../../src/plan.js';
 
 describe('isoWeekMonday', () => {
@@ -148,6 +149,96 @@ describe('deriveSessionTitle', () => {
     // slices to empty must never surface as a blank title in the UI.
     const session = { purpose: 'dryland strength — optional mobility flow', structure: '(optional) mobility flow\n  - hip circles' };
     expect(deriveSessionTitle(session)).toBe('Dryland strength');
+  });
+});
+
+describe('parseStructureBlocks', () => {
+  it('splits the real swim-session format into Warm-up/Main set/Cool-down/Why blocks, in order', () => {
+    const structure = 'Warm-up: 600m easy, building to Z2 pace (1:35-1:39/100m) by the end.\n'
+      + 'Main set: 8 x 300m @ Z2 (1:35-1:39/100m), 15s rest -- continuous aerobic volume (base-block emphasis).\n'
+      + 'Cool-down: 200m easy choice of stroke.\n'
+      + 'Why: continuous aerobic-volume emphasis (base-block phase).';
+    const blocks = parseStructureBlocks(structure);
+    expect(blocks.map((b) => b.label)).toEqual(['Warm-up', 'Main set', 'Cool-down', 'Why']);
+    expect(blocks[0].content).toBe('600m easy, building to Z2 pace (1:35-1:39/100m) by the end.');
+    expect(blocks[1].content).toBe(
+      '8 x 300m @ Z2 (1:35-1:39/100m), 15s rest -- continuous aerobic volume (base-block emphasis).'
+    );
+    expect(blocks[2].content).toBe('200m easy choice of stroke.');
+    expect(blocks[3].content).toBe('continuous aerobic-volume emphasis (base-block phase).');
+  });
+
+  it('splits the real strength-session format into its two heading blocks + Why, preserving bullet indentation', () => {
+    const structure = 'Rotator-cuff / scapular-stability core (2 sets x 10 reps each):\n'
+      + '  - Band external rotation\n'
+      + '  - Prone Y-raise\n'
+      + 'General full-body (layered in as time allows):\n'
+      + '  - Goblet squat\n'
+      + 'Why: rotator-cuff strength/balance, reduces shoulder-injury risk (Hibberd 2012; Manske 2015; Tavares et al. 2025).';
+    const blocks = parseStructureBlocks(structure);
+    expect(blocks.map((b) => b.label)).toEqual([
+      'Rotator-cuff / scapular-stability core (2 sets x 10 reps each)',
+      'General full-body (layered in as time allows)',
+      'Why',
+    ]);
+    expect(blocks[0].content).toBe('  - Band external rotation\n  - Prone Y-raise');
+    expect(blocks[1].content).toBe('  - Goblet squat');
+    expect(blocks[2].content).toBe(
+      'rotator-cuff strength/balance, reduces shoulder-injury risk (Hibberd 2012; Manske 2015; Tavares et al. 2025).'
+    );
+  });
+
+  it('splits a strength session with only the first (no odd-index full-body) block', () => {
+    const structure = 'Rotator-cuff / scapular-stability core (2 sets x 10 reps each):\n'
+      + '  - Band external rotation\n'
+      + 'Why: rotator-cuff strength/balance, reduces shoulder-injury risk (Hibberd 2012; Manske 2015; Tavares et al. 2025).';
+    const blocks = parseStructureBlocks(structure);
+    expect(blocks.map((b) => b.label)).toEqual([
+      'Rotator-cuff / scapular-stability core (2 sets x 10 reps each)',
+      'Why',
+    ]);
+  });
+
+  it('degrades gracefully to one block containing everything when no known label matches at all', () => {
+    const structure = 'Some completely unstructured free text\nwith a second line\nand a third.';
+    const blocks = parseStructureBlocks(structure);
+    expect(blocks).toEqual([{ label: null, content: structure }]);
+  });
+
+  it('returns an empty array for null/empty structure', () => {
+    expect(parseStructureBlocks(null)).toEqual([]);
+    expect(parseStructureBlocks('')).toEqual([]);
+  });
+});
+
+describe('parseMainSetIntervals', () => {
+  it("today's real single-line Main-set content renders as exactly one interval", () => {
+    const content = '8 x 300m @ Z2 (1:35-1:39/100m), 15s rest -- continuous aerobic volume (base-block emphasis).';
+    expect(parseMainSetIntervals(content)).toEqual([content]);
+  });
+
+  it('a synthetic multi-line Main-set content (simulating a future multi-interval engine output) splits into multiple distinct interval items', () => {
+    // Today's engine only ever emits one line here -- this proves the
+    // forward-compatibility requirement: the moment a future engine change
+    // emits 2+ distinct interval lines, this parsing already handles it.
+    const content = '400m @ Z2 (1:35-1:39/100m) build\n'
+      + '4 x 100m @ Z3 (1:20-1:24/100m), 20s rest\n'
+      + '200m @ Z4 (1:08-1:12/100m) descend';
+    expect(parseMainSetIntervals(content)).toEqual([
+      '400m @ Z2 (1:35-1:39/100m) build',
+      '4 x 100m @ Z3 (1:20-1:24/100m), 20s rest',
+      '200m @ Z4 (1:08-1:12/100m) descend',
+    ]);
+  });
+
+  it('filters out blank lines and trims each interval', () => {
+    const content = '  first interval  \n\n  second interval\n';
+    expect(parseMainSetIntervals(content)).toEqual(['first interval', 'second interval']);
+  });
+
+  it('returns an empty array for null/empty content', () => {
+    expect(parseMainSetIntervals(null)).toEqual([]);
+    expect(parseMainSetIntervals('')).toEqual([]);
   });
 });
 
