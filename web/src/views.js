@@ -5,7 +5,7 @@ import {
   formatShortDate, formatLongDate, formatDuration, formatDistance, formatPace,
   parseIsoDate, sessionsByDay, classifySession, sessionDisplay, sessionDotColorVar,
   pickCurrentAndNextWeek, daysUntil, macroTargetEvent, currentBlockIndex, longSwimLadder,
-  findSessionById,
+  findSessionById, parseStructureBlocks, parseMainSetIntervals,
 } from './plan.js';
 import { TOOL_LABELS } from './chat.js';
 import {
@@ -92,14 +92,61 @@ function renderPlanSessionDetailStats(session) {
   return `<div class="detail-stats">${stats}</div>`;
 }
 
-/** Renders `structure`/`detail` as their own labeled sections, each with
- * line breaks preserved (`.detail-notes`'s existing `white-space: pre-wrap`
- * handles both the swim warm-up/main-set/cool-down paragraphs and the
- * strength format's indented `  - ` bullets without any parsing). At least
- * one of the two is present for every real session shape today, but a
- * pool-coach placeholder with neither still has a real, non-blank title in
- * the header above (deriveSessionTitle's fallback), so there is always
- * something sensible to show even when this whole block is empty. */
+/** Renders one `parseStructureBlocks` block as its own titled
+ * `.detail-section` (same style as the workout-detail view's sections, see
+ * renderWorkoutDetail, for visual consistency). The `Why:` block gets a
+ * distinct heading ("Training rationale") -- visually separate from the
+ * Warm-up/Main-set/Cool-down instruction blocks, since it's rationale/
+ * citation text, not an instruction. The `Main set` block additionally
+ * sub-parses its content into distinct numbered interval items via
+ * parseMainSetIntervals (today's real engine output only ever produces one,
+ * but this renders 2+ just as well the moment a future engine change emits
+ * them -- see that function's own doc comment). A block with no recognized
+ * label at all (parseStructureBlocks' graceful-degradation case) falls back
+ * to the original flat "Structure" heading. */
+function renderStructureBlock(block) {
+  if (block.label === null) {
+    return `
+    <section class="detail-section">
+      <h4>Structure</h4>
+      <p class="detail-notes">${esc(block.content)}</p>
+    </section>`;
+  }
+  if (block.label === 'Why') {
+    return `
+    <section class="detail-section">
+      <h4>Training rationale</h4>
+      <p class="detail-notes">${esc(block.content)}</p>
+    </section>`;
+  }
+  if (block.label === 'Main set') {
+    const items = parseMainSetIntervals(block.content).map((interval, i) => `
+      <div class="detail-interval">
+        <div class="detail-interval-label">Interval ${i + 1}</div>
+        <p class="detail-notes">${esc(interval)}</p>
+      </div>`).join('');
+    return `
+    <section class="detail-section">
+      <h4>Main set</h4>
+      ${items}
+    </section>`;
+  }
+  return `
+    <section class="detail-section">
+      <h4>${esc(block.label)}</h4>
+      <p class="detail-notes">${esc(block.content)}</p>
+    </section>`;
+}
+
+/** Renders `structure`/`detail` as their own labeled sections. `structure`
+ * is split into visually-distinct blocks (Warm-up/Main set/Cool-down/Why,
+ * or the strength format's two headings + its own Why) via
+ * parseStructureBlocks/renderStructureBlock rather than one flat
+ * `white-space: pre-wrap` blob. At least one of `structure`/`detail` is
+ * present for every real session shape today, but a pool-coach placeholder
+ * with neither still has a real, non-blank title in the header above
+ * (deriveSessionTitle's fallback), so there is always something sensible to
+ * show even when this whole block is empty. */
 function renderPlanSessionDetail(session) {
   const classification = classifySession(session);
   const { title, detail, structure } = sessionDisplay(session);
@@ -111,11 +158,7 @@ function renderPlanSessionDetail(session) {
       <div class="hist-meta mono">${esc(sportLabel(session.sport))} · ${esc(dateLabel)}</div>
     </div>
     ${renderPlanSessionDetailStats(session)}
-    ${structure ? `
-    <section class="detail-section">
-      <h4>Structure</h4>
-      <p class="detail-notes">${esc(structure)}</p>
-    </section>` : ''}
+    ${structure ? parseStructureBlocks(structure).map(renderStructureBlock).join('') : ''}
     ${detail ? `
     <section class="detail-section">
       <h4>Purpose</h4>

@@ -184,6 +184,92 @@ export function sessionDotColorVar(session, classification) {
   return SPORT_COLOR_VAR[session.sport] || '--c-ink-faint';
 }
 
+// --- Session.structure block parsing (Plan tab's session detail view) -----
+// `structure` is a plain "Label: content"-per-line string (see plan.py's
+// _additional_swim_structure/_strength_session_structure), never a
+// structured object -- keeping it a string avoids any migration of already-
+// persisted plan data. These two helpers split it into visual blocks for
+// renderPlanSessionDetail instead of one flat pre-wrap blob.
+
+/** Recognized structure labels, in two shapes:
+ *  - "inline": `Label: rest of line` -- the swim format's Warm-up/Main set/
+ *    Cool-down lines and both formats' trailing Why: rationale line. Content
+ *    starts inline on the same line as the label.
+ *  - heading-only (no captured inline content): the strength format's own
+ *    two headings, e.g. "Rotator-cuff / scapular-stability core (2 sets x
+ *    10 reps each):" -- the whole line (minus its trailing colon) IS the
+ *    label; content is only the bullet lines that follow it. */
+const STRUCTURE_LABEL_PATTERNS = [
+  { re: /^(Warm-up|Main set|Cool-down|Why):\s*(.*)$/ },
+  { re: /^(Rotator-cuff \/ scapular-stability core.*?|General full-body.*?):\s*$/ },
+];
+
+/** Joins a block's collected lines back into its `content` string, dropping
+ * only fully-blank leading/trailing lines -- NOT a blanket `.join('\n').
+ * trim()`, which would also eat the first content line's own leading
+ * whitespace (the strength format's indented `  - ` bullets rely on that
+ * indentation surviving intact). */
+function joinBlockLines(lines) {
+  let start = 0;
+  let end = lines.length;
+  while (start < end && lines[start].trim() === '') start++;
+  while (end > start && lines[end - 1].trim() === '') end--;
+  return lines.slice(start, end).join('\n');
+}
+
+/** Splits a `session.structure` string into an ordered list of
+ * `{ label, content }` blocks, one per recognized label. Degrades
+ * gracefully for any structure shape matching no known label at all:
+ * returns a single `{ label: null, content: structure }` block containing
+ * the original text verbatim, rather than erroring or dropping content. */
+export function parseStructureBlocks(structure) {
+  if (!structure) return [];
+  const lines = structure.split('\n');
+  const blocks = [];
+  let current = null;
+
+  for (const line of lines) {
+    let label = null;
+    let inlineContent = null;
+    for (const { re } of STRUCTURE_LABEL_PATTERNS) {
+      const m = line.match(re);
+      if (m) {
+        label = m[1];
+        inlineContent = m.length > 2 ? m[2] : null;
+        break;
+      }
+    }
+    if (label !== null) {
+      if (current) blocks.push(current);
+      current = { label, lines: inlineContent ? [inlineContent] : [] };
+    } else if (current) {
+      current.lines.push(line);
+    } else {
+      current = { label: null, lines: [line] };
+    }
+  }
+  if (current) blocks.push(current);
+
+  if (blocks.length === 1 && blocks[0].label === null) {
+    // Nothing matched any known label -- degrade to one block with the
+    // original text untouched.
+    return [{ label: null, content: structure }];
+  }
+  return blocks.map((b) => ({ label: b.label, content: joinBlockLines(b.lines) }));
+}
+
+/** Sub-parses a Main-set block's `content` (as returned by
+ * parseStructureBlocks) into an ordered list of distinct interval strings,
+ * one per non-blank line. Today's real engine output only ever emits ONE
+ * line under "Main set:" (so this naturally returns a single-element
+ * array) -- but this is forward-compatible with a future engine change
+ * emitting 2+ distinct interval lines there, which would split into that
+ * many items with zero further parsing/rendering changes needed. */
+export function parseMainSetIntervals(mainSetContent) {
+  if (!mainSetContent) return [];
+  return mainSetContent.split('\n').map((line) => line.trim()).filter(Boolean);
+}
+
 /** Finds a session by id across every loaded week's `sessions` (mirrors the
  * simple exact-match lookup renderHistorySection does for workouts -- these
  * are internal ids, not user-typed, so no fuzzy matching is needed). Returns

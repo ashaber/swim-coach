@@ -22,6 +22,7 @@ from swim_coach.plan import (
     WEEKLY_VOLUME_RAMP_CAP,
     _additional_swim_structure,
     _duration_min_for_distance,
+    _no_coach_pool_purpose,
     _round_100,
     _strength_session_structure,
     _z2_pace_s_per_100m,
@@ -552,6 +553,12 @@ def test_generate_week_no_pool_coach_produces_real_structure(short_macro):
         assert "Warm-up" in s.structure
         assert "Main set" in s.structure
         assert "Cool-down" in s.structure
+        # Regression guard: purpose must be the real, block-aware training
+        # purpose (_no_coach_pool_purpose), not the old hardcoded dev-note
+        # text ("pool practice -- no pool coach on hand, structure authored
+        # below") that said nothing about the actual training purpose.
+        assert s.purpose == _no_coach_pool_purpose(macro.blocks[0].name)
+        assert "no pool coach on hand" not in s.purpose
 
 
 def test_generate_week_no_pool_coach_leaves_strength_and_recovery_unaffected(short_macro):
@@ -887,3 +894,98 @@ def test_additional_swim_structure_sums_to_requested_distance(macro_block_name, 
     main_set = re.search(r"Main set: (\d+) x (\d+)m", text)
     reps, rep_len = int(main_set.group(1)), int(main_set.group(2))
     assert warm_up + reps * rep_len + cool_down == distance_m
+
+
+# --- real citations, not internal library/ paths, in athlete-facing text ------
+# Regression coverage for the bug where _additional_swim_structure's Main-set
+# line and _strength_session_structure's purpose ended with a citation to this
+# project's own internal engine-config file (e.g.
+# "library/14-swim-set-structure.md") instead of a real, verifiable source.
+# The fix moves the real citation to a trailing "Why: ..." line and drops the
+# internal path entirely.
+
+
+def test_additional_swim_structure_why_line_base_block():
+    text = _additional_swim_structure("base", 2000, 95.0)
+    assert text.splitlines()[-1] == "Why: continuous aerobic-volume emphasis (base-block phase)."
+    assert "library/" not in text
+
+
+@pytest.mark.parametrize("macro_block_name", ["build", "peak", "taper"])
+def test_additional_swim_structure_why_line_non_base_blocks(macro_block_name):
+    text = _additional_swim_structure(macro_block_name, 2000, 95.0)
+    assert text.splitlines()[-1] == (
+        "Why: race-pace-adjacent, broken-distance emphasis -- evidence-based "
+        "phase shift (González-Ravé et al. 2021; Pla et al. 2019)."
+    )
+    assert "library/" not in text
+
+
+def test_additional_swim_structure_main_set_line_has_no_internal_citation():
+    # The specific bug: the Main-set line itself used to end with
+    # "; library/14-swim-set-structure.md" (base) or
+    # "library/14-swim-set-structure.md, cross-referencing
+    # 04-css-intensity-anchors.md's negative-split evidence" (build/peak/
+    # taper) -- a citation to this project's own internal file, not a real
+    # source. The real citation now lives only in the trailing Why: line.
+    base_text = _additional_swim_structure("base", 2000, 95.0)
+    main_set_line = next(line for line in base_text.splitlines() if line.startswith("Main set:"))
+    assert "library/" not in main_set_line
+    assert main_set_line.endswith("(base-block emphasis).")
+
+    build_text = _additional_swim_structure("build", 2000, 95.0)
+    main_set_line = next(line for line in build_text.splitlines() if line.startswith("Main set:"))
+    assert "library/" not in main_set_line
+    assert main_set_line.endswith("(build block).")
+
+
+@pytest.mark.parametrize("session_index", [0, 1])
+def test_strength_session_structure_why_line_cites_real_sources(session_index):
+    text = _strength_session_structure(session_index)
+    assert text.splitlines()[-1] == (
+        "Why: rotator-cuff strength/balance, reduces shoulder-injury risk "
+        "(Hibberd 2012; Manske 2015; Tavares et al. 2025)."
+    )
+    assert "library/" not in text
+
+
+def test_no_coach_pool_purpose_base_block():
+    assert _no_coach_pool_purpose("base") == "Continuous aerobic volume — base-block emphasis"
+
+
+@pytest.mark.parametrize("block_name", ["build", "peak", "taper"])
+def test_no_coach_pool_purpose_non_base_blocks(block_name):
+    assert _no_coach_pool_purpose(block_name) == f"Race-pace-adjacent volume — {block_name}-block emphasis"
+
+
+def test_strength_session_purpose_has_no_internal_citation(short_macro):
+    # The specific bug: generate_week's strength-session purpose ended with
+    # "(library/07-strength-dryland.md)" -- an internal-path-as-citation,
+    # same class of bug as the Main-set line above. The real citations now
+    # live only in _strength_session_structure's own Why: line.
+    athlete, macro = short_macro
+    week_start = macro.blocks[0].start_date
+    week = generate_week(athlete, macro, _iso_week(week_start), week_start)
+    strength = [s for s in week.sessions if s.sport == "strength"]
+    assert len(strength) == STRENGTH_SESSIONS_PER_WEEK
+    for s in strength:
+        assert "library/" not in s.purpose
+        assert "dryland shoulder strength" in s.purpose
+
+
+def test_generate_week_never_leaks_internal_library_paths_into_athlete_facing_text(short_macro):
+    # Cheap, direct insurance against this exact class of bug recurring:
+    # no generated purpose/structure text anywhere should contain the
+    # substring "library/" -- that's always an internal engine-config file
+    # path, never a real, athlete-facing citation.
+    athlete, macro = short_macro
+    for has_pool_coach in (True, False):
+        athlete_variant = athlete.model_copy(update={"has_pool_coach": has_pool_coach})
+        for block in macro.blocks:
+            weeks_in_block = (block.end_date - block.start_date).days // 7 + 1
+            for i in range(weeks_in_block):
+                week_start = block.start_date + timedelta(weeks=i)
+                week = generate_week(athlete_variant, macro, _iso_week(week_start), week_start)
+                for s in week.sessions:
+                    assert "library/" not in (s.purpose or "")
+                    assert "library/" not in (s.structure or "")

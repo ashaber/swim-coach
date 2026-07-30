@@ -309,12 +309,21 @@ def _strength_session_structure(session_index: int) -> str:
     Tavares, Vilas-Boas & Castro (2025) -- see library/07-strength-dryland.md
     for the full citation set (Hibberd 2012, Manske 2015, Tavares 2025) and
     the dosing-range caveat.
+
+    Returns a final `Why: ...` line citing the real sources behind this
+    session's rotator-cuff/scapular-stability emphasis (Hibberd 2012, Manske
+    2015, Tavares et al. 2025) -- athlete-facing text, so a real citation,
+    never the internal `library/07-strength-dryland.md` path.
     """
     lines = ["Rotator-cuff / scapular-stability core (2 sets x 10 reps each):"]
     lines.extend(f"  - {exercise}" for exercise in STRENGTH_CORE_EXERCISES)
     if session_index % 2 == 1:
         lines.append("General full-body (layered in as time allows):")
         lines.extend(f"  - {exercise}" for exercise in STRENGTH_FULL_BODY_ADDITION)
+    lines.append(
+        "Why: rotator-cuff strength/balance, reduces shoulder-injury risk "
+        "(Hibberd 2012; Manske 2015; Tavares et al. 2025)."
+    )
     return "\n".join(lines)
 
 
@@ -338,6 +347,12 @@ def _additional_swim_structure(macro_block_name: str, distance_m: int, css_pace_
     González-Ravé et al. (2021) and Pla et al. (2019), also cited in `14`.
     Distances are rounded to the nearest 100m (main-set reps to the nearest
     rep length) and are illustrative, not exact to the meter.
+
+    Returns a final `Why: ...` line (athlete-facing rationale, no internal
+    `library/` paths) instead of citing internal file paths on the Main-set
+    line itself: base block gets a Coach-judgment framing (no citation
+    oversold where none exists); build/peak/taper gets the real citation
+    (González-Ravé et al. 2021; Pla et al. 2019) backing the phase shift.
     """
     if distance_m <= 0:
         return "No additional pool-independent volume this week."
@@ -385,7 +400,7 @@ def _additional_swim_structure(macro_block_name: str, distance_m: int, css_pace_
     if macro_block_name == "base":
         lines.append(
             f"Main set: {reps} x {rep}m @ Z2 ({z2_range}), 15s rest -- continuous "
-            "aerobic volume (base-block emphasis; library/14-swim-set-structure.md)."
+            "aerobic volume (base-block emphasis)."
         )
     else:
         z3_range = f"{_format_pace_s(z3['pace_lo_s'])}-{_format_pace_s(z3['pace_hi_s'])}/100m"
@@ -393,13 +408,35 @@ def _additional_swim_structure(macro_block_name: str, distance_m: int, css_pace_
         lines.append(
             f"Main set: {reps} x {rep}m broken-distance, descend 1-{reps} from Z3 "
             f"({z3_range}) toward Z4 ({z4_range}) on the last rep, negative-split "
-            f"each repeat -- race-pace-adjacent emphasis ({macro_block_name} block; "
-            "library/14-swim-set-structure.md, cross-referencing "
-            "04-css-intensity-anchors.md's negative-split evidence)."
+            f"each repeat -- race-pace-adjacent emphasis ({macro_block_name} block)."
         )
 
     lines.append(f"Cool-down: {cool_down}m easy choice of stroke.")
+
+    if macro_block_name == "base":
+        lines.append("Why: continuous aerobic-volume emphasis (base-block phase).")
+    else:
+        lines.append(
+            "Why: race-pace-adjacent, broken-distance emphasis -- evidence-based "
+            "phase shift (González-Ravé et al. 2021; Pla et al. 2019)."
+        )
     return "\n".join(lines)
+
+
+def _no_coach_pool_purpose(block_name: str) -> str:
+    """Real, block-aware `purpose` text for a no-pool-coach weekday pool
+    session -- i.e. `generate_week()`'s `athlete.has_pool_coach is False`
+    branch, whose `structure` is authored by `_additional_swim_structure`
+    (see that function's own docstring). Mirrors the tone of this file's
+    other purpose strings (e.g. the long-swim session's "long open-water
+    swim -- endurance and fueling-practice anchor of the week") instead of
+    the generic dev-note text this replaces ("pool practice -- no pool
+    coach on hand, structure authored below"), which said nothing about the
+    actual training purpose.
+    """
+    if block_name == "base":
+        return "Continuous aerobic volume — base-block emphasis"
+    return f"Race-pace-adjacent volume — {block_name}-block emphasis"
 
 
 # --- macro scaffold -----------------------------------------------------------
@@ -662,7 +699,7 @@ def generate_week(
                     ),
                     distance_m=no_coach_pool_distance_m,
                     intensity={"anchor": "rpe"},
-                    purpose="pool practice — no pool coach on hand, structure authored below",
+                    purpose=_no_coach_pool_purpose(block.name),
                     structure=_additional_swim_structure(
                         block.name, no_coach_pool_distance_m, css_pace_s
                     ),
@@ -756,7 +793,7 @@ def generate_week(
                 intensity={"anchor": "rpe"},
                 purpose=(
                     "dryland shoulder strength — rotator-cuff/scapular-stability "
-                    "strength & balance (library/07-strength-dryland.md)"
+                    "strength & balance"
                 ),
                 structure=_strength_session_structure(session_index),
                 status="planned",

@@ -397,18 +397,26 @@ describe('renderApp plan session detail view (click-to-detail)', () => {
     expect(html).not.toContain('>Pool practice<');
   });
 
-  it('opens the full session detail (structure + back button) when detailId matches', () => {
+  it('opens the full session detail (block-parsed structure + back button) when detailId matches', () => {
     const html = renderApp(PLAN_DATA, MAIN_SET_SESSION.id);
     expect(html).toContain('data-a="session:back"');
     expect(html).not.toContain('data-a="session:open"');
-    expect(html).toContain('Warm-up: 600m easy');
-    expect(html).toContain('Main set: 8 x 300m @ Z2');
-    expect(html).toContain('Cool-down: 200m easy choice of stroke.');
+    // Warm-up/Main set/Cool-down are now their own titled sections (block-
+    // parsed via plan.js's parseStructureBlocks), not one flat pre-wrap blob
+    // with the raw "Label:" prefix still in the text.
+    expect(html).toContain('<h4>Warm-up</h4>');
+    expect(html).toContain('600m easy, building to Z2 pace');
+    expect(html).toContain('<h4>Main set</h4>');
+    // The Main-set block's one interval renders as a distinct numbered item.
+    expect(html).toContain('Interval 1');
+    expect(html).toContain('8 x 300m @ Z2 (1:35-1:39/100m), 15s rest');
+    expect(html).toContain('<h4>Cool-down</h4>');
+    expect(html).toContain('200m easy choice of stroke.');
   });
 
-  it('renders the strength session detail with indentation-preserving bullets intact', () => {
+  it('renders the strength session detail with indentation-preserving bullets intact, as its own titled block', () => {
     const html = renderApp(PLAN_DATA, STRENGTH_SESSION.id);
-    expect(html).toContain('Rotator-cuff / scapular-stability core');
+    expect(html).toContain('<h4>Rotator-cuff / scapular-stability core (2 sets x 10 reps each)</h4>');
     expect(html).toContain('  - Band external rotation');
     expect(html).toContain('  - Prone Y-raise');
   });

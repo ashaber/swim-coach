@@ -282,6 +282,14 @@
     table.laps-table tbody tr:nth-child(even) { background: var(--paper-2); }
     .pauses-list { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--ink-soft); }
     .detail-notes { white-space: pre-wrap; font-size: 14px; margin-top: 4px; color: var(--ink); }
+    /* Plan-tab session detail: Main-set block's parsed interval items (see
+       plan.js's parseStructureBlocks/parseMainSetIntervals) -- distinct
+       numbered items rather than one opaque paragraph, forward-compatible
+       with a future multi-interval main set. */
+    .detail-interval { margin-top: 10px; }
+    .detail-interval:first-child { margin-top: 0; }
+    .detail-interval-label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+      color: var(--ink-soft); font-weight: 700; }
 
     /* feedback tab */
     .feedback-entry { margin-top: 12px; }
