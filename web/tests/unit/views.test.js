@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
-  renderHistorySection, renderLogTab, renderSettingsTab, renderUpdateBanner,
+  renderHistorySection, renderLogTab, renderSettingsTab, renderUpdateBanner, renderApp,
 } from '../../src/views.js';
+import { isoWeekMonday, addDays, dateKey } from '../../src/plan.js';
 
 // Real fixture workouts from the task brief -- andrew's 2026-07-09
 // cross_train (analytics-rich, no distance/pace since it's not a swim) and
@@ -318,6 +319,123 @@ describe('renderHistorySection embedded workout chat (Phase C slice 1)', () => {
         messages: [{ role: 'user', content: '<img src=x onerror=alert(1)>', status: 'done' }],
       },
     });
+    expect(html).not.toContain('<img src=x');
+    expect(html).toContain('&lt;img');
+  });
+});
+
+describe('renderApp plan session detail view (click-to-detail)', () => {
+  // A far-future week so pickCurrentAndNextWeek always treats it as "This
+  // week", regardless of the real wall clock the test suite runs under.
+  const FAR_FUTURE_WEEK = '2099-W01';
+  const weekMonday = isoWeekMonday(FAR_FUTURE_WEEK);
+
+  // Real generated-text shapes from the task brief -- the swim main-set
+  // format and the strength bullet format.
+  const MAIN_SET_SESSION = {
+    id: 's-main-set',
+    date: dateKey(weekMonday),
+    sport: 'swim_pool',
+    source: 'ai_coach',
+    duration_min: 65,
+    distance_m: 2400,
+    intensity: { zone: 'Z2' },
+    purpose: 'pool practice — no pool coach on hand, structure authored below',
+    structure: 'Warm-up: 600m easy, building to Z2 pace (1:35-1:39/100m) by the end.\n'
+      + 'Main set: 8 x 300m @ Z2 (1:35-1:39/100m), 15s rest -- continuous aerobic volume for the week.\n'
+      + 'Cool-down: 200m easy choice of stroke.',
+  };
+
+  const STRENGTH_SESSION = {
+    id: 's-strength',
+    date: dateKey(addDays(weekMonday, 1)),
+    sport: 'strength',
+    source: 'ai_coach',
+    duration_min: 30,
+    distance_m: null,
+    intensity: {},
+    purpose: 'dryland shoulder strength — moderate (2 days before the 5-hour swim)',
+    structure: 'Rotator-cuff / scapular-stability core (2 sets x 10 reps each):\n'
+      + '  - Band external rotation\n'
+      + '  - Prone Y-raise',
+  };
+
+  const NO_STRUCTURE_SESSION = {
+    id: 's-coach-pool',
+    date: dateKey(addDays(weekMonday, 2)),
+    sport: 'swim_pool',
+    source: 'pool_coach',
+    duration_min: 90,
+    distance_m: null,
+    intensity: {},
+    purpose: 'coached USMS pool — content assigned by coach',
+    structure: null,
+  };
+
+  const WEEK = {
+    iso_week: FAR_FUTURE_WEEK,
+    meso_block: 'base',
+    focus: 'aerobic base',
+    target_volume_m: 12000,
+    sessions: [MAIN_SET_SESSION, STRENGTH_SESSION, NO_STRUCTURE_SESSION],
+    adaptation_rationale: null,
+  };
+
+  const PLAN_DATA = {
+    athlete: { name: 'Renee' }, events: [], macro: { blocks: [] }, weeks: [WEEK],
+  };
+
+  it('renderSession emits a clickable data-a/data-id for each session row', () => {
+    const html = renderApp(PLAN_DATA, null);
+    expect(html).toContain(`data-a="session:open" data-id="${MAIN_SET_SESSION.id}"`);
+    expect(html).toContain(`data-a="session:open" data-id="${STRENGTH_SESSION.id}"`);
+  });
+
+  it('derives a specific title from the Main set line instead of the generic purpose-derived label', () => {
+    const html = renderApp(PLAN_DATA, null);
+    expect(html).toContain('8 x 300m @ Z2 (1:35-1:39/100m)');
+    expect(html).not.toContain('>Pool practice<');
+  });
+
+  it('opens the full session detail (structure + back button) when detailId matches', () => {
+    const html = renderApp(PLAN_DATA, MAIN_SET_SESSION.id);
+    expect(html).toContain('data-a="session:back"');
+    expect(html).not.toContain('data-a="session:open"');
+    expect(html).toContain('Warm-up: 600m easy');
+    expect(html).toContain('Main set: 8 x 300m @ Z2');
+    expect(html).toContain('Cool-down: 200m easy choice of stroke.');
+  });
+
+  it('renders the strength session detail with indentation-preserving bullets intact', () => {
+    const html = renderApp(PLAN_DATA, STRENGTH_SESSION.id);
+    expect(html).toContain('Rotator-cuff / scapular-stability core');
+    expect(html).toContain('  - Band external rotation');
+    expect(html).toContain('  - Prone Y-raise');
+  });
+
+  it('renders a sensible, non-blank detail view for a session with no structure at all', () => {
+    const html = renderApp(PLAN_DATA, NO_STRUCTURE_SESSION.id);
+    expect(html).toContain('data-a="session:back"');
+    expect(html).toContain('Coached USMS pool'); // falls back to the purpose-derived title
+    expect(html).toContain('content assigned by coach'); // the post-dash purpose detail
+  });
+
+  it('falls back to the ordinary week cards when detailId does not match any session', () => {
+    const html = renderApp(PLAN_DATA, 'no-such-id');
+    expect(html).toContain('data-a="session:open"');
+    expect(html).not.toContain('data-a="session:back"');
+  });
+
+  it('renders the ordinary week cards when detailId is null/undefined', () => {
+    const html = renderApp(PLAN_DATA);
+    expect(html).toContain('data-a="session:open"');
+    expect(html).not.toContain('data-a="session:back"');
+  });
+
+  it('escapes malicious structure content (no raw HTML injection)', () => {
+    const malicious = { ...MAIN_SET_SESSION, id: 's-malicious', structure: '<img src=x onerror=alert(1)>' };
+    const data = { ...PLAN_DATA, weeks: [{ ...WEEK, sessions: [malicious] }] };
+    const html = renderApp(data, 's-malicious');
     expect(html).not.toContain('<img src=x');
     expect(html).toContain('&lt;img');
   });
