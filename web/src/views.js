@@ -5,6 +5,7 @@ import {
   formatShortDate, formatLongDate, formatDuration, formatDistance, formatPace,
   parseIsoDate, sessionsByDay, classifySession, sessionDisplay, sessionDotColorVar,
   pickCurrentAndNextWeek, daysUntil, macroTargetEvent, currentBlockIndex, longSwimLadder,
+  findSessionById,
 } from './plan.js';
 import { TOOL_LABELS } from './chat.js';
 import {
@@ -64,7 +65,7 @@ function renderSession(session) {
   if (session.source === 'pool_coach') metaParts.push('<span class="pill">coach-set</span>');
 
   return `
-    <div class="sess${classification.highlight ? ' big' : ''}">
+    <div class="sess${classification.highlight ? ' big' : ''}" data-a="session:open" data-id="${esc(session.id)}">
       <span class="dot" style="background:var(${dotVar})"></span>
       <div class="body">
         <div class="title">${esc(title)}${classification.tag ? `<span class="tag">${esc(classification.tag)}</span>` : ''}</div>
@@ -72,6 +73,54 @@ function renderSession(session) {
         ${detail ? `<div class="desc">${esc(detail)}</div>` : ''}
       </div>
     </div>`;
+}
+
+// --- Plan session detail view (tapping a session row) ---------------------
+// Mirrors the workout-detail pattern (renderWorkoutDetail below) exactly:
+// a full in-tab view swap driven by main.js's state.planSessionDetailId,
+// rather than a modal/overlay (there's no such component anywhere in this
+// app -- see renderWeeksSection's wiring, which swaps to this the same way
+// renderHistorySection swaps to renderWorkoutDetail).
+
+function renderPlanSessionDetailStats(session) {
+  const stats = [
+    renderDetailStat('Duration', formatDuration(session.duration_min)),
+    renderDetailStat('Distance', formatDistance(session.distance_m)),
+    renderDetailStat('Zone', session.intensity?.zone || null),
+    renderDetailStat('Source', session.source === 'pool_coach' ? 'Coach-set' : null),
+  ].join('');
+  return `<div class="detail-stats">${stats}</div>`;
+}
+
+/** Renders `structure`/`detail` as their own labeled sections, each with
+ * line breaks preserved (`.detail-notes`'s existing `white-space: pre-wrap`
+ * handles both the swim warm-up/main-set/cool-down paragraphs and the
+ * strength format's indented `  - ` bullets without any parsing). At least
+ * one of the two is present for every real session shape today, but a
+ * pool-coach placeholder with neither still has a real, non-blank title in
+ * the header above (deriveSessionTitle's fallback), so there is always
+ * something sensible to show even when this whole block is empty. */
+function renderPlanSessionDetail(session) {
+  const classification = classifySession(session);
+  const { title, detail, structure } = sessionDisplay(session);
+  const dateLabel = formatLongDate(parseIsoDate(session.date));
+
+  return `
+    <div class="detail-header">
+      <h3>${esc(title)}${classification.tag ? `<span class="tag">${esc(classification.tag)}</span>` : ''}</h3>
+      <div class="hist-meta mono">${esc(sportLabel(session.sport))} · ${esc(dateLabel)}</div>
+    </div>
+    ${renderPlanSessionDetailStats(session)}
+    ${structure ? `
+    <section class="detail-section">
+      <h4>Structure</h4>
+      <p class="detail-notes">${esc(structure)}</p>
+    </section>` : ''}
+    ${detail ? `
+    <section class="detail-section">
+      <h4>Purpose</h4>
+      <p class="detail-notes">${esc(detail)}</p>
+    </section>` : ''}`;
 }
 
 function renderWeekCard(week, label) {
@@ -100,7 +149,22 @@ function renderWeekCard(week, label) {
     </div>`;
 }
 
-function renderWeeksSection(weeks) {
+/** `detailId` is main.js's state.planSessionDetailId -- null shows the
+ * ordinary "This week"/"Next week" cards, a session id swaps the whole
+ * section to a back button + renderPlanSessionDetail(...) instead, same
+ * convention as renderHistorySection's `detailId` handling for workouts. */
+function renderWeeksSection(weeks, detailId) {
+  if (detailId) {
+    const session = findSessionById(weeks, detailId);
+    if (session) {
+      return `
+    <section>
+      <div class="s-head"><button type="button" class="btn-ghost" data-a="session:back">&larr; Back to plan</button></div>
+      ${renderPlanSessionDetail(session)}
+    </section>`;
+    }
+  }
+
   const { current, next } = pickCurrentAndNextWeek(weeks);
   if (!current) {
     return `
@@ -238,14 +302,14 @@ function renderLegendPanel() {
     </div>`;
 }
 
-export function renderApp(data) {
+export function renderApp(data, planSessionDetailId) {
   const { athlete, events, macro, weeks } = data;
   const event = macroTargetEvent(macro, events);
 
   return `
     <div class="wrap">
       ${renderMasthead(athlete, event)}
-      ${renderWeeksSection(weeks)}
+      ${renderWeeksSection(weeks, planSessionDetailId)}
       ${renderMacroSection(macro, event, weeks)}
       <div class="foot">
         ${renderLegendPanel()}

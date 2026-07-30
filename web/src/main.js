@@ -6,6 +6,7 @@ import {
   renderLogTab, renderCheckinTab, renderBackendNeededNotice, renderFeedbackTab, renderUpdateBanner,
   renderOnboardingForm,
 } from './views.js';
+import { findSessionById } from './plan.js';
 import {
   loadChatSession, saveChatSession, clearChatStorage,
   appendUserMessage, applyStreamEvent, isStreaming, setExpertMode, clearMessages, toApiHistory,
@@ -131,6 +132,12 @@ const state = {
     token: initialOnboardingActive ? initialSettingsForm.token : null,
   },
   plan: { status: 'idle', data: null, error: null },
+  // Slice: null shows the ordinary "This week"/"Next week" cards; a session
+  // id opens that session's in-tab detail view instead (see views.js's
+  // renderWeeksSection). Reset on leaving the Plan tab (setTab) and pruned
+  // in loadPlan if a refresh's new weeks no longer contain the id -- same
+  // conventions as workoutDetailId below.
+  planSessionDetailId: null,
   chat: loadChatSession(initialIdentity?.athlete || SIGNED_OUT_CHAT_KEY),
   settingsForm: initialSettingsForm,
   online: navigator.onLine,
@@ -258,7 +265,7 @@ function renderTabContent() {
       }
       if (state.plan.status === 'loading' || state.plan.status === 'idle') return renderLoading();
       if (state.plan.status === 'error') return renderError(state.plan.error);
-      return renderApp(state.plan.data);
+      return renderApp(state.plan.data, state.planSessionDetailId);
   }
 }
 
@@ -315,6 +322,7 @@ function applyAthleteSession(identity, token) {
   // is also what covers the "just saved settings, now ready" case, so there
   // isn't a second load-triggering path to keep in sync with this one.
   state.plan = { status: 'idle', data: null, error: null };
+  state.planSessionDetailId = null;
   state.profileForm = createProfileForm();
   state.profileLoad = { status: 'idle', error: null };
   state.profileSubmit = { status: 'idle', message: null };
@@ -358,6 +366,7 @@ function resetToSignedOut({ identityError = null } = {}) {
   saveOnboardingActive(false);
   state.chat = loadChatSession(SIGNED_OUT_CHAT_KEY);
   state.plan = { status: 'idle', data: null, error: null };
+  state.planSessionDetailId = null;
   state.profileForm = createProfileForm();
   state.profileLoad = { status: 'idle', error: null };
   state.profileSubmit = { status: 'idle', message: null };
@@ -548,11 +557,48 @@ async function loadPlan() {
       events: result.data.events?.length ?? 0,
     });
     state.plan = { status: 'ready', data: result.data, error: null };
+    pruneSessionDetailIdIfMissing(result.data.weeks);
   } else {
     log.error('app.plan.load_failed', { error: result.error });
     state.plan = { status: 'error', data: null, error: result.error };
   }
   render();
+}
+
+// --- Plan session detail view (tapping a session row) ----------------------
+// Renders from the plan's weeks already sitting in state.plan.data -- no
+// second API call (see views.js's renderWeeksSection/renderPlanSessionDetail).
+// Mirrors the workout-detail handlers (handleOpenHistoryDetail/
+// handleCloseHistoryDetail above) exactly: history.pushState/popstate wiring
+// for hardware/gesture back, closed on tab-leave, pruned if the id
+// disappears after a plan refresh.
+
+function handleOpenSessionDetail(id) {
+  if (!id) return;
+  state.planSessionDetailId = id;
+  // Pushes an in-app history entry so hardware/gesture back (a `popstate`,
+  // handled by handlePopState) closes the detail instead of navigating the
+  // PWA away entirely -- same reasoning as handleOpenHistoryDetail's own
+  // pushState.
+  history.pushState({ planSessionDetail: id }, '');
+  log.info('plan.session_detail_opened', { athlete: athleteSlug(), session_id: id });
+  render();
+}
+
+function handleCloseSessionDetail() {
+  if (!state.planSessionDetailId) return; // avoids a redundant render on popstate re-entrancy
+  state.planSessionDetailId = null;
+  render();
+}
+
+/** Clears a stale session-detail selection after a plan refresh whose new
+ * weeks no longer contain that session id (e.g. the week rolled off the
+ * "current"/"next" window) -- called from loadPlan right after
+ * state.plan.data is replaced, mirrors pruneDetailIdIfMissing for workouts. */
+function pruneSessionDetailIdIfMissing(weeks) {
+  if (state.planSessionDetailId && !findSessionById(weeks || [], state.planSessionDetailId)) {
+    state.planSessionDetailId = null;
+  }
 }
 
 // --- Coach chat tab ----------------------------------------------------------
@@ -753,15 +799,18 @@ function handleCloseHistoryDetail() {
   render();
 }
 
-// Closes the detail view on a hardware/gesture back press. Deliberately
-// does NOT call history.back()/pushState itself -- it's the *target* of a
-// popstate that already happened, so doing either here would create a
-// pushState/popstate loop. handleCloseHistoryDetail's own guard makes this
-// safe to call unconditionally on every popstate, including ones unrelated
-// to the detail view (e.g. none currently exist, but this stays inert if
-// one is added later).
+// Closes whichever detail view is open on a hardware/gesture back press.
+// Deliberately does NOT call history.back()/pushState itself -- it's the
+// *target* of a popstate that already happened, so doing either here would
+// create a pushState/popstate loop. Both handlers' own guards make this safe
+// to call unconditionally on every popstate, including ones unrelated to
+// either detail view. The two detail views live on different tabs (Log vs.
+// Plan) and are mutually exclusive in practice, but calling both closers
+// unconditionally needs no extra bookkeeping to stay correct if that ever
+// changes.
 function handlePopState() {
   handleCloseHistoryDetail();
+  handleCloseSessionDetail();
 }
 
 /** Clears a stale detail selection after a history refresh whose new data
@@ -1128,6 +1177,17 @@ function setTab(tab) {
     // fires.
     history.back();
   }
+  // Same teardown for the Plan tab's session-detail view -- coming back to
+  // Plan should land on "This week"/"Next week", not wherever the athlete
+  // last was.
+  if (state.tab === 'plan' && state.planSessionDetailId) {
+    state.planSessionDetailId = null;
+    // Consumes the pushState entry handleOpenSessionDetail added, keeping
+    // browser history symmetric with app state -- see the matching Log-tab
+    // comment above for why this is safe (handlePopState's
+    // handleCloseSessionDetail() is a no-op once the id is already null).
+    history.back();
+  }
   state.tab = tab;
   saveActiveTab(tab);
   log.info('tab.switch', { tab });
@@ -1185,6 +1245,9 @@ async function onAppClick(e) {
     // so the in-app "back" affordance and a hardware/gesture back press
     // close the detail via the exact same path -- see handlePopState.
     case 'history:back': history.back(); break;
+    case 'session:open': handleOpenSessionDetail(el.dataset.id); break;
+    // Same history.back()-not-direct-close reasoning as history:back above.
+    case 'session:back': history.back(); break;
     // Awaited (unlike every other handler above) so the server-side revoke
     // this now does (see performSignOut) actually fires before this handler
     // returns, rather than being fired-and-forgotten mid-click.

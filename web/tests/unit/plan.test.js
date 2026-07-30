@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   isoWeekMonday, formatDuration, formatDistance, formatPace, splitPurpose,
-  classifySession, sessionDisplay, pickCurrentAndNextWeek, daysUntil,
+  classifySession, sessionDisplay, deriveSessionTitle, findSessionById,
+  pickCurrentAndNextWeek, daysUntil,
   priorityEvent, macroTargetEvent, currentBlockIndex, longSwimLadder, sessionsByDay,
 } from '../../src/plan.js';
 
@@ -86,10 +87,86 @@ describe('sessionDisplay', () => {
     expect(title).toBe('Bear Lake Monster 10K');
     expect(detail).toBe('dress rehearsal, negative-split');
   });
-  it('prefers structure over the post-dash detail when both exist', () => {
+  it('surfaces structure alongside the post-dash detail -- neither suppresses the other', () => {
+    // Regression: sessionDisplay used to do `detail: detail || session.structure`,
+    // so structure (the real authored warm-up/main-set/cool-down content) was
+    // dead code any time purpose had its usual em-dash detail -- which is
+    // effectively always. Both must now come back as distinct fields.
     const session = { purpose: 'Lucky Peak 5-HOUR swim — fueling rehearsal', structure: 'Feed every 20-30 min.' };
-    const { detail } = sessionDisplay(session);
+    const { detail, structure } = sessionDisplay(session);
     expect(detail).toBe('fueling rehearsal');
+    expect(structure).toBe('Feed every 20-30 min.');
+  });
+
+  it('title falls back to the purpose-derived title when there is no structure', () => {
+    const session = { purpose: 'Long open-water swim — build to event pace', structure: null };
+    const { title, structure } = sessionDisplay(session);
+    expect(title).toBe('Long open-water swim');
+    expect(structure).toBeNull();
+  });
+});
+
+describe('deriveSessionTitle', () => {
+  it('derives the title from a swim session\'s "Main set:" line, cut at the first comma', () => {
+    const session = {
+      purpose: 'pool practice — no pool coach on hand, structure authored below',
+      structure: 'Warm-up: 600m easy, building to Z2 pace (1:35-1:39/100m) by the end.\n'
+        + 'Main set: 8 x 300m @ Z2 (1:35-1:39/100m), 15s rest -- continuous aerobic volume...\n'
+        + 'Cool-down: 200m easy choice of stroke.',
+    };
+    expect(deriveSessionTitle(session)).toBe('8 x 300m @ Z2 (1:35-1:39/100m)');
+  });
+
+  it('derives the title from a strength session\'s first line, cut at the first paren', () => {
+    const session = {
+      purpose: 'dryland shoulder strength — moderate (2 days before the 5-hour swim)',
+      structure: 'Rotator-cuff / scapular-stability core (2 sets x 10 reps each):\n'
+        + '  - Band external rotation\n'
+        + '  - Prone Y-raise',
+    };
+    expect(deriveSessionTitle(session)).toBe('Rotator-cuff / scapular-stability core');
+  });
+
+  it('falls back to the existing splitPurpose-based title when there is no structure', () => {
+    const session = { purpose: 'Bear Lake Monster 10K (B race) — dress rehearsal, negative-split', structure: null };
+    expect(deriveSessionTitle(session)).toBe('Bear Lake Monster 10K');
+  });
+
+  it('does not crash on a "Main set:" line with unusual punctuation (no comma, no " -- ")', () => {
+    const session = { purpose: 'pool practice — structure authored below', structure: 'Main set: 6 x 200m descend 1-6\nCool-down: 200m easy.' };
+    expect(deriveSessionTitle(session)).toBe('6 x 200m descend 1-6');
+  });
+
+  it('does not crash on a bare strength-format first line with no "(" at all', () => {
+    const session = { purpose: 'dryland strength — core work', structure: 'Core stability circuit\n  - plank x 3\n  - dead bug x 10' };
+    expect(deriveSessionTitle(session)).toBe('Core stability circuit');
+  });
+
+  it('falls back to the purpose-derived title rather than a blank one when the structure first line starts with "("', () => {
+    // Not producible by either real generator today (see the doc comment
+    // above), but the format isn't guaranteed either -- a derived title that
+    // slices to empty must never surface as a blank title in the UI.
+    const session = { purpose: 'dryland strength — optional mobility flow', structure: '(optional) mobility flow\n  - hip circles' };
+    expect(deriveSessionTitle(session)).toBe('Dryland strength');
+  });
+});
+
+describe('findSessionById', () => {
+  const weeks = [
+    { iso_week: '2026-W28', sessions: [{ id: 's-1', purpose: 'a' }, { id: 's-2', purpose: 'b' }] },
+    { iso_week: '2026-W29', sessions: [{ id: 's-3', purpose: 'c' }] },
+  ];
+
+  it('finds a session by id across every week', () => {
+    expect(findSessionById(weeks, 's-3').purpose).toBe('c');
+  });
+
+  it('returns null when no session matches', () => {
+    expect(findSessionById(weeks, 'nonexistent')).toBeNull();
+  });
+
+  it('returns null for a null/empty id', () => {
+    expect(findSessionById(weeks, null)).toBeNull();
   });
 });
 

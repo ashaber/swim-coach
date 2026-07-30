@@ -104,13 +104,72 @@ export function classifySession(session) {
   return { highlight: false, tag: null };
 }
 
-/** Derive a display title/detail for a session from its purpose, with any
- * race-tag parenthetical stripped out of the title (it's shown as a badge
- * instead). */
+const MAIN_SET_RE = /Main set:\s*([^\n]+)/;
+
+/** Cuts `text` at whichever of a comma or " -- " occurs first (mirrors the
+ * "Main set:" line's own conventions -- see deriveSessionTitle's doc
+ * comment for the real example), or returns it unchanged if neither is
+ * present. */
+function cutAtFirstBoundary(text) {
+  const commaIdx = text.indexOf(',');
+  const dashIdx = text.indexOf(' -- ');
+  const candidates = [commaIdx, dashIdx].filter((i) => i !== -1);
+  if (candidates.length === 0) return text;
+  return text.slice(0, Math.min(...candidates));
+}
+
+/** Derives a short, actually-descriptive session title from its authored
+ * `structure` text (the real warm-up/main-set/cool-down or strength-bullet
+ * content) rather than the generic sport label `purpose` alone would give.
+ *
+ * - Swim-session format (a "Main set:" line present): takes that line's
+ *   text up to its first comma or " -- ", whichever comes first. E.g.
+ *   "Main set: 8 x 300m @ Z2 (1:35-1:39/100m), 15s rest -- continuous
+ *   aerobic volume..." -> "8 x 300m @ Z2 (1:35-1:39/100m)".
+ * - Strength-session format (no "Main set:" line): takes structure's first
+ *   line up to its first "(". E.g. "Rotator-cuff / scapular-stability core
+ *   (2 sets x 10 reps each):\n  - ..." -> "Rotator-cuff / scapular-stability
+ *   core".
+ * - No structure at all (pool-coach placeholders, recovery, the long
+ *   open-water swim): falls back to today's existing purpose-derived title,
+ *   unchanged.
+ * - Defensive edge case: if a structure string is shaped unlike either format
+ *   above closely enough that the cut leaves nothing (e.g. a strength-style
+ *   first line that starts with "(" itself, cutting to an empty string
+ *   before its first paren) -- not producible by either real generator
+ *   today, but not guaranteed by the format either -- falls back to the same
+ *   purpose-derived title rather than surfacing a blank one. */
+export function deriveSessionTitle(session) {
+  const purposeTitle = () => {
+    const { title } = splitPurpose(session.purpose);
+    return capitalize(title.replace(RACE_TAG_RE, '').replace(/\s{2,}/g, ' ').trim());
+  };
+  const { structure } = session;
+  if (structure) {
+    const mainSetMatch = structure.match(MAIN_SET_RE);
+    if (mainSetMatch) {
+      const derived = capitalize(cutAtFirstBoundary(mainSetMatch[1]).trim());
+      return derived || purposeTitle();
+    }
+    const firstLine = structure.split('\n')[0];
+    const parenIdx = firstLine.indexOf('(');
+    const text = parenIdx !== -1 ? firstLine.slice(0, parenIdx) : firstLine;
+    const derived = capitalize(text.trim());
+    return derived || purposeTitle();
+  }
+  return purposeTitle();
+}
+
+/** Derive a display title/detail/structure for a session. `structure` (the
+ * real authored warm-up/main-set/cool-down or strength content) is surfaced
+ * as its own field, never suppressed by `detail` (the post-em-dash text
+ * split out of `purpose`) -- both are returned separately so callers (the
+ * compact session row AND the click-to-detail view) can each show whatever
+ * is appropriate for their own space, instead of one silently winning via
+ * `||` collapse. */
 export function sessionDisplay(session) {
-  const { title, detail } = splitPurpose(session.purpose);
-  const cleanTitle = capitalize(title.replace(RACE_TAG_RE, '').replace(/\s{2,}/g, ' ').trim());
-  return { title: cleanTitle, detail: detail || session.structure || null };
+  const { detail } = splitPurpose(session.purpose);
+  return { title: deriveSessionTitle(session), detail, structure: session.structure || null };
 }
 
 const SPORT_COLOR_VAR = {
@@ -123,6 +182,19 @@ const SPORT_COLOR_VAR = {
 export function sessionDotColorVar(session, classification) {
   if (classification.highlight) return '--c-signal';
   return SPORT_COLOR_VAR[session.sport] || '--c-ink-faint';
+}
+
+/** Finds a session by id across every loaded week's `sessions` (mirrors the
+ * simple exact-match lookup renderHistorySection does for workouts -- these
+ * are internal ids, not user-typed, so no fuzzy matching is needed). Returns
+ * null if no week has a session with that id. */
+export function findSessionById(weeks, id) {
+  if (!id || !weeks) return null;
+  for (const week of weeks) {
+    const found = (week.sessions || []).find((s) => s.id === id);
+    if (found) return found;
+  }
+  return null;
 }
 
 /** Group a week's sessions by calendar date across the week's Mon..Sun span. */
