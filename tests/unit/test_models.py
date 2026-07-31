@@ -24,8 +24,13 @@ from swim_coach.models import (
     WorkoutAnalytics,
     WorkoutLap,
     WorkoutLength,
+    WorkoutLoad,
     WorkoutPause,
+    WorkoutRepeat,
     WorkoutSet,
+    WorkoutStep,
+    WorkoutStructure,
+    WorkoutTarget,
 )
 from swim_coach.store import FileStore
 
@@ -305,6 +310,171 @@ def test_session_status_default_is_planned():
 def test_week_plan_draft_defaults_false():
     week = make_week()
     assert week.draft is False
+
+
+# --- WorkoutStructure IR: WorkoutTarget/WorkoutLoad/WorkoutStep/WorkoutRepeat ---
+
+
+def test_session_structured_defaults_to_none_for_every_existing_yaml():
+    # Additive field: an already-persisted Session (YAML file or DB jsonb
+    # row) with no `structured` key must keep validating unchanged.
+    session = make_session()
+    assert session.structured is None
+    # structure (prose) is untouched/still present alongside it.
+    assert session.structure == "10x300 @ css+6"
+
+
+def test_session_structured_round_trips_through_json_dump_and_validate():
+    structured = WorkoutStructure(
+        items=[
+            WorkoutStep(
+                label="700m easy",
+                role="warmup",
+                duration_kind="distance_m",
+                duration_value=700,
+                target=WorkoutTarget(basis="zone", zone="Z2"),
+            )
+        ]
+    )
+    session = make_session(structured=structured)
+    dumped = session.model_dump(mode="json")
+    restored = Session.model_validate(dumped)
+    assert restored.structured == structured
+
+
+def test_workout_target_schema_version_and_bases():
+    for basis in ("zone", "percent_css", "absolute", "rpe", "open"):
+        t = WorkoutTarget(basis=basis)
+        assert t.schema_version == 1
+        assert t.zone is None
+        assert t.low is None
+        assert t.high is None
+
+
+def test_workout_target_rejects_invalid_basis():
+    with pytest.raises(ValidationError):
+        WorkoutTarget(basis="not_a_real_basis")
+
+
+def test_workout_target_rejects_invalid_zone():
+    with pytest.raises(ValidationError):
+        WorkoutTarget(basis="zone", zone="Z9")
+
+
+def test_workout_load_schema_version_and_bases():
+    for basis in ("bodyweight", "percent_1rm", "absolute", "rpe_only"):
+        load = WorkoutLoad(basis=basis)
+        assert load.schema_version == 1
+        assert load.value is None
+
+
+def test_workout_step_kind_defaults_to_step_and_is_a_discriminator():
+    step = WorkoutStep(
+        label="8 x 200m",
+        role="interval",
+        duration_kind="distance_m",
+        duration_value=1600,
+    )
+    assert step.kind == "step"
+    assert step.schema_version == 1
+    assert step.modality == "swim"
+    assert step.equipment == []
+    assert step.target is None
+    assert step.load is None
+
+
+def test_workout_step_rejects_invalid_role():
+    with pytest.raises(ValidationError):
+        WorkoutStep(label="x", role="not_a_real_role", duration_kind="open")
+
+
+def test_workout_step_rejects_invalid_duration_kind():
+    with pytest.raises(ValidationError):
+        WorkoutStep(label="x", role="steady", duration_kind="not_a_real_kind")
+
+
+def test_workout_step_accepts_strength_fields():
+    step = WorkoutStep(
+        label="goblet squat",
+        role="steady",
+        duration_kind="reps",
+        duration_value=10,
+        modality="strength",
+        load=WorkoutLoad(basis="percent_1rm", value=70),
+        exercise_name="goblet squat",
+        equipment=["kettlebell"],
+    )
+    assert step.modality == "strength"
+    assert step.load.basis == "percent_1rm"
+    assert step.equipment == ["kettlebell"]
+
+
+@pytest.mark.parametrize(
+    "repeat_kwargs",
+    [
+        {"repeat_mode": "count", "count": 3},
+        {"repeat_mode": "for_duration", "duration_s": 600, "interval_s": 60},
+        {"repeat_mode": "amrap", "duration_s": 300},
+    ],
+)
+def test_workout_repeat_mode_variants_round_trip_through_validation(repeat_kwargs):
+    repeat = WorkoutRepeat(
+        steps=[
+            WorkoutStep(
+                label="burpee",
+                role="steady",
+                duration_kind="reps",
+                duration_value=10,
+                modality="strength",
+            )
+        ],
+        **repeat_kwargs,
+    )
+    assert repeat.kind == "repeat"
+    assert repeat.schema_version == 1
+    for key, value in repeat_kwargs.items():
+        assert getattr(repeat, key) == value
+
+    dumped = repeat.model_dump(mode="json")
+    restored = WorkoutRepeat.model_validate(dumped)
+    assert restored == repeat
+
+
+def test_workout_repeat_mode_defaults_to_count():
+    repeat = WorkoutRepeat(steps=[])
+    assert repeat.repeat_mode == "count"
+
+
+def test_workout_repeat_rejects_invalid_repeat_mode():
+    with pytest.raises(ValidationError):
+        WorkoutRepeat(repeat_mode="not_a_real_mode", steps=[])
+
+
+def test_workout_repeat_steps_can_nest_another_repeat():
+    inner = WorkoutRepeat(
+        repeat_mode="count",
+        count=2,
+        steps=[WorkoutStep(label="x", role="steady", duration_kind="reps", duration_value=5)],
+    )
+    outer = WorkoutRepeat(repeat_mode="count", count=3, steps=[inner])
+    assert isinstance(outer.steps[0], WorkoutRepeat)
+    dumped = outer.model_dump(mode="json")
+    restored = WorkoutRepeat.model_validate(dumped)
+    assert restored == outer
+
+
+def test_workout_structure_items_discriminate_step_vs_repeat():
+    step = WorkoutStep(label="x", role="warmup", duration_kind="distance_m", duration_value=200)
+    repeat = WorkoutRepeat(repeat_mode="count", count=2, steps=[step])
+    structure = WorkoutStructure(items=[step, repeat])
+    assert isinstance(structure.items[0], WorkoutStep)
+    assert isinstance(structure.items[1], WorkoutRepeat)
+
+    dumped = structure.model_dump(mode="json")
+    restored = WorkoutStructure.model_validate(dumped)
+    assert restored == structure
+    assert isinstance(restored.items[0], WorkoutStep)
+    assert isinstance(restored.items[1], WorkoutRepeat)
 
 
 # --- schema_version + athlete_id presence ---

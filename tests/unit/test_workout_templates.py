@@ -4,15 +4,21 @@ library (YAML files + pydantic validation + load-time semantic checks).
 No LLM calls, no network access -- pure arithmetic + model validation.
 """
 
+import uuid
+
 import pytest
 
 from swim_coach import workout_templates
+from swim_coach.models import Athlete, WorkoutLoad, WorkoutRepeat, WorkoutStep, WorkoutStructure, WorkoutTarget
 from swim_coach.workout_templates import (
     FORMAT_STRATEGIES,
     TEMPLATES_DIR,
     WorkoutTemplate,
+    build_main_set_step,
     load_workout_templates,
     render_main_set,
+    render_prose,
+    resolve_template,
 )
 from swim_coach.zones import zone_table
 
@@ -450,3 +456,241 @@ def test_descending_ladder_is_build_peak_taper_only_in_the_real_template_directo
     for t in descending_ladder_templates:
         assert "base" not in t.applicable_blocks
         assert set(t.applicable_blocks) == {"build", "peak", "taper"}
+
+
+# --- build_main_set_step: byte-identical parity vs. render_main_set ------------
+# The whole WorkoutStructure migration hinges on this: render_prose(build_main_
+# set_step(...)) must equal render_main_set(...) EXACTLY (minus the "Main set: "
+# prefix, which render_prose's role->prefix mapping adds back), for every real
+# template + selector this repo ships -- same regression-proof discipline as
+# PR #86's prose-migration parity tests.
+
+_ALL_BLOCKS = ("base", "build", "peak", "taper")
+
+
+def _candidate_count(macro_block_name: str) -> int:
+    templates = load_workout_templates(TEMPLATES_DIR)
+    return len([t for t in templates if macro_block_name in t.applicable_blocks])
+
+
+@pytest.mark.parametrize("css_pace_s", [80.0, 95.0, 110.0])
+@pytest.mark.parametrize("reps,rep", [(7, 200), (4, 300), (1, 100), (10, 150)])
+@pytest.mark.parametrize("macro_block_name", _ALL_BLOCKS)
+def test_build_main_set_step_matches_render_main_set_for_every_real_template(
+    macro_block_name, reps, rep, css_pace_s
+):
+    zones = zone_table(css_pace_s)
+    z2, z3, z4 = zones["Z2"], zones["Z3"], zones["Z4"]
+    for selector in range(_candidate_count(macro_block_name)):
+        expected = render_main_set(macro_block_name, selector, reps, rep, z2, z3, z4)
+        step = build_main_set_step(macro_block_name, selector, reps, rep, z2, z3, z4)
+        got = render_prose(WorkoutStructure(items=[step]))
+        assert got == expected
+
+
+def test_build_main_set_step_covers_all_eighteen_real_templates_across_blocks():
+    # Sanity check that the parametrized sweep above actually walks every
+    # real shipped template at least once (2 base + 16 build/peak/taper),
+    # not just a subset -- guards against a future template addition
+    # silently falling outside the parity sweep's selector range. Tracked by
+    # template `id` (not rendered label) since the same build/peak/taper
+    # template renders different text per macro_block_name (the narrative
+    # embeds "(build block)"/"(peak block)"/"(taper block)").
+    seen_ids: set[str] = set()
+    for macro_block_name in _ALL_BLOCKS:
+        for selector in range(_candidate_count(macro_block_name)):
+            template = workout_templates._select_main_set_template(macro_block_name, selector)
+            seen_ids.add(template.id)
+    templates = load_workout_templates(TEMPLATES_DIR)
+    assert seen_ids == {t.id for t in templates}
+    assert len(seen_ids) == 18
+
+
+def _selector_for(macro_block_name: str, template_id: str) -> int:
+    templates = load_workout_templates(TEMPLATES_DIR)
+    candidates = sorted(
+        (t for t in templates if macro_block_name in t.applicable_blocks), key=lambda t: t.id
+    )
+    return next(i for i, t in enumerate(candidates) if t.id == template_id)
+
+
+def test_build_main_set_step_target_zone_reflects_narrative_template_content():
+    zones = zone_table(95.0)
+    z2, z3, z4 = zones["Z2"], zones["Z3"], zones["Z4"]
+
+    # base-0-straight is Z2-anchored.
+    base_selector = _selector_for("base", "base-0-straight")
+    base_step = build_main_set_step("base", base_selector, 5, 300, z2, z3, z4)
+    assert base_step.target.basis == "zone"
+    assert base_step.target.zone == "Z2"
+
+    # build-0-descend ramps to Z4; build_main_set_step tags the peak zone
+    # reached.
+    descend_selector = _selector_for("build", "build-0-descend")
+    descend_step = build_main_set_step("build", descend_selector, 7, 200, z2, z3, z4)
+    assert descend_step.target.basis == "zone"
+    assert descend_step.target.zone == "Z4"
+
+    # build-f-straight-repeat-sprints (a fins-assisted sprint set) references
+    # no zone-range placeholder at all -- honestly left untargeted rather
+    # than guessed from format_type alone.
+    sprint_selector = _selector_for("build", "build-f-straight-repeat-sprints")
+    sprint_step = build_main_set_step("build", sprint_selector, 7, 200, z2, z3, z4)
+    assert sprint_step.target is None
+
+
+# --- render_prose: generic role-driven rendering -------------------------------
+
+
+def test_render_prose_renders_warmup_interval_cooldown_with_prefixes():
+    structured = WorkoutStructure(
+        items=[
+            WorkoutStep(label="700m easy.", role="warmup", duration_kind="distance_m", duration_value=700),
+            WorkoutStep(label="main set text.", role="interval", duration_kind="distance_m", duration_value=1600),
+            WorkoutStep(label="300m easy.", role="cooldown", duration_kind="distance_m", duration_value=300),
+            WorkoutStep(label="Why: reasons.", role="open", duration_kind="open"),
+        ]
+    )
+    assert render_prose(structured) == (
+        "Warm-up: 700m easy.\nMain set: main set text.\nCool-down: 300m easy.\nWhy: reasons."
+    )
+
+
+def test_render_prose_renders_repeat_steps_as_bullets():
+    repeat = WorkoutRepeat(
+        repeat_mode="count",
+        count=2,
+        steps=[
+            WorkoutStep(label="exercise A", role="steady", duration_kind="reps", duration_value=10),
+            WorkoutStep(label="exercise B", role="steady", duration_kind="reps", duration_value=10),
+        ],
+    )
+    structured = WorkoutStructure(
+        items=[
+            WorkoutStep(label="Header:", role="open", duration_kind="open"),
+            repeat,
+        ]
+    )
+    assert render_prose(structured) == "Header:\n  - exercise A\n  - exercise B"
+
+
+# --- resolve_template: the one place relative -> absolute resolution happens --
+
+
+def test_resolve_template_zone_basis_resolves_to_absolute_pace_from_css():
+    athlete = Athlete(id=uuid.uuid4(), slug="t", name="T", css_pace_s_per_100m=95.0)
+    step = WorkoutStep(
+        label="warm", role="warmup", duration_kind="distance_m", duration_value=500,
+        target=WorkoutTarget(basis="zone", zone="Z2"),
+    )
+    resolved = resolve_template(WorkoutStructure(items=[step]), athlete)
+    z2 = zone_table(95.0)["Z2"]
+    resolved_target = resolved.items[0].target
+    assert resolved_target.basis == "absolute"
+    assert resolved_target.low == z2["pace_lo_s"]
+    assert resolved_target.high == z2["pace_hi_s"]
+    # original template is untouched -- resolve_template never mutates.
+    assert step.target.basis == "zone"
+
+
+@pytest.mark.parametrize("css_pace_s", [80.0, 95.0, 110.0, 130.0])
+@pytest.mark.parametrize("zone", ["Z1", "Z2", "Z3", "Z4", "Z5"])
+def test_resolve_template_zone_basis_matches_zone_table_across_css_range(css_pace_s, zone):
+    athlete = Athlete(id=uuid.uuid4(), slug="t", name="T", css_pace_s_per_100m=css_pace_s)
+    step = WorkoutStep(
+        label="x", role="steady", duration_kind="distance_m", duration_value=100,
+        target=WorkoutTarget(basis="zone", zone=zone),
+    )
+    resolved = resolve_template(WorkoutStructure(items=[step]), athlete)
+    expected = zone_table(css_pace_s)[zone]
+    assert resolved.items[0].target.low == expected["pace_lo_s"]
+    assert resolved.items[0].target.high == expected["pace_hi_s"]
+
+
+@pytest.mark.parametrize("css_pace_s", [80.0, 100.0, 120.0])
+def test_resolve_template_percent_css_basis_resolves_relative_to_css(css_pace_s):
+    athlete = Athlete(id=uuid.uuid4(), slug="t", name="T", css_pace_s_per_100m=css_pace_s)
+    step = WorkoutStep(
+        label="x", role="interval", duration_kind="distance_m", duration_value=100,
+        target=WorkoutTarget(basis="percent_css", low=135, high=140),
+    )
+    resolved = resolve_template(WorkoutStructure(items=[step]), athlete)
+    resolved_target = resolved.items[0].target
+    assert resolved_target.basis == "absolute"
+    assert resolved_target.low == pytest.approx(css_pace_s * 1.35)
+    assert resolved_target.high == pytest.approx(css_pace_s * 1.40)
+
+
+def test_resolve_template_falls_back_to_default_css_when_athlete_has_none():
+    from swim_coach.plan import DEFAULT_CSS_PACE_S_PER_100M
+
+    athlete = Athlete(id=uuid.uuid4(), slug="t", name="T", css_pace_s_per_100m=None)
+    step = WorkoutStep(
+        label="x", role="warmup", duration_kind="distance_m", duration_value=100,
+        target=WorkoutTarget(basis="zone", zone="Z2"),
+    )
+    resolved = resolve_template(WorkoutStructure(items=[step]), athlete)
+    z2 = zone_table(DEFAULT_CSS_PACE_S_PER_100M)["Z2"]
+    assert resolved.items[0].target.low == z2["pace_lo_s"]
+
+
+@pytest.mark.parametrize("one_rm_kg", [40.0, 60.0, 100.0])
+@pytest.mark.parametrize("percent", [50.0, 70.0, 100.0])
+def test_resolve_template_percent_1rm_basis_resolves_via_athlete_constraints(percent, one_rm_kg):
+    athlete = Athlete(
+        id=uuid.uuid4(), slug="t", name="T",
+        constraints={"one_rm_kg": {"goblet squat": one_rm_kg}},
+    )
+    step = WorkoutStep(
+        label="goblet squat", role="steady", duration_kind="reps", duration_value=10,
+        exercise_name="goblet squat", load=WorkoutLoad(basis="percent_1rm", value=percent),
+        modality="strength",
+    )
+    resolved = resolve_template(WorkoutStructure(items=[step]), athlete)
+    resolved_load = resolved.items[0].load
+    assert resolved_load.basis == "absolute"
+    assert resolved_load.value == pytest.approx(one_rm_kg * percent / 100)
+
+
+def test_resolve_template_percent_1rm_without_matching_athlete_data_passes_through_unresolved():
+    athlete = Athlete(id=uuid.uuid4(), slug="t", name="T")
+    step = WorkoutStep(
+        label="bench press", role="steady", duration_kind="reps", duration_value=10,
+        exercise_name="bench press", load=WorkoutLoad(basis="percent_1rm", value=70),
+        modality="strength",
+    )
+    resolved = resolve_template(WorkoutStructure(items=[step]), athlete)
+    assert resolved.items[0].load.basis == "percent_1rm"
+    assert resolved.items[0].load.value == 70
+
+
+def test_resolve_template_bodyweight_and_rpe_bases_pass_through_unchanged():
+    athlete = Athlete(id=uuid.uuid4(), slug="t", name="T")
+    step = WorkoutStep(
+        label="x", role="steady", duration_kind="reps", duration_value=10,
+        load=WorkoutLoad(basis="bodyweight"),
+    )
+    resolved = resolve_template(WorkoutStructure(items=[step]), athlete)
+    assert resolved.items[0].load == WorkoutLoad(basis="bodyweight")
+
+
+def test_resolve_template_resolves_nested_steps_inside_a_repeat():
+    athlete = Athlete(id=uuid.uuid4(), slug="t", name="T", css_pace_s_per_100m=90.0)
+    inner = WorkoutStep(
+        label="x", role="steady", duration_kind="distance_m", duration_value=100,
+        target=WorkoutTarget(basis="zone", zone="Z3"),
+    )
+    repeat = WorkoutRepeat(repeat_mode="count", count=3, steps=[inner])
+    resolved = resolve_template(WorkoutStructure(items=[repeat]), athlete)
+    resolved_inner = resolved.items[0].steps[0]
+    z3 = zone_table(90.0)["Z3"]
+    assert resolved_inner.target.basis == "absolute"
+    assert resolved_inner.target.low == z3["pace_lo_s"]
+
+
+def test_resolve_template_none_target_and_load_pass_through():
+    athlete = Athlete(id=uuid.uuid4(), slug="t", name="T")
+    step = WorkoutStep(label="x", role="open", duration_kind="open")
+    resolved = resolve_template(WorkoutStructure(items=[step]), athlete)
+    assert resolved.items[0].target is None
+    assert resolved.items[0].load is None

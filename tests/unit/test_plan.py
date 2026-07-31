@@ -10,7 +10,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from swim_coach.models import Athlete, Event
+from swim_coach.models import Athlete, Event, WorkoutRepeat, WorkoutStep
 from swim_coach.plan import (
     DEFAULT_POOL_SESSION_MIN,
     LONG_SWIM_SHARE,
@@ -21,16 +21,19 @@ from swim_coach.plan import (
     STRENGTH_SESSIONS_PER_WEEK,
     WEEKLY_VOLUME_RAMP_CAP,
     _additional_swim_structure,
+    _additional_swim_structure_template,
     _duration_min_for_distance,
     _format_pace_s,
     _no_coach_pool_purpose,
     _round_100,
     _strength_session_structure,
+    _strength_session_structure_template,
     _z2_pace_s_per_100m,
     generate_week,
     scaffold_macro,
 )
 from swim_coach.store import FileStore
+from swim_coach.workout_templates import render_prose, resolve_template
 from swim_coach.zones import zone_table
 
 ATHLETE_ID = uuid.uuid4()
@@ -1293,3 +1296,144 @@ def test_generate_week_never_leaks_internal_library_paths_into_athlete_facing_te
                 for s in week.sessions:
                     assert "library/" not in (s.purpose or "")
                     assert "library/" not in (s.structure or "")
+
+
+# --- WorkoutStructure migration: byte-identical parity proofs ------------------
+# The whole point of building WorkoutStructure alongside the legacy prose is
+# that it's provably NOT a behavior change: render_prose(resolve_template(
+# <template>, athlete)) must equal today's real _additional_swim_structure /
+# _strength_session_structure prose output EXACTLY, for every real template +
+# selector -- same regression-proof discipline as PR #86's migration.
+
+_PARITY_BLOCKS = ("base", "build", "peak", "taper")
+_PARITY_DISTANCES_M = (1000, 1500, 2000, 3000, 4000)
+_PARITY_CSS_PACES_S = (80.0, 95.0, 110.0)
+
+
+def _candidate_count_for_block(macro_block_name: str) -> int:
+    from swim_coach.workout_templates import TEMPLATES_DIR, load_workout_templates
+
+    templates = load_workout_templates(TEMPLATES_DIR)
+    return len([t for t in templates if macro_block_name in t.applicable_blocks])
+
+
+@pytest.mark.parametrize("css_pace_s", _PARITY_CSS_PACES_S)
+@pytest.mark.parametrize("distance_m", _PARITY_DISTANCES_M)
+@pytest.mark.parametrize("macro_block_name", _PARITY_BLOCKS)
+def test_additional_swim_structure_template_parity_for_every_selector(
+    macro_block_name, distance_m, css_pace_s
+):
+    athlete = make_athlete(css_pace_s_per_100m=css_pace_s)
+    for selector in range(_candidate_count_for_block(macro_block_name)):
+        expected = _additional_swim_structure(macro_block_name, distance_m, css_pace_s, selector)
+        template = _additional_swim_structure_template(macro_block_name, distance_m, css_pace_s, selector)
+        resolved = resolve_template(template, athlete)
+        got = render_prose(resolved)
+        assert got == expected
+
+
+def test_additional_swim_structure_template_parity_zero_distance_has_no_template():
+    # distance_m <= 0 has no meaningful WorkoutStructure -- callers (i.e.
+    # generate_week) must guard this themselves, mirroring
+    # _additional_swim_structure's own early return.
+    assert _additional_swim_structure("base", 0, 95.0) == "No additional pool-independent volume this week."
+
+
+@pytest.mark.parametrize("session_index", [0, 1, 2, 3])
+def test_strength_session_structure_template_parity(session_index):
+    athlete = make_athlete()
+    expected = _strength_session_structure(session_index)
+    template = _strength_session_structure_template(session_index)
+    resolved = resolve_template(template, athlete)
+    got = render_prose(resolved)
+    assert got == expected
+
+
+def test_strength_session_structure_template_uses_a_real_workout_repeat():
+    # The one production use of a genuine WorkoutRepeat this pass ships --
+    # the "2 sets x 10 reps each" rotator-cuff/scapular-stability core.
+    template = _strength_session_structure_template(0)
+    repeats = [item for item in template.items if isinstance(item, WorkoutRepeat)]
+    assert len(repeats) == 1
+    core_repeat = repeats[0]
+    assert core_repeat.repeat_mode == "count"
+    assert core_repeat.count == 2
+    assert len(core_repeat.steps) == len(STRENGTH_CORE_EXERCISES)
+    for step in core_repeat.steps:
+        assert isinstance(step, WorkoutStep)
+        assert step.load.basis == "bodyweight"
+        assert step.exercise_name in STRENGTH_CORE_EXERCISES
+
+
+# --- Session.structured populated correctly by generate_week ------------------
+
+
+def test_generate_week_populates_structured_for_strength_sessions_across_all_blocks(short_macro):
+    athlete, macro = short_macro
+    for block in macro.blocks:
+        week_start = block.start_date
+        week = generate_week(athlete, macro, _iso_week(week_start), week_start)
+        strength = [s for s in week.sessions if s.sport == "strength"]
+        assert len(strength) == STRENGTH_SESSIONS_PER_WEEK
+        for session_index, s in enumerate(strength):
+            assert s.structured is not None
+            assert render_prose(s.structured) == s.structure
+            assert render_prose(s.structured) == _strength_session_structure(session_index)
+
+
+def test_generate_week_populates_structured_for_no_coach_pool_sessions_across_all_blocks(short_macro):
+    athlete, macro = short_macro
+    athlete = athlete.model_copy(update={"has_pool_coach": False})
+    for block in macro.blocks:
+        week_start = block.start_date
+        week = generate_week(athlete, macro, _iso_week(week_start), week_start)
+        pool_sessions = [s for s in week.sessions if s.sport == "swim_pool"]
+        assert len(pool_sessions) == len(athlete.pool_schedule)
+        for s in pool_sessions:
+            assert s.structured is not None
+            assert render_prose(s.structured) == s.structure
+            # real, athlete-CSS-resolved pace numbers -- not a bare zone name.
+            warmup = s.structured.items[0]
+            assert warmup.role == "warmup"
+            assert warmup.target.basis == "absolute"
+            z2 = zone_table(athlete.css_pace_s_per_100m)["Z2"]
+            assert warmup.target.low == z2["pace_lo_s"]
+            assert warmup.target.high == z2["pace_hi_s"]
+
+
+def test_generate_week_populates_structured_for_additional_swim_session(short_macro):
+    athlete, macro = short_macro
+    for block in macro.blocks:
+        weeks_in_block = (block.end_date - block.start_date).days // 7 + 1
+        for i in range(weeks_in_block):
+            week_start = block.start_date + timedelta(weeks=i)
+            week = generate_week(athlete, macro, _iso_week(week_start), week_start)
+            additional = [
+                s
+                for s in week.sessions
+                if s.sport == "swim_ow" and s.purpose == "additional pool-independent aerobic volume"
+            ]
+            for s in additional:
+                assert s.structured is not None
+                assert render_prose(s.structured) == s.structure
+
+
+def test_generate_week_pool_coach_placeholder_and_long_swim_have_no_structured(short_macro):
+    # No real content is authored for these sessions today (structure=None)
+    # -- structured stays None too, consistent with there being nothing to
+    # structure.
+    athlete, macro = short_macro
+    week_start = macro.blocks[0].start_date
+    week = generate_week(athlete, macro, _iso_week(week_start), week_start)
+    placeholders = [s for s in week.sessions if s.source == "pool_coach"]
+    assert placeholders
+    for s in placeholders:
+        assert s.structured is None
+    long_swims = [s for s in week.sessions if s.sport == "swim_ow" and "long open-water" in s.purpose]
+    assert long_swims
+    for s in long_swims:
+        assert s.structured is None
+    recovery = [s for s in week.sessions if s.sport == "recovery"]
+    assert recovery
+    for s in recovery:
+        assert s.structured is None

@@ -28,8 +28,20 @@ from datetime import date, timedelta
 from typing import Literal
 from uuid import uuid4
 
-from swim_coach.models import Athlete, Event, MacroBlock, MacroPlan, Session, WeekPlan
-from swim_coach.workout_templates import render_main_set
+from swim_coach.models import (
+    Athlete,
+    Event,
+    MacroBlock,
+    MacroPlan,
+    Session,
+    WeekPlan,
+    WorkoutLoad,
+    WorkoutRepeat,
+    WorkoutStep,
+    WorkoutStructure,
+    WorkoutTarget,
+)
+from swim_coach.workout_templates import build_main_set_step, render_prose, resolve_template
 from swim_coach.zones import zone_table
 
 EventFormat = Literal["single_day", "multi_day_stage"]
@@ -311,6 +323,90 @@ def _format_pace_s(pace_s: float) -> str:
     return f"{minutes}:{seconds:02d}"
 
 
+def _strength_session_structure_template(session_index: int) -> WorkoutStructure:
+    """The `WorkoutStructure` TEMPLATE for a strength session -- same
+    content/rationale as `_strength_session_structure` (see that thin
+    prose-wrapper's docstring for the block/phase/dosing-progression
+    rationale, which is unchanged here), just built as structured `WorkoutStep`/
+    `WorkoutRepeat` nodes instead of hand-concatenated prose lines.
+
+    The "2 sets x 10 reps each" rotator-cuff/scapular-stability core is a
+    genuine `WorkoutRepeat(repeat_mode="count", count=2, ...)` wrapping one
+    `WorkoutStep` per exercise (real structural fidelity, not just a bullet
+    list) -- this is this migration's one production use of a real
+    `WorkoutRepeat`. The general full-body addition's three items each
+    already carry their own "3 x 10 ..." dosing baked into the bullet text
+    itself (an existing asymmetry in the real content -- unlike the core
+    exercises, there's no single shared rep scheme across all three), so
+    they're standalone `WorkoutStep`s rather than a second `WorkoutRepeat`.
+
+    Every `WorkoutLoad` here is `basis="bodyweight"` -- this session type has
+    no per-exercise 1RM data collected anywhere yet (see
+    `workout_templates.resolve_template`'s docstring), so `resolve_template`
+    resolving against 1RM is a documented no-op on this real content today.
+    Section headers and the trailing `Why:` line are `role="open"` steps
+    (verbatim athlete-facing text, not really "workout structure" -- see
+    `workout_templates.render_prose`'s docstring) rather than a field on
+    `WorkoutStructure` itself, since the model has none.
+    """
+    items: list[WorkoutStep | WorkoutRepeat] = [
+        WorkoutStep(
+            label="Rotator-cuff / scapular-stability core (2 sets x 10 reps each):",
+            role="open",
+            duration_kind="open",
+            modality="strength",
+        ),
+        WorkoutRepeat(
+            repeat_mode="count",
+            count=2,
+            steps=[
+                WorkoutStep(
+                    label=exercise,
+                    role="steady",
+                    duration_kind="reps",
+                    duration_value=10,
+                    load=WorkoutLoad(basis="bodyweight"),
+                    modality="strength",
+                    exercise_name=exercise,
+                )
+                for exercise in STRENGTH_CORE_EXERCISES
+            ],
+        ),
+    ]
+    if session_index % 2 == 1:
+        items.append(
+            WorkoutStep(
+                label="General full-body (layered in as time allows):",
+                role="open",
+                duration_kind="open",
+                modality="strength",
+            )
+        )
+        items.extend(
+            WorkoutStep(
+                label=exercise,
+                role="steady",
+                duration_kind="open",
+                load=WorkoutLoad(basis="bodyweight"),
+                modality="strength",
+                exercise_name=exercise,
+            )
+            for exercise in STRENGTH_FULL_BODY_ADDITION
+        )
+    items.append(
+        WorkoutStep(
+            label=(
+                "Why: rotator-cuff strength/balance, reduces shoulder-injury risk "
+                "(Hibberd 2012; Manske 2015; Tavares et al. 2025)."
+            ),
+            role="open",
+            duration_kind="open",
+            modality="strength",
+        )
+    )
+    return WorkoutStructure(items=items)
+
+
 def _strength_session_structure(session_index: int) -> str:
     """Fixed default strength-session program text (not macro-block-aware
     -- see library/07-strength-dryland.md's "Open questions" section for
@@ -330,17 +426,15 @@ def _strength_session_structure(session_index: int) -> str:
     session's rotator-cuff/scapular-stability emphasis (Hibberd 2012, Manske
     2015, Tavares et al. 2025) -- athlete-facing text, so a real citation,
     never the internal `library/07-strength-dryland.md` path.
+
+    Byte-identical (unchanged output) to before the `WorkoutStructure`
+    migration -- now a thin `render_prose` wrapper over
+    `_strength_session_structure_template` instead of hand-concatenated
+    lines, so this text and `Session.structured` (built by resolving that
+    same template, see `generate_week`) share one source of truth and can
+    never drift apart. See `tests/unit/test_plan.py`'s parity proof.
     """
-    lines = ["Rotator-cuff / scapular-stability core (2 sets x 10 reps each):"]
-    lines.extend(f"  - {exercise}" for exercise in STRENGTH_CORE_EXERCISES)
-    if session_index % 2 == 1:
-        lines.append("General full-body (layered in as time allows):")
-        lines.extend(f"  - {exercise}" for exercise in STRENGTH_FULL_BODY_ADDITION)
-    lines.append(
-        "Why: rotator-cuff strength/balance, reduces shoulder-injury risk "
-        "(Hibberd 2012; Manske 2015; Tavares et al. 2025)."
-    )
-    return "\n".join(lines)
+    return render_prose(_strength_session_structure_template(session_index))
 
 
 def _additional_swim_structure(
@@ -373,7 +467,10 @@ def _additional_swim_structure(
     keeps every template's arithmetic and periodization-boundary rules
     honest. `selector` (typically the week's 0-based index within its macro
     block -- see `generate_week`'s `week_index_in_block`) is passed straight
-    through to `render_main_set`, which deterministically picks one template
+    through to `_additional_swim_structure_template` (structured) /
+    `build_main_set_step` (its main-set step) -- both share
+    `workout_templates._select_main_set_template`'s selection logic with the
+    legacy `render_main_set`, which deterministically picks one template
     from the block-category's menu via `selector % <template count>` -- the
     same `(macro_block_name, selector)` pair always renders the same
     template, every time, so the whole rotation stays reproducible/auditable
@@ -399,6 +496,35 @@ def _additional_swim_structure(
     if distance_m <= 0:
         return "No additional pool-independent volume this week."
 
+    template = _additional_swim_structure_template(macro_block_name, distance_m, css_pace_s, selector)
+    return render_prose(template)
+
+
+def _additional_swim_structure_template(
+    macro_block_name: str, distance_m: int, css_pace_s: float, selector: int = 0
+) -> WorkoutStructure:
+    """Build the `WorkoutStructure` TEMPLATE for the "additional"
+    pool-independent aerobic swim_ow session -- the structural counterpart
+    to `_additional_swim_structure`'s prose (see that function's own
+    docstring for the full warm-up/cool-down/main-set-format-menu rationale
+    and citations, which is unchanged here). Callers must guard
+    `distance_m <= 0` themselves (mirroring `_additional_swim_structure`'s
+    own early return) -- there's no meaningful `WorkoutStructure` for "no
+    additional volume this week."
+
+    The warm-up/cool-down steps' `label`s are built here using the SAME
+    concrete, already-CSS-resolved `z2`/`z3`/`z4` zone dicts as the legacy
+    prose function (every real call site already has the athlete's CSS
+    available at this point -- see `generate_week`) -- this is what
+    guarantees byte-identical prose without duplicating the warm-up/
+    cool-down text-formatting logic a second time. Each step's `target`
+    field nonetheless stays the relative `basis="zone"` marker (not the
+    resolved pace numbers already reflected in its label) until
+    `workout_templates.resolve_template` is called -- `render_prose` never
+    reads `target`, so this doesn't affect the prose parity proof, and it
+    keeps the model's relative/resolved distinction real for any consumer
+    (e.g. a future Garmin export) that DOES read `target`.
+    """
     zones = zone_table(css_pace_s)
     z2, z3, z4 = zones["Z2"], zones["Z3"], zones["Z4"]
 
@@ -419,7 +545,14 @@ def _additional_swim_structure(
     main_set_budget = max(0, distance_m - warm_up - cool_down_budget_estimate)
 
     z2_range = f"{_format_pace_s(z2['pace_lo_s'])}-{_format_pace_s(z2['pace_hi_s'])}/100m"
-    lines = [f"Warm-up: {warm_up}m easy, building to Z2 pace ({z2_range}) by the end."]
+    warmup_step = WorkoutStep(
+        label=f"{warm_up}m easy, building to Z2 pace ({z2_range}) by the end.",
+        role="warmup",
+        duration_kind="distance_m",
+        duration_value=warm_up,
+        target=WorkoutTarget(basis="zone", zone="Z2"),
+        modality="swim",
+    )
 
     if macro_block_name == "base":
         rep = ADDITIONAL_SWIM_BASE_BLOCK_REP_M if main_set_budget >= 1200 else 200
@@ -441,21 +574,29 @@ def _additional_swim_structure(
 
     # Template menu selection + rendering is fully data-driven -- see
     # `swim_coach.workout_templates` (the `WorkoutTemplate` YAML library,
-    # `FORMAT_STRATEGIES`, and `render_main_set`'s deterministic
+    # `FORMAT_STRATEGIES`, and `build_main_set_step`'s deterministic
     # `selector % <template count>` rotation, same contract as before this
     # migration).
-    lines.append(render_main_set(macro_block_name, selector, reps, rep, z2, z3, z4))
+    main_set_step = build_main_set_step(macro_block_name, selector, reps, rep, z2, z3, z4)
 
-    lines.append(f"Cool-down: {cool_down}m easy choice of stroke.")
+    cooldown_step = WorkoutStep(
+        label=f"{cool_down}m easy choice of stroke.",
+        role="cooldown",
+        duration_kind="distance_m",
+        duration_value=cool_down,
+        modality="swim",
+    )
 
     if macro_block_name == "base":
-        lines.append("Why: continuous aerobic-volume emphasis (base-block phase).")
+        why_label = "Why: continuous aerobic-volume emphasis (base-block phase)."
     else:
-        lines.append(
+        why_label = (
             "Why: race-pace-adjacent, broken-distance emphasis -- evidence-based "
             "phase shift (González-Ravé et al. 2021; Pla et al. 2019)."
         )
-    return "\n".join(lines)
+    why_step = WorkoutStep(label=why_label, role="open", duration_kind="open", modality="swim")
+
+    return WorkoutStructure(items=[warmup_step, main_set_step, cooldown_step, why_step])
 
 
 def _no_coach_pool_purpose(block_name: str) -> str:
@@ -738,6 +879,16 @@ def generate_week(
                     structure=_additional_swim_structure(
                         block.name, no_coach_pool_distance_m, css_pace_s, week_index_in_block
                     ),
+                    structured=(
+                        resolve_template(
+                            _additional_swim_structure_template(
+                                block.name, no_coach_pool_distance_m, css_pace_s, week_index_in_block
+                            ),
+                            athlete,
+                        )
+                        if no_coach_pool_distance_m > 0
+                        else None
+                    ),
                     status="planned",
                 )
             )
@@ -831,6 +982,9 @@ def generate_week(
                     "strength & balance"
                 ),
                 structure=_strength_session_structure(session_index),
+                structured=resolve_template(
+                    _strength_session_structure_template(session_index), athlete
+                ),
                 status="planned",
             )
         )
@@ -874,6 +1028,12 @@ def generate_week(
                 purpose="additional pool-independent aerobic volume",
                 structure=_additional_swim_structure(
                     block.name, additional_distance, css_pace_s, week_index_in_block
+                ),
+                structured=resolve_template(
+                    _additional_swim_structure_template(
+                        block.name, additional_distance, css_pace_s, week_index_in_block
+                    ),
+                    athlete,
                 ),
                 status="planned",
             )
