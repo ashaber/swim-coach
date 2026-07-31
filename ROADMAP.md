@@ -31,6 +31,14 @@ The sections from "Phase 1" down are the original approved build plan, kept as t
 
 ### Now / Next
 
+- **Canonical structured workout data model + Garmin `.FIT` export.** Design
+  and build done (`docs/workout-data-model.md`) — a `WorkoutStructure`
+  IR (`WorkoutStep`/`WorkoutRepeat`/`WorkoutTarget`/`WorkoutLoad`) that
+  prose, the Plan tab UI, and Garmin export all render from, instead of the
+  UI regex-parsing generated prose back into blocks. Open across five PRs
+  (#91 foundation, #92 an unrelated live-bug fix, #93 UI rendering, #94
+  template metadata + coach-searchable library, #95 Garmin `.FIT` export),
+  all CI-green, not yet merged. See the doc for merge order.
 - **Self-service in-app onboarding.** Design is done (`docs/design-self-service-onboarding.md`, PR #63) — replacing admin-run `cli onboard` with an invited user signing in, entering their own hard data, and being provisioned via the same `provision_athlete`. Not implemented; the doc lays out a 4-slice build (schema change for a pending/no-athlete-yet session, the `POST /api/onboarding/provision` endpoint, the frontend wizard, then optional chat-assisted param extraction).
 - **Fully file-free `cli onboard`.** Today's `onboard` still requires `--profile <uncommitted-yaml>` (see README's "Onboarding a new athlete" honesty note) — accepting profile fields as CLI flags directly (or superseding this with the in-app wizard above) is the remaining step to "no files at all."
 - **Exception-specificity refactor (issue #60, open, tech debt).** Audit broad `except Exception` catches above the CLI boundary (flagged: `backend/app/auth.py`'s `require_auth` session-lookup catch) and narrow them to specific exception types where a caller could meaningfully handle the error differently.
