@@ -1,0 +1,6 @@
+schema_version: 1
+id: build-1-pyramid
+applicable_blocks: [build, peak, taper]
+format_type: pyramid
+narrative_template: "Main set: {reps} x {rep}m broken-distance{pyramid_word}, {ramp_clause} -- race-pace-adjacent emphasis ({macro_block_name} block)."
+source_note: "Ported from PR #85 -- same uniform reps as build-0-descend, effort ramps to a peak at the set's middle rep and eases back (or, at reps<=2, a simple build-to-peak fallback -- see workout_templates.py's _pyramid strategy for the degenerate-case fix)."

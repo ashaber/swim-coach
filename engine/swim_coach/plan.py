@@ -29,6 +29,7 @@ from typing import Literal
 from uuid import uuid4
 
 from swim_coach.models import Athlete, Event, MacroBlock, MacroPlan, Session, WeekPlan
+from swim_coach.workout_templates import render_main_set
 from swim_coach.zones import zone_table
 
 EventFormat = Literal["single_day", "multi_day_stage"]
@@ -228,21 +229,20 @@ ADDITIONAL_SWIM_BUILD_BLOCK_REP_M = 200
 # *emphasis* shift itself is [EVIDENCE: swim] (González-Ravé et al. 2021;
 # Pla et al. 2019), the concrete rep length is not.
 
-ADDITIONAL_SWIM_BASE_BLOCK_TEMPLATE_COUNT = 2
-ADDITIONAL_SWIM_BUILD_BLOCK_TEMPLATE_COUNT = 4
-# Size of each block-category's main-set format menu in
-# _additional_swim_structure -- base gets {straight Z2 reps, broken-
-# distance-lite split reps}; build/peak/taper get {uniform descend,
-# pyramid effort, broken-distance ladder, straight negative-split}. All
-# format *choices* are Coach judgment per library/14-swim-set-structure.md's
-# "Main-set format menu" section ("straight aerobic repeats, descending
-# sets, broken-distance/pyramid sets, and negative-split segments are the
-# shared vocabulary of pool coaching ... offered as legitimate, standard
-# coaching options" -- that file is explicit no source ranks one format as
-# superior). `_additional_swim_structure`'s `selector` picks among these via
-# `selector % <count>`, deterministically -- same block + same selector
-# always yields the same template, forever (no random/global state), which
-# is what makes this rotation safe to unit-test and audit.
+# The size of each block-category's main-set format menu (base: 2, build/
+# peak/taper: 4, as of this writing) is no longer a fixed constant here --
+# it's however many templates `engine/swim_coach/workout_templates/*.yaml`
+# ships for that block, read by `swim_coach.workout_templates.
+# render_main_set` at render time. All format *choices* are Coach judgment
+# per library/14-swim-set-structure.md's "Main-set format menu" section
+# ("straight aerobic repeats, descending sets, broken-distance/pyramid sets,
+# and negative-split segments are the shared vocabulary of pool coaching ...
+# offered as legitimate, standard coaching options" -- that file is explicit
+# no source ranks one format as superior). `_additional_swim_structure`'s
+# `selector` picks among the applicable templates via `selector % <count>`,
+# deterministically -- same block + same selector always yields the same
+# template, forever (no random/global state), which is what makes this
+# rotation safe to unit-test and audit.
 
 _WEEKDAY_OFFSETS = {
     "mon": 0,
@@ -366,39 +366,27 @@ def _additional_swim_structure(
     to the nearest 100m (main-set reps to the nearest rep length) and are
     illustrative, not exact to the meter.
 
-    Main-set format menu and rotation: `selector` (typically the week's
-    0-based index within its macro block -- see `generate_week`'s
-    `week_index_in_block`) deterministically picks one template from the
-    block-category's menu via `selector % <template count>` -- the same
-    `(macro_block_name, selector)` pair always renders the same template,
-    every time, so the whole rotation stays reproducible/auditable (no
-    random or global state involved). This does NOT change the function's
-    total-volume or zone-math contract -- warm-up + main set + cool-down
-    still sum exactly to `distance_m` for every template, only the main
-    set's internal SHAPE differs:
-      - `base` block (`ADDITIONAL_SWIM_BASE_BLOCK_TEMPLATE_COUNT` = 2):
-        (0) straight continuous Z2 reps (original/default); (1) the same
-        total Z2 volume split into two shorter aerobic segments per rep
-        with brief rest between them ("broken-distance-lite") for textural
-        variety -- both stay strictly Z2/continuous-aerobic, never Z3/Z4,
-        preserving the base-block aerobic-emphasis principle
-        (library/03-periodization.md, library/14-swim-set-structure.md).
-      - `build`/`peak`/`taper` blocks
-        (`ADDITIONAL_SWIM_BUILD_BLOCK_TEMPLATE_COUNT` = 4): (0) uniform
-        reps descending Z3->Z4 across the set (original/default); (1) a
-        pyramid -- same uniform reps, effort ramps Z3->Z4 at the set's
-        middle rep and eases back to Z3 by the last rep; (2) a
-        broken-distance ladder -- the same total volume paired into
-        climbing (shorter, longer) rungs; (3) a straight negative-split
-        set -- uniform reps at a fixed Z3 anchor, each rep individually
-        negative-split to Z4, no descend-across-reps progression. All four
-        are drawn from library/14-swim-set-structure.md's "Main-set format
-        menu" (an explicitly open menu -- "No verified source in this pass
-        ranks one format as superior"); the base-vs-build/peak/taper
-        *emphasis* shift is the only piece of this with real evidence
-        (González-Ravé et al. 2021; Pla et al. 2019), and it applies
-        identically no matter which of the four templates a given
-        block/rotation lands on.
+    Main-set format menu and rotation: this is data-driven -- see
+    `swim_coach.workout_templates` for the full template library
+    (`engine/swim_coach/workout_templates/*.yaml`), the `FORMAT_STRATEGIES`
+    that compute each shape's numbers, and the load-time validation that
+    keeps every template's arithmetic and periodization-boundary rules
+    honest. `selector` (typically the week's 0-based index within its macro
+    block -- see `generate_week`'s `week_index_in_block`) is passed straight
+    through to `render_main_set`, which deterministically picks one template
+    from the block-category's menu via `selector % <template count>` -- the
+    same `(macro_block_name, selector)` pair always renders the same
+    template, every time, so the whole rotation stays reproducible/auditable
+    (no random or global state involved). This does NOT change the
+    function's total-volume or zone-math contract -- warm-up + main set +
+    cool-down still sum exactly to `distance_m` for every template, only the
+    main set's internal SHAPE differs. All shipped templates are drawn from
+    library/14-swim-set-structure.md's "Main-set format menu" (an explicitly
+    open menu -- "No verified source in this pass ranks one format as
+    superior"); the base-vs-build/peak/taper *emphasis* shift is the only
+    piece of this with real evidence (González-Ravé et al. 2021; Pla et al.
+    2019), and it applies identically no matter which template a given
+    block/rotation lands on.
 
     Returns a final `Why: ...` line (athlete-facing rationale, no internal
     `library/` paths) instead of citing internal file paths on the Main-set
@@ -451,116 +439,12 @@ def _additional_swim_structure(
         remaining_for_cool_down += rep
     cool_down = max(0, remaining_for_cool_down)
 
-    if macro_block_name == "base":
-        # Template menu: library/14-swim-set-structure.md's "Main-set format
-        # menu" ("straight aerobic repeats ... broken-distance ... are the
-        # shared vocabulary of pool coaching ... offered as legitimate,
-        # standard coaching options"). Both templates below stay strictly
-        # Z2/continuous-aerobic -- no Z3/Z4 language -- per the base-block
-        # aerobic-emphasis principle (library/03-periodization.md).
-        base_template = selector % ADDITIONAL_SWIM_BASE_BLOCK_TEMPLATE_COUNT
-        if base_template == 0:
-            lines.append(
-                f"Main set: {reps} x {rep}m @ Z2 ({z2_range}), 15s rest -- continuous "
-                "aerobic volume (base-block emphasis)."
-            )
-        else:
-            # Broken-distance-lite: same total rep volume, split into two
-            # shorter aerobic segments with brief rest between them for
-            # textural variety -- library/14-swim-set-structure.md's menu
-            # includes "broken-distance" as a legitimate format; here it's
-            # applied within the aerobic/Z2 envelope, not the race-pace one.
-            segment = rep // 2
-            lines.append(
-                f"Main set: {reps} x ({segment}m + {segment}m) @ Z2 ({z2_range}), "
-                "10s rest between segments / 15s between reps -- broken-distance-lite "
-                "aerobic volume, same total distance and pace as straight reps "
-                "(base-block emphasis)."
-            )
-    else:
-        z3_range = f"{_format_pace_s(z3['pace_lo_s'])}-{_format_pace_s(z3['pace_hi_s'])}/100m"
-        z4_range = f"{_format_pace_s(z4['pace_lo_s'])}-{_format_pace_s(z4['pace_hi_s'])}/100m"
-        # Template menu: library/14-swim-set-structure.md's "Main-set format
-        # menu" -- descending sets, pyramid sets, broken-distance/ladder
-        # sets, and negative-split segments are all named there as
-        # "legitimate, standard coaching options" with "[n]o verified source
-        # ... rank[ing] one format as superior." All four templates below
-        # keep the same reps/rep-length numbers (same total main-set volume)
-        # computed above; only the narrative shape differs.
-        build_template = selector % ADDITIONAL_SWIM_BUILD_BLOCK_TEMPLATE_COUNT
-        if build_template == 0:
-            lines.append(
-                f"Main set: {reps} x {rep}m broken-distance, descend 1-{reps} from Z3 "
-                f"({z3_range}) toward Z4 ({z4_range}) on the last rep, negative-split "
-                f"each repeat -- race-pace-adjacent emphasis ({macro_block_name} block)."
-            )
-        elif build_template == 1:
-            # Pyramid: same uniform reps, effort ramps to a peak at the
-            # set's middle rep and eases back -- a pyramid shape built from
-            # intensity, not varying rep distance.
-            mid = reps // 2 + 1
-            if reps <= 2:
-                # A true pyramid needs a rep AFTER the peak to ease back on;
-                # with reps<=2, `mid` computes to reps itself (the peak IS
-                # the final rep), which made the "ramps up ... and back down
-                # to Z3 by the final rep" phrasing self-contradictory (the
-                # final rep can't be both the peak and the down-ramp).
-                # Reachable in production: no_coach_pool_distance_m's floor
-                # (NO_COACH_POOL_SESSION_FLOOR_M=300) yields reps in {1,2}
-                # for build/peak/taper at small distances. Fall back to a
-                # simple build-to-peak framing instead.
-                lines.append(
-                    f"Main set: {reps} x {rep}m broken-distance, building from Z3 "
-                    f"({z3_range}) to Z4 ({z4_range}) by the final rep, each repeat "
-                    f"negative-split -- race-pace-adjacent emphasis ({macro_block_name} block)."
-                )
-            else:
-                lines.append(
-                    f"Main set: {reps} x {rep}m broken-distance pyramid, effort ramps "
-                    f"from Z3 ({z3_range}) up to Z4 ({z4_range}) at rep {mid} of {reps} "
-                    "and back down to Z3 by the final rep, each repeat negative-split "
-                    f"-- race-pace-adjacent emphasis ({macro_block_name} block)."
-                )
-        elif build_template == 2:
-            # Broken-distance ladder: the same total volume (reps * rep)
-            # regrouped into climbing (shorter, longer) pairs -- exact by
-            # construction: num_pairs*(rep_short+rep_long) + leftover*rep
-            # == num_pairs*2*rep + leftover*rep == reps*rep, since
-            # rep_short + rep_long == 2*rep and num_pairs*2 + leftover ==
-            # reps.
-            num_pairs, leftover = divmod(reps, 2)
-            rep_short = rep // 2
-            rep_long = rep + rep_short
-            tail = f", plus 1 x {rep}m capstone rep to finish" if leftover else ""
-            # NOTE: "broken-distance ladder" is placed AFTER the numeric
-            # detail (not "Main set: broken-distance ladder -- Nx(...)")
-            # deliberately -- web/src/plan.js's deriveSessionTitle derives
-            # each session's compact title by cutting this line at whichever
-            # comes first, its first comma or its first " -- ". Leading with
-            # "broken-distance ladder -- " put the cut before any of the
-            # reps/distance numbers, so every ladder week showed the same
-            # generic "Broken-distance ladder" title with nothing to
-            # distinguish one week from another -- unlike the other three
-            # templates, whose numeric detail always precedes their first
-            # comma/dash. This ordering keeps the numbers first so the
-            # derived title stays informative, matching the other templates.
-            lines.append(
-                f"Main set: {num_pairs} x ({rep_short}m + {rep_long}m) climbing "
-                f"pairs{tail}, broken-distance ladder, each pair negative-split "
-                f"from Z3 ({z3_range}) toward Z4 ({z4_range}) -- race-pace-adjacent "
-                f"emphasis ({macro_block_name} block)."
-            )
-        else:
-            # Straight negative-split: same uniform reps at a fixed Z3
-            # anchor, each rep individually negative-split toward Z4 --
-            # explicitly no descend-across-reps progression (that's
-            # template 0's job).
-            lines.append(
-                f"Main set: {reps} x {rep}m @ Z3 ({z3_range}), each rep negative-split "
-                f"building to Z4 ({z4_range}) by the finish, no descend-across-reps "
-                "progression, 10s rest -- race-pace-adjacent emphasis "
-                f"({macro_block_name} block)."
-            )
+    # Template menu selection + rendering is fully data-driven -- see
+    # `swim_coach.workout_templates` (the `WorkoutTemplate` YAML library,
+    # `FORMAT_STRATEGIES`, and `render_main_set`'s deterministic
+    # `selector % <template count>` rotation, same contract as before this
+    # migration).
+    lines.append(render_main_set(macro_block_name, selector, reps, rep, z2, z3, z4))
 
     lines.append(f"Cool-down: {cool_down}m easy choice of stroke.")
 
