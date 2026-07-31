@@ -1,6 +1,6 @@
 # Researched masters pool workouts (real, sourced)
 
-**UNREVIEWED**: this file is agent-authored per `00-conventions.md`'s
+**REVIEWED**: this file is agent-authored per `00-conventions.md`'s
 workflow and needs Andrew's human review before being treated as settled
 grounding truth.
 
