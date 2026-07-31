@@ -9,7 +9,7 @@ is where PR #85's independent review caught two real bugs: the pyramid's
 ETL workflow for future workout research (e.g. classifying 20-50 researched
 masters workouts): classify the workout's main-set *shape* against
 `FORMAT_STRATEGIES`' keys (straight, broken_lite, descend, pyramid, ladder,
-negative_split). If one fits, author a new YAML file here -- no code change,
+negative_split, descending_ladder). If one fits, author a new YAML file here -- no code change,
 no Python review needed, just the YAML lint test in
 `tests/unit/test_workout_templates.py` (which runs the same load-time
 validation below against every real file). If none fits -- the workout's
@@ -192,6 +192,50 @@ def _negative_split(reps: int, rep: int, z2: dict, z3: dict, z4: dict, macro_blo
     }
 
 
+def _descending_ladder(reps: int, rep: int, z2: dict, z3: dict, z4: dict, macro_block_name: str) -> dict:
+    """A ONE-DIRECTIONAL (monotonically decreasing) ladder of rep lengths --
+    e.g. 400m, 300m, 200m, 100m -- distinct from `_ladder` above, which pairs
+    a short + long rep per "rung" (100+300, 200+200, ...). Added for PR
+    #86's researched-workout ETL: this was the single most-recurring novel
+    shape found across real published masters workouts (4 independent
+    occurrences -- see `workout_templates/build-j-*`, `build-k-*`, `build-l-*`
+    yaml files' `source_note`s), not covered by any existing strategy.
+
+    Fixed 4-rung arithmetic ladder [4u+leftover, 3u, 2u, u], exact by
+    construction: 10u + leftover == total_m always (same "exact by
+    construction" discipline as `_ladder`'s num_pairs/leftover arithmetic).
+    `leftover` is folded into the top (largest) rung, which never disturbs
+    the strictly-decreasing order since leftover < 10 <= u whenever u >= 10,
+    and even when leftover >= u (small totals), 4u+leftover is still >= 3u
+    for any leftover >= 0 -- the sequence stays non-increasing either way.
+
+    Degenerate small-total guard (same class of edge case as `_pyramid`'s
+    reps<=2 fallback): if `total_m` is too small to form 4 positive,
+    strictly-decreasing rungs (unit == total_m // 10 == 0), collapse to a
+    single rep-length "ladder" of just the top rung == total_m, rather than
+    emitting zero-length rungs. Reachable in principle at very small
+    `NO_COACH_POOL_SESSION_FLOOR_M`-derived budgets, though the real
+    production rep floor (100m) keeps total_m >= 100 in practice, well
+    above this guard's threshold (total_m < 10).
+    """
+    total_m = reps * rep
+    unit = total_m // 10
+    if unit == 0:
+        rungs = [total_m] if total_m > 0 else []
+    else:
+        leftover = total_m - unit * 10
+        rungs = [4 * unit + leftover, 3 * unit, 2 * unit, unit]
+    rung_list = ", ".join(f"{r}m" for r in rungs)
+    return {
+        "rung_list": rung_list,
+        "num_rungs": len(rungs),
+        "z3_range": _zone_range(z3),
+        "z4_range": _zone_range(z4),
+        "macro_block_name": macro_block_name,
+        "_total_m": sum(rungs),
+    }
+
+
 FORMAT_STRATEGIES: dict[str, Callable[[int, int, dict, dict, dict, str], dict]] = {
     "straight": _straight,
     "broken_lite": _broken_lite,
@@ -199,6 +243,7 @@ FORMAT_STRATEGIES: dict[str, Callable[[int, int, dict, dict, dict, str], dict]] 
     "pyramid": _pyramid,
     "ladder": _ladder,
     "negative_split": _negative_split,
+    "descending_ladder": _descending_ladder,
 }
 
 

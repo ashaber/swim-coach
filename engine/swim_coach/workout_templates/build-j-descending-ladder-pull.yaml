@@ -1,0 +1,6 @@
+schema_version: 1
+id: build-j-descending-ladder-pull
+applicable_blocks: [build, peak, taper]
+format_type: descending_ladder
+narrative_template: "Main set: descending-distance pull ladder -- {rung_list} -- each rung negative-split from Z3 ({z3_range}) toward Z4 ({z4_range}) as the distance shrinks, 20s rest between rungs -- echoes the recurring descending-pull-ladder pattern seen in real published masters sets (e.g. a 400-300-200-100 pull ladder embedded in a longer main set) -- race-pace-adjacent emphasis ({macro_block_name} block)."
+source_note: "Adapted from the descending-distance pull ladder embedded in workouts published by Sara McLarty, Masters and Triathlon Swimming Workouts (blog): 'Let's Swim' (June 7, 2021, a 300/250/200/150/100 descending set) and 'Build to Fast (LCM)' (June 4, 2021, a 400/300/200/100 pull ladder)."

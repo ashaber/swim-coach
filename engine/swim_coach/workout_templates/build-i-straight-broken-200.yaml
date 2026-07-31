@@ -1,0 +1,6 @@
+schema_version: 1
+id: build-i-straight-broken-200
+applicable_blocks: [build, peak, taper]
+format_type: straight
+narrative_template: "Main set: {reps} x {rep}m at fast, fins-assisted effort broken into a fast-100/fast-50-50/recovery-100 pattern each round, no across-set progression -- echoes the Broken 200 workout's fins-on fast-100 plus fast-50s plus recovery-back rounds -- race-pace-adjacent emphasis (build/peak/taper block)."
+source_note: "Adapted from a workout published by Matt Donovan, U.S. Masters Swimming (usms.org), 'Best Sprint Workouts for Swimming Faster', May 5, 2021 (Workout 5, Broken 200)."
