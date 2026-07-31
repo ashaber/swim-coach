@@ -270,6 +270,194 @@ export function parseMainSetIntervals(mainSetContent) {
   return mainSetContent.split('\n').map((line) => line.trim()).filter(Boolean);
 }
 
+// --- Session.structured tree-walk (Plan tab's session detail view, Phase A) -
+// `structured` (the new `WorkoutStructure` IR from PR #91, engine/swim_coach/
+// models.py) is a real object tree -- `WorkoutStructure.items`, a list of
+// `WorkoutStep`/`WorkoutRepeat` nodes (discriminated by `kind`). This walks
+// that tree directly (property access on real fields), never regex-parsing a
+// prose string the way parseStructureBlocks/parseMainSetIntervals above do.
+// This is explicitly NOT the polished per-block Warm-up/Main-set/Cool-down
+// design those two helpers feed (that stays as today's fallback, used only
+// when `structured` is absent) -- just a simple, generic, readable line-per-
+// step/repeat walk. Phase A of a two-phase plan; Phase B (a later pass)
+// retires the prose-parsing helpers above entirely.
+
+/** Athlete-facing prefixes for the three "fully narrated" swim-session roles
+ * -- mirrors `workout_templates.py`'s own `_ROLE_LINE_PREFIX` map exactly
+ * (same voice as the prose fallback), applied only to TOP-LEVEL steps
+ * (depth 0): a top-level warmup/interval/cooldown step's `label` is already
+ * a complete narrated sentence (baked in at template-build time -- see
+ * `render_main_set`), so nested/per-rep children under a `WorkoutRepeat`
+ * never get this prefix (there, `label` is a short per-rep name, not a full
+ * sentence, and the repeat's own header line already supplies the context.) */
+const STRUCTURED_ROLE_PREFIX = { warmup: 'Warm-up: ', interval: 'Main set: ', cooldown: 'Cool-down: ' };
+
+/** "90" -> "1:30", "600" -> "10:00". Always mm:ss (unlike formatDuration,
+ * which switches to "h min" -- repeat/step durations here stay short enough
+ * that seconds-resolution mm:ss reads better than an hours split). */
+function formatSecondsClock(totalSeconds) {
+  const total = Math.round(totalSeconds);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+/** A `WorkoutStep`'s duration as short athlete-facing text, or null for
+ * `duration_kind === 'open'` / a missing value. */
+function formatStepDuration(durationKind, durationValue) {
+  if (durationValue === null || durationValue === undefined) return null;
+  if (durationKind === 'distance_m') return `${Math.round(durationValue)}m`;
+  if (durationKind === 'time_s') {
+    const v = Math.round(durationValue);
+    return v < 60 ? `${v}s` : formatSecondsClock(v);
+  }
+  if (durationKind === 'reps') return `${Math.round(durationValue)} reps`;
+  return null;
+}
+
+/** A `WorkoutTarget`'s core intensity text (no leading "@"), or null when
+ * there's nothing meaningful to show (`basis === 'open'`, or a `basis`
+ * lacking the number(s) it needs). */
+function formatTargetCore(target) {
+  if (!target) return null;
+  if (target.basis === 'zone') return target.zone || null;
+  if (target.basis === 'percent_css') {
+    if (target.low === null || target.low === undefined) return null;
+    const high = target.high !== null && target.high !== undefined && target.high !== target.low
+      ? `-${target.high}` : '';
+    return `${target.low}${high}% CSS`;
+  }
+  if (target.basis === 'absolute') {
+    if (target.low === null || target.low === undefined) return null;
+    const high = target.high !== null && target.high !== undefined && target.high !== target.low
+      ? `-${formatPace(target.high)}` : '';
+    return `${formatPace(target.low)}${high}/100m`;
+  }
+  if (target.basis === 'rpe') return 'RPE';
+  return null; // basis === 'open'
+}
+
+/** A `WorkoutLoad`'s core resistance text (no leading "@"), or null.
+ * `basis === 'bodyweight'` deliberately renders nothing -- it's this
+ * codebase's default/uninteresting case (see `_strength_session_structure_
+ * template`'s doc comment: every real strength exercise today is
+ * bodyweight/band-based), so surfacing it on every single exercise line
+ * would be noise rather than signal; `percent_1rm`/`absolute`/`rpe_only` are
+ * all genuinely informative and shown. */
+function formatLoadCore(load) {
+  if (!load) return null;
+  if (load.basis === 'percent_1rm') {
+    return load.value !== null && load.value !== undefined ? `${load.value}% 1RM` : null;
+  }
+  if (load.basis === 'absolute') {
+    return load.value !== null && load.value !== undefined ? `${load.value} kg` : null;
+  }
+  if (load.basis === 'rpe_only') return 'RPE';
+  return null; // basis === 'bodyweight'
+}
+
+/** One `WorkoutStep`'s secondary annotation line -- duration, then target OR
+ * load (a step is swim-shaped or strength-shaped, never carries both
+ * meaningfully), then non-default stroke/equipment -- joined with " · ", or
+ * null when there's nothing beyond the label worth showing. Kept separate
+ * from the step's `text` (its label) so callers (renderStructuredStep below)
+ * can lay the two out differently -- e.g. label as the line's main text,
+ * detail as a smaller/mono trailing badge -- without string-surgery.
+ *
+ * Returns null unconditionally for a TOP-LEVEL narrated step (depth 0,
+ * role in `STRUCTURED_ROLE_PREFIX`): real generated content (see
+ * `render_main_set`) always bakes its full distance AND target/pace into
+ * that step's `label` already (e.g. "9 x 300m @ Z2 (1:35-1:39/100m), 15s
+ * rest..."), so composing a duration/target annotation from the raw fields
+ * here would just repeat what the label already says. Every other step
+ * (nested per-rep children under a `WorkoutRepeat`, and non-narrated roles
+ * like rest/steady) has a short, non-descriptive `label` and genuinely
+ * needs this annotation to be readable -- see e.g. "Rest 15s". */
+function structuredStepDetail(step, depth) {
+  if (depth === 0 && Object.prototype.hasOwnProperty.call(STRUCTURED_ROLE_PREFIX, step.role)) return null;
+  const parts = [];
+  const durationText = formatStepDuration(step.duration_kind, step.duration_value);
+  if (durationText) parts.push(durationText);
+  const targetCore = formatTargetCore(step.target);
+  const loadCore = targetCore ? null : formatLoadCore(step.load);
+  if (targetCore) parts.push(`@ ${targetCore}`);
+  else if (loadCore) parts.push(`@ ${loadCore}`);
+  if (step.stroke && step.stroke !== 'free') parts.push(capitalize(step.stroke));
+  if (step.equipment && step.equipment.length > 0) parts.push(step.equipment.join(', '));
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+/** One line for a `WorkoutStep` node: `{ depth, kind: 'step', text, detail }`.
+ * `text` is the step's label, prefixed for a top-level warmup/interval/
+ * cooldown step (see `STRUCTURED_ROLE_PREFIX`); `detail` is the secondary
+ * duration/target/load annotation from `structuredStepDetail`, or null. */
+function renderStructuredStep(step, depth) {
+  const prefix = depth === 0 ? (STRUCTURED_ROLE_PREFIX[step.role] || '') : '';
+  return { depth, kind: 'step', text: `${prefix}${step.label}`, detail: structuredStepDetail(step, depth) };
+}
+
+/** One header line for a `WorkoutRepeat` node: `{ depth, kind: 'repeat',
+ * text, detail: null }`. `text` always ends in ':' (introducing its indented
+ * children, matching this codebase's existing heading convention -- see
+ * `_strength_session_structure_template`'s own "...(2 sets x 10 reps each):"
+ * label). Framing comes entirely from `repeat_mode`:
+ *  - "count": "{count} x:" (falls back to "? x:" if count is somehow null).
+ *  - "for_duration": EMOM-style -- "every {interval_s}s" is the defining
+ *    trait, so it always shows; the round count is derived (duration_s /
+ *    interval_s) when both are known, e.g. "EMOM x10 (every 60s):".
+ *  - "amrap": "AMRAP for {mm:ss}:", or bare "AMRAP:" if duration_s is
+ *    missing. */
+function renderStructuredRepeatHeader(repeat, depth) {
+  let text;
+  if (repeat.repeat_mode === 'for_duration') {
+    const hasInterval = repeat.interval_s !== null && repeat.interval_s !== undefined;
+    const rounds = hasInterval && repeat.duration_s !== null && repeat.duration_s !== undefined
+      ? Math.round(repeat.duration_s / repeat.interval_s) : null;
+    if (hasInterval) {
+      text = rounds !== null
+        ? `EMOM x${rounds} (every ${Math.round(repeat.interval_s)}s)`
+        : `EMOM (every ${Math.round(repeat.interval_s)}s)`;
+    } else {
+      text = repeat.duration_s !== null && repeat.duration_s !== undefined
+        ? `For ${formatSecondsClock(repeat.duration_s)}` : 'For duration';
+    }
+  } else if (repeat.repeat_mode === 'amrap') {
+    text = repeat.duration_s !== null && repeat.duration_s !== undefined
+      ? `AMRAP for ${formatSecondsClock(repeat.duration_s)}` : 'AMRAP';
+  } else {
+    text = `${repeat.count !== null && repeat.count !== undefined ? repeat.count : '?'} x`;
+  }
+  return { depth, kind: 'repeat', text: `${text}:`, detail: null };
+}
+
+/** Recursively walks a `WorkoutRepeat`/`WorkoutStructure`'s ordered `items`
+ * (or `steps`) list into a flat array of `{ depth, kind, text, detail }`
+ * lines, one per step/repeat node, each carrying its nesting depth so the
+ * caller can indent it -- nested `WorkoutRepeat`s (rare in real content
+ * today, but real per the model) recurse to depth+1 exactly the same way. */
+function walkStructuredItems(items, depth, out) {
+  for (const item of items) {
+    if (item.kind === 'repeat') {
+      out.push(renderStructuredRepeatHeader(item, depth));
+      walkStructuredItems(item.steps, depth + 1, out);
+    } else {
+      out.push(renderStructuredStep(item, depth));
+    }
+  }
+}
+
+/** Entry point: flattens a `WorkoutStructure` (`{ items: [...] }`) into an
+ * ordered array of `{ depth, kind, text, detail }` lines for
+ * `views.js`'s `renderStructuredWorkoutView` to lay out as indented HTML.
+ * Returns `[]` for a missing/empty structure so callers can render nothing
+ * without a null check of their own. */
+export function renderStructuredWorkout(structured) {
+  if (!structured || !structured.items) return [];
+  const out = [];
+  walkStructuredItems(structured.items, 0, out);
+  return out;
+}
+
 /** Finds a session by id across every loaded week's `sessions` (mirrors the
  * simple exact-match lookup renderHistorySection does for workouts -- these
  * are internal ids, not user-typed, so no fuzzy matching is needed). Returns
