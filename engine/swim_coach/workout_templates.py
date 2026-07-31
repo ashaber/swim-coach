@@ -27,6 +27,14 @@ from typing import Callable, Literal
 import yaml
 from pydantic import BaseModel, ValidationError
 
+from swim_coach.models import (
+    Athlete,
+    WorkoutRepeat,
+    WorkoutStep,
+    WorkoutStructure,
+    WorkoutTarget,
+)
+
 TEMPLATES_DIR = Path(__file__).parent / "workout_templates"
 
 # Representative sweep used by `load_workout_templates`'s load-time semantic
@@ -398,18 +406,10 @@ def load_workout_templates(dir_path: Path | str = TEMPLATES_DIR) -> list[Workout
     return templates
 
 
-def render_main_set(
-    macro_block_name: str,
-    selector: int,
-    reps: int,
-    rep: int,
-    z2: dict,
-    z3: dict,
-    z4: dict,
-) -> str:
-    """Filter loaded templates to `macro_block_name in applicable_blocks`,
-    pick one via `selector % len(candidates)`, render it, and return the
-    resulting "Main set: ..." line.
+def _select_main_set_template(macro_block_name: str, selector: int) -> WorkoutTemplate:
+    """Shared candidate-selection logic for `render_main_set` and
+    `build_main_set_step` -- filter loaded templates to `macro_block_name in
+    applicable_blocks`, pick one via `selector % len(candidates)`.
 
     Candidates are sorted by `id` before the modulo pick -- NOT by YAML
     filesystem/glob order (unstable across platforms) -- so `(macro_block_
@@ -428,8 +428,216 @@ def render_main_set(
     )
     if not candidates:
         raise ValueError(f"no workout templates registered for macro block {macro_block_name!r}")
+    return candidates[selector % len(candidates)]
 
-    template = candidates[selector % len(candidates)]
+
+def render_main_set(
+    macro_block_name: str,
+    selector: int,
+    reps: int,
+    rep: int,
+    z2: dict,
+    z3: dict,
+    z4: dict,
+) -> str:
+    """Pick a template via `_select_main_set_template`, render it, and return
+    the resulting "Main set: ..." line. Unchanged behavior/output from
+    before the `WorkoutStructure` migration -- still the direct prose path
+    used by `plan.py`'s `_additional_swim_structure`. See `build_main_set_step`
+    for the structural (`Session.structured`) counterpart, which reuses this
+    exact same selection/rendering so the two can never drift apart.
+    """
+    template = _select_main_set_template(macro_block_name, selector)
     strategy = FORMAT_STRATEGIES[template.format_type]
     placeholders = strategy(reps, rep, z2, z3, z4, macro_block_name)
     return template.narrative_template.format(**placeholders)
+
+
+def build_main_set_step(
+    macro_block_name: str,
+    selector: int,
+    reps: int,
+    rep: int,
+    z2: dict,
+    z3: dict,
+    z4: dict,
+) -> WorkoutStep:
+    """Build the `WorkoutStep` representing a swim session's main set, for
+    `Session.structured`. Reuses `_select_main_set_template` +
+    `FORMAT_STRATEGIES` + `narrative_template.format()` -- the exact same,
+    already-reviewed machinery `render_main_set` uses -- so this step's
+    `label` is guaranteed byte-identical to `render_main_set`'s output
+    (minus the "Main set: " prefix, which `render_prose`'s role->prefix
+    mapping adds back at render time). See
+    `tests/unit/test_workout_templates.py`'s byte-identical parity proof.
+
+    `target`'s zone anchor is derived structurally from which zone-range
+    placeholder the SELECTED template's `narrative_template` string actually
+    references (`{z4_range}` -> Z4, else `{z3_range}` -> Z3, else
+    `{z2_range}` -> Z2, else left untargeted) rather than guessed from
+    `format_type`/`macro_block_name` alone: some build-block `straight`/
+    `broken_lite`-shaped templates (e.g. `build-f-straight-repeat-sprints`,
+    a fins-assisted sprint set) reference no zone range at all, so tagging
+    them Z2 (the format_type's OTHER, base-block use) would be actively
+    wrong. This is intentionally an approximate, single-zone summary of what
+    may be a multi-zone progression (e.g. `descend`'s Z3->Z4 ramp across
+    reps) -- full per-rep zone fidelity is out of scope for this pass (see
+    module docstring's ETL-workflow note and ROADMAP.md's Phase A scoping).
+    """
+    template = _select_main_set_template(macro_block_name, selector)
+    strategy = FORMAT_STRATEGIES[template.format_type]
+    placeholders = strategy(reps, rep, z2, z3, z4, macro_block_name)
+    rendered = template.narrative_template.format(**placeholders)
+    label = rendered.removeprefix("Main set: ")
+
+    if "{z4_range}" in template.narrative_template:
+        target = WorkoutTarget(basis="zone", zone="Z4")
+    elif "{z3_range}" in template.narrative_template:
+        target = WorkoutTarget(basis="zone", zone="Z3")
+    elif "{z2_range}" in template.narrative_template:
+        target = WorkoutTarget(basis="zone", zone="Z2")
+    else:
+        target = None
+
+    return WorkoutStep(
+        label=label,
+        role="interval",
+        duration_kind="distance_m",
+        duration_value=placeholders["_total_m"],
+        target=target,
+        modality="swim",
+    )
+
+
+_ROLE_LINE_PREFIX: dict[str, str] = {
+    "warmup": "Warm-up: ",
+    "interval": "Main set: ",
+    "cooldown": "Cool-down: ",
+}
+# Athlete-facing line prefixes for `render_prose` -- covers every role a real
+# swim session step uses today. Any other role (e.g. "open" section headers/
+# "Why:" lines, or a bare strength exercise) falls through to render_prose's
+# own generic handling below -- this map is intentionally NOT exhaustive over
+# the full WorkoutStep.role Literal.
+
+
+def _render_step_line(step: WorkoutStep) -> str:
+    """One rendered line for a single `WorkoutStep`, used both for a
+    top-level step and for a step nested inside a `WorkoutRepeat` (see
+    `render_prose`). `role="open"` steps render their `label` verbatim (used
+    for section headers and the trailing "Why: ..." line -- text that isn't
+    really "workout structure," just athlete-facing prose carried on the
+    step so the whole session's text lives in one place); a role with a
+    prefix in `_ROLE_LINE_PREFIX` (warmup/interval/cooldown) gets that
+    prefix; anything else (e.g. a strength exercise's `role="steady"`)
+    renders as a "  - " bullet, matching `_strength_session_structure`'s
+    original bullet-list formatting exactly.
+    """
+    if step.role == "open":
+        return step.label
+    prefix = _ROLE_LINE_PREFIX.get(step.role, "")
+    if prefix:
+        return f"{prefix}{step.label}"
+    return f"  - {step.label}"
+
+
+def render_prose(structured: WorkoutStructure) -> str:
+    """Render a `WorkoutStructure` (template or resolved workout -- prose
+    rendering doesn't depend on a target/load's `basis`) into the exact same
+    "Warm-up: ...\\nMain set: ...\\nCool-down: ...\\nWhy: ..." (swim) or
+    header + bulleted-exercise-list (strength) prose shape today's hardcoded
+    `plan.py` functions produce -- see `tests/unit/test_workout_templates.py`
+    and `tests/unit/test_plan.py`'s byte-identical parity proofs.
+
+    Deliberately generic: driven entirely by each step's `role` via
+    `_render_step_line`, never by `format_type` or any other per-template
+    knowledge -- `render_prose` has zero awareness of `FORMAT_STRATEGIES`/
+    `narrative_template`. All of that bespoke-wording complexity is baked
+    into each step's `label` once, at template-build time (see
+    `build_main_set_step` / `plan.py`'s `_strength_session_structure_template`),
+    which is what keeps this renderer simple and reusable across both
+    modalities instead of needing a parallel per-format_type branch here too.
+
+    A top-level `WorkoutRepeat` renders each of its inner steps as its own
+    line (one level of nesting -- real templates this pass ships never nest
+    a `WorkoutRepeat` inside a `WorkoutRepeat`); a section header for a
+    repeat (e.g. "Rotator-cuff / scapular-stability core (2 sets x 10 reps
+    each):") is its own preceding `role="open"` step, not part of the repeat
+    itself (`WorkoutRepeat` has no label/title field -- see models.py).
+    """
+    lines: list[str] = []
+    for item in structured.items:
+        if isinstance(item, WorkoutStep):
+            lines.append(_render_step_line(item))
+        else:
+            for inner in item.steps:
+                lines.append(_render_step_line(inner))
+    return "\n".join(lines)
+
+
+def resolve_template(structured: WorkoutStructure, athlete: Athlete) -> WorkoutStructure:
+    """The ONE place a `WorkoutStructure` template's relative targets get
+    resolved into an athlete-specific workout's absolute ones -- reuses
+    `zones.zone_table` (the same CSS-anchored zone math `zones.py` already
+    used to resolve Z1-Z5 into absolute pace, made explicit/uniform here)
+    for `WorkoutTarget.basis in ("zone", "percent_css")`, and an optional
+    per-exercise 1RM lookup (`athlete.constraints["one_rm_kg"]`, a `dict[str,
+    float]` keyed by `WorkoutStep.exercise_name` -- `constraints` is already
+    a free-form per-athlete dict, so this needs no `Athlete` model change)
+    for `WorkoutLoad.basis == "percent_1rm"`.
+
+    No real template this pass ships uses `percent_1rm` -- every strength
+    exercise in `plan.py`'s `_strength_session_structure_template` is
+    `basis="bodyweight"` (band/bodyweight rotator-cuff and full-body work,
+    no per-exercise 1RM data collected anywhere yet) -- so that branch is a
+    documented no-op on real production content today, exercised directly by
+    synthetic unit tests instead (see `tests/unit/test_workout_templates.py`).
+
+    Non-relative bases (`absolute`, `rpe`, `rpe_only`, `open`, `bodyweight`)
+    and `None` targets/loads pass through unchanged. Returns a new
+    `WorkoutStructure` (via `model_copy`) -- never mutates `structured`.
+    """
+    # Deferred import: DEFAULT_CSS_PACE_S_PER_100M lives in plan.py, which
+    # imports render_main_set/build_main_set_step from this module at load
+    # time -- a top-level import here would be circular. Same pattern
+    # already used by `_validate_template_semantics` above.
+    from swim_coach.plan import DEFAULT_CSS_PACE_S_PER_100M
+    from swim_coach.zones import zone_table
+
+    css = athlete.css_pace_s_per_100m or DEFAULT_CSS_PACE_S_PER_100M
+    zones = zone_table(css)
+    one_rm_kg: dict = athlete.constraints.get("one_rm_kg") or {}
+
+    def _resolve_target(target: WorkoutTarget | None) -> WorkoutTarget | None:
+        if target is None:
+            return None
+        if target.basis == "zone":
+            z = zones[target.zone]
+            return target.model_copy(
+                update={"basis": "absolute", "low": z["pace_lo_s"], "high": z["pace_hi_s"]}
+            )
+        if target.basis == "percent_css":
+            low = css * (target.low / 100) if target.low is not None else None
+            high = css * (target.high / 100) if target.high is not None else None
+            return target.model_copy(update={"basis": "absolute", "low": low, "high": high})
+        return target
+
+    def _resolve_load(load, exercise_name: str | None):
+        if load is None or load.basis != "percent_1rm":
+            return load
+        base = one_rm_kg.get(exercise_name) if exercise_name else None
+        if base is None or load.value is None:
+            return load
+        return load.model_copy(update={"basis": "absolute", "value": base * (load.value / 100)})
+
+    def _resolve_item(item: WorkoutStep | WorkoutRepeat) -> WorkoutStep | WorkoutRepeat:
+        if isinstance(item, WorkoutStep):
+            return item.model_copy(
+                update={
+                    "target": _resolve_target(item.target),
+                    "load": _resolve_load(item.load, item.exercise_name),
+                }
+            )
+        return item.model_copy(update={"steps": [_resolve_item(s) for s in item.steps]})
+
+    return structured.model_copy(update={"items": [_resolve_item(i) for i in structured.items]})

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
@@ -90,6 +90,101 @@ class Event(BaseModel):
     # about* events in conversation, never which events those lookups find.
 
 
+class WorkoutTarget(BaseModel):
+    """Intensity target for a cardio-style (swim) `WorkoutStep`.
+
+    `basis` distinguishes a TEMPLATE's relative target from a resolved
+    WORKOUT's absolute one -- the same shape serves both stages of the
+    template/workout split (see `workout_templates.resolve_template`, the
+    one place this resolution happens). A template step carries
+    `basis="zone"` (e.g. Z3) or `basis="percent_css"` (e.g. 135% of CSS)
+    with no athlete-specific numbers; resolving a template against an
+    athlete's `css_pace_s_per_100m` (via `zones.zone_table`) fills in
+    `basis="absolute"` `low`/`high` pace values (seconds per 100m).
+    `rpe`/`open` never need resolving -- already athlete-relative or
+    deliberately untargeted.
+    """
+
+    schema_version: int = 1
+    basis: Literal["zone", "percent_css", "absolute", "rpe", "open"]
+    zone: Literal["Z1", "Z2", "Z3", "Z4", "Z5"] | None = None  # basis="zone"
+    low: float | None = None  # percent_css: % of CSS; absolute: pace_s_per_100m
+    high: float | None = None  # same units as low
+
+
+class WorkoutLoad(BaseModel):
+    """Resistance target for a strength-style `WorkoutStep` -- same
+    relative/resolved split as `WorkoutTarget`, against 1RM instead of CSS.
+    """
+
+    schema_version: int = 1
+    basis: Literal["bodyweight", "percent_1rm", "absolute", "rpe_only"]
+    value: float | None = None  # percent_1rm: 0-100; absolute: resolved weight
+
+
+class WorkoutStep(BaseModel):
+    """One leaf node in a `WorkoutStructure` tree -- a single swim rep/segment
+    or a single strength exercise. `kind` is the tagged-union discriminator
+    that lets `WorkoutRepeat.steps` hold a mix of steps and nested repeats
+    (see `WorkoutStepOrRepeat` below)."""
+
+    schema_version: int = 1
+    kind: Literal["step"] = "step"
+    label: str  # athlete-facing short name
+    role: Literal["warmup", "steady", "interval", "rest", "recovery", "cooldown", "open"]
+    duration_kind: Literal["time_s", "distance_m", "reps", "open"]
+    duration_value: float | None = None
+    target: WorkoutTarget | None = None  # swim/cardio steps
+    load: WorkoutLoad | None = None  # strength steps
+    modality: Literal["swim", "strength"] = "swim"
+    stroke: Literal["free", "back", "breast", "fly", "im", "mixed", "drill"] | None = None
+    equipment: list[str] = Field(default_factory=list)  # e.g. ["paddles"]
+    exercise_name: str | None = None  # strength steps, e.g. "kettlebell swing"
+
+
+class WorkoutRepeat(BaseModel):
+    """A loop wrapper around an ordered list of steps (nested repeats
+    allowed, rarely used). `repeat_mode` matters more than it looks -- a
+    plain `count` (execute N times) can't express EMOM ("every minute on
+    the minute" -- a new round starts on a fixed interval regardless of how
+    long the round took, `for_duration` + `interval_s`) or AMRAP (as many
+    rounds/reps as possible in a time window, `amrap` + `duration_s`).
+    Without this distinction, `isEMOM`/`isAMRAP` become underivable and
+    collapse back into exactly the kind of hand-typed, drift-prone tag this
+    model is designed to avoid -- so this needs to be right at the model
+    level, not patched on later.
+    """
+
+    schema_version: int = 1
+    kind: Literal["repeat"] = "repeat"
+    repeat_mode: Literal["count", "for_duration", "amrap"] = "count"
+    count: int | None = None  # repeat_mode == "count"
+    duration_s: float | None = None  # for_duration/amrap: total window length
+    interval_s: float | None = None  # for_duration: e.g. 60 for classic EMOM
+    steps: list["WorkoutStepOrRepeat"]  # nested loops allowed, rarely used
+
+
+# Tagged union on `kind` so pydantic v2 can discriminate step vs. repeat
+# nodes in `WorkoutRepeat.steps` / `WorkoutStructure.items` without a class
+# hierarchy (WorkoutStep/WorkoutRepeat stay flat siblings, matching this
+# file's no-inheritance house style).
+WorkoutStepOrRepeat = Annotated[WorkoutStep | WorkoutRepeat, Field(discriminator="kind")]
+WorkoutRepeat.model_rebuild()
+
+
+class WorkoutStructure(BaseModel):
+    """The canonical structured workout intermediate representation (IR).
+    Both a workout TEMPLATE (relative targets) and a resolved WORKOUT
+    (absolute targets) use this same shape -- see `WorkoutTarget`/
+    `WorkoutLoad`'s `basis` field and `workout_templates.resolve_template`.
+    Prose (`Session.structure`) and any future device export (Garmin, etc.)
+    are both just renderings of this IR, never the source of truth.
+    """
+
+    schema_version: int = 1
+    items: list[WorkoutStepOrRepeat]  # top-level ordered sequence
+
+
 class Session(BaseModel):
     """A single planned session within a WeekPlan."""
 
@@ -104,6 +199,14 @@ class Session(BaseModel):
     intensity: dict
     purpose: str
     structure: str | None = None
+    structured: WorkoutStructure | None = None
+    # Canonical structured IR alongside the legacy prose `structure` field
+    # (kept, not replaced -- see workout_templates.py / plan.py module
+    # docstrings for the migration rationale). Additive/optional: every
+    # existing persisted Session (YAML file or DB jsonb row) has no
+    # `structured` key and validates unchanged as `structured=None`; no
+    # schema_version bump, no backfill, same pattern as every other
+    # additive field in this file.
     status: Literal["planned", "completed", "skipped", "replaced"] = "planned"
 
     @field_validator("intensity")
