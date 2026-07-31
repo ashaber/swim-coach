@@ -186,11 +186,31 @@ function renderPlanSessionDetail(session) {
     </div>
     ${renderPlanSessionDetailStats(session)}
     ${structure ? parseStructureBlocks(structure).map(renderStructureBlock).join('') : ''}
+    ${session.structured ? renderGarminDownload(session) : ''}
     ${purpose ? `
     <section class="detail-section">
       <h4>Purpose</h4>
       <p class="detail-notes">${esc(purpose)}</p>
     </section>` : ''}`;
+}
+
+/** A plain download button for any session with `structured` populated --
+ * triggers `main.js`'s `handleDownloadGarminFit` (via the same `data-a`
+ * click-delegation convention every other action in this app uses), which
+ * fetches `GET /api/sessions/{id}/garmin.fit` (backend/app/routes/garmin.py)
+ * and saves the real Garmin workout-type `.FIT` file it returns. Deliberately
+ * plain/undesigned -- see the plan this implements: "reachable from the app"
+ * just means the athlete can get the file during/around a coaching
+ * conversation, not a polished affordance. Absent entirely when
+ * `structured` is `None` (a legacy, un-regenerated session -- there's
+ * nothing to export yet). */
+function renderGarminDownload(session) {
+  return `
+    <section class="detail-section">
+      <button type="button" class="btn-garmin-download" data-a="session:garmin-download" data-id="${esc(session.id)}">
+        Download for Garmin (.fit)
+      </button>
+    </section>`;
 }
 
 function renderWeekCard(week, label) {
