@@ -1,5 +1,6 @@
 schema_version: 1
 id: build-c-pyramid-breathing
+purpose: technique
 applicable_blocks: [build, peak, taper]
 format_type: pyramid
 narrative_template: "Main set: {reps} x {rep}m broken-distance{pyramid_word}, {ramp_clause} -- echoes the Breathing Workout's 2-4-6-8-6-4-2 count pyramid, with the breathing-pattern constraint tightening toward the middle of the set and easing back out -- race-pace-adjacent emphasis ({macro_block_name} block)."
