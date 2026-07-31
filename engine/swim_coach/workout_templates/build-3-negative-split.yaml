@@ -1,5 +1,6 @@
 schema_version: 1
 id: build-3-negative-split
+purpose: threshold
 applicable_blocks: [build, peak, taper]
 format_type: negative_split
 narrative_template: "Main set: {reps} x {rep}m @ Z3 ({z3_range}), each rep negative-split building to Z4 ({z4_range}) by the finish, no descend-across-reps progression, 10s rest -- race-pace-adjacent emphasis ({macro_block_name} block)."

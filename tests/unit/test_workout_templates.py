@@ -7,14 +7,22 @@ No LLM calls, no network access -- pure arithmetic + model validation.
 import uuid
 
 import pytest
+import yaml
 
 from swim_coach import workout_templates
 from swim_coach.models import Athlete, WorkoutLoad, WorkoutRepeat, WorkoutStep, WorkoutStructure, WorkoutTarget
 from swim_coach.workout_templates import (
     FORMAT_STRATEGIES,
     TEMPLATES_DIR,
+    TemplateFacets,
+    TemplatePreference,
     WorkoutTemplate,
     build_main_set_step,
+    clear_template_cache,
+    compute_facets,
+    facets_from_structure,
+    find_templates,
+    load_template_facets,
     load_workout_templates,
     render_main_set,
     render_prose,
@@ -22,9 +30,16 @@ from swim_coach.workout_templates import (
 )
 from swim_coach.zones import zone_table
 
+# `purpose: aerobic_base` is a hardcoded literal (not a `{}` placeholder) so
+# every existing `_VALID_YAML.format(...)` call below keeps working
+# unchanged now that `WorkoutTemplate.purpose` is required -- these tests
+# exercise loader/validation behavior unrelated to `purpose` itself, so a
+# fixed, always-valid value is the right choice (see the dedicated `purpose`/
+# `tags` tests further down for field-specific coverage).
 _VALID_YAML = (
     "schema_version: 1\n"
     "id: {id}\n"
+    "purpose: aerobic_base\n"
     "applicable_blocks: [{blocks}]\n"
     "format_type: {format_type}\n"
     'narrative_template: "{narrative_template}"\n'
@@ -269,9 +284,59 @@ def test_workout_template_schema_version_defaults_to_1():
         applicable_blocks=["base"],
         format_type="straight",
         narrative_template="Main set: {reps} x {rep}m @ Z2 ({z2_range}).",
+        purpose="aerobic_base",
     )
     assert t.schema_version == 1
     assert t.source_note is None
+    assert t.tags == []
+
+
+def test_workout_template_purpose_is_required():
+    with pytest.raises(Exception):  # noqa: B017 -- pydantic ValidationError
+        WorkoutTemplate(
+            id="t",
+            applicable_blocks=["base"],
+            format_type="straight",
+            narrative_template="Main set: {reps} x {rep}m @ Z2 ({z2_range}).",
+        )
+
+
+def test_workout_template_rejects_unknown_purpose_value():
+    with pytest.raises(Exception):  # noqa: B017 -- pydantic ValidationError
+        WorkoutTemplate(
+            id="t",
+            applicable_blocks=["base"],
+            format_type="straight",
+            narrative_template="Main set: {reps} x {rep}m @ Z2 ({z2_range}).",
+            purpose="not_a_real_purpose",
+        )
+
+
+def test_workout_template_tags_defaults_empty_and_accepts_list():
+    t = WorkoutTemplate(
+        id="t",
+        applicable_blocks=["base"],
+        format_type="straight",
+        narrative_template="Main set: {reps} x {rep}m @ Z2 ({z2_range}).",
+        purpose="aerobic_base",
+        tags=["long-tail-label"],
+    )
+    assert t.tags == ["long-tail-label"]
+
+
+def test_real_template_directory_every_template_has_a_valid_purpose():
+    # `purpose` is the one hand-authored, subjective field (per the Opus
+    # consultation) -- confirm every real shipped template actually has one,
+    # and that the real library uses more than one value (i.e. this isn't
+    # just a rubber-stamped default copy-pasted onto every file).
+    templates = load_workout_templates(TEMPLATES_DIR)
+    valid_purposes = {
+        "aerobic_base", "threshold", "race_pace", "technique", "sprint_power",
+        "recovery", "strength_endurance", "max_strength", "posterior_chain",
+    }
+    purposes_seen = {t.purpose for t in templates}
+    assert purposes_seen.issubset(valid_purposes)
+    assert len(purposes_seen) >= 4
 
 
 # --- render_main_set: rotation determinism + variety ---------------------------
@@ -694,3 +759,389 @@ def test_resolve_template_none_target_and_load_pass_through():
     resolved = resolve_template(WorkoutStructure(items=[step]), athlete)
     assert resolved.items[0].target is None
     assert resolved.items[0].load is None
+
+
+# --- TemplateFacets: facets_from_structure (pure, structure-only) -------------
+# No template/YAML/FORMAT_STRATEGIES involvement at all -- exercised directly
+# against hand-built synthetic `WorkoutStructure` trees, including EMOM/AMRAP
+# `WorkoutRepeat` shapes no real shipped template uses yet (see
+# `compute_facets`'s own tests further down for the real-template path).
+
+
+def test_facets_from_structure_no_repeat_is_straight_interval_style():
+    structure = WorkoutStructure(
+        items=[
+            WorkoutStep(label="a", role="interval", duration_kind="distance_m", duration_value=200),
+        ]
+    )
+    facets = facets_from_structure(structure)
+    assert facets.interval_style == "straight"
+
+
+def test_facets_from_structure_count_mode_repeat_is_intervals():
+    repeat = WorkoutRepeat(
+        repeat_mode="count",
+        count=3,
+        steps=[WorkoutStep(label="rep", role="interval", duration_kind="distance_m", duration_value=100)],
+    )
+    facets = facets_from_structure(WorkoutStructure(items=[repeat]))
+    assert facets.interval_style == "intervals"
+
+
+def test_facets_from_structure_for_duration_mode_is_emom():
+    # Synthetic EMOM-shaped template: a new round starts every interval_s
+    # regardless of how long the round took -- no real shipped template uses
+    # this repeat_mode yet (see this module's `compute_facets` tests), so the
+    # derivation is proven here against a hand-built structure standing in
+    # for what an EMOM-shaped template's built structure would look like.
+    emom_repeat = WorkoutRepeat(
+        repeat_mode="for_duration",
+        duration_s=600,
+        interval_s=60,
+        steps=[
+            WorkoutStep(
+                label="kettlebell swing", role="steady", duration_kind="reps", duration_value=15,
+                exercise_name="kettlebell swing", modality="strength", equipment=["kettlebell"],
+            )
+        ],
+    )
+    facets = facets_from_structure(WorkoutStructure(items=[emom_repeat]))
+    assert facets.interval_style == "emom"
+    # The window itself is the duration contribution -- inner rounds are
+    # open-ended (round count depends on how fast each round completes), so
+    # inner-step reps are NOT multiplied into a distance/duration total.
+    assert facets.approx_duration_s == 600
+    assert facets.approx_distance_m is None
+    assert facets.equipment == ["kettlebell"]
+    assert facets.modality == "strength"
+
+
+def test_facets_from_structure_amrap_mode_is_amrap():
+    # Synthetic AMRAP-shaped template: as many rounds/reps as possible within
+    # a fixed window -- same "no real shipped template uses this yet" note as
+    # the EMOM test above.
+    amrap_repeat = WorkoutRepeat(
+        repeat_mode="amrap",
+        duration_s=900,
+        steps=[
+            WorkoutStep(label="burpees", role="steady", duration_kind="reps", duration_value=10, modality="strength"),
+            WorkoutStep(label="air squats", role="steady", duration_kind="reps", duration_value=20, modality="strength"),
+        ],
+    )
+    facets = facets_from_structure(WorkoutStructure(items=[amrap_repeat]))
+    assert facets.interval_style == "amrap"
+    assert facets.approx_duration_s == 900
+    assert facets.approx_distance_m is None
+
+
+def test_facets_from_structure_count_mode_distance_is_multiplied_by_count():
+    # 3 x 100m must total 300m, not 100m -- a `count`-mode repeat's inner
+    # total is multiplied by `count`, unlike for_duration/amrap.
+    repeat = WorkoutRepeat(
+        repeat_mode="count",
+        count=3,
+        steps=[WorkoutStep(label="rep", role="interval", duration_kind="distance_m", duration_value=100)],
+    )
+    facets = facets_from_structure(WorkoutStructure(items=[repeat]))
+    assert facets.approx_distance_m == 300
+
+
+def test_facets_from_structure_derives_equipment_across_the_tree():
+    structure = WorkoutStructure(
+        items=[
+            WorkoutStep(
+                label="a", role="steady", duration_kind="reps", duration_value=10,
+                equipment=["paddles"], modality="swim",
+            ),
+            WorkoutRepeat(
+                repeat_mode="count", count=2,
+                steps=[
+                    WorkoutStep(
+                        label="b", role="steady", duration_kind="reps", duration_value=10,
+                        equipment=["fins", "paddles"], modality="swim",
+                    )
+                ],
+            ),
+        ]
+    )
+    facets = facets_from_structure(structure)
+    assert facets.equipment == ["fins", "paddles"]
+
+
+def test_facets_from_structure_is_medley_true_for_explicit_im_stroke():
+    step = WorkoutStep(label="a", role="interval", duration_kind="distance_m", duration_value=200, stroke="im")
+    facets = facets_from_structure(WorkoutStructure(items=[step]))
+    assert facets.is_medley is True
+    assert facets.strokes == ["im"]
+
+
+def test_facets_from_structure_is_medley_true_for_mixed_stroke():
+    step = WorkoutStep(label="a", role="interval", duration_kind="distance_m", duration_value=200, stroke="mixed")
+    facets = facets_from_structure(WorkoutStructure(items=[step]))
+    assert facets.is_medley is True
+
+
+def test_facets_from_structure_is_medley_true_for_multiple_real_strokes_without_im_label():
+    # Stroke rotation across the set (e.g. free then back) without an
+    # explicit "im"/"mixed" label still reads as medley-ish -- derived from
+    # actually seeing >1 distinct real stroke, not just a single tag.
+    structure = WorkoutStructure(
+        items=[
+            WorkoutStep(label="a", role="interval", duration_kind="distance_m", duration_value=100, stroke="free"),
+            WorkoutStep(label="b", role="interval", duration_kind="distance_m", duration_value=100, stroke="back"),
+        ]
+    )
+    facets = facets_from_structure(structure)
+    assert facets.is_medley is True
+    assert facets.strokes == ["back", "free"]
+
+
+def test_facets_from_structure_is_medley_false_for_single_stroke():
+    step = WorkoutStep(label="a", role="interval", duration_kind="distance_m", duration_value=200, stroke="free")
+    facets = facets_from_structure(WorkoutStructure(items=[step]))
+    assert facets.is_medley is False
+    assert facets.strokes == ["free"]
+
+
+def test_facets_from_structure_no_stroke_no_equipment_defaults_empty():
+    step = WorkoutStep(label="a", role="interval", duration_kind="distance_m", duration_value=200)
+    facets = facets_from_structure(WorkoutStructure(items=[step]))
+    assert facets.equipment == []
+    assert facets.strokes == []
+    assert facets.is_medley is False
+
+
+def test_facets_from_structure_all_strength_steps_is_strength_modality():
+    step = WorkoutStep(
+        label="a", role="steady", duration_kind="reps", duration_value=10, modality="strength",
+        exercise_name="goblet squat",
+    )
+    facets = facets_from_structure(WorkoutStructure(items=[step]))
+    assert facets.modality == "strength"
+
+
+# --- TemplateFacets: compute_facets (real templates via representative structure) --
+
+
+def test_compute_facets_every_real_template_is_straight_swim_with_positive_estimates():
+    # Every real template today ships zero equipment/stroke tagging and
+    # `build_main_set_step` never emits a `WorkoutRepeat` -- so every real
+    # template's computed facets should be "straight"/"swim"/no equipment/no
+    # strokes, with a positive approximate distance and duration. This is the
+    # honest, expected real-content baseline (see EMOM/AMRAP tests above for
+    # proof the derivation mechanism itself works).
+    templates = load_workout_templates(TEMPLATES_DIR)
+    for template in templates:
+        facets = compute_facets(template)
+        assert facets.interval_style == "straight", template.id
+        assert facets.modality == "swim", template.id
+        assert facets.equipment == [], template.id
+        assert facets.strokes == [], template.id
+        assert facets.is_medley is False, template.id
+        assert facets.approx_distance_m is not None and facets.approx_distance_m > 0, template.id
+        assert facets.approx_duration_s is not None and facets.approx_duration_s > 0, template.id
+
+
+def test_load_template_facets_matches_compute_facets_for_every_real_template():
+    templates = load_workout_templates(TEMPLATES_DIR)
+    facets_by_id = load_template_facets(TEMPLATES_DIR)
+    assert set(facets_by_id) == {t.id for t in templates}
+    for template in templates:
+        assert facets_by_id[template.id] == compute_facets(template)
+
+
+# --- module-level cache: load_workout_templates / load_template_facets -------
+
+
+def test_load_workout_templates_caches_across_repeated_calls(tmp_path, monkeypatch):
+    _write(
+        tmp_path, "cached.yaml",
+        _VALID_YAML.format(
+            id="cached-template", blocks="base", format_type="straight",
+            narrative_template="Main set: {reps} x {rep}m @ Z2 ({z2_range}).",
+        ),
+    )
+    clear_template_cache()
+
+    real_safe_load = yaml.safe_load
+    call_count = {"n": 0}
+
+    def _counting_safe_load(*args, **kwargs):
+        call_count["n"] += 1
+        return real_safe_load(*args, **kwargs)
+
+    monkeypatch.setattr(workout_templates.yaml, "safe_load", _counting_safe_load)
+
+    first = load_workout_templates(tmp_path)
+    assert call_count["n"] == 1
+    second = load_workout_templates(tmp_path)
+    assert call_count["n"] == 1  # no re-read on the second call
+    assert first == second
+
+
+def test_clear_template_cache_forces_a_fresh_reload(tmp_path, monkeypatch):
+    _write(
+        tmp_path, "cached.yaml",
+        _VALID_YAML.format(
+            id="cached-template-2", blocks="base", format_type="straight",
+            narrative_template="Main set: {reps} x {rep}m @ Z2 ({z2_range}).",
+        ),
+    )
+    clear_template_cache()
+
+    real_safe_load = yaml.safe_load
+    call_count = {"n": 0}
+
+    def _counting_safe_load(*args, **kwargs):
+        call_count["n"] += 1
+        return real_safe_load(*args, **kwargs)
+
+    monkeypatch.setattr(workout_templates.yaml, "safe_load", _counting_safe_load)
+
+    load_workout_templates(tmp_path)
+    assert call_count["n"] == 1
+    clear_template_cache()
+    load_workout_templates(tmp_path)
+    assert call_count["n"] == 2
+
+
+def test_different_dir_paths_get_independent_cache_entries(tmp_path):
+    dir_a = tmp_path / "a"
+    dir_b = tmp_path / "b"
+    dir_a.mkdir()
+    dir_b.mkdir()
+    _write(
+        dir_a, "t.yaml",
+        _VALID_YAML.format(
+            id="only-in-a", blocks="base", format_type="straight",
+            narrative_template="Main set: {reps} x {rep}m @ Z2 ({z2_range}).",
+        ),
+    )
+    _write(
+        dir_b, "t.yaml",
+        _VALID_YAML.format(
+            id="only-in-b", blocks="base", format_type="straight",
+            narrative_template="Main set: {reps} x {rep}m @ Z2 ({z2_range}).",
+        ),
+    )
+    clear_template_cache()
+    a_templates = load_workout_templates(dir_a)
+    b_templates = load_workout_templates(dir_b)
+    assert {t.id for t in a_templates} == {"only-in-a"}
+    assert {t.id for t in b_templates} == {"only-in-b"}
+
+
+# --- find_templates: real query function over templates + facets ------------
+
+
+def test_find_templates_filters_by_purpose():
+    threshold_templates = find_templates(purpose="threshold")
+    assert len(threshold_templates) == 7
+    assert all(t.purpose == "threshold" for t in threshold_templates)
+
+
+def test_find_templates_filters_by_block():
+    base_templates = find_templates(block="base")
+    assert {t.id for t in base_templates} == {"base-0-straight", "base-1-broken-distance-lite"}
+
+
+def test_find_templates_filters_by_modality():
+    assert len(find_templates(modality="swim")) == 18
+    assert find_templates(modality="strength") == []
+
+
+def test_find_templates_filters_by_interval_style():
+    # Every real template is structurally "straight" (see compute_facets test
+    # above) -- interval_style filtering is proven functionally correct here
+    # (matches everything / matches nothing), with the EMOM/AMRAP derivation
+    # itself proven separately against synthetic structures.
+    assert len(find_templates(interval_style="straight")) == 18
+    assert find_templates(interval_style="emom") == []
+    assert find_templates(interval_style="amrap") == []
+
+
+def test_find_templates_filters_by_equipment_any():
+    # Honest current-content limitation (see TEMPLATE_PREFERENCE_SCHEMA's own
+    # doc note in backend/app/tools.py): no real template carries structured
+    # equipment yet, so this legitimately matches nothing today -- proves the
+    # filter runs without erroring, not that it currently returns anything.
+    assert find_templates(equipment_any=["paddles", "kettlebell"]) == []
+
+
+def test_find_templates_filters_by_max_duration_s():
+    # base templates' representative distance budget yields a slightly
+    # larger approx_duration_s (1425s) than every build/peak/taper template
+    # (1330s) -- see this module's compute_facets tests. A threshold between
+    # the two proves the filter actually excludes some but not all templates.
+    within_build_budget = find_templates(max_duration_s=1400)
+    assert len(within_build_budget) == 16
+    assert all(t.applicable_blocks != ["base"] for t in within_build_budget)
+
+    within_everything = find_templates(max_duration_s=2000)
+    assert len(within_everything) == 18
+
+    within_nothing = find_templates(max_duration_s=1)
+    assert within_nothing == []
+
+
+def test_find_templates_combination_purpose_and_block():
+    sprint_build_templates = find_templates(purpose="sprint_power", block="build")
+    assert [t.id for t in sprint_build_templates] == [
+        "build-f-straight-repeat-sprints",
+        "build-g-straight-kick-and-swim-sprints",
+        "build-i-straight-broken-200",
+        "build-k-descending-ladder-kick",
+    ]
+
+
+def test_find_templates_no_match_returns_empty_list_not_an_error():
+    assert find_templates(purpose="max_strength") == []
+
+
+def test_find_templates_results_are_sorted_by_id():
+    results = find_templates(purpose="threshold")
+    assert [t.id for t in results] == sorted(t.id for t in results)
+
+
+# --- TemplatePreference + _select_main_set_template / build_main_set_step ---
+
+
+def test_template_preference_is_set_false_when_all_fields_none():
+    assert TemplatePreference().is_set() is False
+
+
+def test_template_preference_is_set_true_when_any_field_given():
+    assert TemplatePreference(purpose="threshold").is_set() is True
+    assert TemplatePreference(equipment_any=["paddles"]).is_set() is True
+    assert TemplatePreference(interval_style="emom").is_set() is True
+
+
+def test_select_main_set_template_with_preference_narrows_rotation():
+    default_pick = workout_templates._select_main_set_template("build", 0)
+    assert default_pick.id == "build-0-descend"
+
+    preferred_pick = workout_templates._select_main_set_template(
+        "build", 0, TemplatePreference(purpose="sprint_power")
+    )
+    assert preferred_pick.id == "build-f-straight-repeat-sprints"
+    assert preferred_pick.id != default_pick.id
+
+
+def test_select_main_set_template_preference_matching_nothing_raises():
+    with pytest.raises(ValueError, match="no workout templates match"):
+        workout_templates._select_main_set_template(
+            "base", 0, TemplatePreference(purpose="max_strength")
+        )
+
+
+def test_select_main_set_template_none_preference_behaves_like_no_preference():
+    a = workout_templates._select_main_set_template("build", 2, None)
+    b = workout_templates._select_main_set_template("build", 2, TemplatePreference())
+    assert a.id == b.id
+
+
+def test_build_main_set_step_with_preference_selects_the_matching_template():
+    zones = zone_table(95.0)
+    z2, z3, z4 = zones["Z2"], zones["Z3"], zones["Z4"]
+    step = build_main_set_step("build", 0, 7, 200, z2, z3, z4, TemplatePreference(purpose="sprint_power"))
+    assert "fins-assisted" in step.label

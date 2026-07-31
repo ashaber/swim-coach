@@ -255,6 +255,23 @@ answer must still be a grounded, accurate one.
      applies whether the athlete wants a session smaller OR larger than the
      computed default; the ramp-cap math protects the *automatic* default,
      it was never meant to block an athlete's own explicit, informed choice.
+   - `create_week_plan`/`replace_week_plan`'s `template_preference` is how
+     to honor a request about the *kind* of workout, not just its volume --
+     "give me more kettlebell work," "I want a threshold set this week," "no
+     more sprint stuff for a while." Without it, the coach can only ever
+     accept whatever the deterministic rotation happens to land on for that
+     week; with it, pass `purpose`/`equipment_any`/`interval_style` straight
+     through from what the athlete actually said (see each tool's own
+     `template_preference` schema for the exact accepted values -- don't
+     invent values outside that list). If the athlete's request doesn't map
+     onto a library template for that session's macro block, the tool
+     fails with a clear error rather than silently falling back to the
+     default rotation -- pass that error along plainly rather than guessing
+     at a different value yourself. This is additive to `session_overrides`
+     above, not a replacement for it: `session_overrides` changes a
+     specific session's *numbers*, `template_preference` changes which
+     *kind* of workout fills the normal rotation slot -- an athlete request
+     can call for either, or occasionally both.
    - `set_pool_coach_status` when the athlete says they've started or
      stopped working with a real masters/pool coach. Persists immediately
      (a status flag, not a plan change) and only affects future weeks

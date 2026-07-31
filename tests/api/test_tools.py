@@ -1549,6 +1549,132 @@ def test_replace_week_plan_end_to_end_pool_coach_status_change_regression(athlet
         assert s.structure.strip() != ""
 
 
+# --- template_preference (create_week_plan / replace_week_plan) --------------
+# 2026-W32 (2026-08-03 .. 2026-08-09) is the build block's FIRST week
+# (week_index_in_block == 0 -- the macro's real block boundaries in
+# athletes/renee/plan/macro.yaml have "build" starting exactly 2026-08-03, a
+# Monday) and has no week file in the fixture (only W28/W29 exist). With no
+# preference, selector == 0 deterministically picks "build-0-descend" (the
+# alphabetically-first of 16 build/peak/taper candidates -- see
+# tests/unit/test_workout_templates.py's own rotation tests). Requesting
+# `template_preference={"purpose": "sprint_power"}` narrows the pool to the
+# 4 sprint_power templates, whose alphabetically-first member
+# ("build-f-straight-repeat-sprints", a fins-assisted sprint set) is
+# genuinely different prose from the default -- proving the preference
+# actually changes which template gets selected rather than being accepted
+# and silently ignored.
+
+
+def _additional_swim_session(week):
+    return next(s for s in week.sessions if s.purpose == "additional pool-independent aerobic volume")
+
+
+def test_create_week_plan_default_rotation_picks_build_0_descend(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["create_week_plan"]({"iso_week": "2026-W32"})
+    assert "error" not in result
+
+    week = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W32")
+    session = _additional_swim_session(week)
+    assert "descend" in session.structure.lower()
+    assert "fins-assisted" not in session.structure
+
+
+def test_create_week_plan_with_template_preference_changes_selected_template(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["create_week_plan"](
+        {"iso_week": "2026-W32", "template_preference": {"purpose": "sprint_power"}}
+    )
+    assert "error" not in result
+
+    week = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W32")
+    session = _additional_swim_session(week)
+    assert "fins-assisted" in session.structure
+
+
+def test_create_week_plan_invalid_template_preference_purpose_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["create_week_plan"](
+        {"iso_week": "2026-W32", "template_preference": {"purpose": "not_a_real_purpose"}}
+    )
+    assert "error" in result
+    assert "template_preference" in result["error"]
+    assert FileStore(base_dir=athletes_dir).load_week("renee", "2026-W32") is None
+
+
+def test_create_week_plan_template_preference_matching_nothing_is_a_clean_error(athletes_dir) -> None:
+    # 2026-W30 falls in the base block, which has no sprint_power template
+    # (only "aerobic_base" purpose templates apply to "base").
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["create_week_plan"](
+        {"iso_week": "2026-W30", "template_preference": {"purpose": "sprint_power"}}
+    )
+    assert "error" in result
+    assert "no workout templates match" in result["error"]
+    assert FileStore(base_dir=athletes_dir).load_week("renee", "2026-W30") is None
+
+
+def test_replace_week_plan_with_template_preference_changes_selected_template_on_confirm(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    # Establish the default-rotation baseline first.
+    handlers["create_week_plan"]({"iso_week": "2026-W32"})
+    baseline_week = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W32")
+    baseline_session = _additional_swim_session(baseline_week)
+    assert "fins-assisted" not in baseline_session.structure
+
+    result = handlers["replace_week_plan"](
+        {
+            "iso_week": "2026-W32",
+            "confirm": True,
+            "template_preference": {"purpose": "sprint_power"},
+        }
+    )
+    assert "error" not in result
+    assert result["persisted"] is True
+
+    reloaded_week = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W32")
+    reloaded_session = _additional_swim_session(reloaded_week)
+    assert "fins-assisted" in reloaded_session.structure
+
+
+def test_replace_week_plan_template_preference_draft_mode_does_not_persist(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    handlers["create_week_plan"]({"iso_week": "2026-W32"})
+
+    result = handlers["replace_week_plan"](
+        {"iso_week": "2026-W32", "template_preference": {"purpose": "sprint_power"}}
+    )
+    assert "error" not in result
+    assert result["persisted"] is False
+
+    # Still the unconstrained default on disk -- draft mode never persisted.
+    week = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W32")
+    session = _additional_swim_session(week)
+    assert "fins-assisted" not in session.structure
+
+
+def test_replace_week_plan_invalid_template_preference_interval_style_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["replace_week_plan"](
+        {"iso_week": "2026-W28", "template_preference": {"interval_style": "not_a_real_style"}}
+    )
+    assert "error" in result
+    assert "template_preference" in result["error"]
+
+
 # --- set_event_active_status ---------------------------------------------------
 
 

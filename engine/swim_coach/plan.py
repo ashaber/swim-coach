@@ -41,7 +41,12 @@ from swim_coach.models import (
     WorkoutStructure,
     WorkoutTarget,
 )
-from swim_coach.workout_templates import build_main_set_step, render_prose, resolve_template
+from swim_coach.workout_templates import (
+    TemplatePreference,
+    build_main_set_step,
+    render_prose,
+    resolve_template,
+)
 from swim_coach.zones import zone_table
 
 EventFormat = Literal["single_day", "multi_day_stage"]
@@ -438,7 +443,11 @@ def _strength_session_structure(session_index: int) -> str:
 
 
 def _additional_swim_structure(
-    macro_block_name: str, distance_m: int, css_pace_s: float, selector: int = 0
+    macro_block_name: str,
+    distance_m: int,
+    css_pace_s: float,
+    selector: int = 0,
+    template_preference: TemplatePreference | None = None,
 ) -> str:
     """Warm-up / main-set / cool-down text for the "additional"
     pool-independent aerobic swim_ow session (the `remainder >=
@@ -492,16 +501,29 @@ def _additional_swim_structure(
     (González-Ravé et al. 2021; Pla et al. 2019) backing the phase shift --
     identical wording regardless of which template within the block was
     selected.
+
+    `template_preference` (optional): passed straight through to
+    `_additional_swim_structure_template`/`build_main_set_step` -- narrows
+    the main-set template rotation to candidates matching the preference
+    (e.g. a coach-requested `purpose`/`equipment_any`/`interval_style`)
+    instead of the default blind `selector % count` pick. See
+    `swim_coach.workout_templates.TemplatePreference`.
     """
     if distance_m <= 0:
         return "No additional pool-independent volume this week."
 
-    template = _additional_swim_structure_template(macro_block_name, distance_m, css_pace_s, selector)
+    template = _additional_swim_structure_template(
+        macro_block_name, distance_m, css_pace_s, selector, template_preference
+    )
     return render_prose(template)
 
 
 def _additional_swim_structure_template(
-    macro_block_name: str, distance_m: int, css_pace_s: float, selector: int = 0
+    macro_block_name: str,
+    distance_m: int,
+    css_pace_s: float,
+    selector: int = 0,
+    template_preference: TemplatePreference | None = None,
 ) -> WorkoutStructure:
     """Build the `WorkoutStructure` TEMPLATE for the "additional"
     pool-independent aerobic swim_ow session -- the structural counterpart
@@ -577,7 +599,9 @@ def _additional_swim_structure_template(
     # `FORMAT_STRATEGIES`, and `build_main_set_step`'s deterministic
     # `selector % <template count>` rotation, same contract as before this
     # migration).
-    main_set_step = build_main_set_step(macro_block_name, selector, reps, rep, z2, z3, z4)
+    main_set_step = build_main_set_step(
+        macro_block_name, selector, reps, rep, z2, z3, z4, template_preference
+    )
 
     cooldown_step = WorkoutStep(
         label=f"{cool_down}m easy choice of stroke.",
@@ -745,8 +769,22 @@ def generate_week(
     iso_week: str,
     week_start: date,
     event_format: EventFormat = "single_day",
+    template_preference: TemplatePreference | None = None,
 ) -> WeekPlan:
     """Generate one week's sessions.
+
+    `template_preference` (optional): forwarded to every call site that
+    picks a main-set template via the "additional pool-independent swim"
+    generator (`_additional_swim_structure`/`_additional_swim_structure_
+    template`) -- the no-pool-coach weekday pool sessions and the pool-
+    independent "additional" swim_ow session, both of which otherwise land
+    on whatever the deterministic `selector % count` rotation picks. Lets a
+    chat request like "give me more kettlebell work this week" (via
+    `backend/app/tools.py`'s `create_week_plan`/`replace_week_plan`) actually
+    change which template gets selected. Does NOT affect the strength
+    session template (`_strength_session_structure_template` has its own,
+    separate rotation, out of scope for this pass) or the long swim/recovery
+    sessions (neither uses the template library at all).
 
     Weekly target volume interpolates *linearly* within the containing
     block, from the block's start volume (see `_block_start_volume`) to
@@ -877,12 +915,20 @@ def generate_week(
                     intensity={"anchor": "rpe"},
                     purpose=_no_coach_pool_purpose(block.name),
                     structure=_additional_swim_structure(
-                        block.name, no_coach_pool_distance_m, css_pace_s, week_index_in_block
+                        block.name,
+                        no_coach_pool_distance_m,
+                        css_pace_s,
+                        week_index_in_block,
+                        template_preference,
                     ),
                     structured=(
                         resolve_template(
                             _additional_swim_structure_template(
-                                block.name, no_coach_pool_distance_m, css_pace_s, week_index_in_block
+                                block.name,
+                                no_coach_pool_distance_m,
+                                css_pace_s,
+                                week_index_in_block,
+                                template_preference,
                             ),
                             athlete,
                         )
@@ -1027,11 +1073,19 @@ def generate_week(
                 intensity={"zone": "Z2", "anchor": "css_pace"},
                 purpose="additional pool-independent aerobic volume",
                 structure=_additional_swim_structure(
-                    block.name, additional_distance, css_pace_s, week_index_in_block
+                    block.name,
+                    additional_distance,
+                    css_pace_s,
+                    week_index_in_block,
+                    template_preference,
                 ),
                 structured=resolve_template(
                     _additional_swim_structure_template(
-                        block.name, additional_distance, css_pace_s, week_index_in_block
+                        block.name,
+                        additional_distance,
+                        css_pace_s,
+                        week_index_in_block,
+                        template_preference,
                     ),
                     athlete,
                 ),

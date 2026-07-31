@@ -1,5 +1,6 @@
 schema_version: 1
 id: build-l-descending-ladder-breathing-filler
+purpose: technique
 applicable_blocks: [build, peak, taper]
 format_type: descending_ladder
 narrative_template: "Main set: descending-distance ladder -- {rung_list} -- each rung at moderate-to-strong effort under a breathing-pattern constraint, from Z3 ({z3_range}) toward Z4 ({z4_range}) as the distance shrinks, with a short fixed filler set of quick 25s worked in between every rung -- echoes the Breathing Pattern workout's 400-300-200-100 ladder with an 8x25 filler between rungs -- race-pace-adjacent emphasis ({macro_block_name} block)."

@@ -4,7 +4,7 @@ import {
   classifySession, sessionDisplay, deriveSessionTitle, findSessionById,
   pickCurrentAndNextWeek, daysUntil,
   priorityEvent, macroTargetEvent, currentBlockIndex, longSwimLadder, sessionsByDay,
-  parseStructureBlocks, parseMainSetIntervals,
+  parseStructureBlocks, parseMainSetIntervals, renderStructuredWorkout,
 } from '../../src/plan.js';
 
 describe('isoWeekMonday', () => {
@@ -239,6 +239,151 @@ describe('parseMainSetIntervals', () => {
   it('returns an empty array for null/empty content', () => {
     expect(parseMainSetIntervals(null)).toEqual([]);
     expect(parseMainSetIntervals('')).toEqual([]);
+  });
+});
+
+describe('renderStructuredWorkout', () => {
+  // Synthetic `WorkoutStructure` fixtures matching PR #91's real model
+  // shape (engine/swim_coach/models.py's WorkoutStep/WorkoutRepeat: `kind`
+  // discriminator, `role`, `duration_kind`/`duration_value`, `target`/
+  // `load`, `modality`, `stroke`, `equipment`, `exercise_name` for steps;
+  // `repeat_mode`/`count`/`duration_s`/`interval_s`/`steps` for repeats) --
+  // not raw JSON dumps of real generated content, since this function must
+  // walk the tree generically regardless of which real template produced it.
+
+  it('a plain step list (no repeats): warmup/rest/cooldown, one line each', () => {
+    const structured = {
+      items: [
+        {
+          kind: 'step', label: 'Easy swim', role: 'warmup', duration_kind: 'distance_m',
+          duration_value: 400, target: { basis: 'zone', zone: 'Z2' }, load: null,
+          modality: 'swim', stroke: null, equipment: [], exercise_name: null,
+        },
+        {
+          kind: 'step', label: 'Rest', role: 'rest', duration_kind: 'time_s',
+          duration_value: 15, target: null, load: null,
+          modality: 'swim', stroke: null, equipment: [], exercise_name: null,
+        },
+        {
+          kind: 'step', label: 'Cool down easy', role: 'cooldown', duration_kind: 'distance_m',
+          duration_value: 200, target: null, load: null,
+          modality: 'swim', stroke: null, equipment: [], exercise_name: null,
+        },
+      ],
+    };
+    expect(renderStructuredWorkout(structured)).toEqual([
+      // Top-level warmup/cooldown: label is already the full narrated text
+      // (real generated content bakes distance AND target into it -- see
+      // structuredStepDetail's doc comment), so detail is suppressed
+      // entirely to avoid repeating it.
+      { depth: 0, kind: 'step', text: 'Warm-up: Easy swim', detail: null },
+      // "Rest 15s" -- exactly the plan's own illustrative example. `rest`
+      // isn't a narrated role, so its short label needs this annotation.
+      { depth: 0, kind: 'step', text: 'Rest', detail: '15s' },
+      { depth: 0, kind: 'step', text: 'Cool-down: Cool down easy', detail: null },
+    ]);
+  });
+
+  it('a count-based repeat: "2 x:" header, children indented one level with reps shown (bodyweight load suppressed)', () => {
+    const structured = {
+      items: [
+        {
+          kind: 'repeat', repeat_mode: 'count', count: 2, duration_s: null, interval_s: null,
+          steps: [
+            {
+              kind: 'step', label: 'Band pull-apart', role: 'steady', duration_kind: 'reps',
+              duration_value: 10, target: null, load: { basis: 'bodyweight', value: null },
+              modality: 'strength', stroke: null, equipment: [], exercise_name: 'Band pull-apart',
+            },
+            {
+              kind: 'step', label: 'Prone Y-raise', role: 'steady', duration_kind: 'reps',
+              duration_value: 10, target: null, load: { basis: 'bodyweight', value: null },
+              modality: 'strength', stroke: null, equipment: [], exercise_name: 'Prone Y-raise',
+            },
+          ],
+        },
+      ],
+    };
+    expect(renderStructuredWorkout(structured)).toEqual([
+      { depth: 0, kind: 'repeat', text: '2 x:', detail: null },
+      { depth: 1, kind: 'step', text: 'Band pull-apart', detail: '10 reps' },
+      { depth: 1, kind: 'step', text: 'Prone Y-raise', detail: '10 reps' },
+    ]);
+  });
+
+  it('a for_duration (EMOM-style) repeat derives its round count from duration_s/interval_s, e.g. "EMOM x10 (every 60s):"', () => {
+    const structured = {
+      items: [
+        {
+          kind: 'repeat', repeat_mode: 'for_duration', count: null, duration_s: 600, interval_s: 60,
+          steps: [
+            {
+              kind: 'step', label: 'Kettlebell swing', role: 'steady', duration_kind: 'reps',
+              duration_value: 15, target: null, load: { basis: 'percent_1rm', value: 40 },
+              modality: 'strength', stroke: null, equipment: [], exercise_name: 'Kettlebell swing',
+            },
+          ],
+        },
+      ],
+    };
+    expect(renderStructuredWorkout(structured)).toEqual([
+      { depth: 0, kind: 'repeat', text: 'EMOM x10 (every 60s):', detail: null },
+      { depth: 1, kind: 'step', text: 'Kettlebell swing', detail: '15 reps · @ 40% 1RM' },
+    ]);
+  });
+
+  it('an amrap repeat shows its total window as "AMRAP for {mm:ss}:"', () => {
+    const structured = {
+      items: [
+        {
+          kind: 'repeat', repeat_mode: 'amrap', count: null, duration_s: 720, interval_s: null,
+          steps: [
+            {
+              kind: 'step', label: 'Burpee', role: 'steady', duration_kind: 'reps',
+              duration_value: 10, target: null, load: { basis: 'bodyweight', value: null },
+              modality: 'strength', stroke: null, equipment: [], exercise_name: 'Burpee',
+            },
+            {
+              kind: 'step', label: 'Rest', role: 'rest', duration_kind: 'time_s',
+              duration_value: 10, target: null, load: null,
+              modality: 'strength', stroke: null, equipment: [], exercise_name: null,
+            },
+          ],
+        },
+      ],
+    };
+    expect(renderStructuredWorkout(structured)).toEqual([
+      { depth: 0, kind: 'repeat', text: 'AMRAP for 12:00:', detail: null },
+      { depth: 1, kind: 'step', text: 'Burpee', detail: '10 reps' },
+      { depth: 1, kind: 'step', text: 'Rest', detail: '10s' },
+    ]);
+  });
+
+  it('a nested (non-top-level) swim interval shows its own distance/target/stroke/equipment -- only top-level narrated steps suppress duration', () => {
+    const structured = {
+      items: [
+        {
+          kind: 'repeat', repeat_mode: 'count', count: 4, duration_s: null, interval_s: null,
+          steps: [
+            {
+              kind: 'step', label: '100 build', role: 'interval', duration_kind: 'distance_m',
+              duration_value: 100, target: { basis: 'percent_css', low: 130, high: 140 }, load: null,
+              modality: 'swim', stroke: 'fly', equipment: ['paddles'], exercise_name: null,
+            },
+          ],
+        },
+      ],
+    };
+    expect(renderStructuredWorkout(structured)).toEqual([
+      { depth: 0, kind: 'repeat', text: '4 x:', detail: null },
+      { depth: 1, kind: 'step', text: '100 build', detail: '100m · @ 130-140% CSS · Fly · paddles' },
+    ]);
+  });
+
+  it('returns [] for a missing/empty structured tree (regression: fallback callers must be able to rely on this)', () => {
+    expect(renderStructuredWorkout(null)).toEqual([]);
+    expect(renderStructuredWorkout(undefined)).toEqual([]);
+    expect(renderStructuredWorkout({ items: [] })).toEqual([]);
   });
 });
 
