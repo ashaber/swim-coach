@@ -2,5 +2,5 @@ schema_version: 1
 id: build-k-descending-ladder-kick
 applicable_blocks: [build, peak, taper]
 format_type: descending_ladder
-narrative_template: "Main set: descending-distance kick ladder -- {rung_list} -- same sprint-character effort held on every rung as the distance halves down the ladder, negative-split feel from Z3 ({z3_range}) toward Z4 ({z4_range}) -- echoes the All About Those Legs workout's halving-distance kick ladder (200-100-50-25) -- race-pace-adjacent emphasis ({macro_block_name} block)."
+narrative_template: "Main set: descending-distance kick ladder -- {rung_list} -- same sprint-character effort held on every rung as the distance shrinks rung to rung, negative-split feel from Z3 ({z3_range}) toward Z4 ({z4_range}) -- echoes the All About Those Legs workout's halving-distance kick ladder (200-100-50-25) -- race-pace-adjacent emphasis ({macro_block_name} block)."
 source_note: "Adapted from a workout published by Kris Goodrich, U.S. Masters Swimming (usms.org), 'Best 3,000-Yard Swimming Workouts', January 2, 2024 (Workout 1, All About Those Legs -- a 200/100/50/25 halving-distance, doubling-count kick ladder)."
