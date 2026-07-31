@@ -1,0 +1,6 @@
+schema_version: 1
+id: build-d-descend-freestyle-focus
+applicable_blocks: [build, peak, taper]
+format_type: descend
+narrative_template: "Main set: {reps} x {rep}m broken-distance freestyle, descend 1-{reps} from Z3 ({z3_range}) toward Z4 ({z4_range}) by the final rep, negative-split each repeat -- echoes Freestyle Focus's three rotations of smooth swim, kick-swim, and a descend-1-3 block, all freestyle -- race-pace-adjacent emphasis ({macro_block_name} block)."
+source_note: "Adapted from a workout published by Kris Goodrich, U.S. Masters Swimming (usms.org), 'Best 3,000-Yard Swimming Workouts', January 2, 2024 (Workout 3, Freestyle Focus)."
