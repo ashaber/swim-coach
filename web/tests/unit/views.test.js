@@ -444,6 +444,44 @@ describe('renderApp plan session detail view (click-to-detail)', () => {
     expect(html).toContain('  - Prone Y-raise');
   });
 
+  it('does not render a Garmin download button when structured is absent', () => {
+    const html = renderApp(PLAN_DATA, MAIN_SET_SESSION.id);
+    expect(html).not.toContain('session:garmin-download');
+  });
+
+  it('renders a Garmin download button for a session with structured populated', () => {
+    const STRUCTURED_SESSION = {
+      id: 's-structured',
+      date: dateKey(addDays(weekMonday, 5)),
+      sport: 'swim_pool',
+      source: 'ai_coach',
+      duration_min: 45,
+      distance_m: 1600,
+      intensity: { zone: 'Z3' },
+      purpose: 'garmin-exportable session',
+      structure: 'Main set: 4x200 @ Z3',
+      structured: {
+        schema_version: 1,
+        items: [
+          {
+            schema_version: 1,
+            kind: 'step',
+            label: '4x200 @ Z3',
+            role: 'interval',
+            duration_kind: 'distance_m',
+            duration_value: 800,
+            modality: 'swim',
+            equipment: [],
+          },
+        ],
+      },
+    };
+    const data = { ...PLAN_DATA, weeks: [{ ...WEEK, sessions: [...WEEK.sessions, STRUCTURED_SESSION] }] };
+    const html = renderApp(data, STRUCTURED_SESSION.id);
+    expect(html).toContain(`data-a="session:garmin-download" data-id="${STRUCTURED_SESSION.id}"`);
+    expect(html).toContain('Download for Garmin');
+  });
+
   it('renders a sensible, non-blank detail view for a session with no structure at all', () => {
     const html = renderApp(PLAN_DATA, NO_STRUCTURE_SESSION.id);
     expect(html).toContain('data-a="session:back"');

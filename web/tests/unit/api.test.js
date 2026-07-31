@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   postWorkout, listWorkouts, postWellness, listWellness, fetchPlan, getAthlete, patchAthlete,
   postFeedback, listFeedback, uploadWorkoutFile, exchangeGoogleToken, RequestAccessError, logout,
-  onboard, OnboardForbiddenError, OnboardConflictError,
+  onboard, OnboardForbiddenError, OnboardConflictError, downloadGarminFit,
 } from '../../src/api.js';
 
 function fakeFetch(body, { ok = true, status = 200 } = {}) {
@@ -10,6 +10,20 @@ function fakeFetch(body, { ok = true, status = 200 } = {}) {
     ok,
     status,
     json: async () => body,
+  });
+}
+
+/** Mocks a binary (non-JSON-success) response, for `downloadGarminFit`.
+ * `errorBody` backs `.json()` too -- only ever consulted on the non-2xx
+ * path (via `safeErrorMessage`), same as every other error-shaped mock in
+ * this file. */
+function fakeBlobFetch(blobContent, { ok = true, status = 200, contentDisposition = '', errorBody } = {}) {
+  return vi.fn().mockResolvedValue({
+    ok,
+    status,
+    headers: { get: (name) => (name === 'content-disposition' ? contentDisposition : null) },
+    blob: async () => new Blob([blobContent]),
+    json: async () => errorBody,
   });
 }
 
@@ -194,6 +208,70 @@ describe('patchAthlete', () => {
       baseUrl: 'https://api.example.com', token: 'tok', athlete: 'andrew', payload: {},
     });
     expect(result).toEqual({ ok: false, error: 'invalid sex', status: 422 });
+  });
+});
+
+describe('downloadGarminFit', () => {
+  it('GETs /api/sessions/{id}/garmin.fit with the athlete query param and bearer header, returns a Blob + filename', async () => {
+    global.fetch = fakeBlobFetch('fake fit bytes', {
+      contentDisposition: 'attachment; filename="2026-07-08-swim_pool.fit"',
+    });
+
+    const result = await downloadGarminFit({
+      baseUrl: 'https://api.example.com', token: 'tok123', athlete: 'renee', sessionId: 'sess-1',
+    });
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/sessions/sess-1/garmin.fit?athlete=renee');
+    expect(init.headers.Authorization).toBe('Bearer tok123');
+    expect(result.ok).toBe(true);
+    expect(result.blob).toBeInstanceOf(Blob);
+    expect(result.filename).toBe('2026-07-08-swim_pool.fit');
+  });
+
+  it('defaults to athlete=renee when not given', async () => {
+    global.fetch = fakeBlobFetch('x');
+    await downloadGarminFit({ baseUrl: 'https://api.example.com', token: 't', sessionId: 'sess-1' });
+    const [url] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/sessions/sess-1/garmin.fit?athlete=renee');
+  });
+
+  it('falls back to a {sessionId}.fit filename when Content-Disposition has no filename', async () => {
+    global.fetch = fakeBlobFetch('x', { contentDisposition: '' });
+    const result = await downloadGarminFit({
+      baseUrl: 'https://api.example.com', token: 't', sessionId: 'sess-1',
+    });
+    expect(result.filename).toBe('sess-1.fit');
+  });
+
+  it('returns a normalized error on a 404 (no structured data yet)', async () => {
+    global.fetch = fakeBlobFetch('', {
+      ok: false, status: 404, errorBody: { error: 'this session has no structured workout data to export' },
+    });
+    const result = await downloadGarminFit({
+      baseUrl: 'https://api.example.com', token: 't', sessionId: 'sess-1',
+    });
+    expect(result).toEqual({
+      ok: false, error: 'this session has no structured workout data to export', status: 404,
+    });
+  });
+
+  it('returns a normalized error on a 401 so main.js can single it out via handleUnauthorized', async () => {
+    global.fetch = fakeBlobFetch('', { ok: false, status: 401, errorBody: { error: 'invalid token' } });
+    const result = await downloadGarminFit({
+      baseUrl: 'https://api.example.com', token: 't', sessionId: 'sess-1',
+    });
+    expect(result).toEqual({ ok: false, error: 'invalid token', status: 401 });
+  });
+
+  it('returns a normalized error when fetch itself rejects (offline)', async () => {
+    global.fetch = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    const result = await downloadGarminFit({
+      baseUrl: 'https://api.example.com', token: 't', sessionId: 'sess-1',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/connection|reach/i);
   });
 });
 

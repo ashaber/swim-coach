@@ -11,6 +11,14 @@ dependencies = [
     "pydantic>=2.7",
     "PyYAML>=6.0",
     "fitdecode>=0.10",
+    # FIT-file WRITING (garmin_export.py) -- fitdecode above is read-only.
+    # `fit_tool` is a community-maintained fork of the original
+    # `python_fit_tool` package (removed from PyPI by its author; this fork
+    # continues publishing under the same name) -- confirmed to implement
+    # WorkoutMessage/WorkoutStepMessage/FitFileBuilder (real FIT-writing
+    # support, not just parsing) before choosing it. See garmin_export.py's
+    # module docstring for the full rationale.
+    "fit_tool>=0.9,<1.0",
 ]
 
 [project.optional-dependencies]

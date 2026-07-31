@@ -260,6 +260,53 @@ export async function getAthlete({ baseUrl, token, athlete }) {
   return apiRequest({ baseUrl, token, path: `/api/athlete?athlete=${encodeURIComponent(athlete)}` });
 }
 
+/**
+ * GET {baseUrl}/api/sessions/{sessionId}/garmin.fit?athlete=<slug> --
+ * downloads a session's structured workout as a real Garmin .FIT file (see
+ * backend/app/routes/garmin.py). Deliberately not built on the shared
+ * `apiRequest` helper: that helper always parses the response body as JSON,
+ * but a successful response here is binary (`application/vnd.ant.fit`), so
+ * this calls `response.blob()` instead. A non-2xx response IS still JSON
+ * either way (the backend's exception handlers always return `{error}`
+ * bodies regardless of the route's own success content-type), so error
+ * handling still normalizes to the same `{ok: false, error, status}` shape
+ * every other function here uses -- `main.js`'s `handleUnauthorized` keeps
+ * working unchanged against this function's result too.
+ *
+ * The filename on success comes from the response's `Content-Disposition`
+ * header (the backend names it `<date>-<sport>.fit`) rather than being
+ * constructed client-side, so the two never drift apart.
+ */
+export async function downloadGarminFit({ baseUrl, token, athlete = 'renee', sessionId }) {
+  const path = `/api/sessions/${encodeURIComponent(sessionId)}/garmin.fit?athlete=${encodeURIComponent(athlete)}`;
+  let response;
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch (err) {
+    log.error('api.download_failed', { path, error: err.message });
+    return { ok: false, error: 'Could not reach the coach backend. Check your connection and Settings.' };
+  }
+
+  if (!response.ok) {
+    const message = await safeErrorMessage(response);
+    log.error('api.response_not_ok', { path, status: response.status, error: message });
+    return { ok: false, error: message, status: response.status };
+  }
+
+  try {
+    const blob = await response.blob();
+    const disposition = response.headers.get('content-disposition') || '';
+    const match = disposition.match(/filename="([^"]+)"/);
+    const filename = match ? match[1] : `${sessionId}.fit`;
+    return { ok: true, blob, filename };
+  } catch (err) {
+    log.error('api.parse_failed', { path, error: err.message });
+    return { ok: false, error: 'Unexpected response from backend.', status: response.status };
+  }
+}
+
 /** PATCH {baseUrl}/api/athlete?athlete=<slug> -- saves edited profile fields
  * (see forms.js's serializeProfileForm for the payload shape). */
 export async function patchAthlete({ baseUrl, token, athlete, payload }) {

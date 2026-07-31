@@ -15,6 +15,7 @@ import { loadSettings, saveSettings, isConfigured } from './settings.js';
 import {
   streamChat, postWorkout, postWellness, fetchPlan, getAthlete, patchAthlete,
   postFeedback, listFeedback, uploadWorkoutFile, listWorkouts, syncWorkouts, logout, onboard,
+  downloadGarminFit,
 } from './api.js';
 import {
   serializeWorkoutForm, serializeWellnessForm, profileFormFromAthlete, serializeProfileForm,
@@ -595,6 +596,43 @@ function handleOpenSessionDetail(id) {
   scrollToTop(); // land on the detail content -- was a gap in both this and
   // handleOpenHistoryDetail (neither scrolled), so the page previously
   // stayed wherever it was scrolled (e.g. down near the macro section).
+}
+
+/** Downloads a session's Garmin `.fit` file (see views.js's
+ * renderGarminDownload / backend/app/routes/garmin.py) and saves it via a
+ * synthetic, momentarily-appended `<a download>` -- the standard
+ * Blob-to-file-save pattern, since a plain `<a href>` pointing straight at
+ * the API can't carry the `Authorization` header the route requires. */
+async function handleDownloadGarminFit(sessionId) {
+  if (!sessionId) return;
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) {
+    state.tab = 'settings';
+    saveActiveTab(state.tab);
+    render();
+    return;
+  }
+
+  log.info('plan.garmin_download_requested', { athlete: athleteSlug(), session_id: sessionId });
+  const result = await downloadGarminFit({
+    baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), sessionId,
+  });
+  if (handleUnauthorized(result)) return;
+  if (!result.ok) {
+    log.error('plan.garmin_download_failed', { athlete: athleteSlug(), session_id: sessionId, error: result.error });
+    window.alert(`Couldn't download the Garmin file: ${result.error}`);
+    return;
+  }
+
+  const url = URL.createObjectURL(result.blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = result.filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  log.info('plan.garmin_download_completed', { athlete: athleteSlug(), session_id: sessionId });
 }
 
 function handleCloseSessionDetail() {
@@ -1262,6 +1300,7 @@ async function onAppClick(e) {
     case 'session:open': handleOpenSessionDetail(el.dataset.id); break;
     // Same history.back()-not-direct-close reasoning as history:back above.
     case 'session:back': history.back(); break;
+    case 'session:garmin-download': await handleDownloadGarminFit(el.dataset.id); break;
     // Awaited (unlike every other handler above) so the server-side revoke
     // this now does (see performSignOut) actually fires before this handler
     // returns, rather than being fired-and-forgotten mid-click.

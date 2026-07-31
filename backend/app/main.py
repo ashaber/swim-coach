@@ -23,6 +23,7 @@ from app.routes.athlete import router as athlete_router
 from app.routes.auth import router as auth_router
 from app.routes.chat import router as chat_router
 from app.routes.feedback import router as feedback_router
+from app.routes.garmin import router as garmin_router
 from app.routes.onboard import router as onboard_router
 from app.routes.plan import router as plan_router
 from app.routes.wellness import router as wellness_router
@@ -57,6 +58,18 @@ def create_app() -> FastAPI:
         # preflight itself, so it never exercises this middleware.
         allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type"],
+        # `Content-Disposition` isn't one of the CORS "simple response
+        # headers" a cross-origin `fetch` can read by default -- without
+        # exposing it explicitly here, `response.headers.get(
+        # 'content-disposition')` silently returns null in the browser even
+        # though the server sends it correctly (curl/TestClient both see it
+        # fine, since neither enforces CORS) -- so `web/src/api.js`'s
+        # `downloadGarminFit` always fell back to its generic
+        # `{sessionId}.fit` filename. Caught by driving the real (unmocked)
+        # backend through a real browser (GET /api/sessions/{id}/garmin.fit),
+        # not by the API test suite alone (TestClient doesn't enforce CORS
+        # header-exposure rules either).
+        expose_headers=["Content-Disposition"],
     )
 
     @app.middleware("http")
@@ -94,6 +107,7 @@ def create_app() -> FastAPI:
     app.include_router(feedback_router)
     app.include_router(auth_router)
     app.include_router(onboard_router)
+    app.include_router(garmin_router)
 
     log.info(
         "service start",
