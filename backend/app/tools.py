@@ -92,8 +92,9 @@ from pydantic import ValidationError
 
 from swim_coach.adapt import adapt_week
 from swim_coach.models import Event, Feedback, Workout
-from swim_coach.plan import generate_week, scaffold_macro
+from swim_coach.plan import _duration_min_for_distance, generate_week, scaffold_macro
 from swim_coach.store import StoreInterface
+from swim_coach.workout_templates import TemplatePreference
 
 from app.context import iso_week_str, summarize_rollup
 from app.logging_config import get_logger
@@ -115,6 +116,55 @@ GET_WORKOUTS_CAP = 20
 # app.sync.ON_DEMAND_SYNC_WINDOW_DAYS's docstring for why. Re-exported under
 # this name for backward compatibility (existing tests import it from here).
 SYNC_WORKOUTS_WINDOW_DAYS = ON_DEMAND_SYNC_WINDOW_DAYS
+
+# Shared `template_preference` schema for `create_week_plan`/`replace_week_plan`
+# (see `_parse_template_preference` below) -- the tool-facing surface for
+# `swim_coach.workout_templates.find_templates`/`TemplatePreference`, letting
+# the coach honor a request like "more kettlebell work" or "give me a
+# threshold set" instead of only ever getting whatever `generate_week`'s
+# normally-blind selector%count rotation lands on. Deliberately mirrors
+# `TemplatePreference`'s own three fields exactly (not `find_templates`'
+# full signature) -- `modality`/`block`/`max_duration_s` don't make sense as
+# a model-facing dial here (see `TemplatePreference`'s docstring).
+TEMPLATE_PREFERENCE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "description": (
+        "Narrows which workout-library template generate_week's "
+        "pool-independent swim sessions use this week. Omit entirely for "
+        "the normal default rotation."
+    ),
+    "properties": {
+        "purpose": {
+            "type": "string",
+            "description": (
+                "One of WorkoutTemplate.purpose's values: 'aerobic_base', "
+                "'threshold', 'race_pace', 'technique', 'sprint_power', "
+                "'recovery', 'strength_endurance', 'max_strength', "
+                "'posterior_chain'."
+            ),
+        },
+        "equipment_any": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Match a template using ANY of these equipment items, e.g. "
+                "['kettlebell', 'paddles', 'fins']. Note: no shipped swim "
+                "main-set template uses structured equipment tagging yet as "
+                "of this pass -- this filter is real and tested, but will "
+                "currently match nothing for swim sessions until such "
+                "templates exist."
+            ),
+        },
+        "interval_style": {
+            "type": "string",
+            "description": (
+                "One of TemplateFacets.interval_style's values: 'straight', "
+                "'intervals', 'emom', 'amrap'."
+            ),
+        },
+    },
+    "additionalProperties": False,
+}
 
 TOOLS_SCHEMA: list[dict[str, Any]] = [
     {
@@ -442,7 +492,15 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "week instead. Not the right tool for a week that needs "
             "hand-authored content (no pool coach on hand, real open-water "
             "session structure needed) -- that's judgment-authored, not "
-            "generated."
+            "generated.\n\n"
+            "`template_preference` (optional): honors a request like 'give "
+            "me more kettlebell work this week' or 'I want a threshold set' "
+            "by narrowing which main-set workout-library template the "
+            "generated week's pool-independent swim sessions use, instead "
+            "of always landing on whatever the normal deterministic "
+            "rotation picks. Fails with a clear error (rather than silently "
+            "falling back to the default rotation) if the preference "
+            "matches zero library templates for some session's macro block."
         ),
         "input_schema": {
             "type": "object",
@@ -450,7 +508,8 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 "iso_week": {
                     "type": "string",
                     "description": "ISO week to create, formatted 'YYYY-Wnn', e.g. '2026-W30'.",
-                }
+                },
+                "template_preference": TEMPLATE_PREFERENCE_SCHEMA,
             },
             "required": ["iso_week"],
             "additionalProperties": False,
@@ -532,7 +591,25 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "Never pass confirm=true on the first call for a given request, "
             "and never chain another tool call in the same response after the "
             "draft -- stop and wait for the athlete's explicit agreement in a "
-            "new message, same discipline as replace_macro_plan."
+            "new message, same discipline as replace_macro_plan.\n\n"
+            "`session_overrides` (optional): the automatic ramp/volume math "
+            "won't always land on the exact number an athlete explicitly "
+            "wants for a specific session -- e.g. a conservative first swim "
+            "back after time off, where the computed distance is technically "
+            "ramp-safe but still more than the athlete wants right now. Use "
+            "this to set one or more sessions' distance_m/duration_min "
+            "directly, applied on top of the otherwise-normal generated "
+            "week, still fully gated by the same draft-then-confirm flow -- "
+            "never call with confirm=true and a fresh override in the same "
+            "turn the athlete hasn't seen yet.\n\n"
+            "`template_preference` (optional): honors a request like 'give "
+            "me more kettlebell work this week' or 'I want a threshold set' "
+            "by narrowing which main-set workout-library template the "
+            "recomputed week's pool-independent swim sessions use, instead "
+            "of always landing on whatever the normal deterministic "
+            "rotation picks. Fails with a clear error (rather than silently "
+            "falling back to the default rotation) if the preference "
+            "matches zero library templates for some session's macro block."
         ),
         "input_schema": {
             "type": "object",
@@ -552,6 +629,50 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                         "week plan is currently on file for iso_week."
                     ),
                 },
+                "session_overrides": {
+                    "type": "array",
+                    "description": (
+                        "Optional explicit overrides applied to the generated "
+                        "week's sessions before it's returned/persisted. Each "
+                        "entry must match exactly one session already in the "
+                        "generated week (by date, and by sport too if more "
+                        "than one session falls on that date) -- an entry "
+                        "matching zero or more than one session is an error, "
+                        "not a silent no-op or a guess."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "date": {
+                                "type": "string",
+                                "description": "Session date, 'YYYY-MM-DD', must fall within iso_week.",
+                            },
+                            "sport": {
+                                "type": "string",
+                                "description": (
+                                    "Disambiguates when more than one session falls on "
+                                    "`date`. Omit if only one session that day."
+                                ),
+                            },
+                            "distance_m": {
+                                "type": "number",
+                                "description": "New distance for this session, in meters.",
+                            },
+                            "duration_min": {
+                                "type": "number",
+                                "description": (
+                                    "New duration for this session, in minutes. Optional -- "
+                                    "if omitted while distance_m is given, duration is "
+                                    "re-estimated from the new distance at the athlete's pace, "
+                                    "same math the engine itself uses."
+                                ),
+                            },
+                        },
+                        "required": ["date"],
+                        "additionalProperties": False,
+                    },
+                },
+                "template_preference": TEMPLATE_PREFERENCE_SCHEMA,
             },
             "required": ["iso_week"],
             "additionalProperties": False,
@@ -1143,14 +1264,50 @@ def _handle_set_pool_coach_status(input_data: dict[str, Any], *, store: StoreInt
     return {"updated": True, "has_pool_coach": athlete.has_pool_coach}
 
 
+def _parse_template_preference(
+    raw: dict[str, Any] | None,
+) -> tuple[TemplatePreference | None, str | None]:
+    """Parses the optional `template_preference` tool-input dict (see
+    `TEMPLATE_PREFERENCE_SCHEMA`) into a `TemplatePreference`, returning
+    `(preference, error)` where exactly one is non-`None` -- same convention
+    as this module's other input-parsing code, surfacing a clean `{"error":
+    ...}` instead of a raw pydantic traceback reaching the athlete (e.g. an
+    invalid `purpose` value)."""
+    if not raw:
+        return None, None
+    try:
+        return (
+            TemplatePreference(
+                purpose=raw.get("purpose"),
+                equipment_any=raw.get("equipment_any"),
+                interval_style=raw.get("interval_style"),
+            ),
+            None,
+        )
+    except ValidationError as exc:
+        return None, f"invalid template_preference: {exc}"
+
+
 def _handle_create_week_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
     """Calls `swim_coach.plan.generate_week` directly (the same function
     `cli.py`'s `plan-week` command and the `/plan-week` skill use) and
     persists the result -- only for a week that doesn't exist yet at all;
-    an already-active week stays `propose_adaptation`'s job, unchanged."""
+    an already-active week stays `propose_adaptation`'s job, unchanged.
+
+    Optional `template_preference` (see `TEMPLATE_PREFERENCE_SCHEMA`) is
+    forwarded straight through to `generate_week`, narrowing which main-set
+    library template the week's pool-independent swim sessions use instead
+    of the default blind rotation (see `swim_coach.workout_templates.
+    TemplatePreference`/`find_templates`)."""
     iso_week = input_data.get("iso_week")
     if not iso_week:
         return {"error": "iso_week is required"}
+
+    template_preference, preference_error = _parse_template_preference(
+        input_data.get("template_preference")
+    )
+    if preference_error is not None:
+        return {"error": preference_error}
 
     try:
         year_str, week_str = iso_week.split("-W")
@@ -1191,7 +1348,7 @@ def _handle_create_week_plan(input_data: dict[str, Any], *, store: StoreInterfac
     event_format = event.event_format or "single_day"
 
     try:
-        week = generate_week(athlete, macro, iso_week, week_start, event_format)
+        week = generate_week(athlete, macro, iso_week, week_start, event_format, template_preference)
     except ValueError as exc:
         return {"error": str(exc)}
 
@@ -1311,6 +1468,64 @@ def _handle_reschedule_session(input_data: dict[str, Any], *, store: StoreInterf
     }
 
 
+def _apply_session_overrides(week, overrides: list[dict[str, Any]], css_pace_s: float | None) -> str | None:
+    """Applies explicit per-session distance_m/duration_min overrides to an
+    already-generated week's sessions, in place. Returns an error string on
+    the first override that doesn't match exactly one session (no match, or
+    an ambiguous match needing `sport` to disambiguate, same convention as
+    `reschedule_session`'s existing date+sport matching above) -- callers
+    should treat any non-None return as a full failure, not apply the rest
+    and ignore the bad one. `week` is mutated directly (pydantic Session
+    objects are not frozen in this codebase); this is only ever called on a
+    freshly-computed `generate_week()` result, never a stored object another
+    caller might still be holding a reference to.
+    """
+    for override in overrides:
+        raw_date = override.get("date")
+        try:
+            override_date = date.fromisoformat(raw_date)
+        except (TypeError, ValueError):
+            return f"invalid session_overrides date {raw_date!r}; expected 'YYYY-MM-DD'"
+
+        sport = override.get("sport")
+        matches = [
+            s for s in week.sessions
+            if s.date == override_date and (sport is None or s.sport == sport)
+        ]
+        if len(matches) == 0:
+            same_day = [{"sport": s.sport, "date": s.date.isoformat()} for s in week.sessions if s.date == override_date]
+            return (
+                f"session_overrides: no session matching date {raw_date!r}"
+                + (f" and sport {sport!r}" if sport else "")
+                + f"; sessions on {raw_date!r}: {same_day}"
+            )
+        if len(matches) > 1:
+            return (
+                f"session_overrides: {len(matches)} sessions found on {raw_date!r} "
+                f"({', '.join(s.sport for s in matches)}) -- pass `sport` to disambiguate"
+            )
+
+        session = matches[0]
+        distance_m = override.get("distance_m")
+        duration_min = override.get("duration_min")
+        if distance_m is None and duration_min is None:
+            return f"session_overrides: entry for {raw_date!r} needs distance_m and/or duration_min"
+
+        if distance_m is not None:
+            session.distance_m = distance_m
+        if duration_min is not None:
+            session.duration_min = duration_min
+        elif distance_m is not None and css_pace_s is not None:
+            # No explicit duration override -- re-estimate from the new
+            # distance at the athlete's own CSS pace, same rough-estimate
+            # math the engine itself uses (_duration_min_for_distance),
+            # rather than leaving a stale duration paired with a new distance.
+            # If the athlete has no CSS pace on file yet, leave duration_min
+            # as generate_week originally computed it rather than guessing.
+            session.duration_min = max(_duration_min_for_distance(distance_m, css_pace_s), 15.0)
+    return None
+
+
 def _week_sessions_json(week) -> list[dict[str, Any]]:
     return [
         {
@@ -1341,10 +1556,32 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
     `store.save_week`; `confirm=True` recomputes identically (generate_week
     is a pure function of its inputs, so this is safe to re-run) and
     persists.
+
+    Optional `session_overrides` applies explicit distance_m/duration_min
+    overrides to specific sessions in the freshly-generated week, via
+    `_apply_session_overrides`, before the draft/comparison is built or
+    anything is persisted -- this is the tool's answer to the real dead end
+    where `generate_week`'s own ramp/volume math computes a technically-safe
+    number the athlete explicitly doesn't want (e.g. a conservative first
+    swim back after time off): there was previously no way to just set a
+    specific session's number, only to accept whatever the deterministic
+    math produced or replan the whole macro.
+
+    Optional `template_preference` (see `TEMPLATE_PREFERENCE_SCHEMA`) is
+    forwarded straight through to `generate_week`, same as `create_week_
+    plan` -- narrows which main-set library template the recomputed week's
+    pool-independent swim sessions use instead of the default blind
+    rotation.
     """
     iso_week = input_data.get("iso_week")
     if not iso_week:
         return {"error": "iso_week is required"}
+
+    template_preference, preference_error = _parse_template_preference(
+        input_data.get("template_preference")
+    )
+    if preference_error is not None:
+        return {"error": preference_error}
 
     try:
         year_str, week_str = iso_week.split("-W")
@@ -1382,9 +1619,15 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
         return {"error": f"could not load existing week plan: {exc}"}
 
     try:
-        week = generate_week(athlete, macro, iso_week, week_start, event_format)
+        week = generate_week(athlete, macro, iso_week, week_start, event_format, template_preference)
     except ValueError as exc:
         return {"error": str(exc)}
+
+    session_overrides = input_data.get("session_overrides")
+    if session_overrides:
+        override_error = _apply_session_overrides(week, session_overrides, athlete.css_pace_s_per_100m)
+        if override_error is not None:
+            return {"error": override_error}
 
     comparison = None
     if existing_week is not None:
