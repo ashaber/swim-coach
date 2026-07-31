@@ -12,6 +12,8 @@ import pytest
 
 from swim_coach.models import Athlete, Event
 from swim_coach.plan import (
+    ADDITIONAL_SWIM_BASE_BLOCK_TEMPLATE_COUNT,
+    ADDITIONAL_SWIM_BUILD_BLOCK_TEMPLATE_COUNT,
     DEFAULT_POOL_SESSION_MIN,
     LONG_SWIM_SHARE,
     MIN_RAMP_SEED_VOLUME_M,
@@ -22,6 +24,7 @@ from swim_coach.plan import (
     WEEKLY_VOLUME_RAMP_CAP,
     _additional_swim_structure,
     _duration_min_for_distance,
+    _format_pace_s,
     _no_coach_pool_purpose,
     _round_100,
     _strength_session_structure,
@@ -30,6 +33,7 @@ from swim_coach.plan import (
     scaffold_macro,
 )
 from swim_coach.store import FileStore
+from swim_coach.zones import zone_table
 
 ATHLETE_ID = uuid.uuid4()
 START = date(2026, 1, 5)  # a Monday
@@ -937,6 +941,305 @@ def test_additional_swim_structure_main_set_line_has_no_internal_citation():
     main_set_line = next(line for line in build_text.splitlines() if line.startswith("Main set:"))
     assert "library/" not in main_set_line
     assert main_set_line.endswith("(build block).")
+
+
+# --- expanded main-set template menu + deterministic rotation ----------------
+# _additional_swim_structure's new `selector` parameter picks a template via
+# `selector % <template count>` (2 templates for base, 4 for build/peak/
+# taper) -- see its docstring. All new templates are Coach judgment drawn
+# from library/14-swim-set-structure.md's open "Main-set format menu", same
+# citation footing as the two pre-existing templates covered above.
+
+
+def test_additional_swim_structure_base_block_broken_distance_lite_template():
+    # distance_m=2000, css_pace_s=95.0 -> warm_up=400, cool_down_budget=200,
+    # main_set_budget=1400 -> rep=300 (>=1200), reps=round(1400/300)=5,
+    # remaining_for_cool_down=100 (no giveback triggered) -> cool_down=100.
+    distance_m, css_pace_s = 2000, 95.0
+    text = _additional_swim_structure("base", distance_m, css_pace_s, selector=1)
+    z2 = zone_table(css_pace_s)["Z2"]
+    z2_range = f"{_format_pace_s(z2['pace_lo_s'])}-{_format_pace_s(z2['pace_hi_s'])}/100m"
+    lines = text.splitlines()
+    assert lines[0] == f"Warm-up: 400m easy, building to Z2 pace ({z2_range}) by the end."
+    assert lines[1] == (
+        f"Main set: 5 x (150m + 150m) @ Z2 ({z2_range}), 10s rest between segments / "
+        "15s between reps -- broken-distance-lite aerobic volume, same total distance "
+        "and pace as straight reps (base-block emphasis)."
+    )
+    assert lines[2] == "Cool-down: 100m easy choice of stroke."
+    assert lines[3] == "Why: continuous aerobic-volume emphasis (base-block phase)."
+    assert "Z3" not in text and "Z4" not in text
+    assert "library/" not in text
+
+
+def test_additional_swim_structure_build_block_pyramid_template():
+    # Same distance/pace as above but non-base branch: rep=200 (main_set_
+    # budget 1400 >= 800), reps=round(1400/200)=7, cool_down=200. mid =
+    # 7 // 2 + 1 = 4.
+    distance_m, css_pace_s = 2000, 95.0
+    text = _additional_swim_structure("build", distance_m, css_pace_s, selector=1)
+    z3 = zone_table(css_pace_s)["Z3"]
+    z4 = zone_table(css_pace_s)["Z4"]
+    z3_range = f"{_format_pace_s(z3['pace_lo_s'])}-{_format_pace_s(z3['pace_hi_s'])}/100m"
+    z4_range = f"{_format_pace_s(z4['pace_lo_s'])}-{_format_pace_s(z4['pace_hi_s'])}/100m"
+    lines = text.splitlines()
+    assert lines[1] == (
+        f"Main set: 7 x 200m broken-distance pyramid, effort ramps from Z3 ({z3_range}) "
+        f"up to Z4 ({z4_range}) at rep 4 of 7 and back down to Z3 by the final rep, "
+        "each repeat negative-split -- race-pace-adjacent emphasis (build block)."
+    )
+    assert lines[-1] == (
+        "Why: race-pace-adjacent, broken-distance emphasis -- evidence-based "
+        "phase shift (González-Ravé et al. 2021; Pla et al. 2019)."
+    )
+    assert "library/" not in text
+
+
+def test_additional_swim_structure_build_block_ladder_template():
+    # Same reps/rep as the pyramid test (7 x 200m): ladder pairs 7 into
+    # num_pairs=3, leftover=1; rep_short=100, rep_long=300.
+    distance_m, css_pace_s = 2000, 95.0
+    text = _additional_swim_structure("build", distance_m, css_pace_s, selector=2)
+    z3 = zone_table(css_pace_s)["Z3"]
+    z4 = zone_table(css_pace_s)["Z4"]
+    z3_range = f"{_format_pace_s(z3['pace_lo_s'])}-{_format_pace_s(z3['pace_hi_s'])}/100m"
+    z4_range = f"{_format_pace_s(z4['pace_lo_s'])}-{_format_pace_s(z4['pace_hi_s'])}/100m"
+    lines = text.splitlines()
+    assert lines[1] == (
+        "Main set: 3 x (100m + 300m) climbing pairs, plus 1 x 200m capstone rep to "
+        "finish, broken-distance ladder, each pair negative-split from Z3 "
+        f"({z3_range}) toward Z4 ({z4_range}) -- race-pace-adjacent emphasis (build block)."
+    )
+    assert "library/" not in text
+
+
+def test_additional_swim_structure_build_block_straight_negative_split_template():
+    distance_m, css_pace_s = 2000, 95.0
+    text = _additional_swim_structure("build", distance_m, css_pace_s, selector=3)
+    z3 = zone_table(css_pace_s)["Z3"]
+    z4 = zone_table(css_pace_s)["Z4"]
+    z3_range = f"{_format_pace_s(z3['pace_lo_s'])}-{_format_pace_s(z3['pace_hi_s'])}/100m"
+    z4_range = f"{_format_pace_s(z4['pace_lo_s'])}-{_format_pace_s(z4['pace_hi_s'])}/100m"
+    lines = text.splitlines()
+    assert lines[1] == (
+        f"Main set: 7 x 200m @ Z3 ({z3_range}), each rep negative-split building to "
+        f"Z4 ({z4_range}) by the finish, no descend-across-reps progression, 10s rest "
+        "-- race-pace-adjacent emphasis (build block)."
+    )
+    assert "library/" not in text
+
+
+@pytest.mark.parametrize(
+    "distance_m,css_pace_s,expected_reps", [(300, 95.0, 1), (540, 120.0, 2)]
+)
+def test_additional_swim_structure_pyramid_degenerate_low_reps_no_self_contradiction(
+    distance_m, css_pace_s, expected_reps
+):
+    # Independent-review regression: no_coach_pool_distance_m's floor
+    # (NO_COACH_POOL_SESSION_FLOOR_M=300, see generate_week) is a real
+    # production path that can hand _additional_swim_structure a small
+    # enough distance_m to yield reps in {1, 2} for build/peak/taper
+    # blocks. The general pyramid formula `mid = reps // 2 + 1` makes the
+    # peak land ON the final rep whenever reps<=2, so the generic template
+    # text ("ramps ... at rep N of N and back down to Z3 by the final
+    # rep") was self-contradictory -- the final rep can't be both the peak
+    # AND the down-ramp. Confirm the degenerate branch (reps<=2) avoids
+    # that phrasing and still reports the expected rep count.
+    text = _additional_swim_structure("build", distance_m, css_pace_s, selector=1)
+    main_set_line = next(line for line in text.splitlines() if line.startswith("Main set:"))
+    m = re.search(r"Main set: (\d+) x (\d+)m", main_set_line)
+    assert int(m.group(1)) == expected_reps
+    assert "and back down" not in main_set_line
+    assert "at rep" not in main_set_line
+    assert "library/" not in text
+
+
+def test_additional_swim_structure_ladder_title_is_informative_via_ui_cut_rule():
+    # Independent-review regression: web/src/plan.js's deriveSessionTitle
+    # derives each session's compact title by cutting the "Main set: ..."
+    # line at whichever comes first, its first comma or its first " -- ".
+    # The ladder template originally led with "broken-distance ladder -- ",
+    # so the cut landed immediately after "ladder" and every ladder week
+    # showed the same generic "Broken-distance ladder" title with no
+    # reps/distance numbers to distinguish one week's plan from another's
+    # -- unlike the other three templates, whose numeric detail always
+    # precedes their first comma/dash. Confirm the numeric detail now
+    # survives the same cut rule the UI actually applies.
+    text = _additional_swim_structure("build", 2000, 95.0, selector=2)
+    main_set_line = next(line for line in text.splitlines() if line.startswith("Main set:"))
+    content = main_set_line[len("Main set: ") :]
+    comma_idx = content.find(",")
+    dash_idx = content.find(" -- ")
+    candidates = [i for i in (comma_idx, dash_idx) if i != -1]
+    cut = content[: min(candidates)] if candidates else content
+    assert re.search(r"\d", cut), f"derived title has no numeric detail: {cut!r}"
+
+
+@pytest.mark.parametrize("macro_block_name", ["build", "peak", "taper"])
+def test_additional_swim_structure_pyramid_template_names_correct_block(macro_block_name):
+    text = _additional_swim_structure(macro_block_name, 2000, 95.0, selector=1)
+    main_set_line = next(line for line in text.splitlines() if line.startswith("Main set:"))
+    assert main_set_line.endswith(f"({macro_block_name} block).")
+
+
+def test_additional_swim_structure_rotation_is_deterministic():
+    # The core safety property: same (block, selector) -> byte-identical
+    # output, every time, forever -- no random/global state involved.
+    text_a = _additional_swim_structure("build", 3400, 92.0, selector=5)
+    text_b = _additional_swim_structure("build", 3400, 92.0, selector=5)
+    assert text_a == text_b
+
+    text_a_base = _additional_swim_structure("base", 1800, 88.0, selector=3)
+    text_b_base = _additional_swim_structure("base", 1800, 88.0, selector=3)
+    assert text_a_base == text_b_base
+
+
+def test_additional_swim_structure_rotation_wraps_with_modulo():
+    assert ADDITIONAL_SWIM_BUILD_BLOCK_TEMPLATE_COUNT == 4
+    assert ADDITIONAL_SWIM_BASE_BLOCK_TEMPLATE_COUNT == 2
+    assert _additional_swim_structure("build", 2000, 95.0, selector=0) == _additional_swim_structure(
+        "build", 2000, 95.0, selector=4
+    )
+    assert _additional_swim_structure("build", 2000, 95.0, selector=1) == _additional_swim_structure(
+        "build", 2000, 95.0, selector=5
+    )
+    assert _additional_swim_structure("base", 2000, 95.0, selector=0) == _additional_swim_structure(
+        "base", 2000, 95.0, selector=2
+    )
+
+
+def test_additional_swim_structure_build_block_rotation_selects_multiple_templates():
+    # Regression guard against a rotation rule that accidentally always
+    # resolves to index 0 -- simulates 4 consecutive weeks' selector values.
+    texts = [_additional_swim_structure("build", 2000, 95.0, selector=s) for s in range(4)]
+    assert len(set(texts)) == 4
+    assert "descend 1-" in texts[0]
+    assert "pyramid" in texts[1]
+    assert "broken-distance ladder" in texts[2]
+    assert "no descend-across-reps" in texts[3]
+
+
+def test_additional_swim_structure_base_block_rotation_selects_multiple_templates():
+    texts = [_additional_swim_structure("base", 2000, 95.0, selector=s) for s in range(2)]
+    assert len(set(texts)) == 2
+    assert "continuous aerobic volume (base-block emphasis)." in texts[0]
+    assert "broken-distance-lite" in texts[1]
+
+
+@pytest.mark.parametrize("selector", [0, 1])
+def test_additional_swim_structure_base_templates_stay_aerobic_no_z3_z4(selector):
+    # Direct string assertion (not just eyeballing): base-block output must
+    # never contain Z3/Z4 race-pace language, regardless of which template
+    # in the rotation is selected -- the base->build periodization
+    # principle (library/03-periodization.md, library/14-swim-set-
+    # structure.md) forbids race-pace-adjacent work in the base block.
+    text = _additional_swim_structure("base", 2000, 95.0, selector=selector)
+    assert "Z3" not in text
+    assert "Z4" not in text
+    assert "Z2" in text
+
+
+@pytest.mark.parametrize("selector", [0, 1])
+def test_additional_swim_structure_base_templates_no_internal_citation(selector):
+    text = _additional_swim_structure("base", 2000, 95.0, selector=selector)
+    assert "library/" not in text
+
+
+@pytest.mark.parametrize("selector", [0, 1, 2, 3])
+def test_additional_swim_structure_build_templates_no_internal_citation(selector):
+    text = _additional_swim_structure("build", 2000, 95.0, selector=selector)
+    assert "library/" not in text
+
+
+@pytest.mark.parametrize("distance_m", [1200, 1900, 2500, 3300, 4000])
+def test_additional_swim_structure_base_split_template_sums_to_requested_distance(distance_m):
+    text = _additional_swim_structure("base", distance_m, 95.0, selector=1)
+    warm_up = int(re.search(r"Warm-up: (\d+)m", text).group(1))
+    cool_down = int(re.search(r"Cool-down: (\d+)m", text).group(1))
+    split = re.search(r"Main set: (\d+) x \((\d+)m \+ (\d+)m\)", text)
+    reps, seg_a, seg_b = int(split.group(1)), int(split.group(2)), int(split.group(3))
+    assert warm_up + reps * (seg_a + seg_b) + cool_down == distance_m
+
+
+@pytest.mark.parametrize("macro_block_name", ["build", "peak", "taper"])
+@pytest.mark.parametrize("distance_m", [1200, 1900, 2500, 3300, 4000])
+@pytest.mark.parametrize("selector", [1, 3])  # pyramid, straight negative-split
+def test_additional_swim_structure_pyramid_and_negsplit_sum_to_requested_distance(
+    macro_block_name, distance_m, selector
+):
+    text = _additional_swim_structure(macro_block_name, distance_m, 95.0, selector=selector)
+    warm_up = int(re.search(r"Warm-up: (\d+)m", text).group(1))
+    cool_down = int(re.search(r"Cool-down: (\d+)m", text).group(1))
+    main_set = re.search(r"Main set: (\d+) x (\d+)m", text)
+    reps, rep_len = int(main_set.group(1)), int(main_set.group(2))
+    assert warm_up + reps * rep_len + cool_down == distance_m
+
+
+@pytest.mark.parametrize("macro_block_name", ["build", "peak", "taper"])
+@pytest.mark.parametrize("distance_m", [1200, 1900, 2500, 3300, 4000])
+def test_additional_swim_structure_ladder_sums_to_requested_distance(macro_block_name, distance_m):
+    # The ladder's exact-sum guarantee is by construction (see comment in
+    # plan.py): num_pairs*(rep_short+rep_long) + leftover*rep == reps*rep.
+    text = _additional_swim_structure(macro_block_name, distance_m, 95.0, selector=2)
+    warm_up = int(re.search(r"Warm-up: (\d+)m", text).group(1))
+    cool_down = int(re.search(r"Cool-down: (\d+)m", text).group(1))
+    ladder = re.search(
+        r"Main set: (\d+) x \((\d+)m \+ (\d+)m\) climbing pairs"
+        r"(, plus 1 x (\d+)m capstone rep to finish)?, broken-distance ladder",
+        text,
+    )
+    num_pairs, rep_short, rep_long = int(ladder.group(1)), int(ladder.group(2)), int(ladder.group(3))
+    capstone = int(ladder.group(5)) if ladder.group(4) else 0
+    main_set_total = num_pairs * (rep_short + rep_long) + capstone
+    assert warm_up + main_set_total + cool_down == distance_m
+
+
+def test_generate_week_additional_swim_structure_rotates_across_weeks():
+    # Regression guard on the actual call-site wiring: generate_week must
+    # thread a real, changing selector (week_index_in_block) into
+    # _additional_swim_structure so consecutive weeks in the SAME macro
+    # block don't render an identical main-set template -- this is the
+    # actual fix for the "every week looks the same" monotony complaint.
+    athlete = make_athlete(pool_schedule=["tue"])
+    event = make_event(event_date=START + timedelta(weeks=10))
+    macro = scaffold_macro(
+        athlete, event, START, current_weekly_volume_m=14000, peak_weekly_volume_m=20000
+    )
+    base_block = next(b for b in macro.blocks if b.name == "base")
+    weeks_in_block = (base_block.end_date - base_block.start_date).days // 7 + 1
+    assert weeks_in_block >= 2  # sanity: fixture must actually span >1 week
+
+    structures = []
+    for i in range(weeks_in_block):
+        week_start = base_block.start_date + timedelta(weeks=i)
+        week = generate_week(athlete, macro, _iso_week(week_start), week_start)
+        additional = [
+            s for s in week.sessions if s.purpose == "additional pool-independent aerobic volume"
+        ]
+        assert len(additional) == 1
+        structures.append(additional[0].structure)
+
+    assert len(set(structures)) > 1
+
+
+def test_generate_week_additional_swim_structure_is_reproducible_for_same_week():
+    athlete = make_athlete(pool_schedule=["tue"])
+    event = make_event(event_date=START + timedelta(weeks=10))
+    macro = scaffold_macro(
+        athlete, event, START, current_weekly_volume_m=14000, peak_weekly_volume_m=20000
+    )
+    base_block = next(b for b in macro.blocks if b.name == "base")
+    week_start = base_block.start_date
+
+    week_a = generate_week(athlete, macro, _iso_week(week_start), week_start)
+    week_b = generate_week(athlete, macro, _iso_week(week_start), week_start)
+    structure_a = next(
+        s.structure for s in week_a.sessions if s.purpose == "additional pool-independent aerobic volume"
+    )
+    structure_b = next(
+        s.structure for s in week_b.sessions if s.purpose == "additional pool-independent aerobic volume"
+    )
+    assert structure_a == structure_b
 
 
 @pytest.mark.parametrize("session_index", [0, 1])
