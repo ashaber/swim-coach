@@ -1,0 +1,6 @@
+schema_version: 1
+id: base-0-straight
+applicable_blocks: [base]
+format_type: straight
+narrative_template: "Main set: {reps} x {rep}m @ Z2 ({z2_range}), 15s rest -- continuous aerobic volume (base-block emphasis)."
+source_note: "Ported from PR #85 (engine: expand main-set template library) -- straight continuous Z2 reps, the original/default base-block main set."

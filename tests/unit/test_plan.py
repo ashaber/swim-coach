@@ -12,8 +12,6 @@ import pytest
 
 from swim_coach.models import Athlete, Event
 from swim_coach.plan import (
-    ADDITIONAL_SWIM_BASE_BLOCK_TEMPLATE_COUNT,
-    ADDITIONAL_SWIM_BUILD_BLOCK_TEMPLATE_COUNT,
     DEFAULT_POOL_SESSION_MIN,
     LONG_SWIM_SHARE,
     MIN_RAMP_SEED_VOLUME_M,
@@ -1095,8 +1093,10 @@ def test_additional_swim_structure_rotation_is_deterministic():
 
 
 def test_additional_swim_structure_rotation_wraps_with_modulo():
-    assert ADDITIONAL_SWIM_BUILD_BLOCK_TEMPLATE_COUNT == 4
-    assert ADDITIONAL_SWIM_BASE_BLOCK_TEMPLATE_COUNT == 2
+    # Template-menu sizes now live in engine/swim_coach/workout_templates/
+    # *.yaml (4 build/peak/taper templates, 2 base templates, as shipped by
+    # this migration) rather than a plan.py constant -- see
+    # tests/unit/test_workout_templates.py for the loader-level guarantees.
     assert _additional_swim_structure("build", 2000, 95.0, selector=0) == _additional_swim_structure(
         "build", 2000, 95.0, selector=4
     )

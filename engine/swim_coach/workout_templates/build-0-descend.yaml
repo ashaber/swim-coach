@@ -1,0 +1,6 @@
+schema_version: 1
+id: build-0-descend
+applicable_blocks: [build, peak, taper]
+format_type: descend
+narrative_template: "Main set: {reps} x {rep}m broken-distance, descend 1-{reps} from Z3 ({z3_range}) toward Z4 ({z4_range}) on the last rep, negative-split each repeat -- race-pace-adjacent emphasis ({macro_block_name} block)."
+source_note: "Ported from PR #85 -- uniform reps descending Z3->Z4 across the set, the original/default build/peak/taper main set."
