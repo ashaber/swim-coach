@@ -7,6 +7,7 @@ from __future__ import annotations
 import base64
 import json
 import uuid
+from collections import Counter
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -1390,6 +1391,127 @@ def test_replace_week_plan_missing_iso_week_is_an_error(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
     result = handlers["replace_week_plan"]({})
+    assert "error" in result
+
+
+# --- replace_week_plan session_overrides ----------------------------------------
+# Real bug, real athlete: a first-swim-back-after-a-break session computed a
+# technically ramp-safe but unwanted distance, and there was no tool that could
+# just set a specific session's number -- create_week_plan refuses (week
+# exists), propose_adaptation refuses (no prior week), and replace_week_plan on
+# its own just recomputes the identical deterministic number again. This is the
+# fix: an explicit override applied on top of the otherwise-normal draft.
+
+
+def test_replace_week_plan_session_override_sets_distance_and_reestimates_duration(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    assert "error" not in baseline
+    target = baseline["sessions"][0]
+    original_duration = target["duration_min"]
+    new_distance = (target["distance_m"] or 1000) / 2  # deliberately different from computed
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{"date": target["date"], "sport": target["sport"], "distance_m": new_distance}],
+    })
+
+    assert "error" not in result
+    overridden = next(s for s in result["sessions"] if s["date"] == target["date"] and s["sport"] == target["sport"])
+    assert overridden["distance_m"] == new_distance
+    # Duration was re-estimated from the new distance, not left stale.
+    assert overridden["duration_min"] != original_duration
+
+    # Every other session is untouched.
+    others_before = [s for s in baseline["sessions"] if s["date"] != target["date"] or s["sport"] != target["sport"]]
+    others_after = [s for s in result["sessions"] if s["date"] != target["date"] or s["sport"] != target["sport"]]
+    assert others_before == others_after
+
+
+def test_replace_week_plan_session_override_explicit_duration_is_not_reestimated(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    target = baseline["sessions"][0]
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{
+            "date": target["date"], "sport": target["sport"], "distance_m": 500, "duration_min": 12.5,
+        }],
+    })
+
+    assert "error" not in result
+    overridden = next(s for s in result["sessions"] if s["date"] == target["date"] and s["sport"] == target["sport"])
+    assert overridden["distance_m"] == 500
+    assert overridden["duration_min"] == 12.5
+
+
+def test_replace_week_plan_session_override_persists_only_on_confirm(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    target = baseline["sessions"][0]
+    override = [{"date": target["date"], "sport": target["sport"], "distance_m": 750}]
+
+    draft = handlers["replace_week_plan"]({"iso_week": "2026-W28", "session_overrides": override})
+    assert draft["persisted"] is False
+    on_disk = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    assert not any(s.date.isoformat() == target["date"] and s.distance_m == 750 for s in on_disk.sessions)
+
+    confirmed = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28", "session_overrides": override, "confirm": True,
+    })
+    assert confirmed["persisted"] is True
+    on_disk = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    assert any(s.date.isoformat() == target["date"] and s.distance_m == 750 for s in on_disk.sessions)
+
+
+def test_replace_week_plan_session_override_no_matching_session_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{"date": "2099-01-01", "distance_m": 1000}],
+    })
+
+    assert "error" in result
+    assert "2099-01-01" in result["error"]
+
+
+def test_replace_week_plan_session_override_ambiguous_date_without_sport_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+
+    date_counts = Counter(s["date"] for s in baseline["sessions"])
+    multi_session_date = next((d for d, count in date_counts.items() if count > 1), None)
+    if multi_session_date is None:
+        pytest.skip("this fixture week has no day with more than one session to test ambiguity against")
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{"date": multi_session_date, "distance_m": 1000}],
+    })
+
+    assert "error" in result
+    assert "disambiguate" in result["error"]
+
+
+def test_replace_week_plan_session_override_missing_both_fields_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    target = baseline["sessions"][0]
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{"date": target["date"], "sport": target["sport"]}],
+    })
+
     assert "error" in result
 
 
