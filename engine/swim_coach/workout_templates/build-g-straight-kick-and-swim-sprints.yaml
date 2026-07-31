@@ -1,0 +1,6 @@
+schema_version: 1
+id: build-g-straight-kick-and-swim-sprints
+applicable_blocks: [build, peak, taper]
+format_type: straight
+narrative_template: "Main set: {reps} x {rep}m combining free sprint repeats with a substantial kick set and an easy backstroke recovery swim each round, no across-set progression -- echoes Kick and Swim Sprints' 6x50-free / 200-kick / 100-recovery-back rounds -- race-pace-adjacent emphasis (build/peak/taper block)."
+source_note: "Adapted from a workout published by Matt Donovan, U.S. Masters Swimming (usms.org), 'Best Sprint Workouts for Swimming Faster', May 5, 2021 (Workout 3, Kick and Swim Sprints)."

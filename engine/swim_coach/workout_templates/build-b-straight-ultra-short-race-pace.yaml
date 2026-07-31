@@ -1,0 +1,6 @@
+schema_version: 1
+id: build-b-straight-ultra-short-race-pace
+applicable_blocks: [build, peak, taper]
+format_type: straight
+narrative_template: "Main set: {reps} x {rep}m at controlled, ultra-short race-pace effort with generous send-off rest, no across-set progression -- echoes Ultra-Short Race-Pace Training's ladder of quick 50s then 25s (alternating stroke/free) around a mid-set breather -- race-pace-adjacent emphasis (build/peak/taper block)."
+source_note: "Adapted from a workout published by Kris Goodrich, U.S. Masters Swimming (usms.org), 'Best Workouts for Masters Swimmers', May 5, 2021 (Workout 2, Ultra-Short Race-Pace Training)."
