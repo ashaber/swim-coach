@@ -290,6 +290,18 @@
     .detail-interval:first-child { margin-top: 0; }
     .detail-interval-label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
       color: var(--ink-soft); font-weight: 700; }
+    /* Plan-tab session detail, Phase A: session.structured's generic
+       tree-walk (see plan.js's renderStructuredWorkout / views.js's
+       renderStructuredWorkoutSection) -- one row per WorkoutStep/
+       WorkoutRepeat node, indented under its repeat via inline padding-left.
+       Deliberately plain/generic, not the polished per-block Warm-up/Main-
+       set/Cool-down treatment above (.detail-interval) -- that's Phase B. */
+    .struct-tree { display: flex; flex-direction: column; gap: 2px; }
+    .struct-line { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+      font-size: 14px; color: var(--ink); padding: 3px 0; }
+    .struct-line-repeat { font-weight: 700; margin-top: 6px; }
+    .struct-line-repeat:first-child { margin-top: 0; }
+    .struct-detail { font-size: 12px; color: var(--ink-soft); }
 
     /* feedback tab */
     .feedback-entry { margin-top: 12px; }
