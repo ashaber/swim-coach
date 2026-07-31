@@ -513,6 +513,90 @@ describe('renderApp plan session detail view (click-to-detail)', () => {
     expect(html).not.toContain('<img src=x');
     expect(html).toContain('&lt;img');
   });
+
+  describe('session.structured (PR #91 WorkoutStructure) tree-walk rendering, Phase A', () => {
+    // A synthetic WorkoutStructure matching PR #91's real model shape --
+    // one narrated top-level warmup step and a count-based repeat of
+    // strength-shaped steps, enough to exercise both branches of the walk.
+    const STRUCTURED_SESSION = {
+      ...MAIN_SET_SESSION,
+      id: 's-structured',
+      date: dateKey(addDays(weekMonday, 5)),
+      structured: {
+        items: [
+          {
+            kind: 'step', label: 'Easy swim', role: 'warmup', duration_kind: 'distance_m',
+            duration_value: 400, target: { basis: 'zone', zone: 'Z2' }, load: null,
+            modality: 'swim', stroke: null, equipment: [], exercise_name: null,
+          },
+          {
+            kind: 'repeat', repeat_mode: 'count', count: 3, duration_s: null, interval_s: null,
+            steps: [
+              {
+                kind: 'step', label: '100 build', role: 'interval', duration_kind: 'distance_m',
+                duration_value: 100, target: { basis: 'zone', zone: 'Z3' }, load: null,
+                modality: 'swim', stroke: null, equipment: [], exercise_name: null,
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    it('renders session.structured via the generic tree-walk, not the polished per-block prose parser', () => {
+      const data = { ...PLAN_DATA, weeks: [{ ...WEEK, sessions: [STRUCTURED_SESSION] }] };
+      const html = renderApp(data, STRUCTURED_SESSION.id);
+      expect(html).toContain('<h4>Workout</h4>');
+      expect(html).toContain('struct-tree');
+      expect(html).toContain('Warm-up: Easy swim');
+      expect(html).toContain('3 x:');
+      expect(html).toContain('100 build');
+      // NOT the polished per-block prose headings (Phase B, not this pass) --
+      // proves the structured branch actually took priority over
+      // parseStructureBlocks/renderStructureBlock for this session.
+      expect(html).not.toContain('<h4>Main set</h4>');
+      expect(html).not.toContain('Interval 1');
+    });
+
+    it('regression: a session with structured absent/null still falls back to the prose block parser unchanged', () => {
+      // MAIN_SET_SESSION itself carries no `structured` key at all (real
+      // shape for a legacy, un-regenerated session) -- this is the same
+      // fixture the earlier "block-parsed structure" test above already
+      // exercises; asserted again here, explicitly, as the fallback half of
+      // this Phase A feature's regression coverage.
+      const html = renderApp(PLAN_DATA, MAIN_SET_SESSION.id);
+      expect(html).not.toContain('<h4>Workout</h4>');
+      expect(html).not.toContain('struct-tree');
+      expect(html).toContain('<h4>Main set</h4>');
+      expect(html).toContain('Interval 1');
+    });
+
+    it('regression: a session with structured explicitly null (real PR #91 shape for a legacy DB row) also falls back to prose', () => {
+      const explicitNull = { ...MAIN_SET_SESSION, id: 's-explicit-null', structured: null };
+      const data = { ...PLAN_DATA, weeks: [{ ...WEEK, sessions: [explicitNull] }] };
+      const html = renderApp(data, 's-explicit-null');
+      expect(html).not.toContain('<h4>Workout</h4>');
+      expect(html).toContain('<h4>Main set</h4>');
+    });
+
+    it('escapes malicious structured step text (no raw HTML injection)', () => {
+      const malicious = {
+        ...STRUCTURED_SESSION,
+        id: 's-structured-malicious',
+        structured: {
+          items: [{
+            kind: 'step', label: '<img src=x onerror=alert(1)>', role: 'warmup', duration_kind: 'open',
+            duration_value: null, target: null, load: null, modality: 'swim', stroke: null,
+            equipment: [], exercise_name: null,
+          }],
+        },
+      };
+      const data = { ...PLAN_DATA, weeks: [{ ...WEEK, sessions: [malicious] }] };
+      const html = renderApp(data, 's-structured-malicious');
+      expect(html).not.toContain('<img src=x');
+      expect(html).toContain('&lt;img');
+    });
+  });
 });
 
 describe('renderLogTab', () => {

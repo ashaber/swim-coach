@@ -1,5 +1,6 @@
 schema_version: 1
 id: build-a-descend-whos-in-pool
+purpose: threshold
 applicable_blocks: [build, peak, taper]
 format_type: descend
 narrative_template: "Main set: {reps} x {rep}m broken-distance, descend 1-{reps} from Z3 ({z3_range}) toward Z4 ({z4_range}) by the final rep, negative-split each repeat -- echoes the Who's in the Pool workout's three repeated descend-1-3 blocks, separated by continuous no-walls swims as active-recovery breathers -- race-pace-adjacent emphasis ({macro_block_name} block)."

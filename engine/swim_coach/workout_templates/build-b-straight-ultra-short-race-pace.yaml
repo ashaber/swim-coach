@@ -1,5 +1,6 @@
 schema_version: 1
 id: build-b-straight-ultra-short-race-pace
+purpose: race_pace
 applicable_blocks: [build, peak, taper]
 format_type: straight
 narrative_template: "Main set: {reps} x {rep}m at controlled, ultra-short race-pace effort with generous send-off rest, no across-set progression -- echoes Ultra-Short Race-Pace Training's ladder of quick 50s then 25s (alternating stroke/free) around a mid-set breather -- race-pace-adjacent emphasis (build/peak/taper block)."

@@ -1,5 +1,6 @@
 schema_version: 1
 id: base-0-straight
+purpose: aerobic_base
 applicable_blocks: [base]
 format_type: straight
 narrative_template: "Main set: {reps} x {rep}m @ Z2 ({z2_range}), 15s rest -- continuous aerobic volume (base-block emphasis)."
