@@ -152,6 +152,33 @@ function renderPlanSessionDetail(session) {
   const { title, detail, structure } = sessionDisplay(session);
   const dateLabel = formatLongDate(parseIsoDate(session.date));
 
+  // Whether to show the full, un-split `purpose` or just the post-em-dash
+  // `detail` fragment here depends on where the header title (above) came
+  // from -- deriveSessionTitle prefers a title derived from `structure`
+  // (the "Main set:" line or first line), and only falls back to the
+  // pre-em-dash half of `purpose` when `structure` is absent.
+  //   - When `structure` is present, the header title never overlapped with
+  //     `purpose` at all, so neither half of `purpose` has been shown yet.
+  //     Newer purpose strings (engine's `_no_coach_pool_purpose`, the
+  //     strength session's purpose=, e.g. "Continuous aerobic volume —
+  //     base-block emphasis") are a SINGLE complete statement that merely
+  //     contains an em-dash as internal punctuation; splitting those left
+  //     only the post-dash half ("base-block emphasis"), a meaningless
+  //     fragment. Show the whole sentence instead.
+  //   - When `structure` is absent (e.g. the pool-coach placeholder, the
+  //     long open-water swim, multi-day stage sessions), the header title
+  //     IS the pre-dash half of `purpose` (deriveSessionTitle's
+  //     purposeTitle() fallback) -- showing the full purpose here would
+  //     literally repeat that title text as a prefix (e.g. title "Long
+  //     open-water swim" followed by Purpose "long open-water swim --
+  //     endurance and fueling-practice anchor of the week"). Keep the
+  //     original post-dash `detail` fragment in that case, exactly as
+  //     before this fix.
+  // (renderSession's compact-row subtitle intentionally keeps using
+  // `detail` unconditionally -- that terse one-line spot is correct for the
+  // race-tagged shape and out of scope here.)
+  const purpose = structure ? session.purpose : detail;
+
   return `
     <div class="detail-header">
       <h3>${esc(title)}${classification.tag ? `<span class="tag">${esc(classification.tag)}</span>` : ''}</h3>
@@ -159,10 +186,10 @@ function renderPlanSessionDetail(session) {
     </div>
     ${renderPlanSessionDetailStats(session)}
     ${structure ? parseStructureBlocks(structure).map(renderStructureBlock).join('') : ''}
-    ${detail ? `
+    ${purpose ? `
     <section class="detail-section">
       <h4>Purpose</h4>
-      <p class="detail-notes">${esc(detail)}</p>
+      <p class="detail-notes">${esc(purpose)}</p>
     </section>` : ''}`;
 }
 
