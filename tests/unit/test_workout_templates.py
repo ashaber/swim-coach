@@ -39,7 +39,7 @@ def _write(tmp_path, filename, content):
 
 def test_real_template_directory_loads_and_validates_cleanly():
     templates = load_workout_templates(TEMPLATES_DIR)
-    assert len(templates) == 6
+    assert len(templates) == 18
     ids = {t.id for t in templates}
     assert ids == {
         "base-0-straight",
@@ -48,6 +48,20 @@ def test_real_template_directory_loads_and_validates_cleanly():
         "build-1-pyramid",
         "build-2-ladder",
         "build-3-negative-split",
+        # PR #87 ETL: 9 researched pool workouts reusing existing strategies.
+        "build-a-descend-whos-in-pool",
+        "build-b-straight-ultra-short-race-pace",
+        "build-c-pyramid-breathing",
+        "build-d-descend-freestyle-focus",
+        "build-e-descend-beast-training",
+        "build-f-straight-repeat-sprints",
+        "build-g-straight-kick-and-swim-sprints",
+        "build-h-descend-to-sprint",
+        "build-i-straight-broken-200",
+        # New descending_ladder strategy templates.
+        "build-j-descending-ladder-pull",
+        "build-k-descending-ladder-kick",
+        "build-l-descending-ladder-breathing-filler",
     }
     # Every format_type used by a shipped template is a real strategy.
     for t in templates:
@@ -59,7 +73,8 @@ def test_real_template_directory_base_templates_only_apply_to_base():
     base_templates = [t for t in templates if t.applicable_blocks == ["base"]]
     assert len(base_templates) == 2
     build_templates = [t for t in templates if set(t.applicable_blocks) == {"build", "peak", "taper"}]
-    assert len(build_templates) == 4
+    # 4 original (PR #85) + 9 researched-workout ETL + 3 descending_ladder.
+    assert len(build_templates) == 16
 
 
 # --- malformed YAML / schema errors --------------------------------------------
@@ -268,11 +283,13 @@ def test_render_main_set_is_deterministic():
     assert base_a == base_b
 
 
-def test_render_main_set_build_rotation_selects_all_four_templates():
+def test_render_main_set_build_rotation_selects_all_sixteen_templates():
+    # 4 original (PR #85) + 9 researched-workout ETL + 3 descending_ladder
+    # templates == 16 distinct build/peak/taper candidates as of this ETL.
     zones = zone_table(95.0)
     z2, z3, z4 = zones["Z2"], zones["Z3"], zones["Z4"]
-    texts = [render_main_set("build", s, 7, 200, z2, z3, z4) for s in range(4)]
-    assert len(set(texts)) == 4
+    texts = [render_main_set("build", s, 7, 200, z2, z3, z4) for s in range(16)]
+    assert len(set(texts)) == 16
 
 
 def test_render_main_set_base_rotation_selects_both_templates():
@@ -286,11 +303,32 @@ def test_render_main_set_wraps_with_modulo():
     zones = zone_table(95.0)
     z2, z3, z4 = zones["Z2"], zones["Z3"], zones["Z4"]
     assert render_main_set("build", 0, 7, 200, z2, z3, z4) == render_main_set(
-        "build", 4, 7, 200, z2, z3, z4
+        "build", 16, 7, 200, z2, z3, z4
     )
     assert render_main_set("base", 0, 5, 300, z2, z3, z4) == render_main_set(
         "base", 2, 5, 300, z2, z3, z4
     )
+
+
+def test_render_main_set_new_researched_workout_template_appears_in_rotation():
+    # Sanity check that the ETL'd researched-workout templates are actually
+    # reachable via the real rotation path, not just load-time valid --
+    # build-a (index 4, sorted by id) is "Who's in the Pool?".
+    zones = zone_table(95.0)
+    z2, z3, z4 = zones["Z2"], zones["Z3"], zones["Z4"]
+    text = render_main_set("build", 4, 7, 200, z2, z3, z4)
+    assert "Who's in the Pool" in text
+
+
+def test_render_main_set_new_descending_ladder_template_appears_in_rotation():
+    # build-j (index 13, sorted by id) is the first descending_ladder
+    # template -- confirm the new strategy's output actually reaches the
+    # real rotation, not just direct FORMAT_STRATEGIES unit coverage.
+    zones = zone_table(95.0)
+    z2, z3, z4 = zones["Z2"], zones["Z3"], zones["Z4"]
+    text = render_main_set("build", 13, 7, 200, z2, z3, z4)
+    assert "descending-distance pull ladder" in text
+    assert "library/" not in text
 
 
 def test_render_main_set_unknown_block_raises():
@@ -327,3 +365,88 @@ def test_ladder_strategy_total_matches_reps_times_rep():
     for reps, rep in [(7, 200), (4, 300), (1, 100), (10, 150)]:
         placeholders = FORMAT_STRATEGIES["ladder"](reps, rep, z2, z3, z4, "build")
         assert placeholders["_total_m"] == reps * rep
+
+
+# --- descending_ladder strategy: one-directional ladder, exact-sum invariant --
+
+
+@pytest.mark.parametrize("css_pace_s", [80.0, 95.0, 110.0])
+@pytest.mark.parametrize(
+    "reps,rep",
+    [
+        (7, 200),
+        (4, 300),
+        (1, 100),  # smallest realistic production floor (build rep=100, reps=1)
+        (10, 150),
+        (2, 100),
+        (3, 333),  # deliberately not a round number -- stresses leftover arithmetic
+        (1, 1),  # degenerate: total_m=1, triggers the unit==0 collapse branch
+    ],
+)
+def test_descending_ladder_strategy_total_matches_reps_times_rep(reps, rep, css_pace_s):
+    zones = zone_table(css_pace_s)
+    z2, z3, z4 = zones["Z2"], zones["Z3"], zones["Z4"]
+    placeholders = FORMAT_STRATEGIES["descending_ladder"](reps, rep, z2, z3, z4, "build")
+    assert placeholders["_total_m"] == reps * rep
+
+
+def test_descending_ladder_strategy_rungs_are_strictly_non_increasing():
+    zones = zone_table(95.0)
+    z2, z3, z4 = zones["Z2"], zones["Z3"], zones["Z4"]
+    for reps, rep in [(7, 200), (4, 300), (10, 150), (3, 333), (2, 100)]:
+        placeholders = FORMAT_STRATEGIES["descending_ladder"](reps, rep, z2, z3, z4, "build")
+        rungs = [int(tok.rstrip("m")) for tok in placeholders["rung_list"].split(", ")]
+        assert rungs == sorted(rungs, reverse=True)
+        assert all(r > 0 for r in rungs)
+        assert sum(rungs) == reps * rep
+
+
+def test_descending_ladder_strategy_normal_case_has_four_rungs():
+    zones = zone_table(95.0)
+    z2, z3, z4 = zones["Z2"], zones["Z3"], zones["Z4"]
+    placeholders = FORMAT_STRATEGIES["descending_ladder"](7, 200, z2, z3, z4, "build")
+    assert placeholders["num_rungs"] == 4
+    assert placeholders["rung_list"] == "560m, 420m, 280m, 140m"
+    assert placeholders["_total_m"] == 1400
+
+
+def test_descending_ladder_strategy_degenerate_small_total_collapses_to_one_rung():
+    # total_m=1 -> unit = 1 // 10 == 0 -> the zero-rung guard collapses to a
+    # single rep-length "ladder" of just the top rung, avoiding zero-length
+    # rungs (same class of edge case as the pyramid's reps<=2 fallback).
+    zones = zone_table(95.0)
+    z2, z3, z4 = zones["Z2"], zones["Z3"], zones["Z4"]
+    placeholders = FORMAT_STRATEGIES["descending_ladder"](1, 1, z2, z3, z4, "build")
+    assert placeholders["num_rungs"] == 1
+    assert placeholders["rung_list"] == "1m"
+    assert placeholders["_total_m"] == 1
+
+
+def test_descending_ladder_strategy_is_deterministic():
+    zones = zone_table(92.0)
+    z2, z3, z4 = zones["Z2"], zones["Z3"], zones["Z4"]
+    a = FORMAT_STRATEGIES["descending_ladder"](7, 200, z2, z3, z4, "peak")
+    b = FORMAT_STRATEGIES["descending_ladder"](7, 200, z2, z3, z4, "peak")
+    assert a == b
+
+
+def test_descending_ladder_strategy_reports_macro_block_name():
+    zones = zone_table(95.0)
+    z2, z3, z4 = zones["Z2"], zones["Z3"], zones["Z4"]
+    for block in ("build", "peak", "taper"):
+        placeholders = FORMAT_STRATEGIES["descending_ladder"](7, 200, z2, z3, z4, block)
+        assert placeholders["macro_block_name"] == block
+
+
+def test_descending_ladder_is_build_peak_taper_only_in_the_real_template_directory():
+    # Design choice (per this ETL's brief): the descending_ladder shape is
+    # race-pace-adjacent by nature in every real source workout it was
+    # drawn from (#2, #3, #11, #17 in library/researched-masters-pool-
+    # workouts.md), so no shipped descending_ladder template is base-
+    # applicable -- confirmed directly against the real template directory.
+    templates = load_workout_templates(TEMPLATES_DIR)
+    descending_ladder_templates = [t for t in templates if t.format_type == "descending_ladder"]
+    assert len(descending_ladder_templates) == 3
+    for t in descending_ladder_templates:
+        assert "base" not in t.applicable_blocks
+        assert set(t.applicable_blocks) == {"build", "peak", "taper"}

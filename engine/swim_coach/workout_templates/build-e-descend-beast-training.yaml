@@ -1,0 +1,6 @@
+schema_version: 1
+id: build-e-descend-beast-training
+applicable_blocks: [build, peak, taper]
+format_type: descend
+narrative_template: "Main set: {reps} x {rep}m broken-distance, descend 1-{reps} from Z3 ({z3_range}) toward Z4 ({z4_range}) by the final rep, interval tightening block to block -- echoes the Beast Training Workout's paddle-size progression (no paddles, then small, then large) riding alongside the pace descend, finished with a best-average capstone rep -- race-pace-adjacent emphasis ({macro_block_name} block)."
+source_note: "Adapted from a workout published on the MySwimPro blog, 'Beast Training Workout', June 13, 2019."

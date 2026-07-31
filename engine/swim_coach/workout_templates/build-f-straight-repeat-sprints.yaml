@@ -1,0 +1,6 @@
+schema_version: 1
+id: build-f-straight-repeat-sprints
+applicable_blocks: [build, peak, taper]
+format_type: straight
+narrative_template: "Main set: {reps} x {rep}m at fast, fins-assisted sprint effort with a recovery-paced backstroke segment worked into each round, no across-set progression -- echoes Repeat Sprints' fins-on fast-50/fast-25-25/recovery-50 rounds -- race-pace-adjacent emphasis (build/peak/taper block)."
+source_note: "Adapted from a workout published by Matt Donovan, U.S. Masters Swimming (usms.org), 'Best Sprint Workouts for Swimming Faster', May 5, 2021 (Workout 2, Repeat Sprints)."
