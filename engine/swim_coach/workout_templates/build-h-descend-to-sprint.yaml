@@ -1,5 +1,6 @@
 schema_version: 1
 id: build-h-descend-to-sprint
+purpose: race_pace
 applicable_blocks: [build, peak, taper]
 format_type: descend
 narrative_template: "Main set: {reps} x {rep}m broken-distance, descend 1-{reps} from Z3 ({z3_range}) toward Z4 ({z4_range}) by the final rep, negative-split each repeat -- echoes Descend to Sprint's descend-by-100 pattern, repeated across free, pull, and kick rounds -- race-pace-adjacent emphasis ({macro_block_name} block)."

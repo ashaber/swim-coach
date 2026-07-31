@@ -1,5 +1,6 @@
 schema_version: 1
 id: base-1-broken-distance-lite
+purpose: aerobic_base
 applicable_blocks: [base]
 format_type: broken_lite
 narrative_template: "Main set: {reps} x ({segment}m + {segment}m) @ Z2 ({z2_range}), 10s rest between segments / 15s between reps -- broken-distance-lite aerobic volume, same total distance and pace as straight reps (base-block emphasis)."

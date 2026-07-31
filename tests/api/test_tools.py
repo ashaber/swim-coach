@@ -7,6 +7,7 @@ from __future__ import annotations
 import base64
 import json
 import uuid
+from collections import Counter
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -1393,6 +1394,127 @@ def test_replace_week_plan_missing_iso_week_is_an_error(athletes_dir) -> None:
     assert "error" in result
 
 
+# --- replace_week_plan session_overrides ----------------------------------------
+# Real bug, real athlete: a first-swim-back-after-a-break session computed a
+# technically ramp-safe but unwanted distance, and there was no tool that could
+# just set a specific session's number -- create_week_plan refuses (week
+# exists), propose_adaptation refuses (no prior week), and replace_week_plan on
+# its own just recomputes the identical deterministic number again. This is the
+# fix: an explicit override applied on top of the otherwise-normal draft.
+
+
+def test_replace_week_plan_session_override_sets_distance_and_reestimates_duration(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    assert "error" not in baseline
+    target = baseline["sessions"][0]
+    original_duration = target["duration_min"]
+    new_distance = (target["distance_m"] or 1000) / 2  # deliberately different from computed
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{"date": target["date"], "sport": target["sport"], "distance_m": new_distance}],
+    })
+
+    assert "error" not in result
+    overridden = next(s for s in result["sessions"] if s["date"] == target["date"] and s["sport"] == target["sport"])
+    assert overridden["distance_m"] == new_distance
+    # Duration was re-estimated from the new distance, not left stale.
+    assert overridden["duration_min"] != original_duration
+
+    # Every other session is untouched.
+    others_before = [s for s in baseline["sessions"] if s["date"] != target["date"] or s["sport"] != target["sport"]]
+    others_after = [s for s in result["sessions"] if s["date"] != target["date"] or s["sport"] != target["sport"]]
+    assert others_before == others_after
+
+
+def test_replace_week_plan_session_override_explicit_duration_is_not_reestimated(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    target = baseline["sessions"][0]
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{
+            "date": target["date"], "sport": target["sport"], "distance_m": 500, "duration_min": 12.5,
+        }],
+    })
+
+    assert "error" not in result
+    overridden = next(s for s in result["sessions"] if s["date"] == target["date"] and s["sport"] == target["sport"])
+    assert overridden["distance_m"] == 500
+    assert overridden["duration_min"] == 12.5
+
+
+def test_replace_week_plan_session_override_persists_only_on_confirm(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    target = baseline["sessions"][0]
+    override = [{"date": target["date"], "sport": target["sport"], "distance_m": 750}]
+
+    draft = handlers["replace_week_plan"]({"iso_week": "2026-W28", "session_overrides": override})
+    assert draft["persisted"] is False
+    on_disk = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    assert not any(s.date.isoformat() == target["date"] and s.distance_m == 750 for s in on_disk.sessions)
+
+    confirmed = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28", "session_overrides": override, "confirm": True,
+    })
+    assert confirmed["persisted"] is True
+    on_disk = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    assert any(s.date.isoformat() == target["date"] and s.distance_m == 750 for s in on_disk.sessions)
+
+
+def test_replace_week_plan_session_override_no_matching_session_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{"date": "2099-01-01", "distance_m": 1000}],
+    })
+
+    assert "error" in result
+    assert "2099-01-01" in result["error"]
+
+
+def test_replace_week_plan_session_override_ambiguous_date_without_sport_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+
+    date_counts = Counter(s["date"] for s in baseline["sessions"])
+    multi_session_date = next((d for d, count in date_counts.items() if count > 1), None)
+    if multi_session_date is None:
+        pytest.skip("this fixture week has no day with more than one session to test ambiguity against")
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{"date": multi_session_date, "distance_m": 1000}],
+    })
+
+    assert "error" in result
+    assert "disambiguate" in result["error"]
+
+
+def test_replace_week_plan_session_override_missing_both_fields_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    target = baseline["sessions"][0]
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{"date": target["date"], "sport": target["sport"]}],
+    })
+
+    assert "error" in result
+
+
 def test_replace_week_plan_end_to_end_pool_coach_status_change_regression(athletes_dir) -> None:
     # This morning's real bug, end to end: 2026-W28's real fixture sessions
     # are pool_coach-source placeholders (has_pool_coach defaults True).
@@ -1425,6 +1547,132 @@ def test_replace_week_plan_end_to_end_pool_coach_status_change_regression(athlet
         assert s.source == "ai_coach"
         assert s.structure is not None
         assert s.structure.strip() != ""
+
+
+# --- template_preference (create_week_plan / replace_week_plan) --------------
+# 2026-W32 (2026-08-03 .. 2026-08-09) is the build block's FIRST week
+# (week_index_in_block == 0 -- the macro's real block boundaries in
+# athletes/renee/plan/macro.yaml have "build" starting exactly 2026-08-03, a
+# Monday) and has no week file in the fixture (only W28/W29 exist). With no
+# preference, selector == 0 deterministically picks "build-0-descend" (the
+# alphabetically-first of 16 build/peak/taper candidates -- see
+# tests/unit/test_workout_templates.py's own rotation tests). Requesting
+# `template_preference={"purpose": "sprint_power"}` narrows the pool to the
+# 4 sprint_power templates, whose alphabetically-first member
+# ("build-f-straight-repeat-sprints", a fins-assisted sprint set) is
+# genuinely different prose from the default -- proving the preference
+# actually changes which template gets selected rather than being accepted
+# and silently ignored.
+
+
+def _additional_swim_session(week):
+    return next(s for s in week.sessions if s.purpose == "additional pool-independent aerobic volume")
+
+
+def test_create_week_plan_default_rotation_picks_build_0_descend(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["create_week_plan"]({"iso_week": "2026-W32"})
+    assert "error" not in result
+
+    week = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W32")
+    session = _additional_swim_session(week)
+    assert "descend" in session.structure.lower()
+    assert "fins-assisted" not in session.structure
+
+
+def test_create_week_plan_with_template_preference_changes_selected_template(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["create_week_plan"](
+        {"iso_week": "2026-W32", "template_preference": {"purpose": "sprint_power"}}
+    )
+    assert "error" not in result
+
+    week = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W32")
+    session = _additional_swim_session(week)
+    assert "fins-assisted" in session.structure
+
+
+def test_create_week_plan_invalid_template_preference_purpose_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["create_week_plan"](
+        {"iso_week": "2026-W32", "template_preference": {"purpose": "not_a_real_purpose"}}
+    )
+    assert "error" in result
+    assert "template_preference" in result["error"]
+    assert FileStore(base_dir=athletes_dir).load_week("renee", "2026-W32") is None
+
+
+def test_create_week_plan_template_preference_matching_nothing_is_a_clean_error(athletes_dir) -> None:
+    # 2026-W30 falls in the base block, which has no sprint_power template
+    # (only "aerobic_base" purpose templates apply to "base").
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["create_week_plan"](
+        {"iso_week": "2026-W30", "template_preference": {"purpose": "sprint_power"}}
+    )
+    assert "error" in result
+    assert "no workout templates match" in result["error"]
+    assert FileStore(base_dir=athletes_dir).load_week("renee", "2026-W30") is None
+
+
+def test_replace_week_plan_with_template_preference_changes_selected_template_on_confirm(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    # Establish the default-rotation baseline first.
+    handlers["create_week_plan"]({"iso_week": "2026-W32"})
+    baseline_week = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W32")
+    baseline_session = _additional_swim_session(baseline_week)
+    assert "fins-assisted" not in baseline_session.structure
+
+    result = handlers["replace_week_plan"](
+        {
+            "iso_week": "2026-W32",
+            "confirm": True,
+            "template_preference": {"purpose": "sprint_power"},
+        }
+    )
+    assert "error" not in result
+    assert result["persisted"] is True
+
+    reloaded_week = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W32")
+    reloaded_session = _additional_swim_session(reloaded_week)
+    assert "fins-assisted" in reloaded_session.structure
+
+
+def test_replace_week_plan_template_preference_draft_mode_does_not_persist(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    handlers["create_week_plan"]({"iso_week": "2026-W32"})
+
+    result = handlers["replace_week_plan"](
+        {"iso_week": "2026-W32", "template_preference": {"purpose": "sprint_power"}}
+    )
+    assert "error" not in result
+    assert result["persisted"] is False
+
+    # Still the unconstrained default on disk -- draft mode never persisted.
+    week = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W32")
+    session = _additional_swim_session(week)
+    assert "fins-assisted" not in session.structure
+
+
+def test_replace_week_plan_invalid_template_preference_interval_style_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["replace_week_plan"](
+        {"iso_week": "2026-W28", "template_preference": {"interval_style": "not_a_real_style"}}
+    )
+    assert "error" in result
+    assert "template_preference" in result["error"]
 
 
 # --- set_event_active_status ---------------------------------------------------

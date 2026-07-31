@@ -5,7 +5,7 @@ import {
   formatShortDate, formatLongDate, formatDuration, formatDistance, formatPace,
   parseIsoDate, sessionsByDay, classifySession, sessionDisplay, sessionDotColorVar,
   pickCurrentAndNextWeek, daysUntil, macroTargetEvent, currentBlockIndex, longSwimLadder,
-  findSessionById, parseStructureBlocks, parseMainSetIntervals,
+  findSessionById, parseStructureBlocks, parseMainSetIntervals, renderStructuredWorkout,
 } from './plan.js';
 import { TOOL_LABELS } from './chat.js';
 import {
@@ -138,19 +138,63 @@ function renderStructureBlock(block) {
     </section>`;
 }
 
-/** Renders `structure`/`detail` as their own labeled sections. `structure`
- * is split into visually-distinct blocks (Warm-up/Main set/Cool-down/Why,
- * or the strength format's two headings + its own Why) via
- * parseStructureBlocks/renderStructureBlock rather than one flat
- * `white-space: pre-wrap` blob. At least one of `structure`/`detail` is
- * present for every real session shape today, but a pool-coach placeholder
- * with neither still has a real, non-blank title in the header above
- * (deriveSessionTitle's fallback), so there is always something sensible to
- * show even when this whole block is empty. */
+/** One `renderStructuredWorkout` line as its own indented div -- a repeat's
+ * header (e.g. "3 x:", "EMOM x10 (every 60s):") or a step's label, each with
+ * an optional secondary `.struct-detail` badge (duration/target/load) laid
+ * out as its own small span rather than string-concatenated into `text`, so
+ * CSS can style the two differently (see index.html's `.struct-*` rules).
+ * Indentation is `line.depth` steps of 18px, inline (no new CSS class per
+ * depth needed for what's expected to stay a small handful of levels). */
+function renderStructuredLine(line) {
+  const cls = line.kind === 'repeat' ? 'struct-line struct-line-repeat' : 'struct-line struct-line-step';
+  const detail = line.detail ? `<span class="struct-detail mono">${esc(line.detail)}</span>` : '';
+  return `
+      <div class="${cls}" style="padding-left:${line.depth * 18}px">
+        <span class="struct-text">${esc(line.text)}</span>${detail}
+      </div>`;
+}
+
+/** Phase A's structured-IR rendering: a simple, generic tree-walk over
+ * `session.structured` (see plan.js's `renderStructuredWorkout` for the
+ * actual tree-walking logic -- this just lays its flat `{ depth, kind,
+ * text, detail }` lines out as HTML). Deliberately NOT the polished
+ * per-block Warm-up/Main-set/Cool-down design `renderStructureBlock` above
+ * produces from prose -- that's Phase B's job, a separate follow-up pass.
+ * Returns '' for an empty tree (defensive; `renderPlanSessionDetail` only
+ * calls this once it's already confirmed `structured.items` is non-empty). */
+function renderStructuredWorkoutSection(structured) {
+  const lines = renderStructuredWorkout(structured);
+  if (lines.length === 0) return '';
+  return `
+    <section class="detail-section">
+      <h4>Workout</h4>
+      <div class="struct-tree">${lines.map(renderStructuredLine).join('')}</div>
+    </section>`;
+}
+
+/** Renders `structure`/`detail` as their own labeled sections. Two rendering
+ * paths for the workout-content section, in priority order:
+ *  - `session.structured` present (PR #91's `WorkoutStructure` IR, with at
+ *    least one item): rendered directly via `renderStructuredWorkoutSection`'s
+ *    generic tree-walk -- Phase A of the migration off prose-regex-parsing
+ *    (see plan.js's tree-walk section doc comment for the phased rationale).
+ *  - Otherwise (legacy session predating `structured`, or a real `None`):
+ *    falls back to today's `parseStructureBlocks`/`renderStructureBlock`
+ *    prose rendering, unchanged.
+ * `structure` (the prose string) is still used for the title/purpose logic
+ * below regardless of which path renders the body -- the engine populates
+ * both `structure=` and `structured=` at the same call site, so `structure`
+ * keeps being a reliable signal for deriveSessionTitle/purpose-vs-detail
+ * even on a session that also has `structured`. At least one of
+ * `structure`/`detail` is present for every real session shape today, but a
+ * pool-coach placeholder with neither still has a real, non-blank title in
+ * the header above (deriveSessionTitle's fallback), so there is always
+ * something sensible to show even when this whole block is empty. */
 function renderPlanSessionDetail(session) {
   const classification = classifySession(session);
   const { title, detail, structure } = sessionDisplay(session);
   const dateLabel = formatLongDate(parseIsoDate(session.date));
+  const hasStructured = Boolean(session.structured?.items?.length);
 
   // Whether to show the full, un-split `purpose` or just the post-em-dash
   // `detail` fragment here depends on where the header title (above) came
@@ -185,7 +229,9 @@ function renderPlanSessionDetail(session) {
       <div class="hist-meta mono">${esc(sportLabel(session.sport))} · ${esc(dateLabel)}</div>
     </div>
     ${renderPlanSessionDetailStats(session)}
-    ${structure ? parseStructureBlocks(structure).map(renderStructureBlock).join('') : ''}
+    ${hasStructured
+      ? renderStructuredWorkoutSection(session.structured)
+      : (structure ? parseStructureBlocks(structure).map(renderStructureBlock).join('') : '')}
     ${session.structured ? renderGarminDownload(session) : ''}
     ${purpose ? `
     <section class="detail-section">

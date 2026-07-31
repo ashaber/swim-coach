@@ -25,17 +25,47 @@ from pathlib import Path
 from typing import Callable, Literal
 
 import yaml
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from swim_coach.models import (
     Athlete,
     WorkoutRepeat,
     WorkoutStep,
+    WorkoutStepOrRepeat,
     WorkoutStructure,
     WorkoutTarget,
 )
 
 TEMPLATES_DIR = Path(__file__).parent / "workout_templates"
+
+# The one genuinely subjective, non-derivable WorkoutTemplate field (see this
+# module's docstring's Opus-consultation note carried over from the planning
+# session): coaching INTENT, not shape -- an 8x200 straight set could be
+# aerobic-base or a threshold test; only the template's author knows which.
+# Finalized against the real template library's actual content (18 files as
+# of this pass): every real `build`/`peak`/`taper` template's Z3->Z4 numeric
+# progression reads as either the core threshold-building work (descend/
+# pyramid/ladder/negative_split/descending_ladder shapes with no other
+# gimmick), an explicitly race-pace-named set, a technique-constrained set
+# (breathing pattern, single-stroke focus), or a sprint/power set (fins,
+# kick-sprint, explicit "sprint" framing) -- so those four values are all
+# real today. `recovery`/`strength_endurance`/`max_strength`/`posterior_chain`
+# have no real template yet (no strength WorkoutTemplate/YAML exists in this
+# pass -- strength sessions are still authored directly in `plan.py`'s
+# `_strength_session_structure_template`), but are kept in the enum since
+# they're the plan's own named future categories for that content, not a
+# guess -- adding a real strength template later needs no enum-widening PR.
+TemplatePurpose = Literal[
+    "aerobic_base",
+    "threshold",
+    "race_pace",
+    "technique",
+    "sprint_power",
+    "recovery",
+    "strength_endurance",
+    "max_strength",
+    "posterior_chain",
+]
 
 # Representative sweep used by `load_workout_templates`'s load-time semantic
 # validation (see `_validate_template_semantics`) -- covers small/large
@@ -69,6 +99,16 @@ class WorkoutTemplate(BaseModel):
     format_type: str
     narrative_template: str
     source_note: str | None = None
+    purpose: TemplatePurpose
+    # `tags` is a narrow escape hatch for long-tail labels that don't fit
+    # `purpose`'s coarse coaching-intent categories (e.g. "fins",
+    # "usms-sourced") -- NOT the primary query mechanism. `find_templates`
+    # only exposes real, mechanically-derived facets (equipment/strokes/
+    # interval_style, computed from structure) plus `purpose` as first-class
+    # filters; `tags` isn't in `find_templates`' signature on purpose, so it
+    # can't silently become the lazy flat-bag answer the Opus consultation
+    # rejected -- authors can still tag freely, it just doesn't drive search.
+    tags: list[str] = Field(default_factory=list)
 
 
 def _format_pace_s(pace_s: float) -> str:
@@ -361,14 +401,59 @@ def _validate_template_semantics(template: WorkoutTemplate, file_path: Path) -> 
                     )
 
 
+# Module-level cache: `load_workout_templates()` used to re-read + re-validate
+# every YAML file on every single call (including every call inside
+# `_select_main_set_template`, i.e. every session `generate_week` builds) --
+# fine at 6-18 files, real waste once the library grows. Keyed by the
+# resolved directory path (not the raw `dir_path` argument, which may be a
+# `str` or a relative `Path`) so the real `TEMPLATES_DIR` and any test's own
+# `tmp_path` fixture each get their own independent cache entry -- tests that
+# build a fresh temp directory per test never see another test's cached
+# templates. Facets (see `TemplateFacets` below) are computed once alongside
+# the templates themselves and cached in the same entry, never persisted to
+# disk (recomputed from the template's structure every time the cache is
+# (re)built, per the Opus-consultation "never hand-authored, never persisted"
+# rule).
+_TEMPLATE_CACHE: dict[Path, tuple[list[WorkoutTemplate], dict[str, "TemplateFacets"]]] = {}
+
+
+def clear_template_cache() -> None:
+    """Test-only escape hatch: drops every cached `(templates, facets)`
+    entry so a subsequent `load_workout_templates()`/`load_template_facets()`
+    call re-reads from disk. Production code never needs this -- the
+    template library is a git-versioned, redeployed-to-pick-up-changes asset,
+    not runtime-mutable content (see this module's docstring)."""
+    _TEMPLATE_CACHE.clear()
+
+
 def load_workout_templates(dir_path: Path | str = TEMPLATES_DIR) -> list[WorkoutTemplate]:
     """Parse every `*.yaml` file in `dir_path`, validate via `WorkoutTemplate`,
     then run `_validate_template_semantics` on each -- fails fast with a
     clear, file-identifying error on any violation (malformed YAML, unknown
     `format_type`, a base-applicable template that leaks Z3/Z4 language, a
     template whose strategy doesn't sum to `distance_m`, an internal
-    `library/` citation, or a duplicate `id`).
+    `library/` citation, or a duplicate `id`). Cached per resolved `dir_path`
+    after the first call -- see `_TEMPLATE_CACHE` above.
     """
+    return _load_templates_and_facets(dir_path)[0]
+
+
+def load_template_facets(dir_path: Path | str = TEMPLATES_DIR) -> dict[str, "TemplateFacets"]:
+    """Every loaded template's computed `TemplateFacets`, keyed by template
+    `id`. Same load-and-cache path as `load_workout_templates` (same cache
+    entry, so calling both for the same `dir_path` never re-reads/re-computes
+    twice)."""
+    return _load_templates_and_facets(dir_path)[1]
+
+
+def _load_templates_and_facets(
+    dir_path: Path | str,
+) -> tuple[list[WorkoutTemplate], dict[str, "TemplateFacets"]]:
+    cache_key = Path(dir_path).resolve()
+    cached = _TEMPLATE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     dir_path = Path(dir_path)
     templates: list[WorkoutTemplate] = []
     seen_ids: dict[str, Path] = {}
@@ -403,10 +488,16 @@ def load_workout_templates(dir_path: Path | str = TEMPLATES_DIR) -> list[Workout
         _validate_template_semantics(template, file_path)
         templates.append(template)
 
-    return templates
+    facets = {t.id: compute_facets(t) for t in templates}
+    _TEMPLATE_CACHE[cache_key] = (templates, facets)
+    return templates, facets
 
 
-def _select_main_set_template(macro_block_name: str, selector: int) -> WorkoutTemplate:
+def _select_main_set_template(
+    macro_block_name: str,
+    selector: int,
+    preference: "TemplatePreference | None" = None,
+) -> WorkoutTemplate:
     """Shared candidate-selection logic for `render_main_set` and
     `build_main_set_step` -- filter loaded templates to `macro_block_name in
     applicable_blocks`, pick one via `selector % len(candidates)`.
@@ -420,7 +511,31 @@ def _select_main_set_template(macro_block_name: str, selector: int) -> WorkoutTe
     alphabetical sort order matches PR #85's original selector->template
     mapping exactly (see `tests/unit/test_plan.py`'s byte-identical
     regression tests).
+
+    `preference` (optional): narrows the candidate pool via `find_templates`
+    BEFORE the deterministic `selector % len` rotation applies, so a coach
+    request like "more kettlebell work" or "give me a threshold set" can
+    actually change which template gets picked instead of only ever landing
+    on whatever the blind rotation lands on (see `backend/app/tools.py`'s
+    `create_week_plan`/`replace_week_plan` wiring). Raises if the preference
+    matches zero templates for this block -- a silent fallback to the
+    unfiltered rotation would make an honored-sounding request quietly do
+    nothing, which is worse than a clear error.
     """
+    if preference is not None and preference.is_set():
+        candidates = find_templates(
+            block=macro_block_name,
+            purpose=preference.purpose,
+            equipment_any=preference.equipment_any,
+            interval_style=preference.interval_style,
+        )
+        if not candidates:
+            raise ValueError(
+                f"no workout templates match {preference!r} for macro block "
+                f"{macro_block_name!r}"
+            )
+        return candidates[selector % len(candidates)]
+
     templates = load_workout_templates()
     candidates = sorted(
         (t for t in templates if macro_block_name in t.applicable_blocks),
@@ -453,38 +568,35 @@ def render_main_set(
     return template.narrative_template.format(**placeholders)
 
 
-def build_main_set_step(
+def _build_step_for_template(
+    template: WorkoutTemplate,
     macro_block_name: str,
-    selector: int,
     reps: int,
     rep: int,
     z2: dict,
     z3: dict,
     z4: dict,
 ) -> WorkoutStep:
-    """Build the `WorkoutStep` representing a swim session's main set, for
-    `Session.structured`. Reuses `_select_main_set_template` +
-    `FORMAT_STRATEGIES` + `narrative_template.format()` -- the exact same,
-    already-reviewed machinery `render_main_set` uses -- so this step's
-    `label` is guaranteed byte-identical to `render_main_set`'s output
-    (minus the "Main set: " prefix, which `render_prose`'s role->prefix
-    mapping adds back at render time). See
-    `tests/unit/test_workout_templates.py`'s byte-identical parity proof.
+    """Render a SPECIFIC, already-selected `template` into the `WorkoutStep`
+    representing a swim session's main set. Factored out of
+    `build_main_set_step` so `compute_facets` can render a template's
+    representative structure directly (a fixed template, not a rotation
+    pick) via the exact same, already-reviewed rendering logic -- see that
+    function's docstring.
 
     `target`'s zone anchor is derived structurally from which zone-range
-    placeholder the SELECTED template's `narrative_template` string actually
-    references (`{z4_range}` -> Z4, else `{z3_range}` -> Z3, else
-    `{z2_range}` -> Z2, else left untargeted) rather than guessed from
-    `format_type`/`macro_block_name` alone: some build-block `straight`/
-    `broken_lite`-shaped templates (e.g. `build-f-straight-repeat-sprints`,
-    a fins-assisted sprint set) reference no zone range at all, so tagging
-    them Z2 (the format_type's OTHER, base-block use) would be actively
-    wrong. This is intentionally an approximate, single-zone summary of what
-    may be a multi-zone progression (e.g. `descend`'s Z3->Z4 ramp across
-    reps) -- full per-rep zone fidelity is out of scope for this pass (see
-    module docstring's ETL-workflow note and ROADMAP.md's Phase A scoping).
+    placeholder `template.narrative_template` actually references
+    (`{z4_range}` -> Z4, else `{z3_range}` -> Z3, else `{z2_range}` -> Z2,
+    else left untargeted) rather than guessed from `format_type`/
+    `macro_block_name` alone: some build-block `straight`/`broken_lite`-
+    shaped templates (e.g. `build-f-straight-repeat-sprints`, a fins-assisted
+    sprint set) reference no zone range at all, so tagging them Z2 (the
+    format_type's OTHER, base-block use) would be actively wrong. This is
+    intentionally an approximate, single-zone summary of what may be a
+    multi-zone progression (e.g. `descend`'s Z3->Z4 ramp across reps) --
+    full per-rep zone fidelity is out of scope for this pass (see module
+    docstring's ETL-workflow note and ROADMAP.md's Phase A scoping).
     """
-    template = _select_main_set_template(macro_block_name, selector)
     strategy = FORMAT_STRATEGIES[template.format_type]
     placeholders = strategy(reps, rep, z2, z3, z4, macro_block_name)
     rendered = template.narrative_template.format(**placeholders)
@@ -507,6 +619,348 @@ def build_main_set_step(
         target=target,
         modality="swim",
     )
+
+
+def build_main_set_step(
+    macro_block_name: str,
+    selector: int,
+    reps: int,
+    rep: int,
+    z2: dict,
+    z3: dict,
+    z4: dict,
+    preference: "TemplatePreference | None" = None,
+) -> WorkoutStep:
+    """Build the `WorkoutStep` representing a swim session's main set, for
+    `Session.structured`. Reuses `_select_main_set_template` +
+    `_build_step_for_template` -- the exact same, already-reviewed machinery
+    `render_main_set` uses -- so this step's `label` is guaranteed
+    byte-identical to `render_main_set`'s output (minus the "Main set: "
+    prefix, which `render_prose`'s role->prefix mapping adds back at render
+    time). See `tests/unit/test_workout_templates.py`'s byte-identical
+    parity proof.
+
+    `preference`: see `_select_main_set_template`'s docstring -- passed
+    straight through, narrows the rotation's candidate pool before the
+    `selector % len` pick.
+    """
+    template = _select_main_set_template(macro_block_name, selector, preference)
+    return _build_step_for_template(template, macro_block_name, reps, rep, z2, z3, z4)
+
+
+# --- TemplateFacets: mechanically-derived, never-hand-authored metadata ------
+# Per the Opus-consultation writeup (module docstring / plan file): equipment,
+# stroke(s)/medley-ness, and interval shape (including EMOM/AMRAP) are all
+# read directly off a `WorkoutStructure` tree instead of hand-typed --
+# hand-tagging them would duplicate data that can (and will) drift from the
+# template's actual content. Computed at load time (`load_template_facets`,
+# cached alongside `load_workout_templates`), NEVER persisted to disk --
+# recomputed from the template's structure every time the cache is rebuilt.
+
+
+class TemplateFacets(BaseModel):
+    """Computed, never-hand-authored metadata derived from a
+    `WorkoutTemplate`'s REPRESENTATIVE `WorkoutStructure` (see
+    `compute_facets`) -- the queryable "shape" dimensions `find_templates`
+    filters on, distinct from `purpose` (the one hand-authored, subjective
+    field) and `tags` (the narrow escape hatch).
+
+    `approx_distance_m`/`approx_duration_s` are deliberately approximate: a
+    template's real reps/rep are parametric, resolved only against one
+    athlete's actual session budget at `generate_week()` time (see
+    `resolve_template`) -- these facets are computed from ONE fixed
+    representative `(macro_block_name, distance_m, css_pace_s)` input per
+    template (see `_FACET_REPRESENTATIVE_*` below), suitable for a coarse
+    filtering band (`find_templates`' `max_duration_s`), not exact-minute
+    matching -- exact filtering only makes sense on a *resolved* workout.
+    """
+
+    schema_version: int = 1
+    modality: Literal["swim", "strength"] = "swim"
+    equipment: list[str] = Field(default_factory=list)
+    strokes: list[str] = Field(default_factory=list)
+    is_medley: bool = False
+    # Derived from `WorkoutRepeat.repeat_mode`, NOT `format_type` -- the
+    # "narrow enum wall" finding: `format_type` is an authoring-time
+    # computation hint, and the masters-workout research already found real
+    # shapes it can't name; `interval_style` derived from the actual
+    # structure tree doesn't hit that wall. "straight" means no
+    # `WorkoutRepeat` appears anywhere in the structure at all (every real
+    # template shipped in this pass -- `build_main_set_step` emits a single
+    # flat `WorkoutStep`, never a repeat wrapper).
+    interval_style: Literal["straight", "intervals", "emom", "amrap"] = "straight"
+    approx_distance_m: float | None = None
+    approx_duration_s: float | None = None
+
+
+class TemplatePreference(BaseModel):
+    """Optional coach-driven override for `_select_main_set_template`'s
+    default blind `selector % len` rotation -- the tool-layer's way of
+    honoring a request like "give me more kettlebell work" or "a threshold
+    set this week" instead of only ever getting whatever the rotation lands
+    on. All fields optional and AND-combined via `find_templates` (same
+    semantics as that function's own params) -- `modality`/`block`/
+    `max_duration_s` are deliberately NOT exposed here: modality is always
+    "swim" for this call path, block is already known internally
+    (`macro_block_name`), and duration doesn't make sense as a preference
+    mid-generation (distance/duration are athlete- and budget-driven, not a
+    coach dial). See `backend/app/tools.py`'s `create_week_plan`/
+    `replace_week_plan` wiring for the actual tool-facing surface.
+    """
+
+    schema_version: int = 1
+    purpose: TemplatePurpose | None = None
+    equipment_any: list[str] | None = None
+    interval_style: Literal["straight", "intervals", "emom", "amrap"] | None = None
+
+    def is_set(self) -> bool:
+        """True if at least one filter is actually populated -- lets
+        `_select_main_set_template` treat an all-`None` `TemplatePreference`
+        exactly like `preference=None` (fall through to the unfiltered
+        rotation) rather than needlessly routing through `find_templates`.
+        """
+        return self.purpose is not None or self.equipment_any is not None or self.interval_style is not None
+
+
+def _walk_steps(items: list[WorkoutStepOrRepeat]) -> list[WorkoutStep]:
+    """Flatten a `WorkoutStructure`'s top-level `items` into every leaf
+    `WorkoutStep`, descending into `WorkoutRepeat.steps` recursively (nested
+    repeats are allowed, if rarely used -- see `WorkoutRepeat`'s own
+    docstring)."""
+    steps: list[WorkoutStep] = []
+    for item in items:
+        if isinstance(item, WorkoutStep):
+            steps.append(item)
+        else:
+            steps.extend(_walk_steps(item.steps))
+    return steps
+
+
+def _top_level_repeat_modes(items: list[WorkoutStepOrRepeat]) -> list[str]:
+    """Every `repeat_mode` used by a top-level (or one-level-nested, per
+    `WorkoutRepeat`'s "nested loops allowed, rarely used" note) `WorkoutRepeat`
+    in `items` -- drives `interval_style`'s derivation. Deliberately does NOT
+    recurse arbitrarily deep: a genuinely multi-level-nested repeat structure
+    is out of scope for this pass's real content (every real template ships
+    zero repeats at all; the EMOM/AMRAP derivation is proven against
+    synthetic structures -- see `tests/unit/test_workout_templates.py`)."""
+    modes: list[str] = []
+    for item in items:
+        if isinstance(item, WorkoutRepeat):
+            modes.append(item.repeat_mode)
+            modes.extend(inner.repeat_mode for inner in item.steps if isinstance(inner, WorkoutRepeat))
+    return modes
+
+
+# Representative pace used only to convert a distance-based step's meters
+# into an approximate seconds estimate for `TemplateFacets.approx_duration_s`
+# (so `find_templates`' `max_duration_s` filter has something meaningful to
+# compare against even though every real template today is authored in
+# distance_m, not time_s) -- Coach judgment, a mid-pack CSS pace, not tied to
+# any specific athlete (this is a template-level, not athlete-level, estimate;
+# see `resolve_template` for the real per-athlete resolution).
+_FACET_REPRESENTATIVE_CSS_PACE_S = 95.0
+_FACET_REPRESENTATIVE_DISTANCE_M = 2000
+
+
+def facets_from_structure(structure: WorkoutStructure) -> TemplateFacets:
+    """Pure derivation of `TemplateFacets` from an already-built
+    `WorkoutStructure` -- no template/YAML/FORMAT_STRATEGIES involvement at
+    all, so this is directly testable against hand-built synthetic
+    structures (including EMOM/AMRAP-shaped `WorkoutRepeat` trees no real
+    shipped template uses yet -- see this repo's test suite). `compute_facets`
+    below is the only production caller, feeding it a template's
+    representative structure.
+
+    Repeat-count-aware distance/duration aggregation: a `count`-mode
+    repeat's inner total is multiplied by its `count` (e.g. 3x100m is 300m,
+    not 100m); a `for_duration`/`amrap` repeat's contribution is just its own
+    fixed `duration_s` window, NOT its inner steps multiplied by anything --
+    the number of rounds inside is genuinely open-ended (AMRAP by definition;
+    EMOM's round count depends on how fast each round is actually completed),
+    so summing/multiplying inner-step distances for those two modes would
+    invent a number nothing in the model actually claims.
+    """
+    steps = _walk_steps(structure.items)
+
+    equipment = sorted({e for s in steps for e in s.equipment})
+    strokes = sorted({s.stroke for s in steps if s.stroke is not None})
+    real_strokes = {s for s in strokes if s in ("free", "back", "breast", "fly")}
+    is_medley = "im" in strokes or "mixed" in strokes or len(real_strokes) > 1
+
+    repeat_modes = _top_level_repeat_modes(structure.items)
+    if "amrap" in repeat_modes:
+        interval_style: Literal["straight", "intervals", "emom", "amrap"] = "amrap"
+    elif "for_duration" in repeat_modes:
+        # for_duration + interval_s is the classic EMOM signature ("every
+        # minute on the minute") -- for_duration without an explicit
+        # interval_s is still round-per-fixed-window shaped, not a plain
+        # count repeat, so it's grouped under the same "emom" facet value
+        # rather than adding a rarely-useful fifth interval_style value.
+        interval_style = "emom"
+    elif "count" in repeat_modes:
+        interval_style = "intervals"
+    else:
+        interval_style = "straight"
+
+    modalities = {s.modality for s in steps}
+    modality: Literal["swim", "strength"] = "strength" if modalities == {"strength"} else "swim"
+
+    distance_m, duration_s = _aggregate_distance_and_duration(structure.items)
+    # Convert any pure-distance contribution into an additional duration
+    # estimate at the representative pace, so distance-authored templates
+    # (every real one, today) still get a meaningful approx_duration_s.
+    duration_s += (distance_m / 100.0) * _FACET_REPRESENTATIVE_CSS_PACE_S
+
+    return TemplateFacets(
+        modality=modality,
+        equipment=equipment,
+        strokes=strokes,
+        is_medley=is_medley,
+        interval_style=interval_style,
+        approx_distance_m=distance_m or None,
+        approx_duration_s=duration_s or None,
+    )
+
+
+def _aggregate_distance_and_duration(items: list[WorkoutStepOrRepeat]) -> tuple[float, float]:
+    """Repeat-count-aware (distance_m, duration_s) totals for `items` -- see
+    `facets_from_structure`'s docstring for the count-vs-for_duration/amrap
+    distinction."""
+    distance_m = 0.0
+    duration_s = 0.0
+    for item in items:
+        if isinstance(item, WorkoutStep):
+            if item.duration_kind == "distance_m" and item.duration_value:
+                distance_m += item.duration_value
+            elif item.duration_kind == "time_s" and item.duration_value:
+                duration_s += item.duration_value
+        else:
+            if item.repeat_mode == "count":
+                inner_distance, inner_duration = _aggregate_distance_and_duration(item.steps)
+                count = item.count or 1
+                distance_m += inner_distance * count
+                duration_s += inner_duration * count
+            else:
+                # for_duration/amrap: the window itself is the contribution,
+                # inner rounds are genuinely open-ended (see docstring above).
+                duration_s += item.duration_s or 0.0
+    return distance_m, duration_s
+
+
+def compute_facets(template: WorkoutTemplate) -> TemplateFacets:
+    """Build a template's ONE representative `WorkoutStructure` (a fixed
+    `(macro_block_name, distance_m, css_pace_s)` input -- see
+    `_FACET_REPRESENTATIVE_*` -- since a template's real reps/rep are only
+    known once resolved against an athlete's actual session budget) and
+    derive its `TemplateFacets` from that. `macro_block_name` is the
+    template's own `applicable_blocks[0]` (representative -- every real
+    template's block-set doesn't change the shape it renders, only the
+    wording's "(build block)"/"(peak block)"/"(taper block)" suffix and the
+    base-vs-build/peak/taper rep-length constants, so any one applicable
+    block is a fair representative).
+
+    Duplicates the warm-up/cool-down/main-set-budget preamble already
+    duplicated (deliberately, per this module's own docstring on the
+    deferred-import reasoning) by `_validate_template_semantics` and
+    `plan.py`'s `_additional_swim_structure_template` -- same reasoning
+    applies a third time here: importing `plan.py` at module load time would
+    be circular (`plan.py` imports this module), so the import is deferred
+    to call time, same as those two existing call sites.
+    """
+    from swim_coach.plan import (
+        ADDITIONAL_SWIM_BASE_BLOCK_REP_M,
+        ADDITIONAL_SWIM_BUILD_BLOCK_REP_M,
+        ADDITIONAL_SWIM_COOL_DOWN_SHARE,
+        ADDITIONAL_SWIM_MIN_COOL_DOWN_M,
+        ADDITIONAL_SWIM_MIN_WARM_UP_M,
+        ADDITIONAL_SWIM_WARM_UP_SHARE,
+        _round_100,
+    )
+    from swim_coach.zones import zone_table
+
+    macro_block_name = template.applicable_blocks[0]
+    distance_m = _FACET_REPRESENTATIVE_DISTANCE_M
+    css_pace_s = _FACET_REPRESENTATIVE_CSS_PACE_S
+    zones = zone_table(css_pace_s)
+    z2, z3, z4 = zones["Z2"], zones["Z3"], zones["Z4"]
+
+    warm_up = max(ADDITIONAL_SWIM_MIN_WARM_UP_M, _round_100(distance_m * ADDITIONAL_SWIM_WARM_UP_SHARE))
+    cool_down_budget_estimate = max(
+        ADDITIONAL_SWIM_MIN_COOL_DOWN_M, _round_100(distance_m * ADDITIONAL_SWIM_COOL_DOWN_SHARE)
+    )
+    main_set_budget = max(0, distance_m - warm_up - cool_down_budget_estimate)
+
+    if macro_block_name == "base":
+        rep = ADDITIONAL_SWIM_BASE_BLOCK_REP_M if main_set_budget >= 1200 else 200
+    else:
+        rep = ADDITIONAL_SWIM_BUILD_BLOCK_REP_M if main_set_budget >= 800 else 100
+    reps = max(1, round(main_set_budget / rep))
+
+    step = _build_step_for_template(template, macro_block_name, reps, rep, z2, z3, z4)
+    return facets_from_structure(WorkoutStructure(items=[step]))
+
+
+def find_templates(
+    *,
+    purpose: str | None = None,
+    modality: str | None = None,
+    block: str | None = None,
+    max_duration_s: float | None = None,
+    equipment_any: list[str] | None = None,
+    interval_style: str | None = None,
+) -> list[WorkoutTemplate]:
+    """The coach's real query hook over the loaded template library +
+    computed `TemplateFacets` (DOD: "coach can find these workouts and apply
+    to right place in macro/week") -- replaces the previous
+    "nothing lets the chat layer ask for a specific kind of workout, only
+    blind `selector % count` rotation" gap.
+
+    Every parameter is optional and AND-combined (omit a param to not filter
+    on it); returns `[]` if nothing matches rather than raising -- callers
+    that need "no match" to be an error (e.g. `_select_main_set_template`
+    honoring an explicit `TemplatePreference`) check for an empty result
+    themselves. Results are sorted by `id` (same deterministic order
+    `_select_main_set_template` already relies on for its rotation).
+
+    - `purpose`: exact match against `WorkoutTemplate.purpose`.
+    - `modality`: exact match against the template's representative
+      `TemplateFacets.modality` (every real template today is "swim" -- no
+      strength `WorkoutTemplate`/YAML exists yet).
+    - `block`: `block in template.applicable_blocks`.
+    - `max_duration_s`: keep templates whose `TemplateFacets.approx_duration_s`
+      is populated and `<= max_duration_s` (an approximate band -- see
+      `TemplateFacets`' own caveat; a template with no computed duration
+      estimate is excluded rather than assumed to pass).
+    - `equipment_any`: keep templates whose `TemplateFacets.equipment` shares
+      at least one item with `equipment_any`.
+    - `interval_style`: exact match against `TemplateFacets.interval_style`.
+    """
+    templates = load_workout_templates()
+    facets_by_id = load_template_facets()
+
+    results = []
+    for template in templates:
+        if purpose is not None and template.purpose != purpose:
+            continue
+        if block is not None and block not in template.applicable_blocks:
+            continue
+
+        facets = facets_by_id[template.id]
+        if modality is not None and facets.modality != modality:
+            continue
+        if max_duration_s is not None and (
+            facets.approx_duration_s is None or facets.approx_duration_s > max_duration_s
+        ):
+            continue
+        if equipment_any and not (set(equipment_any) & set(facets.equipment)):
+            continue
+        if interval_style is not None and facets.interval_style != interval_style:
+            continue
+
+        results.append(template)
+
+    return sorted(results, key=lambda t: t.id)
 
 
 _ROLE_LINE_PREFIX: dict[str, str] = {

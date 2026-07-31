@@ -1,5 +1,6 @@
 schema_version: 1
 id: build-k-descending-ladder-kick
+purpose: sprint_power
 applicable_blocks: [build, peak, taper]
 format_type: descending_ladder
 narrative_template: "Main set: descending-distance kick ladder -- {rung_list} -- same sprint-character effort held on every rung as the distance shrinks rung to rung, negative-split feel from Z3 ({z3_range}) toward Z4 ({z4_range}) -- echoes the All About Those Legs workout's halving-distance kick ladder (200-100-50-25) -- race-pace-adjacent emphasis ({macro_block_name} block)."

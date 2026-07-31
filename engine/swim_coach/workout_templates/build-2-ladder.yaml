@@ -1,5 +1,6 @@
 schema_version: 1
 id: build-2-ladder
+purpose: threshold
 applicable_blocks: [build, peak, taper]
 format_type: ladder
 narrative_template: "Main set: {num_pairs} x ({rep_short}m + {rep_long}m) climbing pairs{tail}, broken-distance ladder, each pair negative-split from Z3 ({z3_range}) toward Z4 ({z4_range}) -- race-pace-adjacent emphasis ({macro_block_name} block)."

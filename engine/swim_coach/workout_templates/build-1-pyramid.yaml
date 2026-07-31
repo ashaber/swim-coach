@@ -1,5 +1,6 @@
 schema_version: 1
 id: build-1-pyramid
+purpose: threshold
 applicable_blocks: [build, peak, taper]
 format_type: pyramid
 narrative_template: "Main set: {reps} x {rep}m broken-distance{pyramid_word}, {ramp_clause} -- race-pace-adjacent emphasis ({macro_block_name} block)."
