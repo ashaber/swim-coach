@@ -92,7 +92,7 @@ from pydantic import ValidationError
 
 from swim_coach.adapt import adapt_week
 from swim_coach.models import Event, Feedback, Workout
-from swim_coach.plan import generate_week, scaffold_macro
+from swim_coach.plan import _duration_min_for_distance, generate_week, scaffold_macro
 from swim_coach.store import StoreInterface
 
 from app.context import iso_week_str, summarize_rollup
@@ -532,7 +532,17 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "Never pass confirm=true on the first call for a given request, "
             "and never chain another tool call in the same response after the "
             "draft -- stop and wait for the athlete's explicit agreement in a "
-            "new message, same discipline as replace_macro_plan."
+            "new message, same discipline as replace_macro_plan.\n\n"
+            "`session_overrides` (optional): the automatic ramp/volume math "
+            "won't always land on the exact number an athlete explicitly "
+            "wants for a specific session -- e.g. a conservative first swim "
+            "back after time off, where the computed distance is technically "
+            "ramp-safe but still more than the athlete wants right now. Use "
+            "this to set one or more sessions' distance_m/duration_min "
+            "directly, applied on top of the otherwise-normal generated "
+            "week, still fully gated by the same draft-then-confirm flow -- "
+            "never call with confirm=true and a fresh override in the same "
+            "turn the athlete hasn't seen yet."
         ),
         "input_schema": {
             "type": "object",
@@ -551,6 +561,49 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                         "persists via store.save_week, overwriting whatever "
                         "week plan is currently on file for iso_week."
                     ),
+                },
+                "session_overrides": {
+                    "type": "array",
+                    "description": (
+                        "Optional explicit overrides applied to the generated "
+                        "week's sessions before it's returned/persisted. Each "
+                        "entry must match exactly one session already in the "
+                        "generated week (by date, and by sport too if more "
+                        "than one session falls on that date) -- an entry "
+                        "matching zero or more than one session is an error, "
+                        "not a silent no-op or a guess."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "date": {
+                                "type": "string",
+                                "description": "Session date, 'YYYY-MM-DD', must fall within iso_week.",
+                            },
+                            "sport": {
+                                "type": "string",
+                                "description": (
+                                    "Disambiguates when more than one session falls on "
+                                    "`date`. Omit if only one session that day."
+                                ),
+                            },
+                            "distance_m": {
+                                "type": "number",
+                                "description": "New distance for this session, in meters.",
+                            },
+                            "duration_min": {
+                                "type": "number",
+                                "description": (
+                                    "New duration for this session, in minutes. Optional -- "
+                                    "if omitted while distance_m is given, duration is "
+                                    "re-estimated from the new distance at the athlete's pace, "
+                                    "same math the engine itself uses."
+                                ),
+                            },
+                        },
+                        "required": ["date"],
+                        "additionalProperties": False,
+                    },
                 },
             },
             "required": ["iso_week"],
@@ -1311,6 +1364,64 @@ def _handle_reschedule_session(input_data: dict[str, Any], *, store: StoreInterf
     }
 
 
+def _apply_session_overrides(week, overrides: list[dict[str, Any]], css_pace_s: float | None) -> str | None:
+    """Applies explicit per-session distance_m/duration_min overrides to an
+    already-generated week's sessions, in place. Returns an error string on
+    the first override that doesn't match exactly one session (no match, or
+    an ambiguous match needing `sport` to disambiguate, same convention as
+    `reschedule_session`'s existing date+sport matching above) -- callers
+    should treat any non-None return as a full failure, not apply the rest
+    and ignore the bad one. `week` is mutated directly (pydantic Session
+    objects are not frozen in this codebase); this is only ever called on a
+    freshly-computed `generate_week()` result, never a stored object another
+    caller might still be holding a reference to.
+    """
+    for override in overrides:
+        raw_date = override.get("date")
+        try:
+            override_date = date.fromisoformat(raw_date)
+        except (TypeError, ValueError):
+            return f"invalid session_overrides date {raw_date!r}; expected 'YYYY-MM-DD'"
+
+        sport = override.get("sport")
+        matches = [
+            s for s in week.sessions
+            if s.date == override_date and (sport is None or s.sport == sport)
+        ]
+        if len(matches) == 0:
+            same_day = [{"sport": s.sport, "date": s.date.isoformat()} for s in week.sessions if s.date == override_date]
+            return (
+                f"session_overrides: no session matching date {raw_date!r}"
+                + (f" and sport {sport!r}" if sport else "")
+                + f"; sessions on {raw_date!r}: {same_day}"
+            )
+        if len(matches) > 1:
+            return (
+                f"session_overrides: {len(matches)} sessions found on {raw_date!r} "
+                f"({', '.join(s.sport for s in matches)}) -- pass `sport` to disambiguate"
+            )
+
+        session = matches[0]
+        distance_m = override.get("distance_m")
+        duration_min = override.get("duration_min")
+        if distance_m is None and duration_min is None:
+            return f"session_overrides: entry for {raw_date!r} needs distance_m and/or duration_min"
+
+        if distance_m is not None:
+            session.distance_m = distance_m
+        if duration_min is not None:
+            session.duration_min = duration_min
+        elif distance_m is not None and css_pace_s is not None:
+            # No explicit duration override -- re-estimate from the new
+            # distance at the athlete's own CSS pace, same rough-estimate
+            # math the engine itself uses (_duration_min_for_distance),
+            # rather than leaving a stale duration paired with a new distance.
+            # If the athlete has no CSS pace on file yet, leave duration_min
+            # as generate_week originally computed it rather than guessing.
+            session.duration_min = max(_duration_min_for_distance(distance_m, css_pace_s), 15.0)
+    return None
+
+
 def _week_sessions_json(week) -> list[dict[str, Any]]:
     return [
         {
@@ -1341,6 +1452,16 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
     `store.save_week`; `confirm=True` recomputes identically (generate_week
     is a pure function of its inputs, so this is safe to re-run) and
     persists.
+
+    Optional `session_overrides` applies explicit distance_m/duration_min
+    overrides to specific sessions in the freshly-generated week, via
+    `_apply_session_overrides`, before the draft/comparison is built or
+    anything is persisted -- this is the tool's answer to the real dead end
+    where `generate_week`'s own ramp/volume math computes a technically-safe
+    number the athlete explicitly doesn't want (e.g. a conservative first
+    swim back after time off): there was previously no way to just set a
+    specific session's number, only to accept whatever the deterministic
+    math produced or replan the whole macro.
     """
     iso_week = input_data.get("iso_week")
     if not iso_week:
@@ -1385,6 +1506,12 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
         week = generate_week(athlete, macro, iso_week, week_start, event_format)
     except ValueError as exc:
         return {"error": str(exc)}
+
+    session_overrides = input_data.get("session_overrides")
+    if session_overrides:
+        override_error = _apply_session_overrides(week, session_overrides, athlete.css_pace_s_per_100m)
+        if override_error is not None:
+            return {"error": override_error}
 
     comparison = None
     if existing_week is not None:
