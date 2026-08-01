@@ -1515,6 +1515,104 @@ def test_replace_week_plan_session_override_missing_both_fields_is_a_clean_error
     assert "error" in result
 
 
+# --- replace_week_plan session_overrides: purpose/structure content authoring ---
+# Real bug, real athlete, real transcript: asked the coach for a technique
+# session and Tuesday/Thursday variety on a base-block week. No base-block
+# template has purpose=technique and none is an interval format either, so
+# template_preference correctly failed with a clean error -- but the coach
+# had no way to actually PERSIST the good technique content it already knew
+# how to write. This is the fix: author real content directly via
+# session_overrides instead of only describing it in a chat reply.
+
+
+def test_replace_week_plan_session_override_sets_purpose_and_structure(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    target = baseline["sessions"][0]
+
+    new_purpose = "Technique -- freestyle catch and rotation drills"
+    new_structure = (
+        "Warm-up: 400m easy free.\n"
+        "Main set: 4 x 50m catch-up drill, 15s rest; 4 x 50m single-arm, 15s rest.\n"
+        "Cool-down: 300m easy, focus on stroke count."
+    )
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{
+            "date": target["date"], "sport": target["sport"],
+            "purpose": new_purpose, "structure": new_structure,
+        }],
+    })
+
+    assert "error" not in result
+    overridden = next(s for s in result["sessions"] if s["date"] == target["date"] and s["sport"] == target["sport"])
+    assert overridden["purpose"] == new_purpose
+    assert overridden["structure"] == new_structure
+
+
+def test_replace_week_plan_session_override_structure_clears_stale_structured_ir(athletes_dir) -> None:
+    # The session whose structure we're overriding may already have real
+    # structured data (Garmin-exportable, tree-walk-rendered) from the
+    # template pipeline -- if we didn't clear it, the UI and Garmin export
+    # would keep showing/exporting that OLD content, silently ignoring the
+    # new prose just persisted here.
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    target = next((s for s in baseline["sessions"] if s["has_structured"]), None)
+    if target is None:
+        pytest.skip("no session in this fixture week has structured data to test clearing against")
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{
+            "date": target["date"], "sport": target["sport"],
+            "structure": "Warm-up: 400m easy.\nMain set: hand-authored replacement.\nCool-down: 300m easy.",
+        }],
+        "confirm": True,
+    })
+
+    assert "error" not in result
+    overridden = next(s for s in result["sessions"] if s["date"] == target["date"] and s["sport"] == target["sport"])
+    assert overridden["has_structured"] is False
+
+    on_disk = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    persisted = next(s for s in on_disk.sessions if s.date.isoformat() == target["date"] and s.sport == target["sport"])
+    assert persisted.structured is None
+    assert "hand-authored replacement" in persisted.structure
+
+
+def test_replace_week_plan_session_override_purpose_only_leaves_structure_untouched(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    target = baseline["sessions"][0]
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{"date": target["date"], "sport": target["sport"], "purpose": "Recovery swim"}],
+    })
+
+    assert "error" not in result
+    overridden = next(s for s in result["sessions"] if s["date"] == target["date"] and s["sport"] == target["sport"])
+    assert overridden["purpose"] == "Recovery swim"
+    assert overridden["structure"] == target["structure"]
+    assert overridden["has_structured"] == target["has_structured"]
+
+
+def test_week_sessions_json_exposes_structure_and_has_structured(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+
+    assert "error" not in result
+    for session in result["sessions"]:
+        assert "structure" in session
+        assert "has_structured" in session
+        assert isinstance(session["has_structured"], bool)
+
+
 def test_replace_week_plan_end_to_end_pool_coach_status_change_regression(athletes_dir) -> None:
     # This morning's real bug, end to end: 2026-W28's real fixture sessions
     # are pool_coach-source placeholders (has_pool_coach defaults True).

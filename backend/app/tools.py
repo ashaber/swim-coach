@@ -592,16 +592,34 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "and never chain another tool call in the same response after the "
             "draft -- stop and wait for the athlete's explicit agreement in a "
             "new message, same discipline as replace_macro_plan.\n\n"
-            "`session_overrides` (optional): the automatic ramp/volume math "
+            "`session_overrides` (optional): use this to set one or more "
+            "sessions' distance_m/duration_min/purpose/structure directly, "
+            "applied on top of the otherwise-normal generated week, still "
+            "fully gated by the same draft-then-confirm flow -- never call "
+            "with confirm=true and a fresh override in the same turn the "
+            "athlete hasn't seen yet. Two distinct real uses:\n"
+            "  - distance_m/duration_min: the automatic ramp/volume math "
             "won't always land on the exact number an athlete explicitly "
-            "wants for a specific session -- e.g. a conservative first swim "
-            "back after time off, where the computed distance is technically "
-            "ramp-safe but still more than the athlete wants right now. Use "
-            "this to set one or more sessions' distance_m/duration_min "
-            "directly, applied on top of the otherwise-normal generated "
-            "week, still fully gated by the same draft-then-confirm flow -- "
-            "never call with confirm=true and a fresh override in the same "
-            "turn the athlete hasn't seen yet.\n\n"
+            "wants -- e.g. a conservative first swim back after time off, "
+            "where the computed distance is technically ramp-safe but still "
+            "more than the athlete wants right now.\n"
+            "  - purpose/structure: when the athlete wants a specific "
+            "session's actual CONTENT changed (a technique/drill focus, a "
+            "specific interval structure) and no `template_preference` "
+            "value matches anything in the library for that macro block --"
+            "write the session's real instructions yourself (same as you'd "
+            "describe verbally) directly into `structure`, and a matching "
+            "`purpose` describing it, rather than only describing the "
+            "workout in your chat reply with nowhere for it to actually "
+            "live. This is exactly how to unblock a request like 'give me a "
+            "technique session Thursday' when the template library has no "
+            "technique-purpose entry for that block yet -- don't just "
+            "explain the gap and stop, author the content and persist it "
+            "here. Setting `structure` clears that session's `structured` "
+            "field (the richer structured workout data) since your prose "
+            "replaces it -- the athlete's app view and any Garmin export "
+            "will reflect the same prose you write, not richer structure, "
+            "until a real library template exists for this case.\n\n"
             "`template_preference` (optional): honors a request like 'give "
             "me more kettlebell work this week' or 'I want a threshold set' "
             "by narrowing which main-set workout-library template the "
@@ -665,6 +683,24 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                                     "if omitted while distance_m is given, duration is "
                                     "re-estimated from the new distance at the athlete's pace, "
                                     "same math the engine itself uses."
+                                ),
+                            },
+                            "purpose": {
+                                "type": "string",
+                                "description": (
+                                    "New purpose/description for this session, athlete-facing "
+                                    "(e.g. 'Technique -- freestyle catch and rotation drills')."
+                                ),
+                            },
+                            "structure": {
+                                "type": "string",
+                                "description": (
+                                    "New full session instructions, athlete-facing prose -- "
+                                    "author real content here (warm-up/main set/cool-down or "
+                                    "whatever shape fits) exactly as you'd describe it in chat, "
+                                    "when no library template covers what the athlete asked "
+                                    "for. Setting this clears the session's structured workout "
+                                    "data (see this parameter's parent description)."
                                 ),
                             },
                         },
@@ -1508,8 +1544,13 @@ def _apply_session_overrides(week, overrides: list[dict[str, Any]], css_pace_s: 
         session = matches[0]
         distance_m = override.get("distance_m")
         duration_min = override.get("duration_min")
-        if distance_m is None and duration_min is None:
-            return f"session_overrides: entry for {raw_date!r} needs distance_m and/or duration_min"
+        purpose = override.get("purpose")
+        structure = override.get("structure")
+        if distance_m is None and duration_min is None and purpose is None and structure is None:
+            return (
+                f"session_overrides: entry for {raw_date!r} needs at least one of "
+                "distance_m, duration_min, purpose, structure"
+            )
 
         if distance_m is not None:
             session.distance_m = distance_m
@@ -1523,6 +1564,19 @@ def _apply_session_overrides(week, overrides: list[dict[str, Any]], css_pace_s: 
             # If the athlete has no CSS pace on file yet, leave duration_min
             # as generate_week originally computed it rather than guessing.
             session.duration_min = max(_duration_min_for_distance(distance_m, css_pace_s), 15.0)
+
+        if purpose is not None:
+            session.purpose = purpose
+        if structure is not None:
+            session.structure = structure
+            # The session's structured IR (if any) was built by the template
+            # pipeline for the OLD content -- leaving it in place would mean
+            # the UI's tree-walk rendering and Garmin .fit export both keep
+            # showing/exporting the previous template's workout, silently
+            # ignoring the athlete-facing prose the coach (or athlete) just
+            # asked to persist here. Clear it so both correctly fall back to
+            # the new prose instead of a stale, mismatched structure.
+            session.structured = None
     return None
 
 
@@ -1535,6 +1589,13 @@ def _week_sessions_json(week) -> list[dict[str, Any]]:
             "distance_m": s.distance_m,
             "duration_min": s.duration_min,
             "purpose": s.purpose,
+            "structure": s.structure,
+            # Not the full structured IR (keeps this response compact) --
+            # just whether one exists, so the coach can tell whether a
+            # session_overrides.structure write would be clearing real
+            # structured data (Garmin-exportable) vs. an already-prose-only
+            # session (nothing to lose).
+            "has_structured": s.structured is not None,
         }
         for s in week.sessions
     ]
