@@ -700,7 +700,14 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                                     "whatever shape fits) exactly as you'd describe it in chat, "
                                     "when no library template covers what the athlete asked "
                                     "for. Setting this clears the session's structured workout "
-                                    "data (see this parameter's parent description)."
+                                    "data (see this parameter's parent description). REQUIRES "
+                                    "`distance_m` in this same entry, set to the real total "
+                                    "implied by what you just wrote (e.g. warm-up + main set + "
+                                    "cool-down summed) -- `distance_m` is a separate field with "
+                                    "nothing keeping it in sync with `structure`'s prose "
+                                    "automatically; do the arithmetic yourself and pass the "
+                                    "matching number, or the athlete sees a distance stat that "
+                                    "contradicts the workout you just wrote."
                                 ),
                             },
                         },
@@ -1550,6 +1557,25 @@ def _apply_session_overrides(week, overrides: list[dict[str, Any]], css_pace_s: 
             return (
                 f"session_overrides: entry for {raw_date!r} needs at least one of "
                 "distance_m, duration_min, purpose, structure"
+            )
+        if structure is not None and distance_m is None:
+            # Real bug, caught live: `distance_m` is a separate field from
+            # `structure`'s free-text total -- nothing keeps them in sync
+            # automatically (parsing an arbitrary prose total back out is
+            # fragile and wasn't attempted). Without this check, authoring a
+            # new structure (e.g. 600m warm-up + 10x200m + 400m cool-down =
+            # 3000m) while leaving the session's OLD distance_m in place
+            # (e.g. 400m from whatever it replaced) persists a session whose
+            # stats header silently disagrees with its own written content.
+            # Require the caller to state the real total explicitly rather
+            # than let it drift.
+            return (
+                f"session_overrides: entry for {raw_date!r} sets `structure` "
+                "without `distance_m` -- the two are independent fields with "
+                "nothing keeping them in sync automatically, so the athlete "
+                "would see a distance stat that disagrees with what the "
+                "structure text actually describes. Pass the real total "
+                "distance implied by the new structure as `distance_m` too."
             )
 
         if distance_m is not None:

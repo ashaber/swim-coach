@@ -1541,7 +1541,7 @@ def test_replace_week_plan_session_override_sets_purpose_and_structure(athletes_
         "iso_week": "2026-W28",
         "session_overrides": [{
             "date": target["date"], "sport": target["sport"],
-            "purpose": new_purpose, "structure": new_structure,
+            "purpose": new_purpose, "structure": new_structure, "distance_m": 1000,
         }],
     })
 
@@ -1549,6 +1549,32 @@ def test_replace_week_plan_session_override_sets_purpose_and_structure(athletes_
     overridden = next(s for s in result["sessions"] if s["date"] == target["date"] and s["sport"] == target["sport"])
     assert overridden["purpose"] == new_purpose
     assert overridden["structure"] == new_structure
+    assert overridden["distance_m"] == 1000
+
+
+def test_replace_week_plan_session_override_structure_without_distance_m_is_a_clean_error(athletes_dir) -> None:
+    # Real bug, caught live: a coach-authored structure ("600m warm-up +
+    # 10x200m + 400m cool-down = 3000m") persisted fine, but distance_m was
+    # never updated to match -- the athlete saw a distance stat (400m, left
+    # over from whatever the session used to be) that flatly contradicted
+    # the workout actually written. distance_m and structure are independent
+    # fields; nothing keeps them in sync automatically, so structure-only
+    # overrides must be rejected rather than silently drifting.
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    target = baseline["sessions"][0]
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{
+            "date": target["date"], "sport": target["sport"],
+            "structure": "Warm-up: 600m.\nMain set: 10 x 200m.\nCool-down: 400m.",
+        }],
+    })
+
+    assert "error" in result
+    assert "distance_m" in result["error"]
 
 
 def test_replace_week_plan_session_override_structure_clears_stale_structured_ir(athletes_dir) -> None:
@@ -1569,6 +1595,7 @@ def test_replace_week_plan_session_override_structure_clears_stale_structured_ir
         "session_overrides": [{
             "date": target["date"], "sport": target["sport"],
             "structure": "Warm-up: 400m easy.\nMain set: hand-authored replacement.\nCool-down: 300m easy.",
+            "distance_m": 700,
         }],
         "confirm": True,
     })
