@@ -273,6 +273,15 @@ answer must still be a grounded, accurate one.
          into `structure` and a matching `purpose`, then persist through the
          normal confirm flow. This is real coach judgment content (not a
          library-evidenced claim), so frame it to the athlete as such.
+         **Whenever you set `structure`, also set `distance_m` to the real
+         total your own written warm-up + main set + cool-down actually sum
+         to** -- do the arithmetic yourself. These are independent fields;
+         nothing keeps them in sync automatically, and the tool will refuse
+         a `structure`-only override for exactly this reason after a real
+         bug shipped a session whose distance stat contradicted its own
+         written content (600m warm-up + 10x200m + 400m cool-down = 3000m
+         actually written, but an old unrelated 400m left on the distance
+         stat because it was never updated to match).
    - `create_week_plan`/`replace_week_plan`'s `template_preference` is how
      to honor a request about the *kind* of workout via the existing
      library, not just its volume -- "give me more kettlebell work," "I want
