@@ -1628,6 +1628,218 @@ def test_replace_week_plan_session_override_purpose_only_leaves_structure_untouc
     assert overridden["has_structured"] == target["has_structured"]
 
 
+# --- replace_week_plan session_overrides: structured (machine-readable IR) ---
+# Follow-up to purpose/structure content authoring: `structure` (prose) alone
+# unconditionally nulls `session.structured`, which silently makes any
+# coach-authored session un-exportable to a Garmin watch (the upcoming
+# Intervals.icu push depends entirely on `session.structured` being
+# populated). `structured` lets the coach author the real WorkoutStructure
+# IR directly instead of only prose, without losing Garmin export.
+
+_STRUCTURED_SWIM_PAYLOAD = {
+    "items": [
+        {
+            "kind": "step",
+            "label": "Warm-up",
+            "role": "warmup",
+            "duration_kind": "distance_m",
+            "duration_value": 400,
+            "modality": "swim",
+        },
+        {
+            "kind": "repeat",
+            "repeat_mode": "count",
+            "count": 4,
+            "steps": [
+                {
+                    "kind": "step",
+                    "label": "50m catch-up drill",
+                    "role": "interval",
+                    "duration_kind": "distance_m",
+                    "duration_value": 50,
+                    "modality": "swim",
+                },
+            ],
+        },
+        {
+            "kind": "step",
+            "label": "Cool-down",
+            "role": "cooldown",
+            "duration_kind": "distance_m",
+            "duration_value": 300,
+            "modality": "swim",
+        },
+    ],
+}
+
+_STRUCTURED_STRENGTH_PAYLOAD = {
+    "items": [
+        {
+            "kind": "repeat",
+            "repeat_mode": "count",
+            "count": 3,
+            "steps": [
+                {
+                    "kind": "step",
+                    "label": "Kettlebell swings",
+                    "role": "interval",
+                    "duration_kind": "reps",
+                    "duration_value": 12,
+                    "modality": "strength",
+                    "exercise_name": "kettlebell swing",
+                    "load": {"basis": "absolute", "value": 16},
+                },
+            ],
+        },
+    ],
+}
+
+
+def test_replace_week_plan_session_override_structured_persists_real_ir(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    target = baseline["sessions"][0]
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{
+            "date": target["date"], "sport": target["sport"],
+            "structured": _STRUCTURED_SWIM_PAYLOAD,
+        }],
+        "confirm": True,
+    })
+
+    assert "error" not in result
+    overridden = next(s for s in result["sessions"] if s["date"] == target["date"] and s["sport"] == target["sport"])
+    assert overridden["has_structured"] is True
+
+    on_disk = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    persisted = next(s for s in on_disk.sessions if s.date.isoformat() == target["date"] and s.sport == target["sport"])
+    assert persisted.structured is not None
+    assert persisted.structured.items[0].label == "Warm-up"
+    assert persisted.structured.items[1].kind == "repeat"
+    assert persisted.structured.items[1].steps[0].label == "50m catch-up drill"
+
+
+def test_replace_week_plan_session_override_invalid_structured_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    target = baseline["sessions"][0]
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{
+            "date": target["date"], "sport": target["sport"],
+            # Missing required `label`/`role`/`duration_kind` on the step,
+            # and an invalid `kind` discriminator value -- must fail pydantic
+            # validation cleanly, not 500.
+            "structured": {"items": [{"kind": "bogus"}]},
+        }],
+    })
+
+    assert "error" in result
+    assert isinstance(result["error"], str)
+    # Names the offending field, so the model can fix and retry rather than
+    # guess which of several overrides was rejected.
+    assert "structured" in result["error"]
+
+    # And even with confirm=True the bad payload persists nothing -- an
+    # override error is a whole-call failure, not a partial apply.
+    confirmed = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{
+            "date": target["date"], "sport": target["sport"],
+            "structured": {"items": [{"kind": "bogus"}]},
+        }],
+        "confirm": True,
+    })
+    assert "error" in confirmed
+    on_disk = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    persisted = next(s for s in on_disk.sessions if s.date.isoformat() == target["date"] and s.sport == target["sport"])
+    assert persisted.structure == target["structure"]
+
+
+def test_replace_week_plan_session_override_structure_and_structured_both_persist(athletes_dir) -> None:
+    # This is the case the whole change exists for: coach supplies BOTH the
+    # athlete-facing prose (`structure`) and the machine-readable IR
+    # (`structured`) describing the same session -- neither should clobber
+    # the other.
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    target = baseline["sessions"][0]
+
+    new_structure = (
+        "Warm-up: 400m easy free.\n"
+        "Main set: 4 x 50m catch-up drill.\n"
+        "Cool-down: 300m easy."
+    )
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{
+            "date": target["date"], "sport": target["sport"],
+            "structure": new_structure,
+            "structured": _STRUCTURED_SWIM_PAYLOAD,
+            "distance_m": 1000,
+        }],
+        "confirm": True,
+    })
+
+    assert "error" not in result
+    overridden = next(s for s in result["sessions"] if s["date"] == target["date"] and s["sport"] == target["sport"])
+    assert overridden["structure"] == new_structure
+    assert overridden["has_structured"] is True
+
+    on_disk = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    persisted = next(s for s in on_disk.sessions if s.date.isoformat() == target["date"] and s.sport == target["sport"])
+    assert persisted.structure == new_structure
+    assert persisted.structured is not None
+    assert persisted.structured.items[0].label == "Warm-up"
+
+
+def test_replace_week_plan_session_override_structured_alone_no_distance_required(athletes_dir) -> None:
+    # `structured`-only overrides must NOT be forced through the
+    # `structure`-requires-`distance_m` guard -- a strength session's
+    # structured tree is machine-summable (or has no distance at all), so
+    # requiring distance_m here would add pure friction. Uses the real
+    # motivating case: a coach-authored strength workout with no library
+    # exercise-list entry for it.
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    strength_target = next((s for s in baseline["sessions"] if s["sport"] == "strength"), baseline["sessions"][0])
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{
+            "date": strength_target["date"], "sport": strength_target["sport"],
+            "structured": _STRUCTURED_STRENGTH_PAYLOAD,
+        }],
+        "confirm": True,
+    })
+
+    assert "error" not in result
+    overridden = next(
+        s for s in result["sessions"]
+        if s["date"] == strength_target["date"] and s["sport"] == strength_target["sport"]
+    )
+    assert overridden["has_structured"] is True
+
+    on_disk = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    persisted = next(
+        s for s in on_disk.sessions
+        if s.date.isoformat() == strength_target["date"] and s.sport == strength_target["sport"]
+    )
+    assert persisted.structured is not None
+    repeat_node = persisted.structured.items[0]
+    assert repeat_node.kind == "repeat"
+    assert repeat_node.steps[0].exercise_name == "kettlebell swing"
+    assert repeat_node.steps[0].label == "Kettlebell swings"
+
+
 def test_week_sessions_json_exposes_structure_and_has_structured(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
