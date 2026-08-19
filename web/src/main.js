@@ -4,9 +4,10 @@ import log from './log.js';
 import {
   renderApp, renderLoading, renderError, renderTabBar, renderCoachTab, renderSettingsTab,
   renderLogTab, renderCheckinTab, renderBackendNeededNotice, renderFeedbackTab, renderUpdateBanner,
-  renderOnboardingForm,
+  renderOnboardingForm, renderHistoryTab,
 } from './views.js';
 import { findSessionById } from './plan.js';
+import { buildHistoryFeed } from './history.js';
 import {
   loadChatSession, saveChatSession, clearChatStorage,
   appendUserMessage, applyStreamEvent, isStreaming, setExpertMode, clearMessages, toApiHistory,
@@ -27,7 +28,7 @@ import {
   createOnboardingState, validateOnboardForm, onboardPayloadFromForm,
   loadOnboardingActive, saveOnboardingActive, startOnboardingSession, identityFromOnboardSession,
 } from './onboarding.js';
-import { sortWorkoutsNewestFirst, HISTORY_DISPLAY_CAP, formatSyncResult } from './workouts.js';
+import { sortWorkoutsNewestFirst, formatSyncResult } from './workouts.js';
 import { performSignOut } from './session.js';
 import {
   createPwaUpdateState, markNeedRefresh, markOfflineReady,
@@ -36,7 +37,7 @@ import {
 
 const appEl = document.getElementById('app');
 const ACTIVE_TAB_KEY = 'swimcoach_active_tab';
-const KNOWN_TABS = ['plan', 'log', 'checkin', 'coach', 'feedback', 'settings'];
+const KNOWN_TABS = ['plan', 'log', 'history', 'checkin', 'coach', 'feedback', 'settings'];
 // Chat sessions are keyed per-athlete in localStorage (see chat.js); this is
 // just the storage key used before any real identity has ever signed in.
 const SIGNED_OUT_CHAT_KEY = 'signed-out';
@@ -158,6 +159,14 @@ const state = {
   // the session it belongs to -- see views.js's renderGarminPush. Cleared on
   // leaving the Plan tab / closing the detail, like planSessionDetailId.
   sessionPush: null,
+  // Whether the Plan tab's all-weeks <details> accordion is expanded. Native
+  // <details> keeps this in the DOM, but every render() rebuilds that DOM --
+  // so without mirroring it here, any unrelated re-render silently snapped
+  // the accordion shut while the athlete was reading it. Synced from the
+  // element's own `toggle` event (see the listener near the bottom of this
+  // file), never by intercepting the click, so the native behaviour stays
+  // exactly as it was.
+  allWeeksOpen: false,
   // Secondary manual-entry/upload section is collapsed by default (Phase 3:
   // "Sync from watch" is the Log tab's primary action) -- reset on leaving
   // the Log tab (setTab), same convention as workoutDetailId below.
@@ -220,6 +229,30 @@ function renderTabContent() {
   // notice covers both cases (see the message text in views.js).
   const backendConfigured = isConfigured(state.settingsForm, state.identity);
   switch (state.tab) {
+    case 'history':
+      // The feed needs BOTH sides: completed workouts (workoutHistory) and
+      // the plan's past sessions (plan.data.weeks) to derive skips from.
+      // Both loads are kicked off by setTab; until the plan lands, `weeks`
+      // is empty and the feed is simply completed-only rather than wrongly
+      // reporting everything as skipped.
+      return renderHistoryTab({
+        feed: buildHistoryFeed({
+          weeks: state.plan.data?.weeks || [],
+          workouts: state.workoutHistory.data,
+          now: new Date(),
+        }),
+        status: historyFeedStatus(),
+        error: state.workoutHistory.error || state.plan.error,
+        online: state.online,
+        // Shares workoutDetailId (and therefore handleOpenHistoryDetail's
+        // pushState/back-button wiring, scoped workout chat, and stale-id
+        // pruning) with the Log tab's own history section -- the two tabs
+        // never render at once, and a second parallel id would have to
+        // duplicate all of that behaviour to stay correct.
+        detailId: state.workoutDetailId,
+        workoutChat: state.workoutChat,
+        backendConfigured,
+      });
     case 'log':
       return renderLogTab({
         form: state.logForm,
@@ -275,7 +308,7 @@ function renderTabContent() {
       if (state.plan.status === 'loading' || state.plan.status === 'idle') return renderLoading();
       if (state.plan.status === 'error') return renderError(state.plan.error);
       return renderApp(
-        { ...state.plan.data, sessionPush: state.sessionPush },
+        { ...state.plan.data, sessionPush: state.sessionPush, allWeeksOpen: state.allWeeksOpen },
         state.planSessionDetailId,
       );
   }
@@ -1004,6 +1037,18 @@ function handleSendWorkoutChat() {
  * too: history fetches only when configured *and* online -- offline just
  * shows whatever's already cached in state, or a quiet notice if nothing
  * is. */
+/** The History tab's combined load status. It draws on two independent
+ * fetches (workouts + plan), so it reports the worse of the two: an error in
+ * either half means the feed on screen is incomplete and the athlete
+ * deserves the retry affordance, and it's still "loading" while either is in
+ * flight. Only "ready" once neither is pending or failed. */
+function historyFeedStatus() {
+  const statuses = [state.workoutHistory.status, state.plan.status];
+  if (statuses.includes('error')) return 'error';
+  if (statuses.includes('loading')) return 'loading';
+  return 'ready';
+}
+
 function shouldLoadHistoryNow() {
   return (state.workoutHistory.status === 'idle' || state.workoutHistory.status === 'error')
     && isConfigured(state.settingsForm, state.identity) && state.online;
@@ -1024,7 +1069,14 @@ async function loadHistory() {
   const result = await listWorkouts({ baseUrl: settings.baseUrl, token: settings.token, athlete: identity.athlete });
   if (handleUnauthorized(result)) return;
   if (result.ok && Array.isArray(result.data)) {
-    const sorted = sortWorkoutsNewestFirst(result.data).slice(0, HISTORY_DISPLAY_CAP);
+    // Keeps the FULL list in state; HISTORY_DISPLAY_CAP is applied at
+    // render time by the Log tab instead (see renderHistorySection). It
+    // used to be truncated here, which the History tab's skip derivation
+    // can't tolerate: matching a planned session against a 20-workout
+    // window would report every older session as skipped purely because
+    // its workout had fallen off the end (see history.js's
+    // buildHistoryFeed note).
+    const sorted = sortWorkoutsNewestFirst(result.data);
     log.info('history.loaded', { athlete: identity.athlete, count: sorted.length });
     state.workoutHistory = { status: 'ready', data: sorted, error: null };
     pruneDetailIdIfMissing(sorted);
@@ -1277,7 +1329,7 @@ function setTab(tab) {
   }
   // Leaving the Log tab always drops any open workout-detail view -- coming
   // back to Log should land on the list, not wherever the athlete last was.
-  if (state.tab === 'log' && state.workoutDetailId) {
+  if ((state.tab === 'log' || state.tab === 'history') && state.workoutDetailId) {
     state.workoutDetailId = null;
     closeWorkoutChat();
     // Consumes the pushState entry handleOpenHistoryDetail added (see
@@ -1323,6 +1375,25 @@ function setTab(tab) {
   if (tab === 'log' && shouldLoadHistoryNow()) {
     loadHistory(); // calls render() itself
     return;
+  }
+  // History needs BOTH halves: the workouts it shows as completed, and the
+  // plan weeks it derives skipped sessions from. Either may already be
+  // loaded (from a previous Log/Plan visit), so each is requested
+  // independently; both call render() themselves as they land, and the tab
+  // renders a completed-only feed in the meantime rather than briefly
+  // claiming everything was skipped.
+  if (tab === 'history') {
+    let requested = false;
+    if ((state.plan.status === 'idle' || state.plan.status === 'error')
+      && isConfigured(state.settingsForm, state.identity)) {
+      loadPlan();
+      requested = true;
+    }
+    if (shouldLoadHistoryNow()) {
+      loadHistory();
+      requested = true;
+    }
+    if (requested) return;
   }
   render();
   maybeLoadProfile();
@@ -1491,6 +1562,15 @@ window.addEventListener('offline', updateOnlineState);
 window.addEventListener('popstate', handlePopState);
 
 appEl.addEventListener('click', onAppClick);
+// `toggle` does not bubble, so this listens in the capture phase rather than
+// relying on the delegation onAppClick uses. Records the accordion's state
+// WITHOUT re-rendering -- the DOM is already in the right shape; this only
+// makes the NEXT render reproduce it.
+appEl.addEventListener('toggle', (event) => {
+  const details = event.target;
+  if (!(details instanceof HTMLDetailsElement) || !details.classList.contains('all-weeks')) return;
+  state.allWeeksOpen = details.open;
+}, true);
 appEl.addEventListener('change', onAppChange);
 appEl.addEventListener('input', onAppInput);
 appEl.addEventListener('keydown', onAppKeydown);

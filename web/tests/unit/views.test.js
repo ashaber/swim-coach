@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   renderHistorySection, renderLogTab, renderSettingsTab, renderUpdateBanner, renderApp,
+  renderHistoryTab,
 } from '../../src/views.js';
 import { isoWeekMonday, addDays, dateKey } from '../../src/plan.js';
 
@@ -1086,5 +1087,126 @@ describe('renderApp weeks section: all-weeks accordion', () => {
   it('does not open the accordion by default (no `open` attribute)', () => {
     const html = renderApp(DATA, null);
     expect(html).not.toMatch(/<details[^>]*\sopen/);
+  });
+
+  // The accordion is native <details>, so its open/closed state lives in the
+  // DOM -- and every render() rebuilds that DOM from scratch. Without the
+  // state being re-emitted as an `open` attribute, any unrelated re-render
+  // (a plan refresh, an online/offline flip, a background load landing)
+  // silently snapped it shut mid-read. Caught as a flaky e2e failure.
+  it('re-emits the open attribute when the accordion is open, so a re-render keeps it open', () => {
+    const html = renderApp({ ...DATA, allWeeksOpen: true }, null);
+    expect(html).toMatch(/<details[^>]*\sopen/);
+  });
+
+  it('stays closed when the flag is false', () => {
+    const html = renderApp({ ...DATA, allWeeksOpen: false }, null);
+    expect(html).not.toMatch(/<details[^>]*\sopen/);
+  });
+});
+
+// --- History tab ----------------------------------------------------------
+// Andrew's ask: "history - should show workouts completed with actual stats
+// and planned workout skipped." One reverse-chron feed of both.
+
+describe('renderHistoryTab', () => {
+  const COMPLETED = {
+    id: 'w-done', date: '2026-08-17', sport: 'swim_pool', source: 'fit',
+    distance_m: 2050, duration_min: 61, rpe: 6, avg_pace_s_per_100m: 95,
+    planned_session_id: null, analytics: null, laps: [], pauses: [],
+  };
+  const SKIPPED_SESSION = {
+    id: 's-missed', date: '2026-08-18', sport: 'strength', source: 'ai_coach',
+    duration_min: 45, distance_m: null, intensity: {},
+    purpose: 'Dryland shoulder strength — rotator-cuff work',
+    structure: null, structured: null, status: 'planned',
+  };
+  const FEED = [
+    { kind: 'skipped', date: '2026-08-18', key: 's:s-missed', session: SKIPPED_SESSION },
+    { kind: 'completed', date: '2026-08-17', key: 'w:w-done', workout: COMPLETED },
+  ];
+
+  const base = {
+    feed: FEED, status: 'ready', error: null, online: true,
+    detailId: null, workoutChat: null, backendConfigured: true,
+  };
+
+  it('renders completed workouts with their actual logged stats', () => {
+    const html = renderHistoryTab(base);
+    expect(html).toContain('Pool swim');
+    // The ACTUAL logged distance (2050 m -> "2.1 km" per
+    // formatWorkoutDistance), not the 2000 m the plan had targeted.
+    expect(html).toContain('2.1 km');
+    expect(html).toContain('RPE 6');
+  });
+
+  it('renders a skipped planned session with what was planned', () => {
+    const html = renderHistoryTab(base);
+    expect(html).toContain('Strength');
+    expect(html).toContain('Dryland shoulder strength');
+    expect(html).toContain('45 min'); // the planned duration
+  });
+
+  it('clearly distinguishes a skipped item from a completed one', () => {
+    const html = renderHistoryTab(base);
+    expect(html).toContain('hist-row-skipped');
+    expect(html).toContain('Skipped');
+  });
+
+  it('keeps the feed order given -- newest first, no re-sorting', () => {
+    const html = renderHistoryTab(base);
+    expect(html.indexOf('Dryland shoulder strength')).toBeLessThan(html.indexOf('Pool swim'));
+  });
+
+  it('makes completed rows tappable for detail but skipped rows not', () => {
+    const html = renderHistoryTab(base);
+    expect(html).toContain('data-a="history:open" data-id="w-done"');
+    expect(html).not.toContain('data-id="s-missed"');
+  });
+
+  it('opens the workout detail view when detailId matches a completed item', () => {
+    const html = renderHistoryTab({ ...base, detailId: 'w-done' });
+    expect(html).toContain('data-a="history:back"');
+    expect(html).toContain('Distance');
+    expect(html).not.toContain('data-a="history:open"');
+  });
+
+  it('shows an empty state when nothing has happened yet', () => {
+    const html = renderHistoryTab({ ...base, feed: [] });
+    expect(html).toContain('Nothing logged or missed yet');
+  });
+
+  it('shows a loading state before the first load lands', () => {
+    const html = renderHistoryTab({ ...base, feed: [], status: 'loading' });
+    expect(html).toContain('Loading');
+  });
+
+  it('surfaces an error with a retry action, keeping any stale feed visible', () => {
+    const html = renderHistoryTab({ ...base, status: 'error', error: 'boom' });
+    expect(html).toContain('boom');
+    expect(html).toContain('data-a="history:retry"');
+    expect(html).toContain('Pool swim'); // stale data still shown
+  });
+
+  it('tells the athlete when history needs a connection', () => {
+    const html = renderHistoryTab({ ...base, feed: [], online: false });
+    expect(html).toContain('connection');
+  });
+
+  it('prompts for setup when the backend is not configured', () => {
+    const html = renderHistoryTab({ ...base, backendConfigured: false });
+    expect(html).toContain('Settings');
+  });
+
+  it('escapes hostile content in a skipped session purpose', () => {
+    const nasty = {
+      ...SKIPPED_SESSION, id: 's-nasty', purpose: '<img src=x onerror=alert(1)>',
+    };
+    const html = renderHistoryTab({
+      ...base,
+      feed: [{ kind: 'skipped', date: '2026-08-18', key: 's:s-nasty', session: nasty }],
+    });
+    expect(html).not.toContain('<img src=x');
+    expect(html).toContain('&lt;img');
   });
 });
