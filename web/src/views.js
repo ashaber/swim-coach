@@ -4,7 +4,8 @@
 import {
   formatShortDate, formatLongDate, formatDuration, formatDistance, formatPace,
   parseIsoDate, sessionsByDay, classifySession, sessionDisplay, sessionDotColorVar,
-  pickCurrentAndNextWeek, daysUntil, macroTargetEvent, currentBlockIndex, longSwimLadder,
+  pickCurrentAndNextWeek, sortedByIsoWeek, daysUntil, macroTargetEvent, currentBlockIndex,
+  longSwimLadder,
   findSessionById, parseStructureBlocks, parseMainSetIntervals, renderStructuredWorkout,
 } from './plan.js';
 import { TOOL_LABELS } from './chat.js';
@@ -301,14 +302,26 @@ function renderWeeksSection(weeks, detailId) {
     }
   }
 
-  const { current, next } = pickCurrentAndNextWeek(weeks);
+  const { current, next, stale } = pickCurrentAndNextWeek(weeks);
+  const allWeeks = renderAllWeeksAccordion(weeks);
+
+  // Two genuinely different empty states, and neither one may resurrect a
+  // past week as "This week" (the 2026-08-18 defect -- see plan.js's
+  // pickCurrentAndNextWeek doc comment). `stale` means weeks exist but the
+  // newest one already ended: the plan ran out and needs regenerating, so
+  // say so and still let the athlete page back through what was planned.
   if (!current) {
+    const message = stale
+      ? 'No plan generated for this week yet — ask the coach to plan it.'
+      : 'No weeks planned yet.';
     return `
     <section>
       <div class="s-head"><h2>The plan, day by day</h2></div>
-      <p class="sub">No weeks planned yet.</p>
+      <p class="sub">${message}</p>
+      ${allWeeks}
     </section>`;
   }
+
   const cards = [renderWeekCard(current, `This week · ${weekRangeLabel(current)}`)];
   if (next) cards.push(renderWeekCard(next, `Next week · ${weekRangeLabel(next)}`));
 
@@ -319,7 +332,30 @@ function renderWeeksSection(weeks, detailId) {
         <span class="note">built around real fixed events</span>
       </div>
       ${cards.join('')}
+      ${allWeeks}
     </section>`;
+}
+
+/** Every week on file, past and future, in a collapsed `<details>` -- the
+ * current/next cards above are the day-to-day view, this is the "show me
+ * the whole plan" affordance that previously didn't exist at all (only two
+ * cards were ever reachable). Native `<details>` rather than a JS toggle:
+ * it works with no click handler, keyboard-accessible for free, and stays
+ * usable if the accordion ever renders while offline. `data-a` is present
+ * for e2e/unit selection and for main.js's logging convention; the open/
+ * close behaviour itself is the browser's. Renders nothing when there are
+ * no weeks at all. */
+function renderAllWeeksAccordion(weeks) {
+  const sorted = sortedByIsoWeek(weeks);
+  if (sorted.length === 0) return '';
+  const cards = sorted
+    .map((week) => renderWeekCard(week, `${week.iso_week} · ${weekRangeLabel(week)}`))
+    .join('');
+  return `
+      <details class="all-weeks">
+        <summary data-a="weeks:toggle-all">All planned weeks (${sorted.length})</summary>
+        ${cards}
+      </details>`;
 }
 
 function weekRangeLabel(week) {

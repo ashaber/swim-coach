@@ -818,3 +818,88 @@ describe('renderUpdateBanner', () => {
     expect(html).not.toContain('Ready to work offline');
   });
 });
+
+// --- Stale/empty plan state + the browsable all-weeks accordion ----------
+// The 2026-08-18 defect: the athlete's plan data stopped at 2026-W29 while
+// the wall clock had moved on to W34, and the Plan tab rendered W29 under a
+// "This week" heading. Two fixes are covered here: an honest empty state
+// when every planned week has elapsed (distinct from "nothing planned at
+// all"), and a collapsed accordion so the whole plan -- past weeks included
+// -- is browsable instead of only current+next.
+
+describe('renderApp weeks section: stale / empty states', () => {
+  const PAST_WEEKS = [
+    {
+      iso_week: '2020-W01', meso_block: 'base', focus: 'aerobic base',
+      target_volume_m: 12000, sessions: [], adaptation_rationale: null,
+    },
+    {
+      iso_week: '2020-W02', meso_block: 'base', focus: 'aerobic base',
+      target_volume_m: 13000, sessions: [], adaptation_rationale: null,
+    },
+  ];
+  const BASE = { athlete: { name: 'Renee' }, events: [], macro: { blocks: [] } };
+
+  it('says no plan exists for this week -- and does NOT label a past week "This week"', () => {
+    const html = renderApp({ ...BASE, weeks: PAST_WEEKS }, null);
+    expect(html).toContain('No plan generated for this week yet');
+    expect(html).not.toContain('This week ·');
+    expect(html).not.toContain('Next week ·');
+  });
+
+  it('distinguishes "nothing planned at all" from "this week is missing"', () => {
+    const html = renderApp({ ...BASE, weeks: [] }, null);
+    expect(html).toContain('No weeks planned yet');
+    expect(html).not.toContain('No plan generated for this week yet');
+  });
+
+  it('still offers the all-weeks accordion when the plan is stale, so past weeks stay readable', () => {
+    const html = renderApp({ ...BASE, weeks: PAST_WEEKS }, null);
+    expect(html).toContain('data-a="weeks:toggle-all"');
+    expect(html).toContain('2020-W01');
+    expect(html).toContain('2020-W02');
+  });
+
+  it('renders no accordion at all when there are no weeks', () => {
+    const html = renderApp({ ...BASE, weeks: [] }, null);
+    expect(html).not.toContain('data-a="weeks:toggle-all"');
+  });
+});
+
+describe('renderApp weeks section: all-weeks accordion', () => {
+  const FUTURE = '2099-W01';
+  const monday = isoWeekMonday(FUTURE);
+  const makeWeek = (iso, volume) => ({
+    iso_week: iso, meso_block: 'base', focus: 'aerobic base',
+    target_volume_m: volume, sessions: [], adaptation_rationale: null,
+  });
+  const DATA = {
+    athlete: { name: 'Renee' }, events: [], macro: { blocks: [] },
+    weeks: [makeWeek('2099-W02', 13000), makeWeek(FUTURE, 12000), makeWeek('2019-W40', 9000)],
+  };
+
+  it('renders current + next cards as before', () => {
+    const html = renderApp(DATA, null);
+    expect(html).toContain('This week ·');
+    expect(html).toContain('Next week ·');
+    expect(dateKey(addDays(monday, 0))).toBeTruthy(); // sanity: fixture week resolves
+  });
+
+  it('lists every week, past ones included, inside a collapsed <details> accordion', () => {
+    const html = renderApp(DATA, null);
+    expect(html).toContain('<details');
+    expect(html).toContain('data-a="weeks:toggle-all"');
+    // All three weeks appear in the accordion, chronologically.
+    const i2019 = html.indexOf('2019-W40');
+    const i2099w1 = html.indexOf('2099-W01', html.indexOf('data-a="weeks:toggle-all"'));
+    const i2099w2 = html.indexOf('2099-W02', html.indexOf('data-a="weeks:toggle-all"'));
+    expect(i2019).toBeGreaterThan(-1);
+    expect(i2019).toBeLessThan(i2099w1);
+    expect(i2099w1).toBeLessThan(i2099w2);
+  });
+
+  it('does not open the accordion by default (no `open` attribute)', () => {
+    const html = renderApp(DATA, null);
+    expect(html).not.toMatch(/<details[^>]*\sopen/);
+  });
+});

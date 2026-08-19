@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   isoWeekMonday, formatDuration, formatDistance, formatPace, splitPurpose,
   classifySession, sessionDisplay, deriveSessionTitle, findSessionById,
-  pickCurrentAndNextWeek, daysUntil,
+  pickCurrentAndNextWeek, sortedByIsoWeek, daysUntil,
   priorityEvent, macroTargetEvent, currentBlockIndex, longSwimLadder, sessionsByDay,
   parseStructureBlocks, parseMainSetIntervals, renderStructuredWorkout,
 } from '../../src/plan.js';
@@ -413,19 +413,51 @@ describe('pickCurrentAndNextWeek', () => {
   ];
 
   it('picks W28 as current when now is mid-week-27 (before W28 starts)', () => {
-    const { current, next } = pickCurrentAndNextWeek(weeks, new Date(2026, 6, 5));
+    const { current, next, stale } = pickCurrentAndNextWeek(weeks, new Date(2026, 6, 5));
     expect(current.iso_week).toBe('2026-W28');
     expect(next.iso_week).toBe('2026-W29');
+    expect(stale).toBe(false);
   });
 
   it('picks W29 as current once W28 has fully elapsed', () => {
-    const { current, next } = pickCurrentAndNextWeek(weeks, new Date(2026, 6, 15));
+    const { current, next, stale } = pickCurrentAndNextWeek(weeks, new Date(2026, 6, 15));
     expect(current.iso_week).toBe('2026-W29');
     expect(next).toBeNull();
+    expect(stale).toBe(false);
   });
 
   it('returns nulls for an empty week list', () => {
-    expect(pickCurrentAndNextWeek([])).toEqual({ current: null, next: null });
+    expect(pickCurrentAndNextWeek([])).toEqual({ current: null, next: null, stale: false });
+  });
+
+  // The live defect (2026-08-18): the athlete's plan stopped at 2026-W29
+  // while the wall clock was in W34, and the Plan tab happily showed W29 as
+  // "This week". A stale week presented as the current one is worse than
+  // showing nothing -- it silently hides that no plan exists, so the athlete
+  // trains off a five-week-old prescription. Report the gap instead.
+  it('reports stale (no current/next) when every week has already elapsed', () => {
+    const result = pickCurrentAndNextWeek(weeks, new Date(2026, 7, 18));
+    expect(result).toEqual({ current: null, next: null, stale: true });
+  });
+
+  it('treats the final week as current right up to its own Sunday, not stale', () => {
+    // 2026-W29 runs Mon Jul 13 .. Sun Jul 19; Sunday itself is still "this week".
+    const { current, stale } = pickCurrentAndNextWeek(weeks, new Date(2026, 6, 19));
+    expect(current.iso_week).toBe('2026-W29');
+    expect(stale).toBe(false);
+  });
+});
+
+describe('sortedByIsoWeek', () => {
+  it('orders weeks chronologically without mutating the input', () => {
+    const weeks = [{ iso_week: '2026-W29' }, { iso_week: '2026-W02' }, { iso_week: '2025-W51' }];
+    const sorted = sortedByIsoWeek(weeks);
+    expect(sorted.map((w) => w.iso_week)).toEqual(['2025-W51', '2026-W02', '2026-W29']);
+    expect(weeks[0].iso_week).toBe('2026-W29');
+  });
+
+  it('returns an empty array for a missing week list', () => {
+    expect(sortedByIsoWeek(null)).toEqual([]);
   });
 });
 
