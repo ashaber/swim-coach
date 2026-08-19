@@ -91,7 +91,7 @@ from typing import Any, Callable
 from pydantic import ValidationError
 
 from swim_coach.adapt import adapt_week
-from swim_coach.models import Event, Feedback, Workout
+from swim_coach.models import Event, Feedback, Workout, WorkoutStructure
 from swim_coach.plan import _duration_min_for_distance, generate_week, scaffold_macro
 from swim_coach.store import StoreInterface
 from swim_coach.workout_templates import TemplatePreference
@@ -603,23 +603,52 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "wants -- e.g. a conservative first swim back after time off, "
             "where the computed distance is technically ramp-safe but still "
             "more than the athlete wants right now.\n"
-            "  - purpose/structure: when the athlete wants a specific "
-            "session's actual CONTENT changed (a technique/drill focus, a "
-            "specific interval structure) and no `template_preference` "
-            "value matches anything in the library for that macro block --"
-            "write the session's real instructions yourself (same as you'd "
-            "describe verbally) directly into `structure`, and a matching "
-            "`purpose` describing it, rather than only describing the "
-            "workout in your chat reply with nowhere for it to actually "
-            "live. This is exactly how to unblock a request like 'give me a "
-            "technique session Thursday' when the template library has no "
-            "technique-purpose entry for that block yet -- don't just "
+            "  - purpose/structure/structured: when the athlete wants a "
+            "specific session's actual CONTENT changed (a technique/drill "
+            "focus, a specific interval structure, a strength session with "
+            "exercises the canned library list doesn't cover) and no "
+            "`template_preference` value matches anything in the library "
+            "for that macro block -- write the session's real content "
+            "yourself (same as you'd describe verbally) rather than only "
+            "describing the workout in your chat reply with nowhere for it "
+            "to actually live. This is exactly how to unblock a request "
+            "like 'give me a technique session Thursday' when the template "
+            "library has no technique-purpose entry for that block yet, or "
+            "'give me a kettlebell/goblet-squat strength day' when those "
+            "exercises aren't in the canned strength list -- don't just "
             "explain the gap and stop, author the content and persist it "
-            "here. Setting `structure` clears that session's `structured` "
-            "field (the richer structured workout data) since your prose "
-            "replaces it -- the athlete's app view and any Garmin export "
-            "will reflect the same prose you write, not richer structure, "
-            "until a real library template exists for this case.\n\n"
+            "here. Two ways to author it, and prefer supplying BOTH "
+            "together whenever the workout has real step/rep/exercise "
+            "structure (they describe the same session, one for each "
+            "audience -- there is nothing to reconcile between them, "
+            "neither is derived from the other):\n"
+            "    - `structured`: the machine-readable WorkoutStructure IR "
+            "-- an ordered list of steps and/or repeat blocks. This is "
+            "what renders as the step-by-step tree in the athlete's app "
+            "Plan tab and what exports to a Garmin watch as a real "
+            "lap-advancing workout (warm-up/interval/rest/cool-down laps, "
+            "or strength sets/reps). It is NOT limited to whatever "
+            "exercises `engine/swim_coach/plan.py`'s canned strength list "
+            "happens to contain -- author any exercise/step directly here, "
+            "same as you would in prose. Prefer this whenever the session "
+            "has real structure to describe, which is most of the time.\n"
+            "    - `structure`: athlete-facing prose -- author real "
+            "content here (warm-up/main set/cool-down or whatever shape "
+            "fits) exactly as you'd describe it in chat. Supply this "
+            "alongside `structured` as the human-readable narration of the "
+            "same session whenever you're setting `structured` anyway -- "
+            "it costs nothing and reads better in the app than a bare step "
+            "list.\n"
+            "  Setting `structure` WITHOUT also setting `structured` in "
+            "the same entry clears that session's existing `structured` "
+            "field (if any) -- this is a deliberate choice, not a side "
+            "effect, meaning 'this session is genuinely prose-only, there "
+            "is no real step structure to capture'; the cost is that the "
+            "athlete's Plan tab tree view and any Garmin export will have "
+            "nothing to render/export for this session until it's later "
+            "given real `structured` content. Setting BOTH `structure` and "
+            "`structured` together in the same entry persists both -- "
+            "neither clears the other.\n\n"
             "`template_preference` (optional): honors a request like 'give "
             "me more kettlebell work this week' or 'I want a threshold set' "
             "by narrowing which main-set workout-library template the "
@@ -699,15 +728,60 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                                     "author real content here (warm-up/main set/cool-down or "
                                     "whatever shape fits) exactly as you'd describe it in chat, "
                                     "when no library template covers what the athlete asked "
-                                    "for. Setting this clears the session's structured workout "
-                                    "data (see this parameter's parent description). REQUIRES "
-                                    "`distance_m` in this same entry, set to the real total "
-                                    "implied by what you just wrote (e.g. warm-up + main set + "
-                                    "cool-down summed) -- `distance_m` is a separate field with "
-                                    "nothing keeping it in sync with `structure`'s prose "
-                                    "automatically; do the arithmetic yourself and pass the "
-                                    "matching number, or the athlete sees a distance stat that "
-                                    "contradicts the workout you just wrote."
+                                    "for. Prefer also supplying `structured` alongside this in "
+                                    "the same entry (they describe the same session; neither "
+                                    "clears the other when both are set) -- setting `structure` "
+                                    "WITHOUT `structured` clears the session's existing "
+                                    "structured workout data (see this parameter's parent "
+                                    "description), a deliberate 'prose only, no watch export' "
+                                    "choice, not a side effect. REQUIRES `distance_m` in this "
+                                    "same entry, set to the real total implied by what you just "
+                                    "wrote (e.g. warm-up + main set + cool-down summed) -- "
+                                    "`distance_m` is a separate field with nothing keeping it "
+                                    "in sync with `structure`'s prose automatically; do the "
+                                    "arithmetic yourself and pass the matching number, or the "
+                                    "athlete sees a distance stat that contradicts the workout "
+                                    "you just wrote."
+                                ),
+                            },
+                            "structured": {
+                                "type": "object",
+                                "description": (
+                                    "New machine-readable WorkoutStructure IR for this session "
+                                    "-- the canonical structured workout tree that renders as "
+                                    "the step-by-step tree in the athlete's app Plan tab and "
+                                    "exports to a Garmin watch as a real lap-advancing workout. "
+                                    "Prefer setting this whenever the session has real step/"
+                                    "rep/exercise structure (most of the time), and supply "
+                                    "`structure` alongside it as the matching athlete-facing "
+                                    "prose narration -- setting both persists both, neither "
+                                    "clears the other. Shape: `{\"items\": [...]}` where each "
+                                    "item is either a step -- `{\"kind\": \"step\", \"label\": "
+                                    "str, \"role\": \"warmup\"|\"steady\"|\"interval\"|\"rest\"|"
+                                    "\"recovery\"|\"cooldown\"|\"open\", \"duration_kind\": "
+                                    "\"time_s\"|\"distance_m\"|\"reps\"|\"open\", "
+                                    "\"duration_value\": number, \"modality\": \"swim\"|"
+                                    "\"strength\" (default \"swim\"), and for swim steps "
+                                    "optionally \"stroke\"/\"equipment\" plus a \"target\": "
+                                    "{\"basis\": \"zone\"|\"percent_css\"|\"absolute\"|\"rpe\"|"
+                                    "\"open\", \"zone\": \"Z1\"-\"Z5\"|null, \"low\": number|"
+                                    "null, \"high\": number|null}, or for strength steps "
+                                    "optionally \"exercise_name\" plus a \"load\": {\"basis\": "
+                                    "\"bodyweight\"|\"percent_1rm\"|\"absolute\"|\"rpe_only\", "
+                                    "\"value\": number|null}` -- or a repeat block -- "
+                                    "`{\"kind\": \"repeat\", \"repeat_mode\": \"count\"|"
+                                    "\"for_duration\"|\"amrap\", \"count\": int|null, "
+                                    "\"duration_s\": number|null, \"interval_s\": number|null, "
+                                    "\"steps\": [...]}` whose own `steps` list holds more items "
+                                    "of either kind (steps or nested repeats -- nesting deeper "
+                                    "than one level is allowed but rarely needed in practice). "
+                                    "This is NOT limited to whatever exercises the canned "
+                                    "strength list in `engine/swim_coach/plan.py` happens to "
+                                    "contain -- author any exercise/step directly, same as you "
+                                    "would in prose. An invalid payload (wrong `kind`, missing "
+                                    "required field, etc.) is rejected with a clear error and "
+                                    "nothing is persisted -- fix and retry with a valid payload "
+                                    "rather than falling back to prose-only `structure`."
                                 ),
                             },
                         },
@@ -1553,10 +1627,17 @@ def _apply_session_overrides(week, overrides: list[dict[str, Any]], css_pace_s: 
         duration_min = override.get("duration_min")
         purpose = override.get("purpose")
         structure = override.get("structure")
-        if distance_m is None and duration_min is None and purpose is None and structure is None:
+        structured = override.get("structured")
+        if (
+            distance_m is None
+            and duration_min is None
+            and purpose is None
+            and structure is None
+            and structured is None
+        ):
             return (
                 f"session_overrides: entry for {raw_date!r} needs at least one of "
-                "distance_m, duration_min, purpose, structure"
+                "distance_m, duration_min, purpose, structure, structured"
             )
         if structure is not None and distance_m is None:
             # Real bug, caught live: `distance_m` is a separate field from
@@ -1593,16 +1674,27 @@ def _apply_session_overrides(week, overrides: list[dict[str, Any]], css_pace_s: 
 
         if purpose is not None:
             session.purpose = purpose
+        if structured is not None:
+            try:
+                session.structured = WorkoutStructure.model_validate(structured)
+            except ValidationError as exc:
+                return f"invalid session_overrides structured: {exc}"
         if structure is not None:
             session.structure = structure
-            # The session's structured IR (if any) was built by the template
-            # pipeline for the OLD content -- leaving it in place would mean
-            # the UI's tree-walk rendering and Garmin .fit export both keep
-            # showing/exporting the previous template's workout, silently
-            # ignoring the athlete-facing prose the coach (or athlete) just
-            # asked to persist here. Clear it so both correctly fall back to
-            # the new prose instead of a stale, mismatched structure.
-            session.structured = None
+            if structured is None:
+                # The session's structured IR (if any) was built by the
+                # template pipeline for the OLD content -- leaving it in
+                # place would mean the UI's tree-walk rendering and Garmin
+                # .fit export both keep showing/exporting the previous
+                # template's workout, silently ignoring the athlete-facing
+                # prose the coach (or athlete) just asked to persist here.
+                # Clear it so both correctly fall back to the new prose
+                # instead of a stale, mismatched structure. This only
+                # applies when `structured` was NOT also supplied in this
+                # same entry -- when both are given, they describe the same
+                # session (prose + machine-readable IR) and neither should
+                # clobber the other; see the tool description.
+                session.structured = None
     return None
 
 
