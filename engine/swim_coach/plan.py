@@ -201,6 +201,31 @@ STRENGTH_FULL_BODY_ADDITION = (
 # General full-body work layered in as time allows -- Coach judgment, no
 # swim-specific RCT tested this addition. library/07-strength-dryland.md.
 
+STRENGTH_EXERCISE_REFERENCE_URLS: dict[str, str] = {
+    "Internal rotation at 90° abduction": "https://www.rehabhero.ca/exercise/90-degrees-internal-rotation",
+    "External rotation at 90° abduction": "https://www.rehabhero.ca/exercise/90-degrees-external-rotation",
+    "Scapular punches": "https://www.rehabhero.ca/exercise/serratus-punch",
+    'Scapular retraction ("Ts")': "https://www.rehabhero.ca/exercise/prone-t-raise",
+    'Retraction with upward rotation ("Ys")': "https://www.rehabhero.ca/exercise/prone-y-raise",
+    "3 x 10 goblet squat or bodyweight squat": "https://www.rehabhero.ca/exercise/goblet-squat",
+    "3 x 10 per side single-leg Romanian deadlift (or bodyweight equivalent)": (
+        "https://www.rehabhero.ca/exercise/single-leg-deadlift"
+    ),
+    "3 x 10 plank or dead-bug core hold (30-45s each side)": "https://www.rehabhero.ca/exercise/plank",
+}
+# Coach judgment: these are technique-demonstration links (Rehab Hero, a
+# physiotherapy exercise-library site), not research citations -- they carry
+# no scientific claim about dosing/efficacy (that's STRENGTH_CORE_EXERCISES'
+# and STRENGTH_FULL_BODY_ADDITION's own [EVIDENCE]/Coach judgment comments
+# above), so they are deliberately NOT tagged [EVIDENCE: ...] or
+# [ADAPTED: ...] per CLAUDE.md's evidence-discipline rule -- that tagging is
+# for claims driving engine constants, not "here's what this move looks
+# like" demo links. The plank entry covers the "plank or dead-bug" step
+# (Rehab Hero also has a dead-bug page; one URL per step, plank is the
+# named-first option in that step's label). Looked up by `.get()` wherever
+# used, never `[]` -- a canned exercise added to either tuple above without a
+# matching entry here is a no-op (`None`), never an error.
+
 RECOVERY_SESSION_MIN = 20
 # The Session model requires duration_min > 0, so a 0-duration "day off"
 # isn't representable -- recovery is modeled as a short mobility session
@@ -373,6 +398,7 @@ def _strength_session_structure_template(session_index: int) -> WorkoutStructure
                     load=WorkoutLoad(basis="bodyweight"),
                     modality="strength",
                     exercise_name=exercise,
+                    reference_url=STRENGTH_EXERCISE_REFERENCE_URLS.get(exercise),
                 )
                 for exercise in STRENGTH_CORE_EXERCISES
             ],
@@ -395,6 +421,7 @@ def _strength_session_structure_template(session_index: int) -> WorkoutStructure
                 load=WorkoutLoad(basis="bodyweight"),
                 modality="strength",
                 exercise_name=exercise,
+                reference_url=STRENGTH_EXERCISE_REFERENCE_URLS.get(exercise),
             )
             for exercise in STRENGTH_FULL_BODY_ADDITION
         )

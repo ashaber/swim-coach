@@ -140,6 +140,15 @@ class WorkoutStep(BaseModel):
     stroke: Literal["free", "back", "breast", "fly", "im", "mixed", "drill"] | None = None
     equipment: list[str] = Field(default_factory=list)  # e.g. ["paddles"]
     exercise_name: str | None = None  # strength steps, e.g. "kettlebell swing"
+    reference_url: str | None = None  # technique/demo link
+    # Optional coach- or engine-set link (e.g. plan.py's
+    # STRENGTH_EXERCISE_REFERENCE_URLS, or a coach-authored step's own URL
+    # via session_overrides' `structured`) shown to the athlete as a
+    # clickable technique/demo reference and written into the exported FIT
+    # step's notes -- see garmin_export.py's `_build_leaf_step`. Additive/
+    # optional, same pattern as `Session.structured` above: every existing
+    # persisted WorkoutStep has no `reference_url` key and validates
+    # unchanged as `reference_url=None`; no schema_version bump.
 
 
 class WorkoutRepeat(BaseModel):
