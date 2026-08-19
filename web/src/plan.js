@@ -487,23 +487,42 @@ export function sessionsByDay(week) {
   return days;
 }
 
+/** Weeks ordered chronologically. `iso_week` strings are zero-padded
+ * (`2026-W02`), so a plain lexicographic sort is already chronological.
+ * Copies rather than sorting in place -- callers pass the shared plan data. */
+export function sortedByIsoWeek(weeks) {
+  if (!weeks) return [];
+  return [...weeks].sort((a, b) => a.iso_week.localeCompare(b.iso_week));
+}
+
 /** Pick the "current" and "next" week from a list, sorted by iso_week, by
  * comparing each week's Monday against `now`. "Current" is the earliest
- * week whose Sunday hasn't passed yet; if every week is already past, falls
- * back to the last two so there's still something to show. */
+ * week whose Sunday hasn't passed yet.
+ *
+ * When EVERY week on file has already elapsed, this returns
+ * `{ current: null, next: null, stale: true }` -- deliberately nothing to
+ * render as "this week". It used to fall back to the last two weeks
+ * instead, which produced the 2026-08-18 defect: the athlete's plan data
+ * stopped at 2026-W29 while the wall clock was in W34, and the Plan tab
+ * showed the five-week-old W29 under a "This week" heading. A stale
+ * prescription presented as the current one is worse than an empty state --
+ * it hides the fact that no plan was ever generated. `stale` lets the
+ * caller tell "your plan has run out" apart from "you have no plan at all"
+ * (empty list -> `stale: false`) and word the empty state honestly. */
 export function pickCurrentAndNextWeek(weeks, now = new Date()) {
-  const sorted = [...weeks].sort((a, b) => a.iso_week.localeCompare(b.iso_week));
-  if (sorted.length === 0) return { current: null, next: null };
+  const sorted = sortedByIsoWeek(weeks);
+  if (sorted.length === 0) return { current: null, next: null, stale: false };
 
-  let currentIndex = sorted.findIndex((week) => {
+  const currentIndex = sorted.findIndex((week) => {
     const sunday = addDays(isoWeekMonday(week.iso_week), 6);
     return daysBetween(now, sunday) >= 0;
   });
-  if (currentIndex === -1) currentIndex = Math.max(0, sorted.length - 2);
+  if (currentIndex === -1) return { current: null, next: null, stale: true };
 
   return {
     current: sorted[currentIndex] || null,
     next: sorted[currentIndex + 1] || null,
+    stale: false,
   };
 }
 

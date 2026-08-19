@@ -72,6 +72,12 @@
     /* week */
     .week { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
     .week + .week { margin-top: 16px; }
+    .all-weeks { margin-top: 16px; }
+    .all-weeks > summary { cursor: pointer; list-style: none; padding: 12px 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper-2); color: var(--ink-soft); font-size: 13px; font-weight: 700; }
+    .all-weeks > summary::-webkit-details-marker { display: none; }
+    .all-weeks > summary::before { content: '▸ '; color: var(--ink-faint); }
+    .all-weeks[open] > summary::before { content: '▾ '; }
+    .all-weeks[open] > summary { margin-bottom: 16px; }
     .week-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 14px; padding: 16px 20px; border-bottom: 1px solid var(--line-soft); background: var(--paper-2); }
     .week-head h3 { font-family: var(--display); font-size: 16px; font-weight: 700; }
     .week-head .focus { font-size: 13px; color: var(--ink-soft); }
