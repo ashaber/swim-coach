@@ -139,19 +139,58 @@ function renderStructureBlock(block) {
     </section>`;
 }
 
+/** A URL safe to put in an `href`, or null if it isn't one.
+ *
+ * `esc()` is NOT sufficient on its own here. Escaping defuses quote/angle-
+ * bracket injection *into the attribute*, but `href="javascript:alert(1)"`
+ * needs no escaping to be dangerous -- the browser executes it on tap
+ * regardless. `WorkoutStep.reference_url` is a plain `str` with no
+ * validation (models.py keeps optional fields loose on purpose) and is
+ * reachable from a coach-authored `session_overrides.structured` payload,
+ * so the scheme has to be rejected outright rather than merely escaped.
+ *
+ * Allow-list, not deny-list: only `http:`/`https:` pass. Parsed with `URL`
+ * rather than a string prefix check, so casing, leading/trailing
+ * whitespace, and percent-encoding tricks all normalize before the
+ * comparison instead of slipping past a naive `startsWith`. A rejected or
+ * unparseable URL returns null and the caller falls back to plain text --
+ * the athlete still sees the exercise, just without a link. */
+function safeHref(url) {
+  if (!url) return null;
+  try {
+    const parsed = new URL(String(url).trim());
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : null;
+  } catch {
+    return null; // relative or malformed -- nothing safe to link to
+  }
+}
+
 /** One `renderStructuredWorkout` line as its own indented div -- a repeat's
  * header (e.g. "3 x:", "EMOM x10 (every 60s):") or a step's label, each with
  * an optional secondary `.struct-detail` badge (duration/target/load) laid
  * out as its own small span rather than string-concatenated into `text`, so
  * CSS can style the two differently (see index.html's `.struct-*` rules).
  * Indentation is `line.depth` steps of 18px, inline (no new CSS class per
- * depth needed for what's expected to stay a small handful of levels). */
+ * depth needed for what's expected to stay a small handful of levels).
+ *
+ * When `line.referenceUrl` is present (plan.js's `renderStructuredStep`
+ * threading `WorkoutStep.reference_url` through -- a coach- or engine-set
+ * technique/demo link), the step text renders as a real `<a>` instead of a
+ * plain `<span>`, opening in a new tab (`target="_blank"`, with
+ * `rel="noopener noreferrer"` since it's an external URL). Same
+ * `.struct-text` class either way, so layout is unchanged. A URL that isn't
+ * a safe http(s) link renders as the plain span instead -- see `safeHref`.
+ */
 function renderStructuredLine(line) {
   const cls = line.kind === 'repeat' ? 'struct-line struct-line-repeat' : 'struct-line struct-line-step';
   const detail = line.detail ? `<span class="struct-detail mono">${esc(line.detail)}</span>` : '';
+  const href = safeHref(line.referenceUrl);
+  const text = href
+    ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer" class="struct-text">${esc(line.text)}</a>`
+    : `<span class="struct-text">${esc(line.text)}</span>`;
   return `
       <div class="${cls}" style="padding-left:${line.depth * 18}px">
-        <span class="struct-text">${esc(line.text)}</span>${detail}
+        ${text}${detail}
       </div>`;
 }
 
@@ -191,7 +230,7 @@ function renderStructuredWorkoutSection(structured) {
  * pool-coach placeholder with neither still has a real, non-blank title in
  * the header above (deriveSessionTitle's fallback), so there is always
  * something sensible to show even when this whole block is empty. */
-function renderPlanSessionDetail(session) {
+function renderPlanSessionDetail(session, sessionPush) {
   const classification = classifySession(session);
   const { title, detail, structure } = sessionDisplay(session);
   const dateLabel = formatLongDate(parseIsoDate(session.date));
@@ -234,6 +273,7 @@ function renderPlanSessionDetail(session) {
       ? renderStructuredWorkoutSection(session.structured)
       : (structure ? parseStructureBlocks(structure).map(renderStructureBlock).join('') : '')}
     ${session.structured ? renderGarminDownload(session) : ''}
+    ${session.structured ? renderGarminPush(session, sessionPush) : ''}
     ${purpose ? `
     <section class="detail-section">
       <h4>Purpose</h4>
@@ -257,6 +297,37 @@ function renderGarminDownload(session) {
       <button type="button" class="btn-garmin-download" data-a="session:garmin-download" data-id="${esc(session.id)}">
         Download for Garmin (.fit)
       </button>
+    </section>`;
+}
+
+/** The wireless counterpart to `renderGarminDownload` above, and the thing
+ * the athlete actually asked for: rather than saving a `.fit` to copy over
+ * USB, this POSTs to `/api/sessions/{id}/push-intervals`
+ * (backend/app/routes/garmin.py), which writes the workout to her
+ * intervals.icu calendar for intervals.icu's own Garmin Connect integration
+ * to forward to the watch.
+ *
+ * Gated on `structured` by the caller for the same reason the download
+ * button is -- a prose-only session has no real workout to push, and
+ * offering it would send garbage to a watch.
+ *
+ * `sessionPush` is main.js's `state.sessionPush` -- a SINGLE
+ * `{ id, status, message }` rather than a per-session map, because only one
+ * session detail is open at a time and a push is a short-lived foreground
+ * action (same shape and reasoning as `state.logSync`). The `id` check
+ * matters: without it, opening a different session right after a push would
+ * show the previous session's result under the new one's button. */
+function renderGarminPush(session, sessionPush) {
+  const push = sessionPush && sessionPush.id === session.id ? sessionPush : null;
+  const pushing = push?.status === 'pushing';
+  const resultClass = push?.status === 'error' ? 'fail' : 'ok';
+
+  return `
+    <section class="detail-section">
+      <button type="button" class="btn-garmin-push" data-a="session:push-intervals" data-id="${esc(session.id)}"${pushing ? ' disabled' : ''}>
+        ${pushing ? 'Pushing to Garmin…' : 'Push to Garmin'}
+      </button>
+      ${push && push.message ? `<div class="conn-result ${resultClass}">${esc(push.message)}</div>` : ''}
     </section>`;
 }
 
@@ -290,14 +361,14 @@ function renderWeekCard(week, label) {
  * ordinary "This week"/"Next week" cards, a session id swaps the whole
  * section to a back button + renderPlanSessionDetail(...) instead, same
  * convention as renderHistorySection's `detailId` handling for workouts. */
-function renderWeeksSection(weeks, detailId) {
+function renderWeeksSection(weeks, detailId, sessionPush) {
   if (detailId) {
     const session = findSessionById(weeks, detailId);
     if (session) {
       return `
     <section>
       <div class="s-head"><button type="button" class="btn-ghost" data-a="session:back">&larr; Back to plan</button></div>
-      ${renderPlanSessionDetail(session)}
+      ${renderPlanSessionDetail(session, sessionPush)}
     </section>`;
     }
   }
@@ -475,13 +546,13 @@ function renderLegendPanel() {
 }
 
 export function renderApp(data, planSessionDetailId) {
-  const { athlete, events, macro, weeks } = data;
+  const { athlete, events, macro, weeks, sessionPush } = data;
   const event = macroTargetEvent(macro, events);
 
   return `
     <div class="wrap">
       ${renderMasthead(athlete, event)}
-      ${renderWeeksSection(weeks, planSessionDetailId)}
+      ${renderWeeksSection(weeks, planSessionDetailId, sessionPush)}
       ${renderMacroSection(macro, event, weeks)}
       <div class="foot">
         ${renderLegendPanel()}

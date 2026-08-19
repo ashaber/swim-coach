@@ -126,6 +126,51 @@ def test_download_fit_uses_file_endpoint_never_fit_file() -> None:
     assert "fit-file" not in requested[0]
 
 
+# --- IntervalsClient.push_workout_events (Garmin-push feature) -------------
+
+
+def test_push_workout_events_posts_json_array_with_upsert_true() -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["params"] = dict(request.url.params)
+        captured["body"] = json.loads(request.content)
+        # intervals.icu's bulk endpoint returns a JSON array on success --
+        # see this module's docstring / push_workout_events' own docstring
+        # for why the return annotation can't just claim `dict`.
+        return httpx.Response(200, json=[{"id": 9001}])
+
+    client = IntervalsClient("i12345", "s3cr3t-key", transport=httpx.MockTransport(handler))
+    fit_bytes = b"not-real-fit-bytes-for-plumbing-test"
+    events = [
+        {
+            "category": "WORKOUT",
+            "type": "Swim",
+            "start_date_local": "2026-08-24T00:00:00",
+            "filename": "session-abc123.fit",
+            "file_contents_base64": base64.b64encode(fit_bytes).decode("ascii"),
+            "external_id": "abc123",
+            "name": "Main set",
+        }
+    ]
+
+    result = client.push_workout_events(events)
+
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/api/v1/athlete/i12345/events/bulk"
+    assert captured["params"] == {"upsert": "true"}
+    assert isinstance(captured["body"], list)
+    assert len(captured["body"]) == 1
+    sent_event = captured["body"][0]
+    assert sent_event["external_id"] == "abc123"
+    # The exact assertion the brief calls for: decode the base64 back to
+    # bytes and compare against the original -- not just "field is present".
+    assert base64.b64decode(sent_event["file_contents_base64"]) == fit_bytes
+    assert result == [{"id": 9001}]
+
+
 # --- sync_athlete: end-to-end against a real FileStore ---------------------
 
 

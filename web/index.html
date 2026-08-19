@@ -308,6 +308,13 @@
     .struct-line-repeat { font-weight: 700; margin-top: 6px; }
     .struct-line-repeat:first-child { margin-top: 0; }
     .struct-detail { font-size: 12px; color: var(--ink-soft); }
+    /* A step whose WorkoutStep carries a reference_url (see views.js's
+       renderStructuredLine) renders as this anchor instead of a plain
+       span -- same .struct-text class/layout, just a link affordance for
+       the technique/demo page it opens in a new tab. */
+    a.struct-text { color: var(--accent-ink); text-decoration-line: underline;
+      text-decoration-color: transparent; transition: text-decoration-color .15s; }
+    a.struct-text:hover, a.struct-text:focus-visible { text-decoration-color: currentColor; }
 
     /* feedback tab */
     .feedback-entry { margin-top: 12px; }

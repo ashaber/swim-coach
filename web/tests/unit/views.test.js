@@ -482,6 +482,67 @@ describe('renderApp plan session detail view (click-to-detail)', () => {
     expect(html).toContain('Download for Garmin');
   });
 
+  // The wireless counterpart to the download button above -- the athlete
+  // asked for a per-session push, not just a chat tool. Same
+  // structured-only gating: a prose-only session has nothing real to push.
+  describe('push to Garmin button', () => {
+    const PUSHABLE = {
+      id: 's-pushable',
+      date: dateKey(weekMonday),
+      sport: 'swim_pool',
+      source: 'ai_coach',
+      duration_min: 40,
+      distance_m: 1600,
+      intensity: { zone: 'Z3' },
+      purpose: 'Threshold set',
+      structure: 'Main set: 4x200 @ Z3',
+      structured: {
+        items: [{
+          kind: 'step', label: '4x200 @ Z3', role: 'interval', duration_kind: 'distance_m',
+          duration_value: 800, modality: 'swim', equipment: [],
+        }],
+      },
+    };
+    const withPushable = (push) => ({
+      ...PLAN_DATA, weeks: [{ ...WEEK, sessions: [PUSHABLE] }], sessionPush: push,
+    });
+
+    it('renders a push button for a session with structured data', () => {
+      const html = renderApp(withPushable(null), PUSHABLE.id);
+      expect(html).toContain(`data-a="session:push-intervals" data-id="${PUSHABLE.id}"`);
+      expect(html).toContain('Push to Garmin');
+    });
+
+    it('renders NO push button for a prose-only session -- nothing real to push', () => {
+      const html = renderApp(PLAN_DATA, NO_STRUCTURE_SESSION.id);
+      expect(html).not.toContain('session:push-intervals');
+    });
+
+    it('shows a pushing state while in flight', () => {
+      const html = renderApp(withPushable({ id: PUSHABLE.id, status: 'pushing', message: null }), PUSHABLE.id);
+      expect(html).toContain('Pushing');
+    });
+
+    it('shows a success message after a push', () => {
+      const push = { id: PUSHABLE.id, status: 'success', message: 'Sent to Garmin via Intervals.icu.' };
+      const html = renderApp(withPushable(push), PUSHABLE.id);
+      expect(html).toContain('Sent to Garmin via Intervals.icu.');
+    });
+
+    it('shows an escaped error message when the push fails', () => {
+      const push = { id: PUSHABLE.id, status: 'error', message: '<img src=x onerror=alert(1)>' };
+      const html = renderApp(withPushable(push), PUSHABLE.id);
+      expect(html).not.toContain('<img src=x');
+      expect(html).toContain('&lt;img');
+    });
+
+    it('ignores a push state belonging to a different session', () => {
+      const push = { id: 'some-other-session', status: 'success', message: 'Sent to Garmin via Intervals.icu.' };
+      const html = renderApp(withPushable(push), PUSHABLE.id);
+      expect(html).not.toContain('Sent to Garmin via Intervals.icu.');
+    });
+  });
+
   it('renders a sensible, non-blank detail view for a session with no structure at all', () => {
     const html = renderApp(PLAN_DATA, NO_STRUCTURE_SESSION.id);
     expect(html).toContain('data-a="session:back"');
@@ -633,6 +694,130 @@ describe('renderApp plan session detail view (click-to-detail)', () => {
       const html = renderApp(data, 's-structured-malicious');
       expect(html).not.toContain('<img src=x');
       expect(html).toContain('&lt;img');
+    });
+
+    it('renders a step with a referenceUrl as a clickable link, target=_blank, opening in a new tab safely', () => {
+      const withLink = {
+        ...STRUCTURED_SESSION,
+        id: 's-structured-link',
+        structured: {
+          items: [
+            {
+              kind: 'step', label: 'Goblet squat', role: 'steady', duration_kind: 'reps',
+              duration_value: 10, target: null, load: { basis: 'bodyweight', value: null },
+              modality: 'strength', stroke: null, equipment: [], exercise_name: 'Goblet squat',
+              reference_url: 'https://www.rehabhero.ca/exercise/goblet-squat',
+            },
+          ],
+        },
+      };
+      const data = { ...PLAN_DATA, weeks: [{ ...WEEK, sessions: [withLink] }] };
+      const html = renderApp(data, 's-structured-link');
+      expect(html).toContain(
+        '<a href="https://www.rehabhero.ca/exercise/goblet-squat" target="_blank" rel="noopener noreferrer" class="struct-text">Goblet squat</a>',
+      );
+    });
+
+    it('renders a step without a referenceUrl as a plain span, not a link', () => {
+      // STRUCTURED_SESSION's own steps carry no reference_url.
+      const data = { ...PLAN_DATA, weeks: [{ ...WEEK, sessions: [STRUCTURED_SESSION] }] };
+      const html = renderApp(data, STRUCTURED_SESSION.id);
+      expect(html).toContain('<span class="struct-text">Warm-up: Easy swim</span>');
+      expect(html).not.toContain('<a href="https://www.rehabhero.ca');
+    });
+
+    it('escapes a malicious javascript: reference_url and quote-injecting content (no raw HTML injection)', () => {
+      const malicious = {
+        ...STRUCTURED_SESSION,
+        id: 's-structured-malicious-url',
+        structured: {
+          items: [{
+            kind: 'step', label: 'Goblet squat', role: 'steady', duration_kind: 'reps',
+            duration_value: 10, target: null, load: null, modality: 'strength', stroke: null,
+            equipment: [], exercise_name: 'Goblet squat',
+            reference_url: 'javascript:alert(1)"><img src=x onerror=alert(1)>',
+          }],
+        },
+      };
+      const data = { ...PLAN_DATA, weeks: [{ ...WEEK, sessions: [malicious] }] };
+      const html = renderApp(data, 's-structured-malicious-url');
+      expect(html).not.toContain('<img src=x');
+      expect(html).not.toContain('"><img');
+      // The URL is rejected outright by safeHref (not an http(s) scheme), so
+      // it never reaches the markup at all -- strictly safer than emitting it
+      // escaped into an href, which is what this test originally asserted.
+      expect(html).not.toContain('javascript:');
+      expect(html).not.toContain('&quot;&gt;&lt;img');
+      expect(html).toContain('<span class="struct-text">Goblet squat</span>');
+    });
+
+    // Escaping alone does NOT defuse a `javascript:` URL -- esc() only
+    // neutralizes the quote/angle-bracket injection above; the browser will
+    // still happily execute `href="javascript:alert(1)"` on tap, because
+    // nothing about that string needs escaping to be dangerous. The scheme
+    // itself has to be rejected. `reference_url` is a plain `str` on
+    // WorkoutStep with no validation, reachable from a coach-authored
+    // `session_overrides.structured` payload, so this is a real path.
+    it('does not emit a javascript: href at all -- the scheme is rejected, not merely escaped', () => {
+      const malicious = {
+        ...STRUCTURED_SESSION,
+        id: 's-structured-js-scheme',
+        structured: {
+          items: [{
+            kind: 'step', label: 'Goblet squat', role: 'steady', duration_kind: 'reps',
+            duration_value: 10, target: null, load: null, modality: 'strength', stroke: null,
+            equipment: [], exercise_name: 'Goblet squat',
+            reference_url: 'javascript:alert(1)',
+          }],
+        },
+      };
+      const data = { ...PLAN_DATA, weeks: [{ ...WEEK, sessions: [malicious] }] };
+      const html = renderApp(data, 's-structured-js-scheme');
+      expect(html).not.toContain('javascript:');
+      // Falls back to the plain, un-linked rendering rather than dropping
+      // the step -- the athlete still sees the exercise.
+      expect(html).toContain('<span class="struct-text">Goblet squat</span>');
+    });
+
+    it('rejects other non-http(s) schemes too, and is not fooled by case or leading whitespace', () => {
+      const cases = [
+        'JaVaScRiPt:alert(1)',
+        '  javascript:alert(1)',
+        'data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==',
+        'vbscript:msgbox(1)',
+      ];
+      for (const url of cases) {
+        const session = {
+          ...STRUCTURED_SESSION,
+          id: 's-scheme-probe',
+          structured: {
+            items: [{
+              kind: 'step', label: 'Goblet squat', role: 'steady', duration_kind: 'reps',
+              duration_value: 10, target: null, load: null, modality: 'strength', stroke: null,
+              equipment: [], exercise_name: 'Goblet squat', reference_url: url,
+            }],
+          },
+        };
+        const html = renderApp({ ...PLAN_DATA, weeks: [{ ...WEEK, sessions: [session] }] }, 's-scheme-probe');
+        expect(html, `scheme should be rejected: ${url}`).not.toContain('<a href=');
+      }
+    });
+
+    it('still links a plain http(s) URL', () => {
+      const session = {
+        ...STRUCTURED_SESSION,
+        id: 's-scheme-ok',
+        structured: {
+          items: [{
+            kind: 'step', label: 'Goblet squat', role: 'steady', duration_kind: 'reps',
+            duration_value: 10, target: null, load: null, modality: 'strength', stroke: null,
+            equipment: [], exercise_name: 'Goblet squat',
+            reference_url: 'http://example.org/goblet',
+          }],
+        },
+      };
+      const html = renderApp({ ...PLAN_DATA, weeks: [{ ...WEEK, sessions: [session] }] }, 's-scheme-ok');
+      expect(html).toContain('<a href="http://example.org/goblet"');
     });
   });
 });

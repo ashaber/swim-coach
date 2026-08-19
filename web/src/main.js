@@ -15,6 +15,7 @@ import { loadSettings, saveSettings, isConfigured } from './settings.js';
 import {
   streamChat, postWorkout, postWellness, fetchPlan, getAthlete, patchAthlete,
   postFeedback, listFeedback, uploadWorkoutFile, listWorkouts, syncWorkouts, logout, onboard,
+  pushSessionToIntervals,
   downloadGarminFit,
 } from './api.js';
 import {
@@ -150,6 +151,13 @@ const state = {
   logSubmit: { status: 'idle', message: null },
   logIngest: createLogIngest(),
   logSync: createLogSync(),
+  // Result of the Plan tab's per-session "Push to Garmin" action. A single
+  // { id, status, message } rather than a per-session map: only one session
+  // detail is open at a time, and a push is a short-lived foreground action
+  // (same shape and reasoning as logSync above). `id` scopes the message to
+  // the session it belongs to -- see views.js's renderGarminPush. Cleared on
+  // leaving the Plan tab / closing the detail, like planSessionDetailId.
+  sessionPush: null,
   // Secondary manual-entry/upload section is collapsed by default (Phase 3:
   // "Sync from watch" is the Log tab's primary action) -- reset on leaving
   // the Log tab (setTab), same convention as workoutDetailId below.
@@ -266,7 +274,10 @@ function renderTabContent() {
       }
       if (state.plan.status === 'loading' || state.plan.status === 'idle') return renderLoading();
       if (state.plan.status === 'error') return renderError(state.plan.error);
-      return renderApp(state.plan.data, state.planSessionDetailId);
+      return renderApp(
+        { ...state.plan.data, sessionPush: state.sessionPush },
+        state.planSessionDetailId,
+      );
   }
 }
 
@@ -324,6 +335,7 @@ function applyAthleteSession(identity, token) {
   // isn't a second load-triggering path to keep in sync with this one.
   state.plan = { status: 'idle', data: null, error: null };
   state.planSessionDetailId = null;
+  state.sessionPush = null;
   state.profileForm = createProfileForm();
   state.profileLoad = { status: 'idle', error: null };
   state.profileSubmit = { status: 'idle', message: null };
@@ -368,6 +380,7 @@ function resetToSignedOut({ identityError = null } = {}) {
   state.chat = loadChatSession(SIGNED_OUT_CHAT_KEY);
   state.plan = { status: 'idle', data: null, error: null };
   state.planSessionDetailId = null;
+  state.sessionPush = null;
   state.profileForm = createProfileForm();
   state.profileLoad = { status: 'idle', error: null };
   state.profileSubmit = { status: 'idle', message: null };
@@ -635,9 +648,56 @@ async function handleDownloadGarminFit(sessionId) {
   log.info('plan.garmin_download_completed', { athlete: athleteSlug(), session_id: sessionId });
 }
 
+/** Pushes a session's workout to the athlete's Garmin watch via her
+ * intervals.icu calendar (see views.js's renderGarminPush /
+ * backend/app/routes/garmin.py's push-intervals route). Mirrors
+ * handleDownloadGarminFit's shape -- config gate, log, call, unauthorized
+ * check -- but the result is an inline message rendered from state rather
+ * than a file save, since there's nothing to hand the browser. */
+async function handlePushSessionToGarmin(sessionId) {
+  if (!sessionId) return;
+  if (state.sessionPush?.id === sessionId && state.sessionPush.status === 'pushing') return;
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) {
+    state.tab = 'settings';
+    saveActiveTab(state.tab);
+    render();
+    return;
+  }
+
+  state.sessionPush = { id: sessionId, status: 'pushing', message: null };
+  render();
+  log.info('plan.garmin_push_requested', { athlete: athleteSlug(), session_id: sessionId });
+
+  const result = await pushSessionToIntervals({
+    baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), sessionId,
+  });
+  if (handleUnauthorized(result)) return;
+
+  if (result.ok) {
+    log.info('plan.garmin_push_completed', { athlete: athleteSlug(), session_id: sessionId });
+    state.sessionPush = {
+      id: sessionId,
+      status: 'success',
+      // Deliberately mentions the one-time setup: from here a push looks
+      // identical whether or not the athlete has ticked "Upload planned
+      // workouts" in intervals.icu, so the only honest thing we can claim
+      // is that it reached the calendar.
+      message: 'Sent to your Intervals.icu calendar — it syncs to your watch from there.',
+    };
+  } else {
+    log.error('plan.garmin_push_failed', {
+      athlete: athleteSlug(), session_id: sessionId, error: result.error,
+    });
+    state.sessionPush = { id: sessionId, status: 'error', message: result.error };
+  }
+  render();
+}
+
 function handleCloseSessionDetail() {
   if (!state.planSessionDetailId) return; // avoids a redundant render on popstate re-entrancy
   state.planSessionDetailId = null;
+  state.sessionPush = null;
   render();
 }
 
@@ -648,6 +708,7 @@ function handleCloseSessionDetail() {
 function pruneSessionDetailIdIfMissing(weeks) {
   if (state.planSessionDetailId && !findSessionById(weeks || [], state.planSessionDetailId)) {
     state.planSessionDetailId = null;
+    state.sessionPush = null;
   }
 }
 
@@ -1234,6 +1295,7 @@ function setTab(tab) {
   // last was.
   if (state.tab === 'plan' && state.planSessionDetailId) {
     state.planSessionDetailId = null;
+    state.sessionPush = null;
     // Consumes the pushState entry handleOpenSessionDetail added, keeping
     // browser history symmetric with app state -- see the matching Log-tab
     // comment above for why this is safe (handlePopState's
@@ -1301,6 +1363,7 @@ async function onAppClick(e) {
     // Same history.back()-not-direct-close reasoning as history:back above.
     case 'session:back': history.back(); break;
     case 'session:garmin-download': await handleDownloadGarminFit(el.dataset.id); break;
+    case 'session:push-intervals': await handlePushSessionToGarmin(el.dataset.id); break;
     // Awaited (unlike every other handler above) so the server-side revoke
     // this now does (see performSignOut) actually fires before this handler
     // returns, rather than being fired-and-forgotten mid-click.

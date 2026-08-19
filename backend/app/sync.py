@@ -209,6 +209,35 @@ class IntervalsClient:
         response.raise_for_status()
         return response.json()
 
+    def push_workout_events(self, events: list[dict]) -> Any:
+        """`POST /athlete/{id}/events/bulk?upsert=true` -- creates or updates
+        one or more intervals.icu calendar events from `events` (a JSON
+        array of event dicts; see `app.garmin_push.build_workout_event` for
+        the Garmin-push feature's own WORKOUT-event shape). Confirmed
+        against the live intervals.icu API (see `app.garmin_push`'s module
+        docstring): `upsert=true` combined with each event's own
+        `external_id` makes a re-push idempotent -- intervals.icu updates
+        the existing event instead of creating a duplicate, and (per their
+        docs) only ever matches `external_id` against events this
+        application itself created, so it can't collide with some other
+        tool's calendar entries.
+
+        Returns whatever the endpoint's JSON body parses to -- verified live
+        to be a JSON *array* (one entry per pushed event), not an object, so
+        the return type is intentionally not narrowed to `dict`; callers
+        that only care about success rely on `raise_for_status()` below
+        rather than inspecting the parsed body's shape.
+        """
+        response = _request_with_retry(
+            self._client,
+            "POST",
+            f"{API_BASE}/athlete/{self._athlete_id}/events/bulk",
+            params={"upsert": "true"},
+            json=events,
+        )
+        response.raise_for_status()
+        return response.json()
+
     def download_fit(self, activity_id: str) -> bytes:
         # CRITICAL: `/file` returns the ORIGINAL Garmin device .fit.
         # `/activity/{id}/fit-file` is intervals.icu's own lossy re-encode

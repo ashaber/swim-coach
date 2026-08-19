@@ -3,6 +3,7 @@ import {
   postWorkout, listWorkouts, postWellness, listWellness, fetchPlan, getAthlete, patchAthlete,
   postFeedback, listFeedback, uploadWorkoutFile, exchangeGoogleToken, RequestAccessError, logout,
   onboard, OnboardForbiddenError, OnboardConflictError, downloadGarminFit,
+  pushSessionToIntervals,
 } from '../../src/api.js';
 
 function fakeFetch(body, { ok = true, status = 200 } = {}) {
@@ -496,5 +497,42 @@ describe('logout', () => {
   it('never throws on a non-2xx response either', async () => {
     global.fetch = fakeFetch({ error: 'nope' }, { ok: false, status: 500 });
     await expect(logout({ baseUrl: 'https://api.example.com', token: 't' })).resolves.toBeUndefined();
+  });
+});
+
+describe('pushSessionToIntervals', () => {
+  it('POSTs to /api/sessions/{id}/push-intervals with the athlete query param and bearer header', async () => {
+    const summary = { pushed: 1, skipped: 0, failed: 0, results: [] };
+    global.fetch = fakeFetch(summary);
+
+    const result = await pushSessionToIntervals({
+      baseUrl: 'https://api.example.com', token: 'tok123', athlete: 'renee', sessionId: 's-1',
+    });
+
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/sessions/s-1/push-intervals?athlete=renee');
+    expect(init.method).toBe('POST');
+    expect(init.headers.Authorization).toBe('Bearer tok123');
+    expect(result).toEqual({ ok: true, data: summary });
+  });
+
+  it('url-encodes the session id', async () => {
+    global.fetch = fakeFetch({ pushed: 1 });
+    await pushSessionToIntervals({
+      baseUrl: 'https://api.example.com', token: 't', athlete: 'renee', sessionId: 'a/b c',
+    });
+    const [url] = global.fetch.mock.calls[0];
+    expect(url).toContain('/api/sessions/a%2Fb%20c/push-intervals');
+  });
+
+  it('surfaces a backend error rather than throwing -- the not-configured 409 is a real, expected path', async () => {
+    global.fetch = fakeFetch({ detail: 'sync not configured for this athlete' }, { ok: false, status: 409 });
+
+    const result = await pushSessionToIntervals({
+      baseUrl: 'https://api.example.com', token: 't', athlete: 'renee', sessionId: 's-1',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(409);
   });
 });

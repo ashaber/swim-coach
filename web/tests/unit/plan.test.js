@@ -385,6 +385,49 @@ describe('renderStructuredWorkout', () => {
     expect(renderStructuredWorkout(undefined)).toEqual([]);
     expect(renderStructuredWorkout({ items: [] })).toEqual([]);
   });
+
+  it('threads a step\'s reference_url through as referenceUrl on its line, leaving it unset when absent', () => {
+    const structured = {
+      items: [
+        {
+          kind: 'step', label: 'Goblet squat', role: 'steady', duration_kind: 'reps',
+          duration_value: 10, target: null, load: { basis: 'bodyweight', value: null },
+          modality: 'strength', stroke: null, equipment: [], exercise_name: 'Goblet squat',
+          reference_url: 'https://www.rehabhero.ca/exercise/goblet-squat',
+        },
+        {
+          kind: 'step', label: 'Kettlebell swing', role: 'steady', duration_kind: 'reps',
+          duration_value: 10, target: null, load: { basis: 'bodyweight', value: null },
+          modality: 'strength', stroke: null, equipment: [], exercise_name: 'Kettlebell swing',
+        },
+      ],
+    };
+    const lines = renderStructuredWorkout(structured);
+    expect(lines[0].referenceUrl).toBe('https://www.rehabhero.ca/exercise/goblet-squat');
+    expect(lines[1].referenceUrl).toBeUndefined();
+  });
+
+  it('a repeat header never carries a referenceUrl, even when its child steps do', () => {
+    const structured = {
+      items: [
+        {
+          kind: 'repeat', repeat_mode: 'count', count: 2, duration_s: null, interval_s: null,
+          steps: [
+            {
+              kind: 'step', label: 'Goblet squat', role: 'steady', duration_kind: 'reps',
+              duration_value: 10, target: null, load: { basis: 'bodyweight', value: null },
+              modality: 'strength', stroke: null, equipment: [], exercise_name: 'Goblet squat',
+              reference_url: 'https://www.rehabhero.ca/exercise/goblet-squat',
+            },
+          ],
+        },
+      ],
+    };
+    const lines = renderStructuredWorkout(structured);
+    expect(lines[0].kind).toBe('repeat');
+    expect(lines[0].referenceUrl).toBeUndefined();
+    expect(lines[1].referenceUrl).toBe('https://www.rehabhero.ca/exercise/goblet-squat');
+  });
 });
 
 describe('findSessionById', () => {

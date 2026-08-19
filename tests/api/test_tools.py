@@ -11,6 +11,8 @@ from collections import Counter
 from datetime import date, timedelta
 from pathlib import Path
 
+import uuid
+
 import httpx
 import pytest
 from fakes import SpyFeedbackStore, make_workout
@@ -21,10 +23,17 @@ from swim_coach.models import (
     WorkoutAnalytics,
     WorkoutLap,
     WorkoutPause,
+    WorkoutStep,
+    WorkoutStructure,
 )
 from swim_coach.store import FileStore
 
-from app.tools import GET_WORKOUTS_CAP, SYNC_WORKOUTS_WINDOW_DAYS, build_tool_handlers
+from app.tools import (
+    GET_WORKOUTS_CAP,
+    SYNC_WORKOUTS_WINDOW_DAYS,
+    TOOLS_SCHEMA,
+    build_tool_handlers,
+)
 
 # Fixed IDs/names from the real athletes/renee/ test tree (copied into
 # athletes_dir by conftest.py) -- see events.yaml/plan/macro.yaml.
@@ -443,6 +452,157 @@ def test_sync_workouts_athlete_not_in_config_is_a_friendly_error(
     result = handlers["sync_workouts"]({})
 
     assert result == {"error": "sync not configured for this athlete"}
+
+
+# --- push_to_garmin ----------------------------------------------------------
+# The conversational half of the Garmin push (the PWA's per-session "Push to
+# Garmin" button is the other). Both call the SAME app.garmin_push functions
+# -- these tests exist to prove the tool is wired to the bound athlete and
+# reports the shared summary faithfully, not to re-test the push mechanism
+# itself (tests/api/test_garmin_push.py owns that).
+
+
+def _seed_pushable_session(athletes_dir) -> None:
+    """Adds one session WITH structured workout data to renee's 2026-W28.
+
+    The fixture week's own sessions all predate the `structured` IR (the
+    on-disk YAML has no `structured` key at all, so every one validates as
+    `structured=None`), which means a push over that week correctly skips
+    everything and makes no HTTP call -- true to production, but useless for
+    asserting the tool actually pushes. Mirrors test_garmin_push.py's own
+    `_session`/`_add_session` helpers.
+    """
+    store = FileStore(base_dir=athletes_dir)
+    week = store.load_week("renee", "2026-W28")
+    week.sessions.append(
+        Session(
+            id=uuid.uuid4(),
+            athlete_id=week.athlete_id,
+            date=date(2026, 7, 8),
+            sport="swim_pool",
+            source="ai_coach",
+            duration_min=30.0,
+            distance_m=1000,
+            intensity={"anchor": "css_pace", "zone": "Z3"},
+            purpose="push_to_garmin tool test",
+            structure="Main set: 4x200 @ Z3",
+            structured=WorkoutStructure(
+                items=[
+                    WorkoutStep(
+                        label="4x200 @ Z3",
+                        role="interval",
+                        duration_kind="distance_m",
+                        duration_value=800,
+                        modality="swim",
+                    ),
+                ]
+            ),
+            status="planned",
+        )
+    )
+    store.save_week("renee", week)
+
+
+def test_push_to_garmin_scopes_to_the_bound_athlete_only(
+    athletes_dir, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(
+        "INTERVALS_SYNC_CONFIG",
+        json.dumps(
+            [
+                {"slug": "andrew", "intervals_athlete_id": "i-andrew", "api_key": "andrew-key"},
+                {"slug": "renee", "intervals_athlete_id": "i-renee", "api_key": "renee-key"},
+            ]
+        ),
+    )
+    requested_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_paths.append(request.url.path)
+        return httpx.Response(200, json=[{"id": 1}])
+
+    _force_mock_transport(monkeypatch, handler)
+    _seed_pushable_session(athletes_dir)
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["push_to_garmin"]({"iso_week": "2026-W28"})
+
+    assert "error" not in result
+    # Every call went to renee's intervals.icu athlete id, never andrew's.
+    assert requested_paths
+    assert all(path == "/api/v1/athlete/i-renee/events/bulk" for path in requested_paths)
+
+
+def test_push_to_garmin_not_configured_is_a_friendly_error(
+    athletes_dir, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(
+        "INTERVALS_SYNC_CONFIG",
+        json.dumps([{"slug": "andrew", "intervals_athlete_id": "i-andrew", "api_key": "andrew-key"}]),
+    )
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["push_to_garmin"]({"iso_week": "2026-W28"})
+
+    assert result == {"error": "sync not configured for this athlete"}
+
+
+def test_push_to_garmin_reports_the_shared_push_summary(
+    athletes_dir, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(
+        "INTERVALS_SYNC_CONFIG",
+        json.dumps([{"slug": "renee", "intervals_athlete_id": "i-renee", "api_key": "renee-key"}]),
+    )
+    _force_mock_transport(monkeypatch, lambda request: httpx.Response(200, json=[{"id": 1}]))
+    _seed_pushable_session(athletes_dir)
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["push_to_garmin"]({"iso_week": "2026-W28"})
+
+    # The summary shape push_on_demand returns, passed through unchanged --
+    # the coach needs the skipped/failed counts to tell the athlete the truth
+    # about a week where only some sessions were pushable.
+    assert set(result) >= {"pushed", "skipped", "failed", "results"}
+    assert isinstance(result["results"], list)
+    assert result["pushed"] >= 1
+
+
+def test_push_to_garmin_unknown_week_is_a_clean_error_not_a_crash(
+    athletes_dir, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(
+        "INTERVALS_SYNC_CONFIG",
+        json.dumps([{"slug": "renee", "intervals_athlete_id": "i-renee", "api_key": "renee-key"}]),
+    )
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["push_to_garmin"]({"iso_week": "2099-W01"})
+
+    assert "error" in result
+    assert isinstance(result["error"], str)
+
+
+def test_push_to_garmin_is_registered_with_a_schema_documenting_the_setup_step(
+    athletes_dir,
+) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    assert "push_to_garmin" in handlers
+
+    schema = next(t for t in TOOLS_SCHEMA if t["name"] == "push_to_garmin")
+    description = schema["description"].lower()
+    # The one-time athlete-side step is not automatable, so the coach has to
+    # know to mention it -- a push that silently stops at the intervals.icu
+    # calendar looks identical to a working one from our side.
+    assert "upload planned workouts" in description
+    assert "structured" in description
+    properties = schema["input_schema"]["properties"]
+    assert set(properties) == {"iso_week", "session_id"}
 
 
 @_no_fit_fixture

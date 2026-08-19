@@ -286,6 +286,8 @@ def _apply_load(fit_step: WorkoutStepMessage, load: WorkoutLoad | None) -> None:
 def _build_leaf_step(step: WorkoutStep) -> WorkoutStepMessage:
     fit_step = WorkoutStepMessage()
     fit_step.workout_step_name = step.label[:_MAX_STRING_LEN]
+    if step.reference_url:
+        fit_step.notes = step.reference_url[:_MAX_STRING_LEN]
     fit_step.intensity = _ROLE_TO_INTENSITY.get(step.role, Intensity.OTHER)
 
     duration_type = _DURATION_KIND_TO_FIT.get(step.duration_kind, WorkoutStepDuration.OPEN)

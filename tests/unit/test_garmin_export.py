@@ -16,7 +16,7 @@ import fitdecode
 import pytest
 
 from swim_coach import workout_templates
-from swim_coach.garmin_export import to_garmin_fit_workout
+from swim_coach.garmin_export import _MAX_STRING_LEN, to_garmin_fit_workout
 from swim_coach.models import (
     Athlete,
     WorkoutLoad,
@@ -118,6 +118,69 @@ def test_strength_step_with_bodyweight_load():
     assert len(steps) == 1
     assert steps[0]["duration_type"] == "reps"
     assert steps[0]["duration_reps"] == 10
+
+
+def test_step_with_reference_url_round_trips_into_notes():
+    structured = WorkoutStructure(
+        items=[
+            WorkoutStep(
+                label="goblet squat",
+                role="steady",
+                duration_kind="reps",
+                duration_value=10,
+                load=WorkoutLoad(basis="bodyweight"),
+                modality="strength",
+                exercise_name="goblet squat",
+                reference_url="https://www.rehabhero.ca/exercise/goblet-squat",
+            ),
+        ]
+    )
+    fit_bytes = to_garmin_fit_workout(structured, sport="strength", name="Test strength")
+    steps = _decode_workout_steps(fit_bytes)
+    assert len(steps) == 1
+    assert steps[0]["notes"] == "https://www.rehabhero.ca/exercise/goblet-squat"
+
+
+def test_step_without_reference_url_has_no_notes():
+    structured = WorkoutStructure(
+        items=[
+            WorkoutStep(
+                label="kettlebell swing",
+                role="steady",
+                duration_kind="reps",
+                duration_value=10,
+                load=WorkoutLoad(basis="bodyweight"),
+                modality="strength",
+                exercise_name="kettlebell swing",
+            ),
+        ]
+    )
+    fit_bytes = to_garmin_fit_workout(structured, sport="strength", name="Test strength")
+    steps = _decode_workout_steps(fit_bytes)
+    assert len(steps) == 1
+    assert steps[0].get("notes") is None
+
+
+def test_step_with_long_reference_url_is_truncated_to_max_string_len():
+    long_url = "https://www.rehabhero.ca/exercise/" + ("a" * 100)
+    structured = WorkoutStructure(
+        items=[
+            WorkoutStep(
+                label="goblet squat",
+                role="steady",
+                duration_kind="reps",
+                duration_value=10,
+                load=WorkoutLoad(basis="bodyweight"),
+                modality="strength",
+                exercise_name="goblet squat",
+                reference_url=long_url,
+            ),
+        ]
+    )
+    fit_bytes = to_garmin_fit_workout(structured, sport="strength", name="Test strength")
+    steps = _decode_workout_steps(fit_bytes)
+    assert len(steps) == 1
+    assert steps[0]["notes"] == long_url[:_MAX_STRING_LEN]
 
 
 def test_strength_step_with_absolute_load():

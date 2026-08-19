@@ -18,6 +18,8 @@ from swim_coach.plan import (
     NO_COACH_POOL_SESSION_FLOOR_M,
     POOL_SESSION_EST_M,
     STRENGTH_CORE_EXERCISES,
+    STRENGTH_EXERCISE_REFERENCE_URLS,
+    STRENGTH_FULL_BODY_ADDITION,
     STRENGTH_SESSIONS_PER_WEEK,
     WEEKLY_VOLUME_RAMP_CAP,
     _additional_swim_structure,
@@ -1363,6 +1365,52 @@ def test_strength_session_structure_template_uses_a_real_workout_repeat():
         assert isinstance(step, WorkoutStep)
         assert step.load.basis == "bodyweight"
         assert step.exercise_name in STRENGTH_CORE_EXERCISES
+
+
+# --- STRENGTH_EXERCISE_REFERENCE_URLS ----------------------------------------
+
+
+def test_strength_exercise_reference_urls_covers_every_canned_exercise():
+    # Guard test: every canned strength exercise (core + full-body) must
+    # have a dict entry -- catches a future exercise added to either tuple
+    # without a matching technique link.
+    covered = set(STRENGTH_EXERCISE_REFERENCE_URLS)
+    for exercise in STRENGTH_CORE_EXERCISES:
+        assert exercise in covered, f"missing reference URL for {exercise!r}"
+    for exercise in STRENGTH_FULL_BODY_ADDITION:
+        assert exercise in covered, f"missing reference URL for {exercise!r}"
+
+
+@pytest.mark.parametrize("session_index", [0, 1])
+def test_strength_session_structure_template_canned_steps_carry_reference_urls(session_index):
+    template = _strength_session_structure_template(session_index)
+
+    def walk(items):
+        for item in items:
+            if isinstance(item, WorkoutRepeat):
+                yield from walk(item.steps)
+            else:
+                yield item
+
+    steps = list(walk(template.items))
+    exercise_steps = [s for s in steps if s.exercise_name is not None]
+    assert len(exercise_steps) > 0
+    for step in exercise_steps:
+        assert step.reference_url == STRENGTH_EXERCISE_REFERENCE_URLS[step.exercise_name]
+        assert step.reference_url is not None
+
+    # role="open" section-header/Why: steps carry no exercise_name and no
+    # reference_url.
+    open_steps = [s for s in steps if s.role == "open"]
+    assert len(open_steps) > 0
+    for step in open_steps:
+        assert step.exercise_name is None
+        assert step.reference_url is None
+
+
+def test_strength_exercise_reference_urls_get_is_none_for_unknown_exercise():
+    # .get(), never [] -- a miss must be None, never a KeyError.
+    assert STRENGTH_EXERCISE_REFERENCE_URLS.get("not a real exercise") is None
 
 
 # --- Session.structured populated correctly by generate_week ------------------

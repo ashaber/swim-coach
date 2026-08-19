@@ -31,6 +31,50 @@ The sections from "Phase 1" down are the original approved build plan, kept as t
 
 ### Now / Next
 
+- **Planned workouts pushed to the Garmin watch (via intervals.icu).** The
+  athlete's real requirement: during a session, see the current
+  step/exercise on the watch, hit the lap key to advance, have the device
+  record it — for pool, open water, and strength. USB-copying the existing
+  `.fit` export was tried and rejected as impractical for regular use. The
+  shipped path reuses `garmin_export.to_garmin_fit_workout` unchanged,
+  base64-encodes the `.FIT`, and POSTs it as a `WORKOUT` calendar event to
+  `intervals.icu`'s `events/bulk?upsert=true` endpoint through the existing
+  per-athlete API key (`INTERVALS_SYNC_CONFIG`) — no new OAuth. Reachable
+  three ways: a per-session **"Push to Garmin"** button in the Plan tab, the
+  coach's `push_to_garmin` chat tool, and `POST
+  /api/sessions/{id}/push-intervals`. Re-pushing a session updates its
+  calendar entry instead of duplicating it (`external_id` + `upsert`).
+
+  **One-time athlete-side setup — NOT automatable, and nothing on our side
+  can detect whether it's been done.** In intervals.icu: *Settings →
+  Connections → authorize Garmin Connect → tick "Upload planned
+  workouts"*. Without it, a push still succeeds and still lands on the
+  intervals.icu calendar — it just never reaches the watch, which looks
+  identical to success from our end. This is why the PWA's success message
+  and the chat tool's description both say "sent to your Intervals.icu
+  calendar" rather than "sent to your watch." Don't build around it; tell
+  the athlete.
+
+  **Known fidelity limit, stated plainly:** intervals.icu has no exercise
+  catalog/icon rendering for strength (their own forum lists it as an open,
+  unshipped request). Strength workouts arrive on the watch as named steps
+  with rep targets and lap-advance — which satisfies the stated need, but
+  without Garmin's per-exercise icons. Screenshots showing rich exercise
+  icons come from *native* Garmin Connect workouts, a different path.
+  Reaching that fidelity would mean populating FIT's own
+  `ExerciseCategory`/`ExerciseName` enums (already available in `fit_tool`,
+  currently unused) — a separate, lower-priority enhancement, not needed
+  for the lap-advance workflow. Garmin's own public API does not support
+  third-party structured-strength workout creation at all, and their
+  Developer Training API is enterprise-gated (already evaluated and
+  rejected — see `docs/workout-data-model.md`). Cycling is out of scope:
+  the engine has no cycling sport or FIT mapping today.
+
+  Only swim and strength sessions that carry `structured` data are
+  pushable; prose-only sessions and recovery/cross-train are skipped and
+  counted, never silently dropped. The Plan tab hides the button entirely
+  for a session with nothing real to push.
+
 - **Canonical structured workout data model + Garmin `.FIT` export.** Design
   and build done (`docs/workout-data-model.md`) — a `WorkoutStructure`
   IR (`WorkoutStep`/`WorkoutRepeat`/`WorkoutTarget`/`WorkoutLoad`) that
