@@ -13,7 +13,7 @@ import {
   sportLabel, sourceBadge, formatWorkoutDistance, formatAnalyticsLine,
   formatDrift, formatSplit, formatPauses, formatSwolf, formatMovingVsElapsed,
   formatOffset, formatClock, formatLengthsSummary, formatSyncResult,
-  formatWorkoutChatLabel,
+  formatWorkoutChatLabel, HISTORY_DISPLAY_CAP,
 } from './workouts.js';
 
 function esc(value) {
@@ -361,7 +361,7 @@ function renderWeekCard(week, label) {
  * ordinary "This week"/"Next week" cards, a session id swaps the whole
  * section to a back button + renderPlanSessionDetail(...) instead, same
  * convention as renderHistorySection's `detailId` handling for workouts. */
-function renderWeeksSection(weeks, detailId, sessionPush) {
+function renderWeeksSection(weeks, detailId, sessionPush, allWeeksOpen) {
   if (detailId) {
     const session = findSessionById(weeks, detailId);
     if (session) {
@@ -374,7 +374,7 @@ function renderWeeksSection(weeks, detailId, sessionPush) {
   }
 
   const { current, next, stale } = pickCurrentAndNextWeek(weeks);
-  const allWeeks = renderAllWeeksAccordion(weeks);
+  const allWeeks = renderAllWeeksAccordion(weeks, allWeeksOpen);
 
   // Two genuinely different empty states, and neither one may resurrect a
   // past week as "This week" (the 2026-08-18 defect -- see plan.js's
@@ -416,14 +416,14 @@ function renderWeeksSection(weeks, detailId, sessionPush) {
  * for e2e/unit selection and for main.js's logging convention; the open/
  * close behaviour itself is the browser's. Renders nothing when there are
  * no weeks at all. */
-function renderAllWeeksAccordion(weeks) {
+function renderAllWeeksAccordion(weeks, allWeeksOpen) {
   const sorted = sortedByIsoWeek(weeks);
   if (sorted.length === 0) return '';
   const cards = sorted
     .map((week) => renderWeekCard(week, `${week.iso_week} · ${weekRangeLabel(week)}`))
     .join('');
   return `
-      <details class="all-weeks">
+      <details class="all-weeks"${allWeeksOpen ? ' open' : ''}>
         <summary data-a="weeks:toggle-all">All planned weeks (${sorted.length})</summary>
         ${cards}
       </details>`;
@@ -546,13 +546,13 @@ function renderLegendPanel() {
 }
 
 export function renderApp(data, planSessionDetailId) {
-  const { athlete, events, macro, weeks, sessionPush } = data;
+  const { athlete, events, macro, weeks, sessionPush, allWeeksOpen } = data;
   const event = macroTargetEvent(macro, events);
 
   return `
     <div class="wrap">
       ${renderMasthead(athlete, event)}
-      ${renderWeeksSection(weeks, planSessionDetailId, sessionPush)}
+      ${renderWeeksSection(weeks, planSessionDetailId, sessionPush, allWeeksOpen)}
       ${renderMacroSection(macro, event, weeks)}
       <div class="foot">
         ${renderLegendPanel()}
@@ -578,6 +578,7 @@ export function renderError(message) {
 const TABS = [
   { id: 'plan', label: 'Plan', icon: '📋' },
   { id: 'log', label: 'Log', icon: '📝' },
+  { id: 'history', label: 'History', icon: '📚' },
   { id: 'checkin', label: 'Check-in', icon: '🌙' },
   { id: 'coach', label: 'Coach', icon: '💬' },
   { id: 'feedback', label: 'Feedback', icon: '💡' },
@@ -891,6 +892,109 @@ function renderHistoryList(workouts) {
   return `<div class="hist-list">${workouts.map(renderWorkoutRow).join('')}</div>`;
 }
 
+// --- History tab ----------------------------------------------------------
+// "History should show workouts completed with actual stats and planned
+// workout skipped." One reverse-chronological feed of both, built by
+// history.js's buildHistoryFeed (see that module on why "skipped" is
+// derived rather than read from Session.status).
+//
+// Completed rows reuse renderWorkoutRow/renderWorkoutDetail verbatim -- the
+// Log tab's existing history section already renders exactly the "actual
+// stats" half correctly, and forking it would guarantee drift.
+
+/** A planned-but-never-done session. Deliberately a `<div>`, not the
+ * `<button>` a completed row is: there is no detail view to open, because
+ * there is no logged data behind it -- everything known about a skipped
+ * session is already on this row. Making it look tappable would promise a
+ * screen that can't exist. */
+function renderSkippedRow(session) {
+  const metaParts = [];
+  const duration = formatDuration(session.duration_min);
+  if (duration) metaParts.push(duration);
+  const distance = formatDistance(session.distance_m);
+  if (distance) metaParts.push(`planned ~${distance}`);
+
+  return `
+    <div class="hist-row hist-row-skipped">
+      <div class="hist-date mono">${esc(formatShortDate(parseIsoDate(session.date)))}</div>
+      <div class="hist-body">
+        <div class="hist-title">
+          <span>${esc(sportLabel(session.sport))}</span>
+          <span class="chat-chip chip-skipped">Skipped</span>
+        </div>
+        ${metaParts.length > 0 ? `<div class="hist-meta mono">${metaParts.join(' · ')}</div>` : ''}
+        ${session.purpose ? `<div class="hist-analytics">${esc(session.purpose)}</div>` : ''}
+      </div>
+    </div>`;
+}
+
+function renderHistoryFeed(feed) {
+  const rows = feed.map((item) => (
+    item.kind === 'completed' ? renderWorkoutRow(item.workout) : renderSkippedRow(item.session)
+  ));
+  return `<div class="hist-list">${rows.join('')}</div>`;
+}
+
+function historyShell(body) {
+  return `
+    <div class="wrap settings-wrap">
+      <header class="mast" style="border-bottom:none;padding-bottom:0;">
+        <div>
+          <span class="mark">swim-coach · history</span>
+          <h1>What you've done</h1>
+          <p class="sub">Completed sessions with the stats you actually logged, and the planned ones that got missed.</p>
+        </div>
+      </header>
+      ${body}
+    </div>`;
+}
+
+export function renderHistoryTab({
+  feed, status, error, online, detailId, workoutChat, backendConfigured,
+}) {
+  if (!backendConfigured) {
+    return historyShell(renderBackendNeededNotice(
+      'History needs you to sign in and set a backend URL and token in Settings.',
+    ));
+  }
+
+  const items = feed || [];
+  const hasData = items.length > 0;
+
+  if (hasData && detailId) {
+    const match = items.find((i) => i.kind === 'completed' && i.workout.id === detailId);
+    if (match) {
+      return historyShell(`
+        <section class="hist-section">
+          <div class="s-head"><button type="button" class="btn-ghost" data-a="history:back">&larr; Back to history</button></div>
+          ${renderWorkoutDetail(match.workout, { chat: workoutChat, online })}
+        </section>`);
+    }
+  }
+
+  if (status === 'error') {
+    return historyShell(`
+      <section class="hist-section">
+        ${hasData ? renderHistoryFeed(items) : ''}
+        <div class="hist-error">Couldn't load your history: ${esc(error)}</div>
+        <div class="settings-actions"><button type="button" class="btn-ghost" data-a="history:retry">Retry</button></div>
+      </section>`);
+  }
+
+  if (status === 'loading' && !hasData) {
+    return historyShell('<section class="hist-section"><p class="sub">Loading history…</p></section>');
+  }
+
+  if (!hasData) {
+    const notice = !online
+      ? 'History needs a connection — reconnect to load it.'
+      : 'Nothing logged or missed yet. Once you log a session (or miss a planned one), it shows up here.';
+    return historyShell(`<section class="hist-section"><p class="sub">${esc(notice)}</p></section>`);
+  }
+
+  return historyShell(`<section class="hist-section">${renderHistoryFeed(items)}</section>`);
+}
+
 // --- Workout detail view (tapping a history row) --------------------------
 // Renders from the already-fetched full workout dump in state -- no second
 // API call. Every section (summary stats, analytics, laps, pauses, lengths,
@@ -1067,7 +1171,14 @@ function renderWorkoutDetail(workout, { chat, online } = {}) {
 export function renderHistorySection({
   status, data, error, online, detailId, workoutChat,
 }) {
-  const hasData = data && data.length > 0;
+  // The Log tab shows only the most recent HISTORY_DISPLAY_CAP workouts.
+  // The cap lives here rather than in loadHistory so state keeps the FULL
+  // list -- the History tab's skip derivation needs all of it (see
+  // history.js's buildHistoryFeed note). Detail lookup below deliberately
+  // still searches the uncapped `data`, so an open detail view survives
+  // falling past the cap.
+  const capped = data ? data.slice(0, HISTORY_DISPLAY_CAP) : [];
+  const hasData = capped.length > 0;
 
   if (hasData && detailId) {
     const workout = data.find((w) => w.id === detailId);
@@ -1084,7 +1195,7 @@ export function renderHistorySection({
     return `
       <section class="hist-section">
         <div class="s-head"><h2>Recent workouts</h2></div>
-        ${hasData ? renderHistoryList(data) : ''}
+        ${hasData ? renderHistoryList(capped) : ''}
         <div class="hist-error">Couldn't load your workout history: ${esc(error)}</div>
         <div class="settings-actions"><button type="button" class="btn-ghost" data-a="history:retry">Retry</button></div>
       </section>`;
@@ -1112,7 +1223,7 @@ export function renderHistorySection({
   return `
     <section class="hist-section">
       <div class="s-head"><h2>Recent workouts</h2></div>
-      ${renderHistoryList(data)}
+      ${renderHistoryList(capped)}
     </section>`;
 }
 

@@ -139,6 +139,27 @@ def test_past_weeks_stay_browsable_behind_the_accordion(stale_page):
     assert '2020-W02' in body
 
 
+def test_accordion_stays_open_across_a_re_render(stale_page):
+    """The accordion is native <details>, so its open state lives in the DOM
+    -- which every render() rebuilds from scratch. It used to snap shut on
+    any unrelated re-render (a background load landing, an online/offline
+    flip) while the athlete was mid-read; this showed up first as a flaky
+    failure of the test above. main.js now mirrors the state and re-emits
+    the `open` attribute. Driven here by an offline/online flip, which is a
+    real re-render trigger the athlete hits on a phone."""
+    summary = stale_page.locator('[data-a="weeks:toggle-all"]')
+    summary.wait_for()
+    summary.click()
+    stale_page.wait_for_selector('.week >> visible=true')
+
+    stale_page.context.set_offline(True)
+    stale_page.context.set_offline(False)
+    stale_page.wait_for_timeout(200)  # let any re-render settle
+
+    assert stale_page.locator('details.all-weeks').get_attribute('open') is not None
+    assert stale_page.locator('.week').first.is_visible()
+
+
 def test_current_and_next_cards_still_render_alongside_the_accordion(current_page):
     current_page.wait_for_selector('.week')
     content = current_page.content()
