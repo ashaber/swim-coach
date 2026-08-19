@@ -211,6 +211,24 @@ export async function listWorkouts({ baseUrl, token, athlete = 'renee' }) {
  * `{error}` body -- surfaced through the same `{ ok: false, error }` shape
  * apiRequest already normalizes every other failure into, so main.js only
  * needs one branch. */
+/** POST {baseUrl}/api/sessions/{id}/push-intervals?athlete=<slug> -- pushes
+ * one planned session to the athlete's intervals.icu calendar, which
+ * intervals.icu's own Garmin Connect integration then forwards to the watch
+ * (see backend/app/garmin_push.py). Unlike `downloadGarminFit`, which needs
+ * a bespoke blob fetch, this returns ordinary JSON, so it goes through the
+ * shared `apiRequest` helper like `syncWorkouts` does -- including the 409
+ * the backend returns when intervals.icu isn't configured for this athlete,
+ * normalized into the same `{ ok: false, error }` shape as every other
+ * failure so main.js needs only one branch. */
+export async function pushSessionToIntervals({ baseUrl, token, athlete = 'renee', sessionId }) {
+  return apiRequest({
+    baseUrl,
+    token,
+    path: `/api/sessions/${encodeURIComponent(sessionId)}/push-intervals?athlete=${encodeURIComponent(athlete)}`,
+    method: 'POST',
+  });
+}
+
 export async function syncWorkouts({ baseUrl, token, athlete = 'renee' }) {
   return apiRequest({
     baseUrl, token, path: `/api/workouts/sync?athlete=${encodeURIComponent(athlete)}`, method: 'POST',

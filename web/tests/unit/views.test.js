@@ -482,6 +482,67 @@ describe('renderApp plan session detail view (click-to-detail)', () => {
     expect(html).toContain('Download for Garmin');
   });
 
+  // The wireless counterpart to the download button above -- the athlete
+  // asked for a per-session push, not just a chat tool. Same
+  // structured-only gating: a prose-only session has nothing real to push.
+  describe('push to Garmin button', () => {
+    const PUSHABLE = {
+      id: 's-pushable',
+      date: dateKey(weekMonday),
+      sport: 'swim_pool',
+      source: 'ai_coach',
+      duration_min: 40,
+      distance_m: 1600,
+      intensity: { zone: 'Z3' },
+      purpose: 'Threshold set',
+      structure: 'Main set: 4x200 @ Z3',
+      structured: {
+        items: [{
+          kind: 'step', label: '4x200 @ Z3', role: 'interval', duration_kind: 'distance_m',
+          duration_value: 800, modality: 'swim', equipment: [],
+        }],
+      },
+    };
+    const withPushable = (push) => ({
+      ...PLAN_DATA, weeks: [{ ...WEEK, sessions: [PUSHABLE] }], sessionPush: push,
+    });
+
+    it('renders a push button for a session with structured data', () => {
+      const html = renderApp(withPushable(null), PUSHABLE.id);
+      expect(html).toContain(`data-a="session:push-intervals" data-id="${PUSHABLE.id}"`);
+      expect(html).toContain('Push to Garmin');
+    });
+
+    it('renders NO push button for a prose-only session -- nothing real to push', () => {
+      const html = renderApp(PLAN_DATA, NO_STRUCTURE_SESSION.id);
+      expect(html).not.toContain('session:push-intervals');
+    });
+
+    it('shows a pushing state while in flight', () => {
+      const html = renderApp(withPushable({ id: PUSHABLE.id, status: 'pushing', message: null }), PUSHABLE.id);
+      expect(html).toContain('Pushing');
+    });
+
+    it('shows a success message after a push', () => {
+      const push = { id: PUSHABLE.id, status: 'success', message: 'Sent to Garmin via Intervals.icu.' };
+      const html = renderApp(withPushable(push), PUSHABLE.id);
+      expect(html).toContain('Sent to Garmin via Intervals.icu.');
+    });
+
+    it('shows an escaped error message when the push fails', () => {
+      const push = { id: PUSHABLE.id, status: 'error', message: '<img src=x onerror=alert(1)>' };
+      const html = renderApp(withPushable(push), PUSHABLE.id);
+      expect(html).not.toContain('<img src=x');
+      expect(html).toContain('&lt;img');
+    });
+
+    it('ignores a push state belonging to a different session', () => {
+      const push = { id: 'some-other-session', status: 'success', message: 'Sent to Garmin via Intervals.icu.' };
+      const html = renderApp(withPushable(push), PUSHABLE.id);
+      expect(html).not.toContain('Sent to Garmin via Intervals.icu.');
+    });
+  });
+
   it('renders a sensible, non-blank detail view for a session with no structure at all', () => {
     const html = renderApp(PLAN_DATA, NO_STRUCTURE_SESSION.id);
     expect(html).toContain('data-a="session:back"');

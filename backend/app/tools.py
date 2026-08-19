@@ -97,6 +97,7 @@ from swim_coach.store import StoreInterface
 from swim_coach.workout_templates import TemplatePreference
 
 from app.context import iso_week_str, summarize_rollup
+from app.garmin_push import push_on_demand
 from app.logging_config import get_logger
 from app.sync import ON_DEMAND_SYNC_WINDOW_DAYS, sync_on_demand
 
@@ -289,6 +290,65 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
         "input_schema": {
             "type": "object",
             "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "push_to_garmin",
+        "description": (
+            "Push planned workouts to the athlete's Garmin watch, so she "
+            "can see each step/exercise on the watch during the session and "
+            "hit the lap key to advance through it. Call this when the "
+            "athlete asks to get a workout (or a week) onto her watch, or "
+            "right after you've authored/adapted a session she's about to "
+            "do. Pass `session_id` for one specific session, or `iso_week` "
+            "for every pushable session in that week -- pass whichever the "
+            "athlete's request implies; passing neither is an error.\n\n"
+            "The mechanism: the session's structured workout is encoded as "
+            "a real Garmin `.FIT` workout and written to the athlete's "
+            "intervals.icu calendar, and intervals.icu's own Garmin Connect "
+            "integration then forwards it to the watch automatically. "
+            "Pushing the same session again updates the existing calendar "
+            "entry rather than duplicating it, so it's safe to re-push "
+            "after changing a workout.\n\n"
+            "Two things you must be honest with the athlete about:\n"
+            "  - It only works after a ONE-TIME setup she has to do herself, "
+            "which this tool cannot do and cannot detect: in intervals.icu, "
+            "Settings -> Connections -> authorize Garmin Connect -> tick "
+            "'Upload planned workouts'. Without it the workout lands on her "
+            "intervals.icu calendar and stops there, which looks exactly "
+            "like success from this tool's side. If she's never pushed "
+            "before, tell her to check this.\n"
+            "  - Only swim and strength sessions that have structured "
+            "workout data can be pushed. A prose-only session (one where "
+            "`structured` was never set -- see `session_overrides`) and "
+            "sports like recovery/cross-train are skipped, not pushed. The "
+            "return value counts them under `skipped` with a reason; report "
+            "that honestly rather than implying the whole week went over. "
+            "If the athlete wants a skipped session on her watch, author it "
+            "properly with `session_overrides`' `structured` field first, "
+            "then push again."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "iso_week": {
+                    "type": "string",
+                    "description": (
+                        "Push every pushable session in this week, formatted "
+                        "'YYYY-Wnn', e.g. '2026-W35'."
+                    ),
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": (
+                        "Push just this one session, by its id (as returned "
+                        "by the plan/week tools). Takes precedence over "
+                        "`iso_week` if both are somehow supplied."
+                    ),
+                },
+            },
             "required": [],
             "additionalProperties": False,
         },
@@ -1062,6 +1122,21 @@ def _handle_sync_workouts(input_data: dict[str, Any], *, store: StoreInterface, 
     model-supplied slug -- see `build_tool_handlers`), with this tool's own
     2-day on-demand window."""
     return sync_on_demand(store, slug, window_days=SYNC_WORKOUTS_WINDOW_DAYS)
+
+
+def _handle_push_to_garmin(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    """Delegates to `app.garmin_push.push_on_demand` -- the SAME function the
+    PWA's `POST /api/sessions/{id}/push-intervals` route calls, so the
+    conversational and button paths can't drift apart. Always the bound
+    request's athlete, never a model-supplied slug (see
+    `build_tool_handlers`). Requires at least one of `session_id`/`iso_week`
+    rather than silently defaulting to "this week": a push the athlete
+    didn't ask for lands on her real Garmin calendar."""
+    iso_week = input_data.get("iso_week")
+    session_id = input_data.get("session_id")
+    if not iso_week and not session_id:
+        return {"error": "pass session_id (one session) or iso_week (a whole week)"}
+    return push_on_demand(store, slug, iso_week=iso_week, session_id=session_id)
 
 
 def _handle_create_event(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
@@ -1908,6 +1983,9 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "sync_workouts": lambda input_data: _handle_sync_workouts(
+            input_data, store=store, slug=slug
+        ),
+        "push_to_garmin": lambda input_data: _handle_push_to_garmin(
             input_data, store=store, slug=slug
         ),
         "create_event": lambda input_data: _handle_create_event(
