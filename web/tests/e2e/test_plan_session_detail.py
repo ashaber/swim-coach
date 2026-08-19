@@ -83,9 +83,33 @@ NO_STRUCTURE_SESSION = {
     'structure': None, 'status': 'planned',
 }
 
+# Real WorkoutStructure shape (engine/swim_coach/models.py's WorkoutStep) --
+# one canned strength step carrying a reference_url, matching what
+# plan.py's STRENGTH_EXERCISE_REFERENCE_URLS wires onto real generated
+# strength content -- proves the athlete-visible clickable-link feature
+# (views.js's renderStructuredLine) end to end in a real browser.
+REFERENCE_URL = 'https://www.rehabhero.ca/exercise/goblet-squat'
+STRUCTURED_LINK_SESSION = {
+    'id': 's-structured-link', 'date': TUESDAY, 'sport': 'strength', 'source': 'ai_coach',
+    'duration_min': 30, 'distance_m': None, 'intensity': {},
+    'purpose': 'dryland strength',
+    'structure': 'Goblet squat: 3 x 10',
+    'structured': {
+        'items': [
+            {
+                'kind': 'step', 'label': 'Goblet squat', 'role': 'steady', 'duration_kind': 'reps',
+                'duration_value': 10, 'target': None, 'load': {'basis': 'bodyweight', 'value': None},
+                'modality': 'strength', 'stroke': None, 'equipment': [], 'exercise_name': 'Goblet squat',
+                'reference_url': REFERENCE_URL,
+            },
+        ],
+    },
+    'status': 'planned',
+}
+
 WEEK = {
     'iso_week': ISO_WEEK, 'meso_block': 'base', 'focus': 'aerobic base', 'target_volume_m': 12000,
-    'sessions': [MAIN_SET_SESSION, STRENGTH_SESSION, NO_STRUCTURE_SESSION],
+    'sessions': [MAIN_SET_SESSION, STRENGTH_SESSION, NO_STRUCTURE_SESSION, STRUCTURED_LINK_SESSION],
     'adaptation_rationale': None,
 }
 
@@ -209,6 +233,19 @@ def test_strength_session_bullets_render_with_indentation_intact(page):
     assert 'training rationale' in headings
     assert 'Hibberd 2012' in content
     assert 'library/' not in content
+
+
+def test_structured_step_with_reference_url_renders_as_a_clickable_link(page):
+    # A canned strength step carrying WorkoutStep.reference_url (e.g. from
+    # plan.py's STRENGTH_EXERCISE_REFERENCE_URLS) must render as a real
+    # clickable <a> in the session detail's struct-tree, opening in a new
+    # tab -- not just plain text.
+    _open_session_detail(page, 's-structured-link')
+    link = page.locator('a.struct-text', has_text='Goblet squat')
+    assert link.count() == 1
+    assert link.get_attribute('href') == REFERENCE_URL
+    assert link.get_attribute('target') == '_blank'
+    assert link.get_attribute('rel') == 'noopener noreferrer'
 
 
 def test_no_structure_session_shows_a_sensible_non_blank_detail(page):

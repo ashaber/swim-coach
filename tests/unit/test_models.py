@@ -409,6 +409,31 @@ def test_workout_step_accepts_strength_fields():
     assert step.equipment == ["kettlebell"]
 
 
+def test_workout_step_reference_url_defaults_to_none():
+    # Existing-style WorkoutStep dict (predating this feature) carries no
+    # reference_url key -- must keep validating unchanged, no schema_version
+    # bump.
+    step = WorkoutStep(label="x", role="steady", duration_kind="reps", duration_value=10)
+    assert step.reference_url is None
+
+
+def test_workout_step_reference_url_round_trips_through_yaml():
+    step = WorkoutStep(
+        label="goblet squat",
+        role="steady",
+        duration_kind="reps",
+        duration_value=10,
+        modality="strength",
+        exercise_name="goblet squat",
+        reference_url="https://www.rehabhero.ca/exercise/goblet-squat",
+    )
+    dumped = yaml.safe_dump(step.model_dump(mode="json"))
+    loaded_data = yaml.safe_load(dumped)
+    restored = WorkoutStep.model_validate(loaded_data)
+    assert restored == step
+    assert restored.reference_url == "https://www.rehabhero.ca/exercise/goblet-squat"
+
+
 @pytest.mark.parametrize(
     "repeat_kwargs",
     [

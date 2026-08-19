@@ -138,19 +138,58 @@ function renderStructureBlock(block) {
     </section>`;
 }
 
+/** A URL safe to put in an `href`, or null if it isn't one.
+ *
+ * `esc()` is NOT sufficient on its own here. Escaping defuses quote/angle-
+ * bracket injection *into the attribute*, but `href="javascript:alert(1)"`
+ * needs no escaping to be dangerous -- the browser executes it on tap
+ * regardless. `WorkoutStep.reference_url` is a plain `str` with no
+ * validation (models.py keeps optional fields loose on purpose) and is
+ * reachable from a coach-authored `session_overrides.structured` payload,
+ * so the scheme has to be rejected outright rather than merely escaped.
+ *
+ * Allow-list, not deny-list: only `http:`/`https:` pass. Parsed with `URL`
+ * rather than a string prefix check, so casing, leading/trailing
+ * whitespace, and percent-encoding tricks all normalize before the
+ * comparison instead of slipping past a naive `startsWith`. A rejected or
+ * unparseable URL returns null and the caller falls back to plain text --
+ * the athlete still sees the exercise, just without a link. */
+function safeHref(url) {
+  if (!url) return null;
+  try {
+    const parsed = new URL(String(url).trim());
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : null;
+  } catch {
+    return null; // relative or malformed -- nothing safe to link to
+  }
+}
+
 /** One `renderStructuredWorkout` line as its own indented div -- a repeat's
  * header (e.g. "3 x:", "EMOM x10 (every 60s):") or a step's label, each with
  * an optional secondary `.struct-detail` badge (duration/target/load) laid
  * out as its own small span rather than string-concatenated into `text`, so
  * CSS can style the two differently (see index.html's `.struct-*` rules).
  * Indentation is `line.depth` steps of 18px, inline (no new CSS class per
- * depth needed for what's expected to stay a small handful of levels). */
+ * depth needed for what's expected to stay a small handful of levels).
+ *
+ * When `line.referenceUrl` is present (plan.js's `renderStructuredStep`
+ * threading `WorkoutStep.reference_url` through -- a coach- or engine-set
+ * technique/demo link), the step text renders as a real `<a>` instead of a
+ * plain `<span>`, opening in a new tab (`target="_blank"`, with
+ * `rel="noopener noreferrer"` since it's an external URL). Same
+ * `.struct-text` class either way, so layout is unchanged. A URL that isn't
+ * a safe http(s) link renders as the plain span instead -- see `safeHref`.
+ */
 function renderStructuredLine(line) {
   const cls = line.kind === 'repeat' ? 'struct-line struct-line-repeat' : 'struct-line struct-line-step';
   const detail = line.detail ? `<span class="struct-detail mono">${esc(line.detail)}</span>` : '';
+  const href = safeHref(line.referenceUrl);
+  const text = href
+    ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer" class="struct-text">${esc(line.text)}</a>`
+    : `<span class="struct-text">${esc(line.text)}</span>`;
   return `
       <div class="${cls}" style="padding-left:${line.depth * 18}px">
-        <span class="struct-text">${esc(line.text)}</span>${detail}
+        ${text}${detail}
       </div>`;
 }
 

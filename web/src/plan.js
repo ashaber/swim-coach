@@ -387,13 +387,22 @@ function structuredStepDetail(step, depth) {
   return parts.length > 0 ? parts.join(' · ') : null;
 }
 
-/** One line for a `WorkoutStep` node: `{ depth, kind: 'step', text, detail }`.
- * `text` is the step's label, prefixed for a top-level warmup/interval/
- * cooldown step (see `STRUCTURED_ROLE_PREFIX`); `detail` is the secondary
- * duration/target/load annotation from `structuredStepDetail`, or null. */
+/** One line for a `WorkoutStep` node: `{ depth, kind: 'step', text, detail }`,
+ * plus `referenceUrl` when the step carries one. `text` is the step's label,
+ * prefixed for a top-level warmup/interval/cooldown step (see
+ * `STRUCTURED_ROLE_PREFIX`); `detail` is the secondary duration/target/load
+ * annotation from `structuredStepDetail`, or null. `referenceUrl` mirrors
+ * `step.reference_url` (models.py's `WorkoutStep.reference_url` -- a coach-
+ * or engine-set technique/demo link, e.g. plan.py's
+ * `STRENGTH_EXERCISE_REFERENCE_URLS`) verbatim onto the line when present;
+ * left unset (not `null`) when the step has none, so existing line-shape
+ * assertions elsewhere that don't mention it keep passing. views.js's
+ * `renderStructuredLine` renders it as the step's clickable link. */
 function renderStructuredStep(step, depth) {
   const prefix = depth === 0 ? (STRUCTURED_ROLE_PREFIX[step.role] || '') : '';
-  return { depth, kind: 'step', text: `${prefix}${step.label}`, detail: structuredStepDetail(step, depth) };
+  const line = { depth, kind: 'step', text: `${prefix}${step.label}`, detail: structuredStepDetail(step, depth) };
+  if (step.reference_url) line.referenceUrl = step.reference_url;
+  return line;
 }
 
 /** One header line for a `WorkoutRepeat` node: `{ depth, kind: 'repeat',

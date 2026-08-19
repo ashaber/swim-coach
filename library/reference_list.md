@@ -923,6 +923,24 @@ resource itself and are kept.
 - Fueling technique ("bottle on a string"):
   <https://www.youtube.com/watch?v=41c61sus4Xg>
 
+Strength-technique demonstrations referenced by `plan.py`'s
+`STRENGTH_EXERCISE_REFERENCE_URLS` — Rehab Hero, a physiotherapy exercise
+library, showing how to perform each canned dryland exercise (not research
+citations; no scientific claim attaches to these links):
+
+- Internal rotation at 90° abduction:
+  <https://www.rehabhero.ca/exercise/90-degrees-internal-rotation>
+- External rotation at 90° abduction:
+  <https://www.rehabhero.ca/exercise/90-degrees-external-rotation>
+- Scapular punches: <https://www.rehabhero.ca/exercise/serratus-punch>
+- Scapular retraction ("Ts"): <https://www.rehabhero.ca/exercise/prone-t-raise>
+- Retraction with upward rotation ("Ys"):
+  <https://www.rehabhero.ca/exercise/prone-y-raise>
+- Goblet squat / bodyweight squat: <https://www.rehabhero.ca/exercise/goblet-squat>
+- Single-leg Romanian deadlift (or bodyweight equivalent):
+  <https://www.rehabhero.ca/exercise/single-leg-deadlift>
+- Plank (or dead-bug core hold): <https://www.rehabhero.ca/exercise/plank>
+
 ---
 
 ## Corrections log
