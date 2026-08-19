@@ -35,6 +35,11 @@ from swim_coach.models import (
     Wellness,
     WeekPlan,
     Workout,
+    WorkoutLoad,
+    WorkoutRepeat,
+    WorkoutStep,
+    WorkoutStructure,
+    WorkoutTarget,
 )
 
 SLUG = "renee"
@@ -94,6 +99,54 @@ def _session(athlete_id: uuid.UUID, d: date) -> Session:
         distance_m=6000,
         intensity={"zone": "Z2", "anchor": "css_pace"},
         purpose="long swim",
+    )
+
+
+def _structured_session(athlete_id: uuid.UUID, d: date) -> Session:
+    """A session carrying a real nested `WorkoutStructure` -- a swim step, a
+    strength step, and a repeat wrapping both -- so contract tests can prove
+    the full IR (not just the legacy scalar fields `_session` above covers)
+    round-trips through a backend unchanged."""
+    structure = WorkoutStructure(
+        items=[
+            WorkoutStep(
+                label="warmup",
+                role="warmup",
+                duration_kind="distance_m",
+                duration_value=400,
+                target=WorkoutTarget(basis="zone", zone="Z2"),
+                modality="swim",
+                stroke="free",
+                equipment=["paddles"],
+            ),
+            WorkoutRepeat(
+                repeat_mode="count",
+                count=3,
+                steps=[
+                    WorkoutStep(
+                        label="kettlebell swing",
+                        role="interval",
+                        duration_kind="reps",
+                        duration_value=10,
+                        load=WorkoutLoad(basis="absolute", value=16.0),
+                        modality="strength",
+                        exercise_name="kettlebell swing",
+                    ),
+                ],
+            ),
+        ]
+    )
+    return Session(
+        id=uuid.uuid4(),
+        athlete_id=athlete_id,
+        date=d,
+        sport="swim_pool",
+        source="ai_coach",
+        duration_min=60.0,
+        distance_m=2000,
+        intensity={"zone": "Z2", "anchor": "css_pace"},
+        purpose="technique + dryland",
+        structured=structure,
     )
 
 
@@ -231,6 +284,31 @@ class StoreContractTests:
         week = _week(athlete.id, "2026-W28")
         store.save_week(SLUG, week)
         assert store.load_week(SLUG, "2026-W28") == week
+
+    def test_week_round_trip_preserves_nested_structured_workout(self, store):
+        """Guards against a backend silently dropping `Session.structured`
+        (steps/repeats/targets/load/exercise_name) on save/load -- the gap
+        found 2026-08-19: this suite covered only the legacy scalar session
+        fields, so neither FileStore nor DbStore had ever been proven to
+        round-trip the nested IR, even though `structured` had already
+        shipped."""
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        week = WeekPlan(
+            id=uuid.uuid4(),
+            athlete_id=athlete.id,
+            iso_week="2026-W28",
+            meso_block="base",
+            focus="aerobic base",
+            target_volume_m=18000,
+            sessions=[_structured_session(athlete.id, date(2026, 7, 6))],
+        )
+        store.save_week(SLUG, week)
+        loaded = store.load_week(SLUG, "2026-W28")
+        assert loaded == week
+        assert loaded.sessions[0].structured is not None
+        assert loaded.sessions[0].structured.items[0].label == "warmup"
+        assert loaded.sessions[0].structured.items[1].steps[0].exercise_name == "kettlebell swing"
 
     def test_load_week_none_when_absent(self, store):
         store.save_athlete(_athlete())
