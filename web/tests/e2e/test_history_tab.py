@@ -15,7 +15,7 @@ import json
 from datetime import date, timedelta
 
 import pytest
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 from conftest import BROWSERS, seed_identity, seed_settings
 
@@ -253,8 +253,19 @@ def test_history_with_no_data_at_all_explains_itself(cfg, base_url):
         try:
             pg.wait_for_selector('[data-a="tab:history"]')
             pg.click('[data-a="tab:history"]')
-            pg.wait_for_selector('.hist-section')
-            assert 'Nothing logged or missed yet' in pg.locator('.hist-section').text_content()
+            # `.hist-section` exists in BOTH the "Loading history…" and
+            # settled states (see web/src/views.js's status=='loading'
+            # branch), so a one-shot wait_for_selector()-then-text_content()
+            # races the async plan/workouts fetch this test itself stubs --
+            # it can read "Loading history…" before the stub resolves,
+            # exactly the "waited for present, not for ready" gap
+            # mtb-skills' reload_and_wait() was written to close for its own
+            # WebKit reloads. `expect(...).to_contain_text()` polls/retries
+            # until the settled text appears (or times out), so it's the
+            # right replacement here even though this route stays this
+            # test's -- no shared conftest reload helper needed since
+            # there's no reload() in this flow.
+            expect(pg.locator('.hist-section')).to_contain_text('Nothing logged or missed yet')
             assert pg.locator('.hist-row').count() == 0
         finally:
             ctx.close()
