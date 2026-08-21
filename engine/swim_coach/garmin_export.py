@@ -359,6 +359,22 @@ def _flatten(items: list[WorkoutStepOrRepeat], fit_steps: list[WorkoutStepMessag
     """
     for item in items:
         if isinstance(item, WorkoutStep):
+            if item.role == "open":
+                # `role="open"` is athlete-facing prose carried on the
+                # structure -- section headers and the trailing "Why: ..."
+                # line (see plan.py / workout_templates.render_prose) -- not
+                # real workout content, only shaped as a WorkoutStep because
+                # WorkoutStructure has no separate annotation field. A real
+                # Garmin device disagrees: `duration_type=OPEN` is a genuine
+                # manual-lap-advance step of undefined length, not a no-op,
+                # so encoding these was a real defect -- every export carried
+                # a bogus trailing "step" with a null-null target, and
+                # intervals.icu's calendar view had to invent some length
+                # for it, inflating a 500m/15min swim to 18,010m on a real
+                # push (confirmed live 2026-08-20, feedback entry
+                # fef034ae-8056-4ff6-b30b-b426bffffecb). Skip encoding them
+                # entirely rather than exporting device-meaningless steps.
+                continue
             fit_steps.append(_build_leaf_step(item))
         else:
             loop_start_index = len(fit_steps)

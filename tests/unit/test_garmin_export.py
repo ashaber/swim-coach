@@ -183,6 +183,105 @@ def test_step_with_long_reference_url_is_truncated_to_max_string_len():
     assert steps[0]["notes"] == long_url[:_MAX_STRING_LEN]
 
 
+# --- role="open" annotation steps are prose, not device content -----------
+# `plan.py`/`workout_templates.render_prose` both document `role="open"` as
+# athlete-facing text carried on the structure (section headers, the
+# trailing "Why: ..." line) -- "not really 'workout structure'" per those
+# docstrings, only shaped as a WorkoutStep because the model has no separate
+# annotation field. A real Garmin device disagrees: `duration_type=OPEN` is
+# a genuine manual-lap-advance step of undefined length, not a no-op, so
+# encoding these left every real export with a bogus trailing "step" the
+# athlete had to lap past with a null-null target -- and is the confirmed
+# root cause of a live defect where intervals.icu's calendar view inflated
+# a 500m/15min pool swim to 18,010m by estimating a length for it (feedback
+# entry fef034ae-8056-4ff6-b30b-b426bffffecb, 2026-08-20).
+
+
+def test_open_role_annotation_step_is_not_exported():
+    structured = WorkoutStructure(
+        items=[
+            WorkoutStep(
+                label="200m easy",
+                role="warmup",
+                duration_kind="distance_m",
+                duration_value=200,
+                target=WorkoutTarget(basis="absolute", low=105.0, high=109.0),
+                modality="swim",
+            ),
+            WorkoutStep(
+                label="Why: continuous aerobic-volume emphasis (base-block phase).",
+                role="open",
+                duration_kind="open",
+                modality="swim",
+            ),
+        ]
+    )
+    fit_bytes = to_garmin_fit_workout(structured, sport="swim", name="Test swim")
+    workout_msg = _decode_workout_message(fit_bytes)
+    steps = _decode_workout_steps(fit_bytes)
+    assert len(steps) == 1
+    assert workout_msg["num_valid_steps"] == 1
+    assert steps[0]["duration_type"] == "distance"
+
+
+def test_open_role_section_header_is_not_exported_but_repeat_children_are():
+    structured = WorkoutStructure(
+        items=[
+            WorkoutStep(
+                label="Rotator-cuff / scapular-stability core (2 sets x 10 reps each):",
+                role="open",
+                duration_kind="open",
+                modality="strength",
+            ),
+            WorkoutRepeat(
+                repeat_mode="count",
+                count=2,
+                steps=[
+                    WorkoutStep(
+                        label="internal rotation",
+                        role="steady",
+                        duration_kind="reps",
+                        duration_value=10,
+                        load=WorkoutLoad(basis="bodyweight"),
+                        modality="strength",
+                        exercise_name="internal rotation",
+                    ),
+                ],
+            ),
+        ]
+    )
+    fit_bytes = to_garmin_fit_workout(structured, sport="strength", name="Test strength")
+    steps = _decode_workout_steps(fit_bytes)
+    # Just the exercise step + its repeat marker -- the section-header
+    # annotation is gone, not counted as a third "step".
+    assert len(steps) == 2
+    assert steps[0]["wkt_step_name"] == "internal rotation"
+    assert steps[1]["repeat_steps"] == 2
+
+
+def test_open_duration_step_with_real_role_is_still_exported():
+    # `role="steady"` + `duration_kind="open"` is a REAL open-ended exercise
+    # (e.g. STRENGTH_FULL_BODY_ADDITION's "as time allows" items) -- only
+    # `role="open"` marks pure annotation text; this must not be swept up by
+    # the same filter.
+    structured = WorkoutStructure(
+        items=[
+            WorkoutStep(
+                label="plank hold",
+                role="steady",
+                duration_kind="open",
+                load=WorkoutLoad(basis="bodyweight"),
+                modality="strength",
+                exercise_name="plank hold",
+            ),
+        ]
+    )
+    fit_bytes = to_garmin_fit_workout(structured, sport="strength", name="Test strength")
+    steps = _decode_workout_steps(fit_bytes)
+    assert len(steps) == 1
+    assert steps[0]["wkt_step_name"] == "plank hold"
+
+
 def test_strength_step_with_absolute_load():
     structured = WorkoutStructure(
         items=[
