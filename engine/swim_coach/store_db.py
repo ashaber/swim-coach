@@ -26,12 +26,13 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from swim_coach.models import (
     AllowedEmail,
     Athlete,
     AuthSession,
+    CoachGrant,
     Event,
     Feedback,
     MacroPlan,
@@ -148,6 +149,12 @@ def feedback_to_row(feedback: Feedback) -> dict[str, Any]:
         "context": feedback.context,
         "status": feedback.status,
         "created_at": feedback.created_at,
+        "workout_id": feedback.workout_id,
+        "needs_human_review": feedback.needs_human_review,
+        "ai_provisional_answer": feedback.ai_provisional_answer,
+        "coach_athlete_id": feedback.coach_athlete_id,
+        "coach_reply": feedback.coach_reply,
+        "coach_reply_at": feedback.coach_reply_at,
     }
 
 
@@ -162,6 +169,39 @@ def row_to_feedback(row: dict[str, Any]) -> Feedback:
         context=row["context"] or {},
         status=row["status"],
         created_at=row["created_at"],
+        workout_id=row["workout_id"],
+        needs_human_review=row["needs_human_review"],
+        ai_provisional_answer=row["ai_provisional_answer"],
+        coach_athlete_id=row["coach_athlete_id"],
+        coach_reply=row["coach_reply"],
+        coach_reply_at=row["coach_reply_at"],
+    )
+
+
+def coach_grant_to_row(grant: CoachGrant) -> dict[str, Any]:
+    """Like `feedback_to_row`, `coach_grants` has no `data` JSONB blob --
+    every CoachGrant field maps directly onto its own column."""
+    return {
+        "id": grant.id,
+        "coach_athlete_id": grant.coach_athlete_id,
+        "athlete_id": grant.athlete_id,
+        "status": grant.status,
+        "chat_visibility": grant.chat_visibility,
+        "granted_at": grant.granted_at,
+        "revoked_at": grant.revoked_at,
+    }
+
+
+def row_to_coach_grant(row: dict[str, Any]) -> CoachGrant:
+    return CoachGrant(
+        schema_version=1,
+        id=row["id"],
+        coach_athlete_id=row["coach_athlete_id"],
+        athlete_id=row["athlete_id"],
+        status=row["status"],
+        chat_visibility=row["chat_visibility"],
+        granted_at=row["granted_at"],
+        revoked_at=row["revoked_at"],
     )
 
 
@@ -477,8 +517,16 @@ class DbStore(StoreInterface):
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                insert into feedback (id, athlete_id, type, source, body, context, status, created_at)
-                values (%(id)s, %(athlete_id)s, %(type)s, %(source)s, %(body)s, %(context)s, %(status)s, %(created_at)s)
+                insert into feedback (
+                    id, athlete_id, type, source, body, context, status, created_at,
+                    workout_id, needs_human_review, ai_provisional_answer,
+                    coach_athlete_id, coach_reply, coach_reply_at
+                )
+                values (
+                    %(id)s, %(athlete_id)s, %(type)s, %(source)s, %(body)s, %(context)s, %(status)s, %(created_at)s,
+                    %(workout_id)s, %(needs_human_review)s, %(ai_provisional_answer)s,
+                    %(coach_athlete_id)s, %(coach_reply)s, %(coach_reply_at)s
+                )
                 """,
                 {**row, "context": self._Jsonb(row["context"])},
             )
@@ -508,13 +556,22 @@ class DbStore(StoreInterface):
         return row_to_feedback(row) if row is not None else None
 
     def update_feedback(
-        self, feedback_id: UUID, *, status: str | None = None, context: dict | None = None
+        self,
+        feedback_id: UUID,
+        *,
+        status: str | None = None,
+        context: dict | None = None,
+        needs_human_review: bool | None = None,
+        coach_athlete_id: UUID | None = None,
+        coach_reply: str | None = None,
+        coach_reply_at: datetime | None = None,
     ) -> Feedback | None:
         # `context = context || %(context)s` is Postgres jsonb's shallow-merge
         # operator -- new keys added, overlapping keys take the new value,
         # everything else in the existing context is preserved. Matches
         # StoreInterface.update_feedback's documented "merge, never clobber"
-        # contract.
+        # contract. The four review fields below are plain scalar sets, same
+        # "None means unchanged, given means replace" pattern as `status`.
         sets = []
         params: dict[str, Any] = {"id": feedback_id}
         if status is not None:
@@ -523,6 +580,18 @@ class DbStore(StoreInterface):
         if context is not None:
             sets.append("context = coalesce(context, '{}'::jsonb) || %(context)s")
             params["context"] = self._Jsonb(context)
+        if needs_human_review is not None:
+            sets.append("needs_human_review = %(needs_human_review)s")
+            params["needs_human_review"] = needs_human_review
+        if coach_athlete_id is not None:
+            sets.append("coach_athlete_id = %(coach_athlete_id)s")
+            params["coach_athlete_id"] = coach_athlete_id
+        if coach_reply is not None:
+            sets.append("coach_reply = %(coach_reply)s")
+            params["coach_reply"] = coach_reply
+        if coach_reply_at is not None:
+            sets.append("coach_reply_at = %(coach_reply_at)s")
+            params["coach_reply_at"] = coach_reply_at
         with self._connect() as conn, conn.cursor() as cur:
             if sets:
                 cur.execute(
@@ -533,6 +602,69 @@ class DbStore(StoreInterface):
                 cur.execute("select * from feedback where id = %(id)s", params)
             row = cur.fetchone()
         return row_to_feedback(row) if row is not None else None
+
+    # --- Coach grants (coach-mode Chunk A) -------------------------------
+
+    def create_coach_grant(
+        self, *, coach_slug: str, athlete_slug: str, chat_visibility: str = "shared_only"
+    ) -> CoachGrant:
+        if coach_slug == athlete_slug:
+            raise ValueError(f"a grant to yourself is meaningless: {coach_slug!r}")
+        with self._connect() as conn, conn.cursor() as cur:
+            coach_id = self._athlete_id(cur, coach_slug)  # raises FileNotFoundError if unknown
+            athlete_id = self._athlete_id(cur, athlete_slug)  # raises FileNotFoundError if unknown
+            cur.execute(
+                """
+                insert into coach_grants (id, coach_athlete_id, athlete_id, chat_visibility)
+                values (%s, %s, %s, %s)
+                returning *
+                """,
+                (uuid4(), coach_id, athlete_id, chat_visibility),
+            )
+            row = cur.fetchone()
+        return row_to_coach_grant(row)
+
+    def list_coach_grants(
+        self,
+        *,
+        coach_slug: str | None = None,
+        athlete_slug: str | None = None,
+        status: str | None = None,
+    ) -> list[CoachGrant]:
+        with self._connect() as conn, conn.cursor() as cur:
+            wheres = []
+            params: list[Any] = []
+            if coach_slug is not None:
+                coach_id = self._athlete_id(cur, coach_slug)  # raises FileNotFoundError if unknown
+                wheres.append("coach_athlete_id = %s")
+                params.append(coach_id)
+            if athlete_slug is not None:
+                athlete_id = self._athlete_id(cur, athlete_slug)  # raises FileNotFoundError if unknown
+                wheres.append("athlete_id = %s")
+                params.append(athlete_id)
+            if status is not None:
+                wheres.append("status = %s")
+                params.append(status)
+            query = "select * from coach_grants"
+            if wheres:
+                query += " where " + " and ".join(wheres)
+            query += " order by granted_at"
+            cur.execute(query, params)
+            rows = cur.fetchall()
+        return [row_to_coach_grant(r) for r in rows]
+
+    def revoke_coach_grant(self, grant_id: UUID) -> CoachGrant | None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                update coach_grants set status = 'revoked', revoked_at = now()
+                where id = %s
+                returning *
+                """,
+                (grant_id,),
+            )
+            row = cur.fetchone()
+        return row_to_coach_grant(row) if row is not None else None
 
     # --- Coach texts (verbatim, saved BEFORE parsing) -------------------
 
