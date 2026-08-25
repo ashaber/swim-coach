@@ -165,7 +165,13 @@ def test_roster_lists_coached_athletes(page):
 def test_selecting_athlete_shows_workouts_with_compliance_and_feedback(page):
     _open_roster(page)
     page.click('[data-a="roster:select-athlete"]')
-    page.wait_for_selector('[data-a="roster:back"]')
+    # `roster:back` renders synchronously as soon as an athlete is selected,
+    # before the workouts/feedback fetches resolve (each is a separate async
+    # load, see main.js's loadCoachWorkouts/loadCoachFeedback) -- wait for
+    # markers that only exist once each has actually rendered, or this races
+    # under slow/cold CI runners.
+    page.wait_for_selector('[data-a="roster:open-workout"]')
+    page.wait_for_selector('[data-form="roster-reply"]')
 
     content = page.content()
     # Workout row: sport, distance/duration, and the nested compliance line
