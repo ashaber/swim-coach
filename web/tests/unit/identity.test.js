@@ -32,14 +32,18 @@ describe('identity persistence', () => {
   });
 
   it('round-trips a saved identity', () => {
-    const identity = { name: 'Andrew', athlete: 'andrew', role: 'coach' };
+    const identity = {
+      name: 'Andrew', athlete: 'andrew', role: 'coach', coachFor: ['renee'],
+    };
     saveIdentity(identity, storage);
     expect(loadIdentity(storage)).toEqual(identity);
     expect(currentIdentity(storage)).toEqual(identity);
   });
 
   it('clears a saved identity', () => {
-    saveIdentity({ name: 'Andrew', athlete: 'andrew', role: 'coach' }, storage);
+    saveIdentity({
+      name: 'Andrew', athlete: 'andrew', role: 'coach', coachFor: [],
+    }, storage);
     clearIdentity(storage);
     expect(loadIdentity(storage)).toBeNull();
   });
@@ -54,8 +58,17 @@ describe('identity persistence', () => {
     expect(loadIdentity(storage)).toBeNull();
   });
 
-  it('defaults name to empty string and role to athlete when either is missing', () => {
+  it('defaults name to empty string, role to athlete, and coachFor to [] when missing', () => {
     storage.setItem('swimcoach_identity', JSON.stringify({ athlete: 'renee' }));
-    expect(loadIdentity(storage)).toEqual({ name: '', athlete: 'renee', role: 'athlete' });
+    expect(loadIdentity(storage)).toEqual({
+      name: '', athlete: 'renee', role: 'athlete', coachFor: [],
+    });
+  });
+
+  it('defaults coachFor to [] for an identity persisted before this field existed', () => {
+    storage.setItem('swimcoach_identity', JSON.stringify({ name: 'Renee', athlete: 'renee', role: 'athlete' }));
+    expect(loadIdentity(storage)).toEqual({
+      name: 'Renee', athlete: 'renee', role: 'athlete', coachFor: [],
+    });
   });
 });

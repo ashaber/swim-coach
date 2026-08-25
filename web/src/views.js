@@ -582,13 +582,28 @@ const TABS = [
   { id: 'checkin', label: 'Check-in', icon: '🌙' },
   { id: 'coach', label: 'Coach', icon: '💬' },
   { id: 'feedback', label: 'Feedback', icon: '💡' },
+  { id: 'roster', label: 'My Athletes', icon: '🧑‍🤝‍🧑' },
   { id: 'settings', label: 'Settings', icon: '⚙️' },
 ];
 
-export function renderTabBar(activeTab) {
+/**
+ * `activeTab` is unchanged. Second arg is an options bag: `{ hideRoster }`
+ * -- when true, the 'roster' tab (coach mode Phase 1's "My Athletes") is
+ * left out of the bar entirely, since an identity with no coach grants has
+ * nothing to see there (see main.js's render(), which passes `hideRoster:
+ * !state.coachFor.length`). Chosen over a general allowlist-of-visible-ids
+ * because 'roster' is the only tab that's ever conditionally hidden today --
+ * a single named flag says exactly that, rather than every call site having
+ * to enumerate all 8 tab ids just to hide one. Omitting the second arg
+ * entirely (every existing call site outside main.js's real render(), e.g.
+ * tests) keeps the old "every tab always shows" behavior, `hideRoster`
+ * defaulting to falsy.
+ */
+export function renderTabBar(activeTab, { hideRoster = false } = {}) {
+  const tabs = hideRoster ? TABS.filter((tab) => tab.id !== 'roster') : TABS;
   return `
     <nav class="tabbar" aria-label="Main">
-      ${TABS.map((tab) => `
+      ${tabs.map((tab) => `
         <button type="button" class="tab-btn${tab.id === activeTab ? ' active' : ''}" data-a="tab:${tab.id}" aria-current="${tab.id === activeTab ? 'page' : 'false'}">
           <span class="tab-icon" aria-hidden="true">${tab.icon}</span>
           <span class="tab-label">${esc(tab.label)}</span>
@@ -1449,6 +1464,188 @@ export function renderFeedbackTab({
     </div>`;
 }
 
+// --- Roster tab ("My Athletes" -- coach-mode Phase 1) ----------------------
+// Coach-side view: the athletes who've granted this signed-in identity
+// coach access (GET /api/coach/athletes), then -- once one is selected --
+// that athlete's logged workouts (each with a nested planned-vs-actual
+// `compliance` object, see engine/swim_coach/compliance.py) and durable
+// feedback log, with a reply box for entries that don't have one yet.
+// Deliberately scoped to roster + grants only for this chunk -- the
+// direct-to-coach chat UI and the workout-comment box are a separate,
+// later piece (see the branch brief).
+
+function renderCoachedAthleteRow(athlete) {
+  return `
+    <button type="button" class="hist-row" data-a="roster:select-athlete" data-slug="${esc(athlete.slug)}">
+      <div class="hist-body">
+        <div class="hist-title"><span>${esc(athlete.name || athlete.slug)}</span></div>
+        <div class="hist-meta mono">${esc(athlete.slug)}</div>
+      </div>
+    </button>`;
+}
+
+function renderCoachedAthletesList(athletes) {
+  if (athletes.status === 'loading' && athletes.data.length === 0) {
+    return '<p class="sub">Loading your athletes&hellip;</p>';
+  }
+  if (athletes.status === 'error') {
+    return `<div class="hist-error">Couldn't load your athletes: ${esc(athletes.error)}</div>`;
+  }
+  if (athletes.data.length === 0) {
+    return '<p class="sub">No one has granted you coach access yet.</p>';
+  }
+  return `<div class="hist-list">${athletes.data.map(renderCoachedAthleteRow).join('')}</div>`;
+}
+
+/** One `WorkoutCompliance` (planned-vs-actual for a single logged workout)
+ * rendered as a plain, one-line summary -- `matched: false` (no planned
+ * session lines up with this workout at all) short-circuits before the
+ * delta/intensity/quality fields are even meaningful. */
+function formatComplianceLine(compliance) {
+  if (!compliance) return null;
+  if (!compliance.matched) return 'No matching planned session';
+  const parts = [];
+  if (compliance.distance_delta_pct !== null && compliance.distance_delta_pct !== undefined) {
+    const sign = compliance.distance_delta_pct >= 0 ? '+' : '';
+    parts.push(`${sign}${compliance.distance_delta_pct.toFixed(1)}% distance`);
+  }
+  if (compliance.duration_delta_pct !== null && compliance.duration_delta_pct !== undefined) {
+    const sign = compliance.duration_delta_pct >= 0 ? '+' : '';
+    parts.push(`${sign}${compliance.duration_delta_pct.toFixed(1)}% duration`);
+  }
+  parts.push(`${compliance.intensity_match} intensity`);
+  return parts.join(', ');
+}
+
+function renderCoachWorkoutRow(workout) {
+  const metaParts = [formatDuration(workout.duration_min)];
+  const distance = formatWorkoutDistance(workout.distance_m);
+  if (distance) metaParts.push(distance);
+  const complianceLine = formatComplianceLine(workout.compliance);
+  const qualitySummary = workout.compliance?.quality_summary;
+
+  return `
+    <div class="hist-row hist-row-skipped">
+      <div class="hist-date mono">${esc(formatShortDate(parseIsoDate(workout.date.slice(0, 10))))}</div>
+      <div class="hist-body">
+        <div class="hist-title">
+          <span>${esc(sportLabel(workout.sport, workout.sport_detail))}</span>
+          ${workout.rpe !== null && workout.rpe !== undefined ? `<span class="chat-chip">RPE ${esc(workout.rpe)}</span>` : ''}
+        </div>
+        <div class="hist-meta mono">${metaParts.join(' · ')}</div>
+        ${complianceLine ? `<div class="hist-analytics mono">${esc(complianceLine)}</div>` : ''}
+        ${qualitySummary ? `<div class="hist-analytics">${esc(qualitySummary)}</div>` : ''}
+      </div>
+    </div>`;
+}
+
+function renderCoachWorkoutsSection(workouts) {
+  if (workouts.status === 'loading' && workouts.data.length === 0) {
+    return '<p class="sub">Loading workouts&hellip;</p>';
+  }
+  if (workouts.status === 'error') {
+    return `<div class="hist-error">Couldn't load workouts: ${esc(workouts.error)}</div>`;
+  }
+  if (workouts.data.length === 0) {
+    return '<p class="sub">Nothing logged yet.</p>';
+  }
+  return `<div class="hist-list">${workouts.data.map(renderCoachWorkoutRow).join('')}</div>`;
+}
+
+function renderCoachFeedbackEntry(entry, replyDraft, replySubmit) {
+  const submitting = replySubmit.status === 'submitting' && replySubmit.feedbackId === entry.id;
+  const submitError = replySubmit.status === 'error' && replySubmit.feedbackId === entry.id
+    ? `<div class="conn-result fail">${esc(replySubmit.error)}</div>` : '';
+
+  return `
+    <div class="panel feedback-entry">
+      <div class="feedback-entry-head">
+        <span class="chat-chip">${esc(FEEDBACK_TYPE_LABELS[entry.type] || entry.type)}</span>
+        ${entry.needs_human_review ? '<span class="chat-chip chip-skipped">Needs review</span>' : ''}
+        <span class="feedback-entry-date mono">${esc(formatFeedbackDate(entry.created_at))}</span>
+      </div>
+      <p class="feedback-entry-body">${esc(entry.body)}</p>
+      ${entry.ai_provisional_answer ? `
+      <div class="detail-section">
+        <h4>AI provisional answer</h4>
+        <p class="detail-notes">${esc(entry.ai_provisional_answer)}</p>
+      </div>` : ''}
+      ${entry.coach_reply ? `
+      <div class="detail-section">
+        <h4>Your reply</h4>
+        <p class="detail-notes">${esc(entry.coach_reply)}</p>
+      </div>` : `
+      <label class="field">
+        <span>Reply as coach</span>
+        <textarea rows="3" data-form="roster-reply" data-field="body" data-id="${esc(entry.id)}" placeholder="Write a reply&hellip;">${esc(replyDraft || '')}</textarea>
+      </label>
+      <div class="settings-actions">
+        <button type="button" class="btn" data-a="roster:reply-submit" data-id="${esc(entry.id)}" ${submitting ? 'disabled' : ''}>${submitting ? 'Sending…' : 'Send reply'}</button>
+      </div>
+      ${submitError}`}
+    </div>`;
+}
+
+function renderCoachFeedbackSection(feedback, replyDrafts, replySubmit) {
+  if (feedback.status === 'loading' && feedback.data.length === 0) {
+    return '<p class="sub">Loading feedback&hellip;</p>';
+  }
+  if (feedback.status === 'error') {
+    return `<div class="hist-error">Couldn't load feedback: ${esc(feedback.error)}</div>`;
+  }
+  if (feedback.data.length === 0) {
+    return '<p class="sub">Nothing logged yet.</p>';
+  }
+  return feedback.data.map((entry) => renderCoachFeedbackEntry(entry, replyDrafts[entry.id], replySubmit)).join('');
+}
+
+function rosterShell(body) {
+  return `
+    <div class="wrap settings-wrap">
+      <header class="mast" style="border-bottom:none;padding-bottom:0;">
+        <div>
+          <span class="mark">swim-coach · my athletes</span>
+          <h1>My Athletes</h1>
+          <p class="sub">Athletes who've granted you coach access.</p>
+        </div>
+      </header>
+      ${body}
+    </div>`;
+}
+
+export function renderRosterTab({
+  athletes, actingAsAthlete, workouts, feedback, replyDrafts, replySubmit, backendConfigured, online,
+}) {
+  if (!backendConfigured) {
+    return rosterShell(renderBackendNeededNotice(
+      'My Athletes needs you to sign in and set a backend URL and token in Settings.',
+    ));
+  }
+
+  if (actingAsAthlete) {
+    const match = (athletes.data || []).find((a) => a.slug === actingAsAthlete);
+    const name = match?.name || actingAsAthlete;
+    return rosterShell(`
+      <div class="s-head"><button type="button" class="btn-ghost" data-a="roster:back">&larr; Back to My Athletes</button></div>
+      <p class="sub">Coaching <b>${esc(name)}</b> (${esc(actingAsAthlete)}).</p>
+      ${!online ? '<div class="chat-banner">Offline -- some data may be out of date.</div>' : ''}
+      <section class="hist-section">
+        <div class="s-head"><h2>Workouts</h2></div>
+        ${renderCoachWorkoutsSection(workouts)}
+      </section>
+      <section class="hist-section">
+        <div class="s-head"><h2>Feedback</h2></div>
+        ${renderCoachFeedbackSection(feedback, replyDrafts, replySubmit)}
+      </section>`);
+  }
+
+  return rosterShell(`
+    ${!online ? '<div class="chat-banner">Offline -- your athlete list may be out of date.</div>' : ''}
+    <section class="hist-section">
+      ${renderCoachedAthletesList(athletes)}
+    </section>`);
+}
+
 // --- Onboarding form (Slice 3 of self-service in-app onboarding) -----------
 // Full-screen, rendered instead of the tab bar + tab content entirely (see
 // main.js's render()) while state.onboarding.active is true -- there's
@@ -1615,8 +1812,65 @@ export function renderOnboardingForm({ form, submitting, error }) {
 
 // --- Settings tab ------------------------------------------------------------
 
+// --- Coach access panel (Settings tab: "who can coach me") -----------------
+// Athlete-self-access grants (POST/GET/PATCH /api/grants -- see
+// backend/app/routes/grants.py), NOT the coach-side roster above.
+
+function formatGrantDate(isoString) {
+  if (!isoString) return null;
+  const d = new Date(isoString);
+  return Number.isNaN(d.getTime()) ? isoString : d.toLocaleDateString();
+}
+
+/** The `CoachGrant` response (engine/swim_coach/models.py) carries
+ * `coach_athlete_id` -- a UUID foreign key -- not the coach's slug; this
+ * route has no slug-resolving join today. Shown as a short id prefix
+ * rather than a name until a future backend slice enriches the response --
+ * still enough to tell rows apart and to revoke the right one. */
+function renderGrantRow(grant) {
+  const shortId = String(grant.coach_athlete_id || '').slice(0, 8);
+  const granted = formatGrantDate(grant.granted_at);
+  const revoked = grant.status === 'revoked';
+  return `
+    <div class="hist-row hist-row-skipped">
+      <div class="hist-body">
+        <div class="hist-title">
+          <span>Coach ${esc(shortId)}</span>
+          <span class="chat-chip${revoked ? ' chip-skipped' : ''}">${esc(grant.status)}</span>
+        </div>
+        ${granted ? `<div class="hist-meta mono">Granted ${esc(granted)}</div>` : ''}
+      </div>
+      ${!revoked ? `<button type="button" class="btn-ghost" data-a="grants:revoke" data-id="${esc(grant.id)}">Revoke</button>` : ''}
+    </div>`;
+}
+
+function renderGrantsList(entries) {
+  if (!entries || entries.length === 0) {
+    return "<p class=\"sub\">You haven't granted anyone coach access yet.</p>";
+  }
+  return `<div class="hist-list">${entries.map(renderGrantRow).join('')}</div>`;
+}
+
+function renderGrantsPanel({ grants, form, submit }) {
+  return `
+    <div class="panel settings-panel">
+      <h3 style="margin:0 0 12px;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);">Coach access</h3>
+      ${grants.status === 'loading' && grants.data.length === 0 ? '<p class="sub">Loading&hellip;</p>' : renderGrantsList(grants.data)}
+      ${grants.status === 'error' ? `<div class="conn-result fail">Couldn't load your grants: ${esc(grants.error)}</div>` : ''}
+      <label class="field" style="margin-top:14px;">
+        <span>Grant a coach access (their athlete slug)</span>
+        <input type="text" data-form="grants" data-field="coachSlug" placeholder="e.g. tim" value="${esc(form.coachSlug)}">
+      </label>
+      <div class="settings-actions">
+        <button type="button" class="btn" data-a="grants:submit" ${submit.status === 'submitting' ? 'disabled' : ''}>${submit.status === 'submitting' ? 'Granting…' : 'Grant access'}</button>
+      </div>
+      ${submit.status === 'error' ? `<div class="conn-result fail">${esc(submit.error)}</div>` : ''}
+    </div>`;
+}
+
 export function renderSettingsTab({
   identity, identityError, backendConfigured, profileForm, profileLoad, profileSubmit,
+  grants, grantsForm, grantsSubmit,
 }) {
   return `
     <div class="wrap settings-wrap">
@@ -1638,6 +1892,7 @@ export function renderSettingsTab({
         <div id="google-signin-btn"></div>
         ${identityError ? `<div class="conn-result fail">${esc(identityError)}</div>` : ''}`}
       </div>
+      ${backendConfigured ? renderGrantsPanel({ grants, form: grantsForm, submit: grantsSubmit }) : ''}
       ${backendConfigured ? renderProfilePanel({ form: profileForm, load: profileLoad, submit: profileSubmit }) : ''}
     </div>`;
 }

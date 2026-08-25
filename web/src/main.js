@@ -4,7 +4,7 @@ import log from './log.js';
 import {
   renderApp, renderLoading, renderError, renderTabBar, renderCoachTab, renderSettingsTab,
   renderLogTab, renderCheckinTab, renderBackendNeededNotice, renderFeedbackTab, renderUpdateBanner,
-  renderOnboardingForm, renderHistoryTab,
+  renderOnboardingForm, renderHistoryTab, renderRosterTab,
 } from './views.js';
 import { findSessionById } from './plan.js';
 import { buildHistoryFeed } from './history.js';
@@ -18,6 +18,8 @@ import {
   postFeedback, listFeedback, uploadWorkoutFile, listWorkouts, syncWorkouts, logout, onboard,
   pushSessionToIntervals,
   downloadGarminFit,
+  createGrant, listGrants, revokeGrant,
+  listCoachedAthletes, fetchCoachWorkouts, fetchCoachFeedback, replyToCoachFeedback,
 } from './api.js';
 import {
   serializeWorkoutForm, serializeWellnessForm, profileFormFromAthlete, serializeProfileForm,
@@ -37,7 +39,7 @@ import {
 
 const appEl = document.getElementById('app');
 const ACTIVE_TAB_KEY = 'swimcoach_active_tab';
-const KNOWN_TABS = ['plan', 'log', 'history', 'checkin', 'coach', 'feedback', 'settings'];
+const KNOWN_TABS = ['plan', 'log', 'history', 'checkin', 'coach', 'feedback', 'roster', 'settings'];
 // Chat sessions are keyed per-athlete in localStorage (see chat.js); this is
 // just the storage key used before any real identity has ever signed in.
 const SIGNED_OUT_CHAT_KEY = 'signed-out';
@@ -91,6 +93,29 @@ function createProfileForm() {
 
 function createFeedbackForm() {
   return { type: 'feature_request', body: '' };
+}
+
+// Coach mode Phase 1 (roster/grants surface). See applyAthleteSession /
+// resetToSignedOut for the reset call sites -- a fresh sign-in or sign-out
+// must not carry over a previous identity's coached-athlete view or
+// in-progress grant form.
+function createRosterState() {
+  return {
+    actingAsAthlete: null,
+    athletes: { status: 'idle', data: [], error: null },
+    workouts: { status: 'idle', data: [], error: null },
+    feedback: { status: 'idle', data: [], error: null },
+    replyDrafts: {},
+    replySubmit: { status: 'idle', error: null, feedbackId: null },
+  };
+}
+
+function createGrantsState() {
+  return {
+    entries: { status: 'idle', data: [], error: null },
+    createForm: { coachSlug: '' },
+    createSubmit: { status: 'idle', error: null },
+  };
 }
 
 const initialIdentity = currentIdentity();
@@ -192,6 +217,26 @@ const state = {
   feedbackForm: createFeedbackForm(),
   feedbackSubmit: { status: 'idle', message: null },
   feedbackEntries: { status: 'idle', data: [] },
+  // Coach mode Phase 1 (roster/grants surface only -- direct-to-coach chat
+  // and the workout-comment box are a separate follow-up piece).
+  // `coachFor` mirrors `state.identity?.coachFor` once resolved -- copied
+  // out to the top level (rather than reading through `identity` every
+  // time) purely so render()/renderTabBar's "does this identity coach
+  // anyone" check reads the same regardless of whether identity is null
+  // (signed out) -- see handleIdentityResolved/applyAthleteSession/
+  // resetToSignedOut for where this gets kept in sync.
+  coachFor: initialIdentity?.coachFor || [],
+  // `roster.actingAsAthlete`: the coached-athlete slug currently being
+  // viewed (detail view), or null (list-of-athletes view) -- same "null
+  // shows the list, an id opens detail" convention as
+  // planSessionDetailId/workoutDetailId. `roster.replyDrafts`: in-progress
+  // reply text per feedback row, keyed by feedback id -- a plain object
+  // (not a Map) since it's read/written the same data-form/data-field way
+  // onAppInput already handles every other form, just keyed per-row
+  // instead of flat. `grants.entries` is MY grants (who can coach me) --
+  // Settings tab, self-access.
+  roster: createRosterState(),
+  grants: createGrantsState(),
 };
 
 // Set once at boot by registerSW() (see the bottom of this file) -- the
@@ -291,6 +336,17 @@ function renderTabContent() {
         backendConfigured,
         online: state.online,
       });
+    case 'roster':
+      return renderRosterTab({
+        athletes: state.roster.athletes,
+        actingAsAthlete: state.roster.actingAsAthlete,
+        workouts: state.roster.workouts,
+        feedback: state.roster.feedback,
+        replyDrafts: state.roster.replyDrafts,
+        replySubmit: state.roster.replySubmit,
+        backendConfigured,
+        online: state.online,
+      });
     case 'settings':
       return renderSettingsTab({
         identity: state.identity,
@@ -299,6 +355,9 @@ function renderTabContent() {
         profileForm: state.profileForm,
         profileLoad: state.profileLoad,
         profileSubmit: state.profileSubmit,
+        grants: state.grants.entries,
+        grantsForm: state.grants.createForm,
+        grantsSubmit: state.grants.createSubmit,
       });
     case 'plan':
     default:
@@ -328,7 +387,13 @@ function render() {
     })}`;
     return;
   }
-  appEl.innerHTML = `${renderUpdateBanner(state.pwaUpdate)}${renderTabContent()}${renderTabBar(state.tab)}`;
+  // `roster` (coach mode Phase 1) is hidden from the tab bar unless the
+  // signed-in identity actually coaches someone -- an athlete with no coach
+  // grants has nothing to see there. Every other tab always shows;
+  // renderTabBar's `hideRoster` flag is the one visibility knob (see its
+  // doc comment for why that's the chosen signature over a full allowlist).
+  appEl.innerHTML = `${renderUpdateBanner(state.pwaUpdate)}${renderTabContent()}${
+    renderTabBar(state.tab, { hideRoster: !state.coachFor.length })}`;
   if (state.tab === 'coach') stickChatScrollToBottom();
   if (state.tab === 'log' && state.workoutChat) stickWorkoutChatScrollToBottom();
   if (state.tab === 'settings' && !state.identity) mountGoogleSignIn();
@@ -360,6 +425,7 @@ function mountGoogleSignIn() {
 function applyAthleteSession(identity, token) {
   state.identity = identity;
   state.identityError = null;
+  state.coachFor = identity.coachFor || [];
   state.settingsForm = saveSettings({ baseUrl: state.settingsForm.baseUrl, token });
   state.chat = loadChatSession(identity.athlete);
   // Left idle rather than eagerly fetched here -- setTab('plan') lazily
@@ -377,6 +443,8 @@ function applyAthleteSession(identity, token) {
   state.workoutHistory = { status: 'idle', data: [], error: null };
   state.workoutDetailId = null;
   closeWorkoutChat();
+  state.roster = createRosterState();
+  state.grants = createGrantsState();
 }
 
 /** Fired once per real Google sign-in attempt with the outcome of the
@@ -396,6 +464,7 @@ function handleIdentityResolved(outcome) {
   log.info('identity.resolved', { athlete: outcome.identity.athlete, role: outcome.identity.role });
   render();
   maybeLoadProfile();
+  maybeLoadGrants();
 }
 
 /** Resets every identity-scoped slice of state back to signed-out and
@@ -408,6 +477,9 @@ function handleIdentityResolved(outcome) {
 function resetToSignedOut({ identityError = null } = {}) {
   state.identity = null;
   state.identityError = identityError;
+  state.coachFor = [];
+  state.roster = createRosterState();
+  state.grants = createGrantsState();
   state.onboarding = createOnboardingState();
   saveOnboardingActive(false);
   state.chat = loadChatSession(SIGNED_OUT_CHAT_KEY);
@@ -524,6 +596,7 @@ async function handleOnboardSubmit() {
     render();
     loadPlan(); // calls render() itself
     maybeLoadProfile();
+    maybeLoadGrants();
   } catch (err) {
     // A 401 here means the onboarding session itself expired/was revoked
     // mid-fill -- no amount of retrying the form will fix that, so route
@@ -1317,6 +1390,242 @@ async function handleSubmitFeedback() {
   }
 }
 
+// --- Coach mode (Phase 1): roster (My Athletes tab) + grants (Settings) ---
+// See backend/app/routes/coach.py & grants.py. Two wholly separate access
+// modes: the roster loaders below hit the coach-side routes (path-segment-
+// scoped, resolved server-side from the caller's own coach_for -- NEVER
+// athleteSlug(), which is the SELF-access helper), while the grants loaders
+// hit the athlete-self-access routes (?athlete=<own slug> via athleteSlug()
+// -- the athlete-side "who can coach me" view surfaced in Settings).
+
+async function loadCoachedAthletes() {
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) {
+    state.roster.athletes = { status: 'idle', data: [], error: null };
+    render();
+    return;
+  }
+
+  state.roster.athletes = { status: 'loading', data: state.roster.athletes.data, error: null };
+  render();
+
+  const result = await listCoachedAthletes({ baseUrl: settings.baseUrl, token: settings.token });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    log.info('roster.athletes_loaded', { count: result.data.length });
+    state.roster.athletes = { status: 'ready', data: result.data, error: null };
+  } else {
+    log.error('roster.athletes_load_failed', { error: result.error });
+    state.roster.athletes = { status: 'error', data: [], error: result.error };
+  }
+  render();
+}
+
+async function loadCoachWorkouts(slug) {
+  const settings = state.settingsForm;
+  if (!slug || !isConfigured(settings, state.identity)) {
+    state.roster.workouts = { status: 'idle', data: [], error: null };
+    render();
+    return;
+  }
+
+  state.roster.workouts = { status: 'loading', data: state.roster.workouts.data, error: null };
+  render();
+
+  const result = await fetchCoachWorkouts({ baseUrl: settings.baseUrl, token: settings.token, athlete: slug });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    log.info('roster.workouts_loaded', { athlete: slug, count: result.data.length });
+    state.roster.workouts = { status: 'ready', data: result.data, error: null };
+  } else {
+    log.error('roster.workouts_load_failed', { athlete: slug, error: result.error });
+    state.roster.workouts = { status: 'error', data: [], error: result.error };
+  }
+  render();
+}
+
+async function loadCoachFeedback(slug) {
+  const settings = state.settingsForm;
+  if (!slug || !isConfigured(settings, state.identity)) {
+    state.roster.feedback = { status: 'idle', data: [], error: null };
+    render();
+    return;
+  }
+
+  state.roster.feedback = { status: 'loading', data: state.roster.feedback.data, error: null };
+  render();
+
+  const result = await fetchCoachFeedback({ baseUrl: settings.baseUrl, token: settings.token, athlete: slug });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    log.info('roster.feedback_loaded', { athlete: slug, count: result.data.length });
+    state.roster.feedback = { status: 'ready', data: result.data, error: null };
+  } else {
+    log.error('roster.feedback_load_failed', { athlete: slug, error: result.error });
+    state.roster.feedback = { status: 'error', data: [], error: result.error };
+  }
+  render();
+}
+
+/** Opens one coached athlete's detail view (workouts + feedback), fetching
+ * both -- mirrors handleOpenHistoryDetail/handleOpenSessionDetail's
+ * "set the selection, render, then fetch" shape, minus the pushState/
+ * popstate wiring those two use (this is a tab-internal list<->detail
+ * swap, not something a hardware back press needs to unwind separately --
+ * setTab already tears down every other tab's own detail view the same
+ * way on tab-leave; there is no cross-tab back-button expectation here). */
+function handleSelectCoachedAthlete(slug) {
+  if (!slug) return;
+  state.roster.actingAsAthlete = slug;
+  state.roster.workouts = { status: 'idle', data: [], error: null };
+  state.roster.feedback = { status: 'idle', data: [], error: null };
+  log.info('roster.athlete_selected', { athlete: slug });
+  render();
+  loadCoachWorkouts(slug); // calls render() itself
+  loadCoachFeedback(slug); // calls render() itself
+}
+
+function handleBackToRoster() {
+  state.roster.actingAsAthlete = null;
+  state.roster.workouts = { status: 'idle', data: [], error: null };
+  state.roster.feedback = { status: 'idle', data: [], error: null };
+  render();
+}
+
+async function handleSubmitCoachReply(feedbackId) {
+  if (!feedbackId) return;
+  if (state.roster.replySubmit.status === 'submitting') return;
+  const slug = state.roster.actingAsAthlete;
+  if (!slug) return;
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) return;
+
+  const draft = (state.roster.replyDrafts[feedbackId] || '').trim();
+  if (!draft) {
+    state.roster.replySubmit = { status: 'error', error: 'Write a reply first.', feedbackId };
+    render();
+    return;
+  }
+
+  state.roster.replySubmit = { status: 'submitting', error: null, feedbackId };
+  render();
+  log.info('roster.reply_submit', { athlete: slug, feedback_id: feedbackId });
+
+  const result = await replyToCoachFeedback({
+    baseUrl: settings.baseUrl, token: settings.token, athlete: slug, feedbackId, coachReply: draft,
+  });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    log.info('roster.reply_submit_success', { athlete: slug, feedback_id: feedbackId });
+    state.roster.feedback = {
+      ...state.roster.feedback,
+      data: state.roster.feedback.data.map((entry) => (entry.id === result.data.id ? result.data : entry)),
+    };
+    delete state.roster.replyDrafts[feedbackId];
+    state.roster.replySubmit = { status: 'idle', error: null, feedbackId: null };
+  } else {
+    log.error('roster.reply_submit_failed', { athlete: slug, feedback_id: feedbackId, error: result.error });
+    state.roster.replySubmit = { status: 'error', error: result.error, feedbackId };
+  }
+  render();
+}
+
+// --- Grants (Settings tab: "who can coach me") ------------------------------
+
+async function loadGrants() {
+  const settings = state.settingsForm;
+  const identity = state.identity;
+  if (!isConfigured(settings, identity)) {
+    state.grants.entries = { status: 'idle', data: [], error: null };
+    render();
+    return;
+  }
+
+  state.grants.entries = { status: 'loading', data: state.grants.entries.data, error: null };
+  render();
+
+  const result = await listGrants({ baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug() });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    log.info('grants.list_loaded', { count: result.data.length });
+    state.grants.entries = { status: 'ready', data: result.data, error: null };
+  } else {
+    log.error('grants.list_load_failed', { error: result.error });
+    state.grants.entries = { status: 'error', data: [], error: result.error };
+  }
+  render();
+}
+
+// Triggers loadGrants() only when it's actually useful -- same "on the
+// right tab, configured, not already loading/loaded" gate as
+// maybeLoadProfile(), which this is called alongside everywhere (see every
+// maybeLoadProfile() call site below).
+function maybeLoadGrants() {
+  if (state.tab !== 'settings') return;
+  if (!isConfigured(state.settingsForm, state.identity)) return;
+  if (state.grants.entries.status === 'loading' || state.grants.entries.status === 'ready') return;
+  loadGrants();
+}
+
+async function handleGrantSubmit() {
+  if (state.grants.createSubmit.status === 'submitting') return;
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) return;
+
+  const coachSlug = (state.grants.createForm.coachSlug || '').trim();
+  if (!coachSlug) {
+    state.grants.createSubmit = { status: 'error', error: 'Enter a coach slug first.' };
+    render();
+    return;
+  }
+
+  state.grants.createSubmit = { status: 'submitting', error: null };
+  render();
+  log.info('grants.create_submit', { athlete: athleteSlug() });
+
+  const result = await createGrant({
+    baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), coachSlug,
+  });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    log.info('grants.create_submit_success', { athlete: athleteSlug() });
+    state.grants.entries = { ...state.grants.entries, data: [...state.grants.entries.data, result.data] };
+    state.grants.createForm = { coachSlug: '' };
+    state.grants.createSubmit = { status: 'idle', error: null };
+  } else {
+    log.error('grants.create_submit_failed', { athlete: athleteSlug(), error: result.error });
+    state.grants.createSubmit = { status: 'error', error: result.error };
+  }
+  render();
+}
+
+/** Fire-and-forget with logging, no dedicated submit-status slot -- a
+ * revoke is a single small state flip on an already-visible row (same
+ * spirit as the Plan tab's Garmin push not needing its own draft-form
+ * state). On failure the row just stays as-is and the failure is logged;
+ * the athlete can simply try again. */
+async function handleRevokeGrant(grantId) {
+  if (!grantId) return;
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) return;
+
+  log.info('grants.revoke', { athlete: athleteSlug(), grant_id: grantId });
+  const result = await revokeGrant({
+    baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), grantId,
+  });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    log.info('grants.revoke_success', { athlete: athleteSlug(), grant_id: grantId });
+    state.grants.entries = {
+      ...state.grants.entries,
+      data: state.grants.entries.data.map((g) => (g.id === result.data.id ? result.data : g)),
+    };
+    render();
+  } else {
+    log.error('grants.revoke_failed', { athlete: athleteSlug(), grant_id: grantId, error: result.error });
+  }
+}
+
 // --- Tab switching ------------------------------------------------------------
 
 function setTab(tab) {
@@ -1370,6 +1679,17 @@ function setTab(tab) {
     loadFeedback(); // calls render() itself
     return;
   }
+  // Same lazy-load convention as Feedback above. Note: only the athletes
+  // LIST is refetched on tab-entry -- entering with `actingAsAthlete` still
+  // set (e.g. a re-render while already inside a coached athlete's detail
+  // view) deliberately does NOT re-fetch that athlete's workouts/feedback
+  // here; those loads happen once, from handleSelectCoachedAthlete, when
+  // the athlete is first selected.
+  if (tab === 'roster' && (state.roster.athletes.status === 'idle' || state.roster.athletes.status === 'error')
+    && isConfigured(state.settingsForm, state.identity)) {
+    loadCoachedAthletes(); // calls render() itself
+    return;
+  }
   // Same lazy-load convention as Plan/Feedback above -- see
   // shouldLoadHistoryNow()'s doc comment.
   if (tab === 'log' && shouldLoadHistoryNow()) {
@@ -1397,6 +1717,7 @@ function setTab(tab) {
   }
   render();
   maybeLoadProfile();
+  maybeLoadGrants();
 }
 
 // --- Event delegation ---------------------------------------------------------
@@ -1423,6 +1744,11 @@ async function onAppClick(e) {
     case 'checkin:submit': handleSubmitCheckin(); break;
     case 'profile:submit': handleSubmitProfile(); break;
     case 'feedback:submit': handleSubmitFeedback(); break;
+    case 'roster:select-athlete': handleSelectCoachedAthlete(el.dataset.slug); break;
+    case 'roster:back': handleBackToRoster(); break;
+    case 'roster:reply-submit': handleSubmitCoachReply(el.dataset.id); break;
+    case 'grants:submit': handleGrantSubmit(); break;
+    case 'grants:revoke': handleRevokeGrant(el.dataset.id); break;
     case 'onboard:submit': handleOnboardSubmit(); break;
     case 'history:retry': loadHistory(); break;
     case 'history:open': handleOpenHistoryDetail(el.dataset.id); break;
@@ -1481,6 +1807,13 @@ function onAppInput(e) {
     }
   }
   else if (formName === 'feedback') state.feedbackForm[field] = el.value;
+  // Keyed by per-row feedback id (data-id), not a flat form field like every
+  // other case here -- see state.roster.replyDrafts's doc comment at its
+  // declaration for why a plain object keyed this way is enough.
+  else if (formName === 'roster-reply') {
+    const id = el.dataset.id;
+    if (id) state.roster.replyDrafts[id] = el.value;
+  } else if (formName === 'grants') state.grants.createForm[field] = el.value;
   else if (formName === 'onboard') {
     if (field === 'pool_days') {
       // Same data-day convention as the profile form's pool-day checkboxes
@@ -1580,6 +1913,7 @@ updateOfflineBanner();
 render();
 loadPlan();
 maybeLoadProfile();
+maybeLoadGrants();
 // loadPlan() above self-gates on isConfigured and is otherwise unconditional
 // at boot; loadHistory() has no such caller-independent self-gate -- until
 // now the only caller was setTab's Log-tab branch, so history stayed stuck

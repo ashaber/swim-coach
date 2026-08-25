@@ -171,6 +171,12 @@ def test_onboarding_submit_success_transitions_into_the_app(fake_gsi_page):
     page.route('**/api/onboard', handle_onboard)
     page.route('**/api/plan*', _cors_route(200, 'application/json', PLAN_STUB))
     page.route('**/api/athlete*', _cors_route(200, 'application/json', '{"slug":"jamie","name":"Jamie"}'))
+    # Onboarding lands on the Plan tab (see below), but main.js's
+    # handleOnboardSubmit calls maybeLoadGrants() alongside maybeLoadProfile()
+    # right after -- coach-mode Phase 1's GET /api/grants needs the same
+    # CORS-safe stub as /api/athlete/plan above or it surfaces as an
+    # uncaught access-control error in WebKit.
+    page.route('**/api/grants*', _cors_route(200, 'application/json', '[]'))
 
     _fill_required_fields(page)
     page.click('[data-a="onboard:submit"]')
