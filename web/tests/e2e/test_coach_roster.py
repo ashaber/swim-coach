@@ -211,7 +211,12 @@ def test_replying_to_feedback_patches_and_updates_the_row(page):
     page.fill('[data-form="roster-reply"]', 'Start with 70g/hr and adjust from there.')
     page.click('[data-a="roster:reply-submit"]')
 
-    page.wait_for_selector('text=Start with 70g/hr and adjust from there.')
+    # The still-open form's own textarea already contains this exact text
+    # (via `fill`), so waiting on it as a `text=` selector can match before
+    # the async PATCH resolves -- wait for the form itself to be replaced
+    # instead, which only happens once the reply lands.
+    page.wait_for_selector('[data-form="roster-reply"]', state='detached')
+    assert 'Start with 70g/hr and adjust from there.' in page.content()
     assert len(reply_calls) == 1
     assert reply_calls[0] == {'coach_reply': 'Start with 70g/hr and adjust from there.'}
     # The reply box is gone now that a coach_reply exists on the entry.
