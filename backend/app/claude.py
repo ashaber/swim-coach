@@ -105,6 +105,72 @@ class ClaudeChat:
         The loop ends (and a final `done`/`refusal`/`error` event is
         emitted) once a turn's `stop_reason` isn't `tool_use`, or after
         `MAX_TOOL_ITERATIONS` turns (a runaway-tool-call guard).
+
+        Thin wrapper over `_run_turns` (the shared tool-loop generator also
+        used by `run_once`) -- SSE-frames each raw event dict it yields.
+        """
+        for event in self._run_turns(system, messages, tools, tool_handlers):
+            yield _sse(event)
+
+    def run_once(
+        self,
+        system: list[dict[str, Any]],
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_handlers: dict[str, ToolHandler],
+    ) -> str:
+        """Non-streaming counterpart to `run_streaming`, for a caller that
+        needs ONE complete answer string to persist (the direct-to-coach
+        question endpoint, `POST /api/feedback/questions`) rather than an
+        SSE stream to relay to a browser.
+
+        Drives the exact same tool loop as `run_streaming` (via the shared
+        `_run_turns` generator -- no duplicated loop logic), draining every
+        `"text"` event and concatenating their `"text"` payloads into the
+        final return value. `"tool_use"`/tool-execution side effects happen
+        exactly as they already do in `run_streaming`.
+
+        Error/refusal contract: if the turn sequence ends in a `"refusal"`
+        or `"error"` event (or hits the max-tool-iterations guard, which
+        itself yields an `"error"` event), this raises `RuntimeError` with
+        that event's content as the message, rather than returning a
+        string. Callers must catch `RuntimeError` explicitly and turn it
+        into a clean error response (e.g. a 502) -- never let it become an
+        unhandled 500. A plain-string-return contract was considered (e.g. a
+        sentinel prefix) but rejected: an exception can't be silently
+        mistaken for real model output the way a sentinel string could be if
+        a caller forgets to check for it.
+        """
+        text_parts: list[str] = []
+        for event in self._run_turns(system, messages, tools, tool_handlers):
+            event_type = event.get("type")
+            if event_type == "text":
+                text_parts.append(event["text"])
+            elif event_type == "refusal":
+                raise RuntimeError("refusal")
+            elif event_type == "error":
+                raise RuntimeError(event.get("error", "unknown error"))
+            elif event_type == "done":
+                break
+            # "tool_use" events are informational only here -- the actual
+            # tool execution/side effects already happened inside
+            # _run_turns before the event was yielded.
+        return "".join(text_parts)
+
+    def _run_turns(
+        self,
+        system: list[dict[str, Any]],
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_handlers: dict[str, ToolHandler],
+    ) -> Iterator[dict[str, Any]]:
+        """Shared tool-loop generator behind both `run_streaming` (which
+        SSE-frames each event) and `run_once` (which drains text events into
+        one string). Yields raw event dicts -- `{"type": "text", "text":
+        ...}`, `{"type": "tool_use", ...}`, `{"type": "done", ...}`,
+        `{"type": "refusal"}`, or `{"type": "error", "error": ...}` -- with
+        exactly the same shapes `run_streaming` has always emitted (SSE-
+        framed) before this refactor, so its behavior/tests are unchanged.
         """
         messages = list(messages)
 
@@ -114,11 +180,11 @@ class ClaudeChat:
             try:
                 with self.client.messages.stream(**request_kwargs) as stream:
                     for text in stream.text_stream:
-                        yield _sse({"type": "text", "text": text})
+                        yield {"type": "text", "text": text}
                     final = stream.get_final_message()
             except anthropic.APIError as exc:
                 log.error("anthropic api error", error=str(exc), iteration=iteration)
-                yield _sse({"type": "error", "error": str(exc)})
+                yield {"type": "error", "error": str(exc)}
                 return
 
             usage = final.usage
@@ -136,11 +202,11 @@ class ClaudeChat:
             # guidance -- a refusal's content shape isn't meant to be
             # processed as a normal answer or tool-use turn.
             if final.stop_reason == "refusal":
-                yield _sse({"type": "refusal"})
+                yield {"type": "refusal"}
                 return
 
             if final.stop_reason != "tool_use":
-                yield _sse({"type": "done", "stop_reason": final.stop_reason})
+                yield {"type": "done", "stop_reason": final.stop_reason}
                 return
 
             # exclude_none drops SDK-only null fields (a response TextBlock
@@ -157,7 +223,7 @@ class ClaudeChat:
                 if block.type != "tool_use":
                     continue
                 handler = tool_handlers.get(block.name)
-                yield _sse({"type": "tool_use", "name": block.name, "input": block.input})
+                yield {"type": "tool_use", "name": block.name, "input": block.input}
                 try:
                     result = (
                         handler(block.input) if handler else {"error": f"unknown tool {block.name}"}
@@ -175,4 +241,4 @@ class ClaudeChat:
             messages.append({"role": "user", "content": tool_results})
 
         log.warn("max tool iterations exceeded", max_iterations=MAX_TOOL_ITERATIONS)
-        yield _sse({"type": "error", "error": "max tool iterations exceeded"})
+        yield {"type": "error", "error": "max tool iterations exceeded"}

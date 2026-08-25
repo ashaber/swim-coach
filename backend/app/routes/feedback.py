@@ -27,6 +27,15 @@ answers a logged gap -- so the same gap would otherwise be re-researched
 indefinitely. Same auth gate as the rest of this module; merges `context`
 into the existing entry (via `store.update_feedback`) rather than clobbering
 it, and 404s on an unknown id.
+
+`POST /api/feedback/questions` (coach-mode Phase 1) is the athlete-initiated
+"ask a question about my own training" endpoint: a one-shot, non-streaming
+call through `ClaudeChat.run_once` (app/claude.py) -- built for the SAME
+context/tools/system assembly `/api/chat` uses (app.context/app.tools), just
+without a multi-turn `history` and without SSE -- persisted as a `Feedback`
+row (`type="question"`) carrying the model's `ai_provisional_answer` and,
+when `direct_to_coach` is set, `needs_human_review=True` so it surfaces in
+the coach's queue (routes/coach.py) even before any AI answer is read.
 """
 
 from __future__ import annotations
@@ -39,8 +48,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import ValidationError
 from swim_coach.models import Feedback
 
-from app.auth import Principal, require_auth, resolve_athlete
+from app.auth import (
+    Principal,
+    require_auth,
+    require_chat_rate_limit,
+    require_daily_chat_cap,
+    resolve_athlete,
+)
+from app.claude import ClaudeChat
+from app.context import build_messages, build_system, find_workout_by_id
+from app.routes.chat import get_claude_chat
 from app.store_factory import make_store
+from app.tools import TOOLS_SCHEMA, build_tool_handlers
 
 router = APIRouter()
 
@@ -52,8 +71,11 @@ router = APIRouter()
 _SERVER_ASSIGNED_FIELDS = {"id", "athlete_id", "schema_version", "source", "status", "created_at"}
 
 # The only types an athlete may submit through this endpoint --
-# "research_question" is coach-only (see module docstring).
-_ATHLETE_SUBMITTABLE_TYPES = {"feature_request", "comment", "bug"}
+# "research_question" is coach-only (see module docstring). "question"
+# (coach-mode Phase 1) covers both this route's free-form submissions AND
+# POST /api/feedback/questions below (which constructs its own Feedback
+# directly, bypassing this set, but keeps the type consistent).
+_ATHLETE_SUBMITTABLE_TYPES = {"feature_request", "comment", "bug", "question"}
 
 
 @router.post("/api/feedback")
@@ -127,10 +149,13 @@ async def update_feedback(
 
     status = payload.get("status")
     context = payload.get("context")
+    needs_human_review = payload.get("needs_human_review")
     if status is not None and not isinstance(status, str):
         raise HTTPException(status_code=422, detail="status must be a string")
     if context is not None and not isinstance(context, dict):
         raise HTTPException(status_code=422, detail="context must be an object")
+    if needs_human_review is not None and not isinstance(needs_human_review, bool):
+        raise HTTPException(status_code=422, detail="needs_human_review must be a boolean")
 
     # This route addresses a feedback entry by id, with no `athlete` param to
     # scope -- so unlike its siblings it can't lean on `resolve_athlete`. An
@@ -152,8 +177,85 @@ async def update_feedback(
         if existing.athlete_id != own_id:
             raise HTTPException(status_code=403, detail="athlete mismatch")
 
-    updated = store.update_feedback(feedback_id, status=status, context=context)
+    updated = store.update_feedback(
+        feedback_id, status=status, context=context, needs_human_review=needs_human_review
+    )
     if updated is None:
         raise HTTPException(status_code=404, detail=f"no such feedback entry: {feedback_id}")
 
     return updated.model_dump(mode="json")
+
+
+@router.post("/api/feedback/questions")
+async def ask_question(
+    payload: dict[str, Any],
+    request: Request,
+    athlete: str | None = Query(None),
+    principal: Principal = Depends(require_auth),
+    claude_chat: ClaudeChat = Depends(get_claude_chat),
+) -> dict:
+    settings = request.app.state.settings
+    athlete = resolve_athlete(principal, athlete)
+    require_chat_rate_limit(request, principal.token)
+    require_daily_chat_cap(request, principal)
+
+    store = make_store(settings)
+    try:
+        profile = store.load_athlete(athlete)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"no such athlete: {athlete}") from exc
+
+    body = payload.get("body")
+    if not isinstance(body, str) or not body:
+        raise HTTPException(status_code=422, detail="body must be a non-empty string")
+    workout_id = payload.get("workout_id")
+    if workout_id is not None and not isinstance(workout_id, str):
+        raise HTTPException(status_code=422, detail="workout_id must be a string")
+    direct_to_coach = payload.get("direct_to_coach", False)
+    if not isinstance(direct_to_coach, bool):
+        raise HTTPException(status_code=422, detail="direct_to_coach must be a boolean")
+
+    # Resolve the scoped workout exactly like /api/chat does -- an unknown
+    # workout_id is an ordinary 404 before any model call starts.
+    focused_workout = None
+    if workout_id is not None:
+        focused_workout = find_workout_by_id(store.list_workouts(athlete), workout_id)
+        if focused_workout is None:
+            raise HTTPException(status_code=404, detail=f"no workout matching id {workout_id!r}")
+
+    system = build_system(settings.library_dir, body)
+    messages = build_messages(
+        store,
+        athlete,
+        message=body,
+        history=[],
+        expert_mode=False,
+        focused_workout=focused_workout,
+    )
+    tool_handlers = build_tool_handlers(store, slug=athlete, expert_mode=False)
+
+    try:
+        provisional = claude_chat.run_once(system, messages, TOOLS_SCHEMA, tool_handlers)
+    except RuntimeError as exc:
+        # A real upstream failure (refusal/error/max-iterations from the
+        # model call itself), not a client error -- 502, with a friendly
+        # detail, rather than letting it 500 the whole request.
+        raise HTTPException(
+            status_code=502, detail=f"the coach couldn't answer that just now: {exc}"
+        ) from exc
+
+    feedback = Feedback(
+        id=uuid4(),
+        athlete_id=profile.id,
+        schema_version=1,
+        type="question",
+        source="athlete",
+        body=body,
+        status="open",
+        created_at=datetime.now(timezone.utc),
+        workout_id=UUID(str(focused_workout.id)) if focused_workout is not None else None,
+        needs_human_review=direct_to_coach,
+        ai_provisional_answer=provisional,
+    )
+    store.save_feedback(feedback)
+    return feedback.model_dump(mode="json")

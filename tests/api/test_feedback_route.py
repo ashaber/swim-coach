@@ -8,7 +8,12 @@ not a fake.
 
 from __future__ import annotations
 
-from fakes import auth_headers
+from fakes import (
+    auth_headers,
+    make_final_message,
+    make_text_block,
+    make_workout,
+)
 
 
 def _valid_payload(**overrides) -> dict:
@@ -52,6 +57,16 @@ def test_create_feedback_accepts_comment_and_bug(client) -> None:
         )
         assert response.status_code == 200
         assert response.json()["type"] == feedback_type
+
+
+def test_create_feedback_accepts_question_type(client) -> None:
+    response = client.post(
+        "/api/feedback?athlete=renee",
+        json=_valid_payload(type="question", body="how should I fuel a 4hr swim?"),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+    assert response.json()["type"] == "question"
 
 
 def test_create_feedback_rejects_research_question(client) -> None:
@@ -209,6 +224,28 @@ def test_patch_feedback_invalid_status_type_is_422(client) -> None:
     assert "error" in response.json()
 
 
+def test_patch_feedback_accepts_needs_human_review(client) -> None:
+    created = _create(client)
+    response = client.patch(
+        f"/api/feedback/{created['id']}",
+        json={"needs_human_review": True},
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+    assert response.json()["needs_human_review"] is True
+
+
+def test_patch_feedback_invalid_needs_human_review_type_is_422(client) -> None:
+    created = _create(client)
+    response = client.patch(
+        f"/api/feedback/{created['id']}",
+        json={"needs_human_review": "yes"},
+        headers=auth_headers(),
+    )
+    assert response.status_code == 422
+    assert "error" in response.json()
+
+
 def test_patch_feedback_does_not_disturb_other_entries(client) -> None:
     keep = _create(client, body="leave me alone")
     target = _create(client, body="patch me")
@@ -223,3 +260,141 @@ def test_patch_feedback_does_not_disturb_other_entries(client) -> None:
     by_id = {f["id"]: f for f in listing.json()}
     assert by_id[keep["id"]]["status"] == "open"
     assert by_id[target["id"]]["status"] == "resolved"
+
+
+# --- POST /api/feedback/questions -------------------------------------------
+#
+# The direct-to-coach question endpoint: a one-shot, non-streaming call
+# through ClaudeChat.run_once (app/claude.py), persisted as a Feedback row
+# with type="question". Same fake-ClaudeChat convention as test_chat.py --
+# `fake_claude_chat_factory` overrides get_claude_chat with a ClaudeChat
+# wired to a fake Anthropic client, so run_once never touches the network.
+
+
+def _question_payload(**overrides) -> dict:
+    payload = {"body": "how should I fuel a 4hr swim?"}
+    payload.update(overrides)
+    return payload
+
+
+def test_ask_question_requires_auth(client) -> None:
+    response = client.post("/api/feedback/questions?athlete=renee", json=_question_payload())
+    assert response.status_code == 401
+
+
+def test_ask_question_happy_path_persists_provisional_answer(
+    client, fake_claude_chat_factory
+) -> None:
+    final = make_final_message(
+        [make_text_block("Aim for 60-90g carbs/hr, starting within the first 30 minutes.")],
+        "end_turn",
+    )
+    fake_claude_chat_factory(
+        [(["Aim for 60-90g carbs/hr, starting within the first 30 minutes."], final)]
+    )
+
+    response = client.post(
+        "/api/feedback/questions?athlete=renee",
+        json=_question_payload(),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["type"] == "question"
+    assert body["source"] == "athlete"
+    assert body["body"] == "how should I fuel a 4hr swim?"
+    assert body["ai_provisional_answer"] == (
+        "Aim for 60-90g carbs/hr, starting within the first 30 minutes."
+    )
+    assert body["needs_human_review"] is False
+    assert body["workout_id"] is None
+
+
+def test_ask_question_direct_to_coach_sets_needs_human_review(
+    client, fake_claude_chat_factory
+) -> None:
+    final = make_final_message([make_text_block("Provisional answer.")], "end_turn")
+    fake_claude_chat_factory([(["Provisional answer."], final)])
+
+    response = client.post(
+        "/api/feedback/questions?athlete=renee",
+        json=_question_payload(direct_to_coach=True),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+    assert response.json()["needs_human_review"] is True
+
+
+def test_ask_question_workout_id_linkage(
+    client, fake_claude_chat_factory, athletes_dir
+) -> None:
+    from swim_coach.store import FileStore
+
+    store = FileStore(base_dir=athletes_dir)
+    profile = store.load_athlete("renee")
+    workout = make_workout(athlete_id=profile.id)
+    store.save_workout("renee", workout)
+
+    final = make_final_message([make_text_block("Nice swim.")], "end_turn")
+    fake_claude_chat_factory([(["Nice swim."], final)])
+
+    response = client.post(
+        "/api/feedback/questions?athlete=renee",
+        json=_question_payload(workout_id=str(workout.id)),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+    assert response.json()["workout_id"] == str(workout.id)
+
+
+def test_ask_question_unknown_workout_id_is_404(client, fake_claude_chat_factory) -> None:
+    chat = fake_claude_chat_factory([])
+
+    response = client.post(
+        "/api/feedback/questions?athlete=renee",
+        json=_question_payload(workout_id="ffffffff-0000-0000-0000-000000000000"),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 404
+    assert "error" in response.json()
+    assert chat.client.messages.calls == []
+
+
+def test_ask_question_missing_body_is_422(client, fake_claude_chat_factory) -> None:
+    fake_claude_chat_factory([])
+    response = client.post(
+        "/api/feedback/questions?athlete=renee", json={}, headers=auth_headers()
+    )
+    assert response.status_code == 422
+    assert "error" in response.json()
+
+
+def test_ask_question_rate_limit_enforced(client, fake_claude_chat_factory) -> None:
+    # app_env sets CHAT_RATE_PER_MIN=3 -- shares the same per-token limiter
+    # /api/chat uses, so the 4th call in a minute for the same (service)
+    # token is a 429.
+    def _one_call():
+        final = make_final_message([make_text_block("ok")], "end_turn")
+        fake_claude_chat_factory([(["ok"], final)])
+        return client.post(
+            "/api/feedback/questions?athlete=renee",
+            json=_question_payload(),
+            headers=auth_headers(),
+        )
+
+    statuses = [_one_call().status_code for _ in range(4)]
+    assert statuses[:3] == [200, 200, 200]
+    assert statuses[3] == 429
+
+
+def test_ask_question_run_once_error_is_502_not_a_crash(client, fake_claude_chat_factory) -> None:
+    final = make_final_message([], "refusal")
+    fake_claude_chat_factory([([], final)])
+
+    response = client.post(
+        "/api/feedback/questions?athlete=renee",
+        json=_question_payload(),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 502
+    assert "error" in response.json()
