@@ -27,6 +27,7 @@ import pytest
 
 from swim_coach.models import (
     Athlete,
+    CoachGrant,
     Event,
     Feedback,
     MacroBlock,
@@ -188,6 +189,27 @@ def _feedback(athlete_id: uuid.UUID | None, **overrides) -> Feedback:
     )
     data.update(overrides)
     return Feedback(**data)
+
+
+def _coach_athlete() -> Athlete:
+    """A second athlete acting as a coach -- coaches in this system are
+    themselves athlete accounts (e.g. Tim, a consulting physiologist with no
+    training data of his own; see models.CoachGrant's docstring)."""
+    return Athlete(id=uuid.uuid4(), slug="tim", name="Tim Coach")
+
+
+def _coach_grant(coach_athlete_id: uuid.UUID, athlete_id: uuid.UUID, **overrides) -> CoachGrant:
+    data: dict = dict(
+        id=uuid.uuid4(),
+        coach_athlete_id=coach_athlete_id,
+        athlete_id=athlete_id,
+        status="active",
+        chat_visibility="shared_only",
+        granted_at=datetime.now(timezone.utc),
+        revoked_at=None,
+    )
+    data.update(overrides)
+    return CoachGrant(**data)
 
 
 def _wellness(athlete_id: uuid.UUID, d: date) -> Wellness:
@@ -535,6 +557,244 @@ class StoreContractTests:
         store.update_feedback(target.id, status="resolved")
         untouched = store.get_feedback(keep.id)
         assert untouched == keep
+
+    # --- feedback: human-coach-review fields (coach-mode Chunk A) --------
+
+    def test_update_feedback_needs_human_review_only(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        entry = _feedback(athlete.id, body="my shoulder hurts")
+        store.save_feedback(entry)
+        updated = store.update_feedback(entry.id, needs_human_review=True)
+        assert updated is not None
+        assert updated.needs_human_review is True
+        assert updated.coach_athlete_id is None
+        assert updated.coach_reply is None
+        assert updated.coach_reply_at is None
+        assert store.get_feedback(entry.id).needs_human_review is True
+
+    def test_update_feedback_coach_athlete_id_only(self, store):
+        athlete = _athlete()
+        coach = _coach_athlete()
+        store.save_athlete(athlete)
+        store.save_athlete(coach)
+        entry = _feedback(athlete.id, body="question for my coach")
+        store.save_feedback(entry)
+        updated = store.update_feedback(entry.id, coach_athlete_id=coach.id)
+        assert updated is not None
+        assert updated.coach_athlete_id == coach.id
+        assert updated.needs_human_review is False  # untouched
+
+    def test_update_feedback_coach_reply_only(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        entry = _feedback(athlete.id, body="what pace for the long swim?")
+        store.save_feedback(entry)
+        updated = store.update_feedback(entry.id, coach_reply="Hold Z2, don't chase pace.")
+        assert updated is not None
+        assert updated.coach_reply == "Hold Z2, don't chase pace."
+        assert updated.coach_reply_at is None  # untouched, set independently
+
+    def test_update_feedback_coach_reply_at_only(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        entry = _feedback(athlete.id, body="question")
+        store.save_feedback(entry)
+        replied_at = datetime(2026, 8, 24, 9, 0, 0, tzinfo=timezone.utc)
+        updated = store.update_feedback(entry.id, coach_reply_at=replied_at)
+        assert updated is not None
+        assert updated.coach_reply_at == replied_at
+
+    def test_update_feedback_none_kwargs_leave_new_fields_unchanged(self, store):
+        athlete = _athlete()
+        coach = _coach_athlete()
+        store.save_athlete(athlete)
+        store.save_athlete(coach)
+        entry = _feedback(athlete.id, body="question")
+        store.save_feedback(entry)
+        store.update_feedback(
+            entry.id,
+            needs_human_review=True,
+            coach_athlete_id=coach.id,
+            coach_reply="see above",
+            coach_reply_at=datetime(2026, 8, 24, tzinfo=timezone.utc),
+        )
+        # A subsequent call touching only `status` must not clobber any of
+        # the four fields set above -- None means unchanged, not "clear".
+        updated = store.update_feedback(entry.id, status="resolved")
+        assert updated is not None
+        assert updated.needs_human_review is True
+        assert updated.coach_athlete_id == coach.id
+        assert updated.coach_reply == "see above"
+        assert updated.coach_reply_at == datetime(2026, 8, 24, tzinfo=timezone.utc)
+
+    def test_update_feedback_all_new_fields_together(self, store):
+        athlete = _athlete()
+        coach = _coach_athlete()
+        store.save_athlete(athlete)
+        store.save_athlete(coach)
+        entry = _feedback(athlete.id, body="pain in my shoulder during the long set")
+        store.save_feedback(entry)
+        replied_at = datetime(2026, 8, 24, 10, 30, 0, tzinfo=timezone.utc)
+        updated = store.update_feedback(
+            entry.id,
+            status="resolved",
+            needs_human_review=True,
+            coach_athlete_id=coach.id,
+            coach_reply="Ease off freestyle catch, see a PT if it persists.",
+            coach_reply_at=replied_at,
+        )
+        assert updated is not None
+        assert updated.status == "resolved"
+        assert updated.needs_human_review is True
+        assert updated.coach_athlete_id == coach.id
+        assert updated.coach_reply == "Ease off freestyle catch, see a PT if it persists."
+        assert updated.coach_reply_at == replied_at
+        reloaded = store.get_feedback(entry.id)
+        assert reloaded == updated
+
+    # --- coach grants (coach-mode Chunk A) --------------------------------
+
+    def test_create_coach_grant_round_trip(self, store):
+        coach = _coach_athlete()
+        athlete = _athlete()
+        store.save_athlete(coach)
+        store.save_athlete(athlete)
+        grant = store.create_coach_grant(coach_slug=coach.slug, athlete_slug=athlete.slug)
+        expected = _coach_grant(
+            coach.id, athlete.id, id=grant.id, granted_at=grant.granted_at
+        )
+        assert grant == expected
+        assert grant.status == "active"
+        assert grant.chat_visibility == "shared_only"  # default: more private
+        assert grant.revoked_at is None
+
+    def test_create_coach_grant_with_full_chat_visibility(self, store):
+        coach = _coach_athlete()
+        athlete = _athlete()
+        store.save_athlete(coach)
+        store.save_athlete(athlete)
+        grant = store.create_coach_grant(
+            coach_slug=coach.slug, athlete_slug=athlete.slug, chat_visibility="full"
+        )
+        assert grant.chat_visibility == "full"
+
+    def test_list_coach_grants_empty_when_none(self, store):
+        store.save_athlete(_athlete())
+        assert store.list_coach_grants() == []
+
+    def test_list_coach_grants_returns_created_grant(self, store):
+        coach = _coach_athlete()
+        athlete = _athlete()
+        store.save_athlete(coach)
+        store.save_athlete(athlete)
+        grant = store.create_coach_grant(coach_slug=coach.slug, athlete_slug=athlete.slug)
+        loaded = store.list_coach_grants()
+        assert len(loaded) == 1
+        assert loaded[0] == grant
+
+    def test_list_coach_grants_filters_by_coach_slug(self, store):
+        coach = _coach_athlete()
+        athlete = _athlete()
+        other_athlete = Athlete(id=uuid.uuid4(), slug="other-athlete", name="Other")
+        store.save_athlete(coach)
+        store.save_athlete(athlete)
+        store.save_athlete(other_athlete)
+        store.create_coach_grant(coach_slug=coach.slug, athlete_slug=athlete.slug)
+        # athlete coaches other_athlete -- a grant where `athlete` is itself
+        # the coach, proving the filter is coach-slug-specific.
+        store.create_coach_grant(coach_slug=athlete.slug, athlete_slug=other_athlete.slug)
+        loaded = store.list_coach_grants(coach_slug=coach.slug)
+        assert len(loaded) == 1
+        assert loaded[0].coach_athlete_id == coach.id
+
+    def test_list_coach_grants_filters_by_athlete_slug(self, store):
+        coach = _coach_athlete()
+        athlete = _athlete()
+        other_athlete = Athlete(id=uuid.uuid4(), slug="other-athlete", name="Other")
+        store.save_athlete(coach)
+        store.save_athlete(athlete)
+        store.save_athlete(other_athlete)
+        store.create_coach_grant(coach_slug=coach.slug, athlete_slug=athlete.slug)
+        store.create_coach_grant(coach_slug=coach.slug, athlete_slug=other_athlete.slug)
+        loaded = store.list_coach_grants(athlete_slug=athlete.slug)
+        assert len(loaded) == 1
+        assert loaded[0].athlete_id == athlete.id
+
+    def test_list_coach_grants_filters_by_status(self, store):
+        coach = _coach_athlete()
+        athlete = _athlete()
+        other_athlete = Athlete(id=uuid.uuid4(), slug="other-athlete", name="Other")
+        store.save_athlete(coach)
+        store.save_athlete(athlete)
+        store.save_athlete(other_athlete)
+        active = store.create_coach_grant(coach_slug=coach.slug, athlete_slug=athlete.slug)
+        to_revoke = store.create_coach_grant(coach_slug=coach.slug, athlete_slug=other_athlete.slug)
+        store.revoke_coach_grant(to_revoke.id)
+
+        active_only = store.list_coach_grants(status="active")
+        assert [g.id for g in active_only] == [active.id]
+
+        revoked_only = store.list_coach_grants(status="revoked")
+        assert [g.id for g in revoked_only] == [to_revoke.id]
+
+    def test_create_coach_grant_unknown_coach_slug_raises(self, store):
+        store.save_athlete(_athlete())
+        with pytest.raises(FileNotFoundError):
+            store.create_coach_grant(coach_slug="nobody", athlete_slug=SLUG)
+
+    def test_create_coach_grant_unknown_athlete_slug_raises(self, store):
+        store.save_athlete(_coach_athlete())
+        with pytest.raises(FileNotFoundError):
+            store.create_coach_grant(coach_slug="tim", athlete_slug="nobody")
+
+    def test_create_coach_grant_self_grant_raises(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        with pytest.raises(ValueError):
+            store.create_coach_grant(coach_slug=SLUG, athlete_slug=SLUG)
+
+    def test_list_coach_grants_unknown_coach_slug_raises(self, store):
+        store.save_athlete(_athlete())
+        with pytest.raises(FileNotFoundError):
+            store.list_coach_grants(coach_slug="nobody")
+
+    def test_list_coach_grants_unknown_athlete_slug_raises(self, store):
+        store.save_athlete(_athlete())
+        with pytest.raises(FileNotFoundError):
+            store.list_coach_grants(athlete_slug="nobody")
+
+    def test_revoke_coach_grant_round_trip(self, store):
+        coach = _coach_athlete()
+        athlete = _athlete()
+        store.save_athlete(coach)
+        store.save_athlete(athlete)
+        grant = store.create_coach_grant(coach_slug=coach.slug, athlete_slug=athlete.slug)
+        assert grant.status == "active"
+        revoked = store.revoke_coach_grant(grant.id)
+        assert revoked is not None
+        assert revoked.status == "revoked"
+        assert revoked.revoked_at is not None
+        assert revoked.id == grant.id
+        # persisted
+        reloaded = store.list_coach_grants()[0]
+        assert reloaded.status == "revoked"
+
+    def test_revoke_coach_grant_unknown_id_returns_none(self, store):
+        store.save_athlete(_athlete())
+        assert store.revoke_coach_grant(uuid.uuid4()) is None
+
+    def test_revoke_coach_grant_twice_does_not_error(self, store):
+        coach = _coach_athlete()
+        athlete = _athlete()
+        store.save_athlete(coach)
+        store.save_athlete(athlete)
+        grant = store.create_coach_grant(coach_slug=coach.slug, athlete_slug=athlete.slug)
+        first = store.revoke_coach_grant(grant.id)
+        second = store.revoke_coach_grant(grant.id)
+        assert first is not None
+        assert second is not None
+        assert second.status == "revoked"
 
     # --- coach texts -----------------------------------------------------
 

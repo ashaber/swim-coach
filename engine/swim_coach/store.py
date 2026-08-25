@@ -12,7 +12,7 @@ import shutil
 from abc import ABC, abstractmethod
 from datetime import date, datetime, timezone
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import yaml
 from pydantic import BaseModel
@@ -21,6 +21,7 @@ from swim_coach.models import (
     AllowedEmail,
     Athlete,
     AuthSession,
+    CoachGrant,
     Event,
     Feedback,
     MacroPlan,
@@ -128,13 +129,61 @@ class StoreInterface(ABC):
 
     @abstractmethod
     def update_feedback(
-        self, feedback_id: UUID, *, status: str | None = None, context: dict | None = None
+        self,
+        feedback_id: UUID,
+        *,
+        status: str | None = None,
+        context: dict | None = None,
+        needs_human_review: bool | None = None,
+        coach_athlete_id: UUID | None = None,
+        coach_reply: str | None = None,
+        coach_reply_at: datetime | None = None,
     ) -> Feedback | None:
         """Patch an existing feedback entry: `status`, if given, replaces the
         current value; `context`, if given, is shallow-merged into the
         existing context dict (new keys added, overlapping keys overwritten,
-        untouched keys preserved) -- never a wholesale clobber. Returns the
-        updated entry, or None if `feedback_id` doesn't match any entry."""
+        untouched keys preserved) -- never a wholesale clobber.
+        `needs_human_review`/`coach_athlete_id`/`coach_reply`/
+        `coach_reply_at` are plain scalar fields, each independently
+        settable: same "None means unchanged, given means replace" contract
+        as `status` (NOT a merge like `context`). Returns the updated entry,
+        or None if `feedback_id` doesn't match any entry."""
+        ...
+
+    # --- Coach grants (coach-mode Chunk A) --------------------------------
+
+    @abstractmethod
+    def create_coach_grant(
+        self, *, coach_slug: str, athlete_slug: str, chat_visibility: str = "shared_only"
+    ) -> CoachGrant:
+        """Grant `coach_slug` coach access to `athlete_slug`'s data. Both
+        slugs must be known athletes (raises FileNotFoundError otherwise,
+        matching `load_athlete`'s contract). Raises ValueError if
+        `coach_slug == athlete_slug` -- a grant to yourself is meaningless."""
+        ...
+
+    @abstractmethod
+    def list_coach_grants(
+        self,
+        *,
+        coach_slug: str | None = None,
+        athlete_slug: str | None = None,
+        status: str | None = None,
+    ) -> list[CoachGrant]:
+        """Every coach grant, filtered by any combination of `coach_slug`
+        (grants where this athlete is the coach), `athlete_slug` (grants
+        where this athlete is being coached), and `status` -- or all grants
+        if none are given. Either slug given must be a known athlete (raises
+        FileNotFoundError otherwise, same convention as
+        `list_feedback(athlete=...)`)."""
+        ...
+
+    @abstractmethod
+    def revoke_coach_grant(self, grant_id: UUID) -> CoachGrant | None:
+        """Sets `status="revoked"` and `revoked_at=now()`. Returns the
+        updated grant, or None if no grant has that id. Idempotent-safe:
+        revoking an already-revoked grant just re-sets `revoked_at` again,
+        no special-casing."""
         ...
 
     @abstractmethod
@@ -412,7 +461,15 @@ class FileStore(StoreInterface):
         return None
 
     def update_feedback(
-        self, feedback_id: UUID, *, status: str | None = None, context: dict | None = None
+        self,
+        feedback_id: UUID,
+        *,
+        status: str | None = None,
+        context: dict | None = None,
+        needs_human_review: bool | None = None,
+        coach_athlete_id: UUID | None = None,
+        coach_reply: str | None = None,
+        coach_reply_at: datetime | None = None,
     ) -> Feedback | None:
         entries = self._load_all_feedback()
         updated: Feedback | None = None
@@ -421,12 +478,115 @@ class FileStore(StoreInterface):
                 continue
             new_status = status if status is not None else entry.status
             new_context = {**entry.context, **context} if context is not None else entry.context
-            updated = entry.model_copy(update={"status": new_status, "context": new_context})
+            new_needs_human_review = (
+                needs_human_review if needs_human_review is not None else entry.needs_human_review
+            )
+            new_coach_athlete_id = (
+                coach_athlete_id if coach_athlete_id is not None else entry.coach_athlete_id
+            )
+            new_coach_reply = coach_reply if coach_reply is not None else entry.coach_reply
+            new_coach_reply_at = (
+                coach_reply_at if coach_reply_at is not None else entry.coach_reply_at
+            )
+            updated = entry.model_copy(
+                update={
+                    "status": new_status,
+                    "context": new_context,
+                    "needs_human_review": new_needs_human_review,
+                    "coach_athlete_id": new_coach_athlete_id,
+                    "coach_reply": new_coach_reply,
+                    "coach_reply_at": new_coach_reply_at,
+                }
+            )
             entries[i] = updated
             break
         if updated is None:
             return None
         path = self._feedback_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as fh:
+            for entry in entries:
+                fh.write(json.dumps(entry.model_dump(mode="json")) + "\n")
+        return updated
+
+    # --- Coach grants (coach-mode Chunk A) ----------------------------------
+
+    def _coach_grants_path(self) -> Path:
+        # Deliberately a single file directly under base_dir (a sibling of
+        # every athlete's own slug directory), not per-athlete -- a grant
+        # belongs to two athletes at once (coach and coached), so it doesn't
+        # fit the per-slug-directory convention most FileStore data uses.
+        # Same rationale as `_feedback_path` above.
+        return self.base_dir / "coach_grants.jsonl"
+
+    def _load_all_coach_grants(self) -> list[CoachGrant]:
+        """Every coach grant, file order (not sorted) -- the internal helper
+        `list_coach_grants`/`revoke_coach_grant` use to avoid re-implementing
+        the jsonl read loop, mirroring `_load_all_feedback`."""
+        path = self._coach_grants_path()
+        entries: list[CoachGrant] = []
+        if path.exists():
+            with path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line:
+                        entries.append(CoachGrant.model_validate(json.loads(line)))
+        return entries
+
+    def create_coach_grant(
+        self, *, coach_slug: str, athlete_slug: str, chat_visibility: str = "shared_only"
+    ) -> CoachGrant:
+        if coach_slug == athlete_slug:
+            raise ValueError(f"a grant to yourself is meaningless: {coach_slug!r}")
+        coach_id = self.load_athlete(coach_slug).id  # raises FileNotFoundError if unknown
+        athlete_id = self.load_athlete(athlete_slug).id  # raises FileNotFoundError if unknown
+        grant = CoachGrant(
+            id=uuid4(),
+            coach_athlete_id=coach_id,
+            athlete_id=athlete_id,
+            chat_visibility=chat_visibility,
+            granted_at=datetime.now(timezone.utc),
+        )
+        path = self._coach_grants_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(grant.model_dump(mode="json")) + "\n")
+        return grant
+
+    def list_coach_grants(
+        self,
+        *,
+        coach_slug: str | None = None,
+        athlete_slug: str | None = None,
+        status: str | None = None,
+    ) -> list[CoachGrant]:
+        entries = self._load_all_coach_grants()
+
+        if coach_slug is not None:
+            coach_id = self.load_athlete(coach_slug).id  # raises FileNotFoundError if unknown
+            entries = [g for g in entries if g.coach_athlete_id == coach_id]
+        if athlete_slug is not None:
+            athlete_id = self.load_athlete(athlete_slug).id  # raises FileNotFoundError if unknown
+            entries = [g for g in entries if g.athlete_id == athlete_id]
+        if status is not None:
+            entries = [g for g in entries if g.status == status]
+
+        return entries
+
+    def revoke_coach_grant(self, grant_id: UUID) -> CoachGrant | None:
+        entries = self._load_all_coach_grants()
+        updated: CoachGrant | None = None
+        for i, entry in enumerate(entries):
+            if entry.id != grant_id:
+                continue
+            updated = entry.model_copy(
+                update={"status": "revoked", "revoked_at": datetime.now(timezone.utc)}
+            )
+            entries[i] = updated
+            break
+        if updated is None:
+            return None
+        path = self._coach_grants_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as fh:
             for entry in entries:
