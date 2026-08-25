@@ -397,6 +397,25 @@ class Workout(BaseModel):
     sport_detail: str | None = None
 
 
+class WorkoutCompliance(BaseModel):
+    """Per-workout planned-vs-actual interpretation, computed by
+    `swim_coach.compliance.workout_compliance` -- NOT persisted (a
+    response/computed shape only, hence no `schema_version`).
+
+    Distinct from `load.compliance`'s aggregate weekly-volume-percentage
+    number: this is one workout matched against (at most) one planned
+    `Session`, not a sum across a week. See `compliance.py`'s module
+    docstring for the full distinction and the Phase-1 `intensity_match`
+    gap.
+    """
+
+    matched: bool
+    distance_delta_pct: float | None = None
+    duration_delta_pct: float | None = None
+    intensity_match: Literal["match", "mismatch", "unknown"] = "unknown"
+    quality_summary: str | None = None
+
+
 FeedbackType = Literal["research_question", "feature_request", "comment", "bug"]
 FeedbackSource = Literal["coach", "athlete"]
 
