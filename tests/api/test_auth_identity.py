@@ -422,3 +422,90 @@ def test_daily_chat_cap_returns_429_for_athlete_session(
 
     assert statuses[:2] == [200, 200]
     assert statuses[2] == 429
+
+
+# --- coach mode: resolve_coach_athlete + GET /api/me coach_for -------------
+#
+# Backend-auth-only chunk (backend/app/auth.py + backend/app/routes/auth.py)
+# of coach mode Phase 1. `resolve_athlete`/self-access is untouched by any
+# of this -- these tests exercise the wholly separate `resolve_coach_athlete`
+# code path and the additive `coach_for` field on GET /api/me.
+
+
+def test_resolve_coach_athlete_succeeds_with_active_grant(client, allowlist, store, google):
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    token = _sign_in(client, TIM_EMAIL).json()["token"]
+
+    from app.auth import Principal, resolve_coach_athlete
+
+    principal = Principal(kind="athlete", athlete="tim", token=token, coach_for=frozenset({"renee"}))
+    assert resolve_coach_athlete(principal, "renee") == "renee"
+
+
+def test_resolve_coach_athlete_403_with_no_grant(client, allowlist, store, google):
+    # tim has no grant for renee at all.
+    from app.auth import Principal, resolve_coach_athlete
+
+    principal = Principal(kind="athlete", athlete="tim", token="tok", coach_for=frozenset())
+    with pytest.raises(Exception) as exc_info:
+        resolve_coach_athlete(principal, "renee")
+    assert getattr(exc_info.value, "status_code", None) == 403
+
+
+def test_resolve_coach_athlete_403_with_revoked_grant(client, allowlist, store, google):
+    grant = store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    store.revoke_coach_grant(grant.id)
+
+    # require_auth only ever looks up status="active" grants, so a revoked
+    # grant must never end up in coach_for -- exercise the real end-to-end
+    # path (sign in, then hit GET /api/me) rather than hand-building a
+    # Principal, to prove require_auth itself excludes it.
+    token = _sign_in(client, TIM_EMAIL).json()["token"]
+    me = client.get("/api/me", headers=_bearer(token))
+    assert me.status_code == 200
+    assert me.json()["coach_for"] == []
+
+    from app.auth import Principal, resolve_coach_athlete
+
+    principal = Principal(kind="athlete", athlete="tim", token=token, coach_for=frozenset())
+    with pytest.raises(Exception) as exc_info:
+        resolve_coach_athlete(principal, "renee")
+    assert getattr(exc_info.value, "status_code", None) == 403
+
+
+def test_resolve_coach_athlete_service_token_passes_through(client, allowlist):
+    from app.auth import Principal, resolve_coach_athlete
+
+    principal = Principal(kind="service", athlete=None, token="svc")
+    assert resolve_coach_athlete(principal, "renee") == "renee"
+    assert resolve_coach_athlete(principal, "andrew") == "andrew"
+
+
+def test_resolve_coach_athlete_onboarding_always_403(client, pending_invite, google):
+    token = _sign_in(client, ONBOARDING_EMAIL).json()["token"]
+
+    from app.auth import Principal, resolve_coach_athlete
+
+    principal = Principal(kind="onboarding", athlete=None, token=token)
+    with pytest.raises(Exception) as exc_info:
+        resolve_coach_athlete(principal, "renee")
+    assert getattr(exc_info.value, "status_code", None) == 403
+
+
+def test_me_coach_for_empty_with_no_grants(client, allowlist, google):
+    token = _sign_in(client, TIM_EMAIL).json()["token"]
+    me = client.get("/api/me", headers=_bearer(token))
+    assert me.status_code == 200
+    assert me.json()["coach_for"] == []
+
+
+def test_me_coach_for_lists_active_grants_sorted(client, allowlist, store, google):
+    # tim is granted coach access to both andrew and renee -- coach_for must
+    # list both, sorted.
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    store.create_coach_grant(coach_slug="tim", athlete_slug="andrew")
+
+    token = _sign_in(client, TIM_EMAIL).json()["token"]
+    me = client.get("/api/me", headers=_bearer(token))
+    assert me.status_code == 200
+    assert me.json()["coach_for"] == ["andrew", "renee"]
