@@ -96,6 +96,20 @@ class Principal:
     `allowed_emails` row it's completing without trusting anything the
     request body claims -- the email comes from the server-side session,
     never the client. Always `None` for `service`/`athlete` principals.
+
+    `coach_for` (coach-mode Phase 1) is the set of athlete slugs this
+    principal currently holds an ACTIVE `CoachGrant` for -- i.e. the athlete
+    slugs among `store.list_coach_grants(coach_slug=principal.athlete,
+    status="active")`. It's what `resolve_coach_athlete` below (a wholly
+    separate code path from `resolve_athlete`/self-access) checks to decide
+    whether this principal may act as coach for a requested athlete. Only
+    ever non-empty for `kind == "athlete"`: a `service` principal already has
+    unrestricted cross-athlete access via `resolve_athlete`'s existing
+    behavior, so it has no need of coach grants; an `onboarding` principal
+    403s on every athlete-scoped route regardless (see `resolve_athlete`'s
+    onboarding branch), so it's always empty there too. Defaults to an empty
+    frozenset so every existing `Principal(...)` construction (including in
+    tests) keeps working unchanged.
     """
 
     kind: Literal["service", "athlete", "onboarding"]
@@ -103,6 +117,7 @@ class Principal:
     token: str
     expires_at: datetime | None = None
     pending_email: str | None = None
+    coach_for: frozenset[str] = frozenset()
 
 
 async def require_auth(request: Request) -> Principal:
@@ -144,6 +159,38 @@ async def require_auth(request: Request) -> Principal:
     kind: Literal["athlete", "onboarding"] = (
         "athlete" if session.athlete_slug is not None else "onboarding"
     )
+
+    # coach_for (coach-mode Phase 1) -- only ever populated for kind ==
+    # "athlete" (see Principal.coach_for's docstring). CoachGrant.athlete_id
+    # is a UUID, not a slug, so an active grant has to be resolved back to
+    # the coached athlete's slug before it's useful to a route. Neither
+    # StoreInterface nor FileStore/DbStore has an id->slug lookup or a
+    # "list every athlete" method (that would be new store-layer surface
+    # area, out of scope for this auth-only chunk) -- list_allowed_emails()
+    # is the closest existing capability that enumerates athlete slugs (every
+    # provisioned athlete in this app has an allowlist entry pointing at it),
+    # so build the id->slug map from that plus one load_athlete() per
+    # distinct slug. Call-count for a request from an athlete WITH grants:
+    # one list_coach_grants + one list_allowed_emails + up to
+    # len(distinct allowlisted athlete slugs) load_athlete calls -- fine at
+    # this app's tiny (single-digit athletes) scale; would need a real
+    # id->slug store method if that stops being true. Skipped entirely (zero
+    # extra store calls) for the common case of an athlete with no grants.
+    coach_for: frozenset[str] = frozenset()
+    if kind == "athlete":
+        grants = store.list_coach_grants(coach_slug=session.athlete_slug, status="active")
+        if grants:
+            granted_ids = {g.athlete_id for g in grants}
+            known_slugs = {
+                entry.athlete_slug
+                for entry in store.list_allowed_emails()
+                if entry.athlete_slug is not None
+            }
+            slug_by_id = {store.load_athlete(slug).id: slug for slug in known_slugs}
+            coach_for = frozenset(
+                slug_by_id[athlete_id] for athlete_id in granted_ids if athlete_id in slug_by_id
+            )
+
     return Principal(
         kind=kind,
         athlete=session.athlete_slug,
@@ -152,6 +199,7 @@ async def require_auth(request: Request) -> Principal:
         # Only ever set (and only ever meaningful) for an onboarding
         # session -- see Principal.pending_email's docstring.
         pending_email=session.pending_email if kind == "onboarding" else None,
+        coach_for=coach_for,
     )
 
 
@@ -187,6 +235,43 @@ def resolve_athlete(principal: Principal, requested: str | None, *, default: str
         raise HTTPException(status_code=403, detail="athlete mismatch")
     assert principal.athlete is not None  # invariant: every athlete principal has an athlete
     return principal.athlete
+
+
+def resolve_coach_athlete(principal: Principal, requested: str) -> str:
+    """Applies COACH-mode scoping to a route's `athlete` parameter -- acting
+    as coach for `requested` is a wholly separate mode from self-access, with
+    its own function and its own rules; this never merges into
+    `resolve_athlete` above, which is untouched by this addition.
+
+    - Service principal: passes through UNCHANGED -- `return requested`. A
+      service credential already has unrestricted cross-athlete access
+      everywhere (the existing CLI/scripts/sync-job convenience), same
+      precedent as `resolve_athlete`'s own service-principal case.
+    - Athlete-session principal: `requested` is checked against
+      `principal.coach_for` (the athlete slugs this session holds an ACTIVE
+      `CoachGrant` for -- see `Principal.coach_for`'s docstring and
+      `require_auth`'s population of it). `requested in principal.coach_for`
+      returns `requested`; otherwise a 403 -- this covers both "no grant was
+      ever made" and "a grant existed but was revoked" (a revoked grant is
+      never in `coach_for`, since `require_auth` only ever looks up
+      `status="active"` grants).
+    - Onboarding principal: ALWAYS a 403, same status/detail as
+      `resolve_athlete`'s onboarding branch, for consistency -- an onboarding
+      session has no athlete identity of its own, let alone a coach grant for
+      someone else's.
+
+    Unlike `resolve_athlete`, there is no `default` parameter and `requested`
+    is NOT optional -- there's no sensible "default coachee" to fall through
+    to; every caller (a future coach-mode route) must always name a real
+    athlete slug.
+    """
+    if principal.kind == "service":
+        return requested
+    if principal.kind == "onboarding":
+        raise HTTPException(status_code=403, detail="onboarding session has no athlete")
+    if requested in principal.coach_for:
+        return requested
+    raise HTTPException(status_code=403, detail="no active coach grant for this athlete")
 
 
 class ChatRateLimiter:
