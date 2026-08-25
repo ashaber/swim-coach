@@ -36,17 +36,27 @@ without a multi-turn `history` and without SSE -- persisted as a `Feedback`
 row (`type="question"`) carrying the model's `ai_provisional_answer` and,
 when `direct_to_coach` is set, `needs_human_review=True` so it surfaces in
 the coach's queue (routes/coach.py) even before any AI answer is read.
+
+Both athlete-facing creation paths above additionally schedule a best-effort
+coach-notification email (app/notify.py) via FastAPI `BackgroundTasks`, AFTER
+`store.save_feedback` has already succeeded and the athlete's own response is
+on its way -- so a slow/failing email never affects the feedback save or adds
+latency to the athlete's request. `type="research_question"` (coach-sourced,
+via app/tools.py's `log_open_question` tool) deliberately does NOT get this
+wiring -- a routine AI-flagged research gap notified every time would be
+noisy; Andrew's actual ask was specifically about missing ATHLETE feedback.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from pydantic import ValidationError
 from swim_coach.models import Feedback
+from swim_coach.store import StoreInterface
 
 from app.auth import (
     Principal,
@@ -56,12 +66,32 @@ from app.auth import (
     resolve_athlete,
 )
 from app.claude import ClaudeChat
+from app.config import Settings
 from app.context import build_messages, build_system, find_workout_by_id
+from app.notify import notify_coaches_of_feedback
 from app.routes.chat import get_claude_chat
 from app.store_factory import make_store
 from app.tools import TOOLS_SCHEMA, build_tool_handlers
 
 router = APIRouter()
+
+# The notification callable's shape, exactly `notify_coaches_of_feedback`'s
+# signature minus the keyword-only `client` -- a type alias purely so
+# `get_notifier`'s return annotation reads cleanly.
+Notifier = Callable[[StoreInterface, Settings, Feedback, str], None]
+
+
+def get_notifier(request: Request) -> Notifier:
+    """FastAPI dependency, same seam as routes/chat.py's `get_claude_chat`:
+    routes call the notifier through this indirection so tests can override
+    it (`app.dependency_overrides[get_notifier] = lambda: fake_notifier`)
+    with a spy/fake instead of exercising a real BackgroundTask that would
+    otherwise try to reach the real Resend API. Returns the real
+    `notify_coaches_of_feedback` unless overridden -- no per-app caching
+    needed (unlike `get_claude_chat`'s cached `ClaudeChat`), since this is
+    just a plain function reference, not an object wrapping a client.
+    """
+    return notify_coaches_of_feedback
 
 # Fields the server assigns itself -- stripped from the client payload before
 # constructing the model, same pattern as routes/workouts.py's
@@ -82,8 +112,10 @@ _ATHLETE_SUBMITTABLE_TYPES = {"feature_request", "comment", "bug", "question"}
 async def create_feedback(
     payload: dict[str, Any],
     request: Request,
+    background_tasks: BackgroundTasks,
     athlete: str | None = Query(None),
     principal: Principal = Depends(require_auth),
+    notifier: Notifier = Depends(get_notifier),
 ) -> dict:
     settings = request.app.state.settings
     athlete = resolve_athlete(principal, athlete)
@@ -117,6 +149,10 @@ async def create_feedback(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     store.save_feedback(feedback)
+    # Scheduled AFTER the save succeeds, and runs only after this handler's
+    # own response has been sent (FastAPI BackgroundTasks semantics) -- the
+    # athlete's request never waits on Resend. See app/notify.py.
+    background_tasks.add_task(notifier, store, settings, feedback, athlete)
     return feedback.model_dump(mode="json")
 
 
@@ -190,9 +226,11 @@ async def update_feedback(
 async def ask_question(
     payload: dict[str, Any],
     request: Request,
+    background_tasks: BackgroundTasks,
     athlete: str | None = Query(None),
     principal: Principal = Depends(require_auth),
     claude_chat: ClaudeChat = Depends(get_claude_chat),
+    notifier: Notifier = Depends(get_notifier),
 ) -> dict:
     settings = request.app.state.settings
     athlete = resolve_athlete(principal, athlete)
@@ -258,4 +296,5 @@ async def ask_question(
         ai_provisional_answer=provisional,
     )
     store.save_feedback(feedback)
+    background_tasks.add_task(notifier, store, settings, feedback, athlete)
     return feedback.model_dump(mode="json")

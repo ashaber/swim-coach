@@ -8,12 +8,17 @@ not a fake.
 
 from __future__ import annotations
 
+import uuid
+
+import pytest
 from fakes import (
     auth_headers,
     make_final_message,
     make_text_block,
     make_workout,
 )
+
+from app.routes.feedback import get_notifier
 
 
 def _valid_payload(**overrides) -> dict:
@@ -398,3 +403,66 @@ def test_ask_question_run_once_error_is_502_not_a_crash(client, fake_claude_chat
     )
     assert response.status_code == 502
     assert "error" in response.json()
+
+
+# --- Coach-notification wiring (BackgroundTasks -> app/notify.py) ----------
+#
+# `get_notifier` (routes/feedback.py) is the dependency-injection seam, the
+# SAME pattern as `get_claude_chat` above -- tests override it with a spy so
+# the assertion is "was the notifier scheduled with the right args", never an
+# attempt to peek inside Starlette's BackgroundTasks internals or reach a
+# real Resend API. TestClient runs BackgroundTasks synchronously (as part of
+# the same ASGI call) before `client.post(...)` returns, so the spy's calls
+# are already populated by the time each test asserts on them.
+
+
+@pytest.fixture
+def spy_notifier(app):
+    calls = []
+
+    def fake_notifier(store, settings, feedback, athlete):
+        calls.append({"feedback": feedback, "athlete": athlete})
+
+    app.dependency_overrides[get_notifier] = lambda: fake_notifier
+    yield calls
+    app.dependency_overrides.pop(get_notifier, None)
+
+
+def test_create_feedback_schedules_notification(client, spy_notifier) -> None:
+    response = client.post(
+        "/api/feedback?athlete=renee", json=_valid_payload(), headers=auth_headers()
+    )
+    assert response.status_code == 200
+    assert len(spy_notifier) == 1
+    assert spy_notifier[0]["athlete"] == "renee"
+    assert spy_notifier[0]["feedback"].id == uuid.UUID(response.json()["id"])
+
+
+def test_ask_question_schedules_notification(
+    client, fake_claude_chat_factory, spy_notifier
+) -> None:
+    final = make_final_message([make_text_block("Provisional answer.")], "end_turn")
+    fake_claude_chat_factory([(["Provisional answer."], final)])
+
+    response = client.post(
+        "/api/feedback/questions?athlete=renee",
+        json=_question_payload(),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+    assert len(spy_notifier) == 1
+    assert spy_notifier[0]["athlete"] == "renee"
+    assert spy_notifier[0]["feedback"].id == uuid.UUID(response.json()["id"])
+
+
+def test_create_feedback_notification_failure_does_not_break_response(client) -> None:
+    """A real integration-shaped check: even with the REAL notifier (not the
+    spy above) wired in and no RESEND_API_KEY configured (the test env's
+    default -- see app_env, which never sets it), the feedback save and HTTP
+    response are completely unaffected. This is the behavior the whole
+    BackgroundTasks/never-raises design exists to guarantee."""
+    response = client.post(
+        "/api/feedback?athlete=renee", json=_valid_payload(), headers=auth_headers()
+    )
+    assert response.status_code == 200
+    assert response.json()["body"] == "Please add a pace calculator."

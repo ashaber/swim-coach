@@ -74,6 +74,19 @@ class Settings:
     # require_daily_chat_cap). Exists because the Anthropic key is Andrew's
     # own; once other people can chat, they spend his credits.
     chat_daily_cap_per_athlete: int
+    # Resend (resend.com) API key for coach-notification emails (app/notify.py
+    # -- fires when an athlete submits feedback). OPTIONAL and deliberately
+    # NOT in _REQUIRED_VARS: local dev and CI never have a real Resend
+    # account, and a missing key must never block startup -- notify.py just
+    # no-ops (logged, not an error) when this is unset. `None` (never "") so
+    # every caller can do a plain truthiness check. Defaulted here (not just
+    # in from_env()) so every existing direct `Settings(...)` construction
+    # elsewhere in the test suite keeps working unchanged.
+    resend_api_key: str | None = None
+    # The "from" address on notification emails. Defaults to Resend's own
+    # shared testing-domain sender, which sends without any custom-domain
+    # verification -- fine for this app's low-volume coach-notification use.
+    resend_from_email: str = "onboarding@resend.dev"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -141,6 +154,11 @@ class Settings:
             chat_daily_cap_per_athlete=int(
                 os.environ.get("CHAT_DAILY_CAP_PER_ATHLETE", "50")
             ),
+            # .strip() per this file's secret-handling convention (see the
+            # DATABASE_URL comment above) -- an empty/whitespace-only string
+            # is treated as unset, same as DATABASE_URL's `or None`.
+            resend_api_key=(os.environ.get("RESEND_API_KEY") or "").strip() or None,
+            resend_from_email=os.environ.get("RESEND_FROM_EMAIL", "onboarding@resend.dev"),
         )
 
     def token_matches(self, provided_token: str) -> bool:
