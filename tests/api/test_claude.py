@@ -119,13 +119,13 @@ def test_replayed_assistant_content_drops_sdk_only_null_fields() -> None:
     # "text.parsed_output: Extra inputs are not permitted".
     settings = _settings()
     text = make_text_block("logging a question for research...")
-    tool_use = make_tool_use_block("t1", "log_open_question", {"question": "fueling?"})
+    tool_use = make_tool_use_block("t1", "flag_for_coach_review", {"question": "fueling?"})
     turn_1 = make_final_message([text, tool_use], "tool_use")
     turn_2 = make_final_message([make_text_block("done")], "end_turn")
     client = FakeAnthropicClient([([], turn_1), (["done"], turn_2)])
     chat = ClaudeChat(settings, client=client)
 
-    list(chat.run_streaming([], [], [], {"log_open_question": lambda _in: {"ok": True}}))
+    list(chat.run_streaming([], [], [], {"flag_for_coach_review": lambda _in: {"ok": True}}))
 
     replayed = client.messages.calls[1]["messages"]
     assistant_turn = next(m for m in replayed if m["role"] == "assistant")
