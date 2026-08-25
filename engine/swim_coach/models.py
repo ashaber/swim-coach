@@ -416,7 +416,14 @@ class WorkoutCompliance(BaseModel):
     quality_summary: str | None = None
 
 
-FeedbackType = Literal["research_question", "feature_request", "comment", "bug"]
+FeedbackType = Literal[
+    "research_question", "feature_request", "comment", "bug", "question", "coach_review"
+]
+# "question" -- athlete-initiated, expects an answer (workout-linked via
+# `workout_id`, or direct-to-coach). "coach_review" -- AI-flagged
+# `needs_human_review=True` with no research gap behind it (pain/safety
+# escalations, an explicit "talk to my coach" request, or any other
+# high-stakes judgment call the AI declines to make alone).
 FeedbackSource = Literal["coach", "athlete"]
 
 
@@ -427,7 +434,8 @@ class Feedback(BaseModel):
     the coach's `log_open_question` tool) -- Cloud Run's disk is wiped on
     scale-to-zero, so a plain file was silently losing every logged research
     gap. Generalized here to also carry athlete-submitted feature requests,
-    comments, and bug reports from the app's Feedback tab.
+    comments, and bug reports from the app's Feedback tab, and (coach-mode
+    Chunk A) athlete questions and human-coach review/reply state.
 
     `athlete_id` is nullable: a research question logged by the coach about
     the athlete's own session is still tied to that athlete, but feedback
@@ -435,6 +443,10 @@ class Feedback(BaseModel):
     bag for type-specific extras (e.g. `{"topic": "taper", "expert_mode":
     true}` for a research_question) -- see backend/app/tools.py and
     backend/app/routes/feedback.py for what each type puts there.
+
+    `type` and `needs_human_review` are orthogonal: a `"research_question"`
+    row can ALSO carry `needs_human_review=True` when it's both
+    under-evidenced AND urgent -- one row, not a fork into a second entry.
     """
 
     schema_version: int = 1
@@ -446,6 +458,46 @@ class Feedback(BaseModel):
     context: dict = Field(default_factory=dict)
     status: str = "open"
     created_at: datetime
+    # Human-coach-review fields (coach-mode Chunk A). All optional/defaulted
+    # so every existing Feedback YAML/row (with none of these keys) keeps
+    # validating unchanged -- additive, no schema_version bump needed, same
+    # pattern as `Workout.external_id` above.
+    workout_id: UUID | None = None  # links a comment/question to a Workout
+    needs_human_review: bool = False  # independently settable by AI or athlete
+    ai_provisional_answer: str | None = None
+    coach_athlete_id: UUID | None = None  # which coach (an athlete_id) replied
+    coach_reply: str | None = None
+    coach_reply_at: datetime | None = None
+
+
+CoachGrantStatus = Literal["active", "revoked"]
+ChatVisibility = Literal["full", "shared_only"]
+
+
+class CoachGrant(BaseModel):
+    """One athlete's grant of coach access to another athlete (coaches in
+    this system are themselves athlete accounts -- e.g. Tim, a consulting
+    physiologist with no training data of his own, still has an
+    `athletes/tim/` profile purely to hold a session identity; a
+    `CoachGrant` just references the athletes table twice rather than
+    needing a separate Coach identity model).
+
+    `chat_visibility` controls whether the granted coach can see the
+    athlete's full AI-chat history or only messages the athlete explicitly
+    shares -- defined here now but NOT YET ENFORCED anywhere (chat isn't
+    durably persisted at all yet); defaults to the more private
+    `"shared_only"` so an athlete who never touches the setting doesn't
+    over-share by default once enforcement lands.
+    """
+
+    schema_version: int = 1
+    id: UUID
+    coach_athlete_id: UUID  # the coach's own athlete row
+    athlete_id: UUID        # the athlete being coached
+    status: CoachGrantStatus = "active"
+    chat_visibility: ChatVisibility = "shared_only"
+    granted_at: datetime
+    revoked_at: datetime | None = None
 
 
 class AllowedEmail(BaseModel):
