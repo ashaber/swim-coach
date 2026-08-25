@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   renderHistorySection, renderLogTab, renderSettingsTab, renderUpdateBanner, renderApp,
-  renderHistoryTab,
+  renderHistoryTab, renderTabBar, renderRosterTab,
 } from '../../src/views.js';
 import { isoWeekMonday, addDays, dateKey } from '../../src/plan.js';
 
@@ -954,6 +954,205 @@ describe('renderSettingsTab', () => {
   it('shows the identity error message when sign-in was rejected', () => {
     const html = renderSettingsTab({ ...baseArgs, identityError: 'not authorized yet' });
     expect(html).toContain('not authorized yet');
+  });
+
+  // --- Coach access (grants) section, coach-mode Phase 1 ---
+
+  const grantsBaseArgs = {
+    ...baseArgs,
+    backendConfigured: true,
+    identity: { name: 'Renee', athlete: 'renee', role: 'athlete' },
+    grants: { status: 'idle', data: [], error: null },
+    grantsForm: { coachSlug: '' },
+    grantsSubmit: { status: 'idle', error: null },
+  };
+
+  it('omits the Coach access panel entirely when backend is not configured', () => {
+    const html = renderSettingsTab({ ...baseArgs, backendConfigured: false });
+    expect(html).not.toContain('Coach access');
+    expect(html).not.toContain('data-a="grants:submit"');
+  });
+
+  it('shows the grant form and an empty-state message when there are no grants', () => {
+    const html = renderSettingsTab(grantsBaseArgs);
+    expect(html).toContain('Coach access');
+    expect(html).toContain('data-form="grants"');
+    expect(html).toContain('data-field="coachSlug"');
+    expect(html).toContain('data-a="grants:submit"');
+    expect(html).toContain("haven't granted anyone coach access yet");
+  });
+
+  it('lists an active grant with a Revoke button', () => {
+    const html = renderSettingsTab({
+      ...grantsBaseArgs,
+      grants: {
+        status: 'ready',
+        data: [{
+          id: 'g1', coach_athlete_id: 'abcdef12-3456-7890-abcd-ef1234567890', status: 'active', granted_at: '2026-07-01T00:00:00Z',
+        }],
+        error: null,
+      },
+    });
+    expect(html).toContain('active');
+    expect(html).toContain('data-a="grants:revoke"');
+    expect(html).toContain('data-id="g1"');
+  });
+
+  it('lists a revoked grant without a Revoke button', () => {
+    const html = renderSettingsTab({
+      ...grantsBaseArgs,
+      grants: {
+        status: 'ready',
+        data: [{
+          id: 'g1', coach_athlete_id: 'abcdef12-3456-7890-abcd-ef1234567890', status: 'revoked', granted_at: '2026-07-01T00:00:00Z',
+        }],
+        error: null,
+      },
+    });
+    expect(html).toContain('revoked');
+    expect(html).not.toContain('data-a="grants:revoke"');
+  });
+
+  it('shows the grant-form error message on a failed submit', () => {
+    const html = renderSettingsTab({
+      ...grantsBaseArgs,
+      grantsSubmit: { status: 'error', error: 'no such coach: nobody' },
+    });
+    expect(html).toContain('no such coach: nobody');
+  });
+});
+
+describe('renderTabBar', () => {
+  it('shows every tab, including My Athletes, by default (no second arg)', () => {
+    const html = renderTabBar('plan');
+    expect(html).toContain('data-a="tab:roster"');
+    expect(html).toContain('My Athletes');
+  });
+
+  it('hides the roster tab when hideRoster is true', () => {
+    const html = renderTabBar('plan', { hideRoster: true });
+    expect(html).not.toContain('data-a="tab:roster"');
+  });
+
+  it('shows the roster tab when hideRoster is false', () => {
+    const html = renderTabBar('plan', { hideRoster: false });
+    expect(html).toContain('data-a="tab:roster"');
+  });
+
+  it('marks the active tab', () => {
+    const html = renderTabBar('roster');
+    const match = /<button[^>]*data-a="tab:roster"[^>]*>/.exec(html);
+    expect(match[0]).toContain('active');
+  });
+});
+
+describe('renderRosterTab', () => {
+  const baseArgs = {
+    athletes: { status: 'idle', data: [], error: null },
+    actingAsAthlete: null,
+    workouts: { status: 'idle', data: [], error: null },
+    feedback: { status: 'idle', data: [], error: null },
+    replyDrafts: {},
+    replySubmit: { status: 'idle', error: null, feedbackId: null },
+    backendConfigured: true,
+    online: true,
+  };
+
+  it('shows a backend-needed notice when not configured', () => {
+    const html = renderRosterTab({ ...baseArgs, backendConfigured: false });
+    expect(html).toContain('sign in');
+    expect(html).not.toContain('data-a="roster:select-athlete"');
+  });
+
+  it('shows an empty state when there are no coached athletes', () => {
+    const html = renderRosterTab(baseArgs);
+    expect(html).toContain('coach access');
+  });
+
+  it('lists coached athletes as clickable rows in the list view', () => {
+    const html = renderRosterTab({
+      ...baseArgs,
+      athletes: { status: 'ready', data: [{ slug: 'renee', name: 'Renee' }], error: null },
+    });
+    expect(html).toContain('data-a="roster:select-athlete"');
+    expect(html).toContain('data-slug="renee"');
+    expect(html).toContain('Renee');
+    // No detail-view content while no athlete is selected.
+    expect(html).not.toContain('data-a="roster:back"');
+  });
+
+  it('switches to the detail view (workouts + feedback) once an athlete is selected', () => {
+    const html = renderRosterTab({
+      ...baseArgs,
+      athletes: { status: 'ready', data: [{ slug: 'renee', name: 'Renee' }], error: null },
+      actingAsAthlete: 'renee',
+      workouts: {
+        status: 'ready',
+        data: [{
+          id: 'w1',
+          date: '2026-08-24',
+          sport: 'swim_pool',
+          rpe: 6,
+          duration_min: 45,
+          distance_m: 2000,
+          compliance: {
+            matched: true, distance_delta_pct: 5.2, duration_delta_pct: null, intensity_match: 'unknown', quality_summary: 'No notable quality flags.',
+          },
+        }],
+        error: null,
+      },
+      feedback: {
+        status: 'ready',
+        data: [{
+          id: 'f1', type: 'question', source: 'athlete', body: 'How much fueling for a 4hr swim?', status: 'open', created_at: '2026-08-20T00:00:00Z', needs_human_review: false, ai_provisional_answer: 'Aim for 60-90g carbs/hr.',
+        }],
+        error: null,
+      },
+    });
+    expect(html).toContain('data-a="roster:back"');
+    expect(html).toContain('Renee');
+    // Workout row with compliance rendered plainly.
+    expect(html).toContain('+5.2% distance');
+    expect(html).toContain('unknown intensity');
+    expect(html).toContain('No notable quality flags.');
+    // Feedback entry, its AI provisional answer, and an open reply box
+    // (no coach_reply yet).
+    expect(html).toContain('How much fueling for a 4hr swim?');
+    expect(html).toContain('Aim for 60-90g carbs/hr.');
+    expect(html).toContain('data-form="roster-reply"');
+    expect(html).toContain('data-id="f1"');
+    expect(html).toContain('data-a="roster:reply-submit"');
+  });
+
+  it('shows an existing coach_reply instead of the reply box', () => {
+    const html = renderRosterTab({
+      ...baseArgs,
+      actingAsAthlete: 'renee',
+      feedback: {
+        status: 'ready',
+        data: [{
+          id: 'f1', type: 'question', source: 'athlete', body: 'Q', status: 'answered', created_at: '2026-08-20T00:00:00Z', needs_human_review: false, coach_reply: 'Already answered this.',
+        }],
+        error: null,
+      },
+    });
+    expect(html).toContain('Already answered this.');
+    expect(html).not.toContain('data-form="roster-reply"');
+  });
+
+  it('flags needs_human_review entries visually', () => {
+    const html = renderRosterTab({
+      ...baseArgs,
+      actingAsAthlete: 'renee',
+      feedback: {
+        status: 'ready',
+        data: [{
+          id: 'f1', type: 'coach_review', source: 'athlete', body: 'My shoulder hurts', status: 'open', created_at: '2026-08-20T00:00:00Z', needs_human_review: true,
+        }],
+        error: null,
+      },
+    });
+    expect(html).toContain('Needs review');
   });
 });
 

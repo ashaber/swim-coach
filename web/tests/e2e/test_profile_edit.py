@@ -59,6 +59,17 @@ def _plan_route(route):
     route.fulfill(status=200, content_type='application/json', body=PLAN_STUB, headers=CORS_HEADERS)
 
 
+def _grants_route(route):
+    """Stubs GET **/api/grants* with an empty list -- becoming "configured"
+    and visiting the Settings tab makes main.js's maybeLoadGrants (coach-mode
+    Phase 1) fire this fetch; unmocked, it fails against this file's fake
+    backend origin the same way _plan_route's docstring describes."""
+    if route.request.method == 'OPTIONS':
+        route.fulfill(status=204, headers=CORS_HEADERS)
+        return
+    route.fulfill(status=200, content_type='application/json', body='[]', headers=CORS_HEADERS)
+
+
 def _athlete_route(get_body=None, patch_status=200, patch_body=None):
     """A single `**/api/athlete*` handler covering GET (prefill), PATCH
     (save) and the CORS preflight OPTIONS -- registering one route per test
@@ -95,6 +106,12 @@ def page(request, base_url):
         ctx = browser.new_context(viewport=cfg['vp'], service_workers='block')
         seed_identity(ctx)
         ctx.route('**/api/plan*', _plan_route)
+        # Same "unconditional once the Settings tab is visited" hazard as
+        # /api/athlete's own per-test stubs below, now also true of GET
+        # /api/grants (coach-mode Phase 1's main.js:maybeLoadGrants, wired
+        # in alongside maybeLoadProfile) -- every test in this file visits
+        # Settings, so stub it once here rather than per test.
+        ctx.route('**/api/grants*', _grants_route)
         pg = ctx.new_page()
         js_errors: list[str] = []
         pg.on('pageerror', lambda e: js_errors.append(str(e)))

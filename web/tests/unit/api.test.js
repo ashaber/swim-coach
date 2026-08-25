@@ -4,6 +4,8 @@ import {
   postFeedback, listFeedback, uploadWorkoutFile, exchangeGoogleToken, RequestAccessError, logout,
   onboard, OnboardForbiddenError, OnboardConflictError, downloadGarminFit,
   pushSessionToIntervals,
+  fetchMe, createGrant, listGrants, revokeGrant,
+  listCoachedAthletes, fetchCoachWorkouts, fetchCoachFeedback, replyToCoachFeedback,
 } from '../../src/api.js';
 
 function fakeFetch(body, { ok = true, status = 200 } = {}) {
@@ -534,5 +536,178 @@ describe('pushSessionToIntervals', () => {
 
     expect(result.ok).toBe(false);
     expect(result.status).toBe(409);
+  });
+});
+
+// --- Coach mode (Phase 1): grants + coach-side roster view -----------------
+
+describe('fetchMe', () => {
+  it('GETs /api/me with the bearer header and no athlete query param', async () => {
+    const me = {
+      athlete: 'andrew', name: 'Andrew', role: 'athlete', expires_at: '2026-08-01T00:00:00Z', coach_for: ['renee'],
+    };
+    global.fetch = fakeFetch(me);
+
+    const result = await fetchMe({ baseUrl: 'https://api.example.com', token: 'tok' });
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/me');
+    expect(init.headers.Authorization).toBe('Bearer tok');
+    expect(init.body).toBeUndefined();
+    expect(result).toEqual({ ok: true, data: me });
+  });
+
+  it('returns a normalized error on a non-2xx response', async () => {
+    global.fetch = fakeFetch({ error: 'no athlete identity for this credential' }, { ok: false, status: 403 });
+    const result = await fetchMe({ baseUrl: 'https://api.example.com', token: 'tok' });
+    expect(result).toEqual({ ok: false, error: 'no athlete identity for this credential', status: 403 });
+  });
+});
+
+describe('createGrant', () => {
+  it('POSTs to /api/grants with the athlete query param, bearer header, and coach_slug body', async () => {
+    const grant = { id: 'g1', status: 'active', chat_visibility: 'shared_only' };
+    global.fetch = fakeFetch(grant);
+
+    const result = await createGrant({
+      baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee', coachSlug: 'tim',
+    });
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/grants?athlete=renee');
+    expect(init.method).toBe('POST');
+    expect(init.headers.Authorization).toBe('Bearer tok');
+    expect(JSON.parse(init.body)).toEqual({ coach_slug: 'tim' });
+    expect(result).toEqual({ ok: true, data: grant });
+  });
+
+  it('returns a normalized error on a non-2xx response', async () => {
+    global.fetch = fakeFetch({ error: 'no such coach: nobody' }, { ok: false, status: 404 });
+    const result = await createGrant({
+      baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee', coachSlug: 'nobody',
+    });
+    expect(result).toEqual({ ok: false, error: 'no such coach: nobody', status: 404 });
+  });
+});
+
+describe('listGrants', () => {
+  it('GETs /api/grants with the athlete query param and bearer header, no body', async () => {
+    const grants = [{ id: 'g1', status: 'active' }];
+    global.fetch = fakeFetch(grants);
+
+    const result = await listGrants({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee' });
+
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/grants?athlete=renee');
+    expect(init.method === 'GET' || init.method === undefined).toBe(true);
+    expect(init.body).toBeUndefined();
+    expect(init.headers.Authorization).toBe('Bearer tok');
+    expect(result).toEqual({ ok: true, data: grants });
+  });
+});
+
+describe('revokeGrant', () => {
+  it('PATCHes /api/grants/<grantId> with the athlete query param, bearer header, and status body', async () => {
+    const updated = { id: 'g1', status: 'revoked' };
+    global.fetch = fakeFetch(updated);
+
+    const result = await revokeGrant({
+      baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee', grantId: 'g1',
+    });
+
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/grants/g1?athlete=renee');
+    expect(init.method).toBe('PATCH');
+    expect(init.headers.Authorization).toBe('Bearer tok');
+    expect(JSON.parse(init.body)).toEqual({ status: 'revoked' });
+    expect(result).toEqual({ ok: true, data: updated });
+  });
+
+  it('url-encodes the grant id', async () => {
+    global.fetch = fakeFetch({});
+    await revokeGrant({
+      baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee', grantId: 'a/b c',
+    });
+    const [url] = global.fetch.mock.calls[0];
+    expect(url).toContain('/api/grants/a%2Fb%20c');
+  });
+});
+
+describe('listCoachedAthletes', () => {
+  it('GETs /api/coach/athletes with the bearer header and no athlete query param', async () => {
+    const athletes = [{ slug: 'renee', name: 'Renee' }];
+    global.fetch = fakeFetch(athletes);
+
+    const result = await listCoachedAthletes({ baseUrl: 'https://api.example.com', token: 'tok' });
+
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/coach/athletes');
+    expect(init.headers.Authorization).toBe('Bearer tok');
+    expect(result).toEqual({ ok: true, data: athletes });
+  });
+});
+
+describe('fetchCoachWorkouts', () => {
+  it('GETs /api/coach/athletes/<athlete>/workouts -- athlete as a path segment, no query param', async () => {
+    const workouts = [{ id: 'w1', compliance: { matched: true } }];
+    global.fetch = fakeFetch(workouts);
+
+    const result = await fetchCoachWorkouts({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee' });
+
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/coach/athletes/renee/workouts');
+    expect(url).not.toContain('?athlete=');
+    expect(init.headers.Authorization).toBe('Bearer tok');
+    expect(result).toEqual({ ok: true, data: workouts });
+  });
+
+  it('url-encodes the athlete slug', async () => {
+    global.fetch = fakeFetch([]);
+    await fetchCoachWorkouts({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'a/b' });
+    const [url] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/coach/athletes/a%2Fb/workouts');
+  });
+});
+
+describe('fetchCoachFeedback', () => {
+  it('GETs /api/coach/athletes/<athlete>/feedback -- athlete as a path segment, no query param', async () => {
+    const entries = [{ id: 'f1', body: 'how much fueling for a 4hr swim?' }];
+    global.fetch = fakeFetch(entries);
+
+    const result = await fetchCoachFeedback({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee' });
+
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/coach/athletes/renee/feedback');
+    expect(url).not.toContain('?athlete=');
+    expect(init.headers.Authorization).toBe('Bearer tok');
+    expect(result).toEqual({ ok: true, data: entries });
+  });
+});
+
+describe('replyToCoachFeedback', () => {
+  it('PATCHes /api/coach/athletes/<athlete>/feedback/<feedbackId> with a coach_reply body, no query param', async () => {
+    const updated = { id: 'f1', coach_reply: 'aim for 60-90g carbs/hr' };
+    global.fetch = fakeFetch(updated);
+
+    const result = await replyToCoachFeedback({
+      baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee', feedbackId: 'f1', coachReply: 'aim for 60-90g carbs/hr',
+    });
+
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/coach/athletes/renee/feedback/f1');
+    expect(url).not.toContain('?athlete=');
+    expect(init.method).toBe('PATCH');
+    expect(JSON.parse(init.body)).toEqual({ coach_reply: 'aim for 60-90g carbs/hr' });
+    expect(result).toEqual({ ok: true, data: updated });
+  });
+
+  it('returns a normalized error on a non-2xx response', async () => {
+    global.fetch = fakeFetch({ error: 'coach_reply must be a non-empty string' }, { ok: false, status: 422 });
+    const result = await replyToCoachFeedback({
+      baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee', feedbackId: 'f1', coachReply: '',
+    });
+    expect(result).toEqual({ ok: false, error: 'coach_reply must be a non-empty string', status: 422 });
   });
 });

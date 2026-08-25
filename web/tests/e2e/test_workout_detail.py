@@ -97,6 +97,12 @@ def page(request, base_url):
             '**/api/athlete*',
             _cors_route(200, 'application/json', '{"slug": "renee", "name": "Renee"}'),
         )
+        # Same "unconditional at boot once configured" hazard as GET
+        # /api/plan below, now also true of GET /api/grants (coach-mode
+        # Phase 1's main.js:maybeLoadGrants, wired in alongside
+        # maybeLoadProfile) -- unmocked, it fails on CORS the moment any
+        # test lands on/passes through the Settings tab while configured.
+        ctx.route('**/api/grants*', _cors_route(200, 'application/json', '[]'))
         # Becoming "configured" (see _configure_backend) makes main.js's
         # boot sequence eagerly fire GET /api/plan (loadPlan, unconditional
         # at boot regardless of active tab) -- unmocked, that fetch fails

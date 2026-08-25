@@ -333,6 +333,100 @@ export async function patchAthlete({ baseUrl, token, athlete, payload }) {
   });
 }
 
+// --- Coach mode (Phase 1): grants + coach-side roster view --------------
+// See backend/app/routes/grants.py (athlete-side "who can coach me") and
+// backend/app/routes/coach.py (coach-side "the athletes I coach"). Grants
+// are self-access (?athlete=<slug>, resolve_athlete), the coach routes are
+// path-segment-scoped with NO ?athlete= query param at all (resolved from
+// the caller's own coach_for via resolve_coach_athlete) -- see coach.py's
+// module doc comment for why those two access modes are kept separate.
+
+/** GET {baseUrl}/api/me -- resolves the signed-in session's own identity,
+ * including `coach_for` (the athlete slugs this session holds an active
+ * coach grant for). Unlike POST /api/auth/google's response, this DOES
+ * include coach_for -- see identity.js's signIn, which calls this once
+ * right after exchanging the Google token to fill in that gap. */
+export async function fetchMe({ baseUrl, token }) {
+  return apiRequest({ baseUrl, token, path: '/api/me' });
+}
+
+/** POST {baseUrl}/api/grants?athlete=<athlete> -- grants coach access to
+ * `coachSlug` over `athlete` (self-access: `athlete` must be the caller's
+ * own slug, enforced server-side via resolve_athlete). */
+export async function createGrant({
+  baseUrl, token, athlete, coachSlug,
+}) {
+  return apiRequest({
+    baseUrl,
+    token,
+    path: `/api/grants?athlete=${encodeURIComponent(athlete)}`,
+    method: 'POST',
+    body: { coach_slug: coachSlug },
+  });
+}
+
+/** GET {baseUrl}/api/grants?athlete=<athlete> -- lists the grants `athlete`
+ * has made (i.e. who can coach them), self-access only. */
+export async function listGrants({ baseUrl, token, athlete }) {
+  return apiRequest({ baseUrl, token, path: `/api/grants?athlete=${encodeURIComponent(athlete)}` });
+}
+
+/** PATCH {baseUrl}/api/grants/<grantId>?athlete=<athlete> -- revokes a grant
+ * `athlete` previously made. The route only ever revokes (see grants.py),
+ * but the body still carries `{status: 'revoked'}` for symmetry with the
+ * general PATCH-body convention elsewhere. */
+export async function revokeGrant({
+  baseUrl, token, athlete, grantId,
+}) {
+  return apiRequest({
+    baseUrl,
+    token,
+    path: `/api/grants/${encodeURIComponent(grantId)}?athlete=${encodeURIComponent(athlete)}`,
+    method: 'PATCH',
+    body: { status: 'revoked' },
+  });
+}
+
+/** GET {baseUrl}/api/coach/athletes -- lists the athletes the signed-in
+ * session coaches (derived server-side from the session's own `coach_for`,
+ * NOT an ?athlete= query -- see coach.py's `list_coached_athletes`). */
+export async function listCoachedAthletes({ baseUrl, token }) {
+  return apiRequest({ baseUrl, token, path: '/api/coach/athletes' });
+}
+
+/** GET {baseUrl}/api/coach/athletes/<athlete>/workouts -- the coach-side view
+ * of one coached athlete's logged workouts, each with a nested `compliance`
+ * object (planned-vs-actual, see swim_coach.compliance.workout_compliance).
+ * `athlete` here is a PATH segment (this route has no `?athlete=` query
+ * param at all, unlike every self-access route above) -- confirmed against
+ * backend/app/routes/coach.py. */
+export async function fetchCoachWorkouts({ baseUrl, token, athlete }) {
+  return apiRequest({ baseUrl, token, path: `/api/coach/athletes/${encodeURIComponent(athlete)}/workouts` });
+}
+
+/** GET {baseUrl}/api/coach/athletes/<athlete>/feedback -- the coach-side view
+ * of one coached athlete's durable feedback log (full visibility, no
+ * chat_visibility filtering in Phase 1). Path segment, same as
+ * `fetchCoachWorkouts`. */
+export async function fetchCoachFeedback({ baseUrl, token, athlete }) {
+  return apiRequest({ baseUrl, token, path: `/api/coach/athletes/${encodeURIComponent(athlete)}/feedback` });
+}
+
+/** PATCH {baseUrl}/api/coach/athletes/<athlete>/feedback/<feedbackId> -- a
+ * coach's reply to one of that athlete's feedback entries. Path segments,
+ * same as `fetchCoachWorkouts`/`fetchCoachFeedback`. */
+export async function replyToCoachFeedback({
+  baseUrl, token, athlete, feedbackId, coachReply,
+}) {
+  return apiRequest({
+    baseUrl,
+    token,
+    path: `/api/coach/athletes/${encodeURIComponent(athlete)}/feedback/${encodeURIComponent(feedbackId)}`,
+    method: 'PATCH',
+    body: { coach_reply: coachReply },
+  });
+}
+
 // --- Google sign-in session exchange -----------------------------------------
 // Unlike every function above, `exchangeGoogleToken` throws instead of
 // returning `{ok, ...}` -- identity.js's GSI callback awaits it directly in

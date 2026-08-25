@@ -18,7 +18,7 @@
 // fresh Google sign-in, see main.js's handling of a 401 from any API call).
 
 import log from './log.js';
-import { exchangeGoogleToken, RequestAccessError } from './api.js';
+import { exchangeGoogleToken, fetchMe, RequestAccessError } from './api.js';
 
 const STORAGE_KEY = 'swimcoach_identity';
 const GSI_SCRIPT_SRC = 'https://accounts.google.com/gsi/client';
@@ -39,7 +39,10 @@ export const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID
  * none is stored / the stored value is corrupt or missing required fields.
  * `athlete` is the only field required to trust the stored value -- `name`
  * defaults to '' and `role` to 'athlete' if either is missing, the same
- * defensive posture as before. */
+ * defensive posture as before. `coachFor` (coach-mode Phase 1 -- the athlete
+ * slugs this identity holds an active coach grant for, see api.js's
+ * fetchMe) defaults to `[]` for identities persisted before this field
+ * existed, same defensive pattern as `role`. */
 export function loadIdentity(storage = localStorage) {
   try {
     const raw = storage.getItem(STORAGE_KEY);
@@ -50,6 +53,7 @@ export function loadIdentity(storage = localStorage) {
       name: typeof parsed.name === 'string' ? parsed.name : '',
       athlete: parsed.athlete,
       role: parsed.role ?? 'athlete',
+      coachFor: Array.isArray(parsed.coachFor) ? parsed.coachFor : [],
     };
   } catch {
     return null;
@@ -114,8 +118,8 @@ function loadGsiScript() {
  * Loads the GSI script, initializes it with GOOGLE_CLIENT_ID, and renders
  * the Sign-In button into `buttonEl` (if given). `onIdentity` fires once per
  * credential response with one of:
- *   - `{ ok: true, identity: {name, athlete, role}, token }` -- the identity
- *     has already been persisted via saveIdentity by then; `token` is the
+ *   - `{ ok: true, identity: {name, athlete, role, coachFor}, token }` -- the
+ *     identity has already been persisted via saveIdentity by then; `token` is the
  *     minted session token, for the caller (main.js) to persist into
  *     settings.js's storage.
  *   - `{ ok: true, onboarding: true, token }` -- the Google account is
@@ -170,7 +174,23 @@ export async function signIn({ buttonEl, baseUrl, onIdentity } = {}) {
           onIdentity?.({ ok: true, onboarding: true, token: session.token });
           return;
         }
-        const identity = { name: session.name, athlete: session.athlete, role: session.role };
+        // POST /api/auth/google's response does not include `coach_for`
+        // (only GET /api/me does -- confirmed against backend/app/routes/
+        // auth.py) -- so a second call resolves it before this identity is
+        // considered fully signed in. Best-effort: a failure here (network
+        // blip, backend hiccup) must NOT block sign-in -- coach-mode's
+        // roster tab is a nice-to-have on top of an otherwise complete
+        // identity, so this degrades to `coachFor: []` (the roster tab just
+        // stays hidden, see views.js's renderTabBar) rather than surfacing
+        // an error the athlete can't do anything about.
+        const meResult = await fetchMe({ baseUrl, token: session.token });
+        if (!meResult.ok) {
+          log.warn('identity.fetch_me_failed', { error: meResult.error, status: meResult.status });
+        }
+        const coachFor = meResult.ok && Array.isArray(meResult.data?.coach_for) ? meResult.data.coach_for : [];
+        const identity = {
+          name: session.name, athlete: session.athlete, role: session.role, coachFor,
+        };
         saveIdentity(identity);
         log.info('identity.sign_in_success', { athlete: identity.athlete, role: identity.role });
         onIdentity?.({ ok: true, identity, token: session.token });

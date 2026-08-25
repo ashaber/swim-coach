@@ -234,12 +234,14 @@ def signed_in_page(request, base_url):
         ctx.route('https://accounts.google.com/**', lambda route: route.abort())
         # Being "configured" means main.js's boot sequence eagerly fires
         # GET /api/plan (loadPlan, unconditional at boot) and, once the
-        # Settings tab is visited, GET /api/athlete (maybeLoadProfile) --
-        # stub both with harmless CORS-safe responses so those background
+        # Settings tab is visited, GET /api/athlete (maybeLoadProfile) and
+        # GET /api/grants (maybeLoadGrants, coach-mode Phase 1) -- stub all
+        # three with harmless CORS-safe responses so those background
         # fetches don't surface as uncaught access-control errors in WebKit
         # (this test doesn't care about their content).
         ctx.route('**/api/plan*', _cors_route(200, 'application/json', PLAN_STUB))
         ctx.route('**/api/athlete*', _cors_route(200, 'application/json', '{"slug": "renee", "name": "Renee"}'))
+        ctx.route('**/api/grants*', _cors_route(200, 'application/json', '[]'))
         pg = ctx.new_page()
         js_errors: list[str] = []
         pg.on('pageerror', lambda e: js_errors.append(str(e)))
