@@ -107,6 +107,11 @@ function createRosterState() {
     feedback: { status: 'idle', data: [], error: null },
     replyDrafts: {},
     replySubmit: { status: 'idle', error: null, feedbackId: null },
+    // Slice: null shows the workouts/feedback lists for the acting-as
+    // athlete; a workout id opens that workout's read-only detail view
+    // instead (reuses renderWorkoutDetail -- see views.js's renderRosterTab).
+    // Same convention as state.workoutDetailId (Log/History tabs).
+    workoutDetailId: null,
   };
 }
 
@@ -344,6 +349,7 @@ function renderTabContent() {
         feedback: state.roster.feedback,
         replyDrafts: state.roster.replyDrafts,
         replySubmit: state.roster.replySubmit,
+        workoutDetailId: state.roster.workoutDetailId,
         backendConfigured,
         online: state.online,
       });
@@ -1479,6 +1485,7 @@ function handleSelectCoachedAthlete(slug) {
   state.roster.actingAsAthlete = slug;
   state.roster.workouts = { status: 'idle', data: [], error: null };
   state.roster.feedback = { status: 'idle', data: [], error: null };
+  state.roster.workoutDetailId = null;
   log.info('roster.athlete_selected', { athlete: slug });
   render();
   loadCoachWorkouts(slug); // calls render() itself
@@ -1489,6 +1496,23 @@ function handleBackToRoster() {
   state.roster.actingAsAthlete = null;
   state.roster.workouts = { status: 'idle', data: [], error: null };
   state.roster.feedback = { status: 'idle', data: [], error: null };
+  state.roster.workoutDetailId = null;
+  render();
+}
+
+/** Opens one coached athlete's workout detail view (read-only -- no
+ * embedded chat, see views.js's renderRosterTab, which calls the same
+ * renderWorkoutDetail the athlete's own History tab uses with `chat: null`
+ * so the chat section renders as a no-op). */
+function handleOpenCoachWorkoutDetail(id) {
+  if (!id) return;
+  state.roster.workoutDetailId = id;
+  log.info('roster.workout_detail_opened', { athlete: state.roster.actingAsAthlete, workout: id });
+  render();
+}
+
+function handleCloseCoachWorkoutDetail() {
+  state.roster.workoutDetailId = null;
   render();
 }
 
@@ -1651,6 +1675,13 @@ function setTab(tab) {
     // fires.
     history.back();
   }
+  // Same teardown for the roster tab's workout-detail view -- coming back to
+  // My Athletes should land on the acting-as athlete's lists, not wherever
+  // the coach last was. No history.back() here (unlike Log/Plan's detail
+  // views) -- this one never pushed a history entry.
+  if (state.tab === 'roster' && state.roster.workoutDetailId) {
+    state.roster.workoutDetailId = null;
+  }
   // Same teardown for the Plan tab's session-detail view -- coming back to
   // Plan should land on "This week"/"Next week", not wherever the athlete
   // last was.
@@ -1746,6 +1777,8 @@ async function onAppClick(e) {
     case 'feedback:submit': handleSubmitFeedback(); break;
     case 'roster:select-athlete': handleSelectCoachedAthlete(el.dataset.slug); break;
     case 'roster:back': handleBackToRoster(); break;
+    case 'roster:open-workout': handleOpenCoachWorkoutDetail(el.dataset.id); break;
+    case 'roster:close-workout': handleCloseCoachWorkoutDetail(); break;
     case 'roster:reply-submit': handleSubmitCoachReply(el.dataset.id); break;
     case 'grants:submit': handleGrantSubmit(); break;
     case 'grants:revoke': handleRevokeGrant(el.dataset.id); break;

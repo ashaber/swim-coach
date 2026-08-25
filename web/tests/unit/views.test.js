@@ -1054,8 +1054,30 @@ describe('renderRosterTab', () => {
     feedback: { status: 'idle', data: [], error: null },
     replyDrafts: {},
     replySubmit: { status: 'idle', error: null, feedbackId: null },
+    workoutDetailId: null,
     backendConfigured: true,
     online: true,
+  };
+
+  const workout = {
+    id: 'w1',
+    date: '2026-08-24',
+    sport: 'swim_pool',
+    source: 'fit',
+    rpe: 6,
+    duration_min: 45,
+    distance_m: 2000,
+    avg_pace_s_per_100m: 95,
+    avg_hr: 142,
+    max_hr: 165,
+    notes: null,
+    laps: [],
+    lengths: [],
+    pauses: [],
+    analytics: null,
+    compliance: {
+      matched: true, distance_delta_pct: 5.2, duration_delta_pct: null, intensity_match: 'unknown', quality_summary: 'No notable quality flags.',
+    },
   };
 
   it('shows a backend-needed notice when not configured', () => {
@@ -1153,6 +1175,46 @@ describe('renderRosterTab', () => {
       },
     });
     expect(html).toContain('Needs review');
+  });
+
+  it('renders each workout row as a clickable button opening its detail view', () => {
+    const html = renderRosterTab({
+      ...baseArgs,
+      actingAsAthlete: 'renee',
+      workouts: { status: 'ready', data: [workout], error: null },
+    });
+    expect(html).toContain('data-a="roster:open-workout"');
+    expect(html).toContain('data-id="w1"');
+  });
+
+  it('shows the read-only workout detail view (no embedded chat) when workoutDetailId matches a loaded workout', () => {
+    const html = renderRosterTab({
+      ...baseArgs,
+      athletes: { status: 'ready', data: [{ slug: 'renee', name: 'Renee' }], error: null },
+      actingAsAthlete: 'renee',
+      workouts: { status: 'ready', data: [workout], error: null },
+      workoutDetailId: 'w1',
+    });
+    expect(html).toContain('data-a="roster:close-workout"');
+    // The detail view itself (renderWorkoutDetail's stats section), not
+    // the workouts/feedback list sections.
+    expect(html).toContain('2 km');
+    expect(html).toContain('Pool swim');
+    expect(html).not.toContain('data-a="roster:open-workout"');
+    expect(html).not.toContain('data-a="roster:back"');
+    // No embedded "ask your coach" chat -- that's an athlete-only feature.
+    expect(html).not.toContain('Ask your coach about this workout');
+  });
+
+  it('falls back to the workouts/feedback list when workoutDetailId no longer matches any loaded workout', () => {
+    const html = renderRosterTab({
+      ...baseArgs,
+      actingAsAthlete: 'renee',
+      workouts: { status: 'ready', data: [workout], error: null },
+      workoutDetailId: 'stale-id',
+    });
+    expect(html).toContain('data-a="roster:back"');
+    expect(html).toContain('data-a="roster:open-workout"');
   });
 });
 

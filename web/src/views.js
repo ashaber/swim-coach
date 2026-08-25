@@ -1525,7 +1525,7 @@ function renderCoachWorkoutRow(workout) {
   const qualitySummary = workout.compliance?.quality_summary;
 
   return `
-    <div class="hist-row hist-row-skipped">
+    <button type="button" class="hist-row hist-row-skipped" data-a="roster:open-workout" data-id="${esc(workout.id)}">
       <div class="hist-date mono">${esc(formatShortDate(parseIsoDate(workout.date.slice(0, 10))))}</div>
       <div class="hist-body">
         <div class="hist-title">
@@ -1536,7 +1536,7 @@ function renderCoachWorkoutRow(workout) {
         ${complianceLine ? `<div class="hist-analytics mono">${esc(complianceLine)}</div>` : ''}
         ${qualitySummary ? `<div class="hist-analytics">${esc(qualitySummary)}</div>` : ''}
       </div>
-    </div>`;
+    </button>`;
 }
 
 function renderCoachWorkoutsSection(workouts) {
@@ -1614,7 +1614,8 @@ function rosterShell(body) {
 }
 
 export function renderRosterTab({
-  athletes, actingAsAthlete, workouts, feedback, replyDrafts, replySubmit, backendConfigured, online,
+  athletes, actingAsAthlete, workouts, feedback, replyDrafts, replySubmit, workoutDetailId,
+  backendConfigured, online,
 }) {
   if (!backendConfigured) {
     return rosterShell(renderBackendNeededNotice(
@@ -1625,6 +1626,23 @@ export function renderRosterTab({
   if (actingAsAthlete) {
     const match = (athletes.data || []).find((a) => a.slug === actingAsAthlete);
     const name = match?.name || actingAsAthlete;
+
+    // Read-only workout detail (no embedded chat -- that's an athlete-only
+    // AI feature, see renderWorkoutDetail's `chat` option, which no-ops its
+    // chat section when `chat` is omitted/null, same as passing no chat
+    // here). Falls through to the normal workouts/feedback view if the id
+    // no longer matches anything already loaded (e.g. a stale id after a
+    // refresh), same "just show the list" fallback History's own detail
+    // view uses.
+    if (workoutDetailId) {
+      const workout = (workouts.data || []).find((w) => w.id === workoutDetailId);
+      if (workout) {
+        return rosterShell(`
+          <div class="s-head"><button type="button" class="btn-ghost" data-a="roster:close-workout">&larr; Back to ${esc(name)}'s workouts</button></div>
+          ${renderWorkoutDetail(workout, { online })}`);
+      }
+    }
+
     return rosterShell(`
       <div class="s-head"><button type="button" class="btn-ghost" data-a="roster:back">&larr; Back to My Athletes</button></div>
       <p class="sub">Coaching <b>${esc(name)}</b> (${esc(actingAsAthlete)}).</p>
