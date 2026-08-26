@@ -159,29 +159,105 @@ def test_get_plan_summary_matches_engine_summarize_shape(athletes_dir) -> None:
     assert "compliance_pct" in result
 
 
-def test_log_open_question_calls_save_feedback_with_research_question_shape(
+def test_flag_for_coach_review_research_gap_only_creates_research_question(
     athletes_dir, run_tag
 ) -> None:
     spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir))
     handlers = build_tool_handlers(spy, slug="renee", expert_mode=True)
 
     question = f"is there swim-specific taper research beyond the swim-adapted cycling data? [{run_tag}]"
-    result = handlers["log_open_question"]({"question": question, "topic": "taper"})
+    result = handlers["flag_for_coach_review"](
+        {"question": question, "topic": "taper", "research_gap": True}
+    )
 
     assert result["logged"] is True
+    assert result["type"] == "research_question"
     assert len(spy.saved) == 1
     entry = spy.saved[0]
     assert entry.type == "research_question"
     assert entry.source == "coach"
     assert entry.body == question
+    assert entry.needs_human_review is False
     assert entry.context == {"topic": "taper", "expert_mode": True}
     assert entry.athlete_id == spy.load_athlete("renee").id
 
 
-def test_log_open_question_requires_question_and_topic(athletes_dir) -> None:
+def test_flag_for_coach_review_needs_human_review_only_creates_coach_review(
+    athletes_dir, run_tag
+) -> None:
     spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir))
     handlers = build_tool_handlers(spy, slug="renee", expert_mode=False)
-    result = handlers["log_open_question"]({"question": "", "topic": ""})
+
+    question = f"athlete reported sharp shoulder pain during main set [{run_tag}]"
+    result = handlers["flag_for_coach_review"](
+        {
+            "question": question,
+            "topic": "safety",
+            "needs_human_review": True,
+            "reason": "pain report",
+        }
+    )
+
+    assert result["logged"] is True
+    assert result["type"] == "coach_review"
+    assert len(spy.saved) == 1
+    entry = spy.saved[0]
+    assert entry.type == "coach_review"
+    assert entry.source == "coach"
+    assert entry.body == question
+    assert entry.needs_human_review is True
+    assert entry.context["reason"] == "pain report"
+    assert entry.context["topic"] == "safety"
+
+
+def test_flag_for_coach_review_both_flags_true_is_research_question_with_review_set(
+    athletes_dir, run_tag
+) -> None:
+    # The whole point of the feature: under-evidenced AND urgent, one row.
+    spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir))
+    handlers = build_tool_handlers(spy, slug="renee", expert_mode=False)
+
+    question = f"under-evidenced and urgent taper question [{run_tag}]"
+    result = handlers["flag_for_coach_review"](
+        {
+            "question": question,
+            "topic": "taper",
+            "research_gap": True,
+            "needs_human_review": True,
+            "reason": "blocking a real training decision this week",
+        }
+    )
+
+    assert result["logged"] is True
+    assert result["type"] == "research_question"
+    entry = spy.saved[0]
+    assert entry.type == "research_question"
+    assert entry.needs_human_review is True
+    assert entry.context["reason"] == "blocking a real training decision this week"
+
+
+def test_flag_for_coach_review_requires_at_least_one_flag(athletes_dir) -> None:
+    spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir))
+    handlers = build_tool_handlers(spy, slug="renee", expert_mode=False)
+    result = handlers["flag_for_coach_review"]({"question": "q", "topic": "t"})
+    assert result == {"error": "at least one of research_gap or needs_human_review must be true"}
+    assert spy.saved == []
+
+
+def test_flag_for_coach_review_needs_human_review_without_reason_is_an_error(athletes_dir) -> None:
+    spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir))
+    handlers = build_tool_handlers(spy, slug="renee", expert_mode=False)
+    result = handlers["flag_for_coach_review"](
+        {"question": "q", "topic": "safety", "needs_human_review": True}
+    )
+    assert "error" in result
+    assert spy.saved == []
+
+
+def test_flag_for_coach_review_requires_question_and_topic(athletes_dir) -> None:
+    spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir))
+    handlers = build_tool_handlers(spy, slug="renee", expert_mode=False)
+    result = handlers["flag_for_coach_review"]({"question": "", "topic": "", "research_gap": True})
     assert "error" in result
     assert spy.saved == []
 

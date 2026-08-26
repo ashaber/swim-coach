@@ -75,7 +75,7 @@ class SpyFeedbackStore:
     """Wraps a real StoreInterface, delegating every call to it (so real
     engine tests -- propose_adaptation/get_plan_summary -- work unchanged)
     but also recording every `save_feedback` call in `.saved`, so
-    test_tools.py can assert what `_handle_log_open_question` persisted
+    test_tools.py can assert what `_handle_flag_for_coach_review` persisted
     without depending on jsonl-file mechanics."""
 
     def __init__(self, inner: Any) -> None:

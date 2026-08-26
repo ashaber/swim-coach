@@ -53,7 +53,7 @@ def test_request_shape_includes_tools(client, fake_claude_chat_factory) -> None:
     assert tool_names == {
         "propose_adaptation",
         "get_plan_summary",
-        "log_open_question",
+        "flag_for_coach_review",
         "get_workouts",
         "sync_workouts",
         "push_to_garmin",
@@ -210,12 +210,14 @@ def test_tool_loop_propose_adaptation_does_not_persist(client, fake_claude_chat_
     assert not week_file.exists()
 
 
-def test_tool_loop_log_open_question_persists_feedback(
+def test_tool_loop_flag_for_coach_review_persists_feedback(
     client, fake_claude_chat_factory, athletes_dir, run_tag
 ) -> None:
     question = f"does cold-water acclimation change fueling needs? [{run_tag}]"
     tool_use = make_tool_use_block(
-        "toolu_3", "log_open_question", {"question": question, "topic": "nutrition"}
+        "toolu_3",
+        "flag_for_coach_review",
+        {"question": question, "topic": "nutrition", "research_gap": True},
     )
     turn_1 = make_final_message([tool_use], "tool_use")
     turn_2 = make_final_message(
