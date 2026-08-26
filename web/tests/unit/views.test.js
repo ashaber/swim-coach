@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   renderHistorySection, renderLogTab, renderSettingsTab, renderUpdateBanner, renderApp,
-  renderHistoryTab, renderTabBar, renderRosterTab,
+  renderHistoryTab, renderTabBar, renderRosterTab, renderLoadChart,
 } from '../../src/views.js';
 import { isoWeekMonday, addDays, dateKey } from '../../src/plan.js';
 
@@ -1616,6 +1616,71 @@ describe('renderHistoryTab', () => {
       ...base,
       feed: [{ kind: 'skipped', date: '2026-08-18', key: 's:s-nasty', session: nasty }],
     });
+    expect(html).not.toContain('<img src=x');
+    expect(html).toContain('&lt;img');
+  });
+});
+
+describe('renderLoadChart', () => {
+  const readySeries = [
+    ['2026-07-01', 10.0, 5.0, 5.0],
+    ['2026-07-02', 10.5, 6.0, 4.5],
+    ['2026-07-03', 11.0, 4.0, 7.0],
+  ];
+
+  it('renders nothing for idle or missing load state', () => {
+    expect(renderLoadChart({ status: 'idle', data: null, error: null })).toBe('');
+    expect(renderLoadChart(undefined)).toBe('');
+    expect(renderLoadChart(null)).toBe('');
+  });
+
+  it('shows a loading message while loading with no data yet', () => {
+    const html = renderLoadChart({ status: 'loading', data: null, error: null });
+    expect(html).toContain('Loading training load');
+  });
+
+  it('surfaces an error message', () => {
+    const html = renderLoadChart({ status: 'error', data: null, error: 'network down' });
+    expect(html).toContain('network down');
+  });
+
+  it('shows an honest empty-data message rather than a broken chart for an empty series', () => {
+    const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: [] }, error: null });
+    expect(html).toContain('Not enough logged training');
+    expect(html).not.toContain('<svg');
+  });
+
+  it('renders the chart, its three lines, and clear labels for a real series', () => {
+    const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: readySeries }, error: null });
+    expect(html).toContain('<svg');
+    expect(html).toContain('load-chart-line-ctl');
+    expect(html).toContain('load-chart-line-atl');
+    expect(html).toContain('load-chart-line-tsb');
+    expect(html).toContain('CTL (fitness)');
+    expect(html).toContain('ATL (fatigue)');
+    expect(html).toContain('TSB (form)');
+    // x-axis date labels are present in some human-readable form.
+    expect(html).toMatch(/Jul \d/);
+  });
+
+  it('renders the race-day reference band with an honest, non-authoritative caption', () => {
+    const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: readySeries }, error: null });
+    expect(html).toContain('load-chart-band');
+    expect(html).toContain('Race-day TSB reference band');
+    // Must frame the band as a cycling-coaching convention, not a
+    // swim-specific or peer-reviewed target -- the honesty requirement
+    // from CLAUDE.md's evidence-discipline standard, applied to UI copy.
+    expect(html.toLowerCase()).toContain('cycling');
+    expect(html.toLowerCase()).toContain('not a swim-specific or peer-reviewed target');
+  });
+
+  it('acknowledges the CTL/ATL time constants are provisional cycling-borrowed values', () => {
+    const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: readySeries }, error: null });
+    expect(html.toLowerCase()).toContain('not yet verified for swimming');
+  });
+
+  it('escapes hostile content in the error message', () => {
+    const html = renderLoadChart({ status: 'error', data: null, error: '<img src=x onerror=alert(1)>' });
     expect(html).not.toContain('<img src=x');
     expect(html).toContain('&lt;img');
   });

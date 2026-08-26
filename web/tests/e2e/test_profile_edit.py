@@ -59,6 +59,19 @@ def _plan_route(route):
     route.fulfill(status=200, content_type='application/json', body=PLAN_STUB, headers=CORS_HEADERS)
 
 
+PLAN_LOAD_STUB = '{"athlete":"renee","weeks":12,"ctl_atl_tsb":[]}'
+
+
+def _plan_load_route(route):
+    """Stubs GET **/api/plan/load* -- fires unconditionally at boot
+    alongside GET /api/plan (main.js's loadPlanLoad) -- same hazard
+    _plan_route's own docstring describes."""
+    if route.request.method == 'OPTIONS':
+        route.fulfill(status=204, headers=CORS_HEADERS)
+        return
+    route.fulfill(status=200, content_type='application/json', body=PLAN_LOAD_STUB, headers=CORS_HEADERS)
+
+
 def _grants_route(route):
     """Stubs GET **/api/grants* with an empty list -- becoming "configured"
     and visiting the Settings tab makes main.js's maybeLoadGrants (coach-mode
@@ -106,6 +119,7 @@ def page(request, base_url):
         ctx = browser.new_context(viewport=cfg['vp'], service_workers='block')
         seed_identity(ctx)
         ctx.route('**/api/plan*', _plan_route)
+        ctx.route('**/api/plan/load*', _plan_load_route)
         # Same "unconditional once the Settings tab is visited" hazard as
         # /api/athlete's own per-test stubs below, now also true of GET
         # /api/grants (coach-mode Phase 1's main.js:maybeLoadGrants, wired

@@ -25,6 +25,7 @@ CORS_HEADERS = {
 PLAN_STUB = json.dumps({
     'slug': 'renee', 'athlete': {'name': 'Renee'}, 'events': [], 'macro': {'blocks': []}, 'weeks': [],
 })
+PLAN_LOAD_STUB = json.dumps({'athlete': 'renee', 'weeks': 12, 'ctl_atl_tsb': []})
 
 EXISTING_GRANT = {
     'id': 'g1', 'coach_athlete_id': 'abcdef12-3456-7890-abcd-ef1234567890',
@@ -81,6 +82,10 @@ def page(request, base_url):
         seed_identity(ctx)
         seed_settings(ctx)
         ctx.route('**/api/plan*', _cors_route(200, 'application/json', PLAN_STUB))
+        # GET /api/plan/load fires unconditionally at boot alongside GET
+        # /api/plan (main.js's loadPlanLoad, feeding views.js's
+        # renderLoadChart) -- unmocked, it fails on CORS the same way.
+        ctx.route('**/api/plan/load*', _cors_route(200, 'application/json', PLAN_LOAD_STUB))
         ctx.route(
             '**/api/athlete*',
             _cors_route(200, 'application/json', '{"slug": "renee", "name": "Renee"}'),

@@ -68,6 +68,11 @@ def _make_page(pw, cfg, weeks):
     body = _plan_body(weeks)
     ctx.route('**/api/plan*', lambda route: route.fulfill(
         status=200, content_type='application/json', body=body))
+    # GET /api/plan/load fires unconditionally at boot alongside GET
+    # /api/plan (main.js's loadPlanLoad) -- same treatment as the stub above.
+    ctx.route('**/api/plan/load*', lambda route: route.fulfill(
+        status=200, content_type='application/json',
+        body='{"athlete":"renee","weeks":12,"ctl_atl_tsb":[]}'))
     return browser, ctx
 
 
