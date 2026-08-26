@@ -5,6 +5,8 @@ import {
   pickCurrentAndNextWeek, sortedByIsoWeek, daysUntil,
   priorityEvent, macroTargetEvent, currentBlockIndex, longSwimLadder, sessionsByDay,
   parseStructureBlocks, parseMainSetIntervals, renderStructuredWorkout,
+  splitStructuredRationale, sessionZoneDistribution, formatZoneDistributionSummary,
+  stepCoachingCue, ZONE_GLOSSARY, TERM_GLOSSARY,
 } from '../../src/plan.js';
 
 describe('isoWeekMonday', () => {
@@ -380,6 +382,49 @@ describe('renderStructuredWorkout', () => {
     ]);
   });
 
+  it('an rpe-basis target with a number renders "RPE {n}", not the bare literal "RPE" (bug fix)', () => {
+    const structured = {
+      items: [
+        {
+          kind: 'step', label: 'Easy recovery swim', role: 'steady', duration_kind: 'distance_m',
+          duration_value: 1000, target: { basis: 'rpe', low: 3, high: null }, load: null,
+          modality: 'swim', stroke: null, equipment: [], exercise_name: null,
+        },
+      ],
+    };
+    expect(renderStructuredWorkout(structured)).toEqual([
+      { depth: 0, kind: 'step', text: 'Easy recovery swim', detail: '1000m · @ RPE 3' },
+    ]);
+  });
+
+  it('an rpe-basis target with a low/high range renders "RPE {low}-{high}"', () => {
+    const structured = {
+      items: [
+        {
+          kind: 'step', label: 'Steady swim', role: 'steady', duration_kind: 'distance_m',
+          duration_value: 1000, target: { basis: 'rpe', low: 4, high: 6 }, load: null,
+          modality: 'swim', stroke: null, equipment: [], exercise_name: null,
+        },
+      ],
+    };
+    const lines = renderStructuredWorkout(structured);
+    expect(lines[0].detail).toBe('1000m · @ RPE 4-6');
+  });
+
+  it('an rpe-basis target with no number at all still falls back to the bare "RPE" label (still meaningful on its own)', () => {
+    const structured = {
+      items: [
+        {
+          kind: 'step', label: 'Easy recovery swim', role: 'steady', duration_kind: 'distance_m',
+          duration_value: 1000, target: { basis: 'rpe', low: null, high: null }, load: null,
+          modality: 'swim', stroke: null, equipment: [], exercise_name: null,
+        },
+      ],
+    };
+    const lines = renderStructuredWorkout(structured);
+    expect(lines[0].detail).toBe('1000m · @ RPE');
+  });
+
   it('returns [] for a missing/empty structured tree (regression: fallback callers must be able to rely on this)', () => {
     expect(renderStructuredWorkout(null)).toEqual([]);
     expect(renderStructuredWorkout(undefined)).toEqual([]);
@@ -427,6 +472,312 @@ describe('renderStructuredWorkout', () => {
     expect(lines[0].kind).toBe('repeat');
     expect(lines[0].referenceUrl).toBeUndefined();
     expect(lines[1].referenceUrl).toBe('https://www.rehabhero.ca/exercise/goblet-squat');
+  });
+});
+
+describe('stepCoachingCue', () => {
+  it('returns null for a swim step whose label matches no known set-type vocabulary', () => {
+    expect(stepCoachingCue({
+      kind: 'step', label: '100 build', role: 'interval', modality: 'swim',
+    })).toBeNull();
+  });
+
+  it('matches a real broken-distance main-set label (base-1-broken-distance-lite\'s real narrative)', () => {
+    const cue = stepCoachingCue({
+      kind: 'step', modality: 'swim',
+      label: '6 x (200m + 200m) @ Z2 (1:35-1:39/100m), 10s rest between segments / 15s between reps -- broken-distance-lite aerobic volume, same total distance and pace as straight reps (base-block emphasis).',
+    });
+    expect(cue).toMatch(/broken-distance/i);
+  });
+
+  it('matches a real descend main-set label (build-0-descend\'s real narrative)', () => {
+    const cue = stepCoachingCue({
+      kind: 'step', modality: 'swim',
+      label: '9 x 300m broken-distance, descend 1-9 from Z3 (1:32-1:34/100m) toward Z4 (1:29-1:31/100m) on the last rep, negative-split each repeat -- race-pace-adjacent emphasis (build block).',
+    });
+    // "descend"/"negative-split"/"broken-distance" are all present -- the
+    // more specific "negative-split" pattern is checked before the generic
+    // "descend" one, so that's the cue that wins here (first-match-wins).
+    expect(cue).toMatch(/negative-split/i);
+  });
+
+  it('picks the pull-ladder-specific cue over the generic ladder cue for a real pull-ladder label', () => {
+    const cue = stepCoachingCue({
+      kind: 'step', modality: 'swim',
+      label: 'descending-distance pull ladder -- 400/300/200/100 -- each rung negative-split from Z3 (1:32-1:34/100m) toward Z4 (1:29-1:31/100m) as the distance shrinks, 20s rest between rungs.',
+    });
+    expect(cue).toMatch(/Pull ladder/);
+  });
+
+  it('picks the kick-ladder-specific cue over the generic ladder cue for a real kick-ladder label', () => {
+    const cue = stepCoachingCue({
+      kind: 'step', modality: 'swim',
+      label: 'descending-distance kick ladder -- 200/100/50/25 -- same sprint-character effort held on every rung.',
+    });
+    expect(cue).toMatch(/Kick ladder/);
+  });
+
+  it('matches an exact canonical strength exercise_name (plan.py\'s STRENGTH_CORE_EXERCISES)', () => {
+    const cue = stepCoachingCue({
+      kind: 'step', modality: 'strength', label: 'Internal rotation at 90° abduction',
+      exercise_name: 'Internal rotation at 90° abduction',
+    });
+    expect(cue).toMatch(/rotate/i);
+  });
+
+  it('does NOT keyword-match a strength step\'s label against the swim vocabulary (e.g. "Band pull-apart" must not get the swim pull-set cue)', () => {
+    expect(stepCoachingCue({
+      kind: 'step', modality: 'strength', label: 'Band pull-apart', exercise_name: 'Band pull-apart',
+    })).toBeNull();
+  });
+
+  it('returns null for a strength step whose exercise_name is not one of the canonical exercises', () => {
+    expect(stepCoachingCue({
+      kind: 'step', modality: 'strength', label: 'Kettlebell swing', exercise_name: 'Kettlebell swing',
+    })).toBeNull();
+  });
+
+  it('returns null for a null/undefined step', () => {
+    expect(stepCoachingCue(null)).toBeNull();
+    expect(stepCoachingCue(undefined)).toBeNull();
+  });
+});
+
+describe('renderStructuredWorkout: per-step coaching cue threaded onto matching lines', () => {
+  it('attaches cue to a step whose label matches the vocabulary, leaves it unset on one that doesn\'t (regression: existing no-cue line shapes must stay exact)', () => {
+    const structured = {
+      items: [
+        {
+          kind: 'step', label: 'Easy swim', role: 'warmup', duration_kind: 'distance_m',
+          duration_value: 400, target: { basis: 'zone', zone: 'Z2' }, load: null,
+          modality: 'swim', stroke: null, equipment: [], exercise_name: null,
+        },
+        {
+          kind: 'step', modality: 'swim', role: 'interval', duration_kind: 'distance_m', duration_value: 800,
+          label: '4 x 200m broken-distance, descend 1-4 from Z3 toward Z4 -- race-pace-adjacent emphasis.',
+          target: { basis: 'zone', zone: 'Z3' }, load: null, stroke: null, equipment: [], exercise_name: null,
+        },
+      ],
+    };
+    const lines = renderStructuredWorkout(structured);
+    expect(lines[0].cue).toBeUndefined(); // "Easy swim" matches no vocabulary
+    expect(lines[1].cue).toMatch(/descend/i);
+  });
+
+  it('a repeat header never carries a cue, even when its child steps do', () => {
+    const structured = {
+      items: [
+        {
+          kind: 'repeat', repeat_mode: 'count', count: 2, duration_s: null, interval_s: null,
+          steps: [
+            {
+              kind: 'step', label: 'Internal rotation at 90° abduction', role: 'steady', duration_kind: 'reps',
+              duration_value: 10, target: null, load: { basis: 'bodyweight', value: null },
+              modality: 'strength', stroke: null, equipment: [], exercise_name: 'Internal rotation at 90° abduction',
+            },
+          ],
+        },
+      ],
+    };
+    const lines = renderStructuredWorkout(structured);
+    expect(lines[0].kind).toBe('repeat');
+    expect(lines[0].cue).toBeUndefined();
+    expect(lines[1].cue).toMatch(/rotate/i);
+  });
+});
+
+describe('splitStructuredRationale', () => {
+  it('returns items unchanged and rationale null when there is no trailing Why step', () => {
+    const structured = { items: [{ kind: 'step', label: 'Easy swim', role: 'warmup' }] };
+    expect(splitStructuredRationale(structured)).toEqual({ items: structured.items, rationale: null });
+  });
+
+  it('strips a trailing top-level Why step and exposes its text with the "Why:" prefix removed (plan.py\'s real shape)', () => {
+    const warmup = { kind: 'step', label: 'Easy swim', role: 'warmup' };
+    const mainSet = { kind: 'step', label: '8 x 300m @ Z2', role: 'interval' };
+    const why = {
+      kind: 'step', role: 'open', duration_kind: 'open',
+      label: 'Why: continuous aerobic-volume emphasis (base-block phase).',
+    };
+    const structured = { items: [warmup, mainSet, why] };
+    const result = splitStructuredRationale(structured);
+    expect(result.items).toEqual([warmup, mainSet]);
+    expect(result.rationale).toBe('continuous aerobic-volume emphasis (base-block phase).');
+  });
+
+  it('leaves a "Why:"-labelled step in place when it is nested inside a repeat, not top-level', () => {
+    const nestedWhy = { kind: 'step', role: 'open', label: 'Why: nested, not session rationale.' };
+    const structured = {
+      items: [{ kind: 'repeat', repeat_mode: 'count', count: 2, steps: [nestedWhy] }],
+    };
+    const result = splitStructuredRationale(structured);
+    expect(result.items).toEqual(structured.items);
+    expect(result.rationale).toBeNull();
+  });
+
+  it('does not match a role="open" step whose label merely contains "Why" without the leading "Why:" prefix', () => {
+    const structured = { items: [{ kind: 'step', role: 'open', label: "Here's why this matters." }] };
+    expect(splitStructuredRationale(structured)).toEqual({ items: structured.items, rationale: null });
+  });
+
+  it('returns { items: [], rationale: null } for a missing/empty structured tree', () => {
+    expect(splitStructuredRationale(null)).toEqual({ items: [], rationale: null });
+    expect(splitStructuredRationale(undefined)).toEqual({ items: [], rationale: null });
+    expect(splitStructuredRationale({ items: [] })).toEqual({ items: [], rationale: null });
+  });
+});
+
+describe('sessionZoneDistribution', () => {
+  it('sums distance per zone across plain top-level steps, ordered Z1..Z5', () => {
+    const structured = {
+      items: [
+        {
+          kind: 'step', label: 'Easy swim', role: 'warmup', duration_kind: 'distance_m',
+          duration_value: 400, target: { basis: 'zone', zone: 'Z2' }, modality: 'swim',
+        },
+        {
+          kind: 'step', label: 'Main set', role: 'interval', duration_kind: 'distance_m',
+          duration_value: 1500, target: { basis: 'zone', zone: 'Z3' }, modality: 'swim',
+        },
+        {
+          kind: 'step', label: 'Cool down', role: 'cooldown', duration_kind: 'distance_m',
+          duration_value: 200, target: { basis: 'zone', zone: 'Z2' }, modality: 'swim',
+        },
+      ],
+    };
+    expect(sessionZoneDistribution(structured)).toEqual([
+      { bucket: 'Z2', distance_m: 600, duration_s: null },
+      { bucket: 'Z3', distance_m: 1500, duration_s: null },
+    ]);
+  });
+
+  it('a resolved (basis="absolute") step still buckets by its surviving zone tag (resolve_template never clears `zone`)', () => {
+    const structured = {
+      items: [
+        {
+          kind: 'step', label: 'Main set', role: 'interval', duration_kind: 'distance_m',
+          duration_value: 900, target: { basis: 'absolute', zone: 'Z4', low: 89, high: 91 }, modality: 'swim',
+        },
+      ],
+    };
+    expect(sessionZoneDistribution(structured)).toEqual([
+      { bucket: 'Z4', distance_m: 900, duration_s: null },
+    ]);
+  });
+
+  it('buckets an untagged percent_css target as "% CSS", an rpe target as "RPE", and a targetless step as "Open"', () => {
+    const structured = {
+      items: [
+        { kind: 'step', label: 'a', duration_kind: 'distance_m', duration_value: 100, target: { basis: 'percent_css', low: 135 }, modality: 'swim' },
+        { kind: 'step', label: 'b', duration_kind: 'distance_m', duration_value: 200, target: { basis: 'rpe', low: 3 }, modality: 'swim' },
+        { kind: 'step', label: 'c', duration_kind: 'distance_m', duration_value: 300, target: null, modality: 'swim' },
+      ],
+    };
+    expect(sessionZoneDistribution(structured)).toEqual([
+      { bucket: '% CSS', distance_m: 100, duration_s: null },
+      { bucket: 'RPE', distance_m: 200, duration_s: null },
+      { bucket: 'Open', distance_m: 300, duration_s: null },
+    ]);
+  });
+
+  it('multiplies a count-based repeat\'s children by its count', () => {
+    const structured = {
+      items: [
+        {
+          kind: 'repeat', repeat_mode: 'count', count: 4, steps: [
+            { kind: 'step', label: '100 build', duration_kind: 'distance_m', duration_value: 100, target: { basis: 'zone', zone: 'Z3' }, modality: 'swim' },
+          ],
+        },
+      ],
+    };
+    expect(sessionZoneDistribution(structured)).toEqual([
+      { bucket: 'Z3', distance_m: 400, duration_s: null },
+    ]);
+  });
+
+  it('does not multiply a for_duration/amrap repeat\'s children (no well-defined repetition count)', () => {
+    const structured = {
+      items: [
+        {
+          kind: 'repeat', repeat_mode: 'amrap', duration_s: 600, steps: [
+            { kind: 'step', label: 'Kettlebell swing', duration_kind: 'reps', duration_value: 15, target: null, modality: 'strength' },
+          ],
+        },
+      ],
+    };
+    expect(sessionZoneDistribution(structured)).toEqual([]);
+  });
+
+  it('sums duration_s for time-based steps into minutes-ready seconds totals', () => {
+    const structured = {
+      items: [
+        { kind: 'step', label: 'EMOM work', duration_kind: 'time_s', duration_value: 600, target: { basis: 'zone', zone: 'Z4' }, modality: 'swim' },
+      ],
+    };
+    expect(sessionZoneDistribution(structured)).toEqual([
+      { bucket: 'Z4', distance_m: null, duration_s: 600 },
+    ]);
+  });
+
+  it('excludes strength (reps/load-based) steps entirely -- not a zone concept', () => {
+    const structured = {
+      items: [
+        { kind: 'step', label: 'Goblet squat', duration_kind: 'reps', duration_value: 10, target: null, modality: 'strength' },
+      ],
+    };
+    expect(sessionZoneDistribution(structured)).toEqual([]);
+  });
+
+  it('ignores a reps/open duration_kind step even for a swim-modality step (nothing to sum in either unit)', () => {
+    const structured = {
+      items: [
+        { kind: 'step', label: 'Sighting practice', duration_kind: 'open', duration_value: null, target: { basis: 'zone', zone: 'Z2' }, modality: 'swim' },
+      ],
+    };
+    expect(sessionZoneDistribution(structured)).toEqual([]);
+  });
+
+  it('returns [] for a missing/empty structured tree', () => {
+    expect(sessionZoneDistribution(null)).toEqual([]);
+    expect(sessionZoneDistribution(undefined)).toEqual([]);
+    expect(sessionZoneDistribution({ items: [] })).toEqual([]);
+  });
+});
+
+describe('formatZoneDistributionSummary', () => {
+  it('formats the plan brief\'s own illustrative shape: "Z1: 10 min, Z2: 25 min, Z4: 8 min"', () => {
+    const entries = [
+      { bucket: 'Z1', distance_m: null, duration_s: 600 },
+      { bucket: 'Z2', distance_m: null, duration_s: 1500 },
+      { bucket: 'Z4', distance_m: null, duration_s: 480 },
+    ];
+    expect(formatZoneDistributionSummary(entries)).toBe('Z1: 10 min, Z2: 25 min, Z4: 8 min');
+  });
+
+  it('formats a distance-only entry with formatDistance\'s thousands separator', () => {
+    expect(formatZoneDistributionSummary([{ bucket: 'Z2', distance_m: 1600, duration_s: null }]))
+      .toBe('Z2: 1,600 m');
+  });
+
+  it('joins distance and time with " + " when a single bucket carries both', () => {
+    expect(formatZoneDistributionSummary([{ bucket: 'Z3', distance_m: 300, duration_s: 120 }]))
+      .toBe('Z3: 300 m + 2 min');
+  });
+
+  it('returns "" for no entries', () => {
+    expect(formatZoneDistributionSummary([])).toBe('');
+  });
+});
+
+describe('ZONE_GLOSSARY / TERM_GLOSSARY', () => {
+  it('covers all five zones, in order, matching zones.py\'s real CSS-relative offsets', () => {
+    expect(ZONE_GLOSSARY.map((z) => z.zone)).toEqual(['Z1', 'Z2', 'Z3', 'Z4', 'Z5']);
+    expect(ZONE_GLOSSARY.every((z) => z.range && z.character)).toBe(true);
+  });
+
+  it('covers the abbreviations this app actually renders elsewhere (CSS, RPE, EMOM, AMRAP)', () => {
+    const terms = TERM_GLOSSARY.map((t) => t.term);
+    expect(terms).toEqual(expect.arrayContaining(['CSS', 'RPE', 'EMOM', 'AMRAP']));
   });
 });
 

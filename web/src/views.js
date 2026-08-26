@@ -7,6 +7,8 @@ import {
   pickCurrentAndNextWeek, sortedByIsoWeek, daysUntil, macroTargetEvent, currentBlockIndex,
   longSwimLadder,
   findSessionById, parseStructureBlocks, parseMainSetIntervals, renderStructuredWorkout,
+  splitStructuredRationale, sessionZoneDistribution, formatZoneDistributionSummary,
+  ZONE_GLOSSARY, TERM_GLOSSARY,
 } from './plan.js';
 import { TOOL_LABELS } from './chat.js';
 import {
@@ -91,6 +93,23 @@ function renderPlanSessionDetailStats(session) {
     renderDetailStat('Source', session.source === 'pool_coach' ? 'Coach-set' : null),
   ].join('');
   return `<div class="detail-stats">${stats}</div>`;
+}
+
+/** "Where did the work actually go" -- plan.js's `sessionZoneDistribution`
+ * pure aggregation, rendered as one compact line. Only meaningful for a
+ * session carrying `structured` (a legacy prose-only session has no
+ * per-step target data to bucket) -- callers gate on that the same way they
+ * gate the Garmin export buttons. Renders nothing when the computed summary
+ * has no entries (e.g. an all-reps/open-duration structure, or the
+ * structured tree is empty). */
+function renderZoneDistributionSummary(structured) {
+  const entries = sessionZoneDistribution(structured);
+  if (entries.length === 0) return '';
+  return `
+    <section class="detail-section">
+      <h4>Zone breakdown</h4>
+      <p class="detail-notes mono">${esc(formatZoneDistributionSummary(entries))}</p>
+    </section>`;
 }
 
 /** Renders one `parseStructureBlocks` block as its own titled
@@ -180,7 +199,18 @@ function safeHref(url) {
  * `rel="noopener noreferrer"` since it's an external URL). Same
  * `.struct-text` class either way, so layout is unchanged. A URL that isn't
  * a safe http(s) link renders as the plain span instead -- see `safeHref`.
- */
+ *
+ * When `line.cue` is present (plan.js's `stepCoachingCue` -- a real,
+ * specific technique/coaching cue for this step's drill/set type, only set
+ * when the vocabulary actually has one), the whole line becomes a native
+ * `<details>`/`<summary>` -- collapsed by default (just the label/detail,
+ * identical markup to the plain-line case), the cue text revealed on tap.
+ * Native `<details>`, not a click handler, matching this app's only other
+ * expand/collapse affordance (`renderAllWeeksAccordion`'s `.all-weeks`) --
+ * works with no JS wiring, keyboard-accessible for free, and survives
+ * offline. A line with no cue renders exactly as before (a plain `<div>`,
+ * not wrapped in `<details>`) -- most lines (anything not matching the real
+ * drill/set-type vocabulary) have nothing to expand into. */
 function renderStructuredLine(line) {
   const cls = line.kind === 'repeat' ? 'struct-line struct-line-repeat' : 'struct-line struct-line-step';
   const detail = line.detail ? `<span class="struct-detail mono">${esc(line.detail)}</span>` : '';
@@ -188,6 +218,13 @@ function renderStructuredLine(line) {
   const text = href
     ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer" class="struct-text">${esc(line.text)}</a>`
     : `<span class="struct-text">${esc(line.text)}</span>`;
+  if (line.cue) {
+    return `
+      <details class="${cls} struct-step-toggle" style="padding-left:${line.depth * 18}px">
+        <summary class="struct-summary">${text}${detail}</summary>
+        <p class="struct-cue">${esc(line.cue)}</p>
+      </details>`;
+  }
   return `
       <div class="${cls}" style="padding-left:${line.depth * 18}px">
         ${text}${detail}
@@ -215,9 +252,16 @@ function renderStructuredWorkoutSection(structured) {
 /** Renders `structure`/`detail` as their own labeled sections. Two rendering
  * paths for the workout-content section, in priority order:
  *  - `session.structured` present (PR #91's `WorkoutStructure` IR, with at
- *    least one item): rendered directly via `renderStructuredWorkoutSection`'s
+ *    least one item): rendered via `renderStructuredWorkoutSection`'s
  *    generic tree-walk -- Phase A of the migration off prose-regex-parsing
- *    (see plan.js's tree-walk section doc comment for the phased rationale).
+ *    (see plan.js's tree-walk section doc comment for the phased rationale)
+ *    -- MINUS its trailing "Why: ..." step, if it has one (split out by
+ *    plan.js's `splitStructuredRationale`), which instead renders as its own
+ *    "Training rationale" section via `renderStructureBlock({ label: 'Why',
+ *    ... })` -- the exact same heading/markup the legacy prose path's own
+ *    `Why:` block gets below, so the athlete sees consistent "Training
+ *    rationale" treatment regardless of which representation a session
+ *    uses (previously: only the legacy prose path got this heading at all).
  *  - Otherwise (legacy session predating `structured`, or a real `None`):
  *    falls back to today's `parseStructureBlocks`/`renderStructureBlock`
  *    prose rendering, unchanged.
@@ -235,6 +279,14 @@ function renderPlanSessionDetail(session, sessionPush) {
   const { title, detail, structure } = sessionDisplay(session);
   const dateLabel = formatLongDate(parseIsoDate(session.date));
   const hasStructured = Boolean(session.structured?.items?.length);
+  // Pull the trailing "Why: ..." step (plan.py's real shape, see
+  // splitStructuredRationale's own doc comment) out of the generic
+  // Workout tree-walk so it can get the exact same "Training rationale"
+  // heading the legacy prose path's own `Why:` block gets below, instead of
+  // rendering as just another undifferentiated line in the struct-tree.
+  const { items: workoutItems, rationale } = hasStructured
+    ? splitStructuredRationale(session.structured)
+    : { items: [], rationale: null };
 
   // Whether to show the full, un-split `purpose` or just the post-em-dash
   // `detail` fragment here depends on where the header title (above) came
@@ -269,8 +321,10 @@ function renderPlanSessionDetail(session, sessionPush) {
       <div class="hist-meta mono">${esc(sportLabel(session.sport))} · ${esc(dateLabel)}</div>
     </div>
     ${renderPlanSessionDetailStats(session)}
+    ${hasStructured ? renderZoneDistributionSummary(session.structured) : ''}
     ${hasStructured
-      ? renderStructuredWorkoutSection(session.structured)
+      ? renderStructuredWorkoutSection({ items: workoutItems })
+        + (rationale ? renderStructureBlock({ label: 'Why', content: rationale }) : '')
       : (structure ? parseStructureBlocks(structure).map(renderStructureBlock).join('') : '')}
     ${session.structured ? renderGarminDownload(session) : ''}
     ${session.structured ? renderGarminPush(session, sessionPush) : ''}
@@ -545,8 +599,45 @@ function renderLegendPanel() {
     </div>`;
 }
 
+/** A compact, collapsed-by-default zone/terms reference for the Plan tab --
+ * "easy to ignore when not needed, easy to find when it is" (the athlete
+ * feedback this whole pass responds to was about workouts not making
+ * sense without a coach walking through them, so the terms/zones used
+ * throughout this tab need to be reachable, but a wall of definitions
+ * bolted permanently onto the page would be exactly the wrong fix).
+ * Native `<details>`, matching `renderAllWeeksAccordion`'s own affordance
+ * (works with no JS, keyboard-accessible, survives offline) -- deliberately
+ * its own `.glossary` class rather than reusing `.all-weeks` so main.js's
+ * capture-phase `toggle` listener can track this accordion's open state
+ * independently (toggling the glossary must not also mark the unrelated
+ * all-weeks accordion open, or vice versa). `ZONE_GLOSSARY`/`TERM_GLOSSARY`
+ * (plan.js) are the actual data -- real CSS-relative offsets from
+ * engine/swim_coach/zones.py, not invented numbers. */
+function renderGlossaryPanel(open) {
+  const zoneRows = ZONE_GLOSSARY.map((z) => `
+        <div class="glossary-zone-row">
+          <span class="z mono">${esc(z.zone)}</span>
+          <span class="range mono">${esc(z.range)}</span>
+          <span class="character">${esc(z.character)}</span>
+        </div>`).join('');
+  const termRows = TERM_GLOSSARY.map((t) => `
+        <dt>${esc(t.term)}</dt>
+        <dd>${esc(t.def)}</dd>`).join('');
+
+  return `
+      <details class="glossary"${open ? ' open' : ''}>
+        <summary data-a="glossary:toggle">Terms &amp; zones</summary>
+        <div class="glossary-content">
+          <h4>Zones (CSS-anchored)</h4>
+          <div class="glossary-zones">${zoneRows}</div>
+          <h4>Terms</h4>
+          <dl class="glossary-terms">${termRows}</dl>
+        </div>
+      </details>`;
+}
+
 export function renderApp(data, planSessionDetailId) {
-  const { athlete, events, macro, weeks, sessionPush, allWeeksOpen } = data;
+  const { athlete, events, macro, weeks, sessionPush, allWeeksOpen, glossaryOpen } = data;
   const event = macroTargetEvent(macro, events);
 
   return `
@@ -558,6 +649,7 @@ export function renderApp(data, planSessionDetailId) {
         ${renderLegendPanel()}
         ${renderZonesPanel(athlete)}
       </div>
+      ${renderGlossaryPanel(glossaryOpen)}
       <p class="disc">Generated from ${esc(athlete.name)}'s live plan data on the swim-coach engine. Distances marked ~ are estimates until each session is logged.</p>
     </div>`;
 }

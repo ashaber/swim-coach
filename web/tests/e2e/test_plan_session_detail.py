@@ -107,9 +107,54 @@ STRUCTURED_LINK_SESSION = {
     'status': 'planned',
 }
 
+# Real WorkoutStructure shapes exercising Phase A's expandable-step
+# technique cues (plan.js's stepCoachingCue), the per-session zone-
+# distribution summary (plan.js's sessionZoneDistribution), and the
+# structured-IR "Training rationale" section (plan.js's
+# splitStructuredRationale) all in one session -- one canonical strength
+# exercise_name (plan.py's real STRENGTH_CORE_EXERCISES string), one real
+# descend/broken-distance main-set narrative (engine/swim_coach/
+# workout_templates/build-0-descend.yaml's real shape), and a trailing
+# top-level Why step (plan.py's real appended-rationale shape).
+CUE_MAIN_SET_LABEL = (
+    '9 x 300m broken-distance, descend 1-9 from Z3 (1:32-1:34/100m) toward Z4 '
+    '(1:29-1:31/100m) on the last rep, negative-split each repeat -- '
+    'race-pace-adjacent emphasis (build block).'
+)
+CANONICAL_STRENGTH_EXERCISE = 'Internal rotation at 90° abduction'
+WHY_TEXT = 'race-pace-adjacent, broken-distance emphasis -- evidence-based phase shift (test citation).'
+CUE_SESSION = {
+    'id': 's-cue', 'date': WEDNESDAY, 'sport': 'swim_pool', 'source': 'ai_coach',
+    'duration_min': 45, 'distance_m': 2700, 'intensity': {'zone': 'Z3'},
+    'purpose': 'threshold main set',
+    'structure': f'Main set: {CUE_MAIN_SET_LABEL}',
+    'structured': {
+        'items': [
+            {
+                'kind': 'step', 'label': CUE_MAIN_SET_LABEL, 'role': 'interval', 'duration_kind': 'distance_m',
+                'duration_value': 2700, 'target': {'basis': 'zone', 'zone': 'Z3', 'low': None, 'high': None},
+                'load': None, 'modality': 'swim', 'stroke': None, 'equipment': [], 'exercise_name': None,
+            },
+            {
+                'kind': 'step', 'label': CANONICAL_STRENGTH_EXERCISE, 'role': 'steady', 'duration_kind': 'reps',
+                'duration_value': 10, 'target': None, 'load': {'basis': 'bodyweight', 'value': None},
+                'modality': 'strength', 'stroke': None, 'equipment': [], 'exercise_name': CANONICAL_STRENGTH_EXERCISE,
+            },
+            {
+                'kind': 'step', 'label': f'Why: {WHY_TEXT}', 'role': 'open', 'duration_kind': 'open',
+                'duration_value': None, 'target': None, 'load': None, 'modality': 'swim',
+                'stroke': None, 'equipment': [], 'exercise_name': None,
+            },
+        ],
+    },
+    'status': 'planned',
+}
+
 WEEK = {
     'iso_week': ISO_WEEK, 'meso_block': 'base', 'focus': 'aerobic base', 'target_volume_m': 12000,
-    'sessions': [MAIN_SET_SESSION, STRENGTH_SESSION, NO_STRUCTURE_SESSION, STRUCTURED_LINK_SESSION],
+    'sessions': [
+        MAIN_SET_SESSION, STRENGTH_SESSION, NO_STRUCTURE_SESSION, STRUCTURED_LINK_SESSION, CUE_SESSION,
+    ],
     'adaptation_rationale': None,
 }
 
@@ -309,3 +354,58 @@ def test_opening_session_detail_scrolls_to_top_of_the_content(page):
     page.click(f'[data-a="session:open"][data-id="{MAIN_SET_SESSION["id"]}"]')
     page.wait_for_selector('[data-a="session:back"]')
     assert page.evaluate('window.scrollY') == 0
+
+
+# --- Expandable per-step technique cues, zone breakdown, structured-IR ------
+# "Training rationale" (plan.js's stepCoachingCue/sessionZoneDistribution/
+# splitStructuredRationale; views.js's renderStructuredLine/
+# renderZoneDistributionSummary) -- all exercised via CUE_SESSION above.
+
+def test_zone_breakdown_summary_renders_for_a_structured_session(page):
+    _open_session_detail(page, 's-cue')
+    content = page.content()
+    assert '<h4>Zone breakdown</h4>' in content
+    assert 'Z3: 2,700 m' in content
+
+
+def test_swim_step_matching_the_real_cue_vocabulary_is_collapsed_by_default_and_expands_on_click(page):
+    _open_session_detail(page, 's-cue')
+    toggle = page.locator('details.struct-step-toggle', has_text='300m broken-distance')
+    assert toggle.count() == 1
+    cue = toggle.locator('.struct-cue')
+    # Collapsed: the cue text exists in the DOM (native <details>) but is
+    # not visible until expanded.
+    assert not cue.is_visible()
+    assert toggle.get_attribute('open') is None
+
+    toggle.locator('summary').click()
+    cue.wait_for(state='visible')
+    assert 'negative-split' in cue.text_content().lower() or 'descend' in cue.text_content().lower()
+
+
+def test_strength_step_matching_a_canonical_exercise_name_is_expandable_with_a_real_cue(page):
+    _open_session_detail(page, 's-cue')
+    toggle = page.locator('details.struct-step-toggle', has_text=CANONICAL_STRENGTH_EXERCISE)
+    assert toggle.count() == 1
+    toggle.locator('summary').click()
+    cue = toggle.locator('.struct-cue')
+    cue.wait_for(state='visible')
+    assert 'rotate' in cue.text_content().lower()
+
+
+def test_a_step_with_no_matching_cue_stays_a_plain_non_expandable_line(page):
+    # STRUCTURED_LINK_SESSION's "Goblet squat" step uses a shorthand
+    # exercise_name, not plan.py's real canonical string, so it has no cue.
+    _open_session_detail(page, 's-structured-link')
+    assert page.locator('details.struct-step-toggle').count() == 0
+    assert page.locator('.struct-cue').count() == 0
+
+
+def test_structured_session_gets_a_training_rationale_section_from_its_trailing_why_step(page):
+    _open_session_detail(page, 's-cue')
+    headings = [h.lower() for h in page.locator('.detail-section h4').all_text_contents()]
+    assert 'training rationale' in headings
+    content = page.content()
+    assert WHY_TEXT in content
+    # Not duplicated inside the generic Workout struct-tree.
+    assert content.count(WHY_TEXT) == 1

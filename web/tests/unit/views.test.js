@@ -820,6 +820,155 @@ describe('renderApp plan session detail view (click-to-detail)', () => {
       const html = renderApp({ ...PLAN_DATA, weeks: [{ ...WEEK, sessions: [session] }] }, 's-scheme-ok');
       expect(html).toContain('<a href="http://example.org/goblet"');
     });
+
+    it('a step whose label matches the real technique-cue vocabulary renders as an expandable <details> with the cue text, collapsed by default', () => {
+      const session = {
+        ...STRUCTURED_SESSION,
+        id: 's-with-cue',
+        structured: {
+          items: [{
+            kind: 'step', role: 'interval', duration_kind: 'distance_m', duration_value: 800,
+            label: '4 x 200m broken-distance, descend 1-4 from Z3 toward Z4 -- race-pace-adjacent emphasis.',
+            target: { basis: 'zone', zone: 'Z3' }, load: null, modality: 'swim', stroke: null, equipment: [],
+          }],
+        },
+      };
+      const html = renderApp({ ...PLAN_DATA, weeks: [{ ...WEEK, sessions: [session] }] }, 's-with-cue');
+      expect(html).toContain('<details class="struct-line struct-line-step struct-step-toggle"');
+      expect(html).toContain('<summary class="struct-summary">');
+      // The step's own label/detail markup is unchanged inside the summary
+      // (role="interval" is a top-level narrated role, so it keeps its
+      // "Main set: " prefix exactly as renderStructuredStep already adds).
+      expect(html).toContain('<span class="struct-text">Main set: 4 x 200m broken-distance');
+      expect(html).toContain('class="struct-cue"');
+      expect(html).toMatch(/negative-split|descend/i);
+      // Not present as raw <details open> -- collapsed by default is the
+      // native <details> default (no `open` attribute emitted).
+      expect(html).not.toContain('<details class="struct-line struct-line-step struct-step-toggle" open');
+    });
+
+    it('a step whose label matches no cue vocabulary stays a plain (non-expandable) line -- regression, no generic placeholder cue', () => {
+      const html = renderApp(
+        { ...PLAN_DATA, weeks: [{ ...WEEK, sessions: [STRUCTURED_SESSION] }] },
+        STRUCTURED_SESSION.id,
+      );
+      expect(html).not.toContain('struct-step-toggle');
+      expect(html).not.toContain('struct-cue');
+    });
+
+    it('escapes a malicious cue string (defensive -- today\'s cue vocabulary is all static, hand-authored text, but esc() is still applied)', () => {
+      // stepCoachingCue only ever returns a hand-authored string from the
+      // static vocabulary today, so this can't happen via a real session --
+      // this proves the renderer itself doesn't special-case cue text as
+      // trusted HTML, same defense-in-depth already applied to every other
+      // field on this line.
+      const session = {
+        ...STRUCTURED_SESSION,
+        id: 's-cue-escape-probe',
+        structured: {
+          items: [{
+            kind: 'step', role: 'interval', duration_kind: 'distance_m', duration_value: 100,
+            label: '2 x 100m broken-distance', target: { basis: 'zone', zone: 'Z3' }, load: null,
+            modality: 'swim', stroke: null, equipment: [],
+          }],
+        },
+      };
+      const html = renderApp({ ...PLAN_DATA, weeks: [{ ...WEEK, sessions: [session] }] }, 's-cue-escape-probe');
+      // The real broken-distance cue text renders escaped/plain, no raw tags.
+      expect(html).not.toMatch(/<p class="struct-cue">[^<]*<(?!\/p)/);
+    });
+  });
+
+  describe('per-session zone-distribution summary', () => {
+    const SESSION_WITH_ZONES = {
+      ...MAIN_SET_SESSION,
+      id: 's-zone-dist',
+      structured: {
+        items: [
+          {
+            kind: 'step', label: 'Easy swim', role: 'warmup', duration_kind: 'distance_m',
+            duration_value: 400, target: { basis: 'zone', zone: 'Z2' }, load: null,
+            modality: 'swim', stroke: null, equipment: [], exercise_name: null,
+          },
+          {
+            kind: 'step', label: '8 x 300m', role: 'interval', duration_kind: 'distance_m',
+            duration_value: 2400, target: { basis: 'zone', zone: 'Z3' }, load: null,
+            modality: 'swim', stroke: null, equipment: [], exercise_name: null,
+          },
+        ],
+      },
+    };
+
+    it('renders a "Zone breakdown" section with the computed per-zone summary', () => {
+      const data = { ...PLAN_DATA, weeks: [{ ...WEEK, sessions: [SESSION_WITH_ZONES] }] };
+      const html = renderApp(data, SESSION_WITH_ZONES.id);
+      expect(html).toContain('<h4>Zone breakdown</h4>');
+      expect(html).toContain('Z2: 400 m');
+      expect(html).toContain('Z3: 2,400 m');
+    });
+
+    it('renders no Zone breakdown section for a legacy prose-only session (no structured step data to bucket)', () => {
+      const html = renderApp(PLAN_DATA, MAIN_SET_SESSION.id);
+      expect(html).not.toContain('Zone breakdown');
+    });
+  });
+
+  describe('"Training rationale" for structured-IR sessions (parity with the legacy prose Why: block)', () => {
+    const SESSION_WITH_RATIONALE = {
+      ...MAIN_SET_SESSION,
+      id: 's-structured-rationale',
+      structured: {
+        items: [
+          {
+            kind: 'step', label: '8 x 300m @ Z2', role: 'interval', duration_kind: 'distance_m',
+            duration_value: 2400, target: { basis: 'zone', zone: 'Z2' }, load: null,
+            modality: 'swim', stroke: null, equipment: [], exercise_name: null,
+          },
+          {
+            kind: 'step', role: 'open', duration_kind: 'open', duration_value: null,
+            label: 'Why: continuous aerobic-volume emphasis (base-block phase).',
+            target: null, load: null, modality: 'swim', stroke: null, equipment: [], exercise_name: null,
+          },
+        ],
+      },
+    };
+
+    it('renders a "Training rationale" section for a structured session carrying a trailing Why step', () => {
+      const data = { ...PLAN_DATA, weeks: [{ ...WEEK, sessions: [SESSION_WITH_RATIONALE] }] };
+      const html = renderApp(data, SESSION_WITH_RATIONALE.id);
+      const headings = html.match(/<h4>[^<]*<\/h4>/g) || [];
+      expect(headings.some((h) => h.toLowerCase() === '<h4>training rationale</h4>')).toBe(true);
+      expect(html).toContain('continuous aerobic-volume emphasis (base-block phase).');
+    });
+
+    it('the Why step does not also appear as an undifferentiated line inside the Workout struct-tree', () => {
+      const data = { ...PLAN_DATA, weeks: [{ ...WEEK, sessions: [SESSION_WITH_RATIONALE] }] };
+      const html = renderApp(data, SESSION_WITH_RATIONALE.id);
+      // The rationale text appears exactly once (inside Training rationale),
+      // not a second time inside the struct-tree's plain line rendering.
+      const occurrences = html.split('continuous aerobic-volume emphasis (base-block phase).').length - 1;
+      expect(occurrences).toBe(1);
+    });
+
+    it('a structured session with no Why step gets no Training rationale section (parity: same as legacy prose with no Why: block)', () => {
+      const noRationaleSession = {
+        ...MAIN_SET_SESSION,
+        id: 's-structured-no-rationale',
+        structured: {
+          items: [
+            {
+              kind: 'step', label: '8 x 300m @ Z2', role: 'interval', duration_kind: 'distance_m',
+              duration_value: 2400, target: { basis: 'zone', zone: 'Z2' }, load: null,
+              modality: 'swim', stroke: null, equipment: [], exercise_name: null,
+            },
+          ],
+        },
+      };
+      const data = { ...PLAN_DATA, weeks: [{ ...WEEK, sessions: [noRationaleSession] }] };
+      const html = renderApp(data, noRationaleSession.id);
+      const headings = (html.match(/<h4>[^<]*<\/h4>/g) || []).map((h) => h.toLowerCase());
+      expect(headings).not.toContain('<h4>training rationale</h4>');
+    });
   });
 });
 
