@@ -17,6 +17,7 @@ from swim_coach.models import (
     Feedback,
     MacroBlock,
     MacroPlan,
+    RaceWeekChecklistItem,
     Session,
     Wellness,
     WeekPlan,
@@ -310,6 +311,28 @@ def test_session_status_default_is_planned():
 def test_week_plan_draft_defaults_false():
     week = make_week()
     assert week.draft is False
+
+
+def test_week_plan_race_week_checklist_defaults_to_empty_list():
+    # Additive field: an already-persisted WeekPlan (YAML file or DB jsonb
+    # row) has no race_week_checklist key and must keep validating unchanged
+    # as an empty list -- same discipline as Session.structured above.
+    week = make_week()
+    assert week.race_week_checklist == []
+
+
+def test_week_plan_race_week_checklist_accepts_dated_categorized_items():
+    item = RaceWeekChecklistItem(
+        date=date(2026, 9, 15), category="carb_load", label="Begin carbohydrate loading."
+    )
+    week = make_week(race_week_checklist=[item])
+    assert week.race_week_checklist[0].category == "carb_load"
+    assert week.race_week_checklist[0].date == date(2026, 9, 15)
+
+
+def test_race_week_checklist_item_rejects_bad_category():
+    with pytest.raises(ValidationError):
+        RaceWeekChecklistItem(date=date(2026, 9, 15), category="bogus", label="x")
 
 
 # --- WorkoutStructure IR: WorkoutTarget/WorkoutLoad/WorkoutStep/WorkoutRepeat ---

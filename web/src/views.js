@@ -8,7 +8,7 @@ import {
   longSwimLadder,
   findSessionById, parseStructureBlocks, parseMainSetIntervals, renderStructuredWorkout,
   splitStructuredRationale, sessionZoneDistribution, formatZoneDistributionSummary,
-  ZONE_GLOSSARY, TERM_GLOSSARY, ctlAtlTsbChartGeometry,
+  ZONE_GLOSSARY, TERM_GLOSSARY, ctlAtlTsbChartGeometry, raceWeekCategoryLabel,
 } from './plan.js';
 import { TOOL_LABELS } from './chat.js';
 import {
@@ -385,6 +385,34 @@ function renderGarminPush(session, sessionPush) {
     </section>`;
 }
 
+/** `week.race_week_checklist` (engine/swim_coach/models.py's
+ * RaceWeekChecklistItem list) -- only ever non-empty for the final taper
+ * week immediately preceding the athlete's active, priority-"A" event (see
+ * plan.py's generate_week/_race_week_checklist and library/15-race-week.md).
+ * Sorted by date since carb-load/bodywork/logistics items can legitimately
+ * carry dates outside this WeekPlan's own 7-day span (a race that doesn't
+ * fall on a Monday pushes the carb-load date into the following, not-yet-
+ * generated event week) -- date order, not category order, is what makes
+ * that visible rather than confusing. Renders nothing when the list is
+ * empty (an ordinary taper week, or any non-final-taper week). */
+function renderRaceWeekChecklist(checklist) {
+  if (!checklist || checklist.length === 0) return '';
+  const rows = [...checklist]
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+    .map((item) => `
+      <div class="race-week-item race-week-item-${esc(item.category)}">
+        <span class="race-week-date mono">${esc(formatShortDate(parseIsoDate(item.date)))}</span>
+        <span class="race-week-cat">${esc(raceWeekCategoryLabel(item.category))}</span>
+        <span class="race-week-label">${esc(item.label)}</span>
+      </div>`)
+    .join('');
+  return `
+    <div class="race-week-checklist" data-a="week:race-week-checklist">
+      <h4>Race week checklist</h4>
+      ${rows}
+    </div>`;
+}
+
 function renderWeekCard(week, label) {
   const days = sessionsByDay(week);
   const hasHighlight = (daySessions) => daySessions.some((s) => classifySession(s).highlight);
@@ -407,6 +435,7 @@ function renderWeekCard(week, label) {
         <span class="vol mono">total <b>${week.target_volume_m.toLocaleString('en-US')} m</b></span>
       </div>
       ${week.adaptation_rationale ? `<div class="rationale"><b>Why this shape:</b> ${esc(week.adaptation_rationale)}</div>` : ''}
+      ${renderRaceWeekChecklist(week.race_week_checklist)}
       <div class="days">${dayRows}</div>
     </div>`;
 }

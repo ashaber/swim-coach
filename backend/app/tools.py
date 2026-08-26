@@ -1776,7 +1776,7 @@ def _handle_create_week_plan(input_data: dict[str, Any], *, store: StoreInterfac
     event_format = event.event_format or "single_day"
 
     try:
-        week = generate_week(athlete, macro, iso_week, week_start, event_format, template_preference)
+        week = generate_week(athlete, macro, iso_week, week_start, event_format, template_preference, event)
     except ValueError as exc:
         return {"error": str(exc)}
 
@@ -2109,7 +2109,7 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
         return {"error": f"could not load existing week plan: {exc}"}
 
     try:
-        week = generate_week(athlete, macro, iso_week, week_start, event_format, template_preference)
+        week = generate_week(athlete, macro, iso_week, week_start, event_format, template_preference, event)
     except ValueError as exc:
         return {"error": str(exc)}
 

@@ -10,8 +10,10 @@ from datetime import date, timedelta
 
 import pytest
 
-from swim_coach.models import Athlete, Event, WorkoutRepeat, WorkoutStep
+from swim_coach.models import Athlete, Event, RaceWeekChecklistItem, WorkoutRepeat, WorkoutStep
 from swim_coach.plan import (
+    BODYWORK_WINDOW_DAYS_OUT,
+    CARB_LOAD_WINDOW_START_DAYS_OUT,
     DEFAULT_POOL_SESSION_MIN,
     LONG_SWIM_SHARE,
     MIN_RAMP_SEED_VOLUME_M,
@@ -28,6 +30,7 @@ from swim_coach.plan import (
     _duration_min_for_distance,
     _format_pace_s,
     _no_coach_pool_purpose,
+    _race_week_checklist,
     _round_100,
     _strength_session_structure,
     _strength_session_structure_template,
@@ -1653,3 +1656,192 @@ def test_count_structured_steps_counts_repeat_iterations(short_macro):
     expected_repeat_contribution = repeat.count * len(repeat.steps)
     standalone = sum(1 for i in session.structured.items if i.kind == "step")
     assert count_structured_steps(session.structured) == expected_repeat_contribution + standalone
+
+
+# --- race week: final-taper-week content --------------------------------------
+# `event_date` below is deliberately a FRIDAY (event_monday + 4 days), not a
+# Monday -- mirrors Renee's real UltraSwim 33.3 date (2026-09-18, a Friday)
+# and is exactly the case that makes the carb-load window land in the
+# following (not-yet-generated) event week while the bodywork window still
+# lands inside the final taper week's own last day -- see
+# `RaceWeekChecklistItem`'s docstring and `_race_week_checklist`'s.
+
+
+@pytest.fixture
+def race_week_macro():
+    """A short (10-week) runway -- taper=2 weeks -- ending the Sunday before
+    a Friday event, so `taper_block`'s 2nd (final) week is the one under
+    test; its 1st week is the "ordinary taper week" negative control."""
+    athlete = make_athlete()
+    event_monday = START + timedelta(weeks=10)
+    event = make_event(event_date=event_monday + timedelta(days=4))  # Friday
+    macro = scaffold_macro(
+        athlete, event, START, current_weekly_volume_m=14000, peak_weekly_volume_m=20000
+    )
+    taper_block = next(b for b in macro.blocks if b.name == "taper")
+    assert (taper_block.end_date - taper_block.start_date).days // 7 + 1 == 2
+    final_week_start = taper_block.start_date + timedelta(weeks=1)
+    assert final_week_start + timedelta(days=6) == event_monday - timedelta(days=1)
+    return athlete, event, macro, taper_block, final_week_start
+
+
+def test_race_week_checklist_populated_on_final_taper_week_for_active_a_event(race_week_macro):
+    athlete, event, macro, taper_block, final_week_start = race_week_macro
+    week = generate_week(
+        athlete, macro, _iso_week(final_week_start), final_week_start, event=event
+    )
+
+    assert len(week.race_week_checklist) > 0
+    categories = {item.category for item in week.race_week_checklist}
+    assert categories == {"carb_load", "bodywork", "logistics"}
+
+
+def test_race_week_carb_load_date_is_precisely_computed_and_may_fall_outside_the_week(
+    race_week_macro,
+):
+    athlete, event, macro, taper_block, final_week_start = race_week_macro
+    week = generate_week(
+        athlete, macro, _iso_week(final_week_start), final_week_start, event=event
+    )
+
+    carb_load = next(i for i in week.race_week_checklist if i.category == "carb_load")
+    expected_date = event.event_date - timedelta(days=CARB_LOAD_WINDOW_START_DAYS_OUT)
+    assert carb_load.date == expected_date
+    # This is the whole point of computing from event_date rather than
+    # week_start: for a Friday race, the 72h-out carb-load date lands in the
+    # week AFTER this WeekPlan's own 7-day span (the un-modeled event week).
+    assert carb_load.date > final_week_start + timedelta(days=6)
+    assert "10-12 g/kg" in carb_load.label
+    assert "Burke" in carb_load.label
+
+
+def test_race_week_bodywork_date_lands_on_final_taper_weeks_last_day(race_week_macro):
+    athlete, event, macro, taper_block, final_week_start = race_week_macro
+    week = generate_week(
+        athlete, macro, _iso_week(final_week_start), final_week_start, event=event
+    )
+
+    bodywork = next(i for i in week.race_week_checklist if i.category == "bodywork")
+    expected_date = event.event_date - timedelta(days=BODYWORK_WINDOW_DAYS_OUT)
+    assert bodywork.date == expected_date
+    # Unlike carb-load above, the bodywork window's earlier (5-day-out) edge
+    # happens to fall exactly on this week's own last day for a Friday race.
+    assert bodywork.date == final_week_start + timedelta(days=6)
+    assert "3-5 days" in bodywork.label
+    assert "Weerapong" in bodywork.label
+
+
+def test_race_week_logistics_items_are_distinct_from_physiology_and_dated_at_week_start(
+    race_week_macro,
+):
+    athlete, event, macro, taper_block, final_week_start = race_week_macro
+    week = generate_week(
+        athlete, macro, _iso_week(final_week_start), final_week_start, event=event
+    )
+
+    logistics = [i for i in week.race_week_checklist if i.category == "logistics"]
+    # 3 generic items + 1 water-temp item (make_event sets water_temp_c=18.0)
+    assert len(logistics) == 4
+    assert all(item.date == final_week_start for item in logistics)
+    joined = " ".join(item.label for item in logistics)
+    assert "acclimatize" in joined
+    assert "fueling plan" in joined
+    assert "support" in joined
+    assert "18" in joined  # water_temp_c echoed into the conditions item
+    # Never conflate the athlete-specific logistics checklist with the
+    # cited physiological windows above.
+    assert "Burke" not in joined
+    assert "Weerapong" not in joined
+
+
+def test_race_week_logistics_omits_water_temp_item_when_event_has_none(race_week_macro):
+    athlete, event, macro, taper_block, final_week_start = race_week_macro
+    event = event.model_copy(update={"water_temp_c": None})
+    week = generate_week(
+        athlete, macro, _iso_week(final_week_start), final_week_start, event=event
+    )
+    logistics = [i for i in week.race_week_checklist if i.category == "logistics"]
+    assert len(logistics) == 3
+
+
+def test_race_week_checklist_absent_on_ordinary_taper_week(race_week_macro):
+    athlete, event, macro, taper_block, final_week_start = race_week_macro
+    ordinary_week_start = taper_block.start_date  # week 0 of 2 -- not final
+    assert ordinary_week_start != final_week_start
+    week = generate_week(
+        athlete, macro, _iso_week(ordinary_week_start), ordinary_week_start, event=event
+    )
+    assert week.race_week_checklist == []
+
+
+def test_race_week_checklist_absent_on_non_taper_final_week(race_week_macro):
+    athlete, event, macro, taper_block, final_week_start = race_week_macro
+    peak_block = next(b for b in macro.blocks if b.name == "peak")
+    peak_last_week_start = peak_block.end_date - timedelta(days=6)
+    week = generate_week(
+        athlete, macro, _iso_week(peak_last_week_start), peak_last_week_start, event=event
+    )
+    assert week.race_week_checklist == []
+
+
+def test_race_week_checklist_absent_when_event_not_passed(race_week_macro):
+    athlete, event, macro, taper_block, final_week_start = race_week_macro
+    week = generate_week(athlete, macro, _iso_week(final_week_start), final_week_start)
+    assert week.race_week_checklist == []
+
+
+def test_race_week_checklist_absent_for_b_priority_event(race_week_macro):
+    athlete, event, macro, taper_block, final_week_start = race_week_macro
+    b_event = event.model_copy(update={"priority": "B"})
+    week = generate_week(
+        athlete, macro, _iso_week(final_week_start), final_week_start, event=b_event
+    )
+    assert week.race_week_checklist == []
+
+
+def test_race_week_checklist_absent_for_inactive_event(race_week_macro):
+    athlete, event, macro, taper_block, final_week_start = race_week_macro
+    inactive_event = event.model_copy(update={"active": False})
+    week = generate_week(
+        athlete, macro, _iso_week(final_week_start), final_week_start, event=inactive_event
+    )
+    assert week.race_week_checklist == []
+
+
+def test_race_week_checklist_absent_when_event_id_does_not_match_macro(race_week_macro):
+    athlete, event, macro, taper_block, final_week_start = race_week_macro
+    unrelated_event = make_event(event_date=event.event_date, priority="A")
+    assert unrelated_event.id != macro.event_id
+    week = generate_week(
+        athlete, macro, _iso_week(final_week_start), final_week_start, event=unrelated_event
+    )
+    assert week.race_week_checklist == []
+
+
+def test_race_week_checklist_priority_match_is_case_insensitive(race_week_macro):
+    athlete, event, macro, taper_block, final_week_start = race_week_macro
+    lowercase_event = event.model_copy(update={"priority": "a"})
+    week = generate_week(
+        athlete, macro, _iso_week(final_week_start), final_week_start, event=lowercase_event
+    )
+    assert len(week.race_week_checklist) > 0
+
+
+def test_race_week_checklist_does_not_touch_volume_or_session_composition(race_week_macro):
+    athlete, event, macro, taper_block, final_week_start = race_week_macro
+    with_event = generate_week(
+        athlete, macro, _iso_week(final_week_start), final_week_start, event=event
+    )
+    without_event = generate_week(athlete, macro, _iso_week(final_week_start), final_week_start)
+
+    assert with_event.target_volume_m == without_event.target_volume_m
+    assert [s.distance_m for s in with_event.sessions] == [
+        s.distance_m for s in without_event.sessions
+    ]
+    assert [s.date for s in with_event.sessions] == [s.date for s in without_event.sessions]
+
+
+def test_race_week_checklist_helper_returns_every_item_as_a_real_model(race_week_macro):
+    athlete, event, macro, taper_block, final_week_start = race_week_macro
+    items = _race_week_checklist(event, final_week_start)
+    assert all(isinstance(item, RaceWeekChecklistItem) for item in items)

@@ -366,7 +366,9 @@ def adapt_week(
         )
 
     # --- baseline schedule (pool/strength placement, taper caps) --------------
-    baseline = generate_week(athlete, macro, iso_week, week_start, event_format=event_format)
+    baseline = generate_week(
+        athlete, macro, iso_week, week_start, event_format=event_format, event=event
+    )
 
     # --- target volume ---------------------------------------------------------
     current_target_volume_m = current_week.target_volume_m
@@ -520,4 +522,11 @@ def adapt_week(
         sessions=sessions,
         adaptation_rationale=json.dumps(rationale, sort_keys=True),
         draft=True,
+        race_week_checklist=baseline.race_week_checklist,
+        # Carried straight through from the baseline `generate_week()` call
+        # above, unmodified by the cut/advance/milestone volume tweaks this
+        # function applies to `sessions` -- the checklist's dates/content
+        # are computed purely from `event.event_date` (see
+        # `plan._race_week_checklist`), not from any of this week's volume
+        # numbers, so there is nothing here for adaptation to re-derive.
     )

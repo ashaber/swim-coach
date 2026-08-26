@@ -243,6 +243,42 @@ class Session(BaseModel):
         return v
 
 
+class RaceWeekChecklistItem(BaseModel):
+    """One dated, categorized action item surfaced on the final taper week
+    immediately preceding an athlete's active A-priority event -- see
+    `engine/swim_coach/plan.py`'s `_race_week_checklist` for how these are
+    computed and `library/15-race-week.md` for the citations/rationale
+    behind each category.
+
+    `date` is the specific calendar date the item applies to, computed
+    directly from `Event.event_date` -- it is deliberately NOT guaranteed
+    to fall within the parent `WeekPlan`'s own Monday-Sunday span. A race
+    that isn't itself on a Monday (the common case) pushes windows like the
+    36-72h pre-race carbohydrate-load onto calendar days that land in the
+    following week -- the one containing the event itself, which
+    `plan.scaffold_macro`/`generate_week` deliberately don't model as a
+    macro block (see that module's docstring: "race week itself is ...
+    handled separately"). A per-session field couldn't represent a date
+    outside the week it's attached to; this dedicated, independently-dated
+    list can.
+
+    `category` distinguishes the three genuinely different kinds of content
+    this list can carry, each with its own timing/evidence basis -- see
+    `plan.py`'s citation comments for each:
+      - "carb_load": the 36-72h pre-race carbohydrate-loading window.
+      - "bodywork": the 3-5-day-out light bodywork/massage window.
+      - "logistics": athlete-specific event-logistics checklist items
+        (travel/acclimatization, fueling-plan rehearsal, support-crew
+        confirmation) derived from the event's own fields, not universal
+        taper science.
+    """
+
+    schema_version: int = 1
+    date: date
+    category: Literal["carb_load", "bodywork", "logistics"]
+    label: str
+
+
 class WeekPlan(BaseModel):
     """One week of planned sessions."""
 
@@ -256,6 +292,14 @@ class WeekPlan(BaseModel):
     sessions: list[Session] = Field(default_factory=list)
     adaptation_rationale: str | None = None
     draft: bool = False
+    race_week_checklist: list[RaceWeekChecklistItem] = Field(default_factory=list)
+    # Populated only for the final week of a taper block immediately
+    # preceding the athlete's active, A-priority target event -- see
+    # `plan.generate_week`'s `event` parameter and `_race_week_checklist`.
+    # Additive/optional: every existing persisted WeekPlan (YAML file or DB
+    # jsonb row) has no `race_week_checklist` key and validates unchanged as
+    # an empty list; no schema_version bump, same pattern as every other
+    # additive field in this file.
 
     @field_validator("iso_week")
     @classmethod

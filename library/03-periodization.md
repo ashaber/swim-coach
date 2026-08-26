@@ -50,7 +50,7 @@ corrected ~3-week/~43% figures, or (b) deliberately keeps a different taper
 shape as a documented coach-judgment choice. This file and `plan.py`'s
 constant comments should be updated together whenever that follow-up
 happens — see `plan.py`'s `TAPER_WEEKS_LONG` comment for the same flag in
-code.
+code. `15-race-week.md` layers race-day content on the final week.
 
 ## Safety rail: `WEEKLY_VOLUME_RAMP_CAP = 0.08`
 
@@ -313,3 +313,4 @@ split at planning time in any case, because pool-coach session content
 (most of weekly swim time) is unknown until delivered post-hoc — this is
 surfaced for `/adapt`'s human judgment review, not planning-time
 enforcement.
+
