@@ -20,6 +20,7 @@ load `00-conventions.md` once per session to know how to read the tags.
 | `11-workout-analytics.md` | Provisional (Slice-1 stub) thresholds behind `analytics.py`'s cardiac-drift, split-evenness, pause/gap, and SWOLF constants; general-endurance-adapted, low-to-medium confidence throughout, pending a full research pass. |
 | `13-reds-energy-availability.md` | Chronic energy availability / RED-S: why the "30 kcal/kg FFM" threshold isn't a settled clinical number, why chronic low energy availability (LEA) is a plausible upstream cause of `08`'s 90-minute wall that acute fuelling alone won't fix, why swimming is non-osteogenic (the one clear swim-specific, actionable finding, cross-refs `07-strength-dryland.md`), why no validated LEA screening exists for a post-menopausal athlete, and an HRV/RHR interpretation confound cross-refed into `10-recovery-hrv.md`. States plainly that diagnosis/treatment/bone density are physician/dietitian territory. **UNREVIEWED**, pending human review. |
 | `14-swim-set-structure.md` | Session *composition* (warm-up/main-set/cool-down) for the "additional" pool-independent aerobic swim session, built on top of `04`'s CSS/zone system without changing it: proportions and main-set format menu are Coach judgment/convention; negative-split pacing cross-refs `04`'s existing evidence; a base->build/peak shift toward broken-distance/race-pace-adjacent work is `[EVIDENCE: swim]` (González-Ravé et al. 2021, Pla et al. 2019). Does not touch the Saturday long-swim session (`06`'s territory). **UNREVIEWED**, pending human review. |
+| `15-tiered-session-load.md` | The tiered `session_load` fallback (sRPE > HR-based TRIMP > swim pace-IF > duration-only) fixing the confirmed bug where RPE-less workouts (62 of Renee's 63 real logged workouts) were silently excluded from every load total. Banister TRIMP formula/citation, HRmax/HRrest derivation and their honest confidence labels, the swim-specific cubed-IF TSS adaptation, and the documented cross-tier scale-mismatch limitation. Split out of `03-periodization.md` to stay under its word-count cap. **UNREVIEWED**, pending human review. |
 | `reference_list.md` | **The canonical citation source.** Every claim in every file above resolves to an entry here (title + author + year), never a URL/ID — see its own header for why. |
 | `sample_pool_workout_traditional.md` | A real logged pool-coach workout sample (traditional/technique-focused notation) — reference material for `/log-workout`'s coach-text parser, not a research citation. |
 | `sample_pool_workout_openwater_focus.md` | A real logged pool-coach workout sample (open-water-focused notation) — same purpose as above. |
@@ -36,6 +37,7 @@ load `00-conventions.md` once per session to know how to read the tags.
 | "Should I do the single-day swim or the stage option?" | `06-long-swim-progression.md` (format switch section) |
 | "What's the structure of my additional/aerobic swim — warm-up, main set, cool-down?" | `14-swim-set-structure.md` (session composition on top of `04`'s zones; does not cover the Saturday long swim, see `06`) |
 | "Is my training load too high / monotonous?" | `03-periodization.md` (monotony, ACWR + its criticized-methodology caveat) |
+| "Why is my logged workout's load lower/higher than I expected?" / "why don't I have an RPE on this?" / HR-TRIMP or swim-pace load questions | `15-tiered-session-load.md` (the sRPE/HR-TRIMP/pace-IF/duration-only tiered fallback, and the cross-tier scale-mismatch caveat) |
 | "How am I doing on compliance / consistency?" | `03-periodization.md` (compliance definition + thresholds) |
 | Fueling, feeding intervals, carb targets, the "wall at X minutes" question | `08-ultra-feeding.md` (in-session carbohydrate dose/gut-training, the 90-minute-wall hypotheses, post-swim rehydration) — cross-refs `13-reds-energy-availability.md` if acute fuelling fixes don't resolve a durability wall. `10-recovery-hrv.md`'s nutrition section still covers the post-exercise recovery-window slice specifically. |
 | Hydration, sodium, cramping, "should I drink more?" | `08-ultra-feeding.md` (post-swim rehydration protocol + the exercise-associated-hyponatremia **safety rail** — read that section before ever telling an athlete to drink more). |
@@ -57,12 +59,13 @@ Per ROADMAP.md's repo-structure sketch, topic files `01` (physiology),
 (race execution / the full macro taper — `10`'s mini-taper section covers
 only the between-events case) are **not yet authored**. `07`
 (strength/dryland), `10` (recovery/HRV), `11` (workout analytics), `08`
-(ultra feeding), `13` (RED-S/energy availability), and `14` (swim set
-structure) have all been authored, each grounding an existing engine
-constant or a logged athlete question rather than speculatively covering
-ROADMAP's full sketch. `10` is human-reviewed (Oura device-trust pass,
-2026-07-11); `07`, `11`, `08`, `13`, and `14` remain `UNREVIEWED` pending
-human review — `/coach` and future readers should treat their claims as
-drafts, not settled grounding, until that review happens.
+(ultra feeding), `13` (RED-S/energy availability), `14` (swim set
+structure), and `15` (tiered session load) have all been authored, each
+grounding an existing engine constant or a logged athlete question rather
+than speculatively covering ROADMAP's full sketch. `10` is human-reviewed
+(Oura device-trust pass, 2026-07-11); `07`, `11`, `08`, `13`, `14`, and
+`15` remain `UNREVIEWED` pending human review — `/coach` and future readers
+should treat their claims as drafts, not settled grounding, until that
+review happens.
 `/coach` should say plainly when a question falls in one of the remaining
 gaps rather than improvising a citation that doesn't exist yet.

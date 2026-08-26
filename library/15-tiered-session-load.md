@@ -1,0 +1,180 @@
+# Tiered session load: sRPE > HR-based TRIMP > swim pace-IF > duration-only
+
+Grounds `engine/swim_coach/load.py`'s `session_load`/`daily_loads` tiered
+fallback (moved out of `03-periodization.md`'s "Load monitoring" section to
+stay under that file's word-count cap; the summary there still points
+here). See `00-conventions.md` for the tagging scheme and
+`reference_list.md` for full citations.
+
+## The problem this fixes
+
+Confirmed against Renee's real deployed data: she has 63 real logged
+workouts (synced from her watch via intervals.icu), but only 1 carries an
+RPE -- the other 62 are pure device telemetry (HR, pace, no subjective
+survey). The original `session_load` returned `None` for a missing RPE,
+and `daily_loads` *excluded* that workout from its date's total entirely --
+meaning 62 of her 63 real workouts were invisible to every downstream load
+signal built on `daily_loads` (CTL/ATL/TSB, ACWR, monotony).
+
+**Design principle:** a workout's real training load does not depend on
+whether the athlete bothered to survey it. RPE adds fidelity on top of a
+real, objective load number -- it does not gate whether a load number
+exists at all. `session_load` now falls through four tiers of decreasing
+fidelity, and the last tier is unconditional (never `None`).
+
+## The four tiers
+
+### Tier 1: sRPE
+
+`duration_min * rpe`, unchanged from before -- the standard Foster
+session-RPE model, sport-agnostic. **Coach judgment**, not itself a
+swim-specific evidence claim, though its swim-specific *validity* IS
+separately evidenced (see `03-periodization.md`'s "RHR/HRV baseline
+deviation" section: **✓ Wallace, Slattery & Coutts 2009**, `[EVIDENCE:
+swim]`).
+
+### Tier 2: HR-based TRIMP (Banister heart-rate-reserve training impulse)
+
+Used when `avg_hr`, a derivable `hr_max`, and a derivable `hr_rest` are all
+available:
+
+```
+HRR_fraction = (avg_hr - hr_rest) / (hr_max - hr_rest)
+TRIMP = duration_min * HRR_fraction * weight(HRR_fraction)
+weight(x) = 0.64 * e^(1.92*x)   for men
+weight(x) = 0.86 * e^(1.67*x)   for women
+```
+
+**✓ Verified by direct web search this session** (title/authors/publisher/
+pages confirmed): **Banister EW (1991)**, "Modeling Elite Athletic
+Performance," in *Physiological Testing of Elite Athletes* (Green HJ,
+McDougall JD, Wenger HA, eds), Human Kinetics, Champaign IL, pp. 403-424 --
+the field's own original heart-rate-based training-load method, predating
+sRPE, derived separately for men and women from each group's own
+blood-lactate profile as exercise intensity rises. Corroborated by
+**Morton RH, Fitz-Clarke JR, Banister EW (1990)**, "Modeling human
+performance in running," *Journal of Applied Physiology*, 69(3):1171-1177
+-- same TRIMP family, running application, same lead author. `[ADAPTED:
+general-endurance]` -- not swim-specific. **Confidence: medium** (the
+primary formula is verified and real; it just isn't a swim-specific
+citation). **Test:** if TRIMP-tier loads read as systematically too
+low/high once Renee logs enough dual RPE+HR sessions to eyeball the two
+against each other, revisit.
+
+**⚠ Get this right:** several popular training-log/calculator sites
+reproduce this with the MALE 0.64 coefficient applied to both sexes and
+only the exponent swapped for women -- that does **not** match the primary
+source. This engine's `TRIMP_MALE_COEFFICIENT`/`TRIMP_FEMALE_COEFFICIENT`
+(0.64 vs. 0.86) and `TRIMP_MALE_EXPONENT`/`TRIMP_FEMALE_EXPONENT` (1.92 vs.
+1.67) are both kept distinct per sex.
+
+**`hr_max` derivation:** no lab-tested HRmax is on file for this athlete
+(no fixed HRmax field on `Athlete`). Estimated as the highest
+`Workout.max_hr` ever logged in the athlete's own history -- a common
+practical convention when no lab test exists, not itself a peer-reviewed
+formula. **~ Ausland Å., Kelemen B., Seiler S. (2026)**, "An Exploratory
+Study of Maximal Heart Rate Determination in Endurance Athletes: Laboratory
+Testing Versus Field Based," *Frontiers in Sports and Active Living*,
+8:1806303 -- found real athlete-reported field-effort HRmax exceeded
+standard age-based formulas (Fox 220-age, Tanaka 208-0.7*age) by ~5-6 bpm
+on average, supporting field-observed HR data over generic formulas. Not an
+exact match for this specific convention (that study compares self-reported
+*maximal-effort* HR against lab tests/formulas, not "highest incidentally
+observed HR across ordinary training sessions" -- this athlete's logged
+workouts are training, not standardized max-effort tests, so the proxy is a
+floor that can only rise as more history accumulates, never a confirmed
+ceiling). PROVISIONAL, not `[EVIDENCE]`.
+
+**`hr_rest` derivation:** `Wellness.resting_hr` is optional and sparse (a
+per-day check-in field). Estimated as a short rolling average
+(`HR_REST_LOOKBACK_READINGS = 5`) of the most recent logged readings on or
+before the workout's own date; falls back to
+`HR_REST_GENERIC_FALLBACK_BPM = 60.0` (the top of the commonly-cited
+~60-100 bpm normal adult resting-HR range -- American Heart Association
+patient-education material, "All About Heart Rate") only when the athlete
+has never logged a `resting_hr` at all. Deliberately the top of that range,
+not a lower elite-athlete-typical value: a HIGHER assumed `hr_rest`
+*understates* the HRR fraction and therefore *understates* TRIMP -- the
+safer direction to be wrong in for an assumed number feeding a
+training-load estimate.
+
+Explicitly considered and rejected: deriving `hr_rest` from the athlete's
+own lowest-ever *in-workout* `avg_hr` instead of a population default. Even
+an easy recovery swim's average HR sits well above true resting HR
+(measured supine/seated, not mid-exercise) -- that proxy would
+systematically understate `hr_rest`, inflate the HRR fraction, and
+overestimate load, worse in both accuracy and safety direction than the
+population fallback above.
+
+**Sex selection:** the athlete's `sex` field (`Athlete.sex`) selects the
+coefficient pair. When unset (as Renee's currently is) or `"other"`, the
+engine averages the male and female weighting curves rather than silently
+assuming one -- a deliberate neutral default, not a resolved citation.
+
+### Tier 3: swim pace-based intensity (a TSS-family formula)
+
+Used when tier 2 isn't available, the session is a swim (`swim_pool`/
+`swim_ow`), and both the workout's `avg_pace_s_per_100m` and the athlete's
+`css_pace_s_per_100m` are known:
+
+```
+IF = css_pace_s_per_100m / avg_pace_s_per_100m
+swim_tss = duration_hours * IF^3 * 100
+```
+
+IF is inverted relative to power-based intensity factor because pace is a
+*time* value -- a *lower* `avg_pace_s_per_100m` is *faster*, so it must
+produce a *higher* IF, not lower (`tests/unit/test_load.py` has a direct
+faster-swim-scores-higher-load regression test for this).
+
+**✓ Verified by direct web search/fetch this session.** The general
+TSS-family shape (`TSS = duration_hours * IF^2 * 100`, IF = Normalized
+Power / FTP; one hour exactly at FTP scores 100) originates from
+**Allen H., Coggan A. (2010)**, *Training and Racing with a Power Meter*
+(2nd ed.), VeloPress -- the originating practitioner text for TSS/IF, not a
+peer-reviewed journal source, same footing as this project's other
+TrainingPeaks-convention citations (see `03-periodization.md`'s CTL/ATL
+section). TrainingPeaks' own swim-specific documentation ("Calculating
+Swimming TSS Score," confirmed by direct fetch this session) explicitly
+**cubes** the intensity factor instead of squaring it: "because water
+presents more resistance than air, the physiological stress of swimming
+increases with increasing swim speed faster than ... running" -- a
+deliberate, documented swim-specific adaptation of the generic cycling
+formula, not an unexamined carry-over. `[ADAPTED: cycling]`. **Confidence:
+medium** (a widely-used practitioner convention with a stated physical
+rationale, not an independently validated exponent). **Test:** if this
+tier's swim loads consistently feel out of proportion to sRPE-scored swims
+of similar perceived effort once more dual-logged data exists, revisit the
+exponent.
+
+### Tier 4: duration-only fallback
+
+`duration_min * DURATION_ONLY_ASSUMED_INTENSITY`
+(`DURATION_ONLY_ASSUMED_INTENSITY = 5`, the same 1-10-scale "somewhat hard"
+midpoint the old `DEFAULT_RPE_WHEN_MISSING` constant used). **Coach
+judgment**, last resort only, unconditional so a workout is never simply
+absent from a load total for lack of one specific signal. This replaces
+the old `assume_default_rpe`/`DEFAULT_RPE_WHEN_MISSING` opt-in escape hatch
+(removed as dead code): that mechanism let a caller *choose* to fake an
+RPE for coverage; this fires automatically as the guaranteed final tier,
+only after every richer signal above has already been checked and failed.
+
+## Known limitation: the tiers are not on one numeric scale
+
+sRPE and HR-based TRIMP were never designed to be summed interchangeably
+within one athlete's history -- a session scored by TRIMP typically comes
+out to roughly a third to a half of what the *same* effort would score via
+sRPE (see `tests/unit/test_load.py`'s worked examples: a 60-minute session
+at HRR_fraction≈0.71 scores ~108-121 TRIMP depending on sex, versus 300-480
+for the same duration at a plausible sRPE of 5-8). `daily_loads` sums
+whatever tier each individual workout resolves to anyway, because a real
+lower-fidelity number still beats a silently excluded workout, but a day
+mixing an sRPE-scored session with a TRIMP-scored one will under-represent
+the TRIMP-scored session's relative contribution to that day's total.
+
+This is a real, documented gap, not a solved problem. A future pass could
+calibrate TRIMP/pace-IF against this athlete's own historical
+sRPE-vs-HR/pace data once enough dual-logged sessions exist to fit a
+personal scaling factor -- but inventing an uncited scaling constant now
+would trade one silent distortion for another. Revisit once Renee logs
+more RPE alongside her watch data.

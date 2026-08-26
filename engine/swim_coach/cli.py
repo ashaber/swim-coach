@@ -339,7 +339,7 @@ def _cmd_summarize(args: argparse.Namespace, store: StoreInterface) -> int:
     """
     slug = args.athlete
     try:
-        store.load_athlete(slug)
+        athlete = store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
         return _error_from_exception(_error_label(store, slug, "profile.yaml"), exc)
 
@@ -362,10 +362,14 @@ def _cmd_summarize(args: argparse.Namespace, store: StoreInterface) -> int:
 
     volume_by_week = {_iso_week(ws): weekly_volume_m(workouts, ws) for ws in week_starts}
 
-    loads = daily_loads(workouts)
+    # `athlete`/`wellness` unlock the HR-TRIMP (tier 2) and swim pace-IF
+    # (tier 3) fallbacks for workouts with no logged RPE -- see
+    # `load.daily_loads`'s docstring. Without them this would silently
+    # fall back to tiers 1/4 only for every RPE-less workout.
+    loads = daily_loads(workouts, athlete=athlete, wellness=wellness)
     window_loads = {d: v for d, v in loads.items() if span_start <= d <= span_end}
     monotony_value = monotony(window_loads)
-    load_ratio = acute_chronic_ratio(workouts, as_of)
+    load_ratio = acute_chronic_ratio(workouts, as_of, athlete=athlete, wellness=wellness)
 
     window_wellness = [w for w in wellness if span_start <= w.date <= span_end]
     trend = wellness_trend(window_wellness)
