@@ -272,6 +272,19 @@ export async function fetchPlan({ baseUrl, token, athlete }) {
   return apiRequest({ baseUrl, token, path: `/api/plan?athlete=${encodeURIComponent(athlete)}` });
 }
 
+/** GET {baseUrl}/api/plan/load?athlete=<slug> -- the athlete's own
+ * CTL/ATL/TSB Banister training-load series (see
+ * backend/app/routes/plan.py's `get_plan_load`, which calls straight into
+ * `summarize_rollup`), for the Plan tab's training-load chart
+ * (views.js's renderLoadChart). Self-access, same `?athlete=`/resolve_athlete
+ * convention as `fetchPlan` above -- deliberately its own request rather
+ * than folded into `fetchPlan`'s response, since the chart is the only
+ * consumer of this field and the two are cached under this repo's
+ * NetworkFirst service-worker strategy independently either way. */
+export async function fetchPlanLoad({ baseUrl, token, athlete }) {
+  return apiRequest({ baseUrl, token, path: `/api/plan/load?athlete=${encodeURIComponent(athlete)}` });
+}
+
 /** GET {baseUrl}/api/athlete?athlete=<slug> -- fetches the athlete's own
  * profile, to prefill the Settings tab's profile-edit form. */
 export async function getAthlete({ baseUrl, token, athlete }) {
@@ -413,6 +426,17 @@ export async function fetchCoachWorkouts({ baseUrl, token, athlete }) {
  * `fetchCoachWorkouts`. */
 export async function fetchCoachFeedback({ baseUrl, token, athlete }) {
   return apiRequest({ baseUrl, token, path: `/api/coach/athletes/${encodeURIComponent(athlete)}/feedback` });
+}
+
+/** GET {baseUrl}/api/coach/athletes/<athlete>/load -- the coach-side view of
+ * one coached athlete's CTL/ATL/TSB Banister training-load series (see
+ * backend/app/routes/coach.py's `coach_view_load`), for the roster tab's
+ * training-load chart -- the exact same `views.js` `renderLoadChart`
+ * `fetchPlanLoad` feeds, just gated via `resolve_coach_athlete` instead of
+ * `resolve_athlete`. Path segment, same convention as `fetchCoachWorkouts`/
+ * `fetchCoachFeedback`. */
+export async function fetchCoachLoad({ baseUrl, token, athlete }) {
+  return apiRequest({ baseUrl, token, path: `/api/coach/athletes/${encodeURIComponent(athlete)}/load` });
 }
 
 /** PATCH {baseUrl}/api/coach/athletes/<athlete>/feedback/<feedbackId> -- a

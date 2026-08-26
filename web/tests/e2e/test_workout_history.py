@@ -22,6 +22,7 @@ CORS_HEADERS = {
 }
 
 PLAN_STUB = '{"slug":"renee","athlete":{"name":"Renee"},"events":[],"weeks":[],"macro":{"blocks":[]}}'
+PLAN_LOAD_STUB = '{"athlete":"renee","weeks":12,"ctl_atl_tsb":[]}'
 
 # Real fixture data from the task brief: andrew's 2026-07-09 cross_train
 # (rich analytics, no distance since it's not a swim) and his 2026-03-14
@@ -98,6 +99,7 @@ def page(request, base_url):
         # an uncaught pageerror that trips this fixture's teardown
         # assertion. This file doesn't care about the plan's content.
         ctx.route('**/api/plan*', _cors_route(200, 'application/json', PLAN_STUB))
+        ctx.route('**/api/plan/load*', _cors_route(200, 'application/json', PLAN_LOAD_STUB))
         pg = ctx.new_page()
         js_errors: list[str] = []
         pg.on('pageerror', lambda e: js_errors.append(str(e)))

@@ -7,6 +7,7 @@ import {
   parseStructureBlocks, parseMainSetIntervals, renderStructuredWorkout,
   splitStructuredRationale, sessionZoneDistribution, formatZoneDistributionSummary,
   stepCoachingCue, ZONE_GLOSSARY, TERM_GLOSSARY,
+  ctlAtlTsbChartGeometry, RACE_DAY_TSB_BAND,
 } from '../../src/plan.js';
 
 describe('isoWeekMonday', () => {
@@ -979,5 +980,97 @@ describe('longSwimLadder', () => {
 
   it('returns an empty ladder with no swims, macro, or event', () => {
     expect(longSwimLadder([], null, null)).toEqual([]);
+  });
+});
+
+describe('RACE_DAY_TSB_BAND', () => {
+  it('is the +5 to +25 TrainingPeaks/Joe Friel cycling-coaching reference range', () => {
+    expect(RACE_DAY_TSB_BAND).toEqual({ low: 5, high: 25 });
+  });
+});
+
+describe('ctlAtlTsbChartGeometry', () => {
+  it('returns isEmpty for a missing or empty series, without erroring', () => {
+    expect(ctlAtlTsbChartGeometry([]).isEmpty).toBe(true);
+    expect(ctlAtlTsbChartGeometry(null).isEmpty).toBe(true);
+    expect(ctlAtlTsbChartGeometry(undefined).isEmpty).toBe(true);
+  });
+
+  it('produces one point per series entry for each of the three lines', () => {
+    const series = [
+      ['2026-08-01', 10, 5, 5],
+      ['2026-08-02', 11, 6, 5],
+      ['2026-08-03', 12, 4, 8],
+    ];
+    const geo = ctlAtlTsbChartGeometry(series);
+    expect(geo.isEmpty).toBe(false);
+    expect(geo.ctlPoints).toHaveLength(3);
+    expect(geo.atlPoints).toHaveLength(3);
+    expect(geo.tsbPoints).toHaveLength(3);
+    // x strictly increases left to right, matching the series' own
+    // ascending-by-date order.
+    expect(geo.ctlPoints[0].x).toBeLessThan(geo.ctlPoints[1].x);
+    expect(geo.ctlPoints[1].x).toBeLessThan(geo.ctlPoints[2].x);
+    // First/last x land exactly on the plot's left/right edges.
+    expect(geo.ctlPoints[0].x).toBeCloseTo(geo.plotLeft, 5);
+    expect(geo.ctlPoints[2].x).toBeCloseTo(geo.plotRight, 5);
+  });
+
+  it('a higher value plots higher on screen (smaller SVG y)', () => {
+    const series = [
+      ['2026-08-01', 10, 5, 5],
+      ['2026-08-02', 20, 5, 15],
+    ];
+    const geo = ctlAtlTsbChartGeometry(series);
+    // CTL rises 10 -> 20, so its second point's pixel y must be smaller
+    // (higher up the SVG) than its first.
+    expect(geo.ctlPoints[1].y).toBeLessThan(geo.ctlPoints[0].y);
+  });
+
+  it('single-point series is centered horizontally and does not divide by zero', () => {
+    const geo = ctlAtlTsbChartGeometry([['2026-08-01', 10, 5, 5]]);
+    expect(geo.isEmpty).toBe(false);
+    expect(Number.isFinite(geo.ctlPoints[0].x)).toBe(true);
+    expect(Number.isFinite(geo.ctlPoints[0].y)).toBe(true);
+    expect(geo.ctlPoints[0].x).toBeCloseTo((geo.plotLeft + geo.plotRight) / 2, 5);
+  });
+
+  it('the race-day reference band is always inside the plotted y-range, even when actual TSB never approaches it', () => {
+    const series = [
+      ['2026-08-01', 30, 30, 0],
+      ['2026-08-02', 30, 30, 0],
+    ];
+    const geo = ctlAtlTsbChartGeometry(series);
+    expect(geo.bandTop).toBeGreaterThanOrEqual(geo.plotTop);
+    expect(geo.bandBottom).toBeLessThanOrEqual(geo.plotBottom);
+    // Band top (higher value, 25) plots above band bottom (lower value, 5).
+    expect(geo.bandTop).toBeLessThan(geo.bandBottom);
+  });
+
+  it('x ticks always include the first and last date', () => {
+    const series = Array.from({ length: 20 }, (_, i) => [`2026-08-${String(i + 1).padStart(2, '0')}`, i, i, 0]);
+    const geo = ctlAtlTsbChartGeometry(series);
+    const labels = geo.xTicks.map((t) => t.label);
+    expect(labels[0]).toBe('2026-08-01');
+    expect(labels.at(-1)).toBe('2026-08-20');
+    expect(geo.xTicks.length).toBeLessThanOrEqual(5);
+  });
+
+  it('y ticks span from below the data minimum to above the data maximum', () => {
+    const series = [
+      ['2026-08-01', 10, 5, 5],
+      ['2026-08-02', 20, 8, 12],
+    ];
+    const geo = ctlAtlTsbChartGeometry(series);
+    const values = geo.yTicks.map((t) => t.value);
+    expect(Math.min(...values)).toBeLessThan(0); // padding pushes below the ATL min of 5 and below 0
+    expect(Math.max(...values)).toBeGreaterThan(20);
+  });
+
+  it('respects custom width/height/padding options', () => {
+    const series = [['2026-08-01', 10, 5, 5], ['2026-08-02', 11, 6, 5]];
+    const geo = ctlAtlTsbChartGeometry(series, { width: 300, height: 150 });
+    expect(geo.width).toBe(300);
+    expect(geo.height).toBe(150);
   });
 });

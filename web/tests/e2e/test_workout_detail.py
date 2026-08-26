@@ -25,6 +25,7 @@ CORS_HEADERS = {
 }
 
 PLAN_STUB = '{"slug":"renee","athlete":{"name":"Renee"},"events":[],"weeks":[],"macro":{"blocks":[]}}'
+PLAN_LOAD_STUB = '{"athlete":"renee","weeks":12,"ctl_atl_tsb":[]}'
 
 # A rich .fit workout carrying laps + pauses + full analytics + avg/max HR --
 # everything the detail view can render. Realistic shapes per
@@ -110,6 +111,7 @@ def page(request, base_url):
         # an uncaught pageerror that trips this fixture's teardown
         # assertion. This file doesn't care about the plan's content.
         ctx.route('**/api/plan*', _cors_route(200, 'application/json', PLAN_STUB))
+        ctx.route('**/api/plan/load*', _cors_route(200, 'application/json', PLAN_LOAD_STUB))
         pg = ctx.new_page()
         js_errors: list[str] = []
         pg.on('pageerror', lambda e: js_errors.append(str(e)))
@@ -290,6 +292,9 @@ def test_reload_returns_to_list_without_errors(page):
             '{"slug":"renee","athlete":{"name":"Renee"},"events":[],"weeks":[],"macro":{"blocks":[]}}',
         ),
     )
+    # GET /api/plan/load fires unconditionally at boot alongside GET
+    # /api/plan (main.js's loadPlanLoad) -- same reload hazard as above.
+    page.route('**/api/plan/load*', _cors_route(200, 'application/json', PLAN_LOAD_STUB))
     _open_log_tab_with_workouts(page, [RICH_FIT_WORKOUT])
     page.click('.hist-row')
     page.wait_for_selector('[data-a="history:back"]')
@@ -323,6 +328,9 @@ def test_history_loads_at_boot_without_tab_switch(page):
             '{"slug":"renee","athlete":{"name":"Renee"},"events":[],"weeks":[],"macro":{"blocks":[]}}',
         ),
     )
+    # GET /api/plan/load fires unconditionally at boot alongside GET
+    # /api/plan (main.js's loadPlanLoad) -- same reload hazard as above.
+    page.route('**/api/plan/load*', _cors_route(200, 'application/json', PLAN_LOAD_STUB))
     _open_log_tab_with_workouts(page, [RICH_FIT_WORKOUT])
     # active tab ('log') is now persisted in localStorage (ACTIVE_TAB_KEY),
     # same as the real app after any tab click -- see main.js's setTab.

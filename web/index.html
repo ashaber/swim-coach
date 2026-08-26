@@ -157,6 +157,22 @@
     .zbar { height: 8px; border-radius: 4px; background: linear-gradient(90deg, var(--c-recovery), var(--c-signal)); opacity:.85; }
     .zrow .p { color: var(--ink-soft); }
 
+    /* CTL/ATL/TSB training-load chart (see views.js's renderLoadChart /
+       plan.js's ctlAtlTsbChartGeometry). `width:100%;height:auto` on the
+       SVG plus its own `viewBox` is what keeps this responsive on narrow
+       mobile viewports without horizontal overflow -- the intrinsic pixel
+       size in the viewBox is just a coordinate space, never the rendered
+       size. */
+    .load-chart-panel { padding-bottom: 18px; }
+    .load-chart-svg { width: 100%; height: auto; display: block; margin-top: 4px; }
+    .load-chart-band { fill: var(--accent); opacity: .12; }
+    .load-chart-gridline { stroke: var(--line-soft); stroke-width: 1; }
+    .load-chart-axis-label { font-family: var(--mono); font-size: 9px; fill: var(--ink-faint); }
+    .load-chart-line { fill: none; stroke-width: 2; }
+    .load-chart-legend { margin-top: 10px; }
+    .load-chart-band-dot { background: var(--accent); opacity: .4; }
+    .load-chart-note { font-size: 12px; color: var(--ink-faint); margin-top: 12px; line-height: 1.55; }
+
     .disc { margin-top: 22px; font-size: 12px; color: var(--ink-faint); text-align: center; line-height: 1.6; }
 
     .offline-banner { display: none; background: var(--c-strength); color: #1a1206; font-size: 12.5px; font-weight: 700;

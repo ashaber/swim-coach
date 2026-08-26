@@ -39,6 +39,20 @@ NO_GRANTS_IDENTITY = {'name': 'Andrew', 'athlete': 'andrew', 'role': 'athlete', 
 PLAN_STUB = json.dumps({
     'slug': 'andrew', 'athlete': {'name': 'Andrew'}, 'events': [], 'macro': {'blocks': []}, 'weeks': [],
 })
+PLAN_LOAD_STUB = json.dumps({'athlete': 'andrew', 'weeks': 12, 'ctl_atl_tsb': []})
+
+# The coach roster's own training-load chart data -- a real, non-empty
+# series so test_coach_roster's assertions can prove the chart actually
+# renders (see the "training load chart" tests below), not just that the
+# workouts/feedback lists still work.
+COACH_LOAD_STUB = json.dumps({
+    'athlete': 'renee', 'weeks': 12,
+    'ctl_atl_tsb': [
+        ['2026-08-18', 10.0, 8.0, 2.0],
+        ['2026-08-19', 10.5, 7.0, 3.5],
+        ['2026-08-20', 11.0, 6.5, 4.5],
+    ],
+})
 
 ATHLETES_STUB = json.dumps([{'slug': 'renee', 'name': 'Renee'}])
 
@@ -86,9 +100,19 @@ def _make_ctx(pw, cfg, *, identity=COACH_IDENTITY, reply_calls=None):
     seed_identity(ctx, identity=identity)
     seed_settings(ctx)
     ctx.route('**/api/plan*', _cors_route(200, 'application/json', PLAN_STUB))
+    # GET /api/plan/load fires unconditionally at boot alongside GET
+    # /api/plan (main.js's loadPlanLoad) -- same CORS-preflight treatment.
+    ctx.route('**/api/plan/load*', _cors_route(200, 'application/json', PLAN_LOAD_STUB))
     ctx.route('**/api/coach/athletes/renee/workouts*', _cors_route(200, 'application/json', WORKOUT_STUB))
     ctx.route('**/api/coach/athletes/renee/feedback/f1', _reply_handler(reply_calls))
     ctx.route('**/api/coach/athletes/renee/feedback*', _cors_route(200, 'application/json', FEEDBACK_STUB))
+    # GET /api/coach/athletes/renee/load -- the roster tab's own training-load
+    # chart fetch (main.js's loadCoachLoad, fired once an athlete is selected;
+    # see views.js's renderLoadChart). Registered before the broad
+    # '**/api/coach/athletes*' route below so both can coexist (Playwright
+    # matches the more specific, longer-path pattern -- '*' never crosses a
+    # '/', same rule test_coach_grants_settings.py's _route_grants relies on).
+    ctx.route('**/api/coach/athletes/renee/load*', _cors_route(200, 'application/json', COACH_LOAD_STUB))
     ctx.route('**/api/coach/athletes*', _cors_route(200, 'application/json', ATHLETES_STUB))
     return browser, ctx
 

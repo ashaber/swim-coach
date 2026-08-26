@@ -979,3 +979,139 @@ export const TERM_GLOSSARY = [
   { term: 'EMOM', def: '"Every Minute On the Minute" -- a new round starts on a fixed time interval regardless of how long the previous round took.' },
   { term: 'AMRAP', def: '"As Many Rounds/Reps As Possible" within a fixed time window.' },
 ];
+
+// --- CTL/ATL/TSB training-load chart (Plan tab + coach roster) -------------
+// Pure geometry computation for a hand-rolled inline SVG line chart -- no
+// charting library (this project's stated minimal-dependency convention;
+// web/package.json carries exactly two font packages and nothing
+// chart-related). Consumes the `ctl_atl_tsb` series
+// `backend/app/context.py`'s `summarize_rollup` returns (surfaced directly
+// via the `GET /api/plan/load` / `GET /api/coach/athletes/{slug}/load`
+// endpoints) -- `[[dateIso, ctl, atl, tsb], ...]`, ascending by date.
+// `views.js`'s `renderLoadChart` turns this geometry into markup; kept
+// separate here so the math is unit-testable without a DOM, matching this
+// file's existing split from `renderStructuredWorkout` etc.
+//
+// CTL ("fitness") and ATL ("fatigue") are exponentially-weighted moving
+// averages of daily training load (`engine/swim_coach/load.py`'s
+// `ctl_atl_tsb_series`); TSB ("form") = CTL - ATL. All three share ONE
+// y-axis (same units -- TSB is literally the other two's difference) --
+// the standard cycling-coaching "Performance Management Chart" layout.
+// Plotting TSB alone would lose exactly the signal that matters: whether a
+// rising TSB reflects a real taper (ATL falling while CTL holds) or a
+// stale plan (both eroding together).
+
+/** TrainingPeaks/Joe Friel's commonly-cited cycling-coaching "race-day TSB"
+ * reference range -- roughly +5 to +25 -- with that same convention's own
+ * explicit caveat that individual variation is large (as much as ~15
+ * points between athletes) and masters athletes tend toward the higher
+ * end. This is a CYCLING-coaching convention: never verified for swimming,
+ * never peer-reviewed, and not itself an [EVIDENCE]/[ADAPTED] engine
+ * constant (nothing here feeds plan.py's math) -- rendered as a loose
+ * reference band, not a target, and `views.js`'s `renderLoadChart` says so
+ * in plain language next to it. Same underlying honesty standard as
+ * `engine/swim_coach/load.py`'s `CTL_TIME_CONSTANT_DAYS`/
+ * `ATL_TIME_CONSTANT_DAYS` module comment (also cycling-borrowed, also
+ * unverified for swimming) -- that caveat is repeated in the chart's own
+ * caption rather than papered over here. */
+export const RACE_DAY_TSB_BAND = { low: 5, high: 25 };
+
+const LOAD_CHART_WIDTH = 640;
+const LOAD_CHART_HEIGHT = 260;
+const LOAD_CHART_PADDING = { top: 16, right: 12, bottom: 28, left: 34 };
+const LOAD_CHART_MAX_X_TICKS = 5;
+const LOAD_CHART_Y_TICK_COUNT = 4;
+
+/** Rounds to one decimal -- CTL/ATL/TSB values arrive already 1-decimal
+ * rounded from `summarize_rollup`, so axis labels derived from the data's
+ * own min/max stay at the same precision rather than growing spurious
+ * extra digits from the padding/tick math below. */
+function roundToTenth(value) {
+  return Math.round(value * 10) / 10;
+}
+
+/** At most `maxCount` evenly spaced indices into an `n`-length array,
+ * always including index 0 and `n - 1` (so an axis always anchors on the
+ * series' real first/last date) -- used for the x-axis date ticks. Falls
+ * back to every index when `n <= maxCount`, since there's nothing to
+ * thin out. */
+function evenIndices(n, maxCount) {
+  if (n <= 0) return [];
+  if (n <= maxCount) return Array.from({ length: n }, (_, i) => i);
+  const picks = [];
+  for (let i = 0; i < maxCount; i++) {
+    picks.push(Math.round((i / (maxCount - 1)) * (n - 1)));
+  }
+  return [...new Set(picks)];
+}
+
+/** Pure geometry for the CTL/ATL/TSB chart: given `series` (the
+ * `ctl_atl_tsb` list from `GET /api/plan/load` /
+ * `GET /api/coach/athletes/{slug}/load`), returns everything
+ * `views.js`'s `renderLoadChart` needs to draw the SVG -- pixel-space
+ * point coordinates for each of the three lines, the race-day reference
+ * band's pixel span, and tick marks for both axes -- with no
+ * DOM/rendering logic of its own.
+ *
+ * Returns `{ isEmpty: true, width, height }` for a missing/empty series
+ * (no workouts logged yet, or every logged workout falls outside the
+ * requested window) rather than erroring or dividing by zero on an empty
+ * domain -- callers render an honest "not enough data yet" message
+ * instead of a blank or broken chart. */
+export function ctlAtlTsbChartGeometry(series, {
+  width = LOAD_CHART_WIDTH, height = LOAD_CHART_HEIGHT, padding = LOAD_CHART_PADDING,
+} = {}) {
+  if (!series || series.length === 0) {
+    return { isEmpty: true, width, height };
+  }
+
+  const plotW = width - padding.left - padding.right;
+  const plotH = height - padding.top - padding.bottom;
+  const n = series.length;
+
+  const ctlValues = series.map((p) => p[1]);
+  const atlValues = series.map((p) => p[2]);
+  const tsbValues = series.map((p) => p[3]);
+  // The y-domain always includes the race-day band (and 0) so both are
+  // visible on the chart even for an athlete whose real TSB never gets
+  // near them (e.g. deep in a build block) -- context, not just "whatever
+  // fits today's data".
+  const allValues = [
+    ...ctlValues, ...atlValues, ...tsbValues, RACE_DAY_TSB_BAND.low, RACE_DAY_TSB_BAND.high, 0,
+  ];
+  const rawMin = Math.min(...allValues);
+  const rawMax = Math.max(...allValues);
+  const span = rawMax - rawMin || 1;
+  const yMin = rawMin - span * 0.08;
+  const yMax = rawMax + span * 0.08;
+
+  const xFor = (i) => (n === 1 ? padding.left + plotW / 2 : padding.left + (i / (n - 1)) * plotW);
+  const yFor = (v) => padding.top + (1 - (v - yMin) / (yMax - yMin)) * plotH;
+
+  const toPoints = (values) => series.map((_, i) => ({ x: xFor(i), y: yFor(values[i]) }));
+
+  const xTicks = evenIndices(n, LOAD_CHART_MAX_X_TICKS).map((i) => ({ x: xFor(i), label: series[i][0] }));
+  const yTicks = Array.from({ length: LOAD_CHART_Y_TICK_COUNT + 1 }, (_, i) => {
+    const value = roundToTenth(yMin + (i / LOAD_CHART_Y_TICK_COUNT) * (yMax - yMin));
+    return { y: yFor(value), value };
+  });
+
+  return {
+    isEmpty: false,
+    width,
+    height,
+    plotLeft: padding.left,
+    plotRight: width - padding.right,
+    plotTop: padding.top,
+    plotBottom: height - padding.bottom,
+    ctlPoints: toPoints(ctlValues),
+    atlPoints: toPoints(atlValues),
+    tsbPoints: toPoints(tsbValues),
+    bandTop: yFor(RACE_DAY_TSB_BAND.high),
+    bandBottom: yFor(RACE_DAY_TSB_BAND.low),
+    xTicks,
+    yTicks,
+    firstDate: series[0][0],
+    lastDate: series[n - 1][0],
+  };
+}

@@ -167,6 +167,15 @@ def _plan_route(route):
     route.fulfill(status=200, content_type='application/json', body=PLAN_STUB)
 
 
+PLAN_LOAD_STUB = json.dumps({'athlete': 'renee', 'weeks': 12, 'ctl_atl_tsb': []})
+
+
+def _plan_load_route(route):
+    """GET /api/plan/load fires unconditionally at boot alongside GET
+    /api/plan (main.js's loadPlanLoad) -- same treatment as _plan_route."""
+    route.fulfill(status=200, content_type='application/json', body=PLAN_LOAD_STUB)
+
+
 @pytest.fixture(params=BROWSERS)
 def page(request, base_url):
     """Signed in and configured (same seed_identity/seed_settings convention
@@ -184,6 +193,7 @@ def page(request, base_url):
         seed_identity(ctx)
         seed_settings(ctx)
         ctx.route('**/api/plan*', _plan_route)
+        ctx.route('**/api/plan/load*', _plan_load_route)
         pg = ctx.new_page()
         js_errors: list[str] = []
         pg.on('pageerror', lambda e: js_errors.append(str(e)))

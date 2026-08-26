@@ -78,6 +78,11 @@ def page(request, base_url):
         # an uncaught pageerror that trips this fixture's teardown
         # assertion. This file doesn't care about the plan's content.
         ctx.route('**/api/plan*', _cors_route(200, 'application/json', PLAN_STUB))
+        # Same "unconditional at boot once configured" hazard, now also true
+        # of GET /api/plan/load (main.js's loadPlanLoad, fired alongside
+        # loadPlan -- see views.js's renderLoadChart) -- unmocked, it fails
+        # on CORS the same way GET /api/plan would above.
+        ctx.route('**/api/plan/load*', _cors_route(200, 'application/json', PLAN_LOAD_STUB))
         pg = ctx.new_page()
         js_errors = []
         pg.on('pageerror', lambda e: js_errors.append(str(e)))
@@ -99,6 +104,7 @@ CORS_HEADERS = {
 }
 
 PLAN_STUB = '{"slug":"renee","athlete":{"name":"Renee"},"events":[],"weeks":[],"macro":{"blocks":[]}}'
+PLAN_LOAD_STUB = '{"athlete":"renee","weeks":12,"ctl_atl_tsb":[]}'
 
 
 def _cors_route(status, content_type, body):

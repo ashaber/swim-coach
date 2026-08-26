@@ -8,7 +8,7 @@ import {
   longSwimLadder,
   findSessionById, parseStructureBlocks, parseMainSetIntervals, renderStructuredWorkout,
   splitStructuredRationale, sessionZoneDistribution, formatZoneDistributionSummary,
-  ZONE_GLOSSARY, TERM_GLOSSARY,
+  ZONE_GLOSSARY, TERM_GLOSSARY, ctlAtlTsbChartGeometry,
 } from './plan.js';
 import { TOOL_LABELS } from './chat.js';
 import {
@@ -553,6 +553,93 @@ function renderMacroSection(macro, event, weeks) {
     </section>`;
 }
 
+// --- CTL/ATL/TSB training-load chart (Plan tab + coach roster) -------------
+// Shared, verbatim render function for both surfaces (see plan.js's
+// ctlAtlTsbChartGeometry module comment for the geometry math this
+// consumes) -- renderApp (the athlete's own Plan tab) and renderRosterTab
+// (the coach roster's acting-as-athlete view) call this same function with
+// different `load` state; only the data source differs (main.js's
+// loadPlanLoad vs. loadCoachLoad).
+
+const LOAD_CHART_LINE_COLOR_VAR = { ctl: '--accent', atl: '--c-strength', tsb: '--c-ow' };
+
+function loadChartPointsAttr(points) {
+  return points.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+}
+
+function renderLoadChartSvg(geo) {
+  const yTickLines = geo.yTicks.map((t) => `
+      <line x1="${geo.plotLeft}" y1="${t.y.toFixed(1)}" x2="${geo.plotRight}" y2="${t.y.toFixed(1)}" class="load-chart-gridline" />
+      <text x="${geo.plotLeft - 6}" y="${t.y.toFixed(1)}" class="load-chart-axis-label" text-anchor="end" dominant-baseline="middle">${esc(t.value)}</text>`).join('');
+
+  const xTickLabels = geo.xTicks.map((t) => `
+      <text x="${t.x.toFixed(1)}" y="${geo.plotBottom + 18}" class="load-chart-axis-label" text-anchor="middle">${esc(formatShortDate(parseIsoDate(t.label)))}</text>`).join('');
+
+  return `
+    <svg class="load-chart-svg" viewBox="0 0 ${geo.width} ${geo.height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Training load chart: CTL, ATL, and TSB over time">
+      <rect class="load-chart-band" x="${geo.plotLeft}" y="${geo.bandTop.toFixed(1)}" width="${geo.plotRight - geo.plotLeft}" height="${Math.max(0, geo.bandBottom - geo.bandTop).toFixed(1)}" />
+      ${yTickLines}
+      ${xTickLabels}
+      <polyline class="load-chart-line load-chart-line-ctl" points="${loadChartPointsAttr(geo.ctlPoints)}" style="stroke:var(${LOAD_CHART_LINE_COLOR_VAR.ctl})" />
+      <polyline class="load-chart-line load-chart-line-atl" points="${loadChartPointsAttr(geo.atlPoints)}" style="stroke:var(${LOAD_CHART_LINE_COLOR_VAR.atl})" />
+      <polyline class="load-chart-line load-chart-line-tsb" points="${loadChartPointsAttr(geo.tsbPoints)}" style="stroke:var(${LOAD_CHART_LINE_COLOR_VAR.tsb})" />
+    </svg>`;
+}
+
+/**
+ * Renders the CTL ("fitness") / ATL ("fatigue") / TSB ("form") Banister
+ * training-load chart -- shared verbatim by the athlete's own Plan tab
+ * (renderApp) and the coach roster's acting-as-athlete view (renderRosterTab);
+ * only the `load` state differs between the two call sites.
+ *
+ * `load` follows this app's usual async-state shape (`{status, data, error}`
+ * -- same convention as `state.plan`/`state.roster.workouts`), where
+ * `data.ctl_atl_tsb` is the `[dateIso, ctl, atl, tsb]` series from
+ * `GET /api/plan/load` / `GET /api/coach/athletes/{slug}/load`.
+ *
+ * All three lines share one y-axis -- the standard cycling-coaching
+ * "Performance Management Chart" layout (see plan.js's module comment for
+ * why TSB is never shown alone) -- plus a shaded reference band for the
+ * commonly-cited cycling-coaching "race-day TSB" range. The caption below
+ * the chart explicitly frames both the race-day band AND the underlying
+ * CTL/ATL time constants as cycling-derived and not yet swim-specific or
+ * peer-reviewed (see `engine/swim_coach/load.py`'s
+ * `CTL_TIME_CONSTANT_DAYS`/`ATL_TIME_CONSTANT_DAYS` module comment for the
+ * same caveat at its source) -- this chart must never read as more
+ * authoritative than that series actually is.
+ */
+export function renderLoadChart(load) {
+  if (!load || load.status === 'idle') return '';
+  if (load.status === 'loading' && !load.data) {
+    return '<div class="panel load-chart-panel"><h3>Training load</h3><p class="sub">Loading training load&hellip;</p></div>';
+  }
+  if (load.status === 'error') {
+    return `<div class="panel load-chart-panel"><h3>Training load</h3><div class="hist-error">Couldn't load training load: ${esc(load.error)}</div></div>`;
+  }
+  if (!load.data) return '';
+
+  const series = load.data.ctl_atl_tsb || [];
+  const geo = ctlAtlTsbChartGeometry(series);
+
+  const body = geo.isEmpty
+    ? '<p class="sub">Not enough logged training yet to show a fitness/fatigue trend.</p>'
+    : `
+      ${renderLoadChartSvg(geo)}
+      <div class="legend load-chart-legend">
+        <span class="li"><span class="dot" style="background:var(${LOAD_CHART_LINE_COLOR_VAR.ctl})"></span>CTL (fitness)</span>
+        <span class="li"><span class="dot" style="background:var(${LOAD_CHART_LINE_COLOR_VAR.atl})"></span>ATL (fatigue)</span>
+        <span class="li"><span class="dot" style="background:var(${LOAD_CHART_LINE_COLOR_VAR.tsb})"></span>TSB (form)</span>
+        <span class="li"><span class="dot load-chart-band-dot"></span>Race-day TSB reference band</span>
+      </div>`;
+
+  return `
+    <div class="panel load-chart-panel">
+      <h3>Training load (CTL / ATL / TSB)</h3>
+      ${body}
+      <p class="load-chart-note">CTL ("fitness") and ATL ("fatigue") are 42-day/7-day exponentially weighted averages of daily training load; TSB ("form") is CTL minus ATL. These time constants are the standard cycling/TrainingPeaks convention, carried over as a starting point -- not yet verified for swimming specifically. The shaded band (+5 to +25 TSB) is a commonly-targeted range in cycling coaching practice on race day, not a swim-specific or peer-reviewed target -- individual variation is large, so your own best-performance history is a better guide than this generic band.</p>
+    </div>`;
+}
+
 function renderZonesPanel(athlete) {
   const zones = athlete.zones;
   if (!zones) return '<div class="panel"><h3>Pace anchors</h3><p class="sub">No zones set yet.</p></div>';
@@ -637,14 +724,16 @@ function renderGlossaryPanel(open) {
 }
 
 export function renderApp(data, planSessionDetailId) {
-  const { athlete, events, macro, weeks, sessionPush, allWeeksOpen, glossaryOpen } = data;
+  const { athlete, events, macro, weeks, sessionPush, allWeeksOpen, glossaryOpen, load } = data;
   const event = macroTargetEvent(macro, events);
+  const loadChart = renderLoadChart(load);
 
   return `
     <div class="wrap">
       ${renderMasthead(athlete, event)}
       ${renderWeeksSection(weeks, planSessionDetailId, sessionPush, allWeeksOpen)}
       ${renderMacroSection(macro, event, weeks)}
+      ${loadChart ? `<section>${loadChart}</section>` : ''}
       <div class="foot">
         ${renderLegendPanel()}
         ${renderZonesPanel(athlete)}
@@ -1710,7 +1799,7 @@ function rosterShell(body) {
 
 export function renderRosterTab({
   athletes, actingAsAthlete, workouts, feedback, replyDrafts, replySubmit, workoutDetailId,
-  backendConfigured, online,
+  backendConfigured, online, load,
 }) {
   if (!backendConfigured) {
     return rosterShell(renderBackendNeededNotice(
@@ -1742,6 +1831,7 @@ export function renderRosterTab({
       <div class="s-head"><button type="button" class="btn-ghost" data-a="roster:back">&larr; Back to My Athletes</button></div>
       <p class="sub">Coaching <b>${esc(name)}</b> (${esc(actingAsAthlete)}).</p>
       ${!online ? '<div class="chat-banner">Offline -- some data may be out of date.</div>' : ''}
+      ${renderLoadChart(load)}
       <section class="hist-section">
         <div class="s-head"><h2>Workouts</h2></div>
         ${renderCoachWorkoutsSection(workouts)}
