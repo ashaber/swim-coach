@@ -85,6 +85,36 @@ event must still resolve if the athlete reactivates it or an old macro still
 references it historically. `active` only changes how the model *talks
 about* events in conversation (see PERSONA_AND_RULES), never which events
 existing engine/tool lookups can find.
+
+`propose_session_adjustment` closes the gap `reschedule_session` and
+`propose_adaptation` leave between them: the athlete wants ONE already-
+planned session's own CONTENT scaled up or down mid-week ("I'm fatigued
+today, can you make this shorter with less sprint work?" / "I'm feeling
+strong, give me a bit more") -- not moved to a different day
+(`reschedule_session`, no volume change at all) and not a whole week's
+volume recomputed from the rule table (`propose_adaptation`, and overkill
+for a one-off single-session ask anyway). Calls `swim_coach.plan.
+adjust_session` -- the engine function that actually scales an existing
+session's structured content (or, lacking that, its bare distance_m/
+duration_min) in place, never regenerating it from a different template --
+against a `session.model_copy(deep=True)` of the matched session, so the
+week on file is never touched until `confirm=True`. Same draft-then-confirm
+shape as `replace_week_plan`/`replace_macro_plan`: `confirm` defaults to
+`False`, which only computes and returns the candidate adjusted session
+(plus a comparison against the session as currently on file: old vs. new
+distance_m/duration_min, old vs. new structured step count) as JSON with
+`"persisted": false`, never calling `store.save_week`; `confirm=True`
+recomputes identically (deterministic given the same inputs, so safe to
+re-run) and persists by replacing that one session in place within its
+week's `sessions` list. Target-session matching (`iso_week` + `date` +
+optional `sport` to disambiguate) reuses `reschedule_session`'s exact
+convention and error-message style ("found 0"/"found N, pass sport"). The
+"increase" direction is capped at `SESSION_ADJUSTMENT_INCREASE_CAP_PCT`
+(see that constant's docstring in `plan.py`) -- a same-SESSION safety bound,
+distinct from and not a replacement for `WEEKLY_VOLUME_RAMP_CAP`, which
+still governs the whole week's own volume trajectory untouched by this
+tool. No cap applies to "reduce" -- asking for less today is never the
+unsafe direction.
 """
 
 from __future__ import annotations
@@ -98,7 +128,14 @@ from pydantic import ValidationError
 
 from swim_coach.adapt import adapt_week
 from swim_coach.models import Event, Feedback, Workout, WorkoutStructure
-from swim_coach.plan import _duration_min_for_distance, generate_week, scaffold_macro
+from swim_coach.plan import (
+    SESSION_ADJUSTMENT_INCREASE_CAP_PCT,
+    _duration_min_for_distance,
+    adjust_session,
+    count_structured_steps,
+    generate_week,
+    scaffold_macro,
+)
 from swim_coach.store import StoreInterface
 from swim_coach.workout_templates import TemplatePreference
 
@@ -933,6 +970,144 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
             },
             "required": ["event_name", "active"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "propose_session_adjustment",
+        "description": (
+            "Scale ONE already-planned session's own volume/intensity up or "
+            "down for a same-week, mid-plan reason -- \"I'm fatigued today, "
+            "can you make this shorter with less sprint work?\" or \"I'm "
+            "feeling strong, give me a bit more.\" Scales the session's "
+            "EXISTING structured content (or, if it has none, its bare "
+            "distance_m/duration_min) in place -- it never swaps in a "
+            "different template or regenerates the session from scratch, so "
+            "the result reads as the same workout, adjusted, not a random "
+            "different one. Any session in the current already-generated "
+            "week is in scope, not just today's -- the athlete may "
+            "reasonably want to lighten a session ahead of a busy day "
+            "tomorrow. Wrong tool if the athlete wants the session moved to "
+            "a different day with no content change (use reschedule_session "
+            "instead), or if this is really about a whole week's volume/"
+            "training-load trajectory rather than one session (use "
+            "propose_adaptation instead).\n\n"
+            "Target-session matching works exactly like reschedule_session: "
+            "by iso_week + date, disambiguated by sport when more than one "
+            "session falls on that date -- an entry matching zero or more "
+            "than one session is an error (with the same 'found N' error "
+            "style), never a silent guess.\n\n"
+            "Draft-then-confirm, same shape as replace_week_plan: `confirm` "
+            "defaults to false, which only computes and returns the "
+            "candidate adjusted session (plus a comparison against the "
+            "session as currently on file: old vs. new distance_m, old vs. "
+            "new duration_min, old vs. new structured step count) as JSON "
+            "with \"persisted\": false -- it does NOT call store.save_week. "
+            "Show this draft to the athlete and get their explicit "
+            "agreement before calling this tool again with `confirm: true` "
+            "-- only then does it persist, replacing that one session in "
+            "its week. Never pass confirm=true on the first call for a "
+            "given request, and never chain another tool call in the same "
+            "response after the draft -- stop and wait for the athlete's "
+            "explicit agreement in a new message, same discipline as "
+            "replace_week_plan/replace_macro_plan.\n\n"
+            "`direction`+`magnitude_pct` together describe the (signed) "
+            "adjustment -- there is one mechanism for both directions, not "
+            "two separate tools. `magnitude_pct` is clamped before use: "
+            "'reduce' can go most of the way to nothing (up to 90%) but "
+            "never to exactly zero -- if the athlete wants to skip the "
+            "session entirely, that's a different conversation, not "
+            "\"shorter\". 'increase' is capped at "
+            f"{SESSION_ADJUSTMENT_INCREASE_CAP_PCT:.0f}% "
+            "regardless of what's asked for -- a same-session safety bound, "
+            "separate from and not a substitute for the weekly ramp cap "
+            "propose_adaptation enforces. The response's `magnitude_pct` "
+            "field reports what was ACTUALLY applied after any clamping -- "
+            "tell the athlete honestly if a big ask got capped, don't "
+            "imply it was granted in full.\n\n"
+            "`focus` (optional, default 'overall'): 'interval' targets "
+            "sprint/interval-labeled content first (repeat count on an "
+            "interval-role block, or a bare interval step's own volume) -- "
+            "the right choice for \"less sprint work\" specifically. "
+            "'overall' scales the whole main set proportionally (interval "
+            "and steady-role content alike) while still leaving warm-up/"
+            "cool-down untouched -- the right choice for a plain \"make it "
+            "shorter\" with no specific sprint complaint. If the session has "
+            "no interval-role content at all (e.g. a strength session), "
+            "'interval' automatically falls back to 'overall' rather than "
+            "doing nothing.\n\n"
+            "`reason` is required and logged verbatim -- the athlete's own "
+            "stated reason (fatigue, travel, feeling strong, time-crunched), "
+            "not a paraphrase you invent."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "iso_week": {
+                    "type": "string",
+                    "description": "ISO week the session belongs to, formatted 'YYYY-Wnn', e.g. '2026-W30'.",
+                },
+                "date": {
+                    "type": "string",
+                    "description": "The session's date as currently planned, 'YYYY-MM-DD'.",
+                },
+                "sport": {
+                    "type": "string",
+                    "description": (
+                        "The session's sport (e.g. 'swim_pool', 'swim_ow', "
+                        "'strength', 'recovery') -- disambiguates same-day "
+                        "sessions, since a day can have more than one (e.g. "
+                        "both a swim and a strength session)."
+                    ),
+                },
+                "direction": {
+                    "type": "string",
+                    "enum": ["reduce", "increase"],
+                    "description": "Whether to scale the session down or up.",
+                },
+                "magnitude_pct": {
+                    "type": "number",
+                    "description": (
+                        "Roughly how much to scale by, as a percent (e.g. 20 "
+                        "for \"a bit shorter\"/\"a bit more\", 40-50 for "
+                        "\"quite a bit shorter\"). Clamped server-side -- see "
+                        "this tool's own description for the exact bounds per "
+                        "direction. Omit to use a moderate default."
+                    ),
+                },
+                "focus": {
+                    "type": "string",
+                    "enum": ["interval", "overall"],
+                    "description": (
+                        "'interval' targets sprint/interval-labeled content "
+                        "first (for \"less sprint work\"); 'overall' (default) "
+                        "scales the whole main set proportionally (for a "
+                        "plain \"make it shorter/harder\"). Falls back to "
+                        "'overall' automatically if the session has no "
+                        "interval-role content."
+                    ),
+                },
+                "reason": {
+                    "type": "string",
+                    "description": (
+                        "The athlete's own stated reason for the adjustment "
+                        "(e.g. 'fatigued, slept badly', 'feeling strong', "
+                        "'time-crunched today'), verbatim -- logged with the "
+                        "adjustment."
+                    ),
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "description": (
+                        "Default false: compute and return the candidate "
+                        "adjusted session as a draft only, never persisting. "
+                        "Set true ONLY after the athlete has explicitly agreed "
+                        "to the draft shown in a prior turn -- this then "
+                        "persists by replacing that session in its week."
+                    ),
+                },
+            },
+            "required": ["iso_week", "date", "direction", "reason"],
             "additionalProperties": False,
         },
     },
@@ -1978,6 +2153,167 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
     }
 
 
+def _session_summary_json(session) -> dict[str, Any]:
+    """The athlete-facing shape `propose_session_adjustment` returns for a
+    single (proposed or persisted) session -- same fields `_week_sessions_
+    json` reports per-session, so the two stay visually consistent, minus
+    the full structured IR (kept compact, same reasoning as `_week_sessions_
+    json`'s own `has_structured` boolean)."""
+    return {
+        "date": session.date.isoformat(),
+        "sport": session.sport,
+        "distance_m": session.distance_m,
+        "duration_min": session.duration_min,
+        "purpose": session.purpose,
+        "structure": session.structure,
+        "has_structured": session.structured is not None,
+    }
+
+
+def _handle_propose_session_adjustment(
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str
+) -> dict[str, Any]:
+    """Scales one already-planned `Session`'s volume/intensity up or down via
+    `swim_coach.plan.adjust_session`, applied to a `session.model_copy(deep=
+    True)` so the week on file is never touched until `confirm=True` --
+    same draft-then-confirm shape as `_handle_replace_week_plan`. Target
+    matching (`iso_week` + `date` + optional `sport`) reuses `_handle_
+    reschedule_session`'s exact convention and error-message style.
+
+    `confirm=False` (default) returns the candidate adjusted session plus a
+    comparison against the session as currently on file, `"persisted":
+    False`, never calling `store.save_week`. `confirm=True` recomputes
+    identically (deterministic given the same inputs -- `adjust_session`
+    is a pure function of them) and persists by replacing that one session
+    in place within its week's `sessions` list.
+    """
+    iso_week = input_data.get("iso_week")
+    if not iso_week:
+        return {"error": "iso_week is required"}
+    date_str = input_data.get("date")
+    if not date_str:
+        return {"error": "date is required"}
+    direction = input_data.get("direction")
+    if direction not in ("reduce", "increase"):
+        return {"error": "direction is required and must be 'reduce' or 'increase'"}
+    reason = input_data.get("reason")
+    if not reason:
+        return {"error": "reason is required"}
+
+    sport = input_data.get("sport")
+
+    focus = input_data.get("focus") or "overall"
+    if focus not in ("interval", "overall"):
+        return {"error": f"invalid focus {focus!r}; must be 'interval' or 'overall'"}
+
+    magnitude_pct = input_data.get("magnitude_pct")
+    if magnitude_pct is None:
+        magnitude_pct = 20.0
+    try:
+        magnitude_pct = float(magnitude_pct)
+    except (TypeError, ValueError):
+        return {"error": f"invalid magnitude_pct {magnitude_pct!r}"}
+    if magnitude_pct <= 0:
+        return {"error": f"magnitude_pct must be positive, got {magnitude_pct!r}"}
+
+    confirm = bool(input_data.get("confirm", False))
+
+    try:
+        year_str, week_str = iso_week.split("-W")
+        date.fromisocalendar(int(year_str), int(week_str), 1)
+    except (ValueError, IndexError):
+        return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+
+    try:
+        target_date = date.fromisoformat(date_str)
+    except ValueError:
+        return {"error": f"invalid date {date_str!r}; expected format 'YYYY-MM-DD'"}
+
+    week = store.load_week(slug, iso_week)
+    if week is None:
+        return {
+            "error": (
+                f"no existing week plan for {iso_week!r}; use create_week_plan if "
+                "it doesn't exist at all yet, or propose_adaptation if it needs a "
+                "volume/training-load change"
+            )
+        }
+
+    matches = [s for s in week.sessions if s.date == target_date and (sport is None or s.sport == sport)]
+    if len(matches) != 1:
+        same_day = [
+            {"sport": s.sport, "date": s.date.isoformat()} for s in week.sessions if s.date == target_date
+        ]
+        return {
+            "error": (
+                f"expected exactly one session matching date {date_str!r}"
+                + (f" and sport {sport!r}" if sport else "")
+                + f" in {iso_week!r}, found {len(matches)}; sessions on {date_str!r}: {same_day}"
+            )
+        }
+
+    original = matches[0]
+
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load athlete profile: {exc}"}
+
+    proposed = original.model_copy(deep=True)
+    applied_magnitude_pct = adjust_session(
+        proposed,
+        direction=direction,
+        magnitude_pct=magnitude_pct,
+        focus=focus,
+        css_pace_s=athlete.css_pace_s_per_100m,
+    )
+
+    comparison = {
+        "old_distance_m": original.distance_m,
+        "new_distance_m": proposed.distance_m,
+        "old_duration_min": original.duration_min,
+        "new_duration_min": proposed.duration_min,
+        "old_step_count": count_structured_steps(original.structured),
+        "new_step_count": count_structured_steps(proposed.structured),
+    }
+
+    response: dict[str, Any] = {
+        "iso_week": iso_week,
+        "date": date_str,
+        "sport": original.sport,
+        "direction": direction,
+        "magnitude_pct": applied_magnitude_pct,
+        "focus": focus,
+        "reason": reason,
+        "session": _session_summary_json(proposed),
+        "comparison": comparison,
+    }
+
+    if not confirm:
+        response["persisted"] = False
+        return response
+
+    for index, session in enumerate(week.sessions):
+        if session.id == original.id:
+            week.sessions[index] = proposed
+            break
+    store.save_week(slug, week)
+
+    log.info(
+        "session adjustment applied",
+        athlete=slug,
+        iso_week=iso_week,
+        date=date_str,
+        sport=original.sport,
+        direction=direction,
+        magnitude_pct=applied_magnitude_pct,
+        focus=focus,
+        reason=reason,
+    )
+    response["persisted"] = True
+    return response
+
+
 def _handle_set_event_active_status(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
     """Flips one `Event.active` flag and persists via `store.save_events`
     (the whole list, matching that store method's replace-the-list
@@ -2065,6 +2401,9 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "set_event_active_status": lambda input_data: _handle_set_event_active_status(
+            input_data, store=store, slug=slug
+        ),
+        "propose_session_adjustment": lambda input_data: _handle_propose_session_adjustment(
             input_data, store=store, slug=slug
         ),
     }

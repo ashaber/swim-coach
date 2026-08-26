@@ -17,6 +17,7 @@ from swim_coach.plan import (
     MIN_RAMP_SEED_VOLUME_M,
     NO_COACH_POOL_SESSION_FLOOR_M,
     POOL_SESSION_EST_M,
+    SESSION_ADJUSTMENT_INCREASE_CAP_PCT,
     STRENGTH_CORE_EXERCISES,
     STRENGTH_EXERCISE_REFERENCE_URLS,
     STRENGTH_FULL_BODY_ADDITION,
@@ -31,6 +32,8 @@ from swim_coach.plan import (
     _strength_session_structure,
     _strength_session_structure_template,
     _z2_pace_s_per_100m,
+    adjust_session,
+    count_structured_steps,
     generate_week,
     scaffold_macro,
 )
@@ -1485,3 +1488,168 @@ def test_generate_week_pool_coach_placeholder_and_long_swim_have_no_structured(s
     assert recovery
     for s in recovery:
         assert s.structured is None
+
+
+# --- adjust_session ----------------------------------------------------------
+
+
+def _pool_coach_placeholder_session(short_macro) -> "Session":
+    athlete, macro = short_macro
+    week_start = macro.blocks[0].start_date
+    week = generate_week(athlete, macro, _iso_week(week_start), week_start)
+    return next(s for s in week.sessions if s.source == "pool_coach")
+
+
+def _additional_swim_session(short_macro):
+    athlete, macro = short_macro
+    for block in macro.blocks:
+        weeks_in_block = (block.end_date - block.start_date).days // 7 + 1
+        for i in range(weeks_in_block):
+            week_start = block.start_date + timedelta(weeks=i)
+            week = generate_week(athlete, macro, _iso_week(week_start), week_start)
+            for s in week.sessions:
+                if s.sport == "swim_ow" and s.purpose == "additional pool-independent aerobic volume":
+                    return athlete, s
+    raise AssertionError("short_macro produced no 'additional' swim_ow session")
+
+
+def _strength_session(short_macro):
+    athlete, macro = short_macro
+    week_start = macro.blocks[0].start_date
+    week = generate_week(athlete, macro, _iso_week(week_start), week_start)
+    return athlete, next(s for s in week.sessions if s.sport == "strength")
+
+
+def test_adjust_session_reduce_with_no_structured_scales_distance_and_duration(short_macro):
+    session = _pool_coach_placeholder_session(short_macro)
+    old_distance, old_duration = session.distance_m, session.duration_min
+
+    applied = adjust_session(session, direction="reduce", magnitude_pct=20.0)
+
+    assert applied == 20.0
+    assert session.distance_m < old_distance
+    assert session.duration_min < old_duration
+    assert session.structured is None
+
+
+def test_adjust_session_increase_with_no_structured_scales_distance_and_duration(short_macro):
+    session = _pool_coach_placeholder_session(short_macro)
+    old_distance, old_duration = session.distance_m, session.duration_min
+
+    applied = adjust_session(session, direction="increase", magnitude_pct=10.0)
+
+    assert applied == 10.0
+    assert session.distance_m > old_distance
+    assert session.duration_min > old_duration
+
+
+def test_adjust_session_increase_is_clamped_to_the_safety_cap(short_macro):
+    session = _pool_coach_placeholder_session(short_macro)
+    old_distance = session.distance_m
+
+    applied = adjust_session(session, direction="increase", magnitude_pct=200.0)
+
+    assert applied == SESSION_ADJUSTMENT_INCREASE_CAP_PCT
+    # scaled by the CAPPED factor, not the requested 200%
+    assert session.distance_m == pytest.approx(
+        old_distance * (1 + SESSION_ADJUSTMENT_INCREASE_CAP_PCT / 100), rel=0.05
+    )
+
+
+def test_adjust_session_reduce_is_clamped_below_total_zero(short_macro):
+    session = _pool_coach_placeholder_session(short_macro)
+
+    applied = adjust_session(session, direction="reduce", magnitude_pct=500.0)
+
+    assert applied == 90.0
+    assert session.distance_m > 0
+    assert session.duration_min > 0
+
+
+def test_adjust_session_reduce_interval_focus_shrinks_main_set_preserves_warmup_cooldown(short_macro):
+    athlete, session = _additional_swim_session(short_macro)
+    original = session.model_copy(deep=True)
+    old_items = {id(item): item for item in original.structured.items}
+    warmup_before = next(i for i in original.structured.items if i.role == "warmup")
+    cooldown_before = next(i for i in original.structured.items if i.role == "cooldown")
+    interval_before = next(i for i in original.structured.items if i.role == "interval")
+
+    adjust_session(
+        session, direction="reduce", magnitude_pct=30.0, focus="interval", css_pace_s=athlete.css_pace_s_per_100m
+    )
+
+    warmup_after = next(i for i in session.structured.items if i.role == "warmup")
+    cooldown_after = next(i for i in session.structured.items if i.role == "cooldown")
+    interval_after = next(i for i in session.structured.items if i.role == "interval")
+
+    assert warmup_after.duration_value == warmup_before.duration_value
+    assert cooldown_after.duration_value == cooldown_before.duration_value
+    assert interval_after.duration_value < interval_before.duration_value
+    assert session.distance_m < original.distance_m
+
+
+def test_adjust_session_recomputes_distance_m_from_scaled_structured_tree(short_macro):
+    athlete, session = _additional_swim_session(short_macro)
+
+    adjust_session(
+        session, direction="reduce", magnitude_pct=25.0, focus="overall", css_pace_s=athlete.css_pace_s_per_100m
+    )
+
+    total = sum(
+        item.duration_value
+        for item in session.structured.items
+        if item.duration_kind == "distance_m" and item.duration_value
+    )
+    assert session.distance_m == round(total)
+
+
+def test_adjust_session_strength_repeat_count_scales_down(short_macro):
+    athlete, session = _strength_session(short_macro)
+    core_repeat_before = next(i for i in session.structured.items if i.kind == "repeat")
+    assert core_repeat_before.count == 2
+    steps_before = count_structured_steps(session.structured)
+
+    adjust_session(session, direction="reduce", magnitude_pct=50.0, focus="overall")
+
+    core_repeat_after = next(i for i in session.structured.items if i.kind == "repeat")
+    assert core_repeat_after.count == 1
+    assert count_structured_steps(session.structured) < steps_before
+
+
+def test_adjust_session_interval_focus_falls_back_to_overall_when_no_interval_role(short_macro):
+    # A strength session has no role="interval" content at all -- focus=
+    # "interval" must still scale something (the role="steady" core work)
+    # rather than silently leaving the session untouched.
+    athlete, session = _strength_session(short_macro)
+    core_repeat_before = next(i for i in session.structured.items if i.kind == "repeat")
+    assert core_repeat_before.count == 2
+
+    adjust_session(session, direction="reduce", magnitude_pct=50.0, focus="interval")
+
+    core_repeat_after = next(i for i in session.structured.items if i.kind == "repeat")
+    assert core_repeat_after.count == 1
+
+
+def test_adjust_session_strength_with_no_distance_kind_content_scales_duration_only(short_macro):
+    athlete, session = _strength_session(short_macro)
+    assert session.distance_m is None
+    old_duration = session.duration_min
+
+    adjust_session(session, direction="reduce", magnitude_pct=20.0, focus="overall")
+
+    assert session.distance_m is None
+    assert session.duration_min < old_duration
+
+
+def test_count_structured_steps_is_none_without_structured():
+    assert count_structured_steps(None) is None
+
+
+def test_count_structured_steps_counts_repeat_iterations(short_macro):
+    athlete, session = _strength_session(short_macro)
+    # STRENGTH_CORE_EXERCISES steps, each performed `count` (2) times, plus
+    # whatever standalone open/full-body steps this session_index carries.
+    repeat = next(i for i in session.structured.items if i.kind == "repeat")
+    expected_repeat_contribution = repeat.count * len(repeat.steps)
+    standalone = sum(1 for i in session.structured.items if i.kind == "step")
+    assert count_structured_steps(session.structured) == expected_repeat_contribution + standalone

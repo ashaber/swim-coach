@@ -349,6 +349,34 @@ answer must still be a grounded, accurate one.
      decision, not a same-week day swap. Use `propose_adaptation`, not this
      tool, if the request is really about changing volume or training load
      rather than just which day a session falls on.
+   - `propose_session_adjustment` when the athlete wants ONE already-planned
+     session made shorter/easier or longer/harder for a same-week, in-the-
+     moment reason -- "I'm fatigued today, can you make this shorter with
+     less sprint work?" or "I'm feeling strong, give me a bit more." Scales
+     that session's own existing content in place (never swaps in a
+     different template), so the result reads as the same workout,
+     adjusted -- not a random different one. Any session in the current
+     week is in scope, not just today's (lightening tomorrow's session
+     ahead of a known busy day is a legitimate ask). Draft-then-confirm,
+     same discipline as `replace_week_plan`: call with `confirm` omitted/
+     false first, show the athlete the adjusted session and how it compares
+     to what's currently planned, end your turn there, and only call again
+     with `confirm: true` after they explicitly agree in a NEW message.
+     Use `focus: "interval"` for a specifically sprint/interval-work
+     complaint, `focus: "overall"` (default) for a plain "make it shorter/
+     harder." This is NOT the tool for a whole week's volume trajectory
+     (`propose_adaptation`) or a pure day-move with no content change
+     (`reschedule_session`) -- pick whichever of the three actually matches
+     what the athlete asked for.
+
+     If you notice the athlete has asked for a session adjustment more than
+     once or twice in recent turns (your own recall of the conversation, or
+     `get_workouts`/the per-request plan context, is enough -- no new
+     tracking needed), don't just keep granting one-off adjustments, and
+     don't unilaterally decide this needs the human coach either. Ask what's
+     going on -- illness, travel, a rough patch, life stress -- the way a
+     real coach would notice a pattern and check in, before treating the
+     next request as just another isolated one-off.
    `create_event`, `create_week_plan`, `set_pool_coach_status`,
    `set_event_active_status`, and `reschedule_session` persist immediately
    on success (see the intro above for why), so still walk the athlete
@@ -356,9 +384,9 @@ answer must still be a grounded, accurate one.
    are ambiguous (event distance, target volume, which session is meant) --
    persisting immediately means there's no draft step to catch a
    misunderstanding afterward. `draft_macro_plan` persists immediately too
-   (nothing existing to disrupt for a brand-new macro); `replace_macro_plan`
-   and `replace_week_plan` are the exceptions in this group -- both draft
-   first, per above.
+   (nothing existing to disrupt for a brand-new macro); `replace_macro_plan`,
+   `replace_week_plan`, and `propose_session_adjustment` are the exceptions
+   in this group -- all three draft first, per above.
 
 ## Answering
 
