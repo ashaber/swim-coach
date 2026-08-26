@@ -168,9 +168,10 @@ def test_selecting_athlete_shows_workouts_with_compliance_and_feedback(page):
     # `roster:back` renders synchronously as soon as an athlete is selected,
     # before the workouts/feedback fetches resolve (each is a separate async
     # load, see main.js's loadCoachWorkouts/loadCoachFeedback) -- wait for
-    # a marker that only exists once the workout list has actually rendered,
-    # or this races under slow/cold CI runners.
-    page.wait_for_selector('.hist-row-skipped')
+    # markers that only exist once each has actually rendered, or this races
+    # under slow/cold CI runners.
+    page.wait_for_selector('[data-a="roster:open-workout"]')
+    page.wait_for_selector('[data-form="roster-reply"]')
 
     content = page.content()
     # Workout row: sport, distance/duration, and the nested compliance line
@@ -195,6 +196,38 @@ def test_back_button_returns_to_the_athlete_list(page):
     page.click('[data-a="roster:back"]')
     page.wait_for_selector('[data-a="roster:select-athlete"]')
     assert page.locator('[data-a="roster:back"]').count() == 0
+
+
+# --- Workout detail click-through ---------------------------------------------
+
+def test_clicking_a_workout_opens_its_read_only_detail_view(page):
+    _open_roster(page)
+    page.click('[data-a="roster:select-athlete"]')
+    page.wait_for_selector('[data-a="roster:open-workout"]')
+    page.click('[data-a="roster:open-workout"]')
+    page.wait_for_selector('[data-a="roster:close-workout"]')
+
+    content = page.content()
+    assert 'Pool swim' in content
+    assert '2.1 km' in content
+    # No embedded "ask your coach" chat -- that's an athlete-only feature.
+    assert 'Ask your coach about this workout' not in content
+    # The workouts/feedback list sections are gone while the detail is open.
+    assert page.locator('[data-a="roster:open-workout"]').count() == 0
+    assert page.locator('[data-a="roster:back"]').count() == 0
+
+
+def test_closing_workout_detail_returns_to_the_workouts_and_feedback_lists(page):
+    _open_roster(page)
+    page.click('[data-a="roster:select-athlete"]')
+    page.wait_for_selector('[data-a="roster:open-workout"]')
+    page.click('[data-a="roster:open-workout"]')
+    page.wait_for_selector('[data-a="roster:close-workout"]')
+    page.click('[data-a="roster:close-workout"]')
+    page.wait_for_selector('[data-a="roster:back"]')
+
+    assert page.locator('[data-a="roster:open-workout"]').count() == 1
+    assert 'How much fueling for a 4hr swim?' in page.content()
 
 
 # --- Replying to feedback -----------------------------------------------------
