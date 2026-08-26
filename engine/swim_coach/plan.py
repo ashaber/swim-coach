@@ -103,6 +103,22 @@ WEEKLY_VOLUME_RAMP_CAP = 0.08
 # CLAUDE.md safety rails ("weekly volume +<=8%... without explicit athlete
 # confirmation") / library/03-periodization.md.
 
+SESSION_ADJUSTMENT_INCREASE_CAP_PCT = 25.0
+# Coach judgment: a single already-planned session, adjusted in place via
+# `adjust_session`/`backend/app/tools.py`'s `propose_session_adjustment` (e.g.
+# "I'm feeling strong, can you give me more today?"), may be scaled UP by at
+# most this percentage in one request. Distinct from, and not a replacement
+# for, WEEKLY_VOLUME_RAMP_CAP above: that cap governs how fast the *whole
+# week's* target volume may climb build-to-build; this one bounds a single
+# one-off ad-hoc increase to ONE session's own volume/intensity, requested
+# mid-week outside the normal periodization math entirely. No swim-specific
+# trial informs this exact number -- it is deliberately smaller than the
+# weekly cap (a single session has far less room to safely absorb a surprise
+# jump than a whole week does) and large enough to be a meaningful "yes, more"
+# rather than a token gesture. No cap is applied to the "reduce" direction --
+# an athlete asking for LESS today (fatigue, time-crunched) is never the
+# unsafe direction. library/03-periodization.md (to be authored).
+
 LONG_SWIM_SHARE = 0.33
 # PROVISIONAL: long swim as a share of that week's target volume -- a single
 # Saturday swim for event_format="single_day", split across Saturday+Sunday
@@ -1131,3 +1147,276 @@ def generate_week(
         adaptation_rationale=None,
         draft=False,
     )
+
+
+# --- adjust_session: same-session, in-place volume/intensity scaling --------
+# Distinct from everything above `generate_week` builds (a brand-new week
+# from the macro) -- this scales the content of ONE session that already
+# exists on an already-generated, already-persisted week, for a request like
+# "I'm fatigued today, can you make this shorter with less sprint work?" or
+# "I'm feeling strong, give me a bit more." See `backend/app/tools.py`'s
+# `propose_session_adjustment` for the draft-then-confirm tool wrapping this.
+
+# Leaf-step rounding granularities below -- coarse enough that a scaled
+# distance/time/rep value still reads as a sane, athlete-legible number
+# (e.g. "1,575m" is a worse number to hand an athlete than "1,575" rounded to
+# "1,575" -- rounding to the nearest 25m keeps it clean) rather than a
+# precision requirement of any kind. Coach judgment, no citation.
+_ADJUSTMENT_DISTANCE_ROUND_M = 25.0
+_ADJUSTMENT_TIME_ROUND_S = 30.0
+
+# Floors below keep a heavily-reduced item from collapsing to a
+# contentless 0 -- an item that still exists in the tree should still read
+# as a real (if small) rep/segment, not a step with nothing in it.
+_ADJUSTMENT_MIN_DISTANCE_M = 25.0
+_ADJUSTMENT_MIN_TIME_S = 30.0
+_ADJUSTMENT_MIN_REPS = 1.0
+_ADJUSTMENT_MIN_REPEAT_COUNT = 1
+_ADJUSTMENT_MIN_REPEAT_DURATION_S = 60.0
+
+# Roles that make up a session's "main set" weight -- the content
+# `adjust_session` is actually allowed to scale. `warmup`/`cooldown`/`open`/
+# `rest`/`recovery` are deliberately excluded: preserving the warm-up/
+# cool-down shell (and any rest built into the set) is what keeps a scaled
+# session reading as "the same workout, adjusted" rather than a different
+# workout -- see this module's `_additional_swim_structure_template` and
+# `_strength_session_structure_template`, whose own warmup/cooldown/open
+# steps this mirrors.
+_SCALABLE_ROLES = frozenset({"interval", "steady"})
+
+
+def _clamp_adjustment_magnitude_pct(direction: Literal["reduce", "increase"], magnitude_pct: float) -> float:
+    """Clamps a requested `adjust_session` magnitude into its safe range --
+    see that function's own docstring for the rationale behind each bound.
+    Returns the clamped (possibly unchanged) value; callers report this
+    back to the athlete rather than the raw requested number, so a silently
+    reduced "give me 60% more" isn't misreported as having been honored in
+    full."""
+    if direction == "increase":
+        return max(1.0, min(magnitude_pct, SESSION_ADJUSTMENT_INCREASE_CAP_PCT))
+    return max(1.0, min(magnitude_pct, 90.0))
+
+
+def _adjustment_scale_factor(direction: Literal["reduce", "increase"], magnitude_pct: float) -> float:
+    if direction == "increase":
+        return 1.0 + magnitude_pct / 100.0
+    return 1.0 - magnitude_pct / 100.0
+
+
+def _item_has_role(item: "WorkoutStep | WorkoutRepeat", roles: frozenset[str]) -> bool:
+    if item.kind == "step":
+        return item.role in roles
+    return any(_item_has_role(child, roles) for child in item.steps)
+
+
+def _scale_leaf_step(step: WorkoutStep, factor: float) -> None:
+    if step.duration_value is None:
+        return  # role="open" steps (section headers, "Why:" lines) carry no number to scale
+    if step.duration_kind == "distance_m":
+        scaled = step.duration_value * factor
+        step.duration_value = max(
+            _ADJUSTMENT_MIN_DISTANCE_M,
+            round(scaled / _ADJUSTMENT_DISTANCE_ROUND_M) * _ADJUSTMENT_DISTANCE_ROUND_M,
+        )
+    elif step.duration_kind == "time_s":
+        scaled = step.duration_value * factor
+        step.duration_value = max(
+            _ADJUSTMENT_MIN_TIME_S, round(scaled / _ADJUSTMENT_TIME_ROUND_S) * _ADJUSTMENT_TIME_ROUND_S
+        )
+    elif step.duration_kind == "reps":
+        step.duration_value = max(_ADJUSTMENT_MIN_REPS, round(step.duration_value * factor))
+    # duration_kind == "open": nothing numeric to scale.
+
+
+def _scale_repeat_wrapper(repeat: WorkoutRepeat, factor: float) -> None:
+    """Scales a `WorkoutRepeat` wrapper's own `count`/`duration_s` -- NOT
+    its nested `steps`' own per-iteration duration_values, which are left
+    untouched. This is the "reduce repeat counts on interval/sprint blocks
+    first" mechanism: a 10x200m interval set loses reps (10 -> 7), not
+    200m-per-rep distance -- scaling both the wrapper and its children
+    would double-apply the same adjustment."""
+    if repeat.repeat_mode == "count" and repeat.count is not None:
+        repeat.count = max(_ADJUSTMENT_MIN_REPEAT_COUNT, round(repeat.count * factor))
+    elif repeat.duration_s is not None:  # for_duration / amrap
+        scaled = repeat.duration_s * factor
+        repeat.duration_s = max(
+            _ADJUSTMENT_MIN_REPEAT_DURATION_S,
+            round(scaled / _ADJUSTMENT_TIME_ROUND_S) * _ADJUSTMENT_TIME_ROUND_S,
+        )
+
+
+def _scale_structured_items(
+    items: list["WorkoutStep | WorkoutRepeat"], factor: float, focus: Literal["interval", "overall"]
+) -> None:
+    """Mutates `items` in place, scaling whichever top-level items `focus`
+    selects. `focus="interval"` targets only items carrying a role="interval"
+    leaf somewhere inside them (recursively, so a `WorkoutRepeat` wrapping
+    interval reps still counts); if the session has none at all (e.g. a
+    strength or recovery session has no swim main-set interval content),
+    falls back to every `_SCALABLE_ROLES` item instead of silently scaling
+    nothing."""
+    if focus == "interval":
+        targets = [item for item in items if _item_has_role(item, frozenset({"interval"}))]
+        if not targets:
+            targets = [item for item in items if _item_has_role(item, _SCALABLE_ROLES)]
+    else:
+        targets = [item for item in items if _item_has_role(item, _SCALABLE_ROLES)]
+
+    for item in targets:
+        if item.kind == "step":
+            _scale_leaf_step(item, factor)
+        else:
+            _scale_repeat_wrapper(item, factor)
+
+
+def _sum_distance_m(items: list["WorkoutStep | WorkoutRepeat"]) -> float:
+    """Recursively sums every `duration_kind="distance_m"` leaf's
+    `duration_value`, weighting anything inside a `count`-mode
+    `WorkoutRepeat` by its `count` -- the new source of truth for
+    `Session.distance_m` after `_scale_structured_items` has mutated the
+    tree, same keep-in-sync discipline `backend/app/tools.py`'s
+    `_apply_session_overrides` already enforces for a coach-authored
+    `structure` override. `for_duration`/`amrap` repeats contribute 0 (no
+    reliable distance implied by a time-boxed round) -- not reachable by
+    any template this engine ships today (see `WorkoutRepeat`'s own
+    docstring: "rarely used")."""
+    total = 0.0
+    for item in items:
+        if item.kind == "step":
+            if item.duration_kind == "distance_m" and item.duration_value:
+                total += item.duration_value
+        elif item.repeat_mode == "count" and item.count:
+            total += item.count * _sum_distance_m(item.steps)
+    return total
+
+
+def adjust_session(
+    session: Session,
+    *,
+    direction: Literal["reduce", "increase"],
+    magnitude_pct: float,
+    focus: Literal["interval", "overall"] = "overall",
+    css_pace_s: float | None = None,
+) -> float:
+    """Scale one already-planned `Session`'s volume/intensity up or down IN
+    PLACE, for `backend/app/tools.py`'s `propose_session_adjustment`
+    draft-then-confirm tool -- e.g. "I'm fatigued today, can you make this
+    shorter with less sprint work?" or "I'm feeling strong, give me a bit
+    more." Callers that need the pre-adjustment session to survive
+    unmodified (for a before/after comparison) must pass a
+    `session.model_copy(deep=True)`, same convention as `backend/app/
+    tools.py`'s `_apply_session_overrides` mutating its own `week` argument
+    directly. Returns the actual, post-clamp magnitude_pct that was applied
+    (see `_clamp_adjustment_magnitude_pct`) -- report THIS back to the
+    athlete, not the raw requested number, since a request beyond the safe
+    range is silently clamped rather than rejected.
+
+    Does NOT regenerate the session from a different template -- it scales
+    the EXISTING content in place, which is what keeps the result reading
+    as "the same workout, adjusted" rather than a random different one.
+
+    `magnitude_pct` is clamped before use:
+      - "reduce": [1, 90] -- can go most of the way to nothing (a fatigued
+        or time-crunched athlete's need can be severe) but never to exactly
+        zero, which would leave a degenerate, contentless session; a
+        request to skip the session entirely is a different conversation,
+        not "shorter."
+      - "increase": [1, SESSION_ADJUSTMENT_INCREASE_CAP_PCT] -- see that
+        constant's own docstring for the safety rationale. No such cap
+        applies to "reduce": an athlete asking for less today is never the
+        unsafe direction.
+
+    `focus`:
+      - "interval": scale role="interval" content first -- a `WorkoutRepeat`
+        wrapping interval reps loses reps off its `count` (10x200m ->
+        7x200m, NOT 10x140m -- see `_scale_repeat_wrapper`), while a bare
+        interval `WorkoutStep` not wrapped in a repeat (the shape
+        `_additional_swim_structure_template`'s main-set step actually
+        uses today) has its own `duration_value` scaled directly instead,
+        since there is no separate rep count to reduce. Falls back to
+        "overall" if the session has no role="interval" content at all
+        (e.g. a strength or recovery session) rather than scaling nothing.
+      - "overall" (default): scale every `_SCALABLE_ROLES` item
+        proportionally (interval AND steady-role content alike). Either
+        way, warm-up/cool-down/open (section header / "Why:") content is
+        never touched.
+
+    When `session.structured` is `None` -- most of this athlete's real
+    sessions today: pool-coach placeholders and hand-written prose carry no
+    structured IR at all -- there is nothing to walk, so `distance_m`/
+    `duration_min` are scaled directly instead; that is the entire
+    mechanism in that case.
+
+    When `session.structured` IS present, the scaled tree becomes the new
+    source of truth for `distance_m` (`_sum_distance_m`), and `duration_min`
+    is then re-estimated from the new distance at `css_pace_s`
+    (`_duration_min_for_distance`) when available and the new distance is
+    nonzero (a real swim distance); otherwise (a strength session with no
+    distance-kind content, or no CSS pace on file) `duration_min` is instead
+    scaled directly by the same `direction`/`magnitude_pct` factor the tree
+    itself was scaled by.
+
+    KNOWN LIMITATION: numbers already baked into a step's own athlete-facing
+    `label` text (a rendered "10 x 200m ..." main-set narrative, or a
+    strength section header's hand-written "2 sets x 10 reps") are NOT
+    rewritten to match a scaled `count`/`duration_value` -- the seven
+    different `FORMAT_STRATEGIES` narrative phrasings (`workout_templates.
+    py`) have no reliable generic inverse to parse and rewrite safely. The
+    machine-actionable fields that actually drive the athlete's stats, the
+    Plan tab's tree render, and any Garmin export (`duration_value`/`count`/
+    `duration_s`) are correctly scaled either way; only free text may still
+    describe the pre-adjustment rep count. An accepted trade-off, not
+    silently swept under the rug -- same spirit as this module's other
+    documented KNOWN EDGE CASEs (see `NO_COACH_POOL_SESSION_FLOOR_M` above).
+    """
+    magnitude_pct = _clamp_adjustment_magnitude_pct(direction, magnitude_pct)
+    factor = _adjustment_scale_factor(direction, magnitude_pct)
+
+    if session.structured is not None:
+        _scale_structured_items(session.structured.items, factor, focus)
+        new_distance = _sum_distance_m(session.structured.items)
+        if new_distance > 0:
+            session.distance_m = round(new_distance)
+            if css_pace_s is not None:
+                session.duration_min = max(
+                    _duration_min_for_distance(session.distance_m, css_pace_s), 10.0
+                )
+            else:
+                session.duration_min = max(round(session.duration_min * factor, 1), 10.0)
+        else:
+            # No distance-kind content at all (e.g. a strength session) --
+            # nothing for _sum_distance_m to total, so fall back to scaling
+            # whatever scalar fields the session already carries directly.
+            if session.distance_m is not None:
+                session.distance_m = max(1, round(session.distance_m * factor))
+            session.duration_min = max(round(session.duration_min * factor, 1), 10.0)
+    else:
+        if session.distance_m is not None:
+            session.distance_m = max(1, round(session.distance_m * factor))
+        session.duration_min = max(round(session.duration_min * factor, 1), 10.0)
+
+    return magnitude_pct
+
+
+def count_structured_steps(structured: WorkoutStructure | None) -> int | None:
+    """The "effective step count" `propose_session_adjustment`'s comparison
+    reports -- `None` when the session has no structured IR at all (nothing
+    to count), otherwise every leaf `WorkoutStep` in the tree, with anything
+    inside a `count`-mode `WorkoutRepeat` counted once per iteration (e.g. a
+    2x-wrapped 5-exercise core block counts as 10) so a rep-count reduction
+    (10x200m -> 7x200m) is visible in the comparison even though the number
+    of top-level tree ITEMS never changed."""
+    if structured is None:
+        return None
+
+    def _count(items: list["WorkoutStep | WorkoutRepeat"]) -> int:
+        total = 0
+        for item in items:
+            if item.kind == "step":
+                total += 1
+            else:
+                multiplier = item.count if (item.repeat_mode == "count" and item.count) else 1
+                total += multiplier * _count(item.steps)
+        return total
+
+    return _count(structured.items)

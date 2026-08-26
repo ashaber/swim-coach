@@ -26,6 +26,7 @@ from swim_coach.models import (
     WorkoutStep,
     WorkoutStructure,
 )
+from swim_coach.plan import SESSION_ADJUSTMENT_INCREASE_CAP_PCT
 from swim_coach.store import FileStore
 
 from app.tools import (
@@ -2373,3 +2374,348 @@ def test_replace_macro_plan_can_resolve_and_build_toward_a_deactivated_event(ath
     assert result["persisted"] is True
     reloaded_macro = FileStore(base_dir=athletes_dir).load_macro("renee")
     assert reloaded_macro.event_id == event.id
+
+
+# --- propose_session_adjustment -------------------------------------------------
+# 2026-W28 (2026-07-06 .. 2026-07-12, real test-tree fixture, see the
+# reschedule_session section above for the full day-by-day sport listing).
+# 2026-07-06 (swim_pool, 3500m/90min, pool_coach, structure=None) is the
+# target for most tests here -- unambiguous (one session that day) and has
+# both distance_m/duration_min set, so scaling has something real to shrink/
+# grow. 2026-W29 exists too (2026-07-13 .. 2026-08-02), used to prove this
+# tool's scope isn't hardcoded to any particular week.
+
+
+def test_propose_session_adjustment_draft_mode_does_not_persist(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    original_week = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+
+    result = handlers["propose_session_adjustment"](
+        {
+            "iso_week": "2026-W28",
+            "date": "2026-07-06",
+            "sport": "swim_pool",
+            "direction": "reduce",
+            "magnitude_pct": 20,
+            "reason": "fatigued, slept badly",
+        }
+    )
+
+    assert "error" not in result
+    assert result["persisted"] is False
+    assert result["reason"] == "fatigued, slept badly"
+    assert result["direction"] == "reduce"
+    assert result["session"]["distance_m"] < 3500
+
+    reloaded_week = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    target = next(s for s in reloaded_week.sessions if s.date == date(2026, 7, 6))
+    original_target = next(s for s in original_week.sessions if s.date == date(2026, 7, 6))
+    assert target.distance_m == original_target.distance_m == 3500
+    assert target.duration_min == original_target.duration_min == 90.0
+
+
+def test_propose_session_adjustment_confirm_true_persists(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    draft = handlers["propose_session_adjustment"](
+        {
+            "iso_week": "2026-W28",
+            "date": "2026-07-06",
+            "sport": "swim_pool",
+            "direction": "reduce",
+            "magnitude_pct": 20,
+            "reason": "fatigued, slept badly",
+        }
+    )
+    result = handlers["propose_session_adjustment"](
+        {
+            "iso_week": "2026-W28",
+            "date": "2026-07-06",
+            "sport": "swim_pool",
+            "direction": "reduce",
+            "magnitude_pct": 20,
+            "reason": "fatigued, slept badly",
+            "confirm": True,
+        }
+    )
+
+    assert "error" not in result
+    assert result["persisted"] is True
+    assert result["session"]["distance_m"] == draft["session"]["distance_m"]
+
+    reloaded_week = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    target = next(s for s in reloaded_week.sessions if s.date == date(2026, 7, 6))
+    assert target.distance_m == result["session"]["distance_m"]
+    assert target.duration_min == result["session"]["duration_min"]
+    # every other session in the week is completely untouched
+    assert len(reloaded_week.sessions) == 7
+    other = next(s for s in reloaded_week.sessions if s.date == date(2026, 7, 8))
+    assert other.distance_m == 3500
+    assert other.duration_min == 90.0
+
+
+def test_propose_session_adjustment_reduce_shrinks_the_session(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["propose_session_adjustment"](
+        {
+            "iso_week": "2026-W28",
+            "date": "2026-07-06",
+            "sport": "swim_pool",
+            "direction": "reduce",
+            "magnitude_pct": 30,
+            "reason": "time-crunched today",
+        }
+    )
+
+    assert result["magnitude_pct"] == 30
+    assert result["comparison"]["old_distance_m"] == 3500
+    assert result["comparison"]["new_distance_m"] < 3500
+    assert result["comparison"]["old_duration_min"] == 90.0
+    assert result["comparison"]["new_duration_min"] < 90.0
+
+
+def test_propose_session_adjustment_increase_grows_the_session_and_respects_the_cap(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    # Ask for far more than the safety cap allows.
+    result = handlers["propose_session_adjustment"](
+        {
+            "iso_week": "2026-W28",
+            "date": "2026-07-06",
+            "sport": "swim_pool",
+            "direction": "increase",
+            "magnitude_pct": 200,
+            "reason": "feeling strong today",
+        }
+    )
+
+    assert result["magnitude_pct"] == SESSION_ADJUSTMENT_INCREASE_CAP_PCT
+    assert result["comparison"]["new_distance_m"] > result["comparison"]["old_distance_m"]
+    expected = round(3500 * (1 + SESSION_ADJUSTMENT_INCREASE_CAP_PCT / 100) / 25) * 25
+    assert result["comparison"]["new_distance_m"] == expected
+
+
+def test_propose_session_adjustment_ambiguous_same_day_without_sport_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    week = store.load_week("renee", "2026-W28")
+    athlete_id = store.load_athlete("renee").id
+    duplicate = Session(
+        id=uuid.uuid4(),
+        athlete_id=athlete_id,
+        date=date(2026, 7, 7),
+        sport="recovery",
+        source="ai_coach",
+        duration_min=20.0,
+        distance_m=None,
+        intensity={"anchor": "rpe"},
+        purpose="duplicate recovery session for ambiguity test",
+        structure=None,
+        status="planned",
+    )
+    week.sessions.append(duplicate)
+    store.save_week("renee", week)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["propose_session_adjustment"](
+        {
+            "iso_week": "2026-W28",
+            "date": "2026-07-07",
+            "direction": "reduce",
+            "magnitude_pct": 20,
+            "reason": "fatigued",
+        }
+    )
+
+    assert "error" in result
+    assert "found 2" in result["error"]
+    assert "2026-07-07" in result["error"]
+
+    # untouched -- an ambiguous match must not silently pick one.
+    reloaded = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    strength = next(s for s in reloaded.sessions if s.sport == "strength")
+    assert strength.duration_min == 40.0
+
+
+def test_propose_session_adjustment_no_matching_session_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    # 2026-07-07 is on file, but as "strength" not "swim_ow".
+    result = handlers["propose_session_adjustment"](
+        {
+            "iso_week": "2026-W28",
+            "date": "2026-07-07",
+            "sport": "swim_ow",
+            "direction": "reduce",
+            "magnitude_pct": 20,
+            "reason": "fatigued",
+        }
+    )
+
+    assert "error" in result
+    assert "found 0" in result["error"]
+    assert "strength" in result["error"]
+
+
+def test_propose_session_adjustment_week_does_not_exist_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["propose_session_adjustment"](
+        {
+            "iso_week": "2026-W40",
+            "date": "2026-09-28",
+            "sport": "swim_pool",
+            "direction": "reduce",
+            "magnitude_pct": 20,
+            "reason": "fatigued",
+        }
+    )
+
+    assert "error" in result
+    assert "2026-W40" in result["error"]
+
+
+def test_propose_session_adjustment_works_in_a_week_other_than_the_first(athletes_dir) -> None:
+    # Proves the tool's scope is "any session in an already-generated week,"
+    # not hardcoded to whichever week happens to be "current."
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["propose_session_adjustment"](
+        {
+            "iso_week": "2026-W29",
+            "date": "2026-07-13",
+            "sport": "swim_pool",
+            "direction": "reduce",
+            "magnitude_pct": 20,
+            "reason": "time-crunched",
+            "confirm": True,
+        }
+    )
+
+    assert "error" not in result
+    assert result["persisted"] is True
+    reloaded = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W29")
+    target = next(s for s in reloaded.sessions if s.date == date(2026, 7, 13))
+    assert target.distance_m < 3000
+
+
+def test_propose_session_adjustment_invalid_iso_week_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["propose_session_adjustment"](
+        {"iso_week": "not-a-week", "date": "2026-07-06", "direction": "reduce", "reason": "fatigued"}
+    )
+    assert "error" in result
+
+
+def test_propose_session_adjustment_invalid_date_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["propose_session_adjustment"](
+        {"iso_week": "2026-W28", "date": "not-a-date", "direction": "reduce", "reason": "fatigued"}
+    )
+    assert "error" in result
+
+
+def test_propose_session_adjustment_invalid_direction_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["propose_session_adjustment"](
+        {"iso_week": "2026-W28", "date": "2026-07-06", "direction": "sideways", "reason": "fatigued"}
+    )
+    assert "error" in result
+
+
+def test_propose_session_adjustment_invalid_focus_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["propose_session_adjustment"](
+        {
+            "iso_week": "2026-W28",
+            "date": "2026-07-06",
+            "direction": "reduce",
+            "focus": "everything",
+            "reason": "fatigued",
+        }
+    )
+    assert "error" in result
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"iso_week": ""},
+        {"date": ""},
+        {"direction": ""},
+        {"reason": ""},
+    ],
+)
+def test_propose_session_adjustment_missing_required_field_is_an_error(athletes_dir, overrides: dict) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    payload = {
+        "iso_week": "2026-W28",
+        "date": "2026-07-06",
+        "direction": "reduce",
+        "reason": "fatigued",
+    }
+    payload.update(overrides)
+
+    result = handlers["propose_session_adjustment"](payload)
+
+    assert "error" in result
+
+
+def test_propose_session_adjustment_structured_content_scales_and_reports_step_count(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    week = store.load_week("renee", "2026-W28")
+    athlete = store.load_athlete("renee")
+    target = next(s for s in week.sessions if s.date == date(2026, 7, 8))
+    target.structured = WorkoutStructure(
+        items=[
+            WorkoutStep(label="400m easy warm-up", role="warmup", duration_kind="distance_m", duration_value=400),
+            WorkoutStep(
+                label="10 x 200m @ threshold", role="interval", duration_kind="distance_m", duration_value=2000
+            ),
+            WorkoutStep(label="200m easy cool-down", role="cooldown", duration_kind="distance_m", duration_value=200),
+        ]
+    )
+    target.distance_m = 2600
+    store.save_week("renee", week)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["propose_session_adjustment"](
+        {
+            "iso_week": "2026-W28",
+            "date": "2026-07-08",
+            "sport": "swim_pool",
+            "direction": "reduce",
+            "magnitude_pct": 30,
+            "focus": "interval",
+            "reason": "less sprint work today",
+            "confirm": True,
+        }
+    )
+
+    assert "error" not in result
+    assert result["persisted"] is True
+    assert result["comparison"]["old_step_count"] == 3
+    assert result["comparison"]["new_step_count"] == 3  # bare steps, not repeats -- count unchanged
+    assert result["comparison"]["new_distance_m"] < 2600
+
+    reloaded = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    reloaded_target = next(s for s in reloaded.sessions if s.date == date(2026, 7, 8))
+    warmup = next(i for i in reloaded_target.structured.items if i.role == "warmup")
+    cooldown = next(i for i in reloaded_target.structured.items if i.role == "cooldown")
+    interval = next(i for i in reloaded_target.structured.items if i.role == "interval")
+    assert warmup.duration_value == 400  # untouched
+    assert cooldown.duration_value == 200  # untouched
+    assert interval.duration_value < 2000
+    assert reloaded_target.distance_m == warmup.duration_value + interval.duration_value + cooldown.duration_value
