@@ -73,11 +73,29 @@
     .week { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
     .week + .week { margin-top: 16px; }
     .all-weeks { margin-top: 16px; }
-    .all-weeks > summary { cursor: pointer; list-style: none; padding: 12px 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper-2); color: var(--ink-soft); font-size: 13px; font-weight: 700; }
-    .all-weeks > summary::-webkit-details-marker { display: none; }
-    .all-weeks > summary::before { content: '▸ '; color: var(--ink-faint); }
-    .all-weeks[open] > summary::before { content: '▾ '; }
-    .all-weeks[open] > summary { margin-bottom: 16px; }
+    .all-weeks > summary, .glossary > summary { cursor: pointer; list-style: none; padding: 12px 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper-2); color: var(--ink-soft); font-size: 13px; font-weight: 700; }
+    .all-weeks > summary::-webkit-details-marker, .glossary > summary::-webkit-details-marker { display: none; }
+    .all-weeks > summary::before, .glossary > summary::before { content: '▸ '; color: var(--ink-faint); }
+    .all-weeks[open] > summary::before, .glossary[open] > summary::before { content: '▾ '; }
+    .all-weeks[open] > summary, .glossary[open] > summary { margin-bottom: 16px; }
+    /* Plan tab's collapsed "Terms & zones" reference (see views.js's
+       renderGlossaryPanel) -- unobtrusive by default, reuses .all-weeks'
+       collapsed-accordion look via the shared selectors above, but its own
+       distinct class so main.js's toggle listener can track its open state
+       independently of the unrelated all-weeks accordion. */
+    .glossary { margin-top: 24px; }
+    .glossary-content { padding: 2px 2px 4px; }
+    .glossary-content h4 { font-family: var(--display); font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+      color: var(--ink-faint); font-weight: 700; margin: 16px 0 8px; }
+    .glossary-content h4:first-child { margin-top: 0; }
+    .glossary-zones { display: flex; flex-direction: column; gap: 4px; }
+    .glossary-zone-row { display: flex; align-items: baseline; gap: 10px; font-size: 13px; padding: 3px 0; flex-wrap: wrap; }
+    .glossary-zone-row .z { font-weight: 700; min-width: 24px; }
+    .glossary-zone-row .range { color: var(--ink-soft); min-width: 150px; }
+    .glossary-zone-row .character { color: var(--ink); }
+    .glossary-terms { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; font-size: 13px; }
+    .glossary-terms dt { font-weight: 700; white-space: nowrap; }
+    .glossary-terms dd { margin: 0; color: var(--ink-soft); }
     .week-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 14px; padding: 16px 20px; border-bottom: 1px solid var(--line-soft); background: var(--paper-2); }
     .week-head h3 { font-family: var(--display); font-size: 16px; font-weight: 700; }
     .week-head .focus { font-size: 13px; color: var(--ink-soft); }
@@ -329,6 +347,20 @@
     a.struct-text { color: var(--accent-ink); text-decoration-line: underline;
       text-decoration-color: transparent; transition: text-decoration-color .15s; }
     a.struct-text:hover, a.struct-text:focus-visible { text-decoration-color: currentColor; }
+    /* A step whose WorkoutStep matches a real drill/set-type coaching cue
+       (see plan.js's stepCoachingCue) renders as this expandable <details>
+       instead of a plain .struct-line div -- collapsed line by default, the
+       cue revealed on tap. .struct-line's own `display: flex` would lay the
+       summary and the cue paragraph out side by side as flex items, so this
+       overrides back to block on the <details> itself and moves the flex
+       row onto .struct-summary instead, wrapping only the label/detail
+       spans that were flex-laid-out before. */
+    .struct-line.struct-step-toggle { display: block; }
+    .struct-summary { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; cursor: pointer; list-style: none; }
+    .struct-summary::-webkit-details-marker { display: none; }
+    .struct-summary::after { content: '▸'; margin-left: 4px; color: var(--ink-faint); font-size: 11px; }
+    .struct-step-toggle[open] .struct-summary::after { content: '▾'; }
+    .struct-cue { margin: 6px 0 2px; font-size: 13px; color: var(--ink-soft); }
 
     /* feedback tab */
     .feedback-entry { margin-top: 12px; }

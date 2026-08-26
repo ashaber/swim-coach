@@ -102,13 +102,24 @@ class WorkoutTarget(BaseModel):
     athlete's `css_pace_s_per_100m` (via `zones.zone_table`) fills in
     `basis="absolute"` `low`/`high` pace values (seconds per 100m).
     `rpe`/`open` never need resolving -- already athlete-relative or
-    deliberately untargeted.
+    deliberately untargeted. `rpe` reuses `low`/`high` too (a 1-10 value,
+    the same scale `Workout.rpe` already uses athlete-facing elsewhere in
+    this app) rather than a dedicated field -- `low`/`high` are already
+    generic per-`basis` numbers, so a distinct `rpe_value` field would just
+    duplicate that shape for no benefit. No engine-generated template sets
+    `basis="rpe"` today (every real swim/strength template resolves off CSS
+    or is `basis="bodyweight"` -- see `plan.py`'s `_additional_swim_
+    structure_template`/`_strength_session_structure_template`); it exists
+    for the coach's ad hoc structured-authoring tool (`backend/app/tools.py`'s
+    `create_week_plan`/`replace_week_plan` `structured` param) to use on a
+    genuinely effort-based day (recovery, technique) where no pace target
+    is the right anchor.
     """
 
     schema_version: int = 1
     basis: Literal["zone", "percent_css", "absolute", "rpe", "open"]
     zone: Literal["Z1", "Z2", "Z3", "Z4", "Z5"] | None = None  # basis="zone"
-    low: float | None = None  # percent_css: % of CSS; absolute: pace_s_per_100m
+    low: float | None = None  # percent_css: % of CSS; absolute: pace_s_per_100m; rpe: 1-10
     high: float | None = None  # same units as low
 
 

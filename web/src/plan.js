@@ -317,7 +317,17 @@ function formatStepDuration(durationKind, durationValue) {
 
 /** A `WorkoutTarget`'s core intensity text (no leading "@"), or null when
  * there's nothing meaningful to show (`basis === 'open'`, or a `basis`
- * lacking the number(s) it needs). */
+ * lacking the number(s) it needs).
+ *
+ * `basis === 'rpe'` reuses `low`/`high` the same way `percent_css`/
+ * `absolute` do (models.py's `WorkoutTarget` never gave RPE its own
+ * numeric field -- `low`/`high` are already generic per-basis floats, so
+ * an RPE target just puts a 1-10 value there, the same scale
+ * `Workout.rpe` already uses athlete-facing elsewhere in this app). Renders
+ * "RPE 6" / "RPE 6-7" when a number is present; falls back to the bare
+ * "RPE" label (this function's previous, and only, behavior) when it
+ * isn't -- still meaningful on its own ("effort-based, athlete's
+ * discretion"), so this deliberately does NOT return null in that case. */
 function formatTargetCore(target) {
   if (!target) return null;
   if (target.basis === 'zone') return target.zone || null;
@@ -333,7 +343,12 @@ function formatTargetCore(target) {
       ? `-${formatPace(target.high)}` : '';
     return `${formatPace(target.low)}${high}/100m`;
   }
-  if (target.basis === 'rpe') return 'RPE';
+  if (target.basis === 'rpe') {
+    if (target.low === null || target.low === undefined) return 'RPE';
+    const high = target.high !== null && target.high !== undefined && target.high !== target.low
+      ? `-${target.high}` : '';
+    return `RPE ${target.low}${high}`;
+  }
   return null; // basis === 'open'
 }
 
@@ -387,21 +402,171 @@ function structuredStepDetail(step, depth) {
   return parts.length > 0 ? parts.join(' · ') : null;
 }
 
+// --- Per-step coaching cues (expand-on-tap technique content) -------------
+// Real, specific technique cues for the drill/set-type vocabulary that
+// actually appears in this codebase's engine-generated content -- see
+// engine/swim_coach/workout_templates/*.yaml's narrative_template strings
+// (broken-distance, descend, pyramid, negative-split, the pull/kick/plain
+// ladder variants, fins-assisted, backstroke recovery, breathing-pattern
+// constraint, race-pace/sprint effort) and plan.py's STRENGTH_CORE_EXERCISES
+// / STRENGTH_FULL_BODY_ADDITION (matched by the step's own `exercise_name`,
+// a fixed canonical string, not fuzzy label text). Coach-voice, 1-3
+// sentences, genuine technique-coaching consensus -- no citation fabricated
+// here, matching plan.py's own STRENGTH_EXERCISE_REFERENCE_URLS comment's
+// precedent that a technique/form note isn't the kind of claim CLAUDE.md's
+// [EVIDENCE]/[ADAPTED] tagging governs (that's for claims driving engine
+// constants/prescriptions, not "here's how to execute this move").
+//
+// Deliberately NOT exhaustive and NOT a generic per-role fallback (e.g. no
+// blanket "ease into it" cue for every untagged warmup/cooldown step) -- an
+// unmatched step just has no cue and stays a plain, non-expandable line
+// (see `renderStructuredStep` below and views.js's `renderStructuredLine`).
+// A made-up generic cue would be exactly the "generic placeholder" this
+// feature was asked to avoid.
+
+/** Exact-match cues keyed by `WorkoutStep.exercise_name` -- the canonical
+ * strings plan.py's `STRENGTH_CORE_EXERCISES`/`STRENGTH_FULL_BODY_ADDITION`
+ * actually emit (kept byte-identical to those tuples, including the
+ * degree sign and curly-quoted "Ts"/"Ys" labels, so a real generated step
+ * always matches). */
+const STRENGTH_EXERCISE_CUES = {
+  'Internal rotation at 90° abduction':
+    'Elbow pinned at your side, forearm out at 90° -- rotate it in toward your stomach and back out, slow and controlled. This is a small, precise motion, not a big swing.',
+  'External rotation at 90° abduction':
+    'Elbow pinned at your side, forearm out at 90° -- rotate it away from your stomach against light resistance, then control the return just as carefully as the pull.',
+  'Scapular punches':
+    'Lying on your back, punch straight up toward the ceiling, letting your shoulder blade round forward at the top -- think "push the floor away," then control the return.',
+  'Scapular retraction ("Ts")':
+    'Face down, raise the arms straight out to the sides to form a T, squeezing the shoulder blades together at the top -- pause briefly before lowering, no momentum.',
+  'Retraction with upward rotation ("Ys")':
+    'Face down, raise the arms overhead in a Y shape with thumbs up, squeezing the lower traps -- slow and controlled, not a swing up and drop down.',
+  '3 x 10 goblet squat or bodyweight squat':
+    'Hold the weight at chest height (or hands together if bodyweight), sit the hips back and down, chest tall, knees tracking over the toes rather than caving in.',
+  '3 x 10 per side single-leg Romanian deadlift (or bodyweight equivalent)':
+    'Hinge at the hip on one leg with a soft bend in the standing knee, back flat, letting the free leg extend behind you for balance -- it\'s a hip hinge, not a balance trick.',
+  '3 x 10 plank or dead-bug core hold (30-45s each side)':
+    'Keep the low back pressed flat and the hips level throughout -- planking, don\'t let the hips sag; dead-bugging, move the opposite arm and leg slowly without the low back arching off the floor.',
+};
+
+/** Ordered, first-match-wins keyword cues for the real main-set format
+ * vocabulary (see engine/swim_coach/workout_templates/*.yaml's
+ * `narrative_template` strings). More specific multi-word patterns are
+ * checked before the generic single-word ones they'd otherwise be masked
+ * by (e.g. "descending-distance pull ladder" would also match a bare
+ * `/ladder/` or `/pull/` test, so the pull-ladder-specific cue is checked
+ * first) -- one real, accurate cue per line, not an attempt to cue every
+ * technique element a compound label happens to mention.
+ *
+ * `broken-distance` is checked only AFTER pyramid/negative-split/descend/
+ * ladder, not before them -- every real build/peak/taper template's
+ * narrative describes itself as "broken-distance" as a base characteristic
+ * (see e.g. build-0-descend's/build-3-negative-split's own narrative_
+ * template strings), so checking it first would mask the template's actual
+ * distinguishing shape on nearly every build-block label. It still fires on
+ * its own for base-1-broken-distance-lite, the one real template where
+ * broken-distance genuinely IS the whole story (no descend/pyramid/ladder/
+ * negative-split on top of it).
+ *
+ * `negative-split` is checked before the generic `descend` -- important,
+ * not just tie-breaking: build-3-negative-split's real narrative literally
+ * contains the substring "descend" (in "...no descend-across-reps
+ * progression, distinct from build-0-descend"), which would otherwise
+ * false-positive-match the plain descend rule and cue the athlete with the
+ * exact behavior that template's own docstring says it deliberately is
+ * NOT. */
+const SWIM_SET_TYPE_CUES = [
+  {
+    test: /pull ladder/i,
+    cue: 'Pull ladder -- pull buoy in, legs quiet, all the effort into catch and pull-through as the distance shrinks. A shorter rung is not license to kick to compensate.',
+  },
+  {
+    test: /kick ladder/i,
+    cue: 'Kick ladder -- hold the same sprint-character kick effort on every rung regardless of distance. Drive from the hips, keep ankles loose and pointed rather than flexed.',
+  },
+  {
+    test: /ladder|climbing pairs/i,
+    cue: 'Ladder set -- the distance changes rep to rep, but your pace target per 100m holds steady throughout. A shorter rep is not an invitation to sprint it.',
+  },
+  {
+    test: /pyramid/i,
+    cue: 'Pyramid -- effort ramps up toward the middle of the set and eases back down. Go out conservatively; the point is having something left to peak with on the middle reps.',
+  },
+  {
+    test: /negative-split/i,
+    cue: 'Negative-split -- swim the second half of each rep faster than the first half. Resist going out hard; the whole point is finishing stronger than you started.',
+  },
+  {
+    test: /descend/i,
+    cue: 'Descend -- each rep (or block of reps) gets a little faster than the last while effort feels the same. Start controlled so there\'s real room left to descend by the final rep.',
+  },
+  {
+    test: /broken-distance/i,
+    cue: 'Broken-distance -- a few seconds\' rest mid-rep, but hold the exact same pace across the break as if it were continuous. The rest is there for pace consistency, not recovery.',
+  },
+  {
+    test: /fins-assisted|fins-on/i,
+    cue: 'Fins-assisted -- the extra propulsion and ankle range of motion is there to reinforce a strong, steady kick rhythm, not just to make you swim faster.',
+  },
+  {
+    test: /backstroke recovery|recovery-paced backstroke|easy backstroke/i,
+    cue: 'Easy backstroke -- this is active recovery between hard efforts, not a second work interval. Keep it loose and relaxed, well off race pace.',
+  },
+  {
+    test: /breathing-pattern|breathing constraint/i,
+    cue: 'Breathing-pattern constraint -- hold the prescribed stroke count between breaths. If your form starts to break down, breathe more often rather than muscling through it.',
+  },
+  {
+    test: /race-pace effort|sprint effort/i,
+    cue: 'Race/sprint-pace effort -- swim the pace you\'d actually target on the day, not an all-out max. The generous rest between reps is there so quality holds rep to rep.',
+  },
+  {
+    test: /\bkick\b/i,
+    cue: 'Kick set -- drive from the hips, not just the knees. Keep ankles relaxed and pointed rather than flexed.',
+  },
+  {
+    test: /\bpull\b/i,
+    cue: 'Pull set -- pull buoy between the thighs, legs quiet. Put the effort into catch and pull-through, not compensating with a kick.',
+  },
+];
+
+/** A step's real, specific coaching cue, or `null` when nothing in the
+ * vocabulary above matches -- see this section's module comment for why an
+ * unmatched step gets no cue rather than a fabricated generic one.
+ * Strength steps are matched ONLY by exact `exercise_name` (never by label
+ * keyword-matching against the swim vocabulary above, which would produce
+ * nonsense like matching "Band pull-apart" against the swim pull-set cue). */
+export function stepCoachingCue(step) {
+  if (!step) return null;
+  if (step.modality === 'strength') {
+    return (step.exercise_name && STRENGTH_EXERCISE_CUES[step.exercise_name]) || null;
+  }
+  const label = step.label || '';
+  for (const { test, cue } of SWIM_SET_TYPE_CUES) {
+    if (test.test(label)) return cue;
+  }
+  return null;
+}
+
 /** One line for a `WorkoutStep` node: `{ depth, kind: 'step', text, detail }`,
- * plus `referenceUrl` when the step carries one. `text` is the step's label,
- * prefixed for a top-level warmup/interval/cooldown step (see
+ * plus `referenceUrl` when the step carries one and `cue` when
+ * `stepCoachingCue` finds real technique content for it. `text` is the
+ * step's label, prefixed for a top-level warmup/interval/cooldown step (see
  * `STRUCTURED_ROLE_PREFIX`); `detail` is the secondary duration/target/load
  * annotation from `structuredStepDetail`, or null. `referenceUrl` mirrors
  * `step.reference_url` (models.py's `WorkoutStep.reference_url` -- a coach-
  * or engine-set technique/demo link, e.g. plan.py's
  * `STRENGTH_EXERCISE_REFERENCE_URLS`) verbatim onto the line when present;
  * left unset (not `null`) when the step has none, so existing line-shape
- * assertions elsewhere that don't mention it keep passing. views.js's
- * `renderStructuredLine` renders it as the step's clickable link. */
+ * assertions elsewhere that don't mention it keep passing. Same convention
+ * for `cue`. views.js's `renderStructuredLine` renders `referenceUrl` as
+ * the step's clickable link, and renders a line carrying `cue` as an
+ * expandable `<details>` (collapsed line by default, cue text on tap). */
 function renderStructuredStep(step, depth) {
   const prefix = depth === 0 ? (STRUCTURED_ROLE_PREFIX[step.role] || '') : '';
   const line = { depth, kind: 'step', text: `${prefix}${step.label}`, detail: structuredStepDetail(step, depth) };
   if (step.reference_url) line.referenceUrl = step.reference_url;
+  const cue = stepCoachingCue(step);
+  if (cue) line.cue = cue;
   return line;
 }
 
@@ -465,6 +630,157 @@ export function renderStructuredWorkout(structured) {
   const out = [];
   walkStructuredItems(structured.items, 0, out);
   return out;
+}
+
+/** Splits a `WorkoutStructure`'s top-level `items` into `{ items, rationale }`
+ * -- `rationale` is the trailing top-level `role: "open"` step's label with
+ * its leading "Why:" stripped, or `null` when no such step is present (a
+ * structured session authored without one, e.g. a coach-authored ad hoc
+ * `session_overrides.structured` payload). `items` is the same list with
+ * that one step removed.
+ *
+ * plan.py's `_additional_swim_structure_template` and
+ * `_strength_session_structure_template` both append exactly this shape --
+ * a final `WorkoutStep(label="Why: ...", role="open", duration_kind="open")`
+ * -- as their structured content's last top-level item (see those
+ * functions' own docstrings for the citations/rationale text itself). Left
+ * where it is, that step renders as just another undifferentiated line
+ * inside the generic Workout tree-walk; splitting it out is what lets a
+ * structured-IR session get the exact same "Training rationale" heading
+ * legacy prose's `Why:` block gets (views.js's `renderStructureBlock`),
+ * instead of the rationale being indistinguishable from a real step.
+ *
+ * Only ever strips a TOP-LEVEL (not nested-under-a-repeat) step -- a
+ * "Why:"-labelled step nested inside a `WorkoutRepeat` would be a real (if
+ * oddly authored) per-rep instruction, not session-level rationale, so it's
+ * left in place. Scans from the end and stops at the first match (today's
+ * real content has at most one); a second one -- not producible by any real
+ * generator today, but not forbidden by the model either -- would stay in
+ * the workout list rather than being silently dropped. */
+export function splitStructuredRationale(structured) {
+  if (!structured || !structured.items) return { items: [], rationale: null };
+  const items = structured.items;
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i];
+    if (item.kind === 'step' && item.role === 'open' && typeof item.label === 'string' && item.label.startsWith('Why:')) {
+      return {
+        items: [...items.slice(0, i), ...items.slice(i + 1)],
+        rationale: item.label.slice('Why:'.length).trim(),
+      };
+    }
+  }
+  return { items, rationale: null };
+}
+
+// --- Per-session zone-distribution summary ---------------------------------
+// Given a session's WorkoutStructure, how much time/distance was spent at
+// each intensity -- a pure aggregation over existing WorkoutStep/
+// WorkoutRepeat fields (no new model fields needed). Answers "where did the
+// work actually go" at a glance, distinct from renderStructuredWorkout's
+// step-by-step instructions above.
+
+/** The bucket a step's target sorts into: its Z-zone when tagged (a
+ * `basis="zone"` step's `zone` field, OR a `basis="absolute"` step's `zone`
+ * field -- `workout_templates.resolve_template`'s `model_copy(update=...)`
+ * only overwrites `basis`/`low`/`high` when resolving a zone target, so the
+ * original `zone` tag survives resolution untouched; this is what lets a
+ * RESOLVED, athlete-facing workout's steps still bucket by zone correctly,
+ * not just an unresolved template's), else `"RPE"`/`"% CSS"` for those
+ * relative bases untagged with a zone, else `"Open"` for anything else
+ * (no target at all, or `basis === "open"`). Strength `load`-based dosing
+ * isn't a zone concept -- callers exclude `modality === "strength"` steps
+ * before reaching here (see `sessionZoneDistribution`). */
+function zoneDistributionBucketFor(target) {
+  if (target && target.zone) return target.zone;
+  if (target && target.basis === 'rpe') return 'RPE';
+  if (target && target.basis === 'percent_css') return '% CSS';
+  return 'Open';
+}
+
+const ZONE_DISTRIBUTION_BUCKET_ORDER = ['Z1', 'Z2', 'Z3', 'Z4', 'Z5', '% CSS', 'RPE', 'Open'];
+
+/** Adds one step's duration into `buckets` (a `Map<bucket, { distance_m,
+ * duration_s }>`), scaled by `multiplier` (the number of times this step
+ * actually repeats -- see `walkForZoneDistribution`'s handling of a
+ * `WorkoutRepeat(repeat_mode="count")`). Only `distance_m`/`time_s`
+ * duration_kinds contribute -- `reps`/`open` have nothing to sum in either
+ * unit, and every real strength step uses one of those two, so excluding
+ * `modality === "strength"` up front isn't strictly required for real
+ * content today, but is kept explicit (reps-based dosing genuinely isn't a
+ * "zone" concept) rather than relying on that coincidence. */
+function addStepToZoneDistribution(step, multiplier, buckets) {
+  if (step.modality === 'strength') return;
+  if (step.duration_value === null || step.duration_value === undefined) return;
+  if (step.duration_kind !== 'distance_m' && step.duration_kind !== 'time_s') return;
+  const bucket = zoneDistributionBucketFor(step.target);
+  const entry = buckets.get(bucket) || { distance_m: 0, duration_s: 0 };
+  if (step.duration_kind === 'distance_m') entry.distance_m += step.duration_value * multiplier;
+  else entry.duration_s += step.duration_value * multiplier;
+  buckets.set(bucket, entry);
+}
+
+/** Walks `items` accumulating into `buckets`. A `WorkoutRepeat` multiplies
+ * its children's contribution by `count` for `repeat_mode === "count"` (the
+ * common "4 x 100m" shape -- each child step's `duration_value` is ONE
+ * repetition's worth, e.g. plan.py's engine-authored strength template, or
+ * a coach-authored `session_overrides.structured` swim repeat). "for_
+ * duration"/"amrap" repeats have no well-defined per-child repetition
+ * count (an EMOM's round count isn't "how many times does this step run",
+ * and an AMRAP's is genuinely unknown ahead of time), so their children are
+ * counted once each -- an intentional undercount for those rarer loop
+ * shapes, not a bug. */
+function walkForZoneDistribution(items, multiplier, buckets) {
+  for (const item of items) {
+    if (item.kind === 'repeat') {
+      const childMultiplier = item.repeat_mode === 'count' && item.count
+        ? multiplier * item.count
+        : multiplier;
+      walkForZoneDistribution(item.steps, childMultiplier, buckets);
+    } else {
+      addStepToZoneDistribution(item, multiplier, buckets);
+    }
+  }
+}
+
+/** Entry point: total distance/time spent in each intensity bucket across a
+ * session's `WorkoutStructure`, as an ordered array of `{ bucket,
+ * distance_m, duration_s }` (Z1..Z5, then "% CSS", "RPE", "Open" --
+ * `ZONE_DISTRIBUTION_BUCKET_ORDER` -- omitting any bucket nothing landed
+ * in). `distance_m`/`duration_s` are `null`, not `0`, when that unit has no
+ * contribution in a bucket, matching this file's usual "null means nothing
+ * to show" convention (see `formatDistance`) rather than callers having to
+ * treat a real `0` and "not applicable" as the same thing. Returns `[]` for
+ * a missing/empty structure, same defensive contract as
+ * `renderStructuredWorkout`. */
+export function sessionZoneDistribution(structured) {
+  if (!structured || !structured.items) return [];
+  const buckets = new Map();
+  walkForZoneDistribution(structured.items, 1, buckets);
+  return ZONE_DISTRIBUTION_BUCKET_ORDER
+    .filter((bucket) => buckets.has(bucket))
+    .map((bucket) => {
+      const { distance_m, duration_s } = buckets.get(bucket);
+      return { bucket, distance_m: distance_m || null, duration_s: duration_s || null };
+    });
+}
+
+/** One zone-distribution entry as compact text, e.g. "1,600 m" or "25 min"
+ * -- both joined with " + " on the rare bucket carrying both units (a
+ * session mixing a distance-based and a time-based step in the same
+ * bucket). */
+function formatZoneDistributionEntry(entry) {
+  const parts = [];
+  if (entry.distance_m) parts.push(formatDistance(entry.distance_m));
+  if (entry.duration_s) parts.push(formatDuration(entry.duration_s / 60));
+  return parts.join(' + ');
+}
+
+/** `sessionZoneDistribution`'s entries as one compact summary line, e.g.
+ * "Z1: 10 min, Z2: 25 min, Z4: 8 min" -- the plan brief's own illustrative
+ * shape. Returns `''` for no entries so callers can render nothing without
+ * a length check of their own. */
+export function formatZoneDistributionSummary(entries) {
+  return entries.map((e) => `${e.bucket}: ${formatZoneDistributionEntry(e)}`).join(', ');
 }
 
 /** Finds a session by id across every loaded week's `sessions` (mirrors the
@@ -630,3 +946,36 @@ export function longSwimLadder(weeks, macro, event) {
 
   return rungs;
 }
+
+// --- Glossary (Plan tab's collapsed "Terms & zones" reference) -------------
+// Real values pulled from engine/swim_coach/zones.py's Z1-Z5 offset table
+// and library/04-css-intensity-anchors.md's "character" column for each
+// zone (the CSS-anchored offsets themselves are cited engine constants
+// already -- this is just their athlete-facing gloss, not a new claim), plus
+// the abbreviations/terms that actually show up elsewhere in this file's
+// own rendering (RPE, % CSS, EMOM/AMRAP -- see renderStructuredRepeatHeader
+// above -- and the main-set format vocabulary SWIM_SET_TYPE_CUES already
+// covers). Kept as plain data here (plan.js, not views.js) matching this
+// file's existing split between data/formatting and markup.
+
+export const ZONE_GLOSSARY = [
+  { zone: 'Z1', range: 'CSS +10s/100m and slower', character: 'Easy / recovery' },
+  { zone: 'Z2', range: 'CSS +5s to +9s/100m', character: 'Aerobic endurance' },
+  { zone: 'Z3', range: 'CSS +2s to +4s/100m', character: 'Tempo / threshold-adjacent' },
+  { zone: 'Z4', range: 'CSS -1s to +1s/100m', character: 'At/near CSS (critical velocity)' },
+  { zone: 'Z5', range: 'CSS -2s/100m and faster', character: 'Above critical velocity, anaerobic' },
+];
+
+export const TERM_GLOSSARY = [
+  { term: 'CSS', def: 'Critical Swim Speed -- the pace anchor every zone is offset from, computed from a timed 400m/200m trial (CSS = (t400 - t200) / 2).' },
+  { term: '% CSS', def: 'A pace target expressed as a percentage of CSS pace, e.g. 135% CSS, instead of a fixed Z1-Z5 zone.' },
+  { term: 'RPE', def: 'Rate of Perceived Exertion, 1-10 -- an effort-based target used when a specific pace target isn\'t the right anchor for the day (e.g. easy/recovery, or pool-coach-assigned content whose actual pace is unknown until delivered).' },
+  { term: 'Main set', def: 'The primary training-stimulus portion of a swim session, between the warm-up and cool-down.' },
+  { term: 'Broken-distance', def: 'A set split into shorter segments with brief rest between them, to hold the same pace longer than one continuous effort would allow.' },
+  { term: 'Descend', def: 'Each rep (or block of reps) in a set gets a little faster than the last while effort feels the same.' },
+  { term: 'Negative-split', def: 'Swimming the second half of a rep or set faster than the first half.' },
+  { term: 'Pyramid', def: 'Effort ramps up toward the middle of a set, then eases back down.' },
+  { term: 'Ladder', def: 'Rep distance changes (climbing or descending) across a set while the pace target holds steady.' },
+  { term: 'EMOM', def: '"Every Minute On the Minute" -- a new round starts on a fixed time interval regardless of how long the previous round took.' },
+  { term: 'AMRAP', def: '"As Many Rounds/Reps As Possible" within a fixed time window.' },
+];

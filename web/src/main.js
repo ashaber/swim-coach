@@ -197,6 +197,12 @@ const state = {
   // file), never by intercepting the click, so the native behaviour stays
   // exactly as it was.
   allWeeksOpen: false,
+  // Same "mirror the native <details> open state across re-renders"
+  // reasoning as allWeeksOpen just above, for the Plan tab's collapsed
+  // "Terms & zones" glossary (views.js's renderGlossaryPanel) -- a distinct
+  // flag, not reused from allWeeksOpen, so toggling one accordion never
+  // silently opens/closes the other on the next render.
+  glossaryOpen: false,
   // Secondary manual-entry/upload section is collapsed by default (Phase 3:
   // "Sync from watch" is the Log tab's primary action) -- reset on leaving
   // the Log tab (setTab), same convention as workoutDetailId below.
@@ -373,7 +379,12 @@ function renderTabContent() {
       if (state.plan.status === 'loading' || state.plan.status === 'idle') return renderLoading();
       if (state.plan.status === 'error') return renderError(state.plan.error);
       return renderApp(
-        { ...state.plan.data, sessionPush: state.sessionPush, allWeeksOpen: state.allWeeksOpen },
+        {
+          ...state.plan.data,
+          sessionPush: state.sessionPush,
+          allWeeksOpen: state.allWeeksOpen,
+          glossaryOpen: state.glossaryOpen,
+        },
         state.planSessionDetailId,
       );
   }
@@ -1934,8 +1945,17 @@ appEl.addEventListener('click', onAppClick);
 // makes the NEXT render reproduce it.
 appEl.addEventListener('toggle', (event) => {
   const details = event.target;
-  if (!(details instanceof HTMLDetailsElement) || !details.classList.contains('all-weeks')) return;
-  state.allWeeksOpen = details.open;
+  if (!(details instanceof HTMLDetailsElement)) return;
+  // Two independently-tracked accordions share this one listener (see each
+  // flag's own doc comment at its state declaration) -- deliberately NOT an
+  // else-if, though only one class is ever present on a given element, so
+  // there's no ordering hazard either way. Every other <details> in the app
+  // (e.g. a per-step coaching-cue expand, views.js's .struct-step-toggle)
+  // is intentionally NOT tracked here -- its open/closed state resetting on
+  // the next re-render is an acceptable, low-stakes tradeoff for a
+  // step-level toggle, unlike these two page-level accordions.
+  if (details.classList.contains('all-weeks')) state.allWeeksOpen = details.open;
+  if (details.classList.contains('glossary')) state.glossaryOpen = details.open;
 }, true);
 appEl.addEventListener('change', onAppChange);
 appEl.addEventListener('input', onAppInput);
