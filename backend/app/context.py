@@ -45,6 +45,7 @@ from typing import Any, TypedDict
 from swim_coach.load import (
     acute_chronic_ratio,
     compliance as compute_compliance,
+    ctl_atl_tsb_series,
     daily_loads,
     monotony,
     weekly_volume_m,
@@ -597,6 +598,15 @@ def summarize_rollup(
     (e.g. `build_per_request_context`, which also renders them as exact
     sessions) pass them in rather than triggering a second `list_workouts`
     round trip; defaults to fetching them here when omitted.
+
+    Includes `"ctl_atl_tsb"`: a `[date_iso, ctl, atl, tsb]` list (1-decimal
+    rounded), the Banister CTL/ATL/TSB series from `load.ctl_atl_tsb_series`,
+    windowed to `[span_start, span_end]` the same way `"wellness_trend"` is,
+    but -- unlike every other field here -- computed from the FULL `loads`
+    history rather than `window_loads`, so the exponential average has real
+    warm-up context. This is read-only monitoring surfaced to the
+    athlete-facing AI's judgment; it does not feed `plan.py`'s periodization
+    or taper math.
     """
     as_of = date.today() if as_of is None else as_of
     span_start, span_end, week_starts = _rollup_window(as_of, weeks)
@@ -610,6 +620,20 @@ def summarize_rollup(
     window_loads = {d: v for d, v in loads.items() if span_start <= d <= span_end}
     monotony_value = monotony(window_loads)
     load_ratio = acute_chronic_ratio(workouts, as_of)
+
+    # CTL/ATL/TSB computed from the FULL `loads` history (not `window_loads`)
+    # so the exponentially-weighted averages get proper warm-up from every
+    # workout ever logged, not just this window's -- see `ctl_atl_tsb_series`'s
+    # docstring on cold-start behavior. Only the window-relative slice is
+    # reported here, same convention `wellness_trend`'s "trend" field below
+    # already uses. Read-only/informational (see load.py's CTL/ATL module
+    # docstring for the PROVISIONAL time-constant citation caveat) -- this
+    # never feeds `plan.py`'s periodization or taper math.
+    ctl_atl_tsb = [
+        [d.isoformat(), round(ctl, 1), round(atl, 1), round(tsb, 1)]
+        for d, ctl, atl, tsb in ctl_atl_tsb_series(loads)
+        if span_start <= d <= span_end
+    ]
 
     window_wellness = [w for w in wellness if span_start <= w.date <= span_end]
     trend = wellness_trend(window_wellness)
@@ -634,6 +658,7 @@ def summarize_rollup(
         "monotony": monotony_value,
         "wellness_trend": [[d.isoformat(), v] for d, v in trend],
         "compliance_pct": compliance_pct,
+        "ctl_atl_tsb": ctl_atl_tsb,
     }
 
 

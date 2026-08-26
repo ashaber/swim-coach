@@ -128,6 +128,48 @@ consistent with the literature's own skepticism of ACWR and would support
 loosening or removing this specific rule in a future pass, rather than
 trusting the ratio uncritically.
 
+### CTL / ATL / TSB (Banister impulse-response)
+
+`load.ctl_atl_tsb_series()` adds a second, complementary load-monitoring
+layer on top of ACWR: exponentially-weighted CTL ("fitness"), ATL
+("fatigue"), and TSB = CTL − ATL ("form"), the standard Banister
+impulse-response model used across cycling/TrainingPeaks. Unlike ACWR's
+rolling-window sums above, these are recursive EWMAs walked day by day —
+`CTL_t = CTL_{t-1} + (load_t - CTL_{t-1}) / CTL_TIME_CONSTANT_DAYS`, same
+form for ATL with its own (shorter) time constant.
+
+**⚠ PROVISIONAL, citation debt.** `CTL_TIME_CONSTANT_DAYS = 42` /
+`ATL_TIME_CONSTANT_DAYS = 7` are the standard cycling/TrainingPeaks
+convention, carried over as Coach judgment — **not yet verified for
+swimming specifically**. **Thomas, Mujika & Busso (2008)**, "A model study
+of optimal training reduction during pre-event taper in elite swimmers" —
+*Journal of Sports Sciences*, 26(6):643-652 — is real and verified by
+direct web search this session (title/authors/journal/volume/pages
+confirmed); it comes from the same body of taper/fatigue-modeling research
+this pair of constants should eventually be checked against. Elite
+swimmers training 45-50 km/week have reportedly shown a measured fatigue
+time constant around **19 days**, not the 7-day cycling figure used here —
+but that specific number is sourced only from a secondary summary found
+this session, not from reading the paper's own primary text (currently
+paywalled/inaccessible). The citation is trusted; the number attached to
+it is not yet independently confirmed the way this project's evidence
+discipline requires. See `reference_list.md`'s "Injury & training load"
+entry for the same caveat, stated with the same distinction.
+
+**Practical consequence:** using a 7-day ATL time constant may materially
+misjudge how fast this athlete's fatigue actually clears — a true ~19-day
+constant would make ATL rise and fall much more slowly, softening apparent
+TSB swings considerably. **Test:** revisit both this pair of constants and
+the citation above once direct access to Thomas, Mujika & Busso (2008)'s
+primary text is available to confirm (or correct) the 19-day figure.
+
+**Scope:** this is read-only monitoring, surfaced to the athlete-facing
+AI's context and the `get_plan_summary` tool via
+`backend/app/context.py`'s `summarize_rollup()`. It is deliberately not
+wired into `plan.py`'s `generate_week`/taper/periodization math — informing
+judgment, not gating plan generation, same posture as the 80/20
+intensity-balance section below.
+
 ### Wellness composite
 
 **Coach judgment:** `wellness_composite = mean(sleep_quality, 6-stress,

@@ -175,6 +175,94 @@ def acute_chronic_ratio(
     return acute / chronic_weekly_avg
 
 
+# --- CTL / ATL / TSB (Banister impulse-response) --------------------------------
+
+CTL_TIME_CONSTANT_DAYS = 42
+ATL_TIME_CONSTANT_DAYS = 7
+# PROVISIONAL -- library/03-periodization.md (load-monitoring conventions).
+# These are the standard cycling/TrainingPeaks Banister-model time constants
+# (42-day "Chronic Training Load"/fitness, 7-day "Acute Training Load"/
+# fatigue), NOT yet verified for swimming specifically -- they're carried
+# over from endurance-cycling load-monitoring practice as Coach judgment,
+# the same way `acute_chronic_ratio`'s windows above are `[ADAPTED: running]`.
+#
+# Specific, flagged citation debt: Thomas, Mujika & Busso (2008), "A model
+# study of optimal training reduction during pre-event taper in elite
+# swimmers" -- *Journal of Sports Sciences*, 26(6):643-652 -- is real and
+# verified by direct web search this session (title/authors/journal/volume/
+# pages confirmed), and comes from the same body of taper/fatigue-modeling
+# research this constant should eventually be checked against. Elite
+# swimmers training 45-50 km/week have reportedly shown a measured fatigue
+# time constant around **19 days**, not the 7-day cycling convention used
+# here -- but that specific number is sourced only from a secondary summary
+# of the paper found this session, not from reading the paper's own primary
+# text (it's paywalled; not yet accessible). The citation itself is trusted;
+# the number attached to it is not yet independently confirmed the way this
+# project's evidence discipline requires -- see `reference_list.md`'s entry
+# for the same caveat.
+#
+# Practical consequence: using ATL_TIME_CONSTANT_DAYS = 7 here may
+# materially misjudge how fast this athlete's fatigue actually clears --
+# a true ~19-day time constant would make ATL rise and fall much more
+# slowly than this module currently models, softening apparent TSB swings
+# considerably. Revisit both this constant and the citation above once
+# direct access to Thomas, Mujika & Busso (2008)'s primary text is
+# available to confirm (or correct) the 19-day figure.
+
+
+def ctl_atl_tsb_series(
+    daily_load_values: dict[date, float],
+    *,
+    ctl_tau_days: float = CTL_TIME_CONSTANT_DAYS,
+    atl_tau_days: float = ATL_TIME_CONSTANT_DAYS,
+) -> list[tuple[date, float, float, float]]:
+    """CTL ("fitness"), ATL ("fatigue"), and TSB ("form" = CTL - ATL) as
+    exponentially-weighted moving averages of daily sRPE load -- the
+    standard Banister impulse-response model, in contrast to
+    ``acute_chronic_ratio``'s rolling-window ACWR above.
+
+    Walks every calendar day from the earliest to the latest date present
+    in ``daily_load_values`` (inclusive), same "day with no logged load
+    counts as zero" convention ``daily_loads``/``monotony`` already use --
+    a day missing from the dict is treated as a zero-load day, not skipped.
+    Seeded at ``CTL = ATL = 0`` immediately before the first day in range,
+    then for each day: ``CTL_t = CTL_{t-1} + (load_t - CTL_{t-1}) /
+    ctl_tau_days``, ``ATL_t = ATL_{t-1} + (load_t - ATL_{t-1}) /
+    atl_tau_days``, ``TSB_t = CTL_t - ATL_t``.
+
+    Returns one ``(date, ctl, atl, tsb)`` tuple per calendar day in range,
+    sorted ascending -- same "full series, not a single point-in-time
+    number" philosophy as ``wellness_trend`` above, since a trend is what's
+    actually useful for spotting a slide.
+
+    Read-only/informational: this feeds athlete-facing context and
+    ``get_plan_summary``, not ``plan.py``'s periodization or taper math.
+
+    **Known limitation -- cold start:** seeding both series at 0 means
+    early values in a short history aren't meaningful CTL/ATL estimates yet
+    -- they're still climbing from zero, not reflecting genuine fitness/
+    fatigue. Treat the series as warmed up only after roughly a few
+    multiples of the longer time constant (``ctl_tau_days``) worth of days
+    have accumulated; don't read early-series values as real fitness/
+    fatigue levels.
+    """
+    if not daily_load_values:
+        return []
+    start = min(daily_load_values)
+    end = max(daily_load_values)
+    ctl = 0.0
+    atl = 0.0
+    series: list[tuple[date, float, float, float]] = []
+    day = start
+    while day <= end:
+        load = daily_load_values.get(day, 0.0)
+        ctl = ctl + (load - ctl) / ctl_tau_days
+        atl = atl + (load - atl) / atl_tau_days
+        series.append((day, ctl, atl, ctl - atl))
+        day += timedelta(days=1)
+    return series
+
+
 # --- wellness composite ---------------------------------------------------------
 
 
