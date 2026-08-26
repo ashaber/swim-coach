@@ -170,6 +170,92 @@ wired into `plan.py`'s `generate_week`/taper/periodization math — informing
 judgment, not gating plan generation, same posture as the 80/20
 intensity-balance section below.
 
+### RHR/HRV baseline deviation — corroborating cross-check for CTL/ATL/TSB
+
+`load.wellness_baseline_deviation()` adds a second, *independently
+measured* signal alongside `ctl_atl_tsb_series` above: the percent
+deviation of the athlete's recent (7-day acute) average `resting_hr`/`hrv`
+from her own longer-term (28-day chronic) average, using the same
+coupled acute-vs-chronic rolling-window shape ACWR already uses in this
+file — `WELLNESS_BASELINE_ACUTE_WINDOW_DAYS = 7` /
+`WELLNESS_BASELINE_CHRONIC_WINDOW_DAYS = 28`, reused for consistency
+across this module's rolling-baseline signals, not independently
+re-derived for wellness data (see `load.py`'s module comment for the
+honest caveat on that reuse, including the closest swim-specific data
+point found — `Kamandulis et al. (2020)`, below — which arguably supports
+a shorter acute window for HRV specifically, but measures something
+different enough from "mean of the last 7 calendar days" that it isn't a
+direct substitute).
+
+**Why a separate field, not a merge into `ctl_atl_tsb`:** `ctl_atl_tsb`
+is entirely derived from sRPE training load. sRPE's **validity** as a
+training-load measure is well-supported, including swim-specifically
+(**✓ Wallace, Slattery & Coutts (2009)**, "The Ecological Validity and
+Application of the Session-RPE Method for Quantifying Training Loads in
+Swimming" — *Journal of Strength and Conditioning Research*, 23(1):33-38 —
+`[EVIDENCE: swim]`). Its **reliability** (would the same effort reliably
+produce the same reported RPE) is more mixed and *not* separately verified
+for swimming: **✓ Haddad, Stylianides, Djaoui, Dellal & Chamari (2017)**,
+"Session-RPE Method for Training Load Monitoring: Validity, Ecological
+Usefulness, and Influencing Factors" — *Frontiers in Neuroscience*,
+11:612 — this review's own reliability table reports ICC values for
+session-RPE ranging from ~0.55 (Scott et al. 2013, Australian football,
+short intermittent-running bouts — "fair," borderline "poor") to ~0.95
+(resistance training/basketball/karate protocols — "excellent"),
+i.e. reliability is context/protocol-dependent, unlike the more
+consistently-supported validity literature. No swim-specific *reliability*
+study was found this session (only the swim-specific *validity* study
+above) — flagged honestly as a gap, not filled in with an assumed number.
+
+`resting_hr` and `hrv` are physiologically measured, not self-reported —
+an independent channel from sRPE's subjective-report reliability question.
+Two real, sourced caveats on trusting either as a standalone number:
+
+- **✓ Bosquet, Merkari, Arvisais & Aubert (2008)**, "Is heart rate a
+  convenient tool to monitor over-reaching? A systematic review of the
+  literature" — *British Journal of Sports Medicine*, 42:709-714. Overload
+  training produced a real, moderate resting-HR increase on average, but
+  the effect size was small-to-moderate — small enough that it can fall
+  within RHR's own day-to-day variability read as a single number.
+  Practical takeaway baked into this engine's function: report a
+  **trend-relative percentage against the athlete's own baseline**, not a
+  raw threshold, and don't trust a single day's reading in isolation.
+- **✓ Kamandulis, Juodsnukis, Stanislovaitiene, Zuoziene, Bogdelis,
+  Mickevicius, Eimantas, Snieckus, Olstad & Venckunas (2020)**, "Daily
+  Resting Heart Rate Variability in Adolescent Swimmers during 11 Weeks of
+  Training" — *International Journal of Environmental Research and Public
+  Health*, 17(6):2097 — `[EVIDENCE: swim]`. 22 national-level adolescent
+  swimmers, 11 weeks: **day-to-day HRV alone had limited value** for
+  estimating the athlete's load/tolerance balance, but a consistent ~4.5%
+  HRV *reduction* emerged after 3-5 **consecutive** high-volume (>6 km/day)
+  days, and HRV correlated inversely (r=-0.35, p<0.05) with large
+  (>7 km/day) week-to-week training-load shifts. This is the swim-specific
+  citation for the framing this function is built around: HRV is a weak
+  daily signal but a real one when read as a *sustained deviation from the
+  athlete's own baseline* under materially increased or extended load —
+  exactly the taper/build-block monitoring context this function targets,
+  not routine day-to-day noise.
+
+**Confidence:** medium overall — the mechanism (RHR up / HRV down under
+sustained load, both real but noisy day-to-day) is well-supported and has
+direct swim-specific corroboration (Kamandulis et al.); the specific
+7-day/28-day window choice is PROVISIONAL, reused for consistency with
+ACWR rather than independently validated for wellness data; and
+device-accuracy caveats for Renee's specific Oura ring (separate from
+whether RHR/HRV *as constructs* are meaningful) are already covered in
+`10-recovery-hrv.md`'s "Oura device trust" section rather than re-derived
+here. **Test:** once Renee logs enough `resting_hr`/`hrv` check-ins to
+populate both windows, check whether `wellness_baseline_deviation` moves
+in the same direction as `ctl_atl_tsb`'s TSB dip during a real high-load
+block or taper — persistent disagreement between the two would be a
+reason to weight one over the other for her specifically, not a reason to
+silently merge them into one number.
+
+**Scope:** same as `ctl_atl_tsb` above — read-only monitoring surfaced via
+`backend/app/context.py`'s `summarize_rollup()` as its own
+`"wellness_baseline_deviation"` field, never blended into `"ctl_atl_tsb"`
+and never wired into `plan.py`'s periodization/taper math.
+
 ### Wellness composite
 
 **Coach judgment:** `wellness_composite = mean(sleep_quality, 6-stress,

@@ -676,6 +676,38 @@ raw research input, not itself citable).
   in the current model). Confidence: low (number), the citation itself:
   high. Test: revisit both the constant and this entry once the primary
   text is directly accessible.
+- **✓ Wallace L.K., Slattery K.M., Coutts A.J. (2009)** — "The Ecological
+  Validity and Application of the Session-RPE Method for Quantifying
+  Training Loads in Swimming" — *Journal of Strength and Conditioning
+  Research*, 23(1):33-38. 12 well-trained swimmers, 20 training sessions
+  each: session-RPE tracked heart-rate-based training-impulse and distance
+  criterion measures well; athlete/coach sRPE agreement was also checked.
+  `[EVIDENCE: swim]`, Confidence: medium-high — verified by title/author/
+  journal/volume/pages search this session, summary only (full text not
+  fetched). This is swim-specific support for sRPE's **validity** as a
+  training-load measure specifically — see the Haddad et al. (2017) entry
+  immediately below for the separate, more mixed question of sRPE
+  **reliability**, which has no equivalent swim-specific study.
+- **✓ Haddad M., Stylianides G., Djaoui L., Dellal A., Chamari K.
+  (2017)** — "Session-RPE Method for Training Load Monitoring: Validity,
+  Ecological Usefulness, and Influencing Factors" — *Frontiers in
+  Neuroscience*, 11:612. Review of the session-RPE literature; its own
+  reliability table (ICC across the reviewed studies) reports values
+  ranging from ~0.55 (Scott et al. 2013, Australian football, short
+  intermittent-running bouts — "fair," borderline "poor") up to ~0.95
+  (resistance-training/basketball/karate protocols — "excellent") —
+  i.e. session-RPE reliability is real but context/protocol-dependent,
+  markedly more mixed than its validity evidence. `[ADAPTED:
+  general-endurance/multi-sport]`, Confidence: medium (review-level
+  synthesis, verified by title/author/journal search this session; the
+  underlying ICC table read via a fetched summary, not independently
+  recomputed from each cited study). No swim-specific *reliability* number
+  was found this session — only the swim-specific *validity* study above
+  (Wallace, Slattery & Coutts 2009) — a real, flagged gap, not filled in
+  with an assumed figure. Grounds `03-periodization.md`'s "RHR/HRV baseline
+  deviation" section's rationale for treating physiologically-measured
+  `resting_hr`/`hrv` as an independent corroborating signal alongside
+  sRPE-derived `ctl_atl_tsb`, rather than trusting sRPE-derived load alone.
 
 ## Cross-discipline endurance (cycling / running / triathlon)
 
@@ -819,6 +851,37 @@ raw research input, not itself citable).
   exact population and question) — swim-specific corroboration for
   `03-periodization.md`'s ACWR-is-weak caveat, currently sourced only from
   the running Garmin-RunSafe cohort.
+- **✓ Bosquet L., Merkari S., Arvisais D., Aubert A.E. (2008)** — "Is heart
+  rate a convenient tool to monitor over-reaching? A systematic review of
+  the literature" — *British Journal of Sports Medicine*, 42:709-714.
+  Systematic review/meta-analysis: overload training produced a real,
+  moderate increase in resting heart rate on average, but the effect size
+  was small-to-moderate — small enough that it can fall within resting
+  HR's own day-to-day variability when read as a single number.
+  `[ADAPTED: general-endurance]`, Confidence: medium-high (review-level;
+  verified by title/author/journal/volume/pages search this session,
+  summary only). Grounds `03-periodization.md`'s "RHR/HRV baseline
+  deviation" section's choice to report a **trend-relative percentage
+  against the athlete's own rolling baseline**, not a raw single-day RHR
+  threshold.
+- **✓ Kamandulis S., Juodsnukis A., Stanislovaitiene J., Zuoziene I.J.,
+  Bogdelis A., Mickevicius M., Eimantas N., Snieckus A., Olstad B.H.,
+  Venckunas T. (2020)** — "Daily Resting Heart Rate Variability in
+  Adolescent Swimmers during 11 Weeks of Training" — *International
+  Journal of Environmental Research and Public Health*, 17(6):2097. 22
+  national-level adolescent swimmers (sprint/middle-distance), 11 weeks:
+  day-to-day HRV alone had **limited value** for estimating an athlete's
+  load/tolerance balance, but a consistent ~4.5% HRV **reduction** emerged
+  after 3-5 **consecutive** high-volume (>6 km/day) training days, and HRV
+  correlated inversely (r=-0.35, p<0.05) with large (>7 km/day) week-to-week
+  training-load shifts. `[EVIDENCE: swim]`, Confidence: high for
+  population/question match — verified by title/author/journal/DOI search
+  this session, summary only (full text not fetched). The key swim-specific
+  citation for `03-periodization.md`'s "RHR/HRV baseline deviation"
+  section: HRV is a weak *daily* signal but a real one when read as a
+  sustained deviation from the athlete's own baseline under materially
+  increased or extended load — the taper/build-block monitoring context
+  that function targets, not routine day-to-day noise.
 
 ## Wearables & device validity
 

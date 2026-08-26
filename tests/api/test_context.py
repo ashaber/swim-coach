@@ -26,8 +26,12 @@ from app.context import (
     route_library_files,
     summarize_rollup,
 )
-from fakes import make_event, make_workout
-from swim_coach.load import ctl_atl_tsb_series, daily_loads as compute_daily_loads
+from fakes import make_event, make_wellness, make_workout
+from swim_coach.load import (
+    ctl_atl_tsb_series,
+    daily_loads as compute_daily_loads,
+    wellness_baseline_deviation,
+)
 
 
 def test_system_block_a_is_byte_identical_regardless_of_message(library_dir) -> None:
@@ -294,6 +298,35 @@ def test_summarize_rollup_ctl_atl_tsb_uses_full_history_but_windows_output(app_e
         [d for d, _, _, _ in full_series].index(span_start)
     ][1]
     assert full_history_first_ctl != pytest.approx(window_only_first_ctl)
+
+
+def test_summarize_rollup_includes_wellness_baseline_deviation(app_env) -> None:
+    # Same shape/field-naming as the "ctl_atl_tsb" pattern above: a
+    # separate, distinctly-named key -- never folded into "ctl_atl_tsb" --
+    # computed from the FULL wellness history (not window_wellness), so a
+    # short weeks=N window doesn't starve the 28-day chronic baseline.
+    store = FileStore(base_dir=app_env)
+    as_of = date(2026, 7, 28)
+    entries = [
+        make_wellness(date=as_of - timedelta(days=i), resting_hr=44, hrv=None)
+        for i in range(7, 28)
+    ] + [
+        make_wellness(date=as_of - timedelta(days=i), resting_hr=60, hrv=None)
+        for i in range(0, 7)
+    ]
+    for entry in entries:
+        store.save_wellness("renee", entry)
+
+    rollup = summarize_rollup(store, "renee", weeks=1, as_of=as_of, workouts=[])
+
+    assert "wellness_baseline_deviation" in rollup
+    expected = wellness_baseline_deviation(entries, as_of)
+    assert rollup["wellness_baseline_deviation"] == {
+        "resting_hr_pct_deviation": round(expected["resting_hr_pct_deviation"], 1),
+        "hrv_pct_deviation": expected["hrv_pct_deviation"],
+    }
+    assert rollup["wellness_baseline_deviation"]["resting_hr_pct_deviation"] == pytest.approx(25.0)
+    assert rollup["wellness_baseline_deviation"]["hrv_pct_deviation"] is None
 
 
 def test_per_request_context_labels_rollup_as_aggregate(app_env) -> None:
