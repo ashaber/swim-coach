@@ -10,9 +10,12 @@ from datetime import date, timedelta
 import pytest
 
 from swim_coach.load import (
+    ATL_TIME_CONSTANT_DAYS,
+    CTL_TIME_CONSTANT_DAYS,
     DEFAULT_RPE_WHEN_MISSING,
     acute_chronic_ratio,
     compliance,
+    ctl_atl_tsb_series,
     daily_loads,
     monotony,
     session_load,
@@ -237,6 +240,64 @@ def test_wellness_trend_sorted_by_date():
     ]
     trend = wellness_trend(entries)
     assert [d for d, _ in trend] == [date(2026, 7, 6), date(2026, 7, 7), date(2026, 7, 8)]
+
+
+# --- ctl_atl_tsb_series ----------------------------------------------------------------
+
+
+def test_ctl_atl_tsb_series_empty_input_returns_empty_series():
+    assert ctl_atl_tsb_series({}) == []
+
+
+def test_ctl_atl_tsb_series_single_day_matches_recursion_with_zero_seed():
+    # CTL_0 = ATL_0 = 0 seeded *before* the range, so the first returned
+    # point already reflects one recursion step against that zero seed:
+    # ctl = 0 + (load - 0) / tau, same for atl. Uses non-default taus to
+    # confirm the function isn't hardcoded to the module constants.
+    d = date(2026, 7, 6)
+    series = ctl_atl_tsb_series({d: 50.0}, ctl_tau_days=10, atl_tau_days=2)
+    assert series == [(d, pytest.approx(5.0), pytest.approx(25.0), pytest.approx(-20.0))]
+
+
+def test_ctl_atl_tsb_series_covers_full_date_range_including_zero_days():
+    # A day with no logged load counts as zero, same convention as
+    # daily_loads/monotony elsewhere in this module -- the series must
+    # include every calendar day spanned, not just the days with an entry.
+    start = date(2026, 7, 1)
+    end = date(2026, 7, 5)
+    daily = {start: 100.0, end: 100.0}
+    series = ctl_atl_tsb_series(daily)
+    assert [d for d, _, _, _ in series] == [start + timedelta(days=i) for i in range(5)]
+
+
+def test_ctl_atl_tsb_series_constant_load_converges_ctl_and_atl_with_tsb_near_zero():
+    d0 = date(2026, 1, 1)
+    load = 300.0
+    days = 400  # several multiples of the longer (42-day) time constant
+    daily = {d0 + timedelta(days=i): load for i in range(days)}
+    series = ctl_atl_tsb_series(daily)
+    last_date, ctl, atl, tsb = series[-1]
+    assert last_date == d0 + timedelta(days=days - 1)
+    assert ctl == pytest.approx(load, abs=0.5)
+    assert atl == pytest.approx(load, abs=0.01)
+    assert tsb == pytest.approx(0.0, abs=0.5)
+
+
+def test_ctl_atl_tsb_series_load_spike_after_quiet_period_dips_tsb_negative():
+    # ATL's shorter time constant should respond to a sudden spike much
+    # faster than CTL's -- TSB should dip clearly negative right after it.
+    start = date(2026, 1, 1)
+    spike_day = start + timedelta(days=60)
+    daily = {start: 0.0, spike_day: 500.0}
+    series = ctl_atl_tsb_series(daily)
+    spike_date, ctl, atl, tsb = series[-1]
+    assert spike_date == spike_day
+    # Both CTL/ATL were ~0 going into the spike day (60 quiet days first),
+    # so this reduces to one recursion step from a zero seed.
+    assert ctl == pytest.approx(500.0 / CTL_TIME_CONSTANT_DAYS)
+    assert atl == pytest.approx(500.0 / ATL_TIME_CONSTANT_DAYS)
+    assert atl > ctl
+    assert tsb < 0
 
 
 # --- compliance ----------------------------------------------------------------------

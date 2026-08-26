@@ -657,6 +657,25 @@ raw research input, not itself citable).
   reviews concluding no evidence backs the 10% rule. Corrects the common
   misconception that the 10% rule is research-based (it originates from 1980s
   running lore).
+- **✓⚠ Thomas L., Mujika I., Busso T. (2008)** — "A model study of optimal
+  training reduction during pre-event taper in elite swimmers" — *Journal
+  of Sports Sciences*, 26(6):643-652. Citation itself (author/year/journal/
+  volume/pages) verified real by direct web search this session. The
+  specific numbers commonly attributed to it — a ~33±16 day optimal taper
+  duration and a ~19-day measured fatigue time constant in elite swimmers
+  training 45-50 km/week — are sourced only from a secondary-source summary
+  found this session, **not** confirmed by reading the paper's own primary
+  text (currently paywalled/inaccessible). Treat the citation as solid and
+  the attached numbers as unconfirmed pending direct access to the source.
+  `[ADAPTED: cycling]` context: `engine/swim_coach/load.py`'s
+  `CTL_TIME_CONSTANT_DAYS = 42` / `ATL_TIME_CONSTANT_DAYS = 7` (Banister
+  CTL/ATL/TSB model) use the standard cycling/TrainingPeaks convention, not
+  this paper's reported swim-specific ~19-day figure — see
+  `03-periodization.md`'s "CTL / ATL / TSB" section for the same caveat and
+  the flagged practical consequence (ATL may clear fatigue signal too fast
+  in the current model). Confidence: low (number), the citation itself:
+  high. Test: revisit both the constant and this entry once the primary
+  text is directly accessible.
 
 ## Cross-discipline endurance (cycling / running / triathlon)
 

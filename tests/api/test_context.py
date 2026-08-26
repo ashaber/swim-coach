@@ -8,6 +8,8 @@ import json
 import uuid
 from datetime import date, timedelta
 
+import pytest
+
 from swim_coach.store import FileStore
 
 from swim_coach.models import WorkoutAnalytics, WorkoutLap, WorkoutPause
@@ -22,8 +24,10 @@ from app.context import (
     find_workout_by_id,
     render_focused_workout,
     route_library_files,
+    summarize_rollup,
 )
 from fakes import make_event, make_workout
+from swim_coach.load import ctl_atl_tsb_series, daily_loads as compute_daily_loads
 
 
 def test_system_block_a_is_byte_identical_regardless_of_message(library_dir) -> None:
@@ -246,6 +250,50 @@ def test_per_request_context_includes_summarize_rollup(app_env) -> None:
     text = build_per_request_context(store, "renee", expert_mode=False)
     assert "compliance_pct" in text
     assert "load_ratio_7d_28d" in text
+
+
+def test_summarize_rollup_ctl_atl_tsb_uses_full_history_but_windows_output(app_env) -> None:
+    # `loads = daily_loads(workouts)` inside summarize_rollup already sees
+    # the FULL logged history -- the CTL/ATL series must be computed from
+    # that same full history (so the exponential average gets a real
+    # warm-up), but the returned "ctl_atl_tsb" list must only include the
+    # dates that fall inside the requested weeks-N window, same
+    # window-relative convention `wellness_trend`'s "trend" field uses.
+    store = FileStore(base_dir=app_env)
+    as_of = date(2026, 7, 6)  # Monday
+    workouts = [
+        # Well before the 1-week window -- exists only to warm up CTL/ATL.
+        make_workout(date=as_of - timedelta(days=100), rpe=6, duration_min=60.0),
+        # Inside the window.
+        make_workout(date=as_of + timedelta(days=1), rpe=7, duration_min=45.0),
+    ]
+    for w in workouts:
+        store.save_workout("renee", w)
+
+    rollup = summarize_rollup(store, "renee", weeks=1, as_of=as_of, workouts=workouts)
+
+    assert "ctl_atl_tsb" in rollup
+    span_start, span_end = as_of, as_of + timedelta(days=6)
+    full_series = ctl_atl_tsb_series(compute_daily_loads(workouts))
+    expected = [
+        [d.isoformat(), round(ctl, 1), round(atl, 1), round(tsb, 1)]
+        for d, ctl, atl, tsb in full_series
+        if span_start <= d <= span_end
+    ]
+    assert expected, "test setup should produce a non-empty windowed series"
+    assert rollup["ctl_atl_tsb"] == expected
+    # The 100-day-old workout falls outside the window, but its effect on
+    # CTL/ATL should still be visible -- i.e. this isn't just recomputed
+    # from `window_loads` alone (which would start the recursion at zero
+    # right at span_start instead of carrying warmed-up history into it).
+    window_only_series = ctl_atl_tsb_series(
+        {d: v for d, v in compute_daily_loads(workouts).items() if span_start <= d <= span_end}
+    )
+    window_only_first_ctl = window_only_series[0][1]
+    full_history_first_ctl = full_series[
+        [d for d, _, _, _ in full_series].index(span_start)
+    ][1]
+    assert full_history_first_ctl != pytest.approx(window_only_first_ctl)
 
 
 def test_per_request_context_labels_rollup_as_aggregate(app_env) -> None:
