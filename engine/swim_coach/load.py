@@ -289,6 +289,147 @@ def wellness_trend(entries: list[Wellness]) -> list[tuple[date, float]]:
     return sorted((entry.date, wellness_composite(entry)) for entry in entries)
 
 
+# --- wellness baseline deviation (RHR / HRV fatigue cross-check) --------------
+
+WELLNESS_BASELINE_ACUTE_WINDOW_DAYS = 7
+WELLNESS_BASELINE_CHRONIC_WINDOW_DAYS = 28
+# PROVISIONAL -- library/03-periodization.md (load-monitoring conventions).
+# Reuses acute_chronic_ratio's 7-day/28-day *coupled* window shape (the
+# chronic window includes the acute window, same as ACWR above) purely for
+# consistency across this module's rolling-baseline signals -- not because
+# 7/28 has been independently validated for daily wellness metrics the way
+# it's carried for training load.
+#
+# The closest swim-specific data point found this session --
+# **Kamandulis et al. (2020)**, 22 national-level adolescent swimmers over
+# 11 weeks -- found day-to-day HRV alone had *limited* value for estimating
+# an athlete's load/tolerance balance, but a consistent ~4.5% HRV
+# *reduction* emerged after 3-5 **consecutive** high-volume (>6 km/day)
+# days, and HRV correlated inversely (r=-0.35, p<0.05) with large
+# (>7 km/day) week-to-week training-load shifts. That's evidence for a
+# shorter acute window (~3-5 days) arguably mattering more than a 7-day
+# one for HRV specifically -- but "3-5 consecutive high-volume days" is a
+# different measurement than "mean of the last N calendar days" (this
+# function's shape), so it isn't a direct swap-in citation for
+# WELLNESS_BASELINE_ACUTE_WINDOW_DAYS. Treat 7/28 as a defensible,
+# consistency-driven default, not a resolved citation the way
+# `reference_list.md`'s verification legend expects for an `[EVIDENCE]`
+# claim -- same citation-debt posture as `CTL_TIME_CONSTANT_DAYS`/
+# `ATL_TIME_CONSTANT_DAYS` above.
+
+
+def _daily_field_values(entries: list[Wellness], field: str) -> dict[date, float]:
+    """Date -> value map for one optional `Wellness` field, skipping entries
+    where it's `None` -- both `resting_hr` and `hrv` are optional fields an
+    athlete may not log every day (or at all)."""
+    values: dict[date, float] = {}
+    for entry in entries:
+        value = getattr(entry, field)
+        if value is None:
+            continue
+        values[entry.date] = float(value)
+    return values
+
+
+def _window_mean(values: dict[date, float], as_of: date, window_days: int) -> float | None:
+    """Mean of whatever values fall in the ``window_days`` ending at
+    ``as_of`` (inclusive) -- unlike ``daily_loads``' "missing day counts as
+    zero" convention, a day with no logged wellness entry is *skipped*
+    here, not treated as zero (a missing resting_hr reading is not a
+    resting_hr of zero). Returns ``None`` if the window contains no values
+    at all.
+    """
+    present = [values[d] for i in range(window_days) if (d := as_of - timedelta(days=i)) in values]
+    if not present:
+        return None
+    return statistics.mean(present)
+
+
+def _pct_deviation(
+    values: dict[date, float], as_of: date, acute_window_days: int, chronic_window_days: int
+) -> float | None:
+    acute_mean = _window_mean(values, as_of, acute_window_days)
+    chronic_mean = _window_mean(values, as_of, chronic_window_days)
+    if acute_mean is None or chronic_mean is None or chronic_mean == 0:
+        return None
+    return (acute_mean - chronic_mean) / chronic_mean * 100.0
+
+
+def wellness_baseline_deviation(
+    entries: list[Wellness],
+    as_of: date,
+    *,
+    acute_window_days: int = WELLNESS_BASELINE_ACUTE_WINDOW_DAYS,
+    chronic_window_days: int = WELLNESS_BASELINE_CHRONIC_WINDOW_DAYS,
+) -> dict[str, float | None]:
+    """Percent deviation of the recent (acute-window) average from the
+    athlete's own longer-term (chronic-window) average, computed
+    independently for `resting_hr` and `hrv` -- the same acute-vs-chronic
+    rolling-window shape as `acute_chronic_ratio` above (coupled: the
+    chronic window includes the acute window), applied to two wellness
+    fields instead of training load.
+
+    Returns ``{"resting_hr_pct_deviation": ..., "hrv_pct_deviation": ...}``,
+    each ``float | None``. A field is ``None`` whenever there isn't enough
+    data to trust the number -- no logged values for that field at all, or
+    (critically) no logged value inside the *acute* window even if older
+    chronic-window history exists, since a deviation computed only from
+    stale history would misrepresent "right now" as "computed as of
+    now". `_window_mean`'s missing-day-is-skipped (not zero) convention
+    keeps a single missed check-in from distorting either average.
+
+    **Why this exists, and why it's a separate field from
+    `ctl_atl_tsb_series` rather than folded into it:** `ctl_atl_tsb_series`
+    is built entirely from sRPE training load, whose *validity* as a
+    training-load signal is well-supported (`Wallace, Slattery & Coutts
+    2009` -- swim-specific `[EVIDENCE: swim]` support for session-RPE as a
+    training-load measure) but whose *reliability* (consistency of the
+    same effort producing the same reported RPE) is more mixed:
+    `Haddad et al. (2017)`'s review of the session-RPE literature reports
+    ICC values for session-RPE ranging from ~0.55 (Scott et al. 2013,
+    Australian football, "fair"/borderline-"good") to ~0.95 (excellent) in
+    other sports/protocols -- no swim-specific *reliability* number was
+    found (only the swim-specific *validity* study above), consistent with
+    this project's existing citation-debt pattern of "validity is better
+    evidenced than reliability" for this method. `resting_hr`/`hrv` are
+    physiologically measured, not self-reported, so they corroborate (or
+    fail to corroborate) the sRPE-derived TSB trend from an independent
+    measurement channel -- `Bosquet et al. (2008)`'s systematic review
+    found resting-HR elevation during overreach real but small-to-moderate
+    in magnitude (may fall within day-to-day variability read as a single
+    number, hence this function reports a *trend-relative* percentage
+    rather than a raw value), and `Kamandulis et al. (2020)` (above) is
+    the swim-specific citation that HRV suppression under sustained load is
+    real but easy to miss without comparing against the athlete's own
+    rolling baseline, exactly what this function does. Per this project's
+    "multiple independent signals, not one master number" convention
+    (ACWR/monotony/wellness-composite/CTL-ATL-TSB already coexist rather
+    than merge), this stays its own clearly-labeled field -- a
+    corroborating cross-check for `ctl_atl_tsb_series`'s TSB, not a
+    replacement or a blend into it. See `library/10-recovery-hrv.md`'s
+    "Oura device trust" section for the separate question of *how much to
+    trust the underlying device reading itself* (not addressed here).
+
+    Sign convention (deliberately asymmetric, since "worse" points opposite
+    ways for these two fields): a positive `resting_hr_pct_deviation` means
+    recent RHR sits *above* baseline (elevated = a fatigue signal); a
+    negative `hrv_pct_deviation` means recent HRV sits *below* baseline
+    (suppressed = a fatigue signal). Neither field is inverted/rescaled to
+    force "higher = worse" onto both -- read each field's own sign in light
+    of its own direction.
+    """
+    rhr_values = _daily_field_values(entries, "resting_hr")
+    hrv_values = _daily_field_values(entries, "hrv")
+    return {
+        "resting_hr_pct_deviation": _pct_deviation(
+            rhr_values, as_of, acute_window_days, chronic_window_days
+        ),
+        "hrv_pct_deviation": _pct_deviation(
+            hrv_values, as_of, acute_window_days, chronic_window_days
+        ),
+    }
+
+
 # --- compliance ------------------------------------------------------------------
 
 

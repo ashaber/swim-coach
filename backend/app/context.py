@@ -49,6 +49,7 @@ from swim_coach.load import (
     daily_loads,
     monotony,
     weekly_volume_m,
+    wellness_baseline_deviation,
     wellness_trend,
 )
 from swim_coach.models import Athlete, Event, Workout
@@ -635,6 +636,18 @@ def summarize_rollup(
     warm-up context. This is read-only monitoring surfaced to the
     athlete-facing AI's judgment; it does not feed `plan.py`'s periodization
     or taper math.
+
+    Also includes `"wellness_baseline_deviation"`: the
+    `{"resting_hr_pct_deviation": ..., "hrv_pct_deviation": ...}` dict from
+    `load.wellness_baseline_deviation`, computed from the FULL `wellness`
+    history (same "full history, not window_wellness" reasoning as
+    `ctl_atl_tsb` above -- its 28-day chronic window needs real history, not
+    whatever's left after windowing to `weeks`). This is a corroborating
+    cross-check for `ctl_atl_tsb`'s TSB (independent physiological signal
+    vs. sRPE-derived load), reported as its own field per this project's
+    "separate signals, not one master number" convention -- never blended
+    into `ctl_atl_tsb`. See `load.py`'s `wellness_baseline_deviation`
+    docstring for the full citation trail.
     """
     as_of = date.today() if as_of is None else as_of
     span_start, span_end, week_starts = _rollup_window(as_of, weeks)
@@ -666,6 +679,11 @@ def summarize_rollup(
     window_wellness = [w for w in wellness if span_start <= w.date <= span_end]
     trend = wellness_trend(window_wellness)
 
+    # Full `wellness` history (not `window_wellness`) so the 28-day chronic
+    # baseline has real data behind it -- same reasoning `ctl_atl_tsb`'s
+    # comment above already gives for `loads` vs `window_loads`.
+    baseline_deviation = wellness_baseline_deviation(wellness, as_of)
+
     planned_sessions = []
     for ws in week_starts:
         week_plan = store.load_week(slug, iso_week_str(ws))
@@ -687,6 +705,10 @@ def summarize_rollup(
         "wellness_trend": [[d.isoformat(), v] for d, v in trend],
         "compliance_pct": compliance_pct,
         "ctl_atl_tsb": ctl_atl_tsb,
+        "wellness_baseline_deviation": {
+            key: (round(value, 1) if value is not None else None)
+            for key, value in baseline_deviation.items()
+        },
     }
 
 

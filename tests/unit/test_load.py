@@ -13,6 +13,8 @@ from swim_coach.load import (
     ATL_TIME_CONSTANT_DAYS,
     CTL_TIME_CONSTANT_DAYS,
     DEFAULT_RPE_WHEN_MISSING,
+    WELLNESS_BASELINE_ACUTE_WINDOW_DAYS,
+    WELLNESS_BASELINE_CHRONIC_WINDOW_DAYS,
     acute_chronic_ratio,
     compliance,
     ctl_atl_tsb_series,
@@ -20,6 +22,7 @@ from swim_coach.load import (
     monotony,
     session_load,
     weekly_volume_m,
+    wellness_baseline_deviation,
     wellness_composite,
     wellness_trend,
 )
@@ -298,6 +301,103 @@ def test_ctl_atl_tsb_series_load_spike_after_quiet_period_dips_tsb_negative():
     assert atl == pytest.approx(500.0 / ATL_TIME_CONSTANT_DAYS)
     assert atl > ctl
     assert tsb < 0
+
+
+# --- wellness_baseline_deviation ------------------------------------------------------
+
+
+def test_wellness_baseline_deviation_none_when_no_data_at_all():
+    result = wellness_baseline_deviation([], date(2026, 7, 28))
+    assert result == {"resting_hr_pct_deviation": None, "hrv_pct_deviation": None}
+
+
+def test_wellness_baseline_deviation_none_when_only_chronic_data_no_recent_acute():
+    # Entries exist inside the 28-day chronic window (offsets 10-20 days
+    # back) but none inside the most recent 7-day acute window -- must not
+    # report a stale/misleading deviation number just because *some*
+    # baseline history exists.
+    as_of = date(2026, 7, 28)
+    entries = [
+        make_wellness(date=as_of - timedelta(days=i), resting_hr=50, hrv=60.0)
+        for i in range(10, 21)
+    ]
+    result = wellness_baseline_deviation(entries, as_of)
+    assert result == {"resting_hr_pct_deviation": None, "hrv_pct_deviation": None}
+
+
+def test_wellness_baseline_deviation_resting_hr_elevation_is_positive():
+    # 21 older days (offsets 7-27) at RHR=44, most recent 7 days
+    # (offsets 0-6) at RHR=60. Chronic window is coupled (includes the
+    # acute days), same shape as acute_chronic_ratio:
+    #   chronic_mean = (21*44 + 7*60) / 28 = 48
+    #   acute_mean = 60
+    #   pct_deviation = (60 - 48) / 48 * 100 = +25.0
+    as_of = date(2026, 7, 28)
+    entries = [
+        make_wellness(date=as_of - timedelta(days=i), resting_hr=44, hrv=None)
+        for i in range(7, 28)
+    ] + [
+        make_wellness(date=as_of - timedelta(days=i), resting_hr=60, hrv=None)
+        for i in range(0, 7)
+    ]
+    result = wellness_baseline_deviation(entries, as_of)
+    assert result["resting_hr_pct_deviation"] == pytest.approx(25.0)
+    # No hrv logged at all -- must stay None independently of resting_hr.
+    assert result["hrv_pct_deviation"] is None
+
+
+def test_wellness_baseline_deviation_hrv_suppression_is_negative():
+    # 21 older days (offsets 7-27) at HRV=52.0, most recent 7 days
+    # (offsets 0-6) at HRV=36.0:
+    #   chronic_mean = (21*52 + 7*36) / 28 = 48
+    #   acute_mean = 36
+    #   pct_deviation = (36 - 48) / 48 * 100 = -25.0
+    as_of = date(2026, 7, 28)
+    entries = [
+        make_wellness(date=as_of - timedelta(days=i), resting_hr=None, hrv=52.0)
+        for i in range(7, 28)
+    ] + [
+        make_wellness(date=as_of - timedelta(days=i), resting_hr=None, hrv=36.0)
+        for i in range(0, 7)
+    ]
+    result = wellness_baseline_deviation(entries, as_of)
+    assert result["hrv_pct_deviation"] == pytest.approx(-25.0)
+    assert result["resting_hr_pct_deviation"] is None
+
+
+def test_wellness_baseline_deviation_near_zero_when_stable():
+    as_of = date(2026, 7, 28)
+    entries = [
+        make_wellness(date=as_of - timedelta(days=i), resting_hr=50, hrv=60.0)
+        for i in range(0, 28)
+    ]
+    result = wellness_baseline_deviation(entries, as_of)
+    assert result["resting_hr_pct_deviation"] == pytest.approx(0.0, abs=1e-9)
+    assert result["hrv_pct_deviation"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_wellness_baseline_deviation_custom_windows_are_respected():
+    # Non-default window sizes are honored, not hardcoded to the module
+    # constants -- same convention ctl_atl_tsb_series's tests use.
+    as_of = date(2026, 7, 10)
+    entries = [
+        make_wellness(date=as_of - timedelta(days=i), resting_hr=40, hrv=None)
+        for i in range(1, 9)
+    ] + [
+        make_wellness(date=as_of, resting_hr=50, hrv=None),
+    ]
+    result = wellness_baseline_deviation(entries, as_of, acute_window_days=1, chronic_window_days=9)
+    # chronic_mean = (8*40 + 50) / 9 = 41.111...; acute_mean = 50.
+    expected_chronic = (8 * 40 + 50) / 9
+    expected = (50 - expected_chronic) / expected_chronic * 100
+    assert result["resting_hr_pct_deviation"] == pytest.approx(expected)
+
+
+def test_wellness_baseline_deviation_default_windows_match_acwr_windows():
+    # Documented as a deliberate consistency choice with acute_chronic_ratio,
+    # not independent tuning -- see load.py's module comment.
+    assert WELLNESS_BASELINE_ACUTE_WINDOW_DAYS == 7
+    assert WELLNESS_BASELINE_CHRONIC_WINDOW_DAYS == 28
 
 
 # --- compliance ----------------------------------------------------------------------
