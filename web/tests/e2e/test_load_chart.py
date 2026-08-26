@@ -1,11 +1,14 @@
 """e2e coverage for the CTL/ATL/TSB training-load chart (views.js's
-renderLoadChart, fed by plan.js's ctlAtlTsbChartGeometry) -- surfaces
-`backend/app/context.py`'s `summarize_rollup` "ctl_atl_tsb" field directly
-to the frontend via the new `GET /api/plan/load` (athlete self-access) and
-`GET /api/coach/athletes/{slug}/load` (coach access) endpoints, on two
-surfaces sharing the same render function: the athlete's own Plan tab
-(main.js's loadPlanLoad) and the coach roster's acting-as-athlete view
-(main.js's loadCoachLoad).
+renderLoadChart, fed by plan.js's ctlAtlTsbChartGeometry) plus its
+resting-HR/HRV baseline-deviation cross-check (views.js's
+renderWellnessBaselineDeviation, fed by plan.js's
+describeWellnessBaselineDeviation) -- surfaces `backend/app/context.py`'s
+`summarize_rollup` "ctl_atl_tsb" and "wellness_baseline_deviation" fields
+directly to the frontend via the new `GET /api/plan/load` (athlete
+self-access) and `GET /api/coach/athletes/{slug}/load` (coach access)
+endpoints, on two surfaces sharing the same render function: the athlete's
+own Plan tab (main.js's loadPlanLoad) and the coach roster's
+acting-as-athlete view (main.js's loadCoachLoad).
 
 Same mocked-backend / CORS-preflight conventions as test_plan_session_detail.py
 / test_coach_roster.py: cross-origin GETs carrying an Authorization header,
@@ -48,16 +51,32 @@ REAL_SERIES = [
     ['2026-08-15', 40.5, 20.0, 20.5],
     ['2026-08-22', 40.0, 15.0, 25.0],
 ]
-PLAN_LOAD_STUB = json.dumps({'athlete': 'renee', 'weeks': 12, 'ctl_atl_tsb': REAL_SERIES})
+# A real, non-null wellness_baseline_deviation -- an elevated resting HR
+# (bad) alongside a suppressed HRV (also bad, but opposite raw sign) so a
+# single stub exercises both fields' "concerning" framing at once.
+REAL_WELLNESS_DEVIATION = {'resting_hr_pct_deviation': 8.5, 'hrv_pct_deviation': -11.2}
+NULL_WELLNESS_DEVIATION = {'resting_hr_pct_deviation': None, 'hrv_pct_deviation': None}
+
+PLAN_LOAD_STUB = json.dumps({
+    'athlete': 'renee', 'weeks': 12, 'ctl_atl_tsb': REAL_SERIES,
+    'wellness_baseline_deviation': REAL_WELLNESS_DEVIATION,
+})
+PLAN_LOAD_NULL_WELLNESS_STUB = json.dumps({
+    'athlete': 'renee', 'weeks': 12, 'ctl_atl_tsb': REAL_SERIES,
+    'wellness_baseline_deviation': NULL_WELLNESS_DEVIATION,
+})
 
 COACH_IDENTITY = {'name': 'Andrew', 'athlete': 'andrew', 'role': 'coach', 'coachFor': ['renee']}
 COACH_ATHLETES_STUB = json.dumps([{'slug': 'renee', 'name': 'Renee'}])
 COACH_WORKOUTS_STUB = json.dumps([])
 COACH_FEEDBACK_STUB = json.dumps([])
-COACH_LOAD_STUB = json.dumps({'athlete': 'renee', 'weeks': 12, 'ctl_atl_tsb': REAL_SERIES})
+COACH_LOAD_STUB = json.dumps({
+    'athlete': 'renee', 'weeks': 12, 'ctl_atl_tsb': REAL_SERIES,
+    'wellness_baseline_deviation': REAL_WELLNESS_DEVIATION,
+})
 
 
-def _make_ctx(pw, cfg, *, identity=None):
+def _make_ctx(pw, cfg, *, identity=None, plan_load_body=PLAN_LOAD_STUB, coach_load_body=COACH_LOAD_STUB):
     try:
         browser = getattr(pw, cfg['name']).launch()
     except Exception as e:
@@ -66,10 +85,10 @@ def _make_ctx(pw, cfg, *, identity=None):
     seed_identity(ctx, identity=identity)
     seed_settings(ctx)
     ctx.route('**/api/plan*', _cors_route(200, 'application/json', PLAN_STUB))
-    ctx.route('**/api/plan/load*', _cors_route(200, 'application/json', PLAN_LOAD_STUB))
+    ctx.route('**/api/plan/load*', _cors_route(200, 'application/json', plan_load_body))
     ctx.route('**/api/coach/athletes/renee/workouts*', _cors_route(200, 'application/json', COACH_WORKOUTS_STUB))
     ctx.route('**/api/coach/athletes/renee/feedback*', _cors_route(200, 'application/json', COACH_FEEDBACK_STUB))
-    ctx.route('**/api/coach/athletes/renee/load*', _cors_route(200, 'application/json', COACH_LOAD_STUB))
+    ctx.route('**/api/coach/athletes/renee/load*', _cors_route(200, 'application/json', coach_load_body))
     ctx.route('**/api/coach/athletes*', _cors_route(200, 'application/json', COACH_ATHLETES_STUB))
     return browser, ctx
 
@@ -80,6 +99,29 @@ def page(request, base_url):
     cfg = request.param
     with sync_playwright() as pw:
         browser, ctx = _make_ctx(pw, cfg)
+        pg = ctx.new_page()
+        js_errors: list[str] = []
+        pg.on('pageerror', lambda e: js_errors.append(str(e)))
+        pg.goto(base_url)
+        try:
+            yield pg
+            real_errors = [e for e in js_errors
+                           if 'sw.js load failed' not in e
+                           and 'Importing a module script failed' not in e]
+            assert not real_errors, f'Uncaught JS errors: {real_errors}'
+        finally:
+            ctx.close()
+            browser.close()
+
+
+@pytest.fixture(params=BROWSERS)
+def null_wellness_page(request, base_url):
+    """Same as `page`, except `GET /api/plan/load` reports no wellness data
+    (both `wellness_baseline_deviation` fields `null`) -- the normal state
+    for an athlete who hasn't logged `resting_hr`/`hrv` recently."""
+    cfg = request.param
+    with sync_playwright() as pw:
+        browser, ctx = _make_ctx(pw, cfg, plan_load_body=PLAN_LOAD_NULL_WELLNESS_STUB)
         pg = ctx.new_page()
         js_errors: list[str] = []
         pg.on('pageerror', lambda e: js_errors.append(str(e)))
@@ -139,6 +181,36 @@ def test_chart_renders_on_the_plan_tab_with_real_mocked_data(page):
     assert 'not yet verified for swimming' in content.lower()
 
 
+def test_wellness_baseline_deviation_renders_with_real_mocked_data(page):
+    page.wait_for_selector('.mast h1')
+    page.wait_for_selector('.wellness-baseline-deviation')
+    content = page.content()
+    assert 'Resting HR' in content
+    assert 'HRV' in content
+    assert '+8.5%' in content
+    assert '-11.2%' in content
+    # Both fields are "bad" here (elevated RHR, suppressed HRV) despite
+    # opposite raw signs -- both rendered as concerning callouts.
+    assert page.locator('.wellness-stat--concerning').count() == 2
+    assert page.locator('.wellness-stat--no-data').count() == 0
+    # The independent-cross-check framing is visible, not buried.
+    assert 'independent' in content.lower()
+
+
+def test_wellness_baseline_deviation_null_data_shows_honest_not_enough_data_state(null_wellness_page):
+    page = null_wellness_page
+    page.wait_for_selector('.mast h1')
+    page.wait_for_selector('.wellness-baseline-deviation')
+    content = page.content()
+    # Honest per-field "not enough data" -- never a hidden element, never
+    # a bare 0.0%.
+    assert page.locator('.wellness-stat--no-data').count() == 2
+    assert page.locator('.wellness-stat--concerning').count() == 0
+    assert page.locator('.wellness-stat--good').count() == 0
+    assert 'not enough data' in content.lower()
+    assert '0.0%' not in content
+
+
 def test_chart_is_not_buried_in_a_collapsed_section(page):
     # Task requirement: visible on load, not tucked inside an already-
     # collapsed <details> the way the glossary is.
@@ -165,6 +237,19 @@ def test_chart_renders_on_the_coach_roster_view_for_a_granted_athlete(coach_page
     assert 'TSB' in content
     assert page.locator('.load-chart-line-ctl').count() == 1
     assert page.locator('.load-chart-band').count() == 1
+
+
+def test_wellness_baseline_deviation_renders_on_the_coach_roster_view(coach_page):
+    page = coach_page
+    page.wait_for_selector('[data-a="tab:roster"]')
+    page.click('[data-a="tab:roster"]')
+    page.wait_for_selector('[data-a="roster:select-athlete"]')
+    page.click('[data-a="roster:select-athlete"]')
+    page.wait_for_selector('.wellness-baseline-deviation')
+    content = page.content()
+    assert '+8.5%' in content
+    assert '-11.2%' in content
+    assert page.locator('.wellness-stat--concerning').count() == 2
 
 
 def test_coach_roster_chart_disappears_when_going_back_to_the_athlete_list(coach_page):

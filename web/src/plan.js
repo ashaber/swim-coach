@@ -1115,3 +1115,49 @@ export function ctlAtlTsbChartGeometry(series, {
     lastDate: series[n - 1][0],
   };
 }
+
+// --- Wellness baseline deviation (RHR/HRV cross-check) ----------------------
+// Pure classification of `wellness_baseline_deviation`
+// (`engine/swim_coach/load.py`'s `wellness_baseline_deviation`, surfaced
+// via the same `GET /api/plan/load` / `GET /api/coach/athletes/{slug}/load`
+// endpoints as `ctl_atl_tsb` above) into a good/concerning/no-data status
+// per field. `views.js`'s `renderLoadChart` turns this into markup, right
+// alongside (never blended into) the CTL/ATL/TSB chart above -- kept here,
+// not there, for the same DOM-free-unit-testability split
+// `ctlAtlTsbChartGeometry` already uses.
+//
+// Sign conventions are OPPOSITE for the two fields (see
+// `wellness_baseline_deviation`'s own docstring for the full citation
+// trail): a positive `resting_hr_pct_deviation` is bad (elevated RHR is a
+// fatigue signal); a negative `hrv_pct_deviation` is bad (suppressed HRV is
+// a fatigue signal). Neither field is flipped/rescaled to force
+// "higher = worse" onto both -- each is classified against its own sign.
+
+/** +-5% threshold for flagging a deviation as "concerning" rather than
+ * "within normal range" -- Coach judgment, not sourced from a specific
+ * library citation, chosen to match this app's existing `formatDrift`
+ * (`workouts.js`) 5% cardiac-decoupling threshold for numeric consistency
+ * across the app's various "flag past this magnitude" judgment calls. */
+export const WELLNESS_DEVIATION_CONCERNING_PCT = 5;
+
+function classifyDeviation(value, isBad) {
+  if (value === null || value === undefined) return { value: null, status: 'no-data' };
+  return { value, status: isBad(value) ? 'concerning' : 'good' };
+}
+
+/** Classifies `wellness_baseline_deviation` (`{resting_hr_pct_deviation,
+ * hrv_pct_deviation}`, either field -- or the whole dict -- possibly
+ * `null`/absent, e.g. no `resting_hr`/`hrv` logged recently) into
+ * `{restingHr, hrv}`, each `{value, status}` where `status` is
+ * `'good' | 'concerning' | 'no-data'`. */
+export function describeWellnessBaselineDeviation(deviation) {
+  const d = deviation || {};
+  return {
+    restingHr: classifyDeviation(
+      d.resting_hr_pct_deviation, (v) => v >= WELLNESS_DEVIATION_CONCERNING_PCT,
+    ),
+    hrv: classifyDeviation(
+      d.hrv_pct_deviation, (v) => v <= -WELLNESS_DEVIATION_CONCERNING_PCT,
+    ),
+  };
+}

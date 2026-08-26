@@ -1,8 +1,9 @@
 """GET /api/plan/load (athlete self-access) and
 GET /api/coach/athletes/{slug}/load (coach access) -- surfaces
-`context.summarize_rollup`'s `ctl_atl_tsb` Banister CTL/ATL/TSB series
-directly to the frontend, so the PWA can render a chart without going
-through the coach-chat `get_plan_summary` tool.
+`context.summarize_rollup`'s `ctl_atl_tsb` Banister CTL/ATL/TSB series AND
+`wellness_baseline_deviation` (resting-HR/HRV cross-check) directly to the
+frontend, so the PWA can render a chart without going through the
+coach-chat `get_plan_summary` tool.
 
 Follows `test_plan_route.py`'s pattern for the self-access route and
 `test_coach_route.py`'s pattern (fakes' `_sign_in`/`allowlist`/`google`
@@ -17,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from fakes import auth_headers, google_token_for, make_workout
+from fakes import auth_headers, google_token_for, make_wellness, make_workout
 from swim_coach.store import FileStore
 
 RENEE_EMAIL = "kline.renee@gmail.com"
@@ -109,6 +110,40 @@ def test_athlete_load_empty_history_returns_empty_series(client) -> None:
     assert isinstance(body["ctl_atl_tsb"], list)
 
 
+def test_athlete_load_includes_wellness_baseline_deviation_shape(client) -> None:
+    # No resting_hr/hrv logged beyond whatever the seeded renee fixture
+    # tree ships with -- either way, the field must be present with the
+    # {"resting_hr_pct_deviation", "hrv_pct_deviation"} shape, all-None is
+    # an honest, valid response (not an error, not omitted).
+    response = client.get("/api/plan/load?athlete=renee", headers=auth_headers())
+    assert response.status_code == 200
+    body = response.json()
+    assert "wellness_baseline_deviation" in body
+    deviation = body["wellness_baseline_deviation"]
+    assert set(deviation.keys()) == {"resting_hr_pct_deviation", "hrv_pct_deviation"}
+    for value in deviation.values():
+        assert value is None or isinstance(value, (int, float))
+
+
+def test_athlete_load_wellness_baseline_deviation_reflects_real_data(client, store) -> None:
+    as_of = date.today()
+    entries = [
+        make_wellness(date=as_of - timedelta(days=i), resting_hr=44, hrv=None)
+        for i in range(7, 28)
+    ] + [
+        make_wellness(date=as_of - timedelta(days=i), resting_hr=60, hrv=None)
+        for i in range(0, 7)
+    ]
+    for entry in entries:
+        store.save_wellness("renee", entry)
+
+    response = client.get("/api/plan/load?athlete=renee", headers=auth_headers())
+    assert response.status_code == 200
+    deviation = response.json()["wellness_baseline_deviation"]
+    assert deviation["resting_hr_pct_deviation"] == pytest.approx(25.0)
+    assert deviation["hrv_pct_deviation"] is None
+
+
 def test_athlete_load_respects_weeks_query_param(client, store) -> None:
     _save_workout_for(store, "renee", date=date.today(), rpe=6, duration_min=60.0)
     response = client.get("/api/plan/load?athlete=renee&weeks=2", headers=auth_headers())
@@ -173,3 +208,16 @@ def test_coach_load_service_token_passes(client, allowlist, store) -> None:
     _save_workout_for(store, "renee", date=date.today(), rpe=6, duration_min=60.0)
     response = client.get("/api/coach/athletes/renee/load", headers=auth_headers())
     assert response.status_code == 200
+
+
+def test_coach_load_includes_wellness_baseline_deviation_shape(
+    client, allowlist, store, google
+) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    headers = _headers_for(client, allowlist, google, TIM_EMAIL)
+    response = client.get("/api/coach/athletes/renee/load", headers=headers)
+    assert response.status_code == 200
+    deviation = response.json()["wellness_baseline_deviation"]
+    assert set(deviation.keys()) == {"resting_hr_pct_deviation", "hrv_pct_deviation"}
+    for value in deviation.values():
+        assert value is None or isinstance(value, (int, float))

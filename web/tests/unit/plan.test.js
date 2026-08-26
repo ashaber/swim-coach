@@ -8,6 +8,7 @@ import {
   splitStructuredRationale, sessionZoneDistribution, formatZoneDistributionSummary,
   stepCoachingCue, ZONE_GLOSSARY, TERM_GLOSSARY,
   ctlAtlTsbChartGeometry, RACE_DAY_TSB_BAND,
+  describeWellnessBaselineDeviation, WELLNESS_DEVIATION_CONCERNING_PCT,
 } from '../../src/plan.js';
 
 describe('isoWeekMonday', () => {
@@ -1072,5 +1073,86 @@ describe('ctlAtlTsbChartGeometry', () => {
     const geo = ctlAtlTsbChartGeometry(series, { width: 300, height: 150 });
     expect(geo.width).toBe(300);
     expect(geo.height).toBe(150);
+  });
+});
+
+describe('describeWellnessBaselineDeviation', () => {
+  it('reports no-data for null fields', () => {
+    const result = describeWellnessBaselineDeviation({
+      resting_hr_pct_deviation: null, hrv_pct_deviation: null,
+    });
+    expect(result.restingHr).toEqual({ value: null, status: 'no-data' });
+    expect(result.hrv).toEqual({ value: null, status: 'no-data' });
+  });
+
+  it('reports no-data when the field is missing or the whole dict is absent', () => {
+    expect(describeWellnessBaselineDeviation({}).restingHr.status).toBe('no-data');
+    expect(describeWellnessBaselineDeviation(undefined).restingHr.status).toBe('no-data');
+    expect(describeWellnessBaselineDeviation(null).hrv.status).toBe('no-data');
+  });
+
+  it('flags a positive resting_hr_pct_deviation at/above the threshold as concerning (elevated = bad)', () => {
+    const atThreshold = describeWellnessBaselineDeviation({
+      resting_hr_pct_deviation: WELLNESS_DEVIATION_CONCERNING_PCT, hrv_pct_deviation: null,
+    });
+    expect(atThreshold.restingHr).toEqual({ value: WELLNESS_DEVIATION_CONCERNING_PCT, status: 'concerning' });
+
+    const wellAbove = describeWellnessBaselineDeviation({
+      resting_hr_pct_deviation: 12.5, hrv_pct_deviation: null,
+    });
+    expect(wellAbove.restingHr).toEqual({ value: 12.5, status: 'concerning' });
+  });
+
+  it('reports resting_hr_pct_deviation below the threshold (including negative) as good', () => {
+    const belowThreshold = describeWellnessBaselineDeviation({
+      resting_hr_pct_deviation: 2.0, hrv_pct_deviation: null,
+    });
+    expect(belowThreshold.restingHr).toEqual({ value: 2.0, status: 'good' });
+
+    const negative = describeWellnessBaselineDeviation({
+      resting_hr_pct_deviation: -8.0, hrv_pct_deviation: null,
+    });
+    expect(negative.restingHr).toEqual({ value: -8.0, status: 'good' });
+  });
+
+  it('flags a negative hrv_pct_deviation at/beyond the threshold as concerning (suppressed = bad)', () => {
+    const atThreshold = describeWellnessBaselineDeviation({
+      resting_hr_pct_deviation: null, hrv_pct_deviation: -WELLNESS_DEVIATION_CONCERNING_PCT,
+    });
+    expect(atThreshold.hrv).toEqual({ value: -WELLNESS_DEVIATION_CONCERNING_PCT, status: 'concerning' });
+
+    const wellBelow = describeWellnessBaselineDeviation({
+      resting_hr_pct_deviation: null, hrv_pct_deviation: -20.0,
+    });
+    expect(wellBelow.hrv).toEqual({ value: -20.0, status: 'concerning' });
+  });
+
+  it('reports hrv_pct_deviation above the negative threshold (including positive) as good', () => {
+    const mild = describeWellnessBaselineDeviation({
+      resting_hr_pct_deviation: null, hrv_pct_deviation: -2.0,
+    });
+    expect(mild.hrv).toEqual({ value: -2.0, status: 'good' });
+
+    const positive = describeWellnessBaselineDeviation({
+      resting_hr_pct_deviation: null, hrv_pct_deviation: 15.0,
+    });
+    expect(positive.hrv).toEqual({ value: 15.0, status: 'good' });
+  });
+
+  it('classifies resting_hr and hrv independently in the same call (opposite sign conventions)', () => {
+    // A simultaneously elevated RHR (bad) and suppressed HRV (bad) --
+    // both flagged concerning despite opposite-signed raw values.
+    const bothBad = describeWellnessBaselineDeviation({
+      resting_hr_pct_deviation: 9.0, hrv_pct_deviation: -9.0,
+    });
+    expect(bothBad.restingHr.status).toBe('concerning');
+    expect(bothBad.hrv.status).toBe('concerning');
+
+    // A high positive HRV deviation is NOT concerning (never flip the
+    // sign convention to force "big number = bad" onto both fields).
+    const hrvUp = describeWellnessBaselineDeviation({
+      resting_hr_pct_deviation: null, hrv_pct_deviation: 9.0,
+    });
+    expect(hrvUp.hrv.status).toBe('good');
   });
 });
