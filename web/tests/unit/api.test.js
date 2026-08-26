@@ -651,7 +651,7 @@ describe('listCoachedAthletes', () => {
 
 describe('fetchCoachWorkouts', () => {
   it('GETs /api/coach/athletes/<athlete>/workouts -- athlete as a path segment, no query param', async () => {
-    const workouts = [{ id: 'w1', compliance: { matched: true } }];
+    const workouts = [{ id: 'w1', quality: { matched: true } }];
     global.fetch = fakeFetch(workouts);
 
     const result = await fetchCoachWorkouts({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee' });

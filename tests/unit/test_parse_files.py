@@ -370,6 +370,55 @@ def test_sport_detail_none_when_session_sport_missing():
     assert _sport_detail(None, None, "cross_train") is None
 
 
+# --- _sport_detail: walk/run relabeling (Renee's real feedback: her watch's --------------
+# --- "Run" activity profile mislabeling an actual walk as "running") --------------------
+
+
+def test_sport_detail_slow_running_relabeled_to_walking():
+    # 1.2 m/s is well below the ~2.1 m/s gait-transition threshold
+    # (library/11-workout-analytics.md, "Walk/run FIT sport-label sanity
+    # check") -- this is a walk recorded under a Garmin "Run" profile.
+    detail = _sport_detail("running", "generic", "cross_train", avg_speed_mps=1.2)
+    assert detail == "walking"
+
+
+def test_sport_detail_normal_pace_running_stays_running():
+    # 3.0 m/s (5:33/km) is comfortably above the transition threshold -- a
+    # real run, left labeled as-is.
+    detail = _sport_detail("running", "generic", "cross_train", avg_speed_mps=3.0)
+    assert detail == "running"
+
+
+def test_sport_detail_running_sub_sport_preserved_after_walk_relabel():
+    detail = _sport_detail("running", "trail", "cross_train", avg_speed_mps=1.2)
+    assert detail == "walking/trail"
+
+
+def test_sport_detail_running_without_speed_data_stays_running():
+    # No avg_speed_mps available (e.g. no session.total_distance/
+    # total_timer_time) -- nothing to sanity-check against, so the device
+    # label passes through unchanged rather than guessing.
+    detail = _sport_detail("running", "generic", "cross_train", avg_speed_mps=None)
+    assert detail == "running"
+
+
+def test_sport_detail_walk_relabel_records_warning():
+    warnings: list[str] = []
+    detail = _sport_detail("running", "generic", "cross_train", avg_speed_mps=1.2, warnings=warnings)
+    assert detail == "walking"
+    assert len(warnings) == 1
+    assert "walking" in warnings[0]
+    assert "running" in warnings[0]
+
+
+def test_sport_detail_non_running_sport_unaffected_by_speed_check():
+    # Slow speed on a non-"run" sport (e.g. kayaking) must never be
+    # relabeled -- the gait-transition check is scoped to "run"-family
+    # sport strings only.
+    detail = _sport_detail("kayaking", None, "cross_train", avg_speed_mps=0.3)
+    assert detail == "kayaking"
+
+
 # --- _is_cycling_sport -----------------------------------------------------------------
 
 

@@ -111,7 +111,7 @@ def test_coach_view_workouts_403_without_grant(client, allowlist, google) -> Non
     assert response.status_code == 403
 
 
-def test_coach_view_workouts_includes_compliance_per_item(
+def test_coach_view_workouts_includes_quality_per_item(
     client, allowlist, store, google
 ) -> None:
     from datetime import date
@@ -128,9 +128,9 @@ def test_coach_view_workouts_includes_compliance_per_item(
     # in addition to the two saved by this test.
     assert len(body) >= 2
     for entry in body:
-        assert "compliance" in entry
-        assert "matched" in entry["compliance"]
-        assert "intensity_match" in entry["compliance"]
+        assert "quality" in entry
+        assert "matched" in entry["quality"]
+        assert "intensity_match" in entry["quality"]
 
     # most-recent-first
     dates = [entry["date"] for entry in body]

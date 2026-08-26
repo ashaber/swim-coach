@@ -378,7 +378,34 @@ def _fit_sport(session_sport: object | None, session_sub_sport: object | None, w
     return "cross_train"
 
 
-def _sport_detail(session_sport: object | None, session_sub_sport: object | None, sport: Sport) -> str | None:
+RUN_WALK_TRANSITION_MPS = 2.1
+"""Average session speed below which a device-reported "run" sport is
+relabeled "walking" in `_sport_detail`'s display text.
+
+**[ADAPTED: general-endurance] Confidence: medium.** Grounded in the
+gait-transition-speed biomechanics literature: humans switch from walking to
+running at a preferred transition speed corresponding to a Froude number of
+approximately 0.5 (see `Hreljac A. (1995)`, `reference_list.md`,
+"Cross-discipline endurance"), which for typical adult leg lengths works out
+to roughly 2.0-2.2 m/s. This project picks 2.1 m/s as one representative
+value inside that well-supported range -- individual transition speed shifts
+with leg length, fitness, terrain, and grade, so this is a practitioner's
+judgment call within the literature's range, not a single universally-agreed
+number, and it has not been calibrated against this athlete's own device
+data the way `library/11-workout-analytics.md`'s stationary-pause thresholds
+were calibrated against real MTB rides. See
+`library/11-workout-analytics.md`, "Walk/run FIT sport-label sanity check"
+for the full citation and caveats.
+"""
+
+
+def _sport_detail(
+    session_sport: object | None,
+    session_sub_sport: object | None,
+    sport: Sport,
+    avg_speed_mps: float | None = None,
+    warnings: list[str] | None = None,
+) -> str | None:
     """Free-text `f"{session_sport}/{session_sub_sport}"` detail carried
     alongside the resolved engine `Sport` enum, e.g. `"cycling/mountain"`,
     `"training/strength_training"`. Always `None` for `swim_pool`/`swim_ow`
@@ -392,6 +419,22 @@ def _sport_detail(session_sport: object | None, session_sub_sport: object | None
     (checked via fitdecode, not assumed): this resolves to `"kayaking"`,
     not the `"paddling/kayaking"` guess an earlier draft of this feature
     used before the real fixture was inspected.
+
+    Walk/run sanity check (real athlete feedback, 2026-08-19: "I do not run
+    and the app is equating all walks as runs"): Garmin's raw `session.sport`
+    is a *device activity-profile* label, not a measurement -- a watch left
+    on its "Run" profile during an actual walk still reports
+    `sport="running"`. When the raw sport contains "run" and `avg_speed_mps`
+    is below `RUN_WALK_TRANSITION_MPS`, the displayed sport is relabeled
+    "walking" instead of trusting the device label verbatim -- same
+    derive-truth-from-the-data convention as `_is_cycling_sport`'s
+    stationary-pause gating below. See `RUN_WALK_TRANSITION_MPS`'s docstring
+    and `library/11-workout-analytics.md` ("Walk/run FIT sport-label sanity
+    check") for the cited threshold and its honest confidence caveat. This
+    only ever changes this free-text label, never the resolved `Sport` enum
+    bucket (still `cross_train` either way). With no `avg_speed_mps`
+    available, the device label passes through unchanged -- there's nothing
+    to sanity-check it against.
     """
     if sport in ("swim_pool", "swim_ow"):
         return None
@@ -400,6 +443,18 @@ def _sport_detail(session_sport: object | None, session_sub_sport: object | None
     sport_str = str(session_sport).strip().lower()
     if not sport_str:
         return None
+    if (
+        "run" in sport_str
+        and avg_speed_mps is not None
+        and avg_speed_mps < RUN_WALK_TRANSITION_MPS
+    ):
+        if warnings is not None:
+            warnings.append(
+                f"FIT sport '{sport_str}' relabeled 'walking' for display "
+                f"(avg speed {avg_speed_mps:.2f} m/s is below the "
+                f"{RUN_WALK_TRANSITION_MPS} m/s walk/run gait-transition threshold)"
+            )
+        sport_str = "walking"
     sub_str = str(session_sub_sport).strip().lower() if session_sub_sport is not None else ""
     if not sub_str or sub_str == "generic":
         return sport_str
@@ -840,7 +895,12 @@ def parse_fit(path: str | Path) -> WorkoutDraft:
         else []
     )
     pauses = _merge_pauses(timer_pauses, gap_pauses, idle_pauses, stationary)
-    detail = _sport_detail(session_sport, session_sub_sport, sport)
+    avg_speed_mps = (
+        session_distance / session_duration_s
+        if session_distance and session_duration_s
+        else None
+    )
+    detail = _sport_detail(session_sport, session_sub_sport, sport, avg_speed_mps, warnings)
 
     return WorkoutDraft(
         date=workout_date,

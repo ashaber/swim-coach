@@ -118,6 +118,38 @@ were calibrated against real MTB data rather than guessed. Speculative
 caution, not a validated finding -- flagged here specifically so it isn't
 silently forgotten before that file exists.
 
+## Walk/run FIT sport-label sanity check
+
+**[ADAPTED: general-endurance] Confidence: medium.** `Hreljac A. (1995)`
+(`reference_list.md`, "Cross-discipline endurance") and the broader
+gait-transition-speed biomechanics literature it sits within establish that
+humans switch from walking to running at a preferred transition speed (PTS)
+corresponding to a Froude number of approximately 0.5 -- for typical adult
+leg lengths this works out to roughly 2.0-2.2 m/s. This is a well-supported
+range with a commonly-cited center, not a single universally-agreed cutoff:
+individual PTS shifts with leg length, fitness, terrain, and grade.
+`RUN_WALK_TRANSITION_MPS = 2.1` (`parse_files.py`) is a practitioner's pick
+of one representative value inside that range, not a value this athlete's
+own device data has calibrated.
+
+This exists because Garmin's raw FIT `session.sport` field is a *device
+activity-profile* label, not a ground-truth measurement -- a watch left on
+its "Run" profile during an actual walk still reports `sport="running"`,
+and `_sport_detail` previously passed that string straight through as
+display text. When the raw sport is "running" (or contains "run") and the
+session's average speed (`total_distance / total_timer_time`, the same
+session-level fields `parse_fit` already reads for pace) is below
+`RUN_WALK_TRANSITION_MPS`, `_sport_detail` relabels the display text to
+"walking" instead. This changes only the free-text `sport_detail` label --
+the resolved `Sport` enum bucket (`cross_train`) is unchanged either way, so
+load/volume math is unaffected. Same pattern as `_is_cycling_sport`'s
+stationary-pause gating above: derive truth from the session's own numbers
+rather than trusting the device's self-reported label. **Test:** if a real
+slow-walk `.fit` file recorded under a Run profile ever shows a sustained
+average speed *above* this threshold (e.g. brisk race-walking), the
+practitioner cutoff needs revisiting against that real data, same as the
+stationary-pause thresholds above were revised against real MTB rides.
+
 ## What's still a gap
 
 - No citation exists yet for cardiac-drift/aerobic-decoupling thresholds in

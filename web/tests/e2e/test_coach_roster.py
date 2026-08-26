@@ -1,9 +1,11 @@
 """e2e coverage for coach mode Phase 1's "My Athletes" (roster) tab --
 the coach-side view: list the athletes who've granted this signed-in
 identity coach access, then that athlete's logged workouts (each with a
-nested planned-vs-actual `compliance` object, see
-engine/swim_coach/compliance.py) and durable feedback log, with a reply box
-for entries that don't have a coach_reply yet.
+nested planned-vs-actual `quality` object, see
+engine/swim_coach/quality.py -- named `quality`, not `compliance`, to avoid
+colliding with the engine's other, authoritative weekly-aggregate
+`compliance` number; see IDEAS.md's resolved IDEA 006) and durable feedback
+log, with a reply box for entries that don't have a coach_reply yet.
 
 Deliberately scoped to the roster surface only (see the branch brief) --
 the direct-to-coach chat UI and the workout-comment box are a separate,
@@ -44,7 +46,7 @@ WORKOUT_STUB = json.dumps([{
     'id': 'w1', 'date': '2026-08-20', 'sport': 'swim_pool', 'source': 'fit',
     'distance_m': 2100, 'duration_min': 47.0, 'rpe': 6, 'avg_pace_s_per_100m': 95.0,
     'avg_hr': None, 'max_hr': None, 'notes': None, 'analytics': None, 'laps': [], 'pauses': [],
-    'compliance': {
+    'quality': {
         'matched': True, 'distance_delta_pct': 5.2, 'duration_delta_pct': -2.1,
         'intensity_match': 'unknown', 'quality_summary': 'No notable quality flags.',
     },
@@ -174,7 +176,7 @@ def test_selecting_athlete_shows_workouts_with_compliance_and_feedback(page):
     page.wait_for_selector('[data-form="roster-reply"]')
 
     content = page.content()
-    # Workout row: sport, distance/duration, and the nested compliance line
+    # Workout row: sport, distance/duration, and the nested quality line
     # rendered plainly.
     assert 'Pool swim' in content
     assert '2.1 km' in content

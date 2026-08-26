@@ -1468,8 +1468,11 @@ export function renderFeedbackTab({
 // Coach-side view: the athletes who've granted this signed-in identity
 // coach access (GET /api/coach/athletes), then -- once one is selected --
 // that athlete's logged workouts (each with a nested planned-vs-actual
-// `compliance` object, see engine/swim_coach/compliance.py) and durable
-// feedback log, with a reply box for entries that don't have one yet.
+// `quality` object, see engine/swim_coach/quality.py -- named `quality`, not
+// `compliance`, so it doesn't collide with the engine's other, authoritative
+// weekly-aggregate `compliance` number; see IDEAS.md's resolved IDEA 006)
+// and durable feedback log, with a reply box for entries that don't have
+// one yet.
 // Deliberately scoped to roster + grants only for this chunk -- the
 // direct-to-coach chat UI and the workout-comment box are a separate,
 // later piece (see the branch brief).
@@ -1497,23 +1500,23 @@ function renderCoachedAthletesList(athletes) {
   return `<div class="hist-list">${athletes.data.map(renderCoachedAthleteRow).join('')}</div>`;
 }
 
-/** One `WorkoutCompliance` (planned-vs-actual for a single logged workout)
+/** One `WorkoutQuality` (planned-vs-actual for a single logged workout)
  * rendered as a plain, one-line summary -- `matched: false` (no planned
  * session lines up with this workout at all) short-circuits before the
  * delta/intensity/quality fields are even meaningful. */
-function formatComplianceLine(compliance) {
-  if (!compliance) return null;
-  if (!compliance.matched) return 'No matching planned session';
+function formatQualityLine(quality) {
+  if (!quality) return null;
+  if (!quality.matched) return 'No matching planned session';
   const parts = [];
-  if (compliance.distance_delta_pct !== null && compliance.distance_delta_pct !== undefined) {
-    const sign = compliance.distance_delta_pct >= 0 ? '+' : '';
-    parts.push(`${sign}${compliance.distance_delta_pct.toFixed(1)}% distance`);
+  if (quality.distance_delta_pct !== null && quality.distance_delta_pct !== undefined) {
+    const sign = quality.distance_delta_pct >= 0 ? '+' : '';
+    parts.push(`${sign}${quality.distance_delta_pct.toFixed(1)}% distance`);
   }
-  if (compliance.duration_delta_pct !== null && compliance.duration_delta_pct !== undefined) {
-    const sign = compliance.duration_delta_pct >= 0 ? '+' : '';
-    parts.push(`${sign}${compliance.duration_delta_pct.toFixed(1)}% duration`);
+  if (quality.duration_delta_pct !== null && quality.duration_delta_pct !== undefined) {
+    const sign = quality.duration_delta_pct >= 0 ? '+' : '';
+    parts.push(`${sign}${quality.duration_delta_pct.toFixed(1)}% duration`);
   }
-  parts.push(`${compliance.intensity_match} intensity`);
+  parts.push(`${quality.intensity_match} intensity`);
   return parts.join(', ');
 }
 
@@ -1521,8 +1524,8 @@ function renderCoachWorkoutRow(workout) {
   const metaParts = [formatDuration(workout.duration_min)];
   const distance = formatWorkoutDistance(workout.distance_m);
   if (distance) metaParts.push(distance);
-  const complianceLine = formatComplianceLine(workout.compliance);
-  const qualitySummary = workout.compliance?.quality_summary;
+  const qualityLine = formatQualityLine(workout.quality);
+  const qualitySummary = workout.quality?.quality_summary;
 
   return `
     <button type="button" class="hist-row hist-row-skipped" data-a="roster:open-workout" data-id="${esc(workout.id)}">
@@ -1533,7 +1536,7 @@ function renderCoachWorkoutRow(workout) {
           ${workout.rpe !== null && workout.rpe !== undefined ? `<span class="chat-chip">RPE ${esc(workout.rpe)}</span>` : ''}
         </div>
         <div class="hist-meta mono">${metaParts.join(' · ')}</div>
-        ${complianceLine ? `<div class="hist-analytics mono">${esc(complianceLine)}</div>` : ''}
+        ${qualityLine ? `<div class="hist-analytics mono">${esc(qualityLine)}</div>` : ''}
         ${qualitySummary ? `<div class="hist-analytics">${esc(qualitySummary)}</div>` : ''}
       </div>
     </button>`;

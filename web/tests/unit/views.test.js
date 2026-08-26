@@ -1075,7 +1075,7 @@ describe('renderRosterTab', () => {
     lengths: [],
     pauses: [],
     analytics: null,
-    compliance: {
+    quality: {
       matched: true, distance_delta_pct: 5.2, duration_delta_pct: null, intensity_match: 'unknown', quality_summary: 'No notable quality flags.',
     },
   };
@@ -1117,7 +1117,7 @@ describe('renderRosterTab', () => {
           rpe: 6,
           duration_min: 45,
           distance_m: 2000,
-          compliance: {
+          quality: {
             matched: true, distance_delta_pct: 5.2, duration_delta_pct: null, intensity_match: 'unknown', quality_summary: 'No notable quality flags.',
           },
         }],
@@ -1133,7 +1133,7 @@ describe('renderRosterTab', () => {
     });
     expect(html).toContain('data-a="roster:back"');
     expect(html).toContain('Renee');
-    // Workout row with compliance rendered plainly.
+    // Workout row with quality rendered plainly.
     expect(html).toContain('+5.2% distance');
     expect(html).toContain('unknown intensity');
     expect(html).toContain('No notable quality flags.');
