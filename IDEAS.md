@@ -32,7 +32,26 @@ coach ask questions to train the research.
 
 ---
 
-## IDEA 006 - research and redesign "compliance" (per-workout vs weekly vs mesocycle)
+## IDEA 006 - RESOLVED (2026-08-25) - research and redesign "compliance" (per-workout vs weekly vs mesocycle)
+
+**Resolution:** renamed the per-workout module/concept away from
+"compliance" -- `engine/swim_coach/compliance.py` -> `quality.py`,
+`WorkoutCompliance` -> `WorkoutQuality`, `workout_compliance()` ->
+`workout_quality()`, and the coach-workouts API's nested JSON key
+`"compliance"` -> `"quality"` (`backend/app/routes/coach.py`, consumed by
+`web/src/views.js`'s roster tab). `engine/swim_coach/load.py`'s
+`compliance()` -- the WEEKLY aggregate with the real 70%/90% thresholds
+that drive `/adapt`'s repeat/hold/advance decision -- is untouched and
+remains this codebase's sole authoritative "compliance." Naming collision
+(problem 1 below) is fixed. Conflated-concepts (problem 2) is addressed by
+the rename itself, per this idea's own recommended shape: the per-workout
+bundle (distance/duration delta, intensity_match, quality-flag summary) is
+kept as one "quality" concept rather than split further, matching the
+"keep per-workout signals as quality/execution" recommendation below. No
+thresholds, computations, or field semantics changed -- naming and
+docstrings only.
+
+Original problem statement, kept for context:
 
 Coach-mode Phase 1 (2026-08) added `engine/swim_coach/compliance.py`'s
 `WorkoutCompliance` -- a PER-WORKOUT distance/duration-delta + quality-signal

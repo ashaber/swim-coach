@@ -397,16 +397,19 @@ class Workout(BaseModel):
     sport_detail: str | None = None
 
 
-class WorkoutCompliance(BaseModel):
+class WorkoutQuality(BaseModel):
     """Per-workout planned-vs-actual interpretation, computed by
-    `swim_coach.compliance.workout_compliance` -- NOT persisted (a
+    `swim_coach.quality.workout_quality` -- NOT persisted (a
     response/computed shape only, hence no `schema_version`).
 
     Distinct from `load.compliance`'s aggregate weekly-volume-percentage
-    number: this is one workout matched against (at most) one planned
-    `Session`, not a sum across a week. See `compliance.py`'s module
-    docstring for the full distinction and the Phase-1 `intensity_match`
-    gap.
+    number, which remains this codebase's sole authoritative "compliance":
+    this is one workout matched against (at most) one planned `Session`, not
+    a sum across a week. Named `WorkoutQuality` (not `WorkoutCompliance`,
+    its original Phase-1 name) specifically to avoid colliding with that
+    aggregate -- see `IDEAS.md`'s resolved IDEA 006 and `quality.py`'s
+    module docstring for the full distinction and the Phase-1
+    `intensity_match` gap.
     """
 
     matched: bool

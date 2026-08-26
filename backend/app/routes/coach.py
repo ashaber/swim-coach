@@ -15,7 +15,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from swim_coach.compliance import match_workout_to_session, workout_compliance
+from swim_coach.quality import match_workout_to_session, workout_quality
 from swim_coach.models import Session
 
 from app.auth import Principal, require_auth, resolve_coach_athlete
@@ -69,8 +69,8 @@ async def coach_view_workouts(
     result = []
     for workout in workouts:
         session = match_workout_to_session(workout, sessions)
-        compliance = workout_compliance(workout, session)
-        result.append({**workout.model_dump(mode="json"), "compliance": compliance.model_dump(mode="json")})
+        quality = workout_quality(workout, session)
+        result.append({**workout.model_dump(mode="json"), "quality": quality.model_dump(mode="json")})
 
     # `list_workouts` returns filename order (which happens to sort
     # date-ascending today, since filenames are "{date}-{sport}-{id8}.yaml")

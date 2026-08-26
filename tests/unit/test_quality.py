@@ -1,4 +1,4 @@
-"""Tests for swim_coach.compliance: per-workout planned-vs-actual matching
+"""Tests for swim_coach.quality: per-workout planned-vs-actual matching
 and interpretation.
 
 No LLM calls, no network access -- pure arithmetic + model validation, same
@@ -13,7 +13,7 @@ from datetime import date
 import pytest
 
 from swim_coach.analytics import CARDIAC_DRIFT_FLAG_PCT
-from swim_coach.compliance import match_workout_to_session, workout_compliance
+from swim_coach.quality import match_workout_to_session, workout_quality
 from swim_coach.models import Session, Workout, WorkoutAnalytics
 
 ATHLETE_ID = uuid.uuid4()
@@ -95,14 +95,14 @@ def test_match_dangling_planned_session_id_does_not_fall_back():
     assert result is None
 
 
-# --- workout_compliance -------------------------------------------------------------
+# --- workout_quality -------------------------------------------------------------
 
 
-def test_workout_compliance_no_session_gives_unmatched_and_all_none():
+def test_workout_quality_no_session_gives_unmatched_and_all_none():
     workout = make_workout(
         analytics=WorkoutAnalytics(cardiac_drift_pct=12.0),
     )
-    result = workout_compliance(workout, None)
+    result = workout_quality(workout, None)
     assert result.matched is False
     assert result.distance_delta_pct is None
     assert result.duration_delta_pct is None
@@ -110,75 +110,75 @@ def test_workout_compliance_no_session_gives_unmatched_and_all_none():
     assert result.quality_summary is None
 
 
-def test_workout_compliance_over_delivered_distance_is_positive():
+def test_workout_quality_over_delivered_distance_is_positive():
     session = make_session(distance_m=3000, duration_min=60.0)
     workout = make_workout(distance_m=3300, duration_min=60.0)
-    result = workout_compliance(workout, session)
+    result = workout_quality(workout, session)
     assert result.matched is True
     assert result.distance_delta_pct == 10.0
 
 
-def test_workout_compliance_under_delivered_distance_is_negative():
+def test_workout_quality_under_delivered_distance_is_negative():
     session = make_session(distance_m=3000, duration_min=60.0)
     workout = make_workout(distance_m=2700, duration_min=60.0)
-    result = workout_compliance(workout, session)
+    result = workout_quality(workout, session)
     assert result.distance_delta_pct == -10.0
 
 
-def test_workout_compliance_duration_delta_rounds_to_one_decimal():
+def test_workout_quality_duration_delta_rounds_to_one_decimal():
     session = make_session(distance_m=3000, duration_min=60.0)
     workout = make_workout(distance_m=3000, duration_min=65.0)
-    result = workout_compliance(workout, session)
+    result = workout_quality(workout, session)
     assert result.duration_delta_pct == pytest.approx(8.3)
 
 
-def test_workout_compliance_session_without_distance_gives_none_distance_delta():
+def test_workout_quality_session_without_distance_gives_none_distance_delta():
     # Recovery/strength session shape -- distance_m is None, not comparable.
     session = make_session(sport="strength", distance_m=None, duration_min=45.0)
     workout = make_workout(sport="strength", distance_m=0, duration_min=45.0)
-    result = workout_compliance(workout, session)
+    result = workout_quality(workout, session)
     assert result.distance_delta_pct is None
     # duration_min is always set on Session, so this still computes.
     assert result.duration_delta_pct == 0.0
 
 
-def test_workout_compliance_intensity_match_is_unknown_phase1():
+def test_workout_quality_intensity_match_is_unknown_phase1():
     # Phase-1 gap: no zone-classification-from-pace/HR function exists yet
     # in zones.py, so intensity_match can never be "match"/"mismatch" today
     # regardless of whether session.intensity carries a zone.
     session = make_session(intensity={"zone": "Z2", "anchor": "css_pace"})
     workout = make_workout()
-    result = workout_compliance(workout, session)
+    result = workout_quality(workout, session)
     assert result.intensity_match == "unknown"
 
 
-def test_workout_compliance_intensity_match_unknown_when_no_zone_on_session():
+def test_workout_quality_intensity_match_unknown_when_no_zone_on_session():
     session = make_session(intensity={"anchor": "rpe"})
     workout = make_workout()
-    result = workout_compliance(workout, session)
+    result = workout_quality(workout, session)
     assert result.intensity_match == "unknown"
 
 
-def test_workout_compliance_quality_summary_none_without_analytics():
+def test_workout_quality_quality_summary_none_without_analytics():
     session = make_session()
     workout = make_workout(analytics=None)
-    result = workout_compliance(workout, session)
+    result = workout_quality(workout, session)
     assert result.quality_summary is None
 
 
-def test_workout_compliance_quality_summary_flags_notable_cardiac_drift():
+def test_workout_quality_quality_summary_flags_notable_cardiac_drift():
     session = make_session()
     workout = make_workout(
         analytics=WorkoutAnalytics(cardiac_drift_pct=CARDIAC_DRIFT_FLAG_PCT + 3.0)
     )
-    result = workout_compliance(workout, session)
+    result = workout_quality(workout, session)
     assert result.quality_summary is not None
     assert "drift" in result.quality_summary.lower()
 
 
-def test_workout_compliance_quality_summary_is_calm_without_notable_flags():
+def test_workout_quality_quality_summary_is_calm_without_notable_flags():
     session = make_session()
     workout = make_workout(analytics=WorkoutAnalytics(cardiac_drift_pct=0.5))
-    result = workout_compliance(workout, session)
+    result = workout_quality(workout, session)
     assert result.quality_summary is not None
     assert "no notable" in result.quality_summary.lower()

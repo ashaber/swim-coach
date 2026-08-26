@@ -1,4 +1,4 @@
-"""Per-workout planned-vs-actual matching and compliance interpretation.
+"""Per-workout planned-vs-actual matching and execution-quality interpretation.
 
 Two pure functions, no I/O, no LLM calls:
 
@@ -7,27 +7,32 @@ Two pure functions, no I/O, no LLM calls:
   `web/src/history.js`'s `findWorkoutForSession`, with the match direction
   flipped -- the JS original takes one session and searches many workouts
   (the History feed needs, for each planned session, "was this done?"); this
-  takes one workout and searches many sessions (a compliance caller has one
+  takes one workout and searches many sessions (a caller here has one
   freshly-logged workout and needs "which planned session was this for?").
   The matching semantics are identical, only the iteration direction
   differs: exact `planned_session_id` match wins outright; otherwise fall
   back to same-sport/same-date among sessions with no linked id. See that
   function's docstring for the dangling-id edge case this port preserves.
 
-- `workout_compliance` INTERPRETS already-computed data (workout fields,
+- `workout_quality` INTERPRETS already-computed data (workout fields,
   `WorkoutAnalytics`, the matched `Session`'s planned targets) -- it never
   recomputes anything `load.py`, `zones.py`, or `analytics.py` already own.
 
-This is deliberately NOT the same concept as `load.compliance()`
-(load.py, ~line 207): that function is an AGGREGATE weekly-volume
-percentage -- summed planned distance vs. summed completed distance across
-many sessions/workouts over a period (e.g. one week). `workout_compliance`
-here is a PER-WORKOUT interpretation of one workout against the one session
-it was (or wasn't) planned against -- distance/duration delta percentages,
-an intensity-match verdict, and a quality-flag summary. They share the
-English word "compliance" because both answer "did the athlete do what was
-planned," but at different granularities and for different callers; neither
-calls the other.
+Naming history (see `IDEAS.md`'s resolved IDEA 006): this module was
+originally named `compliance.py` and its result type `WorkoutCompliance`,
+which collided with the pre-existing, library-cited `load.compliance()`
+(load.py, ~line 207) -- a genuinely different concept at a different
+granularity. `load.compliance()` is the one AGGREGATE weekly-volume
+percentage in this codebase -- summed planned distance vs. summed completed
+distance across many sessions/workouts over a period (e.g. one week), with
+the real 70%/90% thresholds that drive `/adapt`'s repeat/hold/advance
+decision. It remains the sole authoritative "compliance" in this codebase.
+`workout_quality` here is a PER-WORKOUT interpretation of one workout
+against the one session it was (or wasn't) planned against -- distance/
+duration delta percentages, an intensity-match verdict, and a quality-flag
+summary (cardiac-drift / SWOLF degradation). Different granularity,
+different callers; neither calls the other, and neither is a substitute for
+the other's number.
 
 Known Phase-1 gap: `intensity_match` can only ever return "unknown" today.
 Comparing a workout's *actual* training zone against `session.intensity`'s
@@ -43,13 +48,13 @@ evidence-discipline rule prohibits, so this module deliberately does not.
 from __future__ import annotations
 
 from swim_coach.analytics import CARDIAC_DRIFT_FLAG_PCT
-from swim_coach.models import Session, Workout, WorkoutAnalytics, WorkoutCompliance
+from swim_coach.models import Session, Workout, WorkoutAnalytics, WorkoutQuality
 
 SWOLF_DEGRADATION_FLAG_PCT = 5.0
 # Coach judgment: a first-quarter-to-last-quarter SWOLF increase of 5% or
 # more (i.e. `WorkoutAnalytics.swolf_degradation_pct >=
 # SWOLF_DEGRADATION_FLAG_PCT`) is treated as a notable within-session
-# stroke-efficiency drop, worth surfacing in the compliance quality summary.
+# stroke-efficiency drop, worth surfacing in the quality summary.
 # No library/ source calibrates a specific magnitude for this athlete
 # population yet. Chosen to match CARDIAC_DRIFT_FLAG_PCT's magnitude
 # (analytics.py, 5.0%) since both are first-half/first-quarter vs.
@@ -127,7 +132,7 @@ def _quality_summary(analytics: WorkoutAnalytics) -> str:
     return " ".join(notes)
 
 
-def workout_compliance(workout: Workout, session: Session | None) -> WorkoutCompliance:
+def workout_quality(workout: Workout, session: Session | None) -> WorkoutQuality:
     """Interpret `workout` against its matched `session` (from
     `match_workout_to_session`, or `None` if nothing matched).
 
@@ -143,11 +148,10 @@ def workout_compliance(workout: Workout, session: Session | None) -> WorkoutComp
     This applies even when `workout.analytics` is populated -- an unmatched
     workout gets no quality summary either, by design (see the class
     docstring / this function's None-session branch): a quality summary is
-    part of a compliance READING against a plan, not a standalone workout
-    report.
+    part of a READING against a plan, not a standalone workout report.
     """
     if session is None:
-        return WorkoutCompliance(
+        return WorkoutQuality(
             matched=False,
             distance_delta_pct=None,
             duration_delta_pct=None,
@@ -167,7 +171,7 @@ def workout_compliance(workout: Workout, session: Session | None) -> WorkoutComp
 
     quality_summary = _quality_summary(workout.analytics) if workout.analytics is not None else None
 
-    return WorkoutCompliance(
+    return WorkoutQuality(
         matched=True,
         distance_delta_pct=distance_delta_pct,
         duration_delta_pct=duration_delta_pct,

@@ -395,9 +395,12 @@ export async function listCoachedAthletes({ baseUrl, token }) {
 }
 
 /** GET {baseUrl}/api/coach/athletes/<athlete>/workouts -- the coach-side view
- * of one coached athlete's logged workouts, each with a nested `compliance`
- * object (planned-vs-actual, see swim_coach.compliance.workout_compliance).
- * `athlete` here is a PATH segment (this route has no `?athlete=` query
+ * of one coached athlete's logged workouts, each with a nested `quality`
+ * object (planned-vs-actual, see swim_coach.quality.workout_quality -- named
+ * `quality`, not `compliance`, to avoid colliding with the engine's other,
+ * authoritative weekly-aggregate `compliance` number; see IDEAS.md's
+ * resolved IDEA 006). `athlete` here is a PATH segment (this route has no
+ * `?athlete=` query
  * param at all, unlike every self-access route above) -- confirmed against
  * backend/app/routes/coach.py. */
 export async function fetchCoachWorkouts({ baseUrl, token, athlete }) {

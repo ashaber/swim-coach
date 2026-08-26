@@ -678,6 +678,21 @@ raw research input, not itself citable).
   fabricated. Not individually verified.
 - **~ Chapman A.R. et al.** — biomechanics of running after cycling. Not
   individually verified.
+- **✓ Hreljac A. (1995)** — "Determinants of the gait transition speed
+  during human locomotion: kinematic factors" — *Journal of Biomechanics*,
+  28(6):669-677. Identifies peak ankle (dorsiflexor) angular velocity as the
+  kinematic determinant of the human walk-to-run preferred transition speed
+  (PTS). Verified by title/author/journal search. The broader gait-biomechanics
+  literature this paper sits within (Froude-number treatments of gait
+  transition, e.g. Alexander's dimensionless-speed framework applied to
+  walk/run) converges on a PTS at Froude number ≈ 0.5, which for typical
+  adult leg lengths works out to roughly 2.0-2.2 m/s -- individual PTS varies
+  with leg length, fitness, terrain, and grade, so this is a well-supported
+  *range* with a commonly-cited center, not a single universal cutoff.
+  `[ADAPTED: general-endurance]` supports `parse_files._sport_detail`'s
+  walk/run FIT-label sanity check (a device "running" activity profile at a
+  speed clearly below gait-transition pace is very likely a walk that was
+  recorded under the wrong Garmin activity profile).
 
 ## Recovery, sleep & HRV
 
