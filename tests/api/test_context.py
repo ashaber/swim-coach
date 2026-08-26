@@ -57,10 +57,19 @@ def test_system_block_a_preserves_safety_and_grounding_invariants(library_dir) -
     assert "CRITICAL SAFETY WARNING" in text
     assert "acute physical distress" in text
     assert "Pause training, alert your support crew" in text
-    # Rule 3: "I don't know" + log_open_question -- the whole research queue
-    # depends on this never softening into improvisation.
+    # Rule 3: "I don't know" + flag_for_coach_review -- the whole research
+    # queue depends on this never softening into improvisation.
     assert '"I don\'t know"' in text
-    assert "log_open_question" in text
+    assert "flag_for_coach_review" in text
+    assert "research_gap" in text
+    assert "needs_human_review" in text
+    # An explicit request to reach the real human coach, and a low-confidence
+    # high-stakes call, must both always flag for human review too.
+    assert "EXPLICITLY asks to talk to" in text
+    assert "high-stakes" in text
+    # The safety override must ALSO trigger a parallel, invisible-to-the-
+    # athlete flag_for_coach_review call -- not just the fixed warning text.
+    assert "acute safety override triggered" in text
     # Rule 4: never hand-compute, never exceed engine caps.
     assert "Never hand-compute zones, loads, or volumes" in text
     assert "ramp-cap" in text

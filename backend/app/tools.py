@@ -5,10 +5,16 @@ brief): `propose_adaptation` calls `swim_coach.adapt.adapt_week` directly --
 the same function `cli.py`'s `adapt` command and the `/adapt` skill call --
 and returns the draft for discussion without persisting it. `get_plan_summary`
 reuses `context.summarize_rollup` (itself a thin reassembly of `load.py`'s
-functions). `log_open_question` implements IDEA 005, persisting through the
-durable `store.save_feedback` seam (engine/swim_coach/models.Feedback)
-instead of the old ephemeral `research/open-questions.jsonl` file, which was
-silently wiped every time Cloud Run scaled to zero.
+functions). `flag_for_coach_review` (originally IDEA 005's `log_open_question`,
+broadened for coach-mode Chunk A) persists through the durable
+`store.save_feedback` seam (engine/swim_coach/models.Feedback) instead of the
+old ephemeral `research/open-questions.jsonl` file, which was silently wiped
+every time Cloud Run scaled to zero. It carries two independent booleans --
+`research_gap` (the library doesn't cover this) and `needs_human_review` (a
+human coach should look at this regardless of research coverage, e.g. a
+pain/safety report, an explicit request to reach the real coach, or a
+high-stakes call the AI shouldn't make alone) -- either or both may be set on
+the same entry; at least one is required.
 
 `create_event`/`draft_macro_plan`/`create_week_plan` are the "chat can create,
 not just adapt" tools: they call the exact same deterministic engine
@@ -212,22 +218,41 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "log_open_question",
+        "name": "flag_for_coach_review",
         "description": (
-            "Log a question the research library doesn't support an answer "
-            "for, so it can be researched and followed up on later. Call this "
-            "whenever you have to say \"I don't know\" because of a library "
-            "gap -- for both athlete questions and, in expert mode, a "
-            "professional coach/physiologist's proposed correction or "
-            "addition the library doesn't yet cover."
+            "Flag something for the athlete's human coach's attention -- two "
+            "independent things this can mean, either or both at once: "
+            "`research_gap` (the library doesn't cover this, so it needs "
+            "actual research) and `needs_human_review` (this needs a human "
+            "coach's eyes regardless of whether the library covers it -- a "
+            "pain/safety report, the athlete explicitly asking to talk to "
+            "their real coach, or a high-stakes judgment call you shouldn't "
+            "make alone). At least one must be true. Call this whenever you "
+            "have to say \"I don't know\" because of a library gap (for both "
+            "athlete questions and, in expert mode, a professional coach/"
+            "physiologist's proposed correction the library doesn't yet "
+            "cover), AND separately whenever something needs a human coach's "
+            "attention even though you DO have a grounded answer to give."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "question": {"type": "string", "description": "The question, verbatim."},
+                "question": {"type": "string", "description": "The question or situation, verbatim."},
                 "topic": {
                     "type": "string",
-                    "description": "Short topic label, e.g. 'nutrition', 'taper', 'HRV'.",
+                    "description": "Short topic label, e.g. 'nutrition', 'taper', 'HRV', 'safety'.",
+                },
+                "research_gap": {
+                    "type": "boolean",
+                    "description": "True if the research library doesn't cover this. Default false.",
+                },
+                "needs_human_review": {
+                    "type": "boolean",
+                    "description": "True if a human coach should look at this regardless of research coverage -- pain/safety reports, an explicit request to reach the human coach, or a high-stakes call you shouldn't make alone. Default false.",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Required when needs_human_review is true: why this needs a human (e.g. 'pain report', 'explicit request to reach coach', 'high-stakes plan deviation').",
                 },
             },
             "required": ["question", "topic"],
@@ -1027,13 +1052,22 @@ def _handle_get_plan_summary(input_data: dict[str, Any], *, store: StoreInterfac
     return summarize_rollup(store, slug, weeks=weeks, as_of=date.today())
 
 
-def _handle_log_open_question(
+def _handle_flag_for_coach_review(
     input_data: dict[str, Any], *, store: StoreInterface, slug: str, expert_mode: bool
 ) -> dict[str, Any]:
     question = input_data.get("question")
     topic = input_data.get("topic")
     if not question or not topic:
         return {"error": "question and topic are both required"}
+
+    research_gap = bool(input_data.get("research_gap", False))
+    needs_human_review = bool(input_data.get("needs_human_review", False))
+    if not research_gap and not needs_human_review:
+        return {"error": "at least one of research_gap or needs_human_review must be true"}
+
+    reason = input_data.get("reason")
+    if needs_human_review and not reason:
+        return {"error": "reason is required when needs_human_review is true"}
 
     try:
         athlete_id = store.load_athlete(slug).id
@@ -1044,17 +1078,25 @@ def _handle_log_open_question(
     entry = Feedback(
         id=uuid.uuid4(),
         athlete_id=athlete_id,
-        type="research_question",
+        type="research_question" if research_gap else "coach_review",
         source="coach",
         body=question,
-        context={"topic": topic, "expert_mode": expert_mode},
+        context={"topic": topic, "expert_mode": expert_mode, **({"reason": reason} if reason else {})},
         status="open",
         created_at=datetime.now(timezone.utc),
+        needs_human_review=needs_human_review,
     )
     store.save_feedback(entry)
 
-    log.info("open question logged", athlete=slug, topic=topic, expert_mode=expert_mode)
-    return {"logged": True, "id": str(entry.id)}
+    log.info(
+        "coach review flagged",
+        athlete=slug,
+        topic=topic,
+        expert_mode=expert_mode,
+        research_gap=research_gap,
+        needs_human_review=needs_human_review,
+    )
+    return {"logged": True, "id": str(entry.id), "type": entry.type}
 
 
 def _summarize_workout(w: Workout) -> dict[str, Any]:
@@ -1976,7 +2018,7 @@ def build_tool_handlers(
         "get_plan_summary": lambda input_data: _handle_get_plan_summary(
             input_data, store=store, slug=slug
         ),
-        "log_open_question": lambda input_data: _handle_log_open_question(
+        "flag_for_coach_review": lambda input_data: _handle_flag_for_coach_review(
             input_data, store=store, slug=slug, expert_mode=expert_mode
         ),
         "get_workouts": lambda input_data: _handle_get_workouts(

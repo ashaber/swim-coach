@@ -1,6 +1,6 @@
 """POST/GET/PATCH /api/feedback -- the durable feedback log.
 
-Generalizes IDEA 005's coach `log_open_question` tool (see app/tools.py) into
+Generalizes IDEA 005's coach `flag_for_coach_review` tool (see app/tools.py) into
 a durable log that also holds athlete-submitted feature requests, comments,
 and bug reports from the PWA's Feedback tab. Persisted via
 `store.save_feedback`/`list_feedback` (engine/swim_coach/models.Feedback) --
@@ -14,7 +14,7 @@ through `make_store(settings)`, the server assigns `id`/`athlete_id`/
 constructing the pydantic `Feedback` model directly -- a `ValidationError`
 becomes a 422 `{"error": ...}` response.
 
-`type=research_question` is coach-only (it's what `log_open_question` logs,
+`type=research_question` is coach-only (it's what `flag_for_coach_review` logs,
 tagged `source="coach"`, automatically) -- this endpoint always sets
 `source="athlete"` and explicitly rejects that type before it ever reaches
 model construction, since `Feedback`'s own `type` field accepts it as a
@@ -42,7 +42,7 @@ coach-notification email (app/notify.py) via FastAPI `BackgroundTasks`, AFTER
 `store.save_feedback` has already succeeded and the athlete's own response is
 on its way -- so a slow/failing email never affects the feedback save or adds
 latency to the athlete's request. `type="research_question"` (coach-sourced,
-via app/tools.py's `log_open_question` tool) deliberately does NOT get this
+via app/tools.py's `flag_for_coach_review` tool) deliberately does NOT get this
 wiring -- a routine AI-flagged research gap notified every time would be
 noisy; Andrew's actual ask was specifically about missing ATHLETE feedback.
 """
@@ -97,7 +97,7 @@ def get_notifier(request: Request) -> Notifier:
 # constructing the model, same pattern as routes/workouts.py's
 # _SERVER_ASSIGNED_FIELDS. `source` is always "athlete" for this endpoint
 # (the coach-sourced "research_question" type only ever comes from
-# app.tools's log_open_question tool handler); `status` always starts "open".
+# app.tools's flag_for_coach_review tool handler); `status` always starts "open".
 _SERVER_ASSIGNED_FIELDS = {"id", "athlete_id", "schema_version", "source", "status", "created_at"}
 
 # The only types an athlete may submit through this endpoint --

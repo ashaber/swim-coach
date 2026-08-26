@@ -129,8 +129,8 @@ class Settings:
         # research/open-questions.jsonl (IDEA 005) lives alongside
         # athletes/ and library/ rather than under either -- derived from
         # ATHLETES_DIR's parent instead of its own env var so there's one
-        # fewer knob to configure/document. See context.py's
-        # `log_open_question` tool handler.
+        # fewer knob to configure/document. See app/tools.py's
+        # `flag_for_coach_review` tool handler.
         research_dir = athletes_dir.parent / "research"
 
         allowed_origins_raw = os.environ.get("ALLOWED_ORIGINS", "https://ashaber.github.io")
