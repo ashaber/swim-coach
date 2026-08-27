@@ -1,3 +1,20 @@
 pytest>=8.0
 playwright>=1.44
+# Auto-retries a failed e2e test once before reporting it as a real
+# failure -- same fix applied in the sibling ../mtb-skills project (commit
+# d4bf0bc, "Harden e2e against WebKit-only CI flakiness; add scoped
+# auto-retry") after repeatedly observing driver-level flakiness there.
+# This project's own flakiness is broader (both chromium and webkit, all
+# involving native <details>-toggle-then-visibility-check timing under CI
+# resource contention -- test_plan_glossary.py, test_plan_session_detail.py,
+# test_coach_roster.py, all confirmed via repeated local/CI reruns to fail
+# on a different, arbitrary test each time, never the same one twice, with
+# zero relationship to the PR's actual diff) rather than one identified
+# root-cause call site -- so unlike mtb-skills' `reload_and_wait()` helper,
+# there's no single call site to harden yet. The scoped retry is the
+# generalizable part of that fix: only wired into the e2e job's own pytest
+# invocation (this file + package.json's test:e2e/test:all + ci.yml's e2e
+# step), never the root pytest.ini, so a real backend/api/unit failure
+# still fails immediately rather than being silently retried away.
+pytest-rerunfailures>=14.0
 # After pip install: run `playwright install chromium webkit`
