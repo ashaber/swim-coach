@@ -69,9 +69,10 @@ async def get_plan_load(
     principal: Principal = Depends(require_auth),
 ) -> dict:
     """The Banister CTL/ATL/TSB series (`summarize_rollup`'s `ctl_atl_tsb`
-    field) for the athlete's own Plan-tab chart -- a minimal, graph-shaped
-    slice of the rollup rather than the whole dict, since that's the only
-    field the chart needs. Calls `summarize_rollup` directly; no math is
+    field) plus the `wellness_baseline_deviation` resting-HR/HRV cross-check
+    for the athlete's own Plan-tab chart -- a minimal, graph-shaped slice of
+    the rollup rather than the whole dict, since those are the only fields
+    the chart needs. Calls `summarize_rollup` directly; no math is
     reimplemented here."""
     settings = request.app.state.settings
     athlete = resolve_athlete(principal, athlete)
@@ -85,4 +86,5 @@ async def get_plan_load(
         "athlete": athlete,
         "weeks": weeks,
         "ctl_atl_tsb": rollup["ctl_atl_tsb"],
+        "wellness_baseline_deviation": rollup["wellness_baseline_deviation"],
     }
