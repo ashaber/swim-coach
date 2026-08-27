@@ -51,6 +51,7 @@ from swim_coach.parse_files import PARSERS_BY_EXTENSION, WorkoutDraft, parse_fit
 from swim_coach.plan import generate_week, scaffold_macro
 from swim_coach.provision import provision_athlete
 from swim_coach.store import FileStore, StoreInterface
+from swim_coach.taper_search import search_taper_grid
 from swim_coach.zones import css_from_test, zone_table
 
 
@@ -733,6 +734,143 @@ def _cmd_analyze(args: argparse.Namespace, store: StoreInterface) -> int:
     return 0
 
 
+def _cmd_simulate_taper(args: argparse.Namespace, store: StoreInterface) -> int:
+    """Read-only, exploratory taper-shape grid search -- projects the
+    athlete's REAL current CTL/ATL (from her real logged history) forward
+    to race-day-adjacent TSB under a grid of candidate `(taper_weeks,
+    decay)` combinations, reporting which (if any) land inside
+    `load.RACE_DAY_TSB_BAND`. See `taper_search.py`'s module docstring for
+    the full modeling-assumption writeup (volume-reduction-as-load-proxy,
+    race-day boundary, taper-block dating).
+
+    **NEVER WRITES ANYTHING** -- no `store.save_*` call anywhere in this
+    function or in `taper_search.py`. This is the first empirical input to
+    the taper-individualization algorithm on the roadmap, not a plan
+    change -- any real change to this athlete's actual taper still needs
+    her explicit confirmation and goes through `scaffold-macro`/`adapt`,
+    per CLAUDE.md's safety rails.
+
+    The "current real taper" reference point (always present in the
+    grid, per `taper_search.build_taper_grid`) is read directly off the
+    athlete's real, already-saved macro plan's `taper` block -- its
+    duration in whole weeks, against `taper_search.TAPER_WEEKLY_DECAY`
+    (the same module-level decay `scaffold_macro` used to generate it) --
+    not re-derived from the event date, so it reflects exactly what was
+    actually scaffolded.
+    """
+    slug = args.athlete
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return _error_from_exception(_error_label(store, slug, "profile.yaml"), exc)
+
+    try:
+        macro = store.load_macro(slug)
+    except Exception as exc:  # noqa: BLE001
+        return _error_from_exception(_error_label(store, slug, "plan/macro.yaml"), exc)
+    if macro is None:
+        return _error("no macro plan for this athlete; run scaffold-macro first")
+
+    taper_block = next((b for b in macro.blocks if b.name == "taper"), None)
+    if taper_block is None:
+        return _error("this athlete's macro plan has no taper block")
+    # +1: start_date/end_date are both inclusive (a 2026-08-31..2026-09-13
+    # taper block is 14 real days, not the 13 a bare subtraction gives).
+    current_real_taper_weeks = ((taper_block.end_date - taper_block.start_date).days + 1) // 7
+    if current_real_taper_weeks < 1:
+        return _error(
+            f"macro's taper block ({taper_block.start_date}..{taper_block.end_date}) "
+            "is under a week long -- can't derive a whole-week taper_weeks from it"
+        )
+
+    event = _event_for_macro(store, slug, macro)
+    if event is None:
+        return _error("this athlete's macro plan's event could not be found")
+
+    if args.as_of:
+        try:
+            as_of = date.fromisoformat(args.as_of)
+        except ValueError:
+            return _error(f"invalid --as-of {args.as_of!r}; expected 'YYYY-MM-DD'")
+    else:
+        as_of = date.today()
+
+    workouts = store.list_workouts(slug)
+    wellness = store.list_wellness(slug)
+
+    grid_kwargs: dict = {}
+    if args.taper_weeks_min is not None:
+        grid_kwargs["taper_weeks_min"] = args.taper_weeks_min
+    if args.decay_min is not None:
+        grid_kwargs["decay_min"] = args.decay_min
+    if args.decay_max is not None:
+        grid_kwargs["decay_max"] = args.decay_max
+    if args.decay_step is not None:
+        grid_kwargs["decay_step"] = args.decay_step
+    if args.baseline_window_days is not None:
+        grid_kwargs["baseline_window_days"] = args.baseline_window_days
+
+    try:
+        result = search_taper_grid(
+            athlete=athlete,
+            event=event,
+            workouts=workouts,
+            wellness=wellness,
+            as_of=as_of,
+            current_real_taper_weeks=current_real_taper_weeks,
+            **grid_kwargs,
+        )
+    except ValueError as exc:
+        return _error(str(exc))
+
+    def _candidate_dict(c) -> dict:
+        return {
+            "taper_weeks": c.taper_weeks,
+            "decay": c.decay,
+            "volume_fraction": round(c.volume_fraction, 4),
+            "taper_start_date": c.taper_start_date.isoformat(),
+            "projected_ctl": round(c.projected_ctl, 1),
+            "projected_atl": round(c.projected_atl, 1),
+            "projected_tsb": round(c.projected_tsb, 1),
+            "in_band": c.in_band,
+            "is_current_real_taper": c.is_current_real_taper,
+            "fits_available_runway": c.fits_available_runway,
+        }
+
+    print(
+        json.dumps(
+            {
+                "athlete": slug,
+                "event": event.name,
+                "race_date": result["race_date"].isoformat(),
+                "as_of": as_of.isoformat(),
+                "anchor_date": result["anchor_date"].isoformat(),
+                "starting_ctl": round(result["ctl0"], 1),
+                "starting_atl": round(result["atl0"], 1),
+                "starting_tsb": round(result["tsb0"], 1),
+                "baseline_daily_load": round(result["baseline_daily_load"], 1),
+                "baseline_window_days": result["baseline_window_days"],
+                "weeks_available": result["weeks_available"],
+                "tsb_band": result["tsb_band"],
+                "any_in_band": result["any_in_band"],
+                "closest_to_band": _candidate_dict(result["closest_to_band"]),
+                "current_real_taper": _candidate_dict(result["current_real_taper"]),
+                "candidates": [_candidate_dict(c) for c in result["candidates"]],
+                "modeling_notes": (
+                    "Read-only exploratory simulation -- never mutates the real plan. "
+                    "Each candidate's load is the athlete's real recent baseline daily "
+                    "load scaled by a volume-reduction fraction (1 - decay*taper_weeks, "
+                    "same formula scaffold_macro uses for volume), not a full "
+                    "session-by-session load projection -- see taper_search.py's module "
+                    "docstring. Projects through the day BEFORE race_date; race day "
+                    "itself is excluded from the projection."
+                ),
+            }
+        )
+    )
+    return 0
+
+
 def _cmd_invite(args: argparse.Namespace, store: StoreInterface) -> int:
     """Add (or re-invite) a beta user to the server-side allowlist
     (allowed_emails). Adding a beta user is a DATA change -- this row -- never
@@ -1196,6 +1334,37 @@ def build_parser() -> argparse.ArgumentParser:
     analyze_target.add_argument("--workout-id", dest="workout_id", help="UUID or 8-char prefix")
     analyze_target.add_argument("--all", action="store_true", help="re-analyze every workout with a raw_ref")
 
+    p_simulate_taper = subparsers.add_parser(
+        "simulate-taper",
+        help=(
+            "read-only: grid-search candidate taper shapes against race-day-adjacent "
+            "TSB (never writes anything)"
+        ),
+    )
+    p_simulate_taper.add_argument("--athlete", required=True)
+    p_simulate_taper.add_argument("--as-of", dest="as_of", help="YYYY-MM-DD, default today")
+    p_simulate_taper.add_argument(
+        "--taper-weeks-min", dest="taper_weeks_min", type=int, default=None,
+        help="shortest candidate taper_weeks to search (default: taper_search.TAPER_WEEKS_GRID_MIN)",
+    )
+    p_simulate_taper.add_argument(
+        "--decay-min", dest="decay_min", type=float, default=None,
+        help="lowest candidate weekly decay to search (default: taper_search.DECAY_GRID_MIN)",
+    )
+    p_simulate_taper.add_argument(
+        "--decay-max", dest="decay_max", type=float, default=None,
+        help="highest candidate weekly decay to search (default: taper_search.DECAY_GRID_MAX)",
+    )
+    p_simulate_taper.add_argument(
+        "--decay-step", dest="decay_step", type=float, default=None,
+        help="step between candidate decay values (default: taper_search.DECAY_GRID_STEP)",
+    )
+    p_simulate_taper.add_argument(
+        "--baseline-window-days", dest="baseline_window_days", type=int, default=None,
+        help="trailing window (days) used to compute the athlete's recent baseline daily load "
+        "(default: taper_search.BASELINE_WINDOW_DAYS)",
+    )
+
     p_invite = subparsers.add_parser(
         "invite", help="allowlist a beta user's Google email (server-side identity)"
     )
@@ -1292,6 +1461,7 @@ _COMMANDS = {
     "parse-coach-text": _cmd_parse_coach_text,
     "ingest": _cmd_ingest,
     "analyze": _cmd_analyze,
+    "simulate-taper": _cmd_simulate_taper,
     "invite": _cmd_invite,
     "list-invites": _cmd_list_invites,
     "revoke-invite": _cmd_revoke_invite,

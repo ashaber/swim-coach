@@ -946,6 +946,132 @@ def test_analyze_requires_workout_id_or_all(athlete_tree):
         _run(athlete_tree["base_dir"], "analyze", "--athlete", athlete_tree["slug"])
 
 
+# --- simulate-taper (read-only taper grid search) ----------------------------------
+
+
+def _seed_workout_history(athlete_tree, *, end_date, days=61):
+    """Save `days` consecutive daily swim workouts ending `end_date`
+    (inclusive) straight to the store -- gives `simulate-taper` a real,
+    gap-free `daily_loads` series to seed its CTL/ATL starting point and
+    baseline daily load from. Base-phase-then-build-phase shape (lower
+    load early, higher recently) so ATL genuinely outruns CTL by
+    `end_date`, same "climbing fitness, currently fatigued" shape as
+    Renee's real numbers -- see `test_taper_search.py`'s
+    `_renee_like_history` for the worked-out math this mirrors."""
+    store = athlete_tree["store"]
+    slug = athlete_tree["slug"]
+    athlete_id = athlete_tree["athlete"].id
+    start_date = end_date - timedelta(days=days - 1)
+    build_start = end_date - timedelta(days=20)
+    day = start_date
+    while day <= end_date:
+        rpe, duration_min = (4, 25.0) if day >= build_start else (2, 20.0)
+        store.save_workout(
+            slug,
+            Workout(
+                id=uuid.uuid4(),
+                athlete_id=athlete_id,
+                date=day,
+                sport="swim_pool",
+                source="manual",
+                distance_m=3000,
+                duration_min=duration_min,
+                rpe=rpe,
+            ),
+        )
+        day += timedelta(days=1)
+
+
+def test_simulate_taper_reports_grid_including_current_real_taper(athlete_tree, capsys):
+    macro = _scaffold(athlete_tree, capsys)
+    taper_block = next(b for b in macro.blocks if b.name == "taper")
+    # start_date/end_date are both inclusive -- e.g. a 28-real-day block
+    # (2026-08-31..2026-09-13-equivalent-length) is 4 whole weeks, not the
+    # 3 a bare (end - start).days // 7 would give.
+    expected_taper_weeks = ((taper_block.end_date - taper_block.start_date).days + 1) // 7
+
+    as_of = date.today()
+    _seed_workout_history(athlete_tree, end_date=as_of - timedelta(days=1))
+
+    code = _run(
+        athlete_tree["base_dir"],
+        "simulate-taper",
+        "--athlete",
+        athlete_tree["slug"],
+        "--as-of",
+        as_of.isoformat(),
+    )
+    assert code == 0
+    result = _out(capsys)
+
+    assert result["athlete"] == athlete_tree["slug"]
+    assert result["event"] == athlete_tree["event"].name
+    assert result["race_date"] == athlete_tree["event"].event_date.isoformat()
+    assert "tsb_band" in result
+    assert isinstance(result["any_in_band"], bool)
+    assert result["current_real_taper"]["taper_weeks"] == expected_taper_weeks
+    # Regression check for the inclusive-day-counting bug: this fixture's
+    # 20-week-out event is a "long runway" scaffold (TAPER_WEEKS_LONG=4),
+    # so the real taper block is exactly 4 whole weeks -- confirm the CLI
+    # doesn't undercount it to 3 via a bare (end - start).days // 7.
+    assert result["current_real_taper"]["taper_weeks"] == 4
+    assert result["current_real_taper"]["decay"] == pytest.approx(0.25)
+    assert any(c["is_current_real_taper"] for c in result["candidates"])
+    assert len(result["candidates"]) > 1
+    assert "closest_to_band" in result
+
+
+def test_simulate_taper_missing_athlete_returns_1(tmp_path, capsys):
+    code = _run(tmp_path, "simulate-taper", "--athlete", "nobody")
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+
+
+def test_simulate_taper_without_macro_errors(athlete_tree, capsys):
+    code = _run(athlete_tree["base_dir"], "simulate-taper", "--athlete", athlete_tree["slug"])
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+
+
+def test_simulate_taper_without_any_workouts_errors(athlete_tree, capsys):
+    _scaffold(athlete_tree, capsys)
+    code = _run(athlete_tree["base_dir"], "simulate-taper", "--athlete", athlete_tree["slug"])
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+
+
+def test_simulate_taper_never_writes_anything(athlete_tree, capsys):
+    macro = _scaffold(athlete_tree, capsys)
+    as_of = date.today()
+    _seed_workout_history(athlete_tree, end_date=as_of - timedelta(days=1))
+
+    macro_path = athlete_tree["base_dir"] / athlete_tree["slug"] / "plan" / "macro.yaml"
+    weeks_dir = athlete_tree["base_dir"] / athlete_tree["slug"] / "plan" / "weeks"
+    macro_before = macro_path.read_text()
+    weeks_before = sorted(weeks_dir.glob("*.yaml")) if weeks_dir.exists() else []
+
+    code = _run(
+        athlete_tree["base_dir"],
+        "simulate-taper",
+        "--athlete",
+        athlete_tree["slug"],
+        "--as-of",
+        as_of.isoformat(),
+    )
+    assert code == 0
+    capsys.readouterr()
+
+    assert macro_path.read_text() == macro_before
+    weeks_after = sorted(weeks_dir.glob("*.yaml")) if weeks_dir.exists() else []
+    assert weeks_after == weeks_before
+    # Reloading through the store must also show the identical macro object
+    # -- not just byte-identical YAML.
+    assert athlete_tree["store"].load_macro(athlete_tree["slug"]) == macro
+
+
 # --- invite / list-invites / revoke-invite (Slice 1: verified identity) ------
 
 
