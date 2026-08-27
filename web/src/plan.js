@@ -1131,6 +1131,183 @@ export function ctlAtlTsbChartGeometry(series, {
   };
 }
 
+// --- CTL/ATL/TSB trend narrative ---------------------------------------------
+// Pure "what actually happened in this athlete's numbers" summary, computed
+// from the same raw `ctl_atl_tsb` series `ctlAtlTsbChartGeometry` above
+// turns into chart geometry -- kept here, not in `views.js`, for the same
+// DOM-free-unit-testability split this file already uses (see
+// `describeWellnessBaselineDeviation` below).
+//
+// This exists because a hand-written narrative interpretation of this
+// chart -- something like "CTL has climbed steadily and consistently...
+// ATL is spiky around big training days... TSB has been deeply negative
+// most of the block" -- was, in the athlete's own words, "the useful coach
+// guidance below the load graph," genuinely more useful day-to-day than
+// the generic methodology caption that used to sit directly under the
+// chart. `views.js`'s `renderLoadChart` renders this prominently and moves
+// that generic caption behind a collapsed disclosure instead.
+//
+// Returns a small structured description, NOT rendered markup -- `views.js`
+// turns each field into copy, matching how it already turns this file's
+// `ctlAtlTsbChartGeometry` output into an SVG.
+
+/** `engine/swim_coach/load.py`'s `CTL_TIME_CONSTANT_DAYS` (42) mirrored
+ * here for narrative thresholds below -- duplicated, not imported, since
+ * this is a JS module and that's Python; keep the two in sync if the
+ * engine constant ever changes. HARD RULE, not a judgment call:
+ * `ctl_atl_tsb_series`'s own docstring says CTL/ATL "aren't meaningful"
+ * before roughly this many days have accumulated -- both series are
+ * seeded at 0 and are still climbing from it, not reflecting genuine
+ * fitness/fatigue, before this point. */
+export const CTL_COLD_START_DAYS = 42;
+
+/** STYLISTIC, not a hard rule: the same docstring says CTL isn't fully
+ * "warmed up" until "roughly a few multiples" of `CTL_COLD_START_DAYS`
+ * have accumulated, without pinning an exact number. This reads "a few" as
+ * 3x -- Coach judgment, chosen so a real ~60-day athlete history (the
+ * documented motivating case for this caveat) lands in the middle
+ * "warming-up" bucket below, rather than being read with either full
+ * confidence or none. */
+export const CTL_WARMED_UP_DAYS = CTL_COLD_START_DAYS * 3;
+
+/** Recent-window length (days) used for BOTH the CTL trend comparison and
+ * the ATL-spike search below -- Coach judgment, not a sourced constant.
+ * The two pieces of narrative are meant to describe the same recent slice
+ * of the block, not two arbitrarily different lookbacks; 14 days reads as
+ * "long enough to see a real direction, short enough to still be recent."
+ * No library citation -- chosen for narrative coherence only. */
+export const CTL_ATL_TREND_WINDOW_DAYS = 14;
+
+/** CTL delta (in CTL points) below which the trend reads as "flat" rather
+ * than rising/falling -- Coach judgment. CTL is a slow 42-day EWMA, so even
+ * a genuinely flat multi-week stretch can drift by a point or two; 3 was
+ * chosen as comfortably above that noise floor without requiring a
+ * dramatic swing to call a real direction. */
+export const CTL_TREND_FLAT_THRESHOLD = 3;
+
+/** `historyDays` -> `'cold-start' | 'warming-up' | 'warmed-up'`, per
+ * `CTL_COLD_START_DAYS`/`CTL_WARMED_UP_DAYS` above. */
+function classifyCtlWarmup(historyDays) {
+  if (historyDays < CTL_COLD_START_DAYS) return 'cold-start';
+  if (historyDays < CTL_WARMED_UP_DAYS) return 'warming-up';
+  return 'warmed-up';
+}
+
+/** Pure trend summary of the raw `ctl_atl_tsb` series -- see module comment
+ * above for what this is for. Deliberately date-based throughout (never
+ * assumes a fixed day-to-day index spacing) -- `ctl_atl_tsb_series` always
+ * walks every calendar day in the real backend, but callers (including
+ * this file's own tests) shouldn't have to rely on that to get an honest
+ * answer out of a sparser series.
+ *
+ * Returns:
+ *   - `hasData`: `false` for a missing/empty series -- nothing else below
+ *     is meaningful then.
+ *   - `historyDays`: inclusive calendar-day span from the series' first to
+ *     last date (`null` when `!hasData`).
+ *   - `warmup`: `'cold-start' | 'warming-up' | 'warmed-up'` (`null` when
+ *     `!hasData`) -- see `classifyCtlWarmup`.
+ *   - `ctlTrend`: `null` when fewer than 2 points. Otherwise either
+ *     `{ status: 'insufficient-window', historyDays, requiredWindowDays }`
+ *     when the series doesn't yet span `CTL_ATL_TREND_WINDOW_DAYS` (an
+ *     honest "can't do this comparison yet," rather than silently
+ *     comparing over a shorter, unstated window), or
+ *     `{ status: 'rising' | 'falling' | 'flat', fromDate, toDate,
+ *     fromValue, toValue }` with the real before/after numbers so the
+ *     magnitude is visible, not just the word.
+ *   - `atlSpike`: `null` when fewer than 2 points. Otherwise the single
+ *     largest-magnitude day-to-day ATL change within the last
+ *     `CTL_ATL_TREND_WINDOW_DAYS` days (falling back to the two most
+ *     recent points if the window doesn't contain at least two):
+ *     `{ fromDate, toDate, fromValue, toValue, direction: 'up' | 'down' | 'flat' }`.
+ *   - `tsb`: `null` only when `!hasData`. Otherwise
+ *     `{ date, value, band: 'below' | 'within' | 'above' }` classifying
+ *     the latest TSB against `RACE_DAY_TSB_BAND` -- purely descriptive,
+ *     NOT a verdict on whether the athlete "should" currently be in that
+ *     band (see `RACE_DAY_TSB_BAND`'s own doc comment: it's a race-day
+ *     reference, not a general target). Callers must frame a `'below'`
+ *     mid-build reading as expected, not as a warning.
+ */
+export function describeCtlAtlTsbTrend(series) {
+  if (!series || series.length === 0) {
+    return {
+      hasData: false, historyDays: null, warmup: null, ctlTrend: null, atlSpike: null, tsb: null,
+    };
+  }
+
+  const n = series.length;
+  const firstDateObj = parseIsoDate(series[0][0]);
+  const lastDateObj = parseIsoDate(series[n - 1][0]);
+  const historyDays = daysBetween(firstDateObj, lastDateObj) + 1;
+  const warmup = classifyCtlWarmup(historyDays);
+
+  const lastPoint = series[n - 1];
+  const lastTsb = lastPoint[3];
+  const tsb = {
+    date: lastPoint[0],
+    value: lastTsb,
+    band: lastTsb < RACE_DAY_TSB_BAND.low
+      ? 'below'
+      : (lastTsb > RACE_DAY_TSB_BAND.high ? 'above' : 'within'),
+  };
+
+  if (n < 2) {
+    return {
+      hasData: true, historyDays, warmup, ctlTrend: null, atlSpike: null, tsb,
+    };
+  }
+
+  // Target date for both the CTL-trend comparison and the ATL-spike
+  // window: `CTL_ATL_TREND_WINDOW_DAYS` before the series' last date.
+  const windowStartTarget = addDays(lastDateObj, -CTL_ATL_TREND_WINDOW_DAYS);
+
+  // --- CTL trend: compare the last point to the latest point at/before
+  // the window's start. `fromIndex` stays -1 (series ascending by date, so
+  // once one date exceeds the target every later one does too) when even
+  // the series' first date is after the target -- not enough history yet.
+  let fromIndex = -1;
+  for (let i = 0; i < n; i++) {
+    if (parseIsoDate(series[i][0]) <= windowStartTarget) fromIndex = i;
+    else break;
+  }
+
+  const ctlTrend = fromIndex === -1
+    ? { status: 'insufficient-window', historyDays, requiredWindowDays: CTL_ATL_TREND_WINDOW_DAYS }
+    : (() => {
+      const fromValue = series[fromIndex][1];
+      const toValue = series[n - 1][1];
+      const delta = toValue - fromValue;
+      const status = Math.abs(delta) < CTL_TREND_FLAT_THRESHOLD
+        ? 'flat'
+        : (delta > 0 ? 'rising' : 'falling');
+      return {
+        status, fromDate: series[fromIndex][0], toDate: series[n - 1][0], fromValue, toValue,
+      };
+    })();
+
+  // --- Biggest ATL swing within the recent window (or the last two
+  // points, if the window doesn't contain at least that many).
+  let recentStart = 0;
+  while (recentStart < n && parseIsoDate(series[recentStart][0]) < windowStartTarget) recentStart++;
+  const spikeStart = Math.min(recentStart, n - 2);
+  let biggest = { delta: series[spikeStart + 1][2] - series[spikeStart][2], fromIndex: spikeStart, toIndex: spikeStart + 1 };
+  for (let i = spikeStart + 1; i < n - 1; i++) {
+    const delta = series[i + 1][2] - series[i][2];
+    if (Math.abs(delta) > Math.abs(biggest.delta)) biggest = { delta, fromIndex: i, toIndex: i + 1 };
+  }
+  const atlSpike = {
+    fromDate: series[biggest.fromIndex][0],
+    toDate: series[biggest.toIndex][0],
+    fromValue: series[biggest.fromIndex][2],
+    toValue: series[biggest.toIndex][2],
+    direction: biggest.delta > 0 ? 'up' : (biggest.delta < 0 ? 'down' : 'flat'),
+  };
+
+  return {
+    hasData: true, historyDays, warmup, ctlTrend, atlSpike, tsb,
+  };
+}
+
 // --- Wellness baseline deviation (RHR/HRV cross-check) ----------------------
 // Pure classification of `wellness_baseline_deviation`
 // (`engine/swim_coach/load.py`'s `wellness_baseline_deviation`, surfaced
