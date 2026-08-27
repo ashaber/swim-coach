@@ -7,18 +7,20 @@ tests/unit/fixtures/fit/README.md.
 
 from __future__ import annotations
 
+import uuid
 from datetime import date
 from pathlib import Path
 
 import pytest
 
-from swim_coach.models import WorkoutPause
+from swim_coach.models import Workout, WorkoutPause
 from swim_coach.parse_files import (
     WorkoutDraft,
     _fit_sport,
     _is_cycling_sport,
     _merge_pauses,
     _sport_detail,
+    backfill_sport_detail,
     parse_csv,
     parse_fit,
     parse_tcx,
@@ -417,6 +419,104 @@ def test_sport_detail_non_running_sport_unaffected_by_speed_check():
     # sport strings only.
     detail = _sport_detail("kayaking", None, "cross_train", avg_speed_mps=0.3)
     assert detail == "kayaking"
+
+
+# --- backfill_sport_detail (historical backfill for the walk/run relabel) -----------------
+
+
+def _workout(**overrides: object) -> Workout:
+    """Minimal, otherwise-valid `Workout` fixture with sensible defaults --
+    a "running" cross_train entry at a walking pace, matching Renee's real
+    mislabeled history unless a test overrides fields to say otherwise."""
+    fields: dict[str, object] = {
+        "id": uuid.uuid4(),
+        "athlete_id": uuid.uuid4(),
+        "date": date(2026, 6, 1),
+        "sport": "cross_train",
+        "source": "fit",
+        "distance_m": 1000,
+        "duration_min": 20.0,  # 1200s -> 1000/1200 = 0.833 m/s, well below threshold
+        "sport_detail": "running",
+    }
+    fields.update(overrides)
+    return Workout(**fields)
+
+
+def test_backfill_slow_running_relabeled_to_walking():
+    workout = _workout(sport_detail="running")
+    updated = backfill_sport_detail(workout)
+    assert updated is not None
+    assert updated.sport_detail == "walking"
+    # Only sport_detail changed -- the enum bucket and everything else
+    # persisted as-is.
+    assert updated.sport == "cross_train"
+    assert updated.id == workout.id
+    assert updated.distance_m == workout.distance_m
+    assert updated.duration_min == workout.duration_min
+
+
+def test_backfill_fast_running_unchanged():
+    # 5000m / 20min = 4.17 m/s, comfortably above the gait-transition
+    # threshold -- a real run, left alone.
+    workout = _workout(sport_detail="running", distance_m=5000, duration_min=20.0)
+    assert backfill_sport_detail(workout) is None
+
+
+def test_backfill_preserves_sub_sport_suffix():
+    workout = _workout(sport_detail="running/trail")
+    updated = backfill_sport_detail(workout)
+    assert updated is not None
+    assert updated.sport_detail == "walking/trail"
+
+
+def test_backfill_already_walking_is_idempotent():
+    workout = _workout(sport_detail="walking")
+    assert backfill_sport_detail(workout) is None
+
+
+def test_backfill_already_walking_with_sub_sport_is_idempotent():
+    workout = _workout(sport_detail="walking/trail")
+    assert backfill_sport_detail(workout) is None
+
+
+@pytest.mark.parametrize("sport", ["swim_pool", "swim_ow", "strength", "recovery"])
+def test_backfill_ignores_non_cross_train_sports(sport):
+    # A non-cross_train workout is never touched, regardless of speed or
+    # whatever sport_detail happens to be set (swim/strength never carry a
+    # "run"-ish sport_detail in practice, but the guard checks `sport` first
+    # regardless).
+    workout = _workout(sport=sport, sport_detail=None, distance_m=1000, duration_min=20.0)
+    assert backfill_sport_detail(workout) is None
+
+
+def test_backfill_ignores_non_running_cross_train_sports():
+    # cycling/strength-training-family cross_train entries at any speed are
+    # left alone -- only a "run"-containing sport_detail is a candidate.
+    workout = _workout(sport_detail="cycling/mountain", distance_m=1000, duration_min=20.0)
+    assert backfill_sport_detail(workout) is None
+
+
+def test_backfill_missing_sport_detail_unchanged():
+    workout = _workout(sport_detail=None)
+    assert backfill_sport_detail(workout) is None
+
+
+def test_backfill_missing_distance_m_unchanged_not_error():
+    # distance_m=0 stands in for "no usable distance" (the schema requires
+    # >=0, not None) -- can't recompute speed, so leave it alone rather than
+    # guessing.
+    workout = _workout(sport_detail="running", distance_m=0, duration_min=20.0)
+    assert backfill_sport_detail(workout) is None
+
+
+def test_backfill_missing_duration_min_unchanged_not_error():
+    # duration_min is required/gt=0 on a schema-valid Workout, but historical
+    # data or a future schema relaxation could still hand us None here --
+    # bypass validation via model_construct to prove the guard doesn't raise.
+    workout = _workout(sport_detail="running", distance_m=1000).model_copy(
+        update={"duration_min": None}
+    )
+    assert backfill_sport_detail(workout) is None
 
 
 # --- _is_cycling_sport -----------------------------------------------------------------
