@@ -404,6 +404,32 @@ class StoreContractTests:
         store.save_workout(SLUG, _workout(athlete.id, d))
         assert len(store.list_workouts(SLUG)) == 2
 
+    def test_list_workouts_since_excludes_older_workouts(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        store.save_workout(SLUG, _workout(athlete.id, date(2026, 7, 1)))
+        store.save_workout(SLUG, _workout(athlete.id, date(2026, 7, 10)))
+        store.save_workout(SLUG, _workout(athlete.id, date(2026, 7, 20)))
+        loaded = store.list_workouts(SLUG, since=date(2026, 7, 10))
+        assert [w.date for w in loaded] == [date(2026, 7, 10), date(2026, 7, 20)]
+
+    def test_list_workouts_since_boundary_is_inclusive(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        boundary = date(2026, 7, 10)
+        store.save_workout(SLUG, _workout(athlete.id, boundary))
+        loaded = store.list_workouts(SLUG, since=boundary)
+        assert len(loaded) == 1
+        assert loaded[0].date == boundary
+
+    def test_list_workouts_since_none_returns_full_history(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        store.save_workout(SLUG, _workout(athlete.id, date(2020, 1, 1)))
+        store.save_workout(SLUG, _workout(athlete.id, date(2026, 7, 20)))
+        assert len(store.list_workouts(SLUG)) == 2
+        assert len(store.list_workouts(SLUG, since=None)) == 2
+
     # --- wellness --------------------------------------------------------
 
     def test_wellness_round_trip(self, store):
