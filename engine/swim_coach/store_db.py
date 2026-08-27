@@ -437,17 +437,26 @@ class DbStore(StoreInterface):
 
     # --- Workouts -------------------------------------------------------
 
-    def list_workouts(self, slug: str) -> list[Workout]:
+    def list_workouts(self, slug: str, *, since: date | None = None) -> list[Workout]:
+        # `since` is pushed into the `WHERE` clause (not filtered in Python
+        # after an unbounded fetch) -- this is the query that actually pays
+        # for a full row scan + network transfer of an athlete's entire
+        # logged history when unbounded, so bounding it here is what
+        # actually reduces the production cost (see StoreInterface's
+        # docstring). Same incremental query-building pattern as
+        # `list_feedback` above.
+        params: list[Any] = [slug]
+        query = """
+            select w.data from workouts w
+            join athletes a on a.athlete_id = w.athlete_id
+            where a.slug = %s
+        """
+        if since is not None:
+            query += " and w.date >= %s"
+            params.append(since)
+        query += " order by w.date, w.sport, w.id"
         with self._connect() as conn, conn.cursor() as cur:
-            cur.execute(
-                """
-                select w.data from workouts w
-                join athletes a on a.athlete_id = w.athlete_id
-                where a.slug = %s
-                order by w.date, w.sport, w.id
-                """,
-                (slug,),
-            )
+            cur.execute(query, params)
             rows = cur.fetchall()
         return [row_to_workout(r) for r in rows]
 

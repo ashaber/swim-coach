@@ -92,7 +92,17 @@ class StoreInterface(ABC):
         ...
 
     @abstractmethod
-    def list_workouts(self, slug: str) -> list[Workout]: ...
+    def list_workouts(self, slug: str, *, since: date | None = None) -> list[Workout]:
+        """Every logged workout for this athlete, sorted by date. `since`,
+        when given, restricts the result to workouts with `date >= since`
+        (inclusive) -- implementations that back a real database MUST push
+        this down into the query itself (a `WHERE date >= ...` clause), not
+        just filter an already-fetched full result set in Python, since the
+        whole point is bounding the underlying read for athletes with a
+        long logged history. `since=None` (the default) returns full
+        history, unchanged from this method's original unbounded
+        contract."""
+        ...
 
     @abstractmethod
     def save_workout(self, slug: str, workout: Workout) -> None: ...
@@ -360,7 +370,7 @@ class FileStore(StoreInterface):
 
     # --- Workouts ------------------------------------------------------------
 
-    def list_workouts(self, slug: str) -> list[Workout]:
+    def list_workouts(self, slug: str, *, since: date | None = None) -> list[Workout]:
         directory = self._athlete_dir(slug) / "logs" / "workouts"
         if not directory.exists():
             return []
@@ -368,7 +378,15 @@ class FileStore(StoreInterface):
         for path in sorted(directory.glob("*.yaml")):
             data = _read_yaml(path)
             if data is not None:
-                workouts.append(Workout.model_validate(data))
+                workout = Workout.model_validate(data)
+                # Filtered in Python, not by filename -- this is the
+                # dev/test-only file-backed store (real production reads go
+                # through DbStore.list_workouts, which pushes `since` into
+                # the SQL `WHERE` clause instead; see StoreInterface's
+                # docstring on this param).
+                if since is not None and workout.date < since:
+                    continue
+                workouts.append(workout)
         return workouts
 
     def save_workout(self, slug: str, workout: Workout) -> None:

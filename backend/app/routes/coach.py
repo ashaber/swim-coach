@@ -10,7 +10,7 @@ a wholly separate access mode from the athlete-self-scoped routes
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
@@ -24,6 +24,31 @@ from app.routes.plan import LOAD_GRAPH_DEFAULT_WEEKS, LOAD_GRAPH_MAX_WEEKS, LOAD
 from app.store_factory import make_store
 
 router = APIRouter()
+
+# A coach reviewing an athlete's roster wants a "how's this athlete doing
+# lately" read, not a fetch of the athlete's entire logged history --
+# unbounded, `coach_view_workouts`'s DB read (`store.list_workouts`) and the
+# plan-week scan it does to find sessions to match workouts against (for
+# quality scoring) both grow forever as an athlete accumulates more
+# workouts/weeks. 90 days is expressed in days (not weeks, unlike
+# `LOAD_GRAPH_DEFAULT_WEEKS` below) since workouts are logged per-day, but
+# lands in the same "recent training, not full history" spirit as that
+# constant's ~84-day (12-week) window for this same coach-mode roster view's
+# load chart.
+COACH_WORKOUTS_DEFAULT_DAYS = 90
+COACH_WORKOUTS_MIN_DAYS = 7
+COACH_WORKOUTS_MAX_DAYS = 365
+
+
+def _iso_week_date_range(iso_week: str) -> tuple[date, date]:
+    """(monday, sunday) for an ISO week id ("2026-W28") -- same
+    `date.fromisocalendar(year, week, weekday)` parse `cli.py`'s
+    `--week`-argument handling already uses (see e.g. `_cmd_plan_week`),
+    just reused here rather than reinvented, since there's no shared public
+    helper for it yet in `engine/swim_coach/`."""
+    year_str, week_str = iso_week.split("-W")
+    monday = date.fromisocalendar(int(year_str), int(week_str), 1)
+    return monday, monday + timedelta(days=6)
 
 
 @router.get("/api/coach/athletes")
@@ -54,16 +79,40 @@ async def list_coached_athletes(
 
 @router.get("/api/coach/athletes/{slug}/workouts")
 async def coach_view_workouts(
-    slug: str, request: Request, principal: Principal = Depends(require_auth)
+    slug: str,
+    request: Request,
+    days: int = Query(
+        COACH_WORKOUTS_DEFAULT_DAYS, ge=COACH_WORKOUTS_MIN_DAYS, le=COACH_WORKOUTS_MAX_DAYS
+    ),
+    principal: Principal = Depends(require_auth),
 ) -> list[dict]:
+    """Coach-mode roster view's per-athlete workout list, each entry
+    annotated with a `quality` (match-to-planned-session score). Windowed to
+    the trailing `days` days (default `COACH_WORKOUTS_DEFAULT_DAYS`) -- both
+    `store.list_workouts` (pushed down to a real `WHERE date >= ...` on the
+    DB-backed store; see `StoreInterface.list_workouts`'s docstring) and the
+    plan-week scan below used only to build match candidates for those
+    workouts. Previously both were unbounded full-history reads that grew
+    forever with an athlete's tenure on the plan."""
     settings = request.app.state.settings
     slug = resolve_coach_athlete(principal, slug)
     store = make_store(settings)
 
-    workouts = store.list_workouts(slug)
+    today = date.today()
+    since = today - timedelta(days=days)
 
+    workouts = store.list_workouts(slug, since=since)
+
+    # `list_week_ids` itself stays a full, unfiltered id listing (cheap --
+    # ids only, no week bodies) so this can filter in Python BEFORE the
+    # actual `load_week` calls, which is where the real per-week cost is
+    # paid -- only weeks whose date range overlaps `[since, today]` are
+    # loaded, rather than every week ever generated for this athlete.
     sessions: list[Session] = []
     for iso_week in store.list_week_ids(slug):
+        week_start, week_end = _iso_week_date_range(iso_week)
+        if week_end < since or week_start > today:
+            continue
         week = store.load_week(slug, iso_week)
         if week is not None:
             sessions.extend(week.sessions)
@@ -95,7 +144,21 @@ async def coach_view_load(
     same minimal graph-shaped response, same `summarize_rollup` call, gated
     via `resolve_coach_athlete` instead of `resolve_athlete`. See
     `routes/plan.py`'s `LOAD_GRAPH_DEFAULT_WEEKS` for why the default window
-    is longer than `get_plan_summary`'s."""
+    is longer than `get_plan_summary`'s.
+
+    No caching added here despite `summarize_rollup` being a real cost: it
+    internally calls `store.list_workouts(slug)` with NO `since` bound at
+    all (see `context.py`), by design -- CTL/ATL's exponentially-weighted
+    averages need full history for a real warm-up, not just this `weeks`
+    window (`ctl_atl_tsb_series`'s cold-start docstring), same for
+    `wellness_baseline_deviation`'s 28-day chronic baseline. That's the same
+    *class* of unbounded-growth cost `coach_view_workouts` had, just
+    intentional and deeper inside `summarize_rollup` (also used by
+    `get_plan_summary` and per-request chat context) -- fixing it means
+    reworking how CTL warm-up gets its history, not a `weeks` bound or a
+    cache slapped on top (a cache would only mask the cost between calls,
+    not remove it). Out of scope for tonight's routing-layer fix; flagged as
+    a follow-up rather than spending a speculative caching layer on it."""
     settings = request.app.state.settings
     slug = resolve_coach_athlete(principal, slug)
     store = make_store(settings)
