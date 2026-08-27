@@ -996,6 +996,107 @@ raw research input, not itself citable).
   sustained deviation from the athlete's own baseline under materially
   increased or extended load — the taper/build-block monitoring context
   that function targets, not routine day-to-day noise.
+- **✓ Bourdon P.C., Cardinale M., Murray A., Gastin P., Kellmann M., Varley
+  M.C., Cable N.T. (2017)** — "Monitoring Athlete Training Loads: Consensus
+  Statement" — *International Journal of Sports Physiology and
+  Performance*, 12(Suppl 2):S2-161-S2-170. Multi-author, multi-discipline
+  consensus framework recommending external-load and internal-load
+  (subjective RPE-based *and* objective physiological) measures be
+  combined as complementary signals, none treated as a standalone gold
+  standard. Does not specify a numeric rule for resolving disagreement
+  between measures. Verified by title/author/journal/volume search this
+  session. See `17-wellness-load-integration.md`.
+- **✓ Plews D.J., Laursen P.B., Stanley J., Kilding A.E., Buchheit M.
+  (2013)** — "Training Adaptation and Heart Rate Variability in Elite
+  Endurance Athletes: Opening the Door to Effective Monitoring" — *Sports
+  Medicine*, 43(9):773-781. Narrative review formalizing a
+  smallest-worthwhile-change (SWC) approach to HRV-guided training: a
+  7-day rolling average of the natural log of rMSSD, with a "normal
+  range" defined as that week's mean plus-or-minus 0.5 standard
+  deviations — a day whose rolling average falls below the lower bound is
+  read as a signal to train easy/rest rather than hard. Same
+  morning-orthostatic-protocol lineage as the Kiviniemi/Vesterinen/
+  Javaloyes trio already cited above — not validated on overnight/
+  ring-style HRV. Verified by title/author/journal/volume/pages search
+  this session. See `17-wellness-load-integration.md`.
+- **✓ Halson S.L. (2014)** — "Monitoring Training Load to Understand
+  Fatigue in Athletes" — *Sports Medicine*, 44(Suppl 2):S139-S147. Review
+  concluding no single training-load marker is definitive; introduces an
+  "uncoupling" concept — internal and external (or subjective and
+  objective) load measures moving apart from their usual relationship is
+  itself diagnostic of a fatigue state a single measure would miss —
+  without giving a specific numeric threshold for either measure.
+  Verified by title/author/journal/volume/pages search this session. See
+  `17-wellness-load-integration.md`.
+- **✓ Bellenger C.R., Fuller J.T., Thomson R.L., Davison K., Robertson
+  E.Y., Buckley J.D. (2016)** — "Monitoring Athletic Training Status
+  Through Autonomic Heart Rate Regulation: A Systematic Review and
+  Meta-Analysis" — *Sports Medicine*, 46(10):1461-1486. Found resting HRV
+  largely unaffected by overreaching in aggregate across the reviewed
+  studies, and — the more important honest complication — functional
+  overreaching sometimes produced HRV **increases** (parasympathetic
+  hyperactivity) rather than decreases, with effect sizes for a
+  resting-RMSSD increase overlapping between athletes who went on to
+  improve (~0.58) and worsen (~0.26) subsequent performance. Verified by
+  title/author/journal/volume/pages search this session, summary only
+  (full text not fetched). See `17-wellness-load-integration.md`.
+- **✓ Rebelo A., Bishop C., Thorpe R.T., Turner A.N., Gabbett T.J.
+  (2026)** — "Monitoring Training Effects in Athletes: A Multidimensional
+  Framework for Decision-Making" — *Sports Medicine*, 56(7):1603-1624.
+  Current narrative review proposing a "Fatigue-Readiness-Adaptation
+  continuum" and 2x2 "Monitoring Quadrants" (training load vs. well-being,
+  training load vs. neuromuscular performance, neuromuscular performance
+  vs. well-being) for contextual interpretation. Explicitly states no
+  validated algorithmic rule exists for resolving disagreement between
+  subjective and objective signals — recommends contextual practitioner
+  judgment instead — and separately cautions against proprietary composite
+  scores via its own "Minimal, Adequate, Accurate" framework, independently
+  converging with this library's existing Oura-Readiness-exclusion stance
+  (`10-recovery-hrv.md`). Verified by title/author/journal/volume/summary
+  fetch this session. See `17-wellness-load-integration.md`.
+- **✓ Flatt A.A., Esco M.R., Nakamura F.Y. (2018)** — "Association between
+  Subjective Indicators of Recovery Status and Heart Rate Variability
+  among Division-1 Sprint-Swimmers" — *Sports (Basel)*, 6(3):93. 17 male
+  Division-1 NCAA sprint swimmers (5 Olympians), 4 weeks of daily
+  ultra-short LnRMSSD plus a wellness questionnaire (sleep, fatigue,
+  stress, mood, soreness): LnRMSSD was significantly higher on
+  better-than-average sleep/fatigue/stress/mood days, and 15 of 17
+  swimmers showed at least one significant individual-level relationship
+  between LnRMSSD and a subjective variable — but muscle soreness showed
+  **no** association with HRV in this population. `[EVIDENCE: swim]`.
+  Verified by title/author/journal/volume/issue/article-number fetch this
+  session. See `17-wellness-load-integration.md`.
+- **✓ Flatt A.A., Hornikel B., Esco M.R. (2017)** — "Heart Rate Variability
+  and Psychometric Responses to Overload and Tapering in Collegiate
+  Sprint-Swimmers" — *Journal of Science and Medicine in Sport*,
+  20(6):606-610. Collegiate sprint swimmers tracked across overload and
+  taper training phases: cardiac-parasympathetic (HRV) and psychometric
+  measures both shifted with training phase, corroborating each other at
+  the phase (multi-week) level rather than the single-day level.
+  `[EVIDENCE: swim]`. Verified by title/author/journal/volume/issue/pages
+  search this session. See `17-wellness-load-integration.md`.
+- **✓ Bulte K.R., Bruce L., Hammond K., Corrigan S.L., Main L.C. (2025)** —
+  "Use of Heart-Rate Variability to Examine Readiness to Perform in
+  Response to Overload and Taper in Swimmers" — *International Journal of
+  Sports Physiology and Performance*, 20(7):918-924. 11 state- to
+  international-level swimmers, 5 months of routine HRV/training/
+  competition data leading into Tokyo 2020 Olympic trials: HRV tracked
+  training-phase transitions (parasympathetic dominance in early taper,
+  rising sympathetic activity approaching competition), more strongly in
+  swimmers who went on to perform well. `[EVIDENCE: swim]`. Verified by
+  title/author/journal/volume/issue/pages search this session. See
+  `17-wellness-load-integration.md`.
+- **✓ Nicolas M., Vacher P., Martinent G., Mourot L. (2016)** — "Monitoring
+  Stress and Recovery States: Structural and External Stages of the Short
+  Version of the RESTQ-Sport in Elite Swimmers Before Championships" —
+  *Journal of Sport and Health Science*, 8(1):77-88. Validates the 36-item
+  RESTQ-Sport subjective recovery-stress questionnaire in elite swimmers
+  approaching championships (not combined with HRV in this particular
+  study) — a richer, swim-validated subjective instrument than this
+  project's current single-composite `wellness_composite`, noted here as a
+  related-but-separate future angle, not evaluated further.
+  `[EVIDENCE: swim]`. Verified by title/author/journal/volume/issue/pages
+  fetch this session. See `17-wellness-load-integration.md`.
 
 ## Wearables & device validity
 

@@ -22,6 +22,7 @@ load `00-conventions.md` once per session to know how to read the tags.
 | `14-swim-set-structure.md` | Session *composition* (warm-up/main-set/cool-down) for the "additional" pool-independent aerobic swim session, built on top of `04`'s CSS/zone system without changing it: proportions and main-set format menu are Coach judgment/convention; negative-split pacing cross-refs `04`'s existing evidence; a base->build/peak shift toward broken-distance/race-pace-adjacent work is `[EVIDENCE: swim]` (González-Ravé et al. 2021, Pla et al. 2019). Does not touch the Saturday long-swim session (`06`'s territory). **UNREVIEWED**, pending human review. |
 | `15-tiered-session-load.md` | The tiered `session_load` fallback (sRPE > HR-based TRIMP > swim pace-IF > duration-only) fixing the confirmed bug where RPE-less workouts (62 of Renee's 63 real logged workouts) were silently excluded from every load total. Banister TRIMP formula/citation, HRmax/HRrest derivation and their honest confidence labels, the swim-specific cubed-IF TSS adaptation, and the documented cross-tier scale-mismatch limitation. Split out of `03-periodization.md` to stay under its word-count cap. **UNREVIEWED**, pending human review. |
 | `16-race-week.md` | The final taper week's own, more prescriptive checklist layered on top of `03`'s taper block (never touching its volume math): the 36-72h pre-race carbohydrate-loading window (Burke et al. 2011; Bussau et al. 2002, no depletion phase needed), the 3-5-day-out bodywork/massage window (Weerapong, Hume & Kolt 2005; Dakić et al. 2023 — modest soreness/psychological benefit, practitioner-convention timing), and a generic, event-data-driven athlete logistics checklist (travel/acclimatization, fueling-plan rehearsal, support-crew confirmation). Gated on an active, priority-"A" event matching the macro. **UNREVIEWED**, pending human review. |
+| `17-wellness-load-integration.md` | Whether/how the independent RHR/HRV baseline-deviation cross-check (`load.py`'s `wellness_baseline_deviation`) should confirm or trigger an adjustment against the sRPE-derived CTL/ATL/TSB model (`ctl_atl_tsb_series`) — currently shown side by side, never combined. Multi-signal monitoring is well-supported (Bourdon et al. 2017; Rebelo et al. 2026) but no validated algorithmic disagreement rule exists anywhere in the literature, swim-specific or not; one concrete HRV numeric trigger exists (Plews et al. 2013's 0.5-SD-of-7-day-rolling-mean) but for a morning protocol this app doesn't have data for yet, and HRV's overreaching signature isn't even reliably a decrease (Bellenger et al. 2016). Ends with a scoped, not-yet-built recommendation: an informational agreement/contradiction flag, never an `action`-changing override. **UNREVIEWED**, pending human review. |
 | `reference_list.md` | **The canonical citation source.** Every claim in every file above resolves to an entry here (title + author + year), never a URL/ID — see its own header for why. |
 | `sample_pool_workout_traditional.md` | A real logged pool-coach workout sample (traditional/technique-focused notation) — reference material for `/log-workout`'s coach-text parser, not a research citation. |
 | `sample_pool_workout_openwater_focus.md` | A real logged pool-coach workout sample (open-water-focused notation) — same purpose as above. |
@@ -51,6 +52,7 @@ load `00-conventions.md` once per session to know how to read the tags.
 | Post-race / post-milestone-swim recovery, "how many easy days do I need?" | `06-long-swim-progression.md` (the `RECOVERY_DAYS_AFTER_MILESTONE_MIN/MAX` constant itself) + `10-recovery-hrv.md` (the recovery-science *why*) |
 | Cold water immersion, compression, massage — "should I ice bath / wear compression?" | `10-recovery-hrv.md` (modality tier list) |
 | Race week: carb-loading timing, pre-race massage/bodywork timing, final-week travel/fueling-rehearsal/support-crew checklist | `16-race-week.md` (layered on `03`'s taper block's own last week; never changes its volume math) |
+| "My HRV/RHR looks off but I feel fine (or vice versa) — does that matter?" / whether wellness/HRV should ever trigger a plan change, not just display alongside it | `17-wellness-load-integration.md` (confirmation vs. contradiction between sRPE-derived TSB and RHR/HRV baseline deviation; states plainly this doesn't drive any plan decision today, and what a future rule would need) |
 | Heat/cold acclimation, taper execution (full macro taper, not the between-events mini-taper), race-day pacing | Not yet authored (`09`, `12`-tier files per ROADMAP.md's repo-structure sketch — `08` and `11` are no longer gaps, see above). Until then: give coach judgment labeled as such, and offer to draft a new `UNREVIEWED` section rather than presenting an unsourced answer as settled. |
 | Acute physical distress (chest pain, palpitations, fainting, heat-stroke/hypothermia signs) | **Not a library-routing question.** Stop and use the `/coach` skill's safety-first override — no file in this library should be consulted before that. |
 
@@ -64,14 +66,16 @@ only the between-events case) are **not yet authored**. `07`
 (ultra feeding), `13` (RED-S/energy availability), `14` (swim set
 structure), and `15` (tiered session load) have all been authored, each
 grounding an existing engine constant or a logged athlete question rather
-than speculatively covering ROADMAP's full sketch. `16` (race week) is a
-new, similarly ad hoc addition outside that original numbering sketch —
-not the full `12`-tier "race execution / macro taper" topic, just the
-final taper week's own carb-load/bodywork/logistics checklist. `10` is
-human-reviewed (Oura device-trust pass, 2026-07-11); `07`, `11`, `08`,
-`13`, `14`, `15`, and `16` remain `UNREVIEWED` pending human review —
-`/coach` and future readers
-should treat their claims as drafts, not settled grounding, until that
-review happens.
+than speculatively covering ROADMAP's full sketch. `16` (race week) and `17` (wellness/HRV load integration) are
+similarly ad hoc additions outside that original numbering sketch — `16`
+is not the full `12`-tier "race execution / macro taper" topic, just the
+final taper week's own carb-load/bodywork/logistics checklist; `17` is a
+research-only answer to a specific developer question (does the RHR/HRV
+baseline-deviation cross-check ever confirm or trigger a load adjustment)
+and grounds no engine constant yet. `10` is human-reviewed (Oura
+device-trust pass, 2026-07-11); `07`, `11`, `08`, `13`, `14`, `15`, `16`,
+and `17` remain `UNREVIEWED` pending human review — `/coach` and future
+readers should treat their claims as drafts, not settled grounding, until
+that review happens.
 `/coach` should say plainly when a question falls in one of the remaining
 gaps rather than improvising a citation that doesn't exist yet.
