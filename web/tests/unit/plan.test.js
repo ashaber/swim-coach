@@ -9,6 +9,8 @@ import {
   stepCoachingCue, ZONE_GLOSSARY, TERM_GLOSSARY,
   ctlAtlTsbChartGeometry, RACE_DAY_TSB_BAND, raceWeekCategoryLabel,
   describeWellnessBaselineDeviation, WELLNESS_DEVIATION_CONCERNING_PCT,
+  describeCtlAtlTsbTrend, CTL_COLD_START_DAYS, CTL_WARMED_UP_DAYS,
+  CTL_ATL_TREND_WINDOW_DAYS, CTL_TREND_FLAT_THRESHOLD,
 } from '../../src/plan.js';
 
 describe('isoWeekMonday', () => {
@@ -1073,6 +1075,163 @@ describe('ctlAtlTsbChartGeometry', () => {
     const geo = ctlAtlTsbChartGeometry(series, { width: 300, height: 150 });
     expect(geo.width).toBe(300);
     expect(geo.height).toBe(150);
+  });
+});
+
+describe('describeCtlAtlTsbTrend', () => {
+  // Builds a `ctl_atl_tsb`-shaped series of `n` daily points starting at
+  // `startIso`, with per-point [ctl, atl, tsb] from `valueFn(i)`. Pure UTC
+  // date math (Date.UTC + a fixed 86400000ms step, `toISOString` to read
+  // the date back out) so the generated ISO strings never depend on the
+  // machine's local timezone, unlike stepping a local `Date` across a
+  // month/year boundary would.
+  function buildSeries(startIso, n, valueFn) {
+    const [y, m, d] = startIso.split('-').map(Number);
+    const startMs = Date.UTC(y, m - 1, d);
+    return Array.from({ length: n }, (_, i) => {
+      const iso = new Date(startMs + i * 86400000).toISOString().slice(0, 10);
+      const [ctl, atl, tsb] = valueFn(i);
+      return [iso, ctl, atl, tsb];
+    });
+  }
+
+  it('reports no data for an empty or missing series', () => {
+    for (const series of [[], null, undefined]) {
+      expect(describeCtlAtlTsbTrend(series)).toEqual({
+        hasData: false, historyDays: null, warmup: null, ctlTrend: null, atlSpike: null, tsb: null,
+      });
+    }
+  });
+
+  it('a single-point series has no trend/spike (nothing to compare) but does have a TSB reading', () => {
+    const result = describeCtlAtlTsbTrend([['2026-08-01', 10, 5, 3]]);
+    expect(result.hasData).toBe(true);
+    expect(result.historyDays).toBe(1);
+    expect(result.ctlTrend).toBeNull();
+    expect(result.atlSpike).toBeNull();
+    expect(result.tsb).toEqual({ date: '2026-08-01', value: 3, band: 'below' });
+    // 1 day is nowhere near CTL_COLD_START_DAYS -- definitely cold-start.
+    expect(result.warmup).toBe('cold-start');
+  });
+
+  it('flags a series shorter than the trend window as insufficient, rather than silently comparing over a shorter span', () => {
+    // 5 daily points -- well short of CTL_ATL_TREND_WINDOW_DAYS (14).
+    const series = buildSeries('2026-08-01', 5, (i) => [10 + i, 5 + i, 5]);
+    const result = describeCtlAtlTsbTrend(series);
+    expect(result.historyDays).toBe(5);
+    expect(result.ctlTrend).toEqual({
+      status: 'insufficient-window', historyDays: 5, requiredWindowDays: CTL_ATL_TREND_WINDOW_DAYS,
+    });
+    // The ATL-spike search doesn't need a full window -- it still reports
+    // the biggest available swing from whatever history exists.
+    expect(result.atlSpike).not.toBeNull();
+  });
+
+  it('detects a rising CTL trend with the real before/after numbers', () => {
+    // 20 daily points, CTL climbing by 1/day -- comfortably past both the
+    // window (14 days) and the flat threshold (3 points).
+    const series = buildSeries('2026-08-01', 20, (i) => [10 + i, 5, 0]);
+    const result = describeCtlAtlTsbTrend(series);
+    expect(result.ctlTrend.status).toBe('rising');
+    expect(result.ctlTrend.toValue).toBe(29); // 10 + 19
+    expect(result.ctlTrend.fromValue).toBe(29 - CTL_ATL_TREND_WINDOW_DAYS);
+    expect(result.ctlTrend.toDate).toBe(series.at(-1)[0]);
+  });
+
+  it('detects a falling CTL trend', () => {
+    const series = buildSeries('2026-08-01', 20, (i) => [40 - i, 5, 0]);
+    const result = describeCtlAtlTsbTrend(series);
+    expect(result.ctlTrend.status).toBe('falling');
+    expect(result.ctlTrend.fromValue).toBeGreaterThan(result.ctlTrend.toValue);
+  });
+
+  it('classifies a small drift within CTL_TREND_FLAT_THRESHOLD as flat, not a false direction', () => {
+    const series = buildSeries('2026-08-01', 20, (i) => [50 + (i % 2), 5, 0]);
+    const result = describeCtlAtlTsbTrend(series);
+    expect(result.ctlTrend.status).toBe('flat');
+  });
+
+  it('treats a delta of exactly CTL_TREND_FLAT_THRESHOLD as a real direction, not flat (boundary is exclusive)', () => {
+    const atThreshold = [
+      ['2026-08-01', 10, 5, 0],
+      ['2026-08-15', 10 + CTL_TREND_FLAT_THRESHOLD, 5, 0], // exactly 14 days apart
+    ];
+    expect(describeCtlAtlTsbTrend(atThreshold).ctlTrend.status).toBe('rising');
+    const justUnder = [
+      ['2026-08-01', 10, 5, 0],
+      ['2026-08-15', 10 + CTL_TREND_FLAT_THRESHOLD - 0.5, 5, 0],
+    ];
+    expect(describeCtlAtlTsbTrend(justUnder).ctlTrend.status).toBe('flat');
+  });
+
+  it('finds the single largest ATL jump in the recent window, not just the last delta', () => {
+    // ATL: mostly small day-to-day moves, with one big jump in the middle
+    // of the window -- the "big training day" shape from the real example.
+    const atlValues = [40, 39, 39.2, 111.1, 105, 100, 95, 90, 88, 86, 84, 82, 80, 78, 76];
+    const series = buildSeries('2026-08-10', atlValues.length, (i) => [50, atlValues[i], 0]);
+    const result = describeCtlAtlTsbTrend(series);
+    expect(result.atlSpike.direction).toBe('up');
+    expect(result.atlSpike.fromValue).toBe(39.2);
+    expect(result.atlSpike.toValue).toBe(111.1);
+  });
+
+  it('reports a downward ATL swing honestly as "down", not force-fit into "spike"', () => {
+    const atlValues = [100, 98, 20, 19, 18];
+    const series = buildSeries('2026-08-20', atlValues.length, (i) => [50, atlValues[i], 0]);
+    const result = describeCtlAtlTsbTrend(series);
+    expect(result.atlSpike.direction).toBe('down');
+    expect(result.atlSpike.fromValue).toBe(98);
+    expect(result.atlSpike.toValue).toBe(20);
+  });
+
+  it('classifies current TSB against RACE_DAY_TSB_BAND descriptively (below/within/above), independent of race proximity', () => {
+    const below = describeCtlAtlTsbTrend([['2026-08-01', 40, 60, -20]]);
+    expect(below.tsb.band).toBe('below');
+    const within = describeCtlAtlTsbTrend([['2026-08-01', 40, 30, 10]]);
+    expect(within.tsb.band).toBe('within');
+    const above = describeCtlAtlTsbTrend([['2026-08-01', 60, 20, 40]]);
+    expect(above.tsb.band).toBe('above');
+    // Boundary values are inclusive of the band.
+    const atLow = describeCtlAtlTsbTrend([['2026-08-01', 40, 35, RACE_DAY_TSB_BAND.low]]);
+    expect(atLow.tsb.band).toBe('within');
+    const atHigh = describeCtlAtlTsbTrend([['2026-08-01', 40, 15, RACE_DAY_TSB_BAND.high]]);
+    expect(atHigh.tsb.band).toBe('within');
+  });
+
+  it('classifies warmup status by history length: cold-start below CTL_COLD_START_DAYS, warming-up up to CTL_WARMED_UP_DAYS, warmed-up beyond', () => {
+    const cold = buildSeries('2026-01-01', CTL_COLD_START_DAYS - 1, (i) => [i, 5, 0]);
+    expect(describeCtlAtlTsbTrend(cold).warmup).toBe('cold-start');
+
+    const justWarming = buildSeries('2026-01-01', CTL_COLD_START_DAYS, (i) => [i, 5, 0]);
+    expect(describeCtlAtlTsbTrend(justWarming).warmup).toBe('warming-up');
+
+    // A real ~60-day athlete history (the documented motivating case) --
+    // past one time constant but nowhere near "a few multiples" of it.
+    const sixtyDays = buildSeries('2026-01-01', 60, (i) => [i, 5, 0]);
+    expect(describeCtlAtlTsbTrend(sixtyDays).warmup).toBe('warming-up');
+
+    const stillWarming = buildSeries('2026-01-01', CTL_WARMED_UP_DAYS - 1, (i) => [i, 5, 0]);
+    expect(describeCtlAtlTsbTrend(stillWarming).warmup).toBe('warming-up');
+
+    const fullyWarmed = buildSeries('2026-01-01', CTL_WARMED_UP_DAYS, (i) => [i, 5, 0]);
+    expect(describeCtlAtlTsbTrend(fullyWarmed).warmup).toBe('warmed-up');
+  });
+
+  it('is robust to non-daily (sparse) series -- date math, not index counting', () => {
+    // Weekly points, matching the shape used by this feature's own e2e
+    // fixture -- must not assume a fixed daily index spacing.
+    const series = [
+      ['2026-08-01', 40.0, 38.0, 2.0],
+      ['2026-08-08', 41.0, 30.0, 11.0],
+      ['2026-08-15', 40.5, 20.0, 20.5],
+      ['2026-08-22', 40.0, 15.0, 25.0],
+    ];
+    const result = describeCtlAtlTsbTrend(series);
+    expect(result.historyDays).toBe(22);
+    // window target = 2026-08-22 minus 14 days = 2026-08-08, which is an
+    // exact point in this series.
+    expect(result.ctlTrend.fromDate).toBe('2026-08-08');
+    expect(result.ctlTrend.toDate).toBe('2026-08-22');
   });
 });
 

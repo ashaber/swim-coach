@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -114,11 +115,15 @@ def test_coach_view_workouts_403_without_grant(client, allowlist, google) -> Non
 def test_coach_view_workouts_includes_quality_per_item(
     client, allowlist, store, google
 ) -> None:
-    from datetime import date
-
+    # Relative to `date.today()`, not a hardcoded absolute date -- this test
+    # must keep passing however far in the future it's actually run (see
+    # test_load_route.py's `test_athlete_load_returns_ctl_atl_tsb_shape`
+    # comment for the same reasoning), and now that this route has a
+    # trailing-window default, an absolute date would eventually fall
+    # outside it and start failing for reasons unrelated to the test.
     store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
-    _save_workout_for(store, "renee", date=date(2026, 8, 1))
-    _save_workout_for(store, "renee", date=date(2026, 8, 3))
+    _save_workout_for(store, "renee", date=date.today() - timedelta(days=1))
+    _save_workout_for(store, "renee", date=date.today())
 
     headers = _tim_headers(client, allowlist, google)
     response = client.get("/api/coach/athletes/renee/workouts", headers=headers)
@@ -138,11 +143,79 @@ def test_coach_view_workouts_includes_quality_per_item(
 
 
 def test_coach_view_workouts_service_token_passes(client, allowlist, store) -> None:
-    from datetime import date
-
-    _save_workout_for(store, "renee", date=date(2026, 8, 1))
+    _save_workout_for(store, "renee", date=date.today())
     response = client.get("/api/coach/athletes/renee/workouts", headers=auth_headers())
     assert response.status_code == 200
+
+
+# --- GET /api/coach/athletes/{slug}/workouts windowing (days param) ----------
+
+
+def test_coach_view_workouts_excludes_workouts_older_than_default_window(
+    client, allowlist, store, google
+) -> None:
+    from app.routes.coach import COACH_WORKOUTS_DEFAULT_DAYS
+
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    too_old = date.today() - timedelta(days=COACH_WORKOUTS_DEFAULT_DAYS + 1)
+    recent = date.today()
+    _save_workout_for(store, "renee", date=too_old, rpe=9)
+    _save_workout_for(store, "renee", date=recent, rpe=3)
+
+    headers = _tim_headers(client, allowlist, google)
+    response = client.get("/api/coach/athletes/renee/workouts", headers=headers)
+    assert response.status_code == 200
+    dates = [entry["date"] for entry in response.json()]
+    assert recent.isoformat() in dates
+    assert too_old.isoformat() not in dates
+
+
+def test_coach_view_workouts_boundary_day_is_included(
+    client, allowlist, store, google
+) -> None:
+    """A workout logged exactly `days` ago is on the inclusive edge of the
+    window (`since = today - timedelta(days=days)`, filtered with `>=`)."""
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    boundary = date.today() - timedelta(days=30)
+    _save_workout_for(store, "renee", date=boundary, rpe=5)
+
+    headers = _tim_headers(client, allowlist, google)
+    response = client.get(
+        "/api/coach/athletes/renee/workouts?days=30", headers=headers
+    )
+    assert response.status_code == 200
+    dates = [entry["date"] for entry in response.json()]
+    assert boundary.isoformat() in dates
+
+
+def test_coach_view_workouts_respects_days_query_param(
+    client, allowlist, store, google
+) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    outside_short_window = date.today() - timedelta(days=20)
+    _save_workout_for(store, "renee", date=outside_short_window, rpe=5)
+
+    headers = _tim_headers(client, allowlist, google)
+    response = client.get(
+        "/api/coach/athletes/renee/workouts?days=10", headers=headers
+    )
+    assert response.status_code == 200
+    dates = [entry["date"] for entry in response.json()]
+    assert outside_short_window.isoformat() not in dates
+
+
+def test_coach_view_workouts_days_out_of_bounds_is_422(
+    client, allowlist, google
+) -> None:
+    headers = _tim_headers(client, allowlist, google)
+    too_small = client.get(
+        "/api/coach/athletes/renee/workouts?days=0", headers=headers
+    )
+    too_large = client.get(
+        "/api/coach/athletes/renee/workouts?days=10000", headers=headers
+    )
+    assert too_small.status_code == 422
+    assert too_large.status_code == 422
 
 
 # --- GET /api/coach/athletes/{slug}/feedback ----------------------------------

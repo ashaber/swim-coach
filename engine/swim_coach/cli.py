@@ -47,7 +47,7 @@ from swim_coach.library_review import (
 )
 from swim_coach.models import Athlete, Event, Wellness, WeekPlan, Workout
 from swim_coach.parse_coach_text import parse_coach_text
-from swim_coach.parse_files import PARSERS_BY_EXTENSION, WorkoutDraft, parse_fit
+from swim_coach.parse_files import PARSERS_BY_EXTENSION, WorkoutDraft, backfill_sport_detail, parse_fit
 from swim_coach.plan import generate_week, scaffold_macro
 from swim_coach.provision import provision_athlete
 from swim_coach.store import FileStore, StoreInterface
@@ -871,6 +871,58 @@ def _cmd_simulate_taper(args: argparse.Namespace, store: StoreInterface) -> int:
     return 0
 
 
+def _cmd_backfill_sport_detail(args: argparse.Namespace, store: StoreInterface) -> int:
+    """One-time historical backfill of `backfill_sport_detail` (see
+    parse_files.py) across an athlete's already-persisted workouts --
+    closes the gap left by PR #116, which only fixed the walk/run
+    `sport_detail` mislabel (a Garmin "Run" activity profile worn during an
+    actual walk) for *newly ingested* .fit files, not workouts logged
+    before that fix shipped.
+
+    Defaults to a dry run: every workout that WOULD change is reported
+    (old -> new label) but nothing is saved. Pass `--apply` to actually
+    persist the relabel via `store.save_workout` -- an in-place field
+    update, never a delete, consistent with CLAUDE.md's "never delete
+    logs" safety rail. Never touches `workout.sport` (the resolved enum
+    bucket) or any workout that isn't a "run"-labeled cross_train entry --
+    see `backfill_sport_detail`'s docstring for the exact rule.
+    """
+    slug = args.athlete
+    try:
+        store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return _error_from_exception(_error_label(store, slug, "profile.yaml"), exc)
+
+    workouts = store.list_workouts(slug)
+    changes = []
+    for workout in workouts:
+        updated = backfill_sport_detail(workout)
+        if updated is None:
+            continue
+        entry = {
+            "workout_id": str(workout.id),
+            "date": workout.date.isoformat(),
+            "old_sport_detail": workout.sport_detail,
+            "new_sport_detail": updated.sport_detail,
+        }
+        if args.apply:
+            store.save_workout(slug, updated)
+        changes.append(entry)
+
+    print(
+        json.dumps(
+            {
+                "athlete": slug,
+                "applied": bool(args.apply),
+                "scanned": len(workouts),
+                "changed": len(changes),
+                "changes": changes,
+            }
+        )
+    )
+    return 0
+
+
 def _cmd_invite(args: argparse.Namespace, store: StoreInterface) -> int:
     """Add (or re-invite) a beta user to the server-side allowlist
     (allowed_emails). Adding a beta user is a DATA change -- this row -- never
@@ -1365,6 +1417,21 @@ def build_parser() -> argparse.ArgumentParser:
         "(default: taper_search.BASELINE_WINDOW_DAYS)",
     )
 
+    p_backfill_sport_detail = subparsers.add_parser(
+        "backfill-sport-detail",
+        help=(
+            "one-time backfill of the walk/run sport_detail relabel (PR #116) "
+            "onto already-persisted workouts; dry-run by default, pass --apply "
+            "to actually save"
+        ),
+    )
+    p_backfill_sport_detail.add_argument("--athlete", required=True)
+    p_backfill_sport_detail.add_argument(
+        "--apply",
+        action="store_true",
+        help="persist the relabel (default: dry-run, prints changes without saving)",
+    )
+
     p_invite = subparsers.add_parser(
         "invite", help="allowlist a beta user's Google email (server-side identity)"
     )
@@ -1462,6 +1529,7 @@ _COMMANDS = {
     "ingest": _cmd_ingest,
     "analyze": _cmd_analyze,
     "simulate-taper": _cmd_simulate_taper,
+    "backfill-sport-detail": _cmd_backfill_sport_detail,
     "invite": _cmd_invite,
     "list-invites": _cmd_list_invites,
     "revoke-invite": _cmd_revoke_invite,
