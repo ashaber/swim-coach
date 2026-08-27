@@ -19,7 +19,7 @@ from datetime import date
 from types import SimpleNamespace
 from typing import Any
 
-from swim_coach.models import Event, Feedback, Workout
+from swim_coach.models import Event, Feedback, Wellness, Workout
 
 TEST_API_TOKEN = "test-token-please-ignore"  # noqa: S105 - test fixture, not a real secret
 TEST_GOOGLE_CLIENT_ID = "test-client-id.apps.googleusercontent.com"
@@ -69,6 +69,27 @@ def make_event(**overrides: Any) -> Event:
     )
     data.update(overrides)
     return Event(**data)
+
+
+def make_wellness(**overrides: Any) -> Wellness:
+    """A daily wellness check-in fixture. Used by test_context.py to
+    exercise `summarize_rollup`'s `wellness_baseline_deviation` field --
+    `resting_hr`/`hrv` default to `None` here (matching most real check-ins,
+    which don't log either) so a caller must opt in explicitly."""
+    data: dict[str, Any] = dict(
+        id=uuid.uuid4(),
+        athlete_id=uuid.uuid4(),
+        date=date(2026, 7, 1),
+        sleep_quality=4,
+        sleep_hours=7.5,
+        stress=2,
+        soreness=2,
+        motivation=4,
+        resting_hr=None,
+        hrv=None,
+    )
+    data.update(overrides)
+    return Wellness(**data)
 
 
 class SpyFeedbackStore:

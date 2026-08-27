@@ -101,6 +101,12 @@ def page(request, base_url):
         seed_settings(ctx)
         ctx.route('**/api/plan*', lambda route: route.fulfill(
             status=200, content_type='application/json', body=PLAN_STUB))
+        # GET /api/plan/load fires unconditionally at boot alongside GET
+        # /api/plan (main.js's loadPlanLoad) -- same treatment as the stub
+        # just above.
+        ctx.route('**/api/plan/load*', lambda route: route.fulfill(
+            status=200, content_type='application/json',
+            body='{"athlete":"renee","weeks":12,"ctl_atl_tsb":[]}'))
         pg = ctx.new_page()
         js_errors: list[str] = []
         pg.on('pageerror', lambda e: js_errors.append(str(e)))

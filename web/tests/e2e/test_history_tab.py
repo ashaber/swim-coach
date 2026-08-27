@@ -103,6 +103,9 @@ def _make_ctx(pw, cfg, *, workouts=WORKOUTS_STUB, plan=PLAN_STUB):
     seed_identity(ctx)
     seed_settings(ctx)
     ctx.route('**/api/plan*', _cors_json(plan))
+    # GET /api/plan/load fires unconditionally at boot alongside GET
+    # /api/plan (main.js's loadPlanLoad) -- same CORS-preflight treatment.
+    ctx.route('**/api/plan/load*', _cors_json('{"athlete":"renee","weeks":12,"ctl_atl_tsb":[]}'))
     ctx.route('**/api/workouts*', _cors_json(workouts))
     return browser, ctx
 

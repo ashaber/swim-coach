@@ -52,6 +52,7 @@ def _cors_route(status, content_type, body):
 
 
 PLAN_STUB = '{"slug":"renee","athlete":{"name":"Renee"},"events":[],"weeks":[],"macro":{"blocks":[]}}'
+PLAN_LOAD_STUB = '{"athlete":"renee","weeks":12,"ctl_atl_tsb":[]}'
 
 
 @pytest.fixture(params=BROWSERS)
@@ -101,6 +102,13 @@ def test_mocked_identity_targets_its_own_athlete_on_api_calls(signed_out_page):
         cors_handler(route)
 
     page.route('**/api/plan*', handle_plan)
+    # GET /api/plan/load fires unconditionally at boot alongside GET
+    # /api/plan (main.js's loadPlanLoad) -- unmocked, it fails on CORS the
+    # same way /api/plan itself would without the stub above.
+    page.route(
+        '**/api/plan/load*',
+        _cors_route(200, 'application/json', '{"athlete":"andrew","weeks":12,"ctl_atl_tsb":[]}'),
+    )
 
     # Simulate a completed sign-in the same way identity.js itself persists
     # one: write {name, athlete, role} to localStorage under
@@ -240,6 +248,7 @@ def signed_in_page(request, base_url):
         # fetches don't surface as uncaught access-control errors in WebKit
         # (this test doesn't care about their content).
         ctx.route('**/api/plan*', _cors_route(200, 'application/json', PLAN_STUB))
+        ctx.route('**/api/plan/load*', _cors_route(200, 'application/json', PLAN_LOAD_STUB))
         ctx.route('**/api/athlete*', _cors_route(200, 'application/json', '{"slug": "renee", "name": "Renee"}'))
         ctx.route('**/api/grants*', _cors_route(200, 'application/json', '[]'))
         pg = ctx.new_page()

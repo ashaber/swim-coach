@@ -14,11 +14,13 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from swim_coach.quality import match_workout_to_session, workout_quality
 from swim_coach.models import Session
 
 from app.auth import Principal, require_auth, resolve_coach_athlete
+from app.context import summarize_rollup
+from app.routes.plan import LOAD_GRAPH_DEFAULT_WEEKS, LOAD_GRAPH_MAX_WEEKS, LOAD_GRAPH_MIN_WEEKS
 from app.store_factory import make_store
 
 router = APIRouter()
@@ -78,6 +80,32 @@ async def coach_view_workouts(
     # than relying on that filename-ordering coincidence.
     result.sort(key=lambda w: w["date"], reverse=True)
     return result
+
+
+@router.get("/api/coach/athletes/{slug}/load")
+async def coach_view_load(
+    slug: str,
+    request: Request,
+    weeks: int = Query(LOAD_GRAPH_DEFAULT_WEEKS, ge=LOAD_GRAPH_MIN_WEEKS, le=LOAD_GRAPH_MAX_WEEKS),
+    principal: Principal = Depends(require_auth),
+) -> dict:
+    """The Banister CTL/ATL/TSB series plus the `wellness_baseline_deviation`
+    resting-HR/HRV cross-check for the coach-mode roster view's chart --
+    coach-access mirror of `GET /api/plan/load` (`backend/app/routes/plan.py`),
+    same minimal graph-shaped response, same `summarize_rollup` call, gated
+    via `resolve_coach_athlete` instead of `resolve_athlete`. See
+    `routes/plan.py`'s `LOAD_GRAPH_DEFAULT_WEEKS` for why the default window
+    is longer than `get_plan_summary`'s."""
+    settings = request.app.state.settings
+    slug = resolve_coach_athlete(principal, slug)
+    store = make_store(settings)
+    rollup = summarize_rollup(store, slug, weeks=weeks)
+    return {
+        "athlete": slug,
+        "weeks": weeks,
+        "ctl_atl_tsb": rollup["ctl_atl_tsb"],
+        "wellness_baseline_deviation": rollup["wellness_baseline_deviation"],
+    }
 
 
 @router.get("/api/coach/athletes/{slug}/feedback")

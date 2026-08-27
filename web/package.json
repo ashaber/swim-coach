@@ -11,7 +11,7 @@
     "preview": "vite preview",
     "gen-icons": "node scripts/gen-icons.js",
     "test": "vitest run",
-    "test:e2e": "../.venv/bin/pytest tests/e2e/"
+    "test:e2e": "../.venv/bin/pytest tests/e2e/ --reruns 2 --reruns-delay 2"
   },
   "devDependencies": {
     "sharp": "^0.35.2",

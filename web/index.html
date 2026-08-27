@@ -103,6 +103,13 @@
     .week-head .vol b { color: var(--ink); font-weight: 700; }
     .rationale { padding: 14px 20px; font-size: 13px; color: var(--ink-soft); border-bottom: 1px solid var(--note-border); background: var(--note-bg); }
     .rationale b { font-family: var(--display); color: var(--note-label); font-weight: 700; }
+    .race-week-checklist { padding: 14px 20px; border-bottom: 1px solid var(--note-border); background: var(--note-bg); }
+    .race-week-checklist h4 { font-family: var(--display); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--note-label); font-weight: 700; margin: 0 0 10px; }
+    .race-week-item { display: grid; grid-template-columns: 60px 90px 1fr; gap: 10px; align-items: baseline; font-size: 12.5px; padding: 5px 0; }
+    .race-week-item + .race-week-item { border-top: 1px solid var(--note-border); }
+    .race-week-date { color: var(--ink-faint); }
+    .race-week-cat { font-family: var(--display); font-size: 10px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--note-label); }
+    .race-week-label { color: var(--ink-soft); }
     .days { display: grid; }
     .day-row { display: grid; grid-template-columns: 92px 1fr; gap: 14px; padding: 13px 20px; align-items: start; }
     .day-row + .day-row { border-top: 1px solid var(--line-soft); }
@@ -156,6 +163,42 @@
     .zbar-track { background: var(--line-soft); border-radius: 4px; height: 8px; }
     .zbar { height: 8px; border-radius: 4px; background: linear-gradient(90deg, var(--c-recovery), var(--c-signal)); opacity:.85; }
     .zrow .p { color: var(--ink-soft); }
+
+    /* CTL/ATL/TSB training-load chart (see views.js's renderLoadChart /
+       plan.js's ctlAtlTsbChartGeometry). `width:100%;height:auto` on the
+       SVG plus its own `viewBox` is what keeps this responsive on narrow
+       mobile viewports without horizontal overflow -- the intrinsic pixel
+       size in the viewBox is just a coordinate space, never the rendered
+       size. */
+    .load-chart-panel { padding-bottom: 18px; }
+    .load-chart-svg { width: 100%; height: auto; display: block; margin-top: 4px; }
+    .load-chart-band { fill: var(--accent); opacity: .12; }
+    .load-chart-gridline { stroke: var(--line-soft); stroke-width: 1; }
+    .load-chart-axis-label { font-family: var(--mono); font-size: 9px; fill: var(--ink-faint); }
+    .load-chart-line { fill: none; stroke-width: 2; }
+    .load-chart-legend { margin-top: 10px; }
+    .load-chart-band-dot { background: var(--accent); opacity: .4; }
+    .load-chart-note { font-size: 12px; color: var(--ink-faint); margin-top: 12px; line-height: 1.55; }
+
+    /* Resting HR / HRV baseline-deviation cross-check (see views.js's
+       renderWellnessBaselineDeviation / plan.js's
+       describeWellnessBaselineDeviation) -- deliberately its own visually
+       distinct block below the CTL/ATL/TSB chart (dashed divider, its own
+       heading, callout tiles with their own color language), never a
+       fourth line blended into the chart above. */
+    .wellness-baseline-deviation { margin-top: 18px; padding-top: 16px; border-top: 1px dashed var(--line-soft); }
+    .wellness-baseline-deviation h4 { margin: 0 0 10px; font-family: var(--display); font-size: 12.5px; font-weight: 800;
+      text-transform: uppercase; letter-spacing: .04em; color: var(--ink-soft); }
+    .wellness-stats { display: flex; gap: 12px; flex-wrap: wrap; }
+    .wellness-stat { flex: 1 1 180px; padding: 10px 12px; border-radius: var(--radius-sm);
+      background: var(--paper-2); border: 1px solid var(--line-soft); }
+    .wellness-stat-label { display: block; font-size: 11px; color: var(--ink-faint); }
+    .wellness-stat-value { display: block; font-size: 20px; font-weight: 800; margin-top: 3px; }
+    .wellness-stat-status { display: block; font-size: 12px; margin-top: 2px; }
+    .wellness-stat--good .wellness-stat-value, .wellness-stat--good .wellness-stat-status { color: var(--mint); }
+    .wellness-stat--concerning { background: var(--c-signal-wash); border-color: var(--c-signal); }
+    .wellness-stat--concerning .wellness-stat-value, .wellness-stat--concerning .wellness-stat-status { color: var(--c-signal); }
+    .wellness-stat--no-data .wellness-stat-value, .wellness-stat--no-data .wellness-stat-status { color: var(--ink-faint); }
 
     .disc { margin-top: 22px; font-size: 12px; color: var(--ink-faint); text-align: center; line-height: 1.6; }
 

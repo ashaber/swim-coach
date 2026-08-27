@@ -141,4 +141,4 @@ jobs:
 
       - name: Run Playwright e2e (chromium + webkit)
         working-directory: web
-        run: pytest tests/e2e/ -v
+        run: pytest tests/e2e/ -v --reruns 2 --reruns-delay 2

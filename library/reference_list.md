@@ -379,6 +379,63 @@ input, not itself citable).
   loss overestimates sweat loss — including in published swim "sweat rate"
   figures.**
 
+## Race-week preparation: carbohydrate loading & bodywork timing
+
+Curated for `03-periodization.md`'s "Race week" section (this session's
+pass). Distinct from the "Fuelling, hydration & hyponatremia" section
+above: those citations ground IN-RACE feeding once the swim is underway;
+these ground the PRE-race carbohydrate-loading protocol and pre-race
+bodywork timing, both verified by direct web search this session.
+
+- **✓ Burke L.M., Hawley J.A., Wong S.H.S., Jeukendrup A.E. (2011)** —
+  "Carbohydrates for training and competition" — *Journal of Sports
+  Sciences*, 29(sup1):S17-S27. The consensus review behind the now-standard
+  pre-race carbohydrate-loading target: 10-12 g/kg body weight/day for
+  36-48h before events lasting longer than ~90 minutes, in already
+  well-trained athletes. `[ADAPTED: general-endurance]`, Confidence: high —
+  title/authors/journal/volume/finding independently confirmed this
+  session; not swim-specific, but this is general exercise-physiology
+  consensus guidance, not a sport-specific finding.
+- **✓ Bussau V.A., Fairchild T.J., Rao A., Steele P., Fournier P.A.
+  (2002)** — "Carbohydrate loading in human muscle: an improved 1 day
+  protocol" — *European Journal of Applied Physiology*, 87(3):290-295. 8
+  endurance-trained athletes; combining physical inactivity with 10
+  g/kg/day high-glycemic-index carbohydrate intake raised muscle glycogen
+  from 95 to 180 mmol/kg wet mass within a single day, with no depletion
+  phase, and two further days of the same diet added no further store.
+  `[ADAPTED: general-endurance]`, Confidence: high — the direct evidence
+  behind `03-periodization.md`'s "no depletion phase needed for a
+  well-trained athlete" framing.
+- **✓ Weerapong P., Hume P.A., Kolt G.S. (2005)** — "The Mechanisms of
+  Massage and Effects on Performance, Muscle Recovery and Injury
+  Prevention" — *Sports Medicine*, 35(3):235-256. Narrative review: massage
+  shows little to no evidence of a direct performance benefit, but a
+  consistent reduction in perceived soreness/fatigue and psychological
+  benefit (lower anxiety/stress, improved mood and perceived recovery).
+  `[ADAPTED: general-endurance]`, Confidence: medium (narrative review,
+  many sports, not swim-specific) — confirmed by direct web search this
+  session.
+- **✓ Dakić M., Toskić L., Ilić V., Đurić S., Dopsaj M., Šimenko J.
+  (2023)** — "The Effects of Massage Therapy on Sport and Exercise
+  Performance: A Systematic Review" — *Sports*, 11(6):110. 114-study
+  PRISMA systematic review corroborating Weerapong et al. (2005) with a
+  larger, more recent evidence base: massage generally does not affect
+  motor abilities (except flexibility), but reduces pain/DOMS and improves
+  mood/relaxation/perceived recovery. `[ADAPTED: general-endurance]`,
+  Confidence: medium-high (systematic review, many sports) — confirmed by
+  direct web search this session.
+
+**⚠ Not independently verified this session:** the specific "schedule
+deep/aggressive bodywork 3-5 days before competition, not the final 1-2
+days" TIMING rule (`plan.py`'s `BODYWORK_WINDOW_DAYS_OUT`) is widespread
+sports-massage-practitioner convention found via general web search
+(multiple practitioner/clinic sources agree on the 3-5-day window and the
+rationale for avoiding the final 1-2 days), not a citation from any of the
+four journal sources above. Treated in `plan.py`/`03-periodization.md` as
+**Coach judgment / practitioner convention**, explicitly not tagged
+`[EVIDENCE]`/`[ADAPTED]` — see this project's evidence-discipline rule in
+`00-conventions.md` for why that distinction matters.
+
 ## Energy availability & RED-S/REDs
 
 Curated for `13-reds-energy-availability.md` (2026-07-13 pass;
@@ -676,6 +733,95 @@ raw research input, not itself citable).
   in the current model). Confidence: low (number), the citation itself:
   high. Test: revisit both the constant and this entry once the primary
   text is directly accessible.
+- **✓ Wallace L.K., Slattery K.M., Coutts A.J. (2009)** — "The Ecological
+  Validity and Application of the Session-RPE Method for Quantifying
+  Training Loads in Swimming" — *Journal of Strength and Conditioning
+  Research*, 23(1):33-38. 12 well-trained swimmers, 20 training sessions
+  each: session-RPE tracked heart-rate-based training-impulse and distance
+  criterion measures well; athlete/coach sRPE agreement was also checked.
+  `[EVIDENCE: swim]`, Confidence: medium-high — verified by title/author/
+  journal/volume/pages search this session, summary only (full text not
+  fetched). This is swim-specific support for sRPE's **validity** as a
+  training-load measure specifically — see the Haddad et al. (2017) entry
+  immediately below for the separate, more mixed question of sRPE
+  **reliability**, which has no equivalent swim-specific study.
+- **✓ Haddad M., Stylianides G., Djaoui L., Dellal A., Chamari K.
+  (2017)** — "Session-RPE Method for Training Load Monitoring: Validity,
+  Ecological Usefulness, and Influencing Factors" — *Frontiers in
+  Neuroscience*, 11:612. Review of the session-RPE literature; its own
+  reliability table (ICC across the reviewed studies) reports values
+  ranging from ~0.55 (Scott et al. 2013, Australian football, short
+  intermittent-running bouts — "fair," borderline "poor") up to ~0.95
+  (resistance-training/basketball/karate protocols — "excellent") —
+  i.e. session-RPE reliability is real but context/protocol-dependent,
+  markedly more mixed than its validity evidence. `[ADAPTED:
+  general-endurance/multi-sport]`, Confidence: medium (review-level
+  synthesis, verified by title/author/journal search this session; the
+  underlying ICC table read via a fetched summary, not independently
+  recomputed from each cited study). No swim-specific *reliability* number
+  was found this session — only the swim-specific *validity* study above
+  (Wallace, Slattery & Coutts 2009) — a real, flagged gap, not filled in
+  with an assumed figure. Grounds `03-periodization.md`'s "RHR/HRV baseline
+  deviation" section's rationale for treating physiologically-measured
+  `resting_hr`/`hrv` as an independent corroborating signal alongside
+  sRPE-derived `ctl_atl_tsb`, rather than trusting sRPE-derived load alone.
+- **✓ Banister E.W. (1991)** — "Modeling Elite Athletic Performance" — in
+  *Physiological Testing of Elite Athletes* (Green H.J., McDougall J.D.,
+  Wenger H.A., eds), Human Kinetics, Champaign IL, pp. 403-424. The
+  original TRIMP (TRaining IMPulse) heart-rate-reserve exponential
+  weighting formula, derived separately for men and women from each
+  group's own blood-lactate profile as exercise intensity rises: `weight =
+  0.64 * e^(1.92 * HRR_fraction)` for men, `0.86 * e^(1.67 * HRR_fraction)`
+  for women. Verified by direct web search this session (title/authors/
+  publisher/pages confirmed). `[ADAPTED: general-endurance]` — not
+  swim-specific; predates sRPE as the field's own original heart-rate-based
+  training-load method. **⚠ Get this right:** several popular training-log/
+  calculator sites reproduce this with the MALE 0.64 coefficient applied to
+  both sexes and only the exponent swapped for women — that does **not**
+  match this primary source; the coefficient AND exponent both differ by
+  sex. Used by `engine/swim_coach/load.py`'s tier-2 (HR-based TRIMP)
+  session-load fallback, for RPE-less workouts with logged HR telemetry —
+  see `03-periodization.md`'s "Tiered session load" section.
+- **✓ Morton R.H., Fitz-Clarke J.R., Banister E.W. (1990)** — "Modeling
+  human performance in running" — *Journal of Applied Physiology*,
+  69(3):1171-1177. Corroborating source for the Banister (1991) TRIMP
+  entry above — same exponential heart-rate-reserve weighting family,
+  applied to running, same lead author. Verified by direct web search this
+  session.
+- **~ Ausland Å., Kelemen B., Seiler S. (2026)** — "An Exploratory Study of
+  Maximal Heart Rate Determination in Endurance Athletes: Laboratory
+  Testing Versus Field Based" — *Frontiers in Sports and Active Living*,
+  8:1806303. Found real athlete-reported field-effort HRmax exceeded
+  standard age-based formulas (Fox 220-age, Tanaka 208-0.7*age) by ~5-6 bpm
+  on average, supporting field-observed HR data over generic formulas.
+  Verified by direct fetch this session (authors/journal/volume/article-ID/
+  date confirmed) but marked `~` here because it's cited as corroborating
+  context for a related-but-distinct practice, not an exact match: it
+  compares self-reported *maximal-effort* HR against lab tests/formulas,
+  while `engine/swim_coach/load.py`'s `estimate_hr_max` uses "highest
+  incidentally observed HR across ordinary training sessions" (no
+  standardized max-effort test) — a practitioner convention this paper
+  supports in spirit, not one it directly tested. PROVISIONAL, not
+  `[EVIDENCE]`.
+- **✓ Allen H., Coggan A. (2010)** — *Training and Racing with a Power
+  Meter* (2nd ed.), VeloPress. Originating practitioner text for
+  cycling Training Stress Score (TSS) and Intensity Factor (IF): `TSS =
+  duration_hours * IF^2 * 100`, `IF = Normalized Power / FTP` (1 hour at
+  FTP = TSS 100). A practitioner/coaching text, not a peer-reviewed
+  journal source — same footing as this project's other TrainingPeaks/
+  cycling-convention citations (`CTL_TIME_CONSTANT_DAYS`/
+  `ATL_TIME_CONSTANT_DAYS`, Thomas/Mujika/Busso 2008 entry above).
+  `[ADAPTED: cycling]`. TrainingPeaks' own swim-specific documentation
+  ("Calculating Swimming TSS Score," confirmed by direct fetch this
+  session) cubes the intensity factor instead of squaring it for swimming
+  specifically, with a stated physical rationale (water resistance scales
+  stress faster than air resistance does for running) — used as
+  `engine/swim_coach/load.py`'s tier-3 (swim pace-based intensity)
+  session-load fallback: `IF = css_pace_s_per_100m / avg_pace_s_per_100m`,
+  `swim_tss = duration_hours * IF^3 * 100`. Confidence: medium (a
+  widely-used practitioner convention with a stated physical rationale,
+  not an independently validated exponent) — see `03-periodization.md`'s
+  "Tiered session load" section for the full test/revisit note.
 
 ## Cross-discipline endurance (cycling / running / triathlon)
 
@@ -819,6 +965,37 @@ raw research input, not itself citable).
   exact population and question) — swim-specific corroboration for
   `03-periodization.md`'s ACWR-is-weak caveat, currently sourced only from
   the running Garmin-RunSafe cohort.
+- **✓ Bosquet L., Merkari S., Arvisais D., Aubert A.E. (2008)** — "Is heart
+  rate a convenient tool to monitor over-reaching? A systematic review of
+  the literature" — *British Journal of Sports Medicine*, 42:709-714.
+  Systematic review/meta-analysis: overload training produced a real,
+  moderate increase in resting heart rate on average, but the effect size
+  was small-to-moderate — small enough that it can fall within resting
+  HR's own day-to-day variability when read as a single number.
+  `[ADAPTED: general-endurance]`, Confidence: medium-high (review-level;
+  verified by title/author/journal/volume/pages search this session,
+  summary only). Grounds `03-periodization.md`'s "RHR/HRV baseline
+  deviation" section's choice to report a **trend-relative percentage
+  against the athlete's own rolling baseline**, not a raw single-day RHR
+  threshold.
+- **✓ Kamandulis S., Juodsnukis A., Stanislovaitiene J., Zuoziene I.J.,
+  Bogdelis A., Mickevicius M., Eimantas N., Snieckus A., Olstad B.H.,
+  Venckunas T. (2020)** — "Daily Resting Heart Rate Variability in
+  Adolescent Swimmers during 11 Weeks of Training" — *International
+  Journal of Environmental Research and Public Health*, 17(6):2097. 22
+  national-level adolescent swimmers (sprint/middle-distance), 11 weeks:
+  day-to-day HRV alone had **limited value** for estimating an athlete's
+  load/tolerance balance, but a consistent ~4.5% HRV **reduction** emerged
+  after 3-5 **consecutive** high-volume (>6 km/day) training days, and HRV
+  correlated inversely (r=-0.35, p<0.05) with large (>7 km/day) week-to-week
+  training-load shifts. `[EVIDENCE: swim]`, Confidence: high for
+  population/question match — verified by title/author/journal/DOI search
+  this session, summary only (full text not fetched). The key swim-specific
+  citation for `03-periodization.md`'s "RHR/HRV baseline deviation"
+  section: HRV is a weak *daily* signal but a real one when read as a
+  sustained deviation from the athlete's own baseline under materially
+  increased or extended load — the taper/build-block monitoring context
+  that function targets, not routine day-to-day noise.
 
 ## Wearables & device validity
 
@@ -952,6 +1129,18 @@ resource itself and are kept.
 
 - Santa Barbara Channel Swimming Association — channel/marathon-swim training
   guidance: <https://santabarbarachannelswim.org/training>
+- TrainingPeaks — "Calculating Swimming TSS Score" (confirmed by direct
+  fetch this session): documents cubing (not squaring) the intensity
+  factor for swim-specific Training Stress Score, with a stated physical
+  rationale. Source for `engine/swim_coach/load.py`'s
+  `SWIM_TSS_INTENSITY_EXPONENT = 3.0`:
+  <https://www.trainingpeaks.com/learn/articles/calculating-swimming-tss-score/>
+- American Heart Association — "All About Heart Rate": commonly-cited
+  ~60-100 bpm normal adult resting-heart-rate range. Source for
+  `engine/swim_coach/load.py`'s `HR_REST_GENERIC_FALLBACK_BPM = 60.0`
+  (the athlete-never-logged-one fallback, deliberately the top of this
+  range — see that constant's comment for why):
+  <https://www.heart.org/en/health-topics/high-blood-pressure/the-facts-about-high-blood-pressure/all-about-heart-rate-pulse>
 - PurplePatch Fitness — open-water pacing tips:
   <https://www.purplepatchfitness.com/freetrainingtips/triathlon-open-water-swimming-tips-and-strategies>
 - Fueling technique ("bottle on a string"):

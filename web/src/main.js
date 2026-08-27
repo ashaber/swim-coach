@@ -14,12 +14,12 @@ import {
 } from './chat.js';
 import { loadSettings, saveSettings, isConfigured } from './settings.js';
 import {
-  streamChat, postWorkout, postWellness, fetchPlan, getAthlete, patchAthlete,
+  streamChat, postWorkout, postWellness, fetchPlan, fetchPlanLoad, getAthlete, patchAthlete,
   postFeedback, listFeedback, uploadWorkoutFile, listWorkouts, syncWorkouts, logout, onboard,
   pushSessionToIntervals,
   downloadGarminFit,
   createGrant, listGrants, revokeGrant,
-  listCoachedAthletes, fetchCoachWorkouts, fetchCoachFeedback, replyToCoachFeedback,
+  listCoachedAthletes, fetchCoachWorkouts, fetchCoachFeedback, fetchCoachLoad, replyToCoachFeedback,
 } from './api.js';
 import {
   serializeWorkoutForm, serializeWellnessForm, profileFormFromAthlete, serializeProfileForm,
@@ -105,6 +105,11 @@ function createRosterState() {
     athletes: { status: 'idle', data: [], error: null },
     workouts: { status: 'idle', data: [], error: null },
     feedback: { status: 'idle', data: [], error: null },
+    // The coach roster's CTL/ATL/TSB training-load chart for whichever
+    // athlete is currently acted-as (views.js's renderLoadChart, fed by
+    // GET /api/coach/athletes/<slug>/load -- see api.js's fetchCoachLoad).
+    // Same {status, data, error} shape as `workouts`/`feedback` above.
+    load: { status: 'idle', data: null, error: null },
     replyDrafts: {},
     replySubmit: { status: 'idle', error: null, feedbackId: null },
     // Slice: null shows the workouts/feedback lists for the acting-as
@@ -165,6 +170,12 @@ const state = {
     token: initialOnboardingActive ? initialSettingsForm.token : null,
   },
   plan: { status: 'idle', data: null, error: null },
+  // The Plan tab's CTL/ATL/TSB training-load chart (views.js's
+  // renderLoadChart) -- GET /api/plan/load, a minimal separate fetch from
+  // `plan` above since it's the only consumer of this field (see
+  // api.js's fetchPlanLoad). Same {status, data, error} async-state shape,
+  // same lazy-load-on-tab-visit trigger as `plan` (see loadPlanLoad/setTab).
+  planLoad: { status: 'idle', data: null, error: null },
   // Slice: null shows the ordinary "This week"/"Next week" cards; a session
   // id opens that session's in-tab detail view instead (see views.js's
   // renderWeeksSection). Reset on leaving the Plan tab (setTab) and pruned
@@ -358,6 +369,7 @@ function renderTabContent() {
         workoutDetailId: state.roster.workoutDetailId,
         backendConfigured,
         online: state.online,
+        load: state.roster.load,
       });
     case 'settings':
       return renderSettingsTab({
@@ -384,6 +396,7 @@ function renderTabContent() {
           sessionPush: state.sessionPush,
           allWeeksOpen: state.allWeeksOpen,
           glossaryOpen: state.glossaryOpen,
+          load: state.planLoad,
         },
         state.planSessionDetailId,
       );
@@ -450,6 +463,7 @@ function applyAthleteSession(identity, token) {
   // is also what covers the "just saved settings, now ready" case, so there
   // isn't a second load-triggering path to keep in sync with this one.
   state.plan = { status: 'idle', data: null, error: null };
+  state.planLoad = { status: 'idle', data: null, error: null };
   state.planSessionDetailId = null;
   state.sessionPush = null;
   state.profileForm = createProfileForm();
@@ -501,6 +515,7 @@ function resetToSignedOut({ identityError = null } = {}) {
   saveOnboardingActive(false);
   state.chat = loadChatSession(SIGNED_OUT_CHAT_KEY);
   state.plan = { status: 'idle', data: null, error: null };
+  state.planLoad = { status: 'idle', data: null, error: null };
   state.planSessionDetailId = null;
   state.sessionPush = null;
   state.profileForm = createProfileForm();
@@ -612,6 +627,7 @@ async function handleOnboardSubmit() {
     log.info('onboard.success', { athlete: identity.athlete });
     render();
     loadPlan(); // calls render() itself
+    loadPlanLoad(); // calls render() itself
     maybeLoadProfile();
     maybeLoadGrants();
   } catch (err) {
@@ -707,6 +723,37 @@ async function loadPlan() {
   } else {
     log.error('app.plan.load_failed', { error: result.error });
     state.plan = { status: 'error', data: null, error: result.error };
+  }
+  render();
+}
+
+/** Fetches GET /api/plan/load?athlete=<slug> for the Plan tab's CTL/ATL/TSB
+ * training-load chart (views.js's renderLoadChart) -- a minimal, separate
+ * fetch from loadPlan() above (see api.js's fetchPlanLoad doc comment for
+ * why). Called alongside loadPlan() at every one of its own call sites
+ * (initial load, tab-visit, History tab's shared Plan fetch) rather than
+ * inventing a new refresh trigger -- the chart refreshes exactly when the
+ * rest of the Plan tab's data does. */
+async function loadPlanLoad() {
+  const settings = state.settingsForm;
+  const identity = state.identity;
+  if (!isConfigured(settings, identity)) {
+    state.planLoad = { status: 'idle', data: null, error: null };
+    render();
+    return;
+  }
+
+  state.planLoad = { status: 'loading', data: state.planLoad.data, error: null };
+  render();
+
+  const result = await fetchPlanLoad({ baseUrl: settings.baseUrl, token: settings.token, athlete: identity.athlete });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    log.info('app.plan_load.loaded', { points: result.data.ctl_atl_tsb?.length ?? 0 });
+    state.planLoad = { status: 'ready', data: result.data, error: null };
+  } else {
+    log.error('app.plan_load.load_failed', { error: result.error });
+    state.planLoad = { status: 'error', data: null, error: result.error };
   }
   render();
 }
@@ -1484,29 +1531,60 @@ async function loadCoachFeedback(slug) {
   render();
 }
 
-/** Opens one coached athlete's detail view (workouts + feedback), fetching
- * both -- mirrors handleOpenHistoryDetail/handleOpenSessionDetail's
- * "set the selection, render, then fetch" shape, minus the pushState/
- * popstate wiring those two use (this is a tab-internal list<->detail
- * swap, not something a hardware back press needs to unwind separately --
- * setTab already tears down every other tab's own detail view the same
- * way on tab-leave; there is no cross-tab back-button expectation here). */
+/** Fetches GET /api/coach/athletes/<slug>/load for the roster tab's
+ * CTL/ATL/TSB training-load chart (views.js's renderLoadChart) -- same
+ * shape and pattern as loadCoachWorkouts/loadCoachFeedback above, just its
+ * own state.roster.load slice (see api.js's fetchCoachLoad doc comment). */
+async function loadCoachLoad(slug) {
+  const settings = state.settingsForm;
+  if (!slug || !isConfigured(settings, state.identity)) {
+    state.roster.load = { status: 'idle', data: null, error: null };
+    render();
+    return;
+  }
+
+  state.roster.load = { status: 'loading', data: state.roster.load.data, error: null };
+  render();
+
+  const result = await fetchCoachLoad({ baseUrl: settings.baseUrl, token: settings.token, athlete: slug });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    log.info('roster.load_loaded', { athlete: slug, points: result.data.ctl_atl_tsb?.length ?? 0 });
+    state.roster.load = { status: 'ready', data: result.data, error: null };
+  } else {
+    log.error('roster.load_load_failed', { athlete: slug, error: result.error });
+    state.roster.load = { status: 'error', data: null, error: result.error };
+  }
+  render();
+}
+
+/** Opens one coached athlete's detail view (workouts + feedback + training
+ * load), fetching all three -- mirrors handleOpenHistoryDetail/
+ * handleOpenSessionDetail's "set the selection, render, then fetch" shape,
+ * minus the pushState/popstate wiring those two use (this is a tab-internal
+ * list<->detail swap, not something a hardware back press needs to unwind
+ * separately -- setTab already tears down every other tab's own detail view
+ * the same way on tab-leave; there is no cross-tab back-button expectation
+ * here). */
 function handleSelectCoachedAthlete(slug) {
   if (!slug) return;
   state.roster.actingAsAthlete = slug;
   state.roster.workouts = { status: 'idle', data: [], error: null };
   state.roster.feedback = { status: 'idle', data: [], error: null };
+  state.roster.load = { status: 'idle', data: null, error: null };
   state.roster.workoutDetailId = null;
   log.info('roster.athlete_selected', { athlete: slug });
   render();
   loadCoachWorkouts(slug); // calls render() itself
   loadCoachFeedback(slug); // calls render() itself
+  loadCoachLoad(slug); // calls render() itself
 }
 
 function handleBackToRoster() {
   state.roster.actingAsAthlete = null;
   state.roster.workouts = { status: 'idle', data: [], error: null };
   state.roster.feedback = { status: 'idle', data: [], error: null };
+  state.roster.load = { status: 'idle', data: null, error: null };
   state.roster.workoutDetailId = null;
   render();
 }
@@ -1714,6 +1792,13 @@ function setTab(tab) {
   if (tab === 'plan' && (state.plan.status === 'idle' || state.plan.status === 'error')
     && isConfigured(state.settingsForm, state.identity)) {
     loadPlan(); // calls render() itself
+    // Same lazy-load trigger, same idle/error-retry condition, own status
+    // field -- the training-load chart is a separate fetch from the plan
+    // itself (see loadPlanLoad's doc comment) so it's gated on its own
+    // state.planLoad.status, not state.plan.status.
+    if (state.planLoad.status === 'idle' || state.planLoad.status === 'error') {
+      loadPlanLoad(); // calls render() itself
+    }
     return;
   }
   if (tab === 'feedback' && (state.feedbackEntries.status === 'idle' || state.feedbackEntries.status === 'error')
@@ -1965,6 +2050,7 @@ log.info('app.init', { version: __APP_VERSION__ ?? 'dev' });
 updateOfflineBanner();
 render();
 loadPlan();
+loadPlanLoad();
 maybeLoadProfile();
 maybeLoadGrants();
 // loadPlan() above self-gates on isConfigured and is otherwise unconditional

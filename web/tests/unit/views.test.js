@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   renderHistorySection, renderLogTab, renderSettingsTab, renderUpdateBanner, renderApp,
-  renderHistoryTab, renderTabBar, renderRosterTab,
+  renderHistoryTab, renderTabBar, renderRosterTab, renderLoadChart,
 } from '../../src/views.js';
-import { isoWeekMonday, addDays, dateKey } from '../../src/plan.js';
+import { isoWeekMonday, addDays, dateKey, formatShortDate } from '../../src/plan.js';
 
 // Real fixture workouts from the task brief -- andrew's 2026-07-09
 // cross_train (analytics-rich, no distance/pace since it's not a swim) and
@@ -972,6 +972,81 @@ describe('renderApp plan session detail view (click-to-detail)', () => {
   });
 });
 
+describe('renderWeekCard race-week checklist (engine/swim_coach/models.py RaceWeekChecklistItem)', () => {
+  const RACE_WEEK = '2099-W02';
+  const raceWeekMonday = isoWeekMonday(RACE_WEEK);
+
+  const BASE_WEEK = {
+    iso_week: RACE_WEEK,
+    meso_block: 'taper',
+    focus: 'taper',
+    target_volume_m: 6000,
+    sessions: [],
+    adaptation_rationale: null,
+  };
+
+  const CHECKLIST = [
+    {
+      date: dateKey(addDays(raceWeekMonday, 8)), // deliberately past this week's own Sunday --
+      category: 'carb_load', // mirrors a race that doesn't fall on a Monday (see library/16-race-week.md)
+      label: 'Begin carbohydrate loading: 10-12 g/kg body weight/day.',
+    },
+    {
+      date: dateKey(addDays(raceWeekMonday, 6)),
+      category: 'bodywork',
+      label: 'Light activation/relaxation bodywork or massage session if available.',
+    },
+    {
+      date: dateKey(raceWeekMonday),
+      category: 'logistics',
+      label: 'Confirm on-water support (kayak/boat escort) with race organizers.',
+    },
+  ];
+
+  function planData(weeks) {
+    return { athlete: { name: 'Renee' }, events: [], macro: { blocks: [] }, weeks };
+  }
+
+  it('renders nothing when race_week_checklist is empty (an ordinary taper week)', () => {
+    const html = renderApp(planData([{ ...BASE_WEEK, race_week_checklist: [] }]), null);
+    expect(html).not.toContain('race-week-checklist');
+  });
+
+  it('renders nothing when race_week_checklist is missing entirely (older persisted weeks)', () => {
+    const html = renderApp(planData([BASE_WEEK]), null);
+    expect(html).not.toContain('race-week-checklist');
+  });
+
+  it('renders every item, its category label, and its date when populated', () => {
+    const html = renderApp(planData([{ ...BASE_WEEK, race_week_checklist: CHECKLIST }]), null);
+    expect(html).toContain('race-week-checklist');
+    expect(html).toContain('Carb-load');
+    expect(html).toContain('Bodywork');
+    expect(html).toContain('Logistics');
+    expect(html).toContain('Begin carbohydrate loading');
+    expect(html).toContain('kayak/boat escort');
+  });
+
+  it('shows a checklist date that falls outside this WeekPlan\'s own 7 days without crashing', () => {
+    // The carb-load item above is dated 8 days after raceWeekMonday -- past
+    // this week's own Sunday -- exactly the "race isn't on a Monday" case
+    // library/16-race-week.md documents. Rendering must not silently drop
+    // or crash on it.
+    const html = renderApp(planData([{ ...BASE_WEEK, race_week_checklist: CHECKLIST }]), null);
+    const expectedDate = formatShortDate(addDays(raceWeekMonday, 8));
+    expect(html).toContain(expectedDate);
+  });
+
+  it('escapes malicious content in a checklist item label', () => {
+    const malicious = [
+      { date: dateKey(raceWeekMonday), category: 'logistics', label: '<img src=x onerror=alert(1)>' },
+    ];
+    const html = renderApp(planData([{ ...BASE_WEEK, race_week_checklist: malicious }]), null);
+    expect(html).not.toContain('<img src=x onerror=alert(1)>');
+    expect(html).toContain('&lt;img');
+  });
+});
+
 describe('renderLogTab', () => {
   const baseArgs = {
     form: { date: '2026-07-11', sport: 'swim_pool', distance_m: '', duration_min: '', rpe: 5, notes: '' },
@@ -1618,5 +1693,151 @@ describe('renderHistoryTab', () => {
     });
     expect(html).not.toContain('<img src=x');
     expect(html).toContain('&lt;img');
+  });
+});
+
+describe('renderLoadChart', () => {
+  const readySeries = [
+    ['2026-07-01', 10.0, 5.0, 5.0],
+    ['2026-07-02', 10.5, 6.0, 4.5],
+    ['2026-07-03', 11.0, 4.0, 7.0],
+  ];
+
+  it('renders nothing for idle or missing load state', () => {
+    expect(renderLoadChart({ status: 'idle', data: null, error: null })).toBe('');
+    expect(renderLoadChart(undefined)).toBe('');
+    expect(renderLoadChart(null)).toBe('');
+  });
+
+  it('shows a loading message while loading with no data yet', () => {
+    const html = renderLoadChart({ status: 'loading', data: null, error: null });
+    expect(html).toContain('Loading training load');
+  });
+
+  it('surfaces an error message', () => {
+    const html = renderLoadChart({ status: 'error', data: null, error: 'network down' });
+    expect(html).toContain('network down');
+  });
+
+  it('shows an honest empty-data message rather than a broken chart for an empty series', () => {
+    const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: [] }, error: null });
+    expect(html).toContain('Not enough logged training');
+    expect(html).not.toContain('<svg');
+  });
+
+  it('renders the chart, its three lines, and clear labels for a real series', () => {
+    const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: readySeries }, error: null });
+    expect(html).toContain('<svg');
+    expect(html).toContain('load-chart-line-ctl');
+    expect(html).toContain('load-chart-line-atl');
+    expect(html).toContain('load-chart-line-tsb');
+    expect(html).toContain('CTL (fitness)');
+    expect(html).toContain('ATL (fatigue)');
+    expect(html).toContain('TSB (form)');
+    // x-axis date labels are present in some human-readable form.
+    expect(html).toMatch(/Jul \d/);
+  });
+
+  it('renders the race-day reference band with an honest, non-authoritative caption', () => {
+    const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: readySeries }, error: null });
+    expect(html).toContain('load-chart-band');
+    expect(html).toContain('Race-day TSB reference band');
+    // Must frame the band as a cycling-coaching convention, not a
+    // swim-specific or peer-reviewed target -- the honesty requirement
+    // from CLAUDE.md's evidence-discipline standard, applied to UI copy.
+    expect(html.toLowerCase()).toContain('cycling');
+    expect(html.toLowerCase()).toContain('not a swim-specific or peer-reviewed target');
+  });
+
+  it('acknowledges the CTL/ATL time constants are provisional cycling-borrowed values', () => {
+    const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: readySeries }, error: null });
+    expect(html.toLowerCase()).toContain('not yet verified for swimming');
+  });
+
+  it('escapes hostile content in the error message', () => {
+    const html = renderLoadChart({ status: 'error', data: null, error: '<img src=x onerror=alert(1)>' });
+    expect(html).not.toContain('<img src=x');
+    expect(html).toContain('&lt;img');
+  });
+
+  describe('wellness baseline deviation (RHR/HRV cross-check)', () => {
+    const readyWithDeviation = (wellness_baseline_deviation) => ({
+      status: 'ready',
+      data: { ctl_atl_tsb: readySeries, wellness_baseline_deviation },
+      error: null,
+    });
+
+    it('shows both deviations with correct, independent good/concerning framing', () => {
+      // Elevated RHR (bad) and suppressed HRV (bad) at the same time --
+      // opposite raw signs, both flagged.
+      const html = renderLoadChart(readyWithDeviation({
+        resting_hr_pct_deviation: 9.0, hrv_pct_deviation: -12.0,
+      }));
+      expect(html).toContain('+9.0%');
+      expect(html).toContain('-12.0%');
+      expect(html).toContain('wellness-stat--concerning');
+      // Both stats are concerning here -- exactly two concerning callouts.
+      expect(html.match(/wellness-stat--concerning/g).length).toBe(2);
+      expect(html).not.toContain('wellness-stat--good');
+    });
+
+    it('shows a good status for a mild positive RHR deviation and a mild negative HRV deviation', () => {
+      const html = renderLoadChart(readyWithDeviation({
+        resting_hr_pct_deviation: 1.0, hrv_pct_deviation: -1.0,
+      }));
+      expect(html).toContain('wellness-stat--good');
+      expect(html).not.toContain('wellness-stat--concerning');
+    });
+
+    it('does NOT flag a positive HRV deviation as concerning (sign conventions are opposite for the two fields)', () => {
+      const html = renderLoadChart(readyWithDeviation({
+        resting_hr_pct_deviation: null, hrv_pct_deviation: 15.0,
+      }));
+      // A rising HRV is good, not bad -- must not be colored the same
+      // direction as a rising (bad) RHR.
+      expect(html).toContain('wellness-stat--good');
+      expect(html).not.toContain('wellness-stat--concerning');
+    });
+
+    it('shows an honest "not enough data" state per-field when both are null, not zero and not hidden', () => {
+      const html = renderLoadChart(readyWithDeviation({
+        resting_hr_pct_deviation: null, hrv_pct_deviation: null,
+      }));
+      expect(html.toLowerCase()).toMatch(/not enough data/);
+      expect(html).not.toContain('0.0%');
+      expect(html.match(/wellness-stat--no-data/g).length).toBe(2);
+    });
+
+    it('shows an honest "not enough data" state for just one field when only one is null', () => {
+      const html = renderLoadChart(readyWithDeviation({
+        resting_hr_pct_deviation: 3.0, hrv_pct_deviation: null,
+      }));
+      expect(html).toContain('wellness-stat--good');
+      expect(html).toContain('wellness-stat--no-data');
+      expect(html.match(/wellness-stat--no-data/g).length).toBe(1);
+    });
+
+    it('still renders the wellness section (as all no-data) when the field is entirely absent from the payload', () => {
+      const html = renderLoadChart({
+        status: 'ready', data: { ctl_atl_tsb: readySeries }, error: null,
+      });
+      expect(html.match(/wellness-stat--no-data/g).length).toBe(2);
+    });
+
+    it('frames the cross-check as independent of, not a replacement for, the sRPE-derived chart above', () => {
+      const html = renderLoadChart(readyWithDeviation({
+        resting_hr_pct_deviation: null, hrv_pct_deviation: null,
+      }));
+      expect(html.toLowerCase()).toContain('independent');
+      expect(html.toLowerCase()).toMatch(/not (a )?replace/);
+    });
+
+    it('keeps the deviation display visually distinct from the CTL/ATL/TSB line markup', () => {
+      const html = renderLoadChart(readyWithDeviation({
+        resting_hr_pct_deviation: 2.0, hrv_pct_deviation: -2.0,
+      }));
+      expect(html).toContain('wellness-baseline-deviation');
+      expect(html).not.toMatch(/load-chart-line-(ctl|atl|tsb)"[^>]*wellness/);
+    });
   });
 });

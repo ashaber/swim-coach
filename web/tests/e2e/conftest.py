@@ -70,13 +70,29 @@ def mock_plan_route(ctx, root: str) -> None:
     same file the old static-file-reading Plan tab used to load directly),
     so Plan-tab tests keep exercising real plan data end-to-end even though
     the Plan tab now fetches it live from the backend instead of a baked
-    data/<slug>.json (see main.js's loadPlan / api.js's fetchPlan)."""
+    data/<slug>.json (see main.js's loadPlan / api.js's fetchPlan).
+
+    Also mocks GET **/api/plan/load* -- main.js's loadPlanLoad fires
+    unconditionally at boot alongside loadPlan (feeding views.js's
+    renderLoadChart), so it needs the same treatment or it fails on CORS
+    against this file's fake backend origin. An empty `ctl_atl_tsb` series
+    is fine here -- this helper is about keeping the Plan tab's OWN data
+    real, not about exercising the training-load chart itself (see
+    test_coach_roster.py's own real-series COACH_LOAD_STUB for a test that
+    specifically cares about the chart rendering)."""
     body = (Path(root) / 'dist' / 'data' / 'renee.json').read_text()
 
     def handler(route):
         route.fulfill(status=200, content_type='application/json', body=body)
 
+    def load_handler(route):
+        route.fulfill(
+            status=200, content_type='application/json',
+            body='{"athlete":"renee","weeks":12,"ctl_atl_tsb":[]}',
+        )
+
     ctx.route('**/api/plan*', handler)
+    ctx.route('**/api/plan/load*', load_handler)
 
 
 class _Handler(http.server.SimpleHTTPRequestHandler):

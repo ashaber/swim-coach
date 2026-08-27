@@ -258,19 +258,22 @@ def _cmd_scaffold_macro(args: argparse.Namespace, store: StoreInterface) -> int:
     return 0
 
 
-def _event_format_for_macro(store: StoreInterface, slug: str, macro) -> str:
-    """Look up the macro's Event and return its event_format, defaulting to
-    "single_day" if the event can't be found (e.g. deleted from events.yaml
-    after the macro was scaffolded) -- never let a lookup miss crash
-    plan-week, since single_day is also Event's own model default."""
+def _event_for_macro(store: StoreInterface, slug: str, macro) -> Event | None:
+    """Look up the macro's Event, or `None` if it can't be found (e.g.
+    deleted from events.yaml after the macro was scaffolded) -- never let a
+    lookup miss crash plan-week. `_cmd_plan_week` derives `event_format`
+    from the result (defaulting to `"single_day"`, also Event's own model
+    default) and forwards the full `Event` to `generate_week` so its
+    optional race-week-checklist gating (active/priority "A"/final taper
+    week) has what it needs -- see `generate_week`'s own docstring."""
     try:
         events = store.load_events(slug)
     except Exception:  # noqa: BLE001
-        return "single_day"
+        return None
     for event in events:
         if event.id == macro.event_id:
-            return event.event_format
-    return "single_day"
+            return event
+    return None
 
 
 def _cmd_plan_week(args: argparse.Namespace, store: StoreInterface) -> int:
@@ -299,9 +302,12 @@ def _cmd_plan_week(args: argparse.Namespace, store: StoreInterface) -> int:
             f"week {args.week} already exists and is not a draft; pass --force to overwrite"
         )
 
-    event_format = _event_format_for_macro(store, slug, macro)
+    event = _event_for_macro(store, slug, macro)
+    event_format = event.event_format if event is not None else "single_day"
     try:
-        week = generate_week(athlete, macro, args.week, week_start, event_format=event_format)
+        week = generate_week(
+            athlete, macro, args.week, week_start, event_format=event_format, event=event
+        )
     except ValueError as exc:
         return _error(str(exc))
 
@@ -339,7 +345,7 @@ def _cmd_summarize(args: argparse.Namespace, store: StoreInterface) -> int:
     """
     slug = args.athlete
     try:
-        store.load_athlete(slug)
+        athlete = store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
         return _error_from_exception(_error_label(store, slug, "profile.yaml"), exc)
 
@@ -362,10 +368,14 @@ def _cmd_summarize(args: argparse.Namespace, store: StoreInterface) -> int:
 
     volume_by_week = {_iso_week(ws): weekly_volume_m(workouts, ws) for ws in week_starts}
 
-    loads = daily_loads(workouts)
+    # `athlete`/`wellness` unlock the HR-TRIMP (tier 2) and swim pace-IF
+    # (tier 3) fallbacks for workouts with no logged RPE -- see
+    # `load.daily_loads`'s docstring. Without them this would silently
+    # fall back to tiers 1/4 only for every RPE-less workout.
+    loads = daily_loads(workouts, athlete=athlete, wellness=wellness)
     window_loads = {d: v for d, v in loads.items() if span_start <= d <= span_end}
     monotony_value = monotony(window_loads)
-    load_ratio = acute_chronic_ratio(workouts, as_of)
+    load_ratio = acute_chronic_ratio(workouts, as_of, athlete=athlete, wellness=wellness)
 
     window_wellness = [w for w in wellness if span_start <= w.date <= span_end]
     trend = wellness_trend(window_wellness)

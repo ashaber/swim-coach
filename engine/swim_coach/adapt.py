@@ -312,7 +312,13 @@ def adapt_week(
     wellness_mean = _wellness_mean(wellness, as_of)
     wellness_red = wellness_mean is not None and wellness_mean <= WELLNESS_RED_THRESHOLD
 
-    load_ratio = acute_chronic_ratio(workouts, as_of)
+    # `athlete`/`wellness` unlock load.py's HR-TRIMP/swim-pace-IF fallback
+    # tiers for RPE-less workouts (see `load.daily_loads`'s docstring) --
+    # without them, a week of pure device-telemetry workouts (no RPE) used
+    # to compute a load ratio of `None` (chronic load of 0), silently never
+    # tripping the cut-volume rule below no matter how hard that week
+    # actually was.
+    load_ratio = acute_chronic_ratio(workouts, as_of, athlete=athlete, wellness=wellness)
     load_ratio_red = load_ratio is not None and load_ratio > LOAD_RATIO_RED_THRESHOLD
 
     last_week_dates = [s.date for s in current_week.sessions]
@@ -366,7 +372,9 @@ def adapt_week(
         )
 
     # --- baseline schedule (pool/strength placement, taper caps) --------------
-    baseline = generate_week(athlete, macro, iso_week, week_start, event_format=event_format)
+    baseline = generate_week(
+        athlete, macro, iso_week, week_start, event_format=event_format, event=event
+    )
 
     # --- target volume ---------------------------------------------------------
     current_target_volume_m = current_week.target_volume_m
@@ -520,4 +528,11 @@ def adapt_week(
         sessions=sessions,
         adaptation_rationale=json.dumps(rationale, sort_keys=True),
         draft=True,
+        race_week_checklist=baseline.race_week_checklist,
+        # Carried straight through from the baseline `generate_week()` call
+        # above, unmodified by the cut/advance/milestone volume tweaks this
+        # function applies to `sessions` -- the checklist's dates/content
+        # are computed purely from `event.event_date` (see
+        # `plan._race_week_checklist`), not from any of this week's volume
+        # numbers, so there is nothing here for adaptation to re-derive.
     )

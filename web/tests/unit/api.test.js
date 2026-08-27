@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
-  postWorkout, listWorkouts, postWellness, listWellness, fetchPlan, getAthlete, patchAthlete,
+  postWorkout, listWorkouts, postWellness, listWellness, fetchPlan, fetchPlanLoad, getAthlete, patchAthlete,
   postFeedback, listFeedback, uploadWorkoutFile, exchangeGoogleToken, RequestAccessError, logout,
   onboard, OnboardForbiddenError, OnboardConflictError, downloadGarminFit,
   pushSessionToIntervals,
   fetchMe, createGrant, listGrants, revokeGrant,
-  listCoachedAthletes, fetchCoachWorkouts, fetchCoachFeedback, replyToCoachFeedback,
+  listCoachedAthletes, fetchCoachWorkouts, fetchCoachFeedback, fetchCoachLoad, replyToCoachFeedback,
 } from '../../src/api.js';
 
 function fakeFetch(body, { ok = true, status = 200 } = {}) {
@@ -158,6 +158,29 @@ describe('fetchPlan', () => {
   it('returns a normalized error on a non-2xx response', async () => {
     global.fetch = fakeFetch({ error: 'no such athlete' }, { ok: false, status: 404 });
     const result = await fetchPlan({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'ghost' });
+    expect(result).toEqual({ ok: false, error: 'no such athlete', status: 404 });
+  });
+});
+
+describe('fetchPlanLoad', () => {
+  it('GETs /api/plan/load with the athlete query param and bearer header, no body', async () => {
+    const load = { athlete: 'renee', weeks: 12, ctl_atl_tsb: [['2026-08-01', 10.0, 5.0, 5.0]] };
+    global.fetch = fakeFetch(load);
+
+    const result = await fetchPlanLoad({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee' });
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/plan/load?athlete=renee');
+    expect(init.method === 'GET' || init.method === undefined).toBe(true);
+    expect(init.body).toBeUndefined();
+    expect(init.headers.Authorization).toBe('Bearer tok');
+    expect(result).toEqual({ ok: true, data: load });
+  });
+
+  it('returns a normalized error on a non-2xx response', async () => {
+    global.fetch = fakeFetch({ error: 'no such athlete' }, { ok: false, status: 404 });
+    const result = await fetchPlanLoad({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'ghost' });
     expect(result).toEqual({ ok: false, error: 'no such athlete', status: 404 });
   });
 });
@@ -683,6 +706,28 @@ describe('fetchCoachFeedback', () => {
     expect(url).not.toContain('?athlete=');
     expect(init.headers.Authorization).toBe('Bearer tok');
     expect(result).toEqual({ ok: true, data: entries });
+  });
+});
+
+describe('fetchCoachLoad', () => {
+  it('GETs /api/coach/athletes/<athlete>/load -- athlete as a path segment, no query param', async () => {
+    const load = { athlete: 'renee', weeks: 12, ctl_atl_tsb: [['2026-08-01', 10.0, 5.0, 5.0]] };
+    global.fetch = fakeFetch(load);
+
+    const result = await fetchCoachLoad({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee' });
+
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/coach/athletes/renee/load');
+    expect(url).not.toContain('?athlete=');
+    expect(init.headers.Authorization).toBe('Bearer tok');
+    expect(result).toEqual({ ok: true, data: load });
+  });
+
+  it('url-encodes the athlete slug', async () => {
+    global.fetch = fakeFetch({});
+    await fetchCoachLoad({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'a/b' });
+    const [url] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/coach/athletes/a%2Fb/load');
   });
 });
 

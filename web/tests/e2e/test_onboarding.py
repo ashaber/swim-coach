@@ -36,6 +36,7 @@ def _cors_route(status, content_type, body):
 
 
 PLAN_STUB = '{"slug":"jamie","athlete":{"name":"Jamie"},"events":[],"weeks":[],"macro":{"blocks":[]}}'
+PLAN_LOAD_STUB = '{"athlete":"jamie","weeks":12,"ctl_atl_tsb":[]}'
 ONBOARDING_SESSION = (
     '{"token":"onboard-tok-abc","athlete":null,"onboarding":true,'
     '"role":"onboarding","expires_at":"2026-08-01T00:00:00Z"}'
@@ -170,6 +171,10 @@ def test_onboarding_submit_success_transitions_into_the_app(fake_gsi_page):
 
     page.route('**/api/onboard', handle_onboard)
     page.route('**/api/plan*', _cors_route(200, 'application/json', PLAN_STUB))
+    # GET /api/plan/load fires alongside GET /api/plan the moment onboarding
+    # lands on the Plan tab (main.js's loadPlanLoad) -- unmocked, it fails on
+    # CORS the same way the other stubs on this page guard against.
+    page.route('**/api/plan/load*', _cors_route(200, 'application/json', PLAN_LOAD_STUB))
     page.route('**/api/athlete*', _cors_route(200, 'application/json', '{"slug":"jamie","name":"Jamie"}'))
     # Onboarding lands on the Plan tab (see below), but main.js's
     # handleOnboardSubmit calls maybeLoadGrants() alongside maybeLoadProfile()
