@@ -28,6 +28,7 @@ from swim_coach.analytics import GAP_THRESHOLD_S
 from swim_coach.analytics import stationary_pauses as _stationary_pauses
 from swim_coach.models import (
     Sport,
+    Workout,
     WorkoutAnalytics,
     WorkoutLap,
     WorkoutLength,
@@ -459,6 +460,77 @@ def _sport_detail(
     if not sub_str or sub_str == "generic":
         return sport_str
     return f"{sport_str}/{sub_str}"
+
+
+def backfill_sport_detail(workout: Workout) -> Workout | None:
+    """One-time historical backfill for the walk/run relabeling `_sport_detail`
+    already applies to every *newly ingested* `.fit` (see that function's
+    docstring, and `RUN_WALK_TRANSITION_MPS` above, for the full citation and
+    the original athlete feedback this closes: "I do not run and the app is
+    equating all walks as runs").
+
+    That fix only changed behavior going forward -- every `Workout` persisted
+    *before* it shipped still carries the old, unrelabeled device string
+    (e.g. `sport_detail="running"` for a workout that was actually a walk).
+    This function re-derives what `_sport_detail` would have produced had the
+    fix been in place at ingest time, using only fields a persisted `Workout`
+    actually stores.
+
+    The wrinkle: `_sport_detail`'s real signature wants the raw device
+    `session_sport`/`session_sub_sport` strings, but those are never
+    persisted on a `Workout` -- only the already-derived `sport_detail`
+    string is (e.g. `"running"`, `"running/trail"`). `_sport_detail`'s own
+    logic is deterministic and reversible enough to work around this: the
+    stored string is exactly `f"{sport_str}/{sub_str}"` (or `sport_str`
+    alone with no meaningful sub-sport), so the leading token before the
+    first `/` stands in for the raw sport label, and everything after it
+    (if anything) is an untouched sub-sport suffix to preserve verbatim.
+
+    `avg_speed_mps` isn't persisted either, but it's cheaply recomputable
+    from two fields every `Workout` does store, the same way `parse_fit`
+    computes it fresh from the raw session fields (see the guard around
+    this module's own `avg_speed_mps = session_distance / session_duration_s`
+    above): `distance_m / (duration_min * 60)`, guarded the same way against
+    a zero/falsy denominator.
+
+    Relabeling rule (mirrors `_sport_detail` exactly, just re-expressed
+    against the derived string instead of the raw one): only a `cross_train`
+    workout whose `sport_detail` (case-insensitively) contains "run" and does
+    NOT already contain "walk" is a candidate; among those, only one whose
+    recomputed `avg_speed_mps` is below `RUN_WALK_TRANSITION_MPS` gets its
+    leading sport token swapped to "walking", with any `/sub_sport` suffix
+    preserved unchanged (`"running/trail"` -> `"walking/trail"`,
+    `"running"` -> `"walking"`).
+
+    Never touches `workout.sport` (the resolved enum bucket stays
+    `cross_train` either way -- that bucketing bug was separately fixed
+    2026-07-10) or any field but `sport_detail`. Returns `None` when nothing
+    should change (already correctly labeled, not a "run"-ish cross_train
+    entry, or missing the distance/duration needed to recompute speed) so
+    callers can tell "checked, no change" apart from "changed" without
+    diffing the whole object themselves.
+    """
+    if workout.sport != "cross_train":
+        return None
+    detail = workout.sport_detail
+    if not detail:
+        return None
+    detail_lower = detail.lower()
+    if "run" not in detail_lower or "walk" in detail_lower:
+        return None
+
+    # Same guard shape as parse_fit's own avg_speed_mps computation: a
+    # missing/zero distance or duration means "can't recompute speed",
+    # which is a reason to leave the workout alone, not a reason to guess.
+    if not workout.distance_m or not workout.duration_min:
+        return None
+    avg_speed_mps = workout.distance_m / (workout.duration_min * 60)
+    if avg_speed_mps >= RUN_WALK_TRANSITION_MPS:
+        return None
+
+    sport_token, sep, sub_token = detail.partition("/")
+    new_detail = "walking" + sep + sub_token
+    return workout.model_copy(update={"sport_detail": new_detail})
 
 
 def _is_cycling_sport(session_sport: object | None) -> bool:

@@ -946,6 +946,96 @@ def test_analyze_requires_workout_id_or_all(athlete_tree):
         _run(athlete_tree["base_dir"], "analyze", "--athlete", athlete_tree["slug"])
 
 
+# --- backfill-sport-detail (historical backfill closing the gap PR #116 left) -------
+
+
+def _save_workout(athlete_tree, **overrides):
+    fields = {
+        "id": uuid.uuid4(),
+        "athlete_id": athlete_tree["athlete"].id,
+        "date": date(2026, 6, 1),
+        "sport": "cross_train",
+        "source": "fit",
+        "distance_m": 1000,
+        "duration_min": 20.0,  # 0.833 m/s -- below the walk/run threshold
+        "sport_detail": "running",
+    }
+    fields.update(overrides)
+    workout = Workout(**fields)
+    athlete_tree["store"].save_workout(athlete_tree["slug"], workout)
+    return workout
+
+
+def test_backfill_sport_detail_dry_run_does_not_save(athlete_tree, capsys):
+    slug = athlete_tree["slug"]
+    workout = _save_workout(athlete_tree)
+
+    code = _run(athlete_tree["base_dir"], "backfill-sport-detail", "--athlete", slug)
+    assert code == 0
+    result = _out(capsys)
+    assert result["applied"] is False
+    assert result["scanned"] == 1
+    assert result["changed"] == 1
+    change = result["changes"][0]
+    assert change["workout_id"] == str(workout.id)
+    assert change["old_sport_detail"] == "running"
+    assert change["new_sport_detail"] == "walking"
+
+    # Dry run must not persist anything.
+    reloaded = athlete_tree["store"].list_workouts(slug)[0]
+    assert reloaded.sport_detail == "running"
+
+
+def test_backfill_sport_detail_apply_persists_change(athlete_tree, capsys):
+    slug = athlete_tree["slug"]
+    workout = _save_workout(athlete_tree, sport_detail="running/trail")
+
+    code = _run(athlete_tree["base_dir"], "backfill-sport-detail", "--athlete", slug, "--apply")
+    assert code == 0
+    result = _out(capsys)
+    assert result["applied"] is True
+    assert result["changed"] == 1
+
+    reloaded = next(w for w in athlete_tree["store"].list_workouts(slug) if w.id == workout.id)
+    assert reloaded.sport_detail == "walking/trail"
+    # Untouched fields preserved -- label-only backfill.
+    assert reloaded.sport == "cross_train"
+    assert reloaded.distance_m == workout.distance_m
+    assert reloaded.duration_min == workout.duration_min
+
+
+def test_backfill_sport_detail_no_changes_reports_zero(athlete_tree, capsys):
+    slug = athlete_tree["slug"]
+    # A genuinely fast run -- above the gait-transition threshold.
+    _save_workout(athlete_tree, distance_m=5000, duration_min=20.0)
+
+    code = _run(athlete_tree["base_dir"], "backfill-sport-detail", "--athlete", slug, "--apply")
+    assert code == 0
+    result = _out(capsys)
+    assert result["scanned"] == 1
+    assert result["changed"] == 0
+    assert result["changes"] == []
+
+
+def test_backfill_sport_detail_leaves_non_running_workouts_alone(athlete_tree, capsys):
+    slug = athlete_tree["slug"]
+    _save_workout(athlete_tree, sport="swim_pool", sport_detail=None, distance_m=2000, duration_min=40.0)
+    _save_workout(athlete_tree, sport_detail="cycling/mountain", distance_m=10000, duration_min=30.0)
+
+    code = _run(athlete_tree["base_dir"], "backfill-sport-detail", "--athlete", slug, "--apply")
+    assert code == 0
+    result = _out(capsys)
+    assert result["scanned"] == 2
+    assert result["changed"] == 0
+
+
+def test_backfill_sport_detail_unknown_athlete_errors(tmp_path, capsys):
+    code = _run(tmp_path, "backfill-sport-detail", "--athlete", "nobody")
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+
+
 # --- invite / list-invites / revoke-invite (Slice 1: verified identity) ------
 
 
