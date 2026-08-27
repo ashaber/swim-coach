@@ -220,6 +220,47 @@ def test_chart_is_not_buried_in_a_collapsed_section(page):
     assert chart.is_visible()
 
 
+def test_ctl_atl_tsb_trend_narrative_renders_prominently_below_the_chart(page):
+    # views.js's renderCtlAtlTsbNarrative / plan.js's describeCtlAtlTsbTrend
+    # -- the computed, athlete-specific "what the numbers say" guidance
+    # this feature adds, quoting Andrew's own framing: "this is the useful
+    # coach guidance below the load graph."
+    page.wait_for_selector('.mast h1')
+    page.wait_for_selector('.load-chart-narrative')
+    narrative = page.locator('.load-chart-narrative')
+    assert narrative.is_visible()
+    text = narrative.inner_text()
+    # The heading renders visually uppercase (CSS text-transform), which
+    # Playwright's inner_text reflects -- compare case-insensitively.
+    assert 'what the numbers say' in text.lower()
+    # REAL_SERIES spans only 22 days -- well short of the cold-start
+    # threshold -- so the narrative must lead with that honesty caveat
+    # rather than presenting an early trend at full confidence.
+    assert 'provisional' in text.lower()
+    assert 'CTL (fitness)' in text
+    assert 'TSB (form)' in text
+
+
+def test_methodology_caption_moved_behind_a_collapsed_by_default_disclosure(page):
+    # Task requirement: the old always-visible methodology paragraph now
+    # lives inside a native <details>, collapsed by default, with its
+    # caveats still one click away rather than deleted.
+    page.wait_for_selector('.mast h1')
+    page.wait_for_selector('.load-chart-methodology')
+    details = page.locator('.load-chart-methodology')
+    summary = details.locator('summary')
+    note = details.locator('.load-chart-note')
+
+    assert 'How this chart works' in summary.inner_text()
+    assert details.get_attribute('open') is None
+    assert not note.is_visible()
+
+    summary.click()
+    note.wait_for(state='visible')
+    assert note.is_visible()
+    assert 'not yet verified for swimming' in note.inner_text().lower()
+
+
 # --- Coach roster's acting-as-athlete view -------------------------------------
 
 def test_chart_renders_on_the_coach_roster_view_for_a_granted_athlete(coach_page):

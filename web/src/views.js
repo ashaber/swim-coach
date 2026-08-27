@@ -9,7 +9,7 @@ import {
   findSessionById, parseStructureBlocks, parseMainSetIntervals, renderStructuredWorkout,
   splitStructuredRationale, sessionZoneDistribution, formatZoneDistributionSummary,
   ZONE_GLOSSARY, TERM_GLOSSARY, ctlAtlTsbChartGeometry, raceWeekCategoryLabel,
-  describeWellnessBaselineDeviation,
+  describeWellnessBaselineDeviation, describeCtlAtlTsbTrend, RACE_DAY_TSB_BAND,
 } from './plan.js';
 import { TOOL_LABELS } from './chat.js';
 import {
@@ -669,6 +669,77 @@ function renderLoadChartSvg(geo) {
     </svg>`;
 }
 
+/** Formats a raw CTL/ATL/TSB number to one decimal for narrative prose --
+ * these values arrive already 1-decimal rounded from `summarize_rollup`
+ * (see `ctlAtlTsbChartGeometry`'s `roundToTenth` comment), so this only
+ * ever normalizes trailing zeros/sign, never adds precision that isn't
+ * really there. */
+function formatTrendValue(value) {
+  return value.toFixed(1);
+}
+
+function formatTrendDate(iso) {
+  return formatShortDate(parseIsoDate(iso));
+}
+
+/** Renders `describeCtlAtlTsbTrend`'s structured summary as the athlete-
+ * facing "what the numbers say" prose -- the "useful coach guidance below
+ * the load graph" this whole feature is for (an athlete's spouse's own
+ * description of a hand-written narrative interpretation of this same
+ * chart, judged more useful day-to-day than the generic methodology
+ * caption that used to sit directly under it -- see `renderLoadChart`'s
+ * own comment for where that caption moved). Ordered warmup caveat first
+ * (an honest heads-up belongs before the numbers it qualifies, not buried
+ * after them), then CTL direction, then the biggest ATL swing, then
+ * current TSB. Returns `''` when `!trend.hasData` -- same empty-series
+ * case `ctlAtlTsbChartGeometry` already renders its own "not enough data
+ * yet" message for, so this narrative doesn't duplicate that. */
+function renderCtlAtlTsbNarrative(series) {
+  const trend = describeCtlAtlTsbTrend(series);
+  if (!trend.hasData) return '';
+
+  const lines = [];
+
+  if (trend.warmup === 'cold-start') {
+    lines.push(`Only ${trend.historyDays} day${trend.historyDays === 1 ? '' : 's'} of logged history so far -- CTL and ATL are still climbing up from zero and don't yet reflect real fitness/fatigue levels. Read everything below as provisional until more history accumulates.`);
+  } else if (trend.warmup === 'warming-up') {
+    lines.push(`This series has ${trend.historyDays} days of history -- past the point where CTL/ATL are pure zero-artifacts, but not yet "fully warmed up" by this model's own standard. Read the trend below as directionally useful, not yet a fully mature fitness estimate.`);
+  }
+
+  if (trend.ctlTrend) {
+    if (trend.ctlTrend.status === 'insufficient-window') {
+      lines.push(`Not enough history yet (${trend.ctlTrend.historyDays} day${trend.ctlTrend.historyDays === 1 ? '' : 's'}) to compare CTL over a ${trend.ctlTrend.requiredWindowDays}-day window.`);
+    } else {
+      const { status, fromDate, toDate, fromValue, toValue } = trend.ctlTrend;
+      const verb = { rising: 'climbed', falling: 'dropped', flat: 'held roughly flat' }[status];
+      lines.push(`CTL (fitness) has ${verb}${status === 'flat' ? '' : ' steadily'} from ${formatTrendDate(fromDate)} to ${formatTrendDate(toDate)}: ${formatTrendValue(fromValue)} → ${formatTrendValue(toValue)}.`);
+    }
+  }
+
+  if (trend.atlSpike && trend.atlSpike.direction !== 'flat') {
+    const { fromDate, toDate, fromValue, toValue, direction } = trend.atlSpike;
+    const verb = direction === 'up' ? 'jumped' : 'dropped';
+    lines.push(`ATL (fatigue) ${verb} from ${formatTrendValue(fromValue)} to ${formatTrendValue(toValue)} across ${formatTrendDate(fromDate)}–${formatTrendDate(toDate)} -- the biggest recent swing, most likely tracking a big training day or block.`);
+  }
+
+  if (trend.tsb) {
+    const { value, band, date } = trend.tsb;
+    const bandPhrase = band === 'within'
+      ? `inside the +${RACE_DAY_TSB_BAND.low} to +${RACE_DAY_TSB_BAND.high} race-day reference band`
+      : band === 'below'
+        ? `below the +${RACE_DAY_TSB_BAND.low} to +${RACE_DAY_TSB_BAND.high} race-day reference band -- expected and fine while deep in training, not a warning sign; that band only means something close to race day`
+        : `above the +${RACE_DAY_TSB_BAND.low} to +${RACE_DAY_TSB_BAND.high} race-day reference band`;
+    lines.push(`TSB (form) is currently ${formatTrendValue(value)} as of ${formatTrendDate(date)} -- ${bandPhrase}.`);
+  }
+
+  if (lines.length === 0) return '';
+  return `
+    <div class="load-chart-narrative">
+      <h4>What the numbers say</h4>
+      ${lines.map((line) => `<p>${esc(line)}</p>`).join('')}
+    </div>`;
+}
+
 /**
  * Renders the CTL ("fitness") / ATL ("fatigue") / TSB ("form") Banister
  * training-load chart -- shared verbatim by the athlete's own Plan tab
@@ -683,13 +754,23 @@ function renderLoadChartSvg(geo) {
  * All three lines share one y-axis -- the standard cycling-coaching
  * "Performance Management Chart" layout (see plan.js's module comment for
  * why TSB is never shown alone) -- plus a shaded reference band for the
- * commonly-cited cycling-coaching "race-day TSB" range. The caption below
- * the chart explicitly frames both the race-day band AND the underlying
- * CTL/ATL time constants as cycling-derived and not yet swim-specific or
+ * commonly-cited cycling-coaching "race-day TSB" range.
+ *
+ * Directly below the chart sits `renderCtlAtlTsbNarrative`'s athlete-
+ * specific "what the numbers say" prose (plan.js's `describeCtlAtlTsbTrend`)
+ * -- the computed, day-to-day-useful trend interpretation this whole
+ * feature is for. The generic methodology paragraph that used to sit here
+ * unconditionally -- explaining the race-day band AND the underlying
+ * CTL/ATL time constants are cycling-derived and not yet swim-specific or
  * peer-reviewed (see `engine/swim_coach/load.py`'s
  * `CTL_TIME_CONSTANT_DAYS`/`ATL_TIME_CONSTANT_DAYS` module comment for the
- * same caveat at its source) -- this chart must never read as more
- * authoritative than that series actually is.
+ * same caveat at its source) -- now lives inside a collapsed-by-default
+ * `<details>` ("How this chart works"): still one click away, per this
+ * project's evidence-discipline convention that these caveats are
+ * load-bearing honesty and must stay reachable, just no longer competing
+ * for attention with the athlete-specific insight that actually matters
+ * day to day. This chart must never read as more authoritative than that
+ * series actually is, on either side of the toggle.
  */
 export function renderLoadChart(load) {
   if (!load || load.status === 'idle') return '';
@@ -715,11 +796,17 @@ export function renderLoadChart(load) {
         <span class="li"><span class="dot load-chart-band-dot"></span>Race-day TSB reference band</span>
       </div>`;
 
+  const narrative = geo.isEmpty ? '' : renderCtlAtlTsbNarrative(series);
+
   return `
     <div class="panel load-chart-panel">
       <h3>Training load (CTL / ATL / TSB)</h3>
       ${body}
-      <p class="load-chart-note">CTL ("fitness") and ATL ("fatigue") are 42-day/7-day exponentially weighted averages of daily training load; TSB ("form") is CTL minus ATL. These time constants are the standard cycling/TrainingPeaks convention, carried over as a starting point -- not yet verified for swimming specifically. The shaded band (+5 to +25 TSB) is a commonly-targeted range in cycling coaching practice on race day, not a swim-specific or peer-reviewed target -- individual variation is large, so your own best-performance history is a better guide than this generic band.</p>
+      ${narrative}
+      <details class="load-chart-methodology">
+        <summary>How this chart works</summary>
+        <p class="load-chart-note">CTL ("fitness") and ATL ("fatigue") are 42-day/7-day exponentially weighted averages of daily training load; TSB ("form") is CTL minus ATL. These time constants are the standard cycling/TrainingPeaks convention, carried over as a starting point -- not yet verified for swimming specifically. The shaded band (+5 to +25 TSB) is a commonly-targeted range in cycling coaching practice on race day, not a swim-specific or peer-reviewed target -- individual variation is large, so your own best-performance history is a better guide than this generic band.</p>
+      </details>
       ${renderWellnessBaselineDeviation(load.data.wellness_baseline_deviation)}
     </div>`;
 }
