@@ -331,22 +331,56 @@ map of that territory, not a replacement for it.
 
 ### What's measured today
 
-- **sRPE session load** (`load.session_load` = duration × RPE) — Foster's
-  method, the base unit everything else below is built from. Specifically
-  validated in swimmers (real correlation coefficients against TRIMP, not
-  just assumed to transfer from other sports).
+- **Tiered session load** (`load.session_load`) — a workout's real training
+  load doesn't depend on whether the athlete bothered to survey it, so this
+  falls through four tiers of decreasing fidelity, the last always
+  returning a number (never `None`, never silently excluding a workout
+  from the day's total):
+  1. **sRPE** (`duration_min × RPE`) — Foster's method, the base unit
+     everything else is built from when a survey exists. Specifically
+     validated in swimmers (real correlation coefficients against TRIMP,
+     not just assumed to transfer from other sports).
+  2. **HR-based TRIMP** (Banister heart-rate-reserve training impulse) —
+     used when `avg_hr` plus a derivable `hr_max`/`hr_rest` are available;
+     sex-specific exponential weighting (0.64·e^(1.92x) men, 0.86·e^(1.67x)
+     women — many popular calculators wrongly apply the male coefficient to
+     both sexes). `hr_max` is estimated from the athlete's own observed
+     history; `hr_rest` from a short rolling average of logged readings,
+     falling back to a documented 60bpm default in the load-*under*-
+     estimating direction when no reading exists at all.
+  3. **Swim pace-based intensity** (a TSS-family formula) — used for swims
+     when tier 2 isn't available but both the workout's pace and the
+     athlete's CSS are known: `duration_hours × IF³ × 100`, where `IF =
+     css_pace / avg_pace`. Cubes the intensity factor rather than squaring
+     it (the cycling-TSS convention), per TrainingPeaks' own swim-specific
+     documentation — water resistance scales with speed faster than air.
+  4. **Duration-only fallback** — `duration_min × 5` (the 1-10 "somewhat
+     hard" midpoint), unconditional, last resort only.
+
+  This closed a real bug found in production: 62 of Renee's 63 real logged
+  workouts (synced from her watch, no subjective survey attached) had no
+  RPE and were being silently excluded from every downstream load signal.
+  RPE now adds *fidelity* on top of a real objective load — it never gates
+  whether one exists. Known limitation: the tiers aren't on one numeric
+  scale (a TRIMP-scored session typically reads as a third to a half of
+  what the same effort would score via sRPE) — `daily_loads` sums whatever
+  tier each workout resolves to anyway, since a real lower-fidelity number
+  still beats a silently excluded one, but this under-represents
+  HR/pace-scored sessions relative to sRPE-scored ones on a mixed day. See
+  `library/15-tiered-session-load.md` for full citations and the
+  hr_max/hr_rest derivation reasoning.
 - **ACWR** (`load.acute_chronic_ratio`, 7-day acute : 28-day chronic) — the
   simple rolling-window load-spike signal already driving parts of `/adapt`.
 - **CTL / ATL / TSB** (`load.ctl_atl_tsb_series`) — the Banister
   impulse-response model: exponentially-weighted "fitness" (CTL), "fatigue"
   (ATL), and "form" (TSB = CTL − ATL). Read-only monitoring, surfaced via
-  `get_plan_summary` and (once merged) a Plan-tab/coach-roster chart —
-  deliberately not wired into `plan.py`'s taper/periodization math.
+  `get_plan_summary` and a Plan-tab/coach-roster chart — deliberately not
+  wired into `plan.py`'s taper/periodization math.
 - **Wellness composite** (`load.wellness_composite`) — a Hooper &
   Mackinnon-style daily check-in (sleep, stress, soreness, motivation),
   already feeding `/adapt`'s judgment review.
-- **RHR/HRV baseline deviation** (`load.wellness_baseline_deviation`, in
-  review) — a rolling acute-vs-chronic deviation for resting heart rate and
+- **RHR/HRV baseline deviation** (`load.wellness_baseline_deviation`) — a
+  rolling acute-vs-chronic deviation for resting heart rate and
   HRV, added as an independent, physiologically-measured cross-check against
   the sRPE-derived CTL/ATL/TSB trend — kept as its own field, never blended
   into one number, since it's corroboration, not a replacement.
@@ -394,18 +428,19 @@ fitness eroding vs. fatigue clearing) that are the actual coaching signal.
 
 ### Roadmap
 
+**Shipped since this section was first written:** the CTL/ATL/TSB chart
+(Plan tab + coach roster view) and the RHR/HRV baseline-deviation
+cross-check alongside it; the tiered session-load fallback described
+above; a distinct Race-phase/week (carb-loading's real 36-72-hour window,
+honestly-caveated bodywork timing, race-specific logistics) layered onto
+the final taper week.
+
 - Resolve the CTL/ATL time-constant citation debt once the Thomas, Mujika &
   Busso (2008) primary text is accessible (currently paywalled).
-- Ship the CTL/ATL/TSB chart to the Plan tab and coach roster view, and the
-  RHR/HRV cross-check alongside it, so the signals above are actually
-  visible rather than only reachable through the chat tool.
 - An athlete effort/wellness survey that compares *prescribed* relative
   intensity against *reported* effort — the concrete mechanism this system
   is missing to ever resolve `quality.py`'s `intensity_match` field out of
   its permanent `"unknown"` state.
-- A distinct Race-phase/week (carb-loading's real 36-72-hour window,
-  honestly-caveated bodywork timing, race-specific logistics) instead of
-  taper running straight into the event.
 - The taper-duration/individualization algorithm itself: using an
   athlete's own CTL/ATL/TSB trajectory (once trusted) to size and time a
   taper, rather than any fixed duration — cross-checked against the
