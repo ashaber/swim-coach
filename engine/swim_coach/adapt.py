@@ -312,7 +312,13 @@ def adapt_week(
     wellness_mean = _wellness_mean(wellness, as_of)
     wellness_red = wellness_mean is not None and wellness_mean <= WELLNESS_RED_THRESHOLD
 
-    load_ratio = acute_chronic_ratio(workouts, as_of)
+    # `athlete`/`wellness` unlock load.py's HR-TRIMP/swim-pace-IF fallback
+    # tiers for RPE-less workouts (see `load.daily_loads`'s docstring) --
+    # without them, a week of pure device-telemetry workouts (no RPE) used
+    # to compute a load ratio of `None` (chronic load of 0), silently never
+    # tripping the cut-volume rule below no matter how hard that week
+    # actually was.
+    load_ratio = acute_chronic_ratio(workouts, as_of, athlete=athlete, wellness=wellness)
     load_ratio_red = load_ratio is not None and load_ratio > LOAD_RATIO_RED_THRESHOLD
 
     last_week_dates = [s.date for s in current_week.sessions]

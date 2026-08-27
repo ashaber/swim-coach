@@ -180,6 +180,26 @@
     .load-chart-band-dot { background: var(--accent); opacity: .4; }
     .load-chart-note { font-size: 12px; color: var(--ink-faint); margin-top: 12px; line-height: 1.55; }
 
+    /* Resting HR / HRV baseline-deviation cross-check (see views.js's
+       renderWellnessBaselineDeviation / plan.js's
+       describeWellnessBaselineDeviation) -- deliberately its own visually
+       distinct block below the CTL/ATL/TSB chart (dashed divider, its own
+       heading, callout tiles with their own color language), never a
+       fourth line blended into the chart above. */
+    .wellness-baseline-deviation { margin-top: 18px; padding-top: 16px; border-top: 1px dashed var(--line-soft); }
+    .wellness-baseline-deviation h4 { margin: 0 0 10px; font-family: var(--display); font-size: 12.5px; font-weight: 800;
+      text-transform: uppercase; letter-spacing: .04em; color: var(--ink-soft); }
+    .wellness-stats { display: flex; gap: 12px; flex-wrap: wrap; }
+    .wellness-stat { flex: 1 1 180px; padding: 10px 12px; border-radius: var(--radius-sm);
+      background: var(--paper-2); border: 1px solid var(--line-soft); }
+    .wellness-stat-label { display: block; font-size: 11px; color: var(--ink-faint); }
+    .wellness-stat-value { display: block; font-size: 20px; font-weight: 800; margin-top: 3px; }
+    .wellness-stat-status { display: block; font-size: 12px; margin-top: 2px; }
+    .wellness-stat--good .wellness-stat-value, .wellness-stat--good .wellness-stat-status { color: var(--mint); }
+    .wellness-stat--concerning { background: var(--c-signal-wash); border-color: var(--c-signal); }
+    .wellness-stat--concerning .wellness-stat-value, .wellness-stat--concerning .wellness-stat-status { color: var(--c-signal); }
+    .wellness-stat--no-data .wellness-stat-value, .wellness-stat--no-data .wellness-stat-status { color: var(--ink-faint); }
+
     .disc { margin-top: 22px; font-size: 12px; color: var(--ink-faint); text-align: center; line-height: 1.6; }
 
     .offline-banner { display: none; background: var(--c-strength); color: #1a1206; font-size: 12.5px; font-weight: 700;

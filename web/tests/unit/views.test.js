@@ -988,7 +988,7 @@ describe('renderWeekCard race-week checklist (engine/swim_coach/models.py RaceWe
   const CHECKLIST = [
     {
       date: dateKey(addDays(raceWeekMonday, 8)), // deliberately past this week's own Sunday --
-      category: 'carb_load', // mirrors a race that doesn't fall on a Monday (see library/15-race-week.md)
+      category: 'carb_load', // mirrors a race that doesn't fall on a Monday (see library/16-race-week.md)
       label: 'Begin carbohydrate loading: 10-12 g/kg body weight/day.',
     },
     {
@@ -1030,7 +1030,7 @@ describe('renderWeekCard race-week checklist (engine/swim_coach/models.py RaceWe
   it('shows a checklist date that falls outside this WeekPlan\'s own 7 days without crashing', () => {
     // The carb-load item above is dated 8 days after raceWeekMonday -- past
     // this week's own Sunday -- exactly the "race isn't on a Monday" case
-    // library/15-race-week.md documents. Rendering must not silently drop
+    // library/16-race-week.md documents. Rendering must not silently drop
     // or crash on it.
     const html = renderApp(planData([{ ...BASE_WEEK, race_week_checklist: CHECKLIST }]), null);
     const expectedDate = formatShortDate(addDays(raceWeekMonday, 8));
@@ -1758,5 +1758,86 @@ describe('renderLoadChart', () => {
     const html = renderLoadChart({ status: 'error', data: null, error: '<img src=x onerror=alert(1)>' });
     expect(html).not.toContain('<img src=x');
     expect(html).toContain('&lt;img');
+  });
+
+  describe('wellness baseline deviation (RHR/HRV cross-check)', () => {
+    const readyWithDeviation = (wellness_baseline_deviation) => ({
+      status: 'ready',
+      data: { ctl_atl_tsb: readySeries, wellness_baseline_deviation },
+      error: null,
+    });
+
+    it('shows both deviations with correct, independent good/concerning framing', () => {
+      // Elevated RHR (bad) and suppressed HRV (bad) at the same time --
+      // opposite raw signs, both flagged.
+      const html = renderLoadChart(readyWithDeviation({
+        resting_hr_pct_deviation: 9.0, hrv_pct_deviation: -12.0,
+      }));
+      expect(html).toContain('+9.0%');
+      expect(html).toContain('-12.0%');
+      expect(html).toContain('wellness-stat--concerning');
+      // Both stats are concerning here -- exactly two concerning callouts.
+      expect(html.match(/wellness-stat--concerning/g).length).toBe(2);
+      expect(html).not.toContain('wellness-stat--good');
+    });
+
+    it('shows a good status for a mild positive RHR deviation and a mild negative HRV deviation', () => {
+      const html = renderLoadChart(readyWithDeviation({
+        resting_hr_pct_deviation: 1.0, hrv_pct_deviation: -1.0,
+      }));
+      expect(html).toContain('wellness-stat--good');
+      expect(html).not.toContain('wellness-stat--concerning');
+    });
+
+    it('does NOT flag a positive HRV deviation as concerning (sign conventions are opposite for the two fields)', () => {
+      const html = renderLoadChart(readyWithDeviation({
+        resting_hr_pct_deviation: null, hrv_pct_deviation: 15.0,
+      }));
+      // A rising HRV is good, not bad -- must not be colored the same
+      // direction as a rising (bad) RHR.
+      expect(html).toContain('wellness-stat--good');
+      expect(html).not.toContain('wellness-stat--concerning');
+    });
+
+    it('shows an honest "not enough data" state per-field when both are null, not zero and not hidden', () => {
+      const html = renderLoadChart(readyWithDeviation({
+        resting_hr_pct_deviation: null, hrv_pct_deviation: null,
+      }));
+      expect(html.toLowerCase()).toMatch(/not enough data/);
+      expect(html).not.toContain('0.0%');
+      expect(html.match(/wellness-stat--no-data/g).length).toBe(2);
+    });
+
+    it('shows an honest "not enough data" state for just one field when only one is null', () => {
+      const html = renderLoadChart(readyWithDeviation({
+        resting_hr_pct_deviation: 3.0, hrv_pct_deviation: null,
+      }));
+      expect(html).toContain('wellness-stat--good');
+      expect(html).toContain('wellness-stat--no-data');
+      expect(html.match(/wellness-stat--no-data/g).length).toBe(1);
+    });
+
+    it('still renders the wellness section (as all no-data) when the field is entirely absent from the payload', () => {
+      const html = renderLoadChart({
+        status: 'ready', data: { ctl_atl_tsb: readySeries }, error: null,
+      });
+      expect(html.match(/wellness-stat--no-data/g).length).toBe(2);
+    });
+
+    it('frames the cross-check as independent of, not a replacement for, the sRPE-derived chart above', () => {
+      const html = renderLoadChart(readyWithDeviation({
+        resting_hr_pct_deviation: null, hrv_pct_deviation: null,
+      }));
+      expect(html.toLowerCase()).toContain('independent');
+      expect(html.toLowerCase()).toMatch(/not (a )?replace/);
+    });
+
+    it('keeps the deviation display visually distinct from the CTL/ATL/TSB line markup', () => {
+      const html = renderLoadChart(readyWithDeviation({
+        resting_hr_pct_deviation: 2.0, hrv_pct_deviation: -2.0,
+      }));
+      expect(html).toContain('wellness-baseline-deviation');
+      expect(html).not.toMatch(/load-chart-line-(ctl|atl|tsb)"[^>]*wellness/);
+    });
   });
 });

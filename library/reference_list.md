@@ -765,6 +765,63 @@ raw research input, not itself citable).
   deviation" section's rationale for treating physiologically-measured
   `resting_hr`/`hrv` as an independent corroborating signal alongside
   sRPE-derived `ctl_atl_tsb`, rather than trusting sRPE-derived load alone.
+- **✓ Banister E.W. (1991)** — "Modeling Elite Athletic Performance" — in
+  *Physiological Testing of Elite Athletes* (Green H.J., McDougall J.D.,
+  Wenger H.A., eds), Human Kinetics, Champaign IL, pp. 403-424. The
+  original TRIMP (TRaining IMPulse) heart-rate-reserve exponential
+  weighting formula, derived separately for men and women from each
+  group's own blood-lactate profile as exercise intensity rises: `weight =
+  0.64 * e^(1.92 * HRR_fraction)` for men, `0.86 * e^(1.67 * HRR_fraction)`
+  for women. Verified by direct web search this session (title/authors/
+  publisher/pages confirmed). `[ADAPTED: general-endurance]` — not
+  swim-specific; predates sRPE as the field's own original heart-rate-based
+  training-load method. **⚠ Get this right:** several popular training-log/
+  calculator sites reproduce this with the MALE 0.64 coefficient applied to
+  both sexes and only the exponent swapped for women — that does **not**
+  match this primary source; the coefficient AND exponent both differ by
+  sex. Used by `engine/swim_coach/load.py`'s tier-2 (HR-based TRIMP)
+  session-load fallback, for RPE-less workouts with logged HR telemetry —
+  see `03-periodization.md`'s "Tiered session load" section.
+- **✓ Morton R.H., Fitz-Clarke J.R., Banister E.W. (1990)** — "Modeling
+  human performance in running" — *Journal of Applied Physiology*,
+  69(3):1171-1177. Corroborating source for the Banister (1991) TRIMP
+  entry above — same exponential heart-rate-reserve weighting family,
+  applied to running, same lead author. Verified by direct web search this
+  session.
+- **~ Ausland Å., Kelemen B., Seiler S. (2026)** — "An Exploratory Study of
+  Maximal Heart Rate Determination in Endurance Athletes: Laboratory
+  Testing Versus Field Based" — *Frontiers in Sports and Active Living*,
+  8:1806303. Found real athlete-reported field-effort HRmax exceeded
+  standard age-based formulas (Fox 220-age, Tanaka 208-0.7*age) by ~5-6 bpm
+  on average, supporting field-observed HR data over generic formulas.
+  Verified by direct fetch this session (authors/journal/volume/article-ID/
+  date confirmed) but marked `~` here because it's cited as corroborating
+  context for a related-but-distinct practice, not an exact match: it
+  compares self-reported *maximal-effort* HR against lab tests/formulas,
+  while `engine/swim_coach/load.py`'s `estimate_hr_max` uses "highest
+  incidentally observed HR across ordinary training sessions" (no
+  standardized max-effort test) — a practitioner convention this paper
+  supports in spirit, not one it directly tested. PROVISIONAL, not
+  `[EVIDENCE]`.
+- **✓ Allen H., Coggan A. (2010)** — *Training and Racing with a Power
+  Meter* (2nd ed.), VeloPress. Originating practitioner text for
+  cycling Training Stress Score (TSS) and Intensity Factor (IF): `TSS =
+  duration_hours * IF^2 * 100`, `IF = Normalized Power / FTP` (1 hour at
+  FTP = TSS 100). A practitioner/coaching text, not a peer-reviewed
+  journal source — same footing as this project's other TrainingPeaks/
+  cycling-convention citations (`CTL_TIME_CONSTANT_DAYS`/
+  `ATL_TIME_CONSTANT_DAYS`, Thomas/Mujika/Busso 2008 entry above).
+  `[ADAPTED: cycling]`. TrainingPeaks' own swim-specific documentation
+  ("Calculating Swimming TSS Score," confirmed by direct fetch this
+  session) cubes the intensity factor instead of squaring it for swimming
+  specifically, with a stated physical rationale (water resistance scales
+  stress faster than air resistance does for running) — used as
+  `engine/swim_coach/load.py`'s tier-3 (swim pace-based intensity)
+  session-load fallback: `IF = css_pace_s_per_100m / avg_pace_s_per_100m`,
+  `swim_tss = duration_hours * IF^3 * 100`. Confidence: medium (a
+  widely-used practitioner convention with a stated physical rationale,
+  not an independently validated exponent) — see `03-periodization.md`'s
+  "Tiered session load" section for the full test/revisit note.
 
 ## Cross-discipline endurance (cycling / running / triathlon)
 
@@ -1072,6 +1129,18 @@ resource itself and are kept.
 
 - Santa Barbara Channel Swimming Association — channel/marathon-swim training
   guidance: <https://santabarbarachannelswim.org/training>
+- TrainingPeaks — "Calculating Swimming TSS Score" (confirmed by direct
+  fetch this session): documents cubing (not squaring) the intensity
+  factor for swim-specific Training Stress Score, with a stated physical
+  rationale. Source for `engine/swim_coach/load.py`'s
+  `SWIM_TSS_INTENSITY_EXPONENT = 3.0`:
+  <https://www.trainingpeaks.com/learn/articles/calculating-swimming-tss-score/>
+- American Heart Association — "All About Heart Rate": commonly-cited
+  ~60-100 bpm normal adult resting-heart-rate range. Source for
+  `engine/swim_coach/load.py`'s `HR_REST_GENERIC_FALLBACK_BPM = 60.0`
+  (the athlete-never-logged-one fallback, deliberately the top of this
+  range — see that constant's comment for why):
+  <https://www.heart.org/en/health-topics/high-blood-pressure/the-facts-about-high-blood-pressure/all-about-heart-rate-pulse>
 - PurplePatch Fitness — open-water pacing tips:
   <https://www.purplepatchfitness.com/freetrainingtips/triathlon-open-water-swimming-tips-and-strategies>
 - Fueling technique ("bottle on a string"):

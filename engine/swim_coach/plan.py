@@ -813,7 +813,7 @@ def _block_start_volume(macro: MacroPlan, block_index: int, block: MacroBlock) -
 # prescriptive CONTENT layer on top of whichever week already comes out of
 # that math as the taper block's last week, without changing a single one of
 # its volume numbers. See `_race_week_checklist`'s own docstring and
-# `library/15-race-week.md` for the full citations.
+# `library/16-race-week.md` for the full citations.
 
 RACE_WEEK_PRIORITY = "A"
 # Coach judgment / engineering convention: race-week content only fires for
@@ -989,7 +989,7 @@ def generate_week(
     `WeekPlan.race_week_checklist` is populated with the final-taper-week
     race-prep content (carbohydrate-loading window, bodywork window,
     logistics checklist) -- see `_race_week_checklist`'s own docstring and
-    `library/15-race-week.md`. In every other
+    `library/16-race-week.md`. In every other
     case (no `event` passed, wrong/inactive/non-"A" event, or any week that
     isn't the taper block's final one) `race_week_checklist` stays the
     model's own default empty list -- an ordinary taper week is otherwise

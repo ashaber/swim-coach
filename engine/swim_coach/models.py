@@ -247,7 +247,7 @@ class RaceWeekChecklistItem(BaseModel):
     """One dated, categorized action item surfaced on the final taper week
     immediately preceding an athlete's active A-priority event -- see
     `engine/swim_coach/plan.py`'s `_race_week_checklist` for how these are
-    computed and `library/15-race-week.md` for the citations/rationale
+    computed and `library/16-race-week.md` for the citations/rationale
     behind each category.
 
     `date` is the specific calendar date the item applies to, computed

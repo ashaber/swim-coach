@@ -89,12 +89,13 @@ async def coach_view_load(
     weeks: int = Query(LOAD_GRAPH_DEFAULT_WEEKS, ge=LOAD_GRAPH_MIN_WEEKS, le=LOAD_GRAPH_MAX_WEEKS),
     principal: Principal = Depends(require_auth),
 ) -> dict:
-    """The Banister CTL/ATL/TSB series for the coach-mode roster view's
-    chart -- coach-access mirror of `GET /api/plan/load`
-    (`backend/app/routes/plan.py`), same minimal graph-shaped response, same
-    `summarize_rollup` call, gated via `resolve_coach_athlete` instead of
-    `resolve_athlete`. See `routes/plan.py`'s `LOAD_GRAPH_DEFAULT_WEEKS` for
-    why the default window is longer than `get_plan_summary`'s."""
+    """The Banister CTL/ATL/TSB series plus the `wellness_baseline_deviation`
+    resting-HR/HRV cross-check for the coach-mode roster view's chart --
+    coach-access mirror of `GET /api/plan/load` (`backend/app/routes/plan.py`),
+    same minimal graph-shaped response, same `summarize_rollup` call, gated
+    via `resolve_coach_athlete` instead of `resolve_athlete`. See
+    `routes/plan.py`'s `LOAD_GRAPH_DEFAULT_WEEKS` for why the default window
+    is longer than `get_plan_summary`'s."""
     settings = request.app.state.settings
     slug = resolve_coach_athlete(principal, slug)
     store = make_store(settings)
@@ -103,6 +104,7 @@ async def coach_view_load(
         "athlete": slug,
         "weeks": weeks,
         "ctl_atl_tsb": rollup["ctl_atl_tsb"],
+        "wellness_baseline_deviation": rollup["wellness_baseline_deviation"],
     }
 
 

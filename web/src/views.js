@@ -9,6 +9,7 @@ import {
   findSessionById, parseStructureBlocks, parseMainSetIntervals, renderStructuredWorkout,
   splitStructuredRationale, sessionZoneDistribution, formatZoneDistributionSummary,
   ZONE_GLOSSARY, TERM_GLOSSARY, ctlAtlTsbChartGeometry, raceWeekCategoryLabel,
+  describeWellnessBaselineDeviation,
 } from './plan.js';
 import { TOOL_LABELS } from './chat.js';
 import {
@@ -388,7 +389,7 @@ function renderGarminPush(session, sessionPush) {
 /** `week.race_week_checklist` (engine/swim_coach/models.py's
  * RaceWeekChecklistItem list) -- only ever non-empty for the final taper
  * week immediately preceding the athlete's active, priority-"A" event (see
- * plan.py's generate_week/_race_week_checklist and library/15-race-week.md).
+ * plan.py's generate_week/_race_week_checklist and library/16-race-week.md).
  * Sorted by date since carb-load/bodywork/logistics items can legitimately
  * carry dates outside this WeekPlan's own 7-day span (a race that doesn't
  * fall on a Monday pushes the carb-load date into the following, not-yet-
@@ -596,6 +597,59 @@ function loadChartPointsAttr(points) {
   return points.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
 }
 
+const WELLNESS_STAT_STATUS_TEXT = {
+  'no-data': 'Not enough data yet',
+  good: 'Within normal range',
+  concerning: 'worth a look',
+};
+
+/** Renders one compact stat callout (resting HR or HRV) from a
+ * `describeWellnessBaselineDeviation` field (`{value, status}`). `label` is
+ * the stat's name; `concerningWord` supplies the field-specific reason a
+ * `concerning` status is bad (opposite for the two fields -- "Elevated" for
+ * resting HR, "Suppressed" for HRV -- see plan.js's
+ * `describeWellnessBaselineDeviation` module comment on why the sign
+ * conventions are never unified). A `null` value (no `resting_hr`/`hrv`
+ * logged recently, or not enough history) renders an honest "not enough
+ * data yet" state -- never a hidden element, never a bare 0.0%. */
+function renderWellnessDeviationStat(label, { value, status }, concerningWord) {
+  const displayValue = value === null ? '—' : `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`;
+  const statusText = status === 'concerning'
+    ? `${concerningWord} — ${WELLNESS_STAT_STATUS_TEXT.concerning}`
+    : WELLNESS_STAT_STATUS_TEXT[status];
+  return `
+      <div class="wellness-stat wellness-stat--${status}">
+        <span class="wellness-stat-label">${esc(label)}</span>
+        <span class="wellness-stat-value mono">${esc(displayValue)}</span>
+        <span class="wellness-stat-status">${esc(statusText)}</span>
+      </div>`;
+}
+
+/** The resting-HR/HRV baseline-deviation cross-check -- deliberately its
+ * own visually distinct block (own heading, own callout styling, a dashed
+ * divider above it) rather than a fourth line blended into the CTL/ATL/TSB
+ * chart above, per this project's "multiple independent signals, not one
+ * master number" convention: it's a physiologically-measured corroboration
+ * of the sRPE-derived trend, not a component of it. Renders unconditionally
+ * whenever `renderLoadChart` has `load.data` at all (even when the
+ * CTL/ATL/TSB series itself is empty) -- wellness history and workout
+ * history are independent logs, so one being empty says nothing about the
+ * other. `deviation` may be `undefined` (older/partial payload) as well as
+ * individually-`null` fields; `describeWellnessBaselineDeviation` treats
+ * both the same honest way. */
+function renderWellnessBaselineDeviation(deviation) {
+  const described = describeWellnessBaselineDeviation(deviation);
+  return `
+    <div class="wellness-baseline-deviation">
+      <h4>Resting HR / HRV cross-check</h4>
+      <div class="wellness-stats">
+        ${renderWellnessDeviationStat('Resting HR vs. 28-day baseline', described.restingHr, 'Elevated')}
+        ${renderWellnessDeviationStat('HRV vs. 28-day baseline', described.hrv, 'Suppressed')}
+      </div>
+      <p class="load-chart-note">Resting heart rate and HRV are physiologically measured, not self-reported like the RPE behind the CTL/ATL/TSB chart above -- an independent cross-check, not a replacement for it. Treat a mismatch between the two as a reason to look closer, not as a verdict on which one is "right".</p>
+    </div>`;
+}
+
 function renderLoadChartSvg(geo) {
   const yTickLines = geo.yTicks.map((t) => `
       <line x1="${geo.plotLeft}" y1="${t.y.toFixed(1)}" x2="${geo.plotRight}" y2="${t.y.toFixed(1)}" class="load-chart-gridline" />
@@ -666,6 +720,7 @@ export function renderLoadChart(load) {
       <h3>Training load (CTL / ATL / TSB)</h3>
       ${body}
       <p class="load-chart-note">CTL ("fitness") and ATL ("fatigue") are 42-day/7-day exponentially weighted averages of daily training load; TSB ("form") is CTL minus ATL. These time constants are the standard cycling/TrainingPeaks convention, carried over as a starting point -- not yet verified for swimming specifically. The shaded band (+5 to +25 TSB) is a commonly-targeted range in cycling coaching practice on race day, not a swim-specific or peer-reviewed target -- individual variation is large, so your own best-performance history is a better guide than this generic band.</p>
+      ${renderWellnessBaselineDeviation(load.data.wellness_baseline_deviation)}
     </div>`;
 }
 

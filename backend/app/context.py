@@ -614,6 +614,7 @@ def summarize_rollup(
     weeks: int = 4,
     as_of: date | None = None,
     workouts: list[Workout] | None = None,
+    athlete: Athlete | None = None,
 ) -> dict[str, Any]:
     """The compact training-load/wellness/compliance rollup, computed with
     the exact same `swim_coach.load` functions `cli.py`'s `summarize`
@@ -622,6 +623,12 @@ def summarize_rollup(
     this function only assembles the same window/rollup shape around it, it
     never recomputes a formula. Used both for the per-request chat context
     and for the `get_plan_summary` tool.
+
+    `athlete`, same "let an already-fetched caller skip a second round
+    trip" convention as `workouts` above -- defaults to fetching it here
+    when omitted. Forwarded into `load.daily_loads`/`acute_chronic_ratio`
+    so their HR-TRIMP/swim-pace-IF fallback tiers can use this athlete's
+    `sex`/`css_pace_s_per_100m` for RPE-less workouts.
 
     `workouts` lets a caller that already fetched the athlete's workouts
     (e.g. `build_per_request_context`, which also renders them as exact
@@ -652,15 +659,22 @@ def summarize_rollup(
     as_of = date.today() if as_of is None else as_of
     span_start, span_end, week_starts = _rollup_window(as_of, weeks)
 
+    athlete = store.load_athlete(slug) if athlete is None else athlete
     workouts = store.list_workouts(slug) if workouts is None else workouts
     wellness = store.list_wellness(slug)
 
     volume_by_week = {iso_week_str(ws): weekly_volume_m(workouts, ws) for ws in week_starts}
 
-    loads = daily_loads(workouts)
+    # `athlete`/`wellness` unlock the HR-TRIMP (tier 2) and swim pace-IF
+    # (tier 3) fallbacks for workouts with no logged RPE -- see
+    # `load.daily_loads`'s docstring. This is the fix for the confirmed
+    # bug where 62 of Renee's 63 real logged workouts (device telemetry,
+    # no subjective RPE) were silently excluded from every load signal
+    # built on `daily_loads` (CTL/ATL/TSB, ACWR, monotony below).
+    loads = daily_loads(workouts, athlete=athlete, wellness=wellness)
     window_loads = {d: v for d, v in loads.items() if span_start <= d <= span_end}
     monotony_value = monotony(window_loads)
-    load_ratio = acute_chronic_ratio(workouts, as_of)
+    load_ratio = acute_chronic_ratio(workouts, as_of, athlete=athlete, wellness=wellness)
 
     # CTL/ATL/TSB computed from the FULL `loads` history (not `window_loads`)
     # so the exponentially-weighted averages get proper warm-up from every
@@ -904,7 +918,7 @@ def build_per_request_context(
     workouts = store.list_workouts(slug)
     events = store.load_events(slug)
     span_start, span_end, _ = _rollup_window(today, weeks=4)
-    rollup = summarize_rollup(store, slug, weeks=4, as_of=today, workouts=workouts)
+    rollup = summarize_rollup(store, slug, weeks=4, as_of=today, workouts=workouts, athlete=athlete)
     demographics = _render_demographics(athlete, today)
 
     parts = [
