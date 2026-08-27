@@ -7,7 +7,7 @@ import {
   parseStructureBlocks, parseMainSetIntervals, renderStructuredWorkout,
   splitStructuredRationale, sessionZoneDistribution, formatZoneDistributionSummary,
   stepCoachingCue, ZONE_GLOSSARY, TERM_GLOSSARY,
-  ctlAtlTsbChartGeometry, RACE_DAY_TSB_BAND,
+  ctlAtlTsbChartGeometry, RACE_DAY_TSB_BAND, raceWeekCategoryLabel,
   describeWellnessBaselineDeviation, WELLNESS_DEVIATION_CONCERNING_PCT,
 } from '../../src/plan.js';
 
@@ -1073,6 +1073,18 @@ describe('ctlAtlTsbChartGeometry', () => {
     const geo = ctlAtlTsbChartGeometry(series, { width: 300, height: 150 });
     expect(geo.width).toBe(300);
     expect(geo.height).toBe(150);
+  });
+});
+
+describe('raceWeekCategoryLabel', () => {
+  it('maps each RaceWeekChecklistItem category to an athlete-facing label', () => {
+    expect(raceWeekCategoryLabel('carb_load')).toBe('Carb-load');
+    expect(raceWeekCategoryLabel('bodywork')).toBe('Bodywork');
+    expect(raceWeekCategoryLabel('logistics')).toBe('Logistics');
+  });
+
+  it('falls back to the raw category string for an unknown value', () => {
+    expect(raceWeekCategoryLabel('mystery')).toBe('mystery');
   });
 });
 

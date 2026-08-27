@@ -539,3 +539,61 @@ def test_property_output_always_validates_across_action_matrix():
                 assert week.target_volume_m >= 0
                 for s in week.sessions:
                     assert s.duration_min > 0
+
+
+# --- race week checklist: carried through /adapt's finalized draft ---------------
+# `generate_week` is the mechanism under test in test_plan.py; this confirms
+# `adapt_week` (the function the /adapt skill actually calls, and therefore
+# what a real athlete's persisted final-taper-week plan comes from in
+# practice) doesn't drop the checklist while reassembling `sessions` around
+# the cut/advance/milestone volume tweaks.
+
+
+def test_adapt_week_carries_race_week_checklist_through_on_final_taper_week():
+    athlete = make_athlete()
+    event_monday = START + timedelta(weeks=10)
+    event = make_event(event_date=event_monday + timedelta(days=4))  # Friday, like Renee's race
+    macro = scaffold_macro(
+        athlete, event, START, current_weekly_volume_m=14000, peak_weekly_volume_m=20000
+    )
+    taper_block = next(b for b in macro.blocks if b.name == "taper")
+    assert (taper_block.end_date - taper_block.start_date).days // 7 + 1 == 2
+
+    current_week_start = taper_block.start_date  # ordinary (1st) taper week
+    current_week = generate_week(
+        athlete, macro, _iso_week(current_week_start), current_week_start, event=event
+    )
+    assert current_week.race_week_checklist == []
+
+    final_week_start = taper_block.start_date + timedelta(weeks=1)
+    as_of = final_week_start - timedelta(days=1)
+    week = adapt_week(
+        athlete, event, macro, _iso_week(final_week_start), final_week_start,
+        current_week, [], [], as_of,
+    )
+
+    assert week.race_week_checklist != []
+    categories = {item.category for item in week.race_week_checklist}
+    assert categories == {"carb_load", "bodywork", "logistics"}
+
+
+def test_adapt_week_no_race_week_checklist_on_an_ordinary_taper_week():
+    athlete = make_athlete()
+    event_monday = START + timedelta(weeks=10)
+    event = make_event(event_date=event_monday + timedelta(days=4))
+    macro = scaffold_macro(
+        athlete, event, START, current_weekly_volume_m=14000, peak_weekly_volume_m=20000
+    )
+    base_block = macro.blocks[0]
+
+    current_week_start = base_block.start_date
+    current_week = generate_week(
+        athlete, macro, _iso_week(current_week_start), current_week_start, event=event
+    )
+    next_week_start = current_week_start + timedelta(weeks=1)
+    as_of = next_week_start - timedelta(days=1)
+    week = adapt_week(
+        athlete, event, macro, _iso_week(next_week_start), next_week_start,
+        current_week, [], [], as_of,
+    )
+    assert week.race_week_checklist == []

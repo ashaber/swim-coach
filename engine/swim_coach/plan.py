@@ -33,6 +33,7 @@ from swim_coach.models import (
     Event,
     MacroBlock,
     MacroPlan,
+    RaceWeekChecklistItem,
     Session,
     WeekPlan,
     WorkoutLoad,
@@ -806,6 +807,168 @@ def _block_start_volume(macro: MacroPlan, block_index: int, block: MacroBlock) -
     return macro.blocks[block_index - 1].weekly_volume_target_m
 
 
+# --- race week: final-taper-week content ------------------------------------
+# Distinct from the taper block's own VOLUME/duration math above (TAPER_WEEKS_
+# LONG/SHORT, TAPER_WEEKLY_DECAY) -- this section adds a final, more
+# prescriptive CONTENT layer on top of whichever week already comes out of
+# that math as the taper block's last week, without changing a single one of
+# its volume numbers. See `_race_week_checklist`'s own docstring and
+# `library/16-race-week.md` for the full citations.
+
+RACE_WEEK_PRIORITY = "A"
+# Coach judgment / engineering convention: race-week content only fires for
+# the athlete's ACTIVE, priority "A" target event -- matches how
+# `Event.priority` is documented (a free-text convention, "A"/"B", never
+# itself gated on anywhere else in this engine -- see `Event.priority`'s own
+# docstring and `Event.active`'s "changes how the coach *talks about* events
+# ... never which events lookups find" note in models.py) but genuinely new
+# here: unlike a read/lookup, firing an athlete-facing race-week checklist
+# for a B-priority tune-up race or a soft-deleted/no-longer-happening event
+# would be actively wrong, not merely stale. Compared case-insensitively
+# (`.strip().upper()`) since `priority` carries no format validation.
+
+CARB_LOAD_WINDOW_START_DAYS_OUT = 3
+# **[ADAPTED: general-endurance] Confidence: high.** `Burke, Hawley, Wong &
+# Jeukendrup (2011)`, "Carbohydrates for training and competition" --
+# *Journal of Sports Sciences*, 29(sup1):S17-S27 -- the consensus review
+# behind the now-standard 10-12 g/kg/day carbohydrate-loading target for
+# 36-48h before events lasting >90 minutes in already well-trained athletes.
+# `Bussau, Fairchild, Rao, Steele & Fournier (2002)`, "Carbohydrate loading
+# in human muscle: an improved 1 day protocol" -- *European Journal of
+# Applied Physiology*, 87(3):290-295 -- is the direct evidence that a
+# well-trained athlete needs NO depletion phase: 8 endurance-trained
+# athletes reached near-maximal muscle glycogen (95 -> 180 mmol/kg wet mass)
+# within 1 day of 10 g/kg/day high-glycemic-index carbohydrate + rest, with
+# 2 further days of the same diet adding no further store. Both papers are
+# cited in `library/reference_list.md`'s "Race-week preparation" section.
+# This constant models the window's EARLIER (72h-out) boundary as a whole
+# calendar day out from `Event.event_date` -- deliberately the more
+# conservative, earlier edge of the literature's "36-72h" range, so the
+# athlete has the full window available rather than being told to start on
+# its last, most time-pressured day. PROVISIONAL: collapsing a 36-72h
+# *duration* range to a single whole-calendar-day marker is coach judgment,
+# not itself a cited figure -- an event's exact start time (not modeled by
+# `Event` today) would let this be more precise.
+
+BODYWORK_WINDOW_DAYS_OUT = 5
+# **Coach judgment / practitioner convention -- NOT a performance-evidence
+# citation.** `Weerapong, Hume & Kolt (2005)`, "The Mechanisms of Massage
+# and Effects on Performance, Muscle Recovery and Injury Prevention" --
+# *Sports Medicine*, 35(3):235-256 -- and the more recent `Dakić, Toskić,
+# Ilić, Đurić, Dopsaj & Šimenko (2023)` systematic review, "The Effects of
+# Massage Therapy on Sport and Exercise Performance" -- *Sports*,
+# 11(6):110 -- both converge on the same real but modest finding: massage
+# shows little to no evidence of a direct PERFORMANCE benefit, but a
+# consistent benefit to perceived soreness/fatigue and psychological state
+# (reduced anxiety/stress, improved mood and perceived recovery).
+# `[ADAPTED: general-endurance] Confidence: medium` for that soreness/
+# psychological-benefit claim itself (both are narrative/systematic
+# reviews spanning many sports, not swim-specific). The specific "3-5 days
+# out, light activation/relaxation rather than deep/aggressive work" TIMING
+# used here is a separate, weaker claim: it is widespread sports-massage-
+# practitioner convention (enough recovery buffer before race day for any
+# post-massage soreness to resolve, without losing the perceived-relaxation
+# benefit to being too far out) -- NOT independently verified against a
+# journal source this session, and must not be oversold as a cited
+# performance intervention. This constant picks the window's earlier,
+# more conservative edge (5 days out, not 3) for the same reason
+# `CARB_LOAD_WINDOW_START_DAYS_OUT` picks its own early edge: more buffer
+# before race day, and (not by design, just this athlete's specific
+# event's weekday) it happens to land on the final taper week's own last
+# (Sunday, recovery-day) session for Renee's actual Friday-race calendar --
+# see `test_plan.py`'s race-week tests for the exact date math.
+
+RACE_WEEK_LOGISTICS_LABELS: tuple[str, ...] = (
+    "If traveling to the race venue, arrive with enough days to spare to "
+    "acclimatize to the local time zone and water conditions before race "
+    "day.",
+    "Do a final full run-through of your race-day fueling plan (carbohydrate "
+    "product, delivery method/feeding schedule, backup options) against the "
+    "in-race protocol you've actually practiced in training.",
+    "Confirm on-water support (kayak/boat escort, sighting/navigation plan, "
+    "safety contacts) with race organizers.",
+)
+# Coach judgment, athlete-agnostic by construction -- these three items are
+# GENERIC race-day-logistics prompts (any open-water athlete travelling to a
+# venue, rehearsing a fueling plan, or needing on-water support benefits
+# from checking all three), not hardcoded to any one athlete's race. They
+# read as directly relevant to Renee's own Greece trip specifically because
+# her real `Event` data (open-water, travel required, kayak-supported) is
+# what it is -- see `athletes/renee/notes/decisions.md`'s 2026-07-05 entries
+# and `athletes/renee/plan/weeks/2026-W29.yaml`'s existing "kayak support"
+# dress-rehearsal language for the precedent this generalizes from -- not
+# because Greece, kayaks, or any other athlete-specific noun is named here.
+# The water-temperature/wetsuit-acclimatization detail in the first item is
+# deliberately left generic prose (not a computed `water_temp_c` number)
+# since `_race_week_checklist` below appends that number separately, only
+# when `Event.water_temp_c` is actually set.
+
+
+def _race_week_checklist(event: Event, week_start: date) -> list[RaceWeekChecklistItem]:
+    """The final taper week's race-week content: a carbohydrate-loading
+    item, a bodywork item, and the athlete-facing logistics checklist --
+    see this module's `CARB_LOAD_WINDOW_START_DAYS_OUT`/
+    `BODYWORK_WINDOW_DAYS_OUT`/`RACE_WEEK_LOGISTICS_LABELS` for the citations
+    and rationale behind each.
+
+    Every item's `date` is computed directly from `event.event_date` -- NOT
+    from `week_start` -- specifically because the two physiologically-timed
+    windows (carb-load, bodywork) do not reliably land inside the calling
+    week's own 7 days (see `RaceWeekChecklistItem`'s docstring for why: a
+    race that isn't itself on a Monday pushes some of these dates into the
+    following, not-yet-generated event week). The three logistics items
+    carry no comparable single physiologically-critical day, so they're
+    anchored to `week_start` itself (the final taper week's Monday) --
+    Coach judgment: settle logistics EARLY in the final week, distinctly
+    separate from the later, evidence-timed physiological windows above.
+    """
+    carb_load_date = event.event_date - timedelta(days=CARB_LOAD_WINDOW_START_DAYS_OUT)
+    bodywork_date = event.event_date - timedelta(days=BODYWORK_WINDOW_DAYS_OUT)
+
+    items = [
+        RaceWeekChecklistItem(
+            date=carb_load_date,
+            category="carb_load",
+            label=(
+                "Begin carbohydrate loading: 10-12 g/kg body weight/day, "
+                "continuing through race day (Burke et al. 2011; Bussau et "
+                "al. 2002 -- no depletion phase needed at this fitness "
+                "level). Keep training volume low through this window; do "
+                "not skip it."
+            ),
+        ),
+        RaceWeekChecklistItem(
+            date=bodywork_date,
+            category="bodywork",
+            label=(
+                "Light activation/relaxation bodywork or massage session if "
+                "available -- 3-5 days out, NOT the final 1-2 days. Modest, "
+                "real evidence for perceived soreness/fatigue and mental "
+                "readiness (Weerapong, Hume & Kolt 2005; Dakić et al. 2023), "
+                "not a proven direct performance intervention -- keep it "
+                "light, not deep/aggressive work this close to race day."
+            ),
+        ),
+    ]
+    for label in RACE_WEEK_LOGISTICS_LABELS:
+        items.append(RaceWeekChecklistItem(date=week_start, category="logistics", label=label))
+
+    if event.water_temp_c is not None:
+        suit_note = "no wetsuit" if not event.wetsuit else "wetsuit"
+        items.append(
+            RaceWeekChecklistItem(
+                date=week_start,
+                category="logistics",
+                label=(
+                    f"Confirm final race-conditions plan for ~{event.water_temp_c:g}°C "
+                    f"water ({suit_note}) -- last chance to bank open-water "
+                    "acclimatization time before race day."
+                ),
+            )
+        )
+    return items
+
+
 def generate_week(
     athlete: Athlete,
     macro: MacroPlan,
@@ -813,8 +976,27 @@ def generate_week(
     week_start: date,
     event_format: EventFormat = "single_day",
     template_preference: TemplatePreference | None = None,
+    event: Event | None = None,
 ) -> WeekPlan:
     """Generate one week's sessions.
+
+    `event` (optional, defaults to `None` -- every existing call site keeps
+    producing byte-identical output unless updated to pass it): when
+    supplied AND it is the athlete's ACTIVE, priority `"A"` target event
+    (`RACE_WEEK_PRIORITY`) AND `event.id == macro.event_id` (the macro this
+    week belongs to was actually scaffolded toward this same event) AND
+    this week is the LAST week of a `"taper"` block, the returned
+    `WeekPlan.race_week_checklist` is populated with the final-taper-week
+    race-prep content (carbohydrate-loading window, bodywork window,
+    logistics checklist) -- see `_race_week_checklist`'s own docstring and
+    `library/16-race-week.md`. In every other
+    case (no `event` passed, wrong/inactive/non-"A" event, or any week that
+    isn't the taper block's final one) `race_week_checklist` stays the
+    model's own default empty list -- an ordinary taper week is otherwise
+    untouched. This deliberately does NOT change `target_volume_m`, the
+    long-swim taper-decay cap, or any other volume/duration math above --
+    purely additive content layered on top of whatever this function
+    already computes.
 
     `template_preference` (optional): forwarded to every call site that
     picks a main-set template via the "additional pool-independent swim"
@@ -1136,6 +1318,17 @@ def generate_week(
             )
         )
 
+    race_week_checklist: list[RaceWeekChecklistItem] = []
+    is_final_taper_week = block.name == "taper" and week_index_in_block == weeks_in_block - 1
+    if (
+        event is not None
+        and is_final_taper_week
+        and event.id == macro.event_id
+        and event.active
+        and event.priority.strip().upper() == RACE_WEEK_PRIORITY
+    ):
+        race_week_checklist = _race_week_checklist(event, week_start)
+
     return WeekPlan(
         id=uuid4(),
         athlete_id=athlete.id,
@@ -1146,6 +1339,7 @@ def generate_week(
         sessions=sessions,
         adaptation_rationale=None,
         draft=False,
+        race_week_checklist=race_week_checklist,
     )
 
 

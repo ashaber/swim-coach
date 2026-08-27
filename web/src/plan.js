@@ -46,6 +46,21 @@ export function dowLabel(index) {
   return DOW_LABELS[index];
 }
 
+// Athlete-facing labels for WeekPlan.race_week_checklist item categories
+// (engine/swim_coach/models.py's RaceWeekChecklistItem.category) -- see
+// library/16-race-week.md for why these three are kept visually distinct
+// (different evidence basis, different timing windows) rather than folded
+// into one generic "race week" blob.
+const RACE_WEEK_CATEGORY_LABELS = {
+  carb_load: 'Carb-load',
+  bodywork: 'Bodywork',
+  logistics: 'Logistics',
+};
+
+export function raceWeekCategoryLabel(category) {
+  return RACE_WEEK_CATEGORY_LABELS[category] || category;
+}
+
 /** "300" -> "5 h", "90" -> "90 min", "125" -> "2 h 5 min". */
 export function formatDuration(minutes) {
   const m = Math.round(minutes);

@@ -169,7 +169,12 @@ def provision_athlete(
         week_start = macro.blocks[0].start_date
         iso_week = _iso_week(week_start)
         week = generate_week(
-            athlete, macro, iso_week, week_start, event_format=target_event.event_format
+            athlete,
+            macro,
+            iso_week,
+            week_start,
+            event_format=target_event.event_format,
+            event=target_event,
         )
         store.save_week(athlete.slug, week)
         log.info(

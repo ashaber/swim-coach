@@ -379,6 +379,63 @@ input, not itself citable).
   loss overestimates sweat loss — including in published swim "sweat rate"
   figures.**
 
+## Race-week preparation: carbohydrate loading & bodywork timing
+
+Curated for `03-periodization.md`'s "Race week" section (this session's
+pass). Distinct from the "Fuelling, hydration & hyponatremia" section
+above: those citations ground IN-RACE feeding once the swim is underway;
+these ground the PRE-race carbohydrate-loading protocol and pre-race
+bodywork timing, both verified by direct web search this session.
+
+- **✓ Burke L.M., Hawley J.A., Wong S.H.S., Jeukendrup A.E. (2011)** —
+  "Carbohydrates for training and competition" — *Journal of Sports
+  Sciences*, 29(sup1):S17-S27. The consensus review behind the now-standard
+  pre-race carbohydrate-loading target: 10-12 g/kg body weight/day for
+  36-48h before events lasting longer than ~90 minutes, in already
+  well-trained athletes. `[ADAPTED: general-endurance]`, Confidence: high —
+  title/authors/journal/volume/finding independently confirmed this
+  session; not swim-specific, but this is general exercise-physiology
+  consensus guidance, not a sport-specific finding.
+- **✓ Bussau V.A., Fairchild T.J., Rao A., Steele P., Fournier P.A.
+  (2002)** — "Carbohydrate loading in human muscle: an improved 1 day
+  protocol" — *European Journal of Applied Physiology*, 87(3):290-295. 8
+  endurance-trained athletes; combining physical inactivity with 10
+  g/kg/day high-glycemic-index carbohydrate intake raised muscle glycogen
+  from 95 to 180 mmol/kg wet mass within a single day, with no depletion
+  phase, and two further days of the same diet added no further store.
+  `[ADAPTED: general-endurance]`, Confidence: high — the direct evidence
+  behind `03-periodization.md`'s "no depletion phase needed for a
+  well-trained athlete" framing.
+- **✓ Weerapong P., Hume P.A., Kolt G.S. (2005)** — "The Mechanisms of
+  Massage and Effects on Performance, Muscle Recovery and Injury
+  Prevention" — *Sports Medicine*, 35(3):235-256. Narrative review: massage
+  shows little to no evidence of a direct performance benefit, but a
+  consistent reduction in perceived soreness/fatigue and psychological
+  benefit (lower anxiety/stress, improved mood and perceived recovery).
+  `[ADAPTED: general-endurance]`, Confidence: medium (narrative review,
+  many sports, not swim-specific) — confirmed by direct web search this
+  session.
+- **✓ Dakić M., Toskić L., Ilić V., Đurić S., Dopsaj M., Šimenko J.
+  (2023)** — "The Effects of Massage Therapy on Sport and Exercise
+  Performance: A Systematic Review" — *Sports*, 11(6):110. 114-study
+  PRISMA systematic review corroborating Weerapong et al. (2005) with a
+  larger, more recent evidence base: massage generally does not affect
+  motor abilities (except flexibility), but reduces pain/DOMS and improves
+  mood/relaxation/perceived recovery. `[ADAPTED: general-endurance]`,
+  Confidence: medium-high (systematic review, many sports) — confirmed by
+  direct web search this session.
+
+**⚠ Not independently verified this session:** the specific "schedule
+deep/aggressive bodywork 3-5 days before competition, not the final 1-2
+days" TIMING rule (`plan.py`'s `BODYWORK_WINDOW_DAYS_OUT`) is widespread
+sports-massage-practitioner convention found via general web search
+(multiple practitioner/clinic sources agree on the 3-5-day window and the
+rationale for avoiding the final 1-2 days), not a citation from any of the
+four journal sources above. Treated in `plan.py`/`03-periodization.md` as
+**Coach judgment / practitioner convention**, explicitly not tagged
+`[EVIDENCE]`/`[ADAPTED]` — see this project's evidence-discipline rule in
+`00-conventions.md` for why that distinction matters.
+
 ## Energy availability & RED-S/REDs
 
 Curated for `13-reds-energy-availability.md` (2026-07-13 pass;

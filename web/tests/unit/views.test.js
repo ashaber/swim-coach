@@ -3,7 +3,7 @@ import {
   renderHistorySection, renderLogTab, renderSettingsTab, renderUpdateBanner, renderApp,
   renderHistoryTab, renderTabBar, renderRosterTab, renderLoadChart,
 } from '../../src/views.js';
-import { isoWeekMonday, addDays, dateKey } from '../../src/plan.js';
+import { isoWeekMonday, addDays, dateKey, formatShortDate } from '../../src/plan.js';
 
 // Real fixture workouts from the task brief -- andrew's 2026-07-09
 // cross_train (analytics-rich, no distance/pace since it's not a swim) and
@@ -969,6 +969,81 @@ describe('renderApp plan session detail view (click-to-detail)', () => {
       const headings = (html.match(/<h4>[^<]*<\/h4>/g) || []).map((h) => h.toLowerCase());
       expect(headings).not.toContain('<h4>training rationale</h4>');
     });
+  });
+});
+
+describe('renderWeekCard race-week checklist (engine/swim_coach/models.py RaceWeekChecklistItem)', () => {
+  const RACE_WEEK = '2099-W02';
+  const raceWeekMonday = isoWeekMonday(RACE_WEEK);
+
+  const BASE_WEEK = {
+    iso_week: RACE_WEEK,
+    meso_block: 'taper',
+    focus: 'taper',
+    target_volume_m: 6000,
+    sessions: [],
+    adaptation_rationale: null,
+  };
+
+  const CHECKLIST = [
+    {
+      date: dateKey(addDays(raceWeekMonday, 8)), // deliberately past this week's own Sunday --
+      category: 'carb_load', // mirrors a race that doesn't fall on a Monday (see library/16-race-week.md)
+      label: 'Begin carbohydrate loading: 10-12 g/kg body weight/day.',
+    },
+    {
+      date: dateKey(addDays(raceWeekMonday, 6)),
+      category: 'bodywork',
+      label: 'Light activation/relaxation bodywork or massage session if available.',
+    },
+    {
+      date: dateKey(raceWeekMonday),
+      category: 'logistics',
+      label: 'Confirm on-water support (kayak/boat escort) with race organizers.',
+    },
+  ];
+
+  function planData(weeks) {
+    return { athlete: { name: 'Renee' }, events: [], macro: { blocks: [] }, weeks };
+  }
+
+  it('renders nothing when race_week_checklist is empty (an ordinary taper week)', () => {
+    const html = renderApp(planData([{ ...BASE_WEEK, race_week_checklist: [] }]), null);
+    expect(html).not.toContain('race-week-checklist');
+  });
+
+  it('renders nothing when race_week_checklist is missing entirely (older persisted weeks)', () => {
+    const html = renderApp(planData([BASE_WEEK]), null);
+    expect(html).not.toContain('race-week-checklist');
+  });
+
+  it('renders every item, its category label, and its date when populated', () => {
+    const html = renderApp(planData([{ ...BASE_WEEK, race_week_checklist: CHECKLIST }]), null);
+    expect(html).toContain('race-week-checklist');
+    expect(html).toContain('Carb-load');
+    expect(html).toContain('Bodywork');
+    expect(html).toContain('Logistics');
+    expect(html).toContain('Begin carbohydrate loading');
+    expect(html).toContain('kayak/boat escort');
+  });
+
+  it('shows a checklist date that falls outside this WeekPlan\'s own 7 days without crashing', () => {
+    // The carb-load item above is dated 8 days after raceWeekMonday -- past
+    // this week's own Sunday -- exactly the "race isn't on a Monday" case
+    // library/16-race-week.md documents. Rendering must not silently drop
+    // or crash on it.
+    const html = renderApp(planData([{ ...BASE_WEEK, race_week_checklist: CHECKLIST }]), null);
+    const expectedDate = formatShortDate(addDays(raceWeekMonday, 8));
+    expect(html).toContain(expectedDate);
+  });
+
+  it('escapes malicious content in a checklist item label', () => {
+    const malicious = [
+      { date: dateKey(raceWeekMonday), category: 'logistics', label: '<img src=x onerror=alert(1)>' },
+    ];
+    const html = renderApp(planData([{ ...BASE_WEEK, race_week_checklist: malicious }]), null);
+    expect(html).not.toContain('<img src=x onerror=alert(1)>');
+    expect(html).toContain('&lt;img');
   });
 });
 
