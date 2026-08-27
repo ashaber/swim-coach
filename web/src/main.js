@@ -1085,15 +1085,16 @@ function handleCloseHistoryDetail() {
 // Closes whichever detail view is open on a hardware/gesture back press.
 // Deliberately does NOT call history.back()/pushState itself -- it's the
 // *target* of a popstate that already happened, so doing either here would
-// create a pushState/popstate loop. Both handlers' own guards make this safe
-// to call unconditionally on every popstate, including ones unrelated to
-// either detail view. The two detail views live on different tabs (Log vs.
-// Plan) and are mutually exclusive in practice, but calling both closers
-// unconditionally needs no extra bookkeeping to stay correct if that ever
-// changes.
+// create a pushState/popstate loop. All three handlers' own guards make this
+// safe to call unconditionally on every popstate, including ones unrelated
+// to any detail view. The three detail views live on different tabs (Log,
+// Plan, roster) and are mutually exclusive in practice, but calling all
+// three closers unconditionally needs no extra bookkeeping to stay correct
+// if that ever changes.
 function handlePopState() {
   handleCloseHistoryDetail();
   handleCloseSessionDetail();
+  handleCloseCoachWorkoutDetail();
 }
 
 /** Clears a stale detail selection after a history refresh whose new data
@@ -1596,11 +1597,17 @@ function handleBackToRoster() {
 function handleOpenCoachWorkoutDetail(id) {
   if (!id) return;
   state.roster.workoutDetailId = id;
+  // Pushes an in-app history entry so hardware/gesture back (a `popstate`,
+  // handled by handlePopState) closes the detail instead of navigating the
+  // PWA away entirely -- same reasoning as handleOpenHistoryDetail's own
+  // pushState.
+  history.pushState({ rosterWorkoutDetail: id }, '');
   log.info('roster.workout_detail_opened', { athlete: state.roster.actingAsAthlete, workout: id });
   render();
 }
 
 function handleCloseCoachWorkoutDetail() {
+  if (!state.roster.workoutDetailId) return; // avoids a redundant render on popstate re-entrancy
   state.roster.workoutDetailId = null;
   render();
 }
@@ -1766,10 +1773,14 @@ function setTab(tab) {
   }
   // Same teardown for the roster tab's workout-detail view -- coming back to
   // My Athletes should land on the acting-as athlete's lists, not wherever
-  // the coach last was. No history.back() here (unlike Log/Plan's detail
-  // views) -- this one never pushed a history entry.
+  // the coach last was.
   if (state.tab === 'roster' && state.roster.workoutDetailId) {
     state.roster.workoutDetailId = null;
+    // Consumes the pushState entry handleOpenCoachWorkoutDetail added, keeping
+    // browser history symmetric with app state -- see the matching Log-tab
+    // comment above for why this is safe (handlePopState's
+    // handleCloseCoachWorkoutDetail() is a no-op once the id is already null).
+    history.back();
   }
   // Same teardown for the Plan tab's session-detail view -- coming back to
   // Plan should land on "This week"/"Next week", not wherever the athlete
@@ -1874,7 +1885,11 @@ async function onAppClick(e) {
     case 'roster:select-athlete': handleSelectCoachedAthlete(el.dataset.slug); break;
     case 'roster:back': handleBackToRoster(); break;
     case 'roster:open-workout': handleOpenCoachWorkoutDetail(el.dataset.id); break;
-    case 'roster:close-workout': handleCloseCoachWorkoutDetail(); break;
+    // Goes through history.back() (not handleCloseCoachWorkoutDetail()
+    // directly) so the in-app "close" affordance and a hardware/gesture
+    // back press close the detail via the exact same path -- see
+    // handlePopState. Same reasoning as history:back/session:back below.
+    case 'roster:close-workout': history.back(); break;
     case 'roster:reply-submit': handleSubmitCoachReply(el.dataset.id); break;
     case 'grants:submit': handleGrantSubmit(); break;
     case 'grants:revoke': handleRevokeGrant(el.dataset.id); break;

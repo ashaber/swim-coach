@@ -256,6 +256,30 @@ def test_closing_workout_detail_returns_to_the_workouts_and_feedback_lists(page)
     assert 'How much fueling for a 4hr swim?' in page.content()
 
 
+def test_hardware_back_closes_workout_detail_not_the_app(page):
+    # Mirrors test_workout_detail.py's test_hardware_back_closes_detail_not_app
+    # for the Log tab's own workout-detail view: opening a coached athlete's
+    # workout from the roster used to have no in-app history entry at all
+    # (see main.js's handleOpenCoachWorkoutDetail before this fix), so a
+    # hardware/gesture back press navigated the PWA away entirely instead of
+    # just closing the detail. page.go_back() is Playwright's proxy for that
+    # hardware/gesture back press.
+    _open_roster(page)
+    page.click('[data-a="roster:select-athlete"]')
+    page.wait_for_selector('[data-a="roster:open-workout"]')
+    page.click('[data-a="roster:open-workout"]')
+    page.wait_for_selector('[data-a="roster:close-workout"]')
+
+    page.go_back()
+    page.wait_for_selector('[data-a="roster:open-workout"]')
+    assert page.locator('[data-a="roster:close-workout"]').count() == 0
+    assert 'How much fueling for a 4hr swim?' in page.content()
+    # Prove the app didn't navigate away entirely -- the tab bar (and the
+    # rest of the app chrome) must still be there, not a blank/exited page.
+    assert page.locator('.tabbar').count() == 1
+    assert page.locator('[data-a="tab:roster"]').count() == 1
+
+
 # --- Replying to feedback -----------------------------------------------------
 
 def test_replying_to_feedback_patches_and_updates_the_row(page):
