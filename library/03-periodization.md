@@ -74,15 +74,13 @@ conservatism over precision here.
 
 ## Load monitoring (`load.py`)
 
-### sRPE session load
+### Tiered session load: sRPE > HR-based TRIMP > swim pace-IF > duration-only
 
-**Coach judgment** (standard training-load bookkeeping method, not itself a
-swim-specific evidence claim): `session_load = duration_min * rpe` (the
-Foster session-RPE model), sport-agnostic. `DEFAULT_RPE_WHEN_MISSING = 5` is
-the 1-10 scale's "somewhat hard" midpoint, used only when a caller opts into
-`assume_default_rpe=True` for an RPE-less logged workout (e.g. an ingested
-.fit file); the default behavior instead excludes RPE-less workouts from
-load totals rather than guessing.
+`session_load` no longer returns `None` for a missing RPE (62 of Renee's 63
+real logged workouts have no RPE; the old behavior excluded them from every
+load total). It falls through four tiers -- sRPE, HR-TRIMP (Banister), swim
+pace-IF (TSS-family), duration-only -- the last always real. **Full
+writeup + citations: `15-tiered-session-load.md`.**
 
 ### Monotony
 
