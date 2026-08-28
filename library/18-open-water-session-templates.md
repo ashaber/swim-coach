@@ -1,8 +1,5 @@
 # Open-water session-content templates
 
-**UNREVIEWED** — drafted this session; pending human review before treated
-as grounding truth, per `00-conventions.md`.
-
 Grounds `engine/swim_coach/ow_session_templates.py`'s template library
 (feed-window practice, out-and-back negative split, chop/wind adaptation,
 sighting drill, breathing-pattern variation, back-to-back multi-day-stage
