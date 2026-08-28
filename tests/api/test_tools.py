@@ -2077,6 +2077,182 @@ def test_replace_week_plan_session_override_structured_alone_no_distance_require
     assert repeat_node.steps[0].label == "Kettlebell swings"
 
 
+# --- replace_week_plan session_overrides: ow_template (open-water template library) ---
+# The open-water session-content template library
+# (engine/swim_coach/ow_session_templates.py, library/
+# 18-open-water-session-templates.md) is wired into session_overrides via
+# this `ow_template` field -- a coach picks a template `id` by name instead
+# of hand-authoring `structure`/`structured` from scratch.
+
+
+def test_replace_week_plan_session_override_ow_template_persists_resolved_content(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    target = next(s for s in baseline["sessions"] if s["sport"] == "swim_ow")
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{
+            "date": target["date"], "sport": target["sport"],
+            "ow_template": {"id": "negative_split", "distance_m": 3000},
+        }],
+        "confirm": True,
+    })
+
+    assert "error" not in result
+    overridden = next(s for s in result["sessions"] if s["date"] == target["date"] and s["sport"] == target["sport"])
+    assert overridden["has_structured"] is True
+    assert overridden["distance_m"] == 3000
+    assert "negative split" in overridden["structure"].lower() or "pacing" in overridden["structure"].lower()
+
+    on_disk = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    persisted = next(s for s in on_disk.sessions if s.date.isoformat() == target["date"] and s.sport == target["sport"])
+    assert persisted.structured is not None
+    # Resolved (not a bare template) -- every real target has a concrete
+    # absolute pace, never a leftover relative zone/percent_css basis, so
+    # Garmin export (garmin_export.to_garmin_fit_workout) never chokes on it.
+    interval_steps = [s for s in persisted.structured.items if s.kind == "step" and s.role == "interval"]
+    assert len(interval_steps) == 2
+    for step in interval_steps:
+        assert step.target.basis == "absolute"
+        assert step.target.low is not None
+
+
+def test_replace_week_plan_session_override_ow_template_defaults_distance_from_session(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    target = next(s for s in baseline["sessions"] if s["sport"] == "swim_ow")
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{
+            "date": target["date"], "sport": target["sport"],
+            "ow_template": {"id": "negative_split"},
+        }],
+        "confirm": True,
+    })
+
+    assert "error" not in result
+    overridden = next(s for s in result["sessions"] if s["date"] == target["date"] and s["sport"] == target["sport"])
+    # No distance_m given anywhere in the override -- falls back to the
+    # session's own already-generated distance.
+    assert overridden["distance_m"] == target["distance_m"]
+
+
+def test_replace_week_plan_session_override_ow_template_missing_id_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    target = baseline["sessions"][0]
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{"date": target["date"], "sport": target["sport"], "ow_template": {}}],
+    })
+
+    assert "error" in result
+    assert "ow_template" in result["error"]
+
+
+def test_replace_week_plan_session_override_ow_template_unknown_id_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    # session[0] (not a sport-filtered pick): the real committed 2026-W28.yaml
+    # was hand-edited away from generate_week's default Saturday long-swim
+    # placement (see notes/decisions.md's 2026-07-05 "W28 rewritten" entry),
+    # so a freshly regenerated `swim_ow` session's date doesn't reliably
+    # exist in the real on-disk file this fixture copies -- session[0]
+    # (Monday's pool slot) is untouched by that edit and always matches,
+    # same convention the other "confirm this DIDN'T persist" tests above use.
+    target = baseline["sessions"][0]
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{
+            "date": target["date"], "sport": target["sport"],
+            "ow_template": {"id": "not_a_real_template", "distance_m": 3000},
+        }],
+        "confirm": True,
+    })
+
+    assert "error" in result
+    assert "unknown ow_template id" in result["error"]
+    # Nothing persisted -- a whole-call failure, not a partial apply.
+    on_disk = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    persisted = next(s for s in on_disk.sessions if s.date.isoformat() == target["date"] and s.sport == target["sport"])
+    assert persisted.structured is None
+
+
+def test_replace_week_plan_session_override_ow_template_below_floor_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    target = next(s for s in baseline["sessions"] if s["sport"] == "swim_ow")
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{
+            "date": target["date"], "sport": target["sport"],
+            "ow_template": {"id": "feed_window_practice", "distance_m": 500},
+        }],
+        "confirm": True,
+    })
+
+    assert "error" in result
+    assert "feed-window practice" in result["error"]
+
+
+def test_replace_week_plan_session_override_ow_template_combined_with_structure_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    target = next(s for s in baseline["sessions"] if s["sport"] == "swim_ow")
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{
+            "date": target["date"], "sport": target["sport"],
+            "ow_template": {"id": "negative_split", "distance_m": 3000},
+            "structure": "hand-written prose",
+        }],
+    })
+
+    assert "error" in result
+    assert "ow_template" in result["error"]
+    assert "structure" in result["error"]
+
+
+def test_replace_week_plan_session_override_ow_template_day2_framing_differs_from_day1(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    target = next(s for s in baseline["sessions"] if s["sport"] == "swim_ow")
+
+    day1 = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{
+            "date": target["date"], "sport": target["sport"],
+            "ow_template": {"id": "back_to_back_stage_day1", "distance_m": 6000},
+        }],
+    })
+    day2 = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{
+            "date": target["date"], "sport": target["sport"],
+            "ow_template": {"id": "back_to_back_stage_day2", "distance_m": 6000},
+        }],
+    })
+
+    assert "error" not in day1 and "error" not in day2
+    structure1 = next(s for s in day1["sessions"] if s["date"] == target["date"])["structure"]
+    structure2 = next(s for s in day2["sessions"] if s["date"] == target["date"])["structure"]
+    assert structure1 != structure2
+    assert "fatigue" in structure2.lower()
+
+
 def test_week_sessions_json_exposes_structure_and_has_structured(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)

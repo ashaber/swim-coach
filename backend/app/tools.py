@@ -127,7 +127,8 @@ from typing import Any, Callable
 from pydantic import ValidationError
 
 from swim_coach.adapt import adapt_week
-from swim_coach.models import Event, Feedback, Workout, WorkoutStructure
+from swim_coach.models import Athlete, Event, Feedback, Workout, WorkoutStructure
+from swim_coach.ow_session_templates import build_ow_session
 from swim_coach.plan import (
     SESSION_ADJUSTMENT_INCREASE_CAP_PCT,
     _duration_min_for_distance,
@@ -137,7 +138,7 @@ from swim_coach.plan import (
     scaffold_macro,
 )
 from swim_coach.store import StoreInterface
-from swim_coach.workout_templates import TemplatePreference
+from swim_coach.workout_templates import TemplatePreference, render_prose, resolve_template
 
 from app.context import iso_week_str, summarize_rollup
 from app.garmin_push import push_on_demand
@@ -719,7 +720,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "applied on top of the otherwise-normal generated week, still "
             "fully gated by the same draft-then-confirm flow -- never call "
             "with confirm=true and a fresh override in the same turn the "
-            "athlete hasn't seen yet. Two distinct real uses:\n"
+            "athlete hasn't seen yet. Three distinct real uses:\n"
             "  - distance_m/duration_min: the automatic ramp/volume math "
             "won't always land on the exact number an athlete explicitly "
             "wants -- e.g. a conservative first swim back after time off, "
@@ -770,7 +771,18 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "nothing to render/export for this session until it's later "
             "given real `structured` content. Setting BOTH `structure` and "
             "`structured` together in the same entry persists both -- "
-            "neither clears the other.\n\n"
+            "neither clears the other.\n"
+            "  - `ow_template`: the same real-content-authoring need as "
+            "purpose/structure/structured above, but for a session that "
+            "matches one of the named open-water session-content templates "
+            "in `engine/swim_coach/ow_session_templates.py` (feed-window "
+            "practice, negative-split pacing, chop/wind adaptation, "
+            "sighting, breathing-pattern variation, back-to-back "
+            "multi-day-stage fatigue simulation, taper activation, race "
+            "dress rehearsal) -- prefer this over hand-authoring `structure`/"
+            "`structured` whenever a named template already matches what's "
+            "wanted; see this field's own schema description for the full "
+            "id list and each template's scaling behavior.\n\n"
             "`template_preference` (optional): honors a request like 'give "
             "me more kettlebell work this week' or 'I want a threshold set' "
             "by narrowing which main-set workout-library template the "
@@ -924,6 +936,61 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                                     "nothing is persisted -- fix and retry with a valid payload "
                                     "rather than falling back to prose-only `structure`."
                                 ),
+                            },
+                            "ow_template": {
+                                "type": "object",
+                                "description": (
+                                    "Build this session's real content from the open-water "
+                                    "session-content template library (engine/swim_coach/"
+                                    "ow_session_templates.py, documented in library/"
+                                    "18-open-water-session-templates.md) instead of hand-"
+                                    "authoring `structure`/`structured` -- prefer this whenever "
+                                    "one of the named templates below matches what's wanted; "
+                                    "fall back to `structure`/`structured` only for something "
+                                    "genuinely novel. Sets both `structured` (the real, resolved "
+                                    "WorkoutStructure -- Garmin-exportable) and `structure` "
+                                    "(matching prose) on the session, plus `distance_m` (from "
+                                    "`ow_template.distance_m` if given, else this entry's own "
+                                    "`distance_m`, else whatever distance the session already "
+                                    "has). Cannot be combined with `structure`/`structured` in "
+                                    "the same entry -- pick one authoring method. Known `id`s: "
+                                    "`feed_window_practice` (endurance_floor -- steady swimming "
+                                    "broken by real feed stops), `negative_split` (skill_scalable "
+                                    "-- out leg easy, back leg faster), `chop_wind_adaptation` "
+                                    "(skill_scalable -- into-chop/downwind halves, bilateral "
+                                    "breathing), `sighting_drill` (skill_scalable -- frequent vs. "
+                                    "infrequent sighting comparison), `breathing_pattern_"
+                                    "variation` (skill_scalable -- alternating bilateral/"
+                                    "unilateral blocks), `back_to_back_stage_day1`/"
+                                    "`back_to_back_stage_day2` (endurance_floor -- a "
+                                    "multi_day_stage event's back-to-back fatigue-simulation "
+                                    "pair, day2 explicitly framed as swum on day1's fatigue), "
+                                    "`taper_activation` (skill_scalable, has a MAXIMUM distance "
+                                    "not a minimum -- deliberately short/sharp, do not use for a "
+                                    "long session), `race_dress_rehearsal` (endurance_floor -- "
+                                    "full race-pace/race-kit continuous swim with feed stops). "
+                                    "`endurance_floor` templates raise a clear error (nothing "
+                                    "persisted) if the resulting distance/CSS implies a duration "
+                                    "below that template's documented minimum -- reach for a "
+                                    "`skill_scalable` template instead of forcing a shorter "
+                                    "endurance session under its floor."
+                                ),
+                                "properties": {
+                                    "id": {
+                                        "type": "string",
+                                        "description": "Template id, see this field's own description for the known list.",
+                                    },
+                                    "distance_m": {
+                                        "type": "number",
+                                        "description": (
+                                            "Distance to build the template at. Optional -- falls "
+                                            "back to this entry's own `distance_m`, then the "
+                                            "session's existing distance, if omitted."
+                                        ),
+                                    },
+                                },
+                                "required": ["id"],
+                                "additionalProperties": False,
                             },
                         },
                         "required": ["date"],
@@ -1896,18 +1963,24 @@ def _handle_reschedule_session(input_data: dict[str, Any], *, store: StoreInterf
     }
 
 
-def _apply_session_overrides(week, overrides: list[dict[str, Any]], css_pace_s: float | None) -> str | None:
-    """Applies explicit per-session distance_m/duration_min overrides to an
-    already-generated week's sessions, in place. Returns an error string on
-    the first override that doesn't match exactly one session (no match, or
-    an ambiguous match needing `sport` to disambiguate, same convention as
-    `reschedule_session`'s existing date+sport matching above) -- callers
-    should treat any non-None return as a full failure, not apply the rest
-    and ignore the bad one. `week` is mutated directly (pydantic Session
-    objects are not frozen in this codebase); this is only ever called on a
-    freshly-computed `generate_week()` result, never a stored object another
-    caller might still be holding a reference to.
+def _apply_session_overrides(week, overrides: list[dict[str, Any]], athlete: Athlete) -> str | None:
+    """Applies explicit per-session distance_m/duration_min/content overrides
+    to an already-generated week's sessions, in place. Returns an error
+    string on the first override that doesn't match exactly one session (no
+    match, or an ambiguous match needing `sport` to disambiguate, same
+    convention as `reschedule_session`'s existing date+sport matching above)
+    -- callers should treat any non-None return as a full failure, not apply
+    the rest and ignore the bad one. `week` is mutated directly (pydantic
+    Session objects are not frozen in this codebase); this is only ever
+    called on a freshly-computed `generate_week()` result, never a stored
+    object another caller might still be holding a reference to.
+
+    Takes the full `athlete` (not just `css_pace_s`) because the `ow_template`
+    field below needs `workout_templates.resolve_template`'s full athlete
+    argument, not just the CSS pace `_duration_min_for_distance` re-estimation
+    already used.
     """
+    css_pace_s = athlete.css_pace_s_per_100m
     for override in overrides:
         raw_date = override.get("date")
         try:
@@ -1939,16 +2012,27 @@ def _apply_session_overrides(week, overrides: list[dict[str, Any]], css_pace_s: 
         purpose = override.get("purpose")
         structure = override.get("structure")
         structured = override.get("structured")
+        ow_template = override.get("ow_template")
         if (
             distance_m is None
             and duration_min is None
             and purpose is None
             and structure is None
             and structured is None
+            and ow_template is None
         ):
             return (
                 f"session_overrides: entry for {raw_date!r} needs at least one of "
-                "distance_m, duration_min, purpose, structure, structured"
+                "distance_m, duration_min, purpose, structure, structured, ow_template"
+            )
+        if ow_template is not None and (structure is not None or structured is not None):
+            return (
+                f"session_overrides: entry for {raw_date!r} sets `ow_template` "
+                "together with `structure`/`structured` -- pick one authoring "
+                "method per entry: `ow_template` builds real content from the "
+                "named open-water template library "
+                "(swim_coach.ow_session_templates.OW_SESSION_TEMPLATES), "
+                "`structure`/`structured` author it directly."
             )
         if structure is not None and distance_m is None:
             # Real bug, caught live: `distance_m` is a separate field from
@@ -2006,6 +2090,45 @@ def _apply_session_overrides(week, overrides: list[dict[str, Any]], css_pace_s: 
                 # session (prose + machine-readable IR) and neither should
                 # clobber the other; see the tool description.
                 session.structured = None
+        if ow_template is not None:
+            # Build real session content from the named open-water template
+            # library (engine/swim_coach/ow_session_templates.py) instead of
+            # requiring the caller to hand-author `structure`/`structured`
+            # from scratch -- see that module's docstring and
+            # library/18-open-water-session-templates.md for what each
+            # template id actually contains and why.
+            template_id = ow_template.get("id") if isinstance(ow_template, dict) else None
+            if not template_id:
+                return (
+                    f"session_overrides: entry for {raw_date!r} sets `ow_template` "
+                    "without an `id` -- see swim_coach.ow_session_templates."
+                    "OW_SESSION_TEMPLATES for known ids."
+                )
+            template_distance = ow_template.get("distance_m")
+            if template_distance is None:
+                template_distance = distance_m if distance_m is not None else session.distance_m
+            if template_distance is None:
+                return (
+                    f"session_overrides: entry for {raw_date!r}'s `ow_template` has "
+                    "no distance_m to build from -- pass `ow_template.distance_m`, "
+                    "or `distance_m` on the same entry, or target a session that "
+                    "already has one."
+                )
+            if css_pace_s is None:
+                return (
+                    f"session_overrides: entry for {raw_date!r} can't build an "
+                    "`ow_template` -- athlete has no css_pace_s_per_100m on file."
+                )
+            try:
+                template_structure = build_ow_session(template_id, int(template_distance), css_pace_s)
+            except ValueError as exc:
+                return f"session_overrides: ow_template error for {raw_date!r}: {exc}"
+            resolved = resolve_template(template_structure, athlete)
+            session.structured = resolved
+            session.structure = render_prose(resolved)
+            session.distance_m = int(template_distance)
+            if duration_min is None:
+                session.duration_min = max(_duration_min_for_distance(template_distance, css_pace_s), 15.0)
     return None
 
 
@@ -2115,7 +2238,7 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
 
     session_overrides = input_data.get("session_overrides")
     if session_overrides:
-        override_error = _apply_session_overrides(week, session_overrides, athlete.css_pace_s_per_100m)
+        override_error = _apply_session_overrides(week, session_overrides, athlete)
         if override_error is not None:
             return {"error": override_error}
 
