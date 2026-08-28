@@ -36,8 +36,22 @@ CORS_HEADERS = {
 COACH_IDENTITY = {'name': 'Andrew', 'athlete': 'andrew', 'role': 'coach', 'coachFor': ['renee']}
 NO_GRANTS_IDENTITY = {'name': 'Andrew', 'athlete': 'andrew', 'role': 'athlete', 'coachFor': []}
 
+# A single session, far enough in the future that plan.js's
+# pickCurrentAndNextWeek always treats its week as "This week" (the sole
+# week's Sunday is always >= "now", regardless of wall clock) -- used by the
+# cross-tab-independence test below to prove the coach's OWN Plan tab session
+# detail (state.planSessionDetailId) and the roster's coached-athlete session
+# detail (state.roster.sessionDetailId) never collide.
+ANDREW_OWN_SESSION = {
+    'id': 'andrew-sess-1', 'date': '2098-12-29', 'sport': 'swim_pool', 'source': 'ai_coach',
+    'duration_min': 45, 'distance_m': 2000, 'intensity': {'zone': 'Z2'}, 'purpose': "Andrew's own session",
+    'structure': None, 'status': 'planned',
+}
 PLAN_STUB = json.dumps({
-    'slug': 'andrew', 'athlete': {'name': 'Andrew'}, 'events': [], 'macro': {'blocks': []}, 'weeks': [],
+    'slug': 'andrew', 'athlete': {'name': 'Andrew'}, 'events': [], 'macro': {'blocks': []},
+    'weeks': [{
+        'iso_week': '2099-W01', 'focus': 'own plan', 'target_volume_m': 2000, 'sessions': [ANDREW_OWN_SESSION],
+    }],
 })
 PLAN_LOAD_STUB = json.dumps({'athlete': 'andrew', 'weeks': 12, 'ctl_atl_tsb': []})
 
@@ -62,6 +76,24 @@ ATHLETES_STUB = json.dumps([{'slug': 'renee', 'name': 'Renee'}])
 # Workouts + Dashboard sub-tab's skip-derivation. A real macro block + one
 # planned-but-never-done session so this file's Training Plan and
 # missed-session-derivation tests have something real to assert against.
+# A real WorkoutStructure shape (engine/swim_coach/models.py's WorkoutStep) --
+# gates both the Garmin download/push buttons on the athlete's own Plan tab
+# (views.js's renderPlanSessionDetail) and, on the coach's Training Plan
+# sub-tab, the honest "not available" note that replaces them instead (see
+# renderPlanSessionDetail's showGarminActions param).
+STRUCTURED_SESSION = {
+    'id': 'sess-structured', 'date': '2026-08-11', 'sport': 'swim_pool', 'source': 'ai_coach',
+    'duration_min': 45, 'distance_m': 1600, 'intensity': {'zone': 'Z3'},
+    'purpose': 'garmin-exportable session', 'structure': 'Main set: 4x200 @ Z3', 'status': 'planned',
+    'structured': {
+        'items': [{
+            'kind': 'step', 'label': '4x200 @ Z3', 'role': 'interval', 'duration_kind': 'distance_m',
+            'duration_value': 800, 'target': None, 'load': None, 'modality': 'swim',
+            'stroke': None, 'equipment': [], 'exercise_name': None,
+        }],
+    },
+}
+
 ROSTER_PLAN_STUB = json.dumps({
     'slug': 'renee', 'name': 'Renee', 'athlete': {'name': 'Renee'}, 'events': [],
     'macro': {
@@ -82,7 +114,7 @@ ROSTER_PLAN_STUB = json.dumps({
             # no optional-chaining) -- must be present here too, or the
             # Training Plan sub-tab throws while rendering this fixture.
             'purpose': 'Aerobic base',
-        }],
+        }, STRUCTURED_SESSION],
     }],
 })
 
@@ -424,6 +456,123 @@ def test_switching_sub_tabs_and_back_preserves_the_athlete_context(page):
     page.click('[data-a="roster:subtab:dashboard"]')
     page.wait_for_selector('[data-a="roster:open-workout"]')
     assert 'Renee' in page.content()
+
+
+# --- Session detail drill-down (the reported bug fix) -------------------------
+# Andrew's real bug report: "I can finally see Renee's plan. However, I can't
+# open the workouts to see the detail." Root cause: renderPlanSessionDetail's
+# Garmin download/push buttons act on the SIGNED-IN coach's own athlete slug
+# (main.js's athleteSlug()), never the coached athlete's -- so drill-down was
+# deliberately left disabled. The fix: real drill-down showing the same
+# structured content the athlete sees, with just the two Garmin actions
+# suppressed (views.js's renderPlanSessionDetail `showGarminActions` param).
+
+def _open_training_plan_and_expand_all_weeks(page):
+    page.click('[data-a="roster:select-athlete"]')
+    page.wait_for_selector('[data-a="roster:subtab:plan"]')
+    page.click('[data-a="roster:subtab:plan"]')
+    page.wait_for_selector('.macro .ph')
+    # STRUCTURED_SESSION's date is in the past relative to "today", so it
+    # only renders inside the collapsed-by-default all-weeks accordion (same
+    # reasoning as test_training_plan_sub_tab_shows_weeks_and_macro_without_
+    # the_load_chart above) -- expand it to make the row clickable.
+    page.click('[data-a="weeks:toggle-all"]')
+    page.wait_for_selector(f'[data-a="session:open"][data-id="{STRUCTURED_SESSION["id"]}"]')
+
+
+def test_clicking_a_session_opens_the_real_detail_with_no_garmin_buttons(page):
+    _open_roster(page)
+    _open_training_plan_and_expand_all_weeks(page)
+    page.click(f'[data-a="session:open"][data-id="{STRUCTURED_SESSION["id"]}"]')
+    page.wait_for_selector('[data-a="session:back"]')
+
+    content = page.content()
+    # Real structured content -- same as the athlete's own Plan tab.
+    assert '4x200 @ Z3' in content
+    # Neither Garmin action is reachable here (see module docstring above).
+    assert page.locator('[data-a="session:garmin-download"]').count() == 0
+    assert page.locator('[data-a="session:push-intervals"]').count() == 0
+    assert 'Download for Garmin' not in content
+    assert 'Push to Garmin' not in content
+    # An honest, small note stands in for them.
+    assert "only available from the athlete's own device" in content
+    # The session list itself is gone while the detail is open.
+    assert page.locator('[data-a="session:open"]').count() == 0
+
+
+def test_closing_session_detail_returns_to_the_plan_list(page):
+    _open_roster(page)
+    _open_training_plan_and_expand_all_weeks(page)
+    page.click(f'[data-a="session:open"][data-id="{STRUCTURED_SESSION["id"]}"]')
+    page.wait_for_selector('[data-a="session:back"]')
+    page.click('[data-a="session:back"]')
+    page.wait_for_selector('[data-a="session:open"]')
+    assert page.locator('[data-a="session:back"]').count() == 0
+
+
+def test_hardware_back_closes_session_detail_not_the_app(page):
+    _open_roster(page)
+    _open_training_plan_and_expand_all_weeks(page)
+    page.click(f'[data-a="session:open"][data-id="{STRUCTURED_SESSION["id"]}"]')
+    page.wait_for_selector('[data-a="session:back"]')
+
+    page.go_back()
+    page.wait_for_selector('[data-a="session:open"]')
+    assert page.locator('[data-a="session:back"]').count() == 0
+    # Prove the app didn't navigate away entirely.
+    assert page.locator('.tabbar').count() == 1
+    assert page.locator('[data-a="tab:roster"]').count() == 1
+
+
+def test_switching_away_from_training_plan_sub_tab_closes_open_session_detail(page):
+    _open_roster(page)
+    _open_training_plan_and_expand_all_weeks(page)
+    page.click(f'[data-a="session:open"][data-id="{STRUCTURED_SESSION["id"]}"]')
+    page.wait_for_selector('[data-a="session:back"]')
+
+    page.click('[data-a="roster:subtab:dashboard"]')
+    page.wait_for_selector('[data-a="roster:open-workout"]')
+    # Coming back to the Training Plan sub-tab lands on the list, not the
+    # stale detail.
+    page.click('[data-a="roster:subtab:plan"]')
+    page.wait_for_selector('.macro .ph')
+    assert page.locator('[data-a="session:back"]').count() == 0
+
+
+def test_coach_session_detail_and_the_athletes_own_plan_tab_use_independent_state(page):
+    # Proves state.roster.sessionDetailId and state.planSessionDetailId are
+    # genuinely separate slices (not the same field reused across the two
+    # surfaces): opening the coached athlete's session, then the coach's OWN
+    # Plan tab session, must show each session's real, correct content --
+    # never a leaked id/content from the other surface's state. (Each tab's
+    # own detail view still closes on tab-leave, same established convention
+    # as state.workoutDetailId/state.roster.workoutDetailId -- this is about
+    # the two states never colliding, not about surviving a tab switch.)
+    _open_roster(page)
+    _open_training_plan_and_expand_all_weeks(page)
+    page.click(f'[data-a="session:open"][data-id="{STRUCTURED_SESSION["id"]}"]')
+    page.wait_for_selector('[data-a="session:back"]')
+    assert '4x200 @ Z3' in page.content()
+
+    # Switching to the coach's own Plan tab lands on ITS OWN list view, not
+    # stuck showing the roster's session detail under a different tab.
+    page.click('[data-a="tab:plan"]')
+    page.wait_for_selector(f'[data-a="session:open"][data-id="{ANDREW_OWN_SESSION["id"]}"]')
+    assert page.locator('[data-a="session:back"]').count() == 0
+
+    page.click(f'[data-a="session:open"][data-id="{ANDREW_OWN_SESSION["id"]}"]')
+    page.wait_for_selector('[data-a="session:back"]')
+    assert "Andrew's own session" in page.content()
+    # Never a leaked id from the roster's session-detail state.
+    assert '4x200 @ Z3' not in page.content()
+
+    # Back to the roster tab: its own Training Plan sub-tab detail was
+    # already closed on tab-leave above -- not left open showing the
+    # athlete's OWN session content under the coach's identity.
+    page.click('[data-a="tab:roster"]')
+    page.wait_for_selector('[data-a="roster:subtab:plan"]')
+    assert page.locator('[data-a="session:back"]').count() == 0
+    assert "Andrew's own session" not in page.content()
 
 
 # --- Offline / mobile viewport standards --------------------------------------

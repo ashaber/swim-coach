@@ -147,6 +147,20 @@ function createRosterState() {
     // to be the entire acting-as-athlete view before this split. Reset
     // alongside the other per-athlete slices above.
     subTab: 'dashboard',
+    // Slice: null shows the Training Plan sub-tab's weeks/macro lists; a
+    // session id opens that session's in-tab detail view instead (see
+    // views.js's renderRosterTrainingPlanBody). Its OWN slice, deliberately
+    // separate from the athlete's own `state.planSessionDetailId` -- a coach
+    // could plausibly have their own Plan tab's session open at the same
+    // time as a coached athlete's, and the two must never collide. No
+    // matching `state.roster.sessionPush`: the Garmin push action is
+    // suppressed entirely in this view (see renderPlanSessionDetail's
+    // `showGarminActions` param), so there is no coach-side push result to
+    // track. Reset whenever a different athlete is selected
+    // (handleSelectCoachedAthlete), the coach backs out to the athlete list
+    // (handleBackToRoster), or the sub-tab is switched away from 'plan'
+    // (handleSelectRosterSubTab) -- same conventions as workoutDetailId.
+    sessionDetailId: null,
   };
 }
 
@@ -408,6 +422,7 @@ function renderTabContent() {
         // see views.js's renderRosterTrainingPlanBody doc comment for why
         // this deliberately isn't its own state.roster.allWeeksOpen slice.
         allWeeksOpen: state.allWeeksOpen,
+        sessionDetailId: state.roster.sessionDetailId,
       });
     case 'settings':
       return renderSettingsTab({
@@ -807,14 +822,17 @@ async function loadPlanLoad() {
 
 function handleOpenSessionDetail(id) {
   if (!id) return;
-  // Session-detail drill-down (and its Garmin push/download actions, which
-  // act on the SIGNED-IN athlete's own slug via athleteSlug()) is only wired
-  // for the athlete's own Plan tab. The coach roster's Training Plan sub-tab
-  // (Build 2) reuses this exact renderSession/renderWeeksSection markup for
-  // its read-only weeks/macro display, so the same data-a="session:open"
-  // click fires there too -- this deliberately no-ops outside the Plan tab
-  // rather than opening a DIFFERENT athlete's session under the coach's own
-  // identity (see views.js's renderRosterTrainingPlanBody doc comment).
+  // data-a="session:open" is shared verbatim between the athlete's own Plan
+  // tab and the coach roster's Training Plan sub-tab (renderSession/
+  // renderWeeksSection markup, Build 2). onAppClick's own 'session:open'
+  // case branches on state.tab to route the click to this handler or to
+  // handleOpenCoachSessionDetail below, so this should only ever be called
+  // while state.tab === 'plan' -- the guard here is defense-in-depth against
+  // ever setting the athlete's OWN state.planSessionDetailId from a stray
+  // roster-context click (which would open a session under the wrong
+  // identity's Garmin actions -- see renderPlanSessionDetail's
+  // showGarminActions doc comment for why those two surfaces must never
+  // share this piece of state).
   if (state.tab !== 'plan') return;
   state.planSessionDetailId = id;
   // Pushes an in-app history entry so hardware/gesture back (a `popstate`,
@@ -1159,6 +1177,7 @@ function handlePopState() {
   handleCloseHistoryDetail();
   handleCloseSessionDetail();
   handleCloseCoachWorkoutDetail();
+  handleCloseCoachSessionDetail();
 }
 
 /** Clears a stale detail selection after a history refresh whose new data
@@ -1645,11 +1664,22 @@ async function loadCoachPlan(slug) {
   if (result.ok) {
     log.info('roster.plan_loaded', { athlete: slug, weeks: result.data.weeks?.length ?? 0 });
     state.roster.plan = { status: 'ready', data: result.data, error: null };
+    pruneRosterSessionDetailIdIfMissing(result.data.weeks);
   } else {
     log.error('roster.plan_load_failed', { athlete: slug, error: result.error });
     state.roster.plan = { status: 'error', data: null, error: result.error };
   }
   render();
+}
+
+/** Clears a stale coach-side session-detail selection after a plan refresh
+ * whose new weeks no longer contain that session id (e.g. the week rolled
+ * off the "current"/"next" window) -- mirrors pruneSessionDetailIdIfMissing
+ * for the athlete's own Plan tab, scoped to state.roster.sessionDetailId. */
+function pruneRosterSessionDetailIdIfMissing(weeks) {
+  if (state.roster.sessionDetailId && !findSessionById(weeks || [], state.roster.sessionDetailId)) {
+    state.roster.sessionDetailId = null;
+  }
 }
 
 /** Opens one coached athlete's detail view (workouts + feedback + training
@@ -1668,6 +1698,7 @@ function handleSelectCoachedAthlete(slug) {
   state.roster.load = { status: 'idle', data: null, error: null };
   state.roster.plan = { status: 'idle', data: null, error: null };
   state.roster.workoutDetailId = null;
+  state.roster.sessionDetailId = null;
   state.roster.feedExpanded = false;
   state.roster.subTab = 'dashboard';
   log.info('roster.athlete_selected', { athlete: slug });
@@ -1685,6 +1716,7 @@ function handleBackToRoster() {
   state.roster.load = { status: 'idle', data: null, error: null };
   state.roster.plan = { status: 'idle', data: null, error: null };
   state.roster.workoutDetailId = null;
+  state.roster.sessionDetailId = null;
   state.roster.feedExpanded = false;
   state.roster.subTab = 'dashboard';
   render();
@@ -1694,14 +1726,20 @@ function handleBackToRoster() {
  * (Build 2: Conversations / Workouts + Dashboard / Training Plan) -- same
  * "no-op on unknown id or already-active" guard as setTab, scoped to
  * state.roster.subTab instead of state.tab. Closes any open workout-detail
- * view first (same teardown setTab already does when leaving the Dashboard/
- * roster tabs entirely) so switching sub-tabs never leaves a detail view
- * open under a sub-tab it doesn't belong to. */
+ * or session-detail view first (same teardown setTab already does when
+ * leaving the Dashboard/roster tabs entirely) so switching sub-tabs never
+ * leaves a detail view open under a sub-tab it doesn't belong to. */
 function handleSelectRosterSubTab(subTab) {
   if (!ROSTER_SUB_TABS.includes(subTab) || subTab === state.roster.subTab) return;
   if (state.roster.workoutDetailId) {
     state.roster.workoutDetailId = null;
     // Consumes the pushState entry handleOpenCoachWorkoutDetail added --
+    // see setTab's matching roster teardown for why this is safe.
+    history.back();
+  }
+  if (state.roster.sessionDetailId) {
+    state.roster.sessionDetailId = null;
+    // Consumes the pushState entry handleOpenCoachSessionDetail added --
     // see setTab's matching roster teardown for why this is safe.
     history.back();
   }
@@ -1730,6 +1768,38 @@ function handleOpenCoachWorkoutDetail(id) {
 function handleCloseCoachWorkoutDetail() {
   if (!state.roster.workoutDetailId) return; // avoids a redundant render on popstate re-entrancy
   state.roster.workoutDetailId = null;
+  render();
+}
+
+/** Opens one coached athlete's session detail view from the Training Plan
+ * sub-tab (fixing the reported "can't open workouts to see the detail" bug)
+ * -- read-only, same real structure/targets/zone breakdown/rationale/purpose
+ * content the athlete sees (views.js's renderPlanSessionDetail), but with
+ * the two Garmin push/download actions suppressed (`showGarminActions:
+ * false` -- see that function's doc comment for why: they'd act on the
+ * SIGNED-IN coach's own athlete slug via athleteSlug(), not the coached
+ * athlete's, and the backend routes have no resolve_coach_athlete support).
+ * Sets state.roster.sessionDetailId, its OWN slice -- deliberately separate
+ * from the athlete's own state.planSessionDetailId/state.sessionPush, so a
+ * coach's own Plan tab session and a coached athlete's session can be open
+ * independently without colliding. Mirrors handleOpenCoachWorkoutDetail's
+ * pushState/popstate shape exactly, for the same hardware/gesture
+ * back-button support. */
+function handleOpenCoachSessionDetail(id) {
+  if (!id) return;
+  state.roster.sessionDetailId = id;
+  // Pushes an in-app history entry so hardware/gesture back (a `popstate`,
+  // handled by handlePopState) closes the detail instead of navigating the
+  // PWA away entirely -- same reasoning as handleOpenCoachWorkoutDetail's
+  // own pushState.
+  history.pushState({ rosterSessionDetail: id }, '');
+  log.info('roster.session_detail_opened', { athlete: state.roster.actingAsAthlete, session: id });
+  render();
+}
+
+function handleCloseCoachSessionDetail() {
+  if (!state.roster.sessionDetailId) return; // avoids a redundant render on popstate re-entrancy
+  state.roster.sessionDetailId = null;
   render();
 }
 
@@ -1906,6 +1976,19 @@ function setTab(tab) {
     // handleCloseCoachWorkoutDetail() is a no-op once the id is already null).
     history.back();
   }
+  // Same teardown for the roster's Training Plan sub-tab's session-detail
+  // view -- coming back to My Athletes should land on the acted-as
+  // athlete's lists, not a stale session detail from a sub-tab that isn't
+  // even showing any more.
+  if (state.tab === 'roster' && state.roster.sessionDetailId) {
+    state.roster.sessionDetailId = null;
+    // Consumes the pushState entry handleOpenCoachSessionDetail added,
+    // keeping browser history symmetric with app state -- see the matching
+    // Log-tab comment above for why this is safe (handlePopState's
+    // handleCloseCoachSessionDetail() is a no-op once the id is already
+    // null).
+    history.back();
+  }
   // Same teardown for the Plan tab's session-detail view -- coming back to
   // Plan should land on "This week"/"Next week", not wherever the athlete
   // last was.
@@ -2030,8 +2113,23 @@ async function onAppClick(e) {
     // so the in-app "back" affordance and a hardware/gesture back press
     // close the detail via the exact same path -- see handlePopState.
     case 'history:back': history.back(); break;
-    case 'session:open': handleOpenSessionDetail(el.dataset.id); break;
+    // Shared data-a="session:open" markup between the athlete's own Plan tab
+    // and the coach roster's Training Plan sub-tab (views.js's renderSession)
+    // -- branch on state.tab to route the click to the right piece of state
+    // rather than inventing a second, differently-named action for the same
+    // row markup. See handleOpenSessionDetail's doc comment for why its own
+    // internal guard still exists as defense-in-depth.
+    case 'session:open':
+      if (state.tab === 'roster') handleOpenCoachSessionDetail(el.dataset.id);
+      else handleOpenSessionDetail(el.dataset.id);
+      break;
     // Same history.back()-not-direct-close reasoning as history:back above.
+    // Generic on purpose: whichever of handleCloseSessionDetail/
+    // handleCloseCoachSessionDetail actually has an open id is the one
+    // handlePopState's resulting popstate will close (each is a no-op when
+    // its own id is already null), so this single case correctly closes
+    // either the athlete's own Plan tab detail or the coach's, without
+    // needing to know which one is open.
     case 'session:back': history.back(); break;
     case 'session:garmin-download': await handleDownloadGarminFit(el.dataset.id); break;
     case 'session:push-intervals': await handlePushSessionToGarmin(el.dataset.id); break;

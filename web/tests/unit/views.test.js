@@ -1682,6 +1682,78 @@ describe('renderRosterTab', () => {
       });
       expect(html).toContain('Skipped');
     });
+
+    // Coach session-detail drill-down (the reported bug fix): the coach can
+    // now open a session from the Training Plan sub-tab and see the same
+    // real content the athlete sees (structure/targets/zone breakdown/
+    // rationale/purpose), but with the two Garmin actions suppressed --
+    // those act on the SIGNED-IN coach's OWN athlete slug (main.js's
+    // athleteSlug()), never the coached athlete's, and the backend has no
+    // resolve_coach_athlete support on those routes at all.
+    describe('session detail drill-down', () => {
+      const structuredSession = {
+        id: 'sess-structured',
+        date: '2020-01-01',
+        sport: 'swim_pool',
+        duration_min: 45,
+        distance_m: 1600,
+        intensity: { zone: 'Z3' },
+        purpose: 'garmin-exportable session',
+        structure: 'Main set: 4x200 @ Z3',
+        structured: {
+          items: [{
+            kind: 'step', label: '4x200 @ Z3', role: 'interval', duration_kind: 'distance_m',
+            duration_value: 800, modality: 'swim', equipment: [],
+          }],
+        },
+      };
+      const planWithStructuredSession = {
+        status: 'ready',
+        data: {
+          slug: 'renee',
+          name: 'Renee',
+          athlete: { name: 'Renee' },
+          events: [],
+          macro: { blocks: [] },
+          weeks: [{
+            iso_week: '2020-W01', focus: 'base', target_volume_m: 2000, sessions: [structuredSession],
+          }],
+        },
+        error: null,
+      };
+
+      it('opens the real session detail (same structured content the athlete sees) with no Garmin buttons, plus an honest note', () => {
+        const html = renderRosterTab({
+          ...actingArgs,
+          subTab: 'plan',
+          sessionDetailId: 'sess-structured',
+          plan: planWithStructuredSession,
+        });
+        expect(html).toContain('data-a="session:back"');
+        // Real structured content, same as the athlete's own view.
+        expect(html).toContain('4x200 @ Z3');
+        // Neither Garmin action -- unsupported for a coach acting on another
+        // athlete's session (see the doc comment above).
+        expect(html).not.toContain('data-a="session:garmin-download"');
+        expect(html).not.toContain('data-a="session:push-intervals"');
+        expect(html).not.toContain('Download for Garmin');
+        expect(html).not.toContain('Push to Garmin');
+        // An honest, small note stands in for them, rather than silently
+        // omitting the actions with no explanation.
+        expect(html).toContain("only available from the athlete's own device");
+      });
+
+      it('falls back to the weeks/macro list when sessionDetailId does not match any loaded session', () => {
+        const html = renderRosterTab({
+          ...actingArgs,
+          subTab: 'plan',
+          sessionDetailId: 'no-such-id',
+          plan: planWithStructuredSession,
+        });
+        expect(html).not.toContain('data-a="session:back"');
+        expect(html).toContain('data-a="session:open"');
+      });
+    });
   });
 
   it('falls back to the workouts/feedback list when workoutDetailId no longer matches any loaded workout', () => {
