@@ -88,6 +88,20 @@ def _make_ctx(pw, cfg, *, identity=None, plan_load_body=PLAN_LOAD_STUB, coach_lo
     seed_settings(ctx)
     ctx.route('**/api/plan*', _cors_route(200, 'application/json', PLAN_STUB))
     ctx.route('**/api/plan/load*', _cors_route(200, 'application/json', plan_load_body))
+    # The athlete-self workouts feed (GET /api/workouts, main.js's
+    # loadHistory) -- unlike the old Plan tab, the merged Dashboard tab
+    # (Build 1) fetches this too the moment it's opened (_open_dashboard),
+    # to build the completed+missed feed alongside the chart. Distinct from
+    # `**/api/coach/athletes/renee/workouts*` below (the coach-side route,
+    # a completely different endpoint path). Left unmocked before this,
+    # every _open_dashboard visit fired a real, unmocked fetch to this
+    # fake-origin backend -- normally swallowed quietly by api.js's own
+    # try/catch, but WebKit can surface the resulting network/access-control
+    # failure as an actual `pageerror` event once the page stays open long
+    # enough for the slow real-network failure to land (e.g. a test that
+    # clicks a disclosure and waits on a CSS transition) -- exactly the
+    # intermittent `page` fixture teardown failure this mock fixes.
+    ctx.route('**/api/workouts*', _cors_route(200, 'application/json', '[]'))
     ctx.route('**/api/coach/athletes/renee/workouts*', _cors_route(200, 'application/json', COACH_WORKOUTS_STUB))
     ctx.route('**/api/coach/athletes/renee/feedback*', _cors_route(200, 'application/json', COACH_FEEDBACK_STUB))
     ctx.route('**/api/coach/athletes/renee/load*', _cors_route(200, 'application/json', coach_load_body))
