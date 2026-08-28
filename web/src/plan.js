@@ -1033,7 +1033,10 @@ export const RACE_DAY_TSB_BAND = { low: 5, high: 25 };
 
 const LOAD_CHART_WIDTH = 640;
 const LOAD_CHART_HEIGHT = 260;
-const LOAD_CHART_PADDING = { top: 16, right: 12, bottom: 28, left: 34 };
+// `right` padding matches `left` (rather than the old, tighter 12px) --
+// dual-axis rendering (see `ctlAtlTsbChartGeometry` below) needs room for a
+// second set of axis-label text on the right edge, same as the left.
+const LOAD_CHART_PADDING = { top: 16, right: 34, bottom: 28, left: 34 };
 const LOAD_CHART_MAX_X_TICKS = 5;
 const LOAD_CHART_Y_TICK_COUNT = 4;
 
@@ -1072,7 +1075,23 @@ function evenIndices(n, maxCount) {
  * (no workouts logged yet, or every logged workout falls outside the
  * requested window) rather than erroring or dividing by zero on an empty
  * domain -- callers render an honest "not enough data yet" message
- * instead of a blank or broken chart. */
+ * instead of a blank or broken chart.
+ *
+ * **Dual y-axis (readability fix, Build 1 of the wellness-ingestion +
+ * training-dashboard plan):** CTL/TSB plot against one ("primary", left)
+ * y-axis, ATL against its own independent ("secondary", right) y-axis.
+ * This chart's code was independently re-verified end-to-end and had no
+ * bug -- the "CTL looks like -ATL" impression athletes reported is a real,
+ * expected property of CTL being a 42-day EWMA (inherently small natural
+ * range) sharing one axis with ATL, a 7-day EWMA (inherently large natural
+ * range), on any real athlete's data. Giving ATL its own scale fixes the
+ * readability problem without touching the underlying math: `ctlPoints`/
+ * `tsbPoints`/`bandTop`/`bandBottom`/`yTicks` are all in primary-axis pixel
+ * space; `atlPoints`/`yTicksSecondary` are in secondary-axis pixel space.
+ * The race-day TSB reference band stays on the primary axis (it describes
+ * TSB, not ATL) and, per the existing convention, always keeps 0 and the
+ * band itself inside the primary domain regardless of the real CTL/TSB
+ * data range. */
 export function ctlAtlTsbChartGeometry(series, {
   width = LOAD_CHART_WIDTH, height = LOAD_CHART_HEIGHT, padding = LOAD_CHART_PADDING,
 } = {}) {
@@ -1087,28 +1106,51 @@ export function ctlAtlTsbChartGeometry(series, {
   const ctlValues = series.map((p) => p[1]);
   const atlValues = series.map((p) => p[2]);
   const tsbValues = series.map((p) => p[3]);
-  // The y-domain always includes the race-day band (and 0) so both are
-  // visible on the chart even for an athlete whose real TSB never gets
-  // near them (e.g. deep in a build block) -- context, not just "whatever
-  // fits today's data".
-  const allValues = [
-    ...ctlValues, ...atlValues, ...tsbValues, RACE_DAY_TSB_BAND.low, RACE_DAY_TSB_BAND.high, 0,
+
+  // Primary (left) axis domain: CTL + TSB + the race-day band + 0 -- NEVER
+  // ATL (see the dual-axis doc comment above). Always includes the band
+  // (and 0) so both are visible even for an athlete whose real TSB never
+  // gets near them (e.g. deep in a build block) -- context, not just
+  // "whatever fits today's data".
+  const primaryValues = [
+    ...ctlValues, ...tsbValues, RACE_DAY_TSB_BAND.low, RACE_DAY_TSB_BAND.high, 0,
   ];
-  const rawMin = Math.min(...allValues);
-  const rawMax = Math.max(...allValues);
-  const span = rawMax - rawMin || 1;
-  const yMin = rawMin - span * 0.08;
-  const yMax = rawMax + span * 0.08;
+  const primaryRawMin = Math.min(...primaryValues);
+  const primaryRawMax = Math.max(...primaryValues);
+  const primarySpan = primaryRawMax - primaryRawMin || 1;
+  const yMin = primaryRawMin - primarySpan * 0.08;
+  const yMax = primaryRawMax + primarySpan * 0.08;
+
+  // Secondary (right) axis domain: ATL's own min/max only -- deliberately
+  // NOT anchored at 0 the way the primary axis is. Forcing a 0 anchor here
+  // would recreate exactly the readability problem this dual-axis change
+  // exists to fix: a real ATL trace that hovers in a narrow band (e.g.
+  // 35-45) would still look flat, dominated by the distance down to 0,
+  // same as it looked flat sharing CTL's axis. Scaled completely
+  // independently of the primary axis -- a tiny real ATL range gets the
+  // full plot height to show its own shape, instead of being flattened by
+  // whatever range CTL/TSB happen to span (or by an arbitrary 0 anchor).
+  const secondaryValues = [...atlValues];
+  const secondaryRawMin = Math.min(...secondaryValues);
+  const secondaryRawMax = Math.max(...secondaryValues);
+  const secondarySpan = secondaryRawMax - secondaryRawMin || 1;
+  const yMinAtl = secondaryRawMin - secondarySpan * 0.08;
+  const yMaxAtl = secondaryRawMax + secondarySpan * 0.08;
 
   const xFor = (i) => (n === 1 ? padding.left + plotW / 2 : padding.left + (i / (n - 1)) * plotW);
   const yFor = (v) => padding.top + (1 - (v - yMin) / (yMax - yMin)) * plotH;
+  const yForAtl = (v) => padding.top + (1 - (v - yMinAtl) / (yMaxAtl - yMinAtl)) * plotH;
 
-  const toPoints = (values) => series.map((_, i) => ({ x: xFor(i), y: yFor(values[i]) }));
+  const toPoints = (values, yFn) => series.map((_, i) => ({ x: xFor(i), y: yFn(values[i]) }));
 
   const xTicks = evenIndices(n, LOAD_CHART_MAX_X_TICKS).map((i) => ({ x: xFor(i), label: series[i][0] }));
   const yTicks = Array.from({ length: LOAD_CHART_Y_TICK_COUNT + 1 }, (_, i) => {
     const value = roundToTenth(yMin + (i / LOAD_CHART_Y_TICK_COUNT) * (yMax - yMin));
     return { y: yFor(value), value };
+  });
+  const yTicksSecondary = Array.from({ length: LOAD_CHART_Y_TICK_COUNT + 1 }, (_, i) => {
+    const value = roundToTenth(yMinAtl + (i / LOAD_CHART_Y_TICK_COUNT) * (yMaxAtl - yMinAtl));
+    return { y: yForAtl(value), value };
   });
 
   return {
@@ -1119,13 +1161,14 @@ export function ctlAtlTsbChartGeometry(series, {
     plotRight: width - padding.right,
     plotTop: padding.top,
     plotBottom: height - padding.bottom,
-    ctlPoints: toPoints(ctlValues),
-    atlPoints: toPoints(atlValues),
-    tsbPoints: toPoints(tsbValues),
+    ctlPoints: toPoints(ctlValues, yFor),
+    atlPoints: toPoints(atlValues, yForAtl),
+    tsbPoints: toPoints(tsbValues, yFor),
     bandTop: yFor(RACE_DAY_TSB_BAND.high),
     bandBottom: yFor(RACE_DAY_TSB_BAND.low),
     xTicks,
     yTicks,
+    yTicksSecondary,
     firstDate: series[0][0],
     lastDate: series[n - 1][0],
   };

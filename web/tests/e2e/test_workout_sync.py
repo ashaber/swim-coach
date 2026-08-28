@@ -126,12 +126,12 @@ def _configure_backend(page, base_url=BASE_URL, token=TOKEN):
 
 
 def _open_log_tab(page):
-    """Opens the Log tab and waits for the history section's fetch to
-    settle (an empty list in every test here) before interacting with the
-    sync button -- same settle-before-interact discipline as
+    """Opens the merged Dashboard tab (Build 1: Log+History) and waits for
+    the feed's fetch to settle (empty in every test here) before interacting
+    with the sync button -- same settle-before-interact discipline as
     test_workout_upload.py's own _open_log_tab."""
-    page.click('[data-a="tab:log"]')
-    page.wait_for_selector('text=No workouts logged yet.')
+    page.click('[data-a="tab:dashboard"]')
+    page.wait_for_selector('text=Nothing logged or missed yet.')
 
 
 def test_sync_button_happy_path_shows_result_and_refreshes_history(page):

@@ -175,6 +175,14 @@
     .load-chart-band { fill: var(--accent); opacity: .12; }
     .load-chart-gridline { stroke: var(--line-soft); stroke-width: 1; }
     .load-chart-axis-label { font-family: var(--mono); font-size: 9px; fill: var(--ink-faint); }
+    /* Dual y-axis readability fix (Build 1, web/training-dashboard-merge):
+       ATL's right-axis tick labels are colored to match ATL's own line
+       color (see views.js's LOAD_CHART_LINE_COLOR_VAR) so the axis reads as
+       visually paired with the line it belongs to, same as the legend
+       below already pairs a color dot with each line's name. Set inline
+       (style=) at the call site since the color is the same JS constant
+       the line strokes use -- this class exists for any non-color rule. */
+    .load-chart-axis-label-secondary { font-family: var(--mono); font-size: 9px; }
     .load-chart-line { fill: none; stroke-width: 2; }
     .load-chart-legend { margin-top: 10px; }
     .load-chart-band-dot { background: var(--accent); opacity: .4; }

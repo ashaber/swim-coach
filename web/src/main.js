@@ -3,8 +3,8 @@ import { registerSW } from 'virtual:pwa-register';
 import log from './log.js';
 import {
   renderApp, renderLoading, renderError, renderTabBar, renderCoachTab, renderSettingsTab,
-  renderLogTab, renderCheckinTab, renderBackendNeededNotice, renderFeedbackTab, renderUpdateBanner,
-  renderOnboardingForm, renderHistoryTab, renderRosterTab,
+  renderDashboardTab, renderCheckinTab, renderBackendNeededNotice, renderFeedbackTab, renderUpdateBanner,
+  renderOnboardingForm, renderRosterTab,
 } from './views.js';
 import { findSessionById } from './plan.js';
 import { buildHistoryFeed } from './history.js';
@@ -39,7 +39,10 @@ import {
 
 const appEl = document.getElementById('app');
 const ACTIVE_TAB_KEY = 'swimcoach_active_tab';
-const KNOWN_TABS = ['plan', 'log', 'history', 'checkin', 'coach', 'feedback', 'roster', 'settings'];
+// 'log' and 'history' merged into one 'dashboard' tab (Build 1 of the
+// wellness-ingestion + training-dashboard plan) -- see views.js's
+// renderDashboardTab/renderTrainingDashboardBody.
+const KNOWN_TABS = ['plan', 'dashboard', 'checkin', 'coach', 'feedback', 'roster', 'settings'];
 // Chat sessions are keyed per-athlete in localStorage (see chat.js); this is
 // just the storage key used before any real identity has ever signed in.
 const SIGNED_OUT_CHAT_KEY = 'signed-out';
@@ -54,7 +57,7 @@ function createLogForm() {
     // Set by logFormFromDraft (forms.js) once a file has been parsed -- see
     // handleLogFileSelected. `source` (fit/tcx/csv) rides along to the
     // confirm-save POST /api/workouts call; `warnings` is read by
-    // views.js's renderLogTab review card and never sent to the backend.
+    // views.js's renderDashboardTab review card and never sent to the backend.
     source: null,
     warnings: [],
   };
@@ -115,8 +118,16 @@ function createRosterState() {
     // Slice: null shows the workouts/feedback lists for the acting-as
     // athlete; a workout id opens that workout's read-only detail view
     // instead (reuses renderWorkoutDetail -- see views.js's renderRosterTab).
-    // Same convention as state.workoutDetailId (Log/History tabs).
+    // Same convention as state.workoutDetailId (the Dashboard tab).
     workoutDetailId: null,
+    // Whether the roster's own Training Dashboard feed (Build 1) is showing
+    // the full completed-workout list or just the paginated recent slice --
+    // same "Show more" convention as state.dashboardFeedExpanded below, its
+    // own bit of state since the coach roster and the athlete's own
+    // dashboard are two independent feeds. Reset whenever a different
+    // athlete is selected (handleSelectCoachedAthlete) or the coach backs
+    // out to the athlete list (handleBackToRoster).
+    feedExpanded: false,
   };
 }
 
@@ -170,11 +181,14 @@ const state = {
     token: initialOnboardingActive ? initialSettingsForm.token : null,
   },
   plan: { status: 'idle', data: null, error: null },
-  // The Plan tab's CTL/ATL/TSB training-load chart (views.js's
-  // renderLoadChart) -- GET /api/plan/load, a minimal separate fetch from
-  // `plan` above since it's the only consumer of this field (see
-  // api.js's fetchPlanLoad). Same {status, data, error} async-state shape,
-  // same lazy-load-on-tab-visit trigger as `plan` (see loadPlanLoad/setTab).
+  // The Dashboard tab's CTL/ATL/TSB training-load chart (views.js's
+  // renderLoadChart, via renderTrainingDashboardBody -- Build 1 moved this
+  // chart off the Plan tab and into the merged Log+History Dashboard tab) --
+  // GET /api/plan/load, a minimal separate fetch from `plan` above since
+  // it's the only consumer of this field (see api.js's fetchPlanLoad). Same
+  // {status, data, error} async-state shape as `plan`. Keeps the `planLoad`
+  // name despite moving tabs -- minimizes unrelated diff surface, and it's
+  // still fetched from the same GET /api/plan/load endpoint either way.
   planLoad: { status: 'idle', data: null, error: null },
   // Slice: null shows the ordinary "This week"/"Next week" cards; a session
   // id opens that session's in-tab detail view instead (see views.js's
@@ -215,14 +229,22 @@ const state = {
   // silently opens/closes the other on the next render.
   glossaryOpen: false,
   // Secondary manual-entry/upload section is collapsed by default (Phase 3:
-  // "Sync from watch" is the Log tab's primary action) -- reset on leaving
-  // the Log tab (setTab), same convention as workoutDetailId below.
+  // "Sync from watch" is the Dashboard tab's primary action) -- reset on
+  // leaving the Dashboard tab (setTab), same convention as workoutDetailId
+  // below.
   logManualOpen: false,
+  // Whether the Dashboard tab's Training Dashboard feed (Build 1: the
+  // merged Log+History tab) is showing the full completed+missed feed or
+  // just the paginated recent slice, per views.js's
+  // renderTrainingDashboardBody -- same "Show more" convention as
+  // state.roster.feedExpanded. Reset on leaving the Dashboard tab (setTab).
+  dashboardFeedExpanded: false,
   workoutHistory: { status: 'idle', data: [], error: null },
   // Slice 2: null shows the history list; a workout id opens that
-  // workout's in-tab detail view instead (see views.js's renderHistorySection).
-  // Reset on leaving the Log tab (setTab) and pruned in loadHistory if a
-  // refresh's new data no longer contains the id.
+  // workout's in-tab detail view instead (see views.js's
+  // renderTrainingDashboardBody). Reset on leaving the Dashboard tab
+  // (setTab) and pruned in loadHistory if a refresh's new data no longer
+  // contains the id.
   workoutDetailId: null,
   // The detail view's embedded scoped chat (Phase C slice 1):
   // {workoutId, messages} while a detail is open, null otherwise.
@@ -296,13 +318,15 @@ function renderTabContent() {
   // notice covers both cases (see the message text in views.js).
   const backendConfigured = isConfigured(state.settingsForm, state.identity);
   switch (state.tab) {
-    case 'history':
-      // The feed needs BOTH sides: completed workouts (workoutHistory) and
-      // the plan's past sessions (plan.data.weeks) to derive skips from.
-      // Both loads are kicked off by setTab; until the plan lands, `weeks`
-      // is empty and the feed is simply completed-only rather than wrongly
-      // reporting everything as skipped.
-      return renderHistoryTab({
+    case 'dashboard':
+      // Build 1 (Log+History merge): the feed needs BOTH sides -- completed
+      // workouts (workoutHistory) and the plan's past sessions
+      // (plan.data.weeks) to derive skips from. Both loads are kicked off
+      // by setTab; until the plan lands, `weeks` is empty and the feed is
+      // simply completed-only rather than wrongly reporting everything as
+      // skipped.
+      return renderDashboardTab({
+        load: state.planLoad,
         feed: buildHistoryFeed({
           weeks: state.plan.data?.weeks || [],
           workouts: state.workoutHistory.data,
@@ -311,27 +335,15 @@ function renderTabContent() {
         status: historyFeedStatus(),
         error: state.workoutHistory.error || state.plan.error,
         online: state.online,
-        // Shares workoutDetailId (and therefore handleOpenHistoryDetail's
-        // pushState/back-button wiring, scoped workout chat, and stale-id
-        // pruning) with the Log tab's own history section -- the two tabs
-        // never render at once, and a second parallel id would have to
-        // duplicate all of that behaviour to stay correct.
         detailId: state.workoutDetailId,
         workoutChat: state.workoutChat,
         backendConfigured,
-      });
-    case 'log':
-      return renderLogTab({
         form: state.logForm,
         submit: state.logSubmit,
         ingest: state.logIngest,
-        backendConfigured,
-        online: state.online,
-        history: state.workoutHistory,
-        detailId: state.workoutDetailId,
         sync: state.logSync,
         manualOpen: state.logManualOpen,
-        workoutChat: state.workoutChat,
+        feedExpanded: state.dashboardFeedExpanded,
       });
     case 'checkin':
       return renderCheckinTab({
@@ -370,6 +382,7 @@ function renderTabContent() {
         backendConfigured,
         online: state.online,
         load: state.roster.load,
+        feedExpanded: state.roster.feedExpanded,
       });
     case 'settings':
       return renderSettingsTab({
@@ -396,7 +409,6 @@ function renderTabContent() {
           sessionPush: state.sessionPush,
           allWeeksOpen: state.allWeeksOpen,
           glossaryOpen: state.glossaryOpen,
-          load: state.planLoad,
         },
         state.planSessionDetailId,
       );
@@ -425,7 +437,7 @@ function render() {
   appEl.innerHTML = `${renderUpdateBanner(state.pwaUpdate)}${renderTabContent()}${
     renderTabBar(state.tab, { hideRoster: !state.coachFor.length })}`;
   if (state.tab === 'coach') stickChatScrollToBottom();
-  if (state.tab === 'log' && state.workoutChat) stickWorkoutChatScrollToBottom();
+  if (state.tab === 'dashboard' && state.workoutChat) stickWorkoutChatScrollToBottom();
   if (state.tab === 'settings' && !state.identity) mountGoogleSignIn();
 }
 
@@ -473,6 +485,7 @@ function applyAthleteSession(identity, token) {
   state.feedbackEntries = { status: 'idle', data: [] };
   state.workoutHistory = { status: 'idle', data: [], error: null };
   state.workoutDetailId = null;
+  state.dashboardFeedExpanded = false;
   closeWorkoutChat();
   state.roster = createRosterState();
   state.grants = createGrantsState();
@@ -524,6 +537,7 @@ function resetToSignedOut({ identityError = null } = {}) {
   state.feedbackEntries = { status: 'idle', data: [] };
   state.workoutHistory = { status: 'idle', data: [], error: null };
   state.workoutDetailId = null;
+  state.dashboardFeedExpanded = false;
   closeWorkoutChat();
   state.tab = 'settings';
   saveActiveTab('settings');
@@ -1044,7 +1058,7 @@ function handleToggleManualLog() {
 
 // --- Workout detail view (Slice 2: tap a history row) ----------------------
 // Renders from the workout dump already sitting in state.workoutHistory.data
-// -- no second API call (see views.js's renderHistorySection/renderWorkoutDetail).
+// -- no second API call (see views.js's renderTrainingDashboardBody/renderWorkoutDetail).
 
 function handleOpenHistoryDetail(id) {
   if (!id) return;
@@ -1079,6 +1093,22 @@ function handleCloseHistoryDetail() {
   if (!state.workoutDetailId) return; // avoids a redundant render on popstate re-entrancy
   state.workoutDetailId = null;
   closeWorkoutChat();
+  render();
+}
+
+/** Expands the Training Dashboard feed's paginated "Show more" affordance
+ * (Build 1's renderTrainingDashboardBody, shared by both surfaces) -- keyed
+ * off which tab is actually visible so the one `dashboard:show-more`
+ * action name works for both without either surface needing to know about
+ * the other's state slice. One-way (sets true, never toggles back) -- see
+ * the click-delegation comment at this action's case for why. */
+function handleShowMoreDashboardFeed() {
+  if (state.tab === 'roster') {
+    state.roster.feedExpanded = true;
+  } else {
+    state.dashboardFeedExpanded = true;
+  }
+  log.info('dashboard.feed_show_more', { athlete: athleteSlug(), tab: state.tab });
   render();
 }
 
@@ -1208,12 +1238,12 @@ async function loadHistory() {
   if (handleUnauthorized(result)) return;
   if (result.ok && Array.isArray(result.data)) {
     // Keeps the FULL list in state; HISTORY_DISPLAY_CAP is applied at
-    // render time by the Log tab instead (see renderHistorySection). It
-    // used to be truncated here, which the History tab's skip derivation
-    // can't tolerate: matching a planned session against a 20-workout
-    // window would report every older session as skipped purely because
-    // its workout had fallen off the end (see history.js's
-    // buildHistoryFeed note).
+    // render time by the Dashboard tab instead (see
+    // renderTrainingDashboardBody). It used to be truncated here, which the
+    // dashboard's skip derivation can't tolerate: matching a planned session
+    // against a 20-workout window would report every older session as
+    // skipped purely because its workout had fallen off the end (see
+    // history.js's buildHistoryFeed note).
     const sorted = sortWorkoutsNewestFirst(result.data);
     log.info('history.loaded', { athlete: identity.athlete, count: sorted.length });
     state.workoutHistory = { status: 'ready', data: sorted, error: null };
@@ -1574,6 +1604,7 @@ function handleSelectCoachedAthlete(slug) {
   state.roster.feedback = { status: 'idle', data: [], error: null };
   state.roster.load = { status: 'idle', data: null, error: null };
   state.roster.workoutDetailId = null;
+  state.roster.feedExpanded = false;
   log.info('roster.athlete_selected', { athlete: slug });
   render();
   loadCoachWorkouts(slug); // calls render() itself
@@ -1587,6 +1618,7 @@ function handleBackToRoster() {
   state.roster.feedback = { status: 'idle', data: [], error: null };
   state.roster.load = { status: 'idle', data: null, error: null };
   state.roster.workoutDetailId = null;
+  state.roster.feedExpanded = false;
   render();
 }
 
@@ -1750,15 +1782,18 @@ async function handleRevokeGrant(grantId) {
 
 function setTab(tab) {
   if (!KNOWN_TABS.includes(tab) || tab === state.tab) return;
-  // Leaving the Log tab always collapses the secondary manual-entry/upload
-  // section back down -- coming back to Log should land on the primary sync
-  // button, not wherever the athlete last left the secondary section.
-  if (state.tab === 'log') {
+  // Leaving the Dashboard tab always collapses the secondary manual-entry/
+  // upload section back down, and the paginated feed back to its default
+  // recent slice -- coming back to the Dashboard should land on the primary
+  // sync button and the short feed, not wherever the athlete last left
+  // either secondary affordance.
+  if (state.tab === 'dashboard') {
     state.logManualOpen = false;
+    state.dashboardFeedExpanded = false;
   }
-  // Leaving the Log tab always drops any open workout-detail view -- coming
-  // back to Log should land on the list, not wherever the athlete last was.
-  if ((state.tab === 'log' || state.tab === 'history') && state.workoutDetailId) {
+  // Leaving the Dashboard tab always drops any open workout-detail view --
+  // coming back should land on the feed, not wherever the athlete last was.
+  if (state.tab === 'dashboard' && state.workoutDetailId) {
     state.workoutDetailId = null;
     closeWorkoutChat();
     // Consumes the pushState entry handleOpenHistoryDetail added (see
@@ -1803,13 +1838,6 @@ function setTab(tab) {
   if (tab === 'plan' && (state.plan.status === 'idle' || state.plan.status === 'error')
     && isConfigured(state.settingsForm, state.identity)) {
     loadPlan(); // calls render() itself
-    // Same lazy-load trigger, same idle/error-retry condition, own status
-    // field -- the training-load chart is a separate fetch from the plan
-    // itself (see loadPlanLoad's doc comment) so it's gated on its own
-    // state.planLoad.status, not state.plan.status.
-    if (state.planLoad.status === 'idle' || state.planLoad.status === 'error') {
-      loadPlanLoad(); // calls render() itself
-    }
     return;
   }
   if (tab === 'feedback' && (state.feedbackEntries.status === 'idle' || state.feedbackEntries.status === 'error')
@@ -1828,23 +1856,25 @@ function setTab(tab) {
     loadCoachedAthletes(); // calls render() itself
     return;
   }
-  // Same lazy-load convention as Plan/Feedback above -- see
-  // shouldLoadHistoryNow()'s doc comment.
-  if (tab === 'log' && shouldLoadHistoryNow()) {
-    loadHistory(); // calls render() itself
-    return;
-  }
-  // History needs BOTH halves: the workouts it shows as completed, and the
-  // plan weeks it derives skipped sessions from. Either may already be
-  // loaded (from a previous Log/Plan visit), so each is requested
-  // independently; both call render() themselves as they land, and the tab
-  // renders a completed-only feed in the meantime rather than briefly
-  // claiming everything was skipped.
-  if (tab === 'history') {
+  // The merged Dashboard tab (Build 1: Log+History) needs THREE things:
+  // the workouts it shows as completed (shouldLoadHistoryNow -- was Log's
+  // own trigger), the plan weeks it derives skipped sessions from (was
+  // History's own trigger), and the CTL/ATL/TSB chart's data (was the Plan
+  // tab's own trigger, moved here since the chart moved off the Plan tab).
+  // Any of the three may already be loaded (from a previous Plan/Dashboard
+  // visit), so each is requested independently; all three call render()
+  // themselves as they land, and the tab renders whatever's already in
+  // state in the meantime rather than blocking on all three at once.
+  if (tab === 'dashboard') {
     let requested = false;
     if ((state.plan.status === 'idle' || state.plan.status === 'error')
       && isConfigured(state.settingsForm, state.identity)) {
       loadPlan();
+      requested = true;
+    }
+    if ((state.planLoad.status === 'idle' || state.planLoad.status === 'error')
+      && isConfigured(state.settingsForm, state.identity)) {
+      loadPlanLoad();
       requested = true;
     }
     if (shouldLoadHistoryNow()) {
@@ -1896,6 +1926,13 @@ async function onAppClick(e) {
     case 'onboard:submit': handleOnboardSubmit(); break;
     case 'history:retry': loadHistory(); break;
     case 'history:open': handleOpenHistoryDetail(el.dataset.id); break;
+    // Shared by both Training Dashboard surfaces (Build 1's
+    // renderTrainingDashboardBody) -- expands the athlete's own dashboard
+    // feed while on the Dashboard tab, or the coach roster's feed while
+    // acting as an athlete on the roster tab. One-way expand (no collapse
+    // control): "show everything" is the only direction a "Show more"
+    // affordance needs.
+    case 'dashboard:show-more': handleShowMoreDashboardFeed(); break;
     // Goes through history.back() (not handleCloseHistoryDetail() directly)
     // so the in-app "back" affordance and a hardware/gesture back press
     // close the detail via the exact same path -- see handlePopState.
@@ -1983,9 +2020,9 @@ function onAppInput(e) {
     if (out) out.textContent = el.value;
   }
 
-  // The Log tab's Save button is gated on RPE being set (see
-  // views.js's renderLogTab `rpeMissing` -- a file upload resets rpe to ''
-  // so the athlete must move the slider at least once). That gate has to
+  // The Dashboard tab's manual-entry Save button is gated on RPE being set
+  // (see views.js's renderManualLogSection `rpeMissing` -- a file upload
+  // resets rpe to '' so the athlete must move the slider at least once). That gate has to
   // update live as the slider is dragged, but this handler deliberately
   // avoids a full render() on every input event (see comment above) to not
   // interrupt an in-progress drag -- so patch just the affected elements
@@ -2024,7 +2061,7 @@ function updateOfflineBanner() {
 // its render function or isn't worth a re-render on a background
 // connectivity change (Plan/Settings/Feedback keep whatever they last
 // rendered until the athlete next interacts with them).
-const TABS_SENSITIVE_TO_ONLINE_STATE = ['coach', 'log', 'checkin'];
+const TABS_SENSITIVE_TO_ONLINE_STATE = ['coach', 'dashboard', 'checkin'];
 
 function updateOnlineState() {
   state.online = navigator.onLine;
@@ -2070,15 +2107,16 @@ maybeLoadProfile();
 maybeLoadGrants();
 // loadPlan() above self-gates on isConfigured and is otherwise unconditional
 // at boot; loadHistory() has no such caller-independent self-gate -- until
-// now the only caller was setTab's Log-tab branch, so history stayed stuck
-// on 'idle' forever if the athlete reopened the PWA with Log already the
-// persisted active tab (state.tab restores from localStorage without ever
-// calling setTab, since no navigation happened). Covers that case the same
-// way setTab does -- see shouldLoadHistoryNow(). state.identity is already
-// resolved synchronously above (identity.js's currentIdentity() is a plain
-// localStorage read, no network round trip -- see initialIdentity at the
-// top of this file), so this reads the same populated state setTab would.
-if (state.tab === 'log' && shouldLoadHistoryNow()) {
+// now the only caller was setTab's Dashboard-tab branch, so history stayed
+// stuck on 'idle' forever if the athlete reopened the PWA with the
+// Dashboard already the persisted active tab (state.tab restores from
+// localStorage without ever calling setTab, since no navigation happened).
+// Covers that case the same way setTab does -- see shouldLoadHistoryNow().
+// state.identity is already resolved synchronously above (identity.js's
+// currentIdentity() is a plain localStorage read, no network round trip --
+// see initialIdentity at the top of this file), so this reads the same
+// populated state setTab would.
+if (state.tab === 'dashboard' && shouldLoadHistoryNow()) {
   loadHistory();
 }
 
