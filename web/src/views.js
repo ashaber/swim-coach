@@ -275,8 +275,22 @@ function renderStructuredWorkoutSection(structured) {
  * `structure`/`detail` is present for every real session shape today, but a
  * pool-coach placeholder with neither still has a real, non-blank title in
  * the header above (deriveSessionTitle's fallback), so there is always
- * something sensible to show even when this whole block is empty. */
-function renderPlanSessionDetail(session, sessionPush) {
+ * something sensible to show even when this whole block is empty.
+ *
+ * `showGarminActions` (default `true`, preserving the athlete's own Plan tab
+ * behaviour unchanged) gates the two Garmin action sections below. The coach
+ * roster's Training Plan sub-tab (`renderRosterTrainingPlanBody`) passes
+ * `false`: both actions ultimately call backend routes
+ * (`backend/app/routes/garmin.py`) gated via `resolve_athlete` (self-only --
+ * no `resolve_coach_athlete` support), and the frontend calls
+ * (`handleDownloadGarminFit`/`handlePushSessionToGarmin`) resolve the target
+ * athlete via `athleteSlug()`, which is always the SIGNED-IN principal's own
+ * slug -- for a coach that's the coach's own athlete record, never the
+ * coached athlete's. Suppressing just these two sections (not the rest of
+ * the detail) is what makes "same view as the athlete sees" honest here:
+ * everything else below -- structure, targets, zone breakdown, training
+ * rationale, purpose -- renders identically either way. */
+function renderPlanSessionDetail(session, sessionPush, showGarminActions = true) {
   const classification = classifySession(session);
   const { title, detail, structure } = sessionDisplay(session);
   const dateLabel = formatLongDate(parseIsoDate(session.date));
@@ -328,13 +342,29 @@ function renderPlanSessionDetail(session, sessionPush) {
       ? renderStructuredWorkoutSection({ items: workoutItems })
         + (rationale ? renderStructureBlock({ label: 'Why', content: rationale }) : '')
       : (structure ? parseStructureBlocks(structure).map(renderStructureBlock).join('') : '')}
-    ${session.structured ? renderGarminDownload(session) : ''}
-    ${session.structured ? renderGarminPush(session, sessionPush) : ''}
+    ${session.structured
+      ? (showGarminActions
+        ? renderGarminDownload(session) + renderGarminPush(session, sessionPush)
+        : renderGarminUnavailableNote())
+      : ''}
     ${purpose ? `
     <section class="detail-section">
       <h4>Purpose</h4>
       <p class="detail-notes">${esc(purpose)}</p>
     </section>` : ''}`;
+}
+
+/** Stands in for the two Garmin action sections when `renderPlanSessionDetail`
+ * is called with `showGarminActions: false` (the coach roster's Training
+ * Plan sub-tab). Same restrained, honest "not available in this context"
+ * tone as `renderCoachConversationPlaceholder`'s stripped-chat treatment on
+ * the workout-detail view -- a small, real explanation rather than silently
+ * omitting the buttons with no comment at all. */
+function renderGarminUnavailableNote() {
+  return `
+    <section class="detail-section">
+      <p class="sub">Garmin download/push is only available from the athlete's own device.</p>
+    </section>`;
 }
 
 /** A plain download button for any session with `structured` populated --
@@ -442,19 +472,22 @@ function renderWeekCard(week, label) {
     </div>`;
 }
 
-/** `detailId` is main.js's state.planSessionDetailId -- null shows the
- * ordinary "This week"/"Next week" cards, a session id swaps the whole
- * section to a back button + renderPlanSessionDetail(...) instead, same
- * convention as renderTrainingDashboardBody's `detailId` handling for
- * workouts. */
-function renderWeeksSection(weeks, detailId, sessionPush, allWeeksOpen) {
+/** `detailId` is main.js's state.planSessionDetailId (athlete's own Plan tab)
+ * or state.roster.sessionDetailId (coach's Training Plan sub-tab) -- null
+ * shows the ordinary "This week"/"Next week" cards, a session id swaps the
+ * whole section to a back button + renderPlanSessionDetail(...) instead,
+ * same convention as renderTrainingDashboardBody's `detailId` handling for
+ * workouts. `showGarminActions` (default `true`) just threads through to
+ * renderPlanSessionDetail -- see that function's doc comment; the coach's
+ * call site (renderRosterTrainingPlanBody) passes `false`. */
+function renderWeeksSection(weeks, detailId, sessionPush, allWeeksOpen, showGarminActions = true) {
   if (detailId) {
     const session = findSessionById(weeks, detailId);
     if (session) {
       return `
     <section>
       <div class="s-head"><button type="button" class="btn-ghost" data-a="session:back">&larr; Back to plan</button></div>
-      ${renderPlanSessionDetail(session, sessionPush)}
+      ${renderPlanSessionDetail(session, sessionPush, showGarminActions)}
     </section>`;
     }
   }
@@ -2005,22 +2038,30 @@ function renderRosterConversationsPlaceholder() {
  * `renderTrainingDashboardBody`, same "chart lives with the feed, not the
  * plan" split Build 1 already established for the athlete's own tabs.
  *
- * Deliberately NOT session-detail drill-down either: `renderSession`'s
- * `data-a="session:open"` is shared verbatim with the athlete's own Plan
- * tab, and its detail view's Garmin push/download actions
- * (`renderGarminPush`/`renderGarminDownload`) act on the SIGNED-IN coach's
- * OWN athlete slug (`athleteSlug()`), not the coached athlete's -- letting
- * this open would either silently no-op against the wrong athlete's data or
- * surface a confusing "no such session" error. `main.js`'s
- * `handleOpenSessionDetail` no-ops outside the Plan tab specifically to keep
- * this read-only rather than wiring a broken/misdirected action; `detailId`/
- * `sessionPush` are passed as `null` here for the same reason. `allWeeksOpen`
- * is deliberately the SAME app-level flag the athlete's own Plan tab uses
- * (not a separate `state.roster.allWeeksOpen`) -- a shared, low-stakes
- * accordion-open cosmetic, same "acceptable tradeoff" precedent
- * `allWeeksOpen`'s own doc comment (main.js) already establishes for
- * page-level `<details>` state. */
-function renderRosterTrainingPlanBody({ plan, online, allWeeksOpen }) {
+ * Session-detail drill-down IS supported (fixing the reported "can't open
+ * workouts to see the detail" bug): `detailId` is main.js's
+ * `state.roster.sessionDetailId` -- its own slice, separate from the
+ * athlete's own `state.planSessionDetailId`/`state.sessionPush`, so a coach
+ * can have their own Plan tab's session open at the same time as a coached
+ * athlete's. `renderWeeksSection` handles the list<->detail branch exactly
+ * as it does for the athlete's own Plan tab; the only difference is the
+ * trailing `false` passed for `showGarminActions`. That suppresses just the
+ * two Garmin push/download sections of `renderPlanSessionDetail` -- they act
+ * on the SIGNED-IN coach's OWN athlete slug (`athleteSlug()`), not the
+ * coached athlete's, and `backend/app/routes/garmin.py` has no
+ * `resolve_coach_athlete` support at all, so wiring them here would either
+ * silently act on the wrong athlete's data or 403/404. Everything else in
+ * the detail view -- structure, targets, zone breakdown, training rationale,
+ * purpose -- renders identically to what the athlete sees, per `sessionPush`
+ * being irrelevant here (always `null`: there is no coach-side push action
+ * to have a result). `allWeeksOpen` is deliberately the SAME app-level flag
+ * the athlete's own Plan tab uses (not a separate `state.roster.allWeeksOpen`)
+ * -- a shared, low-stakes accordion-open cosmetic, same "acceptable
+ * tradeoff" precedent `allWeeksOpen`'s own doc comment (main.js) already
+ * establishes for page-level `<details>` state. */
+function renderRosterTrainingPlanBody({
+  plan, online, allWeeksOpen, detailId,
+}) {
   const status = plan?.status;
   if (status === 'error') {
     return `<div class="hist-error">Couldn't load the training plan: ${esc(plan.error)}</div>`;
@@ -2035,13 +2076,13 @@ function renderRosterTrainingPlanBody({ plan, online, allWeeksOpen }) {
   const { events, macro, weeks } = plan.data;
   const event = macroTargetEvent(macro, events);
   return `
-    ${renderWeeksSection(weeks, null, null, allWeeksOpen)}
+    ${renderWeeksSection(weeks, detailId, null, allWeeksOpen, false)}
     ${renderMacroSection(macro, event, weeks)}`;
 }
 
 export function renderRosterTab({
   athletes, actingAsAthlete, workouts, feedback, replyDrafts, replySubmit, workoutDetailId,
-  backendConfigured, online, load, feedExpanded, plan, subTab, allWeeksOpen,
+  backendConfigured, online, load, feedExpanded, plan, subTab, allWeeksOpen, sessionDetailId,
 }) {
   if (!backendConfigured) {
     return rosterShell(renderBackendNeededNotice(
@@ -2103,7 +2144,9 @@ export function renderRosterTab({
     const activeSubTab = subTab || 'dashboard';
     const subTabBody = (() => {
       if (activeSubTab === 'conversations') return renderRosterConversationsPlaceholder();
-      if (activeSubTab === 'plan') return renderRosterTrainingPlanBody({ plan, online, allWeeksOpen });
+      if (activeSubTab === 'plan') return renderRosterTrainingPlanBody({
+        plan, online, allWeeksOpen, detailId: sessionDetailId,
+      });
       return `
         ${!online ? '<div class="chat-banner">Offline -- some data may be out of date.</div>' : ''}
         ${dashboardBody}
