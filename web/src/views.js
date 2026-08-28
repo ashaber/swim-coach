@@ -12,6 +12,7 @@ import {
   describeWellnessBaselineDeviation, describeCtlAtlTsbTrend, RACE_DAY_TSB_BAND,
 } from './plan.js';
 import { TOOL_LABELS } from './chat.js';
+import { buildHistoryFeed } from './history.js';
 import {
   sportLabel, sourceBadge, formatWorkoutDistance, formatAnalyticsLine,
   formatDrift, formatSplit, formatPauses, formatSwolf, formatMovingVsElapsed,
@@ -1565,6 +1566,23 @@ function renderWorkoutChatSection({ workout, chat, online }) {
     </section>`;
 }
 
+/** Honest, explicitly non-functional placeholder for a coach-athlete
+ * conversation scoped to this one workout -- distinct from
+ * `renderWorkoutChatSection`'s real, working scoped AI chat above (which
+ * stays exactly as-is for the athlete's own view). Shown on the workout
+ * detail view in BOTH the athlete's own Dashboard tab and the coach's roster
+ * view of the same workout (`chat` is `null` there, so
+ * `renderWorkoutChatSection` renders nothing, but this still does) --
+ * Andrew's own words: "save chat as a placeholder, I needed to visualize the
+ * UI," not wired to anything, no state, no send action. */
+function renderCoachConversationPlaceholder() {
+  return `
+    <section class="detail-section" id="coach-conversation">
+      <h4>Coach conversation</h4>
+      <p class="sub">Coach-athlete conversation on this workout -- coming soon.</p>
+    </section>`;
+}
+
 function renderWorkoutDetail(workout, { chat, online } = {}) {
   const badge = sourceBadge(workout.source);
   return `
@@ -1578,6 +1596,7 @@ function renderWorkoutDetail(workout, { chat, online } = {}) {
     ${renderPausesList(workout.pauses)}
     ${renderLengthsSummarySection(workout.lengths)}
     ${renderDetailNotes(workout.notes)}
+    ${renderCoachConversationPlaceholder()}
     ${renderWorkoutChatSection({ workout, chat, online })}`;
 }
 
@@ -1942,9 +1961,87 @@ function rosterShell(body) {
     </div>`;
 }
 
+// --- Roster sub-tabs (Build 2: Conversations / Workouts + Dashboard /
+// Training Plan) ------------------------------------------------------------
+// The coach's "acting as athlete" view used to be one flat list (workouts +
+// feedback). Build 2 splits it into three sub-tabs, nested inside the
+// already-a-tab roster view -- same "which one is active" string-state
+// convention the app's own top-level tab bar uses (main.js's state.tab /
+// this file's TABS / renderTabBar), just scoped to state.roster.subTab
+// instead of state.tab, since no existing multi-SECTION (as opposed to
+// multi-tab) convention in this app fits mutually-exclusive navigation (the
+// allWeeksOpen/glossaryOpen booleans are independent collapsible <details>,
+// not a one-of-three switch).
+const ROSTER_SUB_TABS = [
+  { id: 'conversations', label: 'Conversations' },
+  { id: 'dashboard', label: 'Workouts + Dashboard' },
+  { id: 'plan', label: 'Training Plan' },
+];
+
+function renderRosterSubTabBar(activeSubTab) {
+  return `
+    <nav class="subtab-bar" aria-label="Athlete view">
+      ${ROSTER_SUB_TABS.map((t) => `
+        <button type="button" class="subtab-btn${t.id === activeSubTab ? ' active' : ''}" data-a="roster:subtab:${t.id}" aria-current="${t.id === activeSubTab ? 'page' : 'false'}">${esc(t.label)}</button>`).join('')}
+    </nav>`;
+}
+
+/** Honest, explicitly non-functional placeholder -- Andrew's own words when
+ * asking for this: "save chat as a placeholder, I needed to visualize the
+ * UI," not real messaging. No fetch, no state, no send action. */
+function renderRosterConversationsPlaceholder() {
+  return `
+    <section class="hist-section">
+      <div class="s-head"><h2>Conversations</h2></div>
+      <p class="sub">Coach-athlete conversation -- coming soon.</p>
+    </section>`;
+}
+
+/** The roster's Training Plan sub-tab: the same weeks/macro rendering logic
+ * `renderApp` uses for the athlete's own Plan tab (`renderWeeksSection` +
+ * `renderMacroSection`), fed by the new `GET /api/coach/athletes/<slug>/plan`
+ * endpoint's data (main.js's `state.roster.plan`) instead. Deliberately NOT
+ * the load chart -- that stays in the Workouts + Dashboard sub-tab via
+ * `renderTrainingDashboardBody`, same "chart lives with the feed, not the
+ * plan" split Build 1 already established for the athlete's own tabs.
+ *
+ * Deliberately NOT session-detail drill-down either: `renderSession`'s
+ * `data-a="session:open"` is shared verbatim with the athlete's own Plan
+ * tab, and its detail view's Garmin push/download actions
+ * (`renderGarminPush`/`renderGarminDownload`) act on the SIGNED-IN coach's
+ * OWN athlete slug (`athleteSlug()`), not the coached athlete's -- letting
+ * this open would either silently no-op against the wrong athlete's data or
+ * surface a confusing "no such session" error. `main.js`'s
+ * `handleOpenSessionDetail` no-ops outside the Plan tab specifically to keep
+ * this read-only rather than wiring a broken/misdirected action; `detailId`/
+ * `sessionPush` are passed as `null` here for the same reason. `allWeeksOpen`
+ * is deliberately the SAME app-level flag the athlete's own Plan tab uses
+ * (not a separate `state.roster.allWeeksOpen`) -- a shared, low-stakes
+ * accordion-open cosmetic, same "acceptable tradeoff" precedent
+ * `allWeeksOpen`'s own doc comment (main.js) already establishes for
+ * page-level `<details>` state. */
+function renderRosterTrainingPlanBody({ plan, online, allWeeksOpen }) {
+  const status = plan?.status;
+  if (status === 'error') {
+    return `<div class="hist-error">Couldn't load the training plan: ${esc(plan.error)}</div>`;
+  }
+  if (status === 'loading' && !plan?.data) {
+    return '<p class="sub">Loading plan&hellip;</p>';
+  }
+  if (!plan?.data) {
+    const notice = !online ? 'This needs a connection -- reconnect to load it.' : 'Nothing planned yet.';
+    return `<p class="sub">${esc(notice)}</p>`;
+  }
+  const { events, macro, weeks } = plan.data;
+  const event = macroTargetEvent(macro, events);
+  return `
+    ${renderWeeksSection(weeks, null, null, allWeeksOpen)}
+    ${renderMacroSection(macro, event, weeks)}`;
+}
+
 export function renderRosterTab({
   athletes, actingAsAthlete, workouts, feedback, replyDrafts, replySubmit, workoutDetailId,
-  backendConfigured, online, load, feedExpanded,
+  backendConfigured, online, load, feedExpanded, plan, subTab, allWeeksOpen,
 }) {
   if (!backendConfigured) {
     return rosterShell(renderBackendNeededNotice(
@@ -1956,17 +2053,19 @@ export function renderRosterTab({
     const match = (athletes.data || []).find((a) => a.slug === actingAsAthlete);
     const name = match?.name || actingAsAthlete;
 
-    // Completed-only feed -- no plan-fetch endpoint exists yet on the coach
-    // side to derive skips from (Build 2's job, not this one's -- see the
-    // Build 1 plan's explicit scope decision). Same
-    // `renderTrainingDashboardBody` shared component as the athlete's own
-    // dashboard either way (chart -> actions (null, read-only here) ->
-    // paginated feed); `renderCoachWorkoutRow` (planned-vs-actual quality
-    // line, no embedded chat) stands in for the athlete-side row/detail
-    // treatment.
-    const feed = (workouts.data || []).map((w) => ({
-      kind: 'completed', date: (w.date || '').slice(0, 10), key: `w:${w.id}`, workout: w,
-    }));
+    // Full completed+missed parity (Build 2, upgraded from Build 1's
+    // deliberately completed-only scope): the new coach-plan endpoint means
+    // `plan?.data?.weeks` now exists to derive skips from, same
+    // `buildHistoryFeed` the athlete's own dashboard uses (main.js's
+    // history.js import) -- before that endpoint existed there was nothing
+    // to derive a skip from on the coach side at all. `renderCoachWorkoutRow`
+    // (planned-vs-actual quality line, no embedded chat) still stands in for
+    // the athlete-side completed-row treatment.
+    const feed = buildHistoryFeed({
+      weeks: plan?.data?.weeks || [],
+      workouts: workouts.data || [],
+      now: new Date(),
+    });
     const dashboardBody = renderTrainingDashboardBody({
       load,
       feed,
@@ -1980,32 +2079,45 @@ export function renderRosterTab({
       renderCompletedRow: renderCoachWorkoutRow,
       backAction: 'roster:close-workout',
       chat: false,
-      emptyMessage: 'Nothing logged yet.',
+      emptyMessage: 'Nothing logged or missed yet.',
     });
 
     // Read-only workout detail (no embedded chat -- that's an athlete-only
     // AI feature). When workoutDetailId matches a loaded workout,
     // `dashboardBody` above is ALREADY just the back button + detail (see
     // renderTrainingDashboardBody's own detailId branch) -- rendered alone,
-    // with none of the "Coaching <name>"/Back-to-My-Athletes/Feedback
+    // with none of the "Coaching <name>"/Back-to-My-Athletes/sub-tab bar
     // chrome below, same "focused detail view" convention the original
-    // History tab used. Falls through to the normal workouts/feedback view
-    // if the id no longer matches anything already loaded (e.g. a stale id
-    // after a refresh), same "just show the list" fallback as before.
-    const detailWorkout = workoutDetailId ? feed.find((i) => i.workout.id === workoutDetailId) : null;
+    // History tab used, regardless of which sub-tab was active when it was
+    // opened (a workout row only ever renders from the Workouts + Dashboard
+    // sub-tab, so this is unambiguous). Falls through to the normal sub-tab
+    // view if the id no longer matches anything already loaded (e.g. a stale
+    // id after a refresh), same "just show the list" fallback as before.
+    const detailWorkout = workoutDetailId
+      ? feed.find((i) => i.kind === 'completed' && i.workout.id === workoutDetailId)
+      : null;
     if (detailWorkout) {
       return rosterShell(dashboardBody);
     }
 
+    const activeSubTab = subTab || 'dashboard';
+    const subTabBody = (() => {
+      if (activeSubTab === 'conversations') return renderRosterConversationsPlaceholder();
+      if (activeSubTab === 'plan') return renderRosterTrainingPlanBody({ plan, online, allWeeksOpen });
+      return `
+        ${!online ? '<div class="chat-banner">Offline -- some data may be out of date.</div>' : ''}
+        ${dashboardBody}
+        <section class="hist-section">
+          <div class="s-head"><h2>Feedback</h2></div>
+          ${renderCoachFeedbackSection(feedback, replyDrafts, replySubmit)}
+        </section>`;
+    })();
+
     return rosterShell(`
       <div class="s-head"><button type="button" class="btn-ghost" data-a="roster:back">&larr; Back to My Athletes</button></div>
       <p class="sub">Coaching <b>${esc(name)}</b> (${esc(actingAsAthlete)}).</p>
-      ${!online ? '<div class="chat-banner">Offline -- some data may be out of date.</div>' : ''}
-      ${dashboardBody}
-      <section class="hist-section">
-        <div class="s-head"><h2>Feedback</h2></div>
-        ${renderCoachFeedbackSection(feedback, replyDrafts, replySubmit)}
-      </section>`);
+      ${renderRosterSubTabBar(activeSubTab)}
+      ${subTabBody}`);
   }
 
   return rosterShell(`

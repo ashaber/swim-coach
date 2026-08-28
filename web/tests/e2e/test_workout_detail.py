@@ -195,6 +195,23 @@ def test_open_detail_from_row_shows_all_sections(page):
     assert page.locator('[data-a="history:open"]').count() == 0
 
 
+def test_shows_the_coach_conversation_placeholder_alongside_the_real_ai_chat(page):
+    # Build 2: an honest, explicitly non-functional "coach conversation"
+    # placeholder sits alongside the athlete's real, working scoped AI chat
+    # (id="workout-chat") -- additive, not a replacement for it.
+    _open_log_tab_with_workouts(page, [RICH_FIT_WORKOUT])
+    page.click('.hist-row')
+    page.wait_for_selector('[data-a="history:back"]')
+
+    assert page.locator('#coach-conversation').count() == 1
+    content = page.content()
+    assert 'Coach conversation' in content
+    assert 'coming soon' in content
+    # The real AI chat is still there, untouched.
+    assert 'Ask your coach about this workout' in content
+    assert page.locator('#workout-chat-input').count() == 1
+
+
 def test_back_returns_to_list(page):
     _open_log_tab_with_workouts(page, [RICH_FIT_WORKOUT])
     page.click('.hist-row')

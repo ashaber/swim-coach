@@ -452,6 +452,35 @@ describe('renderDashboardTab', () => {
     });
   });
 
+  describe('coach conversation placeholder (Build 2)', () => {
+    it('renders the honest "coming soon" placeholder alongside the real AI chat, distinct from it', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS,
+        feed: feedOf([RICH_FIT_WORKOUT]),
+        detailId: 'w-rich',
+        workoutChat: { workoutId: 'w-rich', messages: [] },
+      });
+      expect(html).toContain('id="coach-conversation"');
+      expect(html).toContain('Coach conversation');
+      expect(html).toContain('coming soon');
+      // Still has the real, working AI chat -- the placeholder is additive,
+      // not a replacement.
+      expect(html).toContain('Ask your coach about this workout');
+      expect(html).toContain('id="workout-chat-input"');
+    });
+
+    it('still renders even when the real AI chat is absent (workoutChat null)', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS,
+        feed: feedOf([RICH_FIT_WORKOUT]),
+        detailId: 'w-rich',
+        workoutChat: null,
+      });
+      expect(html).toContain('id="coach-conversation"');
+      expect(html).not.toContain('Ask your coach about this workout');
+    });
+  });
+
   describe('sync + manual-entry actions (original Log tab markup, unchanged)', () => {
     it('shows a backend-needed notice, omitting the feed and actions, when backend is not configured', () => {
       const html = renderDashboardTab({ ...DASHBOARD_BASE_ARGS, backendConfigured: false, feed: [] });
@@ -1561,6 +1590,98 @@ describe('renderRosterTab', () => {
     expect(html).not.toContain('data-a="roster:back"');
     // No embedded "ask your coach" chat -- that's an athlete-only feature.
     expect(html).not.toContain('Ask your coach about this workout');
+    // The honest coach-conversation placeholder IS shown here too (Build 2)
+    // -- distinct from the athlete-only AI chat just excluded above.
+    expect(html).toContain('id="coach-conversation"');
+    expect(html).toContain('coming soon');
+  });
+
+  describe('sub-tabs (Build 2: Conversations / Workouts + Dashboard / Training Plan)', () => {
+    const actingArgs = {
+      ...baseArgs,
+      athletes: { status: 'ready', data: [{ slug: 'renee', name: 'Renee' }], error: null },
+      actingAsAthlete: 'renee',
+      plan: { status: 'idle', data: null, error: null },
+    };
+
+    it('shows the sub-tab bar with all three options once an athlete is selected', () => {
+      const html = renderRosterTab(actingArgs);
+      expect(html).toContain('data-a="roster:subtab:conversations"');
+      expect(html).toContain('data-a="roster:subtab:dashboard"');
+      expect(html).toContain('data-a="roster:subtab:plan"');
+    });
+
+    it('defaults to the Workouts + Dashboard sub-tab when subTab is not given', () => {
+      const html = renderRosterTab({
+        ...actingArgs, workouts: { status: 'ready', data: [workout], error: null },
+      });
+      expect(html).toContain('data-a="roster:open-workout"');
+      expect(html).toContain('class="subtab-btn active"');
+    });
+
+    it('shows the honest non-functional Conversations placeholder, not wired to anything', () => {
+      const html = renderRosterTab({ ...actingArgs, subTab: 'conversations' });
+      expect(html).toContain('coming soon');
+      expect(html).not.toContain('data-a="roster:open-workout"');
+      expect(html).not.toContain('data-a="roster:reply-submit"');
+    });
+
+    it('shows the Training Plan sub-tab\'s weeks/macro sections from the coach-plan endpoint data, without the load chart', () => {
+      const html = renderRosterTab({
+        ...actingArgs,
+        subTab: 'plan',
+        plan: {
+          status: 'ready',
+          data: {
+            slug: 'renee',
+            name: 'Renee',
+            athlete: { name: 'Renee' },
+            events: [],
+            macro: { blocks: [] },
+            weeks: [],
+          },
+          error: null,
+        },
+      });
+      expect(html).toContain('No weeks planned yet.');
+      expect(html).toContain('No macro plan scaffolded yet.');
+      expect(html).not.toContain('<svg'); // no load chart in this sub-tab
+    });
+
+    it('shows a loading state for the Training Plan sub-tab while the plan fetch is in flight', () => {
+      const html = renderRosterTab({
+        ...actingArgs, subTab: 'plan', plan: { status: 'loading', data: null, error: null },
+      });
+      expect(html.toLowerCase()).toContain('loading');
+    });
+
+    it('shows an error state for the Training Plan sub-tab on a failed fetch', () => {
+      const html = renderRosterTab({
+        ...actingArgs, subTab: 'plan', plan: { status: 'error', data: null, error: 'boom' },
+      });
+      expect(html).toContain('boom');
+    });
+
+    it('derives missed (skipped) sessions in the Workouts + Dashboard feed once plan weeks are available', () => {
+      const html = renderRosterTab({
+        ...actingArgs,
+        subTab: 'dashboard',
+        workouts: { status: 'ready', data: [], error: null },
+        plan: {
+          status: 'ready',
+          data: {
+            weeks: [{
+              iso_week: '2020-W01',
+              sessions: [{
+                id: 'sess-1', date: '2020-01-01', sport: 'swim_pool', duration_min: 45, status: 'planned',
+              }],
+            }],
+          },
+          error: null,
+        },
+      });
+      expect(html).toContain('Skipped');
+    });
   });
 
   it('falls back to the workouts/feedback list when workoutDetailId no longer matches any loaded workout', () => {

@@ -19,7 +19,7 @@ import {
   pushSessionToIntervals,
   downloadGarminFit,
   createGrant, listGrants, revokeGrant,
-  listCoachedAthletes, fetchCoachWorkouts, fetchCoachFeedback, fetchCoachLoad, replyToCoachFeedback,
+  listCoachedAthletes, fetchCoachWorkouts, fetchCoachFeedback, fetchCoachLoad, fetchCoachPlan, replyToCoachFeedback,
 } from './api.js';
 import {
   serializeWorkoutForm, serializeWellnessForm, profileFormFromAthlete, serializeProfileForm,
@@ -43,6 +43,10 @@ const ACTIVE_TAB_KEY = 'swimcoach_active_tab';
 // wellness-ingestion + training-dashboard plan) -- see views.js's
 // renderDashboardTab/renderTrainingDashboardBody.
 const KNOWN_TABS = ['plan', 'dashboard', 'checkin', 'coach', 'feedback', 'roster', 'settings'];
+// The roster tab's own sub-navigation (Build 2: Coach per-athlete sub-tab
+// restructure) -- see views.js's ROSTER_SUB_TABS/renderRosterSubTabBar for
+// the matching label/render side, and handleSelectRosterSubTab below.
+const ROSTER_SUB_TABS = ['conversations', 'dashboard', 'plan'];
 // Chat sessions are keyed per-athlete in localStorage (see chat.js); this is
 // just the storage key used before any real identity has ever signed in.
 const SIGNED_OUT_CHAT_KEY = 'signed-out';
@@ -128,6 +132,21 @@ function createRosterState() {
     // athlete is selected (handleSelectCoachedAthlete) or the coach backs
     // out to the athlete list (handleBackToRoster).
     feedExpanded: false,
+    // The acted-as athlete's plan export (Build 2's new
+    // GET /api/coach/athletes/<slug>/plan route -- see api.js's
+    // fetchCoachPlan) -- feeds the Training Plan sub-tab's weeks/macro
+    // sections AND, via its `weeks`, the Workouts + Dashboard sub-tab's
+    // skip-derivation (views.js's renderRosterTab, buildHistoryFeed). Same
+    // {status, data, error} async-state shape as `workouts`/`feedback`/
+    // `load` above.
+    plan: { status: 'idle', data: null, error: null },
+    // Which of the roster's three sub-tabs (Build 2: Conversations /
+    // Workouts + Dashboard / Training Plan) is currently showing for the
+    // acted-as athlete -- see views.js's renderRosterTab/
+    // renderRosterSubTabBar. Defaults to 'dashboard', the sub-tab that used
+    // to be the entire acting-as-athlete view before this split. Reset
+    // alongside the other per-athlete slices above.
+    subTab: 'dashboard',
   };
 }
 
@@ -383,6 +402,12 @@ function renderTabContent() {
         online: state.online,
         load: state.roster.load,
         feedExpanded: state.roster.feedExpanded,
+        plan: state.roster.plan,
+        subTab: state.roster.subTab,
+        // Shared with the athlete's own Plan tab (`case 'plan':` below) --
+        // see views.js's renderRosterTrainingPlanBody doc comment for why
+        // this deliberately isn't its own state.roster.allWeeksOpen slice.
+        allWeeksOpen: state.allWeeksOpen,
       });
     case 'settings':
       return renderSettingsTab({
@@ -782,6 +807,15 @@ async function loadPlanLoad() {
 
 function handleOpenSessionDetail(id) {
   if (!id) return;
+  // Session-detail drill-down (and its Garmin push/download actions, which
+  // act on the SIGNED-IN athlete's own slug via athleteSlug()) is only wired
+  // for the athlete's own Plan tab. The coach roster's Training Plan sub-tab
+  // (Build 2) reuses this exact renderSession/renderWeeksSection markup for
+  // its read-only weeks/macro display, so the same data-a="session:open"
+  // click fires there too -- this deliberately no-ops outside the Plan tab
+  // rather than opening a DIFFERENT athlete's session under the coach's own
+  // identity (see views.js's renderRosterTrainingPlanBody doc comment).
+  if (state.tab !== 'plan') return;
   state.planSessionDetailId = id;
   // Pushes an in-app history entry so hardware/gesture back (a `popstate`,
   // handled by handlePopState) closes the detail instead of navigating the
@@ -1589,8 +1623,37 @@ async function loadCoachLoad(slug) {
   render();
 }
 
+/** Fetches GET /api/coach/athletes/<slug>/plan (Build 2's new coach-plan
+ * route) for the roster tab's Training Plan sub-tab (weeks/macro) and, via
+ * its `weeks`, the Workouts + Dashboard sub-tab's skip-derivation -- same
+ * shape/pattern as loadCoachWorkouts/loadCoachFeedback/loadCoachLoad above,
+ * its own state.roster.plan slice (see api.js's fetchCoachPlan doc
+ * comment). */
+async function loadCoachPlan(slug) {
+  const settings = state.settingsForm;
+  if (!slug || !isConfigured(settings, state.identity)) {
+    state.roster.plan = { status: 'idle', data: null, error: null };
+    render();
+    return;
+  }
+
+  state.roster.plan = { status: 'loading', data: state.roster.plan.data, error: null };
+  render();
+
+  const result = await fetchCoachPlan({ baseUrl: settings.baseUrl, token: settings.token, athlete: slug });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    log.info('roster.plan_loaded', { athlete: slug, weeks: result.data.weeks?.length ?? 0 });
+    state.roster.plan = { status: 'ready', data: result.data, error: null };
+  } else {
+    log.error('roster.plan_load_failed', { athlete: slug, error: result.error });
+    state.roster.plan = { status: 'error', data: null, error: result.error };
+  }
+  render();
+}
+
 /** Opens one coached athlete's detail view (workouts + feedback + training
- * load), fetching all three -- mirrors handleOpenHistoryDetail/
+ * load + plan), fetching all four -- mirrors handleOpenHistoryDetail/
  * handleOpenSessionDetail's "set the selection, render, then fetch" shape,
  * minus the pushState/popstate wiring those two use (this is a tab-internal
  * list<->detail swap, not something a hardware back press needs to unwind
@@ -1603,13 +1666,16 @@ function handleSelectCoachedAthlete(slug) {
   state.roster.workouts = { status: 'idle', data: [], error: null };
   state.roster.feedback = { status: 'idle', data: [], error: null };
   state.roster.load = { status: 'idle', data: null, error: null };
+  state.roster.plan = { status: 'idle', data: null, error: null };
   state.roster.workoutDetailId = null;
   state.roster.feedExpanded = false;
+  state.roster.subTab = 'dashboard';
   log.info('roster.athlete_selected', { athlete: slug });
   render();
   loadCoachWorkouts(slug); // calls render() itself
   loadCoachFeedback(slug); // calls render() itself
   loadCoachLoad(slug); // calls render() itself
+  loadCoachPlan(slug); // calls render() itself
 }
 
 function handleBackToRoster() {
@@ -1617,8 +1683,31 @@ function handleBackToRoster() {
   state.roster.workouts = { status: 'idle', data: [], error: null };
   state.roster.feedback = { status: 'idle', data: [], error: null };
   state.roster.load = { status: 'idle', data: null, error: null };
+  state.roster.plan = { status: 'idle', data: null, error: null };
   state.roster.workoutDetailId = null;
   state.roster.feedExpanded = false;
+  state.roster.subTab = 'dashboard';
+  render();
+}
+
+/** Switches the roster's acted-as-athlete view between its three sub-tabs
+ * (Build 2: Conversations / Workouts + Dashboard / Training Plan) -- same
+ * "no-op on unknown id or already-active" guard as setTab, scoped to
+ * state.roster.subTab instead of state.tab. Closes any open workout-detail
+ * view first (same teardown setTab already does when leaving the Dashboard/
+ * roster tabs entirely) so switching sub-tabs never leaves a detail view
+ * open under a sub-tab it doesn't belong to. */
+function handleSelectRosterSubTab(subTab) {
+  if (!ROSTER_SUB_TABS.includes(subTab) || subTab === state.roster.subTab) return;
+  if (state.roster.workoutDetailId) {
+    state.roster.workoutDetailId = null;
+    // Consumes the pushState entry handleOpenCoachWorkoutDetail added --
+    // see setTab's matching roster teardown for why this is safe.
+    history.back();
+  }
+  state.roster.feedExpanded = false;
+  state.roster.subTab = subTab;
+  log.info('roster.subtab_switch', { subtab: subTab });
   render();
 }
 
@@ -1900,6 +1989,10 @@ async function onAppClick(e) {
   const action = el.dataset.a;
   if (action.startsWith('tab:')) {
     setTab(action.slice(4));
+    return;
+  }
+  if (action.startsWith('roster:subtab:')) {
+    handleSelectRosterSubTab(action.slice('roster:subtab:'.length));
     return;
   }
   switch (action) {

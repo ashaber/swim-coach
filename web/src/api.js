@@ -439,6 +439,18 @@ export async function fetchCoachLoad({ baseUrl, token, athlete }) {
   return apiRequest({ baseUrl, token, path: `/api/coach/athletes/${encodeURIComponent(athlete)}/load` });
 }
 
+/** GET {baseUrl}/api/coach/athletes/<athlete>/plan -- the coach-side view of
+ * one coached athlete's plan export (see backend/app/routes/coach.py's
+ * `coach_view_plan`), same `slug`/`name`/`athlete`/`events`/`macro`/`weeks`
+ * shape `fetchPlan` returns for the athlete's own Plan tab, just gated via
+ * `resolve_coach_athlete` instead of `resolve_athlete`. Feeds the roster
+ * tab's Training Plan sub-tab and (via its `weeks`) the Workouts + Dashboard
+ * sub-tab's skip-derivation. Path segment, same convention as
+ * `fetchCoachWorkouts`/`fetchCoachFeedback`/`fetchCoachLoad`. */
+export async function fetchCoachPlan({ baseUrl, token, athlete }) {
+  return apiRequest({ baseUrl, token, path: `/api/coach/athletes/${encodeURIComponent(athlete)}/plan` });
+}
+
 /** PATCH {baseUrl}/api/coach/athletes/<athlete>/feedback/<feedbackId> -- a
  * coach's reply to one of that athlete's feedback entries. Path segments,
  * same as `fetchCoachWorkouts`/`fetchCoachFeedback`. */
