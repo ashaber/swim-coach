@@ -84,7 +84,7 @@ function renderSession(session) {
 // a full in-tab view swap driven by main.js's state.planSessionDetailId,
 // rather than a modal/overlay (there's no such component anywhere in this
 // app -- see renderWeeksSection's wiring, which swaps to this the same way
-// renderHistorySection swaps to renderWorkoutDetail).
+// renderTrainingDashboardBody swaps to renderWorkoutDetail).
 
 function renderPlanSessionDetailStats(session) {
   const stats = [
@@ -444,7 +444,8 @@ function renderWeekCard(week, label) {
 /** `detailId` is main.js's state.planSessionDetailId -- null shows the
  * ordinary "This week"/"Next week" cards, a session id swaps the whole
  * section to a back button + renderPlanSessionDetail(...) instead, same
- * convention as renderHistorySection's `detailId` handling for workouts. */
+ * convention as renderTrainingDashboardBody's `detailId` handling for
+ * workouts. */
 function renderWeeksSection(weeks, detailId, sessionPush, allWeeksOpen) {
   if (detailId) {
     const session = findSessionById(weeks, detailId);
@@ -583,13 +584,14 @@ function renderMacroSection(macro, event, weeks) {
     </section>`;
 }
 
-// --- CTL/ATL/TSB training-load chart (Plan tab + coach roster) -------------
+// --- CTL/ATL/TSB training-load chart (Dashboard tab + coach roster) --------
 // Shared, verbatim render function for both surfaces (see plan.js's
 // ctlAtlTsbChartGeometry module comment for the geometry math this
-// consumes) -- renderApp (the athlete's own Plan tab) and renderRosterTab
-// (the coach roster's acting-as-athlete view) call this same function with
-// different `load` state; only the data source differs (main.js's
-// loadPlanLoad vs. loadCoachLoad).
+// consumes) -- renderTrainingDashboardBody (both the athlete's own Dashboard
+// tab and the coach roster's acting-as-athlete view, since Build 1 moved
+// this chart off the Plan tab and into the merged Log+History Dashboard)
+// calls this same function with different `load` state; only the data
+// source differs (main.js's loadPlanLoad vs. loadCoachLoad).
 
 const LOAD_CHART_LINE_COLOR_VAR = { ctl: '--accent', atl: '--c-strength', tsb: '--c-ow' };
 
@@ -650,18 +652,30 @@ function renderWellnessBaselineDeviation(deviation) {
     </div>`;
 }
 
+/** Dual y-axis rendering (readability fix -- see `ctlAtlTsbChartGeometry`'s
+ * doc comment in plan.js for why): the left axis (grey, gridlined) is
+ * CTL/TSB's shared "primary" scale; the right axis (no gridlines of its
+ * own -- a second full gridline grid would clutter the plot for one line)
+ * is ATL's independent "secondary" scale, its tick labels colored to match
+ * ATL's own line color so the two axes read as visually paired with the
+ * line each belongs to, exactly like the legend below the chart already
+ * pairs a color with a name. */
 function renderLoadChartSvg(geo) {
   const yTickLines = geo.yTicks.map((t) => `
       <line x1="${geo.plotLeft}" y1="${t.y.toFixed(1)}" x2="${geo.plotRight}" y2="${t.y.toFixed(1)}" class="load-chart-gridline" />
       <text x="${geo.plotLeft - 6}" y="${t.y.toFixed(1)}" class="load-chart-axis-label" text-anchor="end" dominant-baseline="middle">${esc(t.value)}</text>`).join('');
 
+  const yTickLabelsSecondary = geo.yTicksSecondary.map((t) => `
+      <text x="${geo.plotRight + 6}" y="${t.y.toFixed(1)}" class="load-chart-axis-label load-chart-axis-label-secondary" text-anchor="start" dominant-baseline="middle" style="fill:var(${LOAD_CHART_LINE_COLOR_VAR.atl})">${esc(t.value)}</text>`).join('');
+
   const xTickLabels = geo.xTicks.map((t) => `
       <text x="${t.x.toFixed(1)}" y="${geo.plotBottom + 18}" class="load-chart-axis-label" text-anchor="middle">${esc(formatShortDate(parseIsoDate(t.label)))}</text>`).join('');
 
   return `
-    <svg class="load-chart-svg" viewBox="0 0 ${geo.width} ${geo.height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Training load chart: CTL, ATL, and TSB over time">
+    <svg class="load-chart-svg" viewBox="0 0 ${geo.width} ${geo.height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Training load chart: CTL and TSB on the left axis, ATL on its own independent right axis">
       <rect class="load-chart-band" x="${geo.plotLeft}" y="${geo.bandTop.toFixed(1)}" width="${geo.plotRight - geo.plotLeft}" height="${Math.max(0, geo.bandBottom - geo.bandTop).toFixed(1)}" />
       ${yTickLines}
+      ${yTickLabelsSecondary}
       ${xTickLabels}
       <polyline class="load-chart-line load-chart-line-ctl" points="${loadChartPointsAttr(geo.ctlPoints)}" style="stroke:var(${LOAD_CHART_LINE_COLOR_VAR.ctl})" />
       <polyline class="load-chart-line load-chart-line-atl" points="${loadChartPointsAttr(geo.atlPoints)}" style="stroke:var(${LOAD_CHART_LINE_COLOR_VAR.atl})" />
@@ -742,19 +756,26 @@ function renderCtlAtlTsbNarrative(series) {
 
 /**
  * Renders the CTL ("fitness") / ATL ("fatigue") / TSB ("form") Banister
- * training-load chart -- shared verbatim by the athlete's own Plan tab
- * (renderApp) and the coach roster's acting-as-athlete view (renderRosterTab);
- * only the `load` state differs between the two call sites.
+ * training-load chart -- shared verbatim by `renderTrainingDashboardBody`
+ * on both the athlete's own Dashboard tab and the coach roster's
+ * acting-as-athlete view; only the `load` state differs between the two
+ * call sites.
  *
  * `load` follows this app's usual async-state shape (`{status, data, error}`
  * -- same convention as `state.plan`/`state.roster.workouts`), where
  * `data.ctl_atl_tsb` is the `[dateIso, ctl, atl, tsb]` series from
  * `GET /api/plan/load` / `GET /api/coach/athletes/{slug}/load`.
  *
- * All three lines share one y-axis -- the standard cycling-coaching
+ * CTL/TSB share one (left) y-axis -- the standard cycling-coaching
  * "Performance Management Chart" layout (see plan.js's module comment for
  * why TSB is never shown alone) -- plus a shaded reference band for the
- * commonly-cited cycling-coaching "race-day TSB" range.
+ * commonly-cited cycling-coaching "race-day TSB" range. ATL plots against
+ * its OWN independent (right) y-axis -- a dual-axis readability fix (Build
+ * 1): a 42-day EWMA (CTL) has an inherently much smaller natural range than
+ * a 7-day EWMA (ATL) on any real athlete's data, so sharing one axis made
+ * CTL look flat/negligible next to ATL's swings, even though nothing about
+ * the underlying numbers was wrong (verified -- see
+ * `ctlAtlTsbChartGeometry`'s own doc comment in plan.js).
  *
  * Directly below the chart sits `renderCtlAtlTsbNarrative`'s athlete-
  * specific "what the numbers say" prose (plan.js's `describeCtlAtlTsbTrend`)
@@ -790,9 +811,9 @@ export function renderLoadChart(load) {
     : `
       ${renderLoadChartSvg(geo)}
       <div class="legend load-chart-legend">
-        <span class="li"><span class="dot" style="background:var(${LOAD_CHART_LINE_COLOR_VAR.ctl})"></span>CTL (fitness)</span>
-        <span class="li"><span class="dot" style="background:var(${LOAD_CHART_LINE_COLOR_VAR.atl})"></span>ATL (fatigue)</span>
-        <span class="li"><span class="dot" style="background:var(${LOAD_CHART_LINE_COLOR_VAR.tsb})"></span>TSB (form)</span>
+        <span class="li"><span class="dot" style="background:var(${LOAD_CHART_LINE_COLOR_VAR.ctl})"></span>CTL (fitness) · left axis</span>
+        <span class="li"><span class="dot" style="background:var(${LOAD_CHART_LINE_COLOR_VAR.atl})"></span>ATL (fatigue) · right axis</span>
+        <span class="li"><span class="dot" style="background:var(${LOAD_CHART_LINE_COLOR_VAR.tsb})"></span>TSB (form) · left axis</span>
         <span class="li"><span class="dot load-chart-band-dot"></span>Race-day TSB reference band</span>
       </div>`;
 
@@ -805,7 +826,7 @@ export function renderLoadChart(load) {
       ${narrative}
       <details class="load-chart-methodology">
         <summary>How this chart works</summary>
-        <p class="load-chart-note">CTL ("fitness") and ATL ("fatigue") are 42-day/7-day exponentially weighted averages of daily training load; TSB ("form") is CTL minus ATL. These time constants are the standard cycling/TrainingPeaks convention, carried over as a starting point -- not yet verified for swimming specifically. The shaded band (+5 to +25 TSB) is a commonly-targeted range in cycling coaching practice on race day, not a swim-specific or peer-reviewed target -- individual variation is large, so your own best-performance history is a better guide than this generic band.</p>
+        <p class="load-chart-note">CTL ("fitness") and ATL ("fatigue") are 42-day/7-day exponentially weighted averages of daily training load; TSB ("form") is CTL minus ATL. These time constants are the standard cycling/TrainingPeaks convention, carried over as a starting point -- not yet verified for swimming specifically. The shaded band (+5 to +25 TSB) is a commonly-targeted range in cycling coaching practice on race day, not a swim-specific or peer-reviewed target -- individual variation is large, so your own best-performance history is a better guide than this generic band. CTL and TSB share the left axis; ATL plots against its own right axis -- a 42-day average has an inherently much smaller natural range than a 7-day one, so sharing one scale made CTL look flat next to ATL's swings even though nothing about the underlying numbers was wrong.</p>
       </details>
       ${renderWellnessBaselineDeviation(load.data.wellness_baseline_deviation)}
     </div>`;
@@ -895,16 +916,14 @@ function renderGlossaryPanel(open) {
 }
 
 export function renderApp(data, planSessionDetailId) {
-  const { athlete, events, macro, weeks, sessionPush, allWeeksOpen, glossaryOpen, load } = data;
+  const { athlete, events, macro, weeks, sessionPush, allWeeksOpen, glossaryOpen } = data;
   const event = macroTargetEvent(macro, events);
-  const loadChart = renderLoadChart(load);
 
   return `
     <div class="wrap">
       ${renderMasthead(athlete, event)}
       ${renderWeeksSection(weeks, planSessionDetailId, sessionPush, allWeeksOpen)}
       ${renderMacroSection(macro, event, weeks)}
-      ${loadChart ? `<section>${loadChart}</section>` : ''}
       <div class="foot">
         ${renderLegendPanel()}
         ${renderZonesPanel(athlete)}
@@ -923,14 +942,16 @@ export function renderError(message) {
 }
 
 // --- Tab bar ---------------------------------------------------------------
-// 6 tabs now that the write endpoints (IDEA 003's Log/Checkin, and this
-// build's Feedback log) have a backend; Library/Athlete still don't. Adding
-// one later is just another entry in TABS plus a case in main.js's
-// tab-content switch -- nothing here needs to change.
+// Log and History merged into one Dashboard tab (Build 1 of the wellness-
+// ingestion + training-dashboard plan) -- they'd grown into near-duplicates
+// (Log embedded a capped, completed-only history view; History showed the
+// same data unbounded, plus derived skips) and the nav had grown "already
+// very busy" across many builds. Adding a tab later is just another entry
+// in TABS plus a case in main.js's tab-content switch -- nothing here needs
+// to change.
 const TABS = [
   { id: 'plan', label: 'Plan', icon: '📋' },
-  { id: 'log', label: 'Log', icon: '📝' },
-  { id: 'history', label: 'History', icon: '📚' },
+  { id: 'dashboard', label: 'Dashboard', icon: '📊' },
   { id: 'checkin', label: 'Check-in', icon: '🌙' },
   { id: 'coach', label: 'Coach', icon: '💬' },
   { id: 'feedback', label: 'Feedback', icon: '💡' },
@@ -1179,34 +1200,12 @@ function renderManualLogSection({
     </div>`;
 }
 
-export function renderLogTab({
-  form, submit, ingest, backendConfigured, online, history, detailId, sync, manualOpen, workoutChat,
-}) {
-  return `
-    <div class="wrap settings-wrap">
-      <header class="mast" style="border-bottom:none;padding-bottom:0;">
-        <div>
-          <span class="mark">swim-coach · log</span>
-          <h1>Log a swim</h1>
-          <p class="sub">Record a completed session so your coach sees it.</p>
-        </div>
-      </header>
-      ${!online ? '<div class="chat-banner">Offline -- logging needs a connection.</div>' : ''}
-      ${!backendConfigured ? renderBackendNeededNotice('Logging a swim needs you to sign in and set a backend URL and token first.') : `
-      ${renderSyncSection(sync, online)}
-      ${renderManualLogSection({
-        form, submit, ingest, online, open: !!manualOpen,
-      })}
-      ${renderHistorySection({ ...history, online, detailId, workoutChat })}`}
-    </div>`;
-}
-
-// --- Workout history (Log tab section) ----------------------------------
+// --- Workout history (dashboard feed rows) --------------------------------
 // Renders whatever's already been logged/imported -- manual entries plus
 // .fit/.tcx/.csv/coach-text imports, which previously had no UI at all (see
 // api.js's listWorkouts, which existed but nothing called). Kept as its own
-// section/render function (rather than folded into renderLogTab's markup
-// inline) so it's cheaply unit-testable on its own -- see
+// row-render function (rather than folded into renderTrainingDashboardBody's
+// markup inline) so it's cheaply unit-testable on its own -- see
 // tests/unit/views.test.js.
 
 // Bioluminescent Dusk treatment: pace-ish values read in the teal accent,
@@ -1255,18 +1254,14 @@ function renderWorkoutRow(workout) {
     </button>`;
 }
 
-function renderHistoryList(workouts) {
-  return `<div class="hist-list">${workouts.map(renderWorkoutRow).join('')}</div>`;
-}
-
-// --- History tab ----------------------------------------------------------
+// --- Training dashboard feed (Log+History merge, Build 1) ------------------
 // "History should show workouts completed with actual stats and planned
 // workout skipped." One reverse-chronological feed of both, built by
 // history.js's buildHistoryFeed (see that module on why "skipped" is
 // derived rather than read from Session.status).
 //
 // Completed rows reuse renderWorkoutRow/renderWorkoutDetail verbatim -- the
-// Log tab's existing history section already renders exactly the "actual
+// original Log tab's history section already rendered exactly the "actual
 // stats" half correctly, and forking it would guarantee drift.
 
 /** A planned-but-never-done session. Deliberately a `<div>`, not the
@@ -1295,71 +1290,132 @@ function renderSkippedRow(session) {
     </div>`;
 }
 
-function renderHistoryFeed(feed) {
-  const rows = feed.map((item) => (
-    item.kind === 'completed' ? renderWorkoutRow(item.workout) : renderSkippedRow(item.session)
-  ));
-  return `<div class="hist-list">${rows.join('')}</div>`;
+/** One feed item (either kind) as a row -- `renderCompletedRow` lets each
+ * surface plug in its own completed-row treatment (the athlete's own
+ * `renderWorkoutRow`, or the coach roster's `renderCoachWorkoutRow` with its
+ * planned-vs-actual quality line) while sharing this one mapping. */
+function renderFeedRow(item, renderCompletedRow) {
+  return item.kind === 'completed' ? renderCompletedRow(item.workout) : renderSkippedRow(item.session);
 }
 
-function historyShell(body) {
-  return `
-    <div class="wrap settings-wrap">
-      <header class="mast" style="border-bottom:none;padding-bottom:0;">
-        <div>
-          <span class="mark">swim-coach · history</span>
-          <h1>What you've done</h1>
-          <p class="sub">Completed sessions with the stats you actually logged, and the planned ones that got missed.</p>
-        </div>
-      </header>
-      ${body}
-    </div>`;
-}
-
-export function renderHistoryTab({
-  feed, status, error, online, detailId, workoutChat, backendConfigured,
+/** The shared body of the merged Training Dashboard (Log+History merge,
+ * Build 1 of the wellness-ingestion + training-dashboard plan): the
+ * CTL/ATL/TSB load chart, then caller-supplied `actions` markup (the
+ * athlete's own sync/manual-entry section -- `null` for the coach roster's
+ * read-only view of someone else's training), then one paginated,
+ * reverse-chronological feed of completed (and, for the athlete's own
+ * dashboard, derived-skipped) sessions. Exactly one render function, called
+ * from both `renderDashboardTab` (athlete) and `renderRosterTab` (coach) --
+ * see each call site for how their `feed`/`actions`/row-rendering differ.
+ *
+ * Pagination: renders only the most recent `HISTORY_DISPLAY_CAP` feed items
+ * by default, with a "Show more" control revealing the rest -- applies to
+ * both surfaces since both funnel through this one function. `feedExpanded`
+ * is the caller's own bit of state (main.js's `state.dashboardFeedExpanded`
+ * / `state.roster.feedExpanded`); this stays a pure render like every other
+ * view here.
+ *
+ * Tapping a completed row opens its detail view (`renderWorkoutDetail`,
+ * verbatim) via `detailId` -- when it matches, this returns ONLY a back
+ * button plus the detail (no chart, no actions, no feed list), same
+ * convention the original History tab used: a focused detail view, not a
+ * busier one. `chat: false` (roster) omits the embedded "ask your coach"
+ * thread entirely -- that's an athlete-only AI feature, never shown on a
+ * coach's read-only view of someone else's workout. */
+function renderTrainingDashboardBody({
+  load, feed, status, error, online, detailId, workoutChat, actions, feedExpanded,
+  renderCompletedRow = renderWorkoutRow,
+  backAction = 'history:back',
+  chat = true,
+  emptyMessage = 'Nothing logged or missed yet. Once you log a session (or miss a planned one), it shows up here.',
 }) {
-  if (!backendConfigured) {
-    return historyShell(renderBackendNeededNotice(
-      'History needs you to sign in and set a backend URL and token in Settings.',
-    ));
-  }
-
   const items = feed || [];
   const hasData = items.length > 0;
 
   if (hasData && detailId) {
     const match = items.find((i) => i.kind === 'completed' && i.workout.id === detailId);
     if (match) {
-      return historyShell(`
+      return `
         <section class="hist-section">
-          <div class="s-head"><button type="button" class="btn-ghost" data-a="history:back">&larr; Back to history</button></div>
-          ${renderWorkoutDetail(match.workout, { chat: workoutChat, online })}
-        </section>`);
+          <div class="s-head"><button type="button" class="btn-ghost" data-a="${backAction}">&larr; Back</button></div>
+          ${renderWorkoutDetail(match.workout, { chat: chat ? workoutChat : null, online })}
+        </section>`;
     }
   }
 
-  if (status === 'error') {
-    return historyShell(`
-      <section class="hist-section">
-        ${hasData ? renderHistoryFeed(items) : ''}
-        <div class="hist-error">Couldn't load your history: ${esc(error)}</div>
-        <div class="settings-actions"><button type="button" class="btn-ghost" data-a="history:retry">Retry</button></div>
-      </section>`);
+  const capped = feedExpanded ? items : items.slice(0, HISTORY_DISPLAY_CAP);
+  const remaining = items.length - capped.length;
+
+  const feedBody = (() => {
+    if (status === 'error') {
+      return `
+        ${hasData ? `<div class="hist-list">${capped.map((item) => renderFeedRow(item, renderCompletedRow)).join('')}</div>` : ''}
+        <div class="hist-error">Couldn't load your training history: ${esc(error)}</div>
+        <div class="settings-actions"><button type="button" class="btn-ghost" data-a="history:retry">Retry</button></div>`;
+    }
+    if (status === 'loading' && !hasData) {
+      return '<p class="sub">Loading history&hellip;</p>';
+    }
+    if (!hasData) {
+      const notice = !online ? 'This needs a connection -- reconnect to load it.' : emptyMessage;
+      return `<p class="sub">${esc(notice)}</p>`;
+    }
+    return `
+      <div class="hist-list">${capped.map((item) => renderFeedRow(item, renderCompletedRow)).join('')}</div>
+      ${remaining > 0 ? `
+      <div class="settings-actions">
+        <button type="button" class="btn-ghost" data-a="dashboard:show-more">Show ${remaining} more</button>
+      </div>` : ''}`;
+  })();
+
+  return `
+    ${renderLoadChart(load)}
+    ${actions || ''}
+    <section class="hist-section">
+      <div class="s-head"><h2>Workouts</h2></div>
+      ${feedBody}
+    </section>`;
+}
+
+function dashboardShell(body) {
+  return `
+    <div class="wrap settings-wrap">
+      <header class="mast" style="border-bottom:none;padding-bottom:0;">
+        <div>
+          <span class="mark">swim-coach · dashboard</span>
+          <h1>Training dashboard</h1>
+          <p class="sub">Your fitness/fatigue trend, plus everything completed or missed.</p>
+        </div>
+      </header>
+      ${body}
+    </div>`;
+}
+
+/** The athlete's own merged Log+History tab (Build 1): sync-from-watch +
+ * manual-entry actions (the original Log tab's own markup, unchanged --
+ * `renderSyncSection`/`renderManualLogSection` above), stacked on top of
+ * `renderTrainingDashboardBody`'s shared chart+feed. The full completed+
+ * missed feed (built by main.js via `history.js`'s `buildHistoryFeed`) --
+ * unlike the coach roster's completed-only view, see `renderRosterTab`. */
+export function renderDashboardTab({
+  load, feed, status, error, online, detailId, workoutChat, backendConfigured,
+  form, submit, ingest, sync, manualOpen, feedExpanded,
+}) {
+  if (!backendConfigured) {
+    return dashboardShell(renderBackendNeededNotice(
+      'The dashboard needs you to sign in and set a backend URL and token in Settings.',
+    ));
   }
 
-  if (status === 'loading' && !hasData) {
-    return historyShell('<section class="hist-section"><p class="sub">Loading history…</p></section>');
-  }
+  const actions = `
+    ${renderSyncSection(sync, online)}
+    ${renderManualLogSection({ form, submit, ingest, online, open: !!manualOpen })}`;
 
-  if (!hasData) {
-    const notice = !online
-      ? 'History needs a connection — reconnect to load it.'
-      : 'Nothing logged or missed yet. Once you log a session (or miss a planned one), it shows up here.';
-    return historyShell(`<section class="hist-section"><p class="sub">${esc(notice)}</p></section>`);
-  }
-
-  return historyShell(`<section class="hist-section">${renderHistoryFeed(items)}</section>`);
+  return dashboardShell(`
+    ${!online ? '<div class="chat-banner">Offline -- some data may be out of date.</div>' : ''}
+    ${renderTrainingDashboardBody({
+      load, feed, status, error, online, detailId, workoutChat, actions, feedExpanded,
+    })}`);
 }
 
 // --- Workout detail view (tapping a history row) --------------------------
@@ -1523,75 +1579,6 @@ function renderWorkoutDetail(workout, { chat, online } = {}) {
     ${renderLengthsSummarySection(workout.lengths)}
     ${renderDetailNotes(workout.notes)}
     ${renderWorkoutChatSection({ workout, chat, online })}`;
-}
-
-/** `history` is `{ status, data, error }` (see main.js's state.workoutHistory)
- * plus `online` and `detailId` folded in -- status is one of
- * idle/loading/ready/error, same convention as plan/profile/feedback in
- * main.js. `detailId` (main.js's state.workoutDetailId) is null for the
- * list view, or a workout id to show that workout's detail view instead --
- * checked ahead of every status branch (using whatever `data` is already in
- * state, stale-during-a-refresh included) so the detail view survives a
- * background render() exactly like every other state-driven view here.
- * `workoutChat` (main.js's state.workoutChat -- {workoutId, messages} or
- * null) feeds the detail view's embedded scoped chat section. */
-export function renderHistorySection({
-  status, data, error, online, detailId, workoutChat,
-}) {
-  // The Log tab shows only the most recent HISTORY_DISPLAY_CAP workouts.
-  // The cap lives here rather than in loadHistory so state keeps the FULL
-  // list -- the History tab's skip derivation needs all of it (see
-  // history.js's buildHistoryFeed note). Detail lookup below deliberately
-  // still searches the uncapped `data`, so an open detail view survives
-  // falling past the cap.
-  const capped = data ? data.slice(0, HISTORY_DISPLAY_CAP) : [];
-  const hasData = capped.length > 0;
-
-  if (hasData && detailId) {
-    const workout = data.find((w) => w.id === detailId);
-    if (workout) {
-      return `
-        <section class="hist-section">
-          <div class="s-head"><button type="button" class="btn-ghost" data-a="history:back">&larr; Back to history</button></div>
-          ${renderWorkoutDetail(workout, { chat: workoutChat, online })}
-        </section>`;
-    }
-  }
-
-  if (status === 'error') {
-    return `
-      <section class="hist-section">
-        <div class="s-head"><h2>Recent workouts</h2></div>
-        ${hasData ? renderHistoryList(capped) : ''}
-        <div class="hist-error">Couldn't load your workout history: ${esc(error)}</div>
-        <div class="settings-actions"><button type="button" class="btn-ghost" data-a="history:retry">Retry</button></div>
-      </section>`;
-  }
-
-  if (status === 'loading' && !hasData) {
-    return `
-      <section class="hist-section">
-        <div class="s-head"><h2>Recent workouts</h2></div>
-        <p class="sub">Loading history…</p>
-      </section>`;
-  }
-
-  if (!hasData) {
-    const notice = !online
-      ? '<p class="sub">History needs a connection -- reconnect to load it.</p>'
-      : '<p class="sub">No workouts logged yet.</p>';
-    return `
-      <section class="hist-section">
-        <div class="s-head"><h2>Recent workouts</h2></div>
-        ${notice}
-      </section>`;
-  }
-
-  return `
-    <section class="hist-section">
-      <div class="s-head"><h2>Recent workouts</h2></div>
-      ${renderHistoryList(capped)}
-    </section>`;
 }
 
 // --- Check-in tab (daily wellness) ---------------------------------------------
@@ -1894,19 +1881,6 @@ function renderCoachWorkoutRow(workout) {
     </button>`;
 }
 
-function renderCoachWorkoutsSection(workouts) {
-  if (workouts.status === 'loading' && workouts.data.length === 0) {
-    return '<p class="sub">Loading workouts&hellip;</p>';
-  }
-  if (workouts.status === 'error') {
-    return `<div class="hist-error">Couldn't load workouts: ${esc(workouts.error)}</div>`;
-  }
-  if (workouts.data.length === 0) {
-    return '<p class="sub">Nothing logged yet.</p>';
-  }
-  return `<div class="hist-list">${workouts.data.map(renderCoachWorkoutRow).join('')}</div>`;
-}
-
 function renderCoachFeedbackEntry(entry, replyDraft, replySubmit) {
   const submitting = replySubmit.status === 'submitting' && replySubmit.feedbackId === entry.id;
   const submitError = replySubmit.status === 'error' && replySubmit.feedbackId === entry.id
@@ -1970,7 +1944,7 @@ function rosterShell(body) {
 
 export function renderRosterTab({
   athletes, actingAsAthlete, workouts, feedback, replyDrafts, replySubmit, workoutDetailId,
-  backendConfigured, online, load,
+  backendConfigured, online, load, feedExpanded,
 }) {
   if (!backendConfigured) {
     return rosterShell(renderBackendNeededNotice(
@@ -1982,31 +1956,52 @@ export function renderRosterTab({
     const match = (athletes.data || []).find((a) => a.slug === actingAsAthlete);
     const name = match?.name || actingAsAthlete;
 
+    // Completed-only feed -- no plan-fetch endpoint exists yet on the coach
+    // side to derive skips from (Build 2's job, not this one's -- see the
+    // Build 1 plan's explicit scope decision). Same
+    // `renderTrainingDashboardBody` shared component as the athlete's own
+    // dashboard either way (chart -> actions (null, read-only here) ->
+    // paginated feed); `renderCoachWorkoutRow` (planned-vs-actual quality
+    // line, no embedded chat) stands in for the athlete-side row/detail
+    // treatment.
+    const feed = (workouts.data || []).map((w) => ({
+      kind: 'completed', date: (w.date || '').slice(0, 10), key: `w:${w.id}`, workout: w,
+    }));
+    const dashboardBody = renderTrainingDashboardBody({
+      load,
+      feed,
+      status: workouts.status,
+      error: workouts.error,
+      online,
+      detailId: workoutDetailId,
+      workoutChat: null,
+      actions: null,
+      feedExpanded,
+      renderCompletedRow: renderCoachWorkoutRow,
+      backAction: 'roster:close-workout',
+      chat: false,
+      emptyMessage: 'Nothing logged yet.',
+    });
+
     // Read-only workout detail (no embedded chat -- that's an athlete-only
-    // AI feature, see renderWorkoutDetail's `chat` option, which no-ops its
-    // chat section when `chat` is omitted/null, same as passing no chat
-    // here). Falls through to the normal workouts/feedback view if the id
-    // no longer matches anything already loaded (e.g. a stale id after a
-    // refresh), same "just show the list" fallback History's own detail
-    // view uses.
-    if (workoutDetailId) {
-      const workout = (workouts.data || []).find((w) => w.id === workoutDetailId);
-      if (workout) {
-        return rosterShell(`
-          <div class="s-head"><button type="button" class="btn-ghost" data-a="roster:close-workout">&larr; Back to ${esc(name)}'s workouts</button></div>
-          ${renderWorkoutDetail(workout, { online })}`);
-      }
+    // AI feature). When workoutDetailId matches a loaded workout,
+    // `dashboardBody` above is ALREADY just the back button + detail (see
+    // renderTrainingDashboardBody's own detailId branch) -- rendered alone,
+    // with none of the "Coaching <name>"/Back-to-My-Athletes/Feedback
+    // chrome below, same "focused detail view" convention the original
+    // History tab used. Falls through to the normal workouts/feedback view
+    // if the id no longer matches anything already loaded (e.g. a stale id
+    // after a refresh), same "just show the list" fallback as before.
+    const detailWorkout = workoutDetailId ? feed.find((i) => i.workout.id === workoutDetailId) : null;
+    if (detailWorkout) {
+      return rosterShell(dashboardBody);
     }
 
     return rosterShell(`
       <div class="s-head"><button type="button" class="btn-ghost" data-a="roster:back">&larr; Back to My Athletes</button></div>
       <p class="sub">Coaching <b>${esc(name)}</b> (${esc(actingAsAthlete)}).</p>
       ${!online ? '<div class="chat-banner">Offline -- some data may be out of date.</div>' : ''}
-      ${renderLoadChart(load)}
-      <section class="hist-section">
-        <div class="s-head"><h2>Workouts</h2></div>
-        ${renderCoachWorkoutsSection(workouts)}
-      </section>
+      ${dashboardBody}
       <section class="hist-section">
         <div class="s-head"><h2>Feedback</h2></div>
         ${renderCoachFeedbackSection(feedback, replyDrafts, replySubmit)}

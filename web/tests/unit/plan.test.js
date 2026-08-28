@@ -1076,6 +1076,70 @@ describe('ctlAtlTsbChartGeometry', () => {
     expect(geo.width).toBe(300);
     expect(geo.height).toBe(150);
   });
+
+  // Readability fix (Build 1, web/training-dashboard-merge): CTL is a 42-day
+  // EWMA with an inherently tiny natural range next to ATL's 7-day-EWMA
+  // range on any real athlete's data -- sharing one y-axis made CTL look
+  // flat/negligible next to ATL's swings (verified NOT a coding bug -- see
+  // the plan doc's Context section). Fix: ATL plots against its own
+  // secondary y-axis, independent of the CTL/TSB/band primary axis.
+  describe('dual y-axis: ATL scales independently of CTL/TSB', () => {
+    it('gives ATL real vertical spread even when its range is tiny next to a huge CTL swing', () => {
+      // CTL swings 10 -> 100 (huge range); ATL barely moves 40 -> 42 (tiny
+      // range in absolute terms, but a real, meaningful swing for a 7-day
+      // EWMA). On a single shared axis, the ATL line would compress to
+      // near-flat; on independent axes, it should still use most of the
+      // available plot height.
+      const series = [
+        ['2026-08-01', 10, 40, 0],
+        ['2026-08-02', 100, 42, 0],
+      ];
+      const geo = ctlAtlTsbChartGeometry(series);
+      const plotH = geo.plotBottom - geo.plotTop;
+      const atlSpread = Math.abs(geo.atlPoints[1].y - geo.atlPoints[0].y);
+      // A shared axis would compress this to a sliver of plotH (roughly
+      // 2/(100-10) of it); independent scaling should put it at a large
+      // fraction of the full plot height.
+      expect(atlSpread).toBeGreaterThan(plotH * 0.3);
+    });
+
+    it('does not let ATL values distort the primary (CTL/TSB) axis domain', () => {
+      // A wild ATL spike must not blow out the primary axis range that
+      // CTL/TSB/the race-day band are plotted against.
+      const series = [
+        ['2026-08-01', 10, 5, 5],
+        ['2026-08-02', 11, 500, 6],
+      ];
+      const geo = ctlAtlTsbChartGeometry(series);
+      const primaryValues = geo.yTicks.map((t) => t.value);
+      expect(Math.max(...primaryValues)).toBeLessThan(100);
+    });
+
+    it('exposes a secondary tick set scaled to ATL\'s own range', () => {
+      const series = [
+        ['2026-08-01', 10, 40, 0],
+        ['2026-08-02', 100, 42, 0],
+      ];
+      const geo = ctlAtlTsbChartGeometry(series);
+      expect(Array.isArray(geo.yTicksSecondary)).toBe(true);
+      expect(geo.yTicksSecondary.length).toBeGreaterThan(1);
+      const secondaryValues = geo.yTicksSecondary.map((t) => t.value);
+      // The secondary axis should bracket ATL's own 40-42 range, not the
+      // primary CTL/TSB/band range.
+      expect(Math.min(...secondaryValues)).toBeLessThanOrEqual(40);
+      expect(Math.max(...secondaryValues)).toBeGreaterThanOrEqual(42);
+      expect(Math.max(...secondaryValues)).toBeLessThan(100);
+    });
+
+    it('a higher ATL value still plots higher on screen (smaller SVG y) on its own axis', () => {
+      const series = [
+        ['2026-08-01', 50, 5, 5],
+        ['2026-08-02', 50, 15, 5],
+      ];
+      const geo = ctlAtlTsbChartGeometry(series);
+      expect(geo.atlPoints[1].y).toBeLessThan(geo.atlPoints[0].y);
+    });
+  });
 });
 
 describe('describeCtlAtlTsbTrend', () => {
