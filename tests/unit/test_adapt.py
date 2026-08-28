@@ -189,6 +189,76 @@ def test_cut_when_load_ratio_red():
     assert rationale["signals"]["load_ratio_7d_28d"] > LOAD_RATIO_RED_THRESHOLD
 
 
+# --- wellness signal: sync-only rows must be filtered, never crash --------------------
+
+
+def test_wellness_mean_uses_only_real_entries_when_mixed_with_sync_only():
+    athlete, event, macro, current_week, next_iso, next_start, as_of = _setup()
+    real_wellness = [
+        make_wellness(date=as_of - timedelta(days=i), sleep_quality=1, stress=5, soreness=5, motivation=1)
+        for i in range(7)
+    ]
+    # Sync-only rows (backend/app/sync.py) for the same window -- objective
+    # data only, no subjective fields at all -- must not affect the mean.
+    sync_only = [
+        make_wellness(
+            date=as_of - timedelta(days=i),
+            sleep_quality=None,
+            sleep_hours=None,
+            stress=None,
+            soreness=None,
+            motivation=None,
+            resting_hr=48,
+            source="intervals_sync",
+        )
+        for i in range(7)
+    ]
+    week = adapt_week(
+        athlete, event, macro, next_iso, next_start, current_week, [], real_wellness + sync_only, as_of
+    )
+    rationale = _rationale(week)
+    # All-red real entries -> composite of 1.0 each -> mean 1.0, same as if
+    # the sync-only rows weren't there at all.
+    assert rationale["signals"]["wellness_composite_mean"] == 1.0
+    assert rationale["action"] == "cut"
+
+
+def test_wellness_mean_none_when_window_entirely_sync_only():
+    athlete, event, macro, current_week, next_iso, next_start, as_of = _setup()
+    sync_only = [
+        make_wellness(
+            date=as_of - timedelta(days=i),
+            sleep_quality=None,
+            sleep_hours=None,
+            stress=None,
+            soreness=None,
+            motivation=None,
+            resting_hr=48,
+            source="intervals_sync",
+        )
+        for i in range(7)
+    ]
+    workouts = _fully_compliant_workouts(current_week)
+    # No crash, and behaves exactly like "no wellness data at all" today --
+    # wellness_composite_mean is None in the rationale, not a crash and not a
+    # fabricated number.
+    week = adapt_week(
+        athlete,
+        event,
+        macro,
+        next_iso,
+        next_start,
+        current_week,
+        workouts,
+        sync_only,
+        as_of,
+        days_since_last_milestone=RECOVERY_DAYS_AFTER_MILESTONE_MIN,
+    )
+    rationale = _rationale(week)
+    assert rationale["signals"]["wellness_composite_mean"] is None
+    assert rationale["action"] == "advance"
+
+
 # --- repeat: low compliance -----------------------------------------------------------
 
 

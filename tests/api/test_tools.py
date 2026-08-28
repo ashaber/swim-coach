@@ -469,9 +469,15 @@ def test_sync_workouts_scopes_to_bound_athlete_only(athletes_dir, monkeypatch: p
     result = handlers["sync_workouts"]({})
 
     assert "error" not in result
-    assert requested_paths == ["/api/v1/athlete/i-renee/activities"]
+    # sync_athlete also pulls wellness (RHR/HRV auto-populate, app.sync) --
+    # the point of this test is that every request is scoped to "renee"
+    # (i-renee), never "andrew", regardless of how many endpoints it hits.
+    assert requested_paths == [
+        "/api/v1/athlete/i-renee/activities",
+        "/api/v1/athlete/i-renee/wellness.json",
+    ]
     expected_auth = "Basic " + base64.b64encode(b"API_KEY:renee-key").decode()
-    assert auth_headers == [expected_auth]
+    assert auth_headers == [expected_auth, expected_auth]
 
 
 def test_sync_workouts_uses_a_two_day_window(athletes_dir, monkeypatch: pytest.MonkeyPatch) -> None:

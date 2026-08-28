@@ -175,9 +175,14 @@ INTENSITY_BALANCE_WINDOW_DAYS = 28
 def _wellness_mean(wellness: list[Wellness], as_of: date, window_days: int = WELLNESS_WINDOW_DAYS) -> float | None:
     cutoff = as_of - timedelta(days=window_days - 1)
     window = [w for w in wellness if cutoff <= w.date <= as_of]
-    if not window:
+    # wellness_composite() can now return None for a sync-only row (no
+    # subjective fields -- see backend/app/sync.py) -- filter those out
+    # rather than crashing; a window that's entirely sync-only behaves
+    # exactly like "no wellness data at all" (returns None below).
+    composites = [c for w in window if (c := wellness_composite(w)) is not None]
+    if not composites:
         return None
-    return sum(wellness_composite(w) for w in window) / len(window)
+    return sum(composites) / len(composites)
 
 
 def _longest_recent_swim_m(

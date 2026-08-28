@@ -581,6 +581,70 @@ def test_wellness_trend_sorted_by_date():
     assert [d for d, _ in trend] == [date(2026, 7, 6), date(2026, 7, 7), date(2026, 7, 8)]
 
 
+@pytest.mark.parametrize("missing_field", ["sleep_quality", "stress", "soreness", "motivation"])
+def test_wellness_composite_none_when_any_subjective_field_missing(missing_field):
+    # Never derive a fabricated composite from a partial subjective set --
+    # same "honest None over fabricated number" convention as monotony()/
+    # wellness_baseline_deviation().
+    w = make_wellness(**{missing_field: None})
+    assert wellness_composite(w) is None
+
+
+def test_wellness_composite_none_even_with_objective_data_present():
+    # A sync-only row (resting_hr/hrv populated, no subjective fields at all)
+    # must not produce a composite -- objective data cannot substitute for a
+    # subjective rating.
+    w = make_wellness(
+        sleep_quality=None,
+        stress=None,
+        soreness=None,
+        motivation=None,
+        resting_hr=52,
+        hrv=61.0,
+    )
+    assert wellness_composite(w) is None
+
+
+def test_wellness_trend_excludes_sync_only_entries():
+    entries = [
+        make_wellness(date=date(2026, 7, 6)),
+        make_wellness(
+            date=date(2026, 7, 7),
+            sleep_quality=None,
+            stress=None,
+            soreness=None,
+            motivation=None,
+            resting_hr=50,
+        ),
+        make_wellness(date=date(2026, 7, 8)),
+    ]
+    trend = wellness_trend(entries)
+    assert [d for d, _ in trend] == [date(2026, 7, 6), date(2026, 7, 8)]
+
+
+def test_wellness_trend_stays_sorted_with_entries_filtered():
+    entries = [
+        make_wellness(date=date(2026, 7, 9)),
+        make_wellness(
+            date=date(2026, 7, 6),
+            sleep_quality=None,
+            stress=None,
+            soreness=None,
+            motivation=None,
+        ),
+        make_wellness(date=date(2026, 7, 8)),
+        make_wellness(
+            date=date(2026, 7, 7),
+            sleep_quality=None,
+            stress=None,
+            soreness=None,
+            motivation=None,
+        ),
+    ]
+    trend = wellness_trend(entries)
+    assert [d for d, _ in trend] == [date(2026, 7, 8), date(2026, 7, 9)]
+
+
 # --- ctl_atl_tsb_series ----------------------------------------------------------------
 
 

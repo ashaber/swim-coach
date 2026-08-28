@@ -638,17 +638,30 @@ class AuthSession(BaseModel):
 
 
 class Wellness(BaseModel):
-    """A daily wellness check-in."""
+    """A daily wellness check-in.
+
+    The four subjective fields (sleep_quality/stress/soreness/motivation) and
+    sleep_hours are optional -- required historically, but an automated
+    intervals.icu sync (backend/app/sync.py) can only ever populate the
+    objective resting_hr/hrv fields, never a fabricated 1-5 subjective rating
+    (same "real load exists regardless of whether it was surveyed"
+    principle used elsewhere in this engine). Additive/optional change, no
+    schema_version bump -- every existing row already has all five populated.
+    """
 
     schema_version: int = 1
     id: UUID
     athlete_id: UUID
     date: date
-    sleep_quality: int = Field(ge=1, le=5)
-    sleep_hours: float = Field(ge=0)
-    stress: int = Field(ge=1, le=5)
-    soreness: int = Field(ge=1, le=5)
-    motivation: int = Field(ge=1, le=5)
+    sleep_quality: int | None = Field(default=None, ge=1, le=5)
+    sleep_hours: float | None = Field(default=None, ge=0)
+    stress: int | None = Field(default=None, ge=1, le=5)
+    soreness: int | None = Field(default=None, ge=1, le=5)
+    motivation: int | None = Field(default=None, ge=1, le=5)
     resting_hr: int | None = None
     hrv: float | None = None
     notes: str | None = None
+    # Provenance, mirroring Workout.source's existing convention. `None` for
+    # every pre-existing row (unknown/manual provenance, written before this
+    # field existed) -- additive/optional, no schema_version bump.
+    source: Literal["manual", "intervals_sync"] | None = None
