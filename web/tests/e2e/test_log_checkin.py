@@ -129,27 +129,28 @@ def _configure_backend(page, base_url=BASE_URL, token=TOKEN):
 
 
 def _open_manual_log(page):
-    """Opens the Log tab, waits for the history section's fetch to settle,
-    then expands the secondary "Log manually / upload a file" section
+    """Opens the merged Dashboard tab (Build 1: Log+History), waits for the
+    feed's fetch to settle, then expands the secondary "Log manually /
+    upload a file" section
     (Phase 3: "Sync from watch" is now the primary action; the manual form
     is collapsed by default -- see main.js's state.logManualOpen) before
     waiting for a form field, so a fill()/click() below never races a
     detached pre-toggle node."""
-    page.click('[data-a="tab:log"]')
+    page.click('[data-a="tab:dashboard"]')
     page.wait_for_selector('.hist-section')
     page.click('[data-a="log:toggle-manual"]')
     page.wait_for_selector('[data-form="log"][data-field="date"]')
 
 
 def test_log_tab_shows_backend_needed_notice_when_unconfigured(page):
-    page.click('[data-a="tab:log"]')
+    page.click('[data-a="tab:dashboard"]')
     page.wait_for_selector('.chat-empty')
     assert 'backend URL and token' in page.content()
 
 
 def test_log_tab_shows_sync_button_when_configured(page):
     _configure_backend(page)
-    page.click('[data-a="tab:log"]')
+    page.click('[data-a="tab:dashboard"]')
     page.wait_for_selector('[data-a="sync:start"]')
     assert 'Sync from watch' in page.content()
 
@@ -216,7 +217,7 @@ def test_checkin_submit_success_shows_saved(page):
     assert 'Saved' in page.locator('.conn-result').inner_text()
 
 
-def test_tab_bar_includes_log_and_checkin(page):
+def test_tab_bar_includes_dashboard_and_checkin(page):
     page.wait_for_selector('.tabbar')
-    assert page.locator('[data-a="tab:log"]').count() == 1
+    assert page.locator('[data-a="tab:dashboard"]').count() == 1
     assert page.locator('[data-a="tab:checkin"]').count() == 1

@@ -175,6 +175,14 @@
     .load-chart-band { fill: var(--accent); opacity: .12; }
     .load-chart-gridline { stroke: var(--line-soft); stroke-width: 1; }
     .load-chart-axis-label { font-family: var(--mono); font-size: 9px; fill: var(--ink-faint); }
+    /* Dual y-axis readability fix (Build 1, web/training-dashboard-merge):
+       ATL's right-axis tick labels are colored to match ATL's own line
+       color (see views.js's LOAD_CHART_LINE_COLOR_VAR) so the axis reads as
+       visually paired with the line it belongs to, same as the legend
+       below already pairs a color dot with each line's name. Set inline
+       (style=) at the call site since the color is the same JS constant
+       the line strokes use -- this class exists for any non-color rule. */
+    .load-chart-axis-label-secondary { font-family: var(--mono); font-size: 9px; }
     .load-chart-line { fill: none; stroke-width: 2; }
     .load-chart-legend { margin-top: 10px; }
     .load-chart-band-dot { background: var(--accent); opacity: .4; }
@@ -267,6 +275,18 @@
     .tab-btn .tab-icon { font-size: 19px; line-height: 1; }
     .tab-btn.active { color: var(--tab-active); }
     .tab-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+    /* roster sub-tab bar -- the coach's "acting as athlete" view's own
+       Conversations/Workouts+Dashboard/Training Plan navigation, nested
+       inside the (already-a-tab) roster view. Deliberately not the fixed
+       bottom .tabbar/.tab-btn styling above (that's reserved for the app's
+       one persistent top-level nav) -- a plain inline pill row instead. */
+    .subtab-bar { display: flex; gap: 6px; margin: 12px 0 16px; flex-wrap: wrap; }
+    .subtab-btn { background: none; border: 1px solid var(--line); border-radius: var(--radius-pill);
+      padding: 7px 14px; color: var(--ink-soft); font-family: var(--sans); font-size: 12.5px;
+      font-weight: 700; cursor: pointer; }
+    .subtab-btn.active { color: var(--tab-active); border-color: var(--tab-active); }
+    .subtab-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
     /* coach chat tab */
     .chat-wrap { padding-bottom: 24px; display: flex; flex-direction: column; }

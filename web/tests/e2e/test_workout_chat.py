@@ -127,13 +127,14 @@ def _configure_backend(page, base_url=BASE_URL, token=TOKEN):
 
 
 def _open_workout_detail(page):
-    """Configures the backend, opens the Log tab, waits for the history
-    fetch to settle (the row is the settled marker), then opens the rich
-    workout's detail view and waits for its own settled marker (the back
-    button plus the chat section's input)."""
+    """Configures the backend, opens the merged Dashboard tab (Build 1:
+    Log+History), waits for the history fetch to settle (the row is the
+    settled marker), then opens the rich workout's detail view and waits
+    for its own settled marker (the back button plus the chat section's
+    input)."""
     page.route('**/api/workouts*', _cors_route(200, 'application/json', json.dumps([RICH_FIT_WORKOUT])))
     _configure_backend(page)
-    page.click('[data-a="tab:log"]')
+    page.click('[data-a="tab:dashboard"]')
     page.wait_for_selector('.hist-row')
     page.click('.hist-row')
     page.wait_for_selector('[data-a="history:back"]')
@@ -212,7 +213,7 @@ def test_back_button_still_returns_to_history_list(page):
     page.click('[data-a="history:back"]')
     page.wait_for_selector('.hist-row')
     assert page.locator('[data-a="history:back"]').count() == 0
-    assert 'Recent workouts' in page.content()
+    assert 'Workouts' in page.content()
 
 
 def test_chat_error_response_shows_error_bubble(page):

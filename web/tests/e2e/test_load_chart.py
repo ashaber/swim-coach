@@ -7,7 +7,9 @@ describeWellnessBaselineDeviation) -- surfaces `backend/app/context.py`'s
 directly to the frontend via the new `GET /api/plan/load` (athlete
 self-access) and `GET /api/coach/athletes/{slug}/load` (coach access)
 endpoints, on two surfaces sharing the same render function: the athlete's
-own Plan tab (main.js's loadPlanLoad) and the coach roster's
+own Dashboard tab (main.js's loadPlanLoad -- Build 1 of the wellness-
+ingestion + training-dashboard plan relocated this chart off the Plan tab
+and into the merged Log+History Dashboard tab) and the coach roster's
 acting-as-athlete view (main.js's loadCoachLoad).
 
 Same mocked-backend / CORS-preflight conventions as test_plan_session_detail.py
@@ -74,6 +76,17 @@ COACH_LOAD_STUB = json.dumps({
     'athlete': 'renee', 'weeks': 12, 'ctl_atl_tsb': REAL_SERIES,
     'wellness_baseline_deviation': REAL_WELLNESS_DEVIATION,
 })
+# GET /api/coach/athletes/renee/plan (Build 2's new coach-plan route) --
+# main.js's loadCoachPlan fires unconditionally the moment an athlete is
+# selected (handleSelectCoachedAthlete), alongside workouts/feedback/load,
+# regardless of which roster sub-tab is active. Left unmocked, every
+# roster:select-athlete click in this file would fire a real, unmocked fetch
+# against this fake-origin backend -- exactly the intermittent WebKit-only
+# `page` fixture teardown failure the `**/api/workouts*` mock above already
+# had to fix once tonight.
+COACH_PLAN_STUB = json.dumps({
+    'slug': 'renee', 'athlete': {'name': 'Renee'}, 'events': [], 'macro': {'blocks': []}, 'weeks': [],
+})
 
 
 def _make_ctx(pw, cfg, *, identity=None, plan_load_body=PLAN_LOAD_STUB, coach_load_body=COACH_LOAD_STUB):
@@ -86,16 +99,42 @@ def _make_ctx(pw, cfg, *, identity=None, plan_load_body=PLAN_LOAD_STUB, coach_lo
     seed_settings(ctx)
     ctx.route('**/api/plan*', _cors_route(200, 'application/json', PLAN_STUB))
     ctx.route('**/api/plan/load*', _cors_route(200, 'application/json', plan_load_body))
+    # The athlete-self workouts feed (GET /api/workouts, main.js's
+    # loadHistory) -- unlike the old Plan tab, the merged Dashboard tab
+    # (Build 1) fetches this too the moment it's opened (_open_dashboard),
+    # to build the completed+missed feed alongside the chart. Distinct from
+    # `**/api/coach/athletes/renee/workouts*` below (the coach-side route,
+    # a completely different endpoint path). Left unmocked before this,
+    # every _open_dashboard visit fired a real, unmocked fetch to this
+    # fake-origin backend -- normally swallowed quietly by api.js's own
+    # try/catch, but WebKit can surface the resulting network/access-control
+    # failure as an actual `pageerror` event once the page stays open long
+    # enough for the slow real-network failure to land (e.g. a test that
+    # clicks a disclosure and waits on a CSS transition) -- exactly the
+    # intermittent `page` fixture teardown failure this mock fixes.
+    ctx.route('**/api/workouts*', _cors_route(200, 'application/json', '[]'))
     ctx.route('**/api/coach/athletes/renee/workouts*', _cors_route(200, 'application/json', COACH_WORKOUTS_STUB))
     ctx.route('**/api/coach/athletes/renee/feedback*', _cors_route(200, 'application/json', COACH_FEEDBACK_STUB))
     ctx.route('**/api/coach/athletes/renee/load*', _cors_route(200, 'application/json', coach_load_body))
+    ctx.route('**/api/coach/athletes/renee/plan*', _cors_route(200, 'application/json', COACH_PLAN_STUB))
     ctx.route('**/api/coach/athletes*', _cors_route(200, 'application/json', COACH_ATHLETES_STUB))
     return browser, ctx
 
 
+def _open_dashboard(page):
+    """Navigates to the merged Dashboard tab (Build 1: Log+History) -- the
+    chart's real home now, after moving off the Plan tab's default landing
+    view."""
+    page.wait_for_selector('[data-a="tab:dashboard"]')
+    page.click('[data-a="tab:dashboard"]')
+    page.wait_for_selector('.hist-section')
+
+
 @pytest.fixture(params=BROWSERS)
 def page(request, base_url):
-    """Signed in as the athlete herself (renee), landing on the Plan tab."""
+    """Signed in as the athlete herself (renee), landing on the Plan tab
+    (the chart itself now lives on the Dashboard tab -- see
+    _open_dashboard)."""
     cfg = request.param
     with sync_playwright() as pw:
         browser, ctx = _make_ctx(pw, cfg)
@@ -158,10 +197,10 @@ def coach_page(request, base_url):
             browser.close()
 
 
-# --- Athlete's own Plan tab ---------------------------------------------------
+# --- Athlete's own Dashboard tab (Build 1 relocated the chart here) -----------
 
-def test_chart_renders_on_the_plan_tab_with_real_mocked_data(page):
-    page.wait_for_selector('.mast h1')
+def test_chart_renders_on_the_dashboard_tab_with_real_mocked_data(page):
+    _open_dashboard(page)
     page.wait_for_selector('.load-chart-svg')
     content = page.content()
     # Clear labels for both athlete and coach.
@@ -181,8 +220,24 @@ def test_chart_renders_on_the_plan_tab_with_real_mocked_data(page):
     assert 'not yet verified for swimming' in content.lower()
 
 
+def test_chart_uses_an_independent_right_axis_for_atl_readability_fix(page):
+    # Build 1's readability fix: CTL/TSB share the left axis, ATL plots
+    # against its own independent right axis (the chart's math was verified
+    # NOT buggy -- CTL's 42-day-EWMA range is just inherently tiny next to
+    # ATL's 7-day-EWMA range on any real data, which made CTL look flat on
+    # one shared axis). Assert the second axis's tick labels actually render
+    # and are visually distinct (colored to match the ATL line).
+    _open_dashboard(page)
+    page.wait_for_selector('.load-chart-svg')
+    secondary_ticks = page.locator('.load-chart-axis-label-secondary')
+    assert secondary_ticks.count() > 0
+    content = page.content()
+    assert 'right axis' in content.lower()
+    assert 'left axis' in content.lower()
+
+
 def test_wellness_baseline_deviation_renders_with_real_mocked_data(page):
-    page.wait_for_selector('.mast h1')
+    _open_dashboard(page)
     page.wait_for_selector('.wellness-baseline-deviation')
     content = page.content()
     assert 'Resting HR' in content
@@ -199,7 +254,7 @@ def test_wellness_baseline_deviation_renders_with_real_mocked_data(page):
 
 def test_wellness_baseline_deviation_null_data_shows_honest_not_enough_data_state(null_wellness_page):
     page = null_wellness_page
-    page.wait_for_selector('.mast h1')
+    _open_dashboard(page)
     page.wait_for_selector('.wellness-baseline-deviation')
     content = page.content()
     # Honest per-field "not enough data" -- never a hidden element, never
@@ -214,7 +269,7 @@ def test_wellness_baseline_deviation_null_data_shows_honest_not_enough_data_stat
 def test_chart_is_not_buried_in_a_collapsed_section(page):
     # Task requirement: visible on load, not tucked inside an already-
     # collapsed <details> the way the glossary is.
-    page.wait_for_selector('.mast h1')
+    _open_dashboard(page)
     chart = page.locator('.load-chart-svg')
     chart.wait_for(state='visible')
     assert chart.is_visible()
@@ -225,7 +280,7 @@ def test_ctl_atl_tsb_trend_narrative_renders_prominently_below_the_chart(page):
     # -- the computed, athlete-specific "what the numbers say" guidance
     # this feature adds, quoting Andrew's own framing: "this is the useful
     # coach guidance below the load graph."
-    page.wait_for_selector('.mast h1')
+    _open_dashboard(page)
     page.wait_for_selector('.load-chart-narrative')
     narrative = page.locator('.load-chart-narrative')
     assert narrative.is_visible()
@@ -245,7 +300,7 @@ def test_methodology_caption_moved_behind_a_collapsed_by_default_disclosure(page
     # Task requirement: the old always-visible methodology paragraph now
     # lives inside a native <details>, collapsed by default, with its
     # caveats still one click away rather than deleted.
-    page.wait_for_selector('.mast h1')
+    _open_dashboard(page)
     page.wait_for_selector('.load-chart-methodology')
     details = page.locator('.load-chart-methodology')
     summary = details.locator('summary')
@@ -308,7 +363,8 @@ def test_coach_roster_chart_disappears_when_going_back_to_the_athlete_list(coach
 
 # --- Mobile viewport / overflow standards --------------------------------------
 
-def test_plan_tab_chart_does_not_overflow_horizontally(page):
+def test_dashboard_tab_chart_does_not_overflow_horizontally(page):
+    _open_dashboard(page)
     page.wait_for_selector('.load-chart-svg')
     overflow = page.evaluate(
         'document.documentElement.scrollWidth - document.documentElement.clientWidth')

@@ -1,4 +1,4 @@
-"""e2e coverage for the Log tab's workout detail view (Slice 2): tapping a
+"""e2e coverage for the merged Dashboard tab's (Build 1: Log+History) workout detail view (Slice 2): tapping a
 history row opens an in-tab detail view; a back action returns to the list.
 
 Same mocked-backend conventions as test_workout_history.py -- no real
@@ -156,7 +156,7 @@ def _configure_backend(page, base_url=BASE_URL, token=TOKEN):
 def _open_log_tab_with_workouts(page, workouts):
     page.route('**/api/workouts*', _cors_route(200, 'application/json', json.dumps(workouts)))
     _configure_backend(page)
-    page.click('[data-a="tab:log"]')
+    page.click('[data-a="tab:dashboard"]')
     page.wait_for_selector('.hist-row')
 
 
@@ -195,6 +195,23 @@ def test_open_detail_from_row_shows_all_sections(page):
     assert page.locator('[data-a="history:open"]').count() == 0
 
 
+def test_shows_the_coach_conversation_placeholder_alongside_the_real_ai_chat(page):
+    # Build 2: an honest, explicitly non-functional "coach conversation"
+    # placeholder sits alongside the athlete's real, working scoped AI chat
+    # (id="workout-chat") -- additive, not a replacement for it.
+    _open_log_tab_with_workouts(page, [RICH_FIT_WORKOUT])
+    page.click('.hist-row')
+    page.wait_for_selector('[data-a="history:back"]')
+
+    assert page.locator('#coach-conversation').count() == 1
+    content = page.content()
+    assert 'Coach conversation' in content
+    assert 'coming soon' in content
+    # The real AI chat is still there, untouched.
+    assert 'Ask your coach about this workout' in content
+    assert page.locator('#workout-chat-input').count() == 1
+
+
 def test_back_returns_to_list(page):
     _open_log_tab_with_workouts(page, [RICH_FIT_WORKOUT])
     page.click('.hist-row')
@@ -223,7 +240,7 @@ def test_hardware_back_closes_detail_not_app(page):
     # Prove the app didn't navigate away entirely -- the tab bar (and the
     # rest of the app chrome) must still be there, not a blank/exited page.
     assert page.locator('.tabbar').count() == 1
-    assert page.locator('[data-a="tab:log"]').count() == 1
+    assert page.locator('[data-a="tab:dashboard"]').count() == 1
 
 
 def test_bare_manual_workout_renders_without_analytics_or_laps_sections(page):
@@ -243,7 +260,7 @@ def test_bare_manual_workout_renders_without_analytics_or_laps_sections(page):
 
 def test_detail_survives_a_background_render(page):
     # Toggling network state triggers main.js's updateOnlineState -> render()
-    # while the Log tab is active (see TABS_SENSITIVE_TO_ONLINE_STATE) -- a
+    # while the Dashboard tab is active (see TABS_SENSITIVE_TO_ONLINE_STATE) -- a
     # cheap way to force an unrelated full re-render and confirm the detail
     # view (fully state-driven) survives it, per the task brief.
     _open_log_tab_with_workouts(page, [RICH_FIT_WORKOUT])
@@ -301,7 +318,7 @@ def test_reload_returns_to_list_without_errors(page):
 
     page.reload()
     # Fresh in-memory state on reload -- workoutDetailId resets to null, so
-    # the Log tab (persisted as the active tab via ACTIVE_TAB_KEY) lands back
+    # the Dashboard tab (persisted as the active tab via ACTIVE_TAB_KEY) lands back
     # on the list, not the detail view. The boot sequence now also lazily
     # loads history itself (see main.js's boot-time shouldLoadHistoryNow()
     # check) since the persisted active tab is 'log' and settings/identity
@@ -316,11 +333,11 @@ def test_reload_returns_to_list_without_errors(page):
 
 def test_history_loads_at_boot_without_tab_switch(page):
     # Reproduces the athlete's first reported bug: reopening the PWA while
-    # the Log tab was the last-active tab used to leave history stuck on
+    # the Dashboard tab was the last-active tab used to leave history stuck on
     # "idle" forever, because only a tab *switch* (setTab) ever triggered
     # loadHistory() -- and a page reload restores the persisted tab without
     # going through setTab at all. The whole point of this test is that
-    # history must render WITHOUT clicking the Log tab again after reload.
+    # history must render WITHOUT clicking the Dashboard tab again after reload.
     page.route(
         '**/api/plan*',
         _cors_route(
@@ -336,7 +353,7 @@ def test_history_loads_at_boot_without_tab_switch(page):
     # same as the real app after any tab click -- see main.js's setTab.
 
     page.reload()
-    # No `page.click('[data-a="tab:log"]')` here -- that's the whole point.
+    # No `page.click('[data-a="tab:dashboard"]')` here -- that's the whole point.
     # Settings/identity are already configured (persisted in localStorage
     # from _configure_backend), and the persisted active tab is 'log', so
     # the boot sequence itself must lazily load history.

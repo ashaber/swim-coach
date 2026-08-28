@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
-  renderHistorySection, renderLogTab, renderSettingsTab, renderUpdateBanner, renderApp,
-  renderHistoryTab, renderTabBar, renderRosterTab, renderLoadChart,
+  renderDashboardTab, renderSettingsTab, renderUpdateBanner, renderApp,
+  renderTabBar, renderRosterTab, renderLoadChart,
 } from '../../src/views.js';
 import { isoWeekMonday, addDays, dateKey, formatShortDate } from '../../src/plan.js';
+import { HISTORY_DISPLAY_CAP } from '../../src/workouts.js';
 
 // Real fixture workouts from the task brief -- andrew's 2026-07-09
 // cross_train (analytics-rich, no distance/pace since it's not a swim) and
@@ -60,268 +61,517 @@ const RICH_FIT_WORKOUT = {
   ],
 };
 
-describe('renderHistorySection', () => {
-  it('renders a workout row with a compact analytics line when analytics has content', () => {
-    const html = renderHistorySection({ status: 'ready', data: [CROSS_TRAIN_WORKOUT], error: null, online: true });
-    expect(html).toContain('Cross-train');
-    expect(html).toContain('hist-analytics');
-    expect(html).toContain('drift -13.8%');
-    expect(html).toContain('fit'); // source badge
-    expect(html).toContain('RPE 6');
-  });
+// Build 1 (Log+History merge, wellness-ingestion + training-dashboard plan):
+// renderLogTab, renderHistoryTab, and renderHistorySection are retired in
+// favor of one shared renderDashboardTab (athlete-facing wrapper) +
+// renderTrainingDashboardBody (shared with renderRosterTab, see that
+// describe block below). Every behavioral assertion those three used to
+// carry is preserved here, just re-pointed at the merged component.
+function feedOf(workouts) {
+  return workouts.map((w) => ({ kind: 'completed', date: w.date, key: `w:${w.id}`, workout: w }));
+}
 
-  it('renders the real swolf example fields', () => {
-    const html = renderHistorySection({ status: 'ready', data: [POOL_SWIM_WORKOUT], error: null, online: true });
-    expect(html).toContain('SWOLF 41.0→43.4 (+6.0%)');
-    expect(html).toContain('3.2 km');
-    expect(html).toContain('1:35 /100m');
-  });
+const DASHBOARD_BASE_ARGS = {
+  load: { status: 'idle', data: null, error: null },
+  status: 'ready',
+  error: null,
+  online: true,
+  detailId: null,
+  workoutChat: null,
+  backendConfigured: true,
+  form: {
+    date: '2026-07-11', sport: 'swim_pool', distance_m: '', duration_min: '', rpe: 5, notes: '',
+  },
+  submit: { status: 'idle', message: null },
+  ingest: { status: 'idle', fileName: null, error: null },
+  sync: { status: 'idle', message: null },
+  manualOpen: false,
+  feedExpanded: false,
+};
 
-  it('renders a workout row with no analytics line when analytics is null', () => {
-    const html = renderHistorySection({ status: 'ready', data: [OLD_MANUAL_WORKOUT], error: null, online: true });
-    expect(html).not.toContain('hist-analytics');
-    // Manual source gets no source badge chip.
-    expect(html).not.toContain('chat-chip');
-  });
-
-  it('renders multiple rows newest-first order as given (does not re-sort)', () => {
-    const html = renderHistorySection({
-      status: 'ready', data: [CROSS_TRAIN_WORKOUT, POOL_SWIM_WORKOUT], error: null, online: true,
+describe('renderDashboardTab', () => {
+  describe('feed rendering (completed workouts)', () => {
+    it('renders a workout row with a compact analytics line when analytics has content', () => {
+      const html = renderDashboardTab({ ...DASHBOARD_BASE_ARGS, feed: feedOf([CROSS_TRAIN_WORKOUT]) });
+      expect(html).toContain('Cross-train');
+      expect(html).toContain('hist-analytics');
+      expect(html).toContain('drift -13.8%');
+      expect(html).toContain('fit'); // source badge
+      expect(html).toContain('RPE 6');
     });
-    const crossIdx = html.indexOf('Cross-train');
-    const poolIdx = html.indexOf('Pool swim');
-    expect(crossIdx).toBeGreaterThan(-1);
-    expect(poolIdx).toBeGreaterThan(crossIdx);
-  });
 
-  it('shows an empty-state message when there are no workouts', () => {
-    const html = renderHistorySection({ status: 'ready', data: [], error: null, online: true });
-    expect(html).toContain('No workouts logged yet.');
-  });
-
-  it('shows a loading message while loading with nothing cached yet', () => {
-    const html = renderHistorySection({ status: 'loading', data: [], error: null, online: true });
-    expect(html).toContain('Loading history');
-  });
-
-  it('shows the error message and a retry action on fetch failure', () => {
-    const html = renderHistorySection({
-      status: 'error', data: [], error: 'Backend error (500).', online: true,
+    it('renders the real swolf example fields', () => {
+      const html = renderDashboardTab({ ...DASHBOARD_BASE_ARGS, feed: feedOf([POOL_SWIM_WORKOUT]) });
+      expect(html).toContain('SWOLF 41.0→43.4 (+6.0%)');
+      expect(html).toContain('3.2 km');
+      expect(html).toContain('1:35 /100m');
     });
-    expect(html).toContain("Couldn't load your workout history");
-    expect(html).toContain('Backend error (500).');
-    expect(html).toContain('data-a="history:retry"');
-  });
 
-  it('still shows stale cached data alongside an error banner on a failed refresh', () => {
-    const html = renderHistorySection({
-      status: 'error', data: [OLD_MANUAL_WORKOUT], error: 'offline', online: false,
+    it('renders a workout row with no analytics line when analytics is null', () => {
+      const html = renderDashboardTab({ ...DASHBOARD_BASE_ARGS, feed: feedOf([OLD_MANUAL_WORKOUT]) });
+      expect(html).not.toContain('hist-analytics');
+      // Manual source gets no source badge chip.
+      expect(html).not.toContain('chat-chip');
     });
-    expect(html).toContain('Pool swim');
-    expect(html).toContain("Couldn't load your workout history");
-  });
 
-  it('shows a quiet offline notice (not the empty-log message) when idle and offline', () => {
-    const html = renderHistorySection({ status: 'idle', data: [], error: null, online: false });
-    expect(html).toContain('reconnect');
-    expect(html).not.toContain('No workouts logged yet.');
-  });
-
-  it('escapes workout notes/text content (no raw HTML injection)', () => {
-    const malicious = { ...OLD_MANUAL_WORKOUT, sport: '<img src=x onerror=alert(1)>' };
-    const html = renderHistorySection({ status: 'ready', data: [malicious], error: null, online: true });
-    expect(html).not.toContain('<img src=x');
-    expect(html).toContain('&lt;img');
-  });
-});
-
-describe('renderHistorySection detail view (Slice 2: tap a row to open detail)', () => {
-  it('renders the detail view instead of the list when detailId matches a workout', () => {
-    const html = renderHistorySection({
-      status: 'ready', data: [RICH_FIT_WORKOUT, OLD_MANUAL_WORKOUT], error: null, online: true, detailId: 'w-rich',
+    it('renders multiple rows in the order the feed gives them (does not re-sort)', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS, feed: feedOf([CROSS_TRAIN_WORKOUT, POOL_SWIM_WORKOUT]),
+      });
+      const crossIdx = html.indexOf('Cross-train');
+      const poolIdx = html.indexOf('Pool swim');
+      expect(crossIdx).toBeGreaterThan(-1);
+      expect(poolIdx).toBeGreaterThan(crossIdx);
     });
-    expect(html).toContain('data-a="history:back"');
-    expect(html).not.toContain('data-a="history:open"');
-    // Header: sport, date, source badge.
-    expect(html).toContain('Open water swim');
-    expect(html).toContain('fit');
-  });
 
-  it('renders summary stats: distance, duration, pace, RPE, avg/max HR', () => {
-    const html = renderHistorySection({
-      status: 'ready', data: [RICH_FIT_WORKOUT], error: null, online: true, detailId: 'w-rich',
+    it('shows an empty-state message when nothing has happened yet', () => {
+      const html = renderDashboardTab({ ...DASHBOARD_BASE_ARGS, feed: [] });
+      expect(html).toContain('Nothing logged or missed yet');
     });
-    expect(html).toContain('5 km');
-    expect(html).toContain('1 h 35 min');
-    expect(html).toContain('1:54 /100m');
-    expect(html).toContain('7/10');
-    expect(html).toContain('132 bpm');
-    expect(html).toContain('158 bpm');
-  });
 
-  it('renders the full analytics block with drift warning, split, moving-vs-elapsed, pauses, and swolf', () => {
-    const html = renderHistorySection({
-      status: 'ready', data: [RICH_FIT_WORKOUT], error: null, online: true, detailId: 'w-rich',
+    it('shows a loading message while loading with nothing cached yet', () => {
+      const html = renderDashboardTab({ ...DASHBOARD_BASE_ARGS, feed: [], status: 'loading' });
+      expect(html).toContain('Loading history');
     });
-    expect(html).toContain('drift +6.4% ⚠');
-    expect(html).toContain('positive split (1:48 → 2:00)');
-    expect(html).toContain('1 h 35 min moving of 1 h 38 min');
-    expect(html).toContain('2 pauses · 3 min stopped');
-    expect(html).toContain('SWOLF 38.2→44.9 (+17.5%)');
-  });
 
-  it('renders a laps table with index, distance, duration, pace, and HR', () => {
-    const html = renderHistorySection({
-      status: 'ready', data: [RICH_FIT_WORKOUT], error: null, online: true, detailId: 'w-rich',
+    it('shows the error message and a retry action on fetch failure', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS, feed: [], status: 'error', error: 'Backend error (500).',
+      });
+      expect(html).toContain("Couldn't load your training history");
+      expect(html).toContain('Backend error (500).');
+      expect(html).toContain('data-a="history:retry"');
     });
-    expect(html).toContain('laps-table');
-    expect(html).toContain('2.5 km');
-    expect(html).toContain('30:30'); // 1830s
-    expect(html).toContain('1:48'); // 108s/100m pace
-    expect(html).toContain('128'); // lap avg HR
-  });
 
-  it('renders a pauses list with offset (h:mm:ss), duration, and source', () => {
-    const html = renderHistorySection({
-      status: 'ready', data: [RICH_FIT_WORKOUT], error: null, online: true, detailId: 'w-rich',
+    it('still shows stale cached data alongside an error banner on a failed refresh', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS,
+        feed: feedOf([OLD_MANUAL_WORKOUT]),
+        status: 'error',
+        error: 'offline',
+        online: false,
+      });
+      expect(html).toContain('Pool swim');
+      expect(html).toContain("Couldn't load your training history");
     });
-    expect(html).toContain('0:12:34'); // 754s offset
-    expect(html).toContain('gap');
-    expect(html).toContain('timer');
-  });
 
-  it('renders notes verbatim (escaped)', () => {
-    const html = renderHistorySection({
-      status: 'ready', data: [RICH_FIT_WORKOUT], error: null, online: true, detailId: 'w-rich',
+    it('shows a quiet offline notice (not the empty-feed message) when there is no data and offline', () => {
+      const html = renderDashboardTab({ ...DASHBOARD_BASE_ARGS, feed: [], online: false });
+      expect(html).toContain('reconnect');
+      expect(html).not.toContain('Nothing logged or missed yet');
     });
-    expect(html).toContain('Choppy back half, felt strong.');
-  });
 
-  it('escapes malicious notes content in the detail view', () => {
-    const malicious = { ...RICH_FIT_WORKOUT, notes: '<img src=x onerror=alert(1)>' };
-    const html = renderHistorySection({
-      status: 'ready', data: [malicious], error: null, online: true, detailId: 'w-rich',
+    it('escapes workout notes/text content (no raw HTML injection)', () => {
+      const malicious = { ...OLD_MANUAL_WORKOUT, sport: '<img src=x onerror=alert(1)>' };
+      const html = renderDashboardTab({ ...DASHBOARD_BASE_ARGS, feed: feedOf([malicious]) });
+      expect(html).not.toContain('<img src=x');
+      expect(html).toContain('&lt;img');
     });
-    expect(html).not.toContain('<img src=x');
-    expect(html).toContain('&lt;img');
   });
 
-  it('renders a bare manual workout (no laps/pauses/analytics) with clean summary stats only', () => {
-    const html = renderHistorySection({
-      status: 'ready', data: [OLD_MANUAL_WORKOUT], error: null, online: true, detailId: 'w-old',
+  describe('skipped sessions (History-tab half of the merge)', () => {
+    const SKIPPED_SESSION = {
+      id: 's-missed', date: '2026-08-18', sport: 'strength', source: 'ai_coach',
+      duration_min: 45, distance_m: null, intensity: {},
+      purpose: 'Dryland shoulder strength — rotator-cuff work',
+      structure: null, structured: null, status: 'planned',
+    };
+    const COMPLETED = {
+      id: 'w-done', date: '2026-08-17', sport: 'swim_pool', source: 'fit',
+      distance_m: 2050, duration_min: 61, rpe: 6, avg_pace_s_per_100m: 95,
+      planned_session_id: null, analytics: null, laps: [], pauses: [],
+    };
+    const FEED = [
+      { kind: 'skipped', date: '2026-08-18', key: 's:s-missed', session: SKIPPED_SESSION },
+      { kind: 'completed', date: '2026-08-17', key: 'w:w-done', workout: COMPLETED },
+    ];
+
+    it('renders a skipped planned session with what was planned', () => {
+      const html = renderDashboardTab({ ...DASHBOARD_BASE_ARGS, feed: FEED });
+      expect(html).toContain('Strength');
+      expect(html).toContain('Dryland shoulder strength');
+      expect(html).toContain('45 min'); // the planned duration
     });
-    expect(html).toContain('data-a="history:back"');
-    expect(html).toContain('Pool swim');
-    expect(html).toContain('2 km');
-    expect(html).toContain('40 min');
-    expect(html).toContain('easy recovery');
-    // No analytics/laps/pauses sections for a workout with none of those fields.
-    expect(html).not.toContain('laps-table');
-    expect(html).not.toContain('pauses-list');
-    expect(html).not.toContain('detail-analytics-list');
-  });
 
-  it('falls back to the list when detailId does not match any loaded workout', () => {
-    const html = renderHistorySection({
-      status: 'ready', data: [OLD_MANUAL_WORKOUT], error: null, online: true, detailId: 'no-such-id',
+    it('clearly distinguishes a skipped item from a completed one', () => {
+      const html = renderDashboardTab({ ...DASHBOARD_BASE_ARGS, feed: FEED });
+      expect(html).toContain('hist-row-skipped');
+      expect(html).toContain('Skipped');
     });
-    expect(html).not.toContain('data-a="history:back"');
-    expect(html).toContain('data-a="history:open"');
-  });
 
-  it('renders the list (not detail) when detailId is null', () => {
-    const html = renderHistorySection({
-      status: 'ready', data: [OLD_MANUAL_WORKOUT], error: null, online: true, detailId: null,
+    it('keeps the feed order given -- newest first, no re-sorting', () => {
+      const html = renderDashboardTab({ ...DASHBOARD_BASE_ARGS, feed: FEED });
+      expect(html.indexOf('Dryland shoulder strength')).toBeLessThan(html.indexOf('Pool swim'));
     });
-    expect(html).not.toContain('data-a="history:back"');
-    expect(html).toContain('data-a="history:open"');
-  });
-});
 
-describe('renderHistorySection embedded workout chat (Phase C slice 1)', () => {
-  const openDetailArgs = {
-    status: 'ready', data: [RICH_FIT_WORKOUT], error: null, online: true, detailId: 'w-rich',
-  };
-
-  it('renders the scoped chat section with the "About:" label when workoutChat matches the open detail', () => {
-    const html = renderHistorySection({
-      ...openDetailArgs, workoutChat: { workoutId: 'w-rich', messages: [] },
+    it('makes completed rows tappable for detail but skipped rows not', () => {
+      const html = renderDashboardTab({ ...DASHBOARD_BASE_ARGS, feed: FEED });
+      expect(html).toContain('data-a="history:open" data-id="w-done"');
+      expect(html).not.toContain('data-id="s-missed"');
     });
-    expect(html).toContain('Ask your coach about this workout');
-    expect(html).toContain('About: Jun 1 Open water swim');
-    expect(html).toContain('id="workout-chat-input"');
-    expect(html).toContain('data-a="workout-chat:send"');
-  });
 
-  it('omits the chat section entirely when workoutChat is null', () => {
-    const html = renderHistorySection({ ...openDetailArgs, workoutChat: null });
-    expect(html).not.toContain('Ask your coach about this workout');
-    expect(html).not.toContain('workout-chat-input');
-  });
-
-  it('omits the chat section when workoutChat belongs to a different workout', () => {
-    const html = renderHistorySection({
-      ...openDetailArgs, workoutChat: { workoutId: 'w-other', messages: [] },
+    it('escapes hostile content in a skipped session purpose', () => {
+      const nasty = { ...SKIPPED_SESSION, id: 's-nasty', purpose: '<img src=x onerror=alert(1)>' };
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS,
+        feed: [{ kind: 'skipped', date: '2026-08-18', key: 's:s-nasty', session: nasty }],
+      });
+      expect(html).not.toContain('<img src=x');
+      expect(html).toContain('&lt;img');
     });
-    expect(html).not.toContain('Ask your coach about this workout');
   });
 
-  it('renders thread messages with the coach-tab bubble classes', () => {
-    const html = renderHistorySection({
-      ...openDetailArgs,
-      workoutChat: {
-        workoutId: 'w-rich',
-        messages: [
-          { role: 'user', content: 'how did this swim go?', status: 'done' },
-          { role: 'assistant', content: 'A strong effort with a positive split.', status: 'done' },
-        ],
-      },
+  describe('pagination ("Show more", Build 1)', () => {
+    const manyWorkouts = Array.from({ length: HISTORY_DISPLAY_CAP + 5 }, (_, i) => ({
+      id: `w-${i}`, date: `2026-01-${String(i + 1).padStart(2, '0')}`, sport: 'swim_pool', source: 'manual',
+      distance_m: 1000, duration_min: 20, rpe: 5, notes: null, analytics: null,
+    }));
+
+    it('shows only the most recent HISTORY_DISPLAY_CAP items by default, with a Show more control', () => {
+      const html = renderDashboardTab({ ...DASHBOARD_BASE_ARGS, feed: feedOf(manyWorkouts) });
+      expect(html.match(/data-a="history:open"/g).length).toBe(HISTORY_DISPLAY_CAP);
+      expect(html).toContain('data-a="dashboard:show-more"');
     });
-    expect(html).toContain('chat-row me');
-    expect(html).toContain('chat-row coach');
-    expect(html).toContain('how did this swim go?');
-    expect(html).toContain('A strong effort with a positive split.');
+
+    it('shows the full feed and no Show more control once feedExpanded is true', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS, feed: feedOf(manyWorkouts), feedExpanded: true,
+      });
+      expect(html).not.toContain('data-a="dashboard:show-more"');
+      expect(html.match(/data-a="history:open"/g).length).toBe(manyWorkouts.length);
+    });
+
+    it('omits the Show more control when the feed already fits within the cap', () => {
+      const html = renderDashboardTab({ ...DASHBOARD_BASE_ARGS, feed: feedOf([OLD_MANUAL_WORKOUT]) });
+      expect(html).not.toContain('data-a="dashboard:show-more"');
+    });
   });
 
-  it('shows the streaming cursor and disables input/send while a reply streams', () => {
-    const html = renderHistorySection({
-      ...openDetailArgs,
-      workoutChat: {
-        workoutId: 'w-rich',
-        messages: [
-          { role: 'user', content: 'thoughts?', status: 'done' },
-          { role: 'assistant', content: 'Looking at it', status: 'streaming', toolCalls: [] },
-        ],
-      },
+  describe('workout detail view (tap a row to open detail)', () => {
+    it('renders the detail view instead of the feed when detailId matches a workout', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS, feed: feedOf([RICH_FIT_WORKOUT, OLD_MANUAL_WORKOUT]), detailId: 'w-rich',
+      });
+      expect(html).toContain('data-a="history:back"');
+      expect(html).not.toContain('data-a="history:open"');
+      // Header: sport, date, source badge.
+      expect(html).toContain('Open water swim');
+      expect(html).toContain('fit');
     });
-    expect(html).toContain('chat-cursor');
-    expect(html).toContain('Sending…');
-    const inputMatch = /<textarea[^>]*id="workout-chat-input"[^>]*>/.exec(html);
-    expect(inputMatch[0]).toContain('disabled');
+
+    it('renders summary stats: distance, duration, pace, RPE, avg/max HR', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS, feed: feedOf([RICH_FIT_WORKOUT]), detailId: 'w-rich',
+      });
+      expect(html).toContain('5 km');
+      expect(html).toContain('1 h 35 min');
+      expect(html).toContain('1:54 /100m');
+      expect(html).toContain('7/10');
+      expect(html).toContain('132 bpm');
+      expect(html).toContain('158 bpm');
+    });
+
+    it('renders the full analytics block with drift warning, split, moving-vs-elapsed, pauses, and swolf', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS, feed: feedOf([RICH_FIT_WORKOUT]), detailId: 'w-rich',
+      });
+      expect(html).toContain('drift +6.4% ⚠');
+      expect(html).toContain('positive split (1:48 → 2:00)');
+      expect(html).toContain('1 h 35 min moving of 1 h 38 min');
+      expect(html).toContain('2 pauses · 3 min stopped');
+      expect(html).toContain('SWOLF 38.2→44.9 (+17.5%)');
+    });
+
+    it('renders a laps table with index, distance, duration, pace, and HR', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS, feed: feedOf([RICH_FIT_WORKOUT]), detailId: 'w-rich',
+      });
+      expect(html).toContain('laps-table');
+      expect(html).toContain('2.5 km');
+      expect(html).toContain('30:30'); // 1830s
+      expect(html).toContain('1:48'); // 108s/100m pace
+      expect(html).toContain('128'); // lap avg HR
+    });
+
+    it('renders a pauses list with offset (h:mm:ss), duration, and source', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS, feed: feedOf([RICH_FIT_WORKOUT]), detailId: 'w-rich',
+      });
+      expect(html).toContain('0:12:34'); // 754s offset
+      expect(html).toContain('gap');
+      expect(html).toContain('timer');
+    });
+
+    it('renders notes verbatim (escaped)', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS, feed: feedOf([RICH_FIT_WORKOUT]), detailId: 'w-rich',
+      });
+      expect(html).toContain('Choppy back half, felt strong.');
+    });
+
+    it('escapes malicious notes content in the detail view', () => {
+      const malicious = { ...RICH_FIT_WORKOUT, notes: '<img src=x onerror=alert(1)>' };
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS, feed: feedOf([malicious]), detailId: 'w-rich',
+      });
+      expect(html).not.toContain('<img src=x');
+      expect(html).toContain('&lt;img');
+    });
+
+    it('renders a bare manual workout (no laps/pauses/analytics) with clean summary stats only', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS, feed: feedOf([OLD_MANUAL_WORKOUT]), detailId: 'w-old',
+      });
+      expect(html).toContain('data-a="history:back"');
+      expect(html).toContain('Pool swim');
+      expect(html).toContain('2 km');
+      expect(html).toContain('40 min');
+      expect(html).toContain('easy recovery');
+      // No analytics/laps/pauses sections for a workout with none of those fields.
+      expect(html).not.toContain('laps-table');
+      expect(html).not.toContain('pauses-list');
+      expect(html).not.toContain('detail-analytics-list');
+    });
+
+    it('falls back to the feed when detailId does not match any loaded workout', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS, feed: feedOf([OLD_MANUAL_WORKOUT]), detailId: 'no-such-id',
+      });
+      expect(html).not.toContain('data-a="history:back"');
+      expect(html).toContain('data-a="history:open"');
+    });
+
+    it('renders the feed (not detail) when detailId is null', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS, feed: feedOf([OLD_MANUAL_WORKOUT]), detailId: null,
+      });
+      expect(html).not.toContain('data-a="history:back"');
+      expect(html).toContain('data-a="history:open"');
+    });
+
+    it('hides the load chart and sync/manual-entry actions while a detail is open', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS,
+        feed: feedOf([RICH_FIT_WORKOUT]),
+        detailId: 'w-rich',
+        load: {
+          status: 'ready',
+          data: { ctl_atl_tsb: [['2026-08-01', 10, 5, 5], ['2026-08-02', 11, 6, 5]] },
+          error: null,
+        },
+      });
+      expect(html).not.toContain('<svg');
+      expect(html).not.toContain('data-a="sync:start"');
+    });
   });
 
-  it('disables the chat input with an offline notice when offline', () => {
-    const html = renderHistorySection({
-      ...openDetailArgs, online: false, workoutChat: { workoutId: 'w-rich', messages: [] },
+  describe('embedded workout chat (Phase C slice 1)', () => {
+    const openDetailArgs = {
+      ...DASHBOARD_BASE_ARGS, feed: feedOf([RICH_FIT_WORKOUT]), detailId: 'w-rich',
+    };
+
+    it('renders the scoped chat section with the "About:" label when workoutChat matches the open detail', () => {
+      const html = renderDashboardTab({
+        ...openDetailArgs, workoutChat: { workoutId: 'w-rich', messages: [] },
+      });
+      expect(html).toContain('Ask your coach about this workout');
+      expect(html).toContain('About: Jun 1 Open water swim');
+      expect(html).toContain('id="workout-chat-input"');
+      expect(html).toContain('data-a="workout-chat:send"');
     });
-    expect(html).toContain('chat-banner');
-    expect(html.toLowerCase()).toContain('offline');
-    const inputMatch = /<textarea[^>]*id="workout-chat-input"[^>]*>/.exec(html);
-    expect(inputMatch[0]).toContain('disabled');
-    const btnMatch = /<button[^>]*data-a="workout-chat:send"[^>]*>/.exec(html);
-    expect(btnMatch[0]).toContain('disabled');
+
+    it('omits the chat section entirely when workoutChat is null', () => {
+      const html = renderDashboardTab({ ...openDetailArgs, workoutChat: null });
+      expect(html).not.toContain('Ask your coach about this workout');
+      expect(html).not.toContain('workout-chat-input');
+    });
+
+    it('omits the chat section when workoutChat belongs to a different workout', () => {
+      const html = renderDashboardTab({
+        ...openDetailArgs, workoutChat: { workoutId: 'w-other', messages: [] },
+      });
+      expect(html).not.toContain('Ask your coach about this workout');
+    });
+
+    it('renders thread messages with the coach-tab bubble classes', () => {
+      const html = renderDashboardTab({
+        ...openDetailArgs,
+        workoutChat: {
+          workoutId: 'w-rich',
+          messages: [
+            { role: 'user', content: 'how did this swim go?', status: 'done' },
+            { role: 'assistant', content: 'A strong effort with a positive split.', status: 'done' },
+          ],
+        },
+      });
+      expect(html).toContain('chat-row me');
+      expect(html).toContain('chat-row coach');
+      expect(html).toContain('how did this swim go?');
+      expect(html).toContain('A strong effort with a positive split.');
+    });
+
+    it('shows the streaming cursor and disables input/send while a reply streams', () => {
+      const html = renderDashboardTab({
+        ...openDetailArgs,
+        workoutChat: {
+          workoutId: 'w-rich',
+          messages: [
+            { role: 'user', content: 'thoughts?', status: 'done' },
+            { role: 'assistant', content: 'Looking at it', status: 'streaming', toolCalls: [] },
+          ],
+        },
+      });
+      expect(html).toContain('chat-cursor');
+      expect(html).toContain('Sending…');
+      const inputMatch = /<textarea[^>]*id="workout-chat-input"[^>]*>/.exec(html);
+      expect(inputMatch[0]).toContain('disabled');
+    });
+
+    it('disables the chat input with an offline notice when offline', () => {
+      const html = renderDashboardTab({
+        ...openDetailArgs, online: false, workoutChat: { workoutId: 'w-rich', messages: [] },
+      });
+      expect(html).toContain('chat-banner');
+      expect(html.toLowerCase()).toContain('offline');
+      const inputMatch = /<textarea[^>]*id="workout-chat-input"[^>]*>/.exec(html);
+      expect(inputMatch[0]).toContain('disabled');
+      const btnMatch = /<button[^>]*data-a="workout-chat:send"[^>]*>/.exec(html);
+      expect(btnMatch[0]).toContain('disabled');
+    });
+
+    it('escapes malicious chat message content', () => {
+      const html = renderDashboardTab({
+        ...openDetailArgs,
+        workoutChat: {
+          workoutId: 'w-rich',
+          messages: [{ role: 'user', content: '<img src=x onerror=alert(1)>', status: 'done' }],
+        },
+      });
+      expect(html).not.toContain('<img src=x');
+      expect(html).toContain('&lt;img');
+    });
   });
 
-  it('escapes malicious chat message content', () => {
-    const html = renderHistorySection({
-      ...openDetailArgs,
-      workoutChat: {
-        workoutId: 'w-rich',
-        messages: [{ role: 'user', content: '<img src=x onerror=alert(1)>', status: 'done' }],
-      },
+  describe('coach conversation placeholder (Build 2)', () => {
+    it('renders the honest "coming soon" placeholder alongside the real AI chat, distinct from it', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS,
+        feed: feedOf([RICH_FIT_WORKOUT]),
+        detailId: 'w-rich',
+        workoutChat: { workoutId: 'w-rich', messages: [] },
+      });
+      expect(html).toContain('id="coach-conversation"');
+      expect(html).toContain('Coach conversation');
+      expect(html).toContain('coming soon');
+      // Still has the real, working AI chat -- the placeholder is additive,
+      // not a replacement.
+      expect(html).toContain('Ask your coach about this workout');
+      expect(html).toContain('id="workout-chat-input"');
     });
-    expect(html).not.toContain('<img src=x');
-    expect(html).toContain('&lt;img');
+
+    it('still renders even when the real AI chat is absent (workoutChat null)', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS,
+        feed: feedOf([RICH_FIT_WORKOUT]),
+        detailId: 'w-rich',
+        workoutChat: null,
+      });
+      expect(html).toContain('id="coach-conversation"');
+      expect(html).not.toContain('Ask your coach about this workout');
+    });
+  });
+
+  describe('sync + manual-entry actions (original Log tab markup, unchanged)', () => {
+    it('shows a backend-needed notice, omitting the feed and actions, when backend is not configured', () => {
+      const html = renderDashboardTab({ ...DASHBOARD_BASE_ARGS, backendConfigured: false, feed: [] });
+      expect(html).toContain('sign in');
+      expect(html).not.toContain('data-a="sync:start"');
+      expect(html).not.toContain('<svg');
+    });
+
+    it('always shows the primary sync button ahead of the (collapsed) manual section and the feed', () => {
+      const html = renderDashboardTab({ ...DASHBOARD_BASE_ARGS, feed: feedOf([CROSS_TRAIN_WORKOUT]) });
+      const syncIdx = html.indexOf('data-a="sync:start"');
+      const toggleIdx = html.indexOf('data-a="log:toggle-manual"');
+      const feedIdx = html.indexOf('Cross-train');
+      expect(syncIdx).toBeGreaterThan(-1);
+      expect(toggleIdx).toBeGreaterThan(syncIdx);
+      expect(feedIdx).toBeGreaterThan(toggleIdx);
+    });
+
+    it('shows "Sync from watch" idle label, enabled, when online and idle', () => {
+      const html = renderDashboardTab({ ...DASHBOARD_BASE_ARGS, feed: [] });
+      expect(html).toContain('Sync from watch');
+      const btnMatch = /<button[^>]*data-a="sync:start"[^>]*>/.exec(html);
+      expect(btnMatch[0]).not.toContain('disabled');
+    });
+
+    it('shows a busy "Syncing…" label and disables the button while syncing', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS, feed: [], sync: { status: 'syncing', message: null },
+      });
+      expect(html).toContain('Syncing');
+      const btnMatch = /<button[^>]*data-a="sync:start"[^>]*>/.exec(html);
+      expect(btnMatch[0]).toContain('disabled');
+    });
+
+    it('disables the sync button while offline', () => {
+      const html = renderDashboardTab({ ...DASHBOARD_BASE_ARGS, feed: [], online: false });
+      const btnMatch = /<button[^>]*data-a="sync:start"[^>]*>/.exec(html);
+      expect(btnMatch[0]).toContain('disabled');
+    });
+
+    it('shows a success result line with the ok treatment', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS, feed: [], sync: { status: 'success', message: '2 new workouts synced' },
+      });
+      expect(html).toContain('conn-result ok');
+      expect(html).toContain('2 new workouts synced');
+    });
+
+    it('shows an error result line verbatim with the fail treatment', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS,
+        feed: [],
+        sync: { status: 'error', message: 'sync not configured for this athlete' },
+      });
+      expect(html).toContain('conn-result fail');
+      expect(html).toContain('sync not configured for this athlete');
+    });
+
+    it('collapses the manual entry/upload section by default, showing only the toggle', () => {
+      const html = renderDashboardTab({ ...DASHBOARD_BASE_ARGS, feed: [] });
+      expect(html).toContain('Log manually / upload a file');
+      expect(html).not.toContain('data-a="log:file-select"');
+      expect(html).not.toContain('data-form="log" data-field="date"');
+    });
+
+    it('expands the manual form and upload input when manualOpen is true', () => {
+      const html = renderDashboardTab({ ...DASHBOARD_BASE_ARGS, feed: [], manualOpen: true });
+      expect(html).toContain('data-a="log:file-select"');
+      expect(html).toContain('data-form="log" data-field="date"');
+      expect(html).toContain('Hide manual entry');
+    });
+  });
+
+  describe('the CTL/ATL/TSB load chart, relocated here from the Plan tab', () => {
+    it('renders the chart above the actions and the feed when data is present', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS,
+        feed: feedOf([CROSS_TRAIN_WORKOUT]),
+        load: {
+          status: 'ready',
+          data: { ctl_atl_tsb: [['2026-08-01', 10, 5, 5], ['2026-08-02', 11, 6, 5]] },
+          error: null,
+        },
+      });
+      const chartIdx = html.indexOf('<svg');
+      const syncIdx = html.indexOf('data-a="sync:start"');
+      const feedIdx = html.indexOf('Cross-train');
+      expect(chartIdx).toBeGreaterThan(-1);
+      expect(chartIdx).toBeLessThan(syncIdx);
+      expect(syncIdx).toBeLessThan(feedIdx);
+    });
   });
 });
 
@@ -385,6 +635,15 @@ describe('renderApp plan session detail view (click-to-detail)', () => {
   const PLAN_DATA = {
     athlete: { name: 'Renee' }, events: [], macro: { blocks: [] }, weeks: [WEEK],
   };
+
+  // Build 1 (Log+History merge): the CTL/ATL/TSB load chart moved off the
+  // Plan tab entirely, into the merged Dashboard tab -- renderApp must never
+  // render it, even when a `load` field is (incorrectly) still passed in.
+  it('never renders the training-load chart -- it moved to the Dashboard tab (Build 1)', () => {
+    const html = renderApp({ ...PLAN_DATA, load: { status: 'ready', data: { ctl_atl_tsb: [['2026-08-01', 10, 5, 5]] } } }, null);
+    expect(html).not.toContain('load-chart-svg');
+    expect(html).not.toContain('<svg');
+  });
 
   it('renderSession emits a clickable data-a/data-id for each session row', () => {
     const html = renderApp(PLAN_DATA, null);
@@ -1047,103 +1306,6 @@ describe('renderWeekCard race-week checklist (engine/swim_coach/models.py RaceWe
   });
 });
 
-describe('renderLogTab', () => {
-  const baseArgs = {
-    form: { date: '2026-07-11', sport: 'swim_pool', distance_m: '', duration_min: '', rpe: 5, notes: '' },
-    submit: { status: 'idle', message: null },
-    ingest: { status: 'idle', fileName: null, error: null },
-    backendConfigured: true,
-    online: true,
-    history: { status: 'idle', data: [], error: null },
-    sync: { status: 'idle', message: null },
-    manualOpen: false,
-  };
-
-  it('includes the history section when backend is configured', () => {
-    const html = renderLogTab({
-      ...baseArgs, history: { status: 'ready', data: [CROSS_TRAIN_WORKOUT], error: null },
-    });
-    expect(html).toContain('Recent workouts');
-    expect(html).toContain('Cross-train');
-  });
-
-  it('omits the history section (and the whole form) when backend is not configured', () => {
-    const html = renderLogTab({
-      ...baseArgs, backendConfigured: false, history: { status: 'idle', data: [], error: null },
-    });
-    expect(html).not.toContain('Recent workouts');
-  });
-
-  it('passes detailId through to the history section, opening the detail view', () => {
-    const html = renderLogTab({
-      ...baseArgs, history: { status: 'ready', data: [CROSS_TRAIN_WORKOUT], error: null }, detailId: 'w-cross',
-    });
-    expect(html).toContain('data-a="history:back"');
-  });
-
-  // --- Phase 3: "Sync from watch" primary action, manual entry secondary ---
-
-  it('always shows the primary sync button ahead of the (collapsed) manual section', () => {
-    const html = renderLogTab(baseArgs);
-    const syncIdx = html.indexOf('data-a="sync:start"');
-    const toggleIdx = html.indexOf('data-a="log:toggle-manual"');
-    const historyIdx = html.indexOf('Recent workouts');
-    expect(syncIdx).toBeGreaterThan(-1);
-    expect(toggleIdx).toBeGreaterThan(syncIdx);
-    expect(historyIdx).toBeGreaterThan(toggleIdx);
-  });
-
-  it('shows "Sync from watch" idle label, enabled, when online and idle', () => {
-    const html = renderLogTab(baseArgs);
-    expect(html).toContain('Sync from watch');
-    const btnMatch = /<button[^>]*data-a="sync:start"[^>]*>/.exec(html);
-    expect(btnMatch[0]).not.toContain('disabled');
-  });
-
-  it('shows a busy "Syncing…" label and disables the button while syncing', () => {
-    const html = renderLogTab({ ...baseArgs, sync: { status: 'syncing', message: null } });
-    expect(html).toContain('Syncing');
-    const btnMatch = /<button[^>]*data-a="sync:start"[^>]*>/.exec(html);
-    expect(btnMatch[0]).toContain('disabled');
-  });
-
-  it('disables the sync button while offline', () => {
-    const html = renderLogTab({ ...baseArgs, online: false });
-    const btnMatch = /<button[^>]*data-a="sync:start"[^>]*>/.exec(html);
-    expect(btnMatch[0]).toContain('disabled');
-  });
-
-  it('shows a success result line with the ok treatment', () => {
-    const html = renderLogTab({
-      ...baseArgs, sync: { status: 'success', message: '2 new workouts synced' },
-    });
-    expect(html).toContain('conn-result ok');
-    expect(html).toContain('2 new workouts synced');
-  });
-
-  it('shows an error result line verbatim with the fail treatment', () => {
-    const html = renderLogTab({
-      ...baseArgs, sync: { status: 'error', message: 'sync not configured for this athlete' },
-    });
-    expect(html).toContain('conn-result fail');
-    expect(html).toContain('sync not configured for this athlete');
-  });
-
-  it('collapses the manual entry/upload section by default, showing only the toggle', () => {
-    const html = renderLogTab(baseArgs);
-    expect(html).toContain('Log manually / upload a file');
-    expect(html).not.toContain('data-a="log:file-select"');
-    expect(html).not.toContain('data-form="log" data-field="date"');
-  });
-
-  it('expands the manual form and upload input when manualOpen is true', () => {
-    const html = renderLogTab({ ...baseArgs, manualOpen: true });
-    expect(html).toContain('data-a="log:file-select"');
-    expect(html).toContain('data-form="log" data-field="date"');
-    expect(html).toContain('Hide manual entry');
-  });
-});
-
 describe('renderSettingsTab', () => {
   const baseArgs = {
     identity: null,
@@ -1428,6 +1590,98 @@ describe('renderRosterTab', () => {
     expect(html).not.toContain('data-a="roster:back"');
     // No embedded "ask your coach" chat -- that's an athlete-only feature.
     expect(html).not.toContain('Ask your coach about this workout');
+    // The honest coach-conversation placeholder IS shown here too (Build 2)
+    // -- distinct from the athlete-only AI chat just excluded above.
+    expect(html).toContain('id="coach-conversation"');
+    expect(html).toContain('coming soon');
+  });
+
+  describe('sub-tabs (Build 2: Conversations / Workouts + Dashboard / Training Plan)', () => {
+    const actingArgs = {
+      ...baseArgs,
+      athletes: { status: 'ready', data: [{ slug: 'renee', name: 'Renee' }], error: null },
+      actingAsAthlete: 'renee',
+      plan: { status: 'idle', data: null, error: null },
+    };
+
+    it('shows the sub-tab bar with all three options once an athlete is selected', () => {
+      const html = renderRosterTab(actingArgs);
+      expect(html).toContain('data-a="roster:subtab:conversations"');
+      expect(html).toContain('data-a="roster:subtab:dashboard"');
+      expect(html).toContain('data-a="roster:subtab:plan"');
+    });
+
+    it('defaults to the Workouts + Dashboard sub-tab when subTab is not given', () => {
+      const html = renderRosterTab({
+        ...actingArgs, workouts: { status: 'ready', data: [workout], error: null },
+      });
+      expect(html).toContain('data-a="roster:open-workout"');
+      expect(html).toContain('class="subtab-btn active"');
+    });
+
+    it('shows the honest non-functional Conversations placeholder, not wired to anything', () => {
+      const html = renderRosterTab({ ...actingArgs, subTab: 'conversations' });
+      expect(html).toContain('coming soon');
+      expect(html).not.toContain('data-a="roster:open-workout"');
+      expect(html).not.toContain('data-a="roster:reply-submit"');
+    });
+
+    it('shows the Training Plan sub-tab\'s weeks/macro sections from the coach-plan endpoint data, without the load chart', () => {
+      const html = renderRosterTab({
+        ...actingArgs,
+        subTab: 'plan',
+        plan: {
+          status: 'ready',
+          data: {
+            slug: 'renee',
+            name: 'Renee',
+            athlete: { name: 'Renee' },
+            events: [],
+            macro: { blocks: [] },
+            weeks: [],
+          },
+          error: null,
+        },
+      });
+      expect(html).toContain('No weeks planned yet.');
+      expect(html).toContain('No macro plan scaffolded yet.');
+      expect(html).not.toContain('<svg'); // no load chart in this sub-tab
+    });
+
+    it('shows a loading state for the Training Plan sub-tab while the plan fetch is in flight', () => {
+      const html = renderRosterTab({
+        ...actingArgs, subTab: 'plan', plan: { status: 'loading', data: null, error: null },
+      });
+      expect(html.toLowerCase()).toContain('loading');
+    });
+
+    it('shows an error state for the Training Plan sub-tab on a failed fetch', () => {
+      const html = renderRosterTab({
+        ...actingArgs, subTab: 'plan', plan: { status: 'error', data: null, error: 'boom' },
+      });
+      expect(html).toContain('boom');
+    });
+
+    it('derives missed (skipped) sessions in the Workouts + Dashboard feed once plan weeks are available', () => {
+      const html = renderRosterTab({
+        ...actingArgs,
+        subTab: 'dashboard',
+        workouts: { status: 'ready', data: [], error: null },
+        plan: {
+          status: 'ready',
+          data: {
+            weeks: [{
+              iso_week: '2020-W01',
+              sessions: [{
+                id: 'sess-1', date: '2020-01-01', sport: 'swim_pool', duration_min: 45, status: 'planned',
+              }],
+            }],
+          },
+          error: null,
+        },
+      });
+      expect(html).toContain('Skipped');
+    });
   });
 
   it('falls back to the workouts/feedback list when workoutDetailId no longer matches any loaded workout', () => {
@@ -1593,108 +1847,6 @@ describe('renderApp weeks section: all-weeks accordion', () => {
 // --- History tab ----------------------------------------------------------
 // Andrew's ask: "history - should show workouts completed with actual stats
 // and planned workout skipped." One reverse-chron feed of both.
-
-describe('renderHistoryTab', () => {
-  const COMPLETED = {
-    id: 'w-done', date: '2026-08-17', sport: 'swim_pool', source: 'fit',
-    distance_m: 2050, duration_min: 61, rpe: 6, avg_pace_s_per_100m: 95,
-    planned_session_id: null, analytics: null, laps: [], pauses: [],
-  };
-  const SKIPPED_SESSION = {
-    id: 's-missed', date: '2026-08-18', sport: 'strength', source: 'ai_coach',
-    duration_min: 45, distance_m: null, intensity: {},
-    purpose: 'Dryland shoulder strength — rotator-cuff work',
-    structure: null, structured: null, status: 'planned',
-  };
-  const FEED = [
-    { kind: 'skipped', date: '2026-08-18', key: 's:s-missed', session: SKIPPED_SESSION },
-    { kind: 'completed', date: '2026-08-17', key: 'w:w-done', workout: COMPLETED },
-  ];
-
-  const base = {
-    feed: FEED, status: 'ready', error: null, online: true,
-    detailId: null, workoutChat: null, backendConfigured: true,
-  };
-
-  it('renders completed workouts with their actual logged stats', () => {
-    const html = renderHistoryTab(base);
-    expect(html).toContain('Pool swim');
-    // The ACTUAL logged distance (2050 m -> "2.1 km" per
-    // formatWorkoutDistance), not the 2000 m the plan had targeted.
-    expect(html).toContain('2.1 km');
-    expect(html).toContain('RPE 6');
-  });
-
-  it('renders a skipped planned session with what was planned', () => {
-    const html = renderHistoryTab(base);
-    expect(html).toContain('Strength');
-    expect(html).toContain('Dryland shoulder strength');
-    expect(html).toContain('45 min'); // the planned duration
-  });
-
-  it('clearly distinguishes a skipped item from a completed one', () => {
-    const html = renderHistoryTab(base);
-    expect(html).toContain('hist-row-skipped');
-    expect(html).toContain('Skipped');
-  });
-
-  it('keeps the feed order given -- newest first, no re-sorting', () => {
-    const html = renderHistoryTab(base);
-    expect(html.indexOf('Dryland shoulder strength')).toBeLessThan(html.indexOf('Pool swim'));
-  });
-
-  it('makes completed rows tappable for detail but skipped rows not', () => {
-    const html = renderHistoryTab(base);
-    expect(html).toContain('data-a="history:open" data-id="w-done"');
-    expect(html).not.toContain('data-id="s-missed"');
-  });
-
-  it('opens the workout detail view when detailId matches a completed item', () => {
-    const html = renderHistoryTab({ ...base, detailId: 'w-done' });
-    expect(html).toContain('data-a="history:back"');
-    expect(html).toContain('Distance');
-    expect(html).not.toContain('data-a="history:open"');
-  });
-
-  it('shows an empty state when nothing has happened yet', () => {
-    const html = renderHistoryTab({ ...base, feed: [] });
-    expect(html).toContain('Nothing logged or missed yet');
-  });
-
-  it('shows a loading state before the first load lands', () => {
-    const html = renderHistoryTab({ ...base, feed: [], status: 'loading' });
-    expect(html).toContain('Loading');
-  });
-
-  it('surfaces an error with a retry action, keeping any stale feed visible', () => {
-    const html = renderHistoryTab({ ...base, status: 'error', error: 'boom' });
-    expect(html).toContain('boom');
-    expect(html).toContain('data-a="history:retry"');
-    expect(html).toContain('Pool swim'); // stale data still shown
-  });
-
-  it('tells the athlete when history needs a connection', () => {
-    const html = renderHistoryTab({ ...base, feed: [], online: false });
-    expect(html).toContain('connection');
-  });
-
-  it('prompts for setup when the backend is not configured', () => {
-    const html = renderHistoryTab({ ...base, backendConfigured: false });
-    expect(html).toContain('Settings');
-  });
-
-  it('escapes hostile content in a skipped session purpose', () => {
-    const nasty = {
-      ...SKIPPED_SESSION, id: 's-nasty', purpose: '<img src=x onerror=alert(1)>',
-    };
-    const html = renderHistoryTab({
-      ...base,
-      feed: [{ kind: 'skipped', date: '2026-08-18', key: 's:s-nasty', session: nasty }],
-    });
-    expect(html).not.toContain('<img src=x');
-    expect(html).toContain('&lt;img');
-  });
-});
 
 describe('renderLoadChart', () => {
   const readySeries = [

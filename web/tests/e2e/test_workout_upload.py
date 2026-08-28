@@ -129,23 +129,24 @@ def _configure_backend(page, base_url=BASE_URL, token=TOKEN):
 
 
 def _open_log_tab(page):
-    """Opens the Log tab and waits for the history section's fetch to settle
-    (every test in this file sees an empty list -- the fixture's default
-    workouts mock or the test's own -- so settled always means the
-    empty-state message) before expanding the secondary manual-entry/upload
-    section (Phase 3: "Sync from watch" is now the primary action; the file
-    input lives behind the "Log manually / upload a file" toggle, collapsed
-    by default -- see main.js's state.logManualOpen) and waiting for the
-    file input itself. The settle-before-interact ordering matters just as
-    much as before: opening the tab fires GET /api/workouts (main.js's
-    loadHistory), and its completion render replaces the whole #app subtree
-    via innerHTML -- a toggle click or file input resolved before that
-    render can hit a detached node, and a change event fired on a detached
-    node never bubbles to #app's delegated listener, silently swallowing
-    the upload (the intermittent chromium timeout in CI: no .conn-result
-    ever renders)."""
-    page.click('[data-a="tab:log"]')
-    page.wait_for_selector('text=No workouts logged yet.')
+    """Opens the merged Dashboard tab (Build 1: Log+History) and waits for
+    the feed's fetch to settle (every test in this file sees an empty feed
+    -- the fixture's default workouts mock or the test's own -- so settled
+    always means the empty-state message) before expanding the secondary
+    manual-entry/upload section (Phase 3: "Sync from watch" is now the
+    primary action; the file input lives behind the "Log manually / upload
+    a file" toggle, collapsed by default -- see main.js's
+    state.logManualOpen) and waiting for the file input itself. The
+    settle-before-interact ordering matters just as much as before: opening
+    the tab fires GET /api/workouts (main.js's loadHistory), and its
+    completion render replaces the whole #app subtree via innerHTML -- a
+    toggle click or file input resolved before that render can hit a
+    detached node, and a change event fired on a detached node never
+    bubbles to #app's delegated listener, silently swallowing the upload
+    (the intermittent chromium timeout in CI: no .conn-result ever
+    renders)."""
+    page.click('[data-a="tab:dashboard"]')
+    page.wait_for_selector('text=Nothing logged or missed yet.')
     page.click('[data-a="log:toggle-manual"]')
     page.wait_for_selector('[data-a="log:file-select"]')
 
