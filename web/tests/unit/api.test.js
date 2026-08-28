@@ -5,7 +5,7 @@ import {
   onboard, OnboardForbiddenError, OnboardConflictError, downloadGarminFit,
   pushSessionToIntervals,
   fetchMe, createGrant, listGrants, revokeGrant,
-  listCoachedAthletes, fetchCoachWorkouts, fetchCoachFeedback, fetchCoachLoad, replyToCoachFeedback,
+  listCoachedAthletes, fetchCoachWorkouts, fetchCoachFeedback, fetchCoachLoad, fetchCoachPlan, replyToCoachFeedback,
 } from '../../src/api.js';
 
 function fakeFetch(body, { ok = true, status = 200 } = {}) {
@@ -728,6 +728,28 @@ describe('fetchCoachLoad', () => {
     await fetchCoachLoad({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'a/b' });
     const [url] = global.fetch.mock.calls[0];
     expect(url).toBe('https://api.example.com/api/coach/athletes/a%2Fb/load');
+  });
+});
+
+describe('fetchCoachPlan', () => {
+  it('GETs /api/coach/athletes/<athlete>/plan -- athlete as a path segment, no query param', async () => {
+    const plan = { slug: 'renee', name: 'Renee', athlete: {}, events: [], macro: {}, weeks: [] };
+    global.fetch = fakeFetch(plan);
+
+    const result = await fetchCoachPlan({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee' });
+
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/coach/athletes/renee/plan');
+    expect(url).not.toContain('?athlete=');
+    expect(init.headers.Authorization).toBe('Bearer tok');
+    expect(result).toEqual({ ok: true, data: plan });
+  });
+
+  it('url-encodes the athlete slug', async () => {
+    global.fetch = fakeFetch({});
+    await fetchCoachPlan({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'a/b' });
+    const [url] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/coach/athletes/a%2Fb/plan');
   });
 });
 

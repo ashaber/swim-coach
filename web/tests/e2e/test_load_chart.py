@@ -76,6 +76,17 @@ COACH_LOAD_STUB = json.dumps({
     'athlete': 'renee', 'weeks': 12, 'ctl_atl_tsb': REAL_SERIES,
     'wellness_baseline_deviation': REAL_WELLNESS_DEVIATION,
 })
+# GET /api/coach/athletes/renee/plan (Build 2's new coach-plan route) --
+# main.js's loadCoachPlan fires unconditionally the moment an athlete is
+# selected (handleSelectCoachedAthlete), alongside workouts/feedback/load,
+# regardless of which roster sub-tab is active. Left unmocked, every
+# roster:select-athlete click in this file would fire a real, unmocked fetch
+# against this fake-origin backend -- exactly the intermittent WebKit-only
+# `page` fixture teardown failure the `**/api/workouts*` mock above already
+# had to fix once tonight.
+COACH_PLAN_STUB = json.dumps({
+    'slug': 'renee', 'athlete': {'name': 'Renee'}, 'events': [], 'macro': {'blocks': []}, 'weeks': [],
+})
 
 
 def _make_ctx(pw, cfg, *, identity=None, plan_load_body=PLAN_LOAD_STUB, coach_load_body=COACH_LOAD_STUB):
@@ -105,6 +116,7 @@ def _make_ctx(pw, cfg, *, identity=None, plan_load_body=PLAN_LOAD_STUB, coach_lo
     ctx.route('**/api/coach/athletes/renee/workouts*', _cors_route(200, 'application/json', COACH_WORKOUTS_STUB))
     ctx.route('**/api/coach/athletes/renee/feedback*', _cors_route(200, 'application/json', COACH_FEEDBACK_STUB))
     ctx.route('**/api/coach/athletes/renee/load*', _cors_route(200, 'application/json', coach_load_body))
+    ctx.route('**/api/coach/athletes/renee/plan*', _cors_route(200, 'application/json', COACH_PLAN_STUB))
     ctx.route('**/api/coach/athletes*', _cors_route(200, 'application/json', COACH_ATHLETES_STUB))
     return browser, ctx
 

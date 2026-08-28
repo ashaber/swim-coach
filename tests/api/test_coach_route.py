@@ -355,3 +355,60 @@ def test_coach_reply_service_principal_is_403(client, allowlist, store) -> None:
         headers=auth_headers(),
     )
     assert response.status_code == 403
+
+
+# --- GET /api/coach/athletes/{slug}/plan --------------------------------------
+
+
+def test_coach_view_plan_requires_auth(client) -> None:
+    response = client.get("/api/coach/athletes/renee/plan")
+    assert response.status_code == 401
+
+
+def test_coach_view_plan_403_without_grant(client, allowlist, google) -> None:
+    headers = _tim_headers(client, allowlist, google)
+    response = client.get("/api/coach/athletes/renee/plan", headers=headers)
+    assert response.status_code == 403
+
+
+def test_coach_view_plan_matches_athlete_self_shape(client, allowlist, store, google) -> None:
+    """Same response shape as GET /api/plan?athlete=renee (the athlete-self
+    route, `routes/plan.py`), just re-scoped to a coach-selected athlete."""
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    headers = _tim_headers(client, allowlist, google)
+
+    coach_response = client.get("/api/coach/athletes/renee/plan", headers=headers)
+    assert coach_response.status_code == 200
+    coach_body = coach_response.json()
+
+    self_response = client.get("/api/plan?athlete=renee", headers=auth_headers())
+    assert self_response.status_code == 200
+    self_body = self_response.json()
+
+    # `generated_at` is a live export timestamp -- necessarily differs
+    # between the two separate calls above, not a shape difference.
+    coach_body.pop("generated_at", None)
+    self_body.pop("generated_at", None)
+    assert coach_body == self_body
+    assert coach_body["slug"] == "renee"
+    assert coach_body["name"] == "Renee"
+    assert "athlete" in coach_body
+    assert "events" in coach_body
+    assert "macro" in coach_body
+    assert "weeks" in coach_body
+    assert len(coach_body["weeks"]) >= 1
+
+
+def test_coach_view_plan_service_token_passes(client, allowlist, store) -> None:
+    response = client.get("/api/coach/athletes/renee/plan", headers=auth_headers())
+    assert response.status_code == 200
+
+
+def test_coach_view_plan_unknown_athlete_is_404(client, allowlist, store, google) -> None:
+    # No coach grant exists for "nobody" -- resolve_coach_athlete 403s before
+    # the route ever reaches `export_athlete`'s own 404 path, same ordering
+    # every other coach route already enforces (auth/authorization gating
+    # happens before existence checks).
+    headers = _tim_headers(client, allowlist, google)
+    response = client.get("/api/coach/athletes/nobody/plan", headers=headers)
+    assert response.status_code == 403

@@ -20,7 +20,12 @@ from swim_coach.models import Session
 
 from app.auth import Principal, require_auth, resolve_coach_athlete
 from app.context import summarize_rollup
-from app.routes.plan import LOAD_GRAPH_DEFAULT_WEEKS, LOAD_GRAPH_MAX_WEEKS, LOAD_GRAPH_MIN_WEEKS
+from app.routes.plan import (
+    LOAD_GRAPH_DEFAULT_WEEKS,
+    LOAD_GRAPH_MAX_WEEKS,
+    LOAD_GRAPH_MIN_WEEKS,
+    export_athlete,
+)
 from app.store_factory import make_store
 
 router = APIRouter()
@@ -169,6 +174,24 @@ async def coach_view_load(
         "ctl_atl_tsb": rollup["ctl_atl_tsb"],
         "wellness_baseline_deviation": rollup["wellness_baseline_deviation"],
     }
+
+
+@router.get("/api/coach/athletes/{slug}/plan")
+async def coach_view_plan(
+    slug: str, request: Request, principal: Principal = Depends(require_auth)
+) -> dict:
+    """Coach-access mirror of `GET /api/plan` (`routes/plan.py`) -- same
+    exported shape (`slug`/`name`/`athlete`/`events`/`macro`/`weeks`), via
+    the same `export_athlete` exporter, gated via `resolve_coach_athlete`
+    instead of `resolve_athlete`. Powers the coach roster view's Training
+    Plan sub-tab."""
+    settings = request.app.state.settings
+    slug = resolve_coach_athlete(principal, slug)
+    store = make_store(settings)
+    try:
+        return export_athlete(store, slug)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"no such athlete: {slug}") from exc
 
 
 @router.get("/api/coach/athletes/{slug}/feedback")

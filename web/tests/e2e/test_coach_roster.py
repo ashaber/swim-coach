@@ -56,6 +56,36 @@ COACH_LOAD_STUB = json.dumps({
 
 ATHLETES_STUB = json.dumps([{'slug': 'renee', 'name': 'Renee'}])
 
+# GET /api/coach/athletes/renee/plan (Build 2's new coach-plan route) --
+# main.js's loadCoachPlan fires unconditionally the moment an athlete is
+# selected, feeding the Training Plan sub-tab's weeks/macro sections and the
+# Workouts + Dashboard sub-tab's skip-derivation. A real macro block + one
+# planned-but-never-done session so this file's Training Plan and
+# missed-session-derivation tests have something real to assert against.
+ROSTER_PLAN_STUB = json.dumps({
+    'slug': 'renee', 'name': 'Renee', 'athlete': {'name': 'Renee'}, 'events': [],
+    'macro': {
+        'blocks': [{
+            'name': 'Base', 'start_date': '2026-08-01', 'end_date': '2026-08-31',
+            'weekly_volume_target_m': 15000,
+        }],
+    },
+    'weeks': [{
+        'iso_week': '2026-W33',
+        'focus': 'Base building', 'target_volume_m': 2000,
+        'sessions': [{
+            'id': 'sess-1', 'date': '2026-08-10', 'sport': 'swim_pool',
+            'duration_min': 45, 'distance_m': 2000, 'status': 'planned',
+            # `purpose` is a required Session field in the real engine
+            # (classifySession/deriveSessionTitle -- views.js's
+            # renderSession/renderWeeksSection -- read it unconditionally,
+            # no optional-chaining) -- must be present here too, or the
+            # Training Plan sub-tab throws while rendering this fixture.
+            'purpose': 'Aerobic base',
+        }],
+    }],
+})
+
 WORKOUT_STUB = json.dumps([{
     'id': 'w1', 'date': '2026-08-20', 'sport': 'swim_pool', 'source': 'fit',
     'distance_m': 2100, 'duration_min': 47.0, 'rpe': 6, 'avg_pace_s_per_100m': 95.0,
@@ -113,6 +143,10 @@ def _make_ctx(pw, cfg, *, identity=COACH_IDENTITY, reply_calls=None):
     # matches the more specific, longer-path pattern -- '*' never crosses a
     # '/', same rule test_coach_grants_settings.py's _route_grants relies on).
     ctx.route('**/api/coach/athletes/renee/load*', _cors_route(200, 'application/json', COACH_LOAD_STUB))
+    # GET /api/coach/athletes/renee/plan (Build 2) -- fires unconditionally
+    # the moment an athlete is selected (main.js's loadCoachPlan), same
+    # unmocked-route hazard as every other coach-athletes/renee/* route here.
+    ctx.route('**/api/coach/athletes/renee/plan*', _cors_route(200, 'application/json', ROSTER_PLAN_STUB))
     ctx.route('**/api/coach/athletes*', _cors_route(200, 'application/json', ATHLETES_STUB))
     return browser, ctx
 
@@ -238,6 +272,10 @@ def test_clicking_a_workout_opens_its_read_only_detail_view(page):
     assert '2.1 km' in content
     # No embedded "ask your coach" chat -- that's an athlete-only feature.
     assert 'Ask your coach about this workout' not in content
+    # The honest, non-functional coach-conversation placeholder (Build 2) IS
+    # shown here -- distinct from the athlete-only AI chat just excluded.
+    assert page.locator('#coach-conversation').count() == 1
+    assert 'coming soon' in content
     # The workouts/feedback list sections are gone while the detail is open.
     assert page.locator('[data-a="roster:open-workout"]').count() == 0
     assert page.locator('[data-a="roster:back"]').count() == 0
@@ -304,6 +342,88 @@ def test_replying_to_feedback_patches_and_updates_the_row(page):
     assert reply_calls[0] == {'coach_reply': 'Start with 70g/hr and adjust from there.'}
     # The reply box is gone now that a coach_reply exists on the entry.
     assert page.locator('[data-form="roster-reply"]').count() == 0
+
+
+# --- Sub-tabs (Build 2: Conversations / Workouts + Dashboard / Training Plan) -
+
+def test_sub_tab_bar_shows_all_three_options(page):
+    _open_roster(page)
+    page.click('[data-a="roster:select-athlete"]')
+    page.wait_for_selector('[data-a="roster:subtab:dashboard"]')
+    assert page.locator('[data-a="roster:subtab:conversations"]').count() == 1
+    assert page.locator('[data-a="roster:subtab:dashboard"]').count() == 1
+    assert page.locator('[data-a="roster:subtab:plan"]').count() == 1
+
+
+def test_defaults_to_workouts_and_dashboard_sub_tab(page):
+    _open_roster(page)
+    page.click('[data-a="roster:select-athlete"]')
+    page.wait_for_selector('[data-a="roster:open-workout"]')
+    assert 'active' in page.locator('[data-a="roster:subtab:dashboard"]').get_attribute('class')
+
+
+def test_conversations_sub_tab_shows_an_honest_non_functional_placeholder(page):
+    _open_roster(page)
+    page.click('[data-a="roster:select-athlete"]')
+    page.wait_for_selector('[data-a="roster:subtab:conversations"]')
+    page.click('[data-a="roster:subtab:conversations"]')
+    page.wait_for_selector('text=coming soon')
+
+    content = page.content()
+    assert 'Conversations' in content
+    # Not wired to anything -- no real workouts/feedback content or actions.
+    assert page.locator('[data-a="roster:open-workout"]').count() == 0
+    assert page.locator('[data-a="roster:reply-submit"]').count() == 0
+    assert page.locator('[data-a="roster:subtab:conversations"]').get_attribute('class').find('active') != -1
+
+
+def test_training_plan_sub_tab_shows_weeks_and_macro_without_the_load_chart(page):
+    _open_roster(page)
+    page.click('[data-a="roster:select-athlete"]')
+    page.wait_for_selector('[data-a="roster:subtab:plan"]')
+    page.click('[data-a="roster:subtab:plan"]')
+    # The macro block from ROSTER_PLAN_STUB -- `.macro .ph` (the block-name
+    # element), not a generic `text=Base` locator: that substring also
+    # matches the week's "focus" ("Base building") and the session's
+    # "purpose" ("Aerobic base"), one copy of which sits inside the
+    # collapsed-by-default `<details class="all-weeks">` accordion (the
+    # planned week here is in the past relative to "today", so it renders
+    # only via that accordion, not the This-week/Next-week cards) -- an
+    # ambiguous locator can resolve to a non-visible element there and hang
+    # `wait_for_selector`'s default visible-state wait forever.
+    page.wait_for_selector('.macro .ph')
+
+    content = page.content()
+    # The planned session from ROSTER_PLAN_STUB, inside the all-weeks
+    # accordion (it's in the past relative to "today", so it isn't a
+    # This-week/Next-week card) -- renderSession's day-row title is derived
+    # from the session's `purpose` text, not its sport label, so "Aerobic
+    # base" (not "Pool swim") is what actually appears here.
+    assert 'Aerobic base' in content
+    assert 'Base building' in content  # the week's `focus`
+    # No load chart in this sub-tab -- that stays in Workouts + Dashboard.
+    assert page.locator('svg').count() == 0
+
+
+def test_workouts_and_dashboard_sub_tab_shows_missed_sessions_now_that_plan_data_exists(page):
+    """Build 2's whole point for this sub-tab: the new coach-plan endpoint
+    means missed (skipped) sessions can now be derived on the coach side too,
+    not just completed workouts (Build 1's deliberately narrower scope)."""
+    _open_roster(page)
+    page.click('[data-a="roster:select-athlete"]')
+    page.wait_for_selector('[data-a="roster:open-workout"]')
+    assert 'Skipped' in page.content()
+
+
+def test_switching_sub_tabs_and_back_preserves_the_athlete_context(page):
+    _open_roster(page)
+    page.click('[data-a="roster:select-athlete"]')
+    page.wait_for_selector('[data-a="roster:subtab:plan"]')
+    page.click('[data-a="roster:subtab:plan"]')
+    page.wait_for_selector('.macro .ph')
+    page.click('[data-a="roster:subtab:dashboard"]')
+    page.wait_for_selector('[data-a="roster:open-workout"]')
+    assert 'Renee' in page.content()
 
 
 # --- Offline / mobile viewport standards --------------------------------------
