@@ -292,6 +292,61 @@ def test_wellness_rejects_out_of_range_scale():
         make_wellness(sleep_quality=0)
 
 
+def test_wellness_minimal_fields_validate_with_subjective_fields_none():
+    # A sync-only row: nothing subjective was ever surveyed for this day, and
+    # fabricating a 1-5 rating from objective data is not allowed (see
+    # load.wellness_composite). Only id/athlete_id/date are truly required.
+    wellness = Wellness(id=uuid.uuid4(), athlete_id=ATHLETE_ID, date=date(2026, 7, 6))
+    assert wellness.sleep_quality is None
+    assert wellness.sleep_hours is None
+    assert wellness.stress is None
+    assert wellness.soreness is None
+    assert wellness.motivation is None
+
+
+def test_wellness_resting_hr_and_hrv_only_validates():
+    wellness = Wellness(
+        id=uuid.uuid4(),
+        athlete_id=ATHLETE_ID,
+        date=date(2026, 7, 6),
+        resting_hr=52,
+        hrv=61.2,
+    )
+    assert wellness.resting_hr == 52
+    assert wellness.hrv == 61.2
+    assert wellness.sleep_quality is None
+
+
+def test_wellness_source_accepts_manual_and_intervals_sync():
+    manual = make_wellness(source="manual")
+    synced = make_wellness(source="intervals_sync")
+    assert manual.source == "manual"
+    assert synced.source == "intervals_sync"
+
+
+def test_wellness_source_rejects_unknown_value():
+    with pytest.raises(ValidationError):
+        make_wellness(source="garmin_direct")
+
+
+def test_wellness_source_omitted_from_dict_still_defaults_none():
+    # Backward compatibility: every existing Wellness YAML (written before
+    # `source` existed) has no `source` key at all -- must still validate,
+    # defaulting to None (unknown/manual provenance).
+    data = dict(
+        id=uuid.uuid4(),
+        athlete_id=ATHLETE_ID,
+        date=date(2026, 7, 6),
+        sleep_quality=4,
+        sleep_hours=7.5,
+        stress=2,
+        soreness=2,
+        motivation=4,
+    )
+    wellness = Wellness(**data)
+    assert wellness.source is None
+
+
 def test_macro_block_requires_known_name():
     with pytest.raises(ValidationError):
         MacroBlock(

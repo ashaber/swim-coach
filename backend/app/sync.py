@@ -47,7 +47,7 @@ from typing import Any
 from uuid import uuid4
 
 import httpx
-from swim_coach.models import Athlete, Workout
+from swim_coach.models import Athlete, Wellness, Workout
 from swim_coach.parse_files import PARSERS_BY_EXTENSION, WorkoutDraft
 from swim_coach.store import StoreInterface
 
@@ -55,6 +55,7 @@ from app.config import ConfigError, Settings
 from app.enrich import enrich_draft
 from app.logging_config import get_logger
 from app.store_factory import make_store
+from app.wellness_merge import merge_wellness
 
 log = get_logger("app.sync")
 
@@ -209,6 +210,32 @@ class IntervalsClient:
         response.raise_for_status()
         return response.json()
 
+    def get_wellness(self, *, oldest: date, newest: date) -> list[dict]:
+        """`GET /athlete/{id}/wellness.json` -- a JSON array of per-day
+        objects. Verified live 2026-07-12 (not re-independently-re-verified
+        by this build) that the date field is `id`, an ISO date string, per
+        intervals.icu's own convention; real fields seen on that call also
+        include `hrv`, `restingHR`, `sleepSecs`, `sleepScore`,
+        `sleepQuality`, `avgSleepingHR`, `readiness` -- of these, only
+        `hrv`/`restingHR` are ever mapped into this app's `Wellness` model
+        (see `app.wellness_merge` / `_ingest_wellness_day` below); the rest
+        are different scales/constructs than our own fields and must never
+        be mapped in (approved plan, Part A6 "explicitly out of scope").
+
+        Any field can come back `null` on a day the athlete's wearable
+        hasn't synced to intervals.icu yet -- callers must never let an
+        incoming `null` clobber an existing non-null stored value (see
+        `app.wellness_merge.merge_wellness`).
+        """
+        response = _request_with_retry(
+            self._client,
+            "GET",
+            f"{API_BASE}/athlete/{self._athlete_id}/wellness.json",
+            params={"oldest": oldest.isoformat(), "newest": newest.isoformat()},
+        )
+        response.raise_for_status()
+        return response.json()
+
     def push_workout_events(self, events: list[dict]) -> Any:
         """`POST /athlete/{id}/events/bulk?upsert=true` -- creates or updates
         one or more intervals.icu calendar events from `events` (a JSON
@@ -350,6 +377,39 @@ def _ingest_activity(
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+def _ingest_wellness_day(
+    day: dict,
+    *,
+    existing_by_date: dict[date, Wellness],
+    store: StoreInterface,
+    slug: str,
+    athlete_id: Any,
+) -> None:
+    """Merges one intervals.icu wellness-endpoint day into the store via
+    `merge_wellness`'s never-overwrite-nonnull-with-null policy. Raises on a
+    malformed day (e.g. no usable `id` date field) -- the caller
+    (`sync_athlete`) catches per-day so one bad day never aborts the rest."""
+    day_date = date.fromisoformat(day["id"])
+    existing = existing_by_date.get(day_date)
+    hrv = day.get("hrv")
+    resting_hr = day.get("restingHR")
+    if hrv is None and resting_hr is None and existing is None:
+        # An all-null day with no existing row is pure noise -- wellness_trend
+        # would filter it out anyway (see engine/swim_coach/load.py).
+        return
+    updates = {
+        "resting_hr": int(resting_hr) if resting_hr is not None else None,
+        "hrv": float(hrv) if hrv is not None else None,
+    }
+    # Only stamp source="intervals_sync" when creating a brand-new row --
+    # never overwrite an existing row's own source (a manual check-in stays
+    # "manual" even after a sync fills in its resting_hr/hrv).
+    source = "intervals_sync" if existing is None else None
+    wellness = merge_wellness(existing, updates, athlete_id=athlete_id, date=day_date, source=source)
+    store.save_wellness(slug, wellness)
+    existing_by_date[day_date] = wellness
+
+
 def sync_athlete(
     cfg: IntervalsAthleteConfig,
     *,
@@ -447,6 +507,48 @@ def sync_athlete(
             else:
                 summary["saved"] += 1
                 dedupe_keys.append((workout.date, workout.sport, workout.duration_min))
+
+        # --- wellness ingest (RHR/HRV auto-populate, see app.wellness_merge) ---
+        # Deliberately NOT reflected in `summary`'s keys -- keeps this dict's
+        # shape backward compatible for every existing caller/test. A
+        # failure here (endpoint error, or one malformed day) is fully
+        # isolated: it's logged and never fails the activity-sync run above.
+        try:
+            wellness_start = time.monotonic()
+            raw_wellness = client.get_wellness(oldest=oldest, newest=today)
+            wellness_duration_ms = round((time.monotonic() - wellness_start) * 1000, 2)
+            log.info(
+                "sync.wellness_listed",
+                slug=cfg.slug,
+                count=len(raw_wellness),
+                oldest=str(oldest),
+                newest=str(today),
+                duration_ms=wellness_duration_ms,
+            )
+            # One list_wellness() call for the whole run -- neither FileStore
+            # nor DbStore supports a single-date lookup, so this bounds the
+            # cost to one full scan per athlete per sync run, not one per
+            # day. Don't "fix" this into a per-day lookup without reason.
+            existing_by_date = {w.date: w for w in store.list_wellness(cfg.slug)}
+            for day in raw_wellness:
+                try:
+                    _ingest_wellness_day(
+                        day,
+                        existing_by_date=existing_by_date,
+                        store=store,
+                        slug=cfg.slug,
+                        athlete_id=profile.id,
+                    )
+                except Exception as exc:  # noqa: BLE001 - one bad day must not abort the rest
+                    log.error(
+                        "sync.wellness_day_failed",
+                        slug=cfg.slug,
+                        day=day.get("id") if isinstance(day, dict) else None,
+                        error=str(exc),
+                    )
+                    continue
+        except Exception as exc:  # noqa: BLE001 - a wellness-endpoint failure must not fail the sync run
+            log.error("sync.wellness_failed", slug=cfg.slug, error=str(exc))
 
         return summary
     finally:

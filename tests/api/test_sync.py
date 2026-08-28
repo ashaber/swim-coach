@@ -22,7 +22,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-from swim_coach.models import Workout
+from swim_coach.models import Wellness, Workout
 from swim_coach.store import FileStore
 
 from app.sync import (
@@ -169,6 +169,210 @@ def test_push_workout_events_posts_json_array_with_upsert_true() -> None:
     # bytes and compare against the original -- not just "field is present".
     assert base64.b64decode(sent_event["file_contents_base64"]) == fit_bytes
     assert result == [{"id": 9001}]
+
+
+# --- IntervalsClient.get_wellness -------------------------------------------
+
+
+def test_get_wellness_sends_basic_auth_and_window_params() -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["params"] = dict(request.url.params)
+        captured["auth_header"] = request.headers.get("authorization", "")
+        return httpx.Response(200, json=[])
+
+    client = IntervalsClient("i12345", "s3cr3t-key", transport=httpx.MockTransport(handler))
+    result = client.get_wellness(oldest=date(2026, 6, 28), newest=date(2026, 7, 12))
+
+    assert result == []
+    assert captured["path"] == "/api/v1/athlete/i12345/wellness.json"
+    assert captured["params"] == {"oldest": "2026-06-28", "newest": "2026-07-12"}
+    expected = "Basic " + base64.b64encode(b"API_KEY:s3cr3t-key").decode()
+    assert captured["auth_header"] == expected
+
+
+# --- sync_athlete: wellness ingest (RHR/HRV auto-populate) ------------------
+
+
+def _wellness_day(day_id: str, **overrides) -> dict:
+    # Real shape confirmed live 2026-07-12 (see sync.py module docstring
+    # and IntervalsClient.get_wellness) -- only "id"/"hrv"/"restingHR" are
+    # ever mapped into this app's Wellness model.
+    data = {
+        "id": day_id,
+        "hrv": 62.0,
+        "restingHR": 50,
+        "sleepSecs": 27000,
+        "sleepScore": 80,
+        "sleepQuality": 4,
+        "avgSleepingHR": 55,
+        "readiness": 90,
+    }
+    data.update(overrides)
+    return data
+
+
+def _handler_with_wellness(wellness_days: list, activities: list | None = None):
+    activities = activities if activities is not None else []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/activities"):
+            return httpx.Response(200, json=activities)
+        if request.url.path.endswith("/wellness.json"):
+            return httpx.Response(200, json=wellness_days)
+        return httpx.Response(404, json={"error": "not found"})
+
+    return handler
+
+
+def test_sync_athlete_new_wellness_row_gets_source_intervals_sync(athletes_dir: Path) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    cfg = IntervalsAthleteConfig(slug="renee", intervals_athlete_id="i999", api_key="test-key")
+    day = date(2026, 8, 20)
+    handler = _handler_with_wellness([_wellness_day(day.isoformat(), hrv=58.0, restingHR=49)])
+
+    sync_athlete(cfg, store=store, client=_make_client(handler))
+
+    saved = next(w for w in store.list_wellness("renee") if w.date == day)
+    assert saved.resting_hr == 49
+    assert saved.hrv == 58.0
+    assert saved.source == "intervals_sync"
+    assert saved.sleep_quality is None
+
+
+def test_sync_athlete_never_overwrites_existing_nonnull_with_null(athletes_dir: Path) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    profile = store.load_athlete("renee")
+    day = date(2026, 8, 20)
+    existing = Wellness(
+        id=uuid.uuid4(),
+        athlete_id=profile.id,
+        date=day,
+        resting_hr=48,
+        hrv=65.0,
+        source="manual",
+        sleep_quality=4,
+        sleep_hours=7.5,
+        stress=2,
+        soreness=2,
+        motivation=4,
+    )
+    store.save_wellness("renee", existing)
+    cfg = IntervalsAthleteConfig(slug="renee", intervals_athlete_id="i999", api_key="test-key")
+    # Wearable hasn't caught up yet -- both objective fields come back null.
+    handler = _handler_with_wellness([_wellness_day(day.isoformat(), hrv=None, restingHR=None)])
+
+    sync_athlete(cfg, store=store, client=_make_client(handler))
+
+    saved = next(w for w in store.list_wellness("renee") if w.date == day)
+    assert saved.resting_hr == 48
+    assert saved.hrv == 65.0
+    assert saved.source == "manual"  # sync never touches an existing row's source
+    assert saved.sleep_quality == 4  # subjective fields untouched
+
+
+def test_sync_athlete_fills_existing_null_fields(athletes_dir: Path) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    profile = store.load_athlete("renee")
+    day = date(2026, 8, 21)
+    existing = Wellness(
+        id=uuid.uuid4(),
+        athlete_id=profile.id,
+        date=day,
+        sleep_quality=4,
+        sleep_hours=7.5,
+        stress=2,
+        soreness=2,
+        motivation=4,
+        source="manual",
+    )
+    store.save_wellness("renee", existing)
+    cfg = IntervalsAthleteConfig(slug="renee", intervals_athlete_id="i999", api_key="test-key")
+    handler = _handler_with_wellness([_wellness_day(day.isoformat(), hrv=59.5, restingHR=47)])
+
+    sync_athlete(cfg, store=store, client=_make_client(handler))
+
+    saved = next(w for w in store.list_wellness("renee") if w.date == day)
+    assert saved.resting_hr == 47
+    assert saved.hrv == 59.5
+    assert saved.source == "manual"
+    assert saved.sleep_quality == 4  # untouched
+
+
+def test_sync_athlete_never_maps_subjective_fields(athletes_dir: Path) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    day = date(2026, 8, 22)
+    cfg = IntervalsAthleteConfig(slug="renee", intervals_athlete_id="i999", api_key="test-key")
+    handler = _handler_with_wellness(
+        [
+            _wellness_day(
+                day.isoformat(), hrv=60.0, restingHR=50, sleepScore=95, sleepQuality=5, readiness=99
+            )
+        ]
+    )
+
+    sync_athlete(cfg, store=store, client=_make_client(handler))
+
+    saved = next(w for w in store.list_wellness("renee") if w.date == day)
+    assert saved.sleep_quality is None
+    assert saved.sleep_hours is None
+    assert saved.stress is None
+    assert saved.soreness is None
+    assert saved.motivation is None
+
+
+def test_sync_athlete_all_null_day_with_no_existing_row_creates_nothing(athletes_dir: Path) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    baseline = {w.date for w in store.list_wellness("renee")}
+    day = date(2026, 8, 23)
+    assert day not in baseline
+    cfg = IntervalsAthleteConfig(slug="renee", intervals_athlete_id="i999", api_key="test-key")
+    handler = _handler_with_wellness([_wellness_day(day.isoformat(), hrv=None, restingHR=None)])
+
+    sync_athlete(cfg, store=store, client=_make_client(handler))
+
+    assert day not in {w.date for w in store.list_wellness("renee")}
+
+
+def test_sync_athlete_one_wellness_day_failure_does_not_stop_others(athletes_dir: Path) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    good_day = date(2026, 8, 24)
+    cfg = IntervalsAthleteConfig(slug="renee", intervals_athlete_id="i999", api_key="test-key")
+    # A malformed day (no "id" date field at all) must not abort the whole
+    # wellness ingest -- the following good day must still be saved.
+    bad_day = {"hrv": 55.0, "restingHR": 48}
+    handler = _handler_with_wellness(
+        [bad_day, _wellness_day(good_day.isoformat(), hrv=61.0, restingHR=46)]
+    )
+
+    sync_athlete(cfg, store=store, client=_make_client(handler))
+
+    saved = next((w for w in store.list_wellness("renee") if w.date == good_day), None)
+    assert saved is not None
+    assert saved.resting_hr == 46
+
+
+def test_sync_athlete_wellness_fetch_failure_leaves_activity_summary_unaffected(
+    athletes_dir: Path,
+) -> None:
+    # If the wellness endpoint itself errors (e.g. a transient 5xx that
+    # survives the retry), the pre-existing activity-sync summary shape/
+    # values must be completely unaffected -- backward compatibility with
+    # every sync_athlete test above this section.
+    store = FileStore(base_dir=athletes_dir)
+    cfg = IntervalsAthleteConfig(slug="renee", intervals_athlete_id="i999", api_key="test-key")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/activities"):
+            return httpx.Response(200, json=[])
+        if request.url.path.endswith("/wellness.json"):
+            return httpx.Response(500, json={"error": "boom"})
+        return httpx.Response(404, json={"error": "not found"})
+
+    summary = sync_athlete(cfg, store=store, client=_make_client(handler))
+    assert summary == {"listed": 0, "new": 0, "saved": 0, "skipped_duplicate": 0, "failed": 0}
 
 
 # --- sync_athlete: end-to-end against a real FileStore ---------------------

@@ -583,7 +583,7 @@ def ctl_atl_tsb_series(
 # --- wellness composite ---------------------------------------------------------
 
 
-def wellness_composite(entry: Wellness) -> float:
+def wellness_composite(entry: Wellness) -> float | None:
     """Daily wellness composite, scaled 1-5 (higher = better recovered).
 
     mean(sleep_quality, 6-stress, 6-soreness, motivation) -- each term is
@@ -592,18 +592,39 @@ def wellness_composite(entry: Wellness) -> float:
     better) before averaging. Coach judgment: this specific weighting/
     composite is Andrew's own scoring of standard wellness-questionnaire
     fields, not an [EVIDENCE] claim -- library/03-periodization.md.
+
+    Returns `None` if any of the four subjective fields is missing (e.g. a
+    sync-only row populated by backend/app/sync.py from intervals.icu, which
+    only ever carries resting_hr/hrv) -- never derive a fabricated composite
+    from a partial subjective set or from objective data alone, same "honest
+    None over fabricated number" convention as `monotony()`/
+    `wellness_baseline_deviation()` above.
     """
-    return (entry.sleep_quality + (6 - entry.stress) + (6 - entry.soreness) + entry.motivation) / 4
+    fields = (entry.sleep_quality, entry.stress, entry.soreness, entry.motivation)
+    if any(f is None for f in fields):
+        return None
+    sleep_quality, stress, soreness, motivation = fields
+    return (sleep_quality + (6 - stress) + (6 - soreness) + motivation) / 4
 
 
 def wellness_trend(entries: list[Wellness]) -> list[tuple[date, float]]:
-    """Date-sorted (date, wellness_composite) series, one point per entry.
+    """Date-sorted (date, wellness_composite) series, one point per entry
+    that has a usable composite.
 
     Convenience wrapper for the CLI's ``summarize`` command ("wellness
     trend") and for `/adapt`'s judgment review -- a raw series is more
     useful for spotting a slide than a single averaged number.
+
+    Entries with no usable composite (e.g. sync-only rows -- see
+    `wellness_composite`) are silently excluded, same "day with nothing to
+    report doesn't appear" convention `daily_loads` already uses, rather than
+    emitting a `None`-valued point.
     """
-    return sorted((entry.date, wellness_composite(entry)) for entry in entries)
+    return sorted(
+        (entry.date, composite)
+        for entry in entries
+        if (composite := wellness_composite(entry)) is not None
+    )
 
 
 # --- wellness baseline deviation (RHR / HRV fatigue cross-check) --------------
