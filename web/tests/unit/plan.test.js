@@ -156,6 +156,19 @@ describe('deriveSessionTitle', () => {
     const session = { purpose: 'dryland strength — optional mobility flow', structure: '(optional) mobility flow\n  - hip circles' };
     expect(deriveSessionTitle(session)).toBe('Dryland strength');
   });
+
+  it('falls back to the purpose-derived title for freeform prose with neither a "Main set:" line nor a bulleted list (real bug: was surfacing the warm-up line as the title)', () => {
+    // A coach-authored `structure` override that doesn't follow the
+    // "Main set:"/strength-bullet conventions (e.g. free-text authored
+    // directly in a chat session) isn't a strength session -- it must not
+    // fall into the strength-format first-line heuristic just because it
+    // also has no "Main set:" line.
+    const session = {
+      purpose: 'open water sighting practice — building comfort spotting buoys in chop',
+      structure: '600m easy warm-up, settling into rhythm.\n2400m steady at Z2, sighting every 6 strokes.\n300m easy cool-down.',
+    };
+    expect(deriveSessionTitle(session)).toBe('Open water sighting practice');
+  });
 });
 
 describe('parseStructureBlocks', () => {
