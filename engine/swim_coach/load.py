@@ -526,6 +526,27 @@ ATL_TIME_CONSTANT_DAYS = 7
 # direct access to Thomas, Mujika & Busso (2008)'s primary text is
 # available to confirm (or correct) the 19-day figure.
 
+RACE_DAY_TSB_BAND = {"low": 5, "high": 25}
+# TrainingPeaks/Joe Friel's commonly-cited cycling-coaching "race-day TSB"
+# reference range -- roughly +5 to +25 -- with that same convention's own
+# explicit caveat that individual variation is large (as much as ~15 points
+# between athletes) and masters athletes tend toward the higher end. This is
+# a CYCLING-coaching convention: never verified for swimming, never
+# peer-reviewed, and not itself an [EVIDENCE]/[ADAPTED] engine constant in
+# the sense the rest of this module's constants are -- carried here purely
+# as a loose reference band for `taper_search.py`'s exploratory simulation,
+# never as a hard target `plan.py`'s real periodization math optimizes for.
+# Mirrors `web/src/plan.js`'s `RACE_DAY_TSB_BAND` byte-for-byte (same value,
+# same caveat) -- that constant renders this same band on the athlete-facing
+# load chart; this one is the engine-side copy `taper_search.py` needed once
+# a Python-side consumer of the band existed. Kept as two separate constants
+# (not one imported across the JS/Python boundary, which doesn't exist in
+# this codebase) -- if the band value ever changes, update both. Same
+# underlying honesty standard as `CTL_TIME_CONSTANT_DAYS`/
+# `ATL_TIME_CONSTANT_DAYS` above (also cycling-borrowed, also unverified for
+# swimming): that caveat is repeated here in plain language rather than
+# papered over.
+
 
 def ctl_atl_tsb_series(
     daily_load_values: dict[date, float],
