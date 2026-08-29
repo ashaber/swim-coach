@@ -148,12 +148,24 @@ function cutAtFirstBoundary(text) {
  * - No structure at all (pool-coach placeholders, recovery, the long
  *   open-water swim): falls back to today's existing purpose-derived title,
  *   unchanged.
+ * - Freeform prose that matches NEITHER format (no "Main set:" line and no
+ *   bulleted list) -- e.g. a coach-authored `structure` override written
+ *   directly in a chat session, without following either convention: falls
+ *   back to the purpose-derived title rather than misreading it as
+ *   strength-format and surfacing its first line (typically the warm-up)
+ *   as the title. Real bug, caught live: an open-water session authored via
+ *   the `structure` override (as opposed to `ow_template`, whose
+ *   `render_prose` output always includes a real "Main set:" line) has no
+ *   bullets and no "Main set:" line, so without this check its warm-up
+ *   sentence became the displayed title.
  * - Defensive edge case: if a structure string is shaped unlike either format
  *   above closely enough that the cut leaves nothing (e.g. a strength-style
  *   first line that starts with "(" itself, cutting to an empty string
  *   before its first paren) -- not producible by either real generator
  *   today, but not guaranteed by the format either -- falls back to the same
  *   purpose-derived title rather than surfacing a blank one. */
+const BULLET_LINE_RE = /^\s*-\s/m;
+
 export function deriveSessionTitle(session) {
   const purposeTitle = () => {
     const { title } = splitPurpose(session.purpose);
@@ -166,11 +178,13 @@ export function deriveSessionTitle(session) {
       const derived = capitalize(cutAtFirstBoundary(mainSetMatch[1]).trim());
       return derived || purposeTitle();
     }
-    const firstLine = structure.split('\n')[0];
-    const parenIdx = firstLine.indexOf('(');
-    const text = parenIdx !== -1 ? firstLine.slice(0, parenIdx) : firstLine;
-    const derived = capitalize(text.trim());
-    return derived || purposeTitle();
+    if (BULLET_LINE_RE.test(structure)) {
+      const firstLine = structure.split('\n')[0];
+      const parenIdx = firstLine.indexOf('(');
+      const text = parenIdx !== -1 ? firstLine.slice(0, parenIdx) : firstLine;
+      const derived = capitalize(text.trim());
+      return derived || purposeTitle();
+    }
   }
   return purposeTitle();
 }
