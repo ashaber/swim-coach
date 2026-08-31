@@ -22,11 +22,12 @@ from app.context import (
     build_system,
     build_system_blocks,
     find_workout_by_id,
+    render_focused_session,
     render_focused_workout,
     route_library_files,
     summarize_rollup,
 )
-from fakes import make_event, make_wellness, make_workout
+from fakes import make_event, make_session, make_wellness, make_workout
 from swim_coach.load import (
     ctl_atl_tsb_series,
     daily_loads as compute_daily_loads,
@@ -603,3 +604,72 @@ def test_system_prefix_untouched_by_focused_workout(library_dir) -> None:
     # chats about the same message share the same cache entry by construction.
     message = "how did this workout go?"
     assert build_system(library_dir, message) == build_system(library_dir, message)
+
+
+# --- focused session (Plan tab's embedded "ask about this session" chat) ----
+# Mirrors the focused-workout section above exactly, for a PLANNED Session
+# instead of a completed Workout -- see `render_focused_session`'s docstring.
+
+
+def test_render_focused_session_includes_summary_fields() -> None:
+    session = make_session(
+        sport="swim_ow",
+        purpose="race-pace open water",
+        structure="continuous 90min @ css",
+        distance_m=6000,
+        duration_min=90.0,
+    )
+    text = render_focused_session(session)
+
+    assert "specific planned session the athlete is asking about" in text
+    assert str(session.id) in text
+    assert '"sport": "swim_ow"' in text
+    assert '"purpose": "race-pace open water"' in text
+    assert '"structure": "continuous 90min @ css"' in text
+    assert '"distance_m": 6000' in text
+    assert '"duration_min": 90.0' in text
+    assert '"status": "planned"' in text
+
+
+def test_render_focused_session_bare_session_renders_cleanly() -> None:
+    session = make_session(structure=None)
+    text = render_focused_session(session)
+
+    assert "specific planned session the athlete is asking about" in text
+    assert '"structure": null' in text
+    assert '"structured": null' in text
+
+
+def test_per_request_context_appends_focused_session_only_when_given(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    session = make_session(purpose="a very specific planned purpose")
+
+    without = build_per_request_context(store, "renee", expert_mode=False)
+    with_focus = build_per_request_context(
+        store, "renee", expert_mode=False, focused_session=session
+    )
+
+    assert "specific planned session the athlete is asking about" not in without
+    assert "specific planned session the athlete is asking about" in with_focus
+    assert str(session.id) in with_focus
+    # Appended after the aggregate rollup -- still per-request, never system.
+    assert with_focus.index("AGGREGATE") < with_focus.index("specific planned session")
+
+
+def test_build_messages_threads_focused_session_into_first_message(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    session = make_session(purpose="taper-week technique focus")
+
+    messages = build_messages(
+        store,
+        "renee",
+        message="what's today's session about?",
+        history=[],
+        expert_mode=False,
+        focused_session=session,
+    )
+
+    assert len(messages) == 1
+    assert "specific planned session the athlete is asking about" in messages[0]["content"]
+    assert "taper-week technique focus" in messages[0]["content"]
+    assert messages[0]["content"].endswith("what's today's session about?")

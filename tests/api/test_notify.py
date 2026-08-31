@@ -37,7 +37,11 @@ from swim_coach.models import Athlete, Feedback  # noqa: E402
 from swim_coach.store import FileStore  # noqa: E402
 
 from app.config import Settings  # noqa: E402
-from app.notify import RESEND_API_URL, notify_coaches_of_feedback  # noqa: E402
+from app.notify import (  # noqa: E402
+    RESEND_API_URL,
+    notify_athlete_of_coach_reply,
+    notify_coaches_of_feedback,
+)
 
 SLUG = "renee"
 
@@ -70,8 +74,15 @@ def _athlete() -> Athlete:
     return Athlete(id=uuid.uuid4(), slug=SLUG, name="Renee Example")
 
 
-def _coach_athlete(slug: str = "tim", name: str = "Tim Coach") -> Athlete:
-    return Athlete(id=uuid.uuid4(), slug=slug, name=name)
+def _coach_athlete(
+    slug: str = "tim", name: str = "Tim Coach", *, email_notifications_enabled: bool = True
+) -> Athlete:
+    return Athlete(
+        id=uuid.uuid4(),
+        slug=slug,
+        name=name,
+        email_notifications_enabled=email_notifications_enabled,
+    )
 
 
 def _feedback(athlete_id: uuid.UUID, **overrides) -> Feedback:
@@ -97,11 +108,19 @@ def _seeded_store(tmp_path: Path) -> tuple[FileStore, Athlete]:
     return store, athlete
 
 
-def _grant_coach(store: FileStore, athlete: Athlete, *, slug: str, name: str, email: str) -> Athlete:
+def _grant_coach(
+    store: FileStore,
+    athlete: Athlete,
+    *,
+    slug: str,
+    name: str,
+    email: str,
+    email_notifications_enabled: bool = True,
+) -> Athlete:
     """Saves a coach athlete, allowlists their email, and grants them active
     coach access to `athlete` -- the full real path a live coach goes
     through, exercised end to end (same as require_auth's own resolution)."""
-    coach = _coach_athlete(slug=slug, name=name)
+    coach = _coach_athlete(slug=slug, name=name, email_notifications_enabled=email_notifications_enabled)
     store.save_athlete(coach)
     store.add_allowed_email(email, athlete=coach.slug)
     store.create_coach_grant(coach_slug=coach.slug, athlete_slug=athlete.slug)
@@ -293,3 +312,206 @@ def test_unresolvable_coach_does_not_block_a_resolvable_one(tmp_path) -> None:
 
     assert len(captured) == 1
     assert captured[0]["body"]["to"] == ["tim@example.com"]
+
+
+# --- coach's own email_notifications_enabled gate ---------------------------
+#
+# `notify_coaches_of_feedback`'s first real behavior change (A4): a coach who
+# has toggled their own Settings-tab email notifications off must never be
+# emailed, independent of the athlete's own toggle (that's the athlete-
+# facing `notify_athlete_of_coach_reply` gate below, tested separately).
+
+
+def test_coach_with_notifications_disabled_is_skipped(tmp_path) -> None:
+    store, athlete = _seeded_store(tmp_path)
+    _grant_coach(
+        store,
+        athlete,
+        slug="tim",
+        name="Tim Coach",
+        email="tim@example.com",
+        email_notifications_enabled=False,
+    )
+    feedback = _feedback(athlete.id)
+
+    called = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        called.append(request)
+        return httpx.Response(200, json={})
+
+    notify_coaches_of_feedback(store, _settings(), feedback, SLUG, client=_client(handler))
+
+    assert called == []
+
+
+def test_coach_with_notifications_enabled_is_notified(tmp_path) -> None:
+    # Explicit true/true case (the default, but asserted explicitly here per
+    # this build's true/true, false-skips, mixed test matrix).
+    store, athlete = _seeded_store(tmp_path)
+    _grant_coach(
+        store,
+        athlete,
+        slug="tim",
+        name="Tim Coach",
+        email="tim@example.com",
+        email_notifications_enabled=True,
+    )
+    feedback = _feedback(athlete.id)
+
+    captured: list[dict] = []
+    notify_coaches_of_feedback(
+        store, _settings(), feedback, SLUG, client=_client(_handler_ok(captured))
+    )
+
+    assert len(captured) == 1
+    assert captured[0]["body"]["to"] == ["tim@example.com"]
+
+
+def test_mixed_coach_notification_toggles_only_notifies_the_enabled_one(tmp_path) -> None:
+    store, athlete = _seeded_store(tmp_path)
+    _grant_coach(
+        store,
+        athlete,
+        slug="tim",
+        name="Tim Coach",
+        email="tim@example.com",
+        email_notifications_enabled=False,
+    )
+    _grant_coach(
+        store,
+        athlete,
+        slug="andrew",
+        name="Andrew Shaber",
+        email="andrew@example.com",
+        email_notifications_enabled=True,
+    )
+    feedback = _feedback(athlete.id)
+
+    captured: list[dict] = []
+    notify_coaches_of_feedback(
+        store, _settings(), feedback, SLUG, client=_client(_handler_ok(captured))
+    )
+
+    assert len(captured) == 1
+    assert captured[0]["body"]["to"] == ["andrew@example.com"]
+
+
+# --- notify_athlete_of_coach_reply (A4's new athlete-facing notifier) -------
+#
+# The mirror direction: an ATHLETE is notified when a coach replies to their
+# own submitted question (`coach_reply_to_feedback`, routes/coach.py). Same
+# never-raises/no-api-key-no-op/client-injection conventions as
+# `notify_coaches_of_feedback` above, gated on the ATHLETE's own
+# `email_notifications_enabled` (not any coach's).
+
+
+def _replied_feedback(athlete_id: uuid.UUID, **overrides) -> Feedback:
+    return _feedback(
+        athlete_id,
+        type="question",
+        body="how should I fuel a 4hr swim?",
+        coach_reply="60-90g carbs/hr, start early.",
+        coach_reply_at=datetime.now(timezone.utc),
+        **overrides,
+    )
+
+
+def test_athlete_notify_no_api_key_makes_no_http_call(tmp_path) -> None:
+    store, athlete = _seeded_store(tmp_path)
+    store.add_allowed_email("renee@example.com", athlete=athlete.slug)
+    feedback = _replied_feedback(athlete.id)
+
+    called = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        called.append(request)
+        return httpx.Response(200, json={})
+
+    settings = _settings(resend_api_key=None)
+    notify_athlete_of_coach_reply(store, settings, feedback, SLUG, client=_client(handler))
+
+    assert called == []
+
+
+def test_athlete_notify_disabled_toggle_makes_no_http_call(tmp_path) -> None:
+    store = FileStore(base_dir=tmp_path)
+    athlete = Athlete(
+        id=uuid.uuid4(), slug=SLUG, name="Renee Example", email_notifications_enabled=False
+    )
+    store.save_athlete(athlete)
+    store.add_allowed_email("renee@example.com", athlete=athlete.slug)
+    feedback = _replied_feedback(athlete.id)
+
+    called = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        called.append(request)
+        return httpx.Response(200, json={})
+
+    notify_athlete_of_coach_reply(store, _settings(), feedback, SLUG, client=_client(handler))
+
+    assert called == []
+
+
+def test_athlete_notify_enabled_toggle_sends_email(tmp_path) -> None:
+    # Explicit true case -- default, but asserted explicitly per this
+    # build's true/true, false-skips, mixed test matrix.
+    store, athlete = _seeded_store(tmp_path)
+    assert athlete.email_notifications_enabled is True
+    store.add_allowed_email("renee@example.com", athlete=athlete.slug)
+    feedback = _replied_feedback(athlete.id)
+
+    captured: list[dict] = []
+    notify_athlete_of_coach_reply(
+        store, _settings(), feedback, SLUG, client=_client(_handler_ok(captured))
+    )
+
+    assert len(captured) == 1
+    call = captured[0]
+    assert call["url"] == RESEND_API_URL
+    assert call["body"]["to"] == ["renee@example.com"]
+    assert call["body"]["from"] == _settings().resend_from_email
+    assert "60-90g carbs/hr, start early." in call["body"]["text"]
+
+
+def test_athlete_notify_missing_allowlist_email_is_skipped_not_crashed(tmp_path) -> None:
+    store, athlete = _seeded_store(tmp_path)
+    # No add_allowed_email call at all -- defensive case, shouldn't normally
+    # happen since every athlete signs in via the allowlist.
+    feedback = _replied_feedback(athlete.id)
+
+    called = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        called.append(request)
+        return httpx.Response(200, json={})
+
+    # Must not raise.
+    notify_athlete_of_coach_reply(store, _settings(), feedback, SLUG, client=_client(handler))
+
+    assert called == []
+
+
+def test_athlete_notify_non_2xx_response_is_logged_and_does_not_raise(tmp_path) -> None:
+    store, athlete = _seeded_store(tmp_path)
+    store.add_allowed_email("renee@example.com", athlete=athlete.slug)
+    feedback = _replied_feedback(athlete.id)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(422, json={"message": "invalid from address"})
+
+    # Must not raise.
+    notify_athlete_of_coach_reply(store, _settings(), feedback, SLUG, client=_client(handler))
+
+
+def test_athlete_notify_transport_error_does_not_raise(tmp_path) -> None:
+    store, athlete = _seeded_store(tmp_path)
+    store.add_allowed_email("renee@example.com", athlete=athlete.slug)
+    feedback = _replied_feedback(athlete.id)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("boom", request=request)
+
+    # Must not raise.
+    notify_athlete_of_coach_reply(store, _settings(), feedback, SLUG, client=_client(handler))

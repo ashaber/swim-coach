@@ -512,6 +512,36 @@ class StoreContractTests:
         assert len(loaded) == 1
         assert loaded[0] == entry
 
+    def test_feedback_session_linkage_round_trips(self, store):
+        # session_date/session_sport (coach-mode Q&A build) must survive the
+        # real row<->model round trip exactly like workout_id already does --
+        # DbStore has no `data` JSONB blob for Feedback (unlike Athlete/
+        # Workout/etc.), so a new Feedback field needs an explicit column +
+        # explicit save_feedback/row_to_feedback wiring, not just a model
+        # change; this is the regression test for that gap.
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        entry = _feedback(
+            athlete.id,
+            type="question",
+            body="what's today's session about?",
+            workout_id=None,
+            session_date=date(2026, 7, 6),
+            session_sport="swim_pool",
+        )
+        store.save_feedback(entry)
+
+        loaded = store.list_feedback(athlete=SLUG)
+        assert len(loaded) == 1
+        assert loaded[0] == entry
+        assert loaded[0].session_date == date(2026, 7, 6)
+        assert loaded[0].session_sport == "swim_pool"
+
+        fetched = store.get_feedback(entry.id)
+        assert fetched is not None
+        assert fetched.session_date == date(2026, 7, 6)
+        assert fetched.session_sport == "swim_pool"
+
     def test_list_feedback_empty_when_none(self, store):
         store.save_athlete(_athlete())
         assert store.list_feedback(athlete=SLUG) == []

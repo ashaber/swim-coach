@@ -357,6 +357,71 @@ def test_coach_reply_service_principal_is_403(client, allowlist, store) -> None:
     assert response.status_code == 403
 
 
+# --- Athlete-notification scheduling (BackgroundTasks -> notify_athlete_of_
+# coach_reply) --------------------------------------------------------------
+#
+# Same dependency-injection seam convention as
+# test_feedback_route.py's `spy_notifier`/`get_notifier`: a spy override so
+# the assertion is "was the notifier scheduled with the right args" and no
+# real Resend API is ever reached.
+
+
+@pytest.fixture
+def spy_athlete_notifier(app):
+    from app.routes.coach import get_athlete_notifier
+
+    calls = []
+
+    def fake_notifier(store, settings, feedback, athlete):
+        calls.append({"feedback": feedback, "athlete": athlete})
+
+    app.dependency_overrides[get_athlete_notifier] = lambda: fake_notifier
+    yield calls
+    app.dependency_overrides.pop(get_athlete_notifier, None)
+
+
+def test_coach_reply_schedules_athlete_notification(
+    client, allowlist, store, google, spy_athlete_notifier
+) -> None:
+    import uuid as uuid_module
+
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    entry = _create_feedback(client, "renee")
+    headers = _tim_headers(client, allowlist, google)
+
+    response = client.patch(
+        f"/api/coach/athletes/renee/feedback/{entry['id']}",
+        json={"coach_reply": "60-90g carbs/hr, start early."},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert len(spy_athlete_notifier) == 1
+    assert spy_athlete_notifier[0]["athlete"] == "renee"
+    assert spy_athlete_notifier[0]["feedback"].id == uuid_module.UUID(entry["id"])
+    assert spy_athlete_notifier[0]["feedback"].coach_reply == "60-90g carbs/hr, start early."
+
+
+def test_coach_reply_notification_failure_does_not_break_response(
+    client, allowlist, store, google
+) -> None:
+    """Real-notifier integration check (no spy): with the REAL notifier
+    wired in and no RESEND_API_KEY configured (app_env's default), the
+    coach-reply save and HTTP response are completely unaffected -- the same
+    BackgroundTasks/never-raises guarantee test_feedback_route.py's
+    equivalent test asserts for the athlete->coach direction."""
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    entry = _create_feedback(client, "renee")
+    headers = _tim_headers(client, allowlist, google)
+
+    response = client.patch(
+        f"/api/coach/athletes/renee/feedback/{entry['id']}",
+        json={"coach_reply": "eat gels"},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["coach_reply"] == "eat gels"
+
+
 # --- GET /api/coach/athletes/{slug}/plan --------------------------------------
 
 

@@ -56,6 +56,17 @@ class Athlete(BaseModel):
     # means no such coach is on deck, so `generate_week` (plan.py) must
     # author real warm-up/main-set/cool-down structure for those pool-day
     # sessions itself instead of emitting a content-less placeholder.
+    email_notifications_enabled: bool = True
+    # Settings-tab toggle (coach-mode Q&A notification build): gates BOTH
+    # directions of the Resend email wiring in `backend/app/notify.py` --
+    # this athlete's own email as a Feedback recipient (coach-reply
+    # notifications) AND, when this athlete is acting as a COACH (coaches
+    # are themselves athlete accounts, see CoachGrant's docstring), this
+    # athlete's own email as a coach notified of a new question. Defaults
+    # True per this session's explicit decision -- zero behavior change for
+    # every existing profile.yaml (no key present) unless explicitly toggled
+    # off, same additive/no-schema_version-bump convention as
+    # `has_pool_coach` above.
 
 
 class Event(BaseModel):
@@ -548,6 +559,21 @@ class Feedback(BaseModel):
     # validating unchanged -- additive, no schema_version bump needed, same
     # pattern as `Workout.external_id` above.
     workout_id: UUID | None = None  # links a comment/question to a Workout
+    # `session_date`/`session_sport` link a question to a PLANNED Session
+    # instead of a completed Workout -- mutually exclusive with `workout_id`
+    # (enforced by the route, not here; see backend/app/routes/feedback.py).
+    # Linking by (date, sport) rather than a raw Session.id is deliberate:
+    # `Session.id` does NOT survive `replace_week_plan` (every session gets
+    # a fresh uuid4() on a full week regenerate -- see plan.py/tools.py), so
+    # a question linked by raw id would silently orphan the moment its week
+    # is regenerated. (date, sport) is the same stability fallback
+    # `quality.match_workout_to_session` already trusts for matching a
+    # completed workout to its planned session. Both optional/defaulted so
+    # every existing persisted Feedback row (with neither key) keeps
+    # validating unchanged -- additive, no schema_version bump, same
+    # pattern as `workout_id` above.
+    session_date: date | None = None
+    session_sport: Sport | None = None
     needs_human_review: bool = False  # independently settable by AI or athlete
     ai_provisional_answer: str | None = None
     coach_athlete_id: UUID | None = None  # which coach (an athlete_id) replied
