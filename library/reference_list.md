@@ -842,6 +842,79 @@ raw research input, not itself citable).
   not an independently validated exponent) — see `03-periodization.md`'s
   "Tiered session load" section for the full test/revisit note.
 
+### Shoulder rehab and return-to-swim (grounds `21-shoulder-health-and-load.md`)
+
+Triggered by a real acute shoulder injury this session; all verified by
+direct web search/fetch, not recalled from training data alone.
+
+- **✓ Desmeules F., Roy J.S., Lafrance S., Charron M., Dubé M.O., Dupuis
+  F., Beneciuk J.M., Grimes J., Kim H.M., Lamontagne M., McCreesh K.,
+  Shanley E., Vukobrat T., Michener L.A. (2025)** — "Rotator Cuff
+  Tendinopathy Diagnosis, Nonsurgical Medical Care, and Rehabilitation: A
+  Clinical Practice Guideline" — *Journal of Orthopaedic & Sports Physical
+  Therapy*, 55(4):235-274. Full bibliographic record confirmed via Europe
+  PMC (publisher page returned 403 to automated fetch) — title, all 14
+  authors, journal, year, volume, issue, page range, DOI, and PMID all
+  matched. Full text paywalled — no specific graded recommendation is
+  quoted anywhere in this library from this source, only its existence and
+  scope. `[ADAPTED: general-endurance]` Confidence: medium.
+- **✓ Wilk K.E., Bagwell M.S., Davies G.J., Arrigo C.A. (2020)** — "Return
+  to Sport Participation Criteria Following Shoulder Injury: A Clinical
+  Commentary" — *International Journal of Sports Physical Therapy*,
+  15(4):624-642. Full record confirmed via Europe PMC. Core argument:
+  return-to-sport is a sequential, criterion-based process (pain-free
+  active ROM, strength symmetry vs. the uninjured side, sport-specific
+  endurance/power, graded symptom-free re-exposure, psychological
+  readiness); overhead/microtrauma athletes need different testing than
+  macrotraumatic injuries. `[ADAPTED: general-endurance]` Confidence:
+  medium.
+- **✓ Page M.J., Green S., McBain B., Surace S.J., Deitch J., Lyttle N.,
+  Mrocki M.A., Buchbinder R. (2016)** — "Manual therapy and exercise for
+  rotator cuff disease" — *Cochrane Database of Systematic Reviews*, Issue
+  6, CD012224. 60 pooled trials (3,620 participants), though only 10
+  addressed the main comparisons; the single placebo-controlled trial
+  found no clinically meaningful pain/function difference vs. placebo,
+  with more (mild, short-lived) adverse events in the treatment group.
+  `[ADAPTED: general-endurance]` Confidence: low-medium — a genuinely
+  conflicting evidence area, see the Yeun entries below for the
+  countervailing (lower-quality) positive signal.
+- **✓ Yeun Y.R. (2017)** — "Effectiveness of massage therapy for shoulder
+  pain: a systematic review and meta-analysis" — *Journal of Physical
+  Therapy Science*, 29(5):936-940; **and** "Effectiveness of massage
+  therapy on the range of motion of the shoulder: a systematic review and
+  meta-analysis" — *Journal of Physical Therapy Science*, 29(2):365-369.
+  Pooled small studies (15/635 participants; 7/237 participants), mostly
+  active/no-treatment comparators (not placebo-controlled): short-term
+  pain reduction (SMD -1.08) and ROM gains. Both confirmed via journal
+  record this session. `[ADAPTED: general-endurance]` Confidence:
+  low-medium — see the Page et al. Cochrane entry above; the two results
+  together are the honest, conflicting picture, not a single verdict.
+- **✓ Page M.J., Green S., Mrocki M.A., Surace S.J., Deitch J., McBain B.,
+  Lyttle N., Buchbinder R. (2016)** — "Electrotherapy modalities for
+  rotator cuff disease" — *Cochrane Database of Systematic Reviews*, Issue
+  6, CD012225. 47 RCTs (2,388 participants); on TENS specifically: "we are
+  uncertain whether TENS is superior to placebo." `[ADAPTED:
+  general-endurance]` Confidence: low-medium.
+- **✓ Johnson M.I., Paley C.A., Jones G., Mulvey M.R., Wittkopf P.G.
+  (2022)** — "Efficacy and safety of transcutaneous electrical nerve
+  stimulation (TENS) for acute and chronic pain in adults: a systematic
+  review and meta-analysis of 381 studies (the meta-TENS study)" — *BMJ
+  Open*, 12(2):e051073. 381 RCTs, 24,532 participants: moderate-certainty
+  evidence pain intensity is lower during/immediately after TENS vs.
+  placebo (SMD -0.96). Confirmed via BMJ Open + PubMed record.
+  `[ADAPTED: general-endurance]` Confidence: low-medium — pain-agnostic
+  (not shoulder-specific), and see the Page et al. CD012225 entry above
+  for the shoulder-specific "uncertain" finding these two must be read
+  together with, not in isolation.
+- **~ Two isometric-exercise-in-tendinopathy systematic reviews (2020,
+  PMID 32818059; 2026, PMID 42203537)** — both located via live search,
+  PubMed/PMC records confirmed, abstract-level read only (not full text).
+  Cited only for the limiting claim that pain-guided isometrics are not
+  established as superior to isotonic exercise for pain — a popular
+  practice with a mixed evidence record, not an established analgesic
+  claim. `[ADAPTED: general-endurance]` Confidence: low. Marked `~`
+  (record-confirmed, not fully read) rather than `✓`.
+
 ## Cross-training load standardization (no-RPE/no-HR case)
 
 Curated for `20-cross-train-load-standardization.md`'s research pass:
