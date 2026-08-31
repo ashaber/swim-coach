@@ -178,3 +178,32 @@ sRPE-vs-HR/pace data once enough dual-logged sessions exist to fit a
 personal scaling factor -- but inventing an uncited scaling constant now
 would trade one silent distortion for another. Revisit once Renee logs
 more RPE alongside her watch data.
+
+**Also investigated and found unsupported:** whether tier 4's
+`DURATION_ONLY_ASSUMED_INTENSITY` should be split per activity type (e.g. a
+different assumed intensity for kayaking vs. walking vs. a generic gym
+session) instead of one flat constant for every cross-train workout with
+neither RPE nor usable HR data. `20-cross-train-load-standardization.md`
+covers this specific question in full: no rigorous, peer-reviewed, or
+widely-adopted industry standard exists for a per-activity-type assumed
+intensity in the zero-signal case, and the closest real analog (missing-RPE
+imputation research in rugby) found that fixed-value substitution -- the
+closest real-world approach to a per-modality constant -- was the *least*
+accurate method tested, with individualized historical-data models winning
+instead (a route this project can't use for a brand-new modality with zero
+prior signal). The uniform `DURATION_ONLY_ASSUMED_INTENSITY` constant
+therefore stays a deliberate, documented simplification, not an unexamined
+gap.
+
+## Unit: "AU" (arbitrary units)
+
+All four tiers above produce a **Training Load (AU) = duration (minutes) x
+CR-10 RPE score** for tier 1, generalized loosely to the other three tiers'
+own formulas (HR-based TRIMP, swim pace-IF, duration-only) -- "AU" names the
+result honestly as a nominal, project-internal scale, not a physical unit
+with external meaning (unlike, say, kilojoules). This label is a
+**Coach judgment** naming choice, not a citation -- it doesn't change any
+formula, constant, or existing load number, and it doesn't resolve the
+"tiers are not on one numeric scale" limitation documented above: an
+sRPE-tier AU value and a TRIMP-tier AU value are both honestly labeled AU,
+and still not directly comparable to each other for the reasons given above.
