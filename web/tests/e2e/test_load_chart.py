@@ -212,8 +212,10 @@ def test_chart_renders_on_the_dashboard_tab_with_real_mocked_data(page):
     assert page.locator('.load-chart-line-ctl').count() == 1
     assert page.locator('.load-chart-line-atl').count() == 1
     assert page.locator('.load-chart-line-tsb').count() == 1
-    # The race-day reference band, honestly captioned.
-    assert page.locator('.load-chart-band').count() == 1
+    # Both reference bands (race-ready, productive training), honestly captioned.
+    assert page.locator('.load-chart-band').count() == 2
+    assert page.locator('.load-chart-band-race').count() == 1
+    assert page.locator('.load-chart-band-productive').count() == 1
     assert 'cycling' in content.lower()
     assert 'not a swim-specific or peer-reviewed target' in content.lower()
     # The provisional-time-constant honesty caveat.
@@ -332,7 +334,7 @@ def test_chart_renders_on_the_coach_roster_view_for_a_granted_athlete(coach_page
     assert 'ATL' in content
     assert 'TSB' in content
     assert page.locator('.load-chart-line-ctl').count() == 1
-    assert page.locator('.load-chart-band').count() == 1
+    assert page.locator('.load-chart-band').count() == 2
 
 
 def test_wellness_baseline_deviation_renders_on_the_coach_roster_view(coach_page):

@@ -10,6 +10,7 @@ import {
   splitStructuredRationale, sessionZoneDistribution, formatZoneDistributionSummary,
   ZONE_GLOSSARY, TERM_GLOSSARY, ctlAtlTsbChartGeometry, raceWeekCategoryLabel,
   describeWellnessBaselineDeviation, describeCtlAtlTsbTrend, RACE_DAY_TSB_BAND,
+  PRODUCTIVE_TRAINING_TSB_BAND, LOAD_CHART_WINDOW_DAYS,
 } from './plan.js';
 import { TOOL_LABELS } from './chat.js';
 import { buildHistoryFeed } from './history.js';
@@ -838,6 +839,14 @@ function renderWellnessBaselineDeviation(deviation) {
  * ATL's own line color so the two axes read as visually paired with the
  * line each belongs to, exactly like the legend below the chart already
  * pairs a color with a name. */
+/** One shaded reference-band `<rect>`, shared by both the race-ready and
+ * productive-training bands in `renderLoadChartSvg` below -- same geometry
+ * shape (full plot width, `top`..`bottom` on the primary axis), differing
+ * only in which band's pixel bounds and CSS class they use. */
+function renderLoadChartBandRect(geo, top, bottom, className) {
+  return `<rect class="load-chart-band ${className}" x="${geo.plotLeft}" y="${top.toFixed(1)}" width="${geo.plotRight - geo.plotLeft}" height="${Math.max(0, bottom - top).toFixed(1)}" />`;
+}
+
 function renderLoadChartSvg(geo) {
   const yTickLines = geo.yTicks.map((t) => `
       <line x1="${geo.plotLeft}" y1="${t.y.toFixed(1)}" x2="${geo.plotRight}" y2="${t.y.toFixed(1)}" class="load-chart-gridline" />
@@ -850,8 +859,9 @@ function renderLoadChartSvg(geo) {
       <text x="${t.x.toFixed(1)}" y="${geo.plotBottom + 18}" class="load-chart-axis-label" text-anchor="middle">${esc(formatShortDate(parseIsoDate(t.label)))}</text>`).join('');
 
   return `
-    <svg class="load-chart-svg" viewBox="0 0 ${geo.width} ${geo.height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Training load chart: CTL and TSB on the left axis, ATL on its own independent right axis">
-      <rect class="load-chart-band" x="${geo.plotLeft}" y="${geo.bandTop.toFixed(1)}" width="${geo.plotRight - geo.plotLeft}" height="${Math.max(0, geo.bandBottom - geo.bandTop).toFixed(1)}" />
+    <svg class="load-chart-svg" viewBox="0 0 ${geo.width} ${geo.height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Training load chart: CTL and TSB on the left axis, ATL on its own independent right axis, with reference bands for productive training and race-day readiness">
+      ${renderLoadChartBandRect(geo, geo.productiveBandTop, geo.productiveBandBottom, 'load-chart-band-productive')}
+      ${renderLoadChartBandRect(geo, geo.bandTop, geo.bandBottom, 'load-chart-band-race')}
       ${yTickLines}
       ${yTickLabelsSecondary}
       ${xTickLabels}
@@ -916,11 +926,13 @@ function renderCtlAtlTsbNarrative(series) {
 
   if (trend.tsb) {
     const { value, band, date } = trend.tsb;
-    const bandPhrase = band === 'within'
-      ? `inside the +${RACE_DAY_TSB_BAND.low} to +${RACE_DAY_TSB_BAND.high} race-day reference band`
-      : band === 'below'
-        ? `below the +${RACE_DAY_TSB_BAND.low} to +${RACE_DAY_TSB_BAND.high} race-day reference band -- expected and fine while deep in training, not a warning sign; that band only means something close to race day`
-        : `above the +${RACE_DAY_TSB_BAND.low} to +${RACE_DAY_TSB_BAND.high} race-day reference band`;
+    const bandPhrase = {
+      'productive': `inside the ${PRODUCTIVE_TRAINING_TSB_BAND.low} to ${PRODUCTIVE_TRAINING_TSB_BAND.high} productive-training band -- expected and good while building, not a warning sign. Reaching the +${RACE_DAY_TSB_BAND.low} to +${RACE_DAY_TSB_BAND.high} race-ready band from here is the taper's job, not something that should already be true mid-block`,
+      'high-risk': `below the ${PRODUCTIVE_TRAINING_TSB_BAND.low} to ${PRODUCTIVE_TRAINING_TSB_BAND.high} productive-training band -- fatigue is accumulating faster than that convention recommends; worth a closer look at recent load and wellness together, not just this number alone`,
+      'grey-zone': `between the productive-training and race-ready bands -- neither deep in a training block nor freshening for a race`,
+      'race-ready': `inside the +${RACE_DAY_TSB_BAND.low} to +${RACE_DAY_TSB_BAND.high} race-day reference band`,
+      'transition': `above the +${RACE_DAY_TSB_BAND.low} to +${RACE_DAY_TSB_BAND.high} race-day reference band -- fresher than race day calls for, likely losing fitness if held here long`,
+    }[band];
     lines.push(`TSB (form) is currently ${formatTrendValue(value)} as of ${formatTrendDate(date)} -- ${bandPhrase}.`);
   }
 
@@ -982,7 +994,13 @@ export function renderLoadChart(load) {
   if (!load.data) return '';
 
   const series = load.data.ctl_atl_tsb || [];
-  const geo = ctlAtlTsbChartGeometry(series);
+  // Chart window: most recent LOAD_CHART_WINDOW_DAYS only, for mobile
+  // readability (see that constant's own doc comment in plan.js) --
+  // the narrative below intentionally keeps using the FULL `series`, not
+  // this slice, since its warmup/history-length read needs the athlete's
+  // real full history, not just what fits on screen.
+  const chartSeries = series.slice(-LOAD_CHART_WINDOW_DAYS);
+  const geo = ctlAtlTsbChartGeometry(chartSeries);
 
   const body = geo.isEmpty
     ? '<p class="sub">Not enough logged training yet to show a fitness/fatigue trend.</p>'
@@ -992,7 +1010,8 @@ export function renderLoadChart(load) {
         <span class="li"><span class="dot" style="background:var(${LOAD_CHART_LINE_COLOR_VAR.ctl})"></span>CTL (fitness) · left axis</span>
         <span class="li"><span class="dot" style="background:var(${LOAD_CHART_LINE_COLOR_VAR.atl})"></span>ATL (fatigue) · right axis</span>
         <span class="li"><span class="dot" style="background:var(${LOAD_CHART_LINE_COLOR_VAR.tsb})"></span>TSB (form) · left axis</span>
-        <span class="li"><span class="dot load-chart-band-dot"></span>Race-day TSB reference band</span>
+        <span class="li"><span class="dot load-chart-band-dot-productive"></span>Productive-training TSB reference band</span>
+        <span class="li"><span class="dot load-chart-band-dot-race"></span>Race-day TSB reference band</span>
       </div>`;
 
   const narrative = geo.isEmpty ? '' : renderCtlAtlTsbNarrative(series);
@@ -1004,7 +1023,7 @@ export function renderLoadChart(load) {
       ${narrative}
       <details class="load-chart-methodology">
         <summary>How this chart works</summary>
-        <p class="load-chart-note">CTL ("fitness") and ATL ("fatigue") are 42-day/7-day exponentially weighted averages of daily training load; TSB ("form") is CTL minus ATL. These time constants are the standard cycling/TrainingPeaks convention, carried over as a starting point -- not yet verified for swimming specifically. The shaded band (+5 to +25 TSB) is a commonly-targeted range in cycling coaching practice on race day, not a swim-specific or peer-reviewed target -- individual variation is large, so your own best-performance history is a better guide than this generic band. CTL and TSB share the left axis; ATL plots against its own right axis -- a 42-day average has an inherently much smaller natural range than a 7-day one, so sharing one scale made CTL look flat next to ATL's swings even though nothing about the underlying numbers was wrong.</p>
+        <p class="load-chart-note">CTL ("fitness") and ATL ("fatigue") are 42-day/7-day exponentially weighted averages of daily training load; TSB ("form") is CTL minus ATL. These time constants are the standard cycling/TrainingPeaks convention, carried over as a starting point -- not yet verified for swimming specifically. The two shaded bands are the same convention's other commonly-cited zones: the lower one (${PRODUCTIVE_TRAINING_TSB_BAND.low} to ${PRODUCTIVE_TRAINING_TSB_BAND.high} TSB) is where productive training typically happens; the upper one (+${RACE_DAY_TSB_BAND.low} to +${RACE_DAY_TSB_BAND.high} TSB) is a commonly-targeted range in cycling coaching practice on race day. Like the time constants above, this is not a swim-specific or peer-reviewed target for either band -- individual variation is large, so your own best-performance history is a better guide than either generic band. The chart shows your most recent ${LOAD_CHART_WINDOW_DAYS} days, for mobile readability -- the trend notes above still draw on your full logged history. CTL and TSB share the left axis; ATL plots against its own right axis -- a 42-day average has an inherently much smaller natural range than a 7-day one, so sharing one scale made CTL look flat next to ATL's swings even though nothing about the underlying numbers was wrong.</p>
       </details>
       ${renderWellnessBaselineDeviation(load.data.wellness_baseline_deviation)}
     </div>`;
