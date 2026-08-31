@@ -321,3 +321,132 @@ Once a human has reviewed an `UNREVIEWED` topic file (e.g. `10-recovery-hrv.md`)
    `/app/library` at build time, so the live chat coach only sees the
    reviewed text after a backend redeploy (see "Deploying the backend"
    above). A library-only merge needs no redeploy for anything except that.
+
+## Training-load methodology (load, wellness, RPE)
+
+How this system measures training stress and recovery, and how confident to
+be in each piece. Full citations and constants live in
+`library/03-periodization.md`'s "Load monitoring" section — this is a
+map of that territory, not a replacement for it.
+
+### What's measured today
+
+- **Tiered session load** (`load.session_load`) — a workout's real training
+  load doesn't depend on whether the athlete bothered to survey it, so this
+  falls through four tiers of decreasing fidelity, the last always
+  returning a number (never `None`, never silently excluding a workout
+  from the day's total):
+  1. **sRPE** (`duration_min × RPE`) — Foster's method, the base unit
+     everything else is built from when a survey exists. Specifically
+     validated in swimmers (real correlation coefficients against TRIMP,
+     not just assumed to transfer from other sports).
+  2. **HR-based TRIMP** (Banister heart-rate-reserve training impulse) —
+     used when `avg_hr` plus a derivable `hr_max`/`hr_rest` are available;
+     sex-specific exponential weighting (0.64·e^(1.92x) men, 0.86·e^(1.67x)
+     women — many popular calculators wrongly apply the male coefficient to
+     both sexes). `hr_max` is estimated from the athlete's own observed
+     history; `hr_rest` from a short rolling average of logged readings,
+     falling back to a documented 60bpm default in the load-*under*-
+     estimating direction when no reading exists at all.
+  3. **Swim pace-based intensity** (a TSS-family formula) — used for swims
+     when tier 2 isn't available but both the workout's pace and the
+     athlete's CSS are known: `duration_hours × IF³ × 100`, where `IF =
+     css_pace / avg_pace`. Cubes the intensity factor rather than squaring
+     it (the cycling-TSS convention), per TrainingPeaks' own swim-specific
+     documentation — water resistance scales with speed faster than air.
+  4. **Duration-only fallback** — `duration_min × 5` (the 1-10 "somewhat
+     hard" midpoint), unconditional, last resort only.
+
+  This closed a real bug found in production: 62 of Renee's 63 real logged
+  workouts (synced from her watch, no subjective survey attached) had no
+  RPE and were being silently excluded from every downstream load signal.
+  RPE now adds *fidelity* on top of a real objective load — it never gates
+  whether one exists. Known limitation: the tiers aren't on one numeric
+  scale (a TRIMP-scored session typically reads as a third to a half of
+  what the same effort would score via sRPE) — `daily_loads` sums whatever
+  tier each workout resolves to anyway, since a real lower-fidelity number
+  still beats a silently excluded one, but this under-represents
+  HR/pace-scored sessions relative to sRPE-scored ones on a mixed day. See
+  `library/15-tiered-session-load.md` for full citations and the
+  hr_max/hr_rest derivation reasoning.
+- **ACWR** (`load.acute_chronic_ratio`, 7-day acute : 28-day chronic) — the
+  simple rolling-window load-spike signal already driving parts of `/adapt`.
+- **CTL / ATL / TSB** (`load.ctl_atl_tsb_series`) — the Banister
+  impulse-response model: exponentially-weighted "fitness" (CTL), "fatigue"
+  (ATL), and "form" (TSB = CTL − ATL). Read-only monitoring, surfaced via
+  `get_plan_summary` and a Plan-tab/coach-roster chart — deliberately not
+  wired into `plan.py`'s taper/periodization math.
+- **Wellness composite** (`load.wellness_composite`) — a Hooper &
+  Mackinnon-style daily check-in (sleep, stress, soreness, motivation),
+  already feeding `/adapt`'s judgment review.
+- **RHR/HRV baseline deviation** (`load.wellness_baseline_deviation`) — a
+  rolling acute-vs-chronic deviation for resting heart rate and
+  HRV, added as an independent, physiologically-measured cross-check against
+  the sRPE-derived CTL/ATL/TSB trend — kept as its own field, never blended
+  into one number, since it's corroboration, not a replacement.
+
+Every one of these follows the same design rule: **multiple independent
+signals, not one master number.** A single "readiness score" would hide
+exactly the disagreements (self-report vs. physiological measurement, or
+fitness eroding vs. fatigue clearing) that are the actual coaching signal.
+
+### Research gaps (honest, current as of this writing)
+
+- **sRPE's validity is well-supported; its reliability is more mixed.**
+  Swim-specific correlation with TRIMP is real, but session-RPE's
+  consistency (ICC) has been reported anywhere from ~0.55 to ~0.95
+  depending on sport/protocol, and no swim-specific *reliability* study was
+  found — only the swim-specific *validity* one. Validity and reliability
+  are different properties; don't conflate them.
+- **CTL/ATL time constants are borrowed from cycling, unverified for
+  swimming.** A swim-specific data point exists (elite swimmers training
+  45-50 km/week showing a ~19-day fatigue time constant, vs. the 7-day
+  cycling convention used here) but only via a secondary summary, not the
+  primary source — see `library/03-periodization.md`'s citation-debt entry.
+- **No validated adjustment found for sex, age, or cross-modal (e.g.
+  strength/cross-training vs. swim) load weighting.** Sex differences in
+  recovery are contested and inconsistent in the literature. Age-related
+  recovery decline is less settled than commonly assumed — much of it may
+  be a detraining confound, not age itself, in an athlete who stays
+  systematically trained. Multi-modal weighting has no validated scheme;
+  sRPE's cross-modal-agnostic design is the accepted simple answer, not a
+  gap to patch. None of these get a fabricated correction factor — an
+  athlete's own measured trajectory is the real individualization
+  mechanism.
+- **Taper duration literature is genuinely split, not just under-cited.**
+  A cross-sport meta-analysis (Bosquet et al. 2007) finds ~2 weeks optimal;
+  a swim-specific individualized model study (Thomas, Mujika & Busso 2008)
+  finds 33±16 days — closer to a month. There is no single correct
+  constant to substitute for the current provisional one; the real
+  individual optimum varies enormously, which is the actual argument for
+  building the CTL/ATL/TSB model rather than picking a different fixed
+  number.
+- **The race-day TSB reference band (+5 to +25) is a cycling-coaching
+  convention** (TrainingPeaks/Joe Friel), not swim-specific or
+  peer-reviewed, and the source itself notes individual variation up to 15
+  points between athletes. Rendered as a loose reference, never a target.
+
+### Roadmap
+
+**Shipped since this section was first written:** the CTL/ATL/TSB chart
+(Plan tab + coach roster view) and the RHR/HRV baseline-deviation
+cross-check alongside it; the tiered session-load fallback described
+above; a distinct Race-phase/week (carb-loading's real 36-72-hour window,
+honestly-caveated bodywork timing, race-specific logistics) layered onto
+the final taper week.
+
+- Resolve the CTL/ATL time-constant citation debt once the Thomas, Mujika &
+  Busso (2008) primary text is accessible (currently paywalled).
+- An athlete effort/wellness survey that compares *prescribed* relative
+  intensity against *reported* effort — the concrete mechanism this system
+  is missing to ever resolve `quality.py`'s `intensity_match` field out of
+  its permanent `"unknown"` state.
+- The taper-duration/individualization algorithm itself: using an
+  athlete's own CTL/ATL/TSB trajectory (once trusted) to size and time a
+  taper, rather than any fixed duration — cross-checked against the
+  athlete's own subjective effort/wellness reports, not either signal
+  alone.
+- A way to mark a life event (illness, travel, other disruption) and have
+  the plan adapt around it — e.g. treating a travel week like a recovery
+  week and re-ramping the weeks after it — rather than only ever adjusting
+  one session at a time.
