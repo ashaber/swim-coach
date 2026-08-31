@@ -301,11 +301,13 @@ def test_patch_workout_wrong_athlete_id_is_404(client) -> None:
 # --- D2: load_au/load_tier attached to every GET/POST /api/workouts response ----
 # `renee`'s real profile.yaml (see fixtures/conftest's ATHLETES_DIR copy) has
 # `css_pace_s_per_100m: 90.0` and no `sex` set -- used below to reach the
-# pace_if tier deterministically. hr_trimp (tier 2) is never reachable from
-# this route at all: routes/workouts.py calls `session_load` with no
-# hr_max/hr_rest kwargs (same documented limitation as
-# `quality.workout_quality` -- neither route loads full workout/wellness
-# history), so only srpe/pace_if/duration are exercised here.
+# pace_if tier deterministically. Unlike `quality.workout_quality` (a pure
+# function that only ever sees one workout, so it genuinely can't supply
+# hr_max/hr_rest), these two routes DO have full store access -- they now
+# load the athlete's full workout/wellness history the same way
+# `load.daily_loads` does (`estimate_hr_max`/`estimate_hr_rest`), so
+# hr_trimp (tier 2) is reachable here too when a workout has its own
+# avg_hr and at least one workout in history has max_hr logged.
 
 
 def test_create_workout_attaches_load_au_and_tier_srpe(client) -> None:
@@ -318,6 +320,35 @@ def test_create_workout_attaches_load_au_and_tier_srpe(client) -> None:
     body = response.json()
     assert body["load_tier"] == "srpe"
     assert body["load_au"] == 360.0  # duration_min * rpe
+
+
+def test_create_workout_attaches_load_au_and_tier_hr_trimp(client) -> None:
+    # No rpe, but a real avg_hr on this workout and a max_hr logged
+    # somewhere in the athlete's history (this same workout, here) --
+    # hr_rest has no wellness data to draw on, so it falls back to
+    # HR_REST_GENERIC_FALLBACK_BPM (60.0). HRR_fraction = (140-60)/(180-60)
+    # = 0.6667; TRIMP = 60 * 0.6667 * mean(male, female Banister weight at
+    # that fraction, since renee's profile has no `sex` set) ~= 98.4.
+    payload = _valid_payload(duration_min=60, avg_hr=140, max_hr=180)
+    del payload["rpe"]
+    response = client.post(
+        "/api/workouts?athlete=renee", json=payload, headers=auth_headers()
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["load_tier"] == "hr_trimp"
+    assert body["load_au"] == pytest.approx(98.4, abs=0.1)
+
+
+def test_list_workouts_attaches_load_au_and_tier_hr_trimp(client) -> None:
+    created = _create(client, rpe=None, duration_min=60, avg_hr=140, max_hr=180)
+    response = client.get("/api/workouts?athlete=renee", headers=auth_headers())
+    assert response.status_code == 200
+    body = response.json()
+    matching = [w for w in body if w["id"] == created["id"]]
+    assert len(matching) == 1
+    assert matching[0]["load_tier"] == "hr_trimp"
+    assert matching[0]["load_au"] == pytest.approx(98.4, abs=0.1)
 
 
 def test_create_workout_attaches_load_au_and_tier_pace_if(client) -> None:
