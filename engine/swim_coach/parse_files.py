@@ -54,7 +54,9 @@ class WorkoutDraft(BaseModel):
     distance_m: int = Field(ge=0)
     duration_min: float = Field(gt=0)
     avg_pace_s_per_100m: float | None = None
-    rpe: int | None = Field(default=None, ge=1, le=10)
+    # 0-10 Foster CR-10 modified-Borg scale, mirrors Workout.rpe -- see
+    # library/19-srpe-protocol.md.
+    rpe: int | None = Field(default=None, ge=0, le=10)
     sets: list[WorkoutSet] = Field(default_factory=list)
     planned_session_id: UUID | None = None
     raw_ref: str | None = None
@@ -86,6 +88,12 @@ class WorkoutDraft(BaseModel):
     # swim_coach.models. Set by parse_fit only (tcx/csv carry no sub-sport
     # detail); always None for swim_pool/swim_ow.
     sport_detail: str | None = None
+    # Mirrors Workout.started_at -- see that field's docstring in
+    # swim_coach.models. Set by parse_fit only, from the FIT session
+    # frame's own start_time when it's a real datetime (see parse_fit
+    # below); tcx/csv parsers don't extract an equivalent field and always
+    # leave this None.
+    started_at: datetime | None = None
 
 
 # --- shared helpers ------------------------------------------------------------------
@@ -973,6 +981,13 @@ def parse_fit(path: str | Path) -> WorkoutDraft:
         else None
     )
     detail = _sport_detail(session_sport, session_sub_sport, sport, avg_speed_mps, warnings)
+    # A4: the real FIT session start-time, when the device actually recorded
+    # one -- NOT `t0` above, which also falls back to the first record's
+    # timestamp when session.start_time is missing. `started_at` is
+    # specifically "did the FIT file give us a real session start time,"
+    # so it stays None in that fallback case rather than silently
+    # borrowing a different (looser) signal.
+    started_at = session_start_time if isinstance(session_start_time, datetime) else None
 
     return WorkoutDraft(
         date=workout_date,
@@ -992,6 +1007,7 @@ def parse_fit(path: str | Path) -> WorkoutDraft:
         series=series,
         elapsed_min=session_elapsed_s / 60 if session_elapsed_s is not None else None,
         sport_detail=detail,
+        started_at=started_at,
     )
 
 

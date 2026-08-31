@@ -156,3 +156,142 @@ def test_create_workout_rejects_bogus_source(client) -> None:
     )
     assert response.status_code == 422
     assert "error" in response.json()
+
+
+# --- PATCH /api/workouts/{workout_id} (A5: correcting rpe/notes after the fact) -----
+
+
+def _create(client, **overrides) -> dict:
+    response = client.post(
+        "/api/workouts?athlete=renee", json=_valid_payload(**overrides), headers=auth_headers()
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+def test_patch_workout_requires_auth(client) -> None:
+    created = _create(client)
+    response = client.patch(
+        f"/api/workouts/{created['id']}?athlete=renee", json={"rpe": 9}
+    )
+    assert response.status_code == 401
+
+
+def test_patch_workout_updates_rpe(client) -> None:
+    created = _create(client, rpe=6)
+    response = client.patch(
+        f"/api/workouts/{created['id']}?athlete=renee",
+        json={"rpe": 9},
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["rpe"] == 9
+    assert body["id"] == created["id"]
+
+    # persisted -- a subsequent GET reflects the correction
+    listed = client.get("/api/workouts?athlete=renee", headers=auth_headers()).json()
+    matching = [w for w in listed if w["id"] == created["id"]]
+    assert len(matching) == 1
+    assert matching[0]["rpe"] == 9
+
+
+def test_patch_workout_updates_notes(client) -> None:
+    created = _create(client, notes="original")
+    response = client.patch(
+        f"/api/workouts/{created['id']}?athlete=renee",
+        json={"notes": "corrected after the fact"},
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+    assert response.json()["notes"] == "corrected after the fact"
+
+
+def test_patch_workout_leaves_untouched_fields_alone(client) -> None:
+    created = _create(client, distance_m=3000, duration_min=60, rpe=6, notes="felt smooth")
+    response = client.patch(
+        f"/api/workouts/{created['id']}?athlete=renee",
+        json={"rpe": 8},
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["rpe"] == 8
+    assert body["distance_m"] == 3000
+    assert body["duration_min"] == 60
+    assert body["notes"] == "felt smooth"
+    assert body["sport"] == created["sport"]
+    assert body["date"] == created["date"]
+
+
+def test_patch_workout_ignores_disallowed_fields_silently(client) -> None:
+    created = _create(client, distance_m=3000)
+    response = client.patch(
+        f"/api/workouts/{created['id']}?athlete=renee",
+        json={"rpe": 7, "distance_m": 99999, "sport": "cross_train"},
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["rpe"] == 7
+    # distance_m/sport are not in the {"rpe", "notes"} allowlist -- silently
+    # ignored, not a 422 or an error.
+    assert body["distance_m"] == 3000
+    assert body["sport"] == created["sport"]
+
+
+def test_patch_workout_rejects_rpe_out_of_range(client) -> None:
+    created = _create(client)
+    response = client.patch(
+        f"/api/workouts/{created['id']}?athlete=renee",
+        json={"rpe": 11},
+        headers=auth_headers(),
+    )
+    assert response.status_code == 422
+    assert "error" in response.json()
+
+
+def test_patch_workout_accepts_rpe_zero(client) -> None:
+    created = _create(client)
+    response = client.patch(
+        f"/api/workouts/{created['id']}?athlete=renee",
+        json={"rpe": 0},
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+    assert response.json()["rpe"] == 0
+
+
+def test_patch_workout_unknown_id_is_404(client) -> None:
+    response = client.patch(
+        "/api/workouts/00000000-0000-0000-0000-000000000000?athlete=renee",
+        json={"rpe": 5},
+        headers=auth_headers(),
+    )
+    assert response.status_code == 404
+    assert "error" in response.json()
+
+
+def test_patch_workout_unknown_athlete_is_404(client) -> None:
+    created = _create(client)
+    response = client.patch(
+        f"/api/workouts/{created['id']}?athlete=nobody",
+        json={"rpe": 5},
+        headers=auth_headers(),
+    )
+    assert response.status_code == 404
+    assert "error" in response.json()
+
+
+def test_patch_workout_wrong_athlete_id_is_404(client) -> None:
+    # renee's workout id, patched against a real but different athlete
+    # (andrew) -- must never resolve, matching get_workout's slug+id
+    # scoping contract.
+    created = _create(client)
+    response = client.patch(
+        f"/api/workouts/{created['id']}?athlete=andrew",
+        json={"rpe": 5},
+        headers=auth_headers(),
+    )
+    assert response.status_code == 404
+    assert "error" in response.json()

@@ -733,6 +733,25 @@ raw research input, not itself citable).
   in the current model). Confidence: low (number), the citation itself:
   high. Test: revisit both the constant and this entry once the primary
   text is directly accessible.
+- **✓ Foster C., Florhaug J.A., Franklin J., Gottschall L., Hrovatin L.A.,
+  Parker S., Doleshal P., Dodge C. (2001)** — "A New Approach to
+  Monitoring Exercise Training" — *Journal of Strength and Conditioning
+  Research*, 15(1):109-115. The originating session-RPE (sRPE) paper:
+  validated a single global 0-10 post-exercise rating (a modified Borg
+  CR-10 category-ratio scale, verbal anchors 0=Rest/Nothing at all through
+  10=Maximal, with 6/8/9 left unanchored) multiplied by session duration
+  against an objective heart-rate-based training-impulse standard, across
+  cycle ergometry and basketball — a consistent relationship across both
+  modes, not itself a swim-specific validation. Verified by direct web
+  search this session (title/authors/journal/volume/issue/pages
+  confirmed via PubMed, the journal's own listing, and independent
+  citation indexes). `[ADAPTED: general-endurance]`, Confidence: high —
+  this is the foundational sRPE-method paper the swim-specific validity
+  study below (Wallace, Slattery & Coutts 2009) and reliability review
+  (Haddad et al. 2017) both build on. Grounds `19-srpe-protocol.md` (the
+  survey instrument: scale, anchors, single global question) as distinct
+  from this list's existing sRPE entries below, which ground the swim
+  load *formula*'s validity/reliability rather than the instrument itself.
 - **✓ Wallace L.K., Slattery K.M., Coutts A.J. (2009)** — "The Ecological
   Validity and Application of the Session-RPE Method for Quantifying
   Training Loads in Swimming" — *Journal of Strength and Conditioning

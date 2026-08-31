@@ -25,6 +25,7 @@ load `00-conventions.md` once per session to know how to read the tags.
 | `16-race-week.md` | The final taper week's own, more prescriptive checklist layered on top of `03`'s taper block (never touching its volume math): the 36-72h pre-race carbohydrate-loading window (Burke et al. 2011; Bussau et al. 2002, no depletion phase needed), the 3-5-day-out bodywork/massage window (Weerapong, Hume & Kolt 2005; Dakić et al. 2023 — modest soreness/psychological benefit, practitioner-convention timing), and a generic, event-data-driven athlete logistics checklist (travel/acclimatization, fueling-plan rehearsal, support-crew confirmation). Gated on an active, priority-"A" event matching the macro. **UNREVIEWED**, pending human review. |
 | `18-open-water-session-templates.md` | The open-water session-content template library (`ow_session_templates.py`): feed-window practice, negative-split pacing, chop/wind adaptation, sighting, breathing-pattern variation, back-to-back multi-day-stage fatigue simulation, taper activation, race dress rehearsal -- mostly Coach judgment (practitioner-convention session shapes, same category as `14`'s main-set menu), cross-referencing `08-ultra-feeding.md` (feeding rationale) and `06-long-swim-progression.md` (`multi_day_stage` back-to-back premise) rather than re-deriving evidence. Documents the `skill_scalable` vs `endurance_floor` duration-scaling design (Andrew's own applied-coaching insight: technique sessions compress fine under a taper, endurance/fueling sessions have a real minimum effective duration). Deliberately drops the source material's eyes-closed sighting drill as an avoidable safety risk. **UNREVIEWED**, pending human review. |
 | `17-wellness-load-integration.md` | Whether/how the independent RHR/HRV baseline-deviation cross-check (`load.py`'s `wellness_baseline_deviation`) should confirm or trigger an adjustment against the sRPE-derived CTL/ATL/TSB model (`ctl_atl_tsb_series`) — currently shown side by side, never combined. Multi-signal monitoring is well-supported (Bourdon et al. 2017; Rebelo et al. 2026) but no validated algorithmic disagreement rule exists anywhere in the literature, swim-specific or not; one concrete HRV numeric trigger exists (Plews et al. 2013's 0.5-SD-of-7-day-rolling-mean) but for a morning protocol this app doesn't have data for yet, and HRV's overreaching signature isn't even reliably a decrease (Bellenger et al. 2016). Ends with a scoped, not-yet-built recommendation: an informational agreement/contradiction flag, never an `action`-changing override. **UNREVIEWED**, pending human review. |
+| `19-srpe-protocol.md` | The Foster CR-10 modified-Borg session-RPE survey protocol (0-10 scale with verbal anchors, single global "how hard was your workout overall" question, ~30-min post-workout ask timing) behind `Workout.rpe`/`WorkoutDraft.rpe` -- the survey *instrument*, distinct from `15-tiered-session-load.md`'s load *formula* that consumes the resulting number. Foster et al. (2001), `[ADAPTED: general-endurance]`, confidence high, verified by direct web search. **UNREVIEWED**, pending human review. |
 | `reference_list.md` | **The canonical citation source.** Every claim in every file above resolves to an entry here (title + author + year), never a URL/ID — see its own header for why. |
 | `sample_pool_workout_traditional.md` | A real logged pool-coach workout sample (traditional/technique-focused notation) — reference material for `/log-workout`'s coach-text parser, not a research citation. |
 | `sample_pool_workout_openwater_focus.md` | A real logged pool-coach workout sample (open-water-focused notation) — same purpose as above. |
@@ -42,6 +43,7 @@ load `00-conventions.md` once per session to know how to read the tags.
 | "What's the structure of my additional/aerobic swim — warm-up, main set, cool-down?" | `14-swim-set-structure.md` (session composition on top of `04`'s zones; does not cover the Saturday long swim, see `06`) |
 | "Is my training load too high / monotonous?" | `03-periodization.md` (monotony, ACWR + its criticized-methodology caveat) |
 | "Why is my logged workout's load lower/higher than I expected?" / "why don't I have an RPE on this?" / HR-TRIMP or swim-pace load questions | `15-tiered-session-load.md` (the sRPE/HR-TRIMP/pace-IF/duration-only tiered fallback, and the cross-tier scale-mismatch caveat) |
+| "What does the RPE number mean?" / "why does the scale go from 0, not 1?" / when should I answer the how-hard-was-that survey | `19-srpe-protocol.md` (the Foster CR-10 scale, verbal anchors, and ~30-min post-workout ask timing) |
 | "Why does my kayak/bike/gym cross-train session get the same estimated load as any other cross-train session, regardless of how hard that specific activity actually is?" | `20-cross-train-load-standardization.md` (the no-RPE/no-HR per-modality-standardization question specifically; `15-tiered-session-load.md` for the tiered fallback itself) |
 | "How am I doing on compliance / consistency?" | `03-periodization.md` (compliance definition + thresholds) |
 | Fueling, feeding intervals, carb targets, the "wall at X minutes" question | `08-ultra-feeding.md` (in-session carbohydrate dose/gut-training, the 90-minute-wall hypotheses, post-swim rehydration) — cross-refs `13-reds-energy-availability.md` if acute fuelling fixes don't resolve a durability wall. `10-recovery-hrv.md`'s nutrition section still covers the post-exercise recovery-window slice specifically. |
@@ -76,13 +78,15 @@ is not the full `12`-tier "race execution / macro taper" topic, just the
 final taper week's own carb-load/bodywork/logistics checklist; `17` is a
 research-only answer to a specific developer question (does the RHR/HRV
 baseline-deviation cross-check ever confirm or trigger a load adjustment)
-and grounds no engine constant yet. `20` (cross-train load standardization)
+and grounds no engine constant yet. `19` documents the Foster CR-10
+session-RPE survey instrument itself (scale/anchors/ask-timing), distinct
+from `15`'s load-formula focus. `20` (cross-train load standardization)
 is similarly ad hoc — a research-only answer to a specific developer
 question (should the duration-only load fallback be split per cross-train
 activity type) that reached a negative verdict grounding the *absence* of a
 new engine constant, not a new one. `10` is human-reviewed (Oura
 device-trust pass, 2026-07-11); `07`, `11`, `08`, `13`, `14`, `15`, `16`,
-`17`, and `20` remain `UNREVIEWED` pending human review — `/coach` and
+`17`, `19`, and `20` remain `UNREVIEWED` pending human review — `/coach` and
 future readers should treat their claims as drafts, not settled grounding,
 until that review happens.
 `/coach` should say plainly when a question falls in one of the remaining

@@ -49,7 +49,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from pydantic import ValidationError
@@ -82,6 +82,15 @@ _CLIENT_SETTABLE_SOURCES = {"manual", "fit", "tcx", "csv"}
 # 10 MB is generous headroom while still bounding memory use per upload
 # (the whole file is read into memory -- see ingest_workout below).
 _MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+# A5: PATCH /api/workouts/{workout_id} is a narrow after-the-fact correction
+# surface, not a general update endpoint -- only these two fields are ever
+# accepted from the client, everything else in the payload is silently
+# dropped. Same allowlist style as _CLIENT_SETTABLE_SOURCES above (accept a
+# named set, not "everything except a denylist" like routes/athlete.py's
+# _SERVER_OWNED_FIELDS -- Workout has far more fields where a stray
+# client-supplied value would be far more consequential than on Athlete).
+_PATCHABLE_WORKOUT_FIELDS = {"rpe", "notes"}
 
 
 @router.post("/api/workouts")
@@ -120,6 +129,48 @@ async def create_workout(
 
     store.save_workout(athlete, workout)
     return workout.model_dump(mode="json")
+
+
+@router.patch("/api/workouts/{workout_id}")
+async def patch_workout(
+    workout_id: UUID,
+    payload: dict[str, Any],
+    request: Request,
+    athlete: str | None = Query(None),
+    principal: Principal = Depends(require_auth),
+) -> dict:
+    """Correct a previously logged workout's `rpe`/`notes` -- the two fields
+    an athlete realistically edits after the fact (a forgotten sRPE survey
+    answered late, a typo in notes). Same slug-scoped
+    load-merge-revalidate-save shape as routes/athlete.py's `PATCH
+    /api/athlete`, but an allowlist (only `rpe`/`notes` accepted) rather
+    than that route's denylist -- see `_PATCHABLE_WORKOUT_FIELDS`'s comment
+    for why. Reuses `store.save_workout` (no narrow `update_workout_rpe`
+    method) -- see that method's own docstring, which already documents
+    this exact "correcting a previously logged workout's notes/rpe" use.
+    """
+    settings = request.app.state.settings
+    athlete = resolve_athlete(principal, athlete)
+    store = make_store(settings)
+    try:
+        store.load_athlete(athlete)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"no such athlete: {athlete}") from exc
+
+    current = store.get_workout(athlete, workout_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail=f"no such workout: {workout_id}")
+
+    client_fields = {k: v for k, v in payload.items() if k in _PATCHABLE_WORKOUT_FIELDS}
+    merged = {**current.model_dump(mode="json"), **client_fields}
+
+    try:
+        updated = Workout(**merged)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    store.save_workout(athlete, updated)
+    return updated.model_dump(mode="json")
 
 
 @router.post("/api/workouts/sync")

@@ -364,13 +364,20 @@ class StoreContractTests:
     # --- workouts --------------------------------------------------------
 
     def test_workout_round_trip(self, store):
+        # `logged_at` is deliberately excluded from this equality check --
+        # DbStore derives it from the real `created_at` DB column at read
+        # time (a value FileStore has no equivalent for and always leaves
+        # None), so the two backends are NOT expected to agree on it. Every
+        # other field must still round-trip exactly. See
+        # test_store_db_mapping.py for logged_at's own dedicated DbStore
+        # coverage.
         athlete = _athlete()
         store.save_athlete(athlete)
         w = _workout(athlete.id, date(2026, 7, 6))
         store.save_workout(SLUG, w)
         loaded = store.list_workouts(SLUG)
         assert len(loaded) == 1
-        assert loaded[0] == w
+        assert loaded[0].model_dump(exclude={"logged_at"}) == w.model_dump(exclude={"logged_at"})
 
     def test_list_workouts_empty_when_none(self, store):
         store.save_athlete(_athlete())
@@ -429,6 +436,35 @@ class StoreContractTests:
         store.save_workout(SLUG, _workout(athlete.id, date(2026, 7, 20)))
         assert len(store.list_workouts(SLUG)) == 2
         assert len(store.list_workouts(SLUG, since=None)) == 2
+
+    # --- workouts: get_workout (A5) ---------------------------------------
+
+    def test_get_workout_returns_matching_workout(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        w = _workout(athlete.id, date(2026, 7, 6))
+        store.save_workout(SLUG, w)
+        found = store.get_workout(SLUG, w.id)
+        assert found is not None
+        assert found.id == w.id
+        assert found.model_dump(exclude={"logged_at"}) == w.model_dump(exclude={"logged_at"})
+
+    def test_get_workout_returns_none_for_unknown_id(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        store.save_workout(SLUG, _workout(athlete.id, date(2026, 7, 6)))
+        assert store.get_workout(SLUG, uuid.uuid4()) is None
+
+    def test_get_workout_wrong_athlete_returns_none(self, store):
+        # A wrong-athlete id must never resolve -- proves the slug-scoping,
+        # not just id-lookup.
+        athlete = _athlete()
+        other = Athlete(id=uuid.uuid4(), slug="other-athlete", name="Other")
+        store.save_athlete(athlete)
+        store.save_athlete(other)
+        w = _workout(athlete.id, date(2026, 7, 6))
+        store.save_workout(SLUG, w)
+        assert store.get_workout("other-athlete", w.id) is None
 
     # --- wellness --------------------------------------------------------
 

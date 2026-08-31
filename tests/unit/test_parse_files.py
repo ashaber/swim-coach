@@ -8,7 +8,7 @@ tests/unit/fixtures/fit/README.md.
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -17,6 +17,7 @@ from swim_coach.models import Workout, WorkoutPause
 from swim_coach.parse_files import (
     WorkoutDraft,
     _fit_sport,
+    _fit_value,
     _is_cycling_sport,
     _merge_pauses,
     _sport_detail,
@@ -25,6 +26,7 @@ from swim_coach.parse_files import (
     parse_fit,
     parse_tcx,
 )
+import swim_coach.parse_files as parse_files_module
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 TCX_FIXTURE = FIXTURES_DIR / "tcx" / "sample_pool_swim.tcx"
@@ -263,6 +265,39 @@ def test_parse_fit_kayak_maps_to_cross_train():
     draft = parse_fit(FIT_KAYAK_FIXTURE)
     assert draft.sport == "cross_train"
     assert any("cross_train" in w for w in draft.warnings)
+
+
+# --- parse_fit: A4 started_at (real FIT session.start_time -> WorkoutDraft) ----------
+
+
+@pytest.mark.skipif(not FIT_FIXTURE.exists(), reason="no real pool .fit fixture")
+def test_parse_fit_with_start_time_populates_started_at():
+    draft = parse_fit(FIT_FIXTURE)
+    assert draft.started_at is not None
+    assert isinstance(draft.started_at, datetime)
+    # Real FIT start_time drives both `date` and `started_at` -- they must
+    # agree, not diverge.
+    assert draft.started_at.date() == draft.date
+
+
+@pytest.mark.skipif(not FIT_FIXTURE.exists(), reason="no real pool .fit fixture")
+def test_parse_fit_without_start_time_leaves_started_at_none(monkeypatch):
+    # No real fixture on hand lacks session.start_time (all four real .fit
+    # fixtures have one) -- so this isolates the "FIT file has no real
+    # session start_time" branch by faking away just that one field via the
+    # module's own _fit_value seam, on top of an otherwise-real .fit file.
+    # Proves the documented fallback: no crash, started_at stays None (never
+    # a fabricated timestamp), same warning path as the pre-existing
+    # "date defaulted to today" case.
+    def fake_fit_value(frame, name):
+        if name == "start_time":
+            return None
+        return _fit_value(frame, name)
+
+    monkeypatch.setattr(parse_files_module, "_fit_value", fake_fit_value)
+    draft = parse_fit(FIT_FIXTURE)
+    assert draft.started_at is None
+    assert any("start_time" in w for w in draft.warnings)
 
 
 @pytest.mark.skipif(not FIT_KAYAK_FIXTURE.exists(), reason="no real kayak .fit fixture")
