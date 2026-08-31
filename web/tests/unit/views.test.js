@@ -1963,6 +1963,24 @@ describe('renderLoadChart', () => {
     expect(html).toMatch(/Jul \d/);
   });
 
+  it('limits the chart itself to the most recent LOAD_CHART_WINDOW_DAYS, for mobile readability', () => {
+    // 40 daily points, 2026-07-01 .. 2026-08-09 -- well past the 28-day
+    // window. The chart's x-axis must not reach back to the series' real
+    // first date; it should start no earlier than day 13 (40 - 28 + 1).
+    const longSeries = Array.from({ length: 40 }, (_, i) => {
+      const d = new Date(Date.UTC(2026, 6, 1));
+      d.setUTCDate(d.getUTCDate() + i);
+      const iso = d.toISOString().slice(0, 10);
+      return [iso, 10 + i, 5 + i * 0.1, 5];
+    });
+    const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: longSeries }, error: null });
+    // The series' real first date (Jul 1) falls outside the 28-day window
+    // and must not appear as an x-axis tick label.
+    expect(html).not.toMatch(/Jul 1\b/);
+    // The series' real last date (Aug 9) is always in-window.
+    expect(html).toMatch(/Aug 9\b/);
+  });
+
   it('renders the race-day reference band with an honest, non-authoritative caption', () => {
     const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: readySeries }, error: null });
     expect(html).toContain('load-chart-band');
@@ -1972,6 +1990,13 @@ describe('renderLoadChart', () => {
     // from CLAUDE.md's evidence-discipline standard, applied to UI copy.
     expect(html.toLowerCase()).toContain('cycling');
     expect(html.toLowerCase()).toContain('not a swim-specific or peer-reviewed target');
+  });
+
+  it('also renders the productive-training reference band, distinct from the race-day one', () => {
+    const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: readySeries }, error: null });
+    expect(html).toContain('load-chart-band-productive');
+    expect(html).toContain('load-chart-band-race');
+    expect(html).toContain('Productive-training TSB reference band');
   });
 
   it('acknowledges the CTL/ATL time constants are provisional cycling-borrowed values', () => {

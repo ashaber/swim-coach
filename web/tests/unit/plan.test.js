@@ -7,10 +7,10 @@ import {
   parseStructureBlocks, parseMainSetIntervals, renderStructuredWorkout,
   splitStructuredRationale, sessionZoneDistribution, formatZoneDistributionSummary,
   stepCoachingCue, ZONE_GLOSSARY, TERM_GLOSSARY,
-  ctlAtlTsbChartGeometry, RACE_DAY_TSB_BAND, raceWeekCategoryLabel,
+  ctlAtlTsbChartGeometry, RACE_DAY_TSB_BAND, PRODUCTIVE_TRAINING_TSB_BAND, raceWeekCategoryLabel,
   describeWellnessBaselineDeviation, WELLNESS_DEVIATION_CONCERNING_PCT,
   describeCtlAtlTsbTrend, CTL_COLD_START_DAYS, CTL_WARMED_UP_DAYS,
-  CTL_ATL_TREND_WINDOW_DAYS, CTL_TREND_FLAT_THRESHOLD,
+  CTL_ATL_TREND_WINDOW_DAYS, CTL_TREND_FLAT_THRESHOLD, LOAD_CHART_WINDOW_DAYS,
 } from '../../src/plan.js';
 
 describe('isoWeekMonday', () => {
@@ -1005,6 +1005,22 @@ describe('RACE_DAY_TSB_BAND', () => {
   });
 });
 
+describe('PRODUCTIVE_TRAINING_TSB_BAND', () => {
+  it('is the -30 to -10 PMC-convention "productive training"/"optimal" reference range', () => {
+    expect(PRODUCTIVE_TRAINING_TSB_BAND).toEqual({ low: -30, high: -10 });
+  });
+
+  it('sits entirely below RACE_DAY_TSB_BAND, with no overlap', () => {
+    expect(PRODUCTIVE_TRAINING_TSB_BAND.high).toBeLessThan(RACE_DAY_TSB_BAND.low);
+  });
+});
+
+describe('LOAD_CHART_WINDOW_DAYS', () => {
+  it('is 28 days', () => {
+    expect(LOAD_CHART_WINDOW_DAYS).toBe(28);
+  });
+});
+
 describe('ctlAtlTsbChartGeometry', () => {
   it('returns isEmpty for a missing or empty series, without erroring', () => {
     expect(ctlAtlTsbChartGeometry([]).isEmpty).toBe(true);
@@ -1061,6 +1077,20 @@ describe('ctlAtlTsbChartGeometry', () => {
     expect(geo.bandBottom).toBeLessThanOrEqual(geo.plotBottom);
     // Band top (higher value, 25) plots above band bottom (lower value, 5).
     expect(geo.bandTop).toBeLessThan(geo.bandBottom);
+  });
+
+  it('the productive-training reference band is also always inside the plotted y-range, and sits below the race-day band', () => {
+    const series = [
+      ['2026-08-01', 30, 30, 0],
+      ['2026-08-02', 30, 30, 0],
+    ];
+    const geo = ctlAtlTsbChartGeometry(series);
+    expect(geo.productiveBandTop).toBeGreaterThanOrEqual(geo.plotTop);
+    expect(geo.productiveBandBottom).toBeLessThanOrEqual(geo.plotBottom);
+    expect(geo.productiveBandTop).toBeLessThan(geo.productiveBandBottom);
+    // Productive band (-30 to -10) is a lower TSB range than the race-day
+    // band (+5 to +25), so it must plot BELOW it (larger pixel y).
+    expect(geo.productiveBandTop).toBeGreaterThan(geo.bandBottom);
   });
 
   it('x ticks always include the first and last date', () => {
@@ -1186,7 +1216,9 @@ describe('describeCtlAtlTsbTrend', () => {
     expect(result.historyDays).toBe(1);
     expect(result.ctlTrend).toBeNull();
     expect(result.atlSpike).toBeNull();
-    expect(result.tsb).toEqual({ date: '2026-08-01', value: 3, band: 'below' });
+    // TSB=3 sits between the two named bands (productive tops out at -10,
+    // race-ready starts at +5) -- genuinely neither, i.e. 'grey-zone'.
+    expect(result.tsb).toEqual({ date: '2026-08-01', value: 3, band: 'grey-zone' });
     // 1 day is nowhere near CTL_COLD_START_DAYS -- definitely cold-start.
     expect(result.warmup).toBe('cold-start');
   });
@@ -1261,18 +1293,38 @@ describe('describeCtlAtlTsbTrend', () => {
     expect(result.atlSpike.toValue).toBe(20);
   });
 
-  it('classifies current TSB against RACE_DAY_TSB_BAND descriptively (below/within/above), independent of race proximity', () => {
-    const below = describeCtlAtlTsbTrend([['2026-08-01', 40, 60, -20]]);
-    expect(below.tsb.band).toBe('below');
-    const within = describeCtlAtlTsbTrend([['2026-08-01', 40, 30, 10]]);
-    expect(within.tsb.band).toBe('within');
-    const above = describeCtlAtlTsbTrend([['2026-08-01', 60, 20, 40]]);
-    expect(above.tsb.band).toBe('above');
-    // Boundary values are inclusive of the band.
-    const atLow = describeCtlAtlTsbTrend([['2026-08-01', 40, 35, RACE_DAY_TSB_BAND.low]]);
-    expect(atLow.tsb.band).toBe('within');
-    const atHigh = describeCtlAtlTsbTrend([['2026-08-01', 40, 15, RACE_DAY_TSB_BAND.high]]);
-    expect(atHigh.tsb.band).toBe('within');
+  it('classifies current TSB five-way against both named bands, independent of race proximity', () => {
+    // Below the productive-training band entirely -- fatigue outrunning
+    // even the "expected while building" convention.
+    const highRisk = describeCtlAtlTsbTrend([['2026-08-01', 40, 75, -40]]);
+    expect(highRisk.tsb.band).toBe('high-risk');
+    // Inside the productive-training band (-30 to -10) -- the real
+    // motivating example: Fitness 42 / Fatigue 59 / Form -17.
+    const productive = describeCtlAtlTsbTrend([['2026-08-01', 42, 59, -17]]);
+    expect(productive.tsb.band).toBe('productive');
+    // Between the two named bands -- genuinely neither.
+    const greyZone = describeCtlAtlTsbTrend([['2026-08-01', 40, 40, 0]]);
+    expect(greyZone.tsb.band).toBe('grey-zone');
+    // Inside the race-ready band.
+    const raceReady = describeCtlAtlTsbTrend([['2026-08-01', 40, 30, 10]]);
+    expect(raceReady.tsb.band).toBe('race-ready');
+    // Above the race-ready band -- fresher than useful.
+    const transition = describeCtlAtlTsbTrend([['2026-08-01', 60, 20, 40]]);
+    expect(transition.tsb.band).toBe('transition');
+
+    // Boundary values are inclusive of whichever named band they touch.
+    const atProductiveLow = describeCtlAtlTsbTrend(
+      [['2026-08-01', 40, 70, PRODUCTIVE_TRAINING_TSB_BAND.low]]
+    );
+    expect(atProductiveLow.tsb.band).toBe('productive');
+    const atProductiveHigh = describeCtlAtlTsbTrend(
+      [['2026-08-01', 40, 50, PRODUCTIVE_TRAINING_TSB_BAND.high]]
+    );
+    expect(atProductiveHigh.tsb.band).toBe('productive');
+    const atRaceLow = describeCtlAtlTsbTrend([['2026-08-01', 40, 35, RACE_DAY_TSB_BAND.low]]);
+    expect(atRaceLow.tsb.band).toBe('race-ready');
+    const atRaceHigh = describeCtlAtlTsbTrend([['2026-08-01', 40, 15, RACE_DAY_TSB_BAND.high]]);
+    expect(atRaceHigh.tsb.band).toBe('race-ready');
   });
 
   it('classifies warmup status by history length: cold-start below CTL_COLD_START_DAYS, warming-up up to CTL_WARMED_UP_DAYS, warmed-up beyond', () => {

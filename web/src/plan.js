@@ -1045,6 +1045,21 @@ export const TERM_GLOSSARY = [
  * caption rather than papered over here. */
 export const RACE_DAY_TSB_BAND = { low: 5, high: 25 };
 
+/** The same TrainingPeaks/WKO-lineage "Performance Management Chart"
+ * convention's OTHER named zone -- the one directly below the race-day
+ * band, roughly -30 to -10 TSB -- commonly labeled "Optimal"/"Productive
+ * Training" (this is the zone intervals.icu's own PMC-style chart shows
+ * under that name). Same honesty standard as `RACE_DAY_TSB_BAND` above:
+ * cycling-coaching practitioner convention, never verified for swimming,
+ * not an engine constant, rendered as a loose reference band with the
+ * caveat stated in the chart's own caption. Deliberately only these two
+ * named bands are drawn (not the full five-zone scheme some tools show --
+ * Transition/Fresh/Grey-Zone/Optimal/High-Risk) -- these are the two an
+ * athlete mid-block actually needs: "here's where productive training
+ * lives" and "here's where race-day freshness lives", with the taper being
+ * the deliberate move from one to the other. */
+export const PRODUCTIVE_TRAINING_TSB_BAND = { low: -30, high: -10 };
+
 const LOAD_CHART_WIDTH = 640;
 const LOAD_CHART_HEIGHT = 260;
 // `right` padding matches `left` (rather than the old, tighter 12px) --
@@ -1053,6 +1068,18 @@ const LOAD_CHART_HEIGHT = 260;
 const LOAD_CHART_PADDING = { top: 16, right: 34, bottom: 28, left: 34 };
 const LOAD_CHART_MAX_X_TICKS = 5;
 const LOAD_CHART_Y_TICK_COUNT = 4;
+
+/** Default chart window: the most recent 28 days of the series, not the
+ * athlete's whole history -- Coach judgment, for mobile readability (a
+ * chart spanning months of daily points compresses into an unreadable
+ * smear on a small screen). Applies to the CHART only, sliced by the
+ * caller (`views.js`'s `renderLoadChart`) right before it calls
+ * `ctlAtlTsbChartGeometry` -- deliberately NOT applied to
+ * `describeCtlAtlTsbTrend`'s `historyDays`/warmup classification, which
+ * needs the athlete's real full history to answer "has enough time
+ * actually accumulated for CTL/ATL to be meaningful," not just "how much
+ * of that history fits on screen." */
+export const LOAD_CHART_WINDOW_DAYS = 28;
 
 /** Rounds to one decimal -- CTL/ATL/TSB values arrive already 1-decimal
  * rounded from `summarize_rollup`, so axis labels derived from the data's
@@ -1127,7 +1154,8 @@ export function ctlAtlTsbChartGeometry(series, {
   // gets near them (e.g. deep in a build block) -- context, not just
   // "whatever fits today's data".
   const primaryValues = [
-    ...ctlValues, ...tsbValues, RACE_DAY_TSB_BAND.low, RACE_DAY_TSB_BAND.high, 0,
+    ...ctlValues, ...tsbValues, RACE_DAY_TSB_BAND.low, RACE_DAY_TSB_BAND.high,
+    PRODUCTIVE_TRAINING_TSB_BAND.low, PRODUCTIVE_TRAINING_TSB_BAND.high, 0,
   ];
   const primaryRawMin = Math.min(...primaryValues);
   const primaryRawMax = Math.max(...primaryValues);
@@ -1180,6 +1208,8 @@ export function ctlAtlTsbChartGeometry(series, {
     tsbPoints: toPoints(tsbValues, yFor),
     bandTop: yFor(RACE_DAY_TSB_BAND.high),
     bandBottom: yFor(RACE_DAY_TSB_BAND.low),
+    productiveBandTop: yFor(PRODUCTIVE_TRAINING_TSB_BAND.high),
+    productiveBandBottom: yFor(PRODUCTIVE_TRAINING_TSB_BAND.low),
     xTicks,
     yTicks,
     yTicksSecondary,
@@ -1277,14 +1307,35 @@ function classifyCtlWarmup(historyDays) {
  *     `CTL_ATL_TREND_WINDOW_DAYS` days (falling back to the two most
  *     recent points if the window doesn't contain at least two):
  *     `{ fromDate, toDate, fromValue, toValue, direction: 'up' | 'down' | 'flat' }`.
- *   - `tsb`: `null` only when `!hasData`. Otherwise
- *     `{ date, value, band: 'below' | 'within' | 'above' }` classifying
- *     the latest TSB against `RACE_DAY_TSB_BAND` -- purely descriptive,
- *     NOT a verdict on whether the athlete "should" currently be in that
- *     band (see `RACE_DAY_TSB_BAND`'s own doc comment: it's a race-day
- *     reference, not a general target). Callers must frame a `'below'`
- *     mid-build reading as expected, not as a warning.
+ *   - `tsb`: `null` only when `!hasData`. Otherwise `{ date, value, band }`
+ *     classifying the latest TSB against BOTH named bands
+ *     (`RACE_DAY_TSB_BAND`, `PRODUCTIVE_TRAINING_TSB_BAND`), five-way,
+ *     ascending by TSB value: `'high-risk'` (below the productive band --
+ *     fatigue accumulating faster than the productive-training convention
+ *     recommends), `'productive'` (inside `PRODUCTIVE_TRAINING_TSB_BAND`
+ *     -- the expected, healthy place to be mid-block), `'grey-zone'`
+ *     (between the two named bands -- genuinely neither), `'race-ready'`
+ *     (inside `RACE_DAY_TSB_BAND`), `'transition'` (above it -- fresher
+ *     than race-day useful, likely losing fitness). Purely descriptive,
+ *     NOT a verdict on whether the athlete "should" currently be in any
+ *     given band (see each band constant's own doc comment: reference
+ *     ranges, not general targets) -- callers must frame a `'productive'`
+ *     mid-build reading as expected and good, not a warning, and frame the
+ *     move from `'productive'` to `'race-ready'` as the taper's whole job,
+ *     not something that should already be true mid-block.
  */
+/** Five-way TSB classification against the two named bands, ascending by
+ * value -- see `describeCtlAtlTsbTrend`'s `tsb.band` doc comment above for
+ * what each name means. Boundary values are inclusive of whichever named
+ * band they touch (matching the single-band convention this replaces). */
+function classifyTsbBand(value) {
+  if (value < PRODUCTIVE_TRAINING_TSB_BAND.low) return 'high-risk';
+  if (value <= PRODUCTIVE_TRAINING_TSB_BAND.high) return 'productive';
+  if (value < RACE_DAY_TSB_BAND.low) return 'grey-zone';
+  if (value <= RACE_DAY_TSB_BAND.high) return 'race-ready';
+  return 'transition';
+}
+
 export function describeCtlAtlTsbTrend(series) {
   if (!series || series.length === 0) {
     return {
@@ -1303,9 +1354,7 @@ export function describeCtlAtlTsbTrend(series) {
   const tsb = {
     date: lastPoint[0],
     value: lastTsb,
-    band: lastTsb < RACE_DAY_TSB_BAND.low
-      ? 'below'
-      : (lastTsb > RACE_DAY_TSB_BAND.high ? 'above' : 'within'),
+    band: classifyTsbBand(lastTsb),
   };
 
   if (n < 2) {

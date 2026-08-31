@@ -53,8 +53,9 @@
     .mast .mark { font-family: var(--display); font-size: 12px; letter-spacing: .07em; text-transform: uppercase;
       background: var(--brand-gradient); -webkit-background-clip: text; background-clip: text; color: transparent;
       font-weight: 800; display: inline-flex; align-items: center; gap: 9px; }
-    .mast .mark::before { content:""; width: 20px; height: 3px; border-radius: 2px;
-      background: linear-gradient(90deg, var(--accent), transparent); }
+    .mast .mark::before { content:""; width: 36px; height: 18px; flex: none;
+      background-image: url('/logo-mark.png'); background-size: contain;
+      background-repeat: no-repeat; background-position: left center; }
     .mast h1 { font-family: var(--display); font-size: 22px; line-height: 1.15; letter-spacing: -.02em;
       font-weight: 800; text-wrap: balance; margin-top: 10px; }
     .mast .sub { color: var(--ink-soft); margin-top: 8px; font-size: 15px; max-width: 60ch; }
@@ -172,7 +173,12 @@
        size. */
     .load-chart-panel { padding-bottom: 18px; }
     .load-chart-svg { width: 100%; height: auto; display: block; margin-top: 4px; }
-    .load-chart-band { fill: var(--accent); opacity: .12; }
+    /* Distinct from all three line colors (--accent/CTL, --c-strength/ATL,
+       --c-ow/TSB) and from each other -- --c-pool (blue) and --c-recovery
+       (sage) are otherwise-unused tokens in this chart, chosen specifically
+       so neither band is ever confusable with a line passing through it. */
+    .load-chart-band-race { fill: var(--c-pool); opacity: .22; }
+    .load-chart-band-productive { fill: var(--c-recovery); opacity: .22; }
     .load-chart-gridline { stroke: var(--line-soft); stroke-width: 1; }
     .load-chart-axis-label { font-family: var(--mono); font-size: 9px; fill: var(--ink-faint); }
     /* Dual y-axis readability fix (Build 1, web/training-dashboard-merge):
@@ -185,7 +191,8 @@
     .load-chart-axis-label-secondary { font-family: var(--mono); font-size: 9px; }
     .load-chart-line { fill: none; stroke-width: 2; }
     .load-chart-legend { margin-top: 10px; }
-    .load-chart-band-dot { background: var(--accent); opacity: .4; }
+    .load-chart-band-dot-race { background: var(--c-pool); }
+    .load-chart-band-dot-productive { background: var(--c-recovery); }
     /* The computed, athlete-specific "what the numbers say" trend
        narrative (views.js's renderCtlAtlTsbNarrative / plan.js's
        describeCtlAtlTsbTrend) -- deliberately styled like this app's
