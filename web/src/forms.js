@@ -239,6 +239,14 @@ export function profileFormFromAthlete(athlete) {
     })(),
     cssPace: formatSecondsToPace(athlete.css_pace_s_per_100m),
     poolDays: poolScheduleToDayMap(athlete.pool_schedule),
+    // B4 (coach-mode Q&A build): the Settings tab's "Email notifications"
+    // toggle -- `email_notifications_enabled` defaults `true` server-side
+    // (engine/swim_coach/models.py's Athlete field) for every existing/new
+    // athlete, so a genuinely missing/undefined value here (an old cached
+    // GET /api/athlete response predating this field) still prefills the
+    // checkbox checked, matching the backend's own default rather than
+    // silently defaulting to off.
+    emailNotificationsEnabled: athlete.email_notifications_enabled !== false,
   };
 }
 
@@ -270,6 +278,11 @@ export function serializeProfileForm(form) {
   if (cssPaceSeconds !== null) payload.css_pace_s_per_100m = cssPaceSeconds;
 
   payload.pool_schedule = dayMapToPoolSchedule(form.poolDays);
+
+  // B4: always sent (a plain boolean, unlike the numeric fields above that
+  // are omitted when unparseable/in-progress) -- there's no "invalid"
+  // checkbox state to guard against.
+  payload.email_notifications_enabled = !!form.emailNotificationsEnabled;
 
   return payload;
 }

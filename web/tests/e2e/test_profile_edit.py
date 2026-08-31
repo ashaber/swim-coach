@@ -83,11 +83,13 @@ def _grants_route(route):
     route.fulfill(status=200, content_type='application/json', body='[]', headers=CORS_HEADERS)
 
 
-def _athlete_route(get_body=None, patch_status=200, patch_body=None):
+def _athlete_route(get_body=None, patch_status=200, patch_body=None, patch_calls=None):
     """A single `**/api/athlete*` handler covering GET (prefill), PATCH
     (save) and the CORS preflight OPTIONS -- registering one route per test
     (rather than re-registering the same pattern with a second handler)
-    avoids relying on Playwright's route-precedence ordering."""
+    avoids relying on Playwright's route-precedence ordering. `patch_calls`
+    (a mutable list), when given, records each PATCH request's decoded JSON
+    body so a test can assert exactly what was sent."""
     get_json = json.dumps(get_body if get_body is not None else PROFILE_FIXTURE)
     patch_json = json.dumps(patch_body if patch_body is not None else PROFILE_FIXTURE)
 
@@ -98,6 +100,8 @@ def _athlete_route(get_body=None, patch_status=200, patch_body=None):
         elif method == 'GET':
             route.fulfill(status=200, content_type='application/json', body=get_json, headers=CORS_HEADERS)
         elif method == 'PATCH':
+            if patch_calls is not None:
+                patch_calls.append(json.loads(route.request.post_data or '{}'))
             route.fulfill(status=patch_status, content_type='application/json', body=patch_json, headers=CORS_HEADERS)
         else:
             route.fulfill(status=404, headers=CORS_HEADERS)
@@ -190,6 +194,45 @@ def test_profile_form_prefills_from_get_athlete(page):
     assert page.is_checked('[data-form="profile"][data-day="wednesday"]')
     assert page.is_checked('[data-form="profile"][data-day="friday"]')
     assert not page.is_checked('[data-form="profile"][data-day="tuesday"]')
+
+
+# --- B4 (coach-mode Q&A build): "Email notifications" toggle -----------------
+
+def test_email_notifications_checkbox_defaults_checked_when_the_field_is_absent(page):
+    # PROFILE_FIXTURE predates this field entirely -- prefilling checked
+    # matches Athlete.email_notifications_enabled's own server-side default
+    # (engine/swim_coach/models.py), not a silent opt-out.
+    page.route('**/api/athlete*', _athlete_route())
+
+    _configure_backend(page)
+    page.wait_for_selector('[data-form="profile"][data-field="name"]')
+    assert page.is_checked('[data-form="profile"][data-field="email_notifications_enabled"]')
+
+
+def test_email_notifications_checkbox_prefills_unchecked_when_explicitly_disabled(page):
+    page.route('**/api/athlete*', _athlete_route(
+        get_body={**PROFILE_FIXTURE, 'email_notifications_enabled': False},
+    ))
+
+    _configure_backend(page)
+    page.wait_for_selector('[data-form="profile"][data-field="name"]')
+    assert not page.is_checked('[data-form="profile"][data-field="email_notifications_enabled"]')
+
+
+def test_unchecking_email_notifications_and_saving_sends_it_disabled(page):
+    patch_calls = []
+    page.route('**/api/athlete*', _athlete_route(patch_calls=patch_calls))
+
+    _configure_backend(page)
+    page.wait_for_selector('[data-form="profile"][data-field="name"]')
+    assert page.is_checked('[data-form="profile"][data-field="email_notifications_enabled"]')
+
+    page.click('[data-form="profile"][data-field="email_notifications_enabled"]')
+    page.click('[data-a="profile:submit"]')
+
+    page.wait_for_selector('.conn-result.ok')
+    assert len(patch_calls) == 1
+    assert patch_calls[0]['email_notifications_enabled'] is False
 
 
 def test_profile_save_success_shows_saved_and_updates_form(page):

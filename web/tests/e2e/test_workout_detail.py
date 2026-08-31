@@ -123,6 +123,12 @@ def page(request, base_url):
         # assertion. This file doesn't care about the plan's content.
         ctx.route('**/api/plan*', _cors_route(200, 'application/json', PLAN_STUB))
         ctx.route('**/api/plan/load*', _cors_route(200, 'application/json', PLAN_LOAD_STUB))
+        # Coach-mode Q&A build: opening a workout detail now lazily fetches
+        # GET /api/feedback (main.js's maybeLoadFeedback) so the new
+        # Ask-the-coach section has data to filter -- unmocked, it fails on
+        # CORS the moment any test in this file opens a detail view, the
+        # same hazard every other route above already documents.
+        ctx.route('**/api/feedback*', _cors_route(200, 'application/json', '[]'))
         pg = ctx.new_page()
         js_errors: list[str] = []
         pg.on('pageerror', lambda e: js_errors.append(str(e)))
@@ -206,18 +212,24 @@ def test_open_detail_from_row_shows_all_sections(page):
     assert page.locator('[data-a="history:open"]').count() == 0
 
 
-def test_shows_the_coach_conversation_placeholder_alongside_the_real_ai_chat(page):
-    # Build 2: an honest, explicitly non-functional "coach conversation"
-    # placeholder sits alongside the athlete's real, working scoped AI chat
-    # (id="workout-chat") -- additive, not a replacement for it.
+def test_shows_the_real_ask_the_coach_section_alongside_the_real_ai_chat(page):
+    # Coach-mode Q&A build: the old, explicitly non-functional "coach
+    # conversation -- coming soon" placeholder is REPLACED by the real
+    # Ask-the-coach Q&A section (views.js's renderAskCoachSection) -- it
+    # sits alongside the athlete's real, working scoped AI chat
+    # (id="workout-chat"), unaffected by this change.
     _open_log_tab_with_workouts(page, [RICH_FIT_WORKOUT])
     page.click('.hist-row')
     page.wait_for_selector('[data-a="history:back"]')
 
-    assert page.locator('#coach-conversation').count() == 1
+    assert page.locator('#ask-coach').count() == 1
     content = page.content()
-    assert 'Coach conversation' in content
-    assert 'coming soon' in content
+    assert 'Ask your coach' in content
+    assert '#coach-conversation' not in content
+    assert 'coming soon' not in content
+    # A real, wired-up input box and submit button -- not a stub.
+    assert page.locator('[data-form="askCoach"][data-field="body"]').count() == 1
+    assert page.locator('[data-a="ask-coach:submit"]').count() == 1
     # The real AI chat is still there, untouched.
     assert 'Ask your coach about this workout' in content
     assert page.locator('#workout-chat-input').count() == 1

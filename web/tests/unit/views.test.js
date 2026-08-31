@@ -3,6 +3,7 @@ import {
   renderDashboardTab, renderSettingsTab, renderUpdateBanner, renderApp,
   renderTabBar, renderRosterTab, renderLoadChart,
   renderCr10SliderField, cr10AnchorLabel, loadTierLabel, renderWorkoutRow,
+  renderAskCoachSection, renderFeedbackTab,
 } from '../../src/views.js';
 import { isoWeekMonday, addDays, dateKey, formatShortDate } from '../../src/plan.js';
 import { HISTORY_DISPLAY_CAP } from '../../src/workouts.js';
@@ -453,19 +454,21 @@ describe('renderDashboardTab', () => {
     });
   });
 
-  describe('coach conversation placeholder (Build 2)', () => {
-    it('renders the honest "coming soon" placeholder alongside the real AI chat, distinct from it', () => {
+  describe('Ask-the-coach Q&A section (replaces the old coach-conversation placeholder)', () => {
+    it('renders the real Q&A section alongside the real AI chat, distinct from it', () => {
       const html = renderDashboardTab({
         ...DASHBOARD_BASE_ARGS,
         feed: feedOf([RICH_FIT_WORKOUT]),
         detailId: 'w-rich',
         workoutChat: { workoutId: 'w-rich', messages: [] },
+        askCoach: { feedback: [], form: { body: '' }, submit: { status: 'idle', error: null } },
       });
-      expect(html).toContain('id="coach-conversation"');
-      expect(html).toContain('Coach conversation');
-      expect(html).toContain('coming soon');
-      // Still has the real, working AI chat -- the placeholder is additive,
-      // not a replacement.
+      expect(html).toContain('id="ask-coach"');
+      expect(html).toContain('Ask your coach');
+      // The honest "coming soon" placeholder is gone -- replaced, not additive.
+      expect(html).not.toContain('id="coach-conversation"');
+      expect(html).not.toContain('coming soon');
+      // Still has the real, working AI chat -- unrelated, unaffected.
       expect(html).toContain('Ask your coach about this workout');
       expect(html).toContain('id="workout-chat-input"');
     });
@@ -476,9 +479,44 @@ describe('renderDashboardTab', () => {
         feed: feedOf([RICH_FIT_WORKOUT]),
         detailId: 'w-rich',
         workoutChat: null,
+        askCoach: { feedback: [], form: { body: '' }, submit: { status: 'idle', error: null } },
       });
-      expect(html).toContain('id="coach-conversation"');
+      expect(html).toContain('id="ask-coach"');
       expect(html).not.toContain('Ask your coach about this workout');
+    });
+
+    it('filters the raw feedback list down to just this workout, by workout_id', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS,
+        feed: feedOf([RICH_FIT_WORKOUT]),
+        detailId: 'w-rich',
+        workoutChat: null,
+        askCoach: {
+          feedback: [
+            { id: 'f1', body: 'about this workout', workout_id: 'w-rich' },
+            { id: 'f2', body: 'about a different workout', workout_id: 'w-other' },
+            { id: 'f3', body: 'a planned-session question', session_date: '2026-06-01', session_sport: 'swim_ow' },
+          ],
+          form: { body: '' },
+          submit: { status: 'idle', error: null },
+        },
+      });
+      expect(html).toContain('about this workout');
+      expect(html).not.toContain('about a different workout');
+      expect(html).not.toContain('a planned-session question');
+    });
+
+    it('renders no input box in read-only mode (form: null -- the coach roster call site)', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS,
+        feed: feedOf([RICH_FIT_WORKOUT]),
+        detailId: 'w-rich',
+        workoutChat: null,
+        askCoach: { feedback: [], form: null },
+      });
+      expect(html).toContain('id="ask-coach"');
+      expect(html).not.toContain('data-form="askCoach"');
+      expect(html).not.toContain('data-a="ask-coach:submit"');
     });
   });
 
@@ -1407,6 +1445,156 @@ describe('renderSettingsTab', () => {
     });
     expect(html).toContain('no such coach: nobody');
   });
+
+  // --- B4 (coach-mode Q&A build): "Email notifications" toggle ---
+
+  const profilePanelArgs = {
+    ...grantsBaseArgs,
+    profileLoad: { status: 'ready', error: null },
+    profileForm: {
+      name: 'Renee', dob: '', sex: '', heightFeet: '', heightInches: '', weightLb: '', cssPace: '',
+      poolDays: {}, emailNotificationsEnabled: true,
+    },
+  };
+
+  it('renders the email-notifications checkbox, checked when enabled', () => {
+    const html = renderSettingsTab(profilePanelArgs);
+    expect(html).toContain('data-form="profile"');
+    const match = /<input type="checkbox" data-form="profile" data-field="email_notifications_enabled"[^>]*>/.exec(html);
+    expect(match).not.toBeNull();
+    expect(match[0]).toContain('checked');
+  });
+
+  it('renders the email-notifications checkbox unchecked when disabled', () => {
+    const html = renderSettingsTab({
+      ...profilePanelArgs,
+      profileForm: { ...profilePanelArgs.profileForm, emailNotificationsEnabled: false },
+    });
+    const match = /<input type="checkbox" data-form="profile" data-field="email_notifications_enabled"[^>]*>/.exec(html);
+    expect(match[0]).not.toContain('checked');
+  });
+});
+
+describe('renderAskCoachSection', () => {
+  it('shows an empty-state message when there are no past questions', () => {
+    const html = renderAskCoachSection({ questions: [], form: { body: '' }, submit: { status: 'idle', error: null } });
+    expect(html).toContain('Nothing asked yet.');
+  });
+
+  it('renders the AI-provisional-answer state', () => {
+    const html = renderAskCoachSection({
+      questions: [{ id: 'f1', body: 'how hard should this be?', ai_provisional_answer: 'Zone 2, easy.', coach_reply: null, needs_human_review: false }],
+      form: { body: '' },
+      submit: { status: 'idle', error: null },
+    });
+    expect(html).toContain('how hard should this be?');
+    expect(html).toContain('AI provisional answer');
+    expect(html).toContain('Zone 2, easy.');
+    expect(html).not.toContain('Waiting on your coach');
+  });
+
+  it('renders the coach-reply state, preferring it over an AI answer when both are present', () => {
+    const html = renderAskCoachSection({
+      questions: [{
+        id: 'f1', body: 'how hard should this be?', ai_provisional_answer: 'Zone 2, easy.',
+        coach_reply: 'Push it a bit today.', needs_human_review: false,
+      }],
+      form: { body: '' },
+      submit: { status: 'idle', error: null },
+    });
+    expect(html).toContain('Your coach replied');
+    expect(html).toContain('Push it a bit today.');
+    expect(html).not.toContain('AI provisional answer');
+  });
+
+  it('renders the waiting-on-coach state when flagged for human review with no answer yet', () => {
+    const html = renderAskCoachSection({
+      questions: [{
+        id: 'f1', body: 'is this safe with my shoulder?', ai_provisional_answer: null,
+        coach_reply: null, needs_human_review: true,
+      }],
+      form: { body: '' },
+      submit: { status: 'idle', error: null },
+    });
+    expect(html).toContain('Waiting on your coach to reply.');
+    expect(html).not.toContain('AI provisional answer');
+    expect(html).not.toContain('Your coach replied');
+  });
+
+  it('renders a real input box and submit button when form is given', () => {
+    const html = renderAskCoachSection({ questions: [], form: { body: 'draft text' }, submit: { status: 'idle', error: null } });
+    expect(html).toContain('data-form="askCoach"');
+    expect(html).toContain('data-a="ask-coach:submit"');
+    expect(html).toContain('draft text');
+  });
+
+  it('omits the input box entirely when form is null (read-only)', () => {
+    const html = renderAskCoachSection({ questions: [], form: null });
+    expect(html).not.toContain('data-form="askCoach"');
+    expect(html).not.toContain('data-a="ask-coach:submit"');
+  });
+
+  it('disables the submit button and shows "Asking…" while submitting', () => {
+    const html = renderAskCoachSection({ questions: [], form: { body: 'x' }, submit: { status: 'submitting', error: null } });
+    const match = /<button[^>]*data-a="ask-coach:submit"[^>]*>([^<]*)<\/button>/.exec(html);
+    expect(match[0]).toContain('disabled');
+    expect(match[1]).toContain('Asking');
+  });
+
+  it('shows the submit error message when submit failed', () => {
+    const html = renderAskCoachSection({ questions: [], form: { body: 'x' }, submit: { status: 'error', error: 'the coach could not answer that just now' } });
+    expect(html).toContain('conn-result fail');
+    expect(html).toContain('the coach could not answer that just now');
+  });
+
+  it('escapes malicious question/answer content', () => {
+    const html = renderAskCoachSection({
+      questions: [{ id: 'f1', body: '<img src=x onerror=alert(1)>', ai_provisional_answer: '<script>bad</script>' }],
+      form: { body: '' },
+      submit: { status: 'idle', error: null },
+    });
+    expect(html).not.toContain('<img src=x');
+    expect(html).not.toContain('<script>bad');
+  });
+});
+
+describe('renderFeedbackTab (B2: answer visibility on the athlete\'s own Feedback tab)', () => {
+  const baseArgs = {
+    form: { type: 'feature_request', body: '' },
+    submit: { status: 'idle', message: null },
+    entriesStatus: 'ready',
+    backendConfigured: true,
+    online: true,
+  };
+
+  it('renders the AI-provisional-answer, coach-reply, and waiting-on-coach states', () => {
+    const html = renderFeedbackTab({
+      ...baseArgs,
+      entries: [
+        { id: 'f1', type: 'question', source: 'athlete', body: 'q1', status: 'open', created_at: '2026-08-20T00:00:00Z', ai_provisional_answer: 'AI says zone 2.', coach_reply: null, needs_human_review: false },
+        { id: 'f2', type: 'question', source: 'athlete', body: 'q2', status: 'answered', created_at: '2026-08-20T00:00:00Z', ai_provisional_answer: 'AI says push it.', coach_reply: 'Coach says ease off.', needs_human_review: false },
+        { id: 'f3', type: 'question', source: 'athlete', body: 'q3', status: 'open', created_at: '2026-08-20T00:00:00Z', ai_provisional_answer: null, coach_reply: null, needs_human_review: true },
+      ],
+    });
+    expect(html).toContain('AI says zone 2.');
+    expect(html).toContain('Coach says ease off.');
+    // The coach reply wins over the AI answer when both exist on one entry.
+    expect(html).not.toContain('AI says push it.');
+    expect(html).toContain('Waiting on your coach to reply.');
+  });
+
+  it('shows the linked session/workout context on a scoped question', () => {
+    const html = renderFeedbackTab({
+      ...baseArgs,
+      entries: [
+        { id: 'f1', type: 'question', source: 'athlete', body: 'about a session', status: 'open', created_at: '2026-08-20T00:00:00Z', session_date: '2026-08-10', session_sport: 'swim_pool' },
+        { id: 'f2', type: 'question', source: 'athlete', body: 'about a workout', status: 'open', created_at: '2026-08-20T00:00:00Z', workout_id: 'w-1' },
+        { id: 'f3', type: 'feature_request', source: 'athlete', body: 'unlinked', status: 'open', created_at: '2026-08-20T00:00:00Z' },
+      ],
+    });
+    expect(html).toContain('About a logged workout');
+    expect(html).toMatch(/About Pool swim on/);
+  });
 });
 
 describe('renderTabBar', () => {
@@ -1430,6 +1618,27 @@ describe('renderTabBar', () => {
     const html = renderTabBar('roster');
     const match = /<button[^>]*data-a="tab:roster"[^>]*>/.exec(html);
     expect(match[0]).toContain('active');
+  });
+
+  // B3 (coach-mode Q&A build): unread count badges.
+  it('renders no badge on either tab when both unread counts are 0/omitted', () => {
+    const html = renderTabBar('plan');
+    expect(html).not.toContain('badge-count');
+  });
+
+  it('renders a badge on the Feedback tab when feedbackUnread is positive', () => {
+    const html = renderTabBar('plan', { feedbackUnread: 3 });
+    const match = /<button[^>]*data-a="tab:feedback"[^>]*>[\s\S]*?<\/button>/.exec(html);
+    expect(match[0]).toContain('<span class="badge-count">3</span>');
+    // Not leaked onto an unrelated tab.
+    const rosterMatch = /<button[^>]*data-a="tab:roster"[^>]*>[\s\S]*?<\/button>/.exec(html);
+    expect(rosterMatch[0]).not.toContain('badge-count');
+  });
+
+  it('renders a badge on the My Athletes (roster) tab when rosterUnread is positive', () => {
+    const html = renderTabBar('plan', { rosterUnread: 2 });
+    const match = /<button[^>]*data-a="tab:roster"[^>]*>[\s\S]*?<\/button>/.exec(html);
+    expect(match[0]).toContain('<span class="badge-count">2</span>');
   });
 });
 
@@ -1591,10 +1800,13 @@ describe('renderRosterTab', () => {
     expect(html).not.toContain('data-a="roster:back"');
     // No embedded "ask your coach" chat -- that's an athlete-only feature.
     expect(html).not.toContain('Ask your coach about this workout');
-    // The honest coach-conversation placeholder IS shown here too (Build 2)
-    // -- distinct from the athlete-only AI chat just excluded above.
-    expect(html).toContain('id="coach-conversation"');
-    expect(html).toContain('coming soon');
+    // The real, read-only Ask-the-coach Q&A section IS shown here too
+    // (coach-mode Q&A build) -- distinct from the athlete-only AI chat just
+    // excluded above, and with no input box (coach replies stay in the
+    // roster's own Feedback section reply UI).
+    expect(html).toContain('id="ask-coach"');
+    expect(html).not.toContain('data-form="askCoach"');
+    expect(html).not.toContain('data-a="ask-coach:submit"');
   });
 
   describe('sub-tabs (Build 2: Conversations / Workouts + Dashboard / Training Plan)', () => {

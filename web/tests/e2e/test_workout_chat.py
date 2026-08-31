@@ -85,6 +85,12 @@ def page(request, base_url):
         # assertion. This file doesn't care about the plan's content.
         ctx.route('**/api/plan*', _cors_route(200, 'application/json', PLAN_STUB))
         ctx.route('**/api/plan/load*', _cors_route(200, 'application/json', PLAN_LOAD_STUB))
+        # Coach-mode Q&A build: opening a workout detail now lazily fetches
+        # GET /api/feedback (main.js's maybeLoadFeedback) so the new
+        # Ask-the-coach section has data to filter -- unmocked, it fails on
+        # CORS the moment any test in this file opens a detail view, the
+        # same hazard every other route above already documents.
+        ctx.route('**/api/feedback*', _cors_route(200, 'application/json', '[]'))
         pg = ctx.new_page()
         js_errors: list[str] = []
         pg.on('pageerror', lambda e: js_errors.append(str(e)))

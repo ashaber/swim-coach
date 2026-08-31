@@ -107,6 +107,13 @@ def page(request, base_url):
         ctx.route('**/api/plan/load*', lambda route: route.fulfill(
             status=200, content_type='application/json',
             body='{"athlete":"renee","weeks":12,"ctl_atl_tsb":[]}'))
+        # Coach-mode Q&A build: opening a session detail now lazily fetches
+        # GET /api/feedback (main.js's maybeLoadFeedback) so the new
+        # Ask-the-coach section has data to filter -- unmocked, it fails on
+        # CORS the moment any test in this file opens a detail view, the
+        # same hazard every other route above already documents.
+        ctx.route('**/api/feedback*', lambda route: route.fulfill(
+            status=200, content_type='application/json', body='[]'))
         pg = ctx.new_page()
         js_errors: list[str] = []
         pg.on('pageerror', lambda e: js_errors.append(str(e)))

@@ -7,6 +7,7 @@ import {
   pushSessionToIntervals,
   fetchMe, createGrant, listGrants, revokeGrant,
   listCoachedAthletes, fetchCoachWorkouts, fetchCoachFeedback, fetchCoachLoad, fetchCoachPlan, replyToCoachFeedback,
+  askAboutSession, askAboutWorkout,
 } from '../../src/api.js';
 
 function fakeFetch(body, { ok = true, status = 200 } = {}) {
@@ -436,6 +437,57 @@ describe('listFeedback', () => {
     expect(init.body).toBeUndefined();
     expect(init.headers.Authorization).toBe('Bearer tok');
     expect(result).toEqual({ ok: true, data: items });
+  });
+});
+
+describe('askAboutSession', () => {
+  it('POSTs to /api/feedback/questions with session_date/session_sport and no workout_id', async () => {
+    const created = {
+      id: 'f1', type: 'question', body: 'how hard should this be?', session_date: '2026-08-10', session_sport: 'swim_pool',
+    };
+    global.fetch = fakeFetch(created);
+
+    const result = await askAboutSession({
+      baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee',
+      date: '2026-08-10', sport: 'swim_pool', body: 'how hard should this be?',
+    });
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/feedback/questions?athlete=renee');
+    expect(init.method).toBe('POST');
+    expect(init.headers.Authorization).toBe('Bearer tok');
+    expect(JSON.parse(init.body)).toEqual({
+      session_date: '2026-08-10', session_sport: 'swim_pool', body: 'how hard should this be?',
+    });
+    expect(result).toEqual({ ok: true, data: created });
+  });
+
+  it('returns a normalized error on a non-2xx response', async () => {
+    global.fetch = fakeFetch({ error: 'the coach could not answer that just now' }, { ok: false, status: 502 });
+    const result = await askAboutSession({
+      baseUrl: 'https://api.example.com', token: 't', athlete: 'renee', date: '2026-08-10', sport: 'swim_pool', body: 'x',
+    });
+    expect(result).toEqual({ ok: false, error: 'the coach could not answer that just now', status: 502 });
+  });
+});
+
+describe('askAboutWorkout', () => {
+  it('POSTs to /api/feedback/questions with workout_id and no session_date/session_sport', async () => {
+    const created = { id: 'f2', type: 'question', body: 'why did this feel so hard?', workout_id: 'w-1' };
+    global.fetch = fakeFetch(created);
+
+    const result = await askAboutWorkout({
+      baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee',
+      workoutId: 'w-1', body: 'why did this feel so hard?',
+    });
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/feedback/questions?athlete=renee');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({ workout_id: 'w-1', body: 'why did this feel so hard?' });
+    expect(result).toEqual({ ok: true, data: created });
   });
 });
 

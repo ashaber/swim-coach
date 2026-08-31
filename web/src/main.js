@@ -20,6 +20,7 @@ import {
   downloadGarminFit,
   createGrant, listGrants, revokeGrant,
   listCoachedAthletes, fetchCoachWorkouts, fetchCoachFeedback, fetchCoachLoad, fetchCoachPlan, replyToCoachFeedback,
+  askAboutSession, askAboutWorkout,
 } from './api.js';
 import {
   serializeWorkoutForm, serializeWellnessForm, profileFormFromAthlete, serializeProfileForm,
@@ -36,6 +37,7 @@ import {
   createPwaUpdateState, markNeedRefresh, markOfflineReady,
   dismissNeedRefresh, dismissOfflineReady, triggerUpdate,
 } from './pwaUpdate.js';
+import { loadLastSeen, saveLastSeen, countUnread } from './unread.js';
 
 const appEl = document.getElementById('app');
 const ACTIVE_TAB_KEY = 'swimcoach_active_tab';
@@ -95,11 +97,31 @@ function createProfileForm() {
     poolDays: {
       monday: false, tuesday: false, wednesday: false, thursday: false, friday: false, saturday: false, sunday: false,
     },
+    // B4: defaults true, matching Athlete.email_notifications_enabled's own
+    // server-side default (engine/swim_coach/models.py) -- overwritten the
+    // moment loadProfile's real GET /api/athlete response lands
+    // (forms.js's profileFormFromAthlete).
+    emailNotificationsEnabled: true,
   };
 }
 
 function createFeedbackForm() {
   return { type: 'feature_request', body: '' };
+}
+
+// --- Ask-the-coach Q&A (coach-mode Q&A build) -------------------------------
+// The Plan tab's session detail and the Dashboard tab's workout detail share
+// this one flat form/submit slice -- only one detail view (of either kind)
+// is ever open at a time in the athlete's own tabs (same "one shared slot"
+// convention state.workoutRpeEdit/state.workoutChat already use), so there's
+// no need for two separate per-surface slices.
+
+function createAskCoachForm() {
+  return { body: '' };
+}
+
+function createAskCoachSubmit() {
+  return { status: 'idle', error: null };
 }
 
 // Coach mode Phase 1 (roster/grants surface). See applyAthleteSession /
@@ -296,6 +318,13 @@ const state = {
   // `editable` doc comment for why (PATCH /api/workouts is self-access
   // only, a coach session could never save it anyway).
   workoutRpeEdit: null,
+  // Coach-mode Q&A build: the Ask-the-coach draft/submit state shared by the
+  // Plan tab's session detail and the Dashboard tab's workout detail (see
+  // createAskCoachForm's doc comment for why one shared slice is enough).
+  // Reset alongside workoutChat/workoutRpeEdit and planSessionDetailId's own
+  // reset paths -- every open/close of either detail view.
+  askCoachForm: createAskCoachForm(),
+  askCoachSubmit: createAskCoachSubmit(),
   checkinForm: createCheckinForm(),
   checkinSubmit: { status: 'idle', message: null },
   profileForm: createProfileForm(),
@@ -388,6 +417,12 @@ function renderTabContent() {
         manualOpen: state.logManualOpen,
         feedExpanded: state.dashboardFeedExpanded,
         rpeEdit: state.workoutRpeEdit,
+        // Coach-mode Q&A build: the athlete's own real Ask-the-coach
+        // section, wired to a real submit action (`form` set) -- see
+        // renderWorkoutDetail's `askCoach` doc comment. `feedback` is the
+        // FULL already-fetched list; renderWorkoutDetail filters it down to
+        // just the open workout by workout_id.
+        askCoach: { feedback: state.feedbackEntries.data, form: state.askCoachForm, submit: state.askCoachSubmit },
       });
     case 'checkin':
       return renderCheckinTab({
@@ -434,6 +469,12 @@ function renderTabContent() {
         // this deliberately isn't its own state.roster.allWeeksOpen slice.
         allWeeksOpen: state.allWeeksOpen,
         sessionDetailId: state.roster.sessionDetailId,
+        // B3: unread count for the roster's own Feedback section heading --
+        // see src/unread.js's countUnread doc comment. Only ever meaningful
+        // once an athlete's own feedback has actually been fetched (0
+        // beforehand -- no per-athlete data to count from yet, same
+        // limitation the tab bar's own rosterUnread badge below accepts).
+        feedbackUnread: countUnread(state.roster.feedback.data, loadLastSeen('coach'), 'coach'),
       });
     case 'settings':
       return renderSettingsTab({
@@ -460,6 +501,10 @@ function renderTabContent() {
           sessionPush: state.sessionPush,
           allWeeksOpen: state.allWeeksOpen,
           glossaryOpen: state.glossaryOpen,
+          // Coach-mode Q&A build: same shape/rationale as the Dashboard
+          // tab's own `askCoach` above, just scoped to a planned Session
+          // instead of a completed Workout.
+          askCoach: { feedback: state.feedbackEntries.data, form: state.askCoachForm, submit: state.askCoachSubmit },
         },
         state.planSessionDetailId,
       );
@@ -485,8 +530,21 @@ function render() {
   // grants has nothing to see there. Every other tab always shows;
   // renderTabBar's `hideRoster` flag is the one visibility knob (see its
   // doc comment for why that's the chosen signature over a full allowlist).
+  //
+  // B3: feedbackUnread/rosterUnread badges -- see src/unread.js's
+  // countUnread doc comment for the asymmetric athlete/coach field choice.
+  // rosterUnread only ever reflects the CURRENTLY acted-as athlete's
+  // feedback (state.roster.feedback is per-selected-athlete, not
+  // aggregated across every coached athlete -- no new backend endpoint
+  // exists to aggregate that, and this build doesn't add one); 0 before any
+  // athlete has been selected, same accepted tradeoff as the roster's own
+  // section-level badge (renderTabContent's 'roster' case).
   appEl.innerHTML = `${renderUpdateBanner(state.pwaUpdate)}${renderTabContent()}${
-    renderTabBar(state.tab, { hideRoster: !state.coachFor.length })}`;
+    renderTabBar(state.tab, {
+      hideRoster: !state.coachFor.length,
+      feedbackUnread: countUnread(state.feedbackEntries.data, loadLastSeen('athlete'), 'athlete'),
+      rosterUnread: countUnread(state.roster.feedback.data, loadLastSeen('coach'), 'coach'),
+    })}`;
   if (state.tab === 'coach') stickChatScrollToBottom();
   if (state.tab === 'dashboard' && state.workoutChat) stickWorkoutChatScrollToBottom();
   if (state.tab === 'settings' && !state.identity) mountGoogleSignIn();
@@ -529,6 +587,8 @@ function applyAthleteSession(identity, token) {
   state.planLoad = { status: 'idle', data: null, error: null };
   state.planSessionDetailId = null;
   state.sessionPush = null;
+  state.askCoachForm = createAskCoachForm();
+  state.askCoachSubmit = createAskCoachSubmit();
   state.profileForm = createProfileForm();
   state.profileLoad = { status: 'idle', error: null };
   state.profileSubmit = { status: 'idle', message: null };
@@ -582,6 +642,8 @@ function resetToSignedOut({ identityError = null } = {}) {
   state.planLoad = { status: 'idle', data: null, error: null };
   state.planSessionDetailId = null;
   state.sessionPush = null;
+  state.askCoachForm = createAskCoachForm();
+  state.askCoachSubmit = createAskCoachSubmit();
   state.profileForm = createProfileForm();
   state.profileLoad = { status: 'idle', error: null };
   state.profileSubmit = { status: 'idle', message: null };
@@ -846,6 +908,11 @@ function handleOpenSessionDetail(id) {
   // share this piece of state).
   if (state.tab !== 'plan') return;
   state.planSessionDetailId = id;
+  // Coach-mode Q&A build: a fresh Ask-the-coach draft for this session --
+  // same "one shared slot, reset on every open" convention as
+  // handleOpenHistoryDetail's own workoutChat/workoutRpeEdit reset below.
+  state.askCoachForm = createAskCoachForm();
+  state.askCoachSubmit = createAskCoachSubmit();
   // Pushes an in-app history entry so hardware/gesture back (a `popstate`,
   // handled by handlePopState) closes the detail instead of navigating the
   // PWA away entirely -- same reasoning as handleOpenHistoryDetail's own
@@ -856,6 +923,7 @@ function handleOpenSessionDetail(id) {
   scrollToTop(); // land on the detail content -- was a gap in both this and
   // handleOpenHistoryDetail (neither scrolled), so the page previously
   // stayed wherever it was scrolled (e.g. down near the macro section).
+  maybeLoadFeedback(); // so the section's past Q&A actually has data to show
 }
 
 /** Downloads a session's Garmin `.fit` file (see views.js's
@@ -945,6 +1013,8 @@ function handleCloseSessionDetail() {
   if (!state.planSessionDetailId) return; // avoids a redundant render on popstate re-entrancy
   state.planSessionDetailId = null;
   state.sessionPush = null;
+  state.askCoachForm = createAskCoachForm();
+  state.askCoachSubmit = createAskCoachSubmit();
   render();
 }
 
@@ -1135,6 +1205,10 @@ function handleOpenHistoryDetail(id, { rpeEdit = null } = {}) {
   // closeWorkoutChat for the matching teardown on every close path).
   state.workoutChat = { workoutId: id, messages: [] };
   state.workoutRpeEdit = rpeEdit;
+  // Coach-mode Q&A build: same "fresh draft on every open" reset as
+  // handleOpenSessionDetail's own.
+  state.askCoachForm = createAskCoachForm();
+  state.askCoachSubmit = createAskCoachSubmit();
   // Pushes an in-app history entry so hardware/gesture back (which fires a
   // `popstate`, handled below) closes the detail instead of navigating the
   // PWA away entirely -- see handlePopState and onAppClick's `history:back`
@@ -1146,6 +1220,7 @@ function handleOpenHistoryDetail(id, { rpeEdit = null } = {}) {
   render();
   scrollToTop(); // see handleOpenSessionDetail's matching call -- was a gap
   // in both handlers, not just the Plan tab's.
+  maybeLoadFeedback(); // so the section's past Q&A actually has data to show
 }
 
 /** A6c: the "Rate this workout" row chip's action -- opens the same detail
@@ -1239,6 +1314,8 @@ function handleCloseHistoryDetail() {
   state.workoutDetailId = null;
   closeWorkoutChat();
   state.workoutRpeEdit = null;
+  state.askCoachForm = createAskCoachForm();
+  state.askCoachSubmit = createAskCoachSubmit();
   render();
 }
 
@@ -1570,6 +1647,22 @@ function maybeLoadProfile() {
   loadProfile();
 }
 
+/** Coach-mode Q&A build: unlike `maybeLoadProfile`/`maybeLoadGrants` above,
+ * this is NOT gated on which tab is active -- the athlete's own Feedback
+ * list (`state.feedbackEntries`) now also backs the Ask-the-coach section on
+ * BOTH the Plan tab's session detail and the Dashboard tab's workout detail
+ * (views.js's renderAskCoachSection call sites), not just the Feedback tab
+ * itself, so it needs to load lazily on demand from whichever of those three
+ * surfaces asks for it first. Called from handleOpenSessionDetail/
+ * handleOpenHistoryDetail (in addition to setTab's own Feedback-tab lazy
+ * load) -- same "never loaded yet, or let's retry" idle/error gate as every
+ * other maybeLoad* helper in this file. */
+function maybeLoadFeedback() {
+  if (!isConfigured(state.settingsForm, state.identity)) return;
+  if (state.feedbackEntries.status === 'loading' || state.feedbackEntries.status === 'ready') return;
+  loadFeedback(); // calls render() itself
+}
+
 async function handleSubmitProfile() {
   if (state.profileSubmit.status === 'submitting') return;
   const settings = state.settingsForm;
@@ -1630,6 +1723,102 @@ async function handleSubmitFeedback() {
     state.feedbackSubmit = { status: 'error', message: result.error };
     render();
   }
+}
+
+// --- Ask-the-coach Q&A (coach-mode Q&A build) -------------------------------
+// The Plan tab's session detail and the Dashboard tab's workout detail each
+// call POST /api/feedback/questions through a different linkage (session
+// date+sport vs. workout_id -- see api.js's askAboutSession/askAboutWorkout),
+// but otherwise share the exact same submit/render shape as
+// handleSubmitFeedback above. `state.askCoachForm`/`state.askCoachSubmit`
+// are shared across both call sites (see createAskCoachForm's doc comment)
+// -- onAppClick's `ask-coach:submit` case branches on which detail view is
+// actually open (state.tab + planSessionDetailId/workoutDetailId) to route
+// to the right one of these two, same "branch on state, not a second action
+// name" convention `session:open`'s click-dispatch case already uses.
+
+async function handleSubmitAskCoachForSession() {
+  if (state.askCoachSubmit.status === 'submitting') return;
+  const id = state.planSessionDetailId;
+  if (!id) return;
+  const session = findSessionById(state.plan.data?.weeks || [], id);
+  if (!session) return;
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) return;
+
+  const body = (state.askCoachForm.body || '').trim();
+  if (!body) {
+    state.askCoachSubmit = { status: 'error', error: 'Ask something first.' };
+    render();
+    return;
+  }
+
+  state.askCoachSubmit = { status: 'submitting', error: null };
+  render();
+  log.info('ask_coach.submit', { athlete: athleteSlug(), scope: 'session', session_id: id });
+
+  const result = await askAboutSession({
+    baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(),
+    date: session.date, sport: session.sport, body,
+  });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    log.info('ask_coach.submit_success', { athlete: athleteSlug(), scope: 'session' });
+    state.askCoachForm = createAskCoachForm();
+    state.askCoachSubmit = createAskCoachSubmit();
+    // Optimistically prepend the new entry (the same shape a subsequent
+    // GET /api/feedback would return it in -- most-recent-first) rather than
+    // a full loadFeedback() refetch -- this is a one-shot AI answer already
+    // fully resolved server-side by the time this response lands, so there's
+    // nothing further for a refetch to pick up that this response doesn't
+    // already have.
+    state.feedbackEntries = {
+      ...state.feedbackEntries,
+      data: [result.data, ...state.feedbackEntries.data],
+    };
+  } else {
+    log.error('ask_coach.submit_failed', { athlete: athleteSlug(), scope: 'session', error: result.error });
+    state.askCoachSubmit = { status: 'error', error: result.error };
+  }
+  render();
+}
+
+async function handleSubmitAskCoachForWorkout() {
+  if (state.askCoachSubmit.status === 'submitting') return;
+  const id = state.workoutDetailId;
+  if (!id) return;
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) return;
+
+  const body = (state.askCoachForm.body || '').trim();
+  if (!body) {
+    state.askCoachSubmit = { status: 'error', error: 'Ask something first.' };
+    render();
+    return;
+  }
+
+  state.askCoachSubmit = { status: 'submitting', error: null };
+  render();
+  log.info('ask_coach.submit', { athlete: athleteSlug(), scope: 'workout', workout_id: id });
+
+  const result = await askAboutWorkout({
+    baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), workoutId: id, body,
+  });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    log.info('ask_coach.submit_success', { athlete: athleteSlug(), scope: 'workout' });
+    state.askCoachForm = createAskCoachForm();
+    state.askCoachSubmit = createAskCoachSubmit();
+    // Same optimistic-prepend reasoning as handleSubmitAskCoachForSession.
+    state.feedbackEntries = {
+      ...state.feedbackEntries,
+      data: [result.data, ...state.feedbackEntries.data],
+    };
+  } else {
+    log.error('ask_coach.submit_failed', { athlete: athleteSlug(), scope: 'workout', error: result.error });
+    state.askCoachSubmit = { status: 'error', error: result.error };
+  }
+  render();
 }
 
 // --- Coach mode (Phase 1): roster (My Athletes tab) + grants (Settings) ---
@@ -1803,7 +1992,26 @@ function handleSelectCoachedAthlete(slug) {
   loadCoachPlan(slug); // calls render() itself
 }
 
+/** B3: leaving the roster's 'dashboard' sub-tab -- where the roster's own
+ * Feedback section lives -- marks the coach role's unread badge seen.
+ * Deliberately fired on LEAVE, not on entry/selection: marking seen the
+ * instant the athlete is selected (before `loadCoachFeedback`'s fetch has
+ * even resolved) would zero the badge before the coach ever actually saw
+ * a nonzero count, defeating its whole purpose. Firing on leave instead
+ * means the badge stays accurate (reflecting real unread state) for the
+ * whole visit, only clearing once she's actually done looking and moves on
+ * -- called from both ways out of the 'dashboard' sub-tab:
+ * handleBackToRoster (closing the acted-as-athlete view entirely) and
+ * handleSelectRosterSubTab (switching to a sibling sub-tab). A no-op if
+ * `subTab` isn't (or wasn't) 'dashboard' -- e.g. backing out from the
+ * Training Plan sub-tab never showed the Feedback section, so there's
+ * nothing to mark seen. */
+function markCoachFeedbackSeenIfLeavingDashboardSubTab(subTab) {
+  if (subTab === 'dashboard') saveLastSeen('coach');
+}
+
 function handleBackToRoster() {
+  markCoachFeedbackSeenIfLeavingDashboardSubTab(state.roster.subTab);
   state.roster.actingAsAthlete = null;
   state.roster.workouts = { status: 'idle', data: [], error: null };
   state.roster.feedback = { status: 'idle', data: [], error: null };
@@ -1825,6 +2033,10 @@ function handleBackToRoster() {
  * leaves a detail view open under a sub-tab it doesn't belong to. */
 function handleSelectRosterSubTab(subTab) {
   if (!ROSTER_SUB_TABS.includes(subTab) || subTab === state.roster.subTab) return;
+  // B3: same "mark seen on leave, not entry" reasoning as
+  // handleBackToRoster's own call -- checked against the OLD sub-tab,
+  // before it's overwritten below.
+  markCoachFeedbackSeenIfLeavingDashboardSubTab(state.roster.subTab);
   if (state.roster.workoutDetailId) {
     state.roster.workoutDetailId = null;
     // Consumes the pushState entry handleOpenCoachWorkoutDetail added --
@@ -2050,6 +2262,8 @@ function setTab(tab) {
     state.workoutDetailId = null;
     closeWorkoutChat();
     state.workoutRpeEdit = null;
+    state.askCoachForm = createAskCoachForm();
+    state.askCoachSubmit = createAskCoachSubmit();
     // Consumes the pushState entry handleOpenHistoryDetail added (see
     // there), keeping browser history symmetric with app state -- without
     // this, a dangling entry would sit in the stack and silently swallow
@@ -2090,6 +2304,8 @@ function setTab(tab) {
   if (state.tab === 'plan' && state.planSessionDetailId) {
     state.planSessionDetailId = null;
     state.sessionPush = null;
+    state.askCoachForm = createAskCoachForm();
+    state.askCoachSubmit = createAskCoachSubmit();
     // Consumes the pushState entry handleOpenSessionDetail added, keeping
     // browser history symmetric with app state -- see the matching Log-tab
     // comment above for why this is safe (handlePopState's
@@ -2099,6 +2315,13 @@ function setTab(tab) {
   state.tab = tab;
   saveActiveTab(tab);
   log.info('tab.switch', { tab });
+  // B3: the athlete's Feedback tab is the "relevant section" for the
+  // athlete-role unread badge -- mark it seen the moment she opens it,
+  // regardless of whether a fetch below is also triggered. Using "now" (not
+  // waiting for the fetch to resolve) is correct: every entry's
+  // coach_reply_at is already fixed in the past relative to this instant, so
+  // nothing the in-flight fetch returns can retroactively count as unread.
+  if (tab === 'feedback') saveLastSeen('athlete');
   // Lazily (re)loads the plan the moment the Plan tab is actually visited,
   // rather than eagerly on every settings-save / sign-in -- covers both
   // "never loaded yet" (idle) and "let's retry" (a previous fetch errored).
@@ -2183,6 +2406,17 @@ async function onAppClick(e) {
     case 'checkin:submit': handleSubmitCheckin(); break;
     case 'profile:submit': handleSubmitProfile(); break;
     case 'feedback:submit': handleSubmitFeedback(); break;
+    // Coach-mode Q&A build: one shared button action, routed to whichever
+    // detail view is actually open -- same "branch on state, not a second
+    // action name for the same shared markup" convention `session:open`'s
+    // own case below already uses. A stray click while NEITHER detail view
+    // is open (shouldn't happen -- the button only renders inside one of
+    // them) is simply a no-op, since both handlers bail out when their own
+    // detail id is unset.
+    case 'ask-coach:submit':
+      if (state.tab === 'plan') handleSubmitAskCoachForSession();
+      else handleSubmitAskCoachForWorkout();
+      break;
     case 'roster:select-athlete': handleSelectCoachedAthlete(el.dataset.slug); break;
     case 'roster:back': handleBackToRoster(); break;
     case 'roster:open-workout': handleOpenCoachWorkoutDetail(el.dataset.id); break;
@@ -2276,11 +2510,19 @@ function onAppInput(e) {
       // toggle keys within the same profileForm.poolDays map.
       const day = el.dataset.day;
       if (day) state.profileForm.poolDays[day] = el.checked;
+    } else if (field === 'email_notifications_enabled') {
+      // B4: a plain checkbox, not a text/select input -- read `.checked`,
+      // same convention as the pool-day checkboxes just above.
+      state.profileForm.emailNotificationsEnabled = el.checked;
     } else {
       state.profileForm[field] = el.value;
     }
   }
   else if (formName === 'feedback') state.feedbackForm[field] = el.value;
+  // Coach-mode Q&A build: shared draft field for both Ask-the-coach call
+  // sites (Plan tab session detail, Dashboard tab workout detail) -- see
+  // createAskCoachForm's doc comment for why one flat slice covers both.
+  else if (formName === 'askCoach') state.askCoachForm[field] = el.value;
   // Keyed by per-row feedback id (data-id), not a flat form field like every
   // other case here -- see state.roster.replyDrafts's doc comment at its
   // declaration for why a plain object keyed this way is enough.

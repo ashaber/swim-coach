@@ -180,6 +180,13 @@ def _make_ctx(pw, cfg, *, identity=COACH_IDENTITY, reply_calls=None):
     # unmocked-route hazard as every other coach-athletes/renee/* route here.
     ctx.route('**/api/coach/athletes/renee/plan*', _cors_route(200, 'application/json', ROSTER_PLAN_STUB))
     ctx.route('**/api/coach/athletes*', _cors_route(200, 'application/json', ATHLETES_STUB))
+    # Coach-mode Q&A build: the coach's OWN Plan tab (state.tab === 'plan',
+    # not the roster) now also lazily fetches GET /api/feedback the moment a
+    # session detail opens there (main.js's maybeLoadFeedback) -- this is the
+    # coach's own self-access feedback list (never
+    # /api/coach/athletes/<slug>/feedback), unmocked, it fails on CORS the
+    # same way every other route here documents.
+    ctx.route('**/api/feedback*', _cors_route(200, 'application/json', '[]'))
     return browser, ctx
 
 
@@ -281,6 +288,73 @@ def test_selecting_athlete_shows_workouts_with_compliance_and_feedback(page):
     assert page.locator('[data-form="roster-reply"]').count() == 1
 
 
+def test_feedback_entry_shows_its_session_or_workout_context(page):
+    # Coach-mode Q&A build: a question is now visible with its session/
+    # workout context attached, not just a bare body/date.
+    scoped_feedback = json.dumps([
+        {
+            'id': 'f-session', 'type': 'question', 'source': 'athlete',
+            'body': 'about a session', 'status': 'open', 'created_at': '2026-08-20T12:00:00Z',
+            'needs_human_review': False, 'ai_provisional_answer': None, 'coach_reply': None,
+            'session_date': '2026-08-10', 'session_sport': 'swim_pool',
+        },
+        {
+            'id': 'f-workout', 'type': 'question', 'source': 'athlete',
+            'body': 'about a workout', 'status': 'open', 'created_at': '2026-08-20T12:00:00Z',
+            'needs_human_review': False, 'ai_provisional_answer': None, 'coach_reply': None,
+            'workout_id': 'w-1',
+        },
+    ])
+    page.context.route('**/api/coach/athletes/renee/feedback*', _cors_route(200, 'application/json', scoped_feedback))
+    _open_roster(page)
+    page.click('[data-a="roster:select-athlete"]')
+    page.wait_for_selector('[data-form="roster-reply"]')
+
+    content = page.content()
+    assert 'About a logged workout' in content
+    assert 'About Pool swim on' in content
+
+
+# --- B3: in-app unread badges -------------------------------------------------
+#
+# main.js marks the coach role's "last seen" (src/unread.js) on LEAVING the
+# roster's 'dashboard' sub-tab (where the Feedback section lives), not on
+# entering it -- see handleBackToRoster/handleSelectRosterSubTab's own doc
+# comments for why: marking it seen the instant the athlete is selected
+# (before the feedback fetch even resolves) would zero the badge before the
+# coach ever actually saw a nonzero count. So the badge is visible for the
+# whole first visit, and clears only once she's actually left.
+
+def test_unread_badge_appears_on_the_my_athletes_tab_and_the_feedback_section(page):
+    _open_roster(page)
+    page.click('[data-a="roster:select-athlete"]')
+    page.wait_for_selector('[data-form="roster-reply"]')
+
+    # The Feedback section heading's own badge (this athlete's unread count).
+    assert page.locator('.badge-count').count() >= 1
+
+    # The tab bar's own My Athletes badge, showing the same real count for
+    # the whole time she's actually looking at the section.
+    tab_badge = page.locator('[data-a="tab:roster"] .badge-count')
+    assert tab_badge.count() == 1
+    assert tab_badge.inner_text() == '1'
+
+
+def test_unread_badge_clears_after_leaving_the_feedback_section(page):
+    _open_roster(page)
+    page.click('[data-a="roster:select-athlete"]')
+    page.wait_for_selector('[data-form="roster-reply"]')
+    assert page.locator('[data-a="tab:roster"] .badge-count').count() == 1
+
+    # Backing out of the acted-as-athlete view marks the coach role's "last
+    # seen" (she was just looking at the Feedback section) -- re-selecting
+    # the same athlete afterward should show no unread items left.
+    page.click('[data-a="roster:back"]')
+    page.click('[data-a="roster:select-athlete"]')
+    page.wait_for_selector('[data-form="roster-reply"]')
+    assert page.locator('[data-a="tab:roster"] .badge-count').count() == 0
+
+
 def test_back_button_returns_to_the_athlete_list(page):
     _open_roster(page)
     page.click('[data-a="roster:select-athlete"]')
@@ -304,10 +378,13 @@ def test_clicking_a_workout_opens_its_read_only_detail_view(page):
     assert '2.1 km' in content
     # No embedded "ask your coach" chat -- that's an athlete-only feature.
     assert 'Ask your coach about this workout' not in content
-    # The honest, non-functional coach-conversation placeholder (Build 2) IS
-    # shown here -- distinct from the athlete-only AI chat just excluded.
-    assert page.locator('#coach-conversation').count() == 1
-    assert 'coming soon' in content
+    # The real, read-only Ask-the-coach Q&A section (coach-mode Q&A build)
+    # IS shown here -- distinct from the athlete-only AI chat just excluded,
+    # and with no input box (coach replies stay in the roster's own
+    # Feedback section reply UI).
+    assert page.locator('#ask-coach').count() == 1
+    assert page.locator('[data-form="askCoach"]').count() == 0
+    assert page.locator('[data-a="ask-coach:submit"]').count() == 0
     # The workouts/feedback list sections are gone while the detail is open.
     assert page.locator('[data-a="roster:open-workout"]').count() == 0
     assert page.locator('[data-a="roster:back"]').count() == 0
