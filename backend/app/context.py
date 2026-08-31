@@ -52,7 +52,7 @@ from swim_coach.load import (
     wellness_baseline_deviation,
     wellness_trend,
 )
-from swim_coach.models import Athlete, Event, Workout
+from swim_coach.models import Athlete, Event, Session, Workout
 from swim_coach.store import StoreInterface
 
 # --- system block A: persona + hard rules -----------------------------------
@@ -897,8 +897,51 @@ def render_focused_workout(workout: Workout) -> str:
     return "\n".join(parts)
 
 
+
+# --- focused session (Plan tab's embedded "ask about this session" chat) ----
+# The Plan tab's own scoped chat ties a question to one PLANNED Session
+# (before it's ever swum, so there's no Workout/laps/analytics yet) --
+# same per-request/uncached placement rationale as `render_focused_workout`
+# above, just for content that doesn't exist as a Workout at all.
+
+
+def render_focused_session(session: Session) -> str:
+    """Full detail block for the one PLANNED session a scoped chat is about
+    -- mirrors `render_focused_workout`'s shape (a labelled summary block
+    distinct from the ordinary lists above) for a `Session` instead of a
+    `Workout`. No laps/pauses/analytics section, unlike the workout version
+    -- a planned session hasn't happened yet, so its purpose/structure/
+    target load/zone (`intensity`) IS the full detail there is to show."""
+    summary = {
+        "id": str(session.id),
+        "date": session.date.isoformat(),
+        "sport": session.sport,
+        "source": session.source,
+        "duration_min": session.duration_min,
+        "distance_m": session.distance_m,
+        "intensity": session.intensity,
+        "purpose": session.purpose,
+        "structure": session.structure,
+        "structured": (
+            session.structured.model_dump(mode="json") if session.structured is not None else None
+        ),
+        "status": session.status,
+    }
+    parts = [
+        "## The specific planned session the athlete is asking about "
+        "(NOT the same as the 28-day exact-sessions list above)",
+        json.dumps(summary, indent=2),
+    ]
+    return "\n".join(parts)
+
+
 def build_per_request_context(
-    store: StoreInterface, slug: str, *, expert_mode: bool, focused_workout: Workout | None = None
+    store: StoreInterface,
+    slug: str,
+    *,
+    expert_mode: bool,
+    focused_workout: Workout | None = None,
+    focused_session: Session | None = None,
 ) -> str:
     """The uncached, per-request text block: athlete profile + zones,
     current + next week plan, the last ~28 days' exact logged sessions
@@ -909,7 +952,14 @@ def build_per_request_context(
 
     `focused_workout`, when given (the Log tab's embedded workout chat),
     appends `render_focused_workout`'s block -- still per-request/uncached,
-    never the stable system prefix (see that function's docstring)."""
+    never the stable system prefix (see that function's docstring).
+    `focused_session`, when given (the Plan tab's embedded "ask about this
+    session" chat), likewise appends `render_focused_session`'s block. The
+    two are independent (a caller resolves at most one per request in
+    practice -- routes/feedback.py's `ask_question` picks a workout OR a
+    session, never both, per `Feedback.workout_id`/`session_date`'s mutual
+    exclusion), but nothing here enforces that; both may be appended if a
+    caller passes both."""
     today = date.today()
     current_iso = iso_week_str(today)
     next_iso = iso_week_str(today + timedelta(days=7))
@@ -955,6 +1005,8 @@ def build_per_request_context(
     ]
     if focused_workout is not None:
         parts += ["", render_focused_workout(focused_workout)]
+    if focused_session is not None:
+        parts += ["", render_focused_session(focused_session)]
     return "\n".join(parts)
 
 
@@ -971,6 +1023,7 @@ def build_messages(
     history: list[HistoryTurn],
     expert_mode: bool,
     focused_workout: Workout | None = None,
+    focused_session: Session | None = None,
 ) -> list[dict[str, Any]]:
     """The `messages` param: per-request context merged into the first
     message of the conversation, then the rest of `history` verbatim, then
@@ -989,10 +1042,17 @@ def build_messages(
     `render_focused_workout`) is threaded straight through to
     `build_per_request_context`; the caller (app.routes.chat) is responsible
     for resolving a `workout_id` to a `Workout` (or a 404) before calling
-    this.
+    this. `focused_session` (the Plan tab's embedded session chat -- see
+    `render_focused_session`) is threaded through the same way; the caller
+    (app.routes.feedback) resolves `session_date`/`session_sport` to a
+    `Session` best-effort before calling this.
     """
     context_text = build_per_request_context(
-        store, slug, expert_mode=expert_mode, focused_workout=focused_workout
+        store,
+        slug,
+        expert_mode=expert_mode,
+        focused_workout=focused_workout,
+        focused_session=focused_session,
     )
     messages: list[dict[str, Any]] = []
 

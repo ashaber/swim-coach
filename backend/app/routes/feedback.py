@@ -49,13 +49,13 @@ noisy; Andrew's actual ask was specifically about missing ATHLETE feedback.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Callable
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from pydantic import ValidationError
-from swim_coach.models import Feedback
+from swim_coach.models import Feedback, Session
 from swim_coach.store import StoreInterface
 
 from app.auth import (
@@ -67,7 +67,7 @@ from app.auth import (
 )
 from app.claude import ClaudeChat
 from app.config import Settings
-from app.context import build_messages, build_system, find_workout_by_id
+from app.context import build_messages, build_system, find_workout_by_id, iso_week_str
 from app.notify import notify_coaches_of_feedback
 from app.routes.chat import get_claude_chat
 from app.store_factory import make_store
@@ -222,6 +222,25 @@ async def update_feedback(
     return updated.model_dump(mode="json")
 
 
+def _find_planned_session(
+    store: StoreInterface, slug: str, session_date: date, session_sport: str
+) -> Session | None:
+    """Best-effort resolution of the actual current `Session` for a
+    session-linked question, for `render_focused_session` context only --
+    NEVER raises/404s on a miss (the caller still answers, just without that
+    one session's detail). Same lookup shape `quality.match_workout_to_session`
+    already uses for a Workout (match by `date`+`sport` within the relevant
+    week's sessions), adapted here for a bare (date, sport) pair since there's
+    no Workout to read a `planned_session_id` off of."""
+    week = store.load_week(slug, iso_week_str(session_date))
+    if week is None:
+        return None
+    for session in week.sessions:
+        if session.date == session_date and session.sport == session_sport:
+            return session
+    return None
+
+
 @router.post("/api/feedback/questions")
 async def ask_question(
     payload: dict[str, Any],
@@ -249,9 +268,45 @@ async def ask_question(
     workout_id = payload.get("workout_id")
     if workout_id is not None and not isinstance(workout_id, str):
         raise HTTPException(status_code=422, detail="workout_id must be a string")
+    session_date_raw = payload.get("session_date")
+    if session_date_raw is not None and not isinstance(session_date_raw, str):
+        raise HTTPException(status_code=422, detail="session_date must be a string")
+    session_sport = payload.get("session_sport")
+    if session_sport is not None and not isinstance(session_sport, str):
+        raise HTTPException(status_code=422, detail="session_sport must be a string")
     direct_to_coach = payload.get("direct_to_coach", False)
     if not isinstance(direct_to_coach, bool):
         raise HTTPException(status_code=422, detail="direct_to_coach must be a boolean")
+
+    # A question is linked to exactly one of a completed Workout
+    # (`workout_id`) or a PLANNED Session (`session_date`+`session_sport`) --
+    # same "pick one linkage" discipline `session_overrides`' `ow_template`-
+    # vs-`structure` mutual-exclusion check already uses elsewhere in this
+    # codebase (see Feedback.session_date's docstring for why a raw
+    # session_id can't be used instead).
+    has_workout = workout_id is not None
+    has_session = session_date_raw is not None
+    if has_workout and has_session:
+        raise HTTPException(
+            status_code=422, detail="give either workout_id or session_date, not both"
+        )
+    if not has_workout and not has_session:
+        raise HTTPException(
+            status_code=422, detail="must link the question to either workout_id or session_date"
+        )
+    if has_session and session_sport is None:
+        raise HTTPException(
+            status_code=422, detail="session_sport is required alongside session_date"
+        )
+
+    session_date: date | None = None
+    if session_date_raw is not None:
+        try:
+            session_date = date.fromisoformat(session_date_raw)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422, detail=f"session_date must be an ISO date: {exc}"
+            ) from exc
 
     # Resolve the scoped workout exactly like /api/chat does -- an unknown
     # workout_id is an ordinary 404 before any model call starts.
@@ -261,6 +316,15 @@ async def ask_question(
         if focused_workout is None:
             raise HTTPException(status_code=404, detail=f"no workout matching id {workout_id!r}")
 
+    # Session resolution is best-effort, unlike workout_id above -- an
+    # athlete asking about a session the coach can't currently find (a
+    # regenerated week, a stale client cache) still gets an answer, just
+    # without that one session's detail in context. See
+    # `_find_planned_session`'s docstring.
+    focused_session = None
+    if session_date is not None:
+        focused_session = _find_planned_session(store, athlete, session_date, session_sport)
+
     system = build_system(settings.library_dir, body)
     messages = build_messages(
         store,
@@ -269,6 +333,7 @@ async def ask_question(
         history=[],
         expert_mode=False,
         focused_workout=focused_workout,
+        focused_session=focused_session,
     )
     tool_handlers = build_tool_handlers(store, slug=athlete, expert_mode=False)
 
@@ -292,6 +357,8 @@ async def ask_question(
         status="open",
         created_at=datetime.now(timezone.utc),
         workout_id=UUID(str(focused_workout.id)) if focused_workout is not None else None,
+        session_date=session_date,
+        session_sport=session_sport,
         needs_human_review=direct_to_coach,
         ai_provisional_answer=provisional,
     )

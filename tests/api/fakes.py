@@ -19,7 +19,7 @@ from datetime import date
 from types import SimpleNamespace
 from typing import Any
 
-from swim_coach.models import Event, Feedback, Wellness, Workout
+from swim_coach.models import Event, Feedback, Session, Wellness, Workout
 
 TEST_API_TOKEN = "test-token-please-ignore"  # noqa: S105 - test fixture, not a real secret
 TEST_GOOGLE_CLIENT_ID = "test-client-id.apps.googleusercontent.com"
@@ -69,6 +69,28 @@ def make_event(**overrides: Any) -> Event:
     )
     data.update(overrides)
     return Event(**data)
+
+
+def make_session(**overrides: Any) -> Session:
+    """A planned-session fixture, `swim_pool` by default. Used by
+    test_context.py's `render_focused_session` tests -- the Plan tab's
+    embedded "ask about this session" chat (a PLANNED session, distinct from
+    a completed Workout)."""
+    data: dict[str, Any] = dict(
+        id=uuid.uuid4(),
+        athlete_id=uuid.uuid4(),
+        date=date(2026, 7, 6),
+        sport="swim_pool",
+        source="pool_coach",
+        duration_min=60.0,
+        distance_m=3000,
+        intensity={"zone": "Z2", "anchor": "css_pace"},
+        purpose="aerobic base",
+        structure="10x300 @ css+6",
+        status="planned",
+    )
+    data.update(overrides)
+    return Session(**data)
 
 
 def make_wellness(**overrides: Any) -> Wellness:

@@ -156,3 +156,39 @@ def test_patch_athlete_can_update_pool_schedule(client) -> None:
     )
     assert response.status_code == 200
     assert response.json()["pool_schedule"] == ["monday", "wednesday"]
+
+
+def test_get_athlete_email_notifications_enabled_defaults_true(client) -> None:
+    response = client.get("/api/athlete?athlete=renee", headers=auth_headers())
+    assert response.status_code == 200
+    assert response.json()["email_notifications_enabled"] is True
+
+
+def test_patch_athlete_can_disable_email_notifications(client) -> None:
+    response = client.patch(
+        "/api/athlete?athlete=renee",
+        json={"email_notifications_enabled": False},
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+    assert response.json()["email_notifications_enabled"] is False
+
+    # Persists -- a fresh GET reflects the same value, not just the PATCH
+    # response.
+    get_response = client.get("/api/athlete?athlete=renee", headers=auth_headers())
+    assert get_response.json()["email_notifications_enabled"] is False
+
+
+def test_patch_athlete_can_re_enable_email_notifications(client) -> None:
+    client.patch(
+        "/api/athlete?athlete=renee",
+        json={"email_notifications_enabled": False},
+        headers=auth_headers(),
+    )
+    response = client.patch(
+        "/api/athlete?athlete=renee",
+        json={"email_notifications_enabled": True},
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+    assert response.json()["email_notifications_enabled"] is True

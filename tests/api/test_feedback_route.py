@@ -277,7 +277,16 @@ def test_patch_feedback_does_not_disturb_other_entries(client) -> None:
 
 
 def _question_payload(**overrides) -> dict:
-    payload = {"body": "how should I fuel a 4hr swim?"}
+    # Default linkage is a planned session (date, sport) rather than a
+    # workout_id -- both/neither of workout_id/session_date is a 422 (see
+    # the mutual-exclusion tests below), so every test needs exactly one.
+    # Tests exercising workout_id linkage explicitly clear session_date/
+    # session_sport back to None when overriding.
+    payload = {
+        "body": "how should I fuel a 4hr swim?",
+        "session_date": "2026-07-06",
+        "session_sport": "swim_pool",
+    }
     payload.update(overrides)
     return payload
 
@@ -345,11 +354,15 @@ def test_ask_question_workout_id_linkage(
 
     response = client.post(
         "/api/feedback/questions?athlete=renee",
-        json=_question_payload(workout_id=str(workout.id)),
+        json=_question_payload(
+            workout_id=str(workout.id), session_date=None, session_sport=None
+        ),
         headers=auth_headers(),
     )
     assert response.status_code == 200
     assert response.json()["workout_id"] == str(workout.id)
+    assert response.json()["session_date"] is None
+    assert response.json()["session_sport"] is None
 
 
 def test_ask_question_unknown_workout_id_is_404(client, fake_claude_chat_factory) -> None:
@@ -357,12 +370,165 @@ def test_ask_question_unknown_workout_id_is_404(client, fake_claude_chat_factory
 
     response = client.post(
         "/api/feedback/questions?athlete=renee",
-        json=_question_payload(workout_id="ffffffff-0000-0000-0000-000000000000"),
+        json=_question_payload(
+            workout_id="ffffffff-0000-0000-0000-000000000000",
+            session_date=None,
+            session_sport=None,
+        ),
         headers=auth_headers(),
     )
     assert response.status_code == 404
     assert "error" in response.json()
     assert chat.client.messages.calls == []
+
+
+# --- session_date/session_sport linkage (Plan tab's embedded session chat) -
+#
+# Links a question to a PLANNED Session by (date, sport) instead of a
+# Workout id -- mutually exclusive with workout_id (Feedback.session_date's
+# docstring: a raw session_id would silently orphan on `replace_week_plan`).
+
+
+def test_ask_question_session_linkage_creates_feedback_row(
+    client, fake_claude_chat_factory
+) -> None:
+    final = make_final_message([make_text_block("Nice pool set.")], "end_turn")
+    fake_claude_chat_factory([(["Nice pool set."], final)])
+
+    response = client.post(
+        "/api/feedback/questions?athlete=renee",
+        json=_question_payload(session_date="2026-07-06", session_sport="swim_pool"),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["session_date"] == "2026-07-06"
+    assert body["session_sport"] == "swim_pool"
+    assert body["workout_id"] is None
+
+
+def test_ask_question_both_workout_id_and_session_date_is_422(
+    client, fake_claude_chat_factory
+) -> None:
+    chat = fake_claude_chat_factory([])
+    response = client.post(
+        "/api/feedback/questions?athlete=renee",
+        json=_question_payload(
+            workout_id="ffffffff-0000-0000-0000-000000000000",
+            session_date="2026-07-06",
+            session_sport="swim_pool",
+        ),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 422
+    assert "error" in response.json()
+    assert chat.client.messages.calls == []
+
+
+def test_ask_question_neither_workout_id_nor_session_date_is_422(
+    client, fake_claude_chat_factory
+) -> None:
+    chat = fake_claude_chat_factory([])
+    response = client.post(
+        "/api/feedback/questions?athlete=renee",
+        json=_question_payload(session_date=None, session_sport=None),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 422
+    assert "error" in response.json()
+    assert chat.client.messages.calls == []
+
+
+def test_ask_question_session_date_without_session_sport_is_422(
+    client, fake_claude_chat_factory
+) -> None:
+    chat = fake_claude_chat_factory([])
+    response = client.post(
+        "/api/feedback/questions?athlete=renee",
+        json=_question_payload(session_date="2026-07-06", session_sport=None),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 422
+    assert "error" in response.json()
+    assert chat.client.messages.calls == []
+
+
+def test_ask_question_resolvable_session_reaches_ai_context(
+    client, fake_claude_chat_factory, athletes_dir
+) -> None:
+    # A resolvable (date, sport) match against the athlete's current-week
+    # plan surfaces render_focused_session's block in the exact messages
+    # sent to the model -- same "check the request-shape assertion the
+    # workout test uses" convention (FakeMessagesAPI.calls). Builds its own
+    # current-ISO-week WeekPlan rather than relying on the fixture's fixed
+    # 2026-W28/W29 weeks, which fall outside `date.today()`'s real window.
+    import uuid
+    from datetime import date
+
+    from swim_coach.models import WeekPlan
+    from swim_coach.store import FileStore
+
+    from app.context import iso_week_str
+    from fakes import make_session
+
+    store = FileStore(base_dir=athletes_dir)
+    profile = store.load_athlete("renee")
+    today = date.today()
+    current_iso = iso_week_str(today)
+
+    target_session = make_session(
+        athlete_id=profile.id,
+        date=today,
+        sport="swim_pool",
+        purpose="a very specific test-only session purpose",
+    )
+    week = WeekPlan(
+        id=uuid.uuid4(),
+        athlete_id=profile.id,
+        iso_week=current_iso,
+        meso_block="base",
+        focus="aerobic volume",
+        target_volume_m=3000,
+        sessions=[target_session],
+    )
+    store.save_week("renee", week)
+
+    final = make_final_message([make_text_block("Sure, here's the plan.")], "end_turn")
+    chat = fake_claude_chat_factory([(["Sure, here's the plan."], final)])
+
+    response = client.post(
+        "/api/feedback/questions?athlete=renee",
+        json=_question_payload(session_date=today.isoformat(), session_sport="swim_pool"),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+
+    assert len(chat.client.messages.calls) == 1
+    sent_messages = chat.client.messages.calls[0]["messages"]
+    sent_text = "\n".join(m["content"] for m in sent_messages)
+    assert "specific planned session the athlete is asking about" in sent_text
+    assert "a very specific test-only session purpose" in sent_text
+
+
+def test_ask_question_unresolvable_session_still_answers(
+    client, fake_claude_chat_factory
+) -> None:
+    # Best-effort resolution: an unresolvable (date, sport) combination
+    # (e.g. no plan on file for that week) must NOT error -- the AI just
+    # answers without that specific session's detail.
+    final = make_final_message([make_text_block("General fueling advice.")], "end_turn")
+    chat = fake_claude_chat_factory([(["General fueling advice."], final)])
+
+    response = client.post(
+        "/api/feedback/questions?athlete=renee",
+        json=_question_payload(session_date="2019-01-01", session_sport="swim_ow"),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+    assert response.json()["ai_provisional_answer"] == "General fueling advice."
+    sent_messages = chat.client.messages.calls[0]["messages"]
+    sent_text = "\n".join(m["content"] for m in sent_messages)
+    assert "specific planned session the athlete is asking about" not in sent_text
 
 
 def test_ask_question_missing_body_is_422(client, fake_claude_chat_factory) -> None:

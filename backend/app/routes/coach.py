@@ -11,15 +11,18 @@ a wholly separate access mode from the athlete-self-scoped routes
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from swim_coach.quality import match_workout_to_session, workout_quality
-from swim_coach.models import Session
+from swim_coach.models import Feedback, Session
+from swim_coach.store import StoreInterface
 
 from app.auth import Principal, require_auth, resolve_coach_athlete
+from app.config import Settings
 from app.context import summarize_rollup
+from app.notify import notify_athlete_of_coach_reply
 from app.routes.plan import (
     LOAD_GRAPH_DEFAULT_WEEKS,
     LOAD_GRAPH_MAX_WEEKS,
@@ -29,6 +32,19 @@ from app.routes.plan import (
 from app.store_factory import make_store
 
 router = APIRouter()
+
+# Same shape/seam convention as routes/feedback.py's `Notifier`/`get_notifier`
+# -- a type alias plus a FastAPI dependency indirection so tests can override
+# it with a spy/fake instead of exercising a real BackgroundTask that would
+# otherwise try to reach the real Resend API.
+AthleteNotifier = Callable[[StoreInterface, Settings, Feedback, str], None]
+
+
+def get_athlete_notifier(request: Request) -> AthleteNotifier:
+    """Returns the real `notify_athlete_of_coach_reply` unless overridden
+    via `app.dependency_overrides[get_athlete_notifier] = ...` (see
+    tests/api/test_coach_route.py's `spy_athlete_notifier`)."""
+    return notify_athlete_of_coach_reply
 
 # A coach reviewing an athlete's roster wants a "how's this athlete doing
 # lately" read, not a fetch of the athlete's entire logged history --
@@ -215,7 +231,9 @@ async def coach_reply_to_feedback(
     feedback_id: UUID,
     payload: dict[str, Any],
     request: Request,
+    background_tasks: BackgroundTasks,
     principal: Principal = Depends(require_auth),
+    notifier: AthleteNotifier = Depends(get_athlete_notifier),
 ) -> dict:
     settings = request.app.state.settings
     slug = resolve_coach_athlete(principal, slug)
@@ -261,5 +279,12 @@ async def coach_reply_to_feedback(
     )
     if updated is None:
         raise HTTPException(status_code=404, detail=f"no such feedback entry: {feedback_id}")
+
+    # Scheduled AFTER the save succeeds, same "schedule after save, never
+    # block the request" discipline routes/feedback.py's own notification
+    # trigger uses -- a slow/failing email never affects this response or
+    # adds latency to the coach's reply. See app/notify.py's
+    # `notify_athlete_of_coach_reply`.
+    background_tasks.add_task(notifier, store, settings, updated, slug)
 
     return updated.model_dump(mode="json")

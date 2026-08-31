@@ -704,6 +704,39 @@ def test_feedback_round_trip_through_yaml():
     assert isinstance(loaded_data["id"], str)
 
 
+def test_feedback_workout_id_only_shape_still_validates_unchanged():
+    # The existing completed-workout linkage -- confirms this build's new
+    # session_date/session_sport fields are purely additive and don't
+    # disturb the shape every existing workout-linked Feedback row is in.
+    feedback = make_feedback(workout_id=uuid.uuid4())
+    assert feedback.workout_id is not None
+    assert feedback.session_date is None
+    assert feedback.session_sport is None
+
+
+def test_feedback_session_linkage_validates():
+    # A question about a PLANNED session (not yet completed as a Workout)
+    # links by (session_date, session_sport) instead -- stable across a
+    # `replace_week_plan` regenerate, unlike a raw session_id.
+    feedback = make_feedback(
+        workout_id=None,
+        session_date=date(2026, 7, 6),
+        session_sport="swim_pool",
+    )
+    assert feedback.workout_id is None
+    assert feedback.session_date == date(2026, 7, 6)
+    assert feedback.session_sport == "swim_pool"
+
+
+def test_feedback_session_sport_rejects_invalid_sport():
+    with pytest.raises(ValidationError):
+        make_feedback(
+            workout_id=None,
+            session_date=date(2026, 7, 6),
+            session_sport="not-a-real-sport",
+        )
+
+
 @pytest.mark.parametrize(
     "factory",
     [make_event, make_session, make_week, make_macro, make_workout, make_wellness],
@@ -921,6 +954,20 @@ def test_athlete_has_pool_coach_defaults_true():
 def test_athlete_has_pool_coach_round_trips_when_set_false():
     athlete = make_athlete(has_pool_coach=False)
     assert athlete.has_pool_coach is False
+
+
+def test_athlete_email_notifications_enabled_defaults_true():
+    # Existing-style profiles (Renee's, Andrew's) carry no
+    # email_notifications_enabled key at all -- must keep validating
+    # unchanged, defaulting to True per this session's decision (Andrew
+    # explicitly locked "default on").
+    athlete = make_athlete()
+    assert athlete.email_notifications_enabled is True
+
+
+def test_athlete_email_notifications_enabled_round_trips_when_set_false():
+    athlete = make_athlete(email_notifications_enabled=False)
+    assert athlete.email_notifications_enabled is False
 
 
 # --- round-trip tests: model -> yaml -> model ---
