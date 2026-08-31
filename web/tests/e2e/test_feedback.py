@@ -5,6 +5,8 @@ ever contacted, every network call is intercepted via Playwright routes with
 CORS headers attached.
 """
 
+import json
+
 import pytest
 from playwright.sync_api import sync_playwright
 
@@ -198,3 +200,48 @@ def test_feedback_tab_lists_logged_entries_including_coach_research_questions(pa
 def test_tab_bar_includes_feedback(page):
     page.wait_for_selector('.tabbar')
     assert page.locator('[data-a="tab:feedback"]').count() == 1
+
+
+# --- B3: in-app unread badge (athlete role) -----------------------------------
+# Deliberately loads the Feedback list via a workout detail's Ask-the-coach
+# section (main.js's maybeLoadFeedback), NOT by visiting the Feedback tab
+# directly -- visiting the Feedback tab both loads AND marks it seen in the
+# same action (setTab's own mark-seen call), which would zero the badge
+# before ever proving it could show a real count. Opening a workout detail
+# loads the same list without touching that timestamp.
+
+COMPLETED_WORKOUT = {
+    'id': 'w-1', 'date': '2026-06-01', 'sport': 'swim_pool', 'source': 'fit',
+    'distance_m': 2000, 'duration_min': 40, 'avg_pace_s_per_100m': 95, 'rpe': 6,
+    'notes': None, 'avg_hr': None, 'max_hr': None, 'analytics': None,
+    'laps': [], 'lengths': [], 'pauses': [],
+}
+
+REPLIED_ENTRY = json.dumps([{
+    'id': 'f1', 'type': 'question', 'source': 'athlete', 'body': 'How much fueling for a 4hr swim?',
+    'status': 'answered', 'created_at': '2026-08-20T12:00:00Z',
+    'ai_provisional_answer': 'Aim for 60-90g carbs/hr.',
+    'coach_reply': 'Start with 70g/hr and adjust from there.',
+    'coach_reply_at': '2026-08-21T09:00:00Z',
+    'needs_human_review': False,
+}])
+
+
+def test_unread_badge_appears_on_the_feedback_tab_then_clears_after_visiting_it(page):
+    page.route('**/api/workouts*', _cors_route(200, 'application/json', json.dumps([COMPLETED_WORKOUT])))
+    page.route('**/api/feedback*', _cors_route(200, 'application/json', REPLIED_ENTRY))
+
+    _configure_backend(page)
+    page.click('[data-a="tab:dashboard"]')
+    page.wait_for_selector('.hist-row')
+    page.click('.hist-row')
+    page.wait_for_selector('#ask-coach')
+
+    tab_badge = page.locator('[data-a="tab:feedback"] .badge-count')
+    assert tab_badge.count() == 1
+    assert tab_badge.inner_text() == '1'
+
+    page.click('[data-a="history:back"]')
+    page.click('[data-a="tab:feedback"]')
+    page.wait_for_selector('.feedback-entry')
+    assert page.locator('[data-a="tab:feedback"] .badge-count').count() == 0

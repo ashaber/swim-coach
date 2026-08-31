@@ -280,6 +280,54 @@ export async function listFeedback({ baseUrl, token, athlete = 'renee' }) {
   return apiRequest({ baseUrl, token, path: `/api/feedback?athlete=${encodeURIComponent(athlete)}` });
 }
 
+// --- Coach-mode Q&A (session/workout-scoped "ask the coach") ---------------
+// POST {baseUrl}/api/feedback/questions?athlete=<slug> -- the one-shot AI
+// Q&A endpoint (backend/app/routes/feedback.py's ask_question), distinct
+// from streamChat's ordinary multi-turn /api/chat: no `history`, no SSE, and
+// the answer is persisted as a durable `Feedback` row (`type="question"`)
+// rather than an ephemeral chat turn -- so it keeps showing up on this
+// session/workout (views.js's renderAskCoachSection) and on the athlete's
+// own Feedback tab (renderFeedbackTab) after she navigates away. The route
+// requires EXACTLY one of `workout_id` or `session_date`+`session_sport`
+// (422 on both-or-neither) -- these two functions are this file's two
+// distinct callers of that one endpoint, one per linkage kind, mirroring
+// `fetchCoachWorkouts`/`fetchCoachFeedback` being separate named functions
+// over the same coach.py module rather than one generic call.
+
+/** Asks a question about a specific PLANNED session (Plan tab's
+ * `renderPlanSessionDetail` -- there is no Workout yet for a session that
+ * hasn't been swum, so this links by `(date, sport)`, the same stability
+ * fallback `Feedback.session_date`'s own doc comment explains: a raw
+ * `Session.id` does NOT survive `replace_week_plan`'s full regenerate). */
+export async function askAboutSession({
+  baseUrl, token, athlete = 'renee', date, sport, body,
+}) {
+  return apiRequest({
+    baseUrl,
+    token,
+    path: `/api/feedback/questions?athlete=${encodeURIComponent(athlete)}`,
+    method: 'POST',
+    body: { session_date: date, session_sport: sport, body },
+  });
+}
+
+/** Asks a question about a specific completed Workout (the workout-detail
+ * view's Ask-the-coach section -- replaces the old, explicitly non-
+ * functional `renderCoachConversationPlaceholder` stub with the real thing
+ * it was gesturing at). Same endpoint/shape as `askAboutSession` above,
+ * just the other linkage kind. */
+export async function askAboutWorkout({
+  baseUrl, token, athlete = 'renee', workoutId, body,
+}) {
+  return apiRequest({
+    baseUrl,
+    token,
+    path: `/api/feedback/questions?athlete=${encodeURIComponent(athlete)}`,
+    method: 'POST',
+    body: { workout_id: workoutId, body },
+  });
+}
+
 /** GET {baseUrl}/api/plan?athlete=<slug> -- the live per-athlete plan. Used
  * by the Plan tab instead of the static baked data/<slug>.json now that the
  * athlete comes from the signed-in identity (src/identity.js) rather than a

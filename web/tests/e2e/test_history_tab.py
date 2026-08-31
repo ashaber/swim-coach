@@ -111,6 +111,12 @@ def _make_ctx(pw, cfg, *, workouts=WORKOUTS_STUB, plan=PLAN_STUB):
     # /api/plan (main.js's loadPlanLoad) -- same CORS-preflight treatment.
     ctx.route('**/api/plan/load*', _cors_json('{"athlete":"renee","weeks":12,"ctl_atl_tsb":[]}'))
     ctx.route('**/api/workouts*', _cors_json(workouts))
+    # Coach-mode Q&A build: opening a workout detail now lazily fetches
+    # GET /api/feedback (main.js's maybeLoadFeedback) so the new
+    # Ask-the-coach section has data to filter -- unmocked, it fails on
+    # CORS the moment any test in this file opens a detail view, the same
+    # hazard every other route above already documents.
+    ctx.route('**/api/feedback*', _cors_json('[]'))
     return browser, ctx
 
 

@@ -266,6 +266,22 @@ describe('profileFormFromAthlete', () => {
     expect(form.weightLb).toBe('');
     expect(form.cssPace).toBe('');
   });
+
+  // B4 (coach-mode Q&A build): "Email notifications" toggle.
+  it('prefills emailNotificationsEnabled true when the athlete has it enabled', () => {
+    const form = profileFormFromAthlete({ name: 'Andrew', pool_schedule: [], email_notifications_enabled: true });
+    expect(form.emailNotificationsEnabled).toBe(true);
+  });
+
+  it('prefills emailNotificationsEnabled false when the athlete has explicitly disabled it', () => {
+    const form = profileFormFromAthlete({ name: 'Andrew', pool_schedule: [], email_notifications_enabled: false });
+    expect(form.emailNotificationsEnabled).toBe(false);
+  });
+
+  it('defaults emailNotificationsEnabled to true when the field is missing (matches the backend default)', () => {
+    const form = profileFormFromAthlete({ name: 'Andrew', pool_schedule: [] });
+    expect(form.emailNotificationsEnabled).toBe(true);
+  });
 });
 
 describe('serializeProfileForm', () => {
@@ -312,6 +328,17 @@ describe('serializeProfileForm', () => {
 
     const blankNameForm = { ...form, name: '   ' };
     expect(serializeProfileForm(blankNameForm).name).toBeUndefined();
+  });
+
+  // B4 (coach-mode Q&A build): always sent, unlike the omit-on-unparseable
+  // numeric fields above -- a checkbox has no "invalid" in-progress state.
+  it('always sends email_notifications_enabled as a real boolean', () => {
+    const base = {
+      name: 'Andrew', dob: '', sex: '', heightFeet: '', heightInches: '', weightLb: '', cssPace: '', poolDays: {},
+    };
+    expect(serializeProfileForm({ ...base, emailNotificationsEnabled: true }).email_notifications_enabled).toBe(true);
+    expect(serializeProfileForm({ ...base, emailNotificationsEnabled: false }).email_notifications_enabled).toBe(false);
+    expect(serializeProfileForm(base).email_notifications_enabled).toBe(false);
   });
 });
 

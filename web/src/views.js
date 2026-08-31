@@ -97,6 +97,114 @@ function renderSession(session) {
     </div>`;
 }
 
+// --- Ask-the-coach Q&A (shared component, coach-mode Q&A build) ------------
+// Renders the durable, `Feedback`-backed Q&A thread for ONE specific planned
+// session or completed workout -- the real component the workout-detail
+// view's old `renderCoachConversationPlaceholder` stub ("coach conversation
+// -- coming soon") was gesturing at, plus a brand-new call site on the Plan
+// tab's session detail (which had no chat/placeholder at all before this).
+// One shared function, three call sites:
+//   - `renderPlanSessionDetail` (athlete's own Plan tab): `form` set, wired
+//     to `askAboutSession` via a real submit action.
+//   - `renderWorkoutDetail` (athlete's own Dashboard tab): `form` set, wired
+//     to `askAboutWorkout`.
+//   - Both of the above's coach-roster read-only mirrors (a coach viewing a
+//     coached athlete's session/workout): `form: null` -- no input box, no
+//     submit action. Coach replies stay centralized in the roster's own
+//     Feedback section reply UI (renderCoachFeedbackEntry above/below),
+//     never duplicated here.
+// `questions` is the CALLER's job to have already filtered down to the one
+// workout/session this section is scoped to (client-side, against the
+// already-fetched GET /api/feedback / GET /api/coach/athletes/<slug>/feedback
+// list -- see main.js's renderTabContent/renderRosterTab wiring) -- this
+// function itself doesn't know about workout_id/session_date/session_sport
+// at all, just renders whatever list it's handed.
+
+/** Shared by `renderAskCoachEntry` below and the athlete's own Feedback tab
+ * (`renderFeedbackEntry`) -- EXACTLY one of three answer states (per the
+ * branch brief): an AI provisional answer, a human coach reply (which always
+ * wins visually over the AI answer if both are present -- a human reply is
+ * the more authoritative, final word), or -- when neither exists yet and the
+ * question was flagged for human review -- an honest "waiting on your coach"
+ * notice. A question that's neither answered nor flagged (freshly asked, AI
+ * still running -- can't actually happen given `ask_question` answers
+ * synchronously before saving, but defensive nonetheless) renders with no
+ * answer section at all rather than a misleading state. */
+function renderFeedbackAnswerBlock(entry) {
+  if (entry.coach_reply) {
+    return `
+      <div class="detail-section">
+        <h4>Your coach replied</h4>
+        <p class="detail-notes">${esc(entry.coach_reply)}</p>
+      </div>`;
+  }
+  if (entry.ai_provisional_answer) {
+    return `
+      <div class="detail-section">
+        <h4>AI provisional answer</h4>
+        <p class="detail-notes">${esc(entry.ai_provisional_answer)}</p>
+      </div>`;
+  }
+  if (entry.needs_human_review) {
+    return '<p class="sub">Waiting on your coach to reply.</p>';
+  }
+  return '';
+}
+
+/** One past question in the thread: the question body, then its answer
+ * state (see `renderFeedbackAnswerBlock`). */
+function renderAskCoachEntry(entry) {
+  return `
+    <div class="panel feedback-entry">
+      <p class="feedback-entry-body">${esc(entry.body)}</p>
+      ${renderFeedbackAnswerBlock(entry)}
+    </div>`;
+}
+
+/** Filters a raw `Feedback` list (GET /api/feedback's response shape) down
+ * to just the entries linked to one completed Workout, by `workout_id` --
+ * see `renderWorkoutDetail`'s call site. */
+function feedbackForWorkout(feedback, workoutId) {
+  return (feedback || []).filter((entry) => entry.workout_id === workoutId);
+}
+
+/** Same idea as `feedbackForWorkout`, for a planned Session instead --
+ * linked by `(session_date, session_sport)`, NOT a raw session id (see
+ * `Feedback.session_date`'s own doc comment in engine/swim_coach/models.py
+ * for why: `Session.id` doesn't survive `replace_week_plan`'s full
+ * regenerate, so a raw-id link would silently orphan). */
+function feedbackForSession(feedback, date, sport) {
+  return (feedback || []).filter((entry) => entry.session_date === date && entry.session_sport === sport);
+}
+
+/** `questions`: the (already-filtered) list of past Q&A for this one
+ * workout/session, most-recent-first (same order GET /api/feedback already
+ * returns). `form`: `{ body }` (the in-progress draft) when this caller
+ * wants a real input box, or `null`/`undefined` for a read-only render (the
+ * coach's own view of a coached athlete's session/workout). `submit`:
+ * `{ status, error }`, same async-state shape as every other form in this
+ * app -- ignored when `form` is falsy. */
+export function renderAskCoachSection({ questions, form, submit } = {}) {
+  const list = (questions && questions.length > 0)
+    ? questions.map(renderAskCoachEntry).join('')
+    : '<p class="sub">Nothing asked yet.</p>';
+
+  return `
+    <section class="detail-section" id="ask-coach">
+      <h4>Ask your coach</h4>
+      ${list}
+      ${form ? `
+      <label class="field">
+        <span>Ask a question about this</span>
+        <textarea rows="3" data-form="askCoach" data-field="body" placeholder="What do you want to know?">${esc(form.body)}</textarea>
+      </label>
+      <div class="settings-actions">
+        <button type="button" class="btn" data-a="ask-coach:submit" ${submit?.status === 'submitting' ? 'disabled' : ''}>${submit?.status === 'submitting' ? 'Asking…' : 'Ask'}</button>
+      </div>
+      ${submit?.status === 'error' ? `<div class="conn-result fail">${esc(submit.error)}</div>` : ''}` : ''}
+    </section>`;
+}
+
 // --- Plan session detail view (tapping a session row) ---------------------
 // Mirrors the workout-detail pattern (renderWorkoutDetail below) exactly:
 // a full in-tab view swap driven by main.js's state.planSessionDetailId,
@@ -311,8 +419,17 @@ function renderStructuredWorkoutSection(structured) {
  * coached athlete's. Suppressing just these two sections (not the rest of
  * the detail) is what makes "same view as the athlete sees" honest here:
  * everything else below -- structure, targets, zone breakdown, training
- * rationale, purpose -- renders identically either way. */
-function renderPlanSessionDetail(session, sessionPush, showGarminActions = true) {
+ * rationale, purpose -- renders identically either way.
+ *
+ * `askCoach` (coach-mode Q&A build): `{ feedback, form, submit }` --
+ * `feedback` is the raw, already-fetched Feedback list (filtered here, via
+ * `feedbackForSession`, down to just this session's own questions);
+ * `form`/`submit` thread straight through to `renderAskCoachSection` (see
+ * its own doc comment -- `form: null`/absent renders read-only, the coach
+ * roster's call site). `null`/absent entirely renders the section with an
+ * empty question list and no input box, so a stale/legacy call site never
+ * crashes on a missing prop. */
+function renderPlanSessionDetail(session, sessionPush, showGarminActions = true, askCoach = null) {
   const classification = classifySession(session);
   const { title, detail, structure } = sessionDisplay(session);
   const dateLabel = formatLongDate(parseIsoDate(session.date));
@@ -373,7 +490,12 @@ function renderPlanSessionDetail(session, sessionPush, showGarminActions = true)
     <section class="detail-section">
       <h4>Purpose</h4>
       <p class="detail-notes">${esc(purpose)}</p>
-    </section>` : ''}`;
+    </section>` : ''}
+    ${renderAskCoachSection({
+      questions: feedbackForSession(askCoach?.feedback, session.date, session.sport),
+      form: askCoach?.form ?? null,
+      submit: askCoach?.submit,
+    })}`;
 }
 
 /** Stands in for the two Garmin action sections when `renderPlanSessionDetail`
@@ -502,14 +624,14 @@ function renderWeekCard(week, label) {
  * workouts. `showGarminActions` (default `true`) just threads through to
  * renderPlanSessionDetail -- see that function's doc comment; the coach's
  * call site (renderRosterTrainingPlanBody) passes `false`. */
-function renderWeeksSection(weeks, detailId, sessionPush, allWeeksOpen, showGarminActions = true) {
+function renderWeeksSection(weeks, detailId, sessionPush, allWeeksOpen, showGarminActions = true, askCoach = null) {
   if (detailId) {
     const session = findSessionById(weeks, detailId);
     if (session) {
       return `
     <section>
       <div class="s-head"><button type="button" class="btn-ghost" data-a="session:back">&larr; Back to plan</button></div>
-      ${renderPlanSessionDetail(session, sessionPush, showGarminActions)}
+      ${renderPlanSessionDetail(session, sessionPush, showGarminActions, askCoach)}
     </section>`;
     }
   }
@@ -972,13 +1094,13 @@ function renderGlossaryPanel(open) {
 }
 
 export function renderApp(data, planSessionDetailId) {
-  const { athlete, events, macro, weeks, sessionPush, allWeeksOpen, glossaryOpen } = data;
+  const { athlete, events, macro, weeks, sessionPush, allWeeksOpen, glossaryOpen, askCoach } = data;
   const event = macroTargetEvent(macro, events);
 
   return `
     <div class="wrap">
       ${renderMasthead(athlete, event)}
-      ${renderWeeksSection(weeks, planSessionDetailId, sessionPush, allWeeksOpen)}
+      ${renderWeeksSection(weeks, planSessionDetailId, sessionPush, allWeeksOpen, true, askCoach)}
       ${renderMacroSection(macro, event, weeks)}
       <div class="foot">
         ${renderLegendPanel()}
@@ -1015,27 +1137,46 @@ const TABS = [
   { id: 'settings', label: 'Settings', icon: '⚙️' },
 ];
 
+/** B3 (coach-mode Q&A build): a small plain count chip -- new to this app
+ * (no existing dot/count precedent anywhere to extend), kept deliberately
+ * minimal to match this app's existing conventions rather than introducing
+ * a new design system. Renders nothing for a falsy/zero count, so every
+ * call site can pass a count unconditionally. */
+function renderUnreadBadge(count) {
+  if (!count) return '';
+  return `<span class="badge-count">${count}</span>`;
+}
+
 /**
- * `activeTab` is unchanged. Second arg is an options bag: `{ hideRoster }`
- * -- when true, the 'roster' tab (coach mode Phase 1's "My Athletes") is
- * left out of the bar entirely, since an identity with no coach grants has
- * nothing to see there (see main.js's render(), which passes `hideRoster:
- * !state.coachFor.length`). Chosen over a general allowlist-of-visible-ids
- * because 'roster' is the only tab that's ever conditionally hidden today --
- * a single named flag says exactly that, rather than every call site having
- * to enumerate all 8 tab ids just to hide one. Omitting the second arg
- * entirely (every existing call site outside main.js's real render(), e.g.
- * tests) keeps the old "every tab always shows" behavior, `hideRoster`
- * defaulting to falsy.
+ * `activeTab` is unchanged. Second arg is an options bag: `{ hideRoster,
+ * feedbackUnread, rosterUnread }`.
+ * - `hideRoster`: when true, the 'roster' tab (coach mode Phase 1's "My
+ *   Athletes") is left out of the bar entirely, since an identity with no
+ *   coach grants has nothing to see there (see main.js's render(), which
+ *   passes `hideRoster: !state.coachFor.length`). Chosen over a general
+ *   allowlist-of-visible-ids because 'roster' is the only tab that's ever
+ *   conditionally hidden today -- a single named flag says exactly that,
+ *   rather than every call site having to enumerate all 7 tab ids just to
+ *   hide one.
+ * - `feedbackUnread`/`rosterUnread` (B3): unread counts (main.js's
+ *   src/unread.js) rendered as a small badge (`renderUnreadBadge`) on the
+ *   Feedback tab (athlete-facing: new coach replies) and the My Athletes tab
+ *   (coach-facing: new athlete questions) respectively. Both default to 0
+ *   (no badge) -- every existing call site outside main.js's real render()
+ *   (e.g. tests) keeps the old "no badges" behavior unchanged.
+ * Omitting the second arg entirely keeps the old "every tab always shows,
+ * no badges" behavior.
  */
-export function renderTabBar(activeTab, { hideRoster = false } = {}) {
+export function renderTabBar(activeTab, { hideRoster = false, feedbackUnread = 0, rosterUnread = 0 } = {}) {
   const tabs = hideRoster ? TABS.filter((tab) => tab.id !== 'roster') : TABS;
+  const unreadByTabId = { feedback: feedbackUnread, roster: rosterUnread };
   return `
     <nav class="tabbar" aria-label="Main">
       ${tabs.map((tab) => `
         <button type="button" class="tab-btn${tab.id === activeTab ? ' active' : ''}" data-a="tab:${tab.id}" aria-current="${tab.id === activeTab ? 'page' : 'false'}">
           <span class="tab-icon" aria-hidden="true">${tab.icon}</span>
           <span class="tab-label">${esc(tab.label)}</span>
+          ${renderUnreadBadge(unreadByTabId[tab.id])}
         </button>`).join('')}
     </nav>`;
 }
@@ -1505,6 +1646,11 @@ function renderTrainingDashboardBody({
   editable = false,
   now = Date.now(),
   emptyMessage = 'Nothing logged or missed yet. Once you log a session (or miss a planned one), it shows up here.',
+  // Coach-mode Q&A build: threaded straight through to `renderWorkoutDetail`
+  // -- see that function's own `askCoach` doc comment. `null` (every
+  // pre-existing call site of this function, until each is updated) renders
+  // an empty read-only Q&A section rather than crashing.
+  askCoach = null,
 }) {
   const items = feed || [];
   const hasData = items.length > 0;
@@ -1516,7 +1662,7 @@ function renderTrainingDashboardBody({
         <section class="hist-section">
           <div class="s-head"><button type="button" class="btn-ghost" data-a="${backAction}">&larr; Back</button></div>
           ${renderWorkoutDetail(match.workout, {
-            chat: chat ? workoutChat : null, online, rpeEdit, editable,
+            chat: chat ? workoutChat : null, online, rpeEdit, editable, askCoach,
           })}
         </section>`;
     }
@@ -1578,7 +1724,7 @@ function dashboardShell(body) {
  * unlike the coach roster's completed-only view, see `renderRosterTab`. */
 export function renderDashboardTab({
   load, feed, status, error, online, detailId, workoutChat, backendConfigured,
-  form, submit, ingest, sync, manualOpen, feedExpanded, rpeEdit,
+  form, submit, ingest, sync, manualOpen, feedExpanded, rpeEdit, askCoach,
 }) {
   if (!backendConfigured) {
     return dashboardShell(renderBackendNeededNotice(
@@ -1593,7 +1739,7 @@ export function renderDashboardTab({
   return dashboardShell(`
     ${!online ? '<div class="chat-banner">Offline -- some data may be out of date.</div>' : ''}
     ${renderTrainingDashboardBody({
-      load, feed, status, error, online, detailId, workoutChat, actions, feedExpanded, rpeEdit, editable: true,
+      load, feed, status, error, online, detailId, workoutChat, actions, feedExpanded, rpeEdit, editable: true, askCoach,
     })}`);
 }
 
@@ -1799,25 +1945,18 @@ function renderWorkoutChatSection({ workout, chat, online }) {
     </section>`;
 }
 
-/** Honest, explicitly non-functional placeholder for a coach-athlete
- * conversation scoped to this one workout -- distinct from
- * `renderWorkoutChatSection`'s real, working scoped AI chat above (which
- * stays exactly as-is for the athlete's own view). Shown on the workout
- * detail view in BOTH the athlete's own Dashboard tab and the coach's roster
- * view of the same workout (`chat` is `null` there, so
- * `renderWorkoutChatSection` renders nothing, but this still does) --
- * Andrew's own words: "save chat as a placeholder, I needed to visualize the
- * UI," not wired to anything, no state, no send action. */
-function renderCoachConversationPlaceholder() {
-  return `
-    <section class="detail-section" id="coach-conversation">
-      <h4>Coach conversation</h4>
-      <p class="sub">Coach-athlete conversation on this workout -- coming soon.</p>
-    </section>`;
-}
-
+/** `askCoach` (coach-mode Q&A build): `{ feedback, form, submit }`, same
+ * shape `renderPlanSessionDetail` takes -- `feedback` is filtered here (via
+ * `feedbackForWorkout`) down to just this workout's own questions. This
+ * REPLACES the old `renderCoachConversationPlaceholder` stub ("coach
+ * conversation -- coming soon") with the real component that stub was
+ * gesturing at -- shown on the workout detail view in BOTH the athlete's
+ * own Dashboard tab (`form` set, wired to a real submit action) and the
+ * coach's roster view of the same workout (`form: null`/absent, read-only;
+ * `chat` stays `null` there too, so `renderWorkoutChatSection` still renders
+ * nothing on that surface -- unchanged). */
 function renderWorkoutDetail(workout, {
-  chat, online, rpeEdit = null, editable = false,
+  chat, online, rpeEdit = null, editable = false, askCoach = null,
 } = {}) {
   const badge = sourceBadge(workout.source);
   return `
@@ -1832,7 +1971,11 @@ function renderWorkoutDetail(workout, {
     ${renderPausesList(workout.pauses)}
     ${renderLengthsSummarySection(workout.lengths)}
     ${renderDetailNotes(workout.notes)}
-    ${renderCoachConversationPlaceholder()}
+    ${renderAskCoachSection({
+      questions: feedbackForWorkout(askCoach?.feedback, workout.id),
+      form: askCoach?.form ?? null,
+      submit: askCoach?.submit,
+    })}
     ${renderWorkoutChatSection({ workout, chat, online })}`;
 }
 
@@ -1974,6 +2117,10 @@ function renderProfilePanel({ form, load, submit }) {
             </label>`).join('')}
         </div>
       </label>
+      <label class="field pool-day" style="flex-direction:row;align-items:center;gap:8px;">
+        <input type="checkbox" data-form="profile" data-field="email_notifications_enabled" ${form.emailNotificationsEnabled ? 'checked' : ''}>
+        <span>Email notifications (a coach reply, or your own question reaching your coach)</span>
+      </label>
       <div class="settings-actions">
         <button type="button" class="btn" data-a="profile:submit" ${submit.status === 'submitting' ? 'disabled' : ''}>${submit.status === 'submitting' ? 'Saving…' : 'Save'}</button>
       </div>
@@ -2001,7 +2148,17 @@ function formatFeedbackDate(isoString) {
   return Number.isNaN(d.getTime()) ? isoString : d.toLocaleString();
 }
 
+/** B2 (coach-mode Q&A build): previously this rendered only type/status/
+ * body/date -- an athlete literally could not see an AI or coach answer to
+ * her own question in this tab (the durable list of EVERYTHING, not just
+ * workout/session-scoped like B1's renderAskCoachSection). Same three-state
+ * answer treatment as `renderAskCoachEntry` (coach reply wins over the AI
+ * answer if both exist; a "waiting on your coach" notice when neither exists
+ * yet but the question was flagged for human review), plus the context line
+ * B1 added to the coach's own roster view (`formatFeedbackContext`), so an
+ * athlete can tell which workout/session an old question was about too. */
 function renderFeedbackEntry(entry) {
+  const context = formatFeedbackContext(entry);
   return `
     <div class="panel feedback-entry">
       <div class="feedback-entry-head">
@@ -2009,7 +2166,9 @@ function renderFeedbackEntry(entry) {
         ${entry.source === 'coach' ? '<span class="chat-chip">coach-logged</span>' : ''}
         <span class="feedback-entry-date mono">${esc(formatFeedbackDate(entry.created_at))}</span>
       </div>
+      ${context ? `<div class="feedback-entry-context mono">${esc(context)}</div>` : ''}
       <p class="feedback-entry-body">${esc(entry.body)}</p>
+      ${renderFeedbackAnswerBlock(entry)}
       <div class="feedback-entry-status mono">${esc(entry.status)}</div>
     </div>`;
 }
@@ -2142,10 +2301,26 @@ function renderCoachWorkoutRow(workout, now) {
     </button>`;
 }
 
+/** Small "about" line describing which workout/session a Feedback entry is
+ * linked to (coach-mode Q&A build) -- previously the coach's roster Feedback
+ * list showed a bare question with no indication of what it was about.
+ * `null` for an unlinked entry (a plain feature_request/comment/bug, or a
+ * coach-logged research_question -- neither carries either field). Plain
+ * text, unescaped -- callers `esc()` it same as any other interpolated
+ * value. */
+function formatFeedbackContext(entry) {
+  if (entry.workout_id) return 'About a logged workout';
+  if (entry.session_date) {
+    return `About ${sportLabel(entry.session_sport)} on ${formatShortDate(parseIsoDate(entry.session_date))}`;
+  }
+  return null;
+}
+
 function renderCoachFeedbackEntry(entry, replyDraft, replySubmit) {
   const submitting = replySubmit.status === 'submitting' && replySubmit.feedbackId === entry.id;
   const submitError = replySubmit.status === 'error' && replySubmit.feedbackId === entry.id
     ? `<div class="conn-result fail">${esc(replySubmit.error)}</div>` : '';
+  const context = formatFeedbackContext(entry);
 
   return `
     <div class="panel feedback-entry">
@@ -2154,6 +2329,7 @@ function renderCoachFeedbackEntry(entry, replyDraft, replySubmit) {
         ${entry.needs_human_review ? '<span class="chat-chip chip-skipped">Needs review</span>' : ''}
         <span class="feedback-entry-date mono">${esc(formatFeedbackDate(entry.created_at))}</span>
       </div>
+      ${context ? `<div class="feedback-entry-context mono">${esc(context)}</div>` : ''}
       <p class="feedback-entry-body">${esc(entry.body)}</p>
       ${entry.ai_provisional_answer ? `
       <div class="detail-section">
@@ -2267,9 +2443,15 @@ function renderRosterConversationsPlaceholder() {
  * the athlete's own Plan tab uses (not a separate `state.roster.allWeeksOpen`)
  * -- a shared, low-stakes accordion-open cosmetic, same "acceptable
  * tradeoff" precedent `allWeeksOpen`'s own doc comment (main.js) already
- * establishes for page-level `<details>` state. */
+ * establishes for page-level `<details>` state.
+ *
+ * `askCoach` (coach-mode Q&A build): threaded straight through to
+ * `renderWeeksSection`/`renderPlanSessionDetail` -- the roster's own call
+ * site (`renderRosterTab`) always passes `form: null` (read-only: coach
+ * replies stay in the roster's own Feedback section reply UI, not
+ * duplicated here). */
 function renderRosterTrainingPlanBody({
-  plan, online, allWeeksOpen, detailId,
+  plan, online, allWeeksOpen, detailId, askCoach,
 }) {
   const status = plan?.status;
   if (status === 'error') {
@@ -2285,13 +2467,17 @@ function renderRosterTrainingPlanBody({
   const { events, macro, weeks } = plan.data;
   const event = macroTargetEvent(macro, events);
   return `
-    ${renderWeeksSection(weeks, detailId, null, allWeeksOpen, false)}
+    ${renderWeeksSection(weeks, detailId, null, allWeeksOpen, false, askCoach)}
     ${renderMacroSection(macro, event, weeks)}`;
 }
 
 export function renderRosterTab({
   athletes, actingAsAthlete, workouts, feedback, replyDrafts, replySubmit, workoutDetailId,
   backendConfigured, online, load, feedExpanded, plan, subTab, allWeeksOpen, sessionDetailId,
+  // B3 (coach-mode Q&A build): count of `feedback` entries newer than this
+  // device's coach "last seen" timestamp (main.js's src/unread.js) -- 0/
+  // absent renders no badge at all (see renderUnreadBadge).
+  feedbackUnread = 0,
 }) {
   if (!backendConfigured) {
     return rosterShell(renderBackendNeededNotice(
@@ -2316,6 +2502,15 @@ export function renderRosterTab({
       workouts: workouts.data || [],
       now: new Date(),
     });
+    // Coach-mode Q&A build: read-only (`form: null`) -- coach replies stay
+    // centralized in `renderCoachFeedbackSection`'s own reply UI below, not
+    // duplicated inside the shared Ask-the-coach component. Shared verbatim
+    // between the workout-detail view (via `renderTrainingDashboardBody`)
+    // and the Training Plan sub-tab's session-detail view (via
+    // `renderRosterTrainingPlanBody`) below -- both filter this same raw
+    // list down to their own one workout/session.
+    const askCoach = { feedback: feedback.data, form: null };
+
     const dashboardBody = renderTrainingDashboardBody({
       load,
       feed,
@@ -2330,6 +2525,7 @@ export function renderRosterTab({
       backAction: 'roster:close-workout',
       chat: false,
       emptyMessage: 'Nothing logged or missed yet.',
+      askCoach,
     });
 
     // Read-only workout detail (no embedded chat -- that's an athlete-only
@@ -2354,13 +2550,13 @@ export function renderRosterTab({
     const subTabBody = (() => {
       if (activeSubTab === 'conversations') return renderRosterConversationsPlaceholder();
       if (activeSubTab === 'plan') return renderRosterTrainingPlanBody({
-        plan, online, allWeeksOpen, detailId: sessionDetailId,
+        plan, online, allWeeksOpen, detailId: sessionDetailId, askCoach,
       });
       return `
         ${!online ? '<div class="chat-banner">Offline -- some data may be out of date.</div>' : ''}
         ${dashboardBody}
         <section class="hist-section">
-          <div class="s-head"><h2>Feedback</h2></div>
+          <div class="s-head"><h2>Feedback${renderUnreadBadge(feedbackUnread)}</h2></div>
           ${renderCoachFeedbackSection(feedback, replyDrafts, replySubmit)}
         </section>`;
     })();
