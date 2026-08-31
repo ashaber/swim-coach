@@ -27,6 +27,23 @@ function esc(value) {
   ));
 }
 
+// D2: which of `session_load`'s four fidelity tiers produced a logged
+// workout's `load_au` (see `engine/swim_coach/load.py`'s `SessionLoad.tier`
+// docstring for what each tier means) -- one shared map instead of
+// duplicating it at each of the three UI call sites (renderDetailStats,
+// renderWorkoutRow, renderCoachWorkoutRow). `null` for an unrecognized/
+// absent tier -- callers render nothing rather than a blank/broken chip.
+const LOAD_TIER_LABELS = {
+  srpe: 'from RPE',
+  hr_trimp: 'from HR',
+  pace_if: 'from pace',
+  duration: 'estimated',
+};
+
+export function loadTierLabel(tier) {
+  return LOAD_TIER_LABELS[tier] || null;
+}
+
 const SESSION_LEGEND = [
   { colorVar: '--c-pool', label: 'Coached pool (fixed)' },
   { colorVar: '--c-ow', label: 'Open water (AI-set)' },
@@ -93,6 +110,11 @@ function renderPlanSessionDetailStats(session) {
     renderDetailStat('Distance', formatDistance(session.distance_m)),
     renderDetailStat('Zone', session.intensity?.zone || null),
     renderDetailStat('Source', session.source === 'pool_coach' ? 'Coach-set' : null),
+    // D1: pure display of `session_target_load_au`, computed server-side
+    // and attached on-the-fly to every exported session (see
+    // scripts/export_plan_json.py's export_athlete) -- no client
+    // computation, no persisted field to be stale against.
+    renderDetailStat('Target load (AU)', session.target_load_au),
   ].join('');
   return `<div class="detail-stats">${stats}</div>`;
 }
@@ -1172,6 +1194,57 @@ function renderSyncSection(sync, online) {
     </div>`;
 }
 
+// --- CR-10 sRPE slider (A6a) -------------------------------------------------
+// Shared component for BOTH the manual-log form's RPE field
+// (renderManualLogSection below) and the workout-detail RPE editor
+// (renderRpeEditSection) -- one slider, one anchor map, two call sites.
+// Foster's modified Borg CR-10 scale (0-10, not 1-10) per
+// `library/19-srpe-protocol.md` -- 6/8/9 are deliberately left unanchored in
+// the original published instrument (not a gap in this table), rendered as
+// an em-dash rather than fabricated text.
+export const CR10_ANCHORS = {
+  0: 'Rest / Nothing at all',
+  1: 'Very Easy',
+  2: 'Easy',
+  3: 'Moderate',
+  4: 'Somewhat Hard',
+  5: 'Hard',
+  7: 'Very Hard',
+  10: 'Maximal / Exhausting',
+};
+
+/** The verbal anchor for one CR-10 value, or `null` for an unanchored rating
+ * (6/8/9) or a missing/invalid value -- callers render `null` as an
+ * em-dash. Exported so main.js's onAppInput can update the anchor caption
+ * live as the slider is dragged, without a full render() (see that
+ * handler's existing data-slider-out convention, which this mirrors via
+ * `data-slider-anchor`). */
+export function cr10AnchorLabel(value) {
+  if (value === '' || value === null || value === undefined) return null;
+  return CR10_ANCHORS[Number(value)] ?? null;
+}
+
+/** Renders just the `<input type="range">` + its live anchor caption --
+ * callers wrap this in their own `<label class="field">`/`<span>` value
+ * display (see renderManualLogSection and renderRpeEditSection), since the
+ * two call sites format that surrounding markup slightly differently.
+ * `value` follows the same "'' /null/undefined means unset" convention as
+ * every other form field in this app (see renderManualLogSection's
+ * `rpeMissing`) -- when unset, no `value` attribute is written so the
+ * range input shows its native default (a mid-scale thumb position) until
+ * the athlete actually drags it, exactly like the pre-existing bare
+ * 1-10 slider did. */
+export function renderCr10SliderField({
+  value, formName, field, outId, disabled = false,
+}) {
+  const missing = value === '' || value === null || value === undefined;
+  const anchorId = `${outId}-anchor`;
+  const anchorText = cr10AnchorLabel(value);
+  return `
+    <input type="range" min="0" max="10" step="1" data-form="${esc(formName)}" data-field="${esc(field)}" data-slider-out="${esc(outId)}" data-slider-anchor="${esc(anchorId)}"${missing ? '' : ` value="${esc(value)}"`}${disabled ? ' disabled' : ''}>
+    <p class="field-hint mono" id="${esc(anchorId)}">${anchorText ? esc(anchorText) : '&mdash;'}</p>`;
+}
+
 // --- Manual entry / file upload (Phase 3 secondary Log-tab action) ----------
 // Demoted behind a collapsed-by-default toggle (state.logManualOpen, see
 // main.js) -- the form/upload markup itself is unchanged from before this
@@ -1220,7 +1293,9 @@ function renderManualLogSection({
       </label>
       <label class="field">
         <span>RPE (effort) &middot; <output id="log-rpe-out">${rpeMissing ? '&ndash;' : esc(form.rpe)}</output>/10 <b id="log-rpe-required-badge"${rpeMissing ? '' : ' hidden'}>(required)</b></span>
-        <input type="range" min="1" max="10" step="1" data-form="log" data-field="rpe" data-slider-out="log-rpe-out"${rpeMissing ? '' : ` value="${esc(form.rpe)}"`}>
+        ${renderCr10SliderField({
+          value: form.rpe, formName: 'log', field: 'rpe', outId: 'log-rpe-out',
+        })}
       </label>
       <label class="field">
         <span>Notes</span>
@@ -1263,7 +1338,60 @@ function highlightDrift(line) {
   return `<span class="stat-drift${warn ? ' stat-drift--warn' : ''}">${esc(driftText)}</span>${esc(rest)}`;
 }
 
-function renderWorkoutRow(workout) {
+/** D2: a compact "<value> AU · <tier label>" chip -- shared by
+ * renderWorkoutRow and renderCoachWorkoutRow below. Defensive: renders
+ * nothing when `load_au` is absent (old cached history data from before
+ * this build, or any future code path that hasn't been updated to attach
+ * it -- see backend/app/routes/workouts.py's module docstring) rather than
+ * showing a broken half-chip; a recognized-but-unlabeled `load_tier`
+ * (shouldn't happen, but defensive) still shows the bare number. */
+function renderLoadChip(workout) {
+  if (workout.load_au === null || workout.load_au === undefined) return '';
+  const tierLabel = loadTierLabel(workout.load_tier);
+  return `<span class="chat-chip">${esc(workout.load_au)} AU${tierLabel ? ` &middot; ${esc(tierLabel)}` : ''}</span>`;
+}
+
+// A6c: an in-app-only "rate this workout" nudge -- no push notification, no
+// new fetch/timer plumbing (explicitly out of scope this build, see the
+// plan doc). Evaluated purely from data already in the feed, only at
+// render time (i.e. only while the app happens to be open) against an
+// injected `now` (mirrors history.js's buildHistoryFeed({ now }) pattern)
+// so this stays deterministically testable rather than reading
+// `Date.now()` with no override.
+const RPE_REMINDER_DELAY_MS = 30 * 60 * 1000; // library/19-srpe-protocol.md's ~30-min post-workout ask-timing convention.
+
+/** Best estimate of when a workout ended -- prefers a real FIT-derived
+ * `started_at` + `duration_min` (the true finish time), falls back to
+ * `logged_at` (the record-saved/"upload" time), and returns `null` (never
+ * a fabricated timestamp) when neither is present. */
+function estimateWorkoutFinishMs(workout) {
+  if (workout.started_at) {
+    const startMs = new Date(workout.started_at).getTime();
+    if (!Number.isNaN(startMs)) return startMs + (workout.duration_min || 0) * 60000;
+  }
+  if (workout.logged_at) {
+    const loggedMs = new Date(workout.logged_at).getTime();
+    if (!Number.isNaN(loggedMs)) return loggedMs;
+  }
+  return null;
+}
+
+/** Tapping this chip opens the workout detail with the RPE editor already
+ * open (`history:open-rate`, handled by main.js's
+ * handleOpenHistoryDetailForRating) -- distinct from the plain
+ * `history:open` the rest of the row triggers. A `<span>`, not a nested
+ * `<button>` (this whole row is already a `<button>`) -- `onAppClick`'s
+ * `e.target.closest('[data-a]')` delegation finds this element first when
+ * tapped, so only the rate action fires, never both. */
+function renderRateChip(workout, now) {
+  if (workout.rpe !== null && workout.rpe !== undefined) return '';
+  const finishMs = estimateWorkoutFinishMs(workout);
+  if (finishMs === null) return '';
+  if (now - finishMs < RPE_REMINDER_DELAY_MS) return '';
+  return `<span class="chat-chip chip-cta" data-a="history:open-rate" data-id="${esc(workout.id)}">Rate this workout</span>`;
+}
+
+export function renderWorkoutRow(workout, now = Date.now()) {
   const metaParts = [formatDuration(workout.duration_min)];
   const distance = formatWorkoutDistance(workout.distance_m);
   if (distance) metaParts.push(distance);
@@ -1281,6 +1409,8 @@ function renderWorkoutRow(workout) {
           <span>${esc(sportLabel(workout.sport, workout.sport_detail))}</span>
           ${badge ? `<span class="chat-chip">${esc(badge)}</span>` : ''}
           ${workout.rpe !== null && workout.rpe !== undefined ? `<span class="chat-chip">RPE ${esc(workout.rpe)}</span>` : ''}
+          ${renderLoadChip(workout)}
+          ${renderRateChip(workout, now)}
         </div>
         <div class="hist-meta mono">${metaParts.join(' · ')}</div>
         ${analyticsLine ? `<div class="hist-analytics mono">${highlightDrift(analyticsLine)}</div>` : ''}
@@ -1327,9 +1457,12 @@ function renderSkippedRow(session) {
 /** One feed item (either kind) as a row -- `renderCompletedRow` lets each
  * surface plug in its own completed-row treatment (the athlete's own
  * `renderWorkoutRow`, or the coach roster's `renderCoachWorkoutRow` with its
- * planned-vs-actual quality line) while sharing this one mapping. */
-function renderFeedRow(item, renderCompletedRow) {
-  return item.kind === 'completed' ? renderCompletedRow(item.workout) : renderSkippedRow(item.session);
+ * planned-vs-actual quality line) while sharing this one mapping. `now`
+ * threads through to `renderCompletedRow` for `renderWorkoutRow`'s A6c
+ * rate-reminder chip (see that function); `renderCoachWorkoutRow` ignores
+ * the extra argument. */
+function renderFeedRow(item, renderCompletedRow, now) {
+  return item.kind === 'completed' ? renderCompletedRow(item.workout, now) : renderSkippedRow(item.session);
 }
 
 /** The shared body of the merged Training Dashboard (Log+History merge,
@@ -1361,6 +1494,16 @@ function renderTrainingDashboardBody({
   renderCompletedRow = renderWorkoutRow,
   backAction = 'history:back',
   chat = true,
+  // A6b: only the athlete's own Dashboard tab call site opts into the RPE
+  // editor (`editable: true` + a real `rpeEdit` state slice) -- the coach
+  // roster's call site leaves both at their defaults, so `renderWorkoutDetail`
+  // never renders an Edit affordance there. This isn't just a UI choice:
+  // `PATCH /api/workouts/{id}` is self-access only (`resolve_athlete`, not
+  // `resolve_coach_athlete` -- see backend/app/auth.py), so a coach session
+  // could never actually save an edit there even if the button existed.
+  rpeEdit = null,
+  editable = false,
+  now = Date.now(),
   emptyMessage = 'Nothing logged or missed yet. Once you log a session (or miss a planned one), it shows up here.',
 }) {
   const items = feed || [];
@@ -1372,7 +1515,9 @@ function renderTrainingDashboardBody({
       return `
         <section class="hist-section">
           <div class="s-head"><button type="button" class="btn-ghost" data-a="${backAction}">&larr; Back</button></div>
-          ${renderWorkoutDetail(match.workout, { chat: chat ? workoutChat : null, online })}
+          ${renderWorkoutDetail(match.workout, {
+            chat: chat ? workoutChat : null, online, rpeEdit, editable,
+          })}
         </section>`;
     }
   }
@@ -1383,7 +1528,7 @@ function renderTrainingDashboardBody({
   const feedBody = (() => {
     if (status === 'error') {
       return `
-        ${hasData ? `<div class="hist-list">${capped.map((item) => renderFeedRow(item, renderCompletedRow)).join('')}</div>` : ''}
+        ${hasData ? `<div class="hist-list">${capped.map((item) => renderFeedRow(item, renderCompletedRow, now)).join('')}</div>` : ''}
         <div class="hist-error">Couldn't load your training history: ${esc(error)}</div>
         <div class="settings-actions"><button type="button" class="btn-ghost" data-a="history:retry">Retry</button></div>`;
     }
@@ -1395,7 +1540,7 @@ function renderTrainingDashboardBody({
       return `<p class="sub">${esc(notice)}</p>`;
     }
     return `
-      <div class="hist-list">${capped.map((item) => renderFeedRow(item, renderCompletedRow)).join('')}</div>
+      <div class="hist-list">${capped.map((item) => renderFeedRow(item, renderCompletedRow, now)).join('')}</div>
       ${remaining > 0 ? `
       <div class="settings-actions">
         <button type="button" class="btn-ghost" data-a="dashboard:show-more">Show ${remaining} more</button>
@@ -1433,7 +1578,7 @@ function dashboardShell(body) {
  * unlike the coach roster's completed-only view, see `renderRosterTab`. */
 export function renderDashboardTab({
   load, feed, status, error, online, detailId, workoutChat, backendConfigured,
-  form, submit, ingest, sync, manualOpen, feedExpanded,
+  form, submit, ingest, sync, manualOpen, feedExpanded, rpeEdit,
 }) {
   if (!backendConfigured) {
     return dashboardShell(renderBackendNeededNotice(
@@ -1448,7 +1593,7 @@ export function renderDashboardTab({
   return dashboardShell(`
     ${!online ? '<div class="chat-banner">Offline -- some data may be out of date.</div>' : ''}
     ${renderTrainingDashboardBody({
-      load, feed, status, error, online, detailId, workoutChat, actions, feedExpanded,
+      load, feed, status, error, online, detailId, workoutChat, actions, feedExpanded, rpeEdit, editable: true,
     })}`);
 }
 
@@ -1468,6 +1613,23 @@ function renderDetailStat(label, value, kind) {
   return `<div class="detail-stat"><div class="l">${esc(label)}</div><div class="v${valueClass}">${esc(value)}</div></div>`;
 }
 
+/** D2's "Load (AU)" detail-view tile -- a `.detail-stat` like every other
+ * tile `renderDetailStat` produces, but with a small reliability-tier chip
+ * embedded in the value (so it needs its own markup rather than
+ * `renderDetailStat`'s plain-text-only value). Defensive: renders nothing
+ * when `load_au` is absent (old cached data, or a code path that hasn't
+ * been updated -- see backend/app/routes/workouts.py) rather than crashing
+ * or showing a chip with no number behind it. */
+function renderLoadDetailStat(workout) {
+  if (workout.load_au === null || workout.load_au === undefined) return '';
+  const tierLabel = loadTierLabel(workout.load_tier);
+  return `
+    <div class="detail-stat">
+      <div class="l">Load (AU)</div>
+      <div class="v">${esc(workout.load_au)}${tierLabel ? ` <span class="chat-chip">${esc(tierLabel)}</span>` : ''}</div>
+    </div>`;
+}
+
 function renderDetailStats(workout) {
   const pace = formatPace(workout.avg_pace_s_per_100m);
   const hasRpe = workout.rpe !== null && workout.rpe !== undefined;
@@ -1480,8 +1642,46 @@ function renderDetailStats(workout) {
     renderDetailStat('RPE', hasRpe ? `${workout.rpe}/10` : null),
     renderDetailStat('Avg HR', hasAvgHr ? `${workout.avg_hr} bpm` : null, 'hr'),
     renderDetailStat('Max HR', hasMaxHr ? `${workout.max_hr} bpm` : null, 'hr'),
+    renderLoadDetailStat(workout),
   ].join('');
   return `<div class="detail-stats">${stats}</div>`;
+}
+
+// --- A6b: editable RPE on the workout detail view --------------------------
+// Only rendered when the caller opts in via `editable: true` (the athlete's
+// own Dashboard tab -- see renderTrainingDashboardBody/renderDashboardTab).
+// Mirrors the `state.logManualOpen` disclosure mechanic: a toggle button
+// swaps in the CR-10 slider + Save/Cancel, driven entirely by main.js's
+// `state.workoutRpeEdit` (null = not editing).
+
+function renderRpeEditSection(workout, rpeEdit) {
+  const isEditingThis = !!rpeEdit && rpeEdit.workoutId === workout.id;
+  const hasRpe = workout.rpe !== null && workout.rpe !== undefined;
+
+  if (!isEditingThis) {
+    return `
+      <div class="settings-actions">
+        <button type="button" class="btn-ghost" data-a="workout:edit-rpe" data-id="${esc(workout.id)}">${hasRpe ? 'Edit RPE' : 'Rate this workout'}</button>
+      </div>`;
+  }
+
+  const submitting = rpeEdit.status === 'submitting';
+  const missing = rpeEdit.rpe === '' || rpeEdit.rpe === null || rpeEdit.rpe === undefined;
+  return `
+    <section class="detail-section" id="workout-rpe-edit">
+      <h4>Rate this workout</h4>
+      <label class="field">
+        <span>RPE (effort) &middot; <output id="workout-rpe-edit-out">${missing ? '&ndash;' : esc(rpeEdit.rpe)}</output>/10</span>
+        ${renderCr10SliderField({
+          value: rpeEdit.rpe, formName: 'workoutRpe', field: 'rpe', outId: 'workout-rpe-edit-out', disabled: submitting,
+        })}
+      </label>
+      ${rpeEdit.status === 'error' ? `<div class="conn-result fail">${esc(rpeEdit.error)}</div>` : ''}
+      <div class="settings-actions">
+        <button type="button" class="btn" data-a="workout:save-rpe" data-id="${esc(workout.id)}" ${submitting || missing ? 'disabled' : ''}>${submitting ? 'Saving…' : 'Save'}</button>
+        <button type="button" class="btn-ghost" data-a="workout:cancel-edit-rpe" ${submitting ? 'disabled' : ''}>Cancel</button>
+      </div>
+    </section>`;
 }
 
 /** The full (not compact-line) analytics block -- each of the same five
@@ -1616,7 +1816,9 @@ function renderCoachConversationPlaceholder() {
     </section>`;
 }
 
-function renderWorkoutDetail(workout, { chat, online } = {}) {
+function renderWorkoutDetail(workout, {
+  chat, online, rpeEdit = null, editable = false,
+} = {}) {
   const badge = sourceBadge(workout.source);
   return `
     <div class="detail-header">
@@ -1624,6 +1826,7 @@ function renderWorkoutDetail(workout, { chat, online } = {}) {
       <div class="hist-meta mono">${esc(formatLongDate(parseIsoDate(workout.date.slice(0, 10))))}${badge ? ` <span class="chat-chip">${esc(badge)}</span>` : ''}</div>
     </div>
     ${renderDetailStats(workout)}
+    ${editable ? renderRpeEditSection(workout, rpeEdit) : ''}
     ${renderDetailAnalytics(workout.analytics)}
     ${renderLapsTable(workout.laps)}
     ${renderPausesList(workout.pauses)}
@@ -1911,7 +2114,12 @@ function formatQualityLine(quality) {
   return parts.join(', ');
 }
 
-function renderCoachWorkoutRow(workout) {
+// `now` is accepted (unused) so this matches renderCompletedRow's shared
+// `(workout, now)` call shape (see renderFeedRow) -- no rate-reminder chip
+// here, only D2's load chip: this is the coach's read-only view of someone
+// else's training, and the reminder is an athlete-facing nudge to log their
+// own effort, not something a coach acts on.
+function renderCoachWorkoutRow(workout, now) {
   const metaParts = [formatDuration(workout.duration_min)];
   const distance = formatWorkoutDistance(workout.distance_m);
   if (distance) metaParts.push(distance);
@@ -1925,6 +2133,7 @@ function renderCoachWorkoutRow(workout) {
         <div class="hist-title">
           <span>${esc(sportLabel(workout.sport, workout.sport_detail))}</span>
           ${workout.rpe !== null && workout.rpe !== undefined ? `<span class="chat-chip">RPE ${esc(workout.rpe)}</span>` : ''}
+          ${renderLoadChip(workout)}
         </div>
         <div class="hist-meta mono">${metaParts.join(' · ')}</div>
         ${qualityLine ? `<div class="hist-analytics mono">${esc(qualityLine)}</div>` : ''}

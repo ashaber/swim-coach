@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   postWorkout, listWorkouts, postWellness, listWellness, fetchPlan, fetchPlanLoad, getAthlete, patchAthlete,
+  patchWorkout,
   postFeedback, listFeedback, uploadWorkoutFile, exchangeGoogleToken, RequestAccessError, logout,
   onboard, OnboardForbiddenError, OnboardConflictError, downloadGarminFit,
   pushSessionToIntervals,
@@ -234,6 +235,35 @@ describe('patchAthlete', () => {
       baseUrl: 'https://api.example.com', token: 'tok', athlete: 'andrew', payload: {},
     });
     expect(result).toEqual({ ok: false, error: 'invalid sex', status: 422 });
+  });
+});
+
+describe('patchWorkout', () => {
+  it('PATCHes /api/workouts/{id} with the athlete query param, bearer header, and JSON body', async () => {
+    const updated = { id: 'w-1', rpe: 7 };
+    global.fetch = fakeFetch(updated);
+    const payload = { rpe: 7 };
+
+    const result = await patchWorkout({
+      baseUrl: 'https://api.example.com', token: 'tok123', athlete: 'renee', workoutId: 'w-1', payload,
+    });
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/workouts/w-1?athlete=renee');
+    expect(init.method).toBe('PATCH');
+    expect(init.headers.Authorization).toBe('Bearer tok123');
+    expect(init.headers['Content-Type']).toBe('application/json');
+    expect(JSON.parse(init.body)).toEqual(payload);
+    expect(result).toEqual({ ok: true, data: updated });
+  });
+
+  it('returns a normalized error on a 422 (out-of-range rpe)', async () => {
+    global.fetch = fakeFetch({ error: 'rpe must be <= 10' }, { ok: false, status: 422 });
+    const result = await patchWorkout({
+      baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee', workoutId: 'w-1', payload: { rpe: 11 },
+    });
+    expect(result).toEqual({ ok: false, error: 'rpe must be <= 10', status: 422 });
   });
 });
 

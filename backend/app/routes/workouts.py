@@ -53,6 +53,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from pydantic import ValidationError
+from swim_coach.load import session_load
 from swim_coach.models import Workout
 from swim_coach.parse_files import PARSERS_BY_EXTENSION
 
@@ -128,7 +129,19 @@ async def create_workout(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     store.save_workout(athlete, workout)
-    return workout.model_dump(mode="json")
+    # D2: attach the same load_au/load_tier every GET /api/workouts row gets
+    # (see list_workouts below) so a freshly-saved workout's response is
+    # never missing the field a subsequent list fetch would show -- one
+    # `session_load` call, reusing the SessionLoad object for both fields.
+    # Never persisted on the model (see module docstring's `Workout`
+    # boundary) -- response-only, computed fresh every time. No
+    # hr_max/hr_rest context is available here (no full workout/wellness
+    # history loaded in this route), so this reuses the exact same
+    # `quality.workout_quality`-documented limitation/pattern: sex and
+    # css_pace_s_per_100m only, tier 2 (HR-based TRIMP) never fires from
+    # this endpoint.
+    sl = session_load(workout, sex=profile.sex, css_pace_s_per_100m=profile.css_pace_s_per_100m)
+    return {**workout.model_dump(mode="json"), "load_au": round(sl.value, 1), "load_tier": sl.tier}
 
 
 @router.patch("/api/workouts/{workout_id}")
@@ -340,9 +353,16 @@ async def list_workouts(
     athlete = resolve_athlete(principal, athlete)
     store = make_store(settings)
     try:
-        store.load_athlete(athlete)
+        profile = store.load_athlete(athlete)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"no such athlete: {athlete}") from exc
 
     workouts = store.list_workouts(athlete)
-    return [w.model_dump(mode="json") for w in workouts]
+    # D2: attach load_au/load_tier per workout, same computation and same
+    # documented hr_max/hr_rest-unavailable limitation as create_workout
+    # above -- see its comment.
+    result = []
+    for w in workouts:
+        sl = session_load(w, sex=profile.sex, css_pace_s_per_100m=profile.css_pace_s_per_100m)
+        result.append({**w.model_dump(mode="json"), "load_au": round(sl.value, 1), "load_tier": sl.tier})
+    return result

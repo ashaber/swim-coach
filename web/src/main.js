@@ -4,7 +4,7 @@ import log from './log.js';
 import {
   renderApp, renderLoading, renderError, renderTabBar, renderCoachTab, renderSettingsTab,
   renderDashboardTab, renderCheckinTab, renderBackendNeededNotice, renderFeedbackTab, renderUpdateBanner,
-  renderOnboardingForm, renderRosterTab,
+  renderOnboardingForm, renderRosterTab, cr10AnchorLabel,
 } from './views.js';
 import { findSessionById } from './plan.js';
 import { buildHistoryFeed } from './history.js';
@@ -14,7 +14,7 @@ import {
 } from './chat.js';
 import { loadSettings, saveSettings, isConfigured } from './settings.js';
 import {
-  streamChat, postWorkout, postWellness, fetchPlan, fetchPlanLoad, getAthlete, patchAthlete,
+  streamChat, postWorkout, postWellness, fetchPlan, fetchPlanLoad, getAthlete, patchAthlete, patchWorkout,
   postFeedback, listFeedback, uploadWorkoutFile, listWorkouts, syncWorkouts, logout, onboard,
   pushSessionToIntervals,
   downloadGarminFit,
@@ -286,6 +286,16 @@ const state = {
   // one workout isn't a durable conversation worth carrying across
   // sessions the way the Coach tab's chat is (chat.js's localStorage).
   workoutChat: null,
+  // A6b: the workout-detail RPE editor. `null` when no edit is in progress;
+  // else `{workoutId, rpe, status, error}` (same async-state shape as
+  // logSubmit/checkinSubmit above). Reset alongside workoutChat -- both are
+  // per-detail-view-scoped and there's only ever one detail view open at a
+  // time (handleOpenHistoryDetail, handleCloseHistoryDetail, setTab leaving
+  // the Dashboard tab). Never populated on the coach roster's read-only
+  // renderWorkoutDetail call site -- see renderTrainingDashboardBody's
+  // `editable` doc comment for why (PATCH /api/workouts is self-access
+  // only, a coach session could never save it anyway).
+  workoutRpeEdit: null,
   checkinForm: createCheckinForm(),
   checkinSubmit: { status: 'idle', message: null },
   profileForm: createProfileForm(),
@@ -377,6 +387,7 @@ function renderTabContent() {
         sync: state.logSync,
         manualOpen: state.logManualOpen,
         feedExpanded: state.dashboardFeedExpanded,
+        rpeEdit: state.workoutRpeEdit,
       });
     case 'checkin':
       return renderCheckinTab({
@@ -1112,12 +1123,18 @@ function handleToggleManualLog() {
 // Renders from the workout dump already sitting in state.workoutHistory.data
 // -- no second API call (see views.js's renderTrainingDashboardBody/renderWorkoutDetail).
 
-function handleOpenHistoryDetail(id) {
+/** `rpeEdit`, when given, opens the detail straight into A6b's RPE-edit
+ * mode (see handleOpenHistoryDetailForRating below, the A6c chip's
+ * handler) -- `null` (the default, every other caller) leaves
+ * `state.workoutRpeEdit` cleared, same "only one detail-scoped edit at a
+ * time" convention as `workoutChat`. */
+function handleOpenHistoryDetail(id, { rpeEdit = null } = {}) {
   if (!id) return;
   state.workoutDetailId = id;
   // A fresh, empty scoped chat thread for this workout (see
   // closeWorkoutChat for the matching teardown on every close path).
   state.workoutChat = { workoutId: id, messages: [] };
+  state.workoutRpeEdit = rpeEdit;
   // Pushes an in-app history entry so hardware/gesture back (which fires a
   // `popstate`, handled below) closes the detail instead of navigating the
   // PWA away entirely -- see handlePopState and onAppClick's `history:back`
@@ -1129,6 +1146,82 @@ function handleOpenHistoryDetail(id) {
   render();
   scrollToTop(); // see handleOpenSessionDetail's matching call -- was a gap
   // in both handlers, not just the Plan tab's.
+}
+
+/** A6c: the "Rate this workout" row chip's action -- opens the same detail
+ * view as a normal row tap, but with the RPE editor already open. Looks up
+ * the workout in the already-loaded history (no second fetch) purely to
+ * seed the editor's initial value (an unrated workout has none, so `''`,
+ * matching the manual-log form's own "unset" convention). */
+function handleOpenHistoryDetailForRating(id) {
+  if (!id) return;
+  const workout = (state.workoutHistory.data || []).find((w) => w.id === id);
+  handleOpenHistoryDetail(id, {
+    rpeEdit: {
+      workoutId: id, rpe: workout?.rpe ?? '', status: 'idle', error: null,
+    },
+  });
+}
+
+/** The workout-detail RPE editor's "Edit RPE"/"Rate this workout" toggle
+ * (renderRpeEditSection's non-editing button) -- opens edit mode for the
+ * workout ALREADY showing in the detail view, unlike
+ * handleOpenHistoryDetailForRating above (which also opens the detail
+ * itself from a list row). */
+function handleEditWorkoutRpe(id) {
+  if (!id) return;
+  const workout = (state.workoutHistory.data || []).find((w) => w.id === id);
+  state.workoutRpeEdit = {
+    workoutId: id, rpe: workout?.rpe ?? '', status: 'idle', error: null,
+  };
+  render();
+}
+
+function handleCancelEditWorkoutRpe() {
+  state.workoutRpeEdit = null;
+  render();
+}
+
+/** Saves the RPE editor's current value via `PATCH /api/workouts/{id}` --
+ * mirrors handleSubmitLog's exact submit/api-call/re-render shape. On
+ * success, refetches via the existing `loadHistory()` (never a hand-rolled
+ * optimistic merge -- the just-saved workout's `load_au`/`load_tier` are
+ * server-computed and would otherwise go stale in state until the next
+ * natural refresh). */
+async function handleSaveWorkoutRpe(id) {
+  if (!state.workoutRpeEdit || state.workoutRpeEdit.workoutId !== id) return;
+  if (state.workoutRpeEdit.status === 'submitting') return;
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) {
+    state.tab = 'settings';
+    saveActiveTab(state.tab);
+    render();
+    return;
+  }
+  const rpeValue = state.workoutRpeEdit.rpe;
+  if (rpeValue === '' || rpeValue === null || rpeValue === undefined) return;
+
+  state.workoutRpeEdit = { ...state.workoutRpeEdit, status: 'submitting', error: null };
+  render();
+  log.info('workout.rpe_edit_submit', { athlete: athleteSlug(), workout_id: id });
+
+  const result = await patchWorkout({
+    baseUrl: settings.baseUrl,
+    token: settings.token,
+    athlete: athleteSlug(),
+    workoutId: id,
+    payload: { rpe: Number(rpeValue) },
+  });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    log.info('workout.rpe_edit_success', { athlete: athleteSlug(), workout_id: id });
+    state.workoutRpeEdit = null;
+    loadHistory(); // refreshes history so the detail reflects the corrected rpe/load_au/load_tier; calls render() itself
+  } else {
+    log.error('workout.rpe_edit_failed', { athlete: athleteSlug(), workout_id: id, error: result.error });
+    state.workoutRpeEdit = { ...state.workoutRpeEdit, status: 'error', error: result.error };
+    render();
+  }
 }
 
 /** Tears down the detail view's EPHEMERAL scoped chat -- aborts any
@@ -1145,6 +1238,7 @@ function handleCloseHistoryDetail() {
   if (!state.workoutDetailId) return; // avoids a redundant render on popstate re-entrancy
   state.workoutDetailId = null;
   closeWorkoutChat();
+  state.workoutRpeEdit = null;
   render();
 }
 
@@ -1955,6 +2049,7 @@ function setTab(tab) {
   if (state.tab === 'dashboard' && state.workoutDetailId) {
     state.workoutDetailId = null;
     closeWorkoutChat();
+    state.workoutRpeEdit = null;
     // Consumes the pushState entry handleOpenHistoryDetail added (see
     // there), keeping browser history symmetric with app state -- without
     // this, a dangling entry would sit in the stack and silently swallow
@@ -2102,6 +2197,13 @@ async function onAppClick(e) {
     case 'onboard:submit': handleOnboardSubmit(); break;
     case 'history:retry': loadHistory(); break;
     case 'history:open': handleOpenHistoryDetail(el.dataset.id); break;
+    // A6c: the "Rate this workout" row chip -- opens the same detail view
+    // as a plain row tap, with the RPE editor already open.
+    case 'history:open-rate': handleOpenHistoryDetailForRating(el.dataset.id); break;
+    // A6b: the workout-detail RPE editor.
+    case 'workout:edit-rpe': handleEditWorkoutRpe(el.dataset.id); break;
+    case 'workout:cancel-edit-rpe': handleCancelEditWorkoutRpe(); break;
+    case 'workout:save-rpe': await handleSaveWorkoutRpe(el.dataset.id); break;
     // Shared by both Training Dashboard surfaces (Build 1's
     // renderTrainingDashboardBody) -- expands the athlete's own dashboard
     // feed while on the Dashboard tab, or the coach roster's feed while
@@ -2186,6 +2288,10 @@ function onAppInput(e) {
     const id = el.dataset.id;
     if (id) state.roster.replyDrafts[id] = el.value;
   } else if (formName === 'grants') state.grants.createForm[field] = el.value;
+  // A6b: the workout-detail RPE editor's own slider -- guarded on
+  // workoutRpeEdit still being set (defensive against a stray late event
+  // after Cancel/Save already cleared it).
+  else if (formName === 'workoutRpe' && state.workoutRpeEdit) state.workoutRpeEdit[field] = el.value;
   else if (formName === 'onboard') {
     if (field === 'pool_days') {
       // Same data-day convention as the profile form's pool-day checkboxes
@@ -2210,6 +2316,15 @@ function onAppInput(e) {
     const out = document.getElementById(outId);
     if (out) out.textContent = el.value;
   }
+  // A6a: the CR-10 slider's live verbal-anchor caption (renderCr10SliderField's
+  // `data-slider-anchor`, shared by both the manual-log form and the
+  // workout-detail RPE editor) -- same direct-DOM-patch convention as
+  // `data-slider-out` above, updated as one number-in/anchor-out pair.
+  const anchorId = el.dataset.sliderAnchor;
+  if (anchorId) {
+    const anchorEl = document.getElementById(anchorId);
+    if (anchorEl) anchorEl.textContent = cr10AnchorLabel(el.value) || '—';
+  }
 
   // The Dashboard tab's manual-entry Save button is gated on RPE being set
   // (see views.js's renderManualLogSection `rpeMissing` -- a file upload
@@ -2224,6 +2339,13 @@ function onAppInput(e) {
     if (saveBtn) saveBtn.disabled = rpeMissing || state.logSubmit.status === 'submitting' || !state.online;
     document.getElementById('log-rpe-required-badge')?.toggleAttribute('hidden', !rpeMissing);
     document.getElementById('log-rpe-hint')?.toggleAttribute('hidden', !rpeMissing);
+  }
+  // Same live-gating convention for the workout-detail RPE editor's own
+  // Save button (views.js's renderRpeEditSection).
+  if (formName === 'workoutRpe' && field === 'rpe' && state.workoutRpeEdit) {
+    const missing = state.workoutRpeEdit.rpe === '' || state.workoutRpeEdit.rpe === null || state.workoutRpeEdit.rpe === undefined;
+    const saveBtn = document.querySelector('[data-a="workout:save-rpe"]');
+    if (saveBtn) saveBtn.disabled = missing || state.workoutRpeEdit.status === 'submitting';
   }
 }
 

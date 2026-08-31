@@ -370,6 +370,10 @@
     .hist-row-skipped:hover, .hist-row-skipped:focus-visible { border-color: var(--line); }
     .hist-row-skipped .hist-title { color: var(--ink-soft); font-weight: 600; }
     .chip-skipped { color: var(--c-attn); background: var(--c-signal-wash); }
+    /* A6c: the "Rate this workout" reminder chip -- accent-colored (unlike
+       the neutral .chat-chip default) since, unlike every other chip on a
+       row, this one is itself tappable (data-a="history:open-rate"). */
+    .chip-cta { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--paper)); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); cursor: pointer; }
     .hist-date { flex: none; width: 56px; font-size: 12px; color: var(--ink-faint); padding-top: 1px; }
     .hist-body { min-width: 0; flex: 1; }
     .hist-title { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-family: var(--display); font-size: 14px; font-weight: 700; }
