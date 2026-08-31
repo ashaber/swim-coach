@@ -48,7 +48,8 @@ evidence-discipline rule prohibits, so this module deliberately does not.
 from __future__ import annotations
 
 from swim_coach.analytics import CARDIAC_DRIFT_FLAG_PCT
-from swim_coach.models import Session, Workout, WorkoutAnalytics, WorkoutQuality
+from swim_coach.load import session_load, session_target_load_au
+from swim_coach.models import Athlete, Session, Workout, WorkoutAnalytics, WorkoutQuality
 
 SWOLF_DEGRADATION_FLAG_PCT = 5.0
 # Coach judgment: a first-quarter-to-last-quarter SWOLF increase of 5% or
@@ -132,15 +133,15 @@ def _quality_summary(analytics: WorkoutAnalytics) -> str:
     return " ".join(notes)
 
 
-def workout_quality(workout: Workout, session: Session | None) -> WorkoutQuality:
+def workout_quality(workout: Workout, session: Session | None, *, athlete: Athlete) -> WorkoutQuality:
     """Interpret `workout` against its matched `session` (from
     `match_workout_to_session`, or `None` if nothing matched).
 
-    Does NOT recompute anything -- reads `workout`/`session` fields and
-    `workout.analytics` (already produced by `analytics.compute_analytics`)
-    as-is. See module docstring for how this differs from `load.compliance
-    ()`'s aggregate weekly number, and for the Phase-1 `intensity_match`
-    gap.
+    Does NOT recompute anything except `load_delta_pct` (see below) --
+    reads `workout`/`session` fields and `workout.analytics` (already
+    produced by `analytics.compute_analytics`) as-is. See module docstring
+    for how this differs from `load.compliance()`'s aggregate weekly
+    number, and for the Phase-1 `intensity_match` gap.
 
     If `session is None` there is nothing to compare against: returns
     `matched=False` with every delta/quality field `None`
@@ -149,12 +150,39 @@ def workout_quality(workout: Workout, session: Session | None) -> WorkoutQuality
     workout gets no quality summary either, by design (see the class
     docstring / this function's None-session branch): a quality summary is
     part of a READING against a plan, not a standalone workout report.
+
+    `athlete` (keyword-only, required) -- new in this build, alongside
+    `load_delta_pct` -- is `session_target_load_au`'s required parameter and
+    supplies `session_load`'s `sex`/`css_pace_s_per_100m` context for its
+    pace-based (tier 3) fallback. **Known, deliberate limitation**: this
+    function has no access to this athlete's full workout/wellness history
+    (it only ever sees the one `workout` being interpreted), so it can never
+    supply `session_load`'s `hr_max`/`hr_rest` kwargs -- tier 2 (HR-based
+    TRIMP) is unreachable from here even when the workout has HR data,
+    falling through to tier 3 (pace) or tier 4 (duration-only) instead.
+    Callers that need the full-fidelity actual load for other purposes
+    (e.g. `daily_loads`) should keep calling `session_load` directly with
+    real history; `load_delta_pct` here is a best-effort per-workout
+    validation signal, not a replacement for that.
+
+    `load_delta_pct` is `None` whenever `matched=False` (nothing to compare
+    against), same convention as `distance_delta_pct`/`duration_delta_pct`.
+    When matched, it's `(actual - target) / target * 100` rounded to one
+    decimal, where `target = session_target_load_au(session, athlete)`
+    (always `> 0`, so no zero-division guard is needed) and
+    `actual = session_load(workout, sex=athlete.sex,
+    css_pace_s_per_100m=athlete.css_pace_s_per_100m).value`. Purely
+    informational -- see `cli.py`'s `validate-load-model` diagnostic for
+    the aggregate view across an athlete's history, and this module's
+    docstring / `library/17-wellness-load-integration.md`'s "Recommendation,
+    not yet built" precedent for why this is never wired into `adapt.py`.
     """
     if session is None:
         return WorkoutQuality(
             matched=False,
             distance_delta_pct=None,
             duration_delta_pct=None,
+            load_delta_pct=None,
             intensity_match="unknown",
             quality_summary=None,
         )
@@ -169,12 +197,19 @@ def workout_quality(workout: Workout, session: Session | None) -> WorkoutQuality
         (workout.duration_min - session.duration_min) / session.duration_min * 100, 1
     )
 
+    target_load_au = session_target_load_au(session, athlete)
+    actual_load_au = session_load(
+        workout, sex=athlete.sex, css_pace_s_per_100m=athlete.css_pace_s_per_100m
+    ).value
+    load_delta_pct = round((actual_load_au - target_load_au) / target_load_au * 100, 1)
+
     quality_summary = _quality_summary(workout.analytics) if workout.analytics is not None else None
 
     return WorkoutQuality(
         matched=True,
         distance_delta_pct=distance_delta_pct,
         duration_delta_pct=duration_delta_pct,
+        load_delta_pct=load_delta_pct,
         intensity_match="unknown",  # see module docstring: Phase-1 gap, no zone classifier exists
         quality_summary=quality_summary,
     )

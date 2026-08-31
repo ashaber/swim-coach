@@ -397,6 +397,13 @@ def test_coach_view_plan_matches_athlete_self_shape(client, allowlist, store, go
     assert "macro" in coach_body
     assert "weeks" in coach_body
     assert len(coach_body["weeks"]) >= 1
+    # C2: GET /api/coach/.../plan reaches the same on-the-fly
+    # `target_load_au` computation as GET /api/plan, via the shared
+    # `export_athlete` exporter.
+    sessions = [s for week in coach_body["weeks"] for s in week["sessions"]]
+    assert sessions, "expected at least one session across all weeks"
+    for session in sessions:
+        assert "target_load_au" in session
 
 
 def test_coach_view_plan_service_token_passes(client, allowlist, store) -> None:
