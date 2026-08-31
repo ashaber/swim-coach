@@ -47,6 +47,7 @@ from swim_coach.load import (
     compliance as compute_compliance,
     ctl_atl_tsb_series,
     daily_loads,
+    estimate_hr_max,
     monotony,
     weekly_volume_m,
     wellness_baseline_deviation,
@@ -54,6 +55,8 @@ from swim_coach.load import (
 )
 from swim_coach.models import Athlete, Event, Session, Workout
 from swim_coach.store import StoreInterface
+
+from app.load_helpers import workout_load_au
 
 # --- system block A: persona + hard rules -----------------------------------
 
@@ -852,13 +855,25 @@ def find_workout_by_id(workouts: list[Workout], workout_id: str) -> Workout | No
     return None
 
 
-def render_focused_workout(workout: Workout) -> str:
+def render_focused_workout(
+    workout: Workout, *, athlete: Athlete, hr_max: float | None, wellness: list[Any]
+) -> str:
     """Full detail block for the one workout a scoped chat is about --
     summary (including analytics + sport_detail), a bounded laps table, and
     every pause (rarely more than a handful, so no cap needed there).
     Labeled distinctly from the ordinary 28-day exact-sessions list so the
     model doesn't conflate "every recent session, in brief" with "the ONE
-    workout under discussion, in full."."""
+    workout under discussion, in full.".
+
+    `load_au`/`load_tier` (via `app.load_helpers.workout_load_au`): a real
+    bug, reported live -- without these the coach could see `rpe`/`avg_hr`
+    but never the actual computed load or which tier produced it, and
+    confabulated a wrong explanation for an RPE-less workout that should
+    have reached tier 2 (HR-based TRIMP). `hr_max`/`wellness` are the
+    caller's job to gather once per request (`build_per_request_context`
+    already has the athlete's full workout history in scope for the
+    "exact sessions" list above), not recomputed here per workout."""
+    load_au, load_tier = workout_load_au(workout, athlete=athlete, hr_max=hr_max, wellness=wellness)
     summary = {
         "id": str(workout.id),
         "date": workout.date.isoformat(),
@@ -873,6 +888,8 @@ def render_focused_workout(workout: Workout) -> str:
         "avg_hr": workout.avg_hr,
         "max_hr": workout.max_hr,
         "analytics": workout.analytics.model_dump(mode="json") if workout.analytics is not None else None,
+        "load_au": load_au,
+        "load_tier": load_tier,
     }
     laps = workout.laps[:FOCUSED_WORKOUT_LAPS_CAP]
     laps_truncated = len(workout.laps) > FOCUSED_WORKOUT_LAPS_CAP
@@ -1004,7 +1021,13 @@ def build_per_request_context(
         json.dumps(rollup, indent=2),
     ]
     if focused_workout is not None:
-        parts += ["", render_focused_workout(focused_workout)]
+        # `workouts` (the athlete's full history, already fetched above for
+        # the "exact sessions" list) is exactly what estimate_hr_max wants;
+        # wellness is fetched fresh here since summarize_rollup's own
+        # internal fetch isn't returned back to this scope for reuse.
+        hr_max = estimate_hr_max(workouts)
+        wellness = store.list_wellness(slug)
+        parts += ["", render_focused_workout(focused_workout, athlete=athlete, hr_max=hr_max, wellness=wellness)]
     if focused_session is not None:
         parts += ["", render_focused_session(focused_session)]
     return "\n".join(parts)

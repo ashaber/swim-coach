@@ -1030,11 +1030,15 @@ export const TERM_GLOSSARY = [
 // rising TSB reflects a real taper (ATL falling while CTL holds) or a
 // stale plan (both eroding together).
 
-/** TrainingPeaks/Joe Friel's commonly-cited cycling-coaching "race-day TSB"
- * reference range -- roughly +5 to +25 -- with that same convention's own
- * explicit caveat that individual variation is large (as much as ~15
- * points between athletes) and masters athletes tend toward the higher
- * end. This is a CYCLING-coaching convention: never verified for swimming,
+/** Joe Friel's own "Freshness Zone," +5 to +25 TSB -- "probably where you
+ * should be on race day" (joefrieltraining.com, "Managing Training Using
+ * TSB," independently re-verified by direct fetch alongside
+ * `PRODUCTIVE_TRAINING_TSB_BAND` below, same source, same session -- see
+ * that constant's doc comment for the fuller citation and the
+ * intervals.icu "% TSB vs. absolute TSB" note). Individual variation is
+ * large (as much as ~15 points between athletes) and masters athletes
+ * tend toward the higher end, per that same source. This is a
+ * CYCLING-coaching convention: never verified for swimming,
  * never peer-reviewed, and not itself an [EVIDENCE]/[ADAPTED] engine
  * constant (nothing here feeds plan.py's math) -- rendered as a loose
  * reference band, not a target, and `views.js`'s `renderLoadChart` says so
@@ -1045,19 +1049,32 @@ export const TERM_GLOSSARY = [
  * caption rather than papered over here. */
 export const RACE_DAY_TSB_BAND = { low: 5, high: 25 };
 
-/** The same TrainingPeaks/WKO-lineage "Performance Management Chart"
- * convention's OTHER named zone -- the one directly below the race-day
- * band, roughly -30 to -10 TSB -- commonly labeled "Optimal"/"Productive
- * Training" (this is the zone intervals.icu's own PMC-style chart shows
- * under that name). Same honesty standard as `RACE_DAY_TSB_BAND` above:
- * cycling-coaching practitioner convention, never verified for swimming,
- * not an engine constant, rendered as a loose reference band with the
- * caveat stated in the chart's own caption. Deliberately only these two
- * named bands are drawn (not the full five-zone scheme some tools show --
- * Transition/Fresh/Grey-Zone/Optimal/High-Risk) -- these are the two an
- * athlete mid-block actually needs: "here's where productive training
- * lives" and "here's where race-day freshness lives", with the taper being
- * the deliberate move from one to the other. */
+/** Joe Friel's own published TSB zones (joefrieltraining.com, "Managing
+ * Training Using TSB"), independently re-verified by direct fetch this
+ * session after a user questioned whether this band had any real basis:
+ * High Risk below -30, **Optimal Training -30 to -10** (quoted verbatim:
+ * "typically when the most effective training occurs"), Grey Zone -10 to
+ * +5, Freshness +5 to +25 (== `RACE_DAY_TSB_BAND` above, same source),
+ * Transitional above +25. Both bands on this chart are this same single
+ * source's zones, not two different conventions stitched together.
+ *
+ * Note for anyone comparing this chart against intervals.icu specifically
+ * (as a user did, live): intervals.icu's own creator has stated its zones
+ * "come from Joe Friel" but are computed on a **relative "% TSB"** metric,
+ * not the raw absolute TSB this engine computes (`ctl_atl_tsb_series`) --
+ * so intervals.icu's own on-screen band edges won't pixel-match this
+ * chart's even though both trace to the same original zone system. These
+ * are Friel's original absolute-TSB numbers, the correct match for what
+ * this engine actually computes.
+ *
+ * Still cycling-coaching practitioner convention, never verified for
+ * swimming, not an engine constant -- same honesty caveat as
+ * `RACE_DAY_TSB_BAND`, stated in the chart's own caption. Deliberately
+ * only these two of Friel's five named zones are drawn (not Grey
+ * Zone/Transitional too) -- these are the two an athlete mid-block
+ * actually needs: "here's where productive training lives" and "here's
+ * where race-day freshness lives", with the taper being the deliberate
+ * move from one to the other. */
 export const PRODUCTIVE_TRAINING_TSB_BAND = { low: -30, high: -10 };
 
 const LOAD_CHART_WIDTH = 640;
