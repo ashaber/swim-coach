@@ -33,6 +33,7 @@ from swim_coach.models import (
     WorkoutStructure,
     WorkoutTarget,
 )
+from swim_coach.parse_files import WorkoutDraft
 from swim_coach.store import FileStore
 
 ATHLETE_ID = uuid.uuid4()
@@ -140,6 +141,24 @@ def make_workout(**overrides):
     return Workout(**data)
 
 
+def make_workout_draft(**overrides):
+    data = dict(
+        date=date(2026, 7, 6),
+        sport="swim_pool",
+        source="manual",
+        distance_m=3000,
+        duration_min=58.0,
+        avg_pace_s_per_100m=96.5,
+        rpe=6,
+        sets=[WorkoutSet(distance_m=300, reps=10, interval="5:00")],
+        planned_session_id=None,
+        raw_ref=None,
+        notes="felt good",
+    )
+    data.update(overrides)
+    return WorkoutDraft(**data)
+
+
 def make_feedback(**overrides):
     data = dict(
         id=uuid.uuid4(),
@@ -198,10 +217,65 @@ def test_workout_accepts_cross_train_sport():
 
 
 def test_workout_rejects_rpe_out_of_range():
+    # A2: the Foster CR-10 scale (library/19-srpe-protocol.md) is 0-10, not
+    # 1-10 -- 0 ("Rest / Nothing at all") is now a valid response, so only
+    # -1/11 (outside the real scale) should reject.
     with pytest.raises(ValidationError):
         make_workout(rpe=11)
     with pytest.raises(ValidationError):
-        make_workout(rpe=0)
+        make_workout(rpe=-1)
+
+
+def test_workout_accepts_rpe_zero():
+    workout = make_workout(rpe=0)
+    assert workout.rpe == 0
+
+
+def test_workout_draft_rejects_rpe_out_of_range():
+    with pytest.raises(ValidationError):
+        make_workout_draft(rpe=11)
+    with pytest.raises(ValidationError):
+        make_workout_draft(rpe=-1)
+
+
+def test_workout_draft_accepts_rpe_zero():
+    draft = make_workout_draft(rpe=0)
+    assert draft.rpe == 0
+
+
+def test_workout_logged_at_defaults_to_none():
+    workout = make_workout()
+    assert workout.logged_at is None
+
+
+def test_workout_logged_at_round_trip_through_yaml(tmp_path):
+    store = FileStore(base_dir=tmp_path)
+    logged_at = datetime(2026, 7, 6, 18, 30, 0, tzinfo=timezone.utc)
+    workout = make_workout(logged_at=logged_at)
+    store.save_athlete(make_athlete())
+    store.save_workout("wife", workout)
+    loaded = store.list_workouts("wife")[0]
+    assert loaded.logged_at == logged_at
+
+
+def test_workout_started_at_defaults_to_none():
+    workout = make_workout()
+    assert workout.started_at is None
+
+
+def test_workout_started_at_round_trip_through_yaml(tmp_path):
+    store = FileStore(base_dir=tmp_path)
+    started_at = datetime(2026, 7, 6, 7, 0, 0, tzinfo=timezone.utc)
+    workout = make_workout(started_at=started_at)
+    store.save_athlete(make_athlete())
+    store.save_workout("wife", workout)
+    loaded = store.list_workouts("wife")[0]
+    assert loaded.started_at == started_at
+
+
+def test_workout_draft_started_at_defaults_to_none():
+    draft = make_workout_draft()
+    assert draft.started_at is None
 
 
 def test_workout_rejects_negative_distance():

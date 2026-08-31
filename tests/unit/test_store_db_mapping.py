@@ -162,6 +162,66 @@ def test_workout_mapping_round_trip():
     assert row_to_workout(row) == w
 
 
+def test_workout_to_row_excludes_logged_at_from_data():
+    # A3: logged_at is read-derived from the real `created_at` DB column,
+    # never persisted back into the JSONB `data` blob -- even when the
+    # in-memory model happens to carry a (stale, previously-read) value.
+    w = Workout(
+        id=uuid.uuid4(),
+        athlete_id=AID,
+        date=date(2026, 7, 6),
+        sport="swim_pool",
+        source="manual",
+        distance_m=4000,
+        duration_min=75.0,
+        rpe=6,
+        logged_at=datetime(2026, 7, 6, 12, 0, tzinfo=timezone.utc),
+    )
+    row = workout_to_row(w)
+    assert "logged_at" not in row["data"]
+
+
+def test_row_to_workout_maps_created_at_to_logged_at():
+    # A3: created_at (the row's own DB column, passed in alongside `data`
+    # by list_workouts/get_workout's SELECT) becomes Workout.logged_at --
+    # never read from `data` itself.
+    w = Workout(
+        id=uuid.uuid4(),
+        athlete_id=AID,
+        date=date(2026, 7, 6),
+        sport="swim_pool",
+        source="manual",
+        distance_m=4000,
+        duration_min=75.0,
+        rpe=6,
+    )
+    row = workout_to_row(w)
+    created_at = datetime(2026, 7, 6, 18, 30, 0, tzinfo=timezone.utc)
+    row["created_at"] = created_at
+    loaded = row_to_workout(row)
+    assert loaded.logged_at == created_at
+    # every other field is otherwise an exact round trip
+    assert loaded.model_dump(exclude={"logged_at"}) == w.model_dump(exclude={"logged_at"})
+
+
+def test_row_to_workout_logged_at_none_when_created_at_absent():
+    # The pure workout_to_row -> row_to_workout round trip (no real SELECT
+    # involved) never has a `created_at` key -- logged_at falls back to
+    # None, matching FileStore's own permanent None (StoreContractTests
+    # exempts logged_at from the cross-store equivalence check for exactly
+    # this reason).
+    w = Workout(
+        id=uuid.uuid4(),
+        athlete_id=AID,
+        date=date(2026, 7, 6),
+        sport="swim_pool",
+        source="manual",
+        distance_m=4000,
+        duration_min=75.0,
+    )
+    assert row_to_workout(workout_to_row(w)).logged_at is None
+
+
 def test_wellness_mapping_round_trip():
     w = Wellness(
         id=uuid.uuid4(),

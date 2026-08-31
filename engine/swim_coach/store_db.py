@@ -107,18 +107,34 @@ def row_to_week(row: dict[str, Any]) -> WeekPlan:
 
 
 def workout_to_row(workout: Workout) -> dict[str, Any]:
+    # `logged_at` is excluded from the persisted JSONB blob -- it is
+    # read-derived from the real `workouts.created_at` DB column (see
+    # row_to_workout below), never a value this app itself writes. Dumping
+    # it into `data` would let a stale/None value from a previous read
+    # silently round-trip back through a later save; row_to_workout always
+    # overrides it from `created_at` on the way out regardless, but keeping
+    # it out of `data` in the first place is the honest, single-source
+    # story (A3).
+    data = workout.model_dump(mode="json", exclude={"logged_at"})
     return {
         "id": workout.id,
         "athlete_id": workout.athlete_id,
         "date": workout.date,
         "sport": workout.sport,
         "schema_version": workout.schema_version,
-        "data": workout.model_dump(mode="json"),
+        "data": data,
     }
 
 
 def row_to_workout(row: dict[str, Any]) -> Workout:
-    return Workout.model_validate(row["data"])
+    # `created_at` -> `logged_at`: real "first saved" timestamp, read-derived
+    # from the DB column, never trusted from `data` itself (see
+    # workout_to_row above). `row.get(...)` (not `row["created_at"]`)
+    # because some callers of this pure mapper (e.g. the workout_to_row ->
+    # row_to_workout round-trip test) construct a row with no `created_at`
+    # key at all -- that's the "we don't know yet" case, same as FileStore's
+    # permanent None.
+    return Workout.model_validate({**row["data"], "logged_at": row.get("created_at")})
 
 
 def wellness_to_row(wellness: Wellness) -> dict[str, Any]:
@@ -447,7 +463,7 @@ class DbStore(StoreInterface):
         # `list_feedback` above.
         params: list[Any] = [slug]
         query = """
-            select w.data from workouts w
+            select w.data, w.created_at from workouts w
             join athletes a on a.athlete_id = w.athlete_id
             where a.slug = %s
         """
@@ -459,6 +475,22 @@ class DbStore(StoreInterface):
             cur.execute(query, params)
             rows = cur.fetchall()
         return [row_to_workout(r) for r in rows]
+
+    def get_workout(self, slug: str, workout_id: UUID) -> Workout | None:
+        # Join-scoped by both slug AND id -- a wrong-athlete id never
+        # resolves (the join simply finds no matching row), so no separate
+        # ownership check is needed on top of this query.
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                select w.data, w.created_at from workouts w
+                join athletes a on a.athlete_id = w.athlete_id
+                where a.slug = %s and w.id = %s
+                """,
+                (slug, workout_id),
+            )
+            row = cur.fetchone()
+        return row_to_workout(row) if row is not None else None
 
     def save_workout(self, slug: str, workout: Workout) -> None:
         # PK is the workout's own id -> re-saving the same id upserts (correct

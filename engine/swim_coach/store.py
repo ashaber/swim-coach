@@ -108,6 +108,15 @@ class StoreInterface(ABC):
     def save_workout(self, slug: str, workout: Workout) -> None: ...
 
     @abstractmethod
+    def get_workout(self, slug: str, workout_id: UUID) -> Workout | None:
+        """Single workout by id, scoped to this athlete slug -- None if no
+        workout with that id exists, OR if it exists but belongs to a
+        different athlete (a wrong-athlete id must never resolve; DbStore
+        enforces this via its own slug+id join, no separate ownership
+        check needed)."""
+        ...
+
+    @abstractmethod
     def list_wellness(self, slug: str) -> list[Wellness]: ...
 
     @abstractmethod
@@ -402,6 +411,16 @@ class FileStore(StoreInterface):
         short_id = str(workout.id)[:8]
         path = directory / f"{workout.date.isoformat()}-{workout.sport}-{short_id}.yaml"
         _write_yaml(path, _dump_model(workout))
+
+    def get_workout(self, slug: str, workout_id: UUID) -> Workout | None:
+        # No id-indexed filename (see save_workout's naming scheme) -- scan
+        # this athlete's own workouts. Dev/test-only file-backed store, same
+        # tradeoff list_workouts already makes; a wrong-athlete id is
+        # naturally excluded since we only ever scan `slug`'s own directory.
+        for workout in self.list_workouts(slug):
+            if workout.id == workout_id:
+                return workout
+        return None
 
     # --- Wellness ------------------------------------------------------------
 

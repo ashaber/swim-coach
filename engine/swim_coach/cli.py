@@ -558,6 +558,7 @@ def _build_workout_from_draft(draft: WorkoutDraft, athlete_id, *, raw_ref: str |
         lengths=draft.lengths,
         pauses=draft.pauses,
         sport_detail=draft.sport_detail,
+        started_at=draft.started_at,
     )
 
 
@@ -1231,7 +1232,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest.add_argument("--athlete", required=True)
     p_ingest.add_argument("--file", required=True)
     p_ingest.add_argument("--date", help="YYYY-MM-DD, overrides the parsed date")
-    p_ingest.add_argument("--rpe", type=int, help="1-10, overrides/sets the parsed rpe")
+    p_ingest.add_argument("--rpe", type=int, help="0-10 (Foster CR-10 scale), overrides/sets the parsed rpe")
     p_ingest.add_argument(
         "--sport",
         choices=["swim_pool", "swim_ow", "strength", "recovery", "cross_train"],

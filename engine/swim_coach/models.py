@@ -417,7 +417,10 @@ class Workout(BaseModel):
     distance_m: int = Field(ge=0)
     duration_min: float = Field(gt=0)
     avg_pace_s_per_100m: float | None = None
-    rpe: int | None = Field(default=None, ge=1, le=10)
+    # 0-10 Foster CR-10 modified-Borg scale (0 = "Rest / Nothing at all"),
+    # see library/19-srpe-protocol.md -- not 1-10, so 0 is a real, valid
+    # response, not an unreachable floor.
+    rpe: int | None = Field(default=None, ge=0, le=10)
     sets: list[WorkoutSet] = Field(default_factory=list)
     planned_session_id: UUID | None = None
     raw_ref: str | None = None
@@ -450,6 +453,21 @@ class Workout(BaseModel):
     # swim_ow (the Sport enum already distinguishes pool/open-water, so a
     # detail string there would be redundant).
     sport_detail: str | None = None
+    # When this workout record was actually saved (DbStore: the real
+    # `workouts.created_at` DB column, surfaced read-only -- see
+    # store_db.row_to_workout; FileStore: always None, no equivalent
+    # durable "first saved" timestamp exists on disk). Never written back
+    # into the persisted JSONB blob -- read-derived only. Additive/
+    # optional so every existing Workout YAML/row keeps validating
+    # unchanged -- no schema_version bump.
+    logged_at: datetime | None = None
+    # Real workout end-time estimate: populated from parse_fit's FIT
+    # session.start_time (+ duration_min) when a real .fit start_time was
+    # captured -- see parse_files.parse_fit. None for tcx/csv ingests (no
+    # equivalent extracted field) and for any .fit without a session
+    # start_time. Additive/optional so every existing Workout YAML/row
+    # keeps validating unchanged -- no schema_version bump.
+    started_at: datetime | None = None
 
 
 class WorkoutQuality(BaseModel):
