@@ -237,7 +237,24 @@ def test_unread_badge_appears_on_the_feedback_tab_then_clears_after_visiting_it(
     page.click('.hist-row')
     page.wait_for_selector('#ask-coach')
 
+    # `#ask-coach` renders synchronously the moment the detail view opens --
+    # BEFORE maybeLoadFeedback's async GET /api/feedback resolves and
+    # triggers the second render that actually shows the badge (loadFeedback
+    # sets status:'loading' and calls render() immediately, then awaits the
+    # real fetch). Asserting on the badge right after `#ask-coach` is
+    # therefore racing that fetch in principle -- the same "waited on the
+    # wrong readiness signal" pattern this suite has hit before, and the
+    # likely explanation for a real, repeated CI failure here (failed 4
+    # consecutive times on a real GitHub Actions run, including after a
+    # manual restart). Flagged honestly: I could NOT force-reproduce the
+    # failure locally, even injecting a 2s artificial delay into the mocked
+    # /api/feedback route and running the full e2e suite sequentially --
+    # so the exact CI-specific timing trigger is confirmed by inference from
+    # the code path, not by a locally-reproduced failing run. Waiting for
+    # the badge itself instead of a proxy is correct regardless of the
+    # precise mechanism: it removes the race entirely rather than shrinking it.
     tab_badge = page.locator('[data-a="tab:feedback"] .badge-count')
+    tab_badge.wait_for(state='visible')
     assert tab_badge.count() == 1
     assert tab_badge.inner_text() == '1'
 
