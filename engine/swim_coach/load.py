@@ -1,6 +1,13 @@
 """Training-load math: tiered session load, weekly volume, monotony, ACWR,
 wellness composite, and plan compliance.
 
+Every load number this module produces (``SessionLoad.value``, and anything
+derived from it -- daily/weekly totals, monotony, ACWR) is in **AU**
+(arbitrary units): a nominal, project-internal scale, not a physical unit
+with external meaning. See `library/15-tiered-session-load.md`'s "Unit: AU
+(arbitrary units)" section -- this is a naming clarification only, it
+changes no formula or constant.
+
 Pure functions over ``list[Workout]`` / ``list[Wellness]`` / ``list[Session]``
 -- no I/O, no LLM calls. `cli.py`'s ``summarize`` command is the only caller
 that turns these into a printed rollup; `adapt.py` calls straight into this
@@ -81,6 +88,10 @@ class SessionLoad:
     real sRPE or a lower-fidelity fallback?") read ``.tier``. Never silently
     dropped the way a bare ``None`` return used to be -- see module
     docstring.
+
+    ``.value`` is in **AU** (arbitrary units) -- see the module docstring
+    and `library/15-tiered-session-load.md`'s "Unit: AU" section. Naming
+    only: this does not change what ``.value`` computes to for any tier.
     """
 
     value: float
