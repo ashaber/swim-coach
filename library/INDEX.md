@@ -26,6 +26,7 @@ load `00-conventions.md` once per session to know how to read the tags.
 | `18-open-water-session-templates.md` | The open-water session-content template library (`ow_session_templates.py`): feed-window practice, negative-split pacing, chop/wind adaptation, sighting, breathing-pattern variation, back-to-back multi-day-stage fatigue simulation, taper activation, race dress rehearsal -- mostly Coach judgment (practitioner-convention session shapes, same category as `14`'s main-set menu), cross-referencing `08-ultra-feeding.md` (feeding rationale) and `06-long-swim-progression.md` (`multi_day_stage` back-to-back premise) rather than re-deriving evidence. Documents the `skill_scalable` vs `endurance_floor` duration-scaling design (Andrew's own applied-coaching insight: technique sessions compress fine under a taper, endurance/fueling sessions have a real minimum effective duration). Deliberately drops the source material's eyes-closed sighting drill as an avoidable safety risk. **UNREVIEWED**, pending human review. |
 | `17-wellness-load-integration.md` | Whether/how the independent RHR/HRV baseline-deviation cross-check (`load.py`'s `wellness_baseline_deviation`) should confirm or trigger an adjustment against the sRPE-derived CTL/ATL/TSB model (`ctl_atl_tsb_series`) — currently shown side by side, never combined. Multi-signal monitoring is well-supported (Bourdon et al. 2017; Rebelo et al. 2026) but no validated algorithmic disagreement rule exists anywhere in the literature, swim-specific or not; one concrete HRV numeric trigger exists (Plews et al. 2013's 0.5-SD-of-7-day-rolling-mean) but for a morning protocol this app doesn't have data for yet, and HRV's overreaching signature isn't even reliably a decrease (Bellenger et al. 2016). Ends with a scoped, not-yet-built recommendation: an informational agreement/contradiction flag, never an `action`-changing override. **UNREVIEWED**, pending human review. |
 | `19-srpe-protocol.md` | The Foster CR-10 modified-Borg session-RPE survey protocol (0-10 scale with verbal anchors, single global "how hard was your workout overall" question, ~30-min post-workout ask timing) behind `Workout.rpe`/`WorkoutDraft.rpe` -- the survey *instrument*, distinct from `15-tiered-session-load.md`'s load *formula* that consumes the resulting number. Foster et al. (2001), `[ADAPTED: general-endurance]`, confidence high, verified by direct web search. **UNREVIEWED**, pending human review. |
+| `21-shoulder-health-and-load.md` | Extends `07-strength-dryland.md`'s injury-*prevention* shoulder program with the injury-*recovery* side: the shoulder-load/injury-risk relationship (cross-refs `07`'s existing ACWR citation), a criteria-based three-phase rehab progression (Desmeules et al. 2025 CPG), adjunct-modality evidence for massage and TENS (both genuinely conflicting -- Cochrane placebo-controlled null vs. smaller positive pooled studies), and swim-specific return-to-training criteria (Wilk et al. 2020) plus practitioner-convention volume/stroke/position adaptations. Triggered by a real acute shoulder injury this session; written as general grounding, not a one-athlete note. **UNREVIEWED**, pending human review. |
 | `reference_list.md` | **The canonical citation source.** Every claim in every file above resolves to an entry here (title + author + year), never a URL/ID — see its own header for why. |
 | `sample_pool_workout_traditional.md` | A real logged pool-coach workout sample (traditional/technique-focused notation) — reference material for `/log-workout`'s coach-text parser, not a research citation. |
 | `sample_pool_workout_openwater_focus.md` | A real logged pool-coach workout sample (open-water-focused notation) — same purpose as above. |
@@ -50,6 +51,7 @@ load `00-conventions.md` once per session to know how to read the tags.
 | Hydration, sodium, cramping, "should I drink more?" | `08-ultra-feeding.md` (post-swim rehydration protocol + the exercise-associated-hyponatremia **safety rail** — read that section before ever telling an athlete to drink more). |
 | Energy availability, RED-S, under-fueling, bone density, "am I eating enough?", appetite after cold swims | `13-reds-energy-availability.md` (chronic energy availability, the swimming-is-non-osteogenic finding, screening-instrument limits, what this system will and won't diagnose). |
 | Strength/dryland programming detail (beyond the 2x/week frequency) | `07-strength-dryland.md` (full programming detail: duration, placement, cut-week/taper handling); `04-css-intensity-anchors.md` cites only the frequency constant. |
+| A real shoulder injury, rehab phases, "should I get a massage/use TENS," or "when can I swim again?" | `21-shoulder-health-and-load.md` (rehab-phase structure, massage/TENS evidence, swim-specific return-to-training criteria and volume ramp-back) -- cross-refs `07-strength-dryland.md`'s prevention-focused exercise vocabulary and ACWR/shoulder-load citation. |
 | Recovery between two hard efforts a week or so apart / "how do I recover before my next race?" | `10-recovery-hrv.md` (sleep, refeed nutrition, modality tiering, mini-taper evidence + gap) |
 | HRV / wellness-composite interpretation, "should I trust my Oura/HRV data or how I feel?" | `10-recovery-hrv.md` (HRV-guided-training section; Saw et al. 2016 grounds the existing subjective `wellness_composite`) |
 | "How much should I trust my Oura HRV / readiness score?" | `10-recovery-hrv.md` ("Oura device trust" section — per-signal confidence for RHR/HRV/sleep staging/Readiness; Readiness explicitly should not drive plan changes) |
@@ -84,10 +86,13 @@ from `15`'s load-formula focus. `20` (cross-train load standardization)
 is similarly ad hoc — a research-only answer to a specific developer
 question (should the duration-only load fallback be split per cross-train
 activity type) that reached a negative verdict grounding the *absence* of a
-new engine constant, not a new one. `10` is human-reviewed (Oura
-device-trust pass, 2026-07-11); `07`, `11`, `08`, `13`, `14`, `15`, `16`,
-`17`, `19`, and `20` remain `UNREVIEWED` pending human review — `/coach` and
-future readers should treat their claims as drafts, not settled grounding,
-until that review happens.
+new engine constant, not a new one. `21` extends `07`'s injury-prevention
+shoulder work with the injury-recovery side (rehab phases, adjunct-modality
+evidence, return-to-swim criteria), triggered by a real acute injury this
+session but written as general grounding, not a one-athlete note. `10` is
+human-reviewed (Oura device-trust pass, 2026-07-11); `07`, `11`, `08`, `13`,
+`14`, `15`, `16`, `17`, `19`, `20`, and `21` remain `UNREVIEWED` pending
+human review — `/coach` and future readers should treat their claims as
+drafts, not settled grounding, until that review happens.
 `/coach` should say plainly when a question falls in one of the remaining
 gaps rather than improvising a citation that doesn't exist yet.
