@@ -842,6 +842,77 @@ raw research input, not itself citable).
   not an independently validated exponent) — see `03-periodization.md`'s
   "Tiered session load" section for the full test/revisit note.
 
+## Cross-training load standardization (no-RPE/no-HR case)
+
+Curated for `20-cross-train-load-standardization.md`'s research pass:
+whether `engine/swim_coach/load.py`'s uniform `DURATION_ONLY_ASSUMED_INTENSITY`
+duration-only fallback should be split per cross-train activity type. Verdict:
+no rigorous standard exists for this specific zero-signal case; see that file
+for the full reasoning. Haddad et al. (2017) is already cited above in
+"Injury & training load" and re-used here, not duplicated.
+
+- **✓ Foster C., Florhaug J.A., Franklin J., et al. (2001)** — "A New
+  Approach to Monitoring Exercise Training" — *Journal of Strength and
+  Conditioning Research*, 15(1):109-115. The original session-RPE (sRPE)
+  paper: defines training load as `duration * RPE`, assuming an RPE value
+  exists to multiply against — silent on what to assume when it doesn't.
+  Verified by direct web search this session (title/authors/journal/volume/
+  pages confirmed). `[ADAPTED: general-endurance/multi-sport]`.
+- **✓ Impellizzeri F.M., Rampinini E., Coutts A.J., Sassi A., Marcora S.M.
+  (2003)** — "Validity of the session-RPE method for determining training
+  load in team sport athletes" — *Journal of Science and Medicine in
+  Sport*, 6(4):525. Validates sRPE against HR-based training-load measures
+  in soccer players; both signals are collected throughout, not addressing
+  the zero-signal case. Verified by direct web search this session.
+  `[ADAPTED: general-endurance/multi-sport]`.
+- **✓ Borges T.O., Bullock N., Duff C., Coutts A.J. (2014)** — "Methods for
+  Quantifying Training in Sprint Kayak" — *Journal of Strength and
+  Conditioning Research*, 28(2):474-482. The one paddling/kayak-specific
+  paper found; confirms sRPE/TRIMP validity for kayak training when
+  actually collected, with no assumed-default guidance for when it isn't.
+  Verified by direct web search this session. `[ADAPTED:
+  general-endurance/multi-sport]`.
+- **✓ Epp-Stobbe A., Tsai M-C., Klimstra M. (2022)** — "Comparison of
+  Imputation Methods for Missing Rate of Perceived Exertion Data in Rugby"
+  — *Machine Learning and Knowledge Extraction*, 4(4):41. The closest real
+  analog to this project's zero-signal question: tested several imputation
+  methods against real missing-RPE rugby data. Team-mean/fixed-value
+  substitution — the closest real-world approach to a flat per-modality
+  constant — was the **least accurate** method tested; individualized
+  historical-data models won instead. Verified by direct web search this
+  session (also cross-checked via Crossref). `[ADAPTED:
+  general-endurance/multi-sport]`.
+- **✓ Epp-Stobbe A., Tsai M-C., Klimstra M. (2025)** — "Rugby Sevens sRPE
+  Workload Imputation Using Objective Models of Measurement" — *Applied
+  Sciences*, 15(12):6520. Follow-up to the 2022 paper above; still requires
+  objective sensor-data model inputs, so it doesn't extend to (or solve)
+  the zero-data case this project has. Verified by direct web search this
+  session. `[ADAPTED: general-endurance/multi-sport]`.
+- **✓ Ainsworth B.E., Haskell W.L., Herrmann S.D., et al. (2011)** — "2011
+  Compendium of Physical Activities" — *Medicine & Science in Sports &
+  Exercise*, 43(8):1575-1581. Real, authoritative MET (metabolic
+  equivalent) reference table — but explicitly **not fit for purpose**
+  here: METs are the absolute energy cost of an activity at a *specified*
+  pace/intensity, not a relative perceived-intensity rating for an
+  unspecified-pace generic session; no validated MET-to-RPE conversion
+  exists for that case. Verified by direct web search this session.
+  `[ADAPTED: general-endurance/multi-sport]`.
+
+**Practical-platform check (not a journal citation, no URL retained — see
+`00-conventions.md`'s citation discipline):** TrainingPeaks' own Training
+Stress Score documentation (the same practitioner source cited above for
+the swim-specific cubed-IF adaptation) was checked directly for this
+question and confirms their methodology requires at least one of power,
+pace, HR, or RPE to compute a TSS value — no fallback is defined for the
+all-missing case. Garmin/Firstbeat's EPOC-based Training Load documentation
+and technical write-ups were also checked directly (industry-practice tier,
+weaker rigor than the peer-reviewed sources above) and confirm their system
+degrades or omits the load estimate rather than substituting a per-activity
+assumed value when HR is absent. Both real commercial platforms made the
+same choice this project already made independently — give a real number
+when possible, or openly decline to estimate, rather than guessing a
+modality-specific constant.
+
 ## Cross-discipline endurance (cycling / running / triathlon)
 
 - **✓ Rønnestad B.R. & Mujika I. (2014)** — "Optimizing strength training for

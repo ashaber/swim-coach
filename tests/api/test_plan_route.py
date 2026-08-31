@@ -21,6 +21,12 @@ def test_plan_returns_exported_shape(client) -> None:
     assert "macro" in body
     assert "weeks" in body
     assert len(body["weeks"]) >= 1
+    # C2: every exported session carries an on-the-fly `target_load_au`.
+    sessions = [s for week in body["weeks"] for s in week["sessions"]]
+    assert sessions, "expected at least one session across all weeks"
+    for session in sessions:
+        assert "target_load_au" in session
+        assert isinstance(session["target_load_au"], (int, float))
 
 
 def test_plan_unknown_athlete_is_404(client) -> None:

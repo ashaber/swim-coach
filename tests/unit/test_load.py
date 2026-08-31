@@ -23,6 +23,7 @@ from swim_coach.load import (
     TRIMP_MALE_EXPONENT,
     WELLNESS_BASELINE_ACUTE_WINDOW_DAYS,
     WELLNESS_BASELINE_CHRONIC_WINDOW_DAYS,
+    ZONE_ASSUMED_RPE,
     acute_chronic_ratio,
     compliance,
     ctl_atl_tsb_series,
@@ -31,6 +32,7 @@ from swim_coach.load import (
     estimate_hr_rest,
     monotony,
     session_load,
+    session_target_load_au,
     weekly_volume_m,
     wellness_baseline_deviation,
     wellness_composite,
@@ -835,3 +837,52 @@ def test_compliance_ignores_non_swim_sessions_and_workouts():
         make_workout(distance_m=0, sport="strength", duration_min=45.0),
     ]
     assert compliance(planned, workouts) == pytest.approx(100.0)
+
+
+# --- session_target_load_au ------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "zone,expected_rpe",
+    [
+        ("Z1", 2),
+        ("Z2", 4),
+        ("Z3", 6),
+        ("Z4", 8),
+        ("Z5", 9),
+    ],
+)
+def test_session_target_load_au_uses_zone_assumed_rpe(zone, expected_rpe):
+    athlete = make_athlete()
+    session = make_session(duration_min=60.0, intensity={"zone": zone, "anchor": "css_pace"})
+    assert ZONE_ASSUMED_RPE[zone] == expected_rpe
+    result = session_target_load_au(session, athlete)
+    assert result == pytest.approx(60.0 * expected_rpe)
+
+
+def test_session_target_load_au_no_zone_falls_back_to_flat_constant():
+    athlete = make_athlete()
+    session = make_session(duration_min=45.0, intensity={"anchor": "rpe"})
+    result = session_target_load_au(session, athlete)
+    assert result == pytest.approx(45.0 * DURATION_ONLY_ASSUMED_INTENSITY)
+
+
+def test_session_target_load_au_unrecognized_zone_falls_back_to_flat_constant():
+    athlete = make_athlete()
+    # Not a real zone label -- defensive, shouldn't happen given Session's
+    # own `_validate_intensity` validator, but the .get() fallback should
+    # still hold rather than raising a KeyError.
+    session = make_session(duration_min=30.0, intensity={"anchor": "rpe"})
+    session.intensity["zone"] = None
+    result = session_target_load_au(session, athlete)
+    assert result == pytest.approx(30.0 * DURATION_ONLY_ASSUMED_INTENSITY)
+
+
+def test_session_target_load_au_always_positive():
+    athlete = make_athlete()
+    for zone in ("Z1", "Z2", "Z3", "Z4", "Z5", None):
+        intensity = {"anchor": "rpe"}
+        if zone is not None:
+            intensity["zone"] = zone
+        session = make_session(duration_min=20.0, intensity=intensity)
+        assert session_target_load_au(session, athlete) > 0

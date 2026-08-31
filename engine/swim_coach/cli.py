@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import statistics
 from datetime import date, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -45,11 +46,12 @@ from swim_coach.library_review import (
     sort_for_review,
     strip_marker,
 )
-from swim_coach.models import Athlete, Event, Wellness, WeekPlan, Workout
+from swim_coach.models import Athlete, Event, Session, Wellness, WeekPlan, Workout
 from swim_coach.parse_coach_text import parse_coach_text
 from swim_coach.parse_files import PARSERS_BY_EXTENSION, WorkoutDraft, backfill_sport_detail, parse_fit
 from swim_coach.plan import generate_week, scaffold_macro
 from swim_coach.provision import provision_athlete
+from swim_coach.quality import match_workout_to_session, workout_quality
 from swim_coach.store import FileStore, StoreInterface
 from swim_coach.zones import css_from_test, zone_table
 
@@ -786,6 +788,102 @@ def _cmd_backfill_sport_detail(args: argparse.Namespace, store: StoreInterface) 
     return 0
 
 
+LOAD_MODEL_VALIDATION_BAND_PCT = 20.0
+# Coach judgment: the "is the projected/target load model tracking reality"
+# band-width reported by `validate-load-model` below -- an actual load
+# within +-20% of its matched session's projected load counts as "close
+# enough" for this informational diagnostic. Not itself an [EVIDENCE]/
+# [ADAPTED] citation (no library source calibrates a specific acceptable-
+# error band for this athlete population); chosen as a round, generous
+# number given `session_target_load_au`'s own `ZONE_ASSUMED_RPE` mapping is
+# itself explicitly provisional (see that constant's docstring in
+# load.py) -- a tight band here would overstate how precise either side of
+# the comparison actually is. Revisit once enough real planned-vs-actual
+# history exists to see what error band this model naturally produces.
+
+
+def _cmd_validate_load_model(args: argparse.Namespace, store: StoreInterface) -> int:
+    """Read-only diagnostic: how well does `session_target_load_au`'s
+    projected load track `session_load`'s actual load, across this
+    athlete's real logged history? Structured like
+    `_cmd_backfill_sport_detail` for how it loads the athlete/workouts/
+    weeks, but there is no `--apply` flag at all -- this command NEVER
+    writes anything, unconditionally, unlike that command's dry-run
+    default.
+
+    For every logged workout, matches it to a planned session
+    (`quality.match_workout_to_session`, scanning every session across
+    every saved week -- same "search everything on file" scope
+    `backfill-sport-detail` and `analyze --all` already use for this class
+    of one-off diagnostic) and reads `quality.workout_quality`'s
+    `load_delta_pct` for the match. Prints one JSON object:
+    `{"athlete", "scanned", "matched", "mean_delta_pct",
+    "median_delta_pct", "pct_within_20pct_band"}` -- `scanned` is the total
+    workout count regardless of match; `matched` is how many found a
+    planned session at all; the three stats are computed only over
+    workouts that both matched AND produced a real `load_delta_pct`, and
+    are honestly `None` (never a fabricated 0 or 100) when that set is
+    empty -- same "no data means None, not a misleading number" convention
+    `monotony()`/`wellness_baseline_deviation()` already use in load.py.
+
+    Purely informational -- see `quality.workout_quality`'s docstring and
+    this project's `wellness_baseline_signal` precedent
+    (`library/17-wellness-load-integration.md`) for why this never touches
+    `adapt.py`.
+    """
+    slug = args.athlete
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return _error_from_exception(_error_label(store, slug, "profile.yaml"), exc)
+
+    workouts = store.list_workouts(slug)
+
+    sessions: list[Session] = []
+    for iso_week in store.list_week_ids(slug):
+        week = store.load_week(slug, iso_week)
+        if week is not None:
+            sessions.extend(week.sessions)
+
+    matched_count = 0
+    deltas: list[float] = []
+    for workout in workouts:
+        session = match_workout_to_session(workout, sessions)
+        quality = workout_quality(workout, session, athlete=athlete)
+        if quality.matched:
+            matched_count += 1
+        if quality.load_delta_pct is not None:
+            deltas.append(quality.load_delta_pct)
+
+    if deltas:
+        mean_delta_pct = round(statistics.mean(deltas), 1)
+        median_delta_pct = round(statistics.median(deltas), 1)
+        pct_within_20pct_band = round(
+            sum(1 for d in deltas if abs(d) <= LOAD_MODEL_VALIDATION_BAND_PCT)
+            / len(deltas)
+            * 100,
+            1,
+        )
+    else:
+        mean_delta_pct = None
+        median_delta_pct = None
+        pct_within_20pct_band = None
+
+    print(
+        json.dumps(
+            {
+                "athlete": slug,
+                "scanned": len(workouts),
+                "matched": matched_count,
+                "mean_delta_pct": mean_delta_pct,
+                "median_delta_pct": median_delta_pct,
+                "pct_within_20pct_band": pct_within_20pct_band,
+            }
+        )
+    )
+    return 0
+
+
 def _cmd_invite(args: argparse.Namespace, store: StoreInterface) -> int:
     """Add (or re-invite) a beta user to the server-side allowlist
     (allowed_emails). Adding a beta user is a DATA change -- this row -- never
@@ -1264,6 +1362,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="persist the relabel (default: dry-run, prints changes without saving)",
     )
 
+    p_validate_load_model = subparsers.add_parser(
+        "validate-load-model",
+        help=(
+            "read-only diagnostic: compare projected (target) load against "
+            "actual logged load across an athlete's history; always "
+            "read-only, no --apply flag"
+        ),
+    )
+    p_validate_load_model.add_argument("--athlete", required=True)
+
     p_invite = subparsers.add_parser(
         "invite", help="allowlist a beta user's Google email (server-side identity)"
     )
@@ -1361,6 +1469,7 @@ _COMMANDS = {
     "ingest": _cmd_ingest,
     "analyze": _cmd_analyze,
     "backfill-sport-detail": _cmd_backfill_sport_detail,
+    "validate-load-model": _cmd_validate_load_model,
     "invite": _cmd_invite,
     "list-invites": _cmd_list_invites,
     "revoke-invite": _cmd_revoke_invite,
