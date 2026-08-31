@@ -30,6 +30,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from swim_coach.load import session_target_load_au
 from swim_coach.store import FileStore, StoreInterface
 
 
@@ -48,12 +49,26 @@ def export_athlete(store: StoreInterface, slug: str) -> dict:
     Weeks are sorted by iso_week (lexicographic sort matches chronological
     order for the "YYYY-Wnn" format). Missing macro is `None`, not an
     error -- an athlete may not have one scaffolded yet.
+
+    Every exported session dict additionally carries `target_load_au`
+    (`swim_coach.load.session_target_load_au`), computed on-the-fly here at
+    read time -- no persisted `Session.target_load_au` field, no
+    migration/backfill needed. This is what makes every already-active plan
+    (including one built before this field existed) get a projected load
+    number "for free" on the very next export, per this build's plan.
     """
     athlete = store.load_athlete(slug)
     events = store.load_events(slug)
     macro = store.load_macro(slug)
     iso_weeks = store.list_week_ids(slug)
     weeks = [store.load_week(slug, iso_week) for iso_week in iso_weeks]
+
+    week_dicts = []
+    for week in weeks:
+        week_dict = week.model_dump(mode="json")
+        for session, session_dict in zip(week.sessions, week_dict["sessions"]):
+            session_dict["target_load_au"] = round(session_target_load_au(session, athlete), 1)
+        week_dicts.append(week_dict)
 
     return {
         "slug": slug,
@@ -62,7 +77,7 @@ def export_athlete(store: StoreInterface, slug: str) -> dict:
         "athlete": athlete.model_dump(mode="json"),
         "events": [event.model_dump(mode="json") for event in events],
         "macro": macro.model_dump(mode="json") if macro is not None else None,
-        "weeks": [week.model_dump(mode="json") for week in weeks],
+        "weeks": week_dicts,
     }
 
 

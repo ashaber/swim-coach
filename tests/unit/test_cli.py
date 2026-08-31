@@ -14,7 +14,8 @@ import pytest
 import yaml
 
 from swim_coach.cli import main, parse_time_to_s
-from swim_coach.models import AllowedEmail, Wellness, Workout
+from swim_coach.load import ZONE_ASSUMED_RPE
+from swim_coach.models import AllowedEmail, Session, Wellness, WeekPlan, Workout
 from pathlib import Path
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -1034,6 +1035,122 @@ def test_backfill_sport_detail_unknown_athlete_errors(tmp_path, capsys):
     assert code == 1
     result = _out(capsys)
     assert "error" in result
+
+
+# --- validate-load-model (C3b: read-only planned-vs-actual load diagnostic) -----
+
+
+def _save_week_with_session(athlete_tree, iso_week, **session_overrides):
+    """Save a one-session WeekPlan under `athlete_tree`'s athlete, returning
+    the saved `Session` for the caller to build a matching workout against."""
+    athlete = athlete_tree["athlete"]
+    fields = dict(
+        id=uuid.uuid4(),
+        athlete_id=athlete.id,
+        date=date(2026, 6, 1),
+        sport="swim_pool",
+        source="pool_coach",
+        duration_min=60.0,
+        distance_m=3000,
+        intensity={"zone": "Z3", "anchor": "css_pace"},
+        purpose="test set",
+    )
+    fields.update(session_overrides)
+    session = Session(**fields)
+    week = WeekPlan(
+        id=uuid.uuid4(),
+        athlete_id=athlete.id,
+        iso_week=iso_week,
+        meso_block="base",
+        focus="test week",
+        target_volume_m=session.distance_m or 0,
+        sessions=[session],
+    )
+    athlete_tree["store"].save_week(athlete_tree["slug"], week)
+    return session
+
+
+def test_validate_load_model_matched_workout_reports_delta(athlete_tree, capsys):
+    slug = athlete_tree["slug"]
+    session = _save_week_with_session(athlete_tree, "2026-W22")
+    # rpe=8 -> actual sRPE load = 60 * 8 = 480; target = 60 * ZONE_ASSUMED_RPE["Z3"] = 360.
+    _save_workout(
+        athlete_tree,
+        date=session.date,
+        sport=session.sport,
+        distance_m=session.distance_m,
+        duration_min=session.duration_min,
+        rpe=8,
+        sport_detail=None,
+    )
+
+    code = _run(athlete_tree["base_dir"], "validate-load-model", "--athlete", slug)
+    assert code == 0
+    result = _out(capsys)
+    assert result["athlete"] == slug
+    assert result["scanned"] == 1
+    assert result["matched"] == 1
+    expected_delta = round((480.0 - 60.0 * ZONE_ASSUMED_RPE["Z3"]) / (60.0 * ZONE_ASSUMED_RPE["Z3"]) * 100, 1)
+    assert result["mean_delta_pct"] == pytest.approx(expected_delta)
+    assert result["median_delta_pct"] == pytest.approx(expected_delta)
+    assert result["pct_within_20pct_band"] == 0.0  # 33.3% over target, outside the +-20% band
+
+
+def test_validate_load_model_zero_matched_workouts_reports_none_stats(athlete_tree, capsys):
+    slug = athlete_tree["slug"]
+    # A workout exists but on a date/sport with no planned session at all.
+    _save_workout(athlete_tree, date=date(2026, 6, 2), sport="cross_train", sport_detail=None)
+
+    code = _run(athlete_tree["base_dir"], "validate-load-model", "--athlete", slug)
+    assert code == 0
+    result = _out(capsys)
+    assert result["athlete"] == slug
+    assert result["scanned"] == 1
+    assert result["matched"] == 0
+    assert result["mean_delta_pct"] is None
+    assert result["median_delta_pct"] is None
+    assert result["pct_within_20pct_band"] is None
+
+
+def test_validate_load_model_never_writes_anything(athlete_tree, capsys):
+    """Purely a report -- no --apply flag exists at all, and nothing on
+    disk changes as a result of running it."""
+    slug = athlete_tree["slug"]
+    session = _save_week_with_session(athlete_tree, "2026-W23")
+    workout = _save_workout(
+        athlete_tree,
+        date=session.date,
+        sport=session.sport,
+        distance_m=session.distance_m,
+        duration_min=session.duration_min,
+        rpe=6,
+        sport_detail=None,
+    )
+
+    code = _run(athlete_tree["base_dir"], "validate-load-model", "--athlete", slug)
+    assert code == 0
+
+    reloaded = next(w for w in athlete_tree["store"].list_workouts(slug) if w.id == workout.id)
+    assert reloaded.rpe == 6  # untouched
+
+
+def test_validate_load_model_unknown_athlete_errors(tmp_path, capsys):
+    code = _run(tmp_path, "validate-load-model", "--athlete", "nobody")
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+
+
+def test_validate_load_model_has_no_apply_flag(athlete_tree, capsys):
+    # argparse rejects the unrecognized flag outright (SystemExit(2)) --
+    # there is no escape hatch to make this command write anything.
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "--base-dir", str(athlete_tree["base_dir"]),
+                "validate-load-model", "--athlete", athlete_tree["slug"], "--apply",
+            ]
+        )
 
 
 # --- invite / list-invites / revoke-invite (Slice 1: verified identity) ------

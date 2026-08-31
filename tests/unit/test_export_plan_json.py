@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from swim_coach.load import session_target_load_au
 from swim_coach.models import Athlete, Event, MacroBlock, MacroPlan, Session, WeekPlan
 from swim_coach.store import FileStore
 
@@ -134,6 +135,24 @@ def test_export_athlete_has_expected_keys_and_counts(full_athlete_tree):
     assert len(data["weeks"]) == 2
     assert [w["iso_week"] for w in data["weeks"]] == ["2026-W10", "2026-W11"]
     assert len(data["weeks"][0]["sessions"]) == 1
+
+
+def test_export_athlete_sessions_carry_target_load_au(full_athlete_tree):
+    """Every exported session dict gets `target_load_au`, computed on-the-fly
+    (no persisted field) -- matching a direct `session_target_load_au` call
+    on the same fixture's athlete/session."""
+    store = full_athlete_tree["store"]
+    slug = full_athlete_tree["slug"]
+    data = export_plan_json.export_athlete(store, slug)
+
+    athlete = store.load_athlete(slug)
+    week1 = next(w for w in data["weeks"] if w["iso_week"] == "2026-W10")
+    assert len(week1["sessions"]) == 1
+    session_dict = week1["sessions"][0]
+    session = Session.model_validate(session_dict)
+
+    assert "target_load_au" in session_dict
+    assert session_dict["target_load_au"] == round(session_target_load_au(session, athlete), 1)
 
 
 def test_export_athlete_with_no_macro_or_weeks(tmp_path):

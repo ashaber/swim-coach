@@ -217,6 +217,62 @@ DURATION_ONLY_ASSUMED_INTENSITY = 5
 # library/03-periodization.md.
 
 
+ZONE_ASSUMED_RPE = {"Z1": 2, "Z2": 4, "Z3": 6, "Z4": 8, "Z5": 9}
+# Coach judgment: a provisional Z1-Z5 -> assumed-CR-10-RPE translation
+# authored for this build (`session_target_load_au` below), NOT an
+# [EVIDENCE]/[ADAPTED] research citation -- there is no library source that
+# says "a Z3 swim session feels like a 6 out of 10." The mapping is chosen
+# to line up with two things this codebase already commits to: `library/
+# 19-srpe-protocol.md`'s Foster CR-10 modified Borg scale (0=Rest/Nothing
+# at all ... 10=Maximal/Exhausting, with 3=Moderate/4=Somewhat Hard/
+# 5=Hard/7=Very Hard as the nearest anchored points), and `library/
+# 04-css-intensity-anchors.md`'s existing qualitative Z1 ("easy aerobic") ..
+# Z5 ("max effort / race pace") zone labels. It exists purely so a PLANNED
+# session (which has a zone, never an RPE -- nobody has done it yet) can get
+# a projected load number in the same AU unit `session_load`'s tier-1 sRPE
+# path produces for a COMPLETED workout, so planned-vs-actual comparisons
+# (see `session_target_load_au` and `quality.workout_quality`'s
+# `load_delta_pct`) are on a common scale. This is explicitly a rough,
+# revisitable guess, not a validated intensity-to-effort model -- library/
+# 03-periodization.md.
+#
+# Reuses the existing `DURATION_ONLY_ASSUMED_INTENSITY` constant (Tier 4,
+# below) as `session_target_load_au`'s own fallback for a planned session
+# with no `intensity.zone` set at all -- same "last-resort flat constant,
+# never a missing number" convention as that tier, just applied to a
+# projection instead of an actual. Not redefined here.
+
+
+def session_target_load_au(session: Session, athlete: Athlete) -> float:
+    """Projected training-load estimate (AU) for a PLANNED `Session`, before
+    it's ever been swum -- the planned-side counterpart to `session_load`'s
+    actual-side estimate.
+
+    `value = session.duration_min * ZONE_ASSUMED_RPE.get(zone,
+    DURATION_ONLY_ASSUMED_INTENSITY)`, where `zone` is
+    `session.intensity.get("zone")`. A session with no recognized zone (or
+    no zone at all -- e.g. an `anchor: "rpe"` session with no `zone` key)
+    falls back to the same flat `DURATION_ONLY_ASSUMED_INTENSITY` constant
+    `session_load`'s tier 4 uses, for the same reason: a real number beats a
+    missing one. Always `> 0` -- `Session.duration_min` is itself
+    constrained `gt=0`, and every value in `ZONE_ASSUMED_RPE` plus the
+    fallback constant is positive.
+
+    Coach judgment: this is a provisional zone -> assumed-RPE translation
+    (see `ZONE_ASSUMED_RPE` above), not an `[EVIDENCE]`/`[ADAPTED]` research
+    citation -- no library source calibrates "what RPE does a Z3 swim feel
+    like" for this athlete population. `athlete` is accepted (not just
+    `session`) for signature symmetry with `session_load` and to leave room
+    for a future per-athlete calibration (e.g. adjusting the zone->RPE
+    mapping from that athlete's own logged sRPE-vs-zone history once enough
+    dual-logged sessions exist) -- unused for now, deliberately not
+    faked-into-use just to justify the parameter.
+    """
+    zone = session.intensity.get("zone")
+    assumed_rpe = ZONE_ASSUMED_RPE.get(zone, DURATION_ONLY_ASSUMED_INTENSITY)
+    return session.duration_min * assumed_rpe
+
+
 def estimate_hr_max(workouts: list[Workout]) -> float | None:
     """Working HRmax estimate: the highest `Workout.max_hr` ever logged
     across this athlete's own workout history (see the comment above this

@@ -102,6 +102,7 @@ async def coach_view_workouts(
     settings = request.app.state.settings
     slug = resolve_coach_athlete(principal, slug)
     store = make_store(settings)
+    athlete = store.load_athlete(slug)
 
     today = date.today()
     since = today - timedelta(days=days)
@@ -125,7 +126,7 @@ async def coach_view_workouts(
     result = []
     for workout in workouts:
         session = match_workout_to_session(workout, sessions)
-        quality = workout_quality(workout, session)
+        quality = workout_quality(workout, session, athlete=athlete)
         result.append({**workout.model_dump(mode="json"), "quality": quality.model_dump(mode="json")})
 
     # `list_workouts` returns filename order (which happens to sort

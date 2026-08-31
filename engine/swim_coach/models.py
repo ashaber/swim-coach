@@ -470,6 +470,15 @@ class WorkoutQuality(BaseModel):
     matched: bool
     distance_delta_pct: float | None = None
     duration_delta_pct: float | None = None
+    load_delta_pct: float | None = None
+    # Percent difference between this workout's actual training load
+    # (`swim_coach.load.session_load`) and its matched session's projected
+    # load (`swim_coach.load.session_target_load_au`) -- `None` when
+    # unmatched, same convention as `distance_delta_pct`/
+    # `duration_delta_pct` above. Part of the training-load validation
+    # mechanism (see `quality.workout_quality`'s docstring and
+    # `cli.py`'s `validate-load-model` diagnostic) -- informational only,
+    # never wired into `adapt.py`.
     intensity_match: Literal["match", "mismatch", "unknown"] = "unknown"
     quality_summary: str | None = None
 
