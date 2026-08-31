@@ -1280,6 +1280,18 @@ function classifyCtlWarmup(historyDays) {
   return 'warmed-up';
 }
 
+/** Five-way TSB classification against the two named bands, ascending by
+ * value -- see `describeCtlAtlTsbTrend`'s `tsb.band` doc comment below for
+ * what each name means. Boundary values are inclusive of whichever named
+ * band they touch (matching the single-band convention this replaces). */
+function classifyTsbBand(value) {
+  if (value < PRODUCTIVE_TRAINING_TSB_BAND.low) return 'high-risk';
+  if (value <= PRODUCTIVE_TRAINING_TSB_BAND.high) return 'productive';
+  if (value < RACE_DAY_TSB_BAND.low) return 'grey-zone';
+  if (value <= RACE_DAY_TSB_BAND.high) return 'race-ready';
+  return 'transition';
+}
+
 /** Pure trend summary of the raw `ctl_atl_tsb` series -- see module comment
  * above for what this is for. Deliberately date-based throughout (never
  * assumes a fixed day-to-day index spacing) -- `ctl_atl_tsb_series` always
@@ -1324,18 +1336,6 @@ function classifyCtlWarmup(historyDays) {
  *     move from `'productive'` to `'race-ready'` as the taper's whole job,
  *     not something that should already be true mid-block.
  */
-/** Five-way TSB classification against the two named bands, ascending by
- * value -- see `describeCtlAtlTsbTrend`'s `tsb.band` doc comment above for
- * what each name means. Boundary values are inclusive of whichever named
- * band they touch (matching the single-band convention this replaces). */
-function classifyTsbBand(value) {
-  if (value < PRODUCTIVE_TRAINING_TSB_BAND.low) return 'high-risk';
-  if (value <= PRODUCTIVE_TRAINING_TSB_BAND.high) return 'productive';
-  if (value < RACE_DAY_TSB_BAND.low) return 'grey-zone';
-  if (value <= RACE_DAY_TSB_BAND.high) return 'race-ready';
-  return 'transition';
-}
-
 export function describeCtlAtlTsbTrend(series) {
   if (!series || series.length === 0) {
     return {

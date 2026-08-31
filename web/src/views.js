@@ -717,6 +717,14 @@ function renderWellnessBaselineDeviation(deviation) {
  * ATL's own line color so the two axes read as visually paired with the
  * line each belongs to, exactly like the legend below the chart already
  * pairs a color with a name. */
+/** One shaded reference-band `<rect>`, shared by both the race-ready and
+ * productive-training bands in `renderLoadChartSvg` below -- same geometry
+ * shape (full plot width, `top`..`bottom` on the primary axis), differing
+ * only in which band's pixel bounds and CSS class they use. */
+function renderLoadChartBandRect(geo, top, bottom, className) {
+  return `<rect class="load-chart-band ${className}" x="${geo.plotLeft}" y="${top.toFixed(1)}" width="${geo.plotRight - geo.plotLeft}" height="${Math.max(0, bottom - top).toFixed(1)}" />`;
+}
+
 function renderLoadChartSvg(geo) {
   const yTickLines = geo.yTicks.map((t) => `
       <line x1="${geo.plotLeft}" y1="${t.y.toFixed(1)}" x2="${geo.plotRight}" y2="${t.y.toFixed(1)}" class="load-chart-gridline" />
@@ -730,8 +738,8 @@ function renderLoadChartSvg(geo) {
 
   return `
     <svg class="load-chart-svg" viewBox="0 0 ${geo.width} ${geo.height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Training load chart: CTL and TSB on the left axis, ATL on its own independent right axis, with reference bands for productive training and race-day readiness">
-      <rect class="load-chart-band load-chart-band-productive" x="${geo.plotLeft}" y="${geo.productiveBandTop.toFixed(1)}" width="${geo.plotRight - geo.plotLeft}" height="${Math.max(0, geo.productiveBandBottom - geo.productiveBandTop).toFixed(1)}" />
-      <rect class="load-chart-band load-chart-band-race" x="${geo.plotLeft}" y="${geo.bandTop.toFixed(1)}" width="${geo.plotRight - geo.plotLeft}" height="${Math.max(0, geo.bandBottom - geo.bandTop).toFixed(1)}" />
+      ${renderLoadChartBandRect(geo, geo.productiveBandTop, geo.productiveBandBottom, 'load-chart-band-productive')}
+      ${renderLoadChartBandRect(geo, geo.bandTop, geo.bandBottom, 'load-chart-band-race')}
       ${yTickLines}
       ${yTickLabelsSecondary}
       ${xTickLabels}
