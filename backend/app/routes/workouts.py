@@ -53,7 +53,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from pydantic import ValidationError
-from swim_coach.load import session_load
+from swim_coach.load import estimate_hr_max, estimate_hr_rest, session_load
 from swim_coach.models import Workout
 from swim_coach.parse_files import PARSERS_BY_EXTENSION
 
@@ -94,6 +94,35 @@ _MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 _PATCHABLE_WORKOUT_FIELDS = {"rpe", "notes"}
 
 
+def _attach_load(
+    workout: Workout, *, profile: Any, hr_max: float | None, wellness: list[Any]
+) -> dict:
+    """D2, HR-TRIMP follow-up: attach `load_au`/`load_tier` to `workout`'s
+    JSON representation, reaching `session_load`'s tier 2 (HR-based TRIMP)
+    when the workout has its own `avg_hr` and `hr_max` is estimable --
+    unlike `quality.workout_quality` (a pure function that only ever sees
+    one workout, so it genuinely can't supply this), these two routes
+    (`create_workout`/`list_workouts` below) DO have full store access, so
+    they compute `hr_max`/`hr_rest` the same way `load.daily_loads` does
+    rather than leaving tier 2 permanently unreachable. `hr_max` is passed
+    in (callers compute it once from the athlete's FULL workout history,
+    not per-workout -- it's the same estimate regardless of which workout
+    is being scored); `hr_rest` is estimated here per-workout since it's
+    genuinely date-dependent (`estimate_hr_rest`'s `as_of` parameter).
+    Never persisted on the `Workout` model -- response-only, computed
+    fresh every call.
+    """
+    hr_rest = estimate_hr_rest(wellness, workout.date)
+    sl = session_load(
+        workout,
+        hr_max=hr_max,
+        hr_rest=hr_rest,
+        sex=profile.sex,
+        css_pace_s_per_100m=profile.css_pace_s_per_100m,
+    )
+    return {**workout.model_dump(mode="json"), "load_au": round(sl.value, 1), "load_tier": sl.tier}
+
+
 @router.post("/api/workouts")
 async def create_workout(
     payload: dict[str, Any],
@@ -131,17 +160,16 @@ async def create_workout(
     store.save_workout(athlete, workout)
     # D2: attach the same load_au/load_tier every GET /api/workouts row gets
     # (see list_workouts below) so a freshly-saved workout's response is
-    # never missing the field a subsequent list fetch would show -- one
-    # `session_load` call, reusing the SessionLoad object for both fields.
-    # Never persisted on the model (see module docstring's `Workout`
-    # boundary) -- response-only, computed fresh every time. No
-    # hr_max/hr_rest context is available here (no full workout/wellness
-    # history loaded in this route), so this reuses the exact same
-    # `quality.workout_quality`-documented limitation/pattern: sex and
-    # css_pace_s_per_100m only, tier 2 (HR-based TRIMP) never fires from
-    # this endpoint.
-    sl = session_load(workout, sex=profile.sex, css_pace_s_per_100m=profile.css_pace_s_per_100m)
-    return {**workout.model_dump(mode="json"), "load_au": round(sl.value, 1), "load_tier": sl.tier}
+    # never missing the field a subsequent list fetch would show. One extra
+    # list_workouts/list_wellness call per save (needed for hr_max/hr_rest,
+    # see _attach_load) -- an accepted, small added cost on every single
+    # workout save, same "one connection per operation" cost profile
+    # store_db.py's own module docstring already accepts for this
+    # single-athlete-app design.
+    all_workouts = store.list_workouts(athlete)
+    wellness = store.list_wellness(athlete)
+    hr_max = estimate_hr_max(all_workouts)
+    return _attach_load(workout, profile=profile, hr_max=hr_max, wellness=wellness)
 
 
 @router.patch("/api/workouts/{workout_id}")
@@ -358,11 +386,11 @@ async def list_workouts(
         raise HTTPException(status_code=404, detail=f"no such athlete: {athlete}") from exc
 
     workouts = store.list_workouts(athlete)
-    # D2: attach load_au/load_tier per workout, same computation and same
-    # documented hr_max/hr_rest-unavailable limitation as create_workout
-    # above -- see its comment.
-    result = []
-    for w in workouts:
-        sl = session_load(w, sex=profile.sex, css_pace_s_per_100m=profile.css_pace_s_per_100m)
-        result.append({**w.model_dump(mode="json"), "load_au": round(sl.value, 1), "load_tier": sl.tier})
-    return result
+    # D2: attach load_au/load_tier per workout via _attach_load (see its
+    # docstring) -- hr_max is computed once from this same already-fetched
+    # `workouts` list (it's one estimate for the whole athlete, not
+    # per-workout), so this route pays no extra store round-trip beyond
+    # the wellness fetch tier 2 needs.
+    wellness = store.list_wellness(athlete)
+    hr_max = estimate_hr_max(workouts)
+    return [_attach_load(w, profile=profile, hr_max=hr_max, wellness=wellness) for w in workouts]
