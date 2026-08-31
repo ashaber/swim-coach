@@ -275,6 +275,23 @@ def test_feedback_mapping_round_trip_with_null_athlete_id():
     assert row_to_feedback(row) == f
 
 
+def test_feedback_mapping_round_trip_with_session_linkage():
+    # session_date/session_sport (coach-mode Q&A build): unlike Athlete/
+    # Workout, `feedback` has no `data` JSONB blob -- every field maps onto
+    # its own column, so a new Feedback field needs explicit row-mapping
+    # coverage here, not just a model change.
+    f = _feedback(
+        type="question",
+        workout_id=None,
+        session_date=date(2026, 7, 6),
+        session_sport="swim_pool",
+    )
+    row = feedback_to_row(f)
+    assert row["session_date"] == date(2026, 7, 6)
+    assert row["session_sport"] == "swim_pool"
+    assert row_to_feedback(row) == f
+
+
 def test_coach_text_storage_key_shape():
     key = coach_text_storage_key("renee", date(2026, 7, 6))
     assert key == "db://coach_texts/renee/2026-07-06"

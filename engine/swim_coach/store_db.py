@@ -166,6 +166,8 @@ def feedback_to_row(feedback: Feedback) -> dict[str, Any]:
         "status": feedback.status,
         "created_at": feedback.created_at,
         "workout_id": feedback.workout_id,
+        "session_date": feedback.session_date,
+        "session_sport": feedback.session_sport,
         "needs_human_review": feedback.needs_human_review,
         "ai_provisional_answer": feedback.ai_provisional_answer,
         "coach_athlete_id": feedback.coach_athlete_id,
@@ -186,6 +188,8 @@ def row_to_feedback(row: dict[str, Any]) -> Feedback:
         status=row["status"],
         created_at=row["created_at"],
         workout_id=row["workout_id"],
+        session_date=row["session_date"],
+        session_sport=row["session_sport"],
         needs_human_review=row["needs_human_review"],
         ai_provisional_answer=row["ai_provisional_answer"],
         coach_athlete_id=row["coach_athlete_id"],
@@ -560,13 +564,13 @@ class DbStore(StoreInterface):
                 """
                 insert into feedback (
                     id, athlete_id, type, source, body, context, status, created_at,
-                    workout_id, needs_human_review, ai_provisional_answer,
-                    coach_athlete_id, coach_reply, coach_reply_at
+                    workout_id, session_date, session_sport, needs_human_review,
+                    ai_provisional_answer, coach_athlete_id, coach_reply, coach_reply_at
                 )
                 values (
                     %(id)s, %(athlete_id)s, %(type)s, %(source)s, %(body)s, %(context)s, %(status)s, %(created_at)s,
-                    %(workout_id)s, %(needs_human_review)s, %(ai_provisional_answer)s,
-                    %(coach_athlete_id)s, %(coach_reply)s, %(coach_reply_at)s
+                    %(workout_id)s, %(session_date)s, %(session_sport)s, %(needs_human_review)s,
+                    %(ai_provisional_answer)s, %(coach_athlete_id)s, %(coach_reply)s, %(coach_reply_at)s
                 )
                 """,
                 {**row, "context": self._Jsonb(row["context"])},
