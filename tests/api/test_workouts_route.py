@@ -9,6 +9,7 @@ immediately visible to a subsequent GET, exactly like it would be against
 
 from __future__ import annotations
 
+import pytest
 from fakes import auth_headers
 
 
@@ -295,3 +296,66 @@ def test_patch_workout_wrong_athlete_id_is_404(client) -> None:
     )
     assert response.status_code == 404
     assert "error" in response.json()
+
+
+# --- D2: load_au/load_tier attached to every GET/POST /api/workouts response ----
+# `renee`'s real profile.yaml (see fixtures/conftest's ATHLETES_DIR copy) has
+# `css_pace_s_per_100m: 90.0` and no `sex` set -- used below to reach the
+# pace_if tier deterministically. hr_trimp (tier 2) is never reachable from
+# this route at all: routes/workouts.py calls `session_load` with no
+# hr_max/hr_rest kwargs (same documented limitation as
+# `quality.workout_quality` -- neither route loads full workout/wellness
+# history), so only srpe/pace_if/duration are exercised here.
+
+
+def test_create_workout_attaches_load_au_and_tier_srpe(client) -> None:
+    response = client.post(
+        "/api/workouts?athlete=renee",
+        json=_valid_payload(rpe=6, duration_min=60),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["load_tier"] == "srpe"
+    assert body["load_au"] == 360.0  # duration_min * rpe
+
+
+def test_create_workout_attaches_load_au_and_tier_pace_if(client) -> None:
+    # No rpe, a swim with a known avg pace -- css_pace_s_per_100m=90.0
+    # (renee's profile) makes this deterministic: IF = 90/100, duration_hours
+    # = 1.0, swim_tss = 1.0 * (0.9**3) * 100 = 72.9.
+    payload = _valid_payload(duration_min=60)
+    del payload["rpe"]
+    payload["avg_pace_s_per_100m"] = 100
+    response = client.post(
+        "/api/workouts?athlete=renee", json=payload, headers=auth_headers()
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["load_tier"] == "pace_if"
+    assert body["load_au"] == pytest.approx(72.9, abs=0.1)
+
+
+def test_create_workout_attaches_load_au_and_tier_duration_fallback(client) -> None:
+    # No rpe, no HR context reachable, not a swim -- falls all the way to
+    # the unconditional duration-only tier.
+    payload = _valid_payload(sport="cross_train", duration_min=45, distance_m=0)
+    del payload["rpe"]
+    response = client.post(
+        "/api/workouts?athlete=renee", json=payload, headers=auth_headers()
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["load_tier"] == "duration"
+    assert body["load_au"] == pytest.approx(45 * 5, abs=0.01)
+
+
+def test_list_workouts_attaches_load_au_and_tier(client) -> None:
+    created = _create(client, rpe=8, duration_min=50)
+    response = client.get("/api/workouts?athlete=renee", headers=auth_headers())
+    assert response.status_code == 200
+    body = response.json()
+    matching = [w for w in body if w["id"] == created["id"]]
+    assert len(matching) == 1
+    assert matching[0]["load_tier"] == "srpe"
+    assert matching[0]["load_au"] == 400.0

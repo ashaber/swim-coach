@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   renderDashboardTab, renderSettingsTab, renderUpdateBanner, renderApp,
   renderTabBar, renderRosterTab, renderLoadChart,
+  renderCr10SliderField, cr10AnchorLabel, loadTierLabel, renderWorkoutRow,
 } from '../../src/views.js';
 import { isoWeekMonday, addDays, dateKey, formatShortDate } from '../../src/plan.js';
 import { HISTORY_DISPLAY_CAP } from '../../src/workouts.js';
@@ -2063,5 +2064,251 @@ describe('renderLoadChart', () => {
       expect(html).toContain('wellness-baseline-deviation');
       expect(html).not.toMatch(/load-chart-line-(ctl|atl|tsb)"[^>]*wellness/);
     });
+  });
+});
+
+// --- A6a: shared CR-10 sRPE slider ------------------------------------------
+
+describe('CR-10 sRPE slider (A6a)', () => {
+  it('uses the 0-10 CR-10 range, not the old bare 1-10 scale', () => {
+    const html = renderCr10SliderField({
+      value: 5, formName: 'log', field: 'rpe', outId: 'log-rpe-out',
+    });
+    expect(html).toContain('min="0"');
+    expect(html).toContain('max="10"');
+  });
+
+  it('carries the data-form/data-field/data-slider-out attributes callers rely on', () => {
+    const html = renderCr10SliderField({
+      value: 5, formName: 'log', field: 'rpe', outId: 'log-rpe-out',
+    });
+    expect(html).toContain('data-form="log"');
+    expect(html).toContain('data-field="rpe"');
+    expect(html).toContain('data-slider-out="log-rpe-out"');
+  });
+
+  it.each([
+    [0, 'Rest / Nothing at all'],
+    [1, 'Very Easy'],
+    [2, 'Easy'],
+    [3, 'Moderate'],
+    [4, 'Somewhat Hard'],
+    [5, 'Hard'],
+    [7, 'Very Hard'],
+    [10, 'Maximal / Exhausting'],
+  ])('shows the Foster CR-10 anchor for value %i', (value, anchor) => {
+    expect(cr10AnchorLabel(value)).toBe(anchor);
+    const html = renderCr10SliderField({
+      value, formName: 'log', field: 'rpe', outId: 'log-rpe-out',
+    });
+    expect(html).toContain(anchor);
+  });
+
+  it.each([6, 8, 9])('renders an em-dash, never fabricated text, for the unanchored value %i', (value) => {
+    expect(cr10AnchorLabel(value)).toBeNull();
+    const html = renderCr10SliderField({
+      value, formName: 'log', field: 'rpe', outId: 'log-rpe-out',
+    });
+    expect(html).toContain('&mdash;');
+  });
+
+  it('renders an em-dash and no `value` attribute when unset', () => {
+    expect(cr10AnchorLabel('')).toBeNull();
+    expect(cr10AnchorLabel(null)).toBeNull();
+    expect(cr10AnchorLabel(undefined)).toBeNull();
+    const html = renderCr10SliderField({
+      value: '', formName: 'log', field: 'rpe', outId: 'log-rpe-out',
+    });
+    expect(html).toContain('&mdash;');
+    expect(html).not.toMatch(/value="\d"/);
+  });
+});
+
+// --- A6c: in-app "rate this workout" reminder chip --------------------------
+
+describe('renderWorkoutRow rate-reminder chip (A6c)', () => {
+  const NOW = new Date(2026, 7, 20, 12, 0, 0).getTime(); // 2026-08-20 noon, local
+
+  function unratedWorkout(overrides = {}) {
+    return {
+      id: 'w-1', date: '2026-08-20', sport: 'swim_pool', source: 'fit',
+      distance_m: 2000, duration_min: 30, rpe: null, ...overrides,
+    };
+  }
+
+  it('shows the chip once >=30 min past the started_at+duration finish estimate', () => {
+    const startedAt = new Date(NOW - 70 * 60000).toISOString(); // finishes 40 min ago (30 min duration)
+    const html = renderWorkoutRow(unratedWorkout({ started_at: startedAt, duration_min: 30 }), NOW);
+    expect(html).toContain('Rate this workout');
+    expect(html).toContain('data-a="history:open-rate"');
+  });
+
+  it('does not show the chip before the 30-minute window has elapsed', () => {
+    const startedAt = new Date(NOW - 40 * 60000).toISOString(); // finishes 10 min ago (30 min duration)
+    const html = renderWorkoutRow(unratedWorkout({ started_at: startedAt, duration_min: 30 }), NOW);
+    expect(html).not.toContain('Rate this workout');
+  });
+
+  it('falls back to logged_at when started_at is absent', () => {
+    const loggedAt = new Date(NOW - 31 * 60000).toISOString();
+    const html = renderWorkoutRow(unratedWorkout({ logged_at: loggedAt }), NOW);
+    expect(html).toContain('Rate this workout');
+  });
+
+  it('never fabricates a timestamp -- no chip when both started_at and logged_at are absent', () => {
+    const html = renderWorkoutRow(unratedWorkout(), NOW);
+    expect(html).not.toContain('Rate this workout');
+  });
+
+  it('never shows the chip once the workout already has an rpe', () => {
+    const startedAt = new Date(NOW - 120 * 60000).toISOString();
+    const html = renderWorkoutRow(unratedWorkout({ started_at: startedAt, duration_min: 30, rpe: 6 }), NOW);
+    expect(html).not.toContain('Rate this workout');
+  });
+
+  it('accepts an injected `now` rather than reading Date.now() unconditionally, and still works with none given', () => {
+    // Mirrors history.test.js's buildHistoryFeed({ now: NOW }) injection
+    // convention -- deterministic when `now` is passed, and still callable
+    // (defaults to Date.now()) when it isn't.
+    expect(() => renderWorkoutRow(unratedWorkout())).not.toThrow();
+  });
+});
+
+// --- D2: load_au/load_tier reliability chip ---------------------------------
+
+describe('loadTierLabel / load chips (D2)', () => {
+  it.each([
+    ['srpe', 'from RPE'],
+    ['hr_trimp', 'from HR'],
+    ['pace_if', 'from pace'],
+    ['duration', 'estimated'],
+  ])('labels the %s tier as "%s"', (tier, label) => {
+    expect(loadTierLabel(tier)).toBe(label);
+  });
+
+  it('returns null (not a fabricated label) for an unrecognized or absent tier', () => {
+    expect(loadTierLabel('bogus')).toBeNull();
+    expect(loadTierLabel(undefined)).toBeNull();
+    expect(loadTierLabel(null)).toBeNull();
+  });
+
+  it.each([
+    ['srpe', 'from RPE'],
+    ['hr_trimp', 'from HR'],
+    ['pace_if', 'from pace'],
+    ['duration', 'estimated'],
+  ])('renders the %s tier\'s chip on a workout row', (tier, label) => {
+    const html = renderWorkoutRow({
+      id: 'w-1', date: '2026-08-20', sport: 'swim_pool', source: 'fit',
+      distance_m: 2000, duration_min: 60, rpe: 6, load_au: 360, load_tier: tier,
+    }, Date.now());
+    expect(html).toContain('360');
+    expect(html).toContain('AU');
+    expect(html).toContain(label);
+  });
+
+  it('renders nothing extra when load_au/load_tier are absent -- defensive for old cached data', () => {
+    const html = renderWorkoutRow({
+      id: 'w-1', date: '2026-08-20', sport: 'swim_pool', source: 'fit',
+      distance_m: 2000, duration_min: 60, rpe: 6,
+    }, Date.now());
+    expect(html).not.toContain('AU');
+  });
+});
+
+// --- D1: planned/target load tile on the Plan tab's session detail ---------
+
+describe('renderPlanSessionDetailStats target load (D1)', () => {
+  function planWithSession(session) {
+    return {
+      athlete: { name: 'Renee' },
+      events: [],
+      macro: { blocks: [] },
+      weeks: [{
+        iso_week: '2099-W01', meso_block: 'base', focus: 'aerobic base',
+        target_volume_m: 10000, sessions: [session], adaptation_rationale: null,
+      }],
+    };
+  }
+
+  it('renders session.target_load_au as a "Target load (AU)" tile', () => {
+    const session = {
+      id: 's-1', date: '2099-01-05', sport: 'swim_pool', source: 'ai_coach',
+      duration_min: 60, distance_m: 2000, intensity: { zone: 'Z2' },
+      purpose: 'aerobic set', structure: null, structured: null, status: 'planned',
+      target_load_au: 260,
+    };
+    const html = renderApp(planWithSession(session), 's-1');
+    expect(html).toContain('Target load (AU)');
+    expect(html).toContain('260');
+  });
+
+  it('renders nothing extra when target_load_au is absent', () => {
+    const session = {
+      id: 's-2', date: '2099-01-05', sport: 'swim_pool', source: 'ai_coach',
+      duration_min: 60, distance_m: 2000, intensity: { zone: 'Z2' },
+      purpose: 'aerobic set', structure: null, structured: null, status: 'planned',
+    };
+    const html = renderApp(planWithSession(session), 's-2');
+    expect(html).not.toContain('Target load (AU)');
+  });
+});
+
+// --- A6b: editable RPE on the workout detail view ---------------------------
+
+describe('RPE editor affordance on the workout detail view (A6b)', () => {
+  const UNRATED = {
+    id: 'w-unrated', date: '2026-08-20', sport: 'swim_pool', source: 'fit',
+    distance_m: 2000, duration_min: 40, rpe: null, notes: null,
+    avg_hr: null, max_hr: null, analytics: null, laps: [], lengths: [], pauses: [],
+  };
+
+  it('shows a "Rate this workout" toggle on the athlete\'s own Dashboard tab when unrated', () => {
+    const html = renderDashboardTab({
+      ...DASHBOARD_BASE_ARGS, feed: feedOf([UNRATED]), detailId: 'w-unrated',
+    });
+    expect(html).toContain('data-a="workout:edit-rpe"');
+    expect(html).toContain('Rate this workout');
+  });
+
+  it('swaps in the CR-10 slider + Save/Cancel once rpeEdit targets this workout', () => {
+    const html = renderDashboardTab({
+      ...DASHBOARD_BASE_ARGS,
+      feed: feedOf([UNRATED]),
+      detailId: 'w-unrated',
+      rpeEdit: {
+        workoutId: 'w-unrated', rpe: 6, status: 'idle', error: null,
+      },
+    });
+    expect(html).toContain('data-a="workout:save-rpe"');
+    expect(html).toContain('data-a="workout:cancel-edit-rpe"');
+    expect(html).toContain('data-form="workoutRpe"');
+  });
+
+  it('surfaces a save error message', () => {
+    const html = renderDashboardTab({
+      ...DASHBOARD_BASE_ARGS,
+      feed: feedOf([UNRATED]),
+      detailId: 'w-unrated',
+      rpeEdit: {
+        workoutId: 'w-unrated', rpe: 6, status: 'error', error: 'invalid rpe',
+      },
+    });
+    expect(html).toContain('invalid rpe');
+  });
+
+  it("never shows the RPE editor on the coach roster's read-only view of the same workout", () => {
+    const html = renderRosterTab({
+      athletes: { status: 'ready', data: [{ slug: 'renee', name: 'Renee' }], error: null },
+      actingAsAthlete: 'renee',
+      workouts: { status: 'ready', data: [UNRATED], error: null },
+      feedback: { status: 'idle', data: [], error: null },
+      replyDrafts: {},
+      replySubmit: { status: 'idle', error: null, feedbackId: null },
+      workoutDetailId: 'w-unrated',
+      backendConfigured: true,
+      online: true,
+    });
+    expect(html).not.toContain('data-a="workout:edit-rpe"');
   });
 });

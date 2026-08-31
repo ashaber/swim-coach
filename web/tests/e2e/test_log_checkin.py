@@ -25,6 +25,18 @@ PLAN_STUB = '{"slug":"renee","athlete":{"name":"Renee"},"events":[],"weeks":[],"
 PLAN_LOAD_STUB = '{"athlete":"renee","weeks":12,"ctl_atl_tsb":[]}'
 
 
+def _set_range_value(page, selector, value):
+    """Playwright's `fill()` doesn't support `<input type="range">` -- set
+    the value directly and dispatch a real `input` event (bubbling, so
+    main.js's delegated `onAppInput` listener on #app picks it up), the same
+    event a manual slider drag fires."""
+    page.eval_on_selector(
+        selector,
+        "(el, value) => { el.value = value; el.dispatchEvent(new Event('input', { bubbles: true })); }",
+        value,
+    )
+
+
 def _cors_route(status, content_type, body):
     def handler(route):
         if route.request.method == 'OPTIONS':
@@ -162,6 +174,28 @@ def test_log_tab_renders_form_fields_when_configured(page):
     assert page.locator('[data-form="log"][data-field="distance_m"]').count() == 1
     assert page.locator('[data-form="log"][data-field="duration_min"]').count() == 1
     assert page.locator('[data-form="log"][data-field="rpe"]').count() == 1
+
+
+def test_log_rpe_slider_uses_the_cr10_zero_to_ten_scale(page):
+    # A6a: the old bare slider was min="1" -- 0 ("Rest / Nothing at all") is
+    # now a legitimate response (library/19-srpe-protocol.md's Foster CR-10
+    # scale), not an unreachable floor.
+    _configure_backend(page)
+    _open_manual_log(page)
+    rpe_slider = page.locator('[data-form="log"][data-field="rpe"]')
+    assert rpe_slider.get_attribute('min') == '0'
+    assert rpe_slider.get_attribute('max') == '10'
+
+
+def test_log_rpe_slider_shows_the_live_cr10_anchor_caption(page):
+    _configure_backend(page)
+    _open_manual_log(page)
+    _set_range_value(page, '[data-form="log"][data-field="rpe"]', '0')
+    assert 'Rest / Nothing at all' in page.content()
+    _set_range_value(page, '[data-form="log"][data-field="rpe"]', '6')
+    # 6 is deliberately unanchored in Foster's own published scale -- an
+    # em-dash, never fabricated text.
+    assert '—' in page.content()
 
 
 def test_log_submit_success_shows_saved_and_resets_form(page):

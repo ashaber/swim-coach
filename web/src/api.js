@@ -204,6 +204,22 @@ export async function listWorkouts({ baseUrl, token, athlete = 'renee' }) {
   return apiRequest({ baseUrl, token, path: `/api/workouts?athlete=${encodeURIComponent(athlete)}` });
 }
 
+/** PATCH {baseUrl}/api/workouts/{workoutId}?athlete=<slug> -- corrects a
+ * previously logged workout's rpe/notes after the fact (A6b's RPE editor;
+ * see backend/app/routes/workouts.py's patch_workout, which only ever
+ * accepts those two fields). Same shape as patchAthlete above. */
+export async function patchWorkout({
+  baseUrl, token, athlete, workoutId, payload,
+}) {
+  return apiRequest({
+    baseUrl,
+    token,
+    path: `/api/workouts/${encodeURIComponent(workoutId)}?athlete=${encodeURIComponent(athlete)}`,
+    method: 'PATCH',
+    body: payload,
+  });
+}
+
 /** POST {baseUrl}/api/workouts/sync?athlete=<slug> -- the Log tab's primary
  * "Sync from watch" button. Runs an on-demand intervals.icu sync for the
  * athlete and returns `{ listed, new, saved, failed }` on success. If sync

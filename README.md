@@ -331,6 +331,14 @@ map of that territory, not a replacement for it.
 
 ### What's measured today
 
+Every load number below — actual or planned, whichever tier produced it —
+is in **AU** (arbitrary units): a nominal, project-internal scale, not a
+physical unit with external meaning. It's what the PWA's "Load (AU)"
+stats/chips (workout rows, workout detail, coach roster) and the Plan tab's
+"Target load (AU)" tile both display — same unit name everywhere it
+surfaces, not a different label per screen. See
+`library/15-tiered-session-load.md`'s "Unit: AU" section.
+
 - **Tiered session load** (`load.session_load`) — a workout's real training
   load doesn't depend on whether the athlete bothered to survey it, so this
   falls through four tiers of decreasing fidelity, the last always
@@ -339,7 +347,19 @@ map of that territory, not a replacement for it.
   1. **sRPE** (`duration_min × RPE`) — Foster's method, the base unit
      everything else is built from when a survey exists. Specifically
      validated in swimmers (real correlation coefficients against TRIMP,
-     not just assumed to transfer from other sports).
+     not just assumed to transfer from other sports). The in-app survey is
+     the actual published **Foster CR-10 modified Borg scale — 0 to 10, not
+     the old bare 1-10 slider** (`library/19-srpe-protocol.md`): 0 ("Rest /
+     Nothing at all") is now a legitimate response — an easy recovery
+     session or technique day has somewhere to report itself at the bottom
+     of the scale, rather than an unreachable floor. Ratings 6/8/9 are
+     deliberately left unanchored in Foster's own published instrument
+     (still selectable, just with no verbal label), and the app renders
+     them as a blank/em-dash rather than inventing anchor text Foster never
+     validated. The app also asks the question roughly 30 minutes after a
+     workout's estimated end time (a recency-bias-avoidance convention, not
+     itself a separately-cited claim) and nudges the athlete in-app (a row
+     chip, not a push notification) if it's still unanswered by then.
   2. **HR-based TRIMP** (Banister heart-rate-reserve training impulse) —
      used when `avg_hr` plus a derivable `hr_max`/`hr_rest` are available;
      sex-specific exponential weighting (0.64·e^(1.92x) men, 0.86·e^(1.67x)
@@ -384,6 +404,41 @@ map of that territory, not a replacement for it.
   HRV, added as an independent, physiologically-measured cross-check against
   the sRPE-derived CTL/ATL/TSB trend — kept as its own field, never blended
   into one number, since it's corroboration, not a replacement.
+- **Projected/target load** (`load.session_target_load_au`) — a *planned*
+  session has no RPE (nobody has done it yet), so this derives a projected
+  load from the session's `intensity.zone` instead: `duration_min ×
+  ZONE_ASSUMED_RPE[zone]`, a Coach-judgment Z1–Z5 → assumed-CR-10-RPE
+  mapping (not an `[EVIDENCE]`/`[ADAPTED]` citation — no source calibrates
+  "what RPE does a Z3 swim feel like"), falling back to the same flat
+  duration-only constant tier 4 above uses when a session has no recognized
+  zone. Computed **on the fly at read time, with no persisted field and no
+  migration** — `scripts/export_plan_json.py` attaches it to every session
+  in the exported plan, so every already-active plan gets it for free on
+  its next `GET /api/plan`/`GET /api/coach/athletes/{slug}/plan` fetch (the
+  Plan tab's "Target load (AU)" tile). This is the *planned* half of a
+  planned-vs-actual comparison — `load.session_load` above (tiered, from
+  what actually happened, surfaced as the "Load (AU)" stat/chip next to a
+  reliability label: "from RPE"/"from HR"/"from pace"/"estimated") is the
+  *actual* half. They're deliberately never conflated into one number.
+- **Validating the model against reality**
+  (`python -m swim_coach.cli validate-load-model --athlete <slug>`) — the
+  honest answer to "how do we know any of this tracks reality." Matches
+  every logged workout to a planned session
+  (`quality.match_workout_to_session`) and compares projected vs. actual
+  load for each match (`quality.workout_quality`'s `load_delta_pct`),
+  printing one JSON object: `{"athlete", "scanned", "matched",
+  "mean_delta_pct", "median_delta_pct", "pct_within_20pct_band"}` —
+  `scanned` is every logged workout regardless of match, `matched` is how
+  many found a planned session at all, and the three stats are computed
+  only over workouts that both matched and produced a real
+  `load_delta_pct` (`None`, never a fabricated 0 or 100, when that set is
+  empty). The ±20% "close enough" band is itself a documented Coach
+  judgment, not a citation — deliberately generous given
+  `ZONE_ASSUMED_RPE`'s own provisional footing. **Read-only and diagnostic
+  only** — like `wellness_baseline_signal`'s "visible, not gating, until
+  proven" precedent, this is never wired into `adapt_week`; it exists to
+  let a human see whether the projected-load model is worth trusting more,
+  not to act on its own.
 
 Every one of these follows the same design rule: **multiple independent
 signals, not one master number.** A single "readiness score" would hide

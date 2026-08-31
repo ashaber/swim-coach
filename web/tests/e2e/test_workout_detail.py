@@ -9,6 +9,7 @@ backend, /api/athlete stubbed).
 """
 
 import json
+import re
 
 import pytest
 from playwright.sync_api import sync_playwright
@@ -17,6 +18,16 @@ from conftest import BROWSERS, seed_identity
 
 BASE_URL = 'https://coach-api.test'
 TOKEN = 'test-token-123'
+
+# A regex, deliberately NOT a glob -- `'**/api/workouts*'` matches only the
+# plain list/create path; `PATCH /api/workouts/{id}` has an extra `/` in it,
+# which glob's `*` doesn't cross. Same gotcha (and fix) as
+# test_plan_garmin_push.py's own `PUSH_ROUTE`: a glob that silently stops
+# matching under one browser engine lets the request escape to the real
+# network, which can make a failure-path test pass for entirely the wrong
+# reason (an unreachable backend renders the same error state a stubbed
+# 4xx does).
+WORKOUTS_ROUTE = re.compile(r'/api/workouts(/[^/?]+)?(\?|$)')
 
 CORS_HEADERS = {
     'Access-Control-Allow-Origin': '*',
@@ -360,6 +371,129 @@ def test_history_loads_at_boot_without_tab_switch(page):
     page.wait_for_selector('.hist-row')
     assert 'Open water swim' in page.content()
     assert page.locator('.tabbar').count() == 1
+
+
+# --- A6b: editable RPE on the workout detail view ---------------------------
+
+# An unrated workout -- the athlete's own manual entry that never got an
+# effort rating (or came in via .fit sync, which never carries one). This is
+# exactly the "Rate this workout" case (see views.js's renderRpeEditSection).
+UNRATED_WORKOUT = {
+    'id': 'w-unrated', 'date': '2026-06-02', 'sport': 'swim_pool', 'source': 'manual',
+    'distance_m': 2000, 'duration_min': 40, 'avg_pace_s_per_100m': None, 'rpe': None,
+    'notes': 'easy technique day', 'avg_hr': None, 'max_hr': None, 'analytics': None,
+    'laps': [], 'lengths': [], 'pauses': [],
+}
+
+
+def _route_workouts_with_editable_rpe(page, workout):
+    """Mocks `**/api/workouts*` so both `GET` (used for the initial load AND
+    the post-save `loadHistory()` refetch) and `PATCH /api/workouts/{id}`
+    (the RPE editor's save) hit the SAME in-memory workout -- a save updates
+    `state['rpe']`, and every subsequent GET reflects it, so this proves the
+    real end-to-end flow (open -> edit -> save -> refetch -> detail reflects
+    the new value) rather than a hand-rolled optimistic merge."""
+    state = {'rpe': workout.get('rpe')}
+
+    def handler(route):
+        if route.request.method == 'OPTIONS':
+            route.fulfill(status=204, headers=CORS_HEADERS)
+            return
+        if route.request.method == 'PATCH':
+            body = json.loads(route.request.post_data or '{}')
+            if 'rpe' in body:
+                state['rpe'] = body['rpe']
+            updated = {**workout, 'rpe': state['rpe']}
+            route.fulfill(status=200, content_type='application/json', body=json.dumps(updated), headers=CORS_HEADERS)
+            return
+        current = {**workout, 'rpe': state['rpe']}
+        route.fulfill(status=200, content_type='application/json', body=json.dumps([current]), headers=CORS_HEADERS)
+
+    page.route(WORKOUTS_ROUTE, handler)
+
+
+def _set_range_value(page, selector, value):
+    """Playwright's `fill()` doesn't support `<input type="range">` -- set
+    the value directly and dispatch a real `input` event (bubbling, so
+    main.js's delegated `onAppInput` listener on #app picks it up), the same
+    event a manual slider drag fires."""
+    page.eval_on_selector(
+        selector,
+        "(el, value) => { el.value = value; el.dispatchEvent(new Event('input', { bubbles: true })); }",
+        value,
+    )
+
+
+def test_edit_rpe_end_to_end_open_edit_move_slider_save(page):
+    _route_workouts_with_editable_rpe(page, UNRATED_WORKOUT)
+    _configure_backend(page)
+    page.click('[data-a="tab:dashboard"]')
+    page.wait_for_selector('.hist-row')
+
+    page.click('.hist-row')
+    page.wait_for_selector('[data-a="history:back"]')
+    # Unrated -> the toggle button reads "Rate this workout", not "Edit RPE".
+    assert 'Rate this workout' in page.content()
+
+    page.click('[data-a="workout:edit-rpe"]')
+    page.wait_for_selector('[data-form="workoutRpe"][data-field="rpe"]')
+    assert page.locator('[data-a="workout:save-rpe"]').count() == 1
+    assert page.locator('[data-a="workout:cancel-edit-rpe"]').count() == 1
+
+    _set_range_value(page, '[data-form="workoutRpe"][data-field="rpe"]', '8')
+    page.click('[data-a="workout:save-rpe"]')
+
+    # Save succeeds -> the editor closes and loadHistory() refetches, so the
+    # detail view (still open, same workout) now shows the corrected value.
+    page.wait_for_selector('[data-a="workout:edit-rpe"]')
+    content = page.content()
+    assert '8/10' in content
+    assert 'Edit RPE' in content  # now rated -- the toggle's label flips
+
+
+def test_cancel_edit_rpe_discards_the_in_progress_change(page):
+    _route_workouts_with_editable_rpe(page, UNRATED_WORKOUT)
+    _configure_backend(page)
+    page.click('[data-a="tab:dashboard"]')
+    page.wait_for_selector('.hist-row')
+    page.click('.hist-row')
+    page.wait_for_selector('[data-a="history:back"]')
+
+    page.click('[data-a="workout:edit-rpe"]')
+    page.wait_for_selector('[data-form="workoutRpe"][data-field="rpe"]')
+    _set_range_value(page, '[data-form="workoutRpe"][data-field="rpe"]', '9')
+    page.click('[data-a="workout:cancel-edit-rpe"]')
+
+    page.wait_for_selector('[data-a="workout:edit-rpe"]')
+    assert 'Rate this workout' in page.content()  # still unrated -- nothing was saved
+    assert page.locator('[data-form="workoutRpe"]').count() == 0
+
+
+def test_edit_rpe_save_failure_shows_error_and_keeps_editor_open(page):
+    def failing_handler(route):
+        if route.request.method == 'OPTIONS':
+            route.fulfill(status=204, headers=CORS_HEADERS)
+        elif route.request.method == 'PATCH':
+            route.fulfill(status=422, content_type='application/json', body='{"error": "rpe must be <= 10"}', headers=CORS_HEADERS)
+        else:
+            route.fulfill(status=200, content_type='application/json', body=json.dumps([UNRATED_WORKOUT]), headers=CORS_HEADERS)
+
+    page.route(WORKOUTS_ROUTE, failing_handler)
+    _configure_backend(page)
+    page.click('[data-a="tab:dashboard"]')
+    page.wait_for_selector('.hist-row')
+    page.click('.hist-row')
+    page.wait_for_selector('[data-a="history:back"]')
+
+    page.click('[data-a="workout:edit-rpe"]')
+    page.wait_for_selector('[data-form="workoutRpe"][data-field="rpe"]')
+    _set_range_value(page, '[data-form="workoutRpe"][data-field="rpe"]', '5')
+    page.click('[data-a="workout:save-rpe"]')
+
+    page.wait_for_selector('.conn-result.fail')
+    assert 'rpe must be <= 10' in page.locator('.conn-result').inner_text()
+    # The editor stays open on failure -- nothing to retry if it closed.
+    assert page.locator('[data-form="workoutRpe"]').count() == 1
 
 
 def test_detail_view_has_no_horizontal_overflow_on_narrow_viewport(page):
