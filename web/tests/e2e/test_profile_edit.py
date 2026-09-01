@@ -196,6 +196,37 @@ def test_profile_form_prefills_from_get_athlete(page):
     assert not page.is_checked('[data-form="profile"][data-day="tuesday"]')
 
 
+# --- LTHR-normalized HR load (Aug 2026 coach-chat cleanup) -------------------
+
+
+def test_lthr_field_blank_when_unset(page):
+    # PROFILE_FIXTURE has no lthr_bpm at all -- must prefill blank, not "0"
+    # or "None".
+    page.route('**/api/athlete*', _athlete_route())
+
+    _configure_backend(page)
+    page.wait_for_selector('[data-form="profile"][data-field="name"]')
+    assert page.input_value('[data-form="profile"][data-field="lthrBpm"]') == ''
+
+
+def test_setting_lthr_and_saving_sends_it_as_an_integer(page):
+    patch_calls = []
+    page.route('**/api/athlete*', _athlete_route(
+        get_body={**PROFILE_FIXTURE, 'lthr_bpm': 172}, patch_calls=patch_calls,
+    ))
+
+    _configure_backend(page)
+    page.wait_for_selector('[data-form="profile"][data-field="name"]')
+    assert page.input_value('[data-form="profile"][data-field="lthrBpm"]') == '172'
+
+    page.fill('[data-form="profile"][data-field="lthrBpm"]', '175')
+    page.click('[data-a="profile:submit"]')
+
+    page.wait_for_selector('.conn-result.ok')
+    assert len(patch_calls) == 1
+    assert patch_calls[0]['lthr_bpm'] == 175
+
+
 # --- B4 (coach-mode Q&A build): "Email notifications" toggle -----------------
 
 def test_email_notifications_checkbox_defaults_checked_when_the_field_is_absent(page):

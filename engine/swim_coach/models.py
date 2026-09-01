@@ -67,6 +67,19 @@ class Athlete(BaseModel):
     # every existing profile.yaml (no key present) unless explicitly toggled
     # off, same additive/no-schema_version-bump convention as
     # `has_pool_coach` above.
+    lthr_bpm: int | None = None
+    # Lactate-threshold heart rate (bpm) -- a physiological anchor the
+    # athlete supplies directly (e.g. from a field test, or read off a
+    # platform like intervals.icu/Garmin that already estimates it), the
+    # same role `css_pace_s_per_100m` plays for swim pace: a real,
+    # athlete-specific reference point rather than a population default or
+    # an incidentally-observed extreme. Used by `load.py`'s HR-based TRIMP
+    # tier to rescale onto the same "100 = one hour at threshold" unit TSS
+    # uses for power -- see that module's `_normalize_trimp_to_lthr_hour`
+    # and `library/15-tiered-session-load.md`. `None` (the default) leaves
+    # tier 2 exactly as before -- raw, un-normalized TRIMP -- for every
+    # existing profile.yaml (no key present) and any athlete who hasn't
+    # set one. Additive, no schema_version bump.
 
 
 class Event(BaseModel):

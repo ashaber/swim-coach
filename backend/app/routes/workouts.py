@@ -119,6 +119,7 @@ def _attach_load(
         hr_rest=hr_rest,
         sex=profile.sex,
         css_pace_s_per_100m=profile.css_pace_s_per_100m,
+        lthr_bpm=profile.lthr_bpm,
     )
     return {**workout.model_dump(mode="json"), "load_au": round(sl.value, 1), "load_tier": sl.tier}
 

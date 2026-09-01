@@ -111,6 +111,65 @@ coefficient pair. When unset (as Renee's currently is) or `"other"`, the
 engine averages the male and female weighting curves rather than silently
 assuming one -- a deliberate neutral default, not a resolved citation.
 
+**Optional refinement -- normalizing to a threshold-hour (`Athlete.lthr_bpm`):**
+raised directly by Andrew (Aug 2026 coach-chat session): his own recent
+cycling workout came back with a coach explanation that assumed a default
+sRPE=1 recovery-ride fallback the engine doesn't even have, for a workout
+that in fact had real HR data and should have reached tier 2. Separately,
+he pointed out that a raw HR/power number means little without knowing the
+athlete's own zones -- "my 200w is endurance, my MTB [ride] it would be Z6
+neuromuscular" -- and asked for the engine to use his known lactate-
+threshold heart rate (LTHR = 172 bpm) the same way it already uses CSS pace
+for swimming, citing intervals.icu's "HRSS" heart-rate load-model option as
+the reference behavior he wanted (small load for an easy 60-minute walk,
+meaningful load for a multi-hour one).
+
+**✓ Verified by direct fetch this session.** TrainingPeaks' own help
+documentation ("Training with TSS vs. hrTSS: What's the Difference?")
+confirms hrTSS is "based on time in heart rate training zones derived from
+an athlete's lactate threshold heart rate," normalized against "an
+estimate of the amount of accumulated TSS in an hour" at threshold effort
+-- the same "100 = one hour at threshold" convention this module's Tier 3
+already uses for FTP (below). Separately, intervals.icu's own creator
+("david," intervals.icu forum thread "HRSS (normalized TRIMP) training
+load," confirmed by direct fetch this session) describes intervals.icu's
+own "HRSS" heart-rate option as literally Banister TRIMP -- **the exact
+formula this tier already implements**, not a different curve -- requiring
+only a resting HR and a threshold HR as inputs, "normalized in a similar
+way to TSS (100 = 1h max effort)."
+
+Both sources converge on the same conclusion: no new exponential-weighting
+formula is needed. `engine/swim_coach/load.py`'s
+`_normalize_trimp_to_lthr_hour` implements exactly this -- when
+`Athlete.lthr_bpm` is set, the existing tier-2 TRIMP output is linearly
+rescaled so that one hour spent at `lthr_bpm` reads as
+`HR_LOAD_NORMALIZED_SCALE` (100) AU, using the athlete's own existing
+`hr_max`/`hr_rest` estimates (unchanged, see above) purely to place
+`lthr_bpm` on the same %HRR fraction the rest of the tier already computes
+on. `[ADAPTED: cycling]` (TSS's "100=1hr@FTP" convention, borrowed for
+HR). **Confidence: medium** (both practitioner sources independently
+confirm the threshold-hour=100 rescaling technique; neither publishes the
+exact internal method a commercial tool like intervals.icu uses to derive
+a working HRmax from LTHR when no lab-tested max is on file, so this
+implementation deliberately keeps using this project's own already-cited
+`estimate_hr_max` -- "highest ever observed" -- rather than inventing an
+unverified LTHR-to-HRmax ratio). **Test:** if Andrew's real lab- or
+field-tested HRmax ever becomes known, compare it against
+`estimate_hr_max`'s floor estimate and revisit if they diverge materially.
+
+Worked check against Andrew's own stated numbers (`lthr_bpm=172`,
+`hr_max=190` observed, `hr_rest=60` generic fallback): a 60-minute walk at
+`avg_hr=85` scores ~7 AU (matching his own quoted expectation of "5-10
+points" for a low-HR walk under HRSS), while a 3-hour walk at `avg_hr=95`
+scores ~33 AU -- small for the short easy walk, but not collapsed to
+near-zero for the long one, addressing his explicit concern that "a 2 to 5
+hour walk needs to be counted." See `tests/unit/test_load.py`'s LTHR
+normalization tests for the exact figures.
+
+This is deliberately a no-op (unchanged raw TRIMP) for any athlete who
+hasn't set `lthr_bpm` -- most profiles haven't, and tier 2's pre-existing
+behavior remains correct and unchanged for them.
+
 ### Tier 3: swim pace-based intensity (a TSS-family formula)
 
 Used when tier 2 isn't available, the session is a swim (`swim_pool`/
@@ -178,6 +237,13 @@ sRPE-vs-HR/pace data once enough dual-logged sessions exist to fit a
 personal scaling factor -- but inventing an uncited scaling constant now
 would trade one silent distortion for another. Revisit once Renee logs
 more RPE alongside her watch data.
+
+**Partial fix, for whichever athlete has one:** the LTHR-normalization
+above narrows this for tier 2 specifically -- rescaling TRIMP onto TSS's
+own "100 = one hour at threshold" convention -- but only for an athlete
+who has actually set `Athlete.lthr_bpm`, and it doesn't reconcile TSS's
+own scale with sRPE's either (those remain two different, never-reconciled
+conventions in the broader field, not something this project has solved).
 
 **Also investigated and found unsupported:** whether tier 4's
 `DURATION_ONLY_ASSUMED_INTENSITY` should be split per activity type (e.g. a
