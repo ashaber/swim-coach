@@ -435,6 +435,104 @@ def test_daily_loads_threads_lthr_bpm_from_athlete():
     assert totals[workout.date] == pytest.approx(100.0, abs=1.0)
 
 
+# --- session_load: tier 1, sRPE-via-HRR normalization (scale-mismatch fix) ---------
+
+
+def test_session_load_srpe_with_full_hr_context_uses_hrr_normalized_value():
+    # RPE=7 estimates HRR_fraction=0.7 (rpe/10.0), run through the exact
+    # same Banister-weighting + LTHR-normalization pipeline tier 2 uses --
+    # NOT simply duration_min * rpe any more. tier stays "srpe".
+    workout = make_workout(rpe=7, duration_min=60.0)
+    result = session_load(workout, hr_max=190.0, hr_rest=50.0, sex="female", lthr_bpm=165.0)
+    hrr_fraction = 7 / 10.0
+    weight = TRIMP_FEMALE_COEFFICIENT * math.exp(TRIMP_FEMALE_EXPONENT * hrr_fraction)
+    raw = 60.0 * hrr_fraction * weight
+    lthr_fraction = (165.0 - 50.0) / (190.0 - 50.0)
+    lthr_weight = TRIMP_FEMALE_COEFFICIENT * math.exp(TRIMP_FEMALE_EXPONENT * lthr_fraction)
+    trimp_per_hour_at_lthr = 60.0 * lthr_fraction * lthr_weight
+    expected = raw / trimp_per_hour_at_lthr * 100.0
+    assert result.tier == "srpe"
+    assert result.value != pytest.approx(60.0 * 7)  # not the old duration*rpe value
+    assert result.value == pytest.approx(expected)
+    assert result.value == pytest.approx(69.576, abs=0.01)
+
+
+def test_session_load_srpe_falls_back_to_duration_times_rpe_when_lthr_bpm_missing():
+    # Same workout/context as above but no lthr_bpm -- must be byte-identical
+    # to the pre-existing sRPE behavior, since one of the four preconditions
+    # (lthr_bpm is not None) isn't met.
+    workout = make_workout(rpe=7, duration_min=60.0)
+    result = session_load(workout, hr_max=190.0, hr_rest=50.0, sex="female", lthr_bpm=None)
+    assert result.tier == "srpe"
+    assert result.value == pytest.approx(60.0 * 7)
+
+
+@pytest.mark.parametrize(
+    "hr_max,hr_rest",
+    [
+        (None, 50.0),  # no hr_max
+        (190.0, None),  # no hr_rest
+        (50.0, 190.0),  # hr_max <= hr_rest (nonsensical range)
+    ],
+)
+def test_session_load_srpe_falls_back_to_duration_times_rpe_when_hr_context_missing(
+    hr_max, hr_rest
+):
+    # Any missing/invalid piece of the four-precondition guard (same guard
+    # shape as tier 2's own HR-TRIMP path) must fall back to the exact
+    # unchanged duration_min * rpe behavior, even with lthr_bpm set.
+    workout = make_workout(rpe=7, duration_min=60.0)
+    result = session_load(
+        workout, hr_max=hr_max, hr_rest=hr_rest, sex="female", lthr_bpm=165.0
+    )
+    assert result.tier == "srpe"
+    assert result.value == pytest.approx(60.0 * 7)
+
+
+def test_session_load_srpe_real_mtb_ride_regression_closes_scale_gap():
+    # Real 2026-08-30 MTB ride that surfaced this bug: rpe=5, duration_min=
+    # 158.5 -> old raw sRPE = 158.5*5 = 792.5 AU, ~10x TrainingPeaks' own
+    # 155 TSS for the same ride and ~10x the 78.6 AU tier-2 scored for the
+    # very next day's ride (2026-08-29, TrainingPeaks TSS 85 -- an ~1.8x
+    # day-to-day spread, not ~10x). Andrew's real profile: hr_max=190,
+    # hr_rest=52, lthr_bpm=172, sex unset (None, same convention as this
+    # module's other "Andrew's own numbers" tests above).
+    #
+    # New path: HRR_fraction = 5/10.0 = 0.5, run through the same
+    # Banister-weighting + LTHR-normalization tier 2 already uses. Hand-
+    # computed (and confirmed via the module's own formula): raw HRR-based
+    # TRIMP = 144.775, normalized to the LTHR-hour=100 scale = 78.468 AU --
+    # a ~10x reduction from the old 792.5, and now landing almost exactly
+    # on the SAME scale as the 78.6 AU tier-2 score for the adjacent
+    # 2026-08-29 ride (a coincidence of these particular numbers, not a
+    # claim the two methods always converge this closely -- RPE is
+    # subjective, HR is measured, some divergence is real signal, not a
+    # bug). Separately, recomputing this SAME 8/30 ride through tier 2 using
+    # its own real avg_hr=138 (not RPE) gives ~121.86 AU here (close to the
+    # ~117.7 the brief's own hand-check found with slightly different
+    # rounding) -- a ~1.55x spread against this test's 78.468, the same
+    # order of magnitude as TrainingPeaks' own 1.8x day-to-day spread, not
+    # the old ~10x scale mismatch.
+    workout = make_workout(rpe=5, duration_min=158.5)
+    result = session_load(workout, hr_max=190.0, hr_rest=52.0, sex=None, lthr_bpm=172.0)
+    old_raw_srpe = 158.5 * 5
+    assert result.tier == "srpe"
+    assert result.value == pytest.approx(78.468, abs=0.01)
+    assert result.value < old_raw_srpe / 5  # meaningfully lower, not a token reduction
+
+    # Tier-2 equivalent for the SAME ride, using its own real avg_hr=138
+    # instead of the RPE estimate -- confirms the RPE-based estimate lands
+    # in the same sane order of magnitude as the HR-measured alternative,
+    # not 10x off from it.
+    hr_workout = make_workout(rpe=None, duration_min=158.5, avg_hr=138)
+    hr_equivalent = session_load(
+        hr_workout, hr_max=190.0, hr_rest=52.0, sex=None, lthr_bpm=172.0
+    )
+    assert hr_equivalent.tier == "hr_trimp"
+    ratio = hr_equivalent.value / result.value
+    assert 1.0 < ratio < 3.0  # same order of magnitude, not the old ~10x gap
+
+
 # --- session_load: tier 3 (swim pace-based intensity) -------------------------------
 
 
