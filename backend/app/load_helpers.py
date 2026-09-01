@@ -38,7 +38,12 @@ def workout_load_au(
     (`swim_coach.load.estimate_hr_max`) -- never recomputed per workout,
     since it's the same estimate regardless of which workout is being
     scored. `hr_rest` is estimated here per-workout since it's genuinely
-    date-dependent (`estimate_hr_rest`'s `as_of` parameter)."""
+    date-dependent (`estimate_hr_rest`'s `as_of` parameter). `lthr_bpm`
+    (when the athlete has set one -- see `engine/swim_coach/load.py`'s
+    `_normalize_trimp_to_lthr_hour`/`library/15-tiered-session-load.md`)
+    rescales tier 2's raw TRIMP onto TSS's own "100 = one hour at
+    threshold" convention; a no-op when unset, same as `session_load`
+    itself."""
     hr_rest = estimate_hr_rest(wellness, workout.date)
     sl = session_load(
         workout,
@@ -46,5 +51,6 @@ def workout_load_au(
         hr_rest=hr_rest,
         sex=athlete.sex,
         css_pace_s_per_100m=athlete.css_pace_s_per_100m,
+        lthr_bpm=athlete.lthr_bpm,
     )
     return round(sl.value, 1), sl.tier
