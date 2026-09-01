@@ -10,7 +10,8 @@ import {
   splitStructuredRationale, sessionZoneDistribution, formatZoneDistributionSummary,
   ZONE_GLOSSARY, TERM_GLOSSARY, ctlAtlTsbChartGeometry, raceWeekCategoryLabel,
   describeWellnessBaselineDeviation, describeCtlAtlTsbTrend, RACE_DAY_TSB_BAND,
-  PRODUCTIVE_TRAINING_TSB_BAND, LOAD_CHART_WINDOW_DAYS,
+  PRODUCTIVE_TRAINING_TSB_BAND, LOAD_CHART_WINDOW_DAYS, LOAD_CHART_WINDOW_OPTIONS,
+  CTL_ATL_TREND_WINDOW_DAYS, formatMonthLabel,
 } from './plan.js';
 import { TOOL_LABELS } from './chat.js';
 import { buildHistoryFeed } from './history.js';
@@ -772,7 +773,7 @@ function renderMacroSection(macro, event, weeks) {
 // calls this same function with different `load` state; only the data
 // source differs (main.js's loadPlanLoad vs. loadCoachLoad).
 
-const LOAD_CHART_LINE_COLOR_VAR = { ctl: '--accent', atl: '--c-strength', tsb: '--c-ow' };
+const LOAD_CHART_LINE_COLOR_VAR = { ctl: '--accent', atl: '--c-strength', tsb: '--c-form' };
 
 function loadChartPointsAttr(points) {
   return points.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
@@ -831,44 +832,187 @@ function renderWellnessBaselineDeviation(deviation) {
     </div>`;
 }
 
-/** Dual y-axis rendering (readability fix -- see `ctlAtlTsbChartGeometry`'s
- * doc comment in plan.js for why): the left axis (grey, gridlined) is
- * CTL/TSB's shared "primary" scale; the right axis (no gridlines of its
- * own -- a second full gridline grid would clutter the plot for one line)
- * is ATL's independent "secondary" scale, its tick labels colored to match
- * ATL's own line color so the two axes read as visually paired with the
- * line each belongs to, exactly like the legend below the chart already
- * pairs a color with a name. */
 /** One shaded reference-band `<rect>`, shared by both the race-ready and
  * productive-training bands in `renderLoadChartSvg` below -- same geometry
- * shape (full plot width, `top`..`bottom` on the primary axis), differing
- * only in which band's pixel bounds and CSS class they use. */
-function renderLoadChartBandRect(geo, top, bottom, className) {
-  return `<rect class="load-chart-band ${className}" x="${geo.plotLeft}" y="${top.toFixed(1)}" width="${geo.plotRight - geo.plotLeft}" height="${Math.max(0, bottom - top).toFixed(1)}" />`;
+ * shape (full plot width, `band.top`..`band.bottom` in the TSB panel's own
+ * pixel space), differing only in which band and CSS class they use.
+ * `isActive` (the athlete's LATEST TSB actually falls in this band) adds
+ * `load-chart-band-active`, bumping the CSS opacity from .22 to .34 --
+ * see plan.js's `PRODUCTIVE_TRAINING_TSB_BAND`/`RACE_DAY_TSB_BAND` doc
+ * comments and index.html's matching rule. */
+function renderLoadChartBandRect(geo, band, className, isActive) {
+  const cls = `load-chart-band ${className}${isActive ? ' load-chart-band-active' : ''}`;
+  return `<rect class="${cls}" x="${geo.plotLeft}" y="${band.top.toFixed(1)}" width="${(geo.plotRight - geo.plotLeft).toFixed(1)}" height="${Math.max(0, band.bottom - band.top).toFixed(1)}" />`;
 }
 
+/** A band's name, set into the band's own left edge, vertically centered --
+ * "productive"/"race-ready" per the design spec, so the band reads as
+ * self-labeled rather than requiring a separate legend entry to identify
+ * which shaded region is which. */
+function renderLoadChartBandLabel(geo, band, text) {
+  const y = (band.top + band.bottom) / 2;
+  return `<text x="${(geo.plotLeft + 8).toFixed(1)}" y="${y.toFixed(1)}" class="load-chart-band-label" dominant-baseline="middle">${esc(text)}</text>`;
+}
+
+/** The two UNNAMED zones above/below the two shaded bands -- "transitional"
+ * (fresher than race-day useful) above the race-ready band, "high risk"
+ * (fatigue outrunning the productive-training convention) below the
+ * productive band -- labeled as small edge text per the design spec, with
+ * no shaded rect of their own. The grey zone between the two named bands is
+ * deliberately left unlabeled (per spec: it reads as itself). */
+function renderLoadChartEdgeLabels(geo) {
+  const transitionalY = (geo.tsbPlot.top + geo.raceBand.top) / 2;
+  const highRiskY = (geo.productiveBand.bottom + geo.tsbPlot.bottom) / 2;
+  return `
+      <text x="${(geo.plotLeft + 8).toFixed(1)}" y="${transitionalY.toFixed(1)}" class="load-chart-edge-label" dominant-baseline="middle">transitional</text>
+      <text x="${(geo.plotLeft + 8).toFixed(1)}" y="${highRiskY.toFixed(1)}" class="load-chart-edge-label" dominant-baseline="middle">high risk</text>`;
+}
+
+/** A small caret at the TSB panel's top/bottom edge for every index
+ * `ctlAtlTsbChartGeometry` had to clamp into `TSB_AXIS_DOMAIN` (plan.js's
+ * `tsbClamped`) -- flags an out-of-range point as an alarm worth a second
+ * look, rather than silently drawing it as if it were merely at the edge of
+ * "normal". Direction (pointing further up/down, off the plot) is read
+ * straight from which edge the point's own pixel y actually landed on --
+ * no need to re-derive it from the raw TSB value's sign against the domain. */
+function renderLoadChartClampCarets(geo) {
+  return geo.tsbClamped.map((i) => {
+    const p = geo.tsbPoints[i];
+    const clampedHigh = Math.abs(p.y - geo.tsbPlot.top) < Math.abs(p.y - geo.tsbPlot.bottom);
+    const size = 4;
+    const points = clampedHigh
+      ? `${(p.x - size).toFixed(1)},${(p.y + size).toFixed(1)} ${(p.x + size).toFixed(1)},${(p.y + size).toFixed(1)} ${p.x.toFixed(1)},${(p.y - size).toFixed(1)}`
+      : `${(p.x - size).toFixed(1)},${(p.y - size).toFixed(1)} ${(p.x + size).toFixed(1)},${(p.y - size).toFixed(1)} ${p.x.toFixed(1)},${(p.y + size).toFixed(1)}`;
+    return `<polygon class="load-chart-clamp-caret" points="${points}" />`;
+  }).join('');
+}
+
+/** CTL/ATL's inline end-of-line name labels (the "legend moves inline"
+ * change, replacing the old separate `.load-chart-legend` row for these two
+ * lines) -- small colored text just to the left of each line's own
+ * right-hand (most recent) point, colored to match the line itself. TSB's
+ * own end-of-line identity is carried by `renderLoadChartLatestTsbLabel`
+ * below instead (it needs a value, not just a name, right at that same
+ * point, so the two are combined there rather than duplicated here). */
+function renderLoadChartLineEndLabels(geo) {
+  const ctlEnd = geo.ctlPoints.at(-1);
+  const atlEnd = geo.atlPoints.at(-1);
+  return `
+      <text x="${(ctlEnd.x - 6).toFixed(1)}" y="${(ctlEnd.y - 5).toFixed(1)}" text-anchor="end" class="load-chart-inline-label" style="fill:var(${LOAD_CHART_LINE_COLOR_VAR.ctl})">CTL</text>
+      <text x="${(atlEnd.x - 6).toFixed(1)}" y="${(atlEnd.y - 5).toFixed(1)}" text-anchor="end" class="load-chart-inline-label" style="fill:var(${LOAD_CHART_LINE_COLOR_VAR.atl})">ATL</text>`;
+}
+
+/** The TSB panel's last point: a filled dot plus a combined "TSB {value}"
+ * label (name and number together, since this one point has to carry both
+ * jobs -- the inline legend entry AND the "what is it right now" reading) --
+ * per the design spec, "the answer to 'which band am I in' should be
+ * visible without reading an axis." Anchored to the LEFT of the dot
+ * (`text-anchor="end"`) because the last point always sits at the plot's
+ * right edge (`plotRight`) -- anchoring right would push the label outside
+ * the viewBox. */
+function renderLoadChartLatestTsbLabel(geo) {
+  const { x, y, value } = geo.latestTsb;
+  const valueText = `${value >= 0 ? '+' : ''}${value.toFixed(1)}`;
+  return `
+      <circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.5" style="fill:var(${LOAD_CHART_LINE_COLOR_VAR.tsb})" />
+      <text x="${(x - 8).toFixed(1)}" y="${(y - 8).toFixed(1)}" text-anchor="end" class="load-chart-inline-label" style="fill:var(${LOAD_CHART_LINE_COLOR_VAR.tsb})">${esc(`TSB ${valueText}`)}</text>`;
+}
+
+/** Two stacked panels (top: CTL/ATL "fitness & fatigue" on one shared,
+ * 0-anchored axis; bottom: TSB "form" on its own fixed-domain axis),
+ * sharing one x-axis rendered once at the very bottom -- see plan.js's
+ * `ctlAtlTsbChartGeometry` module comment for why this replaced an earlier
+ * single-axis, then dual-y-axis, design. */
 function renderLoadChartSvg(geo) {
-  const yTickLines = geo.yTicks.map((t) => `
+  const loadGridlines = geo.yTicks.map((t) => `
       <line x1="${geo.plotLeft}" y1="${t.y.toFixed(1)}" x2="${geo.plotRight}" y2="${t.y.toFixed(1)}" class="load-chart-gridline" />
-      <text x="${geo.plotLeft - 6}" y="${t.y.toFixed(1)}" class="load-chart-axis-label" text-anchor="end" dominant-baseline="middle">${esc(t.value)}</text>`).join('');
+      <text x="${(geo.plotLeft - 6).toFixed(1)}" y="${t.y.toFixed(1)}" class="load-chart-axis-label" text-anchor="end" dominant-baseline="middle">${esc(t.value)}</text>`).join('');
 
-  const yTickLabelsSecondary = geo.yTicksSecondary.map((t) => `
-      <text x="${geo.plotRight + 6}" y="${t.y.toFixed(1)}" class="load-chart-axis-label load-chart-axis-label-secondary" text-anchor="start" dominant-baseline="middle" style="fill:var(${LOAD_CHART_LINE_COLOR_VAR.atl})">${esc(t.value)}</text>`).join('');
+  // Shared x-axis: rendered once, below the TSB (bottom) panel -- there is
+  // only ever one row of date/month labels for the whole chart, not one per
+  // panel. `xTickMode` ('date' vs 'month', see plan.js) picks the label
+  // format; 'month' is used only for the full-history "Season" window,
+  // where a date per tick would be unreadably dense.
+  const xTickLabels = geo.xTicks.map((t) => {
+    const label = geo.xTickMode === 'month'
+      ? formatMonthLabel(parseIsoDate(t.label))
+      : formatShortDate(parseIsoDate(t.label));
+    return `<text x="${t.x.toFixed(1)}" y="${(geo.tsbPlot.bottom + 18).toFixed(1)}" class="load-chart-axis-label" text-anchor="middle">${esc(label)}</text>`;
+  }).join('');
 
-  const xTickLabels = geo.xTicks.map((t) => `
-      <text x="${t.x.toFixed(1)}" y="${geo.plotBottom + 18}" class="load-chart-axis-label" text-anchor="middle">${esc(formatShortDate(parseIsoDate(t.label)))}</text>`).join('');
+  const productiveActive = geo.latestTsb.band === 'productive';
+  const raceActive = geo.latestTsb.band === 'race-ready';
 
   return `
-    <svg class="load-chart-svg" viewBox="0 0 ${geo.width} ${geo.height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Training load chart: CTL and TSB on the left axis, ATL on its own independent right axis, with reference bands for productive training and race-day readiness">
-      ${renderLoadChartBandRect(geo, geo.productiveBandTop, geo.productiveBandBottom, 'load-chart-band-productive')}
-      ${renderLoadChartBandRect(geo, geo.bandTop, geo.bandBottom, 'load-chart-band-race')}
-      ${yTickLines}
-      ${yTickLabelsSecondary}
+    <svg class="load-chart-svg" viewBox="0 0 ${geo.width} ${geo.height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Training load chart: fitness (CTL) and fatigue (ATL) on a shared axis in the top panel, form (TSB) on its own fixed-scale panel below with productive-training and race-day reference bands">
+      ${renderLoadChartBandRect(geo, geo.productiveBand, 'load-chart-band-productive', productiveActive)}
+      ${renderLoadChartBandRect(geo, geo.raceBand, 'load-chart-band-race', raceActive)}
+      ${loadGridlines}
+      <line x1="${geo.plotLeft}" y1="${geo.tsbZeroY.toFixed(1)}" x2="${geo.plotRight}" y2="${geo.tsbZeroY.toFixed(1)}" class="load-chart-zero-line" />
+      ${renderLoadChartBandLabel(geo, geo.productiveBand, 'productive')}
+      ${renderLoadChartBandLabel(geo, geo.raceBand, 'race-ready')}
+      ${renderLoadChartEdgeLabels(geo)}
       ${xTickLabels}
       <polyline class="load-chart-line load-chart-line-ctl" points="${loadChartPointsAttr(geo.ctlPoints)}" style="stroke:var(${LOAD_CHART_LINE_COLOR_VAR.ctl})" />
       <polyline class="load-chart-line load-chart-line-atl" points="${loadChartPointsAttr(geo.atlPoints)}" style="stroke:var(${LOAD_CHART_LINE_COLOR_VAR.atl})" />
       <polyline class="load-chart-line load-chart-line-tsb" points="${loadChartPointsAttr(geo.tsbPoints)}" style="stroke:var(${LOAD_CHART_LINE_COLOR_VAR.tsb})" />
+      ${renderLoadChartClampCarets(geo)}
+      ${renderLoadChartLineEndLabels(geo)}
+      ${renderLoadChartLatestTsbLabel(geo)}
     </svg>`;
+}
+
+/** The window-selector pills above the chart (6 weeks / 12 weeks / Season --
+ * `plan.js`'s `LOAD_CHART_WINDOW_OPTIONS`), reusing the roster sub-tab bar's
+ * own `.subtab-bar`/`.subtab-btn` look verbatim -- same "pill row selects
+ * one of a few named views" pattern, just above a chart instead of above a
+ * tab body. `windowDays` is the currently-selected option's `days` (a
+ * number, or `null` for "Season") -- `main.js`'s persisted
+ * `state.loadWindowDays`. Each pill's `data-a` encodes its own `days` value
+ * (`'season'` standing in for `null`, since `data-` attributes are always
+ * strings) for `main.js`'s click handler to parse back out. */
+function renderLoadChartWindowControls(windowDays) {
+  return `
+    <nav class="subtab-bar load-chart-window-controls" aria-label="Chart time window">
+      ${LOAD_CHART_WINDOW_OPTIONS.map((opt) => {
+        const key = opt.days === null ? 'season' : String(opt.days);
+        const active = opt.days === windowDays;
+        return `<button type="button" class="subtab-btn${active ? ' active' : ''}" data-a="load-chart:window:${key}" aria-current="${active ? 'page' : 'false'}">${esc(opt.label)}</button>`;
+      }).join('')}
+    </nav>`;
+}
+
+/** Athlete-facing wording for each of `classifyTsbBand`'s five band names,
+ * for the one-line verdict below -- must follow the constants' own doc
+ * comments (plan.js's `PRODUCTIVE_TRAINING_TSB_BAND`/`RACE_DAY_TSB_BAND`):
+ * "productive" mid-build is expected and good, never phrased as a warning. */
+const TSB_VERDICT_BAND_LABEL = {
+  'high-risk': 'high-risk band',
+  productive: 'productive band',
+  'grey-zone': 'grey zone',
+  'race-ready': 'race-ready band',
+  transition: 'transitional band',
+};
+
+/** The single most useful line on the panel (design spec 3.6): a one-line,
+ * plain-text verdict directly under the chart -- "can I see at a glance
+ * whether my TSB is in the productive band, over-trained, or tapering
+ * toward race-ready?", answered in one sentence, before the athlete has to
+ * read the narrative below or the chart's own axes. Derived from the same
+ * `describeCtlAtlTsbTrend` structure the narrative already uses (never a
+ * second, independently-computed source of truth for the same numbers).
+ * Returns `''` when there's no TSB reading at all (`!trend.hasData`) --
+ * same empty-series case the chart/narrative already handle their own way. */
+function renderLoadChartVerdict(trend) {
+  if (!trend.hasData || !trend.tsb) return '';
+  const bandLabel = TSB_VERDICT_BAND_LABEL[trend.tsb.band];
+  let fitnessPhrase = '';
+  if (trend.ctlTrend && trend.ctlTrend.status !== 'insufficient-window') {
+    const { status, fromValue, toValue } = trend.ctlTrend;
+    const verb = { rising: 'Fitness rising', falling: 'Fitness falling', flat: 'Fitness holding flat' }[status];
+    fitnessPhrase = ` ${verb}, ${formatTrendValue(fromValue)} → ${formatTrendValue(toValue)} over ${CTL_ATL_TREND_WINDOW_DAYS} days.`;
+  }
+  return `<p class="load-chart-verdict">${esc(`Form ${formatTrendValue(trend.tsb.value)} · ${bandLabel}.${fitnessPhrase}`)}</p>`;
 }
 
 /** Formats a raw CTL/ATL/TSB number to one decimal for narrative prose --
@@ -895,8 +1039,18 @@ function formatTrendDate(iso) {
  * after them), then CTL direction, then the biggest ATL swing, then
  * current TSB. Returns `''` when `!trend.hasData` -- same empty-series
  * case `ctlAtlTsbChartGeometry` already renders its own "not enough data
- * yet" message for, so this narrative doesn't duplicate that. */
-function renderCtlAtlTsbNarrative(series) {
+ * yet" message for, so this narrative doesn't duplicate that.
+ *
+ * Truncation (design spec 3.6): now that `renderLoadChartVerdict` above
+ * gives the one-line headline, this narrative's job is the fuller detail --
+ * genuinely valuable, but no longer the FIRST thing competing for
+ * attention. Only the first line renders by default; the rest sit behind a
+ * "more" toggle -- same one-way, state-tracked "Show more" convention
+ * `main.js`'s `state.dashboardFeedExpanded`/`state.roster.feedExpanded`
+ * already use for the Training Dashboard feed (see
+ * `handleShowMoreDashboardFeed`'s doc comment there), reused here via
+ * `expanded` rather than inventing a second truncation mechanism. */
+function renderCtlAtlTsbNarrative(series, { expanded = false } = {}) {
   const trend = describeCtlAtlTsbTrend(series);
   if (!trend.hasData) return '';
 
@@ -937,53 +1091,66 @@ function renderCtlAtlTsbNarrative(series) {
   }
 
   if (lines.length === 0) return '';
+  const visibleLines = expanded ? lines : lines.slice(0, 1);
+  const hasMore = !expanded && lines.length > 1;
   return `
     <div class="load-chart-narrative">
       <h4>What the numbers say</h4>
-      ${lines.map((line) => `<p>${esc(line)}</p>`).join('')}
+      ${visibleLines.map((line) => `<p>${esc(line)}</p>`).join('')}
+      ${hasMore ? '<button type="button" class="btn-ghost load-chart-narrative-more" data-a="load-chart:narrative-more">more</button>' : ''}
     </div>`;
 }
 
 /**
- * Renders the CTL ("fitness") / ATL ("fatigue") / TSB ("form") Banister
- * training-load chart -- shared verbatim by `renderTrainingDashboardBody`
- * on both the athlete's own Dashboard tab and the coach roster's
- * acting-as-athlete view; only the `load` state differs between the two
- * call sites.
+ * Renders the CTL ("fitness") / ATL ("fatigue") / TSB ("form") training-load
+ * chart -- shared verbatim by `renderTrainingDashboardBody` on both the
+ * athlete's own Dashboard tab and the coach roster's acting-as-athlete
+ * view; only the `load` state (and a couple of per-surface options, below)
+ * differs between the two call sites.
  *
  * `load` follows this app's usual async-state shape (`{status, data, error}`
  * -- same convention as `state.plan`/`state.roster.workouts`), where
  * `data.ctl_atl_tsb` is the `[dateIso, ctl, atl, tsb]` series from
  * `GET /api/plan/load` / `GET /api/coach/athletes/{slug}/load`.
  *
- * CTL/TSB share one (left) y-axis -- the standard cycling-coaching
- * "Performance Management Chart" layout (see plan.js's module comment for
- * why TSB is never shown alone) -- plus a shaded reference band for the
- * commonly-cited cycling-coaching "race-day TSB" range. ATL plots against
- * its OWN independent (right) y-axis -- a dual-axis readability fix (Build
- * 1): a 42-day EWMA (CTL) has an inherently much smaller natural range than
- * a 7-day EWMA (ATL) on any real athlete's data, so sharing one axis made
- * CTL look flat/negligible next to ATL's swings, even though nothing about
- * the underlying numbers was wrong (verified -- see
- * `ctlAtlTsbChartGeometry`'s own doc comment in plan.js).
+ * **Two-panel rebuild (web/two-panel-load-chart):** CTL and ATL now share
+ * one 0-anchored axis in a top panel; TSB gets its own fixed-domain panel
+ * below, with the productive-training/race-day reference bands finally
+ * living somewhere they can't be misread as applying to the CTL line
+ * passing through them. See `ctlAtlTsbChartGeometry`'s module comment in
+ * plan.js for the full history of why (single-axis, then dual-axis, then
+ * this).
  *
- * Directly below the chart sits `renderCtlAtlTsbNarrative`'s athlete-
- * specific "what the numbers say" prose (plan.js's `describeCtlAtlTsbTrend`)
- * -- the computed, day-to-day-useful trend interpretation this whole
- * feature is for. The generic methodology paragraph that used to sit here
- * unconditionally -- explaining the race-day band AND the underlying
- * CTL/ATL time constants are cycling-derived and not yet swim-specific or
- * peer-reviewed (see `engine/swim_coach/load.py`'s
- * `CTL_TIME_CONSTANT_DAYS`/`ATL_TIME_CONSTANT_DAYS` module comment for the
- * same caveat at its source) -- now lives inside a collapsed-by-default
- * `<details>` ("How this chart works"): still one click away, per this
- * project's evidence-discipline convention that these caveats are
- * load-bearing honesty and must stay reachable, just no longer competing
- * for attention with the athlete-specific insight that actually matters
- * day to day. This chart must never read as more authoritative than that
- * series actually is, on either side of the toggle.
+ * Panel order, top to bottom (design spec 3.6 -- "chart panel density"):
+ * window-selector pills, the two-panel SVG, a one-line plain-text VERDICT
+ * (`renderLoadChartVerdict` -- the single most useful line on the panel),
+ * the narrative (`renderCtlAtlTsbNarrative`, now truncated to its first
+ * line by default), then the collapsed-by-default methodology `<details>`.
+ * The old separate three-line legend row is gone -- CTL/ATL/TSB are now
+ * named inline at each line's own right-hand end point instead (see
+ * `renderLoadChartSvg`), and the two bands are named directly on their own
+ * shaded rects.
+ *
+ * `options`:
+ *   - `windowDays` (default `LOAD_CHART_WINDOW_DAYS`): which of
+ *     `LOAD_CHART_WINDOW_OPTIONS` is active -- `null` means the full
+ *     series ("Season"), rendered with month-labeled x-ticks instead of
+ *     dates. Threaded down from `main.js`'s persisted `state.loadWindowDays`
+ *     via `renderTrainingDashboardBody`.
+ *   - `narrativeExpanded` (default `false`): whether the narrative's "more"
+ *     toggle has been opened -- `main.js`'s
+ *     `state.loadNarrativeExpanded`/`state.roster.narrativeExpanded`.
+ *   - `showWellnessInline` (default `true`): whether the resting-HR/HRV
+ *     baseline-deviation cross-check (`renderWellnessBaselineDeviation`)
+ *     renders inline here. The coach roster's acting-as-athlete view keeps
+ *     it here (its default); the athlete's OWN Dashboard call site passes
+ *     `false` and renders it inside the Check-in tab instead (see
+ *     `renderCheckinTab`) -- the coach has no Check-in-tab equivalent to
+ *     move it to, and losing this signal there was never in scope.
  */
-export function renderLoadChart(load) {
+export function renderLoadChart(load, {
+  windowDays = LOAD_CHART_WINDOW_DAYS, narrativeExpanded = false, showWellnessInline = true,
+} = {}) {
   if (!load || load.status === 'idle') return '';
   if (load.status === 'loading' && !load.data) {
     return '<div class="panel load-chart-panel"><h3>Training load</h3><p class="sub">Loading training load&hellip;</p></div>';
@@ -994,38 +1161,37 @@ export function renderLoadChart(load) {
   if (!load.data) return '';
 
   const series = load.data.ctl_atl_tsb || [];
-  // Chart window: most recent LOAD_CHART_WINDOW_DAYS only, for mobile
-  // readability (see that constant's own doc comment in plan.js) --
-  // the narrative below intentionally keeps using the FULL `series`, not
-  // this slice, since its warmup/history-length read needs the athlete's
-  // real full history, not just what fits on screen.
-  const chartSeries = series.slice(-LOAD_CHART_WINDOW_DAYS);
-  const geo = ctlAtlTsbChartGeometry(chartSeries);
+  // Chart window: the selected LOAD_CHART_WINDOW_OPTIONS entry, not the
+  // athlete's whole history by default -- for mobile readability (see
+  // LOAD_CHART_WINDOW_DAYS's own doc comment in plan.js). `windowDays ===
+  // null` ("Season") keeps the full series and switches the x-axis to
+  // month labels. The narrative/verdict below intentionally keep using the
+  // FULL `series`, not this slice, since their warmup/history-length read
+  // needs the athlete's real full history, not just what fits on screen.
+  const chartSeries = windowDays === null ? series : series.slice(-windowDays);
+  const geo = ctlAtlTsbChartGeometry(chartSeries, { xTickMode: windowDays === null ? 'month' : 'date' });
+
+  const trend = describeCtlAtlTsbTrend(series);
 
   const body = geo.isEmpty
     ? '<p class="sub">Not enough logged training yet to show a fitness/fatigue trend.</p>'
-    : `
-      ${renderLoadChartSvg(geo)}
-      <div class="legend load-chart-legend">
-        <span class="li"><span class="dot" style="background:var(${LOAD_CHART_LINE_COLOR_VAR.ctl})"></span>CTL (fitness) · left axis</span>
-        <span class="li"><span class="dot" style="background:var(${LOAD_CHART_LINE_COLOR_VAR.atl})"></span>ATL (fatigue) · right axis</span>
-        <span class="li"><span class="dot" style="background:var(${LOAD_CHART_LINE_COLOR_VAR.tsb})"></span>TSB (form) · left axis</span>
-        <span class="li"><span class="dot load-chart-band-dot-productive"></span>Productive-training TSB reference band</span>
-        <span class="li"><span class="dot load-chart-band-dot-race"></span>Race-day TSB reference band</span>
-      </div>`;
+    : renderLoadChartSvg(geo);
 
-  const narrative = geo.isEmpty ? '' : renderCtlAtlTsbNarrative(series);
+  const verdict = geo.isEmpty ? '' : renderLoadChartVerdict(trend);
+  const narrative = geo.isEmpty ? '' : renderCtlAtlTsbNarrative(series, { expanded: narrativeExpanded });
 
   return `
     <div class="panel load-chart-panel">
       <h3>Training load (CTL / ATL / TSB)</h3>
+      ${renderLoadChartWindowControls(windowDays)}
       ${body}
+      ${verdict}
       ${narrative}
       <details class="load-chart-methodology">
         <summary>How this chart works</summary>
-        <p class="load-chart-note">CTL ("fitness") and ATL ("fatigue") are 42-day/7-day exponentially weighted averages of daily training load; TSB ("form") is CTL minus ATL. These time constants are the standard cycling/TrainingPeaks convention, carried over as a starting point -- not yet verified for swimming specifically. The two shaded bands are the same convention's other commonly-cited zones: the lower one (${PRODUCTIVE_TRAINING_TSB_BAND.low} to ${PRODUCTIVE_TRAINING_TSB_BAND.high} TSB) is where productive training typically happens; the upper one (+${RACE_DAY_TSB_BAND.low} to +${RACE_DAY_TSB_BAND.high} TSB) is a commonly-targeted range in cycling coaching practice on race day. Like the time constants above, this is not a swim-specific or peer-reviewed target for either band -- individual variation is large, so your own best-performance history is a better guide than either generic band. The chart shows your most recent ${LOAD_CHART_WINDOW_DAYS} days, for mobile readability -- the trend notes above still draw on your full logged history. CTL and TSB share the left axis; ATL plots against its own right axis -- a 42-day average has an inherently much smaller natural range than a 7-day one, so sharing one scale made CTL look flat next to ATL's swings even though nothing about the underlying numbers was wrong.</p>
+        <p class="load-chart-note">CTL ("fitness") and ATL ("fatigue") are 42-day/7-day exponentially weighted averages of daily training load; TSB ("form") is CTL minus ATL. These time constants are the standard cycling/TrainingPeaks convention, carried over as a starting point -- not yet verified for swimming specifically. The two shaded bands, in the panel below, are the same convention's other commonly-cited zones: the lower one (${PRODUCTIVE_TRAINING_TSB_BAND.low} to ${PRODUCTIVE_TRAINING_TSB_BAND.high} TSB) is where productive training typically happens; the upper one (+${RACE_DAY_TSB_BAND.low} to +${RACE_DAY_TSB_BAND.high} TSB) is a commonly-targeted range in cycling coaching practice on race day. Like the time constants above, this is not a swim-specific or peer-reviewed target for either band -- individual variation is large, so your own best-performance history is a better guide than either generic band. CTL and ATL share one axis in the top panel; TSB has its own fixed-scale panel below, sized to always contain both bands with margin so they sit in the same place every time you open the app.</p>
       </details>
-      ${renderWellnessBaselineDeviation(load.data.wellness_baseline_deviation)}
+      ${showWellnessInline ? renderWellnessBaselineDeviation(load.data.wellness_baseline_deviation) : ''}
     </div>`;
 }
 
@@ -1670,6 +1836,15 @@ function renderTrainingDashboardBody({
   // pre-existing call site of this function, until each is updated) renders
   // an empty read-only Q&A section rather than crashing.
   askCoach = null,
+  // Two-panel load chart (web/two-panel-load-chart): threaded straight
+  // through to `renderLoadChart` -- see that function's own doc comment for
+  // what each means. `showWellnessInline` defaults `true` (the coach
+  // roster's call site leaves it at the default); the athlete's own
+  // Dashboard call site (`renderDashboardTab`) passes `false` and renders
+  // `renderWellnessBaselineDeviation` inside the Check-in tab instead.
+  loadWindowDays,
+  loadNarrativeExpanded = false,
+  showWellnessInline = true,
 }) {
   const items = feed || [];
   const hasData = items.length > 0;
@@ -1713,7 +1888,7 @@ function renderTrainingDashboardBody({
   })();
 
   return `
-    ${renderLoadChart(load)}
+    ${renderLoadChart(load, { windowDays: loadWindowDays, narrativeExpanded: loadNarrativeExpanded, showWellnessInline })}
     ${actions || ''}
     <section class="hist-section">
       <div class="s-head"><h2>Workouts</h2></div>
@@ -1744,6 +1919,7 @@ function dashboardShell(body) {
 export function renderDashboardTab({
   load, feed, status, error, online, detailId, workoutChat, backendConfigured,
   form, submit, ingest, sync, manualOpen, feedExpanded, rpeEdit, askCoach,
+  loadWindowDays, loadNarrativeExpanded,
 }) {
   if (!backendConfigured) {
     return dashboardShell(renderBackendNeededNotice(
@@ -1759,6 +1935,14 @@ export function renderDashboardTab({
     ${!online ? '<div class="chat-banner">Offline -- some data may be out of date.</div>' : ''}
     ${renderTrainingDashboardBody({
       load, feed, status, error, online, detailId, workoutChat, actions, feedExpanded, rpeEdit, editable: true, askCoach,
+      loadWindowDays, loadNarrativeExpanded,
+      // Resolved decision (web/two-panel-load-chart): the athlete's OWN
+      // Dashboard tab moves the wellness-deviation block OUT of this chart
+      // and into the Check-in tab instead (see renderCheckinTab) -- the
+      // coach roster's call site (renderRosterTab) leaves this at its
+      // `true` default and keeps it rendering here, since there's no
+      // coach-side Check-in-tab equivalent to move it to.
+      showWellnessInline: false,
     })}`);
 }
 
@@ -2000,7 +2184,23 @@ function renderWorkoutDetail(workout, {
 
 // --- Check-in tab (daily wellness) ---------------------------------------------
 
-export function renderCheckinTab({ form, submit, backendConfigured, online }) {
+/** Resolved decision (web/two-panel-load-chart): the resting-HR/HRV
+ * baseline-deviation cross-check moved OUT of the athlete's own Dashboard
+ * chart (`renderLoadChart`'s `showWellnessInline: false` call site) and
+ * into the top of this form instead -- directly relevant context for "how
+ * are you feeling" (RHR/HRV IS part of that story). Reuses the app's
+ * ALREADY-fetched `load` state (`main.js`'s `state.planLoad`, the same data
+ * the Dashboard tab's chart already pulls `ctl_atl_tsb` from -- and which
+ * `main.js` fetches unconditionally at boot, independent of which tab is
+ * active, so this data is normally already in flight or landed by the time
+ * Check-in renders, even without a prior Dashboard visit) rather than
+ * firing a second `GET /api/plan/load`. Renders nothing (not a loading/
+ * error state of its own) until that fetch actually lands -- the form
+ * itself is fully usable in the meantime; this tab never blocks on, or
+ * duplicates, that request. */
+export function renderCheckinTab({
+  form, submit, backendConfigured, online, load,
+}) {
   return `
     <div class="wrap settings-wrap">
       <header class="mast" style="border-bottom:none;padding-bottom:0;">
@@ -2012,6 +2212,7 @@ export function renderCheckinTab({ form, submit, backendConfigured, online }) {
       </header>
       ${!online ? '<div class="chat-banner">Offline -- check-in needs a connection.</div>' : ''}
       ${!backendConfigured ? renderBackendNeededNotice('Checking in needs you to sign in and set a backend URL and token first.') : `
+      ${load?.data ? `<div class="panel settings-panel">${renderWellnessBaselineDeviation(load.data.wellness_baseline_deviation)}</div>` : ''}
       <div class="panel settings-panel">
         <label class="field">
           <span>Date</span>
@@ -2501,6 +2702,18 @@ export function renderRosterTab({
   // device's coach "last seen" timestamp (main.js's src/unread.js) -- 0/
   // absent renders no badge at all (see renderUnreadBadge).
   feedbackUnread = 0,
+  // Two-panel load chart (web/two-panel-load-chart): `loadWindowDays` is the
+  // SAME app-level `state.loadWindowDays` the athlete's own Dashboard tab
+  // uses (not a separate `state.roster.loadWindowDays`) -- a shared,
+  // low-stakes chart-window preference, same "acceptable tradeoff"
+  // precedent `allWeeksOpen` already establishes for page-level state
+  // shared between the athlete's own tabs and this roster view.
+  // `loadNarrativeExpanded` is the roster's OWN slice
+  // (`state.roster.narrativeExpanded`), matching `feedExpanded` just above
+  // it -- the coach roster and the athlete's own dashboard are two
+  // independent feeds/narratives, so this one stays per-surface.
+  loadWindowDays,
+  loadNarrativeExpanded,
 }) {
   if (!backendConfigured) {
     return rosterShell(renderBackendNeededNotice(
@@ -2549,6 +2762,10 @@ export function renderRosterTab({
       chat: false,
       emptyMessage: 'Nothing logged or missed yet.',
       askCoach,
+      loadWindowDays,
+      loadNarrativeExpanded,
+      // showWellnessInline left at its `true` default -- see
+      // renderTrainingDashboardBody's own doc comment.
     });
 
     // Read-only workout detail (no embedded chat -- that's an athlete-only

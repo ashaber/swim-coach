@@ -23,6 +23,16 @@ CORS_HEADERS = {
 
 PLAN_STUB = '{"slug":"renee","athlete":{"name":"Renee"},"events":[],"weeks":[],"macro":{"blocks":[]}}'
 PLAN_LOAD_STUB = '{"athlete":"renee","weeks":12,"ctl_atl_tsb":[]}'
+# A real, non-null wellness_baseline_deviation (web/two-panel-load-chart's
+# resolved decision: this block moves OUT of the athlete's own Dashboard
+# chart and into this tab instead, reusing the same already-fetched
+# GET /api/plan/load response -- see views.js's renderCheckinTab doc
+# comment). Deliberately a fresh stub, not PLAN_LOAD_STUB's null/empty one
+# above, so the tests below can prove real values actually reach this tab.
+PLAN_LOAD_WITH_WELLNESS_STUB = (
+    '{"athlete":"renee","weeks":12,"ctl_atl_tsb":[["2026-08-01",40.0,38.0,2.0]],'
+    '"wellness_baseline_deviation":{"resting_hr_pct_deviation":6.5,"hrv_pct_deviation":-9.0}}'
+)
 
 
 def _set_range_value(page, selector, value):
@@ -255,3 +265,64 @@ def test_tab_bar_includes_dashboard_and_checkin(page):
     page.wait_for_selector('.tabbar')
     assert page.locator('[data-a="tab:dashboard"]').count() == 1
     assert page.locator('[data-a="tab:checkin"]').count() == 1
+
+
+# --- Resolved decision (web/two-panel-load-chart): wellness cross-check ------
+# moved from the Dashboard tab's chart into this tab instead -- see
+# views.js's renderCheckinTab/renderLoadChart doc comments. Note:
+# main.js's loadPlanLoad() fires unconditionally at boot (independent of
+# which tab is active), so `state.planLoad` is already populated by the
+# time these tests visit the Check-in tab even without an explicit prior
+# Dashboard visit -- the tests below exercise that real timing rather than
+# an artificial "never fetched" state this app doesn't actually have.
+
+def test_dashboard_tab_no_longer_shows_the_wellness_cross_check_inline(page):
+    page.route('**/api/plan/load*', _cors_route(200, 'application/json', PLAN_LOAD_WITH_WELLNESS_STUB))
+    _configure_backend(page)
+    page.click('[data-a="tab:dashboard"]')
+    page.wait_for_selector('.load-chart-svg')
+    assert page.locator('.wellness-baseline-deviation').count() == 0
+
+
+def test_checkin_tab_shows_the_wellness_cross_check_without_visiting_the_dashboard_first(page):
+    # Proves the Check-in tab reads the app's own already-in-flight/fetched
+    # `state.planLoad` (populated by main.js's boot-time loadPlanLoad(),
+    # not by a Check-in-tab-specific fetch) -- going straight to Check-in,
+    # never clicking the Dashboard tab at all, still shows real values.
+    page.route('**/api/plan/load*', _cors_route(200, 'application/json', PLAN_LOAD_WITH_WELLNESS_STUB))
+    _configure_backend(page)
+    page.click('[data-a="tab:checkin"]')
+    page.wait_for_selector('.wellness-baseline-deviation')
+    content = page.content()
+    assert '+6.5%' in content
+    assert '-9.0%' in content
+
+
+def test_checkin_tab_renders_the_form_immediately_and_adds_the_wellness_block_once_it_lands(page):
+    # No second/duplicate fetch: while GET /api/plan/load is still pending,
+    # the Check-in form itself is already usable and simply omits the
+    # wellness block (rather than blocking the whole tab on that fetch);
+    # the block appears once the SAME in-flight request resolves.
+    route_event = {'route': None}
+
+    def delayed_handler(route):
+        if route.request.method == 'OPTIONS':
+            route.fulfill(status=204, headers=CORS_HEADERS)
+            return
+        route_event['route'] = route
+
+    page.route('**/api/plan/load*', delayed_handler)
+    _configure_backend(page)
+    page.click('[data-a="tab:checkin"]')
+    page.wait_for_selector('[data-form="checkin"][data-field="date"]')
+    # Let the (intercepted, not-yet-fulfilled) GET actually reach our route
+    # handler before asserting on it -- boot fires it right away, but this
+    # keeps the check independent of exact request timing.
+    page.wait_for_timeout(300)
+    assert route_event['route'] is not None, 'GET /api/plan/load was never intercepted'
+    assert page.locator('.wellness-baseline-deviation').count() == 0
+
+    route_event['route'].fulfill(
+        status=200, content_type='application/json', body=PLAN_LOAD_WITH_WELLNESS_STUB, headers=CORS_HEADERS,
+    )
+    page.wait_for_selector('.wellness-baseline-deviation')

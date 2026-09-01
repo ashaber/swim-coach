@@ -42,6 +42,14 @@ export function formatLongDate(date) {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+/** Month-only label ("Jul") -- used for the load chart's x-axis when the
+ * "Season" window is selected (`ctlAtlTsbChartGeometry`'s `xTickMode:
+ * 'month'`), where a full "Jul 6"-style date per tick would be redundant:
+ * every tick already IS a month boundary. */
+export function formatMonthLabel(date) {
+  return date.toLocaleDateString('en-US', { month: 'short' });
+}
+
 export function dowLabel(index) {
   return DOW_LABELS[index];
 }
@@ -1009,7 +1017,7 @@ export const TERM_GLOSSARY = [
   { term: 'AMRAP', def: '"As Many Rounds/Reps As Possible" within a fixed time window.' },
 ];
 
-// --- CTL/ATL/TSB training-load chart (Plan tab + coach roster) -------------
+// --- CTL/ATL/TSB training-load chart (Dashboard tab + coach roster) --------
 // Pure geometry computation for a hand-rolled inline SVG line chart -- no
 // charting library (this project's stated minimal-dependency convention;
 // web/package.json carries exactly two font packages and nothing
@@ -1023,12 +1031,30 @@ export const TERM_GLOSSARY = [
 //
 // CTL ("fitness") and ATL ("fatigue") are exponentially-weighted moving
 // averages of daily training load (`engine/swim_coach/load.py`'s
-// `ctl_atl_tsb_series`); TSB ("form") = CTL - ATL. All three share ONE
-// y-axis (same units -- TSB is literally the other two's difference) --
-// the standard cycling-coaching "Performance Management Chart" layout.
-// Plotting TSB alone would lose exactly the signal that matters: whether a
-// rising TSB reflects a real taper (ATL falling while CTL holds) or a
-// stale plan (both eroding together).
+// `ctl_atl_tsb_series`); TSB ("form") = CTL - ATL.
+//
+// **Two stacked panels, one shared x-axis, one SVG (the "web/two-panel-
+// load-chart" rebuild)** -- this replaces an earlier single-axis, then a
+// dual-y-axis, design. History, kept because the reasoning still matters:
+// the ORIGINAL single-axis chart plotted CTL, ATL, TSB, and both reference
+// bands all on one y-axis. That domain was `[...ctl, ...tsb, band lows/
+// highs, 0]` -- for a real mid-build athlete, roughly -32..+48, ~80 points
+// tall -- so TSB's meaningful ~20-point band movement got only ~25% of the
+// plot height and the bands rendered as a thin stripe. A DUAL-AXIS fix
+// (ATL on its own independent right axis) was tried next and was correctly
+// diagnosed as not a coding bug -- CTL (42-day EWMA) has an inherently
+// tiny natural range next to ATL's (7-day EWMA) on any real athlete's
+// data -- but it only fixed ATL's flatness; it never fixed the real
+// structural problem, which was TSB and the bands sharing an axis with
+// CTL at all. Splitting into two panels fixes both at once: CTL and ATL
+// are the same kind of quantity (EWMAs of daily load) on one shared,
+// 0-anchored axis in the top panel -- the CTL/ATL gap *is* the fatigue
+// story, and it's only legible when they share a scale. TSB, alone, gets
+// its own panel below with a fixed domain wide enough to hold both named
+// bands with margin -- stable across athletes and weeks, so the bands sit
+// in the same place every time the athlete opens the app, and TSB's own
+// movement finally gets real vertical room instead of being squeezed by
+// values that aren't its own.
 
 /** Joe Friel's own "Freshness Zone," +5 to +25 TSB -- "probably where you
  * should be on race day" (joefrieltraining.com, "Managing Training Using
@@ -1070,33 +1096,80 @@ export const RACE_DAY_TSB_BAND = { low: 5, high: 25 };
  * Still cycling-coaching practitioner convention, never verified for
  * swimming, not an engine constant -- same honesty caveat as
  * `RACE_DAY_TSB_BAND`, stated in the chart's own caption. Deliberately
- * only these two of Friel's five named zones are drawn (not Grey
- * Zone/Transitional too) -- these are the two an athlete mid-block
+ * only these two of Friel's five named zones are drawn as full bands (not
+ * Grey Zone/Transitional too) -- these are the two an athlete mid-block
  * actually needs: "here's where productive training lives" and "here's
  * where race-day freshness lives", with the taper being the deliberate
- * move from one to the other. */
+ * move from one to the other. The TSB panel's fixed domain
+ * (`TSB_AXIS_DOMAIN` below) still leaves room to label the other three
+ * zones (Grey Zone, Transitional, High Risk) as plain edge text, even
+ * though only these two get a shaded rect. */
 export const PRODUCTIVE_TRAINING_TSB_BAND = { low: -30, high: -10 };
 
 const LOAD_CHART_WIDTH = 640;
-const LOAD_CHART_HEIGHT = 260;
-// `right` padding matches `left` (rather than the old, tighter 12px) --
-// dual-axis rendering (see `ctlAtlTsbChartGeometry` below) needs room for a
-// second set of axis-label text on the right edge, same as the left.
+// Was 260 for one panel; two stacked panels plus the gap between them need
+// the extra room.
+const LOAD_CHART_HEIGHT = 300;
 const LOAD_CHART_PADDING = { top: 16, right: 34, bottom: 28, left: 34 };
 const LOAD_CHART_MAX_X_TICKS = 5;
 const LOAD_CHART_Y_TICK_COUNT = 4;
 
-/** Default chart window: the most recent 28 days of the series, not the
- * athlete's whole history -- Coach judgment, for mobile readability (a
- * chart spanning months of daily points compresses into an unreadable
- * smear on a small screen). Applies to the CHART only, sliced by the
- * caller (`views.js`'s `renderLoadChart`) right before it calls
- * `ctlAtlTsbChartGeometry` -- deliberately NOT applied to
- * `describeCtlAtlTsbTrend`'s `historyDays`/warmup classification, which
- * needs the athlete's real full history to answer "has enough time
- * actually accumulated for CTL/ATL to be meaningful," not just "how much
- * of that history fits on screen." */
-export const LOAD_CHART_WINDOW_DAYS = 28;
+/** Fraction of the total plot height (between the top/bottom padding) given
+ * to the bottom (TSB/"form") panel; the remainder goes to the top (CTL/ATL/
+ * "fitness & fatigue") panel. Coach judgment, per the design spec: fitness
+ * and fatigue are the bigger, load-bearing story day to day, so they get
+ * the majority of the height; form still gets enough (40%) for its own
+ * bands and labels to read clearly, not squeezed to an afterthought. */
+export const TSB_PANEL_RATIO = 0.4;
+
+/** Vertical gap (px) between the two panels -- just enough to visually
+ * separate them and leave room for the top panel's own bottom-most gridline
+ * label without it colliding with the TSB panel's top edge. Coach judgment,
+ * not pinned by the design spec. */
+const LOAD_CHART_PANEL_GAP = 22;
+
+/** The TSB (bottom) panel's y-axis domain -- FIXED, not derived from the
+ * series' actual min/max the way the old single-axis chart's domain was.
+ * Wide enough to contain both `RACE_DAY_TSB_BAND` and
+ * `PRODUCTIVE_TRAINING_TSB_BAND` with margin on both ends (for "Transitional"/
+ * "High Risk" edge labels), and -- deliberately -- the SAME range every time,
+ * for every athlete: the whole point is that the bands sit in the same
+ * on-screen place every time the athlete opens the app, instead of drifting
+ * because this week's TSB happened to be a little more or less extreme than
+ * last week's. A TSB outside this range is clamped to the nearest edge and
+ * flagged (see `tsbClamped` below) rather than causing the whole domain to
+ * stretch -- an extreme TSB is an alarm, not a reason to rescale everything
+ * else back down to a thin stripe again. */
+export const TSB_AXIS_DOMAIN = { min: -40, max: 35 };
+
+/** Default chart window: 6 weeks (42 days) of the series, not the athlete's
+ * whole history -- Coach judgment default among `LOAD_CHART_WINDOW_OPTIONS`
+ * below (see that constant's own doc comment for why 42, not the old 28).
+ * Applies to the CHART only, sliced by the caller (`views.js`'s
+ * `renderLoadChart`) right before it calls `ctlAtlTsbChartGeometry` --
+ * deliberately NOT applied to `describeCtlAtlTsbTrend`'s `historyDays`/
+ * warmup classification, which needs the athlete's real full history to
+ * answer "has enough time actually accumulated for CTL/ATL to be
+ * meaningful," not just "how much of that history fits on screen." */
+export const LOAD_CHART_WINDOW_DAYS = 42;
+
+/** The chart's window-selector options (`views.js`'s `renderLoadChart`
+ * renders one pill per entry; `main.js` persists whichever `days` value is
+ * currently selected as `state.loadWindowDays`). `days: null` means "no
+ * slicing -- the whole series" (labeled "Season"), matching
+ * `ctlAtlTsbChartGeometry`'s own convention of never dividing by a length
+ * that doesn't exist. 42 (6 weeks) is the default -- the old hardcoded 28
+ * days is under two mesocycles, too short to see a training block's actual
+ * shape; 6 weeks is long enough to show a build and the recovery week after
+ * it. 84 (12 weeks) shows roughly a full macrocycle. "Season" is the whole
+ * logged history, x-axis labeled by month rather than by date (see
+ * `ctlAtlTsbChartGeometry`'s `xTickMode` option) -- daily date ticks over
+ * months of history would be unreadably dense. */
+export const LOAD_CHART_WINDOW_OPTIONS = [
+  { days: 42, label: '6 weeks' },
+  { days: 84, label: '12 weeks' },
+  { days: null, label: 'Season' },
+];
 
 /** Rounds to one decimal -- CTL/ATL/TSB values arrive already 1-decimal
  * rounded from `summarize_rollup`, so axis labels derived from the data's
@@ -1121,13 +1194,29 @@ function evenIndices(n, maxCount) {
   return [...new Set(picks)];
 }
 
+/** One index per calendar month boundary in `series` (always including
+ * index 0), for the "Season" window's month-labeled x-axis -- daily ticks
+ * over months of history would be unreadably dense, and evenly-spaced
+ * ticks (like `evenIndices` above) wouldn't reliably land on month
+ * starts. */
+function monthTickIndices(series) {
+  const picks = [0];
+  let lastMonth = series[0][0].slice(0, 7);
+  for (let i = 1; i < series.length; i++) {
+    const month = series[i][0].slice(0, 7);
+    if (month !== lastMonth) {
+      picks.push(i);
+      lastMonth = month;
+    }
+  }
+  return picks;
+}
+
 /** Pure geometry for the CTL/ATL/TSB chart: given `series` (the
  * `ctl_atl_tsb` list from `GET /api/plan/load` /
  * `GET /api/coach/athletes/{slug}/load`), returns everything
- * `views.js`'s `renderLoadChart` needs to draw the SVG -- pixel-space
- * point coordinates for each of the three lines, the race-day reference
- * band's pixel span, and tick marks for both axes -- with no
- * DOM/rendering logic of its own.
+ * `views.js`'s `renderLoadChart` needs to draw the two-panel SVG -- see the
+ * module comment above for why it's two panels, not one, and not dual-axis.
  *
  * Returns `{ isEmpty: true, width, height }` for a missing/empty series
  * (no workouts logged yet, or every logged workout falls outside the
@@ -1135,101 +1224,109 @@ function evenIndices(n, maxCount) {
  * domain -- callers render an honest "not enough data yet" message
  * instead of a blank or broken chart.
  *
- * **Dual y-axis (readability fix, Build 1 of the wellness-ingestion +
- * training-dashboard plan):** CTL/TSB plot against one ("primary", left)
- * y-axis, ATL against its own independent ("secondary", right) y-axis.
- * This chart's code was independently re-verified end-to-end and had no
- * bug -- the "CTL looks like -ATL" impression athletes reported is a real,
- * expected property of CTL being a 42-day EWMA (inherently small natural
- * range) sharing one axis with ATL, a 7-day EWMA (inherently large natural
- * range), on any real athlete's data. Giving ATL its own scale fixes the
- * readability problem without touching the underlying math: `ctlPoints`/
- * `tsbPoints`/`bandTop`/`bandBottom`/`yTicks` are all in primary-axis pixel
- * space; `atlPoints`/`yTicksSecondary` are in secondary-axis pixel space.
- * The race-day TSB reference band stays on the primary axis (it describes
- * TSB, not ATL) and, per the existing convention, always keeps 0 and the
- * band itself inside the primary domain regardless of the real CTL/TSB
- * data range. */
+ * `xTickMode` ('date' | 'month', default 'date') selects date-per-tick vs.
+ * one-tick-per-month-boundary x-axis labeling -- `views.js` passes 'month'
+ * only for the "Season" window (see `LOAD_CHART_WINDOW_OPTIONS`). Returned
+ * as `xTickMode` on the result so the renderer knows how to format each
+ * tick's ISO-date label without having to re-derive which mode was used. */
 export function ctlAtlTsbChartGeometry(series, {
   width = LOAD_CHART_WIDTH, height = LOAD_CHART_HEIGHT, padding = LOAD_CHART_PADDING,
+  tsbPanelRatio = TSB_PANEL_RATIO, tsbDomain = TSB_AXIS_DOMAIN, xTickMode = 'date',
 } = {}) {
   if (!series || series.length === 0) {
     return { isEmpty: true, width, height };
   }
 
-  const plotW = width - padding.left - padding.right;
-  const plotH = height - padding.top - padding.bottom;
   const n = series.length;
-
   const ctlValues = series.map((p) => p[1]);
   const atlValues = series.map((p) => p[2]);
   const tsbValues = series.map((p) => p[3]);
 
-  // Primary (left) axis domain: CTL + TSB + the race-day band + 0 -- NEVER
-  // ATL (see the dual-axis doc comment above). Always includes the band
-  // (and 0) so both are visible even for an athlete whose real TSB never
-  // gets near them (e.g. deep in a build block) -- context, not just
-  // "whatever fits today's data".
-  const primaryValues = [
-    ...ctlValues, ...tsbValues, RACE_DAY_TSB_BAND.low, RACE_DAY_TSB_BAND.high,
-    PRODUCTIVE_TRAINING_TSB_BAND.low, PRODUCTIVE_TRAINING_TSB_BAND.high, 0,
-  ];
-  const primaryRawMin = Math.min(...primaryValues);
-  const primaryRawMax = Math.max(...primaryValues);
-  const primarySpan = primaryRawMax - primaryRawMin || 1;
-  const yMin = primaryRawMin - primarySpan * 0.08;
-  const yMax = primaryRawMax + primarySpan * 0.08;
+  const plotW = width - padding.left - padding.right;
+  const plotLeft = padding.left;
+  const plotRight = width - padding.right;
 
-  // Secondary (right) axis domain: ATL's own min/max only -- deliberately
-  // NOT anchored at 0 the way the primary axis is. Forcing a 0 anchor here
-  // would recreate exactly the readability problem this dual-axis change
-  // exists to fix: a real ATL trace that hovers in a narrow band (e.g.
-  // 35-45) would still look flat, dominated by the distance down to 0,
-  // same as it looked flat sharing CTL's axis. Scaled completely
-  // independently of the primary axis -- a tiny real ATL range gets the
-  // full plot height to show its own shape, instead of being flattened by
-  // whatever range CTL/TSB happen to span (or by an arbitrary 0 anchor).
-  const secondaryValues = [...atlValues];
-  const secondaryRawMin = Math.min(...secondaryValues);
-  const secondaryRawMax = Math.max(...secondaryValues);
-  const secondarySpan = secondaryRawMax - secondaryRawMin || 1;
-  const yMinAtl = secondaryRawMin - secondarySpan * 0.08;
-  const yMaxAtl = secondaryRawMax + secondarySpan * 0.08;
+  const totalPlotH = height - padding.top - padding.bottom - LOAD_CHART_PANEL_GAP;
+  const loadPlotH = totalPlotH * (1 - tsbPanelRatio);
+  const tsbPlotH = totalPlotH * tsbPanelRatio;
+  const loadTop = padding.top;
+  const loadBottom = loadTop + loadPlotH;
+  const tsbTop = loadBottom + LOAD_CHART_PANEL_GAP;
+  const tsbBottom = tsbTop + tsbPlotH;
 
-  const xFor = (i) => (n === 1 ? padding.left + plotW / 2 : padding.left + (i / (n - 1)) * plotW);
-  const yFor = (v) => padding.top + (1 - (v - yMin) / (yMax - yMin)) * plotH;
-  const yForAtl = (v) => padding.top + (1 - (v - yMinAtl) / (yMaxAtl - yMinAtl)) * plotH;
+  // Top ("fitness & fatigue") panel: CTL and ATL are the same kind of
+  // quantity -- EWMAs of daily load -- so they share ONE axis, anchored at
+  // 0 (see module comment for why this, not a dual axis, is the fix). Always
+  // includes 0 so the axis never silently omits the floor both lines are
+  // measured from.
+  const loadValues = [...ctlValues, ...atlValues, 0];
+  const loadRawMin = Math.min(...loadValues);
+  const loadRawMax = Math.max(...loadValues);
+  const loadSpan = (loadRawMax - loadRawMin) || 1;
+  const loadYMin = loadRawMin - loadSpan * 0.08;
+  const loadYMax = loadRawMax + loadSpan * 0.08;
 
-  const toPoints = (values, yFn) => series.map((_, i) => ({ x: xFor(i), y: yFn(values[i]) }));
+  const xFor = (i) => (n === 1 ? plotLeft + plotW / 2 : plotLeft + (i / (n - 1)) * plotW);
+  const loadYFor = (v) => loadTop + (1 - (v - loadYMin) / (loadYMax - loadYMin)) * loadPlotH;
+  // Bottom ("form") panel: FIXED domain (`TSB_AXIS_DOMAIN`/`tsbDomain`),
+  // never derived from this athlete's actual TSB range -- see that
+  // constant's own doc comment for why. Values outside the domain are
+  // clamped to the nearest edge for plotting; `tsbClamped` records which
+  // indices that happened to, so the renderer can mark them (a caret at the
+  // boundary) instead of silently misrepresenting an out-of-range point as
+  // being on the edge of "normal".
+  const tsbYFor = (v) => tsbTop + (1 - (v - tsbDomain.min) / (tsbDomain.max - tsbDomain.min)) * tsbPlotH;
 
-  const xTicks = evenIndices(n, LOAD_CHART_MAX_X_TICKS).map((i) => ({ x: xFor(i), label: series[i][0] }));
-  const yTicks = Array.from({ length: LOAD_CHART_Y_TICK_COUNT + 1 }, (_, i) => {
-    const value = roundToTenth(yMin + (i / LOAD_CHART_Y_TICK_COUNT) * (yMax - yMin));
-    return { y: yFor(value), value };
+  const ctlPoints = series.map((_, i) => ({ x: xFor(i), y: loadYFor(ctlValues[i]) }));
+  const atlPoints = series.map((_, i) => ({ x: xFor(i), y: loadYFor(atlValues[i]) }));
+  const tsbClamped = [];
+  const tsbPoints = series.map((_, i) => {
+    const raw = tsbValues[i];
+    const clampedValue = Math.min(tsbDomain.max, Math.max(tsbDomain.min, raw));
+    if (clampedValue !== raw) tsbClamped.push(i);
+    return { x: xFor(i), y: tsbYFor(clampedValue) };
   });
-  const yTicksSecondary = Array.from({ length: LOAD_CHART_Y_TICK_COUNT + 1 }, (_, i) => {
-    const value = roundToTenth(yMinAtl + (i / LOAD_CHART_Y_TICK_COUNT) * (yMaxAtl - yMinAtl));
-    return { y: yForAtl(value), value };
+
+  const lastIndex = n - 1;
+  const latestTsb = {
+    x: xFor(lastIndex),
+    y: tsbPoints[lastIndex].y,
+    value: tsbValues[lastIndex],
+    band: classifyTsbBand(tsbValues[lastIndex]),
+  };
+
+  const xTickIndices = xTickMode === 'month' ? monthTickIndices(series) : evenIndices(n, LOAD_CHART_MAX_X_TICKS);
+  const xTicks = xTickIndices.map((i) => ({ x: xFor(i), label: series[i][0] }));
+  const yTicks = Array.from({ length: LOAD_CHART_Y_TICK_COUNT + 1 }, (_, i) => {
+    const value = roundToTenth(loadYMin + (i / LOAD_CHART_Y_TICK_COUNT) * (loadYMax - loadYMin));
+    return { y: loadYFor(value), value };
   });
 
   return {
     isEmpty: false,
     width,
     height,
-    plotLeft: padding.left,
-    plotRight: width - padding.right,
-    plotTop: padding.top,
-    plotBottom: height - padding.bottom,
-    ctlPoints: toPoints(ctlValues, yFor),
-    atlPoints: toPoints(atlValues, yForAtl),
-    tsbPoints: toPoints(tsbValues, yFor),
-    bandTop: yFor(RACE_DAY_TSB_BAND.high),
-    bandBottom: yFor(RACE_DAY_TSB_BAND.low),
-    productiveBandTop: yFor(PRODUCTIVE_TRAINING_TSB_BAND.high),
-    productiveBandBottom: yFor(PRODUCTIVE_TRAINING_TSB_BAND.low),
+    plotLeft,
+    plotRight,
+    loadPlot: { top: loadTop, bottom: loadBottom },
+    tsbPlot: { top: tsbTop, bottom: tsbBottom },
+    ctlPoints,
+    atlPoints,
+    tsbPoints,
+    tsbClamped,
+    latestTsb,
+    productiveBand: {
+      top: tsbYFor(PRODUCTIVE_TRAINING_TSB_BAND.high),
+      bottom: tsbYFor(PRODUCTIVE_TRAINING_TSB_BAND.low),
+    },
+    raceBand: {
+      top: tsbYFor(RACE_DAY_TSB_BAND.high),
+      bottom: tsbYFor(RACE_DAY_TSB_BAND.low),
+    },
+    tsbZeroY: tsbYFor(0),
     xTicks,
+    xTickMode,
     yTicks,
-    yTicksSecondary,
     firstDate: series[0][0],
     lastDate: series[n - 1][0],
   };
@@ -1300,8 +1397,11 @@ function classifyCtlWarmup(historyDays) {
 /** Five-way TSB classification against the two named bands, ascending by
  * value -- see `describeCtlAtlTsbTrend`'s `tsb.band` doc comment below for
  * what each name means. Boundary values are inclusive of whichever named
- * band they touch (matching the single-band convention this replaces). */
-function classifyTsbBand(value) {
+ * band they touch (matching the single-band convention this replaces).
+ * Exported: also used directly by `ctlAtlTsbChartGeometry`'s `latestTsb.band`
+ * above (hoisted function declaration, so the forward reference is safe) --
+ * one classification function, not two copies drifting apart. */
+export function classifyTsbBand(value) {
   if (value < PRODUCTIVE_TRAINING_TSB_BAND.low) return 'high-risk';
   if (value <= PRODUCTIVE_TRAINING_TSB_BAND.high) return 'productive';
   if (value < RACE_DAY_TSB_BAND.low) return 'grey-zone';
