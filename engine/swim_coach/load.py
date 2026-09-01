@@ -61,6 +61,18 @@ enough dual-logged sessions exist to fit a personal scaling factor, but
 inventing an uncited scaling constant now would trade one silent
 distortion for another. Revisit once Renee logs more RPE alongside her
 watch data.
+
+**Partial fix, for whichever athlete has one:** when `Athlete.lthr_bpm`
+(a real, self-reported/measured lactate-threshold heart rate) is set,
+tier 2's raw TRIMP is additionally rescaled -- see
+`_normalize_trimp_to_lthr_hour` and `HR_LOAD_NORMALIZED_SCALE` below --
+onto the same "100 = one hour at threshold" unit TSS already uses for
+power. This narrows, but does not eliminate, the scale mismatch above: it
+brings TRIMP roughly onto TSS's own convention (and TSS/sRPE are still two
+different, never-reconciled scales in the broader field, not a solved
+mapping this project invented), and it only applies to whichever athlete
+has actually entered an `lthr_bpm` -- an athlete with none set still gets
+the exact same raw, un-normalized TRIMP as before.
 """
 
 from __future__ import annotations
@@ -344,6 +356,82 @@ def _trimp_weighting_factor(hrr_fraction: float, sex: Literal["male", "female", 
     return (male_weight + female_weight) / 2
 
 
+HR_LOAD_NORMALIZED_SCALE = 100.0
+# Optional tier-2 refinement: rescale a raw Banister TRIMP value so that one
+# hour spent exactly at the athlete's own measured lactate-threshold heart
+# rate (`Athlete.lthr_bpm`) reads as HR_LOAD_NORMALIZED_SCALE (100) AU --
+# the same "100 = one hour at threshold" convention power-based TSS already
+# uses in this module (see `SWIM_TSS_INTENSITY_EXPONENT` above: "one hour
+# exactly at FTP scores 100"). **✓ Verified by direct fetch this session**:
+# TrainingPeaks' own help documentation ("Training with TSS vs. hrTSS:
+# What's the Difference?") confirms hrTSS is "based on time in heart rate
+# training zones derived from an athlete's lactate threshold heart rate"
+# and is normalized against "an estimate of the amount of accumulated TSS
+# in an hour" at threshold effort -- i.e. the same threshold-hour=100
+# calibration point, just applied to HR instead of power. Separately,
+# intervals.icu's own creator ("david," intervals.icu forum, "HRSS
+# (normalized TRIMP) training load," confirmed by direct fetch this
+# session) describes their "HRSS" heart-rate load option as literally
+# Banister TRIMP -- the exact formula this tier already implements --
+# "normalized in a similar way to TSS (100 = 1h max effort)," requiring
+# only a resting HR and a threshold HR as inputs. Both sources converge on
+# the same technique: no new exponential-weighting formula is introduced
+# here, only a linear rescale of the existing, already-cited
+# `TRIMP_MALE_COEFFICIENT`/`TRIMP_FEMALE_COEFFICIENT` output. `[ADAPTED:
+# cycling]` (TSS's own "100=1hr@FTP" convention, borrowed for HR).
+# **Confidence: medium** (both practitioner sources independently converge
+# on rescaling TRIMP to a threshold-hour=100 unit; the exact interpolation
+# a commercial tool like intervals.icu's HRSS uses internally to derive
+# HRmax from LTHR when a lab-tested max isn't on file was not published in
+# either source consulted, so this implementation keeps using this
+# project's own existing `estimate_hr_max` -- see that function's own
+# citation/limits above -- as the %HRR denominator rather than inventing an
+# unverified LTHR->HRmax ratio). **Test:** if this athlete's own lab- or
+# field-tested HRmax ever becomes known, compare it against
+# `estimate_hr_max`'s "highest observed" floor and revisit if they diverge
+# materially -- a wrong `hr_max` still distorts the %HRR fraction this
+# normalization is built on top of.
+#
+# Deliberately a no-op (returns `trimp` unchanged) whenever `lthr_bpm` is
+# `None` -- most athletes/profiles have never set one, and tier 2's
+# pre-existing raw-TRIMP behavior is the correct, unchanged default for
+# them, not an error condition.
+
+
+def _normalize_trimp_to_lthr_hour(
+    trimp: float,
+    *,
+    hr_max: float,
+    hr_rest: float,
+    lthr_bpm: float | None,
+    sex: Literal["male", "female", "other"] | None,
+) -> float:
+    """Rescale a raw Banister TRIMP value (see `HR_LOAD_NORMALIZED_SCALE`
+    above for the citations) so one hour at the athlete's own `lthr_bpm`
+    reads as 100 AU, directly addressing this module's documented
+    "known limitation" (TRIMP and sRPE were never on a common scale) for
+    whichever athlete has actually set a threshold HR -- without touching
+    sRPE, pace-IF, or duration-only, and without changing tier 2's output
+    at all for an athlete who hasn't.
+
+    Returns `trimp` unchanged (the pre-normalization behavior) when
+    `lthr_bpm` is `None`, or when it can't be sensibly related to this
+    athlete's own `hr_max`/`hr_rest` (`lthr_bpm <= hr_rest` would make the
+    reference fraction zero or negative) -- same "don't fabricate a number
+    you can't support" posture the rest of this tier already follows.
+    Callers are expected to have already confirmed `hr_max > hr_rest`
+    (`session_load`'s own tier-2 guard), so that is not re-checked here.
+    """
+    if lthr_bpm is None or lthr_bpm <= hr_rest:
+        return trimp
+    lthr_hrr_fraction = max(0.0, min(1.0, (lthr_bpm - hr_rest) / (hr_max - hr_rest)))
+    lthr_weight = _trimp_weighting_factor(lthr_hrr_fraction, sex)
+    trimp_per_hour_at_lthr = 60.0 * lthr_hrr_fraction * lthr_weight
+    if trimp_per_hour_at_lthr <= 0:
+        return trimp
+    return trimp / trimp_per_hour_at_lthr * HR_LOAD_NORMALIZED_SCALE
+
+
 def session_load(
     workout: Workout,
     *,
@@ -351,6 +439,7 @@ def session_load(
     hr_rest: float | None = None,
     sex: Literal["male", "female", "other"] | None = None,
     css_pace_s_per_100m: float | None = None,
+    lthr_bpm: float | None = None,
 ) -> SessionLoad:
     """One workout's training-load estimate, falling through four tiers of
     decreasing fidelity until one applies -- see module docstring for the
@@ -371,6 +460,11 @@ def session_load(
        confirmed ceiling) -- letting either case go unclamped would feed
        an out-of-domain input into the exponential weighting and produce
        a nonsensical (negative or runaway) load.
+       When `lthr_bpm` is also known, the raw TRIMP value is additionally
+       rescaled so one hour at threshold reads as
+       `HR_LOAD_NORMALIZED_SCALE` (100) AU -- see
+       `_normalize_trimp_to_lthr_hour`'s docstring and the citations above
+       `HR_LOAD_NORMALIZED_SCALE`. A no-op when `lthr_bpm` is `None`.
     3. **Swim pace-based intensity** (a TSS-family formula) when tier 2
        isn't available, the workout is a swim (`swim_pool`/`swim_ow`), and
        both `workout.avg_pace_s_per_100m` and `css_pace_s_per_100m` are
@@ -392,6 +486,9 @@ def session_load(
         hrr_fraction = max(0.0, min(1.0, hrr_fraction))
         weight = _trimp_weighting_factor(hrr_fraction, sex)
         trimp = workout.duration_min * hrr_fraction * weight
+        trimp = _normalize_trimp_to_lthr_hour(
+            trimp, hr_max=hr_max, hr_rest=hr_rest, lthr_bpm=lthr_bpm, sex=sex
+        )
         return SessionLoad(value=trimp, tier="hr_trimp")
 
     if (
@@ -452,8 +549,8 @@ def daily_loads(
     has no workouts logged at all (equivalent to zero for lookup purposes
     via ``.get(day, 0.0)``, same convention as before).
 
-    `athlete` (for `sex`/`css_pace_s_per_100m`) and `wellness` (for
-    `resting_hr` history) feed tiers 2/3's context -- both optional so
+    `athlete` (for `sex`/`css_pace_s_per_100m`/`lthr_bpm`) and `wellness`
+    (for `resting_hr` history) feed tiers 2/3's context -- both optional so
     existing callers that only have workouts on hand still get tier-1
     (sRPE) and tier-4 (duration-only) behavior unchanged; passing them in
     is what unlocks tiers 2/3 for RPE-less workouts. `estimate_hr_max` is
@@ -467,6 +564,7 @@ def daily_loads(
     hr_max = estimate_hr_max(workouts)
     sex = athlete.sex if athlete is not None else None
     css_pace_s_per_100m = athlete.css_pace_s_per_100m if athlete is not None else None
+    lthr_bpm = athlete.lthr_bpm if athlete is not None else None
 
     totals: dict[date, float] = {}
     for workout in workouts:
@@ -476,6 +574,7 @@ def daily_loads(
             hr_rest=estimate_hr_rest(wellness, workout.date),
             sex=sex,
             css_pace_s_per_100m=css_pace_s_per_100m,
+            lthr_bpm=lthr_bpm,
         ).value
         totals[workout.date] = totals.get(workout.date, 0.0) + load
     return totals

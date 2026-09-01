@@ -238,6 +238,13 @@ export function profileFormFromAthlete(athlete) {
       return lb === '' ? '' : String(lb);
     })(),
     cssPace: formatSecondsToPace(athlete.css_pace_s_per_100m),
+    // Lactate-threshold heart rate (bpm) -- a plain number, no unit
+    // conversion needed (unlike height/weight/pace above). '' (not the
+    // number 0) when unset, same "empty string means no value yet"
+    // convention every other optional profile field on this form uses.
+    lthrBpm: athlete.lthr_bpm === null || athlete.lthr_bpm === undefined
+      ? ''
+      : String(athlete.lthr_bpm),
     poolDays: poolScheduleToDayMap(athlete.pool_schedule),
     // B4 (coach-mode Q&A build): the Settings tab's "Email notifications"
     // toggle -- `email_notifications_enabled` defaults `true` server-side
@@ -276,6 +283,20 @@ export function serializeProfileForm(form) {
 
   const cssPaceSeconds = parsePaceToSeconds(form.cssPace);
   if (cssPaceSeconds !== null) payload.css_pace_s_per_100m = cssPaceSeconds;
+
+  // lthr_bpm: sent as `null` on an explicit blank (so clearing the field
+  // actually clears it server-side), omitted only when the field holds an
+  // in-progress/unparseable value -- same "don't block saving the rest of
+  // the form" posture height/weight/CSS pace use for a bad in-progress
+  // edit, but this field's own blank state IS a meaningful, sendable value
+  // (unlike a blank CSS pace, which the CSS-pace-specific onboarding flow
+  // treats as "not using CSS mode" rather than "clear it").
+  if ((form.lthrBpm ?? '') === '') {
+    payload.lthr_bpm = null;
+  } else {
+    const lthrBpm = toNullableNumber(form.lthrBpm);
+    if (lthrBpm !== null) payload.lthr_bpm = Math.round(lthrBpm);
+  }
 
   payload.pool_schedule = dayMapToPoolSchedule(form.poolDays);
 

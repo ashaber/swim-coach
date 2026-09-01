@@ -98,15 +98,31 @@ _PATCHABLE_WORKOUT_FIELDS = {"rpe", "notes"}
 def _attach_load(
     workout: Workout, *, profile: Any, hr_max: float | None, wellness: list[Any]
 ) -> dict:
-    """Attach `load_au`/`load_tier` to `workout`'s JSON representation --
-    thin wrapper over `app.load_helpers.workout_load_au` (the shared
-    computation `tools.py`'s `get_workouts` tool and `context.py`'s
-    `render_focused_workout` also use now, so the coach chat reports the
-    same number this HTTP response does instead of guessing at one). Never
-    persisted on the `Workout` model -- response-only, computed fresh
-    every call."""
-    load_au, load_tier = workout_load_au(workout, athlete=profile, hr_max=hr_max, wellness=wellness)
-    return {**workout.model_dump(mode="json"), "load_au": load_au, "load_tier": load_tier}
+    """D2, HR-TRIMP follow-up: attach `load_au`/`load_tier` to `workout`'s
+    JSON representation, reaching `session_load`'s tier 2 (HR-based TRIMP)
+    when the workout has its own `avg_hr` and `hr_max` is estimable --
+    unlike `quality.workout_quality` (a pure function that only ever sees
+    one workout, so it genuinely can't supply this), these two routes
+    (`create_workout`/`list_workouts` below) DO have full store access, so
+    they compute `hr_max`/`hr_rest` the same way `load.daily_loads` does
+    rather than leaving tier 2 permanently unreachable. `hr_max` is passed
+    in (callers compute it once from the athlete's FULL workout history,
+    not per-workout -- it's the same estimate regardless of which workout
+    is being scored); `hr_rest` is estimated here per-workout since it's
+    genuinely date-dependent (`estimate_hr_rest`'s `as_of` parameter).
+    Never persisted on the `Workout` model -- response-only, computed
+    fresh every call.
+    """
+    hr_rest = estimate_hr_rest(wellness, workout.date)
+    sl = session_load(
+        workout,
+        hr_max=hr_max,
+        hr_rest=hr_rest,
+        sex=profile.sex,
+        css_pace_s_per_100m=profile.css_pace_s_per_100m,
+        lthr_bpm=profile.lthr_bpm,
+    )
+    return {**workout.model_dump(mode="json"), "load_au": round(sl.value, 1), "load_tier": sl.tier}
 
 
 @router.post("/api/workouts")

@@ -200,6 +200,94 @@ def test_session_load_hr_trimp_preferred_over_pace_when_both_available():
     assert result.tier == "hr_trimp"
 
 
+# --- session_load: tier 2, LTHR normalization (HRSS-style, Andrew's own real numbers) ---
+
+
+def test_session_load_hr_trimp_lthr_none_is_unchanged():
+    # Default behavior (no lthr_bpm passed) must be byte-for-byte identical
+    # to every hr_trimp test above -- this is a no-op unless an athlete has
+    # actually set a threshold HR.
+    workout = make_workout(rpe=None, duration_min=60.0, avg_hr=150)
+    with_none = session_load(workout, hr_max=190.0, hr_rest=50.0, sex="female", lthr_bpm=None)
+    without_param = session_load(workout, hr_max=190.0, hr_rest=50.0, sex="female")
+    assert with_none.value == without_param.value == pytest.approx(121.499, abs=0.01)
+
+
+def test_session_load_hr_trimp_normalizes_one_hour_at_lthr_to_100():
+    # The whole point of the normalization: a workout spent exactly at the
+    # athlete's own lactate-threshold HR, for exactly one hour, must read
+    # as HR_LOAD_NORMALIZED_SCALE (100) AU -- the same "100 = 1h @
+    # threshold" convention this module's swim pace-IF tier already uses
+    # for FTP (see HR_LOAD_NORMALIZED_SCALE's citations).
+    workout = make_workout(rpe=None, duration_min=60.0, avg_hr=172)
+    result = session_load(workout, hr_max=190.0, hr_rest=60.0, sex=None, lthr_bpm=172)
+    assert result.tier == "hr_trimp"
+    assert result.value == pytest.approx(100.0)
+
+
+def test_session_load_hr_trimp_normalization_preserves_relative_ordering():
+    # A harder effort must still score higher than an easier one after
+    # normalization -- rescaling by a constant factor must not flip order.
+    easy = make_workout(rpe=None, duration_min=60.0, avg_hr=110)
+    hard = make_workout(rpe=None, duration_min=60.0, avg_hr=165)
+    easy_result = session_load(easy, hr_max=190.0, hr_rest=60.0, sex=None, lthr_bpm=172)
+    hard_result = session_load(hard, hr_max=190.0, hr_rest=60.0, sex=None, lthr_bpm=172)
+    assert hard_result.value > easy_result.value
+
+
+def test_session_load_hr_trimp_long_easy_walk_still_counts_meaningfully():
+    # Andrew's real-world concern (Aug 2026 coach-chat thread): a 2-5 hour
+    # low-HR walk at an "interesting destination" should NOT collapse to
+    # ~0 AU under an HRSS-style exponential model, the way a 60-minute
+    # low-HR walk correctly does (see the next test). Duration dominating
+    # a small-but-nonzero intensity term is exactly what TRIMP's own
+    # `duration_min * hrr_fraction * weight(hrr_fraction)` shape already
+    # gives -- normalizing by a constant factor doesn't change that shape,
+    # only its units.
+    workout = make_workout(rpe=None, duration_min=180.0, avg_hr=95)
+    result = session_load(workout, hr_max=190.0, hr_rest=60.0, sex=None, lthr_bpm=172)
+    hrr_fraction = (95 - 60) / (190 - 60)
+    male_weight = TRIMP_MALE_COEFFICIENT * math.exp(TRIMP_MALE_EXPONENT * hrr_fraction)
+    female_weight = TRIMP_FEMALE_COEFFICIENT * math.exp(TRIMP_FEMALE_EXPONENT * hrr_fraction)
+    raw_trimp = 180.0 * hrr_fraction * (male_weight + female_weight) / 2
+    lthr_fraction = (172 - 60) / (190 - 60)
+    lthr_male_weight = TRIMP_MALE_COEFFICIENT * math.exp(TRIMP_MALE_EXPONENT * lthr_fraction)
+    lthr_female_weight = TRIMP_FEMALE_COEFFICIENT * math.exp(TRIMP_FEMALE_EXPONENT * lthr_fraction)
+    trimp_per_hour_at_lthr = 60.0 * lthr_fraction * (lthr_male_weight + lthr_female_weight) / 2
+    expected = raw_trimp / trimp_per_hour_at_lthr * 100.0
+    assert result.value == pytest.approx(expected)
+    # Sanity: a meaningful, clearly-nonzero number for a multi-hour walk --
+    # not the near-zero result a naive exponential-decay reading might fear.
+    assert 20.0 < result.value < 60.0
+
+
+def test_session_load_hr_trimp_short_very_easy_walk_scores_low():
+    # The other half of Andrew's ask: a 60-minute low-HR walk should
+    # correctly read as small (his own quoted expectation: "5-10 points").
+    workout = make_workout(rpe=None, duration_min=60.0, avg_hr=85)
+    result = session_load(workout, hr_max=190.0, hr_rest=60.0, sex=None, lthr_bpm=172)
+    assert 0.0 < result.value < 10.0
+
+
+def test_session_load_hr_trimp_lthr_at_or_below_hr_rest_is_noop():
+    # A nonsensical lthr_bpm (at/below the resting-HR estimate) can't be
+    # related to a real %HRR fraction -- fall back to the raw, unnormalized
+    # TRIMP rather than dividing by a zero/negative reference.
+    workout = make_workout(rpe=None, duration_min=60.0, avg_hr=150)
+    result = session_load(workout, hr_max=190.0, hr_rest=50.0, sex="female", lthr_bpm=50)
+    without_lthr = session_load(workout, hr_max=190.0, hr_rest=50.0, sex="female")
+    assert result.value == without_lthr.value
+
+
+def test_daily_loads_threads_lthr_bpm_from_athlete():
+    athlete = make_athlete(sex=None, lthr_bpm=172)
+    workout = make_workout(
+        rpe=None, duration_min=60.0, avg_hr=172, max_hr=190, avg_pace_s_per_100m=None
+    )
+    totals = daily_loads([workout], athlete=athlete, wellness=[])
+    assert totals[workout.date] == pytest.approx(100.0, abs=1.0)
+
+
 # --- session_load: tier 3 (swim pace-based intensity) -------------------------------
 
 

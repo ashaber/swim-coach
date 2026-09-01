@@ -2127,6 +2127,10 @@ function renderProfilePanel({ form, load, submit }) {
         <input type="text" placeholder="1:40" data-form="profile" data-field="cssPace" value="${esc(form.cssPace)}">
       </label>
       <label class="field">
+        <span>Lactate-threshold heart rate (bpm)</span>
+        <input type="number" min="0" step="1" inputmode="numeric" placeholder="e.g. 172" data-form="profile" data-field="lthrBpm" value="${esc(form.lthrBpm)}">
+      </label>
+      <label class="field">
         <span>Pool days</span>
         <div class="pool-days">
           ${POOL_DAY_LABELS.map((day) => `

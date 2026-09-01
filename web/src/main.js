@@ -93,7 +93,7 @@ function createCheckinForm() {
 
 function createProfileForm() {
   return {
-    name: '', dob: '', sex: '', heightFeet: '', heightInches: '', weightLb: '', cssPace: '',
+    name: '', dob: '', sex: '', heightFeet: '', heightInches: '', weightLb: '', cssPace: '', lthrBpm: '',
     poolDays: {
       monday: false, tuesday: false, wednesday: false, thursday: false, friday: false, saturday: false, sunday: false,
     },

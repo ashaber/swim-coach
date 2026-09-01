@@ -242,7 +242,7 @@ describe('profileFormFromAthlete', () => {
   it('prefills and converts units from an athlete profile', () => {
     const athlete = {
       name: 'Andrew', dob: '1975-04-07', sex: 'male', height_cm: 182.88, weight_kg: 72.6,
-      css_pace_s_per_100m: 100.0, pool_schedule: ['tuesday', 'thursday'],
+      css_pace_s_per_100m: 100.0, lthr_bpm: 172, pool_schedule: ['tuesday', 'thursday'],
     };
     const form = profileFormFromAthlete(athlete);
     expect(form.name).toBe('Andrew');
@@ -252,6 +252,7 @@ describe('profileFormFromAthlete', () => {
     expect(form.heightInches).toBe('0');
     expect(form.weightLb).toBe('160.1');
     expect(form.cssPace).toBe('1:40');
+    expect(form.lthrBpm).toBe('172');
     expect(form.poolDays.tuesday).toBe(true);
     expect(form.poolDays.thursday).toBe(true);
     expect(form.poolDays.monday).toBe(false);
@@ -265,6 +266,7 @@ describe('profileFormFromAthlete', () => {
     expect(form.heightInches).toBe('');
     expect(form.weightLb).toBe('');
     expect(form.cssPace).toBe('');
+    expect(form.lthrBpm).toBe('');
   });
 
   // B4 (coach-mode Q&A build): "Email notifications" toggle.
@@ -339,6 +341,34 @@ describe('serializeProfileForm', () => {
     expect(serializeProfileForm({ ...base, emailNotificationsEnabled: true }).email_notifications_enabled).toBe(true);
     expect(serializeProfileForm({ ...base, emailNotificationsEnabled: false }).email_notifications_enabled).toBe(false);
     expect(serializeProfileForm(base).email_notifications_enabled).toBe(false);
+  });
+
+  // LTHR-normalized HR load (Aug 2026 coach-chat cleanup): a plain integer
+  // field, unlike CSS pace's mm:ss parsing -- and unlike the other numeric
+  // fields, an explicit blank IS a meaningful, sendable value (null =
+  // "clear it"), not just an in-progress edit to silently drop.
+  it('sends a rounded integer lthr_bpm when the field has a value', () => {
+    const form = {
+      name: 'Andrew', dob: '', sex: '', heightFeet: '', heightInches: '', weightLb: '', cssPace: '',
+      lthrBpm: '172', poolDays: {},
+    };
+    expect(serializeProfileForm(form).lthr_bpm).toBe(172);
+  });
+
+  it('sends null for a blank lthr_bpm (explicit clear)', () => {
+    const form = {
+      name: 'Andrew', dob: '', sex: '', heightFeet: '', heightInches: '', weightLb: '', cssPace: '',
+      lthrBpm: '', poolDays: {},
+    };
+    expect(serializeProfileForm(form).lthr_bpm).toBeNull();
+  });
+
+  it('omits lthr_bpm when unparseable rather than sending garbage', () => {
+    const form = {
+      name: 'Andrew', dob: '', sex: '', heightFeet: '', heightInches: '', weightLb: '', cssPace: '',
+      lthrBpm: 'abc', poolDays: {},
+    };
+    expect(serializeProfileForm(form).lthr_bpm).toBeUndefined();
   });
 });
 
