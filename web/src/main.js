@@ -6,7 +6,7 @@ import {
   renderDashboardTab, renderCheckinTab, renderBackendNeededNotice, renderFeedbackTab, renderUpdateBanner,
   renderOnboardingForm, renderRosterTab, cr10AnchorLabel,
 } from './views.js';
-import { findSessionById } from './plan.js';
+import { findSessionById, LOAD_CHART_WINDOW_DAYS, LOAD_CHART_WINDOW_OPTIONS } from './plan.js';
 import { buildHistoryFeed } from './history.js';
 import {
   loadChatSession, saveChatSession, clearChatStorage,
@@ -41,6 +41,12 @@ import { loadLastSeen, saveLastSeen, countUnread } from './unread.js';
 
 const appEl = document.getElementById('app');
 const ACTIVE_TAB_KEY = 'swimcoach_active_tab';
+// The training-load chart's selected window (web/two-panel-load-chart) --
+// stored as the string 'season' or a decimal day count ('42'/'84'), since
+// localStorage only holds strings; `null` (plan.js's "no slicing, full
+// series" sentinel) can't round-trip through it directly. See
+// loadLoadWindowDays/saveLoadWindowDays below.
+const LOAD_WINDOW_DAYS_KEY = 'swimcoach_load_window_days';
 // 'log' and 'history' merged into one 'dashboard' tab (Build 1 of the
 // wellness-ingestion + training-dashboard plan) -- see views.js's
 // renderDashboardTab/renderTrainingDashboardBody.
@@ -154,6 +160,14 @@ function createRosterState() {
     // athlete is selected (handleSelectCoachedAthlete) or the coach backs
     // out to the athlete list (handleBackToRoster).
     feedExpanded: false,
+    // Whether the roster's own training-load chart narrative (views.js's
+    // renderCtlAtlTsbNarrative, web/two-panel-load-chart's truncation) is
+    // showing its full text or just the first line -- same one-way "Show
+    // more" convention as `feedExpanded` just above, its own bit of state
+    // for the same reason: the coach roster and the athlete's own dashboard
+    // are two independent narratives. Reset alongside `feedExpanded`
+    // wherever that resets.
+    narrativeExpanded: false,
     // The acted-as athlete's plan export (Build 2's new
     // GET /api/coach/athletes/<slug>/plan route -- see api.js's
     // fetchCoachPlan) -- feeds the Training Plan sub-tab's weeks/macro
@@ -294,6 +308,24 @@ const state = {
   // renderTrainingDashboardBody -- same "Show more" convention as
   // state.roster.feedExpanded. Reset on leaving the Dashboard tab (setTab).
   dashboardFeedExpanded: false,
+  // The Dashboard tab's training-load chart narrative (views.js's
+  // renderCtlAtlTsbNarrative, web/two-panel-load-chart's truncation) --
+  // same one-way "Show more" convention as dashboardFeedExpanded just
+  // above, its own bit of state since expanding the feed and expanding the
+  // narrative are two independent affordances. Reset on leaving the
+  // Dashboard tab (setTab), same as dashboardFeedExpanded.
+  loadNarrativeExpanded: false,
+  // The training-load chart's selected time window (plan.js's
+  // LOAD_CHART_WINDOW_OPTIONS: 42/84/null days) -- persisted across
+  // sessions (see loadLoadWindowDays/saveLoadWindowDays below), same
+  // "remember a view preference" convention as ACTIVE_TAB_KEY/
+  // loadActiveTab. Deliberately the SAME app-level flag the coach roster's
+  // acting-as-athlete view uses too (not a separate
+  // state.roster.loadWindowDays) -- a shared, low-stakes chart-window
+  // preference, same "acceptable tradeoff" precedent allWeeksOpen already
+  // establishes for page-level state shared between the athlete's own tabs
+  // and the roster view (see views.js's renderRosterTab doc comment).
+  loadWindowDays: loadLoadWindowDays(),
   workoutHistory: { status: 'idle', data: [], error: null },
   // Slice 2: null shows the history list; a workout id opens that
   // workout's in-tab detail view instead (see views.js's
@@ -381,6 +413,32 @@ function saveActiveTab(tab) {
   }
 }
 
+/** Reads the persisted training-load chart window (`LOAD_WINDOW_DAYS_KEY`)
+ * back into one of `LOAD_CHART_WINDOW_OPTIONS`' own `days` values (a number,
+ * or `null` for "Season") -- falls back to `LOAD_CHART_WINDOW_DAYS` (the
+ * default option) for a missing/corrupt/stale stored value, same
+ * "known-good fallback, never trust storage blindly" convention as
+ * loadActiveTab's KNOWN_TABS check. */
+function loadLoadWindowDays() {
+  try {
+    const stored = localStorage.getItem(LOAD_WINDOW_DAYS_KEY);
+    if (stored === 'season') return null;
+    const days = Number(stored);
+    if (LOAD_CHART_WINDOW_OPTIONS.some((o) => o.days === days)) return days;
+    return LOAD_CHART_WINDOW_DAYS;
+  } catch {
+    return LOAD_CHART_WINDOW_DAYS;
+  }
+}
+
+function saveLoadWindowDays(days) {
+  try {
+    localStorage.setItem(LOAD_WINDOW_DAYS_KEY, days === null ? 'season' : String(days));
+  } catch {
+    // ignore
+  }
+}
+
 // --- Rendering ---------------------------------------------------------------
 
 function renderTabContent() {
@@ -423,6 +481,8 @@ function renderTabContent() {
         // FULL already-fetched list; renderWorkoutDetail filters it down to
         // just the open workout by workout_id.
         askCoach: { feedback: state.feedbackEntries.data, form: state.askCoachForm, submit: state.askCoachSubmit },
+        loadWindowDays: state.loadWindowDays,
+        loadNarrativeExpanded: state.loadNarrativeExpanded,
       });
     case 'checkin':
       return renderCheckinTab({
@@ -430,6 +490,10 @@ function renderTabContent() {
         submit: state.checkinSubmit,
         backendConfigured,
         online: state.online,
+        // Resolved decision (web/two-panel-load-chart): reuses the
+        // already-fetched Dashboard-tab load state -- see renderCheckinTab's
+        // own doc comment for why this never fires a second fetch.
+        load: state.planLoad,
       });
     case 'coach':
       return renderCoachTab({
@@ -469,6 +533,11 @@ function renderTabContent() {
         // this deliberately isn't its own state.roster.allWeeksOpen slice.
         allWeeksOpen: state.allWeeksOpen,
         sessionDetailId: state.roster.sessionDetailId,
+        // web/two-panel-load-chart: shared app-level window preference (see
+        // views.js's renderRosterTab doc comment) plus the roster's own
+        // per-surface narrative-expanded slice.
+        loadWindowDays: state.loadWindowDays,
+        loadNarrativeExpanded: state.roster.narrativeExpanded,
         // B3: unread count for the roster's own Feedback section heading --
         // see src/unread.js's countUnread doc comment. Only ever meaningful
         // once an athlete's own feedback has actually been fetched (0
@@ -597,6 +666,7 @@ function applyAthleteSession(identity, token) {
   state.workoutHistory = { status: 'idle', data: [], error: null };
   state.workoutDetailId = null;
   state.dashboardFeedExpanded = false;
+  state.loadNarrativeExpanded = false;
   closeWorkoutChat();
   state.roster = createRosterState();
   state.grants = createGrantsState();
@@ -651,6 +721,7 @@ function resetToSignedOut({ identityError = null } = {}) {
   state.workoutHistory = { status: 'idle', data: [], error: null };
   state.workoutDetailId = null;
   state.dashboardFeedExpanded = false;
+  state.loadNarrativeExpanded = false;
   closeWorkoutChat();
   state.tab = 'settings';
   saveActiveTab('settings');
@@ -1335,6 +1406,39 @@ function handleShowMoreDashboardFeed() {
   render();
 }
 
+/** Expands the training-load chart's narrative (views.js's
+ * renderCtlAtlTsbNarrative, web/two-panel-load-chart's first-line
+ * truncation) -- same "keyed off which tab is actually visible, one-way
+ * expand" convention as handleShowMoreDashboardFeed just above. */
+function handleShowMoreLoadNarrative() {
+  if (state.tab === 'roster') {
+    state.roster.narrativeExpanded = true;
+  } else {
+    state.loadNarrativeExpanded = true;
+  }
+  log.info('load_chart.narrative_show_more', { athlete: athleteSlug(), tab: state.tab });
+  render();
+}
+
+/** Selects the training-load chart's time window (plan.js's
+ * LOAD_CHART_WINDOW_OPTIONS) from one of the pill buttons' own `data-key`
+ * ('season', or a decimal day count) -- see views.js's
+ * renderLoadChartWindowControls for how each pill encodes its own option.
+ * A shared app-level preference (see state.loadWindowDays's own doc
+ * comment for why), so this one handler covers both the athlete's own
+ * Dashboard tab and the coach roster's acting-as-athlete view without
+ * needing to branch on state.tab the way the per-surface handlers above
+ * do. */
+function handleSelectLoadWindow(key) {
+  const days = key === 'season' ? null : Number(key);
+  if (!LOAD_CHART_WINDOW_OPTIONS.some((o) => o.days === days)) return;
+  if (state.loadWindowDays === days) return;
+  state.loadWindowDays = days;
+  saveLoadWindowDays(days);
+  log.info('load_chart.window_selected', { athlete: athleteSlug(), days: days ?? 'season' });
+  render();
+}
+
 // Closes whichever detail view is open on a hardware/gesture back press.
 // Deliberately does NOT call history.back()/pushState itself -- it's the
 // *target* of a popstate that already happened, so doing either here would
@@ -1983,6 +2087,7 @@ function handleSelectCoachedAthlete(slug) {
   state.roster.workoutDetailId = null;
   state.roster.sessionDetailId = null;
   state.roster.feedExpanded = false;
+  state.roster.narrativeExpanded = false;
   state.roster.subTab = 'dashboard';
   log.info('roster.athlete_selected', { athlete: slug });
   render();
@@ -2020,6 +2125,7 @@ function handleBackToRoster() {
   state.roster.workoutDetailId = null;
   state.roster.sessionDetailId = null;
   state.roster.feedExpanded = false;
+  state.roster.narrativeExpanded = false;
   state.roster.subTab = 'dashboard';
   render();
 }
@@ -2050,6 +2156,7 @@ function handleSelectRosterSubTab(subTab) {
     history.back();
   }
   state.roster.feedExpanded = false;
+  state.roster.narrativeExpanded = false;
   state.roster.subTab = subTab;
   log.info('roster.subtab_switch', { subtab: subTab });
   render();
@@ -2255,6 +2362,7 @@ function setTab(tab) {
   if (state.tab === 'dashboard') {
     state.logManualOpen = false;
     state.dashboardFeedExpanded = false;
+  state.loadNarrativeExpanded = false;
   }
   // Leaving the Dashboard tab always drops any open workout-detail view --
   // coming back should land on the feed, not wherever the athlete last was.
@@ -2396,6 +2504,10 @@ async function onAppClick(e) {
     handleSelectRosterSubTab(action.slice('roster:subtab:'.length));
     return;
   }
+  if (action.startsWith('load-chart:window:')) {
+    handleSelectLoadWindow(action.slice('load-chart:window:'.length));
+    return;
+  }
   switch (action) {
     case 'chat:send': handleSendChat(); break;
     case 'chat:clear': handleClearChat(); break;
@@ -2445,6 +2557,11 @@ async function onAppClick(e) {
     // control): "show everything" is the only direction a "Show more"
     // affordance needs.
     case 'dashboard:show-more': handleShowMoreDashboardFeed(); break;
+    // Shared by both Training Dashboard surfaces the same way
+    // 'dashboard:show-more' just above is -- expands the training-load
+    // chart's narrative (web/two-panel-load-chart) on whichever surface is
+    // currently visible.
+    case 'load-chart:narrative-more': handleShowMoreLoadNarrative(); break;
     // Goes through history.back() (not handleCloseHistoryDetail() directly)
     // so the in-app "back" affordance and a hardware/gesture back press
     // close the detail via the exact same path -- see handlePopState.

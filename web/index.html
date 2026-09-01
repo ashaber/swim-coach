@@ -24,6 +24,14 @@
       --accent:#45afc6; --accent-ink:#a3e4d7;
       --mint:#a3e4d7; --amber:#f49342;
       --c-pool:#57a8ce; --c-ow:#2fc2ab; --c-strength:#f49342; --c-recovery:#6c9a90;
+      /* TSB ("form") line color, its own token (web/two-panel-load-chart) --
+         it used to reuse --c-ow, the OPEN-WATER SESSION color elsewhere in
+         this app, so the same hue meant "open water swim" on the Plan tab
+         and "form" on this chart, and it sat close enough to --mint to
+         muddy both. Same single-block, no-theme-variation convention as
+         every other --c-* token here (this app is dark-only, see the note
+         above). */
+      --c-form:#c9a3f0;
       --c-attn:#f49342;
       --c-signal:#e5534b; --c-signal-wash:#2a1614;
       --brand-gradient: linear-gradient(135deg, #45afc6, #a3e4d7, #f49342);
@@ -166,45 +174,77 @@
     .zrow .p { color: var(--ink-soft); }
 
     /* CTL/ATL/TSB training-load chart (see views.js's renderLoadChart /
-       plan.js's ctlAtlTsbChartGeometry). `width:100%;height:auto` on the
-       SVG plus its own `viewBox` is what keeps this responsive on narrow
-       mobile viewports without horizontal overflow -- the intrinsic pixel
-       size in the viewBox is just a coordinate space, never the rendered
-       size. */
+       plan.js's ctlAtlTsbChartGeometry) -- two stacked panels (CTL/ATL
+       "fitness & fatigue" on top, TSB "form" below) sharing one SVG and one
+       x-axis (web/two-panel-load-chart; see plan.js's module comment for
+       why, replacing an earlier single-axis then dual-y-axis design).
+       `width:100%;height:auto` on the SVG plus its own `viewBox` is what
+       keeps this responsive on narrow mobile viewports without horizontal
+       overflow -- the intrinsic pixel size in the viewBox is just a
+       coordinate space, never the rendered size. */
     .load-chart-panel { padding-bottom: 18px; }
     .load-chart-svg { width: 100%; height: auto; display: block; margin-top: 4px; }
+    /* Window-selector pills (6 weeks / 12 weeks / Season) -- reuses the
+       roster sub-tab bar's own .subtab-bar/.subtab-btn look verbatim (see
+       further down this file), just above the chart instead of above a
+       tab's body. */
+    .load-chart-window-controls { margin: 0 0 4px; }
     /* Distinct from all three line colors (--accent/CTL, --c-strength/ATL,
-       --c-ow/TSB) and from each other -- --c-pool (blue) and --c-recovery
+       --c-form/TSB) and from each other -- --c-pool (blue) and --c-recovery
        (sage) are otherwise-unused tokens in this chart, chosen specifically
-       so neither band is ever confusable with a line passing through it. */
+       so neither band is ever confusable with a line passing through it.
+       Both live in the TSB (bottom) panel only, where no other line crosses
+       them -- the top panel has no bands at all (they describe TSB, not
+       CTL/ATL). `.load-chart-band-active` (the band the athlete's LATEST
+       TSB actually falls in, if it's one of these two) bumps opacity from
+       .22 to .34 -- "which band am I in" should be visible without reading
+       an axis. */
     .load-chart-band-race { fill: var(--c-pool); opacity: .22; }
     .load-chart-band-productive { fill: var(--c-recovery); opacity: .22; }
+    .load-chart-band.load-chart-band-active { opacity: .34; }
     .load-chart-gridline { stroke: var(--line-soft); stroke-width: 1; }
     .load-chart-axis-label { font-family: var(--mono); font-size: 9px; fill: var(--ink-faint); }
-    /* Dual y-axis readability fix (Build 1, web/training-dashboard-merge):
-       ATL's right-axis tick labels are colored to match ATL's own line
-       color (see views.js's LOAD_CHART_LINE_COLOR_VAR) so the axis reads as
-       visually paired with the line it belongs to, same as the legend
-       below already pairs a color dot with each line's name. Set inline
-       (style=) at the call site since the color is the same JS constant
-       the line strokes use -- this class exists for any non-color rule. */
-    .load-chart-axis-label-secondary { font-family: var(--mono); font-size: 9px; }
-    .load-chart-line { fill: none; stroke-width: 2; }
-    .load-chart-legend { margin-top: 10px; }
-    .load-chart-band-dot-race { background: var(--c-pool); opacity: .4; }
-    .load-chart-band-dot-productive { background: var(--c-recovery); opacity: .4; }
+    /* The TSB panel's zero line -- plain --line, not a gridline color, since
+       TSB=0 is a meaningful reference (CTL==ATL) rather than just a tick. */
+    .load-chart-zero-line { stroke: var(--line); stroke-width: 1; }
+    /* Panel/section labels set INTO the chart itself (band names, the two
+       unnamed-zone edge captions, and each line's inline end-of-line name --
+       see renderLoadChartSvg's own comment) -- small, low-contrast type,
+       never competing with the lines or the numbers that matter. */
+    .load-chart-band-label { font-family: var(--sans); font-size: 10px; font-weight: 700;
+      letter-spacing: .03em; fill: var(--ink-soft); }
+    .load-chart-edge-label { font-family: var(--sans); font-size: 9.5px; fill: var(--ink-faint);
+      text-transform: uppercase; letter-spacing: .04em; }
+    .load-chart-inline-label { font-family: var(--sans); font-size: 10px; font-weight: 700; }
+    /* A TSB point outside TSB_AXIS_DOMAIN, clamped to the nearest edge for
+       plotting (plan.js's tsbClamped) -- flagged with a small caret rather
+       than silently drawn as if it were merely at the edge of "normal". */
+    .load-chart-clamp-caret { fill: var(--c-signal); }
+    .load-chart-line { fill: none; }
+    .load-chart-line-ctl { stroke-width: 2.5; } /* the slow, load-bearing trend */
+    .load-chart-line-atl { stroke-width: 1.75; opacity: .9; } /* spiky by nature */
+    .load-chart-line-tsb { stroke-width: 2.5; }
+    /* The one-line "can I read this at a glance" verdict (views.js's
+       renderLoadChartVerdict) -- plain text, not a callout: the single most
+       useful line on the panel, so it reads as a fact stated plainly, not
+       as decorated commentary. */
+    .load-chart-verdict { font-size: 14px; color: var(--ink); margin: 12px 0 0; line-height: 1.5; }
     /* The computed, athlete-specific "what the numbers say" trend
        narrative (views.js's renderCtlAtlTsbNarrative / plan.js's
        describeCtlAtlTsbTrend) -- deliberately styled like this app's
        "coach's voice" callouts (.rationale, same note-bg/note-border/
        note-label variables) since that's what it functionally is: the
-       useful, prose interpretation of the chart above, not a caption. */
+       useful, prose interpretation of the chart above, not a caption. Only
+       the first line renders by default now (see .load-chart-narrative-more
+       below) -- it competed with .load-chart-verdict above for the same
+       "tell me the headline" job once that line existed. */
     .load-chart-narrative { margin-top: 14px; padding: 12px 14px; border-radius: var(--radius-sm);
       background: var(--note-bg); border: 1px solid var(--note-border); }
     .load-chart-narrative h4 { margin: 0 0 6px; font-family: var(--display); font-size: 11px;
       text-transform: uppercase; letter-spacing: .06em; font-weight: 800; color: var(--note-label); }
     .load-chart-narrative p { font-size: 13px; color: var(--ink-soft); line-height: 1.55; margin: 6px 0 0; }
     .load-chart-narrative p:first-of-type { margin-top: 0; }
+    .load-chart-narrative-more { margin-top: 8px; font-size: 12px; padding: 4px 10px; }
     /* The generic methodology paragraph that used to render unconditionally
        here now lives behind this collapsed-by-default disclosure -- still
        one click away (its cycling-convention/race-day-band caveats are

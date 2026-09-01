@@ -1,16 +1,21 @@
-"""e2e coverage for the CTL/ATL/TSB training-load chart (views.js's
-renderLoadChart, fed by plan.js's ctlAtlTsbChartGeometry) plus its
-resting-HR/HRV baseline-deviation cross-check (views.js's
-renderWellnessBaselineDeviation, fed by plan.js's
+"""e2e coverage for the two-panel CTL/ATL/TSB training-load chart (web/
+two-panel-load-chart -- views.js's renderLoadChart, fed by plan.js's
+ctlAtlTsbChartGeometry) plus its resting-HR/HRV baseline-deviation
+cross-check (views.js's renderWellnessBaselineDeviation, fed by plan.js's
 describeWellnessBaselineDeviation) -- surfaces `backend/app/context.py`'s
 `summarize_rollup` "ctl_atl_tsb" and "wellness_baseline_deviation" fields
 directly to the frontend via the new `GET /api/plan/load` (athlete
 self-access) and `GET /api/coach/athletes/{slug}/load` (coach access)
 endpoints, on two surfaces sharing the same render function: the athlete's
-own Dashboard tab (main.js's loadPlanLoad -- Build 1 of the wellness-
-ingestion + training-dashboard plan relocated this chart off the Plan tab
-and into the merged Log+History Dashboard tab) and the coach roster's
+own Dashboard tab (main.js's loadPlanLoad) and the coach roster's
 acting-as-athlete view (main.js's loadCoachLoad).
+
+Two-panel rebuild: CTL and ATL now share one 0-anchored axis in a top
+panel; TSB gets its own fixed-domain panel below, self-labeled reference
+bands, a zero line, a one-line plain-text verdict, window-selector pills,
+and (on the athlete's own Dashboard only) the wellness cross-check moved
+out to the Check-in tab instead of rendering inline here -- see
+test_checkin.py for that half of the resolved-decision coverage.
 
 Same mocked-backend / CORS-preflight conventions as test_plan_session_detail.py
 / test_coach_roster.py: cross-origin GETs carrying an Authorization header,
@@ -130,6 +135,18 @@ def _open_dashboard(page):
     page.wait_for_selector('.hist-section')
 
 
+def _open_checkin(page):
+    """Navigates to the Check-in tab -- opens the Dashboard tab FIRST so
+    `state.planLoad` (main.js's loadPlanLoad) actually has data by the time
+    Check-in renders (web/two-panel-load-chart's resolved decision: the
+    Check-in tab reuses that already-fetched state rather than firing its
+    own GET /api/plan/load -- see views.js's renderCheckinTab doc
+    comment)."""
+    _open_dashboard(page)
+    page.click('[data-a="tab:checkin"]')
+    page.wait_for_selector('[data-form="checkin"][data-field="date"]')
+
+
 @pytest.fixture(params=BROWSERS)
 def page(request, base_url):
     """Signed in as the athlete herself (renee), landing on the Plan tab
@@ -197,7 +214,7 @@ def coach_page(request, base_url):
             browser.close()
 
 
-# --- Athlete's own Dashboard tab (Build 1 relocated the chart here) -----------
+# --- Athlete's own Dashboard tab: two-panel chart -----------------------------
 
 def test_chart_renders_on_the_dashboard_tab_with_real_mocked_data(page):
     _open_dashboard(page)
@@ -212,34 +229,80 @@ def test_chart_renders_on_the_dashboard_tab_with_real_mocked_data(page):
     assert page.locator('.load-chart-line-ctl').count() == 1
     assert page.locator('.load-chart-line-atl').count() == 1
     assert page.locator('.load-chart-line-tsb').count() == 1
-    # Both reference bands (race-ready, productive training), honestly captioned.
+    # Both reference bands (race-ready, productive training), self-labeled
+    # inline (design spec 3.2) and honestly captioned in the methodology.
     assert page.locator('.load-chart-band').count() == 2
     assert page.locator('.load-chart-band-race').count() == 1
     assert page.locator('.load-chart-band-productive').count() == 1
+    assert 'productive' in content.lower()
+    assert 'race-ready' in content.lower()
     assert 'cycling' in content.lower()
     assert 'not a swim-specific or peer-reviewed target' in content.lower()
     # The provisional-time-constant honesty caveat.
     assert 'not yet verified for swimming' in content.lower()
 
 
-def test_chart_uses_an_independent_right_axis_for_atl_readability_fix(page):
-    # Build 1's readability fix: CTL/TSB share the left axis, ATL plots
-    # against its own independent right axis (the chart's math was verified
-    # NOT buggy -- CTL's 42-day-EWMA range is just inherently tiny next to
-    # ATL's 7-day-EWMA range on any real data, which made CTL look flat on
-    # one shared axis). Assert the second axis's tick labels actually render
-    # and are visually distinct (colored to match the ATL line).
+def test_chart_is_two_panels_with_a_shared_x_axis_and_no_dual_axis_leftovers(page):
+    # web/two-panel-load-chart: CTL/ATL now share ONE axis (top panel); the
+    # old dual-axis readability fix (a second, independently-scaled ATL
+    # axis) is retired entirely -- its markup must be gone.
     _open_dashboard(page)
     page.wait_for_selector('.load-chart-svg')
-    secondary_ticks = page.locator('.load-chart-axis-label-secondary')
-    assert secondary_ticks.count() > 0
+    assert page.locator('.load-chart-axis-label-secondary').count() == 0
     content = page.content()
-    assert 'right axis' in content.lower()
-    assert 'left axis' in content.lower()
+    assert 'right axis' not in content.lower()
+    assert 'left axis' not in content.lower()
+    # TSB's own panel gets a zero line and the two unnamed-zone edge labels.
+    assert page.locator('.load-chart-zero-line').count() == 1
+    assert 'transitional' in content.lower()
+    assert 'high risk' in content.lower()
 
 
-def test_wellness_baseline_deviation_renders_with_real_mocked_data(page):
+def test_chart_shows_a_one_line_verdict_and_the_currently_occupied_band_is_emphasized(page):
+    # Design spec 3.6: the single most useful line on the panel, directly
+    # under the chart. REAL_SERIES' last point is TSB 25.0 -- inside the
+    # race-ready band.
     _open_dashboard(page)
+    page.wait_for_selector('.load-chart-verdict')
+    verdict = page.locator('.load-chart-verdict').inner_text()
+    assert 'race-ready' in verdict.lower()
+    assert 'Form' in verdict
+    # The race-ready band (the one the athlete is actually in) is the one
+    # bumped to higher opacity, not the productive band.
+    assert page.locator('.load-chart-band-race.load-chart-band-active').count() == 1
+    assert page.locator('.load-chart-band-productive.load-chart-band-active').count() == 0
+
+
+def test_chart_has_a_three_way_window_selector_defaulting_to_6_weeks(page):
+    _open_dashboard(page)
+    page.wait_for_selector('.load-chart-window-controls')
+    pills = page.locator('.load-chart-window-controls .subtab-btn')
+    assert pills.count() == 3
+    texts = [pills.nth(i).inner_text() for i in range(3)]
+    assert texts == ['6 weeks', '12 weeks', 'Season']
+    assert 'active' in pills.nth(0).get_attribute('class')
+
+
+def test_selecting_a_different_window_switches_the_active_pill_and_re_renders_the_chart(page):
+    _open_dashboard(page)
+    page.wait_for_selector('.load-chart-window-controls')
+    page.click('[data-a="load-chart:window:season"]')
+    page.wait_for_selector('[data-a="load-chart:window:season"].active')
+    assert 'active' not in page.locator('[data-a="load-chart:window:42"]').get_attribute('class')
+    # Chart still renders (didn't break on the window switch).
+    assert page.locator('.load-chart-svg').count() == 1
+
+
+def test_wellness_baseline_deviation_no_longer_renders_inline_on_the_athletes_own_dashboard(page):
+    # Resolved decision (web/two-panel-load-chart): moved to the Check-in
+    # tab instead -- see test_log_checkin.py's own coverage of that half.
+    _open_dashboard(page)
+    page.wait_for_selector('.load-chart-svg')
+    assert page.locator('.wellness-baseline-deviation').count() == 0
+
+
+def test_wellness_baseline_deviation_renders_on_the_checkin_tab_with_real_mocked_data(page):
+    _open_checkin(page)
     page.wait_for_selector('.wellness-baseline-deviation')
     content = page.content()
     assert 'Resting HR' in content
@@ -254,9 +317,9 @@ def test_wellness_baseline_deviation_renders_with_real_mocked_data(page):
     assert 'independent' in content.lower()
 
 
-def test_wellness_baseline_deviation_null_data_shows_honest_not_enough_data_state(null_wellness_page):
+def test_wellness_baseline_deviation_null_data_shows_honest_not_enough_data_state_on_checkin(null_wellness_page):
     page = null_wellness_page
-    _open_dashboard(page)
+    _open_checkin(page)
     page.wait_for_selector('.wellness-baseline-deviation')
     content = page.content()
     # Honest per-field "not enough data" -- never a hidden element, never
@@ -277,25 +340,30 @@ def test_chart_is_not_buried_in_a_collapsed_section(page):
     assert chart.is_visible()
 
 
-def test_ctl_atl_tsb_trend_narrative_renders_prominently_below_the_chart(page):
+def test_ctl_atl_tsb_trend_narrative_is_truncated_to_first_line_with_a_more_toggle(page):
     # views.js's renderCtlAtlTsbNarrative / plan.js's describeCtlAtlTsbTrend
     # -- the computed, athlete-specific "what the numbers say" guidance
     # this feature adds, quoting Andrew's own framing: "this is the useful
-    # coach guidance below the load graph."
+    # coach guidance below the load graph." Design spec 3.6: only the first
+    # line shows by default now that the verdict line carries the headline.
     _open_dashboard(page)
     page.wait_for_selector('.load-chart-narrative')
     narrative = page.locator('.load-chart-narrative')
     assert narrative.is_visible()
     text = narrative.inner_text()
-    # The heading renders visually uppercase (CSS text-transform), which
-    # Playwright's inner_text reflects -- compare case-insensitively.
     assert 'what the numbers say' in text.lower()
     # REAL_SERIES spans only 22 days -- well short of the cold-start
     # threshold -- so the narrative must lead with that honesty caveat
     # rather than presenting an early trend at full confidence.
     assert 'provisional' in text.lower()
-    assert 'CTL (fitness)' in text
-    assert 'TSB (form)' in text
+    assert 'CTL (fitness)' not in text  # behind "more" still
+
+    more_button = page.locator('.load-chart-narrative-more')
+    more_button.click()
+    page.wait_for_selector('.load-chart-narrative-more', state='detached')
+    expanded_text = narrative.inner_text()
+    assert 'CTL (fitness)' in expanded_text
+    assert 'TSB (form)' in expanded_text
 
 
 def test_methodology_caption_moved_behind_a_collapsed_by_default_disclosure(page):
@@ -383,3 +451,15 @@ def test_coach_roster_chart_does_not_overflow_horizontally(coach_page):
     overflow = page.evaluate(
         'document.documentElement.scrollWidth - document.documentElement.clientWidth')
     assert overflow <= 1, f'horizontal overflow of {overflow}px'
+
+
+def test_window_control_pills_fit_on_one_line_at_mobile_widths(page):
+    # Task requirement: the three pills fit without wrapping awkwardly at
+    # both mandated mobile viewports (this fixture's own 390x844/412x915,
+    # see conftest.py's BROWSERS). All three sharing the same bounding-box
+    # top y is proof they're on one row, not wrapped onto two.
+    _open_dashboard(page)
+    page.wait_for_selector('.load-chart-window-controls')
+    pills = page.locator('.load-chart-window-controls .subtab-btn')
+    tops = [pills.nth(i).bounding_box()['y'] for i in range(3)]
+    assert max(tops) - min(tops) < 2, f'window pills wrapped onto multiple lines: {tops}'

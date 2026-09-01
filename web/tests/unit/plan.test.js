@@ -11,6 +11,8 @@ import {
   describeWellnessBaselineDeviation, WELLNESS_DEVIATION_CONCERNING_PCT,
   describeCtlAtlTsbTrend, CTL_COLD_START_DAYS, CTL_WARMED_UP_DAYS,
   CTL_ATL_TREND_WINDOW_DAYS, CTL_TREND_FLAT_THRESHOLD, LOAD_CHART_WINDOW_DAYS,
+  LOAD_CHART_WINDOW_OPTIONS, TSB_AXIS_DOMAIN, TSB_PANEL_RATIO, classifyTsbBand,
+  formatMonthLabel,
 } from '../../src/plan.js';
 
 describe('isoWeekMonday', () => {
@@ -1016,8 +1018,59 @@ describe('PRODUCTIVE_TRAINING_TSB_BAND', () => {
 });
 
 describe('LOAD_CHART_WINDOW_DAYS', () => {
-  it('is 28 days', () => {
-    expect(LOAD_CHART_WINDOW_DAYS).toBe(28);
+  it('defaults to 42 days (6 weeks)', () => {
+    expect(LOAD_CHART_WINDOW_DAYS).toBe(42);
+  });
+});
+
+describe('LOAD_CHART_WINDOW_OPTIONS', () => {
+  it('offers 6 weeks (42d), 12 weeks (84d), and a full-series Season option', () => {
+    expect(LOAD_CHART_WINDOW_OPTIONS).toEqual([
+      { days: 42, label: '6 weeks' },
+      { days: 84, label: '12 weeks' },
+      { days: null, label: 'Season' },
+    ]);
+  });
+
+  it('the default window is one of the offered options', () => {
+    expect(LOAD_CHART_WINDOW_OPTIONS.some((o) => o.days === LOAD_CHART_WINDOW_DAYS)).toBe(true);
+  });
+});
+
+describe('TSB_AXIS_DOMAIN', () => {
+  it('is a fixed range wide enough to hold both named bands with margin', () => {
+    expect(TSB_AXIS_DOMAIN.min).toBeLessThan(PRODUCTIVE_TRAINING_TSB_BAND.low);
+    expect(TSB_AXIS_DOMAIN.max).toBeGreaterThan(RACE_DAY_TSB_BAND.high);
+  });
+});
+
+describe('classifyTsbBand', () => {
+  it('classifies below the productive band as high-risk', () => {
+    expect(classifyTsbBand(PRODUCTIVE_TRAINING_TSB_BAND.low - 1)).toBe('high-risk');
+  });
+
+  it('classifies inside the productive band as productive', () => {
+    expect(classifyTsbBand(PRODUCTIVE_TRAINING_TSB_BAND.low)).toBe('productive');
+    expect(classifyTsbBand(PRODUCTIVE_TRAINING_TSB_BAND.high)).toBe('productive');
+  });
+
+  it('classifies between the two named bands as grey-zone', () => {
+    expect(classifyTsbBand(PRODUCTIVE_TRAINING_TSB_BAND.high + 1)).toBe('grey-zone');
+  });
+
+  it('classifies inside the race-day band as race-ready', () => {
+    expect(classifyTsbBand(RACE_DAY_TSB_BAND.low)).toBe('race-ready');
+    expect(classifyTsbBand(RACE_DAY_TSB_BAND.high)).toBe('race-ready');
+  });
+
+  it('classifies above the race-day band as transition', () => {
+    expect(classifyTsbBand(RACE_DAY_TSB_BAND.high + 1)).toBe('transition');
+  });
+});
+
+describe('formatMonthLabel', () => {
+  it('formats a date as a short month name only', () => {
+    expect(formatMonthLabel(new Date(2026, 6, 15))).toBe('Jul');
   });
 });
 
@@ -1048,17 +1101,6 @@ describe('ctlAtlTsbChartGeometry', () => {
     expect(geo.ctlPoints[2].x).toBeCloseTo(geo.plotRight, 5);
   });
 
-  it('a higher value plots higher on screen (smaller SVG y)', () => {
-    const series = [
-      ['2026-08-01', 10, 5, 5],
-      ['2026-08-02', 20, 5, 15],
-    ];
-    const geo = ctlAtlTsbChartGeometry(series);
-    // CTL rises 10 -> 20, so its second point's pixel y must be smaller
-    // (higher up the SVG) than its first.
-    expect(geo.ctlPoints[1].y).toBeLessThan(geo.ctlPoints[0].y);
-  });
-
   it('single-point series is centered horizontally and does not divide by zero', () => {
     const geo = ctlAtlTsbChartGeometry([['2026-08-01', 10, 5, 5]]);
     expect(geo.isEmpty).toBe(false);
@@ -1067,30 +1109,22 @@ describe('ctlAtlTsbChartGeometry', () => {
     expect(geo.ctlPoints[0].x).toBeCloseTo((geo.plotLeft + geo.plotRight) / 2, 5);
   });
 
-  it('the race-day reference band is always inside the plotted y-range, even when actual TSB never approaches it', () => {
-    const series = [
-      ['2026-08-01', 30, 30, 0],
-      ['2026-08-02', 30, 30, 0],
-    ];
+  it('right padding is small -- no secondary axis lives past plotRight any more', () => {
+    // Was 34px (matching the left axis) to make room for the old
+    // dual-axis design's secondary tick labels on the right edge; nothing
+    // draws past plotRight in the two-panel design, so this should be back
+    // down near the pre-dual-axis ~12px, not still budgeting for a second
+    // axis that no longer exists.
+    const series = [['2026-08-01', 10, 5, 5], ['2026-08-02', 11, 6, 5]];
     const geo = ctlAtlTsbChartGeometry(series);
-    expect(geo.bandTop).toBeGreaterThanOrEqual(geo.plotTop);
-    expect(geo.bandBottom).toBeLessThanOrEqual(geo.plotBottom);
-    // Band top (higher value, 25) plots above band bottom (lower value, 5).
-    expect(geo.bandTop).toBeLessThan(geo.bandBottom);
+    expect(geo.width - geo.plotRight).toBeLessThanOrEqual(16);
   });
 
-  it('the productive-training reference band is also always inside the plotted y-range, and sits below the race-day band', () => {
-    const series = [
-      ['2026-08-01', 30, 30, 0],
-      ['2026-08-02', 30, 30, 0],
-    ];
-    const geo = ctlAtlTsbChartGeometry(series);
-    expect(geo.productiveBandTop).toBeGreaterThanOrEqual(geo.plotTop);
-    expect(geo.productiveBandBottom).toBeLessThanOrEqual(geo.plotBottom);
-    expect(geo.productiveBandTop).toBeLessThan(geo.productiveBandBottom);
-    // Productive band (-30 to -10) is a lower TSB range than the race-day
-    // band (+5 to +25), so it must plot BELOW it (larger pixel y).
-    expect(geo.productiveBandTop).toBeGreaterThan(geo.bandBottom);
+  it('respects custom width/height/padding options', () => {
+    const series = [['2026-08-01', 10, 5, 5], ['2026-08-02', 11, 6, 5]];
+    const geo = ctlAtlTsbChartGeometry(series, { width: 300, height: 150 });
+    expect(geo.width).toBe(300);
+    expect(geo.height).toBe(150);
   });
 
   it('x ticks always include the first and last date', () => {
@@ -1102,85 +1136,203 @@ describe('ctlAtlTsbChartGeometry', () => {
     expect(geo.xTicks.length).toBeLessThanOrEqual(5);
   });
 
-  it('y ticks span from below the data minimum to above the data maximum', () => {
+  it('defaults to date-mode x ticks, one per calendar-month boundary in month mode', () => {
     const series = [
-      ['2026-08-01', 10, 5, 5],
-      ['2026-08-02', 20, 8, 12],
+      ['2026-06-28', 10, 5, 0], ['2026-06-29', 10, 5, 0], ['2026-06-30', 10, 5, 0],
+      ['2026-07-01', 10, 5, 0], ['2026-07-15', 10, 5, 0], ['2026-08-01', 10, 5, 0],
     ];
-    const geo = ctlAtlTsbChartGeometry(series);
-    const values = geo.yTicks.map((t) => t.value);
-    expect(Math.min(...values)).toBeLessThan(0); // padding pushes below the ATL min of 5 and below 0
-    expect(Math.max(...values)).toBeGreaterThan(20);
+    const dateGeo = ctlAtlTsbChartGeometry(series);
+    expect(dateGeo.xTickMode).toBe('date');
+
+    const monthGeo = ctlAtlTsbChartGeometry(series, { xTickMode: 'month' });
+    expect(monthGeo.xTickMode).toBe('month');
+    // One tick for the series' first index, then one per new month entered:
+    // Jun 28 (start), Jul 1 (month change), Aug 1 (month change) => 3 ticks.
+    expect(monthGeo.xTicks.map((t) => t.label)).toEqual(['2026-06-28', '2026-07-01', '2026-08-01']);
   });
 
-  it('respects custom width/height/padding options', () => {
-    const series = [['2026-08-01', 10, 5, 5], ['2026-08-02', 11, 6, 5]];
-    const geo = ctlAtlTsbChartGeometry(series, { width: 300, height: 150 });
-    expect(geo.width).toBe(300);
-    expect(geo.height).toBe(150);
+  it('caps month-mode x ticks at 5 even when the series spans many months', () => {
+    // A year-plus of daily entries crossing 14 calendar-month boundaries --
+    // unbounded, "Season" mode would crowd 14+ month labels into the same
+    // axis width date-mode budgets 5 dates for.
+    const series = [];
+    let d = new Date('2025-06-01T00:00:00Z');
+    const end = new Date('2026-08-01T00:00:00Z');
+    while (d < end) {
+      series.push([d.toISOString().slice(0, 10), 10, 5, 0]);
+      d.setUTCDate(d.getUTCDate() + 1);
+    }
+    const geo = ctlAtlTsbChartGeometry(series, { xTickMode: 'month' });
+    expect(geo.xTicks.length).toBeLessThanOrEqual(5);
+    // Still anchors on the series' real first and last month-boundary tick.
+    expect(geo.xTicks[0].label).toBe(series[0][0]);
   });
 
-  // Readability fix (Build 1, web/training-dashboard-merge): CTL is a 42-day
-  // EWMA with an inherently tiny natural range next to ATL's 7-day-EWMA
-  // range on any real athlete's data -- sharing one y-axis made CTL look
-  // flat/negligible next to ATL's swings (verified NOT a coding bug -- see
-  // the plan doc's Context section). Fix: ATL plots against its own
-  // secondary y-axis, independent of the CTL/TSB/band primary axis.
-  describe('dual y-axis: ATL scales independently of CTL/TSB', () => {
-    it('gives ATL real vertical spread even when its range is tiny next to a huge CTL swing', () => {
-      // CTL swings 10 -> 100 (huge range); ATL barely moves 40 -> 42 (tiny
-      // range in absolute terms, but a real, meaningful swing for a 7-day
-      // EWMA). On a single shared axis, the ATL line would compress to
-      // near-flat; on independent axes, it should still use most of the
-      // available plot height.
-      const series = [
-        ['2026-08-01', 10, 40, 0],
-        ['2026-08-02', 100, 42, 0],
-      ];
-      const geo = ctlAtlTsbChartGeometry(series);
-      const plotH = geo.plotBottom - geo.plotTop;
-      const atlSpread = Math.abs(geo.atlPoints[1].y - geo.atlPoints[0].y);
-      // A shared axis would compress this to a sliver of plotH (roughly
-      // 2/(100-10) of it); independent scaling should put it at a large
-      // fraction of the full plot height.
-      expect(atlSpread).toBeGreaterThan(plotH * 0.3);
-    });
-
-    it('does not let ATL values distort the primary (CTL/TSB) axis domain', () => {
-      // A wild ATL spike must not blow out the primary axis range that
-      // CTL/TSB/the race-day band are plotted against.
+  describe('top panel (CTL/ATL, "fitness & fatigue") -- one shared, 0-anchored axis', () => {
+    it('a higher value plots higher on screen (smaller SVG y)', () => {
       const series = [
         ['2026-08-01', 10, 5, 5],
-        ['2026-08-02', 11, 500, 6],
+        ['2026-08-02', 20, 5, 15],
       ];
       const geo = ctlAtlTsbChartGeometry(series);
-      const primaryValues = geo.yTicks.map((t) => t.value);
-      expect(Math.max(...primaryValues)).toBeLessThan(100);
+      expect(geo.ctlPoints[1].y).toBeLessThan(geo.ctlPoints[0].y);
     });
 
-    it('exposes a secondary tick set scaled to ATL\'s own range', () => {
-      const series = [
-        ['2026-08-01', 10, 40, 0],
-        ['2026-08-02', 100, 42, 0],
-      ];
-      const geo = ctlAtlTsbChartGeometry(series);
-      expect(Array.isArray(geo.yTicksSecondary)).toBe(true);
-      expect(geo.yTicksSecondary.length).toBeGreaterThan(1);
-      const secondaryValues = geo.yTicksSecondary.map((t) => t.value);
-      // The secondary axis should bracket ATL's own 40-42 range, not the
-      // primary CTL/TSB/band range.
-      expect(Math.min(...secondaryValues)).toBeLessThanOrEqual(40);
-      expect(Math.max(...secondaryValues)).toBeGreaterThanOrEqual(42);
-      expect(Math.max(...secondaryValues)).toBeLessThan(100);
-    });
-
-    it('a higher ATL value still plots higher on screen (smaller SVG y) on its own axis', () => {
+    it('a higher ATL value also plots higher on screen, on the SAME axis as CTL', () => {
       const series = [
         ['2026-08-01', 50, 5, 5],
         ['2026-08-02', 50, 15, 5],
       ];
       const geo = ctlAtlTsbChartGeometry(series);
       expect(geo.atlPoints[1].y).toBeLessThan(geo.atlPoints[0].y);
+    });
+
+    it('CTL and ATL points fall within the loadPlot pixel span, not the tsbPlot span', () => {
+      const series = [
+        ['2026-08-01', 10, 40, -20],
+        ['2026-08-02', 100, 42, -20],
+      ];
+      const geo = ctlAtlTsbChartGeometry(series);
+      for (const p of [...geo.ctlPoints, ...geo.atlPoints]) {
+        expect(p.y).toBeGreaterThanOrEqual(geo.loadPlot.top - 0.01);
+        expect(p.y).toBeLessThanOrEqual(geo.loadPlot.bottom + 0.01);
+      }
+    });
+
+    it('CTL and ATL share the exact same axis (a huge CTL value does not compress ATL toward a flat line)', () => {
+      // Before the two-panel split, this same scenario compressed ATL's
+      // 40->42 movement to a sliver on a shared-with-CTL axis. Sharing a
+      // 0-anchored axis is now the deliberate point (see plan.js's module
+      // comment: the CTL/ATL gap IS the fatigue story) -- so this no longer
+      // asserts ATL gets independent spread; it asserts CTL and ATL use the
+      // literal same linear mapping (same two points at the same raw value
+      // land at the same pixel y).
+      const series = [
+        ['2026-08-01', 10, 10, 0],
+        ['2026-08-02', 100, 100, 0],
+      ];
+      const geo = ctlAtlTsbChartGeometry(series);
+      expect(geo.ctlPoints[0].y).toBeCloseTo(geo.atlPoints[0].y, 5);
+      expect(geo.ctlPoints[1].y).toBeCloseTo(geo.atlPoints[1].y, 5);
+    });
+
+    it('the shared axis is anchored at 0 even when all real CTL/ATL values are well above it', () => {
+      const series = [
+        ['2026-08-01', 40, 35, 0],
+        ['2026-08-02', 42, 33, 0],
+      ];
+      const geo = ctlAtlTsbChartGeometry(series);
+      const values = geo.yTicks.map((t) => t.value);
+      expect(Math.min(...values)).toBeLessThanOrEqual(0);
+    });
+
+    it('y ticks span from below the data minimum to above the data maximum', () => {
+      const series = [
+        ['2026-08-01', 10, 5, 5],
+        ['2026-08-02', 20, 8, 12],
+      ];
+      const geo = ctlAtlTsbChartGeometry(series);
+      const values = geo.yTicks.map((t) => t.value);
+      expect(Math.min(...values)).toBeLessThanOrEqual(0);
+      expect(Math.max(...values)).toBeGreaterThan(20);
+    });
+  });
+
+  describe('bottom panel (TSB, "form") -- fixed TSB_AXIS_DOMAIN, clamped', () => {
+    it('the race-day and productive-training bands are always inside the tsbPlot pixel span', () => {
+      const series = [
+        ['2026-08-01', 30, 30, 0],
+        ['2026-08-02', 30, 30, 0],
+      ];
+      const geo = ctlAtlTsbChartGeometry(series);
+      expect(geo.raceBand.top).toBeGreaterThanOrEqual(geo.tsbPlot.top);
+      expect(geo.raceBand.bottom).toBeLessThanOrEqual(geo.tsbPlot.bottom);
+      expect(geo.raceBand.top).toBeLessThan(geo.raceBand.bottom);
+      expect(geo.productiveBand.top).toBeGreaterThanOrEqual(geo.tsbPlot.top);
+      expect(geo.productiveBand.bottom).toBeLessThanOrEqual(geo.tsbPlot.bottom);
+      expect(geo.productiveBand.top).toBeLessThan(geo.productiveBand.bottom);
+      // Productive band (-30..-10) is a lower TSB range than the race-day
+      // band (+5..+25), so it must plot BELOW it (larger pixel y).
+      expect(geo.productiveBand.top).toBeGreaterThan(geo.raceBand.bottom);
+    });
+
+    it('the TSB domain (and therefore the bands) never moves with the data -- same pixel position regardless of series values', () => {
+      const flat = ctlAtlTsbChartGeometry([['2026-08-01', 30, 30, 0], ['2026-08-02', 30, 30, 0]]);
+      const extreme = ctlAtlTsbChartGeometry([['2026-08-01', 30, 30, -35], ['2026-08-02', 30, 30, 30]]);
+      expect(extreme.raceBand).toEqual(flat.raceBand);
+      expect(extreme.productiveBand).toEqual(flat.productiveBand);
+    });
+
+    it('a TSB value inside the fixed domain plots at its true value, unclamped', () => {
+      const series = [['2026-08-01', 40, 40, -10], ['2026-08-02', 40, 40, 10]];
+      const geo = ctlAtlTsbChartGeometry(series);
+      expect(geo.tsbClamped).toEqual([]);
+    });
+
+    it('a TSB value outside the fixed domain is clamped to the nearest edge and flagged in tsbClamped', () => {
+      const series = [
+        ['2026-08-01', 40, 40, -60], // below TSB_AXIS_DOMAIN.min (-40)
+        ['2026-08-02', 40, 40, 0],
+        ['2026-08-03', 40, 40, 60], // above TSB_AXIS_DOMAIN.max (35)
+      ];
+      const geo = ctlAtlTsbChartGeometry(series);
+      expect(geo.tsbClamped).toEqual([0, 2]);
+      // Clamped points land exactly on the tsbPlot edges.
+      expect(geo.tsbPoints[0].y).toBeCloseTo(geo.tsbPlot.bottom, 1);
+      expect(geo.tsbPoints[2].y).toBeCloseTo(geo.tsbPlot.top, 1);
+    });
+
+    it('a higher TSB value plots higher on screen (smaller SVG y)', () => {
+      const series = [['2026-08-01', 30, 30, -10], ['2026-08-02', 30, 30, 10]];
+      const geo = ctlAtlTsbChartGeometry(series);
+      expect(geo.tsbPoints[1].y).toBeLessThan(geo.tsbPoints[0].y);
+    });
+
+    it('exposes a zero line inside the tsbPlot span', () => {
+      const geo = ctlAtlTsbChartGeometry([['2026-08-01', 30, 30, 0], ['2026-08-02', 30, 30, 5]]);
+      expect(geo.tsbZeroY).toBeGreaterThanOrEqual(geo.tsbPlot.top);
+      expect(geo.tsbZeroY).toBeLessThanOrEqual(geo.tsbPlot.bottom);
+    });
+
+    it('exposes the latest (last-point) TSB value, pixel position, and band classification', () => {
+      const series = [
+        ['2026-08-01', 40, 70, -40],
+        ['2026-08-02', 42, 59, -17], // inside the productive band
+      ];
+      const geo = ctlAtlTsbChartGeometry(series);
+      expect(geo.latestTsb.value).toBe(-17);
+      expect(geo.latestTsb.band).toBe('productive');
+      expect(geo.latestTsb.x).toBeCloseTo(geo.plotRight, 5);
+      expect(geo.latestTsb.y).toBeGreaterThanOrEqual(geo.tsbPlot.top);
+      expect(geo.latestTsb.y).toBeLessThanOrEqual(geo.tsbPlot.bottom);
+    });
+  });
+
+  describe('two-panel layout', () => {
+    it('the load (top) panel sits entirely above the TSB (bottom) panel, with a gap between them', () => {
+      const geo = ctlAtlTsbChartGeometry([['2026-08-01', 30, 30, 0], ['2026-08-02', 30, 30, 0]]);
+      expect(geo.loadPlot.top).toBeLessThan(geo.loadPlot.bottom);
+      expect(geo.tsbPlot.top).toBeLessThan(geo.tsbPlot.bottom);
+      expect(geo.loadPlot.bottom).toBeLessThan(geo.tsbPlot.top);
+    });
+
+    it('the TSB panel gets roughly TSB_PANEL_RATIO of the combined plot height', () => {
+      const geo = ctlAtlTsbChartGeometry([['2026-08-01', 30, 30, 0], ['2026-08-02', 30, 30, 0]]);
+      const loadH = geo.loadPlot.bottom - geo.loadPlot.top;
+      const tsbH = geo.tsbPlot.bottom - geo.tsbPlot.top;
+      const ratio = tsbH / (loadH + tsbH);
+      expect(ratio).toBeCloseTo(TSB_PANEL_RATIO, 1);
+    });
+
+    it('both panels share the same x extents (plotLeft/plotRight)', () => {
+      const geo = ctlAtlTsbChartGeometry([['2026-08-01', 30, 30, 0], ['2026-08-02', 30, 30, 5]]);
+      // Every point (whichever panel it's in) uses the same xFor mapping --
+      // the first/last point's x always lands on plotLeft/plotRight for
+      // every one of the three series.
+      expect(geo.ctlPoints[0].x).toBeCloseTo(geo.plotLeft, 5);
+      expect(geo.tsbPoints[0].x).toBeCloseTo(geo.plotLeft, 5);
+      expect(geo.ctlPoints.at(-1).x).toBeCloseTo(geo.plotRight, 5);
+      expect(geo.tsbPoints.at(-1).x).toBeCloseTo(geo.plotRight, 5);
     });
   });
 });

@@ -2162,41 +2162,78 @@ describe('renderLoadChart', () => {
     expect(html).not.toContain('<svg');
   });
 
-  it('renders the chart, its three lines, and clear labels for a real series', () => {
+  it('renders the two-panel chart, its three lines, and clear inline labels for a real series', () => {
     const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: readySeries }, error: null });
     expect(html).toContain('<svg');
     expect(html).toContain('load-chart-line-ctl');
     expect(html).toContain('load-chart-line-atl');
     expect(html).toContain('load-chart-line-tsb');
-    expect(html).toContain('CTL (fitness)');
-    expect(html).toContain('ATL (fatigue)');
-    expect(html).toContain('TSB (form)');
+    // Legend moved inline (design spec 3.6) -- CTL/ATL/TSB are named at
+    // each line's own end point now, not in a separate legend row.
+    expect(html).toContain('>CTL<');
+    expect(html).toContain('>ATL<');
+    expect(html).toMatch(/>TSB [+-]?\d/);
     // x-axis date labels are present in some human-readable form.
     expect(html).toMatch(/Jul \d/);
   });
 
-  it('limits the chart itself to the most recent LOAD_CHART_WINDOW_DAYS, for mobile readability', () => {
-    // 40 daily points, 2026-07-01 .. 2026-08-09 -- well past the 28-day
-    // window. The chart's x-axis must not reach back to the series' real
-    // first date; it should start no earlier than day 13 (40 - 28 + 1).
-    const longSeries = Array.from({ length: 40 }, (_, i) => {
-      const d = new Date(Date.UTC(2026, 6, 1));
+  it('defaults the chart window to LOAD_CHART_WINDOW_DAYS (6 weeks), for mobile readability', () => {
+    // 60 daily points, well past the 42-day default window. The chart's
+    // x-axis must not reach back to the series' real first date.
+    const longSeries = Array.from({ length: 60 }, (_, i) => {
+      const d = new Date(Date.UTC(2026, 5, 1));
       d.setUTCDate(d.getUTCDate() + i);
       const iso = d.toISOString().slice(0, 10);
       return [iso, 10 + i, 5 + i * 0.1, 5];
     });
     const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: longSeries }, error: null });
-    // The series' real first date (Jul 1) falls outside the 28-day window
-    // and must not appear as an x-axis tick label.
-    expect(html).not.toMatch(/Jul 1\b/);
-    // The series' real last date (Aug 9) is always in-window.
-    expect(html).toMatch(/Aug 9\b/);
+    // The series' real first date (Jun 1) falls outside the default 42-day
+    // window and must not appear as an x-axis tick label.
+    expect(html).not.toMatch(/Jun 1\b/);
+    // The series' real last date is always in-window.
+    expect(html).toMatch(/Jul 30\b/);
   });
 
-  it('renders the race-day reference band with an honest, non-authoritative caption', () => {
+  it('respects an explicit windowDays option, including null ("Season" -- the full series)', () => {
+    const longSeries = Array.from({ length: 60 }, (_, i) => {
+      const d = new Date(Date.UTC(2026, 5, 1));
+      d.setUTCDate(d.getUTCDate() + i);
+      return [d.toISOString().slice(0, 10), 10 + i, 5, 5];
+    });
+    const windowed = renderLoadChart(
+      { status: 'ready', data: { ctl_atl_tsb: longSeries }, error: null }, { windowDays: 84 },
+    );
+    // 60 days fits entirely inside an 84-day window -- the real first date
+    // shows up.
+    expect(windowed).toMatch(/Jun 1\b/);
+
+    const season = renderLoadChart(
+      { status: 'ready', data: { ctl_atl_tsb: longSeries }, error: null }, { windowDays: null },
+    );
+    // "Season" formats x-ticks as month names, not day-level dates.
+    expect(season).toMatch(/>Jun</);
+    expect(season).not.toMatch(/Jun \d/);
+  });
+
+  it('marks the currently-selected window pill active', () => {
+    const html = renderLoadChart(
+      { status: 'ready', data: { ctl_atl_tsb: readySeries }, error: null }, { windowDays: 84 },
+    );
+    expect(html).toContain('data-a="load-chart:window:84"');
+    // The active pill's own button tag carries the active class + aria-current.
+    const activeButton = html.match(/<button[^>]*data-a="load-chart:window:84"[^>]*>/)[0];
+    expect(activeButton).toContain('active');
+    expect(activeButton).toContain('aria-current="page"');
+    const inactiveButton = html.match(/<button[^>]*data-a="load-chart:window:42"[^>]*>/)[0];
+    expect(inactiveButton).not.toContain('active');
+  });
+
+  it('renders the race-day reference band, self-labeled, with an honest, non-authoritative caption', () => {
     const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: readySeries }, error: null });
-    expect(html).toContain('load-chart-band');
-    expect(html).toContain('Race-day TSB reference band');
+    expect(html).toContain('load-chart-band-race');
+    // The band names itself now (design spec 3.2), not a separate legend
+    // line.
+    expect(html).toContain('>race-ready<');
     // Must frame the band as a cycling-coaching convention, not a
     // swim-specific or peer-reviewed target -- the honesty requirement
     // from CLAUDE.md's evidence-discipline standard, applied to UI copy.
@@ -2204,11 +2241,117 @@ describe('renderLoadChart', () => {
     expect(html.toLowerCase()).toContain('not a swim-specific or peer-reviewed target');
   });
 
-  it('also renders the productive-training reference band, distinct from the race-day one', () => {
+  it('also renders the productive-training reference band, self-labeled and distinct from the race-day one', () => {
     const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: readySeries }, error: null });
     expect(html).toContain('load-chart-band-productive');
     expect(html).toContain('load-chart-band-race');
-    expect(html).toContain('Productive-training TSB reference band');
+    expect(html).toContain('>productive<');
+  });
+
+  it('bumps the currently-occupied band to load-chart-band-active, and only that one', () => {
+    // readySeries' last point has TSB=7.0 -- inside the race-ready band
+    // (+5..+25), not the productive band.
+    const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: readySeries }, error: null });
+    expect(html).toMatch(/load-chart-band-race load-chart-band-active|load-chart-band load-chart-band-race load-chart-band-active/);
+    expect(html).not.toMatch(/load-chart-band-productive load-chart-band-active/);
+  });
+
+  it('renders a zero line and the two unnamed-zone edge labels', () => {
+    const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: readySeries }, error: null });
+    expect(html).toContain('load-chart-zero-line');
+    expect(html).toContain('transitional');
+    expect(html).toContain('high risk');
+    // The grey zone between the two named bands is deliberately unlabeled.
+    expect(html.toLowerCase()).not.toContain('grey zone');
+  });
+
+  it('flags an out-of-range TSB point with a clamp caret rather than silently drawing it at the edge', () => {
+    const extremeSeries = [
+      ['2026-07-01', 30, 30, -60], // below TSB_AXIS_DOMAIN.min
+      ['2026-07-02', 30, 30, 0],
+    ];
+    const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: extremeSeries }, error: null });
+    expect(html).toContain('load-chart-clamp-caret');
+  });
+
+  it('draws a caret (not a circle) for the latest point when it is itself clamped', () => {
+    // Regression: the latest-point marker used to always draw a plain
+    // filled circle, painted on top of (and mostly hiding) the identical
+    // clamp caret drawn underneath it whenever the MOST RECENT point was
+    // itself out of TSB_AXIS_DOMAIN's range -- exactly the one point where
+    // an athlete most needs to see the "off the plot" flag.
+    const extremeSeries = [
+      ['2026-07-01', 30, 30, 0],
+      ['2026-07-02', 30, 30, -60], // below TSB_AXIS_DOMAIN.min, and the LAST point
+    ];
+    const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: extremeSeries }, error: null });
+    expect(html).toContain('load-chart-clamp-caret-latest');
+    // Exactly one caret polygon total (the latest point's own combined
+    // marker) -- no separate plain circle marker duplicating/hiding it.
+    expect((html.match(/<polygon class="load-chart-clamp-caret/g) || []).length).toBe(1);
+    expect(html).not.toMatch(/<circle[^>]*r="3\.5"/);
+  });
+
+  it('still draws the plain circle marker when the latest point is NOT clamped', () => {
+    const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: readySeries }, error: null });
+    expect(html).toMatch(/<circle[^>]*r="3\.5"/);
+    expect(html).not.toContain('load-chart-clamp-caret-latest');
+  });
+
+  it('separates the CTL/ATL inline end-labels vertically when the two lines are numerically close (TSB near 0)', () => {
+    // CTL and ATL both ~30 on the last day (TSB ~0) -- their pixel
+    // y-positions on the shared 0-anchored axis land close together, so
+    // the two end-labels must not use the same small fixed offset (they'd
+    // overlap right when the lines themselves are hardest to tell apart).
+    const closeSeries = [
+      ['2026-07-01', 25, 20, 5],
+      ['2026-07-02', 30, 30, 0],
+    ];
+    const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: closeSeries }, error: null });
+    const ctlY = Number(html.match(/y="(-?[\d.]+)"[^>]*fill:var\(--accent\)">CTL</)?.[1]);
+    const atlY = Number(html.match(/y="(-?[\d.]+)"[^>]*fill:var\(--c-strength\)">ATL</)?.[1]);
+    expect(Number.isFinite(ctlY)).toBe(true);
+    expect(Number.isFinite(atlY)).toBe(true);
+    expect(Math.abs(ctlY - atlY)).toBeGreaterThanOrEqual(14);
+  });
+
+  it('renders a one-line plain-text verdict below the chart, before the narrative', () => {
+    const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: readySeries }, error: null });
+    expect(html).toContain('load-chart-verdict');
+    // readySeries' last point: TSB 7.0, inside the race-ready band.
+    expect(html).toMatch(/Form 7\.0.*race-ready band/);
+    const verdictIndex = html.indexOf('load-chart-verdict');
+    const narrativeIndex = html.indexOf('load-chart-narrative');
+    expect(verdictIndex).toBeLessThan(narrativeIndex);
+  });
+
+  it('truncates the narrative to its first line by default, with a "more" toggle', () => {
+    const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: readySeries }, error: null });
+    expect(html).toContain('load-chart-narrative-more');
+    expect((html.match(/<p>/g) || []).length).toBeGreaterThan(0);
+    // Only the cold-start warmup line is visible -- the CTL-trend/TSB lines
+    // that would otherwise also render are hidden behind "more".
+    expect(html).not.toContain('TSB (form) is currently');
+  });
+
+  it('shows the full narrative with no "more" toggle when narrativeExpanded is true', () => {
+    const html = renderLoadChart(
+      { status: 'ready', data: { ctl_atl_tsb: readySeries }, error: null }, { narrativeExpanded: true },
+    );
+    expect(html).not.toContain('load-chart-narrative-more');
+    expect(html).toContain('TSB (form) is currently');
+  });
+
+  it('renders the wellness cross-check inline by default (showWellnessInline defaults true)', () => {
+    const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: readySeries }, error: null });
+    expect(html).toContain('wellness-baseline-deviation');
+  });
+
+  it('omits the wellness cross-check entirely when showWellnessInline is false', () => {
+    const html = renderLoadChart(
+      { status: 'ready', data: { ctl_atl_tsb: readySeries }, error: null }, { showWellnessInline: false },
+    );
+    expect(html).not.toContain('wellness-baseline-deviation');
   });
 
   it('acknowledges the CTL/ATL time constants are provisional cycling-borrowed values', () => {
