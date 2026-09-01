@@ -758,6 +758,30 @@ raw research input, not itself citable).
   Research*, 23(1):33-38. 12 well-trained swimmers, 20 training sessions
   each: session-RPE tracked heart-rate-based training-impulse and distance
   criterion measures well; athlete/coach sRPE agreement was also checked.
+- **✓ Arney B.E., Glover R., Fusco A., Cortis C., de Koning J.J.,
+  van Erp T., Jaime S., Mikat R.P., Porcari J.P., Foster C. (2019)** —
+  "Comparison of Rating of Perceived Exertion Scales During Incremental and
+  Interval Exercise" — *Kinesiology*, 51(2):150-157. Full primary text
+  fetched and read directly this session (not just a search snippet). 14
+  well-trained non-athletes, cycle-ergometer incremental tests plus
+  easy/moderate/hard 30-min interval sessions: BORG-CR10 correlated
+  "very largely" with %heart-rate-reserve during incremental exercise
+  (r=.87, R²=.75, SEE=14.9%) and interval exercise (r=.84, R²=.70,
+  SEE=11.6%). Their Table 2 gives real descriptive (CR-10, %HRR) pairs
+  across the three interval intensities: (3.1, 63.8%), (6.5, 90.0%), (8.9,
+  97.4%). The paper does **not** publish a full-range CR-10-to-%HRR
+  regression equation with coefficients (its own quadratic regression
+  equations interconvert BORG-RPE 6-20 and BORG-CR10 against each other,
+  not either scale against %HRR) — a least-squares line fit to Table 2's
+  own three points extrapolates to a physiologically nonsensical ~47% %HRR
+  at CR-10=0, confirming the three points don't safely extrapolate to the
+  low end of the scale. `[ADAPTED: general-endurance]` (cycle-ergometer
+  subjects, not swim-specific). **Confidence: low-medium** — corroborates
+  that CR-10 and %HRR are strongly, monotonically related, without pinning
+  down a precise universal conversion. Grounds `engine/swim_coach/load.py`'s
+  `_srpe_via_hrr_normalization` (see `15-tiered-session-load.md`'s Tier 1
+  section) — the honest evidentiary basis for estimating %HRR from RPE
+  when no personal regression exists yet for this athlete.
   `[EVIDENCE: swim]`, Confidence: medium-high — verified by title/author/
   journal/volume/pages search this session, summary only (full text not
   fetched). This is swim-specific support for sRPE's **validity** as a

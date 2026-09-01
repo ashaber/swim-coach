@@ -114,6 +114,51 @@ refinement that changes nothing for the vast majority of existing
 workouts (zero or one lap, or incomplete lap HR data). No `TRIMP_*`
 constant changes; only the time-resolution the already-cited formula is
 evaluated at does.
+
+**Third, orthogonal fix -- putting tier 1 (sRPE) on tier 2's own normalized
+scale, when there's enough context to (confirmed against real production
+data, Aug 2026):** the "known limitation" above and the LTHR-normalization
+fix both describe/narrow the sRPE-vs-TRIMP scale mismatch, but neither
+actually TOUCHES tier 1's own output -- LTHR-normalization only rescales
+tier 2. Confirmed against two of Andrew's own consecutive real rides: a
+2026-08-30 mountain-bike ride logged `rpe=5`, `duration_min=158.5` -- tier 1
+fires, raw sRPE = 792.5 AU (unnormalized; sRPE never gets rescaled) against
+TrainingPeaks' own power-based TSS of 155 for the same ride. The very next
+day (2026-08-29), an over/under ride with no RPE logged fell to tier 2
+(HR-TRIMP), landing at 78.6 AU after LTHR-normalization, against
+TrainingPeaks' own TSS of 85. TrainingPeaks shows these two days ~1.8x
+apart; this engine showed them ~10x apart -- not because either tier's
+formula is wrong on its own terms, but because which tier a workout lands
+on depends only on whether the athlete happened to log an RPE that day, not
+on how hard the workout actually was.
+
+The fix: when `workout.rpe` is set AND the same four preconditions tier 2's
+own HR-TRIMP + LTHR-normalization path already requires are ALSO met
+(`hr_max`, `hr_rest` with `hr_max > hr_rest`, and `lthr_bpm`), the RPE is
+converted to an estimated %HRR fraction (`rpe / 10.0` -- see the citation
+comment above `_srpe_via_hrr_normalization`) and run through the *exact
+same* already-cited Banister weighting + LTHR-normalization pipeline tier 2
+uses -- no new formula, only a new input feeding the existing one. Tier
+PRIORITY is unchanged: sRPE still wins over measured HR whenever
+`workout.rpe` is set, exactly as before -- this refines tier 1's OUTPUT
+VALUE, not which tier fires first. Recomputing the 2026-08-30 ride through
+this refined path (real profile: `hr_max=190`, `hr_rest=52`,
+`lthr_bpm=172`) gives ~78.5 AU -- versus recomputing that same ride through
+tier 2 instead (using its own real `avg_hr=138`, not RPE) at ~121.9 AU, a
+~1.55x spread against the RPE-based estimate, the same order of magnitude
+as TrainingPeaks' own 1.8x day-to-day spread, not the old ~10x scale
+mismatch. Some divergence between the RPE-based estimate and the HR-based
+figure for the same ride is expected and legitimate (RPE is subjective, HR
+is measured), not a bug to chase to zero.
+
+Honest about the RPE-to-%HRR mapping's own limits: it's a Coach judgment /
+PROVISIONAL, low-to-medium-confidence linear approximation, not a validated
+personal regression -- see the citation comment above
+`_srpe_via_hrr_normalization` for the corroborating (but not
+precisely-pinned-down) correlational literature. Like the LTHR-
+normalization fix above, this is a no-op -- byte-identical `duration_min *
+rpe` output -- for whichever athlete/workout is missing any of the four
+preconditions (most profiles have no `lthr_bpm` set).
 """
 
 from __future__ import annotations
@@ -552,6 +597,85 @@ def _normalize_trimp_to_lthr_hour(
     return trimp / trimp_per_hour_at_lthr * HR_LOAD_NORMALIZED_SCALE
 
 
+# RPE (CR-10) -> estimated %HRR mapping, used ONLY to place tier-1 sRPE onto
+# tier 2's own normalized scale when enough HR context exists (see
+# `_srpe_via_hrr_normalization` below). `estimated_hrr_fraction = rpe / 10.0`
+# -- a deliberately simple linear mapping using the CR-10 scale's own
+# definitional endpoints, not a fitted regression: RPE=0 ("Rest / Nothing at
+# all," this project's own already-documented CR-10 anchor -- see
+# `library/19-srpe-protocol.md`) definitionally corresponds to ~0% of heart-
+# rate reserve in use; RPE=10 ("Maximal / Exhausting") definitionally
+# corresponds to using essentially all of it. **Coach judgment / PROVISIONAL,
+# Confidence: low-medium** -- not a validated regression.
+#
+# **✓ Verified by direct fetch this session** (full primary text obtained,
+# not just a search snippet): **Arney B.E., Glover R., Fusco A., Cortis C.,
+# de Koning J.J., van Erp T., Jaime S., Mikat R.P., Porcari J.P., Foster C.
+# (2019)**, "Comparison of Rating of Perceived Exertion Scales During
+# Incremental and Interval Exercise," *Kinesiology*, 51(2):150-157 -- the
+# corroborating correlational evidence that CR-10 RPE and %HRR are strongly,
+# roughly-linearly related, without being a specific universal regression
+# line this module could use directly. Reports "very large" correlations
+# between BORG-CR10 and %HRR during incremental exercise (r=.87, R²=.75,
+# SEE=14.9%) and interval exercise (r=.84, R²=.70, SEE=11.6%), and a real
+# descriptive table (their Table 2, easy/moderate/hard 30-min interval
+# sessions) pairing CR-10 with measured %HRR: CR-10=3.1 at %HRR=63.8,
+# CR-10=6.5 at %HRR=90.0, CR-10=8.9 at %HRR=97.4. That table's own three
+# points, fit with a simple least-squares line, extrapolate to a physio-
+# logically nonsensical ~47% %HRR at RPE=0 (the table only covers moderate-
+# to-hard interval efforts, not the low end of the scale) -- confirming
+# what this comment's own honest caveat already says: the paper does NOT
+# publish a full-range CR-10-to-%HRR regression equation (it publishes one
+# only for interconverting BORG-RPE 6-20 and BORG-CR10 against each other,
+# not either scale against %HRR), so extrapolating a line from these three
+# aggregate points would fabricate a false-precision equation this specific
+# paper doesn't actually support. `estimated_hrr_fraction = rpe / 10.0`
+# remains the honest choice: it uses no invented coefficients, is monotonic,
+# passes through both of CR-10's own definitional endpoints, and is
+# directionally consistent with this real (if imprecisely-pinned-down)
+# correlational evidence. `[ADAPTED: general-endurance]` (cycle-ergometer
+# subjects, not swim-specific). **Test:** once this athlete has enough
+# workouts with BOTH a logged RPE and real HR data, fit a personal
+# RPE-to-%HRR relationship from that athlete's own dual-logged history
+# instead of this generic linear approximation.
+
+
+def _srpe_via_hrr_normalization(
+    workout: Workout,
+    *,
+    hr_max: float,
+    hr_rest: float,
+    lthr_bpm: float,
+    sex: Literal["male", "female", "other"] | None,
+) -> float:
+    """Tier-1 sRPE, refined onto the same numeric scale tier 2 (HR-TRIMP)
+    already uses, when enough HR context exists to place it there -- see
+    the RPE-to-%HRR citation comment directly above this function and the
+    module docstring's third "orthogonal fix" paragraph for the full
+    scale-mismatch rationale and the real 2026-08-29/2026-08-30 numbers
+    this closes the gap between.
+
+    `estimated_hrr_fraction = workout.rpe / 10.0` (clamped `[0.0, 1.0]`,
+    defensive symmetry with tier 2's own clamp -- `Workout.rpe` is already
+    `ge=0, le=10` per the model, so this is never expected to actually
+    clamp anything), then the *exact same* Banister weighting
+    (`_trimp_weighting_factor`) and LTHR-hour normalization
+    (`_normalize_trimp_to_lthr_hour`) tier 2 already uses and already cites
+    -- no new formula, only a new input (`rpe / 10.0` standing in for a
+    measured HRR fraction) feeding the same pipeline. Callers are expected
+    to have already confirmed `hr_max > hr_rest` and `lthr_bpm is not
+    None` (`session_load`'s own guard, mirroring tier 2's), so those are
+    not re-checked here; `_normalize_trimp_to_lthr_hour` still guards
+    `lthr_bpm <= hr_rest` internally, same as it does for tier 2.
+    """
+    estimated_hrr_fraction = max(0.0, min(1.0, workout.rpe / 10.0))
+    weight = _trimp_weighting_factor(estimated_hrr_fraction, sex)
+    raw = workout.duration_min * estimated_hrr_fraction * weight
+    return _normalize_trimp_to_lthr_hour(
+        raw, hr_max=hr_max, hr_rest=hr_rest, lthr_bpm=lthr_bpm, sex=sex
+    )
+
+
 def session_load(
     workout: Workout,
     *,
@@ -569,7 +693,25 @@ def session_load(
 
     1. **sRPE** (`duration_min * rpe`) when `workout.rpe` is set --
        unchanged from the original Foster session-RPE model, highest
-       fidelity because it's athlete-reported.
+       fidelity because it's athlete-reported. Tier priority is unchanged
+       by the refinement below: sRPE still wins over measured HR whenever
+       `workout.rpe` is set, regardless of what other context is also
+       available (see `test_session_load_srpe_wins_even_when_hr_and_pace_
+       context_also_available`).
+
+       **Refinement (see `_srpe_via_hrr_normalization` and the module
+       docstring's third "orthogonal fix" paragraph):** when `hr_max`,
+       `hr_rest` (`hr_max > hr_rest`), and `lthr_bpm` are ALL also known --
+       the same four preconditions tier 2's own HR-TRIMP + LTHR-
+       normalization path already requires -- the sRPE OUTPUT VALUE (not
+       its priority) is refined from the raw `duration_min * rpe` onto
+       tier 2's own normalized scale, by estimating an HRR fraction from
+       the RPE (`rpe / 10.0`) and running it through the exact same
+       Banister-weighting + LTHR-normalization pipeline tier 2 uses. A
+       no-op (falls back to the unchanged `duration_min * rpe`) whenever
+       any one of those four preconditions is missing -- most profiles
+       have no `lthr_bpm` set, and get byte-identical output to before
+       this refinement existed.
     2. **HR-based TRIMP** when `workout.avg_hr`, `hr_max`, and `hr_rest`
        are all available (`hr_max > hr_rest`, so a real HRR range exists).
        HRR_fraction is clamped to `[0.0, 1.0]`: a value below 0 would mean
@@ -599,6 +741,18 @@ def session_load(
        total for lack of one specific signal.
     """
     if workout.rpe is not None:
+        if (
+            hr_max is not None
+            and hr_rest is not None
+            and hr_max > hr_rest
+            and lthr_bpm is not None
+        ):
+            return SessionLoad(
+                value=_srpe_via_hrr_normalization(
+                    workout, hr_max=hr_max, hr_rest=hr_rest, lthr_bpm=lthr_bpm, sex=sex
+                ),
+                tier="srpe",
+            )
         return SessionLoad(value=workout.duration_min * workout.rpe, tier="srpe")
 
     if (
