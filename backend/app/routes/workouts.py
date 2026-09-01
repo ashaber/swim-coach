@@ -53,11 +53,12 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from pydantic import ValidationError
-from swim_coach.load import estimate_hr_max, estimate_hr_rest, session_load
+from swim_coach.load import estimate_hr_max
 from swim_coach.models import Workout
 from swim_coach.parse_files import PARSERS_BY_EXTENSION
 
 from app.auth import Principal, require_auth, resolve_athlete
+from app.load_helpers import workout_load_au
 from app.enrich import enrich_draft
 from app.logging_config import get_logger
 from app.store_factory import make_store
