@@ -127,6 +127,7 @@ from typing import Any, Callable
 from pydantic import ValidationError
 
 from swim_coach.adapt import adapt_week
+from swim_coach.load import estimate_hr_max
 from swim_coach.models import Athlete, Event, Feedback, Workout, WorkoutStructure
 from swim_coach.ow_session_templates import build_ow_session
 from swim_coach.plan import (
@@ -142,6 +143,7 @@ from swim_coach.workout_templates import TemplatePreference, render_prose, resol
 
 from app.context import iso_week_str, summarize_rollup
 from app.garmin_push import push_on_demand
+from app.load_helpers import workout_load_au
 from app.logging_config import get_logger
 from app.sync import ON_DEMAND_SYNC_WINDOW_DAYS, sync_on_demand
 
@@ -1354,13 +1356,22 @@ def _handle_flag_for_coach_review(
     return {"logged": True, "id": str(entry.id), "type": entry.type}
 
 
-def _summarize_workout(w: Workout) -> dict[str, Any]:
+def _summarize_workout(w: Workout, *, athlete: Athlete, hr_max: float | None, wellness: list[Any]) -> dict[str, Any]:
     """The compact per-workout shape `get_workouts` returns -- deliberately
     excludes the unbounded `laps`/`lengths`/`pauses` arrays (a multi-hour
     .fit can carry dozens to hundreds of entries) in favor of counts, same
     spirit as `get_plan_summary` returning an aggregate rather than raw
     rows. `analytics` is small (a handful of scalar fields) so it's passed
-    through in full."""
+    through in full.
+
+    `load_au`/`load_tier` (via `app.load_helpers.workout_load_au`, the same
+    computation `routes/workouts.py`'s HTTP response uses): a real bug,
+    reported live -- without these, the coach could see `rpe`/`avg_hr` on
+    each workout but never the actual computed load or which tier produced
+    it, and confabulated a wrong explanation ("assumed a recovery ride")
+    for an RPE-less workout that should have reached tier 2 (HR-based
+    TRIMP) instead of guessing. Now it reports the real number."""
+    load_au, load_tier = workout_load_au(w, athlete=athlete, hr_max=hr_max, wellness=wellness)
     return {
         "date": w.date.isoformat(),
         "sport": w.sport,
@@ -1376,6 +1387,8 @@ def _summarize_workout(w: Workout) -> dict[str, Any]:
         "lap_count": len(w.laps),
         "length_count": len(w.lengths),
         "pause_count": len(w.pauses),
+        "load_au": load_au,
+        "load_tier": load_tier,
     }
 
 
@@ -1406,8 +1419,21 @@ def _handle_get_workouts(input_data: dict[str, Any], *, store: StoreInterface, s
     truncated = len(matched) > GET_WORKOUTS_CAP
     matched = matched[:GET_WORKOUTS_CAP]
 
+    # Only touch the athlete profile/wellness when there's actually
+    # something to summarize -- `matched` is already `[]` for an unknown
+    # athlete (list_workouts's own non-erroring contract, see comment
+    # above), and `store.load_athlete` would raise for one, breaking that
+    # contract for no reason when there's nothing to attach load to anyway.
+    if matched:
+        athlete = store.load_athlete(slug)
+        wellness = store.list_wellness(slug)
+        hr_max = estimate_hr_max(workouts)
+        summarized = [_summarize_workout(w, athlete=athlete, hr_max=hr_max, wellness=wellness) for w in matched]
+    else:
+        summarized = []
+
     return {
-        "workouts": [_summarize_workout(w) for w in matched],
+        "workouts": summarized,
         "count": len(matched),
         "truncated": truncated,
     }

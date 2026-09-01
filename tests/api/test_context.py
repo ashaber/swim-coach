@@ -524,9 +524,16 @@ def test_find_workout_by_id_unknown_or_empty_is_none() -> None:
     assert find_workout_by_id(workouts, "   ") is None
 
 
+def _athlete_for_load(**overrides):
+    from swim_coach.models import Athlete
+    payload = {"id": uuid.uuid4(), "slug": "renee", "name": "Renee", "css_pace_s_per_100m": 90.0}
+    payload.update(overrides)
+    return Athlete(**payload)
+
+
 def test_render_focused_workout_includes_summary_analytics_laps_pauses_sport_detail() -> None:
     workout = _rich_workout()
-    text = render_focused_workout(workout)
+    text = render_focused_workout(workout, athlete=_athlete_for_load(), hr_max=None, wellness=[])
 
     assert "specific workout the athlete is asking about" in text
     assert str(workout.id) in text
@@ -547,7 +554,7 @@ def test_render_focused_workout_caps_laps_and_labels_truncation() -> None:
     laps = [WorkoutLap(index=i, duration_s=60.0, distance_m=100.0) for i in range(50)]
     workout = _rich_workout(laps=laps)
 
-    text = render_focused_workout(workout)
+    text = render_focused_workout(workout, athlete=_athlete_for_load(), hr_max=None, wellness=[])
 
     assert f"### Laps ({FOCUSED_WORKOUT_LAPS_CAP} of 50 shown, truncated)" in text
     assert f'"index": {FOCUSED_WORKOUT_LAPS_CAP - 1}' in text
@@ -556,12 +563,22 @@ def test_render_focused_workout_caps_laps_and_labels_truncation() -> None:
 
 def test_render_focused_workout_bare_manual_workout_renders_cleanly() -> None:
     workout = make_workout()  # no laps/pauses/analytics/sport_detail
-    text = render_focused_workout(workout)
+    text = render_focused_workout(workout, athlete=_athlete_for_load(), hr_max=None, wellness=[])
 
     assert "specific workout the athlete is asking about" in text
     assert "(no laps recorded)" in text
     assert "(no pauses recorded)" in text
     assert '"analytics": null' in text
+
+
+def test_render_focused_workout_includes_load_au_and_tier() -> None:
+    # Real bug, reported live: without this, the coach could see rpe/avg_hr
+    # but never the actual computed load or which tier produced it, and
+    # confabulated a wrong explanation for an RPE-less, HR-only workout.
+    workout = _rich_workout(rpe=None, avg_hr=140, duration_min=60)
+    text = render_focused_workout(workout, athlete=_athlete_for_load(), hr_max=180.0, wellness=[])
+    assert '"load_tier": "hr_trimp"' in text
+    assert '"load_au":' in text
 
 
 def test_per_request_context_appends_focused_workout_only_when_given(app_env) -> None:
