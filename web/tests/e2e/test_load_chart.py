@@ -340,23 +340,33 @@ def test_chart_is_not_buried_in_a_collapsed_section(page):
     assert chart.is_visible()
 
 
-def test_ctl_atl_tsb_trend_narrative_is_truncated_to_first_line_with_a_more_toggle(page):
+def test_ctl_atl_tsb_trend_narrative_leads_actionable_with_the_cold_start_caveat_behind_more(page):
     # views.js's renderCtlAtlTsbNarrative / plan.js's describeCtlAtlTsbTrend
     # -- the computed, athlete-specific "what the numbers say" guidance
     # this feature adds, quoting Andrew's own framing: "this is the useful
-    # coach guidance below the load graph." Design spec 3.6: only the first
-    # line shows by default now that the verdict line carries the headline.
+    # coach guidance below the load graph." coach-load-visibility-and-
+    # narrative-polish reordered this actionable-first, caveats-last, per
+    # explicit athlete feedback ("the part shown 'this series has 66 days
+    # blah blah blah' belongs at the bottom. Put the two or three
+    # actionable sentences at top."): TSB/CTL/ATL all show by default now
+    # (not just the first fact), while the cold-start/warming-up data-
+    # maturity caveat is ALWAYS last and ALWAYS behind "more", regardless
+    # of how many other lines already show.
     _open_dashboard(page)
     page.wait_for_selector('.load-chart-narrative')
     narrative = page.locator('.load-chart-narrative')
     assert narrative.is_visible()
     text = narrative.inner_text()
     assert 'what the numbers say' in text.lower()
+    # TSB/CTL/ATL are all default-visible now (REAL_SERIES has a real,
+    # non-flat ATL swing and a real, if flat, CTL comparison).
+    assert 'TSB (form)' in text
+    assert 'CTL (fitness)' in text
+    assert 'ATL (fatigue)' in text
     # REAL_SERIES spans only 22 days -- well short of the cold-start
-    # threshold -- so the narrative must lead with that honesty caveat
-    # rather than presenting an early trend at full confidence.
-    assert 'provisional' in text.lower()
-    assert 'CTL (fitness)' not in text  # behind "more" still
+    # threshold -- but that caveat must stay hidden behind "more" even
+    # though it exists, since it's always last/always-hidden now.
+    assert 'provisional' not in text.lower()
 
     more_button = page.locator('.load-chart-narrative-more')
     more_button.click()
@@ -364,6 +374,9 @@ def test_ctl_atl_tsb_trend_narrative_is_truncated_to_first_line_with_a_more_togg
     expanded_text = narrative.inner_text()
     assert 'CTL (fitness)' in expanded_text
     assert 'TSB (form)' in expanded_text
+    assert 'provisional' in expanded_text.lower()
+    # The caveat is the LAST line once expanded.
+    assert expanded_text.rfind('TSB (form)') < expanded_text.lower().rfind('provisional')
 
 
 def test_methodology_caption_moved_behind_a_collapsed_by_default_disclosure(page):

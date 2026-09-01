@@ -112,8 +112,10 @@ describe('renderDashboardTab', () => {
     it('renders a workout row with no analytics line when analytics is null', () => {
       const html = renderDashboardTab({ ...DASHBOARD_BASE_ARGS, feed: feedOf([OLD_MANUAL_WORKOUT]) });
       expect(html).not.toContain('hist-analytics');
-      // Manual source gets no source badge chip.
-      expect(html).not.toContain('chat-chip');
+      // Manual source gets no source badge chip -- but OLD_MANUAL_WORKOUT's
+      // rpe: null still renders the explicit "No RPE" chip (see the "no RPE
+      // indicator" describe block below), so a chat-chip IS present here.
+      expect(html).toContain('No RPE');
     });
 
     it('renders multiple rows in the order the feed gives them (does not re-sort)', () => {
@@ -2325,21 +2327,69 @@ describe('renderLoadChart', () => {
     expect(verdictIndex).toBeLessThan(narrativeIndex);
   });
 
-  it('truncates the narrative to its first line by default, with a "more" toggle', () => {
+  // readySeries is a 3-day series (2026-07-01..07-03) -- cold-start warmup
+  // (< CTL_COLD_START_DAYS=42), CTL trend is 'insufficient-window' (only
+  // 3 days of history vs. the 14-day comparison window), ATL drops
+  // 6.0->4.0 (non-flat, so it renders), and TSB=7.0 lands in the
+  // race-ready band.
+  it('shows TSB/CTL/ATL lines (actionable-first) by default, hiding the cold-start caveat behind "more"', () => {
     const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: readySeries }, error: null });
     expect(html).toContain('load-chart-narrative-more');
-    expect((html.match(/<p>/g) || []).length).toBeGreaterThan(0);
-    // Only the cold-start warmup line is visible -- the CTL-trend/TSB lines
-    // that would otherwise also render are hidden behind "more".
+    // TSB's SHORT actionable line leads (race-ready band's actionable clause).
+    expect(html).toContain('in range for race-day freshness');
+    // CTL trend's insufficient-window line is present too.
+    expect(html).toContain('Not enough history yet');
+    // ATL's spike line (real dates/values, non-flat) is present.
+    expect(html).toContain('ATL (fatigue) dropped from 6.0 to 4.0');
+    // The cold-start caveat and TSB's fuller long-form explanation are
+    // both hidden by default -- caveats-last, actionable-first.
+    expect(html).not.toContain('still climbing up from zero');
     expect(html).not.toContain('TSB (form) is currently');
+    // TSB's short line renders first (actionable-first ordering).
+    expect(html.indexOf('in range for race-day freshness')).toBeLessThan(html.indexOf('Not enough history yet'));
   });
 
-  it('shows the full narrative with no "more" toggle when narrativeExpanded is true', () => {
+  it('expanded view shows the cold-start caveat (last) and TSB\'s fuller explanation, with no "more" toggle', () => {
     const html = renderLoadChart(
       { status: 'ready', data: { ctl_atl_tsb: readySeries }, error: null }, { narrativeExpanded: true },
     );
     expect(html).not.toContain('load-chart-narrative-more');
     expect(html).toContain('TSB (form) is currently');
+    expect(html).toContain('still climbing up from zero');
+    // The caveat is the LAST line, after TSB/CTL/ATL's long forms.
+    expect(html.indexOf('TSB (form) is currently')).toBeLessThan(html.indexOf('still climbing up from zero'));
+  });
+
+  describe('TSB band actionable clause (short) vs. fuller explanation (long)', () => {
+    it('productive band: short view shows the actionable clause, not the fuller explanation', () => {
+      const series = [['2026-08-01', 10, 5, -5], ['2026-08-02', 10, 5, -20]]; // tsb=-20, productive
+      const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: series }, error: null });
+      expect(html).toContain('keep an eye on this to keep it here');
+      expect(html).not.toContain('expected and good while building');
+    });
+
+    it('productive band: expanded view shows the fuller explanation', () => {
+      const series = [['2026-08-01', 10, 5, -5], ['2026-08-02', 10, 5, -20]];
+      const html = renderLoadChart(
+        { status: 'ready', data: { ctl_atl_tsb: series }, error: null }, { narrativeExpanded: true },
+      );
+      expect(html).toContain('expected and good while building');
+    });
+
+    it('high-risk band: short view shows the actionable clause, not the fuller explanation', () => {
+      const series = [['2026-08-01', 10, 5, -20], ['2026-08-02', 10, 5, -40]]; // tsb=-40, high-risk
+      const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: series }, error: null });
+      expect(html).toContain('worth easing off over the next few sessions to let fatigue clear');
+      expect(html).not.toContain('fatigue is accumulating faster');
+    });
+
+    it('high-risk band: expanded view shows the fuller explanation', () => {
+      const series = [['2026-08-01', 10, 5, -20], ['2026-08-02', 10, 5, -40]];
+      const html = renderLoadChart(
+        { status: 'ready', data: { ctl_atl_tsb: series }, error: null }, { narrativeExpanded: true },
+      );
+      expect(html).toContain('fatigue is accumulating faster');
+    });
   });
 
   it('renders the wellness cross-check inline by default (showWellnessInline defaults true)', () => {
@@ -2596,6 +2646,89 @@ describe('loadTierLabel / load chips (D2)', () => {
   });
 });
 
+// --- Explicit "no RPE" indicator (coach-load-visibility-and-narrative-polish) ----
+// Previously a missing rpe rendered nothing at all -- the athlete/coach
+// couldn't tell "no RPE was recorded" from "the row hasn't rendered yet."
+// Both renderWorkoutRow (the athlete's own history row) and
+// renderCoachWorkoutRow (the coach's per-athlete row, exercised here via
+// renderRosterTab) must show the same explicit indicator, and a real rpe
+// must still render the existing "RPE {n}" chip unchanged in both.
+
+describe('explicit "No RPE" indicator', () => {
+  it('renderWorkoutRow shows a "No RPE" chip when rpe is null', () => {
+    const html = renderWorkoutRow({
+      id: 'w-1', date: '2026-08-20', sport: 'swim_pool', source: 'fit',
+      distance_m: 2000, duration_min: 60, rpe: null,
+    }, Date.now());
+    expect(html).toContain('No RPE');
+    expect(html).not.toContain('RPE null');
+  });
+
+  it('renderWorkoutRow shows a "No RPE" chip when rpe is undefined', () => {
+    const html = renderWorkoutRow({
+      id: 'w-1', date: '2026-08-20', sport: 'swim_pool', source: 'fit',
+      distance_m: 2000, duration_min: 60,
+    }, Date.now());
+    expect(html).toContain('No RPE');
+  });
+
+  it('renderWorkoutRow still shows "RPE {n}" and no "No RPE" chip when rpe is a real number', () => {
+    const html = renderWorkoutRow({
+      id: 'w-1', date: '2026-08-20', sport: 'swim_pool', source: 'fit',
+      distance_m: 2000, duration_min: 60, rpe: 6,
+    }, Date.now());
+    expect(html).toContain('RPE 6');
+    expect(html).not.toContain('No RPE');
+  });
+
+  it("renderCoachWorkoutRow (coach roster) shows a \"No RPE\" chip when rpe is null", () => {
+    const html = renderRosterTab({
+      athletes: { status: 'ready', data: [{ slug: 'renee', name: 'Renee' }], error: null },
+      actingAsAthlete: 'renee',
+      workouts: {
+        status: 'ready',
+        data: [{
+          id: 'w1', date: '2026-08-24', sport: 'swim_pool', source: 'fit',
+          rpe: null, duration_min: 45, distance_m: 2000,
+          quality: { matched: true, distance_delta_pct: null, duration_delta_pct: null, intensity_match: 'unknown', quality_summary: null },
+        }],
+        error: null,
+      },
+      feedback: { status: 'idle', data: [], error: null },
+      replyDrafts: {},
+      replySubmit: { status: 'idle', error: null, feedbackId: null },
+      workoutDetailId: null,
+      backendConfigured: true,
+      online: true,
+    });
+    expect(html).toContain('No RPE');
+  });
+
+  it('renderCoachWorkoutRow (coach roster) still shows "RPE {n}" and no "No RPE" chip when rpe is a real number', () => {
+    const html = renderRosterTab({
+      athletes: { status: 'ready', data: [{ slug: 'renee', name: 'Renee' }], error: null },
+      actingAsAthlete: 'renee',
+      workouts: {
+        status: 'ready',
+        data: [{
+          id: 'w1', date: '2026-08-24', sport: 'swim_pool', source: 'fit',
+          rpe: 6, duration_min: 45, distance_m: 2000,
+          quality: { matched: true, distance_delta_pct: null, duration_delta_pct: null, intensity_match: 'unknown', quality_summary: null },
+        }],
+        error: null,
+      },
+      feedback: { status: 'idle', data: [], error: null },
+      replyDrafts: {},
+      replySubmit: { status: 'idle', error: null, feedbackId: null },
+      workoutDetailId: null,
+      backendConfigured: true,
+      online: true,
+    });
+    expect(html).toContain('RPE 6');
+    expect(html).not.toContain('No RPE');
+  });
+});
+
 // --- D1: planned/target load tile on the Plan tab's session detail ---------
 
 describe('renderPlanSessionDetailStats target load (D1)', () => {
@@ -2690,5 +2823,53 @@ describe('RPE editor affordance on the workout detail view (A6b)', () => {
       online: true,
     });
     expect(html).not.toContain('data-a="workout:edit-rpe"');
+  });
+});
+
+// --- Macro-block week-count off-by-one (coach-load-visibility-and-narrative-polish) ----
+// Previous formula: round(dayDiff / 7) + 1 -- takes the raw EXCLUSIVE
+// day-difference, divides by 7, THEN adds 1, double-counting the
+// "+1 for inclusive dates" adjustment and overcounting every block by
+// exactly one week. Fixed: round((dayDiff + 1) / 7) -- make the span
+// inclusive-of-both-endpoints BEFORE dividing by 7. These are the real
+// four blocks from this athlete's real production macro plan (see the PR
+// description's hand-computation) -- base/build/peak/taper should now
+// read 3/1/2/2 real calendar weeks, not the old (wrong) 4/2/3/3.
+
+describe('renderMacroSection week-count (macro-block off-by-one fix)', () => {
+  const REAL_MACRO_BLOCKS = [
+    { name: 'Base', start_date: '2026-08-31', end_date: '2026-09-20', weekly_volume_target_m: 20000 },
+    { name: 'Build', start_date: '2026-09-21', end_date: '2026-09-27', weekly_volume_target_m: 24000 },
+    { name: 'Peak', start_date: '2026-09-28', end_date: '2026-10-11', weekly_volume_target_m: 28000 },
+    { name: 'Taper', start_date: '2026-10-12', end_date: '2026-10-25', weekly_volume_target_m: 14000 },
+  ];
+
+  const MACRO_PLAN_DATA = {
+    athlete: { name: 'Renee' }, events: [], macro: { blocks: REAL_MACRO_BLOCKS }, weeks: [],
+  };
+
+  it('labels each real block with the correct inclusive calendar-week count, not overcounted by one', () => {
+    const html = renderApp(MACRO_PLAN_DATA, null);
+    expect(html).toContain('3 wk'); // Base: 2026-08-31..2026-09-20, 21 days = 3 weeks
+    expect(html).toContain('1 wk'); // Build: 2026-09-21..2026-09-27, 7 days = 1 week
+    // Peak and Taper are both 2 wk (14 days each) -- assert the count of "2 wk"
+    // occurrences rather than presence alone, since two distinct blocks share it.
+    const twoWkMatches = html.match(/2 wk/g) || [];
+    expect(twoWkMatches.length).toBe(2);
+    // Old (wrong) formula's overcount for Base ("4 wk") must not appear.
+    expect(html).not.toContain('4 wk');
+  });
+
+  it('does not render the old off-by-one overcounts for any of the four real blocks', () => {
+    const html = renderApp(MACRO_PLAN_DATA, null);
+    // Old formula gave Base "4 wk", Build "2 wk", Peak "3 wk", Taper "3 wk".
+    // Build's old wrong value ("2 wk") coincides with Peak/Taper's correct
+    // value, so it can't be asserted absent globally -- but Base's "4 wk"
+    // and the "3 wk" that used to apply to Peak/Taper can be checked
+    // precisely: with the fix, exactly one block ("Base") should read "3 wk",
+    // not two or more.
+    const threeWkMatches = html.match(/3 wk/g) || [];
+    expect(threeWkMatches.length).toBe(1);
+    expect(html).not.toContain('4 wk');
   });
 });

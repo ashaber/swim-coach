@@ -1108,8 +1108,14 @@ export const PRODUCTIVE_TRAINING_TSB_BAND = { low: -30, high: -10 };
 
 const LOAD_CHART_WIDTH = 640;
 // Was 260 for one panel; two stacked panels plus the gap between them need
-// the extra room.
-const LOAD_CHART_HEIGHT = 300;
+// the extra room. Bumped +30% (300 -> 390) per explicit athlete request
+// after seeing the two-panel rebuild in production ("I think we have the
+// right chart, now make it 30% taller") -- more room for the now-more-
+// detailed two-panel chart to breathe, especially the TSB panel's band
+// labels/edge labels/verdict marker. `TSB_PANEL_RATIO`/`LOAD_CHART_PANEL_GAP`
+// stay unchanged: this is purely a total-height bump, panel proportions
+// stay the same.
+export const LOAD_CHART_HEIGHT = 390;
 // `right` was widened to 34 (matching `left`) for the old dual-axis design's
 // secondary-axis tick labels on the right edge -- gone now that ATL shares
 // the top panel's left axis (nothing draws past `plotRight` any more; the
