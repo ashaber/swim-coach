@@ -170,6 +170,36 @@ This is deliberately a no-op (unchanged raw TRIMP) for any athlete who
 hasn't set `lthr_bpm` -- most profiles haven't, and tier 2's pre-existing
 behavior remains correct and unchanged for them.
 
+**Lap-based TRIMP summation (fixes a confirmed real-data bug, Aug 2026):**
+whole-session-average TRIMP under-counts interval/variable-effort
+workouts. **Coach judgment / directly verifiable math, not a new external
+research claim** -- the Banister weighting `weight(x) = coefficient *
+e^(exponent*x)` above is convex, and so is `x * weight(x)`; by Jensen's
+inequality, `avg(f(x_i)) >= f(avg(x_i))` for a convex `f`, so summing the
+weighting over each smaller time-slice's own HRR fraction always meets or
+exceeds weighting one whole-session average, strictly exceeding it
+whenever HR varies within the session. This is a property of the
+already-cited Banister formula's own math, not a new source, so no
+separate citation is needed -- stated explicitly rather than left for the
+reader to wonder.
+
+Confirmed against a real over/under bike ride logged 2026-08-29 (99
+minutes, 46 device-captured laps alternating ~60-second hard reps around
+160-170bpm with slower recovery segments around 110-140bpm): 121.67 raw
+TRIMP from the workout's single whole-session `avg_hr`, vs. 139.52 raw
+TRIMP summing the identical formula over its 46 real laps -- ~15% higher
+for the same ride, matching the athlete's own sense that the app
+under-scored it next to intervals.icu's own (differently-scaled) reported
+Load of 87.
+
+`_trimp_from_laps` implements the summed version, used only when
+`workout.laps` is non-empty, every lap has `avg_hr` set, and the laps'
+total duration is within `TRIMP_LAP_COVERAGE_TOLERANCE` (10%, **Coach
+judgment**, not research-backed) of the workout's own duration -- falls
+back to the pre-existing whole-session computation, unchanged, otherwise
+(the overwhelming majority of this athlete's logged history: zero or one
+lap).
+
 ### Tier 3: swim pace-based intensity (a TSS-family formula)
 
 Used when tier 2 isn't available, the session is a swim (`swim_pool`/
