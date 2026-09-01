@@ -868,24 +868,46 @@ function renderLoadChartEdgeLabels(geo) {
       <text x="${(geo.plotLeft + 8).toFixed(1)}" y="${highRiskY.toFixed(1)}" class="load-chart-edge-label" dominant-baseline="middle">high risk</text>`;
 }
 
+/** Shared caret-triangle points for one clamped TSB point, pointing further
+ * up/down (off the plot) depending on which edge it landed on -- factored
+ * out so both the generic clamp-caret pass below AND
+ * `renderLoadChartLatestTsbLabel` (when the LATEST point is itself the one
+ * that's clamped) draw the identical shape rather than two near-duplicate
+ * inline calculations drifting apart over time. */
+function caretPolygonPoints(x, y, geo, size) {
+  const clampedHigh = Math.abs(y - geo.tsbPlot.top) < Math.abs(y - geo.tsbPlot.bottom);
+  return clampedHigh
+    ? `${(x - size).toFixed(1)},${(y + size).toFixed(1)} ${(x + size).toFixed(1)},${(y + size).toFixed(1)} ${x.toFixed(1)},${(y - size).toFixed(1)}`
+    : `${(x - size).toFixed(1)},${(y - size).toFixed(1)} ${(x + size).toFixed(1)},${(y - size).toFixed(1)} ${x.toFixed(1)},${(y + size).toFixed(1)}`;
+}
+
 /** A small caret at the TSB panel's top/bottom edge for every index
  * `ctlAtlTsbChartGeometry` had to clamp into `TSB_AXIS_DOMAIN` (plan.js's
  * `tsbClamped`) -- flags an out-of-range point as an alarm worth a second
  * look, rather than silently drawing it as if it were merely at the edge of
- * "normal". Direction (pointing further up/down, off the plot) is read
- * straight from which edge the point's own pixel y actually landed on --
- * no need to re-derive it from the raw TSB value's sign against the domain. */
+ * "normal". The LATEST point is excluded here even when clamped -- it gets
+ * its own combined caret+value marker from `renderLoadChartLatestTsbLabel`
+ * instead (drawing both would either duplicate the shape or have the
+ * latest-point circle painted on top of it, hiding the very alarm it's
+ * meant to show). */
 function renderLoadChartClampCarets(geo) {
-  return geo.tsbClamped.map((i) => {
+  const lastIndex = geo.tsbPoints.length - 1;
+  return geo.tsbClamped.filter((i) => i !== lastIndex).map((i) => {
     const p = geo.tsbPoints[i];
-    const clampedHigh = Math.abs(p.y - geo.tsbPlot.top) < Math.abs(p.y - geo.tsbPlot.bottom);
-    const size = 4;
-    const points = clampedHigh
-      ? `${(p.x - size).toFixed(1)},${(p.y + size).toFixed(1)} ${(p.x + size).toFixed(1)},${(p.y + size).toFixed(1)} ${p.x.toFixed(1)},${(p.y - size).toFixed(1)}`
-      : `${(p.x - size).toFixed(1)},${(p.y - size).toFixed(1)} ${(p.x + size).toFixed(1)},${(p.y - size).toFixed(1)} ${p.x.toFixed(1)},${(p.y + size).toFixed(1)}`;
-    return `<polygon class="load-chart-clamp-caret" points="${points}" />`;
+    return `<polygon class="load-chart-clamp-caret" points="${caretPolygonPoints(p.x, p.y, geo, 4)}" />`;
   }).join('');
 }
+
+/** Minimum vertical gap (px) between the CTL/ATL inline end-labels' text
+ * baselines before they're pushed further apart -- `TSB = CTL - ATL`, so a
+ * TSB reading near 0 means CTL and ATL are numerically close, which means
+ * their pixel y-positions on the shared 0-anchored load axis land close
+ * together too. Both labels using the same small fixed above-the-point
+ * offset would then overlap right when the two lines are hardest to tell
+ * apart on the chart itself -- exactly the wrong moment to lose the
+ * legend. 14px is comfortably more than one line of this chart's small
+ * inline-label text. */
+const LOAD_CHART_END_LABEL_MIN_GAP = 14;
 
 /** CTL/ATL's inline end-of-line name labels (the "legend moves inline"
  * change, replacing the old separate `.load-chart-legend` row for these two
@@ -893,13 +915,23 @@ function renderLoadChartClampCarets(geo) {
  * right-hand (most recent) point, colored to match the line itself. TSB's
  * own end-of-line identity is carried by `renderLoadChartLatestTsbLabel`
  * below instead (it needs a value, not just a name, right at that same
- * point, so the two are combined there rather than duplicated here). */
+ * point, so the two are combined there rather than duplicated here).
+ *
+ * When the two points land close together vertically (see
+ * `LOAD_CHART_END_LABEL_MIN_GAP`), whichever line is higher on screen (a
+ * smaller SVG y) gets pushed further up and whichever is lower gets pushed
+ * further down, instead of both using the same small offset -- separating
+ * them regardless of which line happens to currently sit on top. */
 function renderLoadChartLineEndLabels(geo) {
   const ctlEnd = geo.ctlPoints.at(-1);
   const atlEnd = geo.atlPoints.at(-1);
+  const closeTogether = Math.abs(ctlEnd.y - atlEnd.y) < LOAD_CHART_END_LABEL_MIN_GAP;
+  const ctlHigher = ctlEnd.y <= atlEnd.y;
+  const ctlOffset = closeTogether ? (ctlHigher ? -9 : 9) : -5;
+  const atlOffset = closeTogether ? (ctlHigher ? 9 : -9) : -5;
   return `
-      <text x="${(ctlEnd.x - 6).toFixed(1)}" y="${(ctlEnd.y - 5).toFixed(1)}" text-anchor="end" class="load-chart-inline-label" style="fill:var(${LOAD_CHART_LINE_COLOR_VAR.ctl})">CTL</text>
-      <text x="${(atlEnd.x - 6).toFixed(1)}" y="${(atlEnd.y - 5).toFixed(1)}" text-anchor="end" class="load-chart-inline-label" style="fill:var(${LOAD_CHART_LINE_COLOR_VAR.atl})">ATL</text>`;
+      <text x="${(ctlEnd.x - 6).toFixed(1)}" y="${(ctlEnd.y + ctlOffset).toFixed(1)}" text-anchor="end" class="load-chart-inline-label" style="fill:var(${LOAD_CHART_LINE_COLOR_VAR.ctl})">CTL</text>
+      <text x="${(atlEnd.x - 6).toFixed(1)}" y="${(atlEnd.y + atlOffset).toFixed(1)}" text-anchor="end" class="load-chart-inline-label" style="fill:var(${LOAD_CHART_LINE_COLOR_VAR.atl})">ATL</text>`;
 }
 
 /** The TSB panel's last point: a filled dot plus a combined "TSB {value}"
@@ -909,12 +941,25 @@ function renderLoadChartLineEndLabels(geo) {
  * visible without reading an axis." Anchored to the LEFT of the dot
  * (`text-anchor="end"`) because the last point always sits at the plot's
  * right edge (`plotRight`) -- anchoring right would push the label outside
- * the viewBox. */
+ * the viewBox.
+ *
+ * When the latest point is ITSELF one `ctlAtlTsbChartGeometry` had to clamp
+ * (`geo.tsbClamped`), the plain filled circle is replaced by the same
+ * caret shape `renderLoadChartClampCarets` draws for every other clamped
+ * point (see that function's own doc comment for why it excludes this
+ * index) -- a circle drawn on top of a caret at the identical coordinates
+ * would hide most of it, silently dropping the one alarm this marker most
+ * needs to show. */
 function renderLoadChartLatestTsbLabel(geo) {
   const { x, y, value } = geo.latestTsb;
   const valueText = `${value >= 0 ? '+' : ''}${value.toFixed(1)}`;
+  const lastIndex = geo.tsbPoints.length - 1;
+  const isClamped = geo.tsbClamped.includes(lastIndex);
+  const marker = isClamped
+    ? `<polygon class="load-chart-clamp-caret load-chart-clamp-caret-latest" points="${caretPolygonPoints(x, y, geo, 5)}" style="fill:var(${LOAD_CHART_LINE_COLOR_VAR.tsb})" />`
+    : `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.5" style="fill:var(${LOAD_CHART_LINE_COLOR_VAR.tsb})" />`;
   return `
-      <circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.5" style="fill:var(${LOAD_CHART_LINE_COLOR_VAR.tsb})" />
+      ${marker}
       <text x="${(x - 8).toFixed(1)}" y="${(y - 8).toFixed(1)}" text-anchor="end" class="load-chart-inline-label" style="fill:var(${LOAD_CHART_LINE_COLOR_VAR.tsb})">${esc(`TSB ${valueText}`)}</text>`;
 }
 
@@ -1049,9 +1094,14 @@ function formatTrendDate(iso) {
  * `main.js`'s `state.dashboardFeedExpanded`/`state.roster.feedExpanded`
  * already use for the Training Dashboard feed (see
  * `handleShowMoreDashboardFeed`'s doc comment there), reused here via
- * `expanded` rather than inventing a second truncation mechanism. */
-function renderCtlAtlTsbNarrative(series, { expanded = false } = {}) {
-  const trend = describeCtlAtlTsbTrend(series);
+ * `expanded` rather than inventing a second truncation mechanism.
+ *
+ * Takes the already-computed `trend` (`describeCtlAtlTsbTrend`'s result),
+ * not the raw `series` -- `renderLoadChart` computes it once and passes it
+ * to both this function and `renderLoadChartVerdict`, rather than each
+ * independently re-deriving the identical structure from the same series
+ * on every render. */
+function renderCtlAtlTsbNarrative(trend, { expanded = false } = {}) {
   if (!trend.hasData) return '';
 
   const lines = [];
@@ -1178,7 +1228,7 @@ export function renderLoadChart(load, {
     : renderLoadChartSvg(geo);
 
   const verdict = geo.isEmpty ? '' : renderLoadChartVerdict(trend);
-  const narrative = geo.isEmpty ? '' : renderCtlAtlTsbNarrative(series, { expanded: narrativeExpanded });
+  const narrative = geo.isEmpty ? '' : renderCtlAtlTsbNarrative(trend, { expanded: narrativeExpanded });
 
   return `
     <div class="panel load-chart-panel">

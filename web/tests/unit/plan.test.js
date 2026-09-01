@@ -1109,6 +1109,17 @@ describe('ctlAtlTsbChartGeometry', () => {
     expect(geo.ctlPoints[0].x).toBeCloseTo((geo.plotLeft + geo.plotRight) / 2, 5);
   });
 
+  it('right padding is small -- no secondary axis lives past plotRight any more', () => {
+    // Was 34px (matching the left axis) to make room for the old
+    // dual-axis design's secondary tick labels on the right edge; nothing
+    // draws past plotRight in the two-panel design, so this should be back
+    // down near the pre-dual-axis ~12px, not still budgeting for a second
+    // axis that no longer exists.
+    const series = [['2026-08-01', 10, 5, 5], ['2026-08-02', 11, 6, 5]];
+    const geo = ctlAtlTsbChartGeometry(series);
+    expect(geo.width - geo.plotRight).toBeLessThanOrEqual(16);
+  });
+
   it('respects custom width/height/padding options', () => {
     const series = [['2026-08-01', 10, 5, 5], ['2026-08-02', 11, 6, 5]];
     const geo = ctlAtlTsbChartGeometry(series, { width: 300, height: 150 });
@@ -1138,6 +1149,23 @@ describe('ctlAtlTsbChartGeometry', () => {
     // One tick for the series' first index, then one per new month entered:
     // Jun 28 (start), Jul 1 (month change), Aug 1 (month change) => 3 ticks.
     expect(monthGeo.xTicks.map((t) => t.label)).toEqual(['2026-06-28', '2026-07-01', '2026-08-01']);
+  });
+
+  it('caps month-mode x ticks at 5 even when the series spans many months', () => {
+    // A year-plus of daily entries crossing 14 calendar-month boundaries --
+    // unbounded, "Season" mode would crowd 14+ month labels into the same
+    // axis width date-mode budgets 5 dates for.
+    const series = [];
+    let d = new Date('2025-06-01T00:00:00Z');
+    const end = new Date('2026-08-01T00:00:00Z');
+    while (d < end) {
+      series.push([d.toISOString().slice(0, 10), 10, 5, 0]);
+      d.setUTCDate(d.getUTCDate() + 1);
+    }
+    const geo = ctlAtlTsbChartGeometry(series, { xTickMode: 'month' });
+    expect(geo.xTicks.length).toBeLessThanOrEqual(5);
+    // Still anchors on the series' real first and last month-boundary tick.
+    expect(geo.xTicks[0].label).toBe(series[0][0]);
   });
 
   describe('top panel (CTL/ATL, "fitness & fatigue") -- one shared, 0-anchored axis', () => {

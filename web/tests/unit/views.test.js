@@ -2274,6 +2274,47 @@ describe('renderLoadChart', () => {
     expect(html).toContain('load-chart-clamp-caret');
   });
 
+  it('draws a caret (not a circle) for the latest point when it is itself clamped', () => {
+    // Regression: the latest-point marker used to always draw a plain
+    // filled circle, painted on top of (and mostly hiding) the identical
+    // clamp caret drawn underneath it whenever the MOST RECENT point was
+    // itself out of TSB_AXIS_DOMAIN's range -- exactly the one point where
+    // an athlete most needs to see the "off the plot" flag.
+    const extremeSeries = [
+      ['2026-07-01', 30, 30, 0],
+      ['2026-07-02', 30, 30, -60], // below TSB_AXIS_DOMAIN.min, and the LAST point
+    ];
+    const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: extremeSeries }, error: null });
+    expect(html).toContain('load-chart-clamp-caret-latest');
+    // Exactly one caret polygon total (the latest point's own combined
+    // marker) -- no separate plain circle marker duplicating/hiding it.
+    expect((html.match(/<polygon class="load-chart-clamp-caret/g) || []).length).toBe(1);
+    expect(html).not.toMatch(/<circle[^>]*r="3\.5"/);
+  });
+
+  it('still draws the plain circle marker when the latest point is NOT clamped', () => {
+    const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: readySeries }, error: null });
+    expect(html).toMatch(/<circle[^>]*r="3\.5"/);
+    expect(html).not.toContain('load-chart-clamp-caret-latest');
+  });
+
+  it('separates the CTL/ATL inline end-labels vertically when the two lines are numerically close (TSB near 0)', () => {
+    // CTL and ATL both ~30 on the last day (TSB ~0) -- their pixel
+    // y-positions on the shared 0-anchored axis land close together, so
+    // the two end-labels must not use the same small fixed offset (they'd
+    // overlap right when the lines themselves are hardest to tell apart).
+    const closeSeries = [
+      ['2026-07-01', 25, 20, 5],
+      ['2026-07-02', 30, 30, 0],
+    ];
+    const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: closeSeries }, error: null });
+    const ctlY = Number(html.match(/y="(-?[\d.]+)"[^>]*fill:var\(--accent\)">CTL</)?.[1]);
+    const atlY = Number(html.match(/y="(-?[\d.]+)"[^>]*fill:var\(--c-strength\)">ATL</)?.[1]);
+    expect(Number.isFinite(ctlY)).toBe(true);
+    expect(Number.isFinite(atlY)).toBe(true);
+    expect(Math.abs(ctlY - atlY)).toBeGreaterThanOrEqual(14);
+  });
+
   it('renders a one-line plain-text verdict below the chart, before the narrative', () => {
     const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: readySeries }, error: null });
     expect(html).toContain('load-chart-verdict');

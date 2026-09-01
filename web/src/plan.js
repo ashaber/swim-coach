@@ -1110,7 +1110,15 @@ const LOAD_CHART_WIDTH = 640;
 // Was 260 for one panel; two stacked panels plus the gap between them need
 // the extra room.
 const LOAD_CHART_HEIGHT = 300;
-const LOAD_CHART_PADDING = { top: 16, right: 34, bottom: 28, left: 34 };
+// `right` was widened to 34 (matching `left`) for the old dual-axis design's
+// secondary-axis tick labels on the right edge -- gone now that ATL shares
+// the top panel's left axis (nothing draws past `plotRight` any more; the
+// inline end-of-line labels anchor `text-anchor="end"` and extend LEFTWARD
+// from it). Restored to the pre-dual-axis 12px, which is still enough
+// margin for the last point's circle/caret marker (radius/half-width ~4px)
+// not to clip against the viewBox edge -- freeing real plot width back up,
+// which matters most on the mobile viewports this chart is sized for.
+const LOAD_CHART_PADDING = { top: 16, right: 12, bottom: 28, left: 34 };
 const LOAD_CHART_MAX_X_TICKS = 5;
 const LOAD_CHART_Y_TICK_COUNT = 4;
 
@@ -1198,7 +1206,13 @@ function evenIndices(n, maxCount) {
  * index 0), for the "Season" window's month-labeled x-axis -- daily ticks
  * over months of history would be unreadably dense, and evenly-spaced
  * ticks (like `evenIndices` above) wouldn't reliably land on month
- * starts. */
+ * starts. Thinned back down to at most `LOAD_CHART_MAX_X_TICKS` (via
+ * `evenIndices` over the month-boundary list itself, not the raw series --
+ * still always keeping the first and last boundary) once an athlete's
+ * "Season" history spans enough months that one tick per month would
+ * crowd the axis the same way daily ticks would; unbounded, an athlete
+ * with a year-plus of history would get 12+ month labels crammed into the
+ * same width this chart budgets for 5. */
 function monthTickIndices(series) {
   const picks = [0];
   let lastMonth = series[0][0].slice(0, 7);
@@ -1209,7 +1223,8 @@ function monthTickIndices(series) {
       lastMonth = month;
     }
   }
-  return picks;
+  if (picks.length <= LOAD_CHART_MAX_X_TICKS) return picks;
+  return evenIndices(picks.length, LOAD_CHART_MAX_X_TICKS).map((i) => picks[i]);
 }
 
 /** Pure geometry for the CTL/ATL/TSB chart: given `series` (the
