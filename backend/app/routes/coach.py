@@ -124,11 +124,14 @@ async def coach_view_workouts(
     used only to build match candidates for those workouts. Previously both
     were unbounded full-history reads that grew forever with an athlete's
     tenure on the plan. `hr_max`, however, is estimated from the athlete's
-    FULL workout history (an unbounded `list_workouts` call, same pattern
-    `tools.py`'s `get_workouts` uses) rather than just the windowed subset
-    -- it's one estimate for the whole athlete, and estimating it off a
-    short window would make it drift depending on which `days` the coach
-    happened to request."""
+    FULL workout history (same pattern `tools.py`'s `get_workouts` uses) --
+    it's one estimate for the whole athlete, and estimating it off a short
+    window would make it drift depending on which `days` the coach happened
+    to request. Rather than a SECOND unbounded `list_workouts` call just for
+    that (which would reintroduce the exact unbounded-growth cost the
+    windowing refactor above eliminated), the full list is fetched once and
+    the windowed subset is filtered from it in Python -- one store round
+    trip does both jobs instead of two."""
     settings = request.app.state.settings
     slug = resolve_coach_athlete(principal, slug)
     store = make_store(settings)
@@ -137,8 +140,9 @@ async def coach_view_workouts(
     today = date.today()
     since = today - timedelta(days=days)
 
-    workouts = store.list_workouts(slug, since=since)
-    hr_max = estimate_hr_max(store.list_workouts(slug))
+    all_workouts = store.list_workouts(slug)
+    hr_max = estimate_hr_max(all_workouts)
+    workouts = [w for w in all_workouts if w.date >= since]
     wellness = store.list_wellness(slug)
 
     # `list_week_ids` itself stays a full, unfiltered id listing (cheap --

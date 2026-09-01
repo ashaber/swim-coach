@@ -2872,4 +2872,27 @@ describe('renderMacroSection week-count (macro-block off-by-one fix)', () => {
     expect(threeWkMatches.length).toBe(1);
     expect(html).not.toContain('4 wk');
   });
+
+  it('floors a same-day (degenerate) block at 1 week, never 0', () => {
+    // Regression: the corrected inclusive-day-span formula
+    // (Math.round(((end-start)/86400000+1)/7)) rounds DOWN to 0 for any
+    // block spanning ~3 calendar days or fewer (e.g. a same-day
+    // start_date===end_date block: (0+1)/7 = 0.14, rounds to 0) -- unlike
+    // the old formula, which could never go below 1 since its own "+1" was
+    // added AFTER rounding. A `flex:0` block collapses to zero/degenerate
+    // width and a literal "0 wk" label would render -- both nonsensical
+    // for a block that, however short, still spans at least one real day.
+    // totalWeeks and the race-marker block a few lines below already guard
+    // the same expression with `Math.max(1, ...)`; weeksInBlock must too.
+    const degenerateBlocks = [
+      { name: 'Base', start_date: '2026-08-31', end_date: '2026-08-31', weekly_volume_target_m: 20000 },
+    ];
+    const html = renderApp(
+      { athlete: { name: 'Renee' }, events: [], macro: { blocks: degenerateBlocks }, weeks: [] },
+      null,
+    );
+    expect(html).toContain('1 wk');
+    expect(html).not.toContain('0 wk');
+    expect(html).not.toMatch(/flex:0[^.\d]/);
+  });
 });

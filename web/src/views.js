@@ -726,7 +726,15 @@ function renderMacroSection(macro, event, weeks) {
   );
 
   const blockEls = macro.blocks.map((block, i) => {
-    const weeksInBlock = Math.round(((parseIsoDate(block.end_date) - parseIsoDate(block.start_date)) / 86400000 + 1) / 7);
+    // Math.max(1, ...) guard -- same as totalWeeks above and the race-marker
+    // block below -- a block spanning 3 calendar days or fewer would
+    // otherwise round DOWN to 0 weeks (Math.round(4/86400000... /7) can
+    // land below 0.5), producing a nonsensical `flex:0` (a zero/degenerate-
+    // width block) and a literal "0 wk" label. Every real block in this
+    // athlete's own macro plan is at least a week long, but a future
+    // shorter block (or a bad/edge-case date pair) must never render as
+    // "0 wk" -- 1 week is the floor, not zero.
+    const weeksInBlock = Math.max(1, Math.round(((parseIsoDate(block.end_date) - parseIsoDate(block.start_date)) / 86400000 + 1) / 7));
     const heightPct = Math.round((block.weekly_volume_target_m / maxVolume) * 100);
     return `
       <div class="block${i === nowIdx ? ' is-now' : ''}" style="flex:${weeksInBlock}">
@@ -1216,11 +1224,15 @@ function renderCtlAtlTsbNarrative(trend, { expanded = false } = {}) {
   const visibleLines = expanded
     ? [...lines.map((l) => l.long), ...(warmupLong ? [warmupLong] : [])]
     : lines.map((l) => l.short);
-  // "More" is offered whenever expanding would reveal something not
-  // already shown: the warmup caveat (always long-only), or any line whose
-  // long form carries more than its short form (TSB's long explanation
-  // always does).
-  const hasMore = !expanded && (Boolean(warmupLong) || lines.some((l) => l.long !== l.short));
+  // "More" is offered whenever there's more to show than the default view
+  // already shows -- which is always true when reached: `trend.tsb` (and
+  // therefore a TSB line whose `long` always differs from its `short`) is
+  // guaranteed present here, since `describeCtlAtlTsbTrend` only ever
+  // returns a null `tsb` alongside `!hasData`, which already returned early
+  // above. So this reduces to simply "not already expanded" -- not, e.g.,
+  // "only if the warmup caveat exists," which would wrongly suggest a case
+  // (no lines differ AND no warmup caveat) that can't actually occur.
+  const hasMore = !expanded;
 
   return `
     <div class="load-chart-narrative">
