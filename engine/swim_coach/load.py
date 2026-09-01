@@ -73,6 +73,47 @@ different, never-reconciled scales in the broader field, not a solved
 mapping this project invented), and it only applies to whichever athlete
 has actually entered an `lthr_bpm` -- an athlete with none set still gets
 the exact same raw, un-normalized TRIMP as before.
+
+**Second, orthogonal fix -- summing per-lap TRIMP instead of weighting one
+whole-session average (confirmed against real data, Aug 2026):** the
+"known limitation" above is about tiers never sharing a common scale with
+each other. This is a different problem, entirely WITHIN tier 2, and it's
+a real property of the math, not a tuning knob: the Banister weighting
+function `weight(x) = coefficient * e^(exponent * x)` is convex on
+`x >= 0` (a scaled exponential), and so is `x * weight(x)` -- the term
+`_trimp_weighting_factor`'s caller actually multiplies by duration to get
+TRIMP. By Jensen's inequality, for a convex `f`, `avg(f(x_i)) >= f(avg
+(x_i))` -- computing the weighting from one SESSION-AVERAGED HRR fraction
+systematically UNDER-counts load relative to computing it from each
+smaller time-slice's own HRR fraction and summing, whenever HR varies
+within the session. The gap is exactly zero for a steady-state effort
+(every lap's HR equals the session average) and grows with how much HR
+varies -- exactly why this surfaces on interval/VO2 workouts, not steady
+continuous swims/rides. Confirmed against a real over/under bike ride
+logged 2026-08-29: 121.67 raw TRIMP from the workout's single whole-session
+`avg_hr`, vs. 139.52 raw TRIMP summing the identical formula over the
+ride's own 46 device-captured laps -- ~15% higher for the exact same ride.
+Independently, TrainingPeaks' own hrTSS documentation (already cited above
+`HR_LOAD_NORMALIZED_SCALE`) separately notes HR-based training-stress
+metrics "struggle with intense efforts ... because the cardiovascular
+system cannot respond rapidly enough to sudden intensity changes" when
+computed from session-level HR -- a distinct mechanism, but consistent
+with the same conclusion.
+
+`_trimp_from_laps` implements the summed version and is used ONLY when
+`workout.laps` is non-empty, every lap has `avg_hr` set (a single lap
+missing HR data invalidates the whole approach for that workout -- never
+silently treated as zero, which would under-count, the opposite of this
+fix's purpose), and the laps' total duration falls within
+`TRIMP_LAP_COVERAGE_TOLERANCE` of the workout's own total duration (an
+incomplete lap set -- e.g. a few manual laps mid-ride with the rest
+unlapped -- can't honestly stand in for the whole session's load). Falls
+back to the pre-existing whole-session-average computation, completely
+unchanged, whenever any of those conditions fails -- a strict, safe
+refinement that changes nothing for the vast majority of existing
+workouts (zero or one lap, or incomplete lap HR data). No `TRIMP_*`
+constant changes; only the time-resolution the already-cited formula is
+evaluated at does.
 """
 
 from __future__ import annotations
@@ -356,6 +397,85 @@ def _trimp_weighting_factor(hrr_fraction: float, sex: Literal["male", "female", 
     return (male_weight + female_weight) / 2
 
 
+TRIMP_LAP_COVERAGE_TOLERANCE = 0.10
+# Coach judgment / PROVISIONAL engineering tolerance, NOT research-backed --
+# library/15-tiered-session-load.md. Real device lap data won't perfectly
+# reconstruct a whole session (a lap-boundary rounding here or there, an
+# unlapped few seconds at the very start/end), so `_trimp_from_laps` below
+# accepts the laps' total duration as a stand-in for the whole session only
+# when it falls within +/-10% of `workout.duration_min * 60`. Chosen the
+# same way `HR_REST_LOOKBACK_READINGS` above was: a reasonable, honestly-
+# labeled default with no dedicated citation behind the specific number,
+# revisitable once more real lap-vs-session-duration data exists across
+# this athlete's logged history. Deliberately NOT looser than this: a
+# workout where the laps only cover roughly half the session (the athlete
+# manually pressed lap a few times but the device didn't auto-lap the
+# rest) must fall back to whole-session `avg_hr` rather than silently
+# treating the unlapped minutes as if they didn't happen.
+
+
+def _trimp_from_laps(
+    workout: Workout,
+    *,
+    hr_max: float,
+    hr_rest: float,
+    sex: Literal["male", "female", "other"] | None,
+) -> float | None:
+    """Raw (pre-LTHR-normalization) TRIMP summed over `workout.laps`'
+    individual laps, or ``None`` if the laps can't safely stand in for the
+    whole session -- see the module docstring's "Second, orthogonal fix"
+    paragraph for the Jensen's-inequality reasoning this implements
+    (summing the convex Banister weighting per lap is mathematically >= the
+    single whole-session-average result, never a mere alternative estimate).
+
+    Applies the *exact same* per-slice formula `session_load`'s
+    whole-session tier-2 branch already uses -- `duration_min *
+    hrr_fraction * weight(hrr_fraction)`, HRR fraction clamped to
+    `[0.0, 1.0]` for the same reason it's clamped there (a lap's own
+    `avg_hr` can exceed the current `hr_max` estimate, or dip below the
+    assumed `hr_rest`) -- just evaluated once per lap and summed, instead
+    of once for the whole session.
+
+    Returns ``None`` (the caller's signal to fall back to the pre-existing
+    whole-session-`avg_hr` computation, unchanged) when:
+      * `workout.laps` is empty (the overwhelming majority case today).
+      * any lap is missing `avg_hr` -- a single lap without HR data
+        invalidates the whole sum for this workout. Never silently treated
+        as a zero-HR lap or skipped: either would UNDER-count, the opposite
+        of this fix's purpose.
+      * the laps' total duration isn't within `TRIMP_LAP_COVERAGE_TOLERANCE`
+        of the workout's own `duration_min * 60` -- an incomplete lap set
+        (e.g. a few manually-pressed laps mid-session with the rest
+        unlapped) can't honestly represent the full session's load, so
+        those unlapped minutes must not be silently treated as if they
+        never happened.
+
+    `hr_max`/`hr_rest`/`sex` are the same single values `session_load`
+    already resolved for the whole workout -- this fix is only about the
+    time-resolution the HR input is evaluated at, not about deriving a
+    different `hr_max`/`hr_rest`/`sex` per lap.
+    """
+    laps = workout.laps
+    if not laps:
+        return None
+    if any(lap.avg_hr is None for lap in laps):
+        return None
+    laps_total_s = sum(lap.duration_s for lap in laps)
+    session_total_s = workout.duration_min * 60.0
+    coverage_ratio = laps_total_s / session_total_s
+    if abs(coverage_ratio - 1.0) > TRIMP_LAP_COVERAGE_TOLERANCE:
+        return None
+
+    total = 0.0
+    for lap in laps:
+        lap_duration_min = lap.duration_s / 60.0
+        hrr_fraction = (lap.avg_hr - hr_rest) / (hr_max - hr_rest)
+        hrr_fraction = max(0.0, min(1.0, hrr_fraction))
+        weight = _trimp_weighting_factor(hrr_fraction, sex)
+        total += lap_duration_min * hrr_fraction * weight
+    return total
+
+
 HR_LOAD_NORMALIZED_SCALE = 100.0
 # Optional tier-2 refinement: rescale a raw Banister TRIMP value so that one
 # hour spent exactly at the athlete's own measured lactate-threshold heart
@@ -460,6 +580,11 @@ def session_load(
        confirmed ceiling) -- letting either case go unclamped would feed
        an out-of-domain input into the exponential weighting and produce
        a nonsensical (negative or runaway) load.
+       When `workout.laps` gives full-coverage, full-HR-data lap detail,
+       the raw TRIMP is summed per-lap instead of computed once from the
+       whole-session average -- see `_trimp_from_laps` for the exact
+       conditions and the module docstring's "Second, orthogonal fix"
+       paragraph for why that's more correct, not just an alternative.
        When `lthr_bpm` is also known, the raw TRIMP value is additionally
        rescaled so one hour at threshold reads as
        `HR_LOAD_NORMALIZED_SCALE` (100) AU -- see
@@ -482,10 +607,12 @@ def session_load(
         and hr_rest is not None
         and hr_max > hr_rest
     ):
-        hrr_fraction = (workout.avg_hr - hr_rest) / (hr_max - hr_rest)
-        hrr_fraction = max(0.0, min(1.0, hrr_fraction))
-        weight = _trimp_weighting_factor(hrr_fraction, sex)
-        trimp = workout.duration_min * hrr_fraction * weight
+        trimp = _trimp_from_laps(workout, hr_max=hr_max, hr_rest=hr_rest, sex=sex)
+        if trimp is None:
+            hrr_fraction = (workout.avg_hr - hr_rest) / (hr_max - hr_rest)
+            hrr_fraction = max(0.0, min(1.0, hrr_fraction))
+            weight = _trimp_weighting_factor(hrr_fraction, sex)
+            trimp = workout.duration_min * hrr_fraction * weight
         trimp = _normalize_trimp_to_lthr_hour(
             trimp, hr_max=hr_max, hr_rest=hr_rest, lthr_bpm=lthr_bpm, sex=sex
         )

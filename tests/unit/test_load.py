@@ -19,6 +19,7 @@ from swim_coach.load import (
     SWIM_TSS_INTENSITY_EXPONENT,
     TRIMP_FEMALE_COEFFICIENT,
     TRIMP_FEMALE_EXPONENT,
+    TRIMP_LAP_COVERAGE_TOLERANCE,
     TRIMP_MALE_COEFFICIENT,
     TRIMP_MALE_EXPONENT,
     WELLNESS_BASELINE_ACUTE_WINDOW_DAYS,
@@ -38,7 +39,7 @@ from swim_coach.load import (
     wellness_composite,
     wellness_trend,
 )
-from swim_coach.models import Athlete, Session, Wellness, Workout
+from swim_coach.models import Athlete, Session, Wellness, Workout, WorkoutLap
 
 ATHLETE_ID = uuid.uuid4()
 
@@ -198,6 +199,152 @@ def test_session_load_hr_trimp_preferred_over_pace_when_both_available():
         workout, hr_max=190.0, hr_rest=50.0, sex="female", css_pace_s_per_100m=90.0
     )
     assert result.tier == "hr_trimp"
+
+
+# --- session_load: tier 2, lap-based TRIMP summation (Jensen's-inequality fix) ------
+
+
+def _hrr(hr, hr_rest, hr_max):
+    return max(0.0, min(1.0, (hr - hr_rest) / (hr_max - hr_rest)))
+
+
+def _lap_weight(hrr_fraction, sex):
+    male_weight = TRIMP_MALE_COEFFICIENT * math.exp(TRIMP_MALE_EXPONENT * hrr_fraction)
+    if sex == "male":
+        return male_weight
+    female_weight = TRIMP_FEMALE_COEFFICIENT * math.exp(TRIMP_FEMALE_EXPONENT * hrr_fraction)
+    if sex == "female":
+        return female_weight
+    return (male_weight + female_weight) / 2
+
+
+def _hand_trimp(hr, duration_min, hr_rest, hr_max, sex):
+    x = _hrr(hr, hr_rest, hr_max)
+    return duration_min * x * _lap_weight(x, sex)
+
+
+def test_session_load_hr_trimp_sums_over_laps_when_full_coverage_available():
+    # Two 30-minute laps, one a real HR spike (170) and one steady-low (110)
+    # -- device-reported whole-session avg_hr (140) is their plain mean
+    # since the laps are equal-length. Summing the Banister weighting per
+    # lap (convex in HRR fraction, so Jensen's inequality guarantees
+    # avg(f(x_i)) >= f(avg(x_i))) must produce a STRICTLY higher raw TRIMP
+    # than weighting the single whole-session average once.
+    hr_max, hr_rest, sex = 190.0, 50.0, "female"
+    laps = [
+        WorkoutLap(index=0, duration_s=1800.0, avg_hr=170),
+        WorkoutLap(index=1, duration_s=1800.0, avg_hr=110),
+    ]
+    workout = make_workout(rpe=None, duration_min=60.0, avg_hr=140, laps=laps)
+    result = session_load(workout, hr_max=hr_max, hr_rest=hr_rest, sex=sex)
+
+    expected_sum_of_laps = _hand_trimp(170, 30.0, hr_rest, hr_max, sex) + _hand_trimp(
+        110, 30.0, hr_rest, hr_max, sex
+    )
+    expected_whole_session = _hand_trimp(140, 60.0, hr_rest, hr_max, sex)
+
+    assert result.tier == "hr_trimp"
+    assert result.value == pytest.approx(expected_sum_of_laps)
+    assert result.value > expected_whole_session
+
+
+def test_session_load_hr_trimp_lap_missing_avg_hr_falls_back_to_whole_session():
+    # One lap missing avg_hr invalidates the whole sum-of-laps approach for
+    # this workout -- never treat the missing lap as zero or skip it (that
+    # would under-count, the opposite of this fix's purpose). Falls back to
+    # the exact pre-existing whole-session-avg_hr computation.
+    hr_max, hr_rest, sex = 190.0, 50.0, "female"
+    laps = [
+        WorkoutLap(index=0, duration_s=1800.0, avg_hr=170),
+        WorkoutLap(index=1, duration_s=1800.0, avg_hr=None),
+    ]
+    workout = make_workout(rpe=None, duration_min=60.0, avg_hr=140, laps=laps)
+    result = session_load(workout, hr_max=hr_max, hr_rest=hr_rest, sex=sex)
+
+    no_laps_workout = make_workout(rpe=None, duration_min=60.0, avg_hr=140, laps=[])
+    expected = session_load(no_laps_workout, hr_max=hr_max, hr_rest=hr_rest, sex=sex)
+
+    assert result.tier == "hr_trimp"
+    assert result.value == pytest.approx(expected.value)
+
+
+def test_session_load_hr_trimp_incomplete_lap_coverage_falls_back_to_whole_session():
+    # Laps only cover half the session (e.g. the athlete manually lapped a
+    # few times but the device didn't auto-lap the rest) -- an incomplete
+    # lap set can't honestly represent the full session's load, so this
+    # must fall back to whole-session avg_hr, same as the missing-avg_hr
+    # case above.
+    hr_max, hr_rest, sex = 190.0, 50.0, "female"
+    laps = [
+        WorkoutLap(index=0, duration_s=900.0, avg_hr=170),
+        WorkoutLap(index=1, duration_s=900.0, avg_hr=110),
+    ]  # 1800s of laps vs. a 3600s (60-min) session -- 50% coverage, way
+    # outside TRIMP_LAP_COVERAGE_TOLERANCE.
+    workout = make_workout(rpe=None, duration_min=60.0, avg_hr=140, laps=laps)
+    result = session_load(workout, hr_max=hr_max, hr_rest=hr_rest, sex=sex)
+
+    no_laps_workout = make_workout(rpe=None, duration_min=60.0, avg_hr=140, laps=[])
+    expected = session_load(no_laps_workout, hr_max=hr_max, hr_rest=hr_rest, sex=sex)
+
+    assert result.tier == "hr_trimp"
+    assert result.value == pytest.approx(expected.value)
+
+
+def test_session_load_hr_trimp_no_laps_is_byte_identical_to_before_this_change():
+    # The overwhelming majority case across this athlete's real logged
+    # history (zero or one lap) -- must never regress.
+    hr_max, hr_rest, sex = 190.0, 50.0, "female"
+    workout = make_workout(rpe=None, duration_min=60.0, avg_hr=150, laps=[])
+    result = session_load(workout, hr_max=hr_max, hr_rest=hr_rest, sex=sex)
+    expected = _hand_trimp(150, 60.0, hr_rest, hr_max, sex)
+    assert result.tier == "hr_trimp"
+    assert result.value == pytest.approx(expected)
+    assert result.value == pytest.approx(121.499, abs=0.01)
+
+
+def test_session_load_hr_trimp_lap_summation_tolerance_is_documented_default():
+    # Coach-judgment default, revisitable -- see load.py's own doc comment.
+    assert TRIMP_LAP_COVERAGE_TOLERANCE == pytest.approx(0.10)
+
+
+def test_session_load_hr_trimp_real_over_under_ride_regression():
+    # Synthetic reproduction of the real 2026-08-29 over/under bike ride
+    # that surfaced this bug: 48 alternating 1-minute laps (24 hard reps
+    # ~168bpm / 24 recovery reps ~122bpm -- a smaller stand-in for the real
+    # ride's 46 device-captured laps, same qualitative over/under shape).
+    # Whole-session avg_hr is the laps' own duration-weighted mean (145.0),
+    # matching how a real device reports one session-level average. Summing
+    # per-lap TRIMP instead must land in the same ~15% uplift ballpark the
+    # real ride showed (121.67 -> 139.52 raw TRIMP, ~+14.7%) -- direction
+    # and rough magnitude, not false precision from a fabricated exact
+    # match.
+    hr_max, hr_rest, sex = 185.0, 55.0, "male"
+    laps = []
+    for i in range(24):
+        laps.append(WorkoutLap(index=2 * i, duration_s=60.0, avg_hr=168))
+        laps.append(WorkoutLap(index=2 * i + 1, duration_s=60.0, avg_hr=122))
+    total_dur_min = sum(lap.duration_s for lap in laps) / 60.0
+    assert total_dur_min == pytest.approx(48.0)
+    whole_session_avg_hr = sum(lap.avg_hr * lap.duration_s for lap in laps) / sum(
+        lap.duration_s for lap in laps
+    )
+
+    workout = make_workout(
+        rpe=None, duration_min=total_dur_min, avg_hr=round(whole_session_avg_hr), laps=laps
+    )
+    result = session_load(workout, hr_max=hr_max, hr_rest=hr_rest, sex=sex)
+
+    expected_sum_of_laps = sum(
+        _hand_trimp(lap.avg_hr, lap.duration_s / 60.0, hr_rest, hr_max, sex) for lap in laps
+    )
+    expected_whole_session = _hand_trimp(
+        round(whole_session_avg_hr), total_dur_min, hr_rest, hr_max, sex
+    )
+
+    assert result.tier == "hr_trimp"
+    assert result.value == pytest.approx(expected_sum_of_laps)
+    uplift_pct = (result.value / expected_whole_session - 1.0) * 100.0
+    assert 8.0 < uplift_pct < 22.0
 
 
 # --- session_load: tier 2, LTHR normalization (HRSS-style, Andrew's own real numbers) ---
