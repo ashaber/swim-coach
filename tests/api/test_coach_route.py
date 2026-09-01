@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 
@@ -140,6 +141,49 @@ def test_coach_view_workouts_includes_quality_per_item(
     # most-recent-first
     dates = [entry["date"] for entry in body]
     assert dates == sorted(dates, reverse=True)
+
+
+def test_coach_view_workouts_includes_load_au_and_tier(
+    client, allowlist, store, google
+) -> None:
+    """Coach-load-visibility fix: each workout row must carry `load_au`/
+    `load_tier` -- previously `coach_view_workouts` computed `quality` but
+    never called `workout_load_au` at all, so the coach roster's per-athlete
+    workout feed showed no load whatsoever. Asserts the returned values
+    match what `app.load_helpers.workout_load_au` independently computes
+    for the same workout/athlete/hr_max/wellness inputs, not just "some
+    number is present"."""
+    from swim_coach.load import estimate_hr_max
+
+    from app.load_helpers import workout_load_au
+
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    _save_workout_for(store, "renee", date=date.today(), rpe=6, duration_min=60.0)
+
+    headers = _tim_headers(client, allowlist, google)
+    response = client.get("/api/coach/athletes/renee/workouts", headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) >= 1
+    for entry in body:
+        assert "load_au" in entry
+        assert "load_tier" in entry
+
+    # Independently recompute the expected value the same way the route
+    # should, from the same store state, and confirm the route's numbers
+    # match exactly -- not just that the keys exist.
+    athlete = store.load_athlete("renee")
+    all_workouts = store.list_workouts("renee")
+    hr_max = estimate_hr_max(all_workouts)
+    wellness = store.list_wellness("renee")
+    by_id = {w.id: w for w in all_workouts}
+    for entry in body:
+        workout = by_id[UUID(entry["id"])]
+        expected_load_au, expected_load_tier = workout_load_au(
+            workout, athlete=athlete, hr_max=hr_max, wellness=wellness
+        )
+        assert entry["load_au"] == expected_load_au
+        assert entry["load_tier"] == expected_load_tier
 
 
 def test_coach_view_workouts_service_token_passes(client, allowlist, store) -> None:

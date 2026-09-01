@@ -12,7 +12,7 @@ import {
   describeCtlAtlTsbTrend, CTL_COLD_START_DAYS, CTL_WARMED_UP_DAYS,
   CTL_ATL_TREND_WINDOW_DAYS, CTL_TREND_FLAT_THRESHOLD, LOAD_CHART_WINDOW_DAYS,
   LOAD_CHART_WINDOW_OPTIONS, TSB_AXIS_DOMAIN, TSB_PANEL_RATIO, classifyTsbBand,
-  formatMonthLabel,
+  formatMonthLabel, LOAD_CHART_HEIGHT,
 } from '../../src/plan.js';
 
 describe('isoWeekMonday', () => {
@@ -1125,6 +1125,19 @@ describe('ctlAtlTsbChartGeometry', () => {
     const geo = ctlAtlTsbChartGeometry(series, { width: 300, height: 150 });
     expect(geo.width).toBe(300);
     expect(geo.height).toBe(150);
+  });
+
+  it('LOAD_CHART_HEIGHT is 390 (300 + 30%) -- explicit athlete request after seeing '
+    + 'the two-panel rebuild in production ("make it 30% taller"); pin the exact '
+    + 'value so a future accidental revert to 300 is caught', () => {
+    expect(LOAD_CHART_HEIGHT).toBe(390);
+  });
+
+  it('defaults to LOAD_CHART_HEIGHT when no height override is passed', () => {
+    const series = [['2026-08-01', 10, 5, 5], ['2026-08-02', 11, 6, 5]];
+    const geo = ctlAtlTsbChartGeometry(series);
+    expect(geo.height).toBe(LOAD_CHART_HEIGHT);
+    expect(geo.height).toBe(390);
   });
 
   it('x ticks always include the first and last date', () => {

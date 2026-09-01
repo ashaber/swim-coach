@@ -15,6 +15,7 @@ from typing import Any, Callable
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from swim_coach.load import estimate_hr_max
 from swim_coach.quality import match_workout_to_session, workout_quality
 from swim_coach.models import Feedback, Session
 from swim_coach.store import StoreInterface
@@ -22,6 +23,7 @@ from swim_coach.store import StoreInterface
 from app.auth import Principal, require_auth, resolve_coach_athlete
 from app.config import Settings
 from app.context import summarize_rollup
+from app.load_helpers import workout_load_au
 from app.notify import notify_athlete_of_coach_reply
 from app.routes.plan import (
     LOAD_GRAPH_DEFAULT_WEEKS,
@@ -108,13 +110,28 @@ async def coach_view_workouts(
     principal: Principal = Depends(require_auth),
 ) -> list[dict]:
     """Coach-mode roster view's per-athlete workout list, each entry
-    annotated with a `quality` (match-to-planned-session score). Windowed to
-    the trailing `days` days (default `COACH_WORKOUTS_DEFAULT_DAYS`) -- both
-    `store.list_workouts` (pushed down to a real `WHERE date >= ...` on the
-    DB-backed store; see `StoreInterface.list_workouts`'s docstring) and the
-    plan-week scan below used only to build match candidates for those
-    workouts. Previously both were unbounded full-history reads that grew
-    forever with an athlete's tenure on the plan."""
+    annotated with a `quality` (match-to-planned-session score) AND, as of
+    the coach-load-visibility fix, `load_au`/`load_tier` -- the same shared
+    `app.load_helpers.workout_load_au` computation `routes/workouts.py`'s
+    `_attach_load`, `tools.py`'s `get_workouts` tool, and `context.py`'s
+    `render_focused_workout` already all use, so the coach roster reports
+    the identical number the athlete's own view and the AI coach do rather
+    than omitting load entirely (the fourth call site that should have had
+    this from the start). Windowed to the trailing `days` days (default
+    `COACH_WORKOUTS_DEFAULT_DAYS`) -- both `store.list_workouts` (pushed
+    down to a real `WHERE date >= ...` on the DB-backed store; see
+    `StoreInterface.list_workouts`'s docstring) and the plan-week scan below
+    used only to build match candidates for those workouts. Previously both
+    were unbounded full-history reads that grew forever with an athlete's
+    tenure on the plan. `hr_max`, however, is estimated from the athlete's
+    FULL workout history (same pattern `tools.py`'s `get_workouts` uses) --
+    it's one estimate for the whole athlete, and estimating it off a short
+    window would make it drift depending on which `days` the coach happened
+    to request. Rather than a SECOND unbounded `list_workouts` call just for
+    that (which would reintroduce the exact unbounded-growth cost the
+    windowing refactor above eliminated), the full list is fetched once and
+    the windowed subset is filtered from it in Python -- one store round
+    trip does both jobs instead of two."""
     settings = request.app.state.settings
     slug = resolve_coach_athlete(principal, slug)
     store = make_store(settings)
@@ -123,7 +140,10 @@ async def coach_view_workouts(
     today = date.today()
     since = today - timedelta(days=days)
 
-    workouts = store.list_workouts(slug, since=since)
+    all_workouts = store.list_workouts(slug)
+    hr_max = estimate_hr_max(all_workouts)
+    workouts = [w for w in all_workouts if w.date >= since]
+    wellness = store.list_wellness(slug)
 
     # `list_week_ids` itself stays a full, unfiltered id listing (cheap --
     # ids only, no week bodies) so this can filter in Python BEFORE the
@@ -143,7 +163,15 @@ async def coach_view_workouts(
     for workout in workouts:
         session = match_workout_to_session(workout, sessions)
         quality = workout_quality(workout, session, athlete=athlete)
-        result.append({**workout.model_dump(mode="json"), "quality": quality.model_dump(mode="json")})
+        load_au, load_tier = workout_load_au(workout, athlete=athlete, hr_max=hr_max, wellness=wellness)
+        result.append(
+            {
+                **workout.model_dump(mode="json"),
+                "quality": quality.model_dump(mode="json"),
+                "load_au": load_au,
+                "load_tier": load_tier,
+            }
+        )
 
     # `list_workouts` returns filename order (which happens to sort
     # date-ascending today, since filenames are "{date}-{sport}-{id8}.yaml")

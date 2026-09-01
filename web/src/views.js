@@ -712,13 +712,29 @@ function renderMacroSection(macro, event, weeks) {
 
   const nowIdx = currentBlockIndex(macro.blocks);
   const maxVolume = Math.max(...macro.blocks.map((b) => b.weekly_volume_target_m), 1);
+  // Inclusive day-span (end - start + 1) BEFORE dividing by 7, not after --
+  // the previous formula divided the exclusive day-diff by 7 and THEN added
+  // 1, double-counting the "+1 for inclusive dates" adjustment and
+  // overcounting every block by exactly one week (a real production taper
+  // block, start_date=2026-10-12/end_date=2026-10-25 -- an exact 14-day/
+  // 2-week span -- was mislabeled "3 wk", a 50% overcount; see
+  // coach-load-visibility-and-narrative-polish PR for the full hand-check
+  // against four real macro blocks).
   const totalWeeks = macro.blocks.reduce(
-    (sum, b) => sum + Math.max(1, Math.round((parseIsoDate(b.end_date) - parseIsoDate(b.start_date)) / 86400000 / 7) + 1),
+    (sum, b) => sum + Math.max(1, Math.round(((parseIsoDate(b.end_date) - parseIsoDate(b.start_date)) / 86400000 + 1) / 7)),
     0,
   );
 
   const blockEls = macro.blocks.map((block, i) => {
-    const weeksInBlock = Math.round((parseIsoDate(block.end_date) - parseIsoDate(block.start_date)) / 86400000 / 7) + 1;
+    // Math.max(1, ...) guard -- same as totalWeeks above and the race-marker
+    // block below -- a block spanning 3 calendar days or fewer would
+    // otherwise round DOWN to 0 weeks (Math.round(4/86400000... /7) can
+    // land below 0.5), producing a nonsensical `flex:0` (a zero/degenerate-
+    // width block) and a literal "0 wk" label. Every real block in this
+    // athlete's own macro plan is at least a week long, but a future
+    // shorter block (or a bad/edge-case date pair) must never render as
+    // "0 wk" -- 1 week is the floor, not zero.
+    const weeksInBlock = Math.max(1, Math.round(((parseIsoDate(block.end_date) - parseIsoDate(block.start_date)) / 86400000 + 1) / 7));
     const heightPct = Math.round((block.weekly_volume_target_m / maxVolume) * 100);
     return `
       <div class="block${i === nowIdx ? ' is-now' : ''}" style="flex:${weeksInBlock}">
@@ -1073,24 +1089,75 @@ function formatTrendDate(iso) {
   return formatShortDate(parseIsoDate(iso));
 }
 
+/** Short, actionable clause appended to each `classifyTsbBand` band's
+ * SHORT narrative line (see `renderCtlAtlTsbNarrative`) -- a real
+ * recommendation grounded only in the current TSB reading itself, never a
+ * claim about specific planned future sessions (this function has no
+ * access to future plan/session data, and shouldn't reach for it here).
+ * `productive`'s wording matches the athlete's own example verbatim in
+ * spirit ("TSB is in the productive range, keep an eye on this to keep it
+ * here"); the other four follow the same level of concreteness. */
+const TSB_BAND_ACTIONABLE_CLAUSE = {
+  productive: 'keep an eye on this to keep it here',
+  'high-risk': 'worth easing off over the next few sessions to let fatigue clear',
+  'grey-zone': 'not currently in either reference band -- worth watching which way this moves',
+  'race-ready': 'in range for race-day freshness',
+  transition: "fresher than useful for training -- likely time to pick load back up if there's no race imminent",
+};
+
+/** Fuller explanatory clause for each band -- the pre-existing, more
+ * detailed text (unchanged from before this reorder), now shown only in
+ * the narrative's LONG/expanded form rather than by default. */
+const TSB_BAND_LONG_CLAUSE = {
+  'productive': `inside the ${PRODUCTIVE_TRAINING_TSB_BAND.low} to ${PRODUCTIVE_TRAINING_TSB_BAND.high} productive-training band -- expected and good while building, not a warning sign. Reaching the +${RACE_DAY_TSB_BAND.low} to +${RACE_DAY_TSB_BAND.high} race-ready band from here is the taper's job, not something that should already be true mid-block`,
+  'high-risk': `below the ${PRODUCTIVE_TRAINING_TSB_BAND.low} to ${PRODUCTIVE_TRAINING_TSB_BAND.high} productive-training band -- fatigue is accumulating faster than that convention recommends; worth a closer look at recent load and wellness together, not just this number alone`,
+  'grey-zone': `between the productive-training and race-ready bands -- neither deep in a training block nor freshening for a race`,
+  'race-ready': `inside the +${RACE_DAY_TSB_BAND.low} to +${RACE_DAY_TSB_BAND.high} race-day reference band`,
+  'transition': `above the +${RACE_DAY_TSB_BAND.low} to +${RACE_DAY_TSB_BAND.high} race-day reference band -- fresher than race day calls for, likely losing fitness if held here long`,
+};
+
 /** Renders `describeCtlAtlTsbTrend`'s structured summary as the athlete-
  * facing "what the numbers say" prose -- the "useful coach guidance below
  * the load graph" this whole feature is for (an athlete's spouse's own
  * description of a hand-written narrative interpretation of this same
  * chart, judged more useful day-to-day than the generic methodology
  * caption that used to sit directly under it -- see `renderLoadChart`'s
- * own comment for where that caption moved). Ordered warmup caveat first
- * (an honest heads-up belongs before the numbers it qualifies, not buried
- * after them), then CTL direction, then the biggest ATL swing, then
- * current TSB. Returns `''` when `!trend.hasData` -- same empty-series
- * case `ctlAtlTsbChartGeometry` already renders its own "not enough data
- * yet" message for, so this narrative doesn't duplicate that.
+ * own comment for where that caption moved).
  *
- * Truncation (design spec 3.6): now that `renderLoadChartVerdict` above
- * gives the one-line headline, this narrative's job is the fuller detail --
- * genuinely valuable, but no longer the FIRST thing competing for
- * attention. Only the first line renders by default; the rest sit behind a
- * "more" toggle -- same one-way, state-tracked "Show more" convention
+ * **Ordering (actionable-first, caveats-last)**: this used to lead with the
+ * warmup/cold-start caveat, then CTL, then ATL, then TSB last -- and only
+ * ever showed the FIRST of those by default, which meant the caveat (not
+ * the actual guidance) was usually the only thing an athlete saw without
+ * tapping "more". Direct athlete feedback: "the part shown 'this series
+ * has 66 days blah blah blah' belongs at the bottom. Put the two or three
+ * actionable sentences at top." This reorders to TSB (with a short
+ * actionable clause) -> CTL trend -> ATL spike (when present/non-flat) ->
+ * warmup caveat, and shows every one of those EXCEPT the caveat by
+ * default -- the caveat is always last and always hidden behind "more",
+ * regardless of how many other lines there are, since it's a
+ * data-maturity disclaimer, not something to act on today.
+ *
+ * **Two-level short/long structure**: each fact is a `{ short, long }`
+ * pair rather than one flat string. The TSB line specifically needs a
+ * distinct short form (band + one actionable clause, e.g. "in the
+ * productive band -- keep an eye on this to keep it here") versus its
+ * long form (the fuller "expected and good while building..." explanation
+ * that used to be the whole line) -- see `TSB_BAND_ACTIONABLE_CLAUSE`/
+ * `TSB_BAND_LONG_CLAUSE`. CTL-trend and ATL-spike currently reuse the same
+ * text for both short and long (already concise, factual sentences); the
+ * warmup caveat only ever has a long form, since it never appears short.
+ * Default (non-expanded) view renders every default-visible line's
+ * `.short`; expanded view renders every line's `.long`, with the caveat
+ * appended at the very end. The ATL-spike sentence keeps stating the real,
+ * already-computed `atlSpike.fromDate`/`toDate`/values plainly (never a
+ * vague "big training day" guess) -- per the athlete's explicit "not a
+ * guess - must have been big training day, read the data" instruction.
+ *
+ * Returns `''` when `!trend.hasData` -- same empty-series case
+ * `ctlAtlTsbChartGeometry` already renders its own "not enough data yet"
+ * message for, so this narrative doesn't duplicate that.
+ *
+ * "More" toggle: same one-way, state-tracked "Show more" convention
  * `main.js`'s `state.dashboardFeedExpanded`/`state.roster.feedExpanded`
  * already use for the Training Dashboard feed (see
  * `handleShowMoreDashboardFeed`'s doc comment there), reused here via
@@ -1104,45 +1171,69 @@ function formatTrendDate(iso) {
 function renderCtlAtlTsbNarrative(trend, { expanded = false } = {}) {
   if (!trend.hasData) return '';
 
+  // Default-visible facts, in actionable-first priority order: TSB (with
+  // its short actionable clause) -> CTL trend -> ATL spike (when present
+  // and non-flat). Each is a { short, long } pair.
   const lines = [];
 
-  if (trend.warmup === 'cold-start') {
-    lines.push(`Only ${trend.historyDays} day${trend.historyDays === 1 ? '' : 's'} of logged history so far -- CTL and ATL are still climbing up from zero and don't yet reflect real fitness/fatigue levels. Read everything below as provisional until more history accumulates.`);
-  } else if (trend.warmup === 'warming-up') {
-    lines.push(`This series has ${trend.historyDays} days of history -- past the point where CTL/ATL are pure zero-artifacts, but not yet "fully warmed up" by this model's own standard. Read the trend below as directionally useful, not yet a fully mature fitness estimate.`);
+  if (trend.tsb) {
+    const { value, band, date } = trend.tsb;
+    const bandLabel = TSB_VERDICT_BAND_LABEL[band];
+    lines.push({
+      short: `TSB (form) is ${formatTrendValue(value)}, in the ${bandLabel} -- ${TSB_BAND_ACTIONABLE_CLAUSE[band]}.`,
+      long: `TSB (form) is currently ${formatTrendValue(value)} as of ${formatTrendDate(date)} -- ${TSB_BAND_LONG_CLAUSE[band]}.`,
+    });
   }
 
   if (trend.ctlTrend) {
+    let text;
     if (trend.ctlTrend.status === 'insufficient-window') {
-      lines.push(`Not enough history yet (${trend.ctlTrend.historyDays} day${trend.ctlTrend.historyDays === 1 ? '' : 's'}) to compare CTL over a ${trend.ctlTrend.requiredWindowDays}-day window.`);
+      text = `Not enough history yet (${trend.ctlTrend.historyDays} day${trend.ctlTrend.historyDays === 1 ? '' : 's'}) to compare CTL over a ${trend.ctlTrend.requiredWindowDays}-day window.`;
     } else {
       const { status, fromDate, toDate, fromValue, toValue } = trend.ctlTrend;
       const verb = { rising: 'climbed', falling: 'dropped', flat: 'held roughly flat' }[status];
-      lines.push(`CTL (fitness) has ${verb}${status === 'flat' ? '' : ' steadily'} from ${formatTrendDate(fromDate)} to ${formatTrendDate(toDate)}: ${formatTrendValue(fromValue)} → ${formatTrendValue(toValue)}.`);
+      text = `CTL (fitness) has ${verb}${status === 'flat' ? '' : ' steadily'} from ${formatTrendDate(fromDate)} to ${formatTrendDate(toDate)}: ${formatTrendValue(fromValue)} → ${formatTrendValue(toValue)}.`;
     }
+    lines.push({ short: text, long: text });
   }
 
   if (trend.atlSpike && trend.atlSpike.direction !== 'flat') {
     const { fromDate, toDate, fromValue, toValue, direction } = trend.atlSpike;
     const verb = direction === 'up' ? 'jumped' : 'dropped';
-    lines.push(`ATL (fatigue) ${verb} from ${formatTrendValue(fromValue)} to ${formatTrendValue(toValue)} across ${formatTrendDate(fromDate)}–${formatTrendDate(toDate)} -- the biggest recent swing, most likely tracking a big training day or block.`);
+    const dateRange = `${formatTrendDate(fromDate)}–${formatTrendDate(toDate)}`;
+    lines.push({
+      short: `ATL (fatigue) ${verb} from ${formatTrendValue(fromValue)} to ${formatTrendValue(toValue)} across ${dateRange} -- most likely a big training day; a few shorter days will shed the fatigue.`,
+      long: `ATL (fatigue) ${verb} from ${formatTrendValue(fromValue)} to ${formatTrendValue(toValue)} across ${dateRange} -- the biggest recent swing, most likely tracking a big training day or block.`,
+    });
   }
 
-  if (trend.tsb) {
-    const { value, band, date } = trend.tsb;
-    const bandPhrase = {
-      'productive': `inside the ${PRODUCTIVE_TRAINING_TSB_BAND.low} to ${PRODUCTIVE_TRAINING_TSB_BAND.high} productive-training band -- expected and good while building, not a warning sign. Reaching the +${RACE_DAY_TSB_BAND.low} to +${RACE_DAY_TSB_BAND.high} race-ready band from here is the taper's job, not something that should already be true mid-block`,
-      'high-risk': `below the ${PRODUCTIVE_TRAINING_TSB_BAND.low} to ${PRODUCTIVE_TRAINING_TSB_BAND.high} productive-training band -- fatigue is accumulating faster than that convention recommends; worth a closer look at recent load and wellness together, not just this number alone`,
-      'grey-zone': `between the productive-training and race-ready bands -- neither deep in a training block nor freshening for a race`,
-      'race-ready': `inside the +${RACE_DAY_TSB_BAND.low} to +${RACE_DAY_TSB_BAND.high} race-day reference band`,
-      'transition': `above the +${RACE_DAY_TSB_BAND.low} to +${RACE_DAY_TSB_BAND.high} race-day reference band -- fresher than race day calls for, likely losing fitness if held here long`,
-    }[band];
-    lines.push(`TSB (form) is currently ${formatTrendValue(value)} as of ${formatTrendDate(date)} -- ${bandPhrase}.`);
+  // Warmup/cold-start caveat: ALWAYS last, and only ever rendered in the
+  // expanded/"more" view, regardless of how many other lines exist above --
+  // it's a data-maturity disclaimer, not something actionable today (the
+  // athlete's own "put longer explanation and filling the pipeline in the
+  // more^ section" instruction).
+  let warmupLong = null;
+  if (trend.warmup === 'cold-start') {
+    warmupLong = `Only ${trend.historyDays} day${trend.historyDays === 1 ? '' : 's'} of logged history so far -- CTL and ATL are still climbing up from zero and don't yet reflect real fitness/fatigue levels. Read everything above as provisional until more history accumulates.`;
+  } else if (trend.warmup === 'warming-up') {
+    warmupLong = `This series has ${trend.historyDays} days of history -- past the point where CTL/ATL are pure zero-artifacts, but not yet "fully warmed up" by this model's own standard. Read the trend above as directionally useful, not yet a fully mature fitness estimate.`;
   }
 
-  if (lines.length === 0) return '';
-  const visibleLines = expanded ? lines : lines.slice(0, 1);
-  const hasMore = !expanded && lines.length > 1;
+  if (lines.length === 0 && !warmupLong) return '';
+
+  const visibleLines = expanded
+    ? [...lines.map((l) => l.long), ...(warmupLong ? [warmupLong] : [])]
+    : lines.map((l) => l.short);
+  // "More" is offered whenever there's more to show than the default view
+  // already shows -- which is always true when reached: `trend.tsb` (and
+  // therefore a TSB line whose `long` always differs from its `short`) is
+  // guaranteed present here, since `describeCtlAtlTsbTrend` only ever
+  // returns a null `tsb` alongside `!hasData`, which already returned early
+  // above. So this reduces to simply "not already expanded" -- not, e.g.,
+  // "only if the warmup caveat exists," which would wrongly suggest a case
+  // (no lines differ AND no warmup caveat) that can't actually occur.
+  const hasMore = !expanded;
+
   return `
     <div class="load-chart-narrative">
       <h4>What the numbers say</h4>
@@ -1727,6 +1818,26 @@ function renderLoadChip(workout) {
   return `<span class="chat-chip">${esc(workout.load_au)} AU${tierLabel ? ` &middot; ${esc(tierLabel)}` : ''}</span>`;
 }
 
+/** RPE chip -- shared by renderWorkoutRow and renderCoachWorkoutRow. A real
+ * `rpe` renders the existing "RPE {n}" chip unchanged. A missing `rpe`
+ * (null/undefined -- common and expected for e.g. GPS-only swims, not an
+ * error) now renders an explicit "No RPE" chip instead of nothing at all:
+ * previously a missing RPE was silently omitted, so the athlete/coach
+ * couldn't tell "this workout has no RPE" from "the row just hasn't
+ * rendered it yet." This matters more now that the load narrative (see
+ * renderCtlAtlTsbNarrative) can point at a workout's load number, and
+ * whether RPE was present is part of how that number was derived. Reuses
+ * the plain `.chat-chip` style (already the quiet/neutral default in this
+ * file -- unlike the accent-colored `.chip-cta` or attention-colored
+ * `.chip-skipped`) rather than an alarming one, since an absent RPE is
+ * informational, not a problem. */
+function renderRpeChip(workout) {
+  if (workout.rpe !== null && workout.rpe !== undefined) {
+    return `<span class="chat-chip">RPE ${esc(workout.rpe)}</span>`;
+  }
+  return '<span class="chat-chip">No RPE</span>';
+}
+
 // A6c: an in-app-only "rate this workout" nudge -- no push notification, no
 // new fetch/timer plumbing (explicitly out of scope this build, see the
 // plan doc). Evaluated purely from data already in the feed, only at
@@ -1784,7 +1895,7 @@ export function renderWorkoutRow(workout, now = Date.now()) {
         <div class="hist-title">
           <span>${esc(sportLabel(workout.sport, workout.sport_detail))}</span>
           ${badge ? `<span class="chat-chip">${esc(badge)}</span>` : ''}
-          ${workout.rpe !== null && workout.rpe !== undefined ? `<span class="chat-chip">RPE ${esc(workout.rpe)}</span>` : ''}
+          ${renderRpeChip(workout)}
           ${renderLoadChip(workout)}
           ${renderRateChip(workout, now)}
         </div>
@@ -2565,7 +2676,7 @@ function renderCoachWorkoutRow(workout, now) {
       <div class="hist-body">
         <div class="hist-title">
           <span>${esc(sportLabel(workout.sport, workout.sport_detail))}</span>
-          ${workout.rpe !== null && workout.rpe !== undefined ? `<span class="chat-chip">RPE ${esc(workout.rpe)}</span>` : ''}
+          ${renderRpeChip(workout)}
           ${renderLoadChip(workout)}
         </div>
         <div class="hist-meta mono">${metaParts.join(' · ')}</div>
