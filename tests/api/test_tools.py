@@ -263,6 +263,114 @@ def test_flag_for_coach_review_requires_question_and_topic(athletes_dir) -> None
     assert spy.saved == []
 
 
+# --- record_health_status ---------------------------------------------------
+
+
+def test_record_health_status_persists_status_and_linked_feedback(athletes_dir, run_tag) -> None:
+    spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir))
+    handlers = build_tool_handlers(spy, slug="renee", expert_mode=False)
+
+    description = f"Sharp right shoulder pain during catch-up drills [{run_tag}]"
+    result = handlers["record_health_status"](
+        {"description": description, "restriction": "light_only", "source": "self_reported"}
+    )
+
+    assert result["logged"] is True
+    assert result["restriction"] == "light_only"
+
+    statuses = spy.list_health_status("renee")
+    assert len(statuses) == 1
+    status = statuses[0]
+    assert status.description == description
+    assert status.restriction == "light_only"
+    assert status.source == "self_reported"
+    assert status.reported_by == "coach"
+    assert status.resolved is False
+    assert str(status.id) == result["health_status_id"]
+
+    assert len(spy.saved) == 1
+    feedback = spy.saved[0]
+    assert feedback.type == "coach_review"
+    assert feedback.needs_human_review is True
+    assert feedback.body == description
+    assert feedback.context["health_status_id"] == str(status.id)
+    assert feedback.athlete_id == spy.load_athlete("renee").id
+    assert str(feedback.id) == result["feedback_id"]
+
+
+def test_record_health_status_accepts_expected_review_date(athletes_dir) -> None:
+    spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir))
+    handlers = build_tool_handlers(spy, slug="renee", expert_mode=False)
+
+    result = handlers["record_health_status"](
+        {
+            "description": "Physio cleared pool work, no OW for 2 weeks.",
+            "restriction": "light_only",
+            "source": "practitioner",
+            "expected_review_date": "2026-09-13",
+        }
+    )
+
+    assert result["logged"] is True
+    status = spy.list_health_status("renee")[0]
+    assert status.expected_review_date is not None
+    assert status.expected_review_date.isoformat() == "2026-09-13"
+    assert status.source == "practitioner"
+
+
+def test_record_health_status_invalid_restriction_is_rejected(athletes_dir) -> None:
+    spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir))
+    handlers = build_tool_handlers(spy, slug="renee", expert_mode=False)
+
+    result = handlers["record_health_status"](
+        {"description": "shoulder pain", "restriction": "definitely_not_a_real_value", "source": "self_reported"}
+    )
+
+    assert "error" in result
+    assert spy.saved == []
+    assert spy.list_health_status("renee") == []
+
+
+def test_record_health_status_invalid_source_is_rejected(athletes_dir) -> None:
+    spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir))
+    handlers = build_tool_handlers(spy, slug="renee", expert_mode=False)
+
+    result = handlers["record_health_status"](
+        {"description": "shoulder pain", "restriction": "light_only", "source": "hearsay"}
+    )
+
+    assert "error" in result
+    assert spy.saved == []
+
+
+def test_record_health_status_missing_required_fields_is_rejected(athletes_dir) -> None:
+    spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir))
+    handlers = build_tool_handlers(spy, slug="renee", expert_mode=False)
+
+    result = handlers["record_health_status"]({"description": "shoulder pain"})
+
+    assert "error" in result
+    assert spy.saved == []
+
+
+def test_record_health_status_invalid_expected_review_date_is_rejected(athletes_dir) -> None:
+    spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir))
+    handlers = build_tool_handlers(spy, slug="renee", expert_mode=False)
+
+    result = handlers["record_health_status"](
+        {
+            "description": "shoulder pain",
+            "restriction": "light_only",
+            "source": "self_reported",
+            "expected_review_date": "not-a-date",
+        }
+    )
+
+    assert "error" in result
+    assert spy.saved == []
+    assert spy.list_health_status("renee") == []
+
+
 def _save(store: FileStore, **overrides) -> None:
     store.save_workout("renee", make_workout(**overrides))
 

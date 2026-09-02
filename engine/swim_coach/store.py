@@ -24,6 +24,7 @@ from swim_coach.models import (
     CoachGrant,
     Event,
     Feedback,
+    HealthStatus,
     MacroPlan,
     Sport,
     Wellness,
@@ -121,6 +122,41 @@ class StoreInterface(ABC):
 
     @abstractmethod
     def save_wellness(self, slug: str, wellness: Wellness) -> None: ...
+
+    @abstractmethod
+    def save_health_status(self, slug: str, entry: HealthStatus) -> None:
+        """Append one durable health-status-log entry (see
+        models.HealthStatus's own docstring for why this is a log, never a
+        single mutable field). Never overwrites or deletes a previous
+        entry -- a new status is always a NEW entry, even when it
+        supersedes an earlier one; the only in-place mutation this log ever
+        allows is flipping an existing entry's `resolved`/`resolved_at`
+        (see `update_health_status` below), never body-content edits."""
+        ...
+
+    @abstractmethod
+    def list_health_status(self, slug: str, *, since: date | None = None) -> list[HealthStatus]:
+        """Every health-status entry for this athlete, most-recent-first by
+        `reported_at` -- same ordering convention as `list_feedback`. The
+        MOST RECENT entry with `resolved=False` (i.e. the first element of
+        this list with `resolved is False`) is the athlete's current active
+        status; if none exists, no active restriction is on file (which is
+        NOT the same as "definitely fine" -- see HealthStatus's docstring).
+        `since`, when given, restricts the result to entries with
+        `reported_at.date() >= since` (inclusive) -- same
+        push-it-into-the-query contract `list_workouts`'s `since` documents;
+        `since=None` (the default) returns full history."""
+        ...
+
+    @abstractmethod
+    def update_health_status(
+        self, slug: str, health_status_id: UUID, *, resolved: bool, resolved_at: datetime | None
+    ) -> HealthStatus | None:
+        """Marks one existing entry resolved/unresolved -- the one in-place
+        mutation this log allows (see `save_health_status`'s docstring).
+        Returns the updated entry, or None if `health_status_id` doesn't
+        match any entry for this athlete."""
+        ...
 
     @abstractmethod
     def save_feedback(self, entry: Feedback) -> None:
@@ -439,6 +475,46 @@ class FileStore(StoreInterface):
         directory = self._athlete_dir(slug) / "logs" / "wellness"
         path = directory / f"{wellness.date.isoformat()}.yaml"
         _write_yaml(path, _dump_model(wellness))
+
+    # --- Health status (durable injury/illness log) -------------------------
+
+    def _health_status_path(self, slug: str, entry: HealthStatus) -> Path:
+        # One file per entry (never one-per-date like wellness -- multiple
+        # health-status entries can legitimately land the same day, e.g. an
+        # athlete self-report followed later by a coach relaying practitioner
+        # guidance). Mirrors save_workout's "date + short id" naming so two
+        # same-day entries never collide.
+        directory = self._athlete_dir(slug) / "logs" / "health-status"
+        short_id = str(entry.id)[:8]
+        return directory / f"{entry.reported_at.date().isoformat()}-{short_id}.yaml"
+
+    def save_health_status(self, slug: str, entry: HealthStatus) -> None:
+        _write_yaml(self._health_status_path(slug, entry), _dump_model(entry))
+
+    def list_health_status(self, slug: str, *, since: date | None = None) -> list[HealthStatus]:
+        directory = self._athlete_dir(slug) / "logs" / "health-status"
+        if not directory.exists():
+            return []
+        entries = []
+        for path in sorted(directory.glob("*.yaml")):
+            data = _read_yaml(path)
+            if data is not None:
+                entry = HealthStatus.model_validate(data)
+                if since is not None and entry.reported_at.date() < since:
+                    continue
+                entries.append(entry)
+        entries.sort(key=lambda e: e.reported_at, reverse=True)
+        return entries
+
+    def update_health_status(
+        self, slug: str, health_status_id: UUID, *, resolved: bool, resolved_at: datetime | None
+    ) -> HealthStatus | None:
+        for entry in self.list_health_status(slug):
+            if entry.id == health_status_id:
+                updated = entry.model_copy(update={"resolved": resolved, "resolved_at": resolved_at})
+                _write_yaml(self._health_status_path(slug, updated), _dump_model(updated))
+                return updated
+        return None
 
     # --- Feedback (durable, replaces research/open-questions.jsonl) --------
 

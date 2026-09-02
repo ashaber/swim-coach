@@ -15,7 +15,7 @@ import yaml
 
 from swim_coach.cli import main, parse_time_to_s
 from swim_coach.load import ZONE_ASSUMED_RPE
-from swim_coach.models import AllowedEmail, Session, Wellness, WeekPlan, Workout
+from swim_coach.models import AllowedEmail, HealthStatus, Session, Wellness, WeekPlan, Workout
 from pathlib import Path
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -67,6 +67,7 @@ def test_validate_success_reports_counts(athlete_tree, capsys):
     assert result["counts"]["weeks"] == 0
     assert result["counts"]["workouts"] == 0
     assert result["counts"]["wellness"] == 0
+    assert result["counts"]["health_status"] == 0
 
 
 def test_validate_missing_athlete_returns_1(tmp_path, capsys):
@@ -108,6 +109,39 @@ def test_validate_counts_workouts_and_wellness(athlete_tree, capsys):
     assert code == 0
     result = _out(capsys)
     assert result["counts"]["workouts"] == 1
+
+
+def test_validate_counts_health_status(athlete_tree, capsys):
+    store = athlete_tree["store"]
+    slug = athlete_tree["slug"]
+    entry = HealthStatus(
+        id=uuid.uuid4(),
+        athlete_id=athlete_tree["athlete"].id,
+        reported_at=datetime(2026, 1, 6, tzinfo=timezone.utc),
+        reported_by="athlete",
+        source="self_reported",
+        description="shoulder pain",
+        restriction="light_only",
+    )
+    store.save_health_status(slug, entry)
+
+    code = _run(athlete_tree["base_dir"], "validate", "--athlete", slug)
+    assert code == 0
+    result = _out(capsys)
+    assert result["counts"]["health_status"] == 1
+
+
+def test_validate_reports_bad_health_status_file_with_path(athlete_tree, capsys):
+    directory = athlete_tree["base_dir"] / athlete_tree["slug"] / "logs" / "health-status"
+    directory.mkdir(parents=True, exist_ok=True)
+    bad_path = directory / "2026-01-01-badbad12.yaml"
+    bad_path.write_text(yaml.safe_dump({"not": "a valid health status"}), encoding="utf-8")
+
+    code = _run(athlete_tree["base_dir"], "validate", "--athlete", athlete_tree["slug"])
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+    assert str(bad_path) == result["file"]
 
 
 # --- zones -----------------------------------------------------------------------

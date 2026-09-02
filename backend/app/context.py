@@ -53,7 +53,7 @@ from swim_coach.load import (
     wellness_baseline_deviation,
     wellness_trend,
 )
-from swim_coach.models import Athlete, Event, Session, Workout
+from swim_coach.models import Athlete, Event, HealthStatus, Session, Workout
 from swim_coach.store import StoreInterface
 
 from app.load_helpers import workout_load_au
@@ -107,6 +107,33 @@ the athlete described. This is a parallel, invisible-to-the-athlete side
 effect: she still sees ONLY the fixed warning text above as your reply. A
 human coach needs to know this override fired, not just that the athlete saw
 a warning message.
+
+## Ordinary injury/illness reports and practitioner guidance -- remember them
+
+Separately from the acute-symptom override above (which is for alarming,
+immediate-danger symptoms only): whenever the athlete describes an
+ordinary injury, pain, soreness beyond the everyday kind, or illness, OR a
+coach relays what a physio/doctor/practitioner said about her training
+capacity, call `record_health_status` with the description verbatim, your
+best read of `restriction` (`none`/`light_only`/`no_training`), and
+`source` (`self_reported` for her own account, `practitioner` for relayed
+clinical guidance). Call it ALONGSIDE your normal reply, in the same turn --
+this is "so it's remembered," never "instead of talking normally." She
+should never notice this happening; it's a durable record for a human coach
+and, later, this system's own planning logic to read, not a change to how
+you talk to her right now. Do this even when you also called
+`flag_for_coach_review` for the same report (e.g. a high-stakes call) --
+`record_health_status` guarantees human visibility on its own, but the two
+tools serve different purposes and either may still be worth calling for
+its own reason.
+
+If the per-request context below shows an athlete already has an active
+(unresolved) health status on file, read it before answering and factor it
+into your judgment -- do not cheerfully propose a full volume week to an
+athlete you already know is flagged light-only or no-training. This is
+context to weigh, not an automatic block: you still decide what to say, and
+nothing here silently changes what `propose_adaptation`/`create_week_plan`/
+etc. would otherwise compute.
 
 ## Voice
 
@@ -790,6 +817,48 @@ def _render_demographics(athlete: Athlete, today: date) -> str | None:
     return json.dumps(facts)
 
 
+def _active_health_status(statuses: list[HealthStatus]) -> HealthStatus | None:
+    """The current active status per HealthStatus's own docstring: the
+    most-recent (by `reported_at`) entry with `resolved=False`. `statuses`
+    is expected already most-recent-first (`list_health_status`'s own
+    ordering contract), so this is just "first unresolved entry" -- but
+    this helper re-derives it defensively rather than assuming callers
+    never hand it an unsorted list."""
+    unresolved = [s for s in statuses if not s.resolved]
+    if not unresolved:
+        return None
+    return max(unresolved, key=lambda s: s.reported_at)
+
+
+def _render_active_health_status(statuses: list[HealthStatus]) -> str:
+    """A prominent, hard-to-miss block for the model's per-request context:
+    the athlete's current active (unresolved) health status, if any. Absence
+    of an active entry is rendered as an EXPLICIT "nothing on file" -- never
+    silence -- and is worded to avoid ever reading as an all-clear (see
+    HealthStatus's own docstring: no record is not the same as "definitely
+    fine"). This is context for the model's judgment, not an enforcement
+    mechanism -- nothing here blocks or rewrites any plan-generation tool
+    call; see context.py's module docstring / this build's PR description
+    for the explicit scope boundary."""
+    active = _active_health_status(statuses)
+    if active is None:
+        return (
+            "No active health status is on file for this athlete. This means "
+            "nothing has been recorded either way -- it is NOT a confirmation "
+            "she's fine, just an absence of data."
+        )
+    lines = [
+        "ACTIVE HEALTH STATUS ON FILE -- read this before answering:",
+        f"  Restriction: {active.restriction}",
+        f"  Description: {active.description}",
+        f"  Reported: {active.reported_at.date().isoformat()} "
+        f"(by {active.reported_by}, {active.source.replace('_', ' ')})",
+    ]
+    if active.expected_review_date is not None:
+        lines.append(f"  Expected review date: {active.expected_review_date.isoformat()}")
+    return "\n".join(lines)
+
+
 def _render_events(events: list[Event], today: date) -> str:
     """Compact, chronological rendering of every event on file, each with
     `days_until` computed relative to `today` -- fixes the coach not
@@ -1004,6 +1073,9 @@ def build_per_request_context(
             demographics,
         ]
     parts += [
+        "",
+        "### Health status",
+        _render_active_health_status(store.list_health_status(slug)),
         "",
         f"### Current week plan ({current_iso})",
         json.dumps(_week_or_none(store, slug, current_iso), indent=2),

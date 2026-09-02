@@ -528,3 +528,197 @@ def test_coach_view_plan_unknown_athlete_is_404(client, allowlist, store, google
     headers = _tim_headers(client, allowlist, google)
     response = client.get("/api/coach/athletes/nobody/plan", headers=headers)
     assert response.status_code == 403
+
+
+# --- GET/POST/PATCH /api/coach/athletes/{slug}/health-status ----------------
+
+
+def test_coach_view_health_status_requires_auth(client) -> None:
+    response = client.get("/api/coach/athletes/renee/health-status")
+    assert response.status_code == 401
+
+
+def test_coach_view_health_status_403_without_grant(client, allowlist, google) -> None:
+    headers = _tim_headers(client, allowlist, google)
+    response = client.get("/api/coach/athletes/renee/health-status", headers=headers)
+    assert response.status_code == 403
+
+
+def test_coach_view_health_status_empty_when_none(client, allowlist, store, google) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    headers = _tim_headers(client, allowlist, google)
+    response = client.get("/api/coach/athletes/renee/health-status", headers=headers)
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_coach_create_health_status_requires_auth(client, allowlist) -> None:
+    response = client.post(
+        "/api/coach/athletes/renee/health-status",
+        json={"description": "shoulder pain", "restriction": "light_only", "source": "self_reported"},
+    )
+    assert response.status_code == 401
+
+
+def test_coach_create_health_status_403_without_grant(client, allowlist, google) -> None:
+    headers = _tim_headers(client, allowlist, google)
+    response = client.post(
+        "/api/coach/athletes/renee/health-status",
+        json={"description": "shoulder pain", "restriction": "light_only", "source": "self_reported"},
+        headers=headers,
+    )
+    assert response.status_code == 403
+
+
+def test_coach_create_health_status_persists_and_is_listable(client, allowlist, store, google) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    headers = _tim_headers(client, allowlist, google)
+
+    response = client.post(
+        "/api/coach/athletes/renee/health-status",
+        json={
+            "description": "Physio cleared pool work, no OW for 2 weeks.",
+            "restriction": "light_only",
+            "source": "practitioner",
+            "expected_review_date": "2026-09-13",
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["description"] == "Physio cleared pool work, no OW for 2 weeks."
+    assert body["restriction"] == "light_only"
+    assert body["source"] == "practitioner"
+    assert body["reported_by"] == "coach"
+    assert body["resolved"] is False
+    assert body["expected_review_date"] == "2026-09-13"
+
+    listed = client.get("/api/coach/athletes/renee/health-status", headers=headers)
+    assert listed.status_code == 200
+    assert len(listed.json()) == 1
+    assert listed.json()[0]["id"] == body["id"]
+
+
+def test_coach_create_health_status_missing_description_is_422(client, allowlist, store, google) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    headers = _tim_headers(client, allowlist, google)
+    response = client.post(
+        "/api/coach/athletes/renee/health-status",
+        json={"restriction": "light_only", "source": "self_reported"},
+        headers=headers,
+    )
+    assert response.status_code == 422
+
+
+def test_coach_create_health_status_invalid_restriction_is_422(client, allowlist, store, google) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    headers = _tim_headers(client, allowlist, google)
+    response = client.post(
+        "/api/coach/athletes/renee/health-status",
+        json={"description": "shoulder pain", "restriction": "kind-of-fine", "source": "self_reported"},
+        headers=headers,
+    )
+    assert response.status_code == 422
+
+
+def test_coach_create_health_status_invalid_source_is_422(client, allowlist, store, google) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    headers = _tim_headers(client, allowlist, google)
+    response = client.post(
+        "/api/coach/athletes/renee/health-status",
+        json={"description": "shoulder pain", "restriction": "light_only", "source": "hearsay"},
+        headers=headers,
+    )
+    assert response.status_code == 422
+
+
+def _create_health_status(client, slug: str, headers: dict, **overrides) -> dict:
+    payload = {"description": "shoulder pain", "restriction": "light_only", "source": "self_reported"}
+    payload.update(overrides)
+    response = client.post(
+        f"/api/coach/athletes/{slug}/health-status", json=payload, headers=headers
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+def test_coach_resolve_health_status_requires_auth(client, allowlist, store, google) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    headers = _tim_headers(client, allowlist, google)
+    entry = _create_health_status(client, "renee", headers)
+    response = client.patch(
+        f"/api/coach/athletes/renee/health-status/{entry['id']}", json={"resolved": True}
+    )
+    assert response.status_code == 401
+
+
+def test_coach_resolve_health_status_403_without_grant(client, allowlist, google) -> None:
+    # No coach grant at all -- resolve_coach_athlete must 403 before the
+    # route ever looks up the (nonexistent) entry.
+    headers = _tim_headers(client, allowlist, google)
+    response = client.patch(
+        "/api/coach/athletes/renee/health-status/00000000-0000-0000-0000-000000000000",
+        json={"resolved": True},
+        headers=headers,
+    )
+    assert response.status_code == 403
+
+
+def test_coach_resolve_health_status_marks_resolved(client, allowlist, store, google) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    headers = _tim_headers(client, allowlist, google)
+    entry = _create_health_status(client, "renee", headers)
+
+    response = client.patch(
+        f"/api/coach/athletes/renee/health-status/{entry['id']}",
+        json={"resolved": True},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["resolved"] is True
+    assert body["resolved_at"]
+
+    listed = client.get("/api/coach/athletes/renee/health-status", headers=headers).json()
+    assert listed[0]["resolved"] is True
+
+
+def test_coach_resolve_health_status_requires_true(client, allowlist, store, google) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    headers = _tim_headers(client, allowlist, google)
+    entry = _create_health_status(client, "renee", headers)
+
+    response = client.patch(
+        f"/api/coach/athletes/renee/health-status/{entry['id']}",
+        json={"resolved": False},
+        headers=headers,
+    )
+    assert response.status_code == 422
+
+
+def test_coach_resolve_health_status_unknown_id_is_404(client, allowlist, store, google) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    headers = _tim_headers(client, allowlist, google)
+    response = client.patch(
+        "/api/coach/athletes/renee/health-status/00000000-0000-0000-0000-000000000000",
+        json={"resolved": True},
+        headers=headers,
+    )
+    assert response.status_code == 404
+
+
+def test_coach_resolve_health_status_404_on_entry_belonging_to_different_athlete(
+    client, allowlist, store, google
+) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    store.create_coach_grant(coach_slug="tim", athlete_slug="andrew")
+    headers = _tim_headers(client, allowlist, google)
+    # entry actually belongs to andrew, not renee.
+    entry = _create_health_status(client, "andrew", headers)
+
+    response = client.patch(
+        f"/api/coach/athletes/renee/health-status/{entry['id']}",
+        json={"resolved": True},
+        headers=headers,
+    )
+    assert response.status_code == 404

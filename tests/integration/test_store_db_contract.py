@@ -43,6 +43,7 @@ _TABLES = [
     "auth_sessions",
     "allowed_emails",
     "feedback",
+    "health_status",
     "coach_texts",
     "wellness_checkins",
     "workouts",

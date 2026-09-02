@@ -35,6 +35,7 @@ from swim_coach.models import (
     CoachGrant,
     Event,
     Feedback,
+    HealthStatus,
     MacroPlan,
     Wellness,
     WeekPlan,
@@ -149,6 +150,26 @@ def wellness_to_row(wellness: Wellness) -> dict[str, Any]:
 
 def row_to_wellness(row: dict[str, Any]) -> Wellness:
     return Wellness.model_validate(row["data"])
+
+
+def health_status_to_row(entry: HealthStatus) -> dict[str, Any]:
+    """Same JSONB-hybrid shape as `wellness_to_row` above (not the
+    all-columns shape `feedback_to_row` uses) -- `athlete_id`/`reported_at`/
+    `resolved` are promoted to real columns for the "this athlete's current
+    active status" query shape (an index on exactly those three columns),
+    everything else lives only in `data`."""
+    return {
+        "id": entry.id,
+        "athlete_id": entry.athlete_id,
+        "reported_at": entry.reported_at,
+        "resolved": entry.resolved,
+        "schema_version": entry.schema_version,
+        "data": entry.model_dump(mode="json"),
+    }
+
+
+def row_to_health_status(row: dict[str, Any]) -> HealthStatus:
+    return HealthStatus.model_validate(row["data"])
 
 
 def feedback_to_row(feedback: Feedback) -> dict[str, Any]:
@@ -554,6 +575,74 @@ class DbStore(StoreInterface):
                 """,
                 row,
             )
+
+    # --- Health status (durable injury/illness log) ----------------------
+
+    def save_health_status(self, slug: str, entry: HealthStatus) -> None:
+        # Always an insert (own uuid PK, never one-per-date like wellness --
+        # see StoreInterface.save_health_status's docstring: a new status is
+        # always a NEW row, never an overwrite of a previous one).
+        row = health_status_to_row(entry)
+        with self._connect() as conn, conn.cursor() as cur:
+            athlete_id = self._athlete_id(cur, slug)
+            row = {**row, "athlete_id": athlete_id, "data": self._Jsonb(row["data"])}
+            cur.execute(
+                """
+                insert into health_status (id, athlete_id, reported_at, resolved, schema_version, data)
+                values (%(id)s, %(athlete_id)s, %(reported_at)s, %(resolved)s, %(schema_version)s, %(data)s)
+                """,
+                row,
+            )
+
+    def list_health_status(self, slug: str, *, since: date | None = None) -> list[HealthStatus]:
+        # `since` pushed into the WHERE clause, same discipline as
+        # `list_workouts` above -- see StoreInterface.list_health_status's
+        # docstring.
+        params: list[Any] = [slug]
+        query = """
+            select h.data from health_status h
+            join athletes a on a.athlete_id = h.athlete_id
+            where a.slug = %s
+        """
+        if since is not None:
+            query += " and h.reported_at >= %s"
+            params.append(since)
+        query += " order by h.reported_at desc, h.id"
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(query, params)
+            rows = cur.fetchall()
+        return [row_to_health_status(r) for r in rows]
+
+    def update_health_status(
+        self, slug: str, health_status_id: UUID, *, resolved: bool, resolved_at: datetime | None
+    ) -> HealthStatus | None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                select h.data from health_status h
+                join athletes a on a.athlete_id = h.athlete_id
+                where a.slug = %s and h.id = %s
+                """,
+                (slug, health_status_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            updated = row_to_health_status(row).model_copy(
+                update={"resolved": resolved, "resolved_at": resolved_at}
+            )
+            new_row = health_status_to_row(updated)
+            cur.execute(
+                """
+                update health_status set
+                    resolved = %(resolved)s,
+                    data = %(data)s,
+                    updated_at = now()
+                where id = %(id)s
+                """,
+                {**new_row, "data": self._Jsonb(new_row["data"])},
+            )
+        return updated
 
     # --- Feedback (durable, replaces research/open-questions.jsonl) -----
 

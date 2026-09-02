@@ -30,6 +30,7 @@ from swim_coach.models import (
     CoachGrant,
     Event,
     Feedback,
+    HealthStatus,
     MacroBlock,
     MacroPlan,
     Session,
@@ -174,6 +175,20 @@ def _workout(athlete_id: uuid.UUID, d: date, sport: str = "swim_pool") -> Workou
         duration_min=75.0,
         rpe=6,
     )
+
+
+def _health_status(athlete_id: uuid.UUID, **overrides) -> HealthStatus:
+    data: dict = dict(
+        id=uuid.uuid4(),
+        athlete_id=athlete_id,
+        reported_at=datetime.now(timezone.utc),
+        reported_by="athlete",
+        source="self_reported",
+        description="Right shoulder's been sharp on catch-up drills.",
+        restriction="light_only",
+    )
+    data.update(overrides)
+    return HealthStatus(**data)
 
 
 def _feedback(athlete_id: uuid.UUID | None, **overrides) -> Feedback:
@@ -500,6 +515,122 @@ class StoreContractTests:
         loaded = store.list_wellness(SLUG)
         assert len(loaded) == 1
         assert loaded[0].motivation == 1
+
+    # --- health status -----------------------------------------------------
+
+    def test_health_status_round_trip(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        entry = _health_status(athlete.id)
+        store.save_health_status(SLUG, entry)
+        loaded = store.list_health_status(SLUG)
+        assert len(loaded) == 1
+        assert loaded[0] == entry
+
+    def test_list_health_status_empty_when_none(self, store):
+        store.save_athlete(_athlete())
+        assert store.list_health_status(SLUG) == []
+
+    def test_list_health_status_most_recent_first(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        older = _health_status(
+            athlete.id,
+            description="older",
+            reported_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        )
+        newer = _health_status(
+            athlete.id,
+            description="newer",
+            reported_at=datetime(2026, 8, 20, tzinfo=timezone.utc),
+        )
+        store.save_health_status(SLUG, older)
+        store.save_health_status(SLUG, newer)
+        loaded = store.list_health_status(SLUG)
+        assert [h.description for h in loaded] == ["newer", "older"]
+
+    def test_list_health_status_multiple_entries_same_athlete(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        for i in range(3):
+            store.save_health_status(
+                SLUG,
+                _health_status(
+                    athlete.id,
+                    description=f"entry {i}",
+                    reported_at=datetime(2026, 8, 1 + i, tzinfo=timezone.utc),
+                ),
+            )
+        loaded = store.list_health_status(SLUG)
+        assert len(loaded) == 3
+        assert [h.description for h in loaded] == ["entry 2", "entry 1", "entry 0"]
+
+    def test_list_health_status_since_filters_older_entries(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        old = _health_status(
+            athlete.id,
+            description="old",
+            reported_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        )
+        recent = _health_status(
+            athlete.id,
+            description="recent",
+            reported_at=datetime(2026, 8, 20, tzinfo=timezone.utc),
+        )
+        store.save_health_status(SLUG, old)
+        store.save_health_status(SLUG, recent)
+        loaded = store.list_health_status(SLUG, since=date(2026, 8, 1))
+        assert [h.description for h in loaded] == ["recent"]
+
+    def test_list_health_status_scoped_to_athlete(self, store):
+        athlete = _athlete()
+        other = Athlete(id=uuid.uuid4(), slug="other-athlete", name="Other")
+        store.save_athlete(athlete)
+        store.save_athlete(other)
+        store.save_health_status(SLUG, _health_status(athlete.id, description="for renee"))
+        store.save_health_status("other-athlete", _health_status(other.id, description="for other"))
+        loaded = store.list_health_status(SLUG)
+        assert [h.description for h in loaded] == ["for renee"]
+
+    def test_update_health_status_marks_resolved(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        entry = _health_status(athlete.id)
+        store.save_health_status(SLUG, entry)
+        resolved_at = datetime(2026, 9, 1, 8, 0, 0, tzinfo=timezone.utc)
+
+        updated = store.update_health_status(SLUG, entry.id, resolved=True, resolved_at=resolved_at)
+
+        assert updated is not None
+        assert updated.resolved is True
+        assert updated.resolved_at == resolved_at
+        loaded = store.list_health_status(SLUG)
+        assert len(loaded) == 1
+        assert loaded[0].resolved is True
+
+    def test_update_health_status_unknown_id_returns_none(self, store):
+        store.save_athlete(_athlete())
+        result = store.update_health_status(
+            SLUG, uuid.uuid4(), resolved=True, resolved_at=datetime.now(timezone.utc)
+        )
+        assert result is None
+
+    def test_update_health_status_does_not_disturb_other_entries(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        keep = _health_status(athlete.id, description="untouched")
+        target = _health_status(athlete.id, description="resolve me")
+        store.save_health_status(SLUG, keep)
+        store.save_health_status(SLUG, target)
+
+        store.update_health_status(
+            SLUG, target.id, resolved=True, resolved_at=datetime.now(timezone.utc)
+        )
+
+        loaded = {h.description: h for h in store.list_health_status(SLUG)}
+        assert loaded["untouched"].resolved is False
+        assert loaded["resolve me"].resolved is True
 
     # --- feedback ----------------------------------------------------------
 

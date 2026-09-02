@@ -6,13 +6,13 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
 from swim_coach.store import FileStore
 
-from swim_coach.models import WorkoutAnalytics, WorkoutLap, WorkoutPause
+from swim_coach.models import HealthStatus, WorkoutAnalytics, WorkoutLap, WorkoutPause
 
 from app.context import (
     FOCUSED_WORKOUT_LAPS_CAP,
@@ -255,6 +255,89 @@ def test_per_request_context_includes_summarize_rollup(app_env) -> None:
     text = build_per_request_context(store, "renee", expert_mode=False)
     assert "compliance_pct" in text
     assert "load_ratio_7d_28d" in text
+
+
+def _health_status(athlete_id: uuid.UUID, **overrides) -> HealthStatus:
+    data: dict = dict(
+        id=uuid.uuid4(),
+        athlete_id=athlete_id,
+        reported_at=datetime.now(timezone.utc),
+        reported_by="athlete",
+        source="self_reported",
+        description="Right shoulder's been sharp on catch-up drills.",
+        restriction="light_only",
+    )
+    data.update(overrides)
+    return HealthStatus(**data)
+
+
+def test_per_request_context_no_active_health_status_message_when_none_on_file(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    text = build_per_request_context(store, "renee", expert_mode=False)
+    health_section = text.split("### Health status")[1].split("### Current week plan")[0]
+    assert "No active health status is on file" in health_section
+    assert "NOT a confirmation" in health_section
+
+
+def test_per_request_context_shows_active_health_status(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    athlete = store.load_athlete("renee")
+    entry = _health_status(
+        athlete.id,
+        description="Sharp shoulder pain on catch-up drills",
+        restriction="light_only",
+    )
+    store.save_health_status("renee", entry)
+
+    text = build_per_request_context(store, "renee", expert_mode=False)
+    health_section = text.split("### Health status")[1].split("### Current week plan")[0]
+
+    assert "ACTIVE HEALTH STATUS ON FILE" in health_section
+    assert "light_only" in health_section
+    assert "Sharp shoulder pain on catch-up drills" in health_section
+    assert "No active health status is on file" not in health_section
+
+
+def test_per_request_context_omits_resolved_health_status_from_active_block(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    athlete = store.load_athlete("renee")
+    entry = _health_status(
+        athlete.id,
+        description="Old resolved shoulder issue",
+        restriction="light_only",
+        resolved=True,
+        resolved_at=datetime.now(timezone.utc),
+    )
+    store.save_health_status("renee", entry)
+
+    text = build_per_request_context(store, "renee", expert_mode=False)
+    health_section = text.split("### Health status")[1].split("### Current week plan")[0]
+
+    assert "No active health status is on file" in health_section
+    assert "Old resolved shoulder issue" not in health_section
+
+
+def test_per_request_context_shows_most_recent_unresolved_entry(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    athlete = store.load_athlete("renee")
+    older = _health_status(
+        athlete.id,
+        description="older issue",
+        reported_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+    )
+    newer = _health_status(
+        athlete.id,
+        description="newer issue",
+        reported_at=datetime(2026, 8, 20, tzinfo=timezone.utc),
+    )
+    store.save_health_status("renee", older)
+    store.save_health_status("renee", newer)
+
+    text = build_per_request_context(store, "renee", expert_mode=False)
+    health_section = text.split("### Health status")[1].split("### Current week plan")[0]
+
+    assert "newer issue" in health_section
+    assert "older issue" not in health_section
 
 
 def test_summarize_rollup_ctl_atl_tsb_uses_full_history_but_windows_output(app_env) -> None:

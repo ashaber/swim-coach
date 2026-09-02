@@ -594,6 +594,76 @@ class Feedback(BaseModel):
     coach_reply_at: datetime | None = None
 
 
+class HealthStatus(BaseModel):
+    """A durable, append-only LOG of an athlete's injury/illness/medical
+    status over time -- built after a real incident exposed that this
+    system had NO durable record of health status anywhere: `Wellness.
+    soreness` is just a daily 1-5 self-rating with no memory beyond "today,"
+    `backend/app/routes/chat.py` persists nothing server-side (chat history
+    is client-supplied per request, so a raw injury description that never
+    triggers a tool call vanishes the moment the browser tab closes), and
+    there was no model of this shape at all. CLAUDE.md's own standing safety
+    rail -- "any pain report -> stop-and-assess" -- was enforced ONLY as
+    prompt-level guidance with zero durable backing before this model
+    existed.
+
+    This is a LOG, not a single mutable field, deliberately mirroring
+    `Feedback` above: health status evolves over days/weeks, and the
+    HISTORY matters as much as the current state -- a physio's guidance
+    last week and this week's may differ, and a later entry must never
+    silently overwrite what was said before. Every entry this athlete has
+    ever had recorded stays on file permanently (this codebase's own safety
+    rail: never delete logs; see CLAUDE.md).
+
+    `restriction` is a coarse, closed 3-value enum -- NOT a replacement for
+    `description`'s free text, which still carries the full human detail
+    (what hurts, what a practitioner said, context) -- because an AI reading
+    this field later (the future ramp-back-up-then-taper planning engine
+    this build is the foundation for, but does NOT itself implement) needs
+    something it can safely branch on without re-interpreting prose every
+    time. "none" / "light_only" / "no_training" is deliberately coarse: a
+    machine can trust an enum value where it can't safely trust its own
+    parse of a paragraph of free text describing a shoulder.
+
+    `reported_by` (who told the system: "athlete" in her own chat, or
+    "coach" relaying something) and `source` (the underlying claim's
+    provenance: "self_reported" -- the athlete's own account of how she
+    feels -- vs "practitioner" -- a physio/doctor's actual clinical
+    guidance, typically relayed by the coach) are independent axes, both
+    worth keeping: a coach can relay a self-reported feeling ("she told me
+    her shoulder's been off") just as an athlete could in principle relay
+    practitioner guidance herself ("my physio said light-only this week").
+    Neither is a lesser kind of claim than the other, but they're not the
+    SAME kind of claim either, and a future reader (human or AI) should be
+    able to tell which is which.
+
+    `resolved`/`resolved_at` let one status be explicitly closed out (e.g.
+    "cleared to resume full training as of DATE") WITHOUT deleting the
+    history that came before it -- a new entry, not an edit to the old one,
+    is how a status changes; nothing here is ever mutated in place except
+    flipping `resolved` on the entry being closed. The MOST RECENT entry
+    (by `reported_at`) with `resolved=False` for a given athlete is that
+    athlete's current active status. If NO such entry exists -- either
+    nothing has ever been logged, or every entry on file has since been
+    resolved -- there is NO active restriction on file. That is explicitly
+    NOT the same thing as "she's definitely fine": it means nothing has
+    been recorded, one way or the other. An absence of data must never be
+    read as an all-clear, by a human OR by any future automated logic that
+    reads this log -- say so plainly wherever this fact is surfaced."""
+
+    schema_version: int = 1
+    id: UUID
+    athlete_id: UUID
+    reported_at: datetime
+    reported_by: Literal["athlete", "coach"]
+    source: Literal["self_reported", "practitioner"]
+    description: str
+    restriction: Literal["none", "light_only", "no_training"]
+    expected_review_date: date | None = None
+    resolved: bool = False
+    resolved_at: datetime | None = None
+
+
 CoachGrantStatus = Literal["active", "revoked"]
 ChatVisibility = Literal["full", "shared_only"]
 

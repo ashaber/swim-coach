@@ -16,6 +16,23 @@ pain/safety report, an explicit request to reach the real coach, or a
 high-stakes call the AI shouldn't make alone) -- either or both may be set on
 the same entry; at least one is required.
 
+`record_health_status` is the durable-injury-record build's tool: the AI's
+only way to write a `HealthStatus` row (engine/swim_coach/models.HealthStatus
+-- see its docstring for the full rationale) so an injury/illness/practitioner-
+guidance conversation is remembered past the current chat turn, instead of
+evaporating the moment the browser tab closes (the gap a real, undetected
+athlete health incident exposed: `Wellness.soreness` is a daily 1-5 rating
+with no memory, and `routes/chat.py` persists no chat history server-side at
+all). It ALWAYS also creates a linked `Feedback` row with
+`needs_human_review=True` (same `store.save_feedback` seam
+`flag_for_coach_review` uses, `context={"health_status_id": ...}` linking the
+two) in the SAME call -- a human coach seeing this is not a second,
+optional step the AI might forget to take; one tool call guarantees both the
+durable record and human visibility. This tool does NOT gate or alter any
+plan-generation tool (`propose_adaptation`/`create_week_plan`/etc.) -- it
+only makes the status durable and visible; auto-blocking training on it is
+explicitly out of scope for this build (see the build's own PR description).
+
 `create_event`/`draft_macro_plan`/`create_week_plan` are the "chat can create,
 not just adapt" tools: they call the exact same deterministic engine
 functions the CLI/skills already use (`swim_coach.plan.scaffold_macro`,
@@ -128,7 +145,7 @@ from pydantic import ValidationError
 
 from swim_coach.adapt import adapt_week
 from swim_coach.load import estimate_hr_max
-from swim_coach.models import Athlete, Event, Feedback, Workout, WorkoutStructure
+from swim_coach.models import Athlete, Event, Feedback, HealthStatus, Workout, WorkoutStructure
 from swim_coach.ow_session_templates import build_ow_session
 from swim_coach.plan import (
     SESSION_ADJUSTMENT_INCREASE_CAP_PCT,
@@ -296,6 +313,46 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
             },
             "required": ["question", "topic"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "record_health_status",
+        "description": (
+            "Durably record an athlete's injury, illness, or a coach-relayed "
+            "practitioner's guidance about training capacity -- so it's "
+            "REMEMBERED past this conversation, not instead of responding "
+            "normally. Call this ALONGSIDE your ordinary reply whenever the "
+            "athlete describes an injury, pain, or illness, or a coach "
+            "relays what a physio/doctor said about her training capacity. "
+            "This also guarantees a human coach sees it -- do not separately "
+            "decide whether to also call flag_for_coach_review; this tool "
+            "already ensures human visibility on its own. Does NOT change or "
+            "block any plan -- it only makes the status durable and visible."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "description": "What was said, verbatim -- the injury/illness/practitioner guidance, in the athlete's or coach's own words.",
+                },
+                "restriction": {
+                    "type": "string",
+                    "enum": ["none", "light_only", "no_training"],
+                    "description": "Coarse training-capacity read: 'none' (no restriction), 'light_only' (reduced/easy training only), 'no_training' (stop training entirely).",
+                },
+                "source": {
+                    "type": "string",
+                    "enum": ["self_reported", "practitioner"],
+                    "description": "'self_reported' -- the athlete's own account of how she feels. 'practitioner' -- a physio/doctor's actual clinical guidance (typically relayed by the coach).",
+                },
+                "expected_review_date": {
+                    "type": "string",
+                    "description": "Optional ISO date ('YYYY-MM-DD') when this status should be reviewed/reassessed, if one was given.",
+                },
+            },
+            "required": ["description", "restriction", "source"],
             "additionalProperties": False,
         },
     },
@@ -1354,6 +1411,95 @@ def _handle_flag_for_coach_review(
         needs_human_review=needs_human_review,
     )
     return {"logged": True, "id": str(entry.id), "type": entry.type}
+
+
+def _handle_record_health_status(
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str
+) -> dict[str, Any]:
+    """Persists a `HealthStatus` row AND, in the same call, a linked
+    `Feedback` row with `needs_human_review=True` -- see this module's
+    docstring and `HealthStatus`'s own docstring for the full rationale.
+    Reusing `store.save_feedback` (the same durable seam
+    `_handle_flag_for_coach_review` already writes through) rather than
+    inventing a second notification mechanism keeps "a human coach will see
+    this" resting on infrastructure already proven to work (the coach
+    roster's existing Feedback section, `needs_human_review` chip, and
+    unread-count badge all already surface this without any new plumbing).
+    """
+    description = input_data.get("description")
+    restriction = input_data.get("restriction")
+    source = input_data.get("source")
+    if not description or not restriction or not source:
+        return {"error": "description, restriction, and source are all required"}
+    if restriction not in ("none", "light_only", "no_training"):
+        return {"error": f"invalid restriction {restriction!r}"}
+    if source not in ("self_reported", "practitioner"):
+        return {"error": f"invalid source {source!r}"}
+
+    expected_review_date = None
+    raw_review_date = input_data.get("expected_review_date")
+    if raw_review_date:
+        try:
+            expected_review_date = date.fromisoformat(raw_review_date)
+        except ValueError:
+            return {"error": f"invalid expected_review_date {raw_review_date!r}, expected YYYY-MM-DD"}
+
+    try:
+        athlete_id = store.load_athlete(slug).id
+    except Exception:  # noqa: BLE001 - same "still log even if the athlete
+        # profile can't be resolved" tolerance as _handle_flag_for_coach_review,
+        # but HealthStatus.athlete_id is NOT nullable (unlike Feedback's), so
+        # a health status genuinely cannot be saved without it -- surface the
+        # failure rather than silently dropping the record.
+        return {"error": f"could not resolve athlete_id for slug {slug!r}"}
+
+    now = datetime.now(timezone.utc)
+    status = HealthStatus(
+        id=uuid.uuid4(),
+        athlete_id=athlete_id,
+        reported_at=now,
+        reported_by="coach",  # the AI, acting as coach in this chat -- same
+        # convention _handle_flag_for_coach_review already uses for `Feedback.
+        # source`; the tool schema's own `source` field carries the distinct
+        # self_reported/practitioner claim-provenance axis instead.
+        source=source,
+        description=description,
+        restriction=restriction,
+        expected_review_date=expected_review_date,
+    )
+    store.save_health_status(slug, status)
+
+    feedback = Feedback(
+        id=uuid.uuid4(),
+        athlete_id=athlete_id,
+        type="coach_review",
+        source="coach",
+        body=description,
+        context={
+            "health_status_id": str(status.id),
+            "restriction": restriction,
+            "health_status_source": source,
+        },
+        status="open",
+        created_at=now,
+        needs_human_review=True,
+    )
+    store.save_feedback(feedback)
+
+    log.info(
+        "health status recorded",
+        athlete=slug,
+        restriction=restriction,
+        source=source,
+        health_status_id=str(status.id),
+        feedback_id=str(feedback.id),
+    )
+    return {
+        "logged": True,
+        "health_status_id": str(status.id),
+        "feedback_id": str(feedback.id),
+        "restriction": restriction,
+    }
 
 
 def _summarize_workout(w: Workout, *, athlete: Athlete, hr_max: float | None, wellness: list[Any]) -> dict[str, Any]:
@@ -2518,6 +2664,9 @@ def build_tool_handlers(
         ),
         "flag_for_coach_review": lambda input_data: _handle_flag_for_coach_review(
             input_data, store=store, slug=slug, expert_mode=expert_mode
+        ),
+        "record_health_status": lambda input_data: _handle_record_health_status(
+            input_data, store=store, slug=slug
         ),
         "get_workouts": lambda input_data: _handle_get_workouts(
             input_data, store=store, slug=slug

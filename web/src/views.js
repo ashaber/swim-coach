@@ -2750,6 +2750,148 @@ function renderCoachFeedbackSection(feedback, replyDrafts, replySubmit) {
   return feedback.data.map((entry) => renderCoachFeedbackEntry(entry, replyDrafts[entry.id], replySubmit)).join('');
 }
 
+// --- Health status (durable injury/illness record, coach roster) -----------
+// Built after a real, undetected athlete health incident exposed this system
+// had NO durable record of health status anywhere -- see
+// engine/swim_coach/models.HealthStatus's docstring for the full rationale.
+// This section is deliberately the loudest thing on the coach roster's
+// per-athlete view: an active (unresolved) status renders in the alarm-red
+// `.health-status-active` box (same tokens `.wellness-stat--concerning`/
+// `.chip-skipped` already use for "needs attention"), never the app's
+// ordinary quiet `.panel` voice -- see index.html's CSS comment on that
+// class for why. Absence of an active status is rendered as an EXPLICIT,
+// honestly-worded "nothing on file" -- never silence, and never phrased as
+// an all-clear (per HealthStatus's own docstring: no record is not the same
+// as "definitely fine").
+
+const HEALTH_RESTRICTION_LABELS = {
+  none: 'No restriction',
+  light_only: 'Light training only',
+  no_training: 'No training',
+};
+
+const HEALTH_SOURCE_LABELS = {
+  self_reported: 'Self-reported',
+  practitioner: 'Practitioner guidance',
+};
+
+/** The most-recent entry with `resolved: false`, or null -- mirrors
+ * backend/app/context.py's `_active_health_status`. `entries` is expected
+ * already most-recent-first (the GET route's own ordering, matching
+ * `list_health_status`'s contract), so this is just "first unresolved
+ * entry," but re-derives defensively rather than assuming that ordering. */
+function findActiveHealthStatus(entries) {
+  const unresolved = (entries || []).filter((e) => !e.resolved);
+  if (unresolved.length === 0) return null;
+  return unresolved.reduce(
+    (latest, e) => (new Date(e.reported_at) > new Date(latest.reported_at) ? e : latest),
+    unresolved[0],
+  );
+}
+
+function renderHealthStatusActiveBox(active, resolveAction) {
+  if (!active) {
+    return '<p class="health-status-empty">No active health status on file. This means nothing has '
+      + "been recorded either way -- it is NOT a confirmation she's fine, just an absence of data.</p>";
+  }
+  const resolving = resolveAction.status === 'submitting' && resolveAction.id === active.id;
+  const resolveError = resolveAction.status === 'error' && resolveAction.id === active.id
+    ? `<div class="conn-result fail">${esc(resolveAction.error)}</div>` : '';
+  return `
+    <div class="health-status-active">
+      <h3>Active health status</h3>
+      <span class="hs-restriction">${esc(HEALTH_RESTRICTION_LABELS[active.restriction] || active.restriction)}</span>
+      <p>${esc(active.description)}</p>
+      <p class="hs-meta">Reported ${esc(formatFeedbackDate(active.reported_at))} by ${esc(active.reported_by)}
+        &middot; ${esc(HEALTH_SOURCE_LABELS[active.source] || active.source)}
+        ${active.expected_review_date ? ` &middot; review by ${esc(active.expected_review_date)}` : ''}</p>
+      <div class="settings-actions">
+        <button type="button" class="btn" data-a="roster:health-status-resolve" data-id="${esc(active.id)}" ${resolving ? 'disabled' : ''}>${resolving ? 'Marking resolved…' : 'Mark resolved'}</button>
+      </div>
+      ${resolveError}
+    </div>`;
+}
+
+function renderHealthStatusForm(form, submit) {
+  const submitting = submit.status === 'submitting';
+  const submitError = submit.status === 'error'
+    ? `<div class="conn-result fail">${esc(submit.error)}</div>` : '';
+  return `
+    <div class="panel">
+      <h3>Log a health status</h3>
+      <label class="field">
+        <span>Description</span>
+        <textarea rows="3" data-form="roster-health-status" data-field="description" placeholder="What did the athlete or a practitioner say?">${esc(form.description || '')}</textarea>
+      </label>
+      <label class="field">
+        <span>Restriction</span>
+        <select data-form="roster-health-status" data-field="restriction">
+          ${Object.entries(HEALTH_RESTRICTION_LABELS).map(([value, label]) => `
+            <option value="${esc(value)}" ${form.restriction === value ? 'selected' : ''}>${esc(label)}</option>`).join('')}
+        </select>
+      </label>
+      <label class="field">
+        <span>Source</span>
+        <select data-form="roster-health-status" data-field="source">
+          ${Object.entries(HEALTH_SOURCE_LABELS).map(([value, label]) => `
+            <option value="${esc(value)}" ${form.source === value ? 'selected' : ''}>${esc(label)}</option>`).join('')}
+        </select>
+      </label>
+      <label class="field">
+        <span>Expected review date (optional)</span>
+        <input type="date" data-form="roster-health-status" data-field="expected_review_date" value="${esc(form.expected_review_date || '')}">
+      </label>
+      <div class="settings-actions">
+        <button type="button" class="btn" data-a="roster:health-status-submit" ${submitting ? 'disabled' : ''}>${submitting ? 'Logging…' : 'Log status'}</button>
+      </div>
+      ${submitError}
+    </div>`;
+}
+
+function renderHealthStatusHistoryEntry(entry) {
+  return `
+    <div class="health-status-history-entry">
+      <div class="feedback-entry-head">
+        <span class="chat-chip">${esc(HEALTH_RESTRICTION_LABELS[entry.restriction] || entry.restriction)}</span>
+        ${entry.resolved ? '<span class="chat-chip">Resolved</span>' : '<span class="chat-chip chip-skipped">Active</span>'}
+        <span class="feedback-entry-date mono">${esc(formatFeedbackDate(entry.reported_at))}</span>
+      </div>
+      <p class="feedback-entry-body">${esc(entry.description)}</p>
+      <p class="hs-meta">${esc(entry.reported_by)} &middot; ${esc(HEALTH_SOURCE_LABELS[entry.source] || entry.source)}</p>
+    </div>`;
+}
+
+/** The coach roster's health-status section: the active status (loud, see
+ * `.health-status-active` above), a form for the coach to log a new one
+ * directly (no AI chat required), and the full history below it -- nothing
+ * is ever silently lost, per this log's own "never delete" rail. Rendered
+ * once per acted-as-athlete view, above the sub-tab bar (`renderRosterTab`'s
+ * call site), so it's visible regardless of which sub-tab is active. */
+function renderRosterHealthStatusSection({
+  healthStatus, form, submit, resolveAction,
+}) {
+  if (healthStatus.status === 'error') {
+    return `<section class="hist-section"><div class="s-head"><h2>Health status</h2></div>
+      <div class="hist-error">Couldn't load health status: ${esc(healthStatus.error)}</div></section>`;
+  }
+  if (healthStatus.status === 'loading' && healthStatus.data.length === 0) {
+    return '<section class="hist-section"><div class="s-head"><h2>Health status</h2></div><p class="sub">Loading&hellip;</p></section>';
+  }
+  const active = findActiveHealthStatus(healthStatus.data);
+  const history = healthStatus.data;
+  return `
+    <section class="hist-section">
+      <div class="s-head"><h2>Health status</h2></div>
+      ${renderHealthStatusActiveBox(active, resolveAction)}
+      ${renderHealthStatusForm(form, submit)}
+      ${history.length > 0 ? `
+      <div class="detail-section">
+        <h4>History</h4>
+        ${history.map(renderHealthStatusHistoryEntry).join('')}
+      </div>` : ''}
+    </section>`;
+}
+
 function rosterShell(body) {
   return `
     <div class="wrap settings-wrap">
@@ -2875,6 +3017,17 @@ export function renderRosterTab({
   // independent feeds/narratives, so this one stays per-surface.
   loadWindowDays,
   loadNarrativeExpanded,
+  // Durable health-status record (backend/health-status-record build): the
+  // athlete's health-status log, the coach's in-progress "log a new one"
+  // form draft, and the two independent submit statuses (logging a new
+  // entry / marking the active one resolved). Defaulted so every existing
+  // call site (and every existing test) that predates this build keeps
+  // rendering an honest "nothing loaded yet" state rather than crashing on
+  // an undefined prop.
+  healthStatus = { status: 'idle', data: [], error: null },
+  healthStatusForm = { description: '', restriction: 'light_only', source: 'self_reported', expected_review_date: '' },
+  healthStatusSubmit = { status: 'idle', error: null },
+  healthStatusResolve = { status: 'idle', error: null, id: null },
 }) {
   if (!backendConfigured) {
     return rosterShell(renderBackendNeededNotice(
@@ -2965,6 +3118,9 @@ export function renderRosterTab({
     return rosterShell(`
       <div class="s-head"><button type="button" class="btn-ghost" data-a="roster:back">&larr; Back to My Athletes</button></div>
       <p class="sub">Coaching <b>${esc(name)}</b> (${esc(actingAsAthlete)}).</p>
+      ${renderRosterHealthStatusSection({
+        healthStatus, form: healthStatusForm, submit: healthStatusSubmit, resolveAction: healthStatusResolve,
+      })}
       ${renderRosterSubTabBar(activeSubTab)}
       ${subTabBody}`);
   }

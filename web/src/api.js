@@ -530,6 +530,52 @@ export async function replyToCoachFeedback({
   });
 }
 
+// --- Health status (durable injury/illness record) ---------------------
+
+/** GET {baseUrl}/api/coach/athletes/<athlete>/health-status -- the coach-side
+ * view of one coached athlete's full health-status history, most-recent-
+ * first (see backend/app/routes/coach.py's `coach_view_health_status`).
+ * Path segment, same convention as `fetchCoachWorkouts`/`fetchCoachFeedback`. */
+export async function fetchCoachHealthStatus({ baseUrl, token, athlete }) {
+  return apiRequest({ baseUrl, token, path: `/api/coach/athletes/${encodeURIComponent(athlete)}/health-status` });
+}
+
+/** POST {baseUrl}/api/coach/athletes/<athlete>/health-status -- lets a coach
+ * log a health status directly (e.g. relaying what a physio said) without
+ * going through an AI chat conversation. `expectedReviewDate` is optional
+ * ('YYYY-MM-DD' or omitted/empty). */
+export async function postCoachHealthStatus({
+  baseUrl, token, athlete, description, restriction, source, expectedReviewDate,
+}) {
+  return apiRequest({
+    baseUrl,
+    token,
+    path: `/api/coach/athletes/${encodeURIComponent(athlete)}/health-status`,
+    method: 'POST',
+    body: {
+      description,
+      restriction,
+      source,
+      ...(expectedReviewDate ? { expected_review_date: expectedReviewDate } : {}),
+    },
+  });
+}
+
+/** PATCH {baseUrl}/api/coach/athletes/<athlete>/health-status/<id> -- marks
+ * one existing health-status entry resolved. Path segments, same convention
+ * as `replyToCoachFeedback`. */
+export async function resolveCoachHealthStatus({
+  baseUrl, token, athlete, healthStatusId,
+}) {
+  return apiRequest({
+    baseUrl,
+    token,
+    path: `/api/coach/athletes/${encodeURIComponent(athlete)}/health-status/${encodeURIComponent(healthStatusId)}`,
+    method: 'PATCH',
+    body: { resolved: true },
+  });
+}
+
 // --- Google sign-in session exchange -----------------------------------------
 // Unlike every function above, `exchangeGoogleToken` throws instead of
 // returning `{ok, ...}` -- identity.js's GSI callback awaits it directly in

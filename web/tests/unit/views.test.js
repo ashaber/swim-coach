@@ -1981,6 +1981,128 @@ describe('renderRosterTab', () => {
     expect(html).toContain('data-a="roster:back"');
     expect(html).toContain('data-a="roster:open-workout"');
   });
+
+  describe('health status section', () => {
+    const actingBase = { ...baseArgs, actingAsAthlete: 'renee' };
+
+    it('renders an honest "nothing on file" message when there is no active status, never an all-clear', () => {
+      const html = renderRosterTab({
+        ...actingBase,
+        healthStatus: { status: 'ready', data: [], error: null },
+      });
+      expect(html).toContain('No active health status on file');
+      expect(html).toContain('NOT a confirmation');
+      expect(html).not.toContain('health-status-active');
+    });
+
+    it('renders the active (unresolved) status prominently', () => {
+      const html = renderRosterTab({
+        ...actingBase,
+        healthStatus: {
+          status: 'ready',
+          data: [{
+            id: 'h1',
+            description: 'Sharp shoulder pain on catch-up drills',
+            restriction: 'light_only',
+            source: 'self_reported',
+            reported_by: 'athlete',
+            reported_at: '2026-08-30T09:00:00Z',
+            resolved: false,
+            resolved_at: null,
+            expected_review_date: null,
+          }],
+          error: null,
+        },
+      });
+      expect(html).toContain('health-status-active');
+      expect(html).toContain('Sharp shoulder pain on catch-up drills');
+      expect(html).toContain('Light training only');
+      expect(html).toContain('data-a="roster:health-status-resolve"');
+      expect(html).toContain('data-id="h1"');
+      expect(html).not.toContain('No active health status on file');
+    });
+
+    it('does not treat a resolved entry as active', () => {
+      const html = renderRosterTab({
+        ...actingBase,
+        healthStatus: {
+          status: 'ready',
+          data: [{
+            id: 'h1',
+            description: 'Old resolved issue',
+            restriction: 'light_only',
+            source: 'self_reported',
+            reported_by: 'athlete',
+            reported_at: '2026-08-01T09:00:00Z',
+            resolved: true,
+            resolved_at: '2026-08-15T09:00:00Z',
+            expected_review_date: null,
+          }],
+          error: null,
+        },
+      });
+      expect(html).toContain('No active health status on file');
+      expect(html).not.toContain('data-a="roster:health-status-resolve"');
+    });
+
+    it('renders the history list below the active box, including resolved entries', () => {
+      const html = renderRosterTab({
+        ...actingBase,
+        healthStatus: {
+          status: 'ready',
+          data: [
+            { id: 'h2', description: 'newer entry', restriction: 'no_training', source: 'practitioner', reported_by: 'coach', reported_at: '2026-08-20T09:00:00Z', resolved: false, resolved_at: null, expected_review_date: null },
+            { id: 'h1', description: 'older resolved entry', restriction: 'light_only', source: 'self_reported', reported_by: 'athlete', reported_at: '2026-08-01T09:00:00Z', resolved: true, resolved_at: '2026-08-10T09:00:00Z', expected_review_date: null },
+          ],
+          error: null,
+        },
+      });
+      expect(html).toContain('newer entry');
+      expect(html).toContain('older resolved entry');
+      expect(html).toContain('History');
+    });
+
+    it('renders the log-a-new-status form wired to the submit action', () => {
+      const html = renderRosterTab({
+        ...actingBase,
+        healthStatus: { status: 'ready', data: [], error: null },
+        healthStatusForm: { description: 'draft text', restriction: 'no_training', source: 'practitioner', expected_review_date: '2026-09-13' },
+      });
+      expect(html).toContain('data-form="roster-health-status"');
+      expect(html).toContain('data-field="description"');
+      expect(html).toContain('data-field="restriction"');
+      expect(html).toContain('data-field="source"');
+      expect(html).toContain('data-field="expected_review_date"');
+      expect(html).toContain('draft text');
+      expect(html).toContain('data-a="roster:health-status-submit"');
+    });
+
+    it('shows a submit error message when the form submission failed', () => {
+      const html = renderRosterTab({
+        ...actingBase,
+        healthStatus: { status: 'ready', data: [], error: null },
+        healthStatusSubmit: { status: 'error', error: 'Add a description first.' },
+      });
+      expect(html).toContain('Add a description first.');
+    });
+
+    it('shows a loading state while the history is being fetched for the first time', () => {
+      const html = renderRosterTab({
+        ...actingBase,
+        healthStatus: { status: 'loading', data: [], error: null },
+      });
+      expect(html).toContain('Loading');
+    });
+
+    it('shows an error state when the history fails to load', () => {
+      const html = renderRosterTab({
+        ...actingBase,
+        healthStatus: { status: 'error', data: [], error: 'network down' },
+      });
+      expect(html).toContain("Couldn't load health status");
+      expect(html).toContain('network down');
+    });
+  });
 });
 
 describe('renderUpdateBanner', () => {

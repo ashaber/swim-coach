@@ -12,6 +12,7 @@ export const TOOL_LABELS = {
   propose_adaptation: 'drafting an adaptation…',
   get_plan_summary: 'consulting the plan…',
   log_open_question: 'logging a question for research…',
+  record_health_status: 'recording health status…',
 };
 
 /** A fresh, empty chat session. */

@@ -20,6 +20,7 @@ import {
   downloadGarminFit,
   createGrant, listGrants, revokeGrant,
   listCoachedAthletes, fetchCoachWorkouts, fetchCoachFeedback, fetchCoachLoad, fetchCoachPlan, replyToCoachFeedback,
+  fetchCoachHealthStatus, postCoachHealthStatus, resolveCoachHealthStatus,
   askAboutSession, askAboutWorkout,
 } from './api.js';
 import {
@@ -197,6 +198,27 @@ function createRosterState() {
     // (handleBackToRoster), or the sub-tab is switched away from 'plan'
     // (handleSelectRosterSubTab) -- same conventions as workoutDetailId.
     sessionDetailId: null,
+    // Durable health-status record (backend/health-status-record build):
+    // the acted-as athlete's full health-status history (most-recent-first,
+    // per GET .../health-status's ordering), same {status, data, error}
+    // async-state shape as `workouts`/`feedback`/`load`/`plan` above.
+    healthStatus: { status: 'idle', data: [], error: null },
+    // The coach's in-progress "log a new health status" form draft --
+    // deliberately its own flat object (not per-row-keyed like
+    // `replyDrafts`, since there's only ever one such form per athlete, not
+    // one per list row). Reset whenever a different athlete is selected or
+    // a submission succeeds.
+    healthStatusForm: {
+      description: '', restriction: 'light_only', source: 'self_reported', expected_review_date: '',
+    },
+    // Submitting the "log a new health status" form -- same {status, error}
+    // shape convention as `replySubmit`, minus the per-row `feedbackId`
+    // (there's only one form, not one per row).
+    healthStatusSubmit: { status: 'idle', error: null },
+    // Marking the CURRENT active entry resolved -- `id` pins the result to
+    // the specific entry being resolved, same "which row is this about"
+    // convention `replySubmit.feedbackId` already establishes.
+    healthStatusResolve: { status: 'idle', error: null, id: null },
   };
 }
 
@@ -544,6 +566,10 @@ function renderTabContent() {
         // beforehand -- no per-athlete data to count from yet, same
         // limitation the tab bar's own rosterUnread badge below accepts).
         feedbackUnread: countUnread(state.roster.feedback.data, loadLastSeen('coach'), 'coach'),
+        healthStatus: state.roster.healthStatus,
+        healthStatusForm: state.roster.healthStatusForm,
+        healthStatusSubmit: state.roster.healthStatusSubmit,
+        healthStatusResolve: state.roster.healthStatusResolve,
       });
     case 'settings':
       return renderSettingsTab({
@@ -2002,6 +2028,118 @@ async function loadCoachFeedback(slug) {
   render();
 }
 
+/** Fetches GET /api/coach/athletes/<slug>/health-status -- the acted-as
+ * athlete's full health-status history (backend/health-status-record
+ * build). Same {status, data, error} fetch-lifecycle shape as
+ * `loadCoachFeedback` just above. */
+async function loadCoachHealthStatus(slug) {
+  const settings = state.settingsForm;
+  if (!slug || !isConfigured(settings, state.identity)) {
+    state.roster.healthStatus = { status: 'idle', data: [], error: null };
+    render();
+    return;
+  }
+
+  state.roster.healthStatus = { status: 'loading', data: state.roster.healthStatus.data, error: null };
+  render();
+
+  const result = await fetchCoachHealthStatus({ baseUrl: settings.baseUrl, token: settings.token, athlete: slug });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    log.info('roster.health_status_loaded', { athlete: slug, count: result.data.length });
+    state.roster.healthStatus = { status: 'ready', data: result.data, error: null };
+  } else {
+    log.error('roster.health_status_load_failed', { athlete: slug, error: result.error });
+    state.roster.healthStatus = { status: 'error', data: [], error: result.error };
+  }
+  render();
+}
+
+/** Submits the coach's "log a new health status" form (state.roster.
+ * healthStatusForm) via POST /api/coach/athletes/<slug>/health-status. On
+ * success, prepends the new entry to the loaded history (most-recent-first,
+ * matching the GET route's own ordering) and clears the form draft --
+ * same "patch state.roster.X.data locally instead of a full refetch"
+ * convention `handleSubmitCoachReply` already uses. */
+async function handleSubmitHealthStatus() {
+  if (state.roster.healthStatusSubmit.status === 'submitting') return;
+  const slug = state.roster.actingAsAthlete;
+  if (!slug) return;
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) return;
+
+  const form = state.roster.healthStatusForm;
+  const description = (form.description || '').trim();
+  if (!description) {
+    state.roster.healthStatusSubmit = { status: 'error', error: 'Add a description first.' };
+    render();
+    return;
+  }
+
+  state.roster.healthStatusSubmit = { status: 'submitting', error: null };
+  render();
+  log.info('roster.health_status_submit', { athlete: slug, restriction: form.restriction });
+
+  const result = await postCoachHealthStatus({
+    baseUrl: settings.baseUrl,
+    token: settings.token,
+    athlete: slug,
+    description,
+    restriction: form.restriction,
+    source: form.source,
+    expectedReviewDate: form.expected_review_date,
+  });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    log.info('roster.health_status_submit_success', { athlete: slug });
+    state.roster.healthStatus = {
+      ...state.roster.healthStatus,
+      data: [result.data, ...state.roster.healthStatus.data],
+    };
+    state.roster.healthStatusForm = {
+      description: '', restriction: 'light_only', source: 'self_reported', expected_review_date: '',
+    };
+    state.roster.healthStatusSubmit = { status: 'idle', error: null };
+  } else {
+    log.error('roster.health_status_submit_failed', { athlete: slug, error: result.error });
+    state.roster.healthStatusSubmit = { status: 'error', error: result.error };
+  }
+  render();
+}
+
+/** Marks the athlete's current active health status resolved via
+ * PATCH .../health-status/<id>. Same local-patch-on-success convention as
+ * `handleSubmitHealthStatus`/`handleSubmitCoachReply` above. */
+async function handleResolveHealthStatus(healthStatusId) {
+  if (!healthStatusId) return;
+  if (state.roster.healthStatusResolve.status === 'submitting') return;
+  const slug = state.roster.actingAsAthlete;
+  if (!slug) return;
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) return;
+
+  state.roster.healthStatusResolve = { status: 'submitting', error: null, id: healthStatusId };
+  render();
+  log.info('roster.health_status_resolve', { athlete: slug, health_status_id: healthStatusId });
+
+  const result = await resolveCoachHealthStatus({
+    baseUrl: settings.baseUrl, token: settings.token, athlete: slug, healthStatusId,
+  });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    log.info('roster.health_status_resolve_success', { athlete: slug, health_status_id: healthStatusId });
+    state.roster.healthStatus = {
+      ...state.roster.healthStatus,
+      data: state.roster.healthStatus.data.map((entry) => (entry.id === result.data.id ? result.data : entry)),
+    };
+    state.roster.healthStatusResolve = { status: 'idle', error: null, id: null };
+  } else {
+    log.error('roster.health_status_resolve_failed', { athlete: slug, health_status_id: healthStatusId, error: result.error });
+    state.roster.healthStatusResolve = { status: 'error', error: result.error, id: healthStatusId };
+  }
+  render();
+}
+
 /** Fetches GET /api/coach/athletes/<slug>/load for the roster tab's
  * CTL/ATL/TSB training-load chart (views.js's renderLoadChart) -- same
  * shape and pattern as loadCoachWorkouts/loadCoachFeedback above, just its
@@ -2089,12 +2227,19 @@ function handleSelectCoachedAthlete(slug) {
   state.roster.feedExpanded = false;
   state.roster.narrativeExpanded = false;
   state.roster.subTab = 'dashboard';
+  state.roster.healthStatus = { status: 'idle', data: [], error: null };
+  state.roster.healthStatusForm = {
+    description: '', restriction: 'light_only', source: 'self_reported', expected_review_date: '',
+  };
+  state.roster.healthStatusSubmit = { status: 'idle', error: null };
+  state.roster.healthStatusResolve = { status: 'idle', error: null, id: null };
   log.info('roster.athlete_selected', { athlete: slug });
   render();
   loadCoachWorkouts(slug); // calls render() itself
   loadCoachFeedback(slug); // calls render() itself
   loadCoachLoad(slug); // calls render() itself
   loadCoachPlan(slug); // calls render() itself
+  loadCoachHealthStatus(slug); // calls render() itself
 }
 
 /** B3: leaving the roster's 'dashboard' sub-tab -- where the roster's own
@@ -2127,6 +2272,12 @@ function handleBackToRoster() {
   state.roster.feedExpanded = false;
   state.roster.narrativeExpanded = false;
   state.roster.subTab = 'dashboard';
+  state.roster.healthStatus = { status: 'idle', data: [], error: null };
+  state.roster.healthStatusForm = {
+    description: '', restriction: 'light_only', source: 'self_reported', expected_review_date: '',
+  };
+  state.roster.healthStatusSubmit = { status: 'idle', error: null };
+  state.roster.healthStatusResolve = { status: 'idle', error: null, id: null };
   render();
 }
 
@@ -2538,6 +2689,8 @@ async function onAppClick(e) {
     // handlePopState. Same reasoning as history:back/session:back below.
     case 'roster:close-workout': history.back(); break;
     case 'roster:reply-submit': handleSubmitCoachReply(el.dataset.id); break;
+    case 'roster:health-status-submit': handleSubmitHealthStatus(); break;
+    case 'roster:health-status-resolve': handleResolveHealthStatus(el.dataset.id); break;
     case 'grants:submit': handleGrantSubmit(); break;
     case 'grants:revoke': handleRevokeGrant(el.dataset.id); break;
     case 'onboard:submit': handleOnboardSubmit(); break;
@@ -2646,7 +2799,13 @@ function onAppInput(e) {
   else if (formName === 'roster-reply') {
     const id = el.dataset.id;
     if (id) state.roster.replyDrafts[id] = el.value;
-  } else if (formName === 'grants') state.grants.createForm[field] = el.value;
+  }
+  // The roster's "log a health status" form -- a plain flat draft object
+  // (state.roster.healthStatusForm), same convention as `feedbackForm`/
+  // `askCoachForm` above (there is only ever one such form per athlete, not
+  // one per row, unlike `roster-reply`'s per-feedback-id draft map).
+  else if (formName === 'roster-health-status') state.roster.healthStatusForm[field] = el.value;
+  else if (formName === 'grants') state.grants.createForm[field] = el.value;
   // A6b: the workout-detail RPE editor's own slider -- guarded on
   // workoutRpeEdit still being set (defensive against a stray late event
   // after Cancel/Save already cleared it).

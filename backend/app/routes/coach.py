@@ -12,12 +12,12 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from swim_coach.load import estimate_hr_max
 from swim_coach.quality import match_workout_to_session, workout_quality
-from swim_coach.models import Feedback, Session
+from swim_coach.models import Feedback, HealthStatus, Session
 from swim_coach.store import StoreInterface
 
 from app.auth import Principal, require_auth, resolve_coach_athlete
@@ -237,6 +237,131 @@ async def coach_view_plan(
         return export_athlete(store, slug)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"no such athlete: {slug}") from exc
+
+
+_VALID_RESTRICTIONS = {"none", "light_only", "no_training"}
+_VALID_HEALTH_SOURCES = {"self_reported", "practitioner"}
+
+
+@router.get("/api/coach/athletes/{slug}/health-status")
+async def coach_view_health_status(
+    slug: str, request: Request, principal: Principal = Depends(require_auth)
+) -> list[dict]:
+    """Coach-mode roster view's per-athlete health-status history --
+    everything on file, most-recent-first (see `StoreInterface.
+    list_health_status`'s ordering contract), so the coach can see the
+    current active status AND the full history (never silently lost, per
+    HealthStatus's own "never delete logs" rail). Same
+    `resolve_coach_athlete` gating as every other GET route in this file."""
+    settings = request.app.state.settings
+    slug = resolve_coach_athlete(principal, slug)
+    store = make_store(settings)
+    entries = store.list_health_status(slug)
+    return [e.model_dump(mode="json") for e in entries]
+
+
+@router.post("/api/coach/athletes/{slug}/health-status")
+async def coach_create_health_status(
+    slug: str,
+    payload: dict[str, Any],
+    request: Request,
+    principal: Principal = Depends(require_auth),
+) -> dict:
+    """Lets a coach log a health status directly -- e.g. relaying what a
+    physio said -- without going through an AI chat conversation at all.
+    Distinct write path from `app/tools.py`'s `record_health_status` tool
+    (which the AI calls from chat), but the exact same durable model. This
+    endpoint does NOT also create a linked `Feedback`/`needs_human_review`
+    row the way the AI tool does -- there is no "make sure a human sees
+    this" problem to solve when a human coach is the one directly typing it
+    in; that guarantee only matters for the AI-authored path."""
+    settings = request.app.state.settings
+    slug = resolve_coach_athlete(principal, slug)
+    store = make_store(settings)
+
+    description = payload.get("description")
+    if not isinstance(description, str) or not description:
+        raise HTTPException(status_code=422, detail="description must be a non-empty string")
+
+    restriction = payload.get("restriction")
+    if restriction not in _VALID_RESTRICTIONS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"restriction must be one of {sorted(_VALID_RESTRICTIONS)}",
+        )
+
+    source = payload.get("source")
+    if source not in _VALID_HEALTH_SOURCES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"source must be one of {sorted(_VALID_HEALTH_SOURCES)}",
+        )
+
+    expected_review_date = None
+    raw_review_date = payload.get("expected_review_date")
+    if raw_review_date:
+        try:
+            expected_review_date = date.fromisoformat(raw_review_date)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422, detail=f"invalid expected_review_date {raw_review_date!r}"
+            ) from exc
+
+    athlete = store.load_athlete(slug)
+    entry = HealthStatus(
+        id=uuid4(),
+        athlete_id=athlete.id,
+        reported_at=datetime.now(timezone.utc),
+        reported_by="coach",
+        source=source,
+        description=description,
+        restriction=restriction,
+        expected_review_date=expected_review_date,
+    )
+    store.save_health_status(slug, entry)
+    return entry.model_dump(mode="json")
+
+
+@router.patch("/api/coach/athletes/{slug}/health-status/{health_status_id}")
+async def coach_resolve_health_status(
+    slug: str,
+    health_status_id: UUID,
+    payload: dict[str, Any],
+    request: Request,
+    principal: Principal = Depends(require_auth),
+) -> dict:
+    """Marks one existing health-status entry resolved -- the one in-place
+    mutation this durable log allows (see `HealthStatus`'s own docstring);
+    everything else about the entry, and every other entry in the athlete's
+    history, is untouched. `resolved` must be explicitly `true` in the
+    body -- this route exists to close out an active status, not to
+    reopen one (there's no product need for that yet, and adding it would
+    just be an unused surface)."""
+    settings = request.app.state.settings
+    slug = resolve_coach_athlete(principal, slug)
+    store = make_store(settings)
+
+    resolved = payload.get("resolved")
+    if resolved is not True:
+        raise HTTPException(status_code=422, detail="resolved must be true")
+
+    athlete = store.load_athlete(slug)
+    existing = next(
+        (e for e in store.list_health_status(slug) if e.id == health_status_id), None
+    )
+    # Defense in depth, same convention as coach_reply_to_feedback's own
+    # athlete_id cross-check below -- 404, not 403, so a coach authorized
+    # for `slug` but given a wrong-athlete id learns nothing about whether
+    # that id exists elsewhere.
+    if existing is None or existing.athlete_id != athlete.id:
+        raise HTTPException(status_code=404, detail=f"no such health status entry: {health_status_id}")
+
+    updated = store.update_health_status(
+        slug, health_status_id, resolved=True, resolved_at=datetime.now(timezone.utc)
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"no such health status entry: {health_status_id}")
+    return updated.model_dump(mode="json")
 
 
 @router.get("/api/coach/athletes/{slug}/feedback")
