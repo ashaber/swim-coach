@@ -220,6 +220,7 @@ function createRosterState() {
     // a submission succeeds.
     healthStatusForm: {
       description: '', restriction: 'light_only', source: 'self_reported', expected_review_date: '',
+      body_region: '', onset: '', severity: '', related_status_id: '',
     },
     // Submitting the "log a new health status" form -- same {status, error}
     // shape convention as `replySubmit`, minus the per-row `feedbackId`
@@ -2109,6 +2110,10 @@ async function handleSubmitHealthStatus() {
     restriction: form.restriction,
     source: form.source,
     expectedReviewDate: form.expected_review_date,
+    bodyRegion: form.body_region,
+    onset: form.onset,
+    severity: form.severity,
+    relatedStatusId: form.related_status_id,
   });
   if (handleUnauthorized(result)) return;
   if (result.ok) {
@@ -2120,6 +2125,7 @@ async function handleSubmitHealthStatus() {
     state.roster.healthStatusVersion += 1; // see its own doc comment (stale-GET guard)
     state.roster.healthStatusForm = {
       description: '', restriction: 'light_only', source: 'self_reported', expected_review_date: '',
+      body_region: '', onset: '', severity: '', related_status_id: '',
     };
     state.roster.healthStatusSubmit = { status: 'idle', error: null };
   } else {
@@ -2253,6 +2259,7 @@ function handleSelectCoachedAthlete(slug) {
   state.roster.healthStatus = { status: 'idle', data: [], error: null };
   state.roster.healthStatusForm = {
     description: '', restriction: 'light_only', source: 'self_reported', expected_review_date: '',
+    body_region: '', onset: '', severity: '', related_status_id: '',
   };
   state.roster.healthStatusSubmit = { status: 'idle', error: null };
   state.roster.healthStatusResolve = { status: 'idle', error: null, id: null };
@@ -2298,6 +2305,7 @@ function handleBackToRoster() {
   state.roster.healthStatus = { status: 'idle', data: [], error: null };
   state.roster.healthStatusForm = {
     description: '', restriction: 'light_only', source: 'self_reported', expected_review_date: '',
+    body_region: '', onset: '', severity: '', related_status_id: '',
   };
   state.roster.healthStatusSubmit = { status: 'idle', error: null };
   state.roster.healthStatusResolve = { status: 'idle', error: null, id: null };

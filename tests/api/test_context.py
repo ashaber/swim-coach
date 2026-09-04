@@ -346,6 +346,48 @@ def test_per_request_context_shows_all_unresolved_entries_not_just_the_newest(ap
     assert "2 ACTIVE HEALTH STATUSES ON FILE" in health_section
 
 
+def test_per_request_context_active_health_status_shows_new_fields_when_set(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    athlete = store.load_athlete("renee")
+    entry = _health_status(
+        athlete.id,
+        description="Shoulder flare-up again, same spot",
+        restriction="light_only",
+        body_region="shoulder",
+        onset="gradual",
+        severity="moderate",
+    )
+    store.save_health_status("renee", entry)
+
+    text = build_per_request_context(store, "renee", expert_mode=False)
+    health_section = text.split("### Health status")[1].split("### Current week plan")[0]
+
+    assert "Body region: shoulder" in health_section
+    assert "Onset: gradual" in health_section
+    assert "Severity: moderate" in health_section
+
+
+def test_per_request_context_active_health_status_omits_unset_new_fields(app_env) -> None:
+    # Matches the ORIGINAL PR's own "minimal entry" convention: none of the
+    # new fields set must render none of their lines -- never "Body region:
+    # None" or similar noise.
+    store = FileStore(base_dir=app_env)
+    athlete = store.load_athlete("renee")
+    entry = _health_status(
+        athlete.id,
+        description="Sharp shoulder pain on catch-up drills",
+        restriction="light_only",
+    )
+    store.save_health_status("renee", entry)
+
+    text = build_per_request_context(store, "renee", expert_mode=False)
+    health_section = text.split("### Health status")[1].split("### Current week plan")[0]
+
+    assert "Body region" not in health_section
+    assert "Onset:" not in health_section
+    assert "Severity:" not in health_section
+
+
 def test_per_request_context_ranks_more_severe_restriction_first_when_multiple_active(app_env) -> None:
     store = FileStore(base_dir=app_env)
     athlete = store.load_athlete("renee")

@@ -527,6 +527,33 @@ class StoreContractTests:
         assert len(loaded) == 1
         assert loaded[0] == entry
 
+    def test_health_status_round_trip_with_all_second_iteration_fields_set(self, store):
+        # Proves the migration needs no schema change: body_region/onset/
+        # severity/related_status_id all live inside the JSONB `data` blob
+        # (DbStore) or the plain model dump (FileStore) with no promoted
+        # column and no allowlist to fall out of sync -- see
+        # health_status_to_row's full model_dump(mode="json").
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        earlier = _health_status(athlete.id, description="first flare-up")
+        store.save_health_status(SLUG, earlier)
+        entry = _health_status(
+            athlete.id,
+            description="second flare-up, same shoulder",
+            body_region="shoulder",
+            onset="gradual",
+            severity="moderate",
+            related_status_id=earlier.id,
+        )
+        store.save_health_status(SLUG, entry)
+
+        loaded = [h for h in store.list_health_status(SLUG) if h.id == entry.id][0]
+        assert loaded == entry
+        assert loaded.body_region == "shoulder"
+        assert loaded.onset == "gradual"
+        assert loaded.severity == "moderate"
+        assert loaded.related_status_id == earlier.id
+
     def test_list_health_status_empty_when_none(self, store):
         store.save_athlete(_athlete())
         assert store.list_health_status(SLUG) == []

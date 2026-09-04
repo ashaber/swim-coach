@@ -883,6 +883,19 @@ def _render_active_health_status(statuses: list[HealthStatus]) -> str:
             f"  Reported: {entry.reported_at.date().isoformat()} "
             f"(by {entry.reported_by}, {entry.source.replace('_', ' ')})",
         ]
+        # Second-iteration fields (industry-modeling evolution) -- only
+        # shown when actually known, same "only show what's actually known"
+        # discipline as expected_review_date above: an unset field means
+        # nobody knows, never "None"/"not specified" noise in the model's
+        # context. related_status_id is deliberately NOT rendered here -- a
+        # raw UUID means nothing to the model without also resolving what it
+        # points to, which isn't worth the complexity for this build.
+        if entry.body_region is not None:
+            lines.append(f"  Body region: {entry.body_region}")
+        if entry.onset is not None:
+            lines.append(f"  Onset: {entry.onset}")
+        if entry.severity is not None:
+            lines.append(f"  Severity: {entry.severity}")
         if entry.expected_review_date is not None:
             lines.append(f"  Expected review date: {entry.expected_review_date.isoformat()}")
         blocks.append("\n".join(lines))

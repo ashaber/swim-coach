@@ -632,6 +632,121 @@ def test_coach_create_health_status_invalid_source_is_422(client, allowlist, sto
     assert response.status_code == 422
 
 
+def test_coach_create_health_status_accepts_and_persists_new_optional_fields(
+    client, allowlist, store, google
+) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    headers = _tim_headers(client, allowlist, google)
+
+    first = client.post(
+        "/api/coach/athletes/renee/health-status",
+        json={"description": "first shoulder flare-up", "restriction": "light_only", "source": "self_reported"},
+        headers=headers,
+    )
+    assert first.status_code == 200
+    first_id = first.json()["id"]
+
+    response = client.post(
+        "/api/coach/athletes/renee/health-status",
+        json={
+            "description": "same shoulder, flared up again",
+            "restriction": "no_training",
+            "source": "practitioner",
+            "body_region": "shoulder",
+            "onset": "gradual",
+            "severity": "moderate",
+            "related_status_id": first_id,
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["body_region"] == "shoulder"
+    assert body["onset"] == "gradual"
+    assert body["severity"] == "moderate"
+    assert body["related_status_id"] == first_id
+
+
+def test_coach_create_health_status_omitting_new_fields_still_works(client, allowlist, store, google) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    headers = _tim_headers(client, allowlist, google)
+    response = client.post(
+        "/api/coach/athletes/renee/health-status",
+        json={"description": "shoulder pain", "restriction": "light_only", "source": "self_reported"},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["body_region"] is None
+    assert body["onset"] is None
+    assert body["severity"] is None
+    assert body["related_status_id"] is None
+
+
+def test_coach_create_health_status_invalid_body_region_is_422(client, allowlist, store, google) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    headers = _tim_headers(client, allowlist, google)
+    response = client.post(
+        "/api/coach/athletes/renee/health-status",
+        json={
+            "description": "shoulder pain",
+            "restriction": "light_only",
+            "source": "self_reported",
+            "body_region": "pinky_toe",
+        },
+        headers=headers,
+    )
+    assert response.status_code == 422
+
+
+def test_coach_create_health_status_invalid_onset_is_422(client, allowlist, store, google) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    headers = _tim_headers(client, allowlist, google)
+    response = client.post(
+        "/api/coach/athletes/renee/health-status",
+        json={
+            "description": "shoulder pain",
+            "restriction": "light_only",
+            "source": "self_reported",
+            "onset": "somewhat_suddenly",
+        },
+        headers=headers,
+    )
+    assert response.status_code == 422
+
+
+def test_coach_create_health_status_invalid_severity_is_422(client, allowlist, store, google) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    headers = _tim_headers(client, allowlist, google)
+    response = client.post(
+        "/api/coach/athletes/renee/health-status",
+        json={
+            "description": "shoulder pain",
+            "restriction": "light_only",
+            "source": "self_reported",
+            "severity": "catastrophic",
+        },
+        headers=headers,
+    )
+    assert response.status_code == 422
+
+
+def test_coach_create_health_status_invalid_related_status_id_is_422(client, allowlist, store, google) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    headers = _tim_headers(client, allowlist, google)
+    response = client.post(
+        "/api/coach/athletes/renee/health-status",
+        json={
+            "description": "shoulder pain",
+            "restriction": "light_only",
+            "source": "self_reported",
+            "related_status_id": "not-a-uuid",
+        },
+        headers=headers,
+    )
+    assert response.status_code == 422
+
+
 def _create_health_status(client, slug: str, headers: dict, **overrides) -> dict:
     payload = {"description": "shoulder pain", "restriction": "light_only", "source": "self_reported"}
     payload.update(overrides)

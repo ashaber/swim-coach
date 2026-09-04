@@ -241,6 +241,12 @@ async def coach_view_plan(
 
 _VALID_RESTRICTIONS = {"none", "light_only", "no_training"}
 _VALID_HEALTH_SOURCES = {"self_reported", "practitioner"}
+_VALID_BODY_REGIONS = {
+    "shoulder", "knee", "back", "hip", "ankle_foot", "elbow_wrist",
+    "illness_systemic", "head_neck", "other",
+}
+_VALID_ONSETS = {"acute", "gradual"}
+_VALID_SEVERITIES = {"slight", "minimal", "mild", "moderate", "serious", "long_term"}
 
 
 @router.get("/api/coach/athletes/{slug}/health-status")
@@ -307,6 +313,37 @@ async def coach_create_health_status(
                 status_code=422, detail=f"invalid expected_review_date {raw_review_date!r}"
             ) from exc
 
+    # Second-iteration fields (industry-modeling evolution) -- all optional,
+    # same "reject an invalid value with 422, never silently drop it"
+    # discipline as restriction/source above. `None`/absent is always valid
+    # (a coach logging a first-contact report often genuinely doesn't know
+    # these yet); an explicitly wrong value is not.
+    body_region = payload.get("body_region")
+    if body_region is not None and body_region not in _VALID_BODY_REGIONS:
+        raise HTTPException(
+            status_code=422, detail=f"body_region must be one of {sorted(_VALID_BODY_REGIONS)}"
+        )
+
+    onset = payload.get("onset")
+    if onset is not None and onset not in _VALID_ONSETS:
+        raise HTTPException(status_code=422, detail=f"onset must be one of {sorted(_VALID_ONSETS)}")
+
+    severity = payload.get("severity")
+    if severity is not None and severity not in _VALID_SEVERITIES:
+        raise HTTPException(
+            status_code=422, detail=f"severity must be one of {sorted(_VALID_SEVERITIES)}"
+        )
+
+    related_status_id = None
+    raw_related_status_id = payload.get("related_status_id")
+    if raw_related_status_id:
+        try:
+            related_status_id = UUID(str(raw_related_status_id))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422, detail=f"invalid related_status_id {raw_related_status_id!r}"
+            ) from exc
+
     athlete = store.load_athlete(slug)
     entry = HealthStatus(
         id=uuid4(),
@@ -317,6 +354,10 @@ async def coach_create_health_status(
         description=description,
         restriction=restriction,
         expected_review_date=expected_review_date,
+        body_region=body_region,
+        onset=onset,
+        severity=severity,
+        related_status_id=related_status_id,
     )
     store.save_health_status(slug, entry)
     return entry.model_dump(mode="json")

@@ -328,7 +328,10 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "This also guarantees a human coach sees it -- do not separately "
             "decide whether to also call flag_for_coach_review; this tool "
             "already ensures human visibility on its own. Does NOT change or "
-            "block any plan -- it only makes the status durable and visible."
+            "block any plan -- it only makes the status durable and visible. "
+            "body_region/onset/severity/related_status_id are all optional "
+            "structured extras -- set ONLY what's genuinely clear from what "
+            "was actually said; leave the rest unset rather than guessing."
         ),
         "input_schema": {
             "type": "object",
@@ -350,6 +353,28 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 "expected_review_date": {
                     "type": "string",
                     "description": "Optional ISO date ('YYYY-MM-DD') when this status should be reviewed/reassessed, if one was given.",
+                },
+                "body_region": {
+                    "type": "string",
+                    "enum": [
+                        "shoulder", "knee", "back", "hip", "ankle_foot", "elbow_wrist",
+                        "illness_systemic", "head_neck", "other",
+                    ],
+                    "description": "The coarse body region this affects, only if reasonably clear from what was said -- never guess.",
+                },
+                "onset": {
+                    "type": "string",
+                    "enum": ["acute", "gradual"],
+                    "description": "Whether this came on suddenly (acute) or built up gradually (gradual/overuse), only if the athlete or coach said something that makes this clear.",
+                },
+                "severity": {
+                    "type": "string",
+                    "enum": ["slight", "minimal", "mild", "moderate", "serious", "long_term"],
+                    "description": "A time-loss-based severity estimate (slight/minimal/mild/moderate/serious/long_term), ONLY if a real clinical assessment or clear timeline was actually given (e.g. a physio's stated recovery estimate) -- this is a real clinical judgment, not something to infer from how the athlete describes feeling. Leave unset far more often than not, especially for a first report right after something happens.",
+                },
+                "related_status_id": {
+                    "type": "string",
+                    "description": "If this is clearly a continuation/recurrence of a specific PRIOR health status already on file (the athlete or coach explicitly says so, or it's unmistakable from context), the id of that earlier entry. Leave unset otherwise -- do not guess at a connection between unrelated reports.",
                 },
             },
             "required": ["description", "restriction", "source"],
@@ -1455,6 +1480,37 @@ def _handle_record_health_status(
         except ValueError:
             return {"error": f"invalid expected_review_date {raw_review_date!r}, expected YYYY-MM-DD"}
 
+    # Second-iteration fields (industry-modeling evolution) -- all optional,
+    # same "absent means never asked/never guessed" discipline as
+    # expected_review_date above: a missing key means the model didn't have
+    # (or wasn't confident enough to state) a value, never a guess coerced
+    # to a default. An explicitly-given-but-invalid value is still rejected
+    # outright, same as restriction/source below -- never silently dropped.
+    body_region = input_data.get("body_region")
+    if body_region is not None and body_region not in (
+        "shoulder", "knee", "back", "hip", "ankle_foot", "elbow_wrist",
+        "illness_systemic", "head_neck", "other",
+    ):
+        return {"error": f"invalid body_region {body_region!r}"}
+
+    onset = input_data.get("onset")
+    if onset is not None and onset not in ("acute", "gradual"):
+        return {"error": f"invalid onset {onset!r}"}
+
+    severity = input_data.get("severity")
+    if severity is not None and severity not in (
+        "slight", "minimal", "mild", "moderate", "serious", "long_term",
+    ):
+        return {"error": f"invalid severity {severity!r}"}
+
+    related_status_id = None
+    raw_related_status_id = input_data.get("related_status_id")
+    if raw_related_status_id:
+        try:
+            related_status_id = uuid.UUID(str(raw_related_status_id))
+        except ValueError:
+            return {"error": f"invalid related_status_id {raw_related_status_id!r}, expected a UUID"}
+
     try:
         athlete_id = store.load_athlete(slug).id
     except Exception:  # noqa: BLE001 - same "still log even if the athlete
@@ -1474,6 +1530,10 @@ def _handle_record_health_status(
         description=description,
         restriction=restriction,
         expected_review_date=expected_review_date,
+        body_region=body_region,
+        onset=onset,
+        severity=severity,
+        related_status_id=related_status_id,
     )
     store.save_health_status(slug, status)
 

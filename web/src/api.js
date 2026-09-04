@@ -546,6 +546,7 @@ export async function fetchCoachHealthStatus({ baseUrl, token, athlete }) {
  * ('YYYY-MM-DD' or omitted/empty). */
 export async function postCoachHealthStatus({
   baseUrl, token, athlete, description, restriction, source, expectedReviewDate,
+  bodyRegion, onset, severity, relatedStatusId,
 }) {
   return apiRequest({
     baseUrl,
@@ -557,6 +558,13 @@ export async function postCoachHealthStatus({
       restriction,
       source,
       ...(expectedReviewDate ? { expected_review_date: expectedReviewDate } : {}),
+      // Second-iteration fields (industry-modeling evolution) -- all
+      // optional, same "omit rather than send an empty string" convention
+      // as expectedReviewDate above.
+      ...(bodyRegion ? { body_region: bodyRegion } : {}),
+      ...(onset ? { onset } : {}),
+      ...(severity ? { severity } : {}),
+      ...(relatedStatusId ? { related_status_id: relatedStatusId } : {}),
     },
   });
 }

@@ -2775,6 +2775,68 @@ const HEALTH_SOURCE_LABELS = {
   practitioner: 'Practitioner guidance',
 };
 
+// Second-iteration fields (industry-modeling evolution, see engine/
+// swim_coach/models.py's HealthStatus docstring for the full citations):
+// coarse body-region/onset/severity labels for the coach's direct-entry
+// form and the active-status/history chips below. All three stay optional
+// everywhere they're rendered -- an unset value renders no chip at all,
+// never a "Not specified" chip mixed in among real ones.
+const HEALTH_BODY_REGION_LABELS = {
+  shoulder: 'Shoulder',
+  knee: 'Knee',
+  back: 'Back',
+  hip: 'Hip',
+  ankle_foot: 'Ankle/foot',
+  elbow_wrist: 'Elbow/wrist',
+  illness_systemic: 'Illness/systemic',
+  head_neck: 'Head/neck',
+  other: 'Other',
+};
+
+const HEALTH_ONSET_LABELS = {
+  acute: 'Acute (sudden)',
+  gradual: 'Gradual (overuse)',
+};
+
+const HEALTH_SEVERITY_LABELS = {
+  slight: 'Slight (<=1 day)',
+  minimal: 'Minimal (2-3 days)',
+  mild: 'Mild (4-7 days)',
+  moderate: 'Moderate (8-28 days)',
+  serious: 'Serious (>28 days-6mo)',
+  long_term: 'Long-term (>6mo)',
+};
+
+/** Small chips for whichever of body_region/onset/severity are actually set
+ * on this entry -- reused by both the active-status box and each history
+ * entry. Omits a chip entirely for a field that's `None`/absent, same
+ * "only show what's known" discipline as the backend context injection
+ * (backend/app/context.py's `_render_active_health_status`) -- never a
+ * "not specified" placeholder chip. */
+function renderHealthStatusExtraChips(entry) {
+  const chips = [];
+  if (entry.body_region) {
+    chips.push(esc(HEALTH_BODY_REGION_LABELS[entry.body_region] || entry.body_region));
+  }
+  if (entry.onset) {
+    chips.push(esc(HEALTH_ONSET_LABELS[entry.onset] || entry.onset));
+  }
+  if (entry.severity) {
+    chips.push(esc(HEALTH_SEVERITY_LABELS[entry.severity] || entry.severity));
+  }
+  if (chips.length === 0) return '';
+  return `<div class="chat-chips">${chips.map((c) => `<span class="chat-chip">${c}</span>`).join('')}</div>`;
+}
+
+/** Short label for one history entry, used to populate the `related_status_id`
+ * select below -- date + a truncated description so a coach can actually
+ * tell entries apart, not just a bare id. */
+function healthStatusOptionLabel(entry) {
+  const desc = (entry.description || '').trim();
+  const shortDesc = desc.length > 60 ? `${desc.slice(0, 57)}...` : desc;
+  return `${formatFeedbackDate(entry.reported_at)} -- ${shortDesc}`;
+}
+
 // Severity ranking for findActiveHealthStatuses below -- mirrors
 // backend/app/context.py's `_RESTRICTION_SEVERITY` exactly (kept in sync
 // manually, same as this file's other JS-side duplicates of engine
@@ -2808,6 +2870,7 @@ function renderOneActiveHealthStatus(active, resolveAction, label) {
     <div class="health-status-active">
       ${label ? `<h3>${esc(label)}</h3>` : ''}
       <span class="hs-restriction">${esc(HEALTH_RESTRICTION_LABELS[active.restriction] || active.restriction)}</span>
+      ${renderHealthStatusExtraChips(active)}
       <p>${esc(active.description)}</p>
       <p class="hs-meta">Reported ${esc(formatFeedbackDate(active.reported_at))} by ${esc(active.reported_by)}
         &middot; ${esc(HEALTH_SOURCE_LABELS[active.source] || active.source)}
@@ -2839,10 +2902,23 @@ function renderHealthStatusActiveBox(activeList, resolveAction) {
   )).join('');
 }
 
-function renderHealthStatusForm(form, submit) {
+function renderHealthStatusForm(form, submit, history) {
   const submitting = submit.status === 'submitting';
   const submitError = submit.status === 'error'
     ? `<div class="conn-result fail">${esc(submit.error)}</div>` : '';
+  // related_status_id is deliberately populated from the FULL history list
+  // (not just the active ones) -- a coach linking a recurrence needs to
+  // pick the earlier entry regardless of whether it's since been resolved.
+  // This select is the RIGHT place for related_status_id to actually get
+  // set in practice: a human coach reviewing full history can consciously
+  // link two entries far more reliably than the AI inferring it from a
+  // chat snippet (see models.py's HealthStatus docstring).
+  const relatedOptions = (history || [])
+    .slice()
+    .sort((a, b) => new Date(b.reported_at) - new Date(a.reported_at))
+    .map((entry) => `
+      <option value="${esc(entry.id)}" ${form.related_status_id === entry.id ? 'selected' : ''}>${esc(healthStatusOptionLabel(entry))}</option>`)
+    .join('');
   return `
     <div class="panel">
       <h3>Log a health status</h3>
@@ -2868,6 +2944,37 @@ function renderHealthStatusForm(form, submit) {
         <span>Expected review date (optional)</span>
         <input type="date" data-form="roster-health-status" data-field="expected_review_date" value="${esc(form.expected_review_date || '')}">
       </label>
+      <label class="field">
+        <span>Body region (optional)</span>
+        <select data-form="roster-health-status" data-field="body_region">
+          <option value="" ${!form.body_region ? 'selected' : ''}>Not specified</option>
+          ${Object.entries(HEALTH_BODY_REGION_LABELS).map(([value, label]) => `
+            <option value="${esc(value)}" ${form.body_region === value ? 'selected' : ''}>${esc(label)}</option>`).join('')}
+        </select>
+      </label>
+      <label class="field">
+        <span>Onset (optional)</span>
+        <select data-form="roster-health-status" data-field="onset">
+          <option value="" ${!form.onset ? 'selected' : ''}>Not specified</option>
+          ${Object.entries(HEALTH_ONSET_LABELS).map(([value, label]) => `
+            <option value="${esc(value)}" ${form.onset === value ? 'selected' : ''}>${esc(label)}</option>`).join('')}
+        </select>
+      </label>
+      <label class="field">
+        <span>Severity (optional)</span>
+        <select data-form="roster-health-status" data-field="severity">
+          <option value="" ${!form.severity ? 'selected' : ''}>Not specified</option>
+          ${Object.entries(HEALTH_SEVERITY_LABELS).map(([value, label]) => `
+            <option value="${esc(value)}" ${form.severity === value ? 'selected' : ''}>${esc(label)}</option>`).join('')}
+        </select>
+      </label>
+      <label class="field">
+        <span>Related to a previous entry (optional)</span>
+        <select data-form="roster-health-status" data-field="related_status_id">
+          <option value="" ${!form.related_status_id ? 'selected' : ''}>Not related to a previous entry</option>
+          ${relatedOptions}
+        </select>
+      </label>
       <div class="settings-actions">
         <button type="button" class="btn" data-a="roster:health-status-submit" ${submitting ? 'disabled' : ''}>${submitting ? 'Logging…' : 'Log status'}</button>
       </div>
@@ -2883,6 +2990,7 @@ function renderHealthStatusHistoryEntry(entry) {
         ${entry.resolved ? '<span class="chat-chip">Resolved</span>' : '<span class="chat-chip chip-skipped">Active</span>'}
         <span class="feedback-entry-date mono">${esc(formatFeedbackDate(entry.reported_at))}</span>
       </div>
+      ${renderHealthStatusExtraChips(entry)}
       <p class="feedback-entry-body">${esc(entry.description)}</p>
       <p class="hs-meta">${esc(entry.reported_by)} &middot; ${esc(HEALTH_SOURCE_LABELS[entry.source] || entry.source)}</p>
     </div>`;
@@ -2910,7 +3018,7 @@ function renderRosterHealthStatusSection({
     <section class="hist-section">
       <div class="s-head"><h2>Health status</h2></div>
       ${renderHealthStatusActiveBox(active, resolveAction)}
-      ${renderHealthStatusForm(form, submit)}
+      ${renderHealthStatusForm(form, submit, history)}
       ${history.length > 0 ? `
       <div class="detail-section">
         <h4>History</h4>
@@ -3052,7 +3160,10 @@ export function renderRosterTab({
   // rendering an honest "nothing loaded yet" state rather than crashing on
   // an undefined prop.
   healthStatus = { status: 'idle', data: [], error: null },
-  healthStatusForm = { description: '', restriction: 'light_only', source: 'self_reported', expected_review_date: '' },
+  healthStatusForm = {
+    description: '', restriction: 'light_only', source: 'self_reported', expected_review_date: '',
+    body_region: '', onset: '', severity: '', related_status_id: '',
+  },
   healthStatusSubmit = { status: 'idle', error: null },
   healthStatusResolve = { status: 'idle', error: null, id: null },
 }) {

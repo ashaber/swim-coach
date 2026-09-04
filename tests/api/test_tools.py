@@ -430,6 +430,126 @@ def test_record_health_status_invalid_expected_review_date_is_rejected(athletes_
     assert spy.list_health_status("renee") == []
 
 
+# --- record_health_status: second-iteration fields (industry-modeling
+# evolution) -- body_region/onset/severity/related_status_id ---------------
+
+
+def test_record_health_status_accepts_all_new_optional_fields(athletes_dir) -> None:
+    spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir))
+    handlers = build_tool_handlers(spy, slug="renee", expert_mode=False)
+
+    first = handlers["record_health_status"](
+        {"description": "first shoulder flare-up", "restriction": "light_only", "source": "self_reported"}
+    )
+    assert first["logged"] is True
+
+    result = handlers["record_health_status"](
+        {
+            "description": "same shoulder, flared up again",
+            "restriction": "no_training",
+            "source": "practitioner",
+            "body_region": "shoulder",
+            "onset": "gradual",
+            "severity": "moderate",
+            "related_status_id": first["health_status_id"],
+        }
+    )
+
+    assert result["logged"] is True
+    statuses = {str(s.id): s for s in spy.list_health_status("renee")}
+    status = statuses[result["health_status_id"]]
+    assert status.body_region == "shoulder"
+    assert status.onset == "gradual"
+    assert status.severity == "moderate"
+    assert str(status.related_status_id) == first["health_status_id"]
+
+
+def test_record_health_status_omitting_new_fields_still_works_exactly_as_before(athletes_dir) -> None:
+    # Regression: the original tool call shape (no new fields at all) must
+    # keep working unchanged.
+    spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir))
+    handlers = build_tool_handlers(spy, slug="renee", expert_mode=False)
+
+    result = handlers["record_health_status"](
+        {"description": "shoulder pain", "restriction": "light_only", "source": "self_reported"}
+    )
+
+    assert result["logged"] is True
+    status = spy.list_health_status("renee")[0]
+    assert status.body_region is None
+    assert status.onset is None
+    assert status.severity is None
+    assert status.related_status_id is None
+
+
+def test_record_health_status_invalid_body_region_is_rejected(athletes_dir) -> None:
+    spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir))
+    handlers = build_tool_handlers(spy, slug="renee", expert_mode=False)
+
+    result = handlers["record_health_status"](
+        {
+            "description": "shoulder pain",
+            "restriction": "light_only",
+            "source": "self_reported",
+            "body_region": "pinky_toe",
+        }
+    )
+
+    assert "error" in result
+    assert spy.list_health_status("renee") == []
+
+
+def test_record_health_status_invalid_onset_is_rejected(athletes_dir) -> None:
+    spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir))
+    handlers = build_tool_handlers(spy, slug="renee", expert_mode=False)
+
+    result = handlers["record_health_status"](
+        {
+            "description": "shoulder pain",
+            "restriction": "light_only",
+            "source": "self_reported",
+            "onset": "somewhat_suddenly",
+        }
+    )
+
+    assert "error" in result
+    assert spy.list_health_status("renee") == []
+
+
+def test_record_health_status_invalid_severity_is_rejected(athletes_dir) -> None:
+    spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir))
+    handlers = build_tool_handlers(spy, slug="renee", expert_mode=False)
+
+    result = handlers["record_health_status"](
+        {
+            "description": "shoulder pain",
+            "restriction": "light_only",
+            "source": "self_reported",
+            "severity": "catastrophic",
+        }
+    )
+
+    assert "error" in result
+    assert spy.list_health_status("renee") == []
+
+
+def test_record_health_status_invalid_related_status_id_is_rejected(athletes_dir) -> None:
+    spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir))
+    handlers = build_tool_handlers(spy, slug="renee", expert_mode=False)
+
+    result = handlers["record_health_status"](
+        {
+            "description": "shoulder pain",
+            "restriction": "light_only",
+            "source": "self_reported",
+            "related_status_id": "not-a-uuid",
+        }
+    )
+
+    assert "error" in result
+    assert spy.list_health_status("renee") == []
+
+
 def _save(store: FileStore, **overrides) -> None:
     store.save_workout("renee", make_workout(**overrides))
 

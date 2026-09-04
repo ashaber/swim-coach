@@ -924,6 +924,33 @@ describe('postCoachHealthStatus', () => {
     });
     expect(result).toEqual({ ok: false, error: 'description must be a non-empty string', status: 422 });
   });
+
+  it('includes body_region/onset/severity/related_status_id when given, omits when falsy', async () => {
+    global.fetch = fakeFetch({ id: 'h2' });
+    await postCoachHealthStatus({
+      baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee',
+      description: 'shoulder flare-up again', restriction: 'no_training', source: 'practitioner',
+      bodyRegion: 'shoulder', onset: 'gradual', severity: 'moderate', relatedStatusId: 'h1',
+    });
+    const [, init] = global.fetch.mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({
+      description: 'shoulder flare-up again', restriction: 'no_training', source: 'practitioner',
+      body_region: 'shoulder', onset: 'gradual', severity: 'moderate', related_status_id: 'h1',
+    });
+  });
+
+  it('omits body_region/onset/severity/related_status_id when empty strings', async () => {
+    global.fetch = fakeFetch({ id: 'h1' });
+    await postCoachHealthStatus({
+      baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee',
+      description: 'shoulder pain', restriction: 'light_only', source: 'self_reported',
+      bodyRegion: '', onset: '', severity: '', relatedStatusId: '',
+    });
+    const [, init] = global.fetch.mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({
+      description: 'shoulder pain', restriction: 'light_only', source: 'self_reported',
+    });
+  });
 });
 
 describe('resolveCoachHealthStatus', () => {

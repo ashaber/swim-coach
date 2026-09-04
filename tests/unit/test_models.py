@@ -1280,3 +1280,99 @@ def test_health_status_round_trip_through_yaml():
     restored = HealthStatus.model_validate(loaded_data)
     assert restored == original
     assert isinstance(loaded_data["id"], str)
+
+
+# --- HealthStatus second-iteration fields: body_region/onset/severity/
+# related_status_id (industry-modeling evolution) --------------------------
+
+
+def test_health_status_new_fields_default_to_none():
+    status = make_health_status()
+    assert status.body_region is None
+    assert status.onset is None
+    assert status.severity is None
+    assert status.related_status_id is None
+
+
+def test_health_status_rejects_bad_body_region():
+    with pytest.raises(ValidationError):
+        make_health_status(body_region="pinky_toe")
+
+
+def test_health_status_rejects_bad_onset():
+    with pytest.raises(ValidationError):
+        make_health_status(onset="somewhat_suddenly")
+
+
+def test_health_status_rejects_bad_severity():
+    with pytest.raises(ValidationError):
+        make_health_status(severity="catastrophic")
+
+
+def test_health_status_accepts_all_valid_body_regions():
+    for region in (
+        "shoulder", "knee", "back", "hip", "ankle_foot", "elbow_wrist",
+        "illness_systemic", "head_neck", "other",
+    ):
+        status = make_health_status(body_region=region)
+        assert status.body_region == region
+
+
+def test_health_status_accepts_all_valid_onsets():
+    for onset in ("acute", "gradual"):
+        status = make_health_status(onset=onset)
+        assert status.onset == onset
+
+
+def test_health_status_accepts_all_valid_severities():
+    for severity in ("slight", "minimal", "mild", "moderate", "serious", "long_term"):
+        status = make_health_status(severity=severity)
+        assert status.severity == severity
+
+
+def test_health_status_severity_independent_of_restriction():
+    # A broken toe: stop training now, but a short expected recovery -- the
+    # two axes this evolution splits apart must be settable independently
+    # in either direction.
+    broken_toe = make_health_status(restriction="no_training", severity="mild")
+    assert broken_toe.restriction == "no_training"
+    assert broken_toe.severity == "mild"
+
+    stress_fracture = make_health_status(restriction="no_training", severity="long_term")
+    assert stress_fracture.restriction == "no_training"
+    assert stress_fracture.severity == "long_term"
+
+
+def test_health_status_severity_stays_optional_even_when_resolved():
+    status = make_health_status(
+        resolved=True,
+        resolved_at=datetime(2026, 9, 1, 8, 0, 0, tzinfo=timezone.utc),
+    )
+    assert status.severity is None
+
+
+def test_health_status_related_status_id_links_to_earlier_entry():
+    earlier = make_health_status(description="first shoulder flare-up")
+    later = make_health_status(
+        description="shoulder flare-up again, same spot",
+        related_status_id=earlier.id,
+    )
+    assert later.related_status_id == earlier.id
+
+
+def test_health_status_fully_populated_entry_round_trips():
+    related = uuid.uuid4()
+    original = make_health_status(
+        body_region="shoulder",
+        onset="gradual",
+        severity="moderate",
+        related_status_id=related,
+    )
+    dumped = yaml.safe_dump(original.model_dump(mode="json"))
+    loaded_data = yaml.safe_load(dumped)
+    restored = HealthStatus.model_validate(loaded_data)
+    assert restored == original
+    assert restored.body_region == "shoulder"
+    assert restored.onset == "gradual"
+    assert restored.severity == "moderate"
+    assert restored.related_status_id == related
