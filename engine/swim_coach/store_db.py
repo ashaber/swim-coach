@@ -616,12 +616,25 @@ class DbStore(StoreInterface):
     def update_health_status(
         self, slug: str, health_status_id: UUID, *, resolved: bool, resolved_at: datetime | None
     ) -> HealthStatus | None:
+        # `for update` row-locks the read within this connection's implicit
+        # transaction (see `_connect`'s own docstring: commits on success,
+        # rolls back on exception -- the whole `with` block below is one
+        # transaction) -- without it, PostgreSQL's default READ COMMITTED
+        # isolation lets a concurrent update land between this SELECT and
+        # the UPDATE below, which would then blindly overwrite based on a
+        # stale read. Harmless today (the only mutation is a boolean flip,
+        # so a lost update just repeats the same result), but this pattern
+        # would silently corrupt data the moment any other field is ever
+        # added to this update path -- locking now costs nothing and closes
+        # that gap before it can matter, especially for safety-relevant data
+        # like this.
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
                 """
                 select h.data from health_status h
                 join athletes a on a.athlete_id = h.athlete_id
                 where a.slug = %s and h.id = %s
+                for update of h
                 """,
                 (slug, health_status_id),
             )

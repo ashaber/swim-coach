@@ -2775,31 +2775,38 @@ const HEALTH_SOURCE_LABELS = {
   practitioner: 'Practitioner guidance',
 };
 
-/** The most-recent entry with `resolved: false`, or null -- mirrors
- * backend/app/context.py's `_active_health_status`. `entries` is expected
- * already most-recent-first (the GET route's own ordering, matching
- * `list_health_status`'s contract), so this is just "first unresolved
- * entry," but re-derives defensively rather than assuming that ordering. */
-function findActiveHealthStatus(entries) {
+// Severity ranking for findActiveHealthStatuses below -- mirrors
+// backend/app/context.py's `_RESTRICTION_SEVERITY` exactly (kept in sync
+// manually, same as this file's other JS-side duplicates of engine
+// constants -- see e.g. CTL_COLD_START_DAYS's own comment in plan.js).
+const HEALTH_RESTRICTION_SEVERITY = { no_training: 2, light_only: 1, none: 0 };
+
+/** ALL entries with `resolved: false`, most-severe-restriction first (ties
+ * broken by most-recent `reported_at`) -- mirrors backend/app/context.py's
+ * `_active_health_statuses` exactly, including the same real bug fix: the
+ * old version returned only the SINGLE most-recently-reported unresolved
+ * entry, silently dropping an older (possibly more severe) still-open one
+ * from view the moment a newer, unrelated one was logged. Nothing ever
+ * auto-resolves an entry, so multiple can be genuinely active at once, and
+ * hiding any of them behind another is exactly the kind of silent loss
+ * this whole feature exists to prevent. */
+function findActiveHealthStatuses(entries) {
   const unresolved = (entries || []).filter((e) => !e.resolved);
-  if (unresolved.length === 0) return null;
-  return unresolved.reduce(
-    (latest, e) => (new Date(e.reported_at) > new Date(latest.reported_at) ? e : latest),
-    unresolved[0],
-  );
+  return unresolved.slice().sort((a, b) => {
+    const severityDiff = (HEALTH_RESTRICTION_SEVERITY[b.restriction] ?? 0)
+      - (HEALTH_RESTRICTION_SEVERITY[a.restriction] ?? 0);
+    if (severityDiff !== 0) return severityDiff;
+    return new Date(b.reported_at) - new Date(a.reported_at);
+  });
 }
 
-function renderHealthStatusActiveBox(active, resolveAction) {
-  if (!active) {
-    return '<p class="health-status-empty">No active health status on file. This means nothing has '
-      + "been recorded either way -- it is NOT a confirmation she's fine, just an absence of data.</p>";
-  }
+function renderOneActiveHealthStatus(active, resolveAction, label) {
   const resolving = resolveAction.status === 'submitting' && resolveAction.id === active.id;
   const resolveError = resolveAction.status === 'error' && resolveAction.id === active.id
     ? `<div class="conn-result fail">${esc(resolveAction.error)}</div>` : '';
   return `
     <div class="health-status-active">
-      <h3>Active health status</h3>
+      ${label ? `<h3>${esc(label)}</h3>` : ''}
       <span class="hs-restriction">${esc(HEALTH_RESTRICTION_LABELS[active.restriction] || active.restriction)}</span>
       <p>${esc(active.description)}</p>
       <p class="hs-meta">Reported ${esc(formatFeedbackDate(active.reported_at))} by ${esc(active.reported_by)}
@@ -2810,6 +2817,26 @@ function renderHealthStatusActiveBox(active, resolveAction) {
       </div>
       ${resolveError}
     </div>`;
+}
+
+/** Renders EVERY currently-active status, not just the newest -- see
+ * `findActiveHealthStatuses`'s own doc comment for the bug this fixes.
+ * Zero, one, and multiple-active are three genuinely different states:
+ * zero renders the explicit "nothing on file" (never silence, never an
+ * all-clear); one renders a single unlabeled box exactly as before; two or
+ * more renders each in its own numbered box so none is visually
+ * subordinate to (or hidden behind) another. */
+function renderHealthStatusActiveBox(activeList, resolveAction) {
+  if (!activeList || activeList.length === 0) {
+    return '<p class="health-status-empty">No active health status on file. This means nothing has '
+      + "been recorded either way -- it is NOT a confirmation she's fine, just an absence of data.</p>";
+  }
+  if (activeList.length === 1) {
+    return renderOneActiveHealthStatus(activeList[0], resolveAction, 'Active health status');
+  }
+  return activeList.map((active, i) => renderOneActiveHealthStatus(
+    active, resolveAction, `Active health status (${i + 1} of ${activeList.length})`,
+  )).join('');
 }
 
 function renderHealthStatusForm(form, submit) {
@@ -2877,7 +2904,7 @@ function renderRosterHealthStatusSection({
   if (healthStatus.status === 'loading' && healthStatus.data.length === 0) {
     return '<section class="hist-section"><div class="s-head"><h2>Health status</h2></div><p class="sub">Loading&hellip;</p></section>';
   }
-  const active = findActiveHealthStatus(healthStatus.data);
+  const active = findActiveHealthStatuses(healthStatus.data);
   const history = healthStatus.data;
   return `
     <section class="hist-section">

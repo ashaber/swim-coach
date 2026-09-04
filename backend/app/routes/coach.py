@@ -345,17 +345,20 @@ async def coach_resolve_health_status(
     if resolved is not True:
         raise HTTPException(status_code=422, detail="resolved must be true")
 
-    athlete = store.load_athlete(slug)
-    existing = next(
-        (e for e in store.list_health_status(slug) if e.id == health_status_id), None
-    )
-    # Defense in depth, same convention as coach_reply_to_feedback's own
-    # athlete_id cross-check below -- 404, not 403, so a coach authorized
-    # for `slug` but given a wrong-athlete id learns nothing about whether
-    # that id exists elsewhere.
-    if existing is None or existing.athlete_id != athlete.id:
-        raise HTTPException(status_code=404, detail=f"no such health status entry: {health_status_id}")
-
+    # No separate ownership pre-check here -- a real review finding fixed
+    # before merge: this used to call `store.list_health_status(slug)` (an
+    # unbounded full-history read) purely to look up `health_status_id` and
+    # cross-check its `athlete_id`, THEN call `store.update_health_status`
+    # below, which re-runs an equivalent slug+id-scoped lookup internally
+    # anyway -- two store round trips (two separate DB connections in
+    # DbStore) to do what one already does. Both `FileStore.
+    # update_health_status` and `DbStore.update_health_status` already
+    # scope their own lookup to THIS `slug` (never matching an id that
+    # belongs to a different athlete) and already return `None` for a
+    # not-found/wrong-athlete id -- the 404 branch below delivers the exact
+    # same "coach authorized for `slug` but given a wrong-athlete id learns
+    # nothing about whether that id exists elsewhere" guarantee the removed
+    # pre-check existed for, with one round trip instead of two.
     updated = store.update_health_status(
         slug, health_status_id, resolved=True, resolved_at=datetime.now(timezone.utc)
     )

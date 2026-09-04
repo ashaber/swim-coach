@@ -2022,6 +2022,43 @@ describe('renderRosterTab', () => {
       expect(html).not.toContain('No active health status on file');
     });
 
+    it('renders EVERY active status, not just the newest, most-severe first', () => {
+      // Real bug fixed before merge: an older, still-unresolved entry used
+      // to silently disappear the moment a newer, unrelated one was
+      // logged. Nothing auto-resolves an entry, so both can be genuinely
+      // active at once, and both must be visible -- with the more severe
+      // restriction (no_training) listed first even though it's older.
+      const html = renderRosterTab({
+        ...actingBase,
+        healthStatus: {
+          status: 'ready',
+          data: [
+            {
+              id: 'newer-milder', description: 'minor cold', restriction: 'light_only',
+              source: 'self_reported', reported_by: 'athlete', reported_at: '2026-08-20T09:00:00Z',
+              resolved: false, resolved_at: null, expected_review_date: null,
+            },
+            {
+              id: 'older-severe', description: 'shoulder injury, no training', restriction: 'no_training',
+              source: 'practitioner', reported_by: 'coach', reported_at: '2026-08-01T09:00:00Z',
+              resolved: false, resolved_at: null, expected_review_date: null,
+            },
+          ],
+          error: null,
+        },
+      });
+      expect(html).toContain('minor cold');
+      expect(html).toContain('shoulder injury, no training');
+      expect(html).toContain('data-id="newer-milder"');
+      expect(html).toContain('data-id="older-severe"');
+      expect(html).toContain('1 of 2');
+      expect(html).toContain('2 of 2');
+      // More severe (no_training, older) must render BEFORE the milder
+      // (light_only, newer) one.
+      expect(html.indexOf('shoulder injury, no training')).toBeLessThan(html.indexOf('minor cold'));
+      expect(html).not.toContain('No active health status on file');
+    });
+
     it('does not treat a resolved entry as active', () => {
       const html = renderRosterTab({
         ...actingBase,

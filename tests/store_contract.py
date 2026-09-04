@@ -583,6 +583,32 @@ class StoreContractTests:
         loaded = store.list_health_status(SLUG, since=date(2026, 8, 1))
         assert [h.description for h in loaded] == ["recent"]
 
+    def test_list_health_status_ties_on_identical_reported_at_break_by_id_ascending(self, store):
+        # Real review bug fixed before merge: FileStore fell back to
+        # filename/glob insertion order for a tie on identical `reported_at`
+        # while DbStore broke it by `id` ascending -- which entry counted as
+        # "most recent" (and therefore which one an active-status reader
+        # treats as authoritative among equally-timed entries) could differ
+        # depending on which backend held the exact same underlying data.
+        # Both backends must now agree: `id` ascending breaks the tie.
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        same_instant = datetime(2026, 8, 20, 12, 0, 0, tzinfo=timezone.utc)
+        higher_id = _health_status(
+            athlete.id, description="higher id", reported_at=same_instant,
+            id=uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"),
+        )
+        lower_id = _health_status(
+            athlete.id, description="lower id", reported_at=same_instant,
+            id=uuid.UUID("00000000-0000-0000-0000-000000000000"),
+        )
+        # Saved in an order that would produce the WRONG result if either
+        # backend fell back to insertion/filename order for the tie.
+        store.save_health_status(SLUG, higher_id)
+        store.save_health_status(SLUG, lower_id)
+        loaded = store.list_health_status(SLUG)
+        assert [h.description for h in loaded] == ["lower id", "higher id"]
+
     def test_list_health_status_scoped_to_athlete(self, store):
         athlete = _athlete()
         other = Athlete(id=uuid.uuid4(), slug="other-athlete", name="Other")

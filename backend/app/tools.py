@@ -1414,7 +1414,7 @@ def _handle_flag_for_coach_review(
 
 
 def _handle_record_health_status(
-    input_data: dict[str, Any], *, store: StoreInterface, slug: str
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str, expert_mode: bool
 ) -> dict[str, Any]:
     """Persists a `HealthStatus` row AND, in the same call, a linked
     `Feedback` row with `needs_human_review=True` -- see this module's
@@ -1425,6 +1425,17 @@ def _handle_record_health_status(
     this" resting on infrastructure already proven to work (the coach
     roster's existing Feedback section, `needs_human_review` chip, and
     unread-count badge all already surface this without any new plumbing).
+
+    `reported_by` is derived from `expert_mode`, NOT hardcoded -- a real
+    review bug caught before merge: `HealthStatus.reported_by`'s own
+    docstring explicitly promises "athlete" when she tells the system
+    directly in her own chat, vs "coach" when a human coach (expert mode)
+    is relaying something -- `expert_mode` is exactly this codebase's own
+    existing signal for "a coach/physiologist is chatting right now" (see
+    `_handle_flag_for_coach_review`'s identical parameter), so deriving
+    `reported_by` from it, rather than hardcoding "coach" unconditionally,
+    is what actually delivers the documented contract instead of silently
+    misattributing every athlete self-report as coach-relayed.
     """
     description = input_data.get("description")
     restriction = input_data.get("restriction")
@@ -1458,10 +1469,7 @@ def _handle_record_health_status(
         id=uuid.uuid4(),
         athlete_id=athlete_id,
         reported_at=now,
-        reported_by="coach",  # the AI, acting as coach in this chat -- same
-        # convention _handle_flag_for_coach_review already uses for `Feedback.
-        # source`; the tool schema's own `source` field carries the distinct
-        # self_reported/practitioner claim-provenance axis instead.
+        reported_by="coach" if expert_mode else "athlete",
         source=source,
         description=description,
         restriction=restriction,
@@ -1469,22 +1477,55 @@ def _handle_record_health_status(
     )
     store.save_health_status(slug, status)
 
-    feedback = Feedback(
-        id=uuid.uuid4(),
-        athlete_id=athlete_id,
-        type="coach_review",
-        source="coach",
-        body=description,
-        context={
-            "health_status_id": str(status.id),
-            "restriction": restriction,
-            "health_status_source": source,
-        },
-        status="open",
-        created_at=now,
-        needs_human_review=True,
-    )
-    store.save_feedback(feedback)
+    # The HealthStatus row above is the durable record of record and is
+    # already saved by this point -- everything below is the SEPARATE
+    # "make sure a human actually sees it" guarantee. A real review finding
+    # before merge: these were two independent, unguarded store calls with
+    # no compensating action if the second (Feedback) write failed after
+    # the first (HealthStatus) succeeded -- an exception here used to
+    # propagate straight up to claude.py's generic tool-error handler with
+    # no indication the health record itself was already safely persisted,
+    # and with the ONE mechanism that guarantees proactive coach visibility
+    # (the needs_human_review Feedback row + roster unread badge) silently
+    # never firing. Catching it here means: the health record is NEVER
+    # rolled back or lost (it's already committed above), the failure is
+    # logged loudly server-side, and the tool result still tells the model
+    # plainly that the coach-visibility half didn't happen -- so the model's
+    # own reply to the athlete/coach can say so explicitly ("logged, but
+    # let your coach know directly too") rather than silently implying full
+    # success. The record itself also remains independently discoverable
+    # any time via GET /api/coach/athletes/{slug}/health-status, which never
+    # depends on this Feedback link existing.
+    feedback_id: str | None = None
+    notify_error: str | None = None
+    try:
+        feedback = Feedback(
+            id=uuid.uuid4(),
+            athlete_id=athlete_id,
+            type="coach_review",
+            source="coach",
+            body=description,
+            context={
+                "health_status_id": str(status.id),
+                "restriction": restriction,
+                "health_status_source": source,
+            },
+            status="open",
+            created_at=now,
+            needs_human_review=True,
+        )
+        store.save_feedback(feedback)
+        feedback_id = str(feedback.id)
+    except Exception as exc:  # noqa: BLE001 - deliberately broad: ANY failure
+        # here must not look like this tool call failed outright (the health
+        # record itself is safe), but must be loud, not swallowed.
+        notify_error = str(exc)
+        log.error(
+            "health status recorded but coach-notification write failed",
+            athlete=slug,
+            health_status_id=str(status.id),
+            error=notify_error,
+        )
 
     log.info(
         "health status recorded",
@@ -1492,14 +1533,21 @@ def _handle_record_health_status(
         restriction=restriction,
         source=source,
         health_status_id=str(status.id),
-        feedback_id=str(feedback.id),
+        feedback_id=feedback_id,
     )
-    return {
+    result: dict[str, Any] = {
         "logged": True,
         "health_status_id": str(status.id),
-        "feedback_id": str(feedback.id),
+        "feedback_id": feedback_id,
         "restriction": restriction,
     }
+    if notify_error is not None:
+        result["notify_error"] = (
+            "The health status was recorded, but flagging it for your human "
+            "coach's attention failed. Tell the athlete/coach to reach their "
+            "human coach directly about this as a precaution."
+        )
+    return result
 
 
 def _summarize_workout(w: Workout, *, athlete: Athlete, hr_max: float | None, wellness: list[Any]) -> dict[str, Any]:
@@ -2666,7 +2714,7 @@ def build_tool_handlers(
             input_data, store=store, slug=slug, expert_mode=expert_mode
         ),
         "record_health_status": lambda input_data: _handle_record_health_status(
-            input_data, store=store, slug=slug
+            input_data, store=store, slug=slug, expert_mode=expert_mode
         ),
         "get_workouts": lambda input_data: _handle_get_workouts(
             input_data, store=store, slug=slug

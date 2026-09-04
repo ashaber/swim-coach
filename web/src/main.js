@@ -203,6 +203,16 @@ function createRosterState() {
     // per GET .../health-status's ordering), same {status, data, error}
     // async-state shape as `workouts`/`feedback`/`load`/`plan` above.
     healthStatus: { status: 'idle', data: [], error: null },
+    // Stale-response guard for loadCoachHealthStatus below (a real review
+    // bug caught before merge): incremented every time a fresh load STARTS
+    // and every time a local mutation (submit/resolve) patches `data`
+    // directly. A slow in-flight GET's success handler only applies its
+    // result if this counter hasn't moved since ITS OWN load started --
+    // otherwise a slow GET completing after a coach's own submit/resolve
+    // would silently clobber that already-durably-saved, just-applied
+    // local change with a stale pre-mutation snapshot, potentially
+    // prompting a confusing duplicate submission.
+    healthStatusVersion: 0,
     // The coach's in-progress "log a new health status" form draft --
     // deliberately its own flat object (not per-row-keyed like
     // `replyDrafts`, since there's only ever one such form per athlete, not
@@ -2041,10 +2051,21 @@ async function loadCoachHealthStatus(slug) {
   }
 
   state.roster.healthStatus = { status: 'loading', data: state.roster.healthStatus.data, error: null };
+  // Snapshot the version BEFORE awaiting -- see healthStatusVersion's own
+  // doc comment above for the race this guards against.
+  const startedAtVersion = state.roster.healthStatusVersion;
   render();
 
   const result = await fetchCoachHealthStatus({ baseUrl: settings.baseUrl, token: settings.token, athlete: slug });
   if (handleUnauthorized(result)) return;
+  if (state.roster.healthStatusVersion !== startedAtVersion) {
+    // A submit/resolve mutated state.roster.healthStatus.data while this
+    // GET was in flight -- that local state is already more current (and
+    // already durably saved server-side) than this response's snapshot,
+    // so applying it now would silently undo a real, successful action.
+    log.info('roster.health_status_load_discarded_stale', { athlete: slug });
+    return;
+  }
   if (result.ok) {
     log.info('roster.health_status_loaded', { athlete: slug, count: result.data.length });
     state.roster.healthStatus = { status: 'ready', data: result.data, error: null };
@@ -2096,6 +2117,7 @@ async function handleSubmitHealthStatus() {
       ...state.roster.healthStatus,
       data: [result.data, ...state.roster.healthStatus.data],
     };
+    state.roster.healthStatusVersion += 1; // see its own doc comment (stale-GET guard)
     state.roster.healthStatusForm = {
       description: '', restriction: 'light_only', source: 'self_reported', expected_review_date: '',
     };
@@ -2132,6 +2154,7 @@ async function handleResolveHealthStatus(healthStatusId) {
       ...state.roster.healthStatus,
       data: state.roster.healthStatus.data.map((entry) => (entry.id === result.data.id ? result.data : entry)),
     };
+    state.roster.healthStatusVersion += 1; // see its own doc comment (stale-GET guard)
     state.roster.healthStatusResolve = { status: 'idle', error: null, id: null };
   } else {
     log.error('roster.health_status_resolve_failed', { athlete: slug, health_status_id: healthStatusId, error: result.error });

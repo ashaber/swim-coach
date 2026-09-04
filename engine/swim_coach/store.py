@@ -137,13 +137,20 @@ class StoreInterface(ABC):
     @abstractmethod
     def list_health_status(self, slug: str, *, since: date | None = None) -> list[HealthStatus]:
         """Every health-status entry for this athlete, most-recent-first by
-        `reported_at` -- same ordering convention as `list_feedback`. The
-        MOST RECENT entry with `resolved=False` (i.e. the first element of
-        this list with `resolved is False`) is the athlete's current active
-        status; if none exists, no active restriction is on file (which is
-        NOT the same as "definitely fine" -- see HealthStatus's docstring).
-        `since`, when given, restricts the result to entries with
-        `reported_at.date() >= since` (inclusive) -- same
+        `reported_at` (ties broken by `id`, so a caller's own ordering is
+        deterministic and identical across both `FileStore` and `DbStore`
+        for the same underlying data) -- same ordering convention as
+        `list_feedback`. ALL entries with `resolved=False` are currently
+        active simultaneously -- nothing here (or anywhere) auto-resolves
+        one just because another was logged later, so a caller must
+        consider every unresolved entry, not just the first one in this
+        list (see `backend/app/context.py`'s `_active_health_statuses` for
+        the reference implementation, including why an early version of
+        that logic that only looked at the single most-recent entry was a
+        real bug). If none exist, no active restriction is on file (which
+        is NOT the same as "definitely fine" -- see HealthStatus's
+        docstring). `since`, when given, restricts the result to entries
+        with `reported_at.date() >= since` (inclusive) -- same
         push-it-into-the-query contract `list_workouts`'s `since` documents;
         `since=None` (the default) returns full history."""
         ...
@@ -503,6 +510,16 @@ class FileStore(StoreInterface):
                 if since is not None and entry.reported_at.date() < since:
                     continue
                 entries.append(entry)
+        # Two-pass STABLE sort (Python's sort() guarantees stability) so a
+        # tie on identical `reported_at` breaks by `id` ascending, matching
+        # DbStore.list_health_status's `order by h.reported_at desc, h.id`
+        # exactly -- a real review finding: without an explicit, matching
+        # tiebreak, FileStore fell back to filename/glob order for ties
+        # while DbStore broke them by id, so which entry counted as "most
+        # recent" (and therefore which one _active_health_statuses treats
+        # as most-severe/most-recent among equally-timed entries) could
+        # differ depending on which backend held the exact same data.
+        entries.sort(key=lambda e: str(e.id))
         entries.sort(key=lambda e: e.reported_at, reverse=True)
         return entries
 

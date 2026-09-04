@@ -317,7 +317,12 @@ def test_per_request_context_omits_resolved_health_status_from_active_block(app_
     assert "Old resolved shoulder issue" not in health_section
 
 
-def test_per_request_context_shows_most_recent_unresolved_entry(app_env) -> None:
+def test_per_request_context_shows_all_unresolved_entries_not_just_the_newest(app_env) -> None:
+    # Real review bug fixed before merge: an older, still-unresolved entry
+    # must NOT silently disappear from the "active" view just because a
+    # newer, unrelated one was logged later -- nothing auto-resolves an
+    # entry, so both are genuinely active simultaneously and BOTH must be
+    # visible to the model's judgment, not just whichever was reported last.
     store = FileStore(base_dir=app_env)
     athlete = store.load_athlete("renee")
     older = _health_status(
@@ -337,7 +342,34 @@ def test_per_request_context_shows_most_recent_unresolved_entry(app_env) -> None
     health_section = text.split("### Health status")[1].split("### Current week plan")[0]
 
     assert "newer issue" in health_section
-    assert "older issue" not in health_section
+    assert "older issue" in health_section
+    assert "2 ACTIVE HEALTH STATUSES ON FILE" in health_section
+
+
+def test_per_request_context_ranks_more_severe_restriction_first_when_multiple_active(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    athlete = store.load_athlete("renee")
+    milder_but_newer = _health_status(
+        athlete.id,
+        description="minor cold",
+        restriction="light_only",
+        reported_at=datetime(2026, 8, 20, tzinfo=timezone.utc),
+    )
+    severe_but_older = _health_status(
+        athlete.id,
+        description="shoulder injury, no training",
+        restriction="no_training",
+        reported_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+    )
+    store.save_health_status("renee", milder_but_newer)
+    store.save_health_status("renee", severe_but_older)
+
+    text = build_per_request_context(store, "renee", expert_mode=False)
+    health_section = text.split("### Health status")[1].split("### Current week plan")[0]
+
+    # The more severe (no_training) entry must be listed BEFORE the milder
+    # (light_only) one, even though it was reported earlier.
+    assert health_section.index("shoulder injury") < health_section.index("minor cold")
 
 
 def test_summarize_rollup_ctl_atl_tsb_uses_full_history_but_windows_output(app_env) -> None:

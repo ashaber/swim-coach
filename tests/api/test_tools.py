@@ -284,7 +284,12 @@ def test_record_health_status_persists_status_and_linked_feedback(athletes_dir, 
     assert status.description == description
     assert status.restriction == "light_only"
     assert status.source == "self_reported"
-    assert status.reported_by == "coach"
+    # expert_mode=False -- this is the ATHLETE'S OWN chat -- reported_by
+    # must be "athlete", not "coach" (a real bug caught before merge: this
+    # was hardcoded to "coach" unconditionally regardless of who was
+    # actually chatting, contradicting HealthStatus's own documented
+    # "athlete in her own chat" contract).
+    assert status.reported_by == "athlete"
     assert status.resolved is False
     assert str(status.id) == result["health_status_id"]
 
@@ -296,6 +301,60 @@ def test_record_health_status_persists_status_and_linked_feedback(athletes_dir, 
     assert feedback.context["health_status_id"] == str(status.id)
     assert feedback.athlete_id == spy.load_athlete("renee").id
     assert str(feedback.id) == result["feedback_id"]
+    assert "notify_error" not in result
+
+
+def test_record_health_status_reported_by_is_coach_in_expert_mode(athletes_dir, run_tag) -> None:
+    # expert_mode=True -- a human coach/physiologist is chatting, per this
+    # codebase's existing convention (same signal _handle_flag_for_coach_
+    # review already uses) -- reported_by must reflect "coach relaying
+    # this," not "athlete."
+    spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir))
+    handlers = build_tool_handlers(spy, slug="renee", expert_mode=True)
+
+    description = f"Physio: no OW swimming for 2 weeks [{run_tag}]"
+    result = handlers["record_health_status"](
+        {"description": description, "restriction": "light_only", "source": "practitioner"}
+    )
+
+    assert result["logged"] is True
+    status = spy.list_health_status("renee")[0]
+    assert status.reported_by == "coach"
+
+
+def test_record_health_status_still_saves_the_record_when_feedback_write_fails(
+    athletes_dir, run_tag
+) -> None:
+    # Real review bug fixed before merge: the HealthStatus write and the
+    # linked needs_human_review Feedback write were two independent,
+    # unguarded store calls. If save_feedback failed AFTER save_health_
+    # status already succeeded, the exception propagated straight up with
+    # no indication the health record was already safely persisted, and the
+    # ONE mechanism guaranteeing proactive coach visibility silently never
+    # fired. The fix: the HealthStatus write must never be lost or rolled
+    # back, and the tool result must plainly flag that the notification
+    # half failed rather than silently implying full success.
+    spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir), fail_feedback=True)
+    handlers = build_tool_handlers(spy, slug="renee", expert_mode=False)
+
+    description = f"Jaw/body lockup, stress-related [{run_tag}]"
+    result = handlers["record_health_status"](
+        {"description": description, "restriction": "no_training", "source": "self_reported"}
+    )
+
+    # The tool call itself must not look like a hard failure -- the health
+    # record IS safely persisted -- but it must say the notification failed.
+    assert result["logged"] is True
+    assert result["feedback_id"] is None
+    assert "notify_error" in result
+
+    statuses = spy.list_health_status("renee")
+    assert len(statuses) == 1
+    assert statuses[0].description == description
+    assert statuses[0].restriction == "no_training"
+    # No Feedback row was persisted (the simulated failure), and the spy
+    # never recorded a successful save.
+    assert spy.saved == []
 
 
 def test_record_health_status_accepts_expected_review_date(athletes_dir) -> None:
