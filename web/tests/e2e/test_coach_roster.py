@@ -143,6 +143,14 @@ REPLIED_FEEDBACK = {
     'coach_reply': 'Start with 70g/hr and adjust from there.',
 }
 
+# GET /api/coach/athletes/renee/health-status (backend/health-status-record
+# build) -- loadCoachHealthStatus fires unconditionally alongside
+# workouts/feedback/load/plan the moment an athlete is selected (see
+# ROSTER_PLAN_STUB's own comment above for the identical unmocked-route
+# hazard this fixes). Empty by default; test_health_status.py overrides it
+# per-test via its own `_make_ctx` wrapper.
+HEALTH_STATUS_STUB = json.dumps([])
+
 
 def _cors_route(status, content_type, body):
     def handler(route):
@@ -179,6 +187,10 @@ def _make_ctx(pw, cfg, *, identity=COACH_IDENTITY, reply_calls=None):
     # the moment an athlete is selected (main.js's loadCoachPlan), same
     # unmocked-route hazard as every other coach-athletes/renee/* route here.
     ctx.route('**/api/coach/athletes/renee/plan*', _cors_route(200, 'application/json', ROSTER_PLAN_STUB))
+    ctx.route(
+        '**/api/coach/athletes/renee/health-status*',
+        _cors_route(200, 'application/json', HEALTH_STATUS_STUB),
+    )
     ctx.route('**/api/coach/athletes*', _cors_route(200, 'application/json', ATHLETES_STUB))
     # Coach-mode Q&A build: the coach's OWN Plan tab (state.tab === 'plan',
     # not the roster) now also lazily fetches GET /api/feedback the moment a

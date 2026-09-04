@@ -18,6 +18,7 @@ from swim_coach.models import (
     AuthSession,
     Event,
     Feedback,
+    HealthStatus,
     MacroBlock,
     MacroPlan,
     Session,
@@ -30,12 +31,14 @@ from swim_coach.store_db import (
     coach_text_storage_key,
     event_to_row,
     feedback_to_row,
+    health_status_to_row,
     macro_to_row,
     row_to_allowed_email,
     row_to_athlete,
     row_to_auth_session,
     row_to_event,
     row_to_feedback,
+    row_to_health_status,
     row_to_macro,
     row_to_week,
     row_to_wellness,
@@ -237,6 +240,39 @@ def test_wellness_mapping_round_trip():
     assert row["id"] == w.id
     assert row["date"] == w.date
     assert row_to_wellness(row) == w
+
+
+def _health_status(**overrides) -> HealthStatus:
+    data: dict = dict(
+        id=uuid.uuid4(),
+        athlete_id=AID,
+        reported_at=datetime(2026, 8, 30, 9, 0, 0, tzinfo=timezone.utc),
+        reported_by="athlete",
+        source="self_reported",
+        description="Right shoulder's been sharp on catch-up drills.",
+        restriction="light_only",
+    )
+    data.update(overrides)
+    return HealthStatus(**data)
+
+
+def test_health_status_mapping_round_trip():
+    h = _health_status()
+    row = health_status_to_row(h)
+    assert row["id"] == h.id
+    assert row["athlete_id"] == h.athlete_id
+    assert row["reported_at"] == h.reported_at
+    assert row["resolved"] == h.resolved
+    assert row_to_health_status(row) == h
+
+
+def test_health_status_mapping_round_trip_resolved():
+    h = _health_status(
+        resolved=True, resolved_at=datetime(2026, 9, 1, 8, 0, 0, tzinfo=timezone.utc)
+    )
+    row = health_status_to_row(h)
+    assert row["resolved"] is True
+    assert row_to_health_status(row) == h
 
 
 def _feedback(**overrides) -> Feedback:

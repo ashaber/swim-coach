@@ -54,6 +54,7 @@ def test_request_shape_includes_tools(client, fake_claude_chat_factory) -> None:
         "propose_adaptation",
         "get_plan_summary",
         "flag_for_coach_review",
+        "record_health_status",
         "get_workouts",
         "sync_workouts",
         "push_to_garmin",

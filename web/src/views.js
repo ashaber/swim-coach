@@ -2750,6 +2750,283 @@ function renderCoachFeedbackSection(feedback, replyDrafts, replySubmit) {
   return feedback.data.map((entry) => renderCoachFeedbackEntry(entry, replyDrafts[entry.id], replySubmit)).join('');
 }
 
+// --- Health status (durable injury/illness record, coach roster) -----------
+// Built after a real, undetected athlete health incident exposed this system
+// had NO durable record of health status anywhere -- see
+// engine/swim_coach/models.HealthStatus's docstring for the full rationale.
+// This section is deliberately the loudest thing on the coach roster's
+// per-athlete view: an active (unresolved) status renders in the alarm-red
+// `.health-status-active` box (same tokens `.wellness-stat--concerning`/
+// `.chip-skipped` already use for "needs attention"), never the app's
+// ordinary quiet `.panel` voice -- see index.html's CSS comment on that
+// class for why. Absence of an active status is rendered as an EXPLICIT,
+// honestly-worded "nothing on file" -- never silence, and never phrased as
+// an all-clear (per HealthStatus's own docstring: no record is not the same
+// as "definitely fine").
+
+const HEALTH_RESTRICTION_LABELS = {
+  none: 'No restriction',
+  light_only: 'Light training only',
+  no_training: 'No training',
+};
+
+const HEALTH_SOURCE_LABELS = {
+  self_reported: 'Self-reported',
+  practitioner: 'Practitioner guidance',
+};
+
+// Second-iteration fields (industry-modeling evolution, see engine/
+// swim_coach/models.py's HealthStatus docstring for the full citations):
+// coarse body-region/onset/severity labels for the coach's direct-entry
+// form and the active-status/history chips below. All three stay optional
+// everywhere they're rendered -- an unset value renders no chip at all,
+// never a "Not specified" chip mixed in among real ones.
+const HEALTH_BODY_REGION_LABELS = {
+  shoulder: 'Shoulder',
+  knee: 'Knee',
+  back: 'Back',
+  hip: 'Hip',
+  ankle_foot: 'Ankle/foot',
+  elbow_wrist: 'Elbow/wrist',
+  illness_systemic: 'Illness/systemic',
+  head_neck: 'Head/neck',
+  other: 'Other',
+};
+
+const HEALTH_ONSET_LABELS = {
+  acute: 'Acute (sudden)',
+  gradual: 'Gradual (overuse)',
+};
+
+const HEALTH_SEVERITY_LABELS = {
+  slight: 'Slight (<=1 day)',
+  minimal: 'Minimal (2-3 days)',
+  mild: 'Mild (4-7 days)',
+  moderate: 'Moderate (8-28 days)',
+  serious: 'Serious (>28 days-6mo)',
+  long_term: 'Long-term (>6mo)',
+};
+
+/** Small chips for whichever of body_region/onset/severity are actually set
+ * on this entry -- reused by both the active-status box and each history
+ * entry. Omits a chip entirely for a field that's `None`/absent, same
+ * "only show what's known" discipline as the backend context injection
+ * (backend/app/context.py's `_render_active_health_status`) -- never a
+ * "not specified" placeholder chip. */
+function renderHealthStatusExtraChips(entry) {
+  const chips = [];
+  if (entry.body_region) {
+    chips.push(esc(HEALTH_BODY_REGION_LABELS[entry.body_region] || entry.body_region));
+  }
+  if (entry.onset) {
+    chips.push(esc(HEALTH_ONSET_LABELS[entry.onset] || entry.onset));
+  }
+  if (entry.severity) {
+    chips.push(esc(HEALTH_SEVERITY_LABELS[entry.severity] || entry.severity));
+  }
+  if (chips.length === 0) return '';
+  return `<div class="chat-chips">${chips.map((c) => `<span class="chat-chip">${c}</span>`).join('')}</div>`;
+}
+
+/** Short label for one history entry, used to populate the `related_status_id`
+ * select below -- date + a truncated description so a coach can actually
+ * tell entries apart, not just a bare id. */
+function healthStatusOptionLabel(entry) {
+  const desc = (entry.description || '').trim();
+  const shortDesc = desc.length > 60 ? `${desc.slice(0, 57)}...` : desc;
+  return `${formatFeedbackDate(entry.reported_at)} -- ${shortDesc}`;
+}
+
+// Severity ranking for findActiveHealthStatuses below -- mirrors
+// backend/app/context.py's `_RESTRICTION_SEVERITY` exactly (kept in sync
+// manually, same as this file's other JS-side duplicates of engine
+// constants -- see e.g. CTL_COLD_START_DAYS's own comment in plan.js).
+const HEALTH_RESTRICTION_SEVERITY = { no_training: 2, light_only: 1, none: 0 };
+
+/** ALL entries with `resolved: false`, most-severe-restriction first (ties
+ * broken by most-recent `reported_at`) -- mirrors backend/app/context.py's
+ * `_active_health_statuses` exactly, including the same real bug fix: the
+ * old version returned only the SINGLE most-recently-reported unresolved
+ * entry, silently dropping an older (possibly more severe) still-open one
+ * from view the moment a newer, unrelated one was logged. Nothing ever
+ * auto-resolves an entry, so multiple can be genuinely active at once, and
+ * hiding any of them behind another is exactly the kind of silent loss
+ * this whole feature exists to prevent. */
+function findActiveHealthStatuses(entries) {
+  const unresolved = (entries || []).filter((e) => !e.resolved);
+  return unresolved.slice().sort((a, b) => {
+    const severityDiff = (HEALTH_RESTRICTION_SEVERITY[b.restriction] ?? 0)
+      - (HEALTH_RESTRICTION_SEVERITY[a.restriction] ?? 0);
+    if (severityDiff !== 0) return severityDiff;
+    return new Date(b.reported_at) - new Date(a.reported_at);
+  });
+}
+
+function renderOneActiveHealthStatus(active, resolveAction, label) {
+  const resolving = resolveAction.status === 'submitting' && resolveAction.id === active.id;
+  const resolveError = resolveAction.status === 'error' && resolveAction.id === active.id
+    ? `<div class="conn-result fail">${esc(resolveAction.error)}</div>` : '';
+  return `
+    <div class="health-status-active">
+      ${label ? `<h3>${esc(label)}</h3>` : ''}
+      <span class="hs-restriction">${esc(HEALTH_RESTRICTION_LABELS[active.restriction] || active.restriction)}</span>
+      ${renderHealthStatusExtraChips(active)}
+      <p>${esc(active.description)}</p>
+      <p class="hs-meta">Reported ${esc(formatFeedbackDate(active.reported_at))} by ${esc(active.reported_by)}
+        &middot; ${esc(HEALTH_SOURCE_LABELS[active.source] || active.source)}
+        ${active.expected_review_date ? ` &middot; review by ${esc(active.expected_review_date)}` : ''}</p>
+      <div class="settings-actions">
+        <button type="button" class="btn" data-a="roster:health-status-resolve" data-id="${esc(active.id)}" ${resolving ? 'disabled' : ''}>${resolving ? 'Marking resolved…' : 'Mark resolved'}</button>
+      </div>
+      ${resolveError}
+    </div>`;
+}
+
+/** Renders EVERY currently-active status, not just the newest -- see
+ * `findActiveHealthStatuses`'s own doc comment for the bug this fixes.
+ * Zero, one, and multiple-active are three genuinely different states:
+ * zero renders the explicit "nothing on file" (never silence, never an
+ * all-clear); one renders a single unlabeled box exactly as before; two or
+ * more renders each in its own numbered box so none is visually
+ * subordinate to (or hidden behind) another. */
+function renderHealthStatusActiveBox(activeList, resolveAction) {
+  if (!activeList || activeList.length === 0) {
+    return '<p class="health-status-empty">No active health status on file. This means nothing has '
+      + "been recorded either way -- it is NOT a confirmation she's fine, just an absence of data.</p>";
+  }
+  if (activeList.length === 1) {
+    return renderOneActiveHealthStatus(activeList[0], resolveAction, 'Active health status');
+  }
+  return activeList.map((active, i) => renderOneActiveHealthStatus(
+    active, resolveAction, `Active health status (${i + 1} of ${activeList.length})`,
+  )).join('');
+}
+
+function renderHealthStatusForm(form, submit, history) {
+  const submitting = submit.status === 'submitting';
+  const submitError = submit.status === 'error'
+    ? `<div class="conn-result fail">${esc(submit.error)}</div>` : '';
+  // related_status_id is deliberately populated from the FULL history list
+  // (not just the active ones) -- a coach linking a recurrence needs to
+  // pick the earlier entry regardless of whether it's since been resolved.
+  // This select is the RIGHT place for related_status_id to actually get
+  // set in practice: a human coach reviewing full history can consciously
+  // link two entries far more reliably than the AI inferring it from a
+  // chat snippet (see models.py's HealthStatus docstring).
+  const relatedOptions = (history || [])
+    .slice()
+    .sort((a, b) => new Date(b.reported_at) - new Date(a.reported_at))
+    .map((entry) => `
+      <option value="${esc(entry.id)}" ${form.related_status_id === entry.id ? 'selected' : ''}>${esc(healthStatusOptionLabel(entry))}</option>`)
+    .join('');
+  return `
+    <div class="panel">
+      <h3>Log a health status</h3>
+      <label class="field">
+        <span>Description</span>
+        <textarea rows="3" data-form="roster-health-status" data-field="description" placeholder="What did the athlete or a practitioner say?">${esc(form.description || '')}</textarea>
+      </label>
+      <label class="field">
+        <span>Restriction</span>
+        <select data-form="roster-health-status" data-field="restriction">
+          ${Object.entries(HEALTH_RESTRICTION_LABELS).map(([value, label]) => `
+            <option value="${esc(value)}" ${form.restriction === value ? 'selected' : ''}>${esc(label)}</option>`).join('')}
+        </select>
+      </label>
+      <label class="field">
+        <span>Source</span>
+        <select data-form="roster-health-status" data-field="source">
+          ${Object.entries(HEALTH_SOURCE_LABELS).map(([value, label]) => `
+            <option value="${esc(value)}" ${form.source === value ? 'selected' : ''}>${esc(label)}</option>`).join('')}
+        </select>
+      </label>
+      <label class="field">
+        <span>Expected review date (optional)</span>
+        <input type="date" data-form="roster-health-status" data-field="expected_review_date" value="${esc(form.expected_review_date || '')}">
+      </label>
+      <label class="field">
+        <span>Body region (optional)</span>
+        <select data-form="roster-health-status" data-field="body_region">
+          <option value="" ${!form.body_region ? 'selected' : ''}>Not specified</option>
+          ${Object.entries(HEALTH_BODY_REGION_LABELS).map(([value, label]) => `
+            <option value="${esc(value)}" ${form.body_region === value ? 'selected' : ''}>${esc(label)}</option>`).join('')}
+        </select>
+      </label>
+      <label class="field">
+        <span>Onset (optional)</span>
+        <select data-form="roster-health-status" data-field="onset">
+          <option value="" ${!form.onset ? 'selected' : ''}>Not specified</option>
+          ${Object.entries(HEALTH_ONSET_LABELS).map(([value, label]) => `
+            <option value="${esc(value)}" ${form.onset === value ? 'selected' : ''}>${esc(label)}</option>`).join('')}
+        </select>
+      </label>
+      <label class="field">
+        <span>Severity (optional)</span>
+        <select data-form="roster-health-status" data-field="severity">
+          <option value="" ${!form.severity ? 'selected' : ''}>Not specified</option>
+          ${Object.entries(HEALTH_SEVERITY_LABELS).map(([value, label]) => `
+            <option value="${esc(value)}" ${form.severity === value ? 'selected' : ''}>${esc(label)}</option>`).join('')}
+        </select>
+      </label>
+      <label class="field">
+        <span>Related to a previous entry (optional)</span>
+        <select data-form="roster-health-status" data-field="related_status_id">
+          <option value="" ${!form.related_status_id ? 'selected' : ''}>Not related to a previous entry</option>
+          ${relatedOptions}
+        </select>
+      </label>
+      <div class="settings-actions">
+        <button type="button" class="btn" data-a="roster:health-status-submit" ${submitting ? 'disabled' : ''}>${submitting ? 'Logging…' : 'Log status'}</button>
+      </div>
+      ${submitError}
+    </div>`;
+}
+
+function renderHealthStatusHistoryEntry(entry) {
+  return `
+    <div class="health-status-history-entry">
+      <div class="feedback-entry-head">
+        <span class="chat-chip">${esc(HEALTH_RESTRICTION_LABELS[entry.restriction] || entry.restriction)}</span>
+        ${entry.resolved ? '<span class="chat-chip">Resolved</span>' : '<span class="chat-chip chip-skipped">Active</span>'}
+        <span class="feedback-entry-date mono">${esc(formatFeedbackDate(entry.reported_at))}</span>
+      </div>
+      ${renderHealthStatusExtraChips(entry)}
+      <p class="feedback-entry-body">${esc(entry.description)}</p>
+      <p class="hs-meta">${esc(entry.reported_by)} &middot; ${esc(HEALTH_SOURCE_LABELS[entry.source] || entry.source)}</p>
+    </div>`;
+}
+
+/** The coach roster's health-status section: the active status (loud, see
+ * `.health-status-active` above), a form for the coach to log a new one
+ * directly (no AI chat required), and the full history below it -- nothing
+ * is ever silently lost, per this log's own "never delete" rail. Rendered
+ * once per acted-as-athlete view, above the sub-tab bar (`renderRosterTab`'s
+ * call site), so it's visible regardless of which sub-tab is active. */
+function renderRosterHealthStatusSection({
+  healthStatus, form, submit, resolveAction,
+}) {
+  if (healthStatus.status === 'error') {
+    return `<section class="hist-section"><div class="s-head"><h2>Health status</h2></div>
+      <div class="hist-error">Couldn't load health status: ${esc(healthStatus.error)}</div></section>`;
+  }
+  if (healthStatus.status === 'loading' && healthStatus.data.length === 0) {
+    return '<section class="hist-section"><div class="s-head"><h2>Health status</h2></div><p class="sub">Loading&hellip;</p></section>';
+  }
+  const active = findActiveHealthStatuses(healthStatus.data);
+  const history = healthStatus.data;
+  return `
+    <section class="hist-section">
+      <div class="s-head"><h2>Health status</h2></div>
+      ${renderHealthStatusActiveBox(active, resolveAction)}
+      ${renderHealthStatusForm(form, submit, history)}
+      ${history.length > 0 ? `
+      <div class="detail-section">
+        <h4>History</h4>
+        ${history.map(renderHealthStatusHistoryEntry).join('')}
+      </div>` : ''}
+    </section>`;
+}
+
 function rosterShell(body) {
   return `
     <div class="wrap settings-wrap">
@@ -2875,6 +3152,20 @@ export function renderRosterTab({
   // independent feeds/narratives, so this one stays per-surface.
   loadWindowDays,
   loadNarrativeExpanded,
+  // Durable health-status record (backend/health-status-record build): the
+  // athlete's health-status log, the coach's in-progress "log a new one"
+  // form draft, and the two independent submit statuses (logging a new
+  // entry / marking the active one resolved). Defaulted so every existing
+  // call site (and every existing test) that predates this build keeps
+  // rendering an honest "nothing loaded yet" state rather than crashing on
+  // an undefined prop.
+  healthStatus = { status: 'idle', data: [], error: null },
+  healthStatusForm = {
+    description: '', restriction: 'light_only', source: 'self_reported', expected_review_date: '',
+    body_region: '', onset: '', severity: '', related_status_id: '',
+  },
+  healthStatusSubmit = { status: 'idle', error: null },
+  healthStatusResolve = { status: 'idle', error: null, id: null },
 }) {
   if (!backendConfigured) {
     return rosterShell(renderBackendNeededNotice(
@@ -2965,6 +3256,9 @@ export function renderRosterTab({
     return rosterShell(`
       <div class="s-head"><button type="button" class="btn-ghost" data-a="roster:back">&larr; Back to My Athletes</button></div>
       <p class="sub">Coaching <b>${esc(name)}</b> (${esc(actingAsAthlete)}).</p>
+      ${renderRosterHealthStatusSection({
+        healthStatus, form: healthStatusForm, submit: healthStatusSubmit, resolveAction: healthStatusResolve,
+      })}
       ${renderRosterSubTabBar(activeSubTab)}
       ${subTabBody}`);
   }

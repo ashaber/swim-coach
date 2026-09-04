@@ -121,11 +121,20 @@ class SpyFeedbackStore:
     test_tools.py can assert what `_handle_flag_for_coach_review` persisted
     without depending on jsonl-file mechanics."""
 
-    def __init__(self, inner: Any) -> None:
+    def __init__(self, inner: Any, *, fail_feedback: bool = False) -> None:
         self._inner = inner
         self.saved: list[Feedback] = []
+        # Simulates a `save_feedback` failure AFTER a caller's own preceding
+        # write (e.g. `record_health_status`'s HealthStatus row) already
+        # succeeded -- see tools.py's `_handle_record_health_status` for the
+        # real partial-failure case this exercises (a health record must
+        # stay durably saved even when the separate coach-notification
+        # write fails).
+        self._fail_feedback = fail_feedback
 
     def save_feedback(self, entry: Feedback) -> None:
+        if self._fail_feedback:
+            raise RuntimeError("simulated save_feedback failure")
         self.saved.append(entry)
         self._inner.save_feedback(entry)
 

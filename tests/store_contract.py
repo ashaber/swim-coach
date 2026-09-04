@@ -30,6 +30,7 @@ from swim_coach.models import (
     CoachGrant,
     Event,
     Feedback,
+    HealthStatus,
     MacroBlock,
     MacroPlan,
     Session,
@@ -174,6 +175,20 @@ def _workout(athlete_id: uuid.UUID, d: date, sport: str = "swim_pool") -> Workou
         duration_min=75.0,
         rpe=6,
     )
+
+
+def _health_status(athlete_id: uuid.UUID, **overrides) -> HealthStatus:
+    data: dict = dict(
+        id=uuid.uuid4(),
+        athlete_id=athlete_id,
+        reported_at=datetime.now(timezone.utc),
+        reported_by="athlete",
+        source="self_reported",
+        description="Right shoulder's been sharp on catch-up drills.",
+        restriction="light_only",
+    )
+    data.update(overrides)
+    return HealthStatus(**data)
 
 
 def _feedback(athlete_id: uuid.UUID | None, **overrides) -> Feedback:
@@ -500,6 +515,175 @@ class StoreContractTests:
         loaded = store.list_wellness(SLUG)
         assert len(loaded) == 1
         assert loaded[0].motivation == 1
+
+    # --- health status -----------------------------------------------------
+
+    def test_health_status_round_trip(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        entry = _health_status(athlete.id)
+        store.save_health_status(SLUG, entry)
+        loaded = store.list_health_status(SLUG)
+        assert len(loaded) == 1
+        assert loaded[0] == entry
+
+    def test_health_status_round_trip_with_all_second_iteration_fields_set(self, store):
+        # Proves the migration needs no schema change: body_region/onset/
+        # severity/related_status_id all live inside the JSONB `data` blob
+        # (DbStore) or the plain model dump (FileStore) with no promoted
+        # column and no allowlist to fall out of sync -- see
+        # health_status_to_row's full model_dump(mode="json").
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        earlier = _health_status(athlete.id, description="first flare-up")
+        store.save_health_status(SLUG, earlier)
+        entry = _health_status(
+            athlete.id,
+            description="second flare-up, same shoulder",
+            body_region="shoulder",
+            onset="gradual",
+            severity="moderate",
+            related_status_id=earlier.id,
+        )
+        store.save_health_status(SLUG, entry)
+
+        loaded = [h for h in store.list_health_status(SLUG) if h.id == entry.id][0]
+        assert loaded == entry
+        assert loaded.body_region == "shoulder"
+        assert loaded.onset == "gradual"
+        assert loaded.severity == "moderate"
+        assert loaded.related_status_id == earlier.id
+
+    def test_list_health_status_empty_when_none(self, store):
+        store.save_athlete(_athlete())
+        assert store.list_health_status(SLUG) == []
+
+    def test_list_health_status_most_recent_first(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        older = _health_status(
+            athlete.id,
+            description="older",
+            reported_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        )
+        newer = _health_status(
+            athlete.id,
+            description="newer",
+            reported_at=datetime(2026, 8, 20, tzinfo=timezone.utc),
+        )
+        store.save_health_status(SLUG, older)
+        store.save_health_status(SLUG, newer)
+        loaded = store.list_health_status(SLUG)
+        assert [h.description for h in loaded] == ["newer", "older"]
+
+    def test_list_health_status_multiple_entries_same_athlete(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        for i in range(3):
+            store.save_health_status(
+                SLUG,
+                _health_status(
+                    athlete.id,
+                    description=f"entry {i}",
+                    reported_at=datetime(2026, 8, 1 + i, tzinfo=timezone.utc),
+                ),
+            )
+        loaded = store.list_health_status(SLUG)
+        assert len(loaded) == 3
+        assert [h.description for h in loaded] == ["entry 2", "entry 1", "entry 0"]
+
+    def test_list_health_status_since_filters_older_entries(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        old = _health_status(
+            athlete.id,
+            description="old",
+            reported_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        )
+        recent = _health_status(
+            athlete.id,
+            description="recent",
+            reported_at=datetime(2026, 8, 20, tzinfo=timezone.utc),
+        )
+        store.save_health_status(SLUG, old)
+        store.save_health_status(SLUG, recent)
+        loaded = store.list_health_status(SLUG, since=date(2026, 8, 1))
+        assert [h.description for h in loaded] == ["recent"]
+
+    def test_list_health_status_ties_on_identical_reported_at_break_by_id_ascending(self, store):
+        # Real review bug fixed before merge: FileStore fell back to
+        # filename/glob insertion order for a tie on identical `reported_at`
+        # while DbStore broke it by `id` ascending -- which entry counted as
+        # "most recent" (and therefore which one an active-status reader
+        # treats as authoritative among equally-timed entries) could differ
+        # depending on which backend held the exact same underlying data.
+        # Both backends must now agree: `id` ascending breaks the tie.
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        same_instant = datetime(2026, 8, 20, 12, 0, 0, tzinfo=timezone.utc)
+        higher_id = _health_status(
+            athlete.id, description="higher id", reported_at=same_instant,
+            id=uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"),
+        )
+        lower_id = _health_status(
+            athlete.id, description="lower id", reported_at=same_instant,
+            id=uuid.UUID("00000000-0000-0000-0000-000000000000"),
+        )
+        # Saved in an order that would produce the WRONG result if either
+        # backend fell back to insertion/filename order for the tie.
+        store.save_health_status(SLUG, higher_id)
+        store.save_health_status(SLUG, lower_id)
+        loaded = store.list_health_status(SLUG)
+        assert [h.description for h in loaded] == ["lower id", "higher id"]
+
+    def test_list_health_status_scoped_to_athlete(self, store):
+        athlete = _athlete()
+        other = Athlete(id=uuid.uuid4(), slug="other-athlete", name="Other")
+        store.save_athlete(athlete)
+        store.save_athlete(other)
+        store.save_health_status(SLUG, _health_status(athlete.id, description="for renee"))
+        store.save_health_status("other-athlete", _health_status(other.id, description="for other"))
+        loaded = store.list_health_status(SLUG)
+        assert [h.description for h in loaded] == ["for renee"]
+
+    def test_update_health_status_marks_resolved(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        entry = _health_status(athlete.id)
+        store.save_health_status(SLUG, entry)
+        resolved_at = datetime(2026, 9, 1, 8, 0, 0, tzinfo=timezone.utc)
+
+        updated = store.update_health_status(SLUG, entry.id, resolved=True, resolved_at=resolved_at)
+
+        assert updated is not None
+        assert updated.resolved is True
+        assert updated.resolved_at == resolved_at
+        loaded = store.list_health_status(SLUG)
+        assert len(loaded) == 1
+        assert loaded[0].resolved is True
+
+    def test_update_health_status_unknown_id_returns_none(self, store):
+        store.save_athlete(_athlete())
+        result = store.update_health_status(
+            SLUG, uuid.uuid4(), resolved=True, resolved_at=datetime.now(timezone.utc)
+        )
+        assert result is None
+
+    def test_update_health_status_does_not_disturb_other_entries(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        keep = _health_status(athlete.id, description="untouched")
+        target = _health_status(athlete.id, description="resolve me")
+        store.save_health_status(SLUG, keep)
+        store.save_health_status(SLUG, target)
+
+        store.update_health_status(
+            SLUG, target.id, resolved=True, resolved_at=datetime.now(timezone.utc)
+        )
+
+        loaded = {h.description: h for h in store.list_health_status(SLUG)}
+        assert loaded["untouched"].resolved is False
+        assert loaded["resolve me"].resolved is True
 
     # --- feedback ----------------------------------------------------------
 

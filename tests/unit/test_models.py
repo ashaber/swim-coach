@@ -15,6 +15,7 @@ from swim_coach.models import (
     Athlete,
     Event,
     Feedback,
+    HealthStatus,
     MacroBlock,
     MacroPlan,
     RaceWeekChecklistItem,
@@ -172,6 +173,20 @@ def make_feedback(**overrides):
     )
     data.update(overrides)
     return Feedback(**data)
+
+
+def make_health_status(**overrides):
+    data = dict(
+        id=uuid.uuid4(),
+        athlete_id=ATHLETE_ID,
+        reported_at=datetime(2026, 8, 30, 9, 0, 0, tzinfo=timezone.utc),
+        reported_by="athlete",
+        source="self_reported",
+        description="Right shoulder's been sharp on catch-up drills since Tuesday.",
+        restriction="light_only",
+    )
+    data.update(overrides)
+    return HealthStatus(**data)
 
 
 def make_wellness(**overrides):
@@ -1189,3 +1204,175 @@ def test_file_store_load_missing_macro_returns_none(tmp_path):
     store = FileStore(base_dir=tmp_path)
     store.save_athlete(make_athlete())
     assert store.load_macro("wife") is None
+
+
+# --- HealthStatus -------------------------------------------------------
+
+
+def test_health_status_carries_schema_version_and_defaults():
+    status = make_health_status()
+    assert status.schema_version == 1
+    assert status.resolved is False
+    assert status.resolved_at is None
+    assert status.expected_review_date is None
+
+
+def test_health_status_required_fields_enforced():
+    with pytest.raises(ValidationError):
+        HealthStatus(
+            id=uuid.uuid4(),
+            athlete_id=ATHLETE_ID,
+            reported_at=datetime.now(timezone.utc),
+            reported_by="athlete",
+            source="self_reported",
+            restriction="light_only",
+            # missing `description`
+        )
+
+
+def test_health_status_rejects_bad_restriction():
+    with pytest.raises(ValidationError):
+        make_health_status(restriction="mostly_fine")
+
+
+def test_health_status_rejects_bad_reported_by():
+    with pytest.raises(ValidationError):
+        make_health_status(reported_by="physio")
+
+
+def test_health_status_rejects_bad_source():
+    with pytest.raises(ValidationError):
+        make_health_status(source="hearsay")
+
+
+def test_health_status_accepts_all_valid_restrictions():
+    for restriction in ("none", "light_only", "no_training"):
+        status = make_health_status(restriction=restriction)
+        assert status.restriction == restriction
+
+
+def test_health_status_coach_relayed_practitioner_guidance():
+    status = make_health_status(
+        reported_by="coach",
+        source="practitioner",
+        description="Physio cleared pool work, no open water for 2 weeks.",
+        restriction="light_only",
+        expected_review_date=date(2026, 9, 13),
+    )
+    assert status.reported_by == "coach"
+    assert status.source == "practitioner"
+    assert status.expected_review_date == date(2026, 9, 13)
+
+
+def test_health_status_can_be_marked_resolved():
+    status = make_health_status(
+        resolved=True,
+        resolved_at=datetime(2026, 9, 1, 8, 0, 0, tzinfo=timezone.utc),
+    )
+    assert status.resolved is True
+    assert status.resolved_at is not None
+
+
+def test_health_status_round_trip_through_yaml():
+    original = make_health_status()
+    dumped = yaml.safe_dump(original.model_dump(mode="json"))
+    loaded_data = yaml.safe_load(dumped)
+    restored = HealthStatus.model_validate(loaded_data)
+    assert restored == original
+    assert isinstance(loaded_data["id"], str)
+
+
+# --- HealthStatus second-iteration fields: body_region/onset/severity/
+# related_status_id (industry-modeling evolution) --------------------------
+
+
+def test_health_status_new_fields_default_to_none():
+    status = make_health_status()
+    assert status.body_region is None
+    assert status.onset is None
+    assert status.severity is None
+    assert status.related_status_id is None
+
+
+def test_health_status_rejects_bad_body_region():
+    with pytest.raises(ValidationError):
+        make_health_status(body_region="pinky_toe")
+
+
+def test_health_status_rejects_bad_onset():
+    with pytest.raises(ValidationError):
+        make_health_status(onset="somewhat_suddenly")
+
+
+def test_health_status_rejects_bad_severity():
+    with pytest.raises(ValidationError):
+        make_health_status(severity="catastrophic")
+
+
+def test_health_status_accepts_all_valid_body_regions():
+    for region in (
+        "shoulder", "knee", "back", "hip", "ankle_foot", "elbow_wrist",
+        "illness_systemic", "head_neck", "other",
+    ):
+        status = make_health_status(body_region=region)
+        assert status.body_region == region
+
+
+def test_health_status_accepts_all_valid_onsets():
+    for onset in ("acute", "gradual"):
+        status = make_health_status(onset=onset)
+        assert status.onset == onset
+
+
+def test_health_status_accepts_all_valid_severities():
+    for severity in ("slight", "minimal", "mild", "moderate", "serious", "long_term"):
+        status = make_health_status(severity=severity)
+        assert status.severity == severity
+
+
+def test_health_status_severity_independent_of_restriction():
+    # A broken toe: stop training now, but a short expected recovery -- the
+    # two axes this evolution splits apart must be settable independently
+    # in either direction.
+    broken_toe = make_health_status(restriction="no_training", severity="mild")
+    assert broken_toe.restriction == "no_training"
+    assert broken_toe.severity == "mild"
+
+    stress_fracture = make_health_status(restriction="no_training", severity="long_term")
+    assert stress_fracture.restriction == "no_training"
+    assert stress_fracture.severity == "long_term"
+
+
+def test_health_status_severity_stays_optional_even_when_resolved():
+    status = make_health_status(
+        resolved=True,
+        resolved_at=datetime(2026, 9, 1, 8, 0, 0, tzinfo=timezone.utc),
+    )
+    assert status.severity is None
+
+
+def test_health_status_related_status_id_links_to_earlier_entry():
+    earlier = make_health_status(description="first shoulder flare-up")
+    later = make_health_status(
+        description="shoulder flare-up again, same spot",
+        related_status_id=earlier.id,
+    )
+    assert later.related_status_id == earlier.id
+
+
+def test_health_status_fully_populated_entry_round_trips():
+    related = uuid.uuid4()
+    original = make_health_status(
+        body_region="shoulder",
+        onset="gradual",
+        severity="moderate",
+        related_status_id=related,
+    )
+    dumped = yaml.safe_dump(original.model_dump(mode="json"))
+    loaded_data = yaml.safe_load(dumped)
+    restored = HealthStatus.model_validate(loaded_data)
+    assert restored == original
+    assert restored.body_region == "shoulder"
+    assert restored.onset == "gradual"
+    assert restored.severity == "moderate"
+    assert restored.related_status_id == related

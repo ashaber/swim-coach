@@ -594,6 +594,197 @@ class Feedback(BaseModel):
     coach_reply_at: datetime | None = None
 
 
+class HealthStatus(BaseModel):
+    """A durable, append-only LOG of an athlete's injury/illness/medical
+    status over time -- built after a real incident exposed that this
+    system had NO durable record of health status anywhere: `Wellness.
+    soreness` is just a daily 1-5 self-rating with no memory beyond "today,"
+    `backend/app/routes/chat.py` persists nothing server-side (chat history
+    is client-supplied per request, so a raw injury description that never
+    triggers a tool call vanishes the moment the browser tab closes), and
+    there was no model of this shape at all. CLAUDE.md's own standing safety
+    rail -- "any pain report -> stop-and-assess" -- was enforced ONLY as
+    prompt-level guidance with zero durable backing before this model
+    existed.
+
+    This is a LOG, not a single mutable field, deliberately mirroring
+    `Feedback` above: health status evolves over days/weeks, and the
+    HISTORY matters as much as the current state -- a physio's guidance
+    last week and this week's may differ, and a later entry must never
+    silently overwrite what was said before. Every entry this athlete has
+    ever had recorded stays on file permanently (this codebase's own safety
+    rail: never delete logs; see CLAUDE.md).
+
+    `restriction` is a coarse, closed 3-value enum -- NOT a replacement for
+    `description`'s free text, which still carries the full human detail
+    (what hurts, what a practitioner said, context) -- because an AI reading
+    this field later (the future ramp-back-up-then-taper planning engine
+    this build is the foundation for, but does NOT itself implement) needs
+    something it can safely branch on without re-interpreting prose every
+    time. "none" / "light_only" / "no_training" is deliberately coarse: a
+    machine can trust an enum value where it can't safely trust its own
+    parse of a paragraph of free text describing a shoulder.
+
+    `reported_by` (who told the system: "athlete" in her own chat, or
+    "coach" relaying something) and `source` (the underlying claim's
+    provenance: "self_reported" -- the athlete's own account of how she
+    feels -- vs "practitioner" -- a physio/doctor's actual clinical
+    guidance, typically relayed by the coach) are independent axes, both
+    worth keeping: a coach can relay a self-reported feeling ("she told me
+    her shoulder's been off") just as an athlete could in principle relay
+    practitioner guidance herself ("my physio said light-only this week").
+    Neither is a lesser kind of claim than the other, but they're not the
+    SAME kind of claim either, and a future reader (human or AI) should be
+    able to tell which is which.
+
+    `resolved`/`resolved_at` let one status be explicitly closed out (e.g.
+    "cleared to resume full training as of DATE") WITHOUT deleting the
+    history that came before it -- a new entry, not an edit to the old one,
+    is how a status changes; nothing here is ever mutated in place except
+    flipping `resolved` on the entry being closed. The MOST RECENT entry
+    (by `reported_at`) with `resolved=False` for a given athlete is that
+    athlete's current active status. If NO such entry exists -- either
+    nothing has ever been logged, or every entry on file has since been
+    resolved -- there is NO active restriction on file. That is explicitly
+    NOT the same thing as "she's definitely fine": it means nothing has
+    been recorded, one way or the other. An absence of data must never be
+    read as an all-clear, by a human OR by any future automated logic that
+    reads this log -- say so plainly wherever this fact is surfaced.
+
+    --- Second-iteration fields (`body_region`/`onset`/`severity`/
+    `related_status_id`) -- industry-modeling evolution, before this ever
+    shipped or migrated ---
+
+    The first version above ("Is there industry modeling we can validate the
+    health status class?") leaned entirely on free-text `description` for
+    anything beyond a coarse restriction level -- workable as a start, but
+    exactly the kind of thing that "will quickly run short" once real
+    automated logic (a future ramp-then-taper planning engine, not part of
+    this build) needs to reason about WHICH activities a restriction
+    affects, not just how severe it sounds. These four fields close that
+    gap by adapting three real, established sports-medicine consensus
+    frameworks -- `[ADAPTED: general-endurance]`, Confidence: medium (the
+    underlying frameworks are real, verified, high-quality consensus
+    documents; the specific choice of which fields to adopt at what
+    granularity for a single-athlete coaching app, rather than a research
+    surveillance tool, is Coach judgment, not itself directly validated).
+    Test: if this athlete population's injury patterns diverge meaningfully
+    from what this coarse taxonomy anticipates, or a genuine need for
+    finer-grained OSICS-style coding emerges, revisit.
+
+      - Fuller CW, Ekstrand J, Junge A, Andersen TE, Bahr R, Dvorak J,
+        Hagglund M, McCrory P, Meeuwisse WH (2006), "Consensus statement on
+        injury definitions and data collection procedures in studies of
+        football (soccer) injuries," Scandinavian Journal of Medicine &
+        Science in Sports / British Journal of Sports Medicine -- the
+        field-defining consensus paper (FIFA/F-MARC). Classifies every
+        injury by location, type, diagnosis, and cause; defines recurrence
+        with precise timing (early: within 2 months of return to full
+        participation; late: 2-12 months after; delayed: >12 months after).
+      - Bahr R, Clarsen B, Derman W, et al. -- International Olympic
+        Committee Injury and Illness Epidemiology Consensus Group (2020),
+        "International Olympic Committee consensus statement: methods for
+        recording and reporting of epidemiological data on injury and
+        illness in sport 2020 (including STROBE-SIIS)," British Journal of
+        Sports Medicine / Orthopaedic Journal of Sports Medicine (PMID
+        32118084 / 32071062) -- the current cross-sport standard (covers
+        illness, not just injury); grades severity by TIME-LOSS (days of
+        full/modified training availability lost), not by a point-in-time
+        restriction level.
+      - Time-loss severity bands, used across multiple sports' consensus
+        statements (Fuller 2006 and successors): slight (<=1 day), minimal
+        (2-3 days), mild (4-7 days), moderate (8-28 days), serious (>28
+        days-6 months), long-term (>6 months) -- keyed to actual/expected
+        days of full or modified training lost.
+      - OSICS/OSIICS (Orchard Sports Injury and Illness Classification
+        System), the ~800-code body-region+tissue+pathology standard most
+        sports injury surveillance databases use, is explicitly NOT being
+        adopted in full here -- that system is built for population-level
+        research comparing injury rates across many athletes/teams, which
+        is overkill for a single-athlete coaching app. Only its
+        STRUCTURING PRINCIPLE (classify by body region) is adapted here, at
+        a deliberately coarse level.
+
+    `body_region` is a coarse 9-value enum, NOT full OSICS coding -- the
+    goal is "can automated logic reason about which activities this
+    restriction affects" (a shoulder issue rules out pulling/catch-up drills
+    specifically, not swimming generally), never population-level injury-
+    rate epidemiology. Optional/`None` because a first-contact report right
+    after an incident often genuinely doesn't yet know a precise region --
+    forcing a guess here would fabricate false precision on safety-relevant
+    data, exactly the failure mode this codebase's own "a real value beats a
+    missing one, but never invent false precision" philosophy (see e.g.
+    `engine/swim_coach/load.py`'s `HR_REST_GENERIC_FALLBACK_BPM` comment)
+    already commits to elsewhere.
+
+    `severity` is a SEPARATE axis from `restriction`, not a replacement for
+    it: `restriction` answers "how much can she do RIGHT NOW" (a point-in-
+    time operational fact); `severity` answers "how big a deal is this
+    expected to be OVERALL" (a time-loss-based clinical/prognostic
+    judgment, per Bahr et al. 2020 / Fuller 2006's severity grading). A
+    broken toe might be `restriction="no_training"` today but only
+    `severity="mild"` (short expected recovery); a stress fracture could be
+    BOTH `no_training` AND `severity="serious"` or `"long_term"`.
+    Conflating these into one field is exactly the gap this evolution
+    closes. `severity` is optional and MUST stay that way even for a
+    `resolved=True` entry being closed out -- the athlete/coach might
+    genuinely never learn (or bother recording) an exact time-loss
+    classification, and absence of a severity value is NOT itself
+    meaningful information, same "absence isn't evidence" doctrine this
+    whole model already commits to for the record's existence overall.
+
+    `onset` (acute vs. gradual/overuse) follows Fuller/IOC's own standard
+    split -- informs whether this is a discrete event or a cumulative
+    pattern. Optional for the same "don't force a guess" reason as
+    `body_region`/`severity`.
+
+    `related_status_id` links a new entry to an EARLIER `HealthStatus.id`
+    this is a recurrence/continuation of -- not enforced via a DB foreign
+    key at the JSONB layer, just a same-athlete id reference the reader is
+    expected to resolve. This is what makes Fuller (2006)'s early/late/
+    delayed recurrence classification (2mo / 2-12mo / >12mo since return to
+    full participation) actually COMPUTABLE later, from the gap between the
+    linked entries' dates, instead of only inferable by a human re-reading
+    free text across the whole history. This build does NOT implement
+    automatic early/late/delayed recurrence computation/labeling -- that's
+    a real, worthwhile follow-up once enough linked entries exist to make it
+    meaningful; this build only adds the linking field itself. No
+    validation that `related_status_id` actually references a real prior
+    entry for THIS athlete belongs here (a cross-record consistency check
+    doesn't belong at the single-model-validation layer) -- if implemented
+    anywhere, it belongs in the tool handler / route layer where the full
+    history is actually available, and even there a dangling reference
+    should be at most a soft warning, never a hard validation failure that
+    could block saving a real health report over a linking mistake.
+
+    Across all four: `description` remains the necessary free-text escape
+    valve for everything that doesn't fit these coarse structured fields --
+    these additions give AUTOMATED logic (the coach roster's display today;
+    a future ramp-then-taper planning engine, not part of this build)
+    something real to branch on, not a replacement for human judgment
+    reading the actual description.
+    """
+
+    schema_version: int = 1
+    id: UUID
+    athlete_id: UUID
+    reported_at: datetime
+    reported_by: Literal["athlete", "coach"]
+    source: Literal["self_reported", "practitioner"]
+    description: str
+    restriction: Literal["none", "light_only", "no_training"]
+    expected_review_date: date | None = None
+    resolved: bool = False
+    resolved_at: datetime | None = None
+    body_region: Literal[
+        "shoulder", "knee", "back", "hip", "ankle_foot", "elbow_wrist",
+        "illness_systemic", "head_neck", "other",
+    ] | None = None
+    onset: Literal["acute", "gradual"] | None = None
+    severity: Literal["slight", "minimal", "mild", "moderate", "serious", "long_term"] | None = None
+    related_status_id: UUID | None = None
+
+
 CoachGrantStatus = Literal["active", "revoked"]
 ChatVisibility = Literal["full", "shared_only"]
 

@@ -278,6 +278,26 @@
     .wellness-stat--concerning .wellness-stat-value, .wellness-stat--concerning .wellness-stat-status { color: var(--c-signal); }
     .wellness-stat--no-data .wellness-stat-value, .wellness-stat--no-data .wellness-stat-status { color: var(--ink-faint); }
 
+    /* Health status (coach roster): the active-status box reuses the exact
+       same alarm-red tokens (--c-signal/--c-signal-wash) `.wellness-stat--
+       concerning`/`.chip-skipped` already use for "this needs attention" --
+       deliberately loud, not a muted informational panel, since this is
+       safety-relevant information a coach must not be able to miss. The
+       empty/history states stay in the app's ordinary quiet `.panel` voice. */
+    .health-status-active { background: var(--c-signal-wash); border: 2px solid var(--c-signal);
+      border-radius: var(--radius); padding: 14px 16px; margin-bottom: 14px; }
+    .health-status-active h3 { color: var(--c-signal); font-family: var(--display); font-size: 13px;
+      text-transform: uppercase; letter-spacing: .06em; font-weight: 800; margin: 0 0 8px; }
+    .health-status-active .hs-restriction { display: inline-block; font-family: var(--display);
+      font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase;
+      color: #fff; background: var(--c-signal); padding: 3px 9px; border-radius: var(--radius-pill);
+      margin-bottom: 8px; }
+    .health-status-active p { margin: 6px 0; color: var(--ink); }
+    .health-status-active .hs-meta { font-size: 12px; color: var(--ink-soft); }
+    .health-status-empty { font-size: 13px; color: var(--ink-faint); margin-bottom: 14px; }
+    .health-status-history-entry { padding: 10px 0; border-top: 1px solid var(--line-soft); }
+    .health-status-history-entry:first-child { border-top: none; }
+
     .disc { margin-top: 22px; font-size: 12px; color: var(--ink-faint); text-align: center; line-height: 1.6; }
 
     .offline-banner { display: none; background: var(--c-strength); color: #1a1206; font-size: 12.5px; font-weight: 700;

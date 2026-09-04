@@ -92,6 +92,12 @@ COACH_LOAD_STUB = json.dumps({
 COACH_PLAN_STUB = json.dumps({
     'slug': 'renee', 'athlete': {'name': 'Renee'}, 'events': [], 'macro': {'blocks': []}, 'weeks': [],
 })
+# GET /api/coach/athletes/renee/health-status (backend/health-status-record
+# build) -- loadCoachHealthStatus fires unconditionally alongside
+# workouts/feedback/load/plan the moment an athlete is selected. Same
+# "left unmocked, every roster:select-athlete click fires a real unmocked
+# fetch" hazard COACH_PLAN_STUB's own comment documents just above.
+COACH_HEALTH_STATUS_STUB = json.dumps([])
 
 
 def _make_ctx(pw, cfg, *, identity=None, plan_load_body=PLAN_LOAD_STUB, coach_load_body=COACH_LOAD_STUB):
@@ -122,6 +128,10 @@ def _make_ctx(pw, cfg, *, identity=None, plan_load_body=PLAN_LOAD_STUB, coach_lo
     ctx.route('**/api/coach/athletes/renee/feedback*', _cors_route(200, 'application/json', COACH_FEEDBACK_STUB))
     ctx.route('**/api/coach/athletes/renee/load*', _cors_route(200, 'application/json', coach_load_body))
     ctx.route('**/api/coach/athletes/renee/plan*', _cors_route(200, 'application/json', COACH_PLAN_STUB))
+    ctx.route(
+        '**/api/coach/athletes/renee/health-status*',
+        _cors_route(200, 'application/json', COACH_HEALTH_STATUS_STUB),
+    )
     ctx.route('**/api/coach/athletes*', _cors_route(200, 'application/json', COACH_ATHLETES_STUB))
     return browser, ctx
 
