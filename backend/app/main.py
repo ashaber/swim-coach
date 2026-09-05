@@ -26,6 +26,7 @@ from app.routes.coach import router as coach_router
 from app.routes.feedback import router as feedback_router
 from app.routes.garmin import router as garmin_router
 from app.routes.grants import router as grants_router
+from app.routes.health_status import router as health_status_router
 from app.routes.onboard import router as onboard_router
 from app.routes.plan import router as plan_router
 from app.routes.wellness import router as wellness_router
@@ -112,6 +113,7 @@ def create_app() -> FastAPI:
     app.include_router(garmin_router)
     app.include_router(grants_router)
     app.include_router(coach_router)
+    app.include_router(health_status_router)
 
     log.info(
         "service start",

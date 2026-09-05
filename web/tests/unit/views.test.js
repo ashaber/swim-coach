@@ -595,6 +595,138 @@ describe('renderDashboardTab', () => {
     });
   });
 
+  describe('athlete self-service "Log health condition" action (web/coach-health-nav-and-athlete-self-log)', () => {
+    it('renders a third collapsed-by-default action, after sync and manual entry', () => {
+      const html = renderDashboardTab({ ...DASHBOARD_BASE_ARGS, feed: [] });
+      expect(html).toContain('Log health condition');
+      // Collapsed by default -- same "toggle only" shape as the manual-entry
+      // section's own collapsed state, no form fields visible yet.
+      expect(html).not.toContain('data-a="health-status:submit"');
+      expect(html).not.toContain('data-form="health-status" data-field="description"');
+      const syncIdx = html.indexOf('data-a="sync:start"');
+      const manualToggleIdx = html.indexOf('data-a="log:toggle-manual"');
+      const healthToggleIdx = html.indexOf('data-a="health-status:toggle"');
+      expect(syncIdx).toBeGreaterThan(-1);
+      expect(manualToggleIdx).toBeGreaterThan(syncIdx);
+      expect(healthToggleIdx).toBeGreaterThan(manualToggleIdx);
+    });
+
+    it('defaults to collapsed even when healthStatusFormOpen is omitted entirely (pre-existing call sites/tests)', () => {
+      const html = renderDashboardTab({ ...DASHBOARD_BASE_ARGS, feed: [] });
+      expect(html).toContain('Log health condition');
+      expect(html).not.toContain('data-a="health-status:submit"');
+    });
+
+    it('expands the form and shows all its fields when healthStatusFormOpen is true', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS, feed: [], healthStatusFormOpen: true,
+      });
+      expect(html).toContain('Hide health condition log');
+      expect(html).toContain('data-form="health-status" data-field="description"');
+      expect(html).toContain('data-form="health-status" data-field="restriction"');
+      expect(html).toContain('data-form="health-status" data-field="source"');
+      expect(html).toContain('data-form="health-status" data-field="expected_review_date"');
+      expect(html).toContain('data-form="health-status" data-field="body_region"');
+      expect(html).toContain('data-form="health-status" data-field="onset"');
+      expect(html).toContain('data-form="health-status" data-field="severity"');
+      expect(html).toContain('data-a="health-status:submit"');
+      // No related-entry picker -- deliberately simpler than the coach
+      // roster's own form (see views.js's renderHealthStatusLogSection).
+      expect(html).not.toContain('data-field="related_status_id"');
+    });
+
+    it('reflects the in-progress form draft', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS,
+        feed: [],
+        healthStatusFormOpen: true,
+        healthStatusForm: {
+          description: 'my shoulder is off', restriction: 'no_training', source: 'practitioner',
+          expected_review_date: '2026-09-20', body_region: '', onset: '', severity: '',
+        },
+      });
+      expect(html).toContain('my shoulder is off');
+    });
+
+    it('shows a submit error message when the submission failed', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS,
+        feed: [],
+        healthStatusFormOpen: true,
+        healthStatusSubmit: { status: 'error', error: 'Add a description first.' },
+      });
+      expect(html).toContain('Add a description first.');
+    });
+
+    it('disables the submit button while submitting', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS,
+        feed: [],
+        healthStatusFormOpen: true,
+        healthStatusSubmit: { status: 'submitting', error: null },
+      });
+      const btnMatch = /<button[^>]*data-a="health-status:submit"[^>]*>/.exec(html);
+      expect(btnMatch[0]).toContain('disabled');
+      expect(html).toContain('Logging…');
+    });
+
+    it('shows a read-only history list of her own entries below the form when open', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS,
+        feed: [],
+        healthStatusFormOpen: true,
+        healthStatus: {
+          status: 'ready',
+          data: [{
+            id: 'h1', description: 'Sharp shoulder pain', restriction: 'light_only',
+            source: 'self_reported', reported_by: 'athlete', reported_at: '2026-08-30T09:00:00Z',
+            resolved: false, resolved_at: null, expected_review_date: null,
+          }],
+          error: null,
+        },
+      });
+      expect(html).toContain('Your recent entries');
+      expect(html).toContain('Sharp shoulder pain');
+    });
+
+    it('shows an honest empty state when no entries are on file yet', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS,
+        feed: [],
+        healthStatusFormOpen: true,
+        healthStatus: { status: 'ready', data: [], error: null },
+      });
+      expect(html).toContain('No health status entries logged yet.');
+    });
+
+    it('shows a loading state while the history is being fetched for the first time', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS,
+        feed: [],
+        healthStatusFormOpen: true,
+        healthStatus: { status: 'loading', data: [], error: null },
+      });
+      expect(html.toLowerCase()).toContain('loading');
+    });
+
+    it('shows an error state when the history fails to load', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS,
+        feed: [],
+        healthStatusFormOpen: true,
+        healthStatus: { status: 'error', data: [], error: 'network down' },
+      });
+      expect(html).toContain("Couldn't load your health status history");
+      expect(html).toContain('network down');
+    });
+
+    it('never renders the coach roster\'s own health-status form/action markup on the athlete\'s Dashboard', () => {
+      const html = renderDashboardTab({ ...DASHBOARD_BASE_ARGS, feed: [], healthStatusFormOpen: true });
+      expect(html).not.toContain('data-form="roster-health-status"');
+      expect(html).not.toContain('data-a="roster:health-status-submit"');
+    });
+  });
+
   describe('the CTL/ATL/TSB load chart, relocated here from the Plan tab', () => {
     it('renders the chart above the actions and the feed when data is present', () => {
       const html = renderDashboardTab({
@@ -1811,7 +1943,7 @@ describe('renderRosterTab', () => {
     expect(html).not.toContain('data-a="ask-coach:submit"');
   });
 
-  describe('sub-tabs (Build 2: Conversations / Workouts + Dashboard / Training Plan)', () => {
+  describe('sub-tabs (Build 2: Conversations / Workouts + Dashboard / Training Plan / Health)', () => {
     const actingArgs = {
       ...baseArgs,
       athletes: { status: 'ready', data: [{ slug: 'renee', name: 'Renee' }], error: null },
@@ -1819,11 +1951,30 @@ describe('renderRosterTab', () => {
       plan: { status: 'idle', data: null, error: null },
     };
 
-    it('shows the sub-tab bar with all three options once an athlete is selected', () => {
+    it('shows the sub-tab bar with all four options once an athlete is selected', () => {
       const html = renderRosterTab(actingArgs);
       expect(html).toContain('data-a="roster:subtab:conversations"');
       expect(html).toContain('data-a="roster:subtab:dashboard"');
       expect(html).toContain('data-a="roster:subtab:plan"');
+      // web/coach-health-nav-and-athlete-self-log: fourth sub-tab, fixing
+      // the reported "injury form dominates the dashboard" bug.
+      expect(html).toContain('data-a="roster:subtab:health"');
+    });
+
+    it('renders the health-status section ONLY on the health sub-tab, never on the other three', () => {
+      const healthStatus = { status: 'ready', data: [], error: null };
+      const dashboardHtml = renderRosterTab({ ...actingArgs, subTab: 'dashboard', healthStatus });
+      const conversationsHtml = renderRosterTab({ ...actingArgs, subTab: 'conversations', healthStatus });
+      const planHtml = renderRosterTab({ ...actingArgs, subTab: 'plan', healthStatus });
+      const healthHtml = renderRosterTab({ ...actingArgs, subTab: 'health', healthStatus });
+
+      // The real reported bug: this section used to render unconditionally,
+      // above the sub-tab bar, on every one of the three pre-existing
+      // sub-tabs regardless of which was active.
+      expect(dashboardHtml).not.toContain('No active health status on file');
+      expect(conversationsHtml).not.toContain('No active health status on file');
+      expect(planHtml).not.toContain('No active health status on file');
+      expect(healthHtml).toContain('No active health status on file');
     });
 
     it('defaults to the Workouts + Dashboard sub-tab when subTab is not given', () => {
@@ -1983,7 +2134,14 @@ describe('renderRosterTab', () => {
   });
 
   describe('health status section', () => {
-    const actingBase = { ...baseArgs, actingAsAthlete: 'renee' };
+    // web/coach-health-nav-and-athlete-self-log: the health-status section
+    // moved behind its own 'health' sub-tab (fixing the reported "injury
+    // form dominates the dashboard" bug) -- every test below asserts on
+    // that section's content, so it needs the 'health' sub-tab active.
+    // See the "renders ONLY on the health sub-tab" describe block further
+    // down for the negative-case coverage (that it does NOT render on the
+    // other three).
+    const actingBase = { ...baseArgs, actingAsAthlete: 'renee', subTab: 'health' };
 
     it('renders an honest "nothing on file" message when there is no active status, never an all-clear', () => {
       const html = renderRosterTab({

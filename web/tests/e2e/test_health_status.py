@@ -149,10 +149,18 @@ def _make_ctx(pw, cfg, *, health_status_route=None, health_status_id_route=None)
 
 
 def _open_roster_and_select_renee(page):
+    """web/coach-health-nav-and-athlete-self-log: the health-status section
+    moved behind its own 'Health' sub-tab (fixing the reported "injury form
+    dominates the dashboard" bug) -- it no longer renders on the default
+    'Workouts + Dashboard' sub-tab the moment an athlete is selected, so
+    this now also navigates to that sub-tab before waiting on the section
+    itself."""
     page.wait_for_selector('[data-a="tab:roster"]')
     page.click('[data-a="tab:roster"]')
     page.wait_for_selector('[data-a="roster:select-athlete"]')
     page.click('[data-a="roster:select-athlete"]')
+    page.wait_for_selector('[data-a="roster:subtab:health"]')
+    page.click('[data-a="roster:subtab:health"]')
     page.wait_for_selector('.health-status-active, .health-status-empty')
 
 

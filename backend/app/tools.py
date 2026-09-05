@@ -160,6 +160,7 @@ from swim_coach.workout_templates import TemplatePreference, render_prose, resol
 
 from app.context import iso_week_str, summarize_rollup
 from app.garmin_push import push_on_demand
+from app.health_status_helpers import link_health_status_feedback
 from app.load_helpers import workout_load_au
 from app.logging_config import get_logger
 from app.sync import ON_DEMAND_SYNC_WINDOW_DAYS, sync_on_demand
@@ -1556,36 +1557,14 @@ def _handle_record_health_status(
     # success. The record itself also remains independently discoverable
     # any time via GET /api/coach/athletes/{slug}/health-status, which never
     # depends on this Feedback link existing.
-    feedback_id: str | None = None
-    notify_error: str | None = None
-    try:
-        feedback = Feedback(
-            id=uuid.uuid4(),
-            athlete_id=athlete_id,
-            type="coach_review",
-            source="coach",
-            body=description,
-            context={
-                "health_status_id": str(status.id),
-                "restriction": restriction,
-                "health_status_source": source,
-            },
-            status="open",
-            created_at=now,
-            needs_human_review=True,
-        )
-        store.save_feedback(feedback)
-        feedback_id = str(feedback.id)
-    except Exception as exc:  # noqa: BLE001 - deliberately broad: ANY failure
-        # here must not look like this tool call failed outright (the health
-        # record itself is safe), but must be loud, not swallowed.
-        notify_error = str(exc)
-        log.error(
-            "health status recorded but coach-notification write failed",
-            athlete=slug,
-            health_status_id=str(status.id),
-            error=notify_error,
-        )
+    #
+    # Factored into app/health_status_helpers.py (web/coach-health-nav-and-
+    # athlete-self-log) so the new athlete self-service POST /api/health-
+    # status route can reuse the exact same guarantee instead of
+    # reimplementing it.
+    feedback_id, notify_error = link_health_status_feedback(
+        store, slug=slug, athlete_id=athlete_id, status=status,
+    )
 
     log.info(
         "health status recorded",

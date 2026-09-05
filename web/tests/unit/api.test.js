@@ -8,6 +8,7 @@ import {
   fetchMe, createGrant, listGrants, revokeGrant,
   listCoachedAthletes, fetchCoachWorkouts, fetchCoachFeedback, fetchCoachLoad, fetchCoachPlan, replyToCoachFeedback,
   fetchCoachHealthStatus, postCoachHealthStatus, resolveCoachHealthStatus,
+  fetchHealthStatus, postHealthStatus,
   askAboutSession, askAboutWorkout,
 } from '../../src/api.js';
 
@@ -967,5 +968,86 @@ describe('resolveCoachHealthStatus', () => {
     expect(init.method).toBe('PATCH');
     expect(JSON.parse(init.body)).toEqual({ resolved: true });
     expect(result).toEqual({ ok: true, data: updated });
+  });
+});
+
+// --- Athlete self-service health-status logging (web/coach-health-nav-and-
+// athlete-self-log) -- self-scoped counterparts hitting /api/health-status
+// (never /api/coach/athletes/<slug>/health-status).
+
+describe('fetchHealthStatus', () => {
+  it('GETs /api/health-status?athlete=<athlete> -- athlete as a query param, not a path segment', async () => {
+    const entries = [{ id: 'h1', description: 'shoulder pain', restriction: 'light_only' }];
+    global.fetch = fakeFetch(entries);
+
+    const result = await fetchHealthStatus({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee' });
+
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/health-status?athlete=renee');
+    expect(init.headers.Authorization).toBe('Bearer tok');
+    expect(result).toEqual({ ok: true, data: entries });
+  });
+
+  it('defaults athlete to "renee" when omitted, same legacy-default convention as listWorkouts', async () => {
+    global.fetch = fakeFetch([]);
+    await fetchHealthStatus({ baseUrl: 'https://api.example.com', token: 'tok' });
+    const [url] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/health-status?athlete=renee');
+  });
+});
+
+describe('postHealthStatus', () => {
+  it('POSTs description/restriction/source to /api/health-status?athlete=<athlete>', async () => {
+    const created = { id: 'h1', description: 'shoulder pain', restriction: 'light_only', source: 'self_reported' };
+    global.fetch = fakeFetch(created);
+
+    const result = await postHealthStatus({
+      baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee',
+      description: 'shoulder pain', restriction: 'light_only', source: 'self_reported',
+    });
+
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/health-status?athlete=renee');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({
+      description: 'shoulder pain', restriction: 'light_only', source: 'self_reported',
+    });
+    expect(result).toEqual({ ok: true, data: created });
+  });
+
+  it('includes expected_review_date/body_region/onset/severity when given, omits when falsy', async () => {
+    global.fetch = fakeFetch({ id: 'h1' });
+    await postHealthStatus({
+      baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee',
+      description: 'shoulder flare-up', restriction: 'no_training', source: 'practitioner',
+      expectedReviewDate: '2026-09-13', bodyRegion: 'shoulder', onset: 'gradual', severity: 'moderate',
+    });
+    const [, init] = global.fetch.mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({
+      description: 'shoulder flare-up', restriction: 'no_training', source: 'practitioner',
+      expected_review_date: '2026-09-13', body_region: 'shoulder', onset: 'gradual', severity: 'moderate',
+    });
+  });
+
+  it('omits expected_review_date/body_region/onset/severity when empty strings', async () => {
+    global.fetch = fakeFetch({ id: 'h1' });
+    await postHealthStatus({
+      baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee',
+      description: 'shoulder pain', restriction: 'light_only', source: 'self_reported',
+      expectedReviewDate: '', bodyRegion: '', onset: '', severity: '',
+    });
+    const [, init] = global.fetch.mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({
+      description: 'shoulder pain', restriction: 'light_only', source: 'self_reported',
+    });
+  });
+
+  it('returns a normalized error on a non-2xx response', async () => {
+    global.fetch = fakeFetch({ error: 'description must be a non-empty string' }, { ok: false, status: 422 });
+    const result = await postHealthStatus({
+      baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee',
+      description: '', restriction: 'light_only', source: 'self_reported',
+    });
+    expect(result).toEqual({ ok: false, error: 'description must be a non-empty string', status: 422 });
   });
 });
