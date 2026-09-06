@@ -15,6 +15,8 @@ list).
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from fakes import auth_headers
 from swim_coach.store import FileStore
 
@@ -85,6 +87,36 @@ def test_create_health_status_creates_linked_needs_human_review_feedback(
     feedback_response = client.get("/api/feedback?athlete=renee", headers=auth_headers())
     assert feedback_response.status_code == 200
     assert any(f["id"] == body["feedback_id"] for f in feedback_response.json())
+
+
+def test_create_health_status_surfaces_notify_error_when_feedback_link_fails(
+    client, athletes_dir,
+) -> None:
+    # Real review gap fixed before merge: this route's own request/response
+    # contract for the notify_error path had no direct test, unlike the
+    # equivalent AI-tool path (tests/api/test_tools.py's own
+    # test_record_health_status_still_saves_the_record_when_feedback_write_
+    # fails). Patches the SAME shared helper (app.health_status_helpers.
+    # link_health_status_feedback) both paths call through, simulating a
+    # failure the way that other test does -- proving the HealthStatus row
+    # is still durably saved (this endpoint must never look like it failed
+    # outright) even when the coach-notification half doesn't happen.
+    with patch(
+        "app.routes.health_status.link_health_status_feedback",
+        return_value=(None, "simulated save_feedback failure"),
+    ):
+        response = client.post(
+            "/api/health-status?athlete=renee", json=_valid_payload(), headers=auth_headers()
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["feedback_id"] is None
+    assert "notify_error" in body
+
+    # The HealthStatus row itself must still be durably saved regardless.
+    store = FileStore(base_dir=athletes_dir)
+    saved = store.list_health_status("renee")
+    assert any(str(h.id) == body["id"] for h in saved)
 
 
 def test_create_health_status_rejects_missing_description(client) -> None:

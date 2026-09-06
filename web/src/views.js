@@ -3191,7 +3191,14 @@ function rosterShell(body) {
 // multi-tab) convention in this app fits mutually-exclusive navigation (the
 // allWeeksOpen/glossaryOpen booleans are independent collapsible <details>,
 // not a one-of-three switch).
-const ROSTER_SUB_TABS = [
+// Exported (real review finding fixed before merge): main.js's click
+// dispatch (setSelectRosterSubTab's validity check) used to keep its OWN
+// independently-maintained copy of this array's id list -- exactly the
+// kind of duplication that caused this PR's own bug (a missing 'health'
+// entry there making the new tab's button a silent no-op even after this
+// file's own render logic was fixed). One source of truth now; main.js
+// derives its flat id list from THIS array instead of hand-copying it.
+export const ROSTER_SUB_TABS = [
   { id: 'conversations', label: 'Conversations' },
   { id: 'dashboard', label: 'Workouts + Dashboard' },
   { id: 'plan', label: 'Training Plan' },
