@@ -97,6 +97,57 @@ persists anything, and only on explicit `confirm=True`, per CLAUDE.md's
   `ATL_TIME_CONSTANT_DAYS` are themselves carried over from cycling,
   unverified for swimming). **Confidence: medium.** See the constant's own
   comment below for the exact band chosen and why.
+
+**2026-09 update: CTL substitution replaces the flat-mean ramp floor/
+ceiling, ACWR was explicitly considered and rejected.** Andrew's own
+question, verbatim: "are we using recent max duration? recent max load?
+Should we be using Acute:Chronic Workload Ratio (ACWR)... EWMA of ATL and
+CTL instead of static trailing-maximum values? ACWR would account for decay
+of fitness due to time off and also would allow for a higher rate of
+increase back to pre-injury load." Two things were true when this was
+asked: (1) the ramp floor/ceiling (`recent_baseline_daily_load`/
+`pre_layoff_baseline_daily_load`, both now DELETED -- see below) were flat
+TRAILING ARITHMETIC MEANS, not maxima, and had no decay awareness at all --
+an athlete who stopped logging during a layoff had her "recent baseline"
+silently frozen at whatever her last active window looked like, no matter
+how much real detraining time had since passed; (2) this codebase's own
+`load.py` already carries an explicit LOW-confidence caveat on ACWR as a
+safety threshold for swimmers specifically (`load.py`'s
+`ACWR_ACUTE_WINDOW_DAYS`/`ACWR_CHRONIC_WINDOW_DAYS` citation block: elevated
+ACWR was associated with shoulder pain in *youth* swimmers, but the
+odds-ratio confidence interval's lower bound sits near 1.0 -- marginal --
+and "ACWR methodology is broadly criticized," with a separate cohort
+finding week-to-week ratio/ACWR a weak predictor compared to a simpler
+single-session-vs-30-day-longest check). Given that, and after this was
+surfaced to Andrew, the confirmed decision was: **CTL substitution, not a
+literal ACWR ratio or its threshold.** This module does NOT implement an
+ACWR ratio or any ACWR-derived threshold anywhere -- that would mean adopting
+a SECOND, separately low-confidence methodology on top of the one this
+codebase already carries citation debt for, for no real gain over what was
+already sitting computed and unused right here.
+
+The actual substitution: `search_taper_grid` already computes `series =
+ctl_atl_tsb_series(loads)` and takes `ctl0` from its last entry -- `ctl0` IS
+already a decay-aware EWMA of daily load (the same Banister model,
+`CTL_TIME_CONSTANT_DAYS=42`) -- exactly the "EWMA of CTL instead of a
+static trailing window" Andrew asked for, just not yet being used as the
+ramp floor. The ramp floor is now `ctl0` directly (no new computation). The
+ramp ceiling is now a point-in-time CTL LOOKUP (`ctl_at`, below) at the
+pre-layoff boundary date, out of the SAME already-computed `series` --
+still not a second average, and still reusing the one EWMA machinery this
+module already trusted for its TSB projection. A third, genuinely new
+capability came out of building this: `series` previously only ever walked
+to the LATEST LOGGED day, so an athlete who stopped logging entirely during
+her injury would never see her CTL decay past that day, even if weeks had
+passed since -- `search_taper_grid` now seeds a zero-load day at `as_of`
+when it's after the latest logged day, letting the walk (and the decay)
+reach all the way to "today" (see that function's own docstring paragraph
+on this extension for the exact guard). The net effect is that the
+window-shrinking hack that used to compensate for the flat mean's staleness
+(`effective_recent_window_days`, now deleted) is no longer needed at all --
+CTL's own decay handles "don't let a stale pre-injury number dominate"
+natively, which is this build's real structural win over the mechanism it
+replaces.
 """
 
 from __future__ import annotations
@@ -138,33 +189,21 @@ RACE_DAY_TSB_BAND = {"low": 5.0, "high": 25.0}
 # the narrower +15-25 window. `[ADAPTED: cycling]`, Confidence: medium.
 # library/22-injury-adapted-taper.md.
 
-RECENT_BASELINE_WINDOW_DAYS = 21
-# Coach judgment / PROVISIONAL, library/03-periodization.md. Unchanged from
-# the old draft's `BASELINE_WINDOW_DAYS`: three weeks, ending on the
-# athlete's most recently logged day -- long enough to smooth normal
-# day-to-day/rest-day noise, short enough to reflect CURRENT training
-# rhythm (which, for an injured/laid-off athlete, is exactly the point --
-# this window is meant to capture "what she can do RIGHT NOW," including a
-# real depressed post-injury load, not to be diluted by pre-injury history).
-# Missing days count as zero load, same convention as `load.daily_loads`.
-
-PRE_LAYOFF_BASELINE_WINDOW_DAYS = 28
-# Coach judgment / PROVISIONAL, library/22-injury-adapted-taper.md. Four weeks
-# (vs. `RECENT_BASELINE_WINDOW_DAYS`'s three) ending the day BEFORE the
-# reference boundary date (an active `HealthStatus.reported_at`'s date when
-# one exists, or `anchor_date - RECENT_BASELINE_WINDOW_DAYS` as a generic
-# "the block of time before recent" fallback when there's no active
-# restriction on file -- see `pre_layoff_baseline_daily_load`). Slightly
-# longer than the recent window on purpose: this number is meant to answer
-# "what was she SUSTAINING before this happened," not just "what did she
-# do on the single day right before" -- a short window risks landing on an
-# already-tapering or already-reduced week and understating real capacity;
-# four weeks is long enough to average out one atypical week without
-# reaching back so far it dilutes into an earlier, lower-volume training
-# phase. No swim-specific citation pins this exact number -- it is a
-# deliberate, documented judgment call, same posture as
-# `RECENT_BASELINE_WINDOW_DAYS`/`HR_REST_LOOKBACK_READINGS` elsewhere in
-# this engine.
+NO_RESTRICTION_PRE_LAYOFF_LOOKBACK_DAYS = 21
+# Coach judgment / PROVISIONAL, library/22-injury-adapted-taper.md. Formerly
+# `RECENT_BASELINE_WINDOW_DAYS` (the old flat-mean recent-baseline window,
+# deleted under CTL substitution -- see module docstring's 2026-09 update
+# paragraph); the VALUE is unchanged (21 days) but its role now is purely to
+# pick a `pre_layoff_boundary` DATE for the `ctl_at` lookup below, not to
+# size an averaging window (CTL substitution has no averaging windows left
+# at all -- see `ctl_at`, `search_taper_grid`). Used ONLY as the generic
+# "how far back counts as pre-layoff" fallback when there's no active
+# `HealthStatus` to anchor a real boundary date (`restriction_reported_at is
+# None` in `search_taper_grid`) -- three weeks back from `anchor_date`, long
+# enough that for a genuinely steady, uninterrupted athlete the CTL read at
+# that date is close to (see `resolve_ramp_target`'s no-restriction
+# docstring) the current CTL, collapsing the ramp to a near-no-op, same
+# posture as the deleted constant it replaces.
 
 LIGHT_ONLY_RAMP_CAP_FRACTION = 0.55
 # Coach judgment / PROVISIONAL, library/22-injury-adapted-taper.md. Confidence: LOW-MEDIUM -- there is NO
@@ -300,47 +339,36 @@ class TaperCandidate:
     ramp_cap_fraction_applied: float | None
 
 
-def recent_baseline_daily_load(
-    daily_load_values: dict[date, float],
-    anchor_date: date,
-    window_days: int = RECENT_BASELINE_WINDOW_DAYS,
-) -> float:
-    """Mean daily training load over the `window_days` ending at
-    `anchor_date` (inclusive). A day absent from `daily_load_values` counts
-    as zero load (same convention as `load.daily_loads`/`ctl_atl_tsb_series`),
-    so a genuine rest day -- or, for an injured athlete, a genuine day off
-    -- pulls the average down rather than being skipped; this is meant to
-    reflect the athlete's real CURRENT training rhythm, whatever that is.
+def ctl_at(series: list[tuple[date, float, float, float]], target_date: date) -> float | None:
+    """Look up the projected CTL for `target_date` in an already-computed
+    `load.ctl_atl_tsb_series` result -- an O(1) dict lookup, not a fresh
+    average or an O(n) scan. This is the "point-in-time EWMA read" this
+    module's CTL-substituted ramp ceiling is built on (see module
+    docstring's 2026-09 update paragraph): `search_taper_grid` already has
+    a full day-by-day `series` computed for its own TSB projection, so the
+    pre-layoff baseline is a LOOKUP into that, not a second, independently
+    -averaged number.
+
+    Returns `None` if `target_date` falls before the earliest day `series`
+    walked (`series[0]`'s date) -- an honest "not available from this
+    history," not a fabricated number. Since `ctl_atl_tsb_series` walks
+    every calendar day with no gaps once it starts, "before the first day"
+    is the ONLY way a `target_date` can be genuinely missing (a `target_
+    date` on or after the first day is always present as an exact key).
+    `ctl_at` itself makes no policy decision about what to do with a
+    `None` -- that is the CALLER's job (see `search_taper_grid`'s own
+    fallback to the earliest available CTL, documented where it's applied,
+    with its own citation for why that specific fallback is the most
+    defensible one available).
+
+    Returns `None` for an empty `series` too (nothing to look up at all).
     """
-    total = sum(
-        daily_load_values.get(anchor_date - timedelta(days=i), 0.0) for i in range(window_days)
-    )
-    return total / window_days
-
-
-def pre_layoff_baseline_daily_load(
-    daily_load_values: dict[date, float],
-    boundary_date: date,
-    window_days: int = PRE_LAYOFF_BASELINE_WINDOW_DAYS,
-) -> float:
-    """Mean daily training load over the `window_days` ending the day
-    BEFORE `boundary_date` (exclusive of `boundary_date` itself) -- "what
-    she was actually capable of before this happened," the ceiling a ramp
-    aims back toward (before any restriction-driven cap is applied -- see
-    `resolve_ramp_target`), NOT the ramp's target itself.
-
-    `boundary_date` is typically the athlete's active `HealthStatus.
-    reported_at` date (the caller resolves this -- see module docstring);
-    days on or after it are never included, so a depressed post-injury
-    period never leaks into what's supposed to be the PRE-injury number.
-    Same "day with no logged load counts as zero" convention as
-    `recent_baseline_daily_load` above.
-    """
-    total = sum(
-        daily_load_values.get(boundary_date - timedelta(days=i), 0.0)
-        for i in range(1, window_days + 1)
-    )
-    return total / window_days
+    if not series:
+        return None
+    if target_date < series[0][0]:
+        return None
+    by_date = {d: ctl for d, ctl, _atl, _tsb in series}
+    return by_date.get(target_date)
 
 
 def taper_volume_fraction(taper_weeks: int, decay: float) -> float:
@@ -362,6 +390,18 @@ def resolve_ramp_target(
     restriction-driven safety cap applies -- see module docstring's
     "Restriction-driven capping" section for the full rationale.
 
+    This function's own math/signature is unchanged by the 2026-09
+    CTL-substitution build (see module docstring) -- only what its two
+    float inputs REPRESENT changed. `current_recent_baseline` is now the
+    athlete's current `ctl0` (a decay-aware Banister EWMA read at
+    `anchor_date`, extended through to `as_of` when she's stopped logging --
+    see `search_taper_grid`), not a flat trailing mean. `pre_layoff_
+    baseline` is now a point-in-time CTL LOOKUP at the pre-layoff boundary
+    date (`ctl_at`, above, called by `search_taper_grid`), not a second
+    flat mean either -- both numbers now come from the same single EWMA
+    series this module already computes for its TSB projection, read at two
+    different dates, rather than two independently-averaged windows.
+
     Returns `(ramp_target_daily_load, ramp_cap_fraction_applied,
     ramp_permitted)`:
       - `restriction == "no_training"`: `(current_recent_baseline, None,
@@ -375,12 +415,18 @@ def resolve_ramp_target(
         `ramp_cap_fraction_applied = LIGHT_ONLY_RAMP_CAP_FRACTION`.
       - `restriction in (None, "none")`: no injury-driven cap -- target is
         `max(current_recent_baseline, pre_layoff_baseline)`. For a steady,
-        uninterrupted athlete these two numbers are close to identical, so
-        this is a near-no-op (see module docstring's regression-test
+        uninterrupted athlete, CTL read at "now" is provably >= CTL read at
+        any earlier date (`ctl_atl_tsb_series`'s recursion is monotonically
+        increasing toward a constant load's ceiling -- see the regression
+        test this collapse behavior is proven against, in
+        `tests/unit/test_taper_search.py`), so this `max()` picks
+        `current_recent_baseline` exactly and the ramp becomes a
+        mathematical no-op (see module docstring's regression-test
         pointer); for an athlete genuinely returning from an unlogged
-        layoff, this still ramps back toward her own real prior capacity.
-        This `max()` floor is safe to keep ONLY here, where there is no
-        active safety restriction to potentially override.
+        layoff (current CTL decayed below her earlier pre-layoff CTL),
+        this still ramps back toward her own real prior capacity. This
+        `max()` floor is safe to keep ONLY here, where there is no active
+        safety restriction to potentially override.
 
     **Real review bug fixed here before merge, safety-critical**: the
     `light_only` branch used to compute `target = max(current_recent_
@@ -604,8 +650,6 @@ def search_taper_grid(
     as_of: date,
     restriction: Restriction | None = None,
     restriction_reported_at: date | None = None,
-    recent_baseline_window_days: int = RECENT_BASELINE_WINDOW_DAYS,
-    pre_layoff_baseline_window_days: int = PRE_LAYOFF_BASELINE_WINDOW_DAYS,
     ramp_days_grid: tuple[int, ...] = RAMP_DAYS_GRID_DEFAULT,
     taper_weeks_min: int = TAPER_WEEKS_GRID_MIN,
     decay_min: float = DECAY_GRID_MIN,
@@ -622,29 +666,65 @@ def search_taper_grid(
     `restriction`/`restriction_reported_at` are plain values the CALLER
     resolves (typically from the athlete's current active `HealthStatus`,
     via `backend/app/context.py`'s `_active_health_statuses` -- this module
-    stays decoupled from that model/resolution logic on purpose). When
-    `restriction_reported_at` is `None` (no active `HealthStatus` to anchor
-    a "before" date), the pre-layoff baseline window ends
-    `recent_baseline_window_days` before `anchor_date` instead -- i.e. "the
-    block of time immediately before the recent window" -- a generic
-    fallback that, for a steady-training athlete, lands close to the recent
-    baseline anyway (see `resolve_ramp_target`'s no-restriction case).
+    stays decoupled from that model/resolution logic on purpose).
 
-    When a restriction IS active, the RECENT baseline window is also capped
-    to never reach back before `restriction_reported_at` -- a restriction
-    reported only a few days ago must not have its "current recent
-    baseline" diluted by weeks of real pre-injury training still sitting
-    inside a plain `recent_baseline_window_days` window (a real gap found
-    and fixed during this build's own validation pass; see the inline
-    comment above where this is computed). The reported
-    `recent_baseline_window_days` in the returned dict reflects this
-    EFFECTIVE (possibly shortened) window, not the raw parameter, so a
-    caller can always see what was actually averaged.
+    **Ramp floor and ceiling are both CTL reads now, not flat means (see
+    module docstring's 2026-09 update paragraph for the full rationale and
+    the ACWR alternative explicitly considered and rejected):**
+      - The floor (`recent_baseline_daily_load` in the returned dict) is
+        `ctl0` directly -- the athlete's real, decay-aware EWMA fitness as
+        of `anchor_date`. No averaging window to configure or shrink
+        anymore: CTL's own 42-day exponential decay already naturally
+        discounts old (pre-layoff) history relative to recent history,
+        which is exactly the property the OLD flat-mean system needed a
+        manual `effective_recent_window_days`-shrinking hack to
+        approximate (see the removed mechanism's own git history for that
+        hack, and this module's earlier bug-fix commentary) -- that hack is
+        gone; CTL supersedes it structurally, not just numerically.
+      - The ceiling (`pre_layoff_baseline_daily_load`) is a point-in-time
+        CTL LOOKUP (`ctl_at`, above) at `pre_layoff_boundary` -- the active
+        `HealthStatus.reported_at` date when one exists, or
+        `anchor_date - NO_RESTRICTION_PRE_LAYOFF_LOOKBACK_DAYS` as a
+        generic "before recent" fallback when there's no active
+        restriction on file. If `pre_layoff_boundary` falls before the
+        earliest day `series` ever walked (a short/incomplete logging
+        history -- `ctl_at` returns `None` in exactly this case, and only
+        this case, since `ctl_atl_tsb_series` never has gaps once it
+        starts), this falls back to the EARLIEST available CTL in the
+        series (`series[0]`) -- the most defensible available proxy, since
+        `ctl_atl_tsb_series` seeds CTL near 0 at the true start of walked
+        history, so the earliest available point is the closest honest
+        answer available for "what was her fitness before this history
+        even starts," rather than fabricating a number for a date the
+        engine has no data reaching back to. `pre_layoff_baseline_used_
+        earliest_fallback` in the returned dict says plainly whether this
+        fallback was used.
+
+    **A real, new capability this build adds: CTL decay is extended through
+    to `as_of` ("today"), not just to the last LOGGED day.**
+    `ctl_atl_tsb_series` only ever walks calendar days from the earliest to
+    the LATEST KEY PRESENT in the `daily_load_values` dict it's given. An
+    athlete who has stopped logging entirely during an injury (this
+    module's own real motivating scenario -- see module docstring) would,
+    without this extension, have `anchor_date`/`ctl0` frozen at her last
+    LOGGED day, never decaying through the real elapsed time since --
+    missing exactly the "decay of fitness due to time off" this build
+    exists to capture. Fix: if `as_of` is AFTER the latest key already
+    present in the computed daily loads, a zero-load entry is seeded at
+    `as_of` before calling `ctl_atl_tsb_series` -- the same "a day missing
+    from the dict counts as zero load" convention `daily_loads`/
+    `ctl_atl_tsb_series` already use everywhere in this codebase, not a new
+    semantic. This ONLY ever extends the walked range forward: nothing is
+    seeded (the dict is used unchanged) when `as_of` is on or before the
+    latest existing key, so an ordinary athlete who logged something today
+    or recently is completely unaffected, and the walk's true START is
+    never touched either way.
 
     The real starting point (`ctl0`/`atl0`/`anchor_date`) comes from running
     `load.ctl_atl_tsb_series` over the athlete's REAL logged
-    `workouts`/`wellness` history and taking its last entry. Raises
-    `ValueError` if `workouts` produces no loggable day at all.
+    `workouts`/`wellness` history (extended per the above) and taking its
+    last entry. Raises `ValueError` if `workouts` produces no loggable day
+    at all.
 
     Only `ramp_days_grid` values consistent with `restriction`'s ramp
     permission are searched -- `resolve_ramp_target`'s `ramp_permitted`
@@ -653,16 +733,17 @@ def search_taper_grid(
     not merely filtered out afterward.
 
     Returns a dict with `anchor_date`/`ctl0`/`atl0`/`tsb0`,
-    `recent_baseline_daily_load`/`recent_baseline_window_days`,
-    `pre_layoff_baseline_daily_load`/`pre_layoff_baseline_window_days`,
-    `restriction`, `ramp_permitted`, `ramp_cap_fraction_applied`,
-    `ramp_target_daily_load`, `race_date`, `days_available`,
-    `weeks_available`, `tsb_band`, `candidates` (list of `TaperCandidate`),
-    `any_in_band` (bool), `closest_to_band` (smallest distance into
-    `tsb_band` among candidates that `fits_available_runway`, ties broken by
-    grid order -- always populated), and `recommended` (alias of
-    `closest_to_band` today -- kept as its own key so a future, more
-    elaborate recommendation rule doesn't require renaming this field).
+    `recent_baseline_daily_load`, `pre_layoff_baseline_daily_load`,
+    `pre_layoff_baseline_boundary_date`, `pre_layoff_baseline_used_
+    earliest_fallback`, `restriction`, `ramp_permitted`,
+    `ramp_cap_fraction_applied`, `ramp_target_daily_load`, `race_date`,
+    `days_available`, `weeks_available`, `tsb_band`, `candidates` (list of
+    `TaperCandidate`), `any_in_band` (bool), `closest_to_band` (smallest
+    distance into `tsb_band` among candidates that `fits_available_runway`,
+    ties broken by grid order -- always populated), and `recommended`
+    (alias of `closest_to_band` today -- kept as its own key so a future,
+    more elaborate recommendation rule doesn't require renaming this
+    field).
     """
     wellness = wellness or []
     loads = daily_loads(workouts, athlete=athlete, wellness=wellness)
@@ -672,37 +753,28 @@ def search_taper_grid(
             "CTL/ATL or a recent baseline daily load"
         )
 
+    # Extend CTL decay through to `as_of` when the athlete has stopped
+    # logging -- see this function's own docstring paragraph above for the
+    # full rationale and the forward-only guard. `loads` is copied rather
+    # than mutated in place since it's a fresh dict from `daily_loads`
+    # either way, but copying keeps the seeding step visibly self-contained.
+    latest_logged_day = max(loads)
+    if as_of > latest_logged_day:
+        loads = {**loads, as_of: 0.0}
+
     series = ctl_atl_tsb_series(loads)
     anchor_date, ctl0, atl0, tsb0 = series[-1]
 
-    # Real bug caught during this build's own validation pass, fixed here:
-    # for a restriction reported only a few days ago (this module's own
-    # real motivating case -- an injury reported 5-6 days before "today"),
-    # a plain `recent_baseline_window_days` (21 days) window reaches back
-    # WELL before the restriction started, blending in weeks of real
-    # pre-injury training and making the "current recent baseline" read as
-    # much higher than what she's actually doing right now post-injury. Cap
-    # the effective recent-baseline window at how many days have actually
-    # elapsed since the restriction was reported, so it never reaches back
-    # past the restriction's own start -- confirmed materially changes the
-    # recommendation on the real motivating scenario (without this cap, a
-    # restriction reported this recently could compute a "recent baseline"
-    # barely below her pre-injury one, making the engine think no ramp is
-    # even needed, which is wrong).
-    effective_recent_window_days = recent_baseline_window_days
-    if restriction not in (None, "none") and restriction_reported_at is not None:
-        days_since_restriction = (anchor_date - restriction_reported_at).days + 1
-        effective_recent_window_days = max(1, min(recent_baseline_window_days, days_since_restriction))
-
-    recent_baseline = recent_baseline_daily_load(loads, anchor_date, effective_recent_window_days)
+    recent_baseline = ctl0
     pre_layoff_boundary = (
         restriction_reported_at
         if restriction_reported_at is not None
-        else anchor_date - timedelta(days=recent_baseline_window_days)
+        else anchor_date - timedelta(days=NO_RESTRICTION_PRE_LAYOFF_LOOKBACK_DAYS)
     )
-    pre_layoff_baseline = pre_layoff_baseline_daily_load(
-        loads, pre_layoff_boundary, pre_layoff_baseline_window_days
-    )
+    pre_layoff_baseline = ctl_at(series, pre_layoff_boundary)
+    pre_layoff_baseline_used_earliest_fallback = pre_layoff_baseline is None
+    if pre_layoff_baseline is None:
+        pre_layoff_baseline = series[0][1]
 
     ramp_target, ramp_cap_fraction_applied, ramp_permitted = resolve_ramp_target(
         recent_baseline, pre_layoff_baseline, restriction
@@ -778,10 +850,9 @@ def search_taper_grid(
         "atl0": atl0,
         "tsb0": tsb0,
         "recent_baseline_daily_load": recent_baseline,
-        "recent_baseline_window_days": effective_recent_window_days,
         "pre_layoff_baseline_daily_load": pre_layoff_baseline,
-        "pre_layoff_baseline_window_days": pre_layoff_baseline_window_days,
         "pre_layoff_baseline_boundary_date": pre_layoff_boundary,
+        "pre_layoff_baseline_used_earliest_fallback": pre_layoff_baseline_used_earliest_fallback,
         "restriction": restriction,
         "ramp_permitted": ramp_permitted,
         "ramp_cap_fraction_applied": ramp_cap_fraction_applied,
