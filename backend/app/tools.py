@@ -158,6 +158,7 @@ from swim_coach.models import (
 from swim_coach.ow_session_templates import build_ow_session
 from swim_coach.plan import (
     SESSION_ADJUSTMENT_INCREASE_CAP_PCT,
+    WEEKLY_VOLUME_RAMP_CAP,
     _duration_min_for_distance,
     adjust_session,
     count_structured_steps,
@@ -1299,7 +1300,22 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "no_training, the response's `no_training_notice` field will be "
             "set and NO candidate proposes any load above her current "
             "baseline -- read that field and say so plainly if it's set; "
-            "never present that output as an ordinary, upbeat recommendation.\n\n"
+            "never present that output as an ordinary, upbeat recommendation. "
+            "Also check `exceeds_claude_md_volume_safety_rail`: if true, the "
+            "proposed ramp exceeds this project's own standing volume-"
+            "increase safety threshold (see `ramp_pct_increase_over_recent_"
+            "baseline` for the actual number) -- name this explicitly to the "
+            "athlete/coach and get real, explicit confirmation before ever "
+            "calling this again with confirm=true, don't just proceed because "
+            "the TSB math looks fine. And check `other_in_band_candidates_"
+            "exist`: if true, the recommended shape was one of SEVERAL that "
+            "would equally land race-day TSB in range -- it was picked "
+            "because it happened to be the mildest/fastest ramp among ties, "
+            "not because it's provably the single best choice; mention this "
+            "when a more gradual alternative might genuinely be preferred "
+            "(e.g. for anxiety/confidence reasons, per this athlete's own "
+            "real advisory-panel input), rather than presenting it as the "
+            "one obviously-correct answer.\n\n"
             "Draft-then-confirm, same shape as propose_adaptation/"
             "replace_week_plan: confirm=false (default) only computes and "
             "returns the candidate shape + session preview as JSON with "
@@ -2975,6 +2991,13 @@ def _handle_propose_injury_adapted_taper(
         taper_start_date=recommended.taper_start_date,
         volume_fraction=recommended.volume_fraction,
         restriction=restriction,
+        # Real review bug fixed before merge: generation used to start
+        # from result["anchor_date"] (the athlete's last LOGGED workout
+        # day) even when that day was well in the past (e.g. an injured
+        # athlete who's stopped logging) -- backdating generated, and on
+        # confirm=True persisted, sessions into already-past calendar
+        # days. as_of clamps generation to never start before today.
+        as_of=date.today(),
     )
 
     no_training_notice = None
@@ -2991,6 +3014,39 @@ def _handle_propose_injury_adapted_taper(
             "is resolved or superseded by a less restrictive entry."
         )
 
+    # Real review finding fixed before merge: this response never computed
+    # or surfaced the ramp's size against CLAUDE.md's own explicit safety
+    # rail ("weekly volume +<=8%... without explicit athlete confirmation")
+    # -- a ramp from a depressed post-injury baseline to the capped target
+    # can easily be a >100% jump over just a few days, and the calling
+    # model had to manually diff two raw numbers and independently
+    # remember the rule to catch that. Reuses `plan.WEEKLY_VOLUME_RAMP_CAP`
+    # (8%) as the reference threshold -- that constant is itself defined
+    # WEEK-over-week, not day-level daily-load-ramp-over-N-days like this
+    # comparison; there is no existing constant measuring exactly this
+    # shape of increase, so this is a Coach-judgment adaptation of the
+    # nearest cited number this codebase already commits to for "how fast
+    # is training load allowed to climb," not a separately-validated
+    # threshold for this specific comparison. Flagged honestly, not
+    # presented as more precise than it is.
+    baseline_for_pct = result["recent_baseline_daily_load"]
+    ramp_pct_increase = (
+        (result["ramp_target_daily_load"] - baseline_for_pct) / baseline_for_pct * 100
+        if baseline_for_pct > 0 else None
+    )
+    exceeds_volume_safety_rail = (
+        ramp_pct_increase is not None and ramp_pct_increase > WEEKLY_VOLUME_RAMP_CAP * 100
+    )
+
+    # Real review finding fixed before merge: `any_candidate_in_band` alone
+    # hides whether the recommended (mildest-ramp-first) candidate was the
+    # ONLY one that worked, or one of several equally-valid options --
+    # `min(fitting, key=...)` silently picks the first in iteration order
+    # (smallest ramp_days), so a more gradual ramp that scored identically
+    # on projected TSB never gets surfaced. Cheap to compute from data
+    # already in `result["candidates"]`; now explicit rather than implied.
+    in_band_count = sum(1 for c in result["candidates"] if c.in_band)
+
     response: dict[str, Any] = {
         "event_name": event.name,
         "race_date": result["race_date"].isoformat(),
@@ -3003,8 +3059,14 @@ def _handle_propose_injury_adapted_taper(
         "ramp_permitted": result["ramp_permitted"],
         "ramp_cap_fraction_applied": result["ramp_cap_fraction_applied"],
         "ramp_target_daily_load": round(result["ramp_target_daily_load"], 1),
+        "ramp_pct_increase_over_recent_baseline": (
+            round(ramp_pct_increase, 1) if ramp_pct_increase is not None else None
+        ),
+        "exceeds_claude_md_volume_safety_rail": exceeds_volume_safety_rail,
         "tsb_band": result["tsb_band"],
         "any_candidate_in_band": result["any_in_band"],
+        "in_band_candidate_count": in_band_count,
+        "other_in_band_candidates_exist": in_band_count > 1,
         "recommended_shape": {
             "ramp_days": recommended.ramp_days,
             "hold_days": recommended.hold_days,

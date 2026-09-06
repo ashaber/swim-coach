@@ -3387,3 +3387,96 @@ def test_propose_injury_adapted_taper_missing_event_is_an_error(athletes_dir) ->
     result = handlers["propose_injury_adapted_taper"]({})
 
     assert "error" in result
+
+
+def test_propose_injury_adapted_taper_flags_ramp_exceeding_volume_safety_rail(
+    athletes_dir,
+) -> None:
+    # Real review finding fixed before merge: the response never computed
+    # or surfaced the ramp's size against CLAUDE.md's own standing volume-
+    # increase safety rail. A steep recent drop (post-injury, light_only)
+    # against a real pre-injury baseline produces a ramp target far more
+    # than plan.WEEKLY_VOLUME_RAMP_CAP (8%) above the athlete's current
+    # recent load -- this must be flagged explicitly, not left for the
+    # model to notice on its own.
+    from swim_coach.plan import WEEKLY_VOLUME_RAMP_CAP
+
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    today = date.today()
+    # Real pre-injury baseline (300 AU/day for weeks), THEN a steep recent
+    # drop to a depressed post-injury level -- current_recent_baseline
+    # (short window) reads low, pre_layoff_baseline (wider window, ending
+    # before the restriction) reads high, so the light_only-capped ramp
+    # target ends up well above the recent baseline.
+    _seed_steady_workouts(store, athlete.id, end=today - timedelta(days=4), days=40, daily_load=300.0)
+    _seed_steady_workouts(store, athlete.id, end=today, days=3, daily_load=20.0)
+    store.save_health_status(
+        "renee",
+        HealthStatus(
+            id=uuid.uuid4(),
+            athlete_id=athlete.id,
+            reported_at=datetime.now(timezone.utc) - timedelta(days=3),
+            reported_by="athlete",
+            source="self_reported",
+            description="shoulder injury, light training only",
+            restriction="light_only",
+        ),
+    )
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["propose_injury_adapted_taper"]({"event": GREECE_EVENT_NAME})
+
+    assert "error" not in result
+    assert result["ramp_pct_increase_over_recent_baseline"] is not None
+    assert result["ramp_pct_increase_over_recent_baseline"] > WEEKLY_VOLUME_RAMP_CAP * 100
+    assert result["exceeds_claude_md_volume_safety_rail"] is True
+
+
+def test_propose_injury_adapted_taper_response_reports_in_band_candidate_visibility(
+    athletes_dir,
+) -> None:
+    # Real review finding fixed before merge: any_candidate_in_band alone
+    # hid whether the recommended (mildest-ramp-first) candidate was the
+    # ONLY one that worked or one of several ties -- these fields must
+    # always be present and internally consistent.
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    today = date.today()
+    _seed_steady_workouts(store, athlete.id, end=today, days=40, daily_load=300.0)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["propose_injury_adapted_taper"]({"event": GREECE_EVENT_NAME})
+
+    assert "error" not in result
+    assert isinstance(result["in_band_candidate_count"], int)
+    assert result["in_band_candidate_count"] >= 0
+    assert result["any_candidate_in_band"] == (result["in_band_candidate_count"] > 0)
+    assert result["other_in_band_candidates_exist"] == (result["in_band_candidate_count"] > 1)
+
+
+def test_propose_injury_adapted_taper_never_generates_sessions_before_today(
+    athletes_dir,
+) -> None:
+    # Real review bug fixed before merge: generation used to start from the
+    # athlete's last LOGGED workout day even when that was well behind
+    # today -- exactly what happens for an injured athlete who's stopped
+    # logging. No generated session may be dated on or before today.
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    today = date.today()
+    stale_anchor = today - timedelta(days=6)
+    _seed_steady_workouts(store, athlete.id, end=stale_anchor, days=40, daily_load=300.0)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["propose_injury_adapted_taper"]({"event": GREECE_EVENT_NAME})
+
+    assert "error" not in result
+    assert result["anchor_date"] == stale_anchor.isoformat()
+    assert result["sessions"], "expected at least one generated session"
+    for s in result["sessions"]:
+        session_date = date.fromisoformat(s["date"])
+        assert session_date > today, (
+            f"session dated {session_date} is not after today ({today}) -- "
+            "would backdate into an already-past calendar day"
+        )

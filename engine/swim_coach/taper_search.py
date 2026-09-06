@@ -367,10 +367,11 @@ def resolve_ramp_target(
       - `restriction == "no_training"`: `(current_recent_baseline, None,
         False)` -- the target is pinned to the current baseline; no ramp
         above it is ever permitted.
-      - `restriction == "light_only"`: target is
-        `max(current_recent_baseline, pre_layoff_baseline *
-        LIGHT_ONLY_RAMP_CAP_FRACTION)` -- never proposes ramping DOWN below
-        whatever the athlete is already doing, but caps how far UP it goes.
+      - `restriction == "light_only"`: target is exactly
+        `pre_layoff_baseline * LIGHT_ONLY_RAMP_CAP_FRACTION` -- a hard
+        ceiling, never extended upward to match a higher current-baseline
+        reading. See the real bug fixed below for why this is a ceiling,
+        not the floor-adjusted target an earlier version computed.
         `ramp_cap_fraction_applied = LIGHT_ONLY_RAMP_CAP_FRACTION`.
       - `restriction in (None, "none")`: no injury-driven cap -- target is
         `max(current_recent_baseline, pre_layoff_baseline)`. For a steady,
@@ -378,13 +379,38 @@ def resolve_ramp_target(
         this is a near-no-op (see module docstring's regression-test
         pointer); for an athlete genuinely returning from an unlogged
         layoff, this still ramps back toward her own real prior capacity.
+        This `max()` floor is safe to keep ONLY here, where there is no
+        active safety restriction to potentially override.
+
+    **Real review bug fixed here before merge, safety-critical**: the
+    `light_only` branch used to compute `target = max(current_recent_
+    baseline, capped_target)` -- intended to mean "never propose ramping
+    DOWN below what she's already doing," but it actually meant "if her
+    own recent-baseline number ever reads ABOVE the cap, for ANY reason,
+    silently abandon the cap entirely and target that higher number
+    instead." That reading can happen for reasons that have nothing to do
+    with the athlete genuinely, safely handling more than the cap: the
+    `recent_baseline_daily_load` window is deliberately SHRUNK to
+    `days_since_restriction_reported` right when a restriction is fresh
+    (see `search_taper_grid` below) -- meaning if the athlete logged a big
+    session on the very day she was hurt (plausible for an in-practice
+    injury), that single day can dominate the shrunk window and read at or
+    near her full pre-injury load, silently erasing the cap at the exact
+    moment it matters most. A safety ceiling that a data artifact can
+    quietly cancel is not a ceiling. Fixed: `light_only`'s target is now
+    `pre_layoff_baseline * LIGHT_ONLY_RAMP_CAP_FRACTION`, full stop -- an
+    absolute ceiling, never extended upward to match a higher
+    current-baseline reading. If a coach/athlete genuinely believes more
+    is safe than this cap allows, that's what `restriction_override` (see
+    the calling tool) is for -- an explicit, visible, human choice to
+    relax the assumption, never an silent side-effect of which exact days
+    happened to fall inside a rolling average window.
     """
     if restriction == "no_training":
         return current_recent_baseline, None, False
     if restriction == "light_only":
         capped_target = pre_layoff_baseline * LIGHT_ONLY_RAMP_CAP_FRACTION
-        target = max(current_recent_baseline, capped_target)
-        return target, LIGHT_ONLY_RAMP_CAP_FRACTION, True
+        return capped_target, LIGHT_ONLY_RAMP_CAP_FRACTION, True
     target = max(current_recent_baseline, pre_layoff_baseline)
     return target, None, True
 
@@ -406,17 +432,70 @@ def _phase_day_load(
     target load is.
 
     Phase membership, in priority order:
-      1. `day >= taper_start_date`: TAPER -- `ramp_target_daily_load *
+      1. `day == taper_start_date == anchor_date + ramp_days` (the RAMP's
+         own final day exactly coincides with TAPER's first day, the
+         `hold_days == 0` case): RAMP wins, resolving to the ramp's own
+         completed value (`ramp_target_daily_load`) -- see the real bug
+         fixed below for why this single-day exception exists.
+      2. `day >= taper_start_date`: TAPER -- `ramp_target_daily_load *
          volume_fraction`.
-      2. `ramp_days > 0` and `day` falls within the first `ramp_days` days
+      3. `ramp_days > 0` and `day` falls within the first `ramp_days` days
          after `anchor_date`: RAMP -- linear interpolation from
          `current_baseline_daily_load` (at `anchor_date`) to
          `ramp_target_daily_load` (at `anchor_date + ramp_days`).
-      3. Otherwise: HOLD -- flat `ramp_target_daily_load`. This covers both
+      4. Otherwise: HOLD -- flat `ramp_target_daily_load`. This covers both
          the explicit post-ramp hold window AND, when `ramp_days == 0`, every
          pre-taper day (immediately "at target" -- the old draft's plain
          hold-then-decay shape).
+
+    **Real review bug fixed here before merge, narrowly**: whenever
+    `hold_days == 0` (`taper_start_date == ramp_end_date` exactly -- taper
+    starts the instant the ramp's own linear rise would complete, no hold
+    window in between), the ramp's own FINAL day used to be classified as
+    TAPER (since `day >= taper_start_date` was checked first and is also
+    true on that exact day) -- silently clipping the ramp one day short of
+    ever actually reaching `ramp_target_daily_load`, dropping straight to
+    the tapered value instead.
+
+    The fix is deliberately a single-day special case (#1 above), NOT a
+    blanket "RAMP always wins over TAPER" reordering -- an earlier attempt
+    at that broke a real, separately-tested invariant: when
+    `ramp_target_daily_load == current_baseline_daily_load` (a flat/no-op
+    "ramp" -- the ordinary no-restriction, steady-state case;
+    `project_ramp_taper_series` deliberately does NOT clamp
+    `taper_start_date` against `ramp_end_date` in that case, since there's
+    no real rising ramp worth protecting), `taper_start_date` can fall
+    WELL BEFORE `ramp_end_date` by many days, not just the single boundary
+    day -- and for every one of those non-boundary overlap days, TAPER
+    must still win (applying the real volume reduction), exactly as this
+    module's own regression test (`test_project_ramp_taper_series_ramp_is_
+    noop_when_target_equals_current`) requires to prove this build
+    collapses to byte-identical output to the old hold-then-decay draft in
+    that case. Only the EXACT coincidence of the ramp's own final day and
+    taper's first day gets the exception; every other overlap still
+    resolves TAPER-first, unchanged from before.
+
+    A second guard on the same exception, found by the SAME regression
+    test after the first fix attempt: `taper_start_date` is NOT clamped
+    against `ramp_end_date` at all when the ramp is flat/no-op
+    (`ramp_target_daily_load == current_baseline_daily_load` -- see
+    `project_ramp_taper_series`'s own docstring). For a fixed
+    `taper_start_date`, some `ramp_days` value in a grid search can
+    coincidentally land `anchor_date + ramp_days` exactly ON that
+    already-fixed date -- but since there's no real ramp value to protect
+    in the no-op case, that coincidence must NOT trigger the exception
+    (which would make different `ramp_days` values diverge in their
+    projected TSB for what's supposed to be a value-identical no-op). The
+    exception is scoped to `ramp_target_daily_load !=
+    current_baseline_daily_load` -- a genuinely rising (or falling) ramp
+    with a real value worth completing before any taper discount applies.
     """
+    if (
+        ramp_days > 0
+        and ramp_target_daily_load != current_baseline_daily_load
+        and day == taper_start_date == anchor_date + timedelta(days=ramp_days)
+    ):
+        return ramp_target_daily_load
     if day >= taper_start_date:
         return ramp_target_daily_load * volume_fraction
     day_offset = (day - anchor_date).days
@@ -633,6 +712,18 @@ def search_taper_grid(
     days_available = max(0, (race_date - as_of).days)
     weeks_available = days_available // 7
 
+    # Defensive floor, not just a default: a `taper_weeks=0` candidate is
+    # structurally invalid -- its `taper_start_date` would equal `race_date`
+    # exactly, which the day-stepping projection loop (bounded at
+    # `race_date - 1`) never reaches, so its `decay`/`volume_fraction`
+    # would be computed and reported but never actually applied to a
+    # single projected day -- silently misrepresenting a no-taper
+    # candidate as a legitimate one that "fits the runway." Not reachable
+    # via this tool's own call site today (which never overrides this
+    # parameter), but clamped here so a future caller can't reintroduce
+    # this by passing a smaller value.
+    taper_weeks_min = max(1, taper_weeks_min)
+
     effective_ramp_days_grid = ramp_days_grid if ramp_permitted else (0,)
     ramp_days_values = sorted({d for d in effective_ramp_days_grid if d >= 0})
     taper_weeks_values = list(range(taper_weeks_min, max(taper_weeks_min, weeks_available) + 1))
@@ -730,9 +821,24 @@ def _session_role(
     day: date,
     *,
     anchor_date: date,
+    current_baseline_daily_load: float,
+    ramp_target_daily_load: float,
     ramp_days: int,
     taper_start_date: date,
 ) -> Literal["ramp", "hold", "taper"]:
+    # Same phase-membership priority as _phase_day_load's own fixed
+    # ordering, INCLUDING both of its hold_days==0 exception's guards (the
+    # single-day coincidence AND the "only for a genuinely rising/falling
+    # ramp, never a flat no-op one" scoping -- see that function's
+    # docstring for the real bugs this avoids) -- kept in sync
+    # deliberately so a session's LABELED role can never disagree with the
+    # load value `_phase_day_load` actually computed for the same day.
+    if (
+        ramp_days > 0
+        and ramp_target_daily_load != current_baseline_daily_load
+        and day == taper_start_date == anchor_date + timedelta(days=ramp_days)
+    ):
+        return "ramp"
     if day >= taper_start_date:
         return "taper"
     day_offset = (day - anchor_date).days
@@ -794,13 +900,39 @@ def generate_taper_sessions(
     taper_start_date: date,
     volume_fraction: float,
     restriction: Restriction | None,
+    as_of: date,
 ) -> list[Session]:
     """Turn one chosen ramp/hold/taper shape into concrete, DRAFT `Session`
-    objects for every day from `anchor_date + 1` through `race_date - 1`
-    (same day range `project_ramp_taper_series` projects over -- race day
-    itself is the event, not a training day). Every `Session.id` is a fresh
-    `uuid4()`; nothing here is persisted (see module docstring) -- the tool
-    layer decides whether/how to persist, on explicit `confirm=True` only.
+    objects for every day from `max(anchor_date, as_of) + 1` through
+    `race_date - 1` (race day itself is the event, not a training day).
+    Every `Session.id` is a fresh `uuid4()`; nothing here is persisted (see
+    module docstring) -- the tool layer decides whether/how to persist, on
+    explicit `confirm=True` only.
+
+    **Real review bug fixed here before merge**: `anchor_date` is the
+    athlete's LAST LOGGED workout day (needed elsewhere, e.g.
+    `project_ramp_taper_series`, as the real starting point for the CTL/ATL
+    recursion -- that math legitimately must anchor on where real logged
+    data ends). But this function used to ALSO use that same date as the
+    start of the CALENDAR RANGE it generates real `Session` rows for --
+    for the athlete this feature was built for, who has stopped logging
+    workouts because she's injured (this feature's own motivating
+    scenario), `anchor_date` can be days behind `as_of` (today), and the
+    old code would generate -- and, on `confirm=True`, PERSIST -- sessions
+    dated in the PAST, silently overwriting whatever real plan record
+    already existed for those already-happened days.
+
+    The fix only changes where the GENERATION LOOP starts
+    (`max(anchor_date, as_of)`) -- `anchor_date` itself is still passed
+    unchanged to `_phase_day_load`/`_session_role` for their own
+    ramp/taper phase-boundary math (`ramp_end_date = anchor_date +
+    ramp_days`, etc.), since those comparisons are against absolute dates
+    and are unaffected by where the generation loop itself begins. If
+    real time has passed since `anchor_date` such that the ramp/hold
+    phases would already be over by `as_of`, the athlete simply starts
+    wherever the shape says today actually falls (e.g. straight into
+    TAPER) -- this build never retroactively fabricates sessions for days
+    that already happened, whether or not they were logged.
 
     Each day's target load comes from the exact same `_phase_day_load` rule
     `project_ramp_taper_series` uses, so the projection and the generated
@@ -833,7 +965,8 @@ def generate_taper_sessions(
     pool_offsets = _weekday_pool_offsets(athlete)
 
     sessions: list[Session] = []
-    day = anchor_date + timedelta(days=1)
+    generation_start = max(anchor_date, as_of)
+    day = generation_start + timedelta(days=1)
     last_day = race_date - timedelta(days=1)
     day_index = 0
     while day <= last_day:
@@ -870,7 +1003,12 @@ def generate_taper_sessions(
             )
         else:
             role = _session_role(
-                day, anchor_date=anchor_date, ramp_days=ramp_days, taper_start_date=taper_start_date
+                day,
+                anchor_date=anchor_date,
+                current_baseline_daily_load=current_baseline_daily_load,
+                ramp_target_daily_load=ramp_target_daily_load,
+                ramp_days=ramp_days,
+                taper_start_date=taper_start_date,
             )
             duration_min = max(MIN_SESSION_DURATION_MIN, _duration_min_for_day_load(day_load))
             distance_m = max(0, _round_100(duration_min / 60 * 3600 / pace_s * 100))

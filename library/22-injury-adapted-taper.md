@@ -56,8 +56,25 @@ window; same posture as `RECENT_BASELINE_WINDOW_DAYS` itself.
 
 When an active `HealthStatus.restriction == "light_only"` exists, the ramp
 phase's target load is capped at 55% of the athlete's own pre-layoff
-baseline (never lower than her current recent baseline -- this never
-proposes ramping DOWN).
+baseline -- a HARD CEILING, full stop.
+
+**Real bug fixed before merge, worth documenting here honestly:** an
+earlier version of this cap read `max(current_recent_baseline,
+55%_of_pre_layoff)`, intended to mean "never propose ramping DOWN below
+what she's already doing." In practice that let the cap be silently
+overridden whenever `current_recent_baseline` itself read high for reasons
+unrelated to genuinely, safely handling more load -- most notably, the
+recent-baseline window is deliberately shrunk right when a restriction is
+freshly reported (see above), so a single big pre-injury session logged
+the very day of the injury can dominate that shrunk window and read near
+full pre-injury load, erasing the cap at exactly the moment it matters
+most. A safety ceiling a data artifact can quietly cancel isn't a ceiling.
+The cap is now unconditional: exactly 55% of pre-layoff baseline, never
+extended upward to match a higher current-baseline reading. A coach who
+genuinely believes more is safe than this cap allows has `restriction_
+override` (the calling tool's own parameter) for that -- an explicit,
+visible human choice, never a silent side effect of which days happened to
+fall inside a rolling average window.
 
 **Confidence: LOW-MEDIUM, stated honestly.** There is no established
 research pinning an exact "what fraction of pre-injury training volume is
