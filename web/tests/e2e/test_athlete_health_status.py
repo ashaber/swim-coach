@@ -193,6 +193,16 @@ def test_athlete_can_submit_a_health_status_end_to_end(cfg, base_url):
             pg.click('[data-a="health-status:submit"]')
 
             pg.wait_for_selector('text=Sharp shoulder pain on catch-up drills')
+            # Wait for the actual text this test asserts on next, not just a
+            # proxy for "the submit succeeded" -- both render from the same
+            # synchronous call in practice, but a CI-only, non-locally-
+            # reproducible flake surfaced here waiting only on the entry's
+            # own description text before snapshotting page.content() (same
+            # class of fix as web/tests/e2e/test_feedback.py's own unread-
+            # badge race: wait for the real assertion target directly,
+            # rather than an element that merely tends to appear alongside
+            # it in the common case).
+            pg.wait_for_selector('text=Your recent entries')
 
             assert len(calls) == 1
             assert calls[0]['description'] == 'Sharp shoulder pain on catch-up drills'
