@@ -3394,29 +3394,51 @@ def test_propose_injury_adapted_taper_flags_ramp_exceeding_volume_safety_rail(
 ) -> None:
     # Real review finding fixed before merge: the response never computed
     # or surfaced the ramp's size against CLAUDE.md's own standing volume-
-    # increase safety rail. A steep recent drop (post-injury, light_only)
-    # against a real pre-injury baseline produces a ramp target far more
-    # than plan.WEEKLY_VOLUME_RAMP_CAP (8%) above the athlete's current
-    # recent load -- this must be flagged explicitly, not left for the
-    # model to notice on its own.
+    # increase safety rail. A real, sustained light_only period against a
+    # genuine pre-injury baseline produces a ramp target far more than
+    # plan.WEEKLY_VOLUME_RAMP_CAP (8%) above the athlete's current recent
+    # load -- this must be flagged explicitly, not left for the model to
+    # notice on its own.
+    #
+    # **Scenario re-derived for CTL substitution (2026-09), not the original
+    # flat-mean scenario:** the original version of this test used only a
+    # 3-day-old restriction to produce a "low recent baseline" -- that
+    # relied on the OLD, now-deleted `effective_recent_window_days`
+    # window-SHRINKING hack, which could make a flat-mean "recent baseline"
+    # collapse artificially fast. CTL has no such hack and doesn't need
+    # one -- real detraining takes real elapsed time to show up in a
+    # 42-day EWMA (`CTL_TIME_CONSTANT_DAYS`, `load.py`), so a 3-day-old
+    # restriction is nowhere near enough real time for `ctl0` to have
+    # decayed meaningfully below the `light_only`-capped ceiling (verified:
+    # it produces a NEGATIVE ramp_pct_increase under CTL, the correct,
+    # honest CTL-based answer for that short a window -- not a bug).
+    # This scenario instead uses a real 40-day light_only period (long
+    # enough for CTL to have genuinely decayed well below
+    # `LIGHT_ONLY_RAMP_CAP_FRACTION` of the pre-injury ceiling -- verified
+    # by direct computation this session: ctl0 ~= 111.5, capped ceiling
+    # ~= 142.9, a genuine ~28% gap, comfortably past the 8% rail) so the
+    # safety-rail flag is exercised for a reason CTL substitution actually
+    # agrees is real, not an artifact of a deleted averaging-window
+    # mechanism this test used to lean on.
     from swim_coach.plan import WEEKLY_VOLUME_RAMP_CAP
 
     store = FileStore(base_dir=athletes_dir)
     athlete = store.load_athlete("renee")
     today = date.today()
-    # Real pre-injury baseline (300 AU/day for weeks), THEN a steep recent
-    # drop to a depressed post-injury level -- current_recent_baseline
-    # (short window) reads low, pre_layoff_baseline (wider window, ending
-    # before the restriction) reads high, so the light_only-capped ramp
-    # target ends up well above the recent baseline.
-    _seed_steady_workouts(store, athlete.id, end=today - timedelta(days=4), days=40, daily_load=300.0)
-    _seed_steady_workouts(store, athlete.id, end=today, days=3, daily_load=20.0)
+    restriction_days_ago = 40
+    reported_at = today - timedelta(days=restriction_days_ago)
+    _seed_steady_workouts(
+        store, athlete.id, end=reported_at - timedelta(days=1), days=90, daily_load=300.0
+    )
+    _seed_steady_workouts(
+        store, athlete.id, end=today, days=restriction_days_ago + 1, daily_load=20.0
+    )
     store.save_health_status(
         "renee",
         HealthStatus(
             id=uuid.uuid4(),
             athlete_id=athlete.id,
-            reported_at=datetime.now(timezone.utc) - timedelta(days=3),
+            reported_at=datetime.combine(reported_at, datetime.min.time(), tzinfo=timezone.utc),
             reported_by="athlete",
             source="self_reported",
             description="shoulder injury, light training only",
@@ -3462,6 +3484,18 @@ def test_propose_injury_adapted_taper_never_generates_sessions_before_today(
     # athlete's last LOGGED workout day even when that was well behind
     # today -- exactly what happens for an injured athlete who's stopped
     # logging. No generated session may be dated on or before today.
+    #
+    # **Updated for CTL substitution (2026-09):** `result["anchor_date"]`
+    # itself now legitimately extends to `today` in exactly this scenario
+    # (see `search_taper_grid`'s own as_of-extension docstring paragraph
+    # and `taper_search.py`'s module docstring) -- CTL now decays all the
+    # way through to "today" rather than freezing at the last logged day,
+    # which is precisely the real, new capability this build adds (Andrew's
+    # own ask: capture "decay of fitness due to time off"). The
+    # session-generation guarantee this test's title names (no session
+    # dated on or before today) still holds, and is still checked below,
+    # but the OLD `anchor_date == stale_anchor` assertion described the
+    # bug this build intentionally fixes, not a behavior to keep asserting.
     store = FileStore(base_dir=athletes_dir)
     athlete = store.load_athlete("renee")
     today = date.today()
@@ -3472,7 +3506,7 @@ def test_propose_injury_adapted_taper_never_generates_sessions_before_today(
     result = handlers["propose_injury_adapted_taper"]({"event": GREECE_EVENT_NAME})
 
     assert "error" not in result
-    assert result["anchor_date"] == stale_anchor.isoformat()
+    assert result["anchor_date"] == today.isoformat()
     assert result["sessions"], "expected at least one generated session"
     for s in result["sessions"]:
         session_date = date.fromisoformat(s["date"])
