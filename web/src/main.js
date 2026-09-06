@@ -4,7 +4,7 @@ import log from './log.js';
 import {
   renderApp, renderLoading, renderError, renderTabBar, renderCoachTab, renderSettingsTab,
   renderDashboardTab, renderCheckinTab, renderBackendNeededNotice, renderFeedbackTab, renderUpdateBanner,
-  renderOnboardingForm, renderRosterTab, cr10AnchorLabel,
+  renderOnboardingForm, renderRosterTab, cr10AnchorLabel, ROSTER_SUB_TABS as ROSTER_SUB_TAB_DEFS,
 } from './views.js';
 import { findSessionById, LOAD_CHART_WINDOW_DAYS, LOAD_CHART_WINDOW_OPTIONS } from './plan.js';
 import { buildHistoryFeed } from './history.js';
@@ -55,9 +55,15 @@ const LOAD_WINDOW_DAYS_KEY = 'swimcoach_load_window_days';
 const KNOWN_TABS = ['plan', 'dashboard', 'checkin', 'coach', 'feedback', 'roster', 'settings'];
 // The roster tab's own sub-navigation (Build 2: Coach per-athlete sub-tab
 // restructure; 'health' added in web/coach-health-nav-and-athlete-self-log)
-// -- see views.js's ROSTER_SUB_TABS/renderRosterSubTabBar for the matching
-// label/render side, and handleSelectRosterSubTab below.
-const ROSTER_SUB_TABS = ['conversations', 'dashboard', 'plan', 'health'];
+// -- derived from views.js's own ROSTER_SUB_TABS (imported above as
+// ROSTER_SUB_TAB_DEFS), not a second hand-maintained copy of the id list.
+// Real review finding fixed before merge: this USED to be its own separate
+// literal array, which is exactly how 'health' went missing here even
+// after it was correctly added to views.js's copy -- the new sub-tab's
+// button was a silent no-op (handleSelectRosterSubTab's validity check
+// below rejected 'health' as an unknown id) despite the render side
+// already working. One source of truth now.
+const ROSTER_SUB_TABS = ROSTER_SUB_TAB_DEFS.map((t) => t.id);
 // Chat sessions are keyed per-athlete in localStorage (see chat.js); this is
 // just the storage key used before any real identity has ever signed in.
 const SIGNED_OUT_CHAT_KEY = 'signed-out';
@@ -743,6 +749,24 @@ function applyAthleteSession(identity, token) {
   state.workoutDetailId = null;
   state.dashboardFeedExpanded = false;
   state.loadNarrativeExpanded = false;
+  // Real review bug fixed before merge: these five athlete self-service
+  // health-status slices were never reset here (or in resetToSignedOut
+  // below), unlike every other identity-scoped slice this function already
+  // clears -- on a shared browser tab, signing in as a different athlete
+  // after someone else used "Log health condition" left the PREVIOUS
+  // athlete's health-status history (and any in-progress draft, injury/
+  // medical free text included) visible under the new identity.
+  // maybeLoadHealthStatus's own "already ready, don't refetch" guard made
+  // this durable until some unrelated code path happened to reset status
+  // away from 'ready' -- resetting explicitly here closes that gap.
+  state.healthStatus = { status: 'idle', data: [], error: null };
+  state.healthStatusForm = {
+    description: '', restriction: 'light_only', source: 'self_reported', expected_review_date: '',
+    body_region: '', onset: '', severity: '',
+  };
+  state.healthStatusSubmit = { status: 'idle', error: null };
+  state.healthStatusFormOpen = false;
+  state.healthStatusVersion = 0;
   closeWorkoutChat();
   state.roster = createRosterState();
   state.grants = createGrantsState();
@@ -798,6 +822,18 @@ function resetToSignedOut({ identityError = null } = {}) {
   state.workoutDetailId = null;
   state.dashboardFeedExpanded = false;
   state.loadNarrativeExpanded = false;
+  // Same real bug fix as applyAthleteSession above -- see its comment for
+  // the full explanation (a signed-out session must not leave a previous
+  // athlete's health-status data reachable either, e.g. via a stale render
+  // before the tab switch below takes effect).
+  state.healthStatus = { status: 'idle', data: [], error: null };
+  state.healthStatusForm = {
+    description: '', restriction: 'light_only', source: 'self_reported', expected_review_date: '',
+    body_region: '', onset: '', severity: '',
+  };
+  state.healthStatusSubmit = { status: 'idle', error: null };
+  state.healthStatusFormOpen = false;
+  state.healthStatusVersion = 0;
   closeWorkoutChat();
   state.tab = 'settings';
   saveActiveTab('settings');
