@@ -40,17 +40,83 @@ this athlete's own real race-day outcomes correlate poorly with landing in
 this band (either direction), revisit the band itself before touching the
 underlying CTL/ATL time constants.
 
-## Pre-layoff baseline window
+## Ramp floor and ceiling: CTL substitution, not flat means (2026-09)
 
-`PRE_LAYOFF_BASELINE_WINDOW_DAYS = 28`, ending the day before the
-reference boundary date (an active `HealthStatus.reported_at`, or a generic
-fallback when there's no active restriction -- see the module's own
-docstring). Four weeks, slightly longer than the existing
-`RECENT_BASELINE_WINDOW_DAYS = 21` (unchanged from the abandoned draft this
-module extends): long enough to average out one atypical week without
-reaching back into an earlier, lower-volume training phase. **Coach
-judgment / PROVISIONAL** -- no swim-specific citation pins this exact
-window; same posture as `RECENT_BASELINE_WINDOW_DAYS` itself.
+The ramp's floor (`recent_baseline_daily_load`) and ceiling
+(`pre_layoff_baseline_daily_load`) were originally plain TRAILING
+ARITHMETIC MEANS: 21 days for the recent/floor number, 28 days for the
+pre-layoff/ceiling number (`RECENT_BASELINE_WINDOW_DAYS`/
+`PRE_LAYOFF_BASELINE_WINDOW_DAYS`, both now deleted). Neither had any real
+decay awareness -- an athlete who stopped logging during an injury had her
+"recent baseline" silently FROZEN at whatever her last active window
+looked like, no matter how much real detraining time had since passed, and
+a fresh restriction needed a separate manual window-shrinking hack
+(`effective_recent_window_days`, also now deleted) just to keep old
+pre-injury days from dominating a still-mostly-empty recent window.
+
+Andrew's own question, verbatim, surfaced this: "are we using recent max
+duration? recent max load? Should we be using Acute:Chronic Workload Ratio
+(ACWR)... EWMA of ATL and CTL instead of static trailing-maximum values?
+ACWR would account for decay of fitness due to time off and also would
+allow for a higher rate of increase back to pre-injury load."
+
+**Two decisions followed, both confirmed:**
+
+1. **CTL substitution, yes.** `search_taper_grid` already computes a full
+   Banister CTL/ATL/TSB series (`load.ctl_atl_tsb_series`,
+   `03-periodization.md`) for its own TSB projection -- `ctl0` (CTL at
+   "now") IS already the decay-aware EWMA Andrew described, just not
+   previously used as the ramp floor. The floor is now `ctl0` directly (no
+   new computation). The ceiling is now a point-in-time CTL LOOKUP
+   (`ctl_at`, an O(1) dict read into the same already-computed series) at
+   the pre-layoff boundary date, rather than a second, independently
+   averaged number. CTL's own 42-day exponential decay supersedes the old
+   window-shrinking hack structurally, not just numerically -- old
+   (pre-layoff) history is naturally discounted relative to recent history
+   by the EWMA itself, with no manual window-capping mechanism needed at
+   all. A genuinely new capability came with this: the CTL walk is now
+   extended through to "today" (seeding a zero-load day at `as_of` when the
+   athlete has stopped logging entirely -- the same "missing day counts as
+   zero load" convention already used throughout `load.py`) rather than
+   stopping at her last logged day, so real elapsed time off is actually
+   reflected in `ctl0` even when she's stopped logging altogether.
+
+2. **A literal ACWR ratio/threshold, explicitly rejected.** This
+   codebase's own `load.py` already carries a LOW-confidence caveat on
+   ACWR as a swimmer-specific safety signal (`ACWR_ACUTE_WINDOW_DAYS`/
+   `ACWR_CHRONIC_WINDOW_DAYS`'s own citation block: elevated ACWR was
+   associated with shoulder pain in *youth* swimmers, Feijen S. et al.
+   2021, but the odds-ratio confidence interval's lower bound sits near
+   1.0 -- marginal -- and "ACWR methodology is broadly criticized," with a
+   separate Garmin-RunSafe cohort finding week-to-week ratio/ACWR a weak
+   predictor next to a simpler single-session-vs-30-day-longest check).
+   Adopting a literal ACWR ratio here would mean stacking a SECOND,
+   separately low-confidence methodology on top of one this codebase
+   already carries citation debt for, for no real gain over the CTL
+   machinery already sitting computed and unused in this exact module.
+   `taper_search.py` does not implement an ACWR ratio or any ACWR-derived
+   threshold anywhere.
+
+**Out-of-range fallback.** If the pre-layoff boundary date falls before the
+earliest day the athlete's logged history ever reaches (a short/incomplete
+logging history), `ctl_at` returns `None` -- the only way it can be
+"missing," since the CTL series never has gaps once it starts. In that
+case `search_taper_grid` falls back to the EARLIEST available CTL in the
+series: `ctl_atl_tsb_series` seeds CTL near 0 at the true start of walked
+history, so the earliest available point is the closest honest answer
+available for "what was her fitness before this history even starts,"
+rather than fabricating a number for a date the engine has no data reaching
+back to. `pre_layoff_baseline_used_earliest_fallback` in the tool's
+response says plainly whether this fallback was used.
+
+The BOUNDARY DATE the ceiling is looked up at is still governed by the
+value formerly named `RECENT_BASELINE_WINDOW_DAYS`, renamed
+`NO_RESTRICTION_PRE_LAYOFF_LOOKBACK_DAYS = 21` now that its only remaining
+role is picking a date (not sizing an averaging window): the active
+`HealthStatus.reported_at` date when one exists, or 21 days back from
+`anchor_date` as a generic "before recent" fallback when there's no active
+restriction on file. **Coach judgment / PROVISIONAL** -- no swim-specific
+citation pins this exact lookback; same posture as before.
 
 ## The ramp cap: `LIGHT_ONLY_RAMP_CAP_FRACTION = 0.55`
 

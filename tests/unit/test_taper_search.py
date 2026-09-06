@@ -12,6 +12,7 @@ from datetime import date, timedelta
 
 import pytest
 
+from swim_coach.load import ctl_atl_tsb_series, daily_loads
 from swim_coach.models import Athlete, Event, Workout
 from swim_coach.taper_search import (
     DECAY_GRID_MAX,
@@ -22,10 +23,9 @@ from swim_coach.taper_search import (
     TaperCandidate,
     _phase_day_load,
     _session_role,
+    ctl_at,
     generate_taper_sessions,
-    pre_layoff_baseline_daily_load,
     project_ramp_taper_series,
-    recent_baseline_daily_load,
     resolve_ramp_target,
     search_taper_grid,
     taper_volume_fraction,
@@ -86,7 +86,7 @@ def _steady_workouts(start: date, end: date, *, daily_load: float) -> list[Worko
     return workouts
 
 
-# --- taper_volume_fraction / recent_baseline_daily_load (unchanged math) ------
+# --- taper_volume_fraction (unchanged math) ------------------------------------
 
 
 def test_taper_volume_fraction_matches_scaffold_macro_formula():
@@ -94,28 +94,38 @@ def test_taper_volume_fraction_matches_scaffold_macro_formula():
     assert taper_volume_fraction(4, 0.30) == pytest.approx(0.0)  # floored at 0
 
 
-def test_recent_baseline_daily_load_treats_missing_days_as_zero():
-    anchor = date(2026, 8, 1)
-    loads = {anchor: 100.0, anchor - timedelta(days=1): 100.0}
-    # window_days=7, only 2 of 7 days have logged load -> average is diluted
-    result = recent_baseline_daily_load(loads, anchor, window_days=7)
-    assert result == pytest.approx(200.0 / 7)
+# --- ctl_at ----------------------------------------------------------------
+# CTL-substitution replaces the old flat-mean recent/pre-layoff baselines --
+# see module docstring's dated update paragraph. `ctl_at` is the small O(1)
+# lookup helper that makes the pre-layoff (ceiling) side of that
+# substitution possible: a point-in-time CTL read out of an
+# already-computed `ctl_atl_tsb_series` result, not a fresh average.
 
 
-# --- pre_layoff_baseline_daily_load -------------------------------------------
-
-
-def test_pre_layoff_baseline_excludes_days_on_or_after_boundary():
-    boundary = date(2026, 8, 20)
+def test_ctl_at_exact_date_hit():
     loads = {
-        date(2026, 8, 10): 400.0,
-        date(2026, 8, 19): 400.0,
-        date(2026, 8, 20): 10.0,  # on/after boundary must not count
-        date(2026, 8, 21): 10.0,
+        date(2026, 8, 1): 100.0,
+        date(2026, 8, 2): 100.0,
+        date(2026, 8, 3): 100.0,
     }
-    result = pre_layoff_baseline_daily_load(loads, boundary, window_days=10)
-    # window covers 8/10..8/19 inclusive (10 days ending the day before boundary)
-    assert result == pytest.approx(400.0 * 2 / 10)
+    series = ctl_atl_tsb_series(loads)
+    target = date(2026, 8, 2)
+    expected = next(ctl for d, ctl, _atl, _tsb in series if d == target)
+    assert ctl_at(series, target) == pytest.approx(expected)
+
+
+def test_ctl_at_before_series_start_returns_none():
+    # `ctl_at` itself stays honest -- "not available from this history," not
+    # a fabricated number (see its own docstring). It is the CALLER
+    # (`search_taper_grid`) that decides how to handle a `None`, documenting
+    # its own fallback choice -- see the search_taper_grid-level tests below.
+    loads = {date(2026, 8, 1): 100.0, date(2026, 8, 2): 100.0}
+    series = ctl_atl_tsb_series(loads)
+    assert ctl_at(series, date(2026, 7, 1)) is None
+
+
+def test_ctl_at_empty_series_returns_none():
+    assert ctl_at([], date(2026, 8, 1)) is None
 
 
 # --- resolve_ramp_target -------------------------------------------------------
@@ -367,8 +377,19 @@ def test_no_training_restriction_never_produces_a_ramp_candidate():
 def test_light_only_caps_ramp_at_documented_fraction_of_pre_layoff_baseline():
     anchor = date(2026, 9, 5)
     reported_at = anchor - timedelta(days=20)
+    # 220 days of steady pre-layoff load -- long enough (CTL_TIME_CONSTANT_
+    # DAYS=42) for CTL to have converged to within ~3% of the true 400.0
+    # steady-state load by `reported_at` (verified: 389.7, a 2.6% gap),
+    # comfortably inside this test's rel=0.05 tolerance. A short pre-layoff
+    # window (the old flat-mean test used 40 days) would read CTL
+    # meaningfully below 400.0 -- CTL is an EWMA that climbs toward, but
+    # never reaches, a constant load ceiling -- so this window is widened
+    # specifically to isolate "does the cap fraction apply correctly to the
+    # pre-layoff CTL ceiling" from "has CTL fully converged yet," which is a
+    # separate, already-covered concern (see the CTL-substitution/as_of-
+    # extension tests below).
     pre_layoff = _steady_workouts(
-        reported_at - timedelta(days=40), reported_at - timedelta(days=1), daily_load=400.0
+        reported_at - timedelta(days=220), reported_at - timedelta(days=1), daily_load=400.0
     )
     recent = _steady_workouts(reported_at, anchor, daily_load=50.0)
     athlete = _athlete()
@@ -386,53 +407,44 @@ def test_light_only_caps_ramp_at_documented_fraction_of_pre_layoff_baseline():
     assert result["ramp_permitted"] is True
     assert result["ramp_cap_fraction_applied"] == LIGHT_ONLY_RAMP_CAP_FRACTION
     assert result["pre_layoff_baseline_daily_load"] == pytest.approx(400.0, rel=0.05)
-    expected_target = 400.0 * LIGHT_ONLY_RAMP_CAP_FRACTION
-    assert result["ramp_target_daily_load"] == pytest.approx(expected_target, rel=0.05)
+    expected_target = result["pre_layoff_baseline_daily_load"] * LIGHT_ONLY_RAMP_CAP_FRACTION
+    assert result["ramp_target_daily_load"] == pytest.approx(expected_target)
     # The cap must never quietly balloon back toward the pre-injury baseline.
     assert result["ramp_target_daily_load"] < result["pre_layoff_baseline_daily_load"]
-
-
-def test_recent_baseline_window_does_not_reach_before_a_very_recent_restriction():
-    """Real bug caught during this build's own validation pass: a
-    restriction reported only a few days ago must not have its 'current
-    recent baseline' diluted by weeks of real pre-injury training still
-    sitting inside a plain RECENT_BASELINE_WINDOW_DAYS-long window -- the
-    effective recent-baseline window must be capped at how many days have
-    actually elapsed since the restriction was reported."""
-    anchor = date(2026, 9, 5)
-    reported_at = anchor - timedelta(days=5)  # restriction reported very recently
-    pre_layoff = _steady_workouts(
-        reported_at - timedelta(days=40), reported_at - timedelta(days=1), daily_load=300.0
-    )
-    # Only 6 days of real post-restriction history (reported_at..anchor),
-    # at a much lower load -- a full RECENT_BASELINE_WINDOW_DAYS (21-day)
-    # window would still be dominated by the 300.0 pre-injury days above.
-    recent = _steady_workouts(reported_at, anchor, daily_load=50.0)
-    athlete = _athlete()
-    event = _event(date(2026, 9, 18))
-
-    result = search_taper_grid(
-        athlete=athlete,
-        event=event,
-        workouts=pre_layoff + recent,
-        as_of=anchor,
-        restriction="light_only",
-        restriction_reported_at=reported_at,
-    )
-
-    # The reported recent baseline must reflect ONLY the 6 real post-
-    # restriction days (all at 50.0), not a blend with the 300.0 pre-injury
-    # regime -- i.e. it must land near 50.0, nowhere near a 21-day blended
-    # average (which would sit far higher).
-    assert result["recent_baseline_daily_load"] == pytest.approx(50.0, rel=0.05)
-    assert result["recent_baseline_window_days"] == 6
 
 
 def test_no_active_health_status_collapses_to_hold_then_decay_regression():
     """With no restriction and a steady (unchanging) training history, the
     ramp is mathematically a no-op -- varying ramp_days across candidates for
     the same (taper_weeks, decay) pair must produce identical projected TSB,
-    proving this build didn't change behavior for the non-injury case."""
+    proving this build didn't change behavior for the non-injury case.
+
+    **Why this invariant still holds EXACTLY (not just approximately) under
+    CTL substitution, verified by actually running this test, not assumed:**
+    under CTL substitution `resolve_ramp_target`'s two inputs are `ctl0`
+    (current recent baseline, at `anchor_date`) and `ctl_at(series,
+    pre_layoff_boundary)` (pre-layoff baseline, at an EARLIER date --
+    `anchor_date - NO_RESTRICTION_PRE_LAYOFF_LOOKBACK_DAYS` when, as here,
+    there's no active HealthStatus). For a steady, constant-load history
+    with no gaps, `ctl_atl_tsb_series`'s CTL recursion (`CTL_t = CTL_{t-1} +
+    (load_t - CTL_{t-1}) / tau`, seeded at 0) is STRICTLY MONOTONICALLY
+    INCREASING day over day -- every day's CTL is closer to (but never
+    reaches) the constant load ceiling than the day before. That makes
+    `ctl0` (the LATEST point in the series) the running maximum over the
+    whole walked history, so it is always >= `ctl_at` of any earlier date
+    in the same series. `resolve_ramp_target`'s no-restriction branch is
+    `max(current_recent_baseline, pre_layoff_baseline)` -- which therefore
+    always evaluates to `current_recent_baseline` (`ctl0`) exactly, not
+    merely approximately: `max()` returns the exact object/value passed in,
+    with no new floating-point computation in between. So
+    `ramp_target_daily_load == current_baseline_daily_load` is bit-for-bit
+    true here, and `_phase_day_load`'s documented no-op short-circuit for
+    that exact equality applies unchanged -- hence the byte-identical
+    projected-TSB collapse this test asserts still holds precisely, for the
+    same structural reason it did under the old flat-mean baselines (there,
+    both baselines were close-to-equal means over overlapping steady-state
+    windows; here, one is provably >= the other via CTL monotonicity, and
+    happens to be selected exactly by `max()`)."""
     anchor = date(2026, 8, 1)
     workouts = _steady_workouts(anchor - timedelta(days=60), anchor, daily_load=300.0)
     athlete = _athlete()
@@ -448,6 +460,7 @@ def test_no_active_health_status_collapses_to_hold_then_decay_regression():
 
     assert result["ramp_permitted"] is True
     assert result["ramp_cap_fraction_applied"] is None
+    assert result["ramp_target_daily_load"] == pytest.approx(result["recent_baseline_daily_load"])
     by_shape: dict[tuple[int, float], set[float]] = {}
     for candidate in result["candidates"]:
         if not candidate.fits_available_runway:
@@ -458,6 +471,189 @@ def test_no_active_health_status_collapses_to_hold_then_decay_regression():
     # regardless of ramp_days, since ramp_target == current baseline here.
     for key, tsb_values in by_shape.items():
         assert len(tsb_values) == 1, f"{key} produced divergent TSB across ramp_days: {tsb_values}"
+
+
+# --- CTL substitution: the real behavioral change over flat-mean baselines -----
+
+
+def test_ctl_substitution_recent_baseline_is_decay_aware_unlike_a_frozen_flat_mean():
+    """The core claim behind this build (Andrew's own ask: 'ACWR would
+    account for decay of fitness due to time off... instead of static
+    trailing-maximum values'), proven end to end rather than asserted:
+
+    An athlete stops logging entirely once injured (this module's own real
+    motivating scenario -- see module docstring). The OLD flat-mean system
+    computed `recent_baseline_daily_load` as a plain mean over the
+    `window_days` ending at `anchor_date`, where `anchor_date` was always
+    the athlete's LAST LOGGED day -- so if she stops logging, that number
+    is FROZEN at whatever her last active window looked like, no matter how
+    much real time (and real detraining) has since passed. The NEW
+    CTL-substituted system's `anchor_date`/`ctl0` are extended through to
+    `as_of` (today) whenever she's stopped logging (see search_taper_grid's
+    own as_of-extension docstring paragraph) -- so `ctl0` keeps decaying
+    for every real day of the gap, correctly reflecting detraining the old
+    frozen number could never see.
+
+    This test reproduces the old flat-mean number by hand (the function
+    itself is deleted -- CLAUDE.md forbids dead code -- but its 21-day
+    trailing-mean arithmetic is trivial to reproduce inline for this
+    A/B comparison) and shows the new CTL-based number is meaningfully
+    LOWER for real elapsed time off, and that this creates real ramp
+    headroom the old system would never have proposed.
+    """
+    as_of = date(2026, 9, 5)  # "today"
+    last_logged = as_of - timedelta(days=20)  # stopped logging 20 days ago
+    pre_injury_start = last_logged - timedelta(days=90)
+    workouts = _steady_workouts(pre_injury_start, last_logged, daily_load=300.0)
+    athlete = _athlete()
+    event = _event(as_of + timedelta(days=40))
+
+    # --- the OLD flat-mean number, reproduced by hand for comparison only ---
+    old_recent_window_days = 21
+    old_loads = daily_loads(workouts, athlete=athlete)
+    old_naive_recent_baseline = sum(
+        old_loads.get(last_logged - timedelta(days=i), 0.0) for i in range(old_recent_window_days)
+    ) / old_recent_window_days
+    # Entirely inside the steady 300.0 regime (last_logged is 90 days into
+    # it) -- the old system, frozen at last_logged, would have reported her
+    # recent baseline as essentially her full pre-injury load.
+    assert old_naive_recent_baseline == pytest.approx(300.0)
+
+    # --- the NEW CTL-substituted number ---
+    result = search_taper_grid(
+        athlete=athlete,
+        event=event,
+        workouts=workouts,
+        as_of=as_of,
+        restriction=None,
+    )
+
+    assert result["anchor_date"] == as_of  # decayed all the way through to today
+    new_recent_baseline = result["recent_baseline_daily_load"]
+    assert new_recent_baseline < old_naive_recent_baseline
+    # Not just numerically lower -- meaningfully so (a real, observable
+    # decay signal, not a rounding-noise difference).
+    assert new_recent_baseline < old_naive_recent_baseline * 0.75
+
+    # --- and this creates real ramp headroom the old system would have
+    # missed entirely (old target ~= old recent baseline, since both sides
+    # of its max() sit in the same steady 300.0 regime -> ~0 ramp proposed
+    # for an athlete who has, in reality, detrained for three weeks) ---
+    new_ramp_target = result["ramp_target_daily_load"]
+    new_ramp_headroom = new_ramp_target - new_recent_baseline
+    old_ramp_headroom = 0.0  # old system: both baselines ~300, no ramp needed
+    assert new_ramp_headroom > old_ramp_headroom
+    assert new_ramp_headroom > 50.0  # a real, substantial ramp, not noise
+
+
+def test_search_taper_grid_extends_ctl_decay_through_as_of_when_athlete_stopped_logging():
+    """Direct test of the as_of-extension mechanism itself (search_taper_
+    grid's own docstring paragraph): when the athlete's last logged day is
+    well before `as_of`, a zero-load day is seeded at `as_of` so
+    `ctl_atl_tsb_series` walks all the way to today -- `anchor_date` becomes
+    `as_of`, not the stale last-logged day, and `ctl0` reflects real decay
+    through the gap."""
+    as_of = date(2026, 9, 5)
+    last_logged = as_of - timedelta(days=10)
+    workouts = _steady_workouts(last_logged - timedelta(days=60), last_logged, daily_load=200.0)
+    athlete = _athlete()
+    event = _event(as_of + timedelta(days=30))
+
+    result_extended = search_taper_grid(
+        athlete=athlete, event=event, workouts=workouts, as_of=as_of, restriction=None
+    )
+    result_unextended = search_taper_grid(
+        athlete=athlete, event=event, workouts=workouts, as_of=last_logged, restriction=None
+    )
+
+    assert result_extended["anchor_date"] == as_of
+    assert result_unextended["anchor_date"] == last_logged
+    # Ten more days of zero-load decay must measurably lower ctl0/the
+    # recent baseline versus stopping the walk at the last logged day.
+    assert result_extended["ctl0"] < result_unextended["ctl0"]
+    assert result_extended["recent_baseline_daily_load"] < result_unextended["recent_baseline_daily_load"]
+
+
+def test_search_taper_grid_as_of_extension_is_noop_when_as_of_not_after_last_logged_day():
+    """Guard: the extension must ONLY ever extend the walked range forward,
+    never touch it when as_of is on or before the last logged day (the
+    ordinary case -- an athlete who logged something today or very
+    recently) -- must not corrupt the walk range backwards either."""
+    last_logged = date(2026, 9, 5)
+    workouts = _steady_workouts(last_logged - timedelta(days=30), last_logged, daily_load=150.0)
+    athlete = _athlete()
+    event = _event(last_logged + timedelta(days=30))
+
+    result_equal = search_taper_grid(
+        athlete=athlete, event=event, workouts=workouts, as_of=last_logged, restriction=None
+    )
+    assert result_equal["anchor_date"] == last_logged
+
+    # as_of strictly BEFORE the last logged day -- the walk must still end
+    # at the real latest logged day, not be truncated backward to as_of.
+    result_before = search_taper_grid(
+        athlete=athlete,
+        event=event,
+        workouts=workouts,
+        as_of=last_logged - timedelta(days=5),
+        restriction=None,
+    )
+    assert result_before["anchor_date"] == last_logged
+    assert result_before["ctl0"] == pytest.approx(result_equal["ctl0"])
+
+
+# --- pre_layoff_baseline: CTL lookup, in-range and out-of-range fallback -------
+
+
+def test_pre_layoff_baseline_ctl_lookup_normal_in_range_case():
+    reported_at = date(2026, 9, 1)
+    anchor = date(2026, 9, 10)
+    workouts = _steady_workouts(reported_at - timedelta(days=60), anchor, daily_load=250.0)
+    athlete = _athlete()
+    event = _event(anchor + timedelta(days=30))
+
+    result = search_taper_grid(
+        athlete=athlete,
+        event=event,
+        workouts=workouts,
+        as_of=anchor,
+        restriction="light_only",
+        restriction_reported_at=reported_at,
+    )
+
+    series = ctl_atl_tsb_series(daily_loads(workouts, athlete=athlete))
+    expected = ctl_at(series, reported_at)
+    assert expected is not None  # in range for this scenario -- sanity check
+    assert result["pre_layoff_baseline_daily_load"] == pytest.approx(expected)
+    assert result["pre_layoff_baseline_used_earliest_fallback"] is False
+
+
+def test_pre_layoff_baseline_ctl_lookup_falls_back_to_earliest_when_boundary_predates_history():
+    # Restriction reported before there is ANY logged history to look up a
+    # pre-layoff CTL at (a short/incomplete logging history) -- ctl_at
+    # returns None for that out-of-range date, and search_taper_grid falls
+    # back to the earliest available CTL in the series (see search_taper_
+    # grid's own docstring paragraph on this fallback and why).
+    anchor = date(2026, 9, 5)
+    history_start = anchor - timedelta(days=5)  # only 5 days of real history
+    reported_at = anchor - timedelta(days=15)  # predates all logged history
+    workouts = _steady_workouts(history_start, anchor, daily_load=100.0)
+    athlete = _athlete()
+    event = _event(anchor + timedelta(days=30))
+
+    result = search_taper_grid(
+        athlete=athlete,
+        event=event,
+        workouts=workouts,
+        as_of=anchor,
+        restriction="light_only",
+        restriction_reported_at=reported_at,
+    )
+
+    series = ctl_atl_tsb_series(daily_loads(workouts, athlete=athlete))
+    assert ctl_at(series, reported_at) is None  # confirms this scenario is genuinely out of range
+    assert result["pre_layoff_baseline_daily_load"] == pytest.approx(series[0][1])
+    assert result["pre_layoff_baseline_used_earliest_fallback"] is True
 
 
 def test_search_taper_grid_raises_on_no_workouts():
