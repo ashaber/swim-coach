@@ -67,6 +67,7 @@ def test_request_shape_includes_tools(client, fake_claude_chat_factory) -> None:
         "replace_week_plan",
         "set_event_active_status",
         "propose_session_adjustment",
+        "propose_injury_adapted_taper",
     }
 
 

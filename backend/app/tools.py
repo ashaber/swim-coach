@@ -145,10 +145,20 @@ from pydantic import ValidationError
 
 from swim_coach.adapt import adapt_week
 from swim_coach.load import estimate_hr_max
-from swim_coach.models import Athlete, Event, Feedback, HealthStatus, Workout, WorkoutStructure
+from swim_coach.models import (
+    Athlete,
+    Event,
+    Feedback,
+    HealthStatus,
+    Session,
+    WeekPlan,
+    Workout,
+    WorkoutStructure,
+)
 from swim_coach.ow_session_templates import build_ow_session
 from swim_coach.plan import (
     SESSION_ADJUSTMENT_INCREASE_CAP_PCT,
+    WEEKLY_VOLUME_RAMP_CAP,
     _duration_min_for_distance,
     adjust_session,
     count_structured_steps,
@@ -156,9 +166,14 @@ from swim_coach.plan import (
     scaffold_macro,
 )
 from swim_coach.store import StoreInterface
+from swim_coach.taper_search import (
+    TaperCandidate,
+    generate_taper_sessions,
+    search_taper_grid,
+)
 from swim_coach.workout_templates import TemplatePreference, render_prose, resolve_template
 
-from app.context import iso_week_str, summarize_rollup
+from app.context import _active_health_statuses, iso_week_str, summarize_rollup
 from app.garmin_push import push_on_demand
 from app.health_status_helpers import link_health_status_feedback
 from app.load_helpers import workout_load_au
@@ -1260,6 +1275,95 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
             },
             "required": ["iso_week", "date", "direction", "reason"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "propose_injury_adapted_taper",
+        "description": (
+            "Draft (or, with confirm=true, persist) an injury/layoff-aware "
+            "ramp-then-taper plan for the remaining runway to a target "
+            "event. Call this when the conversation is heading toward "
+            "'what should the plan look like given this injury/layoff and "
+            "the upcoming event' -- a compressed, short-notice return to "
+            "training ahead of a race, not an ordinary weekly adaptation "
+            "(use propose_adaptation for that).\n\n"
+            "Runs swim_coach.taper_search's grid search: a genuine RAMP "
+            "phase (rebuilding volume from the athlete's current recent "
+            "training load toward a restriction-capped target) followed by "
+            "the usual taper decay down to race day, then generates a real "
+            "day-by-day session preview (dates, sport, distance, duration, "
+            "purpose) for the recommended shape. By default it reads the "
+            "athlete's current ACTIVE HealthStatus automatically (most-"
+            "severe-restriction-first if more than one is on file) -- pass "
+            "restriction_override only to explore a specific 'what if' "
+            "restriction scenario instead. If the active restriction is "
+            "no_training, the response's `no_training_notice` field will be "
+            "set and NO candidate proposes any load above her current "
+            "baseline -- read that field and say so plainly if it's set; "
+            "never present that output as an ordinary, upbeat recommendation. "
+            "Also check `exceeds_claude_md_volume_safety_rail`: if true, the "
+            "proposed ramp exceeds this project's own standing volume-"
+            "increase safety threshold (see `ramp_pct_increase_over_recent_"
+            "baseline` for the actual number) -- name this explicitly to the "
+            "athlete/coach and get real, explicit confirmation before ever "
+            "calling this again with confirm=true, don't just proceed because "
+            "the TSB math looks fine. And check `other_in_band_candidates_"
+            "exist`: if true, the recommended shape was one of SEVERAL that "
+            "would equally land race-day TSB in range -- it was picked "
+            "because it happened to be the mildest/fastest ramp among ties, "
+            "not because it's provably the single best choice; mention this "
+            "when a more gradual alternative might genuinely be preferred "
+            "(e.g. for anxiety/confidence reasons, per this athlete's own "
+            "real advisory-panel input), rather than presenting it as the "
+            "one obviously-correct answer.\n\n"
+            "Draft-then-confirm, same shape as propose_adaptation/"
+            "replace_week_plan: confirm=false (default) only computes and "
+            "returns the candidate shape + session preview as JSON with "
+            "\"persisted\": false, never touching any week on file. "
+            "confirm=true writes the generated sessions into the athlete's "
+            "week plan(s), REPLACING whatever sessions already exist on the "
+            "covered dates (this tool's whole point is to override the "
+            "plan for those days). Show the draft to the athlete/coach and "
+            "get their explicit agreement in a NEW message before calling "
+            "again with confirm=true -- never pass confirm=true on the "
+            "first call for a given request, same discipline as every "
+            "other draft-then-confirm tool in this file."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "event": {
+                    "type": "string",
+                    "description": (
+                        "The target event: its id, an id prefix, or its name "
+                        "(case-insensitive)."
+                    ),
+                },
+                "restriction_override": {
+                    "type": "string",
+                    "enum": ["none", "light_only", "no_training"],
+                    "description": (
+                        "Force a specific restriction assumption instead of "
+                        "reading the athlete's current active HealthStatus -- "
+                        "for exploring a 'what if' scenario only. Omit to use "
+                        "the athlete's real current active health status "
+                        "automatically (or no restriction at all if none is "
+                        "on file)."
+                    ),
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "description": (
+                        "Default false: compute and return the candidate "
+                        "shape + session preview as a draft only, never "
+                        "persisting. Set true ONLY after the athlete/coach "
+                        "has explicitly agreed to the draft shown in a prior "
+                        "turn -- this then persists the generated sessions."
+                    ),
+                },
+            },
+            "required": ["event"],
             "additionalProperties": False,
         },
     },
@@ -2696,6 +2800,308 @@ def _handle_propose_session_adjustment(
     return response
 
 
+def _find_event_by_ref(events: list[Event], query: str) -> Event | None:
+    """Match an event by UUID prefix (case-insensitive) or exact,
+    case-insensitive name -- same convention as `swim_coach.cli`'s own
+    `_find_event` helper, reimplemented here rather than imported since
+    `tools.py` deliberately doesn't depend on the CLI module. Deliberately
+    does NOT filter on `Event.active`, same as every other event lookup in
+    this file (`draft_macro_plan`/`replace_macro_plan`/`propose_adaptation`)
+    -- an inactive event must still resolve."""
+    q = query.strip().lower()
+    for event in events:
+        if str(event.id).lower().startswith(q):
+            return event
+    for event in events:
+        if event.name.strip().lower() == q:
+            return event
+    return None
+
+
+def _persist_taper_sessions(
+    store: StoreInterface, slug: str, sessions: list[Session], rationale: str
+) -> None:
+    """Writes `generate_taper_sessions`' output into the athlete's week
+    plan(s), grouped by ISO week (a short-notice taper's date range
+    commonly spans two calendar weeks).
+
+    For an ISO week that already has a plan on file, every existing
+    session whose `date` falls on a day this tool generated a session for
+    is REPLACED (this tool's whole point is to override the plan for those
+    specific days, per `HealthStatus`-driven safety judgment) -- every
+    other date's sessions in that week are left untouched. For an ISO week
+    with no plan on file at all yet, a minimal new `WeekPlan` is created
+    carrying just the generated sessions (`meso_block="taper"`, since an
+    injury-adapted ramp-then-taper is, by construction, always a
+    taper-phase plan; `target_volume_m` is the sum of the generated
+    sessions' own swim distance, since there is no macro block volume
+    target to inherit for an ad hoc override week like this one).
+
+    Every touched week's `adaptation_rationale` is overwritten with this
+    call's own JSON rationale -- same "durable, inspectable machine
+    reasoning" convention `adapt_week`/`propose_adaptation` already use.
+    """
+    by_iso_week: dict[str, list[Session]] = {}
+    for session in sessions:
+        by_iso_week.setdefault(iso_week_str(session.date), []).append(session)
+
+    for iso_week, group in by_iso_week.items():
+        covered_dates = {s.date for s in group}
+        existing = store.load_week(slug, iso_week)
+        if existing is None:
+            swim_total_m = sum(s.distance_m or 0 for s in group)
+            week = WeekPlan(
+                id=uuid.uuid4(),
+                athlete_id=group[0].athlete_id,
+                iso_week=iso_week,
+                meso_block="taper",
+                focus="injury/layoff-adapted ramp-then-taper override (propose_injury_adapted_taper)",
+                target_volume_m=swim_total_m,
+                sessions=sorted(group, key=lambda s: s.date),
+                adaptation_rationale=rationale,
+                draft=False,
+            )
+        else:
+            kept = [s for s in existing.sessions if s.date not in covered_dates]
+            existing.sessions = sorted(kept + group, key=lambda s: s.date)
+            existing.adaptation_rationale = rationale
+            week = existing
+        store.save_week(slug, week)
+
+
+def _handle_propose_injury_adapted_taper(
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str
+) -> dict[str, Any]:
+    """See this tool's TOOLS_SCHEMA description for the athlete/coach-facing
+    contract. Engine math lives entirely in `swim_coach.taper_search`
+    (`search_taper_grid` + `generate_taper_sessions`) -- this handler's own
+    job is purely: resolve the event and the current restriction, call the
+    engine, shape the JSON response, and (only on `confirm=True`) persist
+    via `_persist_taper_sessions` above. No plan math happens in this
+    function itself, per CLAUDE.md's "engine owns ALL plan math" rule.
+
+    Restriction resolution: `restriction_override` (explicit "what if"
+    input) always wins when given. Otherwise this reads the athlete's real
+    `HealthStatus` history via `store.list_health_status` and
+    `app.context._active_health_statuses` (the same "all currently-
+    unresolved entries, most-severe-restriction-first" helper the per-
+    request context block already uses) and takes the single most severe
+    active entry's `restriction`/`reported_at` -- or `None`/`None` if no
+    active entry exists at all. `restriction_source` in the response always
+    says plainly which path was taken, so the model can tell the athlete/
+    coach whether this reflects a real logged status or a hypothetical.
+    """
+    event_ref = input_data.get("event")
+    if not event_ref:
+        return {"error": "event is required"}
+
+    restriction_override = input_data.get("restriction_override")
+    if restriction_override is not None and restriction_override not in (
+        "none", "light_only", "no_training",
+    ):
+        return {"error": f"invalid restriction_override {restriction_override!r}"}
+
+    confirm = bool(input_data.get("confirm", False))
+
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load athlete profile: {exc}"}
+
+    try:
+        events = store.load_events(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load events: {exc}"}
+    event = _find_event_by_ref(events, event_ref)
+    if event is None:
+        known = [{"id": str(e.id), "name": e.name} for e in events]
+        return {"error": f"no event matching {event_ref!r}; known events: {known}"}
+
+    try:
+        workouts = store.list_workouts(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load workouts: {exc}"}
+    wellness = store.list_wellness(slug)
+
+    if restriction_override is not None:
+        restriction = restriction_override
+        restriction_reported_at = None
+        restriction_source = "explicit restriction_override -- not read from HealthStatus"
+    else:
+        try:
+            statuses = store.list_health_status(slug)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"could not load health status history: {exc}"}
+        active = _active_health_statuses(statuses)
+        if active:
+            restriction = active[0].restriction
+            restriction_reported_at = active[0].reported_at.date()
+            restriction_source = (
+                f"read from the athlete's active HealthStatus (restriction="
+                f"{restriction!r}, reported {restriction_reported_at.isoformat()})"
+            )
+        else:
+            restriction = None
+            restriction_reported_at = None
+            restriction_source = "no active HealthStatus on file -- treated as no restriction"
+
+    try:
+        result = search_taper_grid(
+            athlete=athlete,
+            event=event,
+            workouts=workouts,
+            wellness=wellness,
+            as_of=date.today(),
+            restriction=restriction,
+            restriction_reported_at=restriction_reported_at,
+        )
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    recommended: TaperCandidate = result["recommended"]
+    sessions = generate_taper_sessions(
+        athlete=athlete,
+        event=event,
+        anchor_date=result["anchor_date"],
+        race_date=result["race_date"],
+        current_baseline_daily_load=result["recent_baseline_daily_load"],
+        ramp_target_daily_load=result["ramp_target_daily_load"],
+        ramp_days=recommended.ramp_days,
+        taper_start_date=recommended.taper_start_date,
+        volume_fraction=recommended.volume_fraction,
+        restriction=restriction,
+        # Real review bug fixed before merge: generation used to start
+        # from result["anchor_date"] (the athlete's last LOGGED workout
+        # day) even when that day was well in the past (e.g. an injured
+        # athlete who's stopped logging) -- backdating generated, and on
+        # confirm=True persisted, sessions into already-past calendar
+        # days. as_of clamps generation to never start before today.
+        as_of=date.today(),
+    )
+
+    no_training_notice = None
+    if restriction == "no_training":
+        no_training_notice = (
+            "Active restriction is no_training: this plan does NOT propose "
+            "any ramp above her current recent training baseline anywhere "
+            "-- every day is either a hold at that (very low, post-"
+            "restriction) baseline or full rest, per CLAUDE.md's "
+            "stop-and-assess safety rail. This is not an ordinary "
+            "recommendation to present cheerfully -- say plainly that no "
+            "training increase is being proposed while this restriction "
+            "stands, and that it should be revisited once the restriction "
+            "is resolved or superseded by a less restrictive entry."
+        )
+
+    # Real review finding fixed before merge: this response never computed
+    # or surfaced the ramp's size against CLAUDE.md's own explicit safety
+    # rail ("weekly volume +<=8%... without explicit athlete confirmation")
+    # -- a ramp from a depressed post-injury baseline to the capped target
+    # can easily be a >100% jump over just a few days, and the calling
+    # model had to manually diff two raw numbers and independently
+    # remember the rule to catch that. Reuses `plan.WEEKLY_VOLUME_RAMP_CAP`
+    # (8%) as the reference threshold -- that constant is itself defined
+    # WEEK-over-week, not day-level daily-load-ramp-over-N-days like this
+    # comparison; there is no existing constant measuring exactly this
+    # shape of increase, so this is a Coach-judgment adaptation of the
+    # nearest cited number this codebase already commits to for "how fast
+    # is training load allowed to climb," not a separately-validated
+    # threshold for this specific comparison. Flagged honestly, not
+    # presented as more precise than it is.
+    baseline_for_pct = result["recent_baseline_daily_load"]
+    ramp_pct_increase = (
+        (result["ramp_target_daily_load"] - baseline_for_pct) / baseline_for_pct * 100
+        if baseline_for_pct > 0 else None
+    )
+    exceeds_volume_safety_rail = (
+        ramp_pct_increase is not None and ramp_pct_increase > WEEKLY_VOLUME_RAMP_CAP * 100
+    )
+
+    # Real review finding fixed before merge: `any_candidate_in_band` alone
+    # hides whether the recommended (mildest-ramp-first) candidate was the
+    # ONLY one that worked, or one of several equally-valid options --
+    # `min(fitting, key=...)` silently picks the first in iteration order
+    # (smallest ramp_days), so a more gradual ramp that scored identically
+    # on projected TSB never gets surfaced. Cheap to compute from data
+    # already in `result["candidates"]`; now explicit rather than implied.
+    in_band_count = sum(1 for c in result["candidates"] if c.in_band)
+
+    response: dict[str, Any] = {
+        "event_name": event.name,
+        "race_date": result["race_date"].isoformat(),
+        "anchor_date": result["anchor_date"].isoformat(),
+        "restriction": restriction,
+        "restriction_source": restriction_source,
+        "no_training_notice": no_training_notice,
+        "recent_baseline_daily_load": round(result["recent_baseline_daily_load"], 1),
+        "pre_layoff_baseline_daily_load": round(result["pre_layoff_baseline_daily_load"], 1),
+        "ramp_permitted": result["ramp_permitted"],
+        "ramp_cap_fraction_applied": result["ramp_cap_fraction_applied"],
+        "ramp_target_daily_load": round(result["ramp_target_daily_load"], 1),
+        "ramp_pct_increase_over_recent_baseline": (
+            round(ramp_pct_increase, 1) if ramp_pct_increase is not None else None
+        ),
+        "exceeds_claude_md_volume_safety_rail": exceeds_volume_safety_rail,
+        "tsb_band": result["tsb_band"],
+        "any_candidate_in_band": result["any_in_band"],
+        "in_band_candidate_count": in_band_count,
+        "other_in_band_candidates_exist": in_band_count > 1,
+        "recommended_shape": {
+            "ramp_days": recommended.ramp_days,
+            "hold_days": recommended.hold_days,
+            "taper_weeks": recommended.taper_weeks,
+            "decay": recommended.decay,
+            "ramp_end_date": recommended.ramp_end_date.isoformat(),
+            "taper_start_date": recommended.taper_start_date.isoformat(),
+            "projected_tsb": round(recommended.projected_tsb, 1),
+            "in_band": recommended.in_band,
+            "fits_available_runway": recommended.fits_available_runway,
+        },
+        "sessions": [
+            {
+                "date": s.date.isoformat(),
+                "sport": s.sport,
+                "distance_m": s.distance_m,
+                "duration_min": s.duration_min,
+                "purpose": s.purpose,
+            }
+            for s in sessions
+        ],
+        "persisted": False,
+    }
+
+    if not confirm:
+        return response
+
+    rationale = json.dumps(
+        {
+            "source": "propose_injury_adapted_taper",
+            "restriction": restriction,
+            "restriction_source": restriction_source,
+            "ramp_days": recommended.ramp_days,
+            "ramp_target_daily_load": round(result["ramp_target_daily_load"], 1),
+            "ramp_cap_fraction_applied": result["ramp_cap_fraction_applied"],
+            "taper_weeks": recommended.taper_weeks,
+            "decay": recommended.decay,
+            "projected_tsb": round(recommended.projected_tsb, 1),
+            "tsb_band": result["tsb_band"],
+        },
+        sort_keys=True,
+    )
+    _persist_taper_sessions(store, slug, sessions, rationale)
+
+    log.info(
+        "injury-adapted taper confirmed",
+        athlete=slug,
+        event_name=event.name,
+        restriction=restriction,
+        ramp_days=recommended.ramp_days,
+        taper_weeks=recommended.taper_weeks,
+    )
+    response["persisted"] = True
+    return response
+
+
 def _handle_set_event_active_status(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
     """Flips one `Event.active` flag and persists via `store.save_events`
     (the whole list, matching that store method's replace-the-list
@@ -2789,6 +3195,9 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "propose_session_adjustment": lambda input_data: _handle_propose_session_adjustment(
+            input_data, store=store, slug=slug
+        ),
+        "propose_injury_adapted_taper": lambda input_data: _handle_propose_injury_adapted_taper(
             input_data, store=store, slug=slug
         ),
     }

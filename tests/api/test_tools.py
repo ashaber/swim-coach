@@ -8,7 +8,7 @@ import base64
 import json
 import uuid
 from collections import Counter
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import uuid
@@ -17,6 +17,7 @@ import httpx
 import pytest
 from fakes import SpyFeedbackStore, make_workout
 from swim_coach.models import (
+    HealthStatus,
     MacroBlock,
     MacroPlan,
     Session,
@@ -3188,3 +3189,294 @@ def test_propose_session_adjustment_structured_content_scales_and_reports_step_c
     assert cooldown.duration_value == 200  # untouched
     assert interval.duration_value < 2000
     assert reloaded_target.distance_m == warmup.duration_value + interval.duration_value + cooldown.duration_value
+
+
+# --- propose_injury_adapted_taper ------------------------------------------------
+#
+# Exercises the real engine (`swim_coach.taper_search`) against the real
+# `athletes/renee` fixture tree's actual athlete profile/event (the real
+# UltraSwim 33.3 Greece event, event_date 2026-09-18, css_pace_s_per_100m
+# 90.0) -- see this file's own module docstring for why `athletes_dir` is a
+# realistic, isolated copy rather than a synthetic fixture. Workout history
+# is seeded per-test (the fixture tree ships only one real logged workout,
+# not enough to exercise a meaningful baseline) using relative-to-`date.
+# today()` offsets, never hardcoded absolute dates, so these tests stay
+# correct regardless of which real calendar date the suite runs on.
+
+
+def _seed_steady_workouts(
+    store: FileStore, athlete_id: uuid.UUID, *, end: date, days: int, daily_load: float
+) -> None:
+    """sRPE-scored (duration_min * rpe) workouts, one per day, for `days`
+    days ending at `end` (inclusive) -- lands exactly on `daily_load` AU/day,
+    same convention `tests/unit/test_taper_search.py` uses."""
+    duration_min = daily_load / 5
+    for i in range(days):
+        store.save_workout(
+            "renee",
+            make_workout(
+                id=uuid.uuid4(),
+                athlete_id=athlete_id,
+                date=end - timedelta(days=i),
+                sport="swim_ow",
+                source="manual",
+                distance_m=3000,
+                duration_min=duration_min,
+                rpe=5,
+            ),
+        )
+
+
+def test_propose_injury_adapted_taper_draft_does_not_persist(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    today = date.today()
+    _seed_steady_workouts(store, athlete.id, end=today, days=40, daily_load=300.0)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["propose_injury_adapted_taper"]({"event": GREECE_EVENT_NAME})
+
+    assert "error" not in result
+    assert result["persisted"] is False
+    assert result["event_name"] == GREECE_EVENT_NAME
+    assert result["sessions"], "expected a session preview"
+
+    reloaded = FileStore(base_dir=athletes_dir)
+    from app.context import iso_week_str
+
+    covered_iso_weeks = {
+        iso_week_str(date.fromisoformat(s["date"])) for s in result["sessions"]
+    }
+    for iso_week in covered_iso_weeks:
+        assert reloaded.load_week("renee", iso_week) is None
+
+
+def test_propose_injury_adapted_taper_confirm_persists_sessions(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    today = date.today()
+    _seed_steady_workouts(store, athlete.id, end=today, days=40, daily_load=300.0)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["propose_injury_adapted_taper"]({"event": GREECE_EVENT_NAME, "confirm": True})
+
+    assert "error" not in result
+    assert result["persisted"] is True
+
+    reloaded = FileStore(base_dir=athletes_dir)
+    from app.context import iso_week_str
+
+    for session_json in result["sessions"]:
+        session_date = date.fromisoformat(session_json["date"])
+        iso_week = iso_week_str(session_date)
+        week = reloaded.load_week("renee", iso_week)
+        assert week is not None, f"expected a persisted week for {iso_week}"
+        match = next((s for s in week.sessions if s.date == session_date), None)
+        assert match is not None, f"expected a persisted session on {session_date}"
+        assert match.sport == session_json["sport"]
+        assert "propose_injury_adapted_taper" in match.purpose or "engine" in match.purpose.lower()
+
+
+def test_propose_injury_adapted_taper_no_training_health_status_is_correctly_restricted(
+    athletes_dir,
+) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    today = date.today()
+    _seed_steady_workouts(store, athlete.id, end=today, days=40, daily_load=300.0)
+    store.save_health_status(
+        "renee",
+        HealthStatus(
+            id=uuid.uuid4(),
+            athlete_id=athlete.id,
+            reported_at=datetime.now(timezone.utc) - timedelta(days=1),
+            reported_by="athlete",
+            source="self_reported",
+            description="shoulder pain, told to stop training entirely",
+            restriction="no_training",
+        ),
+    )
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["propose_injury_adapted_taper"]({"event": GREECE_EVENT_NAME})
+
+    assert "error" not in result
+    assert result["restriction"] == "no_training"
+    assert result["ramp_permitted"] is False
+    assert result["ramp_cap_fraction_applied"] is None
+    assert result["no_training_notice"] is not None
+    assert result["recommended_shape"]["ramp_days"] == 0
+    assert result["ramp_target_daily_load"] <= result["recent_baseline_daily_load"] + 1e-6
+
+
+def test_propose_injury_adapted_taper_no_active_health_status_falls_back_to_normal(
+    athletes_dir,
+) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    today = date.today()
+    _seed_steady_workouts(store, athlete.id, end=today, days=40, daily_load=300.0)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["propose_injury_adapted_taper"]({"event": GREECE_EVENT_NAME})
+
+    assert "error" not in result
+    assert result["restriction"] is None
+    assert result["no_training_notice"] is None
+    assert "no active healthstatus" in result["restriction_source"].lower()
+
+
+def test_propose_injury_adapted_taper_restriction_override_bypasses_health_status(
+    athletes_dir,
+) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    today = date.today()
+    _seed_steady_workouts(store, athlete.id, end=today, days=40, daily_load=300.0)
+    store.save_health_status(
+        "renee",
+        HealthStatus(
+            id=uuid.uuid4(),
+            athlete_id=athlete.id,
+            reported_at=datetime.now(timezone.utc) - timedelta(days=1),
+            reported_by="athlete",
+            source="self_reported",
+            description="minor soreness",
+            restriction="light_only",
+        ),
+    )
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["propose_injury_adapted_taper"](
+        {"event": GREECE_EVENT_NAME, "restriction_override": "none"}
+    )
+
+    assert "error" not in result
+    assert result["restriction"] == "none"
+    assert "restriction_override" in result["restriction_source"]
+
+
+def test_propose_injury_adapted_taper_unknown_event_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["propose_injury_adapted_taper"]({"event": "Nonexistent Event"})
+
+    assert "error" in result
+
+
+def test_propose_injury_adapted_taper_resolves_event_by_id_prefix(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    events = store.load_events("renee")
+    greece = next(e for e in events if e.name == GREECE_EVENT_NAME)
+    today = date.today()
+    _seed_steady_workouts(store, athlete.id, end=today, days=40, daily_load=300.0)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["propose_injury_adapted_taper"]({"event": str(greece.id)[:8]})
+
+    assert "error" not in result
+    assert result["event_name"] == GREECE_EVENT_NAME
+
+
+def test_propose_injury_adapted_taper_missing_event_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["propose_injury_adapted_taper"]({})
+
+    assert "error" in result
+
+
+def test_propose_injury_adapted_taper_flags_ramp_exceeding_volume_safety_rail(
+    athletes_dir,
+) -> None:
+    # Real review finding fixed before merge: the response never computed
+    # or surfaced the ramp's size against CLAUDE.md's own standing volume-
+    # increase safety rail. A steep recent drop (post-injury, light_only)
+    # against a real pre-injury baseline produces a ramp target far more
+    # than plan.WEEKLY_VOLUME_RAMP_CAP (8%) above the athlete's current
+    # recent load -- this must be flagged explicitly, not left for the
+    # model to notice on its own.
+    from swim_coach.plan import WEEKLY_VOLUME_RAMP_CAP
+
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    today = date.today()
+    # Real pre-injury baseline (300 AU/day for weeks), THEN a steep recent
+    # drop to a depressed post-injury level -- current_recent_baseline
+    # (short window) reads low, pre_layoff_baseline (wider window, ending
+    # before the restriction) reads high, so the light_only-capped ramp
+    # target ends up well above the recent baseline.
+    _seed_steady_workouts(store, athlete.id, end=today - timedelta(days=4), days=40, daily_load=300.0)
+    _seed_steady_workouts(store, athlete.id, end=today, days=3, daily_load=20.0)
+    store.save_health_status(
+        "renee",
+        HealthStatus(
+            id=uuid.uuid4(),
+            athlete_id=athlete.id,
+            reported_at=datetime.now(timezone.utc) - timedelta(days=3),
+            reported_by="athlete",
+            source="self_reported",
+            description="shoulder injury, light training only",
+            restriction="light_only",
+        ),
+    )
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["propose_injury_adapted_taper"]({"event": GREECE_EVENT_NAME})
+
+    assert "error" not in result
+    assert result["ramp_pct_increase_over_recent_baseline"] is not None
+    assert result["ramp_pct_increase_over_recent_baseline"] > WEEKLY_VOLUME_RAMP_CAP * 100
+    assert result["exceeds_claude_md_volume_safety_rail"] is True
+
+
+def test_propose_injury_adapted_taper_response_reports_in_band_candidate_visibility(
+    athletes_dir,
+) -> None:
+    # Real review finding fixed before merge: any_candidate_in_band alone
+    # hid whether the recommended (mildest-ramp-first) candidate was the
+    # ONLY one that worked or one of several ties -- these fields must
+    # always be present and internally consistent.
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    today = date.today()
+    _seed_steady_workouts(store, athlete.id, end=today, days=40, daily_load=300.0)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["propose_injury_adapted_taper"]({"event": GREECE_EVENT_NAME})
+
+    assert "error" not in result
+    assert isinstance(result["in_band_candidate_count"], int)
+    assert result["in_band_candidate_count"] >= 0
+    assert result["any_candidate_in_band"] == (result["in_band_candidate_count"] > 0)
+    assert result["other_in_band_candidates_exist"] == (result["in_band_candidate_count"] > 1)
+
+
+def test_propose_injury_adapted_taper_never_generates_sessions_before_today(
+    athletes_dir,
+) -> None:
+    # Real review bug fixed before merge: generation used to start from the
+    # athlete's last LOGGED workout day even when that was well behind
+    # today -- exactly what happens for an injured athlete who's stopped
+    # logging. No generated session may be dated on or before today.
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    today = date.today()
+    stale_anchor = today - timedelta(days=6)
+    _seed_steady_workouts(store, athlete.id, end=stale_anchor, days=40, daily_load=300.0)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["propose_injury_adapted_taper"]({"event": GREECE_EVENT_NAME})
+
+    assert "error" not in result
+    assert result["anchor_date"] == stale_anchor.isoformat()
+    assert result["sessions"], "expected at least one generated session"
+    for s in result["sessions"]:
+        session_date = date.fromisoformat(s["date"])
+        assert session_date > today, (
+            f"session dated {session_date} is not after today ({today}) -- "
+            "would backdate into an already-past calendar day"
+        )
