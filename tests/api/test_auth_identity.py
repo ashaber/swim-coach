@@ -259,6 +259,15 @@ def _scoped_requests(client, headers: dict, target: str = "renee"):
     yield "POST /api/wellness", client.post(
         f"/api/wellness?athlete={target}", json={}, headers=headers
     )
+    # Athlete self-service health-status logging
+    # (web/coach-health-nav-and-athlete-self-log) -- same resolve_athlete
+    # scoping as workouts/wellness above.
+    yield "GET /api/health-status", client.get(
+        f"/api/health-status?athlete={target}", headers=headers
+    )
+    yield "POST /api/health-status", client.post(
+        f"/api/health-status?athlete={target}", json={}, headers=headers
+    )
     yield "GET /api/plan", client.get(f"/api/plan?athlete={target}", headers=headers)
     yield "GET /api/feedback", client.get(f"/api/feedback?athlete={target}", headers=headers)
     yield "POST /api/feedback", client.post(

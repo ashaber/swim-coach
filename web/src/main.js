@@ -21,6 +21,7 @@ import {
   createGrant, listGrants, revokeGrant,
   listCoachedAthletes, fetchCoachWorkouts, fetchCoachFeedback, fetchCoachLoad, fetchCoachPlan, replyToCoachFeedback,
   fetchCoachHealthStatus, postCoachHealthStatus, resolveCoachHealthStatus,
+  fetchHealthStatus, postHealthStatus,
   askAboutSession, askAboutWorkout,
 } from './api.js';
 import {
@@ -53,9 +54,10 @@ const LOAD_WINDOW_DAYS_KEY = 'swimcoach_load_window_days';
 // renderDashboardTab/renderTrainingDashboardBody.
 const KNOWN_TABS = ['plan', 'dashboard', 'checkin', 'coach', 'feedback', 'roster', 'settings'];
 // The roster tab's own sub-navigation (Build 2: Coach per-athlete sub-tab
-// restructure) -- see views.js's ROSTER_SUB_TABS/renderRosterSubTabBar for
-// the matching label/render side, and handleSelectRosterSubTab below.
-const ROSTER_SUB_TABS = ['conversations', 'dashboard', 'plan'];
+// restructure; 'health' added in web/coach-health-nav-and-athlete-self-log)
+// -- see views.js's ROSTER_SUB_TABS/renderRosterSubTabBar for the matching
+// label/render side, and handleSelectRosterSubTab below.
+const ROSTER_SUB_TABS = ['conversations', 'dashboard', 'plan', 'health'];
 // Chat sessions are keyed per-athlete in localStorage (see chat.js); this is
 // just the storage key used before any real identity has ever signed in.
 const SIGNED_OUT_CHAT_KEY = 'signed-out';
@@ -177,9 +179,10 @@ function createRosterState() {
     // {status, data, error} async-state shape as `workouts`/`feedback`/
     // `load` above.
     plan: { status: 'idle', data: null, error: null },
-    // Which of the roster's three sub-tabs (Build 2: Conversations /
-    // Workouts + Dashboard / Training Plan) is currently showing for the
-    // acted-as athlete -- see views.js's renderRosterTab/
+    // Which of the roster's four sub-tabs (Build 2: Conversations /
+    // Workouts + Dashboard / Training Plan; Health added in
+    // web/coach-health-nav-and-athlete-self-log) is currently showing for
+    // the acted-as athlete -- see views.js's renderRosterTab/
     // renderRosterSubTabBar. Defaults to 'dashboard', the sub-tab that used
     // to be the entire acting-as-athlete view before this split. Reset
     // alongside the other per-athlete slices above.
@@ -335,6 +338,38 @@ const state = {
   // leaving the Dashboard tab (setTab), same convention as workoutDetailId
   // below.
   logManualOpen: false,
+  // Athlete self-service health-status logging (web/coach-health-nav-and-
+  // athlete-self-log) -- a THIRD collapsed-by-default Dashboard-tab action
+  // alongside sync/manual-entry, same disclosure mechanic as
+  // logManualOpen just above (reset on leaving the Dashboard tab, same
+  // convention). Before this build there was no direct athlete-facing UI
+  // path to log a health status at all (only a coach via the roster, or
+  // the AI via chat's record_health_status tool).
+  healthStatusFormOpen: false,
+  // The athlete's own in-progress "log a health status" form draft -- same
+  // flat-object convention as state.roster.healthStatusForm, minus
+  // related_status_id (see views.js's renderHealthStatusLogSection doc
+  // comment for why this simpler self-service form skips it). Reset on a
+  // successful submit, same as the roster's own form.
+  healthStatusForm: {
+    description: '', restriction: 'light_only', source: 'self_reported', expected_review_date: '',
+    body_region: '', onset: '', severity: '',
+  },
+  // Submitting the athlete's own health-status form -- same {status, error}
+  // shape as state.roster.healthStatusSubmit.
+  healthStatusSubmit: { status: 'idle', error: null },
+  // The athlete's own health-status history (GET /api/health-status),
+  // fetched lazily the first time she opens the log form (see
+  // maybeLoadHealthStatus) -- same {status, data, error} async-state shape
+  // as state.roster.healthStatus, just self-scoped and read-only (no
+  // resolve action on this surface).
+  healthStatus: { status: 'idle', data: [], error: null },
+  // Same stale-response guard as state.roster.healthStatusVersion (see its
+  // own doc comment for the exact race it prevents): a slow-resolving GET
+  // that started BEFORE a submit, but resolves AFTER it, must never
+  // silently clobber the just-submitted entry with an older pre-submit
+  // snapshot. Incremented on every submit success.
+  healthStatusVersion: 0,
   // Whether the Dashboard tab's Training Dashboard feed (Build 1: the
   // merged Log+History tab) is showing the full completed+missed feed or
   // just the paginated recent slice, per views.js's
@@ -516,6 +551,10 @@ function renderTabContent() {
         askCoach: { feedback: state.feedbackEntries.data, form: state.askCoachForm, submit: state.askCoachSubmit },
         loadWindowDays: state.loadWindowDays,
         loadNarrativeExpanded: state.loadNarrativeExpanded,
+        healthStatusForm: state.healthStatusForm,
+        healthStatusSubmit: state.healthStatusSubmit,
+        healthStatusFormOpen: state.healthStatusFormOpen,
+        healthStatus: state.healthStatus,
       });
     case 'checkin':
       return renderCheckinTab({
@@ -1286,6 +1325,128 @@ async function handleSyncWorkouts() {
 function handleToggleManualLog() {
   state.logManualOpen = !state.logManualOpen;
   log.info('log.manual_toggle', { open: state.logManualOpen });
+  render();
+}
+
+// --- Athlete self-service health-status logging (web/coach-health-nav-and-
+// athlete-self-log) ----------------------------------------------------------
+// Same collapsed-by-default toggle + lazy-fetch-on-open pattern as
+// handleToggleManualLog/loadHistory just above, applied to the athlete's own
+// "Log health condition" Dashboard-tab action instead of the manual-entry
+// section.
+
+/** Fetches GET /api/health-status?athlete=<slug> -- the athlete's OWN
+ * health-status history, shown read-only below the log form (see views.js's
+ * renderHealthStatusOwnHistory). Same {status, data, error} fetch-lifecycle
+ * shape AND the same stale-response guard (state.healthStatusVersion) as
+ * loadCoachHealthStatus: without it, a submit completing WHILE this GET is
+ * still in flight would have its freshly-added entry silently overwritten
+ * the moment this GET's now-stale pre-submit snapshot lands. */
+async function loadHealthStatus() {
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) {
+    state.healthStatus = { status: 'idle', data: [], error: null };
+    render();
+    return;
+  }
+
+  state.healthStatus = { status: 'loading', data: state.healthStatus.data, error: null };
+  // Snapshot the version BEFORE awaiting -- see healthStatusVersion's own
+  // doc comment above for the race this guards against.
+  const startedAtVersion = state.healthStatusVersion;
+  render();
+
+  const result = await fetchHealthStatus({ baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug() });
+  if (handleUnauthorized(result)) return;
+  if (state.healthStatusVersion !== startedAtVersion) {
+    // A submit mutated state.healthStatus.data while this GET was in
+    // flight -- that local state is already more current (and already
+    // durably saved server-side) than this response's snapshot, so
+    // applying it now would silently undo a real, successful submission.
+    log.info('health_status.load_discarded_stale', { athlete: athleteSlug() });
+    return;
+  }
+  if (result.ok) {
+    log.info('health_status.loaded', { athlete: athleteSlug(), count: result.data.length });
+    state.healthStatus = { status: 'ready', data: result.data, error: null };
+  } else {
+    log.error('health_status.load_failed', { athlete: athleteSlug(), error: result.error });
+    state.healthStatus = { status: 'error', data: [], error: result.error };
+  }
+  render();
+}
+
+/** Same "never loaded yet, or let's retry" idle/error gate as
+ * maybeLoadProfile/maybeLoadFeedback above -- called only when the athlete
+ * actually opens the log form (handleToggleHealthStatusForm), not eagerly
+ * at boot, since most visits to the Dashboard tab never touch this
+ * collapsed-by-default action at all. */
+function maybeLoadHealthStatus() {
+  if (!isConfigured(state.settingsForm, state.identity)) return;
+  if (state.healthStatus.status === 'loading' || state.healthStatus.status === 'ready') return;
+  loadHealthStatus(); // calls render() itself
+}
+
+function handleToggleHealthStatusForm() {
+  state.healthStatusFormOpen = !state.healthStatusFormOpen;
+  log.info('health_status.form_toggle', { open: state.healthStatusFormOpen });
+  render();
+  if (state.healthStatusFormOpen) maybeLoadHealthStatus();
+}
+
+/** Submits the athlete's own "log a health status" form (state.
+ * healthStatusForm) via POST /api/health-status?athlete=<slug>. On success,
+ * prepends the new entry to the loaded history (most-recent-first, matching
+ * the GET route's own ordering) and clears the form draft -- same "patch
+ * state.X.data locally instead of a full refetch" convention
+ * handleSubmitHealthStatus (the roster's coach-side equivalent) uses. */
+async function handleSubmitHealthStatusSelf() {
+  if (state.healthStatusSubmit.status === 'submitting') return;
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) return;
+
+  const form = state.healthStatusForm;
+  const description = (form.description || '').trim();
+  if (!description) {
+    state.healthStatusSubmit = { status: 'error', error: 'Add a description first.' };
+    render();
+    return;
+  }
+
+  state.healthStatusSubmit = { status: 'submitting', error: null };
+  render();
+  log.info('health_status.submit', { athlete: athleteSlug(), restriction: form.restriction });
+
+  const result = await postHealthStatus({
+    baseUrl: settings.baseUrl,
+    token: settings.token,
+    athlete: athleteSlug(),
+    description,
+    restriction: form.restriction,
+    source: form.source,
+    expectedReviewDate: form.expected_review_date,
+    bodyRegion: form.body_region,
+    onset: form.onset,
+    severity: form.severity,
+  });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    log.info('health_status.submit_success', { athlete: athleteSlug() });
+    state.healthStatus = {
+      ...state.healthStatus,
+      status: 'ready',
+      data: [result.data, ...state.healthStatus.data],
+    };
+    state.healthStatusVersion += 1; // see its own doc comment (stale-GET guard)
+    state.healthStatusForm = {
+      description: '', restriction: 'light_only', source: 'self_reported', expected_review_date: '',
+      body_region: '', onset: '', severity: '',
+    };
+    state.healthStatusSubmit = { status: 'idle', error: null };
+  } else {
+    log.error('health_status.submit_failed', { athlete: athleteSlug(), error: result.error });
+    state.healthStatusSubmit = { status: 'error', error: result.error };
+  }
   render();
 }
 
@@ -2312,9 +2473,10 @@ function handleBackToRoster() {
   render();
 }
 
-/** Switches the roster's acted-as-athlete view between its three sub-tabs
- * (Build 2: Conversations / Workouts + Dashboard / Training Plan) -- same
- * "no-op on unknown id or already-active" guard as setTab, scoped to
+/** Switches the roster's acted-as-athlete view between its four sub-tabs
+ * (Build 2: Conversations / Workouts + Dashboard / Training Plan; Health
+ * added in web/coach-health-nav-and-athlete-self-log) -- same "no-op on
+ * unknown id or already-active" guard as setTab, scoped to
  * state.roster.subTab instead of state.tab. Closes any open workout-detail
  * or session-detail view first (same teardown setTab already does when
  * leaving the Dashboard/roster tabs entirely) so switching sub-tabs never
@@ -2545,6 +2707,11 @@ function setTab(tab) {
     state.logManualOpen = false;
     state.dashboardFeedExpanded = false;
   state.loadNarrativeExpanded = false;
+    // Same collapse-on-leave convention as logManualOpen just above, for
+    // the athlete's own "Log health condition" action (web/coach-health-
+    // nav-and-athlete-self-log) -- coming back to the Dashboard should
+    // land on the primary sync button, not a still-expanded third action.
+    state.healthStatusFormOpen = false;
   }
   // Leaving the Dashboard tab always drops any open workout-detail view --
   // coming back should land on the feed, not wherever the athlete last was.
@@ -2697,6 +2864,8 @@ async function onAppClick(e) {
     case 'log:submit': handleSubmitLog(); break;
     case 'sync:start': handleSyncWorkouts(); break;
     case 'log:toggle-manual': handleToggleManualLog(); break;
+    case 'health-status:toggle': handleToggleHealthStatusForm(); break;
+    case 'health-status:submit': handleSubmitHealthStatusSelf(); break;
     case 'checkin:submit': handleSubmitCheckin(); break;
     case 'profile:submit': handleSubmitProfile(); break;
     case 'feedback:submit': handleSubmitFeedback(); break;
@@ -2836,6 +3005,12 @@ function onAppInput(e) {
   // `askCoachForm` above (there is only ever one such form per athlete, not
   // one per row, unlike `roster-reply`'s per-feedback-id draft map).
   else if (formName === 'roster-health-status') state.roster.healthStatusForm[field] = el.value;
+  // The athlete's own "log a health status" form (web/coach-health-nav-
+  // and-athlete-self-log) -- same flat-draft-object convention as
+  // 'roster-health-status' above, distinct data-form name so the two
+  // independent forms (coach-on-roster vs. athlete-on-her-own-dashboard)
+  // never collide.
+  else if (formName === 'health-status') state.healthStatusForm[field] = el.value;
   else if (formName === 'grants') state.grants.createForm[field] = el.value;
   // A6b: the workout-detail RPE editor's own slider -- guarded on
   // workoutRpeEdit still being set (defensive against a stray late event

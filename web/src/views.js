@@ -2081,6 +2081,19 @@ export function renderDashboardTab({
   load, feed, status, error, online, detailId, workoutChat, backendConfigured,
   form, submit, ingest, sync, manualOpen, feedExpanded, rpeEdit, askCoach,
   loadWindowDays, loadNarrativeExpanded,
+  // Athlete self-service health-status logging (web/coach-health-nav-and-
+  // athlete-self-log, fixing the reported "need another option, log health
+  // condition" gap) -- defaulted so every existing call site/test that
+  // predates this build keeps rendering the collapsed toggle rather than
+  // crashing on an undefined prop, same convention renderRosterTab's own
+  // healthStatus* defaults use.
+  healthStatusForm = {
+    description: '', restriction: 'light_only', source: 'self_reported', expected_review_date: '',
+    body_region: '', onset: '', severity: '',
+  },
+  healthStatusSubmit = { status: 'idle', error: null },
+  healthStatusFormOpen = false,
+  healthStatus = { status: 'idle', data: [], error: null },
 }) {
   if (!backendConfigured) {
     return dashboardShell(renderBackendNeededNotice(
@@ -2090,7 +2103,10 @@ export function renderDashboardTab({
 
   const actions = `
     ${renderSyncSection(sync, online)}
-    ${renderManualLogSection({ form, submit, ingest, online, open: !!manualOpen })}`;
+    ${renderManualLogSection({ form, submit, ingest, online, open: !!manualOpen })}
+    ${renderHealthStatusLogSection({
+      form: healthStatusForm, submit: healthStatusSubmit, open: !!healthStatusFormOpen, history: healthStatus,
+    })}`;
 
   return dashboardShell(`
     ${!online ? '<div class="chat-banner">Offline -- some data may be out of date.</div>' : ''}
@@ -2996,12 +3012,135 @@ function renderHealthStatusHistoryEntry(entry) {
     </div>`;
 }
 
+// --- Athlete self-service health-status logging (Fix 2, web/coach-health-
+// nav-and-athlete-self-log) ---------------------------------------------
+// Before this build, the ONLY ways to create a HealthStatus row were a
+// coach typing directly into the roster's own form (renderHealthStatusForm
+// above) or the AI chat tool calling record_health_status -- there was no
+// direct athlete-facing UI path at all. This gives the athlete a third
+// action alongside "Sync from watch"/"Log manually or upload a file" in
+// the Dashboard tab's own actions area (renderDashboardTab below), posting
+// to the new self-scoped POST /api/health-status route
+// (backend/app/routes/health_status.py) rather than the coach-scoped one.
+
+/** Read-only "your recent entries" list -- rendered inside the log
+ * section below, using the already-fetched GET /api/health-status data
+ * (main.js's state.healthStatus) so opening the form isn't a log-only dead
+ * end with zero visibility into what's already on file. Deliberately no
+ * active-status callout or resolve action here (unlike the coach roster's
+ * renderHealthStatusActiveBox) -- this is a simple history list, not a
+ * duplicate of the roster's own "is anything currently active" UI. */
+function renderHealthStatusOwnHistory(history) {
+  if (history.status === 'error') {
+    return `<p class="sub">Couldn't load your health status history: ${esc(history.error)}</p>`;
+  }
+  if (history.status === 'loading' && history.data.length === 0) {
+    return '<p class="sub">Loading&hellip;</p>';
+  }
+  if (history.data.length === 0) {
+    return '<p class="sub">No health status entries logged yet.</p>';
+  }
+  return `
+    <div class="detail-section">
+      <h4>Your recent entries</h4>
+      ${history.data.map(renderHealthStatusHistoryEntry).join('')}
+    </div>`;
+}
+
+/** The athlete's own "Log health condition" action -- same collapsed-by-
+ * default disclosure mechanic as renderManualLogSection just above it in
+ * renderDashboardTab's actions (state.healthStatusFormOpen mirrors
+ * state.logManualOpen exactly): a toggle button, collapsed by default so
+ * this isn't something permanently visible taking up space, expanding to
+ * the form plus the read-only history list. Fields mirror the coach
+ * roster's renderHealthStatusForm (same enums/labels), minus
+ * related_status_id -- linking a recurrence to a specific earlier entry is
+ * a coach-reviewing-full-history judgment call, not something this
+ * simpler self-service form needs to support. Posts through
+ * data-form="health-status"/data-a="health-status:*", distinct from the
+ * roster's "roster-health-status"/"roster:health-status-*" so main.js's
+ * onAppInput/onAppClick dispatch never conflates the two independent
+ * forms. */
+function renderHealthStatusLogSection({
+  form, submit, open, history,
+}) {
+  const toggleLabel = open ? 'Hide health condition log' : 'Log health condition';
+  const toggleButton = `
+    <div class="panel settings-panel">
+      <button type="button" class="btn-ghost" data-a="health-status:toggle" style="width:100%;" aria-expanded="${open ? 'true' : 'false'}">${toggleLabel}</button>
+    </div>`;
+  if (!open) return toggleButton;
+
+  const submitting = submit.status === 'submitting';
+  const submitError = submit.status === 'error'
+    ? `<div class="conn-result fail">${esc(submit.error)}</div>` : '';
+
+  return `
+    ${toggleButton}
+    <div class="panel settings-panel">
+      <label class="field">
+        <span>Description</span>
+        <textarea rows="3" data-form="health-status" data-field="description" placeholder="What's going on?">${esc(form.description || '')}</textarea>
+      </label>
+      <label class="field">
+        <span>Restriction</span>
+        <select data-form="health-status" data-field="restriction">
+          ${Object.entries(HEALTH_RESTRICTION_LABELS).map(([value, label]) => `
+            <option value="${esc(value)}" ${form.restriction === value ? 'selected' : ''}>${esc(label)}</option>`).join('')}
+        </select>
+      </label>
+      <label class="field">
+        <span>Source</span>
+        <select data-form="health-status" data-field="source">
+          ${Object.entries(HEALTH_SOURCE_LABELS).map(([value, label]) => `
+            <option value="${esc(value)}" ${form.source === value ? 'selected' : ''}>${esc(label)}</option>`).join('')}
+        </select>
+      </label>
+      <label class="field">
+        <span>Expected review date (optional)</span>
+        <input type="date" data-form="health-status" data-field="expected_review_date" value="${esc(form.expected_review_date || '')}">
+      </label>
+      <label class="field">
+        <span>Body region (optional)</span>
+        <select data-form="health-status" data-field="body_region">
+          <option value="" ${!form.body_region ? 'selected' : ''}>Not specified</option>
+          ${Object.entries(HEALTH_BODY_REGION_LABELS).map(([value, label]) => `
+            <option value="${esc(value)}" ${form.body_region === value ? 'selected' : ''}>${esc(label)}</option>`).join('')}
+        </select>
+      </label>
+      <label class="field">
+        <span>Onset (optional)</span>
+        <select data-form="health-status" data-field="onset">
+          <option value="" ${!form.onset ? 'selected' : ''}>Not specified</option>
+          ${Object.entries(HEALTH_ONSET_LABELS).map(([value, label]) => `
+            <option value="${esc(value)}" ${form.onset === value ? 'selected' : ''}>${esc(label)}</option>`).join('')}
+        </select>
+      </label>
+      <label class="field">
+        <span>Severity (optional)</span>
+        <select data-form="health-status" data-field="severity">
+          <option value="" ${!form.severity ? 'selected' : ''}>Not specified</option>
+          ${Object.entries(HEALTH_SEVERITY_LABELS).map(([value, label]) => `
+            <option value="${esc(value)}" ${form.severity === value ? 'selected' : ''}>${esc(label)}</option>`).join('')}
+        </select>
+      </label>
+      <div class="settings-actions">
+        <button type="button" class="btn" data-a="health-status:submit" ${submitting ? 'disabled' : ''}>${submitting ? 'Logging…' : 'Log status'}</button>
+      </div>
+      ${submitError}
+    </div>
+    ${renderHealthStatusOwnHistory(history)}`;
+}
+
 /** The coach roster's health-status section: the active status (loud, see
  * `.health-status-active` above), a form for the coach to log a new one
  * directly (no AI chat required), and the full history below it -- nothing
  * is ever silently lost, per this log's own "never delete" rail. Rendered
- * once per acted-as-athlete view, above the sub-tab bar (`renderRosterTab`'s
- * call site), so it's visible regardless of which sub-tab is active. */
+ * only on the roster's own 'health' sub-tab (`renderRosterTab`'s call
+ * site) -- it used to render unconditionally above the sub-tab bar on
+ * every sub-tab, which a real reported bug called out as dominating the
+ * dashboard/workouts view regardless of which was active; see
+ * ROSTER_SUB_TABS' own doc comment for the fix. */
 function renderRosterHealthStatusSection({
   healthStatus, form, submit, resolveAction,
 }) {
@@ -3056,6 +3195,14 @@ const ROSTER_SUB_TABS = [
   { id: 'conversations', label: 'Conversations' },
   { id: 'dashboard', label: 'Workouts + Dashboard' },
   { id: 'plan', label: 'Training Plan' },
+  // Fourth sub-tab (web/coach-health-nav-and-athlete-self-log): the
+  // health-status section used to render unconditionally, ABOVE this bar,
+  // on every one of the three sub-tabs above -- dominating the dashboard
+  // and every other view regardless of which was active (a real reported
+  // bug). Giving it its own sub-tab instead means it's visible exactly
+  // when the coach actually wants it, same as the other three. See
+  // renderRosterTab's call site for the matching conditional-render change.
+  { id: 'health', label: 'Health' },
 ];
 
 function renderRosterSubTabBar(activeSubTab) {
@@ -3244,6 +3391,16 @@ export function renderRosterTab({
       if (activeSubTab === 'plan') return renderRosterTrainingPlanBody({
         plan, online, allWeeksOpen, detailId: sessionDetailId, askCoach,
       });
+      // Fourth sub-tab (web/coach-health-nav-and-athlete-self-log, fixing
+      // the reported "injury form dominates the dashboard and workouts and
+      // is placed above the navigation" bug): the health-status section
+      // used to render unconditionally above renderRosterSubTabBar, on
+      // every sub-tab regardless of which was active. Now it renders ONLY
+      // here, same conditional-render shape as 'conversations'/'plan'
+      // above.
+      if (activeSubTab === 'health') return renderRosterHealthStatusSection({
+        healthStatus, form: healthStatusForm, submit: healthStatusSubmit, resolveAction: healthStatusResolve,
+      });
       return `
         ${!online ? '<div class="chat-banner">Offline -- some data may be out of date.</div>' : ''}
         ${dashboardBody}
@@ -3256,9 +3413,6 @@ export function renderRosterTab({
     return rosterShell(`
       <div class="s-head"><button type="button" class="btn-ghost" data-a="roster:back">&larr; Back to My Athletes</button></div>
       <p class="sub">Coaching <b>${esc(name)}</b> (${esc(actingAsAthlete)}).</p>
-      ${renderRosterHealthStatusSection({
-        healthStatus, form: healthStatusForm, submit: healthStatusSubmit, resolveAction: healthStatusResolve,
-      })}
       ${renderRosterSubTabBar(activeSubTab)}
       ${subTabBody}`);
   }

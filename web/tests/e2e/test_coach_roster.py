@@ -467,13 +467,37 @@ def test_replying_to_feedback_patches_and_updates_the_row(page):
 
 # --- Sub-tabs (Build 2: Conversations / Workouts + Dashboard / Training Plan) -
 
-def test_sub_tab_bar_shows_all_three_options(page):
+def test_sub_tab_bar_shows_all_four_options(page):
     _open_roster(page)
     page.click('[data-a="roster:select-athlete"]')
     page.wait_for_selector('[data-a="roster:subtab:dashboard"]')
     assert page.locator('[data-a="roster:subtab:conversations"]').count() == 1
     assert page.locator('[data-a="roster:subtab:dashboard"]').count() == 1
     assert page.locator('[data-a="roster:subtab:plan"]').count() == 1
+    # web/coach-health-nav-and-athlete-self-log: fourth sub-tab, fixing the
+    # reported "injury form dominates the dashboard" bug -- the
+    # health-status section used to render unconditionally above this bar.
+    assert page.locator('[data-a="roster:subtab:health"]').count() == 1
+
+
+def test_health_status_section_only_shows_on_the_health_sub_tab(page):
+    _open_roster(page)
+    page.click('[data-a="roster:select-athlete"]')
+    page.wait_for_selector('[data-a="roster:subtab:dashboard"]')
+    # Default sub-tab (Workouts + Dashboard): no health-status section.
+    assert page.locator('.health-status-active, .health-status-empty').count() == 0
+
+    page.click('[data-a="roster:subtab:conversations"]')
+    page.wait_for_selector('text=coming soon')
+    assert page.locator('.health-status-active, .health-status-empty').count() == 0
+
+    page.click('[data-a="roster:subtab:plan"]')
+    page.wait_for_selector('.macro .ph')
+    assert page.locator('.health-status-active, .health-status-empty').count() == 0
+
+    page.click('[data-a="roster:subtab:health"]')
+    page.wait_for_selector('.health-status-active, .health-status-empty')
+    assert page.locator('.health-status-active, .health-status-empty').count() == 1
 
 
 def test_defaults_to_workouts_and_dashboard_sub_tab(page):

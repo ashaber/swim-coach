@@ -584,6 +584,50 @@ export async function resolveCoachHealthStatus({
   });
 }
 
+// --- Athlete self-service health-status logging (web/coach-health-nav-and-
+// athlete-self-log) --------------------------------------------------------
+// Self-scoped counterparts to fetchCoachHealthStatus/postCoachHealthStatus
+// above -- hits /api/health-status (backend/app/routes/health_status.py's
+// resolve_athlete-gated routes), never the coach-scoped
+// /api/coach/athletes/<slug>/health-status path. No resolve action here --
+// unlike the coach roster, the athlete's own Dashboard-tab action has no
+// "mark resolved" affordance (see views.js's renderHealthStatusLogSection).
+
+/** GET {baseUrl}/api/health-status?athlete=<slug> -- the athlete's own
+ * health-status history, most-recent-first. Same `athlete = 'renee'`
+ * legacy-default convention as `listWorkouts`/`listWellness` above (a real
+ * session's own `resolve_athlete` scoping makes this a no-op for anyone
+ * signed in; see backend/app/routes/health_status.py). */
+export async function fetchHealthStatus({ baseUrl, token, athlete = 'renee' }) {
+  return apiRequest({ baseUrl, token, path: `/api/health-status?athlete=${encodeURIComponent(athlete)}` });
+}
+
+/** POST {baseUrl}/api/health-status?athlete=<slug> -- the athlete logging
+ * her own health status directly. Same optional-field shape as
+ * `postCoachHealthStatus`, minus `relatedStatusId` (the athlete's own
+ * simpler form has no related-entry picker -- see
+ * views.js's renderHealthStatusLogSection doc comment). */
+export async function postHealthStatus({
+  baseUrl, token, athlete = 'renee', description, restriction, source, expectedReviewDate,
+  bodyRegion, onset, severity,
+}) {
+  return apiRequest({
+    baseUrl,
+    token,
+    path: `/api/health-status?athlete=${encodeURIComponent(athlete)}`,
+    method: 'POST',
+    body: {
+      description,
+      restriction,
+      source,
+      ...(expectedReviewDate ? { expected_review_date: expectedReviewDate } : {}),
+      ...(bodyRegion ? { body_region: bodyRegion } : {}),
+      ...(onset ? { onset } : {}),
+      ...(severity ? { severity } : {}),
+    },
+  });
+}
+
 // --- Google sign-in session exchange -----------------------------------------
 // Unlike every function above, `exchangeGoogleToken` throws instead of
 // returning `{ok, ...}` -- identity.js's GSI callback awaits it directly in
