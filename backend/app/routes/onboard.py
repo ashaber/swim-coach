@@ -81,7 +81,19 @@ class OnboardEventIn(BaseModel):
 
     name: str
     event_date: str  # ISO date string; parsed into swim_coach.models.Event below
-    distance_m: int = Field(gt=0)
+    target_metric: Literal["distance_m", "duration_min", "load_au"] = "distance_m"
+    distance_m: int | None = Field(default=None, gt=0)
+    target_value: float | None = None
+    # Relaxed to optional (from a plain required `distance_m: int`) alongside
+    # the new `target_metric`/`target_value` fields -- mirrors
+    # swim_coach.models.Event's own relaxation exactly (see that model's
+    # docstring for the full multi-sport-unlock rationale). Every real
+    # onboarding call today omits target_metric/target_value and supplies
+    # distance_m as before, so this is a no-op for current onboarding
+    # behavior; `Event`'s own model_validator (constructed below) enforces
+    # the cross-field rule, same as it does for every other Event caller --
+    # not re-validated here (no onboarding-UI changes for non-swim sports
+    # are shipped in this build).
     water_temp_c: float | None = None
     wetsuit: bool = False
     priority: str = "A"
@@ -204,7 +216,9 @@ async def onboard(
                 athlete_id=athlete_id,
                 name=e.name,
                 event_date=e.event_date,
+                target_metric=e.target_metric,
                 distance_m=e.distance_m,
+                target_value=e.target_value,
                 water_temp_c=e.water_temp_c,
                 wetsuit=e.wetsuit,
                 priority=e.priority,

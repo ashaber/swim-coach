@@ -941,9 +941,21 @@ export function currentBlockIndex(blocks, now = new Date()) {
  * connective step, an estimated peak swim derived from the macro's peak
  * block (60-70% of event distance per library/06 guidance -- ROADMAP.md),
  * and the event itself. Returns [] if there's not enough data to derive
- * anything (no swim_ow sessions and no event). */
+ * anything (no swim_ow sessions and no event).
+ *
+ * The two event-distance-derived rungs (estimated peak swim, and the event
+ * rung itself) only make sense for a distance-target event -- gated on
+ * `event.target_metric` (multi-sport unlock: `Event.distance_m` can now be
+ * `null` for a non-distance event, e.g. a future duration/load-target
+ * cycling or strength macro). `target_metric` missing/undefined is treated
+ * as the "distance_m" default, same as the engine's own Event model, so
+ * every existing swim event (whose JSON simply doesn't carry this field
+ * yet in old caches) renders exactly as before. The "biggest logged swim"
+ * and "build-ups" rungs above are untouched -- they never read
+ * event.distance_m at all. */
 export function longSwimLadder(weeks, macro, event) {
   const rungs = [];
+  const isDistanceEvent = !event || !event.target_metric || event.target_metric === 'distance_m';
 
   let biggest = null;
   for (const week of weeks) {
@@ -964,7 +976,7 @@ export function longSwimLadder(weeks, macro, event) {
   }
 
   const peakBlock = macro?.blocks?.find((b) => b.name === 'peak');
-  if (peakBlock && event) {
+  if (peakBlock && event && isDistanceEvent) {
     const peakDistance = Math.round((event.distance_m * 0.65) / 100) * 100;
     const peakEnd = parseIsoDate(peakBlock.end_date);
     rungs.push({
@@ -973,7 +985,7 @@ export function longSwimLadder(weeks, macro, event) {
     });
   }
 
-  if (event) {
+  if (event && isDistanceEvent) {
     rungs.push({
       km: (event.distance_m / 1000).toFixed(event.distance_m % 1000 === 0 ? 0 : 1),
       label: event.name.split(/[—(]/)[0].trim(),

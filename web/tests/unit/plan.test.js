@@ -999,6 +999,62 @@ describe('longSwimLadder', () => {
   it('returns an empty ladder with no swims, macro, or event', () => {
     expect(longSwimLadder([], null, null)).toEqual([]);
   });
+
+  it('renders the peak and event rungs when target_metric is explicitly "distance_m"', () => {
+    const macro = {
+      blocks: [
+        { name: 'base', start_date: '2026-07-06', end_date: '2026-08-02' },
+        { name: 'build', start_date: '2026-08-03', end_date: '2026-08-16' },
+        { name: 'peak', start_date: '2026-08-17', end_date: '2026-08-30' },
+        { name: 'taper', start_date: '2026-08-31', end_date: '2026-09-13' },
+      ],
+    };
+    const event = {
+      name: 'UltraSwim 33.3 Greece',
+      distance_m: 33300,
+      target_metric: 'distance_m',
+      event_date: '2026-09-18',
+    };
+
+    const rungs = longSwimLadder([], macro, event);
+    expect(rungs.at(-1).final).toBe(true);
+    expect(rungs.at(-1).km).toBe('33.3');
+  });
+
+  it('omits the peak-swim and event rungs for a non-distance target_metric instead of showing garbage', () => {
+    // Multi-sport unlock: event.distance_m is null for a duration/load
+    // target event -- `event.distance_m * 0.65` would otherwise render NaN.
+    const macro = {
+      blocks: [
+        { name: 'base', start_date: '2026-07-06', end_date: '2026-08-02' },
+        { name: 'build', start_date: '2026-08-03', end_date: '2026-08-16' },
+        { name: 'peak', start_date: '2026-08-17', end_date: '2026-08-30' },
+        { name: 'taper', start_date: '2026-08-31', end_date: '2026-09-13' },
+      ],
+    };
+    const event = {
+      name: '2-Hour Endurance Ride',
+      distance_m: null,
+      target_metric: 'duration_min',
+      target_value: 120,
+      event_date: '2026-09-18',
+    };
+    const weeks = [
+      {
+        sessions: [
+          { sport: 'swim_ow', distance_m: 15000, duration_min: 300, date: '2026-07-09' },
+        ],
+      },
+    ];
+
+    const rungs = longSwimLadder(weeks, macro, event);
+    expect(rungs.some((r) => r.final)).toBe(false);
+    expect(rungs.some((r) => !r.connective && Number.isNaN(Number(r.km)))).toBe(false);
+    // The biggest-logged-swim and build-ups rungs, which don't depend on
+    // event.distance_m, are unaffected.
+    expect(rungs[0].km).toBe('15');
+    expect(rungs.some((r) => r.connective === 'build-ups')).toBe(true);
+  });
 });
 
 describe('RACE_DAY_TSB_BAND', () => {

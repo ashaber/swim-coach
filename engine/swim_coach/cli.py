@@ -28,7 +28,7 @@ from swim_coach.adapt import adapt_week
 from swim_coach.analytics import CARDIAC_DRIFT_FLAG_PCT, compute_analytics
 from swim_coach.load import (
     acute_chronic_ratio,
-    compliance as compute_compliance,
+    compute_compliance,
     daily_loads,
     monotony,
     weekly_volume_m,
@@ -397,7 +397,9 @@ def _cmd_summarize(args: argparse.Namespace, store: StoreInterface) -> int:
         if week_plan is not None:
             planned_sessions.extend(week_plan.sessions)
     window_workouts = [w for w in workouts if span_start <= w.date <= span_end]
-    compliance_pct = compute_compliance(planned_sessions, window_workouts) if planned_sessions else None
+    compliance_pct = (
+        compute_compliance(planned_sessions, window_workouts, athlete) if planned_sessions else None
+    )
 
     print(
         json.dumps(

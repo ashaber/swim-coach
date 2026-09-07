@@ -1218,7 +1218,7 @@ def wellness_baseline_deviation(
 # --- compliance ------------------------------------------------------------------
 
 
-def compliance(planned_sessions: list[Session], workouts: list[Workout]) -> float:
+def compliance(planned_sessions: list[Session], workouts: list[Workout]) -> float | None:
     """Percentage of planned swim volume actually completed.
 
     planned_m = sum of `distance_m` across `planned_sessions` with sport in
@@ -1229,13 +1229,101 @@ def compliance(planned_sessions: list[Session], workouts: list[Workout]) -> floa
     both lists to (e.g. one week).
 
     Returns ``completed_m / planned_m * 100``. Can exceed 100 (over-
-    delivered). Returns 0.0 if nothing swim-related was planned (can't be
-    "non-compliant" with an empty plan).
+    delivered). Returns ``None`` if nothing swim-related was planned (can't
+    be "non-compliant" with an empty plan) -- changed from the original
+    ``0.0`` (multi-sport-unlock build): a cyclist/lifter's week has no
+    swim-distance plan at all, and the old ``0.0`` would have read as
+    "perpetually 0% compliant" the moment compliance is ever surfaced for a
+    non-swim athlete. Every caller must treat this as Optional now, same
+    convention `compliance_by_load` below shares.
     """
     planned_m = sum(
         s.distance_m or 0 for s in planned_sessions if s.sport in _SWIM_SPORTS
     )
     if planned_m == 0:
-        return 0.0
+        return None
     completed_m = sum(w.distance_m for w in workouts if w.sport in _SWIM_SPORTS)
     return completed_m / planned_m * 100
+
+
+def compliance_by_load(
+    planned_sessions: list[Session], workouts: list[Workout], athlete: Athlete
+) -> float | None:
+    """Percentage of planned training LOAD (AU) actually completed -- the
+    sport-agnostic counterpart to `compliance()` above, for an athlete/week
+    where summing `distance_m` doesn't make sense (multi-sport-unlock
+    build): no single universal target metric exists across sports --
+    distance is the right universal unit for swimming, but a cyclist is
+    better measured by duration+intensity and a lifter by cumulative work
+    (see `models.Event.target_metric`'s docstring for the full framing).
+    Load (AU) is the one number `session_target_load_au`/`session_load`
+    already compute for every sport, so it's the natural first cross-sport
+    compliance signal -- see this PR's design notes / ROADMAP.md IDEA
+    007-010.
+
+    planned_au = sum of `session_target_load_au(s, athlete)` across ALL
+    `planned_sessions` -- no sport filter (unlike `compliance()`'s
+    {swim_pool, swim_ow} allowlist): every session, of any sport, gets a
+    load projection, so there's no "not comparable" case to exclude.
+    completed_au = sum of `session_load(w, sex=athlete.sex,
+    css_pace_s_per_100m=athlete.css_pace_s_per_100m).value` across ALL
+    `workouts`. Deliberately the same simplified `session_load` call
+    `quality.workout_quality` already uses (not the full `hr_max`/`hr_rest`-
+    aware call `daily_loads` makes) -- this function, like that one, has no
+    access to the athlete's full workout history to derive those, so tier 2
+    (HR-based TRIMP) is unreachable from here even when a workout has HR
+    data; falls through to tier 3 (pace, swim only) or tier 4
+    (duration-only) instead. Good enough for a compliance PERCENTAGE (both
+    sides use the same tiering, so a systematic tier bias mostly cancels
+    between planned and actual); callers needing full-fidelity load for
+    other purposes should call `session_load`/`daily_loads` directly with
+    real history.
+
+    Returns ``completed_au / planned_au * 100``, or ``None`` if nothing was
+    planned (``planned_sessions`` is empty -- `session_target_load_au` is
+    always > 0 for any real session, so `planned_au == 0` only when there
+    were no sessions at all) -- same "can't be non-compliant with an empty
+    plan" convention `compliance()` uses.
+
+    Known, deliberate limitation (explicitly NOT solved here -- a real,
+    documented future gap, not an oversight): this compares aggregate load
+    only, not whether PRESCRIBED INTERVALS were actually matched. For
+    prescribed-interval/HIIT work, matching the intervals is what actually
+    drives the intended adaptation, not just hitting the aggregate load
+    number for the session/week. intervals.icu already computes its own
+    overall workout-compliance percentage with automatic interval detection
+    -- a cheap near-term option to pull in later, rather than building
+    custom interval-matching logic here.
+    """
+    planned_au = sum(session_target_load_au(s, athlete) for s in planned_sessions)
+    if planned_au == 0:
+        return None
+    completed_au = sum(
+        session_load(w, sex=athlete.sex, css_pace_s_per_100m=athlete.css_pace_s_per_100m).value
+        for w in workouts
+    )
+    return completed_au / planned_au * 100
+
+
+def compute_compliance(
+    planned_sessions: list[Session], workouts: list[Workout], athlete: Athlete
+) -> float | None:
+    """Dispatches to `compliance()` (distance-based) when `planned_sessions`
+    is swim-primary, else to `compliance_by_load()` (AU-load-based) --
+    multi-sport-unlock's cross-sport-guidance-isolation constraint: an
+    athlete must only ever be affected by generalization work relevant to
+    their own sport. "Swim-primary" = any planned session with sport in
+    {swim_pool, swim_ow} -- every real swim athlete's week has one, so this
+    is byte-identical to calling `compliance()` directly for Renee (or any
+    other swim athlete) today; this function is purely an additive
+    selection layer on top, never a behavior change for swim.
+
+    A non-swim-primary week (e.g. a cycling/strength macro, once one
+    exists) has no comparable `distance_m` to sum, so it gets the AU-load
+    comparison instead. See `compliance_by_load`'s docstring for that path's
+    own known limitations.
+    """
+    swim_primary = any(s.sport in _SWIM_SPORTS for s in planned_sessions)
+    if swim_primary:
+        return compliance(planned_sessions, workouts)
+    return compliance_by_load(planned_sessions, workouts, athlete)

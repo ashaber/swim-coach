@@ -369,6 +369,70 @@ def test_event_active_omitted_from_dict_still_defaults_true():
     assert event.active is True
 
 
+# --- target_metric (multi-sport unlock) ---------------------------------------
+
+
+def test_event_target_metric_defaults_to_distance_m():
+    event = make_event()
+    assert event.target_metric == "distance_m"
+    assert event.target_value is None
+
+
+def test_event_target_metric_omitted_from_dict_still_defaults_and_validates():
+    # Backward compatibility: a YAML file written before target_metric
+    # existed (no key at all -- every real event on file today) must still
+    # validate, defaulting to "distance_m" with distance_m doing exactly
+    # what it always did.
+    data = dict(
+        id=uuid.uuid4(),
+        athlete_id=ATHLETE_ID,
+        name="Legacy Event",
+        event_date=date(2026, 8, 15),
+        distance_m=10000,
+        water_temp_c=18.0,
+        wetsuit=False,
+        priority="A",
+    )
+    event = Event(**data)
+    assert event.target_metric == "distance_m"
+    assert event.distance_m == 10000
+    assert event.target_value is None
+
+
+def test_event_rejects_bad_target_metric():
+    with pytest.raises(ValidationError):
+        make_event(target_metric="power_watts")
+
+
+def test_event_distance_m_target_metric_requires_distance_m():
+    with pytest.raises(ValidationError, match="distance_m is required"):
+        make_event(target_metric="distance_m", distance_m=None)
+
+
+def test_event_duration_min_target_metric_requires_target_value():
+    with pytest.raises(ValidationError, match="target_value is required"):
+        make_event(target_metric="duration_min", distance_m=None, target_value=None)
+
+
+def test_event_load_au_target_metric_requires_target_value():
+    with pytest.raises(ValidationError, match="target_value is required"):
+        make_event(target_metric="load_au", distance_m=None, target_value=None)
+
+
+def test_event_duration_min_target_metric_accepts_target_value_with_no_distance():
+    event = make_event(target_metric="duration_min", distance_m=None, target_value=120.0)
+    assert event.target_metric == "duration_min"
+    assert event.distance_m is None
+    assert event.target_value == 120.0
+
+
+def test_event_load_au_target_metric_accepts_target_value_with_no_distance():
+    event = make_event(target_metric="load_au", distance_m=None, target_value=450.0)
+    assert event.target_metric == "load_au"
+    assert event.distance_m is None
+    assert event.target_value == 450.0
+
+
 def test_week_plan_rejects_bad_iso_week():
     with pytest.raises(ValidationError):
         make_week(iso_week="not-a-week")

@@ -21,7 +21,8 @@ from swim_coach.adapt import (
     WELLNESS_RED_THRESHOLD,
     adapt_week,
 )
-from swim_coach.models import Athlete, Event, Wellness, Workout
+from swim_coach.load import compliance_by_load
+from swim_coach.models import Athlete, Event, Session, Wellness, WeekPlan, Workout
 from swim_coach.plan import WEEKLY_VOLUME_RAMP_CAP, generate_week, scaffold_macro
 
 ATHLETE_ID = uuid.uuid4()
@@ -419,6 +420,90 @@ def test_hold_when_compliance_is_middling_and_no_red_flags():
     rationale = _rationale(week)
     assert rationale["action"] == "hold"
     assert week.target_volume_m == current_week.target_volume_m
+
+
+# --- multi-sport unlock: compliance dispatch (swim-primary vs. not) -----------------------
+
+
+def _make_non_swim_week(athlete, week_start):
+    """A hand-built, non-swim-primary WeekPlan -- unlike `_setup()`'s
+    `current_week` (always produced by `generate_week`, which is swim-
+    specific end to end), this stands in for what a non-swim macro's
+    planned week WOULD look like once real cross-sport session content
+    exists (out of scope for this build) -- only the compliance dispatch
+    itself is under test here."""
+    return WeekPlan(
+        id=uuid.uuid4(),
+        athlete_id=athlete.id,
+        iso_week=_iso_week(week_start),
+        meso_block="base",
+        focus="strength base",
+        target_volume_m=0,
+        sessions=[
+            Session(
+                id=uuid.uuid4(),
+                athlete_id=athlete.id,
+                date=week_start,
+                sport="strength",
+                source="ai_coach",
+                duration_min=45.0,
+                distance_m=None,
+                intensity={"zone": "Z3", "anchor": "rpe"},
+                purpose="strength",
+            ),
+        ],
+    )
+
+
+def test_compliance_pct_uses_load_based_path_when_current_week_is_not_swim_primary():
+    # A week whose only planned sessions are non-swim (e.g. strength) must
+    # be scored via compliance_by_load, not the distance-based compliance()
+    # (which would see zero swim volume planned and read as None/not-
+    # applicable, wrongly treating a real non-swim week as "nothing
+    # planned").
+    athlete, event, macro, current_week, next_iso, next_start, as_of = _setup()
+    good_wellness = [make_wellness(date=as_of - timedelta(days=i)) for i in range(7)]
+    last_week_start = min(s.date for s in current_week.sessions)
+    non_swim_current_week = _make_non_swim_week(athlete, last_week_start)
+    workouts = [
+        make_workout(
+            date=last_week_start, sport="strength", distance_m=0, duration_min=45.0, rpe=6
+        )
+    ]
+
+    week = adapt_week(
+        athlete, event, macro, next_iso, next_start, non_swim_current_week, workouts, good_wellness, as_of
+    )
+
+    rationale = _rationale(week)
+    expected = compliance_by_load(non_swim_current_week.sessions, workouts, athlete)
+    assert expected is not None
+    assert rationale["signals"]["compliance_pct"] == pytest.approx(expected)
+
+
+def test_compliance_pct_unchanged_for_swim_primary_week_real_athlete_regression():
+    # Regression proof: a real swim-primary week (generate_week's actual
+    # output, exactly what Renee/any swim athlete gets) must produce the
+    # exact same compliance_pct this build's compute_compliance dispatcher
+    # produced before -- i.e. still routed through the distance-based
+    # compliance(), untouched.
+    athlete, event, macro, current_week, next_iso, next_start, as_of = _setup()
+    good_wellness = [make_wellness(date=as_of - timedelta(days=i)) for i in range(7)]
+    workouts = _fully_compliant_workouts(current_week)
+
+    week = adapt_week(
+        athlete, event, macro, next_iso, next_start, current_week, workouts, good_wellness, as_of
+    )
+
+    last_week_dates = [s.date for s in current_week.sessions]
+    last_week_start = min(last_week_dates)
+    last_week_end = max(last_week_dates)
+    last_week_workouts = [w for w in workouts if last_week_start <= w.date <= last_week_end]
+    from swim_coach.load import compliance as distance_compliance
+
+    expected = distance_compliance(current_week.sessions, last_week_workouts)
+    rationale = _rationale(week)
+    assert rationale["signals"]["compliance_pct"] == pytest.approx(expected)
 
 
 # --- forced recovery window (milestone gate) ----------------------------------------------

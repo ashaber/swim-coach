@@ -13,7 +13,7 @@ from datetime import date, datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # cross_train: logged non-swim endurance activity (kayak, run, ride, ...).
 # Counts toward sRPE load (load.py is sport-agnostic there) but never toward
@@ -90,7 +90,41 @@ class Event(BaseModel):
     athlete_id: UUID
     name: str
     event_date: date
-    distance_m: int = Field(gt=0)
+    target_metric: Literal["distance_m", "duration_min", "load_au"] = "distance_m"
+    # Discriminator for what this event's target is measured in -- follows
+    # this codebase's own `basis`-discriminator idiom (see WorkoutTarget/
+    # WorkoutLoad above: a discriminator field + generic value field(s)
+    # reused across variants, documented per-variant in comments) rather
+    # than a true `Field(discriminator=...)` tagged union of separate
+    # classes (that mechanism exists here too -- WorkoutStepOrRepeat -- but
+    # is reserved for structurally different tree nodes, not this case).
+    # No single universal target metric exists across sports (multi-sport-
+    # unlock design discussion, ROADMAP.md IDEA 007-010): duration+intensity
+    # is what actually tells you something for cycling ("a 2-hour endurance
+    # ride tells me what I need to know"); distance is genuinely the right
+    # universal unit for swimming, especially open water where pace is
+    # unknown; strength is measured in cumulative work (e.g. total lbs
+    # lifted). Defaults to "distance_m" so every existing Event YAML (no
+    # target_metric key) validates unchanged and means exactly what it
+    # always meant -- additive, no schema_version bump.
+    distance_m: int | None = Field(default=None, gt=0)
+    # Relaxed from required (`Field(gt=0)`) to optional -- required in
+    # practice (enforced by `_validate_target_metric_fields` below) only
+    # when target_metric == "distance_m". Deliberately KEPT AS ITS OWN
+    # NAMED FIELD rather than folded into `target_value` below -- a
+    # deliberate departure from WorkoutTarget/WorkoutLoad's pure single-
+    # generic-value idiom. `distance_m` is consumed BY NAME across ~10 real
+    # call sites (the create_event tool schema, the onboarding route, the
+    # PWA plan-view form/validation and long-swim-ladder rendering, the
+    # JSON export, and 20+ existing tests) -- renaming it would be a much
+    # wider, riskier blast radius than this build needs.
+    target_value: float | None = None
+    # Meaning depends on target_metric: minutes when target_metric ==
+    # "duration_min", AU (arbitrary training-load units, see load.py's
+    # module docstring) when target_metric == "load_au". Unused/None when
+    # target_metric == "distance_m" (distance_m carries that meaning
+    # instead, see above). Required in practice (enforced below) whenever
+    # target_metric != "distance_m".
     water_temp_c: float | None = None
     wetsuit: bool = False
     priority: str
@@ -112,6 +146,27 @@ class Event(BaseModel):
     # (draft_macro_plan/replace_macro_plan/propose_adaptation) deliberately
     # do NOT filter on this field -- it only changes how the coach *talks
     # about* events in conversation, never which events those lookups find.
+
+    @model_validator(mode="after")
+    def _validate_target_metric_fields(self) -> "Event":
+        """Cross-field rule: `distance_m` is required when target_metric ==
+        "distance_m"; `target_value` is required otherwise. New precedent --
+        this codebase has zero existing `model_validator`s (only
+        `field_validator`s on individual fields) before this one; kept
+        deliberately small and narrowly scoped to this single cross-field
+        rule, not a general validation-framework expansion.
+        """
+        if self.target_metric == "distance_m":
+            if self.distance_m is None:
+                raise ValueError(
+                    "distance_m is required when target_metric == 'distance_m'"
+                )
+        elif self.target_value is None:
+            raise ValueError(
+                f"target_value is required when target_metric is {self.target_metric!r} "
+                "(not 'distance_m')"
+            )
+        return self
 
 
 class WorkoutTarget(BaseModel):

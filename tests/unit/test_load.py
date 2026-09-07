@@ -27,6 +27,8 @@ from swim_coach.load import (
     ZONE_ASSUMED_RPE,
     acute_chronic_ratio,
     compliance,
+    compliance_by_load,
+    compute_compliance,
     ctl_atl_tsb_series,
     daily_loads,
     estimate_hr_max,
@@ -1156,8 +1158,17 @@ def test_compliance_can_exceed_100_when_over_delivered():
     assert compliance(planned, workouts) == pytest.approx(150.0)
 
 
-def test_compliance_zero_when_nothing_planned():
-    assert compliance([], [make_workout(distance_m=5000)]) == 0.0
+def test_compliance_none_when_nothing_planned():
+    # Changed from the original 0.0 (multi-sport-unlock build): "nothing
+    # swim-related planned" must not read as "0% compliant" -- that reading
+    # is what breaks a non-swim athlete the moment compliance is surfaced.
+    assert compliance([], [make_workout(distance_m=5000)]) is None
+
+
+def test_compliance_none_when_only_non_swim_sessions_planned():
+    planned = [make_session(distance_m=None, sport="strength", duration_min=45.0)]
+    workouts = [make_workout(distance_m=5000)]
+    assert compliance(planned, workouts) is None
 
 
 def test_compliance_ignores_non_swim_sessions_and_workouts():
@@ -1170,6 +1181,80 @@ def test_compliance_ignores_non_swim_sessions_and_workouts():
         make_workout(distance_m=0, sport="strength", duration_min=45.0),
     ]
     assert compliance(planned, workouts) == pytest.approx(100.0)
+
+
+# --- compliance_by_load ----------------------------------------------------------
+
+
+def test_compliance_by_load_100_pct_when_exact_match():
+    athlete = make_athlete()
+    planned = [make_session(intensity={"zone": "Z2", "anchor": "css_pace"}, duration_min=60.0)]
+    workouts = [make_workout(sport="strength", rpe=5, duration_min=60.0)]
+    # planned: 60 * ZONE_ASSUMED_RPE["Z2"]; actual (sRPE, rpe set): 60 * 5.
+    # Only equal if ZONE_ASSUMED_RPE["Z2"] == 5 -- assert against the real
+    # target function instead of hardcoding that coincidence.
+    target_au = session_target_load_au(planned[0], athlete)
+    actual_au = session_load(workouts[0]).value
+    result = compliance_by_load(planned, workouts, athlete)
+    assert result == pytest.approx(actual_au / target_au * 100)
+
+
+def test_compliance_by_load_below_100_when_under_delivered():
+    athlete = make_athlete()
+    planned = [
+        make_session(intensity={"zone": "Z3", "anchor": "css_pace"}, duration_min=120.0),
+    ]
+    workouts = [make_workout(sport="strength", rpe=3, duration_min=30.0)]
+    target_au = session_target_load_au(planned[0], athlete)
+    actual_au = session_load(workouts[0]).value
+    assert actual_au < target_au
+    result = compliance_by_load(planned, workouts, athlete)
+    assert result == pytest.approx(actual_au / target_au * 100)
+    assert result < 100.0
+
+
+def test_compliance_by_load_none_when_nothing_planned():
+    athlete = make_athlete()
+    assert compliance_by_load([], [make_workout(rpe=5)], athlete) is None
+
+
+def test_compliance_by_load_includes_non_swim_sessions_unlike_distance_compliance():
+    # Unlike compliance()'s {swim_pool, swim_ow} allowlist, load-based
+    # compliance has no sport filter -- every session/workout carries a real
+    # load projection regardless of sport.
+    athlete = make_athlete()
+    planned = [make_session(sport="strength", intensity={}, duration_min=45.0)]
+    workouts = [make_workout(sport="strength", rpe=6, duration_min=45.0)]
+    target_au = session_target_load_au(planned[0], athlete)
+    actual_au = session_load(workouts[0]).value
+    result = compliance_by_load(planned, workouts, athlete)
+    assert result == pytest.approx(actual_au / target_au * 100)
+
+
+# --- compute_compliance (swim vs. non-swim dispatch) ------------------------------
+
+
+def test_compute_compliance_dispatches_to_distance_compliance_when_swim_primary():
+    athlete = make_athlete()
+    planned = [make_session(distance_m=5000, sport="swim_pool")]
+    workouts = [make_workout(distance_m=5000, sport="swim_pool")]
+    assert compute_compliance(planned, workouts, athlete) == pytest.approx(
+        compliance(planned, workouts)
+    )
+
+
+def test_compute_compliance_dispatches_to_load_compliance_when_not_swim_primary():
+    athlete = make_athlete()
+    planned = [make_session(sport="strength", intensity={}, duration_min=45.0)]
+    workouts = [make_workout(sport="strength", rpe=6, duration_min=45.0)]
+    assert compute_compliance(planned, workouts, athlete) == pytest.approx(
+        compliance_by_load(planned, workouts, athlete)
+    )
+
+
+def test_compute_compliance_none_when_nothing_planned_either_path():
+    athlete = make_athlete()
+    assert compute_compliance([], [make_workout(distance_m=5000)], athlete) is None
 
 
 # --- session_target_load_au ------------------------------------------------------
