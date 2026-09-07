@@ -5,7 +5,13 @@ No LLM calls, no network access — pure arithmetic.
 
 import pytest
 
-from swim_coach.zones import css_from_test, infer_ow_pace, zone_table
+from swim_coach.zones import (
+    bike_zone_for_pct,
+    bike_zone_table,
+    css_from_test,
+    infer_ow_pace,
+    zone_table,
+)
 
 
 # --- css_from_test -----------------------------------------------------------
@@ -119,3 +125,60 @@ def test_infer_ow_pace_water_temp_exactly_at_threshold_not_cold():
 def test_infer_ow_pace_rejects_unknown_conditions():
     with pytest.raises(ValueError):
         infer_ow_pace(95.0, wetsuit=False, conditions="hurricane", water_temp_c=20.0)
+
+
+# --- bike_zone_for_pct / bike_zone_table (Coggan/Allen 7-zone %FTP model) ---
+# library/23-cycling-training.md's boundary convention: inclusive on the
+# upper end, continuous (not whole-number-restricted). Z1 <=55%, Z2 >55-75%,
+# Z3 >75-90%, Z4 >90-105%, Z5 >105-120%, Z6 >120-150%, Z7 >150% (open).
+
+
+@pytest.mark.parametrize(
+    "pct,expected_zone",
+    [
+        (0.0, "Z1"),
+        (54.9, "Z1"),
+        (55.0, "Z1"),  # exact boundary -- inclusive on the upper end
+        (55.1, "Z2"),
+        (56.0, "Z2"),
+        (75.0, "Z2"),  # exact boundary
+        (75.1, "Z3"),
+        (90.0, "Z3"),  # exact boundary
+        (90.1, "Z4"),
+        (105.0, "Z4"),  # exact boundary
+        (105.1, "Z5"),
+        (120.0, "Z5"),  # exact boundary
+        (120.1, "Z6"),
+        (150.0, "Z6"),  # exact boundary
+        (150.1, "Z7"),
+        (200.0, "Z7"),  # open-ended, no upper cap
+    ],
+)
+def test_bike_zone_for_pct_boundaries(pct, expected_zone):
+    assert bike_zone_for_pct(pct) == expected_zone
+
+
+def test_bike_zone_table_shape_and_watts():
+    table = bike_zone_table(250.0)
+    assert set(table) == {"Z1", "Z2", "Z3", "Z4", "Z5", "Z6", "Z7"}
+    z2 = table["Z2"]
+    assert z2["lo_pct_ftp"] == 55.0
+    assert z2["hi_pct_ftp"] == 75.0
+    assert z2["watts_lo"] == pytest.approx(250.0 * 0.55)
+    assert z2["watts_hi"] == pytest.approx(250.0 * 0.75)
+
+
+def test_bike_zone_table_z7_is_open_ended():
+    table = bike_zone_table(250.0)
+    z7 = table["Z7"]
+    assert z7["hi_pct_ftp"] is None
+    assert z7["watts_hi"] is None
+    assert z7["lo_pct_ftp"] == 150.0
+    assert z7["watts_lo"] == pytest.approx(250.0 * 1.5)
+
+
+def test_bike_zone_table_z1_starts_at_zero():
+    table = bike_zone_table(300.0)
+    z1 = table["Z1"]
+    assert z1["lo_pct_ftp"] == 0.0
+    assert z1["watts_lo"] == 0.0

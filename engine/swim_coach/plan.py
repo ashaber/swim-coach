@@ -48,7 +48,7 @@ from swim_coach.workout_templates import (
     render_prose,
     resolve_template,
 )
-from swim_coach.zones import zone_table
+from swim_coach.zones import bike_zone_table, zone_table
 
 EventFormat = Literal["single_day", "multi_day_stage"]
 
@@ -137,6 +137,41 @@ STAGE_SATURDAY_SHARE = 0.55
 # stage event's Sunday leg is always swum on Saturday's fatigue -- training
 # should mirror that order. library/06-long-swim-progression.md
 # (to be authored).
+
+# --- Bike-primary week generation constants ---------------------------------
+# engine/cycling-coach: a real, minimal session-content path for a
+# "bike"-primary week (Event.target_metric == "duration_min", the
+# multi-sport-unlock build already shipped on main -- see
+# engine/multisport-target-metric-unlock). Deliberately NOT a
+# cycling-specific periodization design (no long-ride ladder, no
+# block-shape beyond what scaffold_macro's already-generic base/build/
+# peak/taper arithmetic provides) -- this only distributes whatever
+# weekly total that generic arithmetic already computed across a small,
+# fixed, Coach-judgment session cadence. library/23-cycling-training.md.
+
+BIKE_SESSIONS_PER_WEEK = 3
+# Coach judgment: no source (including Galán-Rioja et al. 2023, cited in
+# library/23-cycling-training.md) prescribes a specific weekly SESSION
+# COUNT for a trained cyclist -- that review reports observed weekly HOUR
+# ranges across periodization models, not a session-count target. 3/week is
+# an engineering default so a bike-primary week has real, distinct content
+# (one harder day, the rest endurance) instead of one undifferentiated
+# blob or an empty placeholder.
+
+BIKE_HARD_SESSION_SHARE = 0.35
+# Coach judgment: of the week's total duration, this share goes to ONE
+# Z3 tempo-emphasis ride; the remainder splits evenly across the other
+# BIKE_SESSIONS_PER_WEEK - 1 sessions as Z2 endurance rides. Both
+# pyramidal (more Z2, some Z3, little top-end) and polarized distributions
+# are reported as viable without a clear winner by Galán-Rioja et al. 2023
+# (library/23-cycling-training.md) -- this specific 35% split is this
+# engine's own default, not a cited ratio.
+
+DEFAULT_BIKE_SESSION_MIN = 15.0
+# Floor so a heavily-taper-compressed or very-early-ramp bike session
+# never collapses to a 0- or near-0-minute, unrepresentable session --
+# same role DEFAULT_POOL_SESSION_MIN/RECOVERY_SESSION_MIN's floors already
+# play for swim/recovery sessions. Coach judgment.
 
 # --- Weekly session-generation constants ------------------------------------
 
@@ -991,6 +1026,83 @@ def _race_week_checklist(event: Event, week_start: date) -> list[RaceWeekCheckli
     return items
 
 
+def _bike_week_sessions(
+    athlete: Athlete,
+    week_start: date,
+    total_duration_min: float,
+    ftp_watts: float | None,
+) -> list[Session]:
+    """Generate `BIKE_SESSIONS_PER_WEEK` generic cycling sessions splitting
+    `total_duration_min` across a small, fixed weekly cadence:
+    `BIKE_HARD_SESSION_SHARE` of the total goes to one Z3 tempo-emphasis
+    session, the rest splits evenly across the remaining Z2 endurance
+    sessions. See the module-level constants above for the citation/scope
+    notes, and `generate_week`'s own docstring for why `total_duration_min`
+    is what it is.
+
+    `ftp_watts`, when known, resolves each session's zone into absolute
+    watt bounds via `zones.bike_zone_table` (library/23-cycling-training.md);
+    when `None`, sessions still carry a real zone name (e.g. "Z2") with no
+    absolute watts -- the same graceful-partial-data convention
+    `DEFAULT_CSS_PACE_S_PER_100M`'s swim counterpart already uses elsewhere
+    in this module.
+
+    Deliberately NOT a cycling-specific periodization design (no long-ride
+    ladder, no block-shape beyond scaffold_macro's own generic arithmetic)
+    -- see this build's own scope note. Days are spread evenly across the
+    week via `_pick_days` with no exclusions -- a bike-only athlete has no
+    `pool_schedule`-equivalent field yet to avoid conflicting with.
+
+    `Session.intensity` carries `{"zone": ..., "ftp_watts_lo": ...,
+    "ftp_watts_hi": ...}` -- deliberately no `"anchor"` key (Session's own
+    `_validate_intensity` only restricts `anchor` to `{css_pace, rpe, hr}`
+    when present at all; a power-based target has no matching value in that
+    set, so this omits the key entirely rather than mislabeling it).
+    """
+    n = BIKE_SESSIONS_PER_WEEK
+    hard_min = round(total_duration_min * BIKE_HARD_SESSION_SHARE, 1)
+    easy_count = n - 1
+    remaining_min = max(0.0, total_duration_min - hard_min)
+    easy_min = round(remaining_min / easy_count, 1) if easy_count > 0 else 0.0
+
+    offsets = _pick_days(n, excluded=set())
+    zone_table_watts = bike_zone_table(ftp_watts) if ftp_watts is not None else None
+
+    sessions: list[Session] = []
+    for i, offset in enumerate(offsets):
+        is_hard = i == 0
+        duration = hard_min if is_hard else easy_min
+        zone = "Z3" if is_hard else "Z2"
+        intensity: dict = {"zone": zone}
+        if zone_table_watts is not None:
+            zone_row = zone_table_watts[zone]
+            intensity["ftp_watts_lo"] = round(zone_row["watts_lo"], 0)
+            intensity["ftp_watts_hi"] = (
+                round(zone_row["watts_hi"], 0) if zone_row["watts_hi"] is not None else None
+            )
+        purpose = (
+            "tempo ride (Z3) — race-specific intensity"
+            if is_hard
+            else "endurance ride (Z2) — aerobic base"
+        )
+        sessions.append(
+            Session(
+                id=uuid4(),
+                athlete_id=athlete.id,
+                date=week_start + timedelta(days=offset),
+                sport="bike",
+                source="ai_coach",
+                duration_min=max(duration, DEFAULT_BIKE_SESSION_MIN),
+                distance_m=None,
+                intensity=intensity,
+                purpose=purpose,
+                structure=None,
+                status="planned",
+            )
+        )
+    return sessions
+
+
 def generate_week(
     athlete: Athlete,
     macro: MacroPlan,
@@ -999,6 +1111,8 @@ def generate_week(
     event_format: EventFormat = "single_day",
     template_preference: TemplatePreference | None = None,
     event: Event | None = None,
+    primary_sport: Literal["swim", "bike"] = "swim",
+    ftp_watts: float | None = None,
 ) -> WeekPlan:
     """Generate one week's sessions.
 
@@ -1032,6 +1146,32 @@ def generate_week(
     session template (`_strength_session_structure_template` has its own,
     separate rotation, out of scope for this pass) or the long swim/recovery
     sessions (neither uses the template library at all).
+
+    `primary_sport` (defaults to `"swim"` -- every existing call site keeps
+    producing byte-identical output unless updated to pass `"bike"`):
+    when `"bike"`, this function takes a completely SEPARATE, much simpler
+    path (`_bike_week_sessions`) instead of everything described below --
+    no pool sessions, no long swim, no strength/recovery days, no
+    `event_format`/`template_preference` handling. The block-interpolated
+    `target_volume_m` computed above is, for a bike-primary week,
+    interpreted as the week's TOTAL DURATION IN MINUTES (matching
+    `Event.target_metric == "duration_min"`, the multi-sport-unlock case
+    this build actually implements content for -- see `models.Event`'s own
+    docstring on why duration+intensity, not distance, is cycling's natural
+    target unit) and split across `BIKE_SESSIONS_PER_WEEK` generic Z2/Z3
+    sessions. **Known, deliberate scope limit:** a macro scaffolded with
+    `Event.target_metric == "load_au"` also reaches this path (nothing here
+    checks which target_metric produced `target_volume_m`), but the number
+    would then be an AU load total, not minutes -- this build does not
+    disambiguate between the two units. Extending this to genuinely handle
+    `load_au` bike weeks is real, documented future scope, not attempted
+    here (matching this build's own explicit brief: implement real content
+    for the shipped multi-sport unlock without inventing a cycling-specific
+    periodization design). `ftp_watts` (optional) is forwarded straight to
+    `_bike_week_sessions` -- see that function's own docstring for what it
+    does when `None`. `race_week_checklist` stays empty for a bike-primary
+    week -- `library/16-race-week.md`'s carb-load/bodywork timing content
+    hasn't been extended to cycling events, so no attempt is made to guess.
 
     Weekly target volume interpolates *linearly* within the containing
     block, from the block's start volume (see `_block_start_volume`) to
@@ -1090,6 +1230,8 @@ def generate_week(
             f"unknown event_format: {event_format!r}, must be 'single_day' or "
             "'multi_day_stage'"
         )
+    if primary_sport not in ("swim", "bike"):
+        raise ValueError(f"unknown primary_sport: {primary_sport!r}, must be 'swim' or 'bike'")
     block_index, block = _find_block(macro, week_start)
     weeks_in_block = (block.end_date - block.start_date).days // 7 + 1
     week_index_in_block = (week_start - block.start_date).days // 7
@@ -1100,6 +1242,28 @@ def generate_week(
     end_volume = block.weekly_volume_target_m
     frac = (week_index_in_block + 1) / weeks_in_block
     target_volume_m = round(start_volume + (end_volume - start_volume) * frac)
+
+    if primary_sport == "bike":
+        # Separate, much simpler path -- see this function's own docstring
+        # for the "bike-primary week" scope note (units, race-week
+        # limitation, etc). None of the swim-specific machinery below
+        # (pool_offsets, long swim, strength/recovery placement,
+        # event_format, template_preference) applies.
+        bike_sessions = _bike_week_sessions(
+            athlete, week_start, float(target_volume_m), ftp_watts
+        )
+        return WeekPlan(
+            id=uuid4(),
+            athlete_id=athlete.id,
+            iso_week=iso_week,
+            meso_block=block.name,
+            focus=block.focus,
+            target_volume_m=target_volume_m,
+            sessions=bike_sessions,
+            adaptation_rationale=None,
+            draft=False,
+            race_week_checklist=[],
+        )
 
     pool_offsets = {_pool_day_offset(entry) for entry in athlete.pool_schedule}
     pace_s = _z2_pace_s_per_100m(athlete)

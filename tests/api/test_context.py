@@ -174,6 +174,84 @@ def test_route_library_files_set_structure_question_reaches_14() -> None:
     assert "14-swim-set-structure.md" in files
 
 
+# --- sport-scope filtering (IDEA 008: never surface cycling content to a ---
+# --- swim-only athlete, or vice versa; see context.filter_files_by_sport_
+# --- scope's own docstring) ---------------------------------------------
+
+
+def test_route_library_files_cycling_keyword_reaches_23_when_sports_none() -> None:
+    # Every real athlete today has Athlete.sports=None -- no filtering
+    # applies, so a (currently unlikely) cycling-shaped question still
+    # routes normally. Proves the mechanism's mere existence changes
+    # nothing for today's real athletes.
+    files = route_library_files("What's my FTP zone for this ride?")
+    assert "23-cycling-training.md" in files
+
+
+def test_route_library_files_bike_athlete_reaches_cycling_file() -> None:
+    files = route_library_files(
+        "What's my FTP zone for this ride?", athlete_sports=["bike"]
+    )
+    assert "23-cycling-training.md" in files
+
+
+def test_route_library_files_swim_only_athlete_excludes_cycling_file() -> None:
+    # The core IDEA 008 guarantee: a swim-configured athlete's cycling-
+    # keyword-matching question must never route to 23-cycling-training.md,
+    # even though the keyword matched.
+    files = route_library_files(
+        "What's my FTP zone for this ride?", athlete_sports=["swim_pool", "swim_ow"]
+    )
+    assert "23-cycling-training.md" not in files
+
+
+def test_route_library_files_swim_only_athlete_swim_routing_unaffected() -> None:
+    # Sport-scope filtering must not touch UNSCOPED files -- a swim
+    # athlete's ordinary swim-keyword routing is untouched.
+    files = route_library_files(
+        "What pace should I swim my Z2 set at?", athlete_sports=["swim_pool", "swim_ow"]
+    )
+    assert "04-css-intensity-anchors.md" in files
+
+
+def test_filter_files_by_sport_scope_none_is_noop() -> None:
+    from app.context import filter_files_by_sport_scope
+
+    files = ["03-periodization.md", "23-cycling-training.md"]
+    assert filter_files_by_sport_scope(files, None) == files
+
+
+def test_filter_files_by_sport_scope_unscoped_file_never_excluded() -> None:
+    from app.context import filter_files_by_sport_scope
+
+    # 03-periodization.md has no declared sport scope -- it must survive
+    # filtering for ANY athlete_sports value, bike-only included.
+    files = ["03-periodization.md", "23-cycling-training.md"]
+    assert filter_files_by_sport_scope(files, ["bike"]) == files
+
+
+def test_filter_files_by_sport_scope_is_symmetric_not_cycling_special_cased(
+    monkeypatch,
+) -> None:
+    # Proves the mechanism itself is generic (works "or the reverse"), using
+    # a synthetic swim-scoped file -- no real swim library file is scoped
+    # today, but the filter function must not special-case cycling.
+    import app.context as context_module
+
+    monkeypatch.setitem(
+        context_module._LIBRARY_FILE_SPORT_SCOPE,
+        "99-fake-swim-only.md",
+        frozenset({"swim_pool"}),
+    )
+    files = ["99-fake-swim-only.md", "23-cycling-training.md"]
+    assert context_module.filter_files_by_sport_scope(files, ["bike"]) == [
+        "23-cycling-training.md"
+    ]
+    assert context_module.filter_files_by_sport_scope(files, ["swim_pool"]) == [
+        "99-fake-swim-only.md"
+    ]
+
+
 def test_routed_block_always_includes_reference_list(library_dir) -> None:
     block = build_routed_block(library_dir, "what pace should I swim at?")
     assert "library/reference_list.md" in block[0]["text"]

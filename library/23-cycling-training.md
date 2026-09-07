@@ -1,31 +1,45 @@
 # Cycling training (road / mountain bike / cyclocross)
 
+See `00-conventions.md` for the tagging scheme and `reference_list.md` for
+full citations.
+
 **UNREVIEWED.** First cycling-native library file (`engine/cycling-coach`
 branch; `IDEAS.md` IDEA 008 "Multi-sport expansion," use case 5 — Andrew
-himself, MTB + cyclocross). Research-only pass: no engine code changed yet.
-Raw research input: `library/research-dossiers/2026-09-07-cycling-training.md`
-(not itself citable — cite this file and `reference_list.md` directly).
+himself, MTB + cyclocross). Raw research input:
+`library/research-dossiers/2026-09-07-cycling-training.md` (not itself
+citable — cite this file and `reference_list.md` directly). Reviewed
+against `library/research-dossiers/2026-09-07-cycling-training-critique.md`'s
+adversarial pass before any engine code was wired to it.
 
-**Tagging-mechanism caveat, stated plainly:** `00-conventions.md`'s
-EVIDENCE tag (allowed values `swim-ultra`/`swim`) and ADAPTED tag (allowed
-values `cycling`/`running`/`tri`/`general-endurance`) scheme has no
-cycling-native EVIDENCE value — `tests/unit/test_library_discipline.py`'s
-`EVIDENCE_ALLOWED` only permits `swim-ultra`/`swim`, and `00-conventions.md`
-doesn't define anything else.
-Every claim below sourced directly from cycling's own literature is
-therefore tagged **ADAPTED (cycling)** purely to satisfy the CI gate's
-allowed-value list — not because it is genuinely being adapted across
-disciplines. A "high" confidence grade on those claims means "no real
-cross-discipline inference is happening," which is the honest read of the
-tag mechanism's mismatch, not the epistemic content. `IDEAS.md`'s IDEA 008
-already flags this exact gap ("no reciprocal tag exists"); fixing it means
-editing `00-conventions.md` and the CI gate's allowed-value sets, which is
-out of scope for a research-only pass and needs its own human-reviewed
-change, not a unilateral fix here.
+**Guidance-scoping constraint (IDEA 008, hard requirement):** this file
+must only ground answers for an athlete whose own configured sport(s)
+include cycling — never surface cycling content to a swim-only athlete
+(Renee). Enforced structurally, not just by this note: `INDEX.md`'s file
+metadata tags this file `Sport scope: bike`, and `backend/app/context.py`'s
+library-file router excludes any routed file whose declared sport scope
+doesn't intersect the athlete's own `Athlete.sports` whenever that field is
+actually set (see `context.py`'s `filter_files_by_sport_scope` and
+`test_context.py`'s coverage) — `Athlete.sports = None` (every real athlete
+today) leaves routing completely unchanged.
+
+**Tagging-mechanism note (resolved):** `00-conventions.md` now defines a
+native per-discipline EVIDENCE tag (allowed values include cycling, written
+as **EVIDENCE (cycling)** below) for claims sourced directly from a
+non-swim discipline and applied to an athlete in that same discipline —
+distinct from **ADAPTED (cycling)**, which is for borrowing cycling
+evidence INTO the swim-ultra plan. Every claim below that is genuinely
+direct cycling evidence carries the new EVIDENCE-cycling tag now, not the
+old ADAPTED-cycling one — this file no longer needs the earlier workaround
+where every cycling-native claim was mechanically tagged ADAPTED purely to
+satisfy the CI gate's allowed-value list (see `IDEAS.md` IDEA 008's "no
+reciprocal tag exists" gap, now closed). The remaining general-endurance
+ADAPTED tags below are genuine adaptations (a non-cycling population's
+findings applied cautiously to this athlete's cycling plan), left exactly
+as ADAPTED.
 
 ## Power-based training zones (Coggan 7-zone model)
 
-**`[ADAPTED: cycling]`** Cycling's power-meter-based training zones are
+**`[EVIDENCE: cycling]`** Cycling's power-meter-based training zones are
 defined as fixed percentages of Functional Threshold Power (FTP — the
 highest average power sustainable for ~60 minutes): Z1 Active Recovery
 <55%, Z2 Endurance 56–75%, Z3 Tempo 76–90%, Z4 Lactate Threshold 91–105%,
@@ -44,6 +58,17 @@ zone predicts (e.g. Z2 riding feels harder than "conversational" across
 several weeks), re-test FTP before assuming the zone boundaries themselves
 are wrong.
 
+**Zone-boundary convention (engineering decision, resolves the source
+table's own whole-number gaps, e.g. "55%"/"56%" leaving 55.0–55.99%
+formally unclassified):** boundaries are inclusive on the upper end and
+continuous, not restricted to whole numbers. A %FTP value falls in the
+FIRST zone whose stated upper bound is `>=` that value: Z1 is `<= 55%`, Z2
+is `> 55% and <= 75%`, Z3 is `> 75% and <= 90%`, Z4 is `> 90% and <= 105%`,
+Z5 is `> 105% and <= 120%`, Z6 is `> 120% and <= 150%`, Z7 is `> 150%`
+(open-ended, no upper cap). `engine/swim_coach/zones.py`'s
+`bike_zone_for_pct`/`bike_zone_table` implement exactly this convention —
+see that module's own citation comment.
+
 Unlike swimming (no power meter — `05-open-water-pace-inference.md`
 infers pace from CSS instead), cycling zones anchor directly to a
 continuously measurable output, so there is no analog to swimming's
@@ -52,7 +77,7 @@ between the two disciplines' zone systems, not just a units change.
 
 ## Training Stress Score, Normalized Power, Intensity Factor
 
-**`[ADAPTED: cycling]`** Normalized Power (NP) is computed via a 4-step
+**`[EVIDENCE: cycling]`** Normalized Power (NP) is computed via a 4-step
 algorithm: (1) a rolling 30-second average of power across the ride, (2)
 each value raised to the 4th power, (3) those values averaged, (4) the
 4th root taken. Intensity Factor `IF = NP / FTP`. Training Stress Score
@@ -84,7 +109,7 @@ study; none was found this pass.
 `ATL_TIME_CONSTANT_DAYS = 7` are already flagged "unverified for swimming."
 This section answers the parallel question for their native discipline.
 
-**`[ADAPTED: cycling]`** The impulse-response model these constants
+**`[EVIDENCE: cycling]`** The impulse-response model these constants
 implement originates with `Banister E.W., Calvert T.W., Savage M.V.,
 Bach T. (1975)`, "A Systems Model of Training for Athletic Performance,"
 *Australian Journal of Sports Medicine*, 7:57-61 (title/authors/journal/
@@ -121,7 +146,7 @@ multi-week trend, not a point value, before making a plan decision off it.
 
 ## Periodization and volume progression
 
-**`[ADAPTED: cycling]`** `Galán-Rioja M.Á., González-Ravé J.M.,
+**`[EVIDENCE: cycling]`** `Galán-Rioja M.Á., González-Ravé J.M.,
 González-Mohíno F., Seiler S. (2023)`, "Training Periodization, Intensity
 Distribution, and Volume in Trained Cyclists: A Systematic Review,"
 *IJSPP*, 18(2):112-122 (7 studies, PRISMA methodology): traditional
@@ -150,18 +175,35 @@ week-to-week ramp cap this engine adds for cycling should be marked
 
 ## Injury: patellofemoral pain and knee loading
 
-**`[ADAPTED: cycling]`** `Clarsen B., Krosshaug T., Bahr R. (2010)`,
+**`[EVIDENCE: cycling]`** `Clarsen B., Krosshaug T., Bahr R. (2010)`,
 "Overuse Injuries in Professional Road Cyclists," *American Journal of
 Sports Medicine*, 38(12):2494-2501 — 109 of 116 riders across 7
 professional teams, 94 overuse injuries registered: lower back 45%, knee
 23% (anterior knee pain a specific study focus). The best-grounded single
 source for road-cycling overuse/knee-injury prevalence found this pass —
-an elite, direct, cycling-specific cohort. **Confidence: high.** **Test:**
-flag any week where reported knee discomfort co-occurs with a recent
-saddle-height or cleat-position change before assuming it's a load-volume
-problem rather than a bike-fit one.
+an elite, direct, cycling-specific cohort.
 
-**`[ADAPTED: cycling]`** `Bini R., Priego-Quesada J. (2022)`, "Methods to
+**Discipline-mismatch caveat (this athlete is primarily MTB + cyclocross,
+not road):** this cohort is exclusively professional ROAD racers — high
+sustained-cadence, low-impact-loading pedaling, per this file's own
+"Discipline variants" section below establishing road and MTB/XCO as
+physiologically distinct populations. Protzen et al. (2026, below) shows
+MTB/XCO loading is highly intermittent (repeated above-threshold surges,
+real stress even from non-pedaling technical sections) — a different
+mechanical loading pattern on the knee than Clarsen's road cohort
+experienced, not just a different terrain. No MTB/cyclocross-specific
+overuse-knee-injury epidemiology was found this pass — an honest gap,
+consistent with how this section's own cyclocross-injury citation below
+handles its gap. **Confidence discounted from `high` to `medium-high`**
+for THIS athlete's actual disciplines specifically (still `high` as
+road-cycling evidence on its own terms) — treat Clarsen's overuse-
+*mechanism* framing as a road-derived proxy for MTB/CX, not a direct match.
+**Test:** flag any week where reported knee discomfort co-occurs with a
+recent saddle-height or cleat-position change before assuming it's a
+load-volume problem rather than a bike-fit one; if MTB/CX-specific knee-
+injury research becomes available, prefer it over this road-cohort proxy.
+
+**`[EVIDENCE: cycling]`** `Bini R., Priego-Quesada J. (2022)`, "Methods to
 determine saddle height in cycling and implications of changes in saddle
 height in performance and injury risk: A systematic review," *Journal of
 Sports Sciences*, 40(4):386-400 (41 included studies, screened from
@@ -181,7 +223,7 @@ Research does **not** treat cycling as one generic umbrella — road and
 MTB (XCO) are studied as physiologically distinct, and cyclocross is an
 explicitly acknowledged research gap, not merely an unexamined one.
 
-**`[ADAPTED: cycling]`** `Protzen G., Inoue A., Buzzachera C., Doma K.,
+**`[EVIDENCE: cycling]`** `Protzen G., Inoue A., Buzzachera C., Doma K.,
 Devantier-Thomas B., Herrero-Molleda A., García-López J., Boullosa D.
 (2026)`, "The Physiology of Contemporary Olympic Cross-Country Mountain
 Biking: A Systematic Review," *Sports Medicine - Open*, 12:16 (direct
@@ -196,7 +238,7 @@ road-style steady-power targets, expect a mismatch against felt effort on
 technical terrain — MTB session design should budget for intermittent
 above-threshold surges, not a single target watt.
 
-**`[ADAPTED: cycling]`** `Fallon T., Palmer D., Bigard X., Heron N.
+**`[EVIDENCE: cycling]`** `Fallon T., Palmer D., Bigard X., Heron N.
 (2025)`, "Epidemiology of injury and illness across all the competitive
 cycling disciplines: a systematic review and meta-analysis," *BMJ Open
 Sport & Exercise Medicine*, 11(3):e002364 (direct full-text read):
@@ -212,7 +254,7 @@ reports a crash-related injury, treat it as this section's acute/
 upper-limb pattern, not the overuse/knee pattern above — different
 mechanism, different response.
 
-**`[ADAPTED: cycling]`** `Fallon T., Fischer N., Heron N. (2025)`, "Injury
+**`[EVIDENCE: cycling]`** `Fallon T., Fischer N., Heron N. (2025)`, "Injury
 epidemiology in cyclocross. A preliminary study," *The Physician and
 Sportsmedicine*, published online 2025-11-13: 534 riders at the 2025
 British National Cyclocross Championships, 6.7% injury rate, mostly

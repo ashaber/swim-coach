@@ -20,7 +20,18 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 # swim volume (load.py's volume filters allowlist {swim_pool, swim_ow}).
 # The planner never schedules it; it exists so real .fit imports of non-swim
 # activities aren't mislabeled as swims.
-Sport = Literal["swim_pool", "swim_ow", "strength", "recovery", "cross_train"]
+#
+# bike: a first-class, PLANNABLE cycling sport (engine/cycling-coach branch,
+# IDEA 008 use case 5) -- deliberately NOT reusing `cross_train`, which is
+# explicitly documented above as a logging-only catch-all the planner never
+# schedules. `bike` is the opposite: `plan.generate_week` can author real
+# bike sessions for it (see that module's `primary_sport` parameter). Road/
+# MTB/cyclocross/gravel sub-classification reuses the EXISTING
+# `Workout.sport_detail` free-text field below (confirmed real production
+# values: "cycling/mountain", "cycling/road", "cycling/gravel_cycling",
+# "cycling/cyclocross") rather than a new field -- see that field's own
+# comment.
+Sport = Literal["swim_pool", "swim_ow", "strength", "recovery", "cross_train", "bike"]
 
 _ISO_WEEK_RE = re.compile(r"^\d{4}-W\d{2}$")
 _VALID_ZONES = {"Z1", "Z2", "Z3", "Z4", "Z5"}
@@ -67,6 +78,22 @@ class Athlete(BaseModel):
     # every existing profile.yaml (no key present) unless explicitly toggled
     # off, same additive/no-schema_version-bump convention as
     # `has_pool_coach` above.
+    sports: list[Sport] | None = None
+    # Which sport(s) this athlete's OWN training actually spans -- IDEA 008's
+    # "never surface cycling guidance to a swim-only athlete" hard
+    # requirement (`engine/cycling-coach` branch), the structural half of
+    # the constraint `library/23-cycling-training.md`'s own guidance-scoping
+    # note names. `None` (the default) means "not yet declared" -- every
+    # existing athlete's profile.yaml has no `sports` key today, and MUST
+    # keep behaving exactly as before: `backend/app/context.py`'s library
+    # routing applies NO sport-scope filtering when `sports is None`, only
+    # once an athlete has actually set it (see `context.
+    # filter_files_by_sport_scope`). This is a capability-only build --
+    # Andrew's own explicit decision this session was to ship the mechanism
+    # without setting `sports` on any real athlete's actual data (Renee,
+    # Tim, or Andrew himself) yet; onboarding a real bike-configured athlete
+    # is deferred. Additive/optional, no schema_version bump, same
+    # convention as every other additive field in this file.
     lthr_bpm: int | None = None
     # Lactate-threshold heart rate (bpm) -- a physiological anchor the
     # athlete supplies directly (e.g. from a field test, or read off a
@@ -226,7 +253,15 @@ class WorkoutStep(BaseModel):
     duration_value: float | None = None
     target: WorkoutTarget | None = None  # swim/cardio steps
     load: WorkoutLoad | None = None  # strength steps
-    modality: Literal["swim", "strength"] = "swim"
+    modality: Literal["swim", "strength", "bike"] = "swim"
+    # "bike" added alongside `Sport`'s own "bike" value (engine/cycling-coach
+    # branch) -- a harder, per-step constraint than `Session.sport` since a
+    # single WorkoutStructure tree's steps are all one modality in practice
+    # today (see `workout_templates.render_main_set`'s modality-uniformity
+    # assumption). No cycling `WorkoutStep`s are actually constructed by this
+    # build (`plan.py`'s bike sessions stay `structured=None`, same as the
+    # existing long-swim/pool-coach-placeholder sessions) -- this is model-
+    # level groundwork only, additive/no schema_version bump.
     stroke: Literal["free", "back", "breast", "fly", "im", "mixed", "drill"] | None = None
     equipment: list[str] = Field(default_factory=list)  # e.g. ["paddles"]
     exercise_name: str | None = None  # strength steps, e.g. "kettlebell swing"

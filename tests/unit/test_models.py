@@ -1049,6 +1049,48 @@ def test_athlete_email_notifications_enabled_round_trips_when_set_false():
     assert athlete.email_notifications_enabled is False
 
 
+def test_athlete_sports_defaults_none():
+    # Every existing profile.yaml (Renee's, Tim's, Andrew's) carries no
+    # `sports` key at all -- must keep validating unchanged as `None`,
+    # meaning "not yet declared" (see the field's own docstring: `None`
+    # leaves backend/app/context.py's sport-scope filtering a no-op).
+    athlete = make_athlete()
+    assert athlete.sports is None
+
+
+def test_athlete_sports_round_trips_when_set():
+    athlete = make_athlete(sports=["bike"])
+    assert athlete.sports == ["bike"]
+
+
+def test_athlete_sports_accepts_bike_sport_value():
+    # "bike" must be a valid Sport literal value usable in Athlete.sports --
+    # engine/cycling-coach's first-class, plannable cycling sport.
+    athlete = make_athlete(sports=["bike", "strength"])
+    assert athlete.sports == ["bike", "strength"]
+
+
+def test_session_accepts_bike_sport():
+    session = make_session(sport="bike")
+    assert session.sport == "bike"
+
+
+def test_workout_accepts_bike_sport():
+    workout = make_workout(sport="bike")
+    assert workout.sport == "bike"
+
+
+def test_workout_step_accepts_bike_modality():
+    step = WorkoutStep(
+        label="Z2 ride",
+        role="steady",
+        duration_kind="time_s",
+        duration_value=1800,
+        modality="bike",
+    )
+    assert step.modality == "bike"
+
+
 # --- round-trip tests: model -> yaml -> model ---
 
 

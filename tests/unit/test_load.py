@@ -623,6 +623,63 @@ def test_session_load_never_returns_none():
     assert result.value > 0.0
 
 
+# --- session_load: "bike" sport (engine/cycling-coach's new Sport value) -----
+# Confirms (per CLAUDE.md/this build's brief) that the existing tiered
+# fallback -- already documented as sport-agnostic for tiers 1/2/4 -- really
+# does still behave that way now that "bike" is a real Sport value, without
+# inventing any power-based load scoring (out of scope for this build).
+
+
+def test_session_load_bike_srpe_tier_unchanged():
+    # Tier 1 (sRPE) is sport-agnostic -- a bike workout with RPE logged
+    # scores exactly like any other sport's.
+    workout = make_workout(sport="bike", duration_min=90.0, rpe=6, distance_m=0)
+    result = session_load(workout)
+    assert result.tier == "srpe"
+    assert result.value == pytest.approx(90.0 * 6)
+
+
+def test_session_load_bike_hr_trimp_tier_reachable():
+    # Tier 2 (HR-based TRIMP) is sport-agnostic too -- no `workout.sport`
+    # check gates it, so a bike ride with HR data but no RPE still reaches
+    # it (unlike tier 3, which is swim-only by design).
+    workout = make_workout(
+        sport="bike", rpe=None, avg_hr=140, duration_min=60.0, distance_m=0
+    )
+    result = session_load(workout, hr_max=180.0, hr_rest=50.0, sex="male")
+    assert result.tier == "hr_trimp"
+    assert result.value > 0.0
+
+
+def test_session_load_bike_skips_pace_tier_falls_to_duration_only():
+    # Tier 3 (swim pace-based intensity) explicitly only fires for
+    # {swim_pool, swim_ow} -- a bike workout with no RPE/HR must skip
+    # straight to tier 4 (duration-only), never attempt a pace-IF
+    # computation (bike has no CSS-pace analog).
+    workout = make_workout(
+        sport="bike",
+        rpe=None,
+        avg_hr=None,
+        avg_pace_s_per_100m=None,
+        duration_min=45.0,
+        distance_m=0,
+    )
+    result = session_load(workout, css_pace_s_per_100m=90.0)
+    assert result.tier == "duration"
+    assert result.value == pytest.approx(45.0 * DURATION_ONLY_ASSUMED_INTENSITY)
+
+
+def test_weekly_volume_m_still_excludes_bike():
+    # bike has no swim distance -- confirms _SWIM_SPORTS wasn't accidentally
+    # widened when "bike" was added to the Sport enum.
+    week_start = date(2026, 7, 6)
+    workouts = [
+        make_workout(date=week_start, sport="swim_pool", distance_m=3000),
+        make_workout(date=week_start, sport="bike", distance_m=0, duration_min=90.0),
+    ]
+    assert weekly_volume_m(workouts, week_start) == 3000
+
+
 # --- estimate_hr_max / estimate_hr_rest -----------------------------------------------
 
 

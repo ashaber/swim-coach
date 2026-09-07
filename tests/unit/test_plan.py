@@ -12,6 +12,8 @@ import pytest
 
 from swim_coach.models import Athlete, Event, RaceWeekChecklistItem, WorkoutRepeat, WorkoutStep
 from swim_coach.plan import (
+    BIKE_HARD_SESSION_SHARE,
+    BIKE_SESSIONS_PER_WEEK,
     BODYWORK_WINDOW_DAYS_OUT,
     CARB_LOAD_WINDOW_START_DAYS_OUT,
     DEFAULT_POOL_SESSION_MIN,
@@ -160,6 +162,130 @@ def test_scaffold_macro_non_distance_event_with_explicit_peak_volume_produces_a_
     # The ramp-cap safety math still applies -- sport-agnostic, no distance
     # assumption baked into it.
     assert macro.blocks[-2].weekly_volume_target_m <= 20000
+
+
+# --- generate_week: bike-primary path (engine/cycling-coach) -----------------
+
+
+def _make_bike_macro(**event_overrides):
+    athlete = make_athlete(sports=["bike"])
+    event = make_event(
+        event_date=START + timedelta(weeks=24),
+        target_metric="duration_min",
+        distance_m=None,
+        target_value=300.0,
+        **event_overrides,
+    )
+    macro = scaffold_macro(
+        athlete, event, START, current_weekly_volume_m=200, peak_weekly_volume_m=600
+    )
+    return athlete, event, macro
+
+
+def test_generate_week_bike_primary_produces_real_bike_sessions():
+    athlete, event, macro = _make_bike_macro()
+    week_start = macro.blocks[0].start_date
+    week = generate_week(
+        athlete, macro, _iso_week(week_start), week_start, primary_sport="bike"
+    )
+    assert len(week.sessions) == BIKE_SESSIONS_PER_WEEK
+    assert all(s.sport == "bike" for s in week.sessions)
+    assert all(s.source == "ai_coach" for s in week.sessions)
+    assert all(s.distance_m is None for s in week.sessions)
+    assert all(s.duration_min > 0 for s in week.sessions)
+    assert all(s.status == "planned" for s in week.sessions)
+    # one hard (Z3) session, the rest Z2 endurance
+    zones_used = [s.intensity["zone"] for s in week.sessions]
+    assert zones_used.count("Z3") == 1
+    assert zones_used.count("Z2") == BIKE_SESSIONS_PER_WEEK - 1
+    # no "anchor" key -- power-based targets have no matching Session
+    # intensity anchor value (css_pace/rpe/hr), so it's omitted, not
+    # mislabeled.
+    assert all("anchor" not in s.intensity for s in week.sessions)
+    assert week.race_week_checklist == []
+
+
+def test_generate_week_bike_primary_total_duration_matches_target():
+    athlete, event, macro = _make_bike_macro()
+    week_start = macro.blocks[0].start_date
+    week = generate_week(
+        athlete, macro, _iso_week(week_start), week_start, primary_sport="bike"
+    )
+    total = sum(s.duration_min for s in week.sessions)
+    assert total == pytest.approx(week.target_volume_m, rel=0.02)
+
+
+def test_generate_week_bike_primary_hard_session_share():
+    athlete, event, macro = _make_bike_macro()
+    week_start = macro.blocks[0].start_date
+    week = generate_week(
+        athlete, macro, _iso_week(week_start), week_start, primary_sport="bike"
+    )
+    hard = next(s for s in week.sessions if s.intensity["zone"] == "Z3")
+    assert hard.duration_min == pytest.approx(
+        week.target_volume_m * BIKE_HARD_SESSION_SHARE, rel=0.05
+    )
+
+
+def test_generate_week_bike_primary_without_ftp_has_no_watts():
+    athlete, event, macro = _make_bike_macro()
+    week_start = macro.blocks[0].start_date
+    week = generate_week(
+        athlete, macro, _iso_week(week_start), week_start, primary_sport="bike"
+    )
+    for s in week.sessions:
+        assert "ftp_watts_lo" not in s.intensity
+        assert "ftp_watts_hi" not in s.intensity
+
+
+def test_generate_week_bike_primary_with_ftp_sets_watt_bounds():
+    athlete, event, macro = _make_bike_macro()
+    week_start = macro.blocks[0].start_date
+    week = generate_week(
+        athlete,
+        macro,
+        _iso_week(week_start),
+        week_start,
+        primary_sport="bike",
+        ftp_watts=250.0,
+    )
+    expected_lo_pct = {"Z2": 0.55, "Z3": 0.75}
+    expected_hi_pct = {"Z2": 0.75, "Z3": 0.90}
+    for s in week.sessions:
+        zone = s.intensity["zone"]
+        assert s.intensity["ftp_watts_lo"] == pytest.approx(250.0 * expected_lo_pct[zone], abs=1)
+        assert s.intensity["ftp_watts_hi"] == pytest.approx(250.0 * expected_hi_pct[zone], abs=1)
+
+
+def test_generate_week_default_primary_sport_is_swim_unchanged():
+    # primary_sport defaults to "swim" -- every existing call site (no
+    # kwarg passed) must keep producing the ordinary swim-week shape.
+    athlete = make_athlete()
+    event = make_event()
+    macro = scaffold_macro(
+        athlete, event, START, current_weekly_volume_m=8000, peak_weekly_volume_m=20000
+    )
+    week_start = macro.blocks[0].start_date
+    week_default = generate_week(athlete, macro, _iso_week(week_start), week_start)
+    week_explicit = generate_week(
+        athlete, macro, _iso_week(week_start), week_start, primary_sport="swim"
+    )
+    assert week_default.target_volume_m == week_explicit.target_volume_m
+    assert [s.sport for s in week_default.sessions] == [s.sport for s in week_explicit.sessions]
+    assert any(s.sport in ("swim_pool", "swim_ow") for s in week_default.sessions)
+
+
+def test_generate_week_rejects_unknown_primary_sport():
+    athlete = make_athlete()
+    event = make_event()
+    macro = scaffold_macro(
+        athlete, event, START, current_weekly_volume_m=8000, peak_weekly_volume_m=20000
+    )
+    week_start = macro.blocks[0].start_date
+    with pytest.raises(ValueError, match="unknown primary_sport"):
+        generate_week(
+            athlete, macro, _iso_week(week_start), week_start, primary_sport="run"
+        )
 
 
 def test_scaffold_macro_refuses_2k_per_week_athlete_signing_up_for_20k_next_week():
