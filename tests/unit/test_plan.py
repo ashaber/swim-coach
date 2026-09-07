@@ -130,6 +130,38 @@ def test_scaffold_macro_raises_if_under_min_weeks():
         scaffold_macro(athlete, event, START, current_weekly_volume_m=8000)
 
 
+def test_scaffold_macro_non_distance_event_requires_explicit_peak_volume():
+    # Multi-sport unlock: target_metric != "distance_m" has no validated
+    # default-derivation formula (unlike PEAK_WEEKLY_VOLUME_X_EVENT_DISTANCE
+    # for swim), so scaffold_macro must refuse to guess.
+    athlete = make_athlete()
+    event = make_event(
+        event_date=START + timedelta(weeks=24),
+        target_metric="duration_min",
+        distance_m=None,
+        target_value=120.0,
+    )
+    with pytest.raises(ValueError, match="requires an explicit peak_weekly_volume_m"):
+        scaffold_macro(athlete, event, START, current_weekly_volume_m=8000)
+
+
+def test_scaffold_macro_non_distance_event_with_explicit_peak_volume_produces_a_macro():
+    athlete = make_athlete()
+    event = make_event(
+        event_date=START + timedelta(weeks=24),
+        target_metric="duration_min",
+        distance_m=None,
+        target_value=120.0,
+    )
+    macro = scaffold_macro(
+        athlete, event, START, current_weekly_volume_m=8000, peak_weekly_volume_m=20000
+    )
+    assert [b.name for b in macro.blocks] == ["base", "build", "peak", "taper"]
+    # The ramp-cap safety math still applies -- sport-agnostic, no distance
+    # assumption baked into it.
+    assert macro.blocks[-2].weekly_volume_target_m <= 20000
+
+
 def test_scaffold_macro_refuses_2k_per_week_athlete_signing_up_for_20k_next_week():
     # Regression test for a real scenario Andrew explicitly named as
     # intentional friction to preserve, not a bug to fix: an athlete

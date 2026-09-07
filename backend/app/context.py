@@ -44,7 +44,7 @@ from typing import Any, TypedDict
 
 from swim_coach.load import (
     acute_chronic_ratio,
-    compliance as compute_compliance,
+    compute_compliance,
     ctl_atl_tsb_series,
     daily_loads,
     estimate_hr_max,
@@ -756,7 +756,7 @@ def summarize_rollup(
             planned_sessions.extend(week_plan.sessions)
     window_workouts = [w for w in workouts if span_start <= w.date <= span_end]
     compliance_pct = (
-        compute_compliance(planned_sessions, window_workouts) if planned_sessions else None
+        compute_compliance(planned_sessions, window_workouts, athlete) if planned_sessions else None
     )
 
     return {

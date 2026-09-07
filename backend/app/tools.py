@@ -533,10 +533,35 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "Event date, formatted 'YYYY-MM-DD'.",
                 },
+                "target_metric": {
+                    "type": "string",
+                    "enum": ["distance_m", "duration_min", "load_au"],
+                    "description": (
+                        "What this event's target is measured in. 'distance_m' "
+                        "(default) for a swim/race with a real distance -- requires "
+                        "`distance_m`. 'duration_min' (e.g. a timed ride) or "
+                        "'load_au' (cumulative training-load units, e.g. strength) "
+                        "for a non-distance event -- both require `target_value` "
+                        "instead of `distance_m`. No single universal target metric "
+                        "exists across sports; only use 'duration_min'/'load_au' "
+                        "when the athlete's event genuinely has no meaningful "
+                        "distance."
+                    ),
+                },
                 "distance_m": {
                     "type": "integer",
                     "minimum": 1,
-                    "description": "Event distance in meters.",
+                    "description": (
+                        "Event distance in meters. Required when target_metric is "
+                        "'distance_m' (the default); omit otherwise."
+                    ),
+                },
+                "target_value": {
+                    "type": "number",
+                    "description": (
+                        "Required when target_metric is 'duration_min' (minutes) or "
+                        "'load_au' (AU); omit when target_metric is 'distance_m'."
+                    ),
                 },
                 "priority": {
                     "type": "string",
@@ -559,7 +584,12 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     ),
                 },
             },
-            "required": ["name", "event_date", "distance_m", "priority"],
+            # `distance_m` is NOT listed as always-required -- it's only
+            # required when target_metric is 'distance_m' (the default); the
+            # handler (`_handle_create_event`) enforces that conditional
+            # requirement, matching swim_coach.models.Event's own
+            # model_validator.
+            "required": ["name", "event_date", "priority"],
             "additionalProperties": False,
         },
     },
@@ -1810,24 +1840,49 @@ def _handle_create_event(input_data: dict[str, Any], *, store: StoreInterface, s
     event_date_str = input_data.get("event_date")
     if not event_date_str:
         return {"error": "event_date is required"}
-    distance_m = input_data.get("distance_m")
-    if distance_m is None:
-        return {"error": "distance_m is required"}
     priority = input_data.get("priority")
     if not priority:
         return {"error": "priority is required"}
+
+    target_metric = input_data.get("target_metric") or "distance_m"
+    if target_metric not in ("distance_m", "duration_min", "load_au"):
+        return {
+            "error": (
+                f"invalid target_metric {target_metric!r}; must be 'distance_m', "
+                "'duration_min', or 'load_au'"
+            )
+        }
+
+    # distance_m/target_value: which is required depends on target_metric --
+    # same conditional rule swim_coach.models.Event's own model_validator
+    # enforces (kept here too, so this fails fast with a clear tool-level
+    # error message rather than a raw pydantic ValidationError below).
+    distance_m = input_data.get("distance_m")
+    target_value = input_data.get("target_value")
+    if target_metric == "distance_m":
+        if distance_m is None:
+            return {"error": "distance_m is required when target_metric is 'distance_m'"}
+        try:
+            distance_m = int(distance_m)
+        except (TypeError, ValueError):
+            return {"error": f"invalid distance_m {distance_m!r}"}
+        if distance_m <= 0:
+            return {"error": f"distance_m must be > 0, got {distance_m!r}"}
+    else:
+        if target_value is None:
+            return {
+                "error": f"target_value is required when target_metric is {target_metric!r}"
+            }
+        try:
+            target_value = float(target_value)
+        except (TypeError, ValueError):
+            return {"error": f"invalid target_value {target_value!r}"}
+        distance_m = None
 
     try:
         event_date = date.fromisoformat(event_date_str)
     except (TypeError, ValueError):
         return {"error": f"invalid event_date {event_date_str!r}; expected format 'YYYY-MM-DD'"}
-
-    try:
-        distance_m = int(distance_m)
-    except (TypeError, ValueError):
-        return {"error": f"invalid distance_m {distance_m!r}"}
-    if distance_m <= 0:
-        return {"error": f"distance_m must be > 0, got {distance_m!r}"}
 
     water_temp_c = input_data.get("water_temp_c")
     if water_temp_c is not None:
@@ -1863,7 +1918,9 @@ def _handle_create_event(input_data: dict[str, Any], *, store: StoreInterface, s
             schema_version=1,
             name=name,
             event_date=event_date,
+            target_metric=target_metric,
             distance_m=distance_m,
+            target_value=target_value,
             water_temp_c=water_temp_c,
             wetsuit=wetsuit,
             priority=priority,
@@ -1881,7 +1938,9 @@ def _handle_create_event(input_data: dict[str, Any], *, store: StoreInterface, s
         "id": str(event.id),
         "name": event.name,
         "event_date": event.event_date.isoformat(),
+        "target_metric": event.target_metric,
         "distance_m": event.distance_m,
+        "target_value": event.target_value,
         "water_temp_c": event.water_temp_c,
         "wetsuit": event.wetsuit,
         "priority": event.priority,

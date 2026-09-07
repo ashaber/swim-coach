@@ -171,6 +171,38 @@ def test_onboard_css_from_test_times(client, pending_invite, google):
     assert saved.css_pace_s_per_100m == 110.0
 
 
+def test_onboard_non_distance_event_target_metric_threads_through(client, pending_invite, google):
+    # Multi-sport unlock: OnboardEventIn's new target_metric/target_value
+    # fields, threaded through to Event via provision_athlete. distance_m
+    # omitted entirely -- an explicit peak_volume_m (already in
+    # _valid_body) is required for scaffold_macro to accept a non-distance
+    # event (see plan.scaffold_macro's own ValueError for the reason).
+    token = _onboarding_token(client, pending_invite, google)
+    body = _valid_body(
+        events=[
+            {
+                "name": "Endurance Ride Block",
+                "event_date": EVENT_DATE,
+                "priority": "A",
+                "target_metric": "duration_min",
+                "target_value": 120,
+            }
+        ],
+    )
+
+    resp = client.post("/api/onboard", json=body, headers=_bearer(token))
+    assert resp.status_code == 200
+    slug = resp.json()["athlete"]
+    saved_events = pending_invite.load_events(slug)
+    assert len(saved_events) == 1
+    assert saved_events[0].target_metric == "duration_min"
+    assert saved_events[0].target_value == 120
+    assert saved_events[0].distance_m is None
+    # scaffold_macro still ran (peak_volume_m was supplied) -- the
+    # ramp-cap safety math is sport-agnostic.
+    assert pending_invite.load_macro(slug) is not None
+
+
 def test_onboard_without_events_still_provisions_bare_athlete(client, pending_invite, google):
     token = _onboarding_token(client, pending_invite, google)
     body = _valid_body()

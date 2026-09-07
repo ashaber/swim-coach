@@ -705,10 +705,15 @@ def scaffold_macro(
     remaining weeks split base/build (base getting ceil(BASE_SHARE)).
 
     peak_weekly_volume_m defaults to event.distance_m *
-    PEAK_WEEKLY_VOLUME_X_EVENT_DISTANCE, but is never allowed to exceed
-    current_weekly_volume_m compounded at WEEKLY_VOLUME_RAMP_CAP/week over
-    the base+build weeks -- this applies even if peak_weekly_volume_m is
-    passed explicitly. If clamped, a UserWarning records the original vs.
+    PEAK_WEEKLY_VOLUME_X_EVENT_DISTANCE -- ONLY when event.target_metric ==
+    "distance_m" (the only sport this default-derivation formula is
+    evidenced for). For any other target_metric ("duration_min"/"load_au"),
+    peak_weekly_volume_m is REQUIRED: raises ValueError if omitted, rather
+    than guessing at an unvalidated duration/load-driven default. Whenever a
+    value is available (explicit or distance-derived), it's never allowed to
+    exceed current_weekly_volume_m compounded at WEEKLY_VOLUME_RAMP_CAP/week
+    over the base+build weeks -- this applies even if peak_weekly_volume_m
+    is passed explicitly. If clamped, a UserWarning records the original vs.
     clamped value.
 
     Each MacroBlock's `weekly_volume_target_m` is the block's END-of-block
@@ -732,7 +737,24 @@ def scaffold_macro(
     base_weeks = math.ceil(remainder_weeks * BASE_SHARE)
     build_weeks = remainder_weeks - base_weeks
 
-    distance_driven_target = event.distance_m * PEAK_WEEKLY_VOLUME_X_EVENT_DISTANCE
+    if event.target_metric == "distance_m":
+        distance_driven_target = event.distance_m * PEAK_WEEKLY_VOLUME_X_EVENT_DISTANCE
+    elif peak_weekly_volume_m is None:
+        # No validated duration/load-driven default-derivation formula
+        # exists yet -- fabricating a "target_value x some constant" number
+        # here would violate this project's evidence-citation discipline
+        # (no research grounds such a constant, unlike
+        # PEAK_WEEKLY_VOLUME_X_EVENT_DISTANCE above). Deferred until real
+        # sport-specific research lands (see ROADMAP.md IDEA 007-010 /
+        # multi-sport-unlock design discussion) -- raise rather than guess.
+        raise ValueError(
+            f"scaffold_macro requires an explicit peak_weekly_volume_m when "
+            f"event.target_metric={event.target_metric!r} (not 'distance_m') "
+            "-- no default peak-volume formula exists yet for non-distance "
+            "events"
+        )
+    else:
+        distance_driven_target = None  # unreachable below: peak_weekly_volume_m is set
     ramp_weeks = base_weeks + build_weeks
     ramp_seed = max(current_weekly_volume_m, MIN_RAMP_SEED_VOLUME_M)
     ramp_limited_max = ramp_seed * (1 + WEEKLY_VOLUME_RAMP_CAP) ** ramp_weeks

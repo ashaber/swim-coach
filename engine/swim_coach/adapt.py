@@ -52,7 +52,7 @@ from uuid import uuid4
 
 from swim_coach.load import (
     acute_chronic_ratio,
-    compliance as compute_compliance,
+    compute_compliance,
     wellness_composite,
 )
 from swim_coach.models import Athlete, Event, MacroPlan, Session, Wellness, WeekPlan, Workout
@@ -330,11 +330,20 @@ def adapt_week(
     last_week_start = min(last_week_dates) if last_week_dates else week_start - timedelta(days=7)
     last_week_end = max(last_week_dates) if last_week_dates else week_start - timedelta(days=1)
     last_week_workouts = [w for w in workouts if last_week_start <= w.date <= last_week_end]
-    compliance_pct = compute_compliance(current_week.sessions, last_week_workouts)
+    compliance_pct = compute_compliance(current_week.sessions, last_week_workouts, athlete)
 
     intensity_balance = _intensity_balance(workouts, as_of)
 
     # --- rule table (priority: cut > repeat > forced-recovery-window > advance > hold) ---
+    # `compliance_pct` can now be `None` (multi-sport-unlock build: nothing
+    # of the relevant type -- swim distance, or AU load for a non-swim week
+    # -- was planned). The `is not None` guards below are the only change
+    # from before: every branch that already fires on a real compliance_pct
+    # value is untouched, so a swim athlete's real week (which always plans
+    # SOME swim volume) gets byte-identical behavior. `None` simply can't
+    # win the repeat/advance comparisons and falls through to the final
+    # `hold`, with its own distinct message so this case is never confused
+    # with the real "hold, no red flags, middling compliance" one.
     fired: list[str] = []
     if wellness_red or load_ratio_red:
         action = "cut"
@@ -347,7 +356,7 @@ def adapt_week(
             fired.append(
                 f"7d:28d load ratio {load_ratio:.2f} > {LOAD_RATIO_RED_THRESHOLD} (red)"
             )
-    elif compliance_pct < COMPLIANCE_REPEAT_THRESHOLD:
+    elif compliance_pct is not None and compliance_pct < COMPLIANCE_REPEAT_THRESHOLD:
         action = "repeat"
         fired.append(
             f"compliance {compliance_pct:.1f}% < {COMPLIANCE_REPEAT_THRESHOLD}% -> "
@@ -363,11 +372,18 @@ def adapt_week(
             f"(< {RECOVERY_DAYS_AFTER_MILESTONE_MIN}d minimum) -> forced recovery "
             "window, no advance"
         )
-    elif compliance_pct >= COMPLIANCE_ADVANCE_THRESHOLD:
+    elif compliance_pct is not None and compliance_pct >= COMPLIANCE_ADVANCE_THRESHOLD:
         action = "advance"
         fired.append(
             f"all green + compliance {compliance_pct:.1f}% >= "
             f"{COMPLIANCE_ADVANCE_THRESHOLD}% -> advance"
+        )
+    elif compliance_pct is None:
+        action = "hold"
+        fired.append(
+            "nothing of the relevant type (swim distance, or load for a "
+            "non-swim week) was planned last week -- compliance not "
+            "applicable, holding"
         )
     else:
         action = "hold"
@@ -403,8 +419,21 @@ def adapt_week(
     longest_recent_m = _longest_recent_swim_m(workouts, as_of)
     milestone = False
 
+    # The long-swim ladder (`_advance_stage_weekend_swims_m`/
+    # `_advance_single_day_long_swim_m`) is swim-distance-specific machinery
+    # (uses `event.distance_m` directly), not just a distance-unit problem
+    # -- explicitly out of scope for this build to generalize into a "long
+    # session" concept for other sports (multi-sport-unlock design notes).
+    # `event.distance_m` is `None` for a non-distance event, so it must
+    # never be reached in that case (it would previously have raised a
+    # confusing TypeError deep inside the ladder math instead of just not
+    # applying) -- gate the "advance the ladder" branch on target_metric,
+    # not just `action`. A non-distance event's `action == "advance"` week
+    # simply holds its (nonexistent, in practice) long-swim session(s) at
+    # their current value instead, same as any other non-advance week.
+    can_advance_ladder = event.target_metric == "distance_m"
     if event_format == "multi_day_stage":
-        if action == "advance":
+        if action == "advance" and can_advance_ladder:
             saturday_m, sunday_m = _advance_stage_weekend_swims_m(
                 current_saturday_m, longest_recent_m, event.distance_m, next_target_volume_m
             )
@@ -418,7 +447,7 @@ def adapt_week(
                     saturday_m = _round_100(saturday_m * scale)
                     sunday_m = max(0, next_target_volume_m - saturday_m)
     else:
-        if action == "advance":
+        if action == "advance" and can_advance_ladder:
             saturday_m = _advance_single_day_long_swim_m(
                 current_saturday_m, longest_recent_m, event.distance_m, next_target_volume_m
             )

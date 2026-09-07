@@ -1134,6 +1134,117 @@ def test_create_event_invalid_event_format_is_an_error(athletes_dir) -> None:
     assert "error" in result
 
 
+# --- create_event: target_metric (multi-sport unlock) ----------------------------
+
+
+def test_create_event_target_metric_defaults_to_distance_m(athletes_dir, run_tag) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["create_event"](
+        {
+            "name": f"Test Default Metric Event [{run_tag}]",
+            "event_date": "2027-05-01",
+            "distance_m": 5000,
+            "priority": "A",
+        }
+    )
+    assert "error" not in result
+    assert result["target_metric"] == "distance_m"
+    assert result["target_value"] is None
+
+
+def test_create_event_duration_min_target_metric_persists_with_no_distance(
+    athletes_dir, run_tag
+) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    name = f"Test Duration Event [{run_tag}]"
+    result = handlers["create_event"](
+        {
+            "name": name,
+            "event_date": "2027-05-01",
+            "priority": "A",
+            "target_metric": "duration_min",
+            "target_value": 120,
+        }
+    )
+    assert "error" not in result
+    assert result["created"] is True
+    assert result["target_metric"] == "duration_min"
+    assert result["target_value"] == 120
+    assert result["distance_m"] is None
+
+    reloaded = FileStore(base_dir=athletes_dir).load_events("renee")
+    matching = [e for e in reloaded if e.name == name]
+    assert len(matching) == 1
+    assert matching[0].target_metric == "duration_min"
+    assert matching[0].distance_m is None
+    assert matching[0].target_value == 120
+
+
+def test_create_event_load_au_target_metric_persists_with_no_distance(athletes_dir, run_tag) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["create_event"](
+        {
+            "name": f"Test Load Event [{run_tag}]",
+            "event_date": "2027-05-01",
+            "priority": "A",
+            "target_metric": "load_au",
+            "target_value": 450,
+        }
+    )
+    assert "error" not in result
+    assert result["target_metric"] == "load_au"
+    assert result["target_value"] == 450
+    assert result["distance_m"] is None
+
+
+def test_create_event_non_distance_target_metric_missing_target_value_is_an_error(
+    athletes_dir,
+) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["create_event"](
+        {
+            "name": "Test Event",
+            "event_date": "2027-01-01",
+            "priority": "A",
+            "target_metric": "duration_min",
+        }
+    )
+    assert "error" in result
+
+
+def test_create_event_distance_metric_without_distance_m_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["create_event"](
+        {
+            "name": "Test Event",
+            "event_date": "2027-01-01",
+            "priority": "A",
+            "target_metric": "distance_m",
+        }
+    )
+    assert "error" in result
+
+
+def test_create_event_invalid_target_metric_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["create_event"](
+        {
+            "name": "Test Event",
+            "event_date": "2027-01-01",
+            "distance_m": 5000,
+            "priority": "A",
+            "target_metric": "power_watts",
+        }
+    )
+    assert "error" in result
+
+
 # --- draft_macro_plan -----------------------------------------------------------
 
 
