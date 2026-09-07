@@ -1046,6 +1046,150 @@ modality-specific constant.
   speed clearly below gait-transition pace is very likely a walk that was
   recorded under the wrong Garmin activity profile).
 
+## Cycling training (native)
+
+Curated for `23-cycling-training.md` (2026-09-07 pass;
+`library/research-dossiers/2026-09-07-cycling-training.md` is the raw
+research input, not itself citable). Distinct from "Cross-discipline
+endurance" above: those entries are cycling/running/tri evidence *adapted
+into* the swim engine; these are cycling-native sources for a cycling
+athlete's own plan (`engine/cycling-coach` branch, IDEA 008 use case 5).
+Per `23-cycling-training.md`'s own header note, these are mechanically
+tagged ADAPTED (cycling) only because `00-conventions.md`'s EVIDENCE tag
+scheme has no cycling-native value yet — not because they are genuinely
+cross-discipline adaptations.
+
+- **✓ Allen H., Coggan A. (2010)** — *Training and Racing with a Power
+  Meter* (2nd ed.) — VeloPress. **✓ Allen H., Coggan A., McGregor S.
+  (2019)** — *Training and Racing with a Power Meter* (3rd ed.) — VeloPress,
+  ISBN 9781937715939. The originating practitioner text for the Coggan
+  7-zone %FTP power-training-zone model (Z1 Active Recovery <55%, Z2
+  Endurance 56-75%, Z3 Tempo 76-90%, Z4 Lactate Threshold 91-105%, Z5
+  VO2max 106-120%, Z6 Anaerobic Capacity 121-150%, Z7 Neuromuscular Power
+  >150%) and Normalized Power / Intensity Factor / Training Stress Score
+  (`TSS = duration_hours * IF^2 * 100`, `IF = NP/FTP`, NP itself a 30-second
+  rolling average raised to the 4th power, averaged, then 4th-rooted).
+  Existence/authors/publisher/editions confirmed via publisher and
+  bookseller listings; the zone table and TSS/NP formulas independently
+  corroborated by multiple convergent secondary practitioner sources
+  (TrainingPeaks, TrainerRoad) this session, not a direct primary-text
+  read. Same evidentiary tier as `engine/swim_coach/load.py`'s existing
+  citation of this book for `SWIM_TSS_INTENSITY_EXPONENT`.
+- **✓ Banister E.W., Calvert T.W., Savage M.V., Bach T. (1975)** — "A
+  Systems Model of Training for Athletic Performance" — *Australian
+  Journal of Sports Medicine*, 7:57-61. The impulse-response ("Banister
+  model")/TRIMP origin behind `CTL_TIME_CONSTANT_DAYS`/
+  `ATL_TIME_CONSTANT_DAYS`'s underlying math. **Page-range citation debt:**
+  independent secondary indexes disagree on pages (57-61 vs. 170-176 in a
+  second listing); title/authors/journal/year are consistent. `[ADAPTED:
+  general-endurance]` — the general systems-model origin, not cycling- or
+  swim-specific by itself.
+- **✓ Clarke D.C., Skiba P.F. (2013)** — "Rationale and resources for
+  teaching the mathematical modeling of athletic training and performance"
+  — *Advances in Physiology Education*, 37:134-152. Reviews the critical-
+  power and Banister impulse-response models together; documents Skiba's
+  own TSS-family extension into cycling (BikeScore) among other sports.
+  `[ADAPTED: cycling]`, Confidence: high — direct engagement with the
+  cycling-native metric family.
+- **✓ Vermeire K., Ghijs M., Bourgois J., Boone J. (2022)** — "The
+  Fitness-Fatigue Model: What's in the Numbers?" — *International Journal
+  of Sports Physiology and Performance*, 17(5):810-813. Commentary urging
+  caution interpreting fitness-fatigue-model parameters (incl. time
+  constants) as fixed physiological truths rather than technique/data-
+  sensitive fitted values. `[ADAPTED: general-endurance]`, Confidence:
+  medium — model-class critique, not cycling-specific data.
+- **✓ Marchal A., Benazieb O., Weldegebriel Y., et al. (2025)** —
+  "Statistical flaws of the fitness-fatigue sports performance prediction
+  model" — *Scientific Reports*, 15:3706. Elite short-track speed skaters
+  (NOT cyclists); found the model ill-conditioned (fitness/fatigue time
+  constants not simultaneously identifiable from typical training data)
+  and prone to overfitting (fatigue term improves training-set fit but not
+  cross-validated prediction). Does not address TrainingPeaks/Coggan's
+  specific 42/7-day parameters directly. `[ADAPTED: general-endurance]`,
+  Confidence: low-medium for relevance to cycling specifically — genuine
+  statistical caution about the model class, wrong sport for direct
+  transfer. **Net honest conclusion on 42/7:** a well-established
+  practitioner convention, not independently validated by outcome data for
+  cycling in anything found this session — keep `load.py`'s existing
+  "PROVISIONAL" framing.
+- **✓ Galán-Rioja M.Á., González-Ravé J.M., González-Mohíno F., Seiler S.
+  (2023)** — "Training Periodization, Intensity Distribution, and Volume
+  in Trained Cyclists: A Systematic Review" — *International Journal of
+  Sports Physiology and Performance*, 18(2):112-122. 7 studies, PRISMA
+  methodology. Traditional periodization: 7.5-10.76 h/week, pyramidal TID.
+  Block periodization: 1-8-week blocks, 8.75-11.68 h/week, pyramidal or
+  polarized TID. **"No evidence is currently available favoring a specific
+  periodization model"** in trained road cyclists over 8-12-week windows.
+  Does **not** contain a week-to-week volume-progression-*rate* number
+  (checked specifically) — see `23-cycling-training.md`'s honest-gap note.
+  `[ADAPTED: cycling]`, Confidence: high — direct cycling population,
+  systematic review.
+- **✓ Clarsen B., Krosshaug T., Bahr R. (2010)** — "Overuse Injuries in
+  Professional Road Cyclists" — *American Journal of Sports Medicine*,
+  38(12):2494-2501. 109 of 116 riders, 7 professional teams; 94 overuse
+  injuries: lower back 45%, knee 23% (anterior knee pain a study focus).
+  The best-grounded single source found for road-cycling overuse/knee-
+  injury prevalence — four independent confirmations this session (SAGE,
+  PubMed, ResearchGate, Oslo Sports Trauma Research Centre's own hosted
+  copy). `[ADAPTED: cycling]`, Confidence: high.
+- **✓ Bini R., Priego-Quesada J. (2022)** — "Methods to determine saddle
+  height in cycling and implications of changes in saddle height in
+  performance and injury risk: A systematic review" — *Journal of Sports
+  Sciences*, 40(4):386-400. 41 included studies (screened from 29,398
+  identified). Patellofemoral compressive force inversely related to
+  saddle height; a 5% saddle-height change altered knee kinematics 35%,
+  moments 16%; 25-30 degree knee flexion at bottom-dead-center recommended.
+  Review's own text flags the underlying body/bike/training-load-to-knee-
+  pain evidence base as still comparatively thin. `[ADAPTED: cycling]`,
+  Confidence: medium-high.
+- **✓ Protzen G., Inoue A., Buzzachera C., Doma K., Devantier-Thomas B.,
+  Herrero-Molleda A., García-López J., Boullosa D. (2026)** — "The
+  Physiology of Contemporary Olympic Cross-Country Mountain Biking: A
+  Systematic Review" — *Sports Medicine - Open*, 12:16. Direct full-text
+  PMC read this session. XCO racing: ~25% of race time above maximal
+  aerobic power, 3-10s surges repeated 15-20x/lap; VO2max comparable to or
+  exceeding road cyclists; growing anaerobic-capacity contribution as
+  courses get more technical; technical terrain imposes real physiological
+  stress independent of mechanical power output. A genuinely distinct
+  MTB (XCO) physiological-demand profile, not road cycling relabeled.
+  `[ADAPTED: cycling]`, Confidence: high.
+- **✓ Fallon T., Palmer D., Bigard X., Heron N. (2025)** — "Epidemiology of
+  injury and illness across all the competitive cycling disciplines: a
+  systematic review and meta-analysis" — *BMJ Open Sport & Exercise
+  Medicine*, 11(3):e002364. Direct full-text PMC read this session.
+  Injury incidence/365 days: BMX 4.59, road 3.68, para 3.62, MTB 3.61,
+  track 3.45. Upper-limb (crash-driven) injuries dominate acute injury
+  across disciplines; road-cycling-specific overuse studies show the
+  opposite, lower-limb-dominant pattern (cf. Clarsen et al. 2010 above).
+  **States explicitly: "cyclocross, gravel cycling, indoor cycling, trials
+  and esports have not been represented to date within the research."**
+  The strongest direct confirmation that cyclocross-specific
+  epidemiology research is a genuine, acknowledged literature gap.
+  `[ADAPTED: cycling]`, Confidence: medium-high.
+- **✓ Fallon T., Fischer N., Heron N. (2025)** — "Injury epidemiology in
+  cyclocross. A preliminary study" — *The Physician and Sportsmedicine*,
+  published online 2025-11-13. Prospective observational study, 2025
+  British National Cyclocross Championships: 534 riders, 6.7% injury rate,
+  predominantly moderate acute injuries — a pattern the authors state
+  differs from road/MTB. Self-described "preliminary"; single event, one
+  country, not yet independently replicated; same research group as the
+  meta-analysis above (Queen's University Belfast / British Cycling
+  medical department). The first real cyclocross-specific epidemiology
+  study found this session. `[ADAPTED: cycling]`, Confidence: low-medium.
+- **⚠ Carmichael R.D., Heikkinen D.J., Mullin E.M., McCall N.R. (2017)** —
+  "Physiological response to cyclocross racing" — *Sports and Exercise
+  Medicine - Open Journal*, 3(3):74-80. **REJECTED, do not cite:** the
+  paper is real (title/authors/journal/volume/pages confirmed via
+  ResearchGate and the journal's own citation-export page), but its
+  publisher, Openventio Publishers, appears on Beall's List of potentially
+  predatory open-access publishers (independently confirmed this session,
+  including a third-party "flaky academic journals" review naming this
+  exact title). Same category as `reference_list.md`'s already-demoted
+  Smith & Thomas/Hilaris entry above. Fallon et al. (2025, both entries
+  above) are the legitimate cyclocross-specific sources; this one is
+  recorded here only so a future pass doesn't re-discover and re-verify it
+  without knowing it was already checked and rejected.
+
 ## Recovery, sleep & HRV
 
 - **✓ Driller M., Leabeater A. (2023)** — "Fundamentals or Icing on Top of

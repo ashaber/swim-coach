@@ -28,6 +28,7 @@ load `00-conventions.md` once per session to know how to read the tags.
 | `19-srpe-protocol.md` | The Foster CR-10 modified-Borg session-RPE survey protocol (0-10 scale with verbal anchors, single global "how hard was your workout overall" question, ~30-min post-workout ask timing) behind `Workout.rpe`/`WorkoutDraft.rpe` -- the survey *instrument*, distinct from `15-tiered-session-load.md`'s load *formula* that consumes the resulting number. Foster et al. (2001), `[ADAPTED: general-endurance]`, confidence high, verified by direct web search. **REVIEWED**, pending human review. |
 | `21-shoulder-health-and-load.md` | Extends `07-strength-dryland.md`'s injury-*prevention* shoulder program with the injury-*recovery* side: the shoulder-load/injury-risk relationship (cross-refs `07`'s existing ACWR citation), a criteria-based three-phase rehab progression (Desmeules et al. 2025 CPG), adjunct-modality evidence for massage and TENS (both genuinely conflicting -- Cochrane placebo-controlled null vs. smaller positive pooled studies), and swim-specific return-to-training criteria (Wilk et al. 2020) plus practitioner-convention volume/stroke/position adaptations. Triggered by a real acute shoulder injury this session; written as general grounding, not a one-athlete note. **REVIEWED**, pending human review. |
 | `22-injury-adapted-taper.md` | Grounds `taper_search.py`'s three-phase RAMP -> HOLD -> TAPER projection extending the plain hold-then-decay taper grid search: the race-day TSB band (Friel/TrainingPeaks, `[ADAPTED: cycling]`), the pre-layoff baseline window, and the restriction-driven `LIGHT_ONLY_RAMP_CAP_FRACTION = 0.55` ramp cap -- honestly graded low-medium confidence, grounded in Mujika & Padilla (2003)'s "hold intensity, cut volume" taper principle applied symmetrically to the ramp-back-up side, cross-referencing `21-shoulder-health-and-load.md`'s clinical return-to-swim criteria. **UNREVIEWED**, pending human review. |
+| `23-cycling-training.md` | **First cycling-native library file** (`engine/cycling-coach` branch; `IDEAS.md` IDEA 008 use case 5). Coggan 7-zone %FTP power-training-zone table; the TSS/Normalized-Power/Intensity-Factor formula (matches `load.py`'s existing pre-cubing TSS citation, now confirmed for cycling's own native use); how well-grounded the swim engine's `CTL_TIME_CONSTANT_DAYS=42`/`ATL_TIME_CONSTANT_DAYS=7` are for their native discipline (practitioner convention, not outcome-validated, per Vermeire et al. 2022 and Marchal et al. 2025's model-class critiques); periodization/volume-progression evidence for trained cyclists (Galán-Rioja et al. 2023 -- no evidence favors one periodization model over another; no cycling-specific week-to-week ramp-rate number exists, an honest gap); patellofemoral pain/knee-loading evidence (Clarsen et al. 2010; Bini & Priego-Quesada 2022 on saddle height); and whether road/MTB/cyclocross are researched as distinct populations (yes for road vs. MTB/XCO; cyclocross is an explicitly acknowledged, still-thin research gap, not silently ignored). **Tagging-mechanism caveat, own header note:** every claim is mechanically tagged ADAPTED (cycling) only because the EVIDENCE tag scheme has no cycling-native value yet -- not because these are genuine cross-discipline adaptations; see `IDEAS.md` IDEA 008's "no reciprocal tag exists" gap. **Guidance-scoping constraint (IDEA 008, hard requirement):** this file must only ground answers for an athlete whose own configured sport(s) include cycling -- never surface cycling content to a swim-only athlete (Renee), the same trust problem IDEA 008 names explicitly. **UNREVIEWED**, pending human review. |
 | `reference_list.md` | **The canonical citation source.** Every claim in every file above resolves to an entry here (title + author + year), never a URL/ID — see its own header for why. |
 | `sample_pool_workout_traditional.md` | A real logged pool-coach workout sample (traditional/technique-focused notation) — reference material for `/log-workout`'s coach-text parser, not a research citation. |
 | `sample_pool_workout_openwater_focus.md` | A real logged pool-coach workout sample (open-water-focused notation) — same purpose as above. |
@@ -65,6 +66,12 @@ load `00-conventions.md` once per session to know how to read the tags.
 | Heat/cold acclimation, taper execution (full macro taper, not the between-events mini-taper), race-day pacing | Not yet authored (`09`, `12`-tier files per ROADMAP.md's repo-structure sketch — `08` and `11` are no longer gaps, see above). Until then: give coach judgment labeled as such, and offer to draft a new `UNREVIEWED` section rather than presenting an unsourced answer as settled. |
 | Acute physical distress (chest pain, palpitations, fainting, heat-stroke/hypothermia signs) | **Not a library-routing question.** Stop and use the `/coach` skill's safety-first override — no file in this library should be consulted before that. |
 | Open-water session content — feed-window/fueling practice, negative splits, sighting, chop/wind, breathing-pattern drills, back-to-back stage-fatigue simulation, taper activation, race dress rehearsal; "why is this session just a bare distance number?" | `18-open-water-session-templates.md` (the `ow_session_templates.py` template library + the `skill_scalable`/`endurance_floor` duration-scaling design) |
+| Power zones, FTP, %FTP training zones for cycling (road/MTB/cyclocross) | `23-cycling-training.md` (Coggan 7-zone table) — **only for an athlete whose configured sport(s) include cycling**, per the file's own guidance-scoping constraint |
+| Cycling TSS / Normalized Power / Intensity Factor, "why is my ride's TSS what it is?" | `23-cycling-training.md` (the exact NP/IF/TSS formula — the same source `load.py`'s swim-specific cubed-exponent TSS adaptation already cites, here for cycling's own native, un-adapted use) |
+| Cycling CTL/ATL/TSB, "is 42/7 days actually right for cycling?" | `23-cycling-training.md` (confirms 42/7 is a practitioner convention, not outcome-validated even for cycling — real methodological critiques of the model class exist) |
+| Cycling periodization / how fast to build volume (road/MTB/cyclocross) | `23-cycling-training.md` (Galán-Rioja et al. 2023 — no evidence favors one periodization model; states plainly no cycling-specific week-to-week ramp-rate number was found) |
+| Cyclist's knee, patellofemoral pain, saddle height and knee load | `23-cycling-training.md` (Clarsen et al. 2010 road-cyclist overuse-injury cohort; Bini & Priego-Quesada 2022 saddle-height systematic review) |
+| Does road/MTB/cyclocross training differ, or is it all "cycling"? | `23-cycling-training.md` (road vs. MTB/XCO are researched as physiologically distinct; cyclocross is an explicitly acknowledged, still-thin research gap per Fallon et al. 2025's own meta-analysis) |
 
 ## Known gaps (as of `13-reds-energy-availability.md`)
 
@@ -93,8 +100,22 @@ shoulder work with the injury-recovery side (rehab phases, adjunct-modality
 evidence, return-to-swim criteria), triggered by a real acute injury this
 session but written as general grounding, not a one-athlete note. `10` is
 human-reviewed (Oura device-trust pass, 2026-07-11); `07`, `11`, `08`, `13`,
-`14`, `15`, `16`, `17`, `19`, `20`, and `21` remain `UNREVIEWED` pending
-human review — `/coach` and future readers should treat their claims as
-drafts, not settled grounding, until that review happens.
+`14`, `15`, `16`, `17`, `19`, `20`, `21`, `22`, and `23` remain `UNREVIEWED`
+pending human review — `/coach` and future readers should treat their
+claims as drafts, not settled grounding, until that review happens.
 `/coach` should say plainly when a question falls in one of the remaining
 gaps rather than improvising a citation that doesn't exist yet.
+
+`23-cycling-training.md` is a different kind of addition from `01`-`22`
+above: it's the first library file for a discipline *other than* swimming
+(`engine/cycling-coach` branch, `IDEAS.md` IDEA 008's multi-sport
+expansion), not another swim-domain topic. Two follow-ups this file's own
+header flags rather than resolves: (1) the EVIDENCE/ADAPTED tag scheme has
+no cycling-native EVIDENCE value, so every cycling-native claim is
+mechanically tagged ADAPTED (cycling) to satisfy the CI gate — a known
+schema gap (IDEA 008: "no reciprocal tag exists"), not a claim these are
+genuine cross-discipline adaptations; (2) per IDEA 008's hard guidance-
+scoping constraint, `/coach` and any future context assembler must gate
+this file's content to athletes whose own configured sport(s) actually
+include cycling — surfacing it to a swim-only athlete (Renee) is exactly
+the trust problem IDEA 008 names, not a hypothetical risk.
