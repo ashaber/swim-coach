@@ -173,6 +173,24 @@ DEFAULT_BIKE_SESSION_MIN = 15.0
 # same role DEFAULT_POOL_SESSION_MIN/RECOVERY_SESSION_MIN's floors already
 # play for swim/recovery sessions. Coach judgment.
 
+BIKE_WARMUP_COOLDOWN_MIN = 5.0
+# Coach judgment: a flat, easy-zone warm-up/cool-down window bracketing a
+# generic Z2/Z3 bike session's main block -- same "some warm-up matters, no
+# source fixes an exact proportion" footing as swim's own
+# ADDITIONAL_SWIM_WARM_UP_SHARE (library/14-swim-set-structure.md); no
+# cycling-specific session-shape source exists to cite instead
+# (library/23-cycling-training.md has none). Symmetric and much shorter
+# than swim's proportional warm-up since a bike session's total duration
+# is typically far longer per session and doesn't need a %-of-session
+# scaling rule to stay sane.
+
+BIKE_MIN_MAIN_BLOCK_S = 600.0
+# Below 10 minutes of main-block time (after reserving
+# BIKE_WARMUP_COOLDOWN_MIN on each side), warm-up/cool-down are dropped
+# entirely and the whole session becomes one continuous block at its
+# assigned zone -- same "too short to bother splitting" floor
+# MIN_ADDITIONAL_SWIM_M's swim counterpart applies. Coach judgment.
+
 # --- Weekly session-generation constants ------------------------------------
 
 DEFAULT_POOL_SESSION_MIN = 75
@@ -1026,6 +1044,87 @@ def _race_week_checklist(event: Event, week_start: date) -> list[RaceWeekCheckli
     return items
 
 
+def _bike_step(
+    label: str,
+    role: Literal["warmup", "interval", "cooldown"],
+    duration_s: float,
+    zone: str,
+    ftp_watts: float | None,
+) -> WorkoutStep:
+    """One leaf `WorkoutStep` for a bike session block -- see
+    `_bike_session_structure`'s docstring for the caller. Resolves `zone` to
+    a real `WorkoutTarget`: `basis="power_w"` (absolute watts, from
+    `zones.bike_zone_table`) once `ftp_watts` is known, else `basis="zone"`
+    (the zone name alone, for a device to apply its own configured power
+    zone) -- the same graceful partial-data convention
+    `_bike_week_sessions`'s own `Session.intensity` dict already uses for
+    exactly this None-vs-known-FTP split.
+    """
+    if ftp_watts is not None:
+        zone_row = bike_zone_table(ftp_watts)[zone]
+        watts_lo, watts_hi = zone_row["watts_lo"], zone_row["watts_hi"]
+        target = WorkoutTarget(basis="power_w", low=watts_lo, high=watts_hi)
+        watts_txt = f"{round(watts_lo)}-{round(watts_hi)}W" if watts_hi is not None else f">{round(watts_lo)}W"
+        zone_txt = f"{zone} ({watts_txt})"
+    else:
+        target = WorkoutTarget(basis="zone", zone=zone)
+        zone_txt = zone
+    return WorkoutStep(
+        label=f"{label} -- {zone_txt}",
+        role=role,
+        duration_kind="time_s",
+        duration_value=duration_s,
+        target=target,
+        modality="bike",
+    )
+
+
+def _bike_session_structure(zone: str, duration_min: float, ftp_watts: float | None) -> WorkoutStructure:
+    """Warm-up / main-block / cool-down `WorkoutStructure` for one generic
+    bike session -- the real structured content `models.WorkoutStep`'s own
+    "bike" modality comment flagged as deferred when Part B of this build
+    shipped ("no cycling WorkoutSteps are actually constructed by this
+    build"); this is that follow-up (engine/cycling-coach Part C,
+    delivery/logging). Deliberately minimal -- a flat warm-up, one flat main
+    block at the session's assigned zone, a flat cool-down -- no
+    cycling-specific long-ride ladder or interval shape, matching
+    `_bike_week_sessions`'s own scope note above. This is also what gives
+    the Garmin FIT push / `.zwo` export paths (`app.garmin_push`,
+    `swim_coach.zwo_export`) something real to export -- both require
+    `Session.structured`, which every bike session left `None` before this.
+
+    Below `BIKE_MIN_MAIN_BLOCK_S` of main-block time after reserving
+    `BIKE_WARMUP_COOLDOWN_MIN` on each side, both are dropped and the whole
+    session becomes one continuous block (see those constants).
+
+    NOTE for any future caller: unlike swim's `basis="zone"` targets, a
+    bike `basis="zone"` target here must NEVER be run through
+    `workout_templates.resolve_template` -- that function's `_resolve_target`
+    unconditionally resolves `basis="zone"` via the CSS-anchored swim
+    `zones.zone_table`, which would silently reinterpret a bike power zone
+    as a swim pace. This function already returns fully resolved content
+    (either `basis="power_w"` or an intentionally-unresolved-but-device-
+    understood `basis="zone"`, same as swim's own zone-basis targets can be
+    left directly Garmin-exportable -- see `garmin_export`'s
+    `test_zone_basis_target_uses_speed_zone`), so it must never be passed to
+    `resolve_template`.
+    """
+    total_s = round(duration_min * 60)
+    warmup_s = round(min(BIKE_WARMUP_COOLDOWN_MIN, duration_min / 4) * 60)
+    cooldown_s = round(min(BIKE_WARMUP_COOLDOWN_MIN, duration_min / 4) * 60)
+    main_s = total_s - warmup_s - cooldown_s
+    if main_s < BIKE_MIN_MAIN_BLOCK_S:
+        warmup_s, cooldown_s, main_s = 0, 0, total_s
+
+    items: list[WorkoutStep] = []
+    if warmup_s > 0:
+        items.append(_bike_step("Warm-up, easy spin", "warmup", warmup_s, "Z1", ftp_watts))
+    items.append(_bike_step("Main set: steady ride", "interval", main_s, zone, ftp_watts))
+    if cooldown_s > 0:
+        items.append(_bike_step("Cool-down, easy spin", "cooldown", cooldown_s, "Z1", ftp_watts))
+    return WorkoutStructure(items=items)
+
+
 def _bike_week_sessions(
     athlete: Athlete,
     week_start: date,
@@ -1085,6 +1184,8 @@ def _bike_week_sessions(
             if is_hard
             else "endurance ride (Z2) — aerobic base"
         )
+        duration_min_final = max(duration, DEFAULT_BIKE_SESSION_MIN)
+        structured = _bike_session_structure(zone, duration_min_final, ftp_watts)
         sessions.append(
             Session(
                 id=uuid4(),
@@ -1092,11 +1193,12 @@ def _bike_week_sessions(
                 date=week_start + timedelta(days=offset),
                 sport="bike",
                 source="ai_coach",
-                duration_min=max(duration, DEFAULT_BIKE_SESSION_MIN),
+                duration_min=duration_min_final,
                 distance_m=None,
                 intensity=intensity,
                 purpose=purpose,
-                structure=None,
+                structure=render_prose(structured),
+                structured=structured,
                 status="planned",
             )
         )

@@ -122,9 +122,18 @@ from swim_coach.models import WorkoutLoad, WorkoutRepeat, WorkoutStep, WorkoutSt
 # narrow and explicit (matches the plan's scope) rather than accepting every
 # `Sport` the engine models elsewhere; raises a clear `ValueError` for
 # anything else (see `to_garmin_fit_workout`).
+#
+# "bike" (engine/cycling-coach Part C): `SubSport.GENERIC` deliberately, not
+# `ROAD`/`MOUNTAIN` -- `plan._bike_week_sessions`' real content is a generic
+# Z2/Z3 ride with no road-vs-MTB-specific shape (that distinction lives in
+# `Workout.sport_detail` for a COMPLETED activity, see `parse_files.
+# _sport_detail`; a PLANNED `Session` has no equivalent field to read a
+# preference from), so guessing a specific sub_sport here would fabricate
+# false precision this build has no real signal for.
 _SPORT_TO_FIT: dict[str, tuple[FitSport, SubSport]] = {
     "swim": (FitSport.SWIMMING, SubSport.LAP_SWIMMING),
     "strength": (FitSport.TRAINING, SubSport.STRENGTH_TRAINING),
+    "bike": (FitSport.CYCLING, SubSport.GENERIC),
 }
 
 # `WorkoutStep.role` -> FIT step intensity. FIT's `Intensity` enum has no
@@ -168,6 +177,19 @@ _EQUIPMENT_TO_FIT: dict[str, WorkoutEquipment] = {
 
 _ZONE_TO_INT: dict[str, int] = {"Z1": 1, "Z2": 2, "Z3": 3, "Z4": 4, "Z5": 5}
 
+_CUSTOM_TARGET_POWER_WATTS_OFFSET = 1000
+# The FIT SDK's own documented encoding for `custom_target_power_low`/`_high`
+# (Garmin FIT SDK Profile.xlsx's comment on these fields, a well-established
+# convention independently re-implemented by multiple open-source FIT
+# tools): a raw value < 1000 means percent of FTP (e.g. 75 -> 75% FTP); a
+# raw value >= 1000 means absolute watts, recovered as `raw - 1000` (e.g.
+# 1300 -> 300 W). This module always writes ABSOLUTE watts -- a resolved
+# `WorkoutTarget(basis="power_w")` already carries real watts (see that
+# basis's own docstring in models.py; `plan._bike_step` resolves %FTP to
+# watts against the athlete's own FTP before a target ever reaches here) --
+# so every value written here is offset by this constant, never a raw
+# sub-1000 percentage.
+
 # FIT string fields are fixed-size on write; `fit_tool`'s `FitFileBuilder`
 # is constructed with `min_string_size` below, but names are still truncated
 # defensively here so an unusually long label can't blow past whatever size
@@ -204,7 +226,9 @@ def _pace_s_to_speed_mps(pace_s_per_100m: float) -> float:
     return 100.0 / pace_s_per_100m
 
 
-def _apply_target(fit_step: WorkoutStepMessage, target: WorkoutTarget | None, stroke: str | None) -> None:
+def _apply_target(
+    fit_step: WorkoutStepMessage, target: WorkoutTarget | None, stroke: str | None, modality: str
+) -> None:
     """Set `fit_step`'s target fields from a resolved `WorkoutTarget` and/or
     a swim `stroke`.
 
@@ -217,6 +241,13 @@ def _apply_target(fit_step: WorkoutStepMessage, target: WorkoutTarget | None, st
     instead. When a pace target IS present, the stroke is still preserved in
     the step's `label` text (already authored by workout_templates.py/
     plan.py), just not as a separate FIT target field.
+
+    `modality` (engine/cycling-coach Part C) disambiguates `basis="zone"`:
+    the SAME basis/zone-name shape means a pace zone for a swim step
+    (`target_speed_zone`) but a POWER zone for a bike step
+    (`target_power_zone`) -- these are genuinely different FIT target types,
+    not just a naming coincidence, so the caller's modality decides which
+    one a zone-basis target means.
     """
     if target is None:
         if stroke and stroke in _STROKE_TO_FIT:
@@ -248,10 +279,39 @@ def _apply_target(fit_step: WorkoutStepMessage, target: WorkoutTarget | None, st
     elif target.basis == "zone" and target.zone in _ZONE_TO_INT:
         # Defensive support for an unresolved-but-zone-tagged target (a
         # template step, or a workout whose zone was deliberately left
-        # device-relative) -- the device applies its own configured pace
-        # zone rather than a specific number range.
-        fit_step.target_type = WorkoutStepTarget.SPEED
-        _set_subfield(fit_step, _FIELD_TARGET_VALUE, "target_speed_zone", _ZONE_TO_INT[target.zone])
+        # device-relative) -- the device applies its own configured pace (or,
+        # for a bike step, power) zone rather than a specific number range.
+        if modality == "bike":
+            fit_step.target_type = WorkoutStepTarget.POWER
+            _set_subfield(fit_step, _FIELD_TARGET_VALUE, "target_power_zone", _ZONE_TO_INT[target.zone])
+        else:
+            fit_step.target_type = WorkoutStepTarget.SPEED
+            _set_subfield(fit_step, _FIELD_TARGET_VALUE, "target_speed_zone", _ZONE_TO_INT[target.zone])
+    elif target.basis == "power_w":
+        # Bike-modality resolved absolute-watts target (see models.py's
+        # `WorkoutTarget` "power_w" docstring) -- the power counterpart to
+        # `basis="absolute"` above. Unlike the pace case, watts aren't
+        # inversely related to anything: `low`/`high` map straight through
+        # to the low/high FIT bounds, no inversion needed.
+        low_w, high_w = target.low, target.high
+        if low_w is None and high_w is None:
+            fit_step.target_type = WorkoutStepTarget.OPEN
+            return
+        fit_step.target_type = WorkoutStepTarget.POWER
+        if low_w is not None:
+            _set_subfield(
+                fit_step,
+                _FIELD_CUSTOM_TARGET_LOW,
+                "custom_target_power_low",
+                round(low_w) + _CUSTOM_TARGET_POWER_WATTS_OFFSET,
+            )
+        if high_w is not None:
+            _set_subfield(
+                fit_step,
+                _FIELD_CUSTOM_TARGET_HIGH,
+                "custom_target_power_high",
+                round(high_w) + _CUSTOM_TARGET_POWER_WATTS_OFFSET,
+            )
     elif target.basis == "percent_css":
         raise ValueError(
             "to_garmin_fit_workout requires a RESOLVED WorkoutStructure -- got an "
@@ -304,7 +364,7 @@ def _build_leaf_step(step: WorkoutStep) -> WorkoutStepMessage:
         fit_step.duration_type = WorkoutStepDuration.OPEN
         fit_step.duration_value = 0
 
-    _apply_target(fit_step, step.target, step.stroke if step.modality == "swim" else None)
+    _apply_target(fit_step, step.target, step.stroke if step.modality == "swim" else None, step.modality)
     _apply_load(fit_step, step.load)
 
     if step.modality == "swim" and step.equipment:
@@ -384,7 +444,7 @@ def _flatten(items: list[WorkoutStepOrRepeat], fit_steps: list[WorkoutStepMessag
 
 def to_garmin_fit_workout(
     structured: WorkoutStructure,
-    sport: Literal["swim", "strength"],
+    sport: Literal["swim", "strength", "bike"],
     name: str,
 ) -> bytes:
     """Encode a RESOLVED `WorkoutStructure` (absolute targets -- see

@@ -483,15 +483,19 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "intervals.icu calendar and stops there, which looks exactly "
             "like success from this tool's side. If she's never pushed "
             "before, tell her to check this.\n"
-            "  - Only swim and strength sessions that have structured "
-            "workout data can be pushed. A prose-only session (one where "
-            "`structured` was never set -- see `session_overrides`) and "
-            "sports like recovery/cross-train are skipped, not pushed. The "
-            "return value counts them under `skipped` with a reason; report "
-            "that honestly rather than implying the whole week went over. "
-            "If the athlete wants a skipped session on her watch, author it "
-            "properly with `session_overrides`' `structured` field first, "
-            "then push again."
+            "  - Only swim, strength, and OUTDOOR bike sessions that have "
+            "structured workout data can be pushed. A prose-only session "
+            "(one where `structured` was never set -- see "
+            "`session_overrides`), sports like recovery/cross-train, and "
+            "INDOOR/trainer bike sessions (`is_indoor`) are skipped, not "
+            "pushed -- an indoor session should be exported with "
+            "export_zwo_workout instead (a .zwo file for MyWhoosh/Zwift, "
+            "not something intervals.icu/Garmin Connect can push to). The "
+            "return value counts every skip under `skipped` with a reason; "
+            "report that honestly rather than implying the whole week went "
+            "over. If the athlete wants a skipped session on her watch, "
+            "author it properly with `session_overrides`' `structured` "
+            "field first, then push again."
         ),
         "input_schema": {
             "type": "object",
@@ -513,6 +517,39 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
             },
             "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "export_zwo_workout",
+        "description": (
+            "Export one INDOOR/trainer bike session as a .zwo file -- the "
+            "workout-file format MyWhoosh and Zwift load into their own "
+            "Workout Builder. Call this for an indoor/trainer bike session "
+            "(session.is_indoor) instead of push_to_garmin, which only "
+            "handles outdoor rides and explicitly skips indoor ones -- "
+            "MyWhoosh/Zwift are trainer software, not something "
+            "intervals.icu/Garmin Connect can push a workout to.\n\n"
+            "Unlike push_to_garmin, this never writes anywhere external -- "
+            "it just returns the .zwo XML content. Present it to the "
+            "athlete as a fenced XML code block she can save as a .zwo "
+            "file and import into MyWhoosh/Zwift's Workout Builder herself; "
+            "do not summarize or paraphrase the XML.\n\n"
+            "Requires the athlete to have ftp_watts on file -- a .zwo "
+            "file's power targets are meaningless without a real FTP "
+            "number. If the tool returns an error about a missing "
+            "ftp_watts, tell the athlete she needs to record her FTP "
+            "before this will work, rather than guessing at one."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "Export this one session, by its id (as returned by the plan/week tools).",
+                },
+            },
+            "required": ["session_id"],
             "additionalProperties": False,
         },
     },
@@ -1827,6 +1864,50 @@ def _handle_push_to_garmin(input_data: dict[str, Any], *, store: StoreInterface,
     if not iso_week and not session_id:
         return {"error": "pass session_id (one session) or iso_week (a whole week)"}
     return push_on_demand(store, slug, iso_week=iso_week, session_id=session_id)
+
+
+def _handle_export_zwo_workout(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    """Builds a `.zwo` file for one INDOOR/trainer bike session --
+    `app.zwo_export.build_zwo_export`, the same function
+    `GET /api/sessions/{id}/zwo` calls, so the conversational and download
+    paths can't drift apart (same shared-primitive shape as
+    `_handle_push_to_garmin`/`push_on_demand` above). Always the bound
+    request's athlete, never a model-supplied slug (see
+    `build_tool_handlers`). Straightforward export, not draft-then-confirm
+    -- a `.zwo` file has no live external write for a bad call to disrupt
+    (see `app.zwo_export`'s own module docstring)."""
+    session_id_str = input_data.get("session_id")
+    if not session_id_str:
+        return {"error": "session_id is required"}
+    try:
+        session_id = uuid.UUID(session_id_str)
+    except ValueError:
+        return {"error": f"invalid session_id: {session_id_str!r}"}
+
+    # Deferred imports: same circular-import shape as
+    # app.garmin_push's own deferred `_find_session` import.
+    from app.routes.garmin import _find_session
+    from app.zwo_export import build_zwo_export
+
+    session = _find_session(store, slug, session_id)
+    if session is None:
+        return {"error": f"no such session: {session_id}"}
+    if session.sport != "bike":
+        return {"error": f"zwo export isn't supported for sport {session.sport!r}"}
+    if session.structured is None:
+        return {"error": "this session has no structured workout data to export (structured is None)"}
+
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001 - a resolved-but-somehow-missing athlete is a clean error
+        return {"error": f"no such athlete: {slug}: {exc}"}
+    if athlete.ftp_watts is None:
+        return {"error": "no ftp_watts on file for this athlete -- required for a .zwo export"}
+
+    try:
+        return build_zwo_export(session, athlete.ftp_watts)
+    except ValueError as exc:
+        return {"error": str(exc)}
 
 
 def _handle_create_event(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
@@ -3227,6 +3308,9 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "push_to_garmin": lambda input_data: _handle_push_to_garmin(
+            input_data, store=store, slug=slug
+        ),
+        "export_zwo_workout": lambda input_data: _handle_export_zwo_workout(
             input_data, store=store, slug=slug
         ),
         "create_event": lambda input_data: _handle_create_event(

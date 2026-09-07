@@ -1603,6 +1603,12 @@ const SPORT_OPTIONS = [
   // pre-filled the form, corrupting exactly the swim-volume math the
   // two-step review/confirm design exists to protect.
   { value: 'cross_train', label: 'Cross-training' },
+  // engine/cycling-coach Part 1: a real cycling FIT upload now parses to
+  // this first-class "bike" sport instead of cross_train (see
+  // parse_files._fit_sport) -- same silent-fallback-to-swim_pool corruption
+  // risk the cross_train entry above already documents, now real for MTB/CX
+  // uploads.
+  { value: 'bike', label: 'Bike' },
 ];
 
 export function renderBackendNeededNotice(message) {

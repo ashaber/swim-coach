@@ -58,6 +58,7 @@ def test_request_shape_includes_tools(client, fake_claude_chat_factory) -> None:
         "get_workouts",
         "sync_workouts",
         "push_to_garmin",
+        "export_zwo_workout",
         "create_event",
         "draft_macro_plan",
         "replace_macro_plan",

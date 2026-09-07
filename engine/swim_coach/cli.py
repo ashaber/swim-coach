@@ -1344,7 +1344,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest.add_argument("--rpe", type=int, help="0-10 (Foster CR-10 scale), overrides/sets the parsed rpe")
     p_ingest.add_argument(
         "--sport",
-        choices=["swim_pool", "swim_ow", "strength", "recovery", "cross_train"],
+        choices=["swim_pool", "swim_ow", "strength", "recovery", "cross_train", "bike"],
         help="overrides the parsed sport",
     )
     p_ingest.add_argument("--save", action="store_true", help="persist the draft as a Workout")

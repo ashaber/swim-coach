@@ -161,6 +161,22 @@ def test_fit_sport_non_swim_maps_to_cross_train_with_warning():
     assert "cross_train" in warnings[0]
 
 
+def test_fit_sport_walking_still_maps_to_cross_train_with_warning():
+    # engine/cycling-coach Part 1 regression: adding cycling classification
+    # must not touch any other non-swim activity type -- walking/hiking (real
+    # production sport_detail values, confirmed this session) still land on
+    # cross_train, unchanged.
+    warnings: list[str] = []
+    assert _fit_sport("walking", None, warnings) == "cross_train"
+    assert "cross_train" in warnings[0]
+
+
+def test_fit_sport_hiking_still_maps_to_cross_train_with_warning():
+    warnings: list[str] = []
+    assert _fit_sport("hiking", None, warnings) == "cross_train"
+    assert "cross_train" in warnings[0]
+
+
 def test_fit_sport_training_sub_sport_strength_maps_to_strength():
     # Garmin encodes a logged strength workout as session.sport="training",
     # sub_sport="strength_training" (surfaces in intervals.icu as
@@ -178,6 +194,22 @@ def test_fit_sport_training_no_sub_sport_maps_to_strength():
     # on its own -- Garmin doesn't use "training" for anything else.
     warnings: list[str] = []
     assert _fit_sport("training", None, warnings) == "strength"
+    assert warnings == []
+
+
+def test_fit_sport_cycling_maps_to_bike():
+    # engine/cycling-coach Part 1: a real cycling FIT activity must classify
+    # as the first-class, plannable "bike" Sport, not the generic
+    # logging-only cross_train bucket -- no warning needed, unambiguous,
+    # same footing as the strength carve-out above.
+    warnings: list[str] = []
+    assert _fit_sport("cycling", "mountain", warnings) == "bike"
+    assert warnings == []
+
+
+def test_fit_sport_cycling_road_also_maps_to_bike():
+    warnings: list[str] = []
+    assert _fit_sport("cycling", "road", warnings) == "bike"
     assert warnings == []
 
 
@@ -610,8 +642,12 @@ def test_merge_pauses_defaults_stationary_to_empty_for_back_compat():
     reason="no real MTB race .fit fixture -- see fixtures/fit/README.md",
 )
 def test_parse_fit_mtb_race_sport_detail_is_cycling_mountain():
+    # engine/cycling-coach Part 1: a real cycling activity now classifies as
+    # the first-class "bike" Sport (not cross_train) -- sport_detail's own
+    # "cycling/mountain" sub-classification is completely unaffected by this
+    # change (same fixture, same raw fields, same resolved detail string).
     draft = parse_fit(FIT_MTB_RACE_FIXTURE)
-    assert draft.sport == "cross_train"
+    assert draft.sport == "bike"
     assert draft.sport_detail == "cycling/mountain"
 
 
@@ -650,8 +686,10 @@ def test_parse_fit_mtb_race_detects_stationary_bottle_stops():
     reason="no real MTB 0709 .fit fixture -- see fixtures/fit/README.md",
 )
 def test_parse_fit_mtb_0709_sport_detail_is_cycling_mountain():
+    # engine/cycling-coach Part 1: same "bike", not cross_train" resolution
+    # as the race fixture above -- see that test's comment.
     draft = parse_fit(FIT_MTB_0709_FIXTURE)
-    assert draft.sport == "cross_train"
+    assert draft.sport == "bike"
     assert draft.sport_detail == "cycling/mountain"
 
 

@@ -353,3 +353,124 @@ def test_push_intervals_cross_athlete_session_is_403(
         headers={"Authorization": f"Bearer {tim_token}"},
     )
     assert response.status_code == 403
+
+
+# --- GET /api/sessions/{id}/zwo (engine/cycling-coach Part C) ----------------
+
+
+def _add_bike_session(athletes_dir, iso_week: str = "2026-W28", *, is_indoor: bool | None = None):
+    from datetime import date
+
+    from swim_coach.models import Session
+
+    store = FileStore(base_dir=athletes_dir)
+    week = store.load_week("renee", iso_week)
+    athlete_id = store.load_athlete("renee").id
+
+    session = Session(
+        id=uuid.uuid4(),
+        athlete_id=athlete_id,
+        date=date(2026, 7, 10),
+        sport="bike",
+        source="ai_coach",
+        duration_min=30.0,
+        distance_m=None,
+        intensity={"zone": "Z2"},
+        purpose="zwo export route test",
+        structure="Main set: steady ride -- Z2",
+        structured=WorkoutStructure(
+            items=[
+                WorkoutStep(
+                    label="Main set: steady ride -- Z2",
+                    role="interval",
+                    duration_kind="time_s",
+                    duration_value=1800,
+                    target=WorkoutTarget(basis="power_w", low=140.0, high=190.0),
+                    modality="bike",
+                ),
+            ]
+        ),
+        status="planned",
+        is_indoor=is_indoor,
+    )
+    week.sessions.append(session)
+    store.save_week("renee", week)
+    return session
+
+
+def _set_renee_ftp(athletes_dir, ftp_watts: float | None) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    athlete.ftp_watts = ftp_watts
+    store.save_athlete(athlete)
+
+
+def test_zwo_requires_auth(client, athletes_dir) -> None:
+    session = _add_bike_session(athletes_dir)
+    response = client.get(f"/api/sessions/{session.id}/zwo?athlete=renee")
+    assert response.status_code == 401
+
+
+def test_zwo_download_is_valid_xml(client, athletes_dir) -> None:
+    _set_renee_ftp(athletes_dir, 250.0)
+    session = _add_bike_session(athletes_dir)
+
+    response = client.get(f"/api/sessions/{session.id}/zwo?athlete=renee", headers=auth_headers())
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/xml")
+    assert "attachment" in response.headers["content-disposition"]
+    assert ".zwo" in response.headers["content-disposition"]
+
+    import xml.etree.ElementTree as ET
+
+    root = ET.fromstring(response.content)
+    assert root.tag == "workout_file"
+    assert root.find("ftpOverride").text == "250"
+    assert root.find("sportType").text == "bike"
+
+
+def test_zwo_unknown_session_is_404(client) -> None:
+    response = client.get(f"/api/sessions/{uuid.uuid4()}/zwo?athlete=renee", headers=auth_headers())
+    assert response.status_code == 404
+    assert "error" in response.json()
+
+
+def test_zwo_session_without_structured_is_404(client, athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    week = store.load_week("renee", "2026-W28")
+    unstructured_session = week.sessions[0]
+    assert unstructured_session.structured is None
+    # Not a bike session either, but structured=None should 404 before the
+    # sport check ever needs to matter for this particular fixture session --
+    # confirmed via the dedicated wrong-sport test below instead.
+
+    response = client.get(
+        f"/api/sessions/{unstructured_session.id}/zwo?athlete=renee", headers=auth_headers()
+    )
+    assert response.status_code in (404, 422)
+
+
+def test_zwo_non_bike_sport_is_422(client, athletes_dir) -> None:
+    _set_renee_ftp(athletes_dir, 250.0)
+    session = _add_structured_session(athletes_dir)  # swim_pool
+    response = client.get(f"/api/sessions/{session.id}/zwo?athlete=renee", headers=auth_headers())
+    assert response.status_code == 422
+    assert "error" in response.json()
+
+
+def test_zwo_missing_ftp_watts_is_422(client, athletes_dir) -> None:
+    _set_renee_ftp(athletes_dir, None)
+    session = _add_bike_session(athletes_dir)
+    response = client.get(f"/api/sessions/{session.id}/zwo?athlete=renee", headers=auth_headers())
+    assert response.status_code == 422
+    assert "ftp_watts" in response.json()["error"]
+
+
+def test_zwo_works_regardless_of_is_indoor_flag(client, athletes_dir) -> None:
+    # Unlike the Garmin push path, the .zwo download is NOT gated on
+    # is_indoor -- an outdoor-tagged bike session can still be exported.
+    _set_renee_ftp(athletes_dir, 250.0)
+    session = _add_bike_session(athletes_dir, is_indoor=False)
+    response = client.get(f"/api/sessions/{session.id}/zwo?athlete=renee", headers=auth_headers())
+    assert response.status_code == 200

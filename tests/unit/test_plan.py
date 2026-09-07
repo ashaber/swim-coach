@@ -275,6 +275,56 @@ def test_generate_week_default_primary_sport_is_swim_unchanged():
     assert any(s.sport in ("swim_pool", "swim_ow") for s in week_default.sessions)
 
 
+def test_generate_week_bike_primary_sessions_have_structured_content():
+    # engine/cycling-coach Part C: bike sessions must carry real structured
+    # content (warm-up + main block + cool-down) so the Garmin FIT push /
+    # .zwo export paths have something real to export -- previously every
+    # bike session left `structured=None`.
+    athlete, event, macro = _make_bike_macro()
+    week_start = macro.blocks[0].start_date
+    week = generate_week(athlete, macro, _iso_week(week_start), week_start, primary_sport="bike")
+    for s in week.sessions:
+        assert s.structured is not None
+        assert s.structure is not None
+        roles = [step.role for step in s.structured.items]
+        assert "interval" in roles  # the real main block
+        assert all(step.modality == "bike" for step in s.structured.items)
+        # warm-up + main + cool-down all sum, in seconds, to duration_min
+        total_s = sum(step.duration_value for step in s.structured.items)
+        assert total_s == pytest.approx(s.duration_min * 60, abs=1)
+
+
+def test_generate_week_bike_primary_structured_uses_zone_basis_without_ftp():
+    athlete, event, macro = _make_bike_macro()
+    week_start = macro.blocks[0].start_date
+    week = generate_week(athlete, macro, _iso_week(week_start), week_start, primary_sport="bike")
+    for s in week.sessions:
+        main_step = next(step for step in s.structured.items if step.role == "interval")
+        assert main_step.target.basis == "zone"
+        assert main_step.target.zone == s.intensity["zone"]
+
+
+def test_generate_week_bike_primary_structured_uses_power_w_with_ftp():
+    athlete, event, macro = _make_bike_macro()
+    week_start = macro.blocks[0].start_date
+    week = generate_week(
+        athlete, macro, _iso_week(week_start), week_start, primary_sport="bike", ftp_watts=250.0
+    )
+    for s in week.sessions:
+        main_step = next(step for step in s.structured.items if step.role == "interval")
+        assert main_step.target.basis == "power_w"
+        assert main_step.target.low == pytest.approx(s.intensity["ftp_watts_lo"], abs=1)
+        assert main_step.target.high == pytest.approx(s.intensity["ftp_watts_hi"], abs=1)
+
+
+def test_generate_week_bike_primary_structured_prose_has_main_set_line():
+    athlete, event, macro = _make_bike_macro()
+    week_start = macro.blocks[0].start_date
+    week = generate_week(athlete, macro, _iso_week(week_start), week_start, primary_sport="bike")
+    for s in week.sessions:
+        assert "Main set:" in s.structure
+
+
 def test_generate_week_rejects_unknown_primary_sport():
     athlete = make_athlete()
     event = make_event()

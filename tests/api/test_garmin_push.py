@@ -51,8 +51,29 @@ STRUCTURED = WorkoutStructure(
     ]
 )
 
+BIKE_STRUCTURED = WorkoutStructure(
+    items=[
+        WorkoutStep(
+            label="Main set: steady ride -- Z2",
+            role="interval",
+            duration_kind="time_s",
+            duration_value=1800,
+            target=WorkoutTarget(basis="power_w", low=140.0, high=190.0),
+            modality="bike",
+        ),
+    ]
+)
 
-def _session(athlete_id, *, sport="swim_pool", structured=STRUCTURED, day=8, purpose="garmin push test"):
+
+def _session(
+    athlete_id,
+    *,
+    sport="swim_pool",
+    structured=STRUCTURED,
+    day=8,
+    purpose="garmin push test",
+    is_indoor=None,
+):
     return Session(
         id=uuid.uuid4(),
         athlete_id=athlete_id,
@@ -60,12 +81,13 @@ def _session(athlete_id, *, sport="swim_pool", structured=STRUCTURED, day=8, pur
         sport=sport,
         source="ai_coach",
         duration_min=30.0,
-        distance_m=1000 if structured is not None else None,
+        distance_m=1000 if (structured is not None and sport != "bike") else None,
         intensity={"anchor": "css_pace", "zone": "Z3"} if sport != "recovery" else {"anchor": "rpe"},
         purpose=purpose,
         structure="Main set: 4x200 @ Z3" if structured is not None else None,
         structured=structured,
         status="planned",
+        is_indoor=is_indoor,
     )
 
 
@@ -144,14 +166,50 @@ def test_build_workout_event_strength_maps_to_weighttraining_type(athletes_dir: 
     assert base64.b64decode(event["file_contents_base64"]) == expected_bytes
 
 
-def test_sport_to_intervals_type_mapping_is_exactly_the_documented_three() -> None:
-    # Locks in the brief's exact mapping so a future edit can't silently
-    # drop/rename one of the three supported sports.
+def test_sport_to_intervals_type_mapping_is_exactly_the_documented_four() -> None:
+    # Locks in the exact mapping so a future edit can't silently drop/rename
+    # one of the four supported sports -- "bike" (outdoor only, see the
+    # is_indoor tests below) added by engine/cycling-coach Part C.
     assert _SESSION_SPORT_TO_INTERVALS_TYPE == {
         "swim_pool": "Swim",
         "swim_ow": "Swim",
         "strength": "WeightTraining",
+        "bike": "Ride",
     }
+
+
+def test_build_workout_event_outdoor_bike_maps_to_ride_type(athletes_dir: Path) -> None:
+    # engine/cycling-coach Part C: outdoor cycling now gets the same Garmin
+    # FIT push path already built for swim/strength.
+    store = FileStore(base_dir=athletes_dir)
+    athlete_id = store.load_athlete("renee").id
+    session = _session(athlete_id, sport="bike", structured=BIKE_STRUCTURED)
+
+    event = build_workout_event(session)
+
+    assert event["type"] == "Ride"
+    expected_bytes = to_garmin_fit_workout(session.structured, sport="bike", name=session.purpose)
+    assert base64.b64decode(event["file_contents_base64"]) == expected_bytes
+
+
+def test_build_workout_event_outdoor_bike_is_indoor_none_by_default(athletes_dir: Path) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    athlete_id = store.load_athlete("renee").id
+    session = _session(athlete_id, sport="bike", structured=BIKE_STRUCTURED)
+    assert session.is_indoor is None
+    # None (unset) is NOT indoor for gating purposes -- push must succeed.
+    build_workout_event(session)
+
+
+def test_build_workout_event_raises_for_indoor_bike(athletes_dir: Path) -> None:
+    # Indoor/trainer sessions route to .zwo export instead -- a live
+    # Garmin/intervals.icu calendar push assumes an outdoor ride.
+    store = FileStore(base_dir=athletes_dir)
+    athlete_id = store.load_athlete("renee").id
+    session = _session(athlete_id, sport="bike", structured=BIKE_STRUCTURED, is_indoor=True)
+
+    with pytest.raises(ValueError, match="indoor"):
+        build_workout_event(session)
 
 
 def test_build_workout_event_raises_for_no_structured_data(athletes_dir: Path) -> None:
@@ -316,6 +374,45 @@ def test_push_on_demand_iso_week_skips_unpushable_sessions_not_fatal(
     assert result_ids[str(no_structure.id)]["reason"] == "no structured workout data"
     assert result_ids[str(unsupported_sport.id)]["pushed"] is False
     assert result_ids[str(unsupported_sport.id)]["reason"] == "unsupported sport 'recovery'"
+
+
+def test_push_on_demand_skips_indoor_bike_session_not_fatal(
+    athletes_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(
+        "INTERVALS_SYNC_CONFIG",
+        json.dumps([{"slug": "renee", "intervals_athlete_id": "i999", "api_key": "k"}]),
+    )
+    store = FileStore(base_dir=athletes_dir)
+    athlete_id = store.load_athlete("renee").id
+
+    outdoor = _session(
+        athlete_id, sport="bike", structured=BIKE_STRUCTURED, day=8, purpose="outdoor ride"
+    )
+    indoor = _session(
+        athlete_id,
+        sport="bike",
+        structured=BIKE_STRUCTURED,
+        day=9,
+        purpose="indoor ride",
+        is_indoor=True,
+    )
+    for s in (outdoor, indoor):
+        _add_session(athletes_dir, s)
+
+    captured: list = []
+    _force_mock_transport(monkeypatch, _bulk_ok_handler(captured))
+
+    result = push_on_demand(store, "renee", iso_week=ISO_WEEK)
+
+    only_pushed_ids = {e["external_id"] for e in captured}
+    assert str(outdoor.id) in only_pushed_ids
+    assert str(indoor.id) not in only_pushed_ids
+
+    result_ids = {r["session_id"]: r for r in result["results"]}
+    assert result_ids[str(outdoor.id)]["pushed"] is True
+    assert result_ids[str(indoor.id)]["pushed"] is False
+    assert result_ids[str(indoor.id)]["reason"] == "indoor/trainer bike session -- export as .zwo instead"
 
 
 def test_push_on_demand_unknown_iso_week_is_a_clean_error(
