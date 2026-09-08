@@ -505,3 +505,11 @@ the final taper week.
   the plan adapt around it — e.g. treating a travel week like a recovery
   week and re-ramping the weeks after it — rather than only ever adjusting
   one session at a time.
+
+## Acknowledgments
+
+Tim Curry has been an ongoing consulting voice on this project's direction and
+design — including, for the multi-sport work, sharing the source of his
+own Claude-Code-based endurance-coaching app and giving explicit go-ahead
+to learn from its concepts (its "red team" adversarial plan-review pattern
+in particular). 
