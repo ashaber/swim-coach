@@ -508,9 +508,8 @@ the final taper week.
 
 ## Acknowledgments
 
-Tim has been an ongoing consulting voice on this project's direction and
+Tim Curry has been an ongoing consulting voice on this project's direction and
 design — including, for the multi-sport work, sharing the source of his
 own Claude-Code-based endurance-coaching app and giving explicit go-ahead
 to learn from its concepts (its "red team" adversarial plan-review pattern
-in particular). Nothing from that app is copied in; the credit here is for
-the thinking, not the code.
+in particular). 
