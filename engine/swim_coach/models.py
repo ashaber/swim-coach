@@ -84,16 +84,35 @@ class Athlete(BaseModel):
     # requirement (`engine/cycling-coach` branch), the structural half of
     # the constraint `library/23-cycling-training.md`'s own guidance-scoping
     # note names. `None` (the default) means "not yet declared" -- every
-    # existing athlete's profile.yaml has no `sports` key today, and MUST
-    # keep behaving exactly as before: `backend/app/context.py`'s library
-    # routing applies NO sport-scope filtering when `sports is None`, only
-    # once an athlete has actually set it (see `context.
-    # filter_files_by_sport_scope`). This is a capability-only build --
-    # Andrew's own explicit decision this session was to ship the mechanism
-    # without setting `sports` on any real athlete's actual data (Renee,
-    # Tim, or Andrew himself) yet; onboarding a real bike-configured athlete
-    # is deferred. Additive/optional, no schema_version bump, same
-    # convention as every other additive field in this file.
+    # existing athlete's profile.yaml has no `sports` key today. Additive/
+    # optional, no schema_version bump, same convention as every other
+    # additive field in this file.
+    #
+    # **Do not read this raw field for sport-scope routing -- use
+    # `effective_sports` below.** A real review bug (PR #167 review,
+    # Finding 1): `backend/app/context.py`'s sport-scope filtering used to
+    # treat `sports is None` as "apply no filtering at all" (i.e. every
+    # sport), which meant cycling library content reached 100% of real
+    # athletes -- every one of whom has `sports=None` today, since setting
+    # it on real athlete data was explicitly deferred. `None` must mean
+    # "not yet declared, so assume swim-only" (this project's actual
+    # population today), never "declared as every sport."
+
+    @property
+    def effective_sports(self) -> list[Sport]:
+        """`sports` resolved to a concrete list for any consumer that needs
+        to know which sport(s) actually ground this athlete's routing/
+        guidance scope -- an unset `sports` field behaves as swim-only
+        (`["swim_pool", "swim_ow"]`), matching every real athlete's actual
+        training today, NEVER as "every sport." See the bug this fixes in
+        `sports`'s own comment above. Prefer this over reading `.sports`
+        directly wherever a concrete sport list is actually needed (sport-
+        scope library routing today); `.sports` itself stays `None`-capable
+        for callers that specifically care whether the athlete has ever
+        declared it at all.
+        """
+        return self.sports if self.sports is not None else ["swim_pool", "swim_ow"]
+
     lthr_bpm: int | None = None
     # Lactate-threshold heart rate (bpm) -- a physiological anchor the
     # athlete supplies directly (e.g. from a field test, or read off a

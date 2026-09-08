@@ -1052,8 +1052,9 @@ def test_athlete_email_notifications_enabled_round_trips_when_set_false():
 def test_athlete_sports_defaults_none():
     # Every existing profile.yaml (Renee's, Tim's, Andrew's) carries no
     # `sports` key at all -- must keep validating unchanged as `None`,
-    # meaning "not yet declared" (see the field's own docstring: `None`
-    # leaves backend/app/context.py's sport-scope filtering a no-op).
+    # meaning "not yet declared" -- see `effective_sports` for how a
+    # consumer that needs a concrete sport list should resolve this instead
+    # of reading the raw field.
     athlete = make_athlete()
     assert athlete.sports is None
 
@@ -1068,6 +1069,23 @@ def test_athlete_sports_accepts_bike_sport_value():
     # engine/cycling-coach's first-class, plannable cycling sport.
     athlete = make_athlete(sports=["bike", "strength"])
     assert athlete.sports == ["bike", "strength"]
+
+
+def test_athlete_effective_sports_resolves_none_to_swim_only():
+    # Real review bug fixed here (PR #167 review, Finding 1): an athlete
+    # with no `sports` key set (every real athlete today) must resolve to
+    # swim-only for any consumer that needs a concrete sport list --
+    # `backend/app/context.py`'s sport-scope routing used to treat `None`
+    # as "no filtering" (i.e. every sport), which let cycling library
+    # content reach 100% of real athletes.
+    athlete = make_athlete()
+    assert athlete.sports is None
+    assert athlete.effective_sports == ["swim_pool", "swim_ow"]
+
+
+def test_athlete_effective_sports_passes_through_when_declared():
+    athlete = make_athlete(sports=["bike"])
+    assert athlete.effective_sports == ["bike"]
 
 
 def test_session_accepts_bike_sport():

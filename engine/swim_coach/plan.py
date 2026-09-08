@@ -167,11 +167,34 @@ BIKE_HARD_SESSION_SHARE = 0.35
 # (library/23-cycling-training.md) -- this specific 35% split is this
 # engine's own default, not a cited ratio.
 
+BIKE_HARD_SESSION_MAX_MIN = 75.0
+# Coach judgment: library/23-cycling-training.md documents no continuous-Z3
+# duration ceiling for a single session (Galán-Rioja et al. 2023 reports
+# viable weekly HOUR ranges across periodization models, not a per-session
+# cap) -- this is a plain engineering safety ceiling, same footing as
+# BIKE_HARD_SESSION_SHARE above, so `hard_min = total_duration_min *
+# BIKE_HARD_SESSION_SHARE` can't produce an unbounded continuous tempo
+# block for a large weekly total (a 600-min week uncapped would put 210
+# continuous minutes at Z3). Any duration this cap displaces is
+# redistributed into the week's Z2 endurance sessions instead of being
+# lost -- see `_bike_week_sessions`.
+
 DEFAULT_BIKE_SESSION_MIN = 15.0
 # Floor so a heavily-taper-compressed or very-early-ramp bike session
 # never collapses to a 0- or near-0-minute, unrepresentable session --
 # same role DEFAULT_POOL_SESSION_MIN/RECOVERY_SESSION_MIN's floors already
 # play for swim/recovery sessions. Coach judgment.
+#
+# **Not applied as a per-session floor on top of a fixed session count.**
+# A real review bug (PR #167 review, Finding 6): flooring EACH of
+# BIKE_SESSIONS_PER_WEEK sessions at this minimum independently could
+# inflate a low-volume (taper) week's TOTAL actual duration by up to 50%
+# (a 30-min weekly target -> 45 actual, three sessions floored to 15 each)
+# -- silently overriding the +8%/week ramp-cap rail that was already
+# applied upstream. `_bike_week_sessions` instead reduces the SESSION
+# COUNT (via `_resolve_bike_session_count` below) when the weekly total
+# can't support `BIKE_SESSIONS_PER_WEEK` sessions at this floor, keeping
+# actual total duration within a small, bounded tolerance of the target.
 
 BIKE_WARMUP_COOLDOWN_MIN = 5.0
 # Coach judgment: a flat, easy-zone warm-up/cool-down window bracketing a
@@ -315,6 +338,27 @@ MIN_RAMP_SEED_VOLUME_M = 1000
 # only affects the ramp CEILING calculation below, not any other reported
 # "current volume" -- an athlete's real current_weekly_volume_m is still 0
 # everywhere else it's used/reported.
+#
+# **METRES -- only valid for `Event.target_metric == "distance_m"`.** See
+# `MIN_RAMP_SEED_DURATION_MIN` below for the duration-unit counterpart
+# `scaffold_macro` actually uses for `target_metric == "duration_min"`
+# macros (PR #167 review, fragile note: this constant used to be reused
+# unchanged for duration-metric macros too -- for a real ~300 min/week
+# cyclist, the seed silently became "1000 minutes," so the +8%/week ramp
+# clamp barely engaged at all for any realistic peak target. This first
+# bit in engine/cycling-coach because it's the first PR to actually
+# produce real duration-path content -- the bug originates in the
+# already-merged #164, which unlocked the target_metric machinery without
+# a real duration-unit consumer yet to expose it).
+
+MIN_RAMP_SEED_DURATION_MIN = 60.0
+# Coach judgment, engineering seed value, same footing/role as
+# MIN_RAMP_SEED_VOLUME_M above -- just in the correct unit (MINUTES, not
+# metres) for a `target_metric == "duration_min"` macro (engine/cycling-
+# coach's bike-primary path today). A brand-new cyclist logging 0 min/week
+# is a real starting point, same "don't cap growth at literal zero"
+# reasoning as MIN_RAMP_SEED_VOLUME_M -- 60 min (a single easy ride) is
+# this engine's own minutes-scale floor, not a validated number.
 
 DEFAULT_CSS_PACE_S_PER_100M = 100.0
 # Fallback pace used only if an athlete has no css_pace_s_per_100m yet
@@ -414,6 +458,31 @@ def _pick_days(count: int, excluded: set[int]) -> list[int]:
         remaining = [d for d in order if d not in chosen]
         chosen.extend(remaining[: count - len(chosen)])
     return chosen[:count]
+
+
+def _spread_days_evenly(count: int) -> list[int]:
+    """Pick `count` Monday-relative day offsets spread evenly across the
+    week (ascending Mon->Sun order) -- `_bike_week_sessions`'s own day
+    placement, since a bike-only athlete has no `pool_schedule`-equivalent
+    field to avoid conflicting with (unlike `_pick_days`'s `excluded` set,
+    which swim callers use to dodge already-placed pool days).
+
+    **Real review bug fixed here (PR #167 review, Finding 3):**
+    `_bike_week_sessions` used to call `_pick_days(count, excluded=set())`,
+    which -- with nothing excluded -- always returns the first `count`
+    ascending offsets: `[0, 1, 2]` for a 3-session week, i.e. every ride
+    lands Mon/Tue/Wed with the hardest (Z3) day first and zero rest between
+    any of them. That only happened to look reasonable for swim because
+    `pool_offsets` there always excludes the intervening days; nothing
+    equivalent existed for bike.
+
+    Offsets are `round(i * 7 / count)` for `i in range(count)` -- verified
+    collision-free (distinct offsets) for every `count` in `1..7`, the only
+    range `BIKE_SESSIONS_PER_WEEK` can realistically take.
+    """
+    if count <= 0:
+        return []
+    return [round(i * 7 / count) for i in range(count)]
 
 
 def _format_pace_s(pace_s: float) -> str:
@@ -809,7 +878,21 @@ def scaffold_macro(
     else:
         distance_driven_target = None  # unreachable below: peak_weekly_volume_m is set
     ramp_weeks = base_weeks + build_weeks
-    ramp_seed = max(current_weekly_volume_m, MIN_RAMP_SEED_VOLUME_M)
+    # PR #167 review fragile note: MIN_RAMP_SEED_VOLUME_M is METRES -- using
+    # it as a duration-minutes floor for target_metric="duration_min"
+    # silently defeated the ramp cap for a real cyclist (seed became "1000
+    # minutes"). Branch on target_metric so each unit gets its own,
+    # correctly-scaled floor; target_metric="load_au" (arbitrary AU units,
+    # no natural minutes/metres floor) still uses the metres constant as an
+    # engineering placeholder -- same "documented, not silently guessed"
+    # footing generate_week's own bike-path docstring already uses for its
+    # load_au scope limit, not a claim this is unit-correct for AU.
+    ramp_seed_floor = (
+        MIN_RAMP_SEED_DURATION_MIN
+        if event.target_metric == "duration_min"
+        else MIN_RAMP_SEED_VOLUME_M
+    )
+    ramp_seed = max(current_weekly_volume_m, ramp_seed_floor)
     ramp_limited_max = ramp_seed * (1 + WEEKLY_VOLUME_RAMP_CAP) ** ramp_weeks
     candidate_peak = (
         peak_weekly_volume_m if peak_weekly_volume_m is not None else distance_driven_target
@@ -1046,7 +1129,7 @@ def _race_week_checklist(event: Event, week_start: date) -> list[RaceWeekCheckli
 
 def _bike_step(
     label: str,
-    role: Literal["warmup", "interval", "cooldown"],
+    role: Literal["warmup", "steady", "cooldown"],
     duration_s: float,
     zone: str,
     ftp_watts: float | None,
@@ -1119,10 +1202,46 @@ def _bike_session_structure(zone: str, duration_min: float, ftp_watts: float | N
     items: list[WorkoutStep] = []
     if warmup_s > 0:
         items.append(_bike_step("Warm-up, easy spin", "warmup", warmup_s, "Z1", ftp_watts))
-    items.append(_bike_step("Main set: steady ride", "interval", main_s, zone, ftp_watts))
+    items.append(_bike_step("Main set: steady ride", "steady", main_s, zone, ftp_watts))
     if cooldown_s > 0:
         items.append(_bike_step("Cool-down, easy spin", "cooldown", cooldown_s, "Z1", ftp_watts))
     return WorkoutStructure(items=items)
+
+
+def _resolve_bike_hard_min(total_duration_min: float) -> float:
+    """The hard (Z3) session's duration, `BIKE_HARD_SESSION_SHARE` of
+    `total_duration_min`, capped at `BIKE_HARD_SESSION_MAX_MIN` -- see that
+    constant's own comment (PR #167 review, Finding 4). Shared between
+    `_resolve_bike_session_count` and `_bike_week_sessions` so both use the
+    exact same number."""
+    return min(round(total_duration_min * BIKE_HARD_SESSION_SHARE, 1), BIKE_HARD_SESSION_MAX_MIN)
+
+
+def _resolve_bike_session_count(total_duration_min: float) -> int:
+    """How many of `BIKE_SESSIONS_PER_WEEK` sessions this week's total
+    duration can actually support without any of them needing
+    `DEFAULT_BIKE_SESSION_MIN`'s floor -- see that constant's own comment
+    (PR #167 review, Finding 6) for the bug this replaces: flooring each
+    session of a FIXED count independently, which could silently inflate a
+    low-volume (taper) week's total actual duration by up to 50%.
+
+    Tries `BIKE_SESSIONS_PER_WEEK` down to 2, returning the largest count
+    whose hard/easy split (computed the same way `_bike_week_sessions`
+    itself computes it) already clears the floor on both the hard session
+    and every easy session, with no flooring needed at all. Falls back to a
+    single session -- the whole week's total as one ride -- if not even 2
+    sessions clear it; a single low-volume session is deliberately NOT
+    labeled "hard" (see `_bike_week_sessions`'s own `is_hard` handling) so
+    this never forces a compressed taper day into a tempo-ride label.
+    """
+    hard_min = _resolve_bike_hard_min(total_duration_min)
+    for n in range(BIKE_SESSIONS_PER_WEEK, 1, -1):
+        easy_count = n - 1
+        remaining_min = max(0.0, total_duration_min - hard_min)
+        easy_min = remaining_min / easy_count
+        if hard_min >= DEFAULT_BIKE_SESSION_MIN and easy_min >= DEFAULT_BIKE_SESSION_MIN:
+            return n
+    return 1
 
 
 def _bike_week_sessions(
@@ -1130,14 +1249,19 @@ def _bike_week_sessions(
     week_start: date,
     total_duration_min: float,
     ftp_watts: float | None,
+    *,
+    is_indoor: bool | None = None,
 ) -> list[Session]:
-    """Generate `BIKE_SESSIONS_PER_WEEK` generic cycling sessions splitting
-    `total_duration_min` across a small, fixed weekly cadence:
-    `BIKE_HARD_SESSION_SHARE` of the total goes to one Z3 tempo-emphasis
+    """Generate up to `BIKE_SESSIONS_PER_WEEK` generic cycling sessions
+    splitting `total_duration_min` across a small weekly cadence:
+    `BIKE_HARD_SESSION_SHARE` of the total (capped at
+    `BIKE_HARD_SESSION_MAX_MIN` -- Finding 4) goes to one Z3 tempo-emphasis
     session, the rest splits evenly across the remaining Z2 endurance
-    sessions. See the module-level constants above for the citation/scope
-    notes, and `generate_week`'s own docstring for why `total_duration_min`
-    is what it is.
+    sessions. The actual session COUNT may be fewer than
+    `BIKE_SESSIONS_PER_WEEK` for a low-volume week -- see
+    `_resolve_bike_session_count` (Finding 6). See the module-level
+    constants above for the citation/scope notes, and `generate_week`'s own
+    docstring for why `total_duration_min` is what it is.
 
     `ftp_watts`, when known, resolves each session's zone into absolute
     watt bounds via `zones.bike_zone_table` (library/23-cycling-training.md);
@@ -1146,11 +1270,25 @@ def _bike_week_sessions(
     `DEFAULT_CSS_PACE_S_PER_100M`'s swim counterpart already uses elsewhere
     in this module.
 
+    `is_indoor` (optional, defaults to `None` -- every existing call site
+    keeps producing byte-identical output unless updated to pass it):
+    forwarded onto every session's own `Session.is_indoor`. PR #167 review,
+    Finding 5: before this parameter existed, NOTHING in this engine ever
+    produced a bike session with `is_indoor` set to anything but its model
+    default (`None`) -- the indoor/trainer `.zwo`-export-vs-outdoor-Garmin-
+    push branch (`app.garmin_push`/`app.routes.garmin`) covered a state
+    that could never actually occur. This makes the mechanism reachable; a
+    real "which of this week's rides are indoor" planning UI/tool is still
+    out of scope for this pass (uniform per-week, not per-session, is the
+    only shape this parameter supports today).
+
     Deliberately NOT a cycling-specific periodization design (no long-ride
     ladder, no block-shape beyond scaffold_macro's own generic arithmetic)
     -- see this build's own scope note. Days are spread evenly across the
-    week via `_pick_days` with no exclusions -- a bike-only athlete has no
-    `pool_schedule`-equivalent field yet to avoid conflicting with.
+    week via `_spread_days_evenly` (Finding 3 -- NOT `_pick_days`, which
+    with nothing excluded always returns the first N ascending offsets,
+    clustering every ride at the start of the week) -- a bike-only athlete
+    has no `pool_schedule`-equivalent field yet to avoid conflicting with.
 
     `Session.intensity` carries `{"zone": ..., "ftp_watts_lo": ...,
     "ftp_watts_hi": ...}` -- deliberately no `"anchor"` key (Session's own
@@ -1158,19 +1296,24 @@ def _bike_week_sessions(
     when present at all; a power-based target has no matching value in that
     set, so this omits the key entirely rather than mislabeling it).
     """
-    n = BIKE_SESSIONS_PER_WEEK
-    hard_min = round(total_duration_min * BIKE_HARD_SESSION_SHARE, 1)
+    n = _resolve_bike_session_count(total_duration_min)
+    hard_min = _resolve_bike_hard_min(total_duration_min)
     easy_count = n - 1
     remaining_min = max(0.0, total_duration_min - hard_min)
     easy_min = round(remaining_min / easy_count, 1) if easy_count > 0 else 0.0
 
-    offsets = _pick_days(n, excluded=set())
+    offsets = _spread_days_evenly(n)
     zone_table_watts = bike_zone_table(ftp_watts) if ftp_watts is not None else None
 
     sessions: list[Session] = []
     for i, offset in enumerate(offsets):
-        is_hard = i == 0
-        duration = hard_min if is_hard else easy_min
+        # A single-session week (Finding 6's low-volume fallback) is never
+        # labeled "hard" -- there's no second (easy) session to contrast it
+        # against, and forcing a compressed taper day into a Z3 tempo-ride
+        # label would be a worse coaching call than the volume-inflation
+        # bug this fallback exists to fix in the first place.
+        is_hard = n > 1 and i == 0
+        duration = total_duration_min if n == 1 else (hard_min if is_hard else easy_min)
         zone = "Z3" if is_hard else "Z2"
         intensity: dict = {"zone": zone}
         if zone_table_watts is not None:
@@ -1200,6 +1343,7 @@ def _bike_week_sessions(
                 structure=render_prose(structured),
                 structured=structured,
                 status="planned",
+                is_indoor=is_indoor,
             )
         )
     return sessions
@@ -1215,8 +1359,17 @@ def generate_week(
     event: Event | None = None,
     primary_sport: Literal["swim", "bike"] = "swim",
     ftp_watts: float | None = None,
+    bike_indoor: bool | None = None,
 ) -> WeekPlan:
     """Generate one week's sessions.
+
+    `bike_indoor` (optional, defaults to `None` -- every existing call site
+    keeps producing byte-identical output unless updated to pass it):
+    forwarded straight through to `_bike_week_sessions`'s own `is_indoor`
+    parameter for a `primary_sport="bike"` week; ignored for a swim week.
+    See that function's docstring for the Finding-5 bug this fixes
+    (`Session.is_indoor` previously had no producer anywhere in this
+    engine).
 
     `event` (optional, defaults to `None` -- every existing call site keeps
     producing byte-identical output unless updated to pass it): when
@@ -1351,8 +1504,27 @@ def generate_week(
         # limitation, etc). None of the swim-specific machinery below
         # (pool_offsets, long swim, strength/recovery placement,
         # event_format, template_preference) applies.
+        if event is not None and event.target_metric == "load_au":
+            # Cheap sanity check for the docstring's own "Known, deliberate
+            # scope limit" note above (PR #167 review, fragile note): this
+            # path interprets target_volume_m as MINUTES, but a macro
+            # scaffolded toward a target_metric="load_au" event feeds an
+            # arbitrary-unit AU number through exactly the same path with
+            # nothing else to catch the mismatch. Warn rather than silently
+            # mislabeling an AU total as minutes -- real load_au-bike
+            # support stays documented future scope, not attempted here.
+            warnings.warn(
+                f"generate_week's bike-primary path interprets "
+                f"target_volume_m ({target_volume_m}) as TOTAL DURATION IN "
+                f"MINUTES, but this week's event has target_metric="
+                f"'load_au' -- the resulting bike sessions' duration_min "
+                "will actually be an AU load number, not minutes. See "
+                "generate_week's own docstring 'Known, deliberate scope "
+                "limit' note.",
+                stacklevel=2,
+            )
         bike_sessions = _bike_week_sessions(
-            athlete, week_start, float(target_volume_m), ftp_watts
+            athlete, week_start, float(target_volume_m), ftp_watts, is_indoor=bike_indoor
         )
         return WeekPlan(
             id=uuid4(),

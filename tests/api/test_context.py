@@ -44,6 +44,45 @@ def test_system_block_a_is_byte_identical_regardless_of_message(library_dir) -> 
     assert block_1 == block_2
 
 
+def test_system_block_a_is_byte_identical_across_messages_for_fixed_sport_scope(library_dir) -> None:
+    # Block A no longer takes zero arguments (Finding 1's fix threads
+    # athlete_sports through it), but it must still be byte-stable across
+    # different MESSAGES for the same athlete sport scope.
+    block_1 = build_system_blocks(library_dir, athlete_sports=["swim_pool", "swim_ow"])
+    block_2 = build_system_blocks(library_dir, athlete_sports=["swim_pool", "swim_ow"])
+    assert block_1 == block_2
+
+
+def test_system_block_a_excludes_cycling_content_for_undeclared_or_swim_only_athlete(
+    library_dir,
+) -> None:
+    # Core Finding-1 guarantee for system block A specifically (not just
+    # block B's routed files): the cycling library file's own INDEX.md row
+    # and its topic-routing rows must never reach a swim-only (or
+    # undeclared -- every real athlete today) athlete's system prompt at
+    # all, full stop. `00-conventions.md`'s own generic tag-scheme
+    # documentation mentions the filename once as an example of the
+    # `[EVIDENCE: cycling]` tag -- that's fine, out of scope for this
+    # guarantee (it's not cycling training GUIDANCE, and isn't gated by the
+    # INDEX.md sport-scope markers) -- so this checks the INDEX.md row's own
+    # distinctive content, not the bare filename string.
+    default_text = build_system_blocks(library_dir)[0]["text"]
+    swim_only_text = build_system_blocks(library_dir, athlete_sports=["swim_pool", "swim_ow"])[0][
+        "text"
+    ]
+    for text in (default_text, swim_only_text):
+        assert "First cycling-native library file" not in text
+        assert "Power zones, FTP, %FTP training zones for cycling" not in text
+        assert "library-index:sport-scope" not in text  # markers never leak as visible text
+
+
+def test_system_block_a_includes_cycling_content_for_bike_athlete(library_dir) -> None:
+    text = build_system_blocks(library_dir, athlete_sports=["bike"])[0]["text"]
+    assert "23-cycling-training.md" in text
+    assert "Coggan 7-zone" in text  # the file's own INDEX.md row summary
+    assert "library-index:sport-scope" not in text  # markers stripped either way
+
+
 def test_system_block_a_has_cache_control(library_dir) -> None:
     blocks = build_system_blocks(library_dir)
     assert len(blocks) == 1
@@ -179,13 +218,27 @@ def test_route_library_files_set_structure_question_reaches_14() -> None:
 # --- scope's own docstring) ---------------------------------------------
 
 
-def test_route_library_files_cycling_keyword_reaches_23_when_sports_none() -> None:
-    # Every real athlete today has Athlete.sports=None -- no filtering
-    # applies, so a (currently unlikely) cycling-shaped question still
-    # routes normally. Proves the mechanism's mere existence changes
-    # nothing for today's real athletes.
+def test_route_library_files_cycling_keyword_excluded_when_sports_none() -> None:
+    # Real review bug (PR #167 review, Finding 1), reproduced exactly here:
+    # every real athlete today has Athlete.sports=None -- the ORIGINAL
+    # behavior treated that as "apply no filtering," so cycling content
+    # reached 100% of real athletes (all swim-only) whenever their message
+    # happened to match a cycling keyword. `athlete_sports=None` must now
+    # resolve to swim-only, same as `Athlete.effective_sports`, so the
+    # cycling file never reaches an undeclared (real, today) athlete.
     files = route_library_files("What's my FTP zone for this ride?")
-    assert "23-cycling-training.md" in files
+    assert "23-cycling-training.md" not in files
+
+
+def test_route_library_files_reviewer_repro_no_cycling_leak_with_sports_none() -> None:
+    # The reviewer's own live repro, verified word-for-word: previously
+    # returned ['03-periodization.md', '06-long-swim-progression.md',
+    # '23-cycling-training.md'] -- cycling content reaching a swim-only
+    # athlete (every real athlete has athlete_sports=None today).
+    files = route_library_files(
+        "Should I ride my road bike on recovery days?", athlete_sports=None
+    )
+    assert "23-cycling-training.md" not in files
 
 
 def test_route_library_files_bike_athlete_reaches_cycling_file() -> None:
@@ -205,6 +258,23 @@ def test_route_library_files_swim_only_athlete_excludes_cycling_file() -> None:
     assert "23-cycling-training.md" not in files
 
 
+def test_route_library_files_off_scope_question_falls_back_not_empty() -> None:
+    # Real review bug fixed here (PR #167 review, Finding 8): the reviewer's
+    # own live repro -- a swim_ow-only athlete asking a mountain-bike-
+    # keyword-matching question -- used to return [] entirely (no topic
+    # grounding at all, not even a graceful default), because
+    # `DEFAULT_ROUTE_FILES`'s fallback ran BEFORE sport-scope filtering, so
+    # filtering could empty an already-non-empty matched set. The fallback
+    # must re-apply AFTER filtering so a routed block is never empty for a
+    # sport-scoped athlete.
+    files = route_library_files(
+        "my mountain bike ride left my knee sore", athlete_sports=["swim_ow"]
+    )
+    assert files  # never empty
+    assert "23-cycling-training.md" not in files  # still correctly excluded
+    assert "03-periodization.md" in files  # DEFAULT_ROUTE_FILES fallback
+
+
 def test_route_library_files_swim_only_athlete_swim_routing_unaffected() -> None:
     # Sport-scope filtering must not touch UNSCOPED files -- a swim
     # athlete's ordinary swim-keyword routing is untouched.
@@ -214,11 +284,17 @@ def test_route_library_files_swim_only_athlete_swim_routing_unaffected() -> None
     assert "04-css-intensity-anchors.md" in files
 
 
-def test_filter_files_by_sport_scope_none_is_noop() -> None:
+def test_filter_files_by_sport_scope_none_resolves_to_swim_only() -> None:
+    # Real review bug fixed here (PR #167 review, Finding 1): None used to
+    # be a no-op (no filtering at all); it must now behave exactly like an
+    # explicit swim-only athlete, since that's every real athlete today.
     from app.context import filter_files_by_sport_scope
 
     files = ["03-periodization.md", "23-cycling-training.md"]
-    assert filter_files_by_sport_scope(files, None) == files
+    assert filter_files_by_sport_scope(files, None) == ["03-periodization.md"]
+    assert filter_files_by_sport_scope(files, None) == filter_files_by_sport_scope(
+        files, ["swim_pool", "swim_ow"]
+    )
 
 
 def test_filter_files_by_sport_scope_unscoped_file_never_excluded() -> None:

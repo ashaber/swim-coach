@@ -132,12 +132,37 @@ def _convert_leaf(step: WorkoutStep, ftp_watts: float) -> tuple[str, dict[str, s
         low = high
 
     if step.role == "warmup":
+        # Floor the LOW bound at the sibling skill's own default warm-up
+        # low (0.40) whenever a zone-derived low bound collapses to (or
+        # below) zero -- Z1's own `lo_pct_ftp` is 0.0 (zones.bike_zone_
+        # table), so a warm-up built from Z1 (as `plan._bike_session_
+        # structure` always does) would otherwise ramp FROM literal zero
+        # watts. The sibling skill's defaults exist for exactly this
+        # "don't ramp from/to zero" reason -- they previously only applied
+        # when a warm-up was absent from the input entirely (see the
+        # `to_zwo_workout`-level fallback below), not when one is present
+        # but derived from a zero-floor zone. The real, already-reasonable
+        # HIGH bound is left untouched -- only the pathological low bound
+        # is corrected, never a deliberate non-zero low an explicit input
+        # provided (see test_explicit_nonzero_warmup_low_bound_is_not_
+        # floored).
+        if low < _DEFAULT_WARMUP_POWER_LOW:
+            low = _DEFAULT_WARMUP_POWER_LOW
+            if high < low:
+                high = low
         return "Warmup", {
             "Duration": duration_s,
             "PowerLow": _fmt_power(low),
             "PowerHigh": _fmt_power(high),
         }
     if step.role == "cooldown":
+        # Same zero-floor correction as warmup above, mirrored for
+        # cooldown's own default low (0.30) -- Z1-derived cool-downs
+        # otherwise ramp TO literal zero watts.
+        if low < _DEFAULT_COOLDOWN_POWER_LOW:
+            low = _DEFAULT_COOLDOWN_POWER_LOW
+            if high < low:
+                high = low
         # Cooldown ramps DOWN: PowerHigh is the starting (higher) power,
         # PowerLow the ending (lower) one -- sibling skill's own explicit
         # rule ("Always set PowerHigh > PowerLow for a smooth power
@@ -152,9 +177,28 @@ def _convert_leaf(step: WorkoutStep, ftp_watts: float) -> tuple[str, dict[str, s
         }
     if low == high:
         return "SteadyState", {"Duration": duration_s, "Power": _fmt_power(low)}
-    # A genuine range on a non-warmup/cooldown step is a mid-workout
-    # progression -- sibling skill's `<Ramp>` element ("power progressions in
-    # the body of the workout").
+    if step.role in ("steady", "interval"):
+        # A FLAT main block that merely carries a target RANGE (e.g. a
+        # zone's own %FTP band) is not a mid-workout power progression --
+        # sibling skill's own explicit rule: "SteadyState -- if the input
+        # gives a range (e.g. 88-93%), use the midpoint (0.905) as Power."
+        # `plan._bike_session_structure` builds every real bike session's
+        # main block this way (a single flat block at the session's
+        # assigned zone, never a genuine build/ramp shape) -- routing it to
+        # `<Ramp>` instead (the bug this fixes) delivered a 0%->90%FTP power
+        # ramp on the trainer instead of the planned steady tempo/endurance
+        # ride. "steady" is the role `_bike_session_structure`'s own main
+        # block SHOULD carry (and the role every other test in this file
+        # already uses for a flat block); "interval" is included too since
+        # that's the role that block's real producer actually assigns today
+        # (see plan.py's own `_bike_step` call) -- both mean the same thing
+        # here: a flat block, not a progression.
+        midpoint = (low + high) / 2
+        return "SteadyState", {"Duration": duration_s, "Power": _fmt_power(midpoint)}
+    # A genuine range on any OTHER role (this codebase has no real producer
+    # of one today -- reserved for a future genuine mid-workout progression)
+    # is a real build -- sibling skill's `<Ramp>` element ("power
+    # progressions in the body of the workout").
     return "Ramp", {
         "Duration": duration_s,
         "PowerLow": _fmt_power(low),
@@ -291,7 +335,16 @@ def to_zwo_workout(
     return (
         '<?xml version="1.0" encoding="utf-8"?>\n'
         "<workout_file>\n"
-        f"  <n>{_xml_escape(name)}</n>\n"
+        # Real Zwift/MyWhoosh ZWO schema uses `<name>`, not `<n>` -- the
+        # sibling skill's own SKILL.md (Step 5's template) has `<n>`
+        # throughout, a markdown-rendering artifact in that source file
+        # rather than the actual format (verified against
+        # github.com/h4l/zwift-workout-file-reference's own tag reference:
+        # `<name>` is "the name of the workout in the Zwift workout list,"
+        # contained directly by `<workout_file>`). `<n>` would leave every
+        # exported workout unnamed on import -- fixed here rather than
+        # ported verbatim, unlike every other element in this template.
+        f"  <name>{_xml_escape(name)}</name>\n"
         f"  <author>{_xml_escape(author)}</author>\n"
         f"  <description>{_xml_escape(description_text)}</description>\n"
         "  <sportType>bike</sportType>\n"

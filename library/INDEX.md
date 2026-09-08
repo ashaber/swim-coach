@@ -28,7 +28,9 @@ load `00-conventions.md` once per session to know how to read the tags.
 | `19-srpe-protocol.md` | The Foster CR-10 modified-Borg session-RPE survey protocol (0-10 scale with verbal anchors, single global "how hard was your workout overall" question, ~30-min post-workout ask timing) behind `Workout.rpe`/`WorkoutDraft.rpe` -- the survey *instrument*, distinct from `15-tiered-session-load.md`'s load *formula* that consumes the resulting number. Foster et al. (2001), `[ADAPTED: general-endurance]`, confidence high, verified by direct web search. **REVIEWED**, pending human review. |
 | `21-shoulder-health-and-load.md` | Extends `07-strength-dryland.md`'s injury-*prevention* shoulder program with the injury-*recovery* side: the shoulder-load/injury-risk relationship (cross-refs `07`'s existing ACWR citation), a criteria-based three-phase rehab progression (Desmeules et al. 2025 CPG), adjunct-modality evidence for massage and TENS (both genuinely conflicting -- Cochrane placebo-controlled null vs. smaller positive pooled studies), and swim-specific return-to-training criteria (Wilk et al. 2020) plus practitioner-convention volume/stroke/position adaptations. Triggered by a real acute shoulder injury this session; written as general grounding, not a one-athlete note. **REVIEWED**, pending human review. |
 | `22-injury-adapted-taper.md` | Grounds `taper_search.py`'s three-phase RAMP -> HOLD -> TAPER projection extending the plain hold-then-decay taper grid search: the race-day TSB band (Friel/TrainingPeaks, `[ADAPTED: cycling]`), the pre-layoff baseline window, and the restriction-driven `LIGHT_ONLY_RAMP_CAP_FRACTION = 0.55` ramp cap -- honestly graded low-medium confidence, grounded in Mujika & Padilla (2003)'s "hold intensity, cut volume" taper principle applied symmetrically to the ramp-back-up side, cross-referencing `21-shoulder-health-and-load.md`'s clinical return-to-swim criteria. **UNREVIEWED**, pending human review. |
-| `23-cycling-training.md` | **First cycling-native library file** (`engine/cycling-coach` branch; `IDEAS.md` IDEA 008 use case 5). Coggan 7-zone %FTP power-training-zone table (with an explicit inclusive-upper-bound boundary convention, implemented by `zones.bike_zone_for_pct`/`bike_zone_table`); the TSS/Normalized-Power/Intensity-Factor formula (matches `load.py`'s existing pre-cubing TSS citation, now confirmed for cycling's own native use); how well-grounded the swim engine's `CTL_TIME_CONSTANT_DAYS=42`/`ATL_TIME_CONSTANT_DAYS=7` are for their native discipline (practitioner convention, not outcome-validated, per Vermeire et al. 2022 and Marchal et al. 2025's model-class critiques); periodization/volume-progression evidence for trained cyclists (Galán-Rioja et al. 2023 -- no evidence favors one periodization model over another; no cycling-specific week-to-week ramp-rate number exists, an honest gap); patellofemoral pain/knee-loading evidence (Clarsen et al. 2010, road-cyclist cohort, discounted to `Confidence: medium-high` and caveated as an MTB/CX proxy, not a direct-population match; Bini & Priego-Quesada 2022 on saddle height); and whether road/MTB/cyclocross are researched as distinct populations (yes for road vs. MTB/XCO; cyclocross is an explicitly acknowledged, still-thin research gap, not silently ignored). **Tagging note (resolved):** genuinely cycling-native claims are tagged `[EVIDENCE: cycling]` (00-conventions.md's new native-discipline evidence tag, added this pass -- see `IDEAS.md` IDEA 008's now-closed "no reciprocal tag exists" gap); only claims from a non-cycling population applied cautiously (Vermeire et al. 2022, Marchal et al. 2025) stay `[ADAPTED: general-endurance]`. **Sport scope: `bike`.** **Guidance-scoping constraint (IDEA 008, hard requirement), now structurally enforced:** this file must only ground answers for an athlete whose own configured sport(s) include cycling -- never surface cycling content to a swim-only athlete (Renee). Enforced by `Athlete.sports` (`models.py`, `None` = unset = unchanged behavior for every real athlete today) plus `backend/app/context.py`'s `filter_files_by_sport_scope` / `_LIBRARY_FILE_SPORT_SCOPE` (mirrors this row's "Sport scope" tag as fixed routing data) -- previously documentation-only (the adversarial critique's objection 3), now backed by code and tests (`tests/api/test_context.py`). **UNREVIEWED**, pending human review. |
+<!-- library-index:sport-scope=bike:start -->
+| `23-cycling-training.md` | **First cycling-native library file** (`engine/cycling-coach` branch; `IDEAS.md` IDEA 008 use case 5). Coggan 7-zone %FTP power-training-zone table (with an explicit inclusive-upper-bound boundary convention, implemented by `zones.bike_zone_for_pct`/`bike_zone_table`); the TSS/Normalized-Power/Intensity-Factor formula (matches `load.py`'s existing pre-cubing TSS citation, now confirmed for cycling's own native use); how well-grounded the swim engine's `CTL_TIME_CONSTANT_DAYS=42`/`ATL_TIME_CONSTANT_DAYS=7` are for their native discipline (practitioner convention, not outcome-validated, per Vermeire et al. 2022 and Marchal et al. 2025's model-class critiques); periodization/volume-progression evidence for trained cyclists (Galán-Rioja et al. 2023 -- no evidence favors one periodization model over another; no cycling-specific week-to-week ramp-rate number exists, an honest gap); patellofemoral pain/knee-loading evidence (Clarsen et al. 2010, road-cyclist cohort, discounted to `Confidence: medium-high` and caveated as an MTB/CX proxy, not a direct-population match; Bini & Priego-Quesada 2022 on saddle height); and whether road/MTB/cyclocross are researched as distinct populations (yes for road vs. MTB/XCO; cyclocross is an explicitly acknowledged, still-thin research gap, not silently ignored). **Tagging note (resolved):** genuinely cycling-native claims are tagged `[EVIDENCE: cycling]` (00-conventions.md's new native-discipline evidence tag, added this pass -- see `IDEAS.md` IDEA 008's now-closed "no reciprocal tag exists" gap); only claims from a non-cycling population applied cautiously (Vermeire et al. 2022, Marchal et al. 2025) stay `[ADAPTED: general-endurance]`. **Sport scope: `bike`.** **Guidance-scoping constraint (IDEA 008, hard requirement), structurally enforced:** this file must only ground answers for an athlete whose own configured sport(s) include cycling -- never surface cycling content to a swim-only athlete (Renee). Enforced by `Athlete.effective_sports` (`models.py` -- an unset `sports` field resolves to swim-only, `["swim_pool", "swim_ow"]`, NOT "every sport") plus `backend/app/context.py`'s `filter_files_by_sport_scope` / `_LIBRARY_FILE_SPORT_SCOPE` (mirrors this row's "Sport scope" tag as fixed routing data) for system block B's routed topic files, AND this very table row plus the topic-routing rows below (both marked with HTML `sport-scope=bike` comments `build_system_blocks` strips out for a non-bike athlete) for system block A -- so neither this row's existence nor its routing rows ever reach a swim-only athlete's context, not just the file's own body text. Covered by `tests/api/test_context.py`. **UNREVIEWED**, pending human review. |
+<!-- library-index:sport-scope=bike:end -->
 | `reference_list.md` | **The canonical citation source.** Every claim in every file above resolves to an entry here (title + author + year), never a URL/ID — see its own header for why. |
 | `sample_pool_workout_traditional.md` | A real logged pool-coach workout sample (traditional/technique-focused notation) — reference material for `/log-workout`'s coach-text parser, not a research citation. |
 | `sample_pool_workout_openwater_focus.md` | A real logged pool-coach workout sample (open-water-focused notation) — same purpose as above. |
@@ -66,12 +68,14 @@ load `00-conventions.md` once per session to know how to read the tags.
 | Heat/cold acclimation, taper execution (full macro taper, not the between-events mini-taper), race-day pacing | Not yet authored (`09`, `12`-tier files per ROADMAP.md's repo-structure sketch — `08` and `11` are no longer gaps, see above). Until then: give coach judgment labeled as such, and offer to draft a new `UNREVIEWED` section rather than presenting an unsourced answer as settled. |
 | Acute physical distress (chest pain, palpitations, fainting, heat-stroke/hypothermia signs) | **Not a library-routing question.** Stop and use the `/coach` skill's safety-first override — no file in this library should be consulted before that. |
 | Open-water session content — feed-window/fueling practice, negative splits, sighting, chop/wind, breathing-pattern drills, back-to-back stage-fatigue simulation, taper activation, race dress rehearsal; "why is this session just a bare distance number?" | `18-open-water-session-templates.md` (the `ow_session_templates.py` template library + the `skill_scalable`/`endurance_floor` duration-scaling design) |
+<!-- library-index:sport-scope=bike:start -->
 | Power zones, FTP, %FTP training zones for cycling (road/MTB/cyclocross) | `23-cycling-training.md` (Coggan 7-zone table) — **only for an athlete whose configured sport(s) include cycling**, per the file's own guidance-scoping constraint |
 | Cycling TSS / Normalized Power / Intensity Factor, "why is my ride's TSS what it is?" | `23-cycling-training.md` (the exact NP/IF/TSS formula — the same source `load.py`'s swim-specific cubed-exponent TSS adaptation already cites, here for cycling's own native, un-adapted use) |
 | Cycling CTL/ATL/TSB, "is 42/7 days actually right for cycling?" | `23-cycling-training.md` (confirms 42/7 is a practitioner convention, not outcome-validated even for cycling — real methodological critiques of the model class exist) |
 | Cycling periodization / how fast to build volume (road/MTB/cyclocross) | `23-cycling-training.md` (Galán-Rioja et al. 2023 — no evidence favors one periodization model; states plainly no cycling-specific week-to-week ramp-rate number was found) |
 | Cyclist's knee, patellofemoral pain, saddle height and knee load | `23-cycling-training.md` (Clarsen et al. 2010 road-cyclist overuse-injury cohort; Bini & Priego-Quesada 2022 saddle-height systematic review) |
 | Does road/MTB/cyclocross training differ, or is it all "cycling"? | `23-cycling-training.md` (road vs. MTB/XCO are researched as physiologically distinct; cyclocross is an explicitly acknowledged, still-thin research gap per Fallon et al. 2025's own meta-analysis) |
+<!-- library-index:sport-scope=bike:end -->
 
 ## Known gaps (as of `13-reds-energy-availability.md`)
 
@@ -106,16 +110,30 @@ claims as drafts, not settled grounding, until that review happens.
 `/coach` should say plainly when a question falls in one of the remaining
 gaps rather than improvising a citation that doesn't exist yet.
 
+<!-- library-index:sport-scope=bike:start -->
 `23-cycling-training.md` is a different kind of addition from `01`-`22`
 above: it's the first library file for a discipline *other than* swimming
 (`engine/cycling-coach` branch, `IDEAS.md` IDEA 008's multi-sport
-expansion), not another swim-domain topic. Two follow-ups this file's own
-header flags rather than resolves: (1) the EVIDENCE/ADAPTED tag scheme has
-no cycling-native EVIDENCE value, so every cycling-native claim is
-mechanically tagged ADAPTED (cycling) to satisfy the CI gate — a known
-schema gap (IDEA 008: "no reciprocal tag exists"), not a claim these are
-genuine cross-discipline adaptations; (2) per IDEA 008's hard guidance-
-scoping constraint, `/coach` and any future context assembler must gate
-this file's content to athletes whose own configured sport(s) actually
-include cycling — surfacing it to a swim-only athlete (Renee) is exactly
-the trust problem IDEA 008 names, not a hypothetical risk.
+expansion), not another swim-domain topic. Both follow-ups this file's own
+header used to flag as open are now resolved, not just documented as
+intent: (1) the EVIDENCE/ADAPTED tag scheme has a real cycling-native
+`[EVIDENCE: cycling]` value (`00-conventions.md`'s native-discipline tag
+list) — genuinely cycling-native claims use it directly; only claims
+carried over from a non-cycling population (Vermeire et al. 2022, Marchal
+et al. 2025) stay `[ADAPTED: general-endurance]`, and neither is a
+mechanical CI-gate workaround. (2) Per IDEA 008's hard guidance-scoping
+constraint, this file's content is gated to athletes whose own configured
+sport(s) actually include cycling — structurally, not just by convention:
+`Athlete.effective_sports` resolves an athlete with no `sports` key set to
+swim-only (`["swim_pool", "swim_ow"]`), never to "every sport";
+`backend/app/context.py`'s `filter_files_by_sport_scope` excludes this
+file from system block B's routed topic files for any athlete whose
+effective sports don't include `bike`; and this file's own Files-table row
+plus its six topic-routing rows above (both spans marked with the
+`sport-scope=bike` HTML comments `build_system_blocks` strips for a
+non-bike athlete) are excluded from system block A too, so even the fact
+that this file exists never reaches a swim-only athlete's context.
+`tests/api/test_context.py` covers exactly this guarantee, including the
+exact "swim-only athlete asks a cycling-keyword question" repro that
+motivated it.
+<!-- library-index:sport-scope=bike:end -->

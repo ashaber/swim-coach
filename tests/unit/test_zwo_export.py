@@ -70,7 +70,14 @@ def test_steady_state_z2_ride_produces_valid_zwo():
     root = _parse(xml_str)
 
     assert root.tag == "workout_file"
-    assert root.find("n").text == "Z2 Endurance"
+    assert root.find("name").text == "Z2 Endurance"
+    # Real ZWO schema fix (fragile note, PR #167 review): the sibling
+    # skill's own SKILL.md uses `<n>`, a markdown-rendering artifact -- the
+    # real Zwift/MyWhoosh workout-file schema uses `<name>` (verified
+    # against github.com/h4l/zwift-workout-file-reference). `<n>` would
+    # import every exported workout unnamed.
+    assert "<name>Z2 Endurance</name>" in xml_str
+    assert "<n>" not in xml_str
     # ElementTree reports an empty element's .text as None, not "" -- a
     # parser quirk, not a claim about what's actually in the XML (confirmed
     # by also checking the raw string below).
@@ -156,6 +163,92 @@ def test_interval_session_with_repeats_produces_intervalst():
     assert intervals.attrib["OffPower"] == "0.55"
 
 
+def test_warmup_and_cooldown_floored_when_zone_derived_low_bound_is_zero():
+    # Real review bug fixed here (PR #167 review, Finding 2): Z1 (Active
+    # Recovery)'s lo_pct_ftp is 0.0 (zones.bike_zone_table) -- a warm-up/
+    # cool-down BUILT from Z1 (as `plan._bike_session_structure` always
+    # does) ramped from/to literal ZERO watts before this fix, instead of
+    # the sibling skill's own defaults (0.40-0.60 up, 0.55-0.30 down) --
+    # which exist for exactly this "don't ramp from/to zero" reason, but
+    # previously only applied when a warm-up/cooldown was absent from the
+    # input entirely, not when one is present but zero-floored. The real,
+    # computed, non-degenerate high bound (Z1's own 55% ceiling) is NOT
+    # touched -- only the pathological zero low bound is floored.
+    structured = WorkoutStructure(
+        items=[
+            WorkoutStep(
+                label="Warm-up, easy spin",
+                role="warmup",
+                duration_kind="time_s",
+                duration_value=300,
+                target=WorkoutTarget(basis="power_w", low=0.0, high=137.5),  # Z1: 0-55% of 250W
+                modality="bike",
+            ),
+            WorkoutStep(
+                label="Main set: steady ride",
+                role="steady",
+                duration_kind="time_s",
+                duration_value=1800,
+                target=WorkoutTarget(basis="power_w", low=180.0, high=180.0),
+                modality="bike",
+            ),
+            WorkoutStep(
+                label="Cool-down, easy spin",
+                role="cooldown",
+                duration_kind="time_s",
+                duration_value=300,
+                target=WorkoutTarget(basis="power_w", low=0.0, high=137.5),
+                modality="bike",
+            ),
+        ]
+    )
+    xml_str = to_zwo_workout(structured, ftp_watts=250.0, name="Floor test")
+    root = _parse(xml_str)
+    children = _workout_children(root)
+
+    warmup = children[0]
+    assert warmup.attrib["PowerLow"] == "0.40"  # floored -- NOT "0.00"
+    assert warmup.attrib["PowerHigh"] == "0.55"  # real computed ceiling, untouched
+
+    cooldown = children[2]
+    assert cooldown.attrib["PowerLow"] == "0.30"  # floored -- NOT "0.00"
+    assert cooldown.attrib["PowerHigh"] == "0.55"  # real computed ceiling, untouched
+
+
+def test_explicit_nonzero_warmup_low_bound_is_not_floored():
+    # The floor must only correct the pathological zero-floor case -- a
+    # real, deliberate, already-reasonable low bound above the sibling
+    # skill's default must pass through verbatim (same "explicit values are
+    # never overridden" convention as test_explicit_short_warmup_is_not_
+    # overridden above, just for the power bound instead of the duration).
+    structured = WorkoutStructure(
+        items=[
+            WorkoutStep(
+                label="Warm-up",
+                role="warmup",
+                duration_kind="time_s",
+                duration_value=300,
+                target=WorkoutTarget(basis="power_w", low=125.0, high=150.0),  # 0.50-0.60
+                modality="bike",
+            ),
+            WorkoutStep(
+                label="Steady",
+                role="steady",
+                duration_kind="time_s",
+                duration_value=1200,
+                target=WorkoutTarget(basis="power_w", low=180.0, high=180.0),
+                modality="bike",
+            ),
+        ]
+    )
+    xml_str = to_zwo_workout(structured, ftp_watts=250.0, name="No floor needed")
+    root = _parse(xml_str)
+    children = _workout_children(root)
+    warmup = children[0]
+    assert warmup.attrib["PowerLow"] == "0.50"
+    assert warmup.attrib["PowerHigh"] == "0.60"
+
+
 # --- warm-up/cool-down-less input needing the defaults applied ---------------
 
 
@@ -224,6 +317,19 @@ def test_explicit_short_warmup_is_not_overridden():
 
 
 def test_zone_basis_target_resolves_via_bike_zone_table():
+    # Real review bug fixed here (PR #167 review, Finding 2): this test
+    # USED TO assert "a real %FTP range -> Ramp", which is exactly the bug
+    # -- a flat, continuous `role="steady"` block (label: "Endurance," no
+    # progression) that merely has a target RANGE (Z2 spans 55-75% FTP,
+    # library/23-cycling-training.md) is not a genuine mid-workout power
+    # progression, so it must export as a single steady watts number at the
+    # range's midpoint, matching the sibling skill's own explicit rule:
+    # "SteadyState -- if the input gives a range (e.g. 88-93%), use the
+    # midpoint (0.905) as Power." Before this fix, every real bike session
+    # this engine plans (`plan._bike_session_structure`'s single flat main
+    # block) exported as a 50-min 0%->90%FTP power RAMP instead of the
+    # planned steady tempo/endurance ride -- a materially different, and
+    # much harder-to-follow, workout on the trainer.
     structured = WorkoutStructure(
         items=[
             WorkoutStep(
@@ -239,12 +345,36 @@ def test_zone_basis_target_resolves_via_bike_zone_table():
     xml_str = to_zwo_workout(structured, ftp_watts=200.0, name="Zone test")
     root = _parse(xml_str)
     children = _workout_children(root)
-    # Z2 spans 55%-75% FTP (library/23-cycling-training.md) -> a real range,
-    # not a single fixed value -> Ramp, per the sibling skill's own mapping
-    # table ("power progressions ... not at start/end" -- mid-workout range).
-    assert children[1].tag == "Ramp"
-    assert children[1].attrib["PowerLow"] == "0.55"
-    assert children[1].attrib["PowerHigh"] == "0.75"
+    # Z2 spans 55%-75% FTP -> midpoint 65% -> a flat SteadyState, not a Ramp.
+    assert children[1].tag == "SteadyState"
+    assert children[1].attrib["Power"] == "0.65"
+
+
+def test_genuine_progression_interval_role_with_range_still_produces_ramp():
+    # The other half of Finding 2's fix: Ramp is not dead code -- it's
+    # reserved for a leaf step that genuinely models a build/progression
+    # (anything that isn't a flat "steady"/"interval" main block, e.g. a
+    # bare `role="recovery"` block with an explicit range and no
+    # steady/interval role), unlike a flat block that merely carries a
+    # target range.
+    structured = WorkoutStructure(
+        items=[
+            WorkoutStep(
+                label="Progressive build",
+                role="recovery",
+                duration_kind="time_s",
+                duration_value=600,
+                target=WorkoutTarget(basis="power_w", low=100.0, high=180.0),
+                modality="bike",
+            ),
+        ]
+    )
+    xml_str = to_zwo_workout(structured, ftp_watts=200.0, name="Ramp test")
+    root = _parse(xml_str)
+    children = _workout_children(root)
+    ramp = next(c for c in children if c.tag == "Ramp")
+    assert ramp.attrib["PowerLow"] == "0.50"
+    assert ramp.attrib["PowerHigh"] == "0.90"
 
 
 # --- untargeted / rpe-only block -> FreeRide ---------------------------------

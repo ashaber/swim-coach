@@ -12,10 +12,12 @@ import pytest
 
 from swim_coach.models import Athlete, Event, RaceWeekChecklistItem, WorkoutRepeat, WorkoutStep
 from swim_coach.plan import (
+    BIKE_HARD_SESSION_MAX_MIN,
     BIKE_HARD_SESSION_SHARE,
     BIKE_SESSIONS_PER_WEEK,
     BODYWORK_WINDOW_DAYS_OUT,
     CARB_LOAD_WINDOW_START_DAYS_OUT,
+    DEFAULT_BIKE_SESSION_MIN,
     DEFAULT_POOL_SESSION_MIN,
     LONG_SWIM_SHARE,
     MIN_RAMP_SEED_VOLUME_M,
@@ -29,6 +31,7 @@ from swim_coach.plan import (
     WEEKLY_VOLUME_RAMP_CAP,
     _additional_swim_structure,
     _additional_swim_structure_template,
+    _bike_week_sessions,
     _duration_min_for_distance,
     _format_pace_s,
     _no_coach_pool_purpose,
@@ -147,6 +150,32 @@ def test_scaffold_macro_non_distance_event_requires_explicit_peak_volume():
         scaffold_macro(athlete, event, START, current_weekly_volume_m=8000)
 
 
+def test_scaffold_macro_ramp_seed_uses_duration_floor_for_duration_metric_events():
+    # Fragile note fixed here (originates in the already-merged #164, but
+    # this PR is the first to produce real duration-path content, so the
+    # first PR this actually bites): MIN_RAMP_SEED_VOLUME_M=1000 is METRES;
+    # scaffold_macro's ramp-seed math ran unchanged for target_metric=
+    # "duration_min" before this fix, so a real cyclist's seed became
+    # "1000 minutes" -- the 8%/week ramp clamp barely engaged (clamping to
+    # ~3700 "minutes" from a real 60-min/week start) instead of the correct
+    # minutes-scale clamp (~222 minutes) a duration-unit seed produces.
+    athlete = make_athlete(sports=["bike"])
+    event = make_event(
+        event_date=START + timedelta(weeks=24),
+        target_metric="duration_min",
+        distance_m=None,
+        target_value=300.0,
+    )
+    with pytest.warns(UserWarning, match="ramp cap"):
+        macro = scaffold_macro(
+            athlete, event, START, current_weekly_volume_m=60, peak_weekly_volume_m=100000
+        )
+    peak_block = next(b for b in macro.blocks if b.name == "peak")
+    # 60 * 1.08**17 (17 ramp weeks over this runway) ~= 222 -- NOT ~3700,
+    # which is what the metres-scale seed bug would have produced.
+    assert peak_block.weekly_volume_target_m == pytest.approx(222, abs=2)
+
+
 def test_scaffold_macro_non_distance_event_with_explicit_peak_volume_produces_a_macro():
     athlete = make_athlete()
     event = make_event(
@@ -222,9 +251,11 @@ def test_generate_week_bike_primary_hard_session_share():
         athlete, macro, _iso_week(week_start), week_start, primary_sport="bike"
     )
     hard = next(s for s in week.sessions if s.intensity["zone"] == "Z3")
-    assert hard.duration_min == pytest.approx(
-        week.target_volume_m * BIKE_HARD_SESSION_SHARE, rel=0.05
-    )
+    # This fixture's target (293 min) * BIKE_HARD_SESSION_SHARE would be
+    # ~102.5 min uncapped -- above BIKE_HARD_SESSION_MAX_MIN (Finding 4), so
+    # the hard session lands at the cap itself, not the raw share.
+    assert week.target_volume_m * BIKE_HARD_SESSION_SHARE > BIKE_HARD_SESSION_MAX_MIN
+    assert hard.duration_min == pytest.approx(BIKE_HARD_SESSION_MAX_MIN, rel=0.01)
 
 
 def test_generate_week_bike_primary_without_ftp_has_no_watts():
@@ -287,7 +318,10 @@ def test_generate_week_bike_primary_sessions_have_structured_content():
         assert s.structured is not None
         assert s.structure is not None
         roles = [step.role for step in s.structured.items]
-        assert "interval" in roles  # the real main block
+        # "steady" -- a flat, non-progression main block (PR #167 review,
+        # Finding 2: this role is what tells zwo_export.py to export a
+        # SteadyState at the zone's midpoint instead of a Ramp from 0%FTP).
+        assert "steady" in roles  # the real main block
         assert all(step.modality == "bike" for step in s.structured.items)
         # warm-up + main + cool-down all sum, in seconds, to duration_min
         total_s = sum(step.duration_value for step in s.structured.items)
@@ -299,7 +333,7 @@ def test_generate_week_bike_primary_structured_uses_zone_basis_without_ftp():
     week_start = macro.blocks[0].start_date
     week = generate_week(athlete, macro, _iso_week(week_start), week_start, primary_sport="bike")
     for s in week.sessions:
-        main_step = next(step for step in s.structured.items if step.role == "interval")
+        main_step = next(step for step in s.structured.items if step.role == "steady")
         assert main_step.target.basis == "zone"
         assert main_step.target.zone == s.intensity["zone"]
 
@@ -311,7 +345,7 @@ def test_generate_week_bike_primary_structured_uses_power_w_with_ftp():
         athlete, macro, _iso_week(week_start), week_start, primary_sport="bike", ftp_watts=250.0
     )
     for s in week.sessions:
-        main_step = next(step for step in s.structured.items if step.role == "interval")
+        main_step = next(step for step in s.structured.items if step.role == "steady")
         assert main_step.target.basis == "power_w"
         assert main_step.target.low == pytest.approx(s.intensity["ftp_watts_lo"], abs=1)
         assert main_step.target.high == pytest.approx(s.intensity["ftp_watts_hi"], abs=1)
@@ -323,6 +357,164 @@ def test_generate_week_bike_primary_structured_prose_has_main_set_line():
     week = generate_week(athlete, macro, _iso_week(week_start), week_start, primary_sport="bike")
     for s in week.sessions:
         assert "Main set:" in s.structure
+
+
+# --- _bike_week_sessions: day spread, hard-session cap, low-volume count ----
+# (PR #167 review findings 3, 4, 5, 6) ----------------------------------------
+
+
+def test_bike_week_sessions_days_are_spread_not_clustered():
+    # Real review bug fixed here (Finding 3): `_pick_days(3, excluded=set())`
+    # always returns [0, 1, 2] (Mon/Tue/Wed) -- the hardest day landing
+    # first, with zero rest between any of the week's rides. The docstring
+    # claimed "spread evenly... via _pick_days with no exclusions," which
+    # was false (that only happened to work for swim because pool_offsets
+    # excludes the intervening days there).
+    athlete = make_athlete(sports=["bike"])
+    sessions = _bike_week_sessions(athlete, START, 180.0, None)
+    offsets = sorted((s.date - START).days for s in sessions)
+    assert len(offsets) == len(set(offsets))  # distinct days
+    assert offsets != [0, 1, 2]  # not clustered at the start of the week
+    # no two sessions on adjacent days for a 3-session week -- genuinely
+    # spread, not just "technically distinct."
+    assert all(b - a > 1 for a, b in zip(offsets, offsets[1:]))
+
+
+def test_bike_week_sessions_hard_session_capped_for_large_weekly_total():
+    # Real review bug fixed here (Finding 4): `hard_min = total_duration_min
+    # * BIKE_HARD_SESSION_SHARE` had no ceiling -- a 600-min week produced a
+    # 210-minute continuous Z3 block, with nothing (CTL, ramp history,
+    # ftp_watts provenance) sanity-checking it.
+    athlete = make_athlete(sports=["bike"])
+    sessions = _bike_week_sessions(athlete, START, 600.0, None)
+    hard = next(s for s in sessions if s.intensity["zone"] == "Z3")
+    assert hard.duration_min <= BIKE_HARD_SESSION_MAX_MIN
+    # The duration beyond the cap goes to the week's Z2 volume, not lost --
+    # total actual duration still tracks the target.
+    total = sum(s.duration_min for s in sessions)
+    assert total == pytest.approx(600.0, rel=0.02)
+
+
+def test_bike_week_sessions_hard_session_uncapped_below_threshold():
+    # The cap must not distort an ordinary, already-sane week.
+    athlete = make_athlete(sports=["bike"])
+    sessions = _bike_week_sessions(athlete, START, 150.0, None)
+    hard = next(s for s in sessions if s.intensity["zone"] == "Z3")
+    assert hard.duration_min == pytest.approx(150.0 * BIKE_HARD_SESSION_SHARE, rel=0.05)
+    assert hard.duration_min < BIKE_HARD_SESSION_MAX_MIN
+
+
+def test_bike_week_sessions_low_volume_reduces_session_count_not_floor_inflation():
+    # Real review bug fixed here (Finding 6): flooring EACH session's
+    # duration at DEFAULT_BIKE_SESSION_MIN independently inflated a taper
+    # week's total by up to 50% (a 30-min target -> 45 actual, three
+    # sessions floored to 15 each) -- silently violating the ramp cap
+    # that was already applied upstream. Reducing session count instead
+    # keeps total duration within a small, bounded tolerance of the target.
+    athlete = make_athlete(sports=["bike"])
+    sessions = _bike_week_sessions(athlete, START, 30.0, None)
+    total = sum(s.duration_min for s in sessions)
+    assert total == pytest.approx(30.0, rel=0.15)
+    assert len(sessions) < BIKE_SESSIONS_PER_WEEK
+    assert all(s.duration_min > 0 for s in sessions)
+
+
+def test_bike_week_sessions_ordinary_volume_keeps_full_session_count():
+    # A normal (non-taper) week must not be affected by Finding 6's fix.
+    athlete = make_athlete(sports=["bike"])
+    sessions = _bike_week_sessions(athlete, START, 300.0, None)
+    assert len(sessions) == BIKE_SESSIONS_PER_WEEK
+
+
+def test_bike_week_sessions_is_indoor_defaults_to_none():
+    athlete = make_athlete(sports=["bike"])
+    sessions = _bike_week_sessions(athlete, START, 180.0, None)
+    assert all(s.is_indoor is None for s in sessions)
+
+
+def test_bike_week_sessions_is_indoor_param_reaches_sessions():
+    # Real review bug fixed here (Finding 5): `Session.is_indoor` had no
+    # producer anywhere -- every real bike session this engine planned left
+    # it permanently `None`, so the indoor-rejection branch in
+    # `app.garmin_push`/`app.routes.garmin` covered a state that could
+    # never occur in practice. This threads a real, explicit, caller-
+    # overridable parameter through to make the mechanism reachable.
+    athlete = make_athlete(sports=["bike"])
+    sessions = _bike_week_sessions(athlete, START, 180.0, None, is_indoor=True)
+    assert sessions  # sanity: fixture actually produced sessions
+    assert all(s.is_indoor is True for s in sessions)
+
+
+def test_generate_week_bike_primary_bike_indoor_param_reaches_sessions():
+    # Same guarantee as above, through the public generate_week API a real
+    # caller would actually use.
+    athlete, event, macro = _make_bike_macro()
+    week_start = macro.blocks[0].start_date
+    week = generate_week(
+        athlete,
+        macro,
+        _iso_week(week_start),
+        week_start,
+        primary_sport="bike",
+        bike_indoor=True,
+    )
+    assert all(s.is_indoor is True for s in week.sessions)
+
+
+def test_generate_week_bike_primary_default_bike_indoor_is_none():
+    # Default (no bike_indoor passed) must stay exactly as before --
+    # additive-only, zero behavior change for every existing call site.
+    athlete, event, macro = _make_bike_macro()
+    week_start = macro.blocks[0].start_date
+    week = generate_week(athlete, macro, _iso_week(week_start), week_start, primary_sport="bike")
+    assert all(s.is_indoor is None for s in week.sessions)
+
+
+def test_generate_week_bike_primary_warns_when_event_target_metric_is_load_au():
+    # Fragile note fixed here (PR #167 review): generate_week's bike path
+    # interprets target_volume_m as MINUTES (see this function's own
+    # docstring); a macro scaffolded toward a target_metric="load_au" event
+    # feeds an arbitrary-unit AU number through the exact same path with
+    # nothing to catch the mismatch. A cheap warning beats silence -- real
+    # load_au-bike support stays out of scope for this pass.
+    athlete = make_athlete(sports=["bike"])
+    event = make_event(
+        event_date=START + timedelta(weeks=24),
+        target_metric="load_au",
+        distance_m=None,
+        target_value=300.0,
+    )
+    macro = scaffold_macro(
+        athlete, event, START, current_weekly_volume_m=200, peak_weekly_volume_m=600
+    )
+    week_start = macro.blocks[0].start_date
+    with pytest.warns(UserWarning, match="load_au"):
+        generate_week(
+            athlete, macro, _iso_week(week_start), week_start, primary_sport="bike", event=event
+        )
+
+
+def test_generate_week_bike_primary_no_warning_when_event_omitted():
+    # Every existing call site (no `event` kwarg under primary_sport="bike")
+    # must keep behaving exactly as before -- no new warning just because
+    # `event` wasn't supplied (the bike path doesn't require it).
+    athlete, event, macro = _make_bike_macro()
+    week_start = macro.blocks[0].start_date
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        generate_week(athlete, macro, _iso_week(week_start), week_start, primary_sport="bike")
+
+
+def test_generate_week_bike_primary_no_warning_for_duration_min_event():
+    # The ordinary, intended case (target_metric="duration_min") must not
+    # warn.
+    athlete, event, macro = _make_bike_macro()
+    week_start = macro.blocks[0].start_date
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        generate_week(
+            athlete, macro, _iso_week(week_start), week_start, primary_sport="bike", event=event
+        )
 
 
 def test_generate_week_rejects_unknown_primary_sport():
