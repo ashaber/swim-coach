@@ -1190,6 +1190,67 @@ cross-discipline adaptations.
   recorded here only so a future pass doesn't re-discover and re-verify it
   without knowing it was already checked and rejected.
 
+### Periodization frameworks & interval-design taxonomy (grounds `24-cycling-periodization-intervals.md`)
+
+Added 2026-09-08, continuing the `engine/cycling-coach` branch (PR #167).
+Unlike the cycling-native entries just above, these three sources are
+genuinely multi-sport syntheses (endurance training theory generally, not
+a cyclist-specific trial population) applied to this athlete's cycling
+plan — tagged `[ADAPTED: general-endurance]` in `24-cycling-periodization-
+intervals.md`, not `[EVIDENCE: cycling]`.
+
+- **✓ Seiler S. (2010)** — "What is Best Practice for Training Intensity
+  and Duration Distribution in Endurance Athletes?" — *International
+  Journal of Sports Physiology and Performance*, 5(3):276-291. Synthesizes
+  training-intensity-distribution data across elite endurance athletes
+  (cross-country skiing, rowing, running, cycling) training 10-13x/week:
+  a convergent ~80% low-intensity / ~20% high-intensity ("polarized")
+  pattern with minimal moderate-intensity ("grey zone") work; notes
+  intensification studies on already-trained athletes don't convincingly
+  show added high-intensity work improves long-term performance further.
+  Confirmed via the publishing journal (Human Kinetics/IJSPP) directly
+  plus independent secondary convergence (Semantic Scholar, ResearchGate)
+  this session — over 1,100 citations, among the most-cited papers in
+  endurance training science. Multi-sport synthesis, not a cyclist-
+  specific cohort. `[ADAPTED: general-endurance]`, Confidence: high.
+- **✓ Issurin V.B. (2008)** — "Block periodization versus traditional
+  training theory: a review" — *The Journal of Sports Medicine and
+  Physical Fitness*, 48(1):65-75. Foundational review proposing
+  concentrated-mesocycle ("block") periodization — sequential,
+  narrow-target training blocks exploiting the residual training effect
+  of each, rather than simultaneous development of many fitness qualities
+  — as an alternative to traditional multi-target periodization. General
+  training-theory review across sports, not cycling-specific. Confirmed
+  via PubMed (PMID 18212712) plus independent convergence (ResearchGate,
+  Semantic Scholar) this session. `[ADAPTED: general-endurance]`,
+  Confidence: medium (theory/review-level, not an empirical cycling
+  trial; Galán-Rioja et al. 2023, already above, independently
+  corroborates that concentrated block periodization is actually used —
+  1-8-week blocks — and effective in trained cyclists specifically).
+- **✓ Buchheit M., Laursen P.B. (2013)** — "High-Intensity Interval
+  Training, Solutions to the Programming Puzzle: Part I: Cardiopulmonary
+  Emphasis" — *Sports Medicine*, 43(5):313-338; and "...Part II:
+  Anaerobic Energy, Neuromuscular Load and Practical Applications" —
+  *Sports Medicine*, 43(10):927-954. **✓ Laursen P., Buchheit M. (2019)**
+  — *Science and Application of High-Intensity Interval Training:
+  Solutions to the Programming Puzzle* — Human Kinetics (the book-length
+  successor to the two-part review, same author pair). Together the
+  originating source for the interval-design taxonomy this project draws
+  its cycling interval-session-shape templates from: work-bout duration
+  and work:rest ratio (not intensity alone) set the physiological target
+  — long steady/near-steady bouts target sustained lactate-threshold-
+  adjacent adaptations; short, fixed-ratio "short-short" formats (e.g.
+  30s/15s, 40s/20s) exploit VO2-kinetics priming to accumulate high
+  time-at-VO2max at lower per-rep neuromuscular cost than long intervals.
+  Multi-sport text (endurance and team sports broadly), not cycling-
+  specific. Confirmed via the publishing journal (Springer/Sports
+  Medicine, two-part review) and publisher (Human Kinetics, book) plus
+  independent secondary convergence (Semantic Scholar: Part I >1,000
+  citations) this session. `[ADAPTED: general-endurance]`, Confidence:
+  high (near-universal adoption as the standard HIIT-programming
+  reference across endurance sports, though not cycling-specific trial
+  data).
+
 ## Recovery, sleep & HRV
 
 - **✓ Driller M., Leabeater A. (2023)** — "Fundamentals or Icing on Top of
