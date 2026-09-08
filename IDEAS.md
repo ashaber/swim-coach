@@ -264,41 +264,150 @@ state, readiness-to-train, and a non-distance goal path are really one
 ones. This is a confirmed starting point, not just the cheapest option on
 a list.
 
-**Suggested ordering after that** (sequencing to react to, not committed):
-2) Andrew's own cyclist case (real, time-sensitive) weighed against 3) Tim
-as a second primary-sport athlete (heaviest lift, validates the hardest
-part) -- both real and live, worth weighing against each other for which
-goes first; 4) horse-riding, once the platform is proven on a second real
-primary sport; 5) research-agent expansion (IDEA 004), higher-value once
-2/3 create real cross-discipline research need, though technically
-independent and could be pulled forward earlier -- Tim's expert-panel
-resource (IDEA 009) is a direct input here whenever it arrives.
+**Ordering after that, confirmed (2026-09):** 2) **Andrew's own cyclist
+case goes first**, deliberately, over Tim's rucking/running case --
+Andrew's own reasoning: cycling is different enough from swim to expose
+real multi-sport design limitations, but well-grounded enough (unlike
+rucking) to build with confidence rather than guessing. A source-verifying
+research pass this session (see IDEA 010's sibling research note, or ask
+for it directly) confirmed this reasoning is sound: cycling has a real,
+deep, well-established zone framework (Coggan/Allen power zones) and,
+notably, the engine's OWN existing CTL/ATL/TSB machinery (Banister
+model, adapted into TrainingPeaks' TSS by Andrew Coggan) is confirmed to
+be genuinely cycling-native and well-grounded -- the code's existing
+"unverified for swimming" flag on those constants is precisely accurate,
+not overcautious. Rucking, by contrast, has a real, solid injury/
+load-carriage literature (Knapik et al. 2004, *Military Medicine*,
+confirmed) but **no validated zone framework or progression-rate research
+at all** -- exactly the "library gap to fill" Andrew is deferring to
+after cycling exposes the platform's general shape.
+3) **Tim's rucking+running case follows**, explicitly expected to need
+more original library work (no borrowed zone/progression framework to
+lean on for rucking specifically -- running itself is well-grounded, Jack
+Daniels' VDOT zones, real research on both sides of the "10% rule" debate).
+4) horse-riding, once the platform is proven on a second real primary
+sport. 5) research-agent expansion (IDEA 004), higher-value once 2/3
+create real cross-discipline research need, though technically
+independent and could be pulled forward earlier -- Tim's own app (IDEA
+009) and any real training data he shares are direct inputs here.
+
+**Cycling build's concrete technical requirements (Andrew, 2026-09), to
+ground the next planning pass rather than re-derive them:**
+- **Power-based training** -- Andrew trains with a power meter; the zone
+  model should be FTP/Coggan-based, not HR/RPE-only (confirmed
+  well-grounded research above), though HR/RPE-only must stay supported
+  for other athletes (Tim has no outdoor power meter, only HR/RPE outdoors
+  and power when on a trainer -- the zone model can't assume power is
+  always available).
+- **Two distinct structured-workout delivery paths, not one:**
+  - **Indoor/trainer** -- workouts come from TrainerRoad or need to be
+    delivered as a `.zwo` file for MyWhoosh (a smart-trainer app). A real,
+    working, already-built skill for exactly this exists in a sibling repo:
+    `workout-to-zwo` (`/home/ashaber/projects/workout-to-zwo`) --
+    TrainerRoad-description-or-structured-block-list -> valid `.zwo` XML,
+    with real parsing rules for repeats/ramps/steady-state/cadence and a
+    worked example. Currently a prompt-driven Claude Code skill (SKILL.md
+    parsing rules for an LLM to follow), not deterministic Python -- if
+    reused inside swim-coach, matching this project's own "engine owns all
+    plan math, never hand-compute in chat" standing rule would mean porting
+    the parsing logic to deterministic Python (`engine/swim_coach/`,
+    alongside `garmin_export.py`), not just invoking the skill as-is.
+  - **Outdoor** -- must go to Garmin, which is exactly what this project's
+    existing intervals.icu bulk-push pipeline already does for swim/
+    strength (`garmin_export.to_garmin_fit_workout`, base64 + POST to
+    intervals.icu's `events/bulk` endpoint, "Push to Garmin" button/tool --
+    see ROADMAP.md's "Now/Next" section). Extending that existing pipeline
+    to a new sport, not building a new one.
 
 **Cross-cutting, applies regardless of order:** the guidance-scoping
 constraint above must hold from the first build onward, not be retrofitted
 later.
 
-## IDEA 009 - Tim's expert-panel resource, when it arrives
+## IDEA 009 - Lessons from Tim's own AI coach app (not a document -- a real, running app)
 
-Tim is sending an updated, more specific panel-of-experts resource he
-personally uses to build his own training (distinct from the ad-hoc
-"panel of experts" plan already used once to validate -- never literally
-transcribe -- Renee's injury-adapted taper). Two uses once it arrives,
-both framed as inputs to judgment, not content to copy in wholesale:
+**Correction (2026-09):** IDEA 009 originally assumed Tim would send an
+updated panel-of-experts *plan document*. What actually arrived is
+different and more interesting: the source of a real Claude-Code-based
+training-coach app Tim built and is *currently using for his own live
+training* (`AI Coach - Sharing Version`, a sibling project, not part of
+this repo) -- general-purpose across endurance sports (intervals.icu-
+integrated, not swim-specific), with an athlete-facing UX built around
+slash commands (`/intake`, `/plan`, `/block`, `/checkin`, `/redteam`, ...)
+and Claude Code skills/agents rather than a bespoke PWA. Reviewed
+read-only this session; nothing copied in -- the concepts below are worth
+learning from, not the code or prose itself.
+
+**Architectural contrast worth naming plainly** (Andrew's own observation):
+Tim's app has comparatively little of an explicit, curated research
+library the way this project's `library/` does -- it leans instead on
+"the data available to Claude" (the model's own latent sports-science
+knowledge) wrapped in a set of behavioral constraints and review layers,
+rather than pre-curated, cited evidence files. Two real, defensible
+strategies for the same underlying goal (don't let the coach say something
+ungrounded) -- worth being aware this project chose the more expensive,
+more auditable path (explicit citations, `[EVIDENCE]`/`[ADAPTED]` tags,
+`Confidence:`/`Test:` lines) rather than assuming it's the only reasonable
+one. Not a recommendation to switch -- this project's evidence discipline
+exists for good, already-documented reasons (see `library/00-conventions.md`'s
+account of a past fabricated-citation incident) -- just an honest
+comparison point.
+
+**The "four experts including red team" turned out to be two different,
+genuinely worth-noting things, not one:**
+
+a. **The "four experts" (physiology, coaching craft, psychology, sports
+   medicine) are NOT four separate model calls.** Tim's own `CLAUDE.md`
+   is explicit: *"Speak as 'I'. You are one coach, not a team... The
+   `coach` skill reasons from four perspectives... That is internal."*
+   One model, one call, instructed to reason through four lenses --
+   cheap, not a multi-agent fan-out. Directly answers the token-cost
+   worry this idea originally raised.
+b. **Red team IS a separate subagent call, but bounded by design to
+   exactly the moment Andrew already guessed -- plan build/revision, not
+   chat.** `.claude/agents/red-team.md`: a single Sonnet subagent,
+   invoked only "before a macrocycle or training block is shown to the
+   athlete, and before any significant plan adjustment," never
+   per-message. Notably well-disciplined as a prompt: explicit
+   anti-padding instruction ("a plan with one real problem and six padded
+   ones is a bad review, because the coach learns to discount you"),
+   capped at 6 objections, terse structured output (verdict, ranked
+   objections with severity/evidence/consequence/suggested-fix, a
+   "fragile points" closer). **This is the one genuinely transferable
+   idea**: an adversarial review pass before a plan reaches the athlete,
+   bounded to plan-build/revision moments -- maps cleanly onto this
+   project's existing draft-then-confirm tools
+   (`propose_injury_adapted_taper`, `draft_macro_plan`) as a real, new,
+   cost-bounded capability, not replacing the coach's own reasoning.
+
+**Independently valuable, separate from the panel/red-team question:**
+Tim's `docs/lessons.md` (real, hard-won intervals.icu integration
+findings, not athlete-specific) has at least one finding worth checking
+against this project's own code directly: *"intervals.icu stores
+`hr_zones` as absolute bpm but `power_zones`/`pace_zones` as percentages
+of threshold. Treating them uniformly produced heart-rate zone tops well
+above the athlete's actual maximum -- physiologically impossible, but
+plausible-looking output... silent, looked plausible until checked against
+physiology."* Also flagged there: inherited/estimated threshold values
+silently masquerading as measured ones (directly relevant to CSS-pace and
+any future FTP onboarding under IDEA 008), and CTL/ATL reading
+artificially low for "today" while the day's data is still uploading.
+Worth a real check whether this project's own intervals.icu sync
+(`backend/app/sync.py`) has either latent bug, independent of anything
+else in this idea.
+
+**Original two uses, still real, once/if Tim shares actual training
+content from his history rather than just the app's source:**
 
 a. **Source identification** -- who are the real coaches/physiologists/
    methodologies behind Tim's training that this project's library should
-   be citing and thinking like, for rucking/running (and any other
-   discipline it covers) -- direct input to IDEA 004 (research-agent
-   expansion) and to any new discipline-specific library files under
-   IDEA 008.
-b. **Workout generation/validation** -- the resource's own workouts are a
-   candidate source for either (i) enriching the library's session-
-   template content directly, or (ii) serving as a validation benchmark
-   for this engine's own generated/ad-hoc workouts -- "does what we'd
-   propose look like what a real panel of experts would prescribe," the
-   same validate-don't-copy discipline already established and confirmed
-   working for Renee's taper.
+   be citing and thinking like, for rucking/running -- direct input to
+   IDEA 004 (research-agent expansion) and to any new discipline-specific
+   library files under IDEA 008.
+b. **Workout generation/validation** -- Tim's own real workouts (not the
+   app's code) as a candidate source for enriching library session-
+   template content or as a validation benchmark for this engine's own
+   generated/ad-hoc workouts, same validate-don't-copy discipline already
+   proven on Renee's taper.
 
 ## IDEA 010 - Goal-setting module
 
