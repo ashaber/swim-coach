@@ -350,17 +350,25 @@ def test_zone_basis_target_resolves_via_bike_zone_table():
     assert children[1].attrib["Power"] == "0.65"
 
 
-def test_genuine_progression_interval_role_with_range_still_produces_ramp():
-    # The other half of Finding 2's fix: Ramp is not dead code -- it's
-    # reserved for a leaf step that genuinely models a build/progression
-    # (anything that isn't a flat "steady"/"interval" main block, e.g. a
-    # bare `role="recovery"` block with an explicit range and no
-    # steady/interval role), unlike a flat block that merely carries a
-    # target range.
+def test_standalone_recovery_role_with_range_produces_steadystate_not_ramp():
+    # engine/cycling-coach interval-template pass: real bug fixed here.
+    # `plan._bike_reps_with_rest_main`/`_bike_blocks_with_rest_main` are the
+    # first real producers of a STANDALONE (not inside an IntervalsT on/off
+    # pair) "recovery"/"rest" leaf step with a genuine zone-band target
+    # (e.g. a between-blocks Z1 easy spin, 0-55% FTP -- low != high).
+    # Before this fix, `role in ("steady", "interval")` was the only flat
+    # branch, so a standalone recovery/rest step with a real range fell
+    # through to <Ramp> and silently exported a rest segment as a power
+    # ramp instead of the intended flat easy spin -- this test used to
+    # assert exactly that as if it were the INTENDED behavior (calling a
+    # bare `role="recovery"` step a stand-in for "a genuine progression"),
+    # which was itself the bug, not a real requirement: no real producer in
+    # this codebase has ever generated an actual mid-workout progression on
+    # a recovery/rest step.
     structured = WorkoutStructure(
         items=[
             WorkoutStep(
-                label="Progressive build",
+                label="Recovery between blocks",
                 role="recovery",
                 duration_kind="time_s",
                 duration_value=600,
@@ -369,12 +377,41 @@ def test_genuine_progression_interval_role_with_range_still_produces_ramp():
             ),
         ]
     )
-    xml_str = to_zwo_workout(structured, ftp_watts=200.0, name="Ramp test")
+    xml_str = to_zwo_workout(structured, ftp_watts=200.0, name="Recovery steady test")
     root = _parse(xml_str)
     children = _workout_children(root)
-    ramp = next(c for c in children if c.tag == "Ramp")
-    assert ramp.attrib["PowerLow"] == "0.50"
-    assert ramp.attrib["PowerHigh"] == "0.90"
+    # Z1 by convention, but the assertion only cares about the mechanism:
+    # a flat range on a recovery/rest role is a SteadyState at the range's
+    # midpoint (0.50-0.90 -> 0.70), same rule "steady"/"interval" already
+    # follow -- never a <Ramp>.
+    steady = next(c for c in children if c.tag == "SteadyState")
+    assert steady.attrib["Power"] == "0.70"
+    assert not any(c.tag == "Ramp" for c in children)
+
+
+def test_ramp_element_unreachable_via_any_valid_workoutstep_role():
+    # `_convert_leaf`'s final `<Ramp>` branch (module docstring: "reserved
+    # for a future genuine mid-workout progression") is, after the fix
+    # above, no longer reachable through ANY value of `WorkoutStep.role`'s
+    # closed Literal type: "open" steps are filtered out before conversion
+    # (see `to_zwo_workout`), "warmup"/"cooldown" are special-cased above
+    # it, and "steady"/"interval"/"recovery"/"rest" (every remaining value)
+    # now all resolve to SteadyState. Documented here as an explicit,
+    # deliberate consequence -- the branch is kept as defensive/forward-
+    # compatible code (matches the sibling skill's real ZWO `<Ramp>`
+    # element, still valid ZWO), not because anything in this codebase can
+    # currently produce it.
+    import swim_coach.models as models_mod
+
+    assert set(models_mod.WorkoutStep.model_fields["role"].annotation.__args__) == {
+        "warmup",
+        "steady",
+        "interval",
+        "rest",
+        "recovery",
+        "cooldown",
+        "open",
+    }
 
 
 # --- untargeted / rpe-only block -> FreeRide ---------------------------------

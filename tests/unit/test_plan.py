@@ -12,9 +12,13 @@ import pytest
 
 from swim_coach.models import Athlete, Event, RaceWeekChecklistItem, WorkoutRepeat, WorkoutStep
 from swim_coach.plan import (
+    BIKE_DELOAD_CADENCE_WEEKS,
+    BIKE_DELOAD_VOLUME_REDUCTION,
     BIKE_FINAL_TAPER_MIN_SESSIONS,
     BIKE_HARD_SESSION_MAX_MIN,
     BIKE_HARD_SESSION_SHARE,
+    BIKE_INTERVAL_TEMPLATE_META,
+    BIKE_INTERVAL_TEMPLATES,
     BIKE_SESSIONS_PER_WEEK,
     BODYWORK_WINDOW_DAYS_OUT,
     CARB_LOAD_WINDOW_START_DAYS_OUT,
@@ -32,12 +36,14 @@ from swim_coach.plan import (
     WEEKLY_VOLUME_RAMP_CAP,
     _additional_swim_structure,
     _additional_swim_structure_template,
+    _bike_ramp_week_index,
     _bike_week_sessions,
     _duration_min_for_distance,
     _format_pace_s,
     _no_coach_pool_purpose,
     _race_week_checklist,
     _round_100,
+    _select_bike_interval_template,
     _strength_session_structure,
     _strength_session_structure_template,
     _z2_pace_s_per_100m,
@@ -86,6 +92,38 @@ def make_event(**overrides):
 def _iso_week(d: date) -> str:
     year, week, _ = d.isocalendar()
     return f"{year}-W{week:02d}"
+
+
+def _leaf_steps(items):
+    """Every real `WorkoutStep` leaf in a `WorkoutStructure.items`-shaped
+    list, one level deep into any `WorkoutRepeat` (matches this codebase's
+    own "no repeat nests inside another repeat" convention -- see
+    `plan._bike_blocks_with_rest_main`'s own docstring)."""
+    for item in items:
+        if item.kind == "step":
+            yield item
+        else:
+            yield from item.steps
+
+
+def _total_structured_s(structured) -> float:
+    """Recursively sum every leaf `WorkoutStep.duration_value` in a
+    `WorkoutStructure`, correctly handling a `WorkoutRepeat` (each child's
+    duration counted `count` times) and an "open" annotation step (no
+    `duration_value` -- contributes 0, matching `plan._bike_open_header`'s
+    own convention). Used by the bike-primary structured-content tests
+    below now that a hard session's main block may be a `WorkoutRepeat`,
+    not always one flat `WorkoutStep`."""
+    total = 0.0
+    for item in structured.items:
+        if item.kind == "step":
+            total += item.duration_value or 0.0
+        else:
+            multiplier = item.count if (item.repeat_mode == "count" and item.count) else 1
+            total += multiplier * sum(
+                (child.duration_value or 0.0) for child in item.steps if child.kind == "step"
+            )
+    return total
 
 
 # --- block allocation ---------------------------------------------------------
@@ -224,9 +262,14 @@ def test_generate_week_bike_primary_produces_real_bike_sessions():
     assert all(s.distance_m is None for s in bike_sessions)
     assert all(s.duration_min > 0 for s in bike_sessions)
     assert all(s.status == "planned" for s in bike_sessions)
-    # one hard (Z3) session, the rest Z2 endurance
+    # one hard (interval-template) session, the rest Z2 endurance -- the
+    # hard session's zone now comes from whichever BIKE_INTERVAL_TEMPLATES
+    # entry _select_bike_interval_template picks for this week (week_index
+    # 0, since week_start is the macro's very first week), not a hardcoded
+    # "Z3" (see plan.py's BIKE_INTERVAL_TEMPLATE_META comment for why).
+    expected_hard_zone = BIKE_INTERVAL_TEMPLATE_META[_select_bike_interval_template(0)]["zone"]
     zones_used = [s.intensity["zone"] for s in bike_sessions]
-    assert zones_used.count("Z3") == 1
+    assert zones_used.count(expected_hard_zone) == 1
     assert zones_used.count("Z2") == BIKE_SESSIONS_PER_WEEK - 1
     # no "anchor" key -- power-based targets have no matching Session
     # intensity anchor value (css_pace/rpe/hr), so it's omitted, not
@@ -281,7 +324,8 @@ def test_generate_week_bike_primary_hard_session_share():
     week = generate_week(
         athlete, macro, _iso_week(week_start), week_start, primary_sport="bike"
     )
-    hard = next(s for s in week.sessions if s.intensity["zone"] == "Z3")
+    expected_hard_zone = BIKE_INTERVAL_TEMPLATE_META[_select_bike_interval_template(0)]["zone"]
+    hard = next(s for s in week.sessions if s.intensity["zone"] == expected_hard_zone)
     # This fixture's target (293 min) * BIKE_HARD_SESSION_SHARE would be
     # ~102.5 min uncapped -- above BIKE_HARD_SESSION_MAX_MIN (Finding 4), so
     # the hard session lands at the cap itself, not the raw share.
@@ -311,8 +355,12 @@ def test_generate_week_bike_primary_with_ftp_sets_watt_bounds():
         primary_sport="bike",
         ftp_watts=250.0,
     )
-    expected_lo_pct = {"Z2": 0.55, "Z3": 0.75}
-    expected_hi_pct = {"Z2": 0.75, "Z3": 0.90}
+    # Full Z1-Z5 table (zones.py's BIKE_Z*_HI_PCT_FTP, library/23-cycling-
+    # training.md) -- covers Z2 (every easy session) and whichever zone
+    # this week's selected interval template's hard session actually uses
+    # (BIKE_INTERVAL_TEMPLATE_META), not just "Z2"/"Z3".
+    expected_lo_pct = {"Z1": 0.0, "Z2": 0.55, "Z3": 0.75, "Z4": 0.90, "Z5": 1.05}
+    expected_hi_pct = {"Z1": 0.55, "Z2": 0.75, "Z3": 0.90, "Z4": 1.05, "Z5": 1.20}
     for s in week.sessions:
         if s.sport != "bike":
             continue
@@ -348,26 +396,37 @@ def test_generate_week_bike_primary_sessions_have_structured_content():
     week_start = macro.blocks[0].start_date
     week = generate_week(athlete, macro, _iso_week(week_start), week_start, primary_sport="bike")
     bike_sessions = [s for s in week.sessions if s.sport == "bike"]
+    hard_zone = BIKE_INTERVAL_TEMPLATE_META[_select_bike_interval_template(0)]["zone"]
     for s in bike_sessions:
         assert s.structured is not None
         assert s.structure is not None
-        roles = [step.role for step in s.structured.items]
-        # "steady" -- a flat, non-progression main block (PR #167 review,
-        # Finding 2: this role is what tells zwo_export.py to export a
-        # SteadyState at the zone's midpoint instead of a Ramp from 0%FTP).
-        assert "steady" in roles  # the real main block
-        assert all(step.modality == "bike" for step in s.structured.items)
-        # warm-up + main + cool-down all sum, in seconds, to duration_min
-        total_s = sum(step.duration_value for step in s.structured.items)
+        assert all(step.modality == "bike" for step in _leaf_steps(s.structured.items))
+        if s.intensity["zone"] != hard_zone:
+            # every EASY (Z2) session is still a flat, non-progression main
+            # block (PR #167 review, Finding 2: "steady" is the role that
+            # tells zwo_export.py to export a SteadyState at the zone's
+            # midpoint instead of a Ramp from 0%FTP) -- unchanged by this
+            # pass, see `_bike_session_structure`.
+            roles = [step.role for step in s.structured.items]
+            assert "steady" in roles
+        # warm-up + main + cool-down all sum, in seconds, to duration_min --
+        # recursively through any WorkoutRepeat the hard session's selected
+        # interval template introduced (see `_total_structured_s`).
+        total_s = _total_structured_s(s.structured)
         assert total_s == pytest.approx(s.duration_min * 60, abs=1)
 
 
 def test_generate_week_bike_primary_structured_uses_zone_basis_without_ftp():
+    # Restricted to the easy (Z2) sessions -- those are still one flat
+    # "steady" block (`_bike_session_structure`, unchanged by this pass).
+    # The hard session's own structured-content/target-basis shape is
+    # covered separately below (interval-template tests) since it may now
+    # be a WorkoutRepeat, not a single top-level "steady" step.
     athlete, event, macro = _make_bike_macro()
     week_start = macro.blocks[0].start_date
     week = generate_week(athlete, macro, _iso_week(week_start), week_start, primary_sport="bike")
     for s in week.sessions:
-        if s.sport != "bike":
+        if s.sport != "bike" or s.intensity["zone"] != "Z2":
             continue
         main_step = next(step for step in s.structured.items if step.role == "steady")
         assert main_step.target.basis == "zone"
@@ -375,13 +434,15 @@ def test_generate_week_bike_primary_structured_uses_zone_basis_without_ftp():
 
 
 def test_generate_week_bike_primary_structured_uses_power_w_with_ftp():
+    # Restricted to the easy (Z2) sessions -- see the zone-basis test above
+    # for why.
     athlete, event, macro = _make_bike_macro()
     week_start = macro.blocks[0].start_date
     week = generate_week(
         athlete, macro, _iso_week(week_start), week_start, primary_sport="bike", ftp_watts=250.0
     )
     for s in week.sessions:
-        if s.sport != "bike":
+        if s.sport != "bike" or s.intensity["zone"] != "Z2":
             continue
         main_step = next(step for step in s.structured.items if step.role == "steady")
         assert main_step.target.basis == "power_w"
@@ -427,7 +488,8 @@ def test_bike_week_sessions_hard_session_capped_for_large_weekly_total():
     # ftp_watts provenance) sanity-checking it.
     athlete = make_athlete(sports=["bike"])
     sessions = _bike_week_sessions(athlete, START, 600.0, None)
-    hard = next(s for s in sessions if s.intensity["zone"] == "Z3")
+    expected_hard_zone = BIKE_INTERVAL_TEMPLATE_META[_select_bike_interval_template(0)]["zone"]
+    hard = next(s for s in sessions if s.intensity["zone"] == expected_hard_zone)
     assert hard.duration_min <= BIKE_HARD_SESSION_MAX_MIN
     # The duration beyond the cap goes to the week's Z2 volume, not lost --
     # total actual duration still tracks the target.
@@ -439,7 +501,8 @@ def test_bike_week_sessions_hard_session_uncapped_below_threshold():
     # The cap must not distort an ordinary, already-sane week.
     athlete = make_athlete(sports=["bike"])
     sessions = _bike_week_sessions(athlete, START, 150.0, None)
-    hard = next(s for s in sessions if s.intensity["zone"] == "Z3")
+    expected_hard_zone = BIKE_INTERVAL_TEMPLATE_META[_select_bike_interval_template(0)]["zone"]
+    hard = next(s for s in sessions if s.intensity["zone"] == expected_hard_zone)
     assert hard.duration_min == pytest.approx(150.0 * BIKE_HARD_SESSION_SHARE, rel=0.05)
     assert hard.duration_min < BIKE_HARD_SESSION_MAX_MIN
 
@@ -558,6 +621,239 @@ def test_generate_week_bike_primary_no_warning_for_duration_min_event():
         generate_week(
             athlete, macro, _iso_week(week_start), week_start, primary_sport="bike", event=event
         )
+
+
+# --- bike interval-template rotation + periodic deload ---------------------
+# (engine/cycling-coach, interval-template/deload pass, grounded in
+# library/24-cycling-periodization-intervals.md) -----------------------------
+
+
+def test_select_bike_interval_template_cycles_through_all_four_in_fixed_order():
+    seen = [_select_bike_interval_template(i) for i in range(8)]
+    assert seen[:4] == list(BIKE_INTERVAL_TEMPLATES)
+    assert seen[4:8] == list(BIKE_INTERVAL_TEMPLATES)  # wraps and repeats
+
+
+def test_bike_ramp_week_index_is_continuous_across_block_boundaries():
+    athlete, event, macro = _make_bike_macro()
+    macro_start = macro.blocks[0].start_date
+    assert _bike_ramp_week_index(macro, macro_start) == 0
+    assert _bike_ramp_week_index(macro, macro_start + timedelta(weeks=1)) == 1
+    # A week inside the SECOND block (build) still counts continuously from
+    # the macro's own start -- does not reset to 0 at the block boundary.
+    build_block = next(b for b in macro.blocks if b.name == "build")
+    expected = (build_block.start_date - macro_start).days // 7
+    assert _bike_ramp_week_index(macro, build_block.start_date) == expected
+    assert expected > 0
+
+
+def test_generate_week_bike_primary_hard_session_varies_across_consecutive_weeks():
+    # The actual "before/after" proof of gap #1: consecutive weeks' hard
+    # session must NOT all be identical flat blocks any more.
+    athlete, event, macro = _make_bike_macro()
+    base_block = next(b for b in macro.blocks if b.name == "base")
+    weeks_to_check = min(4, (base_block.end_date - base_block.start_date).days // 7 + 1)
+    hard_zones = []
+    hard_purposes = []
+    for i in range(weeks_to_check):
+        week_start = base_block.start_date + timedelta(weeks=i)
+        week = generate_week(
+            athlete, macro, _iso_week(week_start), week_start, primary_sport="bike"
+        )
+        bike_sessions = [s for s in week.sessions if s.sport == "bike"]
+        hard = next(s for s in bike_sessions if s.intensity["zone"] != "Z2")
+        hard_zones.append(hard.intensity["zone"])
+        hard_purposes.append(hard.purpose)
+    # Real variety: not every one of the first 4 weeks is the same template.
+    assert len(set(hard_purposes)) > 1
+    # And it matches the documented fixed rotation order exactly.
+    assert hard_purposes == [
+        BIKE_INTERVAL_TEMPLATE_META[_select_bike_interval_template(i)]["purpose"]
+        for i in range(weeks_to_check)
+    ]
+
+
+def test_bike_sustained_threshold_hard_session_is_a_real_repeat_structure():
+    athlete = make_athlete(sports=["bike"])
+    sessions = _bike_week_sessions(athlete, START, 300.0, 250.0, week_index=0)
+    assert _select_bike_interval_template(0) == "sustained_threshold"
+    hard = next(s for s in sessions if s.intensity["zone"] == "Z4")
+    repeats = [item for item in hard.structured.items if item.kind == "repeat"]
+    assert len(repeats) == 1
+    repeat = repeats[0]
+    assert 2 <= repeat.count <= 3  # BIKE_SUSTAINED_THRESHOLD_MIN/MAX_REPS
+    assert len(repeat.steps) == 2
+    work, rest = repeat.steps
+    assert work.duration_value == pytest.approx(600.0)  # BIKE_SUSTAINED_THRESHOLD_WORK_S
+    assert work.target.basis == "power_w"
+
+
+def test_bike_over_unders_hard_session_has_flat_top_level_blocks_no_nested_repeats():
+    athlete = make_athlete(sports=["bike"])
+    sessions = _bike_week_sessions(athlete, START, 300.0, 250.0, week_index=1)
+    assert _select_bike_interval_template(1) == "over_unders"
+    hard = next(s for s in sessions if s.intensity["zone"] == "Z4")
+    block_repeats = [item for item in hard.structured.items if item.kind == "repeat"]
+    assert 2 <= len(block_repeats) <= 4  # BIKE_OVER_UNDER_MIN/MAX_BLOCKS
+    # No nesting: every top-level WorkoutRepeat's own children are plain
+    # WorkoutSteps (zwo_export's IntervalsT conversion requires this).
+    for block in block_repeats:
+        assert all(child.kind == "step" for child in block.steps)
+        assert block.count == 2  # BIKE_OVER_UNDER_CYCLES_PER_BLOCK
+        on, off = block.steps
+        assert on.duration_value == pytest.approx(90.0)
+        assert off.duration_value == pytest.approx(90.0)
+        assert on.target.low > off.target.low  # "over" is genuinely harder than "under"
+
+
+def test_bike_short_short_hard_session_has_correct_30_15_ratio():
+    athlete = make_athlete(sports=["bike"])
+    sessions = _bike_week_sessions(athlete, START, 300.0, 250.0, week_index=2)
+    assert _select_bike_interval_template(2) == "short_short_vo2"
+    hard = next(s for s in sessions if s.intensity["zone"] == "Z5")
+    set_repeats = [item for item in hard.structured.items if item.kind == "repeat"]
+    assert 1 <= len(set_repeats) <= 2  # BIKE_SHORT_SHORT_MIN/MAX_SETS
+    for one_set in set_repeats:
+        assert one_set.count == 10  # BIKE_SHORT_SHORT_REPS_PER_SET
+        on, off = one_set.steps
+        assert on.duration_value == pytest.approx(30.0)
+        assert off.duration_value == pytest.approx(15.0)
+
+
+def test_bike_race_pace_hard_session_is_a_real_repeat_structure():
+    athlete = make_athlete(sports=["bike"])
+    sessions = _bike_week_sessions(athlete, START, 300.0, 250.0, week_index=3)
+    assert _select_bike_interval_template(3) == "race_pace"
+    hard = next(s for s in sessions if s.intensity["zone"] == "Z5")
+    repeats = [item for item in hard.structured.items if item.kind == "repeat"]
+    assert len(repeats) == 1
+    repeat = repeats[0]
+    assert 3 <= repeat.count <= 5  # BIKE_RACE_PACE_MIN/MAX_REPS
+    work, rest = repeat.steps
+    assert work.duration_value == pytest.approx(150.0)  # BIKE_RACE_PACE_WORK_S
+
+
+def test_bike_interval_template_low_volume_degrades_to_flat_block():
+    # Same low-volume graceful-degradation posture as _resolve_bike_session_
+    # count -- when the available main-block time is too small to fit even
+    # one full work bout of the selected template, fall back to the classic
+    # flat single block rather than emitting a malformed/overflowing
+    # structure. In practice DEFAULT_BIKE_SESSION_MIN's 15-min floor keeps
+    # `_bike_week_sessions` from ever actually reaching this main_s that
+    # small (see `_bike_warmup_cooldown_reserve`'s own math), so this is
+    # exercised directly against the template builder, the same way
+    # `_fit_units_with_flexible_gap`'s own degenerate-count path is real
+    # defensive code for an input this build's own callers don't currently
+    # produce.
+    from swim_coach.plan import (
+        _bike_over_unders_main,
+        _bike_short_short_main,
+        _bike_sustained_threshold_main,
+    )
+
+    for builder, unit_s in (
+        (_bike_sustained_threshold_main, 600.0),
+        (_bike_over_unders_main, 360.0),
+        (_bike_short_short_main, 450.0),
+    ):
+        main_s = unit_s - 30.0  # just under one whole unit
+        items = builder(main_s, None)
+        assert len(items) == 1
+        assert items[0].kind == "step"
+        assert items[0].role == "steady"
+        assert items[0].duration_value == pytest.approx(main_s)
+
+
+def test_generate_week_bike_primary_deload_week_reduces_target_volume():
+    # library/24's cadence (BIKE_DELOAD_CADENCE_WEEKS=4, "three build weeks,
+    # one reduced-volume week") applied to a bike-primary macro's
+    # base/build/peak span.
+    from swim_coach.plan import _block_start_volume, _find_block
+
+    athlete, event, macro = _make_bike_macro()
+    macro_start = macro.blocks[0].start_date
+    deload_found = False
+    for week_index in range(20):  # this fixture's base+build+peak span
+        week_start = macro_start + timedelta(weeks=week_index)
+        block_index, block = _find_block(macro, week_start)
+        if block.name == "taper":
+            break
+        weeks_in_block = (block.end_date - block.start_date).days // 7 + 1
+        week_index_in_block = (week_start - block.start_date).days // 7
+        start_volume = _block_start_volume(macro, block_index, block)
+        end_volume = block.weekly_volume_target_m
+        frac = (week_index_in_block + 1) / weeks_in_block
+        expected_non_deload = round(start_volume + (end_volume - start_volume) * frac)
+
+        week = generate_week(
+            athlete, macro, _iso_week(week_start), week_start, primary_sport="bike"
+        )
+        is_deload = (week_index + 1) % BIKE_DELOAD_CADENCE_WEEKS == 0
+        if is_deload:
+            deload_found = True
+            expected_deload = round(expected_non_deload * (1 - BIKE_DELOAD_VOLUME_REDUCTION))
+            assert week.target_volume_m == expected_deload
+            assert week.target_volume_m < expected_non_deload
+            assert "deload" in week.focus.lower()
+        else:
+            assert week.target_volume_m == expected_non_deload
+            assert "deload" not in week.focus.lower()
+    assert deload_found  # sanity: this fixture's runway actually exercises it
+
+
+def test_generate_week_bike_primary_deload_never_applies_in_taper():
+    athlete, event, macro = _make_bike_macro()
+    taper_block = next(b for b in macro.blocks if b.name == "taper")
+    weeks_in_taper = (taper_block.end_date - taper_block.start_date).days // 7 + 1
+    for i in range(weeks_in_taper):
+        week_start = taper_block.start_date + timedelta(weeks=i)
+        week = generate_week(
+            athlete, macro, _iso_week(week_start), week_start, primary_sport="bike"
+        )
+        assert "deload" not in week.focus.lower()
+
+
+def test_generate_week_bike_primary_deload_week_still_produces_real_sessions():
+    # A deload week's reduced target must still be a real, non-degenerate
+    # week -- reuses _resolve_bike_session_count's own graceful session-
+    # count reduction (Finding 6) rather than anything new.
+    athlete, event, macro = _make_bike_macro()
+    macro_start = macro.blocks[0].start_date
+    # Calendar week 4 (1-indexed) = ramp_week_index 3 -> this fixture's
+    # first deload week (see the cadence test above).
+    deload_week_start = macro_start + timedelta(weeks=3)
+    week = generate_week(
+        athlete, macro, _iso_week(deload_week_start), deload_week_start, primary_sport="bike"
+    )
+    bike_sessions = [s for s in week.sessions if s.sport == "bike"]
+    assert len(bike_sessions) >= 1
+    assert all(s.duration_min > 0 for s in bike_sessions)
+    total = sum(s.duration_min for s in bike_sessions)
+    assert total == pytest.approx(week.target_volume_m, rel=0.15)
+
+
+def test_generate_week_bike_primary_swim_macro_unaffected_by_deload_or_rotation():
+    # Deload/rotation are scoped strictly to primary_sport="bike" -- an
+    # ordinary swim macro's weekly target must be untouched (same math as
+    # before this pass).
+    athlete = make_athlete()
+    event = make_event(event_date=START + timedelta(weeks=24))
+    macro = scaffold_macro(
+        athlete, event, START, current_weekly_volume_m=8000, peak_weekly_volume_m=20000
+    )
+    week_start = macro.blocks[0].start_date + timedelta(weeks=3)  # would be a deload week if bike
+    from swim_coach.plan import _block_start_volume, _find_block
+
+    block_index, block = _find_block(macro, week_start)
+    weeks_in_block = (block.end_date - block.start_date).days // 7 + 1
+    week_index_in_block = (week_start - block.start_date).days // 7
+    start_volume = _block_start_volume(macro, block_index, block)
+    end_volume = block.weekly_volume_target_m
+    frac = (week_index_in_block + 1) / weeks_in_block
+    expected = round(start_volume + (end_volume - start_volume) * frac)
+
+    week = generate_week(athlete, macro, _iso_week(week_start), week_start)  # default: swim
+    assert week.target_volume_m == expected
 
 
 def test_generate_week_rejects_unknown_primary_sport():

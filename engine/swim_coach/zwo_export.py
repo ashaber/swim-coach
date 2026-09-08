@@ -177,12 +177,12 @@ def _convert_leaf(step: WorkoutStep, ftp_watts: float) -> tuple[str, dict[str, s
         }
     if low == high:
         return "SteadyState", {"Duration": duration_s, "Power": _fmt_power(low)}
-    if step.role in ("steady", "interval"):
-        # A FLAT main block that merely carries a target RANGE (e.g. a
-        # zone's own %FTP band) is not a mid-workout power progression --
+    if step.role in ("steady", "interval", "recovery", "rest"):
+        # A FLAT block that merely carries a target RANGE (e.g. a zone's
+        # own %FTP band) is not a mid-workout power progression --
         # sibling skill's own explicit rule: "SteadyState -- if the input
         # gives a range (e.g. 88-93%), use the midpoint (0.905) as Power."
-        # `plan._bike_session_structure` builds every real bike session's
+        # `plan._bike_session_structure` builds every FLAT bike session's
         # main block this way (a single flat block at the session's
         # assigned zone, never a genuine build/ramp shape) -- routing it to
         # `<Ramp>` instead (the bug this fixes) delivered a 0%->90%FTP power
@@ -193,12 +193,34 @@ def _convert_leaf(step: WorkoutStep, ftp_watts: float) -> tuple[str, dict[str, s
         # that's the role that block's real producer actually assigns today
         # (see plan.py's own `_bike_step` call) -- both mean the same thing
         # here: a flat block, not a progression.
+        #
+        # "recovery"/"rest" added (engine/cycling-coach, interval-template
+        # pass): `plan._bike_reps_with_rest_main`/`_bike_blocks_with_rest_
+        # main` are the first real producers of a STANDALONE (top-level,
+        # not inside an `IntervalsT` on/off pair -- see `_convert_repeat`
+        # below for that separate case) recovery/rest `WorkoutStep` with a
+        # genuine zone-band target (e.g. a between-blocks Z1 spin, 0-55%
+        # FTP) rather than a fixed single value -- previously unreachable
+        # by any real producer in this codebase, so this branch was never
+        # exercised for those two roles before. Without this, such a step
+        # fell through to the `<Ramp>` branch below and silently exported a
+        # rest/recovery segment as a power ramp instead of the intended
+        # flat easy spin -- the exact same class of bug this function's own
+        # "steady"/"interval" fix above already addressed for the main
+        # block.
         midpoint = (low + high) / 2
         return "SteadyState", {"Duration": duration_s, "Power": _fmt_power(midpoint)}
-    # A genuine range on any OTHER role (this codebase has no real producer
-    # of one today -- reserved for a future genuine mid-workout progression)
-    # is a real build -- sibling skill's `<Ramp>` element ("power
-    # progressions in the body of the workout").
+    # A genuine range on any OTHER role would be a real build -- sibling
+    # skill's `<Ramp>` element ("power progressions in the body of the
+    # workout"). As of the "recovery"/"rest" fix above (engine/cycling-coach
+    # interval-template pass), this branch is UNREACHABLE via any value of
+    # `WorkoutStep.role`'s closed Literal type: "open" steps are filtered
+    # before conversion (`to_zwo_workout`), "warmup"/"cooldown" are
+    # special-cased above, and every remaining value ("steady", "interval",
+    # "recovery", "rest") now resolves to SteadyState. Kept as defensive/
+    # forward-compatible code (real, valid ZWO) in case a future role value
+    # or caller genuinely needs it -- see
+    # `test_ramp_element_unreachable_via_any_valid_workoutstep_role`.
     return "Ramp", {
         "Duration": duration_s,
         "PowerLow": _fmt_power(low),

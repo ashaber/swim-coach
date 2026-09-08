@@ -62,6 +62,7 @@ from swim_coach.plan import (
     RECOVERY_SESSION_MIN,
     STAGE_SATURDAY_SHARE,
     WEEKLY_VOLUME_RAMP_CAP,
+    _bike_ramp_week_index,
     _bike_week_sessions_with_strength,
     _duration_min_for_distance,
     _round_100,
@@ -532,8 +533,18 @@ def adapt_week(
         # `generate_week`'s own bike-primary path uses (strength placement
         # included, PR #167 Finding 3) rather than reused from `baseline`
         # (which reflects the macro's un-adjusted interpolated target).
+        # `week_index=_bike_ramp_week_index(macro, week_start)` keeps the
+        # hard session's interval-template rotation (library/24-cycling-
+        # periodization-intervals.md, `plan._select_bike_interval_template`)
+        # consistent with what `generate_week` would pick for this same
+        # calendar week -- without it, every /adapt-rebuilt week would reset
+        # to week_index=0's template regardless of which real week it is.
         sessions = _bike_week_sessions_with_strength(
-            athlete, week_start, float(next_target_volume_m), ftp_watts
+            athlete,
+            week_start,
+            float(next_target_volume_m),
+            ftp_watts,
+            week_index=_bike_ramp_week_index(macro, week_start),
         )
     else:
         pace_s = _z2_pace_s_per_100m(athlete)
