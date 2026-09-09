@@ -382,6 +382,27 @@ BIKE_INTERVAL_TEMPLATES: tuple[str, ...] = (
 # neuromuscularly-taxing work bout first, shortest/most taxing last) is this
 # engine's own reasonable default (Coach judgment), not a cited cadence.
 
+BIKE_FTP_CHECK_ELIGIBLE_SOURCES = ("app_estimate", "self_reported_historical")
+# threshold-history build, `_bike_week_sessions`'s `ftp_source` param: an FTP
+# reading from either of these two `ThresholdRecord.source` values is real
+# signal but NOT a genuine recent test (an app's own modelled estimate, or
+# the athlete's own recollection of an old number -- Andrew's own example:
+# "I was 350w 10 years ago") -- exactly the case Andrew's real block-01
+# embeds a "doubles as a fitness check" note for, as distinct from a
+# genuinely fresh `field_test`/`ramp_test`/`race_file` reading that needs no
+# such caveat.
+BIKE_FTP_CHECK_PURPOSE_SUFFIX = (
+    " — also doubles as a rough FTP check: your current FTP is based on an "
+    "estimate, not a recent real test, so how this session feels/holds up "
+    "tells us roughly where you actually are; we'll keep the current number "
+    "until a real test (or race file) confirms or corrects it"
+)
+# Coach judgment, not citation-backed -- the wording itself; the DECISION to
+# embed rather than run a dedicated test is Andrew's own real block-01
+# precedent (Tim's app), quoted in this build's own design brief: "Threshold
+# check 2x12min... doubles as a fitness check... today tells me roughly
+# where you are... we hold 263W until race files confirm it."
+
 
 def _select_bike_interval_template(week_index: int) -> str:
     """Deterministically rotate through `BIKE_INTERVAL_TEMPLATES`, one
@@ -1754,6 +1775,143 @@ def _bike_hard_session_structure(
     return WorkoutStructure(items=items)
 
 
+# --- Ramp test (threshold-history build) -- real FTP-from-scratch test ------
+#
+# Andrew's own framing, explicitly (this build's design session): the 2x12min
+# "threshold check" embedded in his real block-01 (`_bike_sustained_threshold_
+# main`/the FTP-check purpose-text note below) is a heuristic appropriate ONLY
+# because his FTP is already reasonably well-known -- it is NOT a substitute
+# for a real ramp test when no current reading exists. This section is that
+# separate, real path: a from-scratch or from-reset FTP-establishing test,
+# not a fitness-check bolted onto an ordinary training session.
+#
+# Protocol grounding (WebSearch-verified this session, direct-fetch confirmed
+# against cyclecoach.com -- Ric Stern's own site -- and roadmancycling.com;
+# see library/24-cycling-periodization-intervals.md's "Ramp test protocol and
+# FTP formula" section for the full citation writeup and Confidence/Test
+# lines). This is NOT a peer-reviewed journal citation -- it is cited here,
+# and in library/24, as a genuine practical/non-journal resource (this
+# project's own reference_list.md "Practical / non-journal resources"
+# category), same tier as e.g. the TrainingPeaks swim-TSS citation already
+# grounding `load.py`'s SWIM_TSS_INTENSITY_EXPONENT.
+BIKE_RAMP_TEST_WARMUP_MIN = 5.0
+# Coach judgment, not citation-backed -- roadmancycling.com's own protocol
+# description says only "a few minutes of easy spinning," no exact figure.
+BIKE_RAMP_TEST_START_WATTS_DEFAULT = 100.0
+# roadmancycling.com (direct-fetch confirmed): "a common structure starts
+# around 100W" -- the no-current-FTP-reading default (see design section 6:
+# "start around 50% FTP (or a fixed low wattage)").
+BIKE_RAMP_TEST_START_FRACTION_OF_FTP = 0.50
+# Same source's "(or roughly 50% of estimated FTP)" alternative -- used
+# instead of the fixed 100W default whenever a prior (even if stale)
+# ftp_watts reading exists, so the ramp starts at a realistic intensity
+# for THIS athlete rather than an arbitrary population default.
+BIKE_RAMP_TEST_STEP_WATTS_PER_MIN = 20.0
+# roadmancycling.com (direct-fetch confirmed): "adds 20W per minute" --
+# also matches TrainerRoad/Zwift's own widely-used ramp-test step rate.
+BIKE_RAMP_TEST_DURATION_MIN = 20.0
+# The real protocol is discrete (a new 1-minute stage every minute until
+# voluntary failure, typically "8-25 minutes including the build" per the
+# same source) -- ZWO's `<Ramp>` element is a single CONTINUOUS linear
+# power ramp over a fixed duration, not a sequence of 1-minute steps. 20
+# minutes is this engine's own reasonable fixed-duration approximation
+# (Coach judgment: the middle of that observed 8-25 min range) delivering a
+# real, close-enough-to-linear approximation of the discrete step protocol
+# for a trainer app to render -- an athlete who fails before reaching the
+# ramp's end simply stops the workout early, same as the real discrete
+# protocol's own "ride until you can't hold the target" termination rule.
+# `end_watts` is deliberately set high enough that most athletes will fail
+# well before reaching it (a real ceiling, not a target to complete).
+BIKE_RAMP_TEST_FTP_FROM_BEST_1MIN_FRACTION = 0.75
+# Ric Stern's own quantified MAP-to-threshold-power relationship
+# (cyclecoach.com, direct-fetch confirmed this session): "the ramp test
+# takes 75% of your best one-minute power to estimate FTP," within a
+# documented ~72-77% individual-variation range. See library/24 for the
+# full writeup -- Confidence: medium (a real, named practitioner-expert's
+# own quantified figure, cross-confirmed across multiple independently
+# direct-fetched sources this session, but NOT a peer-reviewed journal
+# study -- this project's evidence-tagging scheme reserves [EVIDENCE]/
+# [ADAPTED] for actual research papers; this is graded as a genuine
+# practical/non-journal resource instead, same tier as the TrainingPeaks
+# swim-TSS citation already used elsewhere in this engine).
+
+
+def _bike_ramp_test_structure(ftp_watts: float | None) -> WorkoutStructure:
+    """A real, from-scratch (or from-reset) FTP-establishing ramp test --
+    warm-up, then a single continuous power ramp (role="ramp", the
+    threshold-history build's new `WorkoutStep.role` value -- see that
+    field's own comment) climbing at `BIKE_RAMP_TEST_STEP_WATTS_PER_MIN`
+    from a realistic starting point to a real, rarely-reached ceiling. This
+    is genuinely different from `_bike_hard_session_structure`'s
+    "sustained_threshold" template -- that's an ordinary training session
+    that ALSO happens to double as a rough fitness check (see this
+    module's FTP-check purpose-text note in `_bike_week_sessions`); this
+    function is a dedicated, standalone test session whose entire point is
+    establishing (or resetting) the athlete's FTP anchor from real data,
+    for when no current reading exists at all (design section 6's explicit
+    "different situations, not competing designs" framing).
+
+    The athlete pedals until failure, then reports back their best 1-minute
+    average power (either read directly off their own device/app, or via
+    the ride file this session's `.zwo`/Garmin export produces); the coach
+    computes FTP with `ftp_from_ramp_test` below and offers to log it via
+    `record_threshold_test(source="ramp_test")` +
+    `update_athlete_profile`. Deliverable via the exact same ZWO/Garmin
+    export pipeline as any other bike session (`zwo_export.to_zwo_workout`/
+    `garmin_export`) -- no new delivery mechanism, matching design section
+    6's own framing ("just a real, available one" path, not swim-coach's
+    only one).
+
+    `ftp_watts`, when known (even a stale/estimated prior reading -- this
+    function does NOT check its source/age, that judgment belongs to the
+    CALLER deciding whether a ramp test is warranted at all), anchors the
+    start point closer to the athlete's real range
+    (`BIKE_RAMP_TEST_START_FRACTION_OF_FTP`); `None` (the genuinely
+    from-scratch case this function exists for) falls back to
+    `BIKE_RAMP_TEST_START_WATTS_DEFAULT`. No cool-down step is appended --
+    `zwo_export.to_zwo_workout`'s own trailing-cool-down fallback covers
+    delivery, and a real ramp test ends at voluntary failure, not a planned
+    duration, so appending a fixed cool-down here would misrepresent the
+    main block as something the athlete completes on schedule.
+    """
+    warmup_s = round(BIKE_RAMP_TEST_WARMUP_MIN * 60)
+    ramp_s = round(BIKE_RAMP_TEST_DURATION_MIN * 60)
+    start_watts = (
+        ftp_watts * BIKE_RAMP_TEST_START_FRACTION_OF_FTP
+        if ftp_watts is not None
+        else BIKE_RAMP_TEST_START_WATTS_DEFAULT
+    )
+    end_watts = start_watts + BIKE_RAMP_TEST_STEP_WATTS_PER_MIN * BIKE_RAMP_TEST_DURATION_MIN
+
+    items: list[WorkoutStepOrRepeat] = [
+        _bike_step("Warm-up, easy spin", "warmup", warmup_s, "Z1", ftp_watts),
+        WorkoutStep(
+            label=(
+                f"Ramp to failure -- start ~{round(start_watts)}W, "
+                f"+{round(BIKE_RAMP_TEST_STEP_WATTS_PER_MIN)}W/min until you can no "
+                "longer hold the target"
+            ),
+            role="ramp",
+            duration_kind="time_s",
+            duration_value=ramp_s,
+            target=WorkoutTarget(basis="power_w", low=start_watts, high=end_watts),
+            modality="bike",
+        ),
+    ]
+    return WorkoutStructure(items=items)
+
+
+def ftp_from_ramp_test(best_1min_power_w: float) -> float:
+    """FTP estimate from a completed ramp test's best 1-minute average
+    power -- `BIKE_RAMP_TEST_FTP_FROM_BEST_1MIN_FRACTION` (75%, Ric Stern's
+    own quantified MAP-to-threshold figure) applied directly. See this
+    module's ramp-test constants block above for the full citation. Pure
+    arithmetic -- the caller is responsible for actually obtaining
+    `best_1min_power_w` (from the athlete's own device/app reading, or a
+    ride-file analysis this build does not itself implement)."""
+    return round(best_1min_power_w * BIKE_RAMP_TEST_FTP_FROM_BEST_1MIN_FRACTION, 1)
+
+
 def _resolve_bike_hard_min(total_duration_min: float) -> float:
     """The hard (Z3) session's duration, `BIKE_HARD_SESSION_SHARE` of
     `total_duration_min`, capped at `BIKE_HARD_SESSION_MAX_MIN` -- see that
@@ -1818,6 +1976,7 @@ def _bike_week_sessions(
     *,
     is_indoor: bool | None = None,
     week_index: int = 0,
+    ftp_source: str | None = None,
 ) -> list[Session]:
     """Generate up to `BIKE_SESSIONS_PER_WEEK` generic cycling sessions
     splitting `total_duration_min` across a small weekly cadence:
@@ -1881,6 +2040,23 @@ def _bike_week_sessions(
     `_validate_intensity` only restricts `anchor` to `{css_pace, rpe, hr}`
     when present at all; a power-based target has no matching value in that
     set, so this omits the key entirely rather than mislabeling it).
+
+    `ftp_source` (optional, threshold-history build -- defaults to `None`,
+    every existing call site keeps producing byte-identical output unless
+    updated to pass it): the athlete's most recent `ftp_watts`-metric
+    `ThresholdRecord.source` (see that model), if the caller has one. When
+    this week's hard session is `week_index`'s FIRST "sustained_threshold"
+    occurrence (i.e. `week_index == 0` -- `_select_bike_interval_template`'s
+    rotation always starts there) of a fresh bike macro, AND `ftp_source` is
+    `"app_estimate"` or `"self_reported_historical"` (not a real test), an
+    honest note is appended to that session's `purpose` text: this session
+    doubles as a rough fitness check, the same way Andrew's own real block-01
+    (Tim's app) embeds a "threshold check" into its first sustained-threshold
+    session rather than running a dedicated ramp test -- appropriate ONLY
+    because a stale-but-real estimate already exists (see
+    `_bike_ramp_test_structure`'s own docstring for the genuinely
+    from-scratch case this does NOT cover). Reuses this template's existing
+    content unchanged -- no new session type, no ramp-rate generator here.
     """
     n = _resolve_bike_session_count(total_duration_min)
     hard_min = _resolve_bike_hard_min(total_duration_min)
@@ -1908,6 +2084,13 @@ def _bike_week_sessions(
             if is_hard
             else "endurance ride (Z2) — aerobic base"
         )
+        if (
+            is_hard
+            and template == "sustained_threshold"
+            and week_index == 0
+            and ftp_source in BIKE_FTP_CHECK_ELIGIBLE_SOURCES
+        ):
+            purpose += BIKE_FTP_CHECK_PURPOSE_SUFFIX
         duration_min_final = max(duration, DEFAULT_BIKE_SESSION_MIN)
         structured = (
             _bike_hard_session_structure(template, duration_min_final, ftp_watts)
@@ -1988,6 +2171,7 @@ def _bike_week_sessions_with_strength(
     *,
     is_indoor: bool | None = None,
     week_index: int = 0,
+    ftp_source: str | None = None,
 ) -> list[Session]:
     """`_bike_week_sessions`'s output plus STRENGTH_SESSIONS_PER_WEEK
     strength sessions placed on days it didn't already use -- the
@@ -1999,10 +2183,19 @@ def _bike_week_sessions_with_strength(
 
     `week_index` (optional, defaults to 0): forwarded straight through to
     `_bike_week_sessions`'s own `week_index` -- see that function's
-    docstring for the interval-template rotation this selects.
+    docstring for the interval-template rotation this selects. `ftp_source`
+    (optional, threshold-history build, defaults to `None`): forwarded
+    straight through to `_bike_week_sessions`'s own `ftp_source` -- see that
+    function's docstring for the FTP-check purpose-text note this enables.
     """
     bike_sessions = _bike_week_sessions(
-        athlete, week_start, total_duration_min, ftp_watts, is_indoor=is_indoor, week_index=week_index
+        athlete,
+        week_start,
+        total_duration_min,
+        ftp_watts,
+        is_indoor=is_indoor,
+        week_index=week_index,
+        ftp_source=ftp_source,
     )
     excluded = {(s.date - week_start).days for s in bike_sessions}
     strength_offsets = _pick_days(STRENGTH_SESSIONS_PER_WEEK, excluded=excluded)
@@ -2060,8 +2253,19 @@ def generate_week(
     primary_sport: Literal["swim", "bike"] = "swim",
     ftp_watts: float | None = None,
     bike_indoor: bool | None = None,
+    ftp_source: str | None = None,
 ) -> WeekPlan:
     """Generate one week's sessions.
+
+    `ftp_source` (optional, threshold-history build -- defaults to `None`,
+    every existing call site keeps producing byte-identical output unless
+    updated to pass it): the athlete's most recent `ftp_watts`-metric
+    `ThresholdRecord.source`, if the caller has one -- forwarded straight
+    through to `_bike_week_sessions`'s own `ftp_source` for a
+    `primary_sport="bike"` week; ignored for a swim week and for any week
+    that isn't `week_index == 0`'s first "sustained_threshold" occurrence.
+    See that function's docstring for the FTP-check purpose-text note this
+    enables.
 
     `bike_indoor` (optional, defaults to `None` -- every existing call site
     keeps producing byte-identical output unless updated to pass it):
@@ -2321,6 +2525,7 @@ def generate_week(
                 ftp_watts,
                 is_indoor=bike_indoor,
                 week_index=ramp_week_index,
+                ftp_source=ftp_source,
             )
             if len(core_bike_sessions) < BIKE_FINAL_TAPER_MIN_SESSIONS:
                 # The ordinary taper math collapsed this week to a single
@@ -2343,6 +2548,7 @@ def generate_week(
                 ftp_watts,
                 is_indoor=bike_indoor,
                 week_index=ramp_week_index,
+                ftp_source=ftp_source,
             )
             race_week_checklist = []
         return WeekPlan(

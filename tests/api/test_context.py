@@ -12,7 +12,7 @@ import pytest
 
 from swim_coach.store import FileStore
 
-from swim_coach.models import HealthStatus, WorkoutAnalytics, WorkoutLap, WorkoutPause
+from swim_coach.models import HealthStatus, ThresholdRecord, WorkoutAnalytics, WorkoutLap, WorkoutPause
 
 from app.context import (
     FOCUSED_WORKOUT_LAPS_CAP,
@@ -540,6 +540,102 @@ def test_per_request_context_active_health_status_omits_unset_new_fields(app_env
     assert "Body region" not in health_section
     assert "Onset:" not in health_section
     assert "Severity:" not in health_section
+
+
+# --- threshold history (dated, per-sport FTP/LTHR/CSS log) -----------------
+
+
+def _threshold_record(athlete_id: uuid.UUID, **overrides) -> ThresholdRecord:
+    data: dict = dict(
+        id=uuid.uuid4(),
+        athlete_id=athlete_id,
+        sport="bike",
+        metric="ftp_watts",
+        value=263.0,
+        measured_at=date(2026, 9, 1),
+        source="ramp_test",
+    )
+    data.update(overrides)
+    return ThresholdRecord(**data)
+
+
+def _threshold_section(text: str) -> str:
+    return text.split("### Threshold history")[1].split("### Current week plan")[0]
+
+
+def test_per_request_context_no_threshold_history_message_when_none_on_file(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    text = build_per_request_context(store, "renee", expert_mode=False)
+    section = _threshold_section(text)
+    assert "No threshold-test history is on file" in section
+    assert "does NOT mean the athlete has no real threshold" in section
+
+
+def test_per_request_context_shows_threshold_history_entry(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    athlete = store.load_athlete("renee")
+    entry = _threshold_record(athlete.id, value=263.0, source="ramp_test")
+    store.save_threshold_record("renee", entry)
+
+    text = build_per_request_context(store, "renee", expert_mode=False)
+    section = _threshold_section(text)
+
+    assert "bike / ftp_watts" in section
+    assert "263.0" in section
+    assert "ramp test" in section
+    assert "2026-09-01" in section
+    assert "No threshold-test history is on file" not in section
+
+
+def test_per_request_context_shows_both_old_and_recent_threshold_readings_never_picks_a_winner(
+    app_env,
+) -> None:
+    # ThresholdRecord's own design decision, verified end-to-end here: an
+    # old self-reported value and a recent field test must BOTH be visible
+    # to the coach's judgment -- the context render never silently drops or
+    # picks between them.
+    store = FileStore(base_dir=app_env)
+    athlete = store.load_athlete("renee")
+    old = _threshold_record(
+        athlete.id,
+        value=350.0,
+        measured_at=date(2016, 1, 1),
+        source="self_reported_historical",
+        notes="I was 350w 10 years ago",
+    )
+    recent = _threshold_record(
+        athlete.id, value=263.0, measured_at=date(2026, 9, 1), source="ramp_test"
+    )
+    store.save_threshold_record("renee", old)
+    store.save_threshold_record("renee", recent)
+
+    text = build_per_request_context(store, "renee", expert_mode=False)
+    section = _threshold_section(text)
+
+    assert "350.0" in section
+    assert "263.0" in section
+    assert "I was 350w 10 years ago" in section
+    assert "2 reading(s)" in section
+    # Newest first within the group.
+    assert section.index("263.0") < section.index("350.0")
+
+
+def test_per_request_context_threshold_history_groups_by_sport_and_metric(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    athlete = store.load_athlete("renee")
+    bike_ftp = _threshold_record(athlete.id, sport="bike", metric="ftp_watts", value=263.0)
+    swim_css = _threshold_record(
+        athlete.id, sport="swim_pool", metric="css_pace_s_per_100m", value=90.0
+    )
+    store.save_threshold_record("renee", bike_ftp)
+    store.save_threshold_record("renee", swim_css)
+
+    text = build_per_request_context(store, "renee", expert_mode=False)
+    section = _threshold_section(text)
+
+    assert "bike / ftp_watts" in section
+    assert "swim_pool / css_pace_s_per_100m" in section
+    assert "2 sport/metric combination(s)" in section
 
 
 def test_per_request_context_ranks_more_severe_restriction_first_when_multiple_active(app_env) -> None:

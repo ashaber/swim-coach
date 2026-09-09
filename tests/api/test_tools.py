@@ -17,6 +17,7 @@ import httpx
 import pytest
 from fakes import SpyFeedbackStore, make_workout
 from swim_coach.models import (
+    Event,
     HealthStatus,
     MacroBlock,
     MacroPlan,
@@ -28,7 +29,7 @@ from swim_coach.models import (
     WorkoutStructure,
     WorkoutTarget,
 )
-from swim_coach.plan import SESSION_ADJUSTMENT_INCREASE_CAP_PCT
+from swim_coach.plan import SESSION_ADJUSTMENT_INCREASE_CAP_PCT, generate_week
 from swim_coach.store import FileStore
 
 from app.tools import (
@@ -695,6 +696,299 @@ def test_get_workouts_unknown_athlete_behaves_like_other_handlers(athletes_dir) 
     result = handlers["get_workouts"]({"start_date": "2026-01-01", "end_date": "2026-01-31"})
     assert "error" not in result
     assert result["count"] == 0
+
+
+# --- record_threshold_test ----------------------------------------------------
+
+
+def test_record_threshold_test_persists_a_dated_entry(athletes_dir, run_tag) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["record_threshold_test"](
+        {
+            "sport": "bike",
+            "metric": "ftp_watts",
+            "value": 263.0,
+            "measured_at": "2026-09-01",
+            "source": "ramp_test",
+            "notes": f"[{run_tag}] real ramp test",
+        }
+    )
+
+    assert result["logged"] is True
+    assert result["sport"] == "bike"
+    assert result["metric"] == "ftp_watts"
+    assert result["value"] == 263.0
+    assert result["measured_at"] == "2026-09-01"
+    assert result["source"] == "ramp_test"
+
+    records = store.list_threshold_records("renee")
+    assert len(records) == 1
+    entry = records[0]
+    assert entry.sport == "bike"
+    assert entry.metric == "ftp_watts"
+    assert entry.value == 263.0
+    assert entry.source == "ramp_test"
+    assert entry.notes == f"[{run_tag}] real ramp test"
+    assert str(entry.id) == result["threshold_record_id"]
+
+
+def test_record_threshold_test_does_not_write_a_linked_feedback_row(athletes_dir, run_tag) -> None:
+    # Unlike record_health_status, this is ordinary profile data, not a
+    # safety event -- no needs_human_review Feedback row should be written.
+    spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir))
+    handlers = build_tool_handlers(spy, slug="renee", expert_mode=False)
+
+    handlers["record_threshold_test"](
+        {
+            "sport": "bike",
+            "metric": "ftp_watts",
+            "value": 263.0,
+            "measured_at": "2026-09-01",
+            "source": "ramp_test",
+        }
+    )
+
+    assert spy.saved == []
+
+
+def test_record_threshold_test_never_overwrites_a_prior_entry(athletes_dir) -> None:
+    # Both an old self-reported value AND a recent field test stay on file
+    # -- the engine never picks a winner (ThresholdRecord's own design
+    # decision, verified here end-to-end through the tool handler).
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    handlers["record_threshold_test"](
+        {
+            "sport": "bike",
+            "metric": "ftp_watts",
+            "value": 350.0,
+            "measured_at": "2016-01-01",
+            "source": "self_reported_historical",
+            "notes": "I was 350w 10 years ago",
+        }
+    )
+    handlers["record_threshold_test"](
+        {
+            "sport": "bike",
+            "metric": "ftp_watts",
+            "value": 263.0,
+            "measured_at": "2026-09-01",
+            "source": "ramp_test",
+        }
+    )
+
+    records = store.list_threshold_records("renee")
+    assert len(records) == 2
+    assert [r.value for r in records] == [263.0, 350.0]  # newest first
+
+
+def test_record_threshold_test_missing_required_fields_is_rejected(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["record_threshold_test"]({"sport": "bike", "metric": "ftp_watts"})
+
+    assert "error" in result
+    assert store.list_threshold_records("renee") == []
+
+
+def test_record_threshold_test_invalid_sport_is_rejected(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["record_threshold_test"](
+        {
+            "sport": "not-a-sport",
+            "metric": "ftp_watts",
+            "value": 263.0,
+            "measured_at": "2026-09-01",
+            "source": "ramp_test",
+        }
+    )
+
+    assert "error" in result
+    assert store.list_threshold_records("renee") == []
+
+
+def test_record_threshold_test_invalid_metric_is_rejected(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["record_threshold_test"](
+        {
+            "sport": "bike",
+            "metric": "not-a-metric",
+            "value": 263.0,
+            "measured_at": "2026-09-01",
+            "source": "ramp_test",
+        }
+    )
+
+    assert "error" in result
+
+
+def test_record_threshold_test_invalid_source_is_rejected(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["record_threshold_test"](
+        {
+            "sport": "bike",
+            "metric": "ftp_watts",
+            "value": 263.0,
+            "measured_at": "2026-09-01",
+            "source": "not-a-source",
+        }
+    )
+
+    assert "error" in result
+
+
+def test_record_threshold_test_invalid_measured_at_is_rejected(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["record_threshold_test"](
+        {
+            "sport": "bike",
+            "metric": "ftp_watts",
+            "value": 263.0,
+            "measured_at": "not-a-date",
+            "source": "ramp_test",
+        }
+    )
+
+    assert "error" in result
+
+
+def test_record_threshold_test_invalid_value_is_rejected(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["record_threshold_test"](
+        {
+            "sport": "bike",
+            "metric": "ftp_watts",
+            "value": "not-a-number",
+            "measured_at": "2026-09-01",
+            "source": "ramp_test",
+        }
+    )
+
+    assert "error" in result
+
+
+# --- update_athlete_profile ---------------------------------------------------
+
+
+def test_update_athlete_profile_sets_ftp_watts(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["update_athlete_profile"]({"ftp_watts": 263.0})
+
+    assert result["updated"] is True
+    assert result["ftp_watts"] == 263.0
+    assert store.load_athlete("renee").ftp_watts == 263.0
+
+
+def test_update_athlete_profile_sets_multiple_fields_at_once(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["update_athlete_profile"](
+        {"ftp_watts": 263.0, "lthr_bpm": 158, "sports": ["swim_pool", "swim_ow", "bike"]}
+    )
+
+    assert result["updated"] is True
+    athlete = store.load_athlete("renee")
+    assert athlete.ftp_watts == 263.0
+    assert athlete.lthr_bpm == 158
+    assert athlete.sports == ["swim_pool", "swim_ow", "bike"]
+
+
+def test_update_athlete_profile_leaves_other_fields_untouched(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    before = store.load_athlete("renee")
+
+    handlers["update_athlete_profile"]({"ftp_watts": 263.0})
+
+    after = store.load_athlete("renee")
+    assert after.name == before.name
+    assert after.pool_schedule == before.pool_schedule
+    assert after.has_pool_coach == before.has_pool_coach
+
+
+def test_update_athlete_profile_no_fields_is_rejected(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["update_athlete_profile"]({})
+
+    assert "error" in result
+
+
+def test_update_athlete_profile_rejects_negative_ftp_watts(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    before = store.load_athlete("renee").ftp_watts
+
+    result = handlers["update_athlete_profile"]({"ftp_watts": -50.0})
+
+    assert "error" in result
+    assert store.load_athlete("renee").ftp_watts == before
+
+
+def test_update_athlete_profile_rejects_implausibly_large_ftp_watts(athletes_dir) -> None:
+    # A real review-bug shape this test guards against: an athlete typing
+    # "2630" instead of "263" (a unit/decimal slip) must be rejected, not
+    # silently accepted as a real FTP.
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["update_athlete_profile"]({"ftp_watts": 5000.0})
+
+    assert "error" in result
+
+
+def test_update_athlete_profile_rejects_implausible_lthr_bpm(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["update_athlete_profile"]({"lthr_bpm": 900})
+
+    assert "error" in result
+
+
+def test_update_athlete_profile_rejects_implausible_css_pace(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["update_athlete_profile"]({"css_pace_s_per_100m": -10.0})
+
+    assert "error" in result
+
+
+def test_update_athlete_profile_rejects_invalid_sports_value(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["update_athlete_profile"]({"sports": ["not-a-sport"]})
+
+    assert "error" in result
+
+
+def test_update_athlete_profile_rejects_unknown_athlete(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="no-such-athlete", expert_mode=False)
+
+    result = handlers["update_athlete_profile"]({"ftp_watts": 263.0})
+
+    assert "error" in result
 
 
 # --- sync_workouts -----------------------------------------------------------
@@ -1378,6 +1672,194 @@ def test_create_event_invalid_target_metric_is_an_error(athletes_dir) -> None:
         }
     )
     assert "error" in result
+
+
+# --- create_event primary_sport + the bike-macro-week regression (threshold-history) ---
+# Real, audited gap: generate_week's own primary_sport parameter was only
+# correctly threaded through ONE of its 5 real call sites. Event.primary_sport
+# (this build's fix) is the explicit, coach-settable source of truth every
+# other call site now reads -- these tests prove the exact bug end-to-end,
+# not just that the code changed.
+
+
+def test_create_event_primary_sport_defaults_to_swim(athletes_dir, run_tag) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["create_event"](
+        {
+            "name": f"Test Default Sport Event [{run_tag}]",
+            "event_date": "2027-01-01",
+            "distance_m": 5000,
+            "priority": "A",
+        }
+    )
+    assert "error" not in result
+    assert result["primary_sport"] == "swim"
+
+
+def test_create_event_accepts_primary_sport_bike(athletes_dir, run_tag) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    name = f"Test Bike Event [{run_tag}]"
+    result = handlers["create_event"](
+        {
+            "name": name,
+            "event_date": "2027-06-01",
+            "target_metric": "duration_min",
+            "target_value": 300.0,
+            "priority": "B",
+            "primary_sport": "bike",
+        }
+    )
+    assert "error" not in result
+    assert result["primary_sport"] == "bike"
+
+    reloaded = FileStore(base_dir=athletes_dir).load_events("renee")
+    matching = next(e for e in reloaded if e.name == name)
+    assert matching.primary_sport == "bike"
+
+
+def test_create_event_invalid_primary_sport_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["create_event"](
+        {
+            "name": "Test Event",
+            "event_date": "2027-01-01",
+            "distance_m": 5000,
+            "priority": "A",
+            "primary_sport": "run",
+        }
+    )
+    assert "error" in result
+
+
+def _bike_macro_via_tools(handlers, store, run_tag, event_name_suffix="Century") -> tuple[str, dict]:
+    """Shared setup for the two regression tests below: create_event
+    (primary_sport="bike") then draft_macro_plan, both via the real tool
+    handlers (not a hand-built fixture) -- returns (first_iso_week,
+    create_week_plan-ready state). Mirrors the exact real-world sequence a
+    coach session would run."""
+    name = f"Test Bike {event_name_suffix} [{run_tag}]"
+    create_result = handlers["create_event"](
+        {
+            "name": name,
+            "event_date": "2027-06-01",
+            "target_metric": "duration_min",
+            "target_value": 300.0,
+            "priority": "B",
+            "primary_sport": "bike",
+        }
+    )
+    assert "error" not in create_result, create_result
+
+    macro_result = handlers["draft_macro_plan"](
+        {
+            "event_name": name,
+            "current_weekly_volume_m": 200,
+            "peak_weekly_volume_m": 600,
+            # A Monday after renee's existing week-plan fixture files
+            # (2026-W28/W29) so this macro's first week doesn't collide with
+            # an already-persisted week.
+            "start_date": "2026-09-07",
+        }
+    )
+    assert "error" not in macro_result, macro_result
+
+    first_block_start = date.fromisoformat(macro_result["blocks"][0]["start_date"])
+    year, week, _ = first_block_start.isocalendar()
+    iso_week = f"{year}-W{week:02d}"
+    return iso_week, macro_result
+
+
+def test_create_event_bike_then_create_week_plan_produces_real_bike_sessions(
+    athletes_dir, run_tag
+) -> None:
+    """The exact bug this build fixes: `_handle_create_week_plan` used to
+    call `generate_week` with NO primary_sport/ftp_watts at all, so creating
+    the first week of a bike-primary macro silently produced a full swim
+    week (pool placeholders, long-swim ladder) instead of real bike
+    sessions. Proven end-to-end via the real tool chain: create_event
+    (primary_sport="bike") -> draft_macro_plan -> create_week_plan."""
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    iso_week, _macro_result = _bike_macro_via_tools(handlers, store, run_tag, "CWP Century")
+
+    result = handlers["create_week_plan"]({"iso_week": iso_week})
+    assert "error" not in result, result
+    assert len(result["sessions"]) > 0
+
+    sports = {s["sport"] for s in result["sessions"]}
+    assert "bike" in sports
+    assert "swim_pool" not in sports
+    assert "swim_ow" not in sports
+    # strength is the only non-bike sport a bike-primary week legitimately
+    # includes (see plan.py's bike-strength-placement fix, PR #167 Finding 3).
+    assert sports <= {"bike", "strength"}
+
+
+def test_create_event_bike_then_replace_week_plan_produces_real_bike_sessions(
+    athletes_dir, run_tag
+) -> None:
+    """Same bug, `_handle_replace_week_plan` call site -- proven separately
+    per this build's own verification discipline, not assumed identical just
+    because the two handlers look alike."""
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    iso_week, _macro_result = _bike_macro_via_tools(handlers, store, run_tag, "RWP Century")
+
+    result = handlers["replace_week_plan"]({"iso_week": iso_week, "confirm": True})
+    assert "error" not in result, result
+    assert len(result["sessions"]) > 0
+
+    sports = {s["sport"] for s in result["sessions"]}
+    assert "bike" in sports
+    assert "swim_pool" not in sports
+    assert "swim_ow" not in sports
+    assert sports <= {"bike", "strength"}
+
+
+def test_create_week_plan_swim_event_primary_sport_threading_is_byte_identical(athletes_dir) -> None:
+    """Event.primary_sport defaults to "swim" -- every existing swim event
+    (no primary_sport key in events.yaml) reads exactly that default, so
+    this build's primary_sport=/ftp_watts= threading through
+    `_handle_create_week_plan` must be provably a no-op for the swim path
+    this whole app runs on today. Proven by comparing the tool handler's new
+    output against the exact positional-only `generate_week` call this
+    handler made BEFORE the fix (no primary_sport/ftp_watts kwargs at all,
+    matching the pre-fix source)."""
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    macro = store.load_macro("renee")
+    events = store.load_events("renee")
+    event = next(e for e in events if e.id == macro.event_id)
+    assert event.primary_sport == "swim"  # every real events.yaml today has no primary_sport key
+
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    new_result = handlers["create_week_plan"]({"iso_week": "2026-W30"})
+    assert "error" not in new_result
+
+    week_start = date.fromisocalendar(2026, 30, 1)
+    event_format = event.event_format or "single_day"
+    old_week = generate_week(athlete, macro, "2026-W30", week_start, event_format, None, event)
+    old_sessions = [
+        {
+            "date": s.date.isoformat(),
+            "sport": s.sport,
+            "source": s.source,
+            "distance_m": s.distance_m,
+            "duration_min": s.duration_min,
+            "purpose": s.purpose,
+        }
+        for s in old_week.sessions
+    ]
+
+    assert new_result["target_volume_m"] == old_week.target_volume_m
+    assert new_result["meso_block"] == old_week.meso_block
+    assert new_result["focus"] == old_week.focus
+    assert new_result["sessions"] == old_sessions
 
 
 # --- draft_macro_plan -----------------------------------------------------------

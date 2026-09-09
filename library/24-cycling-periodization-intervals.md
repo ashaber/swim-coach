@@ -181,6 +181,74 @@ practitioner-convention race-specificity application of the same
 duration/ratio principle, not a distinct physiological mechanism from
 "short-short."
 
+## Ramp test protocol and FTP formula (threshold-history build)
+
+Grounds `plan.py`'s `_bike_ramp_test_structure`/`ftp_from_ramp_test` -- a
+real, dedicated FTP-establishing test for when no current reading exists
+at all (distinct from the "doubles as a fitness check" purpose-text note
+`_bike_week_sessions` attaches to an ordinary sustained-threshold session
+when the athlete's current FTP is only an estimate, not a fresh test --
+see that function's own docstring; Andrew's own real block-01 (Tim's app)
+embeds the latter, not a dedicated ramp test, precisely because his own
+FTP was already reasonably well-known).
+
+**Protocol.** A few minutes of easy warm-up spinning, then a continuous
+ramp: start around 100W (or roughly 50% of an already-estimated FTP if one
+exists), increase 20W every minute, continue to voluntary failure --
+typically 8-25 minutes total including the build, depending on fitness.
+**✓ Verified by direct fetch this session.** Roadman Cycling's own "How to
+Do a Ramp Test for FTP" guide states this plainly: "A common structure
+starts around 100W (or roughly 50% of estimated FTP) and adds 20W per
+minute," each stage lasting one minute, with warm-up described only as "a
+few minutes of easy spinning... enough" (no exact figure given). This
+matches the same step-rate/starting-wattage convention TrainerRoad and
+Zwift's own ramp tests use.
+
+**FTP formula: 75% of best 1-minute power.** Take the athlete's best
+1-minute average power reached during the test (typically the final
+completed or near-completed stage); FTP = that value x 0.75. Worked
+example from the same source: "If your final minute averaged 320W, your
+FTP estimate is 240W." **`Coach judgment:` treat this as a genuine,
+directly-fetch-confirmed practical resource (this file's own reference_list.md
+"Practical / non-journal resources" tier), NOT an `[EVIDENCE]`/`[ADAPTED]`
+claim** -- despite extensive searching this session (multiple queries
+across CycleCoach.com, TrainerRoad, Roadman Cycling, Zwift Insider, and a
+general academic-publication search), no peer-reviewed journal paper
+establishing this specific 72-77%/75% figure could be located. It traces
+to Ric Stern (CycleCoach.com; 25+ years as a cycling coach and sport
+scientist) -- ✓ verified by direct fetch this session against his own
+site: his "Ramp Testing" article (cyclecoach.com/blog/2019/1/13) states
+"you can use it to estimate your FTP. This would usually be in the 72 to
+77% range," describing this as his own quantified observation from ramp
+testing at the University of Brighton, not a citation to a separate,
+independently-published study -- his site's own bio page (cyclecoach.com/
+ric-stern, direct-fetch confirmed) similarly credits him only with having
+"developed early ramp-test-based models for estimating sustainable
+threshold power from maximal aerobic power (MAP)... that later informed
+widely adopted MAP-to-FTP conversion approaches," with no journal citation
+attached. **Confidence: medium** -- a real, named, credentialed
+practitioner-expert's own directly-fetched, cross-confirmed figure
+(Roadman Cycling's independent description of "well-established and used
+across TrainerRoad and Zwift" corroborates the same 75% number), but
+resting on his own stated coaching-practice experience rather than a
+citable peer-reviewed trial. **Test:** if an athlete's ramp-test-derived
+FTP consistently overshoots what a subsequent real-world sustained effort
+(a race file, or the embedded threshold-check session above) can actually
+hold, that is this athlete's own individual-variation signal (the 72-77%
+range itself, not just the 75% midpoint) -- prefer the real sustained
+effort over the ramp-test estimate going forward, per `ThresholdRecord`'s
+own "coach judges trustworthiness, engine never auto-picks" design.
+
+The ramp itself is genuinely continuous in the real protocol only at the
+per-minute-stage level (a new fixed wattage each minute, not a smooth
+line) -- `plan.py`'s `_bike_ramp_test_structure` approximates this as one
+continuous linear ZWO `<Ramp>` element over a fixed 20-minute window
+(`Coach judgment`, the middle of the observed 8-25 minute range) rather
+than modeling 20 discrete one-minute steps; an athlete who fails before
+reaching the ramp's end simply stops early, same as the real protocol's
+own termination rule. See that function's own docstring for the full
+engineering rationale.
+
 ## Deferred to a future build stage
 
 Not attempted in this pass, consistent with the task scope: wiring any of
@@ -190,3 +258,13 @@ above into `plan.py`'s `_bike_week_sessions` (deload cadence) or
 selected by week/discipline instead of the current flat single-block
 default) is real future engine work, not attempted here. No `plan.py`
 changes were made by this pass.
+
+**Threshold-history build (later pass):** the ramp-test protocol/formula
+section above WAS wired into `plan.py` (`_bike_ramp_test_structure`/
+`ftp_from_ramp_test`) and the FTP-check purpose-text note (`_bike_week_
+sessions`'s `ftp_source` parameter) -- see that build's own PR. The deload-
+cadence/interval-template wiring this section originally deferred was
+completed separately, prior to the threshold-history build (see PR #167
+and the `engine/cycling-coach` branch's later commits) -- this file's
+"Deferred to a future build stage" framing above predates that wiring and
+is retained for its historical record, not because the gap is still open.

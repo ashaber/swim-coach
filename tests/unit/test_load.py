@@ -1361,3 +1361,22 @@ def test_session_target_load_au_always_positive():
             intensity["zone"] = zone
         session = make_session(duration_min=20.0, intensity=intensity)
         assert session_target_load_au(session, athlete) > 0
+
+
+# --- threshold-history build: load.py behavior is completely unchanged -----
+
+
+def test_load_module_has_no_threshold_record_dependency():
+    # Same regression guard as test_zones.py's own -- load.py's TRIMP/TSS
+    # math reads Athlete.lthr_bpm/ftp_watts (the already-existing resolved
+    # fields) directly, never ThresholdRecord history. This build is
+    # additive-only: an athlete with zero ThresholdRecord entries on file
+    # (every real athlete's state immediately after this ships) must
+    # compute identical load numbers to before this build existed.
+    import inspect
+
+    import swim_coach.load as load_mod
+
+    source = inspect.getsource(load_mod)
+    assert "ThresholdRecord" not in source
+    assert "threshold_record" not in source

@@ -167,6 +167,31 @@ class Event(BaseModel):
     # lifted). Defaults to "distance_m" so every existing Event YAML (no
     # target_metric key) validates unchanged and means exactly what it
     # always meant -- additive, no schema_version bump.
+    primary_sport: Literal["swim", "bike"] = "swim"
+    # Which sport this event is FOR -- deliberately the same `Literal["swim",
+    # "bike"]` shape `plan.generate_week`'s own `primary_sport` parameter
+    # already uses (not the finer-grained `Sport` enum `Workout`/`Session`
+    # rows use, which distinguishes `swim_pool`/`swim_ow` -- an event's
+    # primary discipline doesn't need that granularity). Deliberately
+    # ORTHOGONAL to `target_metric` above: `target_metric` says what UNIT
+    # this event's target is measured in (distance/duration/load),
+    # `primary_sport` says WHICH SPORT it's for -- do not infer one from the
+    # other anywhere, going forward. That conflation was a real, audited bug
+    # (threshold-history build): `backend/app/tools.py`'s
+    # `_handle_propose_adaptation` and `cli.py`'s `_cmd_adapt` used to derive
+    # `primary_sport = "bike" if event.target_metric != "distance_m" else
+    # "swim"` -- invisible only while bike was the sole non-swim sport and
+    # happened to always use `duration_min`; a future running event (running
+    # is typically ALSO distance-based, e.g. a 5K) would be misidentified as
+    # "swim" under that inference. A plain, flat `Literal` string list (not
+    # a richer type) is the right shape for "cheap to extend later, don't
+    # over-engineer now" -- same precedent as `ThresholdRecord.metric` and
+    # `00-conventions.md`'s `[EVIDENCE: <discipline>]` tag -- extend the
+    # Literal with each new sport as it's actually built (running next, per
+    # ROADMAP.md). Defaults "swim" so every existing Event YAML (no
+    # primary_sport key) validates unchanged and means exactly what it
+    # always meant -- additive, no schema_version bump, matching every other
+    # additive field in this file.
     distance_m: int | None = Field(default=None, gt=0)
     # Relaxed from required (`Field(gt=0)`) to optional -- required in
     # practice (enforced by `_validate_target_metric_fields` below) only
@@ -296,7 +321,18 @@ class WorkoutStep(BaseModel):
     schema_version: int = 1
     kind: Literal["step"] = "step"
     label: str  # athlete-facing short name
-    role: Literal["warmup", "steady", "interval", "rest", "recovery", "cooldown", "open"]
+    role: Literal["warmup", "steady", "interval", "rest", "recovery", "cooldown", "open", "ramp"]
+    # "ramp" added for the bike ramp-test generator (`plan._bike_ramp_test_
+    # structure` -- threshold-history build): a genuine mid-workout power
+    # PROGRESSION (start low, climb steadily to a real ceiling), unlike
+    # every other role's flat/fixed target. Before this, no real producer
+    # in this codebase ever emitted a role whose `WorkoutTarget` low/high
+    # bounds were meant to be read as "climbs from low to high over the
+    # step's duration" rather than "a flat target band" -- `zwo_export.
+    # _convert_leaf`'s own `<Ramp>`-element branch existed only as
+    # defensive/forward-compatible dead code, documented there as
+    # UNREACHABLE via any value of this Literal that existed at the time.
+    # "ramp" is the first role that actually reaches it.
     duration_kind: Literal["time_s", "distance_m", "reps", "open"]
     duration_value: float | None = None
     target: WorkoutTarget | None = None  # swim/cardio steps
@@ -936,6 +972,87 @@ class HealthStatus(BaseModel):
     onset: Literal["acute", "gradual"] | None = None
     severity: Literal["slight", "minimal", "mild", "moderate", "serious", "long_term"] | None = None
     related_status_id: UUID | None = None
+
+
+class ThresholdRecord(BaseModel):
+    """A durable, append-only LOG of one dated per-sport threshold reading
+    -- same shape as `HealthStatus` above, and for the same reason: a
+    threshold (FTP, LTHR, CSS) is not a single mutable fact, it decays in
+    accuracy over time, and a later reading must never silently erase an
+    earlier one's record. Built to close a real gap: PR #167 added three
+    ad-hoc, undated, unsourced threshold fields directly on `Athlete`
+    (`css_pace_s_per_100m`, `lthr_bpm`, `ftp_watts`) with no way for the
+    coach to ever write them at all -- `record_health_status`/`create_event`
+    existed as real coach tools, but nothing let the coach persist an
+    athlete's own reported FTP. Rather than bolt on a narrow "set FTP" tool,
+    this generalizes the requirement, verbatim from Andrew (the athlete/
+    project owner) this session: "We know for HR based training, will use
+    LTHR, for run, pace. But, there are per-sport values. This value needs
+    to be stored, dated (it will decompose over time). Coach can use
+    judgement for trustworthiness of the value (I was 350w 10 years ago is
+    invalid vs, ramp test last week is accurate)."
+
+    The ENGINE's job is only to store/surface this history -- see
+    `backend/app/context.py`'s `_recent_thresholds`/render function -- it
+    NEVER picks a "current" value automatically; the COACH exercises
+    judgment about which reading is currently trustworthy (a ramp test last
+    week outweighs a number from ten years ago), the same "never let the
+    engine guess at subjective trust" boundary `HealthStatus` already draws
+    for injury-restriction judgment (see that model's own docstring). The
+    engine-resolved value an athlete's zones/load math actually reads stays
+    exactly where it already lives -- `Athlete.ftp_watts`/`lthr_bpm`/
+    `css_pace_s_per_100m` -- set via `update_athlete_profile`
+    (`backend/app/tools.py`) only after a human or the coach model judges a
+    `ThresholdRecord` reading trustworthy enough to adopt; this model itself
+    resolves nothing.
+
+    Every entry ever recorded stays on file permanently (this codebase's
+    own safety rail: never delete logs; see CLAUDE.md) -- there is no
+    resolved/superseded flag on this model at all (unlike `HealthStatus`'s
+    `resolved`), because a threshold reading is never "wrong" the way an
+    open injury status can be closed out -- it just ages. Recency
+    (`measured_at`) and provenance (`source`) are read together, not
+    collapsed into one score.
+
+    `metric` is a flat string list, trivially extensible (e.g. a future
+    `run_pace_s_per_km` once running support exists -- IDEA 008's later
+    build, not this one). Deliberately NOT derived from `sport` alone -- an
+    athlete could plausibly have both an HR- and pace-based reading for the
+    same sport (e.g. LTHR from a chest strap alongside a CSS-equivalent
+    pace test for the same swim sport), so `sport` and `metric` are
+    independent axes, both required.
+
+    `source` is the trustworthiness signal Andrew's own example names
+    directly: "I was 350w 10 years ago" -> `self_reported_historical`;
+    "ramp test last week" -> `ramp_test`. Coach-facing, not engine-consumed
+    -- the coach reads this alongside `measured_at` to judge recency and
+    provenance together, same two-axis judgment `HealthStatus`'s
+    `reported_by`/`source` pair already models for a different question.
+    `field_test` covers a real standalone test that ISN'T the ramp-test
+    protocol (e.g. a swim CSS time-trial pair, a 20-minute FTP test);
+    `app_estimate` covers a platform's own algorithmic estimate (e.g.
+    TrainerRoad's AI FTP detection) -- real signal, but modelled rather than
+    directly tested, which is exactly the kind of distinction Andrew's own
+    "modelled not tested" framing (his real profile.md) already draws and
+    this field makes structurally queryable instead of only prose.
+
+    `notes` is free text, e.g. "TrainerRoad AI FTP detection, modelled not
+    tested" (matching Andrew's own real profile.md phrasing) -- same role
+    `HealthStatus.description` plays: the engine can't safely parse this,
+    the coach can.
+    """
+
+    schema_version: int = 1
+    id: UUID
+    athlete_id: UUID
+    sport: Sport
+    metric: Literal["ftp_watts", "lthr_bpm", "css_pace_s_per_100m"]
+    value: float
+    measured_at: date
+    source: Literal[
+        "field_test", "ramp_test", "race_file", "app_estimate", "self_reported_historical"
+    ]
+    notes: str | None = None
 
 
 CoachGrantStatus = Literal["active", "revoked"]

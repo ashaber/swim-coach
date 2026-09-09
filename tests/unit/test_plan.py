@@ -733,6 +733,186 @@ def test_bike_race_pace_hard_session_is_a_real_repeat_structure():
     assert work.duration_value == pytest.approx(150.0)  # BIKE_RACE_PACE_WORK_S
 
 
+# --- threshold-history build: FTP-check purpose-text note -----------------
+
+
+def test_bike_first_sustained_threshold_week_notes_ftp_check_when_source_is_app_estimate():
+    athlete = make_athlete(sports=["bike"])
+    sessions = _bike_week_sessions(
+        athlete, START, 300.0, 250.0, week_index=0, ftp_source="app_estimate"
+    )
+    assert _select_bike_interval_template(0) == "sustained_threshold"
+    hard = next(s for s in sessions if s.intensity["zone"] == "Z4")
+    assert "also doubles as a rough FTP check" in hard.purpose
+
+
+def test_bike_first_sustained_threshold_week_notes_ftp_check_when_source_is_self_reported_historical():
+    athlete = make_athlete(sports=["bike"])
+    sessions = _bike_week_sessions(
+        athlete, START, 300.0, 250.0, week_index=0, ftp_source="self_reported_historical"
+    )
+    hard = next(s for s in sessions if s.intensity["zone"] == "Z4")
+    assert "also doubles as a rough FTP check" in hard.purpose
+
+
+def test_bike_first_sustained_threshold_week_no_note_when_ftp_source_is_a_real_test():
+    athlete = make_athlete(sports=["bike"])
+    for real_source in ("field_test", "ramp_test", "race_file"):
+        sessions = _bike_week_sessions(
+            athlete, START, 300.0, 250.0, week_index=0, ftp_source=real_source
+        )
+        hard = next(s for s in sessions if s.intensity["zone"] == "Z4")
+        assert "FTP check" not in hard.purpose
+
+
+def test_bike_first_sustained_threshold_week_no_note_when_ftp_source_is_none():
+    # Default -- every existing call site keeps producing byte-identical
+    # output unless updated to pass ftp_source.
+    athlete = make_athlete(sports=["bike"])
+    sessions = _bike_week_sessions(athlete, START, 300.0, 250.0, week_index=0)
+    hard = next(s for s in sessions if s.intensity["zone"] == "Z4")
+    assert "FTP check" not in hard.purpose
+
+
+def test_bike_ftp_check_note_only_on_the_first_sustained_threshold_week_not_later_ones():
+    # week_index=4 also lands on "sustained_threshold" (the rotation cycles
+    # every 4 weeks), but it is NOT the macro's first occurrence -- the note
+    # is deliberately scoped to week_index == 0 only.
+    athlete = make_athlete(sports=["bike"])
+    assert _select_bike_interval_template(4) == "sustained_threshold"
+    sessions = _bike_week_sessions(
+        athlete, START, 300.0, 250.0, week_index=4, ftp_source="app_estimate"
+    )
+    hard = next(s for s in sessions if s.intensity["zone"] == "Z4")
+    assert "FTP check" not in hard.purpose
+
+
+def test_bike_ftp_check_note_only_on_sustained_threshold_not_other_templates():
+    # week_index=1 -> "over_unders" -- an app_estimate source must not leak
+    # the note onto a week whose hard session isn't even the
+    # sustained_threshold template this heuristic is scoped to.
+    athlete = make_athlete(sports=["bike"])
+    assert _select_bike_interval_template(1) == "over_unders"
+    sessions = _bike_week_sessions(
+        athlete, START, 300.0, 250.0, week_index=1, ftp_source="app_estimate"
+    )
+    hard = next(s for s in sessions if s.intensity["zone"] == "Z4")
+    assert "FTP check" not in hard.purpose
+
+
+def test_bike_ftp_check_note_reaches_generate_week_end_to_end():
+    athlete, event, macro = _make_bike_macro()
+    week_start = macro.blocks[0].start_date
+
+    week = generate_week(
+        athlete,
+        macro,
+        _iso_week(week_start),
+        week_start,
+        primary_sport="bike",
+        ftp_watts=250.0,
+        ftp_source="app_estimate",
+    )
+    hard = next(s for s in week.sessions if s.sport == "bike" and s.intensity.get("zone") == "Z4")
+    assert "also doubles as a rough FTP check" in hard.purpose
+
+
+# --- threshold-history build: bike ramp test --------------------------------
+
+
+def test_bike_ramp_test_structure_starts_with_warmup_then_ramp_role():
+    from swim_coach.plan import _bike_ramp_test_structure
+
+    structured = _bike_ramp_test_structure(None)
+    assert structured.items[0].role == "warmup"
+    assert structured.items[1].role == "ramp"
+    assert structured.items[1].modality == "bike"
+    assert structured.items[1].target.basis == "power_w"
+
+
+def test_bike_ramp_test_structure_no_current_ftp_uses_fixed_default_start():
+    from swim_coach.plan import (
+        BIKE_RAMP_TEST_START_WATTS_DEFAULT,
+        _bike_ramp_test_structure,
+    )
+
+    structured = _bike_ramp_test_structure(None)
+    ramp = structured.items[1]
+    assert ramp.target.low == pytest.approx(BIKE_RAMP_TEST_START_WATTS_DEFAULT)
+
+
+def test_bike_ramp_test_structure_known_ftp_starts_at_half_ftp():
+    from swim_coach.plan import (
+        BIKE_RAMP_TEST_START_FRACTION_OF_FTP,
+        _bike_ramp_test_structure,
+    )
+
+    structured = _bike_ramp_test_structure(300.0)
+    ramp = structured.items[1]
+    assert ramp.target.low == pytest.approx(300.0 * BIKE_RAMP_TEST_START_FRACTION_OF_FTP)
+
+
+def test_bike_ramp_test_structure_climbs_steadily_not_flat():
+    from swim_coach.plan import _bike_ramp_test_structure
+
+    structured = _bike_ramp_test_structure(250.0)
+    ramp = structured.items[1]
+    assert ramp.target.high > ramp.target.low  # a real climb, not a flat block
+
+
+def test_bike_ramp_test_structure_no_nonsensical_negative_or_zero_values():
+    # The warm-up step legitimately carries a Z1-derived low bound of 0
+    # (same zero-floor case zwo_export._convert_leaf corrects at export
+    # time for every bike warm-up in this engine, not specific to the ramp
+    # test) -- this test's own job is the RAMP step specifically, which
+    # must always be a real, positive, genuinely climbing power range.
+    from swim_coach.plan import _bike_ramp_test_structure
+
+    for ftp in (None, 150.0, 300.0, 500.0):
+        structured = _bike_ramp_test_structure(ftp)
+        ramp = next(item for item in structured.items if item.role == "ramp")
+        assert ramp.duration_value > 0
+        assert ramp.target.low > 0
+        assert ramp.target.high > ramp.target.low
+
+
+def test_bike_ramp_test_structure_exports_valid_ramp_element():
+    # Real end-to-end proof: build the structure, export it through the
+    # exact same ZWO pipeline any other bike session uses, and read the
+    # raw XML back -- matching this session's own discipline of reading
+    # real output, not just trusting a structure-level assertion.
+    import xml.etree.ElementTree as ET
+
+    from swim_coach.plan import _bike_ramp_test_structure
+    from swim_coach.zwo_export import to_zwo_workout
+
+    structured = _bike_ramp_test_structure(263.0)
+    xml_str = to_zwo_workout(structured, ftp_watts=263.0, name="FTP Ramp Test")
+    root = ET.fromstring(xml_str)
+    workout = root.find("workout")
+    tags = [child.tag for child in workout]
+    assert tags[0] == "Warmup"
+    assert "Ramp" in tags
+    ramp = workout.find("Ramp")
+    assert float(ramp.attrib["PowerLow"]) > 0
+    assert float(ramp.attrib["PowerHigh"]) > float(ramp.attrib["PowerLow"])
+    assert int(ramp.attrib["Duration"]) > 0
+    # Cool-down auto-appended by to_zwo_workout's own trailing fallback --
+    # this generator deliberately appends no cool-down of its own (a real
+    # ramp test ends at voluntary failure, not a planned duration).
+    assert tags[-1] == "Cooldown"
+
+
+def test_ftp_from_ramp_test_applies_75_percent_of_best_1min_power():
+    from swim_coach.plan import BIKE_RAMP_TEST_FTP_FROM_BEST_1MIN_FRACTION, ftp_from_ramp_test
+
+    assert BIKE_RAMP_TEST_FTP_FROM_BEST_1MIN_FRACTION == pytest.approx(0.75)
+    # Matches roadmancycling.com's own worked example, direct-fetch
+    # confirmed this session: "If your final minute averaged 320W, your
+    # FTP estimate is 240W."
+    assert ftp_from_ramp_test(320.0) == pytest.approx(240.0)
+
+
 def test_bike_interval_template_low_volume_degrades_to_flat_block():
     # Same low-volume graceful-degradation posture as _resolve_bike_session_
     # count -- when the available main-block time is too small to fit even

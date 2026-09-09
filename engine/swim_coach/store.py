@@ -27,6 +27,7 @@ from swim_coach.models import (
     HealthStatus,
     MacroPlan,
     Sport,
+    ThresholdRecord,
     Wellness,
     WeekPlan,
     Workout,
@@ -163,6 +164,35 @@ class StoreInterface(ABC):
         mutation this log allows (see `save_health_status`'s docstring).
         Returns the updated entry, or None if `health_status_id` doesn't
         match any entry for this athlete."""
+        ...
+
+    # --- Threshold records (durable, dated, per-sport threshold log) -----
+
+    @abstractmethod
+    def save_threshold_record(self, slug: str, entry: ThresholdRecord) -> None:
+        """Append one durable threshold-reading entry (see
+        models.ThresholdRecord's own docstring for why this is a log, never
+        a single mutable field). Never overwrites or deletes a previous
+        entry -- unlike `HealthStatus`, there is no in-place mutation for
+        this log at all (no `resolved` flag to flip): a threshold reading
+        never becomes "wrong," it just ages."""
+        ...
+
+    @abstractmethod
+    def list_threshold_records(
+        self, slug: str, *, sport: Sport | None = None, metric: str | None = None
+    ) -> list[ThresholdRecord]:
+        """Every threshold-record entry for this athlete, most-recent-first
+        by `measured_at` (ties broken by `id`, same deterministic-tiebreak
+        convention `list_health_status` documents, so `FileStore` and
+        `DbStore` return identical ordering for identical data). `sport`/
+        `metric`, when given, narrow the result to that sport/metric only
+        -- both `None` (the default) returns the athlete's full threshold
+        history across every sport/metric. This function NEVER picks a
+        "current" value -- see `backend/app/context.py`'s
+        `_recent_thresholds` for the reference read pattern and
+        `ThresholdRecord`'s own docstring for why: that judgment call stays
+        with the coach, not the engine."""
         ...
 
     @abstractmethod
@@ -532,6 +562,45 @@ class FileStore(StoreInterface):
                 _write_yaml(self._health_status_path(slug, updated), _dump_model(updated))
                 return updated
         return None
+
+    # --- Threshold records (durable, dated, per-sport threshold log) -----
+
+    def _threshold_record_path(self, slug: str, entry: ThresholdRecord) -> Path:
+        # One file per entry, same "date + short id" naming as
+        # `_health_status_path` -- multiple threshold entries can
+        # legitimately land the same day (e.g. a ramp test result logged
+        # right alongside the athlete correcting an old self-reported
+        # value).
+        directory = self._athlete_dir(slug) / "logs" / "threshold-records"
+        short_id = str(entry.id)[:8]
+        return directory / f"{entry.measured_at.isoformat()}-{short_id}.yaml"
+
+    def save_threshold_record(self, slug: str, entry: ThresholdRecord) -> None:
+        _write_yaml(self._threshold_record_path(slug, entry), _dump_model(entry))
+
+    def list_threshold_records(
+        self, slug: str, *, sport: Sport | None = None, metric: str | None = None
+    ) -> list[ThresholdRecord]:
+        directory = self._athlete_dir(slug) / "logs" / "threshold-records"
+        if not directory.exists():
+            return []
+        entries: list[ThresholdRecord] = []
+        for path in sorted(directory.glob("*.yaml")):
+            data = _read_yaml(path)
+            if data is not None:
+                entry = ThresholdRecord.model_validate(data)
+                if sport is not None and entry.sport != sport:
+                    continue
+                if metric is not None and entry.metric != metric:
+                    continue
+                entries.append(entry)
+        # Same two-pass stable-sort tiebreak discipline as
+        # `list_health_status` above: id ascending first, then
+        # measured_at descending, so a tie on identical `measured_at`
+        # breaks identically to DbStore's `order by measured_at desc, id`.
+        entries.sort(key=lambda e: str(e.id))
+        entries.sort(key=lambda e: e.measured_at, reverse=True)
+        return entries
 
     # --- Feedback (durable, replaces research/open-questions.jsonl) --------
 

@@ -46,7 +46,16 @@ from swim_coach.library_review import (
     sort_for_review,
     strip_marker,
 )
-from swim_coach.models import Athlete, Event, HealthStatus, Session, Wellness, WeekPlan, Workout
+from swim_coach.models import (
+    Athlete,
+    Event,
+    HealthStatus,
+    Session,
+    ThresholdRecord,
+    Wellness,
+    WeekPlan,
+    Workout,
+)
 from swim_coach.parse_coach_text import parse_coach_text
 from swim_coach.parse_files import PARSERS_BY_EXTENSION, WorkoutDraft, backfill_sport_detail, parse_fit
 from swim_coach.plan import generate_week, scaffold_macro
@@ -160,11 +169,20 @@ def _cmd_validate(args: argparse.Namespace, store: StoreInterface) -> int:
         rc = _validate_dir(athlete_dir / "logs" / "health-status", HealthStatus, "health_status", counts)
         if rc is not None:
             return rc
+        # threshold-records: the durable, dated, per-sport threshold log
+        # (threshold-history build) -- same directory-glob validation as
+        # health-status above.
+        rc = _validate_dir(
+            athlete_dir / "logs" / "threshold-records", ThresholdRecord, "threshold_records", counts
+        )
+        if rc is not None:
+            return rc
     else:
         counts["weeks"] = 0
         counts["workouts"] = 0
         counts["wellness"] = 0
         counts["health_status"] = 0
+        counts["threshold_records"] = 0
 
     print(json.dumps({"athlete": slug, "counts": counts}))
     return 0
@@ -315,9 +333,24 @@ def _cmd_plan_week(args: argparse.Namespace, store: StoreInterface) -> int:
 
     event = _event_for_macro(store, slug, macro)
     event_format = event.event_format if event is not None else "single_day"
+    # `primary_sport`/`ftp_watts` read straight off `event.primary_sport`
+    # (never derived from `target_metric` -- see `Event.primary_sport`'s own
+    # comment). threshold-history build, real audit finding: this call site
+    # previously passed neither at all, so `plan-week` on a bike-primary
+    # macro silently generated a full swim week (pool placeholders,
+    # long-swim ladder) instead of real bike sessions.
+    primary_sport = event.primary_sport if event is not None else "swim"
+    ftp_watts = athlete.ftp_watts if primary_sport == "bike" else None
     try:
         week = generate_week(
-            athlete, macro, args.week, week_start, event_format=event_format, event=event
+            athlete,
+            macro,
+            args.week,
+            week_start,
+            event_format=event_format,
+            event=event,
+            primary_sport=primary_sport,
+            ftp_watts=ftp_watts,
         )
     except ValueError as exc:
         return _error(str(exc))
@@ -468,18 +501,23 @@ def _cmd_adapt(args: argparse.Namespace, store: StoreInterface) -> int:
     wellness = store.list_wellness(slug)
     as_of = week_start - timedelta(days=1)
 
-    # `primary_sport` derived the same way `_cmd_plan_week`/tools.py derive
-    # `event_format` from `event.event_format` -- `event.target_metric ==
-    # "distance_m"` is the only sport this engine's swim-shaped machinery is
-    # evidenced for; any other target_metric ("duration_min"/"load_au")
-    # reaches `generate_week`'s bike-primary path today (see that
-    # function's own "Known, deliberate scope limit" docstring note on
-    # load_au). `ftp_watts` comes straight off the athlete profile (same
-    # field `.zwo` export already reads) -- PR #167 red-team review,
-    # Finding 1 (must-fix): without this, `adapt_week`'s internal baseline
-    # call always defaulted to `primary_sport="swim"`, silently substituting
-    # a full swim week for a bike-primary athlete's real cut/advance draft.
-    primary_sport = "bike" if event.target_metric != "distance_m" else "swim"
+    # `primary_sport` read straight off `event.primary_sport` -- NOT derived
+    # from `target_metric`. threshold-history build, real audit finding:
+    # this used to be `"bike" if event.target_metric != "distance_m" else
+    # "swim"`, which conflates UNITS (what target_metric describes) with
+    # SPORT -- invisible only while bike was the sole non-swim sport and
+    # happened to always use `duration_min`. A future running event
+    # (running is typically ALSO distance-based, e.g. a 5K) would have been
+    # misidentified as "swim" under that inference. See
+    # `Event.primary_sport`'s own comment. `ftp_watts` comes straight off
+    # the athlete profile (same field `.zwo` export already reads), only
+    # meaningful for a bike-primary event -- PR #167 red-team review,
+    # Finding 1 (must-fix): without a real `primary_sport` passed through at
+    # all, `adapt_week`'s internal baseline call always defaulted to
+    # `primary_sport="swim"`, silently substituting a full swim week for a
+    # bike-primary athlete's real cut/advance draft.
+    primary_sport = event.primary_sport
+    ftp_watts = athlete.ftp_watts if primary_sport == "bike" else None
     try:
         week = adapt_week(
             athlete,
@@ -493,7 +531,7 @@ def _cmd_adapt(args: argparse.Namespace, store: StoreInterface) -> int:
             as_of,
             days_since_last_milestone=args.days_since_last_milestone,
             primary_sport=primary_sport,
-            ftp_watts=athlete.ftp_watts,
+            ftp_watts=ftp_watts,
         )
     except ValueError as exc:
         return _error(str(exc))

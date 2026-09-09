@@ -210,17 +210,19 @@ def _convert_leaf(step: WorkoutStep, ftp_watts: float) -> tuple[str, dict[str, s
         # block.
         midpoint = (low + high) / 2
         return "SteadyState", {"Duration": duration_s, "Power": _fmt_power(midpoint)}
-    # A genuine range on any OTHER role would be a real build -- sibling
-    # skill's `<Ramp>` element ("power progressions in the body of the
-    # workout"). As of the "recovery"/"rest" fix above (engine/cycling-coach
-    # interval-template pass), this branch is UNREACHABLE via any value of
-    # `WorkoutStep.role`'s closed Literal type: "open" steps are filtered
-    # before conversion (`to_zwo_workout`), "warmup"/"cooldown" are
-    # special-cased above, and every remaining value ("steady", "interval",
-    # "recovery", "rest") now resolves to SteadyState. Kept as defensive/
-    # forward-compatible code (real, valid ZWO) in case a future role value
-    # or caller genuinely needs it -- see
-    # `test_ramp_element_unreachable_via_any_valid_workoutstep_role`.
+    # A genuine range on any OTHER role is a real build -- sibling skill's
+    # `<Ramp>` element ("power progressions in the body of the workout").
+    # As of the "recovery"/"rest" fix above (engine/cycling-coach
+    # interval-template pass), this branch was UNREACHABLE via any value of
+    # `WorkoutStep.role` that existed at the time: "open" steps are
+    # filtered before conversion (`to_zwo_workout`), "warmup"/"cooldown"
+    # are special-cased above, and "steady"/"interval"/"recovery"/"rest"
+    # all resolve to SteadyState. The threshold-history build's new "ramp"
+    # role (`plan._bike_ramp_test_structure`, a real bike ramp-test
+    # session's genuine start-low-climb-steadily main block) is the FIRST
+    # real producer that actually reaches this branch -- see
+    # `test_ramp_element_reachable_via_ramp_role` and
+    # `test_ramp_test_structure_exports_valid_ramp_element`.
     return "Ramp", {
         "Duration": duration_s,
         "PowerLow": _fmt_power(low),

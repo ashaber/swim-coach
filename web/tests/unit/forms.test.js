@@ -284,6 +284,23 @@ describe('profileFormFromAthlete', () => {
     const form = profileFormFromAthlete({ name: 'Andrew', pool_schedule: [] });
     expect(form.emailNotificationsEnabled).toBe(true);
   });
+
+  // threshold-history build: sports/ftpWatts read-only passthrough for the
+  // Settings tab's Sports & thresholds panel.
+  it('prefills sports and ftpWatts from an athlete profile', () => {
+    const athlete = {
+      name: 'Andrew', pool_schedule: [], sports: ['bike', 'swim_pool'], ftp_watts: 250,
+    };
+    const form = profileFormFromAthlete(athlete);
+    expect(form.sports).toEqual(['bike', 'swim_pool']);
+    expect(form.ftpWatts).toBe('250');
+  });
+
+  it('sports is null and ftpWatts is blank when the athlete has not set them yet', () => {
+    const form = profileFormFromAthlete({ name: 'Andrew', pool_schedule: [] });
+    expect(form.sports).toBeNull();
+    expect(form.ftpWatts).toBe('');
+  });
 });
 
 describe('serializeProfileForm', () => {
@@ -310,6 +327,16 @@ describe('serializeProfileForm', () => {
     const payload = serializeProfileForm(form);
     expect(payload.dob).toBeNull();
     expect(payload.sex).toBeNull();
+  });
+
+  it('never sends sports/ftp_watts (read-only, threshold-history build) even when present on the form', () => {
+    const form = {
+      name: 'Andrew', dob: '', sex: '', heightFeet: '', heightInches: '', weightLb: '', cssPace: '', poolDays: {},
+      sports: ['bike'], ftpWatts: '250',
+    };
+    const payload = serializeProfileForm(form);
+    expect(payload.sports).toBeUndefined();
+    expect(payload.ftp_watts).toBeUndefined();
   });
 
   it('omits height/weight/css_pace when unparseable rather than sending garbage', () => {

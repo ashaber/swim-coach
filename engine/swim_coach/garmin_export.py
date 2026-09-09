@@ -148,6 +148,11 @@ _ROLE_TO_INTENSITY: dict[str, Intensity] = {
     "recovery": Intensity.RECOVERY,
     "cooldown": Intensity.COOLDOWN,
     "open": Intensity.OTHER,
+    # "ramp" (threshold-history build's bike ramp-test generator): a genuine
+    # power progression, not an untargeted/other step -- ACTIVE is the
+    # closest real FIT intensity bucket (same as "steady"), FIT has no
+    # dedicated ramp/progression intensity value.
+    "ramp": Intensity.ACTIVE,
 }
 
 _DURATION_KIND_TO_FIT: dict[str, WorkoutStepDuration] = {

@@ -1638,6 +1638,25 @@ resource itself and are kept.
   <https://www.purplepatchfitness.com/freetrainingtips/triathlon-open-water-swimming-tips-and-strategies>
 - Fueling technique ("bottle on a string"):
   <https://www.youtube.com/watch?v=41c61sus4Xg>
+- Ric Stern / CycleCoach.com — "Ramp Testing" (blog, 2019-01-13) and his own
+  bio page (confirmed by direct fetch this session): source for the
+  72-77%/75% MAP-to-threshold-power ("FTP") conversion figure
+  `engine/swim_coach/plan.py`'s `BIKE_RAMP_TEST_FTP_FROM_BEST_1MIN_FRACTION
+  = 0.75` cites -- see `24-cycling-periodization-intervals.md`'s "Ramp test
+  protocol and FTP formula" section for the full writeup, including why
+  this is graded a practical resource rather than `[EVIDENCE]`/`[ADAPTED]`
+  (no peer-reviewed journal source for this specific figure could be
+  located despite an extensive search this session):
+  <https://www.cyclecoach.com/blog/2019/1/13/ramp-testing> and
+  <https://www.cyclecoach.com/ric-stern>
+- Roadman Cycling — "How to Do a Ramp Test for FTP" (confirmed by direct
+  fetch this session): source for `plan.py`'s ramp-test protocol constants
+  (`BIKE_RAMP_TEST_START_WATTS_DEFAULT = 100.0`,
+  `BIKE_RAMP_TEST_STEP_WATTS_PER_MIN = 20.0`) and the worked 320W-best-1min
+  -> 240W-FTP example `tests/unit/test_plan.py`'s
+  `test_ftp_from_ramp_test_applies_75_percent_of_best_1min_power` checks
+  against:
+  <https://roadmancycling.com/answers/how-to-do-a-ramp-test>
 
 Strength-technique demonstrations referenced by `plan.py`'s
 `STRENGTH_EXERCISE_REFERENCE_URLS` — Rehab Hero, a physiotherapy exercise
