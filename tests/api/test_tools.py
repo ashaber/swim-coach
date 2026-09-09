@@ -697,6 +697,299 @@ def test_get_workouts_unknown_athlete_behaves_like_other_handlers(athletes_dir) 
     assert result["count"] == 0
 
 
+# --- record_threshold_test ----------------------------------------------------
+
+
+def test_record_threshold_test_persists_a_dated_entry(athletes_dir, run_tag) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["record_threshold_test"](
+        {
+            "sport": "bike",
+            "metric": "ftp_watts",
+            "value": 263.0,
+            "measured_at": "2026-09-01",
+            "source": "ramp_test",
+            "notes": f"[{run_tag}] real ramp test",
+        }
+    )
+
+    assert result["logged"] is True
+    assert result["sport"] == "bike"
+    assert result["metric"] == "ftp_watts"
+    assert result["value"] == 263.0
+    assert result["measured_at"] == "2026-09-01"
+    assert result["source"] == "ramp_test"
+
+    records = store.list_threshold_records("renee")
+    assert len(records) == 1
+    entry = records[0]
+    assert entry.sport == "bike"
+    assert entry.metric == "ftp_watts"
+    assert entry.value == 263.0
+    assert entry.source == "ramp_test"
+    assert entry.notes == f"[{run_tag}] real ramp test"
+    assert str(entry.id) == result["threshold_record_id"]
+
+
+def test_record_threshold_test_does_not_write_a_linked_feedback_row(athletes_dir, run_tag) -> None:
+    # Unlike record_health_status, this is ordinary profile data, not a
+    # safety event -- no needs_human_review Feedback row should be written.
+    spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir))
+    handlers = build_tool_handlers(spy, slug="renee", expert_mode=False)
+
+    handlers["record_threshold_test"](
+        {
+            "sport": "bike",
+            "metric": "ftp_watts",
+            "value": 263.0,
+            "measured_at": "2026-09-01",
+            "source": "ramp_test",
+        }
+    )
+
+    assert spy.saved == []
+
+
+def test_record_threshold_test_never_overwrites_a_prior_entry(athletes_dir) -> None:
+    # Both an old self-reported value AND a recent field test stay on file
+    # -- the engine never picks a winner (ThresholdRecord's own design
+    # decision, verified here end-to-end through the tool handler).
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    handlers["record_threshold_test"](
+        {
+            "sport": "bike",
+            "metric": "ftp_watts",
+            "value": 350.0,
+            "measured_at": "2016-01-01",
+            "source": "self_reported_historical",
+            "notes": "I was 350w 10 years ago",
+        }
+    )
+    handlers["record_threshold_test"](
+        {
+            "sport": "bike",
+            "metric": "ftp_watts",
+            "value": 263.0,
+            "measured_at": "2026-09-01",
+            "source": "ramp_test",
+        }
+    )
+
+    records = store.list_threshold_records("renee")
+    assert len(records) == 2
+    assert [r.value for r in records] == [263.0, 350.0]  # newest first
+
+
+def test_record_threshold_test_missing_required_fields_is_rejected(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["record_threshold_test"]({"sport": "bike", "metric": "ftp_watts"})
+
+    assert "error" in result
+    assert store.list_threshold_records("renee") == []
+
+
+def test_record_threshold_test_invalid_sport_is_rejected(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["record_threshold_test"](
+        {
+            "sport": "not-a-sport",
+            "metric": "ftp_watts",
+            "value": 263.0,
+            "measured_at": "2026-09-01",
+            "source": "ramp_test",
+        }
+    )
+
+    assert "error" in result
+    assert store.list_threshold_records("renee") == []
+
+
+def test_record_threshold_test_invalid_metric_is_rejected(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["record_threshold_test"](
+        {
+            "sport": "bike",
+            "metric": "not-a-metric",
+            "value": 263.0,
+            "measured_at": "2026-09-01",
+            "source": "ramp_test",
+        }
+    )
+
+    assert "error" in result
+
+
+def test_record_threshold_test_invalid_source_is_rejected(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["record_threshold_test"](
+        {
+            "sport": "bike",
+            "metric": "ftp_watts",
+            "value": 263.0,
+            "measured_at": "2026-09-01",
+            "source": "not-a-source",
+        }
+    )
+
+    assert "error" in result
+
+
+def test_record_threshold_test_invalid_measured_at_is_rejected(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["record_threshold_test"](
+        {
+            "sport": "bike",
+            "metric": "ftp_watts",
+            "value": 263.0,
+            "measured_at": "not-a-date",
+            "source": "ramp_test",
+        }
+    )
+
+    assert "error" in result
+
+
+def test_record_threshold_test_invalid_value_is_rejected(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["record_threshold_test"](
+        {
+            "sport": "bike",
+            "metric": "ftp_watts",
+            "value": "not-a-number",
+            "measured_at": "2026-09-01",
+            "source": "ramp_test",
+        }
+    )
+
+    assert "error" in result
+
+
+# --- update_athlete_profile ---------------------------------------------------
+
+
+def test_update_athlete_profile_sets_ftp_watts(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["update_athlete_profile"]({"ftp_watts": 263.0})
+
+    assert result["updated"] is True
+    assert result["ftp_watts"] == 263.0
+    assert store.load_athlete("renee").ftp_watts == 263.0
+
+
+def test_update_athlete_profile_sets_multiple_fields_at_once(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["update_athlete_profile"](
+        {"ftp_watts": 263.0, "lthr_bpm": 158, "sports": ["swim_pool", "swim_ow", "bike"]}
+    )
+
+    assert result["updated"] is True
+    athlete = store.load_athlete("renee")
+    assert athlete.ftp_watts == 263.0
+    assert athlete.lthr_bpm == 158
+    assert athlete.sports == ["swim_pool", "swim_ow", "bike"]
+
+
+def test_update_athlete_profile_leaves_other_fields_untouched(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    before = store.load_athlete("renee")
+
+    handlers["update_athlete_profile"]({"ftp_watts": 263.0})
+
+    after = store.load_athlete("renee")
+    assert after.name == before.name
+    assert after.pool_schedule == before.pool_schedule
+    assert after.has_pool_coach == before.has_pool_coach
+
+
+def test_update_athlete_profile_no_fields_is_rejected(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["update_athlete_profile"]({})
+
+    assert "error" in result
+
+
+def test_update_athlete_profile_rejects_negative_ftp_watts(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    before = store.load_athlete("renee").ftp_watts
+
+    result = handlers["update_athlete_profile"]({"ftp_watts": -50.0})
+
+    assert "error" in result
+    assert store.load_athlete("renee").ftp_watts == before
+
+
+def test_update_athlete_profile_rejects_implausibly_large_ftp_watts(athletes_dir) -> None:
+    # A real review-bug shape this test guards against: an athlete typing
+    # "2630" instead of "263" (a unit/decimal slip) must be rejected, not
+    # silently accepted as a real FTP.
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["update_athlete_profile"]({"ftp_watts": 5000.0})
+
+    assert "error" in result
+
+
+def test_update_athlete_profile_rejects_implausible_lthr_bpm(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["update_athlete_profile"]({"lthr_bpm": 900})
+
+    assert "error" in result
+
+
+def test_update_athlete_profile_rejects_implausible_css_pace(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["update_athlete_profile"]({"css_pace_s_per_100m": -10.0})
+
+    assert "error" in result
+
+
+def test_update_athlete_profile_rejects_invalid_sports_value(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["update_athlete_profile"]({"sports": ["not-a-sport"]})
+
+    assert "error" in result
+
+
+def test_update_athlete_profile_rejects_unknown_athlete(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="no-such-athlete", expert_mode=False)
+
+    result = handlers["update_athlete_profile"]({"ftp_watts": 263.0})
+
+    assert "error" in result
+
+
 # --- sync_workouts -----------------------------------------------------------
 
 

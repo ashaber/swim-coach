@@ -61,7 +61,7 @@ from swim_coach.load import (
     wellness_baseline_deviation,
     wellness_trend,
 )
-from swim_coach.models import Athlete, Event, HealthStatus, Session, Workout
+from swim_coach.models import Athlete, Event, HealthStatus, Session, ThresholdRecord, Workout
 from swim_coach.store import StoreInterface
 
 from app.load_helpers import workout_load_au
@@ -1128,6 +1128,76 @@ def _render_active_health_status(statuses: list[HealthStatus]) -> str:
     return "\n".join(blocks)
 
 
+def _recent_thresholds(
+    records: list[ThresholdRecord], sport: str | None = None, metric: str | None = None
+) -> list[ThresholdRecord]:
+    """ALL of an athlete's threshold-record entries, optionally narrowed to
+    one `sport`/`metric`, newest-`measured_at`-first (ties broken by `id`
+    ascending, same deterministic tiebreak `store.list_threshold_records`
+    already applies -- reapplied here defensively since this function's
+    contract is to sort its own input, mirroring `_active_health_statuses`'
+    shape exactly). Deliberately mirrors that function's docstring in one
+    more way: this NEVER picks a single "current" value -- every entry that
+    matches the filter is returned, oldest reading included, because the
+    whole point of this model (see `models.ThresholdRecord`'s own
+    docstring) is that recency AND provenance are read together by the
+    COACH, not collapsed into a winner by the engine. An old self-reported
+    value and a recent field test both stay in the returned list,
+    unmodified, always."""
+    filtered = [
+        r for r in records
+        if (sport is None or r.sport == sport) and (metric is None or r.metric == metric)
+    ]
+    filtered.sort(key=lambda r: str(r.id))
+    filtered.sort(key=lambda r: r.measured_at, reverse=True)
+    return filtered
+
+
+def _render_threshold_history(records: list[ThresholdRecord]) -> str:
+    """A prominent per-request context block: EVERY threshold-record entry
+    on file for this athlete, grouped by (sport, metric), each group
+    newest-first -- never just the newest reading, see `_recent_thresholds`
+    above. Absence of ANY history for a given sport/metric is not rendered
+    as a false "no threshold known" claim here -- this function only
+    renders what actually exists; the coach is expected to read
+    `### Profile`'s own `ftp_watts`/`lthr_bpm`/`css_pace_s_per_100m` fields
+    for whatever resolved value (if any) is currently in effect, and use
+    THIS section's full history to judge whether that resolved value still
+    deserves trust, or whether a newer/better-sourced reading here should
+    prompt an `update_athlete_profile` call. This function makes no
+    "current value" pick of its own -- same explicit non-goal
+    `ThresholdRecord`'s own docstring states."""
+    if not records:
+        return (
+            "No threshold-test history is on file for this athlete. This means "
+            "nothing has ever been recorded -- it does NOT mean the athlete has "
+            "no real threshold; check ### Profile's ftp_watts/lthr_bpm/"
+            "css_pace_s_per_100m fields for whatever value (if any) is "
+            "currently set, and ask the athlete for a dated reading (and, "
+            "ideally, its source/age) if none is on file."
+        )
+    groups: dict[tuple[str, str], list[ThresholdRecord]] = {}
+    for r in records:
+        groups.setdefault((r.sport, r.metric), []).append(r)
+    blocks = [
+        f"{len(records)} THRESHOLD-RECORD ENTRIES ON FILE, across "
+        f"{len(groups)} sport/metric combination(s) -- most recent first "
+        "within each; judge trustworthiness from measured_at + source "
+        "together, do not just take the newest at face value if its source "
+        "is weaker than an older, better-tested one:"
+    ]
+    for (sport, metric), group in sorted(groups.items()):
+        ordered = _recent_thresholds(group)
+        lines = [f"  [{sport} / {metric}] {len(ordered)} reading(s):"]
+        for entry in ordered:
+            line = f"    - {entry.measured_at.isoformat()}: {entry.value} ({entry.source.replace('_', ' ')})"
+            if entry.notes:
+                line += f" -- {entry.notes}"
+            lines.append(line)
+        blocks.append("\n".join(lines))
+    return "\n".join(blocks)
+
+
 def _render_events(events: list[Event], today: date) -> str:
     """Compact, chronological rendering of every event on file, each with
     `days_until` computed relative to `today` -- fixes the coach not
@@ -1345,6 +1415,9 @@ def build_per_request_context(
         "",
         "### Health status",
         _render_active_health_status(store.list_health_status(slug)),
+        "",
+        "### Threshold history (FTP / LTHR / CSS -- dated, per-sport)",
+        _render_threshold_history(store.list_threshold_records(slug)),
         "",
         f"### Current week plan ({current_iso})",
         json.dumps(_week_or_none(store, slug, current_iso), indent=2),

@@ -22,6 +22,7 @@ from swim_coach.models import (
     MacroBlock,
     MacroPlan,
     Session,
+    ThresholdRecord,
     Wellness,
     WeekPlan,
     Workout,
@@ -40,9 +41,11 @@ from swim_coach.store_db import (
     row_to_feedback,
     row_to_health_status,
     row_to_macro,
+    row_to_threshold_record,
     row_to_week,
     row_to_wellness,
     row_to_workout,
+    threshold_record_to_row,
     week_to_row,
     wellness_to_row,
     workout_to_row,
@@ -273,6 +276,40 @@ def test_health_status_mapping_round_trip_resolved():
     row = health_status_to_row(h)
     assert row["resolved"] is True
     assert row_to_health_status(row) == h
+
+
+def _threshold_record(**overrides) -> ThresholdRecord:
+    data: dict = dict(
+        id=uuid.uuid4(),
+        athlete_id=AID,
+        sport="bike",
+        metric="ftp_watts",
+        value=263.0,
+        measured_at=date(2026, 9, 1),
+        source="ramp_test",
+    )
+    data.update(overrides)
+    return ThresholdRecord(**data)
+
+
+def test_threshold_record_mapping_round_trip():
+    t = _threshold_record()
+    row = threshold_record_to_row(t)
+    assert row["id"] == t.id
+    assert row["athlete_id"] == t.athlete_id
+    assert row["sport"] == t.sport
+    assert row["metric"] == t.metric
+    assert row["measured_at"] == t.measured_at
+    assert row_to_threshold_record(row) == t
+
+
+def test_threshold_record_mapping_round_trip_with_notes():
+    t = _threshold_record(
+        source="self_reported_historical", notes="I was 350w 10 years ago"
+    )
+    row = threshold_record_to_row(t)
+    assert row_to_threshold_record(row) == t
+    assert row_to_threshold_record(row).notes == "I was 350w 10 years ago"
 
 
 def _feedback(**overrides) -> Feedback:

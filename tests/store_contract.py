@@ -34,6 +34,7 @@ from swim_coach.models import (
     MacroBlock,
     MacroPlan,
     Session,
+    ThresholdRecord,
     Wellness,
     WeekPlan,
     Workout,
@@ -189,6 +190,20 @@ def _health_status(athlete_id: uuid.UUID, **overrides) -> HealthStatus:
     )
     data.update(overrides)
     return HealthStatus(**data)
+
+
+def _threshold_record(athlete_id: uuid.UUID, **overrides) -> ThresholdRecord:
+    data: dict = dict(
+        id=uuid.uuid4(),
+        athlete_id=athlete_id,
+        sport="bike",
+        metric="ftp_watts",
+        value=263.0,
+        measured_at=date(2026, 9, 1),
+        source="ramp_test",
+    )
+    data.update(overrides)
+    return ThresholdRecord(**data)
 
 
 def _feedback(athlete_id: uuid.UUID | None, **overrides) -> Feedback:
@@ -684,6 +699,124 @@ class StoreContractTests:
         loaded = {h.description: h for h in store.list_health_status(SLUG)}
         assert loaded["untouched"].resolved is False
         assert loaded["resolve me"].resolved is True
+
+    # --- threshold records ---------------------------------------------
+
+    def test_threshold_record_round_trip(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        entry = _threshold_record(athlete.id)
+        store.save_threshold_record(SLUG, entry)
+        loaded = store.list_threshold_records(SLUG)
+        assert len(loaded) == 1
+        assert loaded[0] == entry
+
+    def test_threshold_record_round_trip_with_notes(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        entry = _threshold_record(
+            athlete.id,
+            source="app_estimate",
+            notes="TrainerRoad AI FTP detection, modelled not tested",
+        )
+        store.save_threshold_record(SLUG, entry)
+        loaded = store.list_threshold_records(SLUG)[0]
+        assert loaded == entry
+        assert loaded.notes == "TrainerRoad AI FTP detection, modelled not tested"
+
+    def test_list_threshold_records_empty_when_none(self, store):
+        store.save_athlete(_athlete())
+        assert store.list_threshold_records(SLUG) == []
+
+    def test_list_threshold_records_most_recent_first(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        older = _threshold_record(athlete.id, value=250.0, measured_at=date(2016, 1, 1))
+        newer = _threshold_record(athlete.id, value=263.0, measured_at=date(2026, 9, 1))
+        store.save_threshold_record(SLUG, older)
+        store.save_threshold_record(SLUG, newer)
+        loaded = store.list_threshold_records(SLUG)
+        assert [t.value for t in loaded] == [263.0, 250.0]
+
+    def test_list_threshold_records_never_picks_a_winner_both_stay_on_file(self, store):
+        # ThresholdRecord's own docstring / design decision: the engine
+        # NEVER auto-resolves a "current" value -- an old self-reported
+        # value and a recent field test must BOTH remain on file,
+        # unmodified, forever (this codebase's own safety rail: never
+        # delete logs). This test is the store-level proof of that -- the
+        # coach-facing render proof lives in test_context.py.
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        old_self_report = _threshold_record(
+            athlete.id,
+            value=350.0,
+            measured_at=date(2016, 1, 1),
+            source="self_reported_historical",
+            notes="I was 350w 10 years ago",
+        )
+        recent_test = _threshold_record(
+            athlete.id,
+            value=263.0,
+            measured_at=date(2026, 9, 1),
+            source="ramp_test",
+        )
+        store.save_threshold_record(SLUG, old_self_report)
+        store.save_threshold_record(SLUG, recent_test)
+        loaded = store.list_threshold_records(SLUG)
+        assert len(loaded) == 2
+        assert {t.id for t in loaded} == {old_self_report.id, recent_test.id}
+
+    def test_list_threshold_records_filters_by_sport(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        bike = _threshold_record(athlete.id, sport="bike", metric="ftp_watts", value=263.0)
+        swim = _threshold_record(
+            athlete.id, sport="swim_pool", metric="css_pace_s_per_100m", value=90.0
+        )
+        store.save_threshold_record(SLUG, bike)
+        store.save_threshold_record(SLUG, swim)
+        loaded = store.list_threshold_records(SLUG, sport="bike")
+        assert [t.id for t in loaded] == [bike.id]
+
+    def test_list_threshold_records_filters_by_metric(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        ftp = _threshold_record(athlete.id, sport="bike", metric="ftp_watts", value=263.0)
+        lthr = _threshold_record(athlete.id, sport="bike", metric="lthr_bpm", value=158.0)
+        store.save_threshold_record(SLUG, ftp)
+        store.save_threshold_record(SLUG, lthr)
+        loaded = store.list_threshold_records(SLUG, metric="lthr_bpm")
+        assert [t.id for t in loaded] == [lthr.id]
+
+    def test_list_threshold_records_scoped_to_athlete(self, store):
+        athlete = _athlete()
+        other = Athlete(id=uuid.uuid4(), slug="other-athlete", name="Other")
+        store.save_athlete(athlete)
+        store.save_athlete(other)
+        store.save_threshold_record(SLUG, _threshold_record(athlete.id, value=263.0))
+        store.save_threshold_record("other-athlete", _threshold_record(other.id, value=300.0))
+        loaded = store.list_threshold_records(SLUG)
+        assert [t.value for t in loaded] == [263.0]
+
+    def test_list_threshold_records_ties_on_identical_measured_at_break_by_id_ascending(self, store):
+        # Same deterministic-tiebreak discipline as
+        # test_list_health_status_ties_on_identical_reported_at_break_by_id_
+        # ascending -- both backends must agree on tie order.
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        same_day = date(2026, 9, 1)
+        higher_id = _threshold_record(
+            athlete.id, value=1.0, measured_at=same_day,
+            id=uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"),
+        )
+        lower_id = _threshold_record(
+            athlete.id, value=2.0, measured_at=same_day,
+            id=uuid.UUID("00000000-0000-0000-0000-000000000000"),
+        )
+        store.save_threshold_record(SLUG, higher_id)
+        store.save_threshold_record(SLUG, lower_id)
+        loaded = store.list_threshold_records(SLUG)
+        assert [t.value for t in loaded] == [2.0, 1.0]
 
     # --- feedback ----------------------------------------------------------
 

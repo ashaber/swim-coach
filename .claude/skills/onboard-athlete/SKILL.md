@@ -66,6 +66,31 @@ from context):
    the engine directly but belongs in `notes/decisions.md` as context for
    every future `/adapt` judgment call (a "freshly rebuilt" base should bias
    conservative even when the engine's numbers look permissive).
+8. **Sport-by-sport threshold check.** First ask **which sport(s)** this
+   athlete's own training actually spans (`Athlete.sports` — swim-only is
+   the default/assumed value if this is never asked at all, so ask
+   explicitly rather than leaving it unset the moment more than swimming is
+   in scope). Then, **for each sport that has a real threshold concept**
+   (bike -> FTP watts, HR-based training of any sport -> LTHR bpm; swim's
+   own CSS pace is already covered by question 2 above, so don't re-ask
+   it here) ask: **do they currently have a known value?** If yes, ask two
+   more things, not just the number — **method** (a real test: a ramp test,
+   another field test, a race file; vs. a platform's own estimate, e.g.
+   "TrainerRoad AI FTP detection"; vs. just a remembered old number with no
+   real test behind it) and **age** (roughly when was it measured/
+   estimated — an exact date if known, otherwise a rough age is fine, e.g.
+   "a few years ago"). This is a real interview, not a form field: Andrew's
+   own example makes the reason plain — "I was 350w 10 years ago" is a very
+   different kind of fact than "ramp test last week," and both the method
+   and the age are what let the coach judge which readings actually deserve
+   trust later (see `engine/swim_coach/models.py`'s `ThresholdRecord`
+   docstring for the full rationale — this durable log is what "method +
+   age" actually feeds). If the athlete has NO current reading for a sport
+   that needs one (most commonly: they've never done a bike FTP test),
+   say so plainly in `notes/decisions.md` rather than inventing a
+   placeholder number — a genuine ramp test (`/coach` can generate one via
+   `engine/swim_coach/plan.py`'s `_bike_ramp_test_structure`) is real,
+   available next-step guidance to offer, not something to fabricate here.
 
 ## 2. Create the athlete tree
 
@@ -74,9 +99,22 @@ just needs valid YAML at the right paths):
 
 - `athletes/<slug>/profile.yaml` — `Athlete` model: `id` (new UUID), `slug`,
   `name`, `constraints` (incl. `expected_pool_focus` if applicable, HRV
-  device, training-history notes), `pool_schedule`. Leave
-  `css_pace_s_per_100m`/`zones` unset for now — step 3 fills them in via the
-  CLI, not by hand.
+  device, training-history notes), `pool_schedule`, `sports` (question 8).
+  Leave `css_pace_s_per_100m`/`zones` unset for now — step 3 fills them in
+  via the CLI, not by hand. If question 8 surfaced a trustworthy current
+  `ftp_watts`/`lthr_bpm` reading (a real test, not just an old remembered
+  number), set it directly here too — the same field the deployed app's
+  `update_athlete_profile` chat tool would otherwise set later.
+- `athletes/<slug>/logs/threshold-records/<date>-<short-id>.yaml` — one
+  `ThresholdRecord` entry (schema_version, a new UUID `id`, this athlete's
+  `id` as `athlete_id`, `sport`, `metric`, `value`, `measured_at`, `source`,
+  optional `notes`) for EVERY threshold reading question 8 surfaced,
+  regardless of whether it was trustworthy enough to also set on
+  `profile.yaml` above — an old, stale, or platform-estimated reading still
+  belongs in this durable history (see `ThresholdRecord`'s own docstring:
+  the engine never deletes a reading just because a better one exists).
+  Skip this file entirely for a sport with no reading at all — don't
+  fabricate an entry for "no data."
 - `athletes/<slug>/events.yaml` — one `Event` entry per target event,
   including `event_format`.
 - `athletes/<slug>/notes/decisions.md` — an initial dated entry recording

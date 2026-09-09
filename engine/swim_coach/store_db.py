@@ -37,6 +37,8 @@ from swim_coach.models import (
     Feedback,
     HealthStatus,
     MacroPlan,
+    Sport,
+    ThresholdRecord,
     Wellness,
     WeekPlan,
     Workout,
@@ -170,6 +172,27 @@ def health_status_to_row(entry: HealthStatus) -> dict[str, Any]:
 
 def row_to_health_status(row: dict[str, Any]) -> HealthStatus:
     return HealthStatus.model_validate(row["data"])
+
+
+def threshold_record_to_row(entry: ThresholdRecord) -> dict[str, Any]:
+    """Same JSONB-hybrid shape as `health_status_to_row` above --
+    `athlete_id`/`sport`/`metric`/`measured_at` promoted to real columns
+    for the "this athlete's history for one sport+metric" query shape
+    (an index on exactly those columns), everything else lives only in
+    `data`."""
+    return {
+        "id": entry.id,
+        "athlete_id": entry.athlete_id,
+        "sport": entry.sport,
+        "metric": entry.metric,
+        "measured_at": entry.measured_at,
+        "schema_version": entry.schema_version,
+        "data": entry.model_dump(mode="json"),
+    }
+
+
+def row_to_threshold_record(row: dict[str, Any]) -> ThresholdRecord:
+    return ThresholdRecord.model_validate(row["data"])
 
 
 def feedback_to_row(feedback: Feedback) -> dict[str, Any]:
@@ -656,6 +679,47 @@ class DbStore(StoreInterface):
                 {**new_row, "data": self._Jsonb(new_row["data"])},
             )
         return updated
+
+    # --- Threshold records (durable, dated, per-sport threshold log) -----
+
+    def save_threshold_record(self, slug: str, entry: ThresholdRecord) -> None:
+        # Always an insert -- own uuid PK, no in-place mutation for this log
+        # at all (see StoreInterface.save_threshold_record's docstring).
+        row = threshold_record_to_row(entry)
+        with self._connect() as conn, conn.cursor() as cur:
+            athlete_id = self._athlete_id(cur, slug)
+            row = {**row, "athlete_id": athlete_id, "data": self._Jsonb(row["data"])}
+            cur.execute(
+                """
+                insert into threshold_records
+                    (id, athlete_id, sport, metric, measured_at, schema_version, data)
+                values
+                    (%(id)s, %(athlete_id)s, %(sport)s, %(metric)s, %(measured_at)s,
+                     %(schema_version)s, %(data)s)
+                """,
+                row,
+            )
+
+    def list_threshold_records(
+        self, slug: str, *, sport: Sport | None = None, metric: str | None = None
+    ) -> list[ThresholdRecord]:
+        params: list[Any] = [slug]
+        query = """
+            select t.data from threshold_records t
+            join athletes a on a.athlete_id = t.athlete_id
+            where a.slug = %s
+        """
+        if sport is not None:
+            query += " and t.sport = %s"
+            params.append(sport)
+        if metric is not None:
+            query += " and t.metric = %s"
+            params.append(metric)
+        query += " order by t.measured_at desc, t.id"
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(query, params)
+            rows = cur.fetchall()
+        return [row_to_threshold_record(r) for r in rows]
 
     # --- Feedback (durable, replaces research/open-questions.jsonl) -----
 

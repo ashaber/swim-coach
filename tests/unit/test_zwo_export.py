@@ -389,29 +389,41 @@ def test_standalone_recovery_role_with_range_produces_steadystate_not_ramp():
     assert not any(c.tag == "Ramp" for c in children)
 
 
-def test_ramp_element_unreachable_via_any_valid_workoutstep_role():
-    # `_convert_leaf`'s final `<Ramp>` branch (module docstring: "reserved
-    # for a future genuine mid-workout progression") is, after the fix
-    # above, no longer reachable through ANY value of `WorkoutStep.role`'s
-    # closed Literal type: "open" steps are filtered out before conversion
-    # (see `to_zwo_workout`), "warmup"/"cooldown" are special-cased above
-    # it, and "steady"/"interval"/"recovery"/"rest" (every remaining value)
-    # now all resolve to SteadyState. Documented here as an explicit,
-    # deliberate consequence -- the branch is kept as defensive/forward-
-    # compatible code (matches the sibling skill's real ZWO `<Ramp>`
-    # element, still valid ZWO), not because anything in this codebase can
-    # currently produce it.
+def test_ramp_element_reachable_via_ramp_role():
+    # `_convert_leaf`'s final `<Ramp>` branch used to be unreachable via any
+    # value of `WorkoutStep.role`'s closed Literal type ("open" is filtered
+    # before conversion, "warmup"/"cooldown" are special-cased, and
+    # "steady"/"interval"/"recovery"/"rest" all resolve to SteadyState).
+    # The threshold-history build adds "ramp" specifically to reach this
+    # branch -- a genuine start-low-climb-steadily bike ramp-test main
+    # block (`plan._bike_ramp_test_structure`), NOT a flat range that
+    # happens to have low != high. This is a real, produced role value now,
+    # not defensive dead code.
+    structured = WorkoutStructure(
+        items=[
+            WorkoutStep(
+                label="Ramp to failure",
+                role="ramp",
+                duration_kind="time_s",
+                duration_value=1200,
+                modality="bike",
+                target=WorkoutTarget(basis="power_w", low=100.0, high=600.0),
+            ),
+        ]
+    )
+    xml_str = to_zwo_workout(structured, ftp_watts=250.0, name="Ramp role test")
+    root = _parse(xml_str)
+    children = _workout_children(root)
+    ramp = next(c for c in children if c.tag == "Ramp")
+    assert ramp.attrib["PowerLow"] == "0.40"
+    assert ramp.attrib["PowerHigh"] == "2.40"
+    assert ramp.attrib["Duration"] == "1200"
+
+
+def test_ramp_role_is_a_real_valid_workoutstep_role():
     import swim_coach.models as models_mod
 
-    assert set(models_mod.WorkoutStep.model_fields["role"].annotation.__args__) == {
-        "warmup",
-        "steady",
-        "interval",
-        "rest",
-        "recovery",
-        "cooldown",
-        "open",
-    }
+    assert "ramp" in set(models_mod.WorkoutStep.model_fields["role"].annotation.__args__)
 
 
 # --- untargeted / rpe-only block -> FreeRide ---------------------------------

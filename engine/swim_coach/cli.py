@@ -46,7 +46,16 @@ from swim_coach.library_review import (
     sort_for_review,
     strip_marker,
 )
-from swim_coach.models import Athlete, Event, HealthStatus, Session, Wellness, WeekPlan, Workout
+from swim_coach.models import (
+    Athlete,
+    Event,
+    HealthStatus,
+    Session,
+    ThresholdRecord,
+    Wellness,
+    WeekPlan,
+    Workout,
+)
 from swim_coach.parse_coach_text import parse_coach_text
 from swim_coach.parse_files import PARSERS_BY_EXTENSION, WorkoutDraft, backfill_sport_detail, parse_fit
 from swim_coach.plan import generate_week, scaffold_macro
@@ -160,11 +169,20 @@ def _cmd_validate(args: argparse.Namespace, store: StoreInterface) -> int:
         rc = _validate_dir(athlete_dir / "logs" / "health-status", HealthStatus, "health_status", counts)
         if rc is not None:
             return rc
+        # threshold-records: the durable, dated, per-sport threshold log
+        # (threshold-history build) -- same directory-glob validation as
+        # health-status above.
+        rc = _validate_dir(
+            athlete_dir / "logs" / "threshold-records", ThresholdRecord, "threshold_records", counts
+        )
+        if rc is not None:
+            return rc
     else:
         counts["weeks"] = 0
         counts["workouts"] = 0
         counts["wellness"] = 0
         counts["health_status"] = 0
+        counts["threshold_records"] = 0
 
     print(json.dumps({"athlete": slug, "counts": counts}))
     return 0

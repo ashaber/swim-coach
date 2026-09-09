@@ -182,3 +182,39 @@ def test_bike_zone_table_z1_starts_at_zero():
     z1 = table["Z1"]
     assert z1["lo_pct_ftp"] == 0.0
     assert z1["watts_lo"] == 0.0
+
+
+# --- threshold-history build: zones.py behavior is completely unchanged ----
+
+
+def test_zones_module_has_no_threshold_record_dependency():
+    # Regression guard the threshold-history build's own brief explicitly
+    # asks for: ThresholdRecord is a durable, append-only LOG that the
+    # engine only ever WRITES to and reads back verbatim for display
+    # (backend/app/context.py's _recent_thresholds/_render_threshold_
+    # history) -- it must never become a second, competing source of truth
+    # zones.py itself resolves against. An athlete's zones are computed
+    # ONLY from the already-existing resolved Athlete fields
+    # (css_pace_s_per_100m/ftp_watts/lthr_bpm), exactly as before this
+    # build -- zones.py has zero import of, or reference to,
+    # ThresholdRecord at all.
+    import inspect
+
+    import swim_coach.zones as zones_mod
+
+    source = inspect.getsource(zones_mod)
+    assert "ThresholdRecord" not in source
+    assert "threshold_record" not in source
+
+
+def test_bike_zone_table_behavior_unaffected_by_threshold_history_for_athlete_with_no_records():
+    # An athlete with a resolved ftp_watts but ZERO ThresholdRecord history
+    # on file (every real athlete's state immediately after this build
+    # ships, before any record_threshold_test call is ever made) must
+    # produce byte-identical zone output to before this build existed --
+    # this function takes a raw ftp_watts float, never a store/athlete
+    # slug, so there is no code path here that could even see threshold
+    # history one way or the other.
+    table = bike_zone_table(263.0)
+    assert table["Z4"]["watts_lo"] == pytest.approx(263.0 * 0.90)
+    assert table["Z2"]["watts_lo"] == pytest.approx(263.0 * 0.55)

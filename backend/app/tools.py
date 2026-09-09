@@ -33,6 +33,24 @@ plan-generation tool (`propose_adaptation`/`create_week_plan`/etc.) -- it
 only makes the status durable and visible; auto-blocking training on it is
 explicitly out of scope for this build (see the build's own PR description).
 
+`record_threshold_test`/`update_athlete_profile` (threshold-history build)
+close the gap that build's brief was actually written to fix: nothing let
+the coach persist an athlete's own reported FTP/LTHR/CSS at all before this.
+`record_threshold_test` is the durable-log write -- the `ThresholdRecord`
+counterpart to `record_health_status` above, same "a dated log entry, never
+a single mutable field" shape (see `models.ThresholdRecord`'s own
+docstring) -- and, unlike `record_health_status`, does NOT also write a
+linked `Feedback` row (a threshold reading isn't a safety event needing
+proactive human review) and does NOT touch `Athlete.ftp_watts`/`lthr_bpm`/
+`css_pace_s_per_100m` itself. `update_athlete_profile` is the tool that
+actually sets those resolved fields -- the ENGINE never auto-picks a
+"current" value from the `ThresholdRecord` history (that judgment call
+stays with the coach, see `context.py`'s `_recent_thresholds`/render
+function), so `update_athlete_profile` is how the coach acts on that
+judgment once made. Same direct-persist (no draft/confirm step) posture
+`set_pool_coach_status`/`set_event_active_status` already use below -- these
+are low-risk profile fields, not plan/volume changes.
+
 `create_event`/`draft_macro_plan`/`create_week_plan` are the "chat can create,
 not just adapt" tools: they call the exact same deterministic engine
 functions the CLI/skills already use (`swim_coach.plan.scaffold_macro`,
@@ -151,6 +169,7 @@ from swim_coach.models import (
     Feedback,
     HealthStatus,
     Session,
+    ThresholdRecord,
     WeekPlan,
     Workout,
     WorkoutStructure,
@@ -394,6 +413,110 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
             },
             "required": ["description", "restriction", "source"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "record_threshold_test",
+        "description": (
+            "Durably record ONE dated per-sport threshold reading (FTP watts, "
+            "LTHR bpm, or CSS pace s/100m) -- so it's REMEMBERED past this "
+            "conversation as part of the athlete's full threshold HISTORY, "
+            "not a replacement for it. Call this whenever the athlete or "
+            "coach reports a threshold value with any real dating/provenance "
+            "(a ramp test result, a race file, a platform's own estimate, or "
+            "an old remembered number) -- e.g. 'my FTP is 263W from a ramp "
+            "test last week' or 'I was around 350W ten years ago.' This "
+            "ALWAYS just appends a new log entry -- it never edits or deletes "
+            "a prior reading, and it does NOT by itself change what "
+            "zones.py/load.py actually use for this athlete's zones (that's "
+            "`Athlete.ftp_watts`/`lthr_bpm`/`css_pace_s_per_100m`, set "
+            "separately via update_athlete_profile once you judge a reading "
+            "here trustworthy enough to adopt). Call record_threshold_test "
+            "first to log the raw reading, then call update_athlete_profile "
+            "if -- using your own judgment about recency and source quality, "
+            "e.g. a recent ramp_test outweighs a decade-old "
+            "self_reported_historical number -- this reading should become "
+            "the athlete's new resolved value."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "sport": {
+                    "type": "string",
+                    "enum": ["swim_pool", "swim_ow", "strength", "recovery", "cross_train", "bike"],
+                    "description": "Which sport this threshold reading is for.",
+                },
+                "metric": {
+                    "type": "string",
+                    "enum": ["ftp_watts", "lthr_bpm", "css_pace_s_per_100m"],
+                    "description": "Which threshold metric: 'ftp_watts' (cycling FTP), 'lthr_bpm' (lactate-threshold heart rate), or 'css_pace_s_per_100m' (swim critical-swim-speed pace, seconds per 100m).",
+                },
+                "value": {
+                    "type": "number",
+                    "description": "The reading's numeric value, in the metric's own unit (watts, bpm, or seconds per 100m).",
+                },
+                "measured_at": {
+                    "type": "string",
+                    "description": "ISO date ('YYYY-MM-DD') this reading was actually measured/estimated -- NOT today's date, unless the athlete/coach genuinely means today. If only a rough age is known ('a few years ago'), use your best-estimate date and say so in notes.",
+                },
+                "source": {
+                    "type": "string",
+                    "enum": ["field_test", "ramp_test", "race_file", "app_estimate", "self_reported_historical"],
+                    "description": "'field_test' -- a real standalone test that isn't the ramp-test protocol (e.g. a swim CSS time-trial pair, a 20-min FTP test). 'ramp_test' -- the ramp-to-failure protocol specifically. 'race_file' -- derived from an actual race/event file. 'app_estimate' -- a platform's own algorithmic estimate (e.g. 'TrainerRoad AI FTP detection'), real signal but modelled, not directly tested. 'self_reported_historical' -- the athlete's own recollection of an old value with no real test behind it (Andrew's own example: 'I was 350w 10 years ago').",
+                },
+                "notes": {
+                    "type": "string",
+                    "description": "Optional free text carrying whatever context doesn't fit the structured fields (e.g. 'TrainerRoad AI FTP detection, modelled not tested').",
+                },
+            },
+            "required": ["sport", "metric", "value", "measured_at", "source"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "update_athlete_profile",
+        "description": (
+            "Directly set one or more low-risk athlete-profile fields: "
+            "ftp_watts, lthr_bpm, css_pace_s_per_100m, or sports. This is "
+            "the tool that actually changes what zones.py/load.py resolve "
+            "this athlete's zones/load from -- call it AFTER you've judged "
+            "(from record_threshold_test's logged history, or from what the "
+            "athlete/coach just told you) which threshold reading currently "
+            "deserves trust. Only set the field(s) actually given/confirmed "
+            "-- never guess a value to fill in an unrelated field. Like "
+            "set_pool_coach_status, this persists directly (no draft/"
+            "confirm step) -- these are profile facts, not plan/volume "
+            "changes. Prefer calling record_threshold_test first (or "
+            "alongside this call) whenever the new value traces to a real "
+            "dated reading, so the history isn't lost even after the "
+            "resolved value is overwritten again later."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ftp_watts": {
+                    "type": "number",
+                    "description": "Cycling FTP in watts. Must be a real, physiologically plausible number (positive, realistically well under 1000W) -- reject nonsense rather than silently accepting it.",
+                },
+                "lthr_bpm": {
+                    "type": "integer",
+                    "description": "Lactate-threshold heart rate in bpm. Must be a real, physiologically plausible number (positive, realistically well under 250bpm).",
+                },
+                "css_pace_s_per_100m": {
+                    "type": "number",
+                    "description": "Swim critical-swim-speed pace, seconds per 100m. Must be a real, positive, realistically-paced number.",
+                },
+                "sports": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["swim_pool", "swim_ow", "strength", "recovery", "cross_train", "bike"],
+                    },
+                    "description": "The full list of sports this athlete's own training actually spans -- replaces Athlete.sports wholesale (not a merge/append). Only set this when the athlete's actual sport scope is genuinely changing/being declared for the first time.",
+                },
+            },
+            "required": [],
             "additionalProperties": False,
         },
     },
@@ -1781,6 +1904,179 @@ def _handle_record_health_status(
             "human coach directly about this as a precaution."
         )
     return result
+
+
+_THRESHOLD_SPORTS = ("swim_pool", "swim_ow", "strength", "recovery", "cross_train", "bike")
+_THRESHOLD_METRICS = ("ftp_watts", "lthr_bpm", "css_pace_s_per_100m")
+_THRESHOLD_SOURCES = ("field_test", "ramp_test", "race_file", "app_estimate", "self_reported_historical")
+
+
+def _handle_record_threshold_test(
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str
+) -> dict[str, Any]:
+    """Persists a `ThresholdRecord` row -- see that model's own docstring
+    for the full rationale (the same durable-log shape `HealthStatus`
+    already established, generalized to per-sport threshold readings).
+    Unlike `_handle_record_health_status`, this does NOT also write a
+    linked `Feedback` row -- a threshold reading isn't a safety-relevant
+    event needing proactive human review the way an injury report is; it's
+    ordinary athlete-profile data. It also does NOT touch
+    `Athlete.ftp_watts`/`lthr_bpm`/`css_pace_s_per_100m` -- that's
+    `_handle_update_athlete_profile`'s job, called separately once the
+    coach judges a reading here trustworthy enough to adopt (see
+    `ThresholdRecord`'s own docstring on why the engine never auto-picks a
+    "current" value)."""
+    sport = input_data.get("sport")
+    metric = input_data.get("metric")
+    value = input_data.get("value")
+    measured_at_raw = input_data.get("measured_at")
+    source = input_data.get("source")
+    if not sport or not metric or value is None or not measured_at_raw or not source:
+        return {"error": "sport, metric, value, measured_at, and source are all required"}
+    if sport not in _THRESHOLD_SPORTS:
+        return {"error": f"invalid sport {sport!r}"}
+    if metric not in _THRESHOLD_METRICS:
+        return {"error": f"invalid metric {metric!r}"}
+    if source not in _THRESHOLD_SOURCES:
+        return {"error": f"invalid source {source!r}"}
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return {"error": f"invalid value {value!r}; must be a number"}
+
+    try:
+        measured_at = date.fromisoformat(measured_at_raw)
+    except ValueError:
+        return {"error": f"invalid measured_at {measured_at_raw!r}, expected YYYY-MM-DD"}
+
+    try:
+        athlete_id = store.load_athlete(slug).id
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not resolve athlete_id for slug {slug!r}: {exc}"}
+
+    entry = ThresholdRecord(
+        id=uuid.uuid4(),
+        athlete_id=athlete_id,
+        sport=sport,
+        metric=metric,
+        value=float(value),
+        measured_at=measured_at,
+        source=source,
+        notes=input_data.get("notes"),
+    )
+    store.save_threshold_record(slug, entry)
+
+    log.info(
+        "threshold record logged",
+        athlete=slug,
+        sport=sport,
+        metric=metric,
+        source=source,
+        threshold_record_id=str(entry.id),
+    )
+    return {
+        "logged": True,
+        "threshold_record_id": str(entry.id),
+        "sport": sport,
+        "metric": metric,
+        "value": entry.value,
+        "measured_at": measured_at.isoformat(),
+        "source": source,
+    }
+
+
+# Loose physiological-plausibility bounds -- reject obvious nonsense
+# (negative, zero, or absurdly large/small) without pretending to validate
+# real physiology. Coach judgment, not citation-backed: wide enough to
+# never reject a genuine elite or novice reading, narrow enough to catch a
+# clear unit mix-up (e.g. FTP typed in kilowatts, or a CSS pace typed in
+# minutes instead of seconds).
+_FTP_WATTS_MAX = 1000.0
+_LTHR_BPM_MAX = 250.0
+_CSS_PACE_S_PER_100M_MAX = 600.0  # 10 min/100m -- generously slow, still a real pace
+
+
+def _handle_update_athlete_profile(
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str
+) -> dict[str, Any]:
+    """Directly sets one or more low-risk `Athlete` profile fields
+    (`ftp_watts`/`lthr_bpm`/`css_pace_s_per_100m`/`sports`) -- the tool that
+    was simply missing before this build (see `ThresholdRecord`'s own
+    docstring: `record_health_status`/`create_event` existed as real coach
+    tools, but nothing let the coach set `Athlete.ftp_watts`/`sports` at
+    all). Same direct-persist (no draft/confirm step) posture
+    `set_pool_coach_status`/`set_event_active_status` already use -- these
+    are low-risk profile fields, not plan/volume changes.
+
+    Only fields actually present in `input_data` are changed; every other
+    field on the loaded `Athlete` is left exactly as it was (a partial
+    update, never a wholesale replace) -- EXCEPT `sports`, which (per its
+    own tool-schema description) replaces the list wholesale when given,
+    matching `Athlete.sports`' own "the full list, not additive" contract.
+    Every numeric field is validated against a generous physiological-
+    plausibility ceiling before being accepted -- reject nonsense rather
+    than silently accepting it (this tool's own explicit brief)."""
+    if not input_data:
+        return {"error": "at least one field (ftp_watts, lthr_bpm, css_pace_s_per_100m, sports) is required"}
+
+    updates: dict[str, Any] = {}
+
+    if "ftp_watts" in input_data:
+        ftp_watts = input_data["ftp_watts"]
+        if (
+            not isinstance(ftp_watts, (int, float))
+            or isinstance(ftp_watts, bool)
+            or ftp_watts <= 0
+            or ftp_watts > _FTP_WATTS_MAX
+        ):
+            return {"error": f"invalid ftp_watts {ftp_watts!r}; must be a positive number <= {_FTP_WATTS_MAX}"}
+        updates["ftp_watts"] = float(ftp_watts)
+
+    if "lthr_bpm" in input_data:
+        lthr_bpm = input_data["lthr_bpm"]
+        if (
+            not isinstance(lthr_bpm, (int, float))
+            or isinstance(lthr_bpm, bool)
+            or lthr_bpm <= 0
+            or lthr_bpm > _LTHR_BPM_MAX
+        ):
+            return {"error": f"invalid lthr_bpm {lthr_bpm!r}; must be a positive number <= {_LTHR_BPM_MAX}"}
+        updates["lthr_bpm"] = int(lthr_bpm)
+
+    if "css_pace_s_per_100m" in input_data:
+        css_pace = input_data["css_pace_s_per_100m"]
+        if (
+            not isinstance(css_pace, (int, float))
+            or isinstance(css_pace, bool)
+            or css_pace <= 0
+            or css_pace > _CSS_PACE_S_PER_100M_MAX
+        ):
+            return {
+                "error": (
+                    f"invalid css_pace_s_per_100m {css_pace!r}; must be a positive "
+                    f"number <= {_CSS_PACE_S_PER_100M_MAX}"
+                )
+            }
+        updates["css_pace_s_per_100m"] = float(css_pace)
+
+    if "sports" in input_data:
+        sports = input_data["sports"]
+        if not isinstance(sports, list) or not sports or any(s not in _THRESHOLD_SPORTS for s in sports):
+            return {"error": f"invalid sports {sports!r}; must be a non-empty list of valid sport values"}
+        updates["sports"] = sports
+
+    if not updates:
+        return {"error": "at least one field (ftp_watts, lthr_bpm, css_pace_s_per_100m, sports) is required"}
+
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load athlete profile: {exc}"}
+
+    for field, val in updates.items():
+        setattr(athlete, field, val)
+    store.save_athlete(athlete)
+
+    log.info("athlete profile updated", athlete=slug, fields=sorted(updates.keys()))
+    return {"updated": True, **{k: getattr(athlete, k) for k in updates}}
 
 
 def _summarize_workout(w: Workout, *, athlete: Athlete, hr_max: float | None, wellness: list[Any]) -> dict[str, Any]:
@@ -3323,6 +3619,12 @@ def build_tool_handlers(
         ),
         "record_health_status": lambda input_data: _handle_record_health_status(
             input_data, store=store, slug=slug, expert_mode=expert_mode
+        ),
+        "record_threshold_test": lambda input_data: _handle_record_threshold_test(
+            input_data, store=store, slug=slug
+        ),
+        "update_athlete_profile": lambda input_data: _handle_update_athlete_profile(
+            input_data, store=store, slug=slug
         ),
         "get_workouts": lambda input_data: _handle_get_workouts(
             input_data, store=store, slug=slug

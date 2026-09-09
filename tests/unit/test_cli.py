@@ -15,7 +15,15 @@ import yaml
 
 from swim_coach.cli import main, parse_time_to_s
 from swim_coach.load import ZONE_ASSUMED_RPE
-from swim_coach.models import AllowedEmail, HealthStatus, Session, Wellness, WeekPlan, Workout
+from swim_coach.models import (
+    AllowedEmail,
+    HealthStatus,
+    Session,
+    ThresholdRecord,
+    Wellness,
+    WeekPlan,
+    Workout,
+)
 from pathlib import Path
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -136,6 +144,39 @@ def test_validate_reports_bad_health_status_file_with_path(athlete_tree, capsys)
     directory.mkdir(parents=True, exist_ok=True)
     bad_path = directory / "2026-01-01-badbad12.yaml"
     bad_path.write_text(yaml.safe_dump({"not": "a valid health status"}), encoding="utf-8")
+
+    code = _run(athlete_tree["base_dir"], "validate", "--athlete", athlete_tree["slug"])
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+    assert str(bad_path) == result["file"]
+
+
+def test_validate_counts_threshold_records(athlete_tree, capsys):
+    store = athlete_tree["store"]
+    slug = athlete_tree["slug"]
+    entry = ThresholdRecord(
+        id=uuid.uuid4(),
+        athlete_id=athlete_tree["athlete"].id,
+        sport="bike",
+        metric="ftp_watts",
+        value=263.0,
+        measured_at=date(2026, 9, 1),
+        source="ramp_test",
+    )
+    store.save_threshold_record(slug, entry)
+
+    code = _run(athlete_tree["base_dir"], "validate", "--athlete", slug)
+    assert code == 0
+    result = _out(capsys)
+    assert result["counts"]["threshold_records"] == 1
+
+
+def test_validate_reports_bad_threshold_record_file_with_path(athlete_tree, capsys):
+    directory = athlete_tree["base_dir"] / athlete_tree["slug"] / "logs" / "threshold-records"
+    directory.mkdir(parents=True, exist_ok=True)
+    bad_path = directory / "2026-01-01-badbad12.yaml"
+    bad_path.write_text(yaml.safe_dump({"not": "a valid threshold record"}), encoding="utf-8")
 
     code = _run(athlete_tree["base_dir"], "validate", "--athlete", athlete_tree["slug"])
     assert code == 1
