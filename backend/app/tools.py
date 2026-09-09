@@ -743,6 +743,21 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                         "(split across stage days). Default 'single_day'."
                     ),
                 },
+                "primary_sport": {
+                    "type": "string",
+                    "enum": ["swim", "bike"],
+                    "description": (
+                        "Which sport this event is FOR. Default 'swim'. This is "
+                        "the ONLY way to declare a bike-primary event -- "
+                        "deliberately separate from `target_metric` above, which "
+                        "only says what UNIT the target is measured in "
+                        "(distance/duration/load), not which sport. Set "
+                        "'bike' for a cycling event (e.g. a timed century "
+                        "ride) so draft_macro_plan/create_week_plan/ "
+                        "replace_week_plan/propose_adaptation generate real "
+                        "bike sessions for it instead of a swim week."
+                    ),
+                },
             },
             # `distance_m` is NOT listed as always-required -- it's only
             # required when target_metric is 'distance_m' (the default); the
@@ -782,9 +797,15 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 "peak_weekly_volume_m": {
                     "type": "integer",
                     "description": (
-                        "Optional target peak weekly volume in meters. Defaults "
-                        "to event distance x 2.5, clamped by the ramp cap over "
-                        "the base+build weeks."
+                        "Target peak weekly volume in meters. Optional ONLY "
+                        "when the event's target_metric is 'distance_m' (the "
+                        "default for most events) -- there it defaults to "
+                        "event distance x 2.5, clamped by the ramp cap over "
+                        "the base+build weeks. REQUIRED for any other "
+                        "target_metric ('duration_min'/'load_au', e.g. a "
+                        "bike-primary or load-based event): no validated "
+                        "duration/load-driven default formula exists, and "
+                        "omitting it raises an error rather than guessing."
                     ),
                 },
                 "start_date": {
@@ -836,9 +857,15 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 "peak_weekly_volume_m": {
                     "type": "integer",
                     "description": (
-                        "Optional target peak weekly volume in meters. Defaults "
-                        "to event distance x 2.5, clamped by the ramp cap over "
-                        "the base+build weeks."
+                        "Target peak weekly volume in meters. Optional ONLY "
+                        "when the event's target_metric is 'distance_m' (the "
+                        "default for most events) -- there it defaults to "
+                        "event distance x 2.5, clamped by the ramp cap over "
+                        "the base+build weeks. REQUIRED for any other "
+                        "target_metric ('duration_min'/'load_au', e.g. a "
+                        "bike-primary or load-based event): no validated "
+                        "duration/load-driven default formula exists, and "
+                        "omitting it raises an error rather than guessing."
                     ),
                 },
                 "start_date": {
@@ -1648,19 +1675,24 @@ def _handle_propose_adaptation(input_data: dict[str, Any], *, store: StoreInterf
     wellness = store.list_wellness(slug)
     as_of = week_start - timedelta(days=1)
 
-    # `primary_sport` derived the same way `create_week_plan`/
-    # `replace_week_plan` derive `event_format` from `event.event_format` --
-    # `event.target_metric == "distance_m"` is the only sport this engine's
-    # swim-shaped machinery is evidenced for; any other target_metric
-    # ("duration_min"/"load_au") reaches `generate_week`'s bike-primary path
-    # today (see that function's own "Known, deliberate scope limit"
-    # docstring note on load_au). `ftp_watts` comes straight off the
-    # athlete profile (same field the `.zwo` export handler already reads).
-    # PR #167 red-team review, Finding 1 (must-fix): without this,
-    # `adapt_week`'s internal baseline call always defaulted to
-    # `primary_sport="swim"`, silently substituting a full swim week for a
-    # bike-primary athlete's real cut/advance draft.
-    primary_sport = "bike" if event.target_metric != "distance_m" else "swim"
+    # `primary_sport` read straight off `event.primary_sport` -- NOT derived
+    # from `target_metric`. threshold-history build, real audit finding:
+    # this used to be `"bike" if event.target_metric != "distance_m" else
+    # "swim"`, which conflates UNITS (what target_metric describes) with
+    # SPORT -- invisible only while bike was the sole non-swim sport and
+    # happened to always use `duration_min`. A future running event
+    # (running is typically ALSO distance-based, e.g. a 5K) would have been
+    # misidentified as "swim" under that inference. See
+    # `Event.primary_sport`'s own comment. `ftp_watts` comes straight off
+    # the athlete profile (same field the `.zwo` export handler already
+    # reads), only meaningful for a bike-primary event.
+    # PR #167 red-team review, Finding 1 (must-fix): without a real
+    # `primary_sport` passed through at all, `adapt_week`'s internal
+    # baseline call always defaulted to `primary_sport="swim"`, silently
+    # substituting a full swim week for a bike-primary athlete's real
+    # cut/advance draft.
+    primary_sport = event.primary_sport
+    ftp_watts = athlete.ftp_watts if primary_sport == "bike" else None
     try:
         draft = adapt_week(
             athlete,
@@ -1673,7 +1705,7 @@ def _handle_propose_adaptation(input_data: dict[str, Any], *, store: StoreInterf
             wellness,
             as_of,
             primary_sport=primary_sport,
-            ftp_watts=athlete.ftp_watts,
+            ftp_watts=ftp_watts,
         )
     except ValueError as exc:
         return {"error": str(exc)}
@@ -2301,6 +2333,16 @@ def _handle_create_event(input_data: dict[str, Any], *, store: StoreInterface, s
             )
         }
 
+    # `primary_sport`: the only way to declare a bike-primary event -- see
+    # `Event.primary_sport`'s own comment (deliberately orthogonal to
+    # target_metric). Default "swim" matches the model default, so an
+    # omitted field means exactly what it always meant for a swim event.
+    primary_sport = input_data.get("primary_sport") or "swim"
+    if primary_sport not in ("swim", "bike"):
+        return {
+            "error": f"invalid primary_sport {primary_sport!r}; must be 'swim' or 'bike'"
+        }
+
     try:
         athlete = store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
@@ -2325,6 +2367,7 @@ def _handle_create_event(input_data: dict[str, Any], *, store: StoreInterface, s
             wetsuit=wetsuit,
             priority=priority,
             event_format=event_format,
+            primary_sport=primary_sport,
         )
     except ValidationError as exc:
         return {"error": str(exc)}
@@ -2345,6 +2388,7 @@ def _handle_create_event(input_data: dict[str, Any], *, store: StoreInterface, s
         "wetsuit": event.wetsuit,
         "priority": event.priority,
         "event_format": event.event_format,
+        "primary_sport": event.primary_sport,
     }
 
 
@@ -2664,8 +2708,28 @@ def _handle_create_week_plan(input_data: dict[str, Any], *, store: StoreInterfac
 
     event_format = event.event_format or "single_day"
 
+    # `primary_sport`/`ftp_watts` read straight off `event.primary_sport`
+    # (never derived from `target_metric` -- that describes units, not
+    # sport; see Event.primary_sport's own comment) -- threshold-history
+    # build, real audit finding: this call site previously passed neither
+    # at all, so creating the first week of a bike-primary macro silently
+    # generated a full swim week (pool placeholders, long-swim ladder)
+    # instead of real bike sessions.
+    primary_sport = event.primary_sport
+    ftp_watts = athlete.ftp_watts if primary_sport == "bike" else None
+
     try:
-        week = generate_week(athlete, macro, iso_week, week_start, event_format, template_preference, event)
+        week = generate_week(
+            athlete,
+            macro,
+            iso_week,
+            week_start,
+            event_format,
+            template_preference,
+            event,
+            primary_sport=primary_sport,
+            ftp_watts=ftp_watts,
+        )
     except ValueError as exc:
         return {"error": str(exc)}
 
@@ -3053,8 +3117,26 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
     except Exception as exc:  # noqa: BLE001
         return {"error": f"could not load existing week plan: {exc}"}
 
+    # `primary_sport`/`ftp_watts` read straight off `event.primary_sport`
+    # (never derived from `target_metric` -- see Event.primary_sport's own
+    # comment) -- threshold-history build, real audit finding: this call
+    # site previously passed neither at all, same bug as
+    # `_handle_create_week_plan` above.
+    primary_sport = event.primary_sport
+    ftp_watts = athlete.ftp_watts if primary_sport == "bike" else None
+
     try:
-        week = generate_week(athlete, macro, iso_week, week_start, event_format, template_preference, event)
+        week = generate_week(
+            athlete,
+            macro,
+            iso_week,
+            week_start,
+            event_format,
+            template_preference,
+            event,
+            primary_sport=primary_sport,
+            ftp_watts=ftp_watts,
+        )
     except ValueError as exc:
         return {"error": str(exc)}
 

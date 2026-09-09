@@ -340,6 +340,56 @@ def test_event_format_omitted_from_dict_still_defaults():
     assert event.event_format == "single_day"
 
 
+def test_event_primary_sport_defaults_to_swim():
+    event = make_event()
+    assert event.primary_sport == "swim"
+
+
+def test_event_primary_sport_accepts_bike():
+    event = make_event(primary_sport="bike")
+    assert event.primary_sport == "bike"
+
+
+def test_event_rejects_bad_primary_sport():
+    with pytest.raises(ValidationError):
+        make_event(primary_sport="run")
+
+
+def test_event_primary_sport_omitted_from_dict_still_defaults_to_swim():
+    # Backward compatibility: every existing events.yaml (written before
+    # primary_sport existed, no key at all) must still validate, defaulting
+    # to "swim" -- threshold-history build.
+    data = dict(
+        id=uuid.uuid4(),
+        athlete_id=ATHLETE_ID,
+        name="Legacy Event",
+        event_date=date(2026, 8, 15),
+        distance_m=10000,
+        water_temp_c=18.0,
+        wetsuit=False,
+        priority="A",
+    )
+    event = Event(**data)
+    assert event.primary_sport == "swim"
+
+
+def test_event_primary_sport_orthogonal_to_target_metric():
+    # threshold-history build, the real bug this field fixes: primary_sport
+    # and target_metric are independent axes -- a duration_min event isn't
+    # necessarily bike, and a distance_m event isn't necessarily swim (a
+    # future running event would also be distance_m). Both combinations
+    # must validate freely, with no cross-field coupling between them.
+    bike_duration = make_event(
+        primary_sport="bike", target_metric="duration_min", distance_m=None, target_value=300.0
+    )
+    assert bike_duration.primary_sport == "bike"
+    assert bike_duration.target_metric == "duration_min"
+
+    swim_distance = make_event(primary_sport="swim", target_metric="distance_m", distance_m=20000)
+    assert swim_distance.primary_sport == "swim"
+    assert swim_distance.target_metric == "distance_m"
+
+
 def test_event_active_defaults_to_true():
     event = make_event()
     assert event.active is True

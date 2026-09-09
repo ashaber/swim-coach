@@ -2465,6 +2465,56 @@ const POOL_DAY_LABELS = [
   { value: 'sunday', label: 'Sun' },
 ];
 
+// --- Sports & thresholds (Settings tab, threshold-history build) -----------
+// Read-only display of the athlete's configured sports + current threshold
+// values per sport/metric -- Andrew's own "at least show the sport
+// settings (user's sports, thresholds) on profile/settings" request.
+// Deliberately no edit inputs: profile changes for these fields still go
+// through the coach's update_athlete_profile tool, not a form field on this
+// tab (the whole point of that tool being coach-owned). Reuses the same
+// `profileForm`/`profileLoad` state renderProfilePanel already fetches via
+// GET /api/athlete -- no separate fetch pattern invented for this section.
+function renderSportsThresholdsPanel({ form, load }) {
+  if (load.status === 'loading' || load.status === 'idle') {
+    return `
+      <div class="panel settings-panel">
+        <h3 style="margin:0 0 12px;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);">Sports &amp; thresholds</h3>
+        <p class="sub">Loading&hellip;</p>
+      </div>`;
+  }
+  if (load.status === 'error') {
+    // renderProfilePanel already shows the load-error message once on this
+    // tab -- this section just quietly shows nothing rather than a second,
+    // redundant error banner.
+    return '';
+  }
+
+  const sportsHtml = form.sports && form.sports.length > 0
+    ? `<div class="settings-actions">${form.sports.map((s) => `<span class="chat-chip">${esc(sportLabel(s))}</span>`).join('')}</div>`
+    : '<p class="field-hint" style="margin:0;">Not yet set -- treated as swim-only until a coach configures it.</p>';
+
+  const thresholdRows = [
+    ['CSS pace (per 100m)', form.cssPace ? esc(form.cssPace) : 'not set'],
+    ['Lactate-threshold heart rate', form.lthrBpm ? `${esc(form.lthrBpm)} bpm` : 'not set'],
+    ['FTP (bike)', form.ftpWatts ? `${esc(form.ftpWatts)} W` : 'not set'],
+  ];
+
+  return `
+    <div class="panel settings-panel">
+      <h3 style="margin:0 0 12px;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);">Sports &amp; thresholds</h3>
+      <p class="field-hint" style="margin:0 0 8px;">Read-only -- ask your coach to update these.</p>
+      <label class="field">
+        <span>Sports</span>
+        ${sportsHtml}
+      </label>
+      ${thresholdRows.map(([label, value]) => `
+      <label class="field">
+        <span>${esc(label)}</span>
+        <p class="field-hint" style="margin:0;">${value}</p>
+      </label>`).join('')}
+    </div>`;
+}
+
 function renderProfilePanel({ form, load, submit }) {
   if (load.status === 'loading' || load.status === 'idle') {
     return `
@@ -3684,6 +3734,7 @@ export function renderSettingsTab({
         ${identityError ? `<div class="conn-result fail">${esc(identityError)}</div>` : ''}`}
       </div>
       ${backendConfigured ? renderGrantsPanel({ grants, form: grantsForm, submit: grantsSubmit }) : ''}
+      ${backendConfigured ? renderSportsThresholdsPanel({ form: profileForm, load: profileLoad }) : ''}
       ${backendConfigured ? renderProfilePanel({ form: profileForm, load: profileLoad, submit: profileSubmit }) : ''}
     </div>`;
 }

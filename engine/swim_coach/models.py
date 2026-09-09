@@ -167,6 +167,31 @@ class Event(BaseModel):
     # lifted). Defaults to "distance_m" so every existing Event YAML (no
     # target_metric key) validates unchanged and means exactly what it
     # always meant -- additive, no schema_version bump.
+    primary_sport: Literal["swim", "bike"] = "swim"
+    # Which sport this event is FOR -- deliberately the same `Literal["swim",
+    # "bike"]` shape `plan.generate_week`'s own `primary_sport` parameter
+    # already uses (not the finer-grained `Sport` enum `Workout`/`Session`
+    # rows use, which distinguishes `swim_pool`/`swim_ow` -- an event's
+    # primary discipline doesn't need that granularity). Deliberately
+    # ORTHOGONAL to `target_metric` above: `target_metric` says what UNIT
+    # this event's target is measured in (distance/duration/load),
+    # `primary_sport` says WHICH SPORT it's for -- do not infer one from the
+    # other anywhere, going forward. That conflation was a real, audited bug
+    # (threshold-history build): `backend/app/tools.py`'s
+    # `_handle_propose_adaptation` and `cli.py`'s `_cmd_adapt` used to derive
+    # `primary_sport = "bike" if event.target_metric != "distance_m" else
+    # "swim"` -- invisible only while bike was the sole non-swim sport and
+    # happened to always use `duration_min`; a future running event (running
+    # is typically ALSO distance-based, e.g. a 5K) would be misidentified as
+    # "swim" under that inference. A plain, flat `Literal` string list (not
+    # a richer type) is the right shape for "cheap to extend later, don't
+    # over-engineer now" -- same precedent as `ThresholdRecord.metric` and
+    # `00-conventions.md`'s `[EVIDENCE: <discipline>]` tag -- extend the
+    # Literal with each new sport as it's actually built (running next, per
+    # ROADMAP.md). Defaults "swim" so every existing Event YAML (no
+    # primary_sport key) validates unchanged and means exactly what it
+    # always meant -- additive, no schema_version bump, matching every other
+    # additive field in this file.
     distance_m: int | None = Field(default=None, gt=0)
     # Relaxed from required (`Field(gt=0)`) to optional -- required in
     # practice (enforced by `_validate_target_metric_fields` below) only

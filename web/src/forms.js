@@ -246,6 +246,17 @@ export function profileFormFromAthlete(athlete) {
       ? ''
       : String(athlete.lthr_bpm),
     poolDays: poolScheduleToDayMap(athlete.pool_schedule),
+    // Sports/thresholds (threshold-history build, Settings tab read-only
+    // display -- see renderSportsThresholdsPanel in views.js): raw
+    // passthrough, no unit conversion needed for ftpWatts (same "plain
+    // number, empty string means unset" convention as lthrBpm above).
+    // Deliberately NOT included in serializeProfileForm's PATCH payload --
+    // this section is read-only by design (profile changes for these
+    // fields still go through the coach's update_athlete_profile tool).
+    sports: Array.isArray(athlete.sports) ? athlete.sports : null,
+    ftpWatts: athlete.ftp_watts === null || athlete.ftp_watts === undefined
+      ? ''
+      : String(athlete.ftp_watts),
     // B4 (coach-mode Q&A build): the Settings tab's "Email notifications"
     // toggle -- `email_notifications_enabled` defaults `true` server-side
     // (engine/swim_coach/models.py's Athlete field) for every existing/new

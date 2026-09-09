@@ -1607,6 +1607,47 @@ describe('renderSettingsTab', () => {
     const match = /<input type="checkbox" data-form="profile" data-field="email_notifications_enabled"[^>]*>/.exec(html);
     expect(match[0]).not.toContain('checked');
   });
+
+  // --- Sports & thresholds read-only panel (threshold-history build) ---
+
+  it('shows an honest "not yet set" state when sports/thresholds are unconfigured', () => {
+    const html = renderSettingsTab({
+      ...profilePanelArgs,
+      profileForm: {
+        ...profilePanelArgs.profileForm, sports: null, cssPace: '', lthrBpm: '', ftpWatts: '',
+      },
+    });
+    expect(html).toContain('Sports &amp; thresholds');
+    expect(html).toContain('Not yet set');
+    expect(html).toContain('not set');
+  });
+
+  it('lists configured sports as chips with friendly labels', () => {
+    const html = renderSettingsTab({
+      ...profilePanelArgs,
+      profileForm: { ...profilePanelArgs.profileForm, sports: ['bike', 'swim_pool'] },
+    });
+    expect(html).toContain('Bike');
+    expect(html).toContain('Pool swim');
+    expect(html).not.toContain('Not yet set');
+  });
+
+  it('shows configured threshold values (CSS pace, LTHR, FTP)', () => {
+    const html = renderSettingsTab({
+      ...profilePanelArgs,
+      profileForm: {
+        ...profilePanelArgs.profileForm, cssPace: '1:40', lthrBpm: '172', ftpWatts: '250',
+      },
+    });
+    expect(html).toContain('1:40');
+    expect(html).toContain('172 bpm');
+    expect(html).toContain('250 W');
+  });
+
+  it('shows a loading state for the sports & thresholds panel while the profile is loading', () => {
+    const html = renderSettingsTab({ ...profilePanelArgs, profileLoad: { status: 'loading', error: null } });
+    expect(html).toContain('Sports &amp; thresholds');
+  });
 });
 
 describe('renderAskCoachSection', () => {
