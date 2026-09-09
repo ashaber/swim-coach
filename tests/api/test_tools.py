@@ -26,6 +26,7 @@ from swim_coach.models import (
     WorkoutPause,
     WorkoutStep,
     WorkoutStructure,
+    WorkoutTarget,
 )
 from swim_coach.plan import SESSION_ADJUSTMENT_INCREASE_CAP_PCT
 from swim_coach.store import FileStore
@@ -974,6 +975,140 @@ def test_push_to_garmin_is_registered_with_a_schema_documenting_the_setup_step(
     assert "structured" in description
     properties = schema["input_schema"]["properties"]
     assert set(properties) == {"iso_week", "session_id"}
+
+
+# --- export_zwo_workout (engine/cycling-coach Part C) ------------------------
+
+
+def _seed_indoor_bike_session(athletes_dir):
+    store = FileStore(base_dir=athletes_dir)
+    week = store.load_week("renee", "2026-W28")
+    athlete = store.load_athlete("renee")
+    athlete.ftp_watts = 250.0
+    store.save_athlete(athlete)
+
+    session = Session(
+        id=uuid.uuid4(),
+        athlete_id=week.athlete_id,
+        date=date(2026, 7, 8),
+        sport="bike",
+        source="ai_coach",
+        duration_min=30.0,
+        distance_m=None,
+        intensity={"zone": "Z2"},
+        purpose="export_zwo_workout tool test",
+        structure="Main set: steady ride -- Z2",
+        structured=WorkoutStructure(
+            items=[
+                WorkoutStep(
+                    label="Main set: steady ride -- Z2",
+                    role="interval",
+                    duration_kind="time_s",
+                    duration_value=1800,
+                    target=WorkoutTarget(basis="power_w", low=140.0, high=190.0),
+                    modality="bike",
+                ),
+            ]
+        ),
+        status="planned",
+        is_indoor=True,
+    )
+    week.sessions.append(session)
+    store.save_week("renee", week)
+    return session
+
+
+def test_export_zwo_workout_returns_real_xml(athletes_dir) -> None:
+    session = _seed_indoor_bike_session(athletes_dir)
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["export_zwo_workout"]({"session_id": str(session.id)})
+
+    assert "error" not in result
+    assert result["session_id"] == str(session.id)
+    assert result["zwo_xml"].startswith('<?xml version="1.0" encoding="utf-8"?>')
+    assert "<sportType>bike</sportType>" in result["zwo_xml"]
+
+
+def test_export_zwo_workout_requires_session_id(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["export_zwo_workout"]({})
+
+    assert result == {"error": "session_id is required"}
+
+
+def test_export_zwo_workout_unknown_session_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["export_zwo_workout"]({"session_id": str(uuid.uuid4())})
+
+    assert "error" in result
+    assert "no such session" in result["error"]
+
+
+def test_export_zwo_workout_missing_ftp_watts_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    week = store.load_week("renee", "2026-W28")
+    session = Session(
+        id=uuid.uuid4(),
+        athlete_id=week.athlete_id,
+        date=date(2026, 7, 8),
+        sport="bike",
+        source="ai_coach",
+        duration_min=30.0,
+        distance_m=None,
+        intensity={"zone": "Z2"},
+        purpose="no ftp test",
+        structured=WorkoutStructure(
+            items=[
+                WorkoutStep(
+                    label="steady",
+                    role="interval",
+                    duration_kind="time_s",
+                    duration_value=1800,
+                    target=WorkoutTarget(basis="zone", zone="Z2"),
+                    modality="bike",
+                ),
+            ]
+        ),
+        status="planned",
+        is_indoor=True,
+    )
+    week.sessions.append(session)
+    store.save_week("renee", week)
+    # renee's athlete profile has no ftp_watts set in this fixture.
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["export_zwo_workout"]({"session_id": str(session.id)})
+
+    assert "error" in result
+    assert "ftp_watts" in result["error"]
+
+
+def test_export_zwo_workout_wrong_sport_is_a_clean_error(athletes_dir) -> None:
+    _seed_pushable_session(athletes_dir)  # a swim_pool session
+    store = FileStore(base_dir=athletes_dir)
+    week = store.load_week("renee", "2026-W28")
+    swim_session = next(s for s in week.sessions if s.purpose == "push_to_garmin tool test")
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["export_zwo_workout"]({"session_id": str(swim_session.id)})
+
+    assert "error" in result
+    assert "swim_pool" in result["error"]
+
+
+def test_export_zwo_workout_is_registered_with_a_schema(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    assert "export_zwo_workout" in handlers
+
+    schema = next(t for t in TOOLS_SCHEMA if t["name"] == "export_zwo_workout")
+    assert schema["input_schema"]["required"] == ["session_id"]
 
 
 @_no_fit_fixture

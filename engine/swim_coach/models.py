@@ -20,7 +20,18 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 # swim volume (load.py's volume filters allowlist {swim_pool, swim_ow}).
 # The planner never schedules it; it exists so real .fit imports of non-swim
 # activities aren't mislabeled as swims.
-Sport = Literal["swim_pool", "swim_ow", "strength", "recovery", "cross_train"]
+#
+# bike: a first-class, PLANNABLE cycling sport (engine/cycling-coach branch,
+# IDEA 008 use case 5) -- deliberately NOT reusing `cross_train`, which is
+# explicitly documented above as a logging-only catch-all the planner never
+# schedules. `bike` is the opposite: `plan.generate_week` can author real
+# bike sessions for it (see that module's `primary_sport` parameter). Road/
+# MTB/cyclocross/gravel sub-classification reuses the EXISTING
+# `Workout.sport_detail` free-text field below (confirmed real production
+# values: "cycling/mountain", "cycling/road", "cycling/gravel_cycling",
+# "cycling/cyclocross") rather than a new field -- see that field's own
+# comment.
+Sport = Literal["swim_pool", "swim_ow", "strength", "recovery", "cross_train", "bike"]
 
 _ISO_WEEK_RE = re.compile(r"^\d{4}-W\d{2}$")
 _VALID_ZONES = {"Z1", "Z2", "Z3", "Z4", "Z5"}
@@ -67,6 +78,41 @@ class Athlete(BaseModel):
     # every existing profile.yaml (no key present) unless explicitly toggled
     # off, same additive/no-schema_version-bump convention as
     # `has_pool_coach` above.
+    sports: list[Sport] | None = None
+    # Which sport(s) this athlete's OWN training actually spans -- IDEA 008's
+    # "never surface cycling guidance to a swim-only athlete" hard
+    # requirement (`engine/cycling-coach` branch), the structural half of
+    # the constraint `library/23-cycling-training.md`'s own guidance-scoping
+    # note names. `None` (the default) means "not yet declared" -- every
+    # existing athlete's profile.yaml has no `sports` key today. Additive/
+    # optional, no schema_version bump, same convention as every other
+    # additive field in this file.
+    #
+    # **Do not read this raw field for sport-scope routing -- use
+    # `effective_sports` below.** A real review bug (PR #167 review,
+    # Finding 1): `backend/app/context.py`'s sport-scope filtering used to
+    # treat `sports is None` as "apply no filtering at all" (i.e. every
+    # sport), which meant cycling library content reached 100% of real
+    # athletes -- every one of whom has `sports=None` today, since setting
+    # it on real athlete data was explicitly deferred. `None` must mean
+    # "not yet declared, so assume swim-only" (this project's actual
+    # population today), never "declared as every sport."
+
+    @property
+    def effective_sports(self) -> list[Sport]:
+        """`sports` resolved to a concrete list for any consumer that needs
+        to know which sport(s) actually ground this athlete's routing/
+        guidance scope -- an unset `sports` field behaves as swim-only
+        (`["swim_pool", "swim_ow"]`), matching every real athlete's actual
+        training today, NEVER as "every sport." See the bug this fixes in
+        `sports`'s own comment above. Prefer this over reading `.sports`
+        directly wherever a concrete sport list is actually needed (sport-
+        scope library routing today); `.sports` itself stays `None`-capable
+        for callers that specifically care whether the athlete has ever
+        declared it at all.
+        """
+        return self.sports if self.sports is not None else ["swim_pool", "swim_ow"]
+
     lthr_bpm: int | None = None
     # Lactate-threshold heart rate (bpm) -- a physiological anchor the
     # athlete supplies directly (e.g. from a field test, or read off a
@@ -80,6 +126,20 @@ class Athlete(BaseModel):
     # tier 2 exactly as before -- raw, un-normalized TRIMP -- for every
     # existing profile.yaml (no key present) and any athlete who hasn't
     # set one. Additive, no schema_version bump.
+    ftp_watts: float | None = None
+    # Functional Threshold Power (watts) -- cycling's own physiological
+    # anchor, the same role `css_pace_s_per_100m` plays for swim pace and
+    # `lthr_bpm` plays for HR (engine/cycling-coach Part C). Used by
+    # `zones.bike_zone_table` (via `plan._bike_step`/`_bike_week_sessions`)
+    # to resolve a bike session's %FTP zone into absolute watts, and by
+    # `backend/app/zwo_export.build_zwo_export` to express a `.zwo` file's
+    # power targets as fractions of a real, athlete-specific FTP rather than
+    # an arbitrary one supplied per-request. `None` (the default) leaves
+    # every existing profile.yaml (no key present) validating unchanged --
+    # `generate_week`'s bike path already tolerates `ftp_watts=None`
+    # gracefully (zone-name-only targets, no absolute watts), and the `.zwo`
+    # export route/tool return a clear 422 rather than guessing at a number
+    # when it's missing. Additive, no schema_version bump.
 
 
 class Event(BaseModel):
@@ -193,12 +253,27 @@ class WorkoutTarget(BaseModel):
     `create_week_plan`/`replace_week_plan` `structured` param) to use on a
     genuinely effort-based day (recovery, technique) where no pace target
     is the right anchor.
+
+    `basis="power_w"` (engine/cycling-coach Part C -- delivery/logging):
+    the bike-modality RESOLVED counterpart to `basis="absolute"` above --
+    `low`/`high` are absolute watts (not pace), populated by
+    `plan._bike_step` from `zones.bike_zone_table` once an athlete's
+    `ftp_watts` is known. `basis="zone"` still covers the bike case where
+    FTP is unknown (the zone name alone, e.g. "Z2", for a device to apply
+    its own configured power zone -- same graceful partial-data fallback
+    `_bike_step`'s docstring documents); `"power_w"` is only ever reached
+    once real watts numbers exist. Not reusing `"absolute"` itself: that
+    basis's `low`/`high` are documented everywhere else in this codebase
+    (`workout_templates.resolve_template`, `garmin_export._apply_target`)
+    as seconds-per-100m pace specifically, and silently overloading its
+    unit by modality would be a real footgun for any future reader who
+    forgets to check `WorkoutStep.modality` first.
     """
 
     schema_version: int = 1
-    basis: Literal["zone", "percent_css", "absolute", "rpe", "open"]
+    basis: Literal["zone", "percent_css", "absolute", "rpe", "open", "power_w"]
     zone: Literal["Z1", "Z2", "Z3", "Z4", "Z5"] | None = None  # basis="zone"
-    low: float | None = None  # percent_css: % of CSS; absolute: pace_s_per_100m; rpe: 1-10
+    low: float | None = None  # percent_css: % of CSS; absolute: pace_s_per_100m; rpe: 1-10; power_w: watts
     high: float | None = None  # same units as low
 
 
@@ -226,7 +301,16 @@ class WorkoutStep(BaseModel):
     duration_value: float | None = None
     target: WorkoutTarget | None = None  # swim/cardio steps
     load: WorkoutLoad | None = None  # strength steps
-    modality: Literal["swim", "strength"] = "swim"
+    modality: Literal["swim", "strength", "bike"] = "swim"
+    # "bike" added alongside `Sport`'s own "bike" value (engine/cycling-coach
+    # branch) -- a harder, per-step constraint than `Session.sport` since a
+    # single WorkoutStructure tree's steps are all one modality in practice
+    # today (see `workout_templates.render_main_set`'s modality-uniformity
+    # assumption). Real cycling `WorkoutStep`s ARE now constructed by
+    # `plan._bike_session_structure` (engine/cycling-coach Part C) -- a
+    # minimal warm-up/main-block/cool-down shape, the same
+    # deferred-until-delivery-stage groundwork this comment originally
+    # flagged. Additive/no schema_version bump.
     stroke: Literal["free", "back", "breast", "fly", "im", "mixed", "drill"] | None = None
     equipment: list[str] = Field(default_factory=list)  # e.g. ["paddles"]
     exercise_name: str | None = None  # strength steps, e.g. "kettlebell swing"
@@ -307,6 +391,20 @@ class Session(BaseModel):
     # schema_version bump, no backfill, same pattern as every other
     # additive field in this file.
     status: Literal["planned", "completed", "skipped", "replaced"] = "planned"
+    is_indoor: bool | None = None
+    # Engine/cycling-coach Part C (delivery/logging): the lightweight signal
+    # this build's own brief asked for -- "does this bike session need the
+    # outdoor Garmin/intervals.icu push, or the indoor/trainer .zwo export"
+    # (see `backend/app/garmin_push.py` and `swim_coach.zwo_export`). `None`
+    # (the default) means "not indoor" for gating purposes -- every real bike
+    # session this engine currently generates (`plan._bike_week_sessions`)
+    # is a generic outdoor Z2/Z3 ride (matching this athlete's real,
+    # already-flowing production `.fit` data: "cycling/mountain",
+    # "cycling/road", all outdoor sub_sports), so defaulting to the outdoor
+    # push path is the honest default, not a guess. Only ever meaningful for
+    # `sport == "bike"` today; every other sport ignores this field. Purely
+    # additive/optional, no schema_version bump, same convention as every
+    # other additive field in this file.
 
     @field_validator("intensity")
     @classmethod

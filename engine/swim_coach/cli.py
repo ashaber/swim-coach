@@ -468,6 +468,18 @@ def _cmd_adapt(args: argparse.Namespace, store: StoreInterface) -> int:
     wellness = store.list_wellness(slug)
     as_of = week_start - timedelta(days=1)
 
+    # `primary_sport` derived the same way `_cmd_plan_week`/tools.py derive
+    # `event_format` from `event.event_format` -- `event.target_metric ==
+    # "distance_m"` is the only sport this engine's swim-shaped machinery is
+    # evidenced for; any other target_metric ("duration_min"/"load_au")
+    # reaches `generate_week`'s bike-primary path today (see that
+    # function's own "Known, deliberate scope limit" docstring note on
+    # load_au). `ftp_watts` comes straight off the athlete profile (same
+    # field `.zwo` export already reads) -- PR #167 red-team review,
+    # Finding 1 (must-fix): without this, `adapt_week`'s internal baseline
+    # call always defaulted to `primary_sport="swim"`, silently substituting
+    # a full swim week for a bike-primary athlete's real cut/advance draft.
+    primary_sport = "bike" if event.target_metric != "distance_m" else "swim"
     try:
         week = adapt_week(
             athlete,
@@ -480,6 +492,8 @@ def _cmd_adapt(args: argparse.Namespace, store: StoreInterface) -> int:
             wellness,
             as_of,
             days_since_last_milestone=args.days_since_last_milestone,
+            primary_sport=primary_sport,
+            ftp_watts=athlete.ftp_watts,
         )
     except ValueError as exc:
         return _error(str(exc))
@@ -1344,7 +1358,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest.add_argument("--rpe", type=int, help="0-10 (Foster CR-10 scale), overrides/sets the parsed rpe")
     p_ingest.add_argument(
         "--sport",
-        choices=["swim_pool", "swim_ow", "strength", "recovery", "cross_train"],
+        choices=["swim_pool", "swim_ow", "strength", "recovery", "cross_train", "bike"],
         help="overrides the parsed sport",
     )
     p_ingest.add_argument("--save", action="store_true", help="persist the draft as a Workout")

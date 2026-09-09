@@ -362,13 +362,28 @@ def _fit_sport(session_sport: object | None, session_sub_sport: object | None, w
     Anything that isn't recognizably swimming maps to cross_train with a
     warning -- a kayak/run/ride file must never be silently logged as a swim
     (it would pollute swim-volume math; the first real .fit ingested,
-    2026-07-09, was a kayak session). The one carve-out: Garmin encodes a
-    logged strength workout as session.sport=="training" (sub_sport
-    typically "strength_training", surfaces in intervals.icu as
-    "WeightTraining") -- that maps to this engine's own "strength" Sport
-    instead of cross_train, unambiguous enough to need no warning, same as
-    the swim cases above. It still counts toward sRPE load, never swim
-    volume, exactly like cross_train does.
+    2026-07-09, was a kayak session). Two carve-outs, neither needing a
+    warning since both are unambiguous:
+      - Garmin encodes a logged strength workout as session.sport=="training"
+        (sub_sport typically "strength_training", surfaces in intervals.icu
+        as "WeightTraining") -- maps to this engine's own "strength" Sport.
+      - engine/cycling-coach Part C: session.sport=="cycling" (road/mountain/
+        gravel/cyclocross all share this same raw FIT sport, distinguished
+        only by sub_sport -- see `_is_cycling_sport`, which this reuses) maps
+        to this engine's own first-class, PLANNABLE "bike" Sport (see
+        `models.Sport`'s own comment on why `bike` is NOT folded into
+        `cross_train`) rather than falling through to the generic
+        cross_train bucket below. Verified against this repo's two real MTB
+        fixtures (`real_mtb_race.fit`/`real_mtb_0709.fit`, both
+        sport="cycling"/sub_sport="mountain") -- confirmed real production
+        data for the target athlete. `sport_detail` (see `_sport_detail`
+        below) is completely unaffected by this change: it still resolves
+        the same "cycling/mountain"/"cycling/road" free-text detail either
+        way, from the same raw fields, regardless of which `Sport` bucket
+        the activity resolves into.
+    Both carve-outs still count toward sRPE load, never swim volume, exactly
+    like cross_train does; a kayak/walk/hike/run file is untouched by this
+    change and still falls through to cross_train below.
     """
     if session_sub_sport is not None and "open" in str(session_sub_sport).lower():
         return "swim_ow"
@@ -380,6 +395,8 @@ def _fit_sport(session_sport: object | None, session_sub_sport: object | None, w
         return "swim_pool"
     if session_sport_lower == "training" or "strength" in str(session_sub_sport or "").lower():
         return "strength"
+    if _is_cycling_sport(session_sport):
+        return "bike"
     warnings.append(
         f"non-swim FIT sport '{session_sport}' mapped to cross_train "
         "(counts toward sRPE load, not swim volume)"
@@ -558,6 +575,12 @@ def _is_cycling_sport(session_sport: object | None) -> bool:
     exploit for a naturally slow-moving sport, unlike cycling. Scoping to
     cycling keeps the feature safe for the evidence it actually has,
     without silently mis-flagging kayak/paddle/walk/swim sessions.
+
+    Reused (engine/cycling-coach Part C) by `_fit_sport` for the same raw
+    field, for an unrelated purpose (resolving the engine's own `Sport`
+    bucket to "bike" instead of the generic `cross_train`) -- one shared
+    single-source-of-truth predicate for "is this raw FIT sport a cycling
+    activity," not two independently-drifting string checks.
     """
     return session_sport is not None and str(session_sport).strip().lower() == "cycling"
 

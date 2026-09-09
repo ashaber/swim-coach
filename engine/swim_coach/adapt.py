@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, timedelta
+from typing import Literal
 from uuid import uuid4
 
 from swim_coach.load import (
@@ -61,6 +62,8 @@ from swim_coach.plan import (
     RECOVERY_SESSION_MIN,
     STAGE_SATURDAY_SHARE,
     WEEKLY_VOLUME_RAMP_CAP,
+    _bike_ramp_week_index,
+    _bike_week_sessions_with_strength,
     _duration_min_for_distance,
     _round_100,
     _z2_pace_s_per_100m,
@@ -290,6 +293,8 @@ def adapt_week(
     wellness: list[Wellness],
     as_of: date,
     days_since_last_milestone: int | None = None,
+    primary_sport: Literal["swim", "bike"] = "swim",
+    ftp_watts: float | None = None,
 ) -> WeekPlan:
     """Produce a draft next-week `WeekPlan` (`draft=True`) from the
     adaptation rule table + event-format-aware long-swim ladder (see module
@@ -301,6 +306,52 @@ def adapt_week(
     `as_of` is the last day of signal data to consider (typically the day
     before `week_start`). `days_since_last_milestone`, when known, gates a
     forced recovery-window `hold` (see RECOVERY_DAYS_AFTER_MILESTONE_MIN).
+
+    `primary_sport`/`ftp_watts` (both optional, default `"swim"`/`None` --
+    every existing call site keeps producing byte-identical output unless
+    updated to pass `primary_sport="bike"`): forwarded straight through to
+    the internal `generate_week` baseline call below, exactly mirroring
+    `generate_week`'s own parameters of the same name.
+
+    **Real bug this fixes (PR #167 red-team review, Finding 1, must-fix,
+    verified live):** without these, `adapt_week` always built its
+    cut/repeat/hold/advance baseline from `generate_week`'s DEFAULT
+    `primary_sport="swim"` path -- for a bike-primary athlete that silently
+    substituted a full swim week (pool placeholders, long-swim-ladder
+    machinery) as the baseline, whose `swim_ow`/Saturday-Sunday distance
+    logic never matches that athlete's real `sport="bike"` sessions, so
+    `current_saturday_m`/`current_sunday_m` silently resolved to 0 and a
+    red-wellness or load-ratio-red week produced a wrong-sport plan instead
+    of the volume cut this system exists to apply.
+
+    A second, related bug fixed alongside the first: passing
+    `primary_sport`/`ftp_watts` through to the baseline call ALONE is not
+    enough. The swim branch below only overrides the baseline's
+    Saturday/Sunday `swim_ow` session(s) with the cut/advance-adjusted long
+    swim -- every other swim session (pool placeholders, strength) is
+    carried through from `baseline` unmodified, which is fine for swim
+    because the pool coach's/ai_coach's volume there doesn't come from
+    `next_target_volume_m` in the first place. A bike-primary week has NO
+    long-swim-equivalent session to override -- ALL of its actual training
+    content lives in the generic Z2/Z3 session split. Reusing
+    `baseline.sessions` unmodified for bike (as a naive parameter-threading
+    fix would) would silently leave a cut/advance week's actual session
+    durations at the un-adjusted baseline target -- a second, distinct
+    silent no-op bug layered on top of the first. `sessions` for a
+    bike-primary week is therefore rebuilt directly from
+    `next_target_volume_m` via `_bike_week_sessions_with_strength` (below),
+    the same helper `generate_week`'s own bike-primary path uses, rather
+    than sourced from `baseline` at all.
+
+    The long-swim ladder above (`_advance_single_day_long_swim_m`/
+    `_advance_stage_weekend_swims_m`) already gates itself off
+    `event.target_metric == "distance_m"` via `can_advance_ladder`
+    (multi-sport-unlock, PR #164) -- VERIFIED here (not just assumed) to
+    correctly no-op for a bike-primary week with no change needed: a bike
+    baseline's sessions are all `sport="bike"`, so the sessions-assembly
+    loop's `session.sport == "swim_ow"` checks below never match anything,
+    and `can_advance_ladder` is already `False` whenever `event.target_metric
+    != "distance_m"` regardless of `primary_sport`.
 
     Known limitation: ROADMAP.md's "each milestone followed by 3-5 easy/
     recovery days" spans into the week *after* a milestone week. A single
@@ -393,8 +444,21 @@ def adapt_week(
         )
 
     # --- baseline schedule (pool/strength placement, taper caps) --------------
+    # `primary_sport`/`ftp_watts` threaded through here -- see this
+    # function's own docstring "real bug this fixes" note (PR #167 red-team
+    # review, Finding 1). `baseline` still supplies `meso_block`/`focus`/
+    # `race_week_checklist` for every primary_sport; for `primary_sport ==
+    # "bike"` its `sessions` are NOT used below (rebuilt from
+    # `next_target_volume_m` instead -- see the "assemble sessions" section).
     baseline = generate_week(
-        athlete, macro, iso_week, week_start, event_format=event_format, event=event
+        athlete,
+        macro,
+        iso_week,
+        week_start,
+        event_format=event_format,
+        event=event,
+        primary_sport=primary_sport,
+        ftp_watts=ftp_watts,
     )
 
     # --- target volume ---------------------------------------------------------
@@ -459,29 +523,53 @@ def adapt_week(
         sunday_m = 0
 
     # --- assemble sessions: baseline schedule, long-swim override, cut/milestone tweaks ---
-    pace_s = _z2_pace_s_per_100m(athlete)
-    sessions: list[Session] = []
-    for session in baseline.sessions:
-        if session.sport == "swim_ow" and session.date.weekday() == 5:
-            sessions.append(
-                session.model_copy(
-                    update={
-                        "distance_m": saturday_m,
-                        "duration_min": max(_duration_min_for_distance(saturday_m, pace_s), 15.0),
-                    }
+    sessions: list[Session]
+    if primary_sport == "bike":
+        # No long-swim-equivalent session exists to override in place (see
+        # this function's own docstring "second, related bug" note) --
+        # ALL of a bike week's content is the generic Z2/Z3 split, so it
+        # must be rebuilt directly from the cut/advance-adjusted
+        # `next_target_volume_m`, using the exact same helper
+        # `generate_week`'s own bike-primary path uses (strength placement
+        # included, PR #167 Finding 3) rather than reused from `baseline`
+        # (which reflects the macro's un-adjusted interpolated target).
+        # `week_index=_bike_ramp_week_index(macro, week_start)` keeps the
+        # hard session's interval-template rotation (library/24-cycling-
+        # periodization-intervals.md, `plan._select_bike_interval_template`)
+        # consistent with what `generate_week` would pick for this same
+        # calendar week -- without it, every /adapt-rebuilt week would reset
+        # to week_index=0's template regardless of which real week it is.
+        sessions = _bike_week_sessions_with_strength(
+            athlete,
+            week_start,
+            float(next_target_volume_m),
+            ftp_watts,
+            week_index=_bike_ramp_week_index(macro, week_start),
+        )
+    else:
+        pace_s = _z2_pace_s_per_100m(athlete)
+        sessions = []
+        for session in baseline.sessions:
+            if session.sport == "swim_ow" and session.date.weekday() == 5:
+                sessions.append(
+                    session.model_copy(
+                        update={
+                            "distance_m": saturday_m,
+                            "duration_min": max(_duration_min_for_distance(saturday_m, pace_s), 15.0),
+                        }
+                    )
                 )
-            )
-        elif session.sport == "swim_ow" and session.date.weekday() == 6:
-            sessions.append(
-                session.model_copy(
-                    update={
-                        "distance_m": sunday_m,
-                        "duration_min": max(_duration_min_for_distance(sunday_m, pace_s), 15.0),
-                    }
+            elif session.sport == "swim_ow" and session.date.weekday() == 6:
+                sessions.append(
+                    session.model_copy(
+                        update={
+                            "distance_m": sunday_m,
+                            "duration_min": max(_duration_min_for_distance(sunday_m, pace_s), 15.0),
+                        }
+                    )
                 )
-            )
-        else:
-            sessions.append(session)
+            else:
+                sessions.append(session)
 
     if action == "cut":
         # "add a recovery day": convert the last strength session (ai_coach-

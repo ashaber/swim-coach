@@ -95,7 +95,17 @@ async def chat(
                 status_code=404, detail=f"no workout matching id {payload.workout_id!r}"
             )
 
-    system = build_system(settings.library_dir, payload.message)
+    # Fetched once here so build_system's sport-scope filtering (IDEA 008 --
+    # never surface cycling content to a swim-only athlete, or vice versa)
+    # can see this athlete's own sport scope. Passes `effective_sports`, NOT
+    # the raw `.sports` field -- an athlete with no `sports` key set (every
+    # real athlete today) resolves to swim-only, never to "every sport" (PR
+    # #167 review, Finding 1) -- see Athlete.effective_sports and
+    # app.context.filter_files_by_sport_scope.
+    athlete_profile = store.load_athlete(athlete)
+    system = build_system(
+        settings.library_dir, payload.message, athlete_sports=athlete_profile.effective_sports
+    )
     history = [{"role": h.role, "content": h.content} for h in payload.history]
     messages = build_messages(
         store,

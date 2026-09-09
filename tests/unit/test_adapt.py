@@ -113,6 +113,31 @@ def _setup(event_format="single_day", current_volume=14000, peak_volume=20000):
     return athlete, event, macro, current_week, next_iso, next_week_start, as_of
 
 
+def _setup_bike(current_volume=200, peak_volume=600):
+    """bike-primary counterpart to `_setup()` above -- athlete/macro/
+    current_week (a real `generate_week(primary_sport="bike")` output) for
+    PR #167 red-team review Finding 1's test coverage (`/adapt`'s baseline
+    call never used to thread `primary_sport`/`ftp_watts` at all)."""
+    athlete = make_athlete(sports=["bike"])
+    event = make_event(
+        target_metric="duration_min",
+        distance_m=None,
+        target_value=300.0,
+        event_format="single_day",
+    )
+    macro = scaffold_macro(
+        athlete, event, START, current_weekly_volume_m=current_volume, peak_weekly_volume_m=peak_volume
+    )
+    current_week_start = macro.blocks[0].start_date + timedelta(weeks=2)
+    current_week = generate_week(
+        athlete, macro, _iso_week(current_week_start), current_week_start, primary_sport="bike"
+    )
+    next_week_start = current_week_start + timedelta(weeks=1)
+    next_iso = _iso_week(next_week_start)
+    as_of = next_week_start - timedelta(days=1)
+    return athlete, event, macro, current_week, next_iso, next_week_start, as_of
+
+
 def _rationale(week):
     return json.loads(week.adaptation_rationale)
 
@@ -752,3 +777,99 @@ def test_adapt_week_no_race_week_checklist_on_an_ordinary_taper_week():
         current_week, [], [], as_of,
     )
     assert week.race_week_checklist == []
+
+
+# --- bike-primary: /adapt wiring (PR #167 red-team review, Finding 1, must-fix) -----------
+# `adapt_week`'s internal `generate_week` baseline call used to always
+# default to `primary_sport="swim"`, silently substituting a full swim week
+# (pool placeholders, long-swim-ladder machinery) as a bike-primary
+# athlete's cut/advance baseline instead of erroring or doing the right
+# thing. These tests construct a real bike-primary athlete/macro/week and
+# confirm both halves of the fix: (1) the baseline is genuinely bike-shaped,
+# and (2) the resulting week's actual session content/target reflects the
+# cut/advance-adjusted volume, not the un-adjusted baseline (a second,
+# distinct silent-no-op bug that merely threading the parameter through
+# would not have fixed on its own -- see `adapt_week`'s own docstring).
+
+
+def test_adapt_week_bike_primary_cut_produces_real_bike_sessions_with_reduced_target():
+    athlete, event, macro, current_week, next_iso, next_start, as_of = _setup_bike()
+    # sanity: the baseline current_week is genuinely bike-shaped.
+    assert any(s.sport == "bike" for s in current_week.sessions)
+    assert not any(s.sport in ("swim_pool", "swim_ow") for s in current_week.sessions)
+
+    wellness = [
+        make_wellness(date=as_of - timedelta(days=i), sleep_quality=1, stress=5, soreness=5, motivation=1)
+        for i in range(7)
+    ]
+    week = adapt_week(
+        athlete, event, macro, next_iso, next_start, current_week, [], wellness, as_of,
+        primary_sport="bike",
+    )
+
+    rationale = _rationale(week)
+    assert rationale["action"] == "cut"
+    assert week.draft is True
+
+    # a real, reduced bike-duration target -- not a swim-shaped default.
+    prev_target = current_week.target_volume_m
+    assert week.target_volume_m == round(prev_target * (1 - CUT_VOLUME_FRACTION))
+    assert week.target_volume_m < prev_target
+
+    # genuinely bike sessions -- NOT the swim placeholder content the bug
+    # this fixes used to silently substitute -- and not a silent no-op
+    # (empty week).
+    assert week.sessions
+    assert not any(s.sport in ("swim_pool", "swim_ow") for s in week.sessions)
+    bike_sessions = [s for s in week.sessions if s.sport == "bike"]
+    assert bike_sessions
+    assert all(s.distance_m is None for s in bike_sessions)
+    assert all(s.duration_min > 0 for s in bike_sessions)
+
+    # the actual session durations reflect the CUT target, not the
+    # un-adjusted macro-interpolated baseline `generate_week` alone would
+    # have produced -- the "second, related bug" this fix also addresses.
+    total_bike_min = sum(s.duration_min for s in bike_sessions)
+    assert total_bike_min == pytest.approx(week.target_volume_m, rel=0.05)
+
+    # cut week still adds a recovery day (generic strength->recovery
+    # conversion, now reachable for bike since Finding 3 gives bike weeks
+    # real strength sessions to convert from).
+    assert any(s.sport == "recovery" for s in week.sessions)
+
+
+def test_adapt_week_bike_primary_repeat_keeps_bike_sessions_and_ladder_inert():
+    # Good wellness + no workouts logged -> 0% AU-load compliance (bike
+    # sessions were genuinely planned, so `compliance_by_load` reads a real
+    # 0%, not "not applicable") -> deterministic "repeat". Confirms the
+    # swim-distance long-swim ladder (`_advance_single_day_long_swim_m`/
+    # `_advance_stage_weekend_swims_m`) genuinely no-ops for a bike-primary
+    # event (target_metric != "distance_m") -- VERIFIED here, not just
+    # assumed to already be safe via `can_advance_ladder` (multi-sport-
+    # unlock, PR #164) -- and that a non-cut bike week's sessions/target
+    # stay real, unchanged bike content (repeat holds volume at last week's
+    # level, same as current_week's).
+    athlete, event, macro, current_week, next_iso, next_start, as_of = _setup_bike()
+    good_wellness = [make_wellness(date=as_of - timedelta(days=i)) for i in range(7)]
+    week = adapt_week(
+        athlete, event, macro, next_iso, next_start, current_week, [], good_wellness, as_of,
+        primary_sport="bike",
+    )
+    rationale = _rationale(week)
+    assert rationale["action"] == "repeat"
+    assert rationale["long_swim"]["milestone"] is False
+    assert week.target_volume_m == current_week.target_volume_m
+    assert any(s.sport == "bike" for s in week.sessions)
+    assert not any(s.sport in ("swim_pool", "swim_ow") for s in week.sessions)
+
+
+def test_adapt_week_default_primary_sport_still_produces_swim_content():
+    # Regression guard: primary_sport defaults to "swim" -- every existing
+    # (swim) call site that doesn't pass it must keep getting swim content,
+    # zero behavior change.
+    athlete, event, macro, current_week, next_iso, next_start, as_of = _setup()
+    good_wellness = [make_wellness(date=as_of - timedelta(days=i)) for i in range(7)]
+    week = adapt_week(
+        athlete, event, macro, next_iso, next_start, current_week, [], good_wellness, as_of
+    )
+    assert any(s.sport in ("swim_pool", "swim_ow") for s in week.sessions)

@@ -98,6 +98,84 @@ def zone_table(css: float) -> dict[str, dict[str, float | str | None]]:
     }
 
 
+# --- Cycling power-based training zones (Coggan/Allen 7-zone %FTP model) ---
+# Source: library/23-cycling-training.md ("Power-based training zones
+# (Coggan 7-zone model)"), `[EVIDENCE: cycling]` -- directly evidenced for
+# cycling's own native use (Allen H., Coggan A. (2010), Training and Racing
+# with a Power Meter), not an adaptation across disciplines the way this
+# module's swim zone offsets above cite an adjacent one.
+#
+# Zone-boundary convention (per that library file's own explicit engineering
+# decision, resolving the source table's whole-number gaps): boundaries are
+# INCLUSIVE ON THE UPPER END and continuous, not restricted to whole
+# numbers. A %FTP value falls in the first zone whose stated upper bound is
+# >= that value. Z7 has no upper bound (short, maximal sprint efforts).
+
+BIKE_Z1_HI_PCT_FTP: float = 55.0  # Active Recovery -- library/23-cycling-training.md
+BIKE_Z2_HI_PCT_FTP: float = 75.0  # Endurance -- library/23-cycling-training.md
+BIKE_Z3_HI_PCT_FTP: float = 90.0  # Tempo -- library/23-cycling-training.md
+BIKE_Z4_HI_PCT_FTP: float = 105.0  # Lactate Threshold -- library/23-cycling-training.md
+BIKE_Z5_HI_PCT_FTP: float = 120.0  # VO2max -- library/23-cycling-training.md
+BIKE_Z6_HI_PCT_FTP: float = 150.0  # Anaerobic Capacity -- library/23-cycling-training.md
+# Z7 (Neuromuscular Power): > BIKE_Z6_HI_PCT_FTP, no upper cap --
+# library/23-cycling-training.md.
+
+# (zone name, upper %FTP bound or None for open-ended) -- ordered ascending,
+# both `bike_zone_table` and `bike_zone_for_pct` walk this same list so the
+# boundary convention above is implemented in exactly one place.
+_BIKE_ZONE_BOUNDS: list[tuple[str, float | None]] = [
+    ("Z1", BIKE_Z1_HI_PCT_FTP),
+    ("Z2", BIKE_Z2_HI_PCT_FTP),
+    ("Z3", BIKE_Z3_HI_PCT_FTP),
+    ("Z4", BIKE_Z4_HI_PCT_FTP),
+    ("Z5", BIKE_Z5_HI_PCT_FTP),
+    ("Z6", BIKE_Z6_HI_PCT_FTP),
+    ("Z7", None),
+]
+
+
+def bike_zone_for_pct(pct_of_ftp: float) -> str:
+    """Which Coggan/Allen zone (Z1-Z7) a given %FTP value falls into, per
+    the inclusive-upper-bound convention documented above and stated
+    explicitly in library/23-cycling-training.md. Returns the FIRST zone
+    (in ascending order) whose upper bound is >= `pct_of_ftp`; Z7 (the
+    final entry, upper bound `None`) always matches whatever falls through
+    every prior zone, so this never raises.
+    """
+    for name, hi_pct in _BIKE_ZONE_BOUNDS:
+        if hi_pct is None or pct_of_ftp <= hi_pct:
+            return name
+    return _BIKE_ZONE_BOUNDS[-1][0]  # unreachable: Z7's hi_pct is None
+
+
+def bike_zone_table(ftp_watts: float) -> dict[str, dict[str, float | str | None]]:
+    """Build the Z1-Z7 Coggan/Allen %FTP power-zone table anchored to an
+    athlete's FTP (watts) -- the cycling-native counterpart to `zone_table`
+    above, same shape (per-zone name/bounds), but %FTP-based rather than a
+    CSS-pace-offset table, since cycling zones anchor to a directly
+    measurable power output rather than an inferred pace (see
+    library/23-cycling-training.md's own note on this structural
+    difference).
+
+    Each zone entry has: name, lo_pct_ftp, hi_pct_ftp (None = open-ended),
+    and the resolved watts_lo / watts_hi (None where the %FTP bound is
+    open-ended).
+    """
+    table: dict[str, dict[str, float | str | None]] = {}
+    lo_pct = 0.0
+    for name, hi_pct in _BIKE_ZONE_BOUNDS:
+        table[name] = {
+            "name": name,
+            "lo_pct_ftp": lo_pct,
+            "hi_pct_ftp": hi_pct,
+            "watts_lo": ftp_watts * lo_pct / 100.0,
+            "watts_hi": ftp_watts * hi_pct / 100.0 if hi_pct is not None else None,
+        }
+        if hi_pct is not None:
+            lo_pct = hi_pct
+    return table
+
+
 def infer_ow_pace(
     css: float,
     wetsuit: bool,

@@ -325,7 +325,12 @@ async def ask_question(
     if session_date is not None:
         focused_session = _find_planned_session(store, athlete, session_date, session_sport)
 
-    system = build_system(settings.library_dir, body)
+    # Same sport-scope-filtering wiring as /api/chat -- see that route's
+    # own comment and app.context.filter_files_by_sport_scope. Passes
+    # `effective_sports`, not the raw `.sports` field (PR #167 review,
+    # Finding 1).
+    athlete_profile = store.load_athlete(athlete)
+    system = build_system(settings.library_dir, body, athlete_sports=athlete_profile.effective_sports)
     messages = build_messages(
         store,
         athlete,

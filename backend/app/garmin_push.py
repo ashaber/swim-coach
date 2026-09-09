@@ -70,6 +70,7 @@ _SESSION_SPORT_TO_INTERVALS_TYPE: dict[str, str] = {
     "swim_pool": "Swim",
     "swim_ow": "Swim",
     "strength": "WeightTraining",
+    "bike": "Ride",
 }
 
 
@@ -78,16 +79,26 @@ def build_workout_event(session: Session) -> dict[str, Any]:
     docstring's bulk-events contract) for `session`.
 
     Raises `ValueError` -- distinguishable by message -- for a session with
-    no `structured` workout data (nothing real to export) or an unsupported
-    sport (only swim_pool/swim_ow/strength -- same narrow scope as
-    `to_garmin_fit_workout` itself; cycling etc. is explicitly out of
-    scope). Callers that need to skip-and-count rather than fail (see
-    `push_on_demand` below) check these same two conditions themselves
-    before calling this, so they can attach a friendly, structured reason;
-    this function's own raise is just a safety net for any other caller.
+    no `structured` workout data (nothing real to export), an unsupported
+    sport (swim_pool/swim_ow/strength/bike -- engine/cycling-coach Part C
+    extended this from swim/strength-only to also cover OUTDOOR cycling, per
+    this build's own PR description), or an INDOOR/trainer bike session
+    (`session.is_indoor`) -- a live Garmin/intervals.icu calendar push
+    assumes an outdoor ride; an indoor session should be exported as `.zwo`
+    instead (`app.zwo_export`/`GET /api/sessions/{id}/zwo`), a genuinely
+    different, additional delivery path, not reachable through this one.
+    Callers that need to skip-and-count rather than fail (see
+    `push_on_demand` below) check these same conditions themselves before
+    calling this, so they can attach a friendly, structured reason; this
+    function's own raise is just a safety net for any other caller.
     """
     if session.structured is None:
         raise ValueError(f"session {session.id} has no structured workout data to push")
+    if session.sport == "bike" and session.is_indoor:
+        raise ValueError(
+            f"session {session.id} is an indoor/trainer bike session -- push isn't "
+            "supported for it; export it as a .zwo file instead"
+        )
 
     garmin_sport = _SESSION_SPORT_TO_GARMIN_SPORT.get(session.sport)
     intervals_type = _SESSION_SPORT_TO_INTERVALS_TYPE.get(session.sport)
@@ -233,12 +244,14 @@ def push_on_demand(
     try:
         for session in sessions:
             unsupported = session.sport not in _SESSION_SPORT_TO_GARMIN_SPORT
-            if session.structured is None or unsupported:
-                reason = (
-                    "no structured workout data"
-                    if session.structured is None
-                    else f"unsupported sport {session.sport!r}"
-                )
+            indoor_bike = session.sport == "bike" and bool(session.is_indoor)
+            if session.structured is None or unsupported or indoor_bike:
+                if session.structured is None:
+                    reason = "no structured workout data"
+                elif indoor_bike:
+                    reason = "indoor/trainer bike session -- export as .zwo instead"
+                else:
+                    reason = f"unsupported sport {session.sport!r}"
                 log.info(
                     "garmin_push.session_skipped",
                     slug=slug,

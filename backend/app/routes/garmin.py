@@ -14,6 +14,13 @@ as impractical): pushes the same `.FIT` bytes to the athlete's intervals.icu
 calendar, which intervals.icu's own Garmin Connect integration then forwards
 to the watch automatically. See `app.garmin_push`'s module docstring for the
 full mechanism and the one-time athlete-side setup it depends on.
+
+Also owns GET /api/sessions/{session_id}/zwo (engine/cycling-coach Part C):
+the INDOOR/trainer counterpart for a bike session -- a `.zwo` file for
+MyWhoosh/Zwift's own Workout Builder, a genuinely different piece of
+software from Garmin/intervals.icu, not reachable through the Garmin push
+path above at all. See `app.zwo_export`'s module docstring for why this is a
+plain download rather than a draft-then-confirm flow.
 """
 
 from __future__ import annotations
@@ -43,11 +50,42 @@ _FIT_CONTENT_TYPE = "application/vnd.ant.fit"
 # `sport` Literal `to_garmin_fit_workout` accepts. "recovery"/"cross_train"
 # have no real FIT sport-specific workout-step encoding here and are
 # rejected with a clear 422 rather than silently mis-tagged as swim/strength.
+#
+# "bike" (engine/cycling-coach Part C): outdoor cycling now gets the SAME
+# Garmin FIT push path already built for swim/strength -- see
+# `_reject_indoor_bike` below for the one exception (an `is_indoor` session
+# routes to `.zwo` export instead, not this path).
 _SESSION_SPORT_TO_GARMIN_SPORT: dict[str, str] = {
     "swim_pool": "swim",
     "swim_ow": "swim",
     "strength": "strength",
+    "bike": "bike",
 }
+
+
+def _reject_indoor_bike(session: Session) -> None:
+    """A live Garmin/intervals.icu calendar push assumes an outdoor ride --
+    an indoor/trainer bike session should be exported as `.zwo`
+    (`GET /api/sessions/{id}/zwo` below, or `swim_coach.zwo_export` directly)
+    for MyWhoosh/Zwift instead, per this build's own explicit design split
+    (see PR description). Raises a 422 with a clear pointer to the right
+    export, rather than silently pushing a trainer session as if it were a
+    real outdoor GPS ride. A plain `GET .../garmin.fit` DOWNLOAD (the
+    USB-copy path) is deliberately NOT gated the same way -- an athlete
+    could still legitimately want a raw .fit file for an indoor session on
+    non-Zwift-compatible hardware (e.g. a Wahoo/Garmin head unit on a
+    trainer), and that path has no live-calendar-write consequence to guard
+    against.
+    """
+    if session.sport == "bike" and session.is_indoor:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "this is an indoor/trainer bike session -- Garmin push assumes an "
+                "outdoor ride; export it as a .zwo file instead "
+                f"(GET /api/sessions/{session.id}/zwo)"
+            ),
+        )
 
 
 def _find_session(store: StoreInterface, athlete: str, session_id: UUID) -> Session | None:
@@ -142,6 +180,7 @@ async def push_session_garmin(
             status_code=404,
             detail="this session has no structured workout data to push (structured is None)",
         )
+    _reject_indoor_bike(session)
 
     garmin_sport = _SESSION_SPORT_TO_GARMIN_SPORT.get(session.sport)
     if garmin_sport is None:
@@ -174,3 +213,71 @@ async def push_session_garmin(
         raise HTTPException(
             status_code=502, detail=f"failed to push to intervals.icu: {exc}"
         ) from exc
+
+
+# The Zwift/MyWhoosh workout-file MIME type has no dedicated IANA
+# registration (unlike .FIT's `application/vnd.ant.fit` above) -- ZWO is
+# plain XML, so `application/xml` is the honest, standard choice.
+_ZWO_CONTENT_TYPE = "application/xml"
+
+
+@router.get("/api/sessions/{session_id}/zwo")
+async def get_session_zwo(
+    session_id: UUID,
+    request: Request,
+    athlete: str | None = Query(None),
+    principal: Principal = Depends(require_auth),
+) -> Response:
+    """Downloads one INDOOR/trainer bike session's `.zwo` file for MyWhoosh/
+    Zwift's own Workout Builder import (engine/cycling-coach Part C) -- the
+    trainer-software counterpart to `GET .../garmin.fit` above, NOT a
+    replacement for it (see `app.zwo_export`'s module docstring). Not gated
+    on `Session.is_indoor` -- an outdoor-tagged bike session can still be
+    exported this way if the athlete wants it (see `_reject_indoor_bike`'s
+    own docstring for why only the live Garmin PUSH path is gated, not this
+    plain download); it IS gated on `sport == "bike"` (422 otherwise),
+    `structured is not None` (404, same convention as `garmin.fit`), and the
+    athlete having a real `ftp_watts` on file (422 -- a `.zwo` file's power
+    targets are meaningless without one, and this build refuses to guess).
+    """
+    settings = request.app.state.settings
+    athlete_slug = resolve_athlete(principal, athlete)
+    store = make_store(settings)
+
+    session = _find_session(store, athlete_slug, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"no such session: {session_id}")
+    if session.sport != "bike":
+        raise HTTPException(
+            status_code=422, detail=f"zwo export isn't supported for sport {session.sport!r}"
+        )
+    if session.structured is None:
+        raise HTTPException(
+            status_code=404,
+            detail="this session has no structured workout data to export (structured is None)",
+        )
+
+    try:
+        athlete_obj = store.load_athlete(athlete_slug)
+    except Exception as exc:  # noqa: BLE001 - a resolved-but-somehow-missing athlete is a clean 404
+        raise HTTPException(status_code=404, detail=f"no such athlete: {athlete_slug}") from exc
+    if athlete_obj.ftp_watts is None:
+        raise HTTPException(
+            status_code=422,
+            detail="no ftp_watts on file for this athlete -- required for a .zwo export",
+        )
+
+    # Deferred import: same circular-import reasoning as app.garmin_push's
+    # deferred import above.
+    from app.zwo_export import build_zwo_export
+
+    try:
+        result = build_zwo_export(session, athlete_obj.ftp_watts)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return Response(
+        content=result["zwo_xml"].encode("utf-8"),
+        media_type=_ZWO_CONTENT_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{result["filename"]}"'},
+    )

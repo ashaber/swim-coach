@@ -42,17 +42,19 @@ FIT_DATE = date(2026, 3, 14)
 FIT_SPORT = "swim_pool"
 FIT_DURATION_MIN = 54.0
 
-# real_mtb_race.fit parses to date=2026-06-13, sport=cross_train,
-# sport_detail="cycling/mountain", >=5 stationary pauses (see
-# tests/unit/test_parse_files.py). The FileStore filename embeds date+sport
-# (see engine/swim_coach/store.py's save_workout) -- the "existing" workout
-# saved below must carry the SAME date+sport the real fixture will re-parse
-# to, or reanalyze would (correctly, per FileStore's own filename scheme)
-# write a second file rather than overwriting the first. In production this
-# is a non-issue: the original sync always saves the file's own actual
-# parsed date/sport in the first place.
+# real_mtb_race.fit parses to date=2026-06-13, sport=bike (engine/
+# cycling-coach Part 1 reclassified real cycling FIT activities from
+# cross_train to the first-class "bike" Sport -- see
+# tests/unit/test_parse_files.py), sport_detail="cycling/mountain", >=5
+# stationary pauses. The FileStore filename embeds date+sport (see
+# engine/swim_coach/store.py's save_workout) -- the "existing" workout saved
+# below must carry the SAME date+sport the real fixture will re-parse to, or
+# reanalyze would (correctly, per FileStore's own filename scheme) write a
+# second file rather than overwriting the first. In production this is a
+# non-issue: the original sync always saves the file's own actual parsed
+# date/sport in the first place.
 MTB_DATE = date(2026, 6, 13)
-MTB_SPORT = "cross_train"
+MTB_SPORT = "bike"
 
 
 def _download_handler(downloads: dict[str, bytes], *, requested: list[str]):

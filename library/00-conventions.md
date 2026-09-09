@@ -37,9 +37,30 @@ tagged with exactly one of:
 - **`[EVIDENCE: swim]`** — supported by swimming research that isn't
   ultra-distance-specific (e.g. general CSS/critical-velocity literature,
   sprint/middle-distance stroke mechanics).
+- **`[EVIDENCE: <discipline>]`** — directly supported by research native to
+  a non-swimming discipline this project also coaches, applied to an
+  athlete whose own primary sport actually is that discipline. This is
+  deliberately NOT an adaptation-across-disciplines claim (that's
+  `[ADAPTED: ...]` below) — the evidence and the athlete's sport are the
+  same discipline; it just isn't swimming. Allowed discipline values today:
+  `cycling` (`IDEA 008`'s first non-swim discipline — see
+  `23-cycling-training.md`, e.g. the Coggan/Allen power-zone model, as
+  well-established for cycling as CSS is for swimming). Generalizes to
+  future disciplines this project takes on (`IDEA 008` already anticipates
+  running, rucking, etc.) the same way `[ADAPTED]`'s combined-form list
+  below already grows: adding a new discipline value means adding it to
+  `tests/unit/test_library_discipline.py`'s `EVIDENCE_ALLOWED` set
+  explicitly, never widening the check to accept an unlisted value — same
+  "don't paper over it" discipline this file already asks of `[ADAPTED]`'s
+  combined forms. A claim tagged `[EVIDENCE: <discipline>]` does NOT
+  require `Confidence:`/`Test:` fields (same as `[EVIDENCE: swim-ultra]`/
+  `[EVIDENCE: swim]` above — those are for `[ADAPTED]` only), though nothing
+  stops an author from including them anyway when the source itself
+  discusses confidence limits worth carrying forward.
 - **`[ADAPTED: cycling|running|tri|general-endurance]`** — the claim comes
   from an adjacent endurance discipline and is being applied to open-water
-  ultra-swimming by inference, not direct evidence. **Every `[ADAPTED]`
+  ultra-swimming (or, for a non-swim-primary athlete, to whatever their own
+  sport is) by inference, not direct evidence. **Every `[ADAPTED]`
   block must carry two more things:**
   - `Confidence: high|medium-high|medium|low-medium|low` — how much the
     adaptation-across-disciplines inference should be trusted. Reach for an
@@ -93,7 +114,15 @@ grouped by subject area, not by number — is the index).
 2. Answer with the recommendation first, then the reasoning + evidence tag
    ("this is adapted from cycling, medium confidence, worth testing against
    your own data" rather than presenting an `[ADAPTED]` claim as settled
-   swimming science).
+   swimming science). That phrasing is for `[ADAPTED]` claims specifically —
+   it assumes the athlete's own sport differs from the evidence's origin.
+   A `[EVIDENCE: <discipline>]` claim (e.g. `[EVIDENCE: cycling]`) is
+   grounded in the athlete's OWN discipline, not borrowed from an adjacent
+   one, so say so plainly instead ("this is a well-established cycling
+   training-zone model") rather than the "adapted from X" framing — telling
+   a cyclist her own sport's native evidence is "adapted from cycling" reads
+   as nonsensical and undermines the tagging discipline this file exists to
+   protect.
 3. If a question isn't covered, say so, give coach judgment labeled as such,
    and offer to draft a new section — marked `UNREVIEWED` until a human
    reviews it.

@@ -3,12 +3,19 @@
 Layout (stable -> volatile, per ROADMAP.md "Chat context assembly" and this
 build's task spec):
 
-  System block A (cacheable, byte-stable): coach persona + hard rules
-    (grounding/citation/safety, adapted from `.claude/skills/coach/SKILL.md`)
-    + full text of `library/00-conventions.md` + `library/INDEX.md`. No
-    per-request data ever enters this block -- `build_system_blocks` takes
-    no per-request argument at all, which is what guarantees byte-stability
-    by construction rather than by convention.
+  System block A (cacheable, stable per athlete sport-scope): coach persona
+    + hard rules (grounding/citation/safety, adapted from
+    `.claude/skills/coach/SKILL.md`) + full text of
+    `library/00-conventions.md` + `library/INDEX.md`, with INDEX.md's own
+    sport-scoped spans (today, only the cycling file's row + its topic-
+    routing rows -- see `_filter_scoped_index_sections`) stripped out unless
+    the requesting athlete's effective sport scope covers them. No
+    per-request MESSAGE data ever enters this block -- `build_system_blocks`
+    takes an `athlete_sports` argument (PR #167 review, Finding 1: cycling
+    content reaching a swim-only athlete's system prompt unconditionally),
+    not a per-message one, so it stays byte-identical across every request
+    for a given athlete's own fixed sport scope, just no longer literally
+    argument-free.
 
   System block B (cacheable): `library/reference_list.md` (INDEX.md's own
     rule: "always load reference_list.md alongside for citations", so it's
@@ -38,6 +45,7 @@ build's task spec):
 from __future__ import annotations
 
 import json
+import re
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, TypedDict
@@ -464,13 +472,62 @@ def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def build_system_blocks(library_dir: Path) -> list[dict[str, Any]]:
+# --- INDEX.md sport-scoped section stripping (PR #167 review, Finding 1) ---
+# `library/INDEX.md` marks any span that's specific to one sport (today,
+# only the cycling file's own Files-table row plus its 6 topic-routing rows)
+# with a `<!-- library-index:sport-scope=<sport>:start/end -->` HTML-comment
+# pair. Without this, `build_system_blocks` below put the WHOLE of INDEX.md
+# -- cycling row and routing rows included -- into every athlete's system
+# block A unconditionally, regardless of `filter_files_by_sport_scope`'s own
+# per-file filtering of block B's routed content: a swim-only athlete's
+# context still named `23-cycling-training.md` and its routing rows even
+# though the file's own body text could never be routed to her. This is the
+# generic (not cycling-special-cased) mechanism that fixes that -- any
+# future sport-scoped section wraps itself in the same marker pair and gets
+# the same treatment.
+_INDEX_SCOPE_BLOCK_RE = re.compile(
+    r"<!-- library-index:sport-scope=(?P<scope>[\w-]+):start -->\n?"
+    r"(?P<body>.*?)"
+    r"<!-- library-index:sport-scope=(?P=scope):end -->\n?",
+    re.DOTALL,
+)
+
+
+def _filter_scoped_index_sections(text: str, effective_sports: set[str]) -> str:
+    """Strip any `<!-- library-index:sport-scope=X:... -->`-delimited span
+    from `text` whose scope `X` isn't in `effective_sports`; a span whose
+    scope IS covered has its content kept but the marker comments removed
+    (so they never leak into the model's own context as visible text)."""
+
+    def _replace(match: re.Match[str]) -> str:
+        return match.group("body") if match.group("scope") in effective_sports else ""
+
+    return _INDEX_SCOPE_BLOCK_RE.sub(_replace, text)
+
+
+def build_system_blocks(
+    library_dir: Path, *, athlete_sports: list[str] | None = None
+) -> list[dict[str, Any]]:
     """System block A: persona + rules + 00-conventions.md + INDEX.md, as a
-    single cacheable text block. Takes no per-request argument -- this is
-    what makes it byte-stable across every request regardless of what the
-    athlete asks."""
+    single cacheable text block.
+
+    `athlete_sports` (optional, defaults to `None`, same "undeclared
+    resolves to swim-only" convention `filter_files_by_sport_scope` uses --
+    see that function's docstring for the Finding-1 bug this fixes):
+    INDEX.md's own sport-scoped spans (see `_filter_scoped_index_sections`
+    above) are stripped out unless the athlete's effective sports cover
+    that scope. This means block A is no longer byte-identical across
+    EVERY athlete regardless of sport scope the way it originally was --
+    it's now byte-identical across every request for a given athlete's
+    fixed sport scope (still a small, stable set of distinct cache
+    prefixes -- "swim-only" and "includes bike" today -- rather than one
+    global constant), which is the trade this makes to guarantee cycling
+    content never reaches a swim-only athlete's system prompt at all, not
+    just block B's routed topic files. Never varies with the message
+    itself -- only with the athlete's own declared sport scope."""
+    effective_sports = set(athlete_sports) if athlete_sports is not None else set(_DEFAULT_SWIM_ONLY_SPORTS)
     conventions = _read_text(library_dir / "00-conventions.md")
-    index = _read_text(library_dir / "INDEX.md")
+    index = _filter_scoped_index_sections(_read_text(library_dir / "INDEX.md"), effective_sports)
     text = (
         f"{PERSONA_AND_RULES}\n\n"
         f"---\n\n# library/00-conventions.md\n\n{conventions}\n\n"
@@ -590,15 +647,125 @@ DEFAULT_ROUTE_FILES = ["03-periodization.md", "06-long-swim-progression.md"]
 
 MAX_ROUTED_FILES = 3
 
+# --- 23-cycling-training.md: cycling-specific routing (IDEA 008) -----------
+# Mirrors INDEX.md's "Power zones, FTP..." / "Cycling TSS..." / "Cycling
+# CTL/ATL/TSB..." / "Cycling periodization..." / "Cyclist's knee..." /
+# "Does road/MTB/cyclocross..." routing rows as fixed keyword buckets, same
+# "mirror INDEX.md as Python data, don't parse prose at request time"
+# convention _KEYWORD_ROUTES already uses -- update both in the same change
+# if INDEX.md's cycling rows change. Reachability alone does NOT bypass the
+# sport-scope filtering below: these keywords route to
+# `23-cycling-training.md` for ANY message that matches them, but
+# `filter_files_by_sport_scope` still excludes it whenever the requesting
+# athlete's own `Athlete.sports` is set and doesn't include "bike" -- see
+# that function's docstring for the "IDEA 008 hard requirement" this
+# structurally enforces (previously documentation-only, per the adversarial
+# critique's objection 3).
+_CYCLING_KEYWORD_ROUTES: dict[str, set[str]] = {
+    "ftp": {"23-cycling-training.md"},
+    "%ftp": {"23-cycling-training.md"},
+    "power zone": {"23-cycling-training.md"},
+    "normalized power": {"23-cycling-training.md"},
+    "cycling tss": {"23-cycling-training.md"},
+    "intensity factor": {"23-cycling-training.md"},
+    "saddle height": {"23-cycling-training.md"},
+    "patellofemoral": {"23-cycling-training.md"},
+    "mountain bike": {"23-cycling-training.md"},
+    "cyclocross": {"23-cycling-training.md"},
+    "road bike": {"23-cycling-training.md"},
+    "road cycling": {"23-cycling-training.md"},
+}
+_KEYWORD_ROUTES.update(_CYCLING_KEYWORD_ROUTES)
+_LIBRARY_FILES_IN_PRIORITY_ORDER.append("23-cycling-training.md")
 
-def route_library_files(message: str, *, max_files: int = MAX_ROUTED_FILES) -> list[str]:
+# --- sport-scope filtering (Athlete.sports <-> library file sport scope) ---
+# IDEA 008's hard requirement, made structural (adversarial critique
+# objection 3: INDEX.md's own prose note alone had no code/test/model-field
+# backing before this build). Mirrors INDEX.md's per-file "Sport scope"
+# note as fixed Python data -- same convention `_KEYWORD_ROUTES` above
+# already uses for the routing table itself. A file with NO entry here is
+# UNSCOPED and is never filtered out, regardless of `athlete_sports` --
+# every existing swim library file stays unscoped; only
+# `23-cycling-training.md` (the first non-swim-discipline file) is scoped,
+# per this build's own "capability only" boundary.
+_LIBRARY_FILE_SPORT_SCOPE: dict[str, frozenset[str]] = {
+    "23-cycling-training.md": frozenset({"bike"}),
+}
+
+
+# The swim-only default used to resolve an athlete's sport scope whenever
+# the caller doesn't already have a concrete list -- mirrors
+# `Athlete.effective_sports` (models.py) exactly. Kept as its own constant
+# here (rather than importing the model) so this module's filtering has a
+# well-defined default even for a caller that only has a raw
+# `list[str] | None` in hand (e.g. a test calling `route_library_files`
+# directly with `athlete_sports=None`, the reviewer's own repro for Finding
+# 1) and never depends on every call site remembering to resolve
+# `effective_sports` itself first.
+_DEFAULT_SWIM_ONLY_SPORTS: list[str] = ["swim_pool", "swim_ow"]
+
+
+def filter_files_by_sport_scope(
+    filenames: list[str], athlete_sports: list[str] | None
+) -> list[str]:
+    """Drop any routed file whose declared sport scope doesn't intersect the
+    athlete's EFFECTIVE sport scope -- the structural half of IDEA 008's
+    "never surface cycling content to a swim-only athlete" constraint.
+
+    **Real review bug fixed here (PR #167 review, Finding 1):** this used
+    to treat `athlete_sports is None` as "apply NO filtering at all" (every
+    file passes through unfiltered, cycling content included). Since every
+    real athlete today has `Athlete.sports = None` (setting it on real
+    athlete data was explicitly deferred), that meant the sport-scope
+    guarantee was false for 100% of real athletes -- verified live:
+    `route_library_files("Should I ride my road bike on recovery days?",
+    athlete_sports=None)` returned `23-cycling-training.md` in the result.
+    `None` now resolves to `_DEFAULT_SWIM_ONLY_SPORTS` (swim-only) --
+    matching `Athlete.effective_sports`'s own resolution -- so an
+    undeclared athlete is filtered as a swim-only athlete, never as "every
+    sport." An athlete who explicitly declares `sports=["bike"]` (or any
+    other real list) is filtered against exactly that list, unaffected by
+    this default.
+
+    A file with no entry in `_LIBRARY_FILE_SPORT_SCOPE` is unscoped and is
+    NEVER filtered out, regardless of `athlete_sports` -- only a file that
+    HAS declared a scope can be excluded, and only when that declared scope
+    shares nothing with the athlete's own (effective) sports. This is
+    symmetric by construction (not cycling-specific): a hypothetical future
+    swim-scoped file would be excluded from a bike-only athlete's routing
+    the same way.
+    """
+    effective_sports = athlete_sports if athlete_sports is not None else _DEFAULT_SWIM_ONLY_SPORTS
+    athlete_sport_set = set(effective_sports)
+    return [
+        f
+        for f in filenames
+        if f not in _LIBRARY_FILE_SPORT_SCOPE or _LIBRARY_FILE_SPORT_SCOPE[f] & athlete_sport_set
+    ]
+
+
+def route_library_files(
+    message: str,
+    *,
+    max_files: int = MAX_ROUTED_FILES,
+    athlete_sports: list[str] | None = None,
+) -> list[str]:
     """Deterministically route `message` to up to `max_files` topic files
     (not counting reference_list.md, which is always included separately).
 
     Order is fixed by `_LIBRARY_FILES_IN_PRIORITY_ORDER`, not by keyword
-    match order, so any two messages that hit the same bucket produce the
-    same file list in the same order -- required for the resulting text
-    block to be byte-identical (and thus cache-shareable).
+    match order, so any two messages that hit the same bucket (for the same
+    `athlete_sports`) produce the same file list in the same order --
+    required for the resulting text block to be byte-identical (and thus
+    cache-shareable) across requests that share both.
+
+    `athlete_sports` (optional, defaults to `None` -- every existing call
+    site keeps producing byte-identical output unless updated to pass it):
+    forwarded to `filter_files_by_sport_scope` AFTER keyword matching, so a
+    sport-scoped file (today, only `23-cycling-training.md`) never reaches
+    an athlete whose own declared sports don't include it, even if its
+    keywords matched. `None` (today's every real athlete) applies no
+    filtering at all -- see that function's own docstring.
     """
     lower = message.lower()
     matched: set[str] = set()
@@ -608,14 +775,42 @@ def route_library_files(message: str, *, max_files: int = MAX_ROUTED_FILES) -> l
     if not matched:
         matched = set(DEFAULT_ROUTE_FILES)
     ordered = [f for f in _LIBRARY_FILES_IN_PRIORITY_ORDER if f in matched]
+    ordered = filter_files_by_sport_scope(ordered, athlete_sports)
+    if not ordered:
+        # Real review bug fixed here (PR #167 review, Finding 8): the
+        # DEFAULT_ROUTE_FILES fallback above only fires when NO keyword
+        # matched at all -- it ran BEFORE sport-scope filtering, so
+        # filtering could empty an already-non-empty matched set (e.g. a
+        # question that matches ONLY a sport-scoped file this athlete's
+        # scope excludes) with no fallback left to catch it. Verified live:
+        # `route_library_files("my mountain bike ride left my knee sore",
+        # athlete_sports=["swim_ow"])` returned `[]` -- the resulting
+        # context had NO topic grounding at all, not even a graceful
+        # default, exactly the failure mode DEFAULT_ROUTE_FILES exists to
+        # prevent. Re-apply it here, AFTER filtering, so a routed block is
+        # NEVER empty for a sport-scoped athlete -- filtered again for
+        # consistency (DEFAULT_ROUTE_FILES is unscoped today, so this is a
+        # no-op in practice, but stays generic/defensive rather than
+        # assuming that forever).
+        fallback = [f for f in _LIBRARY_FILES_IN_PRIORITY_ORDER if f in set(DEFAULT_ROUTE_FILES)]
+        ordered = filter_files_by_sport_scope(fallback, athlete_sports)
     return ordered[:max_files]
 
 
-def build_routed_block(library_dir: Path, message: str) -> list[dict[str, Any]]:
+def build_routed_block(
+    library_dir: Path, message: str, *, athlete_sports: list[str] | None = None
+) -> list[dict[str, Any]]:
     """System block B: reference_list.md (always included -- INDEX.md's own
     "always load alongside for citations" rule) plus the routed topic
-    files for `message`, as a single cacheable text block."""
-    filenames = ["reference_list.md", *route_library_files(message)]
+    files for `message`, as a single cacheable text block.
+
+    `athlete_sports` (optional, defaults to `None`, forwarded straight to
+    `route_library_files` -- see that function's docstring) is the only
+    thing that can make this block depend on the requesting athlete rather
+    than the message alone; every existing call site (no kwarg passed)
+    keeps producing byte-identical output.
+    """
+    filenames = ["reference_list.md", *route_library_files(message, athlete_sports=athlete_sports)]
     parts = []
     for filename in filenames:
         content = _read_text(library_dir / filename)
@@ -630,11 +825,21 @@ def build_routed_block(library_dir: Path, message: str) -> list[dict[str, Any]]:
     ]
 
 
-def build_system(library_dir: Path, message: str) -> list[dict[str, Any]]:
+def build_system(
+    library_dir: Path, message: str, *, athlete_sports: list[str] | None = None
+) -> list[dict[str, Any]]:
     """The full `system` param: block A then block B, each its own cache
     breakpoint (stable prefix first, per Anthropic's prompt-caching rules --
-    a cache_control block also implicitly caches everything before it)."""
-    return build_system_blocks(library_dir) + build_routed_block(library_dir, message)
+    a cache_control block also implicitly caches everything before it).
+
+    `athlete_sports` (optional, defaults to `None`) is forwarded to BOTH
+    `build_system_blocks` (block A's INDEX.md sport-scoped sections -- PR
+    #167 review, Finding 1) and `build_routed_block` (block B's routed
+    topic files) -- see each function's own docstring.
+    """
+    return build_system_blocks(library_dir, athlete_sports=athlete_sports) + build_routed_block(
+        library_dir, message, athlete_sports=athlete_sports
+    )
 
 
 # --- engine reuse: summarize rollup -----------------------------------------

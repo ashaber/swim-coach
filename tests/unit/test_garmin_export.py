@@ -301,6 +301,114 @@ def test_strength_step_with_absolute_load():
     assert steps[0]["exercise_weight"] == pytest.approx(16.0)
 
 
+# --- bike modality: power_w / zone-as-power-zone (engine/cycling-coach) -----
+
+
+def test_bike_power_w_target_produces_power_type_and_watts():
+    structured = WorkoutStructure(
+        items=[
+            WorkoutStep(
+                label="Main set: steady ride -- Z2 (140-190W)",
+                role="interval",
+                duration_kind="time_s",
+                duration_value=1800,
+                target=WorkoutTarget(basis="power_w", low=140.0, high=190.0),
+                modality="bike",
+            ),
+        ]
+    )
+    fit_bytes = to_garmin_fit_workout(structured, sport="bike", name="Bike test")
+    workout_msg = _decode_workout_message(fit_bytes)
+    assert workout_msg["sport"] == "cycling"
+
+    steps = _decode_workout_steps(fit_bytes)
+    assert len(steps) == 1
+    assert steps[0]["duration_type"] == "time"
+    assert steps[0]["target_type"] == "power"
+    assert steps[0]["custom_target_power_low"] == 140 + 1000
+    assert steps[0]["custom_target_power_high"] == 190 + 1000
+
+
+def test_bike_zone_basis_target_uses_power_zone_not_speed_zone():
+    # The SAME basis="zone" shape swim steps use for a pace zone means a
+    # POWER zone for a bike-modality step -- disambiguated by `modality`,
+    # not a separate basis value.
+    structured = WorkoutStructure(
+        items=[
+            WorkoutStep(
+                label="Main set: steady ride -- Z3",
+                role="interval",
+                duration_kind="time_s",
+                duration_value=1800,
+                target=WorkoutTarget(basis="zone", zone="Z3"),
+                modality="bike",
+            ),
+        ]
+    )
+    fit_bytes = to_garmin_fit_workout(structured, sport="bike", name="Bike zone test")
+    steps = _decode_workout_steps(fit_bytes)
+    assert steps[0]["target_type"] == "power"
+    assert steps[0]["target_power_zone"] == 3
+
+
+def test_bike_open_ended_power_target_is_open():
+    structured = WorkoutStructure(
+        items=[
+            WorkoutStep(
+                label="Easy spin",
+                role="recovery",
+                duration_kind="time_s",
+                duration_value=300,
+                target=WorkoutTarget(basis="power_w"),
+                modality="bike",
+            ),
+        ]
+    )
+    fit_bytes = to_garmin_fit_workout(structured, sport="bike", name="Bike open test")
+    steps = _decode_workout_steps(fit_bytes)
+    assert steps[0]["target_type"] == "open"
+
+
+def test_bike_warmup_and_cooldown_structure_produces_valid_fit_file():
+    # Real shape `plan._bike_session_structure` produces: warm-up (Z1) +
+    # main (power_w or zone) + cool-down (Z1).
+    structured = WorkoutStructure(
+        items=[
+            WorkoutStep(
+                label="Warm-up, easy spin -- Z1",
+                role="warmup",
+                duration_kind="time_s",
+                duration_value=300,
+                target=WorkoutTarget(basis="zone", zone="Z1"),
+                modality="bike",
+            ),
+            WorkoutStep(
+                label="Main set: steady ride -- Z2 (140-190W)",
+                role="interval",
+                duration_kind="time_s",
+                duration_value=1800,
+                target=WorkoutTarget(basis="power_w", low=140.0, high=190.0),
+                modality="bike",
+            ),
+            WorkoutStep(
+                label="Cool-down, easy spin -- Z1",
+                role="cooldown",
+                duration_kind="time_s",
+                duration_value=300,
+                target=WorkoutTarget(basis="zone", zone="Z1"),
+                modality="bike",
+            ),
+        ]
+    )
+    fit_bytes = to_garmin_fit_workout(structured, sport="bike", name="Full bike session")
+    steps = _decode_workout_steps(fit_bytes)
+    assert len(steps) == 3
+    assert steps[0]["target_type"] == "power"
+    assert steps[0]["target_power_zone"] == 1
+    assert steps[1]["custom_target_power_low"] == 140 + 1000
+    assert steps[2]["target_power_zone"] == 1
+
+
 # --- WorkoutRepeat: count / for_duration (EMOM-shaped) / amrap --------------
 
 

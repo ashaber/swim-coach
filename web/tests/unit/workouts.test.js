@@ -34,8 +34,24 @@ describe('sportLabel', () => {
   it('falls back to a title-cased, underscore-stripped detail when unmapped', () => {
     expect(sportLabel('cross_train', 'training/strength_training')).toBe('Cross-train · Strength Training');
   });
-  it('ignores sport_detail for non-cross_train sports', () => {
+  it('ignores sport_detail for non-cross_train/bike sports', () => {
     expect(sportLabel('swim_pool', 'cycling/mountain')).toBe('Pool swim');
+  });
+
+  // engine/cycling-coach Part 1: a real cycling FIT upload now parses to
+  // "bike" instead of cross_train -- the sportDetail suffix logic must
+  // still fire for it, or every MTB/CX ride already flowing in as real
+  // production data would silently lose its "· MTB"-style suffix.
+  it('labels bike', () => {
+    expect(sportLabel('bike')).toBe('Bike');
+  });
+  it('renders exactly as before for a bike workout with no sport_detail', () => {
+    expect(sportLabel('bike', undefined)).toBe('Bike');
+    expect(sportLabel('bike', null)).toBe('Bike');
+  });
+  it('appends a pretty sport_detail suffix for bike, same as cross_train', () => {
+    expect(sportLabel('bike', 'cycling/mountain')).toBe('Bike · MTB');
+    expect(sportLabel('bike', 'cycling/road')).toBe('Bike · Road ride');
   });
 });
 

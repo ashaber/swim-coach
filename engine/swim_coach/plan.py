@@ -25,7 +25,7 @@ from __future__ import annotations
 import math
 import warnings
 from datetime import date, timedelta
-from typing import Literal
+from typing import Callable, Literal
 from uuid import uuid4
 
 from swim_coach.models import (
@@ -39,6 +39,7 @@ from swim_coach.models import (
     WorkoutLoad,
     WorkoutRepeat,
     WorkoutStep,
+    WorkoutStepOrRepeat,
     WorkoutStructure,
     WorkoutTarget,
 )
@@ -48,7 +49,7 @@ from swim_coach.workout_templates import (
     render_prose,
     resolve_template,
 )
-from swim_coach.zones import zone_table
+from swim_coach.zones import bike_zone_table, zone_table
 
 EventFormat = Literal["single_day", "multi_day_stage"]
 
@@ -137,6 +138,311 @@ STAGE_SATURDAY_SHARE = 0.55
 # stage event's Sunday leg is always swum on Saturday's fatigue -- training
 # should mirror that order. library/06-long-swim-progression.md
 # (to be authored).
+
+# --- Bike-primary week generation constants ---------------------------------
+# engine/cycling-coach: a real, minimal session-content path for a
+# "bike"-primary week (Event.target_metric == "duration_min", the
+# multi-sport-unlock build already shipped on main -- see
+# engine/multisport-target-metric-unlock). Deliberately NOT a
+# cycling-specific periodization design (no long-ride ladder, no
+# block-shape beyond what scaffold_macro's already-generic base/build/
+# peak/taper arithmetic provides) -- this only distributes whatever
+# weekly total that generic arithmetic already computed across a small,
+# fixed, Coach-judgment session cadence. library/23-cycling-training.md.
+
+BIKE_SESSIONS_PER_WEEK = 3
+# Coach judgment: no source (including Galán-Rioja et al. 2023, cited in
+# library/23-cycling-training.md) prescribes a specific weekly SESSION
+# COUNT for a trained cyclist -- that review reports observed weekly HOUR
+# ranges across periodization models, not a session-count target. 3/week is
+# an engineering default so a bike-primary week has real, distinct content
+# (one harder day, the rest endurance) instead of one undifferentiated
+# blob or an empty placeholder.
+
+BIKE_HARD_SESSION_SHARE = 0.35
+# Coach judgment: of the week's total duration, this share goes to ONE
+# Z3 tempo-emphasis ride; the remainder splits evenly across the other
+# BIKE_SESSIONS_PER_WEEK - 1 sessions as Z2 endurance rides. Both
+# pyramidal (more Z2, some Z3, little top-end) and polarized distributions
+# are reported as viable without a clear winner by Galán-Rioja et al. 2023
+# (library/23-cycling-training.md) -- this specific 35% split is this
+# engine's own default, not a cited ratio.
+
+BIKE_HARD_SESSION_MAX_MIN = 75.0
+# Coach judgment: library/23-cycling-training.md documents no continuous-Z3
+# duration ceiling for a single session (Galán-Rioja et al. 2023 reports
+# viable weekly HOUR ranges across periodization models, not a per-session
+# cap) -- this is a plain engineering safety ceiling, same footing as
+# BIKE_HARD_SESSION_SHARE above, so `hard_min = total_duration_min *
+# BIKE_HARD_SESSION_SHARE` can't produce an unbounded continuous tempo
+# block for a large weekly total (a 600-min week uncapped would put 210
+# continuous minutes at Z3). Any duration this cap displaces is
+# redistributed into the week's Z2 endurance sessions instead of being
+# lost -- see `_bike_week_sessions`.
+
+DEFAULT_BIKE_SESSION_MIN = 15.0
+# Floor so a heavily-taper-compressed or very-early-ramp bike session
+# never collapses to a 0- or near-0-minute, unrepresentable session --
+# same role DEFAULT_POOL_SESSION_MIN/RECOVERY_SESSION_MIN's floors already
+# play for swim/recovery sessions. Coach judgment.
+#
+# **Not applied as a per-session floor on top of a fixed session count.**
+# A real review bug (PR #167 review, Finding 6): flooring EACH of
+# BIKE_SESSIONS_PER_WEEK sessions at this minimum independently could
+# inflate a low-volume (taper) week's TOTAL actual duration by up to 50%
+# (a 30-min weekly target -> 45 actual, three sessions floored to 15 each)
+# -- silently overriding the +8%/week ramp-cap rail that was already
+# applied upstream. `_bike_week_sessions` instead reduces the SESSION
+# COUNT (via `_resolve_bike_session_count` below) when the weekly total
+# can't support `BIKE_SESSIONS_PER_WEEK` sessions at this floor, keeping
+# actual total duration within a small, bounded tolerance of the target.
+
+BIKE_WARMUP_COOLDOWN_MIN = 5.0
+# Coach judgment: a flat, easy-zone warm-up/cool-down window bracketing a
+# generic Z2/Z3 bike session's main block -- same "some warm-up matters, no
+# source fixes an exact proportion" footing as swim's own
+# ADDITIONAL_SWIM_WARM_UP_SHARE (library/14-swim-set-structure.md); no
+# cycling-specific session-shape source exists to cite instead
+# (library/23-cycling-training.md has none). Symmetric and much shorter
+# than swim's proportional warm-up since a bike session's total duration
+# is typically far longer per session and doesn't need a %-of-session
+# scaling rule to stay sane.
+
+BIKE_MIN_MAIN_BLOCK_S = 600.0
+# Below 10 minutes of main-block time (after reserving
+# BIKE_WARMUP_COOLDOWN_MIN on each side), warm-up/cool-down are dropped
+# entirely and the whole session becomes one continuous block at its
+# assigned zone -- same "too short to bother splitting" floor
+# MIN_ADDITIONAL_SWIM_M's swim counterpart applies. Coach judgment.
+
+BIKE_FINAL_TAPER_MIN_SESSIONS = 2
+BIKE_FINAL_TAPER_OPENER_MIN = 20.0
+BIKE_FINAL_TAPER_EASY_MIN = 20.0
+# PR #167 red-team review, Finding 2 (must-fix): the final taper week's
+# block-interpolated target (`scaffold_macro`'s `taper_end`) can round to
+# (near) zero, and `_resolve_bike_session_count`'s low-volume fallback then
+# collapses the WHOLE week to one `DEFAULT_BIKE_SESSION_MIN`-floored ride --
+# zero race-week content for an athlete's actual, active, A-priority event.
+# `library/23-cycling-training.md` carries no taper/pre-race-sharpener
+# guidance to cite (confirmed absent this pass) -- these two floor
+# durations, and the choice of "one short opener + one easy spin" instead
+# of one minimal ride, are Coach judgment / common practitioner convention
+# (some brief race-intensity-adjacent work to prime without adding fatigue,
+# plus a short easy spin), not a cited finding. This ONLY overrides the
+# final taper week of a qualifying (active, priority "A", same-macro) event
+# when `_bike_week_sessions` would otherwise produce fewer than
+# BIKE_FINAL_TAPER_MIN_SESSIONS sessions -- an ordinary, non-collapsed
+# taper week is untouched. Still a flat single-zone block each
+# (`_bike_session_structure`) -- same discipline-content limitation as
+# every other bike session this build generates (see that function's own
+# "Known, deliberate scope limit" note).
+
+# --- Bike interval-session templates (engine/cycling-coach, deferred-gap --
+# closing pass) -----------------------------------------------------------
+# library/24-cycling-periodization-intervals.md's "Interval-design taxonomy
+# (Laursen & Buchheit)" section grounds four named %FTP-band/duration/
+# work:rest archetypes (Buchheit & Laursen 2013; Laursen & Buchheit 2019),
+# closing the gap `_bike_session_structure`'s former "KNOWN, DOCUMENTED
+# LIMITATION" comment flagged (every hard session was the same flat block
+# regardless of week/discipline, contradicting that same library file's own
+# Protzen et al. 2026 warning that MTB/CX needs surge/interval-shaped
+# content). The exact work/rest seconds and rep counts below are this
+# engine's OWN specific instantiation within each template's stated range --
+# library/24 itself says as much ("the specific instantiation ... is Coach
+# judgment: practitioner convention layered on the taxonomy's general
+# principles above, not a verbatim quote from Laursen & Buchheit").
+# %FTP-band -> Coggan zone mapping uses `zones.py`'s existing named Z1-Z5
+# table (library/23-cycling-training.md) rather than inventing a
+# custom-band WorkoutTarget -- every existing bike zone in this codebase
+# already resolves through that same named table (`_bike_step`/
+# `bike_zone_table`), so snapping each template's stated %FTP band to its
+# closest single Coggan zone is the consistent choice, not a new mechanism.
+
+BIKE_SUSTAINED_THRESHOLD_WORK_S = 600.0
+# 10 min -- the midpoint of library/24's "roughly 8-12 minutes" sustained-
+# threshold work-bout range.
+BIKE_SUSTAINED_THRESHOLD_REST_S = 240.0
+# 4 min -- library/24 says only "near-full recovery between reps," no exact
+# figure. Coach judgment default; see `_fit_units_with_flexible_gap` for how
+# this is actually adjusted per-session to exactly fill the available
+# main-block time (this constant is a bias/starting point, not a hard rule).
+BIKE_SUSTAINED_THRESHOLD_MIN_REPS = 2
+BIKE_SUSTAINED_THRESHOLD_MAX_REPS = 3
+# library/24: "2-3 reps per session."
+BIKE_SUSTAINED_THRESHOLD_ZONE = "Z4"
+# library/24: ~91-100% FTP -- falls entirely within Z4's 90-105% band
+# (zones.py's BIKE_Z3_HI_PCT_FTP/BIKE_Z4_HI_PCT_FTP, library/23).
+
+BIKE_OVER_UNDER_ON_S = 90.0
+BIKE_OVER_UNDER_OFF_S = 90.0
+# library/24: "alternating ~90-second sub-threshold ... and ~90-second
+# supra-threshold work."
+BIKE_OVER_UNDER_CYCLES_PER_BLOCK = 2
+# 2 on/off cycles = 2*(90+90)s = 6 min per block -- the lower bound of
+# library/24's "roughly 6-8 minutes" per-block range; a fixed per-block
+# shape (only the number of BLOCKS adapts to available time below), same
+# posture as every other "fixed citation-grounded work shape, adaptive
+# rep/block count" template here.
+BIKE_OVER_UNDER_BLOCK_REST_S = 180.0
+# 3 min easy between blocks -- library/24 says only "recovery between
+# blocks," no exact figure. Coach judgment default (see
+# BIKE_SUSTAINED_THRESHOLD_REST_S's comment on how this is actually used).
+BIKE_OVER_UNDER_MIN_BLOCKS = 2
+BIKE_OVER_UNDER_MAX_BLOCKS = 4
+# library/24: "2-4 blocks per session."
+BIKE_OVER_UNDER_OVER_ZONE = "Z4"
+# library/24: "over" ~100-105% FTP -- within Z4's 90-105% band.
+BIKE_OVER_UNDER_UNDER_ZONE = "Z3"
+# library/24: "under" ~76-85% FTP -- within Z3's 75-90% band.
+
+BIKE_SHORT_SHORT_ON_S = 30.0
+BIKE_SHORT_SHORT_OFF_S = 15.0
+# library/24: "roughly 30-40 seconds on, 15-20 seconds off" -- the literal
+# "30s/15s" example given in that file's own taxonomy-grounding paragraph.
+BIKE_SHORT_SHORT_REPS_PER_SET = 10
+# library/24: "sets of 8-12 reps" -- 10 is the midpoint.
+BIKE_SHORT_SHORT_SET_REST_S = 240.0
+# 4 min -- library/24 says only "several minutes of easy recovery between
+# sets," no exact figure. Coach judgment default.
+BIKE_SHORT_SHORT_MIN_SETS = 1
+BIKE_SHORT_SHORT_MAX_SETS = 2
+# library/24: "1-2 sets per session."
+BIKE_SHORT_SHORT_ZONE = "Z5"
+# library/24: ~106-118% FTP -- within Z5's 105-120% band.
+
+BIKE_RACE_PACE_WORK_S = 150.0
+# 2.5 min -- the midpoint of library/24's "roughly 2-3 minutes" race-pace
+# work-bout range.
+BIKE_RACE_PACE_REST_S = 150.0
+# 2.5 min (1:1 with work) -- library/24 says only "near-full recovery
+# between reps," no exact figure. Coach judgment default.
+BIKE_RACE_PACE_MIN_REPS = 3
+BIKE_RACE_PACE_MAX_REPS = 5
+# library/24: "3-5 reps per session."
+BIKE_RACE_PACE_ZONE = "Z5"
+# library/24: ~105-114% FTP, explicitly described as bridging "the Z4/Z5
+# boundary" -- doesn't sit cleanly inside one named Coggan zone. Approximated
+# to Z5 (105-120% FTP) since library/24 frames this template as bridging
+# TOWARD the VO2max stimulus ("Bridges the threshold and VO2max stimuli");
+# Z4 would be the equally-defensible alternative snap -- documented here as
+# an engineering approximation, not a precise reproduction of the stated
+# 105-114% band.
+
+BIKE_REST_GAP_CAP_MULTIPLIER = 2.0
+# Coach judgment, not citation-backed: `_fit_units_with_flexible_gap` sizes
+# the rest after each work bout/block/set to consume whatever main-block
+# time is left, which -- verified live this pass by reading the raw
+# exported `.zwo` XML, not just a test assertion -- could inflate "recovery
+# between reps" to something coaching-nonsensical on a large-volume week
+# (25 real minutes of rest after one 7.5-min short-short VO2 set). Each
+# template's own rest constant (e.g. BIKE_SHORT_SHORT_SET_REST_S) times
+# this multiplier caps how far the gap is allowed to grow; anything beyond
+# the cap becomes a trailing "fill remaining time" step instead (still real
+# training-adjacent volume, just not mislabeled as inter-rep recovery).
+
+BIKE_INTERVAL_TEMPLATE_META: dict[str, dict[str, str]] = {
+    "sustained_threshold": {
+        "zone": BIKE_SUSTAINED_THRESHOLD_ZONE,
+        "purpose": "sustained threshold intervals (Z4) — lactate-threshold-adjacent, long work bouts",
+    },
+    "over_unders": {
+        "zone": BIKE_OVER_UNDER_OVER_ZONE,
+        "purpose": "over/unders (Z3/Z4) — fluctuating lactate production/clearance under alternating load",
+    },
+    "short_short_vo2": {
+        "zone": BIKE_SHORT_SHORT_ZONE,
+        "purpose": "short-short VO2 intervals (Z5) — fixed-ratio 30s/15s on/off, VO2-kinetics priming",
+    },
+    "race_pace": {
+        "zone": BIKE_RACE_PACE_ZONE,
+        "purpose": "race-pace intervals (Z5) — punchy repeated efforts, race-specificity",
+    },
+}
+# Session-level `Session.intensity["zone"]` for the week's hard session is
+# set from this table (per selected template), NOT hardcoded "Z3" as it was
+# before this pass -- a session whose actual interval content sits at Z4/Z5
+# labeled "Z3" at the top level would be a real correctness problem (wrong
+# zone/watts bounds via `_bike_intensity`/`zones.bike_zone_table`), worse
+# than the flat-block status quo this pass replaces. No production code
+# outside this module and its own tests reads `Session.intensity["zone"]`
+# to mean specifically "Z3 == the hard session" (verified this pass by
+# search) -- the count/duration/is_indoor/taper/strength machinery this
+# build must not disturb identifies "hard" structurally (`is_hard`), not by
+# zone string.
+
+BIKE_INTERVAL_TEMPLATES: tuple[str, ...] = (
+    "sustained_threshold",
+    "over_unders",
+    "short_short_vo2",
+    "race_pace",
+)
+# Fixed rotation order `_select_bike_interval_template` cycles through --
+# library/24 grounds the four templates themselves but no source specifies
+# a sequencing rule across them, so this ordering (longest/least
+# neuromuscularly-taxing work bout first, shortest/most taxing last) is this
+# engine's own reasonable default (Coach judgment), not a cited cadence.
+
+
+def _select_bike_interval_template(week_index: int) -> str:
+    """Deterministically rotate through `BIKE_INTERVAL_TEMPLATES`, one
+    template per week in a fixed order, so a bike-primary athlete's
+    differentiated "hard" session actually varies week to week instead of
+    always being the same flat block -- closes the exact gap
+    `_bike_session_structure`'s former docstring flagged as a "KNOWN,
+    DOCUMENTED LIMITATION." `week_index` is expected to be a continuous
+    week counter from the start of the athlete's macro (see
+    `_bike_ramp_week_index`) so the rotation advances every real calendar
+    week regardless of which macro block (base/build/peak/taper) it falls
+    in -- there is no research basis for resetting the rotation at a block
+    boundary, and a continuous counter is simpler to reason about.
+    """
+    return BIKE_INTERVAL_TEMPLATES[week_index % len(BIKE_INTERVAL_TEMPLATES)]
+
+
+def _bike_ramp_week_index(macro: MacroPlan, week_start: date) -> int:
+    """0-based count of weeks since this macro's very first week
+    (`macro.blocks[0].start_date` -- always the start of the `base` block,
+    see `scaffold_macro`), continuous across block boundaries (unlike
+    `generate_week`'s own `week_index_in_block`, which resets to 0 at the
+    start of every block). Shared by the bike-primary deload cadence
+    (`BIKE_DELOAD_CADENCE_WEEKS` below) and the interval-template rotation
+    (`_select_bike_interval_template` above) so both advance consistently
+    week over week for the same athlete.
+    """
+    return (week_start - macro.blocks[0].start_date).days // 7
+
+
+BIKE_DELOAD_CADENCE_WEEKS = 4
+# Coach judgment, NOT citation-backed (library/24-cycling-periodization-
+# intervals.md's own "Closing the deload-cadence gap" section is explicit
+# that no source it reviewed -- Seiler 2010, Issurin 2008, Galán-Rioja et
+# al. 2023 -- specifies a validated numeric deload-week cadence). That
+# section's own text: "a periodic step-down cadence of roughly every
+# 3rd-4th week (three build weeks, one reduced-volume week) ... is a
+# reasonable default pending explicit athlete/coach confirmation." This
+# engine picks 4 -- three ordinary weeks, the 4th reduced -- the exact
+# reading of that parenthetical, and the top of library/24's stated
+# "3rd-4th week" range. Closes the gap `generate_week`'s own former "KNOWN
+# LIMITATION" comment flagged (volume climbed every week from base through
+# peak with no periodic deload). Applied only within a bike-primary macro's
+# base/build/peak blocks (continuous week count via `_bike_ramp_week_index`,
+# NOT reset per block) -- never the taper block, which already has its own
+# explicit per-week decay rule (`TAPER_WEEKLY_DECAY`). Swim is explicitly
+# OUT of scope for this pass (see `generate_week`'s own docstring) -- the
+# underlying block-interpolation math is sport-agnostic, so this constant
+# and the branch that applies it are scoped strictly to `primary_sport ==
+# "bike"`, deliberately not touching the swim path at all.
+
+BIKE_DELOAD_VOLUME_REDUCTION = 0.30
+# Coach judgment, NOT citation-backed -- library/24 grounds the deload
+# CADENCE above but explicitly does not ground a reduction MAGNITUDE (no
+# source found). Same order of magnitude as this engine's own existing
+# reactive-cut fraction (`adapt.CUT_VOLUME_FRACTION = 0.25`, itself the
+# midpoint of ROADMAP.md's documented 20-30% reactive-cut range) --
+# deliberately a bit deeper (0.30) since a scheduled deload is a full week
+# planned in advance, not a reactive one-off cut. Consistent with this
+# codebase's own existing reduction of similar shape, not itself a second
+# citation.
 
 # --- Weekly session-generation constants ------------------------------------
 
@@ -262,6 +568,27 @@ MIN_RAMP_SEED_VOLUME_M = 1000
 # only affects the ramp CEILING calculation below, not any other reported
 # "current volume" -- an athlete's real current_weekly_volume_m is still 0
 # everywhere else it's used/reported.
+#
+# **METRES -- only valid for `Event.target_metric == "distance_m"`.** See
+# `MIN_RAMP_SEED_DURATION_MIN` below for the duration-unit counterpart
+# `scaffold_macro` actually uses for `target_metric == "duration_min"`
+# macros (PR #167 review, fragile note: this constant used to be reused
+# unchanged for duration-metric macros too -- for a real ~300 min/week
+# cyclist, the seed silently became "1000 minutes," so the +8%/week ramp
+# clamp barely engaged at all for any realistic peak target. This first
+# bit in engine/cycling-coach because it's the first PR to actually
+# produce real duration-path content -- the bug originates in the
+# already-merged #164, which unlocked the target_metric machinery without
+# a real duration-unit consumer yet to expose it).
+
+MIN_RAMP_SEED_DURATION_MIN = 60.0
+# Coach judgment, engineering seed value, same footing/role as
+# MIN_RAMP_SEED_VOLUME_M above -- just in the correct unit (MINUTES, not
+# metres) for a `target_metric == "duration_min"` macro (engine/cycling-
+# coach's bike-primary path today). A brand-new cyclist logging 0 min/week
+# is a real starting point, same "don't cap growth at literal zero"
+# reasoning as MIN_RAMP_SEED_VOLUME_M -- 60 min (a single easy ride) is
+# this engine's own minutes-scale floor, not a validated number.
 
 DEFAULT_CSS_PACE_S_PER_100M = 100.0
 # Fallback pace used only if an athlete has no css_pace_s_per_100m yet
@@ -361,6 +688,31 @@ def _pick_days(count: int, excluded: set[int]) -> list[int]:
         remaining = [d for d in order if d not in chosen]
         chosen.extend(remaining[: count - len(chosen)])
     return chosen[:count]
+
+
+def _spread_days_evenly(count: int) -> list[int]:
+    """Pick `count` Monday-relative day offsets spread evenly across the
+    week (ascending Mon->Sun order) -- `_bike_week_sessions`'s own day
+    placement, since a bike-only athlete has no `pool_schedule`-equivalent
+    field to avoid conflicting with (unlike `_pick_days`'s `excluded` set,
+    which swim callers use to dodge already-placed pool days).
+
+    **Real review bug fixed here (PR #167 review, Finding 3):**
+    `_bike_week_sessions` used to call `_pick_days(count, excluded=set())`,
+    which -- with nothing excluded -- always returns the first `count`
+    ascending offsets: `[0, 1, 2]` for a 3-session week, i.e. every ride
+    lands Mon/Tue/Wed with the hardest (Z3) day first and zero rest between
+    any of them. That only happened to look reasonable for swim because
+    `pool_offsets` there always excludes the intervening days; nothing
+    equivalent existed for bike.
+
+    Offsets are `round(i * 7 / count)` for `i in range(count)` -- verified
+    collision-free (distinct offsets) for every `count` in `1..7`, the only
+    range `BIKE_SESSIONS_PER_WEEK` can realistically take.
+    """
+    if count <= 0:
+        return []
+    return [round(i * 7 / count) for i in range(count)]
 
 
 def _format_pace_s(pace_s: float) -> str:
@@ -756,7 +1108,21 @@ def scaffold_macro(
     else:
         distance_driven_target = None  # unreachable below: peak_weekly_volume_m is set
     ramp_weeks = base_weeks + build_weeks
-    ramp_seed = max(current_weekly_volume_m, MIN_RAMP_SEED_VOLUME_M)
+    # PR #167 review fragile note: MIN_RAMP_SEED_VOLUME_M is METRES -- using
+    # it as a duration-minutes floor for target_metric="duration_min"
+    # silently defeated the ramp cap for a real cyclist (seed became "1000
+    # minutes"). Branch on target_metric so each unit gets its own,
+    # correctly-scaled floor; target_metric="load_au" (arbitrary AU units,
+    # no natural minutes/metres floor) still uses the metres constant as an
+    # engineering placeholder -- same "documented, not silently guessed"
+    # footing generate_week's own bike-path docstring already uses for its
+    # load_au scope limit, not a claim this is unit-correct for AU.
+    ramp_seed_floor = (
+        MIN_RAMP_SEED_DURATION_MIN
+        if event.target_metric == "duration_min"
+        else MIN_RAMP_SEED_VOLUME_M
+    )
+    ramp_seed = max(current_weekly_volume_m, ramp_seed_floor)
     ramp_limited_max = ramp_seed * (1 + WEEKLY_VOLUME_RAMP_CAP) ** ramp_weeks
     candidate_peak = (
         peak_weekly_volume_m if peak_weekly_volume_m is not None else distance_driven_target
@@ -991,6 +1357,698 @@ def _race_week_checklist(event: Event, week_start: date) -> list[RaceWeekCheckli
     return items
 
 
+def _bike_step(
+    label: str,
+    role: Literal["warmup", "steady", "cooldown"],
+    duration_s: float,
+    zone: str,
+    ftp_watts: float | None,
+) -> WorkoutStep:
+    """One leaf `WorkoutStep` for a bike session block -- see
+    `_bike_session_structure`'s docstring for the caller. Resolves `zone` to
+    a real `WorkoutTarget`: `basis="power_w"` (absolute watts, from
+    `zones.bike_zone_table`) once `ftp_watts` is known, else `basis="zone"`
+    (the zone name alone, for a device to apply its own configured power
+    zone) -- the same graceful partial-data convention
+    `_bike_week_sessions`'s own `Session.intensity` dict already uses for
+    exactly this None-vs-known-FTP split.
+    """
+    if ftp_watts is not None:
+        zone_row = bike_zone_table(ftp_watts)[zone]
+        watts_lo, watts_hi = zone_row["watts_lo"], zone_row["watts_hi"]
+        target = WorkoutTarget(basis="power_w", low=watts_lo, high=watts_hi)
+        watts_txt = f"{round(watts_lo)}-{round(watts_hi)}W" if watts_hi is not None else f">{round(watts_lo)}W"
+        zone_txt = f"{zone} ({watts_txt})"
+    else:
+        target = WorkoutTarget(basis="zone", zone=zone)
+        zone_txt = zone
+    return WorkoutStep(
+        label=f"{label} -- {zone_txt}",
+        role=role,
+        duration_kind="time_s",
+        duration_value=duration_s,
+        target=target,
+        modality="bike",
+    )
+
+
+def _bike_warmup_cooldown_reserve(duration_min: float) -> tuple[float, float, float]:
+    """(warmup_s, cooldown_s, main_s) reservation shared by every bike
+    session-structure builder (`_bike_session_structure` and
+    `_bike_hard_session_structure` below) -- factored out so both use
+    identical warm-up/cool-down math rather than two copies that could
+    silently drift. Below `BIKE_MIN_MAIN_BLOCK_S` of main-block time after
+    reserving `BIKE_WARMUP_COOLDOWN_MIN` on each side, both are dropped and
+    the whole session becomes one continuous block (see those constants).
+    """
+    total_s = round(duration_min * 60)
+    warmup_s = round(min(BIKE_WARMUP_COOLDOWN_MIN, duration_min / 4) * 60)
+    cooldown_s = round(min(BIKE_WARMUP_COOLDOWN_MIN, duration_min / 4) * 60)
+    main_s = total_s - warmup_s - cooldown_s
+    if main_s < BIKE_MIN_MAIN_BLOCK_S:
+        warmup_s, cooldown_s, main_s = 0, 0, total_s
+    return warmup_s, cooldown_s, main_s
+
+
+def _bike_session_structure(zone: str, duration_min: float, ftp_watts: float | None) -> WorkoutStructure:
+    """Warm-up / main-block / cool-down `WorkoutStructure` for one FLAT
+    (single continuous zone) bike session -- the real structured content
+    `models.WorkoutStep`'s own "bike" modality comment flagged as deferred
+    when Part B of this build shipped ("no cycling WorkoutSteps are
+    actually constructed by this build"); this was that follow-up
+    (engine/cycling-coach Part C, delivery/logging).
+
+    **Scope, post interval-template pass:** this function still generates
+    every EASY (Z2 endurance) bike session's content, and the final-taper
+    week's floor content (`_bike_final_taper_sessions`) -- both genuinely
+    are meant to be one flat steady block, not an interval session. The
+    week's differentiated HARD session no longer uses this function -- see
+    `_bike_hard_session_structure` and `_select_bike_interval_template`
+    for the four real interval templates (library/24-cycling-
+    periodization-intervals.md) that replaced the single flat block this
+    function's own docstring used to flag as a known, documented
+    limitation (PR #167 red-team review; that finding contradicted
+    `library/23-cycling-training.md`'s Protzen et al. 2026 warning that
+    MTB/CX sessions need surge/interval-shaped content, not steady-state).
+
+    NOTE for any future caller: unlike swim's `basis="zone"` targets, a
+    bike `basis="zone"` target here must NEVER be run through
+    `workout_templates.resolve_template` -- that function's `_resolve_target`
+    unconditionally resolves `basis="zone"` via the CSS-anchored swim
+    `zones.zone_table`, which would silently reinterpret a bike power zone
+    as a swim pace. This function already returns fully resolved content
+    (either `basis="power_w"` or an intentionally-unresolved-but-device-
+    understood `basis="zone"`, same as swim's own zone-basis targets can be
+    left directly Garmin-exportable -- see `garmin_export`'s
+    `test_zone_basis_target_uses_speed_zone`), so it must never be passed to
+    `resolve_template`.
+    """
+    warmup_s, cooldown_s, main_s = _bike_warmup_cooldown_reserve(duration_min)
+
+    items: list[WorkoutStep] = []
+    if warmup_s > 0:
+        items.append(_bike_step("Warm-up, easy spin", "warmup", warmup_s, "Z1", ftp_watts))
+    items.append(_bike_step("Main set: steady ride", "steady", main_s, zone, ftp_watts))
+    if cooldown_s > 0:
+        items.append(_bike_step("Cool-down, easy spin", "cooldown", cooldown_s, "Z1", ftp_watts))
+    return WorkoutStructure(items=items)
+
+
+def _fit_units_with_flexible_gap(
+    main_s: float, unit_s: float, min_units: int, max_units: int, max_gap_s: float
+) -> tuple[int, float, float]:
+    """Pick the largest repeat count in `[min_units, max_units]` whose
+    fixed, citation-grounded `unit_s` (one work bout, or one whole
+    block/set) fits `count` times within `main_s`; falls back below
+    `min_units` (down to 1) when even the minimum doesn't fit -- same
+    low-volume graceful-degradation posture `_resolve_bike_session_count`
+    already established elsewhere in this module, rather than emitting a
+    malformed/overflowing structure.
+
+    Returns `(count, gap_s, trailing_s)`. The gap (rest after each unit,
+    including the last -- see below) is NOT one of this template's fixed
+    constants -- it's sized to consume main-block time left after `count`
+    full units, capped at `max_gap_s` so a large weekly volume can't
+    inflate "recovery between reps" into something coaching-nonsensical
+    (verified live this pass: an uncapped version put 25 REAL minutes of
+    rest after a 7.5-min short-short VO2 set on a 300-min-total week's hard
+    session -- read straight from the exported `.zwo` XML, not just a test
+    assertion). Whatever time the cap can't absorb becomes `trailing_s`, a
+    single fill step the caller appends before cool-down instead (still
+    real training-adjacent volume, just not disguised as "recovery between
+    reps"). `count * (unit_s + gap_s) + trailing_s` always equals `main_s`
+    exactly.
+
+    Gap applies AFTER EVERY UNIT, including the last one -- matches the
+    actual semantics of `WorkoutRepeat(repeat_mode="count", steps=[work,
+    rest])`, which unconditionally loops the full 2-step pattern `count`
+    times with no special "omit the final rest" case (also `zwo_export`'s
+    own `IntervalsT` conversion: `Repeat=count` cycles of `OnDuration`/
+    `OffDuration`, always including the final off). `count == 1` returns
+    `gap_s = 0.0` and folds all leftover main-block time into `trailing_s`.
+    """
+    count = max_units
+    while count > min_units and count * unit_s > main_s:
+        count -= 1
+    if count * unit_s > main_s:
+        count = 1
+    if count <= 1:
+        return count, 0.0, max(0.0, main_s - unit_s * count)
+    ideal_gap_s = main_s / count - unit_s
+    gap_s = max(0.0, min(ideal_gap_s, max_gap_s))
+    trailing_s = main_s - count * (unit_s + gap_s)
+    return count, gap_s, trailing_s
+
+
+def _bike_open_header(label: str) -> WorkoutStep:
+    """One athlete-facing, non-structural "section header" line -- same
+    `role="open"`/`duration_kind="open"` convention
+    `_strength_session_structure_template` already established (verbatim
+    prose carried on a step, not real workout structure -- see
+    `WorkoutStep`'s own docstring and `render_prose`). `duration_value`
+    stays `None`, so this never contributes to a session's total structured
+    duration. Used here so every hard bike session's rendered prose still
+    contains a "Main set: ..." line (matching the pre-existing invariant
+    `_bike_session_structure`'s flat block always produced) even though the
+    real content underneath is now a `WorkoutRepeat`, not one flat step.
+    """
+    return WorkoutStep(label=label, role="open", duration_kind="open", modality="bike")
+
+
+def _bike_reps_with_rest_main(
+    main_set_label: str,
+    work_label: str,
+    work_zone: str,
+    work_s: float,
+    rest_label: str,
+    min_reps: int,
+    max_reps: int,
+    max_gap_s: float,
+    main_s: float,
+    ftp_watts: float | None,
+) -> list[WorkoutStepOrRepeat]:
+    """Main-block content for a template shaped as N reps of one fixed
+    work bout with rest between reps (sustained threshold, race-pace) --
+    a single `WorkoutRepeat(repeat_mode="count", ...)` wrapping exactly
+    two leaf steps (work, rest), the same on/off-pair shape
+    `zwo_export._convert_repeat` already supports for `IntervalsT`. Falls
+    back to a flat single block (this template's own zone) when `main_s`
+    can't even fit one work bout -- see `_fit_units_with_flexible_gap`
+    (including for `max_gap_s`, the cap on how large "recovery between
+    reps" is allowed to grow before the remainder becomes a trailing fill
+    step instead).
+    """
+    if main_s < work_s:
+        return [_bike_step("Main set: steady ride", "steady", main_s, work_zone, ftp_watts)]
+    count, gap_s, trailing_s = _fit_units_with_flexible_gap(main_s, work_s, min_reps, max_reps, max_gap_s)
+    work_min = round(work_s / 60, 1)
+    if count == 1:
+        header = _bike_open_header(f"Main set: {main_set_label} — 1 x {work_min} min @ {work_zone}")
+        items: list[WorkoutStepOrRepeat] = [
+            header,
+            _bike_step(work_label, "interval", work_s, work_zone, ftp_watts),
+        ]
+        if trailing_s > 0:
+            items.append(_bike_step("Easy spin, fill remaining time", "recovery", trailing_s, "Z1", ftp_watts))
+        return items
+    rest_min = round(gap_s / 60, 1)
+    header = _bike_open_header(
+        f"Main set: {main_set_label} — {count} x {work_min} min @ {work_zone}, "
+        f"~{rest_min} min recovery between reps"
+    )
+    items = [
+        header,
+        WorkoutRepeat(
+            repeat_mode="count",
+            count=count,
+            steps=[
+                _bike_step(work_label, "interval", work_s, work_zone, ftp_watts),
+                _bike_step(rest_label, "recovery", gap_s, "Z1", ftp_watts),
+            ],
+        ),
+    ]
+    if trailing_s > 0:
+        items.append(_bike_step("Easy spin, fill remaining time", "recovery", trailing_s, "Z1", ftp_watts))
+    return items
+
+
+def _bike_blocks_with_rest_main(
+    main_set_label: str,
+    build_unit: Callable[[], WorkoutRepeat],
+    unit_s: float,
+    unit_label: str,
+    fallback_zone: str,
+    min_units: int,
+    max_units: int,
+    max_gap_s: float,
+    main_s: float,
+    ftp_watts: float | None,
+    inter_unit_rest_label: str,
+) -> list[WorkoutStepOrRepeat]:
+    """Main-block content for a template shaped as N repetitions of a
+    fixed, INTERNALLY-STRUCTURED unit (over/unders' 6-min on/off block,
+    short-short's 7.5-min 10x30/15 set) with rest after each unit -- unlike
+    `_bike_reps_with_rest_main`, each unit is itself a `WorkoutRepeat`
+    (`build_unit()`), so the returned list is flat top-level items
+    (unit-repeat, rest-step, unit-repeat, rest-step, ...) rather than one
+    nested repeat -- `zwo_export`'s `IntervalsT` conversion only supports a
+    single level of repeat nesting, so keeping every `WorkoutRepeat` at the
+    top level (never nested inside another) is deliberate, not an
+    oversight. A rest step follows EVERY unit, including the last one
+    (leading into cool-down) -- matches `_fit_units_with_flexible_gap`'s own
+    `count * (unit_s + gap_s) + trailing_s == main_s` contract, the same
+    trailing-gap convention `_bike_reps_with_rest_main`'s single
+    `WorkoutRepeat` already has no way to avoid. `max_gap_s` caps the
+    rest-after-each-unit duration (any excess main-block time becomes one
+    trailing fill step instead of an unrealistically long "recovery"
+    label -- see `_fit_units_with_flexible_gap`'s own comment for the real
+    bug this closes). Falls back to a flat single block when `main_s`
+    can't even fit one whole unit -- see `_fit_units_with_flexible_gap`.
+    """
+    if main_s < unit_s:
+        return [_bike_step("Main set: steady ride", "steady", main_s, fallback_zone, ftp_watts)]
+    count, gap_s, trailing_s = _fit_units_with_flexible_gap(main_s, unit_s, min_units, max_units, max_gap_s)
+    rest_min = round(gap_s / 60, 1)
+    header_text = (
+        f"Main set: {main_set_label} — {count} x {unit_label}"
+        + (f", ~{rest_min} min recovery after each {inter_unit_rest_label.rsplit(' ', 1)[-1][:-1]}" if count > 1 else "")
+    )
+    items: list[WorkoutStepOrRepeat] = [_bike_open_header(header_text)]
+    for _ in range(count):
+        items.append(build_unit())
+        if count > 1:
+            items.append(_bike_step(inter_unit_rest_label, "recovery", gap_s, "Z1", ftp_watts))
+    if trailing_s > 0:
+        items.append(_bike_step("Easy spin, fill remaining time", "recovery", trailing_s, "Z1", ftp_watts))
+    return items
+
+
+def _bike_sustained_threshold_main(main_s: float, ftp_watts: float | None) -> list[WorkoutStepOrRepeat]:
+    """library/24 "Sustained threshold": 2-3 reps of an 8-12 min work bout
+    (~91-100% FTP, Z4) with near-full recovery between reps."""
+    return _bike_reps_with_rest_main(
+        "sustained threshold intervals",
+        "Threshold interval",
+        BIKE_SUSTAINED_THRESHOLD_ZONE,
+        BIKE_SUSTAINED_THRESHOLD_WORK_S,
+        "Recovery between reps",
+        BIKE_SUSTAINED_THRESHOLD_MIN_REPS,
+        BIKE_SUSTAINED_THRESHOLD_MAX_REPS,
+        BIKE_SUSTAINED_THRESHOLD_REST_S * BIKE_REST_GAP_CAP_MULTIPLIER,
+        main_s,
+        ftp_watts,
+    )
+
+
+def _bike_race_pace_main(main_s: float, ftp_watts: float | None) -> list[WorkoutStepOrRepeat]:
+    """library/24 "Race-pace / long VO2": 3-5 reps of a 2-3 min work bout
+    (~105-114% FTP, approximated Z5) with near-full recovery between reps."""
+    return _bike_reps_with_rest_main(
+        "race-pace intervals",
+        "Race-pace interval",
+        BIKE_RACE_PACE_ZONE,
+        BIKE_RACE_PACE_WORK_S,
+        "Recovery between reps",
+        BIKE_RACE_PACE_MIN_REPS,
+        BIKE_RACE_PACE_MAX_REPS,
+        BIKE_RACE_PACE_REST_S * BIKE_REST_GAP_CAP_MULTIPLIER,
+        main_s,
+        ftp_watts,
+    )
+
+
+def _bike_over_unders_main(main_s: float, ftp_watts: float | None) -> list[WorkoutStepOrRepeat]:
+    """library/24 "Over/unders": 2-4 blocks per session, each block a
+    fixed `BIKE_OVER_UNDER_CYCLES_PER_BLOCK` x (90s over ~100-105% FTP /
+    90s under ~76-85% FTP) alternation, with recovery between blocks."""
+    block_s = BIKE_OVER_UNDER_CYCLES_PER_BLOCK * (BIKE_OVER_UNDER_ON_S + BIKE_OVER_UNDER_OFF_S)
+
+    def _build_block() -> WorkoutRepeat:
+        return WorkoutRepeat(
+            repeat_mode="count",
+            count=BIKE_OVER_UNDER_CYCLES_PER_BLOCK,
+            steps=[
+                _bike_step("Over — supra-threshold", "interval", BIKE_OVER_UNDER_ON_S, BIKE_OVER_UNDER_OVER_ZONE, ftp_watts),
+                _bike_step("Under — sub-threshold", "interval", BIKE_OVER_UNDER_OFF_S, BIKE_OVER_UNDER_UNDER_ZONE, ftp_watts),
+            ],
+        )
+
+    return _bike_blocks_with_rest_main(
+        "over/unders",
+        _build_block,
+        block_s,
+        f"{BIKE_OVER_UNDER_CYCLES_PER_BLOCK} x 90s/90s over/under block",
+        BIKE_OVER_UNDER_OVER_ZONE,
+        BIKE_OVER_UNDER_MIN_BLOCKS,
+        BIKE_OVER_UNDER_MAX_BLOCKS,
+        BIKE_OVER_UNDER_BLOCK_REST_S * BIKE_REST_GAP_CAP_MULTIPLIER,
+        main_s,
+        ftp_watts,
+        "Recovery between blocks",
+    )
+
+
+def _bike_short_short_main(main_s: float, ftp_watts: float | None) -> list[WorkoutStepOrRepeat]:
+    """library/24 "Short-short (VO2)": 1-2 sets of `BIKE_SHORT_SHORT_
+    REPS_PER_SET` x (30s on ~106-118% FTP / 15s off) fixed-ratio reps, with
+    recovery between sets."""
+    set_s = BIKE_SHORT_SHORT_REPS_PER_SET * (BIKE_SHORT_SHORT_ON_S + BIKE_SHORT_SHORT_OFF_S)
+
+    def _build_set() -> WorkoutRepeat:
+        return WorkoutRepeat(
+            repeat_mode="count",
+            count=BIKE_SHORT_SHORT_REPS_PER_SET,
+            steps=[
+                _bike_step("Short-short ON", "interval", BIKE_SHORT_SHORT_ON_S, BIKE_SHORT_SHORT_ZONE, ftp_watts),
+                _bike_step("Short-short OFF", "recovery", BIKE_SHORT_SHORT_OFF_S, "Z1", ftp_watts),
+            ],
+        )
+
+    return _bike_blocks_with_rest_main(
+        "short-short VO2 intervals",
+        _build_set,
+        set_s,
+        f"{BIKE_SHORT_SHORT_REPS_PER_SET} x 30s/15s set",
+        BIKE_SHORT_SHORT_ZONE,
+        BIKE_SHORT_SHORT_MIN_SETS,
+        BIKE_SHORT_SHORT_MAX_SETS,
+        BIKE_SHORT_SHORT_SET_REST_S * BIKE_REST_GAP_CAP_MULTIPLIER,
+        main_s,
+        ftp_watts,
+        "Recovery between sets",
+    )
+
+
+_BIKE_INTERVAL_TEMPLATE_BUILDERS = {
+    "sustained_threshold": _bike_sustained_threshold_main,
+    "over_unders": _bike_over_unders_main,
+    "short_short_vo2": _bike_short_short_main,
+    "race_pace": _bike_race_pace_main,
+}
+
+
+def _bike_hard_session_structure(
+    template: str, duration_min: float, ftp_watts: float | None
+) -> WorkoutStructure:
+    """Warm-up / interval-template main-block / cool-down `WorkoutStructure`
+    for the week's differentiated HARD bike session -- the real,
+    repeat-shaped replacement for the flat single block
+    `_bike_session_structure` used to generate for every bike session
+    (PR #167 red-team review finding; see that function's own docstring).
+    `template` is one of `BIKE_INTERVAL_TEMPLATES`
+    (`_select_bike_interval_template` picks which one for a given week).
+    Same warm-up/cool-down reservation as `_bike_session_structure`
+    (`_bike_warmup_cooldown_reserve`) -- only the main-block content
+    differs.
+    """
+    if template not in _BIKE_INTERVAL_TEMPLATE_BUILDERS:
+        raise ValueError(f"unknown bike interval template: {template!r}")
+    warmup_s, cooldown_s, main_s = _bike_warmup_cooldown_reserve(duration_min)
+
+    items: list[WorkoutStepOrRepeat] = []
+    if warmup_s > 0:
+        items.append(_bike_step("Warm-up, easy spin", "warmup", warmup_s, "Z1", ftp_watts))
+    items.extend(_BIKE_INTERVAL_TEMPLATE_BUILDERS[template](main_s, ftp_watts))
+    if cooldown_s > 0:
+        items.append(_bike_step("Cool-down, easy spin", "cooldown", cooldown_s, "Z1", ftp_watts))
+    return WorkoutStructure(items=items)
+
+
+def _resolve_bike_hard_min(total_duration_min: float) -> float:
+    """The hard (Z3) session's duration, `BIKE_HARD_SESSION_SHARE` of
+    `total_duration_min`, capped at `BIKE_HARD_SESSION_MAX_MIN` -- see that
+    constant's own comment (PR #167 review, Finding 4). Shared between
+    `_resolve_bike_session_count` and `_bike_week_sessions` so both use the
+    exact same number."""
+    return min(round(total_duration_min * BIKE_HARD_SESSION_SHARE, 1), BIKE_HARD_SESSION_MAX_MIN)
+
+
+def _resolve_bike_session_count(total_duration_min: float) -> int:
+    """How many of `BIKE_SESSIONS_PER_WEEK` sessions this week's total
+    duration can actually support without any of them needing
+    `DEFAULT_BIKE_SESSION_MIN`'s floor -- see that constant's own comment
+    (PR #167 review, Finding 6) for the bug this replaces: flooring each
+    session of a FIXED count independently, which could silently inflate a
+    low-volume (taper) week's total actual duration by up to 50%.
+
+    Tries `BIKE_SESSIONS_PER_WEEK` down to 2, returning the largest count
+    whose hard/easy split (computed the same way `_bike_week_sessions`
+    itself computes it) already clears the floor on both the hard session
+    and every easy session, with no flooring needed at all. Falls back to a
+    single session -- the whole week's total as one ride -- if not even 2
+    sessions clear it; a single low-volume session is deliberately NOT
+    labeled "hard" (see `_bike_week_sessions`'s own `is_hard` handling) so
+    this never forces a compressed taper day into a tempo-ride label.
+    """
+    hard_min = _resolve_bike_hard_min(total_duration_min)
+    for n in range(BIKE_SESSIONS_PER_WEEK, 1, -1):
+        easy_count = n - 1
+        remaining_min = max(0.0, total_duration_min - hard_min)
+        easy_min = remaining_min / easy_count
+        if hard_min >= DEFAULT_BIKE_SESSION_MIN and easy_min >= DEFAULT_BIKE_SESSION_MIN:
+            return n
+    return 1
+
+
+def _bike_intensity(zone: str, ftp_watts: float | None) -> dict:
+    """`Session.intensity` dict for one bike session at `zone` -- shared by
+    every bike-session builder in this module (`_bike_week_sessions`,
+    `_bike_final_taper_sessions`) so all of them resolve `ftp_watts` the
+    same way: absolute watt bounds (`ftp_watts_lo`/`ftp_watts_hi`) via
+    `zones.bike_zone_table` once `ftp_watts` is known, else the zone name
+    alone -- the same graceful partial-data convention `_bike_step`'s own
+    docstring documents for `WorkoutTarget`. Deliberately no `"anchor"` key
+    -- see `_bike_week_sessions`'s own docstring for why.
+    """
+    intensity: dict = {"zone": zone}
+    if ftp_watts is not None:
+        zone_row = bike_zone_table(ftp_watts)[zone]
+        intensity["ftp_watts_lo"] = round(zone_row["watts_lo"], 0)
+        intensity["ftp_watts_hi"] = (
+            round(zone_row["watts_hi"], 0) if zone_row["watts_hi"] is not None else None
+        )
+    return intensity
+
+
+def _bike_week_sessions(
+    athlete: Athlete,
+    week_start: date,
+    total_duration_min: float,
+    ftp_watts: float | None,
+    *,
+    is_indoor: bool | None = None,
+    week_index: int = 0,
+) -> list[Session]:
+    """Generate up to `BIKE_SESSIONS_PER_WEEK` generic cycling sessions
+    splitting `total_duration_min` across a small weekly cadence:
+    `BIKE_HARD_SESSION_SHARE` of the total (capped at
+    `BIKE_HARD_SESSION_MAX_MIN` -- Finding 4) goes to one differentiated
+    "hard" interval session, the rest splits evenly across the remaining
+    Z2 endurance sessions. The actual session COUNT may be fewer than
+    `BIKE_SESSIONS_PER_WEEK` for a low-volume week -- see
+    `_resolve_bike_session_count` (Finding 6). See the module-level
+    constants above for the citation/scope notes, and `generate_week`'s own
+    docstring for why `total_duration_min` is what it is.
+
+    `week_index` (optional, defaults to 0 -- see below): which of
+    `BIKE_INTERVAL_TEMPLATES` the week's hard session draws from
+    (`_select_bike_interval_template`) -- library/24-cycling-
+    periodization-intervals.md's four real interval archetypes
+    (sustained threshold, over/unders, short-short VO2, race-pace) that
+    replaced the flat single-power block every hard session used to get
+    (PR #167 red-team review finding). The hard session's own
+    `Session.intensity["zone"]`/`purpose` now vary by selected template
+    (`BIKE_INTERVAL_TEMPLATE_META`) instead of being hardcoded "Z3" --
+    unlike `is_indoor` above, this is NOT a byte-identical-unless-updated
+    parameter: replacing the flat block is this pass's whole point, so
+    even the default (`week_index=0`, "sustained_threshold") produces
+    genuinely different (repeat-shaped) content than before this pass.
+    Real callers (`generate_week`, `adapt.adapt_week`) pass a real
+    continuous week counter (`_bike_ramp_week_index`) so the rotation
+    actually advances week to week for a real athlete.
+
+    `ftp_watts`, when known, resolves each session's zone into absolute
+    watt bounds via `zones.bike_zone_table` (library/23-cycling-training.md);
+    when `None`, sessions still carry a real zone name (e.g. "Z2") with no
+    absolute watts -- the same graceful-partial-data convention
+    `DEFAULT_CSS_PACE_S_PER_100M`'s swim counterpart already uses elsewhere
+    in this module.
+
+    `is_indoor` (optional, defaults to `None` -- every existing call site
+    keeps producing byte-identical output unless updated to pass it):
+    forwarded onto every session's own `Session.is_indoor`. PR #167 review,
+    Finding 5: before this parameter existed, NOTHING in this engine ever
+    produced a bike session with `is_indoor` set to anything but its model
+    default (`None`) -- the indoor/trainer `.zwo`-export-vs-outdoor-Garmin-
+    push branch (`app.garmin_push`/`app.routes.garmin`) covered a state
+    that could never actually occur. This makes the mechanism reachable; a
+    real "which of this week's rides are indoor" planning UI/tool is still
+    out of scope for this pass (uniform per-week, not per-session, is the
+    only shape this parameter supports today).
+
+    Deliberately NOT a full cycling-specific periodization design (no
+    long-ride ladder, no block-shape beyond scaffold_macro's own generic
+    arithmetic plus the bike-specific periodic deload -- see
+    `generate_week`'s own docstring) -- see this build's own scope note.
+    Days are spread evenly across the week via `_spread_days_evenly`
+    (Finding 3 -- NOT `_pick_days`, which with nothing excluded always
+    returns the first N ascending offsets, clustering every ride at the
+    start of the week) -- a bike-only athlete has no `pool_schedule`-
+    equivalent field yet to avoid conflicting with.
+
+    `Session.intensity` carries `{"zone": ..., "ftp_watts_lo": ...,
+    "ftp_watts_hi": ...}` -- deliberately no `"anchor"` key (Session's own
+    `_validate_intensity` only restricts `anchor` to `{css_pace, rpe, hr}`
+    when present at all; a power-based target has no matching value in that
+    set, so this omits the key entirely rather than mislabeling it).
+    """
+    n = _resolve_bike_session_count(total_duration_min)
+    hard_min = _resolve_bike_hard_min(total_duration_min)
+    easy_count = n - 1
+    remaining_min = max(0.0, total_duration_min - hard_min)
+    easy_min = round(remaining_min / easy_count, 1) if easy_count > 0 else 0.0
+    template = _select_bike_interval_template(week_index)
+    template_meta = BIKE_INTERVAL_TEMPLATE_META[template]
+
+    offsets = _spread_days_evenly(n)
+
+    sessions: list[Session] = []
+    for i, offset in enumerate(offsets):
+        # A single-session week (Finding 6's low-volume fallback) is never
+        # labeled "hard" -- there's no second (easy) session to contrast it
+        # against, and forcing a compressed taper day into a tempo-ride
+        # label would be a worse coaching call than the volume-inflation
+        # bug this fallback exists to fix in the first place.
+        is_hard = n > 1 and i == 0
+        duration = total_duration_min if n == 1 else (hard_min if is_hard else easy_min)
+        zone = template_meta["zone"] if is_hard else "Z2"
+        intensity = _bike_intensity(zone, ftp_watts)
+        purpose = (
+            template_meta["purpose"]
+            if is_hard
+            else "endurance ride (Z2) — aerobic base"
+        )
+        duration_min_final = max(duration, DEFAULT_BIKE_SESSION_MIN)
+        structured = (
+            _bike_hard_session_structure(template, duration_min_final, ftp_watts)
+            if is_hard
+            else _bike_session_structure(zone, duration_min_final, ftp_watts)
+        )
+        sessions.append(
+            Session(
+                id=uuid4(),
+                athlete_id=athlete.id,
+                date=week_start + timedelta(days=offset),
+                sport="bike",
+                source="ai_coach",
+                duration_min=duration_min_final,
+                distance_m=None,
+                intensity=intensity,
+                purpose=purpose,
+                structure=render_prose(structured),
+                structured=structured,
+                status="planned",
+                is_indoor=is_indoor,
+            )
+        )
+    return sessions
+
+
+def _strength_sessions(athlete: Athlete, week_start: date, offsets: list[int]) -> list[Session]:
+    """STRENGTH_SESSIONS_PER_WEEK-shaped dryland strength `Session`s at the
+    given Monday-relative day `offsets` -- the same content/placement logic
+    every swim week has always used (STRENGTH_CORE_EXERCISES /
+    STRENGTH_FULL_BODY_ADDITION, library/07-strength-dryland.md), factored
+    out so `generate_week`'s bike-primary path can reuse it too (PR #167
+    red-team review, Finding 3, must-fix: bike weeks previously bypassed
+    this mechanism entirely -- zero strength sessions, despite
+    library/23-cycling-training.md's own cited knee/overuse-injury evidence
+    -- Clarsen et al. 2010, Bini & Priego-Quesada 2022 -- having no engine
+    content attached at all).
+
+    Deliberately reuses the EXISTING swim-authored shoulder/rotator-cuff
+    content unchanged, per this pass's explicit scope ("apply existing,
+    already-cited machinery to a new sport, not new periodization") --
+    NOT a claim that this specific exercise selection is what
+    Clarsen/Bini's KNEE-injury findings would themselves prescribe for a
+    cyclist. Authoring real cycling-specific (knee-focused) strength
+    content is documented future scope, not attempted here.
+    """
+    sessions: list[Session] = []
+    for session_index, offset in enumerate(offsets):
+        sessions.append(
+            Session(
+                id=uuid4(),
+                athlete_id=athlete.id,
+                date=week_start + timedelta(days=offset),
+                sport="strength",
+                source="ai_coach",
+                duration_min=STRENGTH_SESSION_MIN,
+                distance_m=None,
+                intensity={"anchor": "rpe"},
+                purpose=(
+                    "dryland shoulder strength — rotator-cuff/scapular-stability "
+                    "strength & balance"
+                ),
+                structure=_strength_session_structure(session_index),
+                structured=resolve_template(
+                    _strength_session_structure_template(session_index), athlete
+                ),
+                status="planned",
+            )
+        )
+    return sessions
+
+
+def _bike_week_sessions_with_strength(
+    athlete: Athlete,
+    week_start: date,
+    total_duration_min: float,
+    ftp_watts: float | None,
+    *,
+    is_indoor: bool | None = None,
+    week_index: int = 0,
+) -> list[Session]:
+    """`_bike_week_sessions`'s output plus STRENGTH_SESSIONS_PER_WEEK
+    strength sessions placed on days it didn't already use -- the
+    bike-primary counterpart to the swim branch's own strength placement
+    (see `_strength_sessions`'s own docstring, PR #167 red-team review
+    Finding 3). Shared by `generate_week`'s bike-primary path and
+    `adapt.adapt_week`'s bike-primary cut/advance rebuild so both place
+    strength identically rather than duplicating the logic.
+
+    `week_index` (optional, defaults to 0): forwarded straight through to
+    `_bike_week_sessions`'s own `week_index` -- see that function's
+    docstring for the interval-template rotation this selects.
+    """
+    bike_sessions = _bike_week_sessions(
+        athlete, week_start, total_duration_min, ftp_watts, is_indoor=is_indoor, week_index=week_index
+    )
+    excluded = {(s.date - week_start).days for s in bike_sessions}
+    strength_offsets = _pick_days(STRENGTH_SESSIONS_PER_WEEK, excluded=excluded)
+    return bike_sessions + _strength_sessions(athlete, week_start, strength_offsets)
+
+
+def _bike_final_taper_sessions(
+    athlete: Athlete, week_start: date, ftp_watts: float | None, *, is_indoor: bool | None = None
+) -> list[Session]:
+    """The final taper week's floor content for a bike-primary week whose
+    normal `_bike_week_sessions` output would otherwise collapse to a
+    single near-token ride -- see `BIKE_FINAL_TAPER_MIN_SESSIONS`'s own
+    comment for the bug and citation status. Two short, genuinely distinct
+    sessions: a brief opener (Z3, some race-intensity-adjacent work) early
+    in the week, then one easy (Z2) spin -- spread via `_spread_days_evenly`
+    like every other bike week, still a flat single-zone block each
+    (`_bike_session_structure`).
+    """
+    offsets = _spread_days_evenly(BIKE_FINAL_TAPER_MIN_SESSIONS)
+    plan = [
+        (BIKE_FINAL_TAPER_OPENER_MIN, "Z3", "race-week opener — short, race-intensity-adjacent effort to prime without adding fatigue"),
+        (BIKE_FINAL_TAPER_EASY_MIN, "Z2", "easy spin — final taper-week leg-opener, keep it light"),
+    ]
+    sessions: list[Session] = []
+    for offset, (duration_min, zone, purpose) in zip(offsets, plan):
+        structured = _bike_session_structure(zone, duration_min, ftp_watts)
+        sessions.append(
+            Session(
+                id=uuid4(),
+                athlete_id=athlete.id,
+                date=week_start + timedelta(days=offset),
+                sport="bike",
+                source="ai_coach",
+                duration_min=duration_min,
+                distance_m=None,
+                intensity=_bike_intensity(zone, ftp_watts),
+                purpose=purpose,
+                structure=render_prose(structured),
+                structured=structured,
+                status="planned",
+                is_indoor=is_indoor,
+            )
+        )
+    return sessions
+
+
 def generate_week(
     athlete: Athlete,
     macro: MacroPlan,
@@ -999,8 +2057,19 @@ def generate_week(
     event_format: EventFormat = "single_day",
     template_preference: TemplatePreference | None = None,
     event: Event | None = None,
+    primary_sport: Literal["swim", "bike"] = "swim",
+    ftp_watts: float | None = None,
+    bike_indoor: bool | None = None,
 ) -> WeekPlan:
     """Generate one week's sessions.
+
+    `bike_indoor` (optional, defaults to `None` -- every existing call site
+    keeps producing byte-identical output unless updated to pass it):
+    forwarded straight through to `_bike_week_sessions`'s own `is_indoor`
+    parameter for a `primary_sport="bike"` week; ignored for a swim week.
+    See that function's docstring for the Finding-5 bug this fixes
+    (`Session.is_indoor` previously had no producer anywhere in this
+    engine).
 
     `event` (optional, defaults to `None` -- every existing call site keeps
     producing byte-identical output unless updated to pass it): when
@@ -1032,6 +2101,60 @@ def generate_week(
     session template (`_strength_session_structure_template` has its own,
     separate rotation, out of scope for this pass) or the long swim/recovery
     sessions (neither uses the template library at all).
+
+    `primary_sport` (defaults to `"swim"` -- every existing call site keeps
+    producing byte-identical output unless updated to pass `"bike"`):
+    when `"bike"`, this function takes a completely SEPARATE, much simpler
+    path (`_bike_week_sessions`) instead of everything described below --
+    no pool sessions, no long swim, no strength/recovery days, no
+    `event_format`/`template_preference` handling. The block-interpolated
+    `target_volume_m` computed above is, for a bike-primary week,
+    interpreted as the week's TOTAL DURATION IN MINUTES (matching
+    `Event.target_metric == "duration_min"`, the multi-sport-unlock case
+    this build actually implements content for -- see `models.Event`'s own
+    docstring on why duration+intensity, not distance, is cycling's natural
+    target unit) and split across `BIKE_SESSIONS_PER_WEEK` generic Z2/Z3
+    sessions (`_bike_week_sessions`), plus `STRENGTH_SESSIONS_PER_WEEK`
+    strength sessions placed on the days it didn't already use
+    (`_bike_week_sessions_with_strength`/`_strength_sessions` -- PR #167
+    red-team review, Finding 3, must-fix: this used to bypass strength
+    placement entirely despite `library/23-cycling-training.md`'s own cited
+    knee/overuse-injury evidence having no engine content attached; now
+    reuses the exact same mechanism swim weeks already use).
+
+    Two more gaps closed this pass (both scoped strictly to bike, see the
+    module-level constant comments for full citation/scope detail): (1) the
+    week's differentiated "hard" session now rotates through
+    `BIKE_INTERVAL_TEMPLATES` (`_select_bike_interval_template`) instead of
+    always being the same flat single-power block (library/24-cycling-
+    periodization-intervals.md's four real interval archetypes); (2) every
+    `BIKE_DELOAD_CADENCE_WEEKS`-th week within a bike-primary macro's
+    base/build/peak span (never the pre-scheduled `taper` block, which
+    already has its own decay rule) reduces `target_volume_m` by
+    `BIKE_DELOAD_VOLUME_REDUCTION` -- a periodic deload the un-modified
+    block-interpolation math above still does not provide for swim (see
+    that math's own comment).
+
+    **Known, deliberate scope limit:** a macro scaffolded with `Event.target_metric
+    == "load_au"` also reaches this path (nothing here checks which
+    target_metric produced `target_volume_m`), but the number would then be
+    an AU load total, not minutes -- this build does not disambiguate
+    between the two units. Extending this to genuinely handle `load_au`
+    bike weeks is real, documented future scope, not attempted here
+    (matching this build's own explicit brief: implement real content for
+    the shipped multi-sport unlock without inventing a cycling-specific
+    periodization design). `ftp_watts` (optional) is forwarded straight to
+    `_bike_week_sessions` -- see that function's own docstring for what it
+    does when `None`. `race_week_checklist` is populated for a bike-primary
+    week under the exact same qualifying condition (active, priority "A",
+    same macro's event, final week of the taper block) as the swim path
+    below, reusing `_race_week_checklist` directly (PR #167 red-team
+    review, Finding 2, must-fix -- previously stayed empty unconditionally).
+    That same final taper week is also floored to at least
+    `BIKE_FINAL_TAPER_MIN_SESSIONS` real sessions
+    (`_bike_final_taper_sessions`) when the ordinary block-interpolated
+    target would otherwise collapse it to one near-token ride -- see that
+    constant's own comment.
 
     Weekly target volume interpolates *linearly* within the containing
     block, from the block's start volume (see `_block_start_volume`) to
@@ -1090,6 +2213,8 @@ def generate_week(
             f"unknown event_format: {event_format!r}, must be 'single_day' or "
             "'multi_day_stage'"
         )
+    if primary_sport not in ("swim", "bike"):
+        raise ValueError(f"unknown primary_sport: {primary_sport!r}, must be 'swim' or 'bike'")
     block_index, block = _find_block(macro, week_start)
     weeks_in_block = (block.end_date - block.start_date).days // 7 + 1
     week_index_in_block = (week_start - block.start_date).days // 7
@@ -1098,8 +2223,140 @@ def generate_week(
 
     start_volume = _block_start_volume(macro, block_index, block)
     end_volume = block.weekly_volume_target_m
+    # This interpolation climbs every week from the start of `base` straight
+    # through `peak` with no periodic deload/recovery week built in -- for a
+    # long runway that's ~21 straight weeks of non-decreasing target before
+    # the pre-scheduled `taper` block finally brings volume down. This
+    # block-interpolation math is entirely sport-agnostic
+    # (block.weekly_volume_target_m and start_volume are just numbers, no
+    # swim-specific step here), so this same gap applies equally to swim.
+    #
+    # BIKE-PRIMARY WEEKS NOW GET A REAL, SCOPED FIX (see the `if
+    # primary_sport == "bike":` branch below, `BIKE_DELOAD_CADENCE_WEEKS`):
+    # every `BIKE_DELOAD_CADENCE_WEEKS`-th week within a bike-primary
+    # macro's base/build/peak span reduces `target_volume_m` by
+    # `BIKE_DELOAD_VOLUME_REDUCTION`, grounded (cadence only, not magnitude
+    # -- see that constant's own comment) in library/24-cycling-
+    # periodization-intervals.md's "Closing the deload-cadence gap" section.
+    #
+    # SWIM IS DELIBERATELY LEFT UNCHANGED by this pass -- generalizing a
+    # scheduled deload to swim's own periodization is a real, separate,
+    # bigger design question (long-swim-ladder interaction, milestone-week
+    # spacing, ROADMAP.md's own post-milestone recovery-day rules would all
+    # need to be reconciled with a scheduled volume drop) and was explicitly
+    # out of scope for this build stage. Swim still relies on the same
+    # mitigations as before: a correctly-wired `/adapt` (`adapt.adapt_week`)
+    # reactive wellness/load-ratio cut -- but not eliminated: a swim athlete
+    # who stays green on every signal still climbs for the entire
+    # base+build+peak span uninterrupted, same as before this pass.
     frac = (week_index_in_block + 1) / weeks_in_block
     target_volume_m = round(start_volume + (end_volume - start_volume) * frac)
+
+    if primary_sport == "bike":
+        # Separate, much simpler path -- see this function's own docstring
+        # for the "bike-primary week" scope note (units, race-week
+        # limitation, etc). None of the swim-specific machinery below
+        # (pool_offsets, long swim, event_format, template_preference)
+        # applies -- strength placement now DOES apply (Finding 3, below),
+        # reusing the exact same mechanism swim weeks use.
+        #
+        # Interval-template rotation (library/24, `_select_bike_interval_
+        # template`) and periodic deload (`BIKE_DELOAD_CADENCE_WEEKS`) both
+        # key off a continuous week counter from the macro's own start, NOT
+        # `week_index_in_block` above (which resets every block boundary).
+        ramp_week_index = _bike_ramp_week_index(macro, week_start)
+        is_deload_week = (
+            block.name in ("base", "build", "peak")
+            and (ramp_week_index + 1) % BIKE_DELOAD_CADENCE_WEEKS == 0
+        )
+        # Never the taper block -- that already has its own explicit
+        # per-week decay rule (TAPER_WEEKLY_DECAY) which this must not
+        # stack with. See BIKE_DELOAD_CADENCE_WEEKS's own comment for the
+        # citation/coach-judgment status of both the cadence and the
+        # magnitude below.
+        if is_deload_week:
+            target_volume_m = round(target_volume_m * (1 - BIKE_DELOAD_VOLUME_REDUCTION))
+            focus = f"{block.focus} — scheduled deload week"
+        else:
+            focus = block.focus
+        if event is not None and event.target_metric == "load_au":
+            # Cheap sanity check for the docstring's own "Known, deliberate
+            # scope limit" note above (PR #167 review, fragile note): this
+            # path interprets target_volume_m as MINUTES, but a macro
+            # scaffolded toward a target_metric="load_au" event feeds an
+            # arbitrary-unit AU number through exactly the same path with
+            # nothing else to catch the mismatch. Warn rather than silently
+            # mislabeling an AU total as minutes -- real load_au-bike
+            # support stays documented future scope, not attempted here.
+            warnings.warn(
+                f"generate_week's bike-primary path interprets "
+                f"target_volume_m ({target_volume_m}) as TOTAL DURATION IN "
+                f"MINUTES, but this week's event has target_metric="
+                f"'load_au' -- the resulting bike sessions' duration_min "
+                "will actually be an AU load number, not minutes. See "
+                "generate_week's own docstring 'Known, deliberate scope "
+                "limit' note.",
+                stacklevel=2,
+            )
+        # Final-taper-week race content (PR #167 red-team review, Finding
+        # 2, must-fix): same qualifying test (active, priority "A", same
+        # macro's event, last week of the taper block) the swim branch uses
+        # below for `_race_week_checklist` -- reused verbatim, not
+        # duplicated, so a qualifying bike event now gets the same
+        # carb-load/bodywork/logistics content a qualifying swim event
+        # already did.
+        is_final_taper_week = block.name == "taper" and week_index_in_block == weeks_in_block - 1
+        is_qualifying_race_week = (
+            event is not None
+            and is_final_taper_week
+            and event.id == macro.event_id
+            and event.active
+            and event.priority.strip().upper() == RACE_WEEK_PRIORITY
+        )
+        if is_qualifying_race_week:
+            core_bike_sessions = _bike_week_sessions(
+                athlete,
+                week_start,
+                float(target_volume_m),
+                ftp_watts,
+                is_indoor=bike_indoor,
+                week_index=ramp_week_index,
+            )
+            if len(core_bike_sessions) < BIKE_FINAL_TAPER_MIN_SESSIONS:
+                # The ordinary taper math collapsed this week to a single
+                # near-token ride (Finding 2) -- floor it to real race-week
+                # content instead.
+                core_bike_sessions = _bike_final_taper_sessions(
+                    athlete, week_start, ftp_watts, is_indoor=bike_indoor
+                )
+            excluded = {(s.date - week_start).days for s in core_bike_sessions}
+            strength_offsets = _pick_days(STRENGTH_SESSIONS_PER_WEEK, excluded=excluded)
+            bike_sessions = core_bike_sessions + _strength_sessions(
+                athlete, week_start, strength_offsets
+            )
+            race_week_checklist = _race_week_checklist(event, week_start)
+        else:
+            bike_sessions = _bike_week_sessions_with_strength(
+                athlete,
+                week_start,
+                float(target_volume_m),
+                ftp_watts,
+                is_indoor=bike_indoor,
+                week_index=ramp_week_index,
+            )
+            race_week_checklist = []
+        return WeekPlan(
+            id=uuid4(),
+            athlete_id=athlete.id,
+            iso_week=iso_week,
+            meso_block=block.name,
+            focus=focus,
+            target_volume_m=target_volume_m,
+            sessions=bike_sessions,
+            adaptation_rationale=None,
+            draft=False,
+            race_week_checklist=race_week_checklist,
+        )
 
     pool_offsets = {_pool_day_offset(entry) for entry in athlete.pool_schedule}
     pace_s = _z2_pace_s_per_100m(athlete)
@@ -1259,28 +2516,7 @@ def generate_week(
     strength_offsets = _pick_days(
         STRENGTH_SESSIONS_PER_WEEK, excluded=pool_offsets | {_WEEKDAY_OFFSETS["sat"], _WEEKDAY_OFFSETS["sun"]}
     )
-    for session_index, offset in enumerate(strength_offsets):
-        sessions.append(
-            Session(
-                id=uuid4(),
-                athlete_id=athlete.id,
-                date=week_start + timedelta(days=offset),
-                sport="strength",
-                source="ai_coach",
-                duration_min=STRENGTH_SESSION_MIN,
-                distance_m=None,
-                intensity={"anchor": "rpe"},
-                purpose=(
-                    "dryland shoulder strength — rotator-cuff/scapular-stability "
-                    "strength & balance"
-                ),
-                structure=_strength_session_structure(session_index),
-                structured=resolve_template(
-                    _strength_session_structure_template(session_index), athlete
-                ),
-                status="planned",
-            )
-        )
+    sessions.extend(_strength_sessions(athlete, week_start, strength_offsets))
 
     if event_format != "multi_day_stage":
         # "multi_day_stage" occupies Sunday with the second stage swim

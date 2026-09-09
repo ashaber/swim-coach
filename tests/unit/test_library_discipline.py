@@ -134,7 +134,16 @@ REFERENCE_LIST = LIBRARY_DIR / "reference_list.md"
 WORD_COUNT_LIMIT = 2500
 
 # --- Rule 3: allowed tag values ---------------------------------------------
-EVIDENCE_ALLOWED = {"swim-ultra", "swim"}
+# "cycling" is the first non-swim EVIDENCE discipline (00-conventions.md's
+# `[EVIDENCE: <discipline>]` tag, added for `23-cycling-training.md` -- see
+# that file's genuinely cycling-native claims, e.g. the Coggan/Allen
+# power-zone model, retagged from `[ADAPTED: cycling]` to `[EVIDENCE:
+# cycling]` since they were never actually cross-discipline adaptations).
+# Future non-swim disciplines (IDEA 008: running, rucking, ...) get added
+# here explicitly, the same "don't widen the check to paper over it"
+# discipline this project already applies to ADAPTED_ALLOWED's combined
+# forms below.
+EVIDENCE_ALLOWED = {"swim-ultra", "swim", "cycling"}
 # Combined ADAPTED forms actually in use in the repo today (grepped, not
 # invented): cycling/running, running/cycling, general-endurance/multi-sport.
 ADAPTED_ALLOWED = {
@@ -613,6 +622,23 @@ def test_invalid_adapted_tag_value_is_flagged() -> None:
 def test_valid_tag_values_pass() -> None:
     text = "**[EVIDENCE: swim-ultra]** X. **[ADAPTED: cycling/running]** Y.\n"
     assert find_invalid_tags(text) == []
+
+
+def test_evidence_cycling_tag_value_passes() -> None:
+    """The new native-evidence discipline tag (00-conventions.md's
+    `[EVIDENCE: <discipline>]`) -- `cycling` is the first allowed value,
+    added for `23-cycling-training.md`'s genuinely cycling-native claims."""
+    text = "**[EVIDENCE: cycling]** The Coggan/Allen power-zone model.\n"
+    assert find_invalid_tags(text) == []
+
+
+def test_evidence_unlisted_discipline_still_flagged() -> None:
+    """A discipline not yet added to EVIDENCE_ALLOWED must still be flagged
+    -- the allowlist grows explicitly (IDEA 008: running, rucking, ...),
+    never by widening the check to accept anything tag-shaped."""
+    text = "**[EVIDENCE: running]** Some claim.\n"
+    violations = find_invalid_tags(text)
+    assert violations == [(1, "EVIDENCE", "running")]
 
 
 def test_invalid_confidence_value_is_flagged() -> None:

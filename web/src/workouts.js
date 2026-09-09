@@ -16,7 +16,17 @@ const SPORT_LABELS = {
   strength: 'Strength',
   recovery: 'Recovery',
   cross_train: 'Cross-train',
+  bike: 'Bike',
 };
+
+// Sports whose sportDetail suffix (e.g. "cycling/mountain" -> "MTB") is
+// worth showing -- engine/cycling-coach Part 1 reclassified real cycling
+// FIT activities from cross_train to their own "bike" sport, so this must
+// cover both: a bike workout still carries the exact same real
+// sport_detail values (road/mountain/gravel/cyclocross) cross_train always
+// did, and losing the "· MTB"-style suffix here would be a real display
+// regression for every MTB/CX ride already flowing in as production data.
+const SPORT_DETAIL_SPORTS = new Set(['cross_train', 'bike']);
 
 const SOURCE_BADGES = {
   fit: 'fit',
@@ -50,12 +60,12 @@ function prettySportDetail(sportDetail) {
 
 /** `sportDetail` is optional (undefined/null for every workout logged
  * before this feature, and always for swim_pool/swim_ow) -- when present
- * on a cross_train workout, it's appended as "Cross-train · <pretty>"
- * (e.g. "Cross-train · MTB"). Every other sport, and cross_train with no
- * detail, renders exactly as before. */
+ * on a cross_train OR bike workout, it's appended as "Cross-train · <pretty>"
+ * / "Bike · <pretty>" (e.g. "Bike · MTB"). Every other sport, and a
+ * cross_train/bike workout with no detail, renders exactly as before. */
 export function sportLabel(sport, sportDetail) {
   const base = SPORT_LABELS[sport] || sport;
-  if (sport === 'cross_train' && sportDetail) {
+  if (SPORT_DETAIL_SPORTS.has(sport) && sportDetail) {
     return `${base} · ${prettySportDetail(sportDetail)}`;
   }
   return base;
