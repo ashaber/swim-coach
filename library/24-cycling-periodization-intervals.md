@@ -107,6 +107,20 @@ This closes the *grounding* half of `plan.py`'s documented deload gap; the
 `_bike_week_sessions`'s block-interpolation math) remains explicitly
 deferred to a future build stage, per that function's own comment.
 
+## A second macro shape: established-base, short-runway sharpening
+
+`swim_coach.plan.scaffold_sharpening_macro`'s **hold -> sharpen -> taper**
+shape — a second, deliberately DIFFERENT periodization shape from
+`scaffold_macro`'s own base->build->peak->taper, for the athlete who
+already has a real training base but not enough runway for that shape —
+reuses this file's own Issurin (2008) block-periodization citation and
+`sharpen`-block interval content, but is documented in its own file,
+`25-macro-sharpening-established-base.md`, to stay under this file's own
+word-count cap. See that file for the shape itself, the derived
+`SHARPENING_MIN_MACRO_WEEKS` minimum runway, and the separately-flagged-
+PROVISIONAL established-base detection threshold
+(`swim_coach.load.has_established_training_base`).
+
 ## Interval-design taxonomy (Laursen & Buchheit)
 
 **`[ADAPTED: general-endurance]`** Per `Buchheit M., Laursen P. B. (2013)`,

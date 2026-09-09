@@ -61,6 +61,33 @@ MIN_MACRO_WEEKS = 8
 # rather than produce a degenerate plan. library/03-periodization.md
 # (to be authored).
 
+# --- Sharpening-macro block allocation constants (scaffold_sharpening_macro) -
+# A second, genuinely DIFFERENT periodization shape for the athlete who
+# already has a real, evidence-based training base (see
+# `swim_coach.load.has_established_training_base`) but does not have
+# MIN_MACRO_WEEKS of runway left before their event -- see
+# `scaffold_sharpening_macro`'s own docstring for the full design and the
+# real Issurin block-periodization citation (verified via a fresh web
+# search this build, `library/24-cycling-periodization-intervals.md`'s
+# "A second macro shape" section).
+
+SHARPEN_WEEKS_MIN = 2
+SHARPEN_WEEKS_MAX = 4
+# `[ADAPTED: general-endurance]`, Confidence: medium -- Issurin V.B. (2008),
+# "Block periodization versus traditional training theory: a review," The
+# Journal of Sports Medicine and Physical Fitness, 48(1):65-75 (already
+# cited in library/24-cycling-periodization-intervals.md; re-verified by a
+# fresh web search this build, not taken on trust from an earlier session's
+# summary): a single block-periodization mesocycle -- accumulation,
+# transmutation, or realization -- runs 2 to 4 weeks. The "sharpen" block
+# below is this engine's own transmutation-block implementation (concentrated
+# race-specific intensity work converting an existing base into
+# event-specific fitness), so it is bounded to Issurin's own stated 2-4 week
+# mesocycle range, not an invented number. `library/24-cycling-
+# periodization-intervals.md`'s own "Closing the deload-cadence gap" section
+# already establishes this project's precedent for applying Issurin's
+# block-length range to a concrete constant.
+
 TAPER_RUNWAY_THRESHOLD_WEEKS = 16
 TAPER_WEEKS_LONG = 4
 TAPER_WEEKS_SHORT = 2
@@ -77,6 +104,20 @@ TAPER_WEEKS_SHORT = 2
 # block from the corrected source is flagged as follow-up work, not done here.
 # Shorter runways compress to a 2-week taper -- PROVISIONAL,
 # library/03-periodization.md.
+
+SHARPENING_MIN_MACRO_WEEKS = SHARPEN_WEEKS_MIN + TAPER_WEEKS_SHORT
+# Derived, not guessed: the shortest runway `scaffold_sharpening_macro` can
+# honestly periodize is Issurin's own minimum transmutation-block length
+# (SHARPEN_WEEKS_MIN=2, see that constant's own citation above) plus the
+# taper this shape reuses UNCHANGED from `scaffold_macro`'s own short-runway
+# taper (TAPER_WEEKS_SHORT=2, already an existing, already-used constant --
+# not a new number invented for this shape). 2+2=4 weeks -- always strictly
+# less than MIN_MACRO_WEEKS (8), which is the entire point: this shape picks
+# up exactly the runway range scaffold_macro refuses (< MIN_MACRO_WEEKS) but
+# has enough weeks to periodize safely (>= SHARPENING_MIN_MACRO_WEEKS). A
+# runway shorter than 4 weeks is refused by this shape too -- there is no
+# further, even-shorter periodization shape in this build; see
+# `scaffold_sharpening_macro`'s own docstring.
 
 PEAK_WEEKS_LONG = 3
 PEAK_WEEKS_SHORT = 2
@@ -1180,6 +1221,162 @@ def scaffold_macro(
                 start_date=cursor,
                 end_date=block_end,
                 weekly_volume_target_m=end_target,
+                focus=focus,
+            )
+        )
+        cursor = block_end + timedelta(days=1)
+
+    return MacroPlan(id=uuid4(), athlete_id=athlete.id, event_id=event.id, blocks=blocks)
+
+
+def scaffold_sharpening_macro(
+    athlete: Athlete,
+    event: Event,
+    start: date,
+    current_weekly_volume_m: int,
+    sharpen_weekly_volume_m: int | None = None,
+) -> MacroPlan:
+    """Build a genuinely DIFFERENT macro shape from `scaffold_macro`'s own
+    base->build->peak->taper -- an established-base, short-runway
+    "sharpening" macro: an optional flat **hold** phase (maintain current
+    fitness, deliberately no ramp), a **sharpen** phase (Issurin's block-
+    periodization "transmutation" block -- concentrated, race-specific
+    intensity work converting existing base fitness into event-specific
+    fitness, 2-4 weeks per `SHARPEN_WEEKS_MIN`/`SHARPEN_WEEKS_MAX`'s own
+    citation), then the EXISTING `taper` block, reused completely unchanged
+    (same name, same `TAPER_WEEKS_SHORT`/`TAPER_WEEKLY_DECAY` math
+    `scaffold_macro` and `generate_week` already use -- no second taper
+    design was authored for this shape).
+
+    **Not `scaffold_macro` compressed into fewer weeks.** `scaffold_macro`
+    ramps linearly from a low starting volume all the way to peak across
+    its base+build weeks (`WEEKLY_VOLUME_RAMP_CAP`/week, `BASE_END_VOLUME_
+    SHARE_OF_PEAK`) -- that ramp is precisely what an athlete who already
+    has a real base does not need, and precisely what `MIN_MACRO_WEEKS`
+    refuses to compress into too few weeks (each phase would stop meaning
+    anything). This function contains NO ramp math at all: both `hold` and
+    `sharpen` are built at the SAME flat `weekly_volume_target_m` (`sharpen_
+    weekly_volume_m`, defaulting to `current_weekly_volume_m` -- "hold,
+    don't ramp" is this shape's whole premise, not a parameter an athlete
+    must think to set), and the block-boundary math itself is different
+    (Issurin transmutation-block sizing, not `BASE_SHARE`/back-to-front
+    taper+peak sizing). The taper's own volume decays off of THIS flat
+    volume via the exact same `TAPER_WEEKLY_DECAY` formula `scaffold_macro`
+    uses off its own (ramped) peak -- the only piece of math genuinely
+    shared between the two shapes, because it is the SAME taper block, not
+    a re-derivation.
+
+    **This function only ever decides its own runway is too short or too
+    long for IT to handle -- it never decides whether the athlete has an
+    established base.** That determination is `swim_coach.load.has_
+    established_training_base`'s job, evaluated ONLY against the athlete's
+    own real logged workout history (never against this event, this macro,
+    or anything conversational) -- deliberately NOT called from inside this
+    function, so `scaffold_sharpening_macro` cannot silently fire for an
+    athlete this engine has no real evidence has a base. `backend/app/
+    tools.py`'s `draft_macro_plan` handler is the one real caller that
+    checks `has_established_training_base` and chooses between this
+    function and `scaffold_macro` based on it -- see that handler's own
+    docstring for the full three-way decision and why it's surfaced
+    transparently rather than silently.
+
+    Raises `ValueError` if `weeks_available < SHARPENING_MIN_MACRO_WEEKS`
+    (this shape's own honest floor -- see that constant's derivation) OR
+    `weeks_available >= MIN_MACRO_WEEKS` (that runway belongs to
+    `scaffold_macro`'s own shape; this function refuses to encroach on it,
+    matching this build's explicit "existing shape untouched" scope rule --
+    see the module-level `SHARPENING_MIN_MACRO_WEEKS` comment for how the
+    two ranges compose so every runway `weeks_available >= SHARPENING_MIN_
+    MACRO_WEEKS` maps to exactly one shape, never both, never neither).
+
+    Block sizing: `taper_weeks = TAPER_WEEKS_SHORT` always (this shape's
+    runway is, by construction, always short); `remainder = weeks_available
+    - taper_weeks`; `sharpen_weeks = min(remainder, SHARPEN_WEEKS_MAX)`
+    (never exceeds Issurin's own upper bound, regardless of how much
+    runway is available -- a "sharpening" block that ran longer than 4
+    weeks would no longer be the concentrated block Issurin's own source
+    describes); `hold_weeks = remainder - sharpen_weeks` (0 whenever the
+    runway is tight enough that `sharpen` alone already fills it -- a
+    `hold` block only appears when there is real spare runway beyond what
+    `sharpen`+`taper` need, matching this phase's own "only present if
+    runway allows" design). `hold_weeks` is never negative:
+    `SHARPENING_MIN_MACRO_WEEKS = SHARPEN_WEEKS_MIN + TAPER_WEEKS_SHORT`
+    guarantees `remainder >= SHARPEN_WEEKS_MIN` for any runway this
+    function accepts, and `SHARPEN_WEEKS_MIN <= SHARPEN_WEEKS_MAX`.
+
+    `sharpen_weekly_volume_m` (optional): the flat weekly volume/duration
+    both `hold` and `sharpen` are built at. Defaults to
+    `current_weekly_volume_m` -- the athlete's OWN real current
+    volume/duration, held flat, not ramped -- since that is this shape's
+    entire premise. Pass it explicitly only for a deliberate coaching call
+    to sharpen at a different (e.g. slightly reduced, higher-intensity-
+    concentration) volume than the athlete's exact current one; no
+    ramp-cap clamping is applied to it (unlike `scaffold_macro`'s
+    `peak_weekly_volume_m` -- there is no ramp for a cap to bound here).
+    Deliberately no `target_metric`-driven distance/duration default
+    derivation (unlike `scaffold_macro`'s `PEAK_WEEKLY_VOLUME_X_EVENT_
+    DISTANCE` path) -- this shape needs no such default in the first
+    place, so it applies uniformly regardless of `event.target_metric`.
+
+    Each `MacroBlock.weekly_volume_target_m` is still the block's END-of-
+    block volume (matching `scaffold_macro`'s own convention, so
+    `generate_week`'s block-interpolation math -- which is sport/shape-
+    agnostic -- works unchanged): `hold`/`sharpen` both end at
+    `sharpen_weekly_volume_m` (flat, so `generate_week`'s per-week linear
+    interpolation produces the SAME target every week within each of those
+    two blocks -- a flat, not ramped, week-over-week volume, the direct
+    proof of this shape's "no ramp" property), and `taper` decays off of
+    that same value via `TAPER_WEEKLY_DECAY`, identically to how
+    `scaffold_macro`'s own taper block decays off its `peak` block.
+    """
+    start_monday = _monday_on_or_after(start)
+    event_monday = _monday_of_week(event.event_date)
+    weeks_available = (event_monday - start_monday).days // 7
+    if weeks_available < SHARPENING_MIN_MACRO_WEEKS:
+        raise ValueError(
+            f"only {weeks_available} whole weeks available before "
+            f"{event.name!r}; need at least {SHARPENING_MIN_MACRO_WEEKS} to "
+            "periodize even a compressed hold->sharpen->taper macro safely"
+        )
+    if weeks_available >= MIN_MACRO_WEEKS:
+        raise ValueError(
+            f"{weeks_available} whole weeks available before {event.name!r} "
+            f"is enough runway ({MIN_MACRO_WEEKS}+) for the standard "
+            "base->build->peak->taper macro -- use scaffold_macro instead"
+        )
+
+    taper_weeks = TAPER_WEEKS_SHORT
+    remainder_weeks = weeks_available - taper_weeks
+    sharpen_weeks = min(remainder_weeks, SHARPEN_WEEKS_MAX)
+    hold_weeks = remainder_weeks - sharpen_weeks
+
+    sharpen_volume = (
+        sharpen_weekly_volume_m if sharpen_weekly_volume_m is not None else current_weekly_volume_m
+    )
+    hold_end = sharpen_volume
+    sharpen_end = sharpen_volume
+    taper_end = max(0, round(sharpen_volume * (1 - TAPER_WEEKLY_DECAY * taper_weeks)))
+
+    block_specs: list[tuple[str, int, float, str]] = []
+    if hold_weeks > 0:
+        block_specs.append(
+            ("hold", hold_weeks, hold_end, "maintain current fitness — no base-building ramp needed")
+        )
+    block_specs.append(
+        ("sharpen", sharpen_weeks, sharpen_end, "race-specific sharpening (Issurin transmutation block)")
+    )
+    block_specs.append(("taper", taper_weeks, taper_end, "taper"))
+
+    blocks: list[MacroBlock] = []
+    cursor = start_monday
+    for name, n_weeks, end_target, focus in block_specs:
+        block_end = cursor + timedelta(weeks=n_weeks) - timedelta(days=1)
+        blocks.append(
+            MacroBlock(
+                name=name,  # type: ignore[arg-type]
+                start_date=cursor,
+                end_date=block_end,
+                weekly_volume_target_m=round(end_target),
                 focus=focus,
             )
         )
@@ -2478,6 +2675,21 @@ def generate_week(
         # stack with. See BIKE_DELOAD_CADENCE_WEEKS's own comment for the
         # citation/coach-judgment status of both the cadence and the
         # magnitude below.
+        #
+        # Sharpening-macro build: also never "hold"/"sharpen" (see
+        # `MacroBlock.name`'s own docstring and `scaffold_sharpening_macro`)
+        # -- deliberate, not an oversight. That whole macro is already short
+        # by construction (SHARPENING_MIN_MACRO_WEEKS=4..MIN_MACRO_WEEKS-1
+        # weeks total), `hold` is a flat maintenance phase with nothing to
+        # "step down" from, and Issurin's own transmutation-block framing
+        # for `sharpen` is itself already a short, concentrated block --
+        # layering a periodic step-down cadence designed for a long, non-
+        # decreasing base/build/peak climb onto it would fight the shape's
+        # own premise, not extend it. `_select_bike_interval_template`'s
+        # rotation (the actual "race-specific intensity work" content this
+        # brief calls for) still applies unchanged either way -- it keys off
+        # `ramp_week_index`, not `block.name`, so `hold`/`sharpen` weeks get
+        # real, varying interval content with no extra plumbing needed here.
         if is_deload_week:
             target_volume_m = round(target_volume_m * (1 - BIKE_DELOAD_VOLUME_REDUCTION))
             focus = f"{block.focus} — scheduled deload week"

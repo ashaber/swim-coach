@@ -1027,6 +1027,215 @@ def ctl_atl_tsb_series(
     return series
 
 
+def _ctl_as_of(daily_load_values: dict[date, float], as_of: date) -> float:
+    """CTL on exactly `as_of`, from the real `ctl_atl_tsb_series` walk --
+    not a new load-computation, just a single-date read of it, handling the
+    two cases that function's own return shape doesn't answer directly:
+    `as_of` before any logged day (no fitness has accrued yet -- 0.0), and
+    `as_of` after the last logged day (the series stops at the last real
+    day; fitness since then is assumed to keep decaying under zero load,
+    same recursion, continued by hand for the gap -- `has_established_
+    training_base` below is the only caller, and it always evaluates
+    "today," which is routinely after the athlete's most recent logged
+    workout).
+    """
+    series = ctl_atl_tsb_series(daily_load_values)
+    if not series:
+        return 0.0
+    ctl_by_date = {d: ctl for d, ctl, _atl, _tsb in series}
+    if as_of in ctl_by_date:
+        return ctl_by_date[as_of]
+    last_date, ctl, _atl, _tsb = series[-1]
+    if as_of < last_date:
+        # Before the very first logged day (series starts at min(daily_load_
+        # values)) -- no real history exists yet as of this date.
+        return 0.0
+    days_since = (as_of - last_date).days
+    for _ in range(days_since):
+        ctl = ctl + (0.0 - ctl) / CTL_TIME_CONSTANT_DAYS
+    return ctl
+
+
+BASE_DETECTION_LOOKBACK_MULTIPLE = 2
+BASE_DETECTION_LOOKBACK_DAYS = BASE_DETECTION_LOOKBACK_MULTIPLE * CTL_TIME_CONSTANT_DAYS
+BASE_DETECTION_LOOKBACK_WEEKS = BASE_DETECTION_LOOKBACK_DAYS // 7
+# PROVISIONAL, Coach judgment -- library/03-periodization.md, no primary
+# literature pins an exact "how many weeks of history makes a training base
+# established" threshold (confirmed absent by direct search this session,
+# alongside the real Issurin block-periodization search that grounds
+# `plan.scaffold_sharpening_macro` -- neither Issurin 2008 nor the sources
+# already cited in library/24-cycling-periodization-intervals.md specify
+# one). This constant is a real, DERIVED number, not an arbitrary round
+# one: `ctl_atl_tsb_series`'s own module docstring already states its CTL
+# series is only meaningful "after roughly a few multiples of [CTL_TIME_
+# CONSTANT_DAYS]" -- an exponential moving average with time constant tau
+# closes ~63% of the gap to its steady-state value after 1 tau, ~86% after
+# 2 tau, ~95% after 3 tau (standard EWMA-to-steady-state math, not a swim-
+# specific claim). BASE_DETECTION_LOOKBACK_MULTIPLE=2 takes the low end of
+# that module's own "a few multiples" language -- 2 x CTL_TIME_CONSTANT_
+# DAYS (42) = 84 days = exactly 12 whole weeks -- as the shortest window
+# this engine's own CTL math would already call "warmed up" rather than
+# "still climbing from a cold start." Test: if a real athlete with a
+# genuinely short (<12-week) but clearly-consistent training history keeps
+# getting refused established-base status while a coach would obviously
+# call them base-trained, revisit the multiple (3 tau=95% is the more
+# conservative alternative already implied by the same docstring) rather
+# than inventing an unrelated number.
+
+BASE_DETECTION_MIN_WEEKS_WITH_LOAD_FRACTION = 0.75
+# PROVISIONAL, Coach judgment -- library/03-periodization.md. Requires real
+# logged load (any nonzero `daily_loads` total) in at least this fraction of
+# the trailing `BASE_DETECTION_LOOKBACK_WEEKS` (9 of 12) -- this is the part
+# of `has_established_training_base` that directly answers this build's own
+# design brief ("not just one big week skewing a mean"): a single spike week
+# amid an otherwise-empty lookback window fails this breadth check even
+# though it could inflate a naive mean or a raw CTL reading on its own. No
+# citation grounds 0.75 specifically -- it is a deliberately generous
+# majority threshold (allows real missed/cutback weeks, e.g. a taper, a
+# minor illness, a travel week) without allowing a base to be "established"
+# by training in only a small minority of the window.
+
+
+@dataclass(frozen=True)
+class TrainingBaseEvidence:
+    """The real, evidence-based numbers behind one `has_established_
+    training_base` call -- `established` is the exact same boolean that
+    function returns (computed here, once, so the two can never disagree),
+    the rest are the underlying evidence a caller can surface HONESTLY to
+    an athlete/coach instead of just asserting the boolean (matching
+    `taper_search.TaperCandidate`'s own `fits_available_runway`/`ramp_cap_
+    fraction_applied` precedent for never letting a consequential engine
+    decision happen invisibly -- see `backend/app/tools.py`'s
+    `draft_macro_plan` handler, the one real caller that surfaces this).
+    """
+
+    established: bool
+    lookback_start: date
+    lookback_weeks: int
+    earliest_logged_day: date | None
+    weeks_with_load: int
+    min_weeks_with_load_fraction: float
+    ctl_at_as_of: float
+
+
+def _training_base_evidence(daily_load_values: dict[date, float], as_of: date) -> TrainingBaseEvidence:
+    """Shared implementation behind `has_established_training_base` (the
+    bare boolean) and `TrainingBaseEvidence` (the same result plus the real
+    numbers behind it) -- see `has_established_training_base`'s own
+    docstring for the full three-condition design and citations; this is
+    just where the arithmetic actually lives, so the two public entry
+    points can never compute a different answer from each other.
+    """
+    lookback_start = as_of - timedelta(days=BASE_DETECTION_LOOKBACK_DAYS - 1)
+
+    if not daily_load_values:
+        return TrainingBaseEvidence(
+            established=False,
+            lookback_start=lookback_start,
+            lookback_weeks=BASE_DETECTION_LOOKBACK_WEEKS,
+            earliest_logged_day=None,
+            weeks_with_load=0,
+            min_weeks_with_load_fraction=BASE_DETECTION_MIN_WEEKS_WITH_LOAD_FRACTION,
+            ctl_at_as_of=0.0,
+        )
+
+    logged_days_on_or_before_as_of = [d for d in daily_load_values if d <= as_of]
+    earliest_logged_day = min(logged_days_on_or_before_as_of) if logged_days_on_or_before_as_of else None
+
+    weeks_with_load = 0
+    for week_index in range(BASE_DETECTION_LOOKBACK_WEEKS):
+        week_start = lookback_start + timedelta(days=week_index * 7)
+        week_total = sum(
+            daily_load_values.get(week_start + timedelta(days=offset), 0.0)
+            for offset in range(7)
+        )
+        if week_total > 0:
+            weeks_with_load += 1
+
+    ctl_at_as_of = _ctl_as_of(daily_load_values, as_of)
+
+    established = (
+        earliest_logged_day is not None
+        and earliest_logged_day <= lookback_start
+        and weeks_with_load / BASE_DETECTION_LOOKBACK_WEEKS >= BASE_DETECTION_MIN_WEEKS_WITH_LOAD_FRACTION
+        and ctl_at_as_of > 0.0
+    )
+    return TrainingBaseEvidence(
+        established=established,
+        lookback_start=lookback_start,
+        lookback_weeks=BASE_DETECTION_LOOKBACK_WEEKS,
+        earliest_logged_day=earliest_logged_day,
+        weeks_with_load=weeks_with_load,
+        min_weeks_with_load_fraction=BASE_DETECTION_MIN_WEEKS_WITH_LOAD_FRACTION,
+        ctl_at_as_of=ctl_at_as_of,
+    )
+
+
+def has_established_training_base(daily_load_values: dict[date, float], as_of: date) -> bool:
+    """Whether this athlete already has a real, evidence-based training base
+    as of `as_of` -- deliberately takes ONLY the athlete's own real logged
+    daily training-load history (the exact `daily_loads(...)` output any
+    caller already has on hand) and a date. No `Event`, no `Athlete`, no
+    `MacroPlan`, no goal/macro/sport of any kind: this is the whole point
+    -- see `plan.scaffold_sharpening_macro`'s own docstring and this
+    build's design brief. The same real logged history, evaluated at the
+    same `as_of`, MUST return the same answer no matter which event/macro a
+    caller is about to plan -- the function signature itself makes this
+    structurally impossible to violate, since there is nothing
+    event/macro-shaped to even pass in.
+
+    Three conditions, all required, all derived only from `daily_load_values`
+    (never inferred from conversation/prose -- see this build's own second
+    mandatory correctness property):
+
+    1. **Real history reaches back far enough.** The earliest day with any
+       logged load must be on or before `as_of -
+       (BASE_DETECTION_LOOKBACK_DAYS - 1)` -- i.e. training was already
+       under way before the trailing lookback window even began, not just
+       started somewhere inside it. See `BASE_DETECTION_LOOKBACK_DAYS`'s own
+       comment for why that specific window length (84 days / 12 weeks) is a
+       real, derived number, not an arbitrary one.
+    2. **That history is broadly, not sparsely, present.** At least
+       `BASE_DETECTION_MIN_WEEKS_WITH_LOAD_FRACTION` of the
+       `BASE_DETECTION_LOOKBACK_WEEKS` calendar weeks inside the lookback
+       window must contain at least one day of real nonzero logged load --
+       see `BASE_DETECTION_MIN_WEEKS_WITH_LOAD_FRACTION`'s own comment for
+       why this, not a raw mean, is what guards against one big week
+       skewing the read.
+    3. **Fitness hasn't fully decayed away by `as_of`.** `_ctl_as_of` (the
+       real `ctl_atl_tsb_series` CTL reading, continued forward under zero
+       load if `as_of` is after the last logged day) must be `> 0`. Nearly
+       always true once (1)/(2) pass -- CTL only reaches exactly zero after
+       an extremely long gap since the last logged day -- but a genuine,
+       free guard against a real edge case (1)/(2) alone would miss
+       nonetheless: a long-ago consistent history that has since gone
+       completely quiet for long enough that a coach would no longer call
+       it a live "base" today.
+
+    Days in `daily_load_values` dated AFTER `as_of` are never consulted --
+    same "don't borrow from data that didn't exist yet" convention
+    `estimate_hr_rest` already uses -- so this can be safely evaluated for a
+    macro being planned starting today even if the athlete's log already has
+    later entries synced in from elsewhere.
+
+    Deliberately does NOT gate on an absolute CTL magnitude (e.g. "CTL must
+    exceed N AU") -- this module's own documented "known limitation" (the
+    module docstring's tiered sRPE/HR-TRIMP/pace-IF/duration scale mismatch)
+    means a single AU threshold could not be trusted the same way across two
+    athletes, or even across one athlete's own history if which tier a given
+    day happened to resolve to changes over time. The breadth-of-weeks check
+    (condition 2) is the real base-detection signal; `_ctl_as_of` (condition
+    3) is used only as a cheap, free sanity floor on top of it, not as the
+    primary criterion.
+
+    See `TrainingBaseEvidence`/`_training_base_evidence` for the same
+    result plus the real numbers behind it, for a caller (e.g. `backend/
+    app/tools.py`'s `draft_macro_plan` handler) that needs to surface HOW
+    this was decided, not just what.
+    """
+    return _training_base_evidence(daily_load_values, as_of).established
+
+
 # --- wellness composite ---------------------------------------------------------
 
 
