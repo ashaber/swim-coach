@@ -1857,6 +1857,79 @@ describe('renderRosterTab', () => {
     expect(html).not.toContain('data-a="roster:select-athlete"');
   });
 
+  it('renders the read-only Intervals section when a bike workout has an analytics.intervals block', () => {
+    const bikeWorkout = {
+      id: 'w9',
+      date: '2026-07-15',
+      sport: 'bike',
+      sport_detail: 'cycling/road',
+      source: 'fit',
+      rpe: 7,
+      duration_min: 75,
+      distance_m: 40000,
+      notes: null,
+      laps: [],
+      lengths: [],
+      pauses: [],
+      analytics: {
+        cardiac_drift_pct: 8.1,
+        intervals: {
+          efforts_detected: 2,
+          detection_basis: 'power',
+          matched_to_prescription: true,
+          prescribed_count: 2,
+          decoupling_tightened_pct: 3.4,
+          decoupling_note: 'measured on the 88% of moving time spent working (above 20W)',
+          efforts: [
+            {
+              n: 1, start_s: 600, duration_s: 720, avg_w: 241, avg_hr: 158,
+              target_w: 239, pct_of_target: 100.8, time_in_band_pct: 72, fade_pct: 2.1,
+              hr_drift_bpm: 4, grade_delta_pct_pts: -0.4, terrain_flag: null,
+              verdict: 'on target',
+            },
+            {
+              n: 2, start_s: 1800, duration_s: 720, avg_w: 205, avg_hr: 160,
+              target_w: 239, pct_of_target: 85.8, time_in_band_pct: 3, fade_pct: 14.2,
+              hr_drift_bpm: 1, grade_delta_pct_pts: 5.5,
+              terrain_flag: 'power fade tracks a downhill grade change (~6 pts less climb) while HR held -- likely terrain, not easing off',
+              verdict: 'under target (86%); power fade tracks a downhill grade change (~6 pts less climb) while HR held -- likely terrain, not easing off',
+            },
+          ],
+        },
+      },
+      quality: null,
+    };
+    const html = renderRosterTab({
+      ...baseArgs,
+      athletes: { status: 'ready', data: [{ slug: 'renee', name: 'Renee' }], error: null },
+      actingAsAthlete: 'renee',
+      workouts: { status: 'ready', data: [bikeWorkout], error: null },
+      workoutDetailId: 'w9',
+    });
+    expect(html).toContain('<h4>Intervals</h4>');
+    expect(html).toContain('Matched to a prescribed 2-interval session.');
+    expect(html).toContain('101% of 239 W');
+    expect(html).toContain('86% of 239 W');
+    expect(html).toContain('on target');
+    expect(html).toContain('likely terrain, not easing off');
+    expect(html).toContain('Aerobic decoupling (working portion only): +3.4%');
+  });
+
+  it('renders no Intervals section for a swim workout with analytics but no intervals block', () => {
+    const html = renderRosterTab({
+      ...baseArgs,
+      athletes: { status: 'ready', data: [{ slug: 'renee', name: 'Renee' }], error: null },
+      actingAsAthlete: 'renee',
+      workouts: {
+        status: 'ready',
+        data: [{ ...workout, analytics: { cardiac_drift_pct: 3.2, intervals: null } }],
+        error: null,
+      },
+      workoutDetailId: 'w1',
+    });
+    expect(html).not.toContain('<h4>Intervals</h4>');
+  });
+
   it('shows an empty state when there are no coached athletes', () => {
     const html = renderRosterTab(baseArgs);
     expect(html).toContain('coach access');

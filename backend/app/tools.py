@@ -157,12 +157,16 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Callable
 
 from pydantic import ValidationError
 
 from swim_coach.adapt import adapt_week
+from swim_coach.analytics import compute_analytics
 from swim_coach.load import _training_base_evidence, daily_loads, estimate_hr_max
+from swim_coach.parse_files import parse_fit
+from swim_coach.quality import match_workout_to_session
 # `_training_base_evidence` is `has_established_training_base`'s own shared
 # implementation -- `_training_base_evidence(...).established` IS `has_
 # established_training_base(...)`'s return value (see load.py: the public
@@ -204,7 +208,12 @@ from swim_coach.taper_search import (
 )
 from swim_coach.workout_templates import TemplatePreference, render_prose, resolve_template
 
-from app.context import _active_health_statuses, iso_week_str, summarize_rollup
+from app.context import (
+    _active_health_statuses,
+    find_workout_by_id,
+    iso_week_str,
+    summarize_rollup,
+)
 from app.garmin_push import push_on_demand
 from app.health_status_helpers import link_health_status_feedback
 from app.load_helpers import workout_load_au
@@ -563,6 +572,50 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
             },
             "required": ["start_date"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "reanalyze_workout",
+        "description": (
+            "Re-run the deterministic interval analyzer over an "
+            "already-logged BIKE ride, now that you know an interval target "
+            "the .fit file itself never carried. Use this after you've done "
+            "the FTP math for a structured session the athlete describes in "
+            "chat (\"it was 2x12min at 91% of my 263W FTP\") and want to "
+            "check what she ACTUALLY held -- average watts vs target, "
+            "time-in-band, within-interval fade, and whether a power fade "
+            "was really terrain (a steepening/easing dirt road) rather than "
+            "her easing off. Pass `target_watts` for an explicit per-"
+            "interval watts number, OR `ftp_watts` + `pct_ftp` to have it "
+            "compute the target, OR neither (it will still detect efforts "
+            "on a dynamic threshold and, if a matching planned session with "
+            "power targets exists, use those). Bike rides only. This "
+            "recomputes and saves the workout's analytics block in place; "
+            "it does not touch the plan. After it returns, describe the "
+            "per-interval result to the athlete."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "workout_id": {
+                    "type": "string",
+                    "description": "The id (or a unique prefix) of the logged bike workout to re-analyze.",
+                },
+                "target_watts": {
+                    "type": "number",
+                    "description": "Explicit per-interval power target in watts (e.g. 239). Takes precedence over ftp_watts/pct_ftp.",
+                },
+                "ftp_watts": {
+                    "type": "number",
+                    "description": "The athlete's FTP in watts -- only used (together with pct_ftp) to compute the target when target_watts isn't given.",
+                },
+                "pct_ftp": {
+                    "type": "number",
+                    "description": "Percent of FTP the intervals were prescribed at (e.g. 91 for 91%). Must be given together with ftp_watts.",
+                },
+            },
+            "required": ["workout_id"],
             "additionalProperties": False,
         },
     },
@@ -2238,6 +2291,151 @@ def _handle_get_workouts(input_data: dict[str, Any], *, store: StoreInterface, s
     }
 
 
+def _recover_prescribed_structure(
+    store: StoreInterface, slug: str, workout: Workout
+) -> WorkoutStructure | None:
+    """The `WorkoutStructure` for the planned session this workout matches,
+    if one is recoverable -- same date+sport fallback
+    `quality.match_workout_to_session` uses, over the workout's own week
+    plus its two neighbours (a ride logged Sunday can belong to the week
+    that just rolled over)."""
+    weeks: list = []
+    seen: set[str] = set()
+    for delta in (-7, 0, 7):
+        iso = iso_week_str(workout.date + timedelta(days=delta))
+        if iso in seen:
+            continue
+        seen.add(iso)
+        wk = store.load_week(slug, iso)
+        if wk is not None:
+            weeks.append(wk)
+    sessions = [s for wk in weeks for s in wk.sessions]
+    session = match_workout_to_session(workout, sessions)
+    return session.structured if session is not None else None
+
+
+def _handle_reanalyze_workout(
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str
+) -> dict[str, Any]:
+    """Re-run the deterministic interval analyzer over an already-logged
+    ride's persisted power/grade series, now that a target the `.fit` file
+    itself never carried is known -- the coach doing the FTP math ("2x12 at
+    91% of 263W = 239W") and then asking "did she actually hold it?".
+
+    Target resolution, in priority order:
+      1. `target_watts` -- an explicit per-interval watts target.
+      2. `ftp_watts` + `pct_ftp` -- computes `ftp_watts * pct_ftp / 100`.
+      3. the matched planned session's own `structured` power targets, if
+         one is recoverable (date+sport).
+      4. nothing -- efforts are still detected on a dynamic threshold and
+         reported, just without a pct-of-target read.
+
+    Series source: the row `store.load_series` holds for this workout; if
+    absent (an older synced ride whose series predates this feature, keyed
+    to a provisional id), falls back to re-parsing `workout.raw_ref` when
+    that file is still on disk. Persists the recomputed `analytics` in
+    place -- no draft/confirm step (it only rewrites a derived field, never
+    plan/volume)."""
+    workout_id = (input_data.get("workout_id") or "").strip()
+    if not workout_id:
+        return {"error": "workout_id is required"}
+
+    workouts = store.list_workouts(slug)
+    workout = find_workout_by_id(workouts, workout_id)
+    if workout is None:
+        return {"error": f"no workout matching id {workout_id!r}"}
+    if workout.sport != "bike":
+        return {
+            "error": (
+                f"interval analysis only runs on bike rides; this workout is "
+                f"{workout.sport!r}"
+            )
+        }
+
+    target_w: float | None = None
+    target_source = "none"
+    tw = input_data.get("target_watts")
+    ftp = input_data.get("ftp_watts")
+    pct = input_data.get("pct_ftp")
+    if tw is not None:
+        if not isinstance(tw, (int, float)) or isinstance(tw, bool) or tw <= 0 or tw > 2000:
+            return {"error": f"invalid target_watts {tw!r}; must be a positive number <= 2000"}
+        target_w = float(tw)
+        target_source = "target_watts"
+    elif ftp is not None or pct is not None:
+        if (
+            not isinstance(ftp, (int, float))
+            or isinstance(ftp, bool)
+            or not isinstance(pct, (int, float))
+            or isinstance(pct, bool)
+            or ftp <= 0
+            or pct <= 0
+        ):
+            return {"error": "ftp_watts and pct_ftp must be supplied together as positive numbers"}
+        target_w = round(float(ftp) * float(pct) / 100, 1)
+        target_source = f"{pct:g}% of {ftp:g}W FTP"
+
+    structure = None
+    if target_w is None:
+        structure = _recover_prescribed_structure(store, slug, workout)
+        if structure is not None:
+            target_source = "matched planned session structure"
+
+    series = store.load_series(slug, workout.id)
+    series_source = "stored series"
+    if series is None and workout.raw_ref:
+        raw_path = Path(workout.raw_ref)
+        if raw_path.suffix.lower() == ".fit" and raw_path.exists():
+            try:
+                series = parse_fit(raw_path).series
+                series_source = f"re-parsed {raw_path.name}"
+            except (OSError, ValueError) as exc:
+                return {"error": f"could not re-parse {raw_path.name}: {exc}"}
+    if series is None:
+        return {
+            "error": (
+                "no time-series data is available for this workout (no stored series "
+                "and no re-parsable raw .fit) -- the athlete would need to re-upload "
+                "the original file"
+            )
+        }
+
+    new_analytics = compute_analytics(
+        laps=workout.laps,
+        lengths=workout.lengths,
+        pauses=workout.pauses,
+        series=series,
+        elapsed_min=workout.analytics.elapsed_min if workout.analytics else None,
+        moving_min=workout.duration_min,
+        sport=workout.sport,
+        interval_target_w=target_w,
+        prescribed_structure=structure,
+    )
+    workout.analytics = new_analytics
+    # Re-key the series row to this real workout id so a later read resolves
+    # without another re-parse (harmless no-op if it was already keyed here).
+    store.save_series(slug, workout.date, workout.sport, workout.id, series)
+    store.save_workout(slug, workout)
+
+    intervals = new_analytics.intervals
+    log.info(
+        "reanalyze_workout",
+        athlete=slug,
+        workout_id=str(workout.id),
+        target_source=target_source,
+        efforts=intervals.efforts_detected if intervals else 0,
+    )
+    return {
+        "reanalyzed": True,
+        "workout_id": str(workout.id),
+        "date": workout.date.isoformat(),
+        "target_watts": target_w,
+        "target_source": target_source,
+        "series_source": series_source,
+        "intervals": intervals.model_dump(mode="json") if intervals is not None else None,
+    }
+
+
 def _handle_sync_workouts(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
     """Delegates to `app.sync.sync_on_demand` (shared with the PWA's `POST
     /api/workouts/sync` route) for the bound request's athlete (never a
@@ -3883,6 +4081,9 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "get_workouts": lambda input_data: _handle_get_workouts(
+            input_data, store=store, slug=slug
+        ),
+        "reanalyze_workout": lambda input_data: _handle_reanalyze_workout(
             input_data, store=store, slug=slug
         ),
         "sync_workouts": lambda input_data: _handle_sync_workouts(

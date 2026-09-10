@@ -2238,6 +2238,52 @@ function renderDetailAnalytics(analytics) {
     </section>`;
 }
 
+/** Read-only "Intervals" section -- the compact deterministic interval-
+ * analyzer block (`analytics.intervals`, a `WorkoutIntervals`), shown only
+ * for bike rides that produced one. Renders nothing otherwise. Each row is
+ * one detected effort: measured vs target watts, in-band %, within-effort
+ * fade, and any terrain-confound verdict. Extends renderDetailAnalytics'
+ * pattern (own `detail-section`, each field conditional on its presence). */
+function renderIntervalsSection(intervals) {
+  if (!intervals || !Number.isFinite(intervals.efforts_detected)) return '';
+  const n = intervals.efforts_detected;
+  const basis = intervals.detection_basis === 'hr' ? ' (HR-based, no power)' : '';
+  const matchLine = intervals.matched_to_prescription
+    ? `Matched to a prescribed ${intervals.prescribed_count}-interval session.`
+    : (intervals.prescribed_count
+      ? `${n} effort${n === 1 ? '' : 's'} detected vs ${intervals.prescribed_count} prescribed.`
+      : '');
+  const decoupLine = intervals.decoupling_tightened_pct !== null && intervals.decoupling_tightened_pct !== undefined
+    ? `Aerobic decoupling (working portion only): ${intervals.decoupling_tightened_pct > 0 ? '+' : ''}${intervals.decoupling_tightened_pct}%${intervals.decoupling_note ? ` — ${esc(intervals.decoupling_note)}` : ''}`
+    : (intervals.decoupling_note ? esc(intervals.decoupling_note) : '');
+
+  const rows = (intervals.efforts || []).map((e) => {
+    const mins = Math.round((e.duration_s || 0) / 6) / 10;
+    const bits = [`${mins} min`];
+    if (e.avg_w !== null && e.avg_w !== undefined) bits.push(`${Math.round(e.avg_w)} W`);
+    if (e.target_w !== null && e.target_w !== undefined && e.pct_of_target !== null && e.pct_of_target !== undefined) {
+      bits.push(`${Math.round(e.pct_of_target)}% of ${Math.round(e.target_w)} W`);
+    }
+    if (e.time_in_band_pct !== null && e.time_in_band_pct !== undefined) bits.push(`${Math.round(e.time_in_band_pct)}% in band`);
+    if (e.fade_pct !== null && e.fade_pct !== undefined && Math.abs(e.fade_pct) >= 5) {
+      bits.push(e.fade_pct > 0 ? `faded ${e.fade_pct}%` : `built +${-e.fade_pct}%`);
+    }
+    return `
+      <div class="interval-row">
+        <div class="interval-row-head mono">#${e.n} · ${bits.join(' · ')}</div>
+        <div class="interval-row-verdict">${esc(e.verdict || '')}</div>
+      </div>`;
+  }).join('');
+
+  return `
+    <section class="detail-section">
+      <h4>Intervals${basis}</h4>
+      ${matchLine ? `<p class="sub">${esc(matchLine)}</p>` : ''}
+      ${decoupLine ? `<div class="detail-analytics-list"><div>${decoupLine}</div></div>` : ''}
+      ${rows ? `<div class="intervals-list">${rows}</div>` : '<p class="sub">No sustained efforts detected.</p>'}
+    </section>`;
+}
+
 function renderLapsTable(laps) {
   if (!laps || laps.length === 0) return '';
   const rows = laps.map((lap) => {
@@ -2353,6 +2399,7 @@ function renderWorkoutDetail(workout, {
     ${renderDetailStats(workout)}
     ${editable ? renderRpeEditSection(workout, rpeEdit) : ''}
     ${renderDetailAnalytics(workout.analytics)}
+    ${renderIntervalsSection(workout.analytics?.intervals)}
     ${renderLapsTable(workout.laps)}
     ${renderPausesList(workout.pauses)}
     ${renderLengthsSummarySection(workout.lengths)}

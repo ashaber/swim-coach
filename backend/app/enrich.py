@@ -16,7 +16,7 @@ safety net and must keep passing unchanged.
 from __future__ import annotations
 
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from swim_coach.analytics import compute_analytics
 from swim_coach.parse_files import WorkoutDraft
@@ -33,17 +33,26 @@ def enrich_draft(
     store: StoreInterface,
     athlete: str,
     tmp_path: Path,
+    workout_id: UUID | None = None,
 ) -> WorkoutDraft:
     """Fills in `draft.raw_ref`/`draft.series_ref`/`draft.analytics` in
     place (and returns it, for chaining) exactly like `swim_coach.cli`'s
     `ingest --save` does.
 
-    Raw-file/series persistence is `FileStore`-only until Phase 2.5's
+    Raw-file persistence is still `FileStore`-only until Phase 2.5's
     Supabase-Storage-backed store lands (ROADMAP.md) -- a db-backed deploy
-    (`STORE_BACKEND=db`) has nowhere durable to put the bytes, so both refs
-    are skipped rather than raising, with a warning appended to
-    `draft.warnings` and analytics still computed (pure functions over the
-    in-memory parse).
+    (`STORE_BACKEND=db`) has nowhere durable to put the original bytes, so
+    `raw_ref` is skipped rather than raising, with a warning appended to
+    `draft.warnings`. The columnar **series** IS now persisted on every
+    backend (`store.save_series` is part of `StoreInterface`, DB-backed by
+    the `workout_series` table) -- this is what lets a synced ride's
+    interval analytics be recomputed later. `workout_id`, when the caller
+    knows it upfront (the intervals.icu sync job does), keys the series row
+    to the real Workout id; the athlete-facing upload route assigns the id
+    only at its separate confirm step, so it passes `None` and the series
+    is keyed to a provisional id until a later `reanalyze_workout` re-keys
+    it. Analytics are always computed (pure functions over the in-memory
+    parse).
 
     Raises `FileExistsError` unmodified if `store.save_raw_file` refuses to
     overwrite a same-named-but-different-content file already on disk --
@@ -64,12 +73,12 @@ def enrich_draft(
         )
 
     if draft.series is not None and hasattr(store, "save_series"):
-        # No Workout id exists yet at this point in either caller (the route
-        # hasn't saved one; the sync job assigns one after this returns) --
-        # save_series only needs *a* UUID to build a recognizable sidecar
-        # filename (see its docstring), so a fresh one here is fine; it
-        # doesn't have to match the id the eventually-saved Workout gets.
-        draft.series_ref = store.save_series(athlete, draft.date, draft.sport, uuid4(), draft.series)
+        # `hasattr` guard retained only for a test double that hides the
+        # method (tests/api/test_workouts_ingest_route.py); every real
+        # store -- FileStore AND DbStore -- now implements it.
+        draft.series_ref = store.save_series(
+            athlete, draft.date, draft.sport, workout_id or uuid4(), draft.series
+        )
 
     draft.analytics = compute_analytics(
         laps=draft.laps,
@@ -78,5 +87,6 @@ def enrich_draft(
         series=draft.series,
         elapsed_min=draft.elapsed_min,
         moving_min=draft.duration_min,
+        sport=draft.sport,
     )
     return draft

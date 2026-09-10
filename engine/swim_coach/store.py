@@ -278,6 +278,36 @@ class StoreInterface(ABC):
         no special-casing."""
         ...
 
+    # --- Workout time-series (columnar sidecar, see parse_files) ----------
+
+    @abstractmethod
+    def save_series(
+        self, slug: str, day: date, sport: Sport, workout_id: UUID, series: dict
+    ) -> str:
+        """Persist a workout's columnar time-series payload (the shape
+        `parse_files._build_series` produces -- `t_s` plus whichever of
+        `hr`/`speed_mps`/`dist_m`/`power_w`/`grade`/... channels the file
+        carried) and return a location string (a filesystem path for
+        `FileStore`, a `db://...` key for `DbStore`). Keyed by `workout_id`
+        -- re-saving the same id overwrites, since callers always re-derive
+        the payload from a freshly parsed `.fit` (no "don't clobber prior
+        data" concern, unlike `save_coach_text`). `day`/`sport` are carried
+        for a human-recognisable `FileStore` filename and for `DbStore`
+        query columns; neither is part of the lookup key."""
+        ...
+
+    @abstractmethod
+    def load_series(self, slug: str, workout_id: UUID) -> dict | None:
+        """The columnar payload a prior `save_series(slug, ..., workout_id,
+        ...)` wrote for this athlete, or `None` if none was ever saved for
+        that id. The one reader of persisted series data -- used by the
+        `analyze` CLI / `reanalyze_workout` coach tool to recompute
+        interval analytics after the athlete supplies a target the `.fit`
+        file itself never carried, without re-parsing the raw file (which a
+        `db`-backed deploy no longer retains). Returns the dict as stored;
+        callers treat a missing/empty channel as "not recorded"."""
+        ...
+
     @abstractmethod
     def coach_text_exists(self, slug: str, day: date) -> bool: ...
 
@@ -826,6 +856,21 @@ class FileStore(StoreInterface):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(series), encoding="utf-8")
         return str(path)
+
+    def load_series(self, slug: str, workout_id: UUID) -> dict | None:
+        """Locate this athlete's series sidecar by the workout id embedded
+        in its filename (`<date>-<sport>-<id[:8]>.json`, see `save_series`).
+        The id prefix is unique in practice (a UUID8 collision within one
+        athlete's series dir is vanishingly unlikely); the first match wins,
+        sorted for determinism. `None` if the dir or a matching file is
+        absent."""
+        directory = self._athlete_dir(slug) / "logs" / "series"
+        if not directory.exists():
+            return None
+        matches = sorted(directory.glob(f"*-{str(workout_id)[:8]}.json"))
+        if not matches:
+            return None
+        return json.loads(matches[0].read_text(encoding="utf-8"))
 
     def save_raw_file(self, slug: str, src_path: str | Path) -> str:
         """Copy a raw device export (.fit/.tcx/.csv) into

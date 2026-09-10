@@ -623,6 +623,52 @@ class WorkoutPause(BaseModel):
     source: Literal["timer", "gap", "idle_length", "stationary"]
 
 
+class IntervalEffort(BaseModel):
+    """One detected sustained effort within a ride, assessed against a
+    target when one is known -- produced by
+    `swim_coach.interval_analysis.assess_effort`. All quality fields are
+    optional: a ride with a power meter fills them in, an HR-only ride
+    leaves the power/target ones `None`. See `library/11-workout-
+    analytics.md` ("Deterministic interval detection", "Interval quality
+    vs. target", "Terrain-confound detection")."""
+
+    n: int  # 1-based effort index within the ride, in time order
+    start_s: float
+    duration_s: float
+    avg_w: float | None = None
+    avg_hr: int | None = None
+    target_w: float | None = None
+    pct_of_target: float | None = None  # avg_w / target_w * 100
+    avg_vs_target_w: float | None = None  # avg_w - target_w (signed)
+    time_in_band_pct: float | None = None  # % of samples within +/-5% of target
+    fade_pct: float | None = None  # (first-third mean - last-third mean) / first-third mean * 100
+    hr_drift_bpm: float | None = None  # last-third mean HR - first-third mean HR
+    grade_delta_pct_pts: float | None = None  # first-third mean grade - last-third, in percentage points
+    terrain_flag: str | None = None
+    verdict: str
+
+
+class WorkoutIntervals(BaseModel):
+    """The compact interval block on `WorkoutAnalytics` -- deterministic
+    output of `swim_coach.interval_analysis.analyze`, computed inside
+    `compute_analytics` for `sport == "bike"` rides that carry a power (or,
+    failing that, HR) series. `None` on `WorkoutAnalytics` for every other
+    sport. `decoupling_tightened_pct` SUPPLEMENTS `WorkoutAnalytics.
+    cardiac_drift_pct` (it does not replace it) -- it's the same first-half-
+    vs-second-half efficiency-factor calc restricted to genuinely working
+    samples, so it's meaningful on a stop-start dirt-road ride where the
+    unfiltered number is not; `decoupling_note` says which."""
+
+    schema_version: int = 1
+    efforts_detected: int
+    detection_basis: Literal["power", "hr"]
+    matched_to_prescription: bool = False
+    prescribed_count: int | None = None
+    efforts: list[IntervalEffort] = Field(default_factory=list)
+    decoupling_tightened_pct: float | None = None
+    decoupling_note: str | None = None
+
+
 class WorkoutAnalytics(BaseModel):
     """Derived workout analytics computed at ingest time by
     `swim_coach.analytics.compute_analytics` -- see that module for the
@@ -639,6 +685,11 @@ class WorkoutAnalytics(BaseModel):
     swolf_first_quarter: float | None = None
     swolf_last_quarter: float | None = None
     swolf_degradation_pct: float | None = None
+    # Interval-analyzer block (deterministic, no LLM) -- populated only for
+    # `sport == "bike"` rides with a usable power/HR series; `None` for
+    # every swim/kayak/strength workout. See `WorkoutIntervals` and
+    # `swim_coach.interval_analysis`.
+    intervals: WorkoutIntervals | None = None
 
 
 class Workout(BaseModel):

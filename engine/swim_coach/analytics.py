@@ -359,6 +359,9 @@ def compute_analytics(
     series: dict | None,
     elapsed_min: float | None,
     moving_min: float | None,
+    sport: str | None = None,
+    interval_target_w: float | None = None,
+    prescribed_structure=None,
 ):
     """Build a swim_coach.models.WorkoutAnalytics from parsed workout parts.
 
@@ -366,13 +369,31 @@ def compute_analytics(
     import at module load time (models.py does not import analytics.py, but
     keeping the import local here keeps the dependency direction obvious:
     analytics depends on models, not the reverse).
+
+    `sport`/`interval_target_w`/`prescribed_structure` (all optional, all
+    additive -- every existing call site works unchanged) drive the
+    deterministic interval analyzer (`swim_coach.interval_analysis`): for a
+    `sport == "bike"` ride with a usable power/HR series it fills in
+    `WorkoutAnalytics.intervals`; every other sport leaves it `None`.
+    `interval_target_w` is a caller-supplied per-interval power target (the
+    coach passing "2x12 at 91% of 263W" for a file that carried no
+    structure); `prescribed_structure` is a `models.WorkoutStructure` when
+    one is recoverable for the session, and its per-rep `power_w` targets
+    win over `interval_target_w`.
     """
+    from swim_coach import interval_analysis
     from swim_coach.models import WorkoutAnalytics
 
     drift = cardiac_drift(series, laps=laps, pauses=pauses)
     split_label, first_pace, second_pace = split_analysis(laps)
     pauses_summary = pause_summary(pauses, elapsed_min=elapsed_min, moving_min=moving_min)
     swolf = swolf_trend(lengths)
+    intervals = interval_analysis.analyze(
+        series,
+        sport=sport,
+        target_w=interval_target_w,
+        structure=prescribed_structure,
+    )
 
     return WorkoutAnalytics(
         cardiac_drift_pct=drift,
@@ -386,4 +407,5 @@ def compute_analytics(
         swolf_first_quarter=swolf[0] if swolf else None,
         swolf_last_quarter=swolf[1] if swolf else None,
         swolf_degradation_pct=swolf[2] if swolf else None,
+        intervals=intervals,
     )

@@ -768,13 +768,71 @@ def _merge_pauses(
     return merged
 
 
-def _build_series(records_raw: list[dict], t0: datetime | None) -> dict[str, list] | None:
+GRADE_SMOOTHING_M = 30.0
+"""Distance (metres) over which a per-sample road grade (rise/run) is
+measured for the interval analyzer's terrain-confound detection -- see
+`swim_coach.interval_analysis` and `library/11-workout-analytics.md`
+("Per-sample grade for terrain-confound detection"). A 30m rise/run window
+smooths out the metre-to-metre altimeter jitter of a barometric device
+without blurring the several-hundred-metre grade changes of a real climb or
+descent. Coach judgment / engineering default, not a cited value."""
+
+_GRADE_MAX_LOOKAHEAD_SAMPLES = 240
+# Bound on how far ahead `_derive_grade` scans for the sample that closes a
+# `GRADE_SMOOTHING_M` window before giving up (leaving that sample's grade
+# None) -- keeps the scan linear on a stop-and-go ride where distance can
+# stay flat for many samples, and a grade measured across a multi-minute
+# stopped span would be meaningless anyway.
+
+
+def _derive_grade(dist_m: list, altitude_m: list) -> list | None:
+    """Per-sample road grade as a decimal fraction (0.08 == 8% uphill),
+    from a forward `GRADE_SMOOTHING_M` rise/run window. `None` for any
+    sample missing distance/altitude, or one that can't close a full window
+    within `_GRADE_MAX_LOOKAHEAD_SAMPLES`. Returns `None` (no channel) when
+    no sample could be computed. Clamped to +/-45% -- a real bike never
+    sustains steeper, so anything past that is altimeter noise."""
+    n = len(dist_m)
+    grade: list = [None] * n
+    computed_any = False
+    for i in range(n):
+        di, ai = dist_m[i], altitude_m[i]
+        if di is None or ai is None:
+            continue
+        stop = min(n, i + 1 + _GRADE_MAX_LOOKAHEAD_SAMPLES)
+        for j in range(i + 1, stop):
+            dj, aj = dist_m[j], altitude_m[j]
+            if dj is None or aj is None:
+                continue
+            run = dj - di
+            if run >= GRADE_SMOOTHING_M:
+                g = (aj - ai) / run
+                grade[i] = max(-0.45, min(0.45, g))
+                computed_any = True
+                break
+    return grade if computed_any else None
+
+
+def _build_series(
+    records_raw: list[dict], t0: datetime | None, *, extended: bool = False
+) -> dict[str, list] | None:
     """Columnar {t_s, hr, speed_mps, dist_m, lat, lng} series from record
     frames, t_s measured from t0. A channel key is included only if at
     least one sample has a non-None value for it (nulls allowed within an
     included channel, for gaps); returns None if every optional channel is
     entirely empty (e.g. a pool swim whose record frames carry only
-    temperature+timestamp)."""
+    temperature+timestamp).
+
+    `extended=True` (set by `parse_fit` only for FIT sessions whose raw
+    sport is `"cycling"` -- see `_is_cycling_sport`) additionally emits
+    `power_w`, `cadence_rpm`, `altitude_m`, and a derived `grade` channel
+    for the deterministic interval analyzer (`swim_coach.interval_analysis`).
+    Gated to cycling for the same reason `stationary_pauses` is: these
+    channels drive cycling-specific interval-quality math, and a real kayak
+    export DOES carry `enhanced_altitude` on every record -- emitting it
+    unconditionally would change that regression fixture's parsed output.
+    Swim/kayak/other-sport `.fit` files are unaffected: their series is
+    byte-identical to before this feature."""
     if t0 is None or not records_raw:
         return None
 
@@ -784,7 +842,11 @@ def _build_series(records_raw: list[dict], t0: datetime | None) -> dict[str, lis
     dist_m: list[object] = []
     lat: list[object] = []
     lng: list[object] = []
+    power_w: list[object] = []
+    cadence_rpm: list[object] = []
+    altitude_m: list[object] = []
     any_hr = any_speed = any_dist = any_lat = any_lng = False
+    any_power = any_cadence = any_alt = False
     prev_t: float | None = None
     prev_dist: float | None = None
 
@@ -818,11 +880,24 @@ def _build_series(records_raw: list[dict], t0: datetime | None) -> dict[str, lis
         any_lat = any_lat or la is not None
         any_lng = any_lng or lo is not None
 
+        if extended:
+            p = record.get("power")
+            power_w.append(p)
+            any_power = any_power or p is not None
+            c = record.get("cadence")
+            cadence_rpm.append(c)
+            any_cadence = any_cadence or c is not None
+            a = record.get("enhanced_altitude")
+            if a is None:
+                a = record.get("altitude")
+            altitude_m.append(a)
+            any_alt = any_alt or a is not None
+
         prev_t = t
         if d is not None:
             prev_dist = d
 
-    if not (any_hr or any_speed or any_dist or any_lat or any_lng):
+    if not (any_hr or any_speed or any_dist or any_lat or any_lng or any_power or any_cadence or any_alt):
         return None
 
     series: dict[str, list] = {"t_s": t_s}
@@ -836,6 +911,16 @@ def _build_series(records_raw: list[dict], t0: datetime | None) -> dict[str, lis
         series["lat"] = lat
     if any_lng:
         series["lng"] = lng
+    if any_power:
+        series["power_w"] = power_w
+    if any_cadence:
+        series["cadence_rpm"] = cadence_rpm
+    if any_alt:
+        series["altitude_m"] = altitude_m
+        if any_dist:
+            grade = _derive_grade(dist_m, altitude_m)
+            if grade is not None:
+                series["grade"] = grade
     return series
 
 
@@ -941,6 +1026,14 @@ def parse_fit(path: str | Path) -> WorkoutDraft:
                         "speed": _fit_value(frame, "speed"),
                         "position_lat": _fit_value(frame, "position_lat"),
                         "position_long": _fit_value(frame, "position_long"),
+                        # Cycling interval-analyzer channels (emitted into the
+                        # series only for cycling -- see _build_series's
+                        # `extended` param). Read defensively like every
+                        # other field; absent on swim/kayak/older exports.
+                        "power": _fit_value(frame, "power"),
+                        "cadence": _fit_value(frame, "cadence"),
+                        "enhanced_altitude": _fit_value(frame, "enhanced_altitude"),
+                        "altitude": _fit_value(frame, "altitude"),
                     }
                 )
             elif frame.name == "event":
@@ -991,12 +1084,9 @@ def parse_fit(path: str | Path) -> WorkoutDraft:
     lengths, idle_pauses = _build_lengths(lengths_raw, laps_raw, t0)
     timer_pauses = _build_timer_pauses(events_raw, t0)
     gap_pauses = _build_gap_pauses(records_raw, t0)
-    series = _build_series(records_raw, t0)
-    stationary = (
-        _stationary_pauses(series)
-        if series is not None and _is_cycling_sport(session_sport)
-        else []
-    )
+    is_cycling = _is_cycling_sport(session_sport)
+    series = _build_series(records_raw, t0, extended=is_cycling)
+    stationary = _stationary_pauses(series) if series is not None and is_cycling else []
     pauses = _merge_pauses(timer_pauses, gap_pauses, idle_pauses, stationary)
     avg_speed_mps = (
         session_distance / session_duration_s

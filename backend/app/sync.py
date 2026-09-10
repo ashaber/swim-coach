@@ -326,7 +326,12 @@ def _ingest_activity(
         tmp_path = tmp_dir / f"{activity_id}.fit"
         tmp_path.write_bytes(fit_bytes)
         draft = PARSERS_BY_EXTENSION[".fit"](tmp_path)
-        enrich_draft(draft, store=store, athlete=slug, tmp_path=tmp_path)
+        # Pre-generate the Workout id so the series row is keyed to the real
+        # workout from the start (this caller, unlike the upload route,
+        # knows the id before save) -- makes `store.load_series(slug,
+        # workout.id)` resolve for a synced ride without a re-analyze pass.
+        workout_id = uuid4()
+        enrich_draft(draft, store=store, athlete=slug, tmp_path=tmp_path, workout_id=workout_id)
 
         if _is_probable_duplicate(draft, dedupe_keys):
             log.info(
@@ -340,7 +345,7 @@ def _ingest_activity(
             return None
 
         workout = Workout(
-            id=uuid4(),
+            id=workout_id,
             athlete_id=profile.id,
             schema_version=1,
             date=draft.date,
