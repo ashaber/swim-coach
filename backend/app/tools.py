@@ -155,6 +155,8 @@ unsafe direction.
 from __future__ import annotations
 
 import json
+import shutil
+import tempfile
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -218,7 +220,14 @@ from app.garmin_push import push_on_demand
 from app.health_status_helpers import link_health_status_feedback
 from app.load_helpers import workout_load_au
 from app.logging_config import get_logger
-from app.sync import ON_DEMAND_SYNC_WINDOW_DAYS, sync_on_demand
+from app.sync import (
+    ON_DEMAND_SYNC_WINDOW_DAYS,
+    SYNC_NOT_CONFIGURED_ERROR,
+    IntervalsClient,
+    SyncConfigError,
+    load_sync_config,
+    sync_on_demand,
+)
 
 log = get_logger(__name__)
 
@@ -578,22 +587,28 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
     {
         "name": "reanalyze_workout",
         "description": (
-            "Re-run the deterministic interval analyzer over an "
-            "already-logged BIKE ride, now that you know an interval target "
-            "the .fit file itself never carried. Use this after you've done "
-            "the FTP math for a structured session the athlete describes in "
-            "chat (\"it was 2x12min at 91% of my 263W FTP\") and want to "
-            "check what she ACTUALLY held -- average watts vs target, "
-            "time-in-band, within-interval fade, and whether a power fade "
-            "was really terrain (a steepening/easing dirt road) rather than "
-            "her easing off. Pass `target_watts` for an explicit per-"
-            "interval watts number, OR `ftp_watts` + `pct_ftp` to have it "
-            "compute the target, OR neither (it will still detect efforts "
-            "on a dynamic threshold and, if a matching planned session with "
-            "power targets exists, use those). Bike rides only. This "
-            "recomputes and saves the workout's analytics block in place; "
-            "it does not touch the plan. After it returns, describe the "
-            "per-interval result to the athlete."
+            "Re-run the deterministic interval analyzer over data we "
+            "ALREADY HAVE for an already-logged BIKE ride (its stored "
+            "power/grade series, or a re-parsable local raw .fit), now that "
+            "you know an interval target the .fit file itself never "
+            "carried. Use this after you've done the FTP math for a "
+            "structured session the athlete describes in chat (\"it was "
+            "2x12min at 91% of my 263W FTP\") and want to check what she "
+            "ACTUALLY held -- average watts vs target, time-in-band, "
+            "within-interval fade, over/under and rep-set sub-structure, "
+            "and whether a power fade was really terrain (a "
+            "steepening/easing dirt road) rather than her easing off. Pass "
+            "`target_watts` for an explicit per-interval watts number, OR "
+            "`ftp_watts` + `pct_ftp` to have it compute the target, OR "
+            "neither (it will still detect efforts on a dynamic threshold "
+            "and, if a matching planned session with power targets exists, "
+            "use those). Bike rides only. This recomputes and saves the "
+            "workout's analytics block in place; it does not touch the "
+            "plan. If this tool reports there is NO local series and NO "
+            "re-parsable raw .fit (an older synced ride on a db-backed "
+            "deploy), use `pull_activity_stream` instead -- that re-fetches "
+            "the original file from intervals.icu. After it returns, "
+            "describe the per-interval result to the athlete."
         ),
         "input_schema": {
             "type": "object",
@@ -616,6 +631,71 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
             },
             "required": ["workout_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "pull_activity_stream",
+        "description": (
+            "Go and FETCH a bike ride's original power/grade time-series "
+            "fresh from intervals.icu, run the CURRENT deterministic "
+            "interval analyzer over it, and cache the result. Use this "
+            "(not reanalyze_workout) when reanalyze_workout has told you "
+            "there's no local series and no re-parsable raw .fit, or when "
+            "you want to be certain the analysis reflects the latest "
+            "analyzer on the untouched original file -- it works "
+            "retroactively for ANY activity still on intervals.icu, however "
+            "old. reanalyze_workout re-runs over data already on our side; "
+            "this one re-pulls the source of truth. Identify the ride "
+            "EITHER by `workout_id` (a logged bike workout that was synced "
+            "from intervals.icu -- its intervals.icu id is taken from its "
+            "external_id) OR by `intervals_activity_id` directly. Target "
+            "resolution is the same as reanalyze_workout: `target_watts`, "
+            "or `ftp_watts` + `pct_ftp`, or the matched planned session's "
+            "structure, or nothing (dynamic detection). Bike rides only. On "
+            "success it writes the fetched series to our series cache and, "
+            "when a matching local workout exists, saves the recomputed "
+            "analytics onto it in place, so routine follow-up questions hit "
+            "the cache instead of re-pulling. It never returns the raw "
+            "stream -- just the compact per-effort summary. Requires the "
+            "athlete to have intervals.icu sync configured (same "
+            "credentials the scheduled sync job uses); it does not take an "
+            "API key."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "workout_id": {
+                    "type": "string",
+                    "description": (
+                        "The id (or a unique prefix) of a logged bike "
+                        "workout that was synced from intervals.icu. Its "
+                        "intervals.icu activity id is read from its "
+                        "external_id. Give this OR intervals_activity_id."
+                    ),
+                },
+                "intervals_activity_id": {
+                    "type": "string",
+                    "description": (
+                        "An intervals.icu activity id to pull directly "
+                        "(e.g. 'i84213507'), when there is no local workout "
+                        "for it yet. Give this OR workout_id."
+                    ),
+                },
+                "target_watts": {
+                    "type": "number",
+                    "description": "Explicit per-interval power target in watts. Takes precedence over ftp_watts/pct_ftp.",
+                },
+                "ftp_watts": {
+                    "type": "number",
+                    "description": "The athlete's FTP in watts -- used with pct_ftp to compute the target when target_watts isn't given.",
+                },
+                "pct_ftp": {
+                    "type": "number",
+                    "description": "Percent of FTP the intervals were prescribed at (e.g. 91). Must be given together with ftp_watts.",
+                },
+            },
+            "required": [],
             "additionalProperties": False,
         },
     },
@@ -2436,6 +2516,185 @@ def _handle_reanalyze_workout(
     }
 
 
+def _resolve_interval_target_watts(
+    input_data: dict[str, Any],
+) -> tuple[float | None, str, dict | None]:
+    """Shared `target_watts` / `ftp_watts`+`pct_ftp` resolution for the
+    interval tools. Returns `(target_w, target_source, error_or_None)`;
+    `(None, "none", None)` means "no explicit target -- fall back to
+    structure/dynamic"."""
+    tw = input_data.get("target_watts")
+    ftp = input_data.get("ftp_watts")
+    pct = input_data.get("pct_ftp")
+    if tw is not None:
+        if not isinstance(tw, (int, float)) or isinstance(tw, bool) or tw <= 0 or tw > 2000:
+            return None, "none", {"error": f"invalid target_watts {tw!r}; must be a positive number <= 2000"}
+        return float(tw), "target_watts", None
+    if ftp is not None or pct is not None:
+        if (
+            not isinstance(ftp, (int, float))
+            or isinstance(ftp, bool)
+            or not isinstance(pct, (int, float))
+            or isinstance(pct, bool)
+            or ftp <= 0
+            or pct <= 0
+        ):
+            return None, "none", {"error": "ftp_watts and pct_ftp must be supplied together as positive numbers"}
+        return round(float(ftp) * float(pct) / 100, 1), f"{pct:g}% of {ftp:g}W FTP", None
+    return None, "none", None
+
+
+def _handle_pull_activity_stream(
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str
+) -> dict[str, Any]:
+    """Re-fetch a bike ride's original `.fit` from intervals.icu, run the
+    CURRENT deterministic interval analyzer over its power/grade series, and
+    cache the result -- the "re-pull is source of truth, cache the result"
+    counterpart to `reanalyze_workout` (which only re-runs over data already
+    on our side).
+
+    Activity resolution:
+      - `intervals_activity_id` -> used directly.
+      - `workout_id` -> a logged bike workout whose `external_id` is
+        `intervals:<id>`; that `<id>` is the activity.
+    A local workout is also looked up by `external_id` when only
+    `intervals_activity_id` was given, so the recomputed analytics can still
+    be cached onto it.
+
+    Credentials come from the stored `INTERVALS_SYNC_CONFIG` for this
+    athlete (via `load_sync_config` -- the SAME per-athlete key the
+    scheduled sync job uses); the tool never takes a key as an argument.
+    Target resolution matches `reanalyze_workout`
+    (`_resolve_interval_target_watts`, then matched-session structure, then
+    dynamic). Persists: `store.save_series` for the fetched stream, and
+    `workout.analytics` in place when a local workout is found. Returns the
+    compact `WorkoutIntervals` summary, never the stream.
+    """
+    workout_id = (input_data.get("workout_id") or "").strip()
+    activity_id = (input_data.get("intervals_activity_id") or "").strip()
+    if not workout_id and not activity_id:
+        return {"error": "pass workout_id or intervals_activity_id"}
+
+    workout: Workout | None = None
+    workouts = store.list_workouts(slug)
+    if workout_id:
+        workout = find_workout_by_id(workouts, workout_id)
+        if workout is None:
+            return {"error": f"no workout matching id {workout_id!r}"}
+        if workout.sport != "bike":
+            return {"error": f"interval analysis only runs on bike rides; this workout is {workout.sport!r}"}
+        ext = workout.external_id or ""
+        if not ext.startswith("intervals:"):
+            return {
+                "error": (
+                    f"workout {workout_id!r} has no intervals.icu external_id "
+                    f"(external_id={workout.external_id!r}) -- it wasn't synced from "
+                    "intervals.icu, so there's nothing to re-pull. Use reanalyze_workout."
+                )
+            }
+        activity_id = ext.split("intervals:", 1)[1]
+    else:
+        workout = next(
+            (w for w in workouts if (w.external_id or "") == f"intervals:{activity_id}"), None
+        )
+        if workout is not None and workout.sport != "bike":
+            return {"error": f"interval analysis only runs on bike rides; the matched workout is {workout.sport!r}"}
+
+    target_w, target_source, target_err = _resolve_interval_target_watts(input_data)
+    if target_err is not None:
+        return target_err
+
+    structure = None
+    if target_w is None and workout is not None:
+        structure = _recover_prescribed_structure(store, slug, workout)
+        if structure is not None:
+            target_source = "matched planned session structure"
+
+    try:
+        configs = load_sync_config()
+    except SyncConfigError as exc:
+        log.error("pull_activity_stream.config_error", athlete=slug, error=str(exc))
+        return {"error": SYNC_NOT_CONFIGURED_ERROR}
+    cfg = next((c for c in configs if c.slug == slug), None)
+    if cfg is None:
+        return {"error": SYNC_NOT_CONFIGURED_ERROR}
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="swimcoach-pull-"))
+    try:
+        try:
+            with IntervalsClient(cfg.intervals_athlete_id, cfg.api_key) as client:
+                fit_bytes = client.download_fit(activity_id)
+        except Exception as exc:  # noqa: BLE001 - any transport/HTTP failure is a clean tool error
+            log.error(
+                "pull_activity_stream.download_failed",
+                athlete=slug,
+                activity_id=activity_id,
+                error=str(exc),
+            )
+            return {"error": f"could not download activity {activity_id} from intervals.icu: {exc}"}
+
+        tmp_path = tmp_dir / f"{activity_id}.fit"
+        tmp_path.write_bytes(fit_bytes)
+        try:
+            draft = parse_fit(tmp_path)
+        except (OSError, ValueError) as exc:
+            return {"error": f"could not parse the fetched .fit for {activity_id}: {exc}"}
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    if draft.sport != "bike":
+        return {
+            "error": (
+                f"interval analysis only runs on bike rides; intervals.icu activity "
+                f"{activity_id} parsed as {draft.sport!r}"
+            )
+        }
+    if not draft.series:
+        return {"error": f"the fetched .fit for {activity_id} carried no usable time-series"}
+
+    new_analytics = compute_analytics(
+        laps=draft.laps,
+        lengths=draft.lengths,
+        pauses=draft.pauses,
+        series=draft.series,
+        elapsed_min=draft.analytics.elapsed_min if draft.analytics else None,
+        moving_min=draft.duration_min,
+        sport=draft.sport,
+        interval_target_w=target_w,
+        prescribed_structure=structure,
+    )
+    intervals = new_analytics.intervals
+
+    persisted = False
+    if workout is not None:
+        store.save_series(slug, workout.date, workout.sport, workout.id, draft.series)
+        workout.analytics = new_analytics
+        store.save_workout(slug, workout)
+        persisted = True
+
+    log.info(
+        "pull_activity_stream",
+        athlete=slug,
+        activity_id=activity_id,
+        workout_id=str(workout.id) if workout is not None else None,
+        target_source=target_source,
+        efforts=intervals.efforts_detected if intervals else 0,
+        persisted=persisted,
+    )
+    return {
+        "pulled": True,
+        "intervals_activity_id": activity_id,
+        "workout_id": str(workout.id) if workout is not None else None,
+        "date": draft.date.isoformat(),
+        "sport": draft.sport,
+        "target_watts": target_w,
+        "target_source": target_source,
+        "series_source": "re-pulled from intervals.icu",
+        "cached": persisted,
+        "intervals": intervals.model_dump(mode="json") if intervals is not None else None,
+    }
+
+
 def _handle_sync_workouts(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
     """Delegates to `app.sync.sync_on_demand` (shared with the PWA's `POST
     /api/workouts/sync` route) for the bound request's athlete (never a
@@ -4084,6 +4343,9 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "reanalyze_workout": lambda input_data: _handle_reanalyze_workout(
+            input_data, store=store, slug=slug
+        ),
+        "pull_activity_stream": lambda input_data: _handle_pull_activity_stream(
             input_data, store=store, slug=slug
         ),
         "sync_workouts": lambda input_data: _handle_sync_workouts(
