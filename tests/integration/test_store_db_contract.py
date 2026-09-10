@@ -45,6 +45,7 @@ _TABLES = [
     "feedback",
     "health_status",
     "threshold_records",
+    "workout_series",
     "coach_texts",
     "wellness_checkins",
     "workouts",

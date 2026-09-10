@@ -150,6 +150,23 @@ average speed *above* this threshold (e.g. brisk race-walking), the
 practitioner cutoff needs revisiting against that real data, same as the
 stationary-pause thresholds above were revised against real MTB rides.
 
+## Per-sample grade for terrain-confound detection
+
+**Coach judgment:** `parse_files.GRADE_SMOOTHING_M = 30.0` — per-sample road
+grade (rise/run) is measured over a forward 30 m distance window from
+altitude and distance deltas. 30 m smooths barometric-altimeter jitter
+without blurring a real climb/descent. Engineering default chosen against
+this athlete's real MTB `.fit` exports (grades land in a plausible ~-18% to
++23% band on `real_mtb_race.fit`), clamped to +/-45%, emitted only for FIT
+sessions whose raw sport is `"cycling"` (the `_is_cycling_sport` gate).
+
+## Deterministic activity-stream interval analyzer
+
+Moved to its own topic file, `26-activity-stream-interval-analysis.md` (this file hit the 2,500-word cap). That file grounds every
+`engine/swim_coach/interval_analysis.py` constant -- effort detection, micro-interval set clustering, the non-effort filter, per-effort
+quality vs target, the adaptive in-band tolerance, terrain-confound flags, over/under sub-resolution, tightened decoupling and its
+all-interval guard, and match-to-prescription. `11` keeps only the cross-sport analytics constants (`analytics.py`).
+
 ## What's still a gap
 
 - No citation exists yet for cardiac-drift/aerobic-decoupling thresholds in

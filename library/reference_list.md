@@ -1190,6 +1190,23 @@ cross-discipline adaptations.
   recorded here only so a future pass doesn't re-discover and re-verify it
   without knowing it was already checked and rejected.
 
+- **✓ Barsumyan A., Soost C., Burchard R. (2025)** — "Enhanced durability
+  predicts success in amateur road cycling: evidence of power output
+  declines" — *Frontiers in Sports and Active Living*, 7:1530162. Fourteen
+  endurance-trained amateur road cyclists (mean age 37.5, VO2max ~52
+  ml/kg/min); a fatiguing protocol (70-80% of initial 20-min TT power until
+  1,000 kJ of work) followed by 5- and 20-min time trials in fresh vs
+  fatigued states. **Successful** cyclists' mean power decline first-to-last
+  over the fatigued 20-min effort was ~6.5%, vs ~12.5% for **less
+  successful** ones; no group difference on the 5-min effort or in HR
+  response. Grounds `interval_analysis.FADE_FLAG_PCT = 10.0` (the
+  within-interval power-fade flag) — see `11-workout-analytics.md`'s
+  "Deterministic activity-stream interval analyzer" section. Existence /
+  authors / journal / year confirmed via PubMed and the publishing journal
+  (Frontiers) this session. `[ADAPTED: cycling]`, Confidence: medium — a
+  single small trained-amateur road-cycling study measuring a fixed
+  fatiguing protocol, not this athlete's population or field intervals.
+
 ### Periodization frameworks & interval-design taxonomy (grounds `24-cycling-periodization-intervals.md`)
 
 Added 2026-09-08, continuing the `engine/cycling-coach` branch (PR #167).
@@ -1628,6 +1645,19 @@ resource itself and are kept.
   rationale. Source for `engine/swim_coach/load.py`'s
   `SWIM_TSS_INTENSITY_EXPONENT = 3.0`:
   <https://www.trainingpeaks.com/learn/articles/calculating-swimming-tss-score/>
+- TrainingPeaks — "Aerobic Decoupling (Pw:Hr and Pa:HR) and Efficiency
+  Factor (EF)" help-centre article, plus the companion "Aerobic Decoupling"
+  coach-blog guides (web-searched, not direct-fetched, this session; the
+  metric definition is convergently described across all of them plus
+  independent practitioner sources): the first-half-EF vs second-half-EF
+  decoupling calc is meaningful only for a **sustained steady effort over
+  ~20 minutes** and is explicitly **not** to be used on interval, group-
+  ride, race, "variable, stop-start or all-out" efforts. Grounds
+  `interval_analysis.tightened_decoupling` and its
+  `TIGHTENED_DECOUPLING_MIN_WORKING_FRAC = 0.5` working-samples-only gate
+  (see `11-workout-analytics.md`, "Tightened aerobic decoupling"). Kept a
+  practical resource, not `[EVIDENCE]`/`[ADAPTED]` — a platform help doc,
+  not a peer-reviewed source.
 - American Heart Association — "All About Heart Rate": commonly-cited
   ~60-100 bpm normal adult resting-heart-rate range. Source for
   `engine/swim_coach/load.py`'s `HR_REST_GENERIC_FALLBACK_BPM = 60.0`

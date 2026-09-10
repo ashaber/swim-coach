@@ -58,6 +58,8 @@ def test_request_shape_includes_tools(client, fake_claude_chat_factory) -> None:
         "record_threshold_test",
         "update_athlete_profile",
         "get_workouts",
+        "reanalyze_workout",
+        "pull_activity_stream",
         "sync_workouts",
         "push_to_garmin",
         "export_zwo_workout",

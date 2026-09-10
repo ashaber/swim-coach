@@ -701,3 +701,85 @@ def test_parse_fit_mtb_0709_detects_stationary_feed_stop():
     candidates = [p for p in stationary if abs(p.start_offset_s - 1328.0) <= 30.0]
     assert len(candidates) == 1, stationary
     assert candidates[0].duration_s == pytest.approx(69.0, abs=15.0)
+
+
+# --- interval-analyzer series channels (power/cadence/altitude/grade) ------------------
+
+
+@pytest.mark.skipif(not FIT_MTB_RACE_FIXTURE.exists(), reason="no real MTB race .fit fixture")
+def test_parse_fit_mtb_race_series_carries_power_cadence_altitude_grade():
+    # The real MTB race fixture carries `power` + `cadence` +
+    # `enhanced_altitude` on essentially every record (see fixtures/fit/
+    # README.md) -- a cycling `.fit`, so `_build_series` runs in `extended`
+    # mode and emits the interval-analyzer channels.
+    draft = parse_fit(FIT_MTB_RACE_FIXTURE)
+    s = draft.series
+    assert s is not None
+    for key in ("power_w", "cadence_rpm", "altitude_m", "grade"):
+        assert key in s, key
+        assert len(s[key]) == len(s["t_s"])
+    powers = [p for p in s["power_w"] if p is not None]
+    assert len(powers) > 20000
+    assert 0 <= min(powers) and max(powers) < 2500  # plausible cycling watts
+    grades = [g for g in s["grade"] if g is not None]
+    assert len(grades) > 10000
+    assert all(-0.45 <= g <= 0.45 for g in grades)
+    # A real MTB course has both meaningful climbs and descents.
+    assert min(grades) < -0.03 and max(grades) > 0.03
+
+
+@pytest.mark.skipif(not FIT_MTB_0709_FIXTURE.exists(), reason="no real MTB 0709 .fit fixture")
+def test_parse_fit_mtb_0709_series_has_altitude_grade_but_no_power():
+    # This ride was recorded with no power meter and no HR strap (see
+    # fixtures/fit/README.md) -- altitude/grade still come through (it's a
+    # cycling file), power/cadence/hr channels are simply absent, per the
+    # "channel key present only if >= 1 non-None sample" convention.
+    draft = parse_fit(FIT_MTB_0709_FIXTURE)
+    s = draft.series
+    assert s is not None
+    assert "altitude_m" in s and "grade" in s
+    assert "power_w" not in s
+    assert "cadence_rpm" not in s
+    assert "hr" not in s
+
+
+@pytest.mark.skipif(not FIT_KAYAK_FIXTURE.exists(), reason="no real kayak .fit fixture")
+def test_parse_fit_kayak_series_channels_unchanged_by_interval_analyzer_feature():
+    # REGRESSION GUARD: the real kayak export DOES carry `enhanced_altitude`
+    # on every record, but it is NOT a cycling `.fit`, so `_build_series`
+    # runs in non-extended mode and its parsed series stays byte-identical
+    # to before the interval-analyzer channels existed -- exactly the six
+    # channels it always had, and no `altitude_m`/`grade`/`power_w`.
+    draft = parse_fit(FIT_KAYAK_FIXTURE)
+    assert draft.series is not None
+    assert set(draft.series.keys()) == {"t_s", "hr", "speed_mps", "dist_m", "lat", "lng"}
+
+
+@pytest.mark.skipif(not FIT_FIXTURE.exists(), reason="no real pool-swim .fit fixture")
+def test_parse_fit_pool_series_still_none_with_interval_analyzer_feature():
+    # REGRESSION GUARD: a pool swim's record frames carry only temperature +
+    # timestamp -- still no series at all, unchanged.
+    draft = parse_fit(FIT_FIXTURE)
+    assert draft.series is None
+
+
+def test_derive_grade_forward_window_and_clamp():
+    from swim_coach.parse_files import _derive_grade
+
+    # 1 m/s of distance per sample; a clean 5% climb for the first stretch,
+    # then flat. The window (GRADE_SMOOTHING_M = 30m) means the last ~30
+    # samples can't close a window and stay None.
+    dist = [float(i) for i in range(120)]
+    alt = [i * 0.05 for i in range(60)] + [60 * 0.05] * 60
+    grade = _derive_grade(dist, alt)
+    assert grade is not None
+    assert grade[0] == pytest.approx(0.05, abs=1e-6)
+    assert grade[70] == pytest.approx(0.0, abs=1e-6)
+    assert grade[-1] is None  # no full forward window left
+
+    # Absurd altimeter spike is clamped, not propagated.
+    spiky = _derive_grade([0.0, 40.0], [0.0, 999.0])
+    assert spiky == [0.45, None]
+
+    # No distance channel -> no grade at all.
+    assert _derive_grade([None, None], [10.0, 12.0]) is None

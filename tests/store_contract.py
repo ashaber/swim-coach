@@ -496,6 +496,49 @@ class StoreContractTests:
         store.save_workout(SLUG, w)
         assert store.get_workout("other-athlete", w.id) is None
 
+    # --- workout time-series (save_series / load_series) -----------------
+
+    def test_series_round_trip(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        w = _workout(athlete.id, date(2026, 6, 13), sport="bike")
+        store.save_workout(SLUG, w)
+        series = {
+            "t_s": [0.0, 1.0, 2.0, 3.0],
+            "power_w": [180, 240, None, 235],
+            "hr": [120, 140, 141, 143],
+            "grade": [0.04, 0.05, 0.06, None],
+        }
+        ref = store.save_series(SLUG, w.date, w.sport, w.id, series)
+        assert isinstance(ref, str) and ref
+        loaded = store.load_series(SLUG, w.id)
+        assert loaded == series
+
+    def test_load_series_none_when_absent(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        assert store.load_series(SLUG, uuid.uuid4()) is None
+
+    def test_save_series_same_id_overwrites(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        w = _workout(athlete.id, date(2026, 6, 13), sport="bike")
+        store.save_workout(SLUG, w)
+        store.save_series(SLUG, w.date, w.sport, w.id, {"t_s": [0.0], "power_w": [100]})
+        store.save_series(SLUG, w.date, w.sport, w.id, {"t_s": [0.0, 1.0], "power_w": [200, 210]})
+        loaded = store.load_series(SLUG, w.id)
+        assert loaded == {"t_s": [0.0, 1.0], "power_w": [200, 210]}
+
+    def test_load_series_scoped_to_athlete(self, store):
+        athlete = _athlete()
+        other = Athlete(id=uuid.uuid4(), slug="other-athlete", name="Other")
+        store.save_athlete(athlete)
+        store.save_athlete(other)
+        w = _workout(athlete.id, date(2026, 6, 13), sport="bike")
+        store.save_workout(SLUG, w)
+        store.save_series(SLUG, w.date, w.sport, w.id, {"t_s": [0.0], "power_w": [123]})
+        assert store.load_series("other-athlete", w.id) is None
+
     # --- wellness --------------------------------------------------------
 
     def test_wellness_round_trip(self, store):

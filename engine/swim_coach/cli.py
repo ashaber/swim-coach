@@ -689,6 +689,7 @@ def _cmd_ingest(args: argparse.Namespace, store: StoreInterface) -> int:
             series=draft.series,
             elapsed_min=draft.elapsed_min,
             moving_min=workout.duration_min,
+            sport=workout.sport,
         )
 
         store.save_workout(slug, workout)
@@ -773,6 +774,7 @@ def _cmd_analyze(args: argparse.Namespace, store: StoreInterface) -> int:
             series=draft.series,
             elapsed_min=draft.elapsed_min,
             moving_min=workout.duration_min,
+            sport=workout.sport,
         )
 
         store.save_workout(slug, workout)

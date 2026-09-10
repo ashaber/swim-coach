@@ -563,6 +563,50 @@ class DbStore(StoreInterface):
                 row,
             )
 
+    # --- Workout time-series (columnar sidecar) ------------------------
+
+    def save_series(
+        self, slug: str, day: date, sport: Sport, workout_id: UUID, series: dict
+    ) -> str:
+        # Keyed on `workout_id` (PK) -- re-saving the same id overwrites,
+        # matching FileStore's unconditional sidecar rewrite. `data` holds
+        # the whole columnar payload as one JSONB object (same JSONB-hybrid
+        # shape as `threshold_records`, `athlete_id`/`date`/`sport` promoted
+        # to real columns). FK is to `athletes` only, NOT `workouts` -- the
+        # backend's enrich path can persist a series before the confirmed
+        # Workout row exists (see backend/app/enrich.py), same as it always
+        # has for the FileStore sidecar.
+        with self._connect() as conn, conn.cursor() as cur:
+            athlete_id = self._athlete_id(cur, slug)
+            cur.execute(
+                """
+                insert into workout_series
+                    (workout_id, athlete_id, date, sport, schema_version, data)
+                values (%s, %s, %s, %s, %s, %s)
+                on conflict (workout_id) do update set
+                    athlete_id = excluded.athlete_id,
+                    date = excluded.date,
+                    sport = excluded.sport,
+                    data = excluded.data,
+                    updated_at = now()
+                """,
+                (workout_id, athlete_id, day, sport, 1, self._Jsonb(series)),
+            )
+        return f"db://workout_series/{slug}/{workout_id}"
+
+    def load_series(self, slug: str, workout_id: UUID) -> dict | None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                select s.data from workout_series s
+                join athletes a on a.athlete_id = s.athlete_id
+                where a.slug = %s and s.workout_id = %s
+                """,
+                (slug, workout_id),
+            )
+            row = cur.fetchone()
+        return row["data"] if row is not None else None
+
     # --- Wellness -------------------------------------------------------
 
     def list_wellness(self, slug: str) -> list[Wellness]:
