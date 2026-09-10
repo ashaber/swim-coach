@@ -73,6 +73,7 @@ def test_request_shape_includes_tools(client, fake_claude_chat_factory) -> None:
         "set_event_active_status",
         "propose_session_adjustment",
         "propose_injury_adapted_taper",
+        "render_plan_table",
     }
 
 
@@ -154,6 +155,31 @@ def test_streaming_text_reaches_the_client(client, fake_claude_chat_factory) -> 
     assert "Your volume is lower" in response.text
     assert "mini-taper" in response.text
     assert '"type": "done"' in response.text
+
+
+def test_max_tokens_truncation_marker_reaches_the_client(client, fake_claude_chat_factory) -> None:
+    from app.claude import MAX_TOKENS_TRUNCATION_MARKER
+
+    final = make_final_message(
+        [make_text_block("Redraft so far: Mon easy 2k, Tue ...")],
+        "max_tokens",
+        usage=make_usage(output_tokens=16384),
+    )
+    fake_claude_chat_factory([(["Redraft so far: Mon easy 2k, Tue ..."], final)])
+
+    response = client.post(
+        "/api/chat",
+        json=_chat_payload(message="redraft this whole week please"),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+    assert "Redraft so far" in response.text
+    # The marker's ASCII spine survives SSE JSON-encoding (emoji/em-dash are
+    # \u-escaped in transport but decode fine in the browser).
+    assert "cut off at the token limit" in response.text
+    assert "reply 'continue' to resume" in response.text
+    assert "cut off at the token limit" in MAX_TOKENS_TRUNCATION_MARKER
+    assert '"stop_reason": "max_tokens"' in response.text
 
 
 def test_refusal_stop_reason_is_handled_before_reading_content(
