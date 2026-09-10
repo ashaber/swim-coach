@@ -162,7 +162,14 @@ from typing import Any, Callable
 from pydantic import ValidationError
 
 from swim_coach.adapt import adapt_week
-from swim_coach.load import estimate_hr_max
+from swim_coach.load import _training_base_evidence, daily_loads, estimate_hr_max
+# `_training_base_evidence` is `has_established_training_base`'s own shared
+# implementation -- `_training_base_evidence(...).established` IS `has_
+# established_training_base(...)`'s return value (see load.py: the public
+# function is a thin wrapper over this), called here directly (not the
+# public wrapper) only so this handler can ALSO surface the real evidence
+# behind that boolean (`established_base_evidence` in the response below)
+# without computing it twice.
 from swim_coach.models import (
     Athlete,
     Event,
@@ -176,13 +183,18 @@ from swim_coach.models import (
 )
 from swim_coach.ow_session_templates import build_ow_session
 from swim_coach.plan import (
+    MIN_MACRO_WEEKS,
     SESSION_ADJUSTMENT_INCREASE_CAP_PCT,
+    SHARPENING_MIN_MACRO_WEEKS,
     WEEKLY_VOLUME_RAMP_CAP,
     _duration_min_for_distance,
+    _monday_of_week,
+    _monday_on_or_after,
     adjust_session,
     count_structured_steps,
     generate_week,
     scaffold_macro,
+    scaffold_sharpening_macro,
 )
 from swim_coach.store import StoreInterface
 from swim_coach.taper_search import (
@@ -771,17 +783,35 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
     {
         "name": "draft_macro_plan",
         "description": (
-            "Scaffold a brand-new base->build->peak->taper macro periodization "
-            "plan toward an existing event, calling the exact same "
-            "swim_coach.plan.scaffold_macro function the CLI's scaffold-macro "
-            "command and /onboard-athlete use -- the 8%/week ramp cap and "
-            "taper/peak sizing are enforced inside that function, which is "
-            "why a brand-new macro is safe to persist immediately. Use when "
-            "the athlete has an event on file but no macro plan for it yet. "
-            "Refuses with an error if a macro plan already exists for that "
-            "event -- this tool is only for a brand-new macro; use "
-            "replace_macro_plan (draft-then-confirm) to revise or replace "
-            "an existing one instead."
+            "Scaffold a brand-new macro periodization plan toward an existing "
+            "event -- automatically picks ONE of two real periodization "
+            "shapes, never silently: (1) the standard base->build->peak->taper "
+            "shape (swim_coach.plan.scaffold_macro, the same function the "
+            "CLI's scaffold-macro command and /onboard-athlete use) whenever "
+            "at least MIN_MACRO_WEEKS (8) weeks of runway remain before the "
+            "event; (2) a shorter hold->sharpen->taper 'sharpening' shape "
+            "(swim_coach.plan.scaffold_sharpening_macro, grounded in Issurin's "
+            "block-periodization 'transmutation' block) whenever the runway is "
+            "shorter than that (but still >= 4 weeks) AND the athlete's REAL "
+            "logged workout history (never this conversation) shows an "
+            "already-established training base "
+            "(swim_coach.load.has_established_training_base) -- this is for "
+            "the athlete who is already consistently training and does not "
+            "need a base-building ramp, just a short block of race-specific "
+            "sharpening into a taper. If neither condition is met (not enough "
+            "runway for shape 1, and either not enough runway for shape 2 or "
+            "no established base on file), refuses with a clear error rather "
+            "than guessing or degenerating either shape. The response's own "
+            "`shape`/`shape_reason`/`established_base_evidence` fields always "
+            "say which shape was used (or why the refusal fired) and the real "
+            "evidence behind that call -- relay this honestly to the athlete, "
+            "never just that a macro was created. Both engine functions' own "
+            "ramp/taper/sizing math is what makes persisting the result "
+            "immediately safe. Use when the athlete has an event on file but "
+            "no macro plan for it yet. Refuses with an error if a macro plan "
+            "already exists for that event -- this tool is only for a "
+            "brand-new macro; use replace_macro_plan (draft-then-confirm) to "
+            "revise or replace an existing one instead."
         ),
         "input_schema": {
             "type": "object",
@@ -792,12 +822,19 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
                 "current_weekly_volume_m": {
                     "type": "integer",
-                    "description": "The athlete's current real weekly swim volume in meters.",
+                    "description": (
+                        "The athlete's current real weekly training volume "
+                        "(meters for swim, minutes for a duration_min-metric "
+                        "event like bike). Also doubles as the flat hold/"
+                        "sharpen volume for the shorter sharpening shape when "
+                        "that shape fires (see peak_weekly_volume_m below)."
+                    ),
                 },
                 "peak_weekly_volume_m": {
                     "type": "integer",
                     "description": (
-                        "Target peak weekly volume in meters. Optional ONLY "
+                        "For the standard base->build->peak->taper shape: "
+                        "target peak weekly volume in meters. Optional ONLY "
                         "when the event's target_metric is 'distance_m' (the "
                         "default for most events) -- there it defaults to "
                         "event distance x 2.5, clamped by the ramp cap over "
@@ -805,7 +842,14 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                         "target_metric ('duration_min'/'load_au', e.g. a "
                         "bike-primary or load-based event): no validated "
                         "duration/load-driven default formula exists, and "
-                        "omitting it raises an error rather than guessing."
+                        "omitting it raises an error rather than guessing. "
+                        "For the shorter sharpening shape (when it fires "
+                        "instead): the same field is reused as the flat hold/"
+                        "sharpen weekly volume -- always optional there "
+                        "(defaults to current_weekly_volume_m, i.e. hold "
+                        "current volume rather than ramp), regardless of "
+                        "target_metric, since that shape has no ramp to size "
+                        "a peak for in the first place."
                     ),
                 },
                 "start_date": {
@@ -2393,12 +2437,42 @@ def _handle_create_event(input_data: dict[str, Any], *, store: StoreInterface, s
 
 
 def _handle_draft_macro_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
-    """Calls `swim_coach.plan.scaffold_macro` directly (the same function
-    `cli.py`'s `scaffold-macro` command and the `/onboard-athlete` skill
-    use) -- its own ramp-cap/taper/peak sizing is exactly why a brand-new
-    macro is safe to persist immediately. Guarded against ever replacing an
-    existing macro tied to the same event: revising one is a separate,
-    not-yet-built concern."""
+    """Three-way shape selection, all real, none silent (sharpening-macro
+    build -- see `swim_coach.plan.scaffold_sharpening_macro`'s own
+    docstring for the shape itself):
+
+    1. `weeks_available >= MIN_MACRO_WEEKS` -> `swim_coach.plan.
+       scaffold_macro` (the same function `cli.py`'s `scaffold-macro`
+       command and the `/onboard-athlete` skill use), EXACTLY as before
+       this build -- its own ramp-cap/taper/peak sizing is why a brand-new
+       macro is safe to persist immediately.
+    2. `weeks_available` between `SHARPENING_MIN_MACRO_WEEKS` and
+       `MIN_MACRO_WEEKS` (exclusive) AND `swim_coach.load.has_established_
+       training_base` says True against the athlete's REAL logged workout
+       history (`store.list_workouts`/`store.list_wellness` ->
+       `swim_coach.load.daily_loads` -- never asserted, never inferred from
+       this conversation) -> `scaffold_sharpening_macro`. The response's
+       own `shape`/`shape_reason`/`established_base_evidence` fields say
+       exactly which shape fired and why, using the real evidence numbers
+       `has_established_training_base` computed -- never a bare "trust me."
+    3. Neither -> the existing, unchanged refusal: calling `scaffold_macro`
+       and letting its own `MIN_MACRO_WEEKS` `ValueError` fire, byte-
+       identical to this tool's behavior before this build (including for
+       an athlete who has no established base at all -- the new shape must
+       never fire for that athlete, so this is the correct, deliberate
+       fallback, not a stopgap).
+
+    `weeks_available` here uses the exact same whole-weeks-from-the-next-
+    Monday-to-the-event's-Monday arithmetic `scaffold_macro`/
+    `scaffold_sharpening_macro` each already do internally
+    (`_monday_on_or_after`/`_monday_of_week`) -- computed once here only so
+    this handler can decide WHICH of them to call; neither engine function
+    is changed to expose it.
+
+    Guarded, same as before this build, against ever replacing an existing
+    macro tied to the same event: revising one is a separate, not-yet-built
+    concern (`replace_macro_plan`).
+    """
     event_name = input_data.get("event_name")
     if not event_name:
         return {"error": "event_name is required"}
@@ -2460,27 +2534,127 @@ def _handle_draft_macro_plan(input_data: dict[str, Any], *, store: StoreInterfac
             )
         }
 
-    try:
-        macro = scaffold_macro(athlete, event, start, current_weekly_volume_m, peak_weekly_volume_m)
-    except ValueError as exc:
-        return {"error": str(exc)}
+    weeks_available = (_monday_of_week(event.event_date) - _monday_on_or_after(start)).days // 7
+    established_base_evidence: dict[str, Any] | None = None
+    shape: str
+    shape_reason: str
+
+    if weeks_available >= MIN_MACRO_WEEKS:
+        shape = "base_build_peak_taper"
+        shape_reason = (
+            f"{weeks_available} weeks of runway before {event_name!r} is enough "
+            f"({MIN_MACRO_WEEKS}+) for the standard base->build->peak->taper macro."
+        )
+        try:
+            macro = scaffold_macro(athlete, event, start, current_weekly_volume_m, peak_weekly_volume_m)
+        except ValueError as exc:
+            return {"error": str(exc)}
+    else:
+        try:
+            workouts = store.list_workouts(slug)
+            wellness = store.list_wellness(slug)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"could not load workout/wellness history: {exc}"}
+        loads = daily_loads(workouts, athlete=athlete, wellness=wellness)
+        evidence = _training_base_evidence(loads, start)
+        established_base_evidence = {
+            "established": evidence.established,
+            "lookback_weeks": evidence.lookback_weeks,
+            "lookback_start": evidence.lookback_start.isoformat(),
+            "earliest_logged_day": (
+                evidence.earliest_logged_day.isoformat() if evidence.earliest_logged_day else None
+            ),
+            "weeks_with_load": evidence.weeks_with_load,
+            "min_weeks_with_load_fraction": evidence.min_weeks_with_load_fraction,
+            "ctl_at_as_of": round(evidence.ctl_at_as_of, 1),
+        }
+        if (
+            evidence.established
+            and weeks_available >= SHARPENING_MIN_MACRO_WEEKS
+            and event.primary_sport == "bike"
+        ):
+            # Sharpening-macro build scope: bike-primary events only, for
+            # now -- `generate_week`'s swim path was never audited/extended
+            # to understand "hold"/"sharpen" blocks (see `MacroBlock.name`'s
+            # own docstring and `scaffold_sharpening_macro`'s docstring).
+            # Gating here, at the one real call site, is what makes that
+            # scope boundary actually true in practice, not just documented.
+            shape = "hold_sharpen_taper"
+            shape_reason = (
+                f"only {weeks_available} weeks of runway before {event_name!r} -- "
+                f"not enough for base->build->peak->taper ({MIN_MACRO_WEEKS}+ "
+                "needed) -- but this athlete's real logged training history shows "
+                f"an established base: load present in {evidence.weeks_with_load} "
+                f"of the trailing {evidence.lookback_weeks} weeks (reaching back to "
+                f"{evidence.earliest_logged_day}), current CTL "
+                f"{evidence.ctl_at_as_of:.0f} AU. Using the shorter "
+                "hold->sharpen->taper sharpening macro instead of refusing."
+            )
+            try:
+                macro = scaffold_sharpening_macro(
+                    athlete, event, start, current_weekly_volume_m, peak_weekly_volume_m
+                )
+            except ValueError as exc:
+                return {"error": str(exc)}
+        else:
+            # Neither shape fits -- reuse scaffold_macro's own refusal
+            # unchanged (including the exact case this shape exists for but
+            # is deliberately refusing: no established base on file, so the
+            # sharpening macro must not fire even though the runway alone
+            # would otherwise qualify for it -- see evidence above).
+            if not evidence.established:
+                shape_reason = (
+                    f"only {weeks_available} weeks of runway before {event_name!r}, "
+                    "and this athlete's real logged training history does not show "
+                    "an established base (load present in only "
+                    f"{evidence.weeks_with_load} of the trailing "
+                    f"{evidence.lookback_weeks} weeks) -- refusing rather than "
+                    "guessing at either macro shape."
+                )
+            elif weeks_available < SHARPENING_MIN_MACRO_WEEKS:
+                shape_reason = (
+                    f"only {weeks_available} weeks of runway before {event_name!r} -- "
+                    f"below even the sharpening macro's own minimum "
+                    f"({SHARPENING_MIN_MACRO_WEEKS} weeks) -- refusing rather than "
+                    "producing a degenerate plan."
+                )
+            else:
+                shape_reason = (
+                    f"only {weeks_available} weeks of runway before {event_name!r}, and "
+                    "this athlete's real logged training history does show an "
+                    "established base -- but the sharpening macro is scoped to "
+                    f"bike-primary events for now (this event's primary_sport is "
+                    f"{event.primary_sport!r}), so refusing rather than using a "
+                    "shape this event's sport hasn't been extended to support."
+                )
+            try:
+                macro = scaffold_macro(athlete, event, start, current_weekly_volume_m, peak_weekly_volume_m)
+            except ValueError as exc:
+                return {"error": str(exc)}
+            # scaffold_macro always raises for weeks_available < MIN_MACRO_WEEKS
+            # (the only way this branch is reached) -- this line is unreachable
+            # in practice, kept only so the branch is total if that invariant
+            # ever changes.
+            shape = "base_build_peak_taper"
 
     store.save_macro(slug, macro)
 
-    log.info("macro plan drafted", athlete=slug, event_name=event_name, macro_id=str(macro.id))
+    log.info(
+        "macro plan drafted",
+        athlete=slug,
+        event_name=event_name,
+        macro_id=str(macro.id),
+        shape=shape,
+        weeks_available=weeks_available,
+    )
     return {
         "created": True,
         "event_name": event_name,
-        "blocks": [
-            {
-                "name": block.name,
-                "start_date": block.start_date.isoformat(),
-                "end_date": block.end_date.isoformat(),
-                "weekly_volume_target_m": block.weekly_volume_target_m,
-                "focus": block.focus,
-            }
-            for block in macro.blocks
-        ],
+        "shape": shape,
+        "shape_reason": shape_reason,
+        "weeks_available": weeks_available,
+        "established_base_evidence": established_base_evidence,
+        "blocks": _macro_blocks_json(macro),
     }
 
 

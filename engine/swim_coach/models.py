@@ -523,9 +523,32 @@ class WeekPlan(BaseModel):
 
 
 class MacroBlock(BaseModel):
-    """One block (base/build/peak/taper) within a MacroPlan."""
+    """One block within a MacroPlan.
 
-    name: Literal["base", "build", "peak", "taper"]
+    `"base"`/`"build"`/`"peak"`/`"taper"` are `plan.scaffold_macro`'s
+    original base->build->peak->taper shape. `"hold"`/`"sharpen"` are the
+    established-base, short-runway "sharpening" shape's own two new phases
+    (`plan.scaffold_sharpening_macro`) -- Issurin's block-periodization
+    "transmutation" block, plus an optional flat maintenance phase ahead of
+    it when the runway allows more than the minimum -- see that function's
+    own docstring for the full design and citation. That second shape
+    reuses `"taper"` UNCHANGED (same block, same volume-decay math,
+    `plan.generate_week`'s existing taper handling) rather than inventing a
+    third taper variant.
+
+    **Scope note, sharpening-macro build:** `scaffold_sharpening_macro` is a
+    separate function, never called from any swim-path code -- as of this
+    build, only `backend/app/tools.py`'s `draft_macro_plan` handler ever
+    invokes it, and only when the target event's `primary_sport == "bike"`.
+    `plan.generate_week`'s swim-primary path (`_no_coach_pool_purpose`,
+    `_additional_swim_structure`, the taper-decay long-swim cap) is
+    therefore never handed a `"hold"`/`"sharpen"`-named block in practice,
+    and was NOT audited or extended to specifically understand those two
+    names in this build -- deliberately out of scope, see
+    `scaffold_sharpening_macro`'s own docstring.
+    """
+
+    name: Literal["base", "build", "peak", "taper", "hold", "sharpen"]
     start_date: date
     end_date: date
     weekly_volume_target_m: int = Field(ge=0)

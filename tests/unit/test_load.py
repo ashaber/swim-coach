@@ -13,6 +13,9 @@ import pytest
 
 from swim_coach.load import (
     ATL_TIME_CONSTANT_DAYS,
+    BASE_DETECTION_LOOKBACK_DAYS,
+    BASE_DETECTION_LOOKBACK_WEEKS,
+    BASE_DETECTION_MIN_WEEKS_WITH_LOAD_FRACTION,
     CTL_TIME_CONSTANT_DAYS,
     DURATION_ONLY_ASSUMED_INTENSITY,
     HR_REST_GENERIC_FALLBACK_BPM,
@@ -33,6 +36,7 @@ from swim_coach.load import (
     daily_loads,
     estimate_hr_max,
     estimate_hr_rest,
+    has_established_training_base,
     monotony,
     session_load,
     session_target_load_au,
@@ -1095,6 +1099,145 @@ def test_ctl_atl_tsb_series_load_spike_after_quiet_period_dips_tsb_negative():
     assert atl == pytest.approx(500.0 / ATL_TIME_CONSTANT_DAYS)
     assert atl > ctl
     assert tsb < 0
+
+
+# --- has_established_training_base ----------------------------------------------------
+
+
+AS_OF = date(2026, 9, 7)
+
+
+def _consistent_daily_loads(*, weeks: int, as_of: date = AS_OF, sessions_per_week=(0, 2, 4)) -> dict:
+    """A real, evidence-shaped daily-load history: `weeks` trailing weeks of
+    consistent (not single-spike) training ending at `as_of`, load on the
+    given Monday-relative offsets each week."""
+    values = {}
+    for w in range(weeks):
+        for offset in sessions_per_week:
+            values[as_of - timedelta(days=w * 7 + offset)] = 80.0
+    return values
+
+
+def test_has_established_training_base_empty_history_is_false():
+    assert has_established_training_base({}, AS_OF) is False
+
+
+def test_has_established_training_base_sparse_single_recent_workout_is_false():
+    sparse = {AS_OF - timedelta(days=1): 50.0}
+    assert has_established_training_base(sparse, AS_OF) is False
+
+
+def test_has_established_training_base_true_for_months_of_consistent_real_training():
+    # Andrew's real scenario: several months of consistent training, not a
+    # single spike week.
+    values = _consistent_daily_loads(weeks=20)
+    assert has_established_training_base(values, AS_OF) is True
+
+
+def test_has_established_training_base_false_when_history_too_short_even_if_dense():
+    # Dense, consistent training that started only 6 weeks ago (well inside
+    # BASE_DETECTION_LOOKBACK_WEEKS=12) is real signal, but not enough
+    # elapsed time for this engine's own CTL math to call it "established"
+    # yet -- condition 1 (earliest logged day reaches back far enough).
+    values = _consistent_daily_loads(weeks=6)
+    assert has_established_training_base(values, AS_OF) is False
+
+
+def test_has_established_training_base_false_for_one_big_spike_week_amid_silence():
+    # The exact case this build's design brief calls out by name: "not just
+    # one big week skewing a mean." A single, very large week of load,
+    # positioned exactly at the start of the lookback window (so it alone
+    # already satisfies condition 1's "reaches back far enough" check),
+    # with nothing else logged anywhere in the other 11 of 12 trailing
+    # weeks, must not read as an established base -- a raw CTL reading or a
+    # naive mean over the window could be inflated by this one week; the
+    # breadth-of-weeks check (condition 2) is exactly what catches it.
+    lookback_start = AS_OF - timedelta(days=BASE_DETECTION_LOOKBACK_DAYS - 1)
+    values = {lookback_start + timedelta(days=d): 500.0 for d in range(7)}
+    evidence_weeks_with_load = 1
+    assert evidence_weeks_with_load / BASE_DETECTION_LOOKBACK_WEEKS < BASE_DETECTION_MIN_WEEKS_WITH_LOAD_FRACTION
+    assert has_established_training_base(values, AS_OF) is False
+
+
+def test_has_established_training_base_false_for_long_dormant_history():
+    # A real, once-consistent history that has since gone completely quiet
+    # long enough that none of it falls inside the trailing lookback window
+    # any more -- condition 2's breadth check (no logged load in ANY of the
+    # trailing BASE_DETECTION_LOOKBACK_WEEKS weeks) correctly refuses this,
+    # matching a coach's own read: training that stopped over a year ago is
+    # not a live "base" today, no matter how consistent it once was.
+    old_training = _consistent_daily_loads(weeks=20, as_of=AS_OF - timedelta(days=400))
+    assert has_established_training_base(old_training, AS_OF) is False
+
+
+def test_has_established_training_base_ignores_days_after_as_of():
+    # A future-dated entry (e.g. synced in from elsewhere) must not count
+    # toward "real history reaching back far enough" or the breadth check --
+    # same "don't borrow from data that doesn't exist yet" convention
+    # estimate_hr_rest already uses.
+    values = _consistent_daily_loads(weeks=20)
+    values[AS_OF + timedelta(days=30)] = 999.0
+    assert has_established_training_base(values, AS_OF) is True
+    # And evaluated at a point BEFORE that real history existed, it's False --
+    # proves the future entry isn't silently pulling the "established" read
+    # earlier than the athlete's real history actually supports.
+    assert has_established_training_base(values, AS_OF - timedelta(weeks=25)) is False
+
+
+def test_has_established_training_base_lookback_window_is_derived_from_ctl_time_constant():
+    # BASE_DETECTION_LOOKBACK_DAYS must be a real, derived number (per this
+    # build's brief), not an arbitrary one -- pin the derivation itself so a
+    # future edit can't silently detach the two constants.
+    assert BASE_DETECTION_LOOKBACK_DAYS == 2 * CTL_TIME_CONSTANT_DAYS
+    assert BASE_DETECTION_LOOKBACK_WEEKS == BASE_DETECTION_LOOKBACK_DAYS // 7
+    assert 0.0 < BASE_DETECTION_MIN_WEEKS_WITH_LOAD_FRACTION <= 1.0
+
+
+# --- Mandatory correctness property #2: event/goal independence -----------------------
+#
+# has_established_training_base's signature takes ONLY (daily_load_values,
+# as_of) -- there is no Event/MacroPlan/goal parameter to even pass in, so
+# this property is structurally guaranteed by the function's own shape, not
+# merely true by coincidence in one test case. This test proves it directly
+# against Andrew's own real test case: the same real athlete history must
+# give the same answer whether he's planning toward his cyclocross goal or
+# an unrelated December MTB event instead.
+
+
+def test_has_established_training_base_is_independent_of_which_event_is_being_planned():
+    real_history = _consistent_daily_loads(weeks=20)
+
+    # Two structurally different hypothetical goals -- a near-term
+    # cyclocross race vs. an unrelated December MTB event -- represented
+    # here the only way this function *can* represent them: by calling it
+    # from two separate call sites that know nothing about each other, with
+    # nothing event-shaped passed through. If the function accepted an
+    # event/macro parameter, these two calls could diverge; because it
+    # doesn't, they structurally cannot.
+    def decide_for_cyclocross_goal():
+        # Pretend caller is about to scaffold a macro toward "CX Nationals."
+        return has_established_training_base(real_history, AS_OF)
+
+    def decide_for_december_mtb_goal():
+        # Pretend caller is about to scaffold a macro toward an unrelated
+        # "December MTB Enduro" instead -- same real athlete, same as_of.
+        return has_established_training_base(real_history, AS_OF)
+
+    result_cyclocross = decide_for_cyclocross_goal()
+    result_december_mtb = decide_for_december_mtb_goal()
+
+    assert result_cyclocross is True
+    assert result_december_mtb is True
+    assert result_cyclocross == result_december_mtb
+
+    # Same invariant holds when the base is genuinely NOT established --
+    # both hypothetical goals must be refused identically, not just agree
+    # when the answer happens to be True.
+    no_history = {}
+    assert has_established_training_base(no_history, AS_OF) == has_established_training_base(
+        no_history, AS_OF
+    )
+    assert has_established_training_base(no_history, AS_OF) is False
 
 
 # --- wellness_baseline_deviation ------------------------------------------------------

@@ -22,6 +22,7 @@ from swim_coach.models import (
     MacroBlock,
     MacroPlan,
     Session,
+    Workout,
     WorkoutAnalytics,
     WorkoutLap,
     WorkoutPause,
@@ -1961,6 +1962,350 @@ def test_draft_macro_plan_missing_event_name_is_an_error(athletes_dir) -> None:
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
     result = handlers["draft_macro_plan"]({"current_weekly_volume_m": 15000})
     assert "error" in result
+
+
+# --- draft_macro_plan: three-way shape selection (sharpening-macro build) -----------
+#
+# `athletes/andrew` is a real, git-committed sandbox athlete tree (distinct
+# from `athletes/renee`'s realistic production-shaped fixture) -- used here
+# so these tests can construct their own real, deterministic training-load
+# fixture (rather than depending on renee's own real logged history, which
+# these tests don't control and shouldn't assume the exact shape of).
+
+_SHARPENING_AS_OF = date(2026, 9, 7)  # a Monday
+
+
+def _log_consistent_bike_history(store: FileStore, slug: str, athlete_id, *, weeks: int, as_of: date) -> None:
+    """Writes `weeks` trailing weeks of real, consistent (not single-spike)
+    bike workouts (3x/week) ending at `as_of` -- the same fixture shape
+    `tests/unit/test_load.py`'s `_consistent_daily_loads` uses, but through
+    the real store/Workout path so it exercises the real
+    `store.list_workouts` -> `daily_loads` -> `has_established_training_
+    base` pipeline `_handle_draft_macro_plan` actually calls."""
+    for w in range(weeks):
+        for offset in (2, 4, 6):
+            store.save_workout(
+                slug,
+                Workout(
+                    id=uuid.uuid4(),
+                    athlete_id=athlete_id,
+                    date=as_of - timedelta(days=w * 7 + offset),
+                    sport="bike",
+                    source="manual",
+                    distance_m=0,
+                    duration_min=60.0,
+                    rpe=5,
+                ),
+            )
+
+
+def _clear_workouts(athletes_dir, slug: str) -> None:
+    workouts_dir = athletes_dir / slug / "logs" / "workouts"
+    for f in workouts_dir.glob("*.yaml"):
+        f.unlink()
+
+
+def test_draft_macro_plan_established_base_and_short_bike_runway_uses_sharpening_shape(
+    athletes_dir,
+) -> None:
+    # Mandatory correctness property #3 (real reproduction of Andrew's
+    # actual scenario): an athlete with several months of real logged
+    # training history, a bike event ~5 weeks out, target_metric=
+    # "duration_min" -- draft_macro_plan must succeed via
+    # scaffold_sharpening_macro instead of refusing, with the response
+    # transparently stating why.
+    store = FileStore(base_dir=athletes_dir)
+    slug = "andrew"
+    athlete = store.load_athlete(slug)
+    _clear_workouts(athletes_dir, slug)
+    _log_consistent_bike_history(store, slug, athlete.id, weeks=20, as_of=_SHARPENING_AS_OF)
+
+    events = store.load_events(slug)
+    events.append(
+        Event(
+            id=uuid.uuid4(),
+            athlete_id=athlete.id,
+            name="CX Regional Championship",
+            event_date=_SHARPENING_AS_OF + timedelta(weeks=5),
+            target_metric="duration_min",
+            distance_m=None,
+            target_value=120.0,
+            priority="A",
+            primary_sport="bike",
+        )
+    )
+    store.save_events(slug, events)
+
+    handlers = build_tool_handlers(store, slug=slug, expert_mode=False)
+    result = handlers["draft_macro_plan"](
+        {
+            "event_name": "CX Regional Championship",
+            "current_weekly_volume_m": 200,
+            "start_date": _SHARPENING_AS_OF.isoformat(),
+        }
+    )
+
+    assert "error" not in result
+    assert result["created"] is True
+    assert result["shape"] == "hold_sharpen_taper"
+    assert "established base" in result["shape_reason"]
+    assert result["weeks_available"] == 5
+    evidence = result["established_base_evidence"]
+    assert evidence["established"] is True
+    assert evidence["weeks_with_load"] == evidence["lookback_weeks"]  # dense, real history
+    assert evidence["ctl_at_as_of"] > 0
+    block_names = [b["name"] for b in result["blocks"]]
+    assert block_names == ["sharpen", "taper"]  # no hold at exactly 5 weeks of runway
+
+    reloaded_macro = FileStore(base_dir=athletes_dir).load_macro(slug)
+    assert reloaded_macro is not None
+    assert [b.name for b in reloaded_macro.blocks] == ["sharpen", "taper"]
+
+
+def test_draft_macro_plan_no_training_history_refuses_even_with_short_bike_runway(
+    athletes_dir,
+) -> None:
+    # The inverse of the test above, mandated by the same brief: an athlete
+    # with NO real training history and the same short runway must still
+    # get the honest refusal -- the sharpening shape must never fire for
+    # someone who doesn't actually have a base.
+    store = FileStore(base_dir=athletes_dir)
+    slug = "andrew"
+    athlete = store.load_athlete(slug)
+    _clear_workouts(athletes_dir, slug)  # no history at all
+    macro_before = store.load_macro(slug)  # andrew's fixture tree ships one, unrelated event
+
+    events = store.load_events(slug)
+    events.append(
+        Event(
+            id=uuid.uuid4(),
+            athlete_id=athlete.id,
+            name="CX Regional Championship No History",
+            event_date=_SHARPENING_AS_OF + timedelta(weeks=5),
+            target_metric="duration_min",
+            distance_m=None,
+            target_value=120.0,
+            priority="A",
+            primary_sport="bike",
+        )
+    )
+    store.save_events(slug, events)
+
+    handlers = build_tool_handlers(store, slug=slug, expert_mode=False)
+    result = handlers["draft_macro_plan"](
+        {
+            "event_name": "CX Regional Championship No History",
+            "current_weekly_volume_m": 200,
+            "start_date": _SHARPENING_AS_OF.isoformat(),
+        }
+    )
+
+    assert "error" in result
+    assert "need at least 8" in result["error"]
+    # No new macro persisted by the failed attempt -- whatever was on file
+    # before (tied to a different, unrelated event) is untouched.
+    assert FileStore(base_dir=athletes_dir).load_macro(slug) == macro_before
+
+
+def test_draft_macro_plan_established_base_but_runway_below_sharpening_floor_refuses(
+    athletes_dir,
+) -> None:
+    # Established base, but weeks_available < SHARPENING_MIN_MACRO_WEEKS --
+    # neither shape fits; reuses scaffold_macro's own refusal unchanged.
+    store = FileStore(base_dir=athletes_dir)
+    slug = "andrew"
+    athlete = store.load_athlete(slug)
+    _clear_workouts(athletes_dir, slug)
+    _log_consistent_bike_history(store, slug, athlete.id, weeks=20, as_of=_SHARPENING_AS_OF)
+
+    events = store.load_events(slug)
+    events.append(
+        Event(
+            id=uuid.uuid4(),
+            athlete_id=athlete.id,
+            name="CX Too Soon",
+            event_date=_SHARPENING_AS_OF + timedelta(weeks=3),
+            target_metric="duration_min",
+            distance_m=None,
+            target_value=120.0,
+            priority="A",
+            primary_sport="bike",
+        )
+    )
+    store.save_events(slug, events)
+
+    handlers = build_tool_handlers(store, slug=slug, expert_mode=False)
+    result = handlers["draft_macro_plan"](
+        {
+            "event_name": "CX Too Soon",
+            "current_weekly_volume_m": 200,
+            "start_date": _SHARPENING_AS_OF.isoformat(),
+        }
+    )
+
+    assert "error" in result
+    assert "need at least 8" in result["error"]
+
+
+def test_draft_macro_plan_established_base_and_short_runway_swim_event_still_refuses(
+    athletes_dir,
+) -> None:
+    # Sharpening-macro build scope: bike-primary events only for now. An
+    # established base + short runway for a SWIM-primary event must still
+    # get the honest refusal, not the sharpening shape -- generate_week's
+    # swim path was never extended to understand "hold"/"sharpen" blocks.
+    store = FileStore(base_dir=athletes_dir)
+    slug = "andrew"
+    athlete = store.load_athlete(slug)
+    _clear_workouts(athletes_dir, slug)
+    for w in range(20):
+        for offset in (2, 4, 6):
+            store.save_workout(
+                slug,
+                Workout(
+                    id=uuid.uuid4(),
+                    athlete_id=athlete.id,
+                    date=_SHARPENING_AS_OF - timedelta(days=w * 7 + offset),
+                    sport="swim_pool",
+                    source="manual",
+                    distance_m=3000,
+                    duration_min=60.0,
+                    rpe=5,
+                ),
+            )
+
+    events = store.load_events(slug)
+    events.append(
+        Event(
+            id=uuid.uuid4(),
+            athlete_id=athlete.id,
+            name="Swim Short Runway",
+            event_date=_SHARPENING_AS_OF + timedelta(weeks=5),
+            distance_m=5000,
+            priority="A",
+            # primary_sport defaults to "swim"
+        )
+    )
+    store.save_events(slug, events)
+
+    handlers = build_tool_handlers(store, slug=slug, expert_mode=False)
+    result = handlers["draft_macro_plan"](
+        {
+            "event_name": "Swim Short Runway",
+            "current_weekly_volume_m": 9000,
+            "start_date": _SHARPENING_AS_OF.isoformat(),
+        }
+    )
+
+    assert "error" in result
+    assert "need at least 8" in result["error"]
+
+
+def test_draft_macro_plan_long_runway_still_uses_standard_shape_unaffected(athletes_dir) -> None:
+    # Zero regression: an event with >= MIN_MACRO_WEEKS of runway must
+    # still get the exact standard-shape response as before this build,
+    # now with the new (additive) shape/shape_reason/weeks_available
+    # fields alongside it.
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["draft_macro_plan"](
+        {
+            "event_name": GREECE_EVENT_NAME + " Doesn't Exist",
+            "current_weekly_volume_m": 15000,
+        }
+    )
+    assert "error" in result  # sanity: confirms the fixture event name below is real
+    handlers["create_event"](
+        {
+            "name": "Zero Regression Long Runway Event",
+            "event_date": "2027-06-01",
+            "distance_m": 20000,
+            "priority": "B",
+        }
+    )
+    result = handlers["draft_macro_plan"](
+        {
+            "event_name": "Zero Regression Long Runway Event",
+            "current_weekly_volume_m": 15000,
+            "start_date": "2027-01-01",
+        }
+    )
+    assert "error" not in result
+    assert result["shape"] == "base_build_peak_taper"
+    assert result["established_base_evidence"] is None
+    assert [b["name"] for b in result["blocks"]] == ["base", "build", "peak", "taper"]
+
+
+def test_draft_macro_plan_shape_is_independent_of_which_goal_is_being_planned(athletes_dir) -> None:
+    # Mandatory correctness property #2, exercised end-to-end through the
+    # real tool handler (not just the bare engine function): the same real
+    # logged history, evaluated at the same start date, must produce the
+    # same shape decision regardless of which event/goal is passed in.
+    store = FileStore(base_dir=athletes_dir)
+    slug = "andrew"
+    athlete = store.load_athlete(slug)
+    _clear_workouts(athletes_dir, slug)
+    _log_consistent_bike_history(store, slug, athlete.id, weeks=20, as_of=_SHARPENING_AS_OF)
+
+    events = store.load_events(slug)
+    events.append(
+        Event(
+            id=uuid.uuid4(),
+            athlete_id=athlete.id,
+            name="Cyclocross Regional Championship",
+            event_date=_SHARPENING_AS_OF + timedelta(weeks=5),
+            target_metric="duration_min",
+            distance_m=None,
+            target_value=120.0,
+            priority="A",
+            primary_sport="bike",
+        )
+    )
+    events.append(
+        Event(
+            id=uuid.uuid4(),
+            athlete_id=athlete.id,
+            name="December MTB Enduro",
+            event_date=_SHARPENING_AS_OF + timedelta(weeks=5),
+            target_metric="duration_min",
+            distance_m=None,
+            target_value=120.0,
+            priority="A",
+            primary_sport="bike",
+        )
+    )
+    store.save_events(slug, events)
+
+    handlers = build_tool_handlers(store, slug=slug, expert_mode=False)
+    result_cyclocross = handlers["draft_macro_plan"](
+        {
+            "event_name": "Cyclocross Regional Championship",
+            "current_weekly_volume_m": 200,
+            "start_date": _SHARPENING_AS_OF.isoformat(),
+        }
+    )
+    result_mtb = handlers["draft_macro_plan"](
+        {
+            "event_name": "December MTB Enduro",
+            "current_weekly_volume_m": 200,
+            "start_date": _SHARPENING_AS_OF.isoformat(),
+        }
+    )
+
+    assert result_cyclocross["shape"] == result_mtb["shape"] == "hold_sharpen_taper"
+    assert (
+        result_cyclocross["established_base_evidence"]["established"]
+        == result_mtb["established_base_evidence"]["established"]
+        is True
+    )
+    assert (
+        result_cyclocross["established_base_evidence"]["weeks_with_load"]
+        == result_mtb["established_base_evidence"]["weeks_with_load"]
+    )
+    assert [b["name"] for b in result_cyclocross["blocks"]] == [
+        b["name"] for b in result_mtb["blocks"]
+    ]
 
 
 # --- replace_macro_plan ----------------------------------------------------------

@@ -25,14 +25,20 @@ from swim_coach.plan import (
     DEFAULT_BIKE_SESSION_MIN,
     DEFAULT_POOL_SESSION_MIN,
     LONG_SWIM_SHARE,
+    MIN_MACRO_WEEKS,
     MIN_RAMP_SEED_VOLUME_M,
     NO_COACH_POOL_SESSION_FLOOR_M,
     POOL_SESSION_EST_M,
     SESSION_ADJUSTMENT_INCREASE_CAP_PCT,
+    SHARPEN_WEEKS_MAX,
+    SHARPEN_WEEKS_MIN,
+    SHARPENING_MIN_MACRO_WEEKS,
     STRENGTH_CORE_EXERCISES,
     STRENGTH_EXERCISE_REFERENCE_URLS,
     STRENGTH_FULL_BODY_ADDITION,
     STRENGTH_SESSIONS_PER_WEEK,
+    TAPER_WEEKLY_DECAY,
+    TAPER_WEEKS_SHORT,
     WEEKLY_VOLUME_RAMP_CAP,
     _additional_swim_structure,
     _additional_swim_structure_template,
@@ -51,6 +57,7 @@ from swim_coach.plan import (
     count_structured_steps,
     generate_week,
     scaffold_macro,
+    scaffold_sharpening_macro,
 )
 from swim_coach.store import FileStore
 from swim_coach.workout_templates import render_prose, resolve_template
@@ -2876,3 +2883,344 @@ def test_generate_week_bike_primary_final_taper_week_no_floor_or_checklist_for_b
         event=event,
     )
     assert week.race_week_checklist == []
+
+
+# --- scaffold_sharpening_macro (sharpening-macro build) -----------------------------
+#
+# A second, genuinely DIFFERENT periodization shape from scaffold_macro's
+# own base->build->peak->taper -- see swim_coach.plan.scaffold_sharpening_
+# macro's own docstring. Andrew's real scenario: ~5.5 weeks to a cyclocross
+# peak, but already consistently training since April -- MIN_MACRO_WEEKS
+# (8) correctly refuses the standard shape, and this shape exists for
+# exactly that case.
+
+
+def _make_sharpening_event(**overrides):
+    data = dict(
+        id=uuid.uuid4(),
+        athlete_id=ATHLETE_ID,
+        name="CX Sharpening Goal",
+        event_date=START + timedelta(weeks=5),
+        target_metric="duration_min",
+        distance_m=None,
+        target_value=120.0,
+        priority="A",
+        primary_sport="bike",
+    )
+    data.update(overrides)
+    return Event(**data)
+
+
+def test_sharpening_min_macro_weeks_is_derived_and_below_min_macro_weeks():
+    # Non-negotiable design property: the sharpening shape's own floor is a
+    # DERIVED number (Issurin's minimum transmutation-block length +
+    # scaffold_macro's own short taper, both already-existing constants,
+    # not a newly-invented one), and always strictly below MIN_MACRO_WEEKS
+    # so the two shapes' accepted runway ranges never overlap.
+    assert SHARPENING_MIN_MACRO_WEEKS == SHARPEN_WEEKS_MIN + TAPER_WEEKS_SHORT
+    assert SHARPENING_MIN_MACRO_WEEKS < MIN_MACRO_WEEKS
+
+
+def test_scaffold_sharpening_macro_raises_below_its_own_min_weeks():
+    athlete = make_athlete(sports=["bike"])
+    event = _make_sharpening_event(event_date=START + timedelta(weeks=SHARPENING_MIN_MACRO_WEEKS - 1))
+    with pytest.raises(ValueError, match="need at least"):
+        scaffold_sharpening_macro(athlete, event, START, current_weekly_volume_m=300)
+
+
+def test_scaffold_sharpening_macro_refuses_runway_long_enough_for_the_standard_shape():
+    # This shape must never encroach on scaffold_macro's own territory --
+    # explicit "existing shape untouched" scope rule.
+    athlete = make_athlete(sports=["bike"])
+    event = _make_sharpening_event(event_date=START + timedelta(weeks=MIN_MACRO_WEEKS))
+    with pytest.raises(ValueError, match="scaffold_macro instead"):
+        scaffold_sharpening_macro(athlete, event, START, current_weekly_volume_m=300)
+
+
+def test_scaffold_sharpening_macro_block_allocation_no_hold_at_minimum_runway():
+    # weeks_available == SHARPENING_MIN_MACRO_WEEKS (4): all of it goes to
+    # sharpen (2, Issurin's own floor) + taper (2) -- no spare runway for
+    # a hold phase.
+    athlete = make_athlete(sports=["bike"])
+    event = _make_sharpening_event(event_date=START + timedelta(weeks=SHARPENING_MIN_MACRO_WEEKS))
+    macro = scaffold_sharpening_macro(athlete, event, START, current_weekly_volume_m=300)
+    weeks = {b.name: (b.end_date - b.start_date).days // 7 + 1 for b in macro.blocks}
+    assert [b.name for b in macro.blocks] == ["sharpen", "taper"]
+    assert weeks == {"sharpen": SHARPEN_WEEKS_MIN, "taper": TAPER_WEEKS_SHORT}
+    assert sum(weeks.values()) == SHARPENING_MIN_MACRO_WEEKS
+    assert macro.blocks[0].start_date == START
+    assert macro.blocks[-1].end_date == START + timedelta(weeks=SHARPENING_MIN_MACRO_WEEKS) - timedelta(days=1)
+
+
+def test_scaffold_sharpening_macro_block_allocation_sharpen_caps_at_issurin_max():
+    # weeks_available == 6: sharpen would want remainder(4)=4 which is
+    # exactly SHARPEN_WEEKS_MAX -- still no hold phase (remainder consumed
+    # entirely by sharpen).
+    athlete = make_athlete(sports=["bike"])
+    event = _make_sharpening_event(event_date=START + timedelta(weeks=6))
+    macro = scaffold_sharpening_macro(athlete, event, START, current_weekly_volume_m=300)
+    weeks = {b.name: (b.end_date - b.start_date).days // 7 + 1 for b in macro.blocks}
+    assert weeks == {"sharpen": SHARPEN_WEEKS_MAX, "taper": TAPER_WEEKS_SHORT}
+    assert sum(weeks.values()) == 6
+
+
+def test_scaffold_sharpening_macro_block_allocation_hold_appears_with_spare_runway():
+    # weeks_available == 7: remainder=5 > SHARPEN_WEEKS_MAX(4) -- sharpen
+    # caps at 4, and the leftover 1 week becomes a real `hold` block. This
+    # is the "only present if runway allows" property.
+    athlete = make_athlete(sports=["bike"])
+    event = _make_sharpening_event(event_date=START + timedelta(weeks=7))
+    macro = scaffold_sharpening_macro(athlete, event, START, current_weekly_volume_m=300)
+    assert [b.name for b in macro.blocks] == ["hold", "sharpen", "taper"]
+    weeks = {b.name: (b.end_date - b.start_date).days // 7 + 1 for b in macro.blocks}
+    assert weeks == {"hold": 1, "sharpen": SHARPEN_WEEKS_MAX, "taper": TAPER_WEEKS_SHORT}
+    assert sum(weeks.values()) == 7
+    # blocks are contiguous
+    for prev, curr in zip(macro.blocks, macro.blocks[1:]):
+        assert curr.start_date == prev.end_date + timedelta(days=1)
+
+
+def test_scaffold_sharpening_macro_andrews_real_scenario_five_and_a_half_weeks():
+    # Andrew's own real test case: ~5.5 weeks of runway (floors to 5 whole
+    # weeks, same _monday_on_or_after/_monday_of_week arithmetic scaffold_
+    # macro itself uses) toward a real cyclocross-shaped goal.
+    athlete = make_athlete(sports=["bike"])
+    event = _make_sharpening_event(
+        event_date=START + timedelta(weeks=5, days=3)  # ~5.5 weeks out
+    )
+    macro = scaffold_sharpening_macro(athlete, event, START, current_weekly_volume_m=300)
+    weeks = {b.name: (b.end_date - b.start_date).days // 7 + 1 for b in macro.blocks}
+    assert weeks == {"sharpen": 3, "taper": TAPER_WEEKS_SHORT}
+    assert sum(weeks.values()) == 5
+
+
+# --- Mandatory correctness property #1: genuinely different shape -------------------
+
+
+def test_scaffold_sharpening_macro_volume_is_flat_no_ramp_math_at_all():
+    # Direct proof this is NOT scaffold_macro's shape compressed into fewer
+    # weeks: scaffold_macro ramps linearly from a low starting volume to
+    # peak across its base+build weeks (WEEKLY_VOLUME_RAMP_CAP/week). This
+    # shape has NO ramp math at all -- hold and sharpen both end at the
+    # exact same flat volume as current_weekly_volume_m.
+    athlete = make_athlete(sports=["bike"])
+    event = _make_sharpening_event(event_date=START + timedelta(weeks=7))
+    macro = scaffold_sharpening_macro(athlete, event, START, current_weekly_volume_m=300)
+    hold_block = next(b for b in macro.blocks if b.name == "hold")
+    sharpen_block = next(b for b in macro.blocks if b.name == "sharpen")
+    assert hold_block.weekly_volume_target_m == 300
+    assert sharpen_block.weekly_volume_target_m == 300
+
+
+def test_scaffold_sharpening_macro_generate_week_interpolation_is_flat_across_hold_and_sharpen():
+    # Not just the block-level end target -- prove every INDIVIDUAL week
+    # generate_week produces within hold/sharpen carries the identical
+    # target_volume_m (flat), in direct contrast to scaffold_macro's own
+    # base block, where generate_week's linear interpolation makes each
+    # week's target STRICTLY GREATER than the last (a real ramp). Same
+    # athlete, same current volume, both real generate_week calls -- not an
+    # assertion about the block config alone.
+    athlete = make_athlete(sports=["bike"])
+    event = _make_sharpening_event(event_date=START + timedelta(weeks=7))
+    sharp_macro = scaffold_sharpening_macro(athlete, event, START, current_weekly_volume_m=300)
+
+    sharp_targets = []
+    for block in sharp_macro.blocks:
+        if block.name not in ("hold", "sharpen"):
+            continue
+        weeks_in_block = (block.end_date - block.start_date).days // 7 + 1
+        for i in range(weeks_in_block):
+            week_start = block.start_date + timedelta(weeks=i)
+            week = generate_week(
+                athlete, sharp_macro, _iso_week(week_start), week_start, primary_sport="bike"
+            )
+            sharp_targets.append(week.target_volume_m)
+    assert sharp_targets == [300] * len(sharp_targets)  # flat -- no ramp, by construction
+
+    # Contrast: scaffold_macro's own base block for a real long-runway
+    # SWIM macro (deliberately swim, not bike, here -- bike's own periodic
+    # deload cadence would otherwise interrupt monotonicity for an
+    # unrelated reason; swim's base/build/peak span is documented to climb
+    # with no deload at all, the cleanest "genuine ramp" contrast) -- its
+    # weekly targets strictly increase week over week, the exact shape this
+    # build must NOT reproduce for the sharpening macro.
+    swim_athlete = make_athlete()
+    swim_event = make_event(event_date=START + timedelta(weeks=24))
+    long_macro = scaffold_macro(
+        swim_athlete, swim_event, START, current_weekly_volume_m=8000, peak_weekly_volume_m=20000
+    )
+    base_block = next(b for b in long_macro.blocks if b.name == "base")
+    weeks_in_base = (base_block.end_date - base_block.start_date).days // 7 + 1
+    base_targets = []
+    for i in range(weeks_in_base):
+        week_start = base_block.start_date + timedelta(weeks=i)
+        week = generate_week(swim_athlete, long_macro, _iso_week(week_start), week_start)
+        base_targets.append(week.target_volume_m)
+    assert base_targets == sorted(base_targets)
+    assert len(set(base_targets)) > 1  # a real ramp, not flat like the sharpening shape
+
+
+def test_scaffold_sharpening_macro_taper_reuses_existing_decay_formula_unchanged():
+    # The taper block is NOT re-derived -- it decays off the flat
+    # hold/sharpen volume via the exact same TAPER_WEEKLY_DECAY formula
+    # scaffold_macro's own taper block uses off its (ramped) peak.
+    athlete = make_athlete(sports=["bike"])
+    event = _make_sharpening_event(event_date=START + timedelta(weeks=6))
+    macro = scaffold_sharpening_macro(athlete, event, START, current_weekly_volume_m=300)
+    taper_block = next(b for b in macro.blocks if b.name == "taper")
+    expected = max(0, round(300 * (1 - TAPER_WEEKLY_DECAY * TAPER_WEEKS_SHORT)))
+    assert taper_block.weekly_volume_target_m == expected
+
+
+def test_scaffold_sharpening_macro_explicit_sharpen_volume_overrides_current():
+    athlete = make_athlete(sports=["bike"])
+    event = _make_sharpening_event(event_date=START + timedelta(weeks=6))
+    macro = scaffold_sharpening_macro(
+        athlete, event, START, current_weekly_volume_m=300, sharpen_weekly_volume_m=250
+    )
+    sharpen_block = next(b for b in macro.blocks if b.name == "sharpen")
+    assert sharpen_block.weekly_volume_target_m == 250
+
+
+def test_scaffold_sharpening_macro_produces_a_valid_macro_plan_for_swim_athlete_too():
+    # scaffold_sharpening_macro itself is sport-agnostic block-building math
+    # (like scaffold_macro) -- it is the TOOL LAYER (backend/app/tools.py)
+    # that scopes real invocation to primary_sport="bike" for this build,
+    # not this engine function itself refusing a swim athlete. Confirms the
+    # function doesn't crash/misbehave for a swim event; does not claim
+    # generate_week's swim path was extended to understand "hold"/"sharpen"
+    # (explicitly out of scope -- see MacroBlock.name's own docstring).
+    athlete = make_athlete()
+    event = make_event(
+        event_date=START + timedelta(weeks=5), name="Short-runway swim goal"
+    )
+    macro = scaffold_sharpening_macro(athlete, event, START, current_weekly_volume_m=8000)
+    assert [b.name for b in macro.blocks] == ["sharpen", "taper"]
+
+
+# --- generate_week bike-path handling of hold/sharpen blocks -------------------------
+
+
+@pytest.fixture
+def sharpening_bike_macro():
+    athlete = make_athlete(sports=["bike"])
+    event = _make_sharpening_event(event_date=START + timedelta(weeks=7))
+    macro = scaffold_sharpening_macro(athlete, event, START, current_weekly_volume_m=300)
+    return athlete, event, macro
+
+
+def test_generate_week_bike_primary_produces_real_sessions_for_hold_block(sharpening_bike_macro):
+    athlete, event, macro = sharpening_bike_macro
+    hold_block = next(b for b in macro.blocks if b.name == "hold")
+    week = generate_week(
+        athlete, macro, _iso_week(hold_block.start_date), hold_block.start_date, primary_sport="bike"
+    )
+    assert week.meso_block == "hold"
+    bike_sessions = [s for s in week.sessions if s.sport == "bike"]
+    assert len(bike_sessions) >= 1
+    assert all(s.duration_min > 0 for s in bike_sessions)
+
+
+def test_generate_week_bike_primary_produces_real_sessions_for_sharpen_block(sharpening_bike_macro):
+    athlete, event, macro = sharpening_bike_macro
+    sharpen_block = next(b for b in macro.blocks if b.name == "sharpen")
+    week = generate_week(
+        athlete, macro, _iso_week(sharpen_block.start_date), sharpen_block.start_date, primary_sport="bike"
+    )
+    assert week.meso_block == "sharpen"
+    bike_sessions = [s for s in week.sessions if s.sport == "bike"]
+    assert len(bike_sessions) >= 1
+    # Real race-specific interval content -- reuses the existing template
+    # rotation, not a flat generic block.
+    hard_sessions = [s for s in bike_sessions if "endurance ride" not in s.purpose]
+    assert len(hard_sessions) >= 1
+
+
+def test_generate_week_bike_primary_hold_and_sharpen_never_get_scheduled_deload(sharpening_bike_macro):
+    # Deliberate design decision (see the code comment above is_deload_week
+    # in generate_week): hold/sharpen are excluded from the periodic
+    # BIKE_DELOAD_CADENCE_WEEKS step-down, same as taper already is -- a
+    # short, already-concentrated block has nothing to "step down" from.
+    athlete, event, macro = sharpening_bike_macro
+    for block in macro.blocks:
+        if block.name not in ("hold", "sharpen"):
+            continue
+        weeks_in_block = (block.end_date - block.start_date).days // 7 + 1
+        for i in range(weeks_in_block):
+            week_start = block.start_date + timedelta(weeks=i)
+            week = generate_week(
+                athlete, macro, _iso_week(week_start), week_start, primary_sport="bike"
+            )
+            assert "deload" not in week.focus.lower()
+
+
+# --- Mandatory correctness property #2: base-detection is athlete-level, --------------
+# --- event-independent (has_established_training_base lives in load.py; -------------
+# --- see tests/unit/test_load.py for the direct, structural proof). This ------------
+# --- test proves the SAME macro shape and volumes come out of scaffold_ -------------
+# --- sharpening_macro regardless of which event/goal it's called for, given --------
+# --- the same athlete/current-volume/start -- the engine layer itself carries -------
+# --- no event-specific branching that could make the shape depend on the goal. -------
+
+
+def test_scaffold_sharpening_macro_same_shape_regardless_of_which_goal_is_passed():
+    athlete = make_athlete(sports=["bike"])
+    cyclocross_goal = _make_sharpening_event(
+        name="Cyclocross Regional Championship", event_date=START + timedelta(weeks=5, days=3)
+    )
+    unrelated_mtb_goal = _make_sharpening_event(
+        name="December MTB Enduro", event_date=START + timedelta(weeks=5, days=3)
+    )
+    macro_a = scaffold_sharpening_macro(athlete, cyclocross_goal, START, current_weekly_volume_m=300)
+    macro_b = scaffold_sharpening_macro(athlete, unrelated_mtb_goal, START, current_weekly_volume_m=300)
+
+    shape_a = [(b.name, (b.end_date - b.start_date).days, b.weekly_volume_target_m) for b in macro_a.blocks]
+    shape_b = [(b.name, (b.end_date - b.start_date).days, b.weekly_volume_target_m) for b in macro_b.blocks]
+    assert shape_a == shape_b
+
+
+# --- Mandatory correctness property #3: zero regression to scaffold_macro's ----------
+# --- existing shape -- pinned, exact expected values (a snapshot), not just ----------
+# --- "the old tests still pass" -----------------------------------------------------
+
+
+def test_scaffold_macro_swim_macro_unchanged_pinned_snapshot():
+    athlete = make_athlete()
+    event = make_event(event_date=START + timedelta(weeks=24))
+    macro = scaffold_macro(
+        athlete, event, START, current_weekly_volume_m=8000, peak_weekly_volume_m=20000
+    )
+    snapshot = [
+        (b.name, b.start_date.isoformat(), b.end_date.isoformat(), b.weekly_volume_target_m)
+        for b in macro.blocks
+    ]
+    assert snapshot == [
+        ("base", "2026-01-05", "2026-03-22", 17000),
+        ("build", "2026-03-23", "2026-05-03", 20000),
+        ("peak", "2026-05-04", "2026-05-24", 20000),
+        ("taper", "2026-05-25", "2026-06-21", 0),
+    ]
+
+
+def test_scaffold_macro_long_runway_bike_macro_unchanged_pinned_snapshot():
+    athlete = make_athlete(sports=["bike"])
+    event = make_event(
+        event_date=START + timedelta(weeks=24),
+        target_metric="duration_min",
+        distance_m=None,
+        target_value=300.0,
+        primary_sport="bike",
+    )
+    macro = scaffold_macro(
+        athlete, event, START, current_weekly_volume_m=200, peak_weekly_volume_m=600
+    )
+    snapshot = [
+        (b.name, b.start_date.isoformat(), b.end_date.isoformat(), b.weekly_volume_target_m)
+        for b in macro.blocks
+    ]
+    assert snapshot == [
+        ("base", "2026-01-05", "2026-03-22", 510),
+        ("build", "2026-03-23", "2026-05-03", 600),
+        ("peak", "2026-05-04", "2026-05-24", 600),
+        ("taper", "2026-05-25", "2026-06-21", 0),
+    ]
