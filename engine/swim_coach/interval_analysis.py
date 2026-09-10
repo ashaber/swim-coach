@@ -1,11 +1,11 @@
 """Deterministic activity-stream interval analyzer.
 
 Answers "did I hit my intervals?" from a synced ride, spending **zero LLM
-tokens** on the stream: a standard span-scan detects sustained efforts
-within a ride (even mid-3-hour-ride), each effort is assessed against its
-prescribed target when one is recoverable, and the athlete's real-world
-terrain confounds (a threshold interval up a steepening dirt road reads
-like a power fade) are flagged rather than silently mis-called.
+tokens** on the stream: a span-scan detects sustained efforts within a ride
+(even mid-3-hour-ride), each effort is assessed against its prescribed
+target when one is recoverable, and the athlete's real-world terrain
+confounds (a threshold interval up a steepening dirt road reads like a
+power fade) are flagged rather than silently mis-called.
 
 Pure functions over the columnar series dict `parse_files._build_series`
 produces (`t_s` plus `power_w`/`hr`/`grade`/... channels) -- no I/O, no
@@ -14,6 +14,31 @@ turns this into a persisted `models.WorkoutIntervals`.
 
 Every named threshold below cites `library/11-workout-analytics.md`'s
 "Deterministic activity-stream interval analyzer" section.
+
+## Algorithms (each detailed in its function's docstring)
+
+1. **Effort detection** (`detect_efforts`) -- single linear pass over the
+   power channel (HR if there's no power). A sample is "above" a threshold
+   (either 80% of a supplied target, or a dynamically derived percentile
+   band of the ride's own working power); a run of above-samples is an
+   effort, sub-25s dips inside it are bridged, and only runs lasting >=120s
+   are kept. O(n), no windowing, no ML.
+2. **Per-effort quality** (`assess_effort`) -- split each effort's samples
+   into equal thirds and compare first-vs-last: mean power, %-of-target,
+   time within +/-5% of target, power fade %, HR drift, mean-grade change.
+3. **Terrain confound** (`_terrain_flag`) -- a fixed decision tree over
+   (fade %, HR drift, grade change) that decides whether a power fade is
+   downhill terrain, the athlete backing off, or a genuine
+   fatigue/durability fade.
+4. **Prescription match** (`match_efforts_to_structure`) -- flatten the
+   planned `WorkoutStructure` to a list of interval reps (expanding repeat
+   counts), then align the i-th detected effort to the i-th prescribed rep
+   positionally, with a +/-25% duration tolerance.
+5. **Tightened decoupling** (`tightened_decoupling`) -- the standard
+   first-half vs second-half efficiency-factor (HR / power) ratio, but
+   computed only over genuinely working samples, and refused (with a
+   reason) when the ride is too stop-start for that number to mean
+   anything.
 """
 
 from __future__ import annotations
@@ -207,11 +232,33 @@ def detect_efforts(
     efforts above a threshold, bridging dips shorter than `merge_gap_s` and
     keeping only spans lasting at least `min_effort_s`.
 
-    Threshold: `target_w * TARGET_GATE_FRAC` when a target is supplied;
-    otherwise dynamic -- `EFFORT_DYNAMIC_FRAC` of the way from the ride's
-    own 40th-percentile working value to its 85th-percentile working value.
-    Deterministic, standard span-scan -- no ML, works on a whole ride
-    regardless of length. See `library/11-workout-analytics.md`.
+    Algorithm (single linear pass, O(n)):
+
+    1. **Pick the channel**: `power_w` if it has any real samples, else
+       `hr`, else return `[]`.
+    2. **Derive the threshold**:
+       - *Target supplied* (power only): `threshold = target_w *
+         TARGET_GATE_FRAC` (0.80) -- a rider at 80% of target is still
+         visibly attempting the interval.
+       - *No target* (dynamic): take all "working" samples (power >
+         `COASTING_FLOOR_W`, or all non-null HR), sort them, and set
+         `threshold = P40 + EFFORT_DYNAMIC_FRAC * (P85 - P40)` where P40/P85
+         are the 40th/85th percentiles by linear interpolation
+         (`_percentile`). This floats with the ride: high enough to skip
+         steady endurance riding, low enough to catch a threshold (not just
+         VO2) interval. Needs >=10 working samples or returns `[]`.
+    3. **Span-scan**: walk every sample once. `above = value >= threshold`.
+       Opening an effort on the first `above`; tracking `last_above_idx` on
+       each subsequent `above`. On a `below` sample, if the time since
+       `last_above_idx` exceeds `merge_gap_s` (25s), close the effort at
+       `last_above_idx` -- so a corner, a freewheel over a crest, or a
+       rough patch inside an interval does not split it. Flush any open
+       effort at end-of-ride.
+    4. **Keep / drop**: an effort survives only if `end_s - start_s >=
+       min_effort_s` (120s). Survivors are renumbered 1..k.
+
+    No windowing, no smoothing, no ML; works on a whole ride of any length.
+    See `library/11-workout-analytics.md`.
     """
     t_s = series.get("t_s")
     picked = _detection_channel(series)
@@ -282,7 +329,26 @@ def assess_effort(
 ) -> EffortQuality:
     """Assess one detected effort: average power, average-vs-target (W and
     %), time-in-target-band %, within-effort power fade %, HR drift, and a
-    terrain-confound flag. See `library/11-workout-analytics.md`.
+    terrain-confound flag.
+
+    Algorithm: slice the series to the effort's `[start_idx, end_idx]`
+    range, then:
+    - **avg power** = mean of non-null `power_w`.
+    - **vs target** (only if `target_w` given): `pct_of_target = avg / tgt
+      * 100`; `avg_vs_target_w = avg - tgt`; `time_in_band_pct` = fraction
+      of samples with `tgt*(1-IN_BAND_FRAC) <= p <= tgt*(1+IN_BAND_FRAC)`
+      (+/-5%).
+    - **fade %** = split the power samples into equal thirds (`_thirds`),
+      `(mean(first_third) - mean(last_third)) / mean(first_third) * 100`.
+      Positive = faded; negative = built through it.
+    - **HR drift** = `mean(hr last third) - mean(hr first third)`, in bpm.
+    - **grade delta** = `(mean(grade first third) - mean(grade last
+      third)) * 100`, in percentage points -- positive means the last
+      third was less uphill.
+    - **terrain flag** = `_terrain_flag(fade, hr_drift, grade_delta)`.
+    - **verdict** = `_verdict(...)` -- a one-line human summary.
+
+    See `library/11-workout-analytics.md`.
     """
     a, b = effort.start_idx, effort.end_idx + 1
     power = (series.get("power_w") or [])[a:b]
@@ -341,6 +407,18 @@ def assess_effort(
 def _terrain_flag(
     fade_pct: float | None, hr_drift_bpm: float | None, grade_delta_pct_pts: float | None
 ) -> str | None:
+    """Fixed decision tree, evaluated in this order (first match wins):
+    1. fade <= 3% -> `None` (nothing to explain).
+    2. grade dropped >= `GRADE_DROP_FLAG` AND HR held/rising -> "terrain":
+       the power fell because the road stopped climbing, not because the
+       athlete tired.
+    3. HR dropped >= `HR_BACKOFF_DROP_BPM` (alongside the fade) -> "backed
+       off": power and HR fell together.
+    4. fade >= `FADE_FLAG_PCT` (10%) AND HR held/rising -> "genuine fade":
+       power fell while HR did not -- fatigue/durability.
+    5. otherwise -> `None`.
+    "held/rising" = HR drift >= `-HR_HELD_BAND_BPM` (>= -2 bpm).
+    """
     if fade_pct is None or fade_pct <= 3.0:
         return None  # no meaningful fade to explain
     hr_held_or_rising = hr_drift_bpm is None or hr_drift_bpm >= -HR_HELD_BAND_BPM
@@ -428,8 +506,23 @@ def _prescribed_reps(structure: WorkoutStructure) -> list[tuple[float | None, fl
 def match_efforts_to_structure(
     detected: list[DetectedEffort], structure: WorkoutStructure | None
 ) -> MatchResult:
-    """Align detected efforts to a prescribed structure's interval reps, in
-    order. When `structure` is `None` or carries no interval reps, returns
+    """Align detected efforts to a prescribed structure's interval reps.
+
+    Algorithm:
+    1. `_prescribed_reps` flattens the `WorkoutStructure` tree to an
+       ordered `[(duration_s, target_w), ...]` list of every
+       `role == "interval"` leaf, expanding each `WorkoutRepeat` by its
+       `count`. `target_w` comes from a `basis == "power_w"` target's
+       `low`/`high` midpoint.
+    2. **Positional alignment**: the i-th prescribed rep is matched to the
+       i-th detected effort (no reordering, no best-fit search). A rep's
+       `duration_ok` is `abs(detected.duration_s - prescribed) <=
+       prescribed * DURATION_TOLERANCE_FRAC` (+/-25%). Prescribed reps
+       past the end of the detected list get `(None, target_w, False)`.
+    3. `matched` is `True` only if the counts are equal AND every rep's
+       `duration_ok`.
+
+    When `structure` is `None` or carries no interval reps, returns
     `matched=False` and the caller reports the detected efforts raw with a
     caller-supplied target. See `library/11-workout-analytics.md`.
     """
@@ -467,10 +560,22 @@ def tightened_decoupling(
 ) -> tuple[float | None, str]:
     """The standard first-half-EF vs second-half-EF aerobic-decoupling
     formula (as `analytics.cardiac_drift` uses), but filtered to genuinely
-    *working* samples: power above `exclude_below_w` (speed > 0.5 m/s when
-    there's no power). Returns `(None, reason)` when the ride is too
-    stop-start for the number to mean anything (less than
-    `TIGHTENED_DECOUPLING_MIN_WORKING_FRAC` of moving time was working).
+    *working* samples.
+
+    Algorithm:
+    1. Require an HR channel and a power (or speed) channel, else
+       `(None, reason)`.
+    2. `moving` = samples with HR and a positive effort value. `working`
+       = `moving` filtered to effort `> floor` (`exclude_below_w` for
+       power, 0.5 m/s for speed).
+    3. If `len(working) / len(moving) < TIGHTENED_DECOUPLING_MIN_WORKING_
+       FRAC` (0.5), the ride was too stop-start -- return `(None, reason)`
+       rather than a misleading number.
+    4. Split `working` at its own time midpoint into `first` / `second`.
+    5. For each half, `EF = mean(HR) / mean(effort)`. Decoupling `pct =
+       (EF_second / EF_first - 1) * 100` -- positive means HR crept up
+       relative to power (aerobic system drifting).
+
     SUPPLEMENTS `WorkoutAnalytics.cardiac_drift_pct`; never replaces it.
     See `library/11-workout-analytics.md`.
     """
@@ -541,6 +646,19 @@ def analyze(
     coach passing "2x12 at 91% of 263W"). `structure`, when a
     `WorkoutStructure` is recoverable for the session, aligns detected
     efforts to prescribed reps and takes each rep's own `power_w` target.
+
+    Orchestration:
+    1. Gate: `sport == "bike"` and a usable power/HR series, else `None`.
+    2. `detect_efforts` -> list of `DetectedEffort` spans.
+    3. `match_efforts_to_structure` -> positional rep alignment (only used
+       to set `matched_to_prescription` and, per-effort, to prefer that
+       rep's own `power_w` target over the caller's `target_w`).
+    4. For each effort: `assess_effort` with the effective target (rep
+       target if matched, else `target_w`) -> a persisted
+       `models.IntervalEffort`.
+    5. `tightened_decoupling` over the whole series -> one ride-level
+       number + note.
+    6. Assemble into `models.WorkoutIntervals`.
     """
     if sport != "bike" or not series:
         return None
