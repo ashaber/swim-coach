@@ -446,3 +446,74 @@ b. **Goal ideation (conversational, coach-side).** SMART goals are a
    feasibility grounding -- and only then SMART-validating the result. A
    conversational "goal discovery" capability sitting *before*
    SMART-goal-setting, not instead of it.
+
+## IDEA 011 - Goal-specific interval-structure research (the sharpen-phase content gap)
+
+Found live, not speculated: the established-base "sharpening" macro shape
+(built for Andrew's real cyclocross case -- `scaffold_sharpening_macro`,
+`hold -> sharpen -> taper`) correctly recognizes *whether* an athlete needs
+a base-building phase at all (a real, goal-independent signal derived from
+logged training history), but the actual session CONTENT generated within
+the sharpen phase is not goal-aware -- it's the four interval templates
+built specifically for CX (sustained threshold, over/unders, short-short
+VO2, race-pace), and would be wrong for a structurally different goal (e.g.
+a hypothetical ultra-endurance event needing extended steady-state work and
+fueling rehearsal instead of short high-intensity efforts). Andrew's own
+framing: this needs real research into how interval STRUCTURE should map
+to (a) the specific physiological adaptation being targeted and (b) how
+that adaptation serves a given goal's actual demands -- not assumed to
+generalize from one goal (CX) to a structurally different one.
+
+Confirmed hypothetical for now (Andrew has no actual competing goal today)
+-- captured so it's not lost, not because it's urgent. Natural next step
+once a second, genuinely different goal type is real (a distance-endurance
+event, a skills-based goal, etc.): research the interval taxonomy for THAT
+goal type the same way `library/24-cycling-periodization-intervals.md` did
+for CX, rather than assuming the existing four templates transfer.
+
+## IDEA 012 - Autoregulation: adapting future workouts from real performance/RPE signal
+
+Andrew's stretch-goal framing, verbatim in spirit: analyze the quality and
+RPE of a completed workout to adapt FUTURE workouts to match what the
+athlete is actually ready for -- and skepticism, also verbatim in spirit,
+that TrainerRoad's marketing (positioning this as achievable only through
+their proprietary ML) is overselling a simpler mechanism.
+
+**That skepticism is well-founded, checked against real research this
+session, not just asserted:** autoregulation (adjusting training load in
+real time based on RPE, reps-in-reserve, or session performance) is a
+real, peer-reviewed exercise-science concept -- used in BOTH strength and
+endurance training, not ML-exclusive or proprietary. The core mechanism
+(use a completed session's real performance/RPE signal to inform the next
+prescription) is achievable with rule-based, deterministic methods, matching
+this project's own "engine owns plan math, agent applies judgment"
+architecture. Where ML *could* add real value -- large-scale pattern
+detection across many athletes' data, fine-grained personalization -- swim
+coach doesn't have that data volume and isn't claiming to compete on it;
+the honest, achievable version here is a principled autoregulation rule,
+not a marketing-scale claim.
+
+**Real, already-existing foundation to build on, not a green field:**
+`engine/swim_coach/quality.py`'s `workout_quality`/`session_target_load_au`
+already compute a per-workout planned-vs-actual load delta (`load_delta_
+pct`) -- but that module's own docstring states plainly it is "purely
+informational... never wired into weekly rollups or adaptation decisions."
+This is exactly the raw signal autoregulation needs, already built,
+deliberately inert.
+
+**The real precedent for how to wire it in safely already exists too, and
+should be followed, not reinvented:** `library/17-wellness-load-integration.md`'s
+own "Recommendation, not yet built" section (a different question --
+wellness/HRV contradiction signals -- but the same underlying caution)
+explicitly argues AGAINST auto-wiring an unvalidated signal into
+`adapt_week`'s decision path, recommending instead a purely informational
+flag (`"confirming"|"contradicting"|"insufficient-data"`-shaped) that a
+human/coach reviews, never an automatic plan rewrite. Apply the same
+posture here: a real autoregulation build should start as an informational
+signal surfaced to the coach (e.g. "this athlete has consistently under/
+over-performed prescribed RPE for N sessions -- consider adjusting"), not
+an automatic engine decision from day one.
+
+Not built here -- captured as a real, well-grounded stretch goal, with its
+building block already in the codebase and its safe-wiring precedent
+already proven correct once.
