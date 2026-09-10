@@ -49,6 +49,23 @@ class Athlete(BaseModel):
     zones: dict | None = None
     constraints: dict = Field(default_factory=dict)
     pool_schedule: list[str | dict] = Field(default_factory=list)
+    training_days: dict[str, list[str | dict]] | None = None
+    # Per-sport weekly training-day PATTERN -- the bike/skills counterpart
+    # to `pool_schedule` above (which only ever covered pool days). Maps a
+    # session-kind key (free strings) to an ordered list of weekday entries
+    # in the SAME `str | dict` shape `pool_schedule` accepts ("tue" /
+    # {"day": "tue"}), so `plan._pool_day_offset` resolves both. The engine
+    # consumes the `"skills"` key today (`engine/cx-skills-day-content`): a
+    # `"skills"` entry places a cyclocross bike-handling session
+    # (`plan._skills_sessions`) on those weekdays for a
+    # `primary_sport="bike"` week. `None` (the default -- every existing
+    # profile.yaml has no `training_days` key) means "no pattern declared";
+    # `generate_week`'s output is then byte-for-byte unchanged. Additive/
+    # optional, no schema_version bump, same convention as every other
+    # additive field in this file. NOTE: the unmerged
+    # engine/week-generator-realism branch (#174) also adds this exact
+    # field plus `"bike"`/`"strength"` consumers -- expect a trivial
+    # merge/rebase here (identical field line, adjacent comment).
     # Demographic fields: all optional, defaulting to None, so every
     # existing profile.yaml (with none of these keys) keeps validating
     # unchanged -- additive, no schema_version bump needed. Store dob, not
