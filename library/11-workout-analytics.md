@@ -162,97 +162,10 @@ sessions whose raw sport is `"cycling"` (the `_is_cycling_sport` gate).
 
 ## Deterministic activity-stream interval analyzer
 
-Grounds `engine/swim_coach/interval_analysis.py` (detect sustained efforts
-in a ride, assess each vs a target, flag terrain confounds; no LLM tokens
-spent on the stream). Most thresholds are engineering defaults / coach
-judgment chosen against this athlete's real cycling `.fit` data; two carry
-an ADAPTED (cycling) tag with its own Confidence/Test, below.
-
-### Detection thresholds (coach judgment)
-
-**Coach judgment:** `EFFORT_MIN_S = 120.0` (shortest span counted as a
-deliberate effort — structured cycling work bouts are minutes, not seconds;
-cf. `24-cycling-periodization-intervals.md`), `EFFORT_MERGE_GAP_S = 25.0`
-(a shorter sub-threshold dip — a corner, a freewheel over a crest — doesn't
-end the effort), `EFFORT_DYNAMIC_FRAC = 0.62` (with no supplied target the
-threshold sits this far from the ride's 40th- toward its 85th-percentile
-working power), `COASTING_FLOOR_W = 20.0` (at/below this the rider is
-freewheeling), `TARGET_GATE_FRAC = 0.80` (with a target supplied, "in an
-effort" means >= 80% of it — 195W against a 239W target is still an
-attempt). All engineering defaults tuned so the scan ignores steady
-endurance riding but catches a threshold interval; none is a cited value.
-
-### Interval quality vs. target
-
-**[ADAPTED: cycling] Confidence: medium.** `IN_BAND_FRAC = 0.05` — percent
-of an interval's samples within +/-5% of target power is the compliance
-metric the power-meter-training literature favours, explicitly *not*
-normalized power (a fatigue-cost estimate that outdoor coasting/surging
-inflates, misleading a time-in-zone read). The +/-5% band is the standard
-practitioner target-range width in the Allen/Coggan lineage (`Allen H.,
-Coggan A. (2010)` / `(2019)`, *Training and Racing with a Power Meter*;
-`reference_list.md`, "Cycling training (native)"), corroborated by
-convergent secondary sources (TrainingPeaks, TrainerRoad, CTS). **Test:**
-if this athlete's "on target" intervals routinely coincide with her saying
-the session felt too easy/hard, revisit the band against her own RPE/HR.
-
-**[ADAPTED: cycling] Confidence: medium.** `FADE_FLAG_PCT = 10.0` —
-first-third-vs-last-third mean power drop within one effort. `Barsumyan A.,
-Soost C., Burchard R. (2025)`, "Enhanced durability predicts success in
-amateur road cycling: evidence of power output declines" — *Frontiers in
-Sports and Active Living* (`reference_list.md`, "Cycling training
-(native)") — found ~6.5% first-to-last power decline over a fatigued 20-min
-TT in *successful* amateur road cyclists vs ~12.5% in *less successful*
-ones (n=14; no 5-min or HR-response difference), so a within-interval fade
-past ~10% is a real durability/pacing signal, not noise. One small
-trained-amateur study of a fixed fatiguing protocol, not this athlete's
-field intervals — hence medium. **Test:** if her flagged >10%-fade
-intervals don't track hard days / poor fuelling / heat / late-ride efforts
-more than her non-flagged ones, recalibrate from her own data.
-
-### Terrain-confound detection (coach judgment)
-
-**Coach judgment:** the confound this analyzer exists for — "a threshold
-interval up a steepening dirt road reads like a power fade" — is flagged
-from three engineering defaults: `GRADE_DROP_FLAG = 0.03` (a first-third-
-to-last-third mean-grade decrease >= 3 percentage points is "materially
-more downhill"), `HR_HELD_BAND_BPM = 2.0` (HR drift within +/-2 bpm is
-"held"), `HR_BACKOFF_DROP_BPM = 5.0` (HR falling > 5 bpm alongside a power
-fade reads as easing off). Rule: fade + grade dropped + HR held/rising ->
-"likely terrain"; fade + HR dropped hard -> "backed off"; fade >= 10% + HR
-held/rising + grade NOT dropped -> "genuine fade". No cited physiological
-threshold — read-the-data-not-the-label heuristics, same spirit as
-`_is_cycling_sport`; verified to behave sensibly on `real_mtb_race.fit`.
-**Test:** if the flag fires on efforts she calls genuine fades (or misses
-ones she calls terrain), tighten `GRADE_DROP_FLAG` / the HR bands against
-her annotated rides.
-
-### Tightened aerobic decoupling (supplements `cardiac_drift_pct`, never replaces it)
-
-**Coach judgment:** `TIGHTENED_DECOUPLING_MIN_WORKING_FRAC = 0.5`. The
-standard first-half-EF vs second-half-EF calc (`analytics.cardiac_drift`)
-is documented by TrainingPeaks (`reference_list.md`, "Practical / non-
-journal resources") as **invalid on "variable, stop-start or all-out"
-rides** — exactly why this athlete's dirt-road interval rides confound the
-unfiltered `cardiac_drift_pct`. `tightened_decoupling` runs the same
-formula on genuinely *working* samples only (power > `COASTING_FLOOR_W`;
-speed > 0.5 m/s absent power), returning `(None, reason)` when < 50% of
-moving time was working. Both numbers are reported; the tightened one is
-labelled with the fraction of moving time it covers. The 50% floor is a
-coach-judgment cutoff. **Test:** the tightened and unfiltered numbers
-should roughly agree on her steady Z2 rides and diverge (tightened =
-trustworthy, or `None`) on stop-start interval rides; if the tightened one
-is still noisy on steady rides, the working-sample filter needs work.
-
-### Match-to-prescription (coach judgment)
-
-**Coach judgment:** `DURATION_TOLERANCE_FRAC = 0.25` — a detected effort
-within +/-25% of a prescribed rep's duration is "the same rep" when
-aligning efforts to a recovered `WorkoutStructure`'s interval steps in
-order. With no recoverable structure (the common case — `planned_session_
-id` is never populated in practice, and a TrainerRoad-originated workout
-carries none), efforts are reported raw against a caller-supplied target.
-Engineering default.
+Moved to its own topic file, `26-activity-stream-interval-analysis.md` (this file hit the 2,500-word cap). That file grounds every
+`engine/swim_coach/interval_analysis.py` constant -- effort detection, micro-interval set clustering, the non-effort filter, per-effort
+quality vs target, the adaptive in-band tolerance, terrain-confound flags, over/under sub-resolution, tightened decoupling and its
+all-interval guard, and match-to-prescription. `11` keeps only the cross-sport analytics constants (`analytics.py`).
 
 ## What's still a gap
 

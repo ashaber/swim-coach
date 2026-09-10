@@ -623,6 +623,30 @@ class WorkoutPause(BaseModel):
     source: Literal["timer", "gap", "idle_length", "stationary"]
 
 
+class IntervalSubStructure(BaseModel):
+    """The internal shape of one detected effort that isn't a single flat
+    block -- either a VO2 "rep set" (a run of short on/off reps collapsed
+    into one effort by `interval_analysis`'s set-clustering pass) or an
+    "over/under" (a continuous block whose power oscillates in a roughly
+    regular high/low pattern). `pattern` discriminates; the `high_*`/`low_*`
+    fields carry the ON/OVER vs float/UNDER halves either way. See
+    `library/26-activity-stream-interval-analysis.md` ("Micro-interval
+    detection and set clustering", "Over/under sub-resolution") and
+    `library/24-cycling-periodization-intervals.md` ("Short-short (VO2)",
+    "Over/unders")."""
+
+    schema_version: int = 1
+    pattern: Literal["rep_set", "over_under"]
+    n_reps: int  # rep_set: ON-rep count; over_under: number of over/under cycles
+    high_avg_w: float | None = None  # mean power of the ON / OVER segments
+    low_avg_w: float | None = None  # mean power of the float-recovery / UNDER segments
+    high_s: float | None = None  # median ON / OVER segment duration
+    low_s: float | None = None  # median float / UNDER segment duration
+    time_in_high_pct: float | None = None  # % of the effort's span in ON/OVER segments
+    time_in_low_pct: float | None = None  # % of the effort's span in float/UNDER segments
+    note: str
+
+
 class IntervalEffort(BaseModel):
     """One detected sustained effort within a ride, assessed against a
     target when one is known -- produced by
@@ -646,6 +670,12 @@ class IntervalEffort(BaseModel):
     grade_delta_pct_pts: float | None = None  # first-third mean grade - last-third, in percentage points
     terrain_flag: str | None = None
     verdict: str
+    sub_structure: IntervalSubStructure | None = None
+    # Set only when this effort isn't a single flat block: a clustered VO2
+    # rep set (30/30-style micro-intervals) or an over/under. `None` for an
+    # ordinary sustained effort. Additive/optional -- every existing
+    # persisted IntervalEffort validates unchanged as `sub_structure=None`;
+    # no schema_version bump.
 
 
 class WorkoutIntervals(BaseModel):
