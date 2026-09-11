@@ -188,6 +188,25 @@ def test_reanalyze_errors_on_non_bike_workout(athletes_dir) -> None:
     store.save_workout("renee", w)
     res = _handlers(store)["reanalyze_workout"]({"workout_id": str(w.id), "target_watts": 239})
     assert "error" in res and "only runs on bike" in res["error"]
+    # A genuinely non-bike sport (not cross_train) gets no mis-tag hint.
+    assert "pull_activity_stream" not in res["error"]
+
+
+def test_reanalyze_on_cross_train_workout_hints_at_pull_activity_stream(athletes_dir) -> None:
+    """This tool's gate is legitimate (it has no fresh source to defer to
+    -- see its docstring), but a cross_train tag specifically is plausibly
+    stale historical data (predating the bike carve-out), so the error
+    should point the coach at the tool that CAN re-pull and correct it."""
+    store = FileStore(base_dir=athletes_dir)
+    profile = store.load_athlete("renee")
+    w = Workout(
+        id=uuid.uuid4(), athlete_id=profile.id, date=RIDE_DATE, sport="cross_train",
+        source="fit", distance_m=20000, duration_min=45.0,
+    )
+    store.save_workout("renee", w)
+    res = _handlers(store)["reanalyze_workout"]({"workout_id": str(w.id), "target_watts": 239})
+    assert "error" in res and "only runs on bike" in res["error"]
+    assert "pull_activity_stream" in res["error"]
 
 
 def test_reanalyze_errors_on_bad_ftp_pct_pairing(athletes_dir) -> None:
