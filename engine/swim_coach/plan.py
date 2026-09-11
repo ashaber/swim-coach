@@ -2961,13 +2961,20 @@ BIKE_PRERACE_PRIMER_REPS = 3
 # exposure" framing (library/24 -- Bosquet 2007; Mujika & Padilla 2003).
 
 
-def _bike_prerace_primer_structure(ftp_watts: float | None) -> WorkoutStructure:
-    """Warm-up / `BIKE_PRERACE_PRIMER_REPS` progressive ramps (full
-    recovery between) / cool-down -- a short, NOMINAL session (like
-    `_skills_session_structure`'s fixed duration, not proportional to
-    weekly volume), meant to sit the day before a race without adding
-    fatigue. See this section's own header comment for how this differs
-    from `_bike_openers_main`."""
+def _bike_ramp_reps_structure(
+    ftp_watts: float | None, reps: int, *, main_set_label: str, why_text: str
+) -> WorkoutStructure:
+    """Warm-up / `reps` progressive ramps (full recovery between) /
+    cool-down -- the shared builder behind BOTH the day-before-race primer
+    (`_bike_prerace_primer_structure`, `reps=BIKE_PRERACE_PRIMER_REPS`) and
+    the race-week midweek quality touch (`_bike_midweek_quality_structure`,
+    `reps=BIKE_MIDWEEK_QUALITY_REPS`) -- same ramp-unit shape
+    (`_bike_openers_ramp_unit`), same warm-up/cool-down bookends
+    (`BIKE_PRERACE_PRIMER_WARMUP_MIN`/`_COOLDOWN_MIN`, reused for both --
+    Coach judgment, no separate citation needed for a second short bookend
+    figure), differing only in rep count and athlete-facing text. A short,
+    NOMINAL session either way (like `_skills_session_structure`'s fixed
+    duration, not proportional to weekly volume)."""
     items: list[WorkoutStepOrRepeat] = [
         _bike_step(
             "Warm-up, easy spin build",
@@ -2977,14 +2984,14 @@ def _bike_prerace_primer_structure(ftp_watts: float | None) -> WorkoutStructure:
             ftp_watts,
         ),
         _bike_open_header(
-            f"Main set: {BIKE_PRERACE_PRIMER_REPS} x progressive ramp "
+            f"Main set: {main_set_label} — {reps} x progressive ramp "
             f"({BIKE_OPENERS_RAMP_Z3_S:.0f}s Z3 / {BIKE_OPENERS_RAMP_Z4_S:.0f}s Z4 / "
             f"{BIKE_OPENERS_RAMP_Z5_S:.0f}s Z5), full recovery between ramps"
         ),
     ]
-    for i in range(BIKE_PRERACE_PRIMER_REPS):
+    for i in range(reps):
         items.append(_bike_openers_ramp_unit(ftp_watts))
-        if i < BIKE_PRERACE_PRIMER_REPS - 1:
+        if i < reps - 1:
             items.append(
                 _bike_step("Easy spin, full recovery", "recovery", BIKE_OPENERS_REST_S, "Z1", ftp_watts)
             )
@@ -2998,34 +3005,46 @@ def _bike_prerace_primer_structure(ftp_watts: float | None) -> WorkoutStructure:
         )
     )
     items.append(
-        WorkoutStep(
-            label=(
-                "Why: a short primer the day before the race wakes up "
-                "race-pace legs and neuromuscular readiness without adding "
-                "fatigue -- keep intensity, cut volume (Bosquet 2007; "
-                "Mujika & Padilla 2003, library/24)."
-            ),
-            role="open",
-            duration_kind="open",
-            modality="bike",
-        )
+        WorkoutStep(label=why_text, role="open", duration_kind="open", modality="bike")
     )
     return WorkoutStructure(items=items)
 
 
-def _bike_prerace_primer_duration_min() -> float:
+def _bike_ramp_reps_duration_min(reps: int) -> float:
     """Fixed nominal duration -- warm-up + N ramps + (N-1) full-recovery
     gaps + cool-down. NOT sized from the week's volume target, same
     "nominal by definition" posture `_skills_session_duration_min` already
-    takes for the skills day."""
+    takes for the skills day. Shared by the primer and the midweek quality
+    touch -- see `_bike_ramp_reps_structure`."""
     ramp_min = (BIKE_OPENERS_RAMP_Z3_S + BIKE_OPENERS_RAMP_Z4_S + BIKE_OPENERS_RAMP_Z5_S) / 60
     rest_min = BIKE_OPENERS_REST_S / 60
     return (
         BIKE_PRERACE_PRIMER_WARMUP_MIN
-        + BIKE_PRERACE_PRIMER_REPS * ramp_min
-        + max(0, BIKE_PRERACE_PRIMER_REPS - 1) * rest_min
+        + reps * ramp_min
+        + max(0, reps - 1) * rest_min
         + BIKE_PRERACE_PRIMER_COOLDOWN_MIN
     )
+
+
+def _bike_prerace_primer_structure(ftp_watts: float | None) -> WorkoutStructure:
+    """`_bike_ramp_reps_structure` at `BIKE_PRERACE_PRIMER_REPS` -- see
+    this section's own header comment for how this differs from
+    `_bike_openers_main`."""
+    return _bike_ramp_reps_structure(
+        ftp_watts,
+        BIKE_PRERACE_PRIMER_REPS,
+        main_set_label="pre-race primer",
+        why_text=(
+            "Why: a short primer the day before the race wakes up "
+            "race-pace legs and neuromuscular readiness without adding "
+            "fatigue -- keep intensity, cut volume (Bosquet 2007; "
+            "Mujika & Padilla 2003, library/24)."
+        ),
+    )
+
+
+def _bike_prerace_primer_duration_min() -> float:
+    return _bike_ramp_reps_duration_min(BIKE_PRERACE_PRIMER_REPS)
 
 
 def _bike_prerace_primer_session(
@@ -3064,6 +3083,157 @@ def _bike_prerace_primer_session(
         status="planned",
         is_indoor=is_indoor,
     )
+
+
+# --- Build E (race-week-fill): light midweek content for a race-containing
+# week ------------------------------------------------------------------
+#
+# Real gap found live: comparing this engine's real output against Tim's
+# already-validated AI coach tool for the identical week shape (skills day,
+# openers-adjacent day, easy day, rest day, pre-race primer, two race
+# days) showed the `in_week_race_dates` branch above built
+# `core_bike_sessions` as ONLY the primer -- every other weekday was
+# empty. Tim's real tool keeps a light two-tier structure through the
+# week instead: a brief quality touch, a genuine easy spin, nothing on a
+# rest day. This section adds that -- additive to the primer/race/
+# strength content above, never replacing it, and still well below a
+# normal (non-race) week's volume (the taper's own volume-cut principle,
+# Bosquet 2007, stays intact -- these are light touches, not new volume).
+
+BIKE_MIDWEEK_QUALITY_REPS = 4
+# Coach judgment: one more ramp rep than the Friday primer's
+# `BIKE_PRERACE_PRIMER_REPS` (3), reusing the exact same ramp-unit shape
+# (`_bike_openers_ramp_unit`) rather than inventing a third rep
+# convention -- library/24's own openers grounding already covers this
+# taper-content territory. Tim's real reference numbers for this slot
+# (load 28, 30 min) sit between his own easy spin (load 30, 45 min, all
+# easy) and a normal build-week hard day: read as "some quality content,
+# more contact than the deliberately-minimal day-before-race primer, well
+# short of a real interval session" -- not a volume target to hit exactly
+# (his tool's load units aren't this engine's sRPE-based ones).
+
+BIKE_MIDWEEK_EASY_MIN = 40.0
+# Coach judgment: Tim's real reference (45 min) sits at the upper end of a
+# genuinely easy spin; 40 stays in the same 30-45 min range while erring
+# slightly lighter, consistent with this still being a taper/race-
+# proximate week.
+
+
+def _bike_midweek_quality_structure(ftp_watts: float | None) -> WorkoutStructure:
+    """`_bike_ramp_reps_structure` at `BIKE_MIDWEEK_QUALITY_REPS` -- see
+    this section's own header for how this differs from the Friday
+    primer (`_bike_prerace_primer_structure`, fewer reps) and from
+    `_bike_openers_main` (the WEEKLY hard-day swap, sized off the week's
+    volume budget instead of a fixed nominal duration)."""
+    return _bike_ramp_reps_structure(
+        ftp_watts,
+        BIKE_MIDWEEK_QUALITY_REPS,
+        main_set_label="race-week quality touch",
+        why_text=(
+            "Why: a brief midweek quality touch keeps some race-pace "
+            "contact without adding real training load this close to the "
+            "race -- more contact than the day-before-race session, well "
+            "short of an interval day (Bosquet 2007; Mujika & Padilla "
+            "2003, library/24)."
+        ),
+    )
+
+
+def _bike_midweek_quality_session(
+    athlete: Athlete,
+    session_date: date,
+    ftp_watts: float | None,
+    *,
+    is_indoor: bool | None = None,
+) -> Session:
+    """The midweek quality-touch `Session` for a race-containing week --
+    see this section's own header comment. Purpose text starts with
+    "race-week quality touch" (not `_PRERACE_PRIMER_PURPOSE_PREFIX` --
+    this is a distinct session type from the day-before-race primer, not
+    another one). Carries `BIKE_OPENERS_ZONE` ("Z4") as its top-level
+    zone, same hard-day-guardrail/strength-protection treatment as the
+    primer."""
+    duration_min = _bike_ramp_reps_duration_min(BIKE_MIDWEEK_QUALITY_REPS)
+    structured = _bike_midweek_quality_structure(ftp_watts)
+    return Session(
+        id=uuid4(),
+        athlete_id=athlete.id,
+        date=session_date,
+        sport="bike",
+        source="ai_coach",
+        duration_min=duration_min,
+        distance_m=None,
+        intensity=_bike_intensity(BIKE_OPENERS_ZONE, ftp_watts),
+        purpose=(
+            "race-week quality touch — short progressive-ramp openers "
+            "(Z3 build → Z4 → brief Z5), more contact than the day-before-"
+            "race session, well short of a real interval day"
+        ),
+        structure=render_prose(structured),
+        structured=structured,
+        status="planned",
+        is_indoor=is_indoor,
+    )
+
+
+def _bike_midweek_easy_session(
+    athlete: Athlete,
+    session_date: date,
+    ftp_watts: float | None,
+    *,
+    is_indoor: bool | None = None,
+) -> Session:
+    """A genuine easy/recovery spin for a race-containing week --
+    `BIKE_MIDWEEK_EASY_MIN` at Z2, reusing `_bike_session_structure` (the
+    SAME flat-single-zone builder `_bike_final_taper_sessions`'s own easy
+    day already uses -- no new easy-session builder invented)."""
+    structured = _bike_session_structure("Z2", BIKE_MIDWEEK_EASY_MIN, ftp_watts)
+    return Session(
+        id=uuid4(),
+        athlete_id=athlete.id,
+        date=session_date,
+        sport="bike",
+        source="ai_coach",
+        duration_min=BIKE_MIDWEEK_EASY_MIN,
+        distance_m=None,
+        intensity=_bike_intensity("Z2", ftp_watts),
+        purpose="race-week easy spin — aerobic, keep it light, no structure to speak of",
+        structure=render_prose(structured),
+        structured=structured,
+        status="planned",
+        is_indoor=is_indoor,
+    )
+
+
+def _bike_race_week_fill_offsets(
+    occupied: set[int],
+    bike_day_offsets: list[int] | None,
+) -> list[int]:
+    """Up to 2 Monday-relative day offsets (0-6) for the race-week midweek
+    fill (quality touch, then easy spin, in that order) -- days not
+    already in `occupied` (race dates, the primer's day, and any skills-
+    day offsets -- see the caller). Deliberately caps at 2: this adds
+    LIGHT touches, not a full week -- any further free days stay
+    genuinely empty (implicit rest, the same convention every other rest
+    day in this engine already uses -- swim weeks never synthesize a
+    placeholder "rest" Session either, so this doesn't invent one).
+
+    When the athlete has a `training_days["bike"]` pattern
+    (`bike_day_offsets`), its declared days are preferred IN ORDER,
+    filtered to the ones not already occupied -- mirrors
+    `_spread_days_evenly`'s own "respect the pattern when set" precedent.
+    Without a pattern, falls back to the earliest free days in the week
+    (ascending Mon->Sun), which naturally front-loads the quality touch
+    and easy spin earlier in the week and leaves later days free for
+    whatever the primer/strength logic still needs -- the same "early in
+    the week" spirit `_spread_days_evenly`'s own even-spacing takes when
+    there's no pattern to honor instead.
+    """
+    if bike_day_offsets:
+        candidates = [o for o in bike_day_offsets if o not in occupied]
+    else:
+        candidates = [o for o in range(7) if o not in occupied]
+    return candidates[:2]
 
 
 def _bike_race_session_structure(ftp_watts: float | None) -> WorkoutStructure:
@@ -3731,6 +3901,13 @@ def generate_week(
         # session count when set, else None -> historical even spacing.
         bike_day_offsets = _training_day_offsets(athlete, "bike")
         strength_day_offsets = _training_day_offsets(athlete, "strength")
+        # Computed here (not just before the trailing skills-append block
+        # below, its own original home) so the race-week fill logic
+        # (Build E, `_bike_race_week_fill_offsets`) can avoid double-
+        # booking a day `_skills_sessions` will also land on later --
+        # `_skills_day_offsets` is a pure function of `athlete`, so this is
+        # the same value either way, just computed once and reused.
+        skills_offsets = _skills_day_offsets(athlete)
 
         # Race proximity / taper -> "openers" + volume pull-down (defect 5).
         # ALL of this is gated on the caller passing `events` -- an existing
@@ -3869,6 +4046,27 @@ def generate_week(
                         is_indoor=bike_indoor,
                     )
                 )
+            # Build E (race-week-fill): light midweek content -- a brief
+            # quality touch, then a genuine easy spin -- on up to 2 days
+            # not already spoken for by a race, the primer, or a skills
+            # day. See `_bike_race_week_fill_offsets`'s own docstring for
+            # why this caps at 2 and leaves any further free day genuinely
+            # empty (implicit rest, same convention every other rest day
+            # in this engine already uses).
+            fill_occupied = set(race_offsets) | set(skills_offsets)
+            if primer_off is not None:
+                fill_occupied.add(primer_off)
+            fill_offsets = _bike_race_week_fill_offsets(fill_occupied, bike_day_offsets)
+            fill_builders = (_bike_midweek_quality_session, _bike_midweek_easy_session)
+            for fill_offset, fill_builder in zip(fill_offsets, fill_builders):
+                core_bike_sessions.append(
+                    fill_builder(
+                        athlete,
+                        week_start + timedelta(days=fill_offset),
+                        ftp_watts,
+                        is_indoor=bike_indoor,
+                    )
+                )
             bike_only = core_bike_sessions + race_sessions
             # Strength AFTER the hard/primer day and clear of the day before
             # any race (`_strength_offsets_after_hard` -- defect 4), honoring
@@ -3982,7 +4180,7 @@ def generate_week(
         # (every existing athlete) -> `_skills_day_offsets` returns [] and
         # this branch is a no-op, so every existing bike-week call site is
         # byte-for-byte unchanged. See library/27-cyclocross-skills.md.
-        skills_offsets = _skills_day_offsets(athlete)
+        # (`skills_offsets` computed once, up above, and reused here.)
         if skills_offsets:
             bike_sessions = bike_sessions + _skills_sessions(
                 athlete, week_start, skills_offsets

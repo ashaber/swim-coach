@@ -171,6 +171,73 @@ day structurally (top-level `BIKE_OPENERS_ZONE`/"Z4") so it still
 protects itself under `_strength_offsets_after_hard` and the hard-day
 guardrail — a real, if brief, intensity-touching session, not a rest day.
 
+## Race-week midweek fill — light content instead of an empty week
+
+**Sport scope: `bike`.** Grounds `plan.py`'s race-week midweek fill
+(`_bike_midweek_quality_session`/`_bike_midweek_easy_session`/
+`_bike_race_week_fill_offsets`, `engine/race-week-fill`). Real gap found
+comparing this engine's output against a real, already-validated AI coach
+tool (a sibling app Andrew also uses) for the identical week shape
+(skills day, openers-adjacent day, easy day, rest day, pre-race primer,
+two race days): `generate_week`'s `in_week_race_dates` branch built
+`core_bike_sessions` as ONLY the pre-race primer above -- every other
+weekday was silently empty. The reference tool's real output for that
+shape kept a light two-tier structure through the week instead:
+
+| Day | Reference tool | Content this fixes it to |
+|---|---|---|
+| Mon | easy + skills primer | skills day (already correct, unchanged) |
+| Tue | openers, ~30 min | midweek quality touch |
+| Wed | easy spin, ~45 min | midweek easy spin |
+| Thu | rest | (no session -- implicit rest) |
+| Fri | pre-race openers | pre-race primer (already correct, unchanged) |
+| Sat/Sun | race | race (already correct, unchanged) |
+
+The reference tool's own minute/load numbers are `Coach judgment`
+REFERENCE POINTS for shape and rough scale, not a spec matched exactly --
+its load units aren't this engine's sRPE-based ones, so "close in spirit"
+is the right bar, not byte-for-byte parity.
+
+**Midweek quality touch:** reuses the SAME progressive-ramp unit as the
+Friday primer (`_bike_openers_ramp_unit`, this file's own section above,
+grounded in `24-cycling-periodization-intervals.md`'s Openers section) at
+`BIKE_MIDWEEK_QUALITY_REPS` = 4 -- one more rep than the primer's 3, so it
+reads as genuinely MORE quality contact than the day-before-race session
+while staying well short of a real interval day. `Coach judgment:` the
+exact rep count -- the reference tool's numbers for this slot (its own
+load units, ~30 min) sit between its easy spin and a normal hard day,
+which is the qualitative target this hits, not a number to reproduce
+exactly.
+
+**Midweek easy spin:** `BIKE_MIDWEEK_EASY_MIN` = 40 min at Z2, reusing
+`_bike_session_structure` -- the SAME flat-single-zone builder
+`_bike_final_taper_sessions`'s own easy day already uses (no new
+easy-session builder invented). `Coach judgment:` 40 min sits in the
+reference tool's ~30-45 min range for this slot, erring slightly lighter
+since this is still a taper/race-proximate week.
+
+**Rest day:** deliberately NO synthesized placeholder session -- matches
+this engine's own existing convention (a swim week's rest day is simply a
+day with no `Session`, not a zero-load stub). The reference tool's own
+"rest + halo" convention names a specific shoulder-mobility routine this
+engine has no equivalent content for; inventing halo-specific content was
+explicitly out of scope for this pass.
+
+**Placement:** up to 2 days (quality touch, then easy spin, in that
+order), chosen from whatever days aren't already claimed by a race date,
+the primer, or a skills day. When the athlete has a `training_days
+["bike"]` weekday pattern, its declared order is honored (filtered to
+free days); without one, the earliest free days in the week are used
+(Mon->Sun ascending) -- same "respect the pattern when set, else spread
+early" precedent `_spread_days_evenly` already establishes elsewhere in
+this file's own bike-week machinery. Deliberately capped at 2, not "fill
+every free day": this adds LIGHT touches on top of an already-cut taper
+week, not a second normal week's worth of content -- any further free day
+stays genuinely empty. The taper's own volume-cut principle (Bosquet
+2007, this file's primer section above) stays intact: a race week's total
+non-race bike training minutes remain well below a normal week's, even
+with these two light additions.
+
 ## Gating: active, priority "A", same event as the macro, final taper week only
 
 `generate_week`'s optional `event` parameter only populates
