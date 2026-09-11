@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.8",
-    "@fontsource/manrope": "^5.2.8"
+    "@fontsource/manrope": "^5.2.8",
+    "marked": "^18.0.12"
   }
 }

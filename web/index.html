@@ -375,13 +375,63 @@
     .chat-row.coach { align-self: flex-start; align-items: flex-start; }
     .chat-bubble { background: var(--paper); border: 1px solid var(--line); border-radius: 14px 14px 14px 4px;
       padding: 10px 15px; font-size: 14.5px; line-height: 1.5; box-shadow: var(--shadow);
-      white-space: pre-wrap; word-break: break-word; }
+      word-break: break-word; }
     .chat-row.me .chat-bubble { background: var(--bubble-out-bg); border-color: var(--bubble-out-border);
       color: var(--bubble-out-ink); border-radius: 14px 14px 4px 14px; }
-    .chat-bubble.is-error { border-color: var(--c-signal); color: var(--c-signal); background: var(--c-signal-wash); }
-    .chat-bubble.is-refusal { border-color: var(--c-strength); background: color-mix(in srgb, var(--c-strength) 12%, var(--paper)); }
+    .chat-bubble.is-error { border-color: var(--c-signal); color: var(--c-signal); background: var(--c-signal-wash);
+      white-space: pre-wrap; }
+    .chat-bubble.is-refusal { border-color: var(--c-strength); background: color-mix(in srgb, var(--c-strength) 12%, var(--paper));
+      white-space: pre-wrap; }
     .chat-cursor { display: inline-block; color: var(--accent); animation: chat-blink 1s step-start infinite; }
     @keyframes chat-blink { 50% { opacity: 0; } }
+    /* Build D: markdown-rendered coach prose (src/markdown.js's
+       renderChatMarkdown output). Error/refusal bubbles keep the old
+       white-space: pre-wrap plain-text treatment above (they're app-
+       generated short strings, not markdown -- see views.js's
+       renderChatMessage) -- .chat-md below is the real-markdown container,
+       scoped to it alone so it doesn't leak into those. */
+    .chat-md { white-space: normal; }
+    .chat-md > *:first-child { margin-top: 0; }
+    .chat-md > *:last-child { margin-bottom: 0; }
+    .chat-md p { margin: 0 0 .6em; }
+    .chat-md h1, .chat-md h2, .chat-md h3, .chat-md h4, .chat-md h5, .chat-md h6 {
+      font-family: var(--display); line-height: 1.25; margin: .8em 0 .35em; }
+    /* Headings inside a chat bubble stay close to body-text size -- the
+       page's own h1/h2/h3 rules elsewhere are sized for section mastheads,
+       wildly oversized for a "### Week 30 overview" heading a coach reply
+       drops mid-bubble. */
+    .chat-md h1 { font-size: 17px; }
+    .chat-md h2 { font-size: 16px; }
+    .chat-md h3, .chat-md h4, .chat-md h5, .chat-md h6 { font-size: 14.5px; }
+    .chat-md ul, .chat-md ol { margin: .3em 0 .6em; padding-left: 1.4em; }
+    .chat-md li { margin: .15em 0; }
+    .chat-md li > ul, .chat-md li > ol { margin: .15em 0; }
+    .chat-md code { font-family: var(--mono); font-size: .92em; background: var(--paper-2);
+      border: 1px solid var(--line-soft); border-radius: 4px; padding: .1em .35em; }
+    .chat-md pre { background: var(--paper-2); border: 1px solid var(--line-soft); border-radius: var(--radius-xs);
+      padding: 8px 10px; overflow-x: auto; margin: .3em 0 .6em; }
+    .chat-md pre code { border: none; padding: 0; background: none; }
+    .chat-md blockquote { margin: .3em 0 .6em; padding: 2px 12px; border-left: 3px solid var(--line);
+      color: var(--ink-soft); }
+    .chat-md a { color: inherit; text-decoration: underline; }
+    /* GFM tables (backend PR #173's render_plan_table tool output) --
+       mirrors the app's existing wide-content convention (e.g.
+       .laps-table-wrap) of an overflow-x: auto wrapper so a wide table
+       scrolls within the bubble instead of the bubble (or the page)
+       stretching past a 390px mobile viewport. */
+    .chat-md table { border-collapse: collapse; width: max-content; max-width: 100%;
+      font-size: 13px; margin: .3em 0 .6em; }
+    .chat-md table:not(:last-child) { margin-bottom: .6em; }
+    .chat-md th, .chat-md td { border: 1px solid var(--line-soft); padding: 5px 9px; text-align: left;
+      white-space: nowrap; }
+    .chat-md th { background: var(--paper-2); font-weight: 700; }
+    /* marked emits <table> as a direct child of whatever element's
+       innerHTML it fills -- .chat-md itself here -- so the scroll
+       container is .chat-md whenever it holds a table: any table too wide
+       for the bubble scrolls horizontally within its own box, never the
+       page (mirrors the app's existing .laps-table-wrap convention for
+       wide content elsewhere). */
+    .chat-md:has(table) { overflow-x: auto; }
     .chat-chips { display: flex; flex-wrap: wrap; gap: 6px; }
     .chat-chip { font-size: 11px; font-weight: 600; color: var(--ink-soft); background: var(--paper-2);
       border: 1px solid var(--line); border-radius: var(--radius-pill); padding: 3px 10px; }
