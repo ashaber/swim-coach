@@ -2893,6 +2893,244 @@ def evaluate_week_realism(
             )
 
     return warnings_out
+# =========================================================================
+# Cyclocross skills-day content (engine/cx-skills-day-content)
+# -------------------------------------------------------------------------
+# A "CX skills" day is bike-HANDLING practice, not a training-load session:
+# ~10-min drill blocks at RPE SKILLS_RPE_LOW-SKILLS_RPE_HIGH, distance and
+# power nominal (NOT the training target). The defect this closes: a real
+# cyclocross week's Monday "CX skills" session was prescribed the generic
+# bike interval script ("3x10 min threshold"). Grounded in
+# library/27-cyclocross-skills.md.
+#
+# Kept as one contiguous, clearly-fenced section on purpose: the unmerged
+# engine/week-generator-realism branch (#174) lands its openers/race
+# builders and `evaluate_week_realism` immediately above `generate_week`
+# too, and edits models.py's `training_days` field -- see this PR's
+# description for the expected trivial rebase. The only edit outside this
+# fence is the small gated call in `generate_week`'s bike path, also
+# fenced with a matching comment.
+# =========================================================================
+
+SKILLS_BLOCK_MIN = 10.0
+# ~10-min drill blocks -- long enough for many repetitions of one skill,
+# short enough to rotate several skills while an amateur's concentration
+# and movement quality stay high (a longer block turns into sloppy reps).
+# Coach judgment -- library/27-cyclocross-skills.md ("Session shape").
+
+SKILLS_WARMUP_MIN = 10.0
+SKILLS_COOLDOWN_MIN = 5.0
+# Easy-spin bookends: a real warm-up matters before low-speed balance /
+# dismount work (cold + stiff = more falls); a short spin-down is enough
+# after a non-glycolytic session. Coach judgment --
+# library/27-cyclocross-skills.md ("Session shape").
+
+SKILLS_RPE_LOW = 5
+SKILLS_RPE_HIGH = 7
+# Effort ceiling for every drill block: firm but repeatable, never a
+# threshold/VO2 effort -- a skills day builds motor patterns, not CTL, and
+# fatigue degrades skill acquisition. Coach judgment, with the
+# not-an-interval-day rationale grounded in library/27-cyclocross-skills.md
+# ("Why RPE 5-7, not a power target").
+
+SKILLS_BLOCKS_PER_SESSION = 4
+# How many `_SKILLS_DRILLS` entries one session runs -- 4 x ~10 min plus
+# bookends ~= 55 min. Coach judgment -- library/27-cyclocross-skills.md.
+
+SKILLS_SESSION_ZONE = "Z2"
+# Nominal `Session.intensity["zone"]` only -- a skills day is RPE-anchored
+# (`anchor="rpe"`), not power-targeted; "Z2" is the honest "this is not a
+# hard day" label and keeps the session out of any hard-day count. The
+# real target lives on each drill step as `WorkoutTarget(basis="rpe")`.
+# library/27-cyclocross-skills.md ("Why RPE 5-7, not a power target").
+
+_SKILLS_DRILLS: tuple[tuple[str, str], ...] = (
+    (
+        "Dismount / remount reps",
+        "step-through dismount at jogging pace, 3-4 running steps, smooth "
+        "remount; alternate the lead foot",
+    ),
+    (
+        "Barrier / hurdle practice",
+        "2-3 barriers a few metres apart: dismount, carry, remount; a "
+        "bunny-hop attempt only on the last pass",
+    ),
+    (
+        "Tight cornering -- off-camber and 180s",
+        "figure-8s and switchback 180s on grass; brake before the apex, "
+        "look through the exit, weight the outside pedal",
+    ),
+    (
+        "Loose-surface / low-traction handling",
+        "gravel/sand/wet-grass straight and turn: light hands, hips back, "
+        "feather the rear brake, pick the firm line",
+    ),
+    (
+        "Run-ups / short shoulder-carry",
+        "shoulder the bike, run a short steep pitch, remount cleanly on the "
+        "flat; keep the running to 20-30 s",
+    ),
+)
+# The standard cyclocross bike-handling curriculum. Coach judgment for the
+# specific drills and cueing (drill programming is coaching craft, not lab
+# science -- see library/27-cyclocross-skills.md, "The drill catalogue"),
+# following the skills content in Simon Burney's cyclocross technique
+# writing and the USA/British Cycling skills-coaching materials.
+
+
+def _select_skills_drills(session_index: int) -> list[tuple[str, str]]:
+    """Deterministically pick `SKILLS_BLOCKS_PER_SESSION` drills for one
+    skills session by rotating a fixed window over `_SKILLS_DRILLS`, so
+    back-to-back skills days aren't identical yet every drill still comes
+    round regularly -- the same fixed-rotation idea as
+    `_select_bike_interval_template`. `session_index` is a 0-based counter
+    (today: this session's position among the week's skills sessions; a
+    continuous cross-week counter can be threaded later without changing
+    this shape). Coach judgment / scheduling heuristic --
+    library/27-cyclocross-skills.md ("Rotate the subset").
+    """
+    n = len(_SKILLS_DRILLS)
+    take = min(SKILLS_BLOCKS_PER_SESSION, n)
+    start = session_index % n
+    return [_SKILLS_DRILLS[(start + i) % n] for i in range(take)]
+
+
+def _skills_session_structure(session_index: int) -> WorkoutStructure:
+    """`WorkoutStructure` for one cyclocross skills day: easy-spin warm-up,
+    `SKILLS_BLOCKS_PER_SESSION` ~10-min handling-drill blocks at RPE
+    `SKILLS_RPE_LOW`-`SKILLS_RPE_HIGH` (`_select_skills_drills` picks
+    which), easy-spin cool-down, trailing `Why:` line. Mirrors
+    `_bike_hard_session_structure`'s warm-up / main / cool-down shape, but
+    every work block carries an `basis="rpe"` target -- NEVER a power/zone
+    interval band. Distance and power on a skills day are nominal (see this
+    section's header and library/27-cyclocross-skills.md).
+    """
+    drill_target = WorkoutTarget(
+        basis="rpe", low=float(SKILLS_RPE_LOW), high=float(SKILLS_RPE_HIGH)
+    )
+    items: list[WorkoutStepOrRepeat] = [
+        WorkoutStep(
+            label=(
+                "Warm-up, easy spin + a few slow-speed balance / track-stand "
+                "touches"
+            ),
+            role="warmup",
+            duration_kind="time_s",
+            duration_value=SKILLS_WARMUP_MIN * 60,
+            target=WorkoutTarget(basis="rpe", low=3.0, high=4.0),
+            modality="bike",
+        ),
+        _bike_open_header(
+            f"Main set: {SKILLS_BLOCKS_PER_SESSION} skill blocks, "
+            f"~{SKILLS_BLOCK_MIN:.0f} min each at RPE "
+            f"{SKILLS_RPE_LOW}-{SKILLS_RPE_HIGH}, easy spin between "
+            "(bike handling, not a training-load session)"
+        ),
+    ]
+    for name, cue in _select_skills_drills(session_index):
+        items.append(
+            WorkoutStep(
+                label=f"{name} — {cue}",
+                role="steady",
+                duration_kind="time_s",
+                duration_value=SKILLS_BLOCK_MIN * 60,
+                target=drill_target,
+                modality="bike",
+            )
+        )
+    items.append(
+        WorkoutStep(
+            label="Cool-down, easy spin",
+            role="cooldown",
+            duration_kind="time_s",
+            duration_value=SKILLS_COOLDOWN_MIN * 60,
+            target=WorkoutTarget(basis="rpe", low=2.0, high=3.0),
+            modality="bike",
+        )
+    )
+    items.append(
+        WorkoutStep(
+            label=(
+                "Why: cyclocross is won and lost on dismounts, corners and "
+                "traction, not watts. Practise the skills fresh and "
+                "controlled; hold RPE 5-7 so fatigue doesn't wreck technique."
+            ),
+            role="open",
+            duration_kind="open",
+            modality="bike",
+        )
+    )
+    return WorkoutStructure(items=items)
+
+
+def _skills_session_duration_min() -> float:
+    """Fixed skills-day duration -- warm-up + N drill blocks + cool-down. A
+    skills day is NOT sized from the week's volume target (see this
+    section's header); like a race slot its minutes are an estimate."""
+    return (
+        SKILLS_WARMUP_MIN
+        + SKILLS_BLOCKS_PER_SESSION * SKILLS_BLOCK_MIN
+        + SKILLS_COOLDOWN_MIN
+    )
+
+
+def _skills_intensity() -> dict:
+    """`Session.intensity` for a skills day: RPE-anchored, no watts. `zone`
+    is the nominal `SKILLS_SESSION_ZONE` only, which keeps the session a
+    non-hard day for any downstream hard-day count."""
+    return {"zone": SKILLS_SESSION_ZONE, "anchor": "rpe"}
+
+
+def _skills_sessions(
+    athlete: Athlete, week_start: date, offsets: list[int]
+) -> list[Session]:
+    """One cyclocross skills `Session` per Monday-relative day `offset`, in
+    ascending date order. `_select_skills_drills` rotates the drill subset
+    by each session's index so multiple skills days (in a week, or across
+    weeks) aren't identical. library/27-cyclocross-skills.md.
+    """
+    duration_min = _skills_session_duration_min()
+    sessions: list[Session] = []
+    for i, offset in enumerate(sorted(offsets)):
+        structured = _skills_session_structure(i)
+        sessions.append(
+            Session(
+                id=uuid4(),
+                athlete_id=athlete.id,
+                date=week_start + timedelta(days=offset),
+                sport="bike",
+                source="ai_coach",
+                duration_min=duration_min,
+                distance_m=None,
+                intensity=_skills_intensity(),
+                purpose=(
+                    "cyclocross skills — bike-handling practice "
+                    "(dismount/remount, barriers, cornering, loose-surface "
+                    "control, run-ups). Distance and power are nominal; "
+                    "hold RPE 5-7."
+                ),
+                structure=render_prose(structured),
+                structured=structured,
+                status="planned",
+                is_indoor=False,
+            )
+        )
+    return sessions
+
+
+def _skills_day_offsets(athlete: Athlete) -> list[int]:
+    """Monday-relative day offsets for the athlete's
+    `training_days["skills"]` weekday pattern, in declared order; `[]` when
+    unset (every existing athlete) so `generate_week`'s bike path is
+    byte-for-byte unchanged. Reads `training_days` defensively via
+    `getattr` so this is safe whether or not
+    engine/week-generator-realism (#174, which adds the field) has merged.
+    Post-#174 this can collapse to `_training_day_offsets(athlete,
+    "skills")`.
+    """
+    training_days = getattr(athlete, "training_days", None) or {}
+    entries = training_days.get("skills") or []
+    return [_pool_day_offset(entry) for entry in entries]
 
 
 def generate_week(
@@ -3358,6 +3596,19 @@ def generate_week(
                 use_openers=use_openers,
             )
             race_week_checklist = []
+        # --- engine/cx-skills-day-content: CX skills days -----------------
+        # A `training_days["skills"]` weekday pattern adds bike-handling
+        # sessions (`_skills_sessions`) on those days -- purely additive,
+        # never replacing a bike/strength session. No `"skills"` pattern
+        # (every existing athlete) -> `_skills_day_offsets` returns [] and
+        # this branch is a no-op, so every existing bike-week call site is
+        # byte-for-byte unchanged. See library/27-cyclocross-skills.md.
+        skills_offsets = _skills_day_offsets(athlete)
+        if skills_offsets:
+            bike_sessions = bike_sessions + _skills_sessions(
+                athlete, week_start, skills_offsets
+            )
+        # ----------------------------------------------------------------
         return WeekPlan(
             id=uuid4(),
             athlete_id=athlete.id,
