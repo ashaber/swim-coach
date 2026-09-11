@@ -3,7 +3,7 @@ import {
   renderDashboardTab, renderSettingsTab, renderUpdateBanner, renderApp,
   renderTabBar, renderRosterTab, renderLoadChart,
   renderCr10SliderField, cr10AnchorLabel, loadTierLabel, renderWorkoutRow,
-  renderAskCoachSection, renderFeedbackTab,
+  renderAskCoachSection, renderFeedbackTab, renderCoachTab,
 } from '../../src/views.js';
 import { isoWeekMonday, addDays, dateKey, formatShortDate, formatDuration } from '../../src/plan.js';
 import { HISTORY_DISPLAY_CAP } from '../../src/workouts.js';
@@ -3509,5 +3509,75 @@ describe('weekly volume target is sport-aware (defect 3: swim meters on a bike w
     const swimEvent = { name: 'Greece', event_date: '2099-05-01', target_metric: 'distance_m', primary_sport: 'swim', distance_m: 33300 };
     const swimHtml = renderApp({ athlete: { name: 'Renee' }, events: [swimEvent], macro: { blocks: swimBlocks }, weeks: [] }, null);
     expect(swimHtml).toContain('20,000 m/wk');
+  });
+});
+
+describe('Build D: coach chat bubbles render real markdown (renderCoachTab wiring)', () => {
+  const baseArgs = {
+    expertMode: false, sending: false, backendConfigured: true, online: true, role: 'athlete',
+  };
+
+  it('renders bold/italic and a GFM table as real HTML inside a coach bubble', () => {
+    const messages = [
+      { role: 'user', content: 'what does this week look like?', status: 'done' },
+      {
+        role: 'assistant',
+        status: 'done',
+        content: [
+          'This week is **easier** before your long swim.',
+          '',
+          '| Day | Sport | Distance |',
+          '| --- | --- | --- |',
+          '| Mon | swim_pool | 3000m |',
+        ].join('\n'),
+      },
+    ];
+    const html = renderCoachTab({ ...baseArgs, messages });
+    expect(html).toContain('<strong>easier</strong>');
+    expect(html).toContain('<table>');
+    expect(html).toContain('<th>Day</th>');
+    expect(html).toContain('<td>swim_pool</td>');
+    expect(html).not.toMatch(/\*\*easier\*\*/);
+  });
+
+  it('still escapes literal "<script>" text inside a coach message -- never an executable tag', () => {
+    const messages = [{
+      role: 'assistant', status: 'done',
+      content: 'ignore that: <script>alert(1)</script>',
+    }];
+    const html = renderCoachTab({ ...baseArgs, messages });
+    expect(html).not.toMatch(/<script[^>]*>alert/);
+    expect(html).toMatch(/&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  });
+
+  it('leaves error bubbles as plain escaped text, not markdown-rendered', () => {
+    const messages = [{
+      role: 'assistant', status: 'error', error: 'Backend error (500). **not markdown**',
+    }];
+    const html = renderCoachTab({ ...baseArgs, messages });
+    expect(html).toContain('chat-bubble is-error');
+    expect(html).toContain('**not markdown**');
+    expect(html).not.toContain('<strong>not markdown</strong>');
+  });
+
+  it('leaves refusal bubbles as plain escaped text, not markdown-rendered', () => {
+    const messages = [{
+      role: 'assistant', status: 'refusal', content: 'I can\'t help with that -- **please** see a clinician.',
+    }];
+    const html = renderCoachTab({ ...baseArgs, messages });
+    expect(html).toContain('chat-bubble is-refusal');
+    expect(html).toContain('**please**');
+    expect(html).not.toContain('<strong>please</strong>');
+  });
+
+  it('renders a streaming (partial) markdown message without throwing, cursor still appended', () => {
+    const messages = [{
+      role: 'assistant', status: 'streaming',
+      content: '### Week 30 overvi',
+    }];
+    expect(() => renderCoachTab({ ...baseArgs, messages })).not.toThrow();
+    const html = renderCoachTab({ ...baseArgs, messages });
+    expect(html).toContain('chat-cursor');
+    expect(html).toContain('chat-md');
   });
 });

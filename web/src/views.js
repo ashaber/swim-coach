@@ -14,6 +14,7 @@ import {
   CTL_ATL_TREND_WINDOW_DAYS, formatMonthLabel,
 } from './plan.js';
 import { TOOL_LABELS } from './chat.js';
+import { renderChatMarkdown } from './markdown.js';
 import { buildHistoryFeed } from './history.js';
 import {
   sportLabel, sourceBadge, formatWorkoutDistance, formatAnalyticsLine,
@@ -1546,8 +1547,24 @@ function renderChatMessage(msg) {
   } else if (msg.status === 'refusal') {
     bubbleHtml = `<div class="chat-bubble is-refusal">${esc(msg.content)}</div>`;
   } else {
+    // Build D: markdown rendering. renderChatMarkdown() (src/markdown.js)
+    // replaces the old esc()-everything rendering for real coach prose --
+    // bold/italic, headers, lists, and (since backend PR #173's
+    // render_plan_table tool) GFM tables -- while keeping the same
+    // never-execute-attacker-text security posture (see that module's
+    // header comment). `msg.content` may be a partial mid-stream string;
+    // renderChatMarkdown is best-effort and never throws on that.
+    //
+    // The streaming cursor is appended as a sibling after the parsed
+    // markdown HTML rather than spliced inside it -- splicing into
+    // arbitrary (possibly deeply nested, e.g. inside a half-open table)
+    // parsed HTML risks producing invalid nesting; appending after is
+    // always well-formed. It sits on its own line when the last streamed
+    // block is a block-level element (a paragraph, list, table) rather
+    // than trailing inline text, which is a cosmetic streaming-only
+    // difference from the old plain-text behavior, not a defect.
     const cursor = msg.status === 'streaming' ? '<span class="chat-cursor">▍</span>' : '';
-    bubbleHtml = `<div class="chat-bubble">${esc(msg.content)}${cursor}</div>`;
+    bubbleHtml = `<div class="chat-bubble"><div class="chat-md">${renderChatMarkdown(msg.content)}</div>${cursor}</div>`;
   }
 
   return `
