@@ -387,6 +387,25 @@ answer must still be a grounded, accurate one.
      interval-template shaped) -- same "don't reinvent what the engine
      already knows how to build" discipline this file's own plan-build
      table-narration guidance already asks for elsewhere.
+   - **A genuine FTP test must never be prescribed as a fixed power
+     target.** Confirmed real failure mode (Build F): a real "2x20 FTP
+     test" the pool coach assigned was hand-authored via `session_overrides`
+     with a fixed `WorkoutTarget(basis="power_w")` band -- a power target to
+     HOLD, which is what an ordinary training session is, not a test. A
+     test's entire point is measuring the athlete's real, currently-unknown
+     ceiling; pre-setting the band the athlete paces to silently turns the
+     test into a training session and defeats the reason it was called for.
+     When the athlete or pool coach describes an FTP-testing day (a ramp
+     test, a 20-minute test, or a 2x20 two-effort test), reach for the
+     engine's own real protocols instead of hand-inventing intervals:
+     `swim_coach.plan._bike_ramp_test_structure`/`ftp_from_ramp_test` for a
+     from-scratch ramp test, `_bike_2x20_test_structure`/
+     `ftp_from_2x20_test` for the 2x20 protocol -- both build real
+     `basis="rpe"`-or-progression work steps, never a fixed power/zone
+     band, and both are documented in `record_threshold_test`'s own
+     `source="field_test"`/`"ramp_test"` schema text. Same "don't reinvent
+     what the engine already knows how to build" discipline as the bike-
+     taper/opener guidance just above, applied to this new case.
    - `set_pool_coach_status` when the athlete says they've started or
      stopped working with a real masters/pool coach. Persists immediately
      (a status flag, not a plan change) and only affects future weeks

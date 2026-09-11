@@ -929,6 +929,131 @@ def test_ftp_from_ramp_test_applies_75_percent_of_best_1min_power():
     assert ftp_from_ramp_test(320.0) == pytest.approx(240.0)
 
 
+# --- Build F: real 2x20 FTP test protocol ------------------------------------
+
+
+def test_bike_2x20_test_structure_shape_warmup_effort_recovery_effort_cooldown():
+    from swim_coach.plan import _bike_2x20_test_structure
+
+    structured = _bike_2x20_test_structure(None)
+    roles = [item.role for item in structured.items]
+    assert roles[0] == "warmup"
+    assert "interval" in roles
+    assert "recovery" in roles
+    assert roles[-2] == "cooldown"  # trailing "Why:" open step comes last
+    assert roles[-1] == "open"
+    # Exactly two work efforts.
+    assert roles.count("interval") == 2
+
+
+def test_bike_2x20_test_work_steps_never_carry_power_w_or_zone_target():
+    # THE regression this build exists to prevent: a real FTP TEST must
+    # never prescribe a fixed power target for the athlete to pace to --
+    # that defeats the entire point of testing (measuring the athlete's
+    # real, unknown ceiling) and silently turns a test into an ordinary
+    # training session (the real incident that motivated this build).
+    from swim_coach.plan import _bike_2x20_test_structure
+
+    for ftp in (None, 200.0, 350.0):
+        structured = _bike_2x20_test_structure(ftp)
+        work_steps = [item for item in structured.items if item.role == "interval"]
+        assert len(work_steps) == 2
+        for step in work_steps:
+            assert step.target is not None
+            assert step.target.basis == "rpe"
+            assert step.target.basis != "power_w"
+            assert step.target.basis != "zone"
+
+
+def test_bike_2x20_test_work_steps_are_real_20_minute_efforts():
+    from swim_coach.plan import BIKE_2X20_TEST_EFFORT_MIN, _bike_2x20_test_structure
+
+    structured = _bike_2x20_test_structure(250.0)
+    work_steps = [item for item in structured.items if item.role == "interval"]
+    for step in work_steps:
+        assert step.duration_kind == "time_s"
+        assert step.duration_value == pytest.approx(BIKE_2X20_TEST_EFFORT_MIN * 60)
+        assert step.modality == "bike"
+
+
+def test_bike_2x20_test_has_a_real_recovery_interval_between_efforts():
+    from swim_coach.plan import BIKE_2X20_TEST_RECOVERY_MIN, _bike_2x20_test_structure
+
+    structured = _bike_2x20_test_structure(250.0)
+    recovery = next(item for item in structured.items if item.role == "recovery")
+    assert recovery.duration_kind == "time_s"
+    assert recovery.duration_value == pytest.approx(BIKE_2X20_TEST_RECOVERY_MIN * 60)
+    # Sits between the two work efforts, not before/after both of them.
+    roles = [item.role for item in structured.items]
+    interval_indices = [i for i, r in enumerate(roles) if r == "interval"]
+    recovery_index = roles.index("recovery")
+    assert interval_indices[0] < recovery_index < interval_indices[1]
+
+
+def test_bike_2x20_test_why_line_documents_pacing_not_target():
+    # The trailing "Why:" line is real, athlete-facing pacing guidance
+    # (a legitimate coaching cue), never a target power number.
+    from swim_coach.plan import _bike_2x20_test_structure
+
+    structured = _bike_2x20_test_structure(250.0)
+    why_step = structured.items[-1]
+    assert why_step.role == "open"
+    assert "Why:" in why_step.label
+    assert "W" not in why_step.label.split("Why:")[1].split(".")[0]  # no stray watt figure
+
+
+def test_bike_2x20_test_structure_exports_cleanly_via_zwo():
+    # Real end-to-end proof the rpe-basis work steps don't crash the ZWO
+    # pipeline -- they carry no power target, so they must degrade to a
+    # FreeRide element rather than raising or silently mis-exporting a
+    # power number that was never actually prescribed.
+    import xml.etree.ElementTree as ET
+
+    from swim_coach.plan import _bike_2x20_test_structure
+    from swim_coach.zwo_export import to_zwo_workout
+
+    structured = _bike_2x20_test_structure(263.0)
+    xml_str = to_zwo_workout(structured, ftp_watts=263.0, name="2x20 FTP Test")
+    root = ET.fromstring(xml_str)
+    workout = root.find("workout")
+    tags = [child.tag for child in workout]
+    assert tags[0] == "Warmup"
+    assert tags[-1] == "Cooldown"
+    assert tags.count("FreeRide") == 2  # the two untargeted rpe-basis efforts
+
+
+def test_bike_2x20_test_structure_exports_cleanly_via_garmin_fit():
+    # Same real end-to-end proof for the Garmin/.FIT export path.
+    from swim_coach.garmin_export import to_garmin_fit_workout
+    from swim_coach.plan import _bike_2x20_test_structure
+
+    structured = _bike_2x20_test_structure(263.0)
+    fit_bytes = to_garmin_fit_workout(structured, sport="bike", name="2x20 FTP Test")
+    assert isinstance(fit_bytes, (bytes, bytearray))
+    assert len(fit_bytes) > 0
+
+
+def test_ftp_from_2x20_test_applies_95_percent_of_average_of_both_efforts():
+    from swim_coach.plan import BIKE_2X20_TEST_FTP_FROM_AVG_FRACTION, ftp_from_2x20_test
+
+    assert BIKE_2X20_TEST_FTP_FROM_AVG_FRACTION == pytest.approx(0.95)
+    # Worked example: two efforts averaging 300W and 280W -> mean 290W ->
+    # FTP = 290 * 0.95 = 275.5W.
+    assert ftp_from_2x20_test(300.0, 280.0) == pytest.approx(275.5)
+    # Order-independent (a true average of the two readings).
+    assert ftp_from_2x20_test(280.0, 300.0) == pytest.approx(275.5)
+
+
+def test_ftp_from_2x20_test_equal_efforts_matches_single_effort_convention():
+    # When both efforts are identical, this must reduce to exactly the
+    # well-established single-20-minute-effort convention
+    # (BIKE_2X20_TEST_FTP_FROM_AVG_FRACTION applied directly) -- a sanity
+    # check that averaging two equal readings doesn't distort the number.
+    from swim_coach.plan import ftp_from_2x20_test
+
+    assert ftp_from_2x20_test(300.0, 300.0) == pytest.approx(300.0 * 0.95)
+
+
 def test_bike_interval_template_low_volume_degrades_to_flat_block():
     # Same low-volume graceful-degradation posture as _resolve_bike_session_
     # count -- when the available main-block time is too small to fit even

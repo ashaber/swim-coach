@@ -51,6 +51,16 @@ judgment once made. Same direct-persist (no draft/confirm step) posture
 `set_pool_coach_status`/`set_event_active_status` already use below -- these
 are low-risk profile fields, not plan/volume changes.
 
+Build F (`engine/ftp-2x20-test`) fixes a real incident: a genuine "2x20 FTP
+test" the pool coach assigned was hand-authored in this app with a fixed
+`WorkoutTarget(basis="power_w")` band -- prescribing a power to hold, which
+is an ordinary training session, not a test (a test measures the athlete's
+real, unknown ceiling). `swim_coach.plan._bike_2x20_test_structure`/
+`ftp_from_2x20_test` are the real, engine-built protocol for exactly this
+`source="field_test"` case -- see this tool's own `source` field
+description and `context.py`'s "don't hand-author what the engine already
+knows how to build" guidance, which now covers this case too.
+
 `create_event`/`draft_macro_plan`/`create_week_plan` are the "chat can create,
 not just adapt" tools: they call the exact same deterministic engine
 functions the CLI/skills already use (`swim_coach.plan.scaffold_macro`,
@@ -496,7 +506,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 "source": {
                     "type": "string",
                     "enum": ["field_test", "ramp_test", "race_file", "app_estimate", "self_reported_historical"],
-                    "description": "'field_test' -- a real standalone test that isn't the ramp-test protocol (e.g. a swim CSS time-trial pair, a 20-min FTP test). 'ramp_test' -- the ramp-to-failure protocol specifically. 'race_file' -- derived from an actual race/event file. 'app_estimate' -- a platform's own algorithmic estimate (e.g. 'TrainerRoad AI FTP detection'), real signal but modelled, not directly tested. 'self_reported_historical' -- the athlete's own recollection of an old value with no real test behind it (Andrew's own example: 'I was 350w 10 years ago').",
+                    "description": "'field_test' -- a real standalone test that isn't the ramp-test protocol (e.g. a swim CSS time-trial pair, a 20-min FTP test, or the 2x20 two-effort FTP test -- see swim_coach.plan._bike_2x20_test_structure/ftp_from_2x20_test, the real engine-built protocol for this case; prescribe THAT via create_week_plan/session_overrides rather than hand-inventing your own bike interval structure for an FTP test, since a genuine test's work efforts must never carry a fixed power target -- see this file's own module docstring and context.py's guidance). 'ramp_test' -- the ramp-to-failure protocol specifically (swim_coach.plan._bike_ramp_test_structure). 'race_file' -- derived from an actual race/event file. 'app_estimate' -- a platform's own algorithmic estimate (e.g. 'TrainerRoad AI FTP detection'), real signal but modelled, not directly tested. 'self_reported_historical' -- the athlete's own recollection of an old value with no real test behind it (Andrew's own example: 'I was 350w 10 years ago').",
                 },
                 "notes": {
                     "type": "string",
