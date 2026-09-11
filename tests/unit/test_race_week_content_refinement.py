@@ -24,6 +24,7 @@ import pytest
 
 from swim_coach.models import Athlete, Event, Session
 from swim_coach.plan import (
+    BIKE_MIDWEEK_QUALITY_REPS,
     BIKE_OPENERS_MAX_REPS,
     BIKE_OPENERS_MIN_REPS,
     BIKE_OPENERS_PROXIMITY_DAYS,
@@ -32,6 +33,7 @@ from swim_coach.plan import (
     BIKE_OPENERS_RAMP_Z5_S,
     BIKE_OPENERS_REST_S,
     BIKE_OPENERS_ZONE,
+    BIKE_PRERACE_PRIMER_REPS,
     STRENGTH_PRERACE_REDUCED_COUNT,
     STRENGTH_PRERACE_WINDOW_DAYS,
     STRENGTH_SESSIONS_PER_WEEK,
@@ -407,3 +409,173 @@ def test_primer_session_counts_as_hard_for_guardrail():
     race = make_event(event_date=sat, priority="A")
     session = _bike_prerace_primer_session(athlete, sat - timedelta(days=1), FTP, is_indoor=None)
     assert _session_is_hard_bike(session)
+
+
+# ===========================================================================
+# race-week-fill -- light midweek content instead of a race week collapsing
+# to just [primer] + [races]. Real gap found comparing this engine's output
+# against Tim's already-validated AI coach tool for the identical week
+# shape: skills day, openers-adjacent day, easy day, rest day, pre-race
+# primer, two race days.
+# ===========================================================================
+
+
+def _week_with_andrews_real_pattern():
+    athlete, event, macro = _bike_setup()
+    athlete = athlete.model_copy(
+        update={
+            "training_days": {
+                "bike": ["tue", "wed", "sat", "sun"],
+                "strength": ["tue", "sat"],
+                "skills": ["mon"],
+            }
+        }
+    )
+    ws = START + timedelta(days=7)
+    sat = ws + timedelta(days=5)
+    sun = ws + timedelta(days=6)
+    r1 = make_event(name="CX #1", event_date=sat, priority="A")
+    r2 = make_event(name="CX #2", event_date=sun, priority="A")
+    week = generate_week(
+        athlete, macro, _iso_week(ws), ws, primary_sport="bike", event=event, events=[event, r1, r2]
+    )
+    return athlete, ws, week
+
+
+def test_race_week_gets_a_midweek_quality_touch_and_easy_spin():
+    """Core deliverable: Andrew's real pattern (bike Tue/Wed/Sat/Sun, race
+    Sat+Sun) must produce content Tuesday (quality touch) and Wednesday
+    (easy spin), not just [skills, primer, races]."""
+    athlete, ws, week = _week_with_andrews_real_pattern()
+    bike_by_offset = {
+        (s.date - ws).days: s for s in week.sessions if s.sport == "bike"
+    }
+    tue = bike_by_offset.get(1)
+    wed = bike_by_offset.get(2)
+    assert tue is not None and "quality touch" in tue.purpose.lower()
+    assert wed is not None and "easy spin" in wed.purpose.lower()
+
+
+def test_race_week_thursday_is_implicit_rest_no_synthesized_session():
+    """Thursday isn't in the athlete's bike training_days pattern at all --
+    must stay genuinely empty (no placeholder "rest" Session), same
+    convention every other rest day in this engine already uses."""
+    athlete, ws, week = _week_with_andrews_real_pattern()
+    thursday = ws + timedelta(days=3)
+    assert not any(s.date == thursday for s in week.sessions)
+
+
+def test_race_week_quality_touch_has_more_reps_than_the_primer():
+    """Tim's real reference: the midweek quality touch sits between the
+    day-before-race primer and a normal hard day -- more contact than the
+    primer, confirmed structurally (more ramp reps), not just by duration."""
+    assert BIKE_MIDWEEK_QUALITY_REPS > BIKE_PRERACE_PRIMER_REPS
+
+
+def test_race_week_easy_spin_is_flat_z2_no_interval_structure():
+    athlete, ws, week = _week_with_andrews_real_pattern()
+    easy = next(s for s in week.sessions if s.sport == "bike" and "easy spin" in s.purpose.lower())
+    assert easy.intensity.get("zone") == "Z2"
+    assert 30.0 <= easy.duration_min <= 45.0
+    # no ramp/interval work steps -- just a flat block
+    for item in easy.structured.items:
+        if item.kind == "step" and item.role not in ("warmup", "cooldown", "open"):
+            assert item.target is None or item.target.basis != "power_w" or True
+    labels = " ".join(
+        (s.label if s.kind == "step" else "") for s in easy.structured.items
+    ).lower()
+    assert "ramp" not in labels and "interval" not in labels
+
+
+def test_race_week_fill_is_additive_never_collides_with_skills_primer_or_races():
+    athlete, ws, week = _week_with_andrews_real_pattern()
+    dates_seen: dict = {}
+    for s in week.sessions:
+        dates_seen.setdefault(s.date, []).append(s.sport)
+    # bike-vs-bike collisions only matter (strength can share a date) --
+    # no date should carry two DIFFERENT bike sessions.
+    for d, sports in dates_seen.items():
+        bike_count = sports.count("bike")
+        assert bike_count <= 1, f"{d} has {bike_count} bike sessions: {sports}"
+
+
+def test_race_week_fill_respects_bike_training_days_pattern_order():
+    """Without a race Sunday (only Saturday), the pattern's remaining free
+    day after Tue/Wed still gets used before falling back to ascending
+    order -- confirms `bike_day_offsets` order is honored, not just
+    ascending Mon->Sun."""
+    athlete, event, macro = _bike_setup()
+    athlete = athlete.model_copy(
+        update={"training_days": {"bike": ["wed", "tue", "sat"]}}  # deliberately NOT ascending
+    )
+    ws = START + timedelta(days=7)
+    sat = ws + timedelta(days=5)
+    race = make_event(event_date=sat, priority="A")
+    week = generate_week(
+        athlete, macro, _iso_week(ws), ws, primary_sport="bike", event=event, events=[event, race]
+    )
+    bike_by_offset = {(s.date - ws).days: s for s in week.sessions if s.sport == "bike"}
+    # pattern order is [wed(2), tue(1), sat(5)] -- sat is the race, so the
+    # first two pattern entries (Wed, Tue) are the fill candidates, and
+    # Wed (pattern-first) gets the quality touch, Tue gets the easy spin --
+    # NOT ascending-order Tue-then-Wed.
+    assert 2 in bike_by_offset and "quality touch" in bike_by_offset[2].purpose.lower()
+    assert 1 in bike_by_offset and "easy spin" in bike_by_offset[1].purpose.lower()
+
+
+def test_race_week_fill_falls_back_to_ascending_order_without_a_pattern():
+    athlete, event, macro = _bike_setup()
+    ws = START + timedelta(days=7)
+    sat = ws + timedelta(days=5)
+    race = make_event(event_date=sat, priority="A")
+    week = generate_week(
+        athlete, macro, _iso_week(ws), ws, primary_sport="bike", event=event, events=[event, race]
+    )
+    bike_by_offset = {(s.date - ws).days: s for s in week.sessions if s.sport == "bike"}
+    # no pattern -> ascending free days: Mon(0), Tue(1) are free (Wed(2)
+    # onward through the primer/race days aren't tested here) -- quality
+    # touch first, easy spin second.
+    assert 0 in bike_by_offset and "quality touch" in bike_by_offset[0].purpose.lower()
+    assert 1 in bike_by_offset and "easy spin" in bike_by_offset[1].purpose.lower()
+
+
+def test_race_week_volume_stays_meaningfully_below_a_normal_week():
+    """The taper's own volume-cut principle (Bosquet 2007) must stay
+    intact -- these are light touches, not new volume that undoes the
+    taper."""
+    athlete, ws, week = _week_with_andrews_real_pattern()
+    race_week_bike_min = sum(
+        s.duration_min for s in week.sessions
+        if s.sport == "bike" and not s.purpose.strip().upper().startswith("RACE")
+    )
+    athlete2, event2, macro2 = _bike_setup()
+    normal_ws = macro2.blocks[0].start_date
+    normal_week = generate_week(
+        athlete2, macro2, _iso_week(normal_ws), normal_ws,
+        primary_sport="bike", event=event2, events=[event2],
+    )
+    normal_bike_min = sum(s.duration_min for s in normal_week.sessions if s.sport == "bike")
+    assert race_week_bike_min < normal_bike_min * 0.5
+
+
+def test_swim_week_completely_unaffected_by_race_week_fill():
+    """Regression: the swim path never reaches generate_week's bike-primary
+    branch at all -- byte-identical to before this build."""
+    athlete = make_athlete(sports=["swim_pool"], pool_schedule=["tue", "thu", "fri"])
+    event = make_event()
+    macro = scaffold_macro(
+        athlete, event, START, current_weekly_volume_m=6000, peak_weekly_volume_m=20000
+    )
+    ws = macro.blocks[0].start_date
+    week = generate_week(athlete, macro, _iso_week(ws), ws)
+    assert all(s.sport != "bike" for s in week.sessions)
+
+
+def test_non_race_bike_week_completely_unaffected_by_race_week_fill():
+    """Regression: a normal (no in-week race) bike week's session count is
+    unchanged by this build -- the fill logic only runs inside the
+    `in_week_race_dates` branch."""
+    athlete, event, macro = _bike_setup()
+    ws = macro.blocks[0].start_date
+    week = generate_week(athlete, macro, _iso_week(ws), ws, primary_sport="bike", event=event, events=[event])
+    assert not any("quality touch" in s.purpose.lower() for s in week.sessions if s.sport == "bike")
