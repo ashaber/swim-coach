@@ -125,6 +125,52 @@ physiologically-critical day the way carb-load/bodywork above do, so Coach
 judgment says settle them EARLY in the final week, clearly separated in
 time from the two evidence-timed windows above.
 
+## Bike pre-race primer — `_bike_prerace_primer_session` (Build E)
+
+**Sport scope: `bike`.** Grounds `plan.py`'s standalone pre-race primer
+session (`engine/race-week-content-refinement`) -- a real defect found in
+Andrew's first real taper/race week: the engine's only "openers" content
+was a swap of the week's REGULAR hard-day session (`_bike_openers_main`,
+`24-cycling-periodization-intervals.md`'s own "Openers" section), which
+lands wherever `training_days["bike"]` already puts the hard day -- for
+Andrew, 4 days before a Saturday race, not the day before (Friday) as
+real pre-race practice expects. `_bike_prerace_primer_session` is a
+SEPARATE, additive session placed exactly one day before EACH race date
+in `in_week_race_dates` (or the following week's Monday-race edge case,
+via `generate_week`'s own lookahead check) -- it does not replace the
+regular hard-day swap, which still governs the rest of a taper block that
+has no race in the current week.
+
+**Timing — the day before, not "sometime in taper week":**
+**`[ADAPTED: general-endurance/multi-sport] Confidence: medium.**` Per
+`Pereira et al. (2025)`, "Priming Exercises and Their Potential
+Impact on Speed and Power Performance: A Narrative Review," *Journal of
+Human Kinetics*, 98:153-168 (see `reference_list.md`): a brief,
+non-fatiguing high-intensity "priming" bout produces its most pronounced
+neuromuscular-readiness effect at specifically the 6h and 24h marks
+before competition, distinct from an ordinary warm-up closer to the
+event. Placing this session exactly one day (~24h) before the race sits
+directly on that window. **Confidence: medium** — the review's own
+population is mostly team-sport speed/power athletes, not endurance
+cyclists, and no cycling-specific priming trial was located; the timing
+principle (not the cycling-specific shape) is what transfers. **Test:**
+if this athlete's race-day form/legs feel flat specifically after a
+day-before primer versus a race with no primer at all, that's
+athlete-specific signal against the ~24h timing, not against priming as a
+concept.
+
+**Shape and duration:** reuses `24-cycling-periodization-intervals.md`'s
+own progressive-ramp unit (`BIKE_OPENERS_RAMP_Z3_S`/`_Z4_S`/`_Z5_S`) —
+`BIKE_PRERACE_PRIMER_REPS` = 3 ramps, full recovery between, wrapped in a
+short easy warm-up/cool-down (~25-30 min total). `Coach judgment:` the
+exact rep count and total duration — deliberately NOMINAL (not
+proportional to weekly volume, same posture `27-cyclocross-skills.md`'s
+skills day already takes), since the day-before-race point is
+neuromuscular readiness, not a training stimulus. Counts as a "hard" bike
+day structurally (top-level `BIKE_OPENERS_ZONE`/"Z4") so it still
+protects itself under `_strength_offsets_after_hard` and the hard-day
+guardrail — a real, if brief, intensity-touching session, not a rest day.
+
 ## Gating: active, priority "A", same event as the macro, final taper week only
 
 `generate_week`'s optional `event` parameter only populates

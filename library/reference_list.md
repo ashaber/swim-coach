@@ -1024,6 +1024,21 @@ modality-specific constant.
 
 ## Cross-discipline endurance (cycling / running / triathlon)
 
+- **✓ Pereira L.A., Zmijewski P., Golas A., Kotula K., McGuigan M.R., Loturco
+  I. (2025)** — "Priming Exercises and Their Potential Impact on Speed and
+  Power Performance: A Narrative Review" — *Journal of Human Kinetics*,
+  98:153-168. Verified by web search (title/authors/journal/volume/pages
+  confirmed) Build E (`race-week-content-refinement`) session. Priming
+  exercise -- a brief, non-fatiguing high-intensity bout roughly 2-48h
+  before competition -- shows its most pronounced neuromuscular-readiness
+  ("delayed potentiation") effects at the 6h and 24h marks specifically; one
+  comparison protocol reviewed used short cycle-ergometer sprints (6 x 6s),
+  though the review's own population is speed/power (mostly team-sport)
+  athletes, not endurance cyclists.
+  `[ADAPTED: general-endurance/multi-sport]` grounds `plan.py`'s standalone
+  day-before-race bike primer (`_bike_prerace_primer_session`,
+  `16-race-week.md`) landing at the ~24h mark specifically, not merely
+  "sometime in taper week."
 - **✓ Rønnestad B.R. & Mujika I. (2014)** — "Optimizing strength training for
   running and cycling endurance performance: A review" — *Scandinavian
   Journal of Medicine & Science in Sports*. Heavy/explosive strength improves

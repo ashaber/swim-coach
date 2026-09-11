@@ -200,27 +200,28 @@ duration/ratio principle, not a distinct physiological mechanism from
 Grounds `plan.py`'s fifth interval template, `"openers"`
 (`_bike_openers_main`, `BIKE_OPENERS_*`), selected instead of the rotation
 pick when a race is within `BIKE_OPENERS_PROXIMITY_DAYS` or the week is a
-`"taper"` block (`_select_bike_interval_template`'s `use_openers`). Shape:
-3-5 reps of ~1-2 min a touch above threshold (~100-105% FTP, low Z4), full
-recovery — the race-pace family, deliberately short and low in total work.
+`"taper"` block (`_select_bike_interval_template`'s `use_openers`) — the
+WEEKLY hard-day's own shape during that block. **Build E revision:** each
+rep is now a progressive RAMP (`BIKE_OPENERS_RAMP_Z3_S`/`_Z4_S`/`_Z5_S` —
+Z3 build, into Z4, into a brief Z5 top-end), not the original flat "1-2
+min a touch above threshold" repeated bout — Andrew's own real pre-race
+practice. A SEPARATE standalone day-before-race primer session
+(`_bike_prerace_primer_session`, additive, not a rotation pick) reuses
+this ramp unit at a short, nominal duration; see `16-race-week.md`'s "Bike
+pre-race primer" section for that session's own grounding.
 
 **`[ADAPTED: general-endurance]`** `Bosquet L., Montpetit J., Arvisais D.,
 Mujika I. (2007)`, "Effects of tapering on performance: a meta-analysis,"
-*Medicine & Science in Sports & Exercise*, 39(8):1358-1365 (27 of 182
-studies): the optimal taper reduces training VOLUME 41-60% while INTENSITY
-and frequency are held. `Mujika & Padilla (2003)` (see `reference_list.md`)
-concurs — volume down up to 60-90%, intensity kept — and `Wang Z. et al.
-(2023)` adds that tapers ≤7 days still help. So a pre-race week keeps
-race-intensity contact (the openers) while
-`BIKE_TAPER_INTENSITY_VOLUME_REDUCTION` pulls weekly volume down on top of
-the block's own decay; prescribing more high-load VO2 here works against
-the taper's purpose. **Confidence: high** (direct meta-analysis; the only
-discount is its multi-sport population — endurance tapering is not thought
-to be discipline-specific). Exact reps/seconds/%FTP and the 25% extra cut
-are `Coach judgment:`, same footing as the four templates above. **Test:**
-if race power the week after an openers taper is flat or down versus a
-race off a normal week, the taper is too deep or the openers too sparse —
-add a rep or a little Z4, not volume.
+*Medicine & Science in Sports & Exercise*, 39(8):1358-1365: the optimal
+taper reduces training VOLUME 41-60% while INTENSITY is held.
+`Mujika & Padilla (2003)` concurs — volume down up to 60-90%, intensity
+kept. A pre-race week keeps race-intensity contact (the ramps) while
+`BIKE_TAPER_INTENSITY_VOLUME_REDUCTION` pulls weekly volume down.
+**Confidence: high.** The REP SHAPE (ramp vs. the original flat-bout
+convention) is `Coach judgment:`, same footing as the four templates
+above. **Test:** if race power the week after an openers taper reads
+flat, the taper is too deep or the ramps too sparse — add a rep, not
+volume.
 
 ### Hard-day density ceiling (the realism guardrail)
 
@@ -304,9 +305,10 @@ engineering rationale.
 ## Implementation history
 
 Every part of this file is now wired into `plan.py`: the deload cadence and
-the interval-template rotation landed with PR #167 / the `engine/cycling-
-coach` branch; the ramp-test protocol/formula and the FTP-check purpose-
-text note (`_bike_week_sessions`'s `ftp_source`) landed with the
-threshold-history build; the openers template, taper volume pull-down, and
-the hard-day realism guardrail landed with the `engine/week-generator-
-realism` build (Build A). No open deferral remains.
+the interval-template rotation landed with PR #167 / `engine/cycling-coach`;
+the ramp-test protocol/formula and the FTP-check purpose-text note landed
+with the threshold-history build; the openers template, taper volume
+pull-down, and the hard-day realism guardrail landed with `engine/week-
+generator-realism` (Build A); the ramp-shaped openers rep and the
+standalone pre-race primer landed with `engine/race-week-content-
+refinement` (Build E, see `16-race-week.md`). No open deferral remains.

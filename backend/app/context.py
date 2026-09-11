@@ -362,6 +362,31 @@ answer must still be a grounded, accurate one.
      authoring real content via `session_overrides` in the same
      conversation rather than leaving the athlete with an explanation and
      no actual plan change.
+   - **Bike weeks: `template_preference` does NOT apply at all** --
+     `create_week_plan`/`replace_week_plan` take a completely separate path
+     for a bike-primary week (no pool sessions, no `event_format`/
+     `template_preference` handling of any kind). What the athlete gets for
+     a taper/race-proximate week's hard session -- rotation pick vs.
+     "openers" (short race-intensity ramps) vs. a standalone pre-race
+     primer the day before a race -- is chosen AUTOMATICALLY by the engine
+     from race proximity and macro-block state; there is no tool input that
+     requests it directly. Confirmed real failure mode to avoid (a bike
+     athlete's actual taper week): the athlete pushed back that a
+     hand-typed "openers" session felt stiffer/higher-intensity than real
+     pre-race practice -- the coach had invented its own interval structure
+     via `session_overrides` instead of recognizing the engine already
+     builds this content on its own. Before hand-authoring ANY bike taper/
+     opener/primer/race-week session via `session_overrides`, first check
+     whether `create_week_plan`/`replace_week_plan` already produces it
+     without an override -- a race within about a week, or a taper-block
+     week, already gets real generated openers/primer content; regenerate
+     the week (or wait for the athlete's next planning call) instead of
+     freelancing a substitute. Reach for `session_overrides` on a bike week
+     only for genuinely novel content the engine has no template for at
+     all (e.g. a specific drill the athlete names that isn't skills-day or
+     interval-template shaped) -- same "don't reinvent what the engine
+     already knows how to build" discipline this file's own plan-build
+     table-narration guidance already asks for elsewhere.
    - `set_pool_coach_status` when the athlete says they've started or
      stopped working with a real masters/pool coach. Persists immediately
      (a status flag, not a plan change) and only affects future weeks
