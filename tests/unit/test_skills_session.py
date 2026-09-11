@@ -279,7 +279,14 @@ def test_generate_week_bike_byte_identical_without_skills_pattern():
     assert run(athlete) == base  # determinism
     assert run(athlete.model_copy(update={"training_days": None})) == base
     assert run(athlete.model_copy(update={"training_days": {}})) == base
-    assert run(athlete.model_copy(update={"training_days": {"bike": ["tue", "thu"]}})) == base
+    # engine/week-generator-realism (#174, merged) consumes the "bike" key
+    # for day placement, so a bike pattern is no longer byte-identical to no
+    # pattern -- but with no "skills" key it must still add zero cyclocross
+    # skills sessions.
+    bike_only = run(athlete.model_copy(update={"training_days": {"bike": ["tue", "thu"]}}))
+    assert not any(
+        "cyclocross skills" in (s.get("purpose") or "") for s in bike_only["sessions"]
+    )
 
 
 def test_generate_week_swim_byte_identical_without_skills_pattern():

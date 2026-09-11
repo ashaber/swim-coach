@@ -369,6 +369,24 @@ BIKE_RACE_PACE_ZONE = "Z5"
 # an engineering approximation, not a precise reproduction of the stated
 # 105-114% band.
 
+BIKE_OPENERS_WORK_S = 90.0
+# 1.5 min -- midpoint of "3-5 x 1-2 min" primers. library/24 "Openers /
+# pre-race primers (taper)" subsection (Build A defect 5,
+# engine/week-generator-realism).
+BIKE_OPENERS_REST_S = 180.0
+# Full recovery between openers (~1:2 work:rest) -- library/24 says "full
+# recovery", no exact figure; Coach judgment default, adjusted per-session
+# by `_fit_units_with_flexible_gap` the same way every other template's rest
+# constant is.
+BIKE_OPENERS_MIN_REPS = 3
+BIKE_OPENERS_MAX_REPS = 5
+# library/24 openers subsection: "3-5 x ...".
+BIKE_OPENERS_ZONE = "Z4"
+# "a touch above threshold" -- ~100-105% FTP sits in the low end of Z4's
+# 90-105% band (library/23 Coggan table). Deliberately race-intensity-
+# ADJACENT, not easy: the taper keeps intensity and cuts volume (Bosquet
+# 2007; Mujika & Padilla 2003 -- see library/24 openers subsection).
+
 BIKE_REST_GAP_CAP_MULTIPLIER = 2.0
 # Coach judgment, not citation-backed: `_fit_units_with_flexible_gap` sizes
 # the rest after each work bout/block/set to consume whatever main-block
@@ -398,6 +416,14 @@ BIKE_INTERVAL_TEMPLATE_META: dict[str, dict[str, str]] = {
         "zone": BIKE_RACE_PACE_ZONE,
         "purpose": "race-pace intervals (Z5) — punchy repeated efforts, race-specificity",
     },
+    "openers": {
+        "zone": BIKE_OPENERS_ZONE,
+        "purpose": (
+            "openers — short race-intensity primers (3–5 × ~1–2 min a touch above "
+            "threshold, full recovery); low total volume, taper week: this switches "
+            "from building CTL to race-ready without adding fatigue"
+        ),
+    },
 }
 # Session-level `Session.intensity["zone"]` for the week's hard session is
 # set from this table (per selected template), NOT hardcoded "Z3" as it was
@@ -416,12 +442,97 @@ BIKE_INTERVAL_TEMPLATES: tuple[str, ...] = (
     "over_unders",
     "short_short_vo2",
     "race_pace",
+    "openers",
 )
-# Fixed rotation order `_select_bike_interval_template` cycles through --
-# library/24 grounds the four templates themselves but no source specifies
-# a sequencing rule across them, so this ordering (longest/least
-# neuromuscularly-taxing work bout first, shortest/most taxing last) is this
-# engine's own reasonable default (Coach judgment), not a cited cadence.
+# The first four are the fixed WEEK-TO-WEEK ROTATION `_select_bike_interval_
+# template` cycles through (`_BIKE_ROTATION_TEMPLATES` below) -- library/24
+# grounds the four templates themselves but no source specifies a sequencing
+# rule across them, so this ordering (longest/least neuromuscularly-taxing
+# work bout first, shortest/most taxing last) is this engine's own
+# reasonable default (Coach judgment), not a cited cadence.
+#
+# "openers" (Build A defect 5, engine/week-generator-realism) is NOT part of
+# that blind rotation -- it is selected ONLY when a race is within
+# `BIKE_OPENERS_PROXIMITY_DAYS` or the week falls in a `"taper"` MacroBlock
+# (`_select_bike_interval_template`'s `use_openers`), where it overrides
+# whatever the rotation would otherwise pick. Short race-intensity primers,
+# low total volume -- see `_bike_openers_main` and library/24's
+# "Openers / pre-race primers (taper)" subsection.
+
+_BIKE_ROTATION_TEMPLATES: tuple[str, ...] = tuple(
+    t for t in BIKE_INTERVAL_TEMPLATES if t != "openers"
+)
+
+# --- Realism guardrail (Build A defect 1, engine/week-generator-realism) ----
+# NOT a flat cap. A bike-primary week may legitimately carry bike sessions
+# PLUS additive strength/mobility/race slots (Andrew's own example: "4 days
+# cycling + 2 days strength + 3 days yoga/mobility + races with warmup and
+# openers can be the right plan"). What the guardrail flags is genuinely
+# UNREALISTIC planning -- and it flags, surfacing a message to the coach
+# (`WeekPlan.planning_warnings`); it never silently clamps the plan.
+
+BIKE_MAX_HARD_DAYS_PER_WEEK = 3
+# Coach judgment, grounded in library/24's Seiler (2010) polarized-
+# distribution framing (~80% low-intensity / ~20% high-intensity, little
+# time in the moderate "grey zone"). For a trained cyclist training ~5-6
+# days/week, ~20% hard works out to roughly 3 genuinely hard sessions; a
+# 4th tips the week into "several moderate days" -- the exact pattern Seiler
+# 2010 predicts will plateau performance. Race slots are ADDITIVE and do
+# NOT count against this ceiling (races are the point of the training, not
+# extra training load). library/24-cycling-periodization-intervals.md.
+
+BIKE_MAX_BIKE_DAYS_PER_WEEK = 6
+# Coach judgment, not citation-backed -- Andrew's own guardrail spec:
+# "Clearly 6+ days a week of cycling will perform poorly." library/23's
+# Galan-Rioja et al. (2023) review reports trained-cyclist weeks at
+# ~7.5-11.7 h across a handful of sessions but prescribes no session-COUNT
+# ceiling (checked this pass), so this is a plain planning-realism default,
+# same footing as `BIKE_SESSIONS_PER_WEEK`. Counts bike TRAINING days only;
+# race days are additive (see above). library/23-cycling-training.md.
+
+BIKE_WEEKLY_VOLUME_RAMP_CAP_FRACTION = 0.08
+# CLAUDE.md's standing safety rail -- "weekly volume +<=8% ... without
+# explicit athlete confirmation" -- applied to a bike-primary week's total
+# planned ride minutes vs. the prior week's. library/23-cycling-training.md
+# is explicit that no cycling-specific week-to-week ramp figure exists; this
+# reuses the project's own uncited +8% rail verbatim rather than implying a
+# citation. Only checked when the caller supplies the prior week's volume.
+
+_BIKE_HARD_ZONES = {"Z3", "Z4", "Z5"}
+# A generated bike session is "hard" for guardrail/strength-ordering
+# purposes when its top-level `Session.intensity["zone"]` sits here (every
+# easy endurance ride is "Z2"; every interval template's session zone is
+# Z4/Z5, and the final-taper opener is Z3). Race sessions are identified
+# structurally by their "RACE — ..." purpose prefix, not by zone.
+
+BIKE_OPENERS_PROXIMITY_DAYS = 7
+# Coach judgment: a week whose end is within this many days of the next race
+# uses the "openers" template instead of the rotation pick. Mujika & Padilla
+# (2003) study taper durations from 4 to >28 days; a single pre-race week
+# sits at the short end. library/24-cycling-periodization-intervals.md.
+
+BIKE_TAPER_INTENSITY_VOLUME_REDUCTION = 0.25
+# Coach judgment (magnitude), grounded in library/24's taper subsection:
+# Bosquet et al. (2007) meta-analysis finds ~41-60% TOTAL training-volume
+# reduction across an optimal taper with INTENSITY held; Mujika & Padilla
+# (2003) put the volume cut as high as 60-90%. When a bike week switches to
+# "openers" (taper block, or a race within BIKE_OPENERS_PROXIMITY_DAYS),
+# this extra 25% cut is applied on top of whatever the block interpolation
+# already computed, landing the pre-race week solidly in that deep-cut zone
+# -- volume down, intensity (the openers themselves) kept race-adjacent,
+# which is exactly the taper literature's prescription. Never stacked with
+# the periodic `BIKE_DELOAD_VOLUME_REDUCTION` (same non-stacking care the
+# existing deload code already takes with TAPER_WEEKLY_DECAY). The openers
+# work/rest/rep/zone constants themselves are defined above, next to the
+# other interval-template constants.
+
+BIKE_RACE_SESSION_DURATION_MIN = 90.0
+# Coach judgment, not citation-backed: a race day's `Session.duration_min`
+# -- a structured warm-up (with 2-3 short openers) + the race itself + a
+# short spin-down, sized for a typical cyclocross/XCO race. Not drawn from
+# `target_volume_m` (a race is not a training-volume allocation); it is an
+# additive slot (Build A defect 5). The structure is warm-up + primers +
+# an open-duration race block, not a fixed-power training set.
 
 BIKE_FTP_CHECK_ELIGIBLE_SOURCES = ("app_estimate", "self_reported_historical")
 # threshold-history build, `_bike_week_sessions`'s `ftp_source` param: an FTP
@@ -445,20 +556,30 @@ BIKE_FTP_CHECK_PURPOSE_SUFFIX = (
 # where you are... we hold 263W until race files confirm it."
 
 
-def _select_bike_interval_template(week_index: int) -> str:
-    """Deterministically rotate through `BIKE_INTERVAL_TEMPLATES`, one
-    template per week in a fixed order, so a bike-primary athlete's
-    differentiated "hard" session actually varies week to week instead of
-    always being the same flat block -- closes the exact gap
-    `_bike_session_structure`'s former docstring flagged as a "KNOWN,
-    DOCUMENTED LIMITATION." `week_index` is expected to be a continuous
-    week counter from the start of the athlete's macro (see
+def _select_bike_interval_template(week_index: int, *, use_openers: bool = False) -> str:
+    """Deterministically rotate through `_BIKE_ROTATION_TEMPLATES` (the four
+    build/peak interval archetypes), one template per week in a fixed order,
+    so a bike-primary athlete's differentiated "hard" session actually
+    varies week to week instead of always being the same flat block --
+    closes the exact gap `_bike_session_structure`'s former docstring
+    flagged as a "KNOWN, DOCUMENTED LIMITATION." `week_index` is expected to
+    be a continuous week counter from the start of the athlete's macro (see
     `_bike_ramp_week_index`) so the rotation advances every real calendar
     week regardless of which macro block (base/build/peak/taper) it falls
     in -- there is no research basis for resetting the rotation at a block
     boundary, and a continuous counter is simpler to reason about.
+
+    `use_openers` (Build A defect 5, engine/week-generator-realism): when
+    True -- a race is within `BIKE_OPENERS_PROXIMITY_DAYS`, or the week is
+    in a `"taper"` MacroBlock -- the blind rotation yields entirely and this
+    returns `"openers"` regardless of `week_index`. That is the whole point
+    of tapering: switch from high CTL to race-ready, not prescribe more
+    high-load VO2 work. See library/24's "Openers / pre-race primers
+    (taper)" subsection.
     """
-    return BIKE_INTERVAL_TEMPLATES[week_index % len(BIKE_INTERVAL_TEMPLATES)]
+    if use_openers:
+        return "openers"
+    return _BIKE_ROTATION_TEMPLATES[week_index % len(_BIKE_ROTATION_TEMPLATES)]
 
 
 def _bike_ramp_week_index(macro: MacroPlan, week_start: date) -> int:
@@ -725,6 +846,24 @@ def _pool_day_offset(entry: str | dict) -> int:
     return _WEEKDAY_OFFSETS[key]
 
 
+def _training_day_offsets(athlete: Athlete, key: str) -> list[int] | None:
+    """Monday-relative day offsets (0=Mon .. 6=Sun) for one entry in
+    `Athlete.training_days` (`"bike"`, `"strength"`, ...), in the coach's
+    declared ORDER (not sorted) -- the first bike entry is the week's
+    hard/interval day. Returns `None` when `training_days` is unset or has
+    no entry for `key` (every existing athlete), so callers fall back to
+    `_spread_days_evenly`'s even spacing byte-for-byte. Raises `ValueError`
+    (same as `_pool_day_offset`) on an unrecognized weekday string.
+    """
+    training_days = getattr(athlete, "training_days", None)
+    if not training_days:
+        return None
+    entries = training_days.get(key)
+    if not entries:
+        return None
+    return [_pool_day_offset(entry) for entry in entries]
+
+
 def _round_100(value: float) -> int:
     return int(round(value / 100)) * 100
 
@@ -752,7 +891,7 @@ def _pick_days(count: int, excluded: set[int]) -> list[int]:
     return chosen[:count]
 
 
-def _spread_days_evenly(count: int) -> list[int]:
+def _spread_days_evenly(count: int, *, day_offsets: list[int] | None = None) -> list[int]:
     """Pick `count` Monday-relative day offsets spread evenly across the
     week (ascending Mon->Sun order) -- `_bike_week_sessions`'s own day
     placement, since a bike-only athlete has no `pool_schedule`-equivalent
@@ -771,9 +910,28 @@ def _spread_days_evenly(count: int) -> list[int]:
     Offsets are `round(i * 7 / count)` for `i in range(count)` -- verified
     collision-free (distinct offsets) for every `count` in `1..7`, the only
     range `BIKE_SESSIONS_PER_WEEK` can realistically take.
+
+    `day_offsets` (Build A defect 2, engine/week-generator-realism): when an
+    athlete has a `training_days` weekday PATTERN (`_training_day_offsets`),
+    those explicit offsets are used instead of even spacing, in the coach's
+    declared order (so `day_offsets[0]` stays the week's hard day). If the
+    pattern has MORE days than `count` (a low-volume week reduced the session
+    count -- see `_resolve_bike_session_count`), the first `count` pattern
+    days are kept. If it has FEWER, the shortfall is filled with evenly-
+    spaced offsets that don't collide with the pattern. `day_offsets=None`
+    (the default, every existing athlete) is byte-for-byte the old behavior.
     """
     if count <= 0:
         return []
+    if day_offsets:
+        pattern: list[int] = []
+        for o in day_offsets:
+            if o not in pattern:
+                pattern.append(o)
+        if len(pattern) >= count:
+            return pattern[:count]
+        fillers = [o for o in (round(i * 7 / count) for i in range(count)) if o not in pattern]
+        return sorted(pattern + fillers[: count - len(pattern)])
     return [round(i * 7 / count) for i in range(count)]
 
 
@@ -1937,11 +2095,35 @@ def _bike_short_short_main(main_s: float, ftp_watts: float | None) -> list[Worko
     )
 
 
+def _bike_openers_main(main_s: float, ftp_watts: float | None) -> list[WorkoutStepOrRepeat]:
+    """library/24 "Openers / pre-race primers (taper)": 3-5 reps of a
+    ~1-2 min work bout a touch above threshold (`BIKE_OPENERS_ZONE`, low Z4)
+    with full recovery between reps. Same rep-with-rest shape as race-pace,
+    just shorter/sharper and -- crucially -- selected on a taper/pre-race
+    week where the WEEKLY VOLUME is also pulled down
+    (`BIKE_TAPER_INTENSITY_VOLUME_REDUCTION`), so the total load is low even
+    though the openers themselves are race-intensity-adjacent. Build A
+    defect 5, engine/week-generator-realism."""
+    return _bike_reps_with_rest_main(
+        "openers (pre-race primers)",
+        "Opener",
+        BIKE_OPENERS_ZONE,
+        BIKE_OPENERS_WORK_S,
+        "Full recovery between openers",
+        BIKE_OPENERS_MIN_REPS,
+        BIKE_OPENERS_MAX_REPS,
+        BIKE_OPENERS_REST_S * BIKE_REST_GAP_CAP_MULTIPLIER,
+        main_s,
+        ftp_watts,
+    )
+
+
 _BIKE_INTERVAL_TEMPLATE_BUILDERS = {
     "sustained_threshold": _bike_sustained_threshold_main,
     "over_unders": _bike_over_unders_main,
     "short_short_vo2": _bike_short_short_main,
     "race_pace": _bike_race_pace_main,
+    "openers": _bike_openers_main,
 }
 
 
@@ -2118,15 +2300,18 @@ def _resolve_bike_hard_min(total_duration_min: float) -> float:
     return min(round(total_duration_min * BIKE_HARD_SESSION_SHARE, 1), BIKE_HARD_SESSION_MAX_MIN)
 
 
-def _resolve_bike_session_count(total_duration_min: float) -> int:
-    """How many of `BIKE_SESSIONS_PER_WEEK` sessions this week's total
+def _resolve_bike_session_count(total_duration_min: float, *, target_count: int | None = None) -> int:
+    """How many of `BIKE_SESSIONS_PER_WEEK` (or `target_count`, when the
+    athlete has a `training_days` bike PATTERN -- Build A defect 2) sessions
+    this week's total
     duration can actually support without any of them needing
     `DEFAULT_BIKE_SESSION_MIN`'s floor -- see that constant's own comment
     (PR #167 review, Finding 6) for the bug this replaces: flooring each
     session of a FIXED count independently, which could silently inflate a
     low-volume (taper) week's total actual duration by up to 50%.
 
-    Tries `BIKE_SESSIONS_PER_WEEK` down to 2, returning the largest count
+    Tries the ceiling (`target_count` if given, else `BIKE_SESSIONS_PER_WEEK`)
+    down to 2, returning the largest count
     whose hard/easy split (computed the same way `_bike_week_sessions`
     itself computes it) already clears the floor on both the hard session
     and every easy session, with no flooring needed at all. Falls back to a
@@ -2134,9 +2319,16 @@ def _resolve_bike_session_count(total_duration_min: float) -> int:
     sessions clear it; a single low-volume session is deliberately NOT
     labeled "hard" (see `_bike_week_sessions`'s own `is_hard` handling) so
     this never forces a compressed taper day into a tempo-ride label.
+
+    `target_count` (Build A defect 2): the number of bike days the athlete's
+    `training_days` pattern declares. When given, it is the ceiling instead
+    of `BIKE_SESSIONS_PER_WEEK` -- so a 4- or 5-day pattern is honored, and
+    a low-volume week still degrades gracefully below it. `None` (every
+    existing caller) keeps the exact prior behavior.
     """
+    ceiling = max(1, target_count if target_count is not None else BIKE_SESSIONS_PER_WEEK)
     hard_min = _resolve_bike_hard_min(total_duration_min)
-    for n in range(BIKE_SESSIONS_PER_WEEK, 1, -1):
+    for n in range(ceiling, 1, -1):
         easy_count = n - 1
         remaining_min = max(0.0, total_duration_min - hard_min)
         easy_min = remaining_min / easy_count
@@ -2174,6 +2366,8 @@ def _bike_week_sessions(
     is_indoor: bool | None = None,
     week_index: int = 0,
     ftp_source: str | None = None,
+    bike_day_offsets: list[int] | None = None,
+    use_openers: bool = False,
 ) -> list[Session]:
     """Generate up to `BIKE_SESSIONS_PER_WEEK` generic cycling sessions
     splitting `total_duration_min` across a small weekly cadence:
@@ -2255,15 +2449,22 @@ def _bike_week_sessions(
     from-scratch case this does NOT cover). Reuses this template's existing
     content unchanged -- no new session type, no ramp-rate generator here.
     """
-    n = _resolve_bike_session_count(total_duration_min)
+    # `bike_day_offsets` (Build A defect 2): the athlete's `training_days`
+    # bike weekday pattern, when set -- drives BOTH the session count ceiling
+    # (`target_count`) and the day placement (`_spread_days_evenly`'s
+    # `day_offsets`). `None` -> the historical `BIKE_SESSIONS_PER_WEEK` /
+    # even-spacing behavior, byte-for-byte. `use_openers` (Build A defect 5):
+    # forces the "openers" template regardless of the `week_index` rotation.
+    target_count = len(bike_day_offsets) if bike_day_offsets else None
+    n = _resolve_bike_session_count(total_duration_min, target_count=target_count)
     hard_min = _resolve_bike_hard_min(total_duration_min)
     easy_count = n - 1
     remaining_min = max(0.0, total_duration_min - hard_min)
     easy_min = round(remaining_min / easy_count, 1) if easy_count > 0 else 0.0
-    template = _select_bike_interval_template(week_index)
+    template = _select_bike_interval_template(week_index, use_openers=use_openers)
     template_meta = BIKE_INTERVAL_TEMPLATE_META[template]
 
-    offsets = _spread_days_evenly(n)
+    offsets = _spread_days_evenly(n, day_offsets=bike_day_offsets)
 
     sessions: list[Session] = []
     for i, offset in enumerate(offsets):
@@ -2360,6 +2561,87 @@ def _strength_sessions(athlete: Athlete, week_start: date, offsets: list[int]) -
     return sessions
 
 
+_RACE_PURPOSE_PREFIX = "RACE — "
+
+
+def _session_is_race(s: Session) -> bool:
+    """A generated race-day session -- identified structurally by its
+    "RACE — ..." purpose prefix (`_bike_race_session`), not by zone, since
+    races are an ADDITIVE slot that doesn't count against the hard-bike-day
+    ceiling. The prefix is specific enough not to catch the pre-existing
+    "race-week opener — ..." final-taper purpose string."""
+    return s.sport == "bike" and s.purpose.strip().upper().startswith(_RACE_PURPOSE_PREFIX)
+
+
+def _session_is_hard_bike(s: Session) -> bool:
+    return (
+        s.sport == "bike"
+        and not _session_is_race(s)
+        and str(s.intensity.get("zone") or "").upper() in _BIKE_HARD_ZONES
+    )
+
+
+def _strength_offsets_after_hard(
+    bike_sessions: list[Session],
+    week_start: date,
+    count: int,
+    *,
+    strength_day_offsets: list[int] | None = None,
+) -> list[int]:
+    """Monday-relative day offsets for `count` strength sessions, obeying
+    Andrew's rule (Build A defect 4): strength is ALWAYS scheduled AFTER the
+    week's interval/hard session -- later the same day, or a subsequent day
+    -- and NEVER the day before a hard or race day.
+
+    `strength_day_offsets` (the athlete's `training_days["strength"]`
+    pattern, when set): those days are preferred, filtered to the ones that
+    satisfy the after-the-hard-day rule, in declared order. Any shortfall
+    (pattern too short, or every pattern day falls before the hard day) is
+    filled from the remaining free days that still satisfy the rule, then --
+    only as a last resort, never leaving strength unplaced -- from any day.
+    Without a pattern this reduces to "the earliest free days on or after
+    the hard day", which for the default even-spaced week (hard on Monday)
+    yields the same offsets `_pick_days` used to.
+    """
+    used = {(s.date - week_start).days for s in bike_sessions}
+    protected = sorted(
+        (s.date - week_start).days
+        for s in bike_sessions
+        if _session_is_hard_bike(s) or _session_is_race(s)
+    )
+    earliest_hard = protected[0] if protected else -1
+    day_before_protected = {p - 1 for p in protected}
+
+    def ok(o: int) -> bool:
+        return o >= earliest_hard and o not in day_before_protected
+
+    chosen: list[int] = []
+    if strength_day_offsets:
+        for o in strength_day_offsets:
+            if o not in chosen and ok(o):
+                chosen.append(o)
+            if len(chosen) == count:
+                return chosen
+    for o in list(range(7)):
+        if len(chosen) == count:
+            break
+        if o in chosen or o in used or not ok(o):
+            continue
+        chosen.append(o)
+    for o in list(range(7)):  # relax "free day" but keep the after-hard rule
+        if len(chosen) == count:
+            break
+        if o in chosen or not ok(o):
+            continue
+        chosen.append(o)
+    for o in list(range(7)):  # last resort: never leave strength unplaced
+        if len(chosen) == count:
+            break
+        if o not in chosen:
+            chosen.append(o)
+    return sorted(chosen[:count])
+
+
 def _bike_week_sessions_with_strength(
     athlete: Athlete,
     week_start: date,
@@ -2369,9 +2651,13 @@ def _bike_week_sessions_with_strength(
     is_indoor: bool | None = None,
     week_index: int = 0,
     ftp_source: str | None = None,
+    bike_day_offsets: list[int] | None = None,
+    strength_day_offsets: list[int] | None = None,
+    use_openers: bool = False,
 ) -> list[Session]:
     """`_bike_week_sessions`'s output plus STRENGTH_SESSIONS_PER_WEEK
-    strength sessions placed on days it didn't already use -- the
+    strength sessions placed AFTER the week's hard/interval session
+    (`_strength_offsets_after_hard` -- Build A defect 4) -- the
     bike-primary counterpart to the swim branch's own strength placement
     (see `_strength_sessions`'s own docstring, PR #167 red-team review
     Finding 3). Shared by `generate_week`'s bike-primary path and
@@ -2384,6 +2670,10 @@ def _bike_week_sessions_with_strength(
     (optional, threshold-history build, defaults to `None`): forwarded
     straight through to `_bike_week_sessions`'s own `ftp_source` -- see that
     function's docstring for the FTP-check purpose-text note this enables.
+    `bike_day_offsets`/`strength_day_offsets`/`use_openers` (Build A,
+    engine/week-generator-realism): the athlete's `training_days` weekday
+    pattern for each and the taper/race-proximity openers flag -- all
+    default to the historical behavior when unset.
     """
     bike_sessions = _bike_week_sessions(
         athlete,
@@ -2393,9 +2683,15 @@ def _bike_week_sessions_with_strength(
         is_indoor=is_indoor,
         week_index=week_index,
         ftp_source=ftp_source,
+        bike_day_offsets=bike_day_offsets,
+        use_openers=use_openers,
     )
-    excluded = {(s.date - week_start).days for s in bike_sessions}
-    strength_offsets = _pick_days(STRENGTH_SESSIONS_PER_WEEK, excluded=excluded)
+    strength_offsets = _strength_offsets_after_hard(
+        bike_sessions,
+        week_start,
+        STRENGTH_SESSIONS_PER_WEEK,
+        strength_day_offsets=strength_day_offsets,
+    )
     return bike_sessions + _strength_sessions(athlete, week_start, strength_offsets)
 
 
@@ -2439,6 +2735,164 @@ def _bike_final_taper_sessions(
     return sessions
 
 
+def _bike_openers_session(
+    athlete: Athlete,
+    session_date: date,
+    total_duration_min: float,
+    ftp_watts: float | None,
+    *,
+    is_indoor: bool | None = None,
+) -> Session:
+    """One standalone "openers" primer session (Build A defect 5) -- the
+    hard session on a race-week that also contains race day(s): short
+    race-intensity primers, low total volume, placed a couple of days
+    before the first race. Reuses the `"openers"` interval template
+    (`_bike_hard_session_structure`)."""
+    structured = _bike_hard_session_structure("openers", total_duration_min, ftp_watts)
+    return Session(
+        id=uuid4(),
+        athlete_id=athlete.id,
+        date=session_date,
+        sport="bike",
+        source="ai_coach",
+        duration_min=total_duration_min,
+        distance_m=None,
+        intensity=_bike_intensity(BIKE_OPENERS_ZONE, ftp_watts),
+        purpose=BIKE_INTERVAL_TEMPLATE_META["openers"]["purpose"],
+        structure=render_prose(structured),
+        structured=structured,
+        status="planned",
+        is_indoor=is_indoor,
+    )
+
+
+def _bike_race_session_structure(ftp_watts: float | None) -> WorkoutStructure:
+    """Warm-up (easy build) + 2-3 short openers + an open-duration RACE
+    block + short spin-down. Not a fixed-power training set -- the race
+    itself is `duration_kind="open"` (the athlete rides the actual event),
+    the openers are the only bounded work."""
+    items: list[WorkoutStepOrRepeat] = [
+        _bike_step("Warm-up, easy build", "warmup", 600.0, "Z2", ftp_watts),
+        _bike_open_header("Pre-race openers — 3 x 40s @ Z4, 90s easy between"),
+        WorkoutRepeat(
+            repeat_mode="count",
+            count=3,
+            steps=[
+                _bike_step("Opener", "interval", 40.0, BIKE_OPENERS_ZONE, ftp_watts),
+                _bike_step("Easy between openers", "recovery", 90.0, "Z1", ftp_watts),
+            ],
+        ),
+        WorkoutStep(
+            label="RACE — ride the event",
+            role="interval",
+            duration_kind="open",
+            target=WorkoutTarget(basis="zone", zone="Z5"),
+            modality="bike",
+        ),
+        _bike_step("Spin-down, easy", "cooldown", 600.0, "Z1", ftp_watts),
+    ]
+    return WorkoutStructure(items=items)
+
+
+def _bike_race_session(
+    athlete: Athlete,
+    race_date: date,
+    event: Event | None,
+    ftp_watts: float | None,
+    *,
+    is_indoor: bool | None = None,
+) -> Session:
+    """A RACE-labelled bike session for a race date that falls inside this
+    week (Build A defect 5). Warm-up + openers + the race itself -- NOT a
+    Z2/VO2 training ride. An additive slot: its `duration_min` is a fixed
+    estimate (`BIKE_RACE_SESSION_DURATION_MIN`), not drawn from
+    `target_volume_m`."""
+    label = event.name if event is not None else "race"
+    structured = _bike_race_session_structure(ftp_watts)
+    return Session(
+        id=uuid4(),
+        athlete_id=athlete.id,
+        date=race_date,
+        sport="bike",
+        source="ai_coach",
+        duration_min=BIKE_RACE_SESSION_DURATION_MIN,
+        distance_m=None,
+        intensity=_bike_intensity("Z5", ftp_watts),
+        purpose=(
+            f"RACE — {label}: structured warm-up with 2–3 short openers, then race. "
+            "This is the day the taper pays off — no extra training load."
+        ),
+        structure=render_prose(structured),
+        structured=structured,
+        status="planned",
+        is_indoor=is_indoor,
+    )
+
+
+def evaluate_week_realism(
+    sessions: list[Session], *, prev_week_bike_volume_min: float | None = None
+) -> list[str]:
+    """Realism guardrail for a bike-primary week's proposed session mix
+    (Build A defect 1, engine/week-generator-realism). Returns human-
+    readable warnings for the coach; an empty list means the plan looks
+    realistic. This FLAGS -- it never clamps: the caller keeps the plan as
+    requested and surfaces these strings (via `WeekPlan.planning_warnings`).
+
+    A multi-modal week is fine -- bike sessions PLUS additive strength/
+    mobility/race slots. What trips a warning:
+      - more than `BIKE_MAX_HARD_DAYS_PER_WEEK` hard bike days (Z3-Z5
+        training sessions; races don't count -- library/24 Seiler polarized);
+      - more than `BIKE_MAX_BIKE_DAYS_PER_WEEK` bike TRAINING days, races
+        excluded (library/23; Andrew's "6+ days will perform poorly");
+      - two hard bike days on back-to-back dates;
+      - total planned ride minutes more than
+        `BIKE_WEEKLY_VOLUME_RAMP_CAP_FRACTION` above `prev_week_bike_volume_min`
+        (CLAUDE.md's +8%/week rail), when the prior week's volume is supplied.
+    """
+    warnings_out: list[str] = []
+    bike = [s for s in sessions if s.sport == "bike"]
+    non_race_bike = [s for s in bike if not _session_is_race(s)]
+    hard = [s for s in bike if _session_is_hard_bike(s)]
+
+    if len(hard) > BIKE_MAX_HARD_DAYS_PER_WEEK:
+        zones = sorted({str(s.intensity.get("zone")) for s in hard})
+        warnings_out.append(
+            f"{len(hard)} hard bike days planned this week (zones {zones}); the "
+            f"realistic ceiling is {BIKE_MAX_HARD_DAYS_PER_WEEK} hard bike day(s) "
+            "(library/24 — Seiler polarized distribution: a 4th hard day tips the "
+            "week into the moderate 'grey zone' that plateaus performance). Move "
+            "the extra hard day(s) to easy endurance, or drop them."
+        )
+
+    if len(non_race_bike) > BIKE_MAX_BIKE_DAYS_PER_WEEK:
+        warnings_out.append(
+            f"{len(non_race_bike)} bike training days planned (races excluded); "
+            f"{BIKE_MAX_BIKE_DAYS_PER_WEEK}+ rideable days a week tends to perform "
+            "poorly (library/23 — no session-count gain observed past a handful of "
+            "well-structured sessions). Consolidate onto fewer, better days."
+        )
+
+    hard_dates = sorted(s.date for s in hard)
+    if any((b - a).days == 1 for a, b in zip(hard_dates, hard_dates[1:])):
+        warnings_out.append(
+            "hard bike days on back-to-back dates; leave an easy or off day "
+            "between hard sessions unless this is a deliberate race-simulation "
+            "block the athlete has confirmed."
+        )
+
+    if prev_week_bike_volume_min is not None and prev_week_bike_volume_min > 0:
+        this_vol = sum(s.duration_min for s in non_race_bike)
+        cap = prev_week_bike_volume_min * (1 + BIKE_WEEKLY_VOLUME_RAMP_CAP_FRACTION)
+        if this_vol > cap:
+            pct = (this_vol / prev_week_bike_volume_min - 1) * 100
+            warnings_out.append(
+                f"planned bike volume {this_vol:.0f} min is +{pct:.0f}% over last "
+                f"week ({prev_week_bike_volume_min:.0f} min) — past the "
+                f"+{BIKE_WEEKLY_VOLUME_RAMP_CAP_FRACTION * 100:.0f}%/week safety "
+                "rail (CLAUDE.md). Needs explicit athlete confirmation."
+            )
+
+    return warnings_out
 # =========================================================================
 # Cyclocross skills-day content (engine/cx-skills-day-content)
 # -------------------------------------------------------------------------
@@ -2691,6 +3145,7 @@ def generate_week(
     ftp_watts: float | None = None,
     bike_indoor: bool | None = None,
     ftp_source: str | None = None,
+    events: list[Event] | None = None,
 ) -> WeekPlan:
     """Generate one week's sessions.
 
@@ -2729,6 +3184,30 @@ def generate_week(
     long-swim taper-decay cap, or any other volume/duration math above --
     purely additive content layered on top of whatever this function
     already computes.
+
+    `events` (optional, Build A defect 5, engine/week-generator-realism --
+    defaults to `None`; every existing call site that passes only `event=`
+    keeps byte-for-byte behavior): the athlete's full active-event list.
+    ONLY for a `primary_sport="bike"` week, and ALL of the following are
+    gated on it being supplied:
+      - a race date inside this Mon-Sun span becomes a RACE-labelled
+        session (warm-up + openers + the race itself, `_bike_race_session`),
+        not a Z2/VO2 training ride; two back-to-back race days both get
+        slots (the additive 6th/7th slot);
+      - a week within `BIKE_OPENERS_PROXIMITY_DAYS` of the next race, or any
+        `"taper"`-block week, switches its hard session to the `"openers"`
+        template and pulls weekly volume down by
+        `BIKE_TAPER_INTENSITY_VOLUME_REDUCTION` (Bosquet 2007; keep
+        intensity, cut volume).
+    The returned `WeekPlan.planning_warnings` always carries the realism
+    guardrail's verdict for a bike week (`evaluate_week_realism`); it is
+    always `[]` for a swim week.
+
+    `Athlete.training_days` (Build A defect 2): when the athlete has a
+    per-sport weekday pattern, a bike week's sessions land on those
+    weekdays (first bike entry = the hard day) and strength lands AFTER the
+    hard day (defect 4). Unset -> `_spread_days_evenly`'s even spacing,
+    byte-for-byte.
 
     `template_preference` (optional): forwarded to every call site that
     picks a main-set template via the "additional pool-independent swim"
@@ -2935,6 +3414,44 @@ def generate_week(
             focus = f"{block.focus} — scheduled deload week"
         else:
             focus = block.focus
+
+        # --- Build A: training-day pattern + race-proximity / taper ---------
+        # `training_days` weekday pattern (defect 2): drives day placement +
+        # session count when set, else None -> historical even spacing.
+        bike_day_offsets = _training_day_offsets(athlete, "bike")
+        strength_day_offsets = _training_day_offsets(athlete, "strength")
+
+        # Race proximity / taper -> "openers" + volume pull-down (defect 5).
+        # ALL of this is gated on the caller passing `events` -- an existing
+        # caller that passes only `event=` keeps byte-for-byte behavior.
+        week_end = week_start + timedelta(days=6)
+        in_week_race_dates: list[date] = []
+        race_within_days: int | None = None
+        if events is not None:
+            bike_events = [
+                e for e in events if e.active and e.primary_sport == "bike"
+            ]
+            in_week_race_dates = sorted(
+                {e.event_date for e in bike_events if week_start <= e.event_date <= week_end}
+            )
+            future_race_dates = [e.event_date for e in bike_events if e.event_date > week_end]
+            if future_race_dates:
+                race_within_days = min((d - week_end).days for d in future_race_dates)
+
+        use_openers = events is not None and (
+            block.name == "taper"
+            or (race_within_days is not None and race_within_days <= BIKE_OPENERS_PROXIMITY_DAYS)
+        )
+        if use_openers and not is_deload_week:
+            # Bosquet (2007) / Mujika & Padilla (2003): keep intensity (the
+            # openers), slash volume. Applied on top of whatever the block
+            # interpolation already computed. Never stacked with the
+            # periodic deload (same non-stacking care the deload code takes).
+            target_volume_m = round(
+                target_volume_m * (1 - BIKE_TAPER_INTENSITY_VOLUME_REDUCTION)
+            )
+            focus = f"{block.focus} — pre-race sharpening: openers, volume pulled down"
+
         if event is not None and event.target_metric == "load_au":
             # Cheap sanity check for the docstring's own "Known, deliberate
             # scope limit" note above (PR #167 review, fragile note): this
@@ -2969,7 +3486,74 @@ def generate_week(
             and event.active
             and event.priority.strip().upper() == RACE_WEEK_PRIORITY
         )
-        if is_qualifying_race_week:
+        if in_week_race_dates:
+            # (A) This week CONTAINS one or more race dates (Build A defect
+            # 5). Each becomes a RACE-labelled session (warm-up + openers +
+            # the race itself), NOT a training ride. Back-to-back race days
+            # both get slots -- this is the 6th/7th-slot case. Ahead of the
+            # first race, a single short openers primer on a free early day;
+            # at most one strength session, and only if it lands after the
+            # primer and clear of the day before any race (a race weekend
+            # leaves no real room for strength).
+            race_offsets = sorted((d - week_start).days for d in in_week_race_dates)
+            first_race_off = race_offsets[0]
+            race_sessions: list[Session] = []
+            for d in in_week_race_dates:
+                ev = next(
+                    (
+                        e
+                        for e in (events or [])
+                        if e.event_date == d and e.primary_sport == "bike" and e.active
+                    ),
+                    event if (event is not None and event.event_date == d) else None,
+                )
+                race_sessions.append(
+                    _bike_race_session(athlete, d, ev, ftp_watts, is_indoor=bike_indoor)
+                )
+            core_bike_sessions: list[Session] = []
+            primer_off: int | None = None
+            if first_race_off >= 2:
+                primer_off = next(
+                    (o for o in range(first_race_off - 1) if o not in race_offsets), None
+                )
+                if primer_off is not None:
+                    primer_min = max(
+                        DEFAULT_BIKE_SESSION_MIN,
+                        round(
+                            min(
+                                float(target_volume_m) * BIKE_HARD_SESSION_SHARE,
+                                BIKE_HARD_SESSION_MAX_MIN,
+                            ),
+                            1,
+                        ),
+                    )
+                    core_bike_sessions.append(
+                        _bike_openers_session(
+                            athlete,
+                            week_start + timedelta(days=primer_off),
+                            primer_min,
+                            ftp_watts,
+                            is_indoor=bike_indoor,
+                        )
+                    )
+            bike_only = core_bike_sessions + race_sessions
+            # Strength AFTER the hard/primer day and clear of the day before
+            # any race (`_strength_offsets_after_hard` -- defect 4), honoring
+            # the athlete's `training_days["strength"]` pattern when set.
+            strength_offsets = _strength_offsets_after_hard(
+                bike_only,
+                week_start,
+                STRENGTH_SESSIONS_PER_WEEK,
+                strength_day_offsets=strength_day_offsets,
+            )
+            bike_sessions = bike_only + _strength_sessions(
+                athlete, week_start, strength_offsets
+            )
+            race_week_checklist = (
+                _race_week_checklist(event, week_start) if is_qualifying_race_week else []
+            )
+            focus = f"{block.focus} — race week ({len(race_sessions)} race day(s))"
+        elif is_qualifying_race_week:
             core_bike_sessions = _bike_week_sessions(
                 athlete,
                 week_start,
@@ -2978,6 +3562,8 @@ def generate_week(
                 is_indoor=bike_indoor,
                 week_index=ramp_week_index,
                 ftp_source=ftp_source,
+                bike_day_offsets=bike_day_offsets,
+                use_openers=use_openers,
             )
             if len(core_bike_sessions) < BIKE_FINAL_TAPER_MIN_SESSIONS:
                 # The ordinary taper math collapsed this week to a single
@@ -2986,8 +3572,12 @@ def generate_week(
                 core_bike_sessions = _bike_final_taper_sessions(
                     athlete, week_start, ftp_watts, is_indoor=bike_indoor
                 )
-            excluded = {(s.date - week_start).days for s in core_bike_sessions}
-            strength_offsets = _pick_days(STRENGTH_SESSIONS_PER_WEEK, excluded=excluded)
+            strength_offsets = _strength_offsets_after_hard(
+                core_bike_sessions,
+                week_start,
+                STRENGTH_SESSIONS_PER_WEEK,
+                strength_day_offsets=strength_day_offsets,
+            )
             bike_sessions = core_bike_sessions + _strength_sessions(
                 athlete, week_start, strength_offsets
             )
@@ -3001,6 +3591,9 @@ def generate_week(
                 is_indoor=bike_indoor,
                 week_index=ramp_week_index,
                 ftp_source=ftp_source,
+                bike_day_offsets=bike_day_offsets,
+                strength_day_offsets=strength_day_offsets,
+                use_openers=use_openers,
             )
             race_week_checklist = []
         # --- engine/cx-skills-day-content: CX skills days -----------------
@@ -3026,6 +3619,7 @@ def generate_week(
             sessions=bike_sessions,
             adaptation_rationale=None,
             draft=False,
+            planning_warnings=evaluate_week_realism(bike_sessions),
             race_week_checklist=race_week_checklist,
         )
 

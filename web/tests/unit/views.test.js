@@ -5,7 +5,7 @@ import {
   renderCr10SliderField, cr10AnchorLabel, loadTierLabel, renderWorkoutRow,
   renderAskCoachSection, renderFeedbackTab,
 } from '../../src/views.js';
-import { isoWeekMonday, addDays, dateKey, formatShortDate } from '../../src/plan.js';
+import { isoWeekMonday, addDays, dateKey, formatShortDate, formatDuration } from '../../src/plan.js';
 import { HISTORY_DISPLAY_CAP } from '../../src/workouts.js';
 
 // Real fixture workouts from the task brief -- andrew's 2026-07-09
@@ -3461,5 +3461,53 @@ describe('renderMacroSection week-count (macro-block off-by-one fix)', () => {
     expect(html).toContain('1 wk');
     expect(html).not.toContain('0 wk');
     expect(html).not.toMatch(/flex:0[^.\d]/);
+  });
+});
+
+describe('weekly volume target is sport-aware (defect 3: swim meters on a bike week)', () => {
+  const FUTURE = '2099-W01';
+  const monday = isoWeekMonday(FUTURE);
+  const mkSession = (offset, sport, durationMin, distanceM) => ({
+    id: `s-${sport}-${offset}`, date: dateKey(addDays(monday, offset)), sport,
+    source: 'ai_coach', duration_min: durationMin, distance_m: distanceM,
+    intensity: {}, purpose: `${sport} work`, structure: null,
+  });
+
+  const swimWeek = {
+    iso_week: FUTURE, meso_block: 'base', focus: 'aerobic base', target_volume_m: 12000,
+    sessions: [mkSession(0, 'swim_pool', 65, 3000), mkSession(2, 'swim_ow', 90, 5000)],
+    adaptation_rationale: null,
+  };
+  const bikeWeek = {
+    iso_week: FUTURE, meso_block: 'base', focus: 'aerobic base', target_volume_m: 503,
+    sessions: [mkSession(0, 'bike', 120, 30000), mkSession(1, 'strength', 40, null)],
+    adaptation_rationale: null,
+  };
+  const base = { athlete: { name: 'Renee' }, events: [], macro: { blocks: [] } };
+
+  it('keeps the swim week total in meters, byte-for-byte as before', () => {
+    const html = renderApp({ ...base, weeks: [swimWeek] }, null);
+    expect(html).toContain('total <b>12,000 m</b>');
+  });
+
+  it('replaces the meaningless meters figure on an all-bike/strength week with a duration total', () => {
+    const html = renderApp({ ...base, weeks: [bikeWeek] }, null);
+    expect(html).not.toContain('503 m');
+    expect(html).not.toContain('total <b>503');
+    // 120 + 40 = 160 min of planned training time.
+    expect(html).toContain(formatDuration(160));
+  });
+
+  it('macro block labels read min/wk for a duration-target (bike) event, m/wk for a swim event', () => {
+    const bikeBlocks = [{ name: 'Base', start_date: '2099-01-05', end_date: '2099-01-25', weekly_volume_target_m: 480 }];
+    const bikeEvent = { name: 'Gravel Worlds', event_date: '2099-05-01', target_metric: 'duration_min', primary_sport: 'bike' };
+    const bikeHtml = renderApp({ athlete: { name: 'Renee' }, events: [bikeEvent], macro: { blocks: bikeBlocks }, weeks: [] }, null);
+    expect(bikeHtml).toContain('480 min/wk');
+    expect(bikeHtml).not.toContain('480 m/wk');
+
+    const swimBlocks = [{ name: 'Base', start_date: '2099-01-05', end_date: '2099-01-25', weekly_volume_target_m: 20000 }];
+    const swimEvent = { name: 'Greece', event_date: '2099-05-01', target_metric: 'distance_m', primary_sport: 'swim', distance_m: 33300 };
+    const swimHtml = renderApp({ athlete: { name: 'Renee' }, events: [swimEvent], macro: { blocks: swimBlocks }, weeks: [] }, null);
+    expect(swimHtml).toContain('20,000 m/wk');
   });
 });

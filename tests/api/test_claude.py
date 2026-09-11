@@ -7,13 +7,21 @@ import httpx
 
 import anthropic
 
-from app.claude import MAX_TOOL_ITERATIONS, ClaudeChat, build_request_kwargs
+import json
+
+from app.claude import (
+    MAX_TOKENS_TRUNCATION_MARKER,
+    MAX_TOOL_ITERATIONS,
+    ClaudeChat,
+    build_request_kwargs,
+)
 from app.config import Settings
 from fakes import (
     FakeAnthropicClient,
     make_final_message,
     make_text_block,
     make_tool_use_block,
+    make_usage,
 )
 
 
@@ -76,6 +84,59 @@ def test_run_streaming_max_iterations_guard() -> None:
 
     assert any('"type": "error"' in e for e in events)
     assert len(client.messages.calls) == MAX_TOOL_ITERATIONS
+
+
+def test_max_tokens_stop_reason_appends_visible_marker_and_warns(capsys) -> None:
+    # Prod 2026-09-10: a "redraft this week" turn hit stop_reason=max_tokens
+    # at exactly 16384 output tokens; the PWA showed a truncated answer with
+    # NO indication anything was cut off. Never silent: the streamed text
+    # must carry a visible marker AND app.claude must emit a WARN log so
+    # every hit is a reviewable signal.
+    settings = _settings()
+    final = make_final_message(
+        [make_text_block("Here is the start of the redraft")],
+        "max_tokens",
+        usage=make_usage(output_tokens=16384),
+    )
+    client = FakeAnthropicClient([(["Here is the start of the redraft"], final)])
+    chat = ClaudeChat(settings, client=client)
+
+    events = list(
+        chat.run_streaming(
+            [], [{"role": "user", "content": "redraft this week"}], [{"name": "create_week_plan"}], {}
+        )
+    )
+
+    # The partial text still reaches the client, followed by the visible marker.
+    text_events = [json.loads(e[len("data: ") :]) for e in events if '"type": "text"' in e]
+    joined = "".join(t["text"] for t in text_events)
+    assert "Here is the start of the redraft" in joined
+    assert MAX_TOKENS_TRUNCATION_MARKER in joined
+    assert "cut off" in MAX_TOKENS_TRUNCATION_MARKER
+
+    # Loop still terminates cleanly with a done event carrying the reason.
+    assert any('"type": "done"' in e and "max_tokens" in e for e in events)
+
+    # WARN log from app.claude, with the review-signal fields.
+    logged = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("{") and "max_tokens" in line
+    ]
+    warn = next(r for r in logged if r["level"] == "warn" and r["msg"] == "turn hit max_tokens")
+    assert warn["output_tokens"] == 16384
+    assert warn["iteration"] == 0
+    assert "create_week_plan" in warn["tools_available"]
+
+
+def test_max_tokens_marker_not_emitted_on_normal_end_turn() -> None:
+    settings = _settings()
+    final = make_final_message([make_text_block("all done, nothing cut")], "end_turn")
+    client = FakeAnthropicClient([(["all done, nothing cut"], final)])
+    chat = ClaudeChat(settings, client=client)
+
+    events = list(chat.run_streaming([], [{"role": "user", "content": "hi"}], [], {}))
+    assert not any(MAX_TOKENS_TRUNCATION_MARKER in e for e in events)
 
 
 def test_run_streaming_handles_anthropic_api_error() -> None:

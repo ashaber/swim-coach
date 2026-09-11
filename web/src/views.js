@@ -591,6 +591,22 @@ function renderRaceWeekChecklist(checklist) {
     </div>`;
 }
 
+/** A week whose planned sessions are all bike/strength/other (no swim at
+ * all) has no meaningful swim "distance target" -- `week.target_volume_m`
+ * is integer metres, a swim concept, and rendering "503 m" on a bike week
+ * is a leftover artifact. Such a week reports planned training TIME instead
+ * (sum of session durations). A week with any swim session, or no sessions
+ * at all, keeps the metres total byte-for-byte as before. */
+function weekVolumeLabel(week) {
+  const sessions = week.sessions || [];
+  const hasSwim = sessions.some((s) => (s.sport || '').startsWith('swim'));
+  if (hasSwim || sessions.length === 0) {
+    return `total <b>${week.target_volume_m.toLocaleString('en-US')} m</b>`;
+  }
+  const totalMin = sessions.reduce((sum, s) => sum + (s.duration_min || 0), 0);
+  return `total <b>${formatDuration(totalMin)}</b>`;
+}
+
 function renderWeekCard(week, label) {
   const days = sessionsByDay(week);
   const hasHighlight = (daySessions) => daySessions.some((s) => classifySession(s).highlight);
@@ -610,7 +626,7 @@ function renderWeekCard(week, label) {
       <div class="week-head">
         <h3>${esc(label)}</h3>
         <span class="focus">${esc(week.focus)}</span>
-        <span class="vol mono">total <b>${week.target_volume_m.toLocaleString('en-US')} m</b></span>
+        <span class="vol mono">${weekVolumeLabel(week)}</span>
       </div>
       ${week.adaptation_rationale ? `<div class="rationale"><b>Why this shape:</b> ${esc(week.adaptation_rationale)}</div>` : ''}
       ${renderRaceWeekChecklist(week.race_week_checklist)}
@@ -712,6 +728,15 @@ function renderMacroSection(macro, event, weeks) {
 
   const nowIdx = currentBlockIndex(macro.blocks);
   const maxVolume = Math.max(...macro.blocks.map((b) => b.weekly_volume_target_m), 1);
+  // `weekly_volume_target_m` is metres only for a swim (distance-target)
+  // event; for a duration-target event (bike) the same field carries
+  // minutes -- so the unit label follows the event, same signal
+  // plan.js's longSwimLadder already keys off. `m/wk` stays byte-identical
+  // for every existing swim macro.
+  const swimMacro = !event
+    || ((!event.primary_sport || event.primary_sport === 'swim')
+      && (!event.target_metric || event.target_metric === 'distance_m'));
+  const volUnit = swimMacro ? 'm/wk' : 'min/wk';
   // Inclusive day-span (end - start + 1) BEFORE dividing by 7, not after --
   // the previous formula divided the exclusive day-diff by 7 and THEN added
   // 1, double-counting the "+1 for inclusive dates" adjustment and
@@ -740,7 +765,7 @@ function renderMacroSection(macro, event, weeks) {
       <div class="block${i === nowIdx ? ' is-now' : ''}" style="flex:${weeksInBlock}">
         <div class="cap">
           <div class="ph">${esc(block.name)}</div>
-          <div class="vol mono">${block.weekly_volume_target_m.toLocaleString('en-US')} m/wk</div>
+          <div class="vol mono">${block.weekly_volume_target_m.toLocaleString('en-US')} ${volUnit}</div>
           <div class="wk">${esc(formatShortDate(parseIsoDate(block.start_date)))} – ${esc(formatShortDate(parseIsoDate(block.end_date)))} · ${weeksInBlock} wk</div>
           ${i === nowIdx ? '<span class="nowtag">Now</span>' : ''}
         </div>

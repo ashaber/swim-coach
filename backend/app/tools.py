@@ -198,6 +198,7 @@ from swim_coach.plan import (
     _monday_on_or_after,
     adjust_session,
     count_structured_steps,
+    evaluate_week_realism,
     generate_week,
     scaffold_macro,
     scaffold_sharpening_macro,
@@ -212,6 +213,7 @@ from swim_coach.workout_templates import TemplatePreference, render_prose, resol
 
 from app.context import (
     _active_health_statuses,
+    athlete_primary_sport,
     find_workout_by_id,
     iso_week_str,
     summarize_rollup,
@@ -1117,7 +1119,16 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "of always landing on whatever the normal deterministic "
             "rotation picks. Fails with a clear error (rather than silently "
             "falling back to the default rotation) if the preference "
-            "matches zero library templates for some session's macro block."
+            "matches zero library templates for some session's macro block.\n\n"
+            "For a bike-primary week the response includes `planning_warnings` "
+            "-- the realism guardrail's verdict (too many hard bike days, too "
+            "many rideable days, back-to-back hard days). It is surfaced, "
+            "never silently applied; relay it to the athlete. Race dates "
+            "inside the week become RACE-labelled sessions, and a taper / "
+            "within-7-days-of-a-race week uses short 'openers' primers with "
+            "volume pulled down rather than a VO2 training ride. To place an "
+            "extra day the generator doesn't (a second race, an openers "
+            "session), use replace_week_plan's `session_overrides` add mode."
         ),
         "input_schema": {
             "type": "object",
@@ -1308,12 +1319,26 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "type": "array",
                     "description": (
                         "Optional explicit overrides applied to the generated "
-                        "week's sessions before it's returned/persisted. Each "
-                        "entry must match exactly one session already in the "
-                        "generated week (by date, and by sport too if more "
-                        "than one session falls on that date) -- an entry "
-                        "matching zero or more than one session is an error, "
-                        "not a silent no-op or a guess."
+                        "week's sessions before it's returned/persisted. In "
+                        "the default (modify) mode each entry must match "
+                        "exactly one session already in the generated week "
+                        "(by date, and by sport too if more than one session "
+                        "falls on that date) -- an entry matching zero or "
+                        "more than one session is an error, not a silent "
+                        "no-op or a guess. "
+                        "ADD MODE: an entry with `add: true` CREATES a "
+                        "session on that date when none exists (instead of "
+                        "erroring), requiring `sport`, `duration_min` and "
+                        "`purpose` (optionally `distance_m`, `intensity`, "
+                        "`structured`/`structure`). This is how to place a "
+                        "6th/7th day the normal generator doesn't -- a second "
+                        "race day, a pre-race openers session, a travel-day "
+                        "swap. An added session is still checked by the "
+                        "realism guardrail (`planning_warnings` in the "
+                        "response): appending a 6th hard bike day still gets "
+                        "flagged, it is not silently clamped. `add: true` "
+                        "with a session already on that date is an error "
+                        "(drop `add` to modify it instead)."
                     ),
                     "items": {
                         "type": "object",
@@ -1322,11 +1347,30 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                                 "type": "string",
                                 "description": "Session date, 'YYYY-MM-DD', must fall within iso_week.",
                             },
+                            "add": {
+                                "type": "boolean",
+                                "description": (
+                                    "Set true to CREATE a new session on `date` (append "
+                                    "mode) instead of modifying an existing one. Requires "
+                                    "`sport`, `duration_min`, `purpose`. Errors if a "
+                                    "session already exists on that date/sport."
+                                ),
+                            },
+                            "intensity": {
+                                "type": "object",
+                                "description": (
+                                    "add mode only: the new session's intensity dict "
+                                    "(e.g. {\"zone\": \"Z4\"} for a hard bike session, "
+                                    "{\"anchor\": \"rpe\"} for effort-based). Defaults to "
+                                    "{\"zone\": \"Z2\"} for bike, {\"anchor\": \"rpe\"} otherwise."
+                                ),
+                            },
                             "sport": {
                                 "type": "string",
                                 "description": (
                                     "Disambiguates when more than one session falls on "
-                                    "`date`. Omit if only one session that day."
+                                    "`date`. Omit if only one session that day. REQUIRED "
+                                    "with `add: true`."
                                 ),
                             },
                             "distance_m": {
@@ -1758,6 +1802,45 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
             },
             "required": ["event"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "render_plan_table",
+        "description": (
+            "Format an already-persisted plan artifact into a ready-to-send "
+            "markdown table -- deterministically, in code, spending NO "
+            "thinking or output tokens on the table itself. Call this "
+            "instead of narrating a full day-by-day plan yourself after a "
+            "plan-build tool (draft_macro_plan / replace_macro_plan / "
+            "create_week_plan / replace_week_plan / propose_adaptation / "
+            "propose_session_adjustment): keep your own reply a short "
+            "summary, and use this for the full table when the athlete "
+            "wants it.\n\n"
+            "`target`: an ISO week id like '2026-W30', or 'current' / "
+            "'next' for this / next week, or 'macro' for the macrocycle "
+            "block table. Reads from storage -- so it only works for a plan "
+            "that's actually been persisted (the create_* tools and "
+            "draft_macro_plan persist immediately; the replace_* / "
+            "propose_* drafts do NOT until confirmed). For an unconfirmed "
+            "draft, lay the days out from the draft tool result's own "
+            "`sessions` array instead. The weekly volume figure is "
+            "sport-aware: a swim athlete sees a metres target, a non-swim "
+            "athlete sees planned training time instead (a metres figure is "
+            "not a distance for them)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": (
+                        "'2026-W30' (an ISO week), 'current', 'next', or "
+                        "'macro'."
+                    ),
+                }
+            },
+            "required": ["target"],
             "additionalProperties": False,
         },
     },
@@ -3360,6 +3443,7 @@ def _handle_create_week_plan(input_data: dict[str, Any], *, store: StoreInterfac
             event,
             primary_sport=primary_sport,
             ftp_watts=ftp_watts,
+            events=events,
         )
     except ValueError as exc:
         return {"error": str(exc)}
@@ -3373,6 +3457,9 @@ def _handle_create_week_plan(input_data: dict[str, Any], *, store: StoreInterfac
         "meso_block": week.meso_block,
         "focus": week.focus,
         "target_volume_m": week.target_volume_m,
+        # Realism-guardrail verdict (Build A defect 1) -- surfaced, never
+        # silently clamped. Empty for a realistic week / any swim week.
+        "planning_warnings": list(week.planning_warnings),
         "sessions": [
             {
                 "date": s.date.isoformat(),
@@ -3510,6 +3597,62 @@ def _apply_session_overrides(week, overrides: list[dict[str, Any]], athlete: Ath
             s for s in week.sessions
             if s.date == override_date and (sport is None or s.sport == sport)
         ]
+
+        if override.get("add"):
+            # APPEND MODE (Build A defect 3, engine/week-generator-realism):
+            # create a session on `date` when none exists, instead of
+            # erroring -- how the coach places a 6th/7th day (a second race
+            # day, an openers session, a travel-day swap). Still subject to
+            # the realism guardrail the caller runs afterwards.
+            if not sport:
+                return f"session_overrides: `add` entry for {raw_date!r} needs `sport`"
+            if matches:
+                return (
+                    f"session_overrides: `add` set for {raw_date!r} but a "
+                    f"{matches[0].sport!r} session already exists that date -- drop "
+                    "`add` to modify the existing one instead"
+                )
+            add_duration = override.get("duration_min")
+            add_purpose = override.get("purpose")
+            if add_duration is None or not add_purpose:
+                return (
+                    f"session_overrides: `add` entry for {raw_date!r} needs "
+                    "`duration_min` and `purpose` (optionally `distance_m`, "
+                    "`intensity`, `structured`/`structure`)"
+                )
+            add_structured_raw = override.get("structured")
+            add_structured = None
+            if add_structured_raw is not None:
+                try:
+                    add_structured = WorkoutStructure.model_validate(add_structured_raw)
+                except ValidationError as exc:
+                    return f"invalid session_overrides structured for {raw_date!r}: {exc}"
+            add_structure = override.get("structure")
+            if add_structure is None and add_structured is not None:
+                add_structure = render_prose(add_structured)
+            add_intensity = override.get("intensity")
+            if not isinstance(add_intensity, dict) or not add_intensity:
+                add_intensity = {"zone": "Z2"} if sport == "bike" else {"anchor": "rpe"}
+            try:
+                new_session = Session(
+                    id=uuid.uuid4(),
+                    athlete_id=athlete.id,
+                    date=override_date,
+                    sport=sport,
+                    source="ai_coach",
+                    duration_min=add_duration,
+                    distance_m=override.get("distance_m"),
+                    intensity=add_intensity,
+                    purpose=add_purpose,
+                    structure=add_structure,
+                    structured=add_structured,
+                    status="planned",
+                )
+            except ValidationError as exc:
+                return f"session_overrides: `add` entry for {raw_date!r} is invalid: {exc}"
+            week.sessions.append(new_session)
+            continue
+
         if len(matches) == 0:
             same_day = [{"sport": s.sport, "date": s.date.isoformat()} for s in week.sessions if s.date == override_date]
             return (
@@ -3767,6 +3910,7 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
             event,
             primary_sport=primary_sport,
             ftp_watts=ftp_watts,
+            events=events,
         )
     except ValueError as exc:
         return {"error": str(exc)}
@@ -3776,6 +3920,23 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
         override_error = _apply_session_overrides(week, session_overrides, athlete)
         if override_error is not None:
             return {"error": override_error}
+
+    # Re-run the realism guardrail (Build A defect 1) AFTER any
+    # session_overrides append (defect 3) -- appending a 6th hard bike day
+    # should still get flagged. Also feeds in the prior week's bike volume
+    # (loaded above as `existing_week`) so the +8%/week rail is checked.
+    if primary_sport == "bike":
+        prev_bike_min: float | None = None
+        if existing_week is not None:
+            prev_bike_min = sum(
+                s.duration_min
+                for s in existing_week.sessions
+                if s.sport == "bike"
+                and not s.purpose.strip().upper().startswith("RACE — ")
+            )
+        week.planning_warnings = evaluate_week_realism(
+            week.sessions, prev_week_bike_volume_min=prev_bike_min
+        )
 
     comparison = None
     if existing_week is not None:
@@ -3792,6 +3953,7 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
             "meso_block": week.meso_block,
             "focus": week.focus,
             "target_volume_m": week.target_volume_m,
+            "planning_warnings": list(week.planning_warnings),
             "sessions": _week_sessions_json(week),
             "comparison": comparison,
             "persisted": False,
@@ -3805,6 +3967,7 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
         "meso_block": week.meso_block,
         "focus": week.focus,
         "target_volume_m": week.target_volume_m,
+        "planning_warnings": list(week.planning_warnings),
         "sessions": _week_sessions_json(week),
         "comparison": comparison,
         "persisted": True,
@@ -4313,6 +4476,150 @@ def _handle_set_event_active_status(input_data: dict[str, Any], *, store: StoreI
     return {"updated": True, "event_name": event_name, "active": event.active}
 
 
+# --- render_plan_table: deterministic markdown formatting of a persisted ----
+# plan artifact. This is the "chunking" half of the max_tokens answer (see
+# app.claude.MAX_TOKENS_TRUNCATION_MARKER): the expensive per-day table is
+# built by code from the structured WeekPlan/MacroPlan, never squeezed
+# through the model's thinking/output budget alongside a plan-build turn.
+
+_DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def _fmt_distance_cell(m: Any) -> str:
+    return f"{int(m):,} m" if m else "--"
+
+
+def _fmt_duration_cell(mins: Any) -> str:
+    if not mins:
+        return "--"
+    total = int(round(mins))
+    h, m = divmod(total, 60)
+    return f"{h}h {m:02d}m" if h else f"{m} min"
+
+
+def format_week_plan_table(week: WeekPlan, *, primary_sport: str = "swim") -> str:
+    """One `WeekPlan` -> a markdown table, one row per session, chronological.
+
+    Sport-aware weekly target (defect: a bike/strength week rendered a
+    leftover swim "distance target" e.g. "503m" -- `WeekPlan.target_volume_m`
+    is integer METERS, a swim concept): a swim athlete gets the metres
+    target verbatim (byte-identical to before); a non-swim athlete gets a
+    planned-training-time target instead, and the metres figure is omitted.
+    """
+    is_swim = primary_sport == "swim"
+    lines = [
+        f"### Week {week.iso_week} -- {week.meso_block} block -- {week.focus}",
+    ]
+    if is_swim:
+        lines.append(f"Weekly volume target: {week.target_volume_m:,} m")
+    else:
+        planned_min = sum(int(round(s.duration_min or 0)) for s in week.sessions)
+        lines.append(
+            f"Weekly training-time target: {planned_min} min planned across "
+            f"{len(week.sessions)} session(s) "
+            f"(metres figure omitted -- {primary_sport} is not a swim-distance sport)"
+        )
+    lines += [
+        "",
+        "| Day | Date | Sport | Distance | Duration | Intensity | Purpose |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for s in sorted(week.sessions, key=lambda x: x.date):
+        zone = "--"
+        if isinstance(s.intensity, dict) and s.intensity.get("zone"):
+            zone = str(s.intensity["zone"])
+        purpose = (s.purpose or "").replace("\n", " ").replace("|", "/").strip() or "--"
+        lines.append(
+            f"| {_DOW[s.date.weekday()]} | {s.date.isoformat()} | {s.sport} "
+            f"| {_fmt_distance_cell(s.distance_m)} | {_fmt_duration_cell(s.duration_min)} "
+            f"| {zone} | {purpose} |"
+        )
+    if not week.sessions:
+        lines.append("| -- | -- | -- | -- | -- | -- | (no sessions planned) |")
+    return "\n".join(lines)
+
+
+def format_macro_plan_table(macro: Any, *, primary_sport: str = "swim") -> str:
+    """One `MacroPlan` -> a markdown block table. Same sport-aware weekly
+    target unit as `format_week_plan_table`: `min/wk` for a duration-target
+    (non-swim) event, `m/wk` unchanged for swim."""
+    unit = "m/wk" if primary_sport == "swim" else "min/wk"
+    lines = [
+        "### Macrocycle blocks",
+        f"| Block | Start | End | Weeks | Weekly target ({unit}) | Focus |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for b in macro.blocks:
+        weeks = max(1, round(((b.end_date - b.start_date).days + 1) / 7))
+        focus = (b.focus or "").replace("|", "/").strip()
+        lines.append(
+            f"| {b.name} | {b.start_date.isoformat()} | {b.end_date.isoformat()} "
+            f"| {weeks} | {b.weekly_volume_target_m:,} | {focus} |"
+        )
+    return "\n".join(lines)
+
+
+def _handle_render_plan_table(
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str
+) -> dict[str, Any]:
+    target = (input_data.get("target") or "").strip()
+    if not target:
+        return {
+            "error": (
+                "target is required: an ISO week id (e.g. '2026-W30'), "
+                "'current', 'next', or 'macro'"
+            )
+        }
+    primary_sport = athlete_primary_sport(store, slug)
+
+    if target.lower() == "macro":
+        macro = store.load_macro(slug)
+        if macro is None:
+            return {
+                "error": (
+                    "no macro plan is persisted for this athlete. If you just "
+                    "drafted one that isn't confirmed/persisted yet, lay it out "
+                    "from the draft tool result instead of calling this."
+                )
+            }
+        return {
+            "target": "macro",
+            "table": format_macro_plan_table(macro, primary_sport=primary_sport),
+        }
+
+    if target.lower() == "current":
+        iso_week = iso_week_str(date.today())
+    elif target.lower() == "next":
+        iso_week = iso_week_str(date.today() + timedelta(days=7))
+    else:
+        iso_week = target
+        try:
+            year_str, week_str = iso_week.split("-W")
+            date.fromisocalendar(int(year_str), int(week_str), 1)
+        except (ValueError, IndexError):
+            return {
+                "error": (
+                    f"invalid target {target!r}; expected an ISO week like "
+                    "'2026-W30', or 'current' / 'next' / 'macro'"
+                )
+            }
+
+    week = store.load_week(slug, iso_week)
+    if week is None:
+        return {
+            "error": (
+                f"no week plan is persisted for {iso_week!r}. If you just "
+                "drafted one that isn't confirmed/persisted yet, render it "
+                "from the draft tool result's own 'sessions' array instead of "
+                "calling this."
+            )
+        }
+    return {
+        "target": iso_week,
+        "table": format_week_plan_table(week, primary_sport=primary_sport),
+    }
+
+
 def build_tool_handlers(
     store: StoreInterface, *, slug: str, expert_mode: bool
 ) -> dict[str, ToolHandler]:
@@ -4385,6 +4692,9 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "propose_injury_adapted_taper": lambda input_data: _handle_propose_injury_adapted_taper(
+            input_data, store=store, slug=slug
+        ),
+        "render_plan_table": lambda input_data: _handle_render_plan_table(
             input_data, store=store, slug=slug
         ),
     }
