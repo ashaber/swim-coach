@@ -57,7 +57,13 @@ from swim_coach.models import (
     Workout,
 )
 from swim_coach.parse_coach_text import parse_coach_text
-from swim_coach.parse_files import PARSERS_BY_EXTENSION, WorkoutDraft, backfill_sport_detail, parse_fit
+from swim_coach.parse_files import (
+    PARSERS_BY_EXTENSION,
+    WorkoutDraft,
+    backfill_cross_train_sport,
+    backfill_sport_detail,
+    parse_fit,
+)
 from swim_coach.plan import generate_week, scaffold_macro
 from swim_coach.provision import provision_athlete
 from swim_coach.quality import match_workout_to_session, workout_quality
@@ -853,6 +859,67 @@ def _cmd_backfill_sport_detail(args: argparse.Namespace, store: StoreInterface) 
     return 0
 
 
+def _cmd_backfill_cross_train_sport(args: argparse.Namespace, store: StoreInterface) -> int:
+    """DRY-RUN-ONLY report of historical `cross_train` workouts whose
+    already-stored `sport_detail` (see `backfill_cross_train_sport` in
+    parse_files.py) shows they were really cycling -- closes the gap left
+    by `engine/cycling-coach` Part C (landed 2026-09-07), which only fixed
+    the cross_train -> bike bucketing for *newly ingested* .fit files, not
+    workouts logged before that carve-out shipped.
+
+    Deliberately does NOT mirror `backfill-sport-detail`'s `--apply`
+    mechanics: there is no `--apply` flag here at all, by design (see
+    build brief "Build G", item 3 -- lower priority, dry-run only). This
+    command only ever reports what WOULD change; nothing is ever
+    persisted, on any invocation. Andrew reviews the printed report and
+    applies any real change by hand (e.g. via a one-off script or a future
+    PR that adds --apply once the dry-run report has been reviewed against
+    real athlete data).
+
+    Uses only what's already stored locally -- no intervals.icu re-pull --
+    to keep this offline and cheap. For actually re-analyzing a
+    mistagged workout against the fresh source of truth, see
+    `pull_activity_stream` (backend/app/tools.py), which is the
+    higher-priority fix this backfill is secondary to.
+    """
+    slug = args.athlete
+    try:
+        store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return _error_from_exception(_error_label(store, slug, "profile.yaml"), exc)
+
+    workouts = store.list_workouts(slug)
+    changes = []
+    for workout in workouts:
+        updated = backfill_cross_train_sport(workout)
+        if updated is None:
+            continue
+        changes.append(
+            {
+                "workout_id": str(workout.id),
+                "date": workout.date.isoformat(),
+                "sport_detail": workout.sport_detail,
+                "current_sport": workout.sport,
+                "would_become_sport": updated.sport,
+            }
+        )
+        # Intentionally never store.save_workout(...) here -- dry-run only,
+        # no --apply path exists on this command.
+
+    print(
+        json.dumps(
+            {
+                "athlete": slug,
+                "dry_run": True,
+                "scanned": len(workouts),
+                "changed": len(changes),
+                "changes": changes,
+            }
+        )
+    )
+    return 0
+
+
 LOAD_MODEL_VALIDATION_BAND_PCT = 20.0
 # Coach judgment: the "is the projected/target load model tracking reality"
 # band-width reported by `validate-load-model` below -- an actual load
@@ -1427,6 +1494,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="persist the relabel (default: dry-run, prints changes without saving)",
     )
 
+    p_backfill_cross_train_sport = subparsers.add_parser(
+        "backfill-cross-train-sport",
+        help=(
+            "read-only report of historical cross_train workouts whose stored "
+            "sport_detail (e.g. 'cycling/road') shows they were really cycling, "
+            "predating the engine/cycling-coach Part C bike carve-out; always "
+            "dry-run, no --apply flag -- Andrew applies any real change by hand"
+        ),
+    )
+    p_backfill_cross_train_sport.add_argument("--athlete", required=True)
+
     p_validate_load_model = subparsers.add_parser(
         "validate-load-model",
         help=(
@@ -1534,6 +1612,7 @@ _COMMANDS = {
     "ingest": _cmd_ingest,
     "analyze": _cmd_analyze,
     "backfill-sport-detail": _cmd_backfill_sport_detail,
+    "backfill-cross-train-sport": _cmd_backfill_cross_train_sport,
     "validate-load-model": _cmd_validate_load_model,
     "invite": _cmd_invite,
     "list-invites": _cmd_list_invites,

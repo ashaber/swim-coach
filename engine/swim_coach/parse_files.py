@@ -558,6 +558,54 @@ def backfill_sport_detail(workout: Workout) -> Workout | None:
     return workout.model_copy(update={"sport_detail": new_detail})
 
 
+def backfill_cross_train_sport(workout: Workout) -> Workout | None:
+    """One-time historical backfill for the `cross_train` -> `bike` bucketing
+    fix `_fit_sport` already applies to every *newly ingested* `.fit` (see
+    that function's docstring: `engine/cycling-coach Part C`, landed
+    2026-09-07 -- session.sport=="cycling" now resolves to the first-class
+    `bike` Sport instead of falling through to the generic cross_train
+    bucket).
+
+    That fix only changed behavior going forward: every `Workout` persisted
+    *before* it shipped still carries the old `sport="cross_train"` bucket
+    even when the ride was genuinely a bike ride. This function identifies
+    those stale entries using only fields a persisted `Workout` already
+    stores -- no re-pull from intervals.icu needed (that's what
+    `pull_activity_stream`'s fresh-parse fix, the higher-priority sibling of
+    this backfill, is for; this one stays offline and cheap).
+
+    The signal: `sport_detail` (see `_sport_detail`) is derived from the
+    exact same raw FIT `session_sport`/`session_sub_sport` fields
+    `_fit_sport` itself reads, and -- per `_fit_sport`'s own docstring --
+    `sport_detail`'s derivation was NEVER affected by the bike carve-out; it
+    resolves the same `"cycling/mountain"`/`"cycling/road"` (or bare
+    `"cycling"`) free-text detail either way. So a `cross_train` workout
+    whose `sport_detail` leading token (before any `/`) is exactly
+    `"cycling"` is unambiguous historical fallout from the old bucketing,
+    not a judgment call -- it would resolve to `bike` today if re-ingested.
+
+    Only ever touches the `sport` enum bucket, never `sport_detail` itself
+    (the inverse of `backfill_sport_detail`, which only ever touches
+    `sport_detail` and never `sport`) or any other field. Returns `None`
+    when nothing should change (not `cross_train`, no `sport_detail`, or a
+    non-cycling leading token) so callers can tell "checked, no change"
+    apart from "changed" without diffing the whole object.
+
+    DRY-RUN ONLY by design: unlike `backfill_sport_detail` (which has a
+    corresponding `--apply`-gated CLI command), the `backfill-cross-train-
+    sport` CLI command built on this function has no `--apply` path at all
+    -- see that command's own docstring for why."""
+    if workout.sport != "cross_train":
+        return None
+    detail = workout.sport_detail
+    if not detail:
+        return None
+    sport_token = detail.partition("/")[0].strip().lower()
+    if sport_token != "cycling":
+        return None
+    return workout.model_copy(update={"sport": "bike"})
+
+
 def _is_cycling_sport(session_sport: object | None) -> bool:
     """True for any FIT session.sport value in the cycling family (road,
     mountain, gravel, etc. all share raw sport="cycling", distinguished
