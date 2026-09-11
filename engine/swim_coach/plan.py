@@ -2925,13 +2925,21 @@ SKILLS_COOLDOWN_MIN = 5.0
 # after a non-glycolytic session. Coach judgment --
 # library/27-cyclocross-skills.md ("Session shape").
 
-SKILLS_RPE_LOW = 5
-SKILLS_RPE_HIGH = 7
-# Effort ceiling for every drill block: firm but repeatable, never a
-# threshold/VO2 effort -- a skills day builds motor patterns, not CTL, and
-# fatigue degrades skill acquisition. Coach judgment, with the
-# not-an-interval-day rationale grounded in library/27-cyclocross-skills.md
-# ("Why RPE 5-7, not a power target").
+SKILLS_RPE_LOW = 2
+SKILLS_RPE_HIGH = 4
+# Build E (race-week-content-refinement): recalibrated DOWN from 5-7, a
+# per-block PEAK-effort read (accelerations out of corners can spike that
+# high for a second or two), to 2-4, the correct SESSION-level reading --
+# this app's load model only ever consumes `Workout.rpe` as one whole-
+# session number (`session_load`'s `duration_min * rpe`,
+# library/19-srpe-protocol.md's Foster CR-10 "single global rating ... not
+# a differentiated per-interval or per-segment score"), never a per-block
+# peak. A ~55-min day of mostly easy spinning between brief accelerations
+# reads as sRPE 2-4 whole-session (confirmed against Andrew's own real
+# usage). Coach judgment for the exact 2-4 figure (Andrew's own estimate);
+# the SESSION-level-not-peak framing is grounded in
+# library/19-srpe-protocol.md, not just asserted here. See
+# library/27-cyclocross-skills.md ("Why RPE 2-4, not a power target").
 
 SKILLS_BLOCKS_PER_SESSION = 4
 # How many `_SKILLS_DRILLS` entries one session runs -- 4 x ~10 min plus
@@ -2942,7 +2950,7 @@ SKILLS_SESSION_ZONE = "Z2"
 # (`anchor="rpe"`), not power-targeted; "Z2" is the honest "this is not a
 # hard day" label and keeps the session out of any hard-day count. The
 # real target lives on each drill step as `WorkoutTarget(basis="rpe")`.
-# library/27-cyclocross-skills.md ("Why RPE 5-7, not a power target").
+# library/27-cyclocross-skills.md ("Why RPE 2-4, not a power target").
 
 _SKILLS_DRILLS: tuple[tuple[str, str], ...] = (
     (
@@ -3053,7 +3061,9 @@ def _skills_session_structure(session_index: int) -> WorkoutStructure:
             label=(
                 "Why: cyclocross is won and lost on dismounts, corners and "
                 "traction, not watts. Practise the skills fresh and "
-                "controlled; hold RPE 5-7 so fatigue doesn't wreck technique."
+                "controlled; this should read as an easy RPE 2-4 whole-"
+                "session effort (not a peak-moment feel) so fatigue doesn't "
+                "wreck technique."
             ),
             role="open",
             duration_kind="open",
@@ -3107,7 +3117,8 @@ def _skills_sessions(
                     "cyclocross skills — bike-handling practice "
                     "(dismount/remount, barriers, cornering, loose-surface "
                     "control, run-ups). Distance and power are nominal; "
-                    "hold RPE 5-7."
+                    "should log as session RPE 2-4 (whole-session feel, not "
+                    "a peak-moment read)."
                 ),
                 structure=render_prose(structured),
                 structured=structured,
