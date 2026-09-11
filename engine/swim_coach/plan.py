@@ -2347,6 +2347,157 @@ def ftp_from_ramp_test(best_1min_power_w: float) -> float:
     return round(best_1min_power_w * BIKE_RAMP_TEST_FTP_FROM_BEST_1MIN_FRACTION, 1)
 
 
+# --- 2x20 test (Build F) -- real two-effort field test, coach content ------
+#
+# The real defect this build fixes: a real "2x20 FTP test" was handed to the
+# athlete as Wednesday's session, but the coach hand-authored it with a fixed
+# `WorkoutTarget(basis="power_w", low=X, high=Y)` -- prescribing a target
+# power to HOLD, which is what an ordinary training session does, not what a
+# genuine TEST does. A test's entire point is measuring the athlete's real,
+# currently-unknown ceiling; pre-setting the power band the athlete paces to
+# quietly turns the test into a training session and defeats the reason it
+# was called for in the first place. This section gives the coach a real,
+# correctly-shaped 2x20 protocol to prescribe instead of hand-inventing one
+# -- `record_threshold_test`'s `source="field_test"` enum value already
+# names "a 20-min FTP test" as exactly this case (backend/app/tools.py).
+#
+# Protocol grounding (WebSearch + direct-fetch verified this session; see
+# library/28-bike-ftp-test-protocols.md for the full citation writeup and
+# Confidence/Test lines). Same "practical/non-journal resource" tier as this
+# module's own ramp-test citations just above -- NOT a peer-reviewed journal
+# citation.
+BIKE_2X20_TEST_WARMUP_MIN = 10.0
+# TrainerDay's own purpose-built "TEST 2x20 FTP Intervals" workout template
+# (direct-fetch confirmed this session): 10 min warm-up.
+BIKE_2X20_TEST_EFFORT_MIN = 20.0
+# The defining duration of this protocol -- two 20-minute maximal efforts.
+BIKE_2X20_TEST_RECOVERY_MIN = 10.0
+# TrainerDay's same template's 10-minute recovery between the two efforts --
+# also matches the real, independently documented CTS/TrainerRoad two-effort
+# (8-minute) FTP test's own 10-minute recovery convention (trainright.com,
+# Chris Carmichael/CTS -- direct-fetch confirmed this session): convergent
+# across two independent real dual-effort test protocols, not just one
+# source. (A third source, an Endurance Nation-attributed forum description,
+# instead used a 2-minute recovery -- noted in library/28 as a real,
+# divergent variant NOT adopted here, in favor of the two-source-convergent
+# 10-minute figure.)
+BIKE_2X20_TEST_COOLDOWN_MIN = 15.0
+# Same TrainerDay template's own trailing cool-down.
+BIKE_2X20_TEST_EFFORT_RPE = 9.0
+# `WorkoutTarget(basis="rpe")` value for both work efforts -- deliberately
+# NOT a power/zone target (see this section's own header comment; this is
+# this build's entire reason for existing). 9, not 10, on library/19-srpe-
+# protocol.md's own modified-Borg-CR-10 scale (0-10, "10 = Maximal /
+# Exhausting"): a real, sustained-for-20-minutes maximal effort is hard but
+# not the single-point instantaneous exhaustion "10" describes -- `Coach
+# judgment` for the exact number (9 is itself unanchored in Foster's own
+# instrument, library/19), the athlete-facing step label carries the real
+# instruction ("your honest hardest sustainable pace for the full 20
+# minutes") rather than leaning on the number alone.
+BIKE_2X20_TEST_FTP_FROM_AVG_FRACTION = 0.95
+# Allen & Coggan's well-established single-20-minute-effort convention
+# (already cited in this module's ramp-test section above, and in
+# `23-cycling-training.md`/`reference_list.md` for the same book's zone/TSS
+# content) applied here to the AVERAGE of both 20-minute efforts' own
+# average power. `Coach judgment` for combining two efforts this way
+# specifically -- no single authoritative source states a 2x20-specific
+# formula; this extends the well-established single-effort 0.95 convention
+# the same way trainright.com's own documented "apps" convention combines
+# the CTS 8-minute test's two efforts (average-then-discount), rather than
+# the alternative CTS-coach convention of taking only the higher effort --
+# see `ftp_from_2x20_test`'s own docstring and library/28 for the full
+# writeup.
+
+
+def _bike_2x20_test_structure(ftp_watts: float | None) -> WorkoutStructure:
+    """A real, standalone two-effort FTP test -- warm-up, a 20-minute
+    maximal effort, an easy recovery spin, a second 20-minute maximal
+    effort, cool-down, a trailing `role="open"` "Why:" pacing note. See
+    this module's own 2x20-test header comment above for the real defect
+    this fixes, and `ftp_from_2x20_test` below for the matching formula.
+
+    **Critical, the whole point of this function:** both 20-minute work
+    steps carry `WorkoutTarget(basis="rpe", ...)` -- NEVER `basis="power_w"`
+    or `basis="zone"`. A genuine FTP test measures the athlete's real,
+    currently-unknown ceiling; a fixed power/zone band would instead be
+    something the athlete paces TO, which is what an ordinary training
+    session does. This mirrors `_skills_session_structure`'s own
+    `basis="rpe"` drill blocks -- the same "no power/zone target on a
+    genuinely effort-anchored block" convention already established
+    elsewhere in this module for bike sessions.
+
+    `ftp_watts`, when known, only ever anchors the warm-up/recovery/cool-
+    down steps (via `_bike_step`'s existing Z1-zone resolution, the same
+    easy-spin convention every other recovery/rest step in this module
+    already uses) -- never the two work efforts themselves, which is the
+    whole point. Deliverable via the exact same ZWO/Garmin export pipeline
+    as any other bike session -- an `rpe`-basis step with no power target
+    already degrades gracefully to a `<FreeRide>`/untargeted step on both
+    exporters (see `zwo_export._leaf_power_fractions`/
+    `garmin_export._apply_target`), so no export-side change was needed for
+    this build; see `test_bike_2x20_test_structure_exports_cleanly_via_zwo`/
+    `..._garmin_fit`.
+    """
+    warmup_s = round(BIKE_2X20_TEST_WARMUP_MIN * 60)
+    effort_s = round(BIKE_2X20_TEST_EFFORT_MIN * 60)
+    recovery_s = round(BIKE_2X20_TEST_RECOVERY_MIN * 60)
+    cooldown_s = round(BIKE_2X20_TEST_COOLDOWN_MIN * 60)
+    effort_target = WorkoutTarget(basis="rpe", low=BIKE_2X20_TEST_EFFORT_RPE, high=BIKE_2X20_TEST_EFFORT_RPE)
+
+    def _effort_step(n: int) -> WorkoutStep:
+        return WorkoutStep(
+            label=(
+                f"Effort {n} of 2 -- 20 min, RPE {BIKE_2X20_TEST_EFFORT_RPE:.0f} -- "
+                "your honest hardest sustainable pace for the full 20 "
+                "minutes; ride to how you feel, do NOT pace to a power number"
+            ),
+            role="interval",
+            duration_kind="time_s",
+            duration_value=effort_s,
+            target=effort_target,
+            modality="bike",
+        )
+
+    items: list[WorkoutStepOrRepeat] = [
+        _bike_step("Warm-up, easy spin build", "warmup", warmup_s, "Z1", ftp_watts),
+        _effort_step(1),
+        _bike_step("Easy spin recovery between efforts", "recovery", recovery_s, "Z1", ftp_watts),
+        _effort_step(2),
+        _bike_step("Cool-down, easy spin", "cooldown", cooldown_s, "Z1", ftp_watts),
+        WorkoutStep(
+            label=(
+                "Why: a genuine FTP test measures your real ceiling -- "
+                "prescribing a power target to hold would just be another "
+                "training session in a test's clothing. Start controlled, "
+                "don't blow up in the first 5 minutes, then hold the "
+                "hardest honest pace you can for the rest of each 20 "
+                "minutes (TrainerRoad's own FTP-test pacing guidance, "
+                "library/28)."
+            ),
+            role="open",
+            duration_kind="open",
+            modality="bike",
+        ),
+    ]
+    return WorkoutStructure(items=items)
+
+
+def ftp_from_2x20_test(avg_w_1: float, avg_w_2: float) -> float:
+    """FTP estimate from a completed 2x20 test's two average-power readings
+    -- `BIKE_2X20_TEST_FTP_FROM_AVG_FRACTION` (0.95, Allen & Coggan's own
+    single-20-minute-effort convention) applied to the AVERAGE of both
+    efforts' own average power. See this module's 2x20-test constants block
+    above for the full citation and the Coach-judgment reasoning behind
+    averaging the two efforts (rather than taking only the higher one, a
+    real documented alternative convention -- see library/28). Pure
+    arithmetic -- the caller is responsible for actually obtaining
+    `avg_w_1`/`avg_w_2` (read directly off the athlete's own device/app, or
+    a ride-file analysis this build does not itself implement) -- same
+    shape as `ftp_from_ramp_test` above.
+    """
+    return round(((avg_w_1 + avg_w_2) / 2) * BIKE_2X20_TEST_FTP_FROM_AVG_FRACTION, 1)
+
+
 def _resolve_bike_hard_min(total_duration_min: float) -> float:
     """The hard (Z3) session's duration, `BIKE_HARD_SESSION_SHARE` of
     `total_duration_min`, capped at `BIKE_HARD_SESSION_MAX_MIN` -- see that
