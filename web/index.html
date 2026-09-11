@@ -375,7 +375,25 @@
     .chat-row.coach { align-self: flex-start; align-items: flex-start; }
     .chat-bubble { background: var(--paper); border: 1px solid var(--line); border-radius: 14px 14px 14px 4px;
       padding: 10px 15px; font-size: 14.5px; line-height: 1.5; box-shadow: var(--shadow);
-      word-break: break-word; }
+      word-break: break-word;
+      /* max-width: 100% + min-width: 0 -- .chat-bubble is a flex item of
+         .chat-row (align-items: flex-start/flex-end, so NOT stretched),
+         which normally sizes it via shrink-to-fit against .chat-row's
+         (definite, max-width: 82%-capped) width. But a Build D markdown
+         table's cells are `white-space: nowrap` (see .chat-md th/td below)
+         so the table's min-content width equals its max-content width --
+         nothing can wrap it any narrower -- and a flex item's automatic
+         min-width only floors at 0 when the item's OWN overflow is
+         non-visible, not a nested descendant's (the table sits two levels
+         down, inside .chat-md, which is what actually gets overflow-x:
+         auto). Without an explicit cap here, that unwrappable table's
+         intrinsic width wins and the whole bubble balloons past .chat-row,
+         pushing off the right edge of the screen -- confirmed via a real
+         rendered measurement during this build (a 615px table forced a
+         647px bubble in a 390px viewport). max-width: 100% resolves
+         against .chat-row's definite width, so the bubble itself is
+         capped there and the table scrolls inside .chat-md instead. */
+      max-width: 100%; min-width: 0; }
     .chat-row.me .chat-bubble { background: var(--bubble-out-bg); border-color: var(--bubble-out-border);
       color: var(--bubble-out-ink); border-radius: 14px 14px 4px 14px; }
     .chat-bubble.is-error { border-color: var(--c-signal); color: var(--c-signal); background: var(--c-signal-wash);
