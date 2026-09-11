@@ -49,6 +49,21 @@ class Athlete(BaseModel):
     zones: dict | None = None
     constraints: dict = Field(default_factory=dict)
     pool_schedule: list[str | dict] = Field(default_factory=list)
+    training_days: dict[str, list[str | dict]] | None = None
+    # Per-sport weekly training-day PATTERN -- the bike/strength/etc.
+    # counterpart to `pool_schedule` above (which only ever covered pool
+    # days). Maps a session-kind key ("bike", "strength", ... -- free
+    # strings; only "bike" and "strength" are consumed by the engine today)
+    # to an ordered list of weekday entries in the SAME `str | dict` shape
+    # `pool_schedule` accepts ("tue" / "tuesday" / {"day": "tue"}), so
+    # `plan._pool_day_offset` resolves both. Order is meaningful: the FIRST
+    # bike entry is treated as the week's hard/interval day (see
+    # `plan._bike_week_sessions`). `None` (the default) means "no pattern
+    # declared" -- `plan.generate_week`'s bike path then falls back to
+    # `_spread_days_evenly`'s even spacing exactly as before, byte-for-byte,
+    # for every existing profile.yaml (no `training_days` key). Additive/
+    # optional, no schema_version bump, same convention as every other
+    # additive field in this file.
     # Demographic fields: all optional, defaulting to None, so every
     # existing profile.yaml (with none of these keys) keeps validating
     # unchanged -- additive, no schema_version bump needed. Store dob, not
@@ -505,6 +520,19 @@ class WeekPlan(BaseModel):
     sessions: list[Session] = Field(default_factory=list)
     adaptation_rationale: str | None = None
     draft: bool = False
+    planning_warnings: list[str] = Field(default_factory=list)
+    # Realism-guardrail verdict for this week's plan (Build A defect 1,
+    # engine/week-generator-realism). Human-readable strings surfaced to the
+    # coach when a bike-primary week's session mix looks unrealistic (too
+    # many hard bike days, too many rideable days, back-to-back hard days,
+    # or a weekly-volume jump past the +8%/week safety rail -- see
+    # `plan.evaluate_week_realism`). The engine NEVER silently clamps on
+    # these; it emits the plan as requested plus the warnings, and the coach
+    # decides. Empty list for a realistic week and for every swim-primary
+    # week. Additive/optional: every existing persisted WeekPlan (YAML file
+    # or DB jsonb row) has no `planning_warnings` key and validates
+    # unchanged as an empty list; no schema_version bump, same pattern as
+    # `race_week_checklist` below.
     race_week_checklist: list[RaceWeekChecklistItem] = Field(default_factory=list)
     # Populated only for the final week of a taper block immediately
     # preceding the athlete's active, A-priority target event -- see

@@ -195,6 +195,44 @@ practitioner-convention race-specificity application of the same
 duration/ratio principle, not a distinct physiological mechanism from
 "short-short."
 
+### Openers / pre-race primers (taper)
+
+Grounds `plan.py`'s fifth interval template, `"openers"`
+(`_bike_openers_main`, `BIKE_OPENERS_*`), selected instead of the rotation
+pick when a race is within `BIKE_OPENERS_PROXIMITY_DAYS` or the week is a
+`"taper"` block (`_select_bike_interval_template`'s `use_openers`). Shape:
+3-5 reps of ~1-2 min a touch above threshold (~100-105% FTP, low Z4), full
+recovery — the race-pace family, deliberately short and low in total work.
+
+**`[ADAPTED: general-endurance]`** `Bosquet L., Montpetit J., Arvisais D.,
+Mujika I. (2007)`, "Effects of tapering on performance: a meta-analysis,"
+*Medicine & Science in Sports & Exercise*, 39(8):1358-1365 (27 of 182
+studies): the optimal taper reduces training VOLUME 41-60% while INTENSITY
+and frequency are held. `Mujika & Padilla (2003)` (see `reference_list.md`)
+concurs — volume down up to 60-90%, intensity kept — and `Wang Z. et al.
+(2023)` adds that tapers ≤7 days still help. So a pre-race week keeps
+race-intensity contact (the openers) while
+`BIKE_TAPER_INTENSITY_VOLUME_REDUCTION` pulls weekly volume down on top of
+the block's own decay; prescribing more high-load VO2 here works against
+the taper's purpose. **Confidence: high** (direct meta-analysis; the only
+discount is its multi-sport population — endurance tapering is not thought
+to be discipline-specific). Exact reps/seconds/%FTP and the 25% extra cut
+are `Coach judgment:`, same footing as the four templates above. **Test:**
+if race power the week after an openers taper is flat or down versus a
+race off a normal week, the taper is too deep or the openers too sparse —
+add a rep or a little Z4, not volume.
+
+### Hard-day density ceiling (the realism guardrail)
+
+Grounds `plan.evaluate_week_realism`'s `BIKE_MAX_HARD_DAYS_PER_WEEK` (3).
+Per `Seiler (2010)` above, elite endurance training converges on ~80%
+low / ~20% high intensity; for a cyclist on ~5-6 days/week that ~20% is
+about three hard sessions, and a fourth pushes toward the "several
+moderate days" pattern Seiler's own **Test** line flags as a plateau
+predictor. Races are additive and don't count.
+`BIKE_MAX_BIKE_DAYS_PER_WEEK` (6) is `Coach judgment:` only. The guardrail
+FLAGS to the coach; it never clamps.
+
 ## Ramp test protocol and FTP formula (threshold-history build)
 
 Grounds `plan.py`'s `_bike_ramp_test_structure`/`ftp_from_ramp_test` -- a
@@ -263,22 +301,12 @@ reaching the ramp's end simply stops early, same as the real protocol's
 own termination rule. See that function's own docstring for the full
 engineering rationale.
 
-## Deferred to a future build stage
+## Implementation history
 
-Not attempted in this pass, consistent with the task scope: wiring any of
-the periodization/deload-cadence guidance or the four interval templates
-above into `plan.py`'s `_bike_week_sessions` (deload cadence) or
-`_bike_session_structure` (interval-shaped `WorkoutStructure` content,
-selected by week/discipline instead of the current flat single-block
-default) is real future engine work, not attempted here. No `plan.py`
-changes were made by this pass.
-
-**Threshold-history build (later pass):** the ramp-test protocol/formula
-section above WAS wired into `plan.py` (`_bike_ramp_test_structure`/
-`ftp_from_ramp_test`) and the FTP-check purpose-text note (`_bike_week_
-sessions`'s `ftp_source` parameter) -- see that build's own PR. The deload-
-cadence/interval-template wiring this section originally deferred was
-completed separately, prior to the threshold-history build (see PR #167
-and the `engine/cycling-coach` branch's later commits) -- this file's
-"Deferred to a future build stage" framing above predates that wiring and
-is retained for its historical record, not because the gap is still open.
+Every part of this file is now wired into `plan.py`: the deload cadence and
+the interval-template rotation landed with PR #167 / the `engine/cycling-
+coach` branch; the ramp-test protocol/formula and the FTP-check purpose-
+text note (`_bike_week_sessions`'s `ftp_source`) landed with the
+threshold-history build; the openers template, taper volume pull-down, and
+the hard-day realism guardrail landed with the `engine/week-generator-
+realism` build (Build A). No open deferral remains.
