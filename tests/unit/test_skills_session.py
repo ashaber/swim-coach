@@ -99,6 +99,24 @@ def _make_bike_macro(**event_overrides):
 # --- drill rotation -------------------------------------------------------
 
 
+# --- Build E: session-level (not per-block-peak) RPE calibration ----------
+#
+# Andrew's real usage finding: this app's load model (session_load /
+# library/19-srpe-protocol.md's Foster CR-10 instrument) treats
+# `Workout.rpe` as ONE whole-session rating, not a per-interval/per-block
+# peak-effort score. A 55-min skills day of mostly easy spinning with brief
+# accelerations reads as sRPE 2-4 on a whole-session basis (Andrew's own
+# estimate), even though a single 2-second effort out of a corner might
+# feel like a 5-7 in the instant. The old SKILLS_RPE_LOW/HIGH=5/7 was a
+# per-block-peak read, inconsistent with how the rest of the engine
+# consumes the number once logged.
+
+
+def test_skills_rpe_band_is_recalibrated_to_session_level_2_to_4():
+    assert SKILLS_RPE_LOW == 2
+    assert SKILLS_RPE_HIGH == 4
+
+
 def test_select_skills_drills_rotates_and_covers_catalogue():
     s0 = _select_skills_drills(0)
     s1 = _select_skills_drills(1)

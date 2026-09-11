@@ -196,6 +196,7 @@ from swim_coach.plan import (
     _duration_min_for_distance,
     _monday_of_week,
     _monday_on_or_after,
+    _session_is_hard_bike,
     adjust_session,
     count_structured_steps,
     evaluate_week_realism,
@@ -1338,7 +1339,19 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                         "response): appending a 6th hard bike day still gets "
                         "flagged, it is not silently clamped. `add: true` "
                         "with a session already on that date is an error "
-                        "(drop `add` to modify it instead)."
+                        "(drop `add` to modify it instead). "
+                        "REMOVE MODE (Build E): an entry with `remove: true` "
+                        "DELETES the matching session(s) instead of modifying "
+                        "them -- how to honor 'drop Wednesday's strength "
+                        "session' / 'I don't want this session, remove it' "
+                        "rather than fumbling toward some other tool. Same "
+                        "date(+sport) matching/ambiguity rules as modify mode; "
+                        "an entry matching zero or more than one session is "
+                        "an error. Mutually exclusive with `add` on the same "
+                        "entry -- setting both is an error. Removing the "
+                        "week's only hard bike day is allowed (never blocked) "
+                        "but surfaces a `planning_warnings` note so the coach "
+                        "can confirm that's really intended."
                     ),
                     "items": {
                         "type": "object",
@@ -1354,6 +1367,15 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                                     "mode) instead of modifying an existing one. Requires "
                                     "`sport`, `duration_min`, `purpose`. Errors if a "
                                     "session already exists on that date/sport."
+                                ),
+                            },
+                            "remove": {
+                                "type": "boolean",
+                                "description": (
+                                    "Set true to DELETE the matching session(s) instead "
+                                    "of modifying them. Mutually exclusive with `add` on "
+                                    "the same entry (an error if both are set). Errors if "
+                                    "zero or more than one session matches date(+sport)."
                                 ),
                             },
                             "intensity": {
@@ -3567,17 +3589,24 @@ def _handle_reschedule_session(input_data: dict[str, Any], *, store: StoreInterf
     }
 
 
-def _apply_session_overrides(week, overrides: list[dict[str, Any]], athlete: Athlete) -> str | None:
+def _apply_session_overrides(
+    week, overrides: list[dict[str, Any]], athlete: Athlete
+) -> tuple[str | None, list[str]]:
     """Applies explicit per-session distance_m/duration_min/content overrides
-    to an already-generated week's sessions, in place. Returns an error
-    string on the first override that doesn't match exactly one session (no
-    match, or an ambiguous match needing `sport` to disambiguate, same
-    convention as `reschedule_session`'s existing date+sport matching above)
-    -- callers should treat any non-None return as a full failure, not apply
-    the rest and ignore the bad one. `week` is mutated directly (pydantic
-    Session objects are not frozen in this codebase); this is only ever
-    called on a freshly-computed `generate_week()` result, never a stored
-    object another caller might still be holding a reference to.
+    to an already-generated week's sessions, in place. Returns
+    `(error, notes)`: `error` is set on the first override that doesn't
+    match exactly one session (no match, or an ambiguous match needing
+    `sport` to disambiguate, same convention as `reschedule_session`'s
+    existing date+sport matching above) -- callers should treat any non-None
+    `error` as a full failure, not apply the rest and ignore the bad one.
+    `notes` (Build E) carries non-fatal, athlete-facing observations worth
+    surfacing via `WeekPlan.planning_warnings` -- flag, never block, same
+    posture as `evaluate_week_realism` -- today just the "`remove` emptied
+    the week's only hard bike day" case (see `"remove"` mode below).
+    `week` is mutated directly (pydantic Session objects are not frozen in
+    this codebase); this is only ever called on a freshly-computed
+    `generate_week()` result, never a stored object another caller might
+    still be holding a reference to.
 
     Takes the full `athlete` (not just `css_pace_s`) because the `ow_template`
     field below needs `workout_templates.resolve_template`'s full athlete
@@ -3585,18 +3614,63 @@ def _apply_session_overrides(week, overrides: list[dict[str, Any]], athlete: Ath
     already used.
     """
     css_pace_s = athlete.css_pace_s_per_100m
+    notes: list[str] = []
     for override in overrides:
         raw_date = override.get("date")
         try:
             override_date = date.fromisoformat(raw_date)
         except (TypeError, ValueError):
-            return f"invalid session_overrides date {raw_date!r}; expected 'YYYY-MM-DD'"
+            return f"invalid session_overrides date {raw_date!r}; expected 'YYYY-MM-DD'", notes
 
         sport = override.get("sport")
         matches = [
             s for s in week.sessions
             if s.date == override_date and (sport is None or s.sport == sport)
         ]
+
+        if override.get("remove"):
+            # REMOVE MODE (Build E, engine/race-week-content-refinement):
+            # delete the matching session(s) instead of modifying them --
+            # real dead end this closes, confirmed live 2026-09-11: an
+            # athlete asking to drop a Wednesday strength session had no
+            # clean path (only "add" and implicit modify existed), so the
+            # coach burned 5 retries hitting MAX_TOOL_ITERATIONS with
+            # nothing persisted. Same date+sport matching/ambiguity rules
+            # as modify mode -- `sport` disambiguates a multi-session day.
+            if override.get("add"):
+                return (
+                    f"session_overrides: entry for {raw_date!r} sets both "
+                    "`remove` and `add` -- pick one: `remove` deletes an "
+                    "existing session, `add` creates a new one.",
+                    notes,
+                )
+            if len(matches) == 0:
+                same_day = [{"sport": s.sport, "date": s.date.isoformat()} for s in week.sessions if s.date == override_date]
+                return (
+                    f"session_overrides: `remove` set for {raw_date!r} but no session "
+                    f"matches" + (f" sport {sport!r}" if sport else "")
+                    + f"; sessions on {raw_date!r}: {same_day}",
+                    notes,
+                )
+            if len(matches) > 1:
+                return (
+                    f"session_overrides: `remove` set for {raw_date!r} but "
+                    f"{len(matches)} sessions match ({', '.join(s.sport for s in matches)}) "
+                    "-- pass `sport` to disambiguate",
+                    notes,
+                )
+            removed = matches[0]
+            was_only_hard_bike_day = removed.sport == "bike" and _session_is_hard_bike(removed) and sum(
+                1 for s in week.sessions if _session_is_hard_bike(s)
+            ) == 1
+            week.sessions.remove(removed)
+            if was_only_hard_bike_day:
+                notes.append(
+                    f"Removed the week's only hard bike day ({removed.date.isoformat()}, "
+                    f"{removed.purpose!r}) per the athlete's request -- confirm this is "
+                    "intended, since the week now has no differentiated hard session."
+                )
+            continue
 
         if override.get("add"):
             # APPEND MODE (Build A defect 3, engine/week-generator-realism):
@@ -3605,13 +3679,13 @@ def _apply_session_overrides(week, overrides: list[dict[str, Any]], athlete: Ath
             # day, an openers session, a travel-day swap). Still subject to
             # the realism guardrail the caller runs afterwards.
             if not sport:
-                return f"session_overrides: `add` entry for {raw_date!r} needs `sport`"
+                return f"session_overrides: `add` entry for {raw_date!r} needs `sport`", notes
             if matches:
                 return (
                     f"session_overrides: `add` set for {raw_date!r} but a "
                     f"{matches[0].sport!r} session already exists that date -- drop "
                     "`add` to modify the existing one instead"
-                )
+                ), notes
             add_duration = override.get("duration_min")
             add_purpose = override.get("purpose")
             if add_duration is None or not add_purpose:
@@ -3619,14 +3693,14 @@ def _apply_session_overrides(week, overrides: list[dict[str, Any]], athlete: Ath
                     f"session_overrides: `add` entry for {raw_date!r} needs "
                     "`duration_min` and `purpose` (optionally `distance_m`, "
                     "`intensity`, `structured`/`structure`)"
-                )
+                ), notes
             add_structured_raw = override.get("structured")
             add_structured = None
             if add_structured_raw is not None:
                 try:
                     add_structured = WorkoutStructure.model_validate(add_structured_raw)
                 except ValidationError as exc:
-                    return f"invalid session_overrides structured for {raw_date!r}: {exc}"
+                    return f"invalid session_overrides structured for {raw_date!r}: {exc}", notes
             add_structure = override.get("structure")
             if add_structure is None and add_structured is not None:
                 add_structure = render_prose(add_structured)
@@ -3649,7 +3723,7 @@ def _apply_session_overrides(week, overrides: list[dict[str, Any]], athlete: Ath
                     status="planned",
                 )
             except ValidationError as exc:
-                return f"session_overrides: `add` entry for {raw_date!r} is invalid: {exc}"
+                return f"session_overrides: `add` entry for {raw_date!r} is invalid: {exc}", notes
             week.sessions.append(new_session)
             continue
 
@@ -3659,12 +3733,12 @@ def _apply_session_overrides(week, overrides: list[dict[str, Any]], athlete: Ath
                 f"session_overrides: no session matching date {raw_date!r}"
                 + (f" and sport {sport!r}" if sport else "")
                 + f"; sessions on {raw_date!r}: {same_day}"
-            )
+            ), notes
         if len(matches) > 1:
             return (
                 f"session_overrides: {len(matches)} sessions found on {raw_date!r} "
                 f"({', '.join(s.sport for s in matches)}) -- pass `sport` to disambiguate"
-            )
+            ), notes
 
         session = matches[0]
         distance_m = override.get("distance_m")
@@ -3684,7 +3758,7 @@ def _apply_session_overrides(week, overrides: list[dict[str, Any]], athlete: Ath
             return (
                 f"session_overrides: entry for {raw_date!r} needs at least one of "
                 "distance_m, duration_min, purpose, structure, structured, ow_template"
-            )
+            ), notes
         if ow_template is not None and (structure is not None or structured is not None):
             return (
                 f"session_overrides: entry for {raw_date!r} sets `ow_template` "
@@ -3693,7 +3767,7 @@ def _apply_session_overrides(week, overrides: list[dict[str, Any]], athlete: Ath
                 "named open-water template library "
                 "(swim_coach.ow_session_templates.OW_SESSION_TEMPLATES), "
                 "`structure`/`structured` author it directly."
-            )
+            ), notes
         if structure is not None and distance_m is None:
             # Real bug, caught live: `distance_m` is a separate field from
             # `structure`'s free-text total -- nothing keeps them in sync
@@ -3712,7 +3786,7 @@ def _apply_session_overrides(week, overrides: list[dict[str, Any]], athlete: Ath
                 "would see a distance stat that disagrees with what the "
                 "structure text actually describes. Pass the real total "
                 "distance implied by the new structure as `distance_m` too."
-            )
+            ), notes
 
         if distance_m is not None:
             session.distance_m = distance_m
@@ -3733,7 +3807,7 @@ def _apply_session_overrides(week, overrides: list[dict[str, Any]], athlete: Ath
             try:
                 session.structured = WorkoutStructure.model_validate(structured)
             except ValidationError as exc:
-                return f"invalid session_overrides structured: {exc}"
+                return f"invalid session_overrides structured: {exc}", notes
         if structure is not None:
             session.structure = structure
             if structured is None:
@@ -3763,7 +3837,7 @@ def _apply_session_overrides(week, overrides: list[dict[str, Any]], athlete: Ath
                     f"session_overrides: entry for {raw_date!r} sets `ow_template` "
                     "without an `id` -- see swim_coach.ow_session_templates."
                     "OW_SESSION_TEMPLATES for known ids."
-                )
+                ), notes
             template_distance = ow_template.get("distance_m")
             if template_distance is None:
                 template_distance = distance_m if distance_m is not None else session.distance_m
@@ -3773,23 +3847,23 @@ def _apply_session_overrides(week, overrides: list[dict[str, Any]], athlete: Ath
                     "no distance_m to build from -- pass `ow_template.distance_m`, "
                     "or `distance_m` on the same entry, or target a session that "
                     "already has one."
-                )
+                ), notes
             if css_pace_s is None:
                 return (
                     f"session_overrides: entry for {raw_date!r} can't build an "
                     "`ow_template` -- athlete has no css_pace_s_per_100m on file."
-                )
+                ), notes
             try:
                 template_structure = build_ow_session(template_id, int(template_distance), css_pace_s)
             except ValueError as exc:
-                return f"session_overrides: ow_template error for {raw_date!r}: {exc}"
+                return f"session_overrides: ow_template error for {raw_date!r}: {exc}", notes
             resolved = resolve_template(template_structure, athlete)
             session.structured = resolved
             session.structure = render_prose(resolved)
             session.distance_m = int(template_distance)
             if duration_min is None:
                 session.duration_min = max(_duration_min_for_distance(template_distance, css_pace_s), 15.0)
-    return None
+    return None, notes
 
 
 def _week_sessions_json(week) -> list[dict[str, Any]]:
@@ -3916,8 +3990,9 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
         return {"error": str(exc)}
 
     session_overrides = input_data.get("session_overrides")
+    override_notes: list[str] = []
     if session_overrides:
-        override_error = _apply_session_overrides(week, session_overrides, athlete)
+        override_error, override_notes = _apply_session_overrides(week, session_overrides, athlete)
         if override_error is not None:
             return {"error": override_error}
 
@@ -3937,6 +4012,12 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
         week.planning_warnings = evaluate_week_realism(
             week.sessions, prev_week_bike_volume_min=prev_bike_min
         )
+    # Build E: fold in any non-fatal session_overrides notes (e.g. a
+    # `remove` that emptied the week's only hard bike day) regardless of
+    # primary_sport -- `evaluate_week_realism` above is bike-only, but a
+    # `remove` note isn't.
+    if override_notes:
+        week.planning_warnings = list(week.planning_warnings) + override_notes
 
     comparison = None
     if existing_week is not None:

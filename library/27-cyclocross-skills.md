@@ -86,15 +86,49 @@ high; a longer block turns into sloppy reps. A skills day is not sized
 from the week's volume target — its distance and power are nominal by
 definition.
 
-## Why RPE 5–7, not a power target
+## Why RPE 2–4, not a power target
 
-Coach judgment: `SKILLS_RPE_LOW` = 5, `SKILLS_RPE_HIGH` = 7. The blocks
-involve accelerations (out of corners, up run-ups) so the session is not
-trivially easy, but it must stay well short of a threshold or VO2 effort.
-The drill steps carry `WorkoutTarget(basis="rpe")`; the session's nominal
-`Session.intensity["zone"]` is `SKILLS_SESSION_ZONE` = "Z2" only, to label
-it honestly as a non-hard day and keep it out of any hard-day count. No
-watts are attached.
+**Build E (`engine/race-week-content-refinement`) revision, replacing this
+section's original 5-7 figure.** `SKILLS_RPE_LOW` = 2, `SKILLS_RPE_HIGH` =
+4, recorded as a **SESSION-level** (whole-workout) rating, not a
+per-block peak-effort read. The original 5-7 band described how a single
+~10-min drill block's accelerations (out of corners, up run-ups) can feel
+in the instant — a real, defensible per-block observation on its own. The
+defect: this app's load model never consumes a per-block number. Session-
+RPE is deliberately a single global 0-10 rating for the ENTIRE session
+("how hard was your workout overall?"), not a differentiated per-
+interval/per-segment score — see `19-srpe-protocol.md`'s "The question:
+one global rating per session," itself grounding `engine/swim_coach/
+load.py`'s tier-1 `session_load` formula (`duration_min * rpe`, Foster et
+al. 2001). A ~55-min skills day is mostly easy spinning and standing
+around between brief technical efforts; rated honestly on a whole-session
+basis (not "what did the hardest 2 seconds feel like") that reads as
+sRPE 2-4, not 5-7 — confirmed directly against real coach usage (Andrew's
+own estimate, live session, 2026-09). Recording the old, higher per-block
+number as if it were the session's sRPE would silently inflate this
+athlete's `session_load`-derived training load for every skills day by
+roughly 2x, purely from a scale-category mismatch, not any real change in
+training stress.
+
+`[ADAPTED: general-endurance] Confidence: high` for the "session-RPE is
+one global rating, not a per-segment score" fact itself (`19-srpe-
+protocol.md`'s own citation, Foster et al. 2001, directly states this).
+**Test:** if this engine, or a future rewrite of it, ever starts asking
+for or recording more than one RPE value per logged workout (a
+per-interval or per-block rating), this citation's own "single global
+question" framing no longer applies and `session_load`'s `duration_min *
+rpe` formula would need a different aggregation to match — that would be
+the signal this fact needs revisiting, not just the 2-4 figure below.
+**Confidence: medium** for the specific 2-4 figure itself (Andrew's own
+estimate for THIS drill mix/pacing, not a separately validated number —
+another athlete's easy-spin/effort ratio on a skills day could differ).
+The drill steps still carry `WorkoutTarget(basis="rpe")` at this new,
+corrected 2-4 band (an athlete-facing cue for how hard the drill blocks
+themselves should feel, kept intentionally conservative/easy rather than
+re-introduced as a separate "per-block peak" scale the app has nowhere to
+record); the session's nominal `Session.intensity["zone"]` stays
+`SKILLS_SESSION_ZONE` = "Z2" only, honestly labeling it a non-hard day and
+keeping it out of any hard-day count. No watts are attached.
 **[ADAPTED: general-endurance] Confidence: medium.** Buchheit & Laursen
 (2013) frame interval prescription as work-bout duration and work:rest
 ratio setting the physiological target — a skills block is deliberately
@@ -102,7 +136,11 @@ ratio setting the physiological target — a skills block is deliberately
 clearest way to state "this is not an interval session." **Test:** if a
 skills session ever exports with a power/zone target band on a work step,
 or its purpose text mentions threshold / VO2 / FTP, the builder has
-regressed.
+regressed. **New test (Build E):** if this athlete's own logged sRPE for a
+real skills day consistently lands outside 2-4 (either direction), that's
+the athlete-specific falsification signal for the 2-4 figure specifically
+— revisit the number, not the session-level-vs-peak framing above (that
+part is the cited, not-athlete-specific fact).
 
 ## Rotate the subset, don't drill the same thing every week
 

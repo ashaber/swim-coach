@@ -4833,6 +4833,133 @@ def test_session_overrides_add_mode_requires_core_fields(athletes_dir) -> None:
     assert "duration_min" in result["error"] or "purpose" in result["error"]
 
 
+# ===========================================================================
+# session_overrides `remove` mode (Build E, engine/race-week-content-
+# refinement) -- real incident: the coach had no clean path to honor "drop
+# Wednesday's strength session" and burned 5 retries hitting
+# MAX_TOOL_ITERATIONS with nothing persisted.
+# ===========================================================================
+
+
+def test_session_overrides_remove_mode_deletes_the_matching_session(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    target = baseline["sessions"][0]
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{"date": target["date"], "sport": target["sport"], "remove": True}],
+    })
+
+    assert "error" not in result, result
+    assert len(result["sessions"]) == len(baseline["sessions"]) - 1
+    assert not any(
+        s["date"] == target["date"] and s["sport"] == target["sport"] for s in result["sessions"]
+    )
+
+
+def test_session_overrides_remove_mode_persists_only_on_confirm(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    target = baseline["sessions"][0]
+    override = [{"date": target["date"], "sport": target["sport"], "remove": True}]
+
+    draft = handlers["replace_week_plan"]({"iso_week": "2026-W28", "session_overrides": override})
+    assert draft["persisted"] is False
+    on_disk = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    assert any(s.date.isoformat() == target["date"] and s.sport == target["sport"] for s in on_disk.sessions)
+
+    confirmed = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28", "session_overrides": override, "confirm": True,
+    })
+    assert confirmed["persisted"] is True
+    on_disk = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    assert not any(s.date.isoformat() == target["date"] and s.sport == target["sport"] for s in on_disk.sessions)
+
+
+def test_session_overrides_remove_mode_no_matching_session_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{"date": "2099-01-01", "remove": True}],
+    })
+
+    assert "error" in result
+    assert "2099-01-01" in result["error"]
+
+
+def test_session_overrides_remove_mode_ambiguous_date_without_sport_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+
+    date_counts = Counter(s["date"] for s in baseline["sessions"])
+    multi_session_date = next((d for d, count in date_counts.items() if count > 1), None)
+    if multi_session_date is None:
+        pytest.skip("this fixture week has no day with more than one session to test ambiguity against")
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{"date": multi_session_date, "remove": True}],
+    })
+
+    assert "error" in result
+    assert "disambiguate" in result["error"]
+
+
+def test_session_overrides_remove_and_add_together_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    target = baseline["sessions"][0]
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{
+            "date": target["date"], "sport": target["sport"], "remove": True, "add": True,
+            "duration_min": 30, "purpose": "x",
+        }],
+    })
+
+    assert "error" in result
+    assert "remove" in result["error"].lower() and "add" in result["error"].lower()
+
+
+def test_session_overrides_remove_only_hard_bike_day_is_allowed_and_flagged(athletes_dir, run_tag) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    iso_week, _macro = _bike_macro_via_tools(handlers, store, run_tag, "RemoveHardDay")
+
+    baseline = handlers["replace_week_plan"]({"iso_week": iso_week})
+    assert "error" not in baseline, baseline
+    # The JSON response has no `intensity` field (see `_week_sessions_json`)
+    # -- the week's differentiated hard bike day is identifiable by purpose
+    # text instead: every easy day gets the exact literal "endurance ride
+    # (Z2) -- aerobic base" purpose (`_bike_week_sessions`), so anything
+    # else on a bike day is the hard/interval-template session.
+    hard = next(
+        s for s in baseline["sessions"]
+        if s["sport"] == "bike" and "aerobic base" not in s["purpose"]
+    )
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": iso_week,
+        "session_overrides": [{"date": hard["date"], "sport": "bike", "remove": True}],
+    })
+
+    assert "error" not in result, result
+    assert not any(s["date"] == hard["date"] and s["sport"] == "bike" for s in result["sessions"])
+    warnings_out = result.get("planning_warnings") or []
+    assert warnings_out, "expected a planning_warnings note, not a silent drop"
+    joined = " ".join(warnings_out).lower()
+    assert "hard bike day" in joined
+    assert result["persisted"] is False  # flag, never block
+
+
 def test_appended_hard_bike_days_trip_the_realism_guardrail(athletes_dir, run_tag) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)

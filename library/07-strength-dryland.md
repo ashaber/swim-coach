@@ -240,28 +240,38 @@ than silent automatic application, especially if cuts recur in
 back-to-back weeks (repeatedly dropping strength, not just one week's
 worth).
 
-## Taper: strength sessions are not currently modified
+## Taper: strength sessions — bike path fixed (Build E), swim path still open
 
-**Coach judgment / open question, honestly scoped to what the engine
-does today.** `plan.py`'s taper-block logic (`TAPER_WEEKS_LONG/SHORT`,
-`TAPER_WEEKLY_DECAY`) only caps the long-swim distance during taper
-weeks — `generate_week()` still calls the same strength-placement logic
-with the same `STRENGTH_SESSIONS_PER_WEEK` and `STRENGTH_SESSION_MIN`
-regardless of which macro block the week falls in. There is no
-taper-specific strength reduction, conversion, or removal anywhere in
-`plan.py` or `adapt.py` today; this file is not inventing one. Formosa
-D.P. et al.'s "Training for a 78-km Solo Open Water Swim" case study
-(`reference_list.md`, corrected figures) found a ~3-week taper reduced
-**total** volume by ~43% while maintaining intensity, which is at least
-directionally consistent with strength volume also stepping down during
-taper — but that source describes overall swim-training volume, not
-dryland strength specifically, so it cannot be cited as direct support
-for a strength-taper rule. Whether strength sessions should reduce in
-frequency, duration, or intensity during taper (to protect the taper's
-purpose of arriving fresh) is flagged here as an **open question**, not
-answered by evidence currently in `reference_list.md` — a candidate for
-`/adapt`'s manual judgment during taper weeks until (if) the engine grows
-an explicit rule.
+**Bike-primary weeks (Build E, `engine/race-week-content-refinement`):
+FIXED.** A real defect in Andrew's own first real taper/race week:
+`generate_week()`'s bike path scheduled `STRENGTH_SESSIONS_PER_WEEK`
+sessions regardless of race proximity, and its only guard
+(`_strength_offsets_after_hard`) excluded just the single day immediately
+before a hard/race day — leaving a 2nd strength session free to land 3
+days out from a real race. Two fixes, additive/flag-not-clamp in spirit
+(never a silent clamp to an unsafe day): `STRENGTH_PRERACE_REDUCED_COUNT`
+(1) replaces the normal count for any taper-block or race-proximate week
+(`plan.py`'s `use_openers`/`in_week_race_dates`); `STRENGTH_PRERACE_
+WINDOW_DAYS` (3) is a second backstop excluding a WIDER pre-race window,
+not just the single day-before — a session that still can't clear it is
+dropped (not relocated) and surfaced via `WeekPlan.planning_warnings`.
+`Coach judgment:` for both numbers — no direct swim-ultra or
+cycling-specific strength-pre-race-taper citation was found (checked
+`21-shoulder-health-and-load.md` and this file; neither addressed
+pre-competition strength timing before this pass), so this applies
+`24-cycling-periodization-intervals.md`'s own cited taper principle
+(Bosquet 2007; Mujika & Padilla 2003 — hold intensity, cut NEW training
+stress) to strength by analogy, calibrated against Andrew's own real
+complaint (3 days out was the reported problem).
+
+**Swim-primary weeks: still an open question**, honestly scoped — this
+fix is bike-only; `adapt.py`'s swim-path strength placement is untouched.
+Formosa D.P. et al.'s "Training for a 78-km Solo Open Water Swim" case
+study (`reference_list.md`, corrected figures) found a ~3-week taper
+reduced **total** volume by ~43% while maintaining intensity, directionally
+consistent but not strength-specific evidence. A candidate for `/adapt`'s
+manual judgment, or a future pass extending Build E's bike-path fix to
+swim, until the engine grows an explicit swim-side rule.
 
 ## Open questions / not yet covered here
 

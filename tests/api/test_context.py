@@ -1292,3 +1292,32 @@ def test_build_messages_threads_focused_session_into_first_message(app_env) -> N
     assert "specific planned session the athlete is asking about" in messages[0]["content"]
     assert "taper-week technique focus" in messages[0]["content"]
     assert messages[0]["content"].endswith("what's today's session about?")
+
+
+# ===========================================================================
+# Build E (race-week-content-refinement) -- persona gap fix: bike weeks
+# don't support template_preference, and the coach must not hand-author
+# taper/opener/primer content the engine already auto-generates.
+# ===========================================================================
+
+
+def test_persona_warns_bike_template_preference_does_not_apply() -> None:
+    from app.context import PERSONA_AND_RULES
+
+    text = PERSONA_AND_RULES
+    assert "template_preference` does NOT apply" in text
+    assert "session_overrides" in text
+    # must explicitly connect this to the real incident that motivated it
+    assert "stiffer" in text.lower() or "felt stiffer" in text.lower()
+
+
+def test_persona_limits_retries_on_tool_error_to_once() -> None:
+    from app.context import PERSONA_AND_RULES
+
+    text = PERSONA_AND_RULES
+    assert "retry **at most once**" in text
+    assert "MAX_TOOL_ITERATIONS" in text
+    for tool_name in (
+        "create_week_plan", "replace_week_plan", "propose_adaptation", "propose_session_adjustment",
+    ):
+        assert tool_name in text
