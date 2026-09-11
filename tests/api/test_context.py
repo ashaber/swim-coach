@@ -1309,3 +1309,15 @@ def test_persona_warns_bike_template_preference_does_not_apply() -> None:
     assert "session_overrides" in text
     # must explicitly connect this to the real incident that motivated it
     assert "stiffer" in text.lower() or "felt stiffer" in text.lower()
+
+
+def test_persona_limits_retries_on_tool_error_to_once() -> None:
+    from app.context import PERSONA_AND_RULES
+
+    text = PERSONA_AND_RULES
+    assert "retry **at most once**" in text
+    assert "MAX_TOOL_ITERATIONS" in text
+    for tool_name in (
+        "create_week_plan", "replace_week_plan", "propose_adaptation", "propose_session_adjustment",
+    ):
+        assert tool_name in text

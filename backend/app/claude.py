@@ -266,6 +266,21 @@ class ClaudeChat:
                 except Exception as exc:  # noqa: BLE001 - a tool bug must not crash the chat turn
                     log.error("tool execution failed", tool=block.name, error=str(exc))
                     result = {"error": str(exc)}
+                # Build E: this incident (5 retries of replace_week_plan,
+                # all failing, nothing persisted) could only be diagnosed
+                # from stop_reason/token-count patterns, never what was
+                # actually TRIED -- this closes that gap. Bounded input
+                # summary (this is training data the coach itself
+                # generated, not a secret) + whether the result carried an
+                # "error" key, so a repeated-failure pattern is visible in
+                # logs without needing a full transcript replay.
+                log.info(
+                    "tool call",
+                    iteration=iteration,
+                    tool=block.name,
+                    input_summary=json.dumps(block.input, default=str)[:500],
+                    had_error=isinstance(result, dict) and "error" in result,
+                )
                 tool_results.append(
                     {
                         "type": "tool_result",
@@ -275,5 +290,38 @@ class ClaudeChat:
                 )
             messages.append({"role": "user", "content": tool_results})
 
-        log.warn("max tool iterations exceeded", max_iterations=MAX_TOOL_ITERATIONS)
+        # Build E: same "never silent" posture the max_tokens branch above
+        # already takes (PR #173) -- track tools_invoked across ALL
+        # iterations (not just the last one) for the log line, and never
+        # let the athlete see a bare, unexplained error with nothing
+        # persisted. Real incident, prod 2026-09-11: a "remove/modify this
+        # session" request retried replace_week_plan 5 times (genuine
+        # retries addressing real errors, not a dumb loop -- input tokens
+        # grew each turn) and surfaced only `{"error": "max tool
+        # iterations exceeded"}`, zero information for the athlete.
+        #
+        # Yielded ALONGSIDE the existing "error" event, not instead of it:
+        # `run_once` (the non-streaming direct-answer path,
+        # POST /api/feedback/questions) still needs a hard failure signal
+        # to turn into a clean 502 rather than silently returning a
+        # half-finished answer with no caller-visible error -- changing
+        # that contract is out of scope here. The streaming path
+        # (`run_streaming`, the PWA chat) gets both events: a normal-
+        # rendering "text" bubble with the coach-voiced explanation FIRST,
+        # so the PWA has real content to show even if it also renders the
+        # trailing error chip -- a frontend rendering choice, not decided
+        # here.
+        log.warn(
+            "max tool iterations exceeded",
+            max_iterations=MAX_TOOL_ITERATIONS,
+            tools_invoked=list(tools_invoked),
+        )
+        yield {
+            "type": "text",
+            "text": (
+                "\n\nI wasn't able to finish this edit after several tries "
+                "— nothing was saved. Can you be more specific, or try a "
+                "smaller change?"
+            ),
+        }
         yield {"type": "error", "error": "max tool iterations exceeded"}
