@@ -127,6 +127,31 @@ def test_system_block_a_preserves_safety_and_grounding_invariants(library_dir) -
     assert "you never persist a plan change" in text
 
 
+def test_system_block_a_instructs_recheck_of_race_dates_before_labelling_sessions(
+    library_dir,
+) -> None:
+    # Defect 2: on a long chat the coach re-labelled a race date as a
+    # training session. PERSONA_AND_RULES must make race dates a first-class
+    # fact the coach re-checks before naming any session that falls on one.
+    text = build_system_blocks(library_dir)[0]["text"]
+    assert "race date" in text.lower()
+    assert "Upcoming events" in text  # names the pinned per-request block
+    assert "re-check" in text.lower() or "recheck" in text.lower()
+
+
+def test_system_block_a_instructs_concise_plan_build_replies(library_dir) -> None:
+    # Defect 1b: the coach must NOT narrate a whole plan as a big markdown
+    # table in the same turn it does the thinking + tool call (that's what
+    # blows the token ceiling). Short summary + render_plan_table for the
+    # full table.
+    text = build_system_blocks(library_dir)[0]["text"]
+    assert "render_plan_table" in text
+    assert "draft_macro_plan" in text and "create_week_plan" in text
+    # The instruction to keep the narrated reply short on a plan-build turn.
+    lowered = text.lower()
+    assert "short summary" in lowered or "keep your reply" in lowered or "concise" in lowered
+
+
 def test_system_block_a_has_voice_section_with_warmth_and_firmness(library_dir) -> None:
     text = build_system_blocks(library_dir)[0]["text"]
     assert "## Voice" in text
@@ -884,6 +909,176 @@ def test_per_request_context_events_include_active_status(app_env) -> None:
     archived_line = next(line for line in text.splitlines() if '"name": "Archived Event"' in line)
     assert '"active": true' in live_line
     assert '"active": false' in archived_line
+
+
+# --- event-date salience (defect 2: coach loses race dates on long chats) ---
+
+
+def test_per_request_context_pins_upcoming_events_above_profile_and_sessions(app_env) -> None:
+    # Prod 2026-09-10: early in a chat the coach knew 9/19 was "the Season
+    # Opener race"; later in the same long chat it called 9/19 a training
+    # session and dropped 9/20 entirely. `_render_events` sits BELOW the big
+    # 28-day session dumps and the current/next week JSON -- easy to lose on
+    # a long history. Fix: a high-salience upcoming-events block near the TOP.
+    store = FileStore(base_dir=app_env)
+    today = date.today()
+    opener = make_event(
+        name="Season Opener CX",
+        event_date=today + timedelta(days=9),
+        distance_m=30000,
+    )
+    race2 = make_event(
+        name="Race 2 CX",
+        event_date=today + timedelta(days=10),
+        distance_m=30000,
+    )
+    store.save_events("renee", [race2, opener])
+
+    text = build_per_request_context(store, "renee", expert_mode=False)
+
+    pinned_idx = text.index("Upcoming events")
+    profile_idx = text.index("### Profile")
+    sessions_idx = text.index("### Exact logged sessions")
+    assert pinned_idx < profile_idx < sessions_idx
+    # Both races, with their dates, are in the pinned block (before Profile).
+    head = text[:profile_idx]
+    assert "Season Opener CX" in head
+    assert "Race 2 CX" in head
+    assert (today + timedelta(days=9)).isoformat() in head
+    assert (today + timedelta(days=10)).isoformat() in head
+
+
+def test_per_request_context_pinned_events_exclude_past_and_archived(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    today = date.today()
+    past = make_event(name="Old Race", event_date=today - timedelta(days=5), distance_m=10000)
+    archived = make_event(
+        name="Cancelled Race", event_date=today + timedelta(days=20), distance_m=10000, active=False
+    )
+    upcoming = make_event(name="Real Target", event_date=today + timedelta(days=14), distance_m=10000)
+    store.save_events("renee", [past, archived, upcoming])
+
+    text = build_per_request_context(store, "renee", expert_mode=False)
+    head = text[: text.index("### Profile")]
+    assert "Real Target" in head
+    assert "Old Race" not in head
+    assert "Cancelled Race" not in head
+    # The full "### Events / races" block lower down still lists everything.
+    assert "Cancelled Race" in text
+    assert "Old Race" in text
+
+
+def test_build_messages_long_history_keeps_pinned_events_near_top_of_first_message(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    today = date.today()
+    store.save_events(
+        "renee",
+        [make_event(name="Pinned Race", event_date=today + timedelta(days=12), distance_m=10000)],
+    )
+    long_history = []
+    for i in range(40):
+        long_history.append({"role": "user", "content": f"question {i} about pacing and fueling"})
+        long_history.append({"role": "assistant", "content": f"answer {i}"})
+
+    messages = build_messages(
+        store, "renee", message="is 9/19 a race or a training day?", history=long_history,
+        expert_mode=False,
+    )
+    first = messages[0]["content"]
+    assert "Pinned Race" in first
+    # The pinned block is near the very top of the assembled context, not
+    # buried under the week JSON / session dump.
+    assert first.index("Upcoming events") < first.index("### Profile")
+    assert first.index("Pinned Race") < first.index("### Exact logged sessions")
+
+
+# --- non-swim weekly volume target (defect 3: swim meters on a bike week) ----
+
+
+def _make_bike_primary_target(store, app_env, today):
+    """Point renee's macro at a fresh bike-primary event so downstream
+    rendering can resolve primary_sport == 'bike', and persist a bike week
+    for the current ISO week so the volume note has a week to annotate."""
+    from swim_coach.models import Event, MacroBlock, MacroPlan, Session, WeekPlan
+
+    athlete = store.load_athlete("renee")
+    bike_event = Event(
+        id=uuid.uuid4(),
+        athlete_id=athlete.id,
+        name="Gravel Worlds",
+        event_date=today + timedelta(days=120),
+        target_metric="duration_min",
+        target_value=600.0,
+        primary_sport="bike",
+        priority="A",
+    )
+    store.save_events("renee", [bike_event])
+    macro = MacroPlan(
+        id=uuid.uuid4(),
+        athlete_id=athlete.id,
+        event_id=bike_event.id,
+        blocks=[
+            MacroBlock(
+                name="base",
+                start_date=today - timedelta(days=14),
+                end_date=today + timedelta(days=100),
+                weekly_volume_target_m=480,
+                focus="aerobic base",
+            )
+        ],
+    )
+    store.save_macro("renee", macro)
+
+    iso = today.isocalendar()
+    iso_week = f"{iso[0]}-W{iso[1]:02d}"
+    monday = date.fromisocalendar(iso[0], iso[1], 1)
+    store.save_week(
+        "renee",
+        WeekPlan(
+            id=uuid.uuid4(),
+            athlete_id=athlete.id,
+            iso_week=iso_week,
+            meso_block="base",
+            focus="aerobic base",
+            target_volume_m=503,
+            sessions=[
+                Session(
+                    id=uuid.uuid4(),
+                    athlete_id=athlete.id,
+                    date=monday,
+                    sport="bike",
+                    source="ai_coach",
+                    duration_min=120.0,
+                    distance_m=40000,
+                    intensity={"zone": "Z2"},
+                    purpose="endurance ride",
+                    structure=None,
+                    status="planned",
+                )
+            ],
+        ),
+    )
+    return bike_event
+
+
+def test_per_request_context_flags_meters_target_as_not_applicable_for_bike_primary(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    today = date.today()
+    _make_bike_primary_target(store, app_env, today)
+
+    text = build_per_request_context(store, "renee", expert_mode=False)
+
+    # The week JSON still round-trips its raw field, but the context now
+    # tells the model that a meters figure is not a distance for this
+    # athlete -- so it never parrots "503m" as a swim distance on a bike week.
+    assert "primary sport is bike" in text.lower() or "not a swim distance" in text.lower()
+    assert "target_volume_m" in text  # raw field still present, just annotated
+
+
+def test_per_request_context_swim_athlete_has_no_non_swim_volume_note(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    text = build_per_request_context(store, "renee", expert_mode=False)
+    assert "not a swim distance" not in text.lower()
 
 
 # --- focused workout (Log tab's embedded workout chat) -----------------------

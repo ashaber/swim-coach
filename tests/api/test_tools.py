@@ -22,6 +22,7 @@ from swim_coach.models import (
     MacroBlock,
     MacroPlan,
     Session,
+    WeekPlan,
     Workout,
     WorkoutAnalytics,
     WorkoutLap,
@@ -38,6 +39,8 @@ from app.tools import (
     SYNC_WORKOUTS_WINDOW_DAYS,
     TOOLS_SCHEMA,
     build_tool_handlers,
+    format_macro_plan_table,
+    format_week_plan_table,
 )
 
 # Fixed IDs/names from the real athletes/renee/ test tree (copied into
@@ -4589,6 +4592,177 @@ def test_propose_injury_adapted_taper_never_generates_sessions_before_today(
         )
 
 
+# --- render_plan_table (defect 1b: cheap deterministic table rendering) ------
+
+
+def _mk_session(d: date, sport: str, *, distance_m=None, duration_min=45.0, purpose="work"):
+    return Session(
+        id=uuid.uuid4(),
+        athlete_id=uuid.uuid4(),
+        date=d,
+        sport=sport,
+        source="ai_coach",
+        duration_min=duration_min,
+        distance_m=distance_m,
+        intensity={"zone": "Z2"},
+        purpose=purpose,
+        structure=None,
+        status="planned",
+    )
+
+
+def _mk_week(iso_week: str, monday: date, sessions) -> WeekPlan:
+    return WeekPlan(
+        id=uuid.uuid4(),
+        athlete_id=uuid.uuid4(),
+        iso_week=iso_week,
+        meso_block="build",
+        focus="threshold",
+        target_volume_m=12345,
+        sessions=sessions,
+    )
+
+
+def test_format_week_plan_table_swim_shows_meter_target_and_one_row_per_session() -> None:
+    monday = date(2026, 7, 20)
+    week = _mk_week(
+        "2026-W30",
+        monday,
+        [
+            _mk_session(monday, "swim_pool", distance_m=3000, purpose="aerobic base"),
+            _mk_session(monday + timedelta(days=2), "swim_ow", distance_m=5000, purpose="long swim"),
+        ],
+    )
+    table = format_week_plan_table(week, primary_sport="swim")
+
+    assert "| Day |" in table and "| --- |" in table
+    assert "12,345 m" in table  # weekly meter target, swim wording unchanged
+    assert "aerobic base" in table and "long swim" in table
+    body_rows = [ln for ln in table.splitlines() if ln.startswith("| ") and "---" not in ln]
+    assert len(body_rows) == 1 + 2  # header + 2 sessions
+
+
+def test_format_week_plan_table_bike_shows_duration_target_not_meters() -> None:
+    monday = date(2026, 7, 20)
+    week = _mk_week(
+        "2026-W30",
+        monday,
+        [
+            _mk_session(monday, "bike", distance_m=30000, duration_min=90.0, purpose="endurance"),
+            _mk_session(monday + timedelta(days=1), "strength", duration_min=40.0, purpose="lift"),
+        ],
+    )
+    table = format_week_plan_table(week, primary_sport="bike")
+
+    assert "12,345 m" not in table
+    assert "130" in table  # 90 + 40 min of planned time
+    assert "min" in table.lower()
+
+
+def test_render_plan_table_handler_formats_persisted_swim_week_deterministically(
+    athletes_dir,
+) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    existing = store.load_week("renee", "2026-W28")
+    assert existing is not None
+
+    r1 = handlers["render_plan_table"]({"target": "2026-W28"})
+    r2 = handlers["render_plan_table"]({"target": "2026-W28"})
+
+    assert "error" not in r1
+    assert "table" in r1
+    assert r1["table"] == r2["table"]  # deterministic
+    assert "| Day |" in r1["table"]
+    assert f"{existing.target_volume_m:,} m" in r1["table"]
+    body_rows = [
+        ln for ln in r1["table"].splitlines() if ln.startswith("| ") and "---" not in ln
+    ]
+    assert len(body_rows) == 1 + len(existing.sessions)
+
+
+def test_render_plan_table_handler_macro_block_table(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    macro = store.load_macro("renee")
+    assert macro is not None
+
+    result = handlers["render_plan_table"]({"target": "macro"})
+    assert "error" not in result
+    assert "table" in result
+    for block in macro.blocks:
+        assert block.name in result["table"]
+
+
+def test_render_plan_table_handler_bike_primary_week_shows_duration_target(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    today = date.today()
+    bike_event = Event(
+        id=uuid.uuid4(),
+        athlete_id=athlete.id,
+        name="Gravel Worlds",
+        event_date=today + timedelta(days=120),
+        target_metric="duration_min",
+        target_value=600.0,
+        primary_sport="bike",
+        priority="A",
+    )
+    store.save_events("renee", [bike_event])
+    store.save_macro(
+        "renee",
+        MacroPlan(
+            id=uuid.uuid4(),
+            athlete_id=athlete.id,
+            event_id=bike_event.id,
+            blocks=[
+                MacroBlock(
+                    name="base",
+                    start_date=today - timedelta(days=14),
+                    end_date=today + timedelta(days=100),
+                    weekly_volume_target_m=480,
+                    focus="aerobic base",
+                )
+            ],
+        ),
+    )
+    iso = today.isocalendar()
+    iso_week = f"{iso[0]}-W{iso[1]:02d}"
+    monday = date.fromisocalendar(iso[0], iso[1], 1)
+    store.save_week(
+        "renee",
+        _mk_week(
+            iso_week,
+            monday,
+            [
+                _mk_session(monday, "bike", duration_min=120.0, purpose="endurance"),
+                _mk_session(monday + timedelta(days=2), "bike", duration_min=75.0, purpose="tempo"),
+            ],
+        ),
+    )
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["render_plan_table"]({"target": iso_week})
+    assert "error" not in result
+    assert "12,345 m" not in result["table"]
+    assert "195" in result["table"]  # 120 + 75 min of planned time
+
+
+def test_render_plan_table_handler_missing_week_points_at_the_draft_result(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["render_plan_table"]({"target": "2099-W40"})
+    assert "error" in result
+    assert "draft" in result["error"].lower()
+
+
+def test_render_plan_table_in_schema_and_handlers(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    schema_names = {t["name"] for t in TOOLS_SCHEMA}
+    assert "render_plan_table" in schema_names
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    assert "render_plan_table" in handlers
 # ===========================================================================
 # session_overrides `add` mode + realism-guardrail surfacing
 # (engine/week-generator-realism, Build A defects 1 + 3)

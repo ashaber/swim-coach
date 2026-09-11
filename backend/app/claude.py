@@ -40,6 +40,20 @@ MAX_TOOL_ITERATIONS = 5
 # worst-case per-message output spend.
 MAX_TOKENS = 16384
 
+# Appended verbatim to the streamed text of any turn whose `stop_reason` is
+# `max_tokens`, so a truncated answer is NEVER silent in the PWA (prod
+# 2026-09-10: a "redraft this week" turn hit max_tokens at exactly 16384
+# output tokens and the PWA showed a cut-off answer with no indication).
+# The ceiling is deliberately NOT being raised -- every hit is instead made
+# visible here and logged (see `_run_turns`) as a signal to review chunking/
+# optimization for that path (Andrew's direction). Plain-ASCII spine
+# ("cut off at the token limit") so it survives SSE JSON-encoding for
+# assertions; the emoji/em-dash decode fine in the browser.
+MAX_TOKENS_TRUNCATION_MARKER = (
+    "\n\n⚠️ _[Response was cut off at the token limit — "
+    "reply 'continue' to resume.]_"
+)
+
 
 def build_request_kwargs(
     settings: Settings,
@@ -173,6 +187,8 @@ class ClaudeChat:
         framed) before this refactor, so its behavior/tests are unchanged.
         """
         messages = list(messages)
+        tool_names_available = [t.get("name") for t in tools] if tools else []
+        tools_invoked: list[str] = []
 
         for iteration in range(MAX_TOOL_ITERATIONS):
             request_kwargs = build_request_kwargs(self.settings, system, messages, tools)
@@ -205,6 +221,24 @@ class ClaudeChat:
                 yield {"type": "refusal"}
                 return
 
+            # max_tokens caps thinking + text COMBINED. The turn stops here
+            # with whatever partial text streamed above -- never silently:
+            # append a visible marker so the PWA shows the answer was cut,
+            # and WARN so every hit is a reviewable signal (per Andrew: each
+            # hit means chunking/optimization for that path should be
+            # reviewed -- the ceiling is not being raised). `render_plan_
+            # table` + the concise-plan-build persona rule are the
+            # structural half of that answer.
+            if final.stop_reason == "max_tokens":
+                log.warn(
+                    "turn hit max_tokens",
+                    iteration=iteration,
+                    output_tokens=getattr(usage, "output_tokens", None),
+                    tools_available=tool_names_available,
+                    tools_invoked=list(tools_invoked),
+                )
+                yield {"type": "text", "text": MAX_TOKENS_TRUNCATION_MARKER}
+
             if final.stop_reason != "tool_use":
                 yield {"type": "done", "stop_reason": final.stop_reason}
                 return
@@ -223,6 +257,7 @@ class ClaudeChat:
                 if block.type != "tool_use":
                     continue
                 handler = tool_handlers.get(block.name)
+                tools_invoked.append(block.name)
                 yield {"type": "tool_use", "name": block.name, "input": block.input}
                 try:
                     result = (

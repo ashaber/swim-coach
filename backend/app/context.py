@@ -449,6 +449,35 @@ answer must still be a grounded, accurate one.
    `replace_week_plan`, and `propose_session_adjustment` are the exceptions
    in this group -- all three draft first, per above.
 
+## Race dates are a first-class fact -- re-check them before labelling a session
+
+The per-request context opens with an "Upcoming events" block: the
+athlete's active, still-upcoming events, each with its exact date. Treat
+those race dates as ground truth for the whole conversation, not just the
+first few turns. Before you name, label, or describe ANY planned session
+that falls on one of those dates -- especially on a long chat, where the
+event list is far up the history -- re-check the "Upcoming events" block.
+A session dated on a race day is that race, never a "VO2 2x5" or any other
+training set, and the day around it is not an ordinary training day.
+
+## Plan-build turns: short reply, render the full table with the tool
+
+When a turn calls `draft_macro_plan`, `replace_macro_plan`,
+`create_week_plan`, `replace_week_plan`, `propose_adaptation`, or
+`propose_session_adjustment`, do NOT also write the whole plan out as a big
+day-by-day markdown table in that same reply. Thinking + the tool call + a
+long narrated table in one turn is exactly what overruns the token limit
+and gets your answer cut off. Instead keep your reply to a short summary:
+the 2-4 key changes (weekly volume, the long session, anything moved /
+added / removed) and a clear "confirm and I'll persist this" (or, for the
+immediate-persist create tools, "it's saved"). If the athlete wants the
+full per-day table, call `render_plan_table` with the ISO week id (or
+`"current"` / `"next"` / `"macro"`) -- it formats the persisted plan
+deterministically in code, so you never retype it and it never costs
+thinking/output tokens. For an unconfirmed draft (nothing persisted yet),
+lay the days out straight from the `sessions` array in the tool result you
+just got back -- transcribe it, don't recompute or re-narrate it.
+
 ## Answering
 
 Recommendation first, then the reasoning -- and the citation/evidence level
@@ -1198,6 +1227,89 @@ def _render_threshold_history(records: list[ThresholdRecord]) -> str:
     return "\n".join(blocks)
 
 
+PINNED_EVENT_SOON_DAYS = 30
+
+
+def _render_upcoming_events_pinned(events: list[Event], today: date) -> str:
+    """A high-salience block for the TOP of the per-request context: only
+    the ACTIVE, still-upcoming events, soonest first, each with `days_until`
+    and a `soon` flag for the ~30-day window.
+
+    Defect fixed (prod 2026-09-10): the coach knew a date was "the Season
+    Opener race" early in a long chat, then later in the SAME chat treated
+    that date as a training session and dropped the next day's race
+    entirely. `_render_events` (the full list, below) sits under the
+    28-day session dumps and the current/next week JSON -- easy to lose on
+    a long message history. This pinned copy sits above `### Profile` so
+    race dates stay first-class no matter how long the conversation runs."""
+    upcoming = sorted(
+        (e for e in events if e.active and e.event_date >= today),
+        key=lambda e: e.event_date,
+    )
+    if not upcoming:
+        return (
+            "(no upcoming active events on file -- if the athlete names a race, "
+            "it is not yet recorded; consider create_event)"
+        )
+    rows = []
+    for e in upcoming:
+        days_until = (e.event_date - today).days
+        rows.append(
+            json.dumps(
+                {
+                    "name": e.name,
+                    "event_date": e.event_date.isoformat(),
+                    "days_until": days_until,
+                    "distance_m": e.distance_m,
+                    "event_format": e.event_format,
+                    "active": e.active,
+                    "soon": days_until <= PINNED_EVENT_SOON_DAYS,
+                }
+            )
+        )
+    return "\n".join(rows)
+
+
+def athlete_primary_sport(store: StoreInterface, slug: str) -> str:
+    """The primary sport of the athlete's current target event -- `"swim"`
+    unless the persisted macro points at an event whose `primary_sport` is
+    something else (today, only `"bike"`).
+
+    Used to decide whether a week/macro `*_volume_*_m` figure is a real
+    swim distance or a meaningless leftover for a non-swim athlete (defect:
+    a bike/strength week rendered a "503m" swim-distance target). Defaults
+    to `"swim"` on any missing macro/event so swim output stays
+    byte-identical."""
+    try:
+        macro = store.load_macro(slug)
+        if macro is None:
+            return "swim"
+        events = store.load_events(slug)
+    except Exception:  # noqa: BLE001 - a lookup failure just means "assume swim"
+        return "swim"
+    event = next((e for e in events if e.id == macro.event_id), None)
+    return event.primary_sport if event is not None else "swim"
+
+
+def _non_swim_volume_note(primary_sport: str, week: dict[str, Any] | None) -> str | None:
+    """A one-line annotation for the model when a rendered week's
+    `target_volume_m` (integer METERS -- a swim concept) is meaningless
+    because this athlete's primary sport isn't swim. Returns None for swim
+    athletes / absent weeks so nothing changes for them."""
+    if primary_sport == "swim" or week is None:
+        return None
+    sessions = week.get("sessions") or []
+    planned_min = sum((s.get("duration_min") or 0) for s in sessions)
+    return (
+        f"NOTE: this athlete's primary sport is {primary_sport}, not swim. "
+        "`target_volume_m` above is integer meters (a swim-distance metric) "
+        "and is NOT a swim distance for this athlete -- do not quote it as "
+        f"one. Planned training time this week is ~{round(planned_min)} min "
+        f"across {len(sessions)} session(s); use that as the weekly volume "
+        "reference instead."
+    )
+
+
 def _render_events(events: list[Event], today: date) -> str:
     """Compact, chronological rendering of every event on file, each with
     `days_until` computed relative to `today` -- fixes the coach not
@@ -1392,14 +1504,26 @@ def build_per_request_context(
     athlete = store.load_athlete(slug)
     workouts = store.list_workouts(slug)
     events = store.load_events(slug)
+    primary_sport = athlete_primary_sport(store, slug)
     span_start, span_end, _ = _rollup_window(today, weeks=4)
     rollup = summarize_rollup(store, slug, weeks=4, as_of=today, workouts=workouts, athlete=athlete)
     demographics = _render_demographics(athlete, today)
+
+    current_week = _week_or_none(store, slug, current_iso)
+    next_week = _week_or_none(store, slug, next_iso)
+    current_week_note = _non_swim_volume_note(primary_sport, current_week)
+    next_week_note = _non_swim_volume_note(primary_sport, next_week)
 
     parts = [
         "## Athlete context (assembled per-request, not cached)",
         f"Asker mode: {'expert (professional coach/physiologist)' if expert_mode else 'athlete'}",
         f"Today: {today.isoformat()} (current week {current_iso}, next week {next_iso})",
+        "",
+        "### Upcoming events (READ FIRST -- race dates are ground truth)",
+        _render_upcoming_events_pinned(events, today),
+        "Before you label or describe any planned session that falls on one "
+        "of these dates, re-check this list: a session dated on a race day "
+        "IS that race, not a training set.",
         "",
         "### Profile",
         json.dumps(athlete.model_dump(mode="json"), indent=2),
@@ -1420,10 +1544,12 @@ def build_per_request_context(
         _render_threshold_history(store.list_threshold_records(slug)),
         "",
         f"### Current week plan ({current_iso})",
-        json.dumps(_week_or_none(store, slug, current_iso), indent=2),
+        json.dumps(current_week, indent=2),
+        *([current_week_note] if current_week_note else []),
         "",
         f"### Next week plan ({next_iso})",
-        json.dumps(_week_or_none(store, slug, next_iso), indent=2),
+        json.dumps(next_week, indent=2),
+        *([next_week_note] if next_week_note else []),
         "",
         "### Exact logged sessions (last 28 days) -- ground truth, each with its sport",
         _render_recent_sessions(workouts, span_start, span_end),

@@ -213,6 +213,7 @@ from swim_coach.workout_templates import TemplatePreference, render_prose, resol
 
 from app.context import (
     _active_health_statuses,
+    athlete_primary_sport,
     find_workout_by_id,
     iso_week_str,
     summarize_rollup,
@@ -1801,6 +1802,45 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
             },
             "required": ["event"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "render_plan_table",
+        "description": (
+            "Format an already-persisted plan artifact into a ready-to-send "
+            "markdown table -- deterministically, in code, spending NO "
+            "thinking or output tokens on the table itself. Call this "
+            "instead of narrating a full day-by-day plan yourself after a "
+            "plan-build tool (draft_macro_plan / replace_macro_plan / "
+            "create_week_plan / replace_week_plan / propose_adaptation / "
+            "propose_session_adjustment): keep your own reply a short "
+            "summary, and use this for the full table when the athlete "
+            "wants it.\n\n"
+            "`target`: an ISO week id like '2026-W30', or 'current' / "
+            "'next' for this / next week, or 'macro' for the macrocycle "
+            "block table. Reads from storage -- so it only works for a plan "
+            "that's actually been persisted (the create_* tools and "
+            "draft_macro_plan persist immediately; the replace_* / "
+            "propose_* drafts do NOT until confirmed). For an unconfirmed "
+            "draft, lay the days out from the draft tool result's own "
+            "`sessions` array instead. The weekly volume figure is "
+            "sport-aware: a swim athlete sees a metres target, a non-swim "
+            "athlete sees planned training time instead (a metres figure is "
+            "not a distance for them)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": (
+                        "'2026-W30' (an ISO week), 'current', 'next', or "
+                        "'macro'."
+                    ),
+                }
+            },
+            "required": ["target"],
             "additionalProperties": False,
         },
     },
@@ -4436,6 +4476,150 @@ def _handle_set_event_active_status(input_data: dict[str, Any], *, store: StoreI
     return {"updated": True, "event_name": event_name, "active": event.active}
 
 
+# --- render_plan_table: deterministic markdown formatting of a persisted ----
+# plan artifact. This is the "chunking" half of the max_tokens answer (see
+# app.claude.MAX_TOKENS_TRUNCATION_MARKER): the expensive per-day table is
+# built by code from the structured WeekPlan/MacroPlan, never squeezed
+# through the model's thinking/output budget alongside a plan-build turn.
+
+_DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def _fmt_distance_cell(m: Any) -> str:
+    return f"{int(m):,} m" if m else "--"
+
+
+def _fmt_duration_cell(mins: Any) -> str:
+    if not mins:
+        return "--"
+    total = int(round(mins))
+    h, m = divmod(total, 60)
+    return f"{h}h {m:02d}m" if h else f"{m} min"
+
+
+def format_week_plan_table(week: WeekPlan, *, primary_sport: str = "swim") -> str:
+    """One `WeekPlan` -> a markdown table, one row per session, chronological.
+
+    Sport-aware weekly target (defect: a bike/strength week rendered a
+    leftover swim "distance target" e.g. "503m" -- `WeekPlan.target_volume_m`
+    is integer METERS, a swim concept): a swim athlete gets the metres
+    target verbatim (byte-identical to before); a non-swim athlete gets a
+    planned-training-time target instead, and the metres figure is omitted.
+    """
+    is_swim = primary_sport == "swim"
+    lines = [
+        f"### Week {week.iso_week} -- {week.meso_block} block -- {week.focus}",
+    ]
+    if is_swim:
+        lines.append(f"Weekly volume target: {week.target_volume_m:,} m")
+    else:
+        planned_min = sum(int(round(s.duration_min or 0)) for s in week.sessions)
+        lines.append(
+            f"Weekly training-time target: {planned_min} min planned across "
+            f"{len(week.sessions)} session(s) "
+            f"(metres figure omitted -- {primary_sport} is not a swim-distance sport)"
+        )
+    lines += [
+        "",
+        "| Day | Date | Sport | Distance | Duration | Intensity | Purpose |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for s in sorted(week.sessions, key=lambda x: x.date):
+        zone = "--"
+        if isinstance(s.intensity, dict) and s.intensity.get("zone"):
+            zone = str(s.intensity["zone"])
+        purpose = (s.purpose or "").replace("\n", " ").replace("|", "/").strip() or "--"
+        lines.append(
+            f"| {_DOW[s.date.weekday()]} | {s.date.isoformat()} | {s.sport} "
+            f"| {_fmt_distance_cell(s.distance_m)} | {_fmt_duration_cell(s.duration_min)} "
+            f"| {zone} | {purpose} |"
+        )
+    if not week.sessions:
+        lines.append("| -- | -- | -- | -- | -- | -- | (no sessions planned) |")
+    return "\n".join(lines)
+
+
+def format_macro_plan_table(macro: Any, *, primary_sport: str = "swim") -> str:
+    """One `MacroPlan` -> a markdown block table. Same sport-aware weekly
+    target unit as `format_week_plan_table`: `min/wk` for a duration-target
+    (non-swim) event, `m/wk` unchanged for swim."""
+    unit = "m/wk" if primary_sport == "swim" else "min/wk"
+    lines = [
+        "### Macrocycle blocks",
+        f"| Block | Start | End | Weeks | Weekly target ({unit}) | Focus |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for b in macro.blocks:
+        weeks = max(1, round(((b.end_date - b.start_date).days + 1) / 7))
+        focus = (b.focus or "").replace("|", "/").strip()
+        lines.append(
+            f"| {b.name} | {b.start_date.isoformat()} | {b.end_date.isoformat()} "
+            f"| {weeks} | {b.weekly_volume_target_m:,} | {focus} |"
+        )
+    return "\n".join(lines)
+
+
+def _handle_render_plan_table(
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str
+) -> dict[str, Any]:
+    target = (input_data.get("target") or "").strip()
+    if not target:
+        return {
+            "error": (
+                "target is required: an ISO week id (e.g. '2026-W30'), "
+                "'current', 'next', or 'macro'"
+            )
+        }
+    primary_sport = athlete_primary_sport(store, slug)
+
+    if target.lower() == "macro":
+        macro = store.load_macro(slug)
+        if macro is None:
+            return {
+                "error": (
+                    "no macro plan is persisted for this athlete. If you just "
+                    "drafted one that isn't confirmed/persisted yet, lay it out "
+                    "from the draft tool result instead of calling this."
+                )
+            }
+        return {
+            "target": "macro",
+            "table": format_macro_plan_table(macro, primary_sport=primary_sport),
+        }
+
+    if target.lower() == "current":
+        iso_week = iso_week_str(date.today())
+    elif target.lower() == "next":
+        iso_week = iso_week_str(date.today() + timedelta(days=7))
+    else:
+        iso_week = target
+        try:
+            year_str, week_str = iso_week.split("-W")
+            date.fromisocalendar(int(year_str), int(week_str), 1)
+        except (ValueError, IndexError):
+            return {
+                "error": (
+                    f"invalid target {target!r}; expected an ISO week like "
+                    "'2026-W30', or 'current' / 'next' / 'macro'"
+                )
+            }
+
+    week = store.load_week(slug, iso_week)
+    if week is None:
+        return {
+            "error": (
+                f"no week plan is persisted for {iso_week!r}. If you just "
+                "drafted one that isn't confirmed/persisted yet, render it "
+                "from the draft tool result's own 'sessions' array instead of "
+                "calling this."
+            )
+        }
+    return {
+        "target": iso_week,
+        "table": format_week_plan_table(week, primary_sport=primary_sport),
+    }
+
+
 def build_tool_handlers(
     store: StoreInterface, *, slug: str, expert_mode: bool
 ) -> dict[str, ToolHandler]:
@@ -4508,6 +4692,9 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "propose_injury_adapted_taper": lambda input_data: _handle_propose_injury_adapted_taper(
+            input_data, store=store, slug=slug
+        ),
+        "render_plan_table": lambda input_data: _handle_render_plan_table(
             input_data, store=store, slug=slug
         ),
     }
