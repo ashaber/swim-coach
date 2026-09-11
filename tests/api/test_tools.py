@@ -4763,3 +4763,105 @@ def test_render_plan_table_in_schema_and_handlers(athletes_dir) -> None:
     assert "render_plan_table" in schema_names
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
     assert "render_plan_table" in handlers
+# ===========================================================================
+# session_overrides `add` mode + realism-guardrail surfacing
+# (engine/week-generator-realism, Build A defects 1 + 3)
+# ===========================================================================
+
+
+def test_session_overrides_add_mode_creates_a_new_session(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    assert "error" not in baseline
+    add_date = "2026-07-06"  # the week's Monday, normally left open
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [
+            {
+                "date": add_date,
+                "add": True,
+                "sport": "recovery",
+                "duration_min": 30,
+                "purpose": "travel-day mobility flush",
+            }
+        ],
+    })
+    assert "error" not in result, result
+    added = [
+        s for s in result["sessions"]
+        if s["date"] == add_date and s["purpose"] == "travel-day mobility flush"
+    ]
+    assert len(added) == 1
+    assert added[0]["sport"] == "recovery"
+    assert added[0]["duration_min"] == 30
+    assert len(result["sessions"]) == len(baseline["sessions"]) + 1
+
+
+def test_session_overrides_add_mode_refuses_when_session_already_exists(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    existing = baseline["sessions"][0]
+
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [
+            {
+                "date": existing["date"],
+                "add": True,
+                "sport": existing["sport"],
+                "duration_min": 30,
+                "purpose": "dup",
+            }
+        ],
+    })
+    assert "error" in result
+    assert "already" in result["error"].lower()
+
+
+def test_session_overrides_add_mode_requires_core_fields(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{"date": "2026-07-06", "add": True, "sport": "bike"}],
+    })
+    assert "error" in result
+    assert "duration_min" in result["error"] or "purpose" in result["error"]
+
+
+def test_appended_hard_bike_days_trip_the_realism_guardrail(athletes_dir, run_tag) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    iso_week, _macro = _bike_macro_via_tools(handlers, store, run_tag, "Guardrail")
+
+    year, wk = iso_week.split("-W")
+    monday = date.fromisocalendar(int(year), int(wk), 1)
+    baseline = handlers["replace_week_plan"]({"iso_week": iso_week})
+    bike_dates = {s["date"] for s in baseline["sessions"] if s["sport"] == "bike"}
+
+    # add a hard bike day on every date the generated week leaves free --
+    # 4 free days + the generated hard day = 5 hard bike days, over the
+    # BIKE_MAX_HARD_DAYS_PER_WEEK ceiling of 3.
+    overrides = [
+        {
+            "date": (monday + timedelta(days=d)).isoformat(),
+            "add": True,
+            "sport": "bike",
+            "duration_min": 75,
+            "purpose": "hard interval session",
+            "intensity": {"zone": "Z4"},
+        }
+        for d in range(7)
+        if (monday + timedelta(days=d)).isoformat() not in bike_dates
+    ]
+    assert len(overrides) >= 2
+    result = handlers["replace_week_plan"]({"iso_week": iso_week, "session_overrides": overrides})
+    assert "error" not in result, result
+    warnings_out = result.get("planning_warnings") or []
+    assert warnings_out, "expected the guardrail to surface warnings, not silently clamp"
+    assert "hard bike day" in " ".join(warnings_out).lower()
+    assert result["persisted"] is False

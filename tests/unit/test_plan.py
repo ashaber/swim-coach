@@ -636,9 +636,18 @@ def test_generate_week_bike_primary_no_warning_for_duration_min_event():
 
 
 def test_select_bike_interval_template_cycles_through_all_four_in_fixed_order():
+    from swim_coach.plan import _BIKE_ROTATION_TEMPLATES
+
+    # "openers" (Build A defect 5) is in BIKE_INTERVAL_TEMPLATES but NOT in
+    # the blind week-to-week rotation -- it is only ever selected via
+    # `use_openers` (taper block / race proximity).
+    assert _BIKE_ROTATION_TEMPLATES == tuple(
+        t for t in BIKE_INTERVAL_TEMPLATES if t != "openers"
+    )
     seen = [_select_bike_interval_template(i) for i in range(8)]
-    assert seen[:4] == list(BIKE_INTERVAL_TEMPLATES)
-    assert seen[4:8] == list(BIKE_INTERVAL_TEMPLATES)  # wraps and repeats
+    assert seen[:4] == list(_BIKE_ROTATION_TEMPLATES)
+    assert seen[4:8] == list(_BIKE_ROTATION_TEMPLATES)  # wraps and repeats
+    assert "openers" not in seen
 
 
 def test_bike_ramp_week_index_is_continuous_across_block_boundaries():

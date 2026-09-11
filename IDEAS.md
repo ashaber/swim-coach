@@ -517,3 +517,44 @@ an automatic engine decision from day one.
 Not built here -- captured as a real, well-grounded stretch goal, with its
 building block already in the codebase and its safe-wiring precedent
 already proven correct once.
+
+## IDEA 013 - The 5-session-slot ceiling on a generated bike-primary week
+
+Found live, not speculated: building Andrew's real first cyclocross week
+(2026-W38) through the coach, the generator produced exactly 5 sessions and
+there was no mechanism to represent a 6th day. Root cause is two flat
+constants plus a modify-only override path:
+
+- `plan.BIKE_SESSIONS_PER_WEEK = 3` -- a hard cap on bike sessions per
+  week, independent of how many days the athlete actually rides. Andrew
+  rides 4-5 (Tue intervals, Wed MTB, Sat, Sun group ride) on top of Mon
+  skills.
+- `plan.STRENGTH_SESSIONS_PER_WEEK = 2` -- added on days the 3 bike
+  sessions didn't use (`_bike_week_sessions_with_strength`).
+- 3 + 2 = 5 is the whole week. `_apply_session_overrides` in
+  `backend/app/tools.py` matches each override to exactly one *existing*
+  session by date+sport and errors ("no session matching date ...") when
+  none exists -- it can modify a generated slot but cannot append a new
+  one. So the coach could not add Sunday 2026-09-20 (day 2 of the Season
+  Opener race weekend); it had to be left for manual post-hoc logging.
+
+Contributing gap: a bike-primary athlete has no `pool_schedule`-equivalent
+field for weekly training-day pattern / frequency (the `_bike_week_sessions`
+and `_spread_days_evenly` docstrings both note this explicitly). Without it
+the engine can't know Andrew's Mon/Tue/Wed/Sat/Sun rhythm, so it both caps
+the count and places days generically (`_spread_days_evenly` -- evenly
+spaced, not the athlete's real pattern).
+
+Related but distinct (same live session): generated skills/race days carry
+the right `purpose` label but the wrong prescribed `structure` -- e.g. a CX
+skills Monday still shows "3x10min threshold interval" content because
+there is no skills-day content template, only the 4 CX interval templates
+from `library/24`. A `structured` override can hand-author it, but there's
+no generated starting point.
+
+Natural fix direction (a "cleanup" build, per Andrew's own framing): an
+athlete bike-frequency/day-pattern field feeding a non-flat
+`BIKE_SESSIONS_PER_WEEK`, plus either an add-session path in
+`session_overrides` or an explicit day-count parameter on
+`create_week_plan`/`replace_week_plan`. Captured now so the concrete
+repro (W38, the missing Sunday race day) isn't lost.

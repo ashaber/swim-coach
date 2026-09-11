@@ -49,6 +49,18 @@ contained fabricated URLs and embedded agent-directive text.
   outperform step tapers; typical performance gain ~3% (range 0.5-6.0%).
   This is the taper-*mechanism* citation the project had been missing
   (Formosa above is a single-case *example*, not the mechanism review).
+- **✓ Bosquet L., Montpetit J., Arvisais D., Mujika I. (2007)** — "Effects
+  of tapering on performance: a meta-analysis" — *Medicine & Science in
+  Sports & Exercise*, 39(8):1358-1365 (title/authors/journal/year verified
+  by web search this pass). 27 of 182 screened studies met inclusion: the
+  optimal taper is a ~2-week exponential reduction of training **volume by
+  41-60%**, with training **intensity and frequency held constant**;
+  typical performance gain ~0.5-6.0%. `[ADAPTED: general-endurance]` —
+  multi-sport, not cyclist-specific. Grounds `plan.py`'s
+  `BIKE_TAPER_INTENSITY_VOLUME_REDUCTION` and the `"openers"` template
+  (keep intensity, cut volume) — see `24-cycling-periodization-intervals.md`
+  "Openers / pre-race primers (taper)". Distinct from Bosquet L., Merkari
+  S., Arvisais D., Aubert A.E. (2008) below (an HRV paper, different topic).
 - **✓ Wang Z., Wang Y.T., Gao W., Zhong Y. (2023)** — "Effects of tapering
   on performance in endurance athletes: A systematic review and
   meta-analysis" — *PLOS ONE*, 18(5):e0282838. 14-study meta-analysis:
