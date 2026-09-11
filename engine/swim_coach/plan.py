@@ -2777,11 +2777,16 @@ def _days_until_race(
     (`in_week_race_offsets`) or the nearest race after this week ends
     (`race_within_days`, `generate_week`'s own local of the same name).
     `None` if no race is close enough for either source to say anything.
-    A race ON `offset` or earlier is never "ahead" of it (not this
-    function's job -- `_strength_offsets_after_hard`'s own day-before/
-    race-day protection already excludes those; this only adds the WIDER
-    multi-day pre-race window on top)."""
-    candidates = [r - offset for r in in_week_race_offsets if r > offset]
+    A race ON `offset` itself counts as 0 days out (deliberately included,
+    NOT just races strictly after `offset` -- real gap found live:
+    `_strength_offsets_after_hard`'s own "protected" mechanism only
+    excludes the day BEFORE a hard/race day, never the race day itself,
+    since multiple sessions legitimately share one date elsewhere in this
+    engine; without this, a reduced-to-1 strength session could still get
+    force-placed on the SAME day as a race by that function's own
+    last-resort fallback). A race strictly BEFORE `offset` is excluded --
+    already in the past relative to this candidate day, not upcoming."""
+    candidates = [r - offset for r in in_week_race_offsets if r >= offset]
     if race_within_days is not None:
         # the nearest race after week_end is `race_within_days` days past
         # week_end (offset 6); from `offset` inside this week, that's

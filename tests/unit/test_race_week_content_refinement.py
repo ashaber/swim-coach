@@ -258,6 +258,33 @@ def test_strength_dropped_entirely_and_flagged_when_even_reduced_count_cant_fit(
         assert any("strength" in w.lower() and "race" in w.lower() for w in week.planning_warnings)
 
 
+def test_strength_never_lands_on_the_race_day_itself():
+    """Real edge case found via the end-to-end check (Andrew's actual
+    pattern, Sat+Sun races + a Friday primer): with only one day left
+    outside the pre-race window, _strength_offsets_after_hard's own
+    last-resort fallback could force-place the single reduced strength
+    session onto the SECOND race day itself (nothing in that function
+    excludes the race day, only the day before it). The strength session
+    must never share a date with a race -- dropped and flagged instead."""
+    athlete, event, macro = _bike_setup()
+    athlete = athlete.model_copy(
+        update={"training_days": {"bike": ["tue", "wed", "sat", "sun"], "strength": ["wed", "thu"]}}
+    )
+    ws = START + timedelta(days=7)
+    sat = ws + timedelta(days=5)
+    sun = ws + timedelta(days=6)
+    r1 = make_event(name="CX #1", event_date=sat, priority="A")
+    r2 = make_event(name="CX #2", event_date=sun, priority="A")
+    week = generate_week(
+        athlete, macro, _iso_week(ws), ws, primary_sport="bike", event=event, events=[event, r1, r2]
+    )
+    race_dates = {sat, sun}
+    strength = [s for s in week.sessions if s.sport == "strength"]
+    assert all(s.date not in race_dates for s in strength)
+    if not strength:
+        assert any("strength" in w.lower() and "race" in w.lower() for w in week.planning_warnings)
+
+
 def test_strength_far_from_race_unaffected():
     """Regression: a normal (non-taper, no nearby race) bike week keeps
     placing STRENGTH_SESSIONS_PER_WEEK sessions, unaffected by the new
