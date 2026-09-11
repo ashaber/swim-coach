@@ -1714,6 +1714,26 @@ resource itself and are kept.
   `test_ftp_from_ramp_test_applies_75_percent_of_best_1min_power` checks
   against:
   <https://roadmancycling.com/answers/how-to-do-a-ramp-test>
+- TrainerDay — "TEST 2x20 FTP Intervals" workout template (confirmed by
+  direct fetch this session): source for `plan.py`'s 2x20-test protocol
+  constants (`BIKE_2X20_TEST_WARMUP_MIN = 10.0`,
+  `BIKE_2X20_TEST_RECOVERY_MIN = 10.0`, `BIKE_2X20_TEST_COOLDOWN_MIN =
+  15.0`) — see `28-bike-ftp-test-protocols.md` for the full writeup,
+  including the corroborating CTS 8-minute-test recovery convention and the
+  divergent Endurance Nation variant explicitly not adopted:
+  <https://app.trainerday.com/workouts/test-2x20-ftp-intervals>
+- Chris Carmichael / CTS, via trainright.com — "FTP Tests: How to perform
+  20-Minute, 8-Minute, and Ramp Tests" (confirmed by direct fetch this
+  session): source for the CTS/TrainerRoad 8-minute two-effort test's own
+  10-minute-recovery and "average vs. higher-of-two" formula conventions,
+  which `28-bike-ftp-test-protocols.md`'s `ftp_from_2x20_test` reasoning
+  extends to the 20-minute case:
+  <https://trainright.com/ftp-tests-how-to-perform-20-minute-8-minute-and-ramp-tests/>
+- TrainerRoad — "FTP Testing: Tips & Strategy to Prepare for Your Next FTP
+  Test" blog post (confirmed by direct fetch this session): source for the
+  2x20 test's "start controlled, don't blow up in the first 5 minutes"
+  pacing-cue text on `_bike_2x20_test_structure`'s trailing "Why:" step:
+  <https://www.trainerroad.com/blog/ftp-assessment-tips/>
 
 Strength-technique demonstrations referenced by `plan.py`'s
 `STRENGTH_EXERCISE_REFERENCE_URLS` — Rehab Hero, a physiotherapy exercise
