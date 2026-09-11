@@ -21,6 +21,7 @@ from swim_coach.parse_files import (
     _is_cycling_sport,
     _merge_pauses,
     _sport_detail,
+    backfill_cross_train_sport,
     backfill_sport_detail,
     parse_csv,
     parse_fit,
@@ -584,6 +585,71 @@ def test_backfill_missing_duration_min_unchanged_not_error():
         update={"duration_min": None}
     )
     assert backfill_sport_detail(workout) is None
+
+
+# --- backfill_cross_train_sport (historical cross_train workouts that were really bike) --
+
+
+def test_backfill_cross_train_relabels_cycling_road_to_bike():
+    workout = _workout(sport="cross_train", sport_detail="cycling/road")
+    updated = backfill_cross_train_sport(workout)
+    assert updated is not None
+    assert updated.sport == "bike"
+    # Only the sport enum bucket changed -- sport_detail carries the same
+    # free-text detail either way (see _fit_sport's own docstring: this
+    # field is derived identically regardless of which Sport bucket the
+    # activity resolves into).
+    assert updated.sport_detail == "cycling/road"
+    assert updated.id == workout.id
+    assert updated.distance_m == workout.distance_m
+    assert updated.duration_min == workout.duration_min
+
+
+def test_backfill_cross_train_relabels_cycling_mountain_to_bike():
+    workout = _workout(sport="cross_train", sport_detail="cycling/mountain")
+    updated = backfill_cross_train_sport(workout)
+    assert updated is not None
+    assert updated.sport == "bike"
+
+
+def test_backfill_cross_train_relabels_bare_cycling_to_bike():
+    # No sub-sport suffix at all -- still a clear "cycling" leading token.
+    workout = _workout(sport="cross_train", sport_detail="cycling")
+    updated = backfill_cross_train_sport(workout)
+    assert updated is not None
+    assert updated.sport == "bike"
+
+
+def test_backfill_cross_train_ignores_non_cycling_detail():
+    workout = _workout(sport="cross_train", sport_detail="running")
+    assert backfill_cross_train_sport(workout) is None
+
+
+def test_backfill_cross_train_ignores_kayaking_detail():
+    workout = _workout(sport="cross_train", sport_detail="paddling/kayaking")
+    assert backfill_cross_train_sport(workout) is None
+
+
+def test_backfill_cross_train_missing_sport_detail_unchanged():
+    workout = _workout(sport="cross_train", sport_detail=None)
+    assert backfill_cross_train_sport(workout) is None
+
+
+@pytest.mark.parametrize("sport", ["swim_pool", "swim_ow", "strength", "recovery", "bike"])
+def test_backfill_cross_train_ignores_non_cross_train_sports(sport):
+    # Already-bike (or any other bucket) workouts are never touched -- only
+    # a stale cross_train entry is a candidate.
+    workout = _workout(sport=sport, sport_detail="cycling/road")
+    assert backfill_cross_train_sport(workout) is None
+
+
+def test_backfill_cross_train_does_not_mutate_sport_detail():
+    # Unlike backfill_sport_detail (which only ever touches sport_detail),
+    # this backfill only ever touches the sport enum bucket -- confirm both
+    # backfills' "only touches its own field" contracts hold independently.
+    workout = _workout(sport="cross_train", sport_detail="cycling/gravel")
+    updated = backfill_cross_train_sport(workout)
+    assert updated.sport_detail == workout.sport_detail
 
 
 # --- _is_cycling_sport -----------------------------------------------------------------

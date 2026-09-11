@@ -650,49 +650,80 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
     {
         "name": "pull_activity_stream",
         "description": (
-            "Go and FETCH a bike ride's original power/grade time-series "
-            "fresh from intervals.icu, run the CURRENT deterministic "
-            "interval analyzer over it, and cache the result. Use this "
-            "(not reanalyze_workout) when reanalyze_workout has told you "
-            "there's no local series and no re-parsable raw .fit, or when "
-            "you want to be certain the analysis reflects the latest "
-            "analyzer on the untouched original file -- it works "
-            "retroactively for ANY activity still on intervals.icu, however "
-            "old. reanalyze_workout re-runs over data already on our side; "
-            "this one re-pulls the source of truth. Identify the ride "
-            "EITHER by `workout_id` (a logged bike workout that was synced "
+            "Go and FETCH a ride's original power/grade time-series fresh "
+            "from intervals.icu, run the CURRENT deterministic interval "
+            "analyzer over it, and cache the result. Use this (not "
+            "reanalyze_workout) when reanalyze_workout has told you there's "
+            "no local series and no re-parsable raw .fit, when you want to "
+            "be certain the analysis reflects the latest analyzer on the "
+            "untouched original file, or when a workout's LOCAL sport tag "
+            "might be wrong (e.g. any cycling ride logged before the bike "
+            "vs cross_train classifier fix -- this tool re-pulls and "
+            "re-classifies from the fresh source, ignoring the stale local "
+            "tag, and corrects it in place once the real analysis "
+            "confirms it's a bike ride) -- it works retroactively for ANY "
+            "activity still on intervals.icu, however old. "
+            "reanalyze_workout re-runs over data already on our side; this "
+            "one re-pulls the source of truth. Identify the ride ONE OF "
+            "THREE ways: `date` ('YYYY-MM-DD') is the CLEAN option -- looks "
+            "up that day's intervals.icu activities and resolves "
+            "automatically when there's exactly one (multiple candidates "
+            "comes back as a clear list to disambiguate from, never a "
+            "silent guess); `workout_id` (a logged workout that was synced "
             "from intervals.icu -- its intervals.icu id is taken from its "
-            "external_id) OR by `intervals_activity_id` directly. Target "
+            "external_id); or `intervals_activity_id` directly -- the "
+            "MANUAL FALLBACK for when you already have the raw intervals.icu "
+            "activity id (e.g. copied out of its web UI URL). Target "
             "resolution is the same as reanalyze_workout: `target_watts`, "
             "or `ftp_watts` + `pct_ftp`, or the matched planned session's "
-            "structure, or nothing (dynamic detection). Bike rides only. On "
+            "structure, or nothing (dynamic detection). Only succeeds when "
+            "the FRESHLY fetched activity is really a bike ride -- a local "
+            "workout's stored sport is never trusted to gate this. On "
             "success it writes the fetched series to our series cache and, "
             "when a matching local workout exists, saves the recomputed "
-            "analytics onto it in place, so routine follow-up questions hit "
-            "the cache instead of re-pulling. It never returns the raw "
-            "stream -- just the compact per-effort summary. Requires the "
-            "athlete to have intervals.icu sync configured (same "
-            "credentials the scheduled sync job uses); it does not take an "
-            "API key."
+            "analytics onto it in place (correcting its `sport` too, if the "
+            "fresh read disagreed), so routine follow-up questions hit the "
+            "cache instead of re-pulling. It never returns the raw stream "
+            "-- just the compact per-effort summary. Requires the athlete "
+            "to have intervals.icu sync configured (same credentials the "
+            "scheduled sync job uses); it does not take an API key."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
+                "date": {
+                    "type": "string",
+                    "description": (
+                        "The clean way to identify the ride: 'YYYY-MM-DD' "
+                        "for the day it happened. Looks up that day's "
+                        "intervals.icu activities and resolves "
+                        "automatically when exactly one is found; multiple "
+                        "matches come back as a disambiguation list instead "
+                        "of a guess. Give this, workout_id, OR "
+                        "intervals_activity_id -- exactly one."
+                    ),
+                },
                 "workout_id": {
                     "type": "string",
                     "description": (
-                        "The id (or a unique prefix) of a logged bike "
-                        "workout that was synced from intervals.icu. Its "
+                        "The id (or a unique prefix) of a logged workout "
+                        "that was synced from intervals.icu. Its "
                         "intervals.icu activity id is read from its "
-                        "external_id. Give this OR intervals_activity_id."
+                        "external_id -- its LOCAL sport tag is not "
+                        "required to be 'bike' (see this tool's own "
+                        "description). Give this, date, OR "
+                        "intervals_activity_id -- exactly one."
                     ),
                 },
                 "intervals_activity_id": {
                     "type": "string",
                     "description": (
-                        "An intervals.icu activity id to pull directly "
-                        "(e.g. 'i84213507'), when there is no local workout "
-                        "for it yet. Give this OR workout_id."
+                        "MANUAL FALLBACK: an intervals.icu activity id to "
+                        "pull directly (e.g. 'i84213507'), when you already "
+                        "have it (e.g. copied from the intervals.icu web "
+                        "UI's URL) or there is no local workout for it yet. "
+                        "Prefer `date` when you don't already have this. "
+                        "Give this, date, OR workout_id -- exactly one."
                     ),
                 },
                 "target_watts": {
@@ -2530,7 +2561,21 @@ def _handle_reanalyze_workout(
     to a provisional id), falls back to re-parsing `workout.raw_ref` when
     that file is still on disk. Persists the recomputed `analytics` in
     place -- no draft/confirm step (it only rewrites a derived field, never
-    plan/volume)."""
+    plan/volume).
+
+    The `workout.sport != "bike"` gate just below is legitimate and
+    DELIBERATELY left as-is, unlike the equivalent local-tag gates removed
+    from `pull_activity_stream` (see that function's docstring for the full
+    reasoning): this tool, by design, only ever re-runs analysis over data
+    ALREADY ON OUR SIDE (a stored series, or a re-parsable local raw .fit)
+    -- it never re-pulls anything, so it has no fresher, more-authoritative
+    signal than `workout.sport` to defer to. Refusing here on the only sport
+    data available is the correct conservative behavior, not the same bug.
+    A workout that's mistagged `cross_train` locally but is really a bike
+    ride should go through `pull_activity_stream` instead (its error
+    message says so below) -- that tool re-pulls the fresh source of truth
+    and, as a side effect of a successful pull, corrects the stale local
+    tag so a LATER `reanalyze_workout` call on the same workout succeeds."""
     workout_id = (input_data.get("workout_id") or "").strip()
     if not workout_id:
         return {"error": "workout_id is required"}
@@ -2540,10 +2585,17 @@ def _handle_reanalyze_workout(
     if workout is None:
         return {"error": f"no workout matching id {workout_id!r}"}
     if workout.sport != "bike":
+        hint = (
+            " -- if this was actually a bike ride (e.g. logged before the bike vs "
+            "cross_train classifier fix), use pull_activity_stream instead: it re-pulls "
+            "the fresh source of truth and corrects the local sport tag"
+            if workout.sport == "cross_train"
+            else ""
+        )
         return {
             "error": (
                 f"interval analysis only runs on bike rides; this workout is "
-                f"{workout.sport!r}"
+                f"{workout.sport!r}{hint}"
             )
         }
 
@@ -2668,13 +2720,41 @@ def _handle_pull_activity_stream(
     counterpart to `reanalyze_workout` (which only re-runs over data already
     on our side).
 
-    Activity resolution:
-      - `intervals_activity_id` -> used directly.
-      - `workout_id` -> a logged bike workout whose `external_id` is
+    Activity resolution -- exactly one of:
+      - `workout_id` -> a logged workout whose `external_id` is
         `intervals:<id>`; that `<id>` is the activity.
-    A local workout is also looked up by `external_id` when only
-    `intervals_activity_id` was given, so the recomputed analytics can still
-    be cached onto it.
+      - `intervals_activity_id` -> used directly (the manual fallback: an id
+        copied out of the intervals.icu web UI's URL).
+      - `date` (`'YYYY-MM-DD'`) -> the clean alternative to copying an id out
+        of a URL. Looks up that day's activities via
+        `IntervalsClient.list_activities(oldest=date, newest=date)` (the
+        SAME call the scheduled sync job uses -- see `app.sync.sync_athlete`)
+        and resolves automatically when exactly one activity comes back.
+        Zero matches, or more than one, is a clean error rather than a
+        silent guess -- a multi-match error lists each candidate's id/name/
+        type/duration (`candidates` in the return value) so the coach can
+        disambiguate by asking the athlete or picking the obviously-relevant
+        one.
+    Whichever way the activity id is resolved, a local workout is also
+    looked up by `external_id` (`intervals:<id>`) so the recomputed
+    analytics can be cached onto it, same as the `workout_id` path.
+
+    Sport gating -- IMPORTANT: this tool never refuses based on a LOCAL
+    workout's stored `sport`. A workout mistagged `cross_train` (e.g. any
+    cycling ride logged before the `engine/cycling-coach` Part C bike
+    carve-out in `_fit_sport` landed 2026-09-07 -- that stale local data
+    predates the fix, it isn't a live classifier bug) can still be
+    re-pulled and re-analyzed here; the ONLY sport check is on `draft.sport`
+    -- the FRESHLY re-parsed result, right before caching -- since a fresh
+    pull is strictly more trustworthy than a possibly-stale local tag. When
+    a matched local workout's stored `sport` disagrees with the fresh
+    `draft.sport`, this tool corrects `workout.sport` in place as part of
+    caching the rest of the result (`sport_corrected`/`previous_sport` in
+    the return value) -- it's already rewriting this workout's analytics on
+    a successful pull, so leaving a now-known-stale sport tag behind would
+    be a silent lie. (Contrast `reanalyze_workout`, which has no fresh pull
+    to defer to and legitimately must gate on the only sport data it has --
+    see that function's own docstring.)
 
     Credentials come from the stored `INTERVALS_SYNC_CONFIG` for this
     athlete (via `load_sync_config` -- the SAME per-athlete key the
@@ -2682,13 +2762,26 @@ def _handle_pull_activity_stream(
     Target resolution matches `reanalyze_workout`
     (`_resolve_interval_target_watts`, then matched-session structure, then
     dynamic). Persists: `store.save_series` for the fetched stream, and
-    `workout.analytics` in place when a local workout is found. Returns the
-    compact `WorkoutIntervals` summary, never the stream.
+    `workout.analytics` (plus a corrected `workout.sport` when it disagreed)
+    in place when a local workout is found. Returns the compact
+    `WorkoutIntervals` summary, never the stream.
     """
     workout_id = (input_data.get("workout_id") or "").strip()
     activity_id = (input_data.get("intervals_activity_id") or "").strip()
-    if not workout_id and not activity_id:
-        return {"error": "pass workout_id or intervals_activity_id"}
+    date_str = (input_data.get("date") or "").strip()
+
+    identifiers_given = sum(bool(x) for x in (workout_id, activity_id, date_str))
+    if identifiers_given == 0:
+        return {"error": "pass workout_id, intervals_activity_id, or date"}
+    if identifiers_given > 1:
+        return {"error": "pass only one of workout_id, intervals_activity_id, or date"}
+
+    target_date: date | None = None
+    if date_str:
+        try:
+            target_date = date.fromisoformat(date_str)
+        except ValueError:
+            return {"error": f"invalid date {date_str!r}; expected YYYY-MM-DD"}
 
     workout: Workout | None = None
     workouts = store.list_workouts(slug)
@@ -2696,8 +2789,9 @@ def _handle_pull_activity_stream(
         workout = find_workout_by_id(workouts, workout_id)
         if workout is None:
             return {"error": f"no workout matching id {workout_id!r}"}
-        if workout.sport != "bike":
-            return {"error": f"interval analysis only runs on bike rides; this workout is {workout.sport!r}"}
+        # NOTE: deliberately no `workout.sport != "bike"` gate here -- see
+        # this function's docstring. Only `external_id` is required, since
+        # that's identity (which activity to re-pull), not a trust signal.
         ext = workout.external_id or ""
         if not ext.startswith("intervals:"):
             return {
@@ -2708,22 +2802,13 @@ def _handle_pull_activity_stream(
                 )
             }
         activity_id = ext.split("intervals:", 1)[1]
-    else:
+    elif activity_id:
         workout = next(
             (w for w in workouts if (w.external_id or "") == f"intervals:{activity_id}"), None
         )
-        if workout is not None and workout.sport != "bike":
-            return {"error": f"interval analysis only runs on bike rides; the matched workout is {workout.sport!r}"}
-
-    target_w, target_source, target_err = _resolve_interval_target_watts(input_data)
-    if target_err is not None:
-        return target_err
-
-    structure = None
-    if target_w is None and workout is not None:
-        structure = _recover_prescribed_structure(store, slug, workout)
-        if structure is not None:
-            target_source = "matched planned session structure"
+        # Same NOTE as above: no sport gate on the matched local workout.
+    # else: date given -- activity_id/workout resolved below, once we have
+    # credentials to list that day's activities.
 
     try:
         configs = load_sync_config()
@@ -2736,17 +2821,62 @@ def _handle_pull_activity_stream(
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="swimcoach-pull-"))
     try:
-        try:
-            with IntervalsClient(cfg.intervals_athlete_id, cfg.api_key) as client:
+        with IntervalsClient(cfg.intervals_athlete_id, cfg.api_key) as client:
+            if target_date is not None:
+                try:
+                    activities = client.list_activities(oldest=target_date, newest=target_date)
+                except Exception as exc:  # noqa: BLE001 - any transport/HTTP failure is a clean tool error
+                    log.error(
+                        "pull_activity_stream.list_failed",
+                        athlete=slug,
+                        date=date_str,
+                        error=str(exc),
+                    )
+                    return {"error": f"could not list intervals.icu activities for {date_str}: {exc}"}
+                if not activities:
+                    return {"error": f"no intervals.icu activities found on {date_str}"}
+                if len(activities) > 1:
+                    candidates = [
+                        {
+                            "id": a.get("id"),
+                            "name": a.get("name"),
+                            "type": a.get("type"),
+                            "moving_time_s": a.get("moving_time"),
+                        }
+                        for a in activities
+                    ]
+                    return {
+                        "error": (
+                            f"{len(activities)} intervals.icu activities found on {date_str} -- "
+                            "specify intervals_activity_id to disambiguate"
+                        ),
+                        "candidates": candidates,
+                    }
+                activity_id = str(activities[0].get("id"))
+                workout = next(
+                    (w for w in workouts if (w.external_id or "") == f"intervals:{activity_id}"),
+                    None,
+                )
+
+            target_w, target_source, target_err = _resolve_interval_target_watts(input_data)
+            if target_err is not None:
+                return target_err
+            structure = None
+            if target_w is None and workout is not None:
+                structure = _recover_prescribed_structure(store, slug, workout)
+                if structure is not None:
+                    target_source = "matched planned session structure"
+
+            try:
                 fit_bytes = client.download_fit(activity_id)
-        except Exception as exc:  # noqa: BLE001 - any transport/HTTP failure is a clean tool error
-            log.error(
-                "pull_activity_stream.download_failed",
-                athlete=slug,
-                activity_id=activity_id,
-                error=str(exc),
-            )
-            return {"error": f"could not download activity {activity_id} from intervals.icu: {exc}"}
+            except Exception as exc:  # noqa: BLE001 - any transport/HTTP failure is a clean tool error
+                log.error(
+                    "pull_activity_stream.download_failed",
+                    athlete=slug,
+                    activity_id=activity_id,
+                    error=str(exc),
+                )
+                return {"error": f"could not download activity {activity_id} from intervals.icu: {exc}"}
 
         tmp_path = tmp_dir / f"{activity_id}.fit"
         tmp_path.write_bytes(fit_bytes)
@@ -2757,6 +2887,8 @@ def _handle_pull_activity_stream(
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
+    # This is THE authoritative sport check for this tool -- fresh, just
+    # re-parsed, never the local `workout.sport` (see docstring).
     if draft.sport != "bike":
         return {
             "error": (
@@ -2781,7 +2913,21 @@ def _handle_pull_activity_stream(
     intervals = new_analytics.intervals
 
     persisted = False
+    sport_corrected = False
+    previous_sport: str | None = None
     if workout is not None:
+        if workout.sport != draft.sport:
+            previous_sport = workout.sport
+            log.info(
+                "pull_activity_stream.sport_corrected",
+                athlete=slug,
+                workout_id=str(workout.id),
+                activity_id=activity_id,
+                previous_sport=previous_sport,
+                new_sport=draft.sport,
+            )
+            workout.sport = draft.sport
+            sport_corrected = True
         store.save_series(slug, workout.date, workout.sport, workout.id, draft.series)
         workout.analytics = new_analytics
         store.save_workout(slug, workout)
@@ -2795,6 +2941,7 @@ def _handle_pull_activity_stream(
         target_source=target_source,
         efforts=intervals.efforts_detected if intervals else 0,
         persisted=persisted,
+        sport_corrected=sport_corrected,
     )
     return {
         "pulled": True,
@@ -2806,6 +2953,8 @@ def _handle_pull_activity_stream(
         "target_source": target_source,
         "series_source": "re-pulled from intervals.icu",
         "cached": persisted,
+        "sport_corrected": sport_corrected,
+        "previous_sport": previous_sport,
         "intervals": intervals.model_dump(mode="json") if intervals is not None else None,
     }
 

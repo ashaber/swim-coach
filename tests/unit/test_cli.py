@@ -1112,6 +1112,104 @@ def test_backfill_sport_detail_unknown_athlete_errors(tmp_path, capsys):
     assert "error" in result
 
 
+# --- backfill-cross-train-sport (historical cross_train workouts that were really bike,
+# predating the engine/cycling-coach Part C bike carve-out) -- DRY-RUN ONLY, no --apply --
+
+
+def test_backfill_cross_train_sport_dry_run_reports_without_saving(athlete_tree, capsys):
+    slug = athlete_tree["slug"]
+    workout = _save_workout(
+        athlete_tree, sport="cross_train", sport_detail="cycling/mountain",
+        distance_m=15000, duration_min=60.0,
+    )
+
+    code = _run(athlete_tree["base_dir"], "backfill-cross-train-sport", "--athlete", slug)
+    assert code == 0
+    result = _out(capsys)
+    assert result["dry_run"] is True
+    assert result["scanned"] == 1
+    assert result["changed"] == 1
+    change = result["changes"][0]
+    assert change["workout_id"] == str(workout.id)
+    assert change["current_sport"] == "cross_train"
+    assert change["would_become_sport"] == "bike"
+    assert change["sport_detail"] == "cycling/mountain"
+
+    # Never persists -- report only.
+    reloaded = athlete_tree["store"].list_workouts(slug)[0]
+    assert reloaded.sport == "cross_train"
+
+
+def test_backfill_cross_train_sport_never_writes_across_a_mixed_fixture_set(athlete_tree, capsys):
+    # A small set spanning the real shapes this backfill must tell apart:
+    # a stale cycling cross_train entry (the target), an already-correct
+    # bike workout, a genuinely-different cross_train activity (kayaking),
+    # and a swim -- none but the first should ever change, and NOTHING
+    # should ever be written regardless.
+    stale_bike = _save_workout(
+        athlete_tree, sport="cross_train", sport_detail="cycling/road",
+        distance_m=20000, duration_min=45.0,
+    )
+    already_bike = _save_workout(
+        athlete_tree, sport="bike", sport_detail="cycling/road",
+        distance_m=20000, duration_min=45.0,
+    )
+    kayak = _save_workout(
+        athlete_tree, sport="cross_train", sport_detail="paddling/kayaking",
+        distance_m=5000, duration_min=60.0,
+    )
+    swim = _save_workout(
+        athlete_tree, sport="swim_pool", sport_detail=None,
+        distance_m=2000, duration_min=40.0,
+    )
+
+    code = _run(
+        athlete_tree["base_dir"], "backfill-cross-train-sport", "--athlete", athlete_tree["slug"]
+    )
+    assert code == 0
+    result = _out(capsys)
+    assert result["scanned"] == 4
+    assert result["changed"] == 1
+    assert result["changes"][0]["workout_id"] == str(stale_bike.id)
+
+    # Nothing in the store changed, for any of the four workouts.
+    by_id = {w.id: w for w in athlete_tree["store"].list_workouts(athlete_tree["slug"])}
+    assert by_id[stale_bike.id].sport == "cross_train"
+    assert by_id[already_bike.id].sport == "bike"
+    assert by_id[kayak.id].sport == "cross_train"
+    assert by_id[swim.id].sport == "swim_pool"
+
+
+def test_backfill_cross_train_sport_no_changes_reports_zero(athlete_tree, capsys):
+    slug = athlete_tree["slug"]
+    _save_workout(athlete_tree, sport="cross_train", sport_detail="paddling/kayaking")
+
+    code = _run(athlete_tree["base_dir"], "backfill-cross-train-sport", "--athlete", slug)
+    assert code == 0
+    result = _out(capsys)
+    assert result["scanned"] == 1
+    assert result["changed"] == 0
+    assert result["changes"] == []
+
+
+def test_backfill_cross_train_sport_unknown_athlete_errors(tmp_path, capsys):
+    code = _run(tmp_path, "backfill-cross-train-sport", "--athlete", "nobody")
+    assert code == 1
+    result = _out(capsys)
+    assert "error" in result
+
+
+def test_backfill_cross_train_sport_has_no_apply_flag(athlete_tree):
+    # Deliberately different from backfill-sport-detail's precedent: this
+    # command has NO --apply path at all -- passing one is a parser error,
+    # not a mutation switch.
+    with pytest.raises(SystemExit):
+        _run(
+            athlete_tree["base_dir"], "backfill-cross-train-sport",
+            "--athlete", athlete_tree["slug"], "--apply",
+        )
+
+
 # --- validate-load-model (C3b: read-only planned-vs-actual load diagnostic) -----
 
 
