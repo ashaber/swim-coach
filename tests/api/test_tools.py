@@ -2927,6 +2927,65 @@ def test_replace_week_plan_draft_includes_comparison_against_current_week(athlet
     assert comparison["new_session_count"] == len(result["sessions"])
 
 
+def test_replace_week_plan_flags_sessions_dropped_by_full_regeneration(athletes_dir) -> None:
+    # Real incident, 2026-09-12: an athlete asked the coach to update just
+    # ONE session's content via session_overrides on an already-persisted
+    # week; replace_week_plan's own docstring says it applies overrides to
+    # a FRESHLY-GENERATED week -- generate_week has no memory of manually
+    # `add`-ed sessions that aren't part of its own deterministic output, so
+    # they silently vanish from the result even though they're still
+    # sitting in the persisted "existing_week" the coach never re-reads.
+    # This nearly deleted a race day. `comparison`'s old/new *counts*
+    # existed already but can't catch a same-count swap -- this proves the
+    # tool now names exactly which persisted sessions wouldn't survive.
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    # Persist a baseline, then bolt on an out-of-band session generate_week
+    # itself would never produce (an "add"-mode session on a day its own
+    # rotation leaves open) -- this is the stand-in for the real incident's
+    # already-persisted MTB/strength/Day-2-race sessions that a fresh
+    # regeneration has no way to reconstruct.
+    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28", "confirm": True})
+    assert "error" not in baseline
+    extra_date = "2026-07-06"  # that week's Monday, normally left open
+    added = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "confirm": True,
+        "session_overrides": [{
+            "date": extra_date, "add": True, "sport": "recovery",
+            "duration_min": 30, "purpose": "manually-added mobility session",
+        }],
+    })
+    assert "error" not in added
+    assert any(s["date"] == extra_date for s in added["sessions"])
+
+    # Now ask for an UNRELATED single-session edit -- a routine content
+    # tweak to a different day, same shape a real "just fix Monday" request
+    # takes.
+    other_session = next(s for s in added["sessions"] if s["date"] != extra_date)
+    result = handlers["replace_week_plan"]({
+        "iso_week": "2026-W28",
+        "session_overrides": [{
+            "date": other_session["date"], "sport": other_session["sport"],
+            "purpose": "unrelated content tweak",
+        }],
+    })
+    assert "error" not in result, result
+
+    # The manually-added session is gone from the regenerated output --
+    # exactly the silent-drop this guardrail must catch (generate_week's
+    # own fresh output may still place SOME session on that date -- e.g. a
+    # real pool day -- so the check is specifically for the vanished
+    # recovery-sport one, not "nothing at all on that date").
+    assert not any(s["date"] == extra_date and s["sport"] == "recovery" for s in result["sessions"])
+    dropped = result.get("dropped_sessions")
+    assert dropped, "expected dropped_sessions to name the vanished session"
+    assert any(d["date"] == extra_date and d["sport"] == "recovery" for d in dropped)
+    warnings = " ".join(result["planning_warnings"]).lower()
+    assert "dropped" in warnings or "would not carry forward" in warnings or "removed" in warnings
+
+
 def test_replace_week_plan_confirm_true_persists_and_overwrites_existing_week(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)

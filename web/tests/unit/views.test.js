@@ -830,6 +830,33 @@ describe('renderApp plan session detail view (click-to-detail)', () => {
     expect(html).not.toContain('>Pool practice<');
   });
 
+  // Defect-round (2026-09-12): a bike session's distance_m is a nominal/
+  // synthetic figure (`engine/swim_coach/plan.py`'s bike-session builders
+  // set it for schema completeness, never as an athlete-facing target --
+  // see e.g. `_skills_sessions`), but renderSession showed it anyway
+  // (`~12,000 m`) with no sport check -- confusing raw-meters bike UI,
+  // exactly the athlete's own report ("In UI, distance in meters should be
+  // duration, km or miles"). Distance is only ever a real target for swim.
+  it('never shows a raw-meters distance figure for a non-swim session', () => {
+    const BIKE_SESSION = {
+      id: 's-bike',
+      date: dateKey(addDays(weekMonday, 3)),
+      sport: 'bike',
+      source: 'ai_coach',
+      duration_min: 60,
+      distance_m: 12000,
+      intensity: { anchor: 'rpe' },
+      purpose: 'CX skills -- dismount/remount, barriers, cornering',
+      structure: null,
+    };
+    const data = { ...PLAN_DATA, weeks: [{ ...WEEK, sessions: [BIKE_SESSION] }] };
+    const html = renderApp(data, null);
+    expect(html).not.toContain('12,000 m');
+    expect(html).not.toContain('~12,000');
+    // Duration must still show.
+    expect(html).toContain('1 h');
+  });
+
   it('regression: renderSession compact-row subtitle for a race-tagged session is unchanged -- still just the post-dash fragment, not the full purpose', () => {
     // "race name — descriptive fragment" is the shape splitPurpose/detail
     // was designed for; the compact week-view row has no room for a full
