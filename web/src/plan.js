@@ -1,6 +1,8 @@
 // Pure date/formatting/derivation helpers for rendering the athlete's plan.
 // Kept free of DOM access so it's cheaply unit-testable (see tests/unit/plan.test.js).
 
+import { sportColorVar } from './sports.js';
+
 const DOW_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const MS_PER_DAY = 86400000;
 
@@ -209,16 +211,14 @@ export function sessionDisplay(session) {
   return { title: deriveSessionTitle(session), detail, structure: session.structure || null };
 }
 
-const SPORT_COLOR_VAR = {
-  swim_pool: '--c-pool',
-  swim_ow: '--c-ow',
-  strength: '--c-strength',
-  recovery: '--c-recovery',
-};
-
 export function sessionDotColorVar(session, classification) {
   if (classification.highlight) return '--c-signal';
-  return SPORT_COLOR_VAR[session.sport] || '--c-ink-faint';
+  // src/sports.js is the one source of truth now -- this used to be its
+  // own separate map here, which is exactly how "bike" got missed when it
+  // was added as a Sport (engine/cycling-coach): every bike session's dot
+  // silently fell through to the generic unknown-sport gray below,
+  // indistinguishable from actually-bad data.
+  return sportColorVar(session.sport) || '--c-ink-faint';
 }
 
 // --- Session.structure block parsing (Plan tab's session detail view) -----
@@ -385,6 +385,24 @@ function formatTargetCore(target) {
     const high = target.high !== null && target.high !== undefined && target.high !== target.low
       ? `-${target.high}` : '';
     return `RPE ${target.low}${high}`;
+  }
+  if (target.basis === 'power_w') {
+    // Real gap (sports-registry follow-up, 2026-09-12): this case never
+    // existed at all -- engine/swim_coach/plan.py's _bike_step always
+    // bakes watts into the step's own `label` already, so no generated
+    // content ever exercised this branch. But a hand-authored
+    // session_overrides.structured payload (the coach constructing a
+    // target JSON directly, without following that label-baking
+    // convention -- the exact pattern behind the units-mislabeling defect
+    // this whole round traces back to) relies on this to show the
+    // wattage at all; without it, the target silently rendered as
+    // nothing. Never reuses `formatPace`/`/100m` -- that's specifically
+    // what caused the original bug (a watts value run through the swim
+    // pace formatter).
+    if (target.low === null || target.low === undefined) return null;
+    const high = target.high !== null && target.high !== undefined && target.high !== target.low
+      ? `-${Math.round(target.high)}` : '';
+    return `${Math.round(target.low)}${high}W`;
   }
   return null; // basis === 'open'
 }

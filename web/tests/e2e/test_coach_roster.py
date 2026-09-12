@@ -80,15 +80,19 @@ ATHLETES_STUB = json.dumps([{'slug': 'renee', 'name': 'Renee'}])
 # gates both the Garmin download/push buttons on the athlete's own Plan tab
 # (views.js's renderPlanSessionDetail) and, on the coach's Training Plan
 # sub-tab, the honest "not available" note that replaces them instead (see
-# renderPlanSessionDetail's showGarminActions param).
+# renderPlanSessionDetail's showGarminActions param). bike, not swim_pool --
+# a structured swim session shows NO Garmin section at all now (sport is a
+# second, independent gate, sportCanPushToGarmin -- a real, still-open
+# FIT-export corruption bug, see web/src/sports.js), so it wouldn't reach
+# the "device only" note this file's own test asserts.
 STRUCTURED_SESSION = {
-    'id': 'sess-structured', 'date': '2026-08-11', 'sport': 'swim_pool', 'source': 'ai_coach',
+    'id': 'sess-structured', 'date': '2026-08-11', 'sport': 'bike', 'source': 'ai_coach',
     'duration_min': 45, 'distance_m': 1600, 'intensity': {'zone': 'Z3'},
     'purpose': 'garmin-exportable session', 'structure': 'Main set: 4x200 @ Z3', 'status': 'planned',
     'structured': {
         'items': [{
             'kind': 'step', 'label': '4x200 @ Z3', 'role': 'interval', 'duration_kind': 'distance_m',
-            'duration_value': 800, 'target': None, 'load': None, 'modality': 'swim',
+            'duration_value': 800, 'target': None, 'load': None, 'modality': 'bike',
             'stroke': None, 'equipment': [], 'exercise_name': None,
         }],
     },

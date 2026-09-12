@@ -12,7 +12,7 @@ import {
   describeCtlAtlTsbTrend, CTL_COLD_START_DAYS, CTL_WARMED_UP_DAYS,
   CTL_ATL_TREND_WINDOW_DAYS, CTL_TREND_FLAT_THRESHOLD, LOAD_CHART_WINDOW_DAYS,
   LOAD_CHART_WINDOW_OPTIONS, TSB_AXIS_DOMAIN, TSB_PANEL_RATIO, classifyTsbBand,
-  formatMonthLabel, LOAD_CHART_HEIGHT,
+  formatMonthLabel, LOAD_CHART_HEIGHT, sessionDotColorVar,
 } from '../../src/plan.js';
 
 describe('isoWeekMonday', () => {
@@ -491,6 +491,69 @@ describe('renderStructuredWorkout', () => {
     expect(lines[0].kind).toBe('repeat');
     expect(lines[0].referenceUrl).toBeUndefined();
     expect(lines[1].referenceUrl).toBe('https://www.rehabhero.ca/exercise/goblet-squat');
+  });
+
+  // Sports-registry follow-up (2026-09-12): formatTargetCore had no
+  // `basis === 'power_w'` case at all -- every real engine-generated bike
+  // step bakes its watts into the label directly (plan.py's _bike_step,
+  // e.g. "Warm-up, easy spin -- Z1 (0-145W)"), so this never showed up
+  // against generated content. But a hand-authored session_overrides.
+  // structured payload (the exact pattern behind this whole defect round --
+  // a coach constructing a target without following that label-baking
+  // convention) relies on this detail annotation to show the wattage at
+  // all. A nested (depth > 0) step is used here specifically because a
+  // depth-0 step in STRUCTURED_ROLE_PREFIX suppresses detail entirely
+  // (see the first test in this block) -- this must exercise the actual
+  // formatTargetCore call, not get short-circuited before it.
+  it('renders a power_w target as watts -- real gap: this basis had no case at all', () => {
+    const structured = {
+      items: [
+        {
+          kind: 'repeat', repeat_mode: 'count', count: 1, duration_s: null, interval_s: null,
+          steps: [
+            {
+              kind: 'step', label: 'Effort', role: 'interval', duration_kind: 'time_s',
+              duration_value: 180, target: { basis: 'power_w', low: 239, high: 271 }, load: null,
+              modality: 'bike', stroke: null, equipment: [], exercise_name: null,
+            },
+          ],
+        },
+      ],
+    };
+    const lines = renderStructuredWorkout(structured);
+    const effortLine = lines.find((l) => l.text === 'Effort');
+    expect(effortLine.detail).toContain('239');
+    expect(effortLine.detail).toContain('271');
+    expect(effortLine.detail).toContain('W');
+    // Never the units-mislabeling bug this whole defect round traces back
+    // to -- a power_w target must never render as a swim pace.
+    expect(effortLine.detail).not.toContain('/100m');
+  });
+});
+
+describe('sessionDotColorVar', () => {
+  const baseSession = (sport) => ({ id: 's1', sport, purpose: 'x', date: '2026-09-14' });
+  const noHighlight = { highlight: false, tag: null };
+
+  it('gives every real sport its own registry color -- no silent fallthrough', () => {
+    // Real gap this closes: "bike" was added as a Sport (engine/cycling-
+    // coach) but never added to plan.js's own separate SPORT_COLOR_VAR map
+    // -- every bike session's plan-tab dot silently matched the generic
+    // unknown-sport fallback, indistinguishable from actually-bad data.
+    expect(sessionDotColorVar(baseSession('bike'), noHighlight)).toBe('--c-bike');
+    expect(sessionDotColorVar(baseSession('cross_train'), noHighlight)).toBe('--c-cross-train');
+    expect(sessionDotColorVar(baseSession('swim_pool'), noHighlight)).toBe('--c-pool');
+    expect(sessionDotColorVar(baseSession('swim_ow'), noHighlight)).toBe('--c-ow');
+    expect(sessionDotColorVar(baseSession('strength'), noHighlight)).toBe('--c-strength');
+    expect(sessionDotColorVar(baseSession('recovery'), noHighlight)).toBe('--c-recovery');
+  });
+
+  it('a highlighted session always wins regardless of sport', () => {
+    expect(sessionDotColorVar(baseSession('bike'), { highlight: true, tag: 'A' })).toBe('--c-signal');
+  });
+
+  it('a genuinely unrecognized sport still falls back gracefully', () => {
+    expect(sessionDotColorVar(baseSession('kayak'), noHighlight)).toBe('--c-ink-faint');
   });
 });
 

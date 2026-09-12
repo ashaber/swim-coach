@@ -44,9 +44,13 @@ ISO_WEEK = '2099-W01'
 MONDAY = '2098-12-29'
 TUESDAY = '2098-12-30'
 
-# Has `structured` -- pushable.
+# Has `structured` -- pushable. bike, not swim_pool: pushing a structured
+# swim (or strength) session corrupts the exported FIT data -- real,
+# still-open defect (see web/src/sports.js's own header comment for the
+# citation) -- so `sportCanPushToGarmin` now gates the button on sport, and
+# bike is the one sport confirmed clean today.
 PUSHABLE_SESSION = {
-    'id': 's-pushable', 'date': MONDAY, 'sport': 'swim_pool', 'source': 'ai_coach',
+    'id': 's-pushable', 'date': MONDAY, 'sport': 'bike', 'source': 'ai_coach',
     'duration_min': 40, 'distance_m': 1600, 'intensity': {'zone': 'Z3'},
     'purpose': 'Threshold set', 'structure': 'Main set: 4 x 200m @ Z3',
     'structured': {
@@ -54,7 +58,7 @@ PUSHABLE_SESSION = {
             {
                 'kind': 'step', 'label': '4 x 200m @ Z3', 'role': 'interval',
                 'duration_kind': 'distance_m', 'duration_value': 800, 'target': None,
-                'load': None, 'modality': 'swim', 'stroke': None, 'equipment': [],
+                'load': None, 'modality': 'bike', 'stroke': None, 'equipment': [],
                 'exercise_name': None, 'reference_url': None,
             },
         ],
@@ -70,10 +74,31 @@ PROSE_ONLY_SESSION = {
     'structure': None, 'structured': None, 'status': 'planned',
 }
 
+# Has `structured`, but a sport with a known FIT-export corruption bug --
+# no button despite otherwise looking pushable. Same date as PROSE_ONLY_
+# SESSION would collide, so this gets its own day.
+WEDNESDAY = '2098-12-31'
+CORRUPTING_SPORT_SESSION = {
+    'id': 's-corrupting-sport', 'date': WEDNESDAY, 'sport': 'swim_pool', 'source': 'ai_coach',
+    'duration_min': 40, 'distance_m': 1600, 'intensity': {'zone': 'Z3'},
+    'purpose': 'Threshold set', 'structure': 'Main set: 4 x 200m @ Z3',
+    'structured': {
+        'items': [
+            {
+                'kind': 'step', 'label': '4 x 200m @ Z3', 'role': 'interval',
+                'duration_kind': 'distance_m', 'duration_value': 800, 'target': None,
+                'load': None, 'modality': 'swim', 'stroke': None, 'equipment': [],
+                'exercise_name': None, 'reference_url': None,
+            },
+        ],
+    },
+    'status': 'planned',
+}
+
 WEEK = {
     'iso_week': ISO_WEEK, 'meso_block': 'base', 'focus': 'aerobic base',
     'target_volume_m': 12000, 'adaptation_rationale': None,
-    'sessions': [PUSHABLE_SESSION, PROSE_ONLY_SESSION],
+    'sessions': [PUSHABLE_SESSION, PROSE_ONLY_SESSION, CORRUPTING_SPORT_SESSION],
 }
 
 PLAN_STUB = json.dumps({
@@ -148,6 +173,16 @@ def test_push_button_is_absent_for_a_prose_only_session(page):
     _open_session_detail(page, 's-prose-only')
     assert page.locator('[data-a="session:push-intervals"]').count() == 0
     # ...and the download button is absent for the same reason, unchanged.
+    assert page.locator('[data-a="session:garmin-download"]').count() == 0
+
+
+def test_neither_button_renders_for_a_sport_with_a_known_export_corruption_bug(page):
+    # Structured, otherwise pushable -- but swim (like strength) has a
+    # real, still-open FIT-export corruption bug (web/src/sports.js's own
+    # header comment has the citation). Both buttons share the exact same
+    # backend encoding (to_garmin_fit_workout), so both are gated.
+    _open_session_detail(page, 's-corrupting-sport')
+    assert page.locator('[data-a="session:push-intervals"]').count() == 0
     assert page.locator('[data-a="session:garmin-download"]').count() == 0
 
 
