@@ -1254,7 +1254,17 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "(plus a comparison against whatever week is currently on file for "
             "iso_week, if any: old vs. new target_volume_m, old vs. new "
             "session count) as JSON with `\"persisted\": false` -- it does NOT "
-            "call save_week. Show this draft to the athlete and get their "
+            "call save_week. IMPORTANT: this ALWAYS regenerates the whole week "
+            "from scratch, even when session_overrides only targets one "
+            "session -- an already-persisted session with no counterpart in "
+            "the fresh regeneration (a manually add-ed session, an earlier "
+            "hand-authored content edit, a race day the deterministic engine "
+            "wouldn't otherwise place) silently vanishes unless you re-add it "
+            "via session_overrides too. Check the response's `dropped_sessions` "
+            "(also folded into `planning_warnings`) before ever confirming -- "
+            "if it names something the athlete still wants, add it back via "
+            "session_overrides' add mode in the SAME call before confirming, "
+            "don't confirm and fix it after. Show this draft to the athlete and get their "
             "explicit agreement before calling this tool again with "
             "`confirm: true` -- only then does it persist (store.save_week), "
             "overwriting whatever week plan is currently on file for iso_week. "
@@ -4046,6 +4056,35 @@ def _week_sessions_json(week) -> list[dict[str, Any]]:
     ]
 
 
+def _dropped_sessions(existing_week, week) -> list[dict[str, Any]]:
+    """Which of `existing_week`'s already-persisted sessions have no
+    counterpart (same date+sport) anywhere in the freshly-generated `week`
+    -- defect-round (2026-09-12): `replace_week_plan` always regenerates
+    the whole week via `generate_week` (see that function's own docstring),
+    which has no memory of anything not part of its own deterministic
+    output -- a hand-`add`-ed session, an earlier session_overrides content
+    edit, a manually-placed race day. Before this, a routine single-session
+    edit could silently drop OTHER already-persisted sessions with only
+    `comparison`'s old/new *counts* as a (easy-to-miss, same-count-hides-it)
+    signal. Matched by `(date, sport)`, not `Session.id` -- ids never
+    survive a regeneration (see `feedbackForSession`'s own doc comment in
+    web/src/views.js for the same reason), so id-matching would call
+    EVERY session "dropped" even when nothing meaningful changed."""
+    if existing_week is None:
+        return []
+    new_keys = {(s.date, s.sport) for s in week.sessions}
+    return [
+        {
+            "date": s.date.isoformat(),
+            "sport": s.sport,
+            "duration_min": s.duration_min,
+            "purpose": s.purpose,
+        }
+        for s in existing_week.sessions
+        if (s.date, s.sport) not in new_keys
+    ]
+
+
 def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
     """Computes a candidate replacement week via `generate_week` (the same
     engine function `create_week_plan` uses) for exactly the case
@@ -4187,6 +4226,25 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
             "new_session_count": len(week.sessions),
         }
 
+    # Defect-round (2026-09-12): loud, impossible-to-miss guardrail for the
+    # real near-miss this session -- a routine single-session edit that
+    # silently dropped a race day. `comparison`'s counts alone don't catch
+    # a same-count content swap; this names exactly which sessions
+    # wouldn't survive, in BOTH the structured `dropped_sessions` field and
+    # `planning_warnings` (so it surfaces wherever warnings already render,
+    # draft or confirmed) -- flags, never blocks, same posture as
+    # `evaluate_week_realism`.
+    dropped = _dropped_sessions(existing_week, week)
+    if dropped:
+        summary = ", ".join(f"{d['date']} {d['sport']}" for d in dropped)
+        week.planning_warnings = list(week.planning_warnings) + [
+            f"{len(dropped)} already-persisted session(s) would be DROPPED by this "
+            f"replacement (not part of generate_week's own fresh output, and this "
+            f"tool regenerates the whole week -- session_overrides only edits what "
+            f"survives regeneration): {summary}. Review before confirming, or "
+            "re-add them via session_overrides' add mode after this replacement."
+        ]
+
     if not confirm:
         return {
             "iso_week": week.iso_week,
@@ -4196,12 +4254,13 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
             "planning_warnings": list(week.planning_warnings),
             "sessions": _week_sessions_json(week),
             "comparison": comparison,
+            "dropped_sessions": dropped,
             "persisted": False,
         }
 
     store.save_week(slug, week)
 
-    log.info("week plan replaced", athlete=slug, iso_week=iso_week)
+    log.info("week plan replaced", athlete=slug, iso_week=iso_week, dropped_sessions=len(dropped))
     return {
         "iso_week": week.iso_week,
         "meso_block": week.meso_block,
@@ -4210,6 +4269,7 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
         "planning_warnings": list(week.planning_warnings),
         "sessions": _week_sessions_json(week),
         "comparison": comparison,
+        "dropped_sessions": dropped,
         "persisted": True,
     }
 

@@ -78,13 +78,24 @@ function renderMasthead(athlete, event) {
     </header>`;
 }
 
+/** True for the two sports where `distance_m` is a real, athlete-facing
+ * target. Defect-round (2026-09-12): every other sport's builders set
+ * `distance_m` as a nominal/synthetic figure for schema completeness only
+ * (e.g. `engine/swim_coach/plan.py`'s `_skills_sessions`) -- showing it as
+ * "~12,000 m" is confusing raw-meters UI, not a real number the athlete
+ * should read as a target. Distance stays swim-only; every other sport
+ * shows duration alone. */
+function _isDistanceMeaningful(sport) {
+  return sport === 'swim_pool' || sport === 'swim_ow';
+}
+
 function renderSession(session) {
   const classification = classifySession(session);
   const { title, detail } = sessionDisplay(session);
   const dotVar = sessionDotColorVar(session, classification);
 
   const metaParts = [formatDuration(session.duration_min)];
-  const distance = formatDistance(session.distance_m);
+  const distance = _isDistanceMeaningful(session.sport) ? formatDistance(session.distance_m) : null;
   if (distance) metaParts.push(`~${distance}`);
   if (session.intensity?.zone) metaParts.push(`<span class="pill">${esc(session.intensity.zone)}</span>`);
   if (session.source === 'pool_coach') metaParts.push('<span class="pill">coach-set</span>');
@@ -218,7 +229,7 @@ export function renderAskCoachSection({ questions, form, submit } = {}) {
 function renderPlanSessionDetailStats(session) {
   const stats = [
     renderDetailStat('Duration', formatDuration(session.duration_min)),
-    renderDetailStat('Distance', formatDistance(session.distance_m)),
+    renderDetailStat('Distance', _isDistanceMeaningful(session.sport) ? formatDistance(session.distance_m) : null),
     renderDetailStat('Zone', session.intensity?.zone || null),
     renderDetailStat('Source', session.source === 'pool_coach' ? 'Coach-set' : null),
     // D1: pure display of `session_target_load_au`, computed server-side
@@ -1972,7 +1983,7 @@ function renderSkippedRow(session) {
   const metaParts = [];
   const duration = formatDuration(session.duration_min);
   if (duration) metaParts.push(duration);
-  const distance = formatDistance(session.distance_m);
+  const distance = _isDistanceMeaningful(session.sport) ? formatDistance(session.distance_m) : null;
   if (distance) metaParts.push(`planned ~${distance}`);
 
   return `
