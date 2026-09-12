@@ -17,6 +17,24 @@
 // a place to invent new sports client-side. Run/ruck have no backend
 // `Sport` value yet (IDEA 008) -- deliberately NOT stubbed here; adding a
 // real entry once they exist is a ~6-line addition, not a design change.
+// `canPushToGarmin: false` for swim_pool/swim_ow/strength (2026-09-12,
+// Andrew, confirmed by actually trying both): pushing a structured swim or
+// strength session to Garmin corrupts the exported FIT data. This is NOT
+// hypothetical or merely "mirrors the backend" -- it's a real, already-
+// logged, still-OPEN defect (athlete feedback, 2026-08-20, topic
+// "garmin-export-defect"): a pushed pool-swim session showed null-null
+// pace ranges, yards/miles unit confusion, and a bogus "110-114%" target
+// on the watch, and the SAME generated file's duration/distance also
+// displayed corrupted (5h/32km instead of ~15min/500m) in intervals.icu's
+// own calendar -- a real unit-conversion/duration-scaling bug in
+// `to_garmin_fit_workout`'s structured-workout-to-FIT encoding path, not
+// fixed as of this registry entry. `backend/app/routes/garmin.py`'s
+// `_SESSION_SPORT_TO_GARMIN_SPORT` still technically maps these sports
+// (the corruption is in the FIT encoding, not a missing route) -- this
+// flag is a deliberate UI-level safety override AHEAD of that root-cause
+// fix, not a description of what the backend allows. Flip back to `true`
+// only once `to_garmin_fit_workout` is actually fixed and re-verified for
+// that sport -- bike is the one sport confirmed clean today.
 export const SPORTS = {
   swim_pool: {
     label: 'Pool swim',
@@ -29,10 +47,7 @@ export const SPORTS = {
     hasPlannedDistance: true,
     hasSportDetail: false,
     colorVar: '--c-pool',
-    // Mirrors backend/app/routes/garmin.py's _SESSION_SPORT_TO_GARMIN_SPORT
-    // -- which sports a planned Session can push to a Garmin device today.
-    // APS: turned to false as the data corrupts for swim
-    canPushToGarmin: false,
+    canPushToGarmin: false, // see this file's own header comment for why
   },
   swim_ow: {
     label: 'Open water swim',
@@ -40,7 +55,11 @@ export const SPORTS = {
     hasPlannedDistance: true,
     hasSportDetail: false,
     colorVar: '--c-ow',
-    canPushToGarmin: true,
+    // Same export path as swim_pool (_SESSION_SPORT_TO_GARMIN_SPORT maps
+    // both to the identical garmin_sport="swim") -- the corruption bug is
+    // in that shared encoding, not something pool-specific, so this must
+    // stay false in lockstep with swim_pool until the real fix lands.
+    canPushToGarmin: false,
   },
   bike: {
     label: 'Bike',
@@ -65,8 +84,7 @@ export const SPORTS = {
     hasPlannedDistance: false,
     hasSportDetail: false,
     colorVar: '--c-strength',
-    // APS - turned to false as strength workouts corrupt going to Garmin
-    canPushToGarmin: false,
+    canPushToGarmin: false, // see this file's own header comment for why
   },
   recovery: {
     label: 'Recovery',

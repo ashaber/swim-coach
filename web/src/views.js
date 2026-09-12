@@ -16,7 +16,7 @@ import {
 import { TOOL_LABELS } from './chat.js';
 import { renderChatMarkdown } from './markdown.js';
 import { buildHistoryFeed } from './history.js';
-import { sportHasPlannedDistance } from './sports.js';
+import { sportHasPlannedDistance, sportCanPushToGarmin } from './sports.js';
 import {
   sportLabel, sourceBadge, formatWorkoutDistance, formatAnalyticsLine,
   formatDrift, formatSplit, formatPauses, formatSwolf, formatMovingVsElapsed,
@@ -485,7 +485,7 @@ function renderPlanSessionDetail(session, sessionPush, showGarminActions = true,
       ? renderStructuredWorkoutSection({ items: workoutItems })
         + (rationale ? renderStructureBlock({ label: 'Why', content: rationale }) : '')
       : (structure ? parseStructureBlocks(structure).map(renderStructureBlock).join('') : '')}
-    ${session.structured
+    ${session.structured && sportCanPushToGarmin(session.sport)
       ? (showGarminActions
         ? renderGarminDownload(session) + renderGarminPush(session, sessionPush)
         : renderGarminUnavailableNote())
