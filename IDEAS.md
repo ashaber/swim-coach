@@ -558,3 +558,37 @@ athlete bike-frequency/day-pattern field feeding a non-flat
 `session_overrides` or an explicit day-count parameter on
 `create_week_plan`/`replace_week_plan`. Captured now so the concrete
 repro (W38, the missing Sunday race day) isn't lost.
+
+
+## IDEA 014 - Intervals as a progression rather than rotation
+
+Intervals are made up of a zone target - e.g., VO2 where sets are made up of 
+durations and repeats.  An athlete has to build the fitness and mental
+fortitude to complete longer set durations.  Before prescribing a 5x2min VO2, 
+the athlete should have worked up to it with 15x15, 30x30 float sets, 7x1min vo2 
+and other shorter durations to be ready.  In addition, interval types can target
+expected demands - like hard starts for short sprint racing demands.
+
+## IDEA 015 - Challenges
+
+The monotony of just doing intervals can take the fun out of training.  Mix 
+it up with a challenge to inspire or keep it interesting.
+
+
+## IDEA 016 - Coach mode - continued
+
+There is a longer design and phasing somewhere.  Key next step is coach to athlete
+chat.  If I have another athlete on this app, I want the more direct feedback
+where they can ask questions and for adjustments.  I also see this as a 
+compelling feature for a coach to augment their work instead of replace 
+them.  
+
+## IDEA 017 - Trainer Road collaboration mode
+
+TR has significant workout library and primary goal to give the right workout 
+at the right level for the athlete.  If this app achieves that goal, good
+enough.  But, if the workout targeting isn't dialed, continue with TR
+as workout generator and this app as guidance coach.  Need to thoughtfully
+know the TR training plan without stealing their workouts.  Possible model
+is like the master swim model where on-deck coach provides the workout and
+swim coach interprets the load and benefit and adapts around it.
