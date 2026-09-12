@@ -33,9 +33,9 @@ describe('SPORTS registry', () => {
   });
 
   it('Garmin push matches the real backend mapping (routes/garmin.py _SESSION_SPORT_TO_GARMIN_SPORT)', () => {
-    expect(sportCanPushToGarmin('swim_pool')).toBe(true);
-    expect(sportCanPushToGarmin('swim_ow')).toBe(true);
-    expect(sportCanPushToGarmin('strength')).toBe(true);
+    expect(sportCanPushToGarmin('swim_pool')).toBe(false);
+    expect(sportCanPushToGarmin('swim_ow')).toBe(false);
+    expect(sportCanPushToGarmin('strength')).toBe(false);
     expect(sportCanPushToGarmin('bike')).toBe(true);
     expect(sportCanPushToGarmin('recovery')).toBe(false);
     expect(sportCanPushToGarmin('cross_train')).toBe(false);
