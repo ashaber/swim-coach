@@ -31,7 +31,8 @@ export const SPORTS = {
     colorVar: '--c-pool',
     // Mirrors backend/app/routes/garmin.py's _SESSION_SPORT_TO_GARMIN_SPORT
     // -- which sports a planned Session can push to a Garmin device today.
-    canPushToGarmin: true,
+    // APS: turned to false as the data corrupts for swim
+    canPushToGarmin: false,
   },
   swim_ow: {
     label: 'Open water swim',
@@ -64,7 +65,8 @@ export const SPORTS = {
     hasPlannedDistance: false,
     hasSportDetail: false,
     colorVar: '--c-strength',
-    canPushToGarmin: true,
+    // APS - turned to false as strength workouts corrupt going to Garmin
+    canPushToGarmin: false,
   },
   recovery: {
     label: 'Recovery',
