@@ -323,6 +323,48 @@ ground the next planning pass rather than re-derive them:**
 constraint above must hold from the first build onward, not be retrofitted
 later.
 
+**Cross-cutting addendum (2026-09-12), confirmed with Andrew: bundle the
+sports-registry refactor into whichever build adds the next real sport(s),
+not before.** Live defect-round work this session found the same
+"scattered per-sport facts, no single source of truth" pattern in the PWA
+(`web/src/plan.js`'s dot-color map, `workouts.js`'s label/detail maps,
+`views.js`'s distance-display check -- each maintained separately, and
+`bike`'s dot color had already silently drifted when it was added
+engine-side). Consolidated into a new `web/src/sports.js` registry
+(PR #183) -- but a matching backend check found the pattern is smaller and
+narrower there: most `sport == "bike"`-style branches in `plan.py`/
+`adapt.py`/`tools.py` are legitimate algorithm dispatch (swim vs. bike
+generate real different plans, not a data-driven variation), not
+display-fact duplication. Only two genuine per-sport facts are actually
+duplicated backend-side -- the FTP-vs-CSS threshold lookup (identical
+`ftp_watts = athlete.ftp_watts if primary_sport == "bike" else None` at
+`backend/app/tools.py:2018,3614,4133`) and the distance-vs-duration volume
+unit (`tools.py:4749,4786`, `backend/app/context.py:1362`, all three
+independently re-deriving the same "is this a swim-distance sport" fact).
+`backend/app/routes/garmin.py`'s `_SESSION_SPORT_TO_GARMIN_SPORT` is
+already the right shape for this -- a small, real per-sport table -- and is
+the pattern to extend, not the full frontend registry's shape ported
+verbatim.
+
+Andrew's own framing for why this waits: *"It would have been ideal to
+validate the refactor when adding two sports but will suffice doing
+together"* -- swim+bike alone can't prove a registry design generalizes;
+run/ruck (this idea's own item 3) actually adding two more real, different
+sports is the right moment to build AND validate the backend registry at
+once, not retrofit it onto two sports now and hope it holds for a third.
+Also fold in then: the API-layer question of whether the Python and JS
+registries need a shared source of truth (today they're two independently-
+maintained copies that can only drift, not two views of one truth -- e.g.
+`web/src/views.js`'s `SPORT_OPTIONS` array, the manual-log-workout form's
+sport dropdown, is a FOURTH undiscovered copy PR #183 itself missed,
+found only while writing this note) -- at minimum a contract test pinning
+the Python `Sport` literal against the JS registry's keys, at most serving
+sport metadata from the API so the frontend derives from backend truth
+instead of mirroring it (a real architectural change: new/extended
+endpoint, frontend refactor, and PWA offline-cache design since this app
+is offline-first -- genuinely part of the same "add real sports" body of
+work, not before it).
+
 ## IDEA 009 - Lessons from Tim's own AI coach app (not a document -- a real, running app)
 
 **Correction (2026-09):** IDEA 009 originally assumed Tim would send an
