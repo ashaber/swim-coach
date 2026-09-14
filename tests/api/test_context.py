@@ -273,6 +273,51 @@ def test_route_library_files_bike_athlete_reaches_cycling_file() -> None:
     assert "23-cycling-training.md" in files
 
 
+# --- 30-altitude-power-adjustment.md routing (2026-09-14 defect) -----------
+# Real gap: the file existed (PR #187) but was never wired into keyword
+# routing at all -- no entry in _LIBRARY_FILES_IN_PRIORITY_ORDER or
+# _KEYWORD_ROUTES, unlike 23-cycling-training.md's real
+# _CYCLING_KEYWORD_ROUTES entries. A general "at what elevation would
+# adjustments matter" question had nothing to route to; the coach could
+# only see a per-workout altitude_context string once a ride had already
+# been analyzed. Mirrors the cycling routing tests above exactly.
+def test_route_library_files_bike_athlete_reaches_altitude_file() -> None:
+    files = route_library_files(
+        "At what elevation would this ride's power have been affected?",
+        athlete_sports=["bike"],
+    )
+    assert "30-altitude-power-adjustment.md" in files
+
+
+def test_route_library_files_altitude_keyword_variants_all_route() -> None:
+    for message in (
+        "does altitude affect my power output",
+        "I was climbing at high elevation for most of the ride",
+        "how does elevation gain change my effective FTP",
+    ):
+        files = route_library_files(message, athlete_sports=["bike"])
+        assert "30-altitude-power-adjustment.md" in files, message
+
+
+def test_route_library_files_swim_only_athlete_excludes_altitude_file() -> None:
+    # Same IDEA 008 sport-scope guarantee 23-cycling-training.md already
+    # gets: a swim-configured athlete's altitude-keyword-matching question
+    # must never route to a bike-only file, even though the keyword matched.
+    files = route_library_files(
+        "does altitude affect my power output", athlete_sports=["swim_pool", "swim_ow"]
+    )
+    assert "30-altitude-power-adjustment.md" not in files
+
+
+def test_route_library_files_altitude_leak_excluded_with_sports_none() -> None:
+    # Same reviewer repro pattern as cycling's own
+    # test_route_library_files_reviewer_repro_no_cycling_leak_with_sports_none
+    # -- every real athlete has athlete_sports=None today, which must
+    # resolve to swim-only, not "no filtering."
+    files = route_library_files("does altitude affect my power output", athlete_sports=None)
+    assert "30-altitude-power-adjustment.md" not in files
+
+
 def test_route_library_files_swim_only_athlete_excludes_cycling_file() -> None:
     # The core IDEA 008 guarantee: a swim-configured athlete's cycling-
     # keyword-matching question must never route to 23-cycling-training.md,

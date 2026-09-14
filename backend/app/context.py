@@ -770,6 +770,27 @@ _CYCLING_KEYWORD_ROUTES: dict[str, set[str]] = {
 _KEYWORD_ROUTES.update(_CYCLING_KEYWORD_ROUTES)
 _LIBRARY_FILES_IN_PRIORITY_ORDER.append("23-cycling-training.md")
 
+# --- 30-altitude-power-adjustment.md: elevation/altitude routing -----------
+# Real gap fixed here (2026-09-14 feedback, logged after Andrew reviewed the
+# Aug 26/27 Sun Valley Gravel ride): the file existed (PR #187) but had no
+# keyword route at all -- not in _LIBRARY_FILES_IN_PRIORITY_ORDER, no
+# "elevation"/"altitude"/"climb" entry in _KEYWORD_ROUTES -- so a general
+# "at what elevation would adjustments matter" question had nothing to
+# route to; the coach could only see a per-workout altitude_context string
+# once a ride had already been analyzed. Mirrors _CYCLING_KEYWORD_ROUTES's
+# own pattern exactly, including the same bike-only sport scope.
+_ALTITUDE_KEYWORD_ROUTES: dict[str, set[str]] = {
+    "altitude": {"30-altitude-power-adjustment.md"},
+    "elevation": {"30-altitude-power-adjustment.md"},
+    "climb": {"30-altitude-power-adjustment.md"},
+    "climbing": {"30-altitude-power-adjustment.md"},
+    "high elevation": {"30-altitude-power-adjustment.md"},
+    "sea level": {"30-altitude-power-adjustment.md"},
+    "home elevation": {"30-altitude-power-adjustment.md"},
+}
+_KEYWORD_ROUTES.update(_ALTITUDE_KEYWORD_ROUTES)
+_LIBRARY_FILES_IN_PRIORITY_ORDER.append("30-altitude-power-adjustment.md")
+
 # --- sport-scope filtering (Athlete.sports <-> library file sport scope) ---
 # IDEA 008's hard requirement, made structural (adversarial critique
 # objection 3: INDEX.md's own prose note alone had no code/test/model-field
@@ -782,6 +803,7 @@ _LIBRARY_FILES_IN_PRIORITY_ORDER.append("23-cycling-training.md")
 # per this build's own "capability only" boundary.
 _LIBRARY_FILE_SPORT_SCOPE: dict[str, frozenset[str]] = {
     "23-cycling-training.md": frozenset({"bike"}),
+    "30-altitude-power-adjustment.md": frozenset({"bike"}),
 }
 
 
