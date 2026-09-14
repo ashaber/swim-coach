@@ -696,6 +696,7 @@ def _cmd_ingest(args: argparse.Namespace, store: StoreInterface) -> int:
             elapsed_min=draft.elapsed_min,
             moving_min=workout.duration_min,
             sport=workout.sport,
+            home_elevation_m=athlete.home_elevation_m,
         )
 
         store.save_workout(slug, workout)
@@ -721,7 +722,7 @@ def _cmd_analyze(args: argparse.Namespace, store: StoreInterface) -> int:
     as skipped, not an error."""
     slug = args.athlete
     try:
-        store.load_athlete(slug)
+        athlete = store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
         return _error_from_exception(_error_label(store, slug, "profile.yaml"), exc)
 
@@ -781,6 +782,7 @@ def _cmd_analyze(args: argparse.Namespace, store: StoreInterface) -> int:
             elapsed_min=draft.elapsed_min,
             moving_min=workout.duration_min,
             sport=workout.sport,
+            home_elevation_m=athlete.home_elevation_m,
         )
 
         store.save_workout(slug, workout)

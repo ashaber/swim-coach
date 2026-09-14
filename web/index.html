@@ -24,6 +24,16 @@
       --accent:#45afc6; --accent-ink:#a3e4d7;
       --mint:#a3e4d7; --amber:#f49342;
       --c-pool:#57a8ce; --c-ow:#2fc2ab; --c-strength:#f49342; --c-recovery:#6c9a90;
+      /* Sports registry (src/sports.js) -- added along with "bike" and
+         "cross_train" getting real registry entries; before this, both
+         sports' plan-tab session dots silently fell through to the
+         generic unknown-sport gray (sessionDotColorVar's own `||`
+         fallback), indistinguishable from actually-bad data. --c-bike is
+         a gold distinct from --c-strength's orange and --c-pool's blue;
+         --c-cross-train is a muted taupe, deliberately closer to neutral
+         than a real sport's color -- it's a synced catch-all bucket, not
+         a planned discipline, and should read that way. */
+      --c-bike:#d9b64a; --c-cross-train:#8a8577;
       /* TSB ("form") line color, its own token (web/two-panel-load-chart) --
          it used to reuse --c-ow, the OPEN-WATER SESSION color elsewhere in
          this app, so the same hue meant "open water swim" on the Plan tab

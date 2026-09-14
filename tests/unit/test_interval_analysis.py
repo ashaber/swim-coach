@@ -8,6 +8,7 @@ are exercised against synthetic sample arrays with known answers.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,9 @@ from swim_coach.parse_files import parse_fit
 
 FIT_MTB_RACE = Path(__file__).parent / "fixtures" / "fit" / "real_mtb_race.fit"
 FIT_SWIM = Path(__file__).parent / "fixtures" / "fit" / "real_swim.fit"
+REAL_5X2_VO2_STREAM = (
+    Path(__file__).parent / "fixtures" / "streams" / "real_bike_5x2min_vo2.json"
+)
 
 
 # --- synthetic series builders --------------------------------------------------------
@@ -556,3 +560,289 @@ def test_analyze_widens_time_in_band_for_a_rough_ride():
     rough_block = ia.analyze(rough_ride, sport="bike", target_w=250)
     smooth_block = ia.analyze(smooth_ride, sport="bike", target_w=250)
     assert rough_block.efforts[0].time_in_band_pct > smooth_block.efforts[0].time_in_band_pct
+
+
+# --- fix 6: EFFORT_MIN_S ramp-lag tolerance --------------------------------------------
+#
+# Real efforts ramp up/down at their boundary, so a genuine ~EFFORT_MIN_S
+# prescribed effort routinely measures a couple of seconds short of the
+# rigid floor and gets silently dropped. `EFFORT_MIN_S_TOLERANCE_S` grants a
+# small grace period on the duration floor -- these tests pin the boundary
+# behaviour with synthetic spans, then prove it against Andrew's real
+# 2026-09-12 ride (5x2min VO2, target 309.1W -- 110-114% of 276W FTP), whose
+# real reps measured 118.00s and 119.00s and were dropped before this fix.
+
+
+def test_effort_just_under_the_floor_is_now_detected_with_tolerance():
+    # 118s -- within EFFORT_MIN_S_TOLERANCE_S of EFFORT_MIN_S=120, mirroring
+    # the real dropped reps below.
+    s = _steady_effort_series(power=310, seconds=118)
+    efforts = ia.detect_efforts(s, target_w=280)
+    assert len(efforts) == 1
+    assert efforts[0].duration_s == pytest.approx(118, abs=1)
+
+
+def test_effort_well_under_the_floor_is_still_rejected():
+    # 100s is well outside any reasonable ramp-lag tolerance -- must still
+    # be treated as noise (single occurrence, below SET_MIN_REPS to cluster).
+    s = _steady_effort_series(power=310, seconds=100)
+    assert ia.detect_efforts(s, target_w=280) == []
+
+
+def test_short_noise_surge_is_unaffected_by_the_tolerance():
+    # Regression pin: the existing 60s/40s/30s noise-rejection fixtures stay
+    # far below EFFORT_MIN_S - EFFORT_MIN_S_TOLERANCE_S and must still be
+    # rejected exactly as before.
+    assert ia.EFFORT_MIN_S - ia.EFFORT_MIN_S_TOLERANCE_S > 60
+    s = _steady_effort_series(power=300, seconds=60)
+    assert ia.detect_efforts(s, target_w=250) == []
+
+
+def _load_real_5x2min_vo2_stream() -> dict:
+    with open(REAL_5X2_VO2_STREAM) as f:
+        return json.load(f)
+
+
+@pytest.mark.skipif(
+    not REAL_5X2_VO2_STREAM.exists(), reason="no real 5x2min VO2 stream fixture"
+)
+def test_real_5x2min_vo2_set_detects_all_five_reps():
+    """Andrew, 2026-09-12 ride, workout id 656e6e84-4cdf-49cf-a888-
+    01a38144a73a (intervals:i186049001): a prescribed 5x2min VO2 set, target
+    309.1W (110-114% of 276W FTP). All 5 reps were genuinely in-band; before
+    this fix only 3 were detected (reps 2 and 5 measured 119.00s/118.00s and
+    were silently dropped by the rigid 120s floor)."""
+    series = _load_real_5x2min_vo2_stream()
+    target_w = 309.1
+    efforts = ia.detect_efforts(series, target_w=target_w)
+    assert len(efforts) == 5
+
+    durations = [round(e.duration_s, 0) for e in efforts]
+    assert durations == [120, 119, 120, 120, 118]
+
+    block = ia.analyze(series, sport="bike", target_w=target_w)
+    assert block is not None
+    assert block.efforts_detected == 5
+    expected_avg_w = [313.8, 307.9, 314.7, 312.4, 318.1]
+    for e, exp_w in zip(block.efforts, expected_avg_w):
+        assert e.avg_w == pytest.approx(exp_w, abs=1.0)
+        assert 300 <= e.avg_w <= 320  # sanity: within the 308-318W range cited in the brief
+        pct = e.avg_w / target_w * 100
+        assert 95 <= pct <= 105
+
+
+# --- elevation-aware compliance: baseline + altitude context --------------------------
+
+
+def _steady_effort_series_with_altitude(
+    *, power: float, seconds: int, altitude: float, baseline: float, hr: int = 150
+) -> dict:
+    """Same shape as `_steady_effort_series` (90s easy / effort / 90s easy)
+    but carrying a flat `altitude_m` channel: the easy edges sit at
+    `baseline`, the effort itself at `altitude`."""
+    easy_n = 90
+    t, p, h, g, a = [], [], [], [], []
+    clock = 0.0
+    for _ in range(easy_n):
+        t.append(clock); p.append(80.0); h.append(110); g.append(0.0); a.append(baseline); clock += 1
+    for _ in range(seconds):
+        t.append(clock); p.append(power); h.append(hr); g.append(0.0); a.append(altitude); clock += 1
+    for _ in range(easy_n):
+        t.append(clock); p.append(80.0); h.append(110); g.append(0.0); a.append(baseline); clock += 1
+    return {"t_s": t, "power_w": p, "hr": h, "grade": g, "altitude_m": a}
+
+
+def test_ride_baseline_altitude_m_is_the_lowest_sample():
+    series = {"altitude_m": [830.0, 820.0, 900.0, 810.0, 850.0] * 3}
+    assert ia._ride_baseline_altitude_m(series) == pytest.approx(810.0)
+
+
+def test_ride_baseline_altitude_m_none_without_enough_data():
+    assert ia._ride_baseline_altitude_m({}) is None
+    assert ia._ride_baseline_altitude_m({"altitude_m": []}) is None
+    assert ia._ride_baseline_altitude_m({"altitude_m": [None, None, 800.0]}) is None
+    assert ia._ride_baseline_altitude_m({"power_w": [200] * 20}) is None
+
+
+def test_altitude_context_silent_below_flag_threshold():
+    # Effort sits ~600m above baseline -- below ALTITUDE_FLAG_THRESHOLD_M
+    # (1000m) -- so no context note, even though the raw numbers are filled in.
+    s = _steady_effort_series_with_altitude(
+        power=240, seconds=720, altitude=1400.0, baseline=800.0
+    )
+    block = ia.analyze(s, sport="bike", target_w=240)
+    e = block.efforts[0]
+    assert e.altitude_m == pytest.approx(1400.0, abs=1)
+    assert e.altitude_gain_m == pytest.approx(600.0, abs=1)
+    assert e.altitude_context is None
+
+
+def test_altitude_context_flags_and_estimates_decrement_above_threshold():
+    # Effort sits 1500m above an 800m baseline -- comfortably above the
+    # 1000m flag threshold. Expected decrement: 1500/1000 * 6.0% = 9.0%.
+    s = _steady_effort_series_with_altitude(
+        power=240, seconds=720, altitude=2300.0, baseline=800.0
+    )
+    block = ia.analyze(s, sport="bike", target_w=240)
+    assert block.baseline_altitude_m == pytest.approx(800.0, abs=1)
+    e = block.efforts[0]
+    assert e.altitude_m == pytest.approx(2300.0, abs=1)
+    assert e.altitude_gain_m == pytest.approx(1500.0, abs=1)
+    assert e.altitude_context is not None
+    assert e.altitude_decrement_pct == pytest.approx(9.0, abs=0.05)
+    assert "9.0%" in e.altitude_context
+    assert "library/30" in e.altitude_context
+    # Never a silent override: pct_of_target/verdict are untouched by altitude.
+    assert e.pct_of_target == pytest.approx(100, abs=1)
+    assert e.verdict.startswith("on target")
+
+
+def test_altitude_context_none_when_no_altitude_channel():
+    s = _steady_effort_series(power=240, seconds=720)
+    assert "altitude_m" not in s
+    block = ia.analyze(s, sport="bike", target_w=240)
+    assert block.baseline_altitude_m is None
+    e = block.efforts[0]
+    assert e.altitude_m is None
+    assert e.altitude_gain_m is None
+    assert e.altitude_context is None
+
+
+def test_altitude_fields_are_regression_safe_without_altitude_data():
+    # Byte-identical WorkoutIntervals for a ride with no altitude channel:
+    # every field except the new altitude_* ones matches exactly what
+    # analyze() produced before this feature existed.
+    s = _steady_effort_series(power=239, seconds=720)
+    block = ia.analyze(s, sport="bike", target_w=239)
+    e = block.efforts[0]
+    assert block.baseline_altitude_m is None
+    assert e.altitude_m is None and e.altitude_gain_m is None and e.altitude_context is None
+    assert e.pct_of_target == pytest.approx(100, abs=1)
+    assert e.verdict.startswith("on target")
+
+
+@pytest.mark.skipif(not FIT_MTB_RACE.exists(), reason="no real MTB race .fit fixture")
+def test_analyze_real_mtb_race_altitude_present_but_below_flag_threshold():
+    # Real ride: ~188m of altitude range (well below the 1000m flag
+    # threshold) -- baseline resolves, but no effort ever gets flagged.
+    draft = parse_fit(FIT_MTB_RACE)
+    block = ia.analyze(draft.series, sport="bike")
+    assert block.baseline_altitude_m is not None
+    assert block.baseline_altitude_source == "ride_relative"
+    assert all(e.altitude_context is None for e in block.efforts)
+    assert any(e.altitude_m is not None for e in block.efforts)
+
+
+# --- elevation-aware compliance, re-anchored: home_elevation_m ------------------------
+#
+# Andrew reviewed a real ride (2026-08-26/27, workout intervals:i180208609)
+# where the athlete was traveling: ride-relative baseline (its own lowest
+# sample, 1835.2m/6021ft) correctly found no flag using the OLD ride-only
+# heuristic -- both real detected efforts' gain above THAT baseline
+# (308.5m, 542.0m) sat under ALTITUDE_FLAG_THRESHOLD_M. But the athlete's
+# real home elevation is 823m/2700ft, far below where this ride started --
+# ride-relative baseline alone cannot see that the whole ride sat >1000m
+# above where this athlete actually lives. These tests are grounded in
+# real, independently-verified-by-hand numbers (not committed as a raw
+# fixture -- personal ride data, same convention as library/26): ride
+# bottom 1835.2m, ride top 2406.6m, home 823m, FTP 276W -> 6.07%/9.50%
+# decrement and ~259.2W/~249.8W effective FTP at bottom/top respectively.
+
+
+def test_home_elevation_preferred_over_ride_relative_baseline_when_set():
+    s = _steady_effort_series_with_altitude(
+        power=260, seconds=720, altitude=1835.2, baseline=1835.2
+    )
+    block = ia.analyze(s, sport="bike", target_w=276, home_elevation_m=823.0)
+    assert block.baseline_altitude_m == pytest.approx(823.0, abs=0.1)
+    assert block.baseline_altitude_source == "home_elevation"
+
+
+def test_ride_relative_baseline_is_a_pure_fallback_when_home_elevation_unset():
+    s = _steady_effort_series_with_altitude(
+        power=260, seconds=720, altitude=1835.2, baseline=1835.2
+    )
+    block = ia.analyze(s, sport="bike", target_w=276, home_elevation_m=None)
+    assert block.baseline_altitude_m == pytest.approx(1835.2, abs=0.1)
+    assert block.baseline_altitude_source == "ride_relative"
+    # Ride-relative gain is ~0 (effort sits right at the ride's own
+    # baseline) -- no flag, exactly the OLD (pre-re-anchor) behavior.
+    assert block.efforts[0].altitude_context is None
+
+
+def test_real_aug26_ride_bottom_clears_threshold_only_with_home_elevation():
+    # The ride's own bottom (1835.2m) -- 1012.2m above real home (823m),
+    # decrement 1012.2/1000*6.0 = 6.072% ~= 6.07%.
+    s = _steady_effort_series_with_altitude(
+        power=260, seconds=720, altitude=1835.2, baseline=1835.2
+    )
+    block = ia.analyze(s, sport="bike", target_w=276.0, home_elevation_m=823.0)
+    e = block.efforts[0]
+    assert e.altitude_gain_m == pytest.approx(1012.2, abs=0.5)
+    assert e.altitude_context is not None
+    assert e.altitude_decrement_pct == pytest.approx(6.07, abs=0.05)
+    assert e.altitude_adjusted_target_w == pytest.approx(259.2, abs=0.5)
+
+
+def test_real_aug26_ride_top_decrement_and_adjusted_target():
+    # The ride's own top (2406.6m) -- 1583.6m above home, decrement
+    # 1583.6/1000*6.0 = 9.502% ~= 9.50%; effective FTP ~249.8W off 276W.
+    s = _steady_effort_series_with_altitude(
+        power=250, seconds=720, altitude=2406.6, baseline=1835.2
+    )
+    block = ia.analyze(s, sport="bike", target_w=276.0, home_elevation_m=823.0)
+    e = block.efforts[0]
+    assert e.altitude_decrement_pct == pytest.approx(9.50, abs=0.05)
+    assert e.altitude_adjusted_target_w == pytest.approx(249.8, abs=0.5)
+
+
+def test_effort_clears_altitude_adjusted_target_despite_reading_under_raw_target():
+    # avg_w=250W against a raw target of 276W reads well under target
+    # (pct_of_target ~91%), but the altitude-adjusted target at the ride's
+    # top (~249.8W) is cleared -- this is Andrew's actual question,
+    # answered without silently changing pct_of_target/verdict.
+    s = _steady_effort_series_with_altitude(
+        power=250, seconds=720, altitude=2406.6, baseline=1835.2
+    )
+    block = ia.analyze(s, sport="bike", target_w=276.0, home_elevation_m=823.0)
+    e = block.efforts[0]
+    assert e.pct_of_target == pytest.approx(250 / 276 * 100, abs=1)
+    assert "under target" in e.verdict  # raw verdict untouched
+    assert e.cleared_altitude_adjusted_target is True
+
+
+def test_altitude_adjusted_target_none_without_a_target():
+    s = _steady_effort_series_with_altitude(
+        power=250, seconds=720, altitude=2406.6, baseline=1835.2
+    )
+    block = ia.analyze(s, sport="bike", home_elevation_m=823.0)  # no target_w
+    e = block.efforts[0]
+    assert e.altitude_context is not None  # the flag itself still fires
+    assert e.altitude_adjusted_target_w is None
+    assert e.cleared_altitude_adjusted_target is None
+
+
+def test_altitude_adjusted_target_none_when_flag_does_not_fire():
+    s = _steady_effort_series_with_altitude(
+        power=260, seconds=720, altitude=1400.0, baseline=800.0
+    )
+    block = ia.analyze(s, sport="bike", target_w=260.0, home_elevation_m=800.0)
+    e = block.efforts[0]
+    assert e.altitude_context is None
+    assert e.altitude_decrement_pct is None
+    assert e.altitude_adjusted_target_w is None
+    assert e.cleared_altitude_adjusted_target is None
+
+
+def test_sept12_ride_with_home_elevation_near_baseline_still_no_flag():
+    # Andrew's real Sept 12 ride: baseline ~827.2m, max ~1509.8m. Home
+    # elevation (823m) sits essentially at the ride's own baseline -- a
+    # real athlete who has set home_elevation_m but ISN'T traveling must
+    # not spuriously trigger the flag. Max relative gain: 1509.8 - 823 =
+    # 686.8m, still under ALTITUDE_FLAG_THRESHOLD_M (1000m).
+    s = _steady_effort_series_with_altitude(
+        power=310, seconds=720, altitude=1450.0, baseline=827.2
+    )
+    block = ia.analyze(s, sport="bike", target_w=309.1, home_elevation_m=823.0)
+    assert block.baseline_altitude_source == "home_elevation"
+    assert block.efforts[0].altitude_context is None

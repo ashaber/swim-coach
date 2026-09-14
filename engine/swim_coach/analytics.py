@@ -449,6 +449,7 @@ def compute_analytics(
     sport: str | None = None,
     interval_target_w: float | None = None,
     prescribed_structure=None,
+    home_elevation_m: float | None = None,
 ):
     """Build a swim_coach.models.WorkoutAnalytics from parsed workout parts.
 
@@ -457,16 +458,22 @@ def compute_analytics(
     keeping the import local here keeps the dependency direction obvious:
     analytics depends on models, not the reverse).
 
-    `sport`/`interval_target_w`/`prescribed_structure` (all optional, all
-    additive -- every existing call site works unchanged) drive the
-    deterministic interval analyzer (`swim_coach.interval_analysis`): for a
-    `sport == "bike"` ride with a usable power/HR series it fills in
-    `WorkoutAnalytics.intervals`; every other sport leaves it `None`.
-    `interval_target_w` is a caller-supplied per-interval power target (the
-    coach passing "2x12 at 91% of 263W" for a file that carried no
-    structure); `prescribed_structure` is a `models.WorkoutStructure` when
-    one is recoverable for the session, and its per-rep `power_w` targets
-    win over `interval_target_w`.
+    `sport`/`interval_target_w`/`prescribed_structure`/`home_elevation_m`
+    (all optional, all additive -- every existing call site works
+    unchanged) drive the deterministic interval analyzer
+    (`swim_coach.interval_analysis`): for a `sport == "bike"` ride with a
+    usable power/HR series it fills in `WorkoutAnalytics.intervals`; every
+    other sport leaves it `None`. `interval_target_w` is a caller-supplied
+    per-interval power target (the coach passing "2x12 at 91% of 263W" for
+    a file that carried no structure); `prescribed_structure` is a
+    `models.WorkoutStructure` when one is recoverable for the session, and
+    its per-rep `power_w` targets win over `interval_target_w`.
+    `home_elevation_m` is the athlete's own `Athlete.home_elevation_m`,
+    when the caller has it -- anchors `interval_analysis`'s altitude-context
+    signal to the athlete's real home elevation (see
+    `library/30-altitude-power-adjustment.md`); `None` (every call site
+    that hasn't been updated to pass it, and every athlete who hasn't set
+    it) falls back to that analyzer's own session-relative heuristic.
 
     `WorkoutAnalytics.avg_power_w`/`normalized_power_w` (Build I) are
     filled in from `series["power_w"]` whenever that channel is present --
@@ -486,6 +493,7 @@ def compute_analytics(
         sport=sport,
         target_w=interval_target_w,
         structure=prescribed_structure,
+        home_elevation_m=home_elevation_m,
     )
     avg_power = average_power_w(series)
     norm_power = normalized_power_w(series)

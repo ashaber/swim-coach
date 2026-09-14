@@ -52,7 +52,10 @@ def enrich_draft(
     only at its separate confirm step, so it passes `None` and the series
     is keyed to a provisional id until a later `reanalyze_workout` re-keys
     it. Analytics are always computed (pure functions over the in-memory
-    parse).
+    parse). Looks up the athlete's `home_elevation_m` (best-effort -- a
+    lookup failure logs a warning and falls through to `None` rather than
+    blocking ingest) to anchor `interval_analysis`'s altitude-context
+    signal on a bike ride; see `library/30-altitude-power-adjustment.md`.
 
     Raises `FileExistsError` unmodified if `store.save_raw_file` refuses to
     overwrite a same-named-but-different-content file already on disk --
@@ -60,6 +63,12 @@ def enrich_draft(
     into an HTTP 409; the sync job's per-activity try/except treats it like
     any other activity failure).
     """
+    try:
+        home_elevation_m = store.load_athlete(athlete).home_elevation_m
+    except Exception as exc:  # noqa: BLE001 - analytics must still compute without it
+        log.warn("workouts.enrich_home_elevation_lookup_failed", athlete=athlete, error=str(exc))
+        home_elevation_m = None
+
     if hasattr(store, "save_raw_file"):
         draft.raw_ref = store.save_raw_file(athlete, tmp_path)
     else:
@@ -88,5 +97,6 @@ def enrich_draft(
         elapsed_min=draft.elapsed_min,
         moving_min=draft.duration_min,
         sport=draft.sport,
+        home_elevation_m=home_elevation_m,
     )
     return draft

@@ -6,41 +6,18 @@
 import {
   formatDuration, formatPace, formatShortDate, parseIsoDate,
 } from './plan.js';
+import { SPORTS, sportHasDetail } from './sports.js';
 
 /** How many most-recent workouts the Log tab's history section shows. */
 export const HISTORY_DISPLAY_CAP = 20;
 
-const SPORT_LABELS = {
-  swim_pool: 'Pool swim',
-  swim_ow: 'Open water swim',
-  strength: 'Strength',
-  recovery: 'Recovery',
-  cross_train: 'Cross-train',
-  bike: 'Bike',
-};
-
-// Sports whose sportDetail suffix (e.g. "cycling/mountain" -> "MTB") is
-// worth showing -- engine/cycling-coach Part 1 reclassified real cycling
-// FIT activities from cross_train to their own "bike" sport, so this must
-// cover both: a bike workout still carries the exact same real
-// sport_detail values (road/mountain/gravel/cyclocross) cross_train always
-// did, and losing the "· MTB"-style suffix here would be a real display
-// regression for every MTB/CX ride already flowing in as production data.
-const SPORT_DETAIL_SPORTS = new Set(['cross_train', 'bike']);
-
-// Build I: sports whose avg_pace_s_per_100m/lap pace is a real, meaningful
-// number -- swim only. Real bug (live report, 2026-09-12): a completed
-// bike ride's detail view and laps table both showed nonsense pace
-// ("0:20/100m") with no power number at all, even though the ride had a
-// full clean power stream. The single per-sport UI source of truth for
-// this distinction, extending SPORT_LABELS' own convention above rather
-// than a new one-off sport check -- used by renderDetailStats/
-// renderLapsTable (views.js) to decide Pace vs. Avg Power/NP.
-const PACE_SPORTS = new Set(['swim_pool', 'swim_ow']);
-
-export function sportUsesPace(sport) {
-  return PACE_SPORTS.has(sport);
-}
+// Build I (2026-09-14): sportUsesPace/PACE_SPORTS used to live here as a
+// one-off set, duplicating exactly the kind of scattered per-sport logic
+// src/sports.js exists to prevent (see that file's own header comment --
+// this is the plan.js dot-color drift happening again, caught before it
+// shipped). Moved to sports.js's `usesPace` field; import it from there.
+// `formatPower` stays here -- a generic number formatter, not a per-sport
+// fact.
 
 /** "195 W" -- rounds to the nearest whole watt. null for null/undefined
  * (never fabricates "0 W" for a sport/workout with no power data). */
@@ -81,12 +58,15 @@ function prettySportDetail(sportDetail) {
 
 /** `sportDetail` is optional (undefined/null for every workout logged
  * before this feature, and always for swim_pool/swim_ow) -- when present
- * on a cross_train OR bike workout, it's appended as "Cross-train · <pretty>"
- * / "Bike · <pretty>" (e.g. "Bike · MTB"). Every other sport, and a
- * cross_train/bike workout with no detail, renders exactly as before. */
+ * on a sport whose registry entry has `hasSportDetail` (cross_train, bike),
+ * it's appended as "Cross-train · <pretty>" / "Bike · <pretty>" (e.g.
+ * "Bike · MTB"). Every other sport, and a detail-eligible workout with no
+ * detail, renders exactly as before. Base label comes from src/sports.js --
+ * the one source of truth -- with the same raw-value fallback this
+ * function always had for a genuinely unrecognized sport. */
 export function sportLabel(sport, sportDetail) {
-  const base = SPORT_LABELS[sport] || sport;
-  if (SPORT_DETAIL_SPORTS.has(sport) && sportDetail) {
+  const base = SPORTS[sport]?.label || sport;
+  if (sportHasDetail(sport) && sportDetail) {
     return `${base} · ${prettySportDetail(sportDetail)}`;
   }
   return base;

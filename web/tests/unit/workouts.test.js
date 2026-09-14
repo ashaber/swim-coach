@@ -4,7 +4,7 @@ import {
   formatDrift, formatSplit, formatPauses, formatSwolf, formatMovingVsElapsed,
   formatAnalyticsLine, HISTORY_DISPLAY_CAP,
   formatOffset, formatClock, formatLengthsSummary, formatSyncResult,
-  formatWorkoutChatLabel, sportUsesPace, formatPower,
+  formatWorkoutChatLabel, formatPower,
 } from '../../src/workouts.js';
 
 describe('sportLabel', () => {
@@ -55,31 +55,11 @@ describe('sportLabel', () => {
   });
 });
 
-// --- Build I: sportUsesPace / formatPower ------------------------------------
-// Real bug (live report, 2026-09-12): a completed bike ride's detail view
-// showed "Pace: 0:20/100m" (a swim metric) and the laps table's Pace
-// column was full of nonsense -- bike/cross_train/strength/recovery are
-// not pace sports. sportUsesPace is the single per-sport UI source of
-// truth for that distinction, extending this module's existing SPORT_
-// LABELS/sportLabel convention rather than a new one-off check.
-describe('sportUsesPace', () => {
-  it('is true for the two swim sports', () => {
-    expect(sportUsesPace('swim_pool')).toBe(true);
-    expect(sportUsesPace('swim_ow')).toBe(true);
-  });
-  it('is false for bike, strength, recovery, and cross_train', () => {
-    expect(sportUsesPace('bike')).toBe(false);
-    expect(sportUsesPace('strength')).toBe(false);
-    expect(sportUsesPace('recovery')).toBe(false);
-    expect(sportUsesPace('cross_train')).toBe(false);
-  });
-  it('is false for an unknown/unrecognized sport (never assumes pace)', () => {
-    expect(sportUsesPace('kayak')).toBe(false);
-    expect(sportUsesPace(undefined)).toBe(false);
-    expect(sportUsesPace(null)).toBe(false);
-  });
-});
-
+// Build I: sportUsesPace itself moved to src/sports.js (the one per-sport
+// UI source of truth -- see that file's own header comment) once this
+// branch merged forward past PR #189; its tests moved to sports.test.js
+// alongside it. formatPower is a plain formatter, not a per-sport fact,
+// so it stays here.
 describe('formatPower', () => {
   it('rounds to the nearest whole watt with a W suffix', () => {
     expect(formatPower(194.7944811418727)).toBe('195 W');
