@@ -1392,6 +1392,69 @@ intervals.md`, not `[EVIDENCE: cycling]`.
   reference across endurance sports, though not cycling-specific trial
   data).
 
+### Altitude & environmental power adjustment (grounds `30-altitude-power-adjustment.md`)
+
+Curated for the elevation-aware-compliance build (`engine/elevation-aware-
+compliance` branch, 2026-09-13). Distinct from the periodization/interval
+sources above: these ground the altitude-VO2max/power-decrement question
+specifically — two general-endurance sources plus one cycling-native race
+dataset, all directly web-verified this session (title/authors/journal/
+year/key figures fetched from the primary or PubMed-indexed source, not
+recalled from memory).
+
+- **✓ Garvican-Lewis L.A., Clark B., Martin D.T., Schumacher Y.O.,
+  McDonald W., Stephens B., et al. (2015)** — "Impact of Altitude on Power
+  Output during Cycling Stage Racing" — *PLoS ONE*, 10(12):e0143028. Real
+  elite road cyclists' own power-meter data (a 7-day near-sea-level race
+  simulation in Australia, n=12; a 14-day international stage race at
+  moderate-high altitude in China, n=14; plus a lab power-profile arm,
+  n=12) — not a simulated-altitude estimate. Against a ~600m baseline:
+  mean power not significantly different below 2000m absolute; maximal
+  mean power for 240s/600s efforts already 4.1%/7.8% lower at 1000-2000m;
+  mean power ~12.3-12.4% lower above 2000m. Authors' own summary: "a
+  decline in MMP for 240 and 600 s of ~6% per 1000 m above sea-level."
+  `[EVIDENCE: cycling]`, Confidence: high for population/modality match
+  (elite professionals, real races) — grounds `interval_analysis.
+  ALTITUDE_POWER_DECREMENT_PCT_PER_1000M`. Full-text figures confirmed via
+  direct fetch of the PMC-hosted version this session.
+- **✓ Fulco C.S., Rock P.B., Cymerman A. (1998)** — "Maximal and
+  submaximal exercise performance at altitude" — *Aviation, Space, and
+  Environmental Medicine*, 69(8):793-801. Citation verified via PubMed
+  (PMID 9715971). Cross-sport review: VO2max reduced in smaller increments
+  from ~580m, then ~1%/100m above 1500m (~10%/1000m); submaximal
+  performance decrements can appear as low as ~700m for 20+-minute events.
+  `[ADAPTED: general-endurance]`, Confidence: medium — foundational,
+  widely-cited review-level synthesis, not cycling-specific data. **Test:**
+  prefer this athlete's own logged elevated-ride data over this figure once
+  enough accumulates.
+- **✓ Wehrlin J.P., Hallén J. (2006)** — "Linear decrease in VO2max and
+  performance with increasing altitude in endurance athletes" — *European
+  Journal of Applied Physiology*, 96(4):404-412. Eight elite
+  endurance-trained runners, hypobaric chamber, simulated altitudes
+  300-2800m: VO2max declined linearly ~6.3%/1000m (range 4.6-7.5%) with no
+  clear low-altitude floor in this small elite sample — a more aggressive,
+  threshold-free version of the effect than Fulco (1998) or Garvican-Lewis
+  (2015) found. `[ADAPTED: running]`, Confidence: medium — small n (8),
+  running not cycling, simulated not real. Included as the honest
+  disagreeing data point, not adopted as the engine's rate. **Test:** same
+  as Fulco (1998) above.
+- **✓ Javaloyes A., Sánchez-Jiménez J.L., Peña-González I.,
+  Moya-Ramón M., Mateo-March M. (2025)** — "The Role of Cadence and Torque
+  in Fatigue-Related Power Output Decline in Cycling's Grand Monuments" —
+  *Sports (Basel)*, 13(11):406. 64 professional male cyclists' real
+  race-file power/cadence/torque data across the five cycling Monuments
+  (2021-2023), fresh vs. fatigued (post 30-60 kJ/kg accumulated work).
+  Top-5 finishers hold power/torque more durably than 6th-30th-ranked
+  riders as fatigue accumulates; cadence/torque strategy shifts with
+  fatigue. Studies whole-race durability, NOT an isolated climbing-vs-flat
+  power comparison, and proposes no numeric correction factor — checked
+  specifically for a distinct, quantifiable "sustained-climbing power
+  penalty" separate from ordinary fatigue; none exists here or in any other
+  source found this session. `[EVIDENCE: cycling]`, Confidence: medium.
+  Cited to document a negative result honestly (no correction was built
+  from it), not to ground a built feature — see `29-altitude-power-
+  adjustment.md`'s "Question 1" section.
+
 ## Recovery, sleep & HRV
 
 - **✓ Driller M., Leabeater A. (2023)** — "Fundamentals or Icing on Top of
