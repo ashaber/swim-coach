@@ -1392,6 +1392,35 @@ intervals.md`, not `[EVIDENCE: cycling]`.
   reference across endurance sports, though not cycling-specific trial
   data).
 
+### Multi-race-season periodization (grounds `31-multi-race-season-periodization.md`)
+
+Curated for the multi-race-season-macro build (`engine/multi-race-season-
+macro` branch, 2026-09-14): a season with several goal races rather than
+one, and how much a "peak" can repeat between them.
+
+- **✓ Bompa T.O. (1999)** — *Periodization: Theory and Methodology of
+  Training*, 4th edition — Human Kinetics. Real, well-known foundational
+  periodization textbook (the same "godfather of periodization" author
+  already invoked by name in general strength/conditioning literature).
+  Its mono-/bi-/tri-cyclical annual-plan model states that when an athlete
+  has 3-5 major competitions scheduled within one year, a double or
+  triple/multiple periodization structure — several distinct
+  preparatory-competitive-transition cycles chained across the season,
+  rather than one continuous macrocycle — is the appropriate model; more
+  frequent peaking within a year carries more cumulative stress, so
+  competitions still need real prioritization even within that chained
+  structure. The primary text itself was not directly fetched this session
+  (not freely available online); confirmed via a direct-fetched secondary
+  source that quotes and cites this specific title/author/edition/year
+  directly — see "Maryland USA Powerlifting — periodization blog" in
+  "Practical / non-journal resources" below for that verification page.
+  `[ADAPTED: general-endurance]`, Confidence: medium (a textbook/theory
+  framework, not an empirical trial — same footing this project already
+  gives Issurin 2008 above, and the same "confirmed via a secondary source
+  quoting the primary text" caveat this project already applies to Ric
+  Stern's ramp-test figure, though that case had no primary text at all
+  rather than an unreachable one).
+
 ### Altitude & environmental power adjustment (grounds `30-altitude-power-adjustment.md`)
 
 Curated for the elevation-aware-compliance build (`engine/elevation-aware-
@@ -1916,6 +1945,50 @@ resource itself and are kept.
   <https://www.trainerroad.com/blog/introducing-trainerroad-ai/>,
   <https://www.trainerroad.com/blog/a-data-driven-explanation-of-the-latest-updates-to-ai-ftp-detection/>,
   <https://www.trainerroad.com/forum/t/why-is-my-ai-ftp-detection-lower/110205>
+- Roadman Cycling — interview with Joe Friel (August 2025), on his
+  A/B/C-priority race-classification system (confirmed by direct fetch
+  this session): "Friel retained the A-, B- and C-priority system. His
+  concern was not that every rider must race only once; it was that
+  treating every event as an A race makes a real peak difficult," and "one
+  A-priority event as the clearest option, two as possible when separated
+  by several months or placed back-to-back, and three as increasingly
+  difficult." The article's own framing, quoted directly rather than
+  smoothed over: "That is Friel's coaching position in this interview. It
+  should not be rewritten as a physiological law." Source for
+  `31-multi-race-season-periodization.md`'s graduated per-race depth
+  design and `engine/swim_coach/plan.py`'s `MINI_TAPER_WEEKS`/
+  `B_TIER_MAX_DEDICATED_WEEKS` (a B/C-priority race never grows a full
+  peak/taper). Not itself Friel's published book (*The Cyclist's Training
+  Bible*) — a secondary-source interview restating his coaching position,
+  the practical-resource tier this repo already gives Ric Stern's ramp-test
+  figure above:
+  <https://roadmancycling.com/blog/joe-friel-perfect-cycling-training-week>
+- Simple Endurance Coaching (Paul Warloski — USA Cycling Level 1 Advanced
+  Certified Coach, RRCA Running Coach, TrainingPeaks Level 2 Coach) —
+  "Why is Periodization in Masters Cyclocross So Important in Your
+  Training Plan" (confirmed by direct fetch this session). A real,
+  credentialed practitioner's cyclocross-specific season-planning advice
+  ("Decide whether you want to be good all season or you want to peak for
+  end-of-the-season championships. It's tough to do both"; mid-week
+  sharpening; rebuilding endurance between race blocks) — but genuinely
+  thin as evidence: a coaching blog post, not a peer-reviewed or even
+  cyclocross-specific research source, and it does not itself discuss
+  A/B/C race tiering or give a quantified tune-up-taper depth. Kept as an
+  honest record that CX-specific literature was searched for and found
+  thin (see `31-multi-race-season-periodization.md`'s own "what's not
+  resolved" section) — not cited as grounding for any specific number:
+  <https://simpleendurancecoaching.com/why-is-periodization-in-masters-cyclocross-so-important-in-your-training-plan/>
+- Maryland USA Powerlifting — "Periodization and the Annual Training Plan
+  – Part One" (confirmed by direct fetch this session): the secondary
+  source used to verify Bompa T.O. (1999)'s mono-/bi-/tri-cyclical
+  annual-plan model (the primary text itself was not freely available to
+  fetch directly this session) — see the Bompa entry above, "Multi-race-
+  season periodization." Quotes the specific edition/year directly
+  ("Periodization: Theory and Methodology of Training, Fourth Edition,
+  Tudor O. Bompa, PhD, 1999") and states plainly "the more times an
+  athlete is required to peak throughout the year, the more stress an
+  athlete is likely to incur":
+  <https://marylandpowerlifting.com/2008/04/11/periodization-and-the-annual-training-plan-part-one/>
 
 Strength-technique demonstrations referenced by `plan.py`'s
 `STRENGTH_EXERCISE_REFERENCE_URLS` — Rehab Hero, a physiotherapy exercise
