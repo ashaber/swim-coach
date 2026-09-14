@@ -617,7 +617,7 @@ def test_altitude_context_flags_and_estimates_decrement_above_threshold():
     assert e.altitude_gain_m == pytest.approx(1500.0, abs=1)
     assert e.altitude_context is not None
     assert "9%" in e.altitude_context
-    assert "library/29" in e.altitude_context
+    assert "library/30" in e.altitude_context
     # Never a silent override: pct_of_target/verdict are untouched by altitude.
     assert e.pct_of_target == pytest.approx(100, abs=1)
     assert e.verdict.startswith("on target")

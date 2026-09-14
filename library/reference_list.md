@@ -1295,7 +1295,7 @@ intervals.md`, not `[EVIDENCE: cycling]`.
   reference across endurance sports, though not cycling-specific trial
   data).
 
-### Altitude & environmental power adjustment (grounds `29-altitude-power-adjustment.md`)
+### Altitude & environmental power adjustment (grounds `30-altitude-power-adjustment.md`)
 
 Curated for the elevation-aware-compliance build (`engine/elevation-aware-
 compliance` branch, 2026-09-13). Distinct from the periodization/interval

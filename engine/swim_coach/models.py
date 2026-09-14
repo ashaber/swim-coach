@@ -711,7 +711,7 @@ class IntervalEffort(BaseModel):
     altitude_context: str | None = None
     # A computed, sourced altitude-power-capability note -- set only when
     # `altitude_gain_m >= interval_analysis.ALTITUDE_FLAG_THRESHOLD_M`
-    # (library/29-altitude-power-adjustment.md); `None` for every ride
+    # (library/30-altitude-power-adjustment.md); `None` for every ride
     # without an altitude channel, and for every effort whose elevation
     # above this ride's own baseline doesn't clear that threshold. Same
     # "flag, never silently override" posture as `terrain_flag` -- it never
@@ -745,7 +745,7 @@ class WorkoutIntervals(BaseModel):
     # This ride's own session-relative altitude baseline -- its lowest
     # `altitude_m` sample (`interval_analysis._ride_baseline_altitude_m`),
     # `None` for a ride with no altitude channel. See
-    # `library/29-altitude-power-adjustment.md` for why a session-relative
+    # `library/30-altitude-power-adjustment.md` for why a session-relative
     # heuristic was chosen over a new `Athlete.home_elevation_m` field, and
     # its stated limitation. Additive/optional -- every existing persisted
     # WorkoutIntervals validates unchanged as `None`; no schema_version
