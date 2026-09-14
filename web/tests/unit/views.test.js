@@ -910,10 +910,16 @@ describe('renderApp plan session detail view (click-to-detail)', () => {
   });
 
   it('renders a Garmin download button for a session with structured populated', () => {
+    // bike, not swim_pool -- see the "push to Garmin button" describe
+    // block's own comment: pushing/downloading a structured swim session
+    // corrupts the exported FIT data (real, still-open defect); both
+    // routes share the exact same to_garmin_fit_workout encoding
+    // (backend/app/routes/garmin.py), so the download button is gated
+    // identically to the push button.
     const STRUCTURED_SESSION = {
       id: 's-structured',
       date: dateKey(addDays(weekMonday, 5)),
-      sport: 'swim_pool',
+      sport: 'bike',
       source: 'ai_coach',
       duration_min: 45,
       distance_m: 1600,
@@ -930,7 +936,7 @@ describe('renderApp plan session detail view (click-to-detail)', () => {
             role: 'interval',
             duration_kind: 'distance_m',
             duration_value: 800,
-            modality: 'swim',
+            modality: 'bike',
             equipment: [],
           },
         ],
@@ -946,10 +952,19 @@ describe('renderApp plan session detail view (click-to-detail)', () => {
   // asked for a per-session push, not just a chat tool. Same
   // structured-only gating: a prose-only session has nothing real to push.
   describe('push to Garmin button', () => {
+    // bike, not swim_pool -- 2026-09-12: pushing a structured swim (or
+    // strength) session to Garmin corrupts the exported FIT data (real,
+    // still-open defect, see sports.js's own header comment for the full
+    // citation). These tests exercise the push-flow MECHANICS (pending/
+    // success/error/wrong-session-id states), which have nothing to do
+    // with sport -- bike is the one sport confirmed clean today, so it's
+    // the fixture that keeps these tests meaningful now that the button
+    // is sport-gated (see the dedicated "sport-gated" tests below for the
+    // actual regression proof).
     const PUSHABLE = {
       id: 's-pushable',
       date: dateKey(weekMonday),
-      sport: 'swim_pool',
+      sport: 'bike',
       source: 'ai_coach',
       duration_min: 40,
       distance_m: 1600,
@@ -959,7 +974,7 @@ describe('renderApp plan session detail view (click-to-detail)', () => {
       structured: {
         items: [{
           kind: 'step', label: '4x200 @ Z3', role: 'interval', duration_kind: 'distance_m',
-          duration_value: 800, modality: 'swim', equipment: [],
+          duration_value: 800, modality: 'bike', equipment: [],
         }],
       },
     };
@@ -967,7 +982,7 @@ describe('renderApp plan session detail view (click-to-detail)', () => {
       ...PLAN_DATA, weeks: [{ ...WEEK, sessions: [PUSHABLE] }], sessionPush: push,
     });
 
-    it('renders a push button for a session with structured data', () => {
+    it('renders a push button for a session with structured data on a sport that supports it', () => {
       const html = renderApp(withPushable(null), PUSHABLE.id);
       expect(html).toContain(`data-a="session:push-intervals" data-id="${PUSHABLE.id}"`);
       expect(html).toContain('Push to Garmin');
@@ -976,6 +991,16 @@ describe('renderApp plan session detail view (click-to-detail)', () => {
     it('renders NO push button for a prose-only session -- nothing real to push', () => {
       const html = renderApp(PLAN_DATA, NO_STRUCTURE_SESSION.id);
       expect(html).not.toContain('session:push-intervals');
+    });
+
+    it('renders NO push button for a structured swim or strength session -- known FIT-export corruption, sports.js canPushToGarmin', () => {
+      for (const sport of ['swim_pool', 'swim_ow', 'strength']) {
+        const broken = { ...PUSHABLE, id: `s-broken-${sport}`, sport };
+        const data = { ...PLAN_DATA, weeks: [{ ...WEEK, sessions: [broken] }] };
+        const html = renderApp(data, broken.id);
+        expect(html).not.toContain('session:push-intervals');
+        expect(html).not.toContain('Push to Garmin');
+      }
     });
 
     it('shows a pushing state while in flight', () => {
@@ -2201,7 +2226,12 @@ describe('renderRosterTab', () => {
       const structuredSession = {
         id: 'sess-structured',
         date: '2020-01-01',
-        sport: 'swim_pool',
+        // bike, not swim_pool -- a structured swim session no longer shows
+        // ANY Garmin section at all (sportCanPushToGarmin gates it before
+        // showGarminActions is even checked, see the "push to Garmin
+        // button" describe block's own comment), so it wouldn't reach the
+        // "device only" note this test exists to prove.
+        sport: 'bike',
         duration_min: 45,
         distance_m: 1600,
         intensity: { zone: 'Z3' },
@@ -2210,7 +2240,7 @@ describe('renderRosterTab', () => {
         structured: {
           items: [{
             kind: 'step', label: '4x200 @ Z3', role: 'interval', duration_kind: 'distance_m',
-            duration_value: 800, modality: 'swim', equipment: [],
+            duration_value: 800, modality: 'bike', equipment: [],
           }],
         },
       };

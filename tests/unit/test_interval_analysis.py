@@ -8,6 +8,7 @@ are exercised against synthetic sample arrays with known answers.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,9 @@ from swim_coach.parse_files import parse_fit
 
 FIT_MTB_RACE = Path(__file__).parent / "fixtures" / "fit" / "real_mtb_race.fit"
 FIT_SWIM = Path(__file__).parent / "fixtures" / "fit" / "real_swim.fit"
+REAL_5X2_VO2_STREAM = (
+    Path(__file__).parent / "fixtures" / "streams" / "real_bike_5x2min_vo2.json"
+)
 
 
 # --- synthetic series builders --------------------------------------------------------
@@ -556,6 +560,75 @@ def test_analyze_widens_time_in_band_for_a_rough_ride():
     rough_block = ia.analyze(rough_ride, sport="bike", target_w=250)
     smooth_block = ia.analyze(smooth_ride, sport="bike", target_w=250)
     assert rough_block.efforts[0].time_in_band_pct > smooth_block.efforts[0].time_in_band_pct
+
+
+# --- fix 6: EFFORT_MIN_S ramp-lag tolerance --------------------------------------------
+#
+# Real efforts ramp up/down at their boundary, so a genuine ~EFFORT_MIN_S
+# prescribed effort routinely measures a couple of seconds short of the
+# rigid floor and gets silently dropped. `EFFORT_MIN_S_TOLERANCE_S` grants a
+# small grace period on the duration floor -- these tests pin the boundary
+# behaviour with synthetic spans, then prove it against Andrew's real
+# 2026-09-12 ride (5x2min VO2, target 309.1W -- 110-114% of 276W FTP), whose
+# real reps measured 118.00s and 119.00s and were dropped before this fix.
+
+
+def test_effort_just_under_the_floor_is_now_detected_with_tolerance():
+    # 118s -- within EFFORT_MIN_S_TOLERANCE_S of EFFORT_MIN_S=120, mirroring
+    # the real dropped reps below.
+    s = _steady_effort_series(power=310, seconds=118)
+    efforts = ia.detect_efforts(s, target_w=280)
+    assert len(efforts) == 1
+    assert efforts[0].duration_s == pytest.approx(118, abs=1)
+
+
+def test_effort_well_under_the_floor_is_still_rejected():
+    # 100s is well outside any reasonable ramp-lag tolerance -- must still
+    # be treated as noise (single occurrence, below SET_MIN_REPS to cluster).
+    s = _steady_effort_series(power=310, seconds=100)
+    assert ia.detect_efforts(s, target_w=280) == []
+
+
+def test_short_noise_surge_is_unaffected_by_the_tolerance():
+    # Regression pin: the existing 60s/40s/30s noise-rejection fixtures stay
+    # far below EFFORT_MIN_S - EFFORT_MIN_S_TOLERANCE_S and must still be
+    # rejected exactly as before.
+    assert ia.EFFORT_MIN_S - ia.EFFORT_MIN_S_TOLERANCE_S > 60
+    s = _steady_effort_series(power=300, seconds=60)
+    assert ia.detect_efforts(s, target_w=250) == []
+
+
+def _load_real_5x2min_vo2_stream() -> dict:
+    with open(REAL_5X2_VO2_STREAM) as f:
+        return json.load(f)
+
+
+@pytest.mark.skipif(
+    not REAL_5X2_VO2_STREAM.exists(), reason="no real 5x2min VO2 stream fixture"
+)
+def test_real_5x2min_vo2_set_detects_all_five_reps():
+    """Andrew, 2026-09-12 ride, workout id 656e6e84-4cdf-49cf-a888-
+    01a38144a73a (intervals:i186049001): a prescribed 5x2min VO2 set, target
+    309.1W (110-114% of 276W FTP). All 5 reps were genuinely in-band; before
+    this fix only 3 were detected (reps 2 and 5 measured 119.00s/118.00s and
+    were silently dropped by the rigid 120s floor)."""
+    series = _load_real_5x2min_vo2_stream()
+    target_w = 309.1
+    efforts = ia.detect_efforts(series, target_w=target_w)
+    assert len(efforts) == 5
+
+    durations = [round(e.duration_s, 0) for e in efforts]
+    assert durations == [120, 119, 120, 120, 118]
+
+    block = ia.analyze(series, sport="bike", target_w=target_w)
+    assert block is not None
+    assert block.efforts_detected == 5
+    expected_avg_w = [313.8, 307.9, 314.7, 312.4, 318.1]
+    for e, exp_w in zip(block.efforts, expected_avg_w):
+        assert e.avg_w == pytest.approx(exp_w, abs=1.0)
+        assert 300 <= e.avg_w <= 320  # sanity: within the 308-318W range cited in the brief
+        pct = e.avg_w / target_w * 100
+        assert 95 <= pct <= 105
 
 
 # --- elevation-aware compliance: baseline + altitude context --------------------------
