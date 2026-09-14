@@ -46,6 +46,28 @@ effort" means >= 80% of it — 195W against a 239W target is still an
 attempt). All engineering defaults tuned so the scan ignores steady
 endurance riding but catches a threshold interval; none is a cited value.
 
+**Coach judgment:** `EFFORT_MIN_S_TOLERANCE_S = 5.0` — a small ramp-up/
+settle-out grace period ON `EFFORT_MIN_S`: a candidate span only needs to
+reach `EFFORT_MIN_S - EFFORT_MIN_S_TOLERANCE_S` to be checked as a
+sustained effort, not the raw floor. Real efforts ramp up to power and
+settle back down at their boundary rather than starting/stopping
+instantaneously, so a genuinely-executed ~`EFFORT_MIN_S` prescribed effort's
+measured above-threshold span routinely lands a few seconds short of the
+nominal duration. Confirmed on real data: Andrew's 2026-09-12 ride
+(prescribed 5x2min VO2 set, target 309.1W — 110-114% of 276W FTP) had two of
+its five genuinely in-band reps (101-103% of target) measure 118.00s and
+119.00s — both silently dropped by the un-tolerant floor despite being real,
+well-executed efforts, not noise. 5s is deliberately not fit to that one
+example's exact 1-2s gap: it allows for lag at both the rising and falling
+edge of one effort (a plausible ~2-3s apiece from ramp-up/settle-out), while
+staying nowhere near the ~30-60s spans this module's noise-rejection tests
+exercise (a single short surge, a handful of scattered short reps) — those
+stay well under the tolerance-adjusted floor, so a few seconds of grace
+narrows the floor without reopening that class of false positive. No
+published source pins this number — ramp-lag tolerance isn't independently
+studied literature, this is an engineering read of one real example, same
+spirit as this section's other engineering defaults above.
+
 ### Interval quality vs. target
 
 **[ADAPTED: cycling] Confidence: medium.** `IN_BAND_FRAC = 0.05` — percent
