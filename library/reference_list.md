@@ -1118,6 +1118,78 @@ cross-discipline adaptations.
   own TSS-family extension into cycling (BikeScore) among other sports.
   `[ADAPTED: cycling]`, Confidence: high — direct engagement with the
   cycling-native metric family.
+- **✓ Monod H., Scherrer J. (1965)** — "The Work Capacity of a Synergic
+  Muscular Group" — *Ergonomics*, 8(3):329-338 (title/authors/journal/
+  volume/pages confirmed by web search this session). The originating
+  critical-power (CP) paper: a linear work-vs-time-to-exhaustion
+  relationship, generalizing to the modern hyperbolic power-duration
+  curve (CP the asymptote, W′ the curvature constant) fit from an
+  athlete's own maximal efforts at several different durations, typically
+  performed on separate days. `[ADAPTED: general-endurance]`, Confidence:
+  high — foundational, near-universally cited origin of the CP construct.
+  See `29-ftp-threshold-change-modeling.md`.
+- **✓ Poole D.C., Burnley M., Vanhatalo A., Rossiter H.B., Jones A.M.
+  (2016)** — "Critical Power: An Important Fatigue Threshold in Exercise
+  Physiology" — *Medicine & Science in Sports & Exercise*, 48(11):
+  2320-2334 (confirmed by direct fetch this session). Foundational modern
+  review: CP is argued to be a genuine physiological boundary, not merely
+  a practical proxy — below CP, muscle metabolite concentrations (PCr,
+  Pi, pH) and VO2 reach steady state; above CP they progress continuously
+  to exhaustion. Explicitly endorses multi-trial estimation: CP/W′ are
+  derived from several constant-power efforts to exhaustion at different
+  durations, "typically performed on different days," not from one test.
+  `[ADAPTED: general-endurance]`, Confidence: high — a leading, heavily-
+  cited review in the field, not cycling- or swim-specific by itself.
+- **✓ Triska C., Karsten B., Heidegger B., et al. (2017)** — "Reliability
+  of the parameters of the power-duration relationship using maximal
+  effort time-trials under laboratory conditions" — *PLOS ONE*,
+  12(12):e0189776 (confirmed by direct fetch this session). 10 well-
+  trained male triathletes, three lab sessions (one familiarization + two
+  test sessions, ≥72h apart), each session three fixed-duration
+  (12/7/3-min) maximal time-trial efforts feeding the CP/W′ fit.
+  **Test-retest reliability, Test I vs. Test II: CP ICC=0.94, CV=2.6%**
+  (Familiarization vs. Test I: ICC=0.86, CV=4.1% — the familiarization
+  effect itself is real and sizeable). Mean bias between repeat CP
+  readings −2W, 95% limits of agreement ±21W. W′ reliability markedly
+  worse (Test II CV=8.2%; Familiarization vs. Test I CV=25.3%) — the
+  curvature parameter is a noisier read than CP itself. `[ADAPTED:
+  general-endurance]` (triathletes tested on a cycle ergometer),
+  Confidence: high — the concrete quantitative anchor `29-ftp-threshold-
+  change-modeling.md` uses for "how much of a swing in a threshold-power
+  reading is plausibly real vs. measurement noise" (roughly 2.6-4.1% CV
+  even under controlled lab conditions with genuinely maximal, purpose-
+  built test efforts — a looser bound than an athlete's own uncontrolled
+  real training sessions should be expected to beat).
+- **✓ Karsten B., Petrigna L., Klose A., et al. (2021)** — "Relationship
+  Between the Critical Power Test and a 20-min Functional Threshold Power
+  Test in Cycling" — *Frontiers in Physiology*, 11:613151 (confirmed by
+  direct fetch this session). CP (mean 256W) and FTP-from-single-20min-
+  test (mean 249W, FTP = 95% of 20-min average power) correlate strongly
+  (r=0.969) but are **not interchangeable** — wide limits of agreement
+  (−19 to +33W), >90% probability of a meaningfully different (>1%
+  smallest-worthwhile-change) reading between the two methods for a given
+  individual. `[ADAPTED: cycling]`, Confidence: high — direct cycling
+  population. Grounds why a single-test/single-number threshold estimate
+  (whether a 20-min field test or a vendor's `app_estimate`) is a
+  narrower, less robust construct than a power-duration curve built from
+  multiple real efforts.
+- **✓ Barsumyan A., Shyla R., Saukkonen A., Soost C., Graw J.A., Burchard
+  R. (2025)** — "Quantifying training response in cycling based on
+  cardiovascular drift using machine learning" — *Frontiers in Artificial
+  Intelligence*, 8:1623384 (confirmed by direct fetch this session). 20
+  male cyclists, monthly standardized submaximal sessions (75% FTP, 60
+  min) over 5 months, 80 paired month-to-month comparisons. Athletes whose
+  cardiovascular drift/aerobic decoupling *improved* between consecutive
+  monthly tests were classified "responders" by ML models reaching
+  0.87-0.93 cross-validation accuracy; authors conclude decoupling trend
+  across sessions is "a reliable indicator of response to training
+  stimulus." `[ADAPTED: cycling]`, Confidence: medium — a real, recent,
+  purpose-built study directly on the cross-session-trend question, but
+  small (n=20, all male), single-intensity protocol, and the authors
+  themselves call for larger-cohort replication. The best evidence found
+  this session that a decoupling/EF TREND across multiple comparable real
+  sessions (not one ride's own first-half/second-half split) is genuine
+  fitness signal.
 - **✓ Vermeire K., Ghijs M., Bourgois J., Boone J. (2022)** — "The
   Fitness-Fatigue Model: What's in the Numbers?" — *International Journal
   of Sports Physiology and Performance*, 17(5):810-813. Commentary urging
@@ -1139,6 +1211,31 @@ cross-discipline adaptations.
   practitioner convention, not independently validated by outcome data for
   cycling in anything found this session — keep `load.py`'s existing
   "PROVISIONAL" framing.
+- **✓ Kontro H., Mastracci A., Cheung S.S., MacInnis M.J. (2026)** — "The
+  three-dimensional impulse-response model: Modeling the training process
+  in accordance with energy system-specific adaptation" — *PLOS ONE*,
+  21(2):e0341721 (title/authors/journal/volume confirmed by direct fetch
+  this session, both the PLOS ONE page and its independently-mirrored PMC
+  copy). The most direct attempt found this session at extending a
+  Banister-style impulse-response model to track **critical power (CP)
+  change itself** (alongside W′ and Pmax) rather than only a generic
+  "performance"/"form" output — genuinely on-topic for whether training
+  load predicts *threshold* change specifically, not just readiness. Cites
+  Vermeire et al. (2022) directly for the same one-dimensional-load
+  critique above ("since the training adaptations performing such
+  different training sessions with a similar [training load] are totally
+  different, the relationship with performance improvement will always be
+  distorted"). **Explicitly NOT outcome-validated: the authors' own words
+  are "the presented model has not been under strict scientific scrutiny"
+  and "no published data exist to support the energy-system specific model
+  parameters."** No dataset with real outcome data is reported — one
+  illustrative case-study figure (a single category-3 female cyclist over
+  ~2.5 years) is a worked example, not a validation cohort (n not
+  reported). `[ADAPTED: general-endurance]`, Confidence: low — a real,
+  current, peer-reviewed proposal that CP-specific impulse-response
+  modeling is where this research direction is heading, but a theoretical
+  framework awaiting its own validation, not evidence that such modeling
+  already works. See `29-ftp-threshold-change-modeling.md`.
 - **✓ Galán-Rioja M.Á., González-Ravé J.M., González-Mohíno F., Seiler S.
   (2023)** — "Training Periodization, Intensity Distribution, and Volume
   in Trained Cyclists: A Systematic Review" — *International Journal of
@@ -1734,6 +1831,28 @@ resource itself and are kept.
   2x20 test's "start controlled, don't blow up in the first 5 minutes"
   pacing-cue text on `_bike_2x20_test_structure`'s trailing "Why:" step:
   <https://www.trainerroad.com/blog/ftp-assessment-tips/>
+- TrainerRoad — company blog/forum material on **AI FTP Detection**
+  (analyzes completed workouts) vs. **AI FTP Prediction** (forward-
+  projects up to 28 days from the *planned* calendar) — confirmed by
+  direct fetch this session, cross-checked across two independent pages.
+  A brief, honestly-caveated aside in `29-ftp-threshold-change-modeling.md`,
+  not that file's focus: TrainerRoad's own first-party account of how its
+  algorithmic estimators work, not peer-reviewed or independently audited.
+  Key points: Prediction is explicitly, by design, sensitive to swapping a
+  scheduled hard workout for an easier one ("Trade a hard workout for a
+  big weekend group ride and see how it affects... predicted FTP" —
+  "Introducing TrainerRoad AI"); Detection recalibrates around a "level 3"
+  completed-threshold-workout baseline (below level 3: FTP decrease;
+  4-6: increase — "A Data Driven Explanation of the Latest Updates to AI
+  FTP Detection," corroborated independently by a founder forum quote in
+  "Metrics on new AI FTP Detection + TrainerRoad AI"); no published
+  accuracy/error margin exists for either feature's single-reading
+  trustworthiness ("TrainerRoad AI FTP Prediction FAQ"); real user-reported
+  swing magnitudes on a single Detection recalibration ("Why is my AI FTP
+  Detection lower?" forum thread) range from -4.3% to -9.3% —
+  <https://www.trainerroad.com/blog/introducing-trainerroad-ai/>,
+  <https://www.trainerroad.com/blog/a-data-driven-explanation-of-the-latest-updates-to-ai-ftp-detection/>,
+  <https://www.trainerroad.com/forum/t/why-is-my-ai-ftp-detection-lower/110205>
 
 Strength-technique demonstrations referenced by `plan.py`'s
 `STRENGTH_EXERCISE_REFERENCE_URLS` — Rehab Hero, a physiotherapy exercise
