@@ -10,6 +10,10 @@ python-multipart>=0.0.9,<1.0
 # cutover is a config-flag flip + redeploy, not a dependency change. Same
 # package as the engine's optional [db] extra.
 psycopg[binary]>=3.1,<4.0
+# Process-level connection pooling for DbStore (backend/db-connection-pooling
+# build). Same DORMANT-while-STORE_BACKEND=file story as psycopg above --
+# also part of the engine's optional [db] extra.
+psycopg_pool>=3.1,<4.0
 # HTTP client for backend/app/sync.py (the intervals.icu auto-sync job) --
 # already an fastapi/starlette transitive dep for TestClient, but pinned
 # explicitly here since sync.py imports it directly.

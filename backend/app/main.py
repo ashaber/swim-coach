@@ -10,11 +10,13 @@ monkeypatching env vars, so each test gets an independently-configured
 from __future__ import annotations
 
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from swim_coach.store_db import close_all_pools
 
 from app.auth import ChatRateLimiter, DailyChatLimiter
 from app.config import Settings
@@ -35,6 +37,21 @@ from app.routes.workouts import router as workouts_router
 log = get_logger("app.main")
 
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Startup does nothing extra today (`Settings.from_env()` already runs
+    before `FastAPI(...)` is constructed in `create_app` below). Shutdown
+    closes every process-level DbStore connection pool this instance ever
+    created (`swim_coach.store_db._POOLS` -- see that module's docstring)
+    so a Cloud Run container teardown (SIGTERM) doesn't leak connections or
+    hang waiting on sockets the app never explicitly closed. A no-op when
+    `STORE_BACKEND=file` (no DbStore was ever constructed, so `_POOLS` is
+    empty) -- safe to run unconditionally."""
+    yield
+    close_all_pools()
+    log.info("db pools closed")
+
+
 def create_app() -> FastAPI:
     # Fails fast: Settings.from_env() raises ConfigError (a RuntimeError
     # subclass) if ANTHROPIC_API_KEY or API_TOKEN is missing, or if
@@ -42,7 +59,7 @@ def create_app() -> FastAPI:
     # this must happen before the app can serve anything.
     settings = Settings.from_env()
 
-    app = FastAPI(title="swim-coach-api")
+    app = FastAPI(title="swim-coach-api", lifespan=_lifespan)
     app.state.settings = settings
     app.state.chat_rate_limiter = ChatRateLimiter(settings.chat_rate_per_min)
     app.state.chat_daily_limiter = DailyChatLimiter(settings.chat_daily_cap_per_athlete)

@@ -78,10 +78,15 @@ async def get_plan_load(
     athlete = resolve_athlete(principal, athlete)
     store = make_store(settings)
     try:
-        store.load_athlete(athlete)
+        fetched_athlete = store.load_athlete(athlete)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"no such athlete: {athlete}") from exc
-    rollup = summarize_rollup(store, athlete, weeks=weeks)
+    # Pass the already-fetched Athlete through so `summarize_rollup` skips
+    # its own internal `load_athlete` round trip (its own docstring: "let an
+    # already-fetched caller skip a second round trip") -- this route used to
+    # discard `fetched_athlete` after the 404 check and let `summarize_rollup`
+    # silently re-fetch the same athlete a second time.
+    rollup = summarize_rollup(store, athlete, weeks=weeks, athlete=fetched_athlete)
     return {
         "athlete": athlete,
         "weeks": weeks,
