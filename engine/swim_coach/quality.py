@@ -199,7 +199,10 @@ def workout_quality(workout: Workout, session: Session | None, *, athlete: Athle
 
     target_load_au = session_target_load_au(session, athlete)
     actual_load_au = session_load(
-        workout, sex=athlete.sex, css_pace_s_per_100m=athlete.css_pace_s_per_100m
+        workout,
+        sex=athlete.sex,
+        css_pace_s_per_100m=athlete.css_pace_s_per_100m,
+        ftp_watts=athlete.ftp_watts,
     ).value
     load_delta_pct = round((actual_load_au - target_load_au) / target_load_au * 100, 1)
 

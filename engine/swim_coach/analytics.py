@@ -59,6 +59,26 @@ STATIONARY_MIN_S = 30.0
 # long to count as a real stop, not slow/technical-terrain riding.
 # library/11-workout-analytics.md ("Stationary-speed pause detection").
 
+POWER_ROLLING_WINDOW_S = 30.0
+# `[EVIDENCE: cycling]` Normalized Power (NP)'s standard 4-step algorithm:
+# (1) a rolling 30-second average of power across the ride, (2) each value
+# raised to the 4th power, (3) the mean of those values taken, (4) the 4th
+# root taken. Per `Allen H., Coggan A. (2010)`, *Training and Racing with a
+# Power Meter* (2nd ed.), VeloPress -- verified and already cited in this
+# repo at `library/23-cycling-training.md`'s "Training Stress Score,
+# Normalized Power, Intensity Factor" section (Confidence: high -- same
+# citation family this project already relies on for `load.py`'s
+# `SWIM_TSS_INTENSITY_EXPONENT` and `library/28-bike-ftp-test-protocols.md`'s
+# FTP-test 0.95-of-average convention), not re-derived here. **Test:** if a
+# computed NP for a real ride diverges materially from what TrainingPeaks
+# or intervals.icu computes for the same file, re-derive this rolling-
+# window implementation step by step before trusting either number.
+#
+# The cited algorithm doesn't specify edge-of-ride behavior for samples
+# less than 30s into the series -- `_trailing_moving_average` below uses a
+# shorter (not padded/fabricated) window for those, an engineering
+# convention, not itself part of the cited algorithm.
+
 
 # --- cardiac drift ----------------------------------------------------------------
 
@@ -232,6 +252,73 @@ def _append_stationary_span(pauses: list[WorkoutPause], start: float, end: float
         pauses.append(WorkoutPause(start_offset_s=start, duration_s=duration_s, source="stationary"))
 
 
+# --- power (Build I: Normalized Power) -----------------------------------------------
+
+
+def average_power_w(series: dict | None) -> float | None:
+    """Plain mean of the `power_w` series channel, ignoring `None` samples
+    (sensor dropouts). `None` when `series` is absent, carries no
+    `power_w` channel at all, or every sample in it is `None` -- never a
+    fabricated 0. `power_w` is only ever emitted by `parse_files.
+    _build_series` for a cycling `.fit` (see its `extended=` gate), so this
+    is effectively bike-only in practice without needing its own sport
+    check here -- same "trust the data, not a sport label" shape as
+    `cardiac_drift`/`split_analysis` above."""
+    if not series:
+        return None
+    power = series.get("power_w")
+    if not power:
+        return None
+    values = [p for p in power if p is not None]
+    if not values:
+        return None
+    return statistics.fmean(values)
+
+
+def _trailing_moving_average(vals: list[float], t_s: list[float], window_s: float) -> list[float]:
+    """Trailing moving average of `vals` over the `window_s` seconds ending
+    at (and including) each sample -- the shape `POWER_ROLLING_WINDOW_S`'s
+    NP algorithm calls for, distinct from `interval_analysis.
+    _centred_moving_average`'s CENTRED window. O(n) via a two-pointer
+    sliding sum (samples are ~1 Hz and monotonic in `t_s`, mirroring that
+    function's own convention); tolerates real gaps in `t_s` (a dropped
+    record, a pause) correctly since the window is time-based, not a fixed
+    sample count."""
+    n = len(vals)
+    out = [0.0] * n
+    lo = 0
+    run = 0.0
+    for i in range(n):
+        run += vals[i]
+        while t_s[lo] < t_s[i] - window_s:
+            run -= vals[lo]
+            lo += 1
+        out[i] = run / (i - lo + 1)
+    return out
+
+
+def normalized_power_w(series: dict | None) -> float | None:
+    """Normalized Power (watts) -- see `POWER_ROLLING_WINDOW_S`'s own
+    docstring for the full citation and the 4-step algorithm. `None` when
+    `series` is absent, carries no usable `power_w` channel, or has fewer
+    than 2 timestamped power samples (not enough to form any rolling
+    window)."""
+    if not series:
+        return None
+    power = series.get("power_w")
+    t_s = series.get("t_s")
+    if not power or not t_s:
+        return None
+    samples = [(t, p) for t, p in zip(t_s, power) if p is not None]
+    if len(samples) < 2:
+        return None
+    ts = [t for t, _ in samples]
+    vals = [float(p) for _, p in samples]
+    rolling = _trailing_moving_average(vals, ts, POWER_ROLLING_WINDOW_S)
+    mean_fourth_power = statistics.fmean(v**4 for v in rolling)
+    return mean_fourth_power**0.25
+
+
 # --- splits -------------------------------------------------------------------------
 
 
@@ -380,6 +467,12 @@ def compute_analytics(
     structure); `prescribed_structure` is a `models.WorkoutStructure` when
     one is recoverable for the session, and its per-rep `power_w` targets
     win over `interval_target_w`.
+
+    `WorkoutAnalytics.avg_power_w`/`normalized_power_w` (Build I) are
+    filled in from `series["power_w"]` whenever that channel is present --
+    see `average_power_w`/`normalized_power_w` above -- and stay `None`
+    otherwise (every swim/kayak/strength workout, or a bike ride with no
+    power meter).
     """
     from swim_coach import interval_analysis
     from swim_coach.models import WorkoutAnalytics
@@ -394,6 +487,8 @@ def compute_analytics(
         target_w=interval_target_w,
         structure=prescribed_structure,
     )
+    avg_power = average_power_w(series)
+    norm_power = normalized_power_w(series)
 
     return WorkoutAnalytics(
         cardiac_drift_pct=drift,
@@ -408,4 +503,6 @@ def compute_analytics(
         swolf_last_quarter=swolf[1] if swolf else None,
         swolf_degradation_pct=swolf[2] if swolf else None,
         intervals=intervals,
+        avg_power_w=avg_power,
+        normalized_power_w=norm_power,
     )

@@ -623,6 +623,15 @@ class WorkoutLap(BaseModel):
     avg_pace_s_per_100m: float | None = None
     stroke: str | None = None
     num_lengths: int | None = None
+    # Bike lap-level average power (Build I: Normalized Power + power-based
+    # load tier), read straight off the FIT lap frame's own `avg_power`
+    # field -- see `parse_files._build_laps`. Gated to cycling sports the
+    # same way `_build_series`'s `extended=`/`_is_cycling_sport` pattern
+    # already gates the record-level power/cadence/altitude channels, so
+    # every swim/kayak/strength lap keeps `avg_power_w=None`, byte-identical
+    # to before this field existed. Additive/optional, no schema_version
+    # bump, same convention as every other additive field in this file.
+    avg_power_w: float | None = None
 
 
 class WorkoutLength(BaseModel):
@@ -750,6 +759,20 @@ class WorkoutAnalytics(BaseModel):
     # every swim/kayak/strength workout. See `WorkoutIntervals` and
     # `swim_coach.interval_analysis`.
     intervals: WorkoutIntervals | None = None
+    # Ride-level average power and Normalized Power (Build I), populated by
+    # `swim_coach.analytics.compute_analytics` from the workout's own
+    # `power_w` series channel when present -- which `parse_files.
+    # _build_series` only ever emits for a cycling `.fit` (see its
+    # `extended=` gate), so these two fields are `None` for every swim/
+    # kayak/strength workout, exactly like `intervals` above. NP is the
+    # standard Coggan/Allen 4-step algorithm (30s rolling average of power,
+    # each value to the 4th power, mean, 4th root) -- see `analytics.
+    # normalized_power_w`'s own citation and `library/23-cycling-
+    # training.md`'s "Training Stress Score, Normalized Power, Intensity
+    # Factor" section. Additive/optional, no schema_version bump, same
+    # convention as every other additive field in this file.
+    avg_power_w: float | None = None
+    normalized_power_w: float | None = None
 
 
 class Workout(BaseModel):

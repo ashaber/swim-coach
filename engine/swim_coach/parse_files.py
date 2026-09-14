@@ -103,6 +103,21 @@ _MIN_DURATION_MIN = 0.1
 # floors to this rather than failing validation outright -- the draft's
 # warnings list always explains why.
 
+_SWIM_SPORTS = {"swim_pool", "swim_ow"}
+# Build I fix: `avg_pace_s_per_100m` (s/100m) is a swim-only concept -- a
+# real, confirmed defect (open since 2026-08-31, "workout analytics bug --
+# cross-train pace/cardiac-drift calculation") had every parser here
+# compute it unconditionally from raw distance/duration, regardless of
+# sport, producing nonsense pace numbers for a real kayak trip
+# (158s/100m) and real MTB laps (up to 920s/100m). Every avg_pace
+# computation site in this module (parse_tcx, parse_csv, parse_fit's
+# session total, _build_laps' per-lap total) is now gated on the resolved
+# sport being in this set. Local to this module rather than importing
+# `load._SWIM_SPORTS` -- deliberately the same "small, stable constant
+# duplicated per-module rather than cross-imported" convention this file
+# already follows for sport-family checks (see `_is_cycling_sport`'s own
+# module-local, single-purpose predicate).
+
 
 def _floor_duration_min(duration_min: float, warnings: list[str], reason: str) -> float:
     if duration_min <= 0:
@@ -178,7 +193,11 @@ def parse_tcx(path: str | Path) -> WorkoutDraft:
         total_time_s += time_s
         sets.append(WorkoutSet(distance_m=round(distance)))
 
-    avg_pace = total_time_s / (total_distance / 100) if total_distance > 0 and total_time_s > 0 else None
+    avg_pace = (
+        total_time_s / (total_distance / 100)
+        if sport in _SWIM_SPORTS and total_distance > 0 and total_time_s > 0
+        else None
+    )
     duration_min = _floor_duration_min(
         round(total_time_s / 60, 1),
         warnings,
@@ -315,16 +334,9 @@ def parse_csv(path: str | Path) -> WorkoutDraft:
         duration_min, warnings, "duration is 0; duration_min floored to satisfy the Workout schema"
     )
 
-    pace_raw = _first_present(row, _CSV_PACE_ALIASES)
-    avg_pace: float | None = None
-    if pace_raw is not None:
-        try:
-            avg_pace = _parse_clock_to_seconds(pace_raw) if ":" in pace_raw else float(pace_raw)
-        except ValueError:
-            warnings.append(f"could not parse avg pace {pace_raw!r}; left unset")
-    if avg_pace is None and distance_m > 0 and duration_min > 0:
-        avg_pace = (duration_min * 60) / (distance_m / 100)
-
+    # Sport is resolved BEFORE pace below (moved ahead of its original
+    # position in this function) so avg_pace's Build I sport gate can read
+    # it -- pure reordering, no other behavior change.
     sport_raw = _first_present(row, _CSV_SPORT_ALIASES)
     sport: Sport = "swim_pool"
     if sport_raw is not None:
@@ -335,6 +347,17 @@ def parse_csv(path: str | Path) -> WorkoutDraft:
             warnings.append(f"unrecognized activity type {sport_raw!r}; assumed swim_pool")
     else:
         warnings.append("no recognizable activity-type column; assumed swim_pool")
+
+    pace_raw = _first_present(row, _CSV_PACE_ALIASES)
+    avg_pace: float | None = None
+    if sport in _SWIM_SPORTS:
+        if pace_raw is not None:
+            try:
+                avg_pace = _parse_clock_to_seconds(pace_raw) if ":" in pace_raw else float(pace_raw)
+            except ValueError:
+                warnings.append(f"could not parse avg pace {pace_raw!r}; left unset")
+        if avg_pace is None and distance_m > 0 and duration_min > 0:
+            avg_pace = (duration_min * 60) / (distance_m / 100)
 
     return WorkoutDraft(
         date=workout_date,
@@ -661,7 +684,16 @@ def _lap_index_for_length(message_index: object, laps_raw: list[dict]) -> int | 
     return None
 
 
-def _build_laps(laps_raw: list[dict], t0: datetime | None) -> list[WorkoutLap]:
+def _build_laps(
+    laps_raw: list[dict], t0: datetime | None, *, sport: Sport | None = None, extended: bool = False
+) -> list[WorkoutLap]:
+    """`sport` gates `avg_pace_s_per_100m` to swim sports only (Build I fix
+    -- see `_SWIM_SPORTS`'s module docstring); `extended` (the same
+    `_is_cycling_sport` predicate `_build_series`'s own `extended=` param
+    uses) gates `avg_power_w` to cycling, so a swim/kayak/strength lap never
+    gets a fabricated power reading and a bike lap with no power meter (real
+    fixture: real_mtb_0709.fit) gets a real `None`, not a 0."""
+    is_swim = sport in _SWIM_SPORTS
     laps: list[WorkoutLap] = []
     for i, raw in enumerate(laps_raw):
         duration_s = raw["total_timer_time"] or raw["total_elapsed_time"] or 0.0
@@ -669,7 +701,7 @@ def _build_laps(laps_raw: list[dict], t0: datetime | None) -> list[WorkoutLap]:
         if t0 is not None and isinstance(raw["start_time"], datetime):
             start_offset_s = (raw["start_time"] - t0).total_seconds()
         distance_m = raw["total_distance"]
-        avg_pace = duration_s / (distance_m / 100) if distance_m and duration_s else None
+        avg_pace = duration_s / (distance_m / 100) if is_swim and distance_m and duration_s else None
         stroke = raw["swim_stroke"]
         laps.append(
             WorkoutLap(
@@ -682,6 +714,7 @@ def _build_laps(laps_raw: list[dict], t0: datetime | None) -> list[WorkoutLap]:
                 avg_pace_s_per_100m=avg_pace,
                 stroke=str(stroke) if stroke is not None else None,
                 num_lengths=raw["num_lengths"],
+                avg_power_w=raw.get("avg_power") if extended else None,
             )
         )
     return laps
@@ -1049,6 +1082,13 @@ def parse_fit(path: str | Path) -> WorkoutDraft:
                         "swim_stroke": stroke,
                         "first_length_index": _fit_value(frame, "first_length_index"),
                         "num_lengths": _fit_value(frame, "num_lengths"),
+                        # Bike lap-level power (Build I) -- read defensively
+                        # like every other field; absent on swim/kayak laps
+                        # and on a bike lap with no power meter (see
+                        # _build_laps' `extended` gate, which decides
+                        # whether this raw value actually reaches
+                        # WorkoutLap.avg_power_w).
+                        "avg_power": _fit_value(frame, "avg_power"),
                     }
                 )
             elif frame.name == "length":
@@ -1119,7 +1159,7 @@ def parse_fit(path: str | Path) -> WorkoutDraft:
 
     avg_pace = (
         session_duration_s / (session_distance / 100)
-        if session_distance and session_duration_s
+        if sport in _SWIM_SPORTS and session_distance and session_duration_s
         else None
     )
     duration_min = _floor_duration_min(
@@ -1128,11 +1168,15 @@ def parse_fit(path: str | Path) -> WorkoutDraft:
         "session duration is 0; duration_min floored to satisfy the Workout schema",
     )
 
-    laps = _build_laps(laps_raw, t0)
+    # Computed here (moved ahead of its original position below) so both
+    # _build_laps' avg_power_w extraction and _build_series' extended=
+    # power/cadence/altitude channels share the exact same cycling gate --
+    # one predicate, not two independently-drifting checks.
+    is_cycling = _is_cycling_sport(session_sport)
+    laps = _build_laps(laps_raw, t0, sport=sport, extended=is_cycling)
     lengths, idle_pauses = _build_lengths(lengths_raw, laps_raw, t0)
     timer_pauses = _build_timer_pauses(events_raw, t0)
     gap_pauses = _build_gap_pauses(records_raw, t0)
-    is_cycling = _is_cycling_sport(session_sport)
     series = _build_series(records_raw, t0, extended=is_cycling)
     stationary = _stationary_pauses(series) if series is not None and is_cycling else []
     pauses = _merge_pauses(timer_pauses, gap_pauses, idle_pauses, stationary)
