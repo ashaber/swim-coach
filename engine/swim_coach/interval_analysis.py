@@ -47,6 +47,14 @@ interval-shape taxonomy, `library/24-cycling-periodization-intervals.md`).
    when the ride is too stop-start for that number to mean anything, and
    also refused for an **all-interval** session that carries no steady
    aerobic block for the number to describe.
+7. **Altitude context** (`_ride_baseline_altitude_m` /
+   `_effort_altitude_context`) -- a ride's own lowest `altitude_m` sample
+   stands in for its baseline elevation; an effort whose own mean altitude
+   sits far enough above that baseline gets a sourced, computed note
+   estimating the reduced sustainable power expected there (real
+   altitude/VO2max physiology, `library/29-altitude-power-adjustment.md`)
+   -- a flag alongside `pct_of_target`/`verdict`, never a silent
+   adjustment to them.
 """
 
 from __future__ import annotations
@@ -284,6 +292,46 @@ DURATION_TOLERANCE_FRAC = 0.25
 # Coach judgment: a detected effort whose duration is within +/-25% of a
 # prescribed rep's duration is "the same rep" for match_efforts_to_
 # structure's alignment. library/26-activity-stream-interval-analysis.md.
+
+ALTITUDE_MIN_SAMPLES = 10
+# Coach judgment: `_ride_baseline_altitude_m` refuses to derive a baseline
+# from fewer than this many non-None altitude samples -- the same
+# defensive floor `_power_roughness` and dynamic-mode `detect_efforts` use
+# (`len(working) < 10/30`) before trusting a ride-wide statistic. A ride
+# with only a handful of altitude samples (a spotty GPS fix, an early
+# .fit-parsing edge case) should surface no altitude signal at all rather
+# than a baseline computed off noise. library/29-altitude-power-adjustment.md.
+
+ALTITUDE_FLAG_THRESHOLD_M = 1000.0
+# Coach judgment: the minimum elevation gain above THIS RIDE's own
+# baseline (see `_ride_baseline_altitude_m`) worth surfacing as an
+# altitude-power context note. Chosen inside the real, converging-but-not-
+# identical evidence in library/29-altitude-power-adjustment.md:
+# Garvican-Lewis et al. (2015)'s elite-cyclist race-power data found mean
+# power unaffected below ~2000m absolute against their ~600m baseline
+# (~1400m relative) while sustained (4-10 min) efforts already showed a
+# real 4-8% decrement in their 1000-2000m absolute band (~400-1400m
+# relative); Fulco, Rock & Cymerman (1998)'s cross-sport review put the
+# onset for endurance events as low as ~700m. 1000m sits inside that
+# convergence zone, deliberately on the conservative side -- same "flag
+# real signal, don't cry wolf" posture as `GRADE_DROP_FLAG`. No source
+# pins this exact number. library/29-altitude-power-adjustment.md.
+
+ALTITUDE_POWER_DECREMENT_PCT_PER_1000M = 6.0
+# [EVIDENCE: cycling] Confidence: high (population/modality match). Garvican-
+# Lewis L.A., Clark B., Martin D.T., Schumacher Y.O., McDonald W.,
+# Stephens B., et al. (2015), "Impact of Altitude on Power Output during
+# Cycling Stage Racing" -- PLoS ONE 10(12):e0143028 -- elite road cyclists'
+# own real-race power-meter data: maximal mean power for 240s/600s efforts
+# (this analyzer's own >=120s "sustained effort" duration scope) declined
+# "~6% per 1000m above sea-level", the paper's own stated dose-response.
+# Applied here to elevation gained above the RIDE's own baseline, not
+# absolute sea-level altitude -- see library/29-altitude-power-adjustment.md
+# for why that's the right question for "how much less power should I
+# expect than usual" and the honestly-stated limitation of that choice.
+# Test: if this athlete's own elevated-ride efforts consistently under- or
+# over-shoot this estimate relative to their near-baseline performance,
+# recalibrate against their own data. library/29-altitude-power-adjustment.md.
 
 
 # --- result types (internal; analyze() returns the pydantic WorkoutIntervals) ------
@@ -618,6 +666,73 @@ def _adaptive_in_band_frac(series: dict, *, indoor: bool | None = None) -> float
         return IN_BAND_FRAC
     band = roughness * IN_BAND_ROUGHNESS_MULT
     return max(IN_BAND_FRAC, min(IN_BAND_FRAC_MAX, band))
+
+
+# --- elevation-aware compliance: altitude context -------------------------------------
+
+
+def _ride_baseline_altitude_m(series: dict) -> float | None:
+    """This ride's own session-relative altitude baseline: its lowest
+    `altitude_m` sample. `None` when the ride carries no altitude channel
+    (every non-`bike` sport, and any `bike` ride whose `.fit` had no
+    altitude/enhanced_altitude field) or fewer than `ALTITUDE_MIN_SAMPLES`
+    real samples.
+
+    **Coach judgment**, the deliberately simpler of two options (the other
+    being a new `Athlete.home_elevation_m` field): a ride typically starts
+    at or near wherever the athlete actually is that day, so its own low
+    point is a zero-cost proxy for "this ride's normal elevation" without
+    requiring any athlete configuration. Wrong exactly when a ride starts
+    already partway up a climb from a trailhead well above the athlete's
+    real home -- a stated, not silent, limitation. See
+    `library/29-altitude-power-adjustment.md`."""
+    altitude = series.get("altitude_m")
+    if not altitude:
+        return None
+    clean = [a for a in altitude if a is not None]
+    if len(clean) < ALTITUDE_MIN_SAMPLES:
+        return None
+    return min(clean)
+
+
+def _effort_altitude_context(
+    series: dict, effort: DetectedEffort, baseline_m: float | None
+) -> tuple[float | None, float | None, str | None]:
+    """`(altitude_m, altitude_gain_m, altitude_context)` for one detected
+    effort: this effort's own mean altitude, its gain above the ride's
+    baseline, and -- only when that gain clears
+    `ALTITUDE_FLAG_THRESHOLD_M` -- a sourced, computed context note
+    estimating the power-capability reduction expected at that elevation
+    (`ALTITUDE_POWER_DECREMENT_PCT_PER_1000M`, applied to the full gain,
+    not just the excess above the threshold).
+
+    A **flag, never a silent override**: the caller never adjusts
+    `pct_of_target`/`avg_w`/`verdict` from this -- same posture as
+    `_terrain_flag`. Returns `(None, None, None)` when there's no altitude
+    channel or no resolvable baseline. See
+    `library/29-altitude-power-adjustment.md`."""
+    if baseline_m is None:
+        return None, None, None
+    altitude = (series.get("altitude_m") or [])[effort.start_idx : effort.end_idx + 1]
+    altitude_m = _mean(altitude)
+    if altitude_m is None:
+        return None, None, None
+    gain_m = altitude_m - baseline_m
+    if gain_m < ALTITUDE_FLAG_THRESHOLD_M:
+        return round(altitude_m, 1), round(gain_m, 1), None
+
+    decrement_pct = gain_m / 1000.0 * ALTITUDE_POWER_DECREMENT_PCT_PER_1000M
+    gain_ft = gain_m * 3.28084
+    altitude_ft = altitude_m * 3.28084
+    baseline_ft = baseline_m * 3.28084
+    note = (
+        f"climbed to ~{altitude_m:.0f}m/~{altitude_ft:.0f}ft, "
+        f"~{gain_m:.0f}m/~{gain_ft:.0f}ft above this ride's baseline "
+        f"(~{baseline_m:.0f}m/~{baseline_ft:.0f}ft) -- expect roughly "
+        f"{decrement_pct:.0f}% less sustainable power than at baseline "
+        f"(library/29-altitude-power-adjustment.md)"
+    )
+    return round(altitude_m, 1), round(gain_m, 1), note
 
 
 # --- per-effort quality --------------------------------------------------------------
@@ -1158,11 +1273,14 @@ def analyze(
     3. `match_efforts_to_structure` -> positional rep alignment.
     4. `_adaptive_in_band_frac` -> this ride's in-band tolerance.
     5. Per effort: `assess_effort` (effective target = matched rep target
-       else `target_w`) + `_sub_structure` -> a persisted
-       `models.IntervalEffort`.
+       else `target_w`) + `_sub_structure` + `_effort_altitude_context`
+       (this effort's own mean altitude vs. the ride's baseline) -> a
+       persisted `models.IntervalEffort`.
     6. `tightened_decoupling`, then override to `(None, reason)` if
        `_is_all_interval` says the ride is a pure VO2/threshold session.
-    7. Assemble into `models.WorkoutIntervals`.
+    7. Assemble into `models.WorkoutIntervals`, including the ride's own
+       `_ride_baseline_altitude_m` (`None` for a ride with no altitude
+       channel -- see `library/29-altitude-power-adjustment.md`).
     """
     if sport != "bike" or not series:
         return None
@@ -1175,6 +1293,7 @@ def analyze(
     efforts = detect_efforts(series, target_w=target_w)
     match = match_efforts_to_structure(efforts, structure)
     in_band = _adaptive_in_band_frac(series, indoor=indoor)
+    baseline_altitude_m = _ride_baseline_altitude_m(series)
 
     out_efforts: list[IntervalEffort] = []
     for e in efforts:
@@ -1183,6 +1302,9 @@ def analyze(
             rep_target = reps[e.n - 1][1]
         eff_target = rep_target if rep_target is not None else target_w
         q = assess_effort(series, e, target_w=eff_target, in_band_frac=in_band)
+        altitude_m, altitude_gain_m, altitude_context = _effort_altitude_context(
+            series, e, baseline_altitude_m
+        )
         out_efforts.append(
             IntervalEffort(
                 n=e.n,
@@ -1200,6 +1322,9 @@ def analyze(
                 terrain_flag=q.terrain_flag,
                 verdict=q.verdict,
                 sub_structure=_sub_structure(series, e),
+                altitude_m=altitude_m,
+                altitude_gain_m=altitude_gain_m,
+                altitude_context=altitude_context,
             )
         )
 
@@ -1218,4 +1343,5 @@ def analyze(
         efforts=out_efforts,
         decoupling_tightened_pct=decoupling_pct,
         decoupling_note=decoupling_note,
+        baseline_altitude_m=round(baseline_altitude_m, 1) if baseline_altitude_m is not None else None,
     )

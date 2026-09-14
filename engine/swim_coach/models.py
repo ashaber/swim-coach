@@ -706,6 +706,20 @@ class IntervalEffort(BaseModel):
     # ordinary sustained effort. Additive/optional -- every existing
     # persisted IntervalEffort validates unchanged as `sub_structure=None`;
     # no schema_version bump.
+    altitude_m: float | None = None  # this effort's own mean altitude sample
+    altitude_gain_m: float | None = None  # altitude_m - WorkoutIntervals.baseline_altitude_m
+    altitude_context: str | None = None
+    # A computed, sourced altitude-power-capability note -- set only when
+    # `altitude_gain_m >= interval_analysis.ALTITUDE_FLAG_THRESHOLD_M`
+    # (library/29-altitude-power-adjustment.md); `None` for every ride
+    # without an altitude channel, and for every effort whose elevation
+    # above this ride's own baseline doesn't clear that threshold. Same
+    # "flag, never silently override" posture as `terrain_flag` -- it never
+    # adjusts `pct_of_target`/`avg_vs_target_w`/`verdict`, it's an
+    # additional signal for the coach to weigh alongside them. Additive/
+    # optional -- every existing persisted IntervalEffort (predating this
+    # field, or from a ride with no altitude channel) validates unchanged
+    # with all three fields `None`; no schema_version bump.
 
 
 class WorkoutIntervals(BaseModel):
@@ -727,6 +741,15 @@ class WorkoutIntervals(BaseModel):
     efforts: list[IntervalEffort] = Field(default_factory=list)
     decoupling_tightened_pct: float | None = None
     decoupling_note: str | None = None
+    baseline_altitude_m: float | None = None
+    # This ride's own session-relative altitude baseline -- its lowest
+    # `altitude_m` sample (`interval_analysis._ride_baseline_altitude_m`),
+    # `None` for a ride with no altitude channel. See
+    # `library/29-altitude-power-adjustment.md` for why a session-relative
+    # heuristic was chosen over a new `Athlete.home_elevation_m` field, and
+    # its stated limitation. Additive/optional -- every existing persisted
+    # WorkoutIntervals validates unchanged as `None`; no schema_version
+    # bump.
 
 
 class WorkoutAnalytics(BaseModel):
