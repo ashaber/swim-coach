@@ -175,6 +175,41 @@ def test_athlete_session_cannot_read_another_athletes_load(
     assert response.status_code == 403
 
 
+def test_athlete_load_fetches_athlete_exactly_once(
+    monkeypatch: pytest.MonkeyPatch, client, store
+) -> None:
+    """Regression test for the double-fetch bug (db-connection-pooling
+    build): `get_plan_load` used to call `store.load_athlete` once for its
+    own 404 check, discard the result, then call `summarize_rollup` without
+    forwarding it -- which re-fetched the same athlete a second time
+    internally (see `summarize_rollup`'s own `athlete=` docstring: "let an
+    already-fetched caller skip a second round trip"). Wraps the real
+    `FileStore` in a call-counting spy (not a mock replacing behavior --
+    every call still goes to the real store) so this asserts the ACTUAL
+    number of `load_athlete` calls the route makes end to end, not just
+    that the fix "looks right" by inspection."""
+    import app.routes.plan as plan_route
+
+    class _CountingStoreSpy:
+        def __init__(self, wrapped):
+            self._wrapped = wrapped
+            self.load_athlete_calls = 0
+
+        def load_athlete(self, slug):
+            self.load_athlete_calls += 1
+            return self._wrapped.load_athlete(slug)
+
+        def __getattr__(self, name):
+            return getattr(self._wrapped, name)
+
+    spy = _CountingStoreSpy(store)
+    monkeypatch.setattr(plan_route, "make_store", lambda settings: spy)
+
+    response = client.get("/api/plan/load?athlete=renee", headers=auth_headers())
+    assert response.status_code == 200
+    assert spy.load_athlete_calls == 1
+
+
 # --- GET /api/coach/athletes/{slug}/load (coach access) -----------------------
 
 

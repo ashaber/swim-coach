@@ -47,6 +47,18 @@ def test_constructing_dbstore_without_psycopg_raises_helpful_error(monkeypatch):
         store_db.DbStore(dsn="postgresql://unused")
 
 
+def test_constructing_dbstore_without_psycopg_pool_raises_helpful_error(monkeypatch):
+    """`psycopg_pool` (backend/db-connection-pooling build) is imported
+    lazily alongside psycopg itself, same discipline, same [db] extra --
+    its absence (psycopg present, psycopg_pool missing) must raise the same
+    kind of clear, actionable ImportError, not an opaque `ModuleNotFoundError`
+    surfacing from deep inside `__init__`."""
+    _block_psycopg_pool(monkeypatch)
+    store_db = importlib.reload(importlib.import_module("swim_coach.store_db"))
+    with pytest.raises(ImportError, match=r"\[db\]|psycopg"):
+        store_db.DbStore(dsn="postgresql://unused")
+
+
 def _block_psycopg(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make `import psycopg` (and submodules) fail, as if not installed."""
     real_import = builtins.__import__
@@ -58,5 +70,21 @@ def _block_psycopg(monkeypatch: pytest.MonkeyPatch) -> None:
 
     for mod in list(sys.modules):
         if mod == "psycopg" or mod.startswith("psycopg."):
+            monkeypatch.delitem(sys.modules, mod, raising=False)
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+
+def _block_psycopg_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make `import psycopg_pool` (and submodules) fail, as if not
+    installed -- psycopg itself stays importable."""
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "psycopg_pool" or name.startswith("psycopg_pool."):
+            raise ImportError(f"blocked for test: {name}")
+        return real_import(name, *args, **kwargs)
+
+    for mod in list(sys.modules):
+        if mod == "psycopg_pool" or mod.startswith("psycopg_pool."):
             monkeypatch.delitem(sys.modules, mod, raising=False)
     monkeypatch.setattr(builtins, "__import__", fake_import)

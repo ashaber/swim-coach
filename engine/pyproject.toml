@@ -30,6 +30,10 @@ dev = [
 # constructing a DbStore needs it. Install with `pip install swim-coach-engine[db]`.
 db = [
     "psycopg[binary]>=3.1",
+    # Process-level connection pooling for DbStore (see store_db.py's module
+    # docstring). Compatible across the psycopg 3.1+ range pinned above --
+    # psycopg_pool is versioned/released separately from psycopg itself.
+    "psycopg_pool>=3.1",
 ]
 
 [tool.hatch.build.targets.wheel]

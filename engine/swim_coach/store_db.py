@@ -16,14 +16,35 @@ Two layers live here:
      importantly, `import swim_coach.store` and the CLI -- work with psycopg
      NOT installed. psycopg is an optional extra: `pip install swim-coach-engine[db]`.
 
-Connection strategy: one short-lived connection per operation (open -> work ->
-commit/rollback -> close), via psycopg's own connection context manager. This
-low-traffic, single-athlete app does not need a pool; correctness and
-simplicity win. A pool can be dropped in behind `_connect` later if needed.
+Connection strategy: a process-level `psycopg_pool.ConnectionPool`, one per
+distinct DSN, cached in the module-level `_POOLS` dict (see `_get_pool`
+below) and shared by every `DbStore(dsn=...)` constructed anywhere in the
+process for that DSN's whole lifetime. This replaced the original "fresh
+connection per operation" design (each `_connect()` call opening and closing
+its own socket) after that was measured, live against production, to cost
+~500-750ms of pure TCP+TLS+auth handshake PER STORE METHOD CALL -- 3-6x the
+~130-195ms the actual query itself takes -- and a single chat-context build
+(`backend/app/context.py`'s `build_per_request_context`) makes 9-10+ such
+calls sequentially. `backend/app/store_factory.py`'s `make_store()` is
+called fresh on nearly every route (by design -- the file/DB backend swap
+stays a one-line factory call, not a `FastAPI` app.state/lifespan
+dependency threaded through every route file), so `DbStore.__init__` itself
+must stay this cheap and call-site-compatible; the pool underneath it is
+what actually persists and gets reused across that per-request
+construction, not the `DbStore` instance itself.
+
+`_connect()`'s public contract is unchanged: its context manager still
+commits on success and rolls back on exception (`psycopg_pool.
+ConnectionPool.connection()` is documented to apply exactly psycopg's normal
+connection-context behavior on top of a pooled connection) -- the only
+difference is that exiting the context now returns the connection to the
+pool (`putconn`) instead of closing the underlying socket.
 """
 
 from __future__ import annotations
 
+import os
+import threading
 from datetime import date, datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -311,6 +332,119 @@ def coach_text_storage_key(slug: str, day: date) -> str:
 
 
 # --------------------------------------------------------------------------
+# Process-level connection pool, cached by DSN
+# --------------------------------------------------------------------------
+#
+# One `psycopg_pool.ConnectionPool` per distinct DSN, created lazily on first
+# use and reused for the life of the process (a warm Cloud Run container).
+# `make_store()` builds a fresh `DbStore` on nearly every request (see this
+# module's docstring above), so this dict -- not the `DbStore` instance --
+# is what actually carries connection reuse across requests.
+
+_POOLS: dict[str, Any] = {}
+_POOLS_LOCK = threading.Lock()
+
+# Pool sizing: Coach judgment / operational choice, informed by (but not
+# identical to) Supabase's own serverless connection-pooling guidance
+# (https://supabase.com/docs/guides/database/connecting-to-postgres#connection-pooler),
+# which recommends a CLIENT pool size of 1 for a serverless function sharing
+# one warm invocation, raised above 1 "only when you have evidence that
+# concurrent invocations on one instance are queuing for the connection."
+# This app isn't quite that shape -- it's a long-lived Cloud Run process
+# (not a one-shot function) that can legitimately have a couple of requests
+# overlapping on the same warm instance (e.g. a chat request mid-flight
+# while a plan/load poll lands, or two browser tabs), and `containerConcurrency=
+# 80`/`maxScale=2` (confirmed via `gcloud run services describe
+# swim-coach-api`) means one instance really can serve several requests at
+# once even though real traffic today is a handful of athletes. So:
+# `min_size=1` (no idle connections held open on a cold/quiet container,
+# matching Supabase's floor) but `max_size` defaults a little above that
+# floor to give a few genuinely-concurrent requests headroom without
+# queuing on the FIRST sign of overlap rather than only after observing it
+# in production -- still tiny next to Supabase's own pgbouncer pool this
+# sits behind (this app's DSN already goes through Supabase's
+# transaction-mode pooler at :6543, so the app-side pool only needs to
+# smooth THIS process's own concurrency, not front the whole database).
+# No production evidence of queuing at 1 exists yet; overridable via
+# `SWIM_COACH_DB_POOL_MIN_SIZE`/`SWIM_COACH_DB_POOL_MAX_SIZE` without a code
+# change if that changes.
+_DEFAULT_POOL_MIN_SIZE = 1
+_DEFAULT_POOL_MAX_SIZE = 5
+
+
+def _int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _pool_min_size() -> int:
+    return _int_env("SWIM_COACH_DB_POOL_MIN_SIZE", _DEFAULT_POOL_MIN_SIZE)
+
+
+def _pool_max_size() -> int:
+    return _int_env("SWIM_COACH_DB_POOL_MAX_SIZE", _DEFAULT_POOL_MAX_SIZE)
+
+
+def _get_pool(dsn: str, connection_pool_cls: Any, dict_row_factory: Any) -> Any:
+    """Return the process-level pool for `dsn`, creating it on first use.
+
+    Double-checked locking: the common case (pool already exists, true for
+    every call after the very first `DbStore(dsn=...)` construction in this
+    process) never touches `_POOLS_LOCK` at all. `connection_pool_cls`/
+    `dict_row_factory` are passed in rather than imported here so the
+    lazy-psycopg-import discipline stays centralized in `DbStore.__init__`
+    (this function itself never needs to know whether psycopg is installed).
+
+    `kwargs={"row_factory": ..., "prepare_threshold": None}` is applied by
+    the pool to EVERY physical connection it ever creates, at connect time
+    -- the pool-native way to carry `_connect()`'s original per-call
+    `psycopg.connect(...)` kwargs forward, and the only way that correctly
+    preserves `prepare_threshold=None` (which must hold for every backend
+    the pool ever hands out, not just the first) -- see this module's
+    docstring and `_connect()`'s own docstring for why that setting is
+    required at all against Supabase's transaction-mode pooler.
+    """
+    pool = _POOLS.get(dsn)
+    if pool is not None:
+        return pool
+    with _POOLS_LOCK:
+        pool = _POOLS.get(dsn)
+        if pool is None:
+            pool = connection_pool_cls(
+                conninfo=dsn,
+                min_size=_pool_min_size(),
+                max_size=_pool_max_size(),
+                kwargs={"row_factory": dict_row_factory, "prepare_threshold": None},
+                open=True,
+            )
+            _POOLS[dsn] = pool
+    return pool
+
+
+def close_all_pools() -> None:
+    """Close every process-level pool this module has created (returning
+    every idle/checked-out connection's underlying socket) and forget them.
+
+    Call this on graceful shutdown (see `backend/app/main.py`'s FastAPI
+    lifespan) so a Cloud Run container teardown doesn't leak connections or
+    hang waiting on ones the app never explicitly closed. Safe to call even
+    when no `DbStore` was ever constructed (e.g. `STORE_BACKEND=file`,
+    which never touches this module's psycopg-dependent code at all) -- in
+    that case `_POOLS` is simply empty and this is a no-op.
+    """
+    with _POOLS_LOCK:
+        pools = list(_POOLS.values())
+        _POOLS.clear()
+    for pool in pools:
+        pool.close()
+
+
+# --------------------------------------------------------------------------
 # DbStore
 # --------------------------------------------------------------------------
 
@@ -325,24 +459,36 @@ class DbStore(StoreInterface):
         self._dsn = dsn
         # Lazy import: keeps `import swim_coach.store`/CLI working when psycopg
         # is not installed. Only constructing a DbStore requires the extra.
+        # `psycopg_pool` is a separate PyPI package (also part of the `db`
+        # extra -- see engine/pyproject.toml) so it's imported lazily here
+        # too, same discipline, same ImportError message.
         try:
             import psycopg  # noqa: F401
             from psycopg.rows import dict_row  # noqa: F401
             from psycopg.types.json import Jsonb  # noqa: F401
+            from psycopg_pool import ConnectionPool  # noqa: F401
         except ImportError as exc:  # pragma: no cover - exercised via extra-absent path
             raise ImportError(
                 "DbStore requires the optional 'db' extra. Install with "
-                "`pip install swim-coach-engine[db]` (or `pip install psycopg[binary]`)."
+                "`pip install swim-coach-engine[db]` (or `pip install "
+                "psycopg[binary] psycopg_pool`)."
             ) from exc
         self._psycopg = psycopg
         self._dict_row = dict_row
         self._Jsonb = Jsonb
+        # Process-level pool, cached by DSN in `_POOLS` -- see that dict's
+        # docstring above. Cheap: this is a dict lookup for every DbStore
+        # construction after the very first one for this DSN.
+        self._pool = _get_pool(dsn, ConnectionPool, dict_row)
 
     # --- connection -----------------------------------------------------
 
     def _connect(self):
-        """A fresh connection whose context manager commits on success,
-        rolls back on exception, and closes on exit (psycopg3 semantics).
+        """A pooled connection whose context manager commits on success,
+        rolls back on exception, and returns to the pool (not closed) on
+        exit (`psycopg_pool.ConnectionPool.connection()` applies psycopg3's
+        normal connection-context commit/rollback semantics on top of a
+        checked-out pooled connection, then checks it back in).
 
         `prepare_threshold=None` DISABLES server-side prepared statements. This
         is required to run against Supabase's pgbouncer transaction pooler
@@ -350,12 +496,11 @@ class DbStore(StoreInterface):
         pinned to one server backend, so a prepared statement created on one
         backend is absent on the next and the query fails. (Note: psycopg's
         `prepare_threshold=0` means "prepare on first use" -- the opposite of
-        what's wanted here; `None` is the disable value.)"""
-        return self._psycopg.connect(
-            self._dsn,
-            row_factory=self._dict_row,
-            prepare_threshold=None,
-        )
+        what's wanted here; `None` is the disable value.) Applied via the
+        pool's own `kwargs` at pool-CREATION time (`_get_pool` above), not
+        per-checkout here, so it holds for every connection the pool ever
+        hands out -- not just the one this particular call happens to get."""
+        return self._pool.connection()
 
     def _athlete_id(self, cur, slug: str) -> UUID:
         cur.execute("select athlete_id from athletes where slug = %s", (slug,))
