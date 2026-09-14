@@ -28,6 +28,27 @@ const SPORT_LABELS = {
 // regression for every MTB/CX ride already flowing in as production data.
 const SPORT_DETAIL_SPORTS = new Set(['cross_train', 'bike']);
 
+// Build I: sports whose avg_pace_s_per_100m/lap pace is a real, meaningful
+// number -- swim only. Real bug (live report, 2026-09-12): a completed
+// bike ride's detail view and laps table both showed nonsense pace
+// ("0:20/100m") with no power number at all, even though the ride had a
+// full clean power stream. The single per-sport UI source of truth for
+// this distinction, extending SPORT_LABELS' own convention above rather
+// than a new one-off sport check -- used by renderDetailStats/
+// renderLapsTable (views.js) to decide Pace vs. Avg Power/NP.
+const PACE_SPORTS = new Set(['swim_pool', 'swim_ow']);
+
+export function sportUsesPace(sport) {
+  return PACE_SPORTS.has(sport);
+}
+
+/** "195 W" -- rounds to the nearest whole watt. null for null/undefined
+ * (never fabricates "0 W" for a sport/workout with no power data). */
+export function formatPower(watts) {
+  if (watts === null || watts === undefined) return null;
+  return `${Math.round(watts)} W`;
+}
+
 const SOURCE_BADGES = {
   fit: 'fit',
   tcx: 'tcx',

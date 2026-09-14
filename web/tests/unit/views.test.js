@@ -63,6 +63,35 @@ const RICH_FIT_WORKOUT = {
   ],
 };
 
+// Build I: a real bike ride with a power stream -- Andrew's real 2026-09-12
+// ride (workout id 656e6e84-4cdf-49cf-a888-01a38144a73a), avg_power_w/
+// normalized_power_w computed by analytics.normalized_power_w against the
+// real saved series this session. No avg_pace_s_per_100m at all (Build I's
+// own pace-gating fix -- bike is not a pace sport).
+const BIKE_FIT_WORKOUT = {
+  id: 'w-bike', date: '2026-09-12', sport: 'bike', source: 'fit',
+  distance_m: 42000, duration_min: 117.25, avg_pace_s_per_100m: null, rpe: null,
+  notes: null, avg_hr: 138, max_hr: 172,
+  analytics: {
+    avg_power_w: 135.28179587122852, normalized_power_w: 194.7944811418727,
+  },
+  laps: [
+    {
+      index: 0, start_offset_s: 0, duration_s: 3600, distance_m: 21000,
+      avg_hr: 130, max_hr: 165, avg_pace_s_per_100m: null, stroke: null,
+      num_lengths: null, avg_power_w: 180,
+    },
+    {
+      index: 1, start_offset_s: 3600, duration_s: 3435, distance_m: 21000,
+      avg_hr: 145, max_hr: 172, avg_pace_s_per_100m: null, stroke: null,
+      num_lengths: null, avg_power_w: 210,
+    },
+  ],
+  lengths: [],
+  pauses: [],
+  load_au: 118.6, load_tier: 'power_tss',
+};
+
 // Build 1 (Log+History merge, wellness-ingestion + training-dashboard plan):
 // renderLogTab, renderHistoryTab, and renderHistorySection are retired in
 // favor of one shared renderDashboardTab (athlete-facing wrapper) +
@@ -295,6 +324,61 @@ describe('renderDashboardTab', () => {
       expect(html).toContain('30:30'); // 1830s
       expect(html).toContain('1:48'); // 108s/100m pace
       expect(html).toContain('128'); // lap avg HR
+    });
+
+    // --- Build I: bike workout shows Power/NP, never Pace -------------------
+    // Real bug fixed here (live report, 2026-09-12): a completed bike ride's
+    // summary showed "Pace: 0:20/100m" and the laps table had a Pace column
+    // full of nonsense, with no power stat anywhere at all.
+    describe('bike workout: Power/NP replace Pace (Build I)', () => {
+      it('summary stats show Avg Power and NP, and no Pace stat, for a bike workout', () => {
+        const html = renderDashboardTab({
+          ...DASHBOARD_BASE_ARGS, feed: feedOf([BIKE_FIT_WORKOUT]), detailId: 'w-bike',
+        });
+        expect(html).toContain('Avg Power');
+        expect(html).toContain('135 W');
+        expect(html).toContain('NP');
+        expect(html).toContain('195 W');
+        expect(html).not.toContain('>Pace<');
+      });
+
+      it('laps table shows a Power column with real per-lap watts, no Pace column, for a bike workout', () => {
+        const html = renderDashboardTab({
+          ...DASHBOARD_BASE_ARGS, feed: feedOf([BIKE_FIT_WORKOUT]), detailId: 'w-bike',
+        });
+        expect(html).toContain('laps-table');
+        expect(html).toContain('180 W');
+        expect(html).toContain('210 W');
+        expect(html).not.toContain('<th>Pace</th>');
+        expect(html).toContain('<th>Power</th>');
+      });
+
+      it('still shows Pace (not Power) for a swim workout -- byte-identical regression', () => {
+        const html = renderDashboardTab({
+          ...DASHBOARD_BASE_ARGS, feed: feedOf([RICH_FIT_WORKOUT]), detailId: 'w-rich',
+        });
+        expect(html).toContain('1:54 /100m');
+        expect(html).toContain('<th>Pace</th>');
+        expect(html).not.toContain('<th>Power</th>');
+        expect(html).not.toContain('Avg Power');
+      });
+
+      it('still shows a Power column (with dashes, not Pace) for a bike ride with no power meter', () => {
+        // Real fixture: real_mtb_0709.fit has no power meter at all -- the
+        // column choice is by SPORT, not by whether this specific ride
+        // happens to have power data, so it must still be "Power" (with
+        // "—" placeholders), never fall back to "Pace".
+        const noPowerBike = {
+          ...BIKE_FIT_WORKOUT,
+          id: 'w-bike-no-power',
+          laps: BIKE_FIT_WORKOUT.laps.map((lap) => ({ ...lap, avg_power_w: null })),
+        };
+        const html = renderDashboardTab({
+          ...DASHBOARD_BASE_ARGS, feed: feedOf([noPowerBike]), detailId: 'w-bike-no-power',
+        });
+        expect(html).toContain('<th>Power</th>');
+        expect(html).not.toContain('<th>Pace</th>');
+      });
     });
 
     it('renders a pauses list with offset (h:mm:ss), duration, and source', () => {
@@ -3203,6 +3287,7 @@ describe('renderWorkoutRow rate-reminder chip (A6c)', () => {
 describe('loadTierLabel / load chips (D2)', () => {
   it.each([
     ['srpe', 'from RPE'],
+    ['power_tss', 'from power'],
     ['hr_trimp', 'from HR'],
     ['pace_if', 'from pace'],
     ['duration', 'estimated'],
@@ -3218,6 +3303,7 @@ describe('loadTierLabel / load chips (D2)', () => {
 
   it.each([
     ['srpe', 'from RPE'],
+    ['power_tss', 'from power'],
     ['hr_trimp', 'from HR'],
     ['pace_if', 'from pace'],
     ['duration', 'estimated'],

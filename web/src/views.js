@@ -20,7 +20,7 @@ import {
   sportLabel, sourceBadge, formatWorkoutDistance, formatAnalyticsLine,
   formatDrift, formatSplit, formatPauses, formatSwolf, formatMovingVsElapsed,
   formatOffset, formatClock, formatLengthsSummary, formatSyncResult,
-  formatWorkoutChatLabel, HISTORY_DISPLAY_CAP,
+  formatWorkoutChatLabel, HISTORY_DISPLAY_CAP, sportUsesPace, formatPower,
 } from './workouts.js';
 
 function esc(value) {
@@ -38,6 +38,7 @@ function esc(value) {
 // absent tier -- callers render nothing rather than a blank/broken chip.
 const LOAD_TIER_LABELS = {
   srpe: 'from RPE',
+  power_tss: 'from power',
   hr_trimp: 'from HR',
   pace_if: 'from pace',
   duration: 'estimated',
@@ -2215,15 +2216,26 @@ function renderLoadDetailStat(workout) {
     </div>`;
 }
 
+// Build I: Pace vs. Power/NP summary stats, decided by sport (sportUsesPace
+// -- workouts.js's own per-sport UI source of truth), not by whether this
+// particular workout happens to carry pace/power data. Real bug fixed here
+// (live report, 2026-09-12): a completed bike ride's summary showed
+// "Pace: 0:20/100m" (a swim metric) and no power stat at all, even with a
+// full clean power stream on the ride.
 function renderDetailStats(workout) {
+  const usesPace = sportUsesPace(workout.sport);
   const pace = formatPace(workout.avg_pace_s_per_100m);
+  const avgPower = formatPower(workout.analytics?.avg_power_w);
+  const np = formatPower(workout.analytics?.normalized_power_w);
   const hasRpe = workout.rpe !== null && workout.rpe !== undefined;
   const hasAvgHr = workout.avg_hr !== null && workout.avg_hr !== undefined;
   const hasMaxHr = workout.max_hr !== null && workout.max_hr !== undefined;
   const stats = [
     renderDetailStat('Distance', formatWorkoutDistance(workout.distance_m)),
     renderDetailStat('Duration', formatDuration(workout.duration_min)),
-    renderDetailStat('Pace', pace ? `${pace} /100m` : null, 'pace'),
+    usesPace
+      ? renderDetailStat('Pace', pace ? `${pace} /100m` : null, 'pace')
+      : renderDetailStat('Avg Power', avgPower, 'power') + renderDetailStat('NP', np, 'power'),
     renderDetailStat('RPE', hasRpe ? `${workout.rpe}/10` : null),
     renderDetailStat('Avg HR', hasAvgHr ? `${workout.avg_hr} bpm` : null, 'hr'),
     renderDetailStat('Max HR', hasMaxHr ? `${workout.max_hr} bpm` : null, 'hr'),
@@ -2337,28 +2349,36 @@ function renderIntervalsSection(intervals) {
     </section>`;
 }
 
-function renderLapsTable(laps) {
+// Build I: `sport` decides whether the last data column is Pace (swim) or
+// Power (every other sport, reading lap.avg_power_w) -- same sportUsesPace
+// gate renderDetailStats uses above, and the same real bug it fixes: a
+// bike ride's laps table used to show a Pace column full of nonsense
+// numbers instead of the real per-lap power sitting right there in
+// lap.avg_power_w.
+function renderLapsTable(laps, sport) {
   if (!laps || laps.length === 0) return '';
+  const usesPace = sportUsesPace(sport);
   const rows = laps.map((lap) => {
     const distance = formatWorkoutDistance(lap.distance_m);
     const duration = formatClock(lap.duration_s);
-    const pace = formatPace(lap.avg_pace_s_per_100m);
+    const lastCol = usesPace ? formatPace(lap.avg_pace_s_per_100m) : formatPower(lap.avg_power_w);
     const hasHr = lap.avg_hr !== null && lap.avg_hr !== undefined;
     return `
       <tr>
         <td>${esc(lap.index)}</td>
         <td>${distance ? esc(distance) : '—'}</td>
         <td>${duration ? esc(duration) : '—'}</td>
-        <td>${pace ? esc(pace) : '—'}</td>
+        <td>${lastCol ? esc(lastCol) : '—'}</td>
         <td>${hasHr ? esc(lap.avg_hr) : '—'}</td>
       </tr>`;
   }).join('');
+  const lastHeader = usesPace ? 'Pace' : 'Power';
   return `
     <section class="detail-section">
       <h4>Laps (${laps.length})</h4>
       <div class="laps-table-wrap">
         <table class="laps-table">
-          <thead><tr><th>#</th><th>Dist</th><th>Time</th><th>Pace</th><th>HR</th></tr></thead>
+          <thead><tr><th>#</th><th>Dist</th><th>Time</th><th>${lastHeader}</th><th>HR</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
@@ -2453,7 +2473,7 @@ function renderWorkoutDetail(workout, {
     ${editable ? renderRpeEditSection(workout, rpeEdit) : ''}
     ${renderDetailAnalytics(workout.analytics)}
     ${renderIntervalsSection(workout.analytics?.intervals)}
-    ${renderLapsTable(workout.laps)}
+    ${renderLapsTable(workout.laps, workout.sport)}
     ${renderPausesList(workout.pauses)}
     ${renderLengthsSummarySection(workout.lengths)}
     ${renderDetailNotes(workout.notes)}
