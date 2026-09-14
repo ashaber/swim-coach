@@ -212,6 +212,7 @@ from swim_coach.plan import (
     evaluate_week_realism,
     generate_week,
     scaffold_macro,
+    scaffold_season_macro,
     scaffold_sharpening_macro,
 )
 from swim_coach.store import StoreInterface
@@ -1106,6 +1107,99 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
             },
             "required": ["event_name", "current_weekly_volume_m"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "draft_season_macro_plan",
+        "description": (
+            "Scaffold ONE season-spanning macro plan across MULTIPLE races "
+            "(multi-race-season-macro build) -- e.g. a cyclocross season "
+            "with several races a few weeks apart, not one isolated goal. "
+            "Chains a per-race sequence of the existing base->build->peak-"
+            "> taper / hold->sharpen->taper shapes (whichever fits each "
+            "race's own runway) into one MacroPlan, graduated by each "
+            "race's existing priority ('A' gets a full peak; 'B' gets a "
+            "shorter, shallower tune-up cycle if there's enough runway; "
+            "'C' or anything else gets no dedicated taper at all -- see "
+            "library/31-multi-race-season-periodization.md for the real "
+            "citations behind this). Use when the athlete has 2+ upcoming "
+            "races/events in the SAME sport they want one coherent plan "
+            "across, instead of drafting toward just one of them. This is "
+            "the fix for a real, logged failure mode: drafting a macro "
+            "toward one race with draft_macro_plan/replace_macro_plan could "
+            "silently stop covering a different race the athlete's existing "
+            "macro was already built around, because a macro plan used to "
+            "only ever target a single event. ALWAYS draft-then-confirm, "
+            "the same shape as replace_macro_plan, regardless of whether a "
+            "macro already exists: confirm defaults to false, returning "
+            "only a candidate plan plus a `coverage` field explicitly "
+            "listing any race the athlete's CURRENT macro covers that this "
+            "candidate would stop covering (`would_lose_coverage_for`) -- "
+            "relay that to the athlete and get explicit agreement before "
+            "calling again with confirm=true, which persists via "
+            "store.save_macro. Never pass confirm=true on the first call "
+            "for a given request. Every race named must share the same "
+            "primary_sport='bike' (cross-sport season planning, e.g. this "
+            "athlete's swim goals alongside a cyclocross season, is a "
+            "separate, deliberately unresolved coaching decision -- this "
+            "tool refuses rather than guessing at it)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "event_names": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 2,
+                    "description": (
+                        "Names of 2+ existing events (each must match "
+                        "exactly), in any order -- they're sorted by date "
+                        "internally. Every named event must share "
+                        "primary_sport='bike'."
+                    ),
+                },
+                "current_weekly_volume_m": {
+                    "type": "integer",
+                    "description": (
+                        "The athlete's current real weekly training volume "
+                        "(minutes for a duration_min-metric sport like "
+                        "bike). Seeds the very first race's build/hold/"
+                        "sharpen cycle; every later race's own cycle is "
+                        "instead seeded off the previous race's own "
+                        "post-taper volume, not this value again."
+                    ),
+                },
+                "peak_weekly_volume_m": {
+                    "type": "integer",
+                    "description": (
+                        "Target peak weekly volume, forwarded ONLY to the "
+                        "first 'A'-priority race that ends up using the "
+                        "full base->build->peak->taper shape (same "
+                        "optionality rule scaffold_macro/draft_macro_plan "
+                        "already document: required for a non-distance_m "
+                        "event, e.g. any bike-primary event). Every other "
+                        "race's own volume is derived from cursor "
+                        "continuity, not this value."
+                    ),
+                },
+                "start_date": {
+                    "type": "string",
+                    "description": "Macro start date, 'YYYY-MM-DD' (default today).",
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "description": (
+                        "Default false: compute and return the candidate "
+                        "season macro as a draft only, plus the `coverage` "
+                        "comparison against any existing macro, never "
+                        "persisting. Set true ONLY after the athlete has "
+                        "explicitly agreed to the draft shown in a prior "
+                        "turn -- this then persists via store.save_macro."
+                    ),
+                },
+            },
+            "required": ["event_names", "current_weekly_volume_m"],
             "additionalProperties": False,
         },
     },
@@ -3510,6 +3604,219 @@ def _handle_replace_macro_plan(input_data: dict[str, Any], *, store: StoreInterf
     }
 
 
+def _handle_draft_season_macro_plan(
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str
+) -> dict[str, Any]:
+    """Multi-race-season-macro build. Scaffolds a season-spanning MacroPlan
+    across MULTIPLE races via `swim_coach.plan.scaffold_season_macro` --
+    chaining a per-race sequence of the existing `scaffold_macro`/
+    `scaffold_sharpening_macro` shapes into ONE `MacroPlan`, graduated by
+    each race's existing `Event.priority` (see that function's own
+    docstring and `library/31-multi-race-season-periodization.md`).
+
+    **This is the real fix for the literal, logged failure mode** (feedback
+    entry 2026-09-11): the athlete's macro is one-per-athlete
+    (`store.load_macro`/`save_macro`), and `draft_macro_plan`/
+    `replace_macro_plan` only ever considered a single `event_id` --
+    drafting toward one race could silently orphan whatever macro was
+    already covering a different one. This tool ALWAYS follows
+    `replace_macro_plan`'s own draft-then-confirm shape, regardless of
+    whether a macro already exists: `confirm` defaults to false, which only
+    computes and returns the candidate season macro plus an explicit
+    `coverage` comparison against whatever macro already exists on file --
+    specifically, which already-covered race(s), if any, this call would
+    stop covering -- never calling `store.save_macro`. Show this to the
+    athlete and get their explicit agreement before calling again with
+    `confirm: true`. Never pass `confirm: true` on the first call for a
+    given request.
+
+    `event_names` (required, list of >= 2): every name must already match
+    an existing `Event` for this athlete exactly, and every race must share
+    `primary_sport == "bike"` -- `scaffold_season_macro` itself refuses a
+    mixed-sport list; this handler additionally scopes real invocation to
+    bike-primary races only, matching `scaffold_sharpening_macro`'s own
+    existing scope boundary (see `library/31`'s "Sport scope" header).
+    Cross-sport season planning (e.g. this athlete's swim goals alongside
+    a cyclocross season) is a real, deliberately unresolved coaching
+    decision, not something this tool guesses at -- refuses with a clear
+    error rather than silently picking one sport's races.
+
+    `established_base` is computed here exactly once (same
+    `_training_base_evidence` helper `draft_macro_plan` already uses,
+    against the athlete's REAL logged workout/wellness history, never
+    asserted or inferred from conversation) and applies to every race in
+    the season -- matching `scaffold_season_macro`'s own single-parameter
+    design.
+    """
+    event_names = input_data.get("event_names")
+    if not event_names or not isinstance(event_names, list) or len(event_names) < 2:
+        return {"error": "event_names is required and must list at least 2 races"}
+
+    current_weekly_volume_m = input_data.get("current_weekly_volume_m")
+    if current_weekly_volume_m is None:
+        return {"error": "current_weekly_volume_m is required"}
+    try:
+        current_weekly_volume_m = int(current_weekly_volume_m)
+    except (TypeError, ValueError):
+        return {"error": f"invalid current_weekly_volume_m {current_weekly_volume_m!r}"}
+
+    peak_weekly_volume_m = input_data.get("peak_weekly_volume_m")
+    if peak_weekly_volume_m is not None:
+        try:
+            peak_weekly_volume_m = int(peak_weekly_volume_m)
+        except (TypeError, ValueError):
+            return {"error": f"invalid peak_weekly_volume_m {peak_weekly_volume_m!r}"}
+
+    start_str = input_data.get("start_date")
+    if start_str:
+        try:
+            start = date.fromisoformat(start_str)
+        except ValueError:
+            return {"error": f"invalid start_date {start_str!r}; expected format 'YYYY-MM-DD'"}
+    else:
+        start = date.today()
+
+    confirm = bool(input_data.get("confirm", False))
+
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load athlete profile: {exc}"}
+
+    try:
+        events = store.load_events(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load events: {exc}"}
+
+    races: list[Event] = []
+    missing_names: list[str] = []
+    for name in event_names:
+        event = next((e for e in events if e.name == name), None)
+        if event is None:
+            missing_names.append(name)
+        else:
+            races.append(event)
+    if missing_names:
+        known_names = [e.name for e in events]
+        return {
+            "error": (
+                f"no event(s) named {missing_names!r} for this athlete; "
+                f"known event names: {known_names}"
+            )
+        }
+
+    non_bike = [race.name for race in races if race.primary_sport != "bike"]
+    if non_bike:
+        return {
+            "error": (
+                f"draft_season_macro_plan is scoped to primary_sport='bike' "
+                f"races for now (same scope boundary as the sharpening "
+                f"macro shape) -- {non_bike!r} are not bike-primary. "
+                "Cross-sport season planning is a separate, unresolved "
+                "coaching decision (see library/31-multi-race-season-"
+                "periodization.md's \"what's not resolved\" section), not "
+                "something this tool guesses at."
+            )
+        }
+
+    past_races = [race.name for race in races if race.event_date <= start]
+    if past_races:
+        return {
+            "error": (
+                f"{past_races!r} are on or before start ({start}) -- "
+                "draft_season_macro_plan only plans forward; drop "
+                "already-past races from event_names."
+            )
+        }
+
+    try:
+        workouts = store.list_workouts(slug)
+        wellness = store.list_wellness(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load workout/wellness history: {exc}"}
+    loads = daily_loads(workouts, athlete=athlete, wellness=wellness)
+    evidence = _training_base_evidence(loads, start)
+    established_base_evidence = {
+        "established": evidence.established,
+        "lookback_weeks": evidence.lookback_weeks,
+        "lookback_start": evidence.lookback_start.isoformat(),
+        "earliest_logged_day": (
+            evidence.earliest_logged_day.isoformat() if evidence.earliest_logged_day else None
+        ),
+        "weeks_with_load": evidence.weeks_with_load,
+        "min_weeks_with_load_fraction": evidence.min_weeks_with_load_fraction,
+        "ctl_at_as_of": round(evidence.ctl_at_as_of, 1),
+    }
+
+    try:
+        macro = scaffold_season_macro(
+            athlete,
+            races,
+            start,
+            current_weekly_volume_m,
+            established_base=evidence.established,
+            peak_weekly_volume_m=peak_weekly_volume_m,
+        )
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    try:
+        existing_macro = store.load_macro(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load macro plan: {exc}"}
+
+    # The literal fix for the logged failure mode: make any coverage LOSS
+    # explicit and visible before persisting, rather than silently
+    # overwriting whatever the athlete's existing macro was covering.
+    coverage: dict[str, Any] | None = None
+    if existing_macro is not None:
+        old_event_ids = existing_macro.event_ids or [existing_macro.event_id]
+        new_event_ids = set(macro.event_ids)
+        events_by_id = {e.id: e for e in events}
+        coverage = {
+            "old_race_names": [
+                events_by_id[eid].name for eid in old_event_ids if eid in events_by_id
+            ],
+            "would_lose_coverage_for": [
+                events_by_id[eid].name
+                for eid in old_event_ids
+                if eid not in new_event_ids and eid in events_by_id
+            ],
+        }
+
+    dedicated_race_ids = {block.race_event_id for block in macro.blocks if block.race_event_id is not None}
+    race_summary = [
+        {
+            "event_name": race.name,
+            "event_date": race.event_date.isoformat(),
+            "priority": race.priority,
+            "got_dedicated_cycle": race.id in dedicated_race_ids,
+        }
+        for race in sorted(races, key=lambda race: race.event_date)
+    ]
+
+    result: dict[str, Any] = {
+        "event_names": [race.name for race in races],
+        "race_summary": race_summary,
+        "established_base_evidence": established_base_evidence,
+        "coverage": coverage,
+        "blocks": _macro_blocks_json(macro),
+        "persisted": False,
+    }
+    if not confirm:
+        return result
+
+    store.save_macro(slug, macro)
+    log.info(
+        "season macro plan drafted",
+        athlete=slug,
+        event_names=[race.name for race in races],
+        macro_id=str(macro.id),
+    )
+    result["persisted"] = True
+    return result
+
+
 def _handle_set_pool_coach_status(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
     """Flips `Athlete.has_pool_coach` (Part 3 -- see `swim_coach.plan.
     generate_week`'s branch on it). Low-risk status flag, not a plan/volume
@@ -4973,6 +5280,9 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "replace_macro_plan": lambda input_data: _handle_replace_macro_plan(
+            input_data, store=store, slug=slug
+        ),
+        "draft_season_macro_plan": lambda input_data: _handle_draft_season_macro_plan(
             input_data, store=store, slug=slug
         ),
         "set_pool_coach_status": lambda input_data: _handle_set_pool_coach_status(
