@@ -16,13 +16,28 @@ tests" rule for `tests/unit`.
 Postgres in CI's `db` job) is what proves the pooled `_connect()` still
 behaves correctly end to end (commit/rollback/checkin against a real
 backend); these tests are scoped to the pool-reuse mechanism itself.
-"""
+
+**Requires the `[db]` extra (psycopg + psycopg_pool) to actually be
+installed** -- unlike `test_store_db_mapping.py`'s pure row<->model mappers
+or `test_store_psycopg_absent.py` (which SIMULATES absence via
+`sys.modules`/`builtins.__import__` blocking, deliberately environment-
+independent), these tests construct a real `DbStore(dsn=...)`, which
+requires the real imports to succeed. CI's `test` job intentionally installs
+ONLY `engine/[dev]` (no `[db]` extra) -- a real, standing "psycopg genuinely
+absent" environment, not a stand-in for one -- to prove the engine core
+keeps working without psycopg at all (see `store_db.py`'s own module
+docstring). `pytest.importorskip` below makes this whole file SKIP cleanly
+in that job rather than fail; CI's separate `backend`/`db` jobs (which do
+install the `[db]` extra) run it for real."""
 
 from __future__ import annotations
 
 import pytest
 
-from swim_coach import store_db
+pytest.importorskip("psycopg")
+pytest.importorskip("psycopg_pool")
+
+from swim_coach import store_db  # noqa: E402 - after the importorskip guard above
 
 # Unreachable-but-syntactically-valid DSNs -- see module docstring above for
 # why constructing a pool against these never blocks or raises.
