@@ -20,12 +20,13 @@ interval-shape taxonomy, `library/24-cycling-periodization-intervals.md`).
 
 1. **Effort detection** (`detect_efforts`) -- single linear pass over the
    power channel (HR if there's no power) at a low primitive floor, then a
-   two-way split: primitives >= `EFFORT_MIN_S` become sustained efforts
-   (after a *sustained-level* gate that rejects a warm-up ramp transiently
-   cresting the threshold), and runs of short primitives separated by short
-   recoveries are collapsed by a **set-clustering** pass into one "rep set"
-   effort (so a 30/30 VO2 session surfaces as "6 sets", not "0 efforts"
-   and not "60 noise blips").
+   two-way split: primitives >= `EFFORT_MIN_S - EFFORT_MIN_S_TOLERANCE_S`
+   (a small ramp-up/settle-out grace period on the nominal floor) become
+   sustained efforts (after a *sustained-level* gate that rejects a warm-up
+   ramp transiently cresting the threshold), and runs of short primitives
+   separated by short recoveries are collapsed by a **set-clustering** pass
+   into one "rep set" effort (so a 30/30 VO2 session surfaces as "6 sets",
+   not "0 efforts" and not "60 noise blips").
 2. **Per-effort quality** (`assess_effort`) -- split each effort's samples
    into equal thirds and compare first-vs-last: mean power, %-of-target,
    time within an **adaptive** band of target (tight indoors on an ERG,
@@ -70,6 +71,28 @@ EFFORT_MIN_S = 120.0
 # interval family -- `library/24`). Shorter above-threshold spans are not
 # discarded outright any more (that made 30/30-style work invisible) -- they
 # are handed to the set-clustering pass below. library/26-activity-stream-interval-analysis.md.
+
+EFFORT_MIN_S_TOLERANCE_S = 5.0
+# Coach judgment: a grace period ON the duration floor -- a candidate span
+# is treated as "sustained" once it reaches `EFFORT_MIN_S -
+# EFFORT_MIN_S_TOLERANCE_S`, not the raw floor. Real efforts ramp up and
+# settle back down at their boundary rather than starting/stopping
+# instantaneously, so a genuinely-executed ~EFFORT_MIN_S effort's measured
+# above-threshold span routinely lands a few seconds short of the nominal
+# duration. Confirmed on real data: a prescribed 5x2min VO2 set (Andrew,
+# 2026-09-12 ride, target 309.1W) had two of its five genuinely in-band reps
+# (101-103% of target) measure 118.00s and 119.00s -- both silently dropped
+# by the old rigid floor despite being real, well-executed efforts, not
+# noise. 5s is deliberately NOT fit to that one example's exact 1-2s gap --
+# it allows for lag at BOTH the rising and falling edge of an effort (a
+# plausible ~2-3s apiece from ramp-up/settle-out), while staying nowhere
+# near the ~30-60s spans this module's noise-rejection tests exercise (a
+# single short surge, a handful of scattered short reps): those stay well
+# under `EFFORT_MIN_S - EFFORT_MIN_S_TOLERANCE_S`, so the tolerance narrows
+# the floor without reopening that class of false positive. No published
+# source pins this number -- ramp-lag tolerance isn't independently studied
+# literature, this is an engineering read of one real example.
+# library/26-activity-stream-interval-analysis.md.
 
 MICRO_EFFORT_MIN_S = 12.0
 # Coach judgment / PROVISIONAL: the primitive-detection floor the raw span
@@ -450,17 +473,19 @@ def detect_efforts(
        floor -- bridging sub-`merge_gap_s` dips -- so a 30s VO2 rep is a
        primitive, not invisible.
     4. **Split the primitives**:
-       - `dur >= min_effort_s` -> a **sustained** candidate. It survives
-         only if its own mean on the detection channel reaches the
+       - `dur >= min_effort_s - EFFORT_MIN_S_TOLERANCE_S` -> a **sustained**
+         candidate (the tolerance is a small ramp-up/settle-out grace period
+         on the nominal floor, not a lowering of `EFFORT_MIN_S` itself). It
+         survives only if its own mean on the detection channel reaches the
          *sustained-level* gate: `target_w * SUSTAINED_EFFORT_GATE_FRAC`
          with a target, or the detection threshold itself without one. This
          is what stops a warm-up ramp -- mean well under target, only its
          tip over the line -- from registering as a failed effort.
        - `MICRO_EFFORT_MIN_S <= dur < SET_MAX_REP_S` -> a **short rep**,
          handed to clustering.
-       - anything between `SET_MAX_REP_S` and `min_effort_s` that failed the
-         sustained gate is dropped (too long to be a rep, too weak to be an
-         effort).
+       - anything between `SET_MAX_REP_S` and `min_effort_s -
+         EFFORT_MIN_S_TOLERANCE_S` that failed the sustained gate is dropped
+         (too long to be a rep, too weak to be an effort).
     5. **Set clustering**: walk the short reps in time order; a new set
        starts whenever the gap from the previous rep's end exceeds
        `SET_RECOVERY_MAX_S`. A set with `>= SET_MIN_REPS` reps and a total
@@ -503,10 +528,15 @@ def detect_efforts(
         t_s, chan, threshold, merge_gap_s=merge_gap_s, min_s=MICRO_EFFORT_MIN_S
     )
 
+    # A small ramp-up/settle-out grace period on the sustained-effort floor
+    # -- see EFFORT_MIN_S_TOLERANCE_S. Real efforts routinely measure a
+    # couple of seconds short of the nominal duration at their boundary.
+    effective_min_s = min_effort_s - EFFORT_MIN_S_TOLERANCE_S
+
     sustained: list[DetectedEffort] = []
     short_reps: list[_Span] = []
     for sp in primitives:
-        if sp.duration_s >= min_effort_s:
+        if sp.duration_s >= effective_min_s:
             m = _span_channel_mean(chan, sp)
             if m is not None and m >= sustained_gate:
                 sustained.append(
