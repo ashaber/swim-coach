@@ -2667,6 +2667,7 @@ def _handle_reanalyze_workout(
         sport=workout.sport,
         interval_target_w=target_w,
         prescribed_structure=structure,
+        home_elevation_m=store.load_athlete(slug).home_elevation_m,
     )
     workout.analytics = new_analytics
     # Re-key the series row to this real workout id so a later read resolves
@@ -2919,6 +2920,7 @@ def _handle_pull_activity_stream(
         sport=draft.sport,
         interval_target_w=target_w,
         prescribed_structure=structure,
+        home_elevation_m=store.load_athlete(slug).home_elevation_m,
     )
     intervals = new_analytics.intervals
 

@@ -157,6 +157,22 @@ class Athlete(BaseModel):
     # gracefully (zone-name-only targets, no absolute watts), and the `.zwo`
     # export route/tool return a clear 422 rather than guessing at a number
     # when it's missing. Additive, no schema_version bump.
+    home_elevation_m: float | None = None
+    # This athlete's real, usual training elevation -- the anchor
+    # `interval_analysis.analyze`'s altitude-context signal compares a
+    # ride's own altitude against (`library/30-altitude-power-adjustment.
+    # md`). **Human-set by design, same posture as `ftp_watts`/`lthr_bpm`/
+    # `css_pace_s_per_100m` above and `ThresholdRecord` below -- never
+    # auto-inferred.** A rolling average of recent ride-start elevations was
+    # considered and explicitly rejected: partial altitude acclimatization
+    # is real physiology but slow and partial, and an automatic rolling
+    # baseline cannot distinguish "genuinely living/training at elevation
+    # for weeks" from "traveling this week" -- it would silently launder a
+    # travel week into a new baseline exactly when the athlete most needs
+    # the flag to fire. `None` (the default) leaves every existing
+    # profile.yaml unchanged: `analyze` falls back to its original
+    # session-relative heuristic (`_ride_baseline_altitude_m`) for any
+    # athlete who hasn't set this. Additive, no schema_version bump.
 
 
 class Event(BaseModel):
@@ -707,19 +723,44 @@ class IntervalEffort(BaseModel):
     # persisted IntervalEffort validates unchanged as `sub_structure=None`;
     # no schema_version bump.
     altitude_m: float | None = None  # this effort's own mean altitude sample
-    altitude_gain_m: float | None = None  # altitude_m - WorkoutIntervals.baseline_altitude_m
+    altitude_gain_m: float | None = None
+    # altitude_m - WorkoutIntervals.baseline_altitude_m. That baseline is
+    # `Athlete.home_elevation_m` when the athlete has set one, else the
+    # ride's own session-relative baseline -- see `baseline_altitude_source`
+    # on `WorkoutIntervals` for which applied to this ride.
     altitude_context: str | None = None
     # A computed, sourced altitude-power-capability note -- set only when
     # `altitude_gain_m >= interval_analysis.ALTITUDE_FLAG_THRESHOLD_M`
     # (library/30-altitude-power-adjustment.md); `None` for every ride
-    # without an altitude channel, and for every effort whose elevation
-    # above this ride's own baseline doesn't clear that threshold. Same
-    # "flag, never silently override" posture as `terrain_flag` -- it never
-    # adjusts `pct_of_target`/`avg_vs_target_w`/`verdict`, it's an
-    # additional signal for the coach to weigh alongside them. Additive/
-    # optional -- every existing persisted IntervalEffort (predating this
-    # field, or from a ride with no altitude channel) validates unchanged
-    # with all three fields `None`; no schema_version bump.
+    # without a resolvable baseline, and for every effort whose elevation
+    # above it doesn't clear that threshold. Same "flag, never silently
+    # override" posture as `terrain_flag` -- it never adjusts
+    # `pct_of_target`/`avg_vs_target_w`/`verdict`, it's an additional signal
+    # for the coach to weigh alongside them. Additive/optional -- every
+    # existing persisted IntervalEffort (predating this field, or from a
+    # ride with no altitude channel) validates unchanged with every
+    # altitude_* field `None`; no schema_version bump.
+    altitude_decrement_pct: float | None = None
+    # The estimated %-power-capability reduction at this effort's elevation
+    # (`ALTITUDE_POWER_DECREMENT_PCT_PER_1000M * altitude_gain_m / 1000`),
+    # set alongside `altitude_context` whenever that note fires -- the same
+    # number embedded in the note's text, exposed separately so a caller
+    # doesn't have to parse it back out of a human-readable string.
+    altitude_adjusted_target_w: float | None = None
+    cleared_altitude_adjusted_target: bool | None = None
+    # Answers Andrew's actual question: "would this rep have hit target
+    # once corrected for elevation, even though it read below the raw
+    # target?" Set only when BOTH `target_w` and `altitude_decrement_pct`
+    # are available for this effort: `altitude_adjusted_target_w = target_w
+    # * (1 - altitude_decrement_pct / 100)`, and
+    # `cleared_altitude_adjusted_target = avg_w >= altitude_adjusted_
+    # target_w`. Never changes `pct_of_target`/`avg_vs_target_w`/`verdict`
+    # themselves -- those stay computed against the raw, un-adjusted
+    # `target_w`, exactly as before this field existed; this is an
+    # additional, clearly-labeled signal alongside them, same "flag, never
+    # silently override" posture as `terrain_flag`/`altitude_context`.
+    # `None` whenever no target was supplied or no altitude flag fired for
+    # this effort. Additive/optional, no schema_version bump.
 
 
 class WorkoutIntervals(BaseModel):
@@ -742,14 +783,28 @@ class WorkoutIntervals(BaseModel):
     decoupling_tightened_pct: float | None = None
     decoupling_note: str | None = None
     baseline_altitude_m: float | None = None
-    # This ride's own session-relative altitude baseline -- its lowest
-    # `altitude_m` sample (`interval_analysis._ride_baseline_altitude_m`),
-    # `None` for a ride with no altitude channel. See
-    # `library/30-altitude-power-adjustment.md` for why a session-relative
-    # heuristic was chosen over a new `Athlete.home_elevation_m` field, and
-    # its stated limitation. Additive/optional -- every existing persisted
-    # WorkoutIntervals validates unchanged as `None`; no schema_version
-    # bump.
+    # The altitude every effort's `altitude_gain_m` is measured against.
+    # `Athlete.home_elevation_m` when the athlete has set one (re-anchored
+    # 2026-09-14: this is what actually answers "was this ride performed
+    # above my home elevation" -- a ride that starts already high relative
+    # to home is now flaggable from its very first sample, not just for
+    # climbing further above wherever it happened to start); otherwise this
+    # ride's own session-relative heuristic -- its lowest `altitude_m`
+    # sample (`interval_analysis._ride_baseline_altitude_m`). `None` for a
+    # ride with no altitude channel. See `baseline_altitude_source` for
+    # which applied, and `library/30-altitude-power-adjustment.md` for the
+    # full reasoning (including why an auto-inferred rolling baseline was
+    # considered and explicitly rejected). Additive/optional -- every
+    # existing persisted WorkoutIntervals validates unchanged as `None`; no
+    # schema_version bump.
+    baseline_altitude_source: Literal["home_elevation", "ride_relative"] | None = None
+    # Which of the two baselines above `baseline_altitude_m` actually is --
+    # `None` only alongside `baseline_altitude_m=None` (no altitude channel,
+    # no `home_elevation_m`, and too few samples for the ride-relative
+    # heuristic). Exists so a coach reading a flagged (or notably NOT
+    # flagged) effort can see at a glance whether the number reflects the
+    # athlete's real home elevation or just wherever this particular ride
+    # happened to start. Additive/optional, no schema_version bump.
 
 
 class WorkoutAnalytics(BaseModel):

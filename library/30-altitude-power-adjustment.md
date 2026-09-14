@@ -91,39 +91,80 @@ source's rate the engine uses.
 
 ### What the engine actually does with this
 
-`interval_analysis` has no existing "home/baseline elevation" concept on
-`Athlete`, and adding one would require an athlete-onboarding change out of
-scope tonight. **Coach judgment:** the analyzer instead derives a
-**session-relative baseline** — a ride's own minimum `altitude_m` sample —
-reasoning that a ride typically starts (or at least passes through) near
-wherever the athlete actually is that day, so the ride's own low point is a
-zero-cost, always-available proxy for "this ride's normal/starting
-elevation" without needing the athlete to have configured anything. This is
-deliberately the *simpler* of the two options the build brief posed (a new
-precise `Athlete.home_elevation_m` field vs. this heuristic) — buildable
-tonight, and correct often enough to be useful; it is wrong exactly when a
-ride starts already partway up a climb from a trailhead well above the
-athlete's real home, which this file states as a known limitation rather
-than a silent gap.
+**Original build (2026-09-13):** `interval_analysis` had no "home/baseline
+elevation" concept on `Athlete`, and adding one looked like an
+athlete-onboarding change out of scope for that build. The analyzer instead
+derived a **session-relative baseline** — a ride's own minimum `altitude_m`
+sample — reasoning that a ride typically starts near wherever the athlete
+actually is that day.
 
-**Known limitation, stated plainly:** the cited dose-response curves are
-all anchored to *absolute* sea-level altitude, not to "however high the
-athlete's normal riding already is." An athlete whose baseline is itself
-at moderate elevation carries some real acclimatization the literature
-doesn't cleanly separate out. This analyzer does not attempt to model
-that separately — it applies the elevation *gained above the ride's own
-baseline* through the same dose-response line, which is the correct
-question for Andrew's own framing ("2500ft above home elevation") and is a
-reasonable approximation specifically because this athlete's own baseline
-sits well below the altitude range where these studies' curves are best
-characterized (a real 2026-09-12 ride's own baseline was ~830m / ~2700ft —
-see the PR for the actual computed numbers). It would not be a safe
-approximation for an athlete whose home base is itself already at, say,
-2500m.
+**Re-anchored 2026-09-14, after real use exposed the gap.** Andrew reviewed
+a real ride (2026-08-26/27) where he was traveling: the ride's own baseline
+(its lowest sample, 1835.2m/6021ft) was itself already ~1012m above his
+real home elevation (823m/2700ft) — but the ride-relative-only heuristic
+compared each effort against that same elevated in-ride baseline, so
+nothing ever crossed the flag threshold. The ride-relative heuristic isn't
+wrong on its own terms (it correctly describes "how much higher did this
+effort climb than where the ride itself started"), but it cannot answer
+the question that actually matters for compliance scoring: **was this ride
+performed somewhere higher than the athlete normally trains at all**,
+regardless of how much the ride climbed once it got there. A ride that
+starts already 1000m above home should be flaggable from its very first
+sample, not just for climbing further above wherever it happened to start.
+
+**`Athlete.home_elevation_m`** (added this pass) fixes this: an explicit,
+human-set field, the same posture this engine already gives `ftp_watts`,
+`lthr_bpm`, `css_pace_s_per_100m`, and `ThresholdRecord` — a real,
+athlete-specific reference point the athlete or coach sets, never a value
+the engine invents or infers. When set, it replaces the ride-relative
+baseline as the anchor every effort's altitude gain is measured against.
+When unset (still true for every existing athlete profile today), the
+analyzer falls back to the original session-relative heuristic exactly as
+before — a pure regression for every athlete/ride without it configured.
+`WorkoutIntervals.baseline_altitude_source` records which of the two
+applied to a given ride, so a coach can tell at a glance whether a flag
+(or its absence) reflects the athlete's real home elevation or just
+wherever a particular ride happened to start.
+
+**Considered and rejected: an auto-inferred rolling baseline.** Rather than
+requiring the athlete to set `home_elevation_m` by hand, the engine could
+instead average recent ride-start elevations over, say, 2-3 weeks and treat
+that rolling figure as the baseline automatically. This was considered and
+explicitly rejected. Partial altitude acclimatization over multiple weeks
+at elevation is real physiology (the dose-response curves above are all
+acute-exposure figures; sustained residence at moderate altitude does
+produce some real, if slow and incomplete, adaptation) — but a rolling
+average of ride-start elevations cannot distinguish "genuinely living and
+training at 5000ft for three weeks, partially adapted" from "just traveling
+there this week, not adapted at all." Averaging the two together would
+silently launder a travel week into a new "normal" baseline exactly when
+the athlete most needs the flag to fire — the Aug 26/27 scenario this
+re-anchor fixes would, after a few more elevated days, eventually
+re-poison its own rolling average and go silent again. This also breaks
+the engine's own standing convention, restated here deliberately: **a
+human sets threshold-type values; the engine never auto-infers one from
+recent data** (`ftp_watts`/`lthr_bpm`/`css_pace_s_per_100m` all work this
+way, and `ThresholdRecord`'s own docstring says so explicitly). A future
+session should not re-propose an auto-inferred rolling baseline without
+re-deriving why it was rejected here.
+
+**Known limitation, stated plainly (applies to whichever baseline is
+active):** the cited dose-response curves are all anchored to *absolute*
+sea-level altitude, not to "however high the athlete's normal riding
+already is." An athlete whose baseline (home-elevation-set or ride-relative)
+is itself at moderate elevation carries some real acclimatization the
+literature doesn't cleanly separate out. This analyzer does not attempt to
+model that separately — it applies the elevation gained above the resolved
+baseline through the same dose-response line, which is the correct question
+for Andrew's own framing ("2500ft above home elevation") and is a reasonable
+approximation specifically because this athlete's own home elevation
+(823m/2700ft) sits well below the altitude range where these studies'
+curves are best characterized. It would not be a safe approximation for an
+athlete whose home base is itself already at, say, 2500m.
 
 **Chosen constants** (both `Coach judgment:` for the exact cutoffs/values,
 grounded in the evidence above for the shape):
-- **Flag threshold: 1000m (~3281ft) above the ride's own baseline.**
+- **Flag threshold: 1000m (~3281ft) above the resolved baseline.**
   Garvican-Lewis's own bands are anchored to their ~600m baseline; their
   1000-2000m absolute band (roughly 400-1400m *relative* to that baseline)
   is where sustained-effort power first measurably drops. 1000m sits
@@ -140,11 +181,34 @@ grounded in the evidence above for the shape):
 The signal is a **flag, never a silent override** — same posture as
 `terrain_flag`/`evaluate_week_realism` elsewhere in this codebase. It never
 adjusts `pct_of_target`, `avg_w`, or `verdict`; it surfaces a labelled,
-computed estimate (e.g. "~4% less sustainable power expected at this
-elevation") alongside the raw numbers for the coach to weigh, most useful
-exactly where Andrew asked for it: a below-target effort at meaningfully
-higher elevation than the athlete's baseline reads differently from an
-identical shortfall at baseline.
+computed estimate (e.g. "~9.5% less sustainable power expected at this
+elevation") alongside the raw numbers for the coach to weigh.
+
+**Elevation-adjusted target comparison.** Andrew's real question, stated
+precisely: during effort/interval work on a climb that gains toward or past
+the flag threshold above a meaningful baseline, is the raw target itself
+context-blind to how much harder that same wattage is getting as the climb
+progresses — and if a rep reads below raw target, would it have cleared an
+elevation-adjusted target? When both a target and an altitude flag exist
+for an effort, `IntervalEffort` now also carries `altitude_decrement_pct`
+(the same number embedded in the note, exposed as a plain float),
+`altitude_adjusted_target_w` (`target_w * (1 - altitude_decrement_pct /
+100)`), and `cleared_altitude_adjusted_target` (`avg_w >= altitude_adjusted_
+target_w`). `pct_of_target`/`avg_vs_target_w`/`verdict` are computed against
+the RAW target exactly as before — these are additional, clearly-labeled
+fields, not a replacement.
+
+**Real-numbers check (2026-08-26/27 ride, not committed as a fixture —
+personal ride data, same convention as `library/26`'s validation rides):**
+home elevation 823m, ride bottom 1835.2m (1012.2m above home, 6.07%
+decrement, effective FTP ≈259.2W off a 276W FTP), ride top 2406.6m (1583.6m
+above home, 9.50% decrement, effective FTP ≈249.8W). Both real detected
+efforts' gain above the ride's OWN baseline (308.5m, 542.0m) stayed under
+the 1000m flag threshold — which is exactly why the original ride-relative
+heuristic correctly produced no flag for this ride and, at the same time,
+completely missed that the whole ride sat >1000m above where this athlete
+actually lives. With `home_elevation_m=823` supplied, both efforts now
+clear the threshold from their very first sample.
 
 ## Question 1: sustained climbing within a ride (no distinct effect found)
 
@@ -193,9 +257,13 @@ prevent.
 ## Implementation
 
 Grounds `interval_analysis.py`'s `ALTITUDE_FLAG_THRESHOLD_M` and
-`ALTITUDE_POWER_DECREMENT_PCT_PER_1000M` constants, `_ride_baseline_
-altitude_m` (the session-relative baseline heuristic), and the
-`altitude_m` / `altitude_gain_m` / `altitude_context` fields added to
-`models.IntervalEffort` plus `baseline_altitude_m` on `models.
-WorkoutIntervals`. See those docstrings for the exact computation; this
-file is the evidence source, not a second copy of the algorithm.
+`ALTITUDE_POWER_DECREMENT_PCT_PER_1000M` constants; `_effective_baseline_
+altitude_m` (home-elevation-first, ride-relative-fallback resolution) and
+`_ride_baseline_altitude_m` (the fallback heuristic itself); and the
+`altitude_m` / `altitude_gain_m` / `altitude_context` /
+`altitude_decrement_pct` / `altitude_adjusted_target_w` /
+`cleared_altitude_adjusted_target` fields on `models.IntervalEffort`, plus
+`baseline_altitude_m` / `baseline_altitude_source` on `models.
+WorkoutIntervals` and `Athlete.home_elevation_m` itself. See those
+docstrings for the exact computation; this file is the evidence source,
+not a second copy of the algorithm.
