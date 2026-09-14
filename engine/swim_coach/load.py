@@ -33,17 +33,18 @@ old behavior (`session_load` returning ``None`` for a missing RPE, and
 `daily_loads` excluding that ``None`` from the day's total) made 62 of her 63
 real workouts invisible to every load-monitoring signal built on
 `daily_loads` (CTL/ATL/TSB, ACWR, monotony). `session_load` now falls
-through four tiers of decreasing fidelity -- sRPE, HR-based TRIMP, swim
-pace-based intensity, duration-only -- and only reaches the last tier (which
-still returns a real number, never ``None``) when literally none of RPE, HR,
-or (for a swim with a known CSS) pace are available. We never fabricate a
-survey answer the athlete didn't give (the old `assume_default_rpe`/
+through five tiers of decreasing fidelity -- sRPE, power-based TSS (bike,
+Build I), HR-based TRIMP, swim pace-based intensity, duration-only -- and
+only reaches the last tier (which still returns a real number, never
+``None``) when literally none of RPE, power+FTP, HR, or (for a swim with a
+known CSS) pace are available. We never fabricate a survey answer the
+athlete didn't give (the old `assume_default_rpe`/
 `DEFAULT_RPE_WHEN_MISSING` escape hatch did exactly that, and has been
 removed as dead code now that a real physiologically-grounded fallback
 exists at every tier below sRPE).
 
 **Known limitation, flagged honestly rather than silently smoothed over:**
-the four tiers are NOT on a common numeric scale. sRPE (`duration_min *
+these tiers are NOT on a common numeric scale. sRPE (`duration_min *
 rpe`, RPE on a 1-10 scale) and HR-based TRIMP (Banister's exponential
 weighting, see below) are both real, cited training-load formulas, but they
 were never designed to be summed interchangeably within the same athlete's
@@ -175,7 +176,7 @@ _SWIM_SPORTS = {"swim_pool", "swim_ow"}
 
 # --- tiered session load --------------------------------------------------------
 
-LoadTier = Literal["srpe", "hr_trimp", "pace_if", "duration"]
+LoadTier = Literal["srpe", "power_tss", "hr_trimp", "pace_if", "duration"]
 
 
 @dataclass(frozen=True)
@@ -194,6 +195,38 @@ class SessionLoad:
 
     value: float
     tier: LoadTier
+
+
+# Power-based TSS (bike, Build I) -- inserted in priority between sRPE and tier 2 -----
+# Real, confirmed gap (2026-09-12 live report): an athlete's real UNRATED
+# bike ride with a full clean power stream fell all the way to tier 2
+# (HR-based TRIMP), completely ignoring the power data sitting right
+# there -- "if power is listed, normalized power is best single power
+# number" (the athlete's own words). This tier fires whenever `workout.
+# analytics.normalized_power_w` (see `analytics.normalized_power_w`,
+# Build I) and a positive `ftp_watts` are both available, checked
+# immediately after sRPE and before tier 2 -- sRPE still wins whenever the
+# athlete has actually rated the session (unchanged; see `session_load`'s
+# own docstring and `test_session_load_srpe_still_wins_over_power_tss_
+# when_athlete_rated_it`).
+
+BIKE_TSS_INTENSITY_EXPONENT = 2.0
+# `[EVIDENCE: cycling]` Training Stress Score (TSS), Coggan's standard,
+# un-adapted formula: `IF = Normalized Power / FTP`, `TSS = duration_hours
+# * IF^2 * 100` -- one hour exactly at FTP (IF = 1.0) scores 100. Per
+# `Allen H., Coggan A. (2010)`, *Training and Racing with a Power Meter*
+# (2nd ed.), VeloPress -- the SAME source `SWIM_TSS_INTENSITY_EXPONENT`
+# below (Tier 3's own constant) already cites (that comment documents this
+# exact un-adapted squared-exponent cycling form before applying its own
+# deliberate swim-specific cubing) and `library/23-cycling-training.md`'s
+# "Training Stress Score, Normalized Power, Intensity Factor" section cites
+# in full (Confidence: high -- same citation family as `28-bike-ftp-test-
+# protocols.md`'s FTP-test 0.95-of-average convention). Not re-derived
+# here, reused directly -- this is cycling's OWN native use of the formula,
+# not an adaptation. **Test:** if a computed TSS for a real ride diverges
+# materially from what TrainingPeaks or intervals.icu computes for the
+# same file, re-derive the NP/IF calculation step by step before trusting
+# either number.
 
 
 # Tier 2: HR-based TRIMP (Banister heart-rate-reserve training impulse) ----------
@@ -684,20 +717,23 @@ def session_load(
     sex: Literal["male", "female", "other"] | None = None,
     css_pace_s_per_100m: float | None = None,
     lthr_bpm: float | None = None,
+    ftp_watts: float | None = None,
 ) -> SessionLoad:
-    """One workout's training-load estimate, falling through four tiers of
+    """One workout's training-load estimate, falling through five tiers of
     decreasing fidelity until one applies -- see module docstring for the
     design principle this replaces (missing RPE used to mean "excluded,"
     not "estimated from the next-best signal"). Always returns a real
-    `SessionLoad`, never ``None`` -- tier 4 is unconditional.
+    `SessionLoad`, never ``None`` -- the last tier is unconditional.
 
     1. **sRPE** (`duration_min * rpe`) when `workout.rpe` is set --
        unchanged from the original Foster session-RPE model, highest
        fidelity because it's athlete-reported. Tier priority is unchanged
-       by the refinement below: sRPE still wins over measured HR whenever
-       `workout.rpe` is set, regardless of what other context is also
-       available (see `test_session_load_srpe_wins_even_when_hr_and_pace_
-       context_also_available`).
+       by the refinement below, and by the new power-based tier inserted
+       after it: sRPE still wins over measured HR *and* over power
+       whenever `workout.rpe` is set, regardless of what other context is
+       also available (see `test_session_load_srpe_wins_even_when_hr_and_
+       pace_context_also_available` and `test_session_load_srpe_still_
+       wins_over_power_tss_when_athlete_rated_it`).
 
        **Refinement (see `_srpe_via_hrr_normalization` and the module
        docstring's third "orthogonal fix" paragraph):** when `hr_max`,
@@ -712,7 +748,16 @@ def session_load(
        any one of those four preconditions is missing -- most profiles
        have no `lthr_bpm` set, and get byte-identical output to before
        this refinement existed.
-    2. **HR-based TRIMP** when `workout.avg_hr`, `hr_max`, and `hr_rest`
+    2. **Power-based TSS** (bike, Build I -- see `BIKE_TSS_INTENSITY_
+       EXPONENT`'s own citation comment above) when `workout.analytics.
+       normalized_power_w` and a positive `ftp_watts` are both available.
+       `IF = normalized_power_w / ftp_watts`, `TSS = duration_hours * IF^2
+       * 100`. Checked immediately after sRPE and before tier 2 (HR-TRIMP)
+       -- power is higher-fidelity than HR for a bike ride with a real
+       power meter, so it must win whenever both are reachable (see
+       `test_session_load_power_tss_wins_over_hr_trimp_when_both_
+       available`).
+    3. **HR-based TRIMP** when `workout.avg_hr`, `hr_max`, and `hr_rest`
        are all available (`hr_max > hr_rest`, so a real HRR range exists).
        HRR_fraction is clamped to `[0.0, 1.0]`: a value below 0 would mean
        `avg_hr` sits below the assumed resting baseline (only possible if
@@ -732,13 +777,20 @@ def session_load(
        `HR_LOAD_NORMALIZED_SCALE` (100) AU -- see
        `_normalize_trimp_to_lthr_hour`'s docstring and the citations above
        `HR_LOAD_NORMALIZED_SCALE`. A no-op when `lthr_bpm` is `None`.
-    3. **Swim pace-based intensity** (a TSS-family formula) when tier 2
-       isn't available, the workout is a swim (`swim_pool`/`swim_ow`), and
-       both `workout.avg_pace_s_per_100m` and `css_pace_s_per_100m` are
-       known and positive.
-    4. **Duration-only** fallback (`DURATION_ONLY_ASSUMED_INTENSITY`) --
-       unconditional, so a workout is never simply absent from a load
-       total for lack of one specific signal.
+       (This is "tier 2" throughout the rest of this module's comments/
+       tests -- its own historical numbering is left unrenumbered even
+       though it's now the third check in reading order here, to avoid
+       churning every existing cross-reference to it; the power-based tier
+       above has no such legacy number to preserve.)
+    4. **Swim pace-based intensity** (a TSS-family formula, "tier 3"
+       elsewhere in this module) when tier 2 isn't available, the workout
+       is a swim (`swim_pool`/`swim_ow`), and both `workout.
+       avg_pace_s_per_100m` and `css_pace_s_per_100m` are known and
+       positive.
+    5. **Duration-only** fallback (`DURATION_ONLY_ASSUMED_INTENSITY`,
+       "tier 4" elsewhere in this module) -- unconditional, so a workout is
+       never simply absent from a load total for lack of one specific
+       signal.
     """
     if workout.rpe is not None:
         if (
@@ -754,6 +806,17 @@ def session_load(
                 tier="srpe",
             )
         return SessionLoad(value=workout.duration_min * workout.rpe, tier="srpe")
+
+    if (
+        workout.analytics is not None
+        and workout.analytics.normalized_power_w is not None
+        and ftp_watts is not None
+        and ftp_watts > 0
+    ):
+        intensity_factor = workout.analytics.normalized_power_w / ftp_watts
+        duration_hours = workout.duration_min / 60.0
+        power_tss = duration_hours * (intensity_factor**BIKE_TSS_INTENSITY_EXPONENT) * 100.0
+        return SessionLoad(value=power_tss, tier="power_tss")
 
     if (
         workout.avg_hr is not None
@@ -830,22 +893,24 @@ def daily_loads(
     has no workouts logged at all (equivalent to zero for lookup purposes
     via ``.get(day, 0.0)``, same convention as before).
 
-    `athlete` (for `sex`/`css_pace_s_per_100m`/`lthr_bpm`) and `wellness`
-    (for `resting_hr` history) feed tiers 2/3's context -- both optional so
-    existing callers that only have workouts on hand still get tier-1
-    (sRPE) and tier-4 (duration-only) behavior unchanged; passing them in
-    is what unlocks tiers 2/3 for RPE-less workouts. `estimate_hr_max` is
-    computed once from the full `workouts` list (not per-workout) since
-    it's a single working ceiling for the whole history, not a per-day
-    figure -- see that function's docstring. `estimate_hr_rest` IS
-    evaluated per-workout, anchored to each workout's own date, so scoring
-    an old workout never borrows from resting-HR data logged after it.
+    `athlete` (for `sex`/`css_pace_s_per_100m`/`lthr_bpm`/`ftp_watts`) and
+    `wellness` (for `resting_hr` history) feed the power/HR/pace tiers'
+    context -- both optional so existing callers that only have workouts on
+    hand still get the sRPE and duration-only tiers' behavior unchanged;
+    passing them in is what unlocks the richer tiers for RPE-less workouts.
+    `estimate_hr_max` is computed once from the full `workouts` list (not
+    per-workout) since it's a single working ceiling for the whole history,
+    not a per-day figure -- see that function's docstring. `estimate_hr_rest`
+    IS evaluated per-workout, anchored to each workout's own date, so
+    scoring an old workout never borrows from resting-HR data logged after
+    it.
     """
     wellness = wellness if wellness is not None else []
     hr_max = estimate_hr_max(workouts)
     sex = athlete.sex if athlete is not None else None
     css_pace_s_per_100m = athlete.css_pace_s_per_100m if athlete is not None else None
     lthr_bpm = athlete.lthr_bpm if athlete is not None else None
+    ftp_watts = athlete.ftp_watts if athlete is not None else None
 
     totals: dict[date, float] = {}
     for workout in workouts:
@@ -856,6 +921,7 @@ def daily_loads(
             sex=sex,
             css_pace_s_per_100m=css_pace_s_per_100m,
             lthr_bpm=lthr_bpm,
+            ftp_watts=ftp_watts,
         ).value
         totals[workout.date] = totals.get(workout.date, 0.0) + load
     return totals
@@ -1475,18 +1541,21 @@ def compliance_by_load(
     {swim_pool, swim_ow} allowlist): every session, of any sport, gets a
     load projection, so there's no "not comparable" case to exclude.
     completed_au = sum of `session_load(w, sex=athlete.sex,
-    css_pace_s_per_100m=athlete.css_pace_s_per_100m).value` across ALL
-    `workouts`. Deliberately the same simplified `session_load` call
-    `quality.workout_quality` already uses (not the full `hr_max`/`hr_rest`-
-    aware call `daily_loads` makes) -- this function, like that one, has no
-    access to the athlete's full workout history to derive those, so tier 2
-    (HR-based TRIMP) is unreachable from here even when a workout has HR
-    data; falls through to tier 3 (pace, swim only) or tier 4
-    (duration-only) instead. Good enough for a compliance PERCENTAGE (both
-    sides use the same tiering, so a systematic tier bias mostly cancels
-    between planned and actual); callers needing full-fidelity load for
-    other purposes should call `session_load`/`daily_loads` directly with
-    real history.
+    css_pace_s_per_100m=athlete.css_pace_s_per_100m,
+    ftp_watts=athlete.ftp_watts).value` across ALL `workouts`. Deliberately
+    the same simplified `session_load` call `quality.workout_quality`
+    already uses (not the full `hr_max`/`hr_rest`-aware call `daily_loads`
+    makes) -- this function, like that one, has no access to the athlete's
+    full workout history to derive those, so tier 2 (HR-based TRIMP) is
+    unreachable from here even when a workout has HR data; falls through
+    to tier 3 (pace, swim only) or tier 4 (duration-only) instead. The
+    power-based TSS tier (Build I) needs no such history-derived context
+    (just the workout's own `normalized_power_w` and the athlete's
+    `ftp_watts`), so it IS reachable here for a bike workout with a power
+    stream. Good enough for a compliance PERCENTAGE (both sides use the
+    same tiering, so a systematic tier bias mostly cancels between planned
+    and actual); callers needing full-fidelity load for other purposes
+    should call `session_load`/`daily_loads` directly with real history.
 
     Returns ``completed_au / planned_au * 100``, or ``None`` if nothing was
     planned (``planned_sessions`` is empty -- `session_target_load_au` is
@@ -1508,7 +1577,12 @@ def compliance_by_load(
     if planned_au == 0:
         return None
     completed_au = sum(
-        session_load(w, sex=athlete.sex, css_pace_s_per_100m=athlete.css_pace_s_per_100m).value
+        session_load(
+            w,
+            sex=athlete.sex,
+            css_pace_s_per_100m=athlete.css_pace_s_per_100m,
+            ftp_watts=athlete.ftp_watts,
+        ).value
         for w in workouts
     )
     return completed_au / planned_au * 100

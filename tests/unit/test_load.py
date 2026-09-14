@@ -16,6 +16,7 @@ from swim_coach.load import (
     BASE_DETECTION_LOOKBACK_DAYS,
     BASE_DETECTION_LOOKBACK_WEEKS,
     BASE_DETECTION_MIN_WEEKS_WITH_LOAD_FRACTION,
+    BIKE_TSS_INTENSITY_EXPONENT,
     CTL_TIME_CONSTANT_DAYS,
     DURATION_ONLY_ASSUMED_INTENSITY,
     HR_REST_GENERIC_FALLBACK_BPM,
@@ -45,7 +46,7 @@ from swim_coach.load import (
     wellness_composite,
     wellness_trend,
 )
-from swim_coach.models import Athlete, Session, Wellness, Workout, WorkoutLap
+from swim_coach.models import Athlete, Session, Wellness, Workout, WorkoutAnalytics, WorkoutLap
 
 ATHLETE_ID = uuid.uuid4()
 
@@ -126,6 +127,161 @@ def test_session_load_srpe_wins_even_when_hr_and_pace_context_also_available():
     )
     assert result.tier == "srpe"
     assert result.value == 420.0
+
+
+# --- session_load: power-based TSS (bike, Build I) -----------------------------------
+# New tier, inserted in priority between sRPE (unchanged, still highest) and
+# HR-based TRIMP (tier 2, below) -- real, confirmed gap: an athlete's real
+# UNRATED bike ride with a full clean power stream fell all the way to
+# tier 2 (HR-TRIMP), ignoring the power data sitting right there (2026-09-12
+# live report). `IF = normalized_power_w / athlete.ftp_watts`, `TSS =
+# duration_hours * IF^2 * 100` -- Coggan's standard, un-adapted TSS formula
+# (the SAME citation `SWIM_TSS_INTENSITY_EXPONENT` above already documents
+# before cubing it for swim) -- see `BIKE_TSS_INTENSITY_EXPONENT`'s own
+# citation comment and `library/23-cycling-training.md`.
+
+
+def test_session_load_power_tss_worked_example():
+    # NP=200W, FTP=250W -> IF=0.8; 60 min -> TSS = 1.0 * 0.8^2 * 100 = 64.0.
+    workout = make_workout(
+        sport="bike",
+        rpe=None,
+        duration_min=60.0,
+        avg_hr=None,
+        distance_m=0,
+        analytics=WorkoutAnalytics(normalized_power_w=200.0),
+    )
+    result = session_load(workout, ftp_watts=250.0)
+    assert result.tier == "power_tss"
+    intensity_factor = 200.0 / 250.0
+    expected = 1.0 * intensity_factor**BIKE_TSS_INTENSITY_EXPONENT * 100.0
+    assert result.value == pytest.approx(expected)
+    assert result.value == pytest.approx(64.0)
+
+
+def test_session_load_power_tss_one_hour_at_ftp_scores_100():
+    # IF=1.0 at exactly FTP -> TSS = 100, the defining anchor point of the
+    # TSS scale (same "100 = one hour at threshold" convention tier 2's own
+    # LTHR normalization already uses).
+    workout = make_workout(
+        sport="bike",
+        rpe=None,
+        duration_min=60.0,
+        avg_hr=None,
+        distance_m=0,
+        analytics=WorkoutAnalytics(normalized_power_w=250.0),
+    )
+    result = session_load(workout, ftp_watts=250.0)
+    assert result.tier == "power_tss"
+    assert result.value == pytest.approx(100.0)
+
+
+def test_session_load_power_tss_wins_over_hr_trimp_when_both_available():
+    # Power is higher-fidelity than HR for a bike ride with a real power
+    # meter -- must win over tier 2 even when full HR context is ALSO
+    # available and would otherwise be reachable.
+    workout = make_workout(
+        sport="bike",
+        rpe=None,
+        duration_min=60.0,
+        avg_hr=140,
+        distance_m=0,
+        analytics=WorkoutAnalytics(normalized_power_w=200.0),
+    )
+    result = session_load(workout, ftp_watts=250.0, hr_max=180.0, hr_rest=50.0, sex="male")
+    assert result.tier == "power_tss"
+    assert result.value == pytest.approx(64.0)
+
+
+def test_session_load_srpe_still_wins_over_power_tss_when_athlete_rated_it():
+    # sRPE stays highest-priority, unchanged -- once the athlete actually
+    # rates a session, that stays authoritative even with NP + ftp_watts
+    # both available (mirrors test_session_load_srpe_wins_even_when_hr_
+    # and_pace_context_also_available above).
+    workout = make_workout(
+        sport="bike",
+        rpe=7,
+        duration_min=60.0,
+        distance_m=0,
+        analytics=WorkoutAnalytics(normalized_power_w=200.0),
+    )
+    result = session_load(workout, ftp_watts=250.0)
+    assert result.tier == "srpe"
+    assert result.value == 420.0
+
+
+def test_session_load_power_tss_requires_ftp_watts():
+    # NP is known but the caller didn't pass ftp_watts (athlete hasn't set
+    # one) -- falls through to the next tier, not a divide-by-unknown.
+    workout = make_workout(
+        sport="bike",
+        rpe=None,
+        duration_min=60.0,
+        avg_hr=140,
+        distance_m=0,
+        analytics=WorkoutAnalytics(normalized_power_w=200.0),
+    )
+    result = session_load(workout, hr_max=180.0, hr_rest=50.0, sex="male")
+    assert result.tier == "hr_trimp"
+
+
+def test_session_load_power_tss_requires_normalized_power():
+    # ftp_watts is known but this workout has no analytics/normalized_power_w
+    # (e.g. no power meter on this ride) -- falls through, no crash.
+    workout = make_workout(sport="bike", rpe=None, duration_min=60.0, avg_hr=None, distance_m=0)
+    result = session_load(workout, ftp_watts=250.0)
+    assert result.tier == "duration"
+
+
+def test_session_load_power_tss_ignores_non_positive_ftp_watts():
+    workout = make_workout(
+        sport="bike",
+        rpe=None,
+        duration_min=60.0,
+        avg_hr=None,
+        distance_m=0,
+        analytics=WorkoutAnalytics(normalized_power_w=200.0),
+    )
+    result = session_load(workout, ftp_watts=0.0)
+    assert result.tier == "duration"
+    result_negative = session_load(workout, ftp_watts=-10.0)
+    assert result_negative.tier == "duration"
+
+
+def test_session_load_power_tss_higher_np_produces_higher_load():
+    easy = make_workout(
+        sport="bike", rpe=None, duration_min=60.0, avg_hr=None, distance_m=0,
+        analytics=WorkoutAnalytics(normalized_power_w=150.0),
+    )
+    hard = make_workout(
+        sport="bike", rpe=None, duration_min=60.0, avg_hr=None, distance_m=0,
+        analytics=WorkoutAnalytics(normalized_power_w=250.0),
+    )
+    easy_result = session_load(easy, ftp_watts=250.0)
+    hard_result = session_load(hard, ftp_watts=250.0)
+    assert easy_result.tier == hard_result.tier == "power_tss"
+    assert hard_result.value > easy_result.value
+
+
+def test_session_load_power_tss_real_andrew_ride_regression():
+    # Real 2026-09-12 bike ride (workout id 656e6e84-4cdf-49cf-a888-
+    # 01a38144a73a): normalized_power_w computed by analytics.
+    # normalized_power_w against the real saved series this session ==
+    # 194.7944811418727 W, duration 117.25 min. Andrew has no ftp_watts on
+    # file yet (real, current state of his profile.yaml) -- this test uses
+    # an illustrative 250W FTP to prove the end-to-end wiring against real
+    # NP, not a claim about his actual threshold.
+    workout = make_workout(
+        sport="bike",
+        rpe=None,
+        duration_min=117.25,
+        avg_hr=None,
+        distance_m=0,
+        analytics=WorkoutAnalytics(normalized_power_w=194.7944811418727),
+    )
+    result = session_load(workout, ftp_watts=250.0)
+    assert result.tier == "power_tss"
+    assert result.value == pytest.approx(118.64, abs=0.01)
 
 
 # --- session_load: tier 2 (HR-based TRIMP) ------------------------------------------
@@ -628,10 +784,12 @@ def test_session_load_never_returns_none():
 
 
 # --- session_load: "bike" sport (engine/cycling-coach's new Sport value) -----
-# Confirms (per CLAUDE.md/this build's brief) that the existing tiered
-# fallback -- already documented as sport-agnostic for tiers 1/2/4 -- really
-# does still behave that way now that "bike" is a real Sport value, without
-# inventing any power-based load scoring (out of scope for this build).
+# Confirms that the existing tiered fallback -- already documented as
+# sport-agnostic for tiers 1/2/4 -- really does still behave that way now
+# that "bike" is a real Sport value. Power-based load scoring for bike now
+# exists (see "session_load: power-based TSS" above) -- these tests cover
+# the workouts that DON'T have normalized_power_w/ftp_watts available, so
+# they still fall through the pre-existing tiers exactly as before.
 
 
 def test_session_load_bike_srpe_tier_unchanged():

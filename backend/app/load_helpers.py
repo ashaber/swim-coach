@@ -43,7 +43,10 @@ def workout_load_au(
     `_normalize_trimp_to_lthr_hour`/`library/15-tiered-session-load.md`)
     rescales tier 2's raw TRIMP onto TSS's own "100 = one hour at
     threshold" convention; a no-op when unset, same as `session_load`
-    itself."""
+    itself. `ftp_watts` (Build I -- when the athlete has set one) is what
+    unlocks the power-based TSS tier for a bike workout that carries a
+    `normalized_power_w`; a no-op (falls through to HR/duration as before)
+    when unset, same convention as `lthr_bpm`."""
     hr_rest = estimate_hr_rest(wellness, workout.date)
     sl = session_load(
         workout,
@@ -52,5 +55,6 @@ def workout_load_au(
         sex=athlete.sex,
         css_pace_s_per_100m=athlete.css_pace_s_per_100m,
         lthr_bpm=athlete.lthr_bpm,
+        ftp_watts=athlete.ftp_watts,
     )
     return round(sl.value, 1), sl.tier

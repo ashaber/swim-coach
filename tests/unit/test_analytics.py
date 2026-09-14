@@ -8,6 +8,8 @@ Real-fixture coverage lives in test_parse_files.py.
 
 from __future__ import annotations
 
+import statistics
+
 import pytest
 
 from swim_coach.analytics import (
@@ -16,7 +18,9 @@ from swim_coach.analytics import (
     SPLIT_EVEN_BAND_PCT,
     STATIONARY_MIN_S,
     STATIONARY_SPEED_MPS,
+    average_power_w,
     cardiac_drift,
+    normalized_power_w,
     pause_summary,
     projected_stop_time_min,
     split_analysis,
@@ -271,3 +275,104 @@ def test_constants_have_expected_values():
     assert CARDIAC_DRIFT_FLAG_PCT == 5.0
     assert STATIONARY_SPEED_MPS == 0.5
     assert STATIONARY_MIN_S == 30.0
+
+
+# --- Build I: average_power_w / normalized_power_w --------------------------------
+
+
+def test_average_power_w_is_plain_mean_of_power_channel():
+    series = {"t_s": [0.0, 1.0, 2.0, 3.0], "power_w": [100, 200, 300, 400]}
+    assert average_power_w(series) == pytest.approx(250.0)
+
+
+def test_average_power_w_ignores_none_samples():
+    series = {"t_s": [0.0, 1.0, 2.0], "power_w": [100, None, 300]}
+    assert average_power_w(series) == pytest.approx(200.0)
+
+
+def test_average_power_w_none_when_no_power_channel():
+    assert average_power_w({"t_s": [0.0, 1.0], "hr": [100, 110]}) is None
+
+
+def test_average_power_w_none_when_series_is_none():
+    assert average_power_w(None) is None
+
+
+def test_average_power_w_none_when_every_sample_is_none():
+    assert average_power_w({"t_s": [0.0, 1.0], "power_w": [None, None]}) is None
+
+
+def test_normalized_power_w_constant_power_equals_average():
+    # A rolling average of a constant signal is that same constant, so
+    # NP == avg power for steady-state riding -- the simplest possible
+    # correctness check of the 4-step algorithm (raising a constant to the
+    # 4th power and taking the 4th root is a no-op).
+    n = 90
+    series = {"t_s": [float(i) for i in range(n)], "power_w": [200] * n}
+    assert normalized_power_w(series) == pytest.approx(200.0)
+    assert average_power_w(series) == pytest.approx(200.0)
+
+
+def test_normalized_power_w_exceeds_average_for_variable_power():
+    # NP's whole point (per library/23-cycling-training.md / Allen & Coggan)
+    # is that the 4th-power weighting penalizes variability -- intervals
+    # with the same average power as a steady ride must produce a HIGHER
+    # NP than that steady ride's average.
+    n = 120
+    steady = {"t_s": [float(i) for i in range(n)], "power_w": [200] * n}
+    variable = {
+        "t_s": [float(i) for i in range(n)],
+        "power_w": [50 if (i // 30) % 2 == 0 else 350 for i in range(n)],
+    }
+    assert average_power_w(steady) == pytest.approx(average_power_w(variable), abs=1.0)
+    assert normalized_power_w(variable) > normalized_power_w(steady)
+
+
+def test_trailing_moving_average_hand_verified_small_example():
+    # Small enough to hand-verify independently of the implementation.
+    # window_s=2.0, 1 Hz samples: lo advances while t_s[lo] < t_s[i] -
+    # window_s, so each window covers the last <= 3 one-second samples.
+    from swim_coach.analytics import _trailing_moving_average
+
+    t_s = [0.0, 1.0, 2.0, 3.0, 4.0]
+    power = [10.0, 20.0, 30.0, 40.0, 50.0]
+    rolling = _trailing_moving_average(power, t_s, window_s=2.0)
+    # i=0: [10] -> 10; i=1: [10,20] -> 15; i=2: [10,20,30] -> 20;
+    # i=3: [20,30,40] -> 30; i=4: [30,40,50] -> 40.
+    assert rolling == pytest.approx([10.0, 15.0, 20.0, 30.0, 40.0])
+
+
+def test_normalized_power_w_hand_verified_small_example():
+    # normalized_power_w always uses the real POWER_ROLLING_WINDOW_S
+    # (30s) -- with only 5 one-second samples, that window covers the
+    # whole series at every point, so the "rolling average" degenerates to
+    # a plain expanding cumulative mean: [10, 15, 20, 25, 30].
+    from swim_coach.analytics import POWER_ROLLING_WINDOW_S, _trailing_moving_average
+
+    t_s = [0.0, 1.0, 2.0, 3.0, 4.0]
+    power = [10.0, 20.0, 30.0, 40.0, 50.0]
+    rolling = _trailing_moving_average(power, t_s, POWER_ROLLING_WINDOW_S)
+    assert rolling == pytest.approx([10.0, 15.0, 20.0, 25.0, 30.0])
+    expected_np = (statistics.fmean(v**4 for v in rolling)) ** 0.25
+    assert normalized_power_w({"t_s": t_s, "power_w": power}) == pytest.approx(expected_np)
+
+
+def test_normalized_power_w_ignores_none_samples_but_keeps_timing():
+    # A gap in the power channel (record present, power missing) must not
+    # shift the time base of surrounding samples -- filtered out by pairing
+    # (t, p) before building the rolling window, not by index position.
+    t_s = [0.0, 1.0, 2.0, 3.0, 4.0]
+    power = [200, None, 200, None, 200]
+    assert normalized_power_w({"t_s": t_s, "power_w": power}) == pytest.approx(200.0)
+
+
+def test_normalized_power_w_none_when_no_power_channel():
+    assert normalized_power_w({"t_s": [0.0, 1.0], "hr": [100, 110]}) is None
+
+
+def test_normalized_power_w_none_when_series_is_none():
+    assert normalized_power_w(None) is None
+
+
+def test_normalized_power_w_none_with_fewer_than_two_samples():
+    assert normalized_power_w({"t_s": [0.0], "power_w": [200]}) is None

@@ -849,3 +849,143 @@ def test_derive_grade_forward_window_and_clamp():
 
     # No distance channel -> no grade at all.
     assert _derive_grade([None, None], [10.0, 12.0]) is None
+
+
+# --- Build I: pace gated to swim sports only, lap-level avg_power_w --------------------
+# Real, confirmed defect (open since 2026-08-31, "workout analytics bug --
+# cross-train pace/cardiac-drift calculation"): avg_pace_s_per_100m was
+# computed for every .fit/.tcx/.csv ingest regardless of sport -- a real
+# kayak trip parsed to "158s/100m" and a real MTB race lap parsed to
+# "920s/100m" (both nonsense pace numbers for a non-swim activity, pinned
+# below against the exact real values this repo's own fixtures produced
+# before this fix -- see this session's own investigation). Fixed at every
+# site that computes avg_pace: parse_tcx, parse_csv, parse_fit's session
+# total, and parse_fit's _build_laps per-lap total.
+
+
+@pytest.mark.skipif(not FIT_KAYAK_FIXTURE.exists(), reason="no real kayak .fit fixture")
+def test_parse_fit_kayak_session_avg_pace_is_none():
+    # Before this fix: 158.30958541334257 s/100m (real, pinned value from
+    # this session's own investigation) -- a nonsense pace for a kayak.
+    draft = parse_fit(FIT_KAYAK_FIXTURE)
+    assert draft.sport == "cross_train"
+    assert draft.avg_pace_s_per_100m is None
+
+
+@pytest.mark.skipif(not FIT_KAYAK_FIXTURE.exists(), reason="no real kayak .fit fixture")
+def test_parse_fit_kayak_lap_avg_pace_is_none():
+    # Before this fix: 158.30958541334257 s/100m on the kayak's one lap
+    # frame (same nonsense number as the session total above, since this
+    # file has a single lap spanning the whole trip).
+    draft = parse_fit(FIT_KAYAK_FIXTURE)
+    assert len(draft.laps) == 1
+    assert draft.laps[0].avg_pace_s_per_100m is None
+    # distance_m/duration_s themselves are untouched -- only the derived
+    # pace is gated.
+    assert draft.laps[0].distance_m == pytest.approx(11494.34)
+
+
+@pytest.mark.skipif(not FIT_MTB_RACE_FIXTURE.exists(), reason="no real MTB race .fit fixture")
+def test_parse_fit_mtb_race_session_avg_pace_is_none():
+    draft = parse_fit(FIT_MTB_RACE_FIXTURE)
+    assert draft.sport == "bike"
+    assert draft.avg_pace_s_per_100m is None
+
+
+@pytest.mark.skipif(not FIT_MTB_RACE_FIXTURE.exists(), reason="no real MTB race .fit fixture")
+def test_parse_fit_mtb_race_laps_have_no_avg_pace():
+    # Before this fix: lap 1 (85.95m in 791.4s) computed to ~920.76 s/100m
+    # -- the exact "Pace: 0:20/100m"-style nonsense the live bug report
+    # described, just a different real lap.
+    draft = parse_fit(FIT_MTB_RACE_FIXTURE)
+    assert len(draft.laps) == 10
+    assert all(lap.avg_pace_s_per_100m is None for lap in draft.laps)
+    # distance_m/duration_s stay populated -- only pace is gated.
+    assert draft.laps[1].distance_m == pytest.approx(85.95)
+
+
+@pytest.mark.skipif(not FIT_MTB_0709_FIXTURE.exists(), reason="no real MTB 0709 .fit fixture")
+def test_parse_fit_mtb_0709_session_avg_pace_is_none():
+    draft = parse_fit(FIT_MTB_0709_FIXTURE)
+    assert draft.sport == "bike"
+    assert draft.avg_pace_s_per_100m is None
+
+
+@pytest.mark.skipif(not FIT_FIXTURE.exists(), reason="no real pool .fit fixture")
+def test_parse_fit_pool_session_and_lap_avg_pace_unchanged():
+    # REGRESSION GUARD: swim sports are unaffected, byte-identical to
+    # before this fix.
+    draft = parse_fit(FIT_FIXTURE)
+    assert draft.sport == "swim_pool"
+    assert draft.avg_pace_s_per_100m == pytest.approx(199.62533732579206)
+    assert draft.laps[0].avg_pace_s_per_100m == pytest.approx(199.62533732579206)
+
+
+def test_parse_tcx_non_swim_pace_would_be_gated(monkeypatch):
+    # parse_tcx's own sport inference only ever produces swim_pool/swim_ow
+    # (no TCX Sport="Biking"-style hint is recognized as non-swim -- see its
+    # own docstring), so there's no real-world non-swim TCX to reproduce the
+    # defect against directly. Proves the gate exists and does nothing to
+    # the real swim path -- forward-compatible defense, not dead code, if
+    # parse_tcx's sport inference is ever widened.
+    draft = parse_tcx(TCX_FIXTURE)
+    assert draft.sport in ("swim_pool", "swim_ow")
+    assert draft.avg_pace_s_per_100m == pytest.approx(120.0)
+
+
+def test_parse_csv_non_swim_activity_type_gets_no_avg_pace(tmp_path):
+    # parse_csv today always resolves an unrecognized activity type to
+    # swim_pool (with a warning) rather than a real non-swim Sport value --
+    # so, like TCX above, this specific gate can't be proven against a
+    # currently-reachable non-swim CSV sport either. This test instead pins
+    # that a CSV with an explicit non-swim activity-type column still (for
+    # now) gets swim_pool + a real pace, documenting today's actual
+    # behavior so a future change to CSV sport inference doesn't silently
+    # start emitting non-swim pace again without this test catching it.
+    csv_path = tmp_path / "ride.csv"
+    csv_path.write_text(
+        "Date,Activity Type,Distance,Time\n2026-03-01,Cycling,20000,3600\n",
+        encoding="utf-8",
+    )
+    draft = parse_csv(csv_path)
+    assert draft.sport == "swim_pool"  # today's actual (documented) behavior
+    assert draft.avg_pace_s_per_100m is not None
+
+
+# --- Build I: WorkoutLap.avg_power_w (bike lap-level power) -----------------------------
+
+
+@pytest.mark.skipif(not FIT_MTB_RACE_FIXTURE.exists(), reason="no real MTB race .fit fixture")
+def test_parse_fit_mtb_race_laps_carry_avg_power_w():
+    # Real per-lap avg_power values read directly from the fixture via
+    # fitdecode this session (10 laps): [0, 2, 169, 151, 143, 142, 141, 135,
+    # 138, 20].
+    draft = parse_fit(FIT_MTB_RACE_FIXTURE)
+    assert [lap.avg_power_w for lap in draft.laps] == [0, 2, 169, 151, 143, 142, 141, 135, 138, 20]
+
+
+@pytest.mark.skipif(not FIT_MTB_0709_FIXTURE.exists(), reason="no real MTB 0709 .fit fixture")
+def test_parse_fit_mtb_0709_laps_avg_power_w_is_none():
+    # This ride carries no power meter data at all (see fixtures/fit/
+    # README.md) -- avg_power_w stays None on every lap, not a fabricated 0.
+    draft = parse_fit(FIT_MTB_0709_FIXTURE)
+    assert len(draft.laps) > 0
+    assert all(lap.avg_power_w is None for lap in draft.laps)
+
+
+@pytest.mark.skipif(not FIT_KAYAK_FIXTURE.exists(), reason="no real kayak .fit fixture")
+def test_parse_fit_kayak_lap_avg_power_w_is_none():
+    # Kayak is not a cycling sport -- avg_power_w extraction is gated the
+    # same way _build_series's extended= power/cadence/altitude channels
+    # are (via _is_cycling_sport), so a kayak lap never gets avg_power_w
+    # even though this device's lap frame carries no such field anyway.
+    draft = parse_fit(FIT_KAYAK_FIXTURE)
+    assert len(draft.laps) == 1
+    assert draft.laps[0].avg_power_w is None
+
+
+@pytest.mark.skipif(not FIT_FIXTURE.exists(), reason="no real pool .fit fixture")
+def test_parse_fit_pool_lap_avg_power_w_is_none():
+    # REGRESSION GUARD: swim laps never carry avg_power_w.
+    draft = parse_fit(FIT_FIXTURE)
+    assert draft.laps[0].avg_power_w is None

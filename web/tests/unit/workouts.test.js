@@ -4,7 +4,7 @@ import {
   formatDrift, formatSplit, formatPauses, formatSwolf, formatMovingVsElapsed,
   formatAnalyticsLine, HISTORY_DISPLAY_CAP,
   formatOffset, formatClock, formatLengthsSummary, formatSyncResult,
-  formatWorkoutChatLabel,
+  formatWorkoutChatLabel, formatPower,
 } from '../../src/workouts.js';
 
 describe('sportLabel', () => {
@@ -52,6 +52,22 @@ describe('sportLabel', () => {
   it('appends a pretty sport_detail suffix for bike, same as cross_train', () => {
     expect(sportLabel('bike', 'cycling/mountain')).toBe('Bike · MTB');
     expect(sportLabel('bike', 'cycling/road')).toBe('Bike · Road ride');
+  });
+});
+
+// Build I: sportUsesPace itself moved to src/sports.js (the one per-sport
+// UI source of truth -- see that file's own header comment) once this
+// branch merged forward past PR #189; its tests moved to sports.test.js
+// alongside it. formatPower is a plain formatter, not a per-sport fact,
+// so it stays here.
+describe('formatPower', () => {
+  it('rounds to the nearest whole watt with a W suffix', () => {
+    expect(formatPower(194.7944811418727)).toBe('195 W');
+    expect(formatPower(200)).toBe('200 W');
+  });
+  it('returns null for null/undefined (never fabricates 0 W)', () => {
+    expect(formatPower(null)).toBeNull();
+    expect(formatPower(undefined)).toBeNull();
   });
 });
 

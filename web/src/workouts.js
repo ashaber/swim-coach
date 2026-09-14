@@ -11,6 +11,21 @@ import { SPORTS, sportHasDetail } from './sports.js';
 /** How many most-recent workouts the Log tab's history section shows. */
 export const HISTORY_DISPLAY_CAP = 20;
 
+// Build I (2026-09-14): sportUsesPace/PACE_SPORTS used to live here as a
+// one-off set, duplicating exactly the kind of scattered per-sport logic
+// src/sports.js exists to prevent (see that file's own header comment --
+// this is the plan.js dot-color drift happening again, caught before it
+// shipped). Moved to sports.js's `usesPace` field; import it from there.
+// `formatPower` stays here -- a generic number formatter, not a per-sport
+// fact.
+
+/** "195 W" -- rounds to the nearest whole watt. null for null/undefined
+ * (never fabricates "0 W" for a sport/workout with no power data). */
+export function formatPower(watts) {
+  if (watts === null || watts === undefined) return null;
+  return `${Math.round(watts)} W`;
+}
+
 const SOURCE_BADGES = {
   fit: 'fit',
   tcx: 'tcx',

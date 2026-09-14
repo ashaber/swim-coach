@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   SPORTS, sportInfo, sportColorVar, sportHasPlannedDistance, sportCanPushToGarmin,
+  sportUsesPace,
 } from '../../src/sports.js';
 
 // Sept 12 defect-round follow-up: sport-conditional logic (distance
@@ -49,6 +50,9 @@ describe('SPORTS registry -- structural invariants (should rarely change)', () =
     expect(sportColorVar('kayak')).toBe(null);
     expect(sportHasPlannedDistance('kayak')).toBe(false);
     expect(sportCanPushToGarmin('kayak')).toBe(false);
+    expect(sportUsesPace('kayak')).toBe(false);
+    expect(sportUsesPace(undefined)).toBe(false);
+    expect(sportUsesPace(null)).toBe(false);
   });
 });
 
@@ -78,5 +82,18 @@ describe('SPORTS registry -- pinned facts (expected to change; see sports.js for
     expect(sportCanPushToGarmin('bike')).toBe(true);
     expect(sportCanPushToGarmin('recovery')).toBe(false);
     expect(sportCanPushToGarmin('cross_train')).toBe(false);
+  });
+
+  // Build I (2026-09-14): real bug (live report, 2026-09-12) -- a completed
+  // bike ride's detail view and laps table both showed nonsense pace
+  // ("0:20/100m") with no power number at all, even though the ride had a
+  // full clean power stream. Only the two swim sports have a real,
+  // meaningful avg_pace_s_per_100m.
+  it('only swim sports use pace -- everything else is a power/duration sport', () => {
+    expect(sportUsesPace('swim_pool')).toBe(true);
+    expect(sportUsesPace('swim_ow')).toBe(true);
+    for (const sport of ['bike', 'strength', 'recovery', 'cross_train']) {
+      expect(sportUsesPace(sport)).toBe(false);
+    }
   });
 });

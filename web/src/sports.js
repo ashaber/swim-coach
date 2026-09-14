@@ -48,6 +48,14 @@ export const SPORTS = {
     hasSportDetail: false,
     colorVar: '--c-pool',
     canPushToGarmin: false, // see this file's own header comment for why
+    // Build I (2026-09-14): the only sports whose avg_pace_s_per_100m/lap
+    // pace is a real, meaningful number. Real bug (live report,
+    // 2026-09-12): a completed bike ride's detail view and laps table both
+    // showed nonsense pace ("0:20/100m") with no power number at all, even
+    // though the ride had a full clean power stream -- moved here (was a
+    // one-off PACE_SPORTS set in workouts.js) so it can't drift the way
+    // plan.js's dot-color map once did before this registry existed.
+    usesPace: true,
   },
   swim_ow: {
     label: 'Open water swim',
@@ -60,6 +68,7 @@ export const SPORTS = {
     // in that shared encoding, not something pool-specific, so this must
     // stay false in lockstep with swim_pool until the real fix lands.
     canPushToGarmin: false,
+    usesPace: true,
   },
   bike: {
     label: 'Bike',
@@ -77,6 +86,7 @@ export const SPORTS = {
     hasSportDetail: true,
     colorVar: '--c-bike',
     canPushToGarmin: true,
+    usesPace: false,
   },
   strength: {
     label: 'Strength',
@@ -85,6 +95,7 @@ export const SPORTS = {
     hasSportDetail: false,
     colorVar: '--c-strength',
     canPushToGarmin: false, // see this file's own header comment for why
+    usesPace: false,
   },
   recovery: {
     label: 'Recovery',
@@ -94,6 +105,7 @@ export const SPORTS = {
     colorVar: '--c-recovery',
     // No recovery-specific Garmin structured-workout export exists.
     canPushToGarmin: false,
+    usesPace: false,
   },
   cross_train: {
     label: 'Cross-train',
@@ -104,6 +116,7 @@ export const SPORTS = {
     // cross_train is a synced-FROM-Garmin catch-all bucket, never
     // planned/authored content -- there's nothing to push.
     canPushToGarmin: false,
+    usesPace: false,
   },
 };
 
@@ -128,4 +141,8 @@ export function sportHasDetail(sport) {
 
 export function sportCanPushToGarmin(sport) {
   return SPORTS[sport]?.canPushToGarmin ?? false;
+}
+
+export function sportUsesPace(sport) {
+  return SPORTS[sport]?.usesPace ?? false;
 }
