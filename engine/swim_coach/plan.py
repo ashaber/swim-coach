@@ -26,7 +26,7 @@ import math
 import warnings
 from datetime import date, timedelta
 from typing import Callable, Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from swim_coach.models import (
     Athlete,
@@ -118,6 +118,48 @@ SHARPENING_MIN_MACRO_WEEKS = SHARPEN_WEEKS_MIN + TAPER_WEEKS_SHORT
 # runway shorter than 4 weeks is refused by this shape too -- there is no
 # further, even-shorter periodization shape in this build; see
 # `scaffold_sharpening_macro`'s own docstring.
+
+# --- Multi-race-season macro constants (scaffold_season_macro) --------------
+# A season-spanning chain of the two shapes above, one per race, graduated
+# by `Event.priority` ("A"/"B"/"C", already an existing free-text field --
+# see that field's own use in `RACE_WEEK_PRIORITY` above). Real citations in
+# `library/31-multi-race-season-periodization.md`.
+
+MINI_TAPER_WEEKS = 1
+# A B-priority race gets a genuinely SHALLOWER pull-down than an A-priority
+# race's own TAPER_WEEKS_SHORT (2 weeks) -- reusing the exact same
+# TAPER_WEEKLY_DECAY per-week decay RATE (not a new formula) but applying it
+# for only 1 week instead of 2, so the resulting volume cut is ~25% instead
+# of ~50% -- still inside `Mujika I., Padilla S. (2003)`'s own studied 4-28
+# day taper-duration range (already cited in `library/reference_list.md`
+# and `library/24-cycling-periodization-intervals.md`) but at the SHORT end
+# of it, matching `Friel J.` (Roadman Cycling interview, Aug 2025, see
+# `library/31-multi-race-season-periodization.md`)'s stated B/C-race
+# guidance that a full A-race taper is not appropriate for a lower-priority
+# race. The exact "1 week" (rather than, say, 10 or 12 days) is
+# `Coach judgment:` -- chosen to stay on this engine's existing whole-week
+# block granularity, not a citation-pinned number.
+
+SHARPEN_MIN_WEEKS_MINI_TAPER = SHARPEN_WEEKS_MIN + MINI_TAPER_WEEKS
+# Derived the same way SHARPENING_MIN_MACRO_WEEKS is derived above, just
+# swapping in MINI_TAPER_WEEKS for TAPER_WEEKS_SHORT: the shortest runway a
+# B-priority race's own dedicated sharpen+mini-taper cycle can honestly
+# periodize. A B-race with less runway than this gets no dedicated cycle at
+# all (folded into whatever block already covers its date) rather than a
+# degenerate one -- see `scaffold_season_macro`'s own docstring.
+
+B_TIER_MAX_DEDICATED_WEEKS = MIN_MACRO_WEEKS - 1
+# `scaffold_sharpening_macro` (which the B-priority per-race cycle reuses,
+# via its own `taper_weeks` parameter) refuses any runway >= MIN_MACRO_WEEKS
+# as "belongs to the full base->build->peak->taper shape instead" -- correct
+# for an A-priority race, but a B-priority race is NEVER supposed to grow
+# into a full peak/taper no matter how much runway sits in front of it
+# (`Friel`'s B-race guidance, same citation as MINI_TAPER_WEEKS above).
+# `scaffold_season_macro` therefore never feeds a B-priority race's own
+# per-race cycle more than this many weeks of runway -- any runway beyond it
+# becomes a plain flat maintenance block ahead of the dedicated cycle
+# (`Coach judgment:` -- "extra time before a tune-up race is just more
+# training, not more tune-up," not a citation-pinned number).
 
 PEAK_WEEKS_LONG = 3
 PEAK_WEEKS_SHORT = 2
@@ -1425,6 +1467,8 @@ def scaffold_sharpening_macro(
     start: date,
     current_weekly_volume_m: int,
     sharpen_weekly_volume_m: int | None = None,
+    *,
+    taper_weeks: int = TAPER_WEEKS_SHORT,
 ) -> MacroPlan:
     """Build a genuinely DIFFERENT macro shape from `scaffold_macro`'s own
     base->build->peak->taper -- an established-base, short-runway
@@ -1518,14 +1562,27 @@ def scaffold_sharpening_macro(
     proof of this shape's "no ramp" property), and `taper` decays off of
     that same value via `TAPER_WEEKLY_DECAY`, identically to how
     `scaffold_macro`'s own taper block decays off its `peak` block.
+
+    `taper_weeks` (keyword-only, defaults to `TAPER_WEEKS_SHORT` -- every
+    existing call site omits it and gets byte-identical behavior to before
+    this parameter existed): multi-race-season-macro build
+    (`scaffold_season_macro`) passes `MINI_TAPER_WEEKS` instead for a
+    B-priority race's own shallower pull-down -- see that constant's own
+    citation. The `SHARPENING_MIN_MACRO_WEEKS`-vs-`MIN_MACRO_WEEKS` runway
+    bounds below are recomputed from the ACTUAL `taper_weeks` passed, not
+    the hardcoded default, so a shorter `taper_weeks` correctly lowers this
+    function's own minimum-runway floor too (`SHARPEN_WEEKS_MIN +
+    taper_weeks`, matching how `SHARPENING_MIN_MACRO_WEEKS` itself is
+    derived at the default `taper_weeks`).
     """
     start_monday = _monday_on_or_after(start)
     event_monday = _monday_of_week(event.event_date)
     weeks_available = (event_monday - start_monday).days // 7
-    if weeks_available < SHARPENING_MIN_MACRO_WEEKS:
+    min_weeks_for_call = SHARPEN_WEEKS_MIN + taper_weeks
+    if weeks_available < min_weeks_for_call:
         raise ValueError(
             f"only {weeks_available} whole weeks available before "
-            f"{event.name!r}; need at least {SHARPENING_MIN_MACRO_WEEKS} to "
+            f"{event.name!r}; need at least {min_weeks_for_call} to "
             "periodize even a compressed hold->sharpen->taper macro safely"
         )
     if weeks_available >= MIN_MACRO_WEEKS:
@@ -1535,7 +1592,6 @@ def scaffold_sharpening_macro(
             "base->build->peak->taper macro -- use scaffold_macro instead"
         )
 
-    taper_weeks = TAPER_WEEKS_SHORT
     remainder_weeks = weeks_available - taper_weeks
     sharpen_weeks = min(remainder_weeks, SHARPEN_WEEKS_MAX)
     hold_weeks = remainder_weeks - sharpen_weeks
@@ -1573,6 +1629,288 @@ def scaffold_sharpening_macro(
         cursor = block_end + timedelta(days=1)
 
     return MacroPlan(id=uuid4(), athlete_id=athlete.id, event_id=event.id, blocks=blocks)
+
+
+def scaffold_season_macro(
+    athlete: Athlete,
+    races: list[Event],
+    start: date,
+    current_weekly_volume_m: int,
+    *,
+    established_base: bool,
+    peak_weekly_volume_m: int | None = None,
+) -> MacroPlan:
+    """Chain multiple races in the SAME season into one season-spanning
+    `MacroPlan` -- multi-race-season-macro build. Real citations in
+    `library/31-multi-race-season-periodization.md`.
+
+    **Design: a CHAIN of per-race mini-cycles, not a new block shape.**
+    Every block this function ever emits comes from calling `scaffold_macro`
+    or `scaffold_sharpening_macro` (completely unchanged, except the latter's
+    new optional `taper_weeks` -- see that parameter's own docstring) once
+    per race and concatenating the results end-to-end, cursor-continuous
+    (each race's own cycle starts exactly where the previous one's last
+    block ended, and is seeded with that block's own end volume, NOT the
+    athlete's raw `current_weekly_volume_m` -- this is what keeps a
+    re-build into race 2 correctly ramp-capped off race 1's post-taper
+    volume rather than silently re-basing to a fresh, unconstrained climb).
+    `Bompa T.O. (1999)`'s mono-/bi-/tri-cyclical annual-plan model is the
+    direct grounding for this: when 3-5 major competitions fall within one
+    season, MULTIPLE periodization cycles (not one continuous macro) is the
+    established structure -- see the library file for the full citation and
+    verification tier.
+
+    Persisted as ONE `MacroPlan` (this athlete's existing single
+    `store.save_macro`/`load_macro` row, unchanged -- no new store method, no
+    DB schema/migration), not multiple separate macro rows -- deliberately,
+    because `generate_week`'s own block-interpolation math (`_find_block`/
+    `_block_start_volume`) already walks a flat `MacroPlan.blocks` list
+    block-by-block with no notion of which "macro shape" or which race a
+    block belongs to -- chaining several shapes' blocks into one list is
+    exactly what it is already built to consume, unmodified. See
+    `MacroPlan.event_ids`/`MacroBlock.race_event_id`'s own docstrings
+    (`models.py`) for how the season's races are recorded on top of the
+    unchanged single-event `MacroPlan.event_id` field.
+
+    **Graduated depth by `Event.priority`** (already an existing free-text
+    "A"/"B" field, compared case-insensitively via `.strip().upper()`, same
+    convention `RACE_WEEK_PRIORITY` already uses -- not a new field):
+    `Friel J.` (grounding in the library file) -- treating every race as an
+    A-priority race "wastes the season"; only a genuine A-race earns a full
+    peak. Per race, in chronological order:
+
+    - **"A"**: the full three-way shape `backend/app/tools.py`'s
+      `draft_macro_plan` handler already uses for a single-race macro --
+      `scaffold_macro` if `weeks_available >= MIN_MACRO_WEEKS`, else
+      `scaffold_sharpening_macro` if `established_base` and
+      `weeks_available >= SHARPENING_MIN_MACRO_WEEKS`, else raises
+      `ValueError` (an A-race this function cannot safely periodize into is
+      a real refusal, not silently downgraded to a lesser shape).
+    - **"B"**: `scaffold_sharpening_macro` with `taper_weeks=
+      MINI_TAPER_WEEKS` (a shallower pull-down than an A-race's own taper --
+      see that constant's citation) whenever `established_base` and
+      `weeks_available >= SHARPEN_MIN_WEEKS_MINI_TAPER`; any runway beyond
+      `B_TIER_MAX_DEDICATED_WEEKS` ahead of that dedicated cycle becomes a
+      plain flat `hold` filler block first (a tune-up race never grows a
+      full peak just because it has lots of runway -- see that constant's
+      own citation). Below the minimum runway (or no established base): NO
+      dedicated block at all -- folded into whatever block already covers
+      that race's date (see below), matching Friel's "B races don't
+      necessarily get their own taper" posture when there isn't real room
+      for one.
+    - **"C"** (or any other/unrecognized `priority` value -- this field has
+      no format validation, matching its existing free-text convention):
+      NEVER gets a dedicated block -- `Friel`'s C-race guidance is "race for
+      training/experience, don't alter the plan." Folded into whatever
+      block already covers its date.
+
+    **Coverage is contiguous EXCEPT for one deliberate, protected gap per
+    dedicated cycle: that race's own implicit race week.** A race that gets
+    no dedicated block leaves the cursor exactly where it already was; the
+    NEXT race that DOES get a dedicated cycle always starts its own first
+    block at that same cursor (both `scaffold_macro` and
+    `scaffold_sharpening_macro` always start immediately, no lead-in gap),
+    which absorbs every skipped race's own date along the way. **Bug fix
+    (2026-09-15):** after a race DOES get a dedicated cycle, the cursor
+    skips past that race's own week too (`event_monday + 1 week`, not
+    `sub_macro.blocks[-1].end_date + 1 day`) -- otherwise the very next
+    race's own cycle would immediately claim and relabel the prior race's
+    real taper/race week as ITS OWN build-up, exactly the "race week itself
+    is not modeled as a macro block" convention `scaffold_macro`/
+    `scaffold_sharpening_macro` already establish for a single race, now
+    correctly preserved when chained. This means a genuine, intentional
+    7-day gap in `blocks` coverage follows every dedicated cycle -- not a
+    bug, the same implicit-race-week convention a single-race macro already
+    has, just now visible in a list of multiple blocks instead of only at
+    the very end. If every remaining race is skipped (including the
+    season's final one), a single trailing flat `hold` block fills from the
+    cursor through the final race's own week, so every week from `start`
+    through the season's last race has SOME block covering it
+    (`generate_week`'s `_find_block` raises for a week outside the macro's
+    range) -- except each dedicated race's own protected week, exactly as a
+    single-race macro already leaves uncovered today.
+
+    **Known, deliberately unaddressed limitation, stated plainly (same
+    footing as `plan.py`'s other documented, deferred gaps -- see the
+    `_bike_week_sessions` "KNOWN LIMITATION" comment for precedent):**
+    `generate_week` itself is NOT changed by this build and still only
+    understands ONE `event` per call (its existing `event`/`events`
+    parameters, caller-supplied). For a season-spanning macro, an
+    INTERMEDIATE race's own race-week content (the `RACE_WEEK_PRIORITY="A"`
+    checklist, carb-load window, etc.) will not fire correctly unless the
+    caller explicitly passes that nearby race as `generate_week`'s `event`
+    argument for the weeks around it (resolvable via the relevant block's
+    own `MacroBlock.race_event_id`) -- today's callers
+    (`create_week_plan`/`replace_week_plan` in `backend/app/tools.py`,
+    `/plan-week`) were not updated to do this automatically. Wiring that is
+    explicitly deferred to a future build stage, not done here. This
+    function's own scope is the macro SCAFFOLD (persisted blocks + which
+    races they belong to), not full weekly-generation event-selection.
+
+    **Scope guard (explicit, not silent):** raises `ValueError` if fewer
+    than 2 races are given (use `scaffold_macro`/`scaffold_sharpening_macro`
+    directly for a single race), if the races don't all share the same
+    `primary_sport` (cross-sport season prioritization is a real, unresolved
+    coaching decision -- see the library file's "what's not resolved"
+    section -- never guessed at here), or if any race's `event_date` is on
+    or before `start` (this function only plans forward; filter out
+    already-past races before calling it -- `backend/app/tools.py`'s caller
+    is where `Event.active`/date filtering belongs, not here).
+
+    `established_base` (required, no default): whether the athlete's REAL
+    logged training history shows an established base
+    (`swim_coach.load.has_established_training_base`), evaluated ONCE by
+    the caller as of `start` -- same "never silently assume, never call
+    `load.py` from inside `plan.py`" posture `scaffold_sharpening_macro`
+    already documents for its own single-race case. A season macro's B/A
+    fallback-to-sharpening branches both depend on it.
+
+    `peak_weekly_volume_m`: forwarded to `scaffold_macro` ONLY for the
+    first "A"-tier race that actually uses the full base->build->peak->taper
+    shape (matching that function's own optionality rules for
+    `event.target_metric`); every other race's own peak/hold/sharpen volume
+    is derived from cursor continuity instead, exactly as this function's
+    own docstring above describes.
+    """
+    if len(races) < 2:
+        raise ValueError(
+            "scaffold_season_macro needs at least 2 races to chain into a "
+            "season -- for a single race, call scaffold_macro or "
+            "scaffold_sharpening_macro directly instead"
+        )
+    sports = {race.primary_sport for race in races}
+    if len(sports) > 1:
+        raise ValueError(
+            "scaffold_season_macro requires every race to share the same "
+            f"primary_sport -- got {sorted(sports)!r}. Cross-sport season "
+            "prioritization is a real, unresolved coaching decision (see "
+            "library/31-multi-race-season-periodization.md's \"what's not "
+            "resolved\" section) -- never guessed at here."
+        )
+    races_sorted = sorted(races, key=lambda race: race.event_date)
+    for race in races_sorted:
+        if race.event_date <= start:
+            raise ValueError(
+                f"{race.name!r} ({race.event_date}) is on or before start "
+                f"({start}) -- scaffold_season_macro only plans forward; "
+                "filter out already-past races before calling it"
+            )
+
+    blocks: list[MacroBlock] = []
+    cursor_start = start
+    cursor_volume = current_weekly_volume_m
+    event_ids: list[UUID] = []
+
+    for race in races_sorted:
+        event_ids.append(race.id)
+        tier = race.priority.strip().upper()
+        start_monday = _monday_on_or_after(cursor_start)
+        event_monday = _monday_of_week(race.event_date)
+        weeks_available = (event_monday - start_monday).days // 7
+
+        if tier == "A":
+            if weeks_available >= MIN_MACRO_WEEKS:
+                sub_macro = scaffold_macro(
+                    athlete, race, cursor_start, cursor_volume, peak_weekly_volume_m
+                )
+            elif established_base and weeks_available >= SHARPENING_MIN_MACRO_WEEKS:
+                sub_macro = scaffold_sharpening_macro(athlete, race, cursor_start, cursor_volume)
+            else:
+                needed = SHARPENING_MIN_MACRO_WEEKS if established_base else MIN_MACRO_WEEKS
+                raise ValueError(
+                    f"only {weeks_available} whole weeks available before "
+                    f"A-priority race {race.name!r} (from {cursor_start}) -- "
+                    f"need at least {needed} to periodize safely "
+                    f"(established_base={established_base})"
+                )
+            for block in sub_macro.blocks:
+                block.race_event_id = race.id
+            blocks.extend(sub_macro.blocks)
+            # Bug fix (2026-09-15, found comparing against a real hand-built
+            # macrocycle): `sub_macro.blocks[-1].end_date` is ALWAYS exactly
+            # `event_monday - 1 day` by construction (scaffold_macro's/
+            # scaffold_sharpening_macro's own "race week itself is not
+            # modeled as a block" convention) -- advancing the cursor to the
+            # day right after that end date lands exactly on THIS race's own
+            # implicit race week, letting the NEXT race's cycle immediately
+            # claim it. Skip past this race's own week too, so a race's real
+            # taper/race week can never be silently relabeled as a
+            # different race's build-up.
+            cursor_start = event_monday + timedelta(weeks=1)
+            cursor_volume = sub_macro.blocks[-1].weekly_volume_target_m
+
+        elif tier == "B" and established_base and weeks_available >= SHARPEN_MIN_WEEKS_MINI_TAPER:
+            dedicated_weeks = min(weeks_available, B_TIER_MAX_DEDICATED_WEEKS)
+            if dedicated_weeks < weeks_available:
+                filler_end = start_monday + timedelta(weeks=weeks_available - dedicated_weeks) - timedelta(
+                    days=1
+                )
+                blocks.append(
+                    MacroBlock(
+                        name="hold",
+                        start_date=start_monday,
+                        end_date=filler_end,
+                        weekly_volume_target_m=round(cursor_volume),
+                        focus="maintain current fitness ahead of a tune-up race",
+                    )
+                )
+                cursor_start = filler_end + timedelta(days=1)
+            sub_macro = scaffold_sharpening_macro(
+                athlete, race, cursor_start, cursor_volume, taper_weeks=MINI_TAPER_WEEKS
+            )
+            for block in sub_macro.blocks:
+                block.race_event_id = race.id
+            blocks.extend(sub_macro.blocks)
+            # Same fix as the A-tier branch above -- see that comment.
+            cursor_start = event_monday + timedelta(weeks=1)
+            cursor_volume = sub_macro.blocks[-1].weekly_volume_target_m
+
+        # else: "B" without enough runway/established base, "C", or any
+        # other/unrecognized priority value -- no dedicated block; folded
+        # into whichever block already covers this race's date (see
+        # docstring's "coverage is always contiguous" section).
+
+    last_race_monday = _monday_of_week(races_sorted[-1].event_date)
+    trailing_start_monday = _monday_on_or_after(cursor_start)
+    # Bug fix (2026-09-15): whether a trailing block is needed depends on
+    # whether the FINAL race itself got a dedicated cycle -- NOT merely on
+    # whether the cursor happens to already sit at that race's own Monday.
+    # Before the cursor fix above, those two conditions were equivalent (the
+    # cursor could only land exactly on a race's own Monday by JUST having
+    # finished that race's own dedicated cycle). They no longer are: if an
+    # EARLIER race's own protected race-week ends exactly one week before a
+    # LATER, undedicated race (e.g. a "C"-tier tune-up race scheduled the
+    # week right after an "A"-tier race), the cursor can coincidentally
+    # land on that later race's Monday too, even though THAT race itself
+    # never got a dedicated cycle and still needs its own week covered.
+    final_race_got_dedicated_cycle = races_sorted[-1].id in {
+        b.race_event_id for b in blocks if b.race_event_id is not None
+    }
+    # `trailing_start_monday <= last_race_monday` guards the same
+    # degenerate case the old `<` comparison also implicitly avoided: races
+    # packed too tightly for the cursor to land on-or-before the final
+    # race's own Monday at all would otherwise emit an inverted (end before
+    # start) block. Real, pre-existing edge case, not introduced by this
+    # fix -- just kept explicit here since the primary gate changed.
+    if not final_race_got_dedicated_cycle and trailing_start_monday <= last_race_monday:
+        blocks.append(
+            MacroBlock(
+                name="hold",
+                start_date=trailing_start_monday,
+                end_date=last_race_monday + timedelta(days=6),
+                weekly_volume_target_m=round(cursor_volume),
+                focus="maintain current fitness through the season's remaining race(s)",
+                race_event_id=races_sorted[-1].id,
+            )
+        )
+
+    return MacroPlan(
+        id=uuid4(),
+        athlete_id=athlete.id,
+        event_id=races_sorted[-1].id,
+        event_ids=event_ids,
+        blocks=blocks,
+    )
 
 
 def _find_block(macro: MacroPlan, week_start: date) -> tuple[int, MacroBlock]:

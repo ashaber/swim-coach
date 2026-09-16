@@ -2538,6 +2538,354 @@ def test_replace_macro_plan_missing_event_name_is_an_error(athletes_dir) -> None
     assert "error" in result
 
 
+# --- draft_season_macro_plan (multi-race-season-macro build) -----------------------
+#
+# Uses `athletes/andrew` (see `_log_consistent_bike_history`/`_clear_workouts`
+# above), same as the sharpening-macro three-way-shape tests -- a bike-scoped
+# sandbox athlete this suite can build its own deterministic training-load
+# fixture on top of, rather than depending on renee's own real history.
+
+
+def _add_bike_event(
+    store: FileStore, slug: str, athlete_id, *, name: str, event_date: date, priority: str
+) -> Event:
+    events = store.load_events(slug)
+    event = Event(
+        id=uuid.uuid4(),
+        athlete_id=athlete_id,
+        name=name,
+        event_date=event_date,
+        target_metric="duration_min",
+        distance_m=None,
+        target_value=90.0,
+        priority=priority,
+        primary_sport="bike",
+    )
+    events.append(event)
+    store.save_events(slug, events)
+    return event
+
+
+def test_draft_season_macro_plan_requires_at_least_two_events(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="andrew", expert_mode=False)
+
+    result = handlers["draft_season_macro_plan"](
+        {"event_names": ["Only One"], "current_weekly_volume_m": 300}
+    )
+    assert "error" in result
+    assert "at least 2 races" in result["error"]
+
+
+def test_draft_season_macro_plan_unknown_event_name_names_existing_events(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("andrew")
+    _add_bike_event(
+        store, "andrew", athlete.id, name="Real Race", event_date=date(2026, 12, 1), priority="A"
+    )
+    handlers = build_tool_handlers(store, slug="andrew", expert_mode=False)
+
+    result = handlers["draft_season_macro_plan"](
+        {"event_names": ["Real Race", "No Such Event"], "current_weekly_volume_m": 300}
+    )
+    assert "error" in result
+    assert "No Such Event" in result["error"]
+    assert "Real Race" in result["error"]  # known event names listed
+
+
+def test_draft_season_macro_plan_refuses_non_bike_events(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("andrew")
+    _add_bike_event(
+        store, "andrew", athlete.id, name="Bike Race", event_date=date(2026, 12, 1), priority="A"
+    )
+    events = store.load_events("andrew")
+    events.append(
+        Event(
+            id=uuid.uuid4(), athlete_id=athlete.id, name="Swim Race",
+            event_date=date(2026, 11, 1), distance_m=3000, priority="B",
+        )
+    )
+    store.save_events("andrew", events)
+    handlers = build_tool_handlers(store, slug="andrew", expert_mode=False)
+
+    result = handlers["draft_season_macro_plan"](
+        {"event_names": ["Bike Race", "Swim Race"], "current_weekly_volume_m": 300}
+    )
+    assert "error" in result
+    assert "primary_sport='bike'" in result["error"]
+    assert "Swim Race" in result["error"]
+
+
+def test_draft_season_macro_plan_refuses_past_races(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("andrew")
+    _add_bike_event(
+        store, "andrew", athlete.id, name="Past Race", event_date=date(2026, 1, 1), priority="B"
+    )
+    _add_bike_event(
+        store, "andrew", athlete.id, name="Future Race", event_date=date(2026, 12, 1), priority="A"
+    )
+    handlers = build_tool_handlers(store, slug="andrew", expert_mode=False)
+
+    result = handlers["draft_season_macro_plan"](
+        {
+            "event_names": ["Past Race", "Future Race"],
+            "current_weekly_volume_m": 300,
+            "start_date": "2026-06-01",
+        }
+    )
+    assert "error" in result
+    assert "Past Race" in result["error"]
+
+
+def test_draft_season_macro_plan_draft_mode_does_not_persist(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    slug = "andrew"
+    athlete = store.load_athlete(slug)
+    _clear_workouts(athletes_dir, slug)
+    _log_consistent_bike_history(store, slug, athlete.id, weeks=20, as_of=_SHARPENING_AS_OF)
+    _add_bike_event(
+        store, slug, athlete.id, name="Race A",
+        event_date=_SHARPENING_AS_OF + timedelta(weeks=4), priority="A",
+    )
+    _add_bike_event(
+        store, slug, athlete.id, name="Race B",
+        event_date=_SHARPENING_AS_OF + timedelta(weeks=12), priority="B",
+    )
+    original_macro = FileStore(base_dir=athletes_dir).load_macro(slug)
+    handlers = build_tool_handlers(store, slug=slug, expert_mode=False)
+
+    result = handlers["draft_season_macro_plan"](
+        {
+            "event_names": ["Race A", "Race B"],
+            "current_weekly_volume_m": 300,
+            "peak_weekly_volume_m": 500,
+            "start_date": _SHARPENING_AS_OF.isoformat(),
+        }
+    )
+
+    assert "error" not in result
+    assert result["persisted"] is False
+    assert len(result["blocks"]) > 0
+    assert FileStore(base_dir=athletes_dir).load_macro(slug) == original_macro
+
+
+def test_draft_season_macro_plan_confirm_true_persists_and_is_retrievable(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    slug = "andrew"
+    athlete = store.load_athlete(slug)
+    _clear_workouts(athletes_dir, slug)
+    _log_consistent_bike_history(store, slug, athlete.id, weeks=20, as_of=_SHARPENING_AS_OF)
+    race_a = _add_bike_event(
+        store, slug, athlete.id, name="Race A2",
+        event_date=_SHARPENING_AS_OF + timedelta(weeks=4), priority="A",
+    )
+    race_b = _add_bike_event(
+        store, slug, athlete.id, name="Race B2",
+        event_date=_SHARPENING_AS_OF + timedelta(weeks=12), priority="B",
+    )
+    handlers = build_tool_handlers(store, slug=slug, expert_mode=False)
+
+    result = handlers["draft_season_macro_plan"](
+        {
+            "event_names": ["Race A2", "Race B2"],
+            "current_weekly_volume_m": 300,
+            "peak_weekly_volume_m": 500,
+            "start_date": _SHARPENING_AS_OF.isoformat(),
+            "confirm": True,
+        }
+    )
+
+    assert "error" not in result
+    assert result["persisted"] is True
+
+    reloaded = FileStore(base_dir=athletes_dir).load_macro(slug)
+    assert reloaded is not None
+    assert reloaded.event_ids == [race_a.id, race_b.id]
+    assert reloaded.event_id == race_b.id  # the final, chronologically-last race
+
+
+def test_draft_season_macro_plan_coverage_flags_lost_race_from_existing_macro(athletes_dir) -> None:
+    # The literal, real fix: athletes/andrew's own shipped fixture macro
+    # targets "Andrew Test Goal 10K" (a DIFFERENT, pre-existing event).
+    # Drafting this new season macro must surface that persisting it would
+    # stop covering that race -- never a silent overwrite.
+    store = FileStore(base_dir=athletes_dir)
+    slug = "andrew"
+    athlete = store.load_athlete(slug)
+    existing_macro = FileStore(base_dir=athletes_dir).load_macro(slug)
+    assert existing_macro is not None  # shipped fixture precondition
+    existing_events = store.load_events(slug)
+    orphaned_event = next(e for e in existing_events if e.id == existing_macro.event_id)
+
+    _clear_workouts(athletes_dir, slug)
+    _log_consistent_bike_history(store, slug, athlete.id, weeks=20, as_of=_SHARPENING_AS_OF)
+    _add_bike_event(
+        store, slug, athlete.id, name="New Race A",
+        event_date=_SHARPENING_AS_OF + timedelta(weeks=4), priority="A",
+    )
+    _add_bike_event(
+        store, slug, athlete.id, name="New Race B",
+        event_date=_SHARPENING_AS_OF + timedelta(weeks=12), priority="B",
+    )
+    handlers = build_tool_handlers(store, slug=slug, expert_mode=False)
+
+    result = handlers["draft_season_macro_plan"](
+        {
+            "event_names": ["New Race A", "New Race B"],
+            "current_weekly_volume_m": 300,
+            "peak_weekly_volume_m": 500,
+            "start_date": _SHARPENING_AS_OF.isoformat(),
+        }
+    )
+
+    assert "error" not in result
+    coverage = result["coverage"]
+    assert coverage is not None
+    assert orphaned_event.name in coverage["old_race_names"]
+    assert orphaned_event.name in coverage["would_lose_coverage_for"]
+    # Draft mode: nothing persisted yet, the real macro is still untouched.
+    assert FileStore(base_dir=athletes_dir).load_macro(slug) == existing_macro
+
+
+def test_draft_season_macro_plan_coverage_is_none_when_new_season_re_covers_same_races(
+    athletes_dir,
+) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    slug = "andrew"
+    athlete = store.load_athlete(slug)
+    _clear_workouts(athletes_dir, slug)
+    _log_consistent_bike_history(store, slug, athlete.id, weeks=20, as_of=_SHARPENING_AS_OF)
+    _add_bike_event(
+        store, slug, athlete.id, name="Repeat Race A",
+        event_date=_SHARPENING_AS_OF + timedelta(weeks=4), priority="A",
+    )
+    _add_bike_event(
+        store, slug, athlete.id, name="Repeat Race B",
+        event_date=_SHARPENING_AS_OF + timedelta(weeks=12), priority="B",
+    )
+    handlers = build_tool_handlers(store, slug=slug, expert_mode=False)
+    first = handlers["draft_season_macro_plan"](
+        {
+            "event_names": ["Repeat Race A", "Repeat Race B"],
+            "current_weekly_volume_m": 300,
+            "peak_weekly_volume_m": 500,
+            "start_date": _SHARPENING_AS_OF.isoformat(),
+            "confirm": True,
+        }
+    )
+    assert first["persisted"] is True
+
+    second = handlers["draft_season_macro_plan"](
+        {
+            "event_names": ["Repeat Race A", "Repeat Race B"],
+            "current_weekly_volume_m": 300,
+            "peak_weekly_volume_m": 500,
+            "start_date": _SHARPENING_AS_OF.isoformat(),
+        }
+    )
+    assert "error" not in second
+    assert second["coverage"]["would_lose_coverage_for"] == []
+
+
+def test_draft_season_macro_plan_real_andrew_cx_calendar_end_to_end(athletes_dir) -> None:
+    # Real, DB-verified scenario this build was written against: Andrew's
+    # actual 2026 cyclocross season -- Season Opener (B, 5 days out from
+    # "today"), Peak Weekend (A), Halloween Weekend (B), Season Finale (B).
+    store = FileStore(base_dir=athletes_dir)
+    slug = "andrew"
+    athlete = store.load_athlete(slug)
+    _clear_workouts(athletes_dir, slug)
+    _log_consistent_bike_history(store, slug, athlete.id, weeks=20, as_of=_SHARPENING_AS_OF)
+
+    season_opener = _add_bike_event(
+        store, slug, athlete.id, name="Season Opener",
+        event_date=_SHARPENING_AS_OF + timedelta(days=5), priority="B",
+    )
+    peak_weekend = _add_bike_event(
+        store, slug, athlete.id, name="Peak Weekend",
+        event_date=_SHARPENING_AS_OF + timedelta(days=33), priority="A",
+    )
+    halloween_weekend = _add_bike_event(
+        store, slug, athlete.id, name="Halloween Weekend",
+        event_date=_SHARPENING_AS_OF + timedelta(days=47), priority="B",
+    )
+    season_finale = _add_bike_event(
+        store, slug, athlete.id, name="Season Finale",
+        event_date=_SHARPENING_AS_OF + timedelta(days=68), priority="B",
+    )
+    handlers = build_tool_handlers(store, slug=slug, expert_mode=False)
+
+    result = handlers["draft_season_macro_plan"](
+        {
+            "event_names": [
+                "Season Opener", "Peak Weekend", "Halloween Weekend", "Season Finale",
+            ],
+            "current_weekly_volume_m": 540,
+            "start_date": _SHARPENING_AS_OF.isoformat(),
+            "confirm": True,
+        }
+    )
+
+    assert "error" not in result
+    assert result["persisted"] is True
+    assert result["established_base_evidence"]["established"] is True
+
+    got_dedicated = {r["event_name"]: r["got_dedicated_cycle"] for r in result["race_summary"]}
+    assert got_dedicated["Peak Weekend"] is True
+    assert got_dedicated["Season Finale"] is True
+    assert got_dedicated["Season Opener"] is False
+    assert got_dedicated["Halloween Weekend"] is False
+
+    reloaded = FileStore(base_dir=athletes_dir).load_macro(slug)
+    assert reloaded is not None
+    assert reloaded.event_ids == [
+        season_opener.id, peak_weekend.id, halloween_weekend.id, season_finale.id,
+    ]
+    # Contiguous, EXCEPT for a deliberate 7-day gap after a dedicated
+    # cycle's own protected race week (2026-09-15 bug fix -- see
+    # scaffold_season_macro's own docstring): a race that got a dedicated
+    # cycle (Peak Weekend, Season Finale here) leaves its own race week
+    # unmodeled, same "race week itself is not a block" convention a
+    # single-race macro already has -- now correctly preserved when
+    # chained, instead of being silently claimed as the next race's
+    # build-up.
+    dedicated_ids = {peak_weekend.id, season_finale.id}
+    for prev, curr in zip(reloaded.blocks, reloaded.blocks[1:]):
+        gap_days = (curr.start_date - prev.end_date).days
+        if prev.race_event_id in dedicated_ids and prev.race_event_id != curr.race_event_id:
+            assert gap_days == 8, (
+                f"expected a 7-day protected-race-week gap after "
+                f"{prev.race_event_id}'s own dedicated cycle, got {gap_days - 1} days"
+            )
+        else:
+            assert gap_days == 1, f"unexpected gap between {prev.name} and {curr.name}"
+
+
+def test_draft_season_macro_plan_missing_current_weekly_volume_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("andrew")
+    _add_bike_event(
+        store, "andrew", athlete.id, name="Vol Test A", event_date=date(2026, 12, 1), priority="A"
+    )
+    _add_bike_event(
+        store, "andrew", athlete.id, name="Vol Test B", event_date=date(2026, 12, 15), priority="B"
+    )
+    handlers = build_tool_handlers(store, slug="andrew", expert_mode=False)
+    result = handlers["draft_season_macro_plan"](
+        {"event_names": ["Vol Test A", "Vol Test B"]}
+    )
+    assert "error" in result
+
+
+def test_draft_season_macro_plan_missing_event_names_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="andrew", expert_mode=False)
+    result = handlers["draft_season_macro_plan"]({"current_weekly_volume_m": 300})
+    assert "error" in result
+
+
 # --- set_pool_coach_status -------------------------------------------------------
 
 

@@ -21,15 +21,18 @@ from swim_coach.plan import (
     BIKE_INTERVAL_TEMPLATES,
     BIKE_SESSIONS_PER_WEEK,
     BODYWORK_WINDOW_DAYS_OUT,
+    B_TIER_MAX_DEDICATED_WEEKS,
     CARB_LOAD_WINDOW_START_DAYS_OUT,
     DEFAULT_BIKE_SESSION_MIN,
     DEFAULT_POOL_SESSION_MIN,
     LONG_SWIM_SHARE,
+    MINI_TAPER_WEEKS,
     MIN_MACRO_WEEKS,
     MIN_RAMP_SEED_VOLUME_M,
     NO_COACH_POOL_SESSION_FLOOR_M,
     POOL_SESSION_EST_M,
     SESSION_ADJUSTMENT_INCREASE_CAP_PCT,
+    SHARPEN_MIN_WEEKS_MINI_TAPER,
     SHARPEN_WEEKS_MAX,
     SHARPEN_WEEKS_MIN,
     SHARPENING_MIN_MACRO_WEEKS,
@@ -46,6 +49,7 @@ from swim_coach.plan import (
     _bike_week_sessions,
     _duration_min_for_distance,
     _format_pace_s,
+    _monday_of_week,
     _no_coach_pool_purpose,
     _race_week_checklist,
     _round_100,
@@ -57,6 +61,7 @@ from swim_coach.plan import (
     count_structured_steps,
     generate_week,
     scaffold_macro,
+    scaffold_season_macro,
     scaffold_sharpening_macro,
 )
 from swim_coach.store import FileStore
@@ -3311,6 +3316,415 @@ def test_scaffold_sharpening_macro_same_shape_regardless_of_which_goal_is_passed
     shape_a = [(b.name, (b.end_date - b.start_date).days, b.weekly_volume_target_m) for b in macro_a.blocks]
     shape_b = [(b.name, (b.end_date - b.start_date).days, b.weekly_volume_target_m) for b in macro_b.blocks]
     assert shape_a == shape_b
+
+
+# --- scaffold_sharpening_macro's new taper_weeks parameter (multi-race-season-macro --
+# --- build) -- additive keyword-only param, default is byte-identical to before -----
+
+
+def test_scaffold_sharpening_macro_taper_weeks_default_is_byte_identical_to_before():
+    # Every existing call site omits taper_weeks -- confirms the new
+    # parameter changes nothing when omitted (regression safety for a
+    # change to an already-shipped, already-tested function).
+    athlete = make_athlete(sports=["bike"])
+    event = _make_sharpening_event(event_date=START + timedelta(weeks=7))
+    with_default_arg = scaffold_sharpening_macro(
+        athlete, event, START, current_weekly_volume_m=300, taper_weeks=TAPER_WEEKS_SHORT
+    )
+    without_arg = scaffold_sharpening_macro(athlete, event, START, current_weekly_volume_m=300)
+    shape_a = [(b.name, b.start_date, b.end_date, b.weekly_volume_target_m) for b in with_default_arg.blocks]
+    shape_b = [(b.name, b.start_date, b.end_date, b.weekly_volume_target_m) for b in without_arg.blocks]
+    assert shape_a == shape_b
+
+
+def test_scaffold_sharpening_macro_shorter_taper_weeks_lowers_min_runway_floor():
+    # A runway too short for the DEFAULT (SHARPENING_MIN_MACRO_WEEKS=4) but
+    # long enough for a shorter taper_weeks (SHARPEN_WEEKS_MIN + 1 = 3)
+    # succeeds instead of raising.
+    athlete = make_athlete(sports=["bike"])
+    event = _make_sharpening_event(event_date=START + timedelta(weeks=SHARPEN_WEEKS_MIN + MINI_TAPER_WEEKS))
+    with pytest.raises(ValueError, match="need at least"):
+        scaffold_sharpening_macro(athlete, event, START, current_weekly_volume_m=300)
+    macro = scaffold_sharpening_macro(
+        athlete, event, START, current_weekly_volume_m=300, taper_weeks=MINI_TAPER_WEEKS
+    )
+    assert [b.name for b in macro.blocks] == ["sharpen", "taper"]
+    taper_block = next(b for b in macro.blocks if b.name == "taper")
+    weeks = (taper_block.end_date - taper_block.start_date).days // 7 + 1
+    assert weeks == MINI_TAPER_WEEKS
+    # Shallower cut than the default 2-week taper's ~50%: 1 week * 25%/week = 25%.
+    assert taper_block.weekly_volume_target_m == max(0, round(300 * (1 - TAPER_WEEKLY_DECAY * MINI_TAPER_WEEKS)))
+
+
+# --- scaffold_season_macro (multi-race-season-macro build) --------------------------
+#
+# Chains scaffold_macro/scaffold_sharpening_macro, once per race, into ONE
+# season-spanning MacroPlan -- see that function's own docstring for the
+# full design and library/31-multi-race-season-periodization.md for the
+# citations. Real, grounded scenario: Andrew's actual 2026 cyclocross
+# season (verified against the live DB this build -- one A-priority race,
+# three B-priority tune-up races, exactly matching Friel's "don't treat
+# every race as an A race" guidance already applied to his real Event rows).
+
+
+def _make_season_event(**overrides):
+    data = dict(
+        id=uuid.uuid4(),
+        athlete_id=ATHLETE_ID,
+        name="Season Race",
+        event_date=START + timedelta(weeks=5),
+        target_metric="duration_min",
+        distance_m=None,
+        target_value=90.0,
+        priority="B",
+        primary_sport="bike",
+    )
+    data.update(overrides)
+    return Event(**data)
+
+
+def _assert_contiguous(blocks):
+    # Bug fix (2026-09-15): a race that GOT a dedicated cycle leaves exactly
+    # a 7-day gap after its own last block -- that race's own protected,
+    # unmodeled race week (same convention a single-race macro already has;
+    # see scaffold_season_macro's own docstring). A gap only ever appears
+    # right after a DIFFERENT race's block starts (block.race_event_id
+    # changes), never mid-cycle within one race's own blocks, and it's never
+    # anything OTHER than exactly 7 days -- a 0-day (contiguous) or 7-day
+    # (protected race week) gap are the only two legal shapes.
+    for prev, curr in zip(blocks, blocks[1:]):
+        gap_days = (curr.start_date - prev.end_date).days
+        if prev.race_event_id != curr.race_event_id:
+            assert gap_days in (1, 8), (
+                f"gap between {prev.name} (ends {prev.end_date}, race="
+                f"{prev.race_event_id}) and {curr.name} (starts "
+                f"{curr.start_date}, race={curr.race_event_id}) is "
+                f"{gap_days - 1} days -- expected 0 (contiguous) or 7 (the "
+                f"prior race's own protected race week)"
+            )
+        else:
+            assert gap_days == 1, (
+                f"gap WITHIN one race's own blocks: {prev.name} (ends "
+                f"{prev.end_date}) and {curr.name} (starts {curr.start_date})"
+            )
+
+
+def test_scaffold_season_macro_requires_at_least_two_races():
+    athlete = make_athlete(sports=["bike"])
+    race = _make_season_event()
+    with pytest.raises(ValueError, match="at least 2 races"):
+        scaffold_season_macro(athlete, [race], START, current_weekly_volume_m=300, established_base=True)
+
+
+def test_scaffold_season_macro_requires_same_primary_sport():
+    athlete = make_athlete(sports=["bike"])
+    bike_race = _make_season_event(event_date=START + timedelta(weeks=5))
+    swim_race = _make_season_event(
+        event_date=START + timedelta(weeks=8),
+        primary_sport="swim",
+        target_metric="distance_m",
+        distance_m=3000,
+        target_value=None,
+    )
+    with pytest.raises(ValueError, match="same primary_sport"):
+        scaffold_season_macro(
+            athlete, [bike_race, swim_race], START, current_weekly_volume_m=300, established_base=True
+        )
+
+
+def test_scaffold_season_macro_requires_races_in_the_future():
+    athlete = make_athlete(sports=["bike"])
+    past_race = _make_season_event(event_date=START - timedelta(days=1))
+    future_race = _make_season_event(event_date=START + timedelta(weeks=8))
+    with pytest.raises(ValueError, match="on or before start"):
+        scaffold_season_macro(
+            athlete, [past_race, future_race], START, current_weekly_volume_m=300, established_base=True
+        )
+
+
+def test_scaffold_season_macro_a_tier_race_raises_when_runway_too_short():
+    athlete = make_athlete(sports=["bike"])
+    imminent_a = _make_season_event(name="Imminent A", event_date=START + timedelta(weeks=1), priority="A")
+    later_b = _make_season_event(name="Later B", event_date=START + timedelta(weeks=10))
+    with pytest.raises(ValueError, match="A-priority race 'Imminent A'"):
+        scaffold_season_macro(
+            athlete, [imminent_a, later_b], START, current_weekly_volume_m=300, established_base=True
+        )
+
+
+def test_scaffold_season_macro_b_tier_skipped_when_runway_too_short():
+    # Below SHARPEN_MIN_WEEKS_MINI_TAPER (3): no dedicated block for the
+    # B-priority race -- it gets absorbed into whatever covers its date.
+    athlete = make_athlete(sports=["bike"])
+    near_b = _make_season_event(
+        name="Near B", event_date=START + timedelta(weeks=2), priority="B"
+    )
+    later_a = _make_season_event(
+        name="Later A", event_date=START + timedelta(weeks=9), priority="A"
+    )
+    macro = scaffold_season_macro(
+        athlete, [near_b, later_a], START, current_weekly_volume_m=300, established_base=True,
+        peak_weekly_volume_m=600,
+    )
+    assert all(b.race_event_id != near_b.id for b in macro.blocks)
+    assert near_b.id in macro.event_ids
+    _assert_contiguous(macro.blocks)
+    assert macro.blocks[0].start_date == START
+
+
+def test_scaffold_season_macro_b_tier_skipped_when_no_established_base():
+    athlete = make_athlete(sports=["bike"])
+    reachable_b = _make_season_event(
+        name="Reachable B", event_date=START + timedelta(weeks=5), priority="B"
+    )
+    later_a = _make_season_event(
+        name="Later A", event_date=START + timedelta(weeks=12), priority="A"
+    )
+    macro = scaffold_season_macro(
+        athlete, [reachable_b, later_a], START, current_weekly_volume_m=300, established_base=False,
+        peak_weekly_volume_m=600,
+    )
+    assert all(b.race_event_id != reachable_b.id for b in macro.blocks)
+    # The A-race's own base block absorbs the whole runway from START, since
+    # nothing consumed the cursor for the skipped B-race.
+    assert macro.blocks[0].start_date == START
+    assert macro.blocks[0].name == "base"
+
+
+def test_scaffold_season_macro_b_tier_gets_shallower_taper_than_a_tier():
+    athlete = make_athlete(sports=["bike"])
+    b_race = _make_season_event(
+        name="B race", event_date=START + timedelta(weeks=SHARPEN_MIN_WEEKS_MINI_TAPER), priority="B"
+    )
+    later_a = _make_season_event(name="Later A", event_date=START + timedelta(weeks=20), priority="A")
+    macro = scaffold_season_macro(
+        athlete, [b_race, later_a], START, current_weekly_volume_m=300, established_base=True,
+        peak_weekly_volume_m=600,
+    )
+    b_taper = next(b for b in macro.blocks if b.race_event_id == b_race.id and b.name == "taper")
+    weeks = (b_taper.end_date - b_taper.start_date).days // 7 + 1
+    assert weeks == MINI_TAPER_WEEKS
+    assert weeks < TAPER_WEEKS_SHORT
+
+
+def test_scaffold_season_macro_b_tier_excess_runway_gets_filler_then_capped_dedicated_cycle():
+    # A B-priority race with MORE than B_TIER_MAX_DEDICATED_WEEKS of runway
+    # never grows a full peak -- the excess becomes a plain flat filler
+    # block ahead of the (still-capped) dedicated sharpen+mini-taper cycle.
+    athlete = make_athlete(sports=["bike"])
+    far_b = _make_season_event(
+        name="Far B", event_date=START + timedelta(weeks=12), priority="B"
+    )
+    later_a = _make_season_event(name="Later A", event_date=START + timedelta(weeks=20), priority="A")
+    macro = scaffold_season_macro(
+        athlete, [far_b, later_a], START, current_weekly_volume_m=300, established_base=True,
+        peak_weekly_volume_m=600,
+    )
+    b_blocks = [b for b in macro.blocks if b.race_event_id == far_b.id]
+    dedicated_weeks = sum((b.end_date - b.start_date).days // 7 + 1 for b in b_blocks)
+    assert dedicated_weeks == B_TIER_MAX_DEDICATED_WEEKS
+    # A filler block (untagged -- doesn't belong to any one race) precedes it.
+    filler = macro.blocks[0]
+    assert filler.race_event_id is None
+    assert filler.name == "hold"
+    assert filler.start_date == START
+    _assert_contiguous(macro.blocks)
+
+
+def test_scaffold_season_macro_ramp_cap_respected_across_race_to_race_transition():
+    # The re-build into race 2 is seeded off race 1's own post-taper volume
+    # (NOT the athlete's raw current_weekly_volume_m) and still clamps to
+    # WEEKLY_VOLUME_RAMP_CAP/week -- chaining must never silently bypass the
+    # existing ramp-cap safety rail (CLAUDE.md).
+    athlete = make_athlete(sports=["bike"])
+    race1 = _make_season_event(name="Race 1", event_date=START + timedelta(weeks=12), priority="B")
+    # week=22, not 20 (2026-09-15): the race-week-collision fix above gives
+    # race2 one fewer week of runway than before (the cursor now correctly
+    # skips race1's own protected race week too) -- at week 20 that shrinks
+    # race2 below MIN_MACRO_WEEKS, so it now falls to the sharpening
+    # fallback shape instead of the full base/build/peak/taper shape this
+    # test needs (peak_weekly_volume_m only applies to the latter). week=22
+    # restores comfortable headroom above MIN_MACRO_WEEKS=8.
+    race2 = _make_season_event(name="Race 2", event_date=START + timedelta(weeks=22), priority="A")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        macro = scaffold_season_macro(
+            athlete, [race1, race2], START, current_weekly_volume_m=300, established_base=True,
+            # Deliberately unreachable in the remaining runway. Raised from
+            # 5000 (2026-09-15): the race-week-collision fix above gives
+            # race2 one fewer week of runway (the cursor now correctly
+            # skips race1's own protected race week too), so 5000 no longer
+            # reliably clears the ramp cap on its own -- this test's actual
+            # intent (prove the cap still applies across a chained
+            # transition, not the exact target number) is unaffected.
+            peak_weekly_volume_m=50000,
+        )
+    assert any("ramp cap" in str(w.message) for w in caught)
+    race2_blocks = [b for b in macro.blocks if b.race_event_id == race2.id]
+    race2_peak = max(b.weekly_volume_target_m for b in race2_blocks)
+    race1_taper_end = next(
+        b.weekly_volume_target_m for b in macro.blocks if b.race_event_id == race1.id and b.name == "taper"
+    )
+    # Whatever it clamped to, it must derive from race1's own post-taper
+    # volume, not from a fresh, unconstrained 300 -> 5000 climb.
+    ramp_weeks_upper_bound = 20  # generous upper bound, just proving it's clamped at all
+    assert race2_peak <= race1_taper_end * (1 + WEEKLY_VOLUME_RAMP_CAP) ** ramp_weeks_upper_bound
+    assert race2_peak < 5000
+
+
+def test_scaffold_season_macro_a_race_own_week_not_swallowed_by_next_race():
+    # Real bug (2026-09-15, found comparing against Andrew's real panel-of-
+    # experts macrocycle): scaffold_macro/scaffold_sharpening_macro's own
+    # convention is "race week itself is not modeled as a macro block" --
+    # a single-race macro's taper ends the Sunday BEFORE race week, and
+    # nothing after it ever claims that week. Chaining breaks this: cursor
+    # advanced to (taper.end_date + 1 day) lands exactly on the PRIOR
+    # race's own implicit race week, so the NEXT race's cycle immediately
+    # claims it -- an A-priority race's own peak/race week silently gets
+    # relabeled as a totally different race's build-up ("sharpen") volume
+    # instead of staying a genuine taper/freshen week. Verified live against
+    # Andrew's real DB race calendar before this test was written: Peak
+    # Weekend's (Oct 17) own race week was covered by Season Finale's
+    # sharpen block instead.
+    athlete = make_athlete(sports=["bike"])
+    race1 = _make_season_event(name="Race 1", event_date=START + timedelta(weeks=14), priority="A")
+    race2 = _make_season_event(name="Race 2", event_date=START + timedelta(weeks=18), priority="B")
+    macro = scaffold_season_macro(
+        athlete, [race1, race2], START, current_weekly_volume_m=1000, established_base=True,
+        peak_weekly_volume_m=2000,
+    )
+    race1_monday = _monday_of_week(race1.event_date)
+    race1_week_end = race1_monday + timedelta(days=6)
+    covering = [
+        b for b in macro.blocks if b.start_date <= race1_monday <= b.end_date
+        or b.start_date <= race1_week_end <= b.end_date
+    ]
+    # Race 1's own week must not be covered by a block belonging to a
+    # DIFFERENT race -- either no block covers it at all (implicit race
+    # week, the single-race convention), or a block covers it that's
+    # actually tagged as race1's own.
+    for block in covering:
+        assert block.race_event_id in (None, race1.id), (
+            f"race1's own week ({race1_monday}..{race1_week_end}) is covered by "
+            f"a {block.name!r} block tagged for a different race "
+            f"({block.race_event_id}) -- should be race1's own taper/race week, "
+            f"not race2's build-up"
+        )
+
+
+def test_scaffold_season_macro_event_ids_lists_every_race_even_skipped_ones():
+    athlete = make_athlete(sports=["bike"])
+    skipped_b = _make_season_event(
+        name="Skipped B", event_date=START + timedelta(weeks=1), priority="B"
+    )
+    dedicated_a = _make_season_event(
+        name="Dedicated A", event_date=START + timedelta(weeks=10), priority="A"
+    )
+    macro = scaffold_season_macro(
+        athlete, [skipped_b, dedicated_a], START, current_weekly_volume_m=300, established_base=True,
+        peak_weekly_volume_m=600,
+    )
+    assert macro.event_ids == [skipped_b.id, dedicated_a.id]
+    assert macro.event_id == dedicated_a.id
+
+
+def test_scaffold_season_macro_priority_is_case_insensitive_and_free_text_tolerant():
+    athlete = make_athlete(sports=["bike"])
+    lowercase_a = _make_season_event(
+        name="lowercase a", event_date=START + timedelta(weeks=9), priority=" a "
+    )
+    unrecognized = _make_season_event(
+        name="Unrecognized priority", event_date=START + timedelta(weeks=5), priority="tune-up"
+    )
+    macro = scaffold_season_macro(
+        athlete, [unrecognized, lowercase_a], START, current_weekly_volume_m=300, established_base=True,
+        peak_weekly_volume_m=600,
+    )
+    # "tune-up" (unrecognized) behaves like a C-priority race: no dedicated
+    # block. " a " (whitespace/case-tolerant) behaves like "A": gets one.
+    assert all(b.race_event_id != unrecognized.id for b in macro.blocks)
+    assert any(b.race_event_id == lowercase_a.id for b in macro.blocks)
+
+
+def test_scaffold_season_macro_trailing_block_omitted_when_final_race_gets_dedicated_cycle():
+    # Matches scaffold_macro/scaffold_sharpening_macro's own convention:
+    # race week itself is not modeled as a macro block.
+    athlete = make_athlete(sports=["bike"])
+    race1 = _make_season_event(name="Race 1", event_date=START + timedelta(weeks=5), priority="B")
+    race2 = _make_season_event(name="Race 2", event_date=START + timedelta(weeks=12), priority="A")
+    macro = scaffold_season_macro(
+        athlete, [race1, race2], START, current_weekly_volume_m=300, established_base=True,
+        peak_weekly_volume_m=600,
+    )
+    last_block = macro.blocks[-1]
+    race2_monday = race2.event_date - timedelta(days=race2.event_date.weekday())
+    assert last_block.end_date == race2_monday - timedelta(days=1)
+
+
+def test_scaffold_season_macro_trailing_block_added_when_final_race_has_no_dedicated_cycle():
+    athlete = make_athlete(sports=["bike"])
+    dedicated_a = _make_season_event(name="Dedicated A", event_date=START + timedelta(weeks=9), priority="A")
+    trailing_c = _make_season_event(
+        name="Trailing C", event_date=START + timedelta(weeks=10), priority="C"
+    )
+    macro = scaffold_season_macro(
+        athlete, [dedicated_a, trailing_c], START, current_weekly_volume_m=300, established_base=True,
+        peak_weekly_volume_m=600,
+    )
+    last_block = macro.blocks[-1]
+    trailing_c_monday = trailing_c.event_date - timedelta(days=trailing_c.event_date.weekday())
+    assert last_block.name == "hold"
+    assert last_block.race_event_id == trailing_c.id
+    assert last_block.end_date == trailing_c_monday + timedelta(days=6)
+    _assert_contiguous(macro.blocks)
+
+
+def test_scaffold_season_macro_andrews_real_cx_calendar_end_to_end():
+    # Real, DB-verified scenario (this build): Andrew's actual 2026
+    # cyclocross season -- Season Opener (B), Peak Weekend (A), Halloween
+    # Weekend (B), Season Finale (B). Date deltas (33/47/68 days from
+    # Season Opener's own 5-day-out start) mirror the real calendar's own
+    # spacing exactly (28/14/21-day gaps between races).
+    athlete = make_athlete(sports=["bike"])
+    season_opener = _make_season_event(
+        name="Season Opener", event_date=START + timedelta(days=5), priority="B"
+    )
+    peak_weekend = _make_season_event(
+        name="Peak Weekend", event_date=START + timedelta(days=33), priority="A"
+    )
+    halloween_weekend = _make_season_event(
+        name="Halloween Weekend", event_date=START + timedelta(days=47), priority="B"
+    )
+    season_finale = _make_season_event(
+        name="Season Finale", event_date=START + timedelta(days=68), priority="B"
+    )
+    races = [season_opener, peak_weekend, halloween_weekend, season_finale]
+    macro = scaffold_season_macro(
+        athlete, races, START, current_weekly_volume_m=540, established_base=True
+    )
+
+    # Every real race is known to the plan...
+    assert macro.event_ids == [r.id for r in races]
+    assert macro.event_id == season_finale.id
+    # ...but only Peak Weekend (A) and Season Finale (B, enough runway)
+    # get their own dedicated cycle -- Season Opener (5 days out) and
+    # Halloween Weekend (2 weeks' runway from Peak Weekend's taper end)
+    # are both too close to periodize on their own, exactly matching this
+    # build's real DB state (verified via DbStore this session).
+    tagged_races = {b.race_event_id for b in macro.blocks if b.race_event_id is not None}
+    assert peak_weekend.id in tagged_races
+    assert season_finale.id in tagged_races
+    assert season_opener.id not in tagged_races
+    assert halloween_weekend.id not in tagged_races
+
+    _assert_contiguous(macro.blocks)
+    assert macro.blocks[0].start_date == START
+    # No week's volume ever exceeds the ramp cap relative to the previous
+    # block's own end volume -- the season-wide safety-rail property.
+    for prev, curr in zip(macro.blocks, macro.blocks[1:]):
+        weeks_in_curr = (curr.end_date - curr.start_date).days // 7 + 1
+        max_allowed = prev.weekly_volume_target_m * (1 + WEEKLY_VOLUME_RAMP_CAP) ** weeks_in_curr
+        assert curr.weekly_volume_target_m <= max_allowed + 1  # +1: rounding
 
 
 # --- Mandatory correctness property #3: zero regression to scaffold_macro's ----------

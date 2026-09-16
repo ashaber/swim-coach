@@ -599,16 +599,64 @@ class MacroBlock(BaseModel):
     end_date: date
     weekly_volume_target_m: int = Field(ge=0)
     focus: str
+    race_event_id: UUID | None = None
+    # Which race (an Event.id) this specific block is building toward or
+    # tapering into -- multi-race-season-macro build
+    # (`plan.scaffold_season_macro`). `None` for every block produced by
+    # `scaffold_macro`/`scaffold_sharpening_macro` (unchanged meaning: the
+    # caller already knows the single target event via the parent
+    # `MacroPlan.event_id`, so tagging every block there would be pure
+    # redundancy, not new information) -- additive, no schema_version bump,
+    # every existing persisted MacroBlock (YAML or DB JSONB, no
+    # race_event_id key) validates unchanged. Only `scaffold_season_macro`
+    # sets this, on every block it produces, since a season-spanning
+    # `MacroPlan.blocks` list chains multiple races' worth of blocks
+    # end-to-end and a reader can no longer assume "the whole plan is for
+    # one event" the way a single-race macro's reader can -- see
+    # `MacroPlan.event_ids`'s own docstring below.
 
 
 class MacroPlan(BaseModel):
-    """The macrocycle scaffold (base -> build -> peak -> taper) toward an event."""
+    """The macrocycle scaffold (base -> build -> peak -> taper) toward an event.
+
+    `event_id` is always required and always resolves: for a single-race
+    macro (`plan.scaffold_macro`/`plan.scaffold_sharpening_macro`, unchanged)
+    it is that macro's one and only target event, exactly as before this
+    field existed. For a season-spanning macro
+    (`plan.scaffold_season_macro`, multi-race-season-macro build) it is set
+    to the LAST (chronologically final) race in the season -- so every
+    EXISTING single-event consumer that only ever reads `.event_id` (the
+    duplicate-macro guard in `backend/app/tools.py`'s `draft_macro_plan`
+    handler, the DB `macro_plans` table's own `event_id` column/index, the
+    PWA) keeps working unchanged, seeing "the plan's event" as its final
+    target -- a reasonable single answer, not an arbitrary one, since the
+    final race is what every earlier block in a season-spanning plan is
+    ultimately building toward.
+    """
 
     schema_version: int = 1
     id: UUID
     athlete_id: UUID
     event_id: UUID
     blocks: list[MacroBlock] = Field(default_factory=list)
+    event_ids: list[UUID] = Field(default_factory=list)
+    # ALL races this macro plan was scaffolded across, chronological order --
+    # multi-race-season-macro build. Empty (the default) for every macro
+    # produced by `scaffold_macro`/`scaffold_sharpening_macro`, unchanged --
+    # additive, no schema_version bump, every existing persisted MacroPlan
+    # (YAML or DB JSONB, no `event_ids` key) validates unchanged as an empty
+    # list, which is exactly what it always implicitly meant ("this macro is
+    # about the one `event_id` above, full stop"). Only `scaffold_season_macro`
+    # populates this, with `event_ids[-1] == event_id` always true for its
+    # output. NOT every id in this list is guaranteed to have a dedicated
+    # `MacroBlock` tagged with its id via `MacroBlock.race_event_id` --
+    # `scaffold_season_macro` deliberately does not carve out a dedicated
+    # block for every race (a B-priority race too close to periodize, or a
+    # C-priority race at all, is folded into whichever surrounding block
+    # already covers its date instead -- see that function's own docstring)
+    # -- so `event_ids` is the complete "races this plan is aware of" list,
+    # while `{b.race_event_id for b in blocks if b.race_event_id}` is the
+    # (possibly smaller) "races that got their own dedicated block" subset.
 
 
 class WorkoutSet(BaseModel):
