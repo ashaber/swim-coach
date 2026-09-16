@@ -49,6 +49,7 @@ from swim_coach.plan import (
     _bike_week_sessions,
     _duration_min_for_distance,
     _format_pace_s,
+    _monday_of_week,
     _no_coach_pool_purpose,
     _race_week_checklist,
     _round_100,
@@ -3383,11 +3384,29 @@ def _make_season_event(**overrides):
 
 
 def _assert_contiguous(blocks):
+    # Bug fix (2026-09-15): a race that GOT a dedicated cycle leaves exactly
+    # a 7-day gap after its own last block -- that race's own protected,
+    # unmodeled race week (same convention a single-race macro already has;
+    # see scaffold_season_macro's own docstring). A gap only ever appears
+    # right after a DIFFERENT race's block starts (block.race_event_id
+    # changes), never mid-cycle within one race's own blocks, and it's never
+    # anything OTHER than exactly 7 days -- a 0-day (contiguous) or 7-day
+    # (protected race week) gap are the only two legal shapes.
     for prev, curr in zip(blocks, blocks[1:]):
-        assert curr.start_date == prev.end_date + timedelta(days=1), (
-            f"gap between {prev.name} (ends {prev.end_date}) and {curr.name} "
-            f"(starts {curr.start_date})"
-        )
+        gap_days = (curr.start_date - prev.end_date).days
+        if prev.race_event_id != curr.race_event_id:
+            assert gap_days in (1, 8), (
+                f"gap between {prev.name} (ends {prev.end_date}, race="
+                f"{prev.race_event_id}) and {curr.name} (starts "
+                f"{curr.start_date}, race={curr.race_event_id}) is "
+                f"{gap_days - 1} days -- expected 0 (contiguous) or 7 (the "
+                f"prior race's own protected race week)"
+            )
+        else:
+            assert gap_days == 1, (
+                f"gap WITHIN one race's own blocks: {prev.name} (ends "
+                f"{prev.end_date}) and {curr.name} (starts {curr.start_date})"
+            )
 
 
 def test_scaffold_season_macro_requires_at_least_two_races():
@@ -3519,12 +3538,26 @@ def test_scaffold_season_macro_ramp_cap_respected_across_race_to_race_transition
     # existing ramp-cap safety rail (CLAUDE.md).
     athlete = make_athlete(sports=["bike"])
     race1 = _make_season_event(name="Race 1", event_date=START + timedelta(weeks=12), priority="B")
-    race2 = _make_season_event(name="Race 2", event_date=START + timedelta(weeks=20), priority="A")
+    # week=22, not 20 (2026-09-15): the race-week-collision fix above gives
+    # race2 one fewer week of runway than before (the cursor now correctly
+    # skips race1's own protected race week too) -- at week 20 that shrinks
+    # race2 below MIN_MACRO_WEEKS, so it now falls to the sharpening
+    # fallback shape instead of the full base/build/peak/taper shape this
+    # test needs (peak_weekly_volume_m only applies to the latter). week=22
+    # restores comfortable headroom above MIN_MACRO_WEEKS=8.
+    race2 = _make_season_event(name="Race 2", event_date=START + timedelta(weeks=22), priority="A")
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         macro = scaffold_season_macro(
             athlete, [race1, race2], START, current_weekly_volume_m=300, established_base=True,
-            peak_weekly_volume_m=5000,  # deliberately unreachable in the remaining runway
+            # Deliberately unreachable in the remaining runway. Raised from
+            # 5000 (2026-09-15): the race-week-collision fix above gives
+            # race2 one fewer week of runway (the cursor now correctly
+            # skips race1's own protected race week too), so 5000 no longer
+            # reliably clears the ramp cap on its own -- this test's actual
+            # intent (prove the cap still applies across a chained
+            # transition, not the exact target number) is unaffected.
+            peak_weekly_volume_m=50000,
         )
     assert any("ramp cap" in str(w.message) for w in caught)
     race2_blocks = [b for b in macro.blocks if b.race_event_id == race2.id]
@@ -3537,6 +3570,46 @@ def test_scaffold_season_macro_ramp_cap_respected_across_race_to_race_transition
     ramp_weeks_upper_bound = 20  # generous upper bound, just proving it's clamped at all
     assert race2_peak <= race1_taper_end * (1 + WEEKLY_VOLUME_RAMP_CAP) ** ramp_weeks_upper_bound
     assert race2_peak < 5000
+
+
+def test_scaffold_season_macro_a_race_own_week_not_swallowed_by_next_race():
+    # Real bug (2026-09-15, found comparing against Andrew's real panel-of-
+    # experts macrocycle): scaffold_macro/scaffold_sharpening_macro's own
+    # convention is "race week itself is not modeled as a macro block" --
+    # a single-race macro's taper ends the Sunday BEFORE race week, and
+    # nothing after it ever claims that week. Chaining breaks this: cursor
+    # advanced to (taper.end_date + 1 day) lands exactly on the PRIOR
+    # race's own implicit race week, so the NEXT race's cycle immediately
+    # claims it -- an A-priority race's own peak/race week silently gets
+    # relabeled as a totally different race's build-up ("sharpen") volume
+    # instead of staying a genuine taper/freshen week. Verified live against
+    # Andrew's real DB race calendar before this test was written: Peak
+    # Weekend's (Oct 17) own race week was covered by Season Finale's
+    # sharpen block instead.
+    athlete = make_athlete(sports=["bike"])
+    race1 = _make_season_event(name="Race 1", event_date=START + timedelta(weeks=14), priority="A")
+    race2 = _make_season_event(name="Race 2", event_date=START + timedelta(weeks=18), priority="B")
+    macro = scaffold_season_macro(
+        athlete, [race1, race2], START, current_weekly_volume_m=1000, established_base=True,
+        peak_weekly_volume_m=2000,
+    )
+    race1_monday = _monday_of_week(race1.event_date)
+    race1_week_end = race1_monday + timedelta(days=6)
+    covering = [
+        b for b in macro.blocks if b.start_date <= race1_monday <= b.end_date
+        or b.start_date <= race1_week_end <= b.end_date
+    ]
+    # Race 1's own week must not be covered by a block belonging to a
+    # DIFFERENT race -- either no block covers it at all (implicit race
+    # week, the single-race convention), or a block covers it that's
+    # actually tagged as race1's own.
+    for block in covering:
+        assert block.race_event_id in (None, race1.id), (
+            f"race1's own week ({race1_monday}..{race1_week_end}) is covered by "
+            f"a {block.name!r} block tagged for a different race "
+            f"({block.race_event_id}) -- should be race1's own taper/race week, "
+            f"not race2's build-up"
+        )
 
 
 def test_scaffold_season_macro_event_ids_lists_every_race_even_skipped_ones():

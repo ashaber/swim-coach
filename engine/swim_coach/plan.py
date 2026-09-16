@@ -1704,17 +1704,31 @@ def scaffold_season_macro(
       training/experience, don't alter the plan." Folded into whatever
       block already covers its date.
 
-    **Coverage is always contiguous, never gapped.** A race that gets no
-    dedicated block leaves the cursor exactly where it already was; the
+    **Coverage is contiguous EXCEPT for one deliberate, protected gap per
+    dedicated cycle: that race's own implicit race week.** A race that gets
+    no dedicated block leaves the cursor exactly where it already was; the
     NEXT race that DOES get a dedicated cycle always starts its own first
     block at that same cursor (both `scaffold_macro` and
     `scaffold_sharpening_macro` always start immediately, no lead-in gap),
-    which absorbs every skipped race's own date along the way. If every
-    remaining race is skipped (including the season's final one), a single
-    trailing flat `hold` block fills from the cursor through the final
-    race's own week, so every week from `start` through the season's last
-    race has SOME block covering it (`generate_week`'s `_find_block` raises
-    for a week outside the macro's range).
+    which absorbs every skipped race's own date along the way. **Bug fix
+    (2026-09-15):** after a race DOES get a dedicated cycle, the cursor
+    skips past that race's own week too (`event_monday + 1 week`, not
+    `sub_macro.blocks[-1].end_date + 1 day`) -- otherwise the very next
+    race's own cycle would immediately claim and relabel the prior race's
+    real taper/race week as ITS OWN build-up, exactly the "race week itself
+    is not modeled as a macro block" convention `scaffold_macro`/
+    `scaffold_sharpening_macro` already establish for a single race, now
+    correctly preserved when chained. This means a genuine, intentional
+    7-day gap in `blocks` coverage follows every dedicated cycle -- not a
+    bug, the same implicit-race-week convention a single-race macro already
+    has, just now visible in a list of multiple blocks instead of only at
+    the very end. If every remaining race is skipped (including the
+    season's final one), a single trailing flat `hold` block fills from the
+    cursor through the final race's own week, so every week from `start`
+    through the season's last race has SOME block covering it
+    (`generate_week`'s `_find_block` raises for a week outside the macro's
+    range) -- except each dedicated race's own protected week, exactly as a
+    single-race macro already leaves uncovered today.
 
     **Known, deliberately unaddressed limitation, stated plainly (same
     footing as `plan.py`'s other documented, deferred gaps -- see the
@@ -1812,7 +1826,17 @@ def scaffold_season_macro(
             for block in sub_macro.blocks:
                 block.race_event_id = race.id
             blocks.extend(sub_macro.blocks)
-            cursor_start = sub_macro.blocks[-1].end_date + timedelta(days=1)
+            # Bug fix (2026-09-15, found comparing against a real hand-built
+            # macrocycle): `sub_macro.blocks[-1].end_date` is ALWAYS exactly
+            # `event_monday - 1 day` by construction (scaffold_macro's/
+            # scaffold_sharpening_macro's own "race week itself is not
+            # modeled as a block" convention) -- advancing the cursor to the
+            # day right after that end date lands exactly on THIS race's own
+            # implicit race week, letting the NEXT race's cycle immediately
+            # claim it. Skip past this race's own week too, so a race's real
+            # taper/race week can never be silently relabeled as a
+            # different race's build-up.
+            cursor_start = event_monday + timedelta(weeks=1)
             cursor_volume = sub_macro.blocks[-1].weekly_volume_target_m
 
         elif tier == "B" and established_base and weeks_available >= SHARPEN_MIN_WEEKS_MINI_TAPER:
@@ -1837,7 +1861,8 @@ def scaffold_season_macro(
             for block in sub_macro.blocks:
                 block.race_event_id = race.id
             blocks.extend(sub_macro.blocks)
-            cursor_start = sub_macro.blocks[-1].end_date + timedelta(days=1)
+            # Same fix as the A-tier branch above -- see that comment.
+            cursor_start = event_monday + timedelta(weeks=1)
             cursor_volume = sub_macro.blocks[-1].weekly_volume_target_m
 
         # else: "B" without enough runway/established base, "C", or any
@@ -1847,16 +1872,27 @@ def scaffold_season_macro(
 
     last_race_monday = _monday_of_week(races_sorted[-1].event_date)
     trailing_start_monday = _monday_on_or_after(cursor_start)
-    # Strict `<`, not `<=`: if the cursor already sits exactly at the final
-    # race's own week (its own dedicated cycle -- "A" or "B" tier -- just
-    # ended there), no trailing block is added, preserving the same "race
-    # week itself is not modeled as a macro block" convention
-    # `scaffold_macro`/`scaffold_sharpening_macro` already establish for a
-    # single race. A trailing block only fires when the final race got NO
-    # dedicated cycle of its own (skipped "B" or any "C"), in which case
-    # there is no such convention to preserve -- the athlete needs SOME
-    # coverage through and including that race's own week too.
-    if trailing_start_monday < last_race_monday:
+    # Bug fix (2026-09-15): whether a trailing block is needed depends on
+    # whether the FINAL race itself got a dedicated cycle -- NOT merely on
+    # whether the cursor happens to already sit at that race's own Monday.
+    # Before the cursor fix above, those two conditions were equivalent (the
+    # cursor could only land exactly on a race's own Monday by JUST having
+    # finished that race's own dedicated cycle). They no longer are: if an
+    # EARLIER race's own protected race-week ends exactly one week before a
+    # LATER, undedicated race (e.g. a "C"-tier tune-up race scheduled the
+    # week right after an "A"-tier race), the cursor can coincidentally
+    # land on that later race's Monday too, even though THAT race itself
+    # never got a dedicated cycle and still needs its own week covered.
+    final_race_got_dedicated_cycle = races_sorted[-1].id in {
+        b.race_event_id for b in blocks if b.race_event_id is not None
+    }
+    # `trailing_start_monday <= last_race_monday` guards the same
+    # degenerate case the old `<` comparison also implicitly avoided: races
+    # packed too tightly for the cursor to land on-or-before the final
+    # race's own Monday at all would otherwise emit an inverted (end before
+    # start) block. Real, pre-existing edge case, not introduced by this
+    # fix -- just kept explicit here since the primary gate changed.
+    if not final_race_got_dedicated_cycle and trailing_start_monday <= last_race_monday:
         blocks.append(
             MacroBlock(
                 name="hold",

@@ -2843,9 +2843,24 @@ def test_draft_season_macro_plan_real_andrew_cx_calendar_end_to_end(athletes_dir
     assert reloaded.event_ids == [
         season_opener.id, peak_weekend.id, halloween_weekend.id, season_finale.id,
     ]
-    # Contiguous, no gaps.
+    # Contiguous, EXCEPT for a deliberate 7-day gap after a dedicated
+    # cycle's own protected race week (2026-09-15 bug fix -- see
+    # scaffold_season_macro's own docstring): a race that got a dedicated
+    # cycle (Peak Weekend, Season Finale here) leaves its own race week
+    # unmodeled, same "race week itself is not a block" convention a
+    # single-race macro already has -- now correctly preserved when
+    # chained, instead of being silently claimed as the next race's
+    # build-up.
+    dedicated_ids = {peak_weekend.id, season_finale.id}
     for prev, curr in zip(reloaded.blocks, reloaded.blocks[1:]):
-        assert curr.start_date == prev.end_date + timedelta(days=1)
+        gap_days = (curr.start_date - prev.end_date).days
+        if prev.race_event_id in dedicated_ids and prev.race_event_id != curr.race_event_id:
+            assert gap_days == 8, (
+                f"expected a 7-day protected-race-week gap after "
+                f"{prev.race_event_id}'s own dedicated cycle, got {gap_days - 1} days"
+            )
+        else:
+            assert gap_days == 1, f"unexpected gap between {prev.name} and {curr.name}"
 
 
 def test_draft_season_macro_plan_missing_current_weekly_volume_is_an_error(athletes_dir) -> None:
