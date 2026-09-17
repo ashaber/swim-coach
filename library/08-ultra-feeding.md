@@ -15,7 +15,7 @@ availability) and `06-long-swim-progression.md` (duration progression).
 
 ## The 90-minute wall is not a plausible muscle-glycogen wall
 
-**The question's premise is the first thing to correct, honestly.** A
+**The question's premise needs correcting, honestly.** A
 ~90-minute "done" point is **not** where trained-athlete muscle-glycogen
 depletion classically lands. `[ADAPTED: cycling]` Confidence: high. Time to
 exhaustion at 70-75% VO2max on a normal mixed diet ran ~126 min in
@@ -100,9 +100,8 @@ the transporter physiology. Confidence: high. ~30 g/h for 1-2h efforts,
 sources (glucose+fructose or maltodextrin+fructose — single-transportable
 carbohydrate saturates gut absorption at ~60 g/h) — per
 `Jeukendrup (2014)` and `Shaw et al. (2014)`, both already in
-`reference_list.md`. Notably, the literature's own prescription for a
-90-minute session is ~30 g/h — it does not treat 90 min as a substrate wall.
-**Test:** for the 33.3 km target (~9-12h), the operative band is 60-90 g/h;
+`reference_list.md`. The literature's own 90-minute prescription is
+~30 g/h — not a substrate wall. **Test:** for the 33.3 km target (~9-12h), the operative band is 60-90 g/h;
 verify tolerance on long swims, logging GI symptoms against g/h actually
 consumed, not planned.
 
@@ -112,31 +111,29 @@ exposure reduced GI symptoms and malabsorption and improved performance
 (`Miall et al. (2018)`); gut absorption and gastric emptying are
 nutrient-specifically trainable (`Jeukendrup (2017)`). **COI note:** the
 carbohydrate-dose literature originates substantially from industry-funded
-and industry-adjacent labs; the findings are well-replicated, but that
-context is worth stating. **Test:** rehearse the exact race feed (product,
+labs; findings are well-replicated, but worth stating. **Test:** rehearse the exact race feed (product,
 concentration, cadence) on every long open-water swim, tracking GI symptom
 scores across the block; expect tolerance to improve over 2+ weeks.
 
 **Feed cadence costs less time than swimmers assume.** `Coach judgment:`
 practitioner convention (channel-swimming associations; no controlled study
-measured the performance cost of feed stops in swimming, and the only
-survey of Channel swimmers' feeding behaviour could not be verified as
-peer-reviewed, so it is not cited as evidence here). A feed every 20-30 min
+measured feed-stop cost in swimming, and the only Channel-swimmer feeding
+survey found could not be verified peer-reviewed, so it's not cited as
+evidence). A feed every 20-30 min
 at 15-20s (bottle on a rope, vertical skulling) costs roughly 40s/hour —
 well under 1% of total swim time. The gut and the fluid volume are the real
 constraints, not the clock.
 
 **Do not let the carbohydrate target drag a dangerous fluid volume behind
 it.** `Coach judgment:` (assembled from `Jeukendrup (2014)` on dose and
-`Hew-Butler et al. (2017)` on fluid volume; this specific combination has
-not been studied). Confidence: low-medium — flagged as reasoning, not
-evidence. Delivering 90 g/h from a dilute (~8%) drink requires ~1.1 L/h; over
-a 9-12h swim that is exactly the hypotonic fluid load that causes EAH (see
-below). Hit the carbohydrate target with **more concentrated feeds**, not
-more fluid. **Test:** compute the litres/hour implied by her planned feed
-schedule before the swim; compare against measured body-mass change on long
-training swims (nude, post-void, before/after). If planned intake exceeds
-measured losses, the plan is wrong.
+`Hew-Butler et al. (2017)` on fluid volume; this combination has not been
+studied). Confidence: low-medium — reasoning, not evidence. Delivering
+90 g/h from a dilute (~8%) drink requires ~1.1 L/h; over a 9-12h swim
+that's the hypotonic load that causes EAH (see below). Hit the target with
+**more concentrated feeds**, not more fluid. **Test:** compute the
+litres/hour implied by her planned feed schedule; compare against measured
+body-mass change on long training swims (nude, post-void, before/after). If
+planned intake exceeds measured losses, the plan is wrong.
 
 ## Post-swim rehydration
 
@@ -241,20 +238,46 @@ evidence and must not be presented as such. **Test:** have her void
 immediately before the post-swim weigh-in, so immersion-driven urine loss
 isn't miscounted as a sweat deficit she then "replaces."
 
+## Bike/CX: intensity-driven fueling, not just duration-driven
+
+**High-intensity intermittent effort needs the long-duration steady-state
+band even when short.** `[ADAPTED: cycling]` Confidence: medium-high.
+Glycogen oxidation scales with relative intensity, not just duration —
+oxidation is far higher per minute at 85% vs. 25% VO2max (`Romijn et al.
+(1993)`), and intermittent high-intensity work depletes fast-twitch
+(type II) fibres beyond what continuous submaximal work depletes
+(`Essén (1978)`; cited qualitatively, figures unverified from primary
+text). **Test:** a short (<90min) but genuinely high-intensity-intermittent
+exposure (a CX race plus its warmup) needs the >2.5-3h steady band
+(60-90 g/h), not the naive <2h/30 g/h reading duration alone implies —
+check GI symptoms/bonk timing against g/h actually consumed.
+
+**Carb-tolerance detraining timeline: genuinely unstudied.**
+`[ADAPTED: general-endurance]` Confidence: high. A 2023 systematic review of
+gut-training/feeding-challenge literature covers only active intervention
+periods (up to 28 days), never how fast tolerance decays after stopping
+(`Martinez et al. (2023)`). **Test:** none — a gap finding, not a claim to
+falsify; no fallback number substitutes for asking the athlete's own last
+training-at-rate date.
+
+**Heat raises glycogen use but lowers ingested-carbohydrate oxidation — not
+a "feed more" trigger.** `[EVIDENCE: cycling]` Cyclists at 35.4C vs. 16.4C
+(matched power) burned 25% more muscle glycogen while oxidizing ingested
+carbohydrate slower (`Jentjens et al. (2002)`). Raising g/h in heat adds GI
+risk without benefit; the real heat lever stays fluid/sodium (see above).
+
 ## Gaps
 
 No swim-specific glycogen-depletion or duration-ceiling literature exists —
-every timeline study cited above is cycling/running, male, and decades old.
-Nothing addresses masters/older female athletes' substrate use specifically.
-No study has measured the performance cost of feed stops in swimming, nor
-the optimal carbohydrate concentration for a swim feed (the
-concentration-vs-fluid-volume trade-off in this file has no data behind it).
-EAH incidence in *warm-water* ultra swims specifically is unknown (Wagner is
-a cool lake, Rogers a late-summer ocean swim). No field heuristic exists to
-interpret low urine output + thirst short of a blood test — which is exactly
-why the answer here is "get a serum sodium," not an invented rule. The
-150%/sodium rehydration protocol has never been validated after an
-ultra-distance swim specifically. Whether a "trained duration ceiling" can
-be deliberately and durably raised, and over what timeframe, is untested;
-`06-long-swim-progression.md`'s ladder is the current answer, and it rests
-on coach judgment, not evidence.
+every timeline study above is cycling/running, male, decades old. Nothing
+addresses masters/older female athletes' substrate use. No study has
+measured feed-stop cost in swimming, nor optimal swim-feed concentration
+(the concentration-vs-fluid-volume trade-off here has no data behind it).
+EAH incidence in *warm-water* ultra swims is unknown (Wagner is a cool
+lake, Rogers a late-summer ocean swim). No field heuristic exists to
+interpret low urine output + thirst short of a blood test — exactly why
+the answer is "get a serum sodium," not an invented rule. The 150%/sodium
+protocol has never been validated after an ultra-distance swim. Whether a
+"trained duration ceiling" can be durably raised, and over what timeframe,
+is untested; `06-long-swim-progression.md`'s ladder is the current answer,
+resting on coach judgment, not evidence.

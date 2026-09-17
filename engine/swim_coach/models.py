@@ -157,6 +157,21 @@ class Athlete(BaseModel):
     # gracefully (zone-name-only targets, no absolute watts), and the `.zwo`
     # export route/tool return a clear 422 rather than guessing at a number
     # when it's missing. Additive, no schema_version bump.
+    carb_tolerance_g_per_hr: float | None = None
+    # In-session carbohydrate-tolerance anchor (grams/hour) -- mirrors
+    # `ftp_watts` exactly (engine/fueling-calculator build), the same
+    # human-set-by-design posture: never auto-inferred, set via
+    # `update_athlete_profile` once a `ThresholdRecord` reading (or the
+    # athlete's own report) is judged trustworthy. Consumed by
+    # `swim_coach.fueling.compute_fueling_plan`, which falls back to its own
+    # `DEFAULT_CARB_TOLERANCE_G_PER_HR` (60 g/h, library/08-ultra-feeding.md's
+    # single-transportable-carbohydrate gut-absorption ceiling) when this is
+    # `None` -- per this build's brief, verbatim from Andrew: "when did you
+    # train at this rate?" is the real mechanism for surfacing an unset
+    # value, not a silently-assumed number (see that tool's own docstring).
+    # `None` (the default) leaves every existing profile.yaml (no key
+    # present) validating unchanged. Additive, no schema_version bump, same
+    # convention as every other additive field in this file.
     home_elevation_m: float | None = None
     # This athlete's real, usual training elevation -- the anchor
     # `interval_analysis.analyze`'s altitude-context signal compares a
@@ -1329,7 +1344,14 @@ class ThresholdRecord(BaseModel):
     id: UUID
     athlete_id: UUID
     sport: Sport
-    metric: Literal["ftp_watts", "lthr_bpm", "css_pace_s_per_100m"]
+    metric: Literal["ftp_watts", "lthr_bpm", "css_pace_s_per_100m", "carb_tolerance_g_per_hr"]
+    # "carb_tolerance_g_per_hr" (engine/fueling-calculator build): a dated
+    # reading of this athlete's demonstrated in-session carbohydrate
+    # tolerance (grams/hour) -- exactly the "trivially extensible" future
+    # metric this docstring's own comment anticipated. See
+    # `Athlete.carb_tolerance_g_per_hr`'s comment for how a trusted reading
+    # here gets adopted, and `swim_coach.fueling`'s module docstring for how
+    # it's consumed.
     value: float
     measured_at: date
     source: Literal[
