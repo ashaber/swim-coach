@@ -888,6 +888,30 @@ def test_record_threshold_test_invalid_value_is_rejected(athletes_dir) -> None:
 # --- update_athlete_profile ---------------------------------------------------
 
 
+def test_record_threshold_test_accepts_carb_tolerance_g_per_hr_metric(athletes_dir) -> None:
+    # Mirrors ftp_watts exactly (engine/fueling-calculator build).
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["record_threshold_test"](
+        {
+            "sport": "bike",
+            "metric": "carb_tolerance_g_per_hr",
+            "value": 75.0,
+            "measured_at": "2026-09-01",
+            "source": "field_test",
+            "notes": "2 weeks of gut-training before Skopelos",
+        }
+    )
+
+    assert result["logged"] is True
+    assert result["metric"] == "carb_tolerance_g_per_hr"
+    records = store.list_threshold_records("renee")
+    assert len(records) == 1
+    assert records[0].metric == "carb_tolerance_g_per_hr"
+    assert records[0].value == 75.0
+
+
 def test_update_athlete_profile_sets_ftp_watts(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
@@ -982,6 +1006,32 @@ def test_update_athlete_profile_rejects_invalid_sports_value(athletes_dir) -> No
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
 
     result = handlers["update_athlete_profile"]({"sports": ["not-a-sport"]})
+
+    assert "error" in result
+
+
+def test_update_athlete_profile_sets_carb_tolerance_g_per_hr(athletes_dir) -> None:
+    # Mirrors ftp_watts exactly (engine/fueling-calculator build).
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["update_athlete_profile"]({"carb_tolerance_g_per_hr": 75.0})
+
+    assert result["updated"] is True
+    assert result["carb_tolerance_g_per_hr"] == 75.0
+    assert store.load_athlete("renee").carb_tolerance_g_per_hr == 75.0
+
+
+def test_update_athlete_profile_rejects_implausible_carb_tolerance_g_per_hr(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["update_athlete_profile"]({"carb_tolerance_g_per_hr": -10.0})
+
+    assert "error" in result
+    assert store.load_athlete("renee").carb_tolerance_g_per_hr is None
+
+    result = handlers["update_athlete_profile"]({"carb_tolerance_g_per_hr": 5000.0})
 
     assert "error" in result
 

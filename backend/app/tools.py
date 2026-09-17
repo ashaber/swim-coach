@@ -464,7 +464,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
         "name": "record_threshold_test",
         "description": (
             "Durably record ONE dated per-sport threshold reading (FTP watts, "
-            "LTHR bpm, or CSS pace s/100m) -- so it's REMEMBERED past this "
+            "LTHR bpm, CSS pace s/100m, or carb tolerance g/h) -- so it's REMEMBERED past this "
             "conversation as part of the athlete's full threshold HISTORY, "
             "not a replacement for it. Call this whenever the athlete or "
             "coach reports a threshold value with any real dating/provenance "
@@ -493,8 +493,8 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
                 "metric": {
                     "type": "string",
-                    "enum": ["ftp_watts", "lthr_bpm", "css_pace_s_per_100m"],
-                    "description": "Which threshold metric: 'ftp_watts' (cycling FTP), 'lthr_bpm' (lactate-threshold heart rate), or 'css_pace_s_per_100m' (swim critical-swim-speed pace, seconds per 100m).",
+                    "enum": ["ftp_watts", "lthr_bpm", "css_pace_s_per_100m", "carb_tolerance_g_per_hr"],
+                    "description": "Which threshold metric: 'ftp_watts' (cycling FTP), 'lthr_bpm' (lactate-threshold heart rate), 'css_pace_s_per_100m' (swim critical-swim-speed pace, seconds per 100m), or 'carb_tolerance_g_per_hr' (demonstrated in-session carbohydrate tolerance, grams/hour -- e.g. from a gut-training block or a rehearsed race-fueling long session).",
                 },
                 "value": {
                     "type": "number",
@@ -522,7 +522,8 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
         "name": "update_athlete_profile",
         "description": (
             "Directly set one or more low-risk athlete-profile fields: "
-            "ftp_watts, lthr_bpm, css_pace_s_per_100m, or sports. This is "
+            "ftp_watts, lthr_bpm, css_pace_s_per_100m, carb_tolerance_g_per_hr, "
+            "or sports. This is "
             "the tool that actually changes what zones.py/load.py resolve "
             "this athlete's zones/load from -- call it AFTER you've judged "
             "(from record_threshold_test's logged history, or from what the "
@@ -550,6 +551,17 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 "css_pace_s_per_100m": {
                     "type": "number",
                     "description": "Swim critical-swim-speed pace, seconds per 100m. Must be a real, positive, realistically-paced number.",
+                },
+                "carb_tolerance_g_per_hr": {
+                    "type": "number",
+                    "description": (
+                        "Demonstrated in-session carbohydrate tolerance, grams/hour "
+                        "-- e.g. from a gut-training block or a rehearsed race-fueling "
+                        "long session (see swim_coach.fueling's DEFAULT_CARB_TOLERANCE_G_PER_HR "
+                        "60g/h fallback used by compute_fueling_plan when this is unset). "
+                        "Must be a real, physiologically plausible number (positive, "
+                        "realistically under 150g/h)."
+                    ),
                 },
                 "sports": {
                     "type": "array",
@@ -2366,7 +2378,7 @@ def _handle_record_health_status(
 
 
 _THRESHOLD_SPORTS = ("swim_pool", "swim_ow", "strength", "recovery", "cross_train", "bike")
-_THRESHOLD_METRICS = ("ftp_watts", "lthr_bpm", "css_pace_s_per_100m")
+_THRESHOLD_METRICS = ("ftp_watts", "lthr_bpm", "css_pace_s_per_100m", "carb_tolerance_g_per_hr")
 _THRESHOLD_SOURCES = ("field_test", "ramp_test", "race_file", "app_estimate", "self_reported_historical")
 
 
@@ -2451,14 +2463,15 @@ def _handle_record_threshold_test(
 _FTP_WATTS_MAX = 1000.0
 _LTHR_BPM_MAX = 250.0
 _CSS_PACE_S_PER_100M_MAX = 600.0  # 10 min/100m -- generously slow, still a real pace
+_CARB_TOLERANCE_G_PER_HR_MAX = 150.0  # well above the ~90g/h trained ceiling library/08 cites
 
 
 def _handle_update_athlete_profile(
     input_data: dict[str, Any], *, store: StoreInterface, slug: str
 ) -> dict[str, Any]:
     """Directly sets one or more low-risk `Athlete` profile fields
-    (`ftp_watts`/`lthr_bpm`/`css_pace_s_per_100m`/`sports`) -- the tool that
-    was simply missing before this build (see `ThresholdRecord`'s own
+    (`ftp_watts`/`lthr_bpm`/`css_pace_s_per_100m`/`carb_tolerance_g_per_hr`/
+    `sports`) -- the tool that was simply missing before this build (see `ThresholdRecord`'s own
     docstring: `record_health_status`/`create_event` existed as real coach
     tools, but nothing let the coach set `Athlete.ftp_watts`/`sports` at
     all). Same direct-persist (no draft/confirm step) posture
@@ -2474,7 +2487,12 @@ def _handle_update_athlete_profile(
     plausibility ceiling before being accepted -- reject nonsense rather
     than silently accepting it (this tool's own explicit brief)."""
     if not input_data:
-        return {"error": "at least one field (ftp_watts, lthr_bpm, css_pace_s_per_100m, sports) is required"}
+        return {
+            "error": (
+                "at least one field (ftp_watts, lthr_bpm, css_pace_s_per_100m, "
+                "carb_tolerance_g_per_hr, sports) is required"
+            )
+        }
 
     updates: dict[str, Any] = {}
 
@@ -2516,6 +2534,22 @@ def _handle_update_athlete_profile(
             }
         updates["css_pace_s_per_100m"] = float(css_pace)
 
+    if "carb_tolerance_g_per_hr" in input_data:
+        carb_tolerance = input_data["carb_tolerance_g_per_hr"]
+        if (
+            not isinstance(carb_tolerance, (int, float))
+            or isinstance(carb_tolerance, bool)
+            or carb_tolerance <= 0
+            or carb_tolerance > _CARB_TOLERANCE_G_PER_HR_MAX
+        ):
+            return {
+                "error": (
+                    f"invalid carb_tolerance_g_per_hr {carb_tolerance!r}; must be a "
+                    f"positive number <= {_CARB_TOLERANCE_G_PER_HR_MAX}"
+                )
+            }
+        updates["carb_tolerance_g_per_hr"] = float(carb_tolerance)
+
     if "sports" in input_data:
         sports = input_data["sports"]
         if not isinstance(sports, list) or not sports or any(s not in _THRESHOLD_SPORTS for s in sports):
@@ -2523,7 +2557,12 @@ def _handle_update_athlete_profile(
         updates["sports"] = sports
 
     if not updates:
-        return {"error": "at least one field (ftp_watts, lthr_bpm, css_pace_s_per_100m, sports) is required"}
+        return {
+            "error": (
+                "at least one field (ftp_watts, lthr_bpm, css_pace_s_per_100m, "
+                "carb_tolerance_g_per_hr, sports) is required"
+            )
+        }
 
     try:
         athlete = store.load_athlete(slug)
