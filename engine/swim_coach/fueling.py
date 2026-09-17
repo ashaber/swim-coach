@@ -117,9 +117,20 @@ HEAT_WARNING = (
     "real cyclists, 16.4C vs 35.4C at matched power output -- see "
     "library/08-ultra-feeding.md's new bike/CX section) -- so pushing g/h "
     "higher on a hot day raises GI-distress risk for reduced benefit, not "
-    "more. The real heat-day lever is fluid/sodium, not more carbohydrate "
-    "-- see library/08-ultra-feeding.md's rehydration and EAH safety-rail "
-    "sections; this calculator does not re-derive that math."
+    "more. The real heat-day lever is fluid/sodium (higher sweat rate -> "
+    "more fluid need), not more carbohydrate. "
+    "`Coach judgment:` (Andrew's own practiced protocol, not a new research "
+    "claim -- the arithmetic is real, the specific dilution amount isn't "
+    "citation-backed): since the carb TOTAL target doesn't change but fluid "
+    "need goes up, hold the carb total steady while drinking more fluid by "
+    "mixing LESS concentrated (fewer scoops per bottle) as heat increases -- "
+    "not more. Carry an independent gel as a flexible carb top-up so carb "
+    "intake isn't locked to how much of the (now more dilute) bottle gets "
+    "drunk -- add the gel only when the gut can handle it, while still being "
+    "free to keep drinking for hydration without over-concentrating the "
+    "gut. See library/08-ultra-feeding.md's rehydration and EAH safety-rail "
+    "sections for the fluid-volume math itself; this calculator does not "
+    "re-derive that math or compute an exact dilution ratio."
 )
 
 

@@ -224,6 +224,14 @@ def test_heat_flag_does_not_raise_target_but_adds_a_warning():
     assert baseline.segments[0].target_g_per_hr_high == hot.segments[0].target_g_per_hr_high
     assert not baseline.warnings
     assert any("heat" in w.lower() for w in hot.warnings)
+    # Real refinement (2026-09-17, Andrew's own practiced protocol): the
+    # warning must be ACTIONABLE, not just "the lever is fluid, go read
+    # library/08" -- same target carb total + more fluid (for increased
+    # sweat rate) means LOWER concentration, with an independent gel as a
+    # flexible carb top-up that isn't locked to bottle concentration.
+    heat_warning = next(w for w in hot.warnings if "heat" in w.lower())
+    assert "dilute" in heat_warning.lower() or "lower concentration" in heat_warning.lower() or "less concentrated" in heat_warning.lower()
+    assert "gel" in heat_warning.lower()
 
 
 # ============================================================================
