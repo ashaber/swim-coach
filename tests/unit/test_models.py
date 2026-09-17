@@ -20,6 +20,7 @@ from swim_coach.models import (
     MacroPlan,
     RaceWeekChecklistItem,
     Session,
+    ThresholdRecord,
     Wellness,
     WeekPlan,
     Workout,
@@ -1159,6 +1160,51 @@ def test_athlete_rejects_unrecognized_timezone_name():
     # `athlete_time.athlete_today`.
     with pytest.raises(ValidationError):
         make_athlete(timezone="Not/A_Real_Zone")
+
+
+def test_athlete_carb_tolerance_g_per_hr_defaults_none():
+    # Mirrors ftp_watts exactly (engine/fueling-calculator build): every
+    # existing profile.yaml carries no carb_tolerance_g_per_hr key at all --
+    # must keep validating unchanged as None, meaning "not yet set" -- the
+    # fueling calculator's own DEFAULT_CARB_TOLERANCE_G_PER_HR fallback
+    # handles that case, the engine never guesses at this field itself.
+    athlete = make_athlete()
+    assert athlete.carb_tolerance_g_per_hr is None
+
+
+def test_athlete_carb_tolerance_g_per_hr_round_trips_when_set():
+    athlete = make_athlete(carb_tolerance_g_per_hr=75.0)
+    assert athlete.carb_tolerance_g_per_hr == 75.0
+
+
+def test_threshold_record_accepts_carb_tolerance_g_per_hr_metric():
+    # New ThresholdRecord.metric value (engine/fueling-calculator build) --
+    # "trivially extensible" per the model's own docstring, same durable-log
+    # shape ftp_watts/lthr_bpm/css_pace_s_per_100m already use.
+    record = ThresholdRecord(
+        id=uuid.uuid4(),
+        athlete_id=ATHLETE_ID,
+        sport="bike",
+        metric="carb_tolerance_g_per_hr",
+        value=75.0,
+        measured_at=date(2026, 9, 1),
+        source="field_test",
+    )
+    assert record.metric == "carb_tolerance_g_per_hr"
+    assert record.value == 75.0
+
+
+def test_threshold_record_rejects_unknown_metric():
+    with pytest.raises(ValidationError):
+        ThresholdRecord(
+            id=uuid.uuid4(),
+            athlete_id=ATHLETE_ID,
+            sport="bike",
+            metric="not_a_real_metric",
+            value=75.0,
+            measured_at=date(2026, 9, 1),
+            source="field_test",
+        )
 
 
 def test_session_accepts_bike_sport():
