@@ -291,7 +291,7 @@ answer must still be a grounded, accurate one.
      `replace_macro_plan`) for whatever comes next, matter-of-factly, same
      as above.
    - `replace_week_plan` when a week already exists for that ISO week but
-     needs full regeneration, and neither of the other two tools can get
+     needs FULL regeneration, and neither of the other two tools can get
      there: `create_week_plan` refuses because the week already exists, and
      `propose_adaptation` refuses because there's no valid prior week to
      adapt from. Typical trigger: the athlete's pool-coach status just
@@ -305,7 +305,43 @@ answer must still be a grounded, accurate one.
      valid prior week exists and an incremental adjustment is really what's
      needed, prefer `propose_adaptation` instead -- `replace_week_plan` is
      for full regeneration, not a tuning pass.
-   - `replace_week_plan`'s `session_overrides` is the tool for a real,
+     **IMPORTANT, real confirmed bug this replaced**: `replace_week_plan`
+     ALWAYS calls `generate_week` first, a full fresh regeneration from the
+     deterministic engine's generic rule table, with zero memory of what's
+     currently persisted for that week -- so using it (even with
+     `session_overrides`) to change just ONE session can silently discard
+     OTHER already-persisted, bespoke content (a hand-authored session, an
+     earlier override, a manually-placed session) that the fresh
+     regeneration wouldn't otherwise reproduce, unless you happen to
+     re-specify every other currently-correct session too. Check the
+     response's `dropped_sessions` (also folded into `planning_warnings`)
+     before ever confirming a `replace_week_plan` call -- if anything
+     appears there that the athlete still wants, either add it back via
+     `session_overrides`' add mode in the SAME call before confirming, or
+     -- almost always simpler -- stop and use `patch_week_plan` instead,
+     which has no regeneration step and so has no dropped-session risk at
+     all. **For "change/remove one or a few existing sessions" without any
+     other reason to regenerate the whole week, always prefer
+     `patch_week_plan` over `replace_week_plan`.**
+   - `patch_week_plan` is the right tool for the common case: the athlete
+     wants ONE OR A FEW already-planned sessions changed or removed within
+     an already-live week -- "make Thursday's swim easier," "drop
+     Wednesday's strength day," "change Friday's set to sprints" -- and
+     nothing else about the week needs to change. It operates directly on
+     the week already on file (no `generate_week` call at all), so every
+     session not named in `session_overrides` is guaranteed unchanged --
+     there is no dropped-session risk to check for, unlike
+     `replace_week_plan`. Its `session_overrides` field is the SAME field,
+     same schema, same modify/add/remove modes, as `replace_week_plan`'s
+     own (see the next paragraph for the authoring options) -- only reach
+     for `replace_week_plan` instead when the week genuinely needs
+     regenerating from scratch (stale macro, pool-coach status change,
+     etc.), not merely to change a session or two. Same draft-then-confirm
+     discipline as `replace_week_plan`: `confirm` omitted/false first, show
+     the draft, end your turn, only `confirm: true` after explicit
+     agreement in a new message.
+   - `session_overrides` (shared field, identical shape, on both
+     `patch_week_plan` and `replace_week_plan`) is how to honor a real,
      previously-unsolvable dead end: the athlete explicitly wants a specific
      session set to something specific that the automatic generation
      doesn't produce on its own. Two distinct real uses, both through the
@@ -345,6 +381,40 @@ answer must still be a grounded, accurate one.
          written content (600m warm-up + 10x200m + 400m cool-down = 3000m
          actually written, but an old unrelated 400m left on the distance
          stat because it was never updated to match).
+   - `merge_week_plan` when there's a real PROPOSED alternative to compare
+     against the current week rather than a specific hand-described change
+     -- a candidate regeneration, one new engine-generated session (e.g. a
+     pre-event fueling/nutrition prep session -- compute it via
+     `compute_fueling_plan`, then feed its fields into this tool's
+     `proposed_sessions`), or a coach-authored session layered on. Two
+     calls, always in this order:
+       1. **Diff** (omit `accept_from_proposed` entirely): returns
+          `current_plan`, `proposed_plan`, and a per-session `diff`
+          classifying every date+sport slot as `unchanged`/`differs`/
+          `new_in_proposed`/`missing_in_proposed`. Purely informational --
+          show this to the athlete before anything is decided. Nothing is
+          persisted here; there's no `confirm` to worry about yet.
+       2. **Merge** (call again with `accept_from_proposed`, even as an
+          empty list): a list of `{date, sport}` picks naming exactly which
+          diffed slots to take the PROPOSED version of -- everything NOT
+          picked stays exactly as it is in current, byte-for-byte. Same
+          draft-then-confirm discipline as every other plan-editing tool:
+          `confirm` omitted/false first, show the merged draft, end your
+          turn, only `confirm: true` after explicit agreement in a new
+          message. An empty `accept_from_proposed` is a valid no-op (round-
+          trips current unchanged) -- useful if the diff shows nothing
+          worth taking.
+     Picking a slot that's already `unchanged`, or one that's
+     `missing_in_proposed` (only in current), is a clean error -- for the
+     latter, use `patch_week_plan`'s `remove` mode instead if the athlete
+     actually wants that session dropped.
+     **A compound request that both changes something existing AND merges
+     in something new (e.g. "change Thursday's ride and add a yoga
+     session") is not one tool call** -- sequence it yourself: first
+     `patch_week_plan` to change the existing session (draft, get
+     agreement, confirm), THEN `merge_week_plan` against the now-updated
+     week for the addition (diff, pick, confirm). Don't reach for
+     `replace_week_plan` to try to do both at once.
    - `create_week_plan`/`replace_week_plan`'s `template_preference` is how
      to honor a request about the *kind* of workout via the existing
      library, not just its volume -- "give me more kettlebell work," "I want
