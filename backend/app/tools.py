@@ -312,6 +312,253 @@ TEMPLATE_PREFERENCE_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
+# Shared by `replace_week_plan` (applied to a freshly-regenerated week) and
+# `patch_week_plan` (applied to the actual persisted week, see that tool's
+# handler) -- both drive the exact same `_apply_session_overrides` match/
+# modify/remove/add semantics, so one schema describes the shape for both
+# rather than drifting into two copies that quietly diverge over time.
+SESSION_OVERRIDES_SCHEMA: dict[str, Any] = {
+    "type": "array",
+    "description": (
+        "Optional explicit overrides applied to the generated "
+        "week's sessions before it's returned/persisted. In "
+        "the default (modify) mode each entry must match "
+        "exactly one session already in the generated week "
+        "(by date, and by sport too if more than one session "
+        "falls on that date) -- an entry matching zero or "
+        "more than one session is an error, not a silent "
+        "no-op or a guess. "
+        "ADD MODE: an entry with `add: true` CREATES a "
+        "session on that date when none exists (instead of "
+        "erroring), requiring `sport`, `duration_min` and "
+        "`purpose` (optionally `distance_m`, `intensity`, "
+        "`structured`/`structure`). This is how to place a "
+        "6th/7th day the normal generator doesn't -- a second "
+        "race day, a pre-race openers session, a travel-day "
+        "swap. An added session is still checked by the "
+        "realism guardrail (`planning_warnings` in the "
+        "response): appending a 6th hard bike day still gets "
+        "flagged, it is not silently clamped. `add: true` "
+        "with a session already on that date is an error "
+        "(drop `add` to modify it instead). "
+        "REMOVE MODE (Build E): an entry with `remove: true` "
+        "DELETES the matching session(s) instead of modifying "
+        "them -- how to honor 'drop Wednesday's strength "
+        "session' / 'I don't want this session, remove it' "
+        "rather than fumbling toward some other tool. Same "
+        "date(+sport) matching/ambiguity rules as modify mode; "
+        "an entry matching zero or more than one session is "
+        "an error. Mutually exclusive with `add` on the same "
+        "entry -- setting both is an error. Removing the "
+        "week's only hard bike day is allowed (never blocked) "
+        "but surfaces a `planning_warnings` note so the coach "
+        "can confirm that's really intended."
+    ),
+    "items": {
+        "type": "object",
+        "properties": {
+            "date": {
+                "type": "string",
+                "description": "Session date, 'YYYY-MM-DD', must fall within iso_week.",
+            },
+            "add": {
+                "type": "boolean",
+                "description": (
+                    "Set true to CREATE a new session on `date` (append "
+                    "mode) instead of modifying an existing one. Requires "
+                    "`sport`, `duration_min`, `purpose`. Errors if a "
+                    "session already exists on that date/sport."
+                ),
+            },
+            "remove": {
+                "type": "boolean",
+                "description": (
+                    "Set true to DELETE the matching session(s) instead "
+                    "of modifying them. Mutually exclusive with `add` on "
+                    "the same entry (an error if both are set). Errors if "
+                    "zero or more than one session matches date(+sport)."
+                ),
+            },
+            "intensity": {
+                "type": "object",
+                "description": (
+                    "add mode only: the new session's intensity dict "
+                    "(e.g. {\"zone\": \"Z4\"} for a hard bike session, "
+                    "{\"anchor\": \"rpe\"} for effort-based). Defaults to "
+                    "{\"zone\": \"Z2\"} for bike, {\"anchor\": \"rpe\"} otherwise."
+                ),
+            },
+            "sport": {
+                "type": "string",
+                "description": (
+                    "Disambiguates when more than one session falls on "
+                    "`date`. Omit if only one session that day. REQUIRED "
+                    "with `add: true`."
+                ),
+            },
+            "distance_m": {
+                "type": "number",
+                "description": "New distance for this session, in meters.",
+            },
+            "duration_min": {
+                "type": "number",
+                "description": (
+                    "New duration for this session, in minutes. Optional -- "
+                    "if omitted while distance_m is given, duration is "
+                    "re-estimated from the new distance at the athlete's pace, "
+                    "same math the engine itself uses."
+                ),
+            },
+            "purpose": {
+                "type": "string",
+                "description": (
+                    "New purpose/description for this session, athlete-facing "
+                    "(e.g. 'Technique -- freestyle catch and rotation drills')."
+                ),
+            },
+            "structure": {
+                "type": "string",
+                "description": (
+                    "New full session instructions, athlete-facing prose -- "
+                    "author real content here (warm-up/main set/cool-down or "
+                    "whatever shape fits) exactly as you'd describe it in chat, "
+                    "when no library template covers what the athlete asked "
+                    "for. Prefer also supplying `structured` alongside this in "
+                    "the same entry (they describe the same session; neither "
+                    "clears the other when both are set) -- setting `structure` "
+                    "WITHOUT `structured` clears the session's existing "
+                    "structured workout data (see this parameter's parent "
+                    "description), a deliberate 'prose only, no watch export' "
+                    "choice, not a side effect. REQUIRES `distance_m` in this "
+                    "same entry, set to the real total implied by what you just "
+                    "wrote (e.g. warm-up + main set + cool-down summed) -- "
+                    "`distance_m` is a separate field with nothing keeping it "
+                    "in sync with `structure`'s prose automatically; do the "
+                    "arithmetic yourself and pass the matching number, or the "
+                    "athlete sees a distance stat that contradicts the workout "
+                    "you just wrote."
+                ),
+            },
+            "structured": {
+                "type": "object",
+                "description": (
+                    "New machine-readable WorkoutStructure IR for this session "
+                    "-- the canonical structured workout tree that renders as "
+                    "the step-by-step tree in the athlete's app Plan tab and "
+                    "exports to a Garmin watch as a real lap-advancing workout. "
+                    "Prefer setting this whenever the session has real step/"
+                    "rep/exercise structure (most of the time), and supply "
+                    "`structure` alongside it as the matching athlete-facing "
+                    "prose narration -- setting both persists both, neither "
+                    "clears the other. Shape: `{\"items\": [...]}` where each "
+                    "item is either a step -- `{\"kind\": \"step\", \"label\": "
+                    "str, \"role\": \"warmup\"|\"steady\"|\"interval\"|\"rest\"|"
+                    "\"recovery\"|\"cooldown\"|\"open\", \"duration_kind\": "
+                    "\"time_s\"|\"distance_m\"|\"reps\"|\"open\", "
+                    "\"duration_value\": number, \"modality\": \"swim\"|"
+                    "\"strength\" (default \"swim\"), and for swim steps "
+                    "optionally \"stroke\"/\"equipment\" plus a \"target\": "
+                    "{\"basis\": \"zone\"|\"percent_css\"|\"absolute\"|\"rpe\"|"
+                    "\"open\", \"zone\": \"Z1\"-\"Z5\"|null, \"low\": number|"
+                    "null, \"high\": number|null}. Prefer \"zone\"/\"percent_css\" "
+                    "whenever the athlete's CSS pace is known -- that's what "
+                    "renders as a real pace range and exports to the watch as an "
+                    "actual target. Reach for \"rpe\" only when effort, not pace, "
+                    "is genuinely the right anchor for the step (recovery, "
+                    "technique work, a day with no meaningful pace target) -- and "
+                    "when you do, put a 1-10 effort value in \"low\" (optionally a "
+                    "higher end in \"high\" for a range, e.g. low=4/high=6 renders "
+                    "as \"RPE 4-6\"); leaving both null still renders as the bare "
+                    "\"RPE\" label, but a real number is more useful to the "
+                    "athlete whenever you actually have one in mind. \"low\"/"
+                    "\"high\" are reused across every basis (they mean % of CSS, "
+                    "a resolved pace, or an RPE value depending on \"basis\" -- "
+                    "there's no separate RPE-specific field). Or for strength steps "
+                    "optionally \"exercise_name\" plus a \"load\": {\"basis\": "
+                    "\"bodyweight\"|\"percent_1rm\"|\"absolute\"|\"rpe_only\", "
+                    "\"value\": number|null}, and optionally \"reference_url\": "
+                    "str|null on ANY step, swim or strength alike -- a "
+                    "technique/demo link, shown to the athlete as a tappable "
+                    "link on that step and written into the exported Garmin FIT "
+                    "step's notes. It must be a plain http(s) URL; anything else "
+                    "is dropped at render time. Omit it for a step with no such "
+                    "link` -- or a repeat block -- "
+                    "`{\"kind\": \"repeat\", \"repeat_mode\": \"count\"|"
+                    "\"for_duration\"|\"amrap\", \"count\": int|null, "
+                    "\"duration_s\": number|null, \"interval_s\": number|null, "
+                    "\"steps\": [...]}` whose own `steps` list holds more items "
+                    "of either kind (steps or nested repeats -- nesting deeper "
+                    "than one level is allowed but rarely needed in practice). "
+                    "This is NOT limited to whatever exercises the canned "
+                    "strength list in `engine/swim_coach/plan.py` happens to "
+                    "contain -- author any exercise/step directly, same as you "
+                    "would in prose. An invalid payload (wrong `kind`, missing "
+                    "required field, etc.) is rejected with a clear error and "
+                    "nothing is persisted -- fix and retry with a valid payload "
+                    "rather than falling back to prose-only `structure`."
+                ),
+            },
+            "ow_template": {
+                "type": "object",
+                "description": (
+                    "Build this session's real content from the open-water "
+                    "session-content template library (engine/swim_coach/"
+                    "ow_session_templates.py, documented in library/"
+                    "18-open-water-session-templates.md) instead of hand-"
+                    "authoring `structure`/`structured` -- prefer this whenever "
+                    "one of the named templates below matches what's wanted; "
+                    "fall back to `structure`/`structured` only for something "
+                    "genuinely novel. Sets both `structured` (the real, resolved "
+                    "WorkoutStructure -- Garmin-exportable) and `structure` "
+                    "(matching prose) on the session, plus `distance_m` (from "
+                    "`ow_template.distance_m` if given, else this entry's own "
+                    "`distance_m`, else whatever distance the session already "
+                    "has). Cannot be combined with `structure`/`structured` in "
+                    "the same entry -- pick one authoring method. Known `id`s: "
+                    "`feed_window_practice` (endurance_floor -- steady swimming "
+                    "broken by real feed stops), `negative_split` (skill_scalable "
+                    "-- out leg easy, back leg faster), `chop_wind_adaptation` "
+                    "(skill_scalable -- into-chop/downwind halves, bilateral "
+                    "breathing), `sighting_drill` (skill_scalable -- frequent vs. "
+                    "infrequent sighting comparison), `breathing_pattern_"
+                    "variation` (skill_scalable -- alternating bilateral/"
+                    "unilateral blocks), `back_to_back_stage_day1`/"
+                    "`back_to_back_stage_day2` (endurance_floor -- a "
+                    "multi_day_stage event's back-to-back fatigue-simulation "
+                    "pair, day2 explicitly framed as swum on day1's fatigue), "
+                    "`taper_activation` (skill_scalable, has a MAXIMUM distance "
+                    "not a minimum -- deliberately short/sharp, do not use for a "
+                    "long session), `race_dress_rehearsal` (endurance_floor -- "
+                    "full race-pace/race-kit continuous swim with feed stops). "
+                    "`endurance_floor` templates raise a clear error (nothing "
+                    "persisted) if the resulting distance/CSS implies a duration "
+                    "below that template's documented minimum -- reach for a "
+                    "`skill_scalable` template instead of forcing a shorter "
+                    "endurance session under its floor."
+                ),
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Template id, see this field's own description for the known list.",
+                    },
+                    "distance_m": {
+                        "type": "number",
+                        "description": (
+                            "Distance to build the template at. Optional -- falls "
+                            "back to this entry's own `distance_m`, then the "
+                            "session's existing distance, if omitted."
+                        ),
+                    },
+                },
+                "required": ["id"],
+                "additionalProperties": False,
+            },
+        },
+        "required": ["date"],
+        "additionalProperties": False,
+    },
+}
+
 TOOLS_SCHEMA: list[dict[str, Any]] = [
     {
         "name": "propose_adaptation",
@@ -1631,247 +1878,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                         "week plan is currently on file for iso_week."
                     ),
                 },
-                "session_overrides": {
-                    "type": "array",
-                    "description": (
-                        "Optional explicit overrides applied to the generated "
-                        "week's sessions before it's returned/persisted. In "
-                        "the default (modify) mode each entry must match "
-                        "exactly one session already in the generated week "
-                        "(by date, and by sport too if more than one session "
-                        "falls on that date) -- an entry matching zero or "
-                        "more than one session is an error, not a silent "
-                        "no-op or a guess. "
-                        "ADD MODE: an entry with `add: true` CREATES a "
-                        "session on that date when none exists (instead of "
-                        "erroring), requiring `sport`, `duration_min` and "
-                        "`purpose` (optionally `distance_m`, `intensity`, "
-                        "`structured`/`structure`). This is how to place a "
-                        "6th/7th day the normal generator doesn't -- a second "
-                        "race day, a pre-race openers session, a travel-day "
-                        "swap. An added session is still checked by the "
-                        "realism guardrail (`planning_warnings` in the "
-                        "response): appending a 6th hard bike day still gets "
-                        "flagged, it is not silently clamped. `add: true` "
-                        "with a session already on that date is an error "
-                        "(drop `add` to modify it instead). "
-                        "REMOVE MODE (Build E): an entry with `remove: true` "
-                        "DELETES the matching session(s) instead of modifying "
-                        "them -- how to honor 'drop Wednesday's strength "
-                        "session' / 'I don't want this session, remove it' "
-                        "rather than fumbling toward some other tool. Same "
-                        "date(+sport) matching/ambiguity rules as modify mode; "
-                        "an entry matching zero or more than one session is "
-                        "an error. Mutually exclusive with `add` on the same "
-                        "entry -- setting both is an error. Removing the "
-                        "week's only hard bike day is allowed (never blocked) "
-                        "but surfaces a `planning_warnings` note so the coach "
-                        "can confirm that's really intended."
-                    ),
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "date": {
-                                "type": "string",
-                                "description": "Session date, 'YYYY-MM-DD', must fall within iso_week.",
-                            },
-                            "add": {
-                                "type": "boolean",
-                                "description": (
-                                    "Set true to CREATE a new session on `date` (append "
-                                    "mode) instead of modifying an existing one. Requires "
-                                    "`sport`, `duration_min`, `purpose`. Errors if a "
-                                    "session already exists on that date/sport."
-                                ),
-                            },
-                            "remove": {
-                                "type": "boolean",
-                                "description": (
-                                    "Set true to DELETE the matching session(s) instead "
-                                    "of modifying them. Mutually exclusive with `add` on "
-                                    "the same entry (an error if both are set). Errors if "
-                                    "zero or more than one session matches date(+sport)."
-                                ),
-                            },
-                            "intensity": {
-                                "type": "object",
-                                "description": (
-                                    "add mode only: the new session's intensity dict "
-                                    "(e.g. {\"zone\": \"Z4\"} for a hard bike session, "
-                                    "{\"anchor\": \"rpe\"} for effort-based). Defaults to "
-                                    "{\"zone\": \"Z2\"} for bike, {\"anchor\": \"rpe\"} otherwise."
-                                ),
-                            },
-                            "sport": {
-                                "type": "string",
-                                "description": (
-                                    "Disambiguates when more than one session falls on "
-                                    "`date`. Omit if only one session that day. REQUIRED "
-                                    "with `add: true`."
-                                ),
-                            },
-                            "distance_m": {
-                                "type": "number",
-                                "description": "New distance for this session, in meters.",
-                            },
-                            "duration_min": {
-                                "type": "number",
-                                "description": (
-                                    "New duration for this session, in minutes. Optional -- "
-                                    "if omitted while distance_m is given, duration is "
-                                    "re-estimated from the new distance at the athlete's pace, "
-                                    "same math the engine itself uses."
-                                ),
-                            },
-                            "purpose": {
-                                "type": "string",
-                                "description": (
-                                    "New purpose/description for this session, athlete-facing "
-                                    "(e.g. 'Technique -- freestyle catch and rotation drills')."
-                                ),
-                            },
-                            "structure": {
-                                "type": "string",
-                                "description": (
-                                    "New full session instructions, athlete-facing prose -- "
-                                    "author real content here (warm-up/main set/cool-down or "
-                                    "whatever shape fits) exactly as you'd describe it in chat, "
-                                    "when no library template covers what the athlete asked "
-                                    "for. Prefer also supplying `structured` alongside this in "
-                                    "the same entry (they describe the same session; neither "
-                                    "clears the other when both are set) -- setting `structure` "
-                                    "WITHOUT `structured` clears the session's existing "
-                                    "structured workout data (see this parameter's parent "
-                                    "description), a deliberate 'prose only, no watch export' "
-                                    "choice, not a side effect. REQUIRES `distance_m` in this "
-                                    "same entry, set to the real total implied by what you just "
-                                    "wrote (e.g. warm-up + main set + cool-down summed) -- "
-                                    "`distance_m` is a separate field with nothing keeping it "
-                                    "in sync with `structure`'s prose automatically; do the "
-                                    "arithmetic yourself and pass the matching number, or the "
-                                    "athlete sees a distance stat that contradicts the workout "
-                                    "you just wrote."
-                                ),
-                            },
-                            "structured": {
-                                "type": "object",
-                                "description": (
-                                    "New machine-readable WorkoutStructure IR for this session "
-                                    "-- the canonical structured workout tree that renders as "
-                                    "the step-by-step tree in the athlete's app Plan tab and "
-                                    "exports to a Garmin watch as a real lap-advancing workout. "
-                                    "Prefer setting this whenever the session has real step/"
-                                    "rep/exercise structure (most of the time), and supply "
-                                    "`structure` alongside it as the matching athlete-facing "
-                                    "prose narration -- setting both persists both, neither "
-                                    "clears the other. Shape: `{\"items\": [...]}` where each "
-                                    "item is either a step -- `{\"kind\": \"step\", \"label\": "
-                                    "str, \"role\": \"warmup\"|\"steady\"|\"interval\"|\"rest\"|"
-                                    "\"recovery\"|\"cooldown\"|\"open\", \"duration_kind\": "
-                                    "\"time_s\"|\"distance_m\"|\"reps\"|\"open\", "
-                                    "\"duration_value\": number, \"modality\": \"swim\"|"
-                                    "\"strength\" (default \"swim\"), and for swim steps "
-                                    "optionally \"stroke\"/\"equipment\" plus a \"target\": "
-                                    "{\"basis\": \"zone\"|\"percent_css\"|\"absolute\"|\"rpe\"|"
-                                    "\"open\", \"zone\": \"Z1\"-\"Z5\"|null, \"low\": number|"
-                                    "null, \"high\": number|null}. Prefer \"zone\"/\"percent_css\" "
-                                    "whenever the athlete's CSS pace is known -- that's what "
-                                    "renders as a real pace range and exports to the watch as an "
-                                    "actual target. Reach for \"rpe\" only when effort, not pace, "
-                                    "is genuinely the right anchor for the step (recovery, "
-                                    "technique work, a day with no meaningful pace target) -- and "
-                                    "when you do, put a 1-10 effort value in \"low\" (optionally a "
-                                    "higher end in \"high\" for a range, e.g. low=4/high=6 renders "
-                                    "as \"RPE 4-6\"); leaving both null still renders as the bare "
-                                    "\"RPE\" label, but a real number is more useful to the "
-                                    "athlete whenever you actually have one in mind. \"low\"/"
-                                    "\"high\" are reused across every basis (they mean % of CSS, "
-                                    "a resolved pace, or an RPE value depending on \"basis\" -- "
-                                    "there's no separate RPE-specific field). Or for strength steps "
-                                    "optionally \"exercise_name\" plus a \"load\": {\"basis\": "
-                                    "\"bodyweight\"|\"percent_1rm\"|\"absolute\"|\"rpe_only\", "
-                                    "\"value\": number|null}, and optionally \"reference_url\": "
-                                    "str|null on ANY step, swim or strength alike -- a "
-                                    "technique/demo link, shown to the athlete as a tappable "
-                                    "link on that step and written into the exported Garmin FIT "
-                                    "step's notes. It must be a plain http(s) URL; anything else "
-                                    "is dropped at render time. Omit it for a step with no such "
-                                    "link` -- or a repeat block -- "
-                                    "`{\"kind\": \"repeat\", \"repeat_mode\": \"count\"|"
-                                    "\"for_duration\"|\"amrap\", \"count\": int|null, "
-                                    "\"duration_s\": number|null, \"interval_s\": number|null, "
-                                    "\"steps\": [...]}` whose own `steps` list holds more items "
-                                    "of either kind (steps or nested repeats -- nesting deeper "
-                                    "than one level is allowed but rarely needed in practice). "
-                                    "This is NOT limited to whatever exercises the canned "
-                                    "strength list in `engine/swim_coach/plan.py` happens to "
-                                    "contain -- author any exercise/step directly, same as you "
-                                    "would in prose. An invalid payload (wrong `kind`, missing "
-                                    "required field, etc.) is rejected with a clear error and "
-                                    "nothing is persisted -- fix and retry with a valid payload "
-                                    "rather than falling back to prose-only `structure`."
-                                ),
-                            },
-                            "ow_template": {
-                                "type": "object",
-                                "description": (
-                                    "Build this session's real content from the open-water "
-                                    "session-content template library (engine/swim_coach/"
-                                    "ow_session_templates.py, documented in library/"
-                                    "18-open-water-session-templates.md) instead of hand-"
-                                    "authoring `structure`/`structured` -- prefer this whenever "
-                                    "one of the named templates below matches what's wanted; "
-                                    "fall back to `structure`/`structured` only for something "
-                                    "genuinely novel. Sets both `structured` (the real, resolved "
-                                    "WorkoutStructure -- Garmin-exportable) and `structure` "
-                                    "(matching prose) on the session, plus `distance_m` (from "
-                                    "`ow_template.distance_m` if given, else this entry's own "
-                                    "`distance_m`, else whatever distance the session already "
-                                    "has). Cannot be combined with `structure`/`structured` in "
-                                    "the same entry -- pick one authoring method. Known `id`s: "
-                                    "`feed_window_practice` (endurance_floor -- steady swimming "
-                                    "broken by real feed stops), `negative_split` (skill_scalable "
-                                    "-- out leg easy, back leg faster), `chop_wind_adaptation` "
-                                    "(skill_scalable -- into-chop/downwind halves, bilateral "
-                                    "breathing), `sighting_drill` (skill_scalable -- frequent vs. "
-                                    "infrequent sighting comparison), `breathing_pattern_"
-                                    "variation` (skill_scalable -- alternating bilateral/"
-                                    "unilateral blocks), `back_to_back_stage_day1`/"
-                                    "`back_to_back_stage_day2` (endurance_floor -- a "
-                                    "multi_day_stage event's back-to-back fatigue-simulation "
-                                    "pair, day2 explicitly framed as swum on day1's fatigue), "
-                                    "`taper_activation` (skill_scalable, has a MAXIMUM distance "
-                                    "not a minimum -- deliberately short/sharp, do not use for a "
-                                    "long session), `race_dress_rehearsal` (endurance_floor -- "
-                                    "full race-pace/race-kit continuous swim with feed stops). "
-                                    "`endurance_floor` templates raise a clear error (nothing "
-                                    "persisted) if the resulting distance/CSS implies a duration "
-                                    "below that template's documented minimum -- reach for a "
-                                    "`skill_scalable` template instead of forcing a shorter "
-                                    "endurance session under its floor."
-                                ),
-                                "properties": {
-                                    "id": {
-                                        "type": "string",
-                                        "description": "Template id, see this field's own description for the known list.",
-                                    },
-                                    "distance_m": {
-                                        "type": "number",
-                                        "description": (
-                                            "Distance to build the template at. Optional -- falls "
-                                            "back to this entry's own `distance_m`, then the "
-                                            "session's existing distance, if omitted."
-                                        ),
-                                    },
-                                },
-                                "required": ["id"],
-                                "additionalProperties": False,
-                            },
-                        },
-                        "required": ["date"],
-                        "additionalProperties": False,
-                    },
-                },
+                "session_overrides": SESSION_OVERRIDES_SCHEMA,
                 "template_preference": TEMPLATE_PREFERENCE_SCHEMA,
             },
             "required": ["iso_week"],
