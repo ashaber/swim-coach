@@ -274,6 +274,49 @@ input, not itself citable).
   malabsorption, increased blood glucose availability, and improved
   performance. `[ADAPTED: running]`. The experimental basis for "90 g/h is a
   trained capacity, not a starting one." Small n.
+- **✓ Martinez I.G., Mika A.S., Biesiekierski J.R., Costa R.J.S. (2023)** —
+  "The Effect of Gut-Training and Feeding-Challenge on Markers of
+  Gastrointestinal Status in Response to Endurance Exercise: A Systematic
+  Literature Review" — *Sports Medicine*, 53(10). Systematic review of
+  gut-training literature; longest intervention examined was 28 days —
+  **no study assessed whether tolerance gains persist after training
+  stops.** `[ADAPTED: general-endurance]` Confidence: high (a direct,
+  recent systematic review confirming the gap). **Test:** none — this is
+  a literature-gap finding, not a claim to falsify; if a future study
+  fills this gap, cite it directly instead of this entry.
+- **✓ Romijn J.A., Coyle E.F., Sidossis L.S., Gastaldelli A., Horowitz J.F.,
+  Endert E., Wolfe R.R. (1993)** — "Regulation of endogenous fat and
+  carbohydrate metabolism in relation to exercise intensity and duration" —
+  *American Journal of Physiology-Endocrinology and Metabolism*, 265(3):
+  E380-E391. 5 trained subjects at 25/65/85% VO2max: plasma glucose uptake
+  and muscle glycogen oxidation increased with exercise intensity.
+  `[ADAPTED: cycling]` Confidence: medium-high (real, direct-fetch-verified
+  abstract; exercise modality not independently confirmed from primary
+  text). **Test:** a high-intensity-intermittent effort's glycogen-
+  oxidation rate should track relative intensity, not just duration —
+  compare reported bonk/GI-symptom timing across sessions of matched
+  duration but different intensity.
+- **~ Essén B. (1978)** — "Glycogen depletion of different fibre types in
+  human skeletal muscle during intermittent and continuous exercise" —
+  *Acta Physiologica Scandinavica*, 103(4):446-455. Muscle-biopsy
+  comparison of continuous vs. intermittent exercise glycogen depletion
+  across fibre types. `[ADAPTED: cycling]` Confidence: medium (title/
+  authorship confirmed via Crossref; paywalled — **specific fibre-glycogen
+  figures were not verified from primary text and none should be quoted
+  here**). **Test:** intermittent high-intensity exercise should deplete
+  fast-twitch (type II) fibres more than continuous submaximal exercise at
+  matched duration — a swim/bike coach could probe this via post-session
+  RPE/bonk-timing differences between interval and steady sessions of
+  equal duration.
+- **✓ Jentjens R.L.P.G., Wagenmakers A.J.M., Jeukendrup A.E. (2002)** —
+  "Heat stress increases muscle glycogen use but reduces the oxidation of
+  ingested carbohydrates during exercise" — *Journal of Applied
+  Physiology*, 92(4):1562-1572. 9 trained cyclists, 90 min at 55% max
+  power, 16.4C vs. 35.4C: exogenous glucose oxidation lower in heat
+  (0.76 vs. 0.84 g/min) and muscle glycogen oxidation 25% higher
+  (2.07 vs. 1.66 g/min). `[EVIDENCE: cycling]`. Direct-fetch-verified
+  abstract with real numbers — heat is not a "feed more carbohydrate"
+  trigger.
 - **✓ Cox G.R., Broad E.M., Riley M.D., Burke L.M. (2002)** — "Body mass
   changes and voluntary fluid intakes of elite level water polo players and
   swimmers" — *Journal of Science and Medicine in Sport*, 5(3):183-193.
