@@ -295,6 +295,25 @@ MIN_SESSION_DURATION_MIN = 15.0
 # `plan.py`'s own `max(_duration_min_for_distance(...), 15.0)` floor for its
 # no-pool-coach pool sessions.
 
+MIN_TAPER_RUNWAY_DAYS = 2
+# Structural, not a tuning knob: `generate_taper_sessions` below only ever
+# emits a `Session` for a day strictly between `generation_start =
+# max(anchor_date, as_of)` and `race_date - 1` inclusive (race day itself
+# is never a training day -- see that function's own docstring). The
+# smallest `race_date - generation_start` gap that can still produce even
+# ONE session is 2 days: one day of runway to generate into, plus the
+# race-day exclusion. Below this, that function's while loop never
+# executes at all and silently returns `[]` -- a real, confirmed bug
+# (feedback entry ed20cbfb-d5a5-4716-9afd-87fbbc7cc810; also what made
+# `tests/api/test_tools.py`'s two runway-sensitive
+# `propose_injury_adapted_taper` tests fail in UTC CI while passing in
+# America/Denver, since the fixture event's `event_date` sat right at this
+# boundary depending on which server timezone computed "today"). The
+# CALLER (`_handle_propose_injury_adapted_taper`, `backend/app/tools.py`)
+# checks this BEFORE calling `generate_taper_sessions`, using this exact
+# constant, so it can return a clear, actionable error instead of a silent
+# empty `sessions` list with no explanation anywhere in the response.
+
 _GENERATOR_ZONE = "Z2"
 # All swim sessions this generator authors use Z2 (steady aerobic) as the
 # held intensity, regardless of ramp/hold/taper phase -- the "hold

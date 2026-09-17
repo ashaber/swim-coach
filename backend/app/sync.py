@@ -47,6 +47,7 @@ from typing import Any
 from uuid import uuid4
 
 import httpx
+from swim_coach.athlete_time import athlete_today
 from swim_coach.models import Athlete, Wellness, Workout
 from swim_coach.parse_files import PARSERS_BY_EXTENSION, WorkoutDraft
 from swim_coach.store import StoreInterface
@@ -83,8 +84,14 @@ _DUPLICATE_DURATION_TOLERANCE_MIN = 1.0
 # just finished a session and wants it pulled in now, not a full re-check of
 # two weeks of history -- today + yesterday is cheap and covers the case
 # where Garmin/intervals.icu hasn't finished processing yet at the moment of
-# the request (tz-safe by construction -- matches this module's own
-# date.today() usage rather than doing timezone math).
+# the request. "Today" here is this athlete's own local date
+# (`athlete_time.athlete_today`, honoring `Athlete.timezone` when set) --
+# updated from this module's original plain `date.today()`, which read a
+# day ahead/behind for any athlete not physically in the server's (UTC on
+# Cloud Run) timezone right around a day boundary. A 2-day window is
+# generous enough that this rarely mattered in practice, but there's no
+# reason for an on-demand "just finished a session" sync to use the wrong
+# "today" when the athlete's own is one function call away.
 ON_DEMAND_SYNC_WINDOW_DAYS = 2
 
 # Friendly, caller-facing-safe error for "this athlete has no working
@@ -456,7 +463,7 @@ def sync_athlete(
         client = IntervalsClient(cfg.intervals_athlete_id, cfg.api_key)
 
     try:
-        today = date.today()
+        today = athlete_today(profile)
         oldest = today - timedelta(days=window_days)
         start = time.monotonic()
         try:

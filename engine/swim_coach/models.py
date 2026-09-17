@@ -12,6 +12,7 @@ import re
 from datetime import date, datetime
 from typing import Annotated, Literal
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -71,7 +72,10 @@ class Athlete(BaseModel):
     # unchanged -- additive, no schema_version bump needed. Store dob, not
     # age, so age stays correct as time passes rather than going stale the
     # day after it's recorded; callers derive age from dob relative to
-    # `date.today()` (see backend/app/context.py).
+    # "today" (see backend/app/context.py's `build_per_request_context`,
+    # which resolves that via `athlete_time.athlete_today` -- this
+    # athlete's own local date when `timezone` below is set, plain
+    # `date.today()` otherwise).
     dob: date | None = None
     sex: Literal["male", "female", "other"] | None = None
     height_cm: float | None = Field(default=None, gt=0)
@@ -188,6 +192,60 @@ class Athlete(BaseModel):
     # profile.yaml unchanged: `analyze` falls back to its original
     # session-relative heuristic (`_ride_baseline_altitude_m`) for any
     # athlete who hasn't set this. Additive, no schema_version bump.
+    timezone: str | None = None
+    # This athlete's own IANA timezone name (e.g. "America/Denver"),
+    # **human-set by design, same posture as `ftp_watts`/`lthr_bpm`/
+    # `home_elevation_m` above -- never auto-inferred or guessed.** Root-fix
+    # for a real, confirmed bug (feedback entry ed20cbfb-d5a5-4716-9afd-
+    # 87fbbc7cc810): before this field existed, the backend had NO
+    # per-athlete timezone concept at all, and `date.today()` (server/
+    # process local time -- UTC on Cloud Run in production) stood in as
+    # "the athlete's today" across every plan-math call site that needed
+    # one, which is silently wrong for any athlete not physically in UTC --
+    # an evening workout logged in the athlete's own local time can land on
+    # the wrong calendar day server-side, and a taper/event runway computed
+    # from server-UTC "today" can read a day short right at a UTC day
+    # boundary. See `athlete_time.athlete_today`, the resolver this field
+    # feeds: it uses `Athlete.timezone` (via `zoneinfo.ZoneInfo`) when set,
+    # and falls back to plain `date.today()` (server time, unchanged
+    # behavior) when unset. `None` (the default) leaves every existing
+    # profile.yaml (no `timezone` key -- 100% of real athletes as of this
+    # field's introduction) validating and behaving byte-for-byte
+    # unchanged. Additive, no schema_version bump, same convention as every
+    # other additive field in this file.
+    #
+    # Validated (not a bare, format-free `str | None`) via the
+    # `_validate_timezone` field_validator below: Python's own `zoneinfo`
+    # module already ships the IANA database this needs, so checking
+    # `ZoneInfo(name)` doesn't raise is a near-zero-cost way to catch a
+    # typo'd/invalid zone name at profile-save time (a clear validation
+    # error) rather than at first use, deep inside plan-math code, as an
+    # unhandled `ZoneInfoNotFoundError`. This is a deliberate, narrow
+    # departure from this file's usual "no format validation on a human-set
+    # string field" convention (`ftp_watts`/`lthr_bpm`/etc. take any
+    # float): those fields fail safely (a wrong number is still a number
+    # that flows through the same math), but a malformed timezone name
+    # fails LOUD, deep in a code path this field's whole purpose is to make
+    # MORE correct, not less -- validating at the boundary is worth the
+    # small departure here.
+
+    @field_validator("timezone")
+    @classmethod
+    def _validate_timezone(cls, value: str | None) -> str | None:
+        """`None` passes straight through (not set -- the overwhelmingly
+        common, always-valid case). A non-`None` value must be a real IANA
+        zone name `zoneinfo.ZoneInfo` recognizes; see the field's own
+        comment above for why this field departs from this file's usual
+        no-format-validation convention."""
+        if value is None:
+            return value
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(
+                f"{value!r} is not a recognized IANA timezone name (e.g. 'America/Denver')"
+            ) from exc
+        return value
 
 
 class Event(BaseModel):

@@ -177,6 +177,7 @@ from pydantic import ValidationError
 from swim_coach import fueling as fueling_module
 from swim_coach.adapt import adapt_week
 from swim_coach.analytics import compute_analytics
+from swim_coach.athlete_time import athlete_today
 from swim_coach.load import _training_base_evidence, daily_loads, estimate_hr_max
 from swim_coach.parse_files import parse_fit
 from swim_coach.quality import match_workout_to_session
@@ -218,6 +219,7 @@ from swim_coach.plan import (
 )
 from swim_coach.store import StoreInterface
 from swim_coach.taper_search import (
+    MIN_TAPER_RUNWAY_DAYS,
     TaperCandidate,
     generate_taper_sessions,
     search_taper_grid,
@@ -2333,7 +2335,11 @@ def _handle_get_plan_summary(input_data: dict[str, Any], *, store: StoreInterfac
         weeks = int(weeks)
     except (TypeError, ValueError):
         return {"error": f"invalid weeks {weeks!r}"}
-    return summarize_rollup(store, slug, weeks=weeks, as_of=date.today())
+    # No explicit `as_of` -- `summarize_rollup` resolves its own default via
+    # `athlete_today` (this athlete's own local date when `Athlete.timezone`
+    # is set, server `date.today()` otherwise), the same athlete-aware
+    # default every other caller of this function now gets.
+    return summarize_rollup(store, slug, weeks=weeks)
 
 
 def _handle_flag_for_coach_review(
@@ -3514,6 +3520,15 @@ def _handle_draft_macro_plan(input_data: dict[str, Any], *, store: StoreInterfac
         except (TypeError, ValueError):
             return {"error": f"invalid peak_weekly_volume_m {peak_weekly_volume_m!r}"}
 
+    # `athlete` loaded BEFORE resolving `start_date`'s default (reordered
+    # from this handler's own original shape) so an omitted `start_date`
+    # defaults to this athlete's own local today (`athlete_today`, honoring
+    # `Athlete.timezone` when set) rather than server-UTC `date.today()`.
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load athlete profile: {exc}"}
+
     start_str = input_data.get("start_date")
     if start_str:
         try:
@@ -3521,12 +3536,7 @@ def _handle_draft_macro_plan(input_data: dict[str, Any], *, store: StoreInterfac
         except ValueError:
             return {"error": f"invalid start_date {start_str!r}; expected format 'YYYY-MM-DD'"}
     else:
-        start = date.today()
-
-    try:
-        athlete = store.load_athlete(slug)
-    except Exception as exc:  # noqa: BLE001
-        return {"error": f"could not load athlete profile: {exc}"}
+        start = athlete_today(athlete)
 
     try:
         events = store.load_events(slug)
@@ -3728,6 +3738,17 @@ def _handle_replace_macro_plan(input_data: dict[str, Any], *, store: StoreInterf
         except (TypeError, ValueError):
             return {"error": f"invalid peak_weekly_volume_m {peak_weekly_volume_m!r}"}
 
+    confirm = bool(input_data.get("confirm", False))
+
+    # `athlete` loaded BEFORE resolving `start_date`'s default (reordered
+    # from this handler's own original shape) so an omitted `start_date`
+    # defaults to this athlete's own local today (`athlete_today`, honoring
+    # `Athlete.timezone` when set) rather than server-UTC `date.today()`.
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load athlete profile: {exc}"}
+
     start_str = input_data.get("start_date")
     if start_str:
         try:
@@ -3735,14 +3756,7 @@ def _handle_replace_macro_plan(input_data: dict[str, Any], *, store: StoreInterf
         except ValueError:
             return {"error": f"invalid start_date {start_str!r}; expected format 'YYYY-MM-DD'"}
     else:
-        start = date.today()
-
-    confirm = bool(input_data.get("confirm", False))
-
-    try:
-        athlete = store.load_athlete(slug)
-    except Exception as exc:  # noqa: BLE001
-        return {"error": f"could not load athlete profile: {exc}"}
+        start = athlete_today(athlete)
 
     try:
         events = store.load_events(slug)
@@ -3862,6 +3876,17 @@ def _handle_draft_season_macro_plan(
         except (TypeError, ValueError):
             return {"error": f"invalid peak_weekly_volume_m {peak_weekly_volume_m!r}"}
 
+    confirm = bool(input_data.get("confirm", False))
+
+    # `athlete` loaded BEFORE resolving `start_date`'s default (reordered
+    # from this handler's own original shape) so an omitted `start_date`
+    # defaults to this athlete's own local today (`athlete_today`, honoring
+    # `Athlete.timezone` when set) rather than server-UTC `date.today()`.
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load athlete profile: {exc}"}
+
     start_str = input_data.get("start_date")
     if start_str:
         try:
@@ -3869,14 +3894,7 @@ def _handle_draft_season_macro_plan(
         except ValueError:
             return {"error": f"invalid start_date {start_str!r}; expected format 'YYYY-MM-DD'"}
     else:
-        start = date.today()
-
-    confirm = bool(input_data.get("confirm", False))
-
-    try:
-        athlete = store.load_athlete(slug)
-    except Exception as exc:  # noqa: BLE001
-        return {"error": f"could not load athlete profile: {exc}"}
+        start = athlete_today(athlete)
 
     try:
         events = store.load_events(slug)
@@ -5338,18 +5356,51 @@ def _handle_propose_injury_adapted_taper(
             restriction_reported_at = None
             restriction_source = "no active HealthStatus on file -- treated as no restriction"
 
+    # This athlete's own local today (`athlete_today`, honoring `Athlete.
+    # timezone` when set) rather than server-UTC `date.today()` -- the real,
+    # confirmed root cause of feedback entry
+    # ed20cbfb-d5a5-4716-9afd-87fbbc7cc810 (see athlete_time.py's module
+    # docstring). Computed once here and reused for both `as_of=` uses below
+    # so search_taper_grid and generate_taper_sessions can never disagree
+    # about what "today" means for this one request.
+    today = athlete_today(athlete)
+
     try:
         result = search_taper_grid(
             athlete=athlete,
             event=event,
             workouts=workouts,
             wellness=wellness,
-            as_of=date.today(),
+            as_of=today,
             restriction=restriction,
             restriction_reported_at=restriction_reported_at,
         )
     except ValueError as exc:
         return {"error": str(exc)}
+
+    # Real, separate bug fixed here (independent of the timezone fix above):
+    # `generate_taper_sessions` only ever emits a session for a day strictly
+    # between `generation_start = max(anchor_date, as_of)` and `race_date -
+    # 1` -- when the event is too close for that range to contain even one
+    # day, its while loop never executes and it silently returns `[]`. This
+    # used to fall straight through to a "successful" response with an
+    # empty `sessions` list and no explanation anywhere in it. Checked here,
+    # BEFORE calling generate_taper_sessions, using the exact same
+    # `MIN_TAPER_RUNWAY_DAYS` derivation that function's own runway is
+    # measured against (see that constant's own comment in
+    # taper_search.py), so the caller gets a clear, actionable error
+    # instead of quietly discovering an empty plan on their own.
+    generation_start = max(result["anchor_date"], today)
+    runway_days = (result["race_date"] - generation_start).days
+    if runway_days < MIN_TAPER_RUNWAY_DAYS:
+        return {
+            "error": (
+                f"not enough runway before {event.name} "
+                f"({result['race_date'].isoformat()}) to safely generate a "
+                f"taper ({runway_days} day(s) remaining, minimum "
+                f"{MIN_TAPER_RUNWAY_DAYS} needed)"
+            )
+        }
 
     recommended: TaperCandidate = result["recommended"]
     sessions = generate_taper_sessions(
@@ -5368,8 +5419,9 @@ def _handle_propose_injury_adapted_taper(
         # day) even when that day was well in the past (e.g. an injured
         # athlete who's stopped logging) -- backdating generated, and on
         # confirm=True persisted, sessions into already-past calendar
-        # days. as_of clamps generation to never start before today.
-        as_of=date.today(),
+        # days. as_of clamps generation to never start before today (this
+        # athlete's own local today -- see above).
+        as_of=today,
     )
 
     no_training_notice = None
@@ -5646,9 +5698,9 @@ def _handle_render_plan_table(
         }
 
     if target.lower() == "current":
-        iso_week = iso_week_str(date.today())
+        iso_week = iso_week_str(athlete_today(store.load_athlete(slug)))
     elif target.lower() == "next":
-        iso_week = iso_week_str(date.today() + timedelta(days=7))
+        iso_week = iso_week_str(athlete_today(store.load_athlete(slug)) + timedelta(days=7))
     else:
         iso_week = target
         try:

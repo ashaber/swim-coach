@@ -15,6 +15,7 @@ from typing import Any, Callable
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from swim_coach.athlete_time import athlete_today
 from swim_coach.load import estimate_hr_max
 from swim_coach.quality import match_workout_to_session, workout_quality
 from swim_coach.models import Feedback, HealthStatus, Session
@@ -137,7 +138,9 @@ async def coach_view_workouts(
     store = make_store(settings)
     athlete = store.load_athlete(slug)
 
-    today = date.today()
+    # This athlete's own local today (`athlete_today`, honoring `Athlete.
+    # timezone` when set) rather than server-UTC `date.today()`.
+    today = athlete_today(athlete)
     since = today - timedelta(days=days)
 
     all_workouts = store.list_workouts(slug)
