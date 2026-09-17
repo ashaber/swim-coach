@@ -69,10 +69,15 @@ def test_high_intensity_intermittent_band_independent_of_duration():
 
 def test_skopelos_irregular_boat_access_reproduces_hand_verified_numbers():
     """Multi-day ultra swim, irregular support-boat access ~90min apart
-    (2.5-5km spacing at ultra open-water pace) -- must reproduce the
-    ~60g/h, 3-scoop, 30-min-cadence numbers already verified by hand
-    (this build's own brief), using Formula 369 (30g carb/scoop) at the
-    athlete's default (unset) carb_tolerance_g_per_hr fallback of 60g/h.
+    (2.5-5km spacing at ultra open-water pace) -- must reproduce the real
+    worked Skopelos numbers from feedback entry
+    d468e6d0-51d8-4818-bf0b-ca12c7f74d7a's coach_reply correction (read
+    directly from the DB this build's own PR verified against): "3 scoops
+    Formula 369 / 30oz tow bottle ... taken in ~10oz pulls on a 30-min
+    clock ... 30g carb + 500mg sodium per feed ... ~60g/hr sustained if
+    the 30-min cadence holds" -- using Formula 369 (30g carb + 500mg
+    sodium/scoop) at the athlete's default (unset) carb_tolerance_g_per_hr
+    fallback of 60g/h.
     """
     access = IrregularAccess(access_points_min=(90.0, 180.0, 270.0, 360.0))
     plan = compute_fueling_plan(
@@ -90,10 +95,15 @@ def test_skopelos_irregular_boat_access_reproduces_hand_verified_numbers():
     assert first_segment.duration_min == 90.0
     assert first_segment.target_g_per_hr_low == 60.0
     assert first_segment.target_g_per_hr_high == 60.0
-    # 60 g/h * 1.5h = 90g -> 3 scoops of Formula 369's 30g/scoop.
+    # 60 g/h * 1.5h = 90g -> 3 scoops of Formula 369's 30g/scoop -- the
+    # exact "3 scoops Formula 369 / 30oz tow bottle" from the real entry.
     assert first_segment.target_carb_g_low == pytest.approx(90.0)
     assert first_segment.servings_low == pytest.approx(3.0)
-    # 30-minute feed cadence within each ~90min segment -> 3 feed points.
+    # 500mg sodium/scoop x 3 scoops = 1500mg/bottle -- matches the real
+    # entry's own per-feed sodium (500mg) x 3 feeds per bottle.
+    assert first_segment.sodium_mg_at_servings_low == pytest.approx(1500.0)
+    # 30-minute feed cadence within each ~90min segment -> 3 feed points --
+    # the real entry's own "~10oz pulls on a 30-min clock."
     assert first_segment.feed_timestamps_min == (0.0, 30.0, 60.0)
 
 

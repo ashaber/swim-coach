@@ -3089,6 +3089,12 @@ def test_compute_fueling_plan_explicit_override_beats_athlete_profile(athletes_d
 def test_compute_fueling_plan_skopelos_shaped_irregular_access_reproduces_hand_verified_numbers(
     athletes_dir,
 ) -> None:
+    """Reproduces the REAL numbers from feedback entry
+    d468e6d0-51d8-4818-bf0b-ca12c7f74d7a's coach_reply correction (read
+    directly from the DB, real ground truth for Renee's actual Skopelos
+    fueling plan): "3 scoops Formula 369 / 30oz tow bottle ... on a 30-min
+    clock ... 30g carb + 500mg sodium per feed ... ~60g/hr sustained."
+    """
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
 
@@ -3105,8 +3111,9 @@ def test_compute_fueling_plan_skopelos_shaped_irregular_access_reproduces_hand_v
     first = result["segments"][0]
     assert first["duration_min"] == 90.0
     assert first["target_g_per_hr_low"] == 60.0
-    assert first["servings_low"] == pytest.approx(3.0)
-    assert first["feed_timestamps_min"] == [0.0, 30.0, 60.0]
+    assert first["servings_low"] == pytest.approx(3.0)  # 3 scoops, matching the real entry
+    assert first["sodium_mg_at_servings_low"] == pytest.approx(1500.0)  # 3 x 500mg/scoop
+    assert first["feed_timestamps_min"] == [0.0, 30.0, 60.0]  # 30-min clock
 
 
 def test_compute_fueling_plan_heat_flag_adds_warning_not_higher_target(athletes_dir) -> None:
