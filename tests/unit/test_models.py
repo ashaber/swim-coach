@@ -1138,6 +1138,29 @@ def test_athlete_effective_sports_passes_through_when_declared():
     assert athlete.effective_sports == ["bike"]
 
 
+def test_athlete_timezone_defaults_none():
+    # Every existing profile.yaml (Renee's, Tim's, Andrew's) carries no
+    # `timezone` key at all -- must keep validating unchanged as `None`.
+    # See `athlete_time.athlete_today`'s own tests for the fallback
+    # behavior this feeds.
+    athlete = make_athlete()
+    assert athlete.timezone is None
+
+
+def test_athlete_timezone_round_trips_when_set():
+    athlete = make_athlete(timezone="America/Denver")
+    assert athlete.timezone == "America/Denver"
+
+
+def test_athlete_rejects_unrecognized_timezone_name():
+    # `_validate_timezone` catches a typo'd/invalid IANA zone name at
+    # profile-save time -- a clear ValidationError -- rather than letting it
+    # surface later as an unhandled ZoneInfoNotFoundError deep inside
+    # `athlete_time.athlete_today`.
+    with pytest.raises(ValidationError):
+        make_athlete(timezone="Not/A_Real_Zone")
+
+
 def test_session_accepts_bike_sport():
     session = make_session(sport="bike")
     assert session.sport == "bike"
