@@ -26,6 +26,7 @@ from pydantic import ValidationError
 
 from swim_coach.adapt import adapt_week
 from swim_coach.analytics import CARDIAC_DRIFT_FLAG_PCT, compute_analytics
+from swim_coach.athlete_time import athlete_today
 from swim_coach.load import (
     acute_chronic_ratio,
     compute_compliance,
@@ -256,7 +257,10 @@ def _cmd_scaffold_macro(args: argparse.Namespace, store: StoreInterface) -> int:
     if event is None:
         return _error(f"no event matching {args.event!r}")
 
-    start = date.fromisoformat(args.start) if args.start else date.today()
+    # `athlete` loaded above -- an omitted `--start` defaults to this
+    # athlete's own local today (`athlete_today`, honoring `Athlete.
+    # timezone` when set) rather than server-UTC `date.today()`.
+    start = date.fromisoformat(args.start) if args.start else athlete_today(athlete)
 
     if args.current_volume is None:
         return _error(
@@ -405,7 +409,10 @@ def _cmd_summarize(args: argparse.Namespace, store: StoreInterface) -> int:
         except ValueError:
             return _error(f"invalid --as-of {args.as_of!r}; expected 'YYYY-MM-DD'")
     else:
-        as_of = date.today()
+        # `athlete` loaded above -- an omitted `--as-of` defaults to this
+        # athlete's own local today (`athlete_today`, honoring `Athlete.
+        # timezone` when set) rather than server-UTC `date.today()`.
+        as_of = athlete_today(athlete)
 
     weeks = args.weeks
     as_of_monday = as_of - timedelta(days=as_of.weekday())
@@ -565,7 +572,21 @@ def _cmd_parse_coach_text(args: argparse.Namespace, store: StoreInterface) -> in
     except OSError as exc:
         return _error(str(exc), file=str(path))
 
-    day = date.fromisoformat(args.date) if args.date else date.today()
+    # This is exactly the "evening workout confused as tomorrow" scenario
+    # this whole build exists to fix: the pool coach hands out today's
+    # workout text after practice, often in the evening -- an omitted
+    # `--date` must default to this athlete's own local today
+    # (`athlete_today`, honoring `Athlete.timezone` when set), not
+    # server-UTC `date.today()`, which can already read "tomorrow" by the
+    # time an evening practice ends.
+    if args.date:
+        day = date.fromisoformat(args.date)
+    else:
+        try:
+            athlete = store.load_athlete(slug)
+        except Exception as exc:  # noqa: BLE001
+            return _error_from_exception(_error_label(store, slug, "profile.yaml"), exc)
+        day = athlete_today(athlete)
 
     # Save the verbatim text BEFORE parsing (CLAUDE.md: "Coach text is
     # saved verbatim to logs/coach-texts/ BEFORE any parsing").

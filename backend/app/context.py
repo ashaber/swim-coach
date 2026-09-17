@@ -50,6 +50,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, TypedDict
 
+from swim_coach.athlete_time import athlete_today
 from swim_coach.load import (
     acute_chronic_ratio,
     compute_compliance,
@@ -1026,10 +1027,16 @@ def summarize_rollup(
     into `ctl_atl_tsb`. See `load.py`'s `wellness_baseline_deviation`
     docstring for the full citation trail.
     """
-    as_of = date.today() if as_of is None else as_of
+    # `athlete` loaded BEFORE resolving `as_of`'s default (reordered from
+    # this function's own original shape) so a caller that omits `as_of`
+    # gets this athlete's own local "today" (`athlete_today`, honoring
+    # `Athlete.timezone` when set) rather than server-UTC `date.today()` --
+    # a caller that supplies `athlete` explicitly is unaffected either way,
+    # since `athlete_today` only runs when `as_of is None`.
+    athlete = store.load_athlete(slug) if athlete is None else athlete
+    as_of = athlete_today(athlete) if as_of is None else as_of
     span_start, span_end, week_starts = _rollup_window(as_of, weeks)
 
-    athlete = store.load_athlete(slug) if athlete is None else athlete
     workouts = store.list_workouts(slug) if workouts is None else workouts
     wellness = store.list_wellness(slug)
 
@@ -1582,11 +1589,15 @@ def build_per_request_context(
     session, never both, per `Feedback.workout_id`/`session_date`'s mutual
     exclusion), but nothing here enforces that; both may be appended if a
     caller passes both."""
-    today = date.today()
+    # `athlete` loaded first so `today` can be this athlete's own local date
+    # (`athlete_today`, honoring `Athlete.timezone` when set) rather than
+    # server-UTC `date.today()` -- reordered from this function's own
+    # original shape (athlete used to load after `today` was computed).
+    athlete = store.load_athlete(slug)
+    today = athlete_today(athlete)
     current_iso = iso_week_str(today)
     next_iso = iso_week_str(today + timedelta(days=7))
 
-    athlete = store.load_athlete(slug)
     workouts = store.list_workouts(slug)
     events = store.load_events(slug)
     primary_sport = athlete_primary_sport(store, slug)

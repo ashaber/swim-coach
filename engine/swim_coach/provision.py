@@ -35,6 +35,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import date
 
+from swim_coach.athlete_time import athlete_today
 from swim_coach.models import AllowedEmail, Athlete, Event, MacroPlan, WeekPlan
 from swim_coach.plan import generate_week, scaffold_macro
 from swim_coach.store import StoreInterface
@@ -162,7 +163,12 @@ def provision_athlete(
         )
         log.info("skipping macro/first-week", extra={"slug": athlete.slug, "reasons": missing_inputs})
     else:
-        start = macro_start or date.today()
+        # `athlete` (constructed just above with a freshly computed `zones`)
+        # is already in scope, so an omitted `macro_start` defaults to this
+        # athlete's own local today (`athlete_today`, honoring `Athlete.
+        # timezone` when the onboarding caller set one on `profile`) rather
+        # than server-UTC `date.today()`.
+        start = macro_start or athlete_today(athlete)
         macro = scaffold_macro(athlete, target_event, start, current_volume_m, peak_volume_m)
         store.save_macro(athlete.slug, macro)
 

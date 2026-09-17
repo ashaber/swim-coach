@@ -174,6 +174,13 @@ def parse_tcx(path: str | Path) -> WorkoutDraft:
     if id_elem is not None and id_elem.text:
         workout_date = _parse_tcx_date(id_elem.text)
     else:
+        # Intentionally NOT athlete-aware: this module's parsers take only a
+        # file path (see module docstring) -- no Athlete/store/slug is ever
+        # in scope here, by design, to keep parsing decoupled from persistence.
+        # This is also only a last-resort fallback for a source file that
+        # itself carries no usable timestamp at all, already flagged via the
+        # warning below for a human to double-check before the draft becomes
+        # a persisted Workout.
         workout_date = date.today()
         warnings.append("no <Id> timestamp found; date defaulted to today")
 
@@ -273,6 +280,11 @@ def _parse_csv_date(value: str) -> tuple[date, bool]:
     try:
         return date.fromisoformat(value[:10]), True
     except ValueError:
+        # Intentionally NOT athlete-aware -- see parse_tcx's own comment on
+        # its equivalent fallback: this module's parsers take only a file
+        # path, no Athlete/store/slug ever in scope, and this only fires for
+        # an unparseable date VALUE that IS present (the caller's own
+        # "no column at all" case below has its own identical fallback).
         return date.today(), False
 
 
@@ -300,6 +312,8 @@ def parse_csv(path: str | Path) -> WorkoutDraft:
         if not ok:
             warnings.append(f"could not parse date {date_raw!r}; defaulted to today")
     else:
+        # Intentionally NOT athlete-aware -- see parse_tcx's own comment on
+        # its equivalent fallback.
         workout_date = date.today()
         warnings.append("no recognizable date column; defaulted to today")
 
@@ -1152,6 +1166,8 @@ def parse_fit(path: str | Path) -> WorkoutDraft:
         workout_date = session_start_time.date()
         t0 = session_start_time
     else:
+        # Intentionally NOT athlete-aware -- see parse_tcx's own comment on
+        # its equivalent fallback.
         workout_date = date.today()
         warnings.append("no session.start_time found; date defaulted to today")
         first_record_ts = records_raw[0]["timestamp"] if records_raw else None

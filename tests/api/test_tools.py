@@ -4682,9 +4682,24 @@ def test_propose_session_adjustment_structured_content_scales_and_reports_step_c
 # 90.0) -- see this file's own module docstring for why `athletes_dir` is a
 # realistic, isolated copy rather than a synthetic fixture. Workout history
 # is seeded per-test (the fixture tree ships only one real logged workout,
-# not enough to exercise a meaningful baseline) using relative-to-`date.
-# today()` offsets, never hardcoded absolute dates, so these tests stay
-# correct regardless of which real calendar date the suite runs on.
+# not enough to exercise a meaningful baseline) using relative-to-`taper_as_
+# of` offsets (see that fixture below), never hardcoded absolute dates.
+#
+# **These tests used to anchor "today" to the live, real `date.today()`
+# instead of a fixed reference** -- which quietly made their own validity
+# depend on how close the real wall-clock date happened to be to the
+# fixture's hardcoded `event_date` (2026-09-18). That gap closed for real
+# during this athlete-timezone build (the suite started running on
+# 2026-09-17, one day before the fixture's event) and every test below
+# started failing with "not enough runway" -- not a flaky CI-timezone
+# artifact this time, a real collision between a live `date.today()`
+# snapshot and a fixed fixture date. `taper_as_of` (below) removes that
+# environment-sensitivity entirely: every test in this block pins "today"
+# to a fixed offset from the event's own real `event_date`, read from the
+# fixture itself rather than hardcoded a second time, and monkeypatches the
+# SUT's own `athlete_today` resolution to match, so these tests are
+# correct regardless of which real calendar date OR timezone the suite
+# happens to run in.
 
 
 def _seed_steady_workouts(
@@ -4710,10 +4725,47 @@ def _seed_steady_workouts(
         )
 
 
-def test_propose_injury_adapted_taper_draft_does_not_persist(athletes_dir) -> None:
+@pytest.fixture
+def taper_as_of(athletes_dir, monkeypatch) -> date:
+    """A fixed, explicit "today" for `propose_injury_adapted_taper` tests,
+    decoupled from the real wall clock -- see this section's own comment
+    above for why. 21 days before the fixture's real Greece event_date:
+    derived from the fixture's own `event_date` (never a second hardcoded
+    absolute date of its own, so it can't itself drift out of sync with the
+    fixture), and easily clears `MIN_TAPER_RUNWAY_DAYS` (2).
+
+    Deliberately NOT a much larger offset (an early draft of this fixture
+    used 180 days): `generate_taper_sessions` emits one session for EVERY
+    day from `today` through `event_date - 1` -- not just a short taper
+    block -- so a "today" too far back generates sessions spanning the
+    fixture's own pre-existing real data: `athletes/renee`'s real
+    `plan/weeks/2026-W{28,29}.yaml` (~ 2026-07-06..2026-07-19) already carry
+    persisted WeekPlans unrelated to these tests, and a real logged workout
+    already exists on 2026-07-06. 21 days keeps both the seeded-workout
+    window (`_seed_steady_workouts`'s trailing 40-90 days) and the
+    generated-session window safely clear of 2026-07 entirely, so this
+    fixture's own synthetic data is the ONLY data these tests' assertions
+    ever see.
+
+    Monkeypatches `app.tools.athlete_today` -- the exact name
+    `_handle_propose_injury_adapted_taper` imports and calls to resolve
+    "today" -- so the handler under test sees this same fixed date, not
+    just this fixture's own return value. A test that also needs the plain
+    `date` value (to seed workout history ending at it, or to assert
+    against it) uses this fixture's return value directly.
+    """
+    store = FileStore(base_dir=athletes_dir)
+    events = store.load_events("renee")
+    greece = next(e for e in events if e.name == GREECE_EVENT_NAME)
+    fixed_today = greece.event_date - timedelta(days=21)
+    monkeypatch.setattr("app.tools.athlete_today", lambda athlete: fixed_today)
+    return fixed_today
+
+
+def test_propose_injury_adapted_taper_draft_does_not_persist(athletes_dir, taper_as_of) -> None:
     store = FileStore(base_dir=athletes_dir)
     athlete = store.load_athlete("renee")
-    today = date.today()
+    today = taper_as_of
     _seed_steady_workouts(store, athlete.id, end=today, days=40, daily_load=300.0)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
 
@@ -4734,10 +4786,10 @@ def test_propose_injury_adapted_taper_draft_does_not_persist(athletes_dir) -> No
         assert reloaded.load_week("renee", iso_week) is None
 
 
-def test_propose_injury_adapted_taper_confirm_persists_sessions(athletes_dir) -> None:
+def test_propose_injury_adapted_taper_confirm_persists_sessions(athletes_dir, taper_as_of) -> None:
     store = FileStore(base_dir=athletes_dir)
     athlete = store.load_athlete("renee")
-    today = date.today()
+    today = taper_as_of
     _seed_steady_workouts(store, athlete.id, end=today, days=40, daily_load=300.0)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
 
@@ -4761,11 +4813,11 @@ def test_propose_injury_adapted_taper_confirm_persists_sessions(athletes_dir) ->
 
 
 def test_propose_injury_adapted_taper_no_training_health_status_is_correctly_restricted(
-    athletes_dir,
+    athletes_dir, taper_as_of,
 ) -> None:
     store = FileStore(base_dir=athletes_dir)
     athlete = store.load_athlete("renee")
-    today = date.today()
+    today = taper_as_of
     _seed_steady_workouts(store, athlete.id, end=today, days=40, daily_load=300.0)
     store.save_health_status(
         "renee",
@@ -4793,11 +4845,11 @@ def test_propose_injury_adapted_taper_no_training_health_status_is_correctly_res
 
 
 def test_propose_injury_adapted_taper_no_active_health_status_falls_back_to_normal(
-    athletes_dir,
+    athletes_dir, taper_as_of,
 ) -> None:
     store = FileStore(base_dir=athletes_dir)
     athlete = store.load_athlete("renee")
-    today = date.today()
+    today = taper_as_of
     _seed_steady_workouts(store, athlete.id, end=today, days=40, daily_load=300.0)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
 
@@ -4810,11 +4862,11 @@ def test_propose_injury_adapted_taper_no_active_health_status_falls_back_to_norm
 
 
 def test_propose_injury_adapted_taper_restriction_override_bypasses_health_status(
-    athletes_dir,
+    athletes_dir, taper_as_of,
 ) -> None:
     store = FileStore(base_dir=athletes_dir)
     athlete = store.load_athlete("renee")
-    today = date.today()
+    today = taper_as_of
     _seed_steady_workouts(store, athlete.id, end=today, days=40, daily_load=300.0)
     store.save_health_status(
         "renee",
@@ -4848,12 +4900,12 @@ def test_propose_injury_adapted_taper_unknown_event_is_an_error(athletes_dir) ->
     assert "error" in result
 
 
-def test_propose_injury_adapted_taper_resolves_event_by_id_prefix(athletes_dir) -> None:
+def test_propose_injury_adapted_taper_resolves_event_by_id_prefix(athletes_dir, taper_as_of) -> None:
     store = FileStore(base_dir=athletes_dir)
     athlete = store.load_athlete("renee")
     events = store.load_events("renee")
     greece = next(e for e in events if e.name == GREECE_EVENT_NAME)
-    today = date.today()
+    today = taper_as_of
     _seed_steady_workouts(store, athlete.id, end=today, days=40, daily_load=300.0)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
 
@@ -4873,7 +4925,7 @@ def test_propose_injury_adapted_taper_missing_event_is_an_error(athletes_dir) ->
 
 
 def test_propose_injury_adapted_taper_flags_ramp_exceeding_volume_safety_rail(
-    athletes_dir,
+    athletes_dir, taper_as_of,
 ) -> None:
     # Real review finding fixed before merge: the response never computed
     # or surfaced the ramp's size against CLAUDE.md's own standing volume-
@@ -4907,7 +4959,7 @@ def test_propose_injury_adapted_taper_flags_ramp_exceeding_volume_safety_rail(
 
     store = FileStore(base_dir=athletes_dir)
     athlete = store.load_athlete("renee")
-    today = date.today()
+    today = taper_as_of
     restriction_days_ago = 40
     reported_at = today - timedelta(days=restriction_days_ago)
     _seed_steady_workouts(
@@ -4939,7 +4991,7 @@ def test_propose_injury_adapted_taper_flags_ramp_exceeding_volume_safety_rail(
 
 
 def test_propose_injury_adapted_taper_response_reports_in_band_candidate_visibility(
-    athletes_dir,
+    athletes_dir, taper_as_of,
 ) -> None:
     # Real review finding fixed before merge: any_candidate_in_band alone
     # hid whether the recommended (mildest-ramp-first) candidate was the
@@ -4947,7 +4999,7 @@ def test_propose_injury_adapted_taper_response_reports_in_band_candidate_visibil
     # always be present and internally consistent.
     store = FileStore(base_dir=athletes_dir)
     athlete = store.load_athlete("renee")
-    today = date.today()
+    today = taper_as_of
     _seed_steady_workouts(store, athlete.id, end=today, days=40, daily_load=300.0)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
 
@@ -4961,7 +5013,7 @@ def test_propose_injury_adapted_taper_response_reports_in_band_candidate_visibil
 
 
 def test_propose_injury_adapted_taper_never_generates_sessions_before_today(
-    athletes_dir,
+    athletes_dir, taper_as_of,
 ) -> None:
     # Real review bug fixed before merge: generation used to start from the
     # athlete's last LOGGED workout day even when that was well behind
@@ -4981,7 +5033,7 @@ def test_propose_injury_adapted_taper_never_generates_sessions_before_today(
     # bug this build intentionally fixes, not a behavior to keep asserting.
     store = FileStore(base_dir=athletes_dir)
     athlete = store.load_athlete("renee")
-    today = date.today()
+    today = taper_as_of
     stale_anchor = today - timedelta(days=6)
     _seed_steady_workouts(store, athlete.id, end=stale_anchor, days=40, daily_load=300.0)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
@@ -4997,6 +5049,53 @@ def test_propose_injury_adapted_taper_never_generates_sessions_before_today(
             f"session dated {session_date} is not after today ({today}) -- "
             "would backdate into an already-past calendar day"
         )
+
+
+def test_propose_injury_adapted_taper_returns_clear_error_when_runway_too_short(
+    athletes_dir, monkeypatch,
+) -> None:
+    # Real, confirmed bug fixed in this build (feedback entry
+    # ed20cbfb-d5a5-4716-9afd-87fbbc7cc810): when the event is too close for
+    # `generate_taper_sessions` to ever emit a single session (its own
+    # `generation_start = max(anchor_date, as_of)` through `race_date - 1`
+    # range is empty), the handler used to fall straight through to a
+    # "successful" response with a silent, unexplained empty `sessions`
+    # list. It must now return a clear, actionable `error` instead --
+    # checked directly here with a deliberately too-close "today" (1 day
+    # before the event; MIN_TAPER_RUNWAY_DAYS requires 2), independent of
+    # the `taper_as_of` fixture's own comfortably-far-away default.
+    from swim_coach.taper_search import MIN_TAPER_RUNWAY_DAYS
+
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    events = store.load_events("renee")
+    greece = next(e for e in events if e.name == GREECE_EVENT_NAME)
+    today = greece.event_date - timedelta(days=1)
+    monkeypatch.setattr("app.tools.athlete_today", lambda athlete: today)
+    _seed_steady_workouts(store, athlete.id, end=today, days=40, daily_load=300.0)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["propose_injury_adapted_taper"]({"event": GREECE_EVENT_NAME})
+
+    assert "error" in result
+    assert "sessions" not in result
+    assert GREECE_EVENT_NAME in result["error"]
+    assert "runway" in result["error"].lower()
+    assert "1 day" in result["error"]
+    assert str(MIN_TAPER_RUNWAY_DAYS) in result["error"]
+
+    # confirm=True must be refused identically, never silently "succeed"
+    # with nothing persisted.
+    confirm_result = handlers["propose_injury_adapted_taper"](
+        {"event": GREECE_EVENT_NAME, "confirm": True}
+    )
+    assert "error" in confirm_result
+    from app.context import iso_week_str
+
+    reloaded = FileStore(base_dir=athletes_dir)
+    iso_week = iso_week_str(today)
+    week = reloaded.load_week("renee", iso_week)
+    assert week is None or all(s.source != "ai_coach" for s in week.sessions)
 
 
 # --- render_plan_table (defect 1b: cheap deterministic table rendering) ------
