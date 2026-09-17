@@ -2936,6 +2936,348 @@ def test_draft_season_macro_plan_missing_event_names_is_an_error(athletes_dir) -
     assert "error" in result
 
 
+# --- compute_fueling_plan (engine/fueling-calculator) -----------------------
+
+_STEADY_NO_ACCESS = {"kind": "none"}
+
+
+def _iso_week_for(d: date) -> str:
+    year, week, _ = d.isocalendar()
+    return f"{year}-W{week:02d}"
+
+
+def test_compute_fueling_plan_requires_duration_min(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["compute_fueling_plan"](
+        {"intensity_class": "steady", "access": _STEADY_NO_ACCESS, "product_key": "formula_369"}
+    )
+    assert "error" in result
+
+
+def test_compute_fueling_plan_invalid_intensity_class(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["compute_fueling_plan"](
+        {"duration_min": 90, "intensity_class": "not-a-class", "access": _STEADY_NO_ACCESS, "product_key": "formula_369"}
+    )
+    assert "error" in result
+
+
+def test_compute_fueling_plan_invalid_access_kind(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["compute_fueling_plan"](
+        {
+            "duration_min": 90,
+            "intensity_class": "steady",
+            "access": {"kind": "not-a-kind"},
+            "product_key": "formula_369",
+        }
+    )
+    assert "error" in result
+
+
+def test_compute_fueling_plan_fixed_interval_without_interval_min_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["compute_fueling_plan"](
+        {
+            "duration_min": 90,
+            "intensity_class": "steady",
+            "access": {"kind": "fixed_interval"},
+            "product_key": "formula_369",
+        }
+    )
+    assert "error" in result
+
+
+def test_compute_fueling_plan_invalid_product_key(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["compute_fueling_plan"](
+        {
+            "duration_min": 90,
+            "intensity_class": "steady",
+            "access": _STEADY_NO_ACCESS,
+            "product_key": "not_a_real_product",
+        }
+    )
+    assert "error" in result
+
+
+def test_compute_fueling_plan_draft_mode_returns_plan_without_persisting(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["compute_fueling_plan"](
+        {
+            "duration_min": 90,
+            "intensity_class": "high_intensity_intermittent",
+            "access": _STEADY_NO_ACCESS,
+            "product_key": "maurten_gel_100",
+        }
+    )
+
+    assert "error" not in result
+    assert result["persisted"] is False
+    assert len(result["segments"]) == 1
+    assert result["segments"][0]["target_g_per_hr_low"] >= 60.0
+    assert result["summary"]
+    assert "pre_event_session_preview" not in result  # no event_name given -- nothing to preview
+
+
+def test_compute_fueling_plan_surfaces_training_recency_question_when_unset(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    assert store.load_athlete("renee").carb_tolerance_g_per_hr is None  # fixture precondition
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["compute_fueling_plan"](
+        {
+            "duration_min": 600,
+            "intensity_class": "steady",
+            "access": _STEADY_NO_ACCESS,
+            "product_key": "formula_369",
+        }
+    )
+
+    assert "error" not in result
+    assert result["carb_tolerance_source"] == "unset"
+    assert result["training_recency_question"] is not None
+    assert "when did you train" in result["training_recency_question"].lower()
+
+
+def test_compute_fueling_plan_uses_athlete_carb_tolerance_when_set(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    handlers["update_athlete_profile"]({"carb_tolerance_g_per_hr": 90.0})
+
+    result = handlers["compute_fueling_plan"](
+        {
+            "duration_min": 600,
+            "intensity_class": "steady",
+            "access": _STEADY_NO_ACCESS,
+            "product_key": "formula_369",
+        }
+    )
+
+    assert "error" not in result
+    assert result["carb_tolerance_source"] == "athlete_profile"
+    assert result["training_recency_question"] is None
+    assert result["carb_tolerance_g_per_hr"] == 90.0
+
+
+def test_compute_fueling_plan_explicit_override_beats_athlete_profile(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    handlers["update_athlete_profile"]({"carb_tolerance_g_per_hr": 90.0})
+
+    result = handlers["compute_fueling_plan"](
+        {
+            "duration_min": 600,
+            "intensity_class": "steady",
+            "access": _STEADY_NO_ACCESS,
+            "product_key": "formula_369",
+            "carb_tolerance_g_per_hr": 50.0,
+        }
+    )
+
+    assert result["carb_tolerance_source"] == "input_override"
+    assert result["carb_tolerance_g_per_hr"] == 50.0
+
+
+def test_compute_fueling_plan_skopelos_shaped_irregular_access_reproduces_hand_verified_numbers(
+    athletes_dir,
+) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["compute_fueling_plan"](
+        {
+            "duration_min": 600,
+            "intensity_class": "steady",
+            "access": {"kind": "irregular", "access_points_min": [90, 180, 270, 360]},
+            "product_key": "formula_369",
+        }
+    )
+
+    assert "error" not in result
+    first = result["segments"][0]
+    assert first["duration_min"] == 90.0
+    assert first["target_g_per_hr_low"] == 60.0
+    assert first["servings_low"] == pytest.approx(3.0)
+    assert first["feed_timestamps_min"] == [0.0, 30.0, 60.0]
+
+
+def test_compute_fueling_plan_heat_flag_adds_warning_not_higher_target(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    cool = handlers["compute_fueling_plan"](
+        {
+            "duration_min": 90,
+            "intensity_class": "high_intensity_intermittent",
+            "access": _STEADY_NO_ACCESS,
+            "product_key": "maurten_gel_100",
+        }
+    )
+    hot = handlers["compute_fueling_plan"](
+        {
+            "duration_min": 90,
+            "intensity_class": "high_intensity_intermittent",
+            "access": _STEADY_NO_ACCESS,
+            "product_key": "maurten_gel_100",
+            "heat": True,
+        }
+    )
+
+    assert cool["segments"][0]["target_g_per_hr_low"] == hot["segments"][0]["target_g_per_hr_low"]
+    assert any("heat" in w.lower() for w in hot["warnings"])
+    assert not any("heat" in w.lower() for w in cool["warnings"])
+
+
+def test_compute_fueling_plan_confirm_without_event_name_is_rejected(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["compute_fueling_plan"](
+        {
+            "duration_min": 90,
+            "intensity_class": "steady",
+            "access": _STEADY_NO_ACCESS,
+            "product_key": "formula_369",
+            "confirm": True,
+        }
+    )
+
+    assert "error" in result
+
+
+def test_compute_fueling_plan_unknown_event_name_is_rejected(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["compute_fueling_plan"](
+        {
+            "duration_min": 90,
+            "intensity_class": "steady",
+            "access": _STEADY_NO_ACCESS,
+            "product_key": "formula_369",
+            "event_name": "Not A Real Event",
+        }
+    )
+
+    assert "error" in result
+
+
+def test_compute_fueling_plan_shows_pre_event_session_preview_without_confirming(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    event = next(e for e in store.load_events("renee") if e.name == GREECE_EVENT_NAME)
+
+    result = handlers["compute_fueling_plan"](
+        {
+            "duration_min": 600,
+            "intensity_class": "steady",
+            "access": {"kind": "irregular", "access_points_min": [90, 180, 270]},
+            "product_key": "formula_369",
+            "event_name": GREECE_EVENT_NAME,
+        }
+    )
+
+    assert "error" not in result
+    assert result["persisted"] is False
+    preview = result["pre_event_session_preview"]
+    assert date.fromisoformat(preview["date"]) == event.event_date - timedelta(days=1)
+    assert preview["sport"] == "recovery"
+    assert "Formula 369" in preview["structure"]
+    iso_week = _iso_week_for(event.event_date - timedelta(days=1))
+    assert store.load_week("renee", iso_week) is None or all(
+        "Pre-event fueling prep" not in (s.purpose or "")
+        for s in (store.load_week("renee", iso_week).sessions or [])
+    )
+
+
+def test_compute_fueling_plan_confirm_true_without_existing_week_plan_is_rejected(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    event = next(e for e in store.load_events("renee") if e.name == GREECE_EVENT_NAME)
+    iso_week = _iso_week_for(event.event_date - timedelta(days=1))
+    assert store.load_week("renee", iso_week) is None  # fixture precondition
+
+    result = handlers["compute_fueling_plan"](
+        {
+            "duration_min": 600,
+            "intensity_class": "steady",
+            "access": {"kind": "irregular", "access_points_min": [90, 180, 270]},
+            "product_key": "formula_369",
+            "event_name": GREECE_EVENT_NAME,
+            "confirm": True,
+        }
+    )
+
+    assert "error" in result
+    assert "create_week_plan" in result["error"]
+
+
+def test_compute_fueling_plan_confirm_true_persists_pre_event_session(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    athlete = store.load_athlete("renee")
+    event = next(e for e in store.load_events("renee") if e.name == GREECE_EVENT_NAME)
+    session_date = event.event_date - timedelta(days=1)
+    iso_week = _iso_week_for(session_date)
+    monday = date.fromisocalendar(*session_date.isocalendar()[:2], 1)
+    existing_week = WeekPlan(
+        id=uuid.uuid4(),
+        athlete_id=athlete.id,
+        iso_week=iso_week,
+        meso_block="taper",
+        focus="race prep",
+        target_volume_m=1000,
+        sessions=[
+            Session(
+                id=uuid.uuid4(),
+                athlete_id=athlete.id,
+                date=monday,
+                sport="swim_pool",
+                source="pool_coach",
+                duration_min=45.0,
+                distance_m=1500,
+                intensity={"zone": "Z2"},
+                purpose="easy taper swim",
+                structure=None,
+                status="planned",
+            )
+        ],
+    )
+    store.save_week("renee", existing_week)
+
+    result = handlers["compute_fueling_plan"](
+        {
+            "duration_min": 600,
+            "intensity_class": "steady",
+            "access": {"kind": "irregular", "access_points_min": [90, 180, 270]},
+            "product_key": "formula_369",
+            "event_name": GREECE_EVENT_NAME,
+            "confirm": True,
+        }
+    )
+
+    assert "error" not in result, result
+    assert result["persisted"] is True
+    assert result["iso_week"] == iso_week
+
+    reloaded = FileStore(base_dir=athletes_dir).load_week("renee", iso_week)
+    assert len(reloaded.sessions) == 2  # the original swim session is preserved
+    new_session = next(s for s in reloaded.sessions if s.date == session_date)
+    assert new_session.sport == "recovery"
+    assert new_session.source == "ai_coach"
+    assert "Formula 369" in new_session.structure
+    original_swim = next(s for s in reloaded.sessions if s.sport == "swim_pool")
+    assert original_swim.purpose == "easy taper swim"  # untouched
+
+
 # --- set_pool_coach_status -------------------------------------------------------
 
 

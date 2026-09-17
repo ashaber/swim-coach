@@ -174,6 +174,7 @@ from typing import Any, Callable
 
 from pydantic import ValidationError
 
+from swim_coach import fueling as fueling_module
 from swim_coach.adapt import adapt_week
 from swim_coach.analytics import compute_analytics
 from swim_coach.load import _training_base_evidence, daily_loads, estimate_hr_max
@@ -1212,6 +1213,161 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
             },
             "required": ["event_names", "current_weekly_volume_m"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "compute_fueling_plan",
+        "description": (
+            "The generic in-session fueling calculator (engine/fueling-"
+            "calculator build, swim_coach.fueling.compute_fueling_plan): "
+            "given an event's total duration/intensity and its external-"
+            "feed-access pattern (none -- fully self-carried; a fixed "
+            "interval -- lap-based pit stops; or an explicit irregular "
+            "list -- a support boat, aid stations), computes the target "
+            "carbohydrate g/h band and what must be self-carried between "
+            "any two consecutive access points (or across the whole event, "
+            "if none) to hit it, with a chosen product's serving counts and "
+            "offset-from-event-start feed timestamps. Generalizes across "
+            "any event shape -- a multi-day ultra swim's irregular boat "
+            "access, a lap-based ultra MTB's regular pit access, a self-"
+            "carried-only short race (include real warmup time in "
+            "duration_min, not just the race itself), or a sparse-irregular "
+            "aid-station race. "
+            "**Carb tolerance:** if `carb_tolerance_g_per_hr` isn't given "
+            "and the athlete has no `carb_tolerance_g_per_hr` on their "
+            "profile, this ALWAYS surfaces a `training_recency_question` in "
+            "the response ('when did you train at this rate?') alongside "
+            "the conservative default-fallback plan -- relay that question "
+            "to the athlete rather than silently trusting the fallback; if "
+            "they answer with a real demonstrated rate, call "
+            "record_threshold_test + update_athlete_profile to persist it, "
+            "then call this tool again. Never silently assume a product the "
+            "athlete hasn't specified either -- ask which of the known "
+            "products (formula_369, maurten_gel_100, tailwind) they're "
+            "actually using. "
+            "**Draft-then-confirm, like draft_season_macro_plan:** "
+            "`confirm` defaults to false, which only computes and returns "
+            "the plan (plus a preview of the pre-event nutrition session, "
+            "if `event_name` is given), never persisting. Set `confirm: "
+            "true` (with `event_name` set -- there is nothing to persist "
+            "without a target event) ONLY after the athlete has explicitly "
+            "agreed, to actually write a Session-shaped pre-event fueling-"
+            "prep entry (deliverable 5: reuses existing WeekPlan/session "
+            "infrastructure, NOT a new race-day timeline) onto the calendar "
+            "day before the event -- requires a week plan to already exist "
+            "for that date (create_week_plan first if not). Never pass "
+            "confirm=true on the first call for a given request."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "duration_min": {
+                    "type": "number",
+                    "description": (
+                        "Total real exposure duration in minutes -- the "
+                        "coach's own judgment call, NOT necessarily the "
+                        "event's own recorded distance/duration (e.g. a "
+                        "45min CX race with a real 45min warmup beforehand "
+                        "is 90min of total exposure, not 45)."
+                    ),
+                },
+                "intensity_class": {
+                    "type": "string",
+                    "enum": ["steady", "high_intensity_intermittent"],
+                    "description": (
+                        "'steady' for continuous, roughly constant-effort "
+                        "events (an ultra swim, an endurance MTB race). "
+                        "'high_intensity_intermittent' for effort that "
+                        "repeatedly surges near/above threshold (CX, crit "
+                        "racing) -- ALWAYS gets the long-duration steady-"
+                        "state band (60-90 g/h) regardless of actual "
+                        "duration, per library/08-ultra-feeding.md's "
+                        "bike/CX section (Essen 1978; Romijn et al. 1993)."
+                    ),
+                },
+                "access": {
+                    "type": "object",
+                    "description": "The external-feed-access pattern.",
+                    "properties": {
+                        "kind": {
+                            "type": "string",
+                            "enum": ["none", "fixed_interval", "irregular"],
+                        },
+                        "interval_min": {
+                            "type": "number",
+                            "description": "Required when kind='fixed_interval': minutes between each regular access point (e.g. lap time).",
+                        },
+                        "access_points_min": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "description": "Required when kind='irregular': offset-from-event-start minutes of each access point (support boat, aid station), any order.",
+                        },
+                    },
+                    "required": ["kind"],
+                },
+                "product_key": {
+                    "type": "string",
+                    "enum": ["formula_369", "maurten_gel_100", "tailwind"],
+                    "description": (
+                        "Which verified product to base servings on -- ask "
+                        "the athlete rather than assuming one they haven't "
+                        "named. See swim_coach.fueling.PRODUCTS for the "
+                        "verified per-serving carb/sodium figures (Formula "
+                        "369's sodium figure carries a real, flagged, "
+                        "unresolved verification conflict -- see its own "
+                        "notes)."
+                    ),
+                },
+                "carb_tolerance_g_per_hr": {
+                    "type": "number",
+                    "description": (
+                        "Explicit override for this call only. Omit to use "
+                        "the athlete's own Athlete.carb_tolerance_g_per_hr "
+                        "if set, else the conservative research-grounded "
+                        "60g/h default fallback (see the tool description's "
+                        "training_recency_question behavior)."
+                    ),
+                },
+                "heat": {
+                    "type": "boolean",
+                    "description": (
+                        "True for a real hot-day scenario. Does NOT raise "
+                        "the carbohydrate target (library/08: heat reduces "
+                        "ingested-carb oxidation while raising endogenous "
+                        "glycogen use -- Jentjens et al. 2002) -- adds a "
+                        "warning about the real heat-day lever (fluid/"
+                        "sodium) instead."
+                    ),
+                },
+                "event_name": {
+                    "type": "string",
+                    "description": (
+                        "Name of an existing event (must match exactly). "
+                        "Required to persist a pre-event nutrition session "
+                        "(confirm=true); optional otherwise -- omit for a "
+                        "pure calculator call with nothing to attach to a "
+                        "calendar date."
+                    ),
+                },
+                "days_before": {
+                    "type": "integer",
+                    "description": "How many days before event_date to place the pre-event nutrition session (default 1).",
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "description": (
+                        "Default false: compute and return the candidate "
+                        "plan (plus a pre-event-session preview if "
+                        "event_name is given), never persisting. Set true "
+                        "ONLY after the athlete has explicitly agreed, and "
+                        "only together with event_name -- this then "
+                        "persists the pre-event nutrition Session onto the "
+                        "week plan covering the day before event_date."
+                    ),
+                },
+            },
+            "required": ["duration_min", "intensity_class", "access", "product_key"],
             "additionalProperties": False,
         },
     },
@@ -3856,6 +4012,260 @@ def _handle_draft_season_macro_plan(
     return result
 
 
+_FUELING_PRODUCT_KEYS = tuple(sorted(fueling_module.PRODUCTS))
+
+
+def _parse_feed_access(raw: dict[str, Any] | None) -> tuple[fueling_module.FeedAccess | None, str | None]:
+    """Parses the tool's `access` input dict into a `swim_coach.fueling`
+    `FeedAccess` value. Returns `(access, error)` -- exactly one is
+    non-None, same convention as this file's other small parse helpers
+    (`_parse_template_preference`)."""
+    if not raw or not isinstance(raw, dict):
+        return None, "access is required, e.g. {\"kind\": \"none\"}"
+    kind = raw.get("kind")
+    if kind == "none":
+        return fueling_module.NoAccess(), None
+    if kind == "fixed_interval":
+        interval_min = raw.get("interval_min")
+        if interval_min is None:
+            return None, "access.kind='fixed_interval' requires access.interval_min"
+        try:
+            return fueling_module.FixedIntervalAccess(interval_min=float(interval_min)), None
+        except (TypeError, ValueError) as exc:
+            return None, f"invalid access.interval_min {interval_min!r}: {exc}"
+    if kind == "irregular":
+        points = raw.get("access_points_min")
+        if not points or not isinstance(points, list):
+            return None, "access.kind='irregular' requires a non-empty access.access_points_min list"
+        try:
+            return fueling_module.IrregularAccess(access_points_min=tuple(float(p) for p in points)), None
+        except (TypeError, ValueError) as exc:
+            return None, f"invalid access.access_points_min {points!r}: {exc}"
+    return None, f"invalid access.kind {kind!r}; must be one of 'none', 'fixed_interval', 'irregular'"
+
+
+def _fueling_segment_json(segment: fueling_module.FuelingSegment) -> dict[str, Any]:
+    return {
+        "start_min": segment.start_min,
+        "end_min": segment.end_min,
+        "duration_min": segment.duration_min,
+        "target_g_per_hr_low": segment.target_g_per_hr_low,
+        "target_g_per_hr_high": segment.target_g_per_hr_high,
+        "target_carb_g_low": round(segment.target_carb_g_low, 1),
+        "target_carb_g_high": round(segment.target_carb_g_high, 1),
+        "servings_low": round(segment.servings_low, 2),
+        "servings_high": round(segment.servings_high, 2),
+        "sodium_mg_at_servings_low": (
+            round(segment.sodium_mg_at_servings_low, 0)
+            if segment.sodium_mg_at_servings_low is not None
+            else None
+        ),
+        "sodium_mg_at_servings_high": (
+            round(segment.sodium_mg_at_servings_high, 0)
+            if segment.sodium_mg_at_servings_high is not None
+            else None
+        ),
+        "feed_timestamps_min": list(segment.feed_timestamps_min),
+    }
+
+
+def _handle_compute_fueling_plan(
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str
+) -> dict[str, Any]:
+    """The `compute_fueling_plan` coach tool -- a thin wrapper around
+    `swim_coach.fueling.compute_fueling_plan` (the pure calculator) that
+    resolves the athlete's own `carb_tolerance_g_per_hr` (surfacing the
+    "when did you train at this rate?" question when unset, per this
+    build's brief -- never silently trusting the calculator's own
+    conservative fallback without saying so), and optionally persists a
+    Session-shaped pre-event nutrition entry via the same generic
+    `_apply_session_overrides` "add" path `replace_week_plan` already
+    exposes (deliverable 5 -- see `swim_coach.fueling.
+    build_pre_event_nutrition_session`'s own docstring for why this is
+    deliberately distinct from `plan._race_week_checklist`'s existing
+    generic `carb_load` reminder).
+
+    Draft-then-confirm, matching `draft_season_macro_plan`: `confirm`
+    defaults to False (compute + preview only); `confirm=True` requires
+    `event_name` (nothing to persist without a target date) and an
+    ALREADY-EXISTING week plan covering the day before the event -- this
+    tool does not create/regenerate a week itself, only appends one session
+    to an existing one (same direct load->mutate->save shape
+    `reschedule_session` already uses, not `replace_week_plan`'s full
+    regenerate-then-override shape, since nothing else about the week
+    needs to change).
+    """
+    duration_min = input_data.get("duration_min")
+    if duration_min is None:
+        return {"error": "duration_min is required"}
+    try:
+        duration_min = float(duration_min)
+    except (TypeError, ValueError):
+        return {"error": f"invalid duration_min {duration_min!r}"}
+
+    intensity_class = input_data.get("intensity_class")
+    if intensity_class not in ("steady", "high_intensity_intermittent"):
+        return {"error": f"invalid intensity_class {intensity_class!r}"}
+
+    access, access_error = _parse_feed_access(input_data.get("access"))
+    if access_error is not None:
+        return {"error": access_error}
+
+    product_key = input_data.get("product_key")
+    if product_key not in _FUELING_PRODUCT_KEYS:
+        return {
+            "error": f"invalid product_key {product_key!r}; known products: {list(_FUELING_PRODUCT_KEYS)}"
+        }
+
+    heat = bool(input_data.get("heat", False))
+
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load athlete profile: {exc}"}
+
+    carb_tolerance_override = input_data.get("carb_tolerance_g_per_hr")
+    training_recency_question: str | None = None
+    if carb_tolerance_override is not None:
+        try:
+            carb_tolerance_g_per_hr: float | None = float(carb_tolerance_override)
+        except (TypeError, ValueError):
+            return {"error": f"invalid carb_tolerance_g_per_hr {carb_tolerance_override!r}"}
+        carb_tolerance_input_source = "input_override"
+    elif athlete.carb_tolerance_g_per_hr is not None:
+        carb_tolerance_g_per_hr = athlete.carb_tolerance_g_per_hr
+        carb_tolerance_input_source = "athlete_profile"
+    else:
+        carb_tolerance_g_per_hr = None  # compute_fueling_plan applies its own default fallback
+        carb_tolerance_input_source = "unset"
+        training_recency_question = (
+            "This athlete has no carb_tolerance_g_per_hr on file -- when did you train at "
+            "this rate? The plan below conservatively uses the research-grounded 60g/h "
+            "default fallback (library/08-ultra-feeding.md) rather than assuming a higher, "
+            "unconfirmed tolerance. If the athlete reports a real demonstrated rate (a "
+            "gut-training block, a rehearsed long-session feed), call record_threshold_test "
+            "then update_athlete_profile to persist it, and call compute_fueling_plan again."
+        )
+
+    try:
+        plan = fueling_module.compute_fueling_plan(
+            duration_min=duration_min,
+            intensity_class=intensity_class,
+            access=access,
+            product_key=product_key,
+            carb_tolerance_g_per_hr=carb_tolerance_g_per_hr,
+            heat=heat,
+        )
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    product = fueling_module.PRODUCTS[product_key]
+    result: dict[str, Any] = {
+        "duration_min": plan.duration_min,
+        "intensity_class": plan.intensity_class,
+        "product_key": plan.product_key,
+        "product_label": product.label,
+        "carb_tolerance_g_per_hr": plan.carb_tolerance_g_per_hr,
+        "carb_tolerance_source": carb_tolerance_input_source,
+        "heat": plan.heat,
+        "access_kind": plan.access_kind,
+        "segments": [_fueling_segment_json(s) for s in plan.segments],
+        "total_carb_g_low": round(plan.total_carb_g_low, 1),
+        "total_carb_g_high": round(plan.total_carb_g_high, 1),
+        "warnings": list(plan.warnings),
+        "summary": fueling_module.render_fueling_plan_summary(plan, product.label),
+        "training_recency_question": training_recency_question,
+        "persisted": False,
+    }
+
+    event_name = input_data.get("event_name")
+    confirm = bool(input_data.get("confirm", False))
+    if confirm and not event_name:
+        return {"error": "confirm=true requires event_name -- nothing to persist without a target event"}
+
+    if event_name:
+        try:
+            events = store.load_events(slug)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"could not load events: {exc}"}
+        event = next((e for e in events if e.name == event_name), None)
+        if event is None:
+            return {
+                "error": (
+                    f"no event named {event_name!r} for this athlete; "
+                    f"known event names: {[e.name for e in events]}"
+                )
+            }
+
+        days_before_raw = input_data.get("days_before", 1)
+        try:
+            days_before = int(days_before_raw)
+        except (TypeError, ValueError):
+            return {"error": f"invalid days_before {days_before_raw!r}"}
+
+        session = fueling_module.build_pre_event_nutrition_session(
+            athlete_id=athlete.id,
+            event_date=event.event_date,
+            plan=plan,
+            product_label=product.label,
+            days_before=days_before,
+        )
+        result["pre_event_session_preview"] = {
+            "date": session.date.isoformat(),
+            "sport": session.sport,
+            "purpose": session.purpose,
+            "structure": session.structure,
+        }
+
+        if confirm:
+            iso_year, iso_week_num, _ = session.date.isocalendar()
+            iso_week = f"{iso_year}-W{iso_week_num:02d}"
+            try:
+                week = store.load_week(slug, iso_week)
+            except Exception as exc:  # noqa: BLE001
+                return {"error": f"could not load week plan {iso_week!r}: {exc}"}
+            if week is None:
+                return {
+                    "error": (
+                        f"no existing week plan for {iso_week!r} (covering "
+                        f"{session.date.isoformat()}, the day before {event_name!r}) -- "
+                        "use create_week_plan first, then call compute_fueling_plan again "
+                        "with confirm=true"
+                    )
+                }
+            override_error, override_notes = _apply_session_overrides(
+                week,
+                [
+                    {
+                        "date": session.date.isoformat(),
+                        "sport": session.sport,
+                        "add": True,
+                        "duration_min": session.duration_min,
+                        "purpose": session.purpose,
+                        "structure": session.structure,
+                        "intensity": session.intensity,
+                    }
+                ],
+                athlete,
+            )
+            if override_error is not None:
+                return {"error": override_error}
+            store.save_week(slug, week)
+            log.info(
+                "pre-event nutrition session persisted",
+                athlete=slug,
+                event_name=event_name,
+                iso_week=iso_week,
+                session_date=session.date.isoformat(),
+            )
+            result["persisted"] = True
+            result["iso_week"] = iso_week
+            if override_notes:
+                result["notes"] = override_notes
+
+    return result
+
+
 def _handle_set_pool_coach_status(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
     """Flips `Athlete.has_pool_coach` (Part 3 -- see `swim_coach.plan.
     generate_week`'s branch on it). Low-risk status flag, not a plan/volume
@@ -5322,6 +5732,9 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "draft_season_macro_plan": lambda input_data: _handle_draft_season_macro_plan(
+            input_data, store=store, slug=slug
+        ),
+        "compute_fueling_plan": lambda input_data: _handle_compute_fueling_plan(
             input_data, store=store, slug=slug
         ),
         "set_pool_coach_status": lambda input_data: _handle_set_pool_coach_status(

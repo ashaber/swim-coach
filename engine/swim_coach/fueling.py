@@ -45,7 +45,7 @@ sodium figure -- see that entry).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Literal
 from uuid import UUID, uuid4
