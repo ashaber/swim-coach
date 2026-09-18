@@ -31,6 +31,7 @@ from swim_coach.models import (
     WorkoutStructure,
     WorkoutTarget,
 )
+from swim_coach import fueling as fueling_module
 from swim_coach.plan import SESSION_ADJUSTMENT_INCREASE_CAP_PCT, generate_week
 from swim_coach.store import FileStore
 
@@ -5897,3 +5898,712 @@ def test_appended_hard_bike_days_trip_the_realism_guardrail(athletes_dir, run_ta
     assert warnings_out, "expected the guardrail to surface warnings, not silently clamp"
     assert "hard bike day" in " ".join(warnings_out).lower()
     assert result["persisted"] is False
+
+
+# ===========================================================================
+# patch_week_plan (backend/week-plan-patch-and-merge)
+# -------------------------------------------------------------------------
+# Real, confirmed bug this fixes: `replace_week_plan` ALWAYS calls
+# `generate_week` first -- a full fresh regeneration -- so even a careful
+# `session_overrides` call can silently drop already-persisted, bespoke
+# sessions that the regeneration doesn't reproduce. `patch_week_plan`
+# operates directly on the persisted week (no `generate_week` call at all),
+# so every session NOT named in `session_overrides` is guaranteed
+# byte-for-byte unchanged. See feedback bf699e7f-1905-476c-ab1b-
+# ae1db37077ca (athlete andrew, live 2026-W38) for the real incident.
+# ===========================================================================
+
+
+def test_patch_week_plan_missing_iso_week_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["patch_week_plan"]({"session_overrides": [{"date": "2026-07-07", "purpose": "x"}]})
+    assert "error" in result
+    assert "iso_week" in result["error"]
+
+
+def test_patch_week_plan_invalid_iso_week_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["patch_week_plan"](
+        {"iso_week": "not-a-week", "session_overrides": [{"date": "2026-07-07", "purpose": "x"}]}
+    )
+    assert "error" in result
+
+
+def test_patch_week_plan_missing_session_overrides_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["patch_week_plan"]({"iso_week": "2026-W28"})
+    assert "error" in result
+    assert "session_overrides" in result["error"]
+
+
+def test_patch_week_plan_empty_session_overrides_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["patch_week_plan"]({"iso_week": "2026-W28", "session_overrides": []})
+    assert "error" in result
+    assert "session_overrides" in result["error"]
+
+
+def test_patch_week_plan_no_existing_week_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    # 2026-W50 has no week file in the fixture tree.
+    result = handlers["patch_week_plan"](
+        {"iso_week": "2026-W50", "session_overrides": [{"date": "2026-12-07", "purpose": "x"}]}
+    )
+    assert "error" in result
+    assert "create_week_plan" in result["error"]
+    assert "replace_week_plan" in result["error"]
+
+
+def test_patch_week_plan_draft_mode_does_not_persist(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    before = store.load_week("renee", "2026-W28")
+
+    result = handlers["patch_week_plan"](
+        {
+            "iso_week": "2026-W28",
+            "session_overrides": [{"date": "2026-07-07", "sport": "strength", "purpose": "new focus"}],
+        }
+    )
+
+    assert "error" not in result, result
+    assert result["persisted"] is False
+    changed = next(s for s in result["sessions"] if s["date"] == "2026-07-07")
+    assert changed["purpose"] == "new focus"
+
+    after = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    assert after.model_dump() == before.model_dump()  # nothing persisted
+
+
+def test_patch_week_plan_confirm_true_changes_only_the_targeted_session(athletes_dir) -> None:
+    """The core regression test for the real bug: every session other than
+    the one named in session_overrides must be byte-for-byte identical
+    before and after -- not just present, not just the right count, but
+    field-for-field unchanged."""
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    before = store.load_week("renee", "2026-W28")
+    assert len(before.sessions) == 7  # fixture precondition
+
+    result = handlers["patch_week_plan"](
+        {
+            "iso_week": "2026-W28",
+            "session_overrides": [
+                {
+                    "date": "2026-07-07",
+                    "sport": "strength",
+                    "purpose": "kettlebell-focused dryland strength",
+                    "duration_min": 55,
+                }
+            ],
+            "confirm": True,
+        }
+    )
+
+    assert "error" not in result, result
+    assert result["persisted"] is True
+
+    after = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    assert len(after.sessions) == 7  # modify mode: count unchanged
+
+    target = next(s for s in after.sessions if s.date == date(2026, 7, 7))
+    assert target.purpose == "kettlebell-focused dryland strength"
+    assert target.duration_min == 55
+
+    before_by_id = {s.id: s for s in before.sessions}
+    untouched = [s for s in after.sessions if s.date != date(2026, 7, 7)]
+    assert len(untouched) == 6
+    for session in untouched:
+        original = before_by_id[session.id]
+        assert session.model_dump() == original.model_dump(), (
+            f"session {session.id} on {session.date} was NOT byte-identical "
+            "after a patch that should only have touched 2026-07-07"
+        )
+
+
+def test_patch_week_plan_add_mode_appends_without_touching_others(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    before = store.load_week("renee", "2026-W28")
+
+    result = handlers["patch_week_plan"](
+        {
+            "iso_week": "2026-W28",
+            "session_overrides": [
+                {
+                    "date": "2026-07-06",  # Monday already has swim_pool
+                    "sport": "strength",  # no strength session that day yet
+                    "add": True,
+                    "duration_min": 30,
+                    "purpose": "extra core work",
+                }
+            ],
+            "confirm": True,
+        }
+    )
+
+    assert "error" not in result, result
+    assert result["persisted"] is True
+
+    after = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    assert len(after.sessions) == 8
+
+    new_session = next(
+        s for s in after.sessions if s.date == date(2026, 7, 6) and s.sport == "strength"
+    )
+    assert new_session.purpose == "extra core work"
+    assert new_session.duration_min == 30
+
+    before_by_id = {s.id: s for s in before.sessions}
+    for session in after.sessions:
+        if session.id in before_by_id:
+            assert session.model_dump() == before_by_id[session.id].model_dump()
+
+
+def test_patch_week_plan_remove_mode_deletes_matching_session_others_untouched(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    before = store.load_week("renee", "2026-W28")
+    removed_id = next(s.id for s in before.sessions if s.date == date(2026, 7, 6))
+
+    result = handlers["patch_week_plan"](
+        {
+            "iso_week": "2026-W28",
+            "session_overrides": [{"date": "2026-07-06", "sport": "swim_pool", "remove": True}],
+            "confirm": True,
+        }
+    )
+
+    assert "error" not in result, result
+    assert result["persisted"] is True
+
+    after = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    assert len(after.sessions) == 6
+    assert all(s.id != removed_id for s in after.sessions)
+
+    before_by_id = {s.id: s for s in before.sessions}
+    for session in after.sessions:
+        assert session.model_dump() == before_by_id[session.id].model_dump()
+
+
+def test_patch_week_plan_session_override_error_leaves_week_untouched(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    before = store.load_week("renee", "2026-W28")
+
+    result = handlers["patch_week_plan"](
+        {
+            "iso_week": "2026-W28",
+            "session_overrides": [{"date": "2026-01-01", "purpose": "no session on this date at all"}],
+            "confirm": True,
+        }
+    )
+    assert "error" in result
+
+    after = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    assert after.model_dump() == before.model_dump()
+
+
+def test_patch_week_plan_in_schema_and_handlers(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    schema_names = {t["name"] for t in TOOLS_SCHEMA}
+    assert "patch_week_plan" in schema_names
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    assert "patch_week_plan" in handlers
+
+
+def test_patch_week_plan_realism_guardrail_flags_ramp_over_prior_week(athletes_dir, run_tag) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    iso_week, _macro = _bike_macro_via_tools(handlers, store, run_tag, "PatchGuardrail")
+
+    year, wk = iso_week.split("-W")
+    monday = date.fromisocalendar(int(year), int(wk), 1)
+    baseline = handlers["replace_week_plan"]({"iso_week": iso_week, "confirm": True})
+    assert "error" not in baseline, baseline
+    bike_dates = {s["date"] for s in baseline["sessions"] if s["sport"] == "bike"}
+
+    free_dates = [
+        (monday + timedelta(days=d)).isoformat()
+        for d in range(7)
+        if (monday + timedelta(days=d)).isoformat() not in bike_dates
+    ]
+    assert free_dates
+
+    # Push a large amount of extra hard bike volume onto every free day --
+    # well past the +8%/week ramp cap over the week's own pre-patch bike
+    # volume.
+    overrides = [
+        {
+            "date": d,
+            "add": True,
+            "sport": "bike",
+            "duration_min": 180,
+            "purpose": "extra hard interval session",
+            "intensity": {"zone": "Z4"},
+        }
+        for d in free_dates
+    ]
+    result = handlers["patch_week_plan"]({"iso_week": iso_week, "session_overrides": overrides})
+    assert "error" not in result, result
+    warnings_out = result.get("planning_warnings") or []
+    assert warnings_out, "expected the realism guardrail to surface warnings, not silently clamp"
+    assert result["persisted"] is False
+
+
+# ===========================================================================
+# merge_week_plan (backend/week-plan-patch-and-merge)
+# -------------------------------------------------------------------------
+# Two-phase diff-then-selective-merge, per Andrew's own mid-build redesign:
+# a strict "additive-only, error on any collision" tool forced the coach to
+# manually clear a slot via patch_week_plan before it could even try, which
+# defeated the point whenever the proposed content legitimately overlapped
+# with something already on file (e.g. a fresh generate_week regeneration).
+# Phase 1 (no `accept_from_proposed`) is a pure, read-only diff of `current`
+# vs. `proposed` classified per (date, sport) into unchanged/differs/
+# new_in_proposed/missing_in_proposed. Phase 2 (`accept_from_proposed`
+# given, even as []) builds a merged plan with ONLY the selected slots
+# taken from proposed -- everything else stays byte-identical to current --
+# behind the same draft-then-confirm gate every other plan-editing tool
+# here uses.
+# ===========================================================================
+
+
+def test_merge_week_plan_missing_iso_week_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["merge_week_plan"]({})
+    assert "error" in result
+    assert "iso_week" in result["error"]
+
+
+def test_merge_week_plan_invalid_iso_week_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["merge_week_plan"]({"iso_week": "not-a-week"})
+    assert "error" in result
+
+
+def test_merge_week_plan_no_existing_week_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    # 2026-W50 has no week file in the fixture tree.
+    result = handlers["merge_week_plan"]({"iso_week": "2026-W50"})
+    assert "error" in result
+    assert "create_week_plan" in result["error"]
+
+
+def test_merge_week_plan_in_schema_and_handlers(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    schema_names = {t["name"] for t in TOOLS_SCHEMA}
+    assert "merge_week_plan" in schema_names
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    assert "merge_week_plan" in handlers
+
+
+def test_merge_week_plan_diff_via_proposed_sessions_classifies_correctly(athletes_dir) -> None:
+    """Requirement (a): the diff correctly classifies unchanged/differs/new
+    across a real synthetic current-vs-proposed pair."""
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    current = store.load_week("renee", "2026-W28")
+    strength = next(s for s in current.sessions if s.date == date(2026, 7, 7))
+    pool = next(s for s in current.sessions if s.date == date(2026, 7, 8))
+
+    proposed_sessions = [
+        # Identical content to the existing strength session -> "unchanged".
+        {
+            "date": strength.date.isoformat(),
+            "sport": strength.sport,
+            "duration_min": strength.duration_min,
+            "purpose": strength.purpose,
+            "distance_m": strength.distance_m,
+            "intensity": strength.intensity,
+        },
+        # Different purpose for the existing pool session -> "differs".
+        {
+            "date": pool.date.isoformat(),
+            "sport": pool.sport,
+            "duration_min": pool.duration_min,
+            "purpose": "CHANGED -- coached pool, different focus this week",
+            "distance_m": pool.distance_m,
+            "intensity": pool.intensity,
+        },
+        # A brand-new slot -> "new_in_proposed".
+        {
+            "date": "2026-07-06",
+            "sport": "strength",
+            "duration_min": 20,
+            "purpose": "extra core work",
+        },
+    ]
+
+    result = handlers["merge_week_plan"](
+        {"iso_week": "2026-W28", "proposed_sessions": proposed_sessions}
+    )
+
+    assert "error" not in result, result
+    assert result["mode"] == "diff"
+    assert result["persisted"] is False
+
+    statuses = {(d["date"], d["sport"]): d["status"] for d in result["diff"]}
+    assert statuses[("2026-07-07", "strength")] == "unchanged"
+    assert statuses[("2026-07-08", "swim_pool")] == "differs"
+    assert statuses[("2026-07-06", "strength")] == "new_in_proposed"
+    # everything else, untouched by proposed_sessions, is unchanged too --
+    # proposed_sessions layers onto a COPY of current, it never wholesale
+    # replaces it.
+    for s in current.sessions:
+        key = (s.date.isoformat(), s.sport)
+        if key not in {("2026-07-07", "strength"), ("2026-07-08", "swim_pool")}:
+            assert statuses[key] == "unchanged", key
+
+
+def test_merge_week_plan_diff_via_regeneration_classifies_missing_in_proposed(athletes_dir) -> None:
+    """Requirement (a), continued: `missing_in_proposed` -- bespoke content
+    only in `current`, absent from a fresh `generate_week` regeneration.
+    Renee is swim-primary, so a `cross_train` session is guaranteed never
+    to appear in the generated proposed plan -- a deterministic way to
+    exercise this branch without depending on unpredictable engine output
+    elsewhere in the diff."""
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    current = store.load_week("renee", "2026-W28")
+    current.sessions.append(
+        Session(
+            id=uuid.uuid4(),
+            athlete_id=current.athlete_id,
+            date=date(2026, 7, 6),
+            sport="cross_train",
+            source="ai_coach",
+            duration_min=20.0,
+            distance_m=None,
+            intensity={"anchor": "rpe"},
+            purpose="bespoke cross-training a fresh regeneration won't reproduce",
+            structure=None,
+            status="planned",
+        )
+    )
+    store.save_week("renee", current)
+
+    result = handlers["merge_week_plan"]({"iso_week": "2026-W28"})
+
+    assert "error" not in result, result
+    assert result["mode"] == "diff"
+    statuses = {(d["date"], d["sport"]): d["status"] for d in result["diff"]}
+    assert statuses[("2026-07-06", "cross_train")] == "missing_in_proposed"
+    # every current session appears somewhere in the diff
+    for s in current.sessions:
+        assert (s.date.isoformat(), s.sport) in statuses
+
+
+def test_merge_week_plan_merge_changes_only_selected_items(athletes_dir) -> None:
+    """Requirement (b): the merge only ever changes exactly the selected
+    items -- everything else byte-identical to current. Also proves a
+    `new_in_proposed` slot that ISN'T selected never makes it in."""
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    before = store.load_week("renee", "2026-W28")
+    assert len(before.sessions) == 7
+
+    proposed_sessions = [
+        {
+            "date": "2026-07-07",
+            "sport": "strength",
+            "duration_min": 55,
+            "purpose": "kettlebell-focused dryland strength",
+        },
+        {
+            "date": "2026-07-06",
+            "sport": "strength",
+            "duration_min": 20,
+            "purpose": "extra core work -- should NOT be persisted, not accepted",
+        },
+    ]
+
+    result = handlers["merge_week_plan"](
+        {
+            "iso_week": "2026-W28",
+            "proposed_sessions": proposed_sessions,
+            "accept_from_proposed": [{"date": "2026-07-07", "sport": "strength"}],
+            "confirm": True,
+        }
+    )
+
+    assert "error" not in result, result
+    assert result["mode"] == "merge"
+    assert result["persisted"] is True
+    assert result["accepted"] == [{"date": "2026-07-07", "sport": "strength", "status": "differs"}]
+
+    after = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    assert len(after.sessions) == 7  # the un-accepted new_in_proposed slot never landed
+
+    target = next(s for s in after.sessions if s.date == date(2026, 7, 7))
+    assert target.purpose == "kettlebell-focused dryland strength"
+    assert target.duration_min == 55
+    assert all(s.date != date(2026, 7, 6) or s.sport != "strength" for s in after.sessions)
+
+    before_by_id = {s.id: s for s in before.sessions}
+    untouched = [s for s in after.sessions if s.date != date(2026, 7, 7)]
+    assert len(untouched) == 6
+    for session in untouched:
+        original = before_by_id[session.id]
+        assert session.model_dump() == original.model_dump(), (
+            f"session {session.id} on {session.date} was NOT byte-identical "
+            "after a merge that should only have touched 2026-07-07"
+        )
+
+
+def test_merge_week_plan_empty_selection_round_trips_current_unchanged(athletes_dir) -> None:
+    """Requirement (c): an empty/no-op selection round-trips current
+    unchanged."""
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    before = store.load_week("renee", "2026-W28")
+
+    result = handlers["merge_week_plan"](
+        {
+            "iso_week": "2026-W28",
+            "proposed_sessions": [
+                {"date": "2026-07-06", "sport": "strength", "duration_min": 20, "purpose": "extra core work"}
+            ],
+            "accept_from_proposed": [],
+            "confirm": True,
+        }
+    )
+
+    assert "error" not in result, result
+    assert result["mode"] == "merge"
+    assert result["accepted"] == []
+    assert result["persisted"] is True
+
+    after = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    assert len(after.sessions) == 7
+    before_by_id = {s.id: s for s in before.sessions}
+    for session in after.sessions:
+        assert session.model_dump() == before_by_id[session.id].model_dump()
+
+
+def test_merge_week_plan_confirm_false_does_not_persist(athletes_dir) -> None:
+    """Requirement (d): confirm=false never persists, confirm=true does
+    (the true half is covered by the tests above)."""
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    before = store.load_week("renee", "2026-W28")
+
+    result = handlers["merge_week_plan"](
+        {
+            "iso_week": "2026-W28",
+            "proposed_sessions": [
+                {
+                    "date": "2026-07-07",
+                    "sport": "strength",
+                    "duration_min": 55,
+                    "purpose": "kettlebell-focused dryland strength",
+                }
+            ],
+            "accept_from_proposed": [{"date": "2026-07-07", "sport": "strength"}],
+        }
+    )
+
+    assert "error" not in result, result
+    assert result["mode"] == "merge"
+    assert result["persisted"] is False
+    merged_target = next(s for s in result["merged_plan"] if s["date"] == "2026-07-07")
+    assert merged_target["purpose"] == "kettlebell-focused dryland strength"
+
+    after = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    assert after.model_dump() == before.model_dump()  # nothing persisted
+
+
+def test_merge_week_plan_accept_unchanged_slot_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    current = store.load_week("renee", "2026-W28")
+    strength = next(s for s in current.sessions if s.date == date(2026, 7, 7))
+    before = store.load_week("renee", "2026-W28")
+
+    result = handlers["merge_week_plan"](
+        {
+            "iso_week": "2026-W28",
+            "proposed_sessions": [
+                {
+                    "date": strength.date.isoformat(),
+                    "sport": strength.sport,
+                    "duration_min": strength.duration_min,
+                    "purpose": strength.purpose,
+                    "distance_m": strength.distance_m,
+                    "intensity": strength.intensity,
+                }
+            ],
+            "accept_from_proposed": [{"date": "2026-07-07", "sport": "strength"}],
+            "confirm": True,
+        }
+    )
+
+    assert "error" in result
+    assert "unchanged" in result["error"]
+
+    after = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    assert after.model_dump() == before.model_dump()  # nothing persisted on error
+
+
+def test_merge_week_plan_accept_missing_in_proposed_slot_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    current = store.load_week("renee", "2026-W28")
+    current.sessions.append(
+        Session(
+            id=uuid.uuid4(),
+            athlete_id=current.athlete_id,
+            date=date(2026, 7, 6),
+            sport="cross_train",
+            source="ai_coach",
+            duration_min=20.0,
+            distance_m=None,
+            intensity={"anchor": "rpe"},
+            purpose="bespoke cross-training",
+            structure=None,
+            status="planned",
+        )
+    )
+    store.save_week("renee", current)
+    before = store.load_week("renee", "2026-W28")
+
+    result = handlers["merge_week_plan"](
+        {
+            "iso_week": "2026-W28",
+            "accept_from_proposed": [{"date": "2026-07-06", "sport": "cross_train"}],
+            "confirm": True,
+        }
+    )
+
+    assert "error" in result
+    assert "CURRENT plan" in result["error"]
+
+    after = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    assert after.model_dump() == before.model_dump()  # nothing persisted on error
+
+
+def test_merge_week_plan_accept_nonexistent_slot_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["merge_week_plan"](
+        {"iso_week": "2026-W28", "accept_from_proposed": [{"date": "2099-01-01", "sport": "strength"}]}
+    )
+    assert "error" in result
+
+
+def test_merge_week_plan_accept_from_proposed_must_be_a_list(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["merge_week_plan"]({"iso_week": "2026-W28", "accept_from_proposed": "not-a-list"})
+    assert "error" in result
+
+
+def test_merge_week_plan_end_to_end_pre_event_nutrition_session_via_engine_generator(athletes_dir) -> None:
+    """The concrete worked example from this build's brief: content
+    computed by a real engine generator (`fueling.build_pre_event_
+    nutrition_session`, already built/merged) fed through merge_week_plan's
+    two-phase diff-then-merge flow -- proving the "engine-generated
+    content" case end to end, not an invented one."""
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    athlete = store.load_athlete("renee")
+    event = next(e for e in store.load_events("renee") if e.name == GREECE_EVENT_NAME)
+    session_date = event.event_date - timedelta(days=1)
+    iso_week = _iso_week_for(session_date)
+    monday = date.fromisocalendar(*session_date.isocalendar()[:2], 1)
+
+    existing_week = WeekPlan(
+        id=uuid.uuid4(),
+        athlete_id=athlete.id,
+        iso_week=iso_week,
+        meso_block="taper",
+        focus="race prep",
+        target_volume_m=1000,
+        sessions=[
+            Session(
+                id=uuid.uuid4(),
+                athlete_id=athlete.id,
+                date=monday,
+                sport="swim_pool",
+                source="pool_coach",
+                duration_min=45.0,
+                distance_m=1500,
+                intensity={"zone": "Z2"},
+                purpose="easy taper swim",
+                structure=None,
+                status="planned",
+            )
+        ],
+    )
+    store.save_week("renee", existing_week)
+
+    # Real engine calculator + real engine generator -- not hand-rolled
+    # fixture data.
+    plan = fueling_module.compute_fueling_plan(
+        duration_min=600,
+        intensity_class="steady",
+        access=fueling_module.IrregularAccess(access_points_min=(90.0, 180.0, 270.0)),
+        product_key="formula_369",
+    )
+    product = fueling_module.PRODUCTS["formula_369"]
+    generated_session = fueling_module.build_pre_event_nutrition_session(
+        athlete_id=athlete.id,
+        event_date=event.event_date,
+        plan=plan,
+        product_label=product.label,
+        days_before=1,
+    )
+
+    proposed_sessions = [
+        {
+            "date": generated_session.date.isoformat(),
+            "sport": generated_session.sport,
+            "duration_min": generated_session.duration_min,
+            "distance_m": generated_session.distance_m,
+            "intensity": generated_session.intensity,
+            "purpose": generated_session.purpose,
+            "structure": generated_session.structure,
+        }
+    ]
+
+    # Phase 1: diff -- shows the generated session as new_in_proposed,
+    # nothing persisted.
+    diff_result = handlers["merge_week_plan"](
+        {"iso_week": iso_week, "proposed_sessions": proposed_sessions}
+    )
+    assert "error" not in diff_result, diff_result
+    assert diff_result["mode"] == "diff"
+    assert diff_result["persisted"] is False
+    statuses = {(d["date"], d["sport"]): d["status"] for d in diff_result["diff"]}
+    assert statuses[(generated_session.date.isoformat(), "recovery")] == "new_in_proposed"
+
+    # Phase 2: merge + confirm -- accept exactly that one slot.
+    merge_result = handlers["merge_week_plan"](
+        {
+            "iso_week": iso_week,
+            "proposed_sessions": proposed_sessions,
+            "accept_from_proposed": [{"date": generated_session.date.isoformat(), "sport": "recovery"}],
+            "confirm": True,
+        }
+    )
+    assert "error" not in merge_result, merge_result
+    assert merge_result["persisted"] is True
+
+    reloaded = FileStore(base_dir=athletes_dir).load_week("renee", iso_week)
+    assert len(reloaded.sessions) == 2  # the original swim session is preserved
+    new_session = next(s for s in reloaded.sessions if s.date == session_date)
+    assert new_session.sport == "recovery"
+    assert new_session.source == "ai_coach"
+    assert "Formula 369" in new_session.structure
+    original_swim = next(s for s in reloaded.sessions if s.sport == "swim_pool")
+    assert original_swim.purpose == "easy taper swim"  # untouched
+    assert original_swim.duration_min == 45.0
+    assert original_swim.distance_m == 1500

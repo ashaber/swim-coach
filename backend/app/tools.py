@@ -312,6 +312,253 @@ TEMPLATE_PREFERENCE_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
+# Shared by `replace_week_plan` (applied to a freshly-regenerated week) and
+# `patch_week_plan` (applied to the actual persisted week, see that tool's
+# handler) -- both drive the exact same `_apply_session_overrides` match/
+# modify/remove/add semantics, so one schema describes the shape for both
+# rather than drifting into two copies that quietly diverge over time.
+SESSION_OVERRIDES_SCHEMA: dict[str, Any] = {
+    "type": "array",
+    "description": (
+        "Optional explicit overrides applied to the generated "
+        "week's sessions before it's returned/persisted. In "
+        "the default (modify) mode each entry must match "
+        "exactly one session already in the generated week "
+        "(by date, and by sport too if more than one session "
+        "falls on that date) -- an entry matching zero or "
+        "more than one session is an error, not a silent "
+        "no-op or a guess. "
+        "ADD MODE: an entry with `add: true` CREATES a "
+        "session on that date when none exists (instead of "
+        "erroring), requiring `sport`, `duration_min` and "
+        "`purpose` (optionally `distance_m`, `intensity`, "
+        "`structured`/`structure`). This is how to place a "
+        "6th/7th day the normal generator doesn't -- a second "
+        "race day, a pre-race openers session, a travel-day "
+        "swap. An added session is still checked by the "
+        "realism guardrail (`planning_warnings` in the "
+        "response): appending a 6th hard bike day still gets "
+        "flagged, it is not silently clamped. `add: true` "
+        "with a session already on that date is an error "
+        "(drop `add` to modify it instead). "
+        "REMOVE MODE (Build E): an entry with `remove: true` "
+        "DELETES the matching session(s) instead of modifying "
+        "them -- how to honor 'drop Wednesday's strength "
+        "session' / 'I don't want this session, remove it' "
+        "rather than fumbling toward some other tool. Same "
+        "date(+sport) matching/ambiguity rules as modify mode; "
+        "an entry matching zero or more than one session is "
+        "an error. Mutually exclusive with `add` on the same "
+        "entry -- setting both is an error. Removing the "
+        "week's only hard bike day is allowed (never blocked) "
+        "but surfaces a `planning_warnings` note so the coach "
+        "can confirm that's really intended."
+    ),
+    "items": {
+        "type": "object",
+        "properties": {
+            "date": {
+                "type": "string",
+                "description": "Session date, 'YYYY-MM-DD', must fall within iso_week.",
+            },
+            "add": {
+                "type": "boolean",
+                "description": (
+                    "Set true to CREATE a new session on `date` (append "
+                    "mode) instead of modifying an existing one. Requires "
+                    "`sport`, `duration_min`, `purpose`. Errors if a "
+                    "session already exists on that date/sport."
+                ),
+            },
+            "remove": {
+                "type": "boolean",
+                "description": (
+                    "Set true to DELETE the matching session(s) instead "
+                    "of modifying them. Mutually exclusive with `add` on "
+                    "the same entry (an error if both are set). Errors if "
+                    "zero or more than one session matches date(+sport)."
+                ),
+            },
+            "intensity": {
+                "type": "object",
+                "description": (
+                    "add mode only: the new session's intensity dict "
+                    "(e.g. {\"zone\": \"Z4\"} for a hard bike session, "
+                    "{\"anchor\": \"rpe\"} for effort-based). Defaults to "
+                    "{\"zone\": \"Z2\"} for bike, {\"anchor\": \"rpe\"} otherwise."
+                ),
+            },
+            "sport": {
+                "type": "string",
+                "description": (
+                    "Disambiguates when more than one session falls on "
+                    "`date`. Omit if only one session that day. REQUIRED "
+                    "with `add: true`."
+                ),
+            },
+            "distance_m": {
+                "type": "number",
+                "description": "New distance for this session, in meters.",
+            },
+            "duration_min": {
+                "type": "number",
+                "description": (
+                    "New duration for this session, in minutes. Optional -- "
+                    "if omitted while distance_m is given, duration is "
+                    "re-estimated from the new distance at the athlete's pace, "
+                    "same math the engine itself uses."
+                ),
+            },
+            "purpose": {
+                "type": "string",
+                "description": (
+                    "New purpose/description for this session, athlete-facing "
+                    "(e.g. 'Technique -- freestyle catch and rotation drills')."
+                ),
+            },
+            "structure": {
+                "type": "string",
+                "description": (
+                    "New full session instructions, athlete-facing prose -- "
+                    "author real content here (warm-up/main set/cool-down or "
+                    "whatever shape fits) exactly as you'd describe it in chat, "
+                    "when no library template covers what the athlete asked "
+                    "for. Prefer also supplying `structured` alongside this in "
+                    "the same entry (they describe the same session; neither "
+                    "clears the other when both are set) -- setting `structure` "
+                    "WITHOUT `structured` clears the session's existing "
+                    "structured workout data (see this parameter's parent "
+                    "description), a deliberate 'prose only, no watch export' "
+                    "choice, not a side effect. REQUIRES `distance_m` in this "
+                    "same entry, set to the real total implied by what you just "
+                    "wrote (e.g. warm-up + main set + cool-down summed) -- "
+                    "`distance_m` is a separate field with nothing keeping it "
+                    "in sync with `structure`'s prose automatically; do the "
+                    "arithmetic yourself and pass the matching number, or the "
+                    "athlete sees a distance stat that contradicts the workout "
+                    "you just wrote."
+                ),
+            },
+            "structured": {
+                "type": "object",
+                "description": (
+                    "New machine-readable WorkoutStructure IR for this session "
+                    "-- the canonical structured workout tree that renders as "
+                    "the step-by-step tree in the athlete's app Plan tab and "
+                    "exports to a Garmin watch as a real lap-advancing workout. "
+                    "Prefer setting this whenever the session has real step/"
+                    "rep/exercise structure (most of the time), and supply "
+                    "`structure` alongside it as the matching athlete-facing "
+                    "prose narration -- setting both persists both, neither "
+                    "clears the other. Shape: `{\"items\": [...]}` where each "
+                    "item is either a step -- `{\"kind\": \"step\", \"label\": "
+                    "str, \"role\": \"warmup\"|\"steady\"|\"interval\"|\"rest\"|"
+                    "\"recovery\"|\"cooldown\"|\"open\", \"duration_kind\": "
+                    "\"time_s\"|\"distance_m\"|\"reps\"|\"open\", "
+                    "\"duration_value\": number, \"modality\": \"swim\"|"
+                    "\"strength\" (default \"swim\"), and for swim steps "
+                    "optionally \"stroke\"/\"equipment\" plus a \"target\": "
+                    "{\"basis\": \"zone\"|\"percent_css\"|\"absolute\"|\"rpe\"|"
+                    "\"open\", \"zone\": \"Z1\"-\"Z5\"|null, \"low\": number|"
+                    "null, \"high\": number|null}. Prefer \"zone\"/\"percent_css\" "
+                    "whenever the athlete's CSS pace is known -- that's what "
+                    "renders as a real pace range and exports to the watch as an "
+                    "actual target. Reach for \"rpe\" only when effort, not pace, "
+                    "is genuinely the right anchor for the step (recovery, "
+                    "technique work, a day with no meaningful pace target) -- and "
+                    "when you do, put a 1-10 effort value in \"low\" (optionally a "
+                    "higher end in \"high\" for a range, e.g. low=4/high=6 renders "
+                    "as \"RPE 4-6\"); leaving both null still renders as the bare "
+                    "\"RPE\" label, but a real number is more useful to the "
+                    "athlete whenever you actually have one in mind. \"low\"/"
+                    "\"high\" are reused across every basis (they mean % of CSS, "
+                    "a resolved pace, or an RPE value depending on \"basis\" -- "
+                    "there's no separate RPE-specific field). Or for strength steps "
+                    "optionally \"exercise_name\" plus a \"load\": {\"basis\": "
+                    "\"bodyweight\"|\"percent_1rm\"|\"absolute\"|\"rpe_only\", "
+                    "\"value\": number|null}, and optionally \"reference_url\": "
+                    "str|null on ANY step, swim or strength alike -- a "
+                    "technique/demo link, shown to the athlete as a tappable "
+                    "link on that step and written into the exported Garmin FIT "
+                    "step's notes. It must be a plain http(s) URL; anything else "
+                    "is dropped at render time. Omit it for a step with no such "
+                    "link` -- or a repeat block -- "
+                    "`{\"kind\": \"repeat\", \"repeat_mode\": \"count\"|"
+                    "\"for_duration\"|\"amrap\", \"count\": int|null, "
+                    "\"duration_s\": number|null, \"interval_s\": number|null, "
+                    "\"steps\": [...]}` whose own `steps` list holds more items "
+                    "of either kind (steps or nested repeats -- nesting deeper "
+                    "than one level is allowed but rarely needed in practice). "
+                    "This is NOT limited to whatever exercises the canned "
+                    "strength list in `engine/swim_coach/plan.py` happens to "
+                    "contain -- author any exercise/step directly, same as you "
+                    "would in prose. An invalid payload (wrong `kind`, missing "
+                    "required field, etc.) is rejected with a clear error and "
+                    "nothing is persisted -- fix and retry with a valid payload "
+                    "rather than falling back to prose-only `structure`."
+                ),
+            },
+            "ow_template": {
+                "type": "object",
+                "description": (
+                    "Build this session's real content from the open-water "
+                    "session-content template library (engine/swim_coach/"
+                    "ow_session_templates.py, documented in library/"
+                    "18-open-water-session-templates.md) instead of hand-"
+                    "authoring `structure`/`structured` -- prefer this whenever "
+                    "one of the named templates below matches what's wanted; "
+                    "fall back to `structure`/`structured` only for something "
+                    "genuinely novel. Sets both `structured` (the real, resolved "
+                    "WorkoutStructure -- Garmin-exportable) and `structure` "
+                    "(matching prose) on the session, plus `distance_m` (from "
+                    "`ow_template.distance_m` if given, else this entry's own "
+                    "`distance_m`, else whatever distance the session already "
+                    "has). Cannot be combined with `structure`/`structured` in "
+                    "the same entry -- pick one authoring method. Known `id`s: "
+                    "`feed_window_practice` (endurance_floor -- steady swimming "
+                    "broken by real feed stops), `negative_split` (skill_scalable "
+                    "-- out leg easy, back leg faster), `chop_wind_adaptation` "
+                    "(skill_scalable -- into-chop/downwind halves, bilateral "
+                    "breathing), `sighting_drill` (skill_scalable -- frequent vs. "
+                    "infrequent sighting comparison), `breathing_pattern_"
+                    "variation` (skill_scalable -- alternating bilateral/"
+                    "unilateral blocks), `back_to_back_stage_day1`/"
+                    "`back_to_back_stage_day2` (endurance_floor -- a "
+                    "multi_day_stage event's back-to-back fatigue-simulation "
+                    "pair, day2 explicitly framed as swum on day1's fatigue), "
+                    "`taper_activation` (skill_scalable, has a MAXIMUM distance "
+                    "not a minimum -- deliberately short/sharp, do not use for a "
+                    "long session), `race_dress_rehearsal` (endurance_floor -- "
+                    "full race-pace/race-kit continuous swim with feed stops). "
+                    "`endurance_floor` templates raise a clear error (nothing "
+                    "persisted) if the resulting distance/CSS implies a duration "
+                    "below that template's documented minimum -- reach for a "
+                    "`skill_scalable` template instead of forcing a shorter "
+                    "endurance session under its floor."
+                ),
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Template id, see this field's own description for the known list.",
+                    },
+                    "distance_m": {
+                        "type": "number",
+                        "description": (
+                            "Distance to build the template at. Optional -- falls "
+                            "back to this entry's own `distance_m`, then the "
+                            "session's existing distance, if omitted."
+                        ),
+                    },
+                },
+                "required": ["id"],
+                "additionalProperties": False,
+            },
+        },
+        "required": ["date"],
+        "additionalProperties": False,
+    },
+}
+
 TOOLS_SCHEMA: list[dict[str, Any]] = [
     {
         "name": "propose_adaptation",
@@ -1631,248 +1878,253 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                         "week plan is currently on file for iso_week."
                     ),
                 },
-                "session_overrides": {
+                "session_overrides": SESSION_OVERRIDES_SCHEMA,
+                "template_preference": TEMPLATE_PREFERENCE_SCHEMA,
+            },
+            "required": ["iso_week"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "patch_week_plan",
+        "description": (
+            "Change or remove ONE OR A FEW already-planned session(s) within "
+            "an already-live week, WITHOUT touching anything else in that "
+            "week. Use this instead of replace_week_plan whenever the "
+            "request is really just 'change Thursday's session' / 'drop "
+            "Wednesday's strength day' / 'make Friday's swim easier' -- "
+            "replace_week_plan ALWAYS regenerates the WHOLE week from "
+            "scratch via generate_week first, which has no memory of "
+            "anything not part of its own deterministic output; a real "
+            "confirmed bug (see replace_week_plan's own description) is "
+            "that even a careful session_overrides list can silently lose "
+            "an already-persisted, bespoke session that fresh regeneration "
+            "wouldn't otherwise reproduce, unless EVERY currently-correct "
+            "session is re-specified in the same call. patch_week_plan has "
+            "no such risk: it operates directly on the week ALREADY on file "
+            "for iso_week -- there is no generate_week call anywhere in "
+            "this tool -- so every session not named in session_overrides "
+            "is guaranteed byte-for-byte unchanged, not just 'unchanged if "
+            "you remembered to re-add it'.\n\n"
+            "`session_overrides` here works IDENTICALLY to "
+            "replace_week_plan's own field of the same name (same schema, "
+            "same modify/add('add':true)/remove('remove':true) modes, same "
+            "date+sport matching and ambiguity errors) -- see that field's "
+            "own description for the full authoring options (distance_m/"
+            "duration_min, purpose/structure/structured, ow_template). The "
+            "only difference is WHAT it's applied to: the real persisted "
+            "week here, a throwaway fresh regeneration there.\n\n"
+            "Draft-then-confirm, same discipline as replace_week_plan: "
+            "`confirm` defaults to false, only computing and returning the "
+            "candidate patched week (plus any realism `planning_warnings`, "
+            "e.g. an `add`-ed session pushing bike volume past the +8%/week "
+            "rail or past the hard-bike-day ceiling) as JSON with "
+            "`\"persisted\": false` -- it does NOT call save_week. Show "
+            "this to the athlete and get their explicit agreement before "
+            "calling again with `confirm: true`; never pass confirm=true on "
+            "the first call for a given request, and never chain another "
+            "tool call in the same response after the draft."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "iso_week": {
+                    "type": "string",
+                    "description": "ISO week to patch, formatted 'YYYY-Wnn', e.g. '2026-W30'. Must already have a persisted week plan (use create_week_plan first if not).",
+                },
+                "session_overrides": SESSION_OVERRIDES_SCHEMA,
+                "confirm": {
+                    "type": "boolean",
+                    "description": (
+                        "Default false: compute and return the candidate "
+                        "patched week as a draft only, never persisting. "
+                        "Set true ONLY after the athlete has explicitly agreed "
+                        "to the draft shown in a prior turn -- this then "
+                        "persists via store.save_week, overwriting the "
+                        "existing week plan for iso_week with the patched one."
+                    ),
+                },
+            },
+            "required": ["iso_week", "session_overrides"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "merge_week_plan",
+        "description": (
+            "Two-phase diff-then-selective-merge for reconciling a PROPOSED "
+            "change (a fresh regeneration, or one new engine-generated/"
+            "coach-authored session) against an already-persisted week, "
+            "without guessing which side wins on any overlap -- the coach "
+            "sees exactly what differs, then explicitly picks which slots "
+            "to take from the proposed side. Use this instead of "
+            "patch_week_plan/replace_week_plan whenever there's a real "
+            "PROPOSED alternative to compare against current (a candidate "
+            "regeneration, a generated nutrition session, etc.) rather than "
+            "a specific hand-described change to make directly.\n\n"
+            "**Phase 1 -- diff (call WITHOUT `accept_from_proposed`)**: "
+            "returns `current_plan`, `proposed_plan`, and a per-session "
+            "`diff` classifying every (date, sport) slot as `\"unchanged\"` "
+            "(identical in both), `\"differs\"` (present in both, different "
+            "content -- both versions shown), `\"new_in_proposed\"` (only "
+            "in proposed), or `\"missing_in_proposed\"` (only in current -- "
+            "e.g. bespoke athlete content a fresh regeneration wouldn't "
+            "reproduce). Nothing is persisted or decided in this phase -- "
+            "purely informational, show it to the athlete/coach before any "
+            "selection is made.\n\n"
+            "The proposed side comes from EITHER `proposed_sessions` "
+            "(explicit session-shaped entries -- same add-mode fields as "
+            "session_overrides: date/sport/duration_min/purpose, optionally "
+            "distance_m/intensity/structure/structured -- layered onto a "
+            "copy of the current plan; use this for ONE new session, e.g. "
+            "compute_fueling_plan's output fed through "
+            "swim_coach.fueling.build_pre_event_nutrition_session, or any "
+            "coach-authored session) OR, if `proposed_sessions` is omitted, "
+            "a fresh generate_week regeneration of the whole week (same "
+            "computation replace_week_plan makes) -- use this to reconcile "
+            "a stale/regenerated week against whatever's already live, "
+            "honoring `template_preference` the same way replace_week_plan "
+            "does.\n\n"
+            "**Phase 2 -- selective merge (call WITH `accept_from_"
+            "proposed`, even as an empty list)**: same `iso_week` (and same "
+            "`template_preference` if the proposed side was a regeneration "
+            "-- it's recomputed identically), plus `accept_from_proposed`: "
+            "a list of `{date, sport}` picks naming exactly which diffed "
+            "slots to take the PROPOSED version of. Builds a merged plan = "
+            "current plan with ONLY those picks replaced/added from "
+            "proposed -- every other session stays untouched, byte-for-"
+            "byte identical to current. Picking a slot that's `\"unchanged\"` "
+            "or `\"missing_in_proposed\"` is a clean error (nothing "
+            "meaningful to accept from proposed for either) -- for a "
+            "`\"missing_in_proposed\"` slot the athlete actually wants "
+            "dropped, use patch_week_plan's `remove` mode instead. An empty "
+            "`accept_from_proposed` is a valid no-op merge (round-trips "
+            "current unchanged). Draft-then-confirm: `confirm` defaults to "
+            "false, returning the candidate `merged_plan` (plus any "
+            "realism `planning_warnings`) as JSON with `\"persisted\": "
+            "false` -- it does NOT call save_week. Show this to the "
+            "athlete and get their explicit agreement before calling again "
+            "with `confirm: true`; never pass confirm=true on the first "
+            "call for a given request.\n\n"
+            "This tool never handles BOTH changing an existing session's "
+            "content AND merging in something new atomically -- for 'change "
+            "Thursday's ride and add a yoga session', call patch_week_plan "
+            "first (change + confirm), THEN merge_week_plan against the "
+            "now-updated week for the addition (diff, pick, confirm)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "iso_week": {
+                    "type": "string",
+                    "description": (
+                        "ISO week to diff/merge, formatted 'YYYY-Wnn', e.g. "
+                        "'2026-W30'. Must already have a persisted week plan "
+                        "(use create_week_plan first if not)."
+                    ),
+                },
+                "proposed_sessions": {
                     "type": "array",
                     "description": (
-                        "Optional explicit overrides applied to the generated "
-                        "week's sessions before it's returned/persisted. In "
-                        "the default (modify) mode each entry must match "
-                        "exactly one session already in the generated week "
-                        "(by date, and by sport too if more than one session "
-                        "falls on that date) -- an entry matching zero or "
-                        "more than one session is an error, not a silent "
-                        "no-op or a guess. "
-                        "ADD MODE: an entry with `add: true` CREATES a "
-                        "session on that date when none exists (instead of "
-                        "erroring), requiring `sport`, `duration_min` and "
-                        "`purpose` (optionally `distance_m`, `intensity`, "
-                        "`structured`/`structure`). This is how to place a "
-                        "6th/7th day the normal generator doesn't -- a second "
-                        "race day, a pre-race openers session, a travel-day "
-                        "swap. An added session is still checked by the "
-                        "realism guardrail (`planning_warnings` in the "
-                        "response): appending a 6th hard bike day still gets "
-                        "flagged, it is not silently clamped. `add: true` "
-                        "with a session already on that date is an error "
-                        "(drop `add` to modify it instead). "
-                        "REMOVE MODE (Build E): an entry with `remove: true` "
-                        "DELETES the matching session(s) instead of modifying "
-                        "them -- how to honor 'drop Wednesday's strength "
-                        "session' / 'I don't want this session, remove it' "
-                        "rather than fumbling toward some other tool. Same "
-                        "date(+sport) matching/ambiguity rules as modify mode; "
-                        "an entry matching zero or more than one session is "
-                        "an error. Mutually exclusive with `add` on the same "
-                        "entry -- setting both is an error. Removing the "
-                        "week's only hard bike day is allowed (never blocked) "
-                        "but surfaces a `planning_warnings` note so the coach "
-                        "can confirm that's really intended."
+                        "Explicit session(s) to propose, layered onto a copy "
+                        "of the current plan (replacing any session already "
+                        "at that date+sport, or adding a new one) to form "
+                        "the proposed side of the diff. Omit entirely to "
+                        "instead propose a fresh generate_week regeneration "
+                        "of the whole week."
                     ),
                     "items": {
                         "type": "object",
                         "properties": {
                             "date": {
                                 "type": "string",
-                                "description": "Session date, 'YYYY-MM-DD', must fall within iso_week.",
+                                "description": "Proposed session's date, 'YYYY-MM-DD'.",
                             },
-                            "add": {
-                                "type": "boolean",
-                                "description": (
-                                    "Set true to CREATE a new session on `date` (append "
-                                    "mode) instead of modifying an existing one. Requires "
-                                    "`sport`, `duration_min`, `purpose`. Errors if a "
-                                    "session already exists on that date/sport."
-                                ),
+                            "sport": {
+                                "type": "string",
+                                "description": "Proposed session's sport (e.g. 'swim_pool', 'bike', 'strength', 'recovery').",
                             },
-                            "remove": {
-                                "type": "boolean",
-                                "description": (
-                                    "Set true to DELETE the matching session(s) instead "
-                                    "of modifying them. Mutually exclusive with `add` on "
-                                    "the same entry (an error if both are set). Errors if "
-                                    "zero or more than one session matches date(+sport)."
-                                ),
+                            "duration_min": {
+                                "type": "number",
+                                "description": "Proposed session's duration, in minutes.",
+                            },
+                            "purpose": {
+                                "type": "string",
+                                "description": "Athlete-facing purpose/description for the proposed session.",
+                            },
+                            "distance_m": {
+                                "type": "number",
+                                "description": "Optional distance for the proposed session, in meters.",
                             },
                             "intensity": {
                                 "type": "object",
                                 "description": (
-                                    "add mode only: the new session's intensity dict "
-                                    "(e.g. {\"zone\": \"Z4\"} for a hard bike session, "
-                                    "{\"anchor\": \"rpe\"} for effort-based). Defaults to "
-                                    "{\"zone\": \"Z2\"} for bike, {\"anchor\": \"rpe\"} otherwise."
-                                ),
-                            },
-                            "sport": {
-                                "type": "string",
-                                "description": (
-                                    "Disambiguates when more than one session falls on "
-                                    "`date`. Omit if only one session that day. REQUIRED "
-                                    "with `add: true`."
-                                ),
-                            },
-                            "distance_m": {
-                                "type": "number",
-                                "description": "New distance for this session, in meters.",
-                            },
-                            "duration_min": {
-                                "type": "number",
-                                "description": (
-                                    "New duration for this session, in minutes. Optional -- "
-                                    "if omitted while distance_m is given, duration is "
-                                    "re-estimated from the new distance at the athlete's pace, "
-                                    "same math the engine itself uses."
-                                ),
-                            },
-                            "purpose": {
-                                "type": "string",
-                                "description": (
-                                    "New purpose/description for this session, athlete-facing "
-                                    "(e.g. 'Technique -- freestyle catch and rotation drills')."
+                                    "Intensity dict, e.g. {\"zone\": \"Z2\"} or "
+                                    "{\"anchor\": \"rpe\"}. Defaults to {\"zone\": "
+                                    "\"Z2\"} for bike, {\"anchor\": \"rpe\"} otherwise."
                                 ),
                             },
                             "structure": {
                                 "type": "string",
                                 "description": (
-                                    "New full session instructions, athlete-facing prose -- "
-                                    "author real content here (warm-up/main set/cool-down or "
-                                    "whatever shape fits) exactly as you'd describe it in chat, "
-                                    "when no library template covers what the athlete asked "
-                                    "for. Prefer also supplying `structured` alongside this in "
-                                    "the same entry (they describe the same session; neither "
-                                    "clears the other when both are set) -- setting `structure` "
-                                    "WITHOUT `structured` clears the session's existing "
-                                    "structured workout data (see this parameter's parent "
-                                    "description), a deliberate 'prose only, no watch export' "
-                                    "choice, not a side effect. REQUIRES `distance_m` in this "
-                                    "same entry, set to the real total implied by what you just "
-                                    "wrote (e.g. warm-up + main set + cool-down summed) -- "
-                                    "`distance_m` is a separate field with nothing keeping it "
-                                    "in sync with `structure`'s prose automatically; do the "
-                                    "arithmetic yourself and pass the matching number, or the "
-                                    "athlete sees a distance stat that contradicts the workout "
-                                    "you just wrote."
+                                    "Athlete-facing prose for the proposed session's "
+                                    "real content. Prefer supplying `structured` "
+                                    "alongside this whenever there's real step "
+                                    "structure."
                                 ),
                             },
                             "structured": {
                                 "type": "object",
                                 "description": (
-                                    "New machine-readable WorkoutStructure IR for this session "
-                                    "-- the canonical structured workout tree that renders as "
-                                    "the step-by-step tree in the athlete's app Plan tab and "
-                                    "exports to a Garmin watch as a real lap-advancing workout. "
-                                    "Prefer setting this whenever the session has real step/"
-                                    "rep/exercise structure (most of the time), and supply "
-                                    "`structure` alongside it as the matching athlete-facing "
-                                    "prose narration -- setting both persists both, neither "
-                                    "clears the other. Shape: `{\"items\": [...]}` where each "
-                                    "item is either a step -- `{\"kind\": \"step\", \"label\": "
-                                    "str, \"role\": \"warmup\"|\"steady\"|\"interval\"|\"rest\"|"
-                                    "\"recovery\"|\"cooldown\"|\"open\", \"duration_kind\": "
-                                    "\"time_s\"|\"distance_m\"|\"reps\"|\"open\", "
-                                    "\"duration_value\": number, \"modality\": \"swim\"|"
-                                    "\"strength\" (default \"swim\"), and for swim steps "
-                                    "optionally \"stroke\"/\"equipment\" plus a \"target\": "
-                                    "{\"basis\": \"zone\"|\"percent_css\"|\"absolute\"|\"rpe\"|"
-                                    "\"open\", \"zone\": \"Z1\"-\"Z5\"|null, \"low\": number|"
-                                    "null, \"high\": number|null}. Prefer \"zone\"/\"percent_css\" "
-                                    "whenever the athlete's CSS pace is known -- that's what "
-                                    "renders as a real pace range and exports to the watch as an "
-                                    "actual target. Reach for \"rpe\" only when effort, not pace, "
-                                    "is genuinely the right anchor for the step (recovery, "
-                                    "technique work, a day with no meaningful pace target) -- and "
-                                    "when you do, put a 1-10 effort value in \"low\" (optionally a "
-                                    "higher end in \"high\" for a range, e.g. low=4/high=6 renders "
-                                    "as \"RPE 4-6\"); leaving both null still renders as the bare "
-                                    "\"RPE\" label, but a real number is more useful to the "
-                                    "athlete whenever you actually have one in mind. \"low\"/"
-                                    "\"high\" are reused across every basis (they mean % of CSS, "
-                                    "a resolved pace, or an RPE value depending on \"basis\" -- "
-                                    "there's no separate RPE-specific field). Or for strength steps "
-                                    "optionally \"exercise_name\" plus a \"load\": {\"basis\": "
-                                    "\"bodyweight\"|\"percent_1rm\"|\"absolute\"|\"rpe_only\", "
-                                    "\"value\": number|null}, and optionally \"reference_url\": "
-                                    "str|null on ANY step, swim or strength alike -- a "
-                                    "technique/demo link, shown to the athlete as a tappable "
-                                    "link on that step and written into the exported Garmin FIT "
-                                    "step's notes. It must be a plain http(s) URL; anything else "
-                                    "is dropped at render time. Omit it for a step with no such "
-                                    "link` -- or a repeat block -- "
-                                    "`{\"kind\": \"repeat\", \"repeat_mode\": \"count\"|"
-                                    "\"for_duration\"|\"amrap\", \"count\": int|null, "
-                                    "\"duration_s\": number|null, \"interval_s\": number|null, "
-                                    "\"steps\": [...]}` whose own `steps` list holds more items "
-                                    "of either kind (steps or nested repeats -- nesting deeper "
-                                    "than one level is allowed but rarely needed in practice). "
-                                    "This is NOT limited to whatever exercises the canned "
-                                    "strength list in `engine/swim_coach/plan.py` happens to "
-                                    "contain -- author any exercise/step directly, same as you "
-                                    "would in prose. An invalid payload (wrong `kind`, missing "
-                                    "required field, etc.) is rejected with a clear error and "
-                                    "nothing is persisted -- fix and retry with a valid payload "
-                                    "rather than falling back to prose-only `structure`."
+                                    "Machine-readable WorkoutStructure IR for the "
+                                    "proposed session -- same shape as "
+                                    "replace_week_plan/patch_week_plan's "
+                                    "session_overrides `structured` field."
                                 ),
-                            },
-                            "ow_template": {
-                                "type": "object",
-                                "description": (
-                                    "Build this session's real content from the open-water "
-                                    "session-content template library (engine/swim_coach/"
-                                    "ow_session_templates.py, documented in library/"
-                                    "18-open-water-session-templates.md) instead of hand-"
-                                    "authoring `structure`/`structured` -- prefer this whenever "
-                                    "one of the named templates below matches what's wanted; "
-                                    "fall back to `structure`/`structured` only for something "
-                                    "genuinely novel. Sets both `structured` (the real, resolved "
-                                    "WorkoutStructure -- Garmin-exportable) and `structure` "
-                                    "(matching prose) on the session, plus `distance_m` (from "
-                                    "`ow_template.distance_m` if given, else this entry's own "
-                                    "`distance_m`, else whatever distance the session already "
-                                    "has). Cannot be combined with `structure`/`structured` in "
-                                    "the same entry -- pick one authoring method. Known `id`s: "
-                                    "`feed_window_practice` (endurance_floor -- steady swimming "
-                                    "broken by real feed stops), `negative_split` (skill_scalable "
-                                    "-- out leg easy, back leg faster), `chop_wind_adaptation` "
-                                    "(skill_scalable -- into-chop/downwind halves, bilateral "
-                                    "breathing), `sighting_drill` (skill_scalable -- frequent vs. "
-                                    "infrequent sighting comparison), `breathing_pattern_"
-                                    "variation` (skill_scalable -- alternating bilateral/"
-                                    "unilateral blocks), `back_to_back_stage_day1`/"
-                                    "`back_to_back_stage_day2` (endurance_floor -- a "
-                                    "multi_day_stage event's back-to-back fatigue-simulation "
-                                    "pair, day2 explicitly framed as swum on day1's fatigue), "
-                                    "`taper_activation` (skill_scalable, has a MAXIMUM distance "
-                                    "not a minimum -- deliberately short/sharp, do not use for a "
-                                    "long session), `race_dress_rehearsal` (endurance_floor -- "
-                                    "full race-pace/race-kit continuous swim with feed stops). "
-                                    "`endurance_floor` templates raise a clear error (nothing "
-                                    "persisted) if the resulting distance/CSS implies a duration "
-                                    "below that template's documented minimum -- reach for a "
-                                    "`skill_scalable` template instead of forcing a shorter "
-                                    "endurance session under its floor."
-                                ),
-                                "properties": {
-                                    "id": {
-                                        "type": "string",
-                                        "description": "Template id, see this field's own description for the known list.",
-                                    },
-                                    "distance_m": {
-                                        "type": "number",
-                                        "description": (
-                                            "Distance to build the template at. Optional -- falls "
-                                            "back to this entry's own `distance_m`, then the "
-                                            "session's existing distance, if omitted."
-                                        ),
-                                    },
-                                },
-                                "required": ["id"],
-                                "additionalProperties": False,
                             },
                         },
-                        "required": ["date"],
+                        "required": ["date", "sport", "duration_min", "purpose"],
                         "additionalProperties": False,
                     },
                 },
                 "template_preference": TEMPLATE_PREFERENCE_SCHEMA,
+                "accept_from_proposed": {
+                    "type": "array",
+                    "description": (
+                        "Presence (even as []) switches this call into Phase "
+                        "2 (selective merge) instead of Phase 1 (diff-only). "
+                        "Each entry names one diffed (date, sport) slot to "
+                        "take the PROPOSED version of; every slot NOT named "
+                        "here stays exactly as it is in the current plan. "
+                        "Omit this field entirely for Phase 1."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "date": {
+                                "type": "string",
+                                "description": "Date of the diffed slot to accept from proposed, 'YYYY-MM-DD'.",
+                            },
+                            "sport": {
+                                "type": "string",
+                                "description": "Sport of the diffed slot to accept from proposed.",
+                            },
+                        },
+                        "required": ["date", "sport"],
+                        "additionalProperties": False,
+                    },
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "description": (
+                        "Phase 2 only (ignored in Phase 1). Default false: "
+                        "compute and return the candidate merged_plan as a "
+                        "draft only, never persisting. Set true ONLY after "
+                        "the athlete has explicitly agreed to the draft "
+                        "shown in a prior turn -- this then persists via "
+                        "store.save_week."
+                    ),
+                },
             },
             "required": ["iso_week"],
             "additionalProperties": False,
@@ -4236,8 +4488,16 @@ def _handle_compute_fueling_plan(
         }
 
         if confirm:
-            iso_year, iso_week_num, _ = session.date.isocalendar()
-            iso_week = f"{iso_year}-W{iso_week_num:02d}"
+            # Loads the week ALREADY persisted for this date directly (never
+            # `generate_week`) and appends exactly this one session to it,
+            # via the shared `_iso_week_for_date`/`_check_no_session_
+            # collision` helpers -- a hard collision error is the right
+            # posture here (unlike merge_week_plan's diff-then-pick, this
+            # tool's own draft/confirm flow already means the athlete saw
+            # `pre_event_session_preview` before confirming, so a same-slot
+            # collision on confirm means something ELSE changed that slot
+            # in between -- surface it, don't silently guess).
+            iso_week = _iso_week_for_date(session.date)
             try:
                 week = store.load_week(slug, iso_week)
             except Exception as exc:  # noqa: BLE001
@@ -4251,23 +4511,10 @@ def _handle_compute_fueling_plan(
                         "with confirm=true"
                     )
                 }
-            override_error, override_notes = _apply_session_overrides(
-                week,
-                [
-                    {
-                        "date": session.date.isoformat(),
-                        "sport": session.sport,
-                        "add": True,
-                        "duration_min": session.duration_min,
-                        "purpose": session.purpose,
-                        "structure": session.structure,
-                        "intensity": session.intensity,
-                    }
-                ],
-                athlete,
-            )
-            if override_error is not None:
-                return {"error": override_error}
+            collision_error = _check_no_session_collision(week, session.date, session.sport)
+            if collision_error is not None:
+                return {"error": collision_error}
+            week.sessions.append(session)
             store.save_week(slug, week)
             log.info(
                 "pre-event nutrition session persisted",
@@ -4278,8 +4525,6 @@ def _handle_compute_fueling_plan(
             )
             result["persisted"] = True
             result["iso_week"] = iso_week
-            if override_notes:
-                result["notes"] = override_notes
 
     return result
 
@@ -4861,6 +5106,38 @@ def _dropped_sessions(existing_week, week) -> list[dict[str, Any]]:
     ]
 
 
+def _iso_week_for_date(target_date: date) -> str:
+    """`YYYY-Wnn` for the ISO week containing `target_date` -- for any tool
+    that needs to find/place a session on a specific calendar date without
+    the caller already knowing which week it falls in
+    (`compute_fueling_plan`)."""
+    iso_year, iso_week_num, _ = target_date.isocalendar()
+    return f"{iso_year}-W{iso_week_num:02d}"
+
+
+def _check_no_session_collision(week: WeekPlan, target_date: date, sport: str) -> str | None:
+    """`compute_fueling_plan`'s own confirm-path guard: a session already on
+    `target_date` with the same `sport` is a real conflict to surface as a
+    clean error, never silently overwritten (losing whatever was already
+    there) or silently skipped (pretending the add happened when it didn't).
+    (The general "propose vs. current" case -- reconciling a broader
+    overlap -- goes through `merge_week_plan`'s diff-then-pick flow instead
+    of a hard error; this narrower helper stays a hard error because
+    `compute_fueling_plan` already shows the athlete a preview before
+    `confirm`, so a collision on confirm means something else changed that
+    exact slot in between.) Returns `None` when there's no collision."""
+    collision = next((s for s in week.sessions if s.date == target_date and s.sport == sport), None)
+    if collision is None:
+        return None
+    return (
+        f"a {sport!r} session already exists on {target_date.isoformat()} "
+        f"({collision.purpose!r}) -- this tool only ever ADDS a new session, "
+        "it never resolves a conflict between two versions of the same "
+        "session. Use patch_week_plan instead to modify or remove the "
+        "existing one first if it should be replaced."
+    )
+
+
 def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
     """Computes a candidate replacement week via `generate_week` (the same
     engine function `create_week_plan` uses) for exactly the case
@@ -5048,6 +5325,523 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
         "dropped_sessions": dropped,
         "persisted": True,
     }
+
+
+def _handle_patch_week_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    """Targeted single/few-session edit to an ALREADY-PERSISTED week --
+    the fix for the real, confirmed bug in `replace_week_plan` (feedback
+    entry bf699e7f-1905-476c-ab1b-ae1db37077ca, athlete andrew, live
+    2026-W38): `replace_week_plan` ALWAYS calls `generate_week` first -- a
+    full, fresh regeneration from the deterministic engine's generic rule
+    table -- with zero awareness of
+    what's currently persisted for that week, so a routine single-session
+    edit can silently replace already-confirmed, bespoke session content
+    with generic defaults unless `session_overrides` happens to re-specify
+    every other already-correct day too, every single call. This tool
+    instead operates directly on `store.load_week`'s own result -- there is
+    NO `generate_week` call anywhere in this path -- so every session NOT
+    named in `session_overrides` is left byte-for-byte exactly as it was
+    already persisted, guaranteed by construction (there is nothing else
+    for it to have come from) rather than by the caller remembering to
+    re-add it.
+
+    Reuses `_apply_session_overrides`'s existing match(modify)/add/remove
+    semantics verbatim -- same `SESSION_OVERRIDES_SCHEMA`, same date(+sport)
+    matching, same ambiguity/error handling `replace_week_plan` already has
+    -- only WHAT it's applied to changes: the real persisted week, not a
+    `generate_week` throwaway that gets thrown away again if the confirm
+    step is never reached.
+
+    Draft-then-confirm, matching `replace_week_plan`'s own shape: `confirm`
+    defaults to False, returning only the candidate patched week (plus
+    `planning_warnings`) as JSON with `"persisted": false` -- it does NOT
+    call `store.save_week`. `confirm=True` recomputes identically (given
+    the same inputs, `_apply_session_overrides` is deterministic) and
+    persists. This tool's `remove` mode and content-authoring overrides can
+    be just as consequential to the session(s) they target as a full week
+    replacement is to the whole week, so it stays behind the same explicit-
+    agreement gate rather than direct-persisting like `reschedule_session`'s
+    single-field move does.
+
+    Also re-runs `evaluate_week_realism` against the candidate's own
+    session list, feeding in the PRE-patch week's own bike volume as
+    `prev_week_bike_volume_min` -- so a patch that pushes this week's own
+    bike volume up more than the +8%/week rail, or that (via `add` mode)
+    appends a hard bike day past the realistic ceiling, still gets flagged,
+    never silently clamped -- same posture `replace_week_plan` already has.
+    """
+    iso_week = input_data.get("iso_week")
+    if not iso_week:
+        return {"error": "iso_week is required"}
+
+    try:
+        year_str, week_str = iso_week.split("-W")
+        date.fromisocalendar(int(year_str), int(week_str), 1)
+    except (ValueError, IndexError):
+        return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+
+    session_overrides = input_data.get("session_overrides")
+    if not session_overrides:
+        return {
+            "error": (
+                "session_overrides is required and must contain at least one "
+                "entry -- patch_week_plan only ever changes the session(s) "
+                "named there; use replace_week_plan if the whole week needs "
+                "regenerating instead."
+            )
+        }
+
+    confirm = bool(input_data.get("confirm", False))
+
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load athlete profile: {exc}"}
+
+    try:
+        week = store.load_week(slug, iso_week)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load existing week plan: {exc}"}
+    if week is None:
+        return {
+            "error": (
+                f"no existing week plan for {iso_week!r} -- use create_week_plan "
+                "if it doesn't exist at all yet, or replace_week_plan if the "
+                "whole week needs to be regenerated from scratch"
+            )
+        }
+
+    # Work on a deep copy so nothing is mutated (and nothing can accidentally
+    # be persisted) until `confirm=True` explicitly asks for it -- `week`
+    # itself stays exactly what `store.load_week` returned, in case an
+    # error below needs to report against the untouched original.
+    candidate = week.model_copy(deep=True)
+    override_error, override_notes = _apply_session_overrides(candidate, session_overrides, athlete)
+    if override_error is not None:
+        return {"error": override_error}
+
+    prev_bike_min = sum(
+        s.duration_min
+        for s in week.sessions
+        if s.sport == "bike" and not s.purpose.strip().upper().startswith("RACE — ")
+    )
+    candidate.planning_warnings = evaluate_week_realism(
+        candidate.sessions, prev_week_bike_volume_min=prev_bike_min or None
+    )
+    if override_notes:
+        candidate.planning_warnings = list(candidate.planning_warnings) + override_notes
+
+    response: dict[str, Any] = {
+        "iso_week": candidate.iso_week,
+        "meso_block": candidate.meso_block,
+        "focus": candidate.focus,
+        "target_volume_m": candidate.target_volume_m,
+        "planning_warnings": list(candidate.planning_warnings),
+        "sessions": _week_sessions_json(candidate),
+        "persisted": False,
+    }
+
+    if not confirm:
+        return response
+
+    store.save_week(slug, candidate)
+
+    log.info(
+        "week plan patched",
+        athlete=slug,
+        iso_week=iso_week,
+        override_count=len(session_overrides),
+    )
+    response["persisted"] = True
+    return response
+
+
+def _session_from_add_fields(entry: dict[str, Any], *, athlete: Athlete) -> tuple[Session | None, str | None]:
+    """Builds one new `Session` from the same add-mode field shape
+    `session_overrides`' `add` mode already uses (`date`/`sport`/
+    `duration_min`/`purpose`, optionally `distance_m`/`intensity`/
+    `structure`/`structured`) -- shared by `merge_week_plan`'s
+    `proposed_sessions` input, so an engine generator's output (e.g.
+    `swim_coach.fueling.build_pre_event_nutrition_session`) or coach-
+    authored content both go through one code path. Returns
+    `(session, error)`."""
+    date_str = entry.get("date")
+    if not date_str:
+        return None, "proposed_sessions entry missing `date`"
+    try:
+        target_date = date.fromisoformat(date_str)
+    except ValueError:
+        return None, f"invalid proposed_sessions date {date_str!r}; expected 'YYYY-MM-DD'"
+
+    sport = entry.get("sport")
+    if not sport:
+        return None, f"proposed_sessions entry for {date_str!r} needs `sport`"
+
+    duration_min = entry.get("duration_min")
+    purpose = entry.get("purpose")
+    if duration_min is None or not purpose:
+        return None, f"proposed_sessions entry for {date_str!r} needs `duration_min` and `purpose`"
+
+    structured_raw = entry.get("structured")
+    structured = None
+    if structured_raw is not None:
+        try:
+            structured = WorkoutStructure.model_validate(structured_raw)
+        except ValidationError as exc:
+            return None, f"invalid proposed_sessions structured for {date_str!r}: {exc}"
+    structure = entry.get("structure")
+    if structure is None and structured is not None:
+        structure = render_prose(structured)
+
+    intensity = entry.get("intensity")
+    if not isinstance(intensity, dict) or not intensity:
+        intensity = {"zone": "Z2"} if sport == "bike" else {"anchor": "rpe"}
+
+    try:
+        session = Session(
+            id=uuid.uuid4(),
+            athlete_id=athlete.id,
+            date=target_date,
+            sport=sport,
+            source="ai_coach",
+            duration_min=duration_min,
+            distance_m=entry.get("distance_m"),
+            intensity=intensity,
+            purpose=purpose,
+            structure=structure,
+            structured=structured,
+            status="planned",
+        )
+    except ValidationError as exc:
+        return None, f"invalid proposed_sessions entry for {date_str!r}: {exc}"
+    return session, None
+
+
+def _build_proposed_sessions_from_fields(
+    current: WeekPlan, proposed_sessions_input: list[dict[str, Any]], athlete: Athlete
+) -> tuple[list[Session] | None, str | None]:
+    """The `proposed_sessions`-supplied-directly path for `merge_week_plan`
+    (as opposed to a fresh `generate_week` regeneration): starts from a deep
+    copy of `current`'s own sessions -- so anything NOT named in
+    `proposed_sessions_input` diffs as `unchanged`, never as spuriously
+    missing -- then applies each entry on top (replacing any session
+    already at that date+sport, or adding a new one). This is how one
+    engine-generated session (e.g. a pre-event nutrition session) becomes a
+    `proposed_plan` that only differs from `current` in that one slot."""
+    proposed = [s.model_copy(deep=True) for s in current.sessions]
+    for entry in proposed_sessions_input:
+        session, error = _session_from_add_fields(entry, athlete=athlete)
+        if error is not None:
+            return None, error
+        key = (session.date, session.sport)
+        proposed = [s for s in proposed if (s.date, s.sport) != key]
+        proposed.append(session)
+    return proposed, None
+
+
+def _generate_candidate_week_for_merge(
+    store: StoreInterface,
+    slug: str,
+    iso_week: str,
+    week_start: date,
+    template_preference: TemplatePreference | None,
+    athlete: Athlete,
+) -> tuple[list[Session] | None, str | None]:
+    """The `generate_week`-regeneration path for `merge_week_plan`'s
+    `proposed_plan` (used whenever `proposed_sessions` is NOT supplied) --
+    same macro/event lookup and `generate_week` call `replace_week_plan`
+    makes for its own candidate, kept as a separate, deliberately-simple
+    function here (rather than sharing `replace_week_plan`'s inline code)
+    so this build doesn't risk that tool's own already-tested behavior
+    under time pressure. Returns `(sessions, error)`."""
+    try:
+        macro = store.load_macro(slug)
+    except Exception as exc:  # noqa: BLE001
+        return None, f"could not load macro plan: {exc}"
+    if macro is None:
+        return None, "no macro plan for this athlete; use draft_macro_plan first"
+
+    try:
+        events = store.load_events(slug)
+    except Exception as exc:  # noqa: BLE001
+        return None, f"could not load events: {exc}"
+    event = next((e for e in events if e.id == macro.event_id), None)
+    if event is None:
+        return None, f"macro's event_id {macro.event_id} not found in events.yaml"
+
+    event_format = event.event_format or "single_day"
+    primary_sport = event.primary_sport
+    ftp_watts = athlete.ftp_watts if primary_sport == "bike" else None
+
+    try:
+        generated = generate_week(
+            athlete,
+            macro,
+            iso_week,
+            week_start,
+            event_format,
+            template_preference,
+            event,
+            primary_sport=primary_sport,
+            ftp_watts=ftp_watts,
+            events=events,
+        )
+    except ValueError as exc:
+        return None, str(exc)
+    return generated.sessions, None
+
+
+def _session_content_dict(session: Session) -> dict[str, Any]:
+    """The fields that matter for diff EQUALITY (and for judging whether a
+    proposed session is a real content change, not just a new id) --
+    deliberately excludes `id`/`athlete_id`/`schema_version` (identity, not
+    content) and `status`/`source` (workflow metadata, not plan content)."""
+    return {
+        "distance_m": session.distance_m,
+        "duration_min": session.duration_min,
+        "purpose": session.purpose,
+        "structure": session.structure,
+        "intensity": session.intensity,
+        "structured": session.structured.model_dump() if session.structured is not None else None,
+    }
+
+
+def _diff_week_sessions(
+    current_sessions: list[Session], proposed_sessions: list[Session]
+) -> tuple[list[dict[str, Any]], dict[tuple[date, str], str], dict[tuple[date, str], Session]]:
+    """Classifies every (date, sport) slot across `current_sessions` and
+    `proposed_sessions` into exactly one of `"unchanged"` / `"differs"` /
+    `"new_in_proposed"` / `"missing_in_proposed"` -- the read-only Phase 1
+    of `merge_week_plan` (see that tool's own docstring). Returns
+    `(diff_items, status_by_key, proposed_by_key)`: `diff_items` is the
+    JSON-ready list for the response; `status_by_key`/`proposed_by_key`
+    (both keyed by `(date, sport)` with a real `date` object, not a string)
+    are reused by Phase 2's merge so a selection can be validated against
+    the SAME classification the coach was just shown, not a re-derived
+    approximation of it."""
+    current_by_key = {(s.date, s.sport): s for s in current_sessions}
+    proposed_by_key = {(s.date, s.sport): s for s in proposed_sessions}
+    all_keys = sorted(set(current_by_key) | set(proposed_by_key))
+
+    diff_items: list[dict[str, Any]] = []
+    status_by_key: dict[tuple[date, str], str] = {}
+    for key in all_keys:
+        session_date, sport = key
+        current_session = current_by_key.get(key)
+        proposed_session = proposed_by_key.get(key)
+        if current_session is not None and proposed_session is not None:
+            status = (
+                "unchanged"
+                if _session_content_dict(current_session) == _session_content_dict(proposed_session)
+                else "differs"
+            )
+        elif proposed_session is not None:
+            status = "new_in_proposed"
+        else:
+            status = "missing_in_proposed"
+        status_by_key[key] = status
+        diff_items.append(
+            {
+                "date": session_date.isoformat(),
+                "sport": sport,
+                "status": status,
+                "current": _session_summary_json(current_session) if current_session is not None else None,
+                "proposed": _session_summary_json(proposed_session) if proposed_session is not None else None,
+            }
+        )
+    return diff_items, status_by_key, proposed_by_key
+
+
+def _handle_merge_week_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    """Two-phase diff-then-selective-merge tool for reconciling a PROPOSED
+    change against an already-persisted week WITHOUT the coach having to
+    guess or the tool having to silently choose a side -- replaces this
+    build's earlier strict "additive-only, error on any collision" design
+    (Andrew's own redesign, mid-build: a hard collision error just forced
+    the coach to manually clear a slot via `patch_week_plan` before this
+    tool could even try, which defeated the point whenever the proposed
+    content -- e.g. a fresh `generate_week` regeneration -- legitimately
+    overlaps with something already on file). Same underlying root cause as
+    `patch_week_plan` (see that tool's docstring): NOTHING is persisted, or
+    even provisionally decided, without the coach seeing exactly what
+    differs first.
+
+    **Phase 1 -- diff (no `accept_from_proposed`, nothing persisted)**:
+    loads the CURRENT persisted week for `iso_week`, computes a PROPOSED
+    plan, and returns both plus a per-(date, sport) `diff` classifying each
+    slot as `"unchanged"` / `"differs"` / `"new_in_proposed"` / `"missing_
+    in_proposed"` (see `_diff_week_sessions`). The proposed plan comes from
+    EITHER `proposed_sessions` (explicit session-shaped entries -- same
+    add-mode fields `session_overrides` already uses -- layered onto a copy
+    of the current plan; this is how one engine-generated session, e.g.
+    `swim_coach.fueling.build_pre_event_nutrition_session`'s output, or one
+    coach-authored session, becomes a proposed plan that only differs from
+    current in that one slot) OR, if `proposed_sessions` is omitted, a
+    fresh `generate_week` regeneration (same computation `replace_week_
+    plan` makes) -- for reconciling a stale/regenerated week against
+    whatever bespoke content is already live. Purely informational: this
+    mode never persists and needs no `confirm`.
+
+    **Phase 2 -- selective merge (`accept_from_proposed` given, even as an
+    empty list)**: given the SAME `iso_week` (and, if the proposed side was
+    a `generate_week` regeneration, the SAME `template_preference` -- it's
+    recomputed identically, a pure function of its inputs) plus
+    `accept_from_proposed`: a list of `{date, sport}` picks naming exactly
+    which diffed slots to take the PROPOSED version of. Builds a merged
+    plan = the current plan with ONLY those picks replaced/added from the
+    proposed side -- every other session is untouched, byte-for-byte
+    identical to current, the same guarantee `patch_week_plan` makes.
+    Picking a slot whose status is `"unchanged"` or `"missing_in_proposed"`
+    is a clean error (nothing meaningful to accept from the proposed side
+    for either). An empty `accept_from_proposed` is a valid, deliberate
+    no-op merge -- round-trips the current plan unchanged. Draft-then-
+    confirm, matching every other plan-editing tool here: `confirm`
+    defaults to False (preview only, `"persisted": false`); `confirm=True`
+    persists via `store.save_week`. Also re-runs `evaluate_week_realism`
+    against the merged result, feeding in the PRE-merge week's own bike
+    volume as `prev_week_bike_volume_min`, same as `patch_week_plan`.
+    """
+    iso_week = input_data.get("iso_week")
+    if not iso_week:
+        return {"error": "iso_week is required"}
+
+    try:
+        year_str, week_str = iso_week.split("-W")
+        week_start = date.fromisocalendar(int(year_str), int(week_str), 1)
+    except (ValueError, IndexError):
+        return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+
+    try:
+        current = store.load_week(slug, iso_week)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load existing week plan: {exc}"}
+    if current is None:
+        return {
+            "error": (
+                f"no existing week plan for {iso_week!r} -- merge_week_plan compares "
+                "a proposed change against an already-persisted week, so there is "
+                "nothing to diff against yet; use create_week_plan first"
+            )
+        }
+
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load athlete profile: {exc}"}
+
+    proposed_sessions_input = input_data.get("proposed_sessions")
+    if proposed_sessions_input:
+        proposed_sessions, build_error = _build_proposed_sessions_from_fields(
+            current, proposed_sessions_input, athlete
+        )
+        if build_error is not None:
+            return {"error": build_error}
+    else:
+        template_preference, preference_error = _parse_template_preference(
+            input_data.get("template_preference")
+        )
+        if preference_error is not None:
+            return {"error": preference_error}
+        proposed_sessions, gen_error = _generate_candidate_week_for_merge(
+            store, slug, iso_week, week_start, template_preference, athlete
+        )
+        if gen_error is not None:
+            return {"error": gen_error}
+
+    diff_items, status_by_key, proposed_by_key = _diff_week_sessions(current.sessions, proposed_sessions)
+
+    accept_from_proposed = input_data.get("accept_from_proposed")
+    if accept_from_proposed is None:
+        # Phase 1: diff only, nothing persisted, no selections made yet.
+        return {
+            "iso_week": iso_week,
+            "mode": "diff",
+            "current_plan": _week_sessions_json(current),
+            "proposed_plan": [_session_summary_json(s) for s in proposed_sessions],
+            "diff": diff_items,
+            "persisted": False,
+        }
+
+    if not isinstance(accept_from_proposed, list):
+        return {"error": "accept_from_proposed must be a list ([] accepts nothing -- a no-op merge)"}
+
+    # Phase 2: selective merge -- start from a deep copy of `current` so
+    # anything not explicitly picked is guaranteed byte-identical.
+    merged = current.model_copy(deep=True)
+    accepted_summary: list[dict[str, Any]] = []
+    for entry in accept_from_proposed:
+        raw_date = entry.get("date") if isinstance(entry, dict) else None
+        sport = entry.get("sport") if isinstance(entry, dict) else None
+        if not raw_date or not sport:
+            return {"error": f"accept_from_proposed entries need `date` and `sport`, got {entry!r}"}
+        try:
+            picked_date = date.fromisoformat(raw_date)
+        except ValueError:
+            return {"error": f"invalid accept_from_proposed date {raw_date!r}; expected 'YYYY-MM-DD'"}
+
+        key = (picked_date, sport)
+        status = status_by_key.get(key)
+        if status is None:
+            return {
+                "error": (
+                    f"accept_from_proposed: no diffed item for date {raw_date!r} "
+                    f"sport {sport!r} -- it doesn't appear in either the current or "
+                    "proposed plan for this call"
+                )
+            }
+        if status == "unchanged":
+            return {
+                "error": (
+                    f"accept_from_proposed: {raw_date!r}/{sport!r} is already unchanged "
+                    "between current and proposed -- nothing to accept"
+                )
+            }
+        if status == "missing_in_proposed":
+            return {
+                "error": (
+                    f"accept_from_proposed: {raw_date!r}/{sport!r} exists only in the "
+                    "CURRENT plan (missing from proposed) -- there is nothing on the "
+                    "proposed side to accept for it; use patch_week_plan's `remove` "
+                    "mode instead if the intent is to drop it"
+                )
+            }
+
+        proposed_session = proposed_by_key[key]
+        merged.sessions = [s for s in merged.sessions if (s.date, s.sport) != key]
+        merged.sessions.append(proposed_session.model_copy(deep=True))
+        accepted_summary.append({"date": raw_date, "sport": sport, "status": status})
+
+    prev_bike_min = sum(
+        s.duration_min
+        for s in current.sessions
+        if s.sport == "bike" and not s.purpose.strip().upper().startswith("RACE — ")
+    )
+    merged.planning_warnings = evaluate_week_realism(
+        merged.sessions, prev_week_bike_volume_min=prev_bike_min or None
+    )
+
+    confirm = bool(input_data.get("confirm", False))
+    response: dict[str, Any] = {
+        "iso_week": iso_week,
+        "mode": "merge",
+        "merged_plan": _week_sessions_json(merged),
+        "accepted": accepted_summary,
+        "planning_warnings": list(merged.planning_warnings),
+        "persisted": False,
+    }
+    if not confirm:
+        return response
+
+    store.save_week(slug, merged)
+
+    log.info(
+        "week plan merged",
+        athlete=slug,
+        iso_week=iso_week,
+        accepted_count=len(accepted_summary),
+    )
+    response["persisted"] = True
+    return response
 
 
 def _session_summary_json(session) -> dict[str, Any]:
@@ -5799,6 +6593,12 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "replace_week_plan": lambda input_data: _handle_replace_week_plan(
+            input_data, store=store, slug=slug
+        ),
+        "patch_week_plan": lambda input_data: _handle_patch_week_plan(
+            input_data, store=store, slug=slug
+        ),
+        "merge_week_plan": lambda input_data: _handle_merge_week_plan(
             input_data, store=store, slug=slug
         ),
         "set_event_active_status": lambda input_data: _handle_set_event_active_status(
