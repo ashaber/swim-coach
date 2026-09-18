@@ -3914,6 +3914,123 @@ def test_scaffold_season_macro_reuses_tagged_subset_from_existing_season_macro()
     assert race3.id in macro.event_ids
 
 
+# --- IDEA 018, corrected 2026-09-19: coverage matched by race IDENTITY, ------------
+# --- not races_sorted[0] position (real design flaw Andrew caught) ----------------
+#
+# The original version of this build hard-coded the reuse check to
+# races_sorted[0] -- "the athlete has exactly one race already on file, and
+# it's always chronologically first in the new request." That breaks for
+# adding a race that falls BEFORE an already-covered one, a season macro
+# with 2+ already-covered races getting a new one inserted anywhere but the
+# front, and exposes a genuine scheduling-conflict case that needs its own
+# explicit refusal. These tests pin the corrected, generalized mechanism.
+
+
+def test_scaffold_season_macro_reuses_existing_coverage_not_at_list_position_zero():
+    # The exact regression Andrew's own example describes: "I decided to...
+    # do a big ride for fun" scheduled AHEAD of an already-covered race.
+    # Peak Weekend is races_sorted[1] here, not races_sorted[0] -- the old
+    # index-0-only design would silently re-derive it (the original bug,
+    # unfixed); the corrected design must still find and reuse it.
+    athlete = make_athlete(sports=["bike"])
+    original_start = START
+    peak_weekend = _make_season_event(
+        name="Peak Weekend", event_date=original_start + timedelta(weeks=5), priority="A"
+    )
+    existing_macro = scaffold_sharpening_macro(athlete, peak_weekend, original_start, 300)
+    original_snapshot = [
+        (b.name, b.start_date, b.end_date, b.weekly_volume_target_m) for b in existing_macro.blocks
+    ]
+
+    new_start = original_start + timedelta(days=2)
+    fun_ride = _make_season_event(
+        name="Fun Ride", event_date=new_start + timedelta(days=5), priority="C"
+    )
+    assert fun_ride.event_date < peak_weekend.event_date  # chronologically first
+
+    macro, season_warnings = scaffold_season_macro(
+        athlete, [fun_ride, peak_weekend], new_start, current_weekly_volume_m=300,
+        established_base=True, existing_macro=existing_macro,
+    )
+
+    assert season_warnings == []
+    peak_blocks = [b for b in macro.blocks if b.race_event_id == peak_weekend.id]
+    assert len(peak_blocks) == 2
+    reused_snapshot = [
+        (b.name, b.start_date, b.end_date, b.weekly_volume_target_m) for b in peak_blocks
+    ]
+    assert reused_snapshot == original_snapshot  # byte-for-byte preserved, NOT re-derived
+    assert macro.event_ids == [fun_ride.id, peak_weekend.id]
+
+
+def test_scaffold_season_macro_new_race_inserted_between_two_already_covered_races():
+    # A season macro with 2+ already-covered races, adding a 3rd race in
+    # the MIDDLE (not the front or the back): both original races' coverage
+    # must be independently reused at their own real dates -- only the new
+    # middle race gets freshly built (or, here, folded in -- it's tier C).
+    athlete = make_athlete(sports=["bike"])
+    race1 = _make_season_event(name="Race 1", event_date=START + timedelta(weeks=14), priority="A")
+    race2 = _make_season_event(name="Race 2", event_date=START + timedelta(weeks=18), priority="B")
+    initial_macro, initial_warnings = scaffold_season_macro(
+        athlete, [race1, race2], START, current_weekly_volume_m=1000, established_base=True,
+        peak_weekly_volume_m=2000,
+    )
+    assert initial_warnings == []
+    race1_tagged = [b for b in initial_macro.blocks if b.race_event_id == race1.id]
+    race2_tagged = [b for b in initial_macro.blocks if b.race_event_id == race2.id]
+    assert race1_tagged and race2_tagged
+
+    race3 = _make_season_event(
+        name="Race 3 (new, middle)", event_date=START + timedelta(weeks=16), priority="C"
+    )
+    new_start = START + timedelta(days=3)
+
+    macro, season_warnings = scaffold_season_macro(
+        athlete, [race1, race2, race3], new_start, current_weekly_volume_m=1000,
+        established_base=True, peak_weekly_volume_m=2000, existing_macro=initial_macro,
+    )
+
+    assert season_warnings == []
+    race1_reused = [b for b in macro.blocks if b.race_event_id == race1.id]
+    race2_reused = [b for b in macro.blocks if b.race_event_id == race2.id]
+    # Both original races reused byte-for-byte (the SAME block objects) --
+    # race 2 specifically is proof this isn't just "index 0 still works":
+    # it's races_sorted[-1] here, and its coverage must still be reused
+    # rather than re-derived just because a new race was inserted before it.
+    assert race1_reused == race1_tagged
+    assert race2_reused == race2_tagged
+    assert macro.event_ids == [race1.id, race3.id, race2.id]  # chronological order
+    # Race 3 (tier C, folded in) gets no dedicated block of its own -- its
+    # date is already covered by race1's/race2's own reused blocks either
+    # side of it.
+    assert all(b.race_event_id != race3.id for b in macro.blocks)
+
+
+def test_scaffold_season_macro_conflict_between_freshly_built_and_reused_coverage_raises():
+    # A freshly-built EARLIER race's own cycle can genuinely overlap a
+    # LATER race's real, already-persisted coverage -- an explicit,
+    # specific refusal, never a silent overlap or data corruption.
+    athlete = make_athlete(sports=["bike"])
+    race_b = _make_season_event(name="Race B", event_date=START + timedelta(weeks=20), priority="A")
+    existing_macro = scaffold_macro(
+        athlete, race_b, START, current_weekly_volume_m=1000, peak_weekly_volume_m=2000
+    )
+    # Race B's real, already-persisted coverage starts right at START.
+    assert existing_macro.blocks[0].start_date == START
+
+    new_start = START + timedelta(weeks=2)
+    race_a = _make_season_event(
+        name="Race A (new)", event_date=new_start + timedelta(weeks=5), priority="A"
+    )
+    assert race_a.event_date < race_b.event_date  # race_a is processed first
+
+    with pytest.raises(ValueError, match="Race B"):
+        scaffold_season_macro(
+            athlete, [race_a, race_b], new_start, current_weekly_volume_m=1000,
+            established_base=True, peak_weekly_volume_m=2000, existing_macro=existing_macro,
+        )
+
+
 # --- Mandatory correctness property #3: zero regression to scaffold_macro's ----------
 # --- existing shape -- pinned, exact expected values (a snapshot), not just ----------
 # --- "the old tests still pass" -----------------------------------------------------
