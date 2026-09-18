@@ -785,3 +785,37 @@ macro's range) so the correct nearby race -- not just the macro's own
 single final `event_id` -- gets passed as `generate_week`'s `event`
 argument for the weeks around each dedicated cycle. Natural follow-on to
 IDEA 018, not a prerequisite for it.
+
+## IDEA 020 - The macro plan shows no marker for an imminent race outside its own scope
+
+Found live (2026-09-19, Andrew, testing the freshly-persisted 3-race
+season macro the night before his own actual race). His real race THIS
+weekend (Sep 19-20) doesn't appear anywhere on the macro timeline -- the
+first race marker after the current "NOW" block is "Peak Weekend Oct 17",
+making it look like that's the next thing happening, when there's a real
+race this weekend the view says nothing about. Andrew's own words: *"This
+weekend is mislabeled Oct 17."*
+
+**Root cause:** the season macro built via `draft_season_macro_plan` was
+deliberately scoped to just the 3 forward-looking races Andrew named
+(Peak Weekend / Halloween Weekend / Season Finale) -- `scaffold_season_
+macro` explicitly refuses a race on or before `start` ("only plans
+forward"), so this weekend's already-imminent race could never have been
+one of the `event_names` in that call, and correctly isn't in
+`macro.event_ids`. `macroRaceMarkers` (`web/src/plan.js`, IDEA 018's own
+PR #197 sibling) only ever renders a marker for a race in `macro.event_ids`
+-- exactly right for "which races is THIS macro periodizing around," but
+it means any OTHER real, known event (already tracked in `events`, which
+the renderer already receives) -- including one happening THIS weekend --
+gets no marker at all, silently. The gap isn't a bug in either piece on
+its own; it's that nothing plugs the space between "races this macro
+scaffolds around" and "every real race the athlete has on the books."
+
+**Natural fix direction (not built here):** render a marker for every
+real, upcoming `Event` inside the visualized window, not only the ones in
+`macro.event_ids` -- distinguished visually (e.g. a plain/muted marker,
+vs. the existing dashed-red styling for a race this macro actually plans
+around) so it's clear at a glance which races this specific macro's
+blocks are built for and which are just nearby and real. `events` is
+already threaded into `renderMacroSection` (PR #197) -- this is a
+rendering-layer addition, no new data needed.
