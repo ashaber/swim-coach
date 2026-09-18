@@ -177,7 +177,7 @@
     .macro { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 22px 22px 16px; }
     .macro-scroll { overflow-x: auto; }
     .blocks { display: flex; gap: 6px; min-width: 560px; align-items: flex-end; height: 168px; }
-    .block { position: relative; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; border-radius: 8px 8px 0 0; }
+    .block { position: relative; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; border-radius: 8px 8px 0 0; min-width: 140px; }
     .block .fill { border-radius: 8px 8px 0 0; background: linear-gradient(180deg, var(--accent), var(--accent-ink)); opacity: .16; width: 100%; }
     .block.is-now .fill { opacity: .32; }
     .block .cap { position: absolute; top: 10px; left: 12px; right: 12px; }
@@ -187,7 +187,7 @@
     .nowtag { display:inline-block; font-family: var(--display); font-size:10px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:#fff; background:var(--accent); padding:2px 7px; border-radius:var(--radius-pill); margin-top:6px; }
     .block.race .rr { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; height:100%; border:2px dashed var(--c-signal); border-radius:8px; background:var(--c-signal-wash); }
     .block.race .rr .em { font-size:20px; }
-    .block.race .rr .t { font-family: var(--display); font-size:11px; font-weight:700; color:var(--c-signal); text-align:center; padding:0 6px; }
+    .block.race .rr .t { font-family: var(--display); font-size:11px; font-weight:700; color:var(--c-signal); text-align:center; padding:0 6px; overflow-wrap: break-word; }
     .macro-note { margin-top:12px; color:var(--ink-faint); font-size:12px; }
     .ladder { margin-top:14px; padding-top:14px; border-top:1px solid var(--line-soft); display:flex; flex-wrap:wrap; gap:8px; align-items:center; font-size:12.5px; color:var(--ink-soft); }
     .rung { display:inline-flex; align-items:center; gap:6px; background:var(--paper-2); border:1px solid var(--line); border-radius:var(--radius-pill); padding:4px 11px; font-weight:600; color:var(--ink); }
