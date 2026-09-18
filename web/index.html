@@ -34,6 +34,16 @@
          than a real sport's color -- it's a synced catch-all bucket, not
          a planned discipline, and should read that way. */
       --c-bike:#d9b64a; --c-cross-train:#8a8577;
+      /* web/fueling-session-render's icon pass (2026-09-17): two more
+         session "kinds" beyond the real Sport registry (nutrition/yoga are
+         heuristic-detected, see plan.js's isFuelingPlanSession/
+         isYogaSession -- not real Sport values). Own tokens, not reused
+         hues, same discipline as --c-form's own comment below: --c-nutrition
+         is an olive-lime, clear of the warm cluster (--c-strength orange,
+         --c-bike gold, --c-signal red) it would otherwise sit near;
+         --c-yoga is a soft rose, clear of --c-form's lavender so the two
+         "calm" colors on this page (a different tab each) don't collide. */
+      --c-nutrition:#a8c24d; --c-yoga:#d98ba3;
       /* TSB ("form") line color, its own token (web/two-panel-load-chart) --
          it used to reuse --c-ow, the OPEN-WATER SESSION color elsewhere in
          this app, so the same hue meant "open water swim" on the Plan tab
@@ -129,6 +139,12 @@
     .race-week-date { color: var(--ink-faint); }
     .race-week-cat { font-family: var(--display); font-size: 10px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--note-label); }
     .race-week-label { color: var(--ink-soft); }
+    .fueling-plan-section .detail-notes { margin: 0 0 6px; }
+    .fueling-segments { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+    .fueling-segments li { font-size: 12.5px; color: var(--ink-soft); background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-xs); padding: 8px 10px; }
+    .fueling-warnings { margin-top: 10px; padding: 8px 10px; border: 1px solid var(--amber); border-radius: var(--radius-xs); background: var(--note-bg); }
+    .fueling-warnings strong { display: block; font-family: var(--display); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--c-attn); margin-bottom: 4px; }
+    .fueling-warnings ul { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--ink-soft); }
     .days { display: grid; }
     .day-row { display: grid; grid-template-columns: 92px 1fr; gap: 14px; padding: 13px 20px; align-items: start; }
     .day-row + .day-row { border-top: 1px solid var(--line-soft); }
@@ -140,6 +156,15 @@
     .sess[data-a] { cursor: pointer; }
     .sess + .sess { margin-top: 10px; }
     .dot { width: 10px; height: 10px; border-radius: 3px; margin-top: 6px; flex: none; }
+    /* Icon-glyph marker (src/icons.js) -- overrides .dot's plain colored
+       square: a 16x16 box centered on the same baseline, tinted via `color`
+       (the svg's own stroke/fill is currentColor) instead of `background`.
+       Only used when renderSessionMarker actually found an icon for the
+       session's key -- an unrecognized sport still gets the plain square
+       above, unchanged. */
+    .dot-icon { width: 16px; height: 16px; border-radius: 0; background: none;
+      display: inline-flex; align-items: center; justify-content: center; margin-top: 2px; }
+    .dot-icon .session-icon { width: 100%; height: 100%; }
     .sess .body { min-width: 0; }
     .sess .title { font-family: var(--display); font-size: 14px; font-weight: 800; letter-spacing: -.01em; }
     .sess .meta { font-size: 12px; color: var(--ink-faint); margin-top: 1px; }

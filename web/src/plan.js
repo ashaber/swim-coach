@@ -114,10 +114,28 @@ function capitalize(text) {
 
 const RACE_TAG_RE = /\(([ab])\s*race\)/i;
 
-/** Sessions whose purpose is marked "(A race)"/"(B race)", or long (3h+)
- * open-water swims, are the plan's milestones -- highlight them and give
- * them a badge. This is a heuristic over free-text `purpose`, not a model
- * field, since Session has no explicit milestone flag today. */
+// The exact, stable first-line prefix `engine/swim_coach/fueling.py`'s
+// `render_fueling_plan_summary` always writes into a pre-event nutrition
+// Session's `structure` field (see `build_pre_event_nutrition_session`).
+// These sessions are built with `sport: "recovery"` on purpose (a real
+// rest day and a fueling-prep session share no other Session field that
+// distinguishes them client-side) -- this prefix is the only reliable
+// client-side signal, same class of free-text heuristic as `RACE_TAG_RE`
+// above, not a model field.
+const FUELING_PLAN_PREFIX = 'Fueling plan:';
+
+/** True for a pre-event fueling/nutrition-prep Session (see
+ * `FUELING_PLAN_PREFIX` above for why this is the detection signal). */
+export function isFuelingPlanSession(session) {
+  return Boolean(session.structure && session.structure.startsWith(FUELING_PLAN_PREFIX));
+}
+
+/** Sessions whose purpose is marked "(A race)"/"(B race)", long (3h+)
+ * open-water swims, or a computed pre-event fueling plan, are the plan's
+ * milestones/specially-shaped content -- highlight/tag them so they don't
+ * render as an undifferentiated generic session card. This is a heuristic
+ * over free-text `purpose`/`structure`, not a model field, since Session
+ * has no explicit milestone/kind flag today. */
 export function classifySession(session) {
   const raceMatch = session.purpose.match(RACE_TAG_RE);
   if (raceMatch) {
@@ -126,7 +144,75 @@ export function classifySession(session) {
   if (session.sport === 'swim_ow' && session.duration_min >= 180) {
     return { highlight: true, tag: 'Milestone' };
   }
+  if (isFuelingPlanSession(session)) {
+    return { highlight: false, tag: 'Fueling' };
+  }
   return { highlight: false, tag: null };
+}
+
+// Free-text purpose/structure match for a yoga/mobility session -- there is
+// no real backend `Sport` value or model field for this today (confirmed
+// against live production data, 2026-09-17: no persisted session anywhere
+// carries "yoga" in purpose or structure yet; these get added ad hoc by the
+// coach via patch_week_plan/merge_week_plan free text). Same class of
+// heuristic as `RACE_TAG_RE`/`FUELING_PLAN_PREFIX` above, weaker than the
+// fueling one (substring match on free text the coach writes, not a stable
+// engine-emitted prefix) -- expected to misfire on a session that merely
+// mentions yoga in passing, and to miss one phrased without the word at
+// all. Good enough for "give it a distinct icon when it says so plainly",
+// not a claim that this is a first-class session kind.
+const YOGA_RE = /\byoga\b/i;
+
+export function isYogaSession(session) {
+  return YOGA_RE.test(`${session.purpose || ''} ${session.structure || ''}`);
+}
+
+/** Which icon (see `src/icons.js`'s `ICON_PATHS`) represents this session.
+ * Nutrition/yoga are checked ahead of the underlying `sport` -- both are
+ * built with an ordinary real `Sport` value (`recovery`, see
+ * `isFuelingPlanSession`'s doc comment for why), so without this priority
+ * they'd be visually indistinguishable from a plain rest day, exactly the
+ * gap this whole pass exists to close. */
+export function sessionIconKey(session) {
+  if (isFuelingPlanSession(session)) return 'nutrition';
+  if (isYogaSession(session)) return 'yoga';
+  return session.sport;
+}
+
+/** Splits a pre-event fueling-plan Session's `structure` text (the exact
+ * shape `render_fueling_plan_summary` writes, see `FUELING_PLAN_PREFIX`)
+ * into `{ header, segments, warnings }` for structured rendering, instead
+ * of the generic session-detail path's `parseStructureBlocks` fallback
+ * (which -- correctly, for content matching no recognized label -- returns
+ * this whole multi-line summary as one undifferentiated prose blob; real
+ * per-segment content like feed timestamps and serving counts deserves
+ * better than that here).
+ *  - `header`: the leading non-segment lines (total exposure/intensity/
+ *    product, carb-tolerance source, access-pattern summary).
+ *  - `segments`: one trimmed string per "  Segment N (...): ..." line.
+ *  - `warnings`: the "  - ..." lines following a "Warnings:" line, with
+ *    that leading "- " stripped. Empty when the plan carried no warnings. */
+export function parseFuelingSummary(structure) {
+  const header = [];
+  const segments = [];
+  const warnings = [];
+  let inWarnings = false;
+  for (const rawLine of structure.split('\n')) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (line === 'Warnings:') {
+      inWarnings = true;
+      continue;
+    }
+    if (inWarnings) {
+      warnings.push(line.replace(/^-\s*/, ''));
+    } else if (/^Segment \d+/.test(line)) {
+      segments.push(line);
+    } else {
+      header.push(line);
+    }
+  }
+  return { header, segments, warnings };
 }
 
 const MAIN_SET_RE = /Main set:\s*([^\n]+)/;
@@ -211,13 +297,23 @@ export function sessionDisplay(session) {
   return { title: deriveSessionTitle(session), detail, structure: session.structure || null };
 }
 
+/** Color for this session's marker -- `--c-signal` for a highlighted race/
+ * milestone, else the color belonging to `sessionIconKey`'s result.
+ * `nutrition`/`yoga` get their own tokens (`--c-nutrition`/`--c-yoga`,
+ * index.html) rather than inheriting the underlying `recovery` sport's
+ * color -- the whole point of tagging them is that they read as distinct
+ * types, not unlabeled rest days, and sharing a color would undercut that
+ * even with a different icon shape. Otherwise this is still `src/sports.js`
+ * as the one source of truth for real sports -- this used to be its own
+ * separate map here, which is exactly how "bike" got missed when it was
+ * added as a Sport (engine/cycling-coach): every bike session's dot
+ * silently fell through to the generic unknown-sport gray below,
+ * indistinguishable from actually-bad data. */
 export function sessionDotColorVar(session, classification) {
   if (classification.highlight) return '--c-signal';
-  // src/sports.js is the one source of truth now -- this used to be its
-  // own separate map here, which is exactly how "bike" got missed when it
-  // was added as a Sport (engine/cycling-coach): every bike session's dot
-  // silently fell through to the generic unknown-sport gray below,
-  // indistinguishable from actually-bad data.
+  const key = sessionIconKey(session);
+  if (key === 'nutrition') return '--c-nutrition';
+  if (key === 'yoga') return '--c-yoga';
   return sportColorVar(session.sport) || '--c-ink-faint';
 }
 
