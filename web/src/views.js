@@ -880,17 +880,29 @@ function renderMacroSection(macro, event, weeks, events) {
   // spanning macro (`draft_season_macro_plan`) only ever showed its single
   // final target race, even though every earlier race it plans around
   // (`macro.event_ids`) is real, known data. Each race's card goes right
-  // after the last training block that ends before its date -- e.g. a
-  // B-priority race with no dedicated block of its own (raced on residual
-  // form between two other blocks' cycles) still gets its own marker,
-  // positioned where it actually falls in the season, not silently
-  // dropped. A race before every block (shouldn't happen for a real plan,
-  // but handled rather than vanishing) goes first.
+  // after the last training block that has already STARTED by its date --
+  // e.g. a B-priority race with no dedicated block of its own (raced on
+  // residual form, folded into whatever block already covers its date)
+  // still gets its own marker, positioned where it actually falls in the
+  // season, not silently dropped. A race before every block (shouldn't
+  // happen for a real plan, but handled rather than vanishing) goes first.
+  //
+  // Real bug, live 2026-09-19: the original predicate checked `end_date <
+  // raceDate` (the block has already ENDED), which misses exactly the
+  // folded-in case above -- a race whose date falls INSIDE a block's own
+  // span (e.g. Halloween Weekend, Oct 31, folded into the Oct 19-Nov 8
+  // Sharpen block that was built for a LATER race) never satisfied that
+  // check, so it grouped at the SAME insertion point as the race before
+  // it (Peak Weekend, Oct 17) even though two real training weeks sit
+  // between them -- both cards rendered touching, looking like a same-
+  // weekend double-header. `start_date <= raceDate` (the block has
+  // already STARTED, whether or not it's ended yet) correctly finds the
+  // Sharpen block itself as Halloween's true chronological position.
   const raceMarkers = macroRaceMarkers(macro, events, event);
   const insertAfter = (raceDate) => {
     let idx = -1;
     macro.blocks.forEach((block, i) => {
-      if (parseIsoDate(block.end_date) < raceDate) idx = i;
+      if (parseIsoDate(block.start_date) <= raceDate) idx = i;
     });
     return idx;
   };

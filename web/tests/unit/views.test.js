@@ -3790,7 +3790,18 @@ describe('renderMacroSection: season-spanning macro shows every race (not just o
     expect(html).toContain('Season Finale');
   });
 
-  it('places the B-priority race with no dedicated block between the two sharpen/taper cycles, in real chronological order', () => {
+  it('places the B-priority race AFTER the training block that actually covers its date, in real chronological order', () => {
+    // Real bug, live 2026-09-19: the insertion-point predicate used to
+    // check "the last block that has already ENDED before this race" --
+    // which finds nothing for a race FOLDED INTO a block (its date falls
+    // INSIDE that block's span, never after it ends), so Halloween Weekend
+    // (folded into the Oct 19-Nov 8 Sharpen block, built for the LATER
+    // Season Finale) grouped at the SAME insertion point as Peak Weekend
+    // (Oct 17) -- both cards rendered touching, even though two real
+    // training weeks (the Sharpen block itself) sit between them. Fixed to
+    // "the last block that has already STARTED" -- correctly finds the
+    // Sharpen block as Halloween's true position, between it and the
+    // following Taper block.
     const html = renderApp(planData(seasonMacro, [PEAK, HALLOWEEN, FINALE]), null);
     // "Season Finale" is `macro.event_id`'s own target (the model's own
     // convention: the final race in a season macro), so it also legitimately
@@ -3800,13 +3811,16 @@ describe('renderMacroSection: season-spanning macro shows every race (not just o
     // sharpen block's own text), not the first occurrence anywhere on the
     // page.
     const peakIdx = html.indexOf('Masters Cyclocross Series - Peak Weekend');
-    const halloweenIdx = html.indexOf('Halloween Weekend');
     const secondSharpenIdx = html.indexOf('Oct 19');
-    const financeIdx = html.indexOf('Season Finale', secondSharpenIdx);
+    const halloweenIdx = html.indexOf('Halloween Weekend');
+    const financeIdx = html.indexOf('Season Finale', halloweenIdx);
     expect(peakIdx).toBeGreaterThan(-1);
-    expect(halloweenIdx).toBeGreaterThan(peakIdx);
-    expect(halloweenIdx).toBeLessThan(secondSharpenIdx);
-    expect(financeIdx).toBeGreaterThan(secondSharpenIdx);
+    expect(secondSharpenIdx).toBeGreaterThan(peakIdx);
+    // The real fix: Halloween's card now renders AFTER the second Sharpen
+    // block's own text -- there's a real training block between it and
+    // Peak Weekend, not two cards touching.
+    expect(halloweenIdx).toBeGreaterThan(secondSharpenIdx);
+    expect(financeIdx).toBeGreaterThan(halloweenIdx);
   });
 
   it('an id in event_ids with no matching Event is dropped, not rendered broken', () => {
