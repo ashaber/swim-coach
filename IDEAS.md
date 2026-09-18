@@ -634,3 +634,95 @@ as workout generator and this app as guidance coach.  Need to thoughtfully
 know the TR training plan without stealing their workouts.  Possible model
 is like the master swim model where on-deck coach provides the workout and
 swim coach interprets the load and benefit and adapts around it.
+
+## IDEA 018 - Season-macro chain aborts entirely on race 1's stale runway, instead of extending an already-built plan
+
+Found live, real repro (2026-09-18, Andrew's own bike/CX season). He built
+a season-spanning macro across three real races (Peak Weekend Oct 17 /
+Halloween Weekend Oct 31 / Season Finale Nov 21) a few days earlier
+(`start_date=2026-09-14`). That persist never actually landed (separate
+issue, see feedback `0b02c780` and the diagnostics landed in PR #198) --
+what's captured here is what happened when he asked the coach to just
+retry the same build tonight: it failed outright, and the failure reveals
+a real architecture gap, not just a persistence bug.
+
+**Root cause, exact code (`engine/swim_coach/plan.py`,
+`scaffold_season_macro`'s per-race loop, ~line 1804-1841):** for an
+`"A"`-priority race, the runway-too-short case is a hard `raise
+ValueError` that aborts the WHOLE chain -- races 2 and 3 (Halloween,
+Season Finale), both with plenty of runway, never get scaffolded either,
+even though nothing is wrong with either of them:
+
+```python
+if tier == "A":
+    if weeks_available >= MIN_MACRO_WEEKS:                     # 8 weeks
+        sub_macro = scaffold_macro(...)
+    elif established_base and weeks_available >= SHARPENING_MIN_MACRO_WEEKS:  # 4 weeks
+        sub_macro = scaffold_sharpening_macro(...)
+    else:
+        raise ValueError(...)   # kills the entire season build
+```
+
+Compare the `"B"`/`"C"` branches a few lines below: below their own
+minimum runway, they degrade gracefully -- no dedicated block, folded
+into whatever's already covering that race's date (exactly the mechanism
+that correctly gives Halloween Weekend no dedicated cycle). The A-tier
+branch's hard-refuse posture is inherited unchanged from the single-race
+`draft_macro_plan` handler this whole season-macro feature (PR #192,
+`multi-race-season-macro` build) was built to go beyond -- reasonable for
+"build ONE race's cycle," wrong blast radius inside a multi-race chain.
+The function's own docstring even states the posture deliberately: *"an
+A-race this function cannot safely periodize into is a real refusal, not
+silently downgraded to a lesser shape."* That sentence was written before
+this function had to coexist with a race that was already mid-cycle.
+
+**The deeper issue, in Andrew's own words:** *"me asking coach to fill in
+the details for the race roster loaded a long time ago shouldn't trip
+guardrails of going from couch to race in a few weeks."* Peak Weekend
+already has a real, valid, currently-persisted sharpen->taper cycle (built
+`start_date=2026-09-14`, still correct, still being followed this week --
+confirmed directly against the DB). Recomputing race 1's shape from a
+fresh `start=today` is the wrong operation entirely when a real cycle for
+it already exists on file: the athlete isn't asking to cold-start a
+macro for an imminent race, they're asking to EXTEND an already-built
+plan forward to cover the rest of a roster that was loaded well in
+advance. `MIN_MACRO_WEEKS`/`SHARPENING_MIN_MACRO_WEEKS` are the right
+guardrail for "can I safely build a NEW cycle from scratch" -- they are
+the wrong question when a cycle already exists and the real ask is "keep
+what's there, add what's missing."
+
+**Also worth scoping, a related but separate point Andrew raised:** the
+`established_base` gate (`_training_base_evidence`,
+`backend/app/tools.py`) checks a 12-week lookback minimum
+(`min_weeks_with_load_fraction`) -- Andrew's real, continuous training
+history goes back to February, ~7 months, well beyond that minimum. The
+gate today is binary (established or not); it doesn't currently
+distinguish "just barely cleared 12 weeks" from "7 months of continuous
+real load." Worth a real design conversation on whether a materially
+longer verified history should earn more than the same fixed
+`SHARPENING_MIN_MACRO_WEEKS` threshold everyone else gets -- e.g. loosening
+or waiving the runway check specifically for extending an already-existing
+macro (distinct from cold-starting one), where the risk profile is
+genuinely different.
+
+**Natural fix direction (not built here -- real engine/architecture work,
+deferred past race weekend on purpose):**
+1. Give `scaffold_season_macro` (or its caller,
+   `_handle_draft_season_macro_plan`) an "extend existing macro" mode:
+   when `store.load_macro` already covers race 1 with real blocks, don't
+   re-derive race 1's shape from `start` at all -- preserve its existing
+   coverage as the season's first cycle, and chain races 2+ forward from
+   wherever that existing macro's coverage actually ends (same cursor-
+   continuity math the function already does between races, just seeded
+   from real persisted data instead of a fresh `scaffold_macro` call).
+2. Separately, reconsider whether an A-tier race's runway failure should
+   ever abort the WHOLE chain, or should isolate to that one race (fall
+   back to the B/C fold-in-no-dedicated-block posture, or to (1)'s
+   preserve-existing-coverage posture) while still scaffolding every other
+   race in the roster.
+3. Revisit whether `established_base`'s binary gate should have a second,
+   stronger tier for a materially longer real history (Andrew's 7 months
+   vs. the 12-week minimum), specifically for the "extend an existing
+   plan" case this idea is about -- not a blanket loosening of the cold-
+   start guardrail, which is doing real, correct work for a genuinely new
+   athlete/race.
