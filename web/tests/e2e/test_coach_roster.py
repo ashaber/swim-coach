@@ -551,7 +551,11 @@ def test_training_plan_sub_tab_shows_weeks_and_macro_without_the_load_chart(page
     assert 'Aerobic base' in content
     assert 'Base building' in content  # the week's `focus`
     # No load chart in this sub-tab -- that stays in Workouts + Dashboard.
-    assert page.locator('svg').count() == 0
+    # Not a blanket "no <svg> anywhere" check -- this sub-tab's own
+    # "Session types" legend legitimately renders small icon <svg>s
+    # (web/session-type-icons); `load-chart-svg` is the load chart's own
+    # unique class and the real, specific thing this test guards.
+    assert page.locator('svg.load-chart-svg').count() == 0
 
 
 def test_workouts_and_dashboard_sub_tab_shows_missed_sessions_now_that_plan_data_exists(page):
