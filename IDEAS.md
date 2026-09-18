@@ -839,3 +839,34 @@ around) so it's clear at a glance which races this specific macro's
 blocks are built for and which are just nearby and real. `events` is
 already threaded into `renderMacroSection` (PR #197) -- this is a
 rendering-layer addition, no new data needed.
+
+## IDEA 021 - Race-week checklist logistics text is swim-specific, even for a bike race
+
+Found live (2026-09-19, verifying IDEA 019's real fix against Andrew's
+real, live bike season macro): the checklist now correctly fires for Peak
+Weekend's real taper week -- but its "logistics" items read "arrive with
+enough days to spare to acclimatize to the local time zone **and water
+conditions**", "confirm **on-water support (kayak/boat escort, sighting/
+navigation plan)**" -- open-water-swim-specific language, for a
+cyclocross race. `RACE_WEEK_LOGISTICS_LABELS` (`engine/swim_coach/
+plan.py`) is a single hardcoded, athlete-agnostic tuple, documented in its
+own comment as "GENERIC... not hardcoded to any one athlete's race" --
+true for swim, never actually exercised for a bike race until IDEA 019's
+fix, since the checklist never fired for any bike-primary season macro
+before that (silently invisible, not previously wrong-and-unnoticed).
+
+**Deliberately out of scope for IDEA 019's own fix** -- that build was
+entirely about WHETHER the checklist fires (a real, severe bug: it never
+fired for ANY race in a season macro, verified against production), not
+WHAT it says once it does. Distinct problem, distinct fix.
+
+**Natural fix direction (not built here):** `RACE_WEEK_LOGISTICS_LABELS`
+needs a bike-primary variant (travel/timezone acclimatization stays
+generic; fueling-plan rehearsal stays generic; the on-water-support item
+needs a real bike-equivalent -- course recon, bike/equipment check,
+support-crew or feed-zone logistics) -- same `event.primary_sport`
+branch-point `_race_week_checklist`'s own caller already has access to
+via `event`. `carb_load`/`bodywork` category labels/citations
+(`CARB_LOAD_WINDOW_START_DAYS_OUT`/`BODYWORK_WINDOW_DAYS_OUT`) are sport-
+agnostic exercise-physiology findings already -- likely fine unchanged;
+only the `logistics` category's actual label TEXT is swim-specific.
