@@ -1639,7 +1639,8 @@ def scaffold_season_macro(
     *,
     established_base: bool,
     peak_weekly_volume_m: int | None = None,
-) -> MacroPlan:
+    existing_macro: MacroPlan | None = None,
+) -> tuple[MacroPlan, list[str]]:
     """Chain multiple races in the SAME season into one season-spanning
     `MacroPlan` -- multi-race-season-macro build. Real citations in
     `library/31-multi-race-season-periodization.md`.
@@ -1771,6 +1772,115 @@ def scaffold_season_macro(
     `event.target_metric`); every other race's own peak/hold/sharpen volume
     is derived from cursor continuity instead, exactly as this function's
     own docstring above describes.
+
+    **`existing_macro` -- extend-an-active-plan mode (IDEA 018, generalized
+    2026-09-19 per a real design flaw Andrew caught in this build's first
+    version -- see the PR history for the original, narrower write-up).**
+    Real, live repro: an athlete builds a season macro across races 1-3,
+    then a few days later asks to "fill in the rest of the roster" from a
+    fresh `start` -- naively re-deriving an already-covered race's shape
+    from that fresh `start` (this function's normal behavior when
+    `existing_macro` is omitted) ignores the real, currently-persisted,
+    still-correct cycle already covering it and can hard-refuse a call that
+    should really just ADD the missing race(s) to what's already on file.
+
+    Coverage is matched by EACH race's own identity, for EVERY race in
+    `races`, not by chronological list position -- an athlete adding a
+    near-term race ahead of an already-covered later one (a fun ride
+    scheduled before Peak Weekend), inserting a new race in the MIDDLE of
+    two already-covered ones, or simply changing which race is the season's
+    A-race must all still find and reuse whichever race(s) really do have
+    existing coverage, wherever they fall in the chain. Two coverage
+    shapes (see `MacroBlock.race_event_id`'s own docstring, `models.py`),
+    checked once for every race in `races_sorted` before the main loop
+    below runs:
+
+    - A **legacy single-race macro** (`existing_macro.event_id == race.id`
+      and every block's `race_event_id is None`, exactly what
+      `scaffold_macro`/`scaffold_sharpening_macro` produce): the WHOLE
+      `existing_macro.blocks` list is reused as that race's coverage. A
+      legacy macro has exactly one `event_id` and zero tagged blocks by
+      construction, so this can match AT MOST one race in the whole list.
+    - An **existing season macro** from a prior `scaffold_season_macro`
+      call (some blocks already tagged `race_event_id == race.id`): just
+      that tagged subset is reused. Any number of races in the list can
+      match this shape independently.
+
+    For each race the main loop below reaches, if real existing coverage
+    was found for THAT race, its shape is NOT re-derived at all -- the
+    reused blocks are tagged with `race_event_id = race.id` (a no-op where
+    already tagged) and appended AT THEIR OWN REAL, ALREADY-PERSISTED
+    DATES (never reflowed or shifted -- they're an already-built artifact,
+    not a fresh derivation), `cursor_start`/`cursor_volume` are advanced
+    exactly the way they are after a real `scaffold_macro`/
+    `scaffold_sharpening_macro` call (skip past that race's own protected
+    race week; seed off its last block's own end volume), and the loop
+    continues to the next race exactly as today. A race with no matching
+    coverage falls through to the existing tier-based build-or-degrade-or-
+    raise logic, building forward from wherever `cursor_start` currently
+    sits, completely unchanged. When NO race in the whole list has matching
+    coverage (no `existing_macro`, or one that doesn't cover any race in
+    this call) this is a genuine cold-start build and behaves exactly as if
+    `existing_macro` were never passed -- the couch-to-race/unrealistic-
+    goal runway guardrail below must not weaken for a real fresh build.
+
+    **A race needing FRESH building can run into a LATER race's real,
+    reserved coverage -- no separate overlap-detection error; folded into
+    the same warn-vs-refuse ladder item 2 below already uses (corrected
+    2026-09-19, second correction).** For each race with no matching
+    coverage, this function also checks whether ITS OWN build would run
+    into the nearest later race (in this same call) that already has real
+    reserved coverage: every shape this function ever builds ends its cycle
+    at the exact same `event_monday - 1 day` (the "race week itself is not
+    modeled as a block" convention, unchanged), so the question is purely
+    about the two races' real DATES, never about which shape this race
+    would otherwise get. When that collision is real:
+
+    - If BOTH this race and the reserved race it collides with are
+      priority `"A"`: raises a `ValueError` naming both races and both
+      dates -- the ONE case that stays a hard refuse unconditionally, even
+      with `established_base=True` and extend mode on. Rationale (Andrew's
+      own words): "A" means real peak form for that specific race; two
+      A-races too close for either to get one is a real goal silently
+      disappearing, not a scheduling nicety a warning can safely narrate
+      past.
+    - Otherwise (at least one side is "B"/"C", or it's simply an ordinary
+      squeeze against a reserved race regardless of tier): if
+      `established_base` is true, folds in exactly like item 2's own
+      degrade below (no dedicated cycle, a real warning appended to this
+      function's second return value, cursor left untouched). If
+      `established_base` is false, raises -- established_base=False must
+      never get the graceful treatment, extend mode included, for any
+      reason.
+
+    When there's no collision (or no later race in this call has reserved
+    coverage at all), this step changes nothing -- the existing tier-based
+    build-or-degrade-or-raise logic below runs exactly as it always has.
+
+    Finding real coverage for ANY race this way also flips on "extend mode"
+    for the WHOLE call: when `established_base` is true and extend mode is
+    on, a tier's runway-too-short case (today, only the "A"-tier hard
+    `raise` below) degrades to the same warn-and-fold-in posture the
+    "B"/"C" tiers already have below their own minimum runway, instead of
+    aborting the entire chain -- Andrew's own framing: *"error on the side
+    of letting a good plan record... coach can raise concerns and proceed
+    vs hard blocks in instances like this."* Any such degrade appends a
+    plain-English string to this function's second return value (see
+    below) rather than silently dropping the concern -- same "never
+    silently clamp, surface the result plus warnings" posture
+    `WeekPlan.planning_warnings`/`evaluate_week_realism` already establish
+    elsewhere in this module. `established_base=False` (or a genuine
+    cold-start with no matching `existing_macro` coverage anywhere in the
+    list) keeps today's hard-refuse behavior completely unchanged -- that
+    split IS the couch-to-race/unrealistic-goal guardrail and must not get
+    weaker.
+
+    Returns `(MacroPlan, warnings)`: `warnings` is a plain list of
+    human-readable strings, empty unless the extend-mode degrade above
+    actually fired -- never raised, never silently dropped; the caller
+    (`backend/app/tools.py`'s `_handle_draft_season_macro_plan`) surfaces
+    it in its own never-persisted result dict, same way it already
+    surfaces `coverage`.
     """
     if len(races) < 2:
         raise ValueError(
@@ -1797,24 +1907,159 @@ def scaffold_season_macro(
             )
 
     blocks: list[MacroBlock] = []
+    warnings_out: list[str] = []
     cursor_start = start
     cursor_volume = current_weekly_volume_m
     event_ids: list[UUID] = []
 
-    for race in races_sorted:
+    # --- IDEA 018 item 1: extend-an-active-plan mode (generalized) -----------
+    # Precomputed once, for EVERY race in this call, against existing_macro
+    # -- matched by each race's own id, independent of where it falls in the
+    # chronological loop below. See this function's own docstring above for
+    # the two coverage shapes and the reserved-coverage collision handling.
+    reused_coverage: dict[UUID, list[MacroBlock]] = {}
+    if existing_macro is not None and existing_macro.blocks:
+        is_legacy_macro = all(b.race_event_id is None for b in existing_macro.blocks)
+        for race in races_sorted:
+            tagged_blocks = [b for b in existing_macro.blocks if b.race_event_id == race.id]
+            if tagged_blocks:
+                reused_coverage[race.id] = tagged_blocks
+            elif is_legacy_macro and existing_macro.event_id == race.id:
+                reused_coverage[race.id] = list(existing_macro.blocks)
+
+    # Extend mode applies to the WHOLE call the moment ANY race in this
+    # request has real existing coverage -- not specifically race 1, and not
+    # a new signal, just this precomputed dict being non-empty.
+    is_extend_mode = bool(reused_coverage)
+
+    # For each race, the NEAREST later race (in races_sorted, chronological
+    # order) that already has real reserved coverage -- `None` if no later
+    # race in this call has any. Used below so a race needing fresh building
+    # can check whether its own build would run into that reserved coverage.
+    ceiling_race_for_index: list[Event | None] = [None] * len(races_sorted)
+    _nearest_reserved_race: Event | None = None
+    for i in range(len(races_sorted) - 1, -1, -1):
+        ceiling_race_for_index[i] = _nearest_reserved_race
+        if races_sorted[i].id in reused_coverage:
+            _nearest_reserved_race = races_sorted[i]
+
+    for index, race in enumerate(races_sorted):
         event_ids.append(race.id)
+        reuse_blocks = reused_coverage.get(race.id)
+        if reuse_blocks is not None:
+            # Reused at its OWN real, already-persisted dates -- never
+            # reflowed/shifted, it's an already-built artifact, not a fresh
+            # derivation.
+            for block in reuse_blocks:
+                if block.race_event_id is None:
+                    block.race_event_id = race.id
+            blocks.extend(reuse_blocks)
+            # Same cursor-continuity math as after a real scaffold_macro/
+            # scaffold_sharpening_macro call below (skip past this race's
+            # own protected race week; seed off its last block's own end
+            # volume) -- just seeded from real persisted data instead of a
+            # fresh call.
+            race_monday = _monday_of_week(race.event_date)
+            cursor_start = race_monday + timedelta(weeks=1)
+            cursor_volume = reuse_blocks[-1].weekly_volume_target_m
+            continue  # existing coverage reused as-is -- skip tier-based build
+
         tier = race.priority.strip().upper()
         start_monday = _monday_on_or_after(cursor_start)
         event_monday = _monday_of_week(race.event_date)
         weeks_available = (event_monday - start_monday).days // 7
 
+        # --- IDEA 018, corrected 2026-09-19 (second correction): no separate
+        # overlap-detection error. Instead, a race that needs FRESH building
+        # checks whether its own build would run into the NEAREST later
+        # race (in this same call) that already has real reserved coverage
+        # -- `next_reserved_race`/`next_reserved_start`, precomputed above --
+        # and funnels that into the SAME warn-vs-refuse decision item 2
+        # already makes, keyed on established_base, with exactly one new,
+        # narrower hard-refuse carved out: two "A"-priority races too close
+        # for either to reach real peak form (Andrew's own words: a real
+        # goal silently disappearing under a warning is a worse failure than
+        # a hard refuse here). `event_monday + 1 week` is this race's own
+        # post-race-week cursor position REGARDLESS of which shape it would
+        # end up using (every shape below ends its cycle at the same
+        # `event_monday - 1 day`, per the existing "race week itself is not
+        # modeled as a block" convention) -- so the collision is driven by
+        # the two races' real DATES, not by which shape this race would get.
+        next_reserved_race = ceiling_race_for_index[index]
+        next_reserved_start = (
+            reused_coverage[next_reserved_race.id][0].start_date
+            if next_reserved_race is not None
+            else None
+        )
+        collides_with_reserved_race = (
+            next_reserved_start is not None
+            and event_monday + timedelta(weeks=1) > next_reserved_start
+        )
+        if collides_with_reserved_race:
+            reserved_tier = next_reserved_race.priority.strip().upper()
+            if tier == "A" and reserved_tier == "A":
+                raise ValueError(
+                    f"{race.name!r} (A, {race.event_date}) and "
+                    f"{next_reserved_race.name!r} (A, {next_reserved_race.event_date}) "
+                    "are too close together for both to reach real peak form -- "
+                    "consider downgrading one to B priority if a genuine taper "
+                    "isn't needed for both"
+                )
+            elif established_base:
+                # Exactly the item-2 posture: never silently dropped, always
+                # surfaced via warnings_out; no dedicated block, cursor left
+                # untouched for whatever already covers this race's date.
+                warnings_out.append(
+                    f"{race.name!r}'s own build would run into "
+                    f"{next_reserved_race.name!r}'s existing coverage (starting "
+                    f"{next_reserved_start}) -- proceeding without a dedicated "
+                    "cycle for it (folded into whatever already covers this "
+                    "race's date) because this call is extending an already-"
+                    "active plan with an established training base -- raise "
+                    "this with the athlete rather than silently accepting it."
+                )
+                continue  # no dedicated block -- folded into whatever covers this race's date
+            else:
+                # Today's ordinary insufficient-base refusal -- established_
+                # base=False must never get the graceful treatment, for any
+                # reason, extend mode included.
+                raise ValueError(
+                    f"{race.name!r}'s own build would run into "
+                    f"{next_reserved_race.name!r}'s existing coverage (starting "
+                    f"{next_reserved_start}), and this athlete's real logged "
+                    "training history does not show an established base -- "
+                    "refusing rather than guessing at how to fold this race in "
+                    f"(established_base={established_base})"
+                )
+
         if tier == "A":
+            sub_macro: MacroPlan | None
             if weeks_available >= MIN_MACRO_WEEKS:
                 sub_macro = scaffold_macro(
                     athlete, race, cursor_start, cursor_volume, peak_weekly_volume_m
                 )
             elif established_base and weeks_available >= SHARPENING_MIN_MACRO_WEEKS:
                 sub_macro = scaffold_sharpening_macro(athlete, race, cursor_start, cursor_volume)
+            elif established_base and is_extend_mode:
+                # IDEA 018 item 2: extending an already-active plan degrades
+                # a too-short A-tier runway to the same warn-and-fold-in
+                # posture the "B"/"C" tiers already have below, instead of
+                # aborting the whole chain -- never silently dropped, always
+                # surfaced via warnings_out. A genuine cold-start build (no
+                # existing coverage found for race 1) never reaches this
+                # branch -- is_extend_mode is False -- so the hard `raise`
+                # below is completely unchanged for it.
+                sub_macro = None
+                warnings_out.append(
+                    f"only {weeks_available} whole weeks available before "
+                    f"A-priority race {race.name!r} (from {cursor_start}) -- "
+                    f"normally needs at least {SHARPENING_MIN_MACRO_WEEKS} to "
+                    "periodize safely, but proceeding without a dedicated "
+                    "cycle (folded into whatever already covers this race's "
+                    "date) because this call is extending an already-active "
+                    "plan with an established training base -- raise this "
+                    "with the athlete rather than silently accepting it."
+                )
             else:
                 needed = SHARPENING_MIN_MACRO_WEEKS if established_base else MIN_MACRO_WEEKS
                 raise ValueError(
@@ -1823,6 +2068,8 @@ def scaffold_season_macro(
                     f"need at least {needed} to periodize safely "
                     f"(established_base={established_base})"
                 )
+            if sub_macro is None:
+                continue  # no dedicated block -- folded into whatever covers this race's date
             for block in sub_macro.blocks:
                 block.race_event_id = race.id
             blocks.extend(sub_macro.blocks)
@@ -1904,13 +2151,14 @@ def scaffold_season_macro(
             )
         )
 
-    return MacroPlan(
+    macro = MacroPlan(
         id=uuid4(),
         athlete_id=athlete.id,
         event_id=races_sorted[-1].id,
         event_ids=event_ids,
         blocks=blocks,
     )
+    return macro, warnings_out
 
 
 def _find_block(macro: MacroPlan, week_start: date) -> tuple[int, MacroBlock]:

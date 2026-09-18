@@ -4108,6 +4108,21 @@ def _handle_draft_season_macro_plan(
     asserted or inferred from conversation) and applies to every race in
     the season -- matching `scaffold_season_macro`'s own single-parameter
     design.
+
+    **IDEA 018 -- extend-an-active-plan mode.** `existing_macro` (already
+    loaded here, now BEFORE the `scaffold_season_macro` call rather than
+    after, specifically so it can be threaded through) is forwarded into
+    `scaffold_season_macro` unconditionally -- that function itself decides
+    whether it actually covers this call's chronologically-first race and,
+    if so, reuses it instead of re-deriving that race's shape from a fresh
+    `start` (see its own docstring for the full design). This is what lets
+    "fill in the rest of an already-loaded race roster" succeed instead of
+    re-deriving -- and potentially hard-refusing -- race 1's already-real,
+    already-persisted cycle. The result's `warnings` key (plain list of
+    strings, empty unless it actually fired) surfaces
+    `scaffold_season_macro`'s own extend-mode runway degrade -- shown to
+    the athlete same as `coverage`, on both a draft (`confirm=false`) and a
+    confirmed call, never silently dropped.
     """
     event_names = input_data.get("event_names")
     if not event_names or not isinstance(event_names, list) or len(event_names) < 2:
@@ -4214,21 +4229,22 @@ def _handle_draft_season_macro_plan(
     }
 
     try:
-        macro = scaffold_season_macro(
+        existing_macro = store.load_macro(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load macro plan: {exc}"}
+
+    try:
+        macro, macro_warnings = scaffold_season_macro(
             athlete,
             races,
             start,
             current_weekly_volume_m,
             established_base=evidence.established,
             peak_weekly_volume_m=peak_weekly_volume_m,
+            existing_macro=existing_macro,
         )
     except ValueError as exc:
         return {"error": str(exc)}
-
-    try:
-        existing_macro = store.load_macro(slug)
-    except Exception as exc:  # noqa: BLE001
-        return {"error": f"could not load macro plan: {exc}"}
 
     # The literal fix for the logged failure mode: make any coverage LOSS
     # explicit and visible before persisting, rather than silently
@@ -4266,6 +4282,12 @@ def _handle_draft_season_macro_plan(
         "established_base_evidence": established_base_evidence,
         "coverage": coverage,
         "blocks": _macro_blocks_json(macro),
+        # IDEA 018 item 2: never-persisted, surfaced same way `coverage` is --
+        # empty unless scaffold_season_macro's extend-mode degrade actually
+        # fired (established_base=True, extending a plan with real existing
+        # coverage for race 1, AND a tier's runway came up short). Show this
+        # to the athlete same as `coverage`, never silently drop it.
+        "warnings": macro_warnings,
         "persisted": False,
     }
     if not confirm:

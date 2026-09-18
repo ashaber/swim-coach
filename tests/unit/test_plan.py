@@ -50,6 +50,7 @@ from swim_coach.plan import (
     _duration_min_for_distance,
     _format_pace_s,
     _monday_of_week,
+    _monday_on_or_after,
     _no_coach_pool_purpose,
     _race_week_checklist,
     _round_100,
@@ -3462,7 +3463,7 @@ def test_scaffold_season_macro_b_tier_skipped_when_runway_too_short():
     later_a = _make_season_event(
         name="Later A", event_date=START + timedelta(weeks=9), priority="A"
     )
-    macro = scaffold_season_macro(
+    macro, season_warnings = scaffold_season_macro(
         athlete, [near_b, later_a], START, current_weekly_volume_m=300, established_base=True,
         peak_weekly_volume_m=600,
     )
@@ -3480,7 +3481,7 @@ def test_scaffold_season_macro_b_tier_skipped_when_no_established_base():
     later_a = _make_season_event(
         name="Later A", event_date=START + timedelta(weeks=12), priority="A"
     )
-    macro = scaffold_season_macro(
+    macro, season_warnings = scaffold_season_macro(
         athlete, [reachable_b, later_a], START, current_weekly_volume_m=300, established_base=False,
         peak_weekly_volume_m=600,
     )
@@ -3497,7 +3498,7 @@ def test_scaffold_season_macro_b_tier_gets_shallower_taper_than_a_tier():
         name="B race", event_date=START + timedelta(weeks=SHARPEN_MIN_WEEKS_MINI_TAPER), priority="B"
     )
     later_a = _make_season_event(name="Later A", event_date=START + timedelta(weeks=20), priority="A")
-    macro = scaffold_season_macro(
+    macro, season_warnings = scaffold_season_macro(
         athlete, [b_race, later_a], START, current_weekly_volume_m=300, established_base=True,
         peak_weekly_volume_m=600,
     )
@@ -3516,7 +3517,7 @@ def test_scaffold_season_macro_b_tier_excess_runway_gets_filler_then_capped_dedi
         name="Far B", event_date=START + timedelta(weeks=12), priority="B"
     )
     later_a = _make_season_event(name="Later A", event_date=START + timedelta(weeks=20), priority="A")
-    macro = scaffold_season_macro(
+    macro, season_warnings = scaffold_season_macro(
         athlete, [far_b, later_a], START, current_weekly_volume_m=300, established_base=True,
         peak_weekly_volume_m=600,
     )
@@ -3548,7 +3549,7 @@ def test_scaffold_season_macro_ramp_cap_respected_across_race_to_race_transition
     race2 = _make_season_event(name="Race 2", event_date=START + timedelta(weeks=22), priority="A")
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        macro = scaffold_season_macro(
+        macro, season_warnings = scaffold_season_macro(
             athlete, [race1, race2], START, current_weekly_volume_m=300, established_base=True,
             # Deliberately unreachable in the remaining runway. Raised from
             # 5000 (2026-09-15): the race-week-collision fix above gives
@@ -3589,7 +3590,7 @@ def test_scaffold_season_macro_a_race_own_week_not_swallowed_by_next_race():
     athlete = make_athlete(sports=["bike"])
     race1 = _make_season_event(name="Race 1", event_date=START + timedelta(weeks=14), priority="A")
     race2 = _make_season_event(name="Race 2", event_date=START + timedelta(weeks=18), priority="B")
-    macro = scaffold_season_macro(
+    macro, season_warnings = scaffold_season_macro(
         athlete, [race1, race2], START, current_weekly_volume_m=1000, established_base=True,
         peak_weekly_volume_m=2000,
     )
@@ -3620,7 +3621,7 @@ def test_scaffold_season_macro_event_ids_lists_every_race_even_skipped_ones():
     dedicated_a = _make_season_event(
         name="Dedicated A", event_date=START + timedelta(weeks=10), priority="A"
     )
-    macro = scaffold_season_macro(
+    macro, season_warnings = scaffold_season_macro(
         athlete, [skipped_b, dedicated_a], START, current_weekly_volume_m=300, established_base=True,
         peak_weekly_volume_m=600,
     )
@@ -3636,7 +3637,7 @@ def test_scaffold_season_macro_priority_is_case_insensitive_and_free_text_tolera
     unrecognized = _make_season_event(
         name="Unrecognized priority", event_date=START + timedelta(weeks=5), priority="tune-up"
     )
-    macro = scaffold_season_macro(
+    macro, season_warnings = scaffold_season_macro(
         athlete, [unrecognized, lowercase_a], START, current_weekly_volume_m=300, established_base=True,
         peak_weekly_volume_m=600,
     )
@@ -3652,7 +3653,7 @@ def test_scaffold_season_macro_trailing_block_omitted_when_final_race_gets_dedic
     athlete = make_athlete(sports=["bike"])
     race1 = _make_season_event(name="Race 1", event_date=START + timedelta(weeks=5), priority="B")
     race2 = _make_season_event(name="Race 2", event_date=START + timedelta(weeks=12), priority="A")
-    macro = scaffold_season_macro(
+    macro, season_warnings = scaffold_season_macro(
         athlete, [race1, race2], START, current_weekly_volume_m=300, established_base=True,
         peak_weekly_volume_m=600,
     )
@@ -3667,7 +3668,7 @@ def test_scaffold_season_macro_trailing_block_added_when_final_race_has_no_dedic
     trailing_c = _make_season_event(
         name="Trailing C", event_date=START + timedelta(weeks=10), priority="C"
     )
-    macro = scaffold_season_macro(
+    macro, season_warnings = scaffold_season_macro(
         athlete, [dedicated_a, trailing_c], START, current_weekly_volume_m=300, established_base=True,
         peak_weekly_volume_m=600,
     )
@@ -3699,7 +3700,7 @@ def test_scaffold_season_macro_andrews_real_cx_calendar_end_to_end():
         name="Season Finale", event_date=START + timedelta(days=68), priority="B"
     )
     races = [season_opener, peak_weekend, halloween_weekend, season_finale]
-    macro = scaffold_season_macro(
+    macro, season_warnings = scaffold_season_macro(
         athlete, races, START, current_weekly_volume_m=540, established_base=True
     )
 
@@ -3725,6 +3726,391 @@ def test_scaffold_season_macro_andrews_real_cx_calendar_end_to_end():
         weeks_in_curr = (curr.end_date - curr.start_date).days // 7 + 1
         max_allowed = prev.weekly_volume_target_m * (1 + WEEKLY_VOLUME_RAMP_CAP) ** weeks_in_curr
         assert curr.weekly_volume_target_m <= max_allowed + 1  # +1: rounding
+
+
+# --- IDEA 018: extend-an-active-plan mode (existing_macro) -------------------------
+#
+# Real, live repro (2026-09-18, Andrew's own bike/CX season, verified against
+# the live DB and Cloud Run logs -- see IDEAS.md's own IDEA 018 for the full
+# incident writeup): a real, currently-persisted 2-block (sharpen/taper)
+# macro for Peak Weekend already exists (built a few days earlier). Asking
+# the coach to "fill in the rest of the roster" (add Halloween Weekend +
+# Season Finale) from a fresh `start` re-derived Peak Weekend's shape from
+# scratch and hard-refused the ENTIRE season build on its now-stale runway,
+# even though races 2/3 both had plenty of runway. These tests pin the fix:
+# reuse race 1's real existing coverage instead of re-deriving it (item 1),
+# and degrade an extend-mode runway-too-short case to a warning instead of a
+# hard raise when established_base is true (item 2) -- while leaving a
+# genuine cold-start build's hard-refuse behavior completely unchanged.
+
+
+def test_scaffold_season_macro_extends_existing_legacy_single_race_macro():
+    # The exact real repro: a legacy single-race macro (scaffold_sharpening_
+    # macro's own untagged-block output) already covers race 1. Extending it
+    # to add two more races from a LATER `start` (where race 1's own runway
+    # has since shrunk below SHARPENING_MIN_MACRO_WEEKS, exactly matching
+    # the real logged failure) must reuse race 1's real coverage byte-for-
+    # byte instead of re-deriving it, and must NOT raise.
+    athlete = make_athlete(sports=["bike"])
+    original_start = START
+    peak_weekend = _make_season_event(
+        name="Peak Weekend", event_date=original_start + timedelta(weeks=5), priority="A"
+    )
+    existing_macro = scaffold_sharpening_macro(athlete, peak_weekend, original_start, 300)
+    assert [b.name for b in existing_macro.blocks] == ["sharpen", "taper"]
+    original_snapshot = [
+        (b.name, b.start_date, b.end_date, b.weekly_volume_target_m, b.focus)
+        for b in existing_macro.blocks
+    ]
+
+    # "A few days later": from this new start, only 3 whole weeks remain
+    # before Peak Weekend -- below SHARPENING_MIN_MACRO_WEEKS (4) -- the
+    # exact real failure ("only 3 whole weeks available... need at least 4").
+    new_start = original_start + timedelta(days=9)
+    start_monday = _monday_on_or_after(new_start)
+    peak_monday = _monday_of_week(peak_weekend.event_date)
+    assert (peak_monday - start_monday).days // 7 == 3
+
+    halloween_weekend = _make_season_event(
+        name="Halloween Weekend", event_date=peak_weekend.event_date + timedelta(weeks=2), priority="B"
+    )
+    season_finale = _make_season_event(
+        name="Season Finale", event_date=peak_weekend.event_date + timedelta(weeks=5), priority="B"
+    )
+
+    macro, season_warnings = scaffold_season_macro(
+        athlete,
+        [peak_weekend, halloween_weekend, season_finale],
+        new_start,
+        current_weekly_volume_m=300,
+        established_base=True,
+        existing_macro=existing_macro,
+    )
+
+    assert season_warnings == []  # reuse, not a degrade -- nothing to warn about
+    peak_blocks = [b for b in macro.blocks if b.race_event_id == peak_weekend.id]
+    assert len(peak_blocks) == 2
+    reused_snapshot = [
+        (b.name, b.start_date, b.end_date, b.weekly_volume_target_m, b.focus) for b in peak_blocks
+    ]
+    assert reused_snapshot == original_snapshot  # byte-for-byte preserved
+
+    # Races 2/3 scaffolded normally on top of the reused coverage.
+    assert macro.event_ids == [peak_weekend.id, halloween_weekend.id, season_finale.id]
+    assert any(b.race_event_id == season_finale.id for b in macro.blocks)
+
+
+def test_scaffold_season_macro_cold_start_still_raises_when_runway_too_short():
+    # Regression guard for the couch-to-race/unrealistic-goal protection:
+    # with NO existing_macro (a genuine fresh build), the hard raise is
+    # completely unchanged, even with established_base=True.
+    athlete = make_athlete(sports=["bike"])
+    imminent_a = _make_season_event(name="Imminent A", event_date=START + timedelta(weeks=1), priority="A")
+    later_b = _make_season_event(name="Later B", event_date=START + timedelta(weeks=10))
+    with pytest.raises(ValueError, match="A-priority race 'Imminent A'"):
+        scaffold_season_macro(
+            athlete, [imminent_a, later_b], START, current_weekly_volume_m=300,
+            established_base=True, existing_macro=None,
+        )
+
+
+def test_scaffold_season_macro_established_base_false_still_raises_even_with_existing_macro():
+    # The other half of the couch-to-race guardrail: an existing_macro that
+    # covers race 1 (so extend mode DOES turn on) must still hard-raise on a
+    # too-short A-tier runway further down the chain when established_base
+    # is false -- the item-2 degrade is gated on established_base, not on
+    # extend mode alone.
+    athlete = make_athlete(sports=["bike"])
+    original_start = START
+    peak_weekend = _make_season_event(
+        name="Peak Weekend", event_date=original_start + timedelta(weeks=5), priority="A"
+    )
+    existing_macro = scaffold_sharpening_macro(athlete, peak_weekend, original_start, 300)
+
+    new_start = original_start + timedelta(days=9)
+    peak_monday = _monday_of_week(peak_weekend.event_date)
+    cursor_start = peak_monday + timedelta(weeks=1)
+    # Only 2 weeks of runway for race 2 -- below SHARPENING_MIN_MACRO_WEEKS.
+    tight_a = _make_season_event(
+        name="Tight A", event_date=cursor_start + timedelta(weeks=2), priority="A"
+    )
+
+    with pytest.raises(ValueError, match="A-priority race 'Tight A'"):
+        scaffold_season_macro(
+            athlete, [peak_weekend, tight_a], new_start, current_weekly_volume_m=300,
+            established_base=False, existing_macro=existing_macro,
+        )
+
+
+def test_scaffold_season_macro_extend_mode_degrades_runway_raise_to_warning():
+    # IDEA 018 item 2: the SAME too-short-runway shape as the test above,
+    # but established_base=True -- degrades to a warning and folds the race
+    # in instead of aborting the whole chain. The warning is real and
+    # surfaced, never silently dropped.
+    athlete = make_athlete(sports=["bike"])
+    original_start = START
+    peak_weekend = _make_season_event(
+        name="Peak Weekend", event_date=original_start + timedelta(weeks=5), priority="A"
+    )
+    existing_macro = scaffold_sharpening_macro(athlete, peak_weekend, original_start, 300)
+
+    new_start = original_start + timedelta(days=9)
+    peak_monday = _monday_of_week(peak_weekend.event_date)
+    cursor_start = peak_monday + timedelta(weeks=1)
+    tight_a = _make_season_event(
+        name="Tight A", event_date=cursor_start + timedelta(weeks=2), priority="A"
+    )
+
+    macro, season_warnings = scaffold_season_macro(
+        athlete, [peak_weekend, tight_a], new_start, current_weekly_volume_m=300,
+        established_base=True, existing_macro=existing_macro,
+    )
+
+    assert len(season_warnings) == 1
+    assert "Tight A" in season_warnings[0]
+    assert "established" in season_warnings[0].lower()
+    # No DEDICATED cycle for the folded-in race -- same posture the B/C
+    # tiers already have below their own minimum runway. It's the last race
+    # in the chain, so it still gets the ordinary trailing "hold" filler
+    # (same as test_scaffold_season_macro_trailing_block_added_when_final_
+    # race_has_no_dedicated_cycle above), just no sharpen/taper/build shape.
+    tight_a_blocks = [b for b in macro.blocks if b.race_event_id == tight_a.id]
+    assert len(tight_a_blocks) == 1
+    assert tight_a_blocks[0].name == "hold"
+    # Race 1's own reused coverage is untouched by the degrade.
+    assert any(b.race_event_id == peak_weekend.id for b in macro.blocks)
+
+
+def test_scaffold_season_macro_reuses_tagged_subset_from_existing_season_macro():
+    # IDEA 018 item 1's second coverage shape: existing_macro is itself a
+    # PRIOR season macro (blocks tagged via race_event_id, not a legacy
+    # single-race macro) -- only race 1's own tagged subset is reused, not
+    # the whole prior macro (which also covers a second race).
+    athlete = make_athlete(sports=["bike"])
+    race1 = _make_season_event(name="Race 1", event_date=START + timedelta(weeks=14), priority="A")
+    race2 = _make_season_event(name="Race 2", event_date=START + timedelta(weeks=18), priority="B")
+    initial_macro, initial_warnings = scaffold_season_macro(
+        athlete, [race1, race2], START, current_weekly_volume_m=1000, established_base=True,
+        peak_weekly_volume_m=2000,
+    )
+    assert initial_warnings == []
+    race1_tagged = [b for b in initial_macro.blocks if b.race_event_id == race1.id]
+    race2_tagged = [b for b in initial_macro.blocks if b.race_event_id == race2.id]
+    assert race1_tagged and race2_tagged  # precondition: both got dedicated cycles
+
+    race3 = _make_season_event(name="Race 3", event_date=START + timedelta(weeks=22), priority="C")
+    new_start = START + timedelta(days=3)
+    macro, season_warnings = scaffold_season_macro(
+        athlete, [race1, race2, race3], new_start, current_weekly_volume_m=1000,
+        established_base=True, peak_weekly_volume_m=2000, existing_macro=initial_macro,
+    )
+
+    assert season_warnings == []
+    # Exactly race 1's own tagged subset was reused (the SAME block objects,
+    # in order) -- not race 2's blocks, and not a blind reuse of the whole
+    # prior macro.
+    assert macro.blocks[: len(race1_tagged)] == race1_tagged
+    assert all(b.race_event_id == race1.id for b in macro.blocks[: len(race1_tagged)])
+    assert race3.id in macro.event_ids
+
+
+# --- IDEA 018, corrected 2026-09-19: coverage matched by race IDENTITY, ------------
+# --- not races_sorted[0] position (real design flaw Andrew caught) ----------------
+#
+# The original version of this build hard-coded the reuse check to
+# races_sorted[0] -- "the athlete has exactly one race already on file, and
+# it's always chronologically first in the new request." That breaks for
+# adding a race that falls BEFORE an already-covered one, a season macro
+# with 2+ already-covered races getting a new one inserted anywhere but the
+# front, and exposes a genuine scheduling-conflict case that needs its own
+# explicit refusal. These tests pin the corrected, generalized mechanism.
+
+
+def test_scaffold_season_macro_reuses_existing_coverage_not_at_list_position_zero():
+    # The exact regression Andrew's own example describes: "I decided to...
+    # do a big ride for fun" scheduled AHEAD of an already-covered race.
+    # Peak Weekend is races_sorted[1] here, not races_sorted[0] -- the old
+    # index-0-only design would silently re-derive it (the original bug,
+    # unfixed); the corrected design must still find and reuse it. Fun
+    # Ride's own tiny window is chosen to NOT collide with Peak Weekend's
+    # real reserved coverage (that's a separate mechanism, pinned by its own
+    # dedicated tests below) -- this test is isolated to the reuse-by-
+    # identity behavior alone.
+    athlete = make_athlete(sports=["bike"])
+    original_start = START
+    peak_weekend = _make_season_event(
+        name="Peak Weekend", event_date=original_start + timedelta(weeks=15), priority="A"
+    )
+    # Peak Weekend's real, existing coverage doesn't start until week 3 --
+    # simulating a macro built a few weeks into the future, same as any
+    # real athlete's plan can be.
+    existing_macro = scaffold_macro(
+        athlete, peak_weekend, original_start + timedelta(weeks=3),
+        current_weekly_volume_m=1000, peak_weekly_volume_m=2000,
+    )
+    original_snapshot = [
+        (b.name, b.start_date, b.end_date, b.weekly_volume_target_m) for b in existing_macro.blocks
+    ]
+
+    new_start = original_start
+    fun_ride = _make_season_event(
+        name="Fun Ride", event_date=new_start + timedelta(days=5), priority="C"
+    )
+    assert fun_ride.event_date < peak_weekend.event_date  # chronologically first
+
+    macro, season_warnings = scaffold_season_macro(
+        athlete, [fun_ride, peak_weekend], new_start, current_weekly_volume_m=300,
+        established_base=True, existing_macro=existing_macro,
+    )
+
+    assert season_warnings == []
+    peak_blocks = [b for b in macro.blocks if b.race_event_id == peak_weekend.id]
+    reused_snapshot = [
+        (b.name, b.start_date, b.end_date, b.weekly_volume_target_m) for b in peak_blocks
+    ]
+    assert reused_snapshot == original_snapshot  # byte-for-byte preserved, NOT re-derived
+    assert macro.event_ids == [fun_ride.id, peak_weekend.id]
+
+
+def test_scaffold_season_macro_new_race_inserted_between_two_already_covered_races():
+    # A season macro with 2+ already-covered races, adding a 3rd race in
+    # the MIDDLE (not the front or the back): both original races' coverage
+    # must be independently reused at their own real dates -- only the new
+    # middle race gets freshly built (or, here, folded in -- it's tier C).
+    # Race 3 sits close enough to Race 2's own reserved coverage that its
+    # own hypothetical build would run into it -- since Race 2 is tier "B"
+    # (not "A"), this degrades to a warning (the collision mechanism, see
+    # the dedicated collision tests below) rather than blocking the call;
+    # Race 1's and Race 2's own real coverage are untouched either way.
+    athlete = make_athlete(sports=["bike"])
+    race1 = _make_season_event(name="Race 1", event_date=START + timedelta(weeks=14), priority="A")
+    race2 = _make_season_event(name="Race 2", event_date=START + timedelta(weeks=18), priority="B")
+    initial_macro, initial_warnings = scaffold_season_macro(
+        athlete, [race1, race2], START, current_weekly_volume_m=1000, established_base=True,
+        peak_weekly_volume_m=2000,
+    )
+    assert initial_warnings == []
+    race1_tagged = [b for b in initial_macro.blocks if b.race_event_id == race1.id]
+    race2_tagged = [b for b in initial_macro.blocks if b.race_event_id == race2.id]
+    assert race1_tagged and race2_tagged
+
+    race3 = _make_season_event(
+        name="Race 3 (new, middle)", event_date=START + timedelta(weeks=16), priority="C"
+    )
+    new_start = START + timedelta(days=3)
+
+    macro, season_warnings = scaffold_season_macro(
+        athlete, [race1, race2, race3], new_start, current_weekly_volume_m=1000,
+        established_base=True, peak_weekly_volume_m=2000, existing_macro=initial_macro,
+    )
+
+    assert len(season_warnings) == 1
+    assert "Race 3 (new, middle)" in season_warnings[0]
+    assert "Race 2" in season_warnings[0]
+    race1_reused = [b for b in macro.blocks if b.race_event_id == race1.id]
+    race2_reused = [b for b in macro.blocks if b.race_event_id == race2.id]
+    # Both original races reused byte-for-byte (the SAME block objects) --
+    # race 2 specifically is proof this isn't just "index 0 still works":
+    # it's races_sorted[-1] here, and its coverage must still be reused
+    # rather than re-derived just because a new race was inserted before it.
+    assert race1_reused == race1_tagged
+    assert race2_reused == race2_tagged
+    assert macro.event_ids == [race1.id, race3.id, race2.id]  # chronological order
+    # Race 3 (tier C, folded in) gets no dedicated block of its own -- its
+    # date is already covered by race1's/race2's own reused blocks either
+    # side of it.
+    assert all(b.race_event_id != race3.id for b in macro.blocks)
+
+
+def test_scaffold_season_macro_two_a_tier_races_too_close_raises_even_with_established_base():
+    # IDEA 018, second correction (2026-09-19): NOT a generic overlap error
+    # -- a race squeezed against a LATER race's real, reserved coverage only
+    # ever hard-refuses when BOTH races are priority "A" (real goal, real
+    # peak form, silently disappearing under a warning is the failure mode
+    # to avoid). This is that exact case: race_a's own cycle would run
+    # right into race_b's real, already-persisted "A"-tier coverage, even
+    # though established_base=True and extend mode is on.
+    athlete = make_athlete(sports=["bike"])
+    race_b = _make_season_event(name="Race B", event_date=START + timedelta(weeks=20), priority="A")
+    existing_macro = scaffold_macro(
+        athlete, race_b, START, current_weekly_volume_m=1000, peak_weekly_volume_m=2000
+    )
+    # Race B's real, already-persisted coverage starts right at START.
+    assert existing_macro.blocks[0].start_date == START
+
+    new_start = START + timedelta(weeks=2)
+    race_a = _make_season_event(
+        name="Race A (new)", event_date=new_start + timedelta(weeks=5), priority="A"
+    )
+    assert race_a.event_date < race_b.event_date  # race_a is processed first
+
+    with pytest.raises(ValueError, match=r"too close together for both to reach real peak form"):
+        scaffold_season_macro(
+            athlete, [race_a, race_b], new_start, current_weekly_volume_m=1000,
+            established_base=True, peak_weekly_volume_m=2000, existing_macro=existing_macro,
+        )
+
+
+def test_scaffold_season_macro_a_tier_race_squeezed_by_reserved_b_tier_degrades_to_warning():
+    # The SAME shape of squeeze as the test above, but the reserved race
+    # this race's build would run into is priority "B" (not "A") -- no
+    # A-vs-A proximity, so this degrades to a warning exactly like item 2's
+    # own too-short-runway case, instead of raising. The reserved race's
+    # own coverage is completely untouched.
+    athlete = make_athlete(sports=["bike"])
+    race_b = _make_season_event(name="Race B", event_date=START + timedelta(weeks=20), priority="B")
+    existing_macro = scaffold_macro(
+        athlete, race_b, START, current_weekly_volume_m=1000, peak_weekly_volume_m=2000
+    )
+    original_snapshot = [
+        (b.name, b.start_date, b.end_date, b.weekly_volume_target_m) for b in existing_macro.blocks
+    ]
+
+    new_start = START + timedelta(weeks=2)
+    race_a = _make_season_event(
+        name="Race A (new)", event_date=new_start + timedelta(weeks=5), priority="A"
+    )
+    assert race_a.event_date < race_b.event_date
+
+    macro, season_warnings = scaffold_season_macro(
+        athlete, [race_a, race_b], new_start, current_weekly_volume_m=1000,
+        established_base=True, peak_weekly_volume_m=2000, existing_macro=existing_macro,
+    )
+
+    assert len(season_warnings) == 1
+    assert "Race A (new)" in season_warnings[0]
+    assert "Race B" in season_warnings[0]
+    # No dedicated cycle for race_a -- folded in.
+    assert all(b.race_event_id != race_a.id for b in macro.blocks)
+    # Race B's own reserved coverage is completely untouched.
+    race_b_blocks = [b for b in macro.blocks if b.race_event_id == race_b.id]
+    reused_snapshot = [
+        (b.name, b.start_date, b.end_date, b.weekly_volume_target_m) for b in race_b_blocks
+    ]
+    assert reused_snapshot == original_snapshot
+
+
+def test_scaffold_season_macro_a_tier_race_squeezed_by_reserved_race_raises_when_no_established_base():
+    # Same squeeze as the two tests above, but established_base=False --
+    # the ordinary insufficient-base refusal, NOT the new A-vs-A message --
+    # established_base=False must never get the graceful (or the A-vs-A)
+    # treatment, extend mode included.
+    athlete = make_athlete(sports=["bike"])
+    race_b = _make_season_event(name="Race B", event_date=START + timedelta(weeks=20), priority="B")
+    existing_macro = scaffold_macro(
+        athlete, race_b, START, current_weekly_volume_m=1000, peak_weekly_volume_m=2000
+    )
+
+    new_start = START + timedelta(weeks=2)
+    race_a = _make_season_event(
+        name="Race A (new)", event_date=new_start + timedelta(weeks=5), priority="A"
+    )
+
+    with pytest.raises(ValueError, match=r"does not show an established base"):
+        scaffold_season_macro(
+            athlete, [race_a, race_b], new_start, current_weekly_volume_m=1000,
+            established_base=False, peak_weekly_volume_m=2000, existing_macro=existing_macro,
+        )
 
 
 # --- Mandatory correctness property #3: zero regression to scaffold_macro's ----------
