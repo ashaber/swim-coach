@@ -3751,6 +3751,85 @@ describe('renderMacroSection week-count (macro-block off-by-one fix)', () => {
   });
 });
 
+// --- Season-spanning macro: every race gets its own marker, not just one --
+// Andrew, live, 2026-09-17: after building a season-spanning macro
+// (draft_season_macro_plan) across three real races (Peak Weekend Oct 17,
+// Halloween Weekend Oct 31 -- B-priority, no dedicated block, raced on
+// residual form -- and Season Finale Nov 21), the Plan tab's macro view
+// only ever showed Peak Weekend. Root cause: renderMacroSection only ever
+// rendered ONE race (`macroTargetEvent`'s single pick), never read
+// `MacroPlan.event_ids` (the full season race list the engine already
+// computes). Shapes below mirror the real conversation's real dates/names.
+
+describe('renderMacroSection: season-spanning macro shows every race (not just one)', () => {
+  const PEAK = { id: 'evt-peak', name: 'Masters Cyclocross Series - Peak Weekend', event_date: '2026-10-17', primary_sport: 'bike' };
+  const HALLOWEEN = { id: 'evt-halloween', name: 'Halloween Weekend', event_date: '2026-10-31', primary_sport: 'bike' };
+  const FINALE = { id: 'evt-finale', name: 'Season Finale', event_date: '2026-11-21', primary_sport: 'bike' };
+
+  const SEASON_BLOCKS = [
+    { name: 'sharpen', focus: 'race-specific sharpening', start_date: '2026-09-14', end_date: '2026-09-27', weekly_volume_target_m: 540, race_event_id: null },
+    { name: 'taper', focus: 'taper', start_date: '2026-09-28', end_date: '2026-10-11', weekly_volume_target_m: 270, race_event_id: 'evt-peak' },
+    { name: 'sharpen', focus: 'race-specific sharpening', start_date: '2026-10-19', end_date: '2026-11-08', weekly_volume_target_m: 270, race_event_id: null },
+    { name: 'taper', focus: 'taper', start_date: '2026-11-09', end_date: '2026-11-15', weekly_volume_target_m: 202, race_event_id: 'evt-finale' },
+  ];
+
+  const seasonMacro = {
+    blocks: SEASON_BLOCKS,
+    event_id: 'evt-finale', // the model's own convention: final race in a season macro
+    event_ids: ['evt-peak', 'evt-halloween', 'evt-finale'],
+  };
+
+  function planData(macro, events) {
+    return { athlete: { name: 'Andrew' }, events, macro, weeks: [] };
+  }
+
+  it('shows all three real races, not just the final/target one', () => {
+    const html = renderApp(planData(seasonMacro, [PEAK, HALLOWEEN, FINALE]), null);
+    expect(html).toContain('Masters Cyclocross Series - Peak Weekend');
+    expect(html).toContain('Halloween Weekend');
+    expect(html).toContain('Season Finale');
+  });
+
+  it('places the B-priority race with no dedicated block between the two sharpen/taper cycles, in real chronological order', () => {
+    const html = renderApp(planData(seasonMacro, [PEAK, HALLOWEEN, FINALE]), null);
+    // "Season Finale" is `macro.event_id`'s own target (the model's own
+    // convention: the final race in a season macro), so it also legitimately
+    // appears once up in the masthead's "Ultra-distance build toward..."
+    // countdown, well before the macro section renders at all -- search
+    // for its macro-section occurrence specifically (after the second
+    // sharpen block's own text), not the first occurrence anywhere on the
+    // page.
+    const peakIdx = html.indexOf('Masters Cyclocross Series - Peak Weekend');
+    const halloweenIdx = html.indexOf('Halloween Weekend');
+    const secondSharpenIdx = html.indexOf('Oct 19');
+    const financeIdx = html.indexOf('Season Finale', secondSharpenIdx);
+    expect(peakIdx).toBeGreaterThan(-1);
+    expect(halloweenIdx).toBeGreaterThan(peakIdx);
+    expect(halloweenIdx).toBeLessThan(secondSharpenIdx);
+    expect(financeIdx).toBeGreaterThan(secondSharpenIdx);
+  });
+
+  it('an id in event_ids with no matching Event is dropped, not rendered broken', () => {
+    const macroWithGhost = { ...seasonMacro, event_ids: [...seasonMacro.event_ids, 'evt-deleted'] };
+    const html = renderApp(planData(macroWithGhost, [PEAK, HALLOWEEN, FINALE]), null);
+    expect(html).toContain('Halloween Weekend');
+    expect(html).not.toContain('undefined');
+  });
+
+  it('a legacy single-race macro (no event_ids) still shows exactly its one race, unchanged', () => {
+    const legacyMacro = {
+      blocks: [{ name: 'base', focus: 'aerobic base', start_date: '2026-08-01', end_date: '2026-08-14', weekly_volume_target_m: 10000 }],
+      event_id: 'evt-peak',
+      event_ids: [],
+    };
+    const html = renderApp(planData(legacyMacro, [PEAK, HALLOWEEN, FINALE]), null);
+    expect(html).toContain('Masters Cyclocross Series - Peak Weekend');
+    expect(html).not.toContain('Halloween Weekend');
+    expect(html).not.toContain('Season Finale');
+    expect((html.match(/class="block race"/g) || []).length).toBe(1);
+  });
+});
+
 describe('weekly volume target is sport-aware (defect 3: swim meters on a bike week)', () => {
   const FUTURE = '2099-W01';
   const monday = isoWeekMonday(FUTURE);
