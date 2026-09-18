@@ -32,7 +32,7 @@ from swim_coach.models import (
     WorkoutTarget,
 )
 from swim_coach import fueling as fueling_module
-from swim_coach.plan import SESSION_ADJUSTMENT_INCREASE_CAP_PCT, generate_week
+from swim_coach.plan import SESSION_ADJUSTMENT_INCREASE_CAP_PCT, _monday_of_week, generate_week
 from swim_coach.store import FileStore
 
 from app.tools import (
@@ -2912,6 +2912,163 @@ def test_draft_season_macro_plan_real_andrew_cx_calendar_end_to_end(athletes_dir
             )
         else:
             assert gap_days == 1, f"unexpected gap between {prev.name} and {curr.name}"
+
+
+# --- IDEA 018: extend-an-active-plan mode, through the REAL tool handler ------------
+#
+# `test_scaffold_season_macro_*` in tests/unit/test_plan.py already pins the
+# engine function's own behavior directly. These exercise the actual real
+# failure path end-to-end: `_handle_draft_season_macro_plan` itself now
+# loads `existing_macro` BEFORE calling `scaffold_season_macro` and threads
+# it through, and surfaces the new `warnings` list in its result dict -- both
+# real handler-level changes with no coverage until these tests.
+
+
+def test_draft_season_macro_plan_extends_existing_legacy_macro_end_to_end(athletes_dir) -> None:
+    # The exact real repro (IDEA 018), driven through the actual tool the
+    # coach calls: Peak Weekend already has a real, persisted legacy
+    # single-race (sharpen/taper) macro from an earlier draft_macro_plan
+    # call. Re-running draft_season_macro_plan a few days later to add two
+    # more races must EXTEND that macro -- reuse Peak Weekend's real
+    # coverage byte-for-byte -- instead of re-deriving it and hard-refusing
+    # on its now-stale runway.
+    store = FileStore(base_dir=athletes_dir)
+    slug = "andrew"
+    athlete = store.load_athlete(slug)
+    _clear_workouts(athletes_dir, slug)
+    _log_consistent_bike_history(store, slug, athlete.id, weeks=20, as_of=_SHARPENING_AS_OF)
+    peak_weekend = _add_bike_event(
+        store, slug, athlete.id, name="Peak Weekend",
+        event_date=_SHARPENING_AS_OF + timedelta(weeks=5), priority="A",
+    )
+    handlers = build_tool_handlers(store, slug=slug, expert_mode=False)
+
+    # Build the real, currently-persisted legacy single-race macro first --
+    # same tool (draft_macro_plan, unchanged, out of scope for this build)
+    # Andrew's real season macro was originally built with.
+    legacy_result = handlers["draft_macro_plan"](
+        {
+            "event_name": "Peak Weekend",
+            "current_weekly_volume_m": 300,
+            "start_date": _SHARPENING_AS_OF.isoformat(),
+        }
+    )
+    assert "error" not in legacy_result
+    assert legacy_result["shape"] == "hold_sharpen_taper"  # the real 2-block sharpen/taper shape
+    legacy_macro = FileStore(base_dir=athletes_dir).load_macro(slug)
+    assert legacy_macro is not None
+    assert legacy_macro.event_id == peak_weekend.id
+    assert all(b.race_event_id is None for b in legacy_macro.blocks)
+    original_snapshot = [
+        (b.name, b.start_date, b.end_date, b.weekly_volume_target_m) for b in legacy_macro.blocks
+    ]
+
+    halloween_weekend = _add_bike_event(
+        store, slug, athlete.id, name="Halloween Weekend",
+        event_date=peak_weekend.event_date + timedelta(weeks=2), priority="B",
+    )
+    season_finale = _add_bike_event(
+        store, slug, athlete.id, name="Season Finale",
+        event_date=peak_weekend.event_date + timedelta(weeks=5), priority="B",
+    )
+
+    # "A few days later": from this later start, Peak Weekend's own runway
+    # has shrunk below SHARPENING_MIN_MACRO_WEEKS -- exactly the real
+    # logged failure. Calling draft_season_macro_plan directly with
+    # confirm=True (as the coordinator's repro does) must now succeed.
+    new_start = _SHARPENING_AS_OF + timedelta(days=9)
+    result = handlers["draft_season_macro_plan"](
+        {
+            "event_names": ["Peak Weekend", "Halloween Weekend", "Season Finale"],
+            "current_weekly_volume_m": 300,
+            "start_date": new_start.isoformat(),
+            "confirm": True,
+        }
+    )
+
+    assert "error" not in result
+    assert result["persisted"] is True
+    # No degrade needed here -- race 1 is fully reused, not folded in --
+    # so the warnings list is present but empty, never silently omitted.
+    assert result["warnings"] == []
+
+    got_dedicated = {r["event_name"]: r["got_dedicated_cycle"] for r in result["race_summary"]}
+    assert got_dedicated["Peak Weekend"] is True
+
+    reloaded = FileStore(base_dir=athletes_dir).load_macro(slug)
+    assert reloaded is not None
+    assert reloaded.event_ids == [peak_weekend.id, halloween_weekend.id, season_finale.id]
+    peak_blocks = [b for b in reloaded.blocks if b.race_event_id == peak_weekend.id]
+    assert len(peak_blocks) == 2
+    reused_snapshot = [
+        (b.name, b.start_date, b.end_date, b.weekly_volume_target_m) for b in peak_blocks
+    ]
+    assert reused_snapshot == original_snapshot  # byte-for-byte preserved
+    assert any(b.race_event_id == season_finale.id for b in reloaded.blocks)
+
+
+def test_draft_season_macro_plan_surfaces_extend_mode_degrade_warning(athletes_dir) -> None:
+    # IDEA 018 item 2, through the real handler: extending an active plan
+    # with established_base=True degrades a too-short A-tier runway further
+    # down the chain to a warning instead of aborting the whole call -- and
+    # that warning is actually present in the tool's own result dict, never
+    # silently dropped.
+    store = FileStore(base_dir=athletes_dir)
+    slug = "andrew"
+    athlete = store.load_athlete(slug)
+    _clear_workouts(athletes_dir, slug)
+    _log_consistent_bike_history(store, slug, athlete.id, weeks=20, as_of=_SHARPENING_AS_OF)
+    peak_weekend = _add_bike_event(
+        store, slug, athlete.id, name="Peak Weekend",
+        event_date=_SHARPENING_AS_OF + timedelta(weeks=5), priority="A",
+    )
+    handlers = build_tool_handlers(store, slug=slug, expert_mode=False)
+
+    legacy_result = handlers["draft_macro_plan"](
+        {
+            "event_name": "Peak Weekend",
+            "current_weekly_volume_m": 300,
+            "start_date": _SHARPENING_AS_OF.isoformat(),
+        }
+    )
+    assert "error" not in legacy_result
+
+    peak_monday = _monday_of_week(peak_weekend.event_date)
+    cursor_start = peak_monday + timedelta(weeks=1)
+    # Only 2 weeks of runway for this second race -- below
+    # SHARPENING_MIN_MACRO_WEEKS (4).
+    tight_a = _add_bike_event(
+        store, slug, athlete.id, name="Tight A",
+        event_date=cursor_start + timedelta(weeks=2), priority="A",
+    )
+
+    new_start = _SHARPENING_AS_OF + timedelta(days=9)
+    result = handlers["draft_season_macro_plan"](
+        {
+            "event_names": ["Peak Weekend", "Tight A"],
+            "current_weekly_volume_m": 300,
+            "start_date": new_start.isoformat(),
+            "confirm": True,
+        }
+    )
+
+    assert "error" not in result
+    assert result["persisted"] is True
+    assert len(result["warnings"]) == 1
+    assert "Tight A" in result["warnings"][0]
+    got_dedicated = {r["event_name"]: r["got_dedicated_cycle"] for r in result["race_summary"]}
+    assert got_dedicated["Peak Weekend"] is True
+    # "Tight A" got no dedicated (sharpen/taper) cycle -- it's the LAST race
+    # in this chain though, so it still gets the ordinary trailing "hold"
+    # filler tagged with its own id (same pre-existing, unrelated mechanism
+    # tests/unit/test_plan.py's own
+    # test_scaffold_season_macro_trailing_block_added_when_final_race_has_
+    # no_dedicated_cycle pins) -- distinguish "got a real dedicated shape"
+    # from "just the automatic trailing filler" by block name, not presence.
+    reloaded = FileStore(base_dir=athletes_dir).load_macro(slug)
+    tight_a_blocks = [b for b in reloaded.blocks if b.race_event_id == tight_a.id]
+    assert len(tight_a_blocks) == 1
+    assert tight_a_blocks[0].name == "hold"
 
 
 def test_draft_season_macro_plan_missing_current_weekly_volume_is_an_error(athletes_dir) -> None:
