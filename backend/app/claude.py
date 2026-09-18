@@ -274,12 +274,31 @@ class ClaudeChat:
                 # generated, not a secret) + whether the result carried an
                 # "error" key, so a repeated-failure pattern is visible in
                 # logs without needing a full transcript replay.
+                #
+                # `error`/`persisted` added (2026-09-18, real incident): a
+                # season-spanning macro plan's `confirm: true` follow-up was
+                # narrated to the athlete as "Persisted"/"verified" twice in
+                # one evening, but the real production DB never changed --
+                # `had_error=False` alone can't distinguish "actually wrote"
+                # from "returned a clean draft-only result" (a
+                # draft-then-confirm tool's own `persisted: False`/`True`
+                # field, when present, is the one thing that actually
+                # answers "did this write anything"). Root-causing that
+                # incident required reconstructing failures from truncated
+                # `input_summary` alone with no real error text at all --
+                # both gaps close here: the tool's own error message (not
+                # just whether one exists) and its own `persisted` verdict
+                # (when the result shape carries one) are now logged
+                # directly, so the next incident doesn't need DB/log
+                # archaeology to diagnose.
                 log.info(
                     "tool call",
                     iteration=iteration,
                     tool=block.name,
                     input_summary=json.dumps(block.input, default=str)[:500],
                     had_error=isinstance(result, dict) and "error" in result,
+                    error=(result.get("error") if isinstance(result, dict) else None),
+                    persisted=(result.get("persisted") if isinstance(result, dict) else None),
                 )
                 tool_results.append(
                     {

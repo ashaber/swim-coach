@@ -194,6 +194,87 @@ def test_tool_call_log_had_error_false_on_success(capsys) -> None:
     assert logged[0]["had_error"] is False
 
 
+def test_tool_call_log_carries_the_real_error_text_not_just_the_boolean(capsys) -> None:
+    # Real incident, 2026-09-18: `had_error` alone was enough to see THAT
+    # replace_week_plan kept failing, but root-causing WHY required
+    # reconstructing the failure from a truncated `input_summary` with no
+    # error text at all -- this closes that gap.
+    settings = _settings()
+    tool_use = make_tool_use_block("t1", "replace_week_plan", {"iso_week": "2026-W30"})
+    final = make_final_message([tool_use], "tool_use")
+    end_final = make_final_message([make_text_block("done")], "end_turn")
+    client = FakeAnthropicClient([([], final), (["done"], end_final)])
+    chat = ClaudeChat(settings, client=client)
+
+    handlers = {"replace_week_plan": lambda _input: {"error": "no such week: 2026-W30"}}
+    list(chat.run_streaming([], [{"role": "user", "content": "x"}], [{"name": "replace_week_plan"}], handlers))
+
+    logged = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("{") and json.loads(line).get("msg") == "tool call"
+    ]
+    assert len(logged) == 1
+    assert logged[0]["had_error"] is True
+    assert logged[0]["error"] == "no such week: 2026-W30"
+
+
+def test_tool_call_log_surfaces_the_tools_own_persisted_verdict(capsys) -> None:
+    # Real incident, 2026-09-18: draft_season_macro_plan's `confirm: true`
+    # follow-up was narrated to the athlete as "Persisted"/"verified" twice
+    # in one evening, but the real DB never changed -- `had_error=False`
+    # alone can't distinguish "actually wrote" from "returned a clean
+    # draft-only result" for a draft-then-confirm tool. Logging the tool's
+    # own `persisted` field directly answers "did this write anything"
+    # without needing to reconstruct it from the database after the fact.
+    settings = _settings()
+    tool_use = make_tool_use_block("t1", "draft_season_macro_plan", {"confirm": True})
+    final = make_final_message([tool_use], "tool_use")
+    end_final = make_final_message([make_text_block("done")], "end_turn")
+    client = FakeAnthropicClient([([], final), (["done"], end_final)])
+    chat = ClaudeChat(settings, client=client)
+
+    handlers = {"draft_season_macro_plan": lambda _input: {"persisted": False, "coverage": {}}}
+    list(
+        chat.run_streaming(
+            [], [{"role": "user", "content": "x"}], [{"name": "draft_season_macro_plan"}], handlers
+        )
+    )
+
+    logged = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("{") and json.loads(line).get("msg") == "tool call"
+    ]
+    assert len(logged) == 1
+    assert logged[0]["had_error"] is False
+    assert logged[0]["persisted"] is False
+
+
+def test_tool_call_log_persisted_is_null_for_a_tool_result_with_no_such_field(capsys) -> None:
+    # A read-only tool's result (e.g. get_plan_summary) has no `persisted`
+    # concept at all -- must log a real null, not crash or fabricate False
+    # (which would misleadingly read as "this tried to persist and didn't").
+    settings = _settings()
+    tool_use = make_tool_use_block("t1", "get_plan_summary", {})
+    final = make_final_message([tool_use], "tool_use")
+    end_final = make_final_message([make_text_block("done")], "end_turn")
+    client = FakeAnthropicClient([([], final), (["done"], end_final)])
+    chat = ClaudeChat(settings, client=client)
+
+    handlers = {"get_plan_summary": lambda _input: {"ok": True}}
+    list(chat.run_streaming([], [{"role": "user", "content": "x"}], [{"name": "get_plan_summary"}], handlers))
+
+    logged = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("{") and json.loads(line).get("msg") == "tool call"
+    ]
+    assert len(logged) == 1
+    assert logged[0]["persisted"] is None
+    assert logged[0]["error"] is None
+
+
 def test_max_tokens_stop_reason_appends_visible_marker_and_warns(capsys) -> None:
     # Prod 2026-09-10: a "redraft this week" turn hit stop_reason=max_tokens
     # at exactly 16384 output tokens; the PWA showed a truncated answer with
