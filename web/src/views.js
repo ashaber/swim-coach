@@ -12,8 +12,10 @@ import {
   describeWellnessBaselineDeviation, describeCtlAtlTsbTrend, RACE_DAY_TSB_BAND,
   PRODUCTIVE_TRAINING_TSB_BAND, LOAD_CHART_WINDOW_DAYS, LOAD_CHART_WINDOW_OPTIONS,
   CTL_ATL_TREND_WINDOW_DAYS, formatMonthLabel, isFuelingPlanSession, parseFuelingSummary,
+  sessionIconKey,
 } from './plan.js';
 import { TOOL_LABELS } from './chat.js';
+import { renderSessionIcon } from './icons.js';
 import { renderChatMarkdown } from './markdown.js';
 import { buildHistoryFeed } from './history.js';
 import { sportHasPlannedDistance, sportCanPushToGarmin, sportUsesPace } from './sports.js';
@@ -49,12 +51,26 @@ export function loadTierLabel(tier) {
   return LOAD_TIER_LABELS[tier] || null;
 }
 
+// `key` selects the icon (src/icons.js) shown next to each label -- `null`
+// (race/milestone) falls back to the plain colored square, same as an
+// unrecognized session's marker does, since "highlighted" is a cross-
+// cutting override rather than its own session type/shape. Includes
+// bike/cross_train (previously missing from this legend even though both
+// are real Sport values with their own color -- see `renderPlanSessionDetail`'s/
+// `sessionDotColorVar`'s docstrings for why that's the exact gap that let
+// "bike" silently fall through to gray before src/sports.js existed) and
+// the two new heuristic-detected kinds (`nutrition`, `yoga` -- see
+// plan.js's `isFuelingPlanSession`/`isYogaSession`).
 const SESSION_LEGEND = [
-  { colorVar: '--c-pool', label: 'Coached pool (fixed)' },
-  { colorVar: '--c-ow', label: 'Open water (AI-set)' },
-  { colorVar: '--c-strength', label: 'Strength' },
-  { colorVar: '--c-recovery', label: 'Recovery' },
-  { colorVar: '--c-signal', label: 'Milestone / race' },
+  { key: 'swim_pool', colorVar: '--c-pool', label: 'Coached pool (fixed)' },
+  { key: 'swim_ow', colorVar: '--c-ow', label: 'Open water (AI-set)' },
+  { key: 'bike', colorVar: '--c-bike', label: 'Bike' },
+  { key: 'strength', colorVar: '--c-strength', label: 'Strength' },
+  { key: 'recovery', colorVar: '--c-recovery', label: 'Recovery' },
+  { key: 'cross_train', colorVar: '--c-cross-train', label: 'Cross-train (synced)' },
+  { key: 'nutrition', colorVar: '--c-nutrition', label: 'Fueling plan' },
+  { key: 'yoga', colorVar: '--c-yoga', label: 'Yoga / mobility' },
+  { key: null, colorVar: '--c-signal', label: 'Milestone / race' },
 ];
 
 function renderMasthead(athlete, event) {
@@ -80,10 +96,32 @@ function renderMasthead(athlete, event) {
     </header>`;
 }
 
+/** The session-type marker shared by the compact day-row list
+ * (`renderSession`) and the "Session types" legend (`renderLegendPanel`) --
+ * a single-color icon glyph (`src/icons.js`) tinted via `colorVar` when one
+ * exists for `iconKey`, else the original plain colored square (an
+ * unrecognized sport, or `null` for a heuristic key with no icon defined
+ * yet) -- same graceful degradation `sportColorVar`'s own `?? null`
+ * already had, never a broken/missing marker. */
+function renderSessionMarker(iconKey, colorVar) {
+  const icon = renderSessionIcon(iconKey);
+  if (icon) {
+    return `<span class="dot dot-icon" style="color:var(${colorVar})">${icon}</span>`;
+  }
+  return `<span class="dot" style="background:var(${colorVar})"></span>`;
+}
+
 function renderSession(session) {
   const classification = classifySession(session);
   const { title, detail } = sessionDisplay(session);
   const dotVar = sessionDotColorVar(session, classification);
+  // Shape still reflects the underlying session type even when highlighted
+  // (a race/milestone) -- `dotVar` above already carries the highlight's
+  // `--c-signal` override, so a race keeps its sport's icon (e.g. a
+  // swimmer for an open-water race) just recolored, rather than losing the
+  // shape information the "A Race"/"Milestone" tag alone doesn't convey
+  // at a glance in the compact day-row list.
+  const iconKey = sessionIconKey(session);
 
   const metaParts = [formatDuration(session.duration_min)];
   const distance = sportHasPlannedDistance(session.sport) ? formatDistance(session.distance_m) : null;
@@ -93,7 +131,7 @@ function renderSession(session) {
 
   return `
     <div class="sess${classification.highlight ? ' big' : ''}" data-a="session:open" data-id="${esc(session.id)}">
-      <span class="dot" style="background:var(${dotVar})"></span>
+      ${renderSessionMarker(iconKey, dotVar)}
       <div class="body">
         <div class="title">${esc(title)}${classification.tag ? `<span class="tag">${esc(classification.tag)}</span>` : ''}</div>
         <div class="meta mono">${metaParts.join(' · ')}</div>
@@ -1429,7 +1467,7 @@ function renderZonesPanel(athlete) {
 
 function renderLegendPanel() {
   const items = SESSION_LEGEND.map((item) => `
-    <span class="li"><span class="dot" style="background:var(${item.colorVar})"></span>${esc(item.label)}</span>`).join('');
+    <span class="li">${renderSessionMarker(item.key, item.colorVar)}${esc(item.label)}</span>`).join('');
   return `
     <div class="panel">
       <h3>Session types</h3>

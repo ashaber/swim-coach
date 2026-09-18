@@ -898,8 +898,11 @@ describe('renderApp plan session detail view (click-to-detail)', () => {
   // render it, even when a `load` field is (incorrectly) still passed in.
   it('never renders the training-load chart -- it moved to the Dashboard tab (Build 1)', () => {
     const html = renderApp({ ...PLAN_DATA, load: { status: 'ready', data: { ctl_atl_tsb: [['2026-08-01', 10, 5, 5]] } } }, null);
+    // Not a blanket "no <svg> anywhere" check -- the Plan tab's own
+    // "Session types" legend legitimately renders small icon <svg>s
+    // (web/fueling-session-render); `load-chart-svg` is the load chart's
+    // own unique class and the real, specific thing this test guards.
     expect(html).not.toContain('load-chart-svg');
-    expect(html).not.toContain('<svg');
   });
 
   it('renderSession emits a clickable data-a/data-id for each session row', () => {
@@ -3553,6 +3556,68 @@ describe('pre-event fueling-plan session rendering', () => {
     const html = renderApp(planWithSession(ordinary), 'plain-1');
     expect(html).toContain('some free-text notes with no recognized label');
     expect(html).not.toContain('fueling-segments');
+  });
+});
+
+// --- Session-type icon markers (color-square -> icon-glyph pass) -----------
+// Andrew, 2026-09-17: "switch from color squares to a graphic ... can be
+// simple, single color" -- the growing list of session kinds (now including
+// the fueling-plan/yoga heuristic tags above) needs shapes, not just colors,
+// to stay scannable. See src/icons.js/plan.js's sessionIconKey.
+
+describe('session-type icon markers', () => {
+  function planWithSession(session) {
+    return {
+      athlete: { name: 'Andrew' },
+      events: [],
+      macro: { blocks: [] },
+      weeks: [{
+        iso_week: '2099-W01', meso_block: 'base', focus: 'base',
+        target_volume_m: 0, sessions: [session], adaptation_rationale: null,
+      }],
+    };
+  }
+
+  const baseSession = (overrides) => ({
+    id: 'icon-1', date: '2099-01-02', source: 'ai_coach', distance_m: null,
+    intensity: { anchor: 'rpe' }, structure: null, structured: null, status: 'planned',
+    ...overrides,
+  });
+
+  it('renders an icon glyph (not just a plain colored square) for a real sport like bike', () => {
+    const session = baseSession({ sport: 'bike', duration_min: 60, purpose: 'endurance ride' });
+    const html = renderApp(planWithSession(session));
+    expect(html).toContain('dot-icon');
+    expect(html).toContain('session-icon');
+  });
+
+  it('a genuinely unrecognized sport still falls back to the plain colored square, not a broken/missing marker', () => {
+    const session = baseSession({ sport: 'kayak', duration_min: 45, purpose: 'paddle session' });
+    const html = renderApp(planWithSession(session));
+    // The compact row's marker for this session must be a plain dot, not
+    // an icon -- can't assert `not.toContain('dot-icon')` globally since
+    // the always-rendered legend panel has its own icon entries.
+    const rowIdx = html.indexOf('data-id="icon-1"');
+    const markerSnippet = html.slice(rowIdx, rowIdx + 200);
+    expect(markerSnippet).toContain('class="dot" style="background:var(--c-ink-faint)"');
+    expect(markerSnippet).not.toContain('dot-icon');
+  });
+
+  it('the "Session types" legend lists every real sport plus the fueling/yoga kinds, each with an icon', () => {
+    const session = baseSession({ sport: 'swim_pool', duration_min: 60, purpose: 'coached set' });
+    const html = renderApp(planWithSession(session));
+    expect(html).toContain('Coached pool (fixed)');
+    expect(html).toContain('Open water (AI-set)');
+    expect(html).toContain('Bike');
+    expect(html).toContain('Strength');
+    expect(html).toContain('Recovery');
+    expect(html).toContain('Cross-train (synced)');
+    expect(html).toContain('Fueling plan');
+    expect(html).toContain('Yoga / mobility');
+    expect(html).toContain('Milestone / race');
+    // The legend's own section, not just the day-row, carries icon markup.
+    const legendIdx = html.indexOf('Session types');
+    expect(html.slice(legendIdx, legendIdx + 4000)).toContain('session-icon');
   });
 });
 

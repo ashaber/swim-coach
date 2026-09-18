@@ -150,6 +150,35 @@ export function classifySession(session) {
   return { highlight: false, tag: null };
 }
 
+// Free-text purpose/structure match for a yoga/mobility session -- there is
+// no real backend `Sport` value or model field for this today (confirmed
+// against live production data, 2026-09-17: no persisted session anywhere
+// carries "yoga" in purpose or structure yet; these get added ad hoc by the
+// coach via patch_week_plan/merge_week_plan free text). Same class of
+// heuristic as `RACE_TAG_RE`/`FUELING_PLAN_PREFIX` above, weaker than the
+// fueling one (substring match on free text the coach writes, not a stable
+// engine-emitted prefix) -- expected to misfire on a session that merely
+// mentions yoga in passing, and to miss one phrased without the word at
+// all. Good enough for "give it a distinct icon when it says so plainly",
+// not a claim that this is a first-class session kind.
+const YOGA_RE = /\byoga\b/i;
+
+export function isYogaSession(session) {
+  return YOGA_RE.test(`${session.purpose || ''} ${session.structure || ''}`);
+}
+
+/** Which icon (see `src/icons.js`'s `ICON_PATHS`) represents this session.
+ * Nutrition/yoga are checked ahead of the underlying `sport` -- both are
+ * built with an ordinary real `Sport` value (`recovery`, see
+ * `isFuelingPlanSession`'s doc comment for why), so without this priority
+ * they'd be visually indistinguishable from a plain rest day, exactly the
+ * gap this whole pass exists to close. */
+export function sessionIconKey(session) {
+  if (isFuelingPlanSession(session)) return 'nutrition';
+  if (isYogaSession(session)) return 'yoga';
+  return session.sport;
+}
+
 /** Splits a pre-event fueling-plan Session's `structure` text (the exact
  * shape `render_fueling_plan_summary` writes, see `FUELING_PLAN_PREFIX`)
  * into `{ header, segments, warnings }` for structured rendering, instead
@@ -268,13 +297,23 @@ export function sessionDisplay(session) {
   return { title: deriveSessionTitle(session), detail, structure: session.structure || null };
 }
 
+/** Color for this session's marker -- `--c-signal` for a highlighted race/
+ * milestone, else the color belonging to `sessionIconKey`'s result.
+ * `nutrition`/`yoga` get their own tokens (`--c-nutrition`/`--c-yoga`,
+ * index.html) rather than inheriting the underlying `recovery` sport's
+ * color -- the whole point of tagging them is that they read as distinct
+ * types, not unlabeled rest days, and sharing a color would undercut that
+ * even with a different icon shape. Otherwise this is still `src/sports.js`
+ * as the one source of truth for real sports -- this used to be its own
+ * separate map here, which is exactly how "bike" got missed when it was
+ * added as a Sport (engine/cycling-coach): every bike session's dot
+ * silently fell through to the generic unknown-sport gray below,
+ * indistinguishable from actually-bad data. */
 export function sessionDotColorVar(session, classification) {
   if (classification.highlight) return '--c-signal';
-  // src/sports.js is the one source of truth now -- this used to be its
-  // own separate map here, which is exactly how "bike" got missed when it
-  // was added as a Sport (engine/cycling-coach): every bike session's dot
-  // silently fell through to the generic unknown-sport gray below,
-  // indistinguishable from actually-bad data.
+  const key = sessionIconKey(session);
+  if (key === 'nutrition') return '--c-nutrition';
+  if (key === 'yoga') return '--c-yoga';
   return sportColorVar(session.sport) || '--c-ink-faint';
 }
 

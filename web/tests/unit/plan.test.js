@@ -13,7 +13,7 @@ import {
   CTL_ATL_TREND_WINDOW_DAYS, CTL_TREND_FLAT_THRESHOLD, LOAD_CHART_WINDOW_DAYS,
   LOAD_CHART_WINDOW_OPTIONS, TSB_AXIS_DOMAIN, TSB_PANEL_RATIO, classifyTsbBand,
   formatMonthLabel, LOAD_CHART_HEIGHT, sessionDotColorVar,
-  isFuelingPlanSession, parseFuelingSummary,
+  isFuelingPlanSession, parseFuelingSummary, sessionIconKey, isYogaSession,
 } from '../../src/plan.js';
 
 // Real output of engine/swim_coach/fueling.py's render_fueling_plan_summary
@@ -627,6 +627,59 @@ describe('sessionDotColorVar', () => {
 
   it('a genuinely unrecognized sport still falls back gracefully', () => {
     expect(sessionDotColorVar(baseSession('kayak'), noHighlight)).toBe('--c-ink-faint');
+  });
+
+  it('gives a pre-event fueling-plan session its own color, not recovery\'s', () => {
+    const session = { ...baseSession('recovery'), structure: REAL_FUELING_STRUCTURE };
+    expect(sessionDotColorVar(session, noHighlight)).toBe('--c-nutrition');
+  });
+
+  it('gives a yoga session its own color, not recovery\'s', () => {
+    const session = { ...baseSession('recovery'), purpose: 'Yoga — 20 min mobility flow' };
+    expect(sessionDotColorVar(session, noHighlight)).toBe('--c-yoga');
+  });
+
+  it('a highlighted fueling/yoga session still wins to --c-signal', () => {
+    const session = { ...baseSession('recovery'), structure: REAL_FUELING_STRUCTURE };
+    expect(sessionDotColorVar(session, { highlight: true, tag: 'A' })).toBe('--c-signal');
+  });
+});
+
+describe('sessionIconKey', () => {
+  const baseSession = (sport) => ({ id: 's1', sport, purpose: 'x', date: '2026-09-14' });
+
+  it('resolves to the real sport for an ordinary session', () => {
+    expect(sessionIconKey(baseSession('bike'))).toBe('bike');
+    expect(sessionIconKey(baseSession('swim_pool'))).toBe('swim_pool');
+  });
+
+  it('resolves nutrition ahead of the underlying "recovery" sport', () => {
+    expect(sessionIconKey({ ...baseSession('recovery'), structure: REAL_FUELING_STRUCTURE })).toBe('nutrition');
+  });
+
+  it('resolves yoga ahead of the underlying sport, from either purpose or structure', () => {
+    expect(sessionIconKey({ ...baseSession('recovery'), purpose: 'Yoga — 20 min' })).toBe('yoga');
+    expect(sessionIconKey({ ...baseSession('strength'), purpose: 'mobility', structure: 'Yoga flow: sun salutations' })).toBe('yoga');
+  });
+
+  it('nutrition detection wins over yoga when (implausibly) both signals are present', () => {
+    const session = { ...baseSession('recovery'), purpose: 'Yoga session', structure: REAL_FUELING_STRUCTURE };
+    expect(sessionIconKey(session)).toBe('nutrition');
+  });
+});
+
+describe('isYogaSession', () => {
+  it('matches "yoga" case-insensitively in purpose', () => {
+    expect(isYogaSession({ purpose: 'YOGA -- recovery flow', structure: null })).toBe(true);
+  });
+  it('matches "yoga" in structure when purpose does not mention it', () => {
+    expect(isYogaSession({ purpose: 'mobility work', structure: 'Yoga: cat-cow, downward dog, child\'s pose' })).toBe(true);
+  });
+  it('does not match an unrelated recovery session', () => {
+    expect(isYogaSession({ purpose: 'full rest or gentle mobility', structure: null })).toBe(false);
+  });
+  it('does not match a substring that only contains "yoga" inside another word', () => {
+    expect(isYogaSession({ purpose: 'yogannnnn is not a real word', structure: null })).toBe(false);
   });
 });
 
