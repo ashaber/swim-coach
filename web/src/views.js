@@ -786,7 +786,40 @@ function weekRangeLabel(week) {
   return `${formatShortDate(first)}–${formatShortDate(last)}`;
 }
 
-function renderMacroSection(macro, event, weeks) {
+/** One `.block.race` marker card -- the same markup `renderMacroSection`
+ * always rendered for its single `event`, factored out so it can be
+ * rendered once per race (see that function's own docstring for why there
+ * can now be more than one). `flexWeight` controls the card's width via
+ * CSS flex, same units (relative "weeks") every training block already
+ * uses so a race card sits comparably sized among them. */
+function renderRaceMarkerCard(race, flexWeight) {
+  return `
+      <div class="block race" style="flex:${Math.max(1, Math.round(flexWeight))}">
+        <div class="rr"><span class="em">🏝️</span><span class="t">${esc(race.name.split(/[—(]/)[0].trim())}<br>${esc(formatShortDate(parseIsoDate(race.event_date)))}</span></div>
+      </div>`;
+}
+
+/** All the season's races this macro should show markers for, chronological
+ * order, real `Event` objects (never bare ids) -- `macro.event_ids`
+ * (engine/swim_coach/models.py's `MacroPlan.event_ids`, multi-race-season-
+ * macro build) when a season-spanning macro populated it, else the single
+ * `fallbackEvent` (every macro predating that build, or a single-race
+ * macro/`scaffold_macro`/`scaffold_sharpening_macro`) -- exactly today's
+ * one-marker behavior, unchanged, for every macro that isn't season-
+ * spanning. An id in `event_ids` with no matching `Event` (deleted/
+ * unsynced data) is dropped rather than rendering a broken card. */
+function macroRaceMarkers(macro, events, fallbackEvent) {
+  if (macro.event_ids && macro.event_ids.length > 0) {
+    const byId = new Map((events || []).map((e) => [e.id, e]));
+    return macro.event_ids
+      .map((id) => byId.get(id))
+      .filter(Boolean)
+      .sort((a, b) => (a.event_date < b.event_date ? -1 : a.event_date > b.event_date ? 1 : 0));
+  }
+  return fallbackEvent ? [fallbackEvent] : [];
+}
+
+function renderMacroSection(macro, event, weeks, events) {
   if (!macro || !macro.blocks || macro.blocks.length === 0) {
     return `
     <section>
@@ -842,12 +875,38 @@ function renderMacroSection(macro, event, weeks) {
       </div>`;
   });
 
-  if (event) {
-    blockEls.push(`
-      <div class="block race" style="flex:${Math.max(1, Math.round(totalWeeks * 0.14))}">
-        <div class="rr"><span class="em">🏝️</span><span class="t">${esc(event.name.split(/[—(]/)[0].trim())}<br>${esc(formatShortDate(parseIsoDate(event.event_date)))}</span></div>
-      </div>`);
-  }
+  // Interleave a marker card for EVERY race the macro is aware of, not just
+  // one appended at the very end -- Andrew, live, 2026-09-17: a season-
+  // spanning macro (`draft_season_macro_plan`) only ever showed its single
+  // final target race, even though every earlier race it plans around
+  // (`macro.event_ids`) is real, known data. Each race's card goes right
+  // after the last training block that ends before its date -- e.g. a
+  // B-priority race with no dedicated block of its own (raced on residual
+  // form between two other blocks' cycles) still gets its own marker,
+  // positioned where it actually falls in the season, not silently
+  // dropped. A race before every block (shouldn't happen for a real plan,
+  // but handled rather than vanishing) goes first.
+  const raceMarkers = macroRaceMarkers(macro, events, event);
+  const insertAfter = (raceDate) => {
+    let idx = -1;
+    macro.blocks.forEach((block, i) => {
+      if (parseIsoDate(block.end_date) < raceDate) idx = i;
+    });
+    return idx;
+  };
+  const racesByInsertIdx = new Map();
+  raceMarkers.forEach((race) => {
+    const idx = insertAfter(parseIsoDate(race.event_date));
+    if (!racesByInsertIdx.has(idx)) racesByInsertIdx.set(idx, []);
+    racesByInsertIdx.get(idx).push(race);
+  });
+  const raceCardsAt = (idx) => (racesByInsertIdx.get(idx) || [])
+    .map((race) => renderRaceMarkerCard(race, totalWeeks * 0.14));
+
+  const interleaved = [
+    ...raceCardsAt(-1),
+    ...blockEls.flatMap((blockEl, i) => [blockEl, ...raceCardsAt(i)]),
+  ];
 
   const ladder = longSwimLadder(weeks, macro, event);
   const ladderHtml = ladder.length > 0 ? `
@@ -867,7 +926,7 @@ function renderMacroSection(macro, event, weeks) {
         <span class="note">bar height = weekly swim volume</span>
       </div>
       <div class="macro">
-        <div class="macro-scroll"><div class="blocks">${blockEls.join('')}</div></div>
+        <div class="macro-scroll"><div class="blocks">${interleaved.join('')}</div></div>
         <p class="macro-note">Weekly volume is periodized base → build → peak → taper toward the event. For a single-day continuous swim, the real work isn't weekly volume — it's the <b>long-swim ladder</b>: escalating continuous swims toward a peak a few weeks out.</p>
         ${ladderHtml}
       </div>
@@ -1521,7 +1580,7 @@ export function renderApp(data, planSessionDetailId) {
     <div class="wrap">
       ${renderMasthead(athlete, event)}
       ${renderWeeksSection(weeks, planSessionDetailId, sessionPush, allWeeksOpen, true, askCoach)}
-      ${renderMacroSection(macro, event, weeks)}
+      ${renderMacroSection(macro, event, weeks, events)}
       <div class="foot">
         ${renderLegendPanel()}
         ${renderZonesPanel(athlete)}
@@ -3516,7 +3575,7 @@ function renderRosterTrainingPlanBody({
   const event = macroTargetEvent(macro, events);
   return `
     ${renderWeeksSection(weeks, detailId, null, allWeeksOpen, false, askCoach)}
-    ${renderMacroSection(macro, event, weeks)}`;
+    ${renderMacroSection(macro, event, weeks, events)}`;
 }
 
 export function renderRosterTab({
