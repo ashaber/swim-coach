@@ -742,3 +742,46 @@ idea resolves into for the actual implementation):**
    second, stronger tier for a materially longer real history~~ --
    **superseded by the correction above.** History length is a ramp-rate
    question, not a runway-gate question; not part of this fix.
+
+## IDEA 019 - Race-week checklist content doesn't reach intermediate races in a season-spanning macro
+
+Found live (2026-09-19, Andrew, looking closely at Renee's plan view
+alongside the IDEA 018 work): `RaceWeekChecklistItem`s (the carb-load/
+bodywork/logistics checklist, `engine/swim_coach/plan.py`'s
+`_race_week_checklist`, rendered by `web/src/views.js`'s
+`renderRaceWeekChecklist`) show up as one documentation block on the plan
+view, keyed off a single macro-wide target event -- unlike `Session`s,
+which render as real, distinct per-day calendar items regardless of which
+race they're near. Andrew's own framing: activities are built to render as
+distinct calendar items; the race-week documentation block is not.
+
+**Already a known, explicitly-documented gap** --
+`scaffold_season_macro`'s own docstring (`plan.py`) states it plainly: for
+a season-spanning macro, an INTERMEDIATE race's own race-week content
+(checklist, carb-load window, etc.) will not fire correctly unless the
+caller explicitly passes that nearby race as `generate_week`'s `event`
+argument for the weeks around it (resolvable via the covering block's own
+`MacroBlock.race_event_id`) -- `generate_week`'s existing callers
+(`create_week_plan`/`replace_week_plan` in `backend/app/tools.py`,
+`/plan-week`) were never updated to do this automatically when
+`scaffold_season_macro` shipped (PR #192). This idea is that gap, logged
+as its own tracked item now that IDEA 018 is about to make multi-race
+macros actually usable in practice -- once a season macro really has
+Halloween Weekend and Season Finale in it, this becomes immediately
+visible (no checklist for either), not theoretical.
+
+**Deliberately logged separately, not folded into IDEA 018's build**:
+distinct mechanism (checklist-event-threading in `generate_week`'s
+callers, not `scaffold_season_macro`'s own per-race chaining), distinct
+files, and a real practical reason -- IDEA 018 is an in-flight build
+touching `plan.py`/`tools.py` right now; picking up this idea in parallel
+risks overlapping edits in the same files for no benefit, when the two
+are cleanly separable and neither blocks the other's design.
+
+**Natural fix direction (not built here):** thread the covering block's
+`MacroBlock.race_event_id` through `create_week_plan`/`replace_week_plan`
+(and any other `generate_week` caller building weeks inside a season
+macro's range) so the correct nearby race -- not just the macro's own
+single final `event_id` -- gets passed as `generate_week`'s `event`
+argument for the weeks around each dedicated cycle. Natural follow-on to
+IDEA 018, not a prerequisite for it.
