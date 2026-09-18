@@ -743,48 +743,68 @@ idea resolves into for the actual implementation):**
    **superseded by the correction above.** History length is a ramp-rate
    question, not a runway-gate question; not part of this fix.
 
-## IDEA 019 - Race-week checklist content doesn't reach intermediate races in a season-spanning macro
+## IDEA 019 - Race-week checklist content is broken for EVERY race in a season-spanning macro, not just intermediate ones (corrected 2026-09-19)
 
-Found live (2026-09-19, Andrew, looking closely at Renee's plan view
-alongside the IDEA 018 work): `RaceWeekChecklistItem`s (the carb-load/
-bodywork/logistics checklist, `engine/swim_coach/plan.py`'s
-`_race_week_checklist`, rendered by `web/src/views.js`'s
-`renderRaceWeekChecklist`) show up as one documentation block on the plan
-view, keyed off a single macro-wide target event -- unlike `Session`s,
-which render as real, distinct per-day calendar items regardless of which
-race they're near. Andrew's own framing: activities are built to render as
-distinct calendar items; the race-week documentation block is not.
+**Correction, same evening, after empirically verifying against the real
+engine (not just reading the docstring the first time):** this idea's
+original write-up undersold the real severity. Verified directly by
+calling `generate_week` with Andrew's real, live, currently-persisted
+season macro (`STORE_BACKEND=db`, real DB) for two different real weeks:
 
-**Already a known, explicitly-documented gap** --
-`scaffold_season_macro`'s own docstring (`plan.py`) states it plainly: for
-a season-spanning macro, an INTERMEDIATE race's own race-week content
-(checklist, carb-load window, etc.) will not fire correctly unless the
-caller explicitly passes that nearby race as `generate_week`'s `event`
-argument for the weeks around it (resolvable via the covering block's own
-`MacroBlock.race_event_id`) -- `generate_week`'s existing callers
-(`create_week_plan`/`replace_week_plan` in `backend/app/tools.py`,
-`/plan-week`) were never updated to do this automatically when
-`scaffold_season_macro` shipped (PR #192). This idea is that gap, logged
-as its own tracked item now that IDEA 018 is about to make multi-race
-macros actually usable in practice -- once a season macro really has
-Halloween Weekend and Season Finale in it, this becomes immediately
-visible (no checklist for either), not theoretical.
+- Halloween Weekend's own week (folded in, no dedicated cycle) --
+  `race_week_checklist` empty. Expected, per the original write-up below.
+- **Peak Weekend's own real, dedicated taper week (Oct 5-11) -- the week
+  a real A-priority race's real carb-load/bodywork/logistics content
+  should obviously fire for -- ALSO empty.**
 
-**Deliberately logged separately, not folded into IDEA 018's build**:
-distinct mechanism (checklist-event-threading in `generate_week`'s
-callers, not `scaffold_season_macro`'s own per-race chaining), distinct
-files, and a real practical reason -- IDEA 018 is an in-flight build
-touching `plan.py`/`tools.py` right now; picking up this idea in parallel
-risks overlapping edits in the same files for no benefit, when the two
-are cleanly separable and neither blocks the other's design.
+Root cause, precise: `generate_week`'s real callers
+(`create_week_plan`/`replace_week_plan`, `backend/app/tools.py`) always
+resolve `event = next(e for e in events if e.id == macro.event_id)` --
+and `MacroPlan.event_id`'s own documented convention (`models.py`) is
+"the LAST race in the season" for any season-spanning macro. So `event`
+is ALWAYS Season Finale for every week generated inside this macro,
+regardless of which block/race a given week actually belongs to.
+`is_qualifying_race_week` (`plan.py`, `generate_week`) requires `event.id
+== macro.event_id` (trivially true by construction -- it's checking the
+same value against itself) AND `event.priority == "A"`. Andrew's real
+season: Peak Weekend is "A", Season Finale is "B" -- so the priority gate
+ALSO fails for Season Finale's own real taper week. Net result: **zero
+weeks in this real, live season macro can ever get race-week checklist
+content**, not "intermediate races don't get it" -- the ONE race
+(Peak Weekend) that unambiguously should is silently skipped too, because
+`event` is never actually about the block being generated.
 
-**Natural fix direction (not built here):** thread the covering block's
-`MacroBlock.race_event_id` through `create_week_plan`/`replace_week_plan`
-(and any other `generate_week` caller building weeks inside a season
-macro's range) so the correct nearby race -- not just the macro's own
-single final `event_id` -- gets passed as `generate_week`'s `event`
-argument for the weeks around each dedicated cycle. Natural follow-on to
-IDEA 018, not a prerequisite for it.
+**Corrected fix direction, cleaner than the original write-up's guess
+(no need to thread anything through every caller):** `generate_week`
+already resolves the covering `MacroBlock` for the week being generated
+(`block`, in scope at the exact point `is_qualifying_race_week` is
+computed) -- and `MacroBlock.race_event_id` already tags which race THAT
+block is dedicated to (`None` for a single-race macro's blocks, a real
+id for a season macro's dedicated blocks). Resolve the qualifying event
+FROM the covering block, inside `generate_week` itself, instead of from
+the single `event` parameter:
+
+```python
+qualifying_event = event
+if events is not None and block.race_event_id is not None:
+    qualifying_event = next((e for e in events if e.id == block.race_event_id), event)
+```
+
+Then use `qualifying_event` (not `event`) for both `is_qualifying_race_week`'s
+checks and the `_race_week_checklist(qualifying_event, week_start)` call --
+and drop the now-redundant `event.id == macro.event_id` comparison
+(`qualifying_event` already IS this block's own target race by
+construction). `None` (a single-race macro's untagged blocks) falls back
+to today's exact existing behavior, byte-for-byte -- zero change for
+every macro predating the season-macro build. No caller
+(`create_week_plan`/`replace_week_plan`/anything else) needs to change at
+all -- this lives entirely inside `generate_week`, using data it already
+has in scope.
+
+**Deliberately logged separately from IDEA 018's own build** (distinct
+mechanism, distinct file region, avoids overlapping edits while that
+build was in flight) -- IDEA 018 has since shipped (PR #199), so this is
+now unblocked and ready to build on its own.
 
 ## IDEA 020 - The macro plan shows no marker for an imminent race outside its own scope
 
