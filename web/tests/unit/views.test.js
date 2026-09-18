@@ -3477,6 +3477,85 @@ describe('renderPlanSessionDetailStats target load (D1)', () => {
   });
 });
 
+// --- Pre-event fueling-plan session detail rendering ------------------------
+// Regression coverage for the gap Andrew flagged live against Renee's real
+// Skopelos plan: a Session built by engine/swim_coach/fueling.py's
+// build_pre_event_nutrition_session (sport: "recovery", structure: the
+// render_fueling_plan_summary text) fell through renderPlanSessionDetail's
+// generic parseStructureBlocks fallback -- one undifferentiated prose blob,
+// not a scannable per-segment breakdown. See plan.js's isFuelingPlanSession/
+// parseFuelingSummary and views.js's renderFuelingPlanSection.
+
+describe('pre-event fueling-plan session rendering', () => {
+  // Real engine output (`.venv/bin/python`, compute_fueling_plan with
+  // product_key='formula_369', carb_tolerance_g_per_hr=83.0,
+  // intensity_class='high_intensity_intermittent', access=NoAccess()) --
+  // Andrew's own 45-min-warmup + 45-min CX race case.
+  const REAL_FUELING_STRUCTURE =
+    'Fueling plan: 90 min total exposure, high intensity intermittent intensity, Formula 369.\n' +
+    'Carb tolerance used: 83 g/h (athlete-confirmed).\n' +
+    'Access pattern: none (1 segment(s)).\n' +
+    '  Segment 1 (0-90 min, 90 min): target 60-83 g/h -> 90-124.5 g carb -> ' +
+    '3.0-4.2 servings; feed at 0, 30, 60 min';
+
+  function planWithSession(session) {
+    return {
+      athlete: { name: 'Andrew' },
+      events: [],
+      macro: { blocks: [] },
+      weeks: [{
+        iso_week: '2099-W01', meso_block: 'race-prep', focus: 'race week',
+        target_volume_m: 0, sessions: [session], adaptation_rationale: null,
+      }],
+    };
+  }
+
+  const fuelingSession = {
+    // 2099-W01's Monday is Dec 29 2098 (isoWeekMonday) -- this date must
+    // fall inside that Mon-Sun window for the compact day-row rendering
+    // path (not just the direct-by-id detail path) to place the session.
+    id: 'fuel-1', date: '2099-01-02', sport: 'recovery', source: 'ai_coach',
+    duration_min: 15, distance_m: null, intensity: { anchor: 'rpe' },
+    purpose: 'Pre-event fueling prep: pack and mix race-day nutrition (Formula 369) per the computed fueling plan below.',
+    structure: REAL_FUELING_STRUCTURE, structured: null, status: 'planned',
+  };
+
+  it('tags the session card "Fueling" instead of rendering as a plain recovery day', () => {
+    const html = renderApp(planWithSession(fuelingSession));
+    expect(html).toContain('Fueling');
+  });
+
+  it('renders each fueling segment as its own scannable list item, not one prose blob', () => {
+    const html = renderApp(planWithSession(fuelingSession), 'fuel-1');
+    expect(html).toContain('fueling-segments');
+    expect(html).toContain('Segment 1 (0-90 min, 90 min)');
+    expect(html).toContain('feed at 0, 30, 60 min');
+  });
+
+  it('surfaces a real heat warning in its own warnings block', () => {
+    const withWarning = {
+      ...fuelingSession,
+      id: 'fuel-2',
+      structure: REAL_FUELING_STRUCTURE + '\nWarnings:\n  - Heat does NOT raise the carbohydrate g/h target above.',
+    };
+    const html = renderApp(planWithSession(withWarning), 'fuel-2');
+    expect(html).toContain('fueling-warnings');
+    expect(html).toContain('Heat does NOT raise the carbohydrate g/h target above.');
+  });
+
+  it('still falls back to the generic Structure blob for an ordinary session with unrecognized structure', () => {
+    const ordinary = {
+      id: 'plain-1', date: '2099-01-05', sport: 'strength', source: 'ai_coach',
+      duration_min: 30, distance_m: null, intensity: { anchor: 'rpe' },
+      purpose: 'general strength — accessory work', structure: 'some free-text notes with no recognized label',
+      structured: null, status: 'planned',
+    };
+    const html = renderApp(planWithSession(ordinary), 'plain-1');
+    expect(html).toContain('some free-text notes with no recognized label');
+    expect(html).not.toContain('fueling-segments');
+  });
+});
+
 // --- A6b: editable RPE on the workout detail view ---------------------------
 
 describe('RPE editor affordance on the workout detail view (A6b)', () => {

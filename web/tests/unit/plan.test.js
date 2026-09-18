@@ -13,7 +13,20 @@ import {
   CTL_ATL_TREND_WINDOW_DAYS, CTL_TREND_FLAT_THRESHOLD, LOAD_CHART_WINDOW_DAYS,
   LOAD_CHART_WINDOW_OPTIONS, TSB_AXIS_DOMAIN, TSB_PANEL_RATIO, classifyTsbBand,
   formatMonthLabel, LOAD_CHART_HEIGHT, sessionDotColorVar,
+  isFuelingPlanSession, parseFuelingSummary,
 } from '../../src/plan.js';
+
+// Real output of engine/swim_coach/fueling.py's render_fueling_plan_summary
+// for Andrew's own 45-min CX race + 45-min warmup case (compute_fueling_plan
+// with product_key='formula_369', carb_tolerance_g_per_hr=83.0,
+// intensity_class='high_intensity_intermittent', access=NoAccess()) --
+// captured via `.venv/bin/python` against the real engine, not hand-typed.
+const REAL_FUELING_STRUCTURE =
+  'Fueling plan: 90 min total exposure, high intensity intermittent intensity, Formula 369.\n' +
+  'Carb tolerance used: 83 g/h (athlete-confirmed).\n' +
+  'Access pattern: none (1 segment(s)).\n' +
+  '  Segment 1 (0-90 min, 90 min): target 60-83 g/h -> 90-124.5 g carb -> ' +
+  '3.0-4.2 servings; feed at 0, 30, 60 min';
 
 describe('isoWeekMonday', () => {
   it('matches the known real data: 2026-W28 starts Monday Jul 6 2026', () => {
@@ -86,6 +99,66 @@ describe('classifySession', () => {
   it('does not flag an ordinary pool session', () => {
     const session = { purpose: 'coached USMS pool — content assigned by coach', sport: 'swim_pool', duration_min: 90 };
     expect(classifySession(session)).toEqual({ highlight: false, tag: null });
+  });
+  it('tags a pre-event fueling-plan session (sport "recovery", indistinguishable otherwise from a real rest day)', () => {
+    const session = {
+      purpose: 'Pre-event fueling prep: pack and mix race-day nutrition (Formula 369) per the computed fueling plan below.',
+      sport: 'recovery',
+      duration_min: 15,
+      structure: REAL_FUELING_STRUCTURE,
+    };
+    expect(classifySession(session)).toEqual({ highlight: false, tag: 'Fueling' });
+  });
+  it('does not tag an ordinary recovery/rest session with no fueling structure', () => {
+    const session = { purpose: 'full rest or gentle mobility', sport: 'recovery', duration_min: 20, structure: null };
+    expect(classifySession(session)).toEqual({ highlight: false, tag: null });
+  });
+});
+
+describe('isFuelingPlanSession', () => {
+  it('is true for the real render_fueling_plan_summary shape', () => {
+    expect(isFuelingPlanSession({ structure: REAL_FUELING_STRUCTURE })).toBe(true);
+  });
+  it('is false for a null/missing structure', () => {
+    expect(isFuelingPlanSession({ structure: null })).toBe(false);
+    expect(isFuelingPlanSession({})).toBe(false);
+  });
+  it('is false for an unrelated structure string that happens to mention fueling', () => {
+    expect(isFuelingPlanSession({ structure: 'Warm-up: 10 min easy\nMain set: fueling practice set' })).toBe(false);
+  });
+});
+
+describe('parseFuelingSummary', () => {
+  it('splits the real engine output into header/segments/warnings (no warnings case)', () => {
+    const { header, segments, warnings } = parseFuelingSummary(REAL_FUELING_STRUCTURE);
+    expect(header).toEqual([
+      'Fueling plan: 90 min total exposure, high intensity intermittent intensity, Formula 369.',
+      'Carb tolerance used: 83 g/h (athlete-confirmed).',
+      'Access pattern: none (1 segment(s)).',
+    ]);
+    expect(segments).toEqual([
+      'Segment 1 (0-90 min, 90 min): target 60-83 g/h -> 90-124.5 g carb -> ' +
+      '3.0-4.2 servings; feed at 0, 30, 60 min',
+    ]);
+    expect(warnings).toEqual([]);
+  });
+  it('captures a real heat warning as its own entry, stripped of the leading "- "', () => {
+    const structureWithWarning =
+      REAL_FUELING_STRUCTURE + '\nWarnings:\n  - Heat does NOT raise the carbohydrate g/h target above.';
+    const { warnings } = parseFuelingSummary(structureWithWarning);
+    expect(warnings).toEqual(['Heat does NOT raise the carbohydrate g/h target above.']);
+  });
+  it('handles multiple real segments (irregular-access Skopelos-style plan)', () => {
+    const multiSegment =
+      'Fueling plan: 220 min total exposure, steady intensity, Formula 369.\n' +
+      'Carb tolerance used: 60 g/h (default fallback -- confirm training-recency before race day).\n' +
+      'Access pattern: irregular (2 segment(s)).\n' +
+      '  Segment 1 (0-150 min, 150 min): target 60-60 g/h -> 150-150 g carb -> 5.0-5.0 servings; feed at 0, 30, 60, 90, 120 min\n' +
+      '  Segment 2 (150-220 min, 70 min): target 60-60 g/h -> 70-70 g carb -> 2.3-2.3 servings; feed at 150, 180, 210 min';
+    const { segments } = parseFuelingSummary(multiSegment);
+    expect(segments).toHaveLength(2);
+    expect(segments[0]).toContain('Segment 1');
+    expect(segments[1]).toContain('Segment 2');
   });
 });
 

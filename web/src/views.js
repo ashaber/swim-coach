@@ -11,7 +11,7 @@ import {
   ZONE_GLOSSARY, TERM_GLOSSARY, ctlAtlTsbChartGeometry, raceWeekCategoryLabel,
   describeWellnessBaselineDeviation, describeCtlAtlTsbTrend, RACE_DAY_TSB_BAND,
   PRODUCTIVE_TRAINING_TSB_BAND, LOAD_CHART_WINDOW_DAYS, LOAD_CHART_WINDOW_OPTIONS,
-  CTL_ATL_TREND_WINDOW_DAYS, formatMonthLabel,
+  CTL_ATL_TREND_WINDOW_DAYS, formatMonthLabel, isFuelingPlanSession, parseFuelingSummary,
 } from './plan.js';
 import { TOOL_LABELS } from './chat.js';
 import { renderChatMarkdown } from './markdown.js';
@@ -485,7 +485,9 @@ function renderPlanSessionDetail(session, sessionPush, showGarminActions = true,
     ${hasStructured
       ? renderStructuredWorkoutSection({ items: workoutItems })
         + (rationale ? renderStructureBlock({ label: 'Why', content: rationale }) : '')
-      : (structure ? parseStructureBlocks(structure).map(renderStructureBlock).join('') : '')}
+      : (isFuelingPlanSession(session)
+        ? renderFuelingPlanSection(session)
+        : (structure ? parseStructureBlocks(structure).map(renderStructureBlock).join('') : ''))}
     ${session.structured && sportCanPushToGarmin(session.sport)
       ? (showGarminActions
         ? renderGarminDownload(session) + renderGarminPush(session, sessionPush)
@@ -592,6 +594,32 @@ function renderRaceWeekChecklist(checklist) {
       <h4>Race week checklist</h4>
       ${rows}
     </div>`;
+}
+
+/** Renders a pre-event fueling-plan Session's `structure` text (see
+ * `isFuelingPlanSession`/`parseFuelingSummary` in plan.js) as its own
+ * structured `.detail-section`, in `renderPlanSessionDetail`'s generic-
+ * structure branch in place of `parseStructureBlocks`' graceful-degradation
+ * prose-blob fallback. That fallback is correct for genuinely unlabeled
+ * text, but this specific shape is real, per-segment structured data (feed
+ * timestamps, serving counts, warnings) -- it deserves a scannable list,
+ * not one undifferentiated paragraph. */
+function renderFuelingPlanSection(session) {
+  const { header, segments, warnings } = parseFuelingSummary(session.structure);
+  return `
+    <section class="detail-section fueling-plan-section" data-a="session:fueling-plan">
+      <h4>Fueling plan</h4>
+      ${header.map((line) => `<p class="detail-notes">${esc(line)}</p>`).join('')}
+      ${segments.length ? `
+      <ol class="fueling-segments">
+        ${segments.map((s) => `<li>${esc(s)}</li>`).join('')}
+      </ol>` : ''}
+      ${warnings.length ? `
+      <div class="fueling-warnings">
+        <strong>Warnings</strong>
+        <ul>${warnings.map((w) => `<li>${esc(w)}</li>`).join('')}</ul>
+      </div>` : ''}
+    </section>`;
 }
 
 /** A week whose planned sessions are all bike/strength/other (no swim at
