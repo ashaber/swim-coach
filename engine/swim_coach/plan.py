@@ -4386,17 +4386,27 @@ def generate_week(
     engine).
 
     `event` (optional, defaults to `None` -- every existing call site keeps
-    producing byte-identical output unless updated to pass it): when
-    supplied AND it is the athlete's ACTIVE, priority `"A"` target event
-    (`RACE_WEEK_PRIORITY`) AND `event.id == macro.event_id` (the macro this
-    week belongs to was actually scaffolded toward this same event) AND
-    this week is the LAST week of a `"taper"` block, the returned
+    producing byte-identical output unless updated to pass it): the
+    race-week-checklist qualifying test actually runs against
+    `qualifying_event`, resolved from the covering `MacroBlock`'s own
+    `race_event_id` when `events` is also supplied and that block is tagged
+    (a `scaffold_season_macro`-built dedicated block) -- IDEA 019 fix,
+    corrected 2026-09-19: real callers always resolve `event =
+    macro.event_id`'s event (the LAST race in a season macro, per
+    `MacroPlan.event_id`'s own docstring), which is wrong for every OTHER
+    race's own block in that same macro. `qualifying_event` falls back to
+    exactly `event` when `events is None` or `block.race_event_id is None`
+    (every block from `scaffold_macro`/`scaffold_sharpening_macro`, the
+    overwhelming majority of real production macros) -- byte-for-byte
+    unchanged from before this fix. When `qualifying_event` is supplied AND
+    it is ACTIVE AND priority `"A"` (`RACE_WEEK_PRIORITY`) AND this week is
+    the LAST week of a `"taper"` block, the returned
     `WeekPlan.race_week_checklist` is populated with the final-taper-week
     race-prep content (carbohydrate-loading window, bodywork window,
     logistics checklist) -- see `_race_week_checklist`'s own docstring and
     `library/16-race-week.md`. In every other
-    case (no `event` passed, wrong/inactive/non-"A" event, or any week that
-    isn't the taper block's final one) `race_week_checklist` stays the
+    case (no qualifying event, wrong/inactive/non-"A" event, or any week
+    that isn't the taper block's final one) `race_week_checklist` stays the
     model's own default empty list -- an ordinary taper week is otherwise
     untouched. This deliberately does NOT change `target_volume_m`, the
     long-swim taper-decay cap, or any other volume/duration math above --
@@ -4485,9 +4495,10 @@ def generate_week(
     `_bike_week_sessions` -- see that function's own docstring for what it
     does when `None`. `race_week_checklist` is populated for a bike-primary
     week under the exact same qualifying condition (active, priority "A",
-    same macro's event, final week of the taper block) as the swim path
-    below, reusing `_race_week_checklist` directly (PR #167 red-team
-    review, Finding 2, must-fix -- previously stayed empty unconditionally).
+    final week of the taper block, resolved as `qualifying_event` -- see
+    `event`'s own docstring above) as the swim path below, reusing
+    `_race_week_checklist` directly (PR #167 red-team review, Finding 2,
+    must-fix -- previously stayed empty unconditionally).
     That same final taper week is also floored to at least
     `BIKE_FINAL_TAPER_MIN_SESSIONS` real sessions
     (`_bike_final_taper_sessions`) when the ordinary block-interpolated
@@ -4558,6 +4569,24 @@ def generate_week(
     week_index_in_block = (week_start - block.start_date).days // 7
     if not (0 <= week_index_in_block < weeks_in_block):
         raise ValueError(f"{week_start} is not a valid week-start within block {block.name!r}")
+
+    # IDEA 019 fix (corrected 2026-09-19, empirically verified against
+    # Andrew's real, live season macro): the race-week-checklist qualifying
+    # test below must use the event THIS block is actually dedicated to, not
+    # the single `event` parameter -- real callers always resolve
+    # `event = macro.event_id`'s event, and MacroPlan.event_id's own
+    # documented convention is "the LAST race in the season" for any
+    # season-spanning macro, so `event` is otherwise always wrong for every
+    # week except (coincidentally) the ones belonging to that last race.
+    # `block.race_event_id` already tags which race THIS block was built
+    # for (`scaffold_season_macro`) -- `None` for every block produced by
+    # `scaffold_macro`/`scaffold_sharpening_macro` (single-race macros, the
+    # overwhelming majority of real production macros today), which
+    # combined with `events is None` (a caller that only ever passed
+    # `event=`) falls back to exactly `event`, byte-for-byte unchanged.
+    qualifying_event = event
+    if events is not None and block.race_event_id is not None:
+        qualifying_event = next((e for e in events if e.id == block.race_event_id), event)
 
     start_volume = _block_start_volume(macro, block_index, block)
     end_volume = block.weekly_volume_target_m
@@ -4724,19 +4753,19 @@ def generate_week(
                 stacklevel=2,
             )
         # Final-taper-week race content (PR #167 red-team review, Finding
-        # 2, must-fix): same qualifying test (active, priority "A", same
-        # macro's event, last week of the taper block) the swim branch uses
+        # 2, must-fix): same qualifying test (active, priority "A", last
+        # week of the taper block, against `qualifying_event` -- IDEA 019
+        # fix, see `generate_week`'s own docstring) the swim branch uses
         # below for `_race_week_checklist` -- reused verbatim, not
         # duplicated, so a qualifying bike event now gets the same
         # carb-load/bodywork/logistics content a qualifying swim event
         # already did.
         is_final_taper_week = block.name == "taper" and week_index_in_block == weeks_in_block - 1
         is_qualifying_race_week = (
-            event is not None
+            qualifying_event is not None
             and is_final_taper_week
-            and event.id == macro.event_id
-            and event.active
-            and event.priority.strip().upper() == RACE_WEEK_PRIORITY
+            and qualifying_event.active
+            and qualifying_event.priority.strip().upper() == RACE_WEEK_PRIORITY
         )
         strength_prerace_reduced = False
         if in_week_race_dates:
@@ -4822,7 +4851,9 @@ def generate_week(
                 bike_only_with_strength, week_start, in_week_race_offsets, race_within_days
             )
             race_week_checklist = (
-                _race_week_checklist(event, week_start) if is_qualifying_race_week else []
+                _race_week_checklist(qualifying_event, week_start)
+                if is_qualifying_race_week
+                else []
             )
             focus = f"{block.focus} — race week ({len(race_sessions)} race day(s))"
         elif is_qualifying_race_week:
@@ -4856,7 +4887,7 @@ def generate_week(
             bike_sessions, strength_prerace_reduced = _filter_strength_prerace_window(
                 bike_sessions_with_strength, week_start, in_week_race_offsets, race_within_days
             )
-            race_week_checklist = _race_week_checklist(event, week_start)
+            race_week_checklist = _race_week_checklist(qualifying_event, week_start)
         else:
             bike_sessions_with_strength = _bike_week_sessions_with_strength(
                 athlete,
@@ -5168,13 +5199,12 @@ def generate_week(
     race_week_checklist: list[RaceWeekChecklistItem] = []
     is_final_taper_week = block.name == "taper" and week_index_in_block == weeks_in_block - 1
     if (
-        event is not None
+        qualifying_event is not None
         and is_final_taper_week
-        and event.id == macro.event_id
-        and event.active
-        and event.priority.strip().upper() == RACE_WEEK_PRIORITY
+        and qualifying_event.active
+        and qualifying_event.priority.strip().upper() == RACE_WEEK_PRIORITY
     ):
-        race_week_checklist = _race_week_checklist(event, week_start)
+        race_week_checklist = _race_week_checklist(qualifying_event, week_start)
 
     return WeekPlan(
         id=uuid4(),

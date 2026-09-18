@@ -2874,14 +2874,28 @@ def test_race_week_checklist_absent_for_inactive_event(race_week_macro):
     assert week.race_week_checklist == []
 
 
-def test_race_week_checklist_absent_when_event_id_does_not_match_macro(race_week_macro):
+def test_race_week_checklist_no_longer_gated_on_event_id_matching_macro_event_id(race_week_macro):
+    # Superseded by IDEA 019's fix (corrected 2026-09-19): the
+    # `event.id == macro.event_id` gate this test used to enforce is
+    # deliberately DROPPED from `is_qualifying_race_week` -- keeping it
+    # would silently reintroduce the exact bug IDEA 019 fixes (comparing
+    # `qualifying_event.id` against `macro.event_id`, always false for
+    # every non-last race's own dedicated block in a season macro, which is
+    # precisely the scenario the fix exists for). `generate_week` no longer
+    # validates that the `event`/`qualifying_event` it's handed "belongs"
+    # to this macro by id -- it trusts the caller (or, when `events` +
+    # `block.race_event_id` are supplied, resolves the correct event
+    # itself). A single-race macro's real caller only ever passes its own
+    # macro's own real event anyway, so this is not a real production
+    # behavior change -- only this synthetic "wrong event object" unit
+    # test's old expectation changes.
     athlete, event, macro, taper_block, final_week_start = race_week_macro
     unrelated_event = make_event(event_date=event.event_date, priority="A")
     assert unrelated_event.id != macro.event_id
     week = generate_week(
         athlete, macro, _iso_week(final_week_start), final_week_start, event=unrelated_event
     )
-    assert week.race_week_checklist == []
+    assert len(week.race_week_checklist) > 0
 
 
 def test_race_week_checklist_priority_match_is_case_insensitive(race_week_macro):
@@ -3023,6 +3037,201 @@ def test_generate_week_bike_primary_final_taper_week_no_floor_or_checklist_for_b
         event=event,
     )
     assert week.race_week_checklist == []
+
+
+# --- race week: qualifying event resolved from the covering block, not the --------
+# single `event` param (IDEA 019, corrected 2026-09-19 -- empirically
+# verified against Andrew's real, live season macro). Real callers
+# (create_week_plan/replace_week_plan, backend/app/tools.py) always resolve
+# `event = macro.event_id`'s event, and MacroPlan.event_id's own documented
+# convention is "the LAST race in the season" for any season-spanning
+# macro -- so `event` was ALWAYS the season finale for every week generated
+# in that macro, no matter which block/race the week actually belonged to.
+# `is_qualifying_race_week` silently never fired for ANY race in a real
+# season macro, not even the one A-priority race (Peak Weekend in the real
+# incident) whose own dedicated taper week obviously should have gotten
+# carb-load/bodywork/logistics content. Fix: resolve the qualifying event
+# from the covering MacroBlock's own `race_event_id` (already tagging which
+# race that block is dedicated to -- `scaffold_season_macro`) instead of the
+# single `event` parameter, falling back to exactly `event` when
+# `events is None` or `block.race_event_id is None` (every single-race
+# macro's blocks -- the overwhelming majority of real production macros).
+
+
+def test_race_week_checklist_resolves_from_covering_block_not_event_param_bike_season_macro():
+    # The real regression, reproduced with a synthetic 2-race season macro
+    # shaped like Andrew's real one: race1 is A-priority with its own
+    # dedicated taper block, race2 (the season finale, B-priority) is the
+    # LAST race -- so macro.event_id == race2.id and every real caller
+    # resolves event=race2 for every week in this macro, race1's own final
+    # taper week included. Before this fix, that week's checklist was
+    # silently empty because `event` (race2) is B-priority.
+    athlete = make_athlete(sports=["bike"])
+    race1 = _make_season_event(name="Race 1", event_date=START + timedelta(weeks=14), priority="A")
+    race2 = _make_season_event(
+        name="Race 2 (season finale)", event_date=START + timedelta(weeks=24), priority="B"
+    )
+    macro, season_warnings = scaffold_season_macro(
+        athlete, [race1, race2], START, current_weekly_volume_m=1000, established_base=True,
+        peak_weekly_volume_m=2000,
+    )
+    assert macro.event_id == race2.id  # matches real callers' always-wrong resolution
+    race1_taper = next(
+        b for b in macro.blocks if b.name == "taper" and b.race_event_id == race1.id
+    )
+    weeks_in_block = (race1_taper.end_date - race1_taper.start_date).days // 7 + 1
+    final_week_start = race1_taper.start_date + timedelta(weeks=weeks_in_block - 1)
+
+    week = generate_week(
+        athlete, macro, _iso_week(final_week_start), final_week_start,
+        primary_sport="bike", event=race2, events=[race1, race2],
+    )
+
+    assert len(week.race_week_checklist) > 0
+    categories = {item.category for item in week.race_week_checklist}
+    assert categories == {"carb_load", "bodywork", "logistics"}
+    # Correctly reflects race1's OWN event_date, not race2's.
+    carb_load = next(i for i in week.race_week_checklist if i.category == "carb_load")
+    assert carb_load.date == race1.event_date - timedelta(days=CARB_LOAD_WINDOW_START_DAYS_OUT)
+
+
+def test_race_week_checklist_season_finales_own_week_stays_empty_when_b_priority():
+    # Sanity companion to the test above: race2 (the season finale) is
+    # B-priority in that same fixture -- its OWN final taper week correctly
+    # stays empty too (not "fixed" into firing for a non-A race just
+    # because it's the last one in the macro) -- same qualifying gate, just
+    # correctly resolved per-block now.
+    athlete = make_athlete(sports=["bike"])
+    race1 = _make_season_event(name="Race 1", event_date=START + timedelta(weeks=14), priority="A")
+    race2 = _make_season_event(
+        name="Race 2 (season finale)", event_date=START + timedelta(weeks=24), priority="B"
+    )
+    macro, season_warnings = scaffold_season_macro(
+        athlete, [race1, race2], START, current_weekly_volume_m=1000, established_base=True,
+        peak_weekly_volume_m=2000,
+    )
+    race2_taper = next(
+        b for b in macro.blocks if b.name == "taper" and b.race_event_id == race2.id
+    )
+    weeks_in_block = (race2_taper.end_date - race2_taper.start_date).days // 7 + 1
+    final_week_start = race2_taper.start_date + timedelta(weeks=weeks_in_block - 1)
+
+    week = generate_week(
+        athlete, macro, _iso_week(final_week_start), final_week_start,
+        primary_sport="bike", event=race2, events=[race1, race2],
+    )
+    assert week.race_week_checklist == []
+
+
+def test_race_week_checklist_stays_empty_for_race_with_no_dedicated_block():
+    # Item 3 of IDEA 019's own verification: a season race folded into
+    # another race's build-up cycle (no dedicated block of its own --
+    # Halloween Weekend in the real incident) correctly still gets NO
+    # checklist for its own week -- there's no real taper to hang
+    # carb-load/bodywork content on; this is expected, not something to
+    # further "fix". Reuses the exact real calendar shape from
+    # test_scaffold_season_macro_andrews_real_cx_calendar_end_to_end.
+    athlete = make_athlete(sports=["bike"])
+    season_opener = _make_season_event(
+        name="Season Opener", event_date=START + timedelta(days=5), priority="B"
+    )
+    peak_weekend = _make_season_event(
+        name="Peak Weekend", event_date=START + timedelta(days=33), priority="A"
+    )
+    halloween_weekend = _make_season_event(
+        name="Halloween Weekend", event_date=START + timedelta(days=47), priority="B"
+    )
+    season_finale = _make_season_event(
+        name="Season Finale", event_date=START + timedelta(days=68), priority="B"
+    )
+    races = [season_opener, peak_weekend, halloween_weekend, season_finale]
+    macro, season_warnings = scaffold_season_macro(
+        athlete, races, START, current_weekly_volume_m=540, established_base=True
+    )
+    assert all(b.race_event_id != halloween_weekend.id for b in macro.blocks)
+
+    halloween_monday = _monday_of_week(halloween_weekend.event_date)
+    week_start = halloween_monday - timedelta(weeks=1)
+    week = generate_week(
+        athlete, macro, _iso_week(week_start), week_start,
+        primary_sport="bike", event=season_finale, events=races,
+    )
+    assert week.race_week_checklist == []
+
+
+def test_race_week_checklist_single_race_macro_bike_unaffected_by_events_param(
+    bike_race_week_macro,
+):
+    # Regression guard: a single-race macro's blocks all have
+    # race_event_id=None (scaffold_macro/scaffold_sharpening_macro's
+    # convention, the overwhelming majority of real production macros
+    # today) -- passing `events` must fall back to exactly `event`,
+    # byte-for-byte, same as never passing `events` at all.
+    athlete, event, macro, taper_block, final_week_start = bike_race_week_macro
+    assert all(b.race_event_id is None for b in macro.blocks)
+    without_events = generate_week(
+        athlete, macro, _iso_week(final_week_start), final_week_start,
+        primary_sport="bike", event=event,
+    )
+    with_events = generate_week(
+        athlete, macro, _iso_week(final_week_start), final_week_start,
+        primary_sport="bike", event=event, events=[event],
+    )
+    assert with_events.race_week_checklist == without_events.race_week_checklist
+    assert len(with_events.race_week_checklist) > 0
+
+
+def test_race_week_checklist_single_race_macro_swim_unaffected_by_events_param(
+    race_week_macro,
+):
+    # Swim-primary counterpart of the regression guard above.
+    athlete, event, macro, taper_block, final_week_start = race_week_macro
+    assert all(b.race_event_id is None for b in macro.blocks)
+    without_events = generate_week(
+        athlete, macro, _iso_week(final_week_start), final_week_start, event=event
+    )
+    with_events = generate_week(
+        athlete, macro, _iso_week(final_week_start), final_week_start,
+        event=event, events=[event],
+    )
+    assert with_events.race_week_checklist == without_events.race_week_checklist
+    assert len(with_events.race_week_checklist) > 0
+
+
+def test_race_week_checklist_resolves_from_covering_block_not_event_param_swim_primary():
+    # Swim-primary counterpart of the bike-season-macro regression above.
+    # scaffold_season_macro is bike-only, so this hand-tags a single-race
+    # swim macro's taper block with a DIFFERENT event's id -- exactly the
+    # shape scaffold_season_macro produces for a dedicated block -- proving
+    # generate_week's swim-primary path also resolves the qualifying event
+    # from the covering block's race_event_id, not blindly from whatever
+    # `event` the caller passed.
+    athlete = make_athlete()
+    local_a = make_event(
+        name="Local A", event_date=START + timedelta(weeks=10, days=4), priority="A"
+    )
+    distractor_b = make_event(
+        name="Distractor B (season finale)", event_date=START + timedelta(weeks=20), priority="B"
+    )
+    macro = scaffold_macro(
+        athlete, local_a, START, current_weekly_volume_m=14000, peak_weekly_volume_m=20000
+    )
+    taper_block = next(b for b in macro.blocks if b.name == "taper")
+    taper_block.race_event_id = local_a.id
+    weeks_in_block = (taper_block.end_date - taper_block.start_date).days // 7 + 1
+    final_week_start = taper_block.start_date + timedelta(weeks=weeks_in_block - 1)
+
+    # Mimics the real caller convention: `event` resolved from
+    # macro.event_id, which for a real season macro is always the LAST
+    # race -- here deliberately the wrong (distractor) event.
+    week = generate_week(
+        athlete, macro, _iso_week(final_week_start), final_week_start,
+        event=distractor_b, events=[local_a, distractor_b],
+    )
+
+    assert len(week.race_week_checklist) > 0
+    carb_load = next(i for i in week.race_week_checklist if i.category == "carb_load")
+    assert carb_load.date == local_a.event_date - timedelta(days=CARB_LOAD_WINDOW_START_DAYS_OUT)
 
 
 # --- scaffold_sharpening_macro (sharpening-macro build) -----------------------------
