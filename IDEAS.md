@@ -691,22 +691,37 @@ guardrail for "can I safely build a NEW cycle from scratch" -- they are
 the wrong question when a cycle already exists and the real ask is "keep
 what's there, add what's missing."
 
-**Also worth scoping, a related but separate point Andrew raised:** the
-`established_base` gate (`_training_base_evidence`,
-`backend/app/tools.py`) checks a 12-week lookback minimum
-(`min_weeks_with_load_fraction`) -- Andrew's real, continuous training
-history goes back to February, ~7 months, well beyond that minimum. The
-gate today is binary (established or not); it doesn't currently
-distinguish "just barely cleared 12 weeks" from "7 months of continuous
-real load." Worth a real design conversation on whether a materially
-longer verified history should earn more than the same fixed
-`SHARPENING_MIN_MACRO_WEEKS` threshold everyone else gets -- e.g. loosening
-or waiving the runway check specifically for extending an already-existing
-macro (distinct from cold-starting one), where the risk profile is
-genuinely different.
+**Correction (2026-09-19, Andrew, morning before the race -- read this
+before building):** the 12-week-vs-7-month point below was slightly off
+target as originally written. The real defect isn't that the evidence
+gate needs more credit for a longer history -- it's that the runway check
+is the wrong check ENTIRELY for this call, because Andrew is editing an
+ACTIVE plan this same coach is already running, not proving he trains.
+Bullet 1 above (preserve race 1's existing coverage, don't re-derive it)
+already correctly identifies this. History-length (12 weeks vs. ~7
+months back to February) is a real, separate axis -- it only bears on RAMP
+RATE (how fast volume can climb, the existing +8%/week progression caps
+elsewhere in the engine), not on whether the runway-length gate should
+apply at all here. Keep those two questions separate: don't loosen
+`SHARPENING_MIN_MACRO_WEEKS` because of history length; fix WHEN the
+runway check applies at all.
 
-**Natural fix direction (not built here -- real engine/architecture work,
-deferred past race weekend on purpose):**
+**Design philosophy for the fix, Andrew's own framing:** *"error on the
+side of letting a good plan record vs 3 weeks of arguing with coach to
+load the plan because of a technical nuance -- coach can raise concerns
+and proceed vs hard blocks in instances like this. This differs from
+[a] 2 week training plan from couch or [a] goal to set world record in 6
+months."* Concretely: an athlete with a real `established_base` extending
+an already-active plan should get a WARNING it can proceed past, not a
+hard refusal, even when a race's runway is genuinely tight -- the couch-
+to-5k / unrealistic-goal case (no established base, or a genuinely fresh
+cold-start build) keeps today's hard-refuse behavior unchanged. The
+discriminator is `established_base` (already computed, already the real
+safety signal) combined with whether this is an extend-existing-plan call
+vs. a fresh build -- not a new signal to invent.
+
+**Natural fix direction (being built now, 2026-09-19 -- see the PR this
+idea resolves into for the actual implementation):**
 1. Give `scaffold_season_macro` (or its caller,
    `_handle_draft_season_macro_plan`) an "extend existing macro" mode:
    when `store.load_macro` already covers race 1 with real blocks, don't
@@ -715,14 +730,15 @@ deferred past race weekend on purpose):**
    wherever that existing macro's coverage actually ends (same cursor-
    continuity math the function already does between races, just seeded
    from real persisted data instead of a fresh `scaffold_macro` call).
-2. Separately, reconsider whether an A-tier race's runway failure should
-   ever abort the WHOLE chain, or should isolate to that one race (fall
-   back to the B/C fold-in-no-dedicated-block posture, or to (1)'s
-   preserve-existing-coverage posture) while still scaffolding every other
-   race in the roster.
-3. Revisit whether `established_base`'s binary gate should have a second,
-   stronger tier for a materially longer real history (Andrew's 7 months
-   vs. the 12-week minimum), specifically for the "extend an existing
-   plan" case this idea is about -- not a blanket loosening of the cold-
-   start guardrail, which is doing real, correct work for a genuinely new
-   athlete/race.
+2. When `established_base` is true AND this is an extend-existing-plan
+   call (item 1's detection), a tier's runway-too-short case degrades to
+   the SAME warn-and-fold-in posture the B/C tiers already have -- for
+   every tier, not just B/C -- instead of a hard `raise`. The existing
+   hard-refuse behavior is UNCHANGED for a fresh/cold-start build (no
+   matching existing macro) or when `established_base` is false -- that's
+   the real guardrail protecting the couch-to-race/unrealistic-goal case,
+   and it must not get weaker.
+3. ~~Revisit whether `established_base`'s binary gate should have a
+   second, stronger tier for a materially longer real history~~ --
+   **superseded by the correction above.** History length is a ramp-rate
+   question, not a runway-gate question; not part of this fix.
