@@ -870,3 +870,116 @@ via `event`. `carb_load`/`bodywork` category labels/citations
 (`CARB_LOAD_WINDOW_START_DAYS_OUT`/`BODYWORK_WINDOW_DAYS_OUT`) are sport-
 agnostic exercise-physiology findings already -- likely fine unchanged;
 only the `logistics` category's actual label TEXT is swim-specific.
+
+## IDEA 022 - Coach API cost audit: ~$20/week, two real root causes found, execution deferred to next week
+
+Andrew, 2026-09-20: *"coach burned through $20 in tokens in about a week.
+Will need to audit usage and optimize."* This is the swim-coach app's OWN
+Anthropic API billing for real athlete coach-chat conversations
+(`backend/app/claude.py`, deployed Cloud Run) -- a separate cost meter
+from Andrew's own Claude Code CLI usage. Audited real (not estimated)
+data via `gcloud logging read` against the live `open-swim-coach-ashaber`
+service; two real root causes identified with exact code citations.
+**Explicit scope for tonight, per Andrew's own direction:** findings only,
+no code changes -- execution deferred to next week.
+
+**Real 7-day totals** (`"claude turn complete"` log lines,
+`backend/app/claude.py:206-214`, 116 real logged turns, 2026-09-13
+through 2026-09-20):
+
+```
+input_tokens               5,210,776   (fresh, full-price input)
+output_tokens                140,550   (full-price output)
+cache_read_input_tokens    9,921,123   (cheap, ~10% of input price)
+cache_creation_input_tokens 4,846,759  (expensive -- writing NEW cache entries)
+```
+
+Per-day breakdown tracks real conversation activity closely (heaviest on
+09-18/09-19, the two long coach-build sessions that week) -- not a
+runaway process or a bug causing silent looping; the spend is real,
+driven by real, long, tool-heavy conversations. **The headline concern:**
+`cache_creation_input_tokens` (4.85M) is nearly as large as raw
+`input_tokens` (5.21M) -- a cache mostly being CREATED rather than REUSED
+provides little of its intended savings while adding real cost on top.
+
+**Root cause #1 (high confidence) -- the conversation history's cache
+prefix is broken by design, not by omission.** `backend/app/context.py`'s
+`build_messages`:
+
+```python
+if history:
+    first = history[0]
+    messages.append(
+        {"role": first["role"], "content": f"{context_text}\n\n---\n\n{first['content']}"}
+    )
+    for turn in history[1:]:
+        messages.append({"role": turn["role"], "content": turn["content"]})
+    messages.append({"role": "user", "content": message})
+```
+
+`context_text` (`build_per_request_context`) is explicitly documented as
+"the uncached, per-request text block" -- athlete profile, current+next
+week plan, last ~28 days of logged sessions, events, load rollup --
+genuinely live data the model needs accurate every turn. That design
+intent is correct. **The problem is WHERE it's spliced in: `history[0]`,
+the very FIRST message, rewritten fresh on every single turn.** Anthropic
+prompt caching requires an exact, stable byte-prefix match from the
+start of the request -- since message[0]'s content changes almost every
+turn, the entire `messages` array is effectively never cacheable from
+that point forward, not just message[0]. Also confirmed: no
+`cache_control` breakpoint exists anywhere in the `messages` array today
+at all (only the two `system` blocks attempt caching).
+
+**Why this looks fixable without sacrificing freshness:** the code's own
+docstring explains context is merged (not inserted as a separate leading
+message) because the Messages API requires strictly alternating
+user/assistant roles -- but that constraint is equally satisfied by
+merging `context_text` into the LATEST message (the new `message`,
+appended at the end) instead of `history[0]`. That would keep per-turn
+freshness exactly as-is, while leaving the entire prior `history` array
+byte-identical across calls -- a real, stable, cacheable prefix for the
+first time. Arguably also improves answer quality (context immediately
+before the question it supports, rather than buried at conversation
+start). **Not implemented or tested -- flagged as the strongest
+candidate for the next build, not a decision made here.**
+
+**Root cause #2 (medium confidence) -- system block B's cache breakpoint
+churns on topic changes.** `build_system` sends two cached blocks: block
+A (`build_system_blocks` -- persona/rules/conventions/INDEX, stable per
+athlete-sport-scope) and block B (`build_routed_block` --
+`reference_list.md` + `route_library_files(message, ...)`, routed by
+keyword-matching the CURRENT message). A conversation that shifts topic
+(macro-planning, then fueling, then a bug report -- exactly this
+session's own pattern, repeatedly) changes block B's text on nearly
+every such shift. Per this file's own docstring ("a cache_control block
+also implicitly caches everything before it"), a block B miss forces the
+WHOLE combined system-prompt cache write to redo, even though block A
+alone would still have matched -- contributing to the large
+`cache_creation_input_tokens` total on top of root cause #1. Lower
+confidence on relative sizing than #1 -- would need real before/after
+data or per-block instrumentation to size precisely. Worth investigating
+further, not concluded here.
+
+**Secondary factor, already partly addressed for reliability (worth
+noting the cost angle too):** `MAX_TOOL_ITERATIONS = 5` -- each iteration
+is a full, separate API call with growing tool-result context appended.
+Real log data confirms iterations up to 4 occurring in practice (matches
+this session's own live incidents: `replace_week_plan` erroring and
+retrying multiple times). PR #198 (merged) added real error/persisted
+diagnostics for this pattern aimed at RELIABILITY -- worth remembering
+every failed/retried tool call is also a full-price extra turn,
+compounding whatever the caching issues above already cost.
+
+**Verification, for whoever picks this up:** before/after comparison
+using the SAME real log query this audit used (`gcloud logging read` on
+`"claude turn complete"`, aggregating
+`input_tokens`/`cache_read_input_tokens`/`cache_creation_input_tokens`
+by day) -- a real fix should show `cache_read_input_tokens` rising
+relative to `cache_creation_input_tokens`, and raw `input_tokens` falling
+for turns beyond the first few in a conversation. Correctness matters at
+least as much as cost here: confirm per-turn context freshness is
+preserved exactly (a newly-logged workout, or a just-updated plan, must
+still show up correctly in the very next turn) via real end-to-end chat
+tests, not just token-count comparisons -- a caching change that
+silently breaks context freshness would be a much worse outcome than the
+cost problem it was meant to fix.
