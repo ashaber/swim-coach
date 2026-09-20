@@ -178,9 +178,16 @@ from swim_coach import fueling as fueling_module
 from swim_coach.adapt import adapt_week
 from swim_coach.analytics import compute_analytics
 from swim_coach.athlete_time import athlete_today
+from swim_coach.gps_laps import GpsLapMetrics, analyze_gps_laps
 from swim_coach.load import _training_base_evidence, daily_loads, estimate_hr_max
 from swim_coach.parse_files import parse_fit
 from swim_coach.quality import match_workout_to_session
+from swim_coach.race_phases import (
+    DEFAULT_SIGNIFICANCE_THRESHOLD_PCT,
+    RacePhase,
+    phase_difference_is_significant,
+    split_race_phases,
+)
 # `_training_base_evidence` is `has_established_training_base`'s own shared
 # implementation -- `_training_base_evidence(...).established` IS `has_
 # established_training_base(...)`'s return value (see load.py: the public
@@ -256,6 +263,12 @@ ToolHandler = Callable[[dict[str, Any]], dict[str, Any]]
 # context. Matches the PWA history list's own display cap
 # (web/src/workouts.js's HISTORY_DISPLAY_CAP).
 GET_WORKOUTS_CAP = 20
+
+# get_ride_pacing caps the per-lap table it returns -- a looped-course race
+# is a handful of laps, but a long ride passing its start point repeatedly
+# could detect dozens; bounded for the same uncached-tool-result-context
+# reason as GET_WORKOUTS_CAP above.
+RIDE_PACING_LAPS_CAP = 40
 
 # sync_workouts uses the same small on-demand window as the PWA Log tab's
 # "Sync from watch" button (POST /api/workouts/sync) -- see
@@ -904,6 +917,43 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 "pct_ftp": {
                     "type": "number",
                     "description": "Percent of FTP the intervals were prescribed at (e.g. 91 for 91%). Must be given together with ftp_watts.",
+                },
+            },
+            "required": ["workout_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "get_ride_pacing",
+        "description": (
+            "Read-only pacing / lap / efficiency breakdown for an already-"
+            "logged BIKE ride, computed on demand from its stored power/"
+            "speed/GPS series. Use this whenever the athlete asks how a "
+            "race or ride was PACED, how their LAPS compared, whether they "
+            "faded, or whether they got more EFFICIENT (e.g. learning a "
+            "cyclocross course). Returns two blocks. `gps_laps`: real per-"
+            "course-lap boundaries detected from the GPS track on a looped "
+            "course (useful when the device recorded no usable native "
+            "laps), each lap with normalized_power_w, avg_speed_mps, "
+            "efficiency_mps_per_w, total_work_kj, variability_index and "
+            "coasting_s -- deliberately SEPARATE lenses you interpret "
+            "together, never one score. `race_phases`: an isolated start "
+            "phase plus three roughly-equal phases with normalized power / "
+            "speed, each compared to phase_1 with a significance flag "
+            "(differences under the 5% within-athlete noise floor are NOT a "
+            "real pacing signal -- don't report them as one). Point-to-"
+            "point rides simply detect zero laps; phases still work without "
+            "GPS. It never writes anything. Needs a stored series -- if it "
+            "reports none, use pull_activity_stream first. Describe what "
+            "the numbers show and hedge accordingly; the response's "
+            "`interpretation` field states the known limits."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "workout_id": {
+                    "type": "string",
+                    "description": "The id (or a unique prefix) of the logged bike workout.",
                 },
             },
             "required": ["workout_id"],
@@ -3097,6 +3147,27 @@ def _recover_prescribed_structure(
     return session.structured if session is not None else None
 
 
+def _load_workout_series(
+    store: StoreInterface, slug: str, workout: Workout
+) -> tuple[dict | None, str, str | None]:
+    """`(series, source_label, error)` for a logged workout: the stored series
+    row if there is one, else a re-parse of `workout.raw_ref` when that .fit
+    is still on disk. `series` is None (with no error) when neither exists --
+    each caller words its own "no data" message; `error` is set only when a
+    re-parse was attempted and failed."""
+    series = store.load_series(slug, workout.id)
+    if series is not None:
+        return series, "stored series", None
+    if workout.raw_ref:
+        raw_path = Path(workout.raw_ref)
+        if raw_path.suffix.lower() == ".fit" and raw_path.exists():
+            try:
+                return parse_fit(raw_path).series, f"re-parsed {raw_path.name}", None
+            except (OSError, ValueError) as exc:
+                return None, "", f"could not re-parse {raw_path.name}: {exc}"
+    return None, "stored series", None
+
+
 def _handle_reanalyze_workout(
     input_data: dict[str, Any], *, store: StoreInterface, slug: str
 ) -> dict[str, Any]:
@@ -3185,16 +3256,9 @@ def _handle_reanalyze_workout(
         if structure is not None:
             target_source = "matched planned session structure"
 
-    series = store.load_series(slug, workout.id)
-    series_source = "stored series"
-    if series is None and workout.raw_ref:
-        raw_path = Path(workout.raw_ref)
-        if raw_path.suffix.lower() == ".fit" and raw_path.exists():
-            try:
-                series = parse_fit(raw_path).series
-                series_source = f"re-parsed {raw_path.name}"
-            except (OSError, ValueError) as exc:
-                return {"error": f"could not re-parse {raw_path.name}: {exc}"}
+    series, series_source, load_error = _load_workout_series(store, slug, workout)
+    if load_error is not None:
+        return {"error": load_error}
     if series is None:
         return {
             "error": (
@@ -3238,6 +3302,139 @@ def _handle_reanalyze_workout(
         "target_source": target_source,
         "series_source": series_source,
         "intervals": intervals.model_dump(mode="json") if intervals is not None else None,
+    }
+
+
+def _round_or_none(value: float | None, ndigits: int) -> float | None:
+    return None if value is None else round(value, ndigits)
+
+
+def _gps_lap_json(m: GpsLapMetrics) -> dict[str, Any]:
+    return {
+        "lap_n": m.lap_n,
+        "duration_s": round(m.duration_s, 1),
+        "normalized_power_w": _round_or_none(m.normalized_power_w, 1),
+        "avg_speed_mps": _round_or_none(m.avg_speed_mps, 2),
+        "efficiency_mps_per_w": _round_or_none(m.efficiency_mps_per_w, 5),
+        "total_work_kj": _round_or_none(m.total_work_kj, 1),
+        "variability_index": _round_or_none(m.variability_index, 3),
+        "coasting_s": _round_or_none(m.coasting_s, 1),
+    }
+
+
+def _race_phases_json(phases: list[RacePhase]) -> list[dict[str, Any]]:
+    """Each phase, plus how `phase_1` compares to it. `phase_1` is the
+    baseline (not the isolated start phase -- see race_phases' Protzen et al.
+    note), so the start phase and phase_1 itself carry no comparison."""
+    baseline = next((p for p in phases if p.name == "phase_1"), None)
+    out: list[dict[str, Any]] = []
+    for p in phases:
+        row: dict[str, Any] = {
+            "name": p.name,
+            "start_s": round(p.start_s, 1),
+            "end_s": round(p.end_s, 1),
+            "normalized_power_w": _round_or_none(p.normalized_power_w, 1),
+            "avg_speed_mps": _round_or_none(p.avg_speed_mps, 2),
+            "vs_phase_1_pct": None,
+            "vs_phase_1_significant": None,
+        }
+        compared = baseline is not None and p.name.startswith("phase_") and p is not baseline
+        if compared and baseline.normalized_power_w and p.normalized_power_w is not None:
+            row["vs_phase_1_pct"] = round(
+                (p.normalized_power_w - baseline.normalized_power_w) / baseline.normalized_power_w * 100, 1
+            )
+            row["vs_phase_1_significant"] = phase_difference_is_significant(
+                baseline.normalized_power_w, p.normalized_power_w
+            )
+        out.append(row)
+    return out
+
+
+RIDE_PACING_INTERPRETATION = (
+    "Read the lap metrics TOGETHER, never one alone. efficiency_mps_per_w "
+    "(speed per watt of NP) rises for genuine improvement AND for fade/easing "
+    "off -- it is only an efficiency gain if avg_speed_mps held or rose; "
+    "rising efficiency with falling speed is fade. total_work_kj is absolute "
+    "energy cost (sloppy lines/re-accelerations raise it). variability_index "
+    "rising with falling speed suggests lost momentum through technical "
+    "sections rather than fatigue. coasting_s falling on a slower lap suggests "
+    "more braking. The lap-metric interpretations are coach judgment, not "
+    "cyclocross-specific evidence. Phase NP differences under the "
+    f"{DEFAULT_SIGNIFICANCE_THRESHOLD_PCT:g}% floor are normal variation, not a pacing "
+    "signal; the start phase is fixed at the first 90s, so a pre-race wait at "
+    "the line (0W) can dominate it."
+)
+
+
+def _handle_get_ride_pacing(
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str
+) -> dict[str, Any]:
+    """Read-only: runs `gps_laps.analyze_gps_laps` and
+    `race_phases.split_race_phases` over the ride's stored series. Neither
+    result is persisted on the Workout (see their module docstrings), so
+    this is the only way the coach can see them."""
+    workout_id = (input_data.get("workout_id") or "").strip()
+    if not workout_id:
+        return {"error": "workout_id is required"}
+
+    workout = find_workout_by_id(store.list_workouts(slug), workout_id)
+    if workout is None:
+        return {"error": f"no workout matching id {workout_id!r}"}
+    if workout.sport != "bike":
+        return {
+            "error": (
+                f"ride pacing only runs on bike rides; this workout is {workout.sport!r} "
+                "-- if it was actually a bike ride, use pull_activity_stream, which "
+                "re-pulls the source and corrects the local sport tag"
+            )
+        }
+
+    series, series_source, load_error = _load_workout_series(store, slug, workout)
+    if load_error is not None:
+        return {"error": load_error}
+    if series is None:
+        return {
+            "error": (
+                "no time-series data is available for this workout (no stored series "
+                "and no re-parsable raw .fit) -- use pull_activity_stream to re-fetch "
+                "it from intervals.icu, or ask the athlete to re-upload the original file"
+            )
+        }
+
+    laps = analyze_gps_laps(series)
+    phases = split_race_phases(series)
+    laps_truncated = len(laps) > RIDE_PACING_LAPS_CAP
+
+    gps_laps: dict[str, Any] = {
+        "detected": len(laps),
+        "laps": [_gps_lap_json(m) for m in laps[:RIDE_PACING_LAPS_CAP]],
+        "truncated": laps_truncated,
+    }
+    if not laps:
+        gps_laps["note"] = (
+            "No laps detected: the ride has no usable GPS track, isn't a looped "
+            "course that returns to its start, or no loop was long enough "
+            "to count as a lap."
+        )
+
+    log.info(
+        "get_ride_pacing",
+        athlete=slug,
+        workout_id=str(workout.id),
+        series_source=series_source,
+        laps_detected=len(laps),
+        phases=len(phases),
+    )
+    return {
+        "workout_id": str(workout.id),
+        "date": workout.date.isoformat(),
+        "series_source": series_source,
+        "gps_laps": gps_laps,
+        "race_phases": {
+            "phases": _race_phases_json(phases),
+            "significance_threshold_pct": DEFAULT_SIGNIFICANCE_THRESHOLD_PCT,
+        },
+        "interpretation": RIDE_PACING_INTERPRETATION,
     }
 
 
@@ -6576,6 +6773,9 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "reanalyze_workout": lambda input_data: _handle_reanalyze_workout(
+            input_data, store=store, slug=slug
+        ),
+        "get_ride_pacing": lambda input_data: _handle_get_ride_pacing(
             input_data, store=store, slug=slug
         ),
         "pull_activity_stream": lambda input_data: _handle_pull_activity_stream(
