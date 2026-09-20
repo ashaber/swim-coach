@@ -178,7 +178,12 @@ from swim_coach import fueling as fueling_module
 from swim_coach.adapt import adapt_week
 from swim_coach.analytics import compute_analytics
 from swim_coach.athlete_time import athlete_today
-from swim_coach.gps_laps import GpsLapMetrics, analyze_gps_laps
+from swim_coach.gps_laps import (
+    GpsLapMetrics,
+    analyze_gps_laps,
+    position_at_offset,
+    start_finish_from_laps,
+)
 from swim_coach.load import _training_base_evidence, daily_loads, estimate_hr_max
 from swim_coach.parse_files import parse_fit
 from swim_coach.quality import match_workout_to_session
@@ -944,7 +949,11 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "real pacing signal -- don't report them as one). Point-to-"
             "point rides simply detect zero laps; phases still work without "
             "GPS. It never writes anything. Needs a stored series -- if it "
-            "reports none, use pull_activity_stream first. Describe what "
+            "reports none, use pull_activity_stream first. If the ride "
+            "started away from the start/finish line (race start chute) and "
+            "laps come back missing or implausible, re-run with "
+            "`start_finish` (a prior ride of the same course, a warmup "
+            "lap-key press, or a lat/lng pin). Describe what "
             "the numbers show and hedge accordingly; the response's "
             "`interpretation` field states the known limits."
         ),
@@ -954,6 +963,34 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 "workout_id": {
                     "type": "string",
                     "description": "The id (or a unique prefix) of the logged bike workout.",
+                },
+                "start_finish": {
+                    "type": "object",
+                    "description": (
+                        "OPTIONAL override for where the start/finish line is. "
+                        "By default laps are counted against the FIRST GPS "
+                        "sample of the recording, which is wrong when the "
+                        "ride started away from the line (e.g. at the start "
+                        "chute of a race, or the athlete couldn't press the "
+                        "lap key on a rough descent) -- symptoms: zero or "
+                        "implausible laps on a looped course. Give EXACTLY "
+                        "ONE of: (a) `from_workout_id` -- a prior ride of the "
+                        "SAME course (e.g. yesterday's race), whose own "
+                        "detected line is reused; (b) `from_workout_id` + "
+                        "`at_lap_index` -- the position where that ride's "
+                        "device lap N began, i.e. a lap-key press at the line "
+                        "on a warmup lap (a single press makes lap 1 start "
+                        "there); (c) `lat` + `lng` -- a pin the athlete "
+                        "supplies. The response's `gps_laps.start_finish` "
+                        "says what was used."
+                    ),
+                    "properties": {
+                        "from_workout_id": {"type": "string"},
+                        "at_lap_index": {"type": "integer"},
+                        "lat": {"type": "number"},
+                        "lng": {"type": "number"},
+                    },
+                    "additionalProperties": False,
                 },
             },
             "required": ["workout_id"],
@@ -3367,6 +3404,76 @@ RIDE_PACING_INTERPRETATION = (
 )
 
 
+def _resolve_start_finish(
+    store: StoreInterface, slug: str, raw: Any
+) -> tuple[tuple[float, float] | None, dict[str, Any], str | None]:
+    """`(lat_lng_or_None, meta, error_or_None)` for get_ride_pacing's optional
+    `start_finish`. `None` input keeps the detector's default (first GPS
+    sample of the recording). `meta` is echoed to the coach so it knows --
+    and can say -- which line the laps were counted against."""
+    default_meta: dict[str, Any] = {"source": "first_gps_sample"}
+    if raw is None:
+        return None, default_meta, None
+    if not isinstance(raw, dict):
+        return None, default_meta, "start_finish must be an object"
+
+    has_pin = "lat" in raw or "lng" in raw
+    from_id = raw.get("from_workout_id")
+    if has_pin == (from_id is not None):
+        if not has_pin and "at_lap_index" in raw:
+            return None, default_meta, "at_lap_index needs from_workout_id"
+        return None, default_meta, (
+            "start_finish needs exactly one of: a pin (lat + lng) or from_workout_id "
+            "(optionally with at_lap_index)"
+        )
+
+    if has_pin:
+        lat, lng = raw.get("lat"), raw.get("lng")
+        if any(not isinstance(v, (int, float)) or isinstance(v, bool) for v in (lat, lng)):
+            return None, default_meta, "start_finish pin needs both lat and lng as numbers"
+        if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+            return None, default_meta, f"start_finish pin ({lat}, {lng}) is out of range"
+        return (float(lat), float(lng)), {"source": "pin", "lat": lat, "lng": lng}, None
+
+    ref = find_workout_by_id(store.list_workouts(slug), str(from_id).strip())
+    if ref is None:
+        return None, default_meta, f"no workout matching id {from_id!r} for start_finish.from_workout_id"
+    ref_series, _, load_error = _load_workout_series(store, slug, ref)
+    if load_error is not None:
+        return None, default_meta, load_error
+    if ref_series is None:
+        return None, default_meta, (
+            f"ride {ref.id} has no stored series to take a start/finish line from -- "
+            "use a different ride, or give a lat/lng pin"
+        )
+
+    at_lap = raw.get("at_lap_index")
+    if at_lap is None:
+        point = start_finish_from_laps(ref_series)
+        if point is None:
+            return None, default_meta, (
+                f"no start/finish line could be derived from ride {ref.id} (no GPS laps "
+                "detected on it) -- use a warmup lap via at_lap_index, or give a lat/lng pin"
+            )
+        source = f"ride {ref.id}"
+    else:
+        if not isinstance(at_lap, int) or isinstance(at_lap, bool):
+            return None, default_meta, "at_lap_index must be an integer"
+        lap = next((lp for lp in ref.laps if lp.index == at_lap), None)
+        if lap is None or lap.start_offset_s is None:
+            return None, default_meta, (
+                f"ride {ref.id} has no lap {at_lap} with a recorded start time "
+                f"(it has laps {[lp.index for lp in ref.laps]})"
+            )
+        point = position_at_offset(ref_series, lap.start_offset_s)
+        if point is None:
+            return None, default_meta, f"lap {at_lap} of ride {ref.id} has no GPS fix at its start"
+        source = f"lap {at_lap} start of ride {ref.id}"
+
+    lat, lng = round(point[0], 6), round(point[1], 6)
+    return (lat, lng), {"source": source, "lat": lat, "lng": lng}, None
+
+
 def _handle_get_ride_pacing(
     input_data: dict[str, Any], *, store: StoreInterface, slug: str
 ) -> dict[str, Any]:
@@ -3402,7 +3509,13 @@ def _handle_get_ride_pacing(
             )
         }
 
-    laps = analyze_gps_laps(series)
+    start_finish, start_finish_meta, sf_error = _resolve_start_finish(
+        store, slug, input_data.get("start_finish")
+    )
+    if sf_error is not None:
+        return {"error": sf_error}
+
+    laps = analyze_gps_laps(series, start_finish=start_finish)
     phases = split_race_phases(series)
     laps_truncated = len(laps) > RIDE_PACING_LAPS_CAP
 
@@ -3410,12 +3523,16 @@ def _handle_get_ride_pacing(
         "detected": len(laps),
         "laps": [_gps_lap_json(m) for m in laps[:RIDE_PACING_LAPS_CAP]],
         "truncated": laps_truncated,
+        "start_finish": start_finish_meta,
     }
     if not laps:
         gps_laps["note"] = (
             "No laps detected: the ride has no usable GPS track, isn't a looped "
             "course that returns to its start, or no loop was long enough "
-            "to count as a lap."
+            "to count as a lap. If it IS a looped course but the recording "
+            "began away from the start/finish line (e.g. at a race start "
+            "chute), pass `start_finish` -- a prior ride of the same course, "
+            "a warmup lap-key press, or a lat/lng pin."
         )
 
     log.info(

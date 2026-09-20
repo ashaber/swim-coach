@@ -16,7 +16,7 @@ import uuid
 from datetime import date
 
 import pytest
-from swim_coach.models import Workout
+from swim_coach.models import Workout, WorkoutLap
 from swim_coach.store import FileStore
 
 from app.tools import RIDE_PACING_LAPS_CAP, build_tool_handlers
@@ -74,6 +74,7 @@ def _seed(
     series: dict | None,
     *,
     sport: str = "bike",
+    laps: list[WorkoutLap] | None = None,
 ) -> Workout:
     profile = store.load_athlete("renee")
     duration_min = (series["t_s"][-1] / 60) if series else 30.0
@@ -85,6 +86,7 @@ def _seed(
         source="fit",
         distance_m=int(SPEED_MPS * (series["t_s"][-1] if series else 1800)),
         duration_min=duration_min,
+        laps=laps or [],
     )
     store.save_workout("renee", w)
     if series is not None:
@@ -211,3 +213,174 @@ def test_no_series_points_at_pull_activity_stream(athletes_dir) -> None:
     res = _handlers(store)["get_ride_pacing"]({"workout_id": str(w.id)})
     assert "no time-series data" in res["error"]
     assert "pull_activity_stream" in res["error"]
+
+
+# --- start/finish anchor ------------------------------------------------------------
+# A race recording that begins at the start chute, off the line the laps are
+# counted at (real case: 2026-09-20). LEAD_IN_S seconds of straight riding
+# from an off-course point precede the loops.
+
+LEAD_IN_S = 150
+S_F_LAT, S_F_LNG = START_LAT, START_LNG  # the loop's (0,0) corner
+
+
+def _with_lead_in(series: dict) -> dict:
+    m_per_deg_lng = M_PER_DEG_LAT * math.cos(math.radians(START_LAT))
+    n = LEAD_IN_S
+    t_s, lat, lng, speed, power = [], [], [], [], []
+    for i in range(n):
+        f = 1 - i / n  # 1 -> 0: chute (-400 E, -250 N) toward the S/F corner
+        t_s.append(float(i))
+        lat.append(START_LAT + (-250.0 * f) / M_PER_DEG_LAT)
+        lng.append(START_LNG + (-400.0 * f) / m_per_deg_lng)
+        speed.append(SPEED_MPS)
+        power.append(150.0)
+    return {
+        "t_s": t_s + [t + n for t in series["t_s"]],
+        "lat": lat + series["lat"],
+        "lng": lng + series["lng"],
+        "speed_mps": speed + series["speed_mps"],
+        "power_w": power + series["power_w"],
+    }
+
+
+def _ride_with_lead_in(store: FileStore, lap_powers: list[float]) -> Workout:
+    return _seed(store, _with_lead_in(_loop_series(lap_powers)))
+
+
+def test_default_reference_reports_first_gps_sample_as_source(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    w = _seed(store, _loop_series([200, 180]))
+
+    res = _handlers(store)["get_ride_pacing"]({"workout_id": str(w.id)})
+
+    assert res["gps_laps"]["start_finish"]["source"] == "first_gps_sample"
+
+
+def test_pin_anchors_laps_on_a_ride_that_starts_off_the_line(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    w = _ride_with_lead_in(store, [200, 180, 160])
+
+    res = _handlers(store)["get_ride_pacing"](
+        {"workout_id": str(w.id), "start_finish": {"lat": S_F_LAT, "lng": S_F_LNG}}
+    )
+
+    assert "error" not in res
+    assert res["gps_laps"]["detected"] == 3
+    assert res["gps_laps"]["start_finish"] == {"source": "pin", "lat": S_F_LAT, "lng": S_F_LNG}
+    # lap 1's window reaches back into the 150W lead-in (boundary fires ~7s before the line)
+    assert [lap["normalized_power_w"] for lap in res["gps_laps"]["laps"]] == pytest.approx([200, 180, 160], abs=5)
+
+
+def test_prior_ride_supplies_the_start_finish(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    prior = _seed(store, _loop_series([200, 200]))
+    today = _ride_with_lead_in(store, [200, 180, 160])
+
+    res = _handlers(store)["get_ride_pacing"](
+        {"workout_id": str(today.id), "start_finish": {"from_workout_id": str(prior.id)}}
+    )
+
+    assert "error" not in res
+    assert res["gps_laps"]["detected"] == 3
+    sf = res["gps_laps"]["start_finish"]
+    assert sf["source"] == f"ride {prior.id}"
+    assert sf["lat"] == pytest.approx(S_F_LAT, abs=0.0003)
+    assert sf["lng"] == pytest.approx(S_F_LNG, abs=0.0003)
+
+
+def test_warmup_lap_press_supplies_the_start_finish(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    # Warmup: rides the loop, presses the lap key back at the line after one lap.
+    warmup = _seed(
+        store,
+        _loop_series([150, 150]),
+        laps=[
+            WorkoutLap(index=0, start_offset_s=0.0, duration_s=float(LAP_S)),
+            WorkoutLap(index=1, start_offset_s=float(LAP_S), duration_s=float(LAP_S)),
+        ],
+    )
+    today = _ride_with_lead_in(store, [200, 180, 160])
+
+    res = _handlers(store)["get_ride_pacing"](
+        {
+            "workout_id": str(today.id),
+            "start_finish": {"from_workout_id": str(warmup.id), "at_lap_index": 1},
+        }
+    )
+
+    assert "error" not in res
+    assert res["gps_laps"]["detected"] == 3
+    assert res["gps_laps"]["start_finish"]["source"] == f"lap 1 start of ride {warmup.id}"
+
+
+@pytest.mark.parametrize(
+    "start_finish, fragment",
+    [
+        ({"lat": S_F_LAT}, "lat and lng"),
+        ({"lat": 95.0, "lng": 0.0}, "out of range"),
+        ({"lat": "x", "lng": 0.0}, "lat and lng"),
+        ({"lat": S_F_LAT, "lng": S_F_LNG, "from_workout_id": "abc"}, "exactly one"),
+        ({}, "exactly one"),
+        ({"at_lap_index": 1}, "from_workout_id"),
+        ({"from_workout_id": "no-such-ride"}, "no workout matching"),
+        ("nope", "object"),
+    ],
+)
+def test_invalid_start_finish_is_a_clear_error(athletes_dir, start_finish, fragment) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    w = _ride_with_lead_in(store, [200, 180])
+
+    res = _handlers(store)["get_ride_pacing"]({"workout_id": str(w.id), "start_finish": start_finish})
+
+    assert fragment in res["error"]
+
+
+def test_prior_ride_without_detectable_laps_errors_and_suggests_alternatives(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    prior = _ride_with_lead_in(store, [200])  # its own first-sample reference is off the line
+    today = _ride_with_lead_in(store, [200, 180])
+
+    res = _handlers(store)["get_ride_pacing"](
+        {"workout_id": str(today.id), "start_finish": {"from_workout_id": str(prior.id)}}
+    )
+
+    assert "no start/finish line" in res["error"]
+    assert "pin" in res["error"] or "lat" in res["error"]
+
+
+@pytest.mark.parametrize("bad_index", [7, -1])
+def test_lap_index_out_of_range_errors(athletes_dir, bad_index) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    warmup = _seed(
+        store,
+        _loop_series([150]),
+        laps=[WorkoutLap(index=0, start_offset_s=0.0, duration_s=float(LAP_S))],
+    )
+    today = _ride_with_lead_in(store, [200, 180])
+
+    res = _handlers(store)["get_ride_pacing"](
+        {
+            "workout_id": str(today.id),
+            "start_finish": {"from_workout_id": str(warmup.id), "at_lap_index": bad_index},
+        }
+    )
+
+    assert "lap" in res["error"] and str(bad_index) in res["error"]
+
+
+def test_zero_laps_note_mentions_start_finish_override(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    w = _ride_with_lead_in(store, [200, 180])
+
+    res = _handlers(store)["get_ride_pacing"]({"workout_id": str(w.id)})
+
+    assert "start_finish" in res["gps_laps"]["note"]
+
+
+def test_schema_advertises_start_finish() -> None:
+    from app.tools import TOOLS_SCHEMA
+
+    schema = next(t for t in TOOLS_SCHEMA if t["name"] == "get_ride_pacing")["input_schema"]
+    assert "start_finish" in schema["properties"]
+    assert schema["required"] == ["workout_id"]

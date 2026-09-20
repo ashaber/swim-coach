@@ -39,9 +39,15 @@ efficiency comparison described below -- nothing about course shape.
 
 1. **Reference point**: the first sample with a valid `lat`/`lng` pair --
    i.e. the start of the activity. For a looped course, start and finish
-   are normally the same point, so this needs no separate "finish line"
-   parameter for v1 (the real use case this was built for -- see the module
-   docstring above -- has exactly one such point).
+   are normally the same point, so by default this needs no separate
+   "finish line" parameter. When a recording does NOT begin on the line
+   (2026-09-20 race: it started at the start chute, well away from the
+   line, on a rough descent where the lap key couldn't be pressed), the
+   caller passes `start_finish=(lat, lng)` -- from a prior ride of the same
+   course (`start_finish_from_laps`), a warmup lap-key press
+   (`position_at_offset` at a `WorkoutLap.start_offset_s`), or a pin. The
+   first lap then starts at the first crossing of that point; the lead-in
+   before it is never reported as a lap.
 2. **Single linear pass** over the series, tracking real geodesic distance
    (`haversine_distance_m`, never a flat lat/lng-degree approximation --
    wrong at any real course scale) from the reference point:
@@ -216,6 +222,7 @@ def _first_valid_gps_index(lat: list, lng: list) -> int | None:
 def detect_gps_laps(
     series: dict | None,
     *,
+    start_finish: tuple[float, float] | None = None,
     proximity_m: float = GPS_LAP_PROXIMITY_M,
     min_away_m: float = GPS_LAP_MIN_AWAY_M,
     min_lap_duration_s: float = GPS_LAP_MIN_DURATION_S,
@@ -223,6 +230,13 @@ def detect_gps_laps(
     """Detect real per-course-lap boundaries from GPS position on a looped
     course. See the module docstring for the full algorithm and edge-case
     posture. Never raises -- see module docstring for every `[]` case.
+
+    `start_finish` is an optional `(lat, lng)` for the real start/finish
+    line, for a recording that does NOT begin on it (e.g. it starts at the
+    start chute, or on a rough descent to the line). Default `None` keeps
+    the first-GPS-sample reference. When given and the recording starts
+    away from it, the first lap begins at the first crossing -- the
+    lead-in from wherever the recording started is not a lap.
     """
     if not series:
         return []
@@ -240,11 +254,22 @@ def detect_gps_laps(
     if n - ref_idx < MIN_USABLE_GPS_SAMPLES:
         return []
 
-    ref_lat, ref_lng = lat[ref_idx], lng[ref_idx]
+    ref_lat, ref_lng = start_finish if start_finish is not None else (lat[ref_idx], lng[ref_idx])
 
-    boundaries: list[int] = [ref_idx]
-    armed = False
-    last_boundary_t = t_s[ref_idx]
+    starts_on_line = (
+        start_finish is None
+        or haversine_distance_m(ref_lat, ref_lng, lat[ref_idx], lng[ref_idx]) <= proximity_m
+    )
+    if starts_on_line:
+        boundaries: list[int] = [ref_idx]
+        armed = False
+        last_boundary_t = t_s[ref_idx]
+    else:
+        # Off-line start: nothing to leave, and no previous boundary for the
+        # min-duration floor to measure the first crossing against.
+        boundaries = []
+        armed = haversine_distance_m(ref_lat, ref_lng, lat[ref_idx], lng[ref_idx]) >= min_away_m
+        last_boundary_t = -math.inf
 
     for i in range(ref_idx + 1, n):
         la, lo = lat[i], lng[i]
@@ -271,6 +296,45 @@ def detect_gps_laps(
         for k in range(len(boundaries) - 1)
     ]
     return laps
+
+
+def start_finish_from_laps(series: dict | None, **detect_kwargs) -> tuple[float, float] | None:
+    """The `(lat, lng)` of a ride's own start/finish line: the mean position
+    of its detected lap-boundary samples, so a prior race's line can anchor
+    detection on a later ride of the same course. `None` when no lap was
+    detected (nothing to derive a line from)."""
+    laps = detect_gps_laps(series, **detect_kwargs)
+    if not laps:
+        return None
+    idxs = [laps[0].start_idx] + [lap.end_idx for lap in laps]
+    lats = [series["lat"][i] for i in idxs]
+    lngs = [series["lng"][i] for i in idxs]
+    return statistics.fmean(lats), statistics.fmean(lngs)
+
+
+# Coach judgment: how far outside the recording an offset may fall and still
+# resolve to its nearest sample -- a lap-key press at the very edge of a
+# recording, not a lap frame from a different activity. Not research-backed.
+POSITION_OFFSET_TOLERANCE_S = 30.0
+
+
+def position_at_offset(series: dict | None, offset_s: float) -> tuple[float, float] | None:
+    """`(lat, lng)` of the valid-GPS sample nearest `offset_s` seconds into
+    the recording -- e.g. where a device lap-key press (a `WorkoutLap.
+    start_offset_s`) happened. `None` without a GPS channel, or when the
+    offset is outside the recording."""
+    if not series:
+        return None
+    t_s, lat, lng = series.get("t_s"), series.get("lat"), series.get("lng")
+    if not t_s or not lat or not lng:
+        return None
+    if offset_s < t_s[0] - POSITION_OFFSET_TOLERANCE_S or offset_s > t_s[-1] + POSITION_OFFSET_TOLERANCE_S:
+        return None
+    valid = [i for i, (la, lo) in enumerate(zip(lat, lng)) if la is not None and lo is not None]
+    if not valid:
+        return None
+    best = min(valid, key=lambda i: abs(t_s[i] - offset_s))
+    return lat[best], lng[best]
 
 
 # --- per-lap metrics ----------------------------------------------------------------
@@ -505,8 +569,8 @@ def analyze_gps_laps(series: dict | None, **detect_kwargs) -> list[GpsLapMetrics
     """Convenience orchestrator: `detect_gps_laps(series, **detect_kwargs)`
     then `lap_metrics` for each detected lap. `[]` whenever `detect_gps_laps`
     itself returns `[]` -- see that function's docstring for every such
-    case. `**detect_kwargs` forwards `proximity_m`/`min_away_m`/
-    `min_lap_duration_s` overrides straight through.
+    case. `**detect_kwargs` forwards `start_finish`/`proximity_m`/
+    `min_away_m`/`min_lap_duration_s` overrides straight through.
     """
     laps = detect_gps_laps(series, **detect_kwargs)
     return [lap_metrics(series, lap) for lap in laps]

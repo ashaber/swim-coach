@@ -28,6 +28,8 @@ from swim_coach.gps_laps import (
     detect_gps_laps,
     haversine_distance_m,
     lap_metrics,
+    position_at_offset,
+    start_finish_from_laps,
 )
 
 START_LAT = 45.0
@@ -499,3 +501,91 @@ def test_analyze_gps_laps_end_to_end_on_synthetic_loop():
 def test_analyze_gps_laps_no_gps_returns_empty_list_not_raises():
     series = {"t_s": [0.0, 60.0], "power_w": [200.0, 210.0]}
     assert analyze_gps_laps(series) == []
+
+
+# --- explicit start/finish anchor ---------------------------------------------------
+# Real case: a race recording that BEGINS at the start chute, well away from
+# the start/finish line the laps are actually counted at. The default
+# (first-GPS-sample) reference then measures every crossing against the
+# chute, not the line.
+
+CHUTE_OFFSET = (-400.0, -250.0)  # meters east/north of the S/F corner
+
+
+def _series_with_lead_in(n_laps: int, *, speed_mps: float = 3.0, step_m: float = 6.0) -> dict:
+    """`_square_loop_series(n_laps)` preceded by a straight lead-in from the
+    off-course chute point to the S/F corner (0, 0)."""
+    loop = _square_loop_series(n_laps, speed_mps=speed_mps, step_m=step_m)
+    lead = _interpolate_path([CHUTE_OFFSET, (0.0, 0.0)], step_m)[:-1]  # (0,0) is loop[0]
+    dt = step_m / speed_mps
+    lead_lat, lead_lng = zip(*(_offset_latlng(dx, dy) for dx, dy in lead))
+    shift = len(lead) * dt
+    return {
+        "t_s": [i * dt for i in range(len(lead))] + [t + shift for t in loop["t_s"]],
+        "lat": list(lead_lat) + loop["lat"],
+        "lng": list(lead_lng) + loop["lng"],
+    }
+
+
+def test_start_finish_anchor_recovers_laps_when_recording_starts_off_the_line():
+    series = _series_with_lead_in(3)
+    laps = detect_gps_laps(series, start_finish=_offset_latlng(0.0, 0.0))
+    assert len(laps) == 3
+    for lap in laps:
+        assert lap.duration_s == pytest.approx(200.0, abs=15.0)
+
+
+def test_start_finish_anchor_first_lap_starts_at_first_crossing_not_recording_start():
+    series = _series_with_lead_in(2)
+    laps = detect_gps_laps(series, start_finish=_offset_latlng(0.0, 0.0))
+    assert laps[0].start_idx > 0
+    start_lat, start_lng = series["lat"][laps[0].start_idx], series["lng"][laps[0].start_idx]
+    assert haversine_distance_m(start_lat, start_lng, *_offset_latlng(0.0, 0.0)) <= GPS_LAP_PROXIMITY_M
+
+
+def test_default_reference_on_off_line_start_does_not_find_the_true_laps():
+    # Documents the problem the anchor exists to solve.
+    series = _series_with_lead_in(3)
+    assert len(detect_gps_laps(series)) != 3
+
+
+def test_start_finish_anchor_matches_default_when_recording_starts_on_the_line():
+    series = _square_loop_series(3)
+    assert detect_gps_laps(series, start_finish=_offset_latlng(0.0, 0.0)) == detect_gps_laps(series)
+
+
+def test_start_finish_anchor_never_approached_detects_zero_laps():
+    series = _square_loop_series(3)
+    far = _offset_latlng(5_000.0, 5_000.0)
+    assert detect_gps_laps(series, start_finish=far) == []
+
+
+def test_start_finish_from_laps_returns_the_line_position():
+    lat, lng = start_finish_from_laps(_square_loop_series(3))
+    assert haversine_distance_m(lat, lng, *_offset_latlng(0.0, 0.0)) <= GPS_LAP_PROXIMITY_M
+
+
+def test_start_finish_from_laps_none_when_no_laps():
+    assert start_finish_from_laps(_series_with_lead_in(3)) is None
+    assert start_finish_from_laps(None) is None
+
+
+def test_position_at_offset_returns_position_of_nearest_sample():
+    series = _square_loop_series(1)
+    i = 10
+    lat, lng = position_at_offset(series, series["t_s"][i])
+    assert (lat, lng) == (series["lat"][i], series["lng"][i])
+
+
+def test_position_at_offset_skips_dropped_gps_fixes():
+    series = _square_loop_series(1)
+    series["lat"][10] = None
+    series["lng"][10] = None
+    lat, lng = position_at_offset(series, series["t_s"][10])
+    assert lat is not None and lng is not None
+
+
+def test_position_at_offset_none_without_gps_or_beyond_the_recording():
+    assert position_at_offset(None, 5.0) is None
+    assert position_at_offset({"t_s": [0.0, 1.0]}, 0.5) is None
+    assert position_at_offset(_square_loop_series(1), 10_000_000.0) is None

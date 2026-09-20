@@ -633,7 +633,10 @@ Each logged session carries an `id`. When the athlete asks you to review,
 debrief, or assess how a BIKE race or ride went -- pacing, fade, lap-to-lap
 consistency, efficiency -- call `get_ride_pacing` with that session's `id`
 before answering, and ground the review in what it returns rather than in
-the summary row alone.
+the summary row alone. If the laps it finds are missing or implausible on a
+looped course, the recording probably began away from the start/finish line
+(e.g. at a race start chute): re-run it with `start_finish`, using a prior
+ride of the same course, a warmup lap-key press, or a pin from the athlete.
 """
 
 
