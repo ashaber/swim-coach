@@ -1,14 +1,25 @@
 """GPS-derived lap-boundary detection and per-lap efficiency metrics.
 
 Motivating case (real, not hypothetical): a real cyclocross race (Andrew,
-2026-09-19, `workouts.id = 'a4391e6d-1583-46a3-a7da-ab2b9acf5b09'`, athlete
-slug `andrew`) whose device recorded exactly ONE native FIT `lap` frame for
-the entire 46.2-minute race -- auto-lap was profile-specific and wasn't
-enabled for this activity's profile, and the one manual lap-key press the
-athlete made mid-race didn't register as a separate FIT lap either. A
-cyclocross course is a closed loop ridden repeatedly, so the real per-lap
-boundaries are recoverable from GPS position alone even when the device's
-own lap telemetry is useless.
+2026-09-19, `workouts.id = '678a693e-052d-4202-bd7e-3acfc39acb5a'`, athlete
+slug `andrew`, 49.4min/14423m -- NOT the `a4391e6d-...` workout from the
+same day, which was that morning's warmup, corrected after an earlier
+mix-up) whose device recorded exactly TWO native FIT `lap` frames for the
+entire race -- auto-lap was profile-specific and wasn't enabled for this
+activity's profile; the athlete's one manual lap-key press (at the end of
+his real lap 1) produced lap frame 0, and everything after (laps 2 through
+5) collapsed into a single lap frame 1. A cyclocross course is a closed
+loop ridden repeatedly, so the real per-lap boundaries are recoverable
+from GPS position alone even when the device's own lap telemetry is
+useless.
+
+Real validation note on detected lap 1's boundary (confirmed by Andrew,
+not a guess): it lands slightly before his own manual lap-1 press --
+explained by the race's real start position, which was slightly off the
+main course and passed through the start/finish line almost immediately,
+rather than a GPS-noise/staging-area artifact as originally guessed.
+Laps 2-5, each bounded by two genuine start/finish line crossings, aren't
+affected by this start-position quirk.
 
 Pure functions over the columnar series dict `parse_files._build_series`
 produces (`t_s` plus `lat`/`lng`/`power_w`/`speed_mps`/... channels, same
@@ -265,11 +276,31 @@ def detect_gps_laps(
 # --- per-lap metrics ----------------------------------------------------------------
 
 
+# Coach judgment: freewheeling reads as literal 0W on a power meter --
+# this small allowance is only for sensor noise/quantization around true
+# zero, not a research-backed number.
+COASTING_POWER_THRESHOLD_W = 5.0
+
+
 @dataclass(frozen=True)
 class GpsLapMetrics:
-    """Per-detected-lap efficiency numbers. See `lap_metrics` and
-    `efficiency_mps_per_w`'s own docstring below for definitions and (for
-    the efficiency field specifically) a real, named limitation."""
+    """Per-detected-lap numbers -- several DELIBERATELY DIFFERENT lenses on
+    the same lap, not one combined score. Andrew's own framing (2026-09-20,
+    reviewing a set of metrics suggestions and picking these three as
+    worth building alongside `efficiency_mps_per_w`): each metric shows a
+    slightly different aspect, and the COACH interprets them together --
+    e.g. "speed increased, work dropped, VI improved" reads as a genuine,
+    multi-signal efficiency gain, where any ONE of these fields moving on
+    its own is much easier to misread (see `efficiency_mps_per_w`'s own
+    fade-vs-genuine-improvement confound below, which every field here
+    shares some version of). Deliberately NOT collapsed into a single
+    "efficiency score" -- Andrew's own words: "we may redefine efficiency
+    with experience" -- exposing the real components and letting
+    interpretation evolve is preferred over locking in an unvalidated
+    combining formula now.
+
+    See `lap_metrics` and each field's own docstring for definitions and
+    (where one exists) a real, named limitation."""
 
     lap_n: int
     start_s: float
@@ -311,6 +342,63 @@ class GpsLapMetrics:
     together, this metric was never designed to be read in isolation.
     library/32-gps-lap-detection.md.
     """
+    total_work_kj: float | None
+    """Total mechanical work for this lap, in kilojoules:
+    `average_power_w * duration_s / 1000` -- the standard convention every
+    cycling head unit/platform uses for "kJ" (average power IS total
+    work / total time by definition, so this is exact, not an
+    approximation -- no per-sample integration/gap-handling edge cases to
+    get wrong, unlike Normalized Power's own rolling-window algorithm).
+
+    Deliberately NOT power/distance or power/speed-normalized -- this is
+    the ABSOLUTE energy cost lens: correcting sloppy lines, bobbling a
+    barrier, or overshooting a corner and re-accelerating all show up here
+    as MORE total kJ for a lap that covers essentially the same distance,
+    even when the resulting lap TIME doesn't change enough to look
+    alarming on its own. Coach judgment (Andrew's own framing,
+    2026-09-20): a rising kJ trend across otherwise-similar laps is worth
+    a coach's attention on its own; read alongside `avg_speed_mps` and
+    `variability_index` for why, not in isolation.
+    """
+    variability_index: float | None
+    """Normalized Power / average power for this lap -- the standard,
+    already-widely-used measure of how SPIKY the lap's effort was (a
+    smooth, steady lap has VI close to 1.0; frequent hard accelerations
+    out of corners or barriers push it higher). Distinct from
+    `efficiency_mps_per_w`/`total_work_kj` -- this says nothing about how
+    much work was done or how fast the lap was, only how EVENLY the power
+    was delivered. `None` under the same conditions `normalized_power_w`/
+    `average_power_w` themselves are (no usable power channel).
+
+    Coach judgment on interpretation (Andrew's own framing): a rising VI
+    across otherwise-similar laps, especially paired with falling
+    `avg_speed_mps`, points at lost momentum through technical
+    sections -- more forced re-accelerations, not more raw fitness demand
+    -- rather than at fatigue alone (fatigue typically shows first as
+    falling `normalized_power_w`/`total_work_kj`, not as rising spikiness
+    of an unchanged power ceiling). Not independently verified against a
+    cyclocross-specific citation -- VI itself is a standard, established
+    metric; this specific interpretive claim about what a RISING CX-lap VI
+    means is reasoned from that standard definition, not sourced from a
+    study of cyclocross specifically (none exists -- see this codebase's
+    2026-09-19 race-analysis research pass).
+    """
+    coasting_s: float | None
+    """Total time (seconds) this lap spent at or below
+    `COASTING_POWER_THRESHOLD_W` -- not pedaling meaningfully, whether
+    freewheeling through a corner or fully dismounted/stopped. `None` when
+    the lap's slice has no usable power/time data at all (distinct from a
+    real `0.0`, which means real samples existed and none of them were at
+    or below the threshold).
+
+    Coach judgment (Andrew's own framing): falling coasting time paired
+    with a SLOWER lap is a real signal on its own -- carrying less
+    momentum through the technical sections (so less time freewheeling)
+    while still going slower usually means more braking/scrubbed speed,
+    not more pedaling effort. This field doesn't distinguish braking from
+    simply choosing tighter, slower lines -- read it as one more component
+    to combine, same posture as every other field on this class.
+    """
 
 
 def _slice_series(series: dict, start_idx: int, end_idx: int) -> dict:
@@ -345,20 +433,59 @@ def _avg_speed_mps(sliced: dict) -> float | None:
     return None
 
 
+def _coasting_s(sliced: dict) -> float | None:
+    """Total time (seconds) at/below `COASTING_POWER_THRESHOLD_W` --
+    each sample's power is treated as holding until the NEXT sample
+    (left-Riemann; the slice's very last sample contributes no duration,
+    since nothing follows it to weight -- same convention `total_work_kj`
+    avoids needing entirely by using avg_power*duration instead, but this
+    field genuinely needs a sample-by-sample walk since it's asking WHERE
+    within the lap the power was low, not just the lap's overall total).
+    `None` when no usable power/time pair exists anywhere in the slice --
+    distinct from a real `0.0`, which means real samples existed and none
+    of them were at/below the threshold."""
+    power = sliced.get("power_w")
+    t_s = sliced.get("t_s")
+    if not power or not t_s or len(power) < 2:
+        return None
+    total = 0.0
+    any_valid = False
+    for i in range(len(power) - 1):
+        p, t0, t1 = power[i], t_s[i], t_s[i + 1]
+        if p is None or t0 is None or t1 is None:
+            continue
+        any_valid = True
+        if p <= COASTING_POWER_THRESHOLD_W:
+            total += t1 - t0
+    return total if any_valid else None
+
+
 def lap_metrics(series: dict, lap: GpsLap) -> GpsLapMetrics:
-    """Normalized Power, average speed, and `efficiency_mps_per_w` for one
-    detected `GpsLap`'s slice of `series`. Never raises -- any unavailable
-    input (no power channel, no usable speed/distance) yields `None` for
-    that field, same posture as `analytics.normalized_power_w`/
-    `average_power_w`.
+    """Normalized Power, average speed, `efficiency_mps_per_w`,
+    `total_work_kj`, `variability_index`, and `coasting_s` for one
+    detected `GpsLap`'s slice of `series` -- several deliberately
+    different lenses on the same lap, see `GpsLapMetrics`'s own docstring
+    for why they're kept separate rather than combined into one score.
+    Never raises -- any unavailable input (no power channel, no usable
+    speed/distance) yields `None` for that field, same posture as
+    `analytics.normalized_power_w`/`average_power_w`.
     """
     sliced = _slice_series(series, lap.start_idx, lap.end_idx)
     norm_power = analytics.normalized_power_w(sliced)
+    avg_power = analytics.average_power_w(sliced)
     avg_speed = _avg_speed_mps(sliced)
 
     efficiency = None
     if norm_power is not None and norm_power > 0 and avg_speed is not None:
         efficiency = avg_speed / norm_power
+
+    total_work_kj = None
+    if avg_power is not None:
+        total_work_kj = avg_power * lap.duration_s / 1000
+
+    variability_index = None
+    if norm_power is not None and avg_power is not None and avg_power > 0:
+        variability_index = norm_power / avg_power
 
     return GpsLapMetrics(
         lap_n=lap.n,
@@ -368,6 +495,9 @@ def lap_metrics(series: dict, lap: GpsLap) -> GpsLapMetrics:
         normalized_power_w=norm_power,
         avg_speed_mps=avg_speed,
         efficiency_mps_per_w=efficiency,
+        total_work_kj=total_work_kj,
+        variability_index=variability_index,
+        coasting_s=_coasting_s(sliced),
     )
 
 
