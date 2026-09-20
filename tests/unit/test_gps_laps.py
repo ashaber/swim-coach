@@ -358,6 +358,131 @@ def test_lap_metrics_falls_back_to_distance_over_duration_when_speed_sparse():
     assert m.avg_speed_mps == pytest.approx(2.0)  # 8m over 4s
 
 
+# --- total_work_kj / variability_index / coasting_s (Andrew's 3-metric build,
+# --- 2026-09-20): different lenses on the same lap, deliberately not combined
+# --- into one score -- see GpsLapMetrics's own docstring for the full framing.
+
+
+def test_lap_metrics_total_work_kj_flat_power_lap():
+    # avg_power * duration_s / 1000 -- flat 250W lap, duration 4.0s ->
+    # 250 * 4 / 1000 = 1.0 kJ exactly (this IS the standard, exact
+    # definition of work from average power -- not an approximation).
+    series = _hand_series()
+    lap2 = GpsLap(n=2, start_idx=5, end_idx=9, start_s=5.0, end_s=9.0)
+    m = lap_metrics(series, lap2)
+    assert m.total_work_kj == pytest.approx(1.0)
+
+
+def test_lap_metrics_total_work_kj_spiky_lap_uses_average_not_normalized_power():
+    # Lap 1: power alternates 100/300/100/300/100, avg_power = 180.0,
+    # duration_s = 4.0 -> 180 * 4 / 1000 = 0.72 kJ. Must NOT equal
+    # normalized_power-derived work (NP for this lap is higher than 180,
+    # per the earlier NP test) -- total_work_kj is explicitly the
+    # average-power-based ABSOLUTE energy cost, a different lens from NP.
+    series = _hand_series()
+    lap1 = GpsLap(n=1, start_idx=0, end_idx=4, start_s=0.0, end_s=4.0)
+    m = lap_metrics(series, lap1)
+    assert m.total_work_kj == pytest.approx(0.72)
+    assert m.total_work_kj != pytest.approx(m.normalized_power_w * 4.0 / 1000)
+
+
+def test_lap_metrics_variability_index_flat_power_is_one():
+    # NP == average power exactly for a perfectly flat-power lap -> VI == 1.0.
+    series = _hand_series()
+    lap2 = GpsLap(n=2, start_idx=5, end_idx=9, start_s=5.0, end_s=9.0)
+    m = lap_metrics(series, lap2)
+    assert m.variability_index == pytest.approx(1.0)
+
+
+def test_lap_metrics_variability_index_spiky_lap_is_above_one():
+    # Real property of normalized_power_w's own algorithm, confirmed
+    # directly before writing this test: for a span much SHORTER than the
+    # 30s rolling window (POWER_ROLLING_WINDOW_S), the trailing average
+    # degenerates into an expanding cumulative mean and NP can legitimately
+    # fall BELOW the raw average -- `_hand_series()`'s 5-sample lap1 is
+    # exactly that case (NP=178.9 < avg=180.0). A clean 50/50 square wave
+    # doesn't reliably fix this either (confirmed directly: even a 90s/
+    # three-cycle 100W/300W square wave still gave NP < average) --
+    # a genuinely realistic profile is needed: SHORT sharp spikes against a
+    # LONGER lower baseline (matching this codebase's own 2026-09-19
+    # race-analysis research: real CX surges are ~3-10s against a much
+    # longer lower-intensity baseline, not 50/50 blocks). Confirmed
+    # directly before writing this assertion: 5s spikes to 400W every 30s
+    # against a 100W baseline gives NP=196.5 > avg=150.0.
+    t_s = list(range(180))
+    power_w = [400.0 if (i % 30) < 5 else 100.0 for i in range(180)]
+    series = {"t_s": [float(t) for t in t_s], "power_w": power_w}
+    lap = GpsLap(n=1, start_idx=0, end_idx=179, start_s=0.0, end_s=179.0)
+    m = lap_metrics(series, lap)
+    assert m.normalized_power_w > 150.0  # avg is exactly 150.0
+    assert m.variability_index > 1.1
+    assert m.variability_index == pytest.approx(m.normalized_power_w / 150.0, rel=1e-9)
+
+
+def test_lap_metrics_variability_index_none_when_no_power_channel():
+    series = {"t_s": list(range(5)), "speed_mps": [3.0] * 5}
+    lap = GpsLap(n=1, start_idx=0, end_idx=4, start_s=0.0, end_s=4.0)
+    m = lap_metrics(series, lap)
+    assert m.variability_index is None
+    assert m.total_work_kj is None
+
+
+def test_lap_metrics_total_work_kj_real_zero_when_avg_power_is_zero():
+    # A real, valid 0.0 (all-zero power throughout, e.g. a fully-coasted
+    # lap) is a genuine answer, distinct from None (no usable data at all).
+    series = {"t_s": list(range(5)), "power_w": [0.0] * 5}
+    lap = GpsLap(n=1, start_idx=0, end_idx=4, start_s=0.0, end_s=4.0)
+    m = lap_metrics(series, lap)
+    assert m.total_work_kj == pytest.approx(0.0)
+    # But variability_index is undefined (0/0) -- correctly None, not a
+    # fabricated 1.0 or a ZeroDivisionError.
+    assert m.variability_index is None
+
+
+def test_lap_metrics_coasting_s_counts_only_at_or_below_threshold():
+    # power_w: 0, 0, 200, 200, 0 at t=0,1,2,3,4 (dt=1s each). Left-Riemann:
+    # interval [0,1) at p=0 -> coasts; [1,2) at p=0 -> coasts; [2,3) at
+    # p=200 -> not coasting; [3,4) at p=200 -> not coasting. The lap's
+    # last sample (t=4) contributes no interval. Expected coasting_s = 2.0.
+    series = {
+        "t_s": [0.0, 1.0, 2.0, 3.0, 4.0],
+        "power_w": [0.0, 0.0, 200.0, 200.0, 0.0],
+    }
+    lap = GpsLap(n=1, start_idx=0, end_idx=4, start_s=0.0, end_s=4.0)
+    m = lap_metrics(series, lap)
+    assert m.coasting_s == pytest.approx(2.0)
+
+
+def test_lap_metrics_coasting_s_respects_threshold_not_just_exact_zero():
+    # A small nonzero power at/below COASTING_POWER_THRESHOLD_W (5.0)
+    # still counts as coasting (sensor noise allowance); power clearly
+    # above it does not. power[0]=3.0 -> the [0,1) interval coasts;
+    # power[1]=50.0 -> the [1,2) interval does not.
+    series = {
+        "t_s": [0.0, 1.0, 2.0],
+        "power_w": [3.0, 50.0, 50.0],
+    }
+    lap = GpsLap(n=1, start_idx=0, end_idx=2, start_s=0.0, end_s=2.0)
+    m = lap_metrics(series, lap)
+    assert m.coasting_s == pytest.approx(1.0)  # only the [0,1) interval
+
+
+def test_lap_metrics_coasting_s_none_when_no_power_channel():
+    series = {"t_s": list(range(5)), "speed_mps": [3.0] * 5}
+    lap = GpsLap(n=1, start_idx=0, end_idx=4, start_s=0.0, end_s=4.0)
+    m = lap_metrics(series, lap)
+    assert m.coasting_s is None
+
+
+def test_lap_metrics_coasting_s_zero_when_never_coasting():
+    # Real, valid 0.0 -- distinct from None -- when real data exists and
+    # none of it qualifies as coasting.
+    series = {"t_s": [0.0, 1.0, 2.0], "power_w": [200.0, 200.0, 200.0]}
+    lap = GpsLap(n=1, start_idx=0, end_idx=2, start_s=0.0, end_s=2.0)
+    m = lap_metrics(series, lap)
+    assert m.coasting_s == pytest.approx(0.0)
+
+
 # --- analyze_gps_laps: end-to-end orchestrator -------------------------------------------
 
 
