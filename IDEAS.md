@@ -983,3 +983,11 @@ still show up correctly in the very next turn) via real end-to-end chat
 tests, not just token-count comparisons -- a caching change that
 silently breaks context freshness would be a much worse outcome than the
 cost problem it was meant to fix.
+
+**Status (2026-09-20):** root cause #1 fixed in PR #209 (context now rides
+the NEWEST message; history is byte-stable; one `cache_control` breakpoint
+at the end of history). Still open: root cause #2 (block B churn on topic
+change), the tool-iteration/retry cost, and the size of the cached system
+prefix itself (~136k tokens per cold turn in the 09-20 logs -- worth a look
+on its own). Measure #1 with the verification query above once it has run
+for a few days.
