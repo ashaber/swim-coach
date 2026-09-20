@@ -1761,18 +1761,26 @@ def build_messages(
     focused_workout: Workout | None = None,
     focused_session: Session | None = None,
 ) -> list[dict[str, Any]]:
-    """The `messages` param: per-request context merged into the first
-    message of the conversation, then the rest of `history` verbatim, then
-    the new `message`.
+    """The `messages` param: `history` verbatim, then the new `message` with
+    the per-request context merged into it.
 
-    The context is merged into (not inserted before) the first message
-    because the Messages API requires strictly alternating user/assistant
-    roles -- prepending a standalone synthetic "user" message in front of
-    `history[0]` (itself a "user" turn, by convention: conversations always
-    open with the athlete) would be two user turns back to back and the API
-    would reject it. Merging into history[0]'s content keeps alternation
-    intact. When `history` is empty, the new `message` *is* the first
-    message, so the context merges there instead.
+    The context goes on the NEWEST message, never `history[0]`. Anthropic
+    prompt caching matches an exact byte-prefix from the start of the
+    request, and the context is live data that differs almost every turn --
+    spliced into the first message it would rewrite the head of the
+    conversation each time and make the whole `messages` array uncacheable
+    (IDEA 022, root cause #1). On the newest message it leaves every prior
+    turn byte-identical, so the history is a stable, cacheable prefix.
+
+    It is merged into (not sent as a separate message before) the new
+    message because the Messages API requires strictly alternating
+    user/assistant roles: a standalone synthetic "user" message would sit
+    next to the athlete's own user turn and the API would reject it.
+
+    The last history message carries the one `cache_control` breakpoint in
+    `messages` (the two system blocks use 2 of the 4 allowed), so each request
+    reads all earlier turns from cache and only writes the newest exchange.
+    With no history there is nothing stable to cache yet.
 
     `focused_workout` (the Log tab's embedded workout chat -- see
     `render_focused_workout`) is threaded straight through to
@@ -1790,17 +1798,13 @@ def build_messages(
         focused_workout=focused_workout,
         focused_session=focused_session,
     )
-    messages: list[dict[str, Any]] = []
-
-    if history:
-        first = history[0]
-        messages.append(
-            {"role": first["role"], "content": f"{context_text}\n\n---\n\n{first['content']}"}
-        )
-        for turn in history[1:]:
-            messages.append({"role": turn["role"], "content": turn["content"]})
-        messages.append({"role": "user", "content": message})
-    else:
-        messages.append({"role": "user", "content": f"{context_text}\n\n---\n\n{message}"})
+    messages: list[dict[str, Any]] = [
+        {"role": turn["role"], "content": turn["content"]} for turn in history
+    ]
+    if messages:
+        messages[-1]["content"] = [
+            {"type": "text", "text": messages[-1]["content"], "cache_control": {"type": "ephemeral"}}
+        ]
+    messages.append({"role": "user", "content": f"{context_text}\n\n---\n\n{message}"})
 
     return messages

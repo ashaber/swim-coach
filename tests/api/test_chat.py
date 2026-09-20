@@ -332,6 +332,35 @@ def test_workout_id_injects_focused_block_into_messages(
     assert '"source": "gap"' in first_message
 
 
+def test_multi_turn_request_keeps_history_bare_and_context_on_newest_message(
+    client, fake_claude_chat_factory
+) -> None:
+    # What reaches the Anthropic client: prior turns carry no per-request
+    # context (so the prefix is cacheable) and the newest message does.
+    final = make_final_message([make_text_block("ok")], "end_turn")
+    chat = fake_claude_chat_factory([(["ok"], final)])
+
+    response = client.post(
+        "/api/chat",
+        json=_chat_payload(
+            message="and now?",
+            history=[
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+            ],
+        ),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+
+    sent = chat.client.messages.calls[0]["messages"]
+    assert sent[0] == {"role": "user", "content": "hi"}
+    assert sent[1]["content"][0]["cache_control"] == {"type": "ephemeral"}
+    assert "## Athlete context" not in str(sent[:2])
+    assert "## Athlete context" in sent[2]["content"]
+    assert sent[2]["content"].endswith("and now?")
+
+
 def test_workout_id_prefix_also_resolves(client, fake_claude_chat_factory, athletes_dir) -> None:
     workout = _save_rich_workout(athletes_dir)
     final = make_final_message([make_text_block("ok")], "end_turn")
