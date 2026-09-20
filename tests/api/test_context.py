@@ -817,6 +817,18 @@ def test_per_request_context_labels_rollup_as_aggregate(app_env) -> None:
     assert "derived from the sessions above" in text
 
 
+def test_per_request_context_exact_sessions_carry_workout_id(app_env) -> None:
+    # Per-workout tools (get_ride_pacing, reanalyze_workout) key on
+    # workout_id; the coach can only call them if the id is in its context.
+    store = FileStore(base_dir=app_env)
+    workout = make_workout(date=date.today() - timedelta(days=1), sport="bike")
+    store.save_workout("renee", workout)
+
+    text = build_per_request_context(store, "renee", expert_mode=False)
+
+    assert f'"id": "{workout.id}"' in text
+
+
 def test_per_request_context_lists_exact_sessions_with_distinct_sports(app_env) -> None:
     # The production bug this build fixes: the coach called a logged
     # swim_ow session a "pool" session because it could only see an

@@ -626,6 +626,19 @@ def test_get_workouts_derived_counts_present_and_arrays_absent(athletes_dir) -> 
     assert "pauses" not in workout
 
 
+def test_get_workouts_includes_id_so_per_workout_tools_are_callable(athletes_dir) -> None:
+    # get_ride_pacing / reanalyze_workout need a workout_id; without the id
+    # here the coach has no way to obtain one in an unfocused chat.
+    store = FileStore(base_dir=athletes_dir)
+    _save(store, date=date(2026, 3, 1))
+    saved = store.list_workouts("renee")[0]
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["get_workouts"]({"start_date": "2026-03-01"})
+
+    assert result["workouts"][0]["id"] == str(saved.id)
+
+
 def test_get_workouts_analytics_passed_through(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     _save(

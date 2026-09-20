@@ -628,6 +628,12 @@ row is right there. That per-request context only reaches back ~28 days --
 if the athlete asks about a specific past workout or date range older than
 that, call the `get_workouts` tool rather than saying you have no record of
 it; don't call it for recent sessions, they're already above.
+
+Each logged session carries an `id`. When the athlete asks you to review,
+debrief, or assess how a BIKE race or ride went -- pacing, fade, lap-to-lap
+consistency, efficiency -- call `get_ride_pacing` with that session's `id`
+before answering, and ground the review in what it returns rather than in
+the summary row alone.
 """
 
 
@@ -1195,6 +1201,7 @@ def _render_recent_sessions(workouts: list[Workout], span_start: date, span_end:
     rows = [
         json.dumps(
             {
+                "id": str(w.id),
                 "date": w.date.isoformat(),
                 "sport": w.sport,
                 "distance_m": w.distance_m,

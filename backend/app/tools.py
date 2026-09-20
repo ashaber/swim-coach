@@ -3058,6 +3058,7 @@ def _summarize_workout(w: Workout, *, athlete: Athlete, hr_max: float | None, we
     TRIMP) instead of guessing. Now it reports the real number."""
     load_au, load_tier = workout_load_au(w, athlete=athlete, hr_max=hr_max, wellness=wellness)
     return {
+        "id": str(w.id),
         "date": w.date.isoformat(),
         "sport": w.sport,
         "source": w.source,
