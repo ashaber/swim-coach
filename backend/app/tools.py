@@ -213,6 +213,7 @@ from swim_coach.plan import (
     SHARPENING_MIN_MACRO_WEEKS,
     WEEKLY_VOLUME_RAMP_CAP,
     _bike_training_days,
+    _template_week_sessions,
     _duration_min_for_distance,
     _monday_of_week,
     _monday_on_or_after,
@@ -857,7 +858,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "(strength right after the intervals, same day) | 'after_hard' (default rule) | "
             "null to clear. ALWAYS call it WITHOUT `confirm` first, read the resolved "
             "layout back to the athlete, and only call again with `confirm: true` after they "
-            "agree -- it changes every future week. Standing rides apply to build/base "
+            "agree -- it changes every future week. For a whole week's shape (several hard days, yoga, skills, days off) use set_weekly_template instead. Standing rides apply to build/base "
             "weeks only: taper and race weeks ignore them, and volume/ramp-cap limits are "
             "never overridden. The response says what was actually stored."
         ),
@@ -879,6 +880,57 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
                 "hard_day": {"type": "string", "description": "The interval/hard bike day: mon..sun."},
                 "strength_placement": {"type": ["string", "null"], "enum": ["after_hard", "same_day_as_hard", None]},
+                "confirm": {"type": "boolean", "description": "true = persist; omit for a preview."},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "set_weekly_template",
+        "description": (
+            "Save the SHAPE of the athlete's training week -- which sessions go on which days "
+            "-- so the week generator builds every future build/base week from it. Use it "
+            "whenever the athlete describes a whole week or a repeating pattern: 'Monday CX "
+            "skills and yoga, Tuesday intervals then strength, Wednesday group ride, Thursday "
+            "off, Friday yoga, Saturday intervals and strength, Sunday group ride'. Prefer it "
+            "over set_schedule_preferences for anything beyond one standing ride, and NEVER "
+            "hand-author session_overrides week after week to reproduce a pattern the athlete "
+            "keeps asking for. `template`: {mon..sun: [slot, ...]} -- a day left out or [] is a "
+            "day OFF. A slot is {kind, role?, label?, duration_min?}: kind 'bike' needs role "
+            "'hard' (an interval ride; several per week are fine, each gets a different "
+            "interval type) or 'endurance' (a Z2 ride, e.g. a club group ride -- put its name in "
+            "`label`); kind 'skills' (cyclocross skills), 'strength' (put it AFTER the hard "
+            "ride in the day's list to say 'after the intervals'), 'yoga', 'recovery'. "
+            "`clear: true` removes the template. ALWAYS call it WITHOUT `confirm` first, read "
+            "the returned `week` grid and any `warnings` back to the athlete, and only call again "
+            "with `confirm: true` after they agree in a new message. It does not change weeks "
+            "already on file -- rebuild those with replace_week_plan's usual draft-then-confirm. "
+            "Taper and race weeks ignore it (the engine's taper/race placement wins, and says "
+            "so). Volume comes from the macro's ramp-capped target; the template never sets "
+            "load. Unusual shapes are WARNED about, never refused."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "template": {
+                    "type": "object",
+                    "description": "Weekday (mon..sun) -> ordered list of session slots.",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "kind": {"type": "string", "enum": ["bike", "skills", "strength", "yoga", "recovery"]},
+                                "role": {"type": "string", "enum": ["hard", "endurance"], "description": "bike slots only"},
+                                "label": {"type": "string", "description": "e.g. 'Heinous club ride'"},
+                                "duration_min": {"type": "number", "description": "optional override, 5-300"},
+                            },
+                            "required": ["kind"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                "clear": {"type": "boolean", "description": "true = remove the saved template."},
                 "confirm": {"type": "boolean", "description": "true = persist; omit for a preview."},
             },
             "additionalProperties": False,
@@ -3200,10 +3252,10 @@ def _handle_set_schedule_preferences(
             if any(r["day"] == hard_day for r in rides):
                 return {"error": f"hard_day {hard_day!r} is already a standing ride day"}
             if hard_entries:
-                return {"error": "give only one hard day: either hard_day or a role 'hard' standing ride"}
+                return {"error": "give only one hard day: either hard_day or a role 'hard' standing ride (for several hard days, yoga, skills or days off use set_weekly_template)"}
             rides = [{"day": hard_day, "role": "hard"}, *rides]
         elif len(hard_entries) > 1:
-            return {"error": "give only one hard day among the standing rides"}
+            return {"error": "give only one hard day among the standing rides (for several hard days use set_weekly_template)"}
         if rides:
             training_days["bike"] = rides
         else:
@@ -3249,6 +3301,104 @@ def _handle_set_schedule_preferences(
         fields=provided,
         verified=result["verified"],
     )
+    return result
+
+
+_TEMPLATE_DAY_ORDER = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def _template_grid(template: dict[str, list[dict]]) -> dict[str, list[str]]:
+    """Each weekday's slots as short readable strings, for the coach to read
+    the week back to the athlete."""
+    grid: dict[str, list[str]] = {}
+    for day in _TEMPLATE_DAY_ORDER:
+        entries: list[str] = []
+        hard_seen = False
+        for slot in template.get(day, []):
+            kind, label = slot["kind"], slot.get("label")
+            if kind == "bike":
+                text = f"bike: {slot['role']}" + (f" - {label}" if label else "")
+                hard_seen = hard_seen or slot["role"] == "hard"
+            elif kind == "strength":
+                text = (f"{label} (strength)" if label else "strength") + (
+                    " (after the intervals)" if hard_seen else ""
+                )
+            else:
+                text = f"{label} ({kind})" if label else kind
+            entries.append(text)
+        grid[day] = entries
+    return grid
+
+
+def _handle_set_weekly_template(
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str
+) -> dict[str, Any]:
+    """Preview / persist the SHAPE of the athlete's week (IDEA 023 v3): which
+    sessions go on which days. The engine fills in content and volume and keeps
+    its safety rails; the template never sets load. Several hard rides per
+    week are allowed -- an unusual shape produces a WARNING in the response
+    (the realism guardrail), never a refusal. Without `confirm: true` this is a
+    preview; `clear: true` removes the template. Persisting reloads the athlete
+    and reports `verified` so the response is what the generator will see."""
+    clear = input_data.get("clear") is True
+    template = input_data.get("template")
+    if clear and template is not None:
+        return {"error": "give either template or clear, not both"}
+    if not clear and template is None:
+        return {"error": "template (a weekday -> list of session slots map) or clear: true is required"}
+    if not clear and not isinstance(template, dict):
+        return {"error": "template must be an object mapping weekdays (mon..sun) to lists of session slots"}
+
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load athlete profile: {exc}"}
+
+    try:
+        candidate = Athlete.model_validate(
+            {**athlete.model_dump(mode="json"), "weekly_template": None if clear else template}
+        )
+    except ValueError as exc:
+        return {"error": f"invalid weekly template: {exc}"}
+
+    result: dict[str, Any] = {"persisted": False}
+    if candidate.weekly_template:
+        grid = _template_grid(candidate.weekly_template)
+        slots = [slot for day_slots in candidate.weekly_template.values() for slot in day_slots]
+        # A nominal week just to run the realism guardrail over the shape --
+        # its warnings are advice, never a block.
+        nominal = _template_week_sessions(candidate, date(2026, 1, 5), 300.0, None)
+        result.update(
+            {
+                "week": grid,
+                "summary": {
+                    "hard_rides": sum(1 for s in slots if s["kind"] == "bike" and s["role"] == "hard"),
+                    "bike_days": sum(
+                        1 for day_slots in candidate.weekly_template.values() if any(s["kind"] == "bike" for s in day_slots)
+                    ),
+                    "days_off": [d for d in _TEMPLATE_DAY_ORDER if not grid[d]],
+                },
+                "warnings": evaluate_week_realism(nominal),
+                "applies_to": (
+                    "build and base weeks. Taper weeks and race weeks use the engine's own placement "
+                    "instead and say so in the week's warnings. Bike minutes still come from the "
+                    "macro's ramp-capped target -- the template sets the structure, never the load."
+                ),
+            }
+        )
+    else:
+        result["cleared"] = True
+
+    if input_data.get("confirm") is not True:
+        result["note"] = "preview only -- nothing saved; call again with confirm: true after the athlete agrees"
+        return result
+
+    athlete.weekly_template = candidate.weekly_template
+    store.save_athlete(athlete)
+    reloaded = store.load_athlete(slug)
+    result["persisted"] = True
+    result["verified"] = reloaded.weekly_template == candidate.weekly_template
+    log.info("weekly template set", athlete=slug, cleared=clear, verified=result["verified"])
     return result
 
 
@@ -6979,6 +7129,9 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "update_athlete_profile": lambda input_data: _handle_update_athlete_profile(
+            input_data, store=store, slug=slug
+        ),
+        "set_weekly_template": lambda input_data: _handle_set_weekly_template(
             input_data, store=store, slug=slug
         ),
         "set_schedule_preferences": lambda input_data: _handle_set_schedule_preferences(

@@ -337,6 +337,20 @@ answer must still be a grounded, accurate one.
      weeks generated from then on (use `replace_week_plan`, with its usual
      draft-then-confirm, to rebuild an existing week). Taper and race weeks
      ignore standing rides, and ramp-cap limits never yield to a preference.
+   - `set_weekly_template` saves the SHAPE of the athlete's week -- which
+     sessions go on which days -- so every future build/base week is built
+     from it. It is the right tool whenever the athlete describes a whole week
+     or a pattern that repeats ("Monday CX skills and yoga, Tuesday intervals
+     then strength, Wednesday group ride, Thursday off ..."): several hard
+     rides per week, yoga, skills days and days off are all expressible. Prefer
+     it to `set_schedule_preferences` for anything beyond one standing ride,
+     and never re-create a repeating pattern by hand with `session_overrides`
+     week after week. Same discipline: call WITHOUT `confirm` first, read the
+     returned `week` grid and any `warnings` back to the athlete, `confirm:
+     true` only after they agree in a new message; weeks ALREADY on file are
+     not changed. Unusual shapes are warned about, never refused; the
+     template sets structure only -- volume stays the macro's ramp-capped
+     target.
    - `patch_week_plan` is the right tool for the common case: the athlete
      wants ONE OR A FEW already-planned sessions changed or removed within
      an already-live week -- "make Thursday's swim easier," "drop

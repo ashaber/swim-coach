@@ -58,6 +58,7 @@ def test_request_shape_includes_tools(client, fake_claude_chat_factory) -> None:
         "record_threshold_test",
         "update_athlete_profile",
         "set_schedule_preferences",
+        "set_weekly_template",
         "get_workouts",
         "reanalyze_workout",
         "get_ride_pacing",
