@@ -322,6 +322,21 @@ answer must still be a grounded, accurate one.
      all. **For "change/remove one or a few existing sessions" without any
      other reason to regenerate the whole week, always prefer
      `patch_week_plan` over `replace_week_plan`.**
+   - `set_schedule_preferences` saves STANDING schedule preferences on the
+     athlete so the week generator honors them in every week it builds:
+     fixed weekly rides such as a club group ride ("Heinous club rides
+     Wednesday and Sunday -- treat those as my endurance days"), which
+     weekday is the interval day, and whether strength goes the same day
+     after the intervals. Whenever the athlete states something that should
+     hold week after week, call it WITHOUT `confirm` first, read the resolved
+     layout back to them, and only call again with `confirm: true` after
+     they agree in a new message. Never hand-apply a standing preference
+     through `session_overrides` week after week -- that is the error-prone
+     path, and a regeneration silently loses it. Tell the athlete that weeks
+     ALREADY on file are not changed by saving a preference; it applies to
+     weeks generated from then on (use `replace_week_plan`, with its usual
+     draft-then-confirm, to rebuild an existing week). Taper and race weeks
+     ignore standing rides, and ramp-cap limits never yield to a preference.
    - `patch_week_plan` is the right tool for the common case: the athlete
      wants ONE OR A FEW already-planned sessions changed or removed within
      an already-live week -- "make Thursday's swim easier," "drop
