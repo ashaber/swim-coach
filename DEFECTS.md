@@ -19,6 +19,16 @@ Tracked defects to address opportunistically. Format: `D<n> — title (where fou
 **D5** — `set_schedule_preferences` (PR #218) re-implemented the single-hard-day limit instead of removing it (2026-09-20).
   - The tool rejects `"give only one hard day"`, so Andrew's Tue + Sat interval days could not even be STATED, let alone honored. The engine cannot generate them either (D3), so the tool was honest but useless for this plan. Pattern to stop repeating: a structural limit is not a safety rail -- see IDEA 023 v3 (weekly template) for the fix; safety rails (ramp cap) must warn and require explicit confirmation, never silently block or silently cap the structure.
 
+**D6** — `confirm` REGENERATED the plan instead of writing the agreed one (found 2026-09-21; Andrew: "what is causing it to corrupt?... plan creates plan; let the coach write it once agreed").
+  - **Root cause:** no draft was ever stored. `replace_week_plan` re-ran `generate_week` on the confirm call and saved that result; `patch_week_plan` re-applied whatever overrides arrived with the confirm to whatever was live at that moment. The plan the athlete agreed to and the plan written were two independent computations, so any change in between (a template edit, different/re-typed overrides, a shifted interval rotation) silently changed the saved week -- the "reverts to a prior iteration" symptom.
+  - **Fix:** PR #222 -- drafts are held under a hidden key and `confirm` + `draft_id` writes exactly that draft (risk flagged, never blocking). `merge_week_plan`, `propose_adaptation`, `propose_session_adjustment` still have their own re-computing confirm paths (open).
+
+**D7** — A modify-mode session override could not set the zone/intensity, so relabelling a session as intervals left the zone tag at Z2 and fooled the realism guardrail (coach-reported defect #4, silent partial-apply; reproduced 2026-09-21). Fixed in #220: modify mode accepts `intensity`, and a purpose that says hard work over an unchanged Z1/Z2 tag is flagged.
+
+**D8** — `structure` without `distance_m` was a hard ERROR (coach-reported defect #3). Now applied and flagged for swim sessions (where distance is a real stat), no requirement for others (#220). Still open from that report: nested repeat-inside-repeat is rejected; setting `structure` without `structured` clears the structured data.
+
+**D9** — Macro coverage undiscoverable before a week call fails (coach-reported #6). `get_plan_summary` now returns `macro_coverage` and the out-of-range error names the covered range and how to extend it (#220).
+
 ## Fixed
 
 **D2a** — The Plan tab labelled an already-elapsed week "This week" (found while diagnosing D2 above).
