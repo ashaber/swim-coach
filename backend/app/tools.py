@@ -165,6 +165,7 @@ unsafe direction.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import tempfile
 import uuid
@@ -398,10 +399,12 @@ SESSION_OVERRIDES_SCHEMA: dict[str, Any] = {
             "intensity": {
                 "type": "object",
                 "description": (
-                    "add mode only: the new session's intensity dict "
-                    "(e.g. {\"zone\": \"Z4\"} for a hard bike session, "
-                    "{\"anchor\": \"rpe\"} for effort-based). Defaults to "
-                    "{\"zone\": \"Z2\"} for bike, {\"anchor\": \"rpe\"} otherwise."
+                    "The session's intensity dict (e.g. {\"zone\": \"Z4\"} for a hard bike "
+                    "session, {\"anchor\": \"rpe\"} for effort-based). In add mode it defaults to "
+                    "{\"zone\": \"Z2\"} for bike, {\"anchor\": \"rpe\"} otherwise. In MODIFY mode it "
+                    "merges into the existing intensity -- REQUIRED, together with `purpose`, when you "
+                    "turn an endurance ride into intervals, otherwise the label says intervals while "
+                    "the zone tag (which realism checks read) still says Z2."
                 ),
             },
             "sport": {
@@ -925,6 +928,11 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                                 "role": {"type": "string", "enum": ["hard", "endurance"], "description": "bike slots only"},
                                 "label": {"type": "string", "description": "e.g. 'Heinous club ride'"},
                                 "duration_min": {"type": "number", "description": "optional override, 5-300"},
+                                "purpose": {
+                                    "type": "string",
+                                    "description": "the athlete's own description of this session (e.g. 'Kettlebell EMOM 10 min'), "
+                                    "used verbatim instead of the engine's generic text; max 300 chars",
+                                },
                             },
                             "required": ["kind"],
                             "additionalProperties": False,
@@ -2812,7 +2820,27 @@ def _handle_get_plan_summary(input_data: dict[str, Any], *, store: StoreInterfac
     # `athlete_today` (this athlete's own local date when `Athlete.timezone`
     # is set, server `date.today()` otherwise), the same athlete-aware
     # default every other caller of this function now gets.
-    return summarize_rollup(store, slug, weeks=weeks)
+    summary = summarize_rollup(store, slug, weeks=weeks)
+    # Defect #6 (coach-reported): whether a week can be created depends on the active
+    # macro's covered range, which was undiscoverable until a call failed. Expose it.
+    try:
+        macro = store.load_macro(slug)
+    except Exception:  # noqa: BLE001 - coverage is advisory; never fail the summary
+        macro = None
+    if macro is not None and macro.blocks:
+        summary = {
+            **summary,
+            "macro_coverage": {
+                "start": macro.blocks[0].start_date.isoformat(),
+                "end": macro.blocks[-1].end_date.isoformat(),
+                "blocks": [
+                    {"name": b.name, "start": b.start_date.isoformat(), "end": b.end_date.isoformat()}
+                    for b in macro.blocks
+                ],
+                "note": "create_week_plan/replace_week_plan only work for weeks inside this range.",
+            },
+        }
+    return summary
 
 
 def _handle_flag_for_coach_review(
@@ -3399,6 +3427,8 @@ def _template_grid(template: dict[str, list[dict]]) -> dict[str, list[str]]:
                 )
             else:
                 text = f"{label} ({kind})" if label else kind
+            if slot.get("purpose"):
+                text += f" [{slot['purpose'][:60]}]"
             entries.append(text)
         grid[day] = entries
     return grid
@@ -3462,6 +3492,16 @@ def _handle_set_weekly_template(
         )
     else:
         result["cleared"] = True
+
+    today_iso = date.today().isocalendar()
+    current_week_id = f"{today_iso[0]}-W{today_iso[1]:02d}"
+    on_file = [w for w in store.list_week_ids(slug) if w >= current_week_id]
+    if on_file:
+        result["weeks_on_file_not_changed"] = on_file
+        result["rebuild_hint"] = (
+            "These weeks are already saved and are NOT changed by saving a template. To rebuild one "
+            "from it, use replace_week_plan (draft first, show the athlete, then confirm)."
+        )
 
     if input_data.get("confirm") is not True:
         result["note"] = "preview only -- nothing saved; call again with confirm: true after the athlete agrees"
@@ -5328,6 +5368,47 @@ def _parse_template_preference(
         return None, f"invalid template_preference: {exc}"
 
 
+def _held_bike_minutes(store: StoreInterface, slug: str, week_start: date) -> float | None:
+    """Last real bike minutes to HOLD for a weekly-template week built under a
+    non-bike macro (whose own volume is swim meters): the nearest of the two
+    previous weeks on file, excluding race days and skills sessions -- the same
+    basis the template's own bike budget uses. `None` when there is no history."""
+    for back in (7, 14):
+        prev = week_start - timedelta(days=back)
+        year, week, _ = prev.isocalendar()
+        try:
+            existing = store.load_week(slug, f"{year}-W{week:02d}")
+        except Exception:  # noqa: BLE001 - no history is fine, just no held volume
+            existing = None
+        if existing is None:
+            continue
+        minutes = sum(
+            s.duration_min
+            for s in existing.sessions
+            if s.sport == "bike"
+            and not s.purpose.strip().upper().startswith("RACE — ")
+            and "skills" not in s.purpose.lower()
+        )
+        if minutes > 0:
+            return minutes
+    return None
+
+
+def _week_generation_kwargs(
+    athlete: Athlete, store: StoreInterface, slug: str, week_start: date, primary_sport: str
+) -> dict[str, Any]:
+    """The sport-dependent `generate_week` kwargs every week-writing tool shares.
+    A weekly template needs the FTP for its bike sessions even under a swim
+    macro, and (under a non-bike macro) the held bike minutes."""
+    kwargs: dict[str, Any] = {
+        "primary_sport": primary_sport,
+        "ftp_watts": athlete.ftp_watts if (primary_sport == "bike" or athlete.weekly_template) else None,
+    }
+    if athlete.weekly_template and primary_sport != "bike":
+        kwargs["template_bike_minutes"] = _held_bike_minutes(store, slug, week_start)
+    return kwargs
+
+
 def _handle_create_week_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
     """Calls `swim_coach.plan.generate_week` directly (the same function
     `cli.py`'s `plan-week` command and the `/plan-week` skill use) and
@@ -5395,7 +5476,6 @@ def _handle_create_week_plan(input_data: dict[str, Any], *, store: StoreInterfac
     # generated a full swim week (pool placeholders, long-swim ladder)
     # instead of real bike sessions.
     primary_sport = event.primary_sport
-    ftp_watts = athlete.ftp_watts if primary_sport == "bike" else None
 
     try:
         week = generate_week(
@@ -5406,9 +5486,8 @@ def _handle_create_week_plan(input_data: dict[str, Any], *, store: StoreInterfac
             event_format,
             template_preference,
             event,
-            primary_sport=primary_sport,
-            ftp_watts=ftp_watts,
             events=events,
+            **_week_generation_kwargs(athlete, store, slug, week_start, primary_sport),
         )
     except ValueError as exc:
         return {"error": str(exc)}
@@ -5530,6 +5609,11 @@ def _handle_reschedule_session(input_data: dict[str, Any], *, store: StoreInterf
         "previous_date": current_date_str,
         "new_date": new_date_str,
     }
+
+
+_HARD_WORK_WORDS = re.compile(
+    r"interval|over[/ -]?under|threshold|vo2|sprint|sweet ?spot|tempo|repeats?|hill repeats", re.IGNORECASE
+)
 
 
 def _apply_session_overrides(
@@ -5690,6 +5774,7 @@ def _apply_session_overrides(
         structure = override.get("structure")
         structured = override.get("structured")
         ow_template = override.get("ow_template")
+        intensity = override.get("intensity")
         if (
             distance_m is None
             and duration_min is None
@@ -5697,11 +5782,21 @@ def _apply_session_overrides(
             and structure is None
             and structured is None
             and ow_template is None
+            and intensity is None
         ):
             return (
                 f"session_overrides: entry for {raw_date!r} needs at least one of "
-                "distance_m, duration_min, purpose, structure, structured, ow_template"
+                "distance_m, duration_min, purpose, structure, structured, ow_template, intensity"
             ), notes
+        if intensity is not None:
+            zone_ok = intensity.get("zone") is None or (
+                isinstance(intensity.get("zone"), str) and re.fullmatch(r"Z[1-7]", intensity["zone"].upper())
+            )
+            if not isinstance(intensity, dict) or not intensity or not zone_ok:
+                return (
+                    f"session_overrides: entry for {raw_date!r} has an invalid `intensity` "
+                    "(expected e.g. {\"zone\": \"Z4\"} or {\"anchor\": \"rpe\"})"
+                ), notes
         if ow_template is not None and (structure is not None or structured is not None):
             return (
                 f"session_overrides: entry for {raw_date!r} sets `ow_template` "
@@ -5711,25 +5806,19 @@ def _apply_session_overrides(
                 "(swim_coach.ow_session_templates.OW_SESSION_TEMPLATES), "
                 "`structure`/`structured` author it directly."
             ), notes
-        if structure is not None and distance_m is None:
+        if structure is not None and distance_m is None and session.sport in ("swim_pool", "swim_ow"):
             # Real bug, caught live: `distance_m` is a separate field from
-            # `structure`'s free-text total -- nothing keeps them in sync
-            # automatically (parsing an arbitrary prose total back out is
-            # fragile and wasn't attempted). Without this check, authoring a
-            # new structure (e.g. 600m warm-up + 10x200m + 400m cool-down =
-            # 3000m) while leaving the session's OLD distance_m in place
-            # (e.g. 400m from whatever it replaced) persists a session whose
-            # stats header silently disagrees with its own written content.
-            # Require the caller to state the real total explicitly rather
-            # than let it drift.
-            return (
-                f"session_overrides: entry for {raw_date!r} sets `structure` "
-                "without `distance_m` -- the two are independent fields with "
-                "nothing keeping them in sync automatically, so the athlete "
-                "would see a distance stat that disagrees with what the "
-                "structure text actually describes. Pass the real total "
-                "distance implied by the new structure as `distance_m` too."
-            ), notes
+            # `structure`'s free-text total and nothing keeps them in sync, so a
+            # rewritten swim structure could persist next to a stale distance
+            # stat that contradicts it. This used to REJECT the override; the
+            # policy is now flag-don't-block: apply the structure, KEEP the old
+            # distance, and say so loudly so the coach can correct it in the same
+            # breath. Non-swim sessions have no real distance stat, so no flag.
+            notes.append(
+                f"{raw_date} {session.sport}: `structure` was rewritten without `distance_m`, so the "
+                f"distance stat still says {session.distance_m}m and may not match the new content. "
+                "Pass the real total as `distance_m` (in a patch_week_plan) to correct it."
+            )
 
         if distance_m is not None:
             session.distance_m = distance_m
@@ -5746,6 +5835,22 @@ def _apply_session_overrides(
 
         if purpose is not None:
             session.purpose = purpose
+        if intensity is not None:
+            session.intensity = {**session.intensity, **{k: (v.upper() if k == "zone" else v) for k, v in intensity.items()}}
+        elif (
+            purpose is not None
+            and session.sport == "bike"
+            and _HARD_WORK_WORDS.search(purpose)
+            and str(session.intensity.get("zone") or "Z2").upper() in ("Z1", "Z2")
+        ):
+            # Defect #4 (coach-reported): a purpose relabelled as intervals with the
+            # zone tag left at Z2 fooled the realism guardrail. Flag, never block or
+            # silently rewrite the zone.
+            notes.append(
+                f"{raw_date} bike: the purpose now describes hard work but the zone tag is still "
+                f"{session.intensity.get('zone') or 'Z2'}, which is what realism checks read. Pass "
+                "`intensity` (e.g. {\"zone\": \"Z4\"}) in the same override so the session IS what its label says."
+            )
         if structured is not None:
             try:
                 session.structured = WorkoutStructure.model_validate(structured)
@@ -6125,7 +6230,6 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
     # site previously passed neither at all, same bug as
     # `_handle_create_week_plan` above.
     primary_sport = event.primary_sport
-    ftp_watts = athlete.ftp_watts if primary_sport == "bike" else None
 
     try:
         week = generate_week(
@@ -6136,12 +6240,17 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
             event_format,
             template_preference,
             event,
-            primary_sport=primary_sport,
-            ftp_watts=ftp_watts,
             events=events,
+            **_week_generation_kwargs(athlete, store, slug, week_start, primary_sport),
         )
     except ValueError as exc:
         return {"error": str(exc)}
+
+    # Warnings the GENERATOR added beyond the realism check (e.g. "template yielded
+    # to a taper week", "volume held under a swim macro"): the realism re-run below
+    # replaces `planning_warnings`, so carry these through instead of losing them.
+    _generator_realism = evaluate_week_realism(week.sessions) if (primary_sport == "bike" or athlete.weekly_template) else []
+    generator_notes = [w for w in week.planning_warnings if w not in _generator_realism]
 
     session_overrides = input_data.get("session_overrides")
     override_notes: list[str] = []
@@ -6154,7 +6263,7 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
     # session_overrides append (defect 3) -- appending a 6th hard bike day
     # should still get flagged. Also feeds in the prior week's bike volume
     # (loaded above as `existing_week`) so the +8%/week rail is checked.
-    if primary_sport == "bike":
+    if primary_sport == "bike" or athlete.weekly_template:
         prev_bike_min: float | None = None
         if existing_week is not None:
             prev_bike_min = sum(
@@ -6165,7 +6274,9 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
             )
         week.planning_warnings = evaluate_week_realism(
             week.sessions, prev_week_bike_volume_min=prev_bike_min
-        )
+        ) + generator_notes
+    else:
+        week.planning_warnings = list(week.planning_warnings)
     # Build E: fold in any non-fatal session_overrides notes (e.g. a
     # `remove` that emptied the week's only hard bike day) regardless of
     # primary_sport -- `evaluate_week_realism` above is bike-only, but a
@@ -6497,7 +6608,6 @@ def _generate_candidate_week_for_merge(
 
     event_format = event.event_format or "single_day"
     primary_sport = event.primary_sport
-    ftp_watts = athlete.ftp_watts if primary_sport == "bike" else None
 
     try:
         generated = generate_week(
@@ -6508,9 +6618,8 @@ def _generate_candidate_week_for_merge(
             event_format,
             template_preference,
             event,
-            primary_sport=primary_sport,
-            ftp_watts=ftp_watts,
             events=events,
+            **_week_generation_kwargs(athlete, store, slug, week_start, primary_sport),
         )
     except ValueError as exc:
         return None, str(exc)

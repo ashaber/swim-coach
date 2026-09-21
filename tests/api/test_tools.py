@@ -4136,14 +4136,16 @@ def test_replace_week_plan_session_override_sets_purpose_and_structure(athletes_
     assert overridden["distance_m"] == 1000
 
 
-def test_replace_week_plan_session_override_structure_without_distance_m_is_a_clean_error(athletes_dir) -> None:
+def test_replace_week_plan_session_override_structure_without_distance_m_is_flagged_not_blocked(athletes_dir) -> None:
     # Real bug, caught live: a coach-authored structure ("600m warm-up +
     # 10x200m + 400m cool-down = 3000m") persisted fine, but distance_m was
     # never updated to match -- the athlete saw a distance stat (400m, left
     # over from whatever the session used to be) that flatly contradicted
     # the workout actually written. distance_m and structure are independent
     # fields; nothing keeps them in sync automatically, so structure-only
-    # overrides must be rejected rather than silently drifting.
+    # overrides must not drift SILENTLY. Policy (Andrew, 2026-09-21): flag the
+    # risk, never block -- the structure is applied, the old distance kept, and
+    # a loud planning warning says the stat may not match.
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
     baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
@@ -4157,8 +4159,8 @@ def test_replace_week_plan_session_override_structure_without_distance_m_is_a_cl
         }],
     })
 
-    assert "error" in result
-    assert "distance_m" in result["error"]
+    assert "error" not in result
+    assert any("distance_m" in w and "may not match" in w for w in result["planning_warnings"])
 
 
 def _draft_then_confirm(handlers, payload):
