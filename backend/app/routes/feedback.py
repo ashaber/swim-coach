@@ -67,7 +67,13 @@ from app.auth import (
 )
 from app.claude import ClaudeChat
 from app.config import Settings
-from app.context import build_messages, build_system, find_workout_by_id, iso_week_str
+from app.context import (
+    build_messages,
+    build_routed_library_text,
+    build_system,
+    find_workout_by_id,
+    iso_week_str,
+)
 from app.notify import notify_coaches_of_feedback
 from app.routes.chat import get_claude_chat
 from app.store_factory import make_store
@@ -330,7 +336,18 @@ async def ask_question(
     # `effective_sports`, not the raw `.sports` field (PR #167 review,
     # Finding 1).
     athlete_profile = store.load_athlete(athlete)
-    system = build_system(settings.library_dir, body, athlete_sports=athlete_profile.effective_sports)
+    in_message = settings.routed_library_in_message
+    system = build_system(
+        settings.library_dir,
+        body,
+        athlete_sports=athlete_profile.effective_sports,
+        include_routed=not in_message,
+    )
+    library_text = (
+        build_routed_library_text(settings.library_dir, body, athlete_sports=athlete_profile.effective_sports)
+        if in_message
+        else None
+    )
     messages = build_messages(
         store,
         athlete,
@@ -339,6 +356,7 @@ async def ask_question(
         expert_mode=False,
         focused_workout=focused_workout,
         focused_session=focused_session,
+        library_text=library_text,
     )
     tool_handlers = build_tool_handlers(store, slug=athlete, expert_mode=False)
 

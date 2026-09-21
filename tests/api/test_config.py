@@ -85,3 +85,15 @@ def test_secret_env_vars_are_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.database_url == "postgresql://u:p@h:6543/db"
     # the stripped token hashes to the stripped value, so a clean token matches
     assert settings.token_matches("correct-token") is True
+
+
+def test_routed_library_in_message_defaults_off_and_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("API_TOKEN", "some-token")
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "id.apps.googleusercontent.com")
+    monkeypatch.delenv("COACH_ROUTED_LIBRARY_IN_MESSAGE", raising=False)
+    assert Settings.from_env().routed_library_in_message is False
+    monkeypatch.setenv("COACH_ROUTED_LIBRARY_IN_MESSAGE", "true")
+    assert Settings.from_env().routed_library_in_message is True
+    monkeypatch.setenv("COACH_ROUTED_LIBRARY_IN_MESSAGE", "0")
+    assert Settings.from_env().routed_library_in_message is False

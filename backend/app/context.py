@@ -1027,8 +1027,26 @@ def build_routed_block(
     ]
 
 
-def build_system(
+def build_routed_library_text(
     library_dir: Path, message: str, *, athlete_sports: list[str] | None = None
+) -> str:
+    """The routed topic files for `message` as plain text for the newest user
+    message (IDEA 022 step 4) -- the same files `build_routed_block` would put
+    in system block B, under a header saying what they are."""
+    body = build_routed_block(library_dir, message, athlete_sports=athlete_sports)[0]["text"]
+    return (
+        "## Library topic files for this question "
+        "(reference material -- ground and cite from these, same rules as the system prompt)\n\n"
+        + body
+    )
+
+
+def build_system(
+    library_dir: Path,
+    message: str,
+    *,
+    athlete_sports: list[str] | None = None,
+    include_routed: bool = True,
 ) -> list[dict[str, Any]]:
     """The full `system` param: block A then block B, each its own cache
     breakpoint (stable prefix first, per Anthropic's prompt-caching rules --
@@ -1038,7 +1056,12 @@ def build_system(
     `build_system_blocks` (block A's INDEX.md sport-scoped sections -- PR
     #167 review, Finding 1) and `build_routed_block` (block B's routed
     topic files) -- see each function's own docstring.
+
+    `include_routed=False` returns block A alone -- the caller then puts the
+    routed files on the newest message via `build_routed_library_text`.
     """
+    if not include_routed:
+        return build_system_blocks(library_dir, athlete_sports=athlete_sports)
     return build_system_blocks(library_dir, athlete_sports=athlete_sports) + build_routed_block(
         library_dir, message, athlete_sports=athlete_sports
     )
@@ -1771,6 +1794,7 @@ def build_messages(
     expert_mode: bool,
     focused_workout: Workout | None = None,
     focused_session: Session | None = None,
+    library_text: str | None = None,
 ) -> list[dict[str, Any]]:
     """The `messages` param: `history` verbatim, then the new `message` with
     the per-request context merged into it.
@@ -1816,6 +1840,10 @@ def build_messages(
         messages[-1]["content"] = [
             {"type": "text", "text": messages[-1]["content"], "cache_control": {"type": "ephemeral"}}
         ]
+    if library_text:
+        # IDEA 022 step 4: routed topic files ride the newest message too, so
+        # nothing message-dependent sits in the cached system/history prefix.
+        context_text = f"{library_text}\n\n---\n\n{context_text}"
     messages.append({"role": "user", "content": f"{context_text}\n\n---\n\n{message}"})
 
     return messages
