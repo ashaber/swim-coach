@@ -23,7 +23,12 @@ from app.auth import (
     resolve_athlete,
 )
 from app.claude import ClaudeChat
-from app.context import build_messages, build_system, find_workout_by_id
+from app.context import (
+    build_messages,
+    build_routed_library_text,
+    build_system,
+    find_workout_by_id,
+)
 from app.store_factory import make_store
 from app.tools import TOOLS_SCHEMA, build_tool_handlers
 
@@ -103,8 +108,19 @@ async def chat(
     # #167 review, Finding 1) -- see Athlete.effective_sports and
     # app.context.filter_files_by_sport_scope.
     athlete_profile = store.load_athlete(athlete)
+    in_message = settings.routed_library_in_message
     system = build_system(
-        settings.library_dir, payload.message, athlete_sports=athlete_profile.effective_sports
+        settings.library_dir,
+        payload.message,
+        athlete_sports=athlete_profile.effective_sports,
+        include_routed=not in_message,
+    )
+    library_text = (
+        build_routed_library_text(
+            settings.library_dir, payload.message, athlete_sports=athlete_profile.effective_sports
+        )
+        if in_message
+        else None
     )
     history = [{"role": h.role, "content": h.content} for h in payload.history]
     messages = build_messages(
@@ -114,6 +130,7 @@ async def chat(
         history=history,
         expert_mode=payload.expert_mode,
         focused_workout=focused_workout,
+        library_text=library_text,
     )
     tool_handlers = build_tool_handlers(
         store,
