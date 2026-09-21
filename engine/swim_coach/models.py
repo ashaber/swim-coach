@@ -51,6 +51,21 @@ class Athlete(BaseModel):
     constraints: dict = Field(default_factory=dict)
     pool_schedule: list[str | dict] = Field(default_factory=list)
     training_days: dict[str, list[str | dict]] | None = None
+    # IDEA 023 phase 1 -- scheduling preferences the week GENERATOR honors, so
+    # they survive every regeneration of a week (they live on the athlete, not
+    # in a chat). A `training_days` entry may be a dict carrying, besides its
+    # `day`, a `label` (e.g. a standing club ride's name) and a `role`:
+    # "hard" (the week's interval day) or "endurance" (a Z2 day). A standing
+    # commitment is just an endurance-role entry with a label. Roles/labels are
+    # applied in build/base weeks only; taper and race weeks ignore them (the
+    # taper/race generators' own placement wins).
+    #
+    # `strength_placement`: "same_day_as_hard" puts the week's first strength
+    # session on the interval day, after the intervals (recovery-wise: one
+    # hard day instead of two); "after_hard" / None keep the engine's default
+    # (after the hard day, same day or later, never the day before a hard/race
+    # day). Additive/optional, no schema_version bump.
+    strength_placement: Literal["after_hard", "same_day_as_hard"] | None = None
     # Per-sport weekly training-day PATTERN -- the bike/strength/skills
     # counterpart to `pool_schedule` above (which only ever covered pool
     # days). Maps a session-kind key ("bike", "strength", "skills" -- free
@@ -228,6 +243,28 @@ class Athlete(BaseModel):
     # fails LOUD, deep in a code path this field's whole purpose is to make
     # MORE correct, not less -- validating at the boundary is worth the
     # small departure here.
+
+    @field_validator("training_days")
+    @classmethod
+    def _validate_training_days(
+        cls, value: dict[str, list[str | dict]] | None
+    ) -> dict[str, list[str | dict]] | None:
+        """Dict entries (the IDEA 023 label/role form) must carry a `day` and,
+        when present, a `role` of "hard" or "endurance" and a string `label`.
+        Plain string entries keep their historical lazy validation."""
+        for entries in (value or {}).values():
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                if not entry.get("day"):
+                    raise ValueError(f"training_days entry {entry!r} needs a 'day'")
+                if entry.get("role") not in (None, "hard", "endurance"):
+                    raise ValueError(
+                        f"training_days role must be 'hard' or 'endurance', got {entry['role']!r}"
+                    )
+                if entry.get("label") is not None and not isinstance(entry["label"], str):
+                    raise ValueError(f"training_days label must be a string, got {entry['label']!r}")
+        return value
 
     @field_validator("timezone")
     @classmethod
