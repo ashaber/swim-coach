@@ -991,3 +991,101 @@ change), the tool-iteration/retry cost, and the size of the cached system
 prefix itself (~136k tokens per cold turn in the 09-20 logs -- worth a look
 on its own). Measure #1 with the verification query above once it has run
 for a few days.
+
+### IDEA 022 -- refined build plan (Andrew + Claude, 2026-09-20 evening)
+
+**Where the money goes** (7-day audit, standard multipliers: cache write
+1.25x, cache read 0.1x, output ~5x input): cache writes ~47%, fresh input
+~40%, cache reads ~8%, **output ~5%**. Cost is all INPUT -- shrink or
+stabilize what each turn sends; shorter replies buy nothing.
+
+**Per-turn anatomy (chars/4 estimates):** tool schemas ~24k tok (28 tools;
+`replace_week_plan`+`patch_week_plan`+`merge_week_plan` alone ~9.4k);
+system block A 17-21k; system block B ~42k EVEN FOR A GREETING (the router's
+no-match default is `03-periodization` + `06-long-swim-progression` -- swim
+files, served to a bike athlete); per-request context size UNKNOWN (the 43k
+median uncached input in the logs included the whole history, which was
+uncached before #209). Production runs `claude-sonnet-5` (deploy-backend.yml
+sets it); the local `.env` says opus-4-8 and only affects local runs.
+Prices (skill table, cached 2026-06-24): Sonnet 5 $2/$10 per MTok, Haiku 4.5
+$1/$5 -- Haiku is 2x cheaper, not 3x, and caches are MODEL-SCOPED, so a
+mid-conversation model switch pays a cold write of the whole prefix.
+
+**Tool calls are not the waste.** ~60 tool calls in 116 turns; reads are not
+spammed. The real tool-related costs are (a) every tool-loop ITERATION
+re-bills everything after the last cache breakpoint at full price (41 of 134
+API calls were iterations >= 1; iteration 1 re-billed ~64k fresh tokens on the
+logged example) and (b) failed `replace_week_plan` retries, each a full extra
+turn. TRAP for "narrow the tool list": tools are FIRST in the cached prefix,
+so varying the tool set per message invalidates everything after it. Safe
+forms: fixed sets per MODE (none in light mode / all in full), Anthropic tool
+search (`defer_loading`, appends schemas, preserves cache), or a schema diet.
+
+**Build order (approved; each item its own PR off main, behavior changes
+behind an env flag default-OFF so a merge alone never changes production):**
+
+1. **Instrument** -- log per-request segment sizes (tools, block A, block B,
+   context, history, new message) so we stop guessing. Log-only.
+2. **Moving cache breakpoint inside the tool loop** -- breakpoint budget is
+   exactly 4: 2 system + 1 end-of-history (#209) + 1 loop. Estimated 10-15%
+   of the bill (estimate, not measured).
+3. **Router default + block B contents** -- why does a greeting cost 42k
+   tokens; stop serving swim files to a bike athlete on no-match.
+4. **Stable/volatile context split** -- slow-changing (profile, zones,
+   events, macro) into a cached block; fast-changing (this week, last 7
+   days, wellness, and the daily `Today:` line) uncached. Deterministic
+   rendering; Anthropic's cache is content-addressed, so NO custom
+   invalidation logic is needed -- it is a re-ordering job.
+5. **Light mode + `need_more` escalation** -- greeting/debrief-building turns
+   get no tools, no block B, trimmed context; one `need_more` tool re-runs in
+   full mode. Deterministic first-pass routing (first turn, short, no
+   plan/pace/fuel/change keywords). Stay on Sonnet first; Haiku is a config
+   flip once quality is measured. Flag: default OFF.
+6. **Athlete notes** -- see IDEA 023 (idea only, not scheduled).
+7. **Tool schema diet / tool search** -- trim the three overlapping plan-edit
+   tools; consider `defer_loading`.
+
+**Deliberately NOT doing:** history compaction (assistant history is text
+only, ~1k tok/exchange; #209 already makes old turns ~10% cost). If it ever
+matters, write our own rolling summary -- Anthropic server-side compaction
+needs compaction blocks round-tripped through `response.content` and the
+client only keeps text. Server-side (DB/engine) result caching is a LATENCY
+question, not a token one; if ever needed, TTL cache keyed on the athlete's
+latest `updated_at`, not hand-written invalidation.
+
+---
+
+## IDEA 023 - Athlete notes: durable, structured facts the coach remembers
+
+Andrew, 2026-09-20: *"separate out athlete preferences (I like to be called
+Bob or God) or I have 3 bikes and like to ride flat pedals when I teach
+skills. Extract these interesting items separate from raw history."*
+
+**Today:** nothing like this exists. Structured profile fields go through
+`update_athlete_profile`; there is no free-form durable-facts store. History
+lives client-side (localStorage) and is re-sent in full, so a preference
+stated in a chat six weeks ago is gone once the athlete clears the session.
+
+**Proposal:** an `athlete_notes` table in Supabase (+ `Store` interface +
+FileStore parity): `id`, `athlete_id`, `text`, `category` (preferred_name |
+equipment | teaching_style | constraint | other), `source_date`, `active`,
+timestamps. The coach writes via a `save_athlete_note` tool and SAYS SO in
+its reply ("noted: you prefer flat pedals when teaching skills"); a
+`retire_athlete_note` sets `active=false` (never delete, per the standing
+never-delete rule). Active notes render into the per-request context (a few
+hundred tokens; belongs in the STABLE half once IDEA 022 step 4 lands, since
+notes change rarely). The PWA gets a small list view so the athlete can see
+and retire what the coach believes about them.
+
+**Why not Anthropic's memory tool (`memory_20250818`):** it is a
+client-implemented file-style tool -- we would build the storage anyway, and
+lose structure, the DB, and PWA visibility. Own store wins.
+
+**Open questions / risks:** (a) PII -- notes are athlete-authored personal
+facts; the logging rule ("never log PII") means log note ids and categories,
+never text. (b) Prompt injection -- a note is model-written text re-injected
+into every future prompt; render it as clearly delimited DATA, cap length
+and count. (c) Migration -- needs a hand-applied Supabase migration (see the
+db-migrations-are-manual memory); the store must tolerate the table being
+absent until applied. (d) Debrief tie-in: post-race light-mode answers
+(IDEA 022 step 5) are a natural source of notes.
