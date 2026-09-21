@@ -755,8 +755,13 @@ def _filter_scoped_index_sections(text: str, effective_sports: set[str]) -> str:
     return _INDEX_SCOPE_BLOCK_RE.sub(_replace, text)
 
 
+def _cache_control(ttl: str) -> dict[str, str]:
+    """`{"type": "ephemeral"}` (5-minute, the default -- byte-identical to before) or the 1-hour form."""
+    return {"type": "ephemeral"} if ttl == "5m" else {"type": "ephemeral", "ttl": ttl}
+
+
 def build_system_blocks(
-    library_dir: Path, *, athlete_sports: list[str] | None = None
+    library_dir: Path, *, athlete_sports: list[str] | None = None, cache_ttl: str = "5m"
 ) -> list[dict[str, Any]]:
     """System block A: persona + rules + 00-conventions.md + INDEX.md +
     reference_list.md, as a single cacheable text block.
@@ -797,7 +802,7 @@ def build_system_blocks(
         {
             "type": "text",
             "text": text,
-            "cache_control": {"type": "ephemeral"},
+            "cache_control": _cache_control(cache_ttl),
         }
     ]
 
@@ -1129,6 +1134,7 @@ def build_system(
     *,
     athlete_sports: list[str] | None = None,
     include_routed: bool = True,
+    cache_ttl: str = "5m",
 ) -> list[dict[str, Any]]:
     """The full `system` param: block A then block B, each its own cache
     breakpoint (stable prefix first, per Anthropic's prompt-caching rules --
@@ -1142,9 +1148,11 @@ def build_system(
     `include_routed=False` returns block A alone -- the caller then puts the
     routed files on the newest message via `build_routed_library_text`.
     """
+    # `cache_ttl` applies to block A only: a longer-TTL entry must come BEFORE shorter ones, and the
+    # message-routed block B (changes with the topic) stays on the default 5 minutes.
     if not include_routed:
-        return build_system_blocks(library_dir, athlete_sports=athlete_sports)
-    return build_system_blocks(library_dir, athlete_sports=athlete_sports) + build_routed_block(
+        return build_system_blocks(library_dir, athlete_sports=athlete_sports, cache_ttl=cache_ttl)
+    return build_system_blocks(library_dir, athlete_sports=athlete_sports, cache_ttl=cache_ttl) + build_routed_block(
         library_dir, message, athlete_sports=athlete_sports
     )
 

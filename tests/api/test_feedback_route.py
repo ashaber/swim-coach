@@ -14,6 +14,7 @@ import pytest
 from fakes import (
     auth_headers,
     make_final_message,
+    message_text,
     make_text_block,
     make_workout,
 )
@@ -505,7 +506,7 @@ def test_ask_question_resolvable_session_reaches_ai_context(
 
     assert len(chat.client.messages.calls) == 1
     sent_messages = chat.client.messages.calls[0]["messages"]
-    sent_text = "\n".join(m["content"] for m in sent_messages)
+    sent_text = "\n".join(message_text(m["content"]) for m in sent_messages)
     assert "specific planned session the athlete is asking about" in sent_text
     assert "a very specific test-only session purpose" in sent_text
 
@@ -527,7 +528,7 @@ def test_ask_question_unresolvable_session_still_answers(
     assert response.status_code == 200
     assert response.json()["ai_provisional_answer"] == "General fueling advice."
     sent_messages = chat.client.messages.calls[0]["messages"]
-    sent_text = "\n".join(m["content"] for m in sent_messages)
+    sent_text = "\n".join(message_text(m["content"]) for m in sent_messages)
     assert "specific planned session the athlete is asking about" not in sent_text
 
 
