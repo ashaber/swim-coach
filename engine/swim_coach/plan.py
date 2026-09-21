@@ -3371,6 +3371,140 @@ def _bike_week_sessions(
     return sessions
 
 
+# Coach judgment: a yoga/mobility slot with no explicit `duration_min`. Not
+# research-backed; an athlete who wants a different length sets `duration_min`.
+TEMPLATE_YOGA_SESSION_MIN = 30.0
+# Coach judgment: when a template holds several hard rides, their combined
+# duration is capped at this share of the week's bike minutes so the easy
+# rides are not squeezed to nothing. The macro's ramp-capped total is untouched.
+TEMPLATE_HARD_TOTAL_SHARE_CAP = 0.6
+
+
+def _template_slots(athlete: Athlete) -> list[tuple[int, int, dict]]:
+    """`(day_offset, order_in_day, slot)` for every slot of the athlete's
+    `weekly_template`, in week then in-day order."""
+    slots = [
+        (_pool_day_offset(day), index, slot)
+        for day, day_slots in (athlete.weekly_template or {}).items()
+        for index, slot in enumerate(day_slots)
+    ]
+    return sorted(slots, key=lambda t: (t[0], t[1]))
+
+
+def _template_week_sessions(
+    athlete: Athlete,
+    week_start: date,
+    total_duration_min: float,
+    ftp_watts: float | None,
+    *,
+    is_indoor: bool | None = None,
+    week_index: int = 0,
+    ftp_source: str | None = None,
+) -> list[Session]:
+    """The week's sessions from the athlete's `weekly_template` (IDEA 023 v3):
+    the athlete chose the shape, the engine supplies content and durations.
+
+    Bike minutes come from `total_duration_min` (the macro's ramp-capped
+    target), split so each hard ride gets `_resolve_bike_hard_min` (combined
+    hard rides capped at `TEMPLATE_HARD_TOTAL_SHARE_CAP` of the total) and
+    the endurance rides share the rest; an explicit slot `duration_min` wins
+    and is taken off the top. The k-th hard ride of the week uses the k-th
+    interval archetype after this week's rotation slot, so two interval days
+    are never the same workout. Skills / strength / yoga slots are additive
+    (never counted in the bike total), as they are in the generic week."""
+    slots = _template_slots(athlete)
+    bike = [(o, i, s) for o, i, s in slots if s["kind"] == "bike"]
+    fixed_min = sum(s["duration_min"] for _, _, s in bike if s.get("duration_min"))
+    budget = max(0.0, total_duration_min - fixed_min)
+    open_hard = [1 for _, _, s in bike if s["role"] == "hard" and not s.get("duration_min")]
+    open_easy = [1 for _, _, s in bike if s["role"] == "endurance" and not s.get("duration_min")]
+    n_hard, n_easy = len(open_hard), len(open_easy)
+    if n_hard and n_easy:
+        hard_each = min(_resolve_bike_hard_min(total_duration_min), budget * TEMPLATE_HARD_TOTAL_SHARE_CAP / n_hard)
+        easy_each = (budget - hard_each * n_hard) / n_easy
+    else:
+        hard_each = budget / n_hard if n_hard else 0.0
+        easy_each = budget / n_easy if n_easy else 0.0
+
+    sessions: list[Session] = []
+    hard_dates: dict[int, int] = {}  # day offset -> order of the last hard ride that day
+    hard_index = 0
+    for offset, order, slot in slots:
+        day = week_start + timedelta(days=offset)
+        kind, label = slot["kind"], slot.get("label")
+        if kind == "bike":
+            is_hard = slot["role"] == "hard"
+            template = _select_bike_interval_template(week_index + hard_index) if is_hard else None
+            meta = BIKE_INTERVAL_TEMPLATE_META[template] if is_hard else None
+            duration = max(slot.get("duration_min") or (hard_each if is_hard else easy_each), DEFAULT_BIKE_SESSION_MIN)
+            zone = meta["zone"] if is_hard else "Z2"
+            purpose = (
+                meta["purpose"]
+                if is_hard
+                else (f"{label} — endurance ride (Z2), aerobic base" if label else "endurance ride (Z2) — aerobic base")
+            )
+            if is_hard and label:
+                purpose = f"{label} — {purpose}"
+            if is_hard and template == "sustained_threshold" and hard_index == 0 and week_index == 0 and (
+                ftp_source in BIKE_FTP_CHECK_ELIGIBLE_SOURCES
+            ):
+                purpose += BIKE_FTP_CHECK_PURPOSE_SUFFIX
+            structured = (
+                _bike_hard_session_structure(template, duration, ftp_watts)
+                if is_hard
+                else _bike_session_structure(zone, duration, ftp_watts)
+            )
+            sessions.append(
+                Session(
+                    id=uuid4(),
+                    athlete_id=athlete.id,
+                    date=day,
+                    sport="bike",
+                    source="ai_coach",
+                    duration_min=duration,
+                    distance_m=None,
+                    intensity=_bike_intensity(zone, ftp_watts),
+                    purpose=purpose,
+                    structure=render_prose(structured),
+                    structured=structured,
+                    status="planned",
+                    is_indoor=is_indoor,
+                )
+            )
+            if is_hard:
+                hard_dates[offset] = order
+                hard_index += 1
+        elif kind == "skills":
+            skills = _skills_sessions(athlete, week_start, [offset])[0]
+            if label:
+                skills = skills.model_copy(update={"purpose": f"{label} — {skills.purpose}"})
+            sessions.append(skills)
+        elif kind == "strength":
+            strength = _strength_sessions(athlete, week_start, [offset])[0]
+            note = ""
+            if offset in hard_dates and hard_dates[offset] < order:
+                note = " — done after the interval session (same day)"
+            purpose = f"{label} — {strength.purpose}" if label else strength.purpose
+            sessions.append(strength.model_copy(update={"purpose": purpose + note}))
+        else:  # yoga / recovery
+            name = label or ("yoga" if kind == "yoga" else "recovery")
+            sessions.append(
+                Session(
+                    id=uuid4(),
+                    athlete_id=athlete.id,
+                    date=day,
+                    sport="recovery",
+                    source="ai_coach",
+                    duration_min=float(slot.get("duration_min") or TEMPLATE_YOGA_SESSION_MIN),
+                    distance_m=None,
+                    intensity={"anchor": "rpe"},
+                    purpose=f"{name} — mobility & recovery",
+                    status="planned",
+                )
+            )
+    return sessions
+
+
 def _strength_sessions(athlete: Athlete, week_start: date, offsets: list[int]) -> list[Session]:
     """STRENGTH_SESSIONS_PER_WEEK-shaped dryland strength `Session`s at the
     given Monday-relative day `offsets` -- the same content/placement logic
@@ -4807,6 +4941,10 @@ def generate_week(
         if not use_openers and not in_week_race_dates:
             bike_day_offsets, bike_day_labels = _bike_training_days(athlete)
         same_day_strength = athlete.strength_placement == "same_day_as_hard"
+        # IDEA 023 v3: a weekly template owns the week's shape in build/base
+        # weeks; a taper or race week yields to the engine's own placement.
+        weekly_template_applies = bool(athlete.weekly_template) and not use_openers and not in_week_race_dates
+        weekly_template_skipped = bool(athlete.weekly_template) and not weekly_template_applies
 
         if use_openers and not is_deload_week:
             # Bosquet (2007) / Mujika & Padilla (2003): keep intensity (the
@@ -4984,6 +5122,21 @@ def generate_week(
                 bike_sessions_with_strength, week_start, in_week_race_offsets, race_within_days
             )
             race_week_checklist = _race_week_checklist(qualifying_event, week_start)
+        elif weekly_template_applies:
+            bike_sessions_with_strength = _template_week_sessions(
+                athlete,
+                week_start,
+                float(target_volume_m),
+                ftp_watts,
+                is_indoor=bike_indoor,
+                week_index=ramp_week_index,
+                ftp_source=ftp_source,
+            )
+            skills_offsets = []  # the template owns skills days
+            bike_sessions, strength_prerace_reduced = _filter_strength_prerace_window(
+                bike_sessions_with_strength, week_start, in_week_race_offsets, race_within_days
+            )
+            race_week_checklist = []
         else:
             bike_sessions_with_strength = _bike_week_sessions_with_strength(
                 athlete,
@@ -5053,6 +5206,12 @@ def generate_week(
             )
         # ----------------------------------------------------------------
         planning_warnings = evaluate_week_realism(bike_sessions)
+        if weekly_template_skipped:
+            planning_warnings = planning_warnings + [
+                "weekly_template was NOT applied to this week: it is a taper or race week, so the "
+                "engine's own taper/race placement is used instead. Tell the athlete which "
+                "of their usual sessions moved or dropped."
+            ]
         if strength_prerace_reduced:
             planning_warnings = planning_warnings + [
                 f"A strength session within {STRENGTH_PRERACE_WINDOW_DAYS} days of a "

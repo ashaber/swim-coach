@@ -66,6 +66,24 @@ class Athlete(BaseModel):
     # (after the hard day, same day or later, never the day before a hard/race
     # day). Additive/optional, no schema_version bump.
     strength_placement: Literal["after_hard", "same_day_as_hard"] | None = None
+    # IDEA 023 v3 -- the WEEKLY TEMPLATE: the athlete states the SHAPE of their
+    # week and the engine fills in content and volume. Maps a weekday
+    # ("mon".."sun", any case, full names accepted) to an ORDERED list of
+    # session slots for that day; a day that is absent or `[]` is a day off.
+    # A slot is `{"kind": ..., "role"?: ..., "label"?: ..., "duration_min"?: ...}`:
+    #   kind "bike"      + role "hard" (an interval session; several per week
+    #                      are fine, each gets a different interval archetype)
+    #                    | role "endurance" (a Z2 ride, e.g. a club group ride)
+    #   kind "skills"    cyclocross bike-handling session
+    #   kind "strength"  dryland strength (noted "after the intervals" when it
+    #                    follows a hard ride the same day)
+    #   kind "yoga"      yoga/mobility (a `recovery` session)
+    #   kind "recovery"  an easy recovery/mobility session
+    # Applied in build/base weeks only; taper and race weeks use the engine's
+    # own placement and the week carries a planning_warning saying so. Volume
+    # still comes from the macro's ramp-capped target -- a template sets the
+    # structure, never the load. Additive/optional, no schema_version bump.
+    weekly_template: dict[str, list[dict]] | None = None
     # Per-sport weekly training-day PATTERN -- the bike/strength/skills
     # counterpart to `pool_schedule` above (which only ever covered pool
     # days). Maps a session-kind key ("bike", "strength", "skills" -- free
@@ -243,6 +261,43 @@ class Athlete(BaseModel):
     # fails LOUD, deep in a code path this field's whole purpose is to make
     # MORE correct, not less -- validating at the boundary is worth the
     # small departure here.
+
+    @field_validator("weekly_template")
+    @classmethod
+    def _validate_weekly_template(
+        cls, value: dict[str, list[dict]] | None
+    ) -> dict[str, list[dict]] | None:
+        """Normalizes weekday keys to "mon".."sun" and validates every slot."""
+        if value is None:
+            return None
+        days = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+        kinds = ("bike", "skills", "strength", "yoga", "recovery")
+        out: dict[str, list[dict]] = {}
+        for raw_day, slots in value.items():
+            day = str(raw_day).strip().lower()[:3]
+            if day not in days:
+                raise ValueError(f"weekly_template day {raw_day!r} is not a weekday (mon..sun)")
+            if day in out:
+                raise ValueError(f"weekly_template lists {day!r} twice")
+            for slot in slots:
+                kind = slot.get("kind")
+                if kind not in kinds:
+                    raise ValueError(f"weekly_template kind must be one of {kinds}, got {kind!r}")
+                role = slot.get("role")
+                if kind == "bike" and role not in ("hard", "endurance"):
+                    raise ValueError("a weekly_template bike slot needs role 'hard' or 'endurance'")
+                if kind != "bike" and role is not None:
+                    raise ValueError(f"role only applies to bike slots, not {kind!r}")
+                label = slot.get("label")
+                if label is not None and (not isinstance(label, str) or len(label) > 60):
+                    raise ValueError("weekly_template label must be a string of at most 60 characters")
+                duration = slot.get("duration_min")
+                if duration is not None and (
+                    isinstance(duration, bool) or not isinstance(duration, (int, float)) or not 5 <= duration <= 300
+                ):
+                    raise ValueError("weekly_template duration_min must be a number from 5 to 300")
+            out[day] = slots
+        return out
 
     @field_validator("training_days")
     @classmethod
