@@ -1324,61 +1324,88 @@ usage mix differs, so this is not a controlled comparison).
 
 ---
 
-## IDEA 025 - Use TypeSafe's Jev (a "System One" classifier) to route turns: light vs heavy, tools, sport, library
+## IDEA 025 - Route every turn into a CALL TYPE with Jev: one battery of questions, a few fixed buckets, each with its own cache
 
-Andrew, 2026-09-21: *"JEV is a new classifier with a skill by typesafe. First idea: consider JEV to decide if
-a question can be light vs heavy. Could also pre-decide some tool calls, sport and library."*
+Andrew, 2026-09-21: *"JEV is a new classifier with a skill by typesafe ... decide light vs heavy, could also
+pre-decide tool calls, sport and library."* Corrected after review (my first framing -- a light/heavy gate with
+tools and library as add-ons -- was too small): *"We can send the whole battery of questions -- is it a
+greeting? is it a health concern? is the sport swim, bike, run, strength? does it need tool a, b, c, d? library
+x, y, z? -- right off the bat. Then compress the classifications into call types that fit the same cache hit:
+{haiku greeting, sonnet info-gather like 'what did you do well', sonnet plan-and-workout questions with tool
+calls, plan create and adapt, research with library backing}. Jev decides the bucket; we do our best to get cache
+hits within each. The hard part is we need more traffic to see testable patterns."*
 
-**What Jev is (sourced; treat vendor claims as claims).** TypeSafe AI (SF lab, out of stealth 2026-09-15,
-$40M seed) released Jev, a model that does NOT generate text: you send a state (text) and typed questions
-(Choice, Score, yes/no checks ...) and get back a probability for every possible answer, calibrated with a
-confidence, all questions in ONE parallel pass. Claims: 70-500 ms end-to-end, 40-200x faster and ~400x cheaper
-than a frontier LLM on classification, cardinality up to 255 per Choice. Pricing on the launch blog: $0.042 per
-MTok input, output free. **Early access only** (console.typesafe.ai, `TYPESAFE_API_KEY`), no self-hosting,
-text-only state. Integrations reported: a Claude Code/Codex skill+tool (`jev-code`: classify / check / score /
-rank / ask), LiteLLM pass-through, LangChain `TypeSafeClassifier`, a Bifrost router feature request, NVIDIA
-NeMo Switchyard-style routing.
-**Independent evidence is thin.** One hands-on routing test (DevelopersIO) classified conversation summaries
-into 4 difficulty tiers: 0.64-0.67 s median vs 2.1 s (Gemini Flash) / 7.2 s (DeepSeek Flash), ~$0.000026 per
-call, 10/10 on "one straightforward sample per tier" -- but the author says that is not an accuracy test, the
-medium tier had lower confidence (0.57-0.67), and he cites an independent benchmark at 67.8% accuracy vs 74.1%
-for competitors ("on par or slightly inferior" accuracy, clearly superior speed and cost).
-Sources: typesafe.ai/blog/introducing-system-one-models-and-jev ; dev.classmethod.jp/en/articles/jev-for-llm-model-routing ;
-github.com/FrancoisChastel/jev-code ; datacamp.com/blog/system-one-models-jev ; langchain.com/blog/building-a-harness-with-jev.
+**What Jev is (sourced; vendor claims are claims).** TypeSafe AI (SF lab, out of stealth 2026-09-15, $40M seed)
+released Jev, a model that does not generate text: you send a state (text) and typed questions (Choice, Score,
+yes/no checks) and get a calibrated probability for EVERY possible answer, all questions in ONE parallel pass.
+Claims: 70-500 ms end to end, 40-200x faster and ~400x cheaper than a frontier LLM at classification, Choice
+cardinality up to 255. Pricing on the launch blog: $0.042/MTok input, output free -- about $0.00003 a call.
+Early access only (console.typesafe.ai, `TYPESAFE_API_KEY`), no self-hosting, text-only state. Reported
+integrations: a Claude Code/Codex skill+tool (`jev-code`: classify/check/score/rank/ask), LiteLLM pass-through,
+LangChain `TypeSafeClassifier`, a Bifrost router request, NeMo-Switchyard-style routing. Independent evidence is
+thin: one routing test (DevelopersIO) got 10/10 on one easy sample per tier at 0.64-0.67 s vs 2.1 s (Gemini
+Flash) but the author says it is not an accuracy test, medium-tier confidence was lower (0.57-0.67), and he
+cites a 67.8% vs 74.1% benchmark. Sources: typesafe.ai/blog/introducing-system-one-models-and-jev ;
+dev.classmethod.jp/en/articles/jev-for-llm-model-routing ; github.com/FrancoisChastel/jev-code.
+Because the battery is one parallel call, asking 10 questions costs about the same as asking 1.
 
-**Why it fits us (inference).** Our routing is hand-written keyword lists (`light_mode.is_light_turn`, the
-library router's `_KEYWORD_ROUTES`). The PR #215 review found their failure modes: "yes, go ahead" routes
-light, "I blacked out" is caught only by accident. A call costs ~$0.00003 against ~$0.23 for a coach call, so
-cost is irrelevant; +~0.6 s latency and accuracy are the real questions. Questions Jev could answer in one
-parallel pass over {latest message + last 1-2 turns + flags}:
-1. **Weight** -- Choice {chat, needs_plan_data, needs_tools_write, health_or_safety}: light vs full.
-2. **Confirmation** -- yes/no "is this agreeing to a pending draft?" given the "Drafts waiting" context
-   (fixes the #215 confirmation hole directly; a confirmation must go full and write the draft).
-3. **Safety** -- yes/no "mentions a symptom, pain, injury or illness?" (a positive ALWAYS forces full).
-4. **Sport** -- Choice {swim, bike, strength, yoga/mobility, multi, none}: which sport's library/context to load.
-5. **Library** -- Choice over our ~30 topic files (or "none"): replaces keyword `_KEYWORD_ROUTES`, and can say
-   "needs no library / no reference list" (the ~58k-token reference list is the single biggest prefix item).
-6. **Tool group** -- Choice {none, plan-write, analysis, fueling, full}: which tool subset to send.
+**The design: battery -> call type -> fixed prefix.**
+1. **Battery (one Jev call, ~0.6 s, ~$0.00003):** greeting/chit-chat? health concern? confirming a pending draft?
+   wants a plan created/changed? asking about their plan/workouts? reflecting on a session or race (debrief)?
+   research/"why" question? sport {swim, bike, run, strength, yoga, other, none}? tool groups needed {plan-write,
+   analysis, fueling, health-record, events/macro}? library topic {our ~30 files, none}?
+2. **Compress to a call type with a DETERMINISTIC table of ours** (transparent, testable, the model only supplies
+   typed probabilities). Precedence: pending-draft confirmation -> D; health concern -> at least C (never A/B);
+   create/change -> D; research -> E; plan/workout question -> C; debrief -> B; greeting -> A. Low confidence,
+   ambiguity, or Jev down -> go UP one bucket (the deterministic keyword rules stay as the fallback).
+3. **Each call type = fixed (model, system prompt, tool set, whether the library is in the prefix)**, so each has
+   ONE stable cached prefix. That is the answer to the cache worry: tools are first in the prefix so a per-turn
+   tool choice would churn the cache, but a handful of fixed profiles does not.
 
-**How to fit it in (safely).**
-- A `router.py` that returns a `Route` (weight, sport, library files, tool profile) from a `Classifier`
-  interface with two implementations: the existing deterministic rules (kept, and the FALLBACK on timeout/
-  error/low confidence) and Jev. A short timeout (~2 s). **Fail toward full**: any low confidence, any
-  safety-positive, any pending draft -> full.
-- **Shadow mode first, no behaviour change:** run Jev alongside the current rules, log both decisions (ids,
-  labels, probabilities -- not message text), and review disagreements. Build a small labelled set from
-  Andrew's real chats before trusting it; the launch numbers say to verify.
-- **Mind the cache.** Tools are FIRST in the cached prefix, so varying the tool set per turn invalidates
-  everything behind it. Use a handful of FIXED tool profiles (each its own cache entry), sticky within a
-  conversation, escalate one way (light -> full) only. Route library files into the newest message
-  (`COACH_ROUTED_LIBRARY_IN_MESSAGE`, IDEA 022 step 4) so library routing never touches the cached prefix.
-- Order: (1) shadow-mode log, (2) drive the light/full decision behind `COACH_LIGHT_MODE` (only after the
-  #215 hardening: allowlist, confirmations always full), (3) sport + library, (4) tool profiles.
+| Call type | Model | Prefix (est. real tokens) | Est. cold cost/call (now: ~$0.52 all-in) | Est. warm |
+|---|---|---|---|---|
+| A greeting / social | Haiku 4.5 | ~2k (tiny prompt, no tools, name+today+next event) -- under the cache minimum, irrelevant | ~$0.003 (-99%) | -- |
+| B info-gather / debrief ("what went well?") | Sonnet 5 | ~21k (light persona + safety + read-only tools + 7-14 day context + notes) | ~$0.05 (-90%) | ~$0.004 |
+| C plan & workout questions, tool calls | Sonnet 5 | ~71k (full persona + read/edit tools, NO reference list) | ~$0.18 (-65%) | ~$0.014 |
+| D plan create / adapt (writes) | Sonnet 5 | ~111k (full tools + persona + INDEX; library routed into the message, NO ref list) | ~$0.28 (-46%) | ~$0.022 |
+| E research with library | Sonnet 5 | ~118k (persona + INDEX + reference list + routed files, minimal tools) | ~$0.30 (-42%) | ~$0.024 |
+Token figures are ESTIMATES built from measured ratios (real tokens run ~1.65x the chars/4 estimate: tools ~45k,
+persona ~15k, INDEX ~16k, reference list ~58k, per-request context ~31k); which tools/prompt pieces each bucket
+carries is a design choice to be tuned. Prices at Sonnet 5 $2/$10 and Haiku 4.5 $1/$5 per MTok, cache write 1.25x
+(2x for 1h), read 0.1x. Today's single fixed prefix (~185k + ~28k fresh) costs ~$0.52 cold.
+**What it is worth (sensitivity, cold calls; the mix is the unknown):** a mix of 10% A / 20% B / 30% C / 30% D /
+10% E averages ~$0.18 (about -66%); a plan-heavy mix (60% D / 30% C / 10% E) ~$0.25 (about -52%). These stack ON
+TOP of the cache fixes (restore #212, 1h TTL) already in flight, and the bigger buckets (D, E) are exactly the
+ones that want the 1-hour TTL, while A/B/C are small enough that a cold write barely matters.
 
-**Risks / open questions.** (a) **Privacy:** athlete messages include health information and would be sent
-to a third party in early access -- needs a data-handling read (and Andrew's OK) before any real traffic;
-shadow mode should start with Andrew's own account only. (b) Early access: availability, quotas, API
-stability, single vendor, no self-host. (c) Accuracy is unverified for OUR domain; a safety-critical class
-(symptoms) must never rely on a classifier alone -- keep the keyword rules as an OR. (d) It routes; it does
-not fix the 5-minute-cache cost (PR #227) or the prefix size on its own. (e) Unknown whether questions need
-few-shot examples or work zero-shot with natural-language definitions.
+**Cache mechanics per bucket.**
+- Each bucket warms independently, so more buckets means more cold starts at low traffic. That is fine: the
+  savings come from the prefixes being 2-100x smaller; only D and E stay big, and they take `PROMPT_CACHE_TTL=1h`.
+- History and the loop marker sit AFTER the prefix, so switching buckets mid-conversation re-writes the history
+  cache (~$0.05). Make switches rare: **move up, not sideways.** Once a conversation is in D it stays in D and gets
+  library files routed into the newest message (`COACH_ROUTED_LIBRARY_IN_MESSAGE`) instead of hopping to E; A->B->C->D
+  are escalations through the existing `need_more` mechanism (#215), never back down except a fresh greeting.
+- Pending-draft turns ("yes, go ahead") must land in the bucket that owns the draft's tool -- the "Drafts waiting"
+  context section already says which -- which also closes the #215 confirmation hole.
+
+**The hard part, and how to get past "we need more traffic".** Today is ~15 coach calls a day, far too few to see
+patterns. So do not wait for organic volume:
+1. **Shadow mode first (no behaviour change):** per request log the battery probabilities, the bucket we WOULD
+   choose, what actually ran (model, tools used, escalations, tool errors, tokens, cost). No message text.
+2. **Seed labelled set offline:** ~100 realistic messages across buckets, taken from the real transcripts
+   (Andrew's own week-planning and post-race chats, the coach's own report), labelled by Andrew; measure Jev's
+   agreement, including a symptom set where a miss must be ZERO.
+3. **Replay cost:** re-price every logged real call under its would-be bucket to get the actual mix and savings
+   instead of the sensitivity guess above.
+4. **Opt-in text capture on Andrew's own account** for a few weeks to grow the labelled set faster.
+Decision gates before it drives anything: agreement vs Andrew's labels, zero safety misses, escalation rate low
+enough that the savings survive (an escalation pays the cheap call PLUS the bigger one).
+
+**Risks / open questions.** (a) **Privacy:** athlete messages include health information and would go to a
+third party in early access -- needs a data-handling read and Andrew's OK; shadow mode on Andrew's own account
+only. (b) Early access: availability, quotas, API stability, single vendor, no self-host. (c) Accuracy is
+unverified for OUR domain; symptoms must never depend on a classifier alone -- keep the keyword rules as an OR.
+(d) An unnecessarily-low bucket costs quality, so the table fails UP; the escalation path must be reliable
+(#215's live behaviour on the real model is still unverified). (e) Whether Jev needs few-shot examples or works
+zero-shot from natural-language definitions is unknown. (f) It routes; it does not replace the cache work
+(#212/#227) or the prefix trimming that makes the bucket prefixes small in the first place.
