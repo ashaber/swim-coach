@@ -93,6 +93,11 @@ class Settings:
     # request; anything needing plan/data/library/health escalates to full mode.
     # Default OFF: it changes what the athlete's coach can see on those turns.
     light_mode: bool = False
+    # Prompt-cache TTL for the big stable system block ("5m" default | "1h"). An athlete who pauses
+    # more than 5 minutes between turns loses a 5-minute cache every time and re-pays a ~170k-token
+    # write (60% of measured spend); "1h" keeps it warm across a planning session for a 2x (not
+    # 1.25x) write. See app.context.build_system_blocks.
+    prompt_cache_ttl: str = "5m"
     # IDEA 022 step 4. When True, the message-routed library topic files ride
     # the newest user message instead of system block B, so system + history
     # are byte-stable across topic changes (a topic-dependent system block
@@ -138,6 +143,10 @@ class Settings:
                 "connection string) -- see .env.example"
             )
 
+        prompt_cache_ttl = os.environ.get("PROMPT_CACHE_TTL", "5m").strip() or "5m"
+        if prompt_cache_ttl not in ("5m", "1h"):
+            raise ConfigError(f"PROMPT_CACHE_TTL must be '5m' or '1h', got {prompt_cache_ttl!r}")
+
         athletes_dir = Path(os.environ.get("ATHLETES_DIR", "../athletes"))
         # research/open-questions.jsonl (IDEA 005) lives alongside
         # athletes/ and library/ rather than under either -- derived from
@@ -173,6 +182,7 @@ class Settings:
             resend_api_key=(os.environ.get("RESEND_API_KEY") or "").strip() or None,
             resend_from_email=os.environ.get("RESEND_FROM_EMAIL", "onboarding@resend.dev"),
             light_mode=os.environ.get("COACH_LIGHT_MODE", "").strip().lower() in ("1", "true", "yes", "on"),
+            prompt_cache_ttl=prompt_cache_ttl,
             routed_library_in_message=os.environ.get("COACH_ROUTED_LIBRARY_IN_MESSAGE", "").strip().lower()
             in ("1", "true", "yes", "on"),
         )

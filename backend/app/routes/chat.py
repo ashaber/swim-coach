@@ -131,6 +131,7 @@ async def chat(
             payload.message,
             athlete_sports=athlete_profile.effective_sports,
             include_routed=not in_message,
+            cache_ttl=settings.prompt_cache_ttl,
         )
         library_text = (
             build_routed_library_text(
