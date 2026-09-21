@@ -5894,7 +5894,7 @@ def test_session_overrides_add_mode_creates_a_new_session(athletes_dir) -> None:
     assert len(result["sessions"]) == len(baseline["sessions"]) + 1
 
 
-def test_session_overrides_add_mode_refuses_when_session_already_exists(athletes_dir) -> None:
+def test_session_overrides_add_mode_onto_an_existing_session_edits_it_with_a_note(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
     baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
@@ -5912,8 +5912,11 @@ def test_session_overrides_add_mode_refuses_when_session_already_exists(athletes
             }
         ],
     })
-    assert "error" in result
-    assert "already" in result["error"].lower()
+    # Policy (2026-09-21): flag, don't block -- `add` onto an existing session of that sport edits it.
+    assert "error" not in result
+    assert any("already" in w.lower() and "edited it" in w for w in result["planning_warnings"])
+    same = [x for x in result["sessions"] if x["date"] == existing["date"] and x["sport"] == existing["sport"]]
+    assert len(same) == 1 and same[0]["purpose"] == "dup"
 
 
 def test_session_overrides_add_mode_defaults_missing_core_fields_with_notes(athletes_dir) -> None:

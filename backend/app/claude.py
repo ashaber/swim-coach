@@ -26,6 +26,7 @@ import anthropic
 
 from app.config import Settings
 from app.logging_config import get_logger
+from app.tool_errors import internal_tool_error
 from app.tools import ToolHandler
 
 log = get_logger(__name__)
@@ -309,6 +310,7 @@ class ClaudeChat:
         messages = list(messages)
         tool_names_available = [t.get("name") for t in tools] if tools else []
         tools_invoked: list[str] = []
+        tool_error_count = 0  # the "failure tax": every errored tool call costs another paid API call
 
         log.info(
             "claude request sizes",
@@ -340,6 +342,7 @@ class ClaudeChat:
                 output_tokens=getattr(usage, "output_tokens", None),
                 cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", 0),
                 cache_creation_input_tokens=getattr(usage, "cache_creation_input_tokens", 0),
+                tool_errors_so_far=tool_error_count,
             )
 
             # Checked before any content is read, per the task's exact API
@@ -407,8 +410,15 @@ class ClaudeChat:
                         handler(block.input) if handler else {"error": f"unknown tool {block.name}"}
                     )
                 except Exception as exc:  # noqa: BLE001 - a tool bug must not crash the chat turn
-                    log.error("tool execution failed", tool=block.name, error=str(exc))
-                    result = {"error": str(exc)}
+                    # Logged with a real stack trace, and the coach gets a structured, actionable
+                    # result (not a raw exception string) so it does not retry or make excuses.
+                    log.error(
+                        "tool execution failed",
+                        tool=block.name,
+                        input_summary=json.dumps(block.input, default=str)[:300],
+                        exc_info=True,
+                    )
+                    result = internal_tool_error(block.name, exc)
                 # Build E: this incident (5 retries of replace_week_plan,
                 # all failing, nothing persisted) could only be diagnosed
                 # from stop_reason/token-count patterns, never what was
@@ -443,6 +453,8 @@ class ClaudeChat:
                     error=(result.get("error") if isinstance(result, dict) else None),
                     persisted=(result.get("persisted") if isinstance(result, dict) else None),
                 )
+                if isinstance(result, dict) and "error" in result:
+                    tool_error_count += 1
                 tool_results.append(
                     {
                         "type": "tool_result",

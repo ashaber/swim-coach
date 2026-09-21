@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import sys
+import traceback
 from datetime import datetime, timezone
 from typing import Any
 
@@ -31,6 +32,16 @@ class JsonLogger:
         self.name = name
 
     def _emit(self, level: str, msg: str, stream: Any, fields: dict[str, Any]) -> None:
+        # `exc_info=True` (or an exception instance) records the exception type and a REAL stack
+        # trace, capped so one runaway recursion cannot bloat a log line. It is consumed here --
+        # never emitted as a literal field -- so a failure is diagnosable and not silently eaten.
+        exc_info = fields.pop("exc_info", None)
+        if exc_info:
+            exc = exc_info if isinstance(exc_info, BaseException) else sys.exc_info()[1]
+            if exc is not None:
+                fields.setdefault("error_type", type(exc).__name__)
+                fields.setdefault("error", str(exc)[:500])
+                fields["stack"] = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[-6000:]
         payload = {
             "level": level,
             "msg": msg,
