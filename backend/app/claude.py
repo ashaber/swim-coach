@@ -128,6 +128,64 @@ def with_loop_breakpoint(
         return messages
     blocks[-1] = {**blocks[-1], "cache_control": {"type": "ephemeral"}}
     return [*messages[:-1], {**last, "content": blocks}]
+# Delimiter `context.build_messages` puts between the per-request context and
+# the athlete's question in the newest user message.
+_CONTEXT_DELIMITER = "\n\n---\n\n"
+
+
+def _content_chars(content: Any) -> int:
+    """Character count of a message's content, whether a plain string or a
+    list of content blocks (text / tool_use / tool_result)."""
+    if isinstance(content, str):
+        return len(content)
+    total = 0
+    for block in content or []:
+        if isinstance(block, dict):
+            inner = block.get("text") or block.get("content") or block.get("input") or ""
+            total += len(inner) if isinstance(inner, str) else len(json.dumps(inner, default=str))
+    return total
+
+
+def request_segment_sizes(
+    system: list[dict[str, Any]],
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    """Character sizes of each segment of one request, for the cost log
+    (IDEA 022 step 1: measure where the input tokens go before optimizing).
+    Chars, not tokens -- no extra API call -- so `est_input_tokens` is
+    chars // 4, a rough figure to compare segments against each other, not
+    a billing number (`claude turn complete` carries the real usage).
+
+    `context_chars` / `question_chars` are the latest message split at the
+    LAST `_CONTEXT_DELIMITER` (the question is the trailing part), so a
+    question that itself contains the delimiter skews the split slightly."""
+    tools_chars = len(json.dumps(tools)) if tools else 0
+    system_block_chars = [len(b.get("text", "")) for b in system]
+    history = messages[:-1]
+    latest = messages[-1]["content"] if messages else ""
+    latest_chars = _content_chars(latest)
+
+    context_chars = 0
+    question_chars = latest_chars
+    if isinstance(latest, str) and _CONTEXT_DELIMITER in latest:
+        context, _, question = latest.rpartition(_CONTEXT_DELIMITER)
+        context_chars, question_chars = len(context), len(question)
+
+    history_chars = sum(_content_chars(m["content"]) for m in history)
+    system_chars = sum(system_block_chars)
+    return {
+        "system_block_chars": system_block_chars,
+        "system_chars": system_chars,
+        "tools_chars": tools_chars,
+        "tool_count": len(tools) if tools else 0,
+        "history_chars": history_chars,
+        "history_messages": len(history),
+        "latest_message_chars": latest_chars,
+        "context_chars": context_chars,
+        "question_chars": question_chars,
+        "est_input_tokens": (system_chars + tools_chars + history_chars + latest_chars) // 4,
+    }
 
 
 def _sse(payload: dict[str, Any]) -> str:
@@ -235,6 +293,12 @@ class ClaudeChat:
         messages = list(messages)
         tool_names_available = [t.get("name") for t in tools] if tools else []
         tools_invoked: list[str] = []
+
+        log.info(
+            "claude request sizes",
+            model=self.settings.claude_model,
+            **request_segment_sizes(system, messages, tools),
+        )
 
         for iteration in range(MAX_TOOL_ITERATIONS):
             request_kwargs = build_request_kwargs(
