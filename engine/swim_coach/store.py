@@ -98,6 +98,12 @@ class StoreInterface(ABC):
         else the most recently saved one. `None` when there is none."""
         raise NotImplementedError
 
+    def list_week_drafts(self, slug: str) -> list[WeekPlan]:
+        """The LATEST held draft for each week/key that has one (a coach's per-turn
+        view of what is waiting for the athlete's yes). `[]` by default so a store
+        that cannot hold drafts simply reports none."""
+        return []
+
     @abstractmethod
     def list_week_ids(self, slug: str) -> list[str]:
         """Every ISO-week id (e.g. "2026-W28") this athlete has a week plan
@@ -495,6 +501,17 @@ class FileStore(StoreInterface):
         name = f"{iso_week}.draft.{draft_id}.yaml" if draft_id else f"{iso_week}.draft.yaml"
         data = _read_yaml(self._athlete_dir(slug) / "plan" / "weeks" / name)
         return WeekPlan.model_validate(data) if data is not None else None
+
+    def list_week_drafts(self, slug: str) -> list[WeekPlan]:
+        weeks_dir = self._athlete_dir(slug) / "plan" / "weeks"
+        if not weeks_dir.exists():
+            return []
+        drafts = []
+        for path in sorted(weeks_dir.glob("*.draft.yaml")):  # the "latest" pointers only
+            data = _read_yaml(path)
+            if data is not None:
+                drafts.append(WeekPlan.model_validate(data))
+        return drafts
 
     def list_week_ids(self, slug: str) -> list[str]:
         weeks_dir = self._athlete_dir(slug) / "plan" / "weeks"

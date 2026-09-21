@@ -6881,3 +6881,15 @@ def test_season_macro_confirm_writes_exactly_the_agreed_macro(athletes_dir) -> N
     assert [(b["name"], b["weekly_volume_target_m"]) for b in draft["blocks"]] == [
         (b.name, b.weekly_volume_target_m) for b in saved.blocks
     ]
+
+
+def test_taper_and_season_macro_confirm_need_only_the_draft_id(athletes_dir, taper_as_of) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    _seed_steady_workouts(store, athlete.id, end=taper_as_of, days=40, daily_load=300.0)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    draft = handlers["propose_injury_adapted_taper"]({"event": GREECE_EVENT_NAME})
+
+    done = handlers["propose_injury_adapted_taper"]({"confirm": True, "draft_id": draft["draft_id"]})  # no event
+
+    assert done["persisted"] is True and done["written_from_draft"] is True

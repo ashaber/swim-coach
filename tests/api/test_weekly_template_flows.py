@@ -133,8 +133,20 @@ def test_set_weekly_template_reports_weeks_already_on_file_that_it_will_not_chan
     assert "replace_week_plan" in result["rebuild_hint"]
 
 
-def test_a_week_outside_the_macro_gets_an_error_that_says_what_the_macro_covers(athletes_dir) -> None:
+def test_a_week_outside_the_macro_is_still_written_from_the_template_and_warned(athletes_dir) -> None:
     store, handlers, macro = _setup(athletes_dir, sport="bike")
+    far = macro.blocks[-1].end_date + timedelta(days=15)
+    far = far - timedelta(days=far.weekday())
+
+    result = handlers["create_week_plan"]({"iso_week": _iso(far)})
+
+    assert result["created"] is True and len(result["sessions"]) == 9
+    assert any("no macro" in w.lower() for w in result["planning_warnings"])
+
+
+def test_a_week_outside_the_macro_without_a_template_says_what_the_macro_covers(athletes_dir) -> None:
+    store, handlers, macro = _setup(athletes_dir, sport="bike")
+    handlers["set_weekly_template"]({"clear": True, "confirm": True})
     far = macro.blocks[-1].end_date + timedelta(weeks=10)
     far = far - timedelta(days=far.weekday())
 

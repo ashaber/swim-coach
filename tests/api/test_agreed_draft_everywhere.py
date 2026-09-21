@@ -183,3 +183,42 @@ def test_macro_and_week_drafts_never_appear_as_weeks_or_macros(athletes_dir) -> 
     before = store.list_week_ids("renee")
     h["replace_macro_plan"](MACRO)
     assert store.list_week_ids("renee") == before and store.load_macro("renee") is None
+
+
+# --- a confirm needs NOTHING but the draft_id (the coach cannot remember anything else) --------
+# The client replays only TEXT turns, so on the confirm turn the coach has lost every tool input
+# from the draft turn. Confirm must not demand them back.
+
+
+def test_session_adjustment_confirm_needs_only_the_draft_id(athletes_dir) -> None:
+    store, h = _h(athletes_dir)
+    draft = h["propose_session_adjustment"](ADJ)
+    done = h["propose_session_adjustment"]({"iso_week": "2026-W28", "confirm": True, "draft_id": draft["draft_id"]})
+    assert done["persisted"] is True and done["written_from_draft"] is True
+    assert next(s for s in store.load_week("renee", "2026-W28").sessions if s.date == date(2026, 7, 6)).distance_m == draft["session"]["distance_m"]
+
+
+def test_merge_confirm_needs_only_the_draft_id(athletes_dir) -> None:
+    store, h = _h(athletes_dir)
+    draft = h["merge_week_plan"](MERGE)
+    done = h["merge_week_plan"]({"iso_week": "2026-W28", "confirm": True, "draft_id": draft["draft_id"]})
+    assert done["persisted"] is True and done["written_from_draft"] is True
+
+
+def test_replace_macro_confirm_needs_only_the_draft_id(athletes_dir) -> None:
+    (athletes_dir / "renee" / "plan" / "macro.yaml").unlink()
+    store, h = _h(athletes_dir)
+    draft = h["replace_macro_plan"](MACRO)
+    done = h["replace_macro_plan"]({"confirm": True, "draft_id": draft["draft_id"]})
+    assert done["persisted"] is True and done["written_from_draft"] is True
+    assert store.load_macro("renee") is not None
+
+
+def test_patch_and_replace_confirm_need_only_iso_week_and_the_draft_id(athletes_dir) -> None:
+    store, h = _h(athletes_dir)
+    t = next(s for s in store.load_week("renee", "2026-W28").sessions if s.date == date(2026, 7, 8))
+    draft = h["patch_week_plan"]({"iso_week": "2026-W28", "session_overrides": [
+        {"date": "2026-07-08", "sport": t.sport, "duration_min": 33}]})
+    done = h["patch_week_plan"]({"iso_week": "2026-W28", "confirm": True, "draft_id": draft["draft_id"]})
+    assert done["written_from_draft"] is True
+    assert next(s for s in store.load_week("renee", "2026-W28").sessions if s.date == date(2026, 7, 8)).duration_min == 33

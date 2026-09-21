@@ -404,6 +404,19 @@ class StoreContractTests:
         assert store.load_week_draft(SLUG, "2026-W28", draft_id=str(first.id)) == first
         assert store.load_week_draft(SLUG, "2026-W29") is None
 
+    def test_list_week_drafts_returns_the_latest_draft_per_week_and_never_live_weeks(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        store.save_week(SLUG, _week(athlete.id, "2026-W28"))  # a live week is not a draft
+        first = _week(athlete.id, "2026-W29")
+        second = _week(athlete.id, "2026-W29").model_copy(update={"focus": "second draft"})
+        store.save_week_draft(SLUG, first)
+        store.save_week_draft(SLUG, second)
+        store.save_week_draft(SLUG, _week(athlete.id, "2026-W30"))
+        drafts = {d.iso_week: d for d in store.list_week_drafts(SLUG)}
+        assert sorted(drafts) == ["2026-W29", "2026-W30"]
+        assert drafts["2026-W29"].focus == "second draft"  # the latest, once per week
+
     def test_week_drafts_are_hidden_from_weeks(self, store):
         athlete = _athlete()
         store.save_athlete(athlete)

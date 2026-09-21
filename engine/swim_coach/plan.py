@@ -4825,7 +4825,49 @@ def generate_week(
         )
     if primary_sport not in ("swim", "bike"):
         raise ValueError(f"unknown primary_sport: {primary_sport!r}, must be 'swim' or 'bike'")
-    block_index, block = _find_block(macro, week_start)
+    try:
+        block_index, block = _find_block(macro, week_start)
+    except ValueError:
+        # No macro block covers this week. With a weekly template the week is still WRITABLE
+        # from the athlete's own shape (volume held, loudly warned) -- a coverage gap must not
+        # stop the coach from writing an agreed week. Without a template, or when a race falls
+        # in the week (which needs a real block), the helpful coverage error stands.
+        week_end = week_start + timedelta(days=6)
+        race_in_week = any(e.active and week_start <= e.event_date <= week_end for e in (events or [])) or (
+            event is not None and week_start <= event.event_date <= week_end
+        )
+        if not athlete.weekly_template or race_in_week:
+            raise
+        minutes = float(template_bike_minutes) if template_bike_minutes else _template_default_minutes(athlete)
+        first_start = macro.blocks[0].start_date if macro.blocks else week_start
+        sessions = _template_week_sessions(
+            athlete,
+            week_start,
+            minutes,
+            ftp_watts,
+            is_indoor=bike_indoor,
+            week_index=max(0, (week_start - first_start).days // 7),
+            ftp_source=ftp_source,
+        )
+        return WeekPlan(
+            id=uuid4(),
+            athlete_id=athlete.id,
+            iso_week=iso_week,
+            meso_block="unplanned",
+            focus="weekly template -- no macro block covers this week",
+            target_volume_m=round(minutes),
+            sessions=sessions,
+            adaptation_rationale=None,
+            draft=False,
+            planning_warnings=evaluate_week_realism(sessions)
+            + [
+                "No macro block covers this week, so it was built from the athlete's weekly_template "
+                f"with bike volume HELD at ~{round(minutes)} min (last week's bike minutes, or the slot "
+                "defaults) and NO ramp-capped target. Confirm the volume with the athlete, and extend or "
+                "replace the macro (draft_season_macro_plan / replace_macro_plan) so later weeks are planned."
+            ],
+            race_week_checklist=[],
+        )
     weeks_in_block = (block.end_date - block.start_date).days // 7 + 1
     week_index_in_block = (week_start - block.start_date).days // 7
     if not (0 <= week_index_in_block < weeks_in_block):

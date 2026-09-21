@@ -655,6 +655,20 @@ class DbStore(StoreInterface):
     def load_week_draft(self, slug: str, iso_week: str, draft_id: str | None = None) -> WeekPlan | None:
         return self.load_week(slug, self._draft_key(iso_week, draft_id))
 
+    def list_week_drafts(self, slug: str) -> list[WeekPlan]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                select w.data from week_plans w
+                join athletes a on a.athlete_id = w.athlete_id
+                where a.slug = %s and w.iso_week like '%%.draft'
+                order by w.iso_week
+                """,
+                (slug,),
+            )
+            rows = cur.fetchall()
+        return [row_to_week(r) for r in rows]
+
     def list_week_ids(self, slug: str) -> list[str]:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(

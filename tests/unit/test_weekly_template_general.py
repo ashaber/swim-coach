@@ -135,3 +135,41 @@ def test_swim_athlete_without_a_template_is_unchanged() -> None:
     week, _ = _week(a, _swim_event(), primary_sport="swim")
     assert any(s.sport in ("swim_pool", "swim_ow") for s in week.sessions)
     assert not any("weekly_template" in w for w in week.planning_warnings)
+
+# --- a week no macro block covers: write it (warned), do not refuse ---------------------------
+
+
+def _uncovered_week(athlete, event, **kw):
+    macro = scaffold_macro(athlete, event, START, current_weekly_volume_m=200, peak_weekly_volume_m=600)
+    far = macro.blocks[-1].end_date + timedelta(days=15)
+    ws = far - timedelta(days=far.weekday())
+    return generate_week(athlete, macro, _iso(ws), ws, primary_sport="bike", event=event, events=[event], **kw), ws
+
+
+def test_a_week_outside_the_macro_is_still_written_from_the_template_with_held_volume() -> None:
+    a = make_athlete(weekly_template={"tue": [{"kind": "bike", "role": "hard"}], "sun": [{"kind": "bike", "role": "endurance"}]})
+    week, ws = _uncovered_week(a, _bike_event(), template_bike_minutes=240.0)
+    assert sorted((s.date - ws).days for s in week.sessions) == [1, 6]
+    assert 230 <= sum(s.duration_min for s in week.sessions) <= 260
+    assert week.meso_block == "unplanned"
+    assert any("no macro" in w.lower() and "held" in w.lower() for w in week.planning_warnings)
+
+
+def test_an_uncovered_week_without_a_template_still_raises_a_helpful_error() -> None:
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError, match="macro"):
+        _uncovered_week(make_athlete(), _bike_event())
+
+
+def test_an_uncovered_week_containing_a_race_still_raises_rather_than_hiding_the_race() -> None:
+    import pytest as _pytest
+
+    a = make_athlete(weekly_template={"tue": [{"kind": "bike", "role": "hard"}]})
+    macro = scaffold_macro(a, _bike_event(), START, current_weekly_volume_m=200, peak_weekly_volume_m=600)
+    far = macro.blocks[-1].end_date + timedelta(days=15)
+    ws = far - timedelta(days=far.weekday())
+    race = Event(id=uuid.uuid4(), athlete_id=ATHLETE_ID, name="Late race", event_date=ws + timedelta(days=5),
+                 target_metric="duration_min", distance_m=None, target_value=1.0, primary_sport="bike", priority="B")
+    with _pytest.raises(ValueError, match="macro"):
+        generate_week(a, macro, _iso(ws), ws, primary_sport="bike", event=_bike_event(), events=[_bike_event(), race])
