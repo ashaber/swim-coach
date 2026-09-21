@@ -9,6 +9,16 @@ Tracked defects to address opportunistically. Format: `D<n> — title (where fou
   - **Masking bug (FIXED, see below):** `pickCurrentAndNextWeek` used to fall back to the last two weeks when every week had elapsed, so the stale W29 rendered under a "This week" heading and hid the gap entirely.
   - **Remaining work (needs Andrew / the athlete):** regenerate the current weeks against the prod DB — `/adapt` in the app, or `cli plan-week --database-url …`. Naive macro-derived regeneration is *not* safe to apply unreviewed: after the five-week gap it produces `andrew` 8,990 → 12,682 m (+41%) and `renee` 17,500 → 26,659 m (+52%) week-over-week, both far past the standing "+≤8% weekly volume without explicit athlete confirmation" rail. Run `/adapt` against the real synced logs instead of `plan-week` off the macro scaffold.
 
+**D3** — The week generator emits exactly ONE hard bike session per week, so a plan with two interval days cannot be generated (reported 2026-09-20; Andrew's real next-week plan).
+  - **Evidence:** asked for Mon skills+yoga / Tue intervals+strength / Wed group ride / Thu off / Fri yoga / Sat intervals+strength / Sun group ride, the generator (with the closest expressible `training_days`) produced 7 of 9 sessions, and **Saturday came out as a Z2 endurance ride**. Root cause: `plan._bike_week_sessions` marks only `i == 0` as hard (`is_hard = n > 1 and i == 0`). The realism guardrail is NOT the blocker (`BIKE_MAX_HARD_DAYS_PER_WEEK = 3`); this is a structural generator limit, so every second interval day, or any session outside the fixed 3-bike + 2-strength shape, has to be hand-authored via `session_overrides` -- the source of the multi-iteration failures catalogued in IDEA 024.
+  - **Impact:** Andrew was forced to build the plan in Tim's tool.
+
+**D4** — No yoga / mobility session type; `Session.sport` is only `swim_pool | swim_ow | strength | recovery | cross_train | bike` (2026-09-20).
+  - Yoga sessions can only be hand-authored as `recovery`/`cross_train` overrides, with no generator support and no library backing. Adding yoga to a week through `replace_week_plan` dropped four sessions including a race day (IDEA 024 #1).
+
+**D5** — `set_schedule_preferences` (PR #218) re-implemented the single-hard-day limit instead of removing it (2026-09-20).
+  - The tool rejects `"give only one hard day"`, so Andrew's Tue + Sat interval days could not even be STATED, let alone honored. The engine cannot generate them either (D3), so the tool was honest but useless for this plan. Pattern to stop repeating: a structural limit is not a safety rail -- see IDEA 023 v3 (weekly template) for the fix; safety rails (ramp cap) must warn and require explicit confirmation, never silently block or silently cap the structure.
+
 ## Fixed
 
 **D2a** — The Plan tab labelled an already-elapsed week "This week" (found while diagnosing D2 above).
