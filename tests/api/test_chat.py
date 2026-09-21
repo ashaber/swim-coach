@@ -57,7 +57,6 @@ def test_request_shape_includes_tools(client, fake_claude_chat_factory) -> None:
         "record_health_status",
         "record_threshold_test",
         "update_athlete_profile",
-        "set_schedule_preferences",
         "set_weekly_template",
         "save_athlete_note",
         "retire_athlete_note",
