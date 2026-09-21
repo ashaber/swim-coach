@@ -154,6 +154,50 @@ def request_segment_sizes(
         "question_chars": question_chars,
         "est_input_tokens": (system_chars + tools_chars + history_chars + latest_chars) // 4,
     }
+# The Messages API allows at most 4 cache_control breakpoints per request.
+MAX_CACHE_BREAKPOINTS = 4
+
+
+def count_cache_breakpoints(
+    system: list[dict[str, Any]] | None,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+) -> int:
+    """How many `cache_control` markers a request already carries across
+    tools, system blocks, and message content blocks."""
+    total = sum(1 for t in tools or [] if "cache_control" in t)
+    total += sum(1 for b in system or [] if "cache_control" in b)
+    for m in messages:
+        if isinstance(m["content"], list):
+            total += sum(1 for b in m["content"] if isinstance(b, dict) and "cache_control" in b)
+    return total
+
+
+def with_loop_breakpoint(
+    system: list[dict[str, Any]] | None,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """`messages` with a cache breakpoint on the LAST block of the LAST message
+    (IDEA 022 step 2). Each tool-loop iteration re-sends the newest user message
+    (the per-request context) plus every tool result so far; a breakpoint after
+    them lets the next iteration read all of it from cache instead of re-billing
+    it at full price. Returns copies -- the stored `messages` stay unmarked, so
+    the marker always sits on the CURRENT last message and never accumulates
+    (the API allows 4 breakpoints: 2 system + 1 end-of-history + this one).
+    Adds nothing when the request is already at the cap."""
+    if not messages or count_cache_breakpoints(system, messages, tools) >= MAX_CACHE_BREAKPOINTS:
+        return messages
+    last = messages[-1]
+    content = last["content"]
+    if isinstance(content, str):
+        blocks: list[dict[str, Any]] = [{"type": "text", "text": content}]
+    else:
+        blocks = [dict(b) for b in content]
+    if not blocks:
+        return messages
+    blocks[-1] = {**blocks[-1], "cache_control": {"type": "ephemeral"}}
+    return [*messages[:-1], {**last, "content": blocks}]
 
 
 def _sse(payload: dict[str, Any]) -> str:
@@ -273,7 +317,9 @@ class ClaudeChat:
         )
 
         for iteration in range(MAX_TOOL_ITERATIONS):
-            request_kwargs = build_request_kwargs(self.settings, system, messages, tools)
+            request_kwargs = build_request_kwargs(
+                self.settings, system, with_loop_breakpoint(system, messages, tools), tools
+            )
 
             try:
                 with self.client.messages.stream(**request_kwargs) as stream:

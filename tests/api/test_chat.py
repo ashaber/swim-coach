@@ -10,6 +10,7 @@ import json
 from fakes import (
     auth_headers,
     make_final_message,
+    message_text,
     make_text_block,
     make_tool_use_block,
     make_usage,
@@ -328,7 +329,7 @@ def test_workout_id_injects_focused_block_into_messages(
     )
     assert response.status_code == 200
 
-    first_message = chat.client.messages.calls[0]["messages"][0]["content"]
+    first_message = message_text(chat.client.messages.calls[0]["messages"][0]["content"])
     assert "specific workout the athlete is asking about" in first_message
     assert str(workout.id) in first_message
     assert '"cardiac_drift_pct": 6.4' in first_message
@@ -360,8 +361,8 @@ def test_multi_turn_request_keeps_history_bare_and_context_on_newest_message(
     assert sent[0] == {"role": "user", "content": "hi"}
     assert sent[1]["content"][0]["cache_control"] == {"type": "ephemeral"}
     assert "## Athlete context" not in str(sent[:2])
-    assert "## Athlete context" in sent[2]["content"]
-    assert sent[2]["content"].endswith("and now?")
+    assert "## Athlete context" in message_text(sent[2]["content"])
+    assert message_text(sent[2]["content"]).endswith("and now?")
 
 
 def test_workout_id_prefix_also_resolves(client, fake_claude_chat_factory, athletes_dir) -> None:
@@ -375,7 +376,7 @@ def test_workout_id_prefix_also_resolves(client, fake_claude_chat_factory, athle
         headers=auth_headers(),
     )
     assert response.status_code == 200
-    first_message = chat.client.messages.calls[0]["messages"][0]["content"]
+    first_message = message_text(chat.client.messages.calls[0]["messages"][0]["content"])
     assert str(workout.id) in first_message
 
 
@@ -386,7 +387,7 @@ def test_no_workout_id_means_no_focused_block(client, fake_claude_chat_factory) 
     response = client.post("/api/chat", json=_chat_payload(), headers=auth_headers())
     assert response.status_code == 200
 
-    first_message = chat.client.messages.calls[0]["messages"][0]["content"]
+    first_message = message_text(chat.client.messages.calls[0]["messages"][0]["content"])
     assert "specific workout the athlete is asking about" not in first_message
 
 
