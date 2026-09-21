@@ -414,11 +414,70 @@ def test_build_messages_shape_with_history(app_env) -> None:
         store, "renee", message="what's next?", history=history, expert_mode=False
     )
     assert len(messages) == 3
-    assert messages[0]["role"] == "user"
-    assert "## Athlete context" in messages[0]["content"]
-    assert messages[0]["content"].endswith("hi")
-    assert messages[1] == {"role": "assistant", "content": "hello!"}
-    assert messages[2] == {"role": "user", "content": "what's next?"}
+    # History is replayed verbatim (byte-stable, cacheable); the per-request
+    # context rides on the NEW message at the end.
+    assert messages[0] == {"role": "user", "content": "hi"}
+    assert messages[1]["role"] == "assistant"
+    assert messages[1]["content"][0]["text"] == "hello!"
+    assert messages[2]["role"] == "user"
+    assert "## Athlete context" in messages[2]["content"]
+    assert messages[2]["content"].endswith("what's next?")
+
+
+def _history_of(n_turns: int) -> list[dict[str, str]]:
+    history: list[dict[str, str]] = []
+    for i in range(n_turns):
+        history.append({"role": "user", "content": f"question {i}"})
+        history.append({"role": "assistant", "content": f"answer {i}"})
+    return history
+
+
+def test_build_messages_history_prefix_is_byte_stable_across_turns(app_env) -> None:
+    # Prompt caching needs an exact prefix match. Two requests in the same
+    # conversation must produce identical bytes for every message that isn't
+    # the new one, even though the per-request context differs between them.
+    store = FileStore(base_dir=app_env)
+    history = _history_of(3)
+    first = build_messages(store, "renee", message="q3", history=history, expert_mode=False)
+    store.save_workout("renee", make_workout(date=date.today(), sport="bike"))
+    second = build_messages(store, "renee", message="q3", history=history, expert_mode=False)
+
+    assert first[:-1] == second[:-1]
+    assert first[-1] != second[-1]  # context moved with the data
+
+
+def test_build_messages_context_reflects_current_data_on_the_latest_turn(app_env) -> None:
+    # Freshness must survive the move: a workout logged between turns shows up
+    # in the very next request's context.
+    store = FileStore(base_dir=app_env)
+    workout = make_workout(date=date.today(), sport="bike")
+    store.save_workout("renee", workout)
+
+    messages = build_messages(
+        store, "renee", message="how was it?", history=_history_of(2), expert_mode=False
+    )
+
+    assert f'"id": "{workout.id}"' in messages[-1]["content"]
+    assert not any(f'"id": "{workout.id}"' in str(m["content"]) for m in messages[:-1])
+
+
+def test_build_messages_marks_end_of_history_as_cache_breakpoint(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    history = _history_of(2)
+    messages = build_messages(store, "renee", message="q2", history=history, expert_mode=False)
+
+    breakpoint_msg = messages[-2]
+    assert breakpoint_msg["role"] == "assistant"
+    assert breakpoint_msg["content"] == [
+        {"type": "text", "text": "answer 1", "cache_control": {"type": "ephemeral"}}
+    ]
+    # exactly one breakpoint in messages -- the API allows 4 total and the two
+    # system blocks already use 2
+    marked = [
+        m for m in messages if isinstance(m["content"], list)
+        and any("cache_control" in b for b in m["content"])
+    ]
+    assert len(marked) == 1
 
 
 def test_build_messages_shape_without_history(app_env) -> None:
@@ -1025,7 +1084,7 @@ def test_per_request_context_pinned_events_exclude_past_and_archived(app_env) ->
     assert "Old Race" in text
 
 
-def test_build_messages_long_history_keeps_pinned_events_near_top_of_first_message(app_env) -> None:
+def test_build_messages_long_history_keeps_pinned_events_near_top_of_context(app_env) -> None:
     store = FileStore(base_dir=app_env)
     today = date.today()
     store.save_events(
@@ -1041,7 +1100,7 @@ def test_build_messages_long_history_keeps_pinned_events_near_top_of_first_messa
         store, "renee", message="is 9/19 a race or a training day?", history=long_history,
         expert_mode=False,
     )
-    first = messages[0]["content"]
+    first = messages[-1]["content"]
     assert "Pinned Race" in first
     # The pinned block is near the very top of the assembled context, not
     # buried under the week JSON / session dump.
