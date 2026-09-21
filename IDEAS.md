@@ -1103,6 +1103,48 @@ after #211 deploys before deciding.
 -- `cache_creation_input_tokens` per iteration-0 turn should fall from ~76k
 avg; iteration >= 1 turns should show the context in `cache_read_input_tokens`.
 
+### IDEA 022 -- PR #215 (light mode) review conclusions (2026-09-20 late)
+
+Merged: #211-#214. #215 (light mode, flag `COACH_LIGHT_MODE`, default OFF) is
+open, retargeted to main, mergeable. **Verdict: safe to merge (flag off), NOT
+ready to enable.** Sound: the `need_more` swap (tested, one-shot, never
+replays the light turn), lazy full-request build, flag default, exclusions
+(expert/focused/feedback route), composition with #214's cache layout.
+
+**Brittleness, worst first:**
+1. **Confirmations route light (probed, real).** "yes, go ahead", "ok do it",
+   "sounds good, thanks", bare "yes" with 2-4 history messages all return
+   LIGHT. If the full coach just proposed a plan change, the light coach has
+   no tools and must notice the pending action and call `need_more`; if it
+   says "Done!" instead that is a false claim of an action -- the worst
+   failure (trust). The `history_len <= 8` gate covers exactly these moments.
+2. **Safety/health detection is a keyword list with holes.** "I blacked out on
+   the climb" went full only by accident ("climb" is a library topic word);
+   "coming down with something", "headache", "scratchy throat" all went light.
+   Full mode records illness via `record_health_status`; a light-mode miss
+   silently loses that record. Only backstop is the light prompt telling the
+   model to call `need_more` -- untested.
+3. **Never run against the real model.** All 27 tests use fakes. Unknown:
+   reliable `need_more` with no preamble, no advice, no claimed data access.
+   Cheap to answer (~15 messages, pennies) but spends Andrew's API key --
+   ask before running.
+4. Preamble before `need_more` is shown, then the full answer follows.
+5. No routing telemetry (only escalations logged): cannot measure light share
+   or misroute rate.
+6. Payoff unproven and probably modest: a chatty conversation that escalates
+   pays a small light call + the same full call; only conversations that stay
+   chatty save. #211's size log had zero lines at review time.
+7. Maintainability: imports private `_KEYWORD_ROUTES`; second persona will
+   drift; word lists English/typo-sensitive.
+
+**Fixes to make before enabling:** invert the gate to an ALLOWLIST (light
+only for greetings/thanks/"just finished / felt / went" openers; everything
+else full); short affirmations/declines always full; if any history, require
+every prior assistant turn to have been light (tag the mode in the SSE
+response and have the client echo it); log mode + reason per request; run the
+small live eval (incl. confirmation, illness, acute cases). Do NOT enable the
+flag until then.
+
 ---
 
 ## IDEA 023 - Athlete notes: durable, structured facts the coach remembers
@@ -1139,3 +1181,116 @@ and count. (c) Migration -- needs a hand-applied Supabase migration (see the
 db-migrations-are-manual memory); the store must tolerate the table being
 absent until applied. (d) Debrief tie-in: post-race light-mode answers
 (IDEA 022 step 5) are a natural source of notes.
+
+
+### IDEA 023 -- refined design (Andrew, 2026-09-20 late; supersedes the notes-only framing)
+
+**Why now:** Andrew spent ~8 iterations building two weeks of workouts; the
+coach kept missing his scheduling preferences, and persisted plans reverted
+to a prior iteration (defects catalogued in IDEA 024). **Success criteria
+(Andrew's words):** (1) he can store "I prefer strength the same day after
+intervals, to maximize recovery"; (2) he can store "standing group rides with
+the Heinous club on Wednesday and Sunday -- treat these as my endurance days
+unless there is a pressing different need like a taper or a race"; (3) when a
+week's schedule is set, those preferences are taken into account -- by the
+GENERATOR, not by the coach hand-editing overrides each time.
+
+**Findings from reading the code (these reshape the plan):**
+- The engine already owns most of the mechanism. `Athlete.training_days`
+  maps "bike"/"strength"/"skills" to weekday lists; in a bike week the FIRST
+  bike entry is the hard/interval day and the rest are Z2 endurance days
+  (`plan._bike_week_sessions`). Entries may be `str | dict`, so a dict can
+  carry extra keys (a label, a role) with no schema change.
+- Strength-after-intervals is ALREADY the engine default ("Andrew's rule,
+  Build A defect 4": strength after the hard session, same day or later,
+  never the day before a hard/race day). What is missing is a preference for
+  the SAME day: the fallback only picks free days, so same-day needs an
+  explicit pattern or a placement option.
+- The gap is wiring: NEITHER `update_athlete_profile` (coach chat) nor the
+  PWA can set `training_days`. It is YAML/DB-only today, so the coach cannot
+  persist a schedule preference at all.
+- The Athlete row is stored as a full JSON blob (`store_db`: `data =
+  athlete.model_dump`), so new Athlete fields need NO Supabase migration.
+  Only the free-text notes table (below) does.
+- `replace_week_plan` regenerates from scratch with no memory of what is
+  persisted; preferences stored on the ATHLETE therefore survive every
+  regeneration, which is exactly what iterating-8-times lacked.
+
+**Design -- two tiers, structured first (it is the actual fix):**
+1. **Structured scheduling preferences on the Athlete (engine-owned, no
+   migration).** Extend `training_days` dict entries with `label` and
+   `role` (`hard` | `endurance`), e.g. `{"day": "wed", "label": "Heinous club
+   ride", "role": "endurance"}`; add `strength_placement:
+   "same_day_as_hard" | "after_hard"` (default = today's rule). The generator
+   places labelled endurance rides on their days, picks the hard day from the
+   remaining days, and drops the standing commitment's claim in taper and
+   race weeks (the taper/race generators' own placement wins; the plan notes
+   the ride was skipped and why). Volume/ramp-cap math is untouched -- a
+   preference never overrides the +8% / +15% safety rails. A `set_schedule_
+   preferences` coach tool (draft-then-confirm, like `propose_adaptation`)
+   validates and persists; it reports the resulting week layout so the
+   athlete confirms what will actually happen.
+2. **Free-text notes (IDEA 023 original).** `athlete_notes` table, `save_
+   athlete_note` / `retire_athlete_note`, active notes rendered into context.
+   For facts the engine cannot act on (preferred name, 3 bikes, flat pedals
+   when teaching skills). Needs a hand-applied Supabase migration.
+3. PWA view/edit of both tiers (later).
+
+**Build order:** (1) engine: `training_days` roles/labels + `strength_
+placement` + tests; (2) `set_schedule_preferences` tool; (3) `athlete_notes`
+store/tools/context (+ migration file, applied by hand); (4) PWA. Phase 1-2
+alone meet success criteria 1-3.
+
+**Risks:** (a) preferences must not silently defeat safety rails -- ramp caps
+stay authoritative (matches the coach's own point 9: a "treat me as in build"
+override must still respect the ramp-cap math); (b) a preference on the
+athlete applies to ALL future weeks -- needs an explicit per-week "ignore
+this week" escape and a visible list; (c) verify the APPLIED week matches the
+preference (defect 4 in IDEA 024: an override can silently fail to
+propagate); (d) other athletes' schedules are per-athlete -- never global.
+
+---
+
+## IDEA 024 - Week-plan tooling defects reported by the coach while building two weeks (2026-09-20)
+
+Source: the coach's own end-of-session error summary while Andrew built two
+weeks (~8 iterations). Coach-logged ids: 62ea6d7d (multi-race season macro
+-- since addressed by `draft_season_macro_plan`, verify), 971a4701 (macro
+coverage range not discoverable before a week call). Grouped by root cause;
+items marked (P) are fixed or reduced by IDEA 023's structured preferences.
+
+1. **Full-regeneration risk (biggest).** `replace_week_plan` always calls
+   `generate_week` from scratch with no knowledge of the persisted week; any
+   session not re-listed in `session_overrides` reverts to generator defaults
+   or vanishes (yoga add dropped 4 sessions incl. a race day, caught only by
+   reading `dropped_sessions`). `patch_week_plan` (edits the persisted week)
+   is safer for "change/add a session or two" and should be the default the
+   coach reaches for. (P) partly: preferences survive regeneration.
+2. **Granularity mismatch.** `template_preference` is whole-week, not
+   per-day ("Tuesday intervals, Thursday technique" impossible); no
+   interval-style or technique-purpose template in the base block, so those
+   calls fail and content is hand-authored, losing library backing. (P)
+3. **Validation quirks that cost retries** (undiscoverable before failing):
+   `structure` (prose) requires `distance_m` in the same entry; setting
+   `structure` without `structured` clears existing structured data; nested
+   repeat-inside-repeat is rejected.
+4. **Silent partial-apply -- a real defect.** A purpose override ("over/
+   unders -- second interval day") did not propagate to `structured`/
+   `intensity`: the workout kept steady-Z2 content and Z2 zone tag while the
+   label said intervals, and the realism guardrail read the stale zone field
+   (false negative). Applied content must be verified against intent.
+5. **Single-active-macro slot** (replacing the Halloween macro orphaned the
+   Season Opener macro). Likely fixed by `draft_season_macro_plan` -- verify
+   before building anything.
+6. **Macro/week coverage not discoverable** before `create_week_plan`/
+   `replace_week_plan` refuse a week outside the macro range (971a4701).
+7. **Compounding asks only ramp-cap-checked at the end** (stacked requests
+   pushed weekly volume +14%; no incremental "budget remaining" per
+   override).
+8. **Tooling friction:** `get_workouts` exposed no id for `reanalyze_workout`
+   / `pull_activity_stream` (FIXED by #207); cross_train mistagged bike rides
+   (per-activity fix only, no bulk/policy fix); `update_athlete_profile`
+   lacked `home_elevation_m` (appears fixed).
+9. **Design tension, not a bug:** block labels are pure runway-math output
+   with no "treat me as already in build" lever. Any override must still
+   respect the ramp-cap math.
