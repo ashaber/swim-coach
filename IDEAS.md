@@ -1294,3 +1294,91 @@ items marked (P) are fixed or reduced by IDEA 023's structured preferences.
 9. **Design tension, not a bug:** block labels are pure runway-math output
    with no "treat me as already in build" lever. Any override must still
    respect the ramp-cap math.
+
+
+### IDEA 022 -- RESULTS: how much the cost optimizations actually helped (2026-09-21, from real Cloud Run logs)
+
+Method: 164 `claude turn complete` calls (09-13 to 09-21), priced at Sonnet 5 rates ($2/$10 per MTok, cache
+write 1.25x, read 0.1x), lined up against Cloud Run revision times. **Honest answer: less than hoped.**
+Cost per call, by deploy period: baseline $0.227 -> #209 period $0.296 -> #211-#214 period $0.230 (flat;
+usage mix differs, so this is not a controlled comparison).
+
+- **#212 never reached main (my stacking error).** It was stacked on #211's branch, so merging it landed
+  in that already-merged branch. `with_loop_breakpoint` was absent from main; the logs agree (15 of today's
+  30 calls are tool-loop iterations that re-bill the ~28k-token context as fresh input). #209/#211/#213/
+  #214 are on main. Re-applied in PR #227. **Lesson: after merging a stacked PR, grep main for its key
+  symbol -- "merged" in the GitHub UI does not prove the code is on main.**
+- **The 5-minute cache is the real cost driver.** Today: 60% of spend is cache WRITES, 20% fresh input, 8%
+  reads, 12% output. The cached prefix (tools + persona + INDEX + reference list) is ~185k REAL tokens
+  (chars/4 estimates run ~1.6x low), so a cold turn costs ~$0.46 before the model speaks. 9 of 14
+  conversation starts today were cold (gaps 7-213 min: the athlete reads a draft, thinks, comes back).
+  #209/#213 work when the cache is warm (a warm start writes ~38k instead of ~185k) but only 5 of 14
+  starts were warm.
+- **What the levers are worth (modeled on the real log, today's 30 calls $7.89):** restore #212 ~7%; a 1-hour
+  TTL on the stable block ~18% (docs: "the only window where the 2x write pays off" for a user who
+  replies after 5-60 min); both ~25% ($5.92). Real, not a step-change. Shipped in #227 (`PROMPT_CACHE_TTL`).
+- **The step-change is the prefix itself.** ~58k real tokens of it is `reference_list.md` (needed only to
+  cite) and ~45k is tool schemas; halving the prefix roughly halves the 60%. That is what routing (IDEA 025)
+  could decide per turn. Also seen: 2 calls ran to the 16k output ceiling (adaptive thinking + long plan
+  writes, ~$0.16 each) -- a lower thinking effort for routine plan writes is worth testing.
+
+---
+
+## IDEA 025 - Use TypeSafe's Jev (a "System One" classifier) to route turns: light vs heavy, tools, sport, library
+
+Andrew, 2026-09-21: *"JEV is a new classifier with a skill by typesafe. First idea: consider JEV to decide if
+a question can be light vs heavy. Could also pre-decide some tool calls, sport and library."*
+
+**What Jev is (sourced; treat vendor claims as claims).** TypeSafe AI (SF lab, out of stealth 2026-09-15,
+$40M seed) released Jev, a model that does NOT generate text: you send a state (text) and typed questions
+(Choice, Score, yes/no checks ...) and get back a probability for every possible answer, calibrated with a
+confidence, all questions in ONE parallel pass. Claims: 70-500 ms end-to-end, 40-200x faster and ~400x cheaper
+than a frontier LLM on classification, cardinality up to 255 per Choice. Pricing on the launch blog: $0.042 per
+MTok input, output free. **Early access only** (console.typesafe.ai, `TYPESAFE_API_KEY`), no self-hosting,
+text-only state. Integrations reported: a Claude Code/Codex skill+tool (`jev-code`: classify / check / score /
+rank / ask), LiteLLM pass-through, LangChain `TypeSafeClassifier`, a Bifrost router feature request, NVIDIA
+NeMo Switchyard-style routing.
+**Independent evidence is thin.** One hands-on routing test (DevelopersIO) classified conversation summaries
+into 4 difficulty tiers: 0.64-0.67 s median vs 2.1 s (Gemini Flash) / 7.2 s (DeepSeek Flash), ~$0.000026 per
+call, 10/10 on "one straightforward sample per tier" -- but the author says that is not an accuracy test, the
+medium tier had lower confidence (0.57-0.67), and he cites an independent benchmark at 67.8% accuracy vs 74.1%
+for competitors ("on par or slightly inferior" accuracy, clearly superior speed and cost).
+Sources: typesafe.ai/blog/introducing-system-one-models-and-jev ; dev.classmethod.jp/en/articles/jev-for-llm-model-routing ;
+github.com/FrancoisChastel/jev-code ; datacamp.com/blog/system-one-models-jev ; langchain.com/blog/building-a-harness-with-jev.
+
+**Why it fits us (inference).** Our routing is hand-written keyword lists (`light_mode.is_light_turn`, the
+library router's `_KEYWORD_ROUTES`). The PR #215 review found their failure modes: "yes, go ahead" routes
+light, "I blacked out" is caught only by accident. A call costs ~$0.00003 against ~$0.23 for a coach call, so
+cost is irrelevant; +~0.6 s latency and accuracy are the real questions. Questions Jev could answer in one
+parallel pass over {latest message + last 1-2 turns + flags}:
+1. **Weight** -- Choice {chat, needs_plan_data, needs_tools_write, health_or_safety}: light vs full.
+2. **Confirmation** -- yes/no "is this agreeing to a pending draft?" given the "Drafts waiting" context
+   (fixes the #215 confirmation hole directly; a confirmation must go full and write the draft).
+3. **Safety** -- yes/no "mentions a symptom, pain, injury or illness?" (a positive ALWAYS forces full).
+4. **Sport** -- Choice {swim, bike, strength, yoga/mobility, multi, none}: which sport's library/context to load.
+5. **Library** -- Choice over our ~30 topic files (or "none"): replaces keyword `_KEYWORD_ROUTES`, and can say
+   "needs no library / no reference list" (the ~58k-token reference list is the single biggest prefix item).
+6. **Tool group** -- Choice {none, plan-write, analysis, fueling, full}: which tool subset to send.
+
+**How to fit it in (safely).**
+- A `router.py` that returns a `Route` (weight, sport, library files, tool profile) from a `Classifier`
+  interface with two implementations: the existing deterministic rules (kept, and the FALLBACK on timeout/
+  error/low confidence) and Jev. A short timeout (~2 s). **Fail toward full**: any low confidence, any
+  safety-positive, any pending draft -> full.
+- **Shadow mode first, no behaviour change:** run Jev alongside the current rules, log both decisions (ids,
+  labels, probabilities -- not message text), and review disagreements. Build a small labelled set from
+  Andrew's real chats before trusting it; the launch numbers say to verify.
+- **Mind the cache.** Tools are FIRST in the cached prefix, so varying the tool set per turn invalidates
+  everything behind it. Use a handful of FIXED tool profiles (each its own cache entry), sticky within a
+  conversation, escalate one way (light -> full) only. Route library files into the newest message
+  (`COACH_ROUTED_LIBRARY_IN_MESSAGE`, IDEA 022 step 4) so library routing never touches the cached prefix.
+- Order: (1) shadow-mode log, (2) drive the light/full decision behind `COACH_LIGHT_MODE` (only after the
+  #215 hardening: allowlist, confirmations always full), (3) sport + library, (4) tool profiles.
+
+**Risks / open questions.** (a) **Privacy:** athlete messages include health information and would be sent
+to a third party in early access -- needs a data-handling read (and Andrew's OK) before any real traffic;
+shadow mode should start with Andrew's own account only. (b) Early access: availability, quotas, API
+stability, single vendor, no self-host. (c) Accuracy is unverified for OUR domain; a safety-critical class
+(symptoms) must never rely on a classifier alone -- keep the keyword rules as an OR. (d) It routes; it does
+not fix the 5-minute-cache cost (PR #227) or the prefix size on its own. (e) Unknown whether questions need
+few-shot examples or work zero-shot with natural-language definitions.
