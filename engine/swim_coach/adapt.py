@@ -63,7 +63,11 @@ from swim_coach.plan import (
     STAGE_SATURDAY_SHARE,
     WEEKLY_VOLUME_RAMP_CAP,
     _bike_ramp_week_index,
+    _bike_training_days,
     _bike_week_sessions_with_strength,
+    _find_block,
+    _template_week_sessions,
+    _training_day_offsets,
     _duration_min_for_distance,
     _round_100,
     _z2_pace_s_per_100m,
@@ -539,13 +543,33 @@ def adapt_week(
         # consistent with what `generate_week` would pick for this same
         # calendar week -- without it, every /adapt-rebuilt week would reset
         # to week_index=0's template regardless of which real week it is.
-        sessions = _bike_week_sessions_with_strength(
-            athlete,
-            week_start,
-            float(next_target_volume_m),
-            ftp_watts,
-            week_index=_bike_ramp_week_index(macro, week_start),
-        )
+        # The athlete's own week SHAPE survives adaptation: a weekly template (IDEA 023
+        # v3) or a day pattern used to be ignored here, silently undoing them on every
+        # /adapt. Both yield in a taper block, exactly as `generate_week` does.
+        in_taper = _find_block(macro, week_start)[1].name == "taper"
+        if athlete.weekly_template and not in_taper:
+            sessions = _template_week_sessions(
+                athlete,
+                week_start,
+                float(next_target_volume_m),
+                ftp_watts,
+                week_index=_bike_ramp_week_index(macro, week_start),
+            )
+        else:
+            bike_offsets, bike_labels = (
+                (_training_day_offsets(athlete, "bike"), {}) if in_taper else _bike_training_days(athlete)
+            )
+            sessions = _bike_week_sessions_with_strength(
+                athlete,
+                week_start,
+                float(next_target_volume_m),
+                ftp_watts,
+                week_index=_bike_ramp_week_index(macro, week_start),
+                bike_day_offsets=bike_offsets,
+                strength_day_offsets=_training_day_offsets(athlete, "strength"),
+                bike_day_labels=bike_labels,
+                same_day_strength=athlete.strength_placement == "same_day_as_hard",
+            )
     else:
         pace_s = _z2_pace_s_per_100m(athlete)
         sessions = []

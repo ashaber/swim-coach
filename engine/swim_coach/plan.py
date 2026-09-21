@@ -4943,7 +4943,9 @@ def generate_week(
         same_day_strength = athlete.strength_placement == "same_day_as_hard"
         # IDEA 023 v3: a weekly template owns the week's shape in build/base
         # weeks; a taper or race week yields to the engine's own placement.
-        weekly_template_applies = bool(athlete.weekly_template) and not use_openers and not in_week_race_dates
+        weekly_template_applies = (
+            bool(athlete.weekly_template) and block.name != "taper" and not use_openers and not in_week_race_dates
+        )
         weekly_template_skipped = bool(athlete.weekly_template) and not weekly_template_applies
 
         if use_openers and not is_deload_week:

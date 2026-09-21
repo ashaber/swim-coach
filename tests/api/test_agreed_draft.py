@@ -180,16 +180,50 @@ def test_tools_advertise_draft_id_and_the_persona_explains_the_draft_is_the_plan
     assert "the draft IS the plan" in " ".join(PERSONA_AND_RULES.split())
 
 
-def test_a_deliberate_one_shot_with_new_overrides_still_works_and_is_flagged_as_not_from_a_draft(athletes_dir) -> None:
+def test_a_missing_draft_id_with_resent_overrides_still_writes_the_agreed_draft(athletes_dir) -> None:
+    # The guaranteed-failure case: the coach forgets draft_id and re-sends overrides
+    # out of habit. The agreed draft must still be what is written.
     store, h, iso = _setup(athletes_dir)
-    draft = h["replace_week_plan"]({"iso_week": iso})  # a lookup draft exists
+    draft = h["replace_week_plan"]({"iso_week": iso})
     target = draft["sessions"][0]
 
     done = h["replace_week_plan"]({
         "iso_week": iso, "confirm": True,
-        "session_overrides": [{"date": target["date"], "sport": target["sport"], "purpose": "explicit one-shot edit"}],
+        "session_overrides": [{"date": target["date"], "sport": target["sport"], "purpose": "a different edit"}],
     })
 
-    assert done["persisted"] is True and not done.get("written_from_draft")
-    assert any(s["purpose"] == "explicit one-shot edit" for s in done["sessions"])
+    assert done["written_from_draft"] is True
+    assert _shape(done["sessions"]) == _shape(draft["sessions"])
+    assert any("NOT applied" in w for w in done["planning_warnings"])
+
+
+def test_a_stale_draft_is_never_written_by_a_confirm_that_names_no_draft_id(athletes_dir) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    store, h, iso = _setup(athletes_dir)
+    draft = h["replace_week_plan"]({"iso_week": iso})
+    old = store.load_week_draft("renee", iso).model_copy(
+        update={"drafted_at": datetime.now(timezone.utc) - timedelta(days=2)}
+    )
+    store.save_week_draft("renee", old)
+
+    done = h["replace_week_plan"]({"iso_week": iso, "confirm": True})
+
+    assert not done.get("written_from_draft")
     assert any("ONE step" in w for w in done["planning_warnings"])
+    # ...but naming it explicitly is deliberate and is honoured
+    again = h["replace_week_plan"]({"iso_week": iso, "confirm": True, "draft_id": draft["draft_id"]})
+    assert again["written_from_draft"] is True
+
+
+def test_a_draft_from_another_tool_is_never_written_by_a_confirm_that_names_no_draft_id(athletes_dir) -> None:
+    store, h, iso = _setup(athletes_dir)
+    h["create_week_plan"]({"iso_week": iso})
+    target = next(s for s in store.load_week("renee", iso).sessions if s.sport == "bike")
+    h["patch_week_plan"]({"iso_week": iso, "session_overrides": [
+        {"date": target.date.isoformat(), "sport": "bike", "duration_min": 45}]})  # a PATCH draft is latest
+
+    done = h["replace_week_plan"]({"iso_week": iso, "confirm": True})  # no draft_id, wrong tool
+
+    assert not done.get("written_from_draft")
+    assert next(s for s in store.load_week("renee", iso).sessions if s.date == target.date and s.sport == "bike").duration_min != 45

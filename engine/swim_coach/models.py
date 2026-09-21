@@ -703,6 +703,14 @@ class WeekPlan(BaseModel):
     sessions: list[Session] = Field(default_factory=list)
     adaptation_rationale: str | None = None
     draft: bool = False
+    # When a HELD draft was proposed (UTC). Drafts older than the tools' expiry are
+    # treated as absent so a stale, forgotten draft can never be written by a later,
+    # unrelated confirm. Additive/optional, no schema_version bump.
+    drafted_at: datetime | None = None
+    # Which tool proposed a HELD draft, so a confirm that names no draft_id only ever
+    # picks up ITS OWN tool's draft (a replace_week_plan draft is never written by a
+    # later merge_week_plan confirm on the same week). Additive/optional.
+    drafted_by: str | None = None
     planning_warnings: list[str] = Field(default_factory=list)
     # Realism-guardrail verdict for this week's plan (Build A defect 1,
     # engine/week-generator-realism). Human-readable strings surfaced to the

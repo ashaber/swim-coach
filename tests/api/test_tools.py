@@ -4161,6 +4161,17 @@ def test_replace_week_plan_session_override_structure_without_distance_m_is_a_cl
     assert "distance_m" in result["error"]
 
 
+def _draft_then_confirm(handlers, payload):
+    """The agreed-plan protocol (Andrew, 2026-09-21): draft the exact payload, then confirm
+    THAT draft by its draft_id -- confirm writes the draft, it never recomputes. Returns the
+    draft's own result when it errors (so error-path tests still see the error)."""
+    draft = handlers["replace_week_plan"]({k: v for k, v in payload.items() if k != "confirm"})
+    if "error" in draft or not draft.get("draft_id"):
+        return draft
+    return handlers["replace_week_plan"]({"iso_week": payload["iso_week"], "confirm": True, "draft_id": draft["draft_id"]})
+
+
+
 def test_replace_week_plan_session_override_structure_clears_stale_structured_ir(athletes_dir) -> None:
     # The session whose structure we're overriding may already have real
     # structured data (Garmin-exportable, tree-walk-rendered) from the
@@ -4174,7 +4185,7 @@ def test_replace_week_plan_session_override_structure_clears_stale_structured_ir
     if target is None:
         pytest.skip("no session in this fixture week has structured data to test clearing against")
 
-    result = handlers["replace_week_plan"]({
+    result = _draft_then_confirm(handlers, {
         "iso_week": "2026-W28",
         "session_overrides": [{
             "date": target["date"], "sport": target["sport"],
@@ -4285,7 +4296,7 @@ def test_replace_week_plan_session_override_structured_persists_real_ir(athletes
     baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
     target = baseline["sessions"][0]
 
-    result = handlers["replace_week_plan"]({
+    result = _draft_then_confirm(handlers, {
         "iso_week": "2026-W28",
         "session_overrides": [{
             "date": target["date"], "sport": target["sport"],
@@ -4331,7 +4342,7 @@ def test_replace_week_plan_session_override_invalid_structured_is_a_clean_error(
 
     # And even with confirm=True the bad payload persists nothing -- an
     # override error is a whole-call failure, not a partial apply.
-    confirmed = handlers["replace_week_plan"]({
+    confirmed = _draft_then_confirm(handlers, {
         "iso_week": "2026-W28",
         "session_overrides": [{
             "date": target["date"], "sport": target["sport"],
@@ -4361,7 +4372,7 @@ def test_replace_week_plan_session_override_structure_and_structured_both_persis
         "Cool-down: 300m easy."
     )
 
-    result = handlers["replace_week_plan"]({
+    result = _draft_then_confirm(handlers, {
         "iso_week": "2026-W28",
         "session_overrides": [{
             "date": target["date"], "sport": target["sport"],
@@ -4396,7 +4407,7 @@ def test_replace_week_plan_session_override_structured_alone_no_distance_require
     baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
     strength_target = next((s for s in baseline["sessions"] if s["sport"] == "strength"), baseline["sessions"][0])
 
-    result = handlers["replace_week_plan"]({
+    result = _draft_then_confirm(handlers, {
         "iso_week": "2026-W28",
         "session_overrides": [{
             "date": strength_target["date"], "sport": strength_target["sport"],
@@ -4438,7 +4449,7 @@ def test_replace_week_plan_session_override_ow_template_persists_resolved_conten
     baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
     target = next(s for s in baseline["sessions"] if s["sport"] == "swim_ow")
 
-    result = handlers["replace_week_plan"]({
+    result = _draft_then_confirm(handlers, {
         "iso_week": "2026-W28",
         "session_overrides": [{
             "date": target["date"], "sport": target["sport"],
@@ -4516,7 +4527,7 @@ def test_replace_week_plan_session_override_ow_template_unknown_id_is_a_clean_er
     # same convention the other "confirm this DIDN'T persist" tests above use.
     target = baseline["sessions"][0]
 
-    result = handlers["replace_week_plan"]({
+    result = _draft_then_confirm(handlers, {
         "iso_week": "2026-W28",
         "session_overrides": [{
             "date": target["date"], "sport": target["sport"],
@@ -4539,7 +4550,7 @@ def test_replace_week_plan_session_override_ow_template_below_floor_is_a_clean_e
     baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
     target = next(s for s in baseline["sessions"] if s["sport"] == "swim_ow")
 
-    result = handlers["replace_week_plan"]({
+    result = _draft_then_confirm(handlers, {
         "iso_week": "2026-W28",
         "session_overrides": [{
             "date": target["date"], "sport": target["sport"],
@@ -6777,3 +6788,94 @@ def test_merge_week_plan_end_to_end_pre_event_nutrition_session_via_engine_gener
     assert original_swim.purpose == "easy taper swim"  # untouched
     assert original_swim.duration_min == 45.0
     assert original_swim.distance_m == 1500
+
+
+# --- agreed draft: the multi-week injury taper and the season macro write what was shown -------
+
+
+def test_taper_confirm_writes_exactly_the_agreed_multi_week_bundle(athletes_dir, taper_as_of) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    _seed_steady_workouts(store, athlete.id, end=taper_as_of, days=40, daily_load=300.0)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    draft = handlers["propose_injury_adapted_taper"]({"event": GREECE_EVENT_NAME})
+    assert draft["persisted"] is False and draft["draft_id"]
+    from app.context import iso_week_str
+
+    weeks = {iso_week_str(date.fromisoformat(s["date"])) for s in draft["sessions"]}
+    assert all(FileStore(base_dir=athletes_dir).load_week("renee", w) is None for w in weeks)  # held, not written
+
+    # more training gets logged after the athlete agreed: a recomputation would now differ
+    _seed_steady_workouts(store, athlete.id, end=taper_as_of, days=10, daily_load=900.0)
+
+    done = handlers["propose_injury_adapted_taper"]({"event": GREECE_EVENT_NAME, "confirm": True, "draft_id": draft["draft_id"]})
+
+    assert done["persisted"] is True and done["written_from_draft"] is True and done["verified"] is True
+    reloaded = FileStore(base_dir=athletes_dir)
+    for s in draft["sessions"]:
+        week = reloaded.load_week("renee", iso_week_str(date.fromisoformat(s["date"])))
+        match = next(x for x in week.sessions if x.date == date.fromisoformat(s["date"]) and x.sport == s["sport"])
+        assert match.distance_m == s["distance_m"] and match.purpose == s["purpose"]
+
+
+def test_taper_confirm_without_a_draft_id_writes_the_agreed_bundle(athletes_dir, taper_as_of) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    _seed_steady_workouts(store, athlete.id, end=taper_as_of, days=40, daily_load=300.0)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    handlers["propose_injury_adapted_taper"]({"event": GREECE_EVENT_NAME})
+
+    done = handlers["propose_injury_adapted_taper"]({"event": GREECE_EVENT_NAME, "confirm": True})
+
+    assert done["written_from_draft"] is True
+
+
+def test_taper_unknown_draft_id_writes_nothing(athletes_dir, taper_as_of) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    _seed_steady_workouts(store, athlete.id, end=taper_as_of, days=40, daily_load=300.0)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    handlers["propose_injury_adapted_taper"]({"event": GREECE_EVENT_NAME})
+
+    result = handlers["propose_injury_adapted_taper"](
+        {"event": GREECE_EVENT_NAME, "confirm": True, "draft_id": "00000000-0000-0000-0000-000000000000"}
+    )
+
+    assert result["persisted"] is False and "draft" in result["error"].lower()
+
+
+def test_taper_one_shot_with_no_draft_is_flagged(athletes_dir, taper_as_of) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    _seed_steady_workouts(store, athlete.id, end=taper_as_of, days=40, daily_load=300.0)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    done = handlers["propose_injury_adapted_taper"]({"event": GREECE_EVENT_NAME, "confirm": True})
+
+    assert done["persisted"] is True and not done.get("written_from_draft")
+    assert any("ONE step" in w for w in done["planning_warnings"])
+
+
+def test_season_macro_confirm_writes_exactly_the_agreed_macro(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    slug = "andrew"
+    athlete = store.load_athlete(slug)
+    _clear_workouts(athletes_dir, slug)
+    _log_consistent_bike_history(store, slug, athlete.id, weeks=20, as_of=_SHARPENING_AS_OF)
+    _add_bike_event(store, slug, athlete.id, name="Race A3", event_date=_SHARPENING_AS_OF + timedelta(weeks=4), priority="A")
+    _add_bike_event(store, slug, athlete.id, name="Race B3", event_date=_SHARPENING_AS_OF + timedelta(weeks=12), priority="B")
+    handlers = build_tool_handlers(store, slug=slug, expert_mode=False)
+    args = {"event_names": ["Race A3", "Race B3"], "current_weekly_volume_m": 300, "peak_weekly_volume_m": 500,
+            "start_date": _SHARPENING_AS_OF.isoformat()}
+
+    draft = handlers["draft_season_macro_plan"](args)
+    assert draft["persisted"] is False and draft["draft_id"]
+
+    done = handlers["draft_season_macro_plan"]({**args, "peak_weekly_volume_m": 900, "confirm": True, "draft_id": draft["draft_id"]})
+
+    assert done["persisted"] is True and done["written_from_draft"] is True and done["verified"] is True
+    saved = FileStore(base_dir=athletes_dir).load_macro(slug)
+    assert [(b["name"], b["weekly_volume_target_m"]) for b in draft["blocks"]] == [
+        (b.name, b.weekly_volume_target_m) for b in saved.blocks
+    ]
