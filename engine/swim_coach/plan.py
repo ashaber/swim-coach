@@ -2222,7 +2222,12 @@ def _find_block(macro: MacroPlan, week_start: date) -> tuple[int, MacroBlock]:
     for index, block in enumerate(macro.blocks):
         if block.start_date <= week_start <= block.end_date:
             return index, block
-    raise ValueError(f"{week_start} is outside this macro plan's date range")
+    raise ValueError(
+        f"{week_start} is outside this macro plan's date range "
+        f"({macro.blocks[0].start_date.isoformat()} to {macro.blocks[-1].end_date.isoformat()}). "
+        "A macro only covers its own blocks: extend or replace it first (draft_season_macro_plan "
+        "for several close races, replace_macro_plan for one), or pick a week inside that range."
+    )
 
 
 def _block_start_volume(macro: MacroPlan, block_index: int, block: MacroBlock) -> float:
@@ -3380,6 +3385,26 @@ TEMPLATE_YOGA_SESSION_MIN = 30.0
 TEMPLATE_HARD_TOTAL_SHARE_CAP = 0.6
 
 
+# Coach judgment: bike minutes per open (no `duration_min`) template slot when a
+# week is built under a NON-bike macro and no held volume is known. Not
+# research-backed; the tools pass last week's real bike minutes when they exist.
+TEMPLATE_DEFAULT_HARD_MIN = 60.0
+TEMPLATE_DEFAULT_ENDURANCE_MIN = 90.0
+
+
+def _template_default_minutes(athlete: Athlete) -> float:
+    """Total bike minutes for a template week with no macro-derived target:
+    explicit slot durations as given, open hard/endurance slots at the defaults."""
+    total = 0.0
+    for _, _, slot in _template_slots(athlete):
+        if slot["kind"] != "bike":
+            continue
+        total += slot.get("duration_min") or (
+            TEMPLATE_DEFAULT_HARD_MIN if slot["role"] == "hard" else TEMPLATE_DEFAULT_ENDURANCE_MIN
+        )
+    return total
+
+
 def _template_slots(athlete: Athlete) -> list[tuple[int, int, dict]]:
     """`(day_offset, order_in_day, slot)` for every slot of the athlete's
     `weekly_template`, in week then in-day order."""
@@ -3449,6 +3474,8 @@ def _template_week_sessions(
                 ftp_source in BIKE_FTP_CHECK_ELIGIBLE_SOURCES
             ):
                 purpose += BIKE_FTP_CHECK_PURPOSE_SUFFIX
+            if slot.get("purpose"):
+                purpose = slot["purpose"]
             structured = (
                 _bike_hard_session_structure(template, duration, ftp_watts)
                 if is_hard
@@ -3476,7 +3503,9 @@ def _template_week_sessions(
                 hard_index += 1
         elif kind == "skills":
             skills = _skills_sessions(athlete, week_start, [offset])[0]
-            if label:
+            if slot.get("purpose"):
+                skills = skills.model_copy(update={"purpose": slot["purpose"]})
+            elif label:
                 skills = skills.model_copy(update={"purpose": f"{label} — {skills.purpose}"})
             sessions.append(skills)
         elif kind == "strength":
@@ -3484,10 +3513,11 @@ def _template_week_sessions(
             note = ""
             if offset in hard_dates and hard_dates[offset] < order:
                 note = " — done after the interval session (same day)"
-            purpose = f"{label} — {strength.purpose}" if label else strength.purpose
-            sessions.append(strength.model_copy(update={"purpose": purpose + note}))
+            base = slot.get("purpose") or (f"{label} — {strength.purpose}" if label else strength.purpose)
+            sessions.append(strength.model_copy(update={"purpose": base + note}))
         else:  # yoga / recovery
             name = label or ("yoga" if kind == "yoga" else "recovery")
+            purpose_text = slot.get("purpose") or f"{name} — mobility & recovery"
             sessions.append(
                 Session(
                     id=uuid4(),
@@ -3498,7 +3528,7 @@ def _template_week_sessions(
                     duration_min=float(slot.get("duration_min") or TEMPLATE_YOGA_SESSION_MIN),
                     distance_m=None,
                     intensity={"anchor": "rpe"},
-                    purpose=f"{name} — mobility & recovery",
+                    purpose=purpose_text,
                     status="planned",
                 )
             )
@@ -4586,8 +4616,17 @@ def generate_week(
     bike_indoor: bool | None = None,
     ftp_source: str | None = None,
     events: list[Event] | None = None,
+    template_bike_minutes: float | None = None,
 ) -> WeekPlan:
     """Generate one week's sessions.
+
+    `template_bike_minutes` (IDEA 023 v3, optional): the bike-minute budget for
+    a `weekly_template` week built under a NON-bike macro (e.g. one targeting a
+    swim event, where the macro's own volume is swim meters and says nothing
+    about bike time). Callers pass the previous week's real bike minutes so
+    volume is HELD, never grown; `None` uses per-slot defaults. Ignored for a
+    bike-primary macro (its ramp-capped target is the budget) and when the
+    athlete has no template.
 
     `ftp_source` (optional, threshold-history build -- defaults to `None`,
     every existing call site keeps producing byte-identical output unless
@@ -4791,6 +4830,55 @@ def generate_week(
     week_index_in_block = (week_start - block.start_date).days // 7
     if not (0 <= week_index_in_block < weeks_in_block):
         raise ValueError(f"{week_start} is not a valid week-start within block {block.name!r}")
+
+    # IDEA 023 v3: the athlete's weekly template also applies when the active
+    # macro targets a NON-bike event -- otherwise a swim-target macro would
+    # silently swallow the template and generate a swim week. Volume is HELD
+    # (the caller's `template_bike_minutes`, else slot defaults) because the
+    # macro's volume is swim meters. A taper or race week yields to the normal
+    # generator and says so.
+    weekly_template_yield_note: str | None = None
+    if athlete.weekly_template and primary_sport != "bike":
+        template_week_end = week_start + timedelta(days=6)
+        race_in_week = any(
+            e.active and week_start <= e.event_date <= template_week_end for e in (events or [])
+        ) or (event is not None and week_start <= event.event_date <= template_week_end)
+        if block.name == "taper" or race_in_week:
+            weekly_template_yield_note = (
+                "weekly_template was NOT applied to this week: it is a taper or race week, so the "
+                "engine's own placement is used instead. Tell the athlete which of their usual "
+                "sessions moved or dropped."
+            )
+        else:
+            minutes = float(template_bike_minutes) if template_bike_minutes else _template_default_minutes(athlete)
+            template_sessions = _template_week_sessions(
+                athlete,
+                week_start,
+                minutes,
+                ftp_watts,
+                is_indoor=bike_indoor,
+                week_index=_bike_ramp_week_index(macro, week_start),
+                ftp_source=ftp_source,
+            )
+            return WeekPlan(
+                id=uuid4(),
+                athlete_id=athlete.id,
+                iso_week=iso_week,
+                meso_block=block.name,
+                focus=f"{block.focus} — weekly template",
+                target_volume_m=round(minutes),
+                sessions=template_sessions,
+                adaptation_rationale=None,
+                draft=False,
+                planning_warnings=evaluate_week_realism(template_sessions)
+                + [
+                    "This macro targets a swim event, so the weekly_template week was built with bike "
+                    f"volume HELD at ~{round(minutes)} min (last week's bike minutes, or the slot "
+                    "defaults) rather than a macro-derived, ramp-capped target. The macro's swim "
+                    "distance is not used. Confirm the volume with the athlete."
+                ],
+                race_week_checklist=[],
+            )
 
     # IDEA 019 fix (corrected 2026-09-19, empirically verified against
     # Andrew's real, live season macro): the race-week-checklist qualifying
@@ -5473,6 +5561,7 @@ def generate_week(
         sessions=sessions,
         adaptation_rationale=None,
         draft=False,
+        planning_warnings=[weekly_template_yield_note] if weekly_template_yield_note else [],
         race_week_checklist=race_week_checklist,
     )
 

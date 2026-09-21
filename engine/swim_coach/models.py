@@ -79,6 +79,9 @@ class Athlete(BaseModel):
     #                    follows a hard ride the same day)
     #   kind "yoga"      yoga/mobility (a `recovery` session)
     #   kind "recovery"  an easy recovery/mobility session
+    # Any slot may also carry `purpose`: the athlete's OWN description of the
+    # session (e.g. a kettlebell EMOM), used verbatim in place of the engine's
+    # generic text -- a bike slot keeps its engine-built intervals/structure.
     # Applied in build/base weeks only; taper and race weeks use the engine's
     # own placement and the week carries a planning_warning saying so. Volume
     # still comes from the macro's ramp-capped target -- a template sets the
@@ -291,6 +294,9 @@ class Athlete(BaseModel):
                 label = slot.get("label")
                 if label is not None and (not isinstance(label, str) or len(label) > 60):
                     raise ValueError("weekly_template label must be a string of at most 60 characters")
+                purpose = slot.get("purpose")
+                if purpose is not None and (not isinstance(purpose, str) or len(purpose) > 300):
+                    raise ValueError("weekly_template purpose must be a string of at most 300 characters")
                 duration = slot.get("duration_min")
                 if duration is not None and (
                     isinstance(duration, bool) or not isinstance(duration, (int, float)) or not 5 <= duration <= 300
