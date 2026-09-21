@@ -212,6 +212,7 @@ from swim_coach.plan import (
     SESSION_ADJUSTMENT_INCREASE_CAP_PCT,
     SHARPENING_MIN_MACRO_WEEKS,
     WEEKLY_VOLUME_RAMP_CAP,
+    _bike_training_days,
     _duration_min_for_distance,
     _monday_of_week,
     _monday_on_or_after,
@@ -836,6 +837,50 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
             },
             "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "set_schedule_preferences",
+        "description": (
+            "Save the athlete's STANDING schedule preferences so the week generator honors "
+            "them in every week it builds -- use this instead of hand-authoring "
+            "session_overrides to honor a preference, which is error-prone and is lost "
+            "the next time a week is regenerated. Use it when the athlete states something "
+            "that should hold week after week: a fixed club/group ride (e.g. 'Heinous club "
+            "rides Wednesday and Sunday -- treat those as my endurance days'), which weekday "
+            "is their interval day, or that strength should be done the same day after the "
+            "intervals. `standing_rides`: [{day: mon..sun, label?: name, role?: "
+            "'endurance'(default)|'hard'}] -- REPLACES the bike pattern (use [] to clear). "
+            "`hard_day`: the interval weekday; when omitted the engine puts it on the free "
+            "day farthest from the standing rides. `strength_placement`: 'same_day_as_hard' "
+            "(strength right after the intervals, same day) | 'after_hard' (default rule) | "
+            "null to clear. ALWAYS call it WITHOUT `confirm` first, read the resolved "
+            "layout back to the athlete, and only call again with `confirm: true` after they "
+            "agree -- it changes every future week. Standing rides apply to build/base "
+            "weeks only: taper and race weeks ignore them, and volume/ramp-cap limits are "
+            "never overridden. The response says what was actually stored."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "standing_rides": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "day": {"type": "string", "description": "mon, tue, wed, thu, fri, sat or sun"},
+                            "label": {"type": "string", "description": "e.g. 'Heinous club ride'"},
+                            "role": {"type": "string", "enum": ["endurance", "hard"]},
+                        },
+                        "required": ["day"],
+                        "additionalProperties": False,
+                    },
+                },
+                "hard_day": {"type": "string", "description": "The interval/hard bike day: mon..sun."},
+                "strength_placement": {"type": ["string", "null"], "enum": ["after_hard", "same_day_as_hard", None]},
+                "confirm": {"type": "boolean", "description": "true = persist; omit for a preview."},
+            },
             "additionalProperties": False,
         },
     },
@@ -3039,6 +3084,172 @@ def _handle_update_athlete_profile(
 
     log.info("athlete profile updated", athlete=slug, fields=sorted(updates.keys()))
     return {"updated": True, **{k: getattr(athlete, k) for k in updates}}
+
+
+_SCHEDULE_DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+_SCHEDULE_LABEL_MAX = 60
+
+
+def _schedule_day(value: Any, what: str) -> tuple[str | None, str | None]:
+    """`(three_letter_day, error)` for a weekday name ("wed" / "Wednesday")."""
+    key = str(value).strip().lower()[:3] if isinstance(value, str) else ""
+    if key not in _SCHEDULE_DAY_KEYS:
+        return None, f"{what} {value!r} is not a weekday (use mon..sun)"
+    return key, None
+
+
+def _parse_standing_rides(raw: Any) -> tuple[list[dict[str, Any]] | None, str | None]:
+    """Validated `training_days["bike"]` dict entries from `standing_rides`."""
+    if not isinstance(raw, list):
+        return None, "standing_rides must be a list of {day, label?, role?} (use [] to clear)"
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict) or not item.get("day"):
+            return None, "each standing ride needs a day"
+        day, err = _schedule_day(item["day"], "standing ride day")
+        if err:
+            return None, err
+        if day in seen:
+            return None, f"duplicate day {day!r} in standing_rides"
+        seen.add(day)
+        role = item.get("role", "endurance")
+        if role not in ("endurance", "hard"):
+            return None, f"standing ride role must be 'endurance' or 'hard', got {role!r}"
+        entry: dict[str, Any] = {"day": day, "role": role}
+        label = item.get("label")
+        if label is not None:
+            if not isinstance(label, str) or len(label.strip()) > _SCHEDULE_LABEL_MAX:
+                return None, f"standing ride label must be a string of at most {_SCHEDULE_LABEL_MAX} characters"
+            if label.strip():
+                entry["label"] = label.strip()
+        entries.append({"day": day, "label": entry["label"], "role": role} if "label" in entry else entry)
+    return entries, None
+
+
+def _describe_bike_days(athlete: Athlete) -> dict[str, Any] | None:
+    """The resolved layout of the athlete's bike pattern, for the coach to
+    read back to the athlete: hard day (and whether the engine picked it) and
+    the endurance days with their labels."""
+    offsets, labels = _bike_training_days(athlete)
+    if not offsets:
+        return None
+    entries = (athlete.training_days or {}).get("bike") or []
+    named_hard = any(isinstance(e, dict) and e.get("role") == "hard" for e in entries) or any(
+        not isinstance(e, dict) or e.get("role") is None for e in entries
+    )
+    return {
+        "hard": {"day": _SCHEDULE_DAY_KEYS[offsets[0]], "chosen_automatically": not named_hard},
+        "endurance": [
+            {"day": _SCHEDULE_DAY_KEYS[o], **({"label": labels[o]} if o in labels else {})} for o in offsets[1:]
+        ],
+    }
+
+
+def _handle_set_schedule_preferences(
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str
+) -> dict[str, Any]:
+    """Preview / persist the athlete's STANDING schedule preferences (IDEA
+    023 phase 2): `standing_rides` (fixed weekly bike commitments such as a
+    club group ride, treated as endurance days), `hard_day` (the interval
+    day) and `strength_placement`. They live on the Athlete, so the week
+    generator honors them on EVERY regeneration -- nothing is hand-applied via
+    session_overrides. Without `confirm: true` this is a preview only.
+
+    Only fields present in `input_data` change; `training_days` keys other than
+    "bike" (strength/skills) are untouched. Persisting reloads the athlete and
+    re-resolves the layout so the reported result is what the generator will
+    actually see, not just what was requested."""
+    provided = [k for k in ("standing_rides", "hard_day", "strength_placement") if k in input_data]
+    if not provided:
+        return {"error": "at least one of standing_rides, hard_day, strength_placement is required"}
+
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load athlete profile: {exc}"}
+
+    training_days = dict(athlete.training_days or {})
+    strength_placement = athlete.strength_placement
+
+    if "strength_placement" in input_data:
+        strength_placement = input_data["strength_placement"]
+        if strength_placement not in (None, "after_hard", "same_day_as_hard"):
+            return {"error": "strength_placement must be 'after_hard', 'same_day_as_hard' or null"}
+
+    if "standing_rides" in input_data or "hard_day" in input_data:
+        if "standing_rides" in input_data:
+            rides, err = _parse_standing_rides(input_data["standing_rides"])
+            if err:
+                return {"error": err}
+        else:  # hard_day alone: keep the existing days, all as endurance
+            rides = []
+            for e in training_days.get("bike") or []:
+                day = e["day"] if isinstance(e, dict) else e
+                key, err = _schedule_day(day, "existing bike day")
+                if err:
+                    return {"error": err}
+                if isinstance(e, dict) and e.get("role") == "hard":
+                    continue
+                rides.append({**(e if isinstance(e, dict) else {"day": key}), "day": key, "role": "endurance"})
+        hard_entries = [r for r in rides if r["role"] == "hard"]
+        if "hard_day" in input_data:
+            hard_day, err = _schedule_day(input_data["hard_day"], "hard_day")
+            if err:
+                return {"error": err}
+            if any(r["day"] == hard_day for r in rides):
+                return {"error": f"hard_day {hard_day!r} is already a standing ride day"}
+            if hard_entries:
+                return {"error": "give only one hard day: either hard_day or a role 'hard' standing ride"}
+            rides = [{"day": hard_day, "role": "hard"}, *rides]
+        elif len(hard_entries) > 1:
+            return {"error": "give only one hard day among the standing rides"}
+        if rides:
+            training_days["bike"] = rides
+        else:
+            training_days.pop("bike", None)
+
+    try:
+        candidate = Athlete.model_validate(
+            {
+                **athlete.model_dump(mode="json"),
+                "training_days": training_days or None,
+                "strength_placement": strength_placement,
+            }
+        )
+    except ValueError as exc:
+        return {"error": f"invalid schedule preference: {exc}"}
+
+    result: dict[str, Any] = {
+        "persisted": False,
+        "bike_days": _describe_bike_days(candidate),
+        "strength_placement": candidate.strength_placement,
+        "applies_to": (
+            "build and base weeks; taper weeks and race weeks ignore standing rides "
+            "(the taper/race placement wins). Volume and ramp-cap limits are unchanged."
+        ),
+    }
+    if input_data.get("confirm") is not True:
+        result["note"] = "preview only -- nothing saved; call again with confirm: true after the athlete agrees"
+        return result
+
+    athlete.training_days = candidate.training_days
+    athlete.strength_placement = candidate.strength_placement
+    store.save_athlete(athlete)
+    reloaded = store.load_athlete(slug)
+    result["persisted"] = True
+    result["verified"] = (
+        reloaded.training_days == candidate.training_days
+        and reloaded.strength_placement == candidate.strength_placement
+    )
+    result["bike_days"] = _describe_bike_days(reloaded)
+    log.info(
+        "schedule preferences set",
+        athlete=slug,
+        fields=provided,
+        verified=result["verified"],
+    )
+    return result
 
 
 def _summarize_workout(w: Workout, *, athlete: Athlete, hr_max: float | None, wellness: list[Any]) -> dict[str, Any]:
@@ -6768,6 +6979,9 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "update_athlete_profile": lambda input_data: _handle_update_athlete_profile(
+            input_data, store=store, slug=slug
+        ),
+        "set_schedule_preferences": lambda input_data: _handle_set_schedule_preferences(
             input_data, store=store, slug=slug
         ),
         "get_workouts": lambda input_data: _handle_get_workouts(
