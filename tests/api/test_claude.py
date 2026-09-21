@@ -14,6 +14,7 @@ from app.claude import (
     MAX_TOOL_ITERATIONS,
     ClaudeChat,
     build_request_kwargs,
+    request_segment_sizes,
 )
 from app.config import Settings
 from fakes import (
@@ -384,3 +385,67 @@ def test_replayed_assistant_content_drops_sdk_only_null_fields() -> None:
     for block in assistant_turn["content"]:
         assert "parsed_output" not in block
         assert "citations" not in block
+
+
+# --- request segment sizes (IDEA 022 step 1: measure before optimizing) -------
+
+
+def test_request_segment_sizes_splits_history_context_and_question() -> None:
+    system = [{"type": "text", "text": "A" * 400}, {"type": "text", "text": "B" * 800}]
+    tools = [{"name": "t", "description": "d" * 100}]
+    messages = [
+        {"role": "user", "content": "h" * 40},
+        {"role": "assistant", "content": [{"type": "text", "text": "a" * 60}]},
+        {"role": "user", "content": "C" * 1000 + "\n\n---\n\n" + "how did it go?"},
+    ]
+
+    sizes = request_segment_sizes(system, messages, tools)
+
+    assert sizes["system_block_chars"] == [400, 800]
+    assert sizes["system_chars"] == 1200
+    assert sizes["tools_chars"] == len(json.dumps(tools))
+    assert sizes["tool_count"] == 1
+    assert sizes["history_chars"] == 100
+    assert sizes["history_messages"] == 2
+    assert sizes["question_chars"] == len("how did it go?")
+    assert sizes["context_chars"] == 1000
+    total = sizes["system_chars"] + sizes["tools_chars"] + sizes["history_chars"] + sizes["latest_message_chars"]
+    assert sizes["est_input_tokens"] == total // 4
+
+
+def test_request_segment_sizes_handles_no_tools_no_history_no_delimiter() -> None:
+    sizes = request_segment_sizes(
+        [{"type": "text", "text": "S"}], [{"role": "user", "content": "just a question"}], None
+    )
+    assert sizes["tools_chars"] == 0
+    assert sizes["tool_count"] == 0
+    assert sizes["history_chars"] == 0
+    assert sizes["context_chars"] == 0
+    assert sizes["question_chars"] == len("just a question")
+
+
+def test_request_sizes_logged_once_on_the_first_iteration_only(capsys) -> None:
+    tool_use = make_tool_use_block("t1", "get_workouts", {})
+    turns = [
+        ([], make_final_message([tool_use], "tool_use")),
+        ([], make_final_message([make_text_block("done")], "end_turn")),
+    ]
+    chat = ClaudeChat(_settings(), client=FakeAnthropicClient(turns))
+
+    list(
+        chat.run_streaming(
+            [{"type": "text", "text": "sys"}],
+            [{"role": "user", "content": "ctx\n\n---\n\nq"}],
+            [{"name": "get_workouts"}],
+            {"get_workouts": lambda _i: {"ok": True}},
+        )
+    )
+
+    logged = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("{") and json.loads(line).get("msg") == "claude request sizes"
+    ]
+    assert len(logged) == 1
+    assert logged[0]["tool_count"] == 1
+    assert logged[0]["model"] == "claude-sonnet-5"
