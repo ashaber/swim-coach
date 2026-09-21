@@ -402,3 +402,37 @@ def test_unknown_workout_id_is_a_404_error_not_a_crash(
     assert "error" in response.json()
     # Resolved (and rejected) before any model call or stream ever started.
     assert chat.client.messages.calls == []
+
+
+def test_flag_on_moves_routed_library_from_system_to_the_newest_message(
+    app, client, fake_claude_chat_factory
+) -> None:
+    import dataclasses
+
+    app.state.settings = dataclasses.replace(app.state.settings, routed_library_in_message=True)
+    final = make_final_message([make_text_block("ok")], "end_turn")
+    chat = fake_claude_chat_factory([(["ok"], final)])
+
+    response = client.post(
+        "/api/chat",
+        json=_chat_payload(message="how should I fuel a 4 hour swim?"),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+
+    call = chat.client.messages.calls[0]
+    assert len(call["system"]) == 1  # stable block A only
+    assert "library/08-ultra-feeding.md" not in call["system"][0]["text"]
+    assert "library/08-ultra-feeding.md" in str(call["messages"][-1]["content"])
+
+
+def test_flag_off_keeps_routed_library_in_the_system_prompt(client, fake_claude_chat_factory) -> None:
+    final = make_final_message([make_text_block("ok")], "end_turn")
+    chat = fake_claude_chat_factory([(["ok"], final)])
+    response = client.post(
+        "/api/chat", json=_chat_payload(message="how should I fuel a 4 hour swim?"), headers=auth_headers()
+    )
+    assert response.status_code == 200
+    call = chat.client.messages.calls[0]
+    assert len(call["system"]) == 2
+    assert "library/08-ultra-feeding.md" in call["system"][1]["text"]

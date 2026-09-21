@@ -87,6 +87,19 @@ class Settings:
     # shared testing-domain sender, which sends without any custom-domain
     # verification -- fine for this app's low-volume coach-notification use.
     resend_from_email: str = "onboarding@resend.dev"
+    # IDEA 022 step 5. When True, short conversational /api/chat turns (see
+    # app.light_mode.is_light_turn) run with a tiny system prompt, one
+    # `need_more` tool and a trimmed context instead of the full ~100k-token
+    # request; anything needing plan/data/library/health escalates to full mode.
+    # Default OFF: it changes what the athlete's coach can see on those turns.
+    light_mode: bool = False
+    # IDEA 022 step 4. When True, the message-routed library topic files ride
+    # the newest user message instead of system block B, so system + history
+    # are byte-stable across topic changes (a topic-dependent system block
+    # invalidates the whole conversation cache behind it). Default OFF: it moves
+    # reference material from the system prompt into the user turn, so enable it
+    # deliberately and watch answer quality + cache_read/cache_creation.
+    routed_library_in_message: bool = False
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -159,6 +172,9 @@ class Settings:
             # is treated as unset, same as DATABASE_URL's `or None`.
             resend_api_key=(os.environ.get("RESEND_API_KEY") or "").strip() or None,
             resend_from_email=os.environ.get("RESEND_FROM_EMAIL", "onboarding@resend.dev"),
+            light_mode=os.environ.get("COACH_LIGHT_MODE", "").strip().lower() in ("1", "true", "yes", "on"),
+            routed_library_in_message=os.environ.get("COACH_ROUTED_LIBRARY_IN_MESSAGE", "").strip().lower()
+            in ("1", "true", "yes", "on"),
         )
 
     def token_matches(self, provided_token: str) -> bool:
