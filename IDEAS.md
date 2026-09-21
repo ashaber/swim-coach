@@ -1294,3 +1294,118 @@ items marked (P) are fixed or reduced by IDEA 023's structured preferences.
 9. **Design tension, not a bug:** block labels are pure runway-math output
    with no "treat me as already in build" lever. Any override must still
    respect the ramp-cap math.
+
+
+### IDEA 022 -- RESULTS: how much the cost optimizations actually helped (2026-09-21, from real Cloud Run logs)
+
+Method: 164 `claude turn complete` calls (09-13 to 09-21), priced at Sonnet 5 rates ($2/$10 per MTok, cache
+write 1.25x, read 0.1x), lined up against Cloud Run revision times. **Honest answer: less than hoped.**
+Cost per call, by deploy period: baseline $0.227 -> #209 period $0.296 -> #211-#214 period $0.230 (flat;
+usage mix differs, so this is not a controlled comparison).
+
+- **#212 never reached main (my stacking error).** It was stacked on #211's branch, so merging it landed
+  in that already-merged branch. `with_loop_breakpoint` was absent from main; the logs agree (15 of today's
+  30 calls are tool-loop iterations that re-bill the ~28k-token context as fresh input). #209/#211/#213/
+  #214 are on main. Re-applied in PR #227. **Lesson: after merging a stacked PR, grep main for its key
+  symbol -- "merged" in the GitHub UI does not prove the code is on main.**
+- **The 5-minute cache is the real cost driver.** Today: 60% of spend is cache WRITES, 20% fresh input, 8%
+  reads, 12% output. The cached prefix (tools + persona + INDEX + reference list) is ~185k REAL tokens
+  (chars/4 estimates run ~1.6x low), so a cold turn costs ~$0.46 before the model speaks. 9 of 14
+  conversation starts today were cold (gaps 7-213 min: the athlete reads a draft, thinks, comes back).
+  #209/#213 work when the cache is warm (a warm start writes ~38k instead of ~185k) but only 5 of 14
+  starts were warm.
+- **What the levers are worth (modeled on the real log, today's 30 calls $7.89):** restore #212 ~7%; a 1-hour
+  TTL on the stable block ~18% (docs: "the only window where the 2x write pays off" for a user who
+  replies after 5-60 min); both ~25% ($5.92). Real, not a step-change. Shipped in #227 (`PROMPT_CACHE_TTL`).
+- **The step-change is the prefix itself.** ~58k real tokens of it is `reference_list.md` (needed only to
+  cite) and ~45k is tool schemas; halving the prefix roughly halves the 60%. That is what routing (IDEA 025)
+  could decide per turn. Also seen: 2 calls ran to the 16k output ceiling (adaptive thinking + long plan
+  writes, ~$0.16 each) -- a lower thinking effort for routine plan writes is worth testing.
+
+---
+
+## IDEA 025 - Route every turn into a CALL TYPE with Jev: one battery of questions, a few fixed buckets, each with its own cache
+
+Andrew, 2026-09-21: *"JEV is a new classifier with a skill by typesafe ... decide light vs heavy, could also
+pre-decide tool calls, sport and library."* Corrected after review (my first framing -- a light/heavy gate with
+tools and library as add-ons -- was too small): *"We can send the whole battery of questions -- is it a
+greeting? is it a health concern? is the sport swim, bike, run, strength? does it need tool a, b, c, d? library
+x, y, z? -- right off the bat. Then compress the classifications into call types that fit the same cache hit:
+{haiku greeting, sonnet info-gather like 'what did you do well', sonnet plan-and-workout questions with tool
+calls, plan create and adapt, research with library backing}. Jev decides the bucket; we do our best to get cache
+hits within each. The hard part is we need more traffic to see testable patterns."*
+
+**What Jev is (sourced; vendor claims are claims).** TypeSafe AI (SF lab, out of stealth 2026-09-15, $40M seed)
+released Jev, a model that does not generate text: you send a state (text) and typed questions (Choice, Score,
+yes/no checks) and get a calibrated probability for EVERY possible answer, all questions in ONE parallel pass.
+Claims: 70-500 ms end to end, 40-200x faster and ~400x cheaper than a frontier LLM at classification, Choice
+cardinality up to 255. Pricing on the launch blog: $0.042/MTok input, output free -- about $0.00003 a call.
+Early access only (console.typesafe.ai, `TYPESAFE_API_KEY`), no self-hosting, text-only state. Reported
+integrations: a Claude Code/Codex skill+tool (`jev-code`: classify/check/score/rank/ask), LiteLLM pass-through,
+LangChain `TypeSafeClassifier`, a Bifrost router request, NeMo-Switchyard-style routing. Independent evidence is
+thin: one routing test (DevelopersIO) got 10/10 on one easy sample per tier at 0.64-0.67 s vs 2.1 s (Gemini
+Flash) but the author says it is not an accuracy test, medium-tier confidence was lower (0.57-0.67), and he
+cites a 67.8% vs 74.1% benchmark. Sources: typesafe.ai/blog/introducing-system-one-models-and-jev ;
+dev.classmethod.jp/en/articles/jev-for-llm-model-routing ; github.com/FrancoisChastel/jev-code.
+Because the battery is one parallel call, asking 10 questions costs about the same as asking 1.
+
+**The design: battery -> call type -> fixed prefix.**
+1. **Battery (one Jev call, ~0.6 s, ~$0.00003):** greeting/chit-chat? health concern? confirming a pending draft?
+   wants a plan created/changed? asking about their plan/workouts? reflecting on a session or race (debrief)?
+   research/"why" question? sport {swim, bike, run, strength, yoga, other, none}? tool groups needed {plan-write,
+   analysis, fueling, health-record, events/macro}? library topic {our ~30 files, none}?
+2. **Compress to a call type with a DETERMINISTIC table of ours** (transparent, testable, the model only supplies
+   typed probabilities). Precedence: pending-draft confirmation -> D; health concern -> at least C (never A/B);
+   create/change -> D; research -> E; plan/workout question -> C; debrief -> B; greeting -> A. Low confidence,
+   ambiguity, or Jev down -> go UP one bucket (the deterministic keyword rules stay as the fallback).
+3. **Each call type = fixed (model, system prompt, tool set, whether the library is in the prefix)**, so each has
+   ONE stable cached prefix. That is the answer to the cache worry: tools are first in the prefix so a per-turn
+   tool choice would churn the cache, but a handful of fixed profiles does not.
+
+| Call type | Model | Prefix (est. real tokens) | Est. cold cost/call (now: ~$0.52 all-in) | Est. warm |
+|---|---|---|---|---|
+| A greeting / social | Haiku 4.5 | ~2k (tiny prompt, no tools, name+today+next event) -- under the cache minimum, irrelevant | ~$0.003 (-99%) | -- |
+| B info-gather / debrief ("what went well?") | Sonnet 5 | ~21k (light persona + safety + read-only tools + 7-14 day context + notes) | ~$0.05 (-90%) | ~$0.004 |
+| C plan & workout questions, tool calls | Sonnet 5 | ~71k (full persona + read/edit tools, NO reference list) | ~$0.18 (-65%) | ~$0.014 |
+| D plan create / adapt (writes) | Sonnet 5 | ~111k (full tools + persona + INDEX; library routed into the message, NO ref list) | ~$0.28 (-46%) | ~$0.022 |
+| E research with library | Sonnet 5 | ~118k (persona + INDEX + reference list + routed files, minimal tools) | ~$0.30 (-42%) | ~$0.024 |
+Token figures are ESTIMATES built from measured ratios (real tokens run ~1.65x the chars/4 estimate: tools ~45k,
+persona ~15k, INDEX ~16k, reference list ~58k, per-request context ~31k); which tools/prompt pieces each bucket
+carries is a design choice to be tuned. Prices at Sonnet 5 $2/$10 and Haiku 4.5 $1/$5 per MTok, cache write 1.25x
+(2x for 1h), read 0.1x. Today's single fixed prefix (~185k + ~28k fresh) costs ~$0.52 cold.
+**What it is worth (sensitivity, cold calls; the mix is the unknown):** a mix of 10% A / 20% B / 30% C / 30% D /
+10% E averages ~$0.18 (about -66%); a plan-heavy mix (60% D / 30% C / 10% E) ~$0.25 (about -52%). These stack ON
+TOP of the cache fixes (restore #212, 1h TTL) already in flight, and the bigger buckets (D, E) are exactly the
+ones that want the 1-hour TTL, while A/B/C are small enough that a cold write barely matters.
+
+**Cache mechanics per bucket.**
+- Each bucket warms independently, so more buckets means more cold starts at low traffic. That is fine: the
+  savings come from the prefixes being 2-100x smaller; only D and E stay big, and they take `PROMPT_CACHE_TTL=1h`.
+- History and the loop marker sit AFTER the prefix, so switching buckets mid-conversation re-writes the history
+  cache (~$0.05). Make switches rare: **move up, not sideways.** Once a conversation is in D it stays in D and gets
+  library files routed into the newest message (`COACH_ROUTED_LIBRARY_IN_MESSAGE`) instead of hopping to E; A->B->C->D
+  are escalations through the existing `need_more` mechanism (#215), never back down except a fresh greeting.
+- Pending-draft turns ("yes, go ahead") must land in the bucket that owns the draft's tool -- the "Drafts waiting"
+  context section already says which -- which also closes the #215 confirmation hole.
+
+**The hard part, and how to get past "we need more traffic".** Today is ~15 coach calls a day, far too few to see
+patterns. So do not wait for organic volume:
+1. **Shadow mode first (no behaviour change):** per request log the battery probabilities, the bucket we WOULD
+   choose, what actually ran (model, tools used, escalations, tool errors, tokens, cost). No message text.
+2. **Seed labelled set offline:** ~100 realistic messages across buckets, taken from the real transcripts
+   (Andrew's own week-planning and post-race chats, the coach's own report), labelled by Andrew; measure Jev's
+   agreement, including a symptom set where a miss must be ZERO.
+3. **Replay cost:** re-price every logged real call under its would-be bucket to get the actual mix and savings
+   instead of the sensitivity guess above.
+4. **Opt-in text capture on Andrew's own account** for a few weeks to grow the labelled set faster.
+Decision gates before it drives anything: agreement vs Andrew's labels, zero safety misses, escalation rate low
+enough that the savings survive (an escalation pays the cheap call PLUS the bigger one).
+
+**Risks / open questions.** (a) **Privacy:** athlete messages include health information and would go to a
+third party in early access -- needs a data-handling read and Andrew's OK; shadow mode on Andrew's own account
+only. (b) Early access: availability, quotas, API stability, single vendor, no self-host. (c) Accuracy is
+unverified for OUR domain; symptoms must never depend on a classifier alone -- keep the keyword rules as an OR.
+(d) An unnecessarily-low bucket costs quality, so the table fails UP; the escalation path must be reliable
+(#215's live behaviour on the real model is still unverified). (e) Whether Jev needs few-shot examples or works
+zero-shot from natural-language definitions is unknown. (f) It routes; it does not replace the cache work
+(#212/#227) or the prefix trimming that makes the bucket prefixes small in the first place.
