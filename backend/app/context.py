@@ -337,6 +337,16 @@ answer must still be a grounded, accurate one.
      weeks generated from then on (use `replace_week_plan`, with its usual
      draft-then-confirm, to rebuild an existing week). Taper and race weeks
      ignore standing rides, and ramp-cap limits never yield to a preference.
+   - **Writing an agreed plan (`replace_week_plan` / `patch_week_plan`): the
+     draft IS the plan.** The draft call (no `confirm`) returns a `draft_id`; the
+     plan you show the athlete is stored under it. When they agree, call again
+     with `confirm: true` and that `draft_id` -- that writes EXACTLY the draft
+     they saw. The generator does not run again, and any `session_overrides` you
+     send with the confirm are ignored (and flagged), so do not re-send them: if
+     something needs to change, make a NEW draft and get agreement on that one.
+     Risks (sessions the write drops, no draft on file) come back as warnings
+     for you to tell the athlete -- they are flagged, never a reason the write
+     is refused or altered.
    - `set_weekly_template` saves the SHAPE of the athlete's week -- which
      sessions go on which days -- so every future build/base week is built
      from it. It is the right tool whenever the athlete describes a whole week

@@ -2014,6 +2014,16 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "ISO week to replace, formatted 'YYYY-Wnn', e.g. '2026-W30'.",
                 },
+                "draft_id": {
+                    "type": "string",
+                    "description": (
+                        "The `draft_id` returned by the draft call (confirm omitted) that the "
+                        "athlete agreed to. With `confirm: true` this writes EXACTLY that draft -- "
+                        "the generator is NOT run again and any session_overrides/"
+                        "template_preference sent with the confirm are ignored (and flagged). Always "
+                        "pass it. An unknown draft_id writes nothing."
+                    ),
+                },
                 "confirm": {
                     "type": "boolean",
                     "description": (
@@ -2080,6 +2090,16 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "description": "ISO week to patch, formatted 'YYYY-Wnn', e.g. '2026-W30'. Must already have a persisted week plan (use create_week_plan first if not).",
                 },
                 "session_overrides": SESSION_OVERRIDES_SCHEMA,
+                "draft_id": {
+                    "type": "string",
+                    "description": (
+                        "The `draft_id` returned by the draft call (confirm omitted) that the "
+                        "athlete agreed to. With `confirm: true` this writes EXACTLY that draft -- "
+                        "the generator is NOT run again and any session_overrides/"
+                        "template_preference sent with the confirm are ignored (and flagged). Always "
+                        "pass it. An unknown draft_id writes nothing."
+                    ),
+                },
                 "confirm": {
                     "type": "boolean",
                     "description": (
@@ -5719,6 +5739,111 @@ def _check_no_session_collision(week: WeekPlan, target_date: date, sport: str) -
     )
 
 
+_DRAFT_IGNORED_ON_CONFIRM = ("session_overrides", "template_preference")
+
+
+def _hold_draft(store: StoreInterface, slug: str, week: WeekPlan) -> str | None:
+    """Keep the PROPOSED week so `confirm` can write exactly what was shown and
+    agreed, instead of running the generator a second time. Returns its id, or
+    `None` when the store cannot hold drafts (the tool then falls back to the old
+    regenerate-on-confirm behaviour and says so)."""
+    try:
+        store.save_week_draft(slug, week.model_copy(update={"draft": True}, deep=True))
+    except NotImplementedError:
+        return None
+    return str(week.id)
+
+
+def _confirm_from_draft(
+    store: StoreInterface, slug: str, iso_week: str, input_data: dict[str, Any], *, tool: str
+) -> dict[str, Any] | None:
+    """`confirm` = WRITE THE AGREED PLAN, never regenerate it (Andrew, 2026-09-21:
+    "plan creates plan; let the coach write it once agreed. Flag risk, don't
+    block, don't corrupt").
+
+    Loads the draft the coach and athlete agreed on (`draft_id`, else the latest
+    for that week) and writes it verbatim. Risk is FLAGGED, never a reason to
+    write something else: sessions in the live week that the draft drops, and any
+    `session_overrides`/`template_preference` sent with the confirm (ignored --
+    the agreed plan is written exactly as shown). Returns `None` when there is no
+    draft on file and none was named, so the caller falls back to its old path;
+    an explicitly named draft that cannot be found writes NOTHING (writing some
+    other plan instead is the corruption this exists to stop)."""
+    draft_id = input_data.get("draft_id")
+    if not draft_id and any(input_data.get(f) for f in _DRAFT_IGNORED_ON_CONFIRM):
+        # New overrides/preferences and NO draft_id: an explicit one-shot request
+        # ("apply these and write"), not a confirm of an agreed plan -- the caller
+        # falls back to its one-step path and flags that no draft was used.
+        return None
+    try:
+        draft = store.load_week_draft(slug, iso_week, draft_id)
+    except NotImplementedError:
+        return None
+    if draft is None:
+        if draft_id:
+            return {
+                "persisted": False,
+                "error": (
+                    f"draft {draft_id!r} for {iso_week} was not found (it was never saved, or "
+                    f"belongs to another week). Nothing was written. Call {tool} without `confirm` "
+                    "to make a new draft, show it to the athlete, then confirm with that draft_id."
+                ),
+            }
+        return None
+
+    try:
+        live_before = store.load_week(slug, iso_week)
+    except Exception:  # noqa: BLE001 - a read problem must not stop writing the agreed plan
+        live_before = None
+    agreed = draft.model_copy(update={"draft": False}, deep=True)
+    warnings = [w for w in agreed.planning_warnings if "DROPPED" not in w]
+    dropped = _dropped_sessions(live_before, agreed)
+    if dropped:
+        summary = ", ".join(f"{d['date']} {d['sport']}" for d in dropped)
+        warnings.append(
+            f"{len(dropped)} session(s) in the week currently on file are NOT in the agreed draft and are "
+            f"DROPPED by writing it: {summary}. Written anyway, exactly as agreed -- tell the athlete."
+        )
+    ignored = [f for f in _DRAFT_IGNORED_ON_CONFIRM if input_data.get(f)]
+    if ignored:
+        warnings.append(
+            f"{', '.join(ignored)} sent with this confirm were NOT applied: the agreed draft was written "
+            f"exactly as shown. To change anything, make a new draft with {tool} and confirm that one."
+        )
+    agreed.planning_warnings = warnings
+    store.save_week(slug, agreed)
+    saved = store.load_week(slug, iso_week)
+    verified = saved is not None and {s.id for s in saved.sessions} == {s.id for s in agreed.sessions}
+    log.info(
+        "week written from agreed draft",
+        athlete=slug,
+        iso_week=iso_week,
+        tool=tool,
+        verified=verified,
+        dropped_sessions=len(dropped),
+    )
+    return {
+        "iso_week": agreed.iso_week,
+        "meso_block": agreed.meso_block,
+        "focus": agreed.focus,
+        "target_volume_m": agreed.target_volume_m,
+        "planning_warnings": list(agreed.planning_warnings),
+        "sessions": _week_sessions_json(agreed),
+        "dropped_sessions": dropped,
+        "persisted": True,
+        "written_from_draft": True,
+        "draft_id": str(draft.id),
+        "verified": verified,
+    }
+
+
+_NO_DRAFT_WARNING = (
+    "This week was generated/edited and written in ONE step, NOT from a draft the athlete had seen "
+    "(no draft_id was given). If the athlete had already agreed to a draft, that draft was not used -- "
+    "tell them. Next time call without `confirm` first, show the draft, and confirm with its draft_id."
+)
+
+
 def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
     """Computes a candidate replacement week via `generate_week` (the same
     engine function `create_week_plan` uses) for exactly the case
@@ -5769,6 +5894,10 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
         return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
 
     confirm = bool(input_data.get("confirm", False))
+    if confirm:
+        agreed = _confirm_from_draft(store, slug, iso_week, input_data, tool="replace_week_plan")
+        if agreed is not None:
+            return agreed
 
     try:
         athlete = store.load_athlete(slug)
@@ -5880,7 +6009,8 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
         ]
 
     if not confirm:
-        return {
+        draft_id = _hold_draft(store, slug, week)
+        draft_response: dict[str, Any] = {
             "iso_week": week.iso_week,
             "meso_block": week.meso_block,
             "focus": week.focus,
@@ -5891,7 +6021,15 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
             "dropped_sessions": dropped,
             "persisted": False,
         }
+        if draft_id:
+            draft_response["draft_id"] = draft_id
+            draft_response["next"] = (
+                "Nothing is written yet. Show this to the athlete; when they agree, call again with "
+                "`confirm: true` and this draft_id -- that writes EXACTLY this plan, not a new one."
+            )
+        return draft_response
 
+    week.planning_warnings = list(week.planning_warnings) + [_NO_DRAFT_WARNING]
     store.save_week(slug, week)
 
     log.info("week plan replaced", athlete=slug, iso_week=iso_week, dropped_sessions=len(dropped))
@@ -5961,6 +6099,11 @@ def _handle_patch_week_plan(input_data: dict[str, Any], *, store: StoreInterface
     except (ValueError, IndexError):
         return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
 
+    if bool(input_data.get("confirm", False)):
+        agreed = _confirm_from_draft(store, slug, iso_week, input_data, tool="patch_week_plan")
+        if agreed is not None:
+            return agreed
+
     session_overrides = input_data.get("session_overrides")
     if not session_overrides:
         return {
@@ -6023,8 +6166,17 @@ def _handle_patch_week_plan(input_data: dict[str, Any], *, store: StoreInterface
     }
 
     if not confirm:
+        draft_id = _hold_draft(store, slug, candidate)
+        if draft_id:
+            response["draft_id"] = draft_id
+            response["next"] = (
+                "Nothing is written yet. Show this to the athlete; when they agree, call again with "
+                "`confirm: true` and this draft_id -- that writes EXACTLY this plan, not a recomputation."
+            )
         return response
 
+    candidate.planning_warnings = list(candidate.planning_warnings) + [_NO_DRAFT_WARNING]
+    response["planning_warnings"] = list(candidate.planning_warnings)
     store.save_week(slug, candidate)
 
     log.info(

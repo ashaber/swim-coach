@@ -630,13 +630,38 @@ class DbStore(StoreInterface):
                 {**row, "data": self._Jsonb(row["data"])},
             )
 
+    def _draft_key(self, iso_week: str, draft_id: str | None) -> str:
+        return f"{iso_week}.draft.{draft_id}" if draft_id else f"{iso_week}.draft"
+
+    def save_week_draft(self, slug: str, week: WeekPlan) -> None:
+        """Held in `week_plans` under a hidden `<iso_week>.draft[.<id>]` key -- no
+        migration, and hidden from `list_week_ids`/`load_week`. Two rows per draft:
+        one by id, one as the "latest" pointer."""
+        row = week_to_row(week)
+        for key in (self._draft_key(week.iso_week, str(week.id)), self._draft_key(week.iso_week, None)):
+            with self._connect() as conn, conn.cursor() as cur:
+                cur.execute(
+                    """
+                    insert into week_plans (id, athlete_id, iso_week, schema_version, data)
+                    values (%(id)s, %(athlete_id)s, %(iso_week)s, %(schema_version)s, %(data)s)
+                    on conflict (athlete_id, iso_week) do update set
+                        schema_version = excluded.schema_version,
+                        data = excluded.data,
+                        updated_at = now()
+                    """,
+                    {**row, "id": uuid4(), "iso_week": key, "data": self._Jsonb(row["data"])},
+                )
+
+    def load_week_draft(self, slug: str, iso_week: str, draft_id: str | None = None) -> WeekPlan | None:
+        return self.load_week(slug, self._draft_key(iso_week, draft_id))
+
     def list_week_ids(self, slug: str) -> list[str]:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
                 """
                 select w.iso_week from week_plans w
                 join athletes a on a.athlete_id = w.athlete_id
-                where a.slug = %s
+                where a.slug = %s and w.iso_week not like '%%.draft%%'
                 order by w.iso_week
                 """,
                 (slug,),

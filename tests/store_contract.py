@@ -391,6 +391,27 @@ class StoreContractTests:
         store.save_week(SLUG, _week(athlete.id, "2026-W28"))
         assert store.list_week_ids(SLUG) == ["2026-W28", "2026-W29"]
 
+    # --- week drafts (an agreed plan is held and written verbatim) -------
+
+    def test_week_draft_round_trips_latest_and_by_id(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        first = _week(athlete.id, "2026-W28")
+        second = _week(athlete.id, "2026-W28").model_copy(update={"focus": "second draft"})
+        store.save_week_draft(SLUG, first)
+        store.save_week_draft(SLUG, second)
+        assert store.load_week_draft(SLUG, "2026-W28").focus == "second draft"
+        assert store.load_week_draft(SLUG, "2026-W28", draft_id=str(first.id)) == first
+        assert store.load_week_draft(SLUG, "2026-W29") is None
+
+    def test_week_drafts_are_hidden_from_weeks(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        store.save_week(SLUG, _week(athlete.id, "2026-W28"))
+        store.save_week_draft(SLUG, _week(athlete.id, "2026-W29"))
+        assert store.list_week_ids(SLUG) == ["2026-W28"]
+        assert store.load_week(SLUG, "2026-W29") is None
+
     # --- workouts --------------------------------------------------------
 
     def test_workout_round_trip(self, store):
