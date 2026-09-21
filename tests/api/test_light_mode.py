@@ -243,3 +243,29 @@ def test_flag_on_need_more_escalates_through_the_route(app, client, fake_claude_
     assert len(full_call["tools"]) > 5
     assert "finished my race today" in json.dumps(full_call["messages"])
     assert "full" in r.text
+
+
+def test_light_escalation_builds_the_full_request_with_the_routed_library_layout(
+    app, client, fake_claude_chat_factory
+) -> None:
+    # light_mode + routed_library_in_message together: the escalated full request
+    # must honour the cache layout (block A only in system, library on the message).
+    app.state.settings = dataclasses.replace(
+        app.state.settings, light_mode=True, routed_library_in_message=True
+    )
+    need_more = make_tool_use_block("t1", NEED_MORE_TOOL_NAME, {"reason": "x"})
+    chat = fake_claude_chat_factory(
+        [
+            ([], make_final_message([need_more], "tool_use")),
+            (["full"], make_final_message([make_text_block("full")], "end_turn")),
+        ]
+    )
+    r = client.post(
+        "/api/chat",
+        json={"message": "hey coach, finished my race today", "history": [], "athlete": "renee", "expert_mode": False},
+        headers=auth_headers(),
+    )
+    assert r.status_code == 200
+    _, full_call = chat.client.messages.calls
+    assert len(full_call["system"]) == 1
+    assert "## Library topic files for this question" in json.dumps(full_call["messages"])

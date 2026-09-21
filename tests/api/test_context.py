@@ -17,6 +17,7 @@ from swim_coach.models import HealthStatus, ThresholdRecord, WorkoutAnalytics, W
 from app.context import (
     FOCUSED_WORKOUT_LAPS_CAP,
     build_messages,
+    build_routed_library_text,
     build_per_request_context,
     build_routed_block,
     build_system,
@@ -88,10 +89,12 @@ def test_system_block_a_has_cache_control(library_dir) -> None:
     assert len(blocks) == 1
     assert blocks[0]["cache_control"] == {"type": "ephemeral"}
     assert "CRITICAL SAFETY WARNING" in blocks[0]["text"]
-    # reference_list.md's own bibliography content belongs in block B (it's
-    # routed alongside topic files, not baked into the stable persona
-    # block) -- block A only *mentions* the filename via INDEX.md's table.
-    assert "Research Reference List" not in blocks[0]["text"]
+    # reference_list.md (~35k tokens, never changes) lives in block A, the
+    # stable block, NOT block B: block B's text changes with the message's
+    # topic, and a cache miss rewrites the whole block -- with the list in it
+    # that was ~42k tokens of cache writes on nearly every turn (IDEA 022).
+    assert "# library/reference_list.md" in blocks[0]["text"]
+    assert "Research Reference List" in blocks[0]["text"]
 
 
 def test_system_block_a_preserves_safety_and_grounding_invariants(library_dir) -> None:
@@ -398,10 +401,27 @@ def test_filter_files_by_sport_scope_is_symmetric_not_cycling_special_cased(
     ]
 
 
-def test_routed_block_always_includes_reference_list(library_dir) -> None:
+def test_routed_block_holds_only_topic_files_not_the_reference_list(library_dir) -> None:
     block = build_routed_block(library_dir, "what pace should I swim at?")
-    assert "library/reference_list.md" in block[0]["text"]
+    assert "library/reference_list.md" not in block[0]["text"]
+    assert "Research Reference List" not in block[0]["text"]
     assert block[0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_block_a_is_identical_whatever_the_message_so_topic_changes_only_rewrite_block_b(library_dir) -> None:
+    fuel = build_system(library_dir, "how should I fuel a 4 hour ride?")
+    pace = build_system(library_dir, "what pace should I swim at?")
+    assert fuel[0] == pace[0]  # the stable, cached prefix (persona + index + reference list)
+    assert fuel[1] != pace[1]  # only the routed topic files differ
+
+
+def test_reference_list_appears_exactly_once_and_before_the_routed_files(library_dir) -> None:
+    # The move must not change what the model reads or in what order: persona,
+    # conventions, index, reference list, THEN routed topic files.
+    blocks = build_system(library_dir, "what pace should I swim at?")
+    full = "\n".join(b["text"] for b in blocks)
+    assert full.count("# library/reference_list.md") == 1
+    assert full.index("# library/reference_list.md") < full.index("# library/04-css-intensity-anchors.md")
 
 
 def test_build_messages_shape_with_history(app_env) -> None:
@@ -1437,3 +1457,50 @@ def test_persona_limits_retries_on_tool_error_to_once() -> None:
         "create_week_plan", "replace_week_plan", "propose_adaptation", "propose_session_adjustment",
     ):
         assert tool_name in text
+
+
+# --- routed library in the newest message (IDEA 022 step 4, flag-gated) -------
+# System blocks sit BEFORE history in the cached prefix, so a topic-dependent
+# system block (block B) invalidates the whole conversation cache behind it
+# whenever the topic changes. With the flag on, everything message-dependent
+# rides the newest message and system + history are byte-stable.
+
+
+def test_build_system_can_omit_the_routed_block(library_dir) -> None:
+    full = build_system(library_dir, "how should I fuel a 4 hour ride?")
+    stable_only = build_system(library_dir, "how should I fuel a 4 hour ride?", include_routed=False)
+    assert len(full) == 2 and len(stable_only) == 1
+    assert stable_only == full[:1]
+
+
+def test_routed_library_text_is_the_routed_files_labelled_as_reference(library_dir) -> None:
+    text = build_routed_library_text(library_dir, "how should I fuel a 4 hour ride?")
+    assert "library/08-ultra-feeding.md" in text
+    assert "reference_list" not in text.lower().replace("reference_list.md", "")  # not the bibliography
+    assert "Research Reference List" not in text
+
+
+def test_build_messages_puts_library_then_context_then_question_in_the_newest_message(app_env, library_dir) -> None:
+    store = FileStore(base_dir=app_env)
+    library_text = build_routed_library_text(library_dir, "how should I fuel a 4 hour ride?")
+    messages = build_messages(
+        store, "renee", message="how should I fuel?", history=[], expert_mode=False,
+        library_text=library_text,
+    )
+    body = messages[-1]["content"]
+    assert body.index("library/08-ultra-feeding.md") < body.index("## Athlete context")
+    assert body.endswith("how should I fuel?")
+
+
+def test_history_prefix_stays_byte_stable_when_the_topic_changes(app_env, library_dir) -> None:
+    store = FileStore(base_dir=app_env)
+    history = _history_of(3)
+    a = build_messages(
+        store, "renee", message="fuel?", history=history, expert_mode=False,
+        library_text=build_routed_library_text(library_dir, "how should I fuel a 4 hour ride?"),
+    )
+    b = build_messages(
+        store, "renee", message="pace?", history=history, expert_mode=False,
+        library_text=build_routed_library_text(library_dir, "what pace should I swim at?"),
+    )
+    assert a[:-1] == b[:-1]

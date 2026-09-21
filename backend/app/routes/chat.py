@@ -23,7 +23,12 @@ from app.auth import (
     resolve_athlete,
 )
 from app.claude import ClaudeChat
-from app.context import build_messages, build_system, find_workout_by_id
+from app.context import (
+    build_messages,
+    build_routed_library_text,
+    build_system,
+    find_workout_by_id,
+)
 from app.light_mode import (
     LIGHT_TOOLS,
     build_light_messages,
@@ -116,11 +121,23 @@ async def chat(
         focused=focused_workout is not None,
         expert_mode=payload.expert_mode,
     )
+
     def build_full_request():
         """The full-mode (system, messages, tools, handlers). A function so a
         light turn only pays for it (DB reads, engine math) if it escalates."""
+        in_message = settings.routed_library_in_message
         system = build_system(
-            settings.library_dir, payload.message, athlete_sports=athlete_profile.effective_sports
+            settings.library_dir,
+            payload.message,
+            athlete_sports=athlete_profile.effective_sports,
+            include_routed=not in_message,
+        )
+        library_text = (
+            build_routed_library_text(
+                settings.library_dir, payload.message, athlete_sports=athlete_profile.effective_sports
+            )
+            if in_message
+            else None
         )
         messages = build_messages(
             store,
@@ -129,6 +146,7 @@ async def chat(
             history=history,
             expert_mode=payload.expert_mode,
             focused_workout=focused_workout,
+            library_text=library_text,
         )
         tool_handlers = build_tool_handlers(
             store,

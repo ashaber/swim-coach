@@ -95,3 +95,13 @@ def test_light_mode_defaults_off_and_reads_env(monkeypatch: pytest.MonkeyPatch) 
     assert Settings.from_env().light_mode is False
     monkeypatch.setenv("COACH_LIGHT_MODE", "true")
     assert Settings.from_env().light_mode is True
+def test_routed_library_in_message_defaults_off_and_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("API_TOKEN", "some-token")
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "id.apps.googleusercontent.com")
+    monkeypatch.delenv("COACH_ROUTED_LIBRARY_IN_MESSAGE", raising=False)
+    assert Settings.from_env().routed_library_in_message is False
+    monkeypatch.setenv("COACH_ROUTED_LIBRARY_IN_MESSAGE", "true")
+    assert Settings.from_env().routed_library_in_message is True
+    monkeypatch.setenv("COACH_ROUTED_LIBRARY_IN_MESSAGE", "0")
+    assert Settings.from_env().routed_library_in_message is False
