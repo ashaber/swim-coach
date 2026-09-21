@@ -14,6 +14,8 @@ from app.claude import (
     MAX_TOOL_ITERATIONS,
     ClaudeChat,
     build_request_kwargs,
+    count_cache_breakpoints,
+    with_loop_breakpoint,
 )
 from app.config import Settings
 from fakes import (
@@ -384,3 +386,100 @@ def test_replayed_assistant_content_drops_sdk_only_null_fields() -> None:
     for block in assistant_turn["content"]:
         assert "parsed_output" not in block
         assert "citations" not in block
+
+
+# --- moving cache breakpoint inside the tool loop (IDEA 022 step 2) ----------
+# Every tool-loop iteration re-sends the newest user message (per-request
+# context) and all tool results so far. Without a breakpoint after them they
+# are re-billed at full price on each iteration; a breakpoint on the LAST
+# block of the LAST message makes iteration N+1 read them from cache.
+
+EPHEMERAL = {"type": "ephemeral"}
+
+
+def _marked(messages) -> list[int]:
+    """Indexes of messages carrying a cache_control marker on any block."""
+    return [
+        i for i, m in enumerate(messages)
+        if isinstance(m["content"], list) and any("cache_control" in b for b in m["content"])
+    ]
+
+
+def test_with_loop_breakpoint_marks_last_block_of_last_message_without_mutating() -> None:
+    messages = [
+        {"role": "user", "content": "ctx\n\n---\n\nq"},
+    ]
+    out = with_loop_breakpoint([], messages, None)
+
+    assert out[-1]["content"] == [{"type": "text", "text": "ctx\n\n---\n\nq", "cache_control": EPHEMERAL}]
+    assert messages == [{"role": "user", "content": "ctx\n\n---\n\nq"}]  # input untouched
+
+
+def test_with_loop_breakpoint_marks_last_tool_result_block() -> None:
+    results = [
+        {"type": "tool_result", "tool_use_id": "a", "content": "1"},
+        {"type": "tool_result", "tool_use_id": "b", "content": "2"},
+    ]
+    messages = [
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": [{"type": "text", "text": "x"}]},
+        {"role": "user", "content": results},
+    ]
+    out = with_loop_breakpoint([], messages, None)
+
+    assert "cache_control" not in out[-1]["content"][0]
+    assert out[-1]["content"][1]["cache_control"] == EPHEMERAL
+    assert "cache_control" not in results[1]  # original block dict untouched
+
+
+def test_with_loop_breakpoint_never_exceeds_four_breakpoints() -> None:
+    system = [
+        {"type": "text", "text": "A", "cache_control": EPHEMERAL},
+        {"type": "text", "text": "B", "cache_control": EPHEMERAL},
+    ]
+    history_marked = {"role": "assistant", "content": [{"type": "text", "text": "h", "cache_control": EPHEMERAL}]}
+    tools = [{"name": "t", "cache_control": EPHEMERAL}]
+    messages = [{"role": "user", "content": "u"}, history_marked, {"role": "user", "content": "q"}]
+
+    assert count_cache_breakpoints(system, messages, tools) == 4
+    out = with_loop_breakpoint(system, messages, tools)  # already at the cap
+    assert count_cache_breakpoints(system, out, tools) == 4
+    assert out[-1]["content"] == "q"
+
+
+def test_real_system_plus_history_plus_loop_marker_totals_exactly_four(app_env, library_dir) -> None:
+    from app.context import build_messages, build_system
+    from swim_coach.store import FileStore
+
+    system = build_system(library_dir, "hello")
+    messages = build_messages(
+        FileStore(base_dir=app_env),
+        "renee",
+        message="q",
+        history=[{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}],
+        expert_mode=False,
+    )
+    assert count_cache_breakpoints(system, with_loop_breakpoint(system, messages, None), None) == 4
+
+
+def test_tool_loop_requests_carry_the_marker_on_the_current_last_message_only() -> None:
+    tool_use = make_tool_use_block("t1", "get_workouts", {})
+    turns = [
+        ([], make_final_message([tool_use], "tool_use")),
+        ([], make_final_message([make_text_block("done")], "end_turn")),
+    ]
+    client = FakeAnthropicClient(turns)
+    chat = ClaudeChat(_settings(), client=client)
+
+    list(
+        chat.run_streaming(
+            [{"type": "text", "text": "sys"}],
+            [{"role": "user", "content": "ctx\n\n---\n\nq"}],
+            [{"name": "get_workouts"}],
+            {"get_workouts": lambda _i: {"ok": True}},
+        )
+    )
+
+    first, second = (c["messages"] for c in client.messages.calls)
+    assert _marked(first) == [0]
+    assert _marked(second) == [2]  # moved to the newest (tool_result) message; not left on message 0
