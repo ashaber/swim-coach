@@ -1,6 +1,6 @@
 """`set_weekly_template` (IDEA 023 v3): the coach tool that saves the SHAPE of
 the athlete's week. Preview by default; `confirm: true` persists. It replaces
-the one-hard-day-only `set_schedule_preferences` for anything beyond a simple
+the (now removed) one-hard-day-only `set_schedule_preferences` -- the single place for every schedule preference, with no limit on interval days
 standing ride (D3/D5)."""
 
 from __future__ import annotations
@@ -147,21 +147,11 @@ def test_andrews_real_week_end_to_end_through_the_tool_into_the_generator(athlet
     assert sorted((s.date - ws).days for s in hard) == [1, 5]  # Tuesday AND Saturday
 
 
-def test_old_tool_points_at_the_new_one_when_two_hard_days_are_asked(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    result = build_tool_handlers(store, slug="renee", expert_mode=False)["set_schedule_preferences"](
-        {"standing_rides": [{"day": "wed", "role": "hard"}], "hard_day": "fri", "confirm": True}
-    )
-    assert "set_weekly_template" in result["error"]
-
-
 def test_tool_registered_and_persona_prefers_it_for_a_whole_week() -> None:
     schema = next(t for t in TOOLS_SCHEMA if t["name"] == "set_weekly_template")
     assert {"template", "clear", "confirm"} <= set(schema["input_schema"]["properties"])
     assert "set_weekly_template" in PERSONA_AND_RULES
-    assert "set_weekly_template" in next(
-        t for t in TOOLS_SCHEMA if t["name"] == "set_schedule_preferences"
-    )["description"]
+    assert "set_schedule_preferences" not in {t["name"] for t in TOOLS_SCHEMA}  # one place for schedule preferences
 
 
 
@@ -196,3 +186,31 @@ def test_a_saved_open_template_writes_a_week_including_swim_and_run(athletes_dir
     out = _template_week_sessions(store.load_athlete("renee"), _d(2026, 9, 21), 0.0, None)
     assert sorted(s.sport for s in out) == ["cross_train", "strength", "swim_pool"]
     assert next(s for s in out if s.sport == "strength").structure == "KB EMOM 10 min"
+
+
+
+def test_flex_rides_and_chosen_interval_types_are_saved_and_read_back(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    template = {
+        "tue": [{"kind": "bike", "role": "hard", "intervals": "vo2"}, {"kind": "strength"}],
+        "wed": [{"kind": "bike", "role": "flex", "label": "Heinous club ride", "duration_min": 90}],
+        "sat": [{"kind": "bike", "role": "hard", "intervals": "threshold"}, {"kind": "strength"}],
+        "sun": [{"kind": "bike", "role": "flex", "label": "Heinous club ride"}],
+    }
+
+    result = _run(store, {"template": template, "confirm": True})
+
+    assert result["persisted"] is True and result["warnings"] == []
+    assert result["week"]["tue"][0] == "bike: hard (short_short_vo2)"
+    assert result["week"]["wed"] == ["bike: flex - Heinous club ride"]
+    assert result["summary"]["hard_rides"] == 2  # the two flex rides are not hard days
+    assert store.load_athlete("renee").weekly_template["sat"][0]["intervals"] == "sustained_threshold"
+
+
+def test_andrews_exact_second_transcript_needs_no_workaround(athletes_dir) -> None:
+    """Wed+Sun Heinous rides that can be easy Z2 or pushed to threshold, 1-2 hours, skipped in
+    races/taper (the template yields there) -- one call, no 'this tool only supports one role'."""
+    store = FileStore(base_dir=athletes_dir)
+    template = {d: [{"kind": "bike", "role": "flex", "label": "Heinous club ride", "duration_min": 90}] for d in ("wed", "sun")}
+    result = _run(store, {"template": template, "confirm": True})
+    assert result["persisted"] is True and "error" not in result and result["warnings"] == []

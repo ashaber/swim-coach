@@ -108,3 +108,10 @@ def test_the_prompt_makes_the_coach_write_the_agreed_plan_and_forbids_excuses() 
     assert "once the athlete agrees, YOU write it" in text
     assert "Never tell the athlete you cannot write" in text
     assert "state the tool's actual message" in text
+
+
+def test_the_prompt_teaches_flex_rides_interval_choice_and_the_per_week_switch() -> None:
+    text = " ".join(PERSONA_AND_RULES.split())
+    assert "`flex`" in text and "interval_type" in text and "NO limit on interval days" in text
+    assert "set_schedule_preferences" not in text
+    assert "Never tell the athlete a ride can only be one thing" in text

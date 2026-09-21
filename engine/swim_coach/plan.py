@@ -3405,6 +3405,37 @@ def _template_default_minutes(athlete: Athlete) -> float:
     return total
 
 
+_ENGINE_PURPOSE_STARTS = (
+    "endurance ride", "sustained threshold", "over/unders", "short-short", "race-pace", "openers",
+)
+
+
+def bike_session_as(session: Session, interval_type: str, ftp_watts: float | None) -> dict[str, Any]:
+    """Field updates that turn a bike `session` into `interval_type` -- one of the engine's
+    deterministic interval types (`BIKE_INTERVAL_TEMPLATES`) or `"endurance"` (easy Z2) -- keeping
+    its date and duration. The engine builds the structured workout, the zone tag and the prose,
+    so the coach never hand-authors a workout to change a ride's target. A leading label on the
+    ride ("Heinous club ride -- ...") is kept."""
+    label = None
+    head, sep, _ = session.purpose.partition(" — ")
+    if sep and not head.lower().startswith(_ENGINE_PURPOSE_STARTS):
+        label = head
+    duration = max(session.duration_min, DEFAULT_BIKE_SESSION_MIN)
+    if interval_type == "endurance":
+        structured = _bike_session_structure("Z2", duration, ftp_watts)
+        zone, purpose = "Z2", "endurance ride (Z2) — aerobic base"
+    else:
+        meta = BIKE_INTERVAL_TEMPLATE_META[interval_type]
+        structured = _bike_hard_session_structure(interval_type, duration, ftp_watts)
+        zone, purpose = meta["zone"], meta["purpose"]
+    return {
+        "intensity": _bike_intensity(zone, ftp_watts),
+        "structured": structured,
+        "structure": render_prose(structured),
+        "purpose": f"{label} — {purpose}" if label else purpose,
+    }
+
+
 def template_normalization_notes(template: dict[str, list[dict]] | None) -> list[str]:
     """Every note the model attached while normalizing a weekly template (an unrecognised
     role treated as endurance, text truncated, a duration clamped ...), prefixed with its day.
@@ -3467,7 +3498,7 @@ def _template_week_sessions(
     fixed_min = sum(s["duration_min"] for _, _, s in bike if s.get("duration_min"))
     budget = max(0.0, total_duration_min - fixed_min)
     open_hard = [1 for _, _, s in bike if s["role"] == "hard" and not s.get("duration_min")]
-    open_easy = [1 for _, _, s in bike if s["role"] == "endurance" and not s.get("duration_min")]
+    open_easy = [1 for _, _, s in bike if s["role"] in ("endurance", "flex") and not s.get("duration_min")]
     n_hard, n_easy = len(open_hard), len(open_easy)
     if n_hard and n_easy:
         hard_each = min(_resolve_bike_hard_min(total_duration_min), budget * TEMPLATE_HARD_TOTAL_SHARE_CAP / n_hard)
@@ -3484,15 +3515,25 @@ def _template_week_sessions(
         kind, label = slot["kind"], slot.get("label")
         if kind == "bike":
             is_hard = slot["role"] == "hard"
-            template = _select_bike_interval_template(week_index + hard_index) if is_hard else None
+            is_flex = slot["role"] == "flex"
+            # The athlete/coach may CHOOSE the interval type for a hard slot (`intervals`); otherwise
+            # the k-th hard ride of the week uses the weekly rotation. A flex ride offers its push
+            # (default sustained threshold) but is generated as an easy Z2 ride.
+            template = (slot.get("intervals") or _select_bike_interval_template(week_index + hard_index)) if is_hard else None
             meta = BIKE_INTERVAL_TEMPLATE_META[template] if is_hard else None
+            push_meta = BIKE_INTERVAL_TEMPLATE_META[slot.get("intervals") or "sustained_threshold"] if is_flex else None
             duration = max(slot.get("duration_min") or (hard_each if is_hard else easy_each), DEFAULT_BIKE_SESSION_MIN)
             zone = meta["zone"] if is_hard else "Z2"
-            purpose = (
-                meta["purpose"]
-                if is_hard
-                else (f"{label} — endurance ride (Z2), aerobic base" if label else "endurance ride (Z2) — aerobic base")
-            )
+            if is_flex:
+                purpose = (
+                    f"{label} — " if label else ""
+                ) + "endurance ride (Z2), aerobic base -- optional push on the day"
+            else:
+                purpose = (
+                    meta["purpose"]
+                    if is_hard
+                    else (f"{label} — endurance ride (Z2), aerobic base" if label else "endurance ride (Z2) — aerobic base")
+                )
             if is_hard and label:
                 purpose = f"{label} — {purpose}"
             if is_hard and template == "sustained_threshold" and hard_index == 0 and week_index == 0 and (
@@ -3507,6 +3548,11 @@ def _template_week_sessions(
                 else _bike_session_structure(zone, duration, ftp_watts)
             )
             prose = render_prose(structured)
+            if is_flex:
+                prose += (
+                    f"\nOptional push (your call on the day): {push_meta['purpose']}. "
+                    "Ask your coach to switch this ride to it for the week and it is built for you."
+                )
             if slot.get("structure"):
                 # the athlete's own description wins; drop the engine's IR so the two never disagree
                 prose, structured = slot["structure"], None

@@ -39,6 +39,25 @@ _VALID_ZONES = {"Z1", "Z2", "Z3", "Z4", "Z5"}
 _VALID_ANCHORS = {"css_pace", "rpe", "hr"}
 
 
+# Words for the engine's deterministic bike interval types (plan.BIKE_INTERVAL_TEMPLATES), so the
+# coach or athlete can CHOOSE one by whatever name they use. Unrecognised -> None (the caller keeps
+# the weekly rotation and notes it; never an error).
+_INTERVAL_TYPE_WORDS: dict[str, str] = {
+    **dict.fromkeys(("sustained_threshold", "threshold", "sustained threshold", "ftp", "sustained", "lt", "lactate threshold"), "sustained_threshold"),
+    **dict.fromkeys(("over_unders", "over/unders", "over unders", "over-unders", "over under", "over/under", "overunders"), "over_unders"),
+    **dict.fromkeys(("short_short_vo2", "vo2", "vo2max", "vo2 max", "short short", "short-short", "30/15", "vo2 intervals"), "short_short_vo2"),
+    **dict.fromkeys(("race_pace", "race pace", "race-pace", "punchy", "race"), "race_pace"),
+    **dict.fromkeys(("openers", "opener", "primer", "primers", "pre-race", "pre race"), "openers"),
+}
+
+
+def normalize_interval_type(raw: object) -> str | None:
+    """The engine's interval-type key for whatever word was used, or `None` when it is not one."""
+    if not isinstance(raw, str):
+        return None
+    return _INTERVAL_TYPE_WORDS.get(raw.strip().lower())
+
+
 class AthleteNote(BaseModel):
     """A durable, free-text fact or preference the athlete has told the coach ("I prefer
     kettlebells to free weights", "call me Bob", "3 bikes; flat pedals when teaching skills").
@@ -86,8 +105,10 @@ class Athlete(BaseModel):
     # session slots for that day; a day that is absent or `[]` is a day off.
     # A slot is `{"kind": ..., "role"?: ..., "label"?: ..., "duration_min"?: ...}`:
     #   kind "bike"      + role "hard" (an interval session; several per week
-    #                      are fine, each gets a different interval archetype)
+    #                      are fine; `intervals` picks the type, else the weekly rotation)
     #                    | role "endurance" (a Z2 ride, e.g. a club group ride)
+    #                    | role "flex" (Z2 by default with an optional push -- a ride that can
+    #                      be easy OR pushed, e.g. a group ride; never counts as a hard day)
     #   kind "skills"    cyclocross bike-handling session
     #   kind "strength"  dryland strength (noted "after the intervals" when it
     #                    follows a hard ride the same day)
@@ -306,6 +327,7 @@ class Athlete(BaseModel):
         hard_words = {"hard", "interval", "intervals", "vo2", "vo2max", "threshold", "tempo", "sweet spot",
                       "sweetspot", "race pace", "race-pace", "sprint", "sprints"}
         easy_words = {"endurance", "easy", "z2", "zone 2", "long", "group", "social", "base", "aerobic", "steady"}
+        flex_words = {"flex", "flexible", "either", "optional", "choose", "z2 or threshold", "easy or hard", "z2 or hard"}
         text_caps = {"label": 200, "purpose": 1500, "structure": 6000}
         out: dict[str, list[dict]] = {}
         for raw_day, slots in value.items():
@@ -327,7 +349,9 @@ class Athlete(BaseModel):
                 if kind == "bike":
                     role = slot.get("role")
                     word = role.strip().lower() if isinstance(role, str) else None
-                    if word in hard_words:
+                    if word in flex_words:
+                        slot["role"] = "flex"
+                    elif word in hard_words:
                         slot["role"] = "hard"
                     elif word in easy_words:
                         slot["role"] = "endurance"
@@ -341,6 +365,14 @@ class Athlete(BaseModel):
                 elif "role" in slot:
                     slot.pop("role")
                     notes.append(f"role ignored: it only applies to bike slots, not {kind!r}")
+                if "intervals" in slot:
+                    chosen = normalize_interval_type(slot["intervals"])
+                    if kind != "bike" or slot.get("role") == "endurance":
+                        notes.append(f"intervals {slot.pop('intervals')!r} ignored: it only applies to hard or flex bike rides")
+                    elif chosen is None:
+                        notes.append(f"intervals {slot.pop('intervals')!r} is not a known interval type, so the weekly rotation is used")
+                    else:
+                        slot["intervals"] = chosen
                 for name, cap in text_caps.items():
                     if name in slot:
                         if not isinstance(slot[name], str):
