@@ -4896,10 +4896,9 @@ def _confirm_macro_from_draft(
     every later week, so a drifted recomputation is the worst place for it). Same rules as
     `_confirm_from_draft`. Flags (never blocks) that it replaces the macro currently on file."""
     draft_id = input_data.get("draft_id")
-    try:
-        carrier = store.load_week_draft(slug, _MACRO_CARRIER_WEEK, draft_id)
-    except NotImplementedError:
-        return None
+    carrier, stop = _load_draft_safely(store, slug, _MACRO_CARRIER_WEEK, draft_id, tool=tool)
+    if stop is not None:
+        return stop
     if carrier is None:
         if draft_id:
             return {
@@ -6389,6 +6388,31 @@ def _check_no_session_collision(week: WeekPlan, target_date: date, sport: str) -
 _DRAFT_IGNORED_ON_CONFIRM = ("session_overrides", "template_preference")
 
 
+def _load_draft_safely(
+    store: StoreInterface, slug: str, key: str, draft_id: str | None, *, tool: str
+) -> tuple[WeekPlan | None, dict[str, Any] | None]:
+    """`(draft, stop)`. A storage error while reading a draft must not block the coach: with no
+    `draft_id` it degrades to `(None, None)` (the caller falls back to its flagged one-step path);
+    with a NAMED `draft_id` it returns a `stop` result that writes NOTHING (writing some other plan
+    instead is the corruption this exists to stop)."""
+    try:
+        return store.load_week_draft(slug, key, draft_id), None
+    except NotImplementedError:
+        return None, None
+    except Exception:  # noqa: BLE001
+        log.error("could not read draft", athlete=slug, key=key, tool=tool, exc_info=True)
+        if draft_id:
+            return None, {
+                "persisted": False,
+                "error": (
+                    f"draft {draft_id!r} could not be read (a storage problem, not a problem with the plan). "
+                    f"Nothing was written. Try the confirm again in a moment, or call {tool} without `confirm` "
+                    "to make a new draft and confirm that."
+                ),
+            }
+        return None, None
+
+
 def _hold_draft(store: StoreInterface, slug: str, week: WeekPlan, *, tool: str) -> str | None:
     """Keep the PROPOSED week so `confirm` can write exactly what was shown and
     agreed, instead of running the generator a second time. Returns its id, or
@@ -6402,6 +6426,9 @@ def _hold_draft(store: StoreInterface, slug: str, week: WeekPlan, *, tool: str) 
             ),
         )
     except NotImplementedError:
+        return None
+    except Exception:  # noqa: BLE001 - draft storage must never block drafting; degrade to no draft_id
+        log.error("could not hold draft", athlete=slug, iso_week=week.iso_week, exc_info=True)
         return None
     return str(week.id)
 
@@ -6433,10 +6460,9 @@ def _confirm_from_draft(
     an explicitly named draft that cannot be found writes NOTHING (writing some
     other plan instead is the corruption this exists to stop)."""
     draft_id = input_data.get("draft_id")
-    try:
-        draft = store.load_week_draft(slug, iso_week, draft_id)
-    except NotImplementedError:
-        return None
+    draft, stop = _load_draft_safely(store, slug, iso_week, draft_id, tool=tool)
+    if stop is not None:
+        return stop
     if draft is not None and not draft_id and draft.drafted_by not in (None, tool):
         return None  # the latest draft belongs to a different tool; never write it by accident
     if draft is not None and not draft_id and _draft_is_stale(draft):
@@ -7605,10 +7631,9 @@ def _confirm_taper_from_draft(
     rules as `_confirm_from_draft`: a named draft_id that cannot be found writes
     nothing, no draft_id uses the latest FRESH draft of THIS tool, else None."""
     draft_id = input_data.get("draft_id")
-    try:
-        carrier = store.load_week_draft(slug, _TAPER_CARRIER_WEEK, draft_id)
-    except NotImplementedError:
-        return None
+    carrier, stop = _load_draft_safely(store, slug, _TAPER_CARRIER_WEEK, draft_id, tool=_TAPER_TOOL)
+    if stop is not None:
+        return stop
     if carrier is None:
         if draft_id:
             return {
