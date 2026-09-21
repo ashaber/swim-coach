@@ -20,7 +20,7 @@ checked patterns):
 from __future__ import annotations
 
 import json
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 import anthropic
 
@@ -53,6 +53,18 @@ MAX_TOKENS_TRUNCATION_MARKER = (
     "\n\n⚠️ _[Response was cut off at the token limit — "
     "reply 'continue' to resume.]_"
 )
+
+
+# What an `escalate` callback returns: the full-mode (system, messages, tools,
+# tool_handlers) to re-run the same question with. See light_mode.py.
+Escalation = tuple[
+    list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, ToolHandler]
+]
+
+# Tool name a light-mode turn calls to hand the message to the full coach.
+# Mirrors app.light_mode.NEED_MORE_TOOL_NAME (not imported: light_mode imports
+# app.context, and this module must stay import-light).
+ESCALATION_TOOL_NAME = "need_more"
 
 
 def build_request_kwargs(
@@ -109,6 +121,8 @@ class ClaudeChat:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         tool_handlers: dict[str, ToolHandler],
+        *,
+        escalate: Callable[[], Escalation] | None = None,
     ) -> Iterator[str]:
         """Yields SSE-framed JSON lines (`"data: {...}\\n\\n"`).
 
@@ -123,7 +137,7 @@ class ClaudeChat:
         Thin wrapper over `_run_turns` (the shared tool-loop generator also
         used by `run_once`) -- SSE-frames each raw event dict it yields.
         """
-        for event in self._run_turns(system, messages, tools, tool_handlers):
+        for event in self._run_turns(system, messages, tools, tool_handlers, escalate=escalate):
             yield _sse(event)
 
     def run_once(
@@ -177,6 +191,8 @@ class ClaudeChat:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         tool_handlers: dict[str, ToolHandler],
+        *,
+        escalate: Callable[[], Escalation] | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Shared tool-loop generator behind both `run_streaming` (which
         SSE-frames each event) and `run_once` (which drains text events into
@@ -242,6 +258,21 @@ class ClaudeChat:
             if final.stop_reason != "tool_use":
                 yield {"type": "done", "stop_reason": final.stop_reason}
                 return
+
+            # Light mode (IDEA 022 step 5): the light coach asked for the full
+            # one. Swap in the full system/messages/tools and re-ask the same
+            # question; the light turn's tool_use is never replayed. One-shot --
+            # `escalate` is cleared so a full-mode turn can't bounce back.
+            if escalate is not None and any(
+                getattr(b, "type", None) == "tool_use" and b.name == ESCALATION_TOOL_NAME
+                for b in final.content
+            ):
+                log.info("light mode escalated to full", iteration=iteration)
+                system, messages, tools, tool_handlers = escalate()
+                messages = list(messages)
+                tool_names_available = [t.get("name") for t in tools] if tools else []
+                escalate = None
+                continue
 
             # exclude_none drops SDK-only null fields (a response TextBlock
             # carries parsed_output/citations that are None in ordinary chat);

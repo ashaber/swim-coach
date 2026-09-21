@@ -24,6 +24,12 @@ from app.auth import (
 )
 from app.claude import ClaudeChat
 from app.context import build_messages, build_system, find_workout_by_id
+from app.light_mode import (
+    LIGHT_TOOLS,
+    build_light_messages,
+    build_light_system,
+    is_light_turn,
+)
 from app.store_factory import make_store
 from app.tools import TOOLS_SCHEMA, build_tool_handlers
 
@@ -103,25 +109,49 @@ async def chat(
     # #167 review, Finding 1) -- see Athlete.effective_sports and
     # app.context.filter_files_by_sport_scope.
     athlete_profile = store.load_athlete(athlete)
-    system = build_system(
-        settings.library_dir, payload.message, athlete_sports=athlete_profile.effective_sports
-    )
     history = [{"role": h.role, "content": h.content} for h in payload.history]
-    messages = build_messages(
-        store,
-        athlete,
-        message=payload.message,
-        history=history,
-        expert_mode=payload.expert_mode,
-        focused_workout=focused_workout,
-    )
-    tool_handlers = build_tool_handlers(
-        store,
-        slug=athlete,
+    light = settings.light_mode and is_light_turn(
+        payload.message,
+        history_len=len(history),
+        focused=focused_workout is not None,
         expert_mode=payload.expert_mode,
     )
+    def build_full_request():
+        """The full-mode (system, messages, tools, handlers). A function so a
+        light turn only pays for it (DB reads, engine math) if it escalates."""
+        system = build_system(
+            settings.library_dir, payload.message, athlete_sports=athlete_profile.effective_sports
+        )
+        messages = build_messages(
+            store,
+            athlete,
+            message=payload.message,
+            history=history,
+            expert_mode=payload.expert_mode,
+            focused_workout=focused_workout,
+        )
+        tool_handlers = build_tool_handlers(
+            store,
+            slug=athlete,
+            expert_mode=payload.expert_mode,
+        )
+        return system, messages, TOOLS_SCHEMA, tool_handlers
 
-    def event_stream():
-        yield from claude_chat.run_streaming(system, messages, TOOLS_SCHEMA, tool_handlers)
+    if light:
+        light_request = (
+            build_light_system(),
+            build_light_messages(store, athlete, message=payload.message, history=history),
+            LIGHT_TOOLS,
+            {},
+        )
+
+        def event_stream():
+            yield from claude_chat.run_streaming(*light_request, escalate=build_full_request)
+
+    else:
+        full_request = build_full_request()
+
+        def event_stream():
+            yield from claude_chat.run_streaming(*full_request)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
