@@ -490,7 +490,9 @@ def test_record_health_status_omitting_new_fields_still_works_exactly_as_before(
     assert status.related_status_id is None
 
 
-def test_record_health_status_invalid_body_region_is_rejected(athletes_dir) -> None:
+def test_record_health_status_unlisted_body_region_is_recorded_as_other_not_rejected(athletes_dir) -> None:
+    # Policy (Andrew, 2026-09-21): an injury is ALWAYS recordable. An unlisted part maps to the
+    # nearest coarse region (here `other`) with a note; the description keeps the exact words.
     spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir))
     handlers = build_tool_handlers(spy, slug="renee", expert_mode=False)
 
@@ -503,8 +505,10 @@ def test_record_health_status_invalid_body_region_is_rejected(athletes_dir) -> N
         }
     )
 
-    assert "error" in result
-    assert spy.list_health_status("renee") == []
+    assert "error" not in result and result["logged"] is True
+    assert any("pinky_toe" in w for w in result["warnings"])
+    saved = spy.list_health_status("renee")
+    assert len(saved) == 1 and saved[0].body_region == "other"
 
 
 def test_record_health_status_invalid_onset_is_rejected(athletes_dir) -> None:
@@ -1787,7 +1791,7 @@ def test_create_event_accepts_primary_sport_bike(athletes_dir, run_tag) -> None:
     assert matching.primary_sport == "bike"
 
 
-def test_create_event_invalid_primary_sport_is_an_error(athletes_dir) -> None:
+def test_create_event_unsupported_primary_sport_is_kept_as_a_note_not_an_error(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
     result = handlers["create_event"](
@@ -1799,7 +1803,7 @@ def test_create_event_invalid_primary_sport_is_an_error(athletes_dir) -> None:
             "primary_sport": "run",
         }
     )
-    assert "error" in result
+    assert "error" not in result and result["created"] is False and "Test Event" in result["saved_as_note"]
 
 
 def _bike_macro_via_tools(handlers, store, run_tag, event_name_suffix="Century") -> tuple[str, dict]:
@@ -4718,7 +4722,7 @@ def test_create_week_plan_invalid_template_preference_purpose_is_a_clean_error(a
     assert FileStore(base_dir=athletes_dir).load_week("renee", "2026-W32") is None
 
 
-def test_create_week_plan_template_preference_matching_nothing_is_a_clean_error(athletes_dir) -> None:
+def test_create_week_plan_template_preference_matching_nothing_falls_back_with_a_warning(athletes_dir) -> None:
     # 2026-W30 falls in the base block, which has no sprint_power template
     # (only "aerobic_base" purpose templates apply to "base").
     store = FileStore(base_dir=athletes_dir)
@@ -4727,9 +4731,10 @@ def test_create_week_plan_template_preference_matching_nothing_is_a_clean_error(
     result = handlers["create_week_plan"](
         {"iso_week": "2026-W30", "template_preference": {"purpose": "sprint_power"}}
     )
-    assert "error" in result
-    assert "no workout templates match" in result["error"]
-    assert FileStore(base_dir=athletes_dir).load_week("renee", "2026-W30") is None
+    # An unmet preference degrades to the default rotation with a warning; it never stops the week.
+    assert "error" not in result and result["created"] is True
+    assert any("default rotation" in w for w in result["planning_warnings"])
+    assert FileStore(base_dir=athletes_dir).load_week("renee", "2026-W30") is not None
 
 
 def test_replace_week_plan_with_template_preference_changes_selected_template_on_confirm(athletes_dir) -> None:
@@ -5911,15 +5916,16 @@ def test_session_overrides_add_mode_refuses_when_session_already_exists(athletes
     assert "already" in result["error"].lower()
 
 
-def test_session_overrides_add_mode_requires_core_fields(athletes_dir) -> None:
+def test_session_overrides_add_mode_defaults_missing_core_fields_with_notes(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
     result = handlers["replace_week_plan"]({
         "iso_week": "2026-W28",
         "session_overrides": [{"date": "2026-07-06", "add": True, "sport": "bike"}],
     })
-    assert "error" in result
-    assert "duration_min" in result["error"] or "purpose" in result["error"]
+    assert "error" not in result
+    assert any("duration_min" in w for w in result["planning_warnings"])
+    assert any("purpose" in w for w in result["planning_warnings"])
 
 
 # ===========================================================================

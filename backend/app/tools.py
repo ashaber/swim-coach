@@ -415,7 +415,9 @@ SESSION_OVERRIDES_SCHEMA: dict[str, Any] = {
                 "description": (
                     "Disambiguates when more than one session falls on "
                     "`date`. Omit if only one session that day. REQUIRED "
-                    "with `add: true`."
+                    "with `add: true`. Use the athlete's own word -- kettlebell, yoga, run, hike, "
+                    "swim, cycling ... -- and it is saved as the closest plan sport (an unknown "
+                    "one becomes cross_train); never refuse because a sport has no exact match."
                 ),
             },
             "distance_m": {
@@ -795,7 +797,8 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
         "description": (
             "Directly set one or more low-risk athlete-profile fields: "
             "ftp_watts, lthr_bpm, css_pace_s_per_100m, carb_tolerance_g_per_hr, "
-            "or sports. This is "
+            "or sports. Anything ELSE the athlete tells you (a preferred name, an equipment or style "
+            "preference ...) is saved as a durable note automatically -- never refused. This is "
             "the tool that actually changes what zones.py/load.py resolve "
             "this athlete's zones/load from -- call it AFTER you've judged "
             "(from record_threshold_test's logged history, or from what the "
@@ -1801,6 +1804,15 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     },
                     "required": ["kind"],
                 },
+                "custom_product": {
+                    "type": "object",
+                    "description": (
+                        "Use INSTEAD of product_key when the athlete uses a product the catalog lacks "
+                        "(real food, another brand): {label, carb_g_per_serving (required, from the label), "
+                        "sodium_mg_per_serving?, serving_label?, is_drink_mix?}. Never refuse a plan "
+                        "because the product is not in the catalog."
+                    ),
+                },
                 "product_key": {
                     "type": "string",
                     "enum": ["formula_369", "maurten_gel_100", "tailwind"],
@@ -1862,7 +1874,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     ),
                 },
             },
-            "required": ["duration_min", "intensity_class", "access", "product_key"],
+            "required": ["duration_min", "intensity_class", "access"],
             "additionalProperties": False,
         },
     },
@@ -2964,6 +2976,33 @@ def _handle_flag_for_coach_review(
     return {"logged": True, "id": str(entry.id), "type": entry.type}
 
 
+_BODY_REGIONS = ("shoulder", "knee", "back", "hip", "ankle_foot", "elbow_wrist", "illness_systemic", "head_neck", "other")
+_BODY_REGION_WORDS: dict[str, str] = {
+    **dict.fromkeys(("neck", "head", "headache", "concussion", "jaw", "cervical"), "head_neck"),
+    **dict.fromkeys(("hamstring", "quad", "quads", "quadriceps", "glute", "glutes", "groin", "adductor", "hip flexor",
+                     "thigh", "pelvis", "it band", "itb"), "hip"),
+    **dict.fromkeys(("calf", "achilles", "shin", "foot", "ankle", "plantar", "heel", "toe", "arch"), "ankle_foot"),
+    **dict.fromkeys(("wrist", "elbow", "forearm", "hand", "thumb", "finger"), "elbow_wrist"),
+    **dict.fromkeys(("lower back", "upper back", "spine", "spinal", "lumbar", "thoracic", "ribs", "rib"), "back"),
+    **dict.fromkeys(("flu", "cold", "covid", "fever", "sick", "illness", "virus", "infection", "stomach", "gi"), "illness_systemic"),
+    **dict.fromkeys(("patella", "kneecap", "meniscus"), "knee"),
+    **dict.fromkeys(("rotator cuff", "scapula", "clavicle", "collarbone", "deltoid", "bicep", "tricep"), "shoulder"),
+}
+
+
+def _normalize_body_region(raw: Any) -> tuple[str | None, str | None]:
+    """`(region, note)`: the coarse body region for whatever body part was named. An injury is
+    ALWAYS recordable -- an unlisted part maps to the nearest region (or `other`) with a note; the
+    athlete's own words are kept in the description. `(None, None)` when none was given."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None, None
+    word = raw.strip().lower()
+    if word in _BODY_REGIONS:
+        return word, None
+    region = _BODY_REGION_WORDS.get(word, "other")
+    return region, f"body_region {raw!r} was recorded as {region!r} (the coarse region); the description keeps the exact words"
+
+
 def _handle_record_health_status(
     input_data: dict[str, Any], *, store: StoreInterface, slug: str, expert_mode: bool
 ) -> dict[str, Any]:
@@ -3012,12 +3051,7 @@ def _handle_record_health_status(
     # (or wasn't confident enough to state) a value, never a guess coerced
     # to a default. An explicitly-given-but-invalid value is still rejected
     # outright, same as restriction/source below -- never silently dropped.
-    body_region = input_data.get("body_region")
-    if body_region is not None and body_region not in (
-        "shoulder", "knee", "back", "hip", "ankle_foot", "elbow_wrist",
-        "illness_systemic", "head_neck", "other",
-    ):
-        return {"error": f"invalid body_region {body_region!r}"}
+    body_region, region_note = _normalize_body_region(input_data.get("body_region"))
 
     onset = input_data.get("onset")
     if onset is not None and onset not in ("acute", "gradual"):
@@ -3105,6 +3139,8 @@ def _handle_record_health_status(
         "feedback_id": feedback_id,
         "restriction": restriction,
     }
+    if region_note:
+        result["warnings"] = [region_note]
     if notify_error is not None:
         result["notify_error"] = (
             "The health status was recorded, but flagging it for your human "
@@ -3226,8 +3262,8 @@ def _handle_update_athlete_profile(
     if not input_data:
         return {
             "error": (
-                "at least one field (ftp_watts, lthr_bpm, css_pace_s_per_100m, "
-                "carb_tolerance_g_per_hr, sports) is required"
+                "nothing to update: give a profile field (ftp_watts, lthr_bpm, css_pace_s_per_100m, "
+                "carb_tolerance_g_per_hr, sports) or, for a preference, use save_athlete_note"
             )
         }
 
@@ -3293,11 +3329,24 @@ def _handle_update_athlete_profile(
             return {"error": f"invalid sports {sports!r}; must be a non-empty list of valid sport values"}
         updates["sports"] = sports
 
-    if not updates:
+    # Anything that is not a profile field (a preferred name, an equipment or style preference ...)
+    # is a durable PREFERENCE: remember it as a note instead of rejecting the call.
+    profile_fields = ("ftp_watts", "lthr_bpm", "css_pace_s_per_100m", "carb_tolerance_g_per_hr", "sports")
+    unknown = {k: v for k, v in input_data.items() if k not in profile_fields and k != "confirm"}
+    note_texts: list[str] = []
+    warnings: list[str] = []
+    for key, value in unknown.items():
+        if isinstance(value, (str, int, float, bool)) and str(value).strip():
+            note_texts.append(f"{key.replace('_', ' ')}: {value}")
+        else:
+            warnings.append(f"{key!r} is not a profile field and its value could not be saved as a note; use save_athlete_note")
+
+    if not updates and not note_texts:
         return {
             "error": (
-                "at least one field (ftp_watts, lthr_bpm, css_pace_s_per_100m, "
-                "carb_tolerance_g_per_hr, sports) is required"
+                "nothing to update: the profile fields are ftp_watts, lthr_bpm, css_pace_s_per_100m, "
+                "carb_tolerance_g_per_hr and sports. For a preference or any other fact about the "
+                "athlete, use save_athlete_note."
             )
         }
 
@@ -3308,10 +3357,22 @@ def _handle_update_athlete_profile(
 
     for field, val in updates.items():
         setattr(athlete, field, val)
+    saved_as_notes: list[str] = []
+    for text in note_texts:
+        if not any(n.active and n.text.strip().lower() == text.lower() for n in athlete.notes):
+            athlete.notes.append(AthleteNote(id=uuid.uuid4(), text=text[:_NOTE_MAX_CHARS], category="profile",
+                                             created=athlete_today(athlete)))
+        saved_as_notes.append(text)
     store.save_athlete(athlete)
 
-    log.info("athlete profile updated", athlete=slug, fields=sorted(updates.keys()))
-    return {"updated": True, **{k: getattr(athlete, k) for k in updates}}
+    log.info("athlete profile updated", athlete=slug, fields=sorted(updates.keys()), notes_saved=len(saved_as_notes))
+    result: dict[str, Any] = {"updated": bool(updates), **{k: getattr(athlete, k) for k in updates}}
+    if saved_as_notes:
+        result["saved_as_notes"] = saved_as_notes
+        warnings.append("Not profile fields, so they were saved as durable notes (save_athlete_note is the tool for these).")
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 
 _SCHEDULE_DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
@@ -4395,7 +4456,13 @@ def _handle_export_zwo_workout(input_data: dict[str, Any], *, store: StoreInterf
     if session.sport != "bike":
         return {"error": f"zwo export isn't supported for sport {session.sport!r}"}
     if session.structured is None:
-        return {"error": "this session has no structured workout data to export (structured is None)"}
+        return {
+            "error": (
+                "this session has no machine-readable workout to export: it was described in the athlete's "
+                "own words (or by a text-only edit), so there are no intervals to turn into a .zwo. The "
+                "session itself is saved and fine; only this export is unavailable for it."
+            )
+        }
 
     try:
         athlete = store.load_athlete(slug)
@@ -4488,8 +4555,29 @@ def _handle_create_event(input_data: dict[str, Any], *, store: StoreInterface, s
     # omitted field means exactly what it always meant for a swim event.
     primary_sport = input_data.get("primary_sport") or "swim"
     if primary_sport not in ("swim", "bike"):
+        # The plan engine can only periodize swim and bike targets. An event in another sport is
+        # still worth remembering: keep it as a durable note (with everything the athlete said)
+        # instead of refusing, and say plainly what the engine can and cannot do with it.
+        try:
+            athlete = store.load_athlete(slug)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"could not load athlete profile: {exc}"}
+        details = ", ".join(
+            f"{k}: {input_data[k]}"
+            for k in ("event_date", "priority", "target_value", "target_metric", "notes")
+            if input_data.get(k) not in (None, "")
+        )
+        text = f"{input_data.get('name', 'event')} ({primary_sport}) -- {details}"[:_NOTE_MAX_CHARS]
+        athlete.notes.append(AthleteNote(id=uuid.uuid4(), text=text, category="event", created=athlete_today(athlete)))
+        store.save_athlete(athlete)
         return {
-            "error": f"invalid primary_sport {primary_sport!r}; must be 'swim' or 'bike'"
+            "created": False,
+            "saved_as_note": text,
+            "warnings": [
+                f"The plan engine can only build periodization for a swim or bike target, not {primary_sport!r}, so this "
+                "was saved as a durable note instead of an event. No macro or race-week plan was generated for it. "
+                "Tell the athlete plainly, and plan their supporting training with set_weekly_template / week tools."
+            ],
         }
 
     try:
@@ -5332,10 +5420,37 @@ def _handle_compute_fueling_plan(
     if access_error is not None:
         return {"error": access_error}
 
+    custom_raw = input_data.get("custom_product")
+    custom_product: fueling_module.ProductFuel | None = None
     product_key = input_data.get("product_key")
-    if product_key not in _FUELING_PRODUCT_KEYS:
+    if custom_raw is not None:
+        # The athlete's own product, from its label: carbs (and sodium) per serving are all the
+        # calculator needs, so a product the catalog lacks never blocks the plan.
+        carb = custom_raw.get("carb_g_per_serving") if isinstance(custom_raw, dict) else None
+        sodium = custom_raw.get("sodium_mg_per_serving") if isinstance(custom_raw, dict) else None
+        if isinstance(carb, bool) or not isinstance(carb, (int, float)) or not 0 < carb <= 200:
+            return {"error": "custom_product.carb_g_per_serving must be a number between 0 and 200 (grams of carbohydrate per serving, from the label)"}
+        if sodium is not None and (isinstance(sodium, bool) or not isinstance(sodium, (int, float)) or sodium < 0):
+            return {"error": "custom_product.sodium_mg_per_serving must be a number >= 0 (milligrams per serving, from the label), or omitted"}
+        label = str(custom_raw.get("label") or "the athlete's own product").strip()[:80]
+        custom_product = fueling_module.ProductFuel(
+            key="custom",
+            label=label,
+            carb_g_per_serving=float(carb),
+            sodium_mg_per_serving=float(sodium) if sodium is not None else None,
+            serving_label=str(custom_raw.get("serving_label") or "serving")[:20],
+            is_drink_mix=bool(custom_raw.get("is_drink_mix", False)),
+            mix_guidance=None,
+            notes="Values supplied by the athlete from the product label; not verified against a catalog.",
+        )
+        product_key = "custom"
+    elif product_key not in _FUELING_PRODUCT_KEYS:
         return {
-            "error": f"invalid product_key {product_key!r}; known products: {list(_FUELING_PRODUCT_KEYS)}"
+            "error": (
+                f"invalid product_key {product_key!r}; known products: {list(_FUELING_PRODUCT_KEYS)}. "
+                "If the athlete uses a different product, pass `custom_product` instead "
+                "(label, carb_g_per_serving, and sodium_mg_per_serving if the label lists it)."
+            )
         }
 
     heat = bool(input_data.get("heat", False))
@@ -5376,11 +5491,12 @@ def _handle_compute_fueling_plan(
             product_key=product_key,
             carb_tolerance_g_per_hr=carb_tolerance_g_per_hr,
             heat=heat,
+            product=custom_product,
         )
     except ValueError as exc:
         return {"error": str(exc)}
 
-    product = fueling_module.PRODUCTS[product_key]
+    product = custom_product or fueling_module.PRODUCTS[product_key]
     result: dict[str, Any] = {
         "duration_min": plan.duration_min,
         "intensity_class": plan.intensity_class,
@@ -5526,6 +5642,33 @@ def _parse_template_preference(
         return None, f"invalid template_preference: {exc}"
 
 
+def _generate_week_tolerant(
+    athlete: Athlete,
+    macro: Any,
+    iso_week: str,
+    week_start: date,
+    event_format: str,
+    template_preference: Any,
+    event: Event,
+    **kwargs: Any,
+) -> WeekPlan:
+    """`generate_week`, except a `template_preference` the library has no template for (an equipment
+    or style preference like kettlebells) DEGRADES to the default rotation with a warning instead of
+    failing the whole week -- an unmet preference must never stop the coach writing the plan."""
+    try:
+        return generate_week(athlete, macro, iso_week, week_start, event_format, template_preference, event, **kwargs)
+    except ValueError as exc:
+        if template_preference is None or "no workout templates match" not in str(exc):
+            raise
+    week = generate_week(athlete, macro, iso_week, week_start, event_format, None, event, **kwargs)
+    week.planning_warnings = list(week.planning_warnings) + [
+        "No library workout template matches the requested preference, so the default rotation was used. "
+        "Write the specific content the athlete asked for yourself (`purpose` / `structure`, as coach "
+        "judgment) and log the gap with flag_for_coach_review (research_gap: true) -- do not refuse."
+    ]
+    return week
+
+
 def _held_bike_minutes(store: StoreInterface, slug: str, week_start: date) -> float | None:
     """Last real bike minutes to HOLD for a weekly-template week built under a
     non-bike macro (whose own volume is swim meters): the nearest of the two
@@ -5638,7 +5781,7 @@ def _handle_create_week_plan(input_data: dict[str, Any], *, store: StoreInterfac
     primary_sport = event.primary_sport
 
     try:
-        week = generate_week(
+        week = _generate_week_tolerant(
             athlete,
             macro,
             iso_week,
@@ -5771,6 +5914,80 @@ def _handle_reschedule_session(input_data: dict[str, Any], *, store: StoreInterf
     }
 
 
+_PLAN_SPORTS = ("swim_pool", "swim_ow", "strength", "recovery", "cross_train", "bike")
+_SPORT_WORDS: dict[str, str] = {
+    **dict.fromkeys(("kettlebell", "kettlebells", "kb", "weights", "weight", "lifting", "gym", "core",
+                     "strength training", "dryland", "resistance", "strength"), "strength"),
+    **dict.fromkeys(("yoga", "mobility", "stretch", "stretching", "foam rolling", "pilates", "rest", "recovery"), "recovery"),
+    **dict.fromkeys(("swim", "swimming", "pool", "pool swim", "swim_pool"), "swim_pool"),
+    **dict.fromkeys(("open water", "open-water", "open water swim", "ow", "ow swim", "swim_ow"), "swim_ow"),
+    **dict.fromkeys(("cycling", "ride", "cycle", "mtb", "mountain bike", "cx", "cyclocross", "spin", "trainer", "bike"), "bike"),
+    "cross_train": "cross_train",
+}
+
+
+def _normalize_plan_sport(raw: Any) -> tuple[str | None, str | None]:
+    """`(plan_sport, note)`: the plan sport for whatever word the athlete used (kettlebell, yoga,
+    run, hike ...). A word the plan has no sport for is saved as `cross_train` WITH A NOTE --
+    never rejected. `(None, None)` when no sport was given."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None, None
+    word = raw.strip().lower()
+    if word in _PLAN_SPORTS:
+        return word, None
+    mapped = _SPORT_WORDS.get(word)
+    if mapped:
+        return mapped, f"sport {raw!r} was saved as {mapped!r}"
+    return "cross_train", f"sport {raw!r} is not a plan sport, so it was saved as 'cross_train' (the athlete's own words are in the purpose)"
+
+
+def _salvage_prose(node: Any) -> list[str]:
+    """Readable lines from a `structured` payload that failed validation, so what the coach wrote
+    is kept as text rather than lost: every label / name / notes / description in the tree, with
+    any scalar detail (reps, sets, duration) that sat beside it."""
+    lines: list[str] = []
+    if isinstance(node, dict):
+        head = next((str(node[k]) for k in ("label", "name", "exercise") if isinstance(node.get(k), (str, int, float))), None)
+        details = [
+            f"{k.replace('_', ' ')} {node[k]}"
+            for k in ("duration_value", "reps", "sets", "repeats", "notes", "description")
+            if isinstance(node.get(k), (str, int, float)) and node[k] != ""
+        ]
+        if head or details:
+            lines.append(", ".join(([head] if head else []) + details))
+        for value in node.values():
+            if isinstance(value, (dict, list)):
+                lines.extend(_salvage_prose(value))
+    elif isinstance(node, list):
+        for item in node:
+            lines.extend(_salvage_prose(item))
+    return lines
+
+
+def _coerce_structured(
+    raw: Any, *, when: str, prose_given: bool, notes: list[str]
+) -> tuple[WorkoutStructure | None, str | None, str | None]:
+    """`(structured, salvaged_prose, error)`. Never blocks on the internal workout IR: invalid
+    `structured` is dropped with a note when the caller also gave `structure` text, salvaged into
+    readable text when it can be, and only an error (that says to use `structure`) when nothing
+    at all could be kept."""
+    try:
+        return WorkoutStructure.model_validate(raw), None, None
+    except ValidationError:
+        pass
+    if prose_given:
+        notes.append(f"{when}: the structured workout data was not valid, so only the `structure` text was saved")
+        return None, None, None
+    salvaged = "\n".join(_salvage_prose(raw))
+    if salvaged:
+        notes.append(f"{when}: the structured workout data was not valid, so it was saved as plain text instead")
+        return None, salvaged, None
+    return None, None, (
+        f"{when}: `structured` could not be used. It is optional -- pass the workout as `structure` "
+        "(plain text, exactly as you would write it in chat) and it will be saved as written."
+    )
+
+
 _HARD_WORK_WORDS = re.compile(
     r"interval|over[/ -]?under|threshold|vo2|sprint|sweet ?spot|tempo|repeats?|hill repeats", re.IGNORECASE
 )
@@ -5809,7 +6026,10 @@ def _apply_session_overrides(
         except (TypeError, ValueError):
             return f"invalid session_overrides date {raw_date!r}; expected 'YYYY-MM-DD'", notes
 
-        sport = override.get("sport")
+        raw_sport = override.get("sport")
+        sport, sport_note = _normalize_plan_sport(raw_sport)
+        if sport_note and override.get("add"):
+            notes.append(f"{raw_date}: {sport_note}")
         matches = [
             s for s in week.sessions
             if s.date == override_date and (sport is None or s.sport == sport)
@@ -5875,20 +6095,24 @@ def _apply_session_overrides(
                 ), notes
             add_duration = override.get("duration_min")
             add_purpose = override.get("purpose")
-            if add_duration is None or not add_purpose:
-                return (
-                    f"session_overrides: `add` entry for {raw_date!r} needs "
-                    "`duration_min` and `purpose` (optionally `distance_m`, "
-                    "`intensity`, `structured`/`structure`)"
-                ), notes
+            add_structure = override.get("structure")
+            if add_duration is None:
+                add_duration = 30.0 if sport == "recovery" else 45.0
+                notes.append(f"{raw_date}: no duration_min was given, so {add_duration:g} minutes was used -- adjust it if that is wrong")
+            if not add_purpose:
+                first_line = next((ln.strip() for ln in str(add_structure or "").splitlines() if ln.strip()), "")
+                add_purpose = first_line[:120] or (str(raw_sport).strip() if isinstance(raw_sport, str) and raw_sport.strip() else "session")
+                notes.append(f"{raw_date}: no purpose was given, so {add_purpose!r} was used")
             add_structured_raw = override.get("structured")
             add_structured = None
             if add_structured_raw is not None:
-                try:
-                    add_structured = WorkoutStructure.model_validate(add_structured_raw)
-                except ValidationError as exc:
-                    return f"invalid session_overrides structured for {raw_date!r}: {exc}", notes
-            add_structure = override.get("structure")
+                add_structured, salvaged, structured_error = _coerce_structured(
+                    add_structured_raw, when=raw_date, prose_given=add_structure is not None, notes=notes
+                )
+                if structured_error:
+                    return structured_error, notes
+                if salvaged and add_structure is None:
+                    add_structure = salvaged
             if add_structure is None and add_structured is not None:
                 add_structure = render_prose(add_structured)
             add_intensity = override.get("intensity")
@@ -6012,10 +6236,16 @@ def _apply_session_overrides(
                 "`intensity` (e.g. {\"zone\": \"Z4\"}) in the same override so the session IS what its label says."
             )
         if structured is not None:
-            try:
-                session.structured = WorkoutStructure.model_validate(structured)
-            except ValidationError as exc:
-                return f"invalid session_overrides structured: {exc}", notes
+            coerced, salvaged, structured_error = _coerce_structured(
+                structured, when=raw_date, prose_given=structure is not None, notes=notes
+            )
+            if structured_error:
+                return structured_error, notes
+            if coerced is not None:
+                session.structured = coerced
+            elif salvaged:
+                session.structure = salvaged
+                session.structured = None
         if structure is not None:
             session.structure = structure
             if structured is None:
@@ -6387,7 +6617,7 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
     primary_sport = event.primary_sport
 
     try:
-        week = generate_week(
+        week = _generate_week_tolerant(
             athlete,
             macro,
             iso_week,
@@ -6765,7 +6995,7 @@ def _generate_candidate_week_for_merge(
     primary_sport = event.primary_sport
 
     try:
-        generated = generate_week(
+        generated = _generate_week_tolerant(
             athlete,
             macro,
             iso_week,
