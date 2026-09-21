@@ -72,11 +72,10 @@ def test_hard_bike_slot_purpose_overrides_the_text_but_keeps_the_structured_inte
     assert ride.structured is not None and ride.intensity.get("zone") not in (None, "Z2")
 
 
-def test_slot_purpose_must_be_a_reasonable_string() -> None:
-    with pytest.raises(ValidationError):
-        make_athlete(weekly_template={"mon": [{"kind": "yoga", "purpose": "x" * 400}]})
-    with pytest.raises(ValidationError):
-        make_athlete(weekly_template={"mon": [{"kind": "yoga", "purpose": 5}]})
+def test_an_unreasonable_purpose_is_fixed_up_with_a_note_not_rejected() -> None:
+    a = make_athlete(weekly_template={"mon": [{"kind": "yoga", "purpose": "x" * 4000}, {"kind": "yoga", "purpose": 5}]})
+    slots = a.weekly_template["mon"]
+    assert len(slots[0]["purpose"]) == 1500 and "purpose" not in slots[1]
 
 
 # --- generality: not one athlete's week --------------------------------------------

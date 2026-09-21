@@ -97,12 +97,8 @@ def test_clear_previews_without_confirm(athletes_dir) -> None:
         ({}, "template"),
         ({"confirm": True}, "template"),
         ({"template": "yoga"}, "template"),
-        ({"template": {"someday": [{"kind": "yoga"}]}}, "weekday"),
-        ({"template": {"mon": [{"kind": "swimming"}]}}, "kind"),
-        ({"template": {"mon": [{"kind": "bike"}]}}, "role"),
-        ({"template": {"mon": [{"kind": "yoga", "role": "hard"}]}}, "role"),
-        ({"template": {"mon": [{"kind": "yoga", "duration_min": 1}]}}, "duration"),
-        ({"template": {"mon": [{"kind": "yoga", "label": "x" * 100}]}}, "label"),
+        ({"template": {"someday": [{"kind": "yoga"}]}}, "weekday"),   # cannot be placed
+        ({"template": {"mon": [{"role": "hard"}]}}, "kind"),          # no kind
         ({"template": WEEK, "clear": True}, "either"),
     ],
 )
@@ -166,3 +162,37 @@ def test_tool_registered_and_persona_prefers_it_for_a_whole_week() -> None:
     assert "set_weekly_template" in next(
         t for t in TOOLS_SCHEMA if t["name"] == "set_schedule_preferences"
     )["description"]
+
+
+
+def test_unusual_slots_are_saved_with_warnings_never_refused(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    template = {
+        "mon": [{"kind": "swim", "duration_min": 45, "purpose": "technique"}],
+        "tue": [{"kind": "bike", "role": "tempo"}],
+        "wed": [{"kind": "yoga", "role": "hard", "duration_min": 2}],
+        "thu": [{"kind": "run", "label": "x" * 300}],
+    }
+
+    result = _run(store, {"template": template, "confirm": True})
+
+    assert result["persisted"] is True and "error" not in result
+    assert any("role ignored" in w for w in result["warnings"])
+    assert any("clamped" in w for w in result["warnings"])
+    assert any("truncated" in w for w in result["warnings"])
+    saved = store.load_athlete("renee").weekly_template
+    assert saved["tue"][0]["role"] == "hard" and saved["mon"][0]["kind"] == "swim"
+
+
+def test_a_saved_open_template_writes_a_week_including_swim_and_run(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    template = {"mon": [{"kind": "swim", "duration_min": 45}], "wed": [{"kind": "run", "duration_min": 40}],
+                "sat": [{"kind": "kettlebell", "structure": "KB EMOM 10 min"}]}
+    assert _run(store, {"template": template, "confirm": True})["persisted"] is True
+    from swim_coach.plan import _template_week_sessions
+    from datetime import date as _d
+
+    out = _template_week_sessions(store.load_athlete("renee"), _d(2026, 9, 21), 0.0, None)
+    assert sorted(s.sport for s in out) == ["cross_train", "strength", "swim_pool"]
+    assert next(s for s in out if s.sport == "strength").structure == "KB EMOM 10 min"

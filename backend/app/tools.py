@@ -198,6 +198,7 @@ from swim_coach.race_phases import (
 # without computing it twice.
 from swim_coach.models import (
     Athlete,
+    AthleteNote,
     Event,
     Feedback,
     MacroPlan,
@@ -216,6 +217,7 @@ from swim_coach.plan import (
     WEEKLY_VOLUME_RAMP_CAP,
     _bike_training_days,
     _template_week_sessions,
+    template_normalization_notes,
     _duration_min_for_distance,
     _monday_of_week,
     _monday_on_or_after,
@@ -891,6 +893,47 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "save_athlete_note",
+        "description": (
+            "Remember something durable the athlete told you, in their own words -- a preference, "
+            "dislike, equipment or availability fact, or how they like to be coached: 'I prefer "
+            "kettlebells to free weights', 'call me Bob', 'I own 3 bikes and ride flat pedals when "
+            "I teach skills', 'I can't train Thursday mornings'. Call it as soon as they say it -- no "
+            "confirmation needed -- then tell them plainly: 'Noted: ...'. ANY preference can be stored: "
+            "`text` is free text and `category` is an optional free label (e.g. equipment, "
+            "preferred_name, schedule, dislikes, teaching). The saved notes are shown to you every turn: "
+            "APPLY them when you plan (see the rules). If a preference changes, pass `replaces` with the "
+            "old note's id so the old one is retired, not contradicted. Saving the same note twice is "
+            "harmless."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "The preference or fact, in the athlete's own words."},
+                "category": {"type": "string", "description": "Optional free label, e.g. equipment, schedule."},
+                "replaces": {"type": "string", "description": "The id of an outdated note this supersedes."},
+            },
+            "required": ["text"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "retire_athlete_note",
+        "description": (
+            "Retire an outdated note when the athlete says a preference no longer holds (notes are "
+            "never deleted, only retired). Give the note's `id` (shown in the notes list) or a "
+            "distinctive `text_contains` fragment."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "text_contains": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "set_weekly_template",
         "description": (
             "Save the SHAPE of the athlete's training week -- which sessions go on which days "
@@ -901,11 +944,16 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "over set_schedule_preferences for anything beyond one standing ride, and NEVER "
             "hand-author session_overrides week after week to reproduce a pattern the athlete "
             "keeps asking for. `template`: {mon..sun: [slot, ...]} -- a day left out or [] is a "
-            "day OFF. A slot is {kind, role?, label?, duration_min?}: kind 'bike' needs role "
-            "'hard' (an interval ride; several per week are fine, each gets a different "
-            "interval type) or 'endurance' (a Z2 ride, e.g. a club group ride -- put its name in "
-            "`label`); kind 'skills' (cyclocross skills), 'strength' (put it AFTER the hard "
-            "ride in the day's list to say 'after the intervals'), 'yoga', 'recovery'. "
+            "day OFF. A slot is {kind, role?, label?, duration_min?, purpose?, structure?}: kind "
+            "'bike' with role 'hard' (an interval ride; several per week are fine, each gets a "
+            "different interval type) or 'endurance' (a Z2 ride, e.g. a club group ride -- put its "
+            "name in `label`); 'skills' (cyclocross skills), 'strength' (put it AFTER the hard "
+            "ride in the day's list to say 'after the intervals'), 'yoga', 'recovery' -- and ANY "
+            "other kind (swim, run, row, hike, core, kettlebell ...): it is accepted and written "
+            "as described, never refused. Put the athlete's own words in `purpose` (short) and "
+            "`structure` (full instructions) so their content is used as written. Anything "
+            "unusual (an unrecognised role, over-long text, an out-of-range duration) is fixed up "
+            "and reported in `warnings`, not rejected. "
             "`clear: true` removes the template. ALWAYS call it WITHOUT `confirm` first, read "
             "the returned `week` grid and any `warnings` back to the athlete, and only call again "
             "with `confirm: true` after they agree in a new message. It does not change weeks "
@@ -925,10 +973,35 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                         "items": {
                             "type": "object",
                             "properties": {
-                                "kind": {"type": "string", "enum": ["bike", "skills", "strength", "yoga", "recovery"]},
-                                "role": {"type": "string", "enum": ["hard", "endurance"], "description": "bike slots only"},
+                                "kind": {
+                                    "type": "string",
+                                    "description": (
+                                        "ANY kind of session. The engine has its own content for bike, skills, "
+                                        "strength, yoga and recovery; anything else (swim, run, row, hike, core, "
+                                        "kettlebell ...) is written exactly as you describe it -- nothing is refused."
+                                    ),
+                                },
+                                "role": {
+                                    "type": "string",
+                                    "description": (
+                                        "bike slots only: hard (intervals/tempo/threshold/vo2) or endurance "
+                                        "(easy/long/group). Anything unrecognised becomes endurance, with a note."
+                                    ),
+                                },
+                                "sport": {
+                                    "type": "string",
+                                    "description": "optional: swim_pool, swim_ow, strength, recovery, cross_train or bike",
+                                },
+                                "distance_m": {"type": "number", "description": "optional distance in metres"},
+                                "structure": {
+                                    "type": "string",
+                                    "description": (
+                                        "the athlete's own full session instructions (e.g. a kettlebell EMOM), "
+                                        "written verbatim; max 6000 chars"
+                                    ),
+                                },
                                 "label": {"type": "string", "description": "e.g. 'Heinous club ride'"},
-                                "duration_min": {"type": "number", "description": "optional override, 5-300"},
+                                "duration_min": {"type": "number", "description": "optional override in minutes (5-900)"},
                                 "purpose": {
                                     "type": "string",
                                     "description": "the athlete's own description of this session (e.g. 'Kettlebell EMOM 10 min'), "
@@ -3483,7 +3556,7 @@ def _handle_set_weekly_template(
                     ),
                     "days_off": [d for d in _TEMPLATE_DAY_ORDER if not grid[d]],
                 },
-                "warnings": evaluate_week_realism(nominal),
+                "warnings": evaluate_week_realism(nominal) + template_normalization_notes(candidate.weekly_template),
                 "applies_to": (
                     "build and base weeks. Taper weeks and race weeks use the engine's own placement "
                     "instead and say so in the week's warnings. Bike minutes still come from the "
@@ -3515,6 +3588,84 @@ def _handle_set_weekly_template(
     result["verified"] = reloaded.weekly_template == candidate.weekly_template
     log.info("weekly template set", athlete=slug, cleared=clear, verified=result["verified"])
     return result
+
+
+_NOTE_MAX_CHARS = 1000
+_NOTE_CATEGORY_MAX_CHARS = 40
+_NOTES_MANY_THRESHOLD = 40
+
+
+def _handle_save_athlete_note(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    """Remember a durable preference or fact, in the athlete's own words. Free text, free
+    category -- nothing here is a fixed vocabulary, so any preference can be stored. Saving
+    the same note again is a no-op; `replaces` retires an outdated note (never deletes).
+    Flag-don't-block: over-long text is truncated and a large pile of notes only warns."""
+    text = input_data.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return {"error": "text is required: the preference or fact, in the athlete's own words"}
+    warnings: list[str] = []
+    text = text.strip()
+    if len(text) > _NOTE_MAX_CHARS:
+        text = text[:_NOTE_MAX_CHARS]
+        warnings.append(f"text truncated to {_NOTE_MAX_CHARS} characters")
+    category = input_data.get("category")
+    category = category.strip()[:_NOTE_CATEGORY_MAX_CHARS] if isinstance(category, str) and category.strip() else None
+
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load athlete profile: {exc}"}
+
+    existing = next((n for n in athlete.notes if n.active and n.text.strip().lower() == text.lower()), None)
+    if existing is not None:
+        return {"saved": True, "already_saved": True, "id": str(existing.id), "text": existing.text,
+                "active_notes": sum(1 for n in athlete.notes if n.active), "warnings": warnings}
+
+    replaces = input_data.get("replaces")
+    if replaces:
+        old = next((n for n in athlete.notes if str(n.id) == str(replaces)), None)
+        if old is None:
+            warnings.append(f"replaces {replaces!r} matched no note, so nothing was retired")
+        else:
+            old.active = False
+
+    note = AthleteNote(id=uuid.uuid4(), text=text, category=category, created=athlete_today(athlete))
+    athlete.notes.append(note)
+    store.save_athlete(athlete)
+    active = sum(1 for n in athlete.notes if n.active)
+    if active > _NOTES_MANY_THRESHOLD:
+        warnings.append(f"{active} active notes: consider retiring ones that are out of date")
+    # ids and category only -- the text is the athlete's personal information and is never logged
+    log.info("athlete note saved", athlete=slug, note_id=str(note.id), category=category, active_notes=active)
+    return {"saved": True, "id": str(note.id), "text": note.text, "category": category,
+            "active_notes": active, "warnings": warnings}
+
+
+def _handle_retire_athlete_note(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    """Retire (never delete) an outdated note, by `id` or by a distinctive fragment of its text."""
+    note_id = input_data.get("id")
+    fragment = input_data.get("text_contains")
+    if not note_id and not (isinstance(fragment, str) and fragment.strip()):
+        return {"error": "give the note's `id` or a distinctive `text_contains` fragment"}
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load athlete profile: {exc}"}
+    active = [n for n in athlete.notes if n.active]
+    if note_id:
+        matches = [n for n in active if str(n.id) == str(note_id)]
+    else:
+        matches = [n for n in active if fragment.strip().lower() in n.text.lower()]
+    listing = [{"id": str(n.id), "text": n.text} for n in (matches or active)]
+    if not matches:
+        return {"error": "no active note matches that", "candidates": listing}
+    if len(matches) > 1:
+        return {"error": "more than one note matches -- retire by `id`", "candidates": listing}
+    matches[0].active = False
+    store.save_athlete(athlete)
+    log.info("athlete note retired", athlete=slug, note_id=str(matches[0].id))
+    return {"retired": True, "id": str(matches[0].id), "text": matches[0].text,
+            "active_notes": sum(1 for n in athlete.notes if n.active)}
 
 
 def _summarize_workout(w: Workout, *, athlete: Athlete, hr_max: float | None, wellness: list[Any]) -> dict[str, Any]:
@@ -7768,6 +7919,12 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "update_athlete_profile": lambda input_data: _handle_update_athlete_profile(
+            input_data, store=store, slug=slug
+        ),
+        "save_athlete_note": lambda input_data: _handle_save_athlete_note(
+            input_data, store=store, slug=slug
+        ),
+        "retire_athlete_note": lambda input_data: _handle_retire_athlete_note(
             input_data, store=store, slug=slug
         ),
         "set_weekly_template": lambda input_data: _handle_set_weekly_template(

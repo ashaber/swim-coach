@@ -184,13 +184,8 @@ def test_race_week_does_not_apply_the_template_and_warns() -> None:
 @pytest.mark.parametrize(
     "template",
     [
-        {"someday": [{"kind": "bike", "role": "hard"}]},
-        {"mon": [{"kind": "swimming"}]},
-        {"mon": [{"kind": "bike"}]},                              # bike needs a role
-        {"mon": [{"kind": "yoga", "role": "hard"}]},              # role only for bike
-        {"mon": [{"kind": "bike", "role": "medium"}]},
-        {"mon": [{"kind": "yoga", "label": "x" * 200}]},
-        {"mon": [{"kind": "yoga", "duration_min": 2}]},
+        {"someday": [{"kind": "bike", "role": "hard"}]},   # not a weekday: cannot be placed
+        {"mon": [{"role": "hard"}]},                        # a slot with no kind
         {"mon": "yoga"},
     ],
 )

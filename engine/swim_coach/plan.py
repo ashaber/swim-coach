@@ -25,7 +25,7 @@ from __future__ import annotations
 import math
 import warnings
 from datetime import date, timedelta
-from typing import Callable, Literal
+from typing import Any, Callable, Literal
 from uuid import UUID, uuid4
 
 from swim_coach.models import (
@@ -3405,6 +3405,31 @@ def _template_default_minutes(athlete: Athlete) -> float:
     return total
 
 
+def template_normalization_notes(template: dict[str, list[dict]] | None) -> list[str]:
+    """Every note the model attached while normalizing a weekly template (an unrecognised
+    role treated as endurance, text truncated, a duration clamped ...), prefixed with its day.
+    Empty for a clean template. Surfaced to the coach when a template is saved -- a template
+    is never rejected for these, only annotated."""
+    return [
+        f"{day}: {slot['_note']}"
+        for day, slots in (template or {}).items()
+        for slot in slots
+        if slot.get("_note")
+    ]
+
+
+def _generic_slot_sport(kind: str, slot: dict) -> str:
+    """Session sport for a template slot the engine has no content for (swim, run, row, hike ...):
+    the slot's own `sport` if it gave a valid one, else a sensible guess from the kind."""
+    if slot.get("sport"):
+        return slot["sport"]
+    if "open water" in kind or kind in ("swim_ow", "ow swim", "ow"):
+        return "swim_ow"
+    if "swim" in kind:
+        return "swim_pool"
+    return "cross_train"
+
+
 def _template_slots(athlete: Athlete) -> list[tuple[int, int, dict]]:
     """`(day_offset, order_in_day, slot)` for every slot of the athlete's
     `weekly_template`, in week then in-day order."""
@@ -3481,6 +3506,10 @@ def _template_week_sessions(
                 if is_hard
                 else _bike_session_structure(zone, duration, ftp_watts)
             )
+            prose = render_prose(structured)
+            if slot.get("structure"):
+                # the athlete's own description wins; drop the engine's IR so the two never disagree
+                prose, structured = slot["structure"], None
             sessions.append(
                 Session(
                     id=uuid4(),
@@ -3492,7 +3521,7 @@ def _template_week_sessions(
                     distance_m=None,
                     intensity=_bike_intensity(zone, ftp_watts),
                     purpose=purpose,
-                    structure=render_prose(structured),
+                    structure=prose,
                     structured=structured,
                     status="planned",
                     is_indoor=is_indoor,
@@ -3507,6 +3536,8 @@ def _template_week_sessions(
                 skills = skills.model_copy(update={"purpose": slot["purpose"]})
             elif label:
                 skills = skills.model_copy(update={"purpose": f"{label} — {skills.purpose}"})
+            if slot.get("structure"):
+                skills = skills.model_copy(update={"structure": slot["structure"], "structured": None})
             sessions.append(skills)
         elif kind == "strength":
             strength = _strength_sessions(athlete, week_start, [offset])[0]
@@ -3514,7 +3545,29 @@ def _template_week_sessions(
             if offset in hard_dates and hard_dates[offset] < order:
                 note = " — done after the interval session (same day)"
             base = slot.get("purpose") or (f"{label} — {strength.purpose}" if label else strength.purpose)
-            sessions.append(strength.model_copy(update={"purpose": base + note}))
+            update: dict[str, Any] = {"purpose": base + note}
+            if slot.get("structure"):
+                update.update({"structure": slot["structure"], "structured": None})
+            sessions.append(strength.model_copy(update=update))
+        elif kind not in ("yoga", "recovery"):
+            # Anything the engine has no content for (swim, run, row, hike, core ...): written
+            # exactly as the athlete described it -- the engine never blocks a session it does
+            # not know how to author.
+            sessions.append(
+                Session(
+                    id=uuid4(),
+                    athlete_id=athlete.id,
+                    date=day,
+                    sport=_generic_slot_sport(kind, slot),
+                    source="ai_coach",
+                    duration_min=float(slot.get("duration_min") or 45.0),
+                    distance_m=slot.get("distance_m"),
+                    intensity={"anchor": "rpe"},
+                    purpose=slot.get("purpose") or (f"{label} — {kind}" if label else kind),
+                    structure=slot.get("structure"),
+                    status="planned",
+                )
+            )
         else:  # yoga / recovery
             name = label or ("yoga" if kind == "yoga" else "recovery")
             purpose_text = slot.get("purpose") or f"{name} — mobility & recovery"
@@ -3529,6 +3582,7 @@ def _template_week_sessions(
                     distance_m=None,
                     intensity={"anchor": "rpe"},
                     purpose=purpose_text,
+                    structure=slot.get("structure"),
                     status="planned",
                 )
             )
