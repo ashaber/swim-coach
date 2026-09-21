@@ -1053,6 +1053,56 @@ client only keeps text. Server-side (DB/engine) result caching is a LATENCY
 question, not a token one; if ever needed, TTL cache keyed on the athlete's
 latest `updated_at`, not hand-written invalidation.
 
+**Build status (2026-09-20 night, unattended build; nothing merged, nothing
+deployed beyond #209):**
+
+| Step | PR | Notes |
+|---|---|---|
+| 1 instrument | #211 | log-only `claude request sizes` line |
+| 2 loop breakpoint | #212 (stacked on #211) | never exceeds 4 breakpoints |
+| 3 reference_list -> block A | #213 | THE big finding, see below |
+| 4 routed library in message | #214 (stacked on #213) | flag `COACH_ROUTED_LIBRARY_IN_MESSAGE`, default OFF |
+| 5 light mode | #215 (stacked on #214) | flag `COACH_LIGHT_MODE`, default OFF |
+| 7 tool schema diet | NOT BUILT | see verdict below |
+
+**Merge order: #211 -> #212 -> #213 -> #214 -> #215** (#210 docs any time).
+All five together were merged on a scratch branch and the full suite passed
+(2867). Steps 1-3 are behaviour-neutral (log line / cache breakpoints / same
+prompt text in the same order). Steps 4 and 5 change what the model sees and
+are OFF until enabled on Cloud Run -- spot-check answers before leaving them on.
+
+**Finding that changed the plan (step 3):** `library/reference_list.md` is
+~35k tokens and was bundled into system block B with the message-routed topic
+files (2-10k). B's text changes with each message's topic and a miss rewrites
+the whole block, so ~35k tokens of never-changing text were re-written at
+1.25x on nearly every turn -- the audit's ~42k average cache write per turn is
+almost exactly B's size. Moving it into stable block A fixed most of the
+writes with zero prompt change. **Second-order finding (step 4):** system
+blocks sit BEFORE history in the prefix, so ANY topic-dependent system block
+invalidates the whole conversation cache behind it; only moving the routed
+files onto the newest message removes that.
+
+**Step 7 verdict -- deprioritized, not built.** Tools are already cached (read
+at ~10%). Tools never called in the 7-day window total ~8k tokens across 13,
+but several are safety/always-needed (`record_health_status`,
+`propose_adaptation`); realistically ~5k tokens are deferrable, i.e. ~0.5k
+token-equivalents per warm turn. Anthropic tool search (`defer_loading`) is
+available on the first-party API but changes the response blocks our loop
+replays (server tool blocks + `model_dump(exclude_none)`), which can't be
+verified offline. Trimming the three plan-edit tools' descriptions is
+risky -- those descriptions encode rules from real incidents and this is
+where the retry-heavy failures live. Revisit only if the size log (#211)
+shows tools dominating.
+
+**Deferred: the "stable/volatile context split"** (profile/zones/events/macro
+in a cached block ahead of history). Its value depends on the stable part's
+size, which is still unmeasured -- read `claude request sizes`.`context_chars`
+after #211 deploys before deciding.
+
+**Verify after deploying** (each PR body has its own): `claude turn complete`
+-- `cache_creation_input_tokens` per iteration-0 turn should fall from ~76k
+avg; iteration >= 1 turns should show the context in `cache_read_input_tokens`.
+
 ---
 
 ## IDEA 023 - Athlete notes: durable, structured facts the coach remembers
