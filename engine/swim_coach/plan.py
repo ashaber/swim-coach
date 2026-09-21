@@ -938,6 +938,63 @@ def _training_day_offsets(athlete: Athlete, key: str) -> list[int] | None:
     return [_pool_day_offset(entry) for entry in entries]
 
 
+def _farthest_free_day(occupied: set[int]) -> int:
+    """The weekday offset (0=Mon) not in `occupied` that is farthest, by
+    circular distance around the 7-day week, from every occupied day; ties go
+    to the earliest offset. Used to place a hard day away from standing
+    endurance days (Wed + Sun -> Fri: two days clear of each)."""
+    free = [d for d in range(7) if d not in occupied]
+    if not occupied or not free:
+        return free[0] if free else 0
+
+    def spacing(day: int) -> int:
+        return min(min(abs(day - o), 7 - abs(day - o)) for o in occupied)
+
+    return max(free, key=lambda d: (spacing(d), -d))
+
+
+def _bike_training_days(athlete: Athlete) -> tuple[list[int] | None, dict[int, str]]:
+    """`(day_offsets, labels)` for the athlete's bike `training_days`, role-
+    aware (IDEA 023 phase 1). `day_offsets` is in the order `_bike_week_
+    sessions` expects -- FIRST is the hard/interval day, the rest Z2 endurance:
+
+      - no entry carries a `role`: the declared order, unchanged (every
+        existing athlete);
+      - otherwise `role: "hard"` entries, then un-roled entries, then
+        `role: "endurance"` entries; when there is no hard or un-roled entry at
+        all (e.g. only standing endurance rides), a hard day is ADDED on the
+        free weekday farthest from the endurance days.
+
+    `labels` maps offset -> the entry's `label` (a standing club ride's name).
+    `(None, {})` when there is no bike pattern. Raises `ValueError` on an
+    unrecognized weekday, like `_training_day_offsets`. Callers apply this in
+    build/base weeks only -- taper and race weeks ignore roles and labels.
+    """
+    entries = (getattr(athlete, "training_days", None) or {}).get("bike")
+    if not entries:
+        return None, {}
+    parsed = [
+        (
+            _pool_day_offset(e),
+            e.get("role") if isinstance(e, dict) else None,
+            e.get("label") if isinstance(e, dict) else None,
+        )
+        for e in entries
+    ]
+    labels = {offset: label for offset, _, label in parsed if label}
+    if not any(role for _, role, _ in parsed):
+        return [offset for offset, _, _ in parsed], labels
+    lead = [o for o, r, _ in parsed if r == "hard"] + [o for o, r, _ in parsed if r is None]
+    endurance = [o for o, r, _ in parsed if r == "endurance"]
+    if not lead:
+        lead = [_farthest_free_day(set(endurance))]
+    ordered: list[int] = []
+    for offset in lead + endurance:
+        if offset not in ordered:
+            ordered.append(offset)
+    return ordered, labels
+
+
 def _round_100(value: float) -> int:
     return int(round(value / 100)) * 100
 
@@ -3161,6 +3218,7 @@ def _bike_week_sessions(
     ftp_source: str | None = None,
     bike_day_offsets: list[int] | None = None,
     use_openers: bool = False,
+    bike_day_labels: dict[int, str] | None = None,
 ) -> list[Session]:
     """Generate up to `BIKE_SESSIONS_PER_WEEK` generic cycling sessions
     splitting `total_duration_min` across a small weekly cadence:
@@ -3270,10 +3328,15 @@ def _bike_week_sessions(
         duration = total_duration_min if n == 1 else (hard_min if is_hard else easy_min)
         zone = template_meta["zone"] if is_hard else "Z2"
         intensity = _bike_intensity(zone, ftp_watts)
+        label = (bike_day_labels or {}).get(offset)
         purpose = (
             template_meta["purpose"]
             if is_hard
-            else "endurance ride (Z2) — aerobic base"
+            else (
+                f"{label} — endurance ride (Z2), aerobic base"
+                if label
+                else "endurance ride (Z2) — aerobic base"
+            )
         )
         if (
             is_hard
@@ -3394,6 +3457,7 @@ def _strength_offsets_after_hard(
     count: int,
     *,
     strength_day_offsets: list[int] | None = None,
+    same_day_as_hard: bool = False,
 ) -> list[int]:
     """Monday-relative day offsets for `count` strength sessions, obeying
     Andrew's rule (Build A defect 4): strength is ALWAYS scheduled AFTER the
@@ -3409,6 +3473,13 @@ def _strength_offsets_after_hard(
     Without a pattern this reduces to "the earliest free days on or after
     the hard day", which for the default even-spaced week (hard on Monday)
     yields the same offsets `_pick_days` used to.
+
+    `same_day_as_hard` (IDEA 023 -- `Athlete.strength_placement ==
+    "same_day_as_hard"`): the FIRST strength slot is the hard day itself
+    (after the intervals -- one hard day instead of two), provided that day
+    passes the same never-the-day-before-a-hard/race-day rule; any further
+    slots follow the normal rules above. Default False is byte-for-byte the
+    old behavior.
     """
     used = {(s.date - week_start).days for s in bike_sessions}
     protected = sorted(
@@ -3423,6 +3494,10 @@ def _strength_offsets_after_hard(
         return o >= earliest_hard and o not in day_before_protected
 
     chosen: list[int] = []
+    if same_day_as_hard and protected and count > 0 and ok(earliest_hard):
+        chosen.append(earliest_hard)
+        if len(chosen) == count:
+            return chosen
     if strength_day_offsets:
         for o in strength_day_offsets:
             if o not in chosen and ok(o):
@@ -3578,6 +3653,8 @@ def _bike_week_sessions_with_strength(
     strength_day_offsets: list[int] | None = None,
     use_openers: bool = False,
     strength_count: int = STRENGTH_SESSIONS_PER_WEEK,
+    bike_day_labels: dict[int, str] | None = None,
+    same_day_strength: bool = False,
 ) -> list[Session]:
     """`_bike_week_sessions`'s output plus `strength_count` strength
     sessions placed AFTER the week's hard/interval session
@@ -3615,14 +3692,25 @@ def _bike_week_sessions_with_strength(
         ftp_source=ftp_source,
         bike_day_offsets=bike_day_offsets,
         use_openers=use_openers,
+        bike_day_labels=bike_day_labels,
     )
     strength_offsets = _strength_offsets_after_hard(
         bike_sessions,
         week_start,
         strength_count,
         strength_day_offsets=strength_day_offsets,
+        same_day_as_hard=same_day_strength,
     )
-    return bike_sessions + _strength_sessions(athlete, week_start, strength_offsets)
+    strength_sessions = _strength_sessions(athlete, week_start, strength_offsets)
+    if same_day_strength:
+        hard_dates = {s.date for s in bike_sessions if _session_is_hard_bike(s)}
+        strength_sessions = [
+            s.model_copy(update={"purpose": f"{s.purpose} — done after the interval session (same day)"})
+            if s.date in hard_dates
+            else s
+            for s in strength_sessions
+        ]
+    return bike_sessions + strength_sessions
 
 
 def _bike_final_taper_sessions(
@@ -4712,6 +4800,14 @@ def generate_week(
             block.name == "taper"
             or (race_within_days is not None and race_within_days <= BIKE_OPENERS_PROXIMITY_DAYS)
         )
+        # IDEA 023: role-aware bike days + standing-ride labels, BUILD/BASE
+        # weeks only. A taper (`use_openers`) or a race week yields -- the
+        # taper/race placement wins, standing commitments do not claim days.
+        bike_day_labels: dict[int, str] = {}
+        if not use_openers and not in_week_race_dates:
+            bike_day_offsets, bike_day_labels = _bike_training_days(athlete)
+        same_day_strength = athlete.strength_placement == "same_day_as_hard"
+
         if use_openers and not is_deload_week:
             # Bosquet (2007) / Mujika & Padilla (2003): keep intensity (the
             # openers), slash volume. Applied on top of whatever the block
@@ -4901,6 +4997,8 @@ def generate_week(
                 strength_day_offsets=strength_day_offsets,
                 use_openers=use_openers,
                 strength_count=effective_strength_count,
+                bike_day_labels=bike_day_labels,
+                same_day_strength=same_day_strength,
             )
             bike_sessions, strength_prerace_reduced = _filter_strength_prerace_window(
                 bike_sessions_with_strength, week_start, in_week_race_offsets, race_within_days
