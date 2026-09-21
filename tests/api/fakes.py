@@ -248,3 +248,12 @@ def fake_google_verify(raw_token: str) -> dict:
 def google_token_for(email: str) -> str:
     """The id_token string the fake verifier above accepts for `email`."""
     return f"valid:{email}"
+
+
+def message_text(content) -> str:
+    """Plain text of a message's content as sent to the Anthropic client --
+    a string, or a list of blocks (the newest message and the end of history
+    carry cache breakpoints, so they arrive as text blocks)."""
+    if isinstance(content, str):
+        return content
+    return "".join(b.get("text", "") for b in content if isinstance(b, dict))
