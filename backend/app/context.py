@@ -6,7 +6,9 @@ build's task spec):
   System block A (cacheable, stable per athlete sport-scope): coach persona
     + hard rules (grounding/citation/safety, adapted from
     `.claude/skills/coach/SKILL.md`) + full text of
-    `library/00-conventions.md` + `library/INDEX.md`, with INDEX.md's own
+    `library/00-conventions.md` + `library/INDEX.md` + `library/reference_list.md`
+    (the ~35k-token bibliography: never message-dependent, so it lives in the
+    STABLE block -- see `build_system_blocks`), with INDEX.md's own
     sport-scoped spans (today, only the cycling file's row + its topic-
     routing rows -- see `_filter_scoped_index_sections`) stripped out unless
     the requesting athlete's effective sport scope covers them. No
@@ -17,11 +19,8 @@ build's task spec):
     for a given athlete's own fixed sport scope, just no longer literally
     argument-free.
 
-  System block B (cacheable): `library/reference_list.md` (INDEX.md's own
-    rule: "always load reference_list.md alongside for citations", so it's
-    treated as a routing constant, not a routed file) plus 1-3 topic files
-    selected by deterministic keyword-bucket routing against INDEX.md's
-    routing table. Same message (or any message landing in the same
+  System block B (cacheable): 1-3 topic files selected by deterministic
+    keyword-bucket routing against INDEX.md's routing table. Same message (or any message landing in the same
     keyword bucket) always produces byte-identical block B text, so common
     topics share a cache entry.
 
