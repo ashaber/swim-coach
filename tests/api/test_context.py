@@ -124,10 +124,11 @@ def test_system_block_a_preserves_safety_and_grounding_invariants(library_dir) -
     # Rule 4: never hand-compute, never exceed engine caps.
     assert "Never hand-compute zones, loads, or volumes" in text
     assert "ramp-cap" in text
-    # Rule 5: read-only, propose_adaptation, never persist.
-    assert "Read-only by default" in text
+    # Rule 5 (revised 2026-09-21, Andrew): no silent changes AND no hand-offs -- show a draft,
+    # and once the athlete agrees the coach WRITES it; it may never say it cannot.
+    assert "No silent changes, and no hand-offs" in text
     assert "propose_adaptation" in text
-    assert "you never persist a plan change" in text
+    assert "you never persist a plan change" not in text
 
 
 def test_system_block_a_instructs_recheck_of_race_dates_before_labelling_sessions(

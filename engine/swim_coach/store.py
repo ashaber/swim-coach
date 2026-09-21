@@ -85,6 +85,25 @@ class StoreInterface(ABC):
     @abstractmethod
     def save_week(self, slug: str, week: WeekPlan) -> None: ...
 
+    def save_week_draft(self, slug: str, week: WeekPlan) -> None:
+        """Hold a PROPOSED week (not yet agreed/written) so `confirm` can write
+        exactly what was shown, never a regeneration. Stored under a hidden key:
+        never listed by `list_week_ids`, never returned by `load_week`. Not
+        abstract so a store that cannot hold drafts degrades to the old
+        regenerate-on-confirm behaviour instead of breaking."""
+        raise NotImplementedError
+
+    def load_week_draft(self, slug: str, iso_week: str, draft_id: str | None = None) -> WeekPlan | None:
+        """The draft saved for `iso_week` -- the specific `draft_id` when given,
+        else the most recently saved one. `None` when there is none."""
+        raise NotImplementedError
+
+    def list_week_drafts(self, slug: str) -> list[WeekPlan]:
+        """The LATEST held draft for each week/key that has one (a coach's per-turn
+        view of what is waiting for the athlete's yes). `[]` by default so a store
+        that cannot hold drafts simply reports none."""
+        return []
+
     @abstractmethod
     def list_week_ids(self, slug: str) -> list[str]:
         """Every ISO-week id (e.g. "2026-W28") this athlete has a week plan
@@ -472,13 +491,36 @@ class FileStore(StoreInterface):
         path = self._athlete_dir(slug) / "plan" / "weeks" / f"{week.iso_week}.yaml"
         _write_yaml(path, _dump_model(week))
 
+    def save_week_draft(self, slug: str, week: WeekPlan) -> None:
+        weeks_dir = self._athlete_dir(slug) / "plan" / "weeks"
+        data = _dump_model(week)
+        _write_yaml(weeks_dir / f"{week.iso_week}.draft.{week.id}.yaml", data)
+        _write_yaml(weeks_dir / f"{week.iso_week}.draft.yaml", data)  # "latest" pointer
+
+    def load_week_draft(self, slug: str, iso_week: str, draft_id: str | None = None) -> WeekPlan | None:
+        name = f"{iso_week}.draft.{draft_id}.yaml" if draft_id else f"{iso_week}.draft.yaml"
+        data = _read_yaml(self._athlete_dir(slug) / "plan" / "weeks" / name)
+        return WeekPlan.model_validate(data) if data is not None else None
+
+    def list_week_drafts(self, slug: str) -> list[WeekPlan]:
+        weeks_dir = self._athlete_dir(slug) / "plan" / "weeks"
+        if not weeks_dir.exists():
+            return []
+        drafts = []
+        for path in sorted(weeks_dir.glob("*.draft.yaml")):  # the "latest" pointers only
+            data = _read_yaml(path)
+            if data is not None:
+                drafts.append(WeekPlan.model_validate(data))
+        return drafts
+
     def list_week_ids(self, slug: str) -> list[str]:
         weeks_dir = self._athlete_dir(slug) / "plan" / "weeks"
         if not weeks_dir.exists():
             return []
         # Filename stem is the iso_week ("2026-W28.yaml" -> "2026-W28"); the
         # "YYYY-Wnn" format sorts lexicographically into chronological order.
-        return sorted(path.stem for path in weeks_dir.glob("*.yaml"))
+        # Drafts ("2026-W28.draft.<id>.yaml") are held aside and never listed.
+        return sorted(path.stem for path in weeks_dir.glob("*.yaml") if ".draft" not in path.stem)
 
     # --- Workouts ------------------------------------------------------------
 

@@ -165,6 +165,7 @@ unsafe direction.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import tempfile
 import uuid
@@ -197,8 +198,10 @@ from swim_coach.race_phases import (
 # without computing it twice.
 from swim_coach.models import (
     Athlete,
+    AthleteNote,
     Event,
     Feedback,
+    MacroPlan,
     HealthStatus,
     Session,
     ThresholdRecord,
@@ -213,6 +216,8 @@ from swim_coach.plan import (
     SHARPENING_MIN_MACRO_WEEKS,
     WEEKLY_VOLUME_RAMP_CAP,
     _bike_training_days,
+    _template_week_sessions,
+    template_normalization_notes,
     _duration_min_for_distance,
     _monday_of_week,
     _monday_on_or_after,
@@ -241,6 +246,7 @@ from app.context import (
     iso_week_str,
     summarize_rollup,
 )
+from app.drafts import MACRO_CARRIER_WEEK, TAPER_CARRIER_WEEK, draft_is_stale
 from app.garmin_push import push_on_demand
 from app.health_status_helpers import link_health_status_feedback
 from app.load_helpers import workout_load_au
@@ -396,10 +402,12 @@ SESSION_OVERRIDES_SCHEMA: dict[str, Any] = {
             "intensity": {
                 "type": "object",
                 "description": (
-                    "add mode only: the new session's intensity dict "
-                    "(e.g. {\"zone\": \"Z4\"} for a hard bike session, "
-                    "{\"anchor\": \"rpe\"} for effort-based). Defaults to "
-                    "{\"zone\": \"Z2\"} for bike, {\"anchor\": \"rpe\"} otherwise."
+                    "The session's intensity dict (e.g. {\"zone\": \"Z4\"} for a hard bike "
+                    "session, {\"anchor\": \"rpe\"} for effort-based). In add mode it defaults to "
+                    "{\"zone\": \"Z2\"} for bike, {\"anchor\": \"rpe\"} otherwise. In MODIFY mode it "
+                    "merges into the existing intensity -- REQUIRED, together with `purpose`, when you "
+                    "turn an endurance ride into intervals, otherwise the label says intervals while "
+                    "the zone tag (which realism checks read) still says Z2."
                 ),
             },
             "sport": {
@@ -407,7 +415,9 @@ SESSION_OVERRIDES_SCHEMA: dict[str, Any] = {
                 "description": (
                     "Disambiguates when more than one session falls on "
                     "`date`. Omit if only one session that day. REQUIRED "
-                    "with `add: true`."
+                    "with `add: true`. Use the athlete's own word -- kettlebell, yoga, run, hike, "
+                    "swim, cycling ... -- and it is saved as the closest plan sport (an unknown "
+                    "one becomes cross_train); never refuse because a sport has no exact match."
                 ),
             },
             "distance_m": {
@@ -787,7 +797,8 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
         "description": (
             "Directly set one or more low-risk athlete-profile fields: "
             "ftp_watts, lthr_bpm, css_pace_s_per_100m, carb_tolerance_g_per_hr, "
-            "or sports. This is "
+            "or sports. Anything ELSE the athlete tells you (a preferred name, an equipment or style "
+            "preference ...) is saved as a durable note automatically -- never refused. This is "
             "the tool that actually changes what zones.py/load.py resolve "
             "this athlete's zones/load from -- call it AFTER you've judged "
             "(from record_threshold_test's logged history, or from what the "
@@ -857,7 +868,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "(strength right after the intervals, same day) | 'after_hard' (default rule) | "
             "null to clear. ALWAYS call it WITHOUT `confirm` first, read the resolved "
             "layout back to the athlete, and only call again with `confirm: true` after they "
-            "agree -- it changes every future week. Standing rides apply to build/base "
+            "agree -- it changes every future week. For a whole week's shape (several hard days, yoga, skills, days off) use set_weekly_template instead. Standing rides apply to build/base "
             "weeks only: taper and race weeks ignore them, and volume/ramp-cap limits are "
             "never overridden. The response says what was actually stored."
         ),
@@ -879,6 +890,133 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
                 "hard_day": {"type": "string", "description": "The interval/hard bike day: mon..sun."},
                 "strength_placement": {"type": ["string", "null"], "enum": ["after_hard", "same_day_as_hard", None]},
+                "confirm": {"type": "boolean", "description": "true = persist; omit for a preview."},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "save_athlete_note",
+        "description": (
+            "Remember something durable the athlete told you, in their own words -- a preference, "
+            "dislike, equipment or availability fact, or how they like to be coached: 'I prefer "
+            "kettlebells to free weights', 'call me Bob', 'I own 3 bikes and ride flat pedals when "
+            "I teach skills', 'I can't train Thursday mornings'. Call it as soon as they say it -- no "
+            "confirmation needed -- then tell them plainly: 'Noted: ...'. ANY preference can be stored: "
+            "`text` is free text and `category` is an optional free label (e.g. equipment, "
+            "preferred_name, schedule, dislikes, teaching). The saved notes are shown to you every turn: "
+            "APPLY them when you plan (see the rules). If a preference changes, pass `replaces` with the "
+            "old note's id so the old one is retired, not contradicted. Saving the same note twice is "
+            "harmless."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "The preference or fact, in the athlete's own words."},
+                "category": {"type": "string", "description": "Optional free label, e.g. equipment, schedule."},
+                "replaces": {"type": "string", "description": "The id of an outdated note this supersedes."},
+            },
+            "required": ["text"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "retire_athlete_note",
+        "description": (
+            "Retire an outdated note when the athlete says a preference no longer holds (notes are "
+            "never deleted, only retired). Give the note's `id` (shown in the notes list) or a "
+            "distinctive `text_contains` fragment."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "text_contains": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "set_weekly_template",
+        "description": (
+            "Save the SHAPE of the athlete's training week -- which sessions go on which days "
+            "-- so the week generator builds every future build/base week from it. Use it "
+            "whenever the athlete describes a whole week or a repeating pattern: 'Monday CX "
+            "skills and yoga, Tuesday intervals then strength, Wednesday group ride, Thursday "
+            "off, Friday yoga, Saturday intervals and strength, Sunday group ride'. Prefer it "
+            "over set_schedule_preferences for anything beyond one standing ride, and NEVER "
+            "hand-author session_overrides week after week to reproduce a pattern the athlete "
+            "keeps asking for. `template`: {mon..sun: [slot, ...]} -- a day left out or [] is a "
+            "day OFF. A slot is {kind, role?, label?, duration_min?, purpose?, structure?}: kind "
+            "'bike' with role 'hard' (an interval ride; several per week are fine, each gets a "
+            "different interval type) or 'endurance' (a Z2 ride, e.g. a club group ride -- put its "
+            "name in `label`); 'skills' (cyclocross skills), 'strength' (put it AFTER the hard "
+            "ride in the day's list to say 'after the intervals'), 'yoga', 'recovery' -- and ANY "
+            "other kind (swim, run, row, hike, core, kettlebell ...): it is accepted and written "
+            "as described, never refused. Put the athlete's own words in `purpose` (short) and "
+            "`structure` (full instructions) so their content is used as written. Anything "
+            "unusual (an unrecognised role, over-long text, an out-of-range duration) is fixed up "
+            "and reported in `warnings`, not rejected. "
+            "`clear: true` removes the template. ALWAYS call it WITHOUT `confirm` first, read "
+            "the returned `week` grid and any `warnings` back to the athlete, and only call again "
+            "with `confirm: true` after they agree in a new message. It does not change weeks "
+            "already on file -- rebuild those with replace_week_plan's usual draft-then-confirm. "
+            "Taper and race weeks ignore it (the engine's taper/race placement wins, and says "
+            "so). Volume comes from the macro's ramp-capped target; the template never sets "
+            "load. Unusual shapes are WARNED about, never refused."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "template": {
+                    "type": "object",
+                    "description": "Weekday (mon..sun) -> ordered list of session slots.",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "kind": {
+                                    "type": "string",
+                                    "description": (
+                                        "ANY kind of session. The engine has its own content for bike, skills, "
+                                        "strength, yoga and recovery; anything else (swim, run, row, hike, core, "
+                                        "kettlebell ...) is written exactly as you describe it -- nothing is refused."
+                                    ),
+                                },
+                                "role": {
+                                    "type": "string",
+                                    "description": (
+                                        "bike slots only: hard (intervals/tempo/threshold/vo2) or endurance "
+                                        "(easy/long/group). Anything unrecognised becomes endurance, with a note."
+                                    ),
+                                },
+                                "sport": {
+                                    "type": "string",
+                                    "description": "optional: swim_pool, swim_ow, strength, recovery, cross_train or bike",
+                                },
+                                "distance_m": {"type": "number", "description": "optional distance in metres"},
+                                "structure": {
+                                    "type": "string",
+                                    "description": (
+                                        "the athlete's own full session instructions (e.g. a kettlebell EMOM), "
+                                        "written verbatim; max 6000 chars"
+                                    ),
+                                },
+                                "label": {"type": "string", "description": "e.g. 'Heinous club ride'"},
+                                "duration_min": {"type": "number", "description": "optional override in minutes (5-900)"},
+                                "purpose": {
+                                    "type": "string",
+                                    "description": "the athlete's own description of this session (e.g. 'Kettlebell EMOM 10 min'), "
+                                    "used verbatim instead of the engine's generic text; max 300 chars",
+                                },
+                            },
+                            "required": ["kind"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                "clear": {"type": "boolean", "description": "true = remove the saved template."},
                 "confirm": {"type": "boolean", "description": "true = persist; omit for a preview."},
             },
             "additionalProperties": False,
@@ -1451,6 +1589,14 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "Macro start date, 'YYYY-MM-DD' (default today).",
                 },
+                "draft_id": {
+                    "type": "string",
+                    "description": (
+                        "The `draft_id` returned by the draft call (confirm omitted) that the athlete "
+                        "agreed to. With `confirm: true` this writes EXACTLY that draft -- nothing is "
+                        "recomputed. Always pass it. An unknown draft_id writes nothing."
+                    ),
+                },
                 "confirm": {
                     "type": "boolean",
                     "description": (
@@ -1543,6 +1689,14 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 "start_date": {
                     "type": "string",
                     "description": "Macro start date, 'YYYY-MM-DD' (default today).",
+                },
+                "draft_id": {
+                    "type": "string",
+                    "description": (
+                        "The `draft_id` returned by the draft call (confirm omitted) that the athlete "
+                        "agreed to. With `confirm: true` this writes EXACTLY that draft -- nothing is "
+                        "recomputed. Always pass it. An unknown draft_id writes nothing."
+                    ),
                 },
                 "confirm": {
                     "type": "boolean",
@@ -1650,6 +1804,15 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     },
                     "required": ["kind"],
                 },
+                "custom_product": {
+                    "type": "object",
+                    "description": (
+                        "Use INSTEAD of product_key when the athlete uses a product the catalog lacks "
+                        "(real food, another brand): {label, carb_g_per_serving (required, from the label), "
+                        "sodium_mg_per_serving?, serving_label?, is_drink_mix?}. Never refuse a plan "
+                        "because the product is not in the catalog."
+                    ),
+                },
                 "product_key": {
                     "type": "string",
                     "enum": ["formula_369", "maurten_gel_100", "tailwind"],
@@ -1711,7 +1874,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     ),
                 },
             },
-            "required": ["duration_min", "intensity_class", "access", "product_key"],
+            "required": ["duration_min", "intensity_class", "access"],
             "additionalProperties": False,
         },
     },
@@ -1962,6 +2125,16 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "ISO week to replace, formatted 'YYYY-Wnn', e.g. '2026-W30'.",
                 },
+                "draft_id": {
+                    "type": "string",
+                    "description": (
+                        "The `draft_id` returned by the draft call (confirm omitted) that the "
+                        "athlete agreed to. With `confirm: true` this writes EXACTLY that draft -- "
+                        "the generator is NOT run again and any session_overrides/"
+                        "template_preference sent with the confirm are ignored (and flagged). Always "
+                        "pass it. An unknown draft_id writes nothing."
+                    ),
+                },
                 "confirm": {
                     "type": "boolean",
                     "description": (
@@ -2028,6 +2201,16 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "description": "ISO week to patch, formatted 'YYYY-Wnn', e.g. '2026-W30'. Must already have a persisted week plan (use create_week_plan first if not).",
                 },
                 "session_overrides": SESSION_OVERRIDES_SCHEMA,
+                "draft_id": {
+                    "type": "string",
+                    "description": (
+                        "The `draft_id` returned by the draft call (confirm omitted) that the "
+                        "athlete agreed to. With `confirm: true` this writes EXACTLY that draft -- "
+                        "the generator is NOT run again and any session_overrides/"
+                        "template_preference sent with the confirm are ignored (and flagged). Always "
+                        "pass it. An unknown draft_id writes nothing."
+                    ),
+                },
                 "confirm": {
                     "type": "boolean",
                     "description": (
@@ -2209,6 +2392,14 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                         "additionalProperties": False,
                     },
                 },
+                "draft_id": {
+                    "type": "string",
+                    "description": (
+                        "The `draft_id` returned by the draft call (confirm omitted) that the athlete "
+                        "agreed to. With `confirm: true` this writes EXACTLY that draft -- nothing is "
+                        "recomputed. Always pass it. An unknown draft_id writes nothing."
+                    ),
+                },
                 "confirm": {
                     "type": "boolean",
                     "description": (
@@ -2385,6 +2576,14 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                         "adjustment."
                     ),
                 },
+                "draft_id": {
+                    "type": "string",
+                    "description": (
+                        "The `draft_id` returned by the draft call (confirm omitted) that the athlete "
+                        "agreed to. With `confirm: true` this writes EXACTLY that draft -- nothing is "
+                        "recomputed. Always pass it. An unknown draft_id writes nothing."
+                    ),
+                },
                 "confirm": {
                     "type": "boolean",
                     "description": (
@@ -2472,6 +2671,14 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                         "the athlete's real current active health status "
                         "automatically (or no restriction at all if none is "
                         "on file)."
+                    ),
+                },
+                "draft_id": {
+                    "type": "string",
+                    "description": (
+                        "The `draft_id` returned by the draft call (confirm omitted) that the athlete "
+                        "agreed to. With `confirm: true` this writes EXACTLY that draft -- nothing is "
+                        "recomputed. Always pass it. An unknown draft_id writes nothing."
                     ),
                 },
                 "confirm": {
@@ -2654,7 +2861,20 @@ def _handle_propose_adaptation(input_data: dict[str, Any], *, store: StoreInterf
     except ValueError as exc:
         return {"error": str(exc)}
 
+    draft_id = _hold_draft(store, slug, draft, tool="propose_adaptation")
     return {
+        **(
+            {
+                "draft_id": draft_id,
+                "next": (
+                    "Nothing is written. When the athlete (or Andrew) agrees, write EXACTLY this adaptation "
+                    "by calling replace_week_plan with `confirm: true` and this draft_id -- do NOT regenerate "
+                    "the week, which would discard the adaptation."
+                ),
+            }
+            if draft_id
+            else {}
+        ),
         "iso_week": draft.iso_week,
         "draft": draft.draft,
         "meso_block": draft.meso_block,
@@ -2686,7 +2906,27 @@ def _handle_get_plan_summary(input_data: dict[str, Any], *, store: StoreInterfac
     # `athlete_today` (this athlete's own local date when `Athlete.timezone`
     # is set, server `date.today()` otherwise), the same athlete-aware
     # default every other caller of this function now gets.
-    return summarize_rollup(store, slug, weeks=weeks)
+    summary = summarize_rollup(store, slug, weeks=weeks)
+    # Defect #6 (coach-reported): whether a week can be created depends on the active
+    # macro's covered range, which was undiscoverable until a call failed. Expose it.
+    try:
+        macro = store.load_macro(slug)
+    except Exception:  # noqa: BLE001 - coverage is advisory; never fail the summary
+        macro = None
+    if macro is not None and macro.blocks:
+        summary = {
+            **summary,
+            "macro_coverage": {
+                "start": macro.blocks[0].start_date.isoformat(),
+                "end": macro.blocks[-1].end_date.isoformat(),
+                "blocks": [
+                    {"name": b.name, "start": b.start_date.isoformat(), "end": b.end_date.isoformat()}
+                    for b in macro.blocks
+                ],
+                "note": "create_week_plan/replace_week_plan only work for weeks inside this range.",
+            },
+        }
+    return summary
 
 
 def _handle_flag_for_coach_review(
@@ -2734,6 +2974,33 @@ def _handle_flag_for_coach_review(
         needs_human_review=needs_human_review,
     )
     return {"logged": True, "id": str(entry.id), "type": entry.type}
+
+
+_BODY_REGIONS = ("shoulder", "knee", "back", "hip", "ankle_foot", "elbow_wrist", "illness_systemic", "head_neck", "other")
+_BODY_REGION_WORDS: dict[str, str] = {
+    **dict.fromkeys(("neck", "head", "headache", "concussion", "jaw", "cervical"), "head_neck"),
+    **dict.fromkeys(("hamstring", "quad", "quads", "quadriceps", "glute", "glutes", "groin", "adductor", "hip flexor",
+                     "thigh", "pelvis", "it band", "itb"), "hip"),
+    **dict.fromkeys(("calf", "achilles", "shin", "foot", "ankle", "plantar", "heel", "toe", "arch"), "ankle_foot"),
+    **dict.fromkeys(("wrist", "elbow", "forearm", "hand", "thumb", "finger"), "elbow_wrist"),
+    **dict.fromkeys(("lower back", "upper back", "spine", "spinal", "lumbar", "thoracic", "ribs", "rib"), "back"),
+    **dict.fromkeys(("flu", "cold", "covid", "fever", "sick", "illness", "virus", "infection", "stomach", "gi"), "illness_systemic"),
+    **dict.fromkeys(("patella", "kneecap", "meniscus"), "knee"),
+    **dict.fromkeys(("rotator cuff", "scapula", "clavicle", "collarbone", "deltoid", "bicep", "tricep"), "shoulder"),
+}
+
+
+def _normalize_body_region(raw: Any) -> tuple[str | None, str | None]:
+    """`(region, note)`: the coarse body region for whatever body part was named. An injury is
+    ALWAYS recordable -- an unlisted part maps to the nearest region (or `other`) with a note; the
+    athlete's own words are kept in the description. `(None, None)` when none was given."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None, None
+    word = raw.strip().lower()
+    if word in _BODY_REGIONS:
+        return word, None
+    region = _BODY_REGION_WORDS.get(word, "other")
+    return region, f"body_region {raw!r} was recorded as {region!r} (the coarse region); the description keeps the exact words"
 
 
 def _handle_record_health_status(
@@ -2784,12 +3051,7 @@ def _handle_record_health_status(
     # (or wasn't confident enough to state) a value, never a guess coerced
     # to a default. An explicitly-given-but-invalid value is still rejected
     # outright, same as restriction/source below -- never silently dropped.
-    body_region = input_data.get("body_region")
-    if body_region is not None and body_region not in (
-        "shoulder", "knee", "back", "hip", "ankle_foot", "elbow_wrist",
-        "illness_systemic", "head_neck", "other",
-    ):
-        return {"error": f"invalid body_region {body_region!r}"}
+    body_region, region_note = _normalize_body_region(input_data.get("body_region"))
 
     onset = input_data.get("onset")
     if onset is not None and onset not in ("acute", "gradual"):
@@ -2877,6 +3139,8 @@ def _handle_record_health_status(
         "feedback_id": feedback_id,
         "restriction": restriction,
     }
+    if region_note:
+        result["warnings"] = [region_note]
     if notify_error is not None:
         result["notify_error"] = (
             "The health status was recorded, but flagging it for your human "
@@ -2998,8 +3262,8 @@ def _handle_update_athlete_profile(
     if not input_data:
         return {
             "error": (
-                "at least one field (ftp_watts, lthr_bpm, css_pace_s_per_100m, "
-                "carb_tolerance_g_per_hr, sports) is required"
+                "nothing to update: give a profile field (ftp_watts, lthr_bpm, css_pace_s_per_100m, "
+                "carb_tolerance_g_per_hr, sports) or, for a preference, use save_athlete_note"
             )
         }
 
@@ -3065,11 +3329,24 @@ def _handle_update_athlete_profile(
             return {"error": f"invalid sports {sports!r}; must be a non-empty list of valid sport values"}
         updates["sports"] = sports
 
-    if not updates:
+    # Anything that is not a profile field (a preferred name, an equipment or style preference ...)
+    # is a durable PREFERENCE: remember it as a note instead of rejecting the call.
+    profile_fields = ("ftp_watts", "lthr_bpm", "css_pace_s_per_100m", "carb_tolerance_g_per_hr", "sports")
+    unknown = {k: v for k, v in input_data.items() if k not in profile_fields and k != "confirm"}
+    note_texts: list[str] = []
+    warnings: list[str] = []
+    for key, value in unknown.items():
+        if isinstance(value, (str, int, float, bool)) and str(value).strip():
+            note_texts.append(f"{key.replace('_', ' ')}: {value}")
+        else:
+            warnings.append(f"{key!r} is not a profile field and its value could not be saved as a note; use save_athlete_note")
+
+    if not updates and not note_texts:
         return {
             "error": (
-                "at least one field (ftp_watts, lthr_bpm, css_pace_s_per_100m, "
-                "carb_tolerance_g_per_hr, sports) is required"
+                "nothing to update: the profile fields are ftp_watts, lthr_bpm, css_pace_s_per_100m, "
+                "carb_tolerance_g_per_hr and sports. For a preference or any other fact about the "
+                "athlete, use save_athlete_note."
             )
         }
 
@@ -3080,10 +3357,22 @@ def _handle_update_athlete_profile(
 
     for field, val in updates.items():
         setattr(athlete, field, val)
+    saved_as_notes: list[str] = []
+    for text in note_texts:
+        if not any(n.active and n.text.strip().lower() == text.lower() for n in athlete.notes):
+            athlete.notes.append(AthleteNote(id=uuid.uuid4(), text=text[:_NOTE_MAX_CHARS], category="profile",
+                                             created=athlete_today(athlete)))
+        saved_as_notes.append(text)
     store.save_athlete(athlete)
 
-    log.info("athlete profile updated", athlete=slug, fields=sorted(updates.keys()))
-    return {"updated": True, **{k: getattr(athlete, k) for k in updates}}
+    log.info("athlete profile updated", athlete=slug, fields=sorted(updates.keys()), notes_saved=len(saved_as_notes))
+    result: dict[str, Any] = {"updated": bool(updates), **{k: getattr(athlete, k) for k in updates}}
+    if saved_as_notes:
+        result["saved_as_notes"] = saved_as_notes
+        warnings.append("Not profile fields, so they were saved as durable notes (save_athlete_note is the tool for these).")
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 
 _SCHEDULE_DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
@@ -3200,10 +3489,10 @@ def _handle_set_schedule_preferences(
             if any(r["day"] == hard_day for r in rides):
                 return {"error": f"hard_day {hard_day!r} is already a standing ride day"}
             if hard_entries:
-                return {"error": "give only one hard day: either hard_day or a role 'hard' standing ride"}
+                return {"error": "give only one hard day: either hard_day or a role 'hard' standing ride (for several hard days, yoga, skills or days off use set_weekly_template)"}
             rides = [{"day": hard_day, "role": "hard"}, *rides]
         elif len(hard_entries) > 1:
-            return {"error": "give only one hard day among the standing rides"}
+            return {"error": "give only one hard day among the standing rides (for several hard days use set_weekly_template)"}
         if rides:
             training_days["bike"] = rides
         else:
@@ -3250,6 +3539,194 @@ def _handle_set_schedule_preferences(
         verified=result["verified"],
     )
     return result
+
+
+_TEMPLATE_DAY_ORDER = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def _template_grid(template: dict[str, list[dict]]) -> dict[str, list[str]]:
+    """Each weekday's slots as short readable strings, for the coach to read
+    the week back to the athlete."""
+    grid: dict[str, list[str]] = {}
+    for day in _TEMPLATE_DAY_ORDER:
+        entries: list[str] = []
+        hard_seen = False
+        for slot in template.get(day, []):
+            kind, label = slot["kind"], slot.get("label")
+            if kind == "bike":
+                text = f"bike: {slot['role']}" + (f" - {label}" if label else "")
+                hard_seen = hard_seen or slot["role"] == "hard"
+            elif kind == "strength":
+                text = (f"{label} (strength)" if label else "strength") + (
+                    " (after the intervals)" if hard_seen else ""
+                )
+            else:
+                text = f"{label} ({kind})" if label else kind
+            if slot.get("purpose"):
+                text += f" [{slot['purpose'][:60]}]"
+            entries.append(text)
+        grid[day] = entries
+    return grid
+
+
+def _handle_set_weekly_template(
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str
+) -> dict[str, Any]:
+    """Preview / persist the SHAPE of the athlete's week (IDEA 023 v3): which
+    sessions go on which days. The engine fills in content and volume and keeps
+    its safety rails; the template never sets load. Several hard rides per
+    week are allowed -- an unusual shape produces a WARNING in the response
+    (the realism guardrail), never a refusal. Without `confirm: true` this is a
+    preview; `clear: true` removes the template. Persisting reloads the athlete
+    and reports `verified` so the response is what the generator will see."""
+    clear = input_data.get("clear") is True
+    template = input_data.get("template")
+    if clear and template is not None:
+        return {"error": "give either template or clear, not both"}
+    if not clear and template is None:
+        return {"error": "template (a weekday -> list of session slots map) or clear: true is required"}
+    if not clear and not isinstance(template, dict):
+        return {"error": "template must be an object mapping weekdays (mon..sun) to lists of session slots"}
+
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load athlete profile: {exc}"}
+
+    try:
+        candidate = Athlete.model_validate(
+            {**athlete.model_dump(mode="json"), "weekly_template": None if clear else template}
+        )
+    except ValueError as exc:
+        return {"error": f"invalid weekly template: {exc}"}
+
+    result: dict[str, Any] = {"persisted": False}
+    if candidate.weekly_template:
+        grid = _template_grid(candidate.weekly_template)
+        slots = [slot for day_slots in candidate.weekly_template.values() for slot in day_slots]
+        # A nominal week just to run the realism guardrail over the shape --
+        # its warnings are advice, never a block.
+        nominal = _template_week_sessions(candidate, date(2026, 1, 5), 300.0, None)
+        result.update(
+            {
+                "week": grid,
+                "summary": {
+                    "hard_rides": sum(1 for s in slots if s["kind"] == "bike" and s["role"] == "hard"),
+                    "bike_days": sum(
+                        1 for day_slots in candidate.weekly_template.values() if any(s["kind"] == "bike" for s in day_slots)
+                    ),
+                    "days_off": [d for d in _TEMPLATE_DAY_ORDER if not grid[d]],
+                },
+                "warnings": evaluate_week_realism(nominal) + template_normalization_notes(candidate.weekly_template),
+                "applies_to": (
+                    "build and base weeks. Taper weeks and race weeks use the engine's own placement "
+                    "instead and say so in the week's warnings. Bike minutes still come from the "
+                    "macro's ramp-capped target -- the template sets the structure, never the load."
+                ),
+            }
+        )
+    else:
+        result["cleared"] = True
+
+    today_iso = date.today().isocalendar()
+    current_week_id = f"{today_iso[0]}-W{today_iso[1]:02d}"
+    on_file = [w for w in store.list_week_ids(slug) if w >= current_week_id]
+    if on_file:
+        result["weeks_on_file_not_changed"] = on_file
+        result["rebuild_hint"] = (
+            "These weeks are already saved and are NOT changed by saving a template. To rebuild one "
+            "from it, use replace_week_plan (draft first, show the athlete, then confirm)."
+        )
+
+    if input_data.get("confirm") is not True:
+        result["note"] = "preview only -- nothing saved; call again with confirm: true after the athlete agrees"
+        return result
+
+    athlete.weekly_template = candidate.weekly_template
+    store.save_athlete(athlete)
+    reloaded = store.load_athlete(slug)
+    result["persisted"] = True
+    result["verified"] = reloaded.weekly_template == candidate.weekly_template
+    log.info("weekly template set", athlete=slug, cleared=clear, verified=result["verified"])
+    return result
+
+
+_NOTE_MAX_CHARS = 1000
+_NOTE_CATEGORY_MAX_CHARS = 40
+_NOTES_MANY_THRESHOLD = 40
+
+
+def _handle_save_athlete_note(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    """Remember a durable preference or fact, in the athlete's own words. Free text, free
+    category -- nothing here is a fixed vocabulary, so any preference can be stored. Saving
+    the same note again is a no-op; `replaces` retires an outdated note (never deletes).
+    Flag-don't-block: over-long text is truncated and a large pile of notes only warns."""
+    text = input_data.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return {"error": "text is required: the preference or fact, in the athlete's own words"}
+    warnings: list[str] = []
+    text = text.strip()
+    if len(text) > _NOTE_MAX_CHARS:
+        text = text[:_NOTE_MAX_CHARS]
+        warnings.append(f"text truncated to {_NOTE_MAX_CHARS} characters")
+    category = input_data.get("category")
+    category = category.strip()[:_NOTE_CATEGORY_MAX_CHARS] if isinstance(category, str) and category.strip() else None
+
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load athlete profile: {exc}"}
+
+    existing = next((n for n in athlete.notes if n.active and n.text.strip().lower() == text.lower()), None)
+    if existing is not None:
+        return {"saved": True, "already_saved": True, "id": str(existing.id), "text": existing.text,
+                "active_notes": sum(1 for n in athlete.notes if n.active), "warnings": warnings}
+
+    replaces = input_data.get("replaces")
+    if replaces:
+        old = next((n for n in athlete.notes if str(n.id) == str(replaces)), None)
+        if old is None:
+            warnings.append(f"replaces {replaces!r} matched no note, so nothing was retired")
+        else:
+            old.active = False
+
+    note = AthleteNote(id=uuid.uuid4(), text=text, category=category, created=athlete_today(athlete))
+    athlete.notes.append(note)
+    store.save_athlete(athlete)
+    active = sum(1 for n in athlete.notes if n.active)
+    if active > _NOTES_MANY_THRESHOLD:
+        warnings.append(f"{active} active notes: consider retiring ones that are out of date")
+    # ids and category only -- the text is the athlete's personal information and is never logged
+    log.info("athlete note saved", athlete=slug, note_id=str(note.id), category=category, active_notes=active)
+    return {"saved": True, "id": str(note.id), "text": note.text, "category": category,
+            "active_notes": active, "warnings": warnings}
+
+
+def _handle_retire_athlete_note(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    """Retire (never delete) an outdated note, by `id` or by a distinctive fragment of its text."""
+    note_id = input_data.get("id")
+    fragment = input_data.get("text_contains")
+    if not note_id and not (isinstance(fragment, str) and fragment.strip()):
+        return {"error": "give the note's `id` or a distinctive `text_contains` fragment"}
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"could not load athlete profile: {exc}"}
+    active = [n for n in athlete.notes if n.active]
+    if note_id:
+        matches = [n for n in active if str(n.id) == str(note_id)]
+    else:
+        matches = [n for n in active if fragment.strip().lower() in n.text.lower()]
+    listing = [{"id": str(n.id), "text": n.text} for n in (matches or active)]
+    if not matches:
+        return {"error": "no active note matches that", "candidates": listing}
+    if len(matches) > 1:
+        return {"error": "more than one note matches -- retire by `id`", "candidates": listing}
+    matches[0].active = False
+    store.save_athlete(athlete)
+    log.info("athlete note retired", athlete=slug, note_id=str(matches[0].id))
+    return {"retired": True, "id": str(matches[0].id), "text": matches[0].text,
+            "active_notes": sum(1 for n in athlete.notes if n.active)}
 
 
 def _summarize_workout(w: Workout, *, athlete: Athlete, hr_max: float | None, wellness: list[Any]) -> dict[str, Any]:
@@ -3979,7 +4456,13 @@ def _handle_export_zwo_workout(input_data: dict[str, Any], *, store: StoreInterf
     if session.sport != "bike":
         return {"error": f"zwo export isn't supported for sport {session.sport!r}"}
     if session.structured is None:
-        return {"error": "this session has no structured workout data to export (structured is None)"}
+        return {
+            "error": (
+                "this session has no machine-readable workout to export: it was described in the athlete's "
+                "own words (or by a text-only edit), so there are no intervals to turn into a .zwo. The "
+                "session itself is saved and fine; only this export is unavailable for it."
+            )
+        }
 
     try:
         athlete = store.load_athlete(slug)
@@ -4072,8 +4555,29 @@ def _handle_create_event(input_data: dict[str, Any], *, store: StoreInterface, s
     # omitted field means exactly what it always meant for a swim event.
     primary_sport = input_data.get("primary_sport") or "swim"
     if primary_sport not in ("swim", "bike"):
+        # The plan engine can only periodize swim and bike targets. An event in another sport is
+        # still worth remembering: keep it as a durable note (with everything the athlete said)
+        # instead of refusing, and say plainly what the engine can and cannot do with it.
+        try:
+            athlete = store.load_athlete(slug)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"could not load athlete profile: {exc}"}
+        details = ", ".join(
+            f"{k}: {input_data[k]}"
+            for k in ("event_date", "priority", "target_value", "target_metric", "notes")
+            if input_data.get(k) not in (None, "")
+        )
+        text = f"{input_data.get('name', 'event')} ({primary_sport}) -- {details}"[:_NOTE_MAX_CHARS]
+        athlete.notes.append(AthleteNote(id=uuid.uuid4(), text=text, category="event", created=athlete_today(athlete)))
+        store.save_athlete(athlete)
         return {
-            "error": f"invalid primary_sport {primary_sport!r}; must be 'swim' or 'bike'"
+            "created": False,
+            "saved_as_note": text,
+            "warnings": [
+                f"The plan engine can only build periodization for a swim or bike target, not {primary_sport!r}, so this "
+                "was saved as a durable note instead of an event. No macro or race-week plan was generated for it. "
+                "Tell the athlete plainly, and plan their supporting training with set_weekly_template / week tools."
+            ],
         }
 
     try:
@@ -4364,6 +4868,74 @@ def _macro_blocks_json(macro) -> list[dict[str, Any]]:
     ]
 
 
+# Macro drafts ride in the tested week-draft store, so no migration is needed (a macro table
+# holds exactly one row per athlete): the MacroPlan is carried as JSON inside a WeekPlan
+# record held under a valid-format week no real plan will ever use.
+_MACRO_CARRIER_WEEK = MACRO_CARRIER_WEEK
+
+
+def _hold_macro_draft(store: StoreInterface, slug: str, athlete: Athlete, macro: MacroPlan, *, tool: str) -> str | None:
+    carrier = WeekPlan(
+        id=uuid.uuid4(),
+        athlete_id=athlete.id,
+        iso_week=_MACRO_CARRIER_WEEK,
+        meso_block="macro-draft",
+        focus="held macro draft",
+        target_volume_m=0,
+        sessions=[],
+        adaptation_rationale=json.dumps({"macro": macro.model_dump(mode="json")}),
+        draft=True,
+    )
+    return _hold_draft(store, slug, carrier, tool=tool)
+
+
+def _confirm_macro_from_draft(
+    store: StoreInterface, slug: str, input_data: dict[str, Any], *, tool: str
+) -> dict[str, Any] | None:
+    """Write the macro the athlete AGREED to, verbatim -- never recompute it (the macro drives
+    every later week, so a drifted recomputation is the worst place for it). Same rules as
+    `_confirm_from_draft`. Flags (never blocks) that it replaces the macro currently on file."""
+    draft_id = input_data.get("draft_id")
+    carrier, stop = _load_draft_safely(store, slug, _MACRO_CARRIER_WEEK, draft_id, tool=tool)
+    if stop is not None:
+        return stop
+    if carrier is None:
+        if draft_id:
+            return {
+                "persisted": False,
+                "error": (
+                    f"macro draft {draft_id!r} was not found. Nothing was written. Call {tool} without "
+                    "`confirm` to make a new draft, show the athlete, then confirm with that draft_id."
+                ),
+            }
+        return None
+    if not draft_id and (carrier.drafted_by not in (None, tool) or _draft_is_stale(carrier)):
+        return None
+    macro = MacroPlan.model_validate(json.loads(carrier.adaptation_rationale or "{}")["macro"])
+    warnings: list[str] = []
+    try:
+        current = store.load_macro(slug)
+    except Exception:  # noqa: BLE001
+        current = None
+    if current is not None and current.id != macro.id:
+        warnings.append(
+            f"This replaces the macro plan currently on file (id {current.id}, "
+            f"{current.blocks[0].start_date} to {current.blocks[-1].end_date}). Written exactly as agreed."
+        )
+    store.save_macro(slug, macro)
+    reloaded = store.load_macro(slug)
+    verified = reloaded is not None and reloaded.id == macro.id
+    log.info("macro written from agreed draft", athlete=slug, tool=tool, macro_id=str(macro.id), verified=verified)
+    return {
+        "blocks": _macro_blocks_json(macro),
+        "persisted": True,
+        "written_from_draft": True,
+        "draft_id": str(carrier.id),
+        "verified": verified,
+        "warnings": warnings,
+    }
+
+
 def _handle_replace_macro_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
     """Computes a candidate replacement macro via `scaffold_macro` (the same
     engine function `draft_macro_plan` uses, now with the zero-current-
@@ -4380,6 +4952,13 @@ def _handle_replace_macro_plan(input_data: dict[str, Any], *, store: StoreInterf
     identically (scaffold_macro is a pure function of its inputs, so this is
     safe to re-run) and persists.
     """
+    if bool(input_data.get("confirm", False)):
+        # Before ANY other validation: the draft_id alone must be enough (the coach has lost the
+        # draft turn's inputs -- history is text only).
+        agreed = _confirm_macro_from_draft(store, slug, input_data, tool="replace_macro_plan")
+        if agreed is not None:
+            return {**({"event_name": input_data.get("event_name")} if "replace_macro_plan" == "replace_macro_plan" else {}), **agreed}
+
     event_name = input_data.get("event_name")
     if not event_name:
         return {"error": "event_name is required"}
@@ -4456,11 +5035,23 @@ def _handle_replace_macro_plan(input_data: dict[str, Any], *, store: StoreInterf
         }
 
     if not confirm:
+        draft_id = _hold_macro_draft(store, slug, athlete, macro, tool="replace_macro_plan")
         return {
             "event_name": event_name,
             "blocks": _macro_blocks_json(macro),
             "comparison": comparison,
             "persisted": False,
+            **(
+                {
+                    "draft_id": draft_id,
+                    "next": (
+                        "Nothing is written yet. When the athlete agrees, call again with `confirm: true` and "
+                        "this draft_id -- that writes EXACTLY this macro, not a recomputation."
+                    ),
+                }
+                if draft_id
+                else {}
+            ),
         }
 
     store.save_macro(slug, macro)
@@ -4471,6 +5062,7 @@ def _handle_replace_macro_plan(input_data: dict[str, Any], *, store: StoreInterf
         "blocks": _macro_blocks_json(macro),
         "comparison": comparison,
         "persisted": True,
+        "written_without_draft": _NO_DRAFT_WARNING,
     }
 
 
@@ -4533,6 +5125,13 @@ def _handle_draft_season_macro_plan(
     the athlete same as `coverage`, on both a draft (`confirm=false`) and a
     confirmed call, never silently dropped.
     """
+    if bool(input_data.get("confirm", False)):
+        # Before ANY other validation: the draft_id alone must be enough (the coach has lost the
+        # draft turn's inputs -- history is text only).
+        agreed = _confirm_macro_from_draft(store, slug, input_data, tool="draft_season_macro_plan")
+        if agreed is not None:
+            return {**({"event_name": input_data.get("event_name")} if "draft_season_macro_plan" == "replace_macro_plan" else {}), **agreed}
+
     event_names = input_data.get("event_names")
     if not event_names or not isinstance(event_names, list) or len(event_names) < 2:
         return {"error": "event_names is required and must list at least 2 races"}
@@ -4700,8 +5299,16 @@ def _handle_draft_season_macro_plan(
         "persisted": False,
     }
     if not confirm:
+        draft_id = _hold_macro_draft(store, slug, athlete, macro, tool="draft_season_macro_plan")
+        if draft_id:
+            result["draft_id"] = draft_id
+            result["next"] = (
+                "Nothing is written yet. When the athlete agrees, call again with `confirm: true` and "
+                "this draft_id -- that writes EXACTLY this season macro, not a recomputation."
+            )
         return result
 
+    result["written_without_draft"] = _NO_DRAFT_WARNING
     store.save_macro(slug, macro)
     log.info(
         "season macro plan drafted",
@@ -4812,10 +5419,37 @@ def _handle_compute_fueling_plan(
     if access_error is not None:
         return {"error": access_error}
 
+    custom_raw = input_data.get("custom_product")
+    custom_product: fueling_module.ProductFuel | None = None
     product_key = input_data.get("product_key")
-    if product_key not in _FUELING_PRODUCT_KEYS:
+    if custom_raw is not None:
+        # The athlete's own product, from its label: carbs (and sodium) per serving are all the
+        # calculator needs, so a product the catalog lacks never blocks the plan.
+        carb = custom_raw.get("carb_g_per_serving") if isinstance(custom_raw, dict) else None
+        sodium = custom_raw.get("sodium_mg_per_serving") if isinstance(custom_raw, dict) else None
+        if isinstance(carb, bool) or not isinstance(carb, (int, float)) or not 0 < carb <= 200:
+            return {"error": "custom_product.carb_g_per_serving must be a number between 0 and 200 (grams of carbohydrate per serving, from the label)"}
+        if sodium is not None and (isinstance(sodium, bool) or not isinstance(sodium, (int, float)) or sodium < 0):
+            return {"error": "custom_product.sodium_mg_per_serving must be a number >= 0 (milligrams per serving, from the label), or omitted"}
+        label = str(custom_raw.get("label") or "the athlete's own product").strip()[:80]
+        custom_product = fueling_module.ProductFuel(
+            key="custom",
+            label=label,
+            carb_g_per_serving=float(carb),
+            sodium_mg_per_serving=float(sodium) if sodium is not None else None,
+            serving_label=str(custom_raw.get("serving_label") or "serving")[:20],
+            is_drink_mix=bool(custom_raw.get("is_drink_mix", False)),
+            mix_guidance=None,
+            notes="Values supplied by the athlete from the product label; not verified against a catalog.",
+        )
+        product_key = "custom"
+    elif product_key not in _FUELING_PRODUCT_KEYS:
         return {
-            "error": f"invalid product_key {product_key!r}; known products: {list(_FUELING_PRODUCT_KEYS)}"
+            "error": (
+                f"invalid product_key {product_key!r}; known products: {list(_FUELING_PRODUCT_KEYS)}. "
+                "If the athlete uses a different product, pass `custom_product` instead "
+                "(label, carb_g_per_serving, and sodium_mg_per_serving if the label lists it)."
+            )
         }
 
     heat = bool(input_data.get("heat", False))
@@ -4856,11 +5490,12 @@ def _handle_compute_fueling_plan(
             product_key=product_key,
             carb_tolerance_g_per_hr=carb_tolerance_g_per_hr,
             heat=heat,
+            product=custom_product,
         )
     except ValueError as exc:
         return {"error": str(exc)}
 
-    product = fueling_module.PRODUCTS[product_key]
+    product = custom_product or fueling_module.PRODUCTS[product_key]
     result: dict[str, Any] = {
         "duration_min": plan.duration_min,
         "intensity_class": plan.intensity_class,
@@ -5006,6 +5641,76 @@ def _parse_template_preference(
         return None, f"invalid template_preference: {exc}"
 
 
+def _generate_week_tolerant(
+    athlete: Athlete,
+    macro: Any,
+    iso_week: str,
+    week_start: date,
+    event_format: str,
+    template_preference: Any,
+    event: Event,
+    **kwargs: Any,
+) -> WeekPlan:
+    """`generate_week`, except a `template_preference` the library has no template for (an equipment
+    or style preference like kettlebells) DEGRADES to the default rotation with a warning instead of
+    failing the whole week -- an unmet preference must never stop the coach writing the plan."""
+    try:
+        return generate_week(athlete, macro, iso_week, week_start, event_format, template_preference, event, **kwargs)
+    except ValueError as exc:
+        if template_preference is None or "no workout templates match" not in str(exc):
+            raise
+    week = generate_week(athlete, macro, iso_week, week_start, event_format, None, event, **kwargs)
+    week.planning_warnings = list(week.planning_warnings) + [
+        "No library workout template matches the requested preference, so the default rotation was used. "
+        "Write the specific content the athlete asked for yourself (`purpose` / `structure`, as coach "
+        "judgment) and log the gap with flag_for_coach_review (research_gap: true) -- do not refuse."
+    ]
+    return week
+
+
+def _held_bike_minutes(store: StoreInterface, slug: str, week_start: date) -> float | None:
+    """Last real bike minutes to HOLD for a weekly-template week built under a
+    non-bike macro (whose own volume is swim meters): the nearest of the two
+    previous weeks on file, excluding race days and skills sessions -- the same
+    basis the template's own bike budget uses. `None` when there is no history."""
+    for back in (7, 14):
+        prev = week_start - timedelta(days=back)
+        year, week, _ = prev.isocalendar()
+        try:
+            existing = store.load_week(slug, f"{year}-W{week:02d}")
+        except Exception:  # noqa: BLE001 - no history is fine, just no held volume
+            existing = None
+        if existing is None:
+            continue
+        minutes = sum(
+            s.duration_min
+            for s in existing.sessions
+            if s.sport == "bike"
+            and not s.purpose.strip().upper().startswith("RACE — ")
+            and "skills" not in s.purpose.lower()
+        )
+        if minutes > 0:
+            return minutes
+    return None
+
+
+def _week_generation_kwargs(
+    athlete: Athlete, store: StoreInterface, slug: str, week_start: date, primary_sport: str
+) -> dict[str, Any]:
+    """The sport-dependent `generate_week` kwargs every week-writing tool shares.
+    A weekly template needs the FTP for its bike sessions even under a swim
+    macro, and (under a non-bike macro) the held bike minutes."""
+    kwargs: dict[str, Any] = {
+        "primary_sport": primary_sport,
+        "ftp_watts": athlete.ftp_watts if (primary_sport == "bike" or athlete.weekly_template) else None,
+    }
+    if athlete.weekly_template:
+        # Ignored for a macro-covered bike week (its ramp-capped target is the budget); used for a
+        # non-bike macro and for a week no macro block covers.
+        kwargs["template_bike_minutes"] = _held_bike_minutes(store, slug, week_start)
+    return kwargs
+
+
 def _handle_create_week_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
     """Calls `swim_coach.plan.generate_week` directly (the same function
     `cli.py`'s `plan-week` command and the `/plan-week` skill use) and
@@ -5073,10 +5778,9 @@ def _handle_create_week_plan(input_data: dict[str, Any], *, store: StoreInterfac
     # generated a full swim week (pool placeholders, long-swim ladder)
     # instead of real bike sessions.
     primary_sport = event.primary_sport
-    ftp_watts = athlete.ftp_watts if primary_sport == "bike" else None
 
     try:
-        week = generate_week(
+        week = _generate_week_tolerant(
             athlete,
             macro,
             iso_week,
@@ -5084,9 +5788,8 @@ def _handle_create_week_plan(input_data: dict[str, Any], *, store: StoreInterfac
             event_format,
             template_preference,
             event,
-            primary_sport=primary_sport,
-            ftp_watts=ftp_watts,
             events=events,
+            **_week_generation_kwargs(athlete, store, slug, week_start, primary_sport),
         )
     except ValueError as exc:
         return {"error": str(exc)}
@@ -5210,6 +5913,85 @@ def _handle_reschedule_session(input_data: dict[str, Any], *, store: StoreInterf
     }
 
 
+_PLAN_SPORTS = ("swim_pool", "swim_ow", "strength", "recovery", "cross_train", "bike")
+_SPORT_WORDS: dict[str, str] = {
+    **dict.fromkeys(("kettlebell", "kettlebells", "kb", "weights", "weight", "lifting", "gym", "core",
+                     "strength training", "dryland", "resistance", "strength"), "strength"),
+    **dict.fromkeys(("yoga", "mobility", "stretch", "stretching", "foam rolling", "pilates", "rest", "recovery"), "recovery"),
+    **dict.fromkeys(("swim", "swimming", "pool", "pool swim", "swim_pool"), "swim_pool"),
+    **dict.fromkeys(("open water", "open-water", "open water swim", "ow", "ow swim", "swim_ow"), "swim_ow"),
+    **dict.fromkeys(("cycling", "ride", "cycle", "mtb", "mountain bike", "cx", "cyclocross", "spin", "trainer", "bike"), "bike"),
+    "cross_train": "cross_train",
+}
+
+
+def _normalize_plan_sport(raw: Any) -> tuple[str | None, str | None]:
+    """`(plan_sport, note)`: the plan sport for whatever word the athlete used (kettlebell, yoga,
+    run, hike ...). A word the plan has no sport for is saved as `cross_train` WITH A NOTE --
+    never rejected. `(None, None)` when no sport was given."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None, None
+    word = raw.strip().lower()
+    if word in _PLAN_SPORTS:
+        return word, None
+    mapped = _SPORT_WORDS.get(word)
+    if mapped:
+        return mapped, f"sport {raw!r} was saved as {mapped!r}"
+    return "cross_train", f"sport {raw!r} is not a plan sport, so it was saved as 'cross_train' (the athlete's own words are in the purpose)"
+
+
+def _salvage_prose(node: Any) -> list[str]:
+    """Readable lines from a `structured` payload that failed validation, so what the coach wrote
+    is kept as text rather than lost: every label / name / notes / description in the tree, with
+    any scalar detail (reps, sets, duration) that sat beside it."""
+    lines: list[str] = []
+    if isinstance(node, dict):
+        head = next((str(node[k]) for k in ("label", "name", "exercise") if isinstance(node.get(k), (str, int, float))), None)
+        details = [
+            f"{k.replace('_', ' ')} {node[k]}"
+            for k in ("duration_value", "reps", "sets", "repeats", "notes", "description")
+            if isinstance(node.get(k), (str, int, float)) and node[k] != ""
+        ]
+        if head or details:
+            lines.append(", ".join(([head] if head else []) + details))
+        for value in node.values():
+            if isinstance(value, (dict, list)):
+                lines.extend(_salvage_prose(value))
+    elif isinstance(node, list):
+        for item in node:
+            lines.extend(_salvage_prose(item))
+    return lines
+
+
+def _coerce_structured(
+    raw: Any, *, when: str, prose_given: bool, notes: list[str]
+) -> tuple[WorkoutStructure | None, str | None, str | None]:
+    """`(structured, salvaged_prose, error)`. Never blocks on the internal workout IR: invalid
+    `structured` is dropped with a note when the caller also gave `structure` text, salvaged into
+    readable text when it can be, and only an error (that says to use `structure`) when nothing
+    at all could be kept."""
+    try:
+        return WorkoutStructure.model_validate(raw), None, None
+    except ValidationError:
+        pass
+    if prose_given:
+        notes.append(f"{when}: the structured workout data was not valid, so only the `structure` text was saved")
+        return None, None, None
+    salvaged = "\n".join(_salvage_prose(raw))
+    if salvaged:
+        notes.append(f"{when}: the structured workout data was not valid, so it was saved as plain text instead")
+        return None, salvaged, None
+    return None, None, (
+        f"{when}: `structured` could not be used. It is optional -- pass the workout as `structure` "
+        "(plain text, exactly as you would write it in chat) and it will be saved as written."
+    )
+
+
+_HARD_WORK_WORDS = re.compile(
+    r"interval|over[/ -]?under|threshold|vo2|sprint|sweet ?spot|tempo|repeats?|hill repeats", re.IGNORECASE
+)
+
+
 def _apply_session_overrides(
     week, overrides: list[dict[str, Any]], athlete: Athlete
 ) -> tuple[str | None, list[str]]:
@@ -5243,7 +6025,10 @@ def _apply_session_overrides(
         except (TypeError, ValueError):
             return f"invalid session_overrides date {raw_date!r}; expected 'YYYY-MM-DD'", notes
 
-        sport = override.get("sport")
+        raw_sport = override.get("sport")
+        sport, sport_note = _normalize_plan_sport(raw_sport)
+        if sport_note and override.get("add"):
+            notes.append(f"{raw_date}: {sport_note}")
         matches = [
             s for s in week.sessions
             if s.date == override_date and (sport is None or s.sport == sport)
@@ -5309,20 +6094,24 @@ def _apply_session_overrides(
                 ), notes
             add_duration = override.get("duration_min")
             add_purpose = override.get("purpose")
-            if add_duration is None or not add_purpose:
-                return (
-                    f"session_overrides: `add` entry for {raw_date!r} needs "
-                    "`duration_min` and `purpose` (optionally `distance_m`, "
-                    "`intensity`, `structured`/`structure`)"
-                ), notes
+            add_structure = override.get("structure")
+            if add_duration is None:
+                add_duration = 30.0 if sport == "recovery" else 45.0
+                notes.append(f"{raw_date}: no duration_min was given, so {add_duration:g} minutes was used -- adjust it if that is wrong")
+            if not add_purpose:
+                first_line = next((ln.strip() for ln in str(add_structure or "").splitlines() if ln.strip()), "")
+                add_purpose = first_line[:120] or (str(raw_sport).strip() if isinstance(raw_sport, str) and raw_sport.strip() else "session")
+                notes.append(f"{raw_date}: no purpose was given, so {add_purpose!r} was used")
             add_structured_raw = override.get("structured")
             add_structured = None
             if add_structured_raw is not None:
-                try:
-                    add_structured = WorkoutStructure.model_validate(add_structured_raw)
-                except ValidationError as exc:
-                    return f"invalid session_overrides structured for {raw_date!r}: {exc}", notes
-            add_structure = override.get("structure")
+                add_structured, salvaged, structured_error = _coerce_structured(
+                    add_structured_raw, when=raw_date, prose_given=add_structure is not None, notes=notes
+                )
+                if structured_error:
+                    return structured_error, notes
+                if salvaged and add_structure is None:
+                    add_structure = salvaged
             if add_structure is None and add_structured is not None:
                 add_structure = render_prose(add_structured)
             add_intensity = override.get("intensity")
@@ -5368,6 +6157,7 @@ def _apply_session_overrides(
         structure = override.get("structure")
         structured = override.get("structured")
         ow_template = override.get("ow_template")
+        intensity = override.get("intensity")
         if (
             distance_m is None
             and duration_min is None
@@ -5375,11 +6165,21 @@ def _apply_session_overrides(
             and structure is None
             and structured is None
             and ow_template is None
+            and intensity is None
         ):
             return (
                 f"session_overrides: entry for {raw_date!r} needs at least one of "
-                "distance_m, duration_min, purpose, structure, structured, ow_template"
+                "distance_m, duration_min, purpose, structure, structured, ow_template, intensity"
             ), notes
+        if intensity is not None:
+            zone_ok = intensity.get("zone") is None or (
+                isinstance(intensity.get("zone"), str) and re.fullmatch(r"Z[1-7]", intensity["zone"].upper())
+            )
+            if not isinstance(intensity, dict) or not intensity or not zone_ok:
+                return (
+                    f"session_overrides: entry for {raw_date!r} has an invalid `intensity` "
+                    "(expected e.g. {\"zone\": \"Z4\"} or {\"anchor\": \"rpe\"})"
+                ), notes
         if ow_template is not None and (structure is not None or structured is not None):
             return (
                 f"session_overrides: entry for {raw_date!r} sets `ow_template` "
@@ -5389,25 +6189,19 @@ def _apply_session_overrides(
                 "(swim_coach.ow_session_templates.OW_SESSION_TEMPLATES), "
                 "`structure`/`structured` author it directly."
             ), notes
-        if structure is not None and distance_m is None:
+        if structure is not None and distance_m is None and session.sport in ("swim_pool", "swim_ow"):
             # Real bug, caught live: `distance_m` is a separate field from
-            # `structure`'s free-text total -- nothing keeps them in sync
-            # automatically (parsing an arbitrary prose total back out is
-            # fragile and wasn't attempted). Without this check, authoring a
-            # new structure (e.g. 600m warm-up + 10x200m + 400m cool-down =
-            # 3000m) while leaving the session's OLD distance_m in place
-            # (e.g. 400m from whatever it replaced) persists a session whose
-            # stats header silently disagrees with its own written content.
-            # Require the caller to state the real total explicitly rather
-            # than let it drift.
-            return (
-                f"session_overrides: entry for {raw_date!r} sets `structure` "
-                "without `distance_m` -- the two are independent fields with "
-                "nothing keeping them in sync automatically, so the athlete "
-                "would see a distance stat that disagrees with what the "
-                "structure text actually describes. Pass the real total "
-                "distance implied by the new structure as `distance_m` too."
-            ), notes
+            # `structure`'s free-text total and nothing keeps them in sync, so a
+            # rewritten swim structure could persist next to a stale distance
+            # stat that contradicts it. This used to REJECT the override; the
+            # policy is now flag-don't-block: apply the structure, KEEP the old
+            # distance, and say so loudly so the coach can correct it in the same
+            # breath. Non-swim sessions have no real distance stat, so no flag.
+            notes.append(
+                f"{raw_date} {session.sport}: `structure` was rewritten without `distance_m`, so the "
+                f"distance stat still says {session.distance_m}m and may not match the new content. "
+                "Pass the real total as `distance_m` (in a patch_week_plan) to correct it."
+            )
 
         if distance_m is not None:
             session.distance_m = distance_m
@@ -5424,11 +6218,33 @@ def _apply_session_overrides(
 
         if purpose is not None:
             session.purpose = purpose
+        if intensity is not None:
+            session.intensity = {**session.intensity, **{k: (v.upper() if k == "zone" else v) for k, v in intensity.items()}}
+        elif (
+            purpose is not None
+            and session.sport == "bike"
+            and _HARD_WORK_WORDS.search(purpose)
+            and str(session.intensity.get("zone") or "Z2").upper() in ("Z1", "Z2")
+        ):
+            # Defect #4 (coach-reported): a purpose relabelled as intervals with the
+            # zone tag left at Z2 fooled the realism guardrail. Flag, never block or
+            # silently rewrite the zone.
+            notes.append(
+                f"{raw_date} bike: the purpose now describes hard work but the zone tag is still "
+                f"{session.intensity.get('zone') or 'Z2'}, which is what realism checks read. Pass "
+                "`intensity` (e.g. {\"zone\": \"Z4\"}) in the same override so the session IS what its label says."
+            )
         if structured is not None:
-            try:
-                session.structured = WorkoutStructure.model_validate(structured)
-            except ValidationError as exc:
-                return f"invalid session_overrides structured: {exc}", notes
+            coerced, salvaged, structured_error = _coerce_structured(
+                structured, when=raw_date, prose_given=structure is not None, notes=notes
+            )
+            if structured_error:
+                return structured_error, notes
+            if coerced is not None:
+                session.structured = coerced
+            elif salvaged:
+                session.structure = salvaged
+                session.structured = None
         if structure is not None:
             session.structure = structure
             if structured is None:
@@ -5569,6 +6385,174 @@ def _check_no_session_collision(week: WeekPlan, target_date: date, sport: str) -
     )
 
 
+_DRAFT_IGNORED_ON_CONFIRM = ("session_overrides", "template_preference")
+
+
+def _load_draft_safely(
+    store: StoreInterface, slug: str, key: str, draft_id: str | None, *, tool: str
+) -> tuple[WeekPlan | None, dict[str, Any] | None]:
+    """`(draft, stop)`. A storage error while reading a draft must not block the coach: with no
+    `draft_id` it degrades to `(None, None)` (the caller falls back to its flagged one-step path);
+    with a NAMED `draft_id` it returns a `stop` result that writes NOTHING (writing some other plan
+    instead is the corruption this exists to stop)."""
+    try:
+        return store.load_week_draft(slug, key, draft_id), None
+    except NotImplementedError:
+        return None, None
+    except Exception:  # noqa: BLE001
+        log.error("could not read draft", athlete=slug, key=key, tool=tool, exc_info=True)
+        if draft_id:
+            return None, {
+                "persisted": False,
+                "error": (
+                    f"draft {draft_id!r} could not be read (a storage problem, not a problem with the plan). "
+                    f"Nothing was written. Try the confirm again in a moment, or call {tool} without `confirm` "
+                    "to make a new draft and confirm that."
+                ),
+            }
+        return None, None
+
+
+def _hold_draft(store: StoreInterface, slug: str, week: WeekPlan, *, tool: str) -> str | None:
+    """Keep the PROPOSED week so `confirm` can write exactly what was shown and
+    agreed, instead of running the generator a second time. Returns its id, or
+    `None` when the store cannot hold drafts (the tool then falls back to the old
+    regenerate-on-confirm behaviour and says so)."""
+    try:
+        store.save_week_draft(
+            slug,
+            week.model_copy(
+                update={"draft": True, "drafted_at": datetime.now(timezone.utc), "drafted_by": tool}, deep=True
+            ),
+        )
+    except NotImplementedError:
+        return None
+    except Exception:  # noqa: BLE001 - draft storage must never block drafting; degrade to no draft_id
+        log.error("could not hold draft", athlete=slug, iso_week=week.iso_week, exc_info=True)
+        return None
+    return str(week.id)
+
+
+_draft_is_stale = draft_is_stale  # shared with the per-request context (app.drafts)
+
+
+def _confirm_from_draft(
+    store: StoreInterface,
+    slug: str,
+    iso_week: str,
+    input_data: dict[str, Any],
+    *,
+    tool: str,
+    ignored_inputs: tuple[str, ...] = _DRAFT_IGNORED_ON_CONFIRM,
+    expected_dates: set[str] | None = None,
+    flag_dropped: bool = True,
+) -> dict[str, Any] | None:
+    """`confirm` = WRITE THE AGREED PLAN, never regenerate it (Andrew, 2026-09-21:
+    "plan creates plan; let the coach write it once agreed. Flag risk, don't
+    block, don't corrupt").
+
+    Loads the draft the coach and athlete agreed on (`draft_id`, else the latest
+    for that week) and writes it verbatim. Risk is FLAGGED, never a reason to
+    write something else: sessions in the live week that the draft drops, and any
+    `session_overrides`/`template_preference` sent with the confirm (ignored --
+    the agreed plan is written exactly as shown). Returns `None` when there is no
+    draft on file and none was named, so the caller falls back to its old path;
+    an explicitly named draft that cannot be found writes NOTHING (writing some
+    other plan instead is the corruption this exists to stop)."""
+    draft_id = input_data.get("draft_id")
+    draft, stop = _load_draft_safely(store, slug, iso_week, draft_id, tool=tool)
+    if stop is not None:
+        return stop
+    if draft is not None and not draft_id and draft.drafted_by not in (None, tool):
+        return None  # the latest draft belongs to a different tool; never write it by accident
+    if draft is not None and not draft_id and _draft_is_stale(draft):
+        # A forgotten draft from an earlier conversation must never be written by an
+        # unrelated confirm; the caller falls through to its one-step path (flagged).
+        return None
+    if draft is None:
+        if draft_id:
+            return {
+                "persisted": False,
+                "error": (
+                    f"draft {draft_id!r} for {iso_week} was not found (it was never saved, or "
+                    f"belongs to another week). Nothing was written. Call {tool} without `confirm` "
+                    "to make a new draft, show it to the athlete, then confirm with that draft_id."
+                ),
+            }
+        return None
+
+    try:
+        live_before = store.load_week(slug, iso_week)
+    except Exception:  # noqa: BLE001 - a read problem must not stop writing the agreed plan
+        live_before = None
+    agreed = draft.model_copy(update={"draft": False, "drafted_at": None, "drafted_by": None}, deep=True)
+    warnings = [w for w in agreed.planning_warnings if "DROPPED" not in w]
+    dropped = _dropped_sessions(live_before, agreed) if flag_dropped else []
+    if dropped:
+        summary = ", ".join(f"{d['date']} {d['sport']}" for d in dropped)
+        warnings.append(
+            f"{len(dropped)} session(s) in the week currently on file are NOT in the agreed draft and are "
+            f"DROPPED by writing it: {summary}. Written anyway, exactly as agreed -- tell the athlete."
+        )
+    if expected_dates is not None and live_before is not None:
+        # A targeted tool (one session adjusted, a few sessions merged) writes the WHOLE
+        # draft week; anything ELSE that changed in the live week after the draft was
+        # made is overwritten by that. Flag it -- the agreed plan is still written.
+        live_by = {(x.date.isoformat(), x.sport): x for x in live_before.sessions}
+        changed_since = [
+            f"{x.date.isoformat()} {x.sport}"
+            for x in agreed.sessions
+            if x.date.isoformat() not in expected_dates
+            and (lv := live_by.get((x.date.isoformat(), x.sport))) is not None
+            and (lv.duration_min, lv.distance_m, lv.purpose, lv.intensity)
+            != (x.duration_min, x.distance_m, x.purpose, x.intensity)
+        ]
+        if changed_since:
+            warnings.append(
+                f"{len(changed_since)} session(s) were CHANGED in the week on file after this draft was "
+                f"made and are overwritten by writing it as agreed: {', '.join(changed_since)}. "
+                "Tell the athlete; re-apply them if they should stay."
+            )
+    ignored = [f for f in ignored_inputs if input_data.get(f)]
+    if ignored:
+        warnings.append(
+            f"{', '.join(ignored)} sent with this confirm were NOT applied: the agreed draft was written "
+            f"exactly as shown. To change anything, make a new draft with {tool} and confirm that one."
+        )
+    agreed.planning_warnings = warnings
+    store.save_week(slug, agreed)
+    saved = store.load_week(slug, iso_week)
+    verified = saved is not None and {s.id for s in saved.sessions} == {s.id for s in agreed.sessions}
+    log.info(
+        "week written from agreed draft",
+        athlete=slug,
+        iso_week=iso_week,
+        tool=tool,
+        verified=verified,
+        dropped_sessions=len(dropped),
+    )
+    return {
+        "iso_week": agreed.iso_week,
+        "meso_block": agreed.meso_block,
+        "focus": agreed.focus,
+        "target_volume_m": agreed.target_volume_m,
+        "planning_warnings": list(agreed.planning_warnings),
+        "sessions": _week_sessions_json(agreed),
+        "dropped_sessions": dropped,
+        "persisted": True,
+        "written_from_draft": True,
+        "draft_id": str(draft.id),
+        "verified": verified,
+    }
+
+
+_NO_DRAFT_WARNING = (
+    "This week was generated/edited and written in ONE step, NOT from a draft the athlete had seen "
+    "(no draft_id was given). If the athlete had already agreed to a draft, that draft was not used -- "
+    "tell them. Next time call without `confirm` first, show the draft, and confirm with its draft_id."
+)
+
+
 def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
     """Computes a candidate replacement week via `generate_week` (the same
     engine function `create_week_plan` uses) for exactly the case
@@ -5619,6 +6603,10 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
         return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
 
     confirm = bool(input_data.get("confirm", False))
+    if confirm:
+        agreed = _confirm_from_draft(store, slug, iso_week, input_data, tool="replace_week_plan")
+        if agreed is not None:
+            return agreed
 
     try:
         athlete = store.load_athlete(slug)
@@ -5653,10 +6641,9 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
     # site previously passed neither at all, same bug as
     # `_handle_create_week_plan` above.
     primary_sport = event.primary_sport
-    ftp_watts = athlete.ftp_watts if primary_sport == "bike" else None
 
     try:
-        week = generate_week(
+        week = _generate_week_tolerant(
             athlete,
             macro,
             iso_week,
@@ -5664,12 +6651,17 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
             event_format,
             template_preference,
             event,
-            primary_sport=primary_sport,
-            ftp_watts=ftp_watts,
             events=events,
+            **_week_generation_kwargs(athlete, store, slug, week_start, primary_sport),
         )
     except ValueError as exc:
         return {"error": str(exc)}
+
+    # Warnings the GENERATOR added beyond the realism check (e.g. "template yielded
+    # to a taper week", "volume held under a swim macro"): the realism re-run below
+    # replaces `planning_warnings`, so carry these through instead of losing them.
+    _generator_realism = evaluate_week_realism(week.sessions) if (primary_sport == "bike" or athlete.weekly_template) else []
+    generator_notes = [w for w in week.planning_warnings if w not in _generator_realism]
 
     session_overrides = input_data.get("session_overrides")
     override_notes: list[str] = []
@@ -5682,7 +6674,7 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
     # session_overrides append (defect 3) -- appending a 6th hard bike day
     # should still get flagged. Also feeds in the prior week's bike volume
     # (loaded above as `existing_week`) so the +8%/week rail is checked.
-    if primary_sport == "bike":
+    if primary_sport == "bike" or athlete.weekly_template:
         prev_bike_min: float | None = None
         if existing_week is not None:
             prev_bike_min = sum(
@@ -5693,7 +6685,9 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
             )
         week.planning_warnings = evaluate_week_realism(
             week.sessions, prev_week_bike_volume_min=prev_bike_min
-        )
+        ) + generator_notes
+    else:
+        week.planning_warnings = list(week.planning_warnings)
     # Build E: fold in any non-fatal session_overrides notes (e.g. a
     # `remove` that emptied the week's only hard bike day) regardless of
     # primary_sport -- `evaluate_week_realism` above is bike-only, but a
@@ -5730,7 +6724,8 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
         ]
 
     if not confirm:
-        return {
+        draft_id = _hold_draft(store, slug, week, tool="replace_week_plan")
+        draft_response: dict[str, Any] = {
             "iso_week": week.iso_week,
             "meso_block": week.meso_block,
             "focus": week.focus,
@@ -5741,7 +6736,15 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
             "dropped_sessions": dropped,
             "persisted": False,
         }
+        if draft_id:
+            draft_response["draft_id"] = draft_id
+            draft_response["next"] = (
+                "Nothing is written yet. Show this to the athlete; when they agree, call again with "
+                "`confirm: true` and this draft_id -- that writes EXACTLY this plan, not a new one."
+            )
+        return draft_response
 
+    week.planning_warnings = list(week.planning_warnings) + [_NO_DRAFT_WARNING]
     store.save_week(slug, week)
 
     log.info("week plan replaced", athlete=slug, iso_week=iso_week, dropped_sessions=len(dropped))
@@ -5811,6 +6814,11 @@ def _handle_patch_week_plan(input_data: dict[str, Any], *, store: StoreInterface
     except (ValueError, IndexError):
         return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
 
+    if bool(input_data.get("confirm", False)):
+        agreed = _confirm_from_draft(store, slug, iso_week, input_data, tool="patch_week_plan")
+        if agreed is not None:
+            return agreed
+
     session_overrides = input_data.get("session_overrides")
     if not session_overrides:
         return {
@@ -5873,8 +6881,17 @@ def _handle_patch_week_plan(input_data: dict[str, Any], *, store: StoreInterface
     }
 
     if not confirm:
+        draft_id = _hold_draft(store, slug, candidate, tool="patch_week_plan")
+        if draft_id:
+            response["draft_id"] = draft_id
+            response["next"] = (
+                "Nothing is written yet. Show this to the athlete; when they agree, call again with "
+                "`confirm: true` and this draft_id -- that writes EXACTLY this plan, not a recomputation."
+            )
         return response
 
+    candidate.planning_warnings = list(candidate.planning_warnings) + [_NO_DRAFT_WARNING]
+    response["planning_warnings"] = list(candidate.planning_warnings)
     store.save_week(slug, candidate)
 
     log.info(
@@ -6002,10 +7019,9 @@ def _generate_candidate_week_for_merge(
 
     event_format = event.event_format or "single_day"
     primary_sport = event.primary_sport
-    ftp_watts = athlete.ftp_watts if primary_sport == "bike" else None
 
     try:
-        generated = generate_week(
+        generated = _generate_week_tolerant(
             athlete,
             macro,
             iso_week,
@@ -6013,9 +7029,8 @@ def _generate_candidate_week_for_merge(
             event_format,
             template_preference,
             event,
-            primary_sport=primary_sport,
-            ftp_watts=ftp_watts,
             events=events,
+            **_week_generation_kwargs(athlete, store, slug, week_start, primary_sport),
         )
     except ValueError as exc:
         return None, str(exc)
@@ -6135,6 +7150,16 @@ def _handle_merge_week_plan(input_data: dict[str, Any], *, store: StoreInterface
     iso_week = input_data.get("iso_week")
     if not iso_week:
         return {"error": "iso_week is required"}
+
+    if bool(input_data.get("confirm", False)):
+        picks = input_data.get("accept_from_proposed")
+        picked = {str(e.get("date")) for e in picks if isinstance(e, dict)} if isinstance(picks, list) else None
+        agreed = _confirm_from_draft(
+            store, slug, iso_week, input_data, tool="merge_week_plan",
+            ignored_inputs=(), expected_dates=picked,
+        )
+        if agreed is not None:
+            return agreed
 
     try:
         year_str, week_str = iso_week.split("-W")
@@ -6261,8 +7286,17 @@ def _handle_merge_week_plan(input_data: dict[str, Any], *, store: StoreInterface
         "persisted": False,
     }
     if not confirm:
+        draft_id = _hold_draft(store, slug, merged, tool="merge_week_plan")
+        if draft_id:
+            response["draft_id"] = draft_id
+            response["next"] = (
+                "Nothing is written yet. When the athlete agrees, call again with `confirm: true` and "
+                "this draft_id -- that writes EXACTLY this merged plan."
+            )
         return response
 
+    merged.planning_warnings = list(merged.planning_warnings) + [_NO_DRAFT_WARNING]
+    response["planning_warnings"] = list(merged.planning_warnings)
     store.save_week(slug, merged)
 
     log.info(
@@ -6312,6 +7346,32 @@ def _handle_propose_session_adjustment(
     iso_week = input_data.get("iso_week")
     if not iso_week:
         return {"error": "iso_week is required"}
+
+    if bool(input_data.get("confirm", False)):
+        # Before ANY other validation: on the confirm turn the coach has lost every input from
+        # the draft turn (history is text only), so the draft_id must be enough on its own.
+        date_arg = input_data.get("date")
+        agreed = _confirm_from_draft(
+            store, slug, iso_week, input_data, tool="propose_session_adjustment",
+            ignored_inputs=(), expected_dates={str(date_arg)} if date_arg else None,
+        )
+        if agreed is not None:
+            if agreed.get("persisted") and date_arg:
+                # keep this tool's own response contract: the adjusted session's summary
+                written = store.load_week(slug, iso_week)
+                sport_filter = input_data.get("sport")
+                target = next(
+                    (
+                        x for x in (written.sessions if written else [])
+                        if x.date.isoformat() == str(date_arg) and (not sport_filter or x.sport == sport_filter)
+                    ),
+                    None,
+                )
+                if target is not None:
+                    agreed["date"] = str(date_arg)
+                    agreed["sport"] = target.sport
+                    agreed["session"] = _session_summary_json(target)
+            return agreed
     date_str = input_data.get("date")
     if not date_str:
         return {"error": "date is required"}
@@ -6413,12 +7473,25 @@ def _handle_propose_session_adjustment(
 
     if not confirm:
         response["persisted"] = False
+        draft_week = week.model_copy(deep=True)
+        for index, session in enumerate(draft_week.sessions):
+            if session.id == original.id:
+                draft_week.sessions[index] = proposed
+                break
+        draft_id = _hold_draft(store, slug, draft_week, tool="propose_session_adjustment")
+        if draft_id:
+            response["draft_id"] = draft_id
+            response["next"] = (
+                "Nothing is written yet. When the athlete agrees, call again with `confirm: true` and "
+                "this draft_id -- that writes EXACTLY this adjustment."
+            )
         return response
 
     for index, session in enumerate(week.sessions):
         if session.id == original.id:
             week.sessions[index] = proposed
             break
+    response["planning_warnings"] = [_NO_DRAFT_WARNING]
     store.save_week(slug, week)
 
     log.info(
@@ -6454,9 +7527,9 @@ def _find_event_by_ref(events: list[Event], query: str) -> Event | None:
     return None
 
 
-def _persist_taper_sessions(
+def _taper_week_plans(
     store: StoreInterface, slug: str, sessions: list[Session], rationale: str
-) -> None:
+) -> list[WeekPlan]:
     """Writes `generate_taper_sessions`' output into the athlete's week
     plan(s), grouped by ISO week (a short-notice taper's date range
     commonly spans two calendar weeks).
@@ -6481,6 +7554,7 @@ def _persist_taper_sessions(
     for session in sessions:
         by_iso_week.setdefault(iso_week_str(session.date), []).append(session)
 
+    weeks: list[WeekPlan] = []
     for iso_week, group in by_iso_week.items():
         covered_dates = {s.date for s in group}
         existing = store.load_week(slug, iso_week)
@@ -6502,7 +7576,106 @@ def _persist_taper_sessions(
             existing.sessions = sorted(kept + group, key=lambda s: s.date)
             existing.adaptation_rationale = rationale
             week = existing
+        weeks.append(week)
+    return weeks
+
+
+def _persist_taper_sessions(
+    store: StoreInterface, slug: str, sessions: list[Session], rationale: str
+) -> None:
+    """Computes `_taper_week_plans` and writes every touched week."""
+    for week in _taper_week_plans(store, slug, sessions, rationale):
         store.save_week(slug, week)
+
+
+_TAPER_TOOL = "propose_injury_adapted_taper"
+
+
+# A valid-format ISO week no real plan will ever use: the bundle record (a WeekPlan, so it
+# validates and stores like any draft) is held under it. Its rationale names the event.
+_TAPER_CARRIER_WEEK = TAPER_CARRIER_WEEK
+
+
+def _taper_carrier_key(event: Event) -> str:
+    return _TAPER_CARRIER_WEEK
+
+
+def _hold_taper_bundle(store: StoreInterface, slug: str, event: Event, weeks: list[WeekPlan]) -> str | None:
+    """Hold every week the taper would write, plus a carrier record listing them, so
+    confirm can write EXACTLY the taper the athlete saw (it spans several ISO weeks).
+    Returns the carrier's draft id, or None if the store cannot hold drafts."""
+    bundle = []
+    for week in weeks:
+        draft_id = _hold_draft(store, slug, week, tool=_TAPER_TOOL)
+        if draft_id is None:
+            return None
+        bundle.append({"iso_week": week.iso_week, "draft_id": draft_id})
+    carrier = WeekPlan(
+        id=uuid.uuid4(),
+        athlete_id=weeks[0].athlete_id,
+        iso_week=_taper_carrier_key(event),
+        meso_block="taper",
+        focus="held injury-adapted taper bundle",
+        target_volume_m=0,
+        sessions=[],
+        adaptation_rationale=json.dumps({"event_id": str(event.id), "event_name": event.name, "bundle": bundle}),
+        draft=True,
+    )
+    return _hold_draft(store, slug, carrier, tool=_TAPER_TOOL)
+
+
+def _confirm_taper_from_draft(
+    store: StoreInterface, slug: str, event: Event | None, input_data: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Write the held taper bundle verbatim (every week, exactly as drafted); same
+    rules as `_confirm_from_draft`: a named draft_id that cannot be found writes
+    nothing, no draft_id uses the latest FRESH draft of THIS tool, else None."""
+    draft_id = input_data.get("draft_id")
+    carrier, stop = _load_draft_safely(store, slug, _TAPER_CARRIER_WEEK, draft_id, tool=_TAPER_TOOL)
+    if stop is not None:
+        return stop
+    if carrier is None:
+        if draft_id:
+            return {
+                "persisted": False,
+                "error": (
+                    f"taper draft {draft_id!r} was not found. Nothing was written. Call "
+                    "propose_injury_adapted_taper without `confirm` to make a new draft, show the athlete, "
+                    "then confirm with that draft_id."
+                ),
+            }
+        return None
+    carried = json.loads(carrier.adaptation_rationale or "{}")
+    if event is not None and carried.get("event_id") != str(event.id):
+        if draft_id:
+            return {"persisted": False, "error": f"taper draft {draft_id!r} belongs to a different event. Nothing was written."}
+        return None
+    if not draft_id and (carrier.drafted_by not in (None, _TAPER_TOOL) or _draft_is_stale(carrier)):
+        return None
+    written: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for item in carried.get("bundle", []):
+        result = _confirm_from_draft(
+            store, slug, item["iso_week"], {"draft_id": item["draft_id"]}, tool=_TAPER_TOOL,
+            ignored_inputs=(), flag_dropped=False,
+        )
+        if result is None or not result.get("persisted"):
+            return {
+                "persisted": False,
+                "error": f"held taper week {item['iso_week']} could not be written; weeks already written: {written}",
+                "weeks_written": written,
+            }
+        written.append({"iso_week": item["iso_week"], "verified": result["verified"]})
+        warnings.extend(result["planning_warnings"])
+    return {
+        "event_name": carried.get("event_name"),
+        "persisted": True,
+        "written_from_draft": True,
+        "draft_id": str(carrier.id),
+        "weeks_written": written,
+        "verified": all(w["verified"] for w in written),
+        "planning_warnings": warnings,
+    }
 
 
 def _handle_propose_injury_adapted_taper(
@@ -6527,6 +7700,19 @@ def _handle_propose_injury_adapted_taper(
     says plainly which path was taken, so the model can tell the athlete/
     coach whether this reflects a real logged status or a hypothetical.
     """
+    if bool(input_data.get("confirm", False)):
+        # Before ANY other validation (the coach has lost the draft turn's inputs): the draft_id
+        # alone is enough; a named `event` is only used to check it is the same event.
+        named_event = None
+        if input_data.get("event"):
+            try:
+                named_event = _find_event_by_ref(store.load_events(slug), input_data["event"])
+            except Exception:  # noqa: BLE001
+                named_event = None
+        agreed = _confirm_taper_from_draft(store, slug, named_event, input_data)
+        if agreed is not None:
+            return agreed
+
     event_ref = input_data.get("event")
     if not event_ref:
         return {"error": "event is required"}
@@ -6741,8 +7927,17 @@ def _handle_propose_injury_adapted_taper(
     }
 
     if not confirm:
+        rationale_preview = json.dumps({"source": "propose_injury_adapted_taper"}, sort_keys=True)
+        draft_id = _hold_taper_bundle(store, slug, event, _taper_week_plans(store, slug, sessions, rationale_preview))
+        if draft_id:
+            response["draft_id"] = draft_id
+            response["next"] = (
+                "Nothing is written yet. When the athlete agrees, call again with `confirm: true` and this "
+                "draft_id -- that writes EXACTLY this taper (every week shown), not a recomputation."
+            )
         return response
 
+    response["planning_warnings"] = [_NO_DRAFT_WARNING]
     rationale = json.dumps(
         {
             "source": "propose_injury_adapted_taper",
@@ -6979,6 +8174,15 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "update_athlete_profile": lambda input_data: _handle_update_athlete_profile(
+            input_data, store=store, slug=slug
+        ),
+        "save_athlete_note": lambda input_data: _handle_save_athlete_note(
+            input_data, store=store, slug=slug
+        ),
+        "retire_athlete_note": lambda input_data: _handle_retire_athlete_note(
+            input_data, store=store, slug=slug
+        ),
+        "set_weekly_template": lambda input_data: _handle_set_weekly_template(
             input_data, store=store, slug=slug
         ),
         "set_schedule_preferences": lambda input_data: _handle_set_schedule_preferences(

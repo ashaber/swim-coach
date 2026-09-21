@@ -25,7 +25,7 @@ from __future__ import annotations
 import math
 import warnings
 from datetime import date, timedelta
-from typing import Callable, Literal
+from typing import Any, Callable, Literal
 from uuid import UUID, uuid4
 
 from swim_coach.models import (
@@ -2222,7 +2222,12 @@ def _find_block(macro: MacroPlan, week_start: date) -> tuple[int, MacroBlock]:
     for index, block in enumerate(macro.blocks):
         if block.start_date <= week_start <= block.end_date:
             return index, block
-    raise ValueError(f"{week_start} is outside this macro plan's date range")
+    raise ValueError(
+        f"{week_start} is outside this macro plan's date range "
+        f"({macro.blocks[0].start_date.isoformat()} to {macro.blocks[-1].end_date.isoformat()}). "
+        "A macro only covers its own blocks: extend or replace it first (draft_season_macro_plan "
+        "for several close races, replace_macro_plan for one), or pick a week inside that range."
+    )
 
 
 def _block_start_volume(macro: MacroPlan, block_index: int, block: MacroBlock) -> float:
@@ -3371,6 +3376,219 @@ def _bike_week_sessions(
     return sessions
 
 
+# Coach judgment: a yoga/mobility slot with no explicit `duration_min`. Not
+# research-backed; an athlete who wants a different length sets `duration_min`.
+TEMPLATE_YOGA_SESSION_MIN = 30.0
+# Coach judgment: when a template holds several hard rides, their combined
+# duration is capped at this share of the week's bike minutes so the easy
+# rides are not squeezed to nothing. The macro's ramp-capped total is untouched.
+TEMPLATE_HARD_TOTAL_SHARE_CAP = 0.6
+
+
+# Coach judgment: bike minutes per open (no `duration_min`) template slot when a
+# week is built under a NON-bike macro and no held volume is known. Not
+# research-backed; the tools pass last week's real bike minutes when they exist.
+TEMPLATE_DEFAULT_HARD_MIN = 60.0
+TEMPLATE_DEFAULT_ENDURANCE_MIN = 90.0
+
+
+def _template_default_minutes(athlete: Athlete) -> float:
+    """Total bike minutes for a template week with no macro-derived target:
+    explicit slot durations as given, open hard/endurance slots at the defaults."""
+    total = 0.0
+    for _, _, slot in _template_slots(athlete):
+        if slot["kind"] != "bike":
+            continue
+        total += slot.get("duration_min") or (
+            TEMPLATE_DEFAULT_HARD_MIN if slot["role"] == "hard" else TEMPLATE_DEFAULT_ENDURANCE_MIN
+        )
+    return total
+
+
+def template_normalization_notes(template: dict[str, list[dict]] | None) -> list[str]:
+    """Every note the model attached while normalizing a weekly template (an unrecognised
+    role treated as endurance, text truncated, a duration clamped ...), prefixed with its day.
+    Empty for a clean template. Surfaced to the coach when a template is saved -- a template
+    is never rejected for these, only annotated."""
+    return [
+        f"{day}: {slot['_note']}"
+        for day, slots in (template or {}).items()
+        for slot in slots
+        if slot.get("_note")
+    ]
+
+
+def _generic_slot_sport(kind: str, slot: dict) -> str:
+    """Session sport for a template slot the engine has no content for (swim, run, row, hike ...):
+    the slot's own `sport` if it gave a valid one, else a sensible guess from the kind."""
+    if slot.get("sport"):
+        return slot["sport"]
+    if "open water" in kind or kind in ("swim_ow", "ow swim", "ow"):
+        return "swim_ow"
+    if "swim" in kind:
+        return "swim_pool"
+    return "cross_train"
+
+
+def _template_slots(athlete: Athlete) -> list[tuple[int, int, dict]]:
+    """`(day_offset, order_in_day, slot)` for every slot of the athlete's
+    `weekly_template`, in week then in-day order."""
+    slots = [
+        (_pool_day_offset(day), index, slot)
+        for day, day_slots in (athlete.weekly_template or {}).items()
+        for index, slot in enumerate(day_slots)
+    ]
+    return sorted(slots, key=lambda t: (t[0], t[1]))
+
+
+def _template_week_sessions(
+    athlete: Athlete,
+    week_start: date,
+    total_duration_min: float,
+    ftp_watts: float | None,
+    *,
+    is_indoor: bool | None = None,
+    week_index: int = 0,
+    ftp_source: str | None = None,
+) -> list[Session]:
+    """The week's sessions from the athlete's `weekly_template` (IDEA 023 v3):
+    the athlete chose the shape, the engine supplies content and durations.
+
+    Bike minutes come from `total_duration_min` (the macro's ramp-capped
+    target), split so each hard ride gets `_resolve_bike_hard_min` (combined
+    hard rides capped at `TEMPLATE_HARD_TOTAL_SHARE_CAP` of the total) and
+    the endurance rides share the rest; an explicit slot `duration_min` wins
+    and is taken off the top. The k-th hard ride of the week uses the k-th
+    interval archetype after this week's rotation slot, so two interval days
+    are never the same workout. Skills / strength / yoga slots are additive
+    (never counted in the bike total), as they are in the generic week."""
+    slots = _template_slots(athlete)
+    bike = [(o, i, s) for o, i, s in slots if s["kind"] == "bike"]
+    fixed_min = sum(s["duration_min"] for _, _, s in bike if s.get("duration_min"))
+    budget = max(0.0, total_duration_min - fixed_min)
+    open_hard = [1 for _, _, s in bike if s["role"] == "hard" and not s.get("duration_min")]
+    open_easy = [1 for _, _, s in bike if s["role"] == "endurance" and not s.get("duration_min")]
+    n_hard, n_easy = len(open_hard), len(open_easy)
+    if n_hard and n_easy:
+        hard_each = min(_resolve_bike_hard_min(total_duration_min), budget * TEMPLATE_HARD_TOTAL_SHARE_CAP / n_hard)
+        easy_each = (budget - hard_each * n_hard) / n_easy
+    else:
+        hard_each = budget / n_hard if n_hard else 0.0
+        easy_each = budget / n_easy if n_easy else 0.0
+
+    sessions: list[Session] = []
+    hard_dates: dict[int, int] = {}  # day offset -> order of the last hard ride that day
+    hard_index = 0
+    for offset, order, slot in slots:
+        day = week_start + timedelta(days=offset)
+        kind, label = slot["kind"], slot.get("label")
+        if kind == "bike":
+            is_hard = slot["role"] == "hard"
+            template = _select_bike_interval_template(week_index + hard_index) if is_hard else None
+            meta = BIKE_INTERVAL_TEMPLATE_META[template] if is_hard else None
+            duration = max(slot.get("duration_min") or (hard_each if is_hard else easy_each), DEFAULT_BIKE_SESSION_MIN)
+            zone = meta["zone"] if is_hard else "Z2"
+            purpose = (
+                meta["purpose"]
+                if is_hard
+                else (f"{label} — endurance ride (Z2), aerobic base" if label else "endurance ride (Z2) — aerobic base")
+            )
+            if is_hard and label:
+                purpose = f"{label} — {purpose}"
+            if is_hard and template == "sustained_threshold" and hard_index == 0 and week_index == 0 and (
+                ftp_source in BIKE_FTP_CHECK_ELIGIBLE_SOURCES
+            ):
+                purpose += BIKE_FTP_CHECK_PURPOSE_SUFFIX
+            if slot.get("purpose"):
+                purpose = slot["purpose"]
+            structured = (
+                _bike_hard_session_structure(template, duration, ftp_watts)
+                if is_hard
+                else _bike_session_structure(zone, duration, ftp_watts)
+            )
+            prose = render_prose(structured)
+            if slot.get("structure"):
+                # the athlete's own description wins; drop the engine's IR so the two never disagree
+                prose, structured = slot["structure"], None
+            sessions.append(
+                Session(
+                    id=uuid4(),
+                    athlete_id=athlete.id,
+                    date=day,
+                    sport="bike",
+                    source="ai_coach",
+                    duration_min=duration,
+                    distance_m=None,
+                    intensity=_bike_intensity(zone, ftp_watts),
+                    purpose=purpose,
+                    structure=prose,
+                    structured=structured,
+                    status="planned",
+                    is_indoor=is_indoor,
+                )
+            )
+            if is_hard:
+                hard_dates[offset] = order
+                hard_index += 1
+        elif kind == "skills":
+            skills = _skills_sessions(athlete, week_start, [offset])[0]
+            if slot.get("purpose"):
+                skills = skills.model_copy(update={"purpose": slot["purpose"]})
+            elif label:
+                skills = skills.model_copy(update={"purpose": f"{label} — {skills.purpose}"})
+            if slot.get("structure"):
+                skills = skills.model_copy(update={"structure": slot["structure"], "structured": None})
+            sessions.append(skills)
+        elif kind == "strength":
+            strength = _strength_sessions(athlete, week_start, [offset])[0]
+            note = ""
+            if offset in hard_dates and hard_dates[offset] < order:
+                note = " — done after the interval session (same day)"
+            base = slot.get("purpose") or (f"{label} — {strength.purpose}" if label else strength.purpose)
+            update: dict[str, Any] = {"purpose": base + note}
+            if slot.get("structure"):
+                update.update({"structure": slot["structure"], "structured": None})
+            sessions.append(strength.model_copy(update=update))
+        elif kind not in ("yoga", "recovery"):
+            # Anything the engine has no content for (swim, run, row, hike, core ...): written
+            # exactly as the athlete described it -- the engine never blocks a session it does
+            # not know how to author.
+            sessions.append(
+                Session(
+                    id=uuid4(),
+                    athlete_id=athlete.id,
+                    date=day,
+                    sport=_generic_slot_sport(kind, slot),
+                    source="ai_coach",
+                    duration_min=float(slot.get("duration_min") or 45.0),
+                    distance_m=slot.get("distance_m"),
+                    intensity={"anchor": "rpe"},
+                    purpose=slot.get("purpose") or (f"{label} — {kind}" if label else kind),
+                    structure=slot.get("structure"),
+                    status="planned",
+                )
+            )
+        else:  # yoga / recovery
+            name = label or ("yoga" if kind == "yoga" else "recovery")
+            purpose_text = slot.get("purpose") or f"{name} — mobility & recovery"
+            sessions.append(
+                Session(
+                    id=uuid4(),
+                    athlete_id=athlete.id,
+                    date=day,
+                    sport="recovery",
+                    source="ai_coach",
+                    duration_min=float(slot.get("duration_min") or TEMPLATE_YOGA_SESSION_MIN),
+                    distance_m=None,
+                    intensity={"anchor": "rpe"},
+                    purpose=purpose_text,
+                    structure=slot.get("structure"),
+                    status="planned",
+                )
+            )
+    return sessions
+
+
 def _strength_sessions(athlete: Athlete, week_start: date, offsets: list[int]) -> list[Session]:
     """STRENGTH_SESSIONS_PER_WEEK-shaped dryland strength `Session`s at the
     given Monday-relative day `offsets` -- the same content/placement logic
@@ -4452,8 +4670,17 @@ def generate_week(
     bike_indoor: bool | None = None,
     ftp_source: str | None = None,
     events: list[Event] | None = None,
+    template_bike_minutes: float | None = None,
 ) -> WeekPlan:
     """Generate one week's sessions.
+
+    `template_bike_minutes` (IDEA 023 v3, optional): the bike-minute budget for
+    a `weekly_template` week built under a NON-bike macro (e.g. one targeting a
+    swim event, where the macro's own volume is swim meters and says nothing
+    about bike time). Callers pass the previous week's real bike minutes so
+    volume is HELD, never grown; `None` uses per-slot defaults. Ignored for a
+    bike-primary macro (its ramp-capped target is the budget) and when the
+    athlete has no template.
 
     `ftp_source` (optional, threshold-history build -- defaults to `None`,
     every existing call site keeps producing byte-identical output unless
@@ -4652,11 +4879,102 @@ def generate_week(
         )
     if primary_sport not in ("swim", "bike"):
         raise ValueError(f"unknown primary_sport: {primary_sport!r}, must be 'swim' or 'bike'")
-    block_index, block = _find_block(macro, week_start)
+    try:
+        block_index, block = _find_block(macro, week_start)
+    except ValueError:
+        # No macro block covers this week. With a weekly template the week is still WRITABLE
+        # from the athlete's own shape (volume held, loudly warned) -- a coverage gap must not
+        # stop the coach from writing an agreed week. Without a template, or when a race falls
+        # in the week (which needs a real block), the helpful coverage error stands.
+        week_end = week_start + timedelta(days=6)
+        race_in_week = any(e.active and week_start <= e.event_date <= week_end for e in (events or [])) or (
+            event is not None and week_start <= event.event_date <= week_end
+        )
+        if not athlete.weekly_template or race_in_week:
+            raise
+        minutes = float(template_bike_minutes) if template_bike_minutes else _template_default_minutes(athlete)
+        first_start = macro.blocks[0].start_date if macro.blocks else week_start
+        sessions = _template_week_sessions(
+            athlete,
+            week_start,
+            minutes,
+            ftp_watts,
+            is_indoor=bike_indoor,
+            week_index=max(0, (week_start - first_start).days // 7),
+            ftp_source=ftp_source,
+        )
+        return WeekPlan(
+            id=uuid4(),
+            athlete_id=athlete.id,
+            iso_week=iso_week,
+            meso_block="unplanned",
+            focus="weekly template -- no macro block covers this week",
+            target_volume_m=round(minutes),
+            sessions=sessions,
+            adaptation_rationale=None,
+            draft=False,
+            planning_warnings=evaluate_week_realism(sessions)
+            + [
+                "No macro block covers this week, so it was built from the athlete's weekly_template "
+                f"with bike volume HELD at ~{round(minutes)} min (last week's bike minutes, or the slot "
+                "defaults) and NO ramp-capped target. Confirm the volume with the athlete, and extend or "
+                "replace the macro (draft_season_macro_plan / replace_macro_plan) so later weeks are planned."
+            ],
+            race_week_checklist=[],
+        )
     weeks_in_block = (block.end_date - block.start_date).days // 7 + 1
     week_index_in_block = (week_start - block.start_date).days // 7
     if not (0 <= week_index_in_block < weeks_in_block):
         raise ValueError(f"{week_start} is not a valid week-start within block {block.name!r}")
+
+    # IDEA 023 v3: the athlete's weekly template also applies when the active
+    # macro targets a NON-bike event -- otherwise a swim-target macro would
+    # silently swallow the template and generate a swim week. Volume is HELD
+    # (the caller's `template_bike_minutes`, else slot defaults) because the
+    # macro's volume is swim meters. A taper or race week yields to the normal
+    # generator and says so.
+    weekly_template_yield_note: str | None = None
+    if athlete.weekly_template and primary_sport != "bike":
+        template_week_end = week_start + timedelta(days=6)
+        race_in_week = any(
+            e.active and week_start <= e.event_date <= template_week_end for e in (events or [])
+        ) or (event is not None and week_start <= event.event_date <= template_week_end)
+        if block.name == "taper" or race_in_week:
+            weekly_template_yield_note = (
+                "weekly_template was NOT applied to this week: it is a taper or race week, so the "
+                "engine's own placement is used instead. Tell the athlete which of their usual "
+                "sessions moved or dropped."
+            )
+        else:
+            minutes = float(template_bike_minutes) if template_bike_minutes else _template_default_minutes(athlete)
+            template_sessions = _template_week_sessions(
+                athlete,
+                week_start,
+                minutes,
+                ftp_watts,
+                is_indoor=bike_indoor,
+                week_index=_bike_ramp_week_index(macro, week_start),
+                ftp_source=ftp_source,
+            )
+            return WeekPlan(
+                id=uuid4(),
+                athlete_id=athlete.id,
+                iso_week=iso_week,
+                meso_block=block.name,
+                focus=f"{block.focus} — weekly template",
+                target_volume_m=round(minutes),
+                sessions=template_sessions,
+                adaptation_rationale=None,
+                draft=False,
+                planning_warnings=evaluate_week_realism(template_sessions)
+                + [
+                    "This macro targets a swim event, so the weekly_template week was built with bike "
+                    f"volume HELD at ~{round(minutes)} min (last week's bike minutes, or the slot "
+                    "defaults) rather than a macro-derived, ramp-capped target. The macro's swim "
+                    "distance is not used. Confirm the volume with the athlete."
+                ],
+                race_week_checklist=[],
+            )
 
     # IDEA 019 fix (corrected 2026-09-19, empirically verified against
     # Andrew's real, live season macro): the race-week-checklist qualifying
@@ -4807,6 +5125,12 @@ def generate_week(
         if not use_openers and not in_week_race_dates:
             bike_day_offsets, bike_day_labels = _bike_training_days(athlete)
         same_day_strength = athlete.strength_placement == "same_day_as_hard"
+        # IDEA 023 v3: a weekly template owns the week's shape in build/base
+        # weeks; a taper or race week yields to the engine's own placement.
+        weekly_template_applies = (
+            bool(athlete.weekly_template) and block.name != "taper" and not use_openers and not in_week_race_dates
+        )
+        weekly_template_skipped = bool(athlete.weekly_template) and not weekly_template_applies
 
         if use_openers and not is_deload_week:
             # Bosquet (2007) / Mujika & Padilla (2003): keep intensity (the
@@ -4984,6 +5308,21 @@ def generate_week(
                 bike_sessions_with_strength, week_start, in_week_race_offsets, race_within_days
             )
             race_week_checklist = _race_week_checklist(qualifying_event, week_start)
+        elif weekly_template_applies:
+            bike_sessions_with_strength = _template_week_sessions(
+                athlete,
+                week_start,
+                float(target_volume_m),
+                ftp_watts,
+                is_indoor=bike_indoor,
+                week_index=ramp_week_index,
+                ftp_source=ftp_source,
+            )
+            skills_offsets = []  # the template owns skills days
+            bike_sessions, strength_prerace_reduced = _filter_strength_prerace_window(
+                bike_sessions_with_strength, week_start, in_week_race_offsets, race_within_days
+            )
+            race_week_checklist = []
         else:
             bike_sessions_with_strength = _bike_week_sessions_with_strength(
                 athlete,
@@ -5053,6 +5392,12 @@ def generate_week(
             )
         # ----------------------------------------------------------------
         planning_warnings = evaluate_week_realism(bike_sessions)
+        if weekly_template_skipped:
+            planning_warnings = planning_warnings + [
+                "weekly_template was NOT applied to this week: it is a taper or race week, so the "
+                "engine's own taper/race placement is used instead. Tell the athlete which "
+                "of their usual sessions moved or dropped."
+            ]
         if strength_prerace_reduced:
             planning_warnings = planning_warnings + [
                 f"A strength session within {STRENGTH_PRERACE_WINDOW_DAYS} days of a "
@@ -5314,6 +5659,7 @@ def generate_week(
         sessions=sessions,
         adaptation_rationale=None,
         draft=False,
+        planning_warnings=[weekly_template_yield_note] if weekly_template_yield_note else [],
         race_week_checklist=race_week_checklist,
     )
 

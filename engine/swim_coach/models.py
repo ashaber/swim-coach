@@ -39,6 +39,20 @@ _VALID_ZONES = {"Z1", "Z2", "Z3", "Z4", "Z5"}
 _VALID_ANCHORS = {"css_pace", "rpe", "hr"}
 
 
+class AthleteNote(BaseModel):
+    """A durable, free-text fact or preference the athlete has told the coach ("I prefer
+    kettlebells to free weights", "call me Bob", "3 bikes; flat pedals when teaching skills").
+
+    Deliberately open: `category` is a free label (never a fixed vocabulary), and a note is
+    never deleted -- changing one retires it (`active=False`) so history is kept."""
+
+    id: UUID
+    text: str
+    category: str | None = None
+    created: date
+    active: bool = True
+
+
 class Athlete(BaseModel):
     """The athlete profile: identity, CSS pace, zones, constraints, pool schedule."""
 
@@ -66,6 +80,30 @@ class Athlete(BaseModel):
     # (after the hard day, same day or later, never the day before a hard/race
     # day). Additive/optional, no schema_version bump.
     strength_placement: Literal["after_hard", "same_day_as_hard"] | None = None
+    # IDEA 023 v3 -- the WEEKLY TEMPLATE: the athlete states the SHAPE of their
+    # week and the engine fills in content and volume. Maps a weekday
+    # ("mon".."sun", any case, full names accepted) to an ORDERED list of
+    # session slots for that day; a day that is absent or `[]` is a day off.
+    # A slot is `{"kind": ..., "role"?: ..., "label"?: ..., "duration_min"?: ...}`:
+    #   kind "bike"      + role "hard" (an interval session; several per week
+    #                      are fine, each gets a different interval archetype)
+    #                    | role "endurance" (a Z2 ride, e.g. a club group ride)
+    #   kind "skills"    cyclocross bike-handling session
+    #   kind "strength"  dryland strength (noted "after the intervals" when it
+    #                    follows a hard ride the same day)
+    #   kind "yoga"      yoga/mobility (a `recovery` session)
+    #   kind "recovery"  an easy recovery/mobility session
+    # Any slot may also carry `purpose`: the athlete's OWN description of the
+    # session (e.g. a kettlebell EMOM), used verbatim in place of the engine's
+    # generic text -- a bike slot keeps its engine-built intervals/structure.
+    # Applied in build/base weeks only; taper and race weeks use the engine's
+    # own placement and the week carries a planning_warning saying so. Volume
+    # still comes from the macro's ramp-capped target -- a template sets the
+    # structure, never the load. Additive/optional, no schema_version bump.
+    weekly_template: dict[str, list[dict]] | None = None
+    # Durable free-text preferences and facts the coach remembers and applies (see AthleteNote).
+    # Stored on the athlete record, so it needs no migration. Additive/optional.
+    notes: list[AthleteNote] = Field(default_factory=list)
     # Per-sport weekly training-day PATTERN -- the bike/strength/skills
     # counterpart to `pool_schedule` above (which only ever covered pool
     # days). Maps a session-kind key ("bike", "strength", "skills" -- free
@@ -243,6 +281,94 @@ class Athlete(BaseModel):
     # fails LOUD, deep in a code path this field's whole purpose is to make
     # MORE correct, not less -- validating at the boundary is worth the
     # small departure here.
+
+    @field_validator("weekly_template")
+    @classmethod
+    def _validate_weekly_template(
+        cls, value: dict[str, list[dict]] | None
+    ) -> dict[str, list[dict]] | None:
+        """Normalizes weekday keys to "mon".."sun" and every slot to a writable shape.
+
+        POLICY (Andrew, 2026-09-21: hard codes must never block a coach from WRITING a week):
+        anything unusual is normalized WITH A NOTE (`_note` on the slot, surfaced by
+        `plan.template_normalization_notes`), never rejected. Only input that cannot be
+        placed at all is an error: a key that is not a weekday, or a slot with no `kind`."""
+        if value is None:
+            return None
+        days = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+        sports = ("swim_pool", "swim_ow", "strength", "recovery", "cross_train", "bike")
+        kind_aliases = {
+            "mobility": "yoga", "stretch": "yoga", "stretching": "yoga",
+            "weights": "strength", "lifting": "strength", "gym": "strength", "kettlebell": "strength",
+            "kettlebells": "strength", "kb": "strength", "core": "strength", "strength training": "strength",
+            "cx skills": "skills", "cyclocross skills": "skills", "bike skills": "skills",
+        }
+        hard_words = {"hard", "interval", "intervals", "vo2", "vo2max", "threshold", "tempo", "sweet spot",
+                      "sweetspot", "race pace", "race-pace", "sprint", "sprints"}
+        easy_words = {"endurance", "easy", "z2", "zone 2", "long", "group", "social", "base", "aerobic", "steady"}
+        text_caps = {"label": 200, "purpose": 1500, "structure": 6000}
+        out: dict[str, list[dict]] = {}
+        for raw_day, slots in value.items():
+            day = str(raw_day).strip().lower()[:3]
+            if day not in days:
+                raise ValueError(f"weekly_template day {raw_day!r} is not a weekday (mon..sun)")
+            if day in out:
+                raise ValueError(f"weekly_template lists {day!r} twice")
+            normalized: list[dict] = []
+            for original in slots:
+                raw_kind = original.get("kind")
+                if not isinstance(raw_kind, str) or not raw_kind.strip():
+                    raise ValueError("every weekly_template slot needs a `kind` (e.g. bike, strength, yoga, swim)")
+                slot = dict(original)
+                notes: list[str] = [slot["_note"]] if slot.get("_note") else []
+                kind = raw_kind.strip().lower()
+                kind = kind_aliases.get(kind, kind)
+                slot["kind"] = kind
+                if kind == "bike":
+                    role = slot.get("role")
+                    word = role.strip().lower() if isinstance(role, str) else None
+                    if word in hard_words:
+                        slot["role"] = "hard"
+                    elif word in easy_words:
+                        slot["role"] = "endurance"
+                    else:
+                        slot["role"] = "endurance"
+                        notes.append(
+                            "bike slot had no role, treated as an endurance ride"
+                            if role is None
+                            else f"bike role {role!r} not recognised, treated as an endurance ride"
+                        )
+                elif "role" in slot:
+                    slot.pop("role")
+                    notes.append(f"role ignored: it only applies to bike slots, not {kind!r}")
+                for name, cap in text_caps.items():
+                    if name in slot:
+                        if not isinstance(slot[name], str):
+                            slot.pop(name)
+                            notes.append(f"{name} dropped: it must be text")
+                        elif len(slot[name]) > cap:
+                            slot[name] = slot[name][:cap]
+                            notes.append(f"{name} truncated to {cap} characters")
+                if "duration_min" in slot:
+                    d = slot["duration_min"]
+                    if isinstance(d, bool) or not isinstance(d, (int, float)):
+                        slot.pop("duration_min")
+                        notes.append("duration_min dropped: it must be a number")
+                    elif not 5 <= d <= 900:
+                        slot["duration_min"] = min(max(d, 5), 900)
+                        notes.append(f"duration_min {d} clamped to {slot['duration_min']}")
+                if "distance_m" in slot:
+                    m = slot["distance_m"]
+                    if isinstance(m, bool) or not isinstance(m, (int, float)) or m < 0:
+                        slot.pop("distance_m")
+                        notes.append("distance_m dropped: it must be a non-negative number")
+                if "sport" in slot and slot["sport"] not in sports:
+                    notes.append(f"sport {slot.pop('sport')!r} not recognised, ignored")
+                if notes:
+                    slot["_note"] = "; ".join(dict.fromkeys(notes))
+                normalized.append(slot)
+            out[day] = normalized
+        return out
 
     @field_validator("training_days")
     @classmethod
@@ -648,6 +774,14 @@ class WeekPlan(BaseModel):
     sessions: list[Session] = Field(default_factory=list)
     adaptation_rationale: str | None = None
     draft: bool = False
+    # When a HELD draft was proposed (UTC). Drafts older than the tools' expiry are
+    # treated as absent so a stale, forgotten draft can never be written by a later,
+    # unrelated confirm. Additive/optional, no schema_version bump.
+    drafted_at: datetime | None = None
+    # Which tool proposed a HELD draft, so a confirm that names no draft_id only ever
+    # picks up ITS OWN tool's draft (a replace_week_plan draft is never written by a
+    # later merge_week_plan confirm on the same week). Additive/optional.
+    drafted_by: str | None = None
     planning_warnings: list[str] = Field(default_factory=list)
     # Realism-guardrail verdict for this week's plan (Build A defect 1,
     # engine/week-generator-realism). Human-readable strings surfaced to the

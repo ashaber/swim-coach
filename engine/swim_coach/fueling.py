@@ -360,6 +360,7 @@ def compute_fueling_plan(
     product_key: str,
     carb_tolerance_g_per_hr: float | None = None,
     heat: bool = False,
+    product: ProductFuel | None = None,
 ) -> FuelingPlan:
     """The generic calculator: event duration/intensity + access pattern +
     product -> a target g/h band, per-access-segment serving counts, and
@@ -379,7 +380,8 @@ def compute_fueling_plan(
     """
     if duration_min <= 0:
         raise ValueError(f"duration_min must be > 0, got {duration_min!r}")
-    product = _product(product_key)
+    # `product` lets the athlete's own product (its label values) stand in for the catalog.
+    product = product if product is not None else _product(product_key)
 
     if carb_tolerance_g_per_hr is None:
         resolved_tolerance = DEFAULT_CARB_TOLERANCE_G_PER_HR
