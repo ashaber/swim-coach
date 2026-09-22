@@ -204,6 +204,7 @@ from swim_coach.models import (
     Feedback,
     MacroPlan,
     HealthStatus,
+    RaceDebrief,
     Session,
     ThresholdRecord,
     WeekPlan,
@@ -901,6 +902,66 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "properties": {
                 "id": {"type": "string"},
                 "text_contains": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "save_race_debrief",
+        "description": (
+            "Record a post-race (or post-key-session) interview as durable history -- once per "
+            "event, kept forever, shown back to you on future turns so 'what does this athlete "
+            "need to work on' doesn't have to be re-derived from raw logs every time. Pull the "
+            "objective data FIRST (get_ride_pacing / reanalyze_workout / pull_activity_stream for "
+            "the session, official result if the athlete gives one) before asking anything, then "
+            "interview: ask what went well and what they'd like to work on (their own two open "
+            "questions, always ask both), plus targeted follow-ups the data raises (where in the "
+            "race it hurt: early or late; the gap to whoever they were racing). Ask ONE follow-up "
+            "at a time, never a checklist. Hold your own read of the data loosely -- when the "
+            "athlete's course/tactical knowledge contradicts what a file suggests (a 'fade' that "
+            "was really a hairpin turn, a 'coast' that was traffic), believe them and say so "
+            "plainly, don't keep the wrong conclusion. `tactical_note` (how they raced -- staging, "
+            "positioning, pacing calls) and `training_implication` (what should change in the "
+            "PLAN) are separate on purpose: a tactical finding is a proposal for the athlete to "
+            "confirm, not a training change, and doesn't belong in the plan. When there IS a real "
+            "training implication, weave it INTO an existing hard-day session next time you write "
+            "one (session_overrides `structure`/`purpose`) rather than adding a new session or day "
+            "-- same 'flag risk, don't corrupt' rule as everywhere else. Every field but "
+            "event_name/event_date is optional; save what you actually have, don't force fields "
+            "with nothing to put there."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string", "description": "The matching Event's id, if this race is on the calendar."},
+                "event_name": {"type": "string", "description": "The race or session name, even if no matching Event exists."},
+                "event_date": {"type": "string", "description": "ISO date (YYYY-MM-DD) the race/session happened."},
+                "result": {"type": "string", "description": "Free text: placing, gap to a named competitor, time -- whatever the athlete has."},
+                "went_well": {"type": "string", "description": "The athlete's own answer to 'what did you do well?'"},
+                "work_on": {"type": "string", "description": "The athlete's own answer to 'what would you like to work on?'"},
+                "data_findings": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Short, specific facts from the analyzer/official result (e.g. 'lap 1 cost 22s of the 26s gap; laps 2-5 flat, no fade') -- not opinions.",
+                },
+                "training_implication": {"type": "string", "description": "What should change in the PLAN, if anything -- coach judgment, plain language."},
+                "tactical_note": {"type": "string", "description": "A race-day (not training) proposal -- staging, positioning, pacing. Flagged as a proposal, not a decision."},
+            },
+            "required": ["event_name", "event_date"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "get_race_debriefs",
+        "description": (
+            "Read back this athlete's race-debrief history (see save_race_debrief) -- the most "
+            "recent ones are already in your per-request context, so call this for older ones, or "
+            "to check whether an event already has a debrief before starting a new interview."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "Most recent N (default 10)."},
             },
             "additionalProperties": False,
         },
@@ -3557,6 +3618,92 @@ def _handle_retire_athlete_note(input_data: dict[str, Any], *, store: StoreInter
     log.info("athlete note retired", athlete=slug, note_id=str(matches[0].id))
     return {"retired": True, "id": str(matches[0].id), "text": matches[0].text,
             "active_notes": sum(1 for n in athlete.notes if n.active)}
+
+
+_DEBRIEF_TEXT_MAX_CHARS = 2000
+_DEBRIEF_FINDING_MAX_CHARS = 300
+_DEBRIEF_FINDINGS_MAX = 12
+
+
+def _handle_save_race_debrief(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    """Persist a post-race interview -- see RaceDebrief's own docstring and this tool's schema
+    description for the interview protocol. Flag-don't-block: nothing here is required beyond
+    identifying the event; over-long text truncates with a warning rather than erroring."""
+    event_name = input_data.get("event_name")
+    event_date_raw = input_data.get("event_date")
+    if not isinstance(event_name, str) or not event_name.strip():
+        return {"error": "event_name is required"}
+    try:
+        event_date = date.fromisoformat(str(event_date_raw))
+    except (ValueError, TypeError):
+        return {"error": f"event_date must be an ISO date (YYYY-MM-DD), got {event_date_raw!r}"}
+
+    warnings: list[str] = []
+
+    def _text(key: str) -> str | None:
+        val = input_data.get(key)
+        if not isinstance(val, str) or not val.strip():
+            return None
+        val = val.strip()
+        if len(val) > _DEBRIEF_TEXT_MAX_CHARS:
+            val = val[:_DEBRIEF_TEXT_MAX_CHARS]
+            warnings.append(f"{key} truncated to {_DEBRIEF_TEXT_MAX_CHARS} characters")
+        return val
+
+    findings_raw = input_data.get("data_findings")
+    findings: list[str] = []
+    if isinstance(findings_raw, list):
+        for f in findings_raw[:_DEBRIEF_FINDINGS_MAX]:
+            if isinstance(f, str) and f.strip():
+                findings.append(f.strip()[:_DEBRIEF_FINDING_MAX_CHARS])
+        if len(findings_raw) > _DEBRIEF_FINDINGS_MAX:
+            warnings.append(f"data_findings truncated to the first {_DEBRIEF_FINDINGS_MAX}")
+
+    event_id_raw = input_data.get("event_id")
+    event_id = None
+    if event_id_raw:
+        try:
+            event_id = uuid.UUID(str(event_id_raw))
+        except ValueError:
+            warnings.append(f"event_id {event_id_raw!r} is not a valid id -- saved without it")
+
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        log.error("storage read failed", what='athlete profile', exc_info=True)
+        return storage_error("athlete profile", exc)
+
+    debrief = RaceDebrief(
+        id=uuid.uuid4(),
+        event_id=event_id,
+        event_name=event_name.strip()[:200],
+        event_date=event_date,
+        logged=athlete_today(athlete),
+        result=_text("result"),
+        went_well=_text("went_well"),
+        work_on=_text("work_on"),
+        data_findings=findings,
+        training_implication=_text("training_implication"),
+        tactical_note=_text("tactical_note"),
+    )
+    athlete.race_debriefs.append(debrief)
+    store.save_athlete(athlete)
+    log.info("race debrief saved", athlete=slug, debrief_id=str(debrief.id), event_name=debrief.event_name)
+    return {"saved": True, "id": str(debrief.id), "event_name": debrief.event_name,
+            "event_date": debrief.event_date.isoformat(), "warnings": warnings}
+
+
+def _handle_get_race_debriefs(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    """Read back race-debrief history, most recent first."""
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        log.error("storage read failed", what='athlete profile', exc_info=True)
+        return storage_error("athlete profile", exc)
+    limit = input_data.get("limit")
+    limit = limit if isinstance(limit, int) and limit > 0 else 10
+    ordered = sorted(athlete.race_debriefs, key=lambda d: d.event_date, reverse=True)
+    return {"debriefs": [d.model_dump(mode="json") for d in ordered[:limit]], "total": len(athlete.race_debriefs)}
 
 
 def _summarize_workout(w: Workout, *, athlete: Athlete, hr_max: float | None, wellness: list[Any]) -> dict[str, Any]:
@@ -8188,6 +8335,12 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "retire_athlete_note": lambda input_data: _handle_retire_athlete_note(
+            input_data, store=store, slug=slug
+        ),
+        "save_race_debrief": lambda input_data: _handle_save_race_debrief(
+            input_data, store=store, slug=slug
+        ),
+        "get_race_debriefs": lambda input_data: _handle_get_race_debriefs(
             input_data, store=store, slug=slug
         ),
         "set_weekly_template": lambda input_data: _handle_set_weekly_template(

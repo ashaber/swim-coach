@@ -718,6 +718,31 @@ debrief, or assess how a BIKE race or ride went -- pacing, fade, lap-to-lap
 consistency, efficiency -- call `get_ride_pacing` with that session's `id`
 before answering, and ground the review in what it returns rather than in
 the summary row alone.
+
+## Post-race interview (`save_race_debrief`)
+
+When a race just happened (an event's date has passed and it has no debrief yet -- check the
+"Recent race-debrief history" section above and `get_race_debriefs` for older ones) and the
+athlete brings it up, or they explicitly ask for a debrief/review: pull the objective data FIRST
+(`get_ride_pacing`/the session's own analyzer output; the athlete's own official result if they
+give one -- an official time/placing is ground truth over a file, which can misread a start line
+or a neutral roll-out as race time) -- THEN interview. Always ask both of the athlete's own two
+opening questions, together: what did you do well, and what would you like to work on. Add
+targeted follow-ups the data itself raises (a gap to a named competitor, where it hurt -- early or
+late), but ask only ONE new thing per turn, never a checklist.
+
+Hold your own reading of the data loosely. A file can't see a 90-degree turn onto gravel, a gate,
+traffic, or a tactical call -- when the athlete's own course/race knowledge contradicts what the
+numbers suggested (a "fade" that was really a corner, a "coast" that was a merge), say plainly that
+it changes your read, and revise -- don't defend the original number. Keep two things separate, and
+only save what you actually have (nothing here is required): a `tactical_note` (staging,
+positioning, pacing -- how they raced) is a proposal for the athlete to confirm, not a training
+change; a `training_implication` (what should change in the PLAN) is coach judgment about what to
+build into a session. When there is a real training implication, bring it in by editing an existing
+hard-day session next time you write one (session_overrides `structure`/`purpose`) -- never add a
+new session or day for it, same rule as everywhere else. Once the picture is reasonably settled,
+call `save_race_debrief` so the next planning turn already has it -- don't wait for a "final"
+answer that never comes; a debrief with just `went_well`/`work_on` filled in is still worth saving.
 """
 
 
@@ -1544,6 +1569,39 @@ def render_athlete_notes(athlete: Athlete) -> str | None:
     return "\n".join(lines)
 
 
+_RACE_DEBRIEFS_SHOWN = 2
+
+
+def render_race_debriefs(athlete: Athlete) -> str | None:
+    """The `_RACE_DEBRIEFS_SHOWN` most recent post-race interviews (see `RaceDebrief`/
+    `save_race_debrief`), shown every turn so what the athlete needs to work on doesn't have to be
+    re-derived from raw logs -- or `None` when there are none yet. Older ones: `get_race_debriefs`."""
+    if not athlete.race_debriefs:
+        return None
+    ordered = sorted(athlete.race_debriefs, key=lambda d: d.event_date, reverse=True)
+    lines = [
+        "### Recent race-debrief history (what past interviews found -- weave `training_implication` "
+        "into plan content, apply `tactical_note` only as a proposal the athlete still has to confirm)",
+    ]
+    for d in ordered[:_RACE_DEBRIEFS_SHOWN]:
+        lines.append(f"- {d.event_date.isoformat()} {d.event_name} (id {d.id}):")
+        if d.result:
+            lines.append(f"  result: {d.result}")
+        if d.went_well:
+            lines.append(f"  went well: {d.went_well}")
+        if d.work_on:
+            lines.append(f"  work on: {d.work_on}")
+        for finding in d.data_findings:
+            lines.append(f"  finding: {finding}")
+        if d.training_implication:
+            lines.append(f"  training implication: {d.training_implication}")
+        if d.tactical_note:
+            lines.append(f"  tactical proposal (unconfirmed): {d.tactical_note}")
+    if len(athlete.race_debriefs) > _RACE_DEBRIEFS_SHOWN:
+        lines.append(f"  ({len(athlete.race_debriefs) - _RACE_DEBRIEFS_SHOWN} older debrief(s) -- get_race_debriefs)")
+    return "\n".join(lines)
+
+
 def _render_upcoming_events_pinned(events: list[Event], today: date) -> str:
     """A high-salience block for the TOP of the per-request context: only
     the ACTIVE, still-upcoming events, soonest first, each with `days_until`
@@ -1840,6 +1898,7 @@ def build_per_request_context(
         "",
         *([held_drafts, ""] if (held_drafts := render_pending_drafts(store, slug)) else []),
         *([athlete_notes, ""] if (athlete_notes := render_athlete_notes(athlete)) else []),
+        *([race_debriefs, ""] if (race_debriefs := render_race_debriefs(athlete)) else []),
         "### Upcoming events (READ FIRST -- race dates are ground truth)",
         _render_upcoming_events_pinned(events, today),
         "Before you label or describe any planned session that falls on one "
@@ -1847,7 +1906,7 @@ def build_per_request_context(
         "IS that race, not a training set.",
         "",
         "### Profile",
-        json.dumps(athlete.model_dump(mode="json", exclude={"notes"}), indent=2),
+        json.dumps(athlete.model_dump(mode="json", exclude={"notes", "race_debriefs"}), indent=2),
     ]
     if demographics is not None:
         parts += [

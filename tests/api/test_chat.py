@@ -83,6 +83,8 @@ def test_request_shape_includes_tools(client, fake_claude_chat_factory) -> None:
         "propose_session_adjustment",
         "propose_injury_adapted_taper",
         "render_plan_table",
+        "save_race_debrief",
+        "get_race_debriefs",
     }
 
 
