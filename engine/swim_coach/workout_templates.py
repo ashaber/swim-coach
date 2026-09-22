@@ -1013,8 +1013,9 @@ def render_prose(structured: WorkoutStructure) -> str:
     modalities instead of needing a parallel per-format_type branch here too.
 
     A top-level `WorkoutRepeat` renders each of its inner steps as its own
-    line (one level of nesting -- real templates this pass ships never nest
-    a `WorkoutRepeat` inside a `WorkoutRepeat`); a section header for a
+    line (real templates this pass ships never nest a `WorkoutRepeat` inside
+    a `WorkoutRepeat`, but coach-authored workouts do, so nesting recurses
+    -- see `_render_repeat_lines`); a section header for a
     repeat (e.g. "Rotator-cuff / scapular-stability core (2 sets x 10 reps
     each):") is its own preceding `role="open"` step, not part of the repeat
     itself (`WorkoutRepeat` has no label/title field -- see models.py).
@@ -1024,9 +1025,22 @@ def render_prose(structured: WorkoutStructure) -> str:
         if isinstance(item, WorkoutStep):
             lines.append(_render_step_line(item))
         else:
-            for inner in item.steps:
-                lines.append(_render_step_line(inner))
+            _render_repeat_lines(item, lines, nested=False)
     return "\n".join(lines)
+
+
+def _render_repeat_lines(repeat: WorkoutRepeat, lines: list[str], *, nested: bool) -> None:
+    """A repeat's inner items as lines. The model ALLOWS a repeat inside a repeat (2 sets of 3 x
+    kettlebell swings), so a nested repeat recurses -- with a "Repeat Nx:" line so its count is not
+    lost. A top-level repeat renders exactly as it always has (its count lives in the labels), which
+    keeps every existing template's prose byte-identical."""
+    if nested:
+        lines.append(f"Repeat {repeat.count}x:")
+    for inner in repeat.steps:
+        if isinstance(inner, WorkoutStep):
+            lines.append(_render_step_line(inner))
+        else:
+            _render_repeat_lines(inner, lines, nested=True)
 
 
 def resolve_template(structured: WorkoutStructure, athlete: Athlete) -> WorkoutStructure:

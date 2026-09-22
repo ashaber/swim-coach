@@ -16,6 +16,10 @@ from typing import Any
 from swim_coach.models import WeekPlan
 from swim_coach.store import StoreInterface
 
+from app.logging_config import get_logger
+
+log = get_logger(__name__)
+
 # A held draft older than this is treated as absent by a confirm that names no draft_id, and is
 # no longer offered to the coach as waiting.
 DRAFT_MAX_AGE = timedelta(hours=12)
@@ -55,6 +59,7 @@ def _is_written(store: StoreInterface, slug: str, draft: WeekPlan) -> bool:
         live = store.load_week(slug, draft.iso_week)
         return live is not None and live.id == draft.id
     except Exception:  # noqa: BLE001 - never let a lookup problem hide a draft from the coach
+        log.warn("swallowed exception, using a default", where='backend/app/drafts.py', line_hint=57, exc_info=True)
         return False
 
 
@@ -62,6 +67,7 @@ def pending_drafts(store: StoreInterface, slug: str) -> list[WeekPlan]:
     try:
         held = store.list_week_drafts(slug)
     except Exception:  # noqa: BLE001
+        log.warn("swallowed exception, using a default", where='backend/app/drafts.py', line_hint=64, exc_info=True)
         return []
     return [d for d in held if not draft_is_stale(d) and not _is_written(store, slug, d)]
 

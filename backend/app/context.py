@@ -66,6 +66,7 @@ from swim_coach.store import StoreInterface
 
 from app.drafts import render_pending_drafts
 from app.load_helpers import workout_load_au
+from app.logging_config import get_logger
 
 # --- system block A: persona + hard rules -----------------------------------
 
@@ -73,6 +74,8 @@ from app.load_helpers import workout_load_au
 # same persona, same safety-first override, same grounding rules -- so
 # Phase 1 and Phase 2 coaching voice/behavior stay identical. Byte-stable:
 # no template variables, no timestamps.
+log = get_logger(__name__)
+
 PERSONA_AND_RULES = """\
 You are the swim-coach AI coaching agent: conversational coaching grounded in
 `library/` (a curated research library) and the athlete's own plan/history.
@@ -1597,6 +1600,7 @@ def athlete_primary_sport(store: StoreInterface, slug: str) -> str:
             return "swim"
         events = store.load_events(slug)
     except Exception:  # noqa: BLE001 - a lookup failure just means "assume swim"
+        log.warn("swallowed exception, using a default", where='backend/app/context.py', line_hint=1599, exc_info=True)
         return "swim"
     event = next((e for e in events if e.id == macro.event_id), None)
     return event.primary_sport if event is not None else "swim"

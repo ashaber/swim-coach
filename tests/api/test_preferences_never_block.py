@@ -102,12 +102,13 @@ def test_invalid_structured_content_alone_is_salvaged_into_readable_text(athlete
     assert "KB EMOM" in saved.structure and "goblet squats" in saved.structure and saved.structured is None
 
 
-def test_unsalvageable_structured_content_gives_an_actionable_message_not_a_validation_dump(athletes_dir) -> None:
+def test_unsalvageable_structured_content_is_dropped_with_an_actionable_note_not_a_validation_dump(athletes_dir) -> None:
     store, h = _h(athletes_dir)
     result = _add(h, sport="strength", duration_min=30, purpose="KB", structured={"foo": 1})
-    assert "error" in result
-    assert "`structure`" in result["error"] and "plain text" in result["error"]
-    assert "validation error" not in result["error"].lower()
+    # The session is still written (as text) and the note says what to do -- never a validation dump.
+    assert "error" not in result
+    note = next(w for w in result["planning_warnings"] if "detailed part" in w)
+    assert "`structure`" in note and "plain text" in note and "validation error" not in note.lower()
 
 
 # --- 3. an equipment/style preference with no matching library template still writes the week ----------
@@ -237,3 +238,33 @@ def test_an_event_in_an_unsupported_sport_is_kept_as_a_note_with_a_clear_explana
     assert "error" not in result and result["created"] is False
     assert "Trail 50k" in result["saved_as_note"] and "swim or bike" in result["warnings"][0]
     assert any("Trail 50k" in n.text for n in store.load_athlete("renee").notes)
+
+
+# --- 10. live-log bugs (2026-09-21): nested repeats crashed the write; `add` onto an existing session errored --------
+
+
+NESTED_KB = {"items": [{"kind": "repeat", "count": 2, "steps": [
+    {"kind": "repeat", "count": 3, "steps": [
+        {"kind": "step", "label": "KB swing x12", "role": "interval", "duration_kind": "reps", "duration_value": 12, "modality": "strength"},
+        {"kind": "step", "label": "Rest 30s", "role": "rest", "duration_kind": "time_s", "duration_value": 30, "modality": "strength"}]},
+    {"kind": "step", "label": "Set rest 2 min", "role": "rest", "duration_kind": "time_s", "duration_value": 120, "modality": "strength"}]}]}
+
+
+def test_a_coach_authored_workout_with_a_nested_repeat_writes(athletes_dir) -> None:
+    store, h = _h(athletes_dir)
+    result = _add(h, sport="strength", duration_min=30, purpose="KB sets", structured=NESTED_KB)
+    assert "error" not in result, result
+    added = next(s for s in result["sessions"] if s["date"] == D and s["sport"] == "strength")
+    assert added["has_structured"] is True
+
+
+def test_add_onto_an_existing_session_of_that_sport_edits_it_with_a_note_not_an_error(athletes_dir) -> None:
+    store, h = _h(athletes_dir)
+    existing = next(s for s in store.load_week("renee", WEEK).sessions if s.sport == "recovery")
+    result = h["patch_week_plan"]({"iso_week": WEEK, "session_overrides": [
+        {"date": existing.date.isoformat(), "add": True, "sport": "recovery", "duration_min": 25, "purpose": "Yoga and mobility"}]})
+    assert "error" not in result, result
+    assert any("already" in w and "edited it" in w for w in result["planning_warnings"])
+    edited = next(s for s in result["sessions"] if s["date"] == existing.date.isoformat() and s["sport"] == "recovery")
+    assert edited["duration_min"] == 25 and edited["purpose"] == "Yoga and mobility"
+    assert len([s for s in result["sessions"] if s["date"] == existing.date.isoformat() and s["sport"] == "recovery"]) == 1

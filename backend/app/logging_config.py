@@ -19,8 +19,29 @@ from __future__ import annotations
 
 import json
 import sys
+import traceback
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any
+
+# Fields merged into EVERY log line emitted while a `log_context(...)` block is active, so a failure
+# log line says WHAT was being done (tool, athlete, a bounded summary of the request) without every
+# call site repeating it. Only ever set around a plain synchronous call -- never held across a
+# generator `yield` (streaming responses run in per-call context copies, so the value would leak or
+# vanish).
+_LOG_CONTEXT: ContextVar[dict[str, Any]] = ContextVar("log_context", default={})
+
+
+@contextmanager
+def log_context(**fields: Any) -> Iterator[None]:
+    """Attach `fields` to every log line emitted inside the block (nesting merges; inner wins)."""
+    token = _LOG_CONTEXT.set({**_LOG_CONTEXT.get(), **fields})
+    try:
+        yield
+    finally:
+        _LOG_CONTEXT.reset(token)
 
 
 class JsonLogger:
@@ -31,11 +52,22 @@ class JsonLogger:
         self.name = name
 
     def _emit(self, level: str, msg: str, stream: Any, fields: dict[str, Any]) -> None:
+        # `exc_info=True` (or an exception instance) records the exception type and a REAL stack
+        # trace, capped so one runaway recursion cannot bloat a log line. It is consumed here --
+        # never emitted as a literal field -- so a failure is diagnosable and not silently eaten.
+        exc_info = fields.pop("exc_info", None)
+        if exc_info:
+            exc = exc_info if isinstance(exc_info, BaseException) else sys.exc_info()[1]
+            if exc is not None:
+                fields.setdefault("error_type", type(exc).__name__)
+                fields.setdefault("error", str(exc)[:500])
+                fields["stack"] = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[-6000:]
         payload = {
             "level": level,
             "msg": msg,
             "logger": self.name,
             "ts": datetime.now(timezone.utc).isoformat(),
+            **_LOG_CONTEXT.get(),
             **fields,
         }
         # default=str so any stray non-JSON-serializable value (Path, UUID,
