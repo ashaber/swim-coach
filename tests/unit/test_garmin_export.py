@@ -329,6 +329,29 @@ def test_bike_power_w_target_produces_power_type_and_watts():
     assert steps[0]["custom_target_power_high"] == 190 + 1000
 
 
+def test_bike_power_w_zero_low_bound_is_nudged_off_the_percent_watts_boundary():
+    # Real incident, 2026-09-22: a Z1 step's real 0 W low bound encoded to raw 1000 -- exactly the
+    # boundary the "<1000 percent / >=1000 watts" FIT convention uses -- and a downstream reader
+    # (a second app/device) decoded it on the percent side, showing "1000-1152%" instead of 0-152W.
+    structured = WorkoutStructure(
+        items=[
+            WorkoutStep(
+                label="Warm-up, easy spin -- Z1 (0-152W)",
+                role="warmup",
+                duration_kind="time_s",
+                duration_value=300,
+                target=WorkoutTarget(basis="power_w", low=0.0, high=151.8),
+                modality="bike",
+            ),
+        ]
+    )
+    fit_bytes = to_garmin_fit_workout(structured, sport="bike", name="Bike test")
+    steps = _decode_workout_steps(fit_bytes)
+    # Never exactly 1000 (the ambiguous boundary value) -- nudged to 1 W instead of 0 W.
+    assert steps[0]["custom_target_power_low"] == 1001
+    assert steps[0]["custom_target_power_high"] == 1152
+
+
 def test_bike_zone_basis_target_uses_power_zone_not_speed_zone():
     # The SAME basis="zone" shape swim steps use for a pace zone means a
     # POWER zone for a bike-modality step -- disambiguated by `modality`,

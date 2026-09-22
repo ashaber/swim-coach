@@ -183,6 +183,17 @@ _EQUIPMENT_TO_FIT: dict[str, WorkoutEquipment] = {
 _ZONE_TO_INT: dict[str, int] = {"Z1": 1, "Z2": 2, "Z3": 3, "Z4": 4, "Z5": 5}
 
 _CUSTOM_TARGET_POWER_WATTS_OFFSET = 1000
+# Real incident, 2026-09-22 (Andrew, live push, corroborated on a second app/device): a Z1
+# recovery/warm-up/cool-down step with a real 0 W low bound encoded to a raw
+# `custom_target_power_low` of exactly `_CUSTOM_TARGET_POWER_WATTS_OFFSET` (1000) -- the literal
+# boundary value the "< 1000 percent / >= 1000 watts" convention (this module's own comment above)
+# uses to distinguish the two units. Whatever read that FIT file decoded it on the percent side of
+# that boundary instead, displaying "1000-1152%" and a nonsense multi-kW power target. This module's
+# own encoding is internally correct either way -- 1000 IS >= 1000 -- but landing exactly ON the
+# boundary a downstream reader might treat as "> 1000" rather than ">=" is free, avoidable risk for a
+# value (0 W low bound) that is common (every recovery/warm-up/cool-down step). `_encode_watts` below
+# nudges a rounded-to-zero bound up to 1 W so the raw value is always unambiguously above the
+# boundary, never exactly on it -- 1 W is imperceptible next to a real interval target.
 # The FIT SDK's own documented encoding for `custom_target_power_low`/`_high`
 # (Garmin FIT SDK Profile.xlsx's comment on these fields, a well-established
 # convention independently re-implemented by multiple open-source FIT
@@ -223,6 +234,13 @@ def _set_subfield(fit_step: WorkoutStepMessage, field_id: int, sub_field_name: s
     if sub_field is None:
         raise AssertionError(f"fit_tool workout_step field {field_id} has no subfield named {sub_field_name!r}")
     field.set_value(0, value, sub_field)
+
+
+def _encode_custom_target_watts(watts: float) -> int:
+    """Encode a resolved absolute-watts bound as a raw `custom_target_power_*` value -- see
+    `_CUSTOM_TARGET_POWER_WATTS_OFFSET`'s own comment for why a rounded-to-zero bound is nudged to
+    1 W rather than landing exactly on the percent/watts boundary."""
+    return max(1, round(watts)) + _CUSTOM_TARGET_POWER_WATTS_OFFSET
 
 
 def _pace_s_to_speed_mps(pace_s_per_100m: float) -> float:
@@ -308,14 +326,14 @@ def _apply_target(
                 fit_step,
                 _FIELD_CUSTOM_TARGET_LOW,
                 "custom_target_power_low",
-                round(low_w) + _CUSTOM_TARGET_POWER_WATTS_OFFSET,
+                _encode_custom_target_watts(low_w),
             )
         if high_w is not None:
             _set_subfield(
                 fit_step,
                 _FIELD_CUSTOM_TARGET_HIGH,
                 "custom_target_power_high",
-                round(high_w) + _CUSTOM_TARGET_POWER_WATTS_OFFSET,
+                _encode_custom_target_watts(high_w),
             )
     elif target.basis == "percent_css":
         raise ValueError(
