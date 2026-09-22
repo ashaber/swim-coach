@@ -251,7 +251,7 @@ from app.drafts import MACRO_CARRIER_WEEK, TAPER_CARRIER_WEEK, draft_is_stale
 from app.garmin_push import push_on_demand
 from app.health_status_helpers import link_health_status_feedback
 from app.load_helpers import workout_load_au
-from app.logging_config import get_logger
+from app.logging_config import get_logger, log_context
 from app.sync import (
     ON_DEMAND_SYNC_WINDOW_DAYS,
     SYNC_NOT_CONFIGURED_ERROR,
@@ -260,6 +260,7 @@ from app.sync import (
     load_sync_config,
     sync_on_demand,
 )
+from app.tool_errors import internal_tool_error, storage_error, storage_problem_text
 
 log = get_logger(__name__)
 
@@ -2733,13 +2734,13 @@ def _handle_propose_adaptation(input_data: dict[str, Any], *, store: StoreInterf
         athlete = store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='athlete profile', exc_info=True)
-        return {"error": f"could not load athlete profile: {exc}"}
+        return storage_error("athlete profile", exc)
 
     try:
         macro = store.load_macro(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='macro plan', exc_info=True)
-        return {"error": f"could not load macro plan: {exc}"}
+        return storage_error("macro plan", exc)
     if macro is None:
         return {"error": "no macro plan for this athlete; run scaffold-macro first"}
 
@@ -2747,7 +2748,7 @@ def _handle_propose_adaptation(input_data: dict[str, Any], *, store: StoreInterf
         events = store.load_events(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='events', exc_info=True)
-        return {"error": f"could not load events: {exc}"}
+        return storage_error("events", exc)
     event = next((e for e in events if e.id == macro.event_id), None)
     if event is None:
         return {"error": f"macro's event_id {macro.event_id} not found in events.yaml"}
@@ -3341,7 +3342,7 @@ def _handle_update_athlete_profile(
         athlete = store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='athlete profile', exc_info=True)
-        return {"error": f"could not load athlete profile: {exc}"}
+        return storage_error("athlete profile", exc)
 
     for field, val in updates.items():
         setattr(athlete, field, val)
@@ -3418,7 +3419,7 @@ def _handle_set_weekly_template(
         athlete = store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='athlete profile', exc_info=True)
-        return {"error": f"could not load athlete profile: {exc}"}
+        return storage_error("athlete profile", exc)
 
     try:
         candidate = Athlete.model_validate(
@@ -3503,7 +3504,7 @@ def _handle_save_athlete_note(input_data: dict[str, Any], *, store: StoreInterfa
         athlete = store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='athlete profile', exc_info=True)
-        return {"error": f"could not load athlete profile: {exc}"}
+        return storage_error("athlete profile", exc)
 
     existing = next((n for n in athlete.notes if n.active and n.text.strip().lower() == text.lower()), None)
     if existing is not None:
@@ -3540,7 +3541,7 @@ def _handle_retire_athlete_note(input_data: dict[str, Any], *, store: StoreInter
         athlete = store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='athlete profile', exc_info=True)
-        return {"error": f"could not load athlete profile: {exc}"}
+        return storage_error("athlete profile", exc)
     active = [n for n in athlete.notes if n.active]
     if note_id:
         matches = [n for n in active if str(n.id) == str(note_id)]
@@ -4401,7 +4402,7 @@ def _handle_create_event(input_data: dict[str, Any], *, store: StoreInterface, s
             athlete = store.load_athlete(slug)
         except Exception as exc:  # noqa: BLE001
             log.error("storage read failed", what='athlete profile', exc_info=True)
-            return {"error": f"could not load athlete profile: {exc}"}
+            return storage_error("athlete profile", exc)
         details = ", ".join(
             f"{k}: {input_data[k]}"
             for k in ("event_date", "priority", "target_value", "target_metric", "notes")
@@ -4424,13 +4425,13 @@ def _handle_create_event(input_data: dict[str, Any], *, store: StoreInterface, s
         athlete = store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='athlete profile', exc_info=True)
-        return {"error": f"could not load athlete profile: {exc}"}
+        return storage_error("athlete profile", exc)
 
     try:
         events = store.load_events(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='events', exc_info=True)
-        return {"error": f"could not load events: {exc}"}
+        return storage_error("events", exc)
 
     try:
         event = Event(
@@ -4535,7 +4536,7 @@ def _handle_draft_macro_plan(input_data: dict[str, Any], *, store: StoreInterfac
         athlete = store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='athlete profile', exc_info=True)
-        return {"error": f"could not load athlete profile: {exc}"}
+        return storage_error("athlete profile", exc)
 
     start_str = input_data.get("start_date")
     if start_str:
@@ -4550,7 +4551,7 @@ def _handle_draft_macro_plan(input_data: dict[str, Any], *, store: StoreInterfac
         events = store.load_events(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='events', exc_info=True)
-        return {"error": f"could not load events: {exc}"}
+        return storage_error("events", exc)
     event = next((e for e in events if e.name == event_name), None)
     if event is None:
         known_names = [e.name for e in events]
@@ -4565,7 +4566,7 @@ def _handle_draft_macro_plan(input_data: dict[str, Any], *, store: StoreInterfac
         existing_macro = store.load_macro(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='macro plan', exc_info=True)
-        return {"error": f"could not load macro plan: {exc}"}
+        return storage_error("macro plan", exc)
     if existing_macro is not None and existing_macro.event_id == event.id:
         return {
             "error": (
@@ -4597,7 +4598,7 @@ def _handle_draft_macro_plan(input_data: dict[str, Any], *, store: StoreInterfac
             wellness = store.list_wellness(slug)
         except Exception as exc:  # noqa: BLE001
             log.error("storage read failed", what='workout/wellness history', exc_info=True)
-            return {"error": f"could not load workout/wellness history: {exc}"}
+            return storage_error("workout/wellness history", exc)
         loads = daily_loads(workouts, athlete=athlete, wellness=wellness)
         evidence = _training_base_evidence(loads, start)
         established_base_evidence = {
@@ -4835,7 +4836,7 @@ def _handle_replace_macro_plan(input_data: dict[str, Any], *, store: StoreInterf
         athlete = store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='athlete profile', exc_info=True)
-        return {"error": f"could not load athlete profile: {exc}"}
+        return storage_error("athlete profile", exc)
 
     start_str = input_data.get("start_date")
     if start_str:
@@ -4850,7 +4851,7 @@ def _handle_replace_macro_plan(input_data: dict[str, Any], *, store: StoreInterf
         events = store.load_events(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='events', exc_info=True)
-        return {"error": f"could not load events: {exc}"}
+        return storage_error("events", exc)
     event = next((e for e in events if e.name == event_name), None)
     if event is None:
         known_names = [e.name for e in events]
@@ -4865,7 +4866,7 @@ def _handle_replace_macro_plan(input_data: dict[str, Any], *, store: StoreInterf
         existing_macro = store.load_macro(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='macro plan', exc_info=True)
-        return {"error": f"could not load macro plan: {exc}"}
+        return storage_error("macro plan", exc)
 
     try:
         macro = scaffold_macro(athlete, event, start, current_weekly_volume_m, peak_weekly_volume_m)
@@ -5011,7 +5012,7 @@ def _handle_draft_season_macro_plan(
         athlete = store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='athlete profile', exc_info=True)
-        return {"error": f"could not load athlete profile: {exc}"}
+        return storage_error("athlete profile", exc)
 
     start_str = input_data.get("start_date")
     if start_str:
@@ -5026,7 +5027,7 @@ def _handle_draft_season_macro_plan(
         events = store.load_events(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='events', exc_info=True)
-        return {"error": f"could not load events: {exc}"}
+        return storage_error("events", exc)
 
     races: list[Event] = []
     missing_names: list[str] = []
@@ -5074,7 +5075,7 @@ def _handle_draft_season_macro_plan(
         wellness = store.list_wellness(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='workout/wellness history', exc_info=True)
-        return {"error": f"could not load workout/wellness history: {exc}"}
+        return storage_error("workout/wellness history", exc)
     loads = daily_loads(workouts, athlete=athlete, wellness=wellness)
     evidence = _training_base_evidence(loads, start)
     established_base_evidence = {
@@ -5093,7 +5094,7 @@ def _handle_draft_season_macro_plan(
         existing_macro = store.load_macro(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='macro plan', exc_info=True)
-        return {"error": f"could not load macro plan: {exc}"}
+        return storage_error("macro plan", exc)
 
     try:
         macro, macro_warnings = scaffold_season_macro(
@@ -5312,7 +5313,7 @@ def _handle_compute_fueling_plan(
         athlete = store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='athlete profile', exc_info=True)
-        return {"error": f"could not load athlete profile: {exc}"}
+        return storage_error("athlete profile", exc)
 
     carb_tolerance_override = input_data.get("carb_tolerance_g_per_hr")
     training_recency_question: str | None = None
@@ -5379,7 +5380,7 @@ def _handle_compute_fueling_plan(
             events = store.load_events(slug)
         except Exception as exc:  # noqa: BLE001
             log.error("storage read failed", what='events', exc_info=True)
-            return {"error": f"could not load events: {exc}"}
+            return storage_error("events", exc)
         event = next((e for e in events if e.name == event_name), None)
         if event is None:
             return {
@@ -5424,7 +5425,7 @@ def _handle_compute_fueling_plan(
                 week = store.load_week(slug, iso_week)
             except Exception as exc:  # noqa: BLE001
                 log.error("storage read failed", what='week plan', exc_info=True)
-                return {"error": f"could not load week plan {iso_week!r}: {exc}"}
+                return storage_error(f"week plan {iso_week!r}", exc)
             if week is None:
                 return {
                     "error": (
@@ -5466,7 +5467,7 @@ def _handle_set_pool_coach_status(input_data: dict[str, Any], *, store: StoreInt
         athlete = store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='athlete profile', exc_info=True)
-        return {"error": f"could not load athlete profile: {exc}"}
+        return storage_error("athlete profile", exc)
 
     athlete.has_pool_coach = has_pool_coach
     store.save_athlete(athlete)
@@ -5627,13 +5628,13 @@ def _handle_create_week_plan(input_data: dict[str, Any], *, store: StoreInterfac
         athlete = store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='athlete profile', exc_info=True)
-        return {"error": f"could not load athlete profile: {exc}"}
+        return storage_error("athlete profile", exc)
 
     try:
         macro = store.load_macro(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='macro plan', exc_info=True)
-        return {"error": f"could not load macro plan: {exc}"}
+        return storage_error("macro plan", exc)
     if macro is None:
         return {"error": "no macro plan for this athlete; use draft_macro_plan first"}
 
@@ -5641,7 +5642,7 @@ def _handle_create_week_plan(input_data: dict[str, Any], *, store: StoreInterfac
         events = store.load_events(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='events', exc_info=True)
-        return {"error": f"could not load events: {exc}"}
+        return storage_error("events", exc)
     event = next((e for e in events if e.id == macro.event_id), None)
     if event is None:
         return {"error": f"macro's event_id {macro.event_id} not found in events.yaml"}
@@ -6208,6 +6209,84 @@ def _apply_session_overrides(
     return None, notes
 
 
+
+_TEXT_ONLY_KEYS = ("date", "sport", "add", "remove", "duration_min", "distance_m", "purpose", "structure")
+
+
+def _text_only(override: dict[str, Any]) -> dict[str, Any] | None:
+    """The override reduced to its plain-text parts (date, sport, add/remove, length, purpose, structure
+    text) -- what is left when the detailed parts (structured workout, intensity, interval type,
+    ow_template) could not be applied. `None` when nothing but date/sport would remain."""
+    reduced = {k: v for k, v in override.items() if k in _TEXT_ONLY_KEYS}
+    has_text_detail = any(k not in ("date", "sport") for k in reduced)
+    # nothing to retry unless there is some text to save AND something was actually dropped
+    return reduced if has_text_detail and reduced != override else None
+
+
+def _apply_overrides_tolerant(
+    week: WeekPlan,
+    overrides: list[dict[str, Any]],
+    athlete: Athlete,
+    failures: list[dict[str, Any]],
+) -> tuple[str | None, list[str]]:
+    """Apply each override entry ON ITS OWN, so one bad entry never sinks the rest of the week
+    (Andrew, 2026-09-21: "the week plan includes kettlebells, the KB workout dropped to prose but the
+    rest is good -- then rewrite just that workout").
+
+    Per entry: apply it to a snapshot-protected `week`; if it fails (a validation error OR an unexpected
+    exception, which is logged with a stack), roll the partial change back and retry it as TEXT ONLY
+    (purpose / structure / length, no structured workout, intensity, interval type). If that also fails
+    the entry is reported as NOT APPLIED and everything else still lands. `failures` receives one dict per
+    entry that was degraded or dropped. An error is returned only when NO entry could be applied at all."""
+    notes: list[str] = []
+    applied = 0
+    first_error: str | None = None
+    for index, override in enumerate(overrides):
+        raw_date = override.get("date") if isinstance(override, dict) else None
+        snapshot = week.model_copy(deep=True)
+        error: str | None = None
+        entry_notes: list[str] = []
+        try:
+            error, entry_notes = _apply_session_overrides(week, [override], athlete)
+        except Exception as exc:  # noqa: BLE001 - one entry's bug must not take the week down
+            log.error("override entry failed", index=index, date=raw_date, exc_info=True)
+            error = f"internal problem applying this entry ({type(exc).__name__}, logged)"
+        if error is None:
+            notes.extend(entry_notes)
+            applied += 1
+            continue
+
+        week.sessions = snapshot.sessions  # roll back anything the failed attempt half-applied
+        first_error = first_error or error
+        reduced = _text_only(override) if isinstance(override, dict) else None
+        if reduced is not None:
+            try:
+                retry_error, retry_notes = _apply_session_overrides(week, [reduced], athlete)
+            except Exception:  # noqa: BLE001
+                log.error("override entry failed", index=index, date=raw_date, stage="text-only retry", exc_info=True)
+                retry_error, retry_notes = "internal problem on the text-only retry (logged)", []
+            if retry_error is None:
+                applied += 1
+                notes.extend(retry_notes)
+                notes.append(
+                    f"{raw_date}: the detailed part of override #{index + 1} could not be applied ({error}); "
+                    "the session was saved with just its text (purpose/structure/length). Rewrite that one "
+                    "workout next -- the rest of the week is unaffected."
+                )
+                failures.append({"index": index, "date": raw_date, "sport": override.get("sport"),
+                                 "degraded_to_text": True, "reason": error})
+                continue
+            week.sessions = snapshot.sessions
+        failures.append({"index": index, "date": raw_date, "sport": override.get("sport") if isinstance(override, dict) else None,
+                         "degraded_to_text": False, "reason": error})
+        notes.append(
+            f"NOT APPLIED (override #{index + 1}, {raw_date}): {error}. Every other override WAS applied; fix or "
+            "rewrite just this one."
+        )
+    if applied == 0 and failures:
+        return first_error, notes
+    return None, notes
+
 def _week_sessions_json(week) -> list[dict[str, Any]]:
     return [
         {
@@ -6518,13 +6597,13 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
         athlete = store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='athlete profile', exc_info=True)
-        return {"error": f"could not load athlete profile: {exc}"}
+        return storage_error("athlete profile", exc)
 
     try:
         macro = store.load_macro(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='macro plan', exc_info=True)
-        return {"error": f"could not load macro plan: {exc}"}
+        return storage_error("macro plan", exc)
     if macro is None:
         return {"error": "no macro plan for this athlete; use draft_macro_plan first"}
 
@@ -6532,7 +6611,7 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
         events = store.load_events(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='events', exc_info=True)
-        return {"error": f"could not load events: {exc}"}
+        return storage_error("events", exc)
     event = next((e for e in events if e.id == macro.event_id), None)
     if event is None:
         return {"error": f"macro's event_id {macro.event_id} not found in events.yaml"}
@@ -6543,7 +6622,7 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
         existing_week = store.load_week(slug, iso_week)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='existing week plan', exc_info=True)
-        return {"error": f"could not load existing week plan: {exc}"}
+        return storage_error("existing week plan", exc)
 
     # `primary_sport`/`ftp_watts` read straight off `event.primary_sport`
     # (never derived from `target_metric` -- see Event.primary_sport's own
@@ -6575,8 +6654,9 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
 
     session_overrides = input_data.get("session_overrides")
     override_notes: list[str] = []
+    not_applied: list[dict[str, Any]] = []
     if session_overrides:
-        override_error, override_notes = _apply_session_overrides(week, session_overrides, athlete)
+        override_error, override_notes = _apply_overrides_tolerant(week, session_overrides, athlete, not_applied)
         if override_error is not None:
             return {"error": override_error}
 
@@ -6646,6 +6726,8 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
             "dropped_sessions": dropped,
             "persisted": False,
         }
+        if not_applied:
+            draft_response["not_applied"] = not_applied
         if draft_id:
             draft_response["draft_id"] = draft_id
             draft_response["next"] = (
@@ -6668,6 +6750,7 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
         "comparison": comparison,
         "dropped_sessions": dropped,
         "persisted": True,
+        **({"not_applied": not_applied} if not_applied else {}),
     }
 
 
@@ -6746,13 +6829,13 @@ def _handle_patch_week_plan(input_data: dict[str, Any], *, store: StoreInterface
         athlete = store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='athlete profile', exc_info=True)
-        return {"error": f"could not load athlete profile: {exc}"}
+        return storage_error("athlete profile", exc)
 
     try:
         week = store.load_week(slug, iso_week)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='existing week plan', exc_info=True)
-        return {"error": f"could not load existing week plan: {exc}"}
+        return storage_error("existing week plan", exc)
     if week is None:
         return {
             "error": (
@@ -6767,7 +6850,8 @@ def _handle_patch_week_plan(input_data: dict[str, Any], *, store: StoreInterface
     # itself stays exactly what `store.load_week` returned, in case an
     # error below needs to report against the untouched original.
     candidate = week.model_copy(deep=True)
-    override_error, override_notes = _apply_session_overrides(candidate, session_overrides, athlete)
+    not_applied: list[dict[str, Any]] = []
+    override_error, override_notes = _apply_overrides_tolerant(candidate, session_overrides, athlete, not_applied)
     if override_error is not None:
         return {"error": override_error}
 
@@ -6790,6 +6874,7 @@ def _handle_patch_week_plan(input_data: dict[str, Any], *, store: StoreInterface
         "planning_warnings": list(candidate.planning_warnings),
         "sessions": _week_sessions_json(candidate),
         "persisted": False,
+        **({"not_applied": not_applied} if not_applied else {}),
     }
 
     if not confirm:
@@ -6918,7 +7003,7 @@ def _generate_candidate_week_for_merge(
         macro = store.load_macro(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='macro plan', exc_info=True)
-        return None, f"could not load macro plan: {exc}"
+        return None, storage_problem_text("macro plan")
     if macro is None:
         return None, "no macro plan for this athlete; use draft_macro_plan first"
 
@@ -6926,7 +7011,7 @@ def _generate_candidate_week_for_merge(
         events = store.load_events(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='events', exc_info=True)
-        return None, f"could not load events: {exc}"
+        return None, storage_problem_text("events")
     event = next((e for e in events if e.id == macro.event_id), None)
     if event is None:
         return None, f"macro's event_id {macro.event_id} not found in events.yaml"
@@ -7085,7 +7170,7 @@ def _handle_merge_week_plan(input_data: dict[str, Any], *, store: StoreInterface
         current = store.load_week(slug, iso_week)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='existing week plan', exc_info=True)
-        return {"error": f"could not load existing week plan: {exc}"}
+        return storage_error("existing week plan", exc)
     if current is None:
         return {
             "error": (
@@ -7099,7 +7184,7 @@ def _handle_merge_week_plan(input_data: dict[str, Any], *, store: StoreInterface
         athlete = store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='athlete profile', exc_info=True)
-        return {"error": f"could not load athlete profile: {exc}"}
+        return storage_error("athlete profile", exc)
 
     proposed_sessions_input = input_data.get("proposed_sessions")
     if proposed_sessions_input:
@@ -7356,7 +7441,7 @@ def _handle_propose_session_adjustment(
         athlete = store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='athlete profile', exc_info=True)
-        return {"error": f"could not load athlete profile: {exc}"}
+        return storage_error("athlete profile", exc)
 
     proposed = original.model_copy(deep=True)
     applied_magnitude_pct = adjust_session(
@@ -7647,13 +7732,13 @@ def _handle_propose_injury_adapted_taper(
         athlete = store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='athlete profile', exc_info=True)
-        return {"error": f"could not load athlete profile: {exc}"}
+        return storage_error("athlete profile", exc)
 
     try:
         events = store.load_events(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='events', exc_info=True)
-        return {"error": f"could not load events: {exc}"}
+        return storage_error("events", exc)
     event = _find_event_by_ref(events, event_ref)
     if event is None:
         known = [{"id": str(e.id), "name": e.name} for e in events]
@@ -7663,7 +7748,7 @@ def _handle_propose_injury_adapted_taper(
         workouts = store.list_workouts(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='workouts', exc_info=True)
-        return {"error": f"could not load workouts: {exc}"}
+        return storage_error("workouts", exc)
     wellness = store.list_wellness(slug)
 
     if restriction_override is not None:
@@ -7675,7 +7760,7 @@ def _handle_propose_injury_adapted_taper(
             statuses = store.list_health_status(slug)
         except Exception as exc:  # noqa: BLE001
             log.error("storage read failed", what='health status history', exc_info=True)
-            return {"error": f"could not load health status history: {exc}"}
+            return storage_error("health status history", exc)
         active = _active_health_statuses(statuses)
         if active:
             restriction = active[0].restriction
@@ -7909,7 +7994,7 @@ def _handle_set_event_active_status(input_data: dict[str, Any], *, store: StoreI
         events = store.load_events(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='events', exc_info=True)
-        return {"error": f"could not load events: {exc}"}
+        return storage_error("events", exc)
 
     matches = [e for e in events if e.name == event_name]
     if len(matches) != 1:
@@ -8080,7 +8165,7 @@ def build_tool_handlers(
     over the tool handlers above, so the tool schema the model sees never
     exposes `expert_mode` as something the model itself sets -- it's a
     client-declared request flag, not a model decision."""
-    return {
+    handlers: dict[str, ToolHandler] = {
         "propose_adaptation": lambda input_data: _handle_propose_adaptation(
             input_data, store=store, slug=slug
         ),
@@ -8175,3 +8260,23 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
     }
+    return {name: _with_log_context(name, slug, handler) for name, handler in handlers.items()}
+
+
+def _with_log_context(tool: str, slug: str, handler: ToolHandler) -> ToolHandler:
+    """Every log line a tool emits (storage failures, swallowed exceptions, override failures) carries
+    which tool was running, for which athlete, and a bounded summary of what it was asked -- so a
+    failure in the logs says WHAT failed without cross-referencing another line."""
+
+    def run(input_data: dict[str, Any]) -> dict[str, Any]:
+        summary = json.dumps(input_data, default=str)[:300]
+        with log_context(tool=tool, athlete=slug, input_summary=summary):
+            try:
+                return handler(input_data)
+            except Exception as exc:  # noqa: BLE001 - a tool bug must not crash the chat turn
+                # Logged HERE, inside the context, so the stack line names the tool and athlete;
+                # the coach gets a structured result, never the raw exception.
+                log.error("tool execution failed", exc_info=True)
+                return internal_tool_error(tool, exc)
+
+    return run

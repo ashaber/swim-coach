@@ -20,8 +20,28 @@ from __future__ import annotations
 import json
 import sys
 import traceback
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any
+
+# Fields merged into EVERY log line emitted while a `log_context(...)` block is active, so a failure
+# log line says WHAT was being done (tool, athlete, a bounded summary of the request) without every
+# call site repeating it. Only ever set around a plain synchronous call -- never held across a
+# generator `yield` (streaming responses run in per-call context copies, so the value would leak or
+# vanish).
+_LOG_CONTEXT: ContextVar[dict[str, Any]] = ContextVar("log_context", default={})
+
+
+@contextmanager
+def log_context(**fields: Any) -> Iterator[None]:
+    """Attach `fields` to every log line emitted inside the block (nesting merges; inner wins)."""
+    token = _LOG_CONTEXT.set({**_LOG_CONTEXT.get(), **fields})
+    try:
+        yield
+    finally:
+        _LOG_CONTEXT.reset(token)
 
 
 class JsonLogger:
@@ -47,6 +67,7 @@ class JsonLogger:
             "msg": msg,
             "logger": self.name,
             "ts": datetime.now(timezone.utc).isoformat(),
+            **_LOG_CONTEXT.get(),
             **fields,
         }
         # default=str so any stray non-JSON-serializable value (Path, UUID,

@@ -102,12 +102,13 @@ def test_invalid_structured_content_alone_is_salvaged_into_readable_text(athlete
     assert "KB EMOM" in saved.structure and "goblet squats" in saved.structure and saved.structured is None
 
 
-def test_unsalvageable_structured_content_gives_an_actionable_message_not_a_validation_dump(athletes_dir) -> None:
+def test_unsalvageable_structured_content_is_dropped_with_an_actionable_note_not_a_validation_dump(athletes_dir) -> None:
     store, h = _h(athletes_dir)
     result = _add(h, sport="strength", duration_min=30, purpose="KB", structured={"foo": 1})
-    assert "error" in result
-    assert "`structure`" in result["error"] and "plain text" in result["error"]
-    assert "validation error" not in result["error"].lower()
+    # The session is still written (as text) and the note says what to do -- never a validation dump.
+    assert "error" not in result
+    note = next(w for w in result["planning_warnings"] if "detailed part" in w)
+    assert "`structure`" in note and "plain text" in note and "validation error" not in note.lower()
 
 
 # --- 3. an equipment/style preference with no matching library template still writes the week ----------

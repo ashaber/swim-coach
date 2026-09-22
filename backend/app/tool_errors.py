@@ -52,3 +52,30 @@ def internal_tool_error(tool: str, exc: BaseException) -> dict[str, Any]:
         "do_not_retry_same_call": True,
         "what_to_do": _guidance(tool),
     }
+
+
+def storage_error(what: str, exc: BaseException) -> dict[str, Any]:
+    """The structured result when reading `what` (e.g. "macro plan") from storage failed.
+
+    The exception text is NOT passed to the coach -- it is a driver/SQL message that means nothing to it
+    and invites excuses. The full stack is in the logs (the caller logs `storage read failed` with
+    `what=` and `exc_info=True`, under the tool's `log_context`). The coach gets what it can act on:
+    it is a temporary storage problem, retrying once is reasonable, and the athlete's request is not lost.
+    """
+    return {
+        "error": f"could not load {what} (storage problem, not a problem with your request)",
+        "code": "storage_error",
+        "what": what,
+        "retryable": True,
+        "input_problem": False,
+        "what_to_do": (
+            "Retry this call once. If it fails again, tell the athlete plainly that the "
+            f"{what} could not be read right now, do the parts of the request that do not need it, "
+            "and keep the request with save_athlete_note so nothing is lost. " + _NO_EXCUSES
+        ),
+    }
+
+
+def storage_problem_text(what: str) -> str:
+    """One-line form of `storage_error` for helpers that return `(value, error_text)` tuples."""
+    return f"could not load {what} (storage problem, not a problem with your request); retry once"

@@ -175,3 +175,83 @@ def test_a_swallowed_lookup_failure_leaves_a_log_line(athletes_dir, capsys) -> N
     assert pending_drafts(BrokenList(base_dir=athletes_dir), "renee") == []   # degrades to "none waiting"
     entry = next(e for e in _lines(capsys) if e.get("msg") == "swallowed exception, using a default")
     assert "drafts.py" in entry["where"] and "Traceback" in entry["stack"]
+
+
+
+# --- 5. the log says WHAT failed; the coach never sees the raw exception ----------------------------------
+
+
+def _store_failing_on(athletes_dir, method: str):
+    from swim_coach.store import FileStore
+
+    class Broken(FileStore):
+        pass
+
+    def boom(self, *a, **k):
+        raise RuntimeError("psycopg.OperationalError: password=hunter2 host=10.0.0.5")
+
+    setattr(Broken, method, boom)
+    return Broken(base_dir=athletes_dir)
+
+
+def test_the_coach_gets_a_structured_storage_error_never_the_raw_exception(athletes_dir) -> None:
+    import app.tools as tools
+
+    h = tools.build_tool_handlers(_store_failing_on(athletes_dir, "load_athlete"), slug="renee", expert_mode=False)
+    result = h["update_athlete_profile"]({"ftp_watts": 250})
+
+    assert result["code"] == "storage_error" and result["retryable"] is True and result["what"] == "athlete profile"
+    assert "what_to_do" in result and "save_athlete_note" in result["what_to_do"]
+    assert "hunter2" not in json.dumps(result) and "psycopg" not in json.dumps(result)
+
+
+def test_the_failure_log_names_the_tool_the_athlete_and_the_request(athletes_dir, capsys) -> None:
+    import app.tools as tools
+
+    h = tools.build_tool_handlers(_store_failing_on(athletes_dir, "load_athlete"), slug="renee", expert_mode=False)
+    h["update_athlete_profile"]({"ftp_watts": 250})
+
+    entry = next(e for e in _lines(capsys) if e.get("msg") == "storage read failed")
+    assert entry["tool"] == "update_athlete_profile" and entry["athlete"] == "renee"
+    assert "ftp_watts" in entry["input_summary"]
+    assert entry["what"] == "athlete profile" and entry["error_type"] == "RuntimeError"
+    assert "hunter2" in entry["stack"]  # the operator sees the real cause; the coach does not
+
+
+def test_a_crashing_handler_is_logged_with_its_tool_and_athlete_and_returns_the_structured_error(
+    athletes_dir, monkeypatch, capsys
+) -> None:
+    from swim_coach.store import FileStore
+
+    import app.tools as tools
+
+    def boom(*a, **k):
+        raise AttributeError("'X' object has no attribute 'role'")
+
+    monkeypatch.setattr(tools, "_handle_get_plan_summary", boom)
+    h = tools.build_tool_handlers(FileStore(base_dir=athletes_dir), slug="renee", expert_mode=False)
+    result = h["get_plan_summary"]({})
+
+    assert result["code"] == "internal_error" and result["do_not_retry_same_call"] is True
+    entry = next(e for e in _lines(capsys) if e.get("msg") == "tool execution failed")
+    assert entry["tool"] == "get_plan_summary" and entry["athlete"] == "renee" and "Traceback" in entry["stack"]
+
+
+def test_log_context_does_not_leak_past_the_tool_call(athletes_dir, capsys) -> None:
+    import app.tools as tools
+
+    h = tools.build_tool_handlers(_store_failing_on(athletes_dir, "load_athlete"), slug="renee", expert_mode=False)
+    h["update_athlete_profile"]({"ftp_watts": 250})
+    _lines(capsys)
+    get_logger("t").info("later")
+    assert "tool" not in _lines(capsys)[-1]
+
+
+def test_the_tool_call_log_carries_the_error_code(capsys) -> None:
+    tool_use = make_tool_use_block("t1", "t", {})
+    turns = [([], make_final_message([tool_use], "tool_use")), (["ok"], make_final_message([make_text_block("ok")], "end_turn"))]
+    chat = ClaudeChat(_settings(), client=FakeAnthropicClient(turns))
+    handlers = {"t": lambda _i: {"error": "x", "code": "storage_error"}}
+    list(chat.run_streaming([], [{"role": "user", "content": "x"}], [{"name": "t"}], handlers))
+    entry = next(e for e in _lines(capsys) if e.get("msg") == "tool call")
+    assert entry["error_code"] == "storage_error"

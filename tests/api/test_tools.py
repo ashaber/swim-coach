@@ -4569,7 +4569,7 @@ def test_replace_week_plan_session_override_ow_template_below_floor_is_a_clean_e
     assert "feed-window practice" in result["error"]
 
 
-def test_replace_week_plan_session_override_ow_template_combined_with_structure_is_an_error(athletes_dir) -> None:
+def test_replace_week_plan_session_override_ow_template_combined_with_structure_degrades_to_the_text(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
     baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
@@ -4584,9 +4584,12 @@ def test_replace_week_plan_session_override_ow_template_combined_with_structure_
         }],
     })
 
-    assert "error" in result
-    assert "ow_template" in result["error"]
-    assert "structure" in result["error"]
+    # Policy (2026-09-21): one bad part of an entry never blocks the write. The conflicting ow_template
+    # is dropped, the hand-written text is saved, and the warning says exactly why.
+    assert "error" not in result
+    assert any("detailed part" in w and "ow_template" in w and "structure" in w for w in result["planning_warnings"])
+    saved = next(x for x in result["sessions"] if x["date"] == target["date"] and x["sport"] == target["sport"])
+    assert saved["has_structured"] is False
 
 
 def test_replace_week_plan_session_override_ow_template_day2_framing_differs_from_day1(athletes_dir) -> None:

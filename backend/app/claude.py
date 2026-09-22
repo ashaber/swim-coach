@@ -451,6 +451,7 @@ class ClaudeChat:
                     input_summary=json.dumps(block.input, default=str)[:500],
                     had_error=isinstance(result, dict) and "error" in result,
                     error=(result.get("error") if isinstance(result, dict) else None),
+                    error_code=(result.get("code") if isinstance(result, dict) else None),
                     persisted=(result.get("persisted") if isinstance(result, dict) else None),
                 )
                 if isinstance(result, dict) and "error" in result:
