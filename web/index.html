@@ -102,11 +102,11 @@
     .week { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
     .week + .week { margin-top: 16px; }
     .all-weeks { margin-top: 16px; }
-    .all-weeks > summary, .glossary > summary, .load-chart-methodology > summary { cursor: pointer; list-style: none; padding: 12px 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper-2); color: var(--ink-soft); font-size: 13px; font-weight: 700; }
-    .all-weeks > summary::-webkit-details-marker, .glossary > summary::-webkit-details-marker, .load-chart-methodology > summary::-webkit-details-marker { display: none; }
-    .all-weeks > summary::before, .glossary > summary::before, .load-chart-methodology > summary::before { content: '▸ '; color: var(--ink-faint); }
-    .all-weeks[open] > summary::before, .glossary[open] > summary::before, .load-chart-methodology[open] > summary::before { content: '▾ '; }
-    .all-weeks[open] > summary, .glossary[open] > summary, .load-chart-methodology[open] > summary { margin-bottom: 12px; }
+    .all-weeks > summary, .glossary > summary, .load-chart-methodology > summary, .race-analysis > summary, .race-debrief > summary { cursor: pointer; list-style: none; padding: 12px 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper-2); color: var(--ink-soft); font-size: 13px; font-weight: 700; }
+    .all-weeks > summary::-webkit-details-marker, .glossary > summary::-webkit-details-marker, .load-chart-methodology > summary::-webkit-details-marker, .race-analysis > summary::-webkit-details-marker, .race-debrief > summary::-webkit-details-marker { display: none; }
+    .all-weeks > summary::before, .glossary > summary::before, .load-chart-methodology > summary::before, .race-analysis > summary::before, .race-debrief > summary::before { content: '▸ '; color: var(--ink-faint); }
+    .all-weeks[open] > summary::before, .glossary[open] > summary::before, .load-chart-methodology[open] > summary::before, .race-analysis[open] > summary::before, .race-debrief[open] > summary::before { content: '▾ '; }
+    .all-weeks[open] > summary, .glossary[open] > summary, .load-chart-methodology[open] > summary, .race-analysis[open] > summary, .race-debrief[open] > summary { margin-bottom: 12px; }
     /* Plan tab's collapsed "Terms & zones" reference (see views.js's
        renderGlossaryPanel) -- unobtrusive by default, reuses .all-weeks'
        collapsed-accordion look via the shared selectors above, but its own

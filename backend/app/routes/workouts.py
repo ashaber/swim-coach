@@ -63,6 +63,7 @@ from app.enrich import enrich_draft
 from app.logging_config import get_logger
 from app.store_factory import make_store
 from app.sync import ON_DEMAND_SYNC_WINDOW_DAYS, sync_on_demand
+from app.tools import build_tool_handlers
 
 router = APIRouter()
 log = get_logger("app.routes.workouts")
@@ -202,6 +203,43 @@ async def patch_workout(
 
     store.save_workout(athlete, updated)
     return updated.model_dump(mode="json")
+
+
+@router.get("/api/workouts/{workout_id}/pacing")
+async def get_workout_pacing(
+    workout_id: UUID,
+    request: Request,
+    athlete: str | None = Query(None),
+    principal: Principal = Depends(require_auth),
+) -> dict:
+    """Bike-only GPS-lap/race-phase analysis for one workout -- the same
+    `analyze_gps_laps`/`split_race_phases` output the coach's own
+    `get_ride_pacing` chat tool returns, exposed as a plain REST read so the
+    PWA can show it directly on a race activity's detail view (Andrew,
+    2026-09-22) rather than the athlete having to ask the coach for it.
+
+    Deliberately NOT folded into `GET /api/workouts`'s list response: this
+    is real compute over a workout's full time-series (not a stored field),
+    so it's fetched lazily, one workout at a time, only when its detail
+    view actually needs it. Reuses `build_tool_handlers`'s `get_ride_pacing`
+    handler verbatim (same convention as routes/feedback.py's own reuse of
+    `build_tool_handlers`) rather than re-implementing its lookup/error
+    shape a second time -- an error result (unknown id, wrong sport, no
+    series) comes back with the SAME `{"error": ...}` shape whether the
+    coach or the PWA asked for it.
+    """
+    settings = request.app.state.settings
+    athlete = resolve_athlete(principal, athlete)
+    store = make_store(settings)
+    handlers = build_tool_handlers(store, slug=athlete, expert_mode=False)
+    result = handlers["get_ride_pacing"]({"workout_id": str(workout_id)})
+    if "error" in result:
+        # "no such workout" is a real 404; a wrong sport or no series data is a real workout that
+        # just can't be analyzed this way -- 422, same "row exists, request is what's invalid" split
+        # patch_workout already uses above.
+        status = 404 if "no workout matching id" in result["error"] else 422
+        raise HTTPException(status_code=status, detail=result["error"])
+    return result
 
 
 @router.post("/api/workouts/sync")

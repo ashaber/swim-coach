@@ -381,6 +381,131 @@ describe('renderDashboardTab', () => {
       });
     });
 
+    // --- Race analysis + race debrief (Andrew, 2026-09-22) -------------------
+    describe('race analysis section (bike-only, collapsible)', () => {
+      it('is absent for a non-bike workout even with pacing data present', () => {
+        const html = renderDashboardTab({
+          ...DASHBOARD_BASE_ARGS, feed: feedOf([RICH_FIT_WORKOUT]), detailId: 'w-rich',
+          pacing: { 'w-rich': { status: 'ready', data: { gps_laps: { laps: [] }, race_phases: { phases: [] } } } },
+        });
+        expect(html).not.toContain('Race analysis');
+      });
+
+      it('is absent for a bike workout before pacing has started loading', () => {
+        const html = renderDashboardTab({
+          ...DASHBOARD_BASE_ARGS, feed: feedOf([BIKE_FIT_WORKOUT]), detailId: 'w-bike', pacing: {},
+        });
+        expect(html).not.toContain('Race analysis');
+      });
+
+      it('shows a loading message while pacing is in flight', () => {
+        const html = renderDashboardTab({
+          ...DASHBOARD_BASE_ARGS, feed: feedOf([BIKE_FIT_WORKOUT]), detailId: 'w-bike',
+          pacing: { 'w-bike': { status: 'loading' } },
+        });
+        expect(html).toContain('<details class="race-analysis">');
+        expect(html).toContain('Loading race analysis');
+      });
+
+      it('shows the tool\'s own plain-language error rather than a raw failure', () => {
+        const html = renderDashboardTab({
+          ...DASHBOARD_BASE_ARGS, feed: feedOf([BIKE_FIT_WORKOUT]), detailId: 'w-bike',
+          pacing: { 'w-bike': { status: 'error', error: 'no time-series data is available for this workout' } },
+        });
+        expect(html).toContain('no time-series data is available');
+      });
+
+      it('renders the lap table (Lap/Time/NP/Speed/Work/VI/Coasting) and the race-phase table when ready', () => {
+        const html = renderDashboardTab({
+          ...DASHBOARD_BASE_ARGS, feed: feedOf([BIKE_FIT_WORKOUT]), detailId: 'w-bike',
+          pacing: {
+            'w-bike': {
+              status: 'ready',
+              data: {
+                gps_laps: {
+                  laps: [{
+                    lap_n: 1, duration_s: 480.0, normalized_power_w: 337.0, avg_speed_mps: 3.71,
+                    efficiency_mps_per_w: 0.011, total_work_kj: 85.4, variability_index: 1.2, coasting_s: 93.0,
+                  }],
+                },
+                race_phases: {
+                  phases: [
+                    { name: 'start', start_s: 0, end_s: 60, normalized_power_w: 400.0, avg_speed_mps: 4.0, vs_phase_1_pct: null, vs_phase_1_significant: null },
+                    { name: 'phase_2', start_s: 60, end_s: 500, normalized_power_w: 230.0, avg_speed_mps: 5.5, vs_phase_1_pct: -16.3, vs_phase_1_significant: true },
+                  ],
+                },
+              },
+            },
+          },
+        });
+        expect(html).toContain('<details class="race-analysis">');
+        expect(html).toContain('<summary>Race analysis</summary>');
+        expect(html).toContain('337 W'); // lap NP
+        expect(html).toContain('13.4 km/h'); // 3.71 m/s
+        expect(html).toContain('85.4 kJ');
+        expect(html).toContain('phase_2');
+        expect(html).toContain('-16.3%');
+        expect(html).toContain('(real)'); // vs_phase_1_significant
+      });
+
+      it('shows the no-laps note instead of an empty table when none were detected', () => {
+        const html = renderDashboardTab({
+          ...DASHBOARD_BASE_ARGS, feed: feedOf([BIKE_FIT_WORKOUT]), detailId: 'w-bike',
+          pacing: {
+            'w-bike': {
+              status: 'ready',
+              data: { gps_laps: { laps: [], note: 'No laps detected: no usable GPS track.' }, race_phases: { phases: [] } },
+            },
+          },
+        });
+        expect(html).toContain('No laps detected: no usable GPS track.');
+      });
+    });
+
+    describe('race debrief section (matched by date, only when one exists)', () => {
+      it('is absent when no debrief matches this workout\'s date', () => {
+        const html = renderDashboardTab({
+          ...DASHBOARD_BASE_ARGS, feed: feedOf([BIKE_FIT_WORKOUT]), detailId: 'w-bike',
+          raceDebriefs: [{ id: 'd1', event_name: 'Some other race', event_date: '2026-01-01' }],
+        });
+        expect(html).not.toContain('Race debrief');
+      });
+
+      it('renders the matching debrief\'s fields when the event_date matches the workout\'s date', () => {
+        const html = renderDashboardTab({
+          ...DASHBOARD_BASE_ARGS, feed: feedOf([BIKE_FIT_WORKOUT]), detailId: 'w-bike',
+          raceDebriefs: [{
+            id: 'd1', event_name: 'Wafflecross', event_date: '2026-09-12',
+            result: '3rd, 26s back', went_well: 'Held pace, no fade', work_on: 'The start',
+            data_findings: ['lap 1 cost 22 of the 26s gap'],
+            training_implication: 'add short start-reps into the existing Saturday hard day',
+            tactical_note: 'stage further forward if allowed',
+          }],
+        });
+        expect(html).toContain('<details class="race-debrief">');
+        expect(html).toContain('Race debrief — Wafflecross');
+        expect(html).toContain('3rd, 26s back');
+        expect(html).toContain('Held pace, no fade');
+        expect(html).toContain('The start');
+        expect(html).toContain('lap 1 cost 22 of the 26s gap');
+        expect(html).toContain('add short start-reps into the existing Saturday hard day');
+        expect(html).toContain('Tactical proposal (unconfirmed):');
+        expect(html).toContain('stage further forward if allowed');
+      });
+
+      it('escapes malicious debrief content', () => {
+        const html = renderDashboardTab({
+          ...DASHBOARD_BASE_ARGS, feed: feedOf([BIKE_FIT_WORKOUT]), detailId: 'w-bike',
+          raceDebriefs: [{
+            id: 'd1', event_name: '<script>alert(1)</script>', event_date: '2026-09-12',
+            went_well: '<img src=x onerror=alert(1)>',
+          }],
+        });
+        expect(html).not.toContain('<script>alert(1)</script>');
+        expect(html).not.toContain('<img src=x onerror=alert(1)>');
+      });
+    });
+
     it('renders a pauses list with offset (h:mm:ss), duration, and source', () => {
       const html = renderDashboardTab({
         ...DASHBOARD_BASE_ARGS, feed: feedOf([RICH_FIT_WORKOUT]), detailId: 'w-rich',

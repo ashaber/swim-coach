@@ -2193,6 +2193,11 @@ function renderTrainingDashboardBody({
   loadWindowDays,
   loadNarrativeExpanded = false,
   showWellnessInline = true,
+  // See renderDashboardTab's own doc comment. Defaulted the same way (the
+  // coach roster's call site doesn't pass these yet -- read-only info,
+  // safe to add there later; not wired for coach-mode this build).
+  pacing = {},
+  raceDebriefs = [],
 }) {
   const items = feed || [];
   const hasData = items.length > 0;
@@ -2205,6 +2210,7 @@ function renderTrainingDashboardBody({
           <div class="s-head"><button type="button" class="btn-ghost" data-a="${backAction}">&larr; Back</button></div>
           ${renderWorkoutDetail(match.workout, {
             chat: chat ? workoutChat : null, online, rpeEdit, editable, askCoach,
+            pacing: pacing[match.workout.id], raceDebriefs,
           })}
         </section>`;
     }
@@ -2268,6 +2274,13 @@ export function renderDashboardTab({
   load, feed, status, error, online, detailId, workoutChat, backendConfigured,
   form, submit, ingest, sync, manualOpen, feedExpanded, rpeEdit, askCoach,
   loadWindowDays, loadNarrativeExpanded,
+  // Race analysis/debrief (Andrew, 2026-09-22): threaded straight through
+  // to renderWorkoutDetail -- see that function's own doc comments.
+  // `pacing`: state.pacingByWorkoutId (keyed by workout id). `raceDebriefs`:
+  // state.raceDebriefs.data. Defaulted so a stale test/call site that
+  // predates this build renders the same as before rather than crashing.
+  pacing = {},
+  raceDebriefs = [],
   // Athlete self-service health-status logging (web/coach-health-nav-and-
   // athlete-self-log, fixing the reported "need another option, log health
   // condition" gap) -- defaulted so every existing call site/test that
@@ -2299,7 +2312,7 @@ export function renderDashboardTab({
     ${!online ? '<div class="chat-banner">Offline -- some data may be out of date.</div>' : ''}
     ${renderTrainingDashboardBody({
       load, feed, status, error, online, detailId, workoutChat, actions, feedExpanded, rpeEdit, editable: true, askCoach,
-      loadWindowDays, loadNarrativeExpanded,
+      loadWindowDays, loadNarrativeExpanded, pacing, raceDebriefs,
       // Resolved decision (web/two-panel-load-chart): the athlete's OWN
       // Dashboard tab moves the wellness-deviation block OUT of this chart
       // and into the Check-in tab instead (see renderCheckinTab) -- the
@@ -2526,6 +2539,118 @@ function renderPausesList(pauses) {
     </section>`;
 }
 
+function formatSpeedKmh(mps) {
+  if (mps === null || mps === undefined) return null;
+  return `${(mps * 3.6).toFixed(1)} km/h`;
+}
+
+/** GPS-lap detection + race-phase pacing split (Andrew, 2026-09-22: "visible
+ * in the race activity in the PWA... it will be long so maybe collapsible
+ * chunks" -- reading a transcript where a lap/NP/efficiency/coasting table
+ * exactly like this one, from this app's own analyzer, made another
+ * coaching tool's race read far more specific than ours). Bike-only, real
+ * compute fetched lazily by main.js's maybeLoadPacing -- `pacing` is
+ * `state.pacingByWorkoutId[workout.id]` (`undefined` before that fires).
+ * Collapsed `<details>` (this app's only collapsible-section convention --
+ * see renderAllWeeksAccordion/renderGlossaryPanel) rather than always-open:
+ * a full lap table for a multi-hour ride is exactly the "long" content
+ * Andrew flagged. Shown for any bike workout with something to say (laps,
+ * phases, or an informative reason there's neither) -- never silently
+ * absent, so an athlete who expects race analysis and doesn't see it isn't
+ * left guessing why. */
+function renderRaceAnalysisSection(workout, pacing) {
+  if (workout.sport !== 'bike' || !pacing || pacing.status === 'idle') return '';
+
+  let body;
+  if (pacing.status === 'loading') {
+    body = '<p class="sub">Loading race analysis…</p>';
+  } else if (pacing.status === 'error') {
+    // The tool's own error text is already athlete-legible (e.g. "no
+    // time-series data is available...") -- not a raw exception, see
+    // get_ride_pacing's own error shapes.
+    body = `<p class="sub">${esc(pacing.error || 'Race analysis is not available for this ride.')}</p>`;
+  } else {
+    const laps = pacing.data?.gps_laps?.laps ?? [];
+    const lapsNote = pacing.data?.gps_laps?.note;
+    const phases = pacing.data?.race_phases?.phases ?? [];
+    const lapRows = laps.map((lap) => `
+      <tr>
+        <td>${esc(lap.lap_n)}</td>
+        <td>${esc(formatClock(lap.duration_s) || '—')}</td>
+        <td>${lap.normalized_power_w !== null ? esc(formatPower(lap.normalized_power_w)) : '—'}</td>
+        <td>${lap.avg_speed_mps !== null ? esc(formatSpeedKmh(lap.avg_speed_mps)) : '—'}</td>
+        <td>${lap.total_work_kj !== null ? `${esc(lap.total_work_kj)} kJ` : '—'}</td>
+        <td>${lap.variability_index !== null ? esc(lap.variability_index) : '—'}</td>
+        <td>${lap.coasting_s !== null ? esc(formatClock(lap.coasting_s)) : '—'}</td>
+      </tr>`).join('');
+    const lapsTable = laps.length > 0 ? `
+      <div class="laps-table-wrap">
+        <table class="laps-table">
+          <thead><tr><th>Lap</th><th>Time</th><th>NP</th><th>Speed</th><th>Work</th><th>VI</th><th>Coasting</th></tr></thead>
+          <tbody>${lapRows}</tbody>
+        </table>
+      </div>` : `<p class="sub">${esc(lapsNote || 'No laps detected.')}</p>`;
+    const phaseRows = phases.map((p) => {
+      const vs = p.vs_phase_1_pct === null || p.vs_phase_1_pct === undefined
+        ? '—'
+        : `${p.vs_phase_1_pct > 0 ? '+' : ''}${p.vs_phase_1_pct}%${p.vs_phase_1_significant ? ' (real)' : ''}`;
+      return `
+      <tr>
+        <td>${esc(p.name)}</td>
+        <td>${esc(formatClock(p.start_s))}–${esc(formatClock(p.end_s))}</td>
+        <td>${p.normalized_power_w !== null ? esc(formatPower(p.normalized_power_w)) : '—'}</td>
+        <td>${p.avg_speed_mps !== null ? esc(formatSpeedKmh(p.avg_speed_mps)) : '—'}</td>
+        <td>${esc(vs)}</td>
+      </tr>`;
+    }).join('');
+    const phasesTable = phases.length > 0 ? `
+      <div class="laps-table-wrap" style="margin-top:10px">
+        <table class="laps-table">
+          <thead><tr><th>Phase</th><th>Span</th><th>NP</th><th>Speed</th><th>vs phase 1</th></tr></thead>
+          <tbody>${phaseRows}</tbody>
+        </table>
+      </div>` : '';
+    body = lapsTable + phasesTable;
+  }
+
+  return `
+    <section class="detail-section">
+      <details class="race-analysis">
+        <summary>Race analysis</summary>
+        ${body}
+      </details>
+    </section>`;
+}
+
+/** The matching post-race interview (see save_race_debrief/RaceDebrief),
+ * matched to this workout by calendar date -- only rendered when one
+ * actually exists, so most workouts show nothing here. `debriefs` is
+ * `state.raceDebriefs.data` (empty until maybeLoadRaceDebriefs's fetch
+ * lands). Same labels as context.py's render_race_debriefs, so what the
+ * athlete sees here and what the coach reads every turn say the same
+ * thing. */
+function renderRaceDebriefSection(workout, debriefs) {
+  const workoutDate = (workout.date || '').slice(0, 10);
+  const debrief = (debriefs || []).find((d) => d.event_date === workoutDate);
+  if (!debrief) return '';
+
+  const findings = (debrief.data_findings || []).map((f) => `<li>${esc(f)}</li>`).join('');
+  return `
+    <section class="detail-section">
+      <details class="race-debrief">
+        <summary>Race debrief — ${esc(debrief.event_name)}</summary>
+        <div class="detail-analytics-list">
+          ${debrief.result ? `<div><strong>Result:</strong> ${esc(debrief.result)}</div>` : ''}
+          ${debrief.went_well ? `<div><strong>Went well:</strong> ${esc(debrief.went_well)}</div>` : ''}
+          ${debrief.work_on ? `<div><strong>Work on:</strong> ${esc(debrief.work_on)}</div>` : ''}
+          ${findings ? `<div><strong>Findings:</strong><ul>${findings}</ul></div>` : ''}
+          ${debrief.training_implication ? `<div><strong>Training implication:</strong> ${esc(debrief.training_implication)}</div>` : ''}
+          ${debrief.tactical_note ? `<div><strong>Tactical proposal (unconfirmed):</strong> ${esc(debrief.tactical_note)}</div>` : ''}
+        </div>
+      </details>
+    </section>`;
+}
+
 function renderLengthsSummarySection(lengths) {
   const summary = formatLengthsSummary(lengths?.length);
   if (!summary) return '';
@@ -2588,7 +2713,7 @@ function renderWorkoutChatSection({ workout, chat, online }) {
  * `chat` stays `null` there too, so `renderWorkoutChatSection` still renders
  * nothing on that surface -- unchanged). */
 function renderWorkoutDetail(workout, {
-  chat, online, rpeEdit = null, editable = false, askCoach = null,
+  chat, online, rpeEdit = null, editable = false, askCoach = null, pacing = null, raceDebriefs = [],
 } = {}) {
   const badge = sourceBadge(workout.source);
   return `
@@ -2598,8 +2723,10 @@ function renderWorkoutDetail(workout, {
     </div>
     ${renderDetailStats(workout)}
     ${editable ? renderRpeEditSection(workout, rpeEdit) : ''}
+    ${renderRaceDebriefSection(workout, raceDebriefs)}
     ${renderDetailAnalytics(workout.analytics)}
     ${renderIntervalsSection(workout.analytics?.intervals)}
+    ${renderRaceAnalysisSection(workout, pacing)}
     ${renderLapsTable(workout.laps, workout.sport)}
     ${renderPausesList(workout.pauses)}
     ${renderLengthsSummarySection(workout.lengths)}
