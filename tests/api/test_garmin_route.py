@@ -28,7 +28,7 @@ from swim_coach.models import WorkoutStep, WorkoutStructure, WorkoutTarget
 from swim_coach.store import FileStore
 
 
-def _add_structured_session(athletes_dir, iso_week: str = "2026-W28"):
+def _add_structured_session(athletes_dir, iso_week: str = "2026-W28", *, purpose: str = "garmin export route test"):
     """Append a real session with `structured` populated to an existing
     real week on file, save it, and return (session_id, sport, date_iso)."""
     store = FileStore(base_dir=athletes_dir)
@@ -48,7 +48,7 @@ def _add_structured_session(athletes_dir, iso_week: str = "2026-W28"):
         duration_min=30.0,
         distance_m=1000,
         intensity={"anchor": "css_pace", "zone": "Z3"},
-        purpose="garmin export route test",
+        purpose=purpose,
         structure="Main set: 4x200 @ Z3",
         structured=WorkoutStructure(
             items=[
@@ -95,6 +95,26 @@ def test_garmin_fit_download_is_valid_fit_bytes(client, athletes_dir) -> None:
             if frame.frame_type == fitdecode.FIT_FRAME_DATA and frame.name == "workout_step":
                 step_count += 1
     assert step_count == 1
+
+
+def test_garmin_fit_workout_name_is_the_short_device_title_not_the_full_purpose(client, athletes_dir) -> None:
+    # Real incident, 2026-09-22 ("very long titles are hard to find on Garmin device") -- this IS
+    # the USB-copy-to-the-watch download path garmin_export.py's own module docstring describes.
+    long_purpose = "sustained threshold intervals (Z4) — lactate-threshold-adjacent, long work bouts"
+    session = _add_structured_session(athletes_dir, purpose=long_purpose)
+    response = client.get(
+        f"/api/sessions/{session.id}/garmin.fit?athlete=renee", headers=auth_headers()
+    )
+    assert response.status_code == 200
+
+    with fitdecode.FitReader(response.content) as fit:
+        for frame in fit:
+            if frame.frame_type == fitdecode.FIT_FRAME_DATA and frame.name == "workout":
+                names = {f.name: f.value for f in frame.fields}
+                assert names["wkt_name"] == "sustained threshold intervals (Z4)"
+                break
+        else:
+            pytest.fail("no workout message found in decoded .fit bytes")
 
 
 def test_garmin_fit_exposes_content_disposition_for_cross_origin_fetch(client, athletes_dir) -> None:

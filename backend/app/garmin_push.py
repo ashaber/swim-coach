@@ -41,6 +41,7 @@ from typing import Any
 from uuid import UUID
 
 from swim_coach.garmin_export import to_garmin_fit_workout
+from swim_coach.workout_templates import short_device_title
 from swim_coach.models import Session
 from swim_coach.store import StoreInterface
 
@@ -105,7 +106,13 @@ def build_workout_event(session: Session) -> dict[str, Any]:
     if garmin_sport is None or intervals_type is None:
         raise ValueError(f"garmin push isn't supported for sport {session.sport!r}")
 
-    fit_bytes = to_garmin_fit_workout(session.structured, sport=garmin_sport, name=session.purpose)
+    # The SAME short title on both: `name` below is what intervals.icu shows on the calendar/
+    # workout-list page (the actual "very long titles are hard to find" surface Andrew flagged),
+    # and it's also passed into the FIT file's own internal workout_name so a device that reads
+    # the FIT directly (rather than intervals.icu's own re-display of it) shows the same short
+    # title, not the full purpose in one place and a short title in the other.
+    title = short_device_title(session.purpose)
+    fit_bytes = to_garmin_fit_workout(session.structured, sport=garmin_sport, name=title)
 
     return {
         "category": "WORKOUT",
@@ -114,7 +121,7 @@ def build_workout_event(session: Session) -> dict[str, Any]:
         "filename": f"session-{session.id}.fit",
         "file_contents_base64": base64.b64encode(fit_bytes).decode("ascii"),
         "external_id": str(session.id),
-        "name": session.purpose,
+        "name": title,
     }
 
 
