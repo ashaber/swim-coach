@@ -1210,6 +1210,33 @@ class WorkoutAnalytics(BaseModel):
     normalized_power_w: float | None = None
 
 
+WorkoutChatSenderRole = Literal["athlete", "ai_coach", "coach"]
+
+
+class WorkoutChatMessage(BaseModel):
+    """One message in a workout's persisted three-party chat thread (IDEA 016) --
+    replaces the old ephemeral, AI-only workout-chat box (`renderWorkoutChatSection`
+    used to say plainly "this thread isn't saved -- it clears when you leave this
+    workout"). Andrew, 2026-09-23: the athlete chats, the AI responds naturally
+    the same as before, and a human coach can now also read the whole thing and
+    comment on just one part without that silencing the AI for the rest of it.
+
+    Embedded on `Workout` (`chat_messages` below), not its own table: per-workout
+    volume is bounded (a handful to a few dozen messages about ONE workout) --
+    the same "small, bounded, embed it" shape `AthleteNote`/`RaceDebrief` already
+    use on `Athlete`, not the unbounded-ongoing-log shape a general coach<->athlete
+    thread would need (that's a separate model). Never deleted or edited.
+    """
+
+    id: UUID
+    sender_role: WorkoutChatSenderRole
+    # Set only when sender_role == "coach" -- which coach, since CoachGrant is
+    # genuinely many-to-many (an athlete can have more than one active coach).
+    coach_athlete_id: UUID | None = None
+    body: str
+    created_at: datetime
+
+
 class Workout(BaseModel):
     """A completed workout, logged manually or ingested from a file/coach text."""
 
@@ -1273,6 +1300,16 @@ class Workout(BaseModel):
     # start_time. Additive/optional so every existing Workout YAML/row
     # keeps validating unchanged -- no schema_version bump.
     started_at: datetime | None = None
+    # Workout chat thread (IDEA 016, see WorkoutChatMessage's own docstring).
+    # Additive/optional so every existing Workout YAML/row (with neither key)
+    # keeps validating unchanged -- no schema_version bump.
+    chat_messages: list[WorkoutChatMessage] = Field(default_factory=list)
+    # Deterministic mute switch: a plain boolean, not something inferred from
+    # scanning message history, so it's a reliable control either party (or
+    # the AI itself, told to recognize an explicit "stop responding here")
+    # can flip -- see `set_workout_chat_muted` (backend/app/tools.py) and
+    # PATCH /api/workouts/{id}'s `chat_ai_muted` field.
+    chat_ai_muted: bool = False
 
 
 class WorkoutQuality(BaseModel):

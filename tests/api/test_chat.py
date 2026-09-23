@@ -85,6 +85,7 @@ def test_request_shape_includes_tools(client, fake_claude_chat_factory) -> None:
         "render_plan_table",
         "save_race_debrief",
         "get_race_debriefs",
+        "set_workout_chat_muted",
     }
 
 
@@ -391,6 +392,107 @@ def test_no_workout_id_means_no_focused_block(client, fake_claude_chat_factory) 
 
     first_message = message_text(chat.client.messages.calls[0]["messages"][0]["content"])
     assert "specific workout the athlete is asking about" not in first_message
+
+
+def test_workout_chat_persists_both_the_athlete_message_and_the_ai_reply(
+    client, fake_claude_chat_factory, athletes_dir
+) -> None:
+    from swim_coach.store import FileStore
+
+    workout = _save_rich_workout(athletes_dir)
+    final = make_final_message([make_text_block("Nice negative split.")], "end_turn")
+    fake_claude_chat_factory([(["Nice negative split."], final)])
+
+    response = client.post(
+        "/api/chat",
+        json=_chat_payload(message="how did this swim go?", workout_id=str(workout.id)),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+
+    reloaded = FileStore(base_dir=athletes_dir).get_workout("renee", workout.id)
+    assert [m.sender_role for m in reloaded.chat_messages] == ["athlete", "ai_coach"]
+    assert reloaded.chat_messages[0].body == "how did this swim go?"
+    assert reloaded.chat_messages[1].body == "Nice negative split."
+    assert reloaded.chat_ai_muted is False
+
+
+def test_workout_chat_muted_thread_skips_the_model_but_still_saves_the_athlete_message(
+    client, fake_claude_chat_factory, athletes_dir
+) -> None:
+    from swim_coach.store import FileStore
+
+    workout = _save_rich_workout(athletes_dir)
+    store = FileStore(base_dir=athletes_dir)
+    workout.chat_ai_muted = True
+    store.save_workout("renee", workout)
+    chat = fake_claude_chat_factory([])  # no turns queued -- a real call would raise/hang
+
+    response = client.post(
+        "/api/chat",
+        json=_chat_payload(message="just logging this, no need to reply", workout_id=str(workout.id)),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+    assert chat.client.messages.calls == []  # the model was never called -- deterministic, not hoped-for
+
+    reloaded = store.get_workout("renee", workout.id)
+    assert len(reloaded.chat_messages) == 1
+    assert reloaded.chat_messages[0].sender_role == "athlete"
+    assert reloaded.chat_messages[0].body == "just logging this, no need to reply"
+    assert reloaded.chat_ai_muted is True  # unaffected by this turn
+
+
+def test_workout_chat_folds_a_pending_human_coach_comment_into_the_ai_turn(
+    client, fake_claude_chat_factory, athletes_dir
+) -> None:
+    """A workout thread whose last entry is an unanswered human-coach comment: the AI must see
+    it, and the request sent to Anthropic must never carry two consecutive "user" turns (the
+    Messages API would reject that)."""
+    import uuid as uuid_mod
+    from datetime import datetime, timezone
+
+    from swim_coach.models import WorkoutChatMessage
+    from swim_coach.store import FileStore
+
+    workout = _save_rich_workout(athletes_dir)
+    store = FileStore(base_dir=athletes_dir)
+    workout.chat_messages = [
+        WorkoutChatMessage(
+            id=uuid_mod.uuid4(), sender_role="athlete", body="rough start, faded late",
+            created_at=datetime(2026, 9, 23, 8, 0, 0, tzinfo=timezone.utc),
+        ),
+        WorkoutChatMessage(
+            id=uuid_mod.uuid4(), sender_role="ai_coach", body="looked like a positive split, what happened?",
+            created_at=datetime(2026, 9, 23, 8, 0, 5, tzinfo=timezone.utc),
+        ),
+        WorkoutChatMessage(
+            id=uuid_mod.uuid4(), sender_role="coach", coach_athlete_id=uuid_mod.uuid4(),
+            body="I was there -- she was fighting a current on the back half.",
+            created_at=datetime(2026, 9, 23, 9, 0, 0, tzinfo=timezone.utc),
+        ),
+    ]
+    store.save_workout("renee", workout)
+    final = make_final_message([make_text_block("that explains it, good context.")], "end_turn")
+    chat = fake_claude_chat_factory([(["that explains it, good context."], final)])
+
+    response = client.post(
+        "/api/chat",
+        json=_chat_payload(message="anything I should change next time?", workout_id=str(workout.id)),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+
+    sent_messages = chat.client.messages.calls[0]["messages"]
+    roles = [m["role"] for m in sent_messages]
+    # Strict alternation -- never two "user" entries back to back.
+    assert all(a != b for a, b in zip(roles, roles[1:]))
+    last_text = message_text(sent_messages[-1]["content"])
+    assert "fighting a current" in last_text  # the coach's comment reached the model
+    assert "anything I should change next time?" in last_text  # alongside the athlete's new message
+
+    reloaded = store.get_workout("renee", workout.id)
+    assert [m.sender_role for m in reloaded.chat_messages] == ["athlete", "ai_coach", "coach", "athlete", "ai_coach"]
 
 
 def test_unknown_workout_id_is_a_404_error_not_a_crash(

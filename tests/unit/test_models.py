@@ -25,6 +25,7 @@ from swim_coach.models import (
     WeekPlan,
     Workout,
     WorkoutAnalytics,
+    WorkoutChatMessage,
     WorkoutLap,
     WorkoutLength,
     WorkoutLoad,
@@ -297,6 +298,59 @@ def test_workout_draft_started_at_defaults_to_none():
 def test_workout_rejects_negative_distance():
     with pytest.raises(ValidationError):
         make_workout(distance_m=-100)
+
+
+# --- workout chat thread (IDEA 016) --------------------------------------
+
+
+def test_workout_chat_messages_and_muted_default_empty(tmp_path):
+    workout = make_workout()
+    assert workout.chat_messages == []
+    assert workout.chat_ai_muted is False
+
+
+def test_workout_chat_message_round_trip_through_yaml(tmp_path):
+    store = FileStore(base_dir=tmp_path)
+    messages = [
+        WorkoutChatMessage(
+            id=uuid.uuid4(), sender_role="athlete", body="how did this go?",
+            created_at=datetime(2026, 9, 23, 8, 0, 0, tzinfo=timezone.utc),
+        ),
+        WorkoutChatMessage(
+            id=uuid.uuid4(), sender_role="ai_coach", body="looks solid, no fade.",
+            created_at=datetime(2026, 9, 23, 8, 0, 5, tzinfo=timezone.utc),
+        ),
+        WorkoutChatMessage(
+            id=uuid.uuid4(), sender_role="coach", coach_athlete_id=uuid.uuid4(),
+            body="agreed, nice pacing.",
+            created_at=datetime(2026, 9, 23, 9, 0, 0, tzinfo=timezone.utc),
+        ),
+    ]
+    workout = make_workout(chat_messages=messages, chat_ai_muted=True)
+    store.save_athlete(make_athlete())
+    store.save_workout("wife", workout)
+
+    loaded = store.list_workouts("wife")[0]
+    assert loaded.chat_ai_muted is True
+    assert [m.sender_role for m in loaded.chat_messages] == ["athlete", "ai_coach", "coach"]
+    assert loaded.chat_messages[2].coach_athlete_id == messages[2].coach_athlete_id
+    assert loaded.chat_messages[0].body == "how did this go?"
+
+
+def test_workout_chat_message_rejects_invalid_sender_role():
+    with pytest.raises(ValidationError):
+        WorkoutChatMessage(
+            id=uuid.uuid4(), sender_role="admin", body="x",
+            created_at=datetime(2026, 9, 23, 8, 0, 0, tzinfo=timezone.utc),
+        )
+
+
+def test_workout_chat_message_coach_athlete_id_defaults_to_none():
+    msg = WorkoutChatMessage(
+        id=uuid.uuid4(), sender_role="athlete", body="x",
+        created_at=datetime(2026, 9, 23, 8, 0, 0, tzinfo=timezone.utc),
+    )
+    assert msg.coach_athlete_id is None
 
 
 def test_event_rejects_negative_distance():

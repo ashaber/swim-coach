@@ -10,6 +10,7 @@ import {
   fetchCoachHealthStatus, postCoachHealthStatus, resolveCoachHealthStatus,
   fetchHealthStatus, postHealthStatus,
   askAboutSession, askAboutWorkout,
+  postCoachWorkoutChatMessage, patchCoachWorkoutChatMuted,
 } from '../../src/api.js';
 
 function fakeFetch(body, { ok = true, status = 200 } = {}) {
@@ -775,6 +776,40 @@ describe('fetchCoachWorkouts', () => {
     await fetchCoachWorkouts({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'a/b' });
     const [url] = global.fetch.mock.calls[0];
     expect(url).toBe('https://api.example.com/api/coach/athletes/a%2Fb/workouts');
+  });
+});
+
+describe('postCoachWorkoutChatMessage', () => {
+  it('POSTs /api/coach/athletes/<athlete>/workouts/<workoutId>/chat-messages with the body', async () => {
+    const saved = { id: 'm1', sender_role: 'coach', body: 'nice pacing', coach_athlete_id: 't1' };
+    global.fetch = fakeFetch(saved);
+
+    const result = await postCoachWorkoutChatMessage({
+      baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee', workoutId: 'w1', body: 'nice pacing',
+    });
+
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/coach/athletes/renee/workouts/w1/chat-messages');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({ body: 'nice pacing' });
+    expect(result).toEqual({ ok: true, data: saved });
+  });
+});
+
+describe('patchCoachWorkoutChatMuted', () => {
+  it('PATCHes /api/coach/athletes/<athlete>/workouts/<workoutId>/chat-mute with chat_ai_muted', async () => {
+    const updated = { workout_id: 'w1', chat_ai_muted: true };
+    global.fetch = fakeFetch(updated);
+
+    const result = await patchCoachWorkoutChatMuted({
+      baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee', workoutId: 'w1', muted: true,
+    });
+
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/coach/athletes/renee/workouts/w1/chat-mute');
+    expect(init.method).toBe('PATCH');
+    expect(JSON.parse(init.body)).toEqual({ chat_ai_muted: true });
+    expect(result).toEqual({ ok: true, data: updated });
   });
 });
 

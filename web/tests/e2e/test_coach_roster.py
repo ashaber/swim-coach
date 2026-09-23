@@ -386,7 +386,10 @@ def test_back_button_returns_to_the_athlete_list(page):
 
 # --- Workout detail click-through ---------------------------------------------
 
-def test_clicking_a_workout_opens_its_read_only_detail_view(page):
+def test_clicking_a_workout_opens_its_detail_view_with_a_real_writable_chat_thread(page):
+    """IDEA 016: the old read-only Ask-the-coach Q&A box and the athlete-only ephemeral AI chat
+    are both gone from this view -- replaced by ONE persisted thread the coach can write into
+    directly, the same one the athlete sees on her own side."""
     _open_roster(page)
     page.click('[data-a="roster:select-athlete"]')
     page.wait_for_selector('[data-a="roster:open-workout"]')
@@ -396,18 +399,93 @@ def test_clicking_a_workout_opens_its_read_only_detail_view(page):
     content = page.content()
     assert 'Pool swim' in content
     assert '2.1 km' in content
-    # No embedded "ask your coach" chat -- that's an athlete-only feature.
     assert 'Ask your coach about this workout' not in content
-    # The real, read-only Ask-the-coach Q&A section (coach-mode Q&A build)
-    # IS shown here -- distinct from the athlete-only AI chat just excluded,
-    # and with no input box (coach replies stay in the roster's own
-    # Feedback section reply UI).
-    assert page.locator('#ask-coach').count() == 1
+    assert page.locator('#ask-coach').count() == 0
     assert page.locator('[data-form="askCoach"]').count() == 0
     assert page.locator('[data-a="ask-coach:submit"]').count() == 0
+    assert 'Chat with athlete' in content
+    assert page.locator('#roster-workout-chat-input').count() == 1
+    assert page.locator('[data-a="roster:workout-chat:send"]').count() == 1
+    assert page.locator('[data-a="roster:workout-chat:mute-toggle"]').count() == 1
     # The workouts/feedback list sections are gone while the detail is open.
     assert page.locator('[data-a="roster:open-workout"]').count() == 0
     assert page.locator('[data-a="roster:back"]').count() == 0
+
+
+def test_coach_sends_a_workout_chat_comment_and_sees_it_appear(page):
+    captured = {}
+
+    def send_handler(route):
+        if route.request.method == 'OPTIONS':
+            route.fulfill(status=204, headers=CORS_HEADERS)
+            return
+        captured['body'] = json.loads(route.request.post_data)
+        saved = {
+            'id': 'm1', 'sender_role': 'coach', 'coach_athlete_id': 'tim-id',
+            'body': captured['body']['body'], 'created_at': '2026-08-20T13:00:00Z',
+        }
+        route.fulfill(status=200, content_type='application/json', body=json.dumps(saved), headers=CORS_HEADERS)
+
+    page.route('**/api/coach/athletes/renee/workouts/w1/chat-messages', send_handler)
+
+    _open_roster(page)
+    page.click('[data-a="roster:select-athlete"]')
+    page.wait_for_selector('[data-a="roster:open-workout"]')
+    page.click('[data-a="roster:open-workout"]')
+    page.wait_for_selector('#roster-workout-chat-input')
+
+    page.fill('#roster-workout-chat-input', 'nice negative split here')
+    page.click('[data-a="roster:workout-chat:send"]')
+
+    page.wait_for_function(
+        "() => document.querySelector('#workout-chat').textContent.includes('nice negative split here')",
+        timeout=5000,
+    )
+    assert captured['body'] == {'body': 'nice negative split here'}
+    # Merged straight from the response, no extra round trip -- the input clears and re-enables.
+    assert page.locator('#roster-workout-chat-input').input_value() == ''
+    send_btn = page.locator('[data-a="roster:workout-chat:send"]')
+    assert send_btn.inner_text().strip() == 'Send'
+    assert not send_btn.is_disabled()
+
+
+def test_coach_toggles_mute_on_a_workout_thread(page):
+    muted_state = {'value': False}
+
+    def mute_handler(route):
+        if route.request.method == 'OPTIONS':
+            route.fulfill(status=204, headers=CORS_HEADERS)
+            return
+        body = json.loads(route.request.post_data)
+        muted_state['value'] = body['chat_ai_muted']
+        route.fulfill(
+            status=200, content_type='application/json',
+            body=json.dumps({'workout_id': 'w1', 'chat_ai_muted': body['chat_ai_muted']}),
+            headers=CORS_HEADERS,
+        )
+
+    def workouts_handler(route):
+        workouts = json.loads(WORKOUT_STUB)
+        workouts[0]['chat_ai_muted'] = muted_state['value']
+        route.fulfill(status=200, content_type='application/json', body=json.dumps(workouts), headers=CORS_HEADERS)
+
+    page.route('**/api/coach/athletes/renee/workouts/w1/chat-mute', mute_handler)
+    # Registered after open -- wins for the refetch the mute toggle triggers (loadCoachWorkouts),
+    # reflecting whatever the PATCH above most recently set -- same "the mock simulates real
+    # persistence" convention as the send test above, just stateful here since this test checks
+    # BOTH the before and after state, not just after.
+    page.route('**/api/coach/athletes/renee/workouts*', workouts_handler)
+
+    _open_roster(page)
+    page.click('[data-a="roster:select-athlete"]')
+    page.wait_for_selector('[data-a="roster:open-workout"]')
+    page.click('[data-a="roster:open-workout"]')
+    page.wait_for_selector('[data-a="roster:workout-chat:mute-toggle"]')
+
+    assert page.locator('[data-a="roster:workout-chat:mute-toggle"]').inner_text().strip() == 'Mute AI'
+    page.click('[data-a="roster:workout-chat:mute-toggle"]')
+    page.wait_for_selector('text=The AI coach is muted in this thread')
+    assert page.locator('[data-a="roster:workout-chat:mute-toggle"]').inner_text().strip() == 'Unmute AI'
 
 
 def test_closing_workout_detail_returns_to_the_workouts_and_feedback_lists(page):

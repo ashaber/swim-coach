@@ -503,6 +503,33 @@ export async function fetchCoachWorkouts({ baseUrl, token, athlete }) {
   return apiRequest({ baseUrl, token, path: `/api/coach/athletes/${encodeURIComponent(athlete)}/workouts` });
 }
 
+/** POST {baseUrl}/api/coach/athletes/<athlete>/workouts/<workoutId>/chat-messages -- a human
+ * coach's comment in one workout's persisted chat thread (IDEA 016). No AI call, a plain
+ * append -- see backend/app/routes/coach.py's `coach_send_workout_chat_message`. Returns the
+ * saved `WorkoutChatMessage` on success. */
+export async function postCoachWorkoutChatMessage({ baseUrl, token, athlete, workoutId, body }) {
+  return apiRequest({
+    baseUrl, token,
+    path: `/api/coach/athletes/${encodeURIComponent(athlete)}/workouts/${encodeURIComponent(workoutId)}/chat-messages`,
+    method: 'POST',
+    body: { body },
+  });
+}
+
+/** PATCH {baseUrl}/api/coach/athletes/<athlete>/workouts/<workoutId>/chat-mute -- the coach's
+ * own manual mute/unmute toggle for that workout's chat thread (same underlying
+ * `Workout.chat_ai_muted` field the athlete's own `patchWorkout` toggle and the AI's
+ * `set_workout_chat_muted` tool flip -- see backend/app/routes/coach.py's
+ * `coach_set_workout_chat_muted`). */
+export async function patchCoachWorkoutChatMuted({ baseUrl, token, athlete, workoutId, muted }) {
+  return apiRequest({
+    baseUrl, token,
+    path: `/api/coach/athletes/${encodeURIComponent(athlete)}/workouts/${encodeURIComponent(workoutId)}/chat-mute`,
+    method: 'PATCH',
+    body: { chat_ai_muted: muted },
+  });
+}
+
 /** GET {baseUrl}/api/coach/athletes/<athlete>/feedback -- the coach-side view
  * of one coached athlete's durable feedback log (full visibility, no
  * chat_visibility filtering in Phase 1). Path segment, same as

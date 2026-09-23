@@ -165,30 +165,13 @@ def test_ask_a_question_on_a_planned_session_end_to_end(page):
     assert page.input_value('[data-form="askCoach"][data-field="body"]') == ''
 
 
-def test_ask_a_question_on_a_completed_workout_end_to_end(page):
-    created_ref = []
-    page.route('**/api/feedback/questions*', _questions_route(created_ref))
-    page.route('**/api/feedback*', _cors_route(200, 'application/json', '[]'))
-
-    page.wait_for_selector('[data-a="tab:dashboard"]')
-    page.click('[data-a="tab:dashboard"]')
-    page.wait_for_selector('.hist-row')
-    page.click('.hist-row')
-    page.wait_for_selector('#ask-coach')
-    assert 'Nothing asked yet.' in page.content()
-
-    page.fill('[data-form="askCoach"][data-field="body"]', 'Why did the second half feel so hard?')
-    page.click('[data-a="ask-coach:submit"]')
-
-    page.wait_for_selector('text=Keep it aerobic -- Zone 2 the whole way.')
-    content = page.content()
-    assert 'Why did the second half feel so hard?' in content
-    # The request was linked by workout_id, not session_date/session_sport.
-    assert len(created_ref) == 1
-    assert created_ref[0]['workout_id'] == COMPLETED_WORKOUT['id']
-    assert 'session_date' not in created_ref[0]
-    # The real, working AI chat is unaffected by this build.
-    assert page.locator('#workout-chat-input').count() == 1
+# IDEA 016 removed the OLD workout-linked ask-coach path entirely: the completed-workout
+# detail view's single-turn Feedback Q&A box is gone, replaced by the persisted three-party
+# thread covered in test_workout_chat.py/test_coach_roster.py instead. The SESSION-linked path
+# (renderAskCoachSection on a PLANNED session, tested above) is untouched -- this build never
+# touched sessions -- so the "submit error keeps the draft" coverage below moved onto that
+# still-real surface instead of being lost when the workout-linked test it used to ride on was
+# deleted.
 
 
 def test_submit_error_shows_inline_and_keeps_the_draft(page):
@@ -198,10 +181,10 @@ def test_submit_error_shows_inline_and_keeps_the_draft(page):
     )
     page.route('**/api/feedback*', _cors_route(200, 'application/json', '[]'))
 
-    page.wait_for_selector('[data-a="tab:dashboard"]')
-    page.click('[data-a="tab:dashboard"]')
-    page.wait_for_selector('.hist-row')
-    page.click('.hist-row')
+    page.wait_for_selector('[data-a="tab:plan"]')
+    page.click('[data-a="tab:plan"]')
+    page.wait_for_selector(f'[data-a="session:open"][data-id="{PLANNED_SESSION["id"]}"]')
+    page.click(f'[data-a="session:open"][data-id="{PLANNED_SESSION["id"]}"]')
     page.wait_for_selector('#ask-coach')
 
     page.fill('[data-form="askCoach"][data-field="body"]', 'a question')

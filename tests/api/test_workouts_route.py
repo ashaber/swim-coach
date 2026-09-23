@@ -208,6 +208,28 @@ def test_patch_workout_updates_notes(client) -> None:
     assert response.json()["notes"] == "corrected after the fact"
 
 
+def test_patch_workout_toggles_chat_ai_muted(client) -> None:
+    # IDEA 016: the athlete's own manual mute/unmute toggle for her workout's chat thread.
+    created = _create(client)
+    assert created["chat_ai_muted"] is False
+
+    muted = client.patch(
+        f"/api/workouts/{created['id']}?athlete=renee",
+        json={"chat_ai_muted": True},
+        headers=auth_headers(),
+    )
+    assert muted.status_code == 200
+    assert muted.json()["chat_ai_muted"] is True
+
+    unmuted = client.patch(
+        f"/api/workouts/{created['id']}?athlete=renee",
+        json={"chat_ai_muted": False},
+        headers=auth_headers(),
+    )
+    assert unmuted.status_code == 200
+    assert unmuted.json()["chat_ai_muted"] is False
+
+
 def test_patch_workout_leaves_untouched_fields_alone(client) -> None:
     created = _create(client, distance_m=3000, duration_min=60, rpe=6, notes="felt smooth")
     response = client.patch(

@@ -24,6 +24,7 @@ import {
   fetchHealthStatus, postHealthStatus,
   askAboutSession, askAboutWorkout,
   fetchWorkoutPacing,
+  postCoachWorkoutChatMessage, patchCoachWorkoutChatMuted,
 } from './api.js';
 import {
   serializeWorkoutForm, serializeWellnessForm, profileFormFromAthlete, serializeProfileForm,
@@ -240,6 +241,11 @@ function createRosterState() {
     // the specific entry being resolved, same "which row is this about"
     // convention `replySubmit.feedbackId` already establishes.
     healthStatusResolve: { status: 'idle', error: null, id: null },
+    // IDEA 016: the coach's own "sending a comment" status for whichever workout's chat
+    // thread is currently open -- same {status, error} shape as replySubmit/healthStatusSubmit.
+    // No draft text here (the composer's own textarea, read by id on submit, same convention
+    // handleSendWorkoutChat's athlete-side composer already uses -- no per-keystroke state).
+    workoutChatSubmit: { status: 'idle', error: null },
   };
 }
 
@@ -638,6 +644,7 @@ function renderTabContent() {
         healthStatusForm: state.roster.healthStatusForm,
         healthStatusSubmit: state.roster.healthStatusSubmit,
         healthStatusResolve: state.roster.healthStatusResolve,
+        workoutChatSubmit: state.roster.workoutChatSubmit,
       });
     case 'settings':
       return renderSettingsTab({
@@ -1772,9 +1779,115 @@ function handleSendWorkoutChat() {
       if (event.type === 'done' || event.type === 'refusal' || event.type === 'error') {
         log.info('workout_chat.turn_complete', { workout_id: workoutId, type: event.type });
       }
+      // IDEA 016: ONLY on a clean 'done' -- the backend persisted the athlete's message and
+      // the AI's reply onto Workout.chat_messages, so refetch and let the now-durable thread
+      // replace this ephemeral overlay. Deliberately NOT done for 'refusal'/'error': the
+      // athlete still needs to SEE that bubble (what went wrong), and refetching+clearing
+      // here would wipe it the instant it appeared with nothing to show in its place -- a
+      // real bug caught by this file's own e2e coverage (test_chat_error_response_shows_
+      // error_bubble). The athlete's message may still have saved server-side even on an
+      // error turn; that's picked up by the next ordinary refetch (reopening the detail, or
+      // a poll tick), not urgent enough to risk clobbering the visible error.
+      if (event.type === 'done') {
+        loadHistory().then(() => {
+          if (state.workoutChat && state.workoutChat.workoutId === workoutId) {
+            state.workoutChat = { workoutId, messages: [] };
+            render();
+          }
+        });
+      }
       render();
     },
   });
+}
+
+/** IDEA 016: the athlete's own manual mute/unmute toggle for her workout's chat thread --
+ * same underlying `Workout.chat_ai_muted` field the AI's own `set_workout_chat_muted` tool
+ * and the coach's own toggle (`handleToggleRosterWorkoutChatMute` below) flip. Reuses the
+ * existing `patchWorkout` (already allowlists `chat_ai_muted`, see routes/workouts.py). */
+async function handleToggleWorkoutChatMute() {
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) return;
+  const workoutId = state.workoutDetailId;
+  const workout = state.workoutHistory.data.find((w) => w.id === workoutId);
+  if (!workout) return;
+
+  const muted = !workout.chat_ai_muted;
+  const result = await patchWorkout({
+    baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), workoutId,
+    payload: { chat_ai_muted: muted },
+  });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    log.info('workout_chat.mute_toggled', { athlete: athleteSlug(), workout_id: workoutId, muted });
+    loadHistory(); // refreshes so the toggle's own new state renders; calls render() itself
+  } else {
+    log.error('workout_chat.mute_toggle_failed', { athlete: athleteSlug(), workout_id: workoutId, error: result.error });
+    render();
+  }
+}
+
+/** The human coach's comment in one workout's chat thread (IDEA 016) -- no AI call, a plain
+ * append via `postCoachWorkoutChatMessage`. Same "read the textarea by id, clear it, send"
+ * shape as `handleSendWorkoutChat`'s athlete-side composer, but no streaming: the saved
+ * message comes back directly in the response, so it's merged into local state immediately
+ * rather than waiting on a refetch/poll tick. */
+async function handleSendRosterWorkoutChatMessage() {
+  if (state.roster.workoutChatSubmit.status === 'submitting') return;
+  const input = document.getElementById('roster-workout-chat-input');
+  const text = input?.value.trim();
+  if (!text) return;
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) return;
+  const athlete = state.roster.actingAsAthlete;
+  const workoutId = state.roster.workoutDetailId;
+  if (!athlete || !workoutId) return;
+
+  state.roster.workoutChatSubmit = { status: 'submitting', error: null };
+  if (input) input.value = '';
+  render();
+  log.info('roster.workout_chat_send', { athlete, workout_id: workoutId });
+
+  const result = await postCoachWorkoutChatMessage({
+    baseUrl: settings.baseUrl, token: settings.token, athlete, workoutId, body: text,
+  });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    const workout = state.roster.workouts.data.find((w) => w.id === workoutId);
+    if (workout) workout.chat_messages = [...(workout.chat_messages || []), result.data];
+    state.roster.workoutChatSubmit = { status: 'idle', error: null };
+    log.info('roster.workout_chat_sent', { athlete, workout_id: workoutId });
+  } else {
+    log.error('roster.workout_chat_send_failed', { athlete, workout_id: workoutId, error: result.error });
+    state.roster.workoutChatSubmit = { status: 'error', error: result.error };
+  }
+  render();
+}
+
+/** The coach's own manual mute/unmute toggle -- immediate, deterministic, same underlying
+ * field the athlete's own toggle and the AI tool flip (see `coach_set_workout_chat_muted`,
+ * backend/app/routes/coach.py). */
+async function handleToggleRosterWorkoutChatMute() {
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) return;
+  const athlete = state.roster.actingAsAthlete;
+  const workoutId = state.roster.workoutDetailId;
+  if (!athlete || !workoutId) return;
+  const workout = state.roster.workouts.data.find((w) => w.id === workoutId);
+  if (!workout) return;
+
+  const muted = !workout.chat_ai_muted;
+  const result = await patchCoachWorkoutChatMuted({
+    baseUrl: settings.baseUrl, token: settings.token, athlete, workoutId, muted,
+  });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    workout.chat_ai_muted = result.data.chat_ai_muted;
+    log.info('roster.workout_chat_mute_toggled', { athlete, workout_id: workoutId, muted: workout.chat_ai_muted });
+  } else {
+    log.error('roster.workout_chat_mute_toggle_failed', { athlete, workout_id: workoutId, error: result.error });
+  }
+  render();
 }
 
 /** Shared "should loadHistory() fire right now?" check -- used both by
@@ -2991,6 +3104,9 @@ async function onAppClick(e) {
     case 'chat:send': handleSendChat(); break;
     case 'chat:clear': handleClearChat(); break;
     case 'workout-chat:send': handleSendWorkoutChat(); break;
+    case 'workout-chat:mute-toggle': await handleToggleWorkoutChatMute(); break;
+    case 'roster:workout-chat:send': await handleSendRosterWorkoutChatMessage(); break;
+    case 'roster:workout-chat:mute-toggle': await handleToggleRosterWorkoutChatMute(); break;
     case 'log:submit': handleSubmitLog(); break;
     case 'sync:start': handleSyncWorkouts(); break;
     case 'log:toggle-manual': handleToggleManualLog(); break;

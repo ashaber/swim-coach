@@ -1186,6 +1186,27 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "set_workout_chat_muted",
+        "description": (
+            "Silence (or restore) YOUR OWN replies in one workout's chat thread -- call this the "
+            "instant either the athlete or a human coach explicitly asks you to stop responding "
+            "there ('let the coach take this', 'don't reply here', 'you can talk again'). This is "
+            "a real, deterministic switch, not a promise -- once muted, you will not be called on "
+            "that thread again until this is set back to false. Muting is per-workout, not global: "
+            "it does not affect any other thread or the main Coach conversation. Say plainly that "
+            "you're going quiet (or back), then call this -- don't just stop responding silently."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "workout_id": {"type": "string", "description": "The id (or a unique prefix) of the workout whose thread this is."},
+                "muted": {"type": "boolean", "description": "true to silence your own replies there, false to resume."},
+            },
+            "required": ["workout_id", "muted"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "pull_activity_stream",
         "description": (
             "Go and FETCH a ride's original power/grade time-series fresh "
@@ -4111,6 +4132,36 @@ def _handle_get_ride_pacing(
         },
         "interpretation": RIDE_PACING_INTERPRETATION,
     }
+
+
+def _handle_set_workout_chat_muted(
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str
+) -> dict[str, Any]:
+    """Deterministic mute switch for a workout's chat thread (IDEA 016) -- the same underlying
+    field (`Workout.chat_ai_muted`) the athlete's own manual toggle (`PATCH /api/workouts/{id}`)
+    and a human coach's equivalent flip, so muting via any of the three paths behaves
+    identically. Reloads the workout fresh right before writing (same "don't clobber a message
+    that landed mid-turn" discipline `_append_workout_chat_message` in routes/chat.py uses)."""
+    workout_id_str = (input_data.get("workout_id") or "").strip()
+    muted = input_data.get("muted")
+    if not workout_id_str:
+        return {"error": "workout_id is required"}
+    if not isinstance(muted, bool):
+        return {"error": "muted is required and must be true or false"}
+
+    workout = find_workout_by_id(store.list_workouts(slug), workout_id_str)
+    if workout is None:
+        return {"error": f"no workout matching id {workout_id_str!r}"}
+
+    try:
+        workout.chat_ai_muted = muted
+        store.save_workout(slug, workout)
+    except Exception as exc:  # noqa: BLE001
+        log.error("storage write failed", what="workout chat mute", exc_info=True)
+        return storage_error("workout", exc)
+
+    log.info("workout chat muted" if muted else "workout chat unmuted", athlete=slug, workout_id=str(workout.id))
+    return {"workout_id": str(workout.id), "chat_ai_muted": muted}
 
 
 def _resolve_interval_target_watts(
@@ -8353,6 +8404,9 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "get_ride_pacing": lambda input_data: _handle_get_ride_pacing(
+            input_data, store=store, slug=slug
+        ),
+        "set_workout_chat_muted": lambda input_data: _handle_set_workout_chat_muted(
             input_data, store=store, slug=slug
         ),
         "pull_activity_stream": lambda input_data: _handle_pull_activity_stream(
