@@ -1,5 +1,12 @@
-"""e2e coverage for the workout detail view's embedded scoped chat (Phase C
-slice 1: "Ask your coach about this workout").
+"""e2e coverage for the workout detail view's chat thread ("Ask your coach about this
+workout") -- originally an ephemeral, AI-only box (Phase C slice 1), now a persisted,
+three-party thread (athlete + AI coach + human coach, IDEA 016). The athlete's own send still
+streams the AI's reply live (same as before); once it completes, the client refetches and the
+now-durable `Workout.chat_messages` replaces the ephemeral overlay -- several tests below
+register a SECOND, updated `**/api/workouts*` mock after the initial page open specifically to
+simulate that persisted state, since Playwright matches the most-recently-registered handler
+first. Coach-side send/mute coverage lives in test_coach_roster.py, not here (this file is the
+athlete's own view only).
 
 Same mocked-backend conventions as test_coach_chat.py (SSE body mocked via
 Playwright routes with CORS headers -- see that file's docstring for the
@@ -147,14 +154,20 @@ def _open_workout_detail(page):
     page.wait_for_selector('#workout-chat-input')
 
 
-def test_detail_shows_scoped_chat_section_with_about_label(page):
+def test_detail_shows_the_thread_section(page):
     _open_workout_detail(page)
     content = page.content()
     assert 'Ask your coach about this workout' in content
-    assert 'About: Jun 1 Open water swim' in content
+    assert 'Mute AI' in content
+    assert 'No messages yet.' in content
 
 
-def test_send_message_renders_mocked_scoped_reply(page):
+def test_send_message_streams_then_settles_into_the_persisted_thread(page):
+    """IDEA 016: the ephemeral overlay shows the reply as it streams (same live-typing feel as
+    before); once it completes, main.js refetches GET /api/workouts and the persisted
+    Workout.chat_messages (simulated here by the SECOND, updated mock registered below, exactly
+    as the real backend would now return after this same send) replaces it -- so the content is
+    still visible after settling, not just transiently during the stream."""
     sse_body = (
         'data: {"type":"text","text":"That positive split came from "}\n\n'
         'data: {"type":"text","text":"the choppy back half -- solid effort."}\n\n'
@@ -172,10 +185,25 @@ def test_send_message_renders_mocked_scoped_reply(page):
     page.route('**/api/chat', chat_handler)
 
     _open_workout_detail(page)
+
+    # Registered AFTER the initial open -- Playwright matches the most-recently-registered
+    # handler first, so this one wins for the POST-send refetch only, simulating the backend
+    # having persisted the exchange in between (see routes/chat.py's _persisting_workout_chat_
+    # stream, which is exactly this: append athlete message, append AI reply, once the turn's
+    # own SSE stream has fully finished sending).
+    persisted_workout = {
+        **RICH_FIT_WORKOUT,
+        'chat_messages': [
+            {'id': 'm1', 'sender_role': 'athlete', 'body': 'why was the second half slower?', 'created_at': '2026-06-01T08:00:00Z'},
+            {'id': 'm2', 'sender_role': 'ai_coach', 'body': 'That positive split came from the choppy back half -- solid effort.', 'created_at': '2026-06-01T08:00:05Z'},
+        ],
+    }
+    page.route('**/api/workouts*', _cors_route(200, 'application/json', json.dumps([persisted_workout])))
+
     page.fill('#workout-chat-input', 'why was the second half slower?')
     page.click('[data-a="workout-chat:send"]')
 
-    # User bubble renders immediately; reply streams in and finalizes.
+    # User bubble renders immediately (the ephemeral overlay); reply streams in.
     page.wait_for_selector('#workout-chat .chat-row.me .chat-bubble')
     page.wait_for_function(
         "() => { const b = document.querySelectorAll('#workout-chat .chat-row.coach .chat-bubble'); "
@@ -192,8 +220,21 @@ def test_send_message_renders_mocked_scoped_reply(page):
     assert send_btn.inner_text().strip() == 'Send'
     assert not send_btn.is_disabled()
 
+    # And -- the actual new behavior -- the content is still there once the refetch settles,
+    # not just transiently during the stream: the persisted version replaced the overlay.
+    page.wait_for_function(
+        "() => { const b = document.querySelectorAll('#workout-chat .chat-row.coach .chat-bubble'); "
+        "return b.length > 0 && b[b.length-1].textContent.includes('solid effort'); }",
+        timeout=5000,
+    )
+    assert 'why was the second half slower?' in page.content()
 
-def test_thread_is_ephemeral_cleared_when_detail_closes(page):
+
+def test_thread_is_persisted_not_cleared_when_reopening_the_same_workout(page):
+    """IDEA 016 changed this from the old behavior (the box said outright "this thread isn't
+    saved -- it clears when you leave this workout"): the exchange is now durable, so reopening
+    the SAME workout shows it again, fed from the ordinary workout list refetch -- no special
+    per-thread persistence call needed on open, it's just part of the Workout object already."""
     sse_body = (
         'data: {"type":"text","text":"A strong swim."}\n\n'
         'data: {"type":"done","stop_reason":"end_turn"}\n\n'
@@ -201,17 +242,27 @@ def test_thread_is_ephemeral_cleared_when_detail_closes(page):
     page.route('**/api/chat', _cors_route(200, 'text/event-stream', sse_body))
 
     _open_workout_detail(page)
+    # Same "registered after open, wins for the later refetch" convention as the send test above.
+    persisted_workout = {
+        **RICH_FIT_WORKOUT,
+        'chat_messages': [
+            {'id': 'm1', 'sender_role': 'athlete', 'body': 'quick thoughts?', 'created_at': '2026-06-01T08:00:00Z'},
+            {'id': 'm2', 'sender_role': 'ai_coach', 'body': 'A strong swim.', 'created_at': '2026-06-01T08:00:05Z'},
+        ],
+    }
+    page.route('**/api/workouts*', _cors_route(200, 'application/json', json.dumps([persisted_workout])))
+
     page.fill('#workout-chat-input', 'quick thoughts?')
     page.click('[data-a="workout-chat:send"]')
     page.wait_for_selector('#workout-chat .chat-row.coach .chat-bubble')
 
-    # Back to the list, then reopen the same workout -- the thread is gone.
+    # Back to the list, then reopen the same workout -- the thread is STILL there.
     page.click('[data-a="history:back"]')
     page.wait_for_selector('.hist-row')
     page.click('.hist-row')
     page.wait_for_selector('#workout-chat-input')
-    assert 'quick thoughts?' not in page.content()
-    assert 'A strong swim.' not in page.content()
+    assert 'quick thoughts?' in page.content()
+    assert 'A strong swim.' in page.content()
 
 
 def test_back_button_still_returns_to_history_list(page):

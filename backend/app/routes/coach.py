@@ -18,14 +18,14 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 from swim_coach.athlete_time import athlete_today
 from swim_coach.load import estimate_hr_max
 from swim_coach.quality import match_workout_to_session, workout_quality
-from swim_coach.models import Feedback, HealthStatus, Session
+from swim_coach.models import Feedback, HealthStatus, Session, WorkoutChatMessage
 from swim_coach.store import StoreInterface
 
 from app.auth import Principal, require_auth, resolve_coach_athlete
 from app.config import Settings
 from app.context import summarize_rollup
 from app.load_helpers import workout_load_au
-from app.notify import notify_athlete_of_coach_reply
+from app.notify import notify_athlete_of_coach_reply, notify_athlete_of_workout_chat_message
 from app.routes.plan import (
     LOAD_GRAPH_DEFAULT_WEEKS,
     LOAD_GRAPH_MAX_WEEKS,
@@ -48,6 +48,18 @@ def get_athlete_notifier(request: Request) -> AthleteNotifier:
     via `app.dependency_overrides[get_athlete_notifier] = ...` (see
     tests/api/test_coach_route.py's `spy_athlete_notifier`)."""
     return notify_athlete_of_coach_reply
+
+
+# Same seam convention as AthleteNotifier/get_athlete_notifier above, for the
+# workout-chat-thread notifier (IDEA 016) -- a separate type/dependency since
+# it notifies about a WorkoutChatMessage, not a Feedback row.
+WorkoutChatNotifier = Callable[[StoreInterface, Settings, WorkoutChatMessage, str], None]
+
+
+def get_workout_chat_notifier(request: Request) -> WorkoutChatNotifier:
+    """Returns the real `notify_athlete_of_workout_chat_message` unless
+    overridden via `app.dependency_overrides[get_workout_chat_notifier] = ...`."""
+    return notify_athlete_of_workout_chat_message
 
 # A coach reviewing an athlete's roster wants a "how's this athlete doing
 # lately" read, not a fetch of the athlete's entire logged history --
@@ -488,3 +500,82 @@ async def coach_reply_to_feedback(
     background_tasks.add_task(notifier, store, settings, updated, slug)
 
     return updated.model_dump(mode="json")
+
+
+@router.post("/api/coach/athletes/{slug}/workouts/{workout_id}/chat-messages")
+async def coach_send_workout_chat_message(
+    slug: str,
+    workout_id: UUID,
+    payload: dict[str, Any],
+    request: Request,
+    background_tasks: BackgroundTasks,
+    principal: Principal = Depends(require_auth),
+    notifier: WorkoutChatNotifier = Depends(get_workout_chat_notifier),
+) -> dict:
+    """A human coach's comment in one workout's chat thread (IDEA 016) -- the AI-free
+    counterpart to `POST /api/chat`'s workout-scoped persistence (`routes/chat.py`): no model
+    call happens here at all, just a plain append. Same auth shape as `coach_reply_to_feedback`
+    just above (a real coach identity, not the service credential, for the same "who is this
+    coach" reason), and the same "reload fresh right before writing" discipline `routes/chat.py`
+    uses, so a message that landed here doesn't get lost to a concurrent AI turn's stale-object
+    save, or vice versa."""
+    settings = request.app.state.settings
+    slug = resolve_coach_athlete(principal, slug)
+    store = make_store(settings)
+
+    body = payload.get("body")
+    if not isinstance(body, str) or not body.strip():
+        raise HTTPException(status_code=422, detail="body must be a non-empty string")
+
+    if principal.kind != "athlete" or principal.athlete is None:
+        raise HTTPException(
+            status_code=403,
+            detail="commenting as coach requires a single coach identity; a service credential has none",
+        )
+    coach_athlete_id = store.load_athlete(principal.athlete).id
+
+    workout = store.get_workout(slug, workout_id)
+    if workout is None:
+        raise HTTPException(status_code=404, detail=f"no such workout: {workout_id}")
+
+    message = WorkoutChatMessage(
+        id=uuid4(), sender_role="coach", coach_athlete_id=coach_athlete_id,
+        body=body.strip(), created_at=datetime.now(timezone.utc),
+    )
+    workout.chat_messages.append(message)
+    store.save_workout(slug, workout)
+
+    # Scheduled AFTER the save succeeds, same discipline coach_reply_to_feedback's own
+    # notification trigger uses just above.
+    background_tasks.add_task(notifier, store, settings, message, slug)
+
+    return message.model_dump(mode="json")
+
+
+@router.patch("/api/coach/athletes/{slug}/workouts/{workout_id}/chat-mute")
+async def coach_set_workout_chat_muted(
+    slug: str,
+    workout_id: UUID,
+    payload: dict[str, Any],
+    request: Request,
+    principal: Principal = Depends(require_auth),
+) -> dict:
+    """The coach-side manual mute/unmute toggle -- immediate, deterministic, no dependence on
+    the AI recognizing a spoken request on the athlete's next turn (see `set_workout_chat_muted`,
+    the AI-callable tool in `app.tools`, and `PATCH /api/workouts/{id}`'s `chat_ai_muted` field,
+    the athlete's own equivalent -- all three flip the exact same `Workout.chat_ai_muted`)."""
+    settings = request.app.state.settings
+    slug = resolve_coach_athlete(principal, slug)
+    store = make_store(settings)
+
+    muted = payload.get("chat_ai_muted")
+    if not isinstance(muted, bool):
+        raise HTTPException(status_code=422, detail="chat_ai_muted must be true or false")
+
+    workout = store.get_workout(slug, workout_id)
+    if workout is None:
+        raise HTTPException(status_code=404, detail=f"no such workout: {workout_id}")
+
+    workout.chat_ai_muted = muted
+    store.save_workout(slug, workout)
+    return {"workout_id": str(workout_id), "chat_ai_muted": muted}

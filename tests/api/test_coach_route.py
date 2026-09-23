@@ -466,6 +466,241 @@ def test_coach_reply_notification_failure_does_not_break_response(
     assert response.json()["coach_reply"] == "eat gels"
 
 
+# --- POST /api/coach/athletes/{slug}/workouts/{workout_id}/chat-messages (IDEA 016) ----------
+# The human-coach-comment counterpart to a workout's chat thread -- no AI call, a plain append.
+# Same auth shape as the coach-reply-to-feedback tests just above (mirrored deliberately).
+
+
+def _seed_workout(store, slug: str, **overrides) -> dict:
+    athlete_id = store.load_athlete(slug).id
+    workout = make_workout(athlete_id=athlete_id, **overrides)
+    store.save_workout(slug, workout)
+    return workout
+
+
+def _workout_chat_url(slug: str, workout_id) -> str:
+    return f"/api/coach/athletes/{slug}/workouts/{workout_id}/chat-messages"
+
+
+def test_workout_chat_send_requires_auth(client, allowlist, store) -> None:
+    workout = _seed_workout(store, "renee")
+    response = client.post(_workout_chat_url("renee", workout.id), json={"body": "nice pacing"})
+    assert response.status_code == 401
+
+
+def test_workout_chat_send_403_without_grant(client, allowlist, google, store) -> None:
+    workout = _seed_workout(store, "renee")
+    headers = _tim_headers(client, allowlist, google)
+    response = client.post(
+        _workout_chat_url("renee", workout.id), json={"body": "nice pacing"}, headers=headers
+    )
+    assert response.status_code == 403
+
+
+def test_workout_chat_send_missing_body_is_422(client, allowlist, store, google) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    workout = _seed_workout(store, "renee")
+    headers = _tim_headers(client, allowlist, google)
+    response = client.post(_workout_chat_url("renee", workout.id), json={}, headers=headers)
+    assert response.status_code == 422
+
+
+def test_workout_chat_send_blank_body_is_422(client, allowlist, store, google) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    workout = _seed_workout(store, "renee")
+    headers = _tim_headers(client, allowlist, google)
+    response = client.post(
+        _workout_chat_url("renee", workout.id), json={"body": "   "}, headers=headers
+    )
+    assert response.status_code == 422
+
+
+def test_workout_chat_send_appends_and_persists(client, allowlist, store, google) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    workout = _seed_workout(store, "renee")
+    headers = _tim_headers(client, allowlist, google)
+
+    response = client.post(
+        _workout_chat_url("renee", workout.id),
+        json={"body": "nice negative split there"},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["sender_role"] == "coach"
+    assert body["body"] == "nice negative split there"
+    tim_id = store.load_athlete("tim").id
+    assert body["coach_athlete_id"] == str(tim_id)
+    assert body["created_at"]
+
+    reloaded = store.get_workout("renee", workout.id)
+    assert len(reloaded.chat_messages) == 1
+    assert reloaded.chat_messages[0].body == "nice negative split there"
+
+
+def test_workout_chat_send_appends_without_clobbering_existing_messages(
+    client, allowlist, store, google
+) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    workout = _seed_workout(store, "renee")
+    headers = _tim_headers(client, allowlist, google)
+
+    client.post(_workout_chat_url("renee", workout.id), json={"body": "first"}, headers=headers)
+    client.post(_workout_chat_url("renee", workout.id), json={"body": "second"}, headers=headers)
+
+    reloaded = store.get_workout("renee", workout.id)
+    assert [m.body for m in reloaded.chat_messages] == ["first", "second"]
+
+
+def test_workout_chat_send_unknown_workout_id_is_404(client, allowlist, store, google) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    headers = _tim_headers(client, allowlist, google)
+    response = client.post(
+        _workout_chat_url("renee", "00000000-0000-0000-0000-000000000000"),
+        json={"body": "no such workout"},
+        headers=headers,
+    )
+    assert response.status_code == 404
+
+
+def test_workout_chat_send_wrong_athlete_workout_is_404(client, allowlist, store, google) -> None:
+    # The grant is for renee; the workout belongs to andrew -- resolve_coach_athlete already
+    # scopes `slug` to renee, so store.get_workout("renee", andrew's workout id) finds nothing.
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    andrew_workout = _seed_workout(store, "andrew")
+    headers = _tim_headers(client, allowlist, google)
+    response = client.post(
+        _workout_chat_url("renee", andrew_workout.id),
+        json={"body": "wrong athlete"},
+        headers=headers,
+    )
+    assert response.status_code == 404
+
+
+def test_workout_chat_send_service_principal_is_403(client, allowlist, store) -> None:
+    workout = _seed_workout(store, "renee")
+    response = client.post(
+        _workout_chat_url("renee", workout.id),
+        json={"body": "no single coach identity"},
+        headers=auth_headers(),
+    )
+    assert response.status_code == 403
+
+
+@pytest.fixture
+def spy_workout_chat_notifier(app):
+    from app.routes.coach import get_workout_chat_notifier
+
+    calls = []
+
+    def fake_notifier(store, settings, message, athlete):
+        calls.append({"message": message, "athlete": athlete})
+
+    app.dependency_overrides[get_workout_chat_notifier] = lambda: fake_notifier
+    yield calls
+    app.dependency_overrides.pop(get_workout_chat_notifier, None)
+
+
+def test_workout_chat_send_schedules_athlete_notification(
+    client, allowlist, store, google, spy_workout_chat_notifier
+) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    workout = _seed_workout(store, "renee")
+    headers = _tim_headers(client, allowlist, google)
+
+    response = client.post(
+        _workout_chat_url("renee", workout.id), json={"body": "great pacing"}, headers=headers
+    )
+    assert response.status_code == 200
+    assert len(spy_workout_chat_notifier) == 1
+    assert spy_workout_chat_notifier[0]["athlete"] == "renee"
+    assert spy_workout_chat_notifier[0]["message"].body == "great pacing"
+
+
+def test_workout_chat_send_notification_failure_does_not_break_response(
+    client, allowlist, store, google
+) -> None:
+    """Real-notifier integration check (no spy): no RESEND_API_KEY configured (app_env's
+    default) -- the save and HTTP response are completely unaffected."""
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    workout = _seed_workout(store, "renee")
+    headers = _tim_headers(client, allowlist, google)
+
+    response = client.post(
+        _workout_chat_url("renee", workout.id), json={"body": "nice work"}, headers=headers
+    )
+    assert response.status_code == 200
+    assert response.json()["body"] == "nice work"
+
+
+# --- PATCH /api/coach/athletes/{slug}/workouts/{workout_id}/chat-mute (IDEA 016) -------------
+
+
+def test_workout_chat_mute_requires_auth(client, allowlist, store) -> None:
+    workout = _seed_workout(store, "renee")
+    response = client.patch(
+        f"/api/coach/athletes/renee/workouts/{workout.id}/chat-mute", json={"chat_ai_muted": True}
+    )
+    assert response.status_code == 401
+
+
+def test_workout_chat_mute_403_without_grant(client, allowlist, google, store) -> None:
+    workout = _seed_workout(store, "renee")
+    headers = _tim_headers(client, allowlist, google)
+    response = client.patch(
+        f"/api/coach/athletes/renee/workouts/{workout.id}/chat-mute",
+        json={"chat_ai_muted": True},
+        headers=headers,
+    )
+    assert response.status_code == 403
+
+
+def test_workout_chat_mute_toggles_and_persists(client, allowlist, store, google) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    workout = _seed_workout(store, "renee")
+    headers = _tim_headers(client, allowlist, google)
+
+    muted = client.patch(
+        f"/api/coach/athletes/renee/workouts/{workout.id}/chat-mute",
+        json={"chat_ai_muted": True},
+        headers=headers,
+    )
+    assert muted.status_code == 200
+    assert muted.json() == {"workout_id": str(workout.id), "chat_ai_muted": True}
+    assert store.get_workout("renee", workout.id).chat_ai_muted is True
+
+    unmuted = client.patch(
+        f"/api/coach/athletes/renee/workouts/{workout.id}/chat-mute",
+        json={"chat_ai_muted": False},
+        headers=headers,
+    )
+    assert unmuted.status_code == 200
+    assert store.get_workout("renee", workout.id).chat_ai_muted is False
+
+
+def test_workout_chat_mute_non_boolean_is_422(client, allowlist, store, google) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    workout = _seed_workout(store, "renee")
+    headers = _tim_headers(client, allowlist, google)
+    response = client.patch(
+        f"/api/coach/athletes/renee/workouts/{workout.id}/chat-mute",
+        json={"chat_ai_muted": "yes"},
+        headers=headers,
+    )
+    assert response.status_code == 422
+
+
+def test_workout_chat_mute_unknown_workout_is_404(client, allowlist, store, google) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    headers = _tim_headers(client, allowlist, google)
+    response = client.patch(
+        "/api/coach/athletes/renee/workouts/00000000-0000-0000-0000-000000000000/chat-mute",
+        json={"chat_ai_muted": True},
+        headers=headers,
+    )
+    assert response.status_code == 404
+
+
 # --- GET /api/coach/athletes/{slug}/plan --------------------------------------
 
 

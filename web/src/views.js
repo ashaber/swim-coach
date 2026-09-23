@@ -2179,11 +2179,11 @@ function renderTrainingDashboardBody({
   editable = false,
   now = Date.now(),
   emptyMessage = 'Nothing logged or missed yet. Once you log a session (or miss a planned one), it shows up here.',
-  // Coach-mode Q&A build: threaded straight through to `renderWorkoutDetail`
-  // -- see that function's own `askCoach` doc comment. `null` (every
-  // pre-existing call site of this function, until each is updated) renders
-  // an empty read-only Q&A section rather than crashing.
-  askCoach = null,
+  // IDEA 016: the coach's own "sending" state for a workout-thread comment, threaded straight
+  // through to `renderWorkoutDetail` -- only the coach roster's call site (`chat: false`) ever
+  // sets this to something other than the default; the athlete's own view has no use for it
+  // (her sends go through the streaming `workoutChat` state instead).
+  coachChatSubmitting = false,
   // Two-panel load chart (web/two-panel-load-chart): threaded straight
   // through to `renderLoadChart` -- see that function's own doc comment for
   // what each means. `showWellnessInline` defaults `true` (the coach
@@ -2209,8 +2209,8 @@ function renderTrainingDashboardBody({
         <section class="hist-section">
           <div class="s-head"><button type="button" class="btn-ghost" data-a="${backAction}">&larr; Back</button></div>
           ${renderWorkoutDetail(match.workout, {
-            chat: chat ? workoutChat : null, online, rpeEdit, editable, askCoach,
-            pacing: pacing[match.workout.id], raceDebriefs,
+            chat: chat ? workoutChat : null, viewerRole: chat ? 'athlete' : 'coach', online, rpeEdit, editable,
+            pacing: pacing[match.workout.id], raceDebriefs, coachChatSubmitting,
           })}
         </section>`;
     }
@@ -2272,7 +2272,7 @@ function dashboardShell(body) {
  * unlike the coach roster's completed-only view, see `renderRosterTab`. */
 export function renderDashboardTab({
   load, feed, status, error, online, detailId, workoutChat, backendConfigured,
-  form, submit, ingest, sync, manualOpen, feedExpanded, rpeEdit, askCoach,
+  form, submit, ingest, sync, manualOpen, feedExpanded, rpeEdit,
   loadWindowDays, loadNarrativeExpanded,
   // Race analysis/debrief (Andrew, 2026-09-22): threaded straight through
   // to renderWorkoutDetail -- see that function's own doc comments.
@@ -2311,7 +2311,7 @@ export function renderDashboardTab({
   return dashboardShell(`
     ${!online ? '<div class="chat-banner">Offline -- some data may be out of date.</div>' : ''}
     ${renderTrainingDashboardBody({
-      load, feed, status, error, online, detailId, workoutChat, actions, feedExpanded, rpeEdit, editable: true, askCoach,
+      load, feed, status, error, online, detailId, workoutChat, actions, feedExpanded, rpeEdit, editable: true,
       loadWindowDays, loadNarrativeExpanded, pacing, raceDebriefs,
       // Resolved decision (web/two-panel-load-chart): the athlete's OWN
       // Dashboard tab moves the wellness-deviation block OUT of this chart
@@ -2678,25 +2678,66 @@ function renderDetailNotes(notes) {
 // cleared when the detail closes). `chat` is {workoutId, messages} or null
 // (defensive: renders nothing if it doesn't match this workout).
 
-function renderWorkoutChatSection({ workout, chat, online }) {
-  if (!chat || chat.workoutId !== workout.id) return '';
-  const messages = chat.messages || [];
-  const last = messages[messages.length - 1];
-  const sending = !!last && last.role === 'assistant' && last.status === 'streaming';
+/** One message in a workout's persisted three-party thread (IDEA 016) -- role styling is
+ * PERSPECTIVE-based (the viewer's own words are always "me"/right-aligned, everyone else's
+ * are "coach"/left-aligned with a small label so athlete/AI/human-coach are never confused),
+ * not a fixed sender->style mapping. Reuses `renderChatMarkdown` (same as the streaming AI
+ * chat) so a coach's or the AI's formatted prose renders identically everywhere. */
+function renderWorkoutThreadMessage(msg, viewerRole) {
+  const isMine = msg.sender_role === viewerRole;
+  const roleClass = isMine ? 'me' : 'coach';
+  const label = isMine ? '' : { athlete: 'Athlete', ai_coach: 'AI coach', coach: 'Coach' }[msg.sender_role] || '';
+  return `
+    <div class="chat-row ${roleClass}">
+      ${label ? `<div class="chat-chips"><span class="chat-chip">${esc(label)}</span></div>` : ''}
+      <div class="chat-bubble"><div class="chat-md">${renderChatMarkdown(msg.body)}</div></div>
+    </div>`;
+}
+
+/** Replaces the old ephemeral, AI-only `renderWorkoutChatSection` -- one persisted, three-party
+ * thread (athlete + AI coach + human coach), shown identically on the athlete's own workout
+ * detail view (`viewerRole: 'athlete'`) and the coach roster's view of that same workout
+ * (`viewerRole: 'coach'`), which never had any write surface here before (IDEA 016).
+ *
+ * `streamingChat` (athlete view only): the ephemeral `state.workoutChat` overlay for an
+ * in-flight AI reply that hasn't been persisted (and refetched into `workout.chat_messages`)
+ * yet -- gives the athlete's own send the same live-typing feel as before; once the turn
+ * completes, main.js refetches and this overlay stops rendering (the now-updated
+ * `workout.chat_messages` carries the identical content persisted).
+ *
+ * `inputId`/`sendAction`/`muteAction` are threaded through rather than hardcoded so ONE
+ * function serves both surfaces with their own distinct DOM ids/dispatch actions. */
+function renderWorkoutThread({
+  workout, viewerRole, streamingChat = null, online, inputId, sendAction, muteAction, submitting = false,
+}) {
+  const messages = workout.chat_messages || [];
+  const muted = workout.chat_ai_muted;
+  const rows = messages.map((m) => renderWorkoutThreadMessage(m, viewerRole)).join('');
+  const isStreamingHere = viewerRole === 'athlete' && streamingChat && streamingChat.workoutId === workout.id;
+  const streamingMessages = isStreamingHere ? streamingChat.messages || [] : [];
+  const lastStreaming = streamingMessages[streamingMessages.length - 1];
+  const sendingLive = submitting
+    || (isStreamingHere && !!lastStreaming && lastStreaming.role === 'assistant' && lastStreaming.status === 'streaming');
+  const streamingRows = isStreamingHere ? streamingMessages.map(renderChatMessage).join('') : '';
+  const hasAnything = rows || streamingRows;
+
   return `
     <section class="detail-section" id="workout-chat">
-      <h4>Ask your coach about this workout</h4>
-      <p class="sub">${esc(formatWorkoutChatLabel(workout))} · this thread isn't saved -- it clears when you leave this workout.</p>
-      ${!online ? '<div class="chat-banner">Offline -- chatting about this workout needs a connection.</div>' : ''}
-      ${messages.length > 0 ? `
+      <div class="chat-thread-head">
+        <h4>${viewerRole === 'coach' ? 'Chat with athlete' : 'Ask your coach about this workout'}</h4>
+        <button type="button" class="btn-ghost chat-mute-btn" data-a="${esc(muteAction)}">${muted ? 'Unmute AI' : 'Mute AI'}</button>
+      </div>
+      ${muted ? '<p class="sub">The AI coach is muted in this thread -- only you and your coach will reply.</p>' : ''}
+      ${!online ? '<div class="chat-banner">Offline -- this needs a connection.</div>' : ''}
+      ${hasAnything ? `
       <div class="chat-messages" id="workout-chat-messages">
-        ${messages.map(renderChatMessage).join('')}
-      </div>` : ''}
+        ${rows}${streamingRows}
+      </div>` : '<p class="sub">No messages yet.</p>'}
       <div class="chat-composer">
-        <textarea id="workout-chat-input" class="chat-input" placeholder="Ask about this workout…" rows="2" ${sending || !online ? 'disabled' : ''}></textarea>
+        <textarea id="${esc(inputId)}" class="chat-input" placeholder="${viewerRole === 'coach' ? 'Comment on this workout…' : 'Ask about this workout…'}" rows="2" ${sendingLive || !online ? 'disabled' : ''}></textarea>
         <div class="chat-composer-row">
           <span></span>
-          <button type="button" class="btn" data-a="workout-chat:send" ${sending || !online ? 'disabled' : ''}>${sending ? 'Sending…' : 'Send'}</button>
+          <button type="button" class="btn" data-a="${esc(sendAction)}" ${sendingLive || !online ? 'disabled' : ''}>${sendingLive ? 'Sending…' : 'Send'}</button>
         </div>
       </div>
     </section>`;
@@ -2713,9 +2754,13 @@ function renderWorkoutChatSection({ workout, chat, online }) {
  * `chat` stays `null` there too, so `renderWorkoutChatSection` still renders
  * nothing on that surface -- unchanged). */
 function renderWorkoutDetail(workout, {
-  chat, online, rpeEdit = null, editable = false, askCoach = null, pacing = null, raceDebriefs = [],
+  chat, online, rpeEdit = null, editable = false, pacing = null, raceDebriefs = [],
+  viewerRole = 'athlete', coachChatSubmitting = false,
 } = {}) {
   const badge = sourceBadge(workout.source);
+  // `renderAskCoachSection` (the old single-turn Feedback-based Q&A) is gone from here
+  // entirely -- superseded by the unified thread below (IDEA 016); it's still used,
+  // unchanged, for PLAN SESSIONS (renderPlanSessionDetail).
   return `
     <div class="detail-header">
       <h3>${esc(sportLabel(workout.sport, workout.sport_detail))}</h3>
@@ -2731,12 +2776,13 @@ function renderWorkoutDetail(workout, {
     ${renderPausesList(workout.pauses)}
     ${renderLengthsSummarySection(workout.lengths)}
     ${renderDetailNotes(workout.notes)}
-    ${renderAskCoachSection({
-      questions: feedbackForWorkout(askCoach?.feedback, workout.id),
-      form: askCoach?.form ?? null,
-      submit: askCoach?.submit,
-    })}
-    ${renderWorkoutChatSection({ workout, chat, online })}`;
+    ${renderWorkoutThread(viewerRole === 'coach' ? {
+      workout, viewerRole, online, submitting: coachChatSubmitting,
+      inputId: 'roster-workout-chat-input', sendAction: 'roster:workout-chat:send', muteAction: 'roster:workout-chat:mute-toggle',
+    } : {
+      workout, viewerRole, streamingChat: chat, online,
+      inputId: 'workout-chat-input', sendAction: 'workout-chat:send', muteAction: 'workout-chat:mute-toggle',
+    })}`;
 }
 
 // --- Check-in tab (daily wellness) ---------------------------------------------
@@ -3750,6 +3796,11 @@ export function renderRosterTab({
   },
   healthStatusSubmit = { status: 'idle', error: null },
   healthStatusResolve = { status: 'idle', error: null, id: null },
+  // IDEA 016: the coach's own "sending a workout-thread comment" status
+  // (`state.roster.workoutChatSubmit`) -- defaulted the same "predates this
+  // build, render idle rather than crash" way as the health-status slices
+  // just above.
+  workoutChatSubmit = { status: 'idle', error: null },
 }) {
   if (!backendConfigured) {
     return rosterShell(renderBackendNeededNotice(
@@ -3797,7 +3848,7 @@ export function renderRosterTab({
       backAction: 'roster:close-workout',
       chat: false,
       emptyMessage: 'Nothing logged or missed yet.',
-      askCoach,
+      coachChatSubmitting: workoutChatSubmit.status === 'submitting',
       loadWindowDays,
       loadNarrativeExpanded,
       // showWellnessInline left at its `true` default -- see

@@ -212,27 +212,24 @@ def test_open_detail_from_row_shows_all_sections(page):
     assert page.locator('[data-a="history:open"]').count() == 0
 
 
-def test_shows_the_real_ask_the_coach_section_alongside_the_real_ai_chat(page):
-    # Coach-mode Q&A build: the old, explicitly non-functional "coach
-    # conversation -- coming soon" placeholder is REPLACED by the real
-    # Ask-the-coach Q&A section (views.js's renderAskCoachSection) -- it
-    # sits alongside the athlete's real, working scoped AI chat
-    # (id="workout-chat"), unaffected by this change.
+def test_shows_the_real_persisted_chat_thread_not_the_old_ask_coach_box(page):
+    # IDEA 016: the old single-turn Ask-the-coach Q&A box (which had itself replaced an even
+    # older "coach conversation -- coming soon" placeholder) is gone from the workout detail
+    # view -- superseded by ONE persisted, three-party thread (see test_workout_chat.py for
+    # full send/mute coverage). Session-linked Ask-the-coach is untouched (test_ask_coach.py).
     _open_log_tab_with_workouts(page, [RICH_FIT_WORKOUT])
     page.click('.hist-row')
     page.wait_for_selector('[data-a="history:back"]')
 
-    assert page.locator('#ask-coach').count() == 1
     content = page.content()
-    assert 'Ask your coach' in content
+    assert page.locator('#ask-coach').count() == 0
     assert '#coach-conversation' not in content
     assert 'coming soon' not in content
-    # A real, wired-up input box and submit button -- not a stub.
-    assert page.locator('[data-form="askCoach"][data-field="body"]').count() == 1
-    assert page.locator('[data-a="ask-coach:submit"]').count() == 1
-    # The real AI chat is still there, untouched.
+    assert page.locator('[data-form="askCoach"]').count() == 0
+    # The real, persisted thread -- input box, send, and mute toggle.
     assert 'Ask your coach about this workout' in content
     assert page.locator('#workout-chat-input').count() == 1
+    assert page.locator('[data-a="workout-chat:mute-toggle"]').count() == 1
 
 
 def test_back_returns_to_list(page):

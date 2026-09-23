@@ -583,27 +583,30 @@ describe('renderDashboardTab', () => {
       ...DASHBOARD_BASE_ARGS, feed: feedOf([RICH_FIT_WORKOUT]), detailId: 'w-rich',
     };
 
-    it('renders the scoped chat section with the "About:" label when workoutChat matches the open detail', () => {
+    // IDEA 016: the thread itself is now persisted (Workout.chat_messages), so the section
+    // (heading + composer) always renders on the athlete's own view regardless of whether
+    // there's a live/ephemeral streaming exchange in flight -- only the trailing LIVE overlay
+    // bubble (tested separately below) depends on `workoutChat` matching this workout.
+    it('always renders the thread section with a composer, whether or not a live exchange is in flight', () => {
       const html = renderDashboardTab({
         ...openDetailArgs, workoutChat: { workoutId: 'w-rich', messages: [] },
       });
       expect(html).toContain('Ask your coach about this workout');
-      expect(html).toContain('About: Jun 1 Open water swim');
       expect(html).toContain('id="workout-chat-input"');
       expect(html).toContain('data-a="workout-chat:send"');
     });
 
-    it('omits the chat section entirely when workoutChat is null', () => {
+    it('still renders the thread section and composer when workoutChat is null', () => {
       const html = renderDashboardTab({ ...openDetailArgs, workoutChat: null });
-      expect(html).not.toContain('Ask your coach about this workout');
-      expect(html).not.toContain('workout-chat-input');
+      expect(html).toContain('Ask your coach about this workout');
+      expect(html).toContain('workout-chat-input');
     });
 
-    it('omits the chat section when workoutChat belongs to a different workout', () => {
+    it('still renders the thread section when workoutChat belongs to a different workout (no live overlay, no crash)', () => {
       const html = renderDashboardTab({
         ...openDetailArgs, workoutChat: { workoutId: 'w-other', messages: [] },
       });
-      expect(html).not.toContain('Ask your coach about this workout');
+      expect(html).toContain('Ask your coach about this workout');
     });
 
     it('renders thread messages with the coach-tab bubble classes', () => {
@@ -665,69 +668,67 @@ describe('renderDashboardTab', () => {
     });
   });
 
-  describe('Ask-the-coach Q&A section (replaces the old coach-conversation placeholder)', () => {
-    it('renders the real Q&A section alongside the real AI chat, distinct from it', () => {
+  describe('workout chat thread (IDEA 016 -- replaces the old ephemeral AI-only box AND the old single-turn Feedback Q&A)', () => {
+    it('renders the persisted thread with a mute toggle and composer, and the old boxes are gone', () => {
       const html = renderDashboardTab({
         ...DASHBOARD_BASE_ARGS,
         feed: feedOf([RICH_FIT_WORKOUT]),
         detailId: 'w-rich',
         workoutChat: { workoutId: 'w-rich', messages: [] },
-        askCoach: { feedback: [], form: { body: '' }, submit: { status: 'idle', error: null } },
       });
-      expect(html).toContain('id="ask-coach"');
-      expect(html).toContain('Ask your coach');
-      // The honest "coming soon" placeholder is gone -- replaced, not additive.
+      // Both predecessors are gone.
+      expect(html).not.toContain('id="ask-coach"');
       expect(html).not.toContain('id="coach-conversation"');
       expect(html).not.toContain('coming soon');
-      // Still has the real, working AI chat -- unrelated, unaffected.
+      expect(html).not.toContain("it clears when you leave this workout");
+      // The real thing.
+      expect(html).toContain('id="workout-chat"');
       expect(html).toContain('Ask your coach about this workout');
       expect(html).toContain('id="workout-chat-input"');
+      expect(html).toContain('data-a="workout-chat:send"');
+      expect(html).toContain('data-a="workout-chat:mute-toggle"');
+      expect(html).toContain('Mute AI');
+      expect(html).toContain('No messages yet.');
     });
 
-    it('still renders even when the real AI chat is absent (workoutChat null)', () => {
+    it('renders each persisted message with a role label, perspective-based (the athlete never sees her own words labelled)', () => {
+      const rich = {
+        ...RICH_FIT_WORKOUT,
+        chat_messages: [
+          { id: 'm1', sender_role: 'athlete', body: 'how did this go?', created_at: '2026-06-01T08:00:00Z' },
+          { id: 'm2', sender_role: 'ai_coach', body: 'no fade, held pace well.', created_at: '2026-06-01T08:00:05Z' },
+          { id: 'm3', sender_role: 'coach', coach_athlete_id: 'c1', body: 'agreed, nice work.', created_at: '2026-06-01T09:00:00Z' },
+        ],
+      };
       const html = renderDashboardTab({
-        ...DASHBOARD_BASE_ARGS,
-        feed: feedOf([RICH_FIT_WORKOUT]),
-        detailId: 'w-rich',
-        workoutChat: null,
-        askCoach: { feedback: [], form: { body: '' }, submit: { status: 'idle', error: null } },
+        ...DASHBOARD_BASE_ARGS, feed: feedOf([rich]), detailId: 'w-rich', workoutChat: null,
       });
-      expect(html).toContain('id="ask-coach"');
-      expect(html).not.toContain('Ask your coach about this workout');
+      expect(html).toContain('how did this go?');
+      expect(html).toContain('no fade, held pace well.');
+      expect(html).toContain('agreed, nice work.');
+      expect(html).toContain('>AI coach<');
+      expect(html).toContain('>Coach<');
+      expect(html).not.toContain('>Athlete<'); // the viewer IS the athlete -- her own message is unlabelled "me"
     });
 
-    it('filters the raw feedback list down to just this workout, by workout_id', () => {
+    it('shows a muted notice and "Unmute AI" when the thread is muted', () => {
+      const rich = { ...RICH_FIT_WORKOUT, chat_ai_muted: true };
       const html = renderDashboardTab({
-        ...DASHBOARD_BASE_ARGS,
-        feed: feedOf([RICH_FIT_WORKOUT]),
-        detailId: 'w-rich',
-        workoutChat: null,
-        askCoach: {
-          feedback: [
-            { id: 'f1', body: 'about this workout', workout_id: 'w-rich' },
-            { id: 'f2', body: 'about a different workout', workout_id: 'w-other' },
-            { id: 'f3', body: 'a planned-session question', session_date: '2026-06-01', session_sport: 'swim_ow' },
-          ],
-          form: { body: '' },
-          submit: { status: 'idle', error: null },
-        },
+        ...DASHBOARD_BASE_ARGS, feed: feedOf([rich]), detailId: 'w-rich', workoutChat: null,
       });
-      expect(html).toContain('about this workout');
-      expect(html).not.toContain('about a different workout');
-      expect(html).not.toContain('a planned-session question');
+      expect(html).toContain('The AI coach is muted in this thread');
+      expect(html).toContain('Unmute AI');
     });
 
-    it('renders no input box in read-only mode (form: null -- the coach roster call site)', () => {
+    it('escapes malicious message content', () => {
+      const rich = {
+        ...RICH_FIT_WORKOUT,
+        chat_messages: [{ id: 'm1', sender_role: 'coach', coach_athlete_id: 'c1', body: '<img src=x onerror=alert(1)>', created_at: '2026-06-01T08:00:00Z' }],
+      };
       const html = renderDashboardTab({
-        ...DASHBOARD_BASE_ARGS,
-        feed: feedOf([RICH_FIT_WORKOUT]),
-        detailId: 'w-rich',
-        workoutChat: null,
-        askCoach: { feedback: [], form: null },
+        ...DASHBOARD_BASE_ARGS, feed: feedOf([rich]), detailId: 'w-rich', workoutChat: null,
       });
-      expect(html).toContain('id="ask-coach"');
-      expect(html).not.toContain('data-form="askCoach"');
-      expect(html).not.toContain('data-a="ask-coach:submit"');
+      expect(html).not.toContain('<img src=x');
     });
   });
 
@@ -2295,7 +2296,7 @@ describe('renderRosterTab', () => {
     expect(html).toContain('data-id="w1"');
   });
 
-  it('shows the read-only workout detail view (no embedded chat) when workoutDetailId matches a loaded workout', () => {
+  it('shows the workout detail view with a real, writable chat thread (not read-only) when workoutDetailId matches a loaded workout', () => {
     const html = renderRosterTab({
       ...baseArgs,
       athletes: { status: 'ready', data: [{ slug: 'renee', name: 'Renee' }], error: null },
@@ -2310,15 +2311,15 @@ describe('renderRosterTab', () => {
     expect(html).toContain('Pool swim');
     expect(html).not.toContain('data-a="roster:open-workout"');
     expect(html).not.toContain('data-a="roster:back"');
-    // No embedded "ask your coach" chat -- that's an athlete-only feature.
+    // The old AI-only ephemeral box and the old single-turn Feedback-based
+    // Q&A are both gone here -- IDEA 016's unified thread replaces them,
+    // and unlike either predecessor, the COACH can write into it now.
     expect(html).not.toContain('Ask your coach about this workout');
-    // The real, read-only Ask-the-coach Q&A section IS shown here too
-    // (coach-mode Q&A build) -- distinct from the athlete-only AI chat just
-    // excluded above, and with no input box (coach replies stay in the
-    // roster's own Feedback section reply UI).
-    expect(html).toContain('id="ask-coach"');
-    expect(html).not.toContain('data-form="askCoach"');
-    expect(html).not.toContain('data-a="ask-coach:submit"');
+    expect(html).not.toContain('id="ask-coach"');
+    expect(html).toContain('Chat with athlete');
+    expect(html).toContain('data-a="roster:workout-chat:send"');
+    expect(html).toContain('id="roster-workout-chat-input"');
+    expect(html).toContain('data-a="roster:workout-chat:mute-toggle"');
   });
 
   describe('sub-tabs (Build 2: Conversations / Workouts + Dashboard / Training Plan / Health)', () => {

@@ -36,7 +36,7 @@ from app.auth import hash_token
 from app.logging_config import get_logger
 
 if TYPE_CHECKING:
-    from swim_coach.models import Feedback
+    from swim_coach.models import Feedback, WorkoutChatMessage
     from swim_coach.store import StoreInterface
 
     from app.config import Settings
@@ -369,4 +369,118 @@ def notify_athlete_of_coach_reply(
             athlete=athlete_slug,
             feedback_id=str(feedback.id),
             error=str(exc),
+        )
+
+
+# --- workout chat thread (IDEA 016): human coach -> athlete email --------------------------
+#
+# `notify_athlete_of_workout_chat_message` fires from the coach-side send route
+# (`backend/app/routes/coach.py`), scheduled via BackgroundTasks AFTER the message has already
+# been persisted onto the workout -- same "schedule after save, never block the request"
+# discipline every other notifier in this module uses. Deliberately its OWN functions, not a
+# reuse of `notify_athlete_of_coach_reply` above: that one hardcodes `Feedback`'s own
+# `coach_reply`/subject line, and a workout chat message has neither.
+
+
+def _build_workout_chat_email(athlete_name: str, message: "WorkoutChatMessage") -> dict:
+    text = (
+        f"Hi {athlete_name}, your coach just commented on one of your workouts:\n\n"
+        f"{message.body}\n\n"
+        "Open the app to see the full conversation."
+    )
+    return {"subject": "Your coach commented on a workout", "text": text}
+
+
+def _send_workout_chat_email(
+    client: httpx.Client, settings: "Settings", athlete_email: str, athlete_name: str,
+    message: "WorkoutChatMessage",
+) -> None:
+    email_hash = hash_token(athlete_email)
+    payload = {
+        "from": settings.resend_from_email,
+        "to": [athlete_email],
+        **_build_workout_chat_email(athlete_name, message),
+    }
+    try:
+        response = client.post(
+            RESEND_API_URL,
+            headers={"Authorization": f"Bearer {settings.resend_api_key}"},
+            json=payload,
+        )
+    except Exception as exc:  # noqa: BLE001 - any transport error, this send just failed
+        log.error(
+            "notify.workout_chat_send_failed", athlete_email_hash=email_hash,
+            message_id=str(message.id), error=str(exc),
+        )
+        return
+
+    if response.status_code not in _SUCCESS_STATUS_CODES:
+        log.error(
+            "notify.workout_chat_send_failed", athlete_email_hash=email_hash,
+            message_id=str(message.id), status_code=response.status_code, error=response.text[:500],
+        )
+        return
+
+    log.info(
+        "notify.workout_chat_sent", athlete_email_hash=email_hash,
+        message_id=str(message.id), status_code=response.status_code,
+    )
+
+
+def _notify_athlete_of_workout_chat_message(
+    store: "StoreInterface", settings: "Settings", message: "WorkoutChatMessage",
+    athlete_slug: str, *, client: httpx.Client | None,
+) -> None:
+    if not settings.resend_api_key:
+        log.info("notify.workout_chat_skipped_no_api_key", athlete=athlete_slug, message_id=str(message.id))
+        return
+
+    athlete = store.load_athlete(athlete_slug)
+    if not athlete.email_notifications_enabled:
+        log.info(
+            "notify.workout_chat_skipped_notifications_disabled",
+            athlete=athlete_slug, message_id=str(message.id),
+        )
+        return
+
+    allowed_emails = store.list_allowed_emails()
+    email_by_slug = {
+        entry.athlete_slug: entry.email for entry in allowed_emails if entry.athlete_slug is not None
+    }
+    athlete_email = email_by_slug.get(athlete_slug)
+    if athlete_email is None:
+        log.warn(
+            "notify.workout_chat_athlete_missing_allowlist_email",
+            athlete=athlete_slug, message_id=str(message.id),
+        )
+        return
+
+    owns_client = client is None
+    if client is None:
+        client = httpx.Client(timeout=_HTTP_TIMEOUT_S)
+    try:
+        _send_workout_chat_email(client, settings, athlete_email, athlete.name, message)
+    finally:
+        if owns_client:
+            client.close()
+
+
+def notify_athlete_of_workout_chat_message(
+    store: "StoreInterface", settings: "Settings", message: "WorkoutChatMessage",
+    athlete_slug: str, *, client: httpx.Client | None = None,
+) -> None:
+    """Best-effort email notification to `athlete_slug` when a human coach comments in one of
+    her workout's chat threads (IDEA 016). NEVER raises -- same reasoning as every other
+    notifier in this module. No-ops (with a log line) if `settings.resend_api_key` is unset, or
+    if `athlete_slug`'s own `email_notifications_enabled` is False.
+
+    `client`, same test-injection convention as the rest of this module -- used as-is and NOT
+    closed by this function when given.
+    """
+    try:
+        _notify_athlete_of_workout_chat_message(store, settings, message, athlete_slug, client=client)
+    except Exception as exc:  # noqa: BLE001 - this IS the boundary; see module docstring
+        log.error(
+            "notify.workout_chat_unexpected_failure",
+            athlete=athlete_slug, message_id=str(message.id), error=str(exc),
         )

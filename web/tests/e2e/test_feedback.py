@@ -235,9 +235,9 @@ def test_unread_badge_appears_on_the_feedback_tab_then_clears_after_visiting_it(
     page.click('[data-a="tab:dashboard"]')
     page.wait_for_selector('.hist-row')
     page.click('.hist-row')
-    page.wait_for_selector('#ask-coach')
+    page.wait_for_selector('[data-a="history:back"]')
 
-    # `#ask-coach` renders synchronously the moment the detail view opens --
+    # `[data-a="history:back"]` renders synchronously the moment the detail view opens --
     # BEFORE maybeLoadFeedback's async GET /api/feedback resolves and
     # triggers the second render that actually shows the badge (loadFeedback
     # sets status:'loading' and calls render() immediately, then awaits the

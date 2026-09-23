@@ -87,13 +87,20 @@ _CLIENT_SETTABLE_SOURCES = {"manual", "fit", "tcx", "csv"}
 _MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 # A5: PATCH /api/workouts/{workout_id} is a narrow after-the-fact correction
-# surface, not a general update endpoint -- only these two fields are ever
+# surface, not a general update endpoint -- only these fields are ever
 # accepted from the client, everything else in the payload is silently
 # dropped. Same allowlist style as _CLIENT_SETTABLE_SOURCES above (accept a
 # named set, not "everything except a denylist" like routes/athlete.py's
 # _SERVER_OWNED_FIELDS -- Workout has far more fields where a stray
 # client-supplied value would be far more consequential than on Athlete).
-_PATCHABLE_WORKOUT_FIELDS = {"rpe", "notes"}
+# `chat_ai_muted` (IDEA 016): the athlete's own manual mute/unmute toggle for
+# her workout's chat thread -- a plain boolean flip, same "deterministic
+# switch, not a field the client can otherwise corrupt" reasoning as
+# rpe/notes. `chat_messages` itself is deliberately NOT here: it's an
+# append-only log with its own dedicated write path (app.routes.chat's
+# persistence hook, app.routes.coach's human-coach send route), never a
+# bulk client overwrite.
+_PATCHABLE_WORKOUT_FIELDS = {"rpe", "notes", "chat_ai_muted"}
 
 
 def _attach_load(

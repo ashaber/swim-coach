@@ -1792,6 +1792,11 @@ def render_focused_workout(
     parts = [
         "## The specific workout the athlete is asking about "
         "(NOT the same as the 28-day exact-sessions list above)",
+        "This thread is saved and shared: a human coach with access to this athlete can read "
+        "everything here and reply too (their words appear above labelled '[Your human "
+        "coach]:'). If the athlete or a human coach explicitly asks you to stop responding "
+        "here, say so plainly and call set_workout_chat_muted(muted=true) -- don't just go "
+        "silent. Call it again with muted=false if told you can talk again.",
         json.dumps(summary, indent=2),
         "",
         laps_header,
