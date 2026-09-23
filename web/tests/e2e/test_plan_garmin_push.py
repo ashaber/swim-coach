@@ -139,6 +139,11 @@ def page(request, base_url):
         # same hazard every other route above already documents.
         ctx.route('**/api/feedback*', lambda route: route.fulfill(
             status=200, content_type='application/json', body='[]'))
+        # Same hazard, same fix: opening a session detail also now fires GET
+        # /api/athlete (main.js's maybeLoadRaceDebriefs, race-debrief-interview
+        # build) so the race-debrief section has something to match against.
+        ctx.route('**/api/athlete*', lambda route: route.fulfill(
+            status=200, content_type='application/json', body='{"race_debriefs": []}'))
         pg = ctx.new_page()
         js_errors: list[str] = []
         pg.on('pageerror', lambda e: js_errors.append(str(e)))

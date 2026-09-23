@@ -118,6 +118,10 @@ def page(request, base_url):
         ctx.route('**/api/plan/load*', _cors_route(200, 'application/json', PLAN_LOAD_STUB))
         ctx.route('**/api/workouts*', _cors_route(200, 'application/json', json.dumps([COMPLETED_WORKOUT])))
         ctx.route('**/api/grants*', _cors_route(200, 'application/json', '[]'))
+        # maybeLoadRaceDebriefs fires GET /api/athlete on opening a session/workout detail
+        # (race-debrief-interview build) -- unmocked, it's a real cross-origin fetch that
+        # WebKit logs as a CORS console/page error even though app code catches it cleanly.
+        ctx.route('**/api/athlete*', _cors_route(200, 'application/json', '{"race_debriefs": []}'))
         pg = ctx.new_page()
         js_errors: list[str] = []
         pg.on('pageerror', lambda e: js_errors.append(str(e)))
