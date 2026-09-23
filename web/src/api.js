@@ -350,9 +350,28 @@ export async function fetchPlanLoad({ baseUrl, token, athlete }) {
 }
 
 /** GET {baseUrl}/api/athlete?athlete=<slug> -- fetches the athlete's own
- * profile, to prefill the Settings tab's profile-edit form. */
+ * profile, to prefill the Settings tab's profile-edit form. Also carries
+ * `race_debriefs` (main.js's loadRaceDebriefs reads that field off this
+ * same response -- no separate endpoint, see RaceDebrief in the engine). */
 export async function getAthlete({ baseUrl, token, athlete }) {
   return apiRequest({ baseUrl, token, path: `/api/athlete?athlete=${encodeURIComponent(athlete)}` });
+}
+
+/** GET {baseUrl}/api/workouts/{workoutId}/pacing?athlete=<slug> -- GPS-lap
+ * detection + race-phase pacing split for one bike workout (Andrew,
+ * 2026-09-22: the race activity's own detail view, not only through chat
+ * -- see backend/app/routes/workouts.py's `get_workout_pacing`, which
+ * reuses the coach's own `get_ride_pacing` tool). Real compute over the
+ * full time-series, so main.js only calls this lazily, one workout at a
+ * time, when a bike workout's detail view actually opens -- never folded
+ * into the bulk workout list. A 404/422 (unknown id, wrong sport, no
+ * series data) comes back as `{ ok: false, error }` like any other
+ * apiRequest failure; the caller decides what "no pacing data" looks like. */
+export async function fetchWorkoutPacing({ baseUrl, token, athlete, workoutId }) {
+  return apiRequest({
+    baseUrl, token,
+    path: `/api/workouts/${encodeURIComponent(workoutId)}/pacing?athlete=${encodeURIComponent(athlete)}`,
+  });
 }
 
 /**

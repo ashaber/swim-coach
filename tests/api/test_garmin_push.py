@@ -145,6 +145,21 @@ def test_build_workout_event_swim_pool_maps_to_swim_type(athletes_dir: Path) -> 
     assert base64.b64decode(event["file_contents_base64"]) == expected_bytes
 
 
+def test_build_workout_event_name_is_the_short_device_title_not_the_full_purpose(athletes_dir: Path) -> None:
+    # Real incident, 2026-09-22 ("very long titles are hard to find on Garmin device"): the pushed
+    # event's name used to be the FULL purpose string. It's now the short label half only -- see
+    # short_device_title's own docstring for the "<label> -- <rationale>" splitting convention.
+    store = FileStore(base_dir=athletes_dir)
+    athlete_id = store.load_athlete("renee").id
+    long_purpose = "sustained threshold intervals (Z4) — lactate-threshold-adjacent, long work bouts"
+    session = _session(athlete_id, purpose=long_purpose)
+
+    event = build_workout_event(session)
+
+    assert event["name"] == "sustained threshold intervals (Z4)"
+    assert event["name"] != session.purpose
+
+
 def test_build_workout_event_swim_ow_also_maps_to_swim_type(athletes_dir: Path) -> None:
     store = FileStore(base_dir=athletes_dir)
     athlete_id = store.load_athlete("renee").id

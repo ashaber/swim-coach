@@ -125,6 +125,42 @@ def _format_pace_s(pace_s: float) -> str:
     return f"{minutes}:{seconds:02d}"
 
 
+_DEVICE_TITLE_MAX_LEN = 40
+
+
+def short_device_title(purpose: str, max_len: int = _DEVICE_TITLE_MAX_LEN) -> str:
+    """A short, scannable title for a workout DEVICE (Garmin/Zwift workout list), derived from a
+    `Session.purpose` string -- distinct from `purpose` itself, which stays as the full rationale
+    everywhere else (chat, the PWA's session detail, `structure` text).
+
+    Andrew, 2026-09-22, reading a real pushed workout: "very long titles are hard to find on
+    Garmin device" -- the workout's title was its FULL purpose string ("sustained threshold
+    intervals (Z4) -- lactate-threshold-adjacent, long work bouts"), truncated only at
+    `garmin_export._MAX_STRING_LEN` (63, the raw FIT field's byte limit, not a "looks good on a
+    device list" length) -- a device screen shows maybe 20-30 characters before wrapping/clipping,
+    so the athlete saw a jargon fragment, not a name.
+
+    Every purpose this engine generates (plan.py, workout_templates.py's own `_select_main_set_
+    template` callers) consistently follows a "<short label> -- <rationale>" shape, joined by
+    " -- " (an em dash with a space on each side): "over/unders (Z3/Z4) -- fluctuating lactate
+    production/clearance...", "Heinous club ride -- endurance". Splitting on the FIRST such
+    separator recovers exactly the short label half, with no rationale lost anywhere else (nothing
+    calls this on `purpose` before showing the FULL string to the athlete/coach -- only device
+    export naming does). A purpose with no separator (already short, e.g. "VO2 intervals") passes
+    through unchanged, just length-capped the same way.
+
+    Still capped at `max_len` (default `_DEVICE_TITLE_MAX_LEN`) in case even the short-label half
+    runs long, cutting at the last whole word rather than mid-word -- and this is deliberately
+    layered UNDER, not instead of, `garmin_export._MAX_STRING_LEN`'s own raw byte-safety
+    truncation, which still applies afterward as a hard protocol-level backstop.
+    """
+    label = purpose.split(" — ", 1)[0].strip()
+    if len(label) <= max_len:
+        return label
+    truncated = label[:max_len].rsplit(" ", 1)[0].strip()
+    return truncated or label[:max_len].strip()
+
+
 def _zone_range(zone: dict) -> str:
     return f"{_format_pace_s(zone['pace_lo_s'])}-{_format_pace_s(zone['pace_hi_s'])}/100m"
 

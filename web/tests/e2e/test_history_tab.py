@@ -117,6 +117,10 @@ def _make_ctx(pw, cfg, *, workouts=WORKOUTS_STUB, plan=PLAN_STUB):
     # CORS the moment any test in this file opens a detail view, the same
     # hazard every other route above already documents.
     ctx.route('**/api/feedback*', _cors_json('[]'))
+    # Same hazard, same fix: opening a workout detail also now fires GET
+    # /api/athlete (main.js's maybeLoadRaceDebriefs, race-debrief-interview
+    # build) so the race-debrief section has something to match against.
+    ctx.route('**/api/athlete*', _cors_json('{"race_debriefs": []}'))
     return browser, ctx
 
 

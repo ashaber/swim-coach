@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import Any
 
 from swim_coach.models import Session
+from swim_coach.workout_templates import short_device_title
 from swim_coach.zwo_export import to_zwo_workout
 
 
@@ -39,7 +40,7 @@ def build_zwo_export(session: Session, ftp_watts: float) -> dict[str, Any]:
     that into their own error response (422, since it's an engine bug/
     unsupported-shape situation, never an athlete input error).
     """
-    xml_str = to_zwo_workout(session.structured, ftp_watts=ftp_watts, name=session.purpose)
+    xml_str = to_zwo_workout(session.structured, ftp_watts=ftp_watts, name=short_device_title(session.purpose))
     filename = f"{session.date.isoformat()}-bike.zwo"
     return {
         "zwo_xml": xml_str,

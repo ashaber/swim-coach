@@ -203,6 +203,10 @@ def _make_ctx(pw, cfg, *, identity=COACH_IDENTITY, reply_calls=None):
     # /api/coach/athletes/<slug>/feedback), unmocked, it fails on CORS the
     # same way every other route here documents.
     ctx.route('**/api/feedback*', _cors_route(200, 'application/json', '[]'))
+    # Same hazard, same fix: that same session-detail open also now fires
+    # GET /api/athlete (main.js's maybeLoadRaceDebriefs, race-debrief-
+    # interview build) -- also the coach's own self-access endpoint.
+    ctx.route('**/api/athlete*', _cors_route(200, 'application/json', '{"race_debriefs": []}'))
     return browser, ctx
 
 

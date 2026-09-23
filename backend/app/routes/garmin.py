@@ -29,6 +29,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from swim_coach.garmin_export import to_garmin_fit_workout
+from swim_coach.workout_templates import short_device_title
 from swim_coach.models import Session
 from swim_coach.store import StoreInterface
 
@@ -134,7 +135,10 @@ async def get_session_garmin_fit(
         )
 
     try:
-        fit_bytes = to_garmin_fit_workout(session.structured, sport=garmin_sport, name=session.purpose)
+        # Short title, same as build_workout_event's own -- this IS the USB-copy-to-the-watch
+        # path garmin_export.py's own module docstring describes, exactly the "very long titles
+        # are hard to find on Garmin device" surface (Andrew, 2026-09-22).
+        fit_bytes = to_garmin_fit_workout(session.structured, sport=garmin_sport, name=short_device_title(session.purpose))
     except ValueError as exc:
         # An unresolved template (basis="percent_css") reaching this point
         # would be an engine bug (generate_week always resolves before

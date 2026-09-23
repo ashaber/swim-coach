@@ -72,6 +72,36 @@ class AthleteNote(BaseModel):
     active: bool = True
 
 
+class RaceDebrief(BaseModel):
+    """A structured record of a post-race (or post-key-session) interview -- what the coach and
+    athlete learned, kept as durable history the way `AthleteNote` keeps preferences (never
+    deleted; `Athlete.race_debriefs` only ever grows).
+
+    Andrew, 2026-09-22, reading a real transcript from a second coaching tool that produced a
+    visibly better-targeted block off exactly this kind of interview: the value isn't the
+    interview text itself, it's that the CONCLUSION gets written down once and then every later
+    planning turn can read it back, instead of re-deriving "what does this athlete need to work
+    on" from raw logs every single time. Two fields are the athlete's own two requested opening
+    questions (`went_well`/`work_on`); `data_findings` and `tactical_note` capture what the
+    analyzer/official-result cross-check and the race-tactics half of the conversation turned up,
+    kept separate from `training_implication` (what should actually change in the PLAN) because a
+    race-day tactic (where to line up) and a training change (what to build into a session) are
+    different kinds of follow-up with different owners -- see `save_race_debrief`'s docstring for
+    the full split and why each is optional, not required."""
+
+    id: UUID
+    event_id: UUID | None = None
+    event_name: str
+    event_date: date
+    logged: date
+    result: str | None = None
+    went_well: str | None = None
+    work_on: str | None = None
+    data_findings: list[str] = Field(default_factory=list)
+    training_implication: str | None = None
+    tactical_note: str | None = None
+
+
 class Athlete(BaseModel):
     """The athlete profile: identity, CSS pace, zones, constraints, pool schedule."""
 
@@ -125,6 +155,9 @@ class Athlete(BaseModel):
     # Durable free-text preferences and facts the coach remembers and applies (see AthleteNote).
     # Stored on the athlete record, so it needs no migration. Additive/optional.
     notes: list[AthleteNote] = Field(default_factory=list)
+    # Post-race/key-session interview history (see RaceDebrief). Same "stored on the athlete,
+    # never deleted, no migration" shape as `notes` -- additive/optional.
+    race_debriefs: list[RaceDebrief] = Field(default_factory=list)
     # Per-sport weekly training-day PATTERN -- the bike/strength/skills
     # counterpart to `pool_schedule` above (which only ever covered pool
     # days). Maps a session-kind key ("bike", "strength", "skills" -- free

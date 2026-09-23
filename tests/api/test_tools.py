@@ -1397,6 +1397,24 @@ def test_export_zwo_workout_returns_real_xml(athletes_dir) -> None:
     assert "<sportType>bike</sportType>" in result["zwo_xml"]
 
 
+def test_export_zwo_workout_name_is_the_short_device_title_not_the_full_purpose(athletes_dir) -> None:
+    # Real incident, 2026-09-22 ("very long titles are hard to find on Garmin device") -- same fix
+    # as build_workout_event's, applied here too: a trainer app's workout list has the same
+    # scannability problem a Garmin device does.
+    session = _seed_indoor_bike_session(athletes_dir)
+    session.purpose = "sustained threshold intervals (Z4) — lactate-threshold-adjacent, long work bouts"
+    store = FileStore(base_dir=athletes_dir)
+    week = store.load_week("renee", "2026-W28")
+    week.sessions = [s if s.id != session.id else session for s in week.sessions]
+    store.save_week("renee", week)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["export_zwo_workout"]({"session_id": str(session.id)})
+
+    assert "<name>sustained threshold intervals (Z4)</name>" in result["zwo_xml"]
+    assert session.purpose not in result["zwo_xml"]
+
+
 def test_export_zwo_workout_requires_session_id(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)

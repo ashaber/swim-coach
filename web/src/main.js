@@ -23,6 +23,7 @@ import {
   fetchCoachHealthStatus, postCoachHealthStatus, resolveCoachHealthStatus,
   fetchHealthStatus, postHealthStatus,
   askAboutSession, askAboutWorkout,
+  fetchWorkoutPacing,
 } from './api.js';
 import {
   serializeWorkoutForm, serializeWellnessForm, profileFormFromAthlete, serializeProfileForm,
@@ -439,6 +440,15 @@ const state = {
   feedbackForm: createFeedbackForm(),
   feedbackSubmit: { status: 'idle', message: null },
   feedbackEntries: { status: 'idle', data: [] },
+  // Race-debrief history (RaceDebrief -- see loadRaceDebriefs/maybeLoadRaceDebriefs below): same
+  // idle/loading/ready/error shape as feedbackEntries, read off the same GET /api/athlete response
+  // getAthlete already serves (no separate endpoint -- see api.js's fetchWorkoutPacing docstring
+  // for why pacing IS its own endpoint but this isn't).
+  raceDebriefs: { status: 'idle', data: [] },
+  // GPS-lap/race-phase pacing analysis, keyed by workout id, fetched lazily one workout at a time
+  // (see maybeLoadPacing) -- never bulk-fetched with the workout list, it's real compute over a
+  // full time-series. { [workoutId]: { status: 'loading'|'ready'|'error', data, error } }.
+  pacingByWorkoutId: {},
   // Coach mode Phase 1 (roster/grants surface only -- direct-to-coach chat
   // and the workout-comment box are a separate follow-up piece).
   // `coachFor` mirrors `state.identity?.coachFor` once resolved -- copied
@@ -557,6 +567,8 @@ function renderTabContent() {
         askCoach: { feedback: state.feedbackEntries.data, form: state.askCoachForm, submit: state.askCoachSubmit },
         loadWindowDays: state.loadWindowDays,
         loadNarrativeExpanded: state.loadNarrativeExpanded,
+        pacing: state.pacingByWorkoutId,
+        raceDebriefs: state.raceDebriefs.data,
         healthStatusForm: state.healthStatusForm,
         healthStatusSubmit: state.healthStatusSubmit,
         healthStatusFormOpen: state.healthStatusFormOpen,
@@ -745,6 +757,8 @@ function applyAthleteSession(identity, token) {
   state.profileSubmit = { status: 'idle', message: null };
   // Same lazy-load convention for the Feedback tab's list (see setTab).
   state.feedbackEntries = { status: 'idle', data: [] };
+  state.raceDebriefs = { status: 'idle', data: [] };
+  state.pacingByWorkoutId = {};
   state.workoutHistory = { status: 'idle', data: [], error: null };
   state.workoutDetailId = null;
   state.dashboardFeedExpanded = false;
@@ -818,6 +832,8 @@ function resetToSignedOut({ identityError = null } = {}) {
   state.profileLoad = { status: 'idle', error: null };
   state.profileSubmit = { status: 'idle', message: null };
   state.feedbackEntries = { status: 'idle', data: [] };
+  state.raceDebriefs = { status: 'idle', data: [] };
+  state.pacingByWorkoutId = {};
   state.workoutHistory = { status: 'idle', data: [], error: null };
   state.workoutDetailId = null;
   state.dashboardFeedExpanded = false;
@@ -1107,6 +1123,7 @@ function handleOpenSessionDetail(id) {
   // handleOpenHistoryDetail (neither scrolled), so the page previously
   // stayed wherever it was scrolled (e.g. down near the macro section).
   maybeLoadFeedback(); // so the section's past Q&A actually has data to show
+  maybeLoadRaceDebriefs(); // so the race-debrief section has data to match against
 }
 
 /** Downloads a session's Garmin `.fit` file (see views.js's
@@ -1526,6 +1543,8 @@ function handleOpenHistoryDetail(id, { rpeEdit = null } = {}) {
   scrollToTop(); // see handleOpenSessionDetail's matching call -- was a gap
   // in both handlers, not just the Plan tab's.
   maybeLoadFeedback(); // so the section's past Q&A actually has data to show
+  maybeLoadRaceDebriefs(); // so the race-debrief section has data to match against
+  maybeLoadPacing(state.workoutHistory.data.find((w) => w.id === id)); // bike-only, no-op otherwise
 }
 
 /** A6c: the "Rate this workout" row chip's action -- opens the same detail
@@ -1970,6 +1989,81 @@ async function loadFeedback() {
   } else {
     log.error('feedback.list_load_failed', { error: result.error });
     state.feedbackEntries = { status: 'error', data: [] };
+  }
+  render();
+}
+
+/** Race-debrief history -- reads `race_debriefs` off the same full-profile
+ * response `getAthlete` already serves for the Settings tab (see api.js),
+ * so this needs no new endpoint. Same status shape/reasoning as
+ * loadFeedback just above. */
+async function loadRaceDebriefs() {
+  const settings = state.settingsForm;
+  const identity = state.identity;
+  if (!isConfigured(settings, identity)) {
+    state.raceDebriefs = { status: 'idle', data: [] };
+    render();
+    return;
+  }
+
+  state.raceDebriefs = { status: 'loading', data: state.raceDebriefs.data };
+  render();
+
+  const result = await getAthlete({ baseUrl: settings.baseUrl, token: settings.token, athlete: identity.athlete });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    const debriefs = Array.isArray(result.data?.race_debriefs) ? result.data.race_debriefs : [];
+    log.info('race_debriefs.loaded', { athlete: identity.athlete, count: debriefs.length });
+    state.raceDebriefs = { status: 'ready', data: debriefs };
+  } else {
+    log.error('race_debriefs.load_failed', { athlete: identity.athlete, error: result.error });
+    state.raceDebriefs = { status: 'error', data: [] };
+  }
+  render();
+}
+
+/** Same "not tab-gated, load on demand from whichever surface asks for it
+ * first" convention as maybeLoadFeedback -- called from handleOpenHistoryDetail
+ * (the race activity's own detail view) and handleOpenSessionDetail. */
+function maybeLoadRaceDebriefs() {
+  if (!isConfigured(state.settingsForm, state.identity)) return;
+  if (state.raceDebriefs.status === 'loading' || state.raceDebriefs.status === 'ready') return;
+  loadRaceDebriefs();
+}
+
+/** GPS-lap/race-phase pacing for one bike workout (Andrew, 2026-09-22: visible
+ * directly on the race activity's own detail view). Lazy, per-workout, real
+ * compute -- only fires for a bike workout, only once per workout id (a
+ * cached error is NOT retried automatically -- most "error" cases here are
+ * "not actually analyzable", e.g. no series data, so refetching on every
+ * open would just repeat the same 422 -- see renderRaceAnalysisSection's own
+ * retry affordance for the athlete-initiated path back in). */
+function maybeLoadPacing(workout) {
+  if (!workout || workout.sport !== 'bike') return;
+  if (!isConfigured(state.settingsForm, state.identity)) return;
+  const existing = state.pacingByWorkoutId[workout.id];
+  if (existing && (existing.status === 'loading' || existing.status === 'ready' || existing.status === 'error')) return;
+  loadPacing(workout.id);
+}
+
+async function loadPacing(workoutId) {
+  const settings = state.settingsForm;
+  const identity = state.identity;
+  if (!isConfigured(settings, identity)) return;
+
+  state.pacingByWorkoutId = { ...state.pacingByWorkoutId, [workoutId]: { status: 'loading', data: null, error: null } };
+  render();
+
+  const result = await fetchWorkoutPacing({
+    baseUrl: settings.baseUrl, token: settings.token, athlete: identity.athlete, workoutId,
+  });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    log.info('pacing.loaded', { athlete: identity.athlete, workout_id: workoutId });
+    state.pacingByWorkoutId = { ...state.pacingByWorkoutId, [workoutId]: { status: 'ready', data: result.data, error: null } };
+  } else {
+    log.warn('pacing.load_failed', { athlete: identity.athlete, workout_id: workoutId, error: result.error });
+    state.pacingByWorkoutId = { ...state.pacingByWorkoutId, [workoutId]: { status: 'error', data: null, error: result.error } };
   }
   render();
 }
