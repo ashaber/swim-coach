@@ -1,0 +1,40 @@
+schema_version: 1
+file: 32-gps-lap-detection.md
+cards:
+- section: the-real-grounded-problem
+  heading: The real, grounded problem
+  summary: A real cyclocross race recorded no per-lap FIT data (auto-lap off, manual lap-press didn't
+    register); since the course is a closed loop, lap boundaries can still be recovered from GPS position.
+  recommendation: none -- background only
+  content_hash: 71c74773c8e9163b8a048a9bcef0f0302eafcd6b93f2b617dcdebad1d2ac9a99
+- section: reference-point-and-geodesic-distance
+  heading: Reference point and geodesic distance
+  summary: Detector uses the activity's first GPS sample as the start/reference point (assumes start equals
+    finish for closed loops) and computes distances with the haversine geodesic formula, not flat lat/lng
+    Euclidean distance.
+  recommendation: none -- background only
+  content_hash: 671171e9d284b4e32a82203aa30b665634669f5a805b38e79918caef2c40ec57
+- section: proximity-arm-distance-and-minimum-duration-thresholds
+  heading: Proximity, arm-distance, and minimum-duration thresholds
+  summary: 'Coach-judgment thresholds: 20m proximity radius sized to GPS accuracy limits, 50m minimum
+    move-away to prevent duplicate start-line laps, 120s minimum duration between confirmed boundaries
+    — shorter real laps get merged, not dropped.'
+  recommendation: For courses with real laps under ~2 minutes, pass an explicit smaller min_lap_duration_s
+    — the 120s default will silently merge short real laps together instead of detecting them separately.
+  content_hash: a4ded0a9b4ce4129e7e9e62754d7154caf7bd6a2a72e25f3d7efca52c5ede941
+- section: the-efficiency-metric-efficiencympsperw
+  heading: 'The efficiency metric: `efficiency_mps_per_w`'
+  summary: 'New metric: avg_speed / normalized_power per lap, higher meaning more efficient; it cannot
+    distinguish genuine efficiency gains from fading, since power and speed dropping together also raises
+    the ratio.'
+  recommendation: Only read a rising per-lap efficiency number as real improvement when that lap's average
+    speed is also flat or rising — a rising ratio with falling speed means fade, not progress.
+  content_hash: 8be5d62b9cf37408893722e480925ba0ef7959fde7ed9d827b88f07012bc9173
+- section: provenance-distinct-from-models-workoutlap
+  heading: 'Provenance: distinct from `models.WorkoutLap`'
+  summary: GPS-detected laps are kept as a separate GpsLap dataclass, distinct from device-recorded WorkoutLap,
+    since GPS-derived boundaries are computed after the fact and can be wrong (drift, missed or false
+    triggers).
+  recommendation: When presenting per-lap data, label GPS-detected lap splits as lower-confidence than
+    device-recorded laps — they can be wrong in ways native FIT lap frames aren't.
+  content_hash: 8edad823e301ff27118caa0e2b56bdd90e011f5a6194954d74dc4a9fc3653497

@@ -1,0 +1,39 @@
+schema_version: 1
+file: 19-srpe-protocol.md
+cards:
+- section: the-problem-this-fixes
+  heading: The problem this fixes
+  summary: The old RPE input was an unlabeled 1-10 slider excluding 0 as a response, with no timing guidance;
+    only 1 of Renee's 63 logged workouts carried an RPE. The engine now accepts 0.
+  recommendation: none -- background only
+  content_hash: 6834e78512ba6786e78a3eba6a9d12d9ea93fe1905cfd80aa33e2360219a1848
+- section: the-scale-modified-borg-cr-10-0-10-not-1-10
+  heading: 'The scale: modified Borg CR-10, 0-10 (not 1-10)'
+  summary: Session-RPE uses Foster's modified Borg CR-10 scale, running 0 ("Rest/Nothing at all") to 10
+    ("Maximal/Exhausting") with verbal anchors at most points; validated across cycling and basketball,
+    not swim-specific.
+  recommendation: Rate your overall session effort on a 0-10 scale (0 = rest/nothing at all, 10 = maximal/exhausting);
+    0 is a legitimate answer for an easy recovery or technique day.
+  content_hash: 8d6f03175a10b0f6a38d2bf2a496c1d292e987dff13dd1b6ca5638ec969dcc49
+- section: the-question-one-global-rating-per-session
+  heading: 'The question: one global rating per session'
+  summary: Session-RPE is deliberately one single global rating for the entire workout, warm-up through
+    cool-down, not a separate score per interval or segment -- what makes duration x RPE a valid session-level
+    load calculation.
+  recommendation: Give one overall effort rating for the whole session, not a rating per set or interval
+    -- answer "how hard was your workout overall?"
+  content_hash: 3e7731c94045183dc180d18789ec5af8d1123bed73c31aa52a5b9aa38d0fdef8
+- section: timing-ask-30-minutes-after-the-workout-ends
+  heading: 'Timing: ask ~30 minutes after the workout ends'
+  summary: The sRPE question is asked about 30 minutes after a workout ends -- a Coach-judgment timing
+    choice, not paper-cited -- meant to avoid recency bias from the last few minutes while still fresh.
+  recommendation: Answer the RPE prompt roughly 30 minutes after finishing a workout, not right at the
+    finish line and not the next day, for the most accurate rating.
+  content_hash: ebfb97bf4b76df0a6f02d6a03ee462208fb49a8222b3ac946dd2d88c33a32131
+- section: what-this-file-does-not-cover
+  heading: What this file does not cover
+  summary: This file covers only the survey instrument (scale, anchors, single question, ask-timing) --
+    not the load formula that consumes the RPE number, the swim-specific validity evidence, or any UI
+    implementation, all documented elsewhere.
+  recommendation: none -- background only
+  content_hash: ae33c5c1f44823468ea2d10af2ff34456fc46bfdea1e26294d238ddd472bfd67

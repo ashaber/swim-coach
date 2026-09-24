@@ -1,0 +1,48 @@
+schema_version: 1
+file: 14-swim-set-structure.md
+cards:
+- section: scope-boundary-this-is-not-a-pace-zone-math-file
+  heading: 'Scope boundary: this is not a pace-zone-math file'
+  summary: Clarifies this file only covers internal session structure (warm-up/main-set/cool-down composition),
+    not CSS/zone math (owned by file 04) and not the Saturday long-swim session (intentionally continuous,
+    owned by file 06).
+  recommendation: none -- background only
+  content_hash: a07e0c1a24e8b3bf4eeaeffbc6ea98b8b7ad2c199e03c1a20dbe875ecb7c7a87
+- section: session-skeleton-warm-up-main-set-cool-down
+  heading: 'Session skeleton: warm-up, main set, cool-down'
+  summary: A ~20% warm-up / ~10% cool-down split is standard pool-coaching convention, not a study-derived
+    figure; a cited paper supports that warming up helps performance generally, but not any specific volume
+    percentage.
+  recommendation: Structure aerobic sessions with roughly a 20% easy-building warm-up and 10% easy cool-down
+    as the default; watch for slower early-set pace on days warm-up is skipped as a check.
+  content_hash: 60902f916719a3c7ede52a9f3bf4af0aeb11d05278a227166f922b82de3b5eb9
+- section: main-set-format-menu
+  heading: Main-set format menu
+  summary: Straight repeats, descending sets, broken-distance/pyramid sets, and negative-split segments
+    are standard, evidence-neutral pool-coaching format options; negative-split pacing specifically has
+    real swim-evidence support documented elsewhere.
+  recommendation: Offer straight, descending, broken-distance/pyramid, or negative-split main-set formats
+    interchangeably as legitimate coaching choices, leaning on negative-split pacing where evidence specifically
+    favors it.
+  content_hash: cf18713f169586509ec2fd9de2a5e01a7eeb468778a54e4f28ed75973725934c
+- section: base-build-peak-shift-in-session-emphasis
+  heading: Base -> build/peak shift in session emphasis
+  summary: Elite-swimmer research supports shifting session emphasis across a macrocycle — more continuous
+    aerobic volume in base, more threshold/broken-distance race-pace work in build/peak — though the evidence
+    base is thin and adapted from short-event elite swimmers.
+  recommendation: Plan more continuous Z2 aerobic swimming in the base block and shift toward broken-distance
+    Z3->Z4 descending work in build/peak/taper, per the engine's existing session-generation logic.
+  content_hash: 982c01df68fa7a6c274410c646d782676ff3ba9330f2dcc880e3d14cc2de51ba
+- section: what-plan-py-actually-generates
+  heading: What `plan.py` actually generates
+  summary: 'Documents actual generator behavior: 20% warm-up (200m floor), base-block 300m Z2 repeats
+    or build-block 200m descending Z3->Z4 negative-split repeats, and a 10% cool-down (100m floor), paced
+    from the existing zone table.'
+  recommendation: none -- background only
+  content_hash: 76216b0fd5c6dccdec2aeb3b3e5218f9209cce868dc98b03027da8d9a6236466
+- section: open-questions-not-yet-covered-here
+  heading: Open questions / not yet covered here
+  summary: Notes no ranked comparison of main-set formats was found, warm-up/cool-down proportions aren't
+    calibrated to this athlete's own data, and whether rep length should also vary by macro block is unevidenced.
+  recommendation: none -- background only
+  content_hash: 817d5cdcc64ef35476ba621fb2aabe1e81dccf2b37bd7fabaa4f5ccb109ea14f

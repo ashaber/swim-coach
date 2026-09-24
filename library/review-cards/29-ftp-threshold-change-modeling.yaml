@@ -1,0 +1,66 @@
+schema_version: 1
+file: 29-ftp-threshold-change-modeling.md
+cards:
+- section: the-real-question-this-grounds
+  heading: The real question this grounds
+  summary: 'Frames the question prompted by a vendor FTP estimate swinging 282W to 277W: does training-load
+    history predict real FTP change, and what real signals in an athlete''s own data indicate a genuine
+    threshold shift?'
+  recommendation: none -- background only
+  content_hash: 2f0f2233ad6d67c7d8e45df77d7eb22d15800a4a23616c8890cbd01533e0d5e2
+- section: q1-does-training-load-history-ctl-atl-tsb-predict-ftp-change-itself
+  heading: 'Q1: Does training-load history (CTL/ATL/TSB) predict FTP change itself?'
+  summary: Concludes no validated model connects CTL/ATL/TSB training-load history to real FTP change
+    — TSB measures readiness, not physiological ceiling; reviews two model-class critiques plus one unvalidated
+    attempt (Kontro et al.) at modeling threshold change directly.
+  recommendation: Coach never treats a CTL/ATL/TSB trend as evidence that FTP itself is changing — it's
+    a readiness/fatigue signal only; don't infer threshold change from training-load numbers alone.
+  content_hash: e88f16dac40f195504e7ccbb498bf192e20c55773f01dc6f7cd424b0b7b1a1b7
+- section: q2-real-signals-of-genuine-threshold-change-in-an-athlete-s-own-data
+  heading: 'Q2: Real signals of genuine threshold change in an athlete''s own data'
+  summary: 'Identifies real signals of threshold change: critical power fit from multiple maximal efforts
+    at different durations, a ~2.6-4% noise floor for single-session swings, and cross-session power-vs-HR
+    decoupling trends — all more principled than one test.'
+  recommendation: Coach treats a single-session power/estimate swing under ~4% as noise, not real change;
+    trusts a trend across several repeated real efforts or decoupling readings over weeks as the stronger
+    signal instead.
+  content_hash: f1a1cc5098e02561bfa1156ded0b329ac54d792df1a48c825d7c4681d891bfe7
+- section: what-this-engine-s-own-analyzer-would-need-to-compute-idea-capture-not-built
+  heading: What this engine's own analyzer would need to compute (IDEA-capture, not built)
+  summary: 'Sketches a future, not-yet-built analyzer: trend matched-effort power across repeated sessions,
+    extend decoupling into a cross-session trend, and fit a real athlete-derived CP curve from logged
+    maximal efforts — idea-capture only, nothing built.'
+  recommendation: none -- background only
+  content_hash: c48105b212343ceb54c570222995d2e56fe8108d7e9190940434f76b687163fd
+- section: vendor-rolling-estimators-brief-aside-not-this-file-s-focus
+  heading: Vendor rolling estimators (brief aside — not this file's focus)
+  summary: 'Documents TrainerRoad''s own account: AI FTP Detection recalibrates around a workout-type-sensitive
+    ''level 3'' baseline, and user-reported swings run -4.3% to -9.3% — larger than the -1.8% swing that
+    prompted this file; an unaudited vendor claim.'
+  recommendation: Coach doesn't treat a vendor FTP-detection swing alone as alarming — it can shift due
+    to which workout type was completed, and typical reported swings (-4 to -9%) already exceed common
+    single-recalibration changes.
+  content_hash: b06083aa37dade2090d438ba68a48b178e7c907fe15dfac7f31d1b7e8158286b
+- section: practical-guidance-for-this-engine
+  heading: Practical guidance for this engine
+  summary: 'Ranks threshold-reading trust: field_test/ramp_test/race_file readings outweigh a single app_estimate;
+    a future cross-session trend (unbuilt) would outweigh both; the engine already never auto-picks a
+    ''current'' ThresholdRecord value — a human/coach judges trustworthiness.'
+  recommendation: Coach treats a lone app_estimate swing of a few percent as expected noise, doesn't update
+    Athlete.ftp_watts from it alone, and weights it down further after a taper/opener or missed hard day;
+    prefers field/ramp/race-file readings.
+  content_hash: 99c554e1e197067d1a84d2b1b8b3fa4cd771997bdc92c9d76e1e59a2ddfc759f
+- section: what-s-not-well-established
+  heading: What's NOT well-established
+  summary: 'Lists open gaps: no validated model links training load to FTP change; no source states how
+    many real efforts make a trend trustworthy; decoupling-trend evidence is preliminary; TrainerRoad''s
+    mechanism is unaudited; nothing here is built.'
+  recommendation: none -- background only
+  content_hash: 4a3ef99e32d6aebd3f26e22a0f03bf3f7632bd4485edff9e26d95b44b7c0a785
+- section: implementation-history
+  heading: Implementation history
+  summary: Records this was a research-only pass — no engine code or context.py sport-scope wiring changed;
+    no ThresholdRecord design change, just grounding for the existing app_estimate posture and an idea-capture
+    sketch for a future analyzer.
+  recommendation: none -- background only
+  content_hash: 4437e112c26ba1b4eaba654139e9ca36117ddb8dd58b7522b9920af5f7489f08

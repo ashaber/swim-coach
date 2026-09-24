@@ -1,0 +1,23 @@
+schema_version: 1
+file: 20-cross-train-load-standardization.md
+cards:
+- section: the-question-this-investigates
+  heading: The question this investigates
+  summary: Asks whether a rigorous standard exists for assuming different fixed intensity values per activity
+    type when a cross-train workout has neither RPE nor HR data, to replace the current uniform constant.
+  recommendation: none -- background only
+  content_hash: 7430fde3716c2684dba3fc1dc5ff4fc9111adc69f01a735e3ec76c80cfe26ee0
+- section: verdict
+  heading: Verdict
+  summary: No rigorous or industry standard exists for per-modality zero-signal intensity defaults; checked
+    three angles (validity literature, missing-RPE imputation research, commercial platforms) all confirm
+    this gap is unsolved.
+  recommendation: none -- background only
+  content_hash: 7f34c7bd502b489f25342da5d1d3e86fb29f810e1849d4b547138b2f22cf9339
+- section: decision
+  heading: Decision
+  summary: Keep the uniform DURATION_ONLY_ASSUMED_INTENSITY fallback constant undifferentiated by activity
+    type; deliberate simplification, not an oversight, since a per-modality alternative was investigated
+    and found unsupported by evidence.
+  recommendation: none -- background only
+  content_hash: a1ca230a5bb7a2dbd418d047538906fed82dbae01c4c61fb486adc37ecc98fa6

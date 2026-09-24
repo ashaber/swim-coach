@@ -335,6 +335,31 @@ def require_chat_rate_limit(request: Request, token: str) -> None:
         raise HTTPException(status_code=429, detail="chat rate limit exceeded")
 
 
+def require_library_admin(request: Request, principal: Principal) -> None:
+    """Raises 403 unless `principal` may act on an admin-only library-review
+    route (`POST /api/library/reviews`) -- the ONLY enforcement point that
+    matters; the `is_library_admin` flag `GET /api/me`/`POST /api/auth/google`
+    return is UI convenience for the PWA to decide whether to render the
+    Approvals section, never trusted on its own (a client could always lie
+    about a boolean it doesn't send back to us -- this checks the server's
+    own `Settings.library_admins`, populated from the `LIBRARY_ADMINS` env
+    var, every time).
+
+    - Service principal (the legacy shared API_TOKEN, i.e. Andrew's own
+      CLI/scripts): always allowed, same "already has unrestricted access"
+      precedent as `resolve_athlete`/`resolve_coach_athlete`.
+    - Athlete-session principal: allowed iff `principal.athlete` is in
+      `Settings.library_admins`.
+    - Onboarding principal: always 403 -- no athlete identity to check.
+    """
+    if principal.kind == "service":
+        return
+    settings = request.app.state.settings
+    if principal.kind == "athlete" and principal.athlete in settings.library_admins:
+        return
+    raise HTTPException(status_code=403, detail="library admin access required")
+
+
 def require_daily_chat_cap(request: Request, principal: Principal) -> None:
     """Raises 429 if this athlete SESSION has exceeded
     `CHAT_DAILY_CAP_PER_ATHLETE` requests in the trailing 24h. A no-op for a

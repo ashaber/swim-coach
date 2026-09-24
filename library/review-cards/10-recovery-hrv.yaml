@@ -1,0 +1,75 @@
+schema_version: 1
+file: 10-recovery-hrv.md
+cards:
+- section: recovery-windows-between-hard-efforts-5-10-days
+  heading: Recovery windows between hard efforts (5-10 days)
+  summary: Notes sleep, nutrition, and periodization are the strongest evidence-backed recovery levers
+    (not devices like foam rolling/cryotherapy), and that no engine constant yet models a short B-to-A-event
+    turnaround window like Renee's 9-day gap.
+  recommendation: Prioritize sleep, nutrition, and rest over recovery gadgets between two closely spaced
+    hard efforts; treat a short multi-day gap as needing case-by-case judgment, not an automated engine
+    rule yet.
+  content_hash: f95781f158c6bdad2f042a9ac17c27004a325cdfa7bf4dfb61a4406a3edea65d
+- section: nutrition-for-the-refeed-window
+  heading: Nutrition for the refeed window
+  summary: Early post-exercise carbohydrate (started within 30-60 min) speeds glycogen resynthesis; whole-day
+    protein target is well above general RDA; carb+protein co-feeding during very long efforts helps protein
+    balance.
+  recommendation: Start refeeding carbs within 30-60 min after long swims, target higher daily protein
+    intake, and offer carb+protein feeds during very long combined training days, not just afterward.
+  content_hash: 9742e2eff79aaf3b019d18cef676029b395aa55c0f595e23d4c1c739e01951a5
+- section: sleep-the-highest-leverage-lever-available-in-a-short-window
+  heading: 'Sleep: the highest-leverage lever available in a short window'
+  summary: Sleep extension is the most consistently beneficial recovery intervention studied in athletes;
+    the engine's wellness composite already weights sleep quality, grounding why sleep deserves that weight.
+  recommendation: In a short recovery window, prioritize extending sleep toward roughly 8.5-9.5h/night
+    over other recovery modalities as the single highest-leverage lever available.
+  content_hash: a24e322de7c3d16268e5b17c4f0293575a89e41d2136971a33eac071407e1503
+- section: modality-tier-list-comfort-vs-performance-recovery
+  heading: 'Modality tier list: comfort vs. performance-recovery'
+  summary: Cold-water immersion and compression garments help soreness/power recovery but are not proven
+    to accelerate endurance-performance recovery specifically; useful as comfort tools, not substitutes
+    for sleep or refueling.
+  recommendation: Offer cold-water immersion or compression as comfort-tier options if the athlete wants
+    them, but don't rely on them to restore endurance readiness — sleep and refueling remain the real
+    levers.
+  content_hash: ec0e858dbea136347f80397f0d23f7230051f3acc4782384b654aa3cf3670d38
+- section: hrv-and-wellness-guided-load-adjustment
+  heading: HRV- and wellness-guided load adjustment
+  summary: Subjective wellness self-report tracks recovery state as well as or better than objective measures;
+    HRV-guided training (hard only on stable/rising HRV) is well-evidenced but untested for short single-athlete
+    windows or overnight-device data.
+  recommendation: Keep the subjective wellness composite as the primary go/no-go signal; once HRV data
+    accumulates, layer a stable-or-rising-HRV rule on top rather than replacing wellness_composite.
+  content_hash: 11613e94222a0cd30cc13acc775abf8fcf94cf1b46b2203f440a4edff7e6c277
+- section: oura-device-trust-how-much-to-believe-each-signal
+  heading: 'Oura device trust: how much to believe each signal'
+  summary: 'Rates Oura signal trustworthiness: resting heart rate highest confidence, multi-night HRV
+    trend medium-high, sleep staging low-medium, and the blended Readiness composite score low confidence
+    with no validated scoring.'
+  recommendation: Trust Oura resting HR and multi-night HRV trends; don't act on a single night's HRV
+    dip or the blended Readiness score — read raw trends when informing plan decisions.
+  content_hash: e5555a8df24d7699c476ece5f7fc993a89f04ccb0005b2bea36ae68f013b7fbe
+- section: swimming-specific-recovery-load-monitoring
+  heading: Swimming-specific recovery-load monitoring
+  summary: A swim-specific study found session-RPE (especially distance-weighted) tracked recovery-stress
+    state better than acute:chronic workload ratio (ACWR) in elite swimmers, with individual baselines
+    outperforming group-level thresholds.
+  recommendation: Weight individualized sRPE/wellness tracking over the engine's ACWR red-flag threshold
+    when judging this athlete's recovery-stress state between closely spaced hard efforts.
+  content_hash: b9e5df1741f8a44155656fdc106d4d930c4515a1e9b2cb33839b748a82374870
+- section: mini-taper-for-a-b-event-1-week-out
+  heading: Mini-taper for a B-event ~1 week out
+  summary: Taper literature supports cutting volume 41-90% while holding intensity/frequency; even tapers
+    of 7 days or less show a positive effect, though no study tests a B-then-A event pair roughly a week
+    apart.
+  recommendation: Treat the week before a closely spaced second event as a short taper-in — cut volume,
+    hold intensity and frequency close to normal — rather than a normal week or a full taper.
+  content_hash: 1daee4c882d21a946f9248693d3f79c4a894fe79f9152f9772cc6c9159aef3be
+- section: what-s-still-a-gap
+  heading: What's still a gap
+  summary: States no swim/kayak-specific evidence exists for this exact short-turnaround scenario, no
+    engine constant yet implements refeed timing or mini-taper cuts, and HRV-guided adjustment awaits
+    a logged rolling baseline.
+  recommendation: none -- background only
+  content_hash: c5fa0c9ebff067d7aa1c742b6717bb8ac6f675e4177be902bedbc152bf5b73cb

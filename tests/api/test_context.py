@@ -402,6 +402,20 @@ def test_filter_files_by_sport_scope_is_symmetric_not_cycling_special_cased(
     ]
 
 
+def test_every_bike_numbered_library_file_is_sport_scoped() -> None:
+    # web/resources-tab-library-review build: the Resources tab's card view
+    # reuses _LIBRARY_FILE_SPORT_SCOPE directly (not just chat's
+    # _KEYWORD_ROUTES) to decide what a swim-only athlete may see, so every
+    # file that self-declares "Sport scope: `bike`" in its own header must
+    # be listed here even if chat doesn't route to it yet.
+    import app.context as context_module
+
+    for n in (23, 24, 25, 26, 27, 28, 29, 30, 31, 32):
+        matches = [f for f in context_module._LIBRARY_FILE_SPORT_SCOPE if f.startswith(f"{n}-")]
+        assert matches, f"{n}-*.md should be in _LIBRARY_FILE_SPORT_SCOPE"
+        assert context_module._LIBRARY_FILE_SPORT_SCOPE[matches[0]] == frozenset({"bike"})
+
+
 def test_routed_block_holds_only_topic_files_not_the_reference_list(library_dir) -> None:
     block = build_routed_block(library_dir, "what pace should I swim at?")
     assert "library/reference_list.md" not in block[0]["text"]

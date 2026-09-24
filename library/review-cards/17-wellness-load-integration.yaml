@@ -1,0 +1,46 @@
+schema_version: 1
+file: 17-wellness-load-integration.md
+cards:
+- section: finding-1-multi-signal-monitoring-is-well-supported-an-algorithmic-disagreement-rule-is-not
+  heading: Finding 1 — multi-signal monitoring is well-supported; an algorithmic disagreement rule is
+    not
+  summary: Consensus literature supports combining external load, subjective load, and physiological measures
+    as complementary signals, but no validated algorithmic rule exists for resolving disagreement between
+    them; practitioner judgment fills that gap, not composite scores.
+  recommendation: none -- background only
+  content_hash: 8bb3fc9912417cd628b2e5f022d46dff0d7a6f44bb785e3e46619e19a4e4489a
+- section: finding-2-is-there-a-validated-deviation-size-threshold
+  heading: Finding 2 — is there a validated deviation-size threshold?
+  summary: One numeric HRV threshold exists (0.5 SD below a 7-day rolling mean), but it's validated only
+    for morning-orthostatic HRV testing, not overnight/ring-style HRV like this app's Oura data; HRV also
+    doesn't reliably decrease with overreaching.
+  recommendation: none -- background only
+  content_hash: 6efb5f430cc042823b6c854c6950d5e40885d42150669a194ee972aca490eeab
+- section: finding-3-what-does-confirmation-vs-contradiction-actually-mean
+  heading: Finding 3 — what does confirmation vs. contradiction actually mean?
+  summary: '"Uncoupling" between internal and external load signals is itself diagnostic of fatigue; subjective
+    self-report is more sensitive than objective measures; swim-specific data shows soreness doesn''t
+    track HRV even when sleep/stress/mood do.'
+  recommendation: none -- background only
+  content_hash: 2847f8c592d91e8519e5c5748f9bcabc6a4c50526739d86d7e91b712c2b2ba5f
+- section: finding-4-swim-specific-evidence-honestly-scoped
+  heading: Finding 4 — swim-specific evidence, honestly scoped
+  summary: Real swim-specific HRV literature exists (tracking subjective sub-domains and macro training-phase
+    transitions), but no study, in swimming or any other sport, tests a rule for what a sRPE/TSB-vs-HRV
+    contradiction should trigger.
+  recommendation: none -- background only
+  content_hash: 99a4a338d2491aad8886cfed2c5d69e45d651b5b8b0f92c71d5b064bc6dedd66
+- section: what-is-and-isn-t-well-supported
+  heading: What is and isn't well-supported
+  summary: 'Summarizes the review: using wellness deviation as a corroborating, never overriding, signal
+    is supported; a numeric contradiction-trigger rule, swim-specific HRV thresholds, and a blanket "HRV
+    down = bad" assumption are all unsupported.'
+  recommendation: none -- background only
+  content_hash: f64b35ef2d85f72b9446021dfe99ea5cfdbb3ddcfaecdde51fb3909ddbab7410
+- section: recommendation-not-yet-built
+  heading: Recommendation, not yet built
+  summary: 'A scoped, not-yet-built proposal: add an informational-only confirming/contradicting/insufficient-data
+    flag comparing TSB trend to wellness deviation, never letting it override adapt_week''s action decision,
+    surfacing sustained contradictions as a question to the athlete.'
+  recommendation: none -- background only
+  content_hash: f51f4a090080d642cd8288a2bacb0582138da05aa146c2ae44e0013b2d783c1c

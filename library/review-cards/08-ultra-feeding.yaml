@@ -1,0 +1,47 @@
+schema_version: 1
+file: 08-ultra-feeding.md
+cards:
+- section: the-90-minute-wall-is-not-a-plausible-muscle-glycogen-wall
+  heading: The 90-minute wall is not a plausible muscle-glycogen wall
+  summary: Explains that a ~90-min "wall" doesn't match trained-athlete glycogen depletion timelines;
+    more likely causes are low starting glycogen, fasted blood glucose, or a habituated perceptual duration
+    ceiling.
+  recommendation: Before assuming a fixed physiological ceiling, test fed-vs-fasted sessions and pre-session
+    carb intake, and consider whether chronic under-fuelling (see REDs file) is the real driver.
+  content_hash: 3c9e48b0901b2cb31d39577bba20fcee31da75d9c0950bc4f172546d5da653ad
+- section: in-session-carbohydrate-feeding
+  heading: In-session carbohydrate feeding
+  summary: Gives a dose ladder (30g/h short efforts up to 90g/h for >2.5-3h multi-transportable carbs),
+    notes 90g/h needs training to tolerate, and warns not to over-hydrate to hit carb targets.
+  recommendation: Fuel 60-90g/h on long swims using concentrated multi-transportable carb sources, rehearse
+    the exact race feed repeatedly, and never increase fluid volume just to hit a carb target.
+  content_hash: 7712cd47604d1975e6bd9e720d14c82de96eafbfa01f4005de54c033cedc2c0b
+- section: post-swim-rehydration
+  heading: Post-swim rehydration
+  summary: States sodium-containing fluid, not plain water, retains fluid; recommends replacing ~150%
+    of a measured body-mass deficit over 4-6h, and warns against rehydrating when no deficit was measured.
+  recommendation: Weigh nude/post-void before and after long swims; only rehydrate to 150% of an actual
+    measured deficit with a sodium-containing fluid — never rehydrate against an assumed deficit.
+  content_hash: 7f04389c99661570c20bced8d34ffc0d50a5fcb4bc05480bb08c80624628ba35
+- section: safety-rail-exercise-associated-hyponatremia-eah
+  heading: SAFETY RAIL — exercise-associated hyponatremia (EAH)
+  summary: Documents that low urine output/thirst after a long swim is an ambiguous sign overlapping dehydration
+    and hyponatremia (EAH), that electrolyte intake doesn't rule it out, and that this population carries
+    high documented EAH risk.
+  recommendation: Never default to "drink more." Weigh pre/post; if mass is stable or up with low urine
+    output, withhold fluid and seek urgent medical evaluation, especially with headache, nausea, or confusion.
+  content_hash: f0e3fd4dd1fc7266ce53a473fbfe0c586a4c37afa5f99e6a7a4972a7e4146d11
+- section: bike-cx-intensity-driven-fueling-not-just-duration-driven
+  heading: 'Bike/CX: intensity-driven fueling, not just duration-driven'
+  summary: Notes high-intensity intermittent efforts (like a CX race) burn glycogen faster than duration
+    alone implies, but heat lowers carb oxidation so raising intake in heat adds GI risk without benefit.
+  recommendation: Fuel short-but-intense efforts (e.g. a CX race) at the higher steady-state carb band,
+    not the naive duration-based amount; in heat, prioritize fluid/sodium over extra carbohydrate.
+  content_hash: c15053b10058e3a2ca5ae924216debe85c659b7800e0683a434671b7a0e3fe51
+- section: gaps
+  heading: Gaps
+  summary: 'Lists what''s unstudied: swim-specific glycogen/duration-ceiling data, masters/older-female
+    substrate use, feed-stop cost in swimming, warm-water EAH incidence, and whether a trained duration
+    ceiling can be durably raised.'
+  recommendation: none -- background only
+  content_hash: 08f26575793f9313c23f19cbe4706fa0b634d61b311ce946ec8f451a4b275ac5

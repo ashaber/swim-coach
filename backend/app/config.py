@@ -105,6 +105,15 @@ class Settings:
     # reference material from the system prompt into the user turn, so enable it
     # deliberately and watch answer quality + cache_read/cache_creation.
     routed_library_in_message: bool = False
+    # web/resources-tab-library-review build. Comma-separated athlete slugs
+    # (LIBRARY_ADMINS env var) allowed to review/accept/flag research-library
+    # cards via POST /api/library/reviews -- empty (the default) means no
+    # admins at all, so the Resources tab's Approvals section stays hidden
+    # for everyone until Andrew explicitly configures it. Enforced
+    # server-side on every admin route (app.auth.require_library_admin) --
+    # the `is_library_admin` flag GET /api/me returns is UI-convenience only,
+    # never trusted on its own.
+    library_admins: frozenset[str] = frozenset()
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -158,6 +167,9 @@ class Settings:
         allowed_origins_raw = os.environ.get("ALLOWED_ORIGINS", "https://ashaber.github.io")
         allowed_origins = [o.strip() for o in allowed_origins_raw.split(",") if o.strip()]
 
+        library_admins_raw = os.environ.get("LIBRARY_ADMINS", "")
+        library_admins = frozenset(s.strip() for s in library_admins_raw.split(",") if s.strip())
+
         return cls(
             anthropic_api_key=os.environ["ANTHROPIC_API_KEY"].strip(),
             api_token_hash=_sha256_hex(os.environ["API_TOKEN"].strip()),
@@ -185,6 +197,7 @@ class Settings:
             prompt_cache_ttl=prompt_cache_ttl,
             routed_library_in_message=os.environ.get("COACH_ROUTED_LIBRARY_IN_MESSAGE", "").strip().lower()
             in ("1", "true", "yes", "on"),
+            library_admins=library_admins,
         )
 
     def token_matches(self, provided_token: str) -> bool:

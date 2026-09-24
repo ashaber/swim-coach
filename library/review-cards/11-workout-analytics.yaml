@@ -1,0 +1,59 @@
+schema_version: 1
+file: 11-workout-analytics.md
+cards:
+- section: cardiac-drift-aerobic-decoupling
+  heading: Cardiac drift / aerobic decoupling
+  summary: Describes a rising HR-to-pace ratio across a steady effort as a common (but uncited) coaching
+    heuristic for aerobic durability/fueling adequacy; the >5% flag threshold is an engineering default,
+    not a validated cutoff.
+  recommendation: Use a flagged >5% cardiac-drift day as a prompt to check for under-fueling, heat, or
+    fatigue that day, not as a validated fitness verdict on its own.
+  content_hash: 9fba86ab9cda80465fe1acc5f8a7fb4e47202af183ce5b8d26613bb8f5bc6025
+- section: swolf-as-a-stroke-efficiency-proxy
+  heading: SWOLF as a stroke-efficiency proxy
+  summary: SWOLF (stroke count + time per length) is a practical, uncited pool-efficiency proxy; a rising
+    SWOLF within a session flags fatigue-driven mechanics degradation; the trend requires >=8 active lengths
+    and excludes outlier-duration lengths.
+  recommendation: Treat a rising within-session SWOLF trend as a descriptive fatigue-mechanics signal
+    worth mentioning to the athlete, not as a proven or precise efficiency measurement.
+  content_hash: 96541f870337eb34edcbc699319718e5de3217cd0b613d2c49ed3cc7f29fffb9
+- section: pause-gap-threshold-and-even-split-band
+  heading: Pause-gap threshold and even-split band
+  summary: Defines two engineering-default thresholds — a 30s timestamp-gap-as-pause cutoff and a ±2%
+    even-split labeling band — tuned to this project's real device data, not derived from any cited study.
+  recommendation: none -- background only
+  content_hash: aba7d39b03070f6b9c2a51d40c3c542c43a477a276ac1d991d64318c0612daeb
+- section: stationary-speed-pause-detection
+  heading: Stationary-speed pause detection
+  summary: Documents 0.5 m/s / 30s speed-based stop-detection thresholds, calibrated against real MTB
+    bottle-stop data, scoped only to cycling FIT files; flagged as untested and possibly wrong for open-water
+    swim GPS drift.
+  recommendation: none -- background only
+  content_hash: 9bca22d938876b1a7a4daa0845d81740aa97dd3924b112f380b01af6c633b937
+- section: walk-run-fit-sport-label-sanity-check
+  heading: Walk/run FIT sport-label sanity check
+  summary: Relabels a device's "running" sport as "walking" display text when average session speed falls
+    below ~2.1 m/s, since watches self-report an activity profile rather than a verified gait; load math
+    is unaffected.
+  recommendation: none -- background only
+  content_hash: a0a383eff9170a873728f17840e819b01992efbbf1d2c0e3ae01eb59601ef35b
+- section: per-sample-grade-for-terrain-confound-detection
+  heading: Per-sample grade for terrain-confound detection
+  summary: Defines a 30m-smoothed per-sample grade calculation from altitude/distance, applied only to
+    cycling FIT sessions, tuned against real MTB export data to smooth altimeter jitter without blurring
+    real climbs.
+  recommendation: none -- background only
+  content_hash: f2043e34a2535b8b78af84ae4368bc1b06e285c39e5c8912cd6d5cad8261495b
+- section: deterministic-activity-stream-interval-analyzer
+  heading: Deterministic activity-stream interval analyzer
+  summary: States this content moved to a new file, 26-activity-stream-interval-analysis.md, because this
+    file hit its word cap; this file now retains only cross-sport analytics constants.
+  recommendation: none -- background only
+  content_hash: d742ef461eebe11840a324723ba77f4aaaee7a55be725f9742950e1cfb60d4e4
+- section: what-s-still-a-gap
+  heading: What's still a gap
+  summary: 'Lists open gaps: no citation for cardiac-drift thresholds in swimming, the even-split ±2%
+    band is a coach-judgment bucketing layered on a real pacing finding, and SWOLF validation remains
+    future work.'
+  recommendation: none -- background only
+  content_hash: a4461a3b6e40db8c3e830563aafb3bb79b07c59375c9883185977146b9cd9d91

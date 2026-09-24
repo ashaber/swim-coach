@@ -1,0 +1,45 @@
+schema_version: 1
+file: 21-shoulder-health-and-load.md
+cards:
+- section: shoulder-load-and-injury-risk-total-load-not-just-strength-load
+  heading: 'Shoulder load and injury risk: total load, not just strength load'
+  summary: References `07`'s ACWR citation (low confidence, youth cohort) and states shoulder load is
+    a whole-week question since pool volume, the long-swim ladder, and strength all ramp together; flags
+    rehab sessions need protection from cut-week auto-substitution.
+  recommendation: Don't cut a physio-prescribed rehab exercise during a 'cut week' the way a prevention
+    exercise gets sacrificed -- manually protect it; treat weekly total load (swim+strength) as one shared
+    shoulder-risk budget.
+  content_hash: abf641702e430e0bae76958098d22404f248f6eaba360f3efc8b0d499585dfb7
+- section: rehab-phases-criteria-based-not-calendar-based
+  heading: 'Rehab phases: criteria-based, not calendar-based'
+  summary: Cites a 2025 JOSPT clinical-practice guideline anchoring a generic three-phase rehab shape
+    (acute, subacute/progressive loading, return-to-sport) with symptom-based, not calendar-based, phase
+    transitions; flags weak evidence for pain-guided isometrics as early analgesia.
+  recommendation: Advance an injured athlete through rehab phases by symptom response, not a calendar;
+    don't claim isometric holds reliably reduce pain -- the evidence for that specific claim is weak/mixed.
+  content_hash: 249512cee6d9896dc2010fd720a1e3e083628d6e62181730048e3aeea771ad3b
+- section: adjunct-modalities-what-they-do-and-don-t-do
+  heading: 'Adjunct modalities: what they do and don''t do'
+  summary: 'Massage and TENS evidence is genuinely mixed: placebo-controlled trials show no real effect
+    while smaller uncontrolled studies show benefit, suggesting a placebo-driven, short-term symptom effect
+    rather than tissue healing for either modality.'
+  recommendation: If recommending massage or TENS, frame both as short-term symptom management only (never
+    as healing/accelerating recovery), and pair TENS with an explicit masking-risk warning against training
+    through numbed pain.
+  content_hash: d7b53d68eaa34b095e7dc12f81a4545b1344583b03073618882867a470fb5f44
+- section: return-to-swimming-criteria-and-volume-ramp-back
+  heading: 'Return-to-swimming: criteria, and volume ramp-back'
+  summary: 'Return-to-swim should be sequential and criterion-based (pain-free ROM, strength symmetry,
+    sport-specific endurance, graded exposure); includes swim-specific practitioner guidance: pain ceiling,
+    graded volume, stroke/position choices, avoiding paddles.'
+  recommendation: Clear return to swimming only via criteria (pain-free ROM, ~80-90% strength symmetry,
+    no flare); cap set pain at ~4/10, restart at 25-50% volume, avoid paddles and overhead kickboard positions,
+    keep the +8%/week ramp cap.
+  content_hash: 50e76680db0de3d395ea878f6b346a9c8477083d849cc7afa2f29d1f406f9e92
+- section: what-this-file-does-not-cover
+  heading: What this file does not cover
+  summary: Explicitly scopes out acute first-24-hour self-care, red-flag/urgent-referral criteria, and
+    diagnosis-specific treatment decisions as time-bound, situational content not included in this durable
+    library file.
+  recommendation: none -- background only
+  content_hash: 39d6ce3b7812458f0a45df7f1a34b2692284ac741ea39f513e7a16051185cc5c

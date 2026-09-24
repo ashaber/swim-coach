@@ -1,0 +1,33 @@
+schema_version: 1
+file: 30-altitude-power-adjustment.md
+cards:
+- section: the-real-request-this-grounds
+  heading: The real request this grounds
+  summary: 'Andrew asked for elevation-awareness in two senses: within-ride climbing vs. riding above
+    home elevation; power is grade-independent so only the second is a real physiological effect.'
+  recommendation: none -- background only
+  content_hash: 00441de662189595a5350f80a2e11739d7c80cc4dc8c5dbf0f6fda61e948ce46
+- section: question-2-absolute-elevation-vs-the-athlete-s-baseline-real-buildable
+  heading: 'Question 2: absolute elevation vs. the athlete''s baseline (real, buildable)'
+  summary: 'Covers the real evidence-backed effect: altitude above baseline reduces sustainable power
+    (~6%/1000m per Garvican-Lewis cycling data); engine flags rides more than 1000m above the resolved
+    baseline.'
+  recommendation: When athlete rides significantly above home elevation, coach notes reduced expected
+    sustainable power (~6%/1000m above the 1000m threshold) as context only — never adjusts the raw target
+    or verdict.
+  content_hash: 16050a899917b751ae3ac89f9ef123d92d56928fce607aa54ba665d945ddab80
+- section: question-1-sustained-climbing-within-a-ride-no-distinct-effect-found
+  heading: 'Question 1: sustained climbing within a ride (no distinct effect found)'
+  summary: No distinct, quantifiable 'climbing tax' on sustainable power was found; sustained climbing
+    changes cadence/torque strategy and pacing, already covered by existing fade and terrain-confound
+    detection.
+  recommendation: Don't attribute a below-target effort on a climbing ride to a separate 'climbing tax'
+    — use the existing fade/terrain-confound flags to explain pacing dips instead.
+  content_hash: 5bf8b75ed3b0bb06c2e03b1f9d098f88989ad73e03636fb544ad6021e54d775b
+- section: implementation
+  heading: Implementation
+  summary: Lists the engine constants, model fields, and functions this file grounds (ALTITUDE_FLAG_THRESHOLD_M,
+    baseline resolution helpers, IntervalEffort/WorkoutIntervals altitude fields) — points to code docstrings
+    for the actual computation.
+  recommendation: none -- background only
+  content_hash: b3aa88f5aab9f851e2be92d98135f115a2dc228cda05c49ef753df35ac7de7da

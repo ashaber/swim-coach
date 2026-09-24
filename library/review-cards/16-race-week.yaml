@@ -1,0 +1,56 @@
+schema_version: 1
+file: 16-race-week.md
+cards:
+- section: why-a-dated-checklist-not-per-session-prose
+  heading: Why a dated checklist, not per-session prose
+  summary: Carb-loading and bodywork windows are pinned to exact calendar dates from the race date, not
+    "this week" generically -- those dates can fall outside the final taper week (confirmed with Renee's
+    2026-09-18 race).
+  recommendation: none -- background only
+  content_hash: dc40d3ab0345d6480109f0b828d858816a9c46cde90f3de9da2a10941a3b21bb
+- section: carbohydrate-loading-carbloadwindowstartdaysout-3
+  heading: Carbohydrate loading — `CARB_LOAD_WINDOW_START_DAYS_OUT = 3`
+  summary: Evidence supports 10-12 g/kg bodyweight/day of carbohydrate for 36-48h before events over 90
+    minutes, with no depletion phase needed -- near-maximal glycogen is reached within a single high-carb,
+    rest day.
+  recommendation: Starting 3 days before your race, eat 10-12 g/kg bodyweight/day of carbohydrate -- no
+    depletion phase needed, just consistent high-carb intake plus rest.
+  content_hash: f58336dc0150b34d1411a427b909a145f498f4da666851f6d7429680710e33df
+- section: bodywork-massage-bodyworkwindowdaysout-5
+  heading: Bodywork / massage — `BODYWORK_WINDOW_DAYS_OUT = 5`
+  summary: Massage shows little evidence of direct performance benefit but a real, consistent reduction
+    in perceived soreness and stress; the specific 5-day-out timing is practitioner convention, not a
+    journal-validated figure.
+  recommendation: Consider light massage or bodywork starting about 5 days before your race for soreness
+    and stress relief -- keep it light/relaxation-focused, not deep or aggressive work.
+  content_hash: ded2da1260f9eb900f8ab79842d2197b9ba18139b4e002201f6e9702a64d1496
+- section: logistics-checklist-generic-event-data-driven-not-hardcoded-to-one-athlete
+  heading: Logistics checklist — generic, event-data-driven (not hardcoded to one athlete)
+  summary: A generic logistics checklist (travel/time-zone/water-temp acclimatization, a fueling-plan
+    rehearsal, support-crew confirmation) is generated from the event's own data fields, not hardcoded
+    to any one athlete, and scheduled early in race week.
+  recommendation: Early in race week, confirm travel and water-temperature logistics, rehearse the actual
+    in-race fueling plan you've practiced, and confirm any support-crew or kayak arrangements.
+  content_hash: 01668cfc320eac194321d03e73147a802d19af2f61b5c4619f0a68a962b17d44
+- section: bike-pre-race-primer-bikepreraceprimersession-build-e
+  heading: Bike pre-race primer — `_bike_prerace_primer_session` (Build E)
+  summary: A standalone, brief high-intensity priming session (three short ramps, ~25-30 min total) is
+    scheduled exactly one day before each bike race date, fixing a bug where the prior openers content
+    landed several days too early.
+  recommendation: The day before your bike race, expect a short priming session -- a few brief hard ramps
+    inside an easy 25-30 minute ride -- not a full workout, just neuromuscular readiness.
+  content_hash: df73f76b06b9a2fe02de99904b989c472bb70044fde1d01a10efed676c08c0c2
+- section: race-week-midweek-fill-light-content-instead-of-an-empty-week
+  heading: Race-week midweek fill — light content instead of an empty week
+  summary: Race week's midweek days previously sat empty except for the pre-race primer; up to two light
+    touches now fill them -- a brief quality ride and an easy spin -- per a reference tool's shape.
+  recommendation: In race week, expect one short quality ride and one easy spin on non-race weekdays alongside
+    the pre-race primer -- light additions on top of an already-cut taper week, not a normal week.
+  content_hash: b451fc016739238673c2ece2d7f72c0d48ec800545aa0384982dd9d4e18fda5a
+- section: gating-active-priority-a-same-event-as-the-macro-final-taper-week-only
+  heading: 'Gating: active, priority "A", same event as the macro, final taper week only'
+  summary: The race-week checklist only generates when the event is active, priority "A", matches the
+    macro's own event, and it's the taper block's final week -- a deliberate departure from how active/priority
+    usually gate nothing.
+  recommendation: none -- background only
+  content_hash: 83d0950b525ebbe6c87bec5c83a12efe4cafdfd5625a9c6dbfcb8952d194dd45

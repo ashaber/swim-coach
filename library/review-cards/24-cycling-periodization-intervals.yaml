@@ -1,0 +1,52 @@
+schema_version: 1
+file: 24-cycling-periodization-intervals.md
+cards:
+- section: framework-grounding-polarized-distribution-and-block-periodization
+  heading: 'Framework grounding: polarized distribution and block periodization'
+  summary: Elite endurance athletes converge on a roughly 80/20 low/high-intensity ('polarized') distribution
+    with little moderate-intensity 'grey zone' time; block periodization (concentrating on few qualities
+    per block) is corroborated as used by trained cyclists.
+  recommendation: Structure a cyclist's training week toward a clear hard/easy split (roughly 80% low,
+    20% high intensity) instead of several moderate days; favor concentrated blocks over broad simultaneous
+    development.
+  content_hash: 3f13bf1e1772a68f907ef9cacca764c1dee6e0fa28c328c421a022619bd2b612
+- section: closing-the-deload-cadence-gap
+  heading: Closing the deload-cadence gap
+  summary: No cited source specifies a validated deload-week cadence; a roughly every-3rd-to-4th-week
+    step-down (three build weeks, one reduced week) is adopted as an uncited, pending-confirmation coaching
+    default.
+  recommendation: Schedule a reduced-volume deload week roughly every 3rd-4th week of a cyclist's build;
+    present this as a coaching default pending explicit athlete/coach confirmation, not a proven cadence.
+  content_hash: 37ee652f6379bcaf284d615079464f2e4198b560b7625e88828671f35fb1737a
+- section: a-second-macro-shape-established-base-short-runway-sharpening
+  heading: 'A second macro shape: established-base, short-runway sharpening'
+  summary: Documents a second periodization shape -- hold, then sharpen, then taper -- for an athlete
+    with an existing training base but limited runway before their goal; full detail lives in a separate
+    file.
+  recommendation: For a cyclist with an established base but a short runway before their goal event, use
+    a hold-sharpen-taper plan shape instead of a full base-build-peak-taper progression.
+  content_hash: 5fa34705e6244591c25aa85abb65a1364eaf92dd0a592cce30c9a04aba2c5f92
+- section: interval-design-taxonomy-laursen-buchheit
+  heading: Interval-design taxonomy (Laursen & Buchheit)
+  summary: An interval's physiological target is set primarily by bout duration and work:rest ratio, not
+    intensity alone; short fixed-ratio 'short-short' formats accumulate more near-VO2max time at lower
+    per-rep cost than long continuous bouts.
+  recommendation: If a short-short interval set shows material power/HR decay by the final reps (e.g.
+    >5% drop), stop the block rather than push through -- recovery or block length needs adjusting.
+  content_hash: 69560193e1752d9baf1ad3b6c2d4bbd151e539f32ace9d7cd7ba525eb179210e
+- section: ramp-test-protocol-and-ftp-formula-threshold-history-build
+  heading: Ramp test protocol and FTP formula (threshold-history build)
+  summary: Describes a dedicated ramp-test protocol (start ~100W or 50% estimated FTP, +20W/minute to
+    failure) and an FTP formula (75% of best 1-minute power), sourced from practitioner Ric Stern, not
+    a peer-reviewed study.
+  recommendation: To establish FTP with no current reading, run a ramp test (start near 50% estimated
+    FTP, +20W/minute to failure); estimate FTP as 75% of best 1-minute power, preferring a real sustained
+    effort if it diverges.
+  content_hash: 88d92fa68a7f977f4a72e285e575ad411f62bf9125a52357f020e91abea9ae34
+- section: implementation-history
+  heading: Implementation history
+  summary: Records that every part of this file (deload cadence, interval-template rotation, ramp-test
+    protocol, openers template, taper pull-down, hard-day guardrail) is now wired into plan.py across
+    several builds; no deferral remains.
+  recommendation: none -- background only
+  content_hash: e180d77f51e1592164e2dad2ec7b1e588b1ec7af7be814ae6d52478632dee545

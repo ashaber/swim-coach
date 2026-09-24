@@ -1,0 +1,20 @@
+schema_version: 1
+file: 25-macro-sharpening-established-base.md
+cards:
+- section: the-shape-itself
+  heading: The shape itself
+  summary: Defines a second macro periodization shape — hold, sharpen, taper — for athletes with an established
+    base but a short runway (4-8 weeks) before their event; sharpen is capped 2–4 weeks per Issurin's
+    transmutation block.
+  recommendation: Coach prescribes hold->sharpen->taper (not the standard base->build->peak->taper) when
+    an athlete has real logged training history but under 8 weeks before race day.
+  content_hash: d15c57b98ef280a24eadb38e0d61409b9fbf252c774e063d45c22f49d7efb6d5
+- section: established-base-detection-honestly-flagged-provisional
+  heading: 'Established-base detection: honestly flagged PROVISIONAL'
+  summary: 'Explains has_established_training_base: a coach-judgment (not literature-cited) 84-day lookback
+    with a 75%-of-weeks-must-carry-load breadth check, derived from the engine''s own CTL time constant,
+    decides whether logged history counts as an established base.'
+  recommendation: If a real athlete with under 12 weeks but clearly consistent training history is refused
+    established-base status when a coach would call them base-trained, revisit the lookback window rather
+    than override manually.
+  content_hash: 1a828689926a402dbd05f60fa7a2cd95c3afc7dd226af3503c7d4b2a0b657bb6

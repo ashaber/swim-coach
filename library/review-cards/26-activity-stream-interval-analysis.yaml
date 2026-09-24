@@ -1,0 +1,12 @@
+schema_version: 1
+file: 26-activity-stream-interval-analysis.md
+cards:
+- section: deterministic-activity-stream-interval-analyzer
+  heading: Deterministic activity-stream interval analyzer
+  summary: 'Grounds interval_analysis.py: a deterministic (no-LLM) bike-ride analyzer detecting sustained
+    efforts, assessing them against targets/terrain confounds, and surfacing sub-structure (sets, over/unders)
+    — mostly engineering defaults tuned on this athlete''s real rides, not literature.'
+  recommendation: Coach reads the analyzer's objective per-ride output (efforts found, on-target %, terrain-vs-fade
+    flags, decoupling) to give athletes accurate post-ride feedback instead of eyeballing power files
+    by hand.
+  content_hash: 5089cc01d7cc79e046db73514aa3d7f069395c7d3237957b3e764511d9e83288
