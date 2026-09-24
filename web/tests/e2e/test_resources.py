@@ -244,6 +244,28 @@ def test_opening_from_an_approvals_card_scrolls_to_its_heading(admin_page):
     admin_page.wait_for_function('() => window.scrollY > 200')
 
 
+# --- Hardware/gesture back (web/resources-hotfix fix 3) ---------------------
+# The library detail view had no history entry at all before this fix, so a
+# hardware/gesture back press closed the whole PWA instead of just the
+# detail. page.go_back() is Playwright's proxy for that back press -- same
+# pattern as test_coach_roster.py's test_hardware_back_closes_workout_detail_
+# not_the_app / test_workout_detail.py's own hardware-back test.
+
+def test_hardware_back_closes_library_detail_not_the_app(page):
+    page.click('[data-a="tab:resources"]')
+    page.wait_for_selector('.library-card')
+    page.locator('[data-a="library:open-file"]').first.click()
+    page.wait_for_selector('#library-file-content')
+
+    page.go_back()
+    page.wait_for_selector('.library-card')
+    assert page.locator('#library-file-content').count() == 0
+    # Prove the app didn't navigate away entirely -- the tab bar is still
+    # there, not a blank/exited page.
+    assert page.locator('.tabbar').count() == 1
+    assert page.locator('[data-a="tab:resources"]').count() == 1
+
+
 # --- Approvals (admin-only) --------------------------------------------------
 
 def test_resources_hides_approvals_for_non_admin(page):

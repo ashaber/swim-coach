@@ -1735,17 +1735,18 @@ function handleSelectLoadWindow(key) {
 // Closes whichever detail view is open on a hardware/gesture back press.
 // Deliberately does NOT call history.back()/pushState itself -- it's the
 // *target* of a popstate that already happened, so doing either here would
-// create a pushState/popstate loop. All three handlers' own guards make this
-// safe to call unconditionally on every popstate, including ones unrelated
-// to any detail view. The three detail views live on different tabs (Log,
-// Plan, roster) and are mutually exclusive in practice, but calling all
-// three closers unconditionally needs no extra bookkeeping to stay correct
-// if that ever changes.
+// create a pushState/popstate loop. Each handler's own re-entrancy guard
+// makes this safe to call unconditionally on every popstate, including ones
+// unrelated to any detail view. These detail views live on different tabs
+// (Log, Plan, roster, Resources) and are mutually exclusive in practice, but
+// calling every closer unconditionally needs no extra bookkeeping to stay
+// correct if that ever changes.
 function handlePopState() {
   handleCloseHistoryDetail();
   handleCloseSessionDetail();
   handleCloseCoachWorkoutDetail();
   handleCloseCoachSessionDetail();
+  handleCloseLibraryFile();
 }
 
 /** Clears a stale detail selection after a history refresh whose new data
@@ -2320,6 +2321,13 @@ async function handleOpenLibraryFile(name, anchor) {
   if (!name) return;
   state.libraryOpenFile = { name, anchor: anchor || null };
   if (!anchor) scrollToTop();
+  // Pushes an in-app history entry so hardware/gesture back (a `popstate`,
+  // handled by handlePopState) closes the detail back to the Resources tile
+  // list instead of navigating the PWA away entirely -- web/resources-hotfix
+  // fix 3, exactly the same pushState/popstate/re-entrancy-guard shape as
+  // handleOpenSessionDetail/handleOpenCoachWorkoutDetail (this view had no
+  // history entry at all before this fix).
+  history.pushState({ libraryDetail: name }, '');
   const settings = state.settingsForm;
   const identity = state.identity;
 
@@ -2352,6 +2360,7 @@ async function handleOpenLibraryFile(name, anchor) {
 }
 
 function handleCloseLibraryFile() {
+  if (!state.libraryOpenFile) return; // avoids a redundant render on popstate re-entrancy
   state.libraryOpenFile = null;
   state.libraryFile = { status: 'idle', data: null, error: null };
   render();
@@ -3298,7 +3307,12 @@ async function onAppClick(e) {
     case 'health-status:submit': handleSubmitHealthStatusSelf(); break;
     case 'profile:submit': handleSubmitProfile(); break;
     case 'library:open-file': handleOpenLibraryFile(el.dataset.file, el.dataset.anchor); break;
-    case 'library:close-file': handleCloseLibraryFile(); break;
+    // Goes through history.back() (not handleCloseLibraryFile() directly) so
+    // both the in-app back control and hardware/gesture back close the
+    // detail via the exact same path -- see handlePopState. Same
+    // history.back()-not-direct-close reasoning as history:back/session:back
+    // above.
+    case 'library:close-file': history.back(); break;
     case 'library:filter': handleSetLibraryFilter(el.dataset.filter); break;
     case 'library:review:accept':
       await handleSubmitLibraryReview('accepted', el.dataset.file, el.dataset.section, el.dataset.hash);
