@@ -20,12 +20,19 @@ driven against tmp_path, same style as test_cli.py.
 from __future__ import annotations
 
 import json
+import re
+from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from swim_coach.cli import main
+from swim_coach.models import Athlete, LibraryReview
+from swim_coach.store import FileStore
 from swim_coach.library_review import (
     CLAIM,
     FILE_HEADER,
+    INDEX_REVIEWED_SUFFIX,
+    INDEX_UNREVIEWED_SUFFIX,
     MECHANICAL,
     NEEDS_JUDGMENT,
     all_item_ids,
@@ -39,6 +46,7 @@ from swim_coach.library_review import (
     resolve_citations,
     scan_file,
     scan_library,
+    section_evidence,
     slugify,
     sort_for_review,
     strip_marker,
@@ -488,6 +496,133 @@ def test_real_library_surfaces_per_claim_items_from_the_new_wave():
     assert all(i.dossier is None for i in items if i.file == "07-strength-dryland.md")
 
 
+# --- INDEX.md vs. scanner consistency (regression for the marker-drift bug) --------
+
+_INDEX_ROW_RE = re.compile(r"^\| `([\w.\-]+\.md)` \| (.*) \|$", re.MULTILINE)
+
+
+def _index_status_by_file() -> dict[str, str]:
+    """`{filename: "pending" | "reviewed"}`, read from `library/INDEX.md`'s
+    own Files-table row text -- the same `INDEX_UNREVIEWED_SUFFIX` /
+    `INDEX_REVIEWED_SUFFIX` strings `mark_index_reviewed` reads and writes.
+    A row ending in neither exact suffix (e.g. `11-workout-analytics.md`'s
+    "pending a full research pass" -- a Slice-1-stub status distinct from
+    the binary reviewed/unreviewed gate) is left out of both sets."""
+    text = (REPO_ROOT / "library" / "INDEX.md").read_text(encoding="utf-8")
+    status: dict[str, str] = {}
+    for m in _INDEX_ROW_RE.finditer(text):
+        filename, row = m.group(1), m.group(2).rstrip()
+        if row.endswith(INDEX_UNREVIEWED_SUFFIX):
+            status[filename] = "pending"
+        elif row.endswith(INDEX_REVIEWED_SUFFIX):
+            status[filename] = "reviewed"
+    return status
+
+
+def test_every_file_index_calls_pending_is_actually_detected():
+    """The exact defect this build's marker-normalization pass fixed: a
+    topic file's own in-body marker can silently drift out of sync with
+    `INDEX.md`'s row for it (wrong word -- "REVIEWED" instead of
+    "UNREVIEWED" -- or no marker at all), making the scanner miss a file
+    INDEX.md still lists as pending, or keep queuing one INDEX.md says is
+    done. `INDEX.md`'s own row text is the ground truth here."""
+    status = _index_status_by_file()
+    pending = {f for f, s in status.items() if s == "pending"}
+    reviewed = {f for f, s in status.items() if s == "reviewed"}
+    assert pending, "sanity: INDEX.md should list at least one pending file"
+    assert reviewed, "sanity: INDEX.md should list at least one reviewed file"
+
+    items = scan_library(REPO_ROOT / "library")
+    files_with_items = {i.file for i in items}
+
+    missing = pending - files_with_items
+    assert not missing, (
+        "INDEX.md marks these files pending human review, but the scanner "
+        f"finds no items for them -- a marker-form bug: {sorted(missing)}"
+    )
+
+    wrongly_queued = reviewed & files_with_items
+    assert not wrongly_queued, (
+        "INDEX.md marks these files Human-reviewed, but the scanner still "
+        f"finds items for them -- a stale/leftover marker: {sorted(wrongly_queued)}"
+    )
+
+
+# --- section_evidence (library_cards / Resources-tab reviewer derived fields) ------
+
+
+def test_section_evidence_aggregates_lowest_confidence_and_both_tags():
+    # Bone loading: EVIDENCE Confidence:high + ADAPTED Confidence:medium ->
+    # lowest of the two is "medium".
+    start = DRAFTED_FILE.index("## Bone loading")
+    end = len(DRAFTED_FILE)
+    ev = section_evidence(DRAFTED_FILE, start, end, _refs(), Path("/nonexistent"))
+    assert ev.lowest_confidence == "medium"
+    assert set(ev.tags) == {"[EVIDENCE: swim]", "[ADAPTED: general-endurance]"}
+    assert ev.source_count == 2  # Gomez-Bruton + Hutson
+    assert ev.reviewed is False  # still under DRAFTED_FILE's file-level marker
+
+
+def test_section_evidence_unreviewed_when_covered_by_file_level_marker():
+    start = DRAFTED_FILE.index("## In-session carbohydrate feeding")
+    end = DRAFTED_FILE.index("## Bone loading")
+    ev = section_evidence(DRAFTED_FILE, start, end, _refs(), Path("/nonexistent"))
+    assert ev.reviewed is False
+
+
+def test_section_evidence_reviewed_when_no_marker_covers_the_span():
+    # SECTION_MARKER_FILE's marker only covers "Open questions..."; the CSS
+    # section above it carries an [EVIDENCE] claim but no active marker.
+    start = SECTION_MARKER_FILE.index("## Critical Swim Speed")
+    end = SECTION_MARKER_FILE.index("## Open questions")
+    ev = section_evidence(SECTION_MARKER_FILE, start, end, _refs(), Path("/nonexistent"))
+    assert ev.reviewed is True
+    assert ev.tags == ("[EVIDENCE: swim]",)
+
+
+def test_section_evidence_weak_source_surfaced():
+    # "the-90-minute-wall" section cites Eston (2012), a ~-marked (weak) source.
+    start = DRAFTED_FILE.index("## The 90-minute wall")
+    end = DRAFTED_FILE.index("## In-session carbohydrate feeding")
+    ev = section_evidence(DRAFTED_FILE, start, end, _refs(), Path("/nonexistent"))
+    assert ev.weak_source_count >= 1
+
+
+def test_section_evidence_no_claims_gives_none_confidence_and_no_tags():
+    ev = section_evidence(
+        "# T\n\n## Empty section\n\njust prose, no tags.\n", 8, 49, [], Path("/nonexistent")
+    )
+    assert ev.lowest_confidence is None
+    assert ev.tags == ()
+    assert ev.source_count == 0
+
+
+def test_section_evidence_unrecognized_confidence_string_ranks_lowest():
+    text = (
+        "# T\n\n**UNREVIEWED**: draft.\n\n## S\n\n"
+        "`[EVIDENCE: swim]` Confidence: weird-value. A claim.\n"
+    )
+    ev = section_evidence(text, text.index("## S"), len(text), [], Path("/nonexistent"))
+    assert ev.lowest_confidence == "weird-value"
+
+
+def test_section_evidence_needs_judgment_true_for_evidence_or_adapted():
+    start = DRAFTED_FILE.index("## Bone loading")
+    ev = section_evidence(DRAFTED_FILE, start, len(DRAFTED_FILE), _refs(), Path("/nonexistent"))
+    assert ev.needs_judgment is True
+
+
+def test_section_evidence_needs_judgment_false_for_coach_judgment_only():
+    # 07's "What's actually in a session" (NESTED_MARKER_FILE) is pure
+    # Coach judgment -- no EVIDENCE/ADAPTED tag -- so it's mechanical, not
+    # needs-judgment.
+    start = NESTED_MARKER_FILE.index("## What's actually in a session")
+    end = NESTED_MARKER_FILE.index("## Watch total load when ramping")
+    ev = section_evidence(NESTED_MARKER_FILE, start, end, _refs(), Path("/nonexistent"))
+    assert ev.needs_judgment is False
+    assert ev.reviewed is False  # its own inline section marker still covers it
+
+
 # --- strip_marker ----------------------------------------------------------------------
 
 
@@ -732,3 +867,284 @@ def test_cli_review_accept_changes_nothing_but_the_marker_bytes(tmp_path, capsys
     assert "UNREVIEWED" not in added
     # The claim's own prose survived verbatim.
     assert "flagged as a gap, not a decision." in after.decode("utf-8")
+
+
+# --- CLI: library-review-apply ------------------------------------------------------
+
+from swim_coach.library_cards import content_hash as _card_hash  # noqa: E402
+from swim_coach.library_cards import section_text as _card_section_text  # noqa: E402
+from swim_coach.library_cards import topic_sections as _card_topic_sections  # noqa: E402
+
+FILE_LEVEL_APPLY_FILE = """# Apply test file (file-level marker)
+
+**UNREVIEWED**: pending human review.
+
+## Section one
+
+Some prose about section one.
+
+## Section two
+
+Some prose about section two.
+"""
+
+SECTION_LEVEL_APPLY_FILE = """# Apply test file (section-level marker)
+
+## Reviewed already
+
+Stable content, no marker here at all.
+
+## Needs its own review
+
+**Coach judgment / UNREVIEWED**: flagged as a gap.
+"""
+
+
+def _real_hash(text: str, heading: str) -> str:
+    section = next(s for s in _card_topic_sections(text) if s.heading == heading)
+    return _card_hash(_card_section_text(text, section))
+
+
+def _athlete_store(tmp_path) -> tuple[FileStore, Athlete]:
+    store = FileStore(base_dir=tmp_path / "athletes")
+    admin = Athlete(id=uuid4(), slug="andrew", name="Andrew")
+    store.save_athlete(admin)
+    return store, admin
+
+
+def _save_review(
+    store: FileStore,
+    admin: Athlete,
+    *,
+    file: str,
+    section: str,
+    content_hash: str,
+    decision: str = "accepted",
+    note: str | None = None,
+    created_at=None,
+) -> LibraryReview:
+    review = LibraryReview(
+        id=uuid4(),
+        file=file,
+        section=section,
+        content_hash=content_hash,
+        decision=decision,
+        note=note,
+        reviewed_by=admin.id,
+        created_at=created_at or datetime.now(timezone.utc),
+    )
+    store.save_library_review(review)
+    return review
+
+
+def _apply_library(tmp_path, store: FileStore, library: Path, *, dry_run: bool = False, capsys):
+    argv = ["--base-dir", str(store.base_dir), "--library-dir", str(library), "library-review-apply"]
+    if dry_run:
+        argv.append("--dry-run")
+    code = main(argv)
+    return code, json.loads(capsys.readouterr().out.strip())
+
+
+def test_apply_strips_file_level_marker_once_every_section_accepted(tmp_path, capsys):
+    library = tmp_path / "library"
+    _write(library, "apply-file.md", FILE_LEVEL_APPLY_FILE)
+    store, admin = _athlete_store(tmp_path)
+    _save_review(
+        store, admin, file="apply-file.md", section="section-one",
+        content_hash=_real_hash(FILE_LEVEL_APPLY_FILE, "Section one"),
+    )
+    _save_review(
+        store, admin, file="apply-file.md", section="section-two",
+        content_hash=_real_hash(FILE_LEVEL_APPLY_FILE, "Section two"),
+    )
+
+    code, result = _apply_library(tmp_path, store, library, capsys=capsys)
+    assert code == 0
+    assert {"file": "apply-file.md", "action": "stripped-file-marker"} in result["applied"]
+    assert result["skipped"] == []
+
+    text = (library / "apply-file.md").read_text(encoding="utf-8")
+    assert "UNREVIEWED" not in text
+    assert "Some prose about section one." in text
+    assert "Some prose about section two." in text
+
+
+def test_apply_skips_partial_file_when_not_every_section_accepted(tmp_path, capsys):
+    library = tmp_path / "library"
+    _write(library, "apply-file.md", FILE_LEVEL_APPLY_FILE)
+    store, admin = _athlete_store(tmp_path)
+    _save_review(
+        store, admin, file="apply-file.md", section="section-one",
+        content_hash=_real_hash(FILE_LEVEL_APPLY_FILE, "Section one"),
+    )
+    # section-two has no review at all.
+
+    code, result = _apply_library(tmp_path, store, library, capsys=capsys)
+    assert code == 0
+    assert result["applied"] == []
+    partial = [s for s in result["skipped"] if s["reason"] == "partial-file"]
+    assert len(partial) == 1
+    assert partial[0]["missing_sections"] == ["section-two"]
+
+    text = (library / "apply-file.md").read_text(encoding="utf-8")
+    assert "**UNREVIEWED**" in text  # untouched
+
+
+def test_apply_skips_stale_hash(tmp_path, capsys):
+    library = tmp_path / "library"
+    _write(library, "apply-file.md", FILE_LEVEL_APPLY_FILE)
+    store, admin = _athlete_store(tmp_path)
+    _save_review(
+        store, admin, file="apply-file.md", section="section-one", content_hash="not-the-real-hash"
+    )
+    _save_review(
+        store, admin, file="apply-file.md", section="section-two",
+        content_hash=_real_hash(FILE_LEVEL_APPLY_FILE, "Section two"),
+    )
+
+    code, result = _apply_library(tmp_path, store, library, capsys=capsys)
+    assert code == 0
+    stale = [s for s in result["skipped"] if s["reason"] == "stale-hash"]
+    assert stale == [{"file": "apply-file.md", "section": "section-one", "reason": "stale-hash"}]
+    # section-two alone isn't enough to clear the file-level marker.
+    assert any(s["reason"] == "partial-file" for s in result["skipped"])
+    text = (library / "apply-file.md").read_text(encoding="utf-8")
+    assert "**UNREVIEWED**" in text
+
+
+def test_apply_strips_a_section_owned_marker_directly(tmp_path, capsys):
+    library = tmp_path / "library"
+    _write(library, "apply-file-2.md", SECTION_LEVEL_APPLY_FILE)
+    store, admin = _athlete_store(tmp_path)
+    _save_review(
+        store, admin, file="apply-file-2.md", section="needs-its-own-review",
+        content_hash=_real_hash(SECTION_LEVEL_APPLY_FILE, "Needs its own review"),
+    )
+
+    code, result = _apply_library(tmp_path, store, library, capsys=capsys)
+    assert code == 0
+    assert {
+        "file": "apply-file-2.md",
+        "section": "needs-its-own-review",
+        "action": "stripped-section-marker",
+    } in result["applied"]
+
+    text = (library / "apply-file-2.md").read_text(encoding="utf-8")
+    assert "UNREVIEWED" not in text
+    assert "flagged as a gap." in text
+
+
+def test_apply_ignores_flagged_decisions(tmp_path, capsys):
+    library = tmp_path / "library"
+    _write(library, "apply-file-2.md", SECTION_LEVEL_APPLY_FILE)
+    store, admin = _athlete_store(tmp_path)
+    _save_review(
+        store, admin, file="apply-file-2.md", section="needs-its-own-review",
+        content_hash=_real_hash(SECTION_LEVEL_APPLY_FILE, "Needs its own review"),
+        decision="flagged", note="check this",
+    )
+
+    code, result = _apply_library(tmp_path, store, library, capsys=capsys)
+    assert code == 0
+    assert result["applied"] == []
+    assert result["skipped"] == []  # a flagged decision isn't "pending apply" -- just not acted on
+    text = (library / "apply-file-2.md").read_text(encoding="utf-8")
+    assert "**Coach judgment / UNREVIEWED**" in text
+
+
+def test_apply_most_recent_decision_wins_over_an_earlier_one(tmp_path, capsys):
+    library = tmp_path / "library"
+    _write(library, "apply-file-2.md", SECTION_LEVEL_APPLY_FILE)
+    store, admin = _athlete_store(tmp_path)
+    real_hash = _real_hash(SECTION_LEVEL_APPLY_FILE, "Needs its own review")
+    _save_review(
+        store, admin, file="apply-file-2.md", section="needs-its-own-review",
+        content_hash=real_hash, decision="accepted",
+        created_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
+    )
+    _save_review(
+        store, admin, file="apply-file-2.md", section="needs-its-own-review",
+        content_hash=real_hash, decision="flagged", note="actually, hold on",
+        created_at=datetime(2026, 9, 20, tzinfo=timezone.utc),
+    )
+
+    code, result = _apply_library(tmp_path, store, library, capsys=capsys)
+    assert code == 0
+    assert result["applied"] == []  # the LATEST decision is flagged, not accepted
+    text = (library / "apply-file-2.md").read_text(encoding="utf-8")
+    assert "**Coach judgment / UNREVIEWED**" in text
+
+
+def test_apply_dry_run_reports_without_writing(tmp_path, capsys):
+    library = tmp_path / "library"
+    _write(library, "apply-file.md", FILE_LEVEL_APPLY_FILE)
+    store, admin = _athlete_store(tmp_path)
+    _save_review(
+        store, admin, file="apply-file.md", section="section-one",
+        content_hash=_real_hash(FILE_LEVEL_APPLY_FILE, "Section one"),
+    )
+    _save_review(
+        store, admin, file="apply-file.md", section="section-two",
+        content_hash=_real_hash(FILE_LEVEL_APPLY_FILE, "Section two"),
+    )
+
+    code, result = _apply_library(tmp_path, store, library, dry_run=True, capsys=capsys)
+    assert code == 0
+    assert result["dry_run"] is True
+    assert {"file": "apply-file.md", "action": "would-strip-file-marker"} in result["applied"]
+
+    text = (library / "apply-file.md").read_text(encoding="utf-8")
+    assert "**UNREVIEWED**" in text  # untouched
+
+
+def test_apply_is_idempotent(tmp_path, capsys):
+    library = tmp_path / "library"
+    _write(library, "apply-file-2.md", SECTION_LEVEL_APPLY_FILE)
+    store, admin = _athlete_store(tmp_path)
+    _save_review(
+        store, admin, file="apply-file-2.md", section="needs-its-own-review",
+        content_hash=_real_hash(SECTION_LEVEL_APPLY_FILE, "Needs its own review"),
+    )
+
+    first_code, first_result = _apply_library(tmp_path, store, library, capsys=capsys)
+    assert first_code == 0
+    assert len(first_result["applied"]) == 1
+
+    second_code, second_result = _apply_library(tmp_path, store, library, capsys=capsys)
+    assert second_code == 0
+    assert second_result["applied"] == []
+    assert second_result["skipped"] == []
+
+
+def test_apply_updates_index_when_file_level_marker_clears(tmp_path, capsys):
+    library = tmp_path / "library"
+    _write(library, "apply-file.md", FILE_LEVEL_APPLY_FILE)
+    _write(
+        library,
+        "INDEX.md",
+        "| `apply-file.md` | s. **UNREVIEWED**, pending human review. |\n",
+    )
+    store, admin = _athlete_store(tmp_path)
+    _save_review(
+        store, admin, file="apply-file.md", section="section-one",
+        content_hash=_real_hash(FILE_LEVEL_APPLY_FILE, "Section one"),
+    )
+    _save_review(
+        store, admin, file="apply-file.md", section="section-two",
+        content_hash=_real_hash(FILE_LEVEL_APPLY_FILE, "Section two"),
+    )
+
+    code, result = _apply_library(tmp_path, store, library, capsys=capsys)
+    assert code == 0
+    assert result["index_updated"] == ["apply-file.md"]
+    assert "Human-reviewed." in (library / "INDEX.md").read_text(encoding="utf-8")
+
+
+def test_apply_no_accepted_reviews_is_a_clean_no_op(tmp_path, capsys):
+    library = tmp_path / "library"
+    _write(library, "apply-file.md", FILE_LEVEL_APPLY_FILE)
+    store, _admin = _athlete_store(tmp_path)
+
+    code, result = _apply_library(tmp_path, store, library, capsys=capsys)
+    assert code == 0
+    assert result == {"applied": [], "skipped": [], "index_updated": [], "dry_run": False}

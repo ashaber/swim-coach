@@ -1,0 +1,40 @@
+schema_version: 1
+file: 22-injury-adapted-taper.md
+cards:
+- section: why-this-exists
+  heading: Why this exists
+  summary: 'Built for a real case: an injured athlete''s near-zero recent load shouldn''t be projected
+    forward flatly; adds a capped RAMP phase before TAPER so the engine can propose rebuilding before
+    tapering, as a general capability.'
+  recommendation: For an athlete returning from injury/illness with limited runway before a race, plan
+    a gradual rebuild toward a safe target before tapering, rather than holding at the depressed post-injury
+    load.
+  content_hash: 9ebdedd1812dae5887c4742720d6348ddf40f88c8555781e77b0be5e6a332e1e
+- section: race-day-tsb-band
+  heading: Race-day TSB band
+  summary: Sets the taper's race-day TSB (Form) target band at +5 to +25, based on a cycling/TrainingPeaks
+    practitioner convention (Joe Friel), stacked on already swimming-unverified CTL/ATL constants.
+  recommendation: Target race-day Training Stress Balance (Form) somewhere in the +5 to +25 range when
+    planning a taper.
+  content_hash: 766e11827cd16418ba5e2c80259e4914f597b90d220fd428663c8774cf089ecc
+- section: ramp-floor-and-ceiling-ctl-substitution-not-flat-means-2026-09
+  heading: 'Ramp floor and ceiling: CTL substitution, not flat means (2026-09)'
+  summary: Ramp floor/ceiling now use CTL (a decay-aware EWMA) instead of flat trailing averages, so time
+    off is properly reflected in the ramp target; a literal ACWR ratio/threshold was considered and rejected.
+  recommendation: none -- background only
+  content_hash: 37e82322607a868cd80a99619dd16caca655c2a8f93299587fd436b5cd67ca19
+- section: the-ramp-cap-lightonlyrampcapfraction-0-55
+  heading: 'The ramp cap: `LIGHT_ONLY_RAMP_CAP_FRACTION = 0.55`'
+  summary: Under a light-only restriction, ramp target load is hard-capped at 55% of pre-layoff baseline,
+    never overridden upward by a high current-baseline reading; a bug that silently bypassed the cap was
+    fixed.
+  recommendation: While under a light-only training restriction, don't let a returning athlete's ramp-back
+    target exceed 55% of their pre-injury training load unless a coach explicitly overrides it.
+  content_hash: 6922ab10e40bc9420d3f19b9176c3dc7a1074b19b34b93c3ce64c678e5700a0d
+- section: ramp-day-grid-and-rest-day-cadence
+  heading: Ramp-day grid and rest-day cadence
+  summary: Ramp phase uses a day-granular grid (0,2,4,6,8,10,14 days) rather than weekly, and renders
+    every 3rd day as a rest day during ramp-back; both are coach-judgment, uncited.
+  recommendation: During a short-notice injury-return ramp, plan rest on a roughly every-third-day cadence
+    rather than a fixed weekly rest-day pattern.
+  content_hash: dabb3d126103f4a2cc1272ac8e82382556663457f4dbd262f541406d681b50a2

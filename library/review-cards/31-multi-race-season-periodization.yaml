@@ -1,0 +1,46 @@
+schema_version: 1
+file: 31-multi-race-season-periodization.md
+cards:
+- section: not-every-race-is-an-a-race
+  heading: Not every race is an A race
+  summary: Per Friel's A/B/C framework, only an A-priority race gets full periodization and a real taper;
+    treating every race as an A race makes a genuine peak difficult.
+  recommendation: Help the athlete designate one (rarely two) A-priority race per season for full taper
+    and peak; treat other races as B/C — no full taper, race for training/experience.
+  content_hash: a012e041303179608205a6da13069942a2fb4a0e112bfdd0b9ea881be2ffe53b
+- section: a-season-can-have-multiple-peaks-this-is-not-exotic
+  heading: A season CAN have multiple peaks — this is not exotic
+  summary: Per Bompa, seasons with 3-5 major competitions standardly use multi-cycle (bi- or tri-cyclical)
+    periodization rather than one continuous macro, though frequent peaking still demands real prioritization.
+  recommendation: For athletes with several goal races in one season, plan a chain of per-race mini-cycles
+    (base/build/peak/taper each) rather than one long build spanning the whole season.
+  content_hash: 272e5367cb27daecd46f88c38a4c5bf787f6bf1f272683e20d887eebc6e9e437
+- section: how-much-can-a-taper-peak-repeat-within-one-season
+  heading: How much can a taper/peak repeat within one season?
+  summary: B-priority races get a shallow ~1-week, ~25% volume-cut mini-taper (short end of the 4-28-day
+    literature range); A-race tapers stay full 2-week/41-60% cut, sharpen blocks capped at 2-4 weeks.
+  recommendation: Give A-priority races the full ~2-week taper; give B-priority races only a brief ~1-week,
+    shallower taper and a capped 2-4 week sharpen block, not a full build.
+  content_hash: 896c6205f21c94fa51429e0ae624fd36e3a2b75afba41de56ee5b09b2a99f877
+- section: cyclocross-specific-literature-genuinely-thin-said-plainly
+  heading: 'Cyclocross-specific literature: genuinely thin, said plainly'
+  summary: No peer-reviewed, cyclocross-specific research on racing frequency, recovery, or multi-peak
+    periodization was found; only general practitioner advice echoing the same Friel/Bompa qualitative
+    points, no new numbers.
+  recommendation: none -- background only
+  content_hash: a785d655b5a20a7b10f2923ce62dd77f0f0651448b430daf3644e3a832900210
+- section: design-mapping-how-this-became-scaffoldseasonmacro
+  heading: 'Design mapping: how this became `scaffold_season_macro`'
+  summary: Chose to chain existing single-race macro/sharpening cycles together rather than build a new
+    season-wide model, since generate_week already consumes a flat block list unmodified — no schema change
+    needed.
+  recommendation: none -- background only
+  content_hash: 767be6ca4c9f29df44974a5a072372514b8212c29b97d9376eb1acc8d1fbb409
+- section: what-s-not-resolved
+  heading: What's not resolved
+  summary: Cross-sport goal conflicts (e.g. swim vs. cyclocross), CX-specific research gaps, and automatic
+    per-week race selection remain unresolved — explicitly left as deferred follow-ups or human decisions,
+    not silently dropped.
+  recommendation: When an athlete has goals across sports (e.g. swim and cyclocross), flag the cross-sport
+    priority conflict for an explicit human/coach decision — the system does not auto-resolve it.
+  content_hash: 07b2942f2dc304e6aeaee6e717c012289c87ab0dca279e7a8bb6c20f2abf140c

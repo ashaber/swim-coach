@@ -1,0 +1,70 @@
+schema_version: 1
+file: 13-reds-energy-availability.md
+cards:
+- section: the-model-and-what-this-system-will-not-do
+  heading: The model, and what this system will not do
+  summary: Defines energy availability as RED-S's organizing concept but states the system will never
+    compute an EA number, since field estimation lacks a standard protocol and carries large error; the
+    30 kcal/kg threshold is unsettled.
+  recommendation: Never present an EA number or the "30 kcal/kg" figure as a target to the athlete; discuss
+    energy-availability concerns qualitatively, not as a computed score.
+  content_hash: c7bbab40a4d4dad6a1877ed929b14f235a203af869230cee21c35fb4ae770458
+- section: chronic-lea-is-a-plausible-upstream-cause-of-the-90-minute-wall-and-acute-fuelling-will-not-fix-it
+  heading: Chronic LEA is a plausible upstream cause of the 90-minute wall — and acute fuelling will not
+    fix it
+  summary: A controlled crossover trial found low energy availability impaired endurance performance in
+    a way that persisted after 3 days of refuelling, with glycogen/mitochondrial capacity unchanged —
+    acute fuelling alone won't fix it.
+  recommendation: If fixing acute in-session fueling doesn't improve durability over 3-4 weeks — especially
+    with falling body mass, poor sleep, or illness — refer to a sports physician and dietitian, not another
+    training tweak.
+  content_hash: 3d0daf2837cdce21bfee2068f8ecc59825b6b34e9ca37a66130769d097ce7013
+- section: swimming-is-not-osteogenic-the-highest-value-swim-specific-finding-here
+  heading: Swimming is not osteogenic — the highest-value swim-specific finding here
+  summary: Swimmers' bone mineral density is similar to sedentary controls and lower than high-impact
+    athletes; swimming does not confer bone protection even when well-fuelled, compounding menopause and
+    possible LEA bone risks.
+  recommendation: Add brief, low-cost impact/plyometric work to the existing dryland strength block for
+    bone loading, and recommend a baseline DXA scan and sports-physician conversation given the unprotected
+    bone-risk stack.
+  content_hash: 99bb2e8e4f8bf35cdac2cbcb944cc2426226e363ee7f03938c63885ce9facfc0
+- section: the-classic-warning-sign-does-not-exist-for-this-athlete
+  heading: The classic warning sign does not exist for this athlete
+  summary: Menstrual dysfunction, the standard REDs screening marker, carries no information for a peri-/post-menopausal
+    athlete; the only screening tool tested in her age band can inflate false "at risk" flags, and no
+    validated instrument exists.
+  recommendation: Do not run or rely on a LEAF-Q-style score for this athlete, and do not treat its absence
+    as reassurance — be explicit that no validated screening tool exists for her demographic.
+  content_hash: dd2575f89ae0167243e4e1305e510887fa5f439bc7aec11a229eb01b8a94be32
+- section: what-this-system-can-legitimately-notice
+  heading: What this system can legitimately notice
+  summary: Within-day energy timing (not just daily total) tracked with menstrual dysfunction in matched-EA
+    athletes; cold-water swimming increases post-exercise appetite rather than suppressing it, so post-swim
+    hunger is physiological.
+  recommendation: Flag long gaps between a big training session and the first substantial meal as a habit
+    to shift earlier, and reassure the athlete post-cold-swim hunger is normal physiology, not a lapse.
+  content_hash: fce6b0f6df01b7bff135d45106ad101e1f3ac180f1eccf5289628503f1f110c0
+- section: what-restoring-energy-availability-actually-looks-like-and-its-limits
+  heading: What restoring energy availability actually looks like — and its limits
+  summary: A modest daily calorie increase (+360 kcal/day) over 6 months restored menses in most amenorrheic
+    athletes studied, but bone/muscle outcomes showed little change over that period — bone recovers on
+    a slower timescale.
+  recommendation: Do not set any specific intake target yourself — any corrective nutrition plan is a
+    registered sports dietitian's call, informed by a sports physician; encourage acting on suspicion
+    early rather than waiting for injury.
+  content_hash: 3b4d10bd4f32ef3dba9962c42316cf4bcbbe6f4a32a5f7e3a28fad4589f4f0bf
+- section: hrv-rhr-confound-cross-reference-10-recovery-hrv-md
+  heading: HRV/RHR confound (cross-reference `10-recovery-hrv.md`)
+  summary: Energy-deficient amenorrheic women can show lower resting heart rate alongside impaired vascular/lipid
+    health — a harmful energy state can look like "improving fitness" on wearable RHR data; HRV's behavior
+    under LEA is unknown.
+  recommendation: If Oura RHR trends down while wellness composite or matched-effort pace/RPE trend the
+    wrong way, surface that divergence explicitly rather than treating falling RHR as good news.
+  content_hash: c539e6ca83bc829d1e03797327f76e562de82c605081437d703bd71d5b322e02
+- section: gaps-stated-bluntly
+  heading: Gaps, stated bluntly
+  summary: 'States masters/peri-/post-menopausal female athletes are close to an evidence vacuum: no validated
+    screening tool, no EA threshold, no amenorrhea red flag, and no ultra-distance open-water swimming
+    LEA evidence at any age.'
+  recommendation: none -- background only
+  content_hash: efe24efee46cc8c51ac6d24a4bb0cdf0cf544b464770ac78296465f9e6904026

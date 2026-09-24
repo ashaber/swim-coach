@@ -124,6 +124,7 @@ async def google_sign_in(
         "name": athlete.name,
         "role": _DEFAULT_ROLE,
         "expires_at": expires_at.isoformat(),
+        "is_library_admin": athlete.slug in settings.library_admins,
     }
 
 
@@ -154,6 +155,7 @@ async def get_me(request: Request, principal: Principal = Depends(require_auth))
         "role": _DEFAULT_ROLE,
         "expires_at": principal.expires_at.isoformat() if principal.expires_at else None,
         "coach_for": sorted(principal.coach_for),
+        "is_library_admin": athlete.slug in settings.library_admins,
     }
 
 

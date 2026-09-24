@@ -1,0 +1,53 @@
+schema_version: 1
+file: 28-bike-ftp-test-protocols.md
+cards:
+- section: the-real-defect-this-grounds
+  heading: The real defect this grounds
+  summary: 'Identifies the bug this file fixes: a hand-authored 2x20 FTP test was given a fixed power-target
+    band, turning a test of an unknown ceiling into an ordinary session — grounds a correctly-built engine
+    protocol instead.'
+  recommendation: Coach prescribes the engine's own 2x20 FTP test structure (no pre-set power band) rather
+    than hand-authoring one, so the test actually measures the athlete's current ceiling instead of quietly
+    becoming a training session.
+  content_hash: a0ce0ba98dbd33abf6e6fbc176dc3fddf63ec627417ce21d00ec37f27e0cc877
+- section: the-canonical-single-effort-convention-grounding
+  heading: The canonical single-effort convention (grounding)
+  summary: 'Cites the originating single-effort convention (Allen & Coggan): ride 20 minutes all-out,
+    FTP = 0.95 x average power; high confidence, independently cross-confirmed across TrainingPeaks, TrainerRoad,
+    CTS, and Roadman Cycling.'
+  recommendation: Coach can cite this as the well-established basis for a standard single 20-minute FTP
+    test (0.95 x average power) when a shorter, simpler test protocol is preferred over the 2x20 version.
+  content_hash: 426ffbeafc8bf4b3d301d2646f40cdc3236468f3798bb1bf5a430d9f87e011dc
+- section: the-2x20-two-effort-structure-what-s-actually-distinct
+  heading: The 2x20 (two-effort) structure -- what's actually distinct
+  summary: Documents the verified 2x20 structure — 10min warm-up, 20min effort, 10min recovery, 20min
+    effort, 15min cool-down — the 10-minute recovery confirmed by two independent sources; a rival 2-minute-recovery
+    convention exists but wasn't adopted.
+  recommendation: Coach prescribes the exact 2x20 workout shape (10/20/10/20/15 min) this file grounds
+    — two 20-minute efforts with a 10-minute recovery — as the engine's literature-corroborated 2x20 test
+    structure.
+  content_hash: 2c5943e59a10e8aff82b63d87031b33fe672054015892ca372d09df6f6693c5b
+- section: ftp-formula-0-95-x-the-average-of-both-efforts
+  heading: 'FTP formula: 0.95 x the average of both efforts'
+  summary: No source states a 2x20-specific formula; the engine averages both 20-minute efforts' power
+    then applies 0.95 (not 'take the higher effort'), a reasoned extension chosen so a fatigued second
+    effort isn't excluded from the result.
+  recommendation: Coach reports FTP as 0.95 x the average of both 20-minute efforts' power (never just
+    the stronger one); if the reading sits well below a later test, trust the more recent real result
+    instead.
+  content_hash: 1c78b6d9f89f84cd6bfb08e1ce5695aaabf74e9ba2f8f8deb44d273c73e65cb5
+- section: pacing-cue-prescription-text-not-a-target
+  heading: Pacing cue (prescription text, not a target)
+  summary: The athlete-facing pacing cue ('start controlled, don't blow up in the first 5 minutes') is
+    real sourced advice from TrainerRoad's FTP-assessment guidance — a coaching cue, not a power/zone
+    target on the work steps.
+  recommendation: Coach tells the athlete to pace the 2x20 test controlled and not blow up in the first
+    5 minutes, as text guidance only — never a power number on the work step.
+  content_hash: b1c9caace16273a5e4fcda8b1dc10874396769b3570338968b663c525ee10dcf
+- section: implementation-history
+  heading: Implementation history
+  summary: Records that _bike_2x20_test_structure/ftp_from_2x20_test landed in Build F, wired into the
+    tool schema and coaching context guidance, with no open deferral beyond the sport-scope routing gap
+    shared with other bike files.
+  recommendation: none -- background only
+  content_hash: c9f7ed4705b2a9515c31d78f67c547a8d6a1156a723054a06828ae57092a0ec8

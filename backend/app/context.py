@@ -1036,12 +1036,31 @@ _LIBRARY_FILES_IN_PRIORITY_ORDER.append("30-altitude-power-adjustment.md")
 # note as fixed Python data -- same convention `_KEYWORD_ROUTES` above
 # already uses for the routing table itself. A file with NO entry here is
 # UNSCOPED and is never filtered out, regardless of `athlete_sports` --
-# every existing swim library file stays unscoped; only
-# `23-cycling-training.md` (the first non-swim-discipline file) is scoped,
-# per this build's own "capability only" boundary.
+# every existing swim library file stays unscoped.
+#
+# web/resources-tab-library-review build (2026-09): every one of
+# `23-cycling-training.md` through `32-gps-lap-detection.md` self-declares
+# "**Sport scope: `bike`**" in its own header (grepped, not guessed) even
+# though several of them (`24`/`25`/`26`/`27`/`28`/`29`/`31`/`32`) honestly
+# document themselves as "not yet wired into context.py's routing" for chat
+# keyword-bucket purposes -- that caveat is about `_KEYWORD_ROUTES` never
+# reaching them via a message-topic match, not about whether they're safe to
+# surface. The Resources tab's library-card view (`/api/library/cards`)
+# reuses THIS dict directly to decide what an athlete may see regardless of
+# chat routing, so every self-declared bike-scoped file must be listed here
+# even ones chat can't reach yet -- a swim-only athlete must never see a
+# card for any of them, not just the two chat already routes to.
 _LIBRARY_FILE_SPORT_SCOPE: dict[str, frozenset[str]] = {
     "23-cycling-training.md": frozenset({"bike"}),
+    "24-cycling-periodization-intervals.md": frozenset({"bike"}),
+    "25-macro-sharpening-established-base.md": frozenset({"bike"}),
+    "26-activity-stream-interval-analysis.md": frozenset({"bike"}),
+    "27-cyclocross-skills.md": frozenset({"bike"}),
+    "28-bike-ftp-test-protocols.md": frozenset({"bike"}),
+    "29-ftp-threshold-change-modeling.md": frozenset({"bike"}),
     "30-altitude-power-adjustment.md": frozenset({"bike"}),
+    "31-multi-race-season-periodization.md": frozenset({"bike"}),
+    "32-gps-lap-detection.md": frozenset({"bike"}),
 }
 
 

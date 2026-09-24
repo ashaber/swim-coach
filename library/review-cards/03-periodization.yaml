@@ -1,0 +1,41 @@
+schema_version: 1
+file: 03-periodization.md
+cards:
+- section: macro-block-structure-base-build-peak-taper
+  heading: Macro block structure (base -> build -> peak -> taper)
+  summary: Describes plan.scaffold_macro()'s four-block runway split (base/build/peak/taper) and its coach-judgment
+    constants (min 8 weeks, taper threshold, peak/base shares) — a conventional periodization shape, not
+    independently cited research.
+  recommendation: Coach explains the athlete's current block and why volume/intensity emphasis shifts
+    over the runway to the event; treats the specific splits as provisional, not proven-optimal.
+  content_hash: be4de851774f8a4bdb99ba0b62477223ffedc3aa84b1bb35434670114229cb29
+- section: taper-taperweekslong-short-taperweeklydecay-known-citation-debt
+  heading: 'Taper: `TAPER_WEEKS_LONG/SHORT`, `TAPER_WEEKLY_DECAY` — known citation debt'
+  summary: Flags that the engine's 4-week/25%-per-week taper was wrongly attributed to Formosa et al.;
+    the real paper reports a ~3-week taper with ~43% total volume reduction, intensity maintained.
+  recommendation: Coach treats current taper length/decay as provisional coach judgment, not settled evidence,
+    and flags to Andrew that taper math needs revisiting against the corrected ~3-week/43% figures.
+  content_hash: 989aaef74c82da9260fcfb3aa6db8ff4ab7113ac80abd2d4b469aef22865616c
+- section: safety-rail-weeklyvolumerampcap-0-08
+  heading: 'Safety rail: `WEEKLY_VOLUME_RAMP_CAP = 0.08`'
+  summary: Documents the hard +8%/week volume-ramp cap as a coach-judgment safety rail, deliberately more
+    conservative than the debunked '10% rule' (found not evidence-based by Buist et al.).
+  recommendation: Coach never lets weekly volume increase beyond 8% without the athlete's explicit confirmation;
+    this is enforced as a hard ceiling in plan generation, not just guidance.
+  content_hash: 2178661a157b2d6e50af5473d774d77e63e1e1b34a4f032b9fd5053d1f5f2d63
+- section: load-monitoring-load-py
+  heading: Load monitoring (`load.py`)
+  summary: 'Covers load.py''s monitoring stack: tiered session-load fallback, monotony, ACWR (weak secondary
+    signal per Garmin-RunSafe data), CTL/ATL/TSB fitness-fatigue model, RHR/HRV baseline deviation, wellness
+    composite, compliance, and cut-magnitude thresholds.'
+  recommendation: Coach uses these read-only signals (load ratios, wellness composite, compliance, CTL/ATL/TSB)
+    to judge when to cut, hold, or advance volume; ACWR and CTL/ATL/TSB constants are provisional, not
+    gating.
+  content_hash: 589aec8da5476c41e9c276a0f6f7d8c2b109ace4a6f2b940a78b839710321353
+- section: informational-only-80-20-intensity-balance
+  heading: 'Informational-only: 80/20 intensity balance'
+  summary: The 80/20 easy/hard intensity-balance rule has no verified citation (Seiler's polarized-training
+    work isn't sourced); it's implemented as coach judgment, reporting only, not enforced.
+  recommendation: Coach reports the trailing 28-day easy/hard swim-time split as context during /adapt
+    review but does not use it to gate any cut/repeat/hold/advance decision.
+  content_hash: 0957d6573f08502d430569b70b77f7878c2445c3a49b8fdee903fc7f4b48a762

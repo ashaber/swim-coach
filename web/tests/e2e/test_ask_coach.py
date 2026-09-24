@@ -1,9 +1,12 @@
 """e2e coverage for the coach-mode Q&A build's Ask-the-coach feature (Part B):
 asking a question about a planned session (Plan tab) or a completed workout
-(Dashboard tab), and seeing the athlete's own Feedback tab reflect a coach's
-reply. See web/src/views.js's renderAskCoachSection (the shared component)
-and web/src/api.js's askAboutSession/askAboutWorkout (both POST
-/api/feedback/questions -- backend/app/routes/feedback.py's ask_question).
+(Dashboard tab), and seeing that session/workout's own Ask-the-coach section
+reflect a coach's reply. See web/src/views.js's renderAskCoachSection (the
+shared component) and web/src/api.js's askAboutSession/askAboutWorkout (both
+POST /api/feedback/questions -- backend/app/routes/feedback.py's
+ask_question). The athlete's own durable Feedback TAB used to also show
+this; it was retired (web/resources-tab-library-review) -- the data path
+(state.feedbackEntries) is unchanged and still backs this section.
 
 Same mocked-backend conventions as test_workout_detail.py/
 test_plan_session_detail.py -- no real backend is ever contacted, every
@@ -196,40 +199,51 @@ def test_submit_error_shows_inline_and_keeps_the_draft(page):
     assert page.input_value('[data-form="askCoach"][data-field="body"]') == 'a question'
 
 
-def test_athlete_own_feedback_tab_reflects_a_coach_reply(page):
-    # B2: the athlete's own durable Feedback tab must show an existing
-    # coach reply, independent of any workout/session-scoped view (B1).
+def test_session_ask_coach_section_reflects_a_coach_reply(page):
+    # The athlete's own durable Feedback tab used to also show this
+    # (retired, web/resources-tab-library-review) -- the session-scoped
+    # Ask-the-coach section (B1, renderAskCoachSection) is the one surface
+    # left for it, so this asserts the same coach-reply-wins-over-AI
+    # behavior there instead. Linked to PLANNED_SESSION by (session_date,
+    # session_sport), the same linkage `feedbackForSession` (views.js)
+    # filters on.
     entries = json.dumps([{
-        'id': 'f1', 'type': 'question', 'source': 'athlete', 'body': 'How much fueling for a 4hr swim?',
+        'id': 'f1', 'type': 'question', 'source': 'athlete', 'body': 'How much fueling for this one?',
         'status': 'answered', 'created_at': '2026-08-20T12:00:00Z',
         'ai_provisional_answer': 'Aim for 60-90g carbs/hr.',
         'coach_reply': 'Start with 70g/hr and adjust from there.',
         'needs_human_review': False,
+        'session_date': MONDAY, 'session_sport': 'swim_pool',
     }])
     page.route('**/api/feedback*', _cors_route(200, 'application/json', entries))
 
-    page.wait_for_selector('[data-a="tab:feedback"]')
-    page.click('[data-a="tab:feedback"]')
-    page.wait_for_selector('.feedback-entry')
+    page.wait_for_selector('[data-a="tab:plan"]')
+    page.click('[data-a="tab:plan"]')
+    page.wait_for_selector(f'[data-a="session:open"][data-id="{PLANNED_SESSION["id"]}"]')
+    page.click(f'[data-a="session:open"][data-id="{PLANNED_SESSION["id"]}"]')
+    page.wait_for_selector('#ask-coach')
 
     content = page.content()
-    assert 'How much fueling for a 4hr swim?' in content
+    assert 'How much fueling for this one?' in content
     assert 'Your coach replied' in content
     assert 'Start with 70g/hr and adjust from there.' in content
     # The coach reply wins over the AI provisional answer once both exist.
     assert 'Aim for 60-90g carbs/hr.' not in content
 
 
-def test_waiting_on_coach_state_when_flagged_for_review_with_no_reply_yet(page):
+def test_session_ask_coach_waiting_on_coach_state_when_flagged_for_review(page):
     entries = json.dumps([{
         'id': 'f1', 'type': 'question', 'source': 'athlete', 'body': 'Is this safe with my shoulder?',
         'status': 'open', 'created_at': '2026-08-20T12:00:00Z',
         'ai_provisional_answer': None, 'coach_reply': None, 'needs_human_review': True,
+        'session_date': MONDAY, 'session_sport': 'swim_pool',
     }])
     page.route('**/api/feedback*', _cors_route(200, 'application/json', entries))
 
-    page.wait_for_selector('[data-a="tab:feedback"]')
-    page.click('[data-a="tab:feedback"]')
-    page.wait_for_selector('.feedback-entry')
+    page.wait_for_selector('[data-a="tab:plan"]')
+    page.click('[data-a="tab:plan"]')
+    page.wait_for_selector(f'[data-a="session:open"][data-id="{PLANNED_SESSION["id"]}"]')
+    page.click(f'[data-a="session:open"][data-id="{PLANNED_SESSION["id"]}"]')
+    page.wait_for_selector('#ask-coach')
 
     assert 'Waiting on your coach to reply.' in page.content()

@@ -2,7 +2,7 @@
 within the Settings tab (see views.js's renderProfilePanel / main.js's
 loadProfile/handleSubmitProfile).
 
-Same mocked-backend conventions as test_log_checkin.py (see its module
+Same mocked-backend conventions as test_manual_log.py (see its module
 docstring): no real backend is ever contacted, and every network call is
 intercepted via Playwright routes with CORS headers attached (the mocked
 backend is a different origin, exactly like the real GitHub Pages / Cloud
@@ -111,7 +111,7 @@ def _athlete_route(get_body=None, patch_status=200, patch_body=None, patch_calls
 @pytest.fixture(params=BROWSERS)
 def page(request, base_url):
     """Seeds a signed-in identity (past the Phase 2.5 sign-in gate) but
-    deliberately NOT a configured backend -- see test_log_checkin.py's `page`
+    deliberately NOT a configured backend -- see test_manual_log.py's `page`
     fixture docstring; same reasoning applies here (the "unconfigured" test
     below needs that empty state)."""
     cfg = request.param

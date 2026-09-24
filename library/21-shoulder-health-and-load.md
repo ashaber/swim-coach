@@ -10,6 +10,9 @@ generalized here for any future shoulder-load question, not written as a
 one-athlete note. See `00-conventions.md` for the tagging scheme and
 `reference_list.md` for full citations.
 
+
+**UNREVIEWED**, pending human review.
+
 ## Shoulder load and injury risk: total load, not just strength load
 
 `07-strength-dryland.md`'s "Watch total load, not just strength load, when

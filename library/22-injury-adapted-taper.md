@@ -7,6 +7,9 @@ for the underlying CTL/ATL/TSB Banister model and its own citation debt
 (time constants unverified for swimming) -- this file only covers what's
 new here, not a restatement of that model.
 
+
+**UNREVIEWED**, pending human review.
+
 ## Why this exists
 
 Built for a real, current situation (Sept 2026): an athlete suffered a

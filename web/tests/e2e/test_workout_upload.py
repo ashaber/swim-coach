@@ -1,12 +1,12 @@
 """e2e coverage for the Log tab's .fit/.tcx/.csv file upload (Phase 3).
 
-Same mocked-backend conventions as test_log_checkin.py: no real backend is
+Same mocked-backend conventions as test_manual_log.py: no real backend is
 ever contacted, every network call is intercepted via Playwright routes with
 CORS headers attached. The two-step design under test: picking a file POSTs
 multipart to `**/api/workouts/ingest*` (mocked here to return a canned
 `WorkoutDraft`), which pre-fills the Log form as a *review* card -- nothing
 is saved until the athlete sets RPE (never present in a file) and clicks
-Save/Confirm, which is the existing `POST /api/workouts` call test_log_checkin.py
+Save/Confirm, which is the existing `POST /api/workouts` call test_manual_log.py
 already covers the JSON shape of.
 """
 
@@ -43,7 +43,7 @@ def _cors_route(status, content_type, body):
 
 @pytest.fixture(params=BROWSERS)
 def page(request, base_url):
-    """Same shape as test_log_checkin.py's `page` fixture: signed in, but
+    """Same shape as test_manual_log.py's `page` fixture: signed in, but
     deliberately NOT a configured backend (the "unconfigured" test needs
     that empty state), plus a default mocked GET /api/athlete for the
     Settings tab's profile section and a default empty GET /api/workouts

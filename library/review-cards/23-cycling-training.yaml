@@ -1,0 +1,52 @@
+schema_version: 1
+file: 23-cycling-training.md
+cards:
+- section: power-based-training-zones-coggan-7-zone-model
+  heading: Power-based training zones (Coggan 7-zone model)
+  summary: Defines seven power-based training zones as %FTP bands (Z1 <=55% through Z7 >150%) per Allen
+    & Coggan; also sets this engine's own inclusive-upper-bound convention for classifying boundary values.
+  recommendation: Set a cycling athlete's training zones as %FTP bands per the Coggan 7-zone table; if
+    felt effort at a given %FTP drifts from prediction over weeks, re-test FTP rather than doubt the zones.
+  content_hash: 544288352c1cf15cae896fbbda86ba67ded9e4b7cb1693ba7d094ab5e83f5e4c
+- section: training-stress-score-normalized-power-intensity-factor
+  heading: Training Stress Score, Normalized Power, Intensity Factor
+  summary: Defines Normalized Power's 4-step rolling-average algorithm, Intensity Factor (NP/FTP), and
+    TSS (duration x IF^2 x 100) for cycling -- the standard un-adapted formula, distinct from this engine's
+    cubed swim-TSS adaptation.
+  recommendation: Compute cycling TSS using the standard NP/IF formula; if a computed TSS diverges materially
+    from TrainingPeaks or intervals.icu for the same ride, re-derive the NP/IF math before trusting either
+    number.
+  content_hash: 95158af74a1451364fac526525cecaee67012f37dd02a5df62455007427229ee
+- section: ctl-atl-tsb-time-constants-how-well-grounded-for-cycling
+  heading: CTL / ATL / TSB time constants — how well-grounded for cycling
+  summary: The 42-day/7-day CTL/ATL time constants are TrainingPeaks practitioner convention, not independently
+    validated against cycling outcome data; recent literature cautions fitness-fatigue model parameters
+    aren't fixed physiological constants.
+  recommendation: Treat a cyclist's TSB as noisy day-to-day; trust the multi-week trend, not one value,
+    before making a training-plan decision based on it.
+  content_hash: ae8297aae54a2673122e091498697a89c2048958473038a232ebc97a1b0e3277
+- section: periodization-and-volume-progression
+  heading: Periodization and volume progression
+  summary: A systematic review found no evidence favoring block over traditional periodization in trained
+    cyclists -- both improved fitness/threshold measures; no cycling-specific safe week-to-week volume-ramp-rate
+    figure was found.
+  recommendation: Don't treat one periodization model as definitively correct for a cyclist; label any
+    week-to-week volume ramp cap applied as coach judgment, not an evidence-backed figure.
+  content_hash: cce5ac86fa100cdb6e0c69d6091396e6a66dae38af2dd54d9caf1cef1d83f1f9
+- section: injury-patellofemoral-pain-and-knee-loading
+  heading: 'Injury: patellofemoral pain and knee loading'
+  summary: Road-cycling data shows knee as the second most common overuse-injury site (23%); saddle height
+    inversely relates to patellofemoral load, with 25-30 degree knee flexion at bottom-dead-center the
+    recommended target.
+  recommendation: If a cyclist reports anterior knee pain, check saddle height and fore-aft position against
+    the 25-30 degree bottom-dead-center flexion target before assuming it's purely an overuse-volume issue.
+  content_hash: 2a50ed83a527c9018f047fc9a2072ae7697ef848dd52e54b8bca49eb02f839a0
+- section: discipline-variants-road-vs-mountain-bike-vs-cyclocross
+  heading: 'Discipline variants: road vs. mountain bike vs. cyclocross'
+  summary: 'Road, MTB/XCO, and cyclocross are physiologically and injury-wise distinct: MTB involves intermittent
+    above-threshold surges even off-pedal; injury patterns differ (crash-driven upper-limb vs. overuse
+    knee); cyclocross data remains sparse.'
+  recommendation: Design MTB sessions around intermittent above-threshold surges rather than steady wattage
+    targets; treat a crash injury as the acute upper-limb pattern and gradual-onset pain as the overuse/knee
+    pattern.
+  content_hash: 34da6e13d19097d5784d6a433df7e10ea25b154e4390eed842266e913e7965d5

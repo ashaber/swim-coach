@@ -720,6 +720,98 @@ def strip_marker(text: str, marker_start: int, marker_end: int) -> str:
     return text[:marker_start] + f"**{fallback}**" + text[marker_end:]
 
 
+# --- section-level derived evidence (library_cards / Resources tab reviewer) ---
+
+# Ordering low -> high, used only to pick the LOWEST confidence among a
+# section's claim blocks (the single confidence badge a review card shows --
+# `docs/library-review.md`). A confidence string this scheme doesn't
+# recognize ranks below every named level (-1) rather than being dropped,
+# so an unexpected value still surfaces as "needs attention" instead of
+# silently vanishing from the badge.
+_CONFIDENCE_RANK = {"low": 0, "medium-low": 1, "medium": 2, "medium-high": 3, "high": 4}
+
+
+def _confidence_rank(value: str) -> int:
+    return _CONFIDENCE_RANK.get(value.lower(), -1)
+
+
+@dataclass(frozen=True)
+class SectionEvidence:
+    """Derived (never hand-typed onto a `library_cards.ReviewCardEntry`)
+    review-facing signals for one section span: the lowest `Confidence:`
+    among its tagged claim blocks, every distinct evidence tag present,
+    resolved source counts (total and weak/unverified ~ or caveated ⚠),
+    unresolved-citation count, the file's own named dossier (if any), and
+    whether an UNREVIEWED marker still covers this span at all."""
+
+    lowest_confidence: str | None
+    tags: tuple[str, ...]
+    source_count: int
+    weak_source_count: int
+    unresolved_citation_count: int
+    dossier: str | None
+    reviewed: bool
+    needs_judgment: bool  # any block tagged EVIDENCE/ADAPTED -- see _classify
+
+
+def section_evidence(
+    text: str,
+    section_start: int,
+    section_end: int,
+    ref_entries: list[RefEntry],
+    dossiers_dir: Path,
+) -> SectionEvidence:
+    """Aggregates every tagged claim block whose span falls inside
+    `[section_start, section_end)` -- the exact span a `library_cards.
+    TopicSection` describes -- into one set of review-facing signals for
+    that section's review card. `reviewed` answers "is this span still
+    covered by an active UNREVIEWED marker" directly from `find_markers`
+    (file- or section-scoped, same innermost-marker-wins reasoning
+    `scan_file` itself uses), independent of whether the section actually
+    has any tagged claims -- a section with prose but no `[EVIDENCE]`/
+    `[ADAPTED]`/`Coach judgment` anchor is still un-reviewed if a covering
+    marker says so."""
+    blocks = [b for b in find_claim_blocks(text) if section_start <= b.start < section_end]
+    markers = find_markers(text)
+    reviewed = not any(
+        m.scope_start <= section_start and section_end <= m.scope_end for m in markers
+    )
+
+    confidences: list[str] = []
+    tags: list[str] = []
+    source_count = 0
+    weak_source_count = 0
+    unresolved_count = 0
+    for block in blocks:
+        claim_text = text[block.start : block.end]
+        confidence = CONFIDENCE_RE.search(claim_text)
+        if confidence:
+            confidences.append(confidence.group(1))
+        if block.tag_kind:
+            tag = f"[{block.tag_kind}: {block.tag_value}]" if block.tag_value else block.tag_kind
+            if tag not in tags:
+                tags.append(tag)
+        sources, unresolved = resolve_citations(claim_text, ref_entries)
+        source_count += len(sources)
+        weak_source_count += sum(1 for s in sources if s.is_weak)
+        unresolved_count += len(unresolved)
+
+    lowest = min(confidences, key=_confidence_rank) if confidences else None
+    dossier = find_dossier(text, dossiers_dir)
+    needs_judgment = any(_classify(b.tag_kind) == NEEDS_JUDGMENT for b in blocks)
+
+    return SectionEvidence(
+        lowest_confidence=lowest,
+        tags=tuple(tags),
+        source_count=source_count,
+        weak_source_count=weak_source_count,
+        unresolved_citation_count=unresolved_count,
+        dossier=dossier,
+        reviewed=reviewed,
+        needs_judgment=needs_judgment,
+    )
+
+
 # --- terminal rendering ----------------------------------------------------------
 
 

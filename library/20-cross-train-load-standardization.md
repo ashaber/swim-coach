@@ -9,6 +9,9 @@ usable HR data. Could that constant be split per activity type instead,
 grounded in real evidence? See `00-conventions.md` for the tagging scheme
 and `reference_list.md` for full citations.
 
+
+**UNREVIEWED**, pending human review.
+
 ## The question this investigates
 
 Not "is session-RPE/TRIMP valid for cycling/running/paddling" -- that is

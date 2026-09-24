@@ -1,0 +1,33 @@
+schema_version: 1
+file: 15-tiered-session-load.md
+cards:
+- section: the-problem-this-fixes
+  heading: The problem this fixes
+  summary: 62 of Renee's 63 real logged workouts lacked RPE and session_load returned None for them, so
+    daily_loads silently excluded most of her real training from every load signal (CTL/ATL/TSB, ACWR,
+    monotony).
+  recommendation: Trust the load graphs (CTL/ATL/ACWR) as complete even on days you skip the RPE survey
+    -- you don't need to backfill RPE just to make a workout count.
+  content_hash: 4ae29a923537c84e522b3b9022a5de0fb1b830bf997c6d87f70a73e784e973bf
+- section: the-four-tiers
+  heading: The four tiers
+  summary: Session load falls through four tiers by data availability -- sRPE (duration x RPE, HRR-normalized
+    when LTHR is set), HR-based TRIMP, swim pace-intensity factor, then an unconditional duration-only
+    fallback.
+  recommendation: Log RPE when you can, since it's the top-priority tier; if you skip it, the engine still
+    estimates load automatically from HR, pace, or duration alone -- no action needed.
+  content_hash: 539da690ae11d6fa2eaafdd389efa1e7497314c33a8edc4781352b9a9dc823de
+- section: known-limitation-the-tiers-are-not-on-one-numeric-scale
+  heading: 'Known limitation: the tiers are not on one numeric scale'
+  summary: sRPE and HR-based TRIMP scores aren't directly comparable -- TRIMP typically scores a third
+    to half of an equivalent-effort sRPE session -- so mixing tiers in one athlete's history under-represents
+    TRIMP-scored sessions.
+  recommendation: If your profile has lthr_bpm set, sRPE and TRIMP scores are reconciled onto one scale;
+    without it, don't directly compare load numbers between an RPE-logged day and a device-only day.
+  content_hash: bdda9de674ab653e69470bea2f5dc2901e30737d1821ecf2fc89f92bdd179928
+- section: unit-au-arbitrary-units
+  heading: 'Unit: "AU" (arbitrary units)'
+  summary: All four load tiers output values labeled "AU" -- a nominal, project-internal unit, not a physical
+    unit -- an honest naming choice that does not itself resolve cross-tier comparability.
+  recommendation: none -- background only
+  content_hash: a1978912c4a6bd92ea18440a2a14cd513cbb78c2febc8c71aa7f6eba4216d333

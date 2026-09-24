@@ -87,21 +87,6 @@ export function logFormFromDraft(draft, existingForm) {
   return form;
 }
 
-/** Serializes the Check-in tab's form state into a `POST /api/wellness` body. */
-export function serializeWellnessForm(form) {
-  return {
-    date: form.date,
-    sleep_quality: toNumberOrZero(form.sleep_quality),
-    sleep_hours: toNumberOrZero(form.sleep_hours),
-    stress: toNumberOrZero(form.stress),
-    soreness: toNumberOrZero(form.soreness),
-    motivation: toNumberOrZero(form.motivation),
-    resting_hr: toNullableNumber(form.resting_hr),
-    hrv: toNullableNumber(form.hrv),
-    notes: toNullableText(form.notes),
-  };
-}
-
 // --- Profile edit form (Settings tab) ---------------------------------------
 // Pure unit-conversion + (de)serialization helpers for the self-service
 // profile-edit form (GET/PATCH /api/athlete -- see engine/swim_coach/models.py's
@@ -317,16 +302,4 @@ export function serializeProfileForm(form) {
   payload.email_notifications_enabled = !!form.emailNotificationsEnabled;
 
   return payload;
-}
-
-/** Serializes the Feedback tab's form state into a `POST /api/feedback` body.
- * `type` is one of feature_request/comment/bug (research_question is
- * coach-only -- see backend/app/routes/feedback.py); `body` is trimmed (not
- * nulled when blank -- the backend rejects an empty body as a 422, same as
- * any other required-field validation failure). */
-export function serializeFeedbackForm(form) {
-  return {
-    type: form.type,
-    body: (form.body ?? '').trim(),
-  };
 }

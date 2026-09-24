@@ -335,6 +335,50 @@ def require_chat_rate_limit(request: Request, token: str) -> None:
         raise HTTPException(status_code=429, detail="chat rate limit exceeded")
 
 
+def require_library_admin(
+    request: Request, principal: Principal, requested_athlete: str | None
+) -> str:
+    """Raises 403/422 unless this request may act as a library-review admin
+    on `POST /api/library/reviews`; on success returns the resolved
+    athlete slug to record as the review's `reviewed_by` identity -- the
+    ONLY enforcement point that matters. The `is_library_admin` flag
+    `GET /api/me`/`POST /api/auth/google` return is UI convenience for the
+    PWA to decide whether to render the Approvals section, never trusted on
+    its own (a client could always lie about a boolean it doesn't send back
+    to us) -- this checks the server's own `Settings.library_admins`
+    (`LIBRARY_ADMINS` env var) every time.
+
+    - Athlete-session principal: same self-access guarantee as
+      `resolve_athlete` -- `requested_athlete`, if given, must match
+      `principal.athlete` (403 otherwise); the resolved slug is always
+      `principal.athlete`. Then checked against `library_admins`.
+    - Service principal (the legacy shared API_TOKEN, i.e. Andrew's own
+      CLI/scripts): has no athlete identity of its own to default to (unlike
+      `resolve_athlete`, which falls back to a training-data default like
+      "renee" -- meaningless for "who is the human admin reviewing this").
+      `requested_athlete` is therefore REQUIRED (422 if omitted), then
+      checked against `library_admins` same as an athlete principal.
+    - Onboarding principal: always 403 -- no athlete identity to check.
+    """
+    if principal.kind == "onboarding":
+        raise HTTPException(status_code=403, detail="onboarding session has no athlete")
+    if principal.kind == "athlete":
+        if requested_athlete is not None and requested_athlete != principal.athlete:
+            raise HTTPException(status_code=403, detail="athlete mismatch")
+        athlete = principal.athlete
+    else:  # service
+        if requested_athlete is None:
+            raise HTTPException(
+                status_code=422, detail="athlete is required to identify the reviewer"
+            )
+        athlete = requested_athlete
+
+    settings = request.app.state.settings
+    if athlete not in settings.library_admins:
+        raise HTTPException(status_code=403, detail="library admin access required")
+    return athlete
+
+
 def require_daily_chat_cap(request: Request, principal: Principal) -> None:
     """Raises 429 if this athlete SESSION has exceeded
     `CHAT_DAILY_CAP_PER_ATHLETE` requests in the trailing 24h. A no-op for a

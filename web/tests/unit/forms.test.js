@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  serializeWorkoutForm, serializeWellnessForm, serializeFeedbackForm,
+  serializeWorkoutForm,
   parsePaceToSeconds, formatSecondsToPace,
   cmToFeetInches, feetInchesToCm,
   kgToLb, lbToKg,
@@ -73,44 +73,6 @@ describe('serializeWorkoutForm', () => {
     expect(result.laps).toEqual(form.laps);
     expect(result.avg_hr).toBe(128);
     expect(result.max_hr).toBe(161);
-  });
-});
-
-describe('serializeWellnessForm', () => {
-  it('coerces all score/number fields and trims notes', () => {
-    const form = {
-      date: '2026-07-07',
-      sleep_quality: '4',
-      sleep_hours: '7.5',
-      stress: '2',
-      soreness: '3',
-      motivation: '4',
-      resting_hr: '52',
-      hrv: '61.2',
-      notes: '  felt good  ',
-    };
-    expect(serializeWellnessForm(form)).toEqual({
-      date: '2026-07-07',
-      sleep_quality: 4,
-      sleep_hours: 7.5,
-      stress: 2,
-      soreness: 3,
-      motivation: 4,
-      resting_hr: 52,
-      hrv: 61.2,
-      notes: 'felt good',
-    });
-  });
-
-  it('sends null for blank optional fields (resting_hr, hrv, notes)', () => {
-    const form = {
-      date: '2026-07-07', sleep_quality: '3', sleep_hours: '8', stress: '3', soreness: '3', motivation: '3',
-      resting_hr: '', hrv: '', notes: '',
-    };
-    const result = serializeWellnessForm(form);
-    expect(result.resting_hr).toBeNull();
-    expect(result.hrv).toBeNull();
-    expect(result.notes).toBeNull();
   });
 });
 
@@ -399,20 +361,6 @@ describe('serializeProfileForm', () => {
   });
 });
 
-describe('serializeFeedbackForm', () => {
-  it('passes through type and trims body', () => {
-    const form = { type: 'feature_request', body: '  add a pace calculator  ' };
-    expect(serializeFeedbackForm(form)).toEqual({
-      type: 'feature_request',
-      body: 'add a pace calculator',
-    });
-  });
-
-  it('supports comment and bug types', () => {
-    expect(serializeFeedbackForm({ type: 'comment', body: 'nice app' }).type).toBe('comment');
-    expect(serializeFeedbackForm({ type: 'bug', body: 'plan tab crashed' }).type).toBe('bug');
-  });
-});
 
 describe('logFormFromDraft', () => {
   const existingForm = {

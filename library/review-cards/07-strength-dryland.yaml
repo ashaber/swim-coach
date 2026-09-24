@@ -1,0 +1,71 @@
+schema_version: 1
+file: 07-strength-dryland.md
+cards:
+- section: why-strength-is-in-the-plan-at-all-strength-balance-improvement-not-proven-injury-incidence-reduction
+  heading: 'Why strength is in the plan at all: strength/balance improvement, not proven injury-incidence
+    reduction'
+  summary: Three swim-specific RCTs show dryland strength work improves rotator-cuff strength/balance
+    and reduces in-season shoulder imbalance; a prior claim of reduced injury/pain incidence was corrected
+    as overstated.
+  recommendation: Coach frames strength work to the athlete as building shoulder strength/balance, not
+    as a proven injury-prevention or performance intervention.
+  content_hash: eed51b00b7a6ad26439ffd3bed8e8bd71a000ee53409119394a43dd0c5ed4200
+- section: session-duration-45-minutes
+  heading: 'Session duration: 45 minutes'
+  summary: STRENGTH_SESSION_MIN = 45 is an uncited engineering choice sized to fit a real stimulus (warm-up,
+    exercises, work sets) without crowding a day already carrying pool/long-swim volume.
+  recommendation: Coach schedules strength sessions at 45 minutes as a practical default, not a research-derived
+    duration.
+  content_hash: 1679b7aaac8896657ecdf3ffc821f9429e967f456e7798841a1374c01567608f
+- section: what-s-actually-in-a-session-exercise-selection-and-dosing
+  heading: 'What''s actually in a session: exercise selection and dosing'
+  summary: 'Default session: 2x10 reps of five core rotator-cuff/scapular exercises from Tavares (2025),
+    plus full-body work in the second session; evidence supports exercise selection and rep-range, not
+    this exact fixed dose.'
+  recommendation: Coach presents the exercise list/dosing as a reviewed starting point, not a fixed prescription,
+    and treats kettlebell use and return-from-layoff ramping as unevidenced judgment calls.
+  content_hash: 6c77ed95de6a3e0444b0ac9c2154bc1b52e041af2728b5598cbdfc447f031356
+- section: does-strength-training-improve-swim-performance-not-just-reduce-injury
+  heading: Does strength training improve swim performance, not just reduce injury?
+  summary: Land-based strength improves running/cycling economy (Rønnestad & Mujika 2014), but the inference
+    to swimming is weak (low confidence) since swim economy is technique-dominated, not muscular.
+  recommendation: Coach tells the athlete strength work is for shoulder health, not a proven speed booster,
+    and watches whether CSS trends track strength blocks as a weak signal either way.
+  content_hash: 9a33f41cba592c79837e6379556a5267a6b759b9192cb2f31295b5ffaa041fe4
+- section: placement-pool-free-weekdays-never-the-weekend
+  heading: 'Placement: pool-free weekdays, never the weekend'
+  summary: Strength sessions are scheduled on pool-free weekdays, excluding weekends entirely, to avoid
+    same-day shoulder-loading interference with pool practice and to protect long-swim recovery time.
+  recommendation: Coach places both weekly strength sessions on weekdays without pool practice and never
+    on Saturday/Sunday, which stay reserved for the long swim.
+  content_hash: 4c49633bd9ccc533bbc2d42a6cf6d9dbeb843d61fc9464f223c213b88f3faae4
+- section: watch-total-load-not-just-strength-load-when-ramping
+  heading: Watch total load, not just strength load, when ramping
+  summary: A youth-swimmer study links ACWR to shoulder pain (weak, caveated evidence); the point is shoulder
+    load risk comes from total ramping load, not strength sessions alone.
+  recommendation: Coach checks pool volume and long-swim distance, not just strength sessions, whenever
+    shoulder soreness appears during a week where several load sources are ramping together.
+  content_hash: d7d1609de660598fb51feecd9b2ee1f5e94d00f6f5a276c5aa7989f190e17043
+- section: cut-weeks-strength-is-the-first-thing-sacrificed
+  heading: 'Cut weeks: strength is the first thing sacrificed'
+  summary: On a cut week, the last strength session converts to a recovery session before pool volume
+    or the long swim is touched, since strength is the plan's own flexible addition.
+  recommendation: Coach cuts strength before touching pool-coach volume or the long swim, but flags to
+    the athlete when cuts recur back-to-back, since this repeatedly drops shoulder work at a higher-risk
+    time.
+  content_hash: 765790c7732efe76070992270f7d49ae5af2da5398beebae1eb43ab7686c3307
+- section: taper-strength-sessions-bike-path-fixed-build-e-swim-path-still-open
+  heading: 'Taper: strength sessions — bike path fixed (Build E), swim path still open'
+  summary: A real defect let a second bike-week strength session land 3 days pre-race; now fixed via a
+    reduced pre-race count and a wider exclusion window. The swim-path equivalent is still unbuilt.
+  recommendation: Coach applies the reduced-strength/wider-exclusion taper rule for bike-primary race
+    weeks; for swim-primary taper weeks, strength placement still needs manual judgment review since no
+    engine rule exists yet.
+  content_hash: 1a7b0a2796376b13a2594d4c255caf486af26628e507e20e523b720075d1bdfb
+- section: open-questions-not-yet-covered-here
+  heading: Open questions / not yet covered here
+  summary: 'Lists unresolved items: the fixed 2x10 dose and full-body addition are unreviewed judgment;
+    kettlebell choice and layoff-return progression have no citable source; macro-block scaling of strength
+    isn''t implemented.'
+  recommendation: none -- background only
+  content_hash: 4ef48cd94f0b9b66e797de4a5518acd856f869ae4a1cc0d627167607b08fc36a

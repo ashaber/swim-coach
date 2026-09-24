@@ -251,26 +251,11 @@ export async function syncWorkouts({ baseUrl, token, athlete = 'renee' }) {
   });
 }
 
-/** POST {baseUrl}/api/wellness?athlete=<slug> -- logs a daily check-in. */
-export async function postWellness({ baseUrl, token, athlete = 'renee', payload }) {
-  return apiRequest({
-    baseUrl, token, path: `/api/wellness?athlete=${encodeURIComponent(athlete)}`, method: 'POST', body: payload,
-  });
-}
-
-/** GET {baseUrl}/api/wellness?athlete=<slug> -- lists logged check-ins. */
+/** GET {baseUrl}/api/wellness?athlete=<slug> -- lists logged check-ins
+ * (wellness itself is auto-synced from intervals.icu; there's no manual-
+ * entry UI in the PWA -- see ROADMAP.md's tab-consolidation note). */
 export async function listWellness({ baseUrl, token, athlete = 'renee' }) {
   return apiRequest({ baseUrl, token, path: `/api/wellness?athlete=${encodeURIComponent(athlete)}` });
-}
-
-/** POST {baseUrl}/api/feedback?athlete=<slug> -- submits a feature request,
- * comment, or bug report (the coach's own research-gap questions are
- * logged separately, server-side, via the chat tool loop -- see
- * backend/app/tools.py's log_open_question). */
-export async function postFeedback({ baseUrl, token, athlete = 'renee', payload }) {
-  return apiRequest({
-    baseUrl, token, path: `/api/feedback?athlete=${encodeURIComponent(athlete)}`, method: 'POST', body: payload,
-  });
 }
 
 /** GET {baseUrl}/api/feedback?athlete=<slug> -- lists the durable feedback
@@ -278,6 +263,48 @@ export async function postFeedback({ baseUrl, token, athlete = 'renee', payload 
  * questions. */
 export async function listFeedback({ baseUrl, token, athlete = 'renee' }) {
   return apiRequest({ baseUrl, token, path: `/api/feedback?athlete=${encodeURIComponent(athlete)}` });
+}
+
+// --- Resources tab: research-library review cards ---------------------------
+// backend/app/routes/library.py. Card content (summary/recommendation) is
+// authored YAML; everything else (confidence, tags, reviewed/stale flags,
+// latest_review) is derived server-side -- see that route's own docstring.
+
+/** GET {baseUrl}/api/library/cards?athlete=<slug> -- every review card the
+ * athlete's own sport scope may see. */
+export async function listLibraryCards({ baseUrl, token, athlete = 'renee' }) {
+  return apiRequest({ baseUrl, token, path: `/api/library/cards?athlete=${encodeURIComponent(athlete)}` });
+}
+
+/** GET {baseUrl}/api/library/files/<name>?athlete=<slug> -- one topic file's
+ * full markdown, for the "read full section" jump-to-anchor flow. */
+export async function fetchLibraryFile({ baseUrl, token, athlete = 'renee', name }) {
+  return apiRequest({
+    baseUrl,
+    token,
+    path: `/api/library/files/${encodeURIComponent(name)}?athlete=${encodeURIComponent(athlete)}`,
+  });
+}
+
+/** POST {baseUrl}/api/library/reviews?athlete=<slug> -- admin-only: records
+ * an accept/flag decision on a review card (server-side-enforced; see
+ * app/auth.py's require_library_admin). `note` is required when flagging. */
+export async function submitLibraryReview({
+  baseUrl, token, athlete = 'renee', file, section, contentHash, decision, note,
+}) {
+  return apiRequest({
+    baseUrl,
+    token,
+    path: `/api/library/reviews?athlete=${encodeURIComponent(athlete)}`,
+    method: 'POST',
+    body: {
+      file,
+      section,
+      content_hash: contentHash,
+      decision,
+      ...(note ? { note } : {}),
+    },
+  });
 }
 
 // --- Coach-mode Q&A (session/workout-scoped "ask the coach") ---------------

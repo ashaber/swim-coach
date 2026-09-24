@@ -36,7 +36,7 @@ MOCK_IDENTITY = {'name': 'Renee', 'athlete': 'renee', 'role': 'athlete'}
 # without it, loadSettings() treats this as a stale pre-cutover value and
 # drops the token (see that module's migration doc comment). Only the base
 # `page` fixture below seeds this by default -- test_coach_chat.py /
-# test_log_checkin.py override `page` and deliberately do NOT seed settings,
+# test_manual_log.py override `page` and deliberately do NOT seed settings,
 # so their "unconfigured" test cases (no backend URL/session yet) still
 # exercise that empty state; they configure it themselves
 # (`_configure_backend`) when a test needs it.

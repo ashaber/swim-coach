@@ -1,8 +1,8 @@
 # Ultra feeding: the 90-minute wall, in-swim carbohydrate, and rehydration
 
-**REVIEWED** — drafted from `library/research-dossiers/2026-07-13-ultra-feeding.md`
-(sources independently spot-verified); pending human review before treated
-as grounding truth, per `00-conventions.md`.
+**Human-reviewed** (2026-07-28) — drafted from
+`library/research-dossiers/2026-07-13-ultra-feeding.md` (sources
+independently spot-verified), per `00-conventions.md`.
 
 Answers the athlete's hottest logged question (asked 3x): a "my body is
 done" wall at ~90 minutes that coincides with her habitual pool-session

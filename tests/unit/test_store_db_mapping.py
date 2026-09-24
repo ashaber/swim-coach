@@ -19,6 +19,7 @@ from swim_coach.models import (
     Event,
     Feedback,
     HealthStatus,
+    LibraryReview,
     MacroBlock,
     MacroPlan,
     Session,
@@ -33,6 +34,7 @@ from swim_coach.store_db import (
     event_to_row,
     feedback_to_row,
     health_status_to_row,
+    library_review_to_row,
     macro_to_row,
     row_to_allowed_email,
     row_to_athlete,
@@ -40,6 +42,7 @@ from swim_coach.store_db import (
     row_to_event,
     row_to_feedback,
     row_to_health_status,
+    row_to_library_review,
     row_to_macro,
     row_to_threshold_record,
     row_to_week,
@@ -363,6 +366,43 @@ def test_feedback_mapping_round_trip_with_session_linkage():
     assert row["session_date"] == date(2026, 7, 6)
     assert row["session_sport"] == "swim_pool"
     assert row_to_feedback(row) == f
+
+
+def _library_review(**overrides) -> LibraryReview:
+    defaults = dict(
+        id=uuid.uuid4(),
+        file="07-strength-dryland.md",
+        section="session-duration-45-minutes",
+        content_hash="deadbeef" * 8,
+        decision="accepted",
+        note=None,
+        reviewed_by=AID,
+        created_at=datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc),
+    )
+    defaults.update(overrides)
+    return LibraryReview(**defaults)
+
+
+def test_library_review_mapping_round_trip():
+    review = _library_review()
+    row = library_review_to_row(review)
+    assert row["id"] == review.id
+    assert row["file"] == review.file
+    assert row["section"] == review.section
+    assert row["content_hash"] == review.content_hash
+    assert row["decision"] == review.decision
+    assert row["note"] == review.note
+    assert row["reviewed_by"] == review.reviewed_by
+    assert row["created_at"] == review.created_at
+    assert row_to_library_review(row) == review
+
+
+def test_library_review_mapping_round_trip_flagged_with_note():
+    review = _library_review(decision="flagged", note="the Manske citation looks off")
+    row = library_review_to_row(review)
+    assert row["decision"] == "flagged"
+    assert row["note"] == "the Manske citation looks off"
+    assert row_to_library_review(row) == review
 
 
 def test_coach_text_storage_key_shape():

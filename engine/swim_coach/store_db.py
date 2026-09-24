@@ -57,6 +57,7 @@ from swim_coach.models import (
     Event,
     Feedback,
     HealthStatus,
+    LibraryReview,
     MacroPlan,
     Sport,
     ThresholdRecord,
@@ -287,6 +288,35 @@ def row_to_coach_grant(row: dict[str, Any]) -> CoachGrant:
         chat_visibility=row["chat_visibility"],
         granted_at=row["granted_at"],
         revoked_at=row["revoked_at"],
+    )
+
+
+def library_review_to_row(review: LibraryReview) -> dict[str, Any]:
+    """Like `coach_grant_to_row`, `library_reviews` has no `data` JSONB blob
+    -- every LibraryReview field maps directly onto its own column."""
+    return {
+        "id": review.id,
+        "file": review.file,
+        "section": review.section,
+        "content_hash": review.content_hash,
+        "decision": review.decision,
+        "note": review.note,
+        "reviewed_by": review.reviewed_by,
+        "created_at": review.created_at,
+    }
+
+
+def row_to_library_review(row: dict[str, Any]) -> LibraryReview:
+    return LibraryReview(
+        schema_version=1,
+        id=row["id"],
+        file=row["file"],
+        section=row["section"],
+        content_hash=row["content_hash"],
+        decision=row["decision"],
+        note=row["note"],
+        reviewed_by=row["reviewed_by"],
+        created_at=row["created_at"],
     )
 
 
@@ -1104,6 +1134,42 @@ class DbStore(StoreInterface):
             )
             row = cur.fetchone()
         return row_to_coach_grant(row) if row is not None else None
+
+    # --- Library reviews (web/resources-tab-library-review) -----------------
+
+    def save_library_review(self, entry: LibraryReview) -> None:
+        row = library_review_to_row(entry)
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                insert into library_reviews
+                    (id, file, section, content_hash, decision, note, reviewed_by, created_at)
+                values
+                    (%(id)s, %(file)s, %(section)s, %(content_hash)s, %(decision)s,
+                     %(note)s, %(reviewed_by)s, %(created_at)s)
+                """,
+                row,
+            )
+
+    def list_library_reviews(
+        self, *, file: str | None = None, section: str | None = None
+    ) -> list[LibraryReview]:
+        with self._connect() as conn, conn.cursor() as cur:
+            wheres = []
+            params: list[Any] = []
+            if file is not None:
+                wheres.append("file = %s")
+                params.append(file)
+            if section is not None:
+                wheres.append("section = %s")
+                params.append(section)
+            query = "select * from library_reviews"
+            if wheres:
+                query += " where " + " and ".join(wheres)
+            query += " order by created_at desc"
+            cur.execute(query, params)
+            rows = cur.fetchall()
+        return [row_to_library_review(r) for r in rows]
 
     # --- Coach texts (verbatim, saved BEFORE parsing) -------------------
 

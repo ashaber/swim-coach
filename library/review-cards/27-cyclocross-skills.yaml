@@ -1,0 +1,54 @@
+schema_version: 1
+file: 27-cyclocross-skills.md
+cards:
+- section: why-a-skills-day-is-not-an-interval-day
+  heading: Why a skills day is not an interval day
+  summary: Cyclocross demands technical skill under repeated surges, not steady power; practicing handling
+    at high intensity is counter-productive since fatigue degrades motor learning, so skills work stays
+    easy to protect the week's hard-day budget.
+  recommendation: Coach schedules a dedicated low-intensity skills day (not an interval session) for cyclocross
+    athletes, keeping technical practice separate from — and not counted toward — the week's hard-day
+    total.
+  content_hash: 00f15174732318b19adfbe3b3f5b3bbd6d532fd416b3a24f7105622a044a8b58
+- section: the-drill-catalogue
+  heading: The drill catalogue
+  summary: Lists five ~10-minute drill families — dismount/remount, barrier practice, off-camber/180 cornering,
+    loose-surface handling, run-ups — drawn from standard practitioner cyclocross coaching (Burney, USA/British
+    Cycling), recorded as coaching craft, not a cited study.
+  recommendation: Coach rotates athletes through these five standard cyclocross handling drills (dismounts,
+    barriers, cornering, loose-surface riding, run-ups) as the concrete content of each skills-day session.
+  content_hash: c443925df4289db6865bccb0f6e0878f3e7ab211fe5356dd4af996c7b0b7f627
+- section: session-shape
+  heading: Session shape
+  summary: 'Specifies session structure: 10-min warm-up, four ~10-minute drill blocks with easy spinning
+    between, 5-min cooldown (~55 min total) — long enough for repetition, short enough to keep movement
+    quality high; not sized to weekly volume.'
+  recommendation: 'Coach structures every skills day as ~55 minutes: warm-up, four 10-minute drill blocks,
+    cooldown — a fixed nominal shape independent of that week''s overall volume target.'
+  content_hash: c7076e45c258bea2c1a6b1c40ba030a8f7baac3971cfcebfb9c2621ad38d3c94
+- section: why-rpe-2-4-not-a-power-target
+  heading: Why RPE 2–4, not a power target
+  summary: 'Session-level sRPE target corrected from 5-7 to 2-4: sRPE rates the WHOLE session (Foster
+    et al.), not peak per-block effort, so an honestly-rated skills day scores 2-4, avoiding load inflation;
+    no power target given.'
+  recommendation: Coach logs skills days at sRPE 2-4 (whole-session, not peak-moment) and never assigns
+    a power/zone target — drill steps carry only an easy RPE cue, keeping the day out of hard-day counts.
+  content_hash: 42ca2bae8745617dcc6645f10ddfe4a6aa0173d235dabe139ff11158da7634b9
+- section: rotate-the-subset-don-t-drill-the-same-thing-every-week
+  heading: Rotate the subset, don't drill the same thing every week
+  summary: Drill selection deterministically rotates through the five-drill catalogue by session index,
+    so back-to-back skills days differ while every drill recurs regularly — reflecting the motor-learning
+    principle that varied practice retains better than repeating one skill.
+  recommendation: Coach doesn't repeat the same drill set every skills day — the rotation automatically
+    varies which drills an athlete practices session to session, supporting better retention than blocked
+    repetition.
+  content_hash: 55a7c08aadc8639d7d698248f37b1b0efe2ae03f3d7cc27c3843f27ca58f9d67
+- section: crash-risk-rationale
+  heading: Crash-risk rationale
+  summary: Frames skills practice as injury mitigation — cyclocross injuries are predominantly crash-driven,
+    and drills rehearse the maneuvers (dismounts, corners, barriers) most likely to cause one; grounded
+    in one preliminary study, link is coach inference.
+  recommendation: 'Coach positions the skills day as crash-prevention: regularly rehearsing dismounts,
+    barriers, and off-camber cornering at controlled effort, tracking near-misses/falls over a season
+    to test whether it actually reduces race-day crashes.'
+  content_hash: 7fb3857790d235a28a5cdc504b67fef9e81e1b78e616aedfbcceb9376e5c0b75

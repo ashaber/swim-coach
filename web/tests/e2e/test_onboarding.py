@@ -50,7 +50,7 @@ ATHLETE_SESSION = (
 # test_identity_gate.py installs, just duplicated here (each e2e file is
 # self-contained about what browser/network surface it needs, per this
 # repo's existing convention -- see e.g. test_profile_edit.py's own
-# _athlete_route rather than importing test_log_checkin.py's).
+# _athlete_route rather than importing test_manual_log.py's).
 _FAKE_GSI_INIT_SCRIPT = """
 (() => {
   window.google = {

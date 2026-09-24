@@ -1,0 +1,39 @@
+schema_version: 1
+file: 05-open-water-pace-inference.md
+cards:
+- section: why-open-water-pace-needs-correction-at-all
+  heading: Why open-water pace needs correction at all
+  summary: Open water removes pool conditions (flat water, wall push-offs, lane lines); Zamparo's energetics
+    work shows a real but unquantified metabolic-cost penalty versus pool swimming.
+  recommendation: Coach expects open-water pace to run slower than pool CSS pace and treats all correction
+    constants here as provisional starting guesses pending calibration.
+  content_hash: 2ef30b709ac8a35bc04abf3c8a4bba53ee94e59327a2fff106a34c476fc5ef2f
+- section: wetsuit-correction-wetsuitadjs-4-5-s-100m-faster
+  heading: 'Wetsuit correction: `WETSUIT_ADJ_S = -4.5` (s/100m, faster)'
+  summary: WETSUIT_ADJ_S = -4.5s/100m is the coach-judgment midpoint of a commonly cited -3 to -6s/100m
+    wetsuit buoyancy-assist range, uncalibrated against this athlete's own swims.
+  recommendation: Coach applies a -4.5s/100m pace adjustment for wetsuit swims but flags the number for
+    recalibration once 3+ wetsuit and 3+ skins swims are logged; wetsuit choice also affects race-category
+    eligibility.
+  content_hash: 0f20fd1d2222b8c1af4c5ca80451a888cbae70d868a08be4df76295c2360fc48
+- section: conditions-correction-conditionsadjs
+  heading: 'Conditions correction: `CONDITIONS_ADJ_S`'
+  summary: Calm/moderate/rough open-water conditions add +2.0/+5.0/+8.0s/100m penalties (coach judgment,
+    low confidence); ordering is supported by a practitioner pacing-decay-curve resource, not the exact
+    values.
+  recommendation: Coach applies escalating pace penalties for rougher conditions and recalibrates once
+    3+ logged open-water swims let predicted vs. actual pace be compared.
+  content_hash: 32d8d8f50440ccf3560451bf8842d686c11a0f396d10cc268239823b464d7de6
+- section: cold-water-correction-coldwaterthresholdc-16-0-coldwateradjs-2-0
+  heading: 'Cold-water correction: `COLD_WATER_THRESHOLD_C = 16.0`, `COLD_WATER_ADJ_S = 2.0`'
+  summary: Below 16.0°C, a flat +2.0s/100m penalty applies for added neuromuscular/thermal cost; the threshold/penalty
+    pair is coach judgment, uncited, and currently inactive for the athlete's ~23-25°C A-event.
+  recommendation: Coach applies the cold-water penalty only if water is below 16°C; for the current primary
+    event this correction doesn't apply and isn't a calibration priority yet.
+  content_hash: 8fee61c760c6a1aac524f9ecc623973a0f72b219c49e41bafb86238870488f9c
+- section: what-calibration-will-look-like-in-practice
+  heading: What calibration will look like in practice
+  summary: 'Describes the manual loop: compare infer_ow_pace() predictions against logged open-water swim
+    pace, and adjust constants if a systematic bias appears; not automated as of Day 4.'
+  recommendation: none -- background only
+  content_hash: fa1f40ad0ac715afaa638ce36f68497f51be329246dd82081f9f19dd15225d65

@@ -1721,6 +1721,49 @@ class CoachGrant(BaseModel):
     revoked_at: datetime | None = None
 
 
+LibraryReviewDecision = Literal["accepted", "flagged"]
+
+
+class LibraryReview(BaseModel):
+    """One admin decision on a `library/*.md` review card (web/
+    resources-tab-library-review build, `docs/library-review.md`).
+
+    `file`/`section` name a `library_cards.ReviewCardEntry` (`file` is the
+    topic file's own filename, e.g. `"07-strength-dryland.md"`; `section` is
+    its slug) -- there is deliberately no foreign key onto a `library_cards`
+    table, because cards are authored/versioned as YAML in the repo, never a
+    DB row. `content_hash` is copied from the card at review time so a later
+    `library-review-apply` run (`engine/swim_coach/cli.py`) can tell whether
+    the section text the admin actually reviewed is still current before
+    stripping its UNREVIEWED marker -- an accepted decision whose hash no
+    longer matches the live section is stale and must be re-reviewed, never
+    silently applied.
+
+    Append-only, same convention as `Feedback`/`HealthStatus`: a new review
+    of the same `(file, section)` is a NEW row, never an edit of a previous
+    one, so the full decision history survives even after a `decision`
+    changes. The store layer's `list_library_reviews` returns most-recent-
+    first; callers wanting "the current verdict" take the first entry for a
+    given `(file, section)`.
+
+    A `"flagged"` decision also creates a `Feedback` row (`type=
+    "research_question"`, `source="coach"`, `context={"topic":
+    "library-review", "file":..., "section":...}`, `body=note`) so a flag
+    lands in the same research queue every other unresolved gap does --
+    handled by `backend/app/routes/library.py`, not by this model.
+    """
+
+    schema_version: int = 1
+    id: UUID
+    file: str
+    section: str
+    content_hash: str
+    decision: LibraryReviewDecision
+    note: str | None = None
+    reviewed_by: UUID  # the admin's own athlete_id
+    created_at: datetime
+
+
 class AllowedEmail(BaseModel):
     """One entry in the server-side beta allowlist (Slice 1 "verified
     identity" -- see backend/app/routes/auth.py).

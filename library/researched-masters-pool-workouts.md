@@ -1,8 +1,8 @@
 # Researched masters pool workouts (real, sourced)
 
-**REVIEWED**: this file is agent-authored per `00-conventions.md`'s
-workflow and needs Andrew's human review before being treated as settled
-grounding truth.
+**Human-reviewed:** this file is agent-authored per `00-conventions.md`'s
+workflow; Andrew has reviewed it and it is treated as settled grounding
+truth.
 
 ## Purpose and status
 

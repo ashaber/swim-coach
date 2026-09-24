@@ -1,0 +1,53 @@
+schema_version: 1
+file: 06-long-swim-progression.md
+cards:
+- section: why-the-long-swim-gets-first-class-treatment
+  heading: Why the long swim gets first-class treatment
+  summary: The continuous (or stage) long swim is the training stimulus most specific to race demands,
+    rehearsing multi-hour fueling/pacing/durability; event format changes weekly composition, not macro
+    volumes.
+  recommendation: Coach treats the long swim as the plan's spine and the primary place multi-hour race-specific
+    fueling and pacing get rehearsed.
+  content_hash: 439127d7c44e3f1c09c8b012026e6ea3496f8c285fd7787b2d2fd00b46dea142
+- section: the-core-injury-risk-evidence-single-session-spikes
+  heading: 'The core injury-risk evidence: single-session spikes'
+  summary: A large running cohort found injury risk rises sharply when a single session exceeds the prior-30-day
+    longest effort by more than ~10%, more predictive than ACWR or weekly ramps.
+  recommendation: Coach caps any single long-swim jump at SINGLE_SESSION_STEP_CAP (15%) over the athlete's
+    actual longest swim in the last 30 days, enforced on every ladder advance.
+  content_hash: 578c7b60a1401cb72e5529e31462a03c2e38cd7078cd97b3af50b16f425f1b3d
+- section: milestone-recovery-3-5-days
+  heading: 'Milestone recovery: 3-5 days'
+  summary: After a milestone long swim, 3-5 recovery days are prescribed, informed by the single-session
+    spike-risk finding and channel-swimming community practice treating long swims as discrete milestones.
+  recommendation: Coach schedules easier days for 3-5 days after a milestone long swim, tracking the countdown
+    across weekly /adapt calls via a recorded milestone date.
+  content_hash: aa917fa5cd9181fef1d1576a9068b3fde4612c8f94a4edfe3fa222d2fbefbefe
+- section: singleday-format-the-escalating-ladder
+  heading: '`single_day` format: the escalating ladder'
+  summary: For single continuous events, the long swim escalates toward 60-70% of event distance via 2-3
+    major milestones (Santa Barbara Channel Swimming Association guidance), bounded by step/peak caps.
+  recommendation: Coach advances the long swim toward a peak of ~70% of event distance in milestone jumps,
+    never exceeding the step cap or peak-share ceiling.
+  content_hash: 5689e9aca3a2aee17050aec7d54565a01cde273a5b7adae0f38b3d8479a23cf4
+- section: multidaystage-format-back-to-back-weekend-swims
+  heading: '`multi_day_stage` format: back-to-back weekend swims'
+  summary: For stage events, weekly long-swim volume splits across Saturday (55%, fresher day) and Sunday,
+    with Saturday capped at 30-40% of event distance per ROADMAP's design intent — no single monster swim.
+  recommendation: Coach schedules Saturday as the longer stage day and Sunday as swum on Saturday's fatigue,
+    emphasizing overnight refueling/recovery between the two days rather than a multi-day rest window.
+  content_hash: 56b8d61e730ce049f691323a8c9cb474ebb6554949bbd283019af7c75a01e6e7
+- section: format-switching
+  heading: Format switching
+  summary: The athlete's A event may switch between single_day and multi_day_stage formats if the ladder
+    isn't tracking well; both formats share the same underlying constants, making a switch a cheap re-scaffold.
+  recommendation: Coach can recommend switching event format at a decision point without rebuilding the
+    macro plan, since block volumes are format-independent.
+  content_hash: 1b3342c2924a5199e4222094bf51389a8713d863d4b312e0226566673b25bf05
+- section: pool-session-placeholder-sizing
+  heading: Pool-session placeholder sizing
+  summary: Pool-coach sessions are sized at a fixed 75min/3500m placeholder when a real coach exists;
+    without one, the engine sizes pool days proportionally to weekly target volume with a 300m floor.
+  recommendation: Coach relies on fixed placeholder sizing only with a real pool coach; otherwise trusts
+    proportional sizing, aware early-restart weeks with many pool days can modestly overshoot target volume.
+  content_hash: ab5ca758d20b93bf839b093b30e1f286e79ce6a102a6cd7ce9fc20465d3e65eb

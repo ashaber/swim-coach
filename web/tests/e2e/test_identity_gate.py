@@ -31,7 +31,7 @@ from playwright.sync_api import sync_playwright
 from conftest import BROWSERS, MOCK_IDENTITY, MOCK_SETTINGS, seed_settings
 
 # Same CORS-preflight-aware mocking convention as test_coach_chat.py /
-# test_log_checkin.py (see their module docstrings): the mocked backend is a
+# test_manual_log.py (see their module docstrings): the mocked backend is a
 # different origin than the app itself, so the app's Authorization header
 # triggers a real CORS preflight (OPTIONS) that WebKit enforces strictly even
 # against a mocked/fulfilled response.

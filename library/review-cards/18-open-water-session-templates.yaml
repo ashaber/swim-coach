@@ -1,0 +1,35 @@
+schema_version: 1
+file: 18-open-water-session-templates.md
+cards:
+- section: why-this-exists
+  heading: Why this exists
+  summary: Long-swim and stage sessions previously had no real content beyond a distance number; this
+    module supplies general, athlete-parameterized open-water session templates a coach can select by
+    name, mirroring existing pool/strength template patterns.
+  recommendation: none -- background only
+  content_hash: 30e7bc6bfb4d769a9432404964b4a98bbbb3f4f196d221ac053d4ffd38c9078c
+- section: what-this-file-is-and-isn-t
+  heading: What this file is (and isn't)
+  summary: Nearly all template content (rep counts, rest durations, warm-up proportions) is Coach judgment,
+    not evidence-tagged research; only the feed-window and back-to-back stage-fatigue rationales lean
+    on evidence documented elsewhere in the library.
+  recommendation: none -- background only
+  content_hash: 48365187410679ec8cb4bf4fe1612f586f37c89ce045d8a8c90ecb186c633120
+- section: duration-floor-design-skillscalable-vs-endurancefloor
+  heading: 'Duration-floor design: `skill_scalable` vs `endurance_floor`'
+  summary: Templates are tagged skill_scalable (safe to cut proportionally in taper, e.g. pacing/sighting
+    drills) or endurance_floor (fueling/fatigue sessions needing real duration to work); each endurance_floor
+    template declares a 75-90 min minimum and refuses to build shorter.
+  recommendation: For a shorter taper-day session, use a skill_scalable template (pacing, sighting, breathing);
+    don't ask to cut a feed-window, stage-simulation, or race-rehearsal session below its built-in duration
+    floor.
+  content_hash: e38e3f21690ee8085392c9bd8475f4c6baf854317a8ae6354edfd03cacbe827e
+- section: deliberate-deviation-from-the-source-material-no-eyes-closed-sighting-drill
+  heading: 'Deliberate deviation from the source material: no eyes-closed sighting drill'
+  summary: The sighting-drill template deliberately omits the source material's eyes-closed "drift awareness"
+    component -- a real open-water safety risk (disorientation, an unprepared support boat) -- achieving
+    the same training value through sighting-frequency comparison instead.
+  recommendation: Sighting drills will never ask you to swim open water with your eyes closed -- that
+    risk was intentionally excluded in favor of a frequent-vs-infrequent sighting comparison that trains
+    the same skill safely.
+  content_hash: 510d4558765982c79ccc6f57b04da90b327c9bb5ecc64e44568a1a631c6cfde5

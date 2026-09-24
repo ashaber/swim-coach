@@ -24,6 +24,9 @@ constants (`IN_BAND_FRAC`, `FADE_FLAG_PCT`) additionally carry an
 ADAPTED-cycling tag with its own Confidence and Test line, in the
 "Interval quality vs. target" section below.
 
+
+**UNREVIEWED**, pending human review.
+
 ## Deterministic activity-stream interval analyzer
 
 Grounds `engine/swim_coach/interval_analysis.py` (detect sustained efforts

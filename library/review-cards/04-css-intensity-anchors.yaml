@@ -1,0 +1,44 @@
+schema_version: 1
+file: 04-css-intensity-anchors.md
+cards:
+- section: why-anchor-to-css-not-power-or-heart-rate
+  heading: Why anchor to CSS, not power or heart rate
+  summary: Explains CSS-anchored pace, not power/HR, is used because swimming lacks reliable low-cost
+    power meters and water immersion suppresses HR versus land effort at equal intensity.
+  recommendation: Coach primarily uses pace (CSS-derived) to set intensity targets, with HR/RPE as secondary
+    anchors, especially for pool-coach-assigned sessions with unknown target pace.
+  content_hash: f4d1e16a45ec8138311c4bdf464a64d4e1854655024f567e875fc7c42c897a91
+- section: critical-swim-speed-css
+  heading: Critical Swim Speed (CSS)
+  summary: CSS = (t400-t200)/2 from a paired time-trial, validated against lactate threshold (Wakayoshi
+    1992); a swim-specific critical-velocity foundation for pace zones, re-tested periodically.
+  recommendation: Coach re-tests CSS every 4-6 weeks and treats a zone table older than 6-8 weeks as due
+    for retest before trusting pace targets closely.
+  content_hash: 8448967e234a82be79476746764ec86497f475dfe541c09bb94d8114539375d5
+- section: the-z1-z5-zone-table
+  heading: The Z1-Z5 zone table
+  summary: Five zones (Z1-Z5) are built as second-per-100m offsets from CSS (Z4=CSS); offset widths are
+    coach judgment, not independently published, pending per-athlete validation.
+  recommendation: Coach assigns Z1-Z5 pace targets from CSS offsets, but watches whether logged Z2 RPE
+    trends down over time as the signal the offsets are working.
+  content_hash: b739f292642c2b7f2562065db3a61f59573311170c7281ad4d8f4e13a6af726c
+- section: negative-split-pacing-z2-long-swim-target-discipline
+  heading: Negative-split pacing (Z2 long-swim target discipline)
+  summary: Elite open-water 10km medalists negative-split (Saavedra 2018); a large marathon-runner dataset
+    shows negative/flat pacing beats fast starts. Long swims should build pace, not front-load it.
+  recommendation: Coach instructs the athlete to hold or build into Z2 pace across a long swim rather
+    than starting fast, and flags a positive split as possible under-fueling/over-pacing.
+  content_hash: f7c0f9ad59a2765ffe95bdf0a73f4a77aaeacad7016d0ab1ce01f670cbff6b01
+- section: dryland-strength-as-an-intensity-adjacent-input
+  heading: Dryland strength as an intensity-adjacent input
+  summary: Two weekly strength sessions compete for the same weekly training-stress budget as CSS-anchored
+    swim zones; three swim-specific RCTs support the twice-weekly frequency at high confidence.
+  recommendation: Coach accounts for strength sessions as real training load when planning weekly stress
+    alongside CSS-zone swim volume, not as a separate, load-free add-on.
+  content_hash: 46756de0ddca03a89f89593dcc9fb1816c998f60deef8e3f43e2caf0c02a4f8d
+- section: open-questions-not-yet-covered-here
+  heading: Open questions / not yet covered here
+  summary: 'Notes two gaps: zone-specific fueling lives in other files, and HR-based secondary zone anchoring
+    isn''t implemented in zones.py despite the data model allowing it.'
+  recommendation: none -- background only
+  content_hash: b83d543e5ed6dcf12454f94671459a3b95bce38c246d703e875a5ea54c1fe46c
