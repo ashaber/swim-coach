@@ -242,6 +242,32 @@ def test_route_library_files_set_structure_question_reaches_14() -> None:
     assert "14-swim-set-structure.md" in files
 
 
+# --- 33/34/35 routing (2026-09-23 nutrition/kettlebell/return-from-layoff --
+# --- research build): general/all-athlete files, not sport-scoped. -------
+
+
+def test_route_library_files_creatine_question_reaches_33() -> None:
+    files = route_library_files("Should I take creatine supplements?")
+    assert "33-daily-nutrition-and-supplements.md" in files
+
+
+def test_route_library_files_kettlebell_question_reaches_34() -> None:
+    files = route_library_files("What kettlebell exercises should I do for my strength session?")
+    assert "34-kettlebell-strength-programming.md" in files
+
+
+def test_route_library_files_layoff_question_reaches_35() -> None:
+    files = route_library_files("I'm coming back after 5 months off, how fast can I ramp up?")
+    assert "35-return-from-layoff.md" in files
+
+
+def test_route_library_files_unrelated_question_excludes_33_34_35() -> None:
+    files = route_library_files("What pace should I swim my Z2 set at?")
+    assert "33-daily-nutrition-and-supplements.md" not in files
+    assert "34-kettlebell-strength-programming.md" not in files
+    assert "35-return-from-layoff.md" not in files
+
+
 # --- sport-scope filtering (IDEA 008: never surface cycling content to a ---
 # --- swim-only athlete, or vice versa; see context.filter_files_by_sport_
 # --- scope's own docstring) ---------------------------------------------

@@ -846,11 +846,14 @@ _LIBRARY_FILES_IN_PRIORITY_ORDER = [
     "03-periodization.md",
     "04-css-intensity-anchors.md",
     "07-strength-dryland.md",
+    "34-kettlebell-strength-programming.md",
     "14-swim-set-structure.md",
     "05-open-water-pace-inference.md",
     "06-long-swim-progression.md",
     "08-ultra-feeding.md",
     "13-reds-energy-availability.md",
+    "33-daily-nutrition-and-supplements.md",
+    "35-return-from-layoff.md",
 ]
 
 _KEYWORD_ROUTES: dict[str, set[str]] = {
@@ -931,6 +934,29 @@ _KEYWORD_ROUTES: dict[str, set[str]] = {
     "appetite": {"13-reds-energy-availability.md"},
     "amenorrhea": {"13-reds-energy-availability.md"},
     "menstrual": {"13-reds-energy-availability.md"},
+    # 33-daily-nutrition-and-supplements.md -- creatine/supplements/protein/
+    # daily carbs/cramping. General/all-athlete content, not sport-scoped.
+    "creatine": {"33-daily-nutrition-and-supplements.md"},
+    "supplement": {"33-daily-nutrition-and-supplements.md"},
+    "protein": {"33-daily-nutrition-and-supplements.md"},
+    "daily carb": {"33-daily-nutrition-and-supplements.md"},
+    "carb periodization": {"33-daily-nutrition-and-supplements.md"},
+    "caffeine": {"33-daily-nutrition-and-supplements.md"},
+    "vitamin d": {"33-daily-nutrition-and-supplements.md"},
+    "iron": {"33-daily-nutrition-and-supplements.md"},
+    # 34-kettlebell-strength-programming.md -- kettlebell/exercise-selection/
+    # sets-reps beyond 07's frequency constant. Cross-routes 07 too.
+    "kettlebell": {"34-kettlebell-strength-programming.md", "07-strength-dryland.md"},
+    "sets and reps": {"34-kettlebell-strength-programming.md"},
+    "sets/reps": {"34-kettlebell-strength-programming.md"},
+    "turkish get-up": {"34-kettlebell-strength-programming.md"},
+    # 35-return-from-layoff.md -- layoff/detraining/coming back after time off.
+    "layoff": {"35-return-from-layoff.md"},
+    "detraining": {"35-return-from-layoff.md"},
+    "coming back": {"35-return-from-layoff.md"},
+    "time off": {"35-return-from-layoff.md"},
+    "months off": {"35-return-from-layoff.md"},
+    "muscle memory": {"35-return-from-layoff.md"},
 }
 
 # Deterministic fallback bucket when no keyword matches -- "why is the plan
