@@ -31,6 +31,7 @@ from swim_coach.models import (
     Event,
     Feedback,
     HealthStatus,
+    LibraryReview,
     MacroBlock,
     MacroPlan,
     Session,
@@ -240,6 +241,21 @@ def _coach_grant(coach_athlete_id: uuid.UUID, athlete_id: uuid.UUID, **overrides
     )
     data.update(overrides)
     return CoachGrant(**data)
+
+
+def _library_review(reviewed_by: uuid.UUID, **overrides) -> LibraryReview:
+    data: dict = dict(
+        id=uuid.uuid4(),
+        file="07-strength-dryland.md",
+        section="session-duration-45-minutes",
+        content_hash="a" * 64,
+        decision="accepted",
+        note=None,
+        reviewed_by=reviewed_by,
+        created_at=datetime.now(timezone.utc),
+    )
+    data.update(overrides)
+    return LibraryReview(**data)
 
 
 def _wellness(athlete_id: uuid.UUID, d: date) -> Wellness:
@@ -1281,6 +1297,90 @@ class StoreContractTests:
         assert first is not None
         assert second is not None
         assert second.status == "revoked"
+
+    # --- library reviews (web/resources-tab-library-review) ---------------
+
+    def test_save_and_list_library_review_round_trip(self, store):
+        admin = _athlete()
+        store.save_athlete(admin)
+        review = _library_review(admin.id)
+        store.save_library_review(review)
+        loaded = store.list_library_reviews()
+        assert len(loaded) == 1
+        assert loaded[0] == review
+
+    def test_list_library_reviews_empty_when_none(self, store):
+        assert store.list_library_reviews() == []
+
+    def test_list_library_reviews_most_recent_first(self, store):
+        admin = _athlete()
+        store.save_athlete(admin)
+        older = _library_review(
+            admin.id, created_at=datetime(2026, 9, 1, tzinfo=timezone.utc)
+        )
+        newer = _library_review(
+            admin.id,
+            section="what-s-actually-in-a-session-exercise-selection-and-dosing",
+            created_at=datetime(2026, 9, 20, tzinfo=timezone.utc),
+        )
+        store.save_library_review(older)
+        store.save_library_review(newer)
+        loaded = store.list_library_reviews()
+        assert [r.id for r in loaded] == [newer.id, older.id]
+
+    def test_list_library_reviews_filters_by_file(self, store):
+        admin = _athlete()
+        store.save_athlete(admin)
+        a = _library_review(admin.id, file="07-strength-dryland.md")
+        b = _library_review(admin.id, file="08-ultra-feeding.md", section="gaps")
+        store.save_library_review(a)
+        store.save_library_review(b)
+        loaded = store.list_library_reviews(file="08-ultra-feeding.md")
+        assert [r.id for r in loaded] == [b.id]
+
+    def test_list_library_reviews_filters_by_section(self, store):
+        admin = _athlete()
+        store.save_athlete(admin)
+        a = _library_review(admin.id, file="07-strength-dryland.md", section="gaps")
+        b = _library_review(admin.id, file="08-ultra-feeding.md", section="gaps")
+        store.save_library_review(a)
+        store.save_library_review(b)
+        loaded = store.list_library_reviews(section="gaps")
+        assert {r.id for r in loaded} == {a.id, b.id}
+
+    def test_list_library_reviews_filters_by_file_and_section(self, store):
+        admin = _athlete()
+        store.save_athlete(admin)
+        target = _library_review(admin.id, file="07-strength-dryland.md", section="gaps")
+        other = _library_review(admin.id, file="08-ultra-feeding.md", section="gaps")
+        store.save_library_review(target)
+        store.save_library_review(other)
+        loaded = store.list_library_reviews(file="07-strength-dryland.md", section="gaps")
+        assert [r.id for r in loaded] == [target.id]
+
+    def test_save_library_review_is_append_only_a_re_review_is_a_new_row(self, store):
+        admin = _athlete()
+        store.save_athlete(admin)
+        first = _library_review(admin.id, decision="flagged", note="check the Manske citation")
+        second = _library_review(admin.id, decision="accepted", note=None)
+        store.save_library_review(first)
+        store.save_library_review(second)
+        loaded = store.list_library_reviews(file=first.file, section=first.section)
+        assert len(loaded) == 2
+        # Most recent (the later save) is the current verdict.
+        assert loaded[0].decision == "accepted"
+        assert loaded[1].decision == "flagged"
+
+    def test_library_review_flagged_carries_a_note(self, store):
+        admin = _athlete()
+        store.save_athlete(admin)
+        review = _library_review(
+            admin.id, decision="flagged", note="the RCT citation looks weak"
+        )
+        store.save_library_review(review)
+        loaded = store.list_library_reviews()[0]
+        assert loaded.decision == "flagged"
+        assert loaded.note == "the RCT citation looks weak"
 
     # --- coach texts -----------------------------------------------------
 

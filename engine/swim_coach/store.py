@@ -25,6 +25,7 @@ from swim_coach.models import (
     Event,
     Feedback,
     HealthStatus,
+    LibraryReview,
     MacroPlan,
     Sport,
     ThresholdRecord,
@@ -295,6 +296,29 @@ class StoreInterface(ABC):
         updated grant, or None if no grant has that id. Idempotent-safe:
         revoking an already-revoked grant just re-sets `revoked_at` again,
         no special-casing."""
+        ...
+
+    # --- Library reviews (web/resources-tab-library-review) ----------------
+
+    @abstractmethod
+    def save_library_review(self, entry: LibraryReview) -> None:
+        """Append one admin review decision on a `library/*.md` review card
+        (see models.LibraryReview). Never overwrites or deletes a previous
+        entry -- a re-review of the same `(file, section)` is a new row, so
+        the full decision history survives."""
+        ...
+
+    @abstractmethod
+    def list_library_reviews(
+        self, *, file: str | None = None, section: str | None = None
+    ) -> list[LibraryReview]:
+        """Every library-review decision, most-recent-first. `file`/
+        `section`, if given, narrow the result to that card only (both
+        given together narrows to one exact card; either alone narrows to
+        every section of that file, or every file's card with that
+        section slug). Callers wanting "the current verdict" for a card
+        take the first entry for that `(file, section)` pair -- this
+        method never collapses history itself."""
         ...
 
     # --- Workout time-series (columnar sidecar, see parse_files) ----------
@@ -863,6 +887,41 @@ class FileStore(StoreInterface):
             for entry in entries:
                 fh.write(json.dumps(entry.model_dump(mode="json")) + "\n")
         return updated
+
+    # --- Library reviews (web/resources-tab-library-review) -----------------
+
+    def _library_reviews_path(self) -> Path:
+        # Single file directly under base_dir, same rationale as
+        # `_feedback_path`/`_coach_grants_path` above -- a review decision
+        # isn't athlete-scoped data (it's about library CONTENT), so it
+        # doesn't fit the per-slug-directory convention.
+        return self.base_dir / "library_reviews.jsonl"
+
+    def save_library_review(self, entry: LibraryReview) -> None:
+        path = self._library_reviews_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry.model_dump(mode="json")) + "\n")
+
+    def list_library_reviews(
+        self, *, file: str | None = None, section: str | None = None
+    ) -> list[LibraryReview]:
+        path = self._library_reviews_path()
+        entries: list[LibraryReview] = []
+        if path.exists():
+            with path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line:
+                        entries.append(LibraryReview.model_validate(json.loads(line)))
+
+        if file is not None:
+            entries = [e for e in entries if e.file == file]
+        if section is not None:
+            entries = [e for e in entries if e.section == section]
+
+        entries.sort(key=lambda e: e.created_at, reverse=True)
+        return entries
 
     # --- Coach texts (verbatim Markdown, saved BEFORE parsing) --------------------
 
