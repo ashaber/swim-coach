@@ -3061,18 +3061,29 @@ function maybeLoadGrants() {
 // failed refresh, see identity.js's mergeMeIntoIdentity doc comment.
 async function maybeRefreshIdentityAdminFlags() {
   if (!state.identity || !state.settingsForm.token || !state.online) return;
-  const meResult = await fetchMe({ baseUrl: state.settingsForm.baseUrl, token: state.settingsForm.token });
-  if (!meResult.ok) {
-    log.warn('identity.refresh_admin_flags_failed', { error: meResult.error, status: meResult.status });
-    return;
+  // api.js's fetchMe (-> apiRequest) already catches every fetch/network
+  // failure internally and resolves {ok: false, error} rather than
+  // rejecting -- this try/catch is pure belt-and-suspenders so a future
+  // change to that contract can never turn this best-effort boot-time
+  // refresh into an unhandled rejection (this fires on nearly every app
+  // boot, unlike a user-triggered action, so there's no click handler
+  // catching it either).
+  try {
+    const meResult = await fetchMe({ baseUrl: state.settingsForm.baseUrl, token: state.settingsForm.token });
+    if (!meResult.ok) {
+      log.warn('identity.refresh_admin_flags_failed', { error: meResult.error, status: meResult.status });
+      return;
+    }
+    const merged = mergeMeIntoIdentity(state.identity, meResult);
+    if (merged === state.identity) return;
+    state.identity = merged;
+    state.coachFor = merged.coachFor || [];
+    saveIdentity(merged);
+    log.info('identity.refresh_admin_flags_succeeded', { isLibraryAdmin: merged.isLibraryAdmin });
+    render();
+  } catch (err) {
+    log.warn('identity.refresh_admin_flags_failed', { error: err.message });
   }
-  const merged = mergeMeIntoIdentity(state.identity, meResult);
-  if (merged === state.identity) return;
-  state.identity = merged;
-  state.coachFor = merged.coachFor || [];
-  saveIdentity(merged);
-  log.info('identity.refresh_admin_flags_succeeded', { isLibraryAdmin: merged.isLibraryAdmin });
-  render();
 }
 
 async function handleGrantSubmit() {
