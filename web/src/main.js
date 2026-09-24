@@ -2303,12 +2303,23 @@ function handleSetLibraryFilter(filter) {
   render();
 }
 
-/** Opens the "read full section" view for one topic file, scrolled to
- * `anchor` -- fetches it if not already cached (offline: cache-only, same
- * fallback posture as loadLibraryCards). */
+/** Opens the "read full section" view for one topic file -- fetches it if
+ * not already cached (offline: cache-only, same fallback posture as
+ * loadLibraryCards). Two entry points, two scroll behaviors (web/
+ * resources-hotfix fix 2 -- was a gap before this fix, the view just landed
+ * wherever the window happened to be scrolled): the Research library list's
+ * card (renderLibraryCard) never passes `anchor`, so this scrolls straight
+ * to the top of the file, same as handleOpenSessionDetail's scrollToTop().
+ * An Approvals card (renderApprovalCard) DOES pass `anchor` (its own
+ * heading -- the specific to-be-reviewed section), so instead of jumping to
+ * the top this waits for the file to finish loading and scrolls to that
+ * heading -- see the anchor-gated effect in render() below
+ * (scrollToLibrarySectionAnchor), which fires once state.libraryFile is
+ * 'ready'. */
 async function handleOpenLibraryFile(name, anchor) {
   if (!name) return;
   state.libraryOpenFile = { name, anchor: anchor || null };
+  if (!anchor) scrollToTop();
   const settings = state.settingsForm;
   const identity = state.identity;
 

@@ -62,10 +62,18 @@ UNREVIEWED_CARD = {
     'latest_review': None,
 }
 CARDS_JSON = json.dumps([REVIEWED_CARD, UNREVIEWED_CARD])
-FILE_BODY = json.dumps({
-    'file': '07-strength-dryland.md',
-    'content': '# Strength & dryland programming\n\n## Session duration: 45 minutes\n\nReal section body text.\n',
-})
+# Both cards' headings appear in this one mocked file body (the mocked route
+# below serves it for any requested filename), with a tall filler block
+# between them -- long enough that "scrolled to the heading" and "scrolled
+# to the top" are actually distinguishable by window.scrollY (web/
+# resources-hotfix fix 2's own scroll-position tests rely on this).
+FILE_CONTENT = (
+    '# Strength & dryland programming\n\n'
+    '## Session duration: 45 minutes\n\nReal section body text.\n\n'
+    + ('Filler paragraph text to create scroll height.\n\n' * 120)
+    + '## Gaps, stated bluntly\n\nApproval section body text.\n'
+)
+FILE_BODY = json.dumps({'file': '07-strength-dryland.md', 'content': FILE_CONTENT})
 
 ADMIN_IDENTITY = {'name': 'Andrew', 'athlete': 'andrew', 'role': 'athlete', 'coachFor': [], 'isLibraryAdmin': True}
 NON_ADMIN_IDENTITY = {'name': 'Renee', 'athlete': 'renee', 'role': 'athlete', 'coachFor': [], 'isLibraryAdmin': False}
@@ -204,6 +212,36 @@ def test_resources_read_full_section_opens_file_and_back_returns(page):
 
     page.click('[data-a="library:close-file"]')
     page.wait_for_selector('.library-card')
+
+
+# --- Detail-view scroll position (web/resources-hotfix fix 2) ---------------
+# Opening a file from the Research library list should land at the top;
+# opening it from an Approvals card (a specific to-be-reviewed section)
+# should land scrolled to that section's heading. Before this fix, both
+# just kept whatever scroll position the card grid happened to have.
+
+def test_opening_from_the_research_library_list_scrolls_to_top(page):
+    page.click('[data-a="tab:resources"]')
+    page.wait_for_selector('.library-card')
+    # Scroll down first, so landing at the top is actually observable.
+    page.evaluate('window.scrollTo(0, 400)')
+    assert page.evaluate('window.scrollY') > 0
+    page.locator('[data-a="library:open-file"]').first.click()
+    page.wait_for_selector('#library-file-content')
+    assert page.evaluate('window.scrollY') == 0
+
+
+def test_opening_from_an_approvals_card_scrolls_to_its_heading(admin_page):
+    admin_page.click('[data-a="tab:resources"]')
+    admin_page.wait_for_selector('.library-card')
+    admin_page.wait_for_selector('h2:has-text("Approvals")')
+    # The Approvals card's own "Read full section" button (UNREVIEWED_CARD,
+    # heading "Gaps, stated bluntly" -- far down FILE_CONTENT's filler
+    # block, well past a scroll-to-top position).
+    approvals = admin_page.locator('section', has=admin_page.locator('h2', has_text='Approvals'))
+    approvals.locator('[data-a="library:open-file"]').click()
+    admin_page.wait_for_selector('#library-file-content')
+    admin_page.wait_for_function('() => window.scrollY > 200')
 
 
 # --- Approvals (admin-only) --------------------------------------------------
