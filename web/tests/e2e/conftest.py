@@ -58,9 +58,11 @@ MOCK_SETTINGS = {'baseUrl': 'https://mock-backend.test', 'token': 'test-e2e-toke
 # more specific '**/api/me*' route AFTER context creation, which -- per
 # Playwright's route-matching order (most-recently-registered wins) --
 # overrides this default.
-_DEFAULT_ME_BODY = json.dumps({
-    'athlete': None, 'name': '', 'role': 'athlete', 'coach_for': [], 'is_library_admin': False,
-})
+# Deliberately EMPTY: identity.js's mergeMeIntoIdentity keeps the saved
+# identity's own isLibraryAdmin/coachFor for any field the response omits,
+# so this default is a true no-op. Asserting coach_for: [] here wiped every
+# coach-roster test's saved coach grants (PR #237 CI regression).
+_DEFAULT_ME_BODY = json.dumps({})
 
 
 def _default_me_route(route) -> None:
