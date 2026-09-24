@@ -84,6 +84,28 @@ export function clearIdentity(storage = localStorage) {
   }
 }
 
+/** Pure merge for the app-start admin-flag refresh (web/resources-hotfix):
+ * a saved identity from BEFORE some admin-only entitlement shipped (e.g.
+ * `is_library_admin`) never picks it up otherwise, since `isLibraryAdmin`/
+ * `coachFor` are only ever written into localStorage at Google sign-in
+ * time (see signIn below). Given a saved `identity` and a GET /api/me
+ * result (api.js's fetchMe -- `{ok, data, error, status}`), returns a new
+ * identity with `isLibraryAdmin`/`coachFor` refreshed from the response
+ * when it succeeded and carried those fields; returns `identity` unchanged
+ * (same object, not a copy) when `meResult` failed or `identity` itself is
+ * null -- the caller's best-effort contract: a failed/offline refresh keeps
+ * whatever was already saved rather than clobbering it with a default. */
+export function mergeMeIntoIdentity(identity, meResult) {
+  if (!identity || !meResult?.ok) return identity;
+  return {
+    ...identity,
+    isLibraryAdmin: typeof meResult.data?.is_library_admin === 'boolean'
+      ? meResult.data.is_library_admin
+      : identity.isLibraryAdmin,
+    coachFor: Array.isArray(meResult.data?.coach_for) ? meResult.data.coach_for : identity.coachFor,
+  };
+}
+
 /** Restore-on-load entry point: the identity to use right now, without any
  * network round trip. main.js calls this at startup the same way it calls
  * loadSettings()/loadChatSession(). */

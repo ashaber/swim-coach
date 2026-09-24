@@ -26,12 +26,15 @@ import {
   fetchWorkoutPacing,
   postCoachWorkoutChatMessage, patchCoachWorkoutChatMuted,
   listLibraryCards, fetchLibraryFile, submitLibraryReview,
+  fetchMe,
 } from './api.js';
 import {
   serializeWorkoutForm, profileFormFromAthlete, serializeProfileForm,
   logFormFromDraft,
 } from './forms.js';
-import { currentIdentity, signIn, signOut, saveIdentity } from './identity.js';
+import {
+  currentIdentity, signIn, signOut, saveIdentity, mergeMeIntoIdentity,
+} from './identity.js';
 import {
   createOnboardingState, validateOnboardForm, onboardPayloadFromForm,
   loadOnboardingActive, saveOnboardingActive, startOnboardingSession, identityFromOnboardSession,
@@ -3024,6 +3027,34 @@ function maybeLoadGrants() {
   loadGrants();
 }
 
+// web/resources-hotfix fix 1: a saved identity restored via currentIdentity()
+// at the top of this file (a plain localStorage read, see initialIdentity)
+// never picks up an admin-only entitlement that started existing/changing
+// AFTER that identity was last saved (isLibraryAdmin is only ever written
+// at Google sign-in -- see identity.js's signIn) -- e.g. an athlete promoted
+// to library admin server-side stays stuck showing the gated Resources
+// section until they explicitly sign out and back in. Called once at app
+// boot (see the bottom of this file) to re-resolve those flags from a fresh
+// GET /api/me, the same call signIn() already makes. Best-effort: offline
+// or any request failure just leaves the saved identity as-is (logged) --
+// this must never block app start or clobber a good cached identity with a
+// failed refresh, see identity.js's mergeMeIntoIdentity doc comment.
+async function maybeRefreshIdentityAdminFlags() {
+  if (!state.identity || !state.settingsForm.token || !state.online) return;
+  const meResult = await fetchMe({ baseUrl: state.settingsForm.baseUrl, token: state.settingsForm.token });
+  if (!meResult.ok) {
+    log.warn('identity.refresh_admin_flags_failed', { error: meResult.error, status: meResult.status });
+    return;
+  }
+  const merged = mergeMeIntoIdentity(state.identity, meResult);
+  if (merged === state.identity) return;
+  state.identity = merged;
+  state.coachFor = merged.coachFor || [];
+  saveIdentity(merged);
+  log.info('identity.refresh_admin_flags_succeeded', { isLibraryAdmin: merged.isLibraryAdmin });
+  render();
+}
+
 async function handleGrantSubmit() {
   if (state.grants.createSubmit.status === 'submitting') return;
   const settings = state.settingsForm;
@@ -3545,6 +3576,7 @@ loadPlan();
 loadPlanLoad();
 maybeLoadProfile();
 maybeLoadGrants();
+maybeRefreshIdentityAdminFlags();
 // loadPlan() above self-gates on isConfigured and is otherwise unconditional
 // at boot; loadHistory() has no such caller-independent self-gate -- until
 // now the only caller was setTab's Dashboard-tab branch, so history stayed
