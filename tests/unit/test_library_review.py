@@ -42,6 +42,7 @@ from swim_coach.library_review import (
     resolve_citations,
     scan_file,
     scan_library,
+    section_evidence,
     slugify,
     sort_for_review,
     strip_marker,
@@ -541,6 +542,64 @@ def test_every_file_index_calls_pending_is_actually_detected():
         "INDEX.md marks these files Human-reviewed, but the scanner still "
         f"finds items for them -- a stale/leftover marker: {sorted(wrongly_queued)}"
     )
+
+
+# --- section_evidence (library_cards / Resources-tab reviewer derived fields) ------
+
+
+def test_section_evidence_aggregates_lowest_confidence_and_both_tags():
+    # Bone loading: EVIDENCE Confidence:high + ADAPTED Confidence:medium ->
+    # lowest of the two is "medium".
+    start = DRAFTED_FILE.index("## Bone loading")
+    end = len(DRAFTED_FILE)
+    ev = section_evidence(DRAFTED_FILE, start, end, _refs(), Path("/nonexistent"))
+    assert ev.lowest_confidence == "medium"
+    assert set(ev.tags) == {"[EVIDENCE: swim]", "[ADAPTED: general-endurance]"}
+    assert ev.source_count == 2  # Gomez-Bruton + Hutson
+    assert ev.reviewed is False  # still under DRAFTED_FILE's file-level marker
+
+
+def test_section_evidence_unreviewed_when_covered_by_file_level_marker():
+    start = DRAFTED_FILE.index("## In-session carbohydrate feeding")
+    end = DRAFTED_FILE.index("## Bone loading")
+    ev = section_evidence(DRAFTED_FILE, start, end, _refs(), Path("/nonexistent"))
+    assert ev.reviewed is False
+
+
+def test_section_evidence_reviewed_when_no_marker_covers_the_span():
+    # SECTION_MARKER_FILE's marker only covers "Open questions..."; the CSS
+    # section above it carries an [EVIDENCE] claim but no active marker.
+    start = SECTION_MARKER_FILE.index("## Critical Swim Speed")
+    end = SECTION_MARKER_FILE.index("## Open questions")
+    ev = section_evidence(SECTION_MARKER_FILE, start, end, _refs(), Path("/nonexistent"))
+    assert ev.reviewed is True
+    assert ev.tags == ("[EVIDENCE: swim]",)
+
+
+def test_section_evidence_weak_source_surfaced():
+    # "the-90-minute-wall" section cites Eston (2012), a ~-marked (weak) source.
+    start = DRAFTED_FILE.index("## The 90-minute wall")
+    end = DRAFTED_FILE.index("## In-session carbohydrate feeding")
+    ev = section_evidence(DRAFTED_FILE, start, end, _refs(), Path("/nonexistent"))
+    assert ev.weak_source_count >= 1
+
+
+def test_section_evidence_no_claims_gives_none_confidence_and_no_tags():
+    ev = section_evidence(
+        "# T\n\n## Empty section\n\njust prose, no tags.\n", 8, 49, [], Path("/nonexistent")
+    )
+    assert ev.lowest_confidence is None
+    assert ev.tags == ()
+    assert ev.source_count == 0
+
+
+def test_section_evidence_unrecognized_confidence_string_ranks_lowest():
+    text = (
+        "# T\n\n**UNREVIEWED**: draft.\n\n## S\n\n"
+        "`[EVIDENCE: swim]` Confidence: weird-value. A claim.\n"
+    )
+    ev = section_evidence(text, text.index("## S"), len(text), [], Path("/nonexistent"))
+    assert ev.lowest_confidence == "weird-value"
 
 
 # --- strip_marker ----------------------------------------------------------------------
