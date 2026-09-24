@@ -2257,6 +2257,10 @@ describe('renderResourcesTab', () => {
       ...baseArgs, isAdmin: true, online: false, cards: { status: 'ready', data: [card({ reviewed: false })], error: null },
     });
     expect(html).toContain('Offline');
+    const acceptMatch = /<button[^>]*data-a="library:review:accept"[^>]*>/.exec(html);
+    const flagMatch = /<button[^>]*data-a="library:review:flag"[^>]*>/.exec(html);
+    expect(acceptMatch[0]).toContain('disabled');
+    expect(flagMatch[0]).toContain('disabled');
   });
 
   it('the offline banner shows when offline and cards are otherwise ready', () => {

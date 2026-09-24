@@ -31,6 +31,22 @@ The sections from "Phase 1" down are the original approved build plan, kept as t
 
 ### Now / Next
 
+- **PWA tab consolidation (web/resources-tab-library-review): Check-in and
+  Feedback tabs retired.** Check-in's daily wellness capture is redundant
+  with intervals.icu auto-sync (every real athlete's check-in rows already
+  carry `source: intervals_sync` in prod) — no replacement manual-entry UI
+  was added; its resting-HR/HRV baseline-deviation cross-check moved back
+  onto the Dashboard tab's own training-load chart, where it originally
+  lived. The Feedback tab (the durable-log browsing UI) is gone too — the
+  underlying data/flows (Ask-the-coach on a session/workout, the coach
+  roster's feedback view) are untouched, just no longer a standalone tab to
+  browse. Further consolidation (e.g. surfacing check-in-style questions
+  directly in Coach chat rather than any dedicated tab at all) is still a
+  live idea, not fully closed. A new **Resources tab** takes their place:
+  today it holds the research-library review cards (see
+  `docs/library-review.md`), and it's structured to be the app's future
+  home for other reference links worth keeping handy (e.g. favorite podcast
+  episodes) — not just library content.
 - **Planned workouts pushed to the Garmin watch (via intervals.icu).** The
   athlete's real requirement: during a session, see the current
   step/exercise on the watch, hit the lap key to advance, have the device

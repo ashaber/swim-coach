@@ -3040,11 +3040,15 @@ function renderLibraryCardGrid(cardsState, filter) {
  * `library_review.sort_for_review` uses server-side, applied here to the
  * card-level `needs_judgment` flag since a card, unlike a raw review item,
  * may bundle several claims. */
-function renderApprovalCard(card, reviewDrafts, reviewSubmit) {
+function renderApprovalCard(card, reviewDrafts, reviewSubmit, online) {
   const key = `${card.file}#${card.section}`;
   const draft = reviewDrafts[key] || '';
   const submitting = reviewSubmit.status === 'submitting' && reviewSubmit.key === key;
   const rowError = reviewSubmit.status === 'error' && reviewSubmit.key === key ? reviewSubmit.error : null;
+  // Disabled offline (per this section's own banner, not just re-stated per
+  // card) as well as while a submit for THIS card is already in flight --
+  // there's nothing to optimistically apply against with no connection.
+  const disabled = submitting || !online;
 
   return `
     <div class="panel library-card">
@@ -3056,11 +3060,11 @@ function renderApprovalCard(card, reviewDrafts, reviewSubmit) {
       <p class="library-card-recommendation"><strong>Coach's call:</strong> ${esc(card.recommendation)}</p>
       <label class="field">
         <span>Flag note (required to flag)</span>
-        <textarea rows="2" data-form="library-review" data-field="note" data-key="${esc(key)}" placeholder="What needs a second look?">${esc(draft)}</textarea>
+        <textarea rows="2" data-form="library-review" data-field="note" data-key="${esc(key)}" placeholder="What needs a second look?" ${!online ? 'disabled' : ''}>${esc(draft)}</textarea>
       </label>
       <div class="settings-actions">
-        <button type="button" class="btn" data-a="library:review:accept" data-file="${esc(card.file)}" data-section="${esc(card.section)}" data-hash="${esc(card.content_hash || '')}" ${submitting ? 'disabled' : ''}>Accept</button>
-        <button type="button" class="btn-ghost" data-a="library:review:flag" data-file="${esc(card.file)}" data-section="${esc(card.section)}" data-hash="${esc(card.content_hash || '')}" ${submitting ? 'disabled' : ''}>Flag</button>
+        <button type="button" class="btn" data-a="library:review:accept" data-file="${esc(card.file)}" data-section="${esc(card.section)}" data-hash="${esc(card.content_hash || '')}" ${disabled ? 'disabled' : ''}>Accept</button>
+        <button type="button" class="btn-ghost" data-a="library:review:flag" data-file="${esc(card.file)}" data-section="${esc(card.section)}" data-hash="${esc(card.content_hash || '')}" ${disabled ? 'disabled' : ''}>Flag</button>
       </div>
       ${rowError ? `<div class="conn-result fail">${esc(rowError)}</div>` : ''}
     </div>`;
@@ -3079,7 +3083,7 @@ function renderApprovalsSection({
       ${!online ? '<div class="chat-banner">Offline -- accept/flag needs a connection.</div>' : ''}
       ${pending.length === 0
         ? '<p class="sub">Nothing waiting on review.</p>'
-        : pending.map((c) => renderApprovalCard(c, reviewDrafts, reviewSubmit)).join('')}
+        : pending.map((c) => renderApprovalCard(c, reviewDrafts, reviewSubmit, online)).join('')}
     </section>`;
 }
 

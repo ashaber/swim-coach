@@ -145,18 +145,6 @@ def _open_dashboard(page):
     page.wait_for_selector('.hist-section')
 
 
-def _open_checkin(page):
-    """Navigates to the Check-in tab -- opens the Dashboard tab FIRST so
-    `state.planLoad` (main.js's loadPlanLoad) actually has data by the time
-    Check-in renders (web/two-panel-load-chart's resolved decision: the
-    Check-in tab reuses that already-fetched state rather than firing its
-    own GET /api/plan/load -- see views.js's renderCheckinTab doc
-    comment)."""
-    _open_dashboard(page)
-    page.click('[data-a="tab:checkin"]')
-    page.wait_for_selector('[data-form="checkin"][data-field="date"]')
-
-
 @pytest.fixture(params=BROWSERS)
 def page(request, base_url):
     """Signed in as the athlete herself (renee), landing on the Plan tab
@@ -303,16 +291,12 @@ def test_selecting_a_different_window_switches_the_active_pill_and_re_renders_th
     assert page.locator('.load-chart-svg').count() == 1
 
 
-def test_wellness_baseline_deviation_no_longer_renders_inline_on_the_athletes_own_dashboard(page):
-    # Resolved decision (web/two-panel-load-chart): moved to the Check-in
-    # tab instead -- see test_log_checkin.py's own coverage of that half.
+def test_wellness_baseline_deviation_renders_inline_on_the_athletes_own_dashboard(page):
+    # The Check-in tab used to hold this instead (moved there so the
+    # Dashboard chart wasn't crowded); that tab is retired (web/
+    # resources-tab-library-review), so showWellnessInline reverts to its
+    # `true` default and this renders inline on the chart again.
     _open_dashboard(page)
-    page.wait_for_selector('.load-chart-svg')
-    assert page.locator('.wellness-baseline-deviation').count() == 0
-
-
-def test_wellness_baseline_deviation_renders_on_the_checkin_tab_with_real_mocked_data(page):
-    _open_checkin(page)
     page.wait_for_selector('.wellness-baseline-deviation')
     content = page.content()
     assert 'Resting HR' in content
@@ -327,9 +311,9 @@ def test_wellness_baseline_deviation_renders_on_the_checkin_tab_with_real_mocked
     assert 'independent' in content.lower()
 
 
-def test_wellness_baseline_deviation_null_data_shows_honest_not_enough_data_state_on_checkin(null_wellness_page):
+def test_wellness_baseline_deviation_null_data_shows_honest_not_enough_data_state(null_wellness_page):
     page = null_wellness_page
-    _open_checkin(page)
+    _open_dashboard(page)
     page.wait_for_selector('.wellness-baseline-deviation')
     content = page.content()
     # Honest per-field "not enough data" -- never a hidden element, never

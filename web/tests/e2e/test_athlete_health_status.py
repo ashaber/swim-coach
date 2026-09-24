@@ -198,10 +198,10 @@ def test_athlete_can_submit_a_health_status_end_to_end(cfg, base_url):
             # synchronous call in practice, but a CI-only, non-locally-
             # reproducible flake surfaced here waiting only on the entry's
             # own description text before snapshotting page.content() (same
-            # class of fix as web/tests/e2e/test_feedback.py's own unread-
-            # badge race: wait for the real assertion target directly,
-            # rather than an element that merely tends to appear alongside
-            # it in the common case).
+            # class of fix as elsewhere in this suite (e.g. the coach-
+            # roster unread-badge tests): wait for the real assertion
+            # target directly, rather than an element that merely tends to
+            # appear alongside it in the common case).
             pg.wait_for_selector('text=Your recent entries')
 
             assert len(calls) == 1

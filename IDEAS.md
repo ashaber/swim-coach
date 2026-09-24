@@ -1409,3 +1409,12 @@ unverified for OUR domain; symptoms must never depend on a classifier alone -- k
 (#215's live behaviour on the real model is still unverified). (e) Whether Jev needs few-shot examples or works
 zero-shot from natural-language definitions is unknown. (f) It routes; it does not replace the cache work
 (#212/#227) or the prefix trimming that makes the bucket prefixes small in the first place.
+
+**Laya (github.com/NandhaKishorM/laya)** -- a self-hosted, reportedly Jev-compatible classifier (same
+battery-of-typed-questions shape) surfaced while scoping this build. Deferred until traffic justifies it:
+hosting a 421M-parameter model likely costs more in always-on Cloud Run/GPU spend than it would save at this
+app's current volume (~15 coach calls/day, per this section's own "hard part" note above) -- the whole point of
+Jev-style routing is cutting COST, and a self-hosted model with real infra overhead could easily net negative at
+this scale versus Jev's pay-per-call pricing. Revisit once real traffic grows enough to make the shadow-mode
+replay in this section's step 1-3 plan meaningful; run that same offline shadow-eval against Laya before any
+self-hosting decision, not instead of it.
