@@ -1621,9 +1621,8 @@ export function renderError(message) {
 const TABS = [
   { id: 'plan', label: 'Plan', icon: '📋' },
   { id: 'dashboard', label: 'Dashboard', icon: '📊' },
-  { id: 'checkin', label: 'Check-in', icon: '🌙' },
   { id: 'coach', label: 'Coach', icon: '💬' },
-  { id: 'feedback', label: 'Feedback', icon: '💡' },
+  { id: 'resources', label: 'Resources', icon: '📚' },
   { id: 'roster', label: 'My Athletes', icon: '🧑‍🤝‍🧑' },
   { id: 'settings', label: 'Settings', icon: '⚙️' },
 ];
@@ -1640,27 +1639,29 @@ function renderUnreadBadge(count) {
 
 /**
  * `activeTab` is unchanged. Second arg is an options bag: `{ hideRoster,
- * feedbackUnread, rosterUnread }`.
+ * rosterUnread }`.
  * - `hideRoster`: when true, the 'roster' tab (coach mode Phase 1's "My
  *   Athletes") is left out of the bar entirely, since an identity with no
  *   coach grants has nothing to see there (see main.js's render(), which
  *   passes `hideRoster: !state.coachFor.length`). Chosen over a general
  *   allowlist-of-visible-ids because 'roster' is the only tab that's ever
  *   conditionally hidden today -- a single named flag says exactly that,
- *   rather than every call site having to enumerate all 7 tab ids just to
+ *   rather than every call site having to enumerate every tab id just to
  *   hide one.
- * - `feedbackUnread`/`rosterUnread` (B3): unread counts (main.js's
- *   src/unread.js) rendered as a small badge (`renderUnreadBadge`) on the
- *   Feedback tab (athlete-facing: new coach replies) and the My Athletes tab
- *   (coach-facing: new athlete questions) respectively. Both default to 0
- *   (no badge) -- every existing call site outside main.js's real render()
- *   (e.g. tests) keeps the old "no badges" behavior unchanged.
+ * - `rosterUnread` (B3): unread count (main.js's src/unread.js) rendered as
+ *   a small badge (`renderUnreadBadge`) on the My Athletes tab (coach-
+ *   facing: new athlete questions). Defaults to 0 (no badge) -- every
+ *   existing call site outside main.js's real render() (e.g. tests) keeps
+ *   the old "no badge" behavior unchanged. The athlete-facing Feedback-tab
+ *   badge this used to also carry was retired along with that tab (web/
+ *   resources-tab-library-review) -- the underlying feedback list still
+ *   backs the Ask-the-coach sections, just with no tab-bar badge anymore.
  * Omitting the second arg entirely keeps the old "every tab always shows,
- * no badges" behavior.
+ * no badge" behavior.
  */
-export function renderTabBar(activeTab, { hideRoster = false, feedbackUnread = 0, rosterUnread = 0 } = {}) {
+export function renderTabBar(activeTab, { hideRoster = false, rosterUnread = 0 } = {}) {
   const tabs = hideRoster ? TABS.filter((tab) => tab.id !== 'roster') : TABS;
-  const unreadByTabId = { feedback: feedbackUnread, roster: rosterUnread };
+  const unreadByTabId = { roster: rosterUnread };
   return `
     <nav class="tabbar" aria-label="Main">
       ${tabs.map((tab) => `
@@ -2186,10 +2187,9 @@ function renderTrainingDashboardBody({
   coachChatSubmitting = false,
   // Two-panel load chart (web/two-panel-load-chart): threaded straight
   // through to `renderLoadChart` -- see that function's own doc comment for
-  // what each means. `showWellnessInline` defaults `true` (the coach
-  // roster's call site leaves it at the default); the athlete's own
-  // Dashboard call site (`renderDashboardTab`) passes `false` and renders
-  // `renderWellnessBaselineDeviation` inside the Check-in tab instead.
+  // what each means. `showWellnessInline` stays at its `true` default for
+  // every call site now (the Check-in tab it used to be moved into for the
+  // athlete's own Dashboard is gone -- web/resources-tab-library-review).
   loadWindowDays,
   loadNarrativeExpanded = false,
   showWellnessInline = true,
@@ -2313,13 +2313,11 @@ export function renderDashboardTab({
     ${renderTrainingDashboardBody({
       load, feed, status, error, online, detailId, workoutChat, actions, feedExpanded, rpeEdit, editable: true,
       loadWindowDays, loadNarrativeExpanded, pacing, raceDebriefs,
-      // Resolved decision (web/two-panel-load-chart): the athlete's OWN
-      // Dashboard tab moves the wellness-deviation block OUT of this chart
-      // and into the Check-in tab instead (see renderCheckinTab) -- the
-      // coach roster's call site (renderRosterTab) leaves this at its
-      // `true` default and keeps it rendering here, since there's no
-      // coach-side Check-in-tab equivalent to move it to.
-      showWellnessInline: false,
+      // web/resources-tab-library-review: the Check-in tab (which used to
+      // hold this block instead, see its own now-removed renderCheckinTab)
+      // is gone -- showWellnessInline now stays at its `true` default here
+      // too, same as the coach roster's call site, so this signal keeps a
+      // home in the app rather than losing it entirely.
     })}`);
 }
 
@@ -2785,82 +2783,6 @@ function renderWorkoutDetail(workout, {
     })}`;
 }
 
-// --- Check-in tab (daily wellness) ---------------------------------------------
-
-/** Resolved decision (web/two-panel-load-chart): the resting-HR/HRV
- * baseline-deviation cross-check moved OUT of the athlete's own Dashboard
- * chart (`renderLoadChart`'s `showWellnessInline: false` call site) and
- * into the top of this form instead -- directly relevant context for "how
- * are you feeling" (RHR/HRV IS part of that story). Reuses the app's
- * ALREADY-fetched `load` state (`main.js`'s `state.planLoad`, the same data
- * the Dashboard tab's chart already pulls `ctl_atl_tsb` from -- and which
- * `main.js` fetches unconditionally at boot, independent of which tab is
- * active, so this data is normally already in flight or landed by the time
- * Check-in renders, even without a prior Dashboard visit) rather than
- * firing a second `GET /api/plan/load`. Renders nothing (not a loading/
- * error state of its own) until that fetch actually lands -- the form
- * itself is fully usable in the meantime; this tab never blocks on, or
- * duplicates, that request. */
-export function renderCheckinTab({
-  form, submit, backendConfigured, online, load,
-}) {
-  return `
-    <div class="wrap settings-wrap">
-      <header class="mast" style="border-bottom:none;padding-bottom:0;">
-        <div>
-          <span class="mark">swim-coach · check-in</span>
-          <h1>How are you feeling?</h1>
-          <p class="sub">A quick daily check-in -- sleep, stress, soreness, motivation.</p>
-        </div>
-      </header>
-      ${!online ? '<div class="chat-banner">Offline -- check-in needs a connection.</div>' : ''}
-      ${!backendConfigured ? renderBackendNeededNotice('Checking in needs you to sign in and set a backend URL and token first.') : `
-      ${load?.data ? `<div class="panel settings-panel">${renderWellnessBaselineDeviation(load.data.wellness_baseline_deviation)}</div>` : ''}
-      <div class="panel settings-panel">
-        <label class="field">
-          <span>Date</span>
-          <input type="date" data-form="checkin" data-field="date" value="${esc(form.date)}">
-        </label>
-        <label class="field">
-          <span>Sleep quality &middot; <output id="checkin-sleep_quality-out">${esc(form.sleep_quality)}</output>/5</span>
-          <input type="range" min="1" max="5" step="1" data-form="checkin" data-field="sleep_quality" data-slider-out="checkin-sleep_quality-out" value="${esc(form.sleep_quality)}">
-        </label>
-        <label class="field">
-          <span>Sleep hours</span>
-          <input type="number" min="0" step="0.25" inputmode="decimal" data-form="checkin" data-field="sleep_hours" value="${esc(form.sleep_hours)}">
-        </label>
-        <label class="field">
-          <span>Stress &middot; <output id="checkin-stress-out">${esc(form.stress)}</output>/5</span>
-          <input type="range" min="1" max="5" step="1" data-form="checkin" data-field="stress" data-slider-out="checkin-stress-out" value="${esc(form.stress)}">
-        </label>
-        <label class="field">
-          <span>Soreness &middot; <output id="checkin-soreness-out">${esc(form.soreness)}</output>/5</span>
-          <input type="range" min="1" max="5" step="1" data-form="checkin" data-field="soreness" data-slider-out="checkin-soreness-out" value="${esc(form.soreness)}">
-        </label>
-        <label class="field">
-          <span>Motivation &middot; <output id="checkin-motivation-out">${esc(form.motivation)}</output>/5</span>
-          <input type="range" min="1" max="5" step="1" data-form="checkin" data-field="motivation" data-slider-out="checkin-motivation-out" value="${esc(form.motivation)}">
-        </label>
-        <label class="field">
-          <span>Resting HR (optional)</span>
-          <input type="number" min="0" step="1" inputmode="numeric" data-form="checkin" data-field="resting_hr" value="${esc(form.resting_hr)}">
-        </label>
-        <label class="field">
-          <span>HRV (optional)</span>
-          <input type="number" min="0" step="0.1" inputmode="decimal" data-form="checkin" data-field="hrv" value="${esc(form.hrv)}">
-        </label>
-        <label class="field">
-          <span>Notes</span>
-          <textarea rows="3" data-form="checkin" data-field="notes" placeholder="Anything else going on?">${esc(form.notes)}</textarea>
-        </label>
-        <div class="settings-actions">
-          <button type="button" class="btn" data-a="checkin:submit" ${submit.status === 'submitting' || !online ? 'disabled' : ''}>${submit.status === 'submitting' ? 'Saving…' : 'Save'}</button>
-        </div>
-        ${renderSubmitResult(submit)}
-      </div>`}
-    </div>`;
-}
-
 // --- Profile edit (Settings tab section) --------------------------------------
 // Self-service profile editing (Phase 2.5) -- an athlete edits name/dob/sex/
 // height/weight/CSS pace/pool days themselves instead of Fable hand-loading
@@ -3005,13 +2927,9 @@ function renderProfilePanel({ form, load, submit }) {
     </div>`;
 }
 
-// --- Feedback tab (durable feedback log) ---------------------------------
-
-const FEEDBACK_TYPE_OPTIONS = [
-  { value: 'feature_request', label: 'Feature request' },
-  { value: 'comment', label: 'Comment' },
-  { value: 'bug', label: 'Bug' },
-];
+// --- Feedback (durable feedback log -- data paths still used by the
+// Ask-the-coach sections and the coach roster; the athlete-facing Feedback
+// TAB itself was retired, web/resources-tab-library-review) ---------------
 
 const FEEDBACK_TYPE_LABELS = {
   research_question: 'Research question',
@@ -3025,72 +2943,200 @@ function formatFeedbackDate(isoString) {
   return Number.isNaN(d.getTime()) ? isoString : d.toLocaleString();
 }
 
-/** B2 (coach-mode Q&A build): previously this rendered only type/status/
- * body/date -- an athlete literally could not see an AI or coach answer to
- * her own question in this tab (the durable list of EVERYTHING, not just
- * workout/session-scoped like B1's renderAskCoachSection). Same three-state
- * answer treatment as `renderAskCoachEntry` (coach reply wins over the AI
- * answer if both exist; a "waiting on your coach" notice when neither exists
- * yet but the question was flagged for human review), plus the context line
- * B1 added to the coach's own roster view (`formatFeedbackContext`), so an
- * athlete can tell which workout/session an old question was about too. */
-function renderFeedbackEntry(entry) {
-  const context = formatFeedbackContext(entry);
+// --- Resources tab (research library review, web/resources-tab-library-review) ---
+// Structured as titled sections so a future one (e.g. favorite podcast
+// links) slots in alongside "Research library" without restructuring the
+// tab -- see renderResourcesTab's own top-level layout.
+//
+// Card fields: `summary`/`recommendation`/`heading` are authored content
+// (`library/review-cards/*.yaml`); `confidence`/`tags`/`source_count`/
+// `weak_source_count`/`dossier`/`reviewed`/`needs_judgment`/`stale` are all
+// DERIVED server-side (GET /api/library/cards, backend/app/routes/
+// library.py) -- never hand-typed, never recomputed here. `latest_review`
+// (or null) is this card's most recent accept/flag decision.
+
+const LIBRARY_FILTERS = [
+  { id: 'all', label: 'All' },
+  { id: 'needs_review', label: 'Needs review' },
+  { id: 'flagged', label: 'Flagged' },
+];
+
+function libraryConfidenceBadgeClass(confidence) {
+  if (confidence === 'high') return 'badge-ok';
+  if (confidence === 'medium-high' || confidence === 'medium') return 'badge-warn';
+  if (confidence) return 'badge-fail';
+  return '';
+}
+
+function matchesLibraryFilter(card, filter) {
+  if (filter === 'needs_review') return !card.reviewed || card.stale;
+  if (filter === 'flagged') return card.latest_review?.decision === 'flagged';
+  return true;
+}
+
+function renderLibraryFilterChips(filter) {
   return `
-    <div class="panel feedback-entry">
-      <div class="feedback-entry-head">
-        <span class="chat-chip">${esc(FEEDBACK_TYPE_LABELS[entry.type] || entry.type)}</span>
-        ${entry.source === 'coach' ? '<span class="chat-chip">coach-logged</span>' : ''}
-        <span class="feedback-entry-date mono">${esc(formatFeedbackDate(entry.created_at))}</span>
-      </div>
-      ${context ? `<div class="feedback-entry-context mono">${esc(context)}</div>` : ''}
-      <p class="feedback-entry-body">${esc(entry.body)}</p>
-      ${renderFeedbackAnswerBlock(entry)}
-      <div class="feedback-entry-status mono">${esc(entry.status)}</div>
+    <div class="chip-row" role="group" aria-label="Filter cards">
+      ${LIBRARY_FILTERS.map((f) => `
+        <button type="button" class="chip${f.id === filter ? ' active' : ''}" data-a="library:filter" data-filter="${f.id}">
+          ${esc(f.label)}
+        </button>`).join('')}
     </div>`;
 }
 
-function renderFeedbackList(entries) {
-  if (!entries || entries.length === 0) {
-    return '<p class="sub">Nothing logged yet.</p>';
-  }
-  return entries.map(renderFeedbackEntry).join('');
+function renderLibraryCardBadges(card) {
+  const confidenceClass = libraryConfidenceBadgeClass(card.confidence);
+  return `
+    <div class="library-card-badges">
+      ${card.confidence ? `<span class="badge ${confidenceClass}">${esc(card.confidence)} confidence</span>` : ''}
+      <span class="badge ${card.reviewed ? 'badge-ok' : 'badge-warn'}">${card.reviewed ? 'Reviewed' : 'Unreviewed'}</span>
+      ${card.stale ? '<span class="badge badge-fail">Stale</span>' : ''}
+      ${card.latest_review?.decision === 'flagged' ? '<span class="badge badge-fail">Flagged</span>' : ''}
+    </div>`;
 }
 
-export function renderFeedbackTab({
-  form, submit, entries, entriesStatus, backendConfigured, online,
+function renderLibraryCard(card) {
+  return `
+    <div class="panel library-card">
+      ${renderLibraryCardBadges(card)}
+      <h3 class="library-card-heading">${esc(card.heading)}</h3>
+      <div class="library-card-file mono">${esc(card.file)}</div>
+      <p class="library-card-summary">${esc(card.summary)}</p>
+      <p class="library-card-recommendation"><strong>Coach's call:</strong> ${esc(card.recommendation)}</p>
+      <div class="library-card-meta mono">${card.source_count} source${card.source_count === 1 ? '' : 's'}${card.weak_source_count ? ` (${card.weak_source_count} to weigh)` : ''}</div>
+      <div class="settings-actions">
+        <button type="button" class="btn-ghost" data-a="library:open-file" data-file="${esc(card.file)}" data-anchor="${esc(card.heading)}">Read full section</button>
+      </div>
+    </div>`;
+}
+
+function renderLibraryCardGrid(cardsState, filter) {
+  if (cardsState.status === 'loading' && !cardsState.data.length) {
+    return '<p class="sub">Loading the research library&hellip;</p>';
+  }
+  if (cardsState.status === 'error' && !cardsState.data.length) {
+    return `<div class="hist-error">Couldn't load the research library: ${esc(cardsState.error)}</div>`;
+  }
+  const filtered = (cardsState.data || []).filter((c) => matchesLibraryFilter(c, filter));
+  if (filtered.length === 0) {
+    return '<p class="sub">Nothing matches this filter.</p>';
+  }
+
+  const byFile = new Map();
+  filtered.forEach((card) => {
+    if (!byFile.has(card.file)) byFile.set(card.file, []);
+    byFile.get(card.file).push(card);
+  });
+
+  return [...byFile.entries()].map(([file, cards]) => `
+    <div class="library-file-group">
+      <h4 class="library-file-group-heading mono">${esc(file)}</h4>
+      ${cards.map(renderLibraryCard).join('')}
+    </div>`).join('');
+}
+
+/** Approvals (admin-only): unreviewed + stale cards, needs-judgment first --
+ * same "the human most needs to weigh these" ordering
+ * `library_review.sort_for_review` uses server-side, applied here to the
+ * card-level `needs_judgment` flag since a card, unlike a raw review item,
+ * may bundle several claims. */
+function renderApprovalCard(card, reviewDrafts, reviewSubmit) {
+  const key = `${card.file}#${card.section}`;
+  const draft = reviewDrafts[key] || '';
+  const submitting = reviewSubmit.status === 'submitting' && reviewSubmit.key === key;
+  const rowError = reviewSubmit.status === 'error' && reviewSubmit.key === key ? reviewSubmit.error : null;
+
+  return `
+    <div class="panel library-card">
+      ${renderLibraryCardBadges(card)}
+      ${card.needs_judgment ? '<span class="badge badge-warn">Needs judgment</span>' : '<span class="badge">Mechanical</span>'}
+      <h3 class="library-card-heading">${esc(card.heading)}</h3>
+      <div class="library-card-file mono">${esc(card.file)}</div>
+      <p class="library-card-summary">${esc(card.summary)}</p>
+      <p class="library-card-recommendation"><strong>Coach's call:</strong> ${esc(card.recommendation)}</p>
+      <label class="field">
+        <span>Flag note (required to flag)</span>
+        <textarea rows="2" data-form="library-review" data-field="note" data-key="${esc(key)}" placeholder="What needs a second look?">${esc(draft)}</textarea>
+      </label>
+      <div class="settings-actions">
+        <button type="button" class="btn" data-a="library:review:accept" data-file="${esc(card.file)}" data-section="${esc(card.section)}" data-hash="${esc(card.content_hash || '')}" ${submitting ? 'disabled' : ''}>Accept</button>
+        <button type="button" class="btn-ghost" data-a="library:review:flag" data-file="${esc(card.file)}" data-section="${esc(card.section)}" data-hash="${esc(card.content_hash || '')}" ${submitting ? 'disabled' : ''}>Flag</button>
+      </div>
+      ${rowError ? `<div class="conn-result fail">${esc(rowError)}</div>` : ''}
+    </div>`;
+}
+
+function renderApprovalsSection({
+  cards, reviewDrafts, reviewSubmit, online,
 }) {
+  const pending = (cards.data || [])
+    .filter((c) => !c.reviewed || c.stale)
+    .sort((a, b) => (a.needs_judgment === b.needs_judgment ? 0 : a.needs_judgment ? -1 : 1));
+
+  return `
+    <section>
+      <div class="s-head"><h2>Approvals</h2></div>
+      ${!online ? '<div class="chat-banner">Offline -- accept/flag needs a connection.</div>' : ''}
+      ${pending.length === 0
+        ? '<p class="sub">Nothing waiting on review.</p>'
+        : pending.map((c) => renderApprovalCard(c, reviewDrafts, reviewSubmit)).join('')}
+    </section>`;
+}
+
+/** "Read full section": the topic file's markdown, rendered via the same
+ * markdown pipeline chat replies use (marked, `<` neutralized before
+ * parsing -- see markdown.js's own security-posture doc comment). Scrolling
+ * to `openFile.anchor` (the card's verbatim heading text) is main.js's job
+ * (scrollToLibrarySectionAnchor), since marked doesn't generate heading
+ * `id`s to link to directly. */
+function renderLibraryFileView({ openFile, file, online }) {
+  const body = (() => {
+    if (file.status === 'loading') return '<p class="sub">Loading&hellip;</p>';
+    if (file.status === 'error') {
+      return `<div class="hist-error">Couldn't load ${esc(openFile.name)}: ${esc(file.error)}</div>`;
+    }
+    if (!file.data) return '';
+    return `<div id="library-file-content" class="library-file-content">${renderChatMarkdown(file.data.content)}</div>`;
+  })();
+
+  return `
+    <div class="wrap settings-wrap">
+      <header class="mast" style="border-bottom:none;padding-bottom:0;">
+        <div class="s-head"><button type="button" class="btn-ghost" data-a="library:close-file">&larr; Back</button></div>
+        <span class="mark mono">${esc(openFile.name)}</span>
+      </header>
+      ${!online ? '<div class="chat-banner">Offline -- showing the last-loaded copy.</div>' : ''}
+      ${body}
+    </div>`;
+}
+
+export function renderResourcesTab({
+  cards, filter, openFile, file, isAdmin, reviewDrafts, reviewSubmit, backendConfigured, online,
+}) {
+  if (!backendConfigured) {
+    return renderBackendNeededNotice('Resources needs you to sign in and set a backend URL and token first.');
+  }
+  if (openFile) {
+    return renderLibraryFileView({ openFile, file, online });
+  }
   return `
     <div class="wrap settings-wrap">
       <header class="mast" style="border-bottom:none;padding-bottom:0;">
         <div>
-          <span class="mark">swim-coach · feedback</span>
-          <h1>Feedback</h1>
-          <p class="sub">Feature requests, comments, bugs -- plus the coach's own logged research gaps.</p>
+          <span class="mark">swim-coach · resources</span>
+          <h1>Resources</h1>
+          <p class="sub">The research library behind your plan.</p>
         </div>
       </header>
-      ${!online ? '<div class="chat-banner">Offline -- feedback needs a connection.</div>' : ''}
-      ${!backendConfigured ? renderBackendNeededNotice('Feedback needs you to sign in and set a backend URL and token first.') : `
-      <div class="panel settings-panel">
-        <label class="field">
-          <span>Type</span>
-          <select data-form="feedback" data-field="type">
-            ${FEEDBACK_TYPE_OPTIONS.map((opt) => `<option value="${opt.value}"${form.type === opt.value ? ' selected' : ''}>${esc(opt.label)}</option>`).join('')}
-          </select>
-        </label>
-        <label class="field">
-          <span>Details</span>
-          <textarea rows="4" data-form="feedback" data-field="body" placeholder="What's on your mind?">${esc(form.body)}</textarea>
-        </label>
-        <div class="settings-actions">
-          <button type="button" class="btn" data-a="feedback:submit" ${submit.status === 'submitting' || !online ? 'disabled' : ''}>${submit.status === 'submitting' ? 'Saving…' : 'Send'}</button>
-        </div>
-        ${renderSubmitResult(submit)}
-      </div>
+      ${!online ? '<div class="chat-banner">Offline -- showing the last-loaded cards.</div>' : ''}
       <section>
-        <div class="s-head"><h2>Logged so far</h2></div>
-        ${entriesStatus === 'loading' ? '<p class="sub">Loading…</p>' : renderFeedbackList(entries)}
-      </section>`}
+        <div class="s-head"><h2>Research library</h2></div>
+        ${renderLibraryFilterChips(filter)}
+        ${renderLibraryCardGrid(cards, filter)}
+      </section>
+      ${isAdmin ? renderApprovalsSection({
+        cards, reviewDrafts, reviewSubmit, online,
+      }) : ''}
     </div>`;
 }
 

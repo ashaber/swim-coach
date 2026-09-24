@@ -3,8 +3,8 @@ import { registerSW } from 'virtual:pwa-register';
 import log from './log.js';
 import {
   renderApp, renderLoading, renderError, renderTabBar, renderCoachTab, renderSettingsTab,
-  renderDashboardTab, renderCheckinTab, renderBackendNeededNotice, renderFeedbackTab, renderUpdateBanner,
-  renderOnboardingForm, renderRosterTab, cr10AnchorLabel, ROSTER_SUB_TABS as ROSTER_SUB_TAB_DEFS,
+  renderDashboardTab, renderBackendNeededNotice, renderUpdateBanner,
+  renderOnboardingForm, renderRosterTab, renderResourcesTab, cr10AnchorLabel, ROSTER_SUB_TABS as ROSTER_SUB_TAB_DEFS,
 } from './views.js';
 import { findSessionById, LOAD_CHART_WINDOW_DAYS, LOAD_CHART_WINDOW_OPTIONS } from './plan.js';
 import { buildHistoryFeed } from './history.js';
@@ -14,8 +14,8 @@ import {
 } from './chat.js';
 import { loadSettings, saveSettings, isConfigured } from './settings.js';
 import {
-  streamChat, postWorkout, postWellness, fetchPlan, fetchPlanLoad, getAthlete, patchAthlete, patchWorkout,
-  postFeedback, listFeedback, uploadWorkoutFile, listWorkouts, syncWorkouts, logout, onboard,
+  streamChat, postWorkout, fetchPlan, fetchPlanLoad, getAthlete, patchAthlete, patchWorkout,
+  listFeedback, uploadWorkoutFile, listWorkouts, syncWorkouts, logout, onboard,
   pushSessionToIntervals,
   downloadGarminFit,
   createGrant, listGrants, revokeGrant,
@@ -25,10 +25,11 @@ import {
   askAboutSession, askAboutWorkout,
   fetchWorkoutPacing,
   postCoachWorkoutChatMessage, patchCoachWorkoutChatMuted,
+  listLibraryCards, fetchLibraryFile, submitLibraryReview,
 } from './api.js';
 import {
-  serializeWorkoutForm, serializeWellnessForm, profileFormFromAthlete, serializeProfileForm,
-  serializeFeedbackForm, logFormFromDraft,
+  serializeWorkoutForm, profileFormFromAthlete, serializeProfileForm,
+  logFormFromDraft,
 } from './forms.js';
 import { currentIdentity, signIn, signOut, saveIdentity } from './identity.js';
 import {
@@ -54,7 +55,7 @@ const LOAD_WINDOW_DAYS_KEY = 'swimcoach_load_window_days';
 // 'log' and 'history' merged into one 'dashboard' tab (Build 1 of the
 // wellness-ingestion + training-dashboard plan) -- see views.js's
 // renderDashboardTab/renderTrainingDashboardBody.
-const KNOWN_TABS = ['plan', 'dashboard', 'checkin', 'coach', 'feedback', 'roster', 'settings'];
+const KNOWN_TABS = ['plan', 'dashboard', 'coach', 'resources', 'roster', 'settings'];
 // The roster tab's own sub-navigation (Build 2: Coach per-athlete sub-tab
 // restructure; 'health' added in web/coach-health-nav-and-athlete-self-log)
 // -- derived from views.js's own ROSTER_SUB_TABS (imported above as
@@ -101,13 +102,6 @@ function createLogSync() {
 // check can never let an unsupported file actually get ingested.
 const SUPPORTED_INGEST_EXTENSIONS = ['.fit', '.tcx', '.csv'];
 
-function createCheckinForm() {
-  return {
-    date: todayIso(), sleep_quality: 3, sleep_hours: '', stress: 3, soreness: 3, motivation: 3,
-    resting_hr: '', hrv: '', notes: '',
-  };
-}
-
 function createProfileForm() {
   return {
     name: '', dob: '', sex: '', heightFeet: '', heightInches: '', weightLb: '', cssPace: '', lthrBpm: '',
@@ -120,10 +114,6 @@ function createProfileForm() {
     // (forms.js's profileFormFromAthlete).
     emailNotificationsEnabled: true,
   };
-}
-
-function createFeedbackForm() {
-  return { type: 'feature_request', body: '' };
 }
 
 // --- Ask-the-coach Q&A (coach-mode Q&A build) -------------------------------
@@ -423,7 +413,7 @@ const state = {
   workoutChat: null,
   // A6b: the workout-detail RPE editor. `null` when no edit is in progress;
   // else `{workoutId, rpe, status, error}` (same async-state shape as
-  // logSubmit/checkinSubmit above). Reset alongside workoutChat -- both are
+  // logSubmit above). Reset alongside workoutChat -- both are
   // per-detail-view-scoped and there's only ever one detail view open at a
   // time (handleOpenHistoryDetail, handleCloseHistoryDetail, setTab leaving
   // the Dashboard tab). Never populated on the coach roster's read-only
@@ -438,14 +428,29 @@ const state = {
   // reset paths -- every open/close of either detail view.
   askCoachForm: createAskCoachForm(),
   askCoachSubmit: createAskCoachSubmit(),
-  checkinForm: createCheckinForm(),
-  checkinSubmit: { status: 'idle', message: null },
   profileForm: createProfileForm(),
   profileLoad: { status: 'idle', error: null },
   profileSubmit: { status: 'idle', message: null },
-  feedbackForm: createFeedbackForm(),
-  feedbackSubmit: { status: 'idle', message: null },
   feedbackEntries: { status: 'idle', data: [] },
+  // Resources tab (web/resources-tab-library-review): the research-library
+  // review cards (GET /api/library/cards, sport-scope-filtered server-side)
+  // and, lazily, one opened topic file's markdown (GET /api/library/files/
+  // {name}) for the "read full section" jump-to-anchor flow -- same
+  // {status, data, error} async-state shape as `plan`/`feedbackEntries`.
+  // `filter` is the card-list filter chip ('all' | 'needs_review' |
+  // 'flagged'); `openFile` is {name, anchor} | null (null shows the card
+  // grid, a value shows that file's rendered markdown instead -- same "null
+  // shows the list, a value opens detail" convention as workoutDetailId).
+  libraryCards: { status: 'idle', data: [], error: null },
+  libraryFile: { status: 'idle', data: null, error: null },
+  libraryFilter: 'all',
+  libraryOpenFile: null,
+  // Approvals section (admin-only, `is_library_admin`): per-card accept/flag
+  // submit state, keyed by `${file}#${section}` -- same per-row-keyed
+  // convention as `roster.replyDrafts`/`roster.replySubmit`, since several
+  // cards' actions could plausibly be in flight/just-completed at once.
+  libraryReviewDrafts: {},
+  libraryReviewSubmit: { status: 'idle', error: null, key: null },
   // Race-debrief history (RaceDebrief -- see loadRaceDebriefs/maybeLoadRaceDebriefs below): same
   // idle/loading/ready/error shape as feedbackEntries, read off the same GET /api/athlete response
   // getAthlete already serves (no separate endpoint -- see api.js's fetchWorkoutPacing docstring
@@ -580,17 +585,6 @@ function renderTabContent() {
         healthStatusFormOpen: state.healthStatusFormOpen,
         healthStatus: state.healthStatus,
       });
-    case 'checkin':
-      return renderCheckinTab({
-        form: state.checkinForm,
-        submit: state.checkinSubmit,
-        backendConfigured,
-        online: state.online,
-        // Resolved decision (web/two-panel-load-chart): reuses the
-        // already-fetched Dashboard-tab load state -- see renderCheckinTab's
-        // own doc comment for why this never fires a second fetch.
-        load: state.planLoad,
-      });
     case 'coach':
       return renderCoachTab({
         messages: state.chat.messages,
@@ -600,12 +594,15 @@ function renderTabContent() {
         online: state.online,
         role: state.identity?.role,
       });
-    case 'feedback':
-      return renderFeedbackTab({
-        form: state.feedbackForm,
-        submit: state.feedbackSubmit,
-        entries: state.feedbackEntries.data,
-        entriesStatus: state.feedbackEntries.status,
+    case 'resources':
+      return renderResourcesTab({
+        cards: state.libraryCards,
+        filter: state.libraryFilter,
+        openFile: state.libraryOpenFile,
+        file: state.libraryFile,
+        isAdmin: !!state.identity?.isLibraryAdmin,
+        reviewDrafts: state.libraryReviewDrafts,
+        reviewSubmit: state.libraryReviewSubmit,
         backendConfigured,
         online: state.online,
       });
@@ -701,23 +698,40 @@ function render() {
   // renderTabBar's `hideRoster` flag is the one visibility knob (see its
   // doc comment for why that's the chosen signature over a full allowlist).
   //
-  // B3: feedbackUnread/rosterUnread badges -- see src/unread.js's
-  // countUnread doc comment for the asymmetric athlete/coach field choice.
-  // rosterUnread only ever reflects the CURRENTLY acted-as athlete's
-  // feedback (state.roster.feedback is per-selected-athlete, not
-  // aggregated across every coached athlete -- no new backend endpoint
-  // exists to aggregate that, and this build doesn't add one); 0 before any
-  // athlete has been selected, same accepted tradeoff as the roster's own
-  // section-level badge (renderTabContent's 'roster' case).
+  // B3: rosterUnread badge -- see src/unread.js's countUnread doc comment.
+  // Only ever reflects the CURRENTLY acted-as athlete's feedback
+  // (state.roster.feedback is per-selected-athlete, not aggregated across
+  // every coached athlete -- no new backend endpoint exists to aggregate
+  // that, and this build doesn't add one); 0 before any athlete has been
+  // selected, same accepted tradeoff as the roster's own section-level
+  // badge (renderTabContent's 'roster' case).
   appEl.innerHTML = `${renderUpdateBanner(state.pwaUpdate)}${renderTabContent()}${
     renderTabBar(state.tab, {
       hideRoster: !state.coachFor.length,
-      feedbackUnread: countUnread(state.feedbackEntries.data, loadLastSeen('athlete'), 'athlete'),
       rosterUnread: countUnread(state.roster.feedback.data, loadLastSeen('coach'), 'coach'),
     })}`;
   if (state.tab === 'coach') stickChatScrollToBottom();
   if (state.tab === 'dashboard' && state.workoutChat) stickWorkoutChatScrollToBottom();
   if (state.tab === 'settings' && !state.identity) mountGoogleSignIn();
+  if (state.tab === 'resources' && state.libraryOpenFile?.anchor && state.libraryFile.status === 'ready') {
+    scrollToLibrarySectionAnchor(state.libraryOpenFile.anchor);
+  }
+}
+
+/** Scrolls the "read full section" markdown view to the heading whose text
+ * matches `headingText` exactly (the card's own verbatim heading, carried
+ * as the click's `data-anchor`) -- marked doesn't generate heading `id`s by
+ * default, so this matches by rendered text content instead of a
+ * synthetic anchor slug, avoiding a second slugify implementation to keep
+ * in sync with the backend's. Best-effort: a missing/renamed heading (the
+ * file changed shape since the card was authored) just leaves the view
+ * scrolled to the top rather than throwing. */
+function scrollToLibrarySectionAnchor(headingText) {
+  const panel = document.getElementById('library-file-content');
+  if (!panel) return;
+  const heading = [...panel.querySelectorAll('h1, h2, h3, h4, h5, h6')]
+    .find((el) => el.textContent.trim() === headingText);
+  heading?.scrollIntoView({ block: 'start' });
 }
 
 // Mounts (or re-mounts, on every Settings re-render while signed out) the
@@ -762,8 +776,18 @@ function applyAthleteSession(identity, token) {
   state.profileForm = createProfileForm();
   state.profileLoad = { status: 'idle', error: null };
   state.profileSubmit = { status: 'idle', message: null };
-  // Same lazy-load convention for the Feedback tab's list (see setTab).
+  // Same lazy-load convention for the ask-coach feature's feedback list
+  // (see maybeLoadFeedback).
   state.feedbackEntries = { status: 'idle', data: [] };
+  // Resources tab: sport-scoped card list, so it must be re-fetched fresh
+  // for the newly-signed-in athlete -- same "reset to idle, let setTab's
+  // lazy-load re-fetch it" convention as feedbackEntries above.
+  state.libraryCards = { status: 'idle', data: [], error: null };
+  state.libraryFile = { status: 'idle', data: null, error: null };
+  state.libraryFilter = 'all';
+  state.libraryOpenFile = null;
+  state.libraryReviewDrafts = {};
+  state.libraryReviewSubmit = { status: 'idle', error: null, key: null };
   state.raceDebriefs = { status: 'idle', data: [] };
   state.pacingByWorkoutId = {};
   state.workoutHistory = { status: 'idle', data: [], error: null };
@@ -839,6 +863,12 @@ function resetToSignedOut({ identityError = null } = {}) {
   state.profileLoad = { status: 'idle', error: null };
   state.profileSubmit = { status: 'idle', message: null };
   state.feedbackEntries = { status: 'idle', data: [] };
+  state.libraryCards = { status: 'idle', data: [], error: null };
+  state.libraryFile = { status: 'idle', data: null, error: null };
+  state.libraryFilter = 'all';
+  state.libraryOpenFile = null;
+  state.libraryReviewDrafts = {};
+  state.libraryReviewSubmit = { status: 'idle', error: null, key: null };
   state.raceDebriefs = { status: 'idle', data: [] };
   state.pacingByWorkoutId = {};
   state.workoutHistory = { status: 'idle', data: [], error: null };
@@ -2017,38 +2047,6 @@ async function handleLogFileSelected(file) {
   render();
 }
 
-// --- Check-in tab (daily wellness) ---------------------------------------------
-
-async function handleSubmitCheckin() {
-  if (state.checkinSubmit.status === 'submitting') return;
-  const settings = state.settingsForm;
-  if (!isConfigured(settings, state.identity)) {
-    state.tab = 'settings';
-    saveActiveTab(state.tab);
-    render();
-    return;
-  }
-
-  const payload = serializeWellnessForm(state.checkinForm);
-  state.checkinSubmit = { status: 'submitting', message: null };
-  render();
-  log.info('checkin.submit', { athlete: athleteSlug() });
-
-  const result = await postWellness({
-    baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), payload,
-  });
-  if (handleUnauthorized(result)) return;
-  if (result.ok) {
-    log.info('checkin.submit_success', { athlete: athleteSlug() });
-    state.checkinForm = createCheckinForm();
-    state.checkinSubmit = { status: 'success', message: 'Saved.' };
-  } else {
-    log.error('checkin.submit_failed', { athlete: athleteSlug(), error: result.error });
-    state.checkinSubmit = { status: 'error', message: result.error };
-  }
-  render();
-}
-
 // --- Profile edit (Settings tab section) --------------------------------------
 // Self-service profile editing (Phase 2.5): GET /api/athlete prefills the
 // form the moment the Settings tab is opened (or becomes configured), PATCH
@@ -2196,16 +2194,201 @@ function maybeLoadProfile() {
  * this is NOT gated on which tab is active -- the athlete's own Feedback
  * list (`state.feedbackEntries`) now also backs the Ask-the-coach section on
  * BOTH the Plan tab's session detail and the Dashboard tab's workout detail
- * (views.js's renderAskCoachSection call sites), not just the Feedback tab
- * itself, so it needs to load lazily on demand from whichever of those three
- * surfaces asks for it first. Called from handleOpenSessionDetail/
- * handleOpenHistoryDetail (in addition to setTab's own Feedback-tab lazy
- * load) -- same "never loaded yet, or let's retry" idle/error gate as every
- * other maybeLoad* helper in this file. */
+ * (views.js's renderAskCoachSection call sites), so it needs to load
+ * lazily on demand from whichever of those two surfaces asks for it first.
+ * Called from handleOpenSessionDetail/handleOpenHistoryDetail -- same
+ * "never loaded yet, or let's retry" idle/error gate as every other
+ * maybeLoad* helper in this file. */
 function maybeLoadFeedback() {
   if (!isConfigured(state.settingsForm, state.identity)) return;
   if (state.feedbackEntries.status === 'loading' || state.feedbackEntries.status === 'ready') return;
   loadFeedback(); // calls render() itself
+}
+
+// --- Resources tab (research library review, web/resources-tab-library-review) ---
+// Cards + one lazily-opened topic file, both cached in localStorage so the
+// last-fetched content is still readable offline -- see loadLibraryCards/
+// handleOpenLibraryFile below.
+
+const LIBRARY_CARDS_CACHE_KEY = 'swimcoach_library_cards_cache';
+const LIBRARY_FILES_CACHE_KEY = 'swimcoach_library_files_cache';
+
+function loadCachedLibraryCards() {
+  try {
+    const raw = localStorage.getItem(LIBRARY_CARDS_CACHE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveCachedLibraryCards(cards) {
+  try {
+    localStorage.setItem(LIBRARY_CARDS_CACHE_KEY, JSON.stringify(cards));
+  } catch {
+    // ignore -- localStorage unavailable (private mode quota, etc.)
+  }
+}
+
+function loadCachedLibraryFile(name) {
+  try {
+    const raw = localStorage.getItem(LIBRARY_FILES_CACHE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return typeof parsed?.[name] === 'string' ? parsed[name] : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveCachedLibraryFile(name, content) {
+  try {
+    const raw = localStorage.getItem(LIBRARY_FILES_CACHE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    parsed[name] = content;
+    localStorage.setItem(LIBRARY_FILES_CACHE_KEY, JSON.stringify(parsed));
+  } catch {
+    // ignore -- localStorage unavailable (private mode quota, etc.)
+  }
+}
+
+/** Fetches the review-card list, falling back to whatever was cached from
+ * the last successful fetch when offline -- offline shows the last-known
+ * cards read-only rather than an empty/error state (see
+ * renderResourcesTab's offline notice for the accompanying UI). */
+async function loadLibraryCards() {
+  const settings = state.settingsForm;
+  const identity = state.identity;
+  if (!isConfigured(settings, identity)) {
+    state.libraryCards = { status: 'idle', data: [], error: null };
+    render();
+    return;
+  }
+
+  if (!state.online) {
+    const cached = loadCachedLibraryCards();
+    state.libraryCards = cached
+      ? { status: 'ready', data: cached, error: null }
+      : { status: 'error', data: [], error: 'Offline, and nothing cached yet.' };
+    render();
+    return;
+  }
+
+  state.libraryCards = { status: 'loading', data: state.libraryCards.data, error: null };
+  render();
+
+  const result = await listLibraryCards({ baseUrl: settings.baseUrl, token: settings.token, athlete: identity.athlete });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    log.info('library.cards_loaded', { athlete: identity.athlete, count: result.data.length });
+    state.libraryCards = { status: 'ready', data: result.data, error: null };
+    saveCachedLibraryCards(result.data);
+  } else {
+    log.error('library.cards_load_failed', { error: result.error });
+    const cached = loadCachedLibraryCards();
+    state.libraryCards = cached
+      ? { status: 'ready', data: cached, error: null }
+      : { status: 'error', data: [], error: result.error };
+  }
+  render();
+}
+
+function handleSetLibraryFilter(filter) {
+  if (!filter || filter === state.libraryFilter) return;
+  state.libraryFilter = filter;
+  log.info('library.filter_changed', { filter });
+  render();
+}
+
+/** Opens the "read full section" view for one topic file, scrolled to
+ * `anchor` -- fetches it if not already cached (offline: cache-only, same
+ * fallback posture as loadLibraryCards). */
+async function handleOpenLibraryFile(name, anchor) {
+  if (!name) return;
+  state.libraryOpenFile = { name, anchor: anchor || null };
+  const settings = state.settingsForm;
+  const identity = state.identity;
+
+  if (!state.online) {
+    const cached = loadCachedLibraryFile(name);
+    state.libraryFile = cached
+      ? { status: 'ready', data: { file: name, content: cached }, error: null }
+      : { status: 'error', data: null, error: 'Offline, and this file is not cached yet.' };
+    render();
+    return;
+  }
+
+  state.libraryFile = { status: 'loading', data: null, error: null };
+  render();
+
+  const result = await fetchLibraryFile({ baseUrl: settings.baseUrl, token: settings.token, athlete: identity.athlete, name });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    log.info('library.file_loaded', { athlete: identity.athlete, file: name });
+    state.libraryFile = { status: 'ready', data: result.data, error: null };
+    saveCachedLibraryFile(name, result.data.content);
+  } else {
+    log.error('library.file_load_failed', { file: name, error: result.error });
+    const cached = loadCachedLibraryFile(name);
+    state.libraryFile = cached
+      ? { status: 'ready', data: { file: name, content: cached }, error: null }
+      : { status: 'error', data: null, error: result.error };
+  }
+  render();
+}
+
+function handleCloseLibraryFile() {
+  state.libraryOpenFile = null;
+  state.libraryFile = { status: 'idle', data: null, error: null };
+  render();
+}
+
+/** Accept/flag a card (Approvals section, admin-only -- server-side
+ * enforced regardless of what the client shows). Optimistic: on success,
+ * the card list is refetched so its `latest_review`/`reviewed`/`stale`
+ * fields reflect the just-recorded decision immediately. */
+async function handleSubmitLibraryReview(decision, file, section, contentHash) {
+  if (!file || !section) return;
+  const key = `${file}#${section}`;
+  if (state.libraryReviewSubmit.status === 'submitting') return;
+  if (!state.online) return; // Approvals buttons are disabled offline; defensive no-op.
+
+  const settings = state.settingsForm;
+  const identity = state.identity;
+  if (!isConfigured(settings, identity)) return;
+
+  const note = (state.libraryReviewDrafts[key] || '').trim();
+  if (decision === 'flagged' && !note) {
+    state.libraryReviewSubmit = { status: 'error', error: 'Add a note before flagging.', key };
+    render();
+    return;
+  }
+
+  state.libraryReviewSubmit = { status: 'submitting', error: null, key };
+  render();
+  log.info('library.review_submit', { athlete: identity.athlete, file, section, decision });
+
+  const result = await submitLibraryReview({
+    baseUrl: settings.baseUrl,
+    token: settings.token,
+    athlete: identity.athlete,
+    file,
+    section,
+    contentHash,
+    decision,
+    note: decision === 'flagged' ? note : undefined,
+  });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    log.info('library.review_submit_success', { athlete: identity.athlete, file, section, decision });
+    state.libraryReviewSubmit = { status: 'success', error: null, key };
+    delete state.libraryReviewDrafts[key];
+    loadLibraryCards(); // refreshes latest_review/reviewed/stale -- calls render() itself
+  } else {
+    log.error('library.review_submit_failed', { file, section, error: result.error });
+    state.libraryReviewSubmit = { status: 'error', error: result.error, key };
+    render();
+  }
 }
 
 async function handleSubmitProfile() {
@@ -2231,43 +2414,6 @@ async function handleSubmitProfile() {
     state.profileSubmit = { status: 'error', message: result.error };
   }
   render();
-}
-
-async function handleSubmitFeedback() {
-  if (state.feedbackSubmit.status === 'submitting') return;
-  const settings = state.settingsForm;
-  if (!isConfigured(settings, state.identity)) {
-    state.tab = 'settings';
-    saveActiveTab(state.tab);
-    render();
-    return;
-  }
-
-  const payload = serializeFeedbackForm(state.feedbackForm);
-  if (!payload.body) {
-    state.feedbackSubmit = { status: 'error', message: 'Add some details first.' };
-    render();
-    return;
-  }
-
-  state.feedbackSubmit = { status: 'submitting', message: null };
-  render();
-  log.info('feedback.submit', { athlete: athleteSlug(), type: payload.type });
-
-  const result = await postFeedback({
-    baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), payload,
-  });
-  if (handleUnauthorized(result)) return;
-  if (result.ok) {
-    log.info('feedback.submit_success', { athlete: athleteSlug() });
-    state.feedbackForm = createFeedbackForm();
-    state.feedbackSubmit = { status: 'success', message: 'Saved.' };
-    loadFeedback(); // calls render() itself
-  } else {
-    log.error('feedback.submit_failed', { athlete: athleteSlug(), error: result.error });
-    state.feedbackSubmit = { status: 'error', message: result.error };
-    render();
-  }
 }
 
 // --- Ask-the-coach Q&A (coach-mode Q&A build) -------------------------------
@@ -3015,13 +3161,6 @@ function setTab(tab) {
   state.tab = tab;
   saveActiveTab(tab);
   log.info('tab.switch', { tab });
-  // B3: the athlete's Feedback tab is the "relevant section" for the
-  // athlete-role unread badge -- mark it seen the moment she opens it,
-  // regardless of whether a fetch below is also triggered. Using "now" (not
-  // waiting for the fetch to resolve) is correct: every entry's
-  // coach_reply_at is already fixed in the past relative to this instant, so
-  // nothing the in-flight fetch returns can retroactively count as unread.
-  if (tab === 'feedback') saveLastSeen('athlete');
   // Lazily (re)loads the plan the moment the Plan tab is actually visited,
   // rather than eagerly on every settings-save / sign-in -- covers both
   // "never loaded yet" (idle) and "let's retry" (a previous fetch errored).
@@ -3030,9 +3169,12 @@ function setTab(tab) {
     loadPlan(); // calls render() itself
     return;
   }
-  if (tab === 'feedback' && (state.feedbackEntries.status === 'idle' || state.feedbackEntries.status === 'error')
-    && isConfigured(state.settingsForm, state.identity)) {
-    loadFeedback(); // calls render() itself
+  // Resources tab (web/resources-tab-library-review): same lazy-load
+  // convention as Plan/Roster above -- fetch the card list the moment the
+  // tab is actually opened, not eagerly. Falls back to whatever's cached in
+  // localStorage while offline (see loadLibraryCards).
+  if (tab === 'resources' && (state.libraryCards.status === 'idle' || state.libraryCards.status === 'error')) {
+    loadLibraryCards(); // calls render() itself
     return;
   }
   // Same lazy-load convention as Feedback above. Note: only the athletes
@@ -3112,9 +3254,16 @@ async function onAppClick(e) {
     case 'log:toggle-manual': handleToggleManualLog(); break;
     case 'health-status:toggle': handleToggleHealthStatusForm(); break;
     case 'health-status:submit': handleSubmitHealthStatusSelf(); break;
-    case 'checkin:submit': handleSubmitCheckin(); break;
     case 'profile:submit': handleSubmitProfile(); break;
-    case 'feedback:submit': handleSubmitFeedback(); break;
+    case 'library:open-file': handleOpenLibraryFile(el.dataset.file, el.dataset.anchor); break;
+    case 'library:close-file': handleCloseLibraryFile(); break;
+    case 'library:filter': handleSetLibraryFilter(el.dataset.filter); break;
+    case 'library:review:accept':
+      await handleSubmitLibraryReview('accepted', el.dataset.file, el.dataset.section, el.dataset.hash);
+      break;
+    case 'library:review:flag':
+      await handleSubmitLibraryReview('flagged', el.dataset.file, el.dataset.section, el.dataset.hash);
+      break;
     // Coach-mode Q&A build: one shared button action, routed to whichever
     // detail view is actually open -- same "branch on state, not a second
     // action name for the same shared markup" convention `session:open`'s
@@ -3204,13 +3353,13 @@ function onAppChange(e) {
   }
 }
 
-// Log/Check-in form fields carry `data-form`/`data-field` instead of feeding
-// through full state + render() on every keystroke -- a full re-render on
-// every keystroke would tear out focus and slider drag position (the DOM
-// under #app is fully replaced each render()). Instead this handler mutates
-// `state.logForm`/`state.checkinForm` directly (read back on submit) and,
-// for range sliders, updates their `data-slider-out` <output> label in
-// place -- no render() call here.
+// Form fields carry `data-form`/`data-field` instead of feeding through
+// full state + render() on every keystroke -- a full re-render on every
+// keystroke would tear out focus and slider drag position (the DOM under
+// #app is fully replaced each render()). Instead this handler mutates
+// `state.logForm`/etc. directly (read back on submit) and, for range
+// sliders, updates their `data-slider-out` <output> label in place -- no
+// render() call here.
 function onAppInput(e) {
   const el = e.target;
   const formName = el.dataset.form;
@@ -3218,7 +3367,6 @@ function onAppInput(e) {
   if (!formName || !field) return;
 
   if (formName === 'log') state.logForm[field] = el.value;
-  else if (formName === 'checkin') state.checkinForm[field] = el.value;
   else if (formName === 'profile') {
     if (field === 'pool_days') {
       // Each pool-day checkbox carries data-day (see views.js's
@@ -3234,7 +3382,14 @@ function onAppInput(e) {
       state.profileForm[field] = el.value;
     }
   }
-  else if (formName === 'feedback') state.feedbackForm[field] = el.value;
+  // Resources tab Approvals: the per-card flag note, keyed by
+  // `${file}#${section}` (data-key) -- same per-row-keyed convention as
+  // `roster-reply` above (several cards' notes could plausibly be
+  // in-progress at once).
+  else if (formName === 'library-review') {
+    const key = el.dataset.key;
+    if (key) state.libraryReviewDrafts[key] = el.value;
+  }
   // Coach-mode Q&A build: shared draft field for both Ask-the-coach call
   // sites (Plan tab session detail, Dashboard tab workout detail) -- see
   // createAskCoachForm's doc comment for why one flat slice covers both.
@@ -3247,9 +3402,9 @@ function onAppInput(e) {
     if (id) state.roster.replyDrafts[id] = el.value;
   }
   // The roster's "log a health status" form -- a plain flat draft object
-  // (state.roster.healthStatusForm), same convention as `feedbackForm`/
-  // `askCoachForm` above (there is only ever one such form per athlete, not
-  // one per row, unlike `roster-reply`'s per-feedback-id draft map).
+  // (state.roster.healthStatusForm), same convention as `askCoachForm`
+  // above (there is only ever one such form per athlete, not one per row,
+  // unlike `roster-reply`'s per-feedback-id draft map).
   else if (formName === 'roster-health-status') state.roster.healthStatusForm[field] = el.value;
   // The athlete's own "log a health status" form (web/coach-health-nav-
   // and-athlete-self-log) -- same flat-draft-object convention as
@@ -3342,9 +3497,11 @@ function updateOfflineBanner() {
 // content actually reflects the new state rather than only the always-in-DOM
 // #offline-banner updating. Every other tab either doesn't touch `online` in
 // its render function or isn't worth a re-render on a background
-// connectivity change (Plan/Settings/Feedback keep whatever they last
-// rendered until the athlete next interacts with them).
-const TABS_SENSITIVE_TO_ONLINE_STATE = ['coach', 'dashboard', 'checkin'];
+// connectivity change (Plan/Settings keep whatever they last rendered until
+// the athlete next interacts with them). `resources`: the Approvals
+// section's Accept/Flag buttons disable while offline (nothing to
+// optimistically apply against -- see renderResourcesTab).
+const TABS_SENSITIVE_TO_ONLINE_STATE = ['coach', 'dashboard', 'resources'];
 
 function updateOnlineState() {
   state.online = navigator.onLine;

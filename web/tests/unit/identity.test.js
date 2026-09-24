@@ -33,7 +33,7 @@ describe('identity persistence', () => {
 
   it('round-trips a saved identity', () => {
     const identity = {
-      name: 'Andrew', athlete: 'andrew', role: 'coach', coachFor: ['renee'],
+      name: 'Andrew', athlete: 'andrew', role: 'coach', coachFor: ['renee'], isLibraryAdmin: true,
     };
     saveIdentity(identity, storage);
     expect(loadIdentity(storage)).toEqual(identity);
@@ -42,7 +42,7 @@ describe('identity persistence', () => {
 
   it('clears a saved identity', () => {
     saveIdentity({
-      name: 'Andrew', athlete: 'andrew', role: 'coach', coachFor: [],
+      name: 'Andrew', athlete: 'andrew', role: 'coach', coachFor: [], isLibraryAdmin: false,
     }, storage);
     clearIdentity(storage);
     expect(loadIdentity(storage)).toBeNull();
@@ -61,14 +61,32 @@ describe('identity persistence', () => {
   it('defaults name to empty string, role to athlete, and coachFor to [] when missing', () => {
     storage.setItem('swimcoach_identity', JSON.stringify({ athlete: 'renee' }));
     expect(loadIdentity(storage)).toEqual({
-      name: '', athlete: 'renee', role: 'athlete', coachFor: [],
+      name: '', athlete: 'renee', role: 'athlete', coachFor: [], isLibraryAdmin: false,
     });
   });
 
   it('defaults coachFor to [] for an identity persisted before this field existed', () => {
     storage.setItem('swimcoach_identity', JSON.stringify({ name: 'Renee', athlete: 'renee', role: 'athlete' }));
     expect(loadIdentity(storage)).toEqual({
-      name: 'Renee', athlete: 'renee', role: 'athlete', coachFor: [],
+      name: 'Renee', athlete: 'renee', role: 'athlete', coachFor: [], isLibraryAdmin: false,
     });
+  });
+
+  it('defaults isLibraryAdmin to false for an identity persisted before this field existed', () => {
+    storage.setItem(
+      'swimcoach_identity',
+      JSON.stringify({ name: 'Renee', athlete: 'renee', role: 'athlete', coachFor: [] }),
+    );
+    expect(loadIdentity(storage).isLibraryAdmin).toBe(false);
+  });
+
+  it('round-trips isLibraryAdmin true', () => {
+    storage.setItem(
+      'swimcoach_identity',
+      JSON.stringify({
+        name: 'Andrew', athlete: 'andrew', role: 'athlete', coachFor: [], isLibraryAdmin: true,
+      }),
+    );
+    expect(loadIdentity(storage).isLibraryAdmin).toBe(true);
   });
 });

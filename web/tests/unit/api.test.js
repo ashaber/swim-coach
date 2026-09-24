@@ -1,13 +1,14 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
-  postWorkout, listWorkouts, postWellness, listWellness, fetchPlan, fetchPlanLoad, getAthlete, patchAthlete,
+  postWorkout, listWorkouts, listWellness, fetchPlan, fetchPlanLoad, getAthlete, patchAthlete,
   patchWorkout,
-  postFeedback, listFeedback, uploadWorkoutFile, exchangeGoogleToken, RequestAccessError, logout,
+  listFeedback, uploadWorkoutFile, exchangeGoogleToken, RequestAccessError, logout,
   onboard, OnboardForbiddenError, OnboardConflictError, downloadGarminFit,
   pushSessionToIntervals,
   fetchMe, createGrant, listGrants, revokeGrant,
   listCoachedAthletes, fetchCoachWorkouts, fetchCoachFeedback, fetchCoachLoad, fetchCoachPlan, replyToCoachFeedback,
   fetchCoachHealthStatus, postCoachHealthStatus, resolveCoachHealthStatus,
+  listLibraryCards, fetchLibraryFile, submitLibraryReview,
   fetchHealthStatus, postHealthStatus,
   askAboutSession, askAboutWorkout,
   postCoachWorkoutChatMessage, patchCoachWorkoutChatMuted,
@@ -102,24 +103,6 @@ describe('listWorkouts', () => {
     expect(init.body).toBeUndefined();
     expect(init.headers.Authorization).toBe('Bearer tok');
     expect(result).toEqual({ ok: true, data: items });
-  });
-});
-
-describe('postWellness', () => {
-  it('POSTs to /api/wellness with the athlete query param, bearer header, and JSON body', async () => {
-    const created = { id: 'we1', date: '2026-07-07', sleep_quality: 4 };
-    global.fetch = fakeFetch(created);
-    const payload = { date: '2026-07-07', sleep_quality: 4, sleep_hours: 7.5, stress: 2, soreness: 2, motivation: 4 };
-
-    const result = await postWellness({
-      baseUrl: 'https://api.example.com', token: 'tok123', athlete: 'renee', payload,
-    });
-
-    const [url, init] = global.fetch.mock.calls[0];
-    expect(url).toBe('https://api.example.com/api/wellness?athlete=renee');
-    expect(init.method).toBe('POST');
-    expect(JSON.parse(init.body)).toEqual(payload);
-    expect(result).toEqual({ ok: true, data: created });
   });
 });
 
@@ -335,33 +318,6 @@ describe('downloadGarminFit', () => {
   });
 });
 
-describe('postFeedback', () => {
-  it('POSTs to /api/feedback with the athlete query param, bearer header, and JSON body', async () => {
-    const created = { id: 'f1', type: 'feature_request', body: 'add a pace calculator' };
-    global.fetch = fakeFetch(created);
-    const payload = { type: 'feature_request', body: 'add a pace calculator' };
-
-    const result = await postFeedback({
-      baseUrl: 'https://api.example.com', token: 'tok123', athlete: 'renee', payload,
-    });
-
-    expect(global.fetch).toHaveBeenCalledTimes(1);
-    const [url, init] = global.fetch.mock.calls[0];
-    expect(url).toBe('https://api.example.com/api/feedback?athlete=renee');
-    expect(init.method).toBe('POST');
-    expect(init.headers.Authorization).toBe('Bearer tok123');
-    expect(JSON.parse(init.body)).toEqual(payload);
-    expect(result).toEqual({ ok: true, data: created });
-  });
-
-  it('returns a normalized error on a non-2xx response', async () => {
-    global.fetch = fakeFetch({ error: 'research_question is coach-only' }, { ok: false, status: 422 });
-    const result = await postFeedback({
-      baseUrl: 'https://api.example.com', token: 't', athlete: 'renee', payload: {},
-    });
-    expect(result).toEqual({ ok: false, error: 'research_question is coach-only', status: 422 });
-  });
-});
 
 describe('uploadWorkoutFile', () => {
   it('POSTs multipart FormData to /api/workouts/ingest with the athlete query param and bearer header, no Content-Type override', async () => {
@@ -440,6 +396,95 @@ describe('listFeedback', () => {
     expect(init.body).toBeUndefined();
     expect(init.headers.Authorization).toBe('Bearer tok');
     expect(result).toEqual({ ok: true, data: items });
+  });
+});
+
+describe('listLibraryCards', () => {
+  it('GETs /api/library/cards with the athlete query param and bearer header', async () => {
+    const cards = [{ file: '07-strength-dryland.md', section: 'session-duration-45-minutes' }];
+    global.fetch = fakeFetch(cards);
+
+    const result = await listLibraryCards({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee' });
+
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/library/cards?athlete=renee');
+    expect(init.headers.Authorization).toBe('Bearer tok');
+    expect(result).toEqual({ ok: true, data: cards });
+  });
+});
+
+describe('fetchLibraryFile', () => {
+  it('GETs /api/library/files/<name> with the athlete query param, url-encoding the name', async () => {
+    const file = { file: '07-strength-dryland.md', content: '# Strength & dryland programming\n' };
+    global.fetch = fakeFetch(file);
+
+    const result = await fetchLibraryFile({
+      baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee', name: '07-strength-dryland.md',
+    });
+
+    const [url] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/library/files/07-strength-dryland.md?athlete=renee');
+    expect(result).toEqual({ ok: true, data: file });
+  });
+});
+
+describe('submitLibraryReview', () => {
+  it('POSTs to /api/library/reviews with the decision and content_hash', async () => {
+    const created = { id: 'r1', decision: 'accepted' };
+    global.fetch = fakeFetch(created);
+
+    const result = await submitLibraryReview({
+      baseUrl: 'https://api.example.com',
+      token: 'tok',
+      athlete: 'andrew',
+      file: '07-strength-dryland.md',
+      section: 'session-duration-45-minutes',
+      contentHash: 'abc123',
+      decision: 'accepted',
+    });
+
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/library/reviews?athlete=andrew');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({
+      file: '07-strength-dryland.md',
+      section: 'session-duration-45-minutes',
+      content_hash: 'abc123',
+      decision: 'accepted',
+    });
+    expect(result).toEqual({ ok: true, data: created });
+  });
+
+  it('includes note only when given, and omits it entirely when absent', async () => {
+    global.fetch = fakeFetch({ id: 'r2', decision: 'flagged' });
+
+    await submitLibraryReview({
+      baseUrl: 'https://api.example.com',
+      token: 'tok',
+      athlete: 'andrew',
+      file: '07-strength-dryland.md',
+      section: 'gaps',
+      contentHash: 'abc123',
+      decision: 'flagged',
+      note: 'the Manske citation looks off',
+    });
+
+    const [, init] = global.fetch.mock.calls[0];
+    expect(JSON.parse(init.body).note).toBe('the Manske citation looks off');
+  });
+
+  it('returns a normalized error on a non-2xx response', async () => {
+    global.fetch = fakeFetch({ error: 'note is required when flagging' }, { ok: false, status: 422 });
+    const result = await submitLibraryReview({
+      baseUrl: 'https://api.example.com',
+      token: 'tok',
+      athlete: 'andrew',
+      file: '07-strength-dryland.md',
+      section: 'gaps',
+      contentHash: 'abc123',
+      decision: 'flagged',
+    });
+    expect(result).toEqual({ ok: false, error: 'note is required when flagging', status: 422 });
   });
 });
 

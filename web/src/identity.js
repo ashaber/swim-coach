@@ -54,6 +54,12 @@ export function loadIdentity(storage = localStorage) {
       athlete: parsed.athlete,
       role: parsed.role ?? 'athlete',
       coachFor: Array.isArray(parsed.coachFor) ? parsed.coachFor : [],
+      // web/resources-tab-library-review: whether this athlete may review
+      // library cards (Resources tab's Approvals section). Defaults false
+      // for identities persisted before this field existed, same
+      // defensive pattern as `coachFor`. UI convenience only -- the
+      // backend enforces this independently on every admin route.
+      isLibraryAdmin: !!parsed.isLibraryAdmin,
     };
   } catch {
     return null;
@@ -188,8 +194,16 @@ export async function signIn({ buttonEl, baseUrl, onIdentity } = {}) {
           log.warn('identity.fetch_me_failed', { error: meResult.error, status: meResult.status });
         }
         const coachFor = meResult.ok && Array.isArray(meResult.data?.coach_for) ? meResult.data.coach_for : [];
+        // Prefer the freshest source (the same fetchMe call that resolved
+        // coachFor above) when it succeeded; fall back to the sign-in
+        // response's own is_library_admin otherwise -- both endpoints
+        // return it (see backend/app/routes/auth.py), so either is a
+        // valid source, just fetchMe's is more likely to be current.
+        const isLibraryAdmin = meResult.ok && typeof meResult.data?.is_library_admin === 'boolean'
+          ? meResult.data.is_library_admin
+          : !!session.is_library_admin;
         const identity = {
-          name: session.name, athlete: session.athlete, role: session.role, coachFor,
+          name: session.name, athlete: session.athlete, role: session.role, coachFor, isLibraryAdmin,
         };
         saveIdentity(identity);
         log.info('identity.sign_in_success', { athlete: identity.athlete, role: identity.role });

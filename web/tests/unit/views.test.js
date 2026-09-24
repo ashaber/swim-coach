@@ -3,7 +3,7 @@ import {
   renderDashboardTab, renderSettingsTab, renderUpdateBanner, renderApp,
   renderTabBar, renderRosterTab, renderLoadChart,
   renderCr10SliderField, cr10AnchorLabel, loadTierLabel, renderWorkoutRow,
-  renderAskCoachSection, renderFeedbackTab, renderCoachTab,
+  renderAskCoachSection, renderCoachTab, renderResourcesTab,
 } from '../../src/views.js';
 import { isoWeekMonday, addDays, dateKey, formatShortDate, formatDuration } from '../../src/plan.js';
 import { HISTORY_DISPLAY_CAP } from '../../src/workouts.js';
@@ -1998,45 +1998,6 @@ describe('renderAskCoachSection', () => {
   });
 });
 
-describe('renderFeedbackTab (B2: answer visibility on the athlete\'s own Feedback tab)', () => {
-  const baseArgs = {
-    form: { type: 'feature_request', body: '' },
-    submit: { status: 'idle', message: null },
-    entriesStatus: 'ready',
-    backendConfigured: true,
-    online: true,
-  };
-
-  it('renders the AI-provisional-answer, coach-reply, and waiting-on-coach states', () => {
-    const html = renderFeedbackTab({
-      ...baseArgs,
-      entries: [
-        { id: 'f1', type: 'question', source: 'athlete', body: 'q1', status: 'open', created_at: '2026-08-20T00:00:00Z', ai_provisional_answer: 'AI says zone 2.', coach_reply: null, needs_human_review: false },
-        { id: 'f2', type: 'question', source: 'athlete', body: 'q2', status: 'answered', created_at: '2026-08-20T00:00:00Z', ai_provisional_answer: 'AI says push it.', coach_reply: 'Coach says ease off.', needs_human_review: false },
-        { id: 'f3', type: 'question', source: 'athlete', body: 'q3', status: 'open', created_at: '2026-08-20T00:00:00Z', ai_provisional_answer: null, coach_reply: null, needs_human_review: true },
-      ],
-    });
-    expect(html).toContain('AI says zone 2.');
-    expect(html).toContain('Coach says ease off.');
-    // The coach reply wins over the AI answer when both exist on one entry.
-    expect(html).not.toContain('AI says push it.');
-    expect(html).toContain('Waiting on your coach to reply.');
-  });
-
-  it('shows the linked session/workout context on a scoped question', () => {
-    const html = renderFeedbackTab({
-      ...baseArgs,
-      entries: [
-        { id: 'f1', type: 'question', source: 'athlete', body: 'about a session', status: 'open', created_at: '2026-08-20T00:00:00Z', session_date: '2026-08-10', session_sport: 'swim_pool' },
-        { id: 'f2', type: 'question', source: 'athlete', body: 'about a workout', status: 'open', created_at: '2026-08-20T00:00:00Z', workout_id: 'w-1' },
-        { id: 'f3', type: 'feature_request', source: 'athlete', body: 'unlinked', status: 'open', created_at: '2026-08-20T00:00:00Z' },
-      ],
-    });
-    expect(html).toContain('About a logged workout');
-    expect(html).toMatch(/About Pool swim on/);
-  });
-});
-
 describe('renderTabBar', () => {
   it('shows every tab, including My Athletes, by default (no second arg)', () => {
     const html = renderTabBar('plan');
@@ -2061,24 +2022,298 @@ describe('renderTabBar', () => {
   });
 
   // B3 (coach-mode Q&A build): unread count badges.
-  it('renders no badge on either tab when both unread counts are 0/omitted', () => {
+  it('renders no badge on any tab when the unread count is 0/omitted', () => {
     const html = renderTabBar('plan');
     expect(html).not.toContain('badge-count');
-  });
-
-  it('renders a badge on the Feedback tab when feedbackUnread is positive', () => {
-    const html = renderTabBar('plan', { feedbackUnread: 3 });
-    const match = /<button[^>]*data-a="tab:feedback"[^>]*>[\s\S]*?<\/button>/.exec(html);
-    expect(match[0]).toContain('<span class="badge-count">3</span>');
-    // Not leaked onto an unrelated tab.
-    const rosterMatch = /<button[^>]*data-a="tab:roster"[^>]*>[\s\S]*?<\/button>/.exec(html);
-    expect(rosterMatch[0]).not.toContain('badge-count');
   });
 
   it('renders a badge on the My Athletes (roster) tab when rosterUnread is positive', () => {
     const html = renderTabBar('plan', { rosterUnread: 2 });
     const match = /<button[^>]*data-a="tab:roster"[^>]*>[\s\S]*?<\/button>/.exec(html);
     expect(match[0]).toContain('<span class="badge-count">2</span>');
+  });
+});
+
+describe('renderResourcesTab', () => {
+  const card = (overrides = {}) => ({
+    file: '07-strength-dryland.md',
+    section: 'session-duration-45-minutes',
+    heading: 'Session duration: 45 minutes',
+    summary: 'A 45-minute strength session fits a real stimulus without crowding the rest of the week.',
+    recommendation: 'none -- background only',
+    confidence: 'high',
+    tags: ['[EVIDENCE: swim]'],
+    source_count: 2,
+    weak_source_count: 0,
+    dossier: null,
+    reviewed: true,
+    needs_judgment: false,
+    stale: false,
+    content_hash: 'abc123',
+    latest_review: null,
+    ...overrides,
+  });
+
+  const baseArgs = {
+    cards: { status: 'ready', data: [card()], error: null },
+    filter: 'all',
+    openFile: null,
+    file: { status: 'idle', data: null, error: null },
+    isAdmin: false,
+    reviewDrafts: {},
+    reviewSubmit: { status: 'idle', error: null, key: null },
+    backendConfigured: true,
+    online: true,
+  };
+
+  it('shows a backend-needed notice when not configured', () => {
+    const html = renderResourcesTab({ ...baseArgs, backendConfigured: false });
+    expect(html).toContain('sign in');
+  });
+
+  it('shows a loading state', () => {
+    const html = renderResourcesTab({ ...baseArgs, cards: { status: 'loading', data: [], error: null } });
+    expect(html).toContain('Loading');
+  });
+
+  it('shows an error state when nothing is cached', () => {
+    const html = renderResourcesTab({
+      ...baseArgs, cards: { status: 'error', data: [], error: 'network down' },
+    });
+    expect(html).toContain('network down');
+  });
+
+  it('renders a card with heading, file, summary, and recommendation', () => {
+    const html = renderResourcesTab(baseArgs);
+    expect(html).toContain('Session duration: 45 minutes');
+    expect(html).toContain('07-strength-dryland.md');
+    expect(html).toContain('A 45-minute strength session');
+    expect(html).toContain('none -- background only');
+  });
+
+  it('shows a confidence badge and a reviewed badge', () => {
+    const html = renderResourcesTab(baseArgs);
+    expect(html).toContain('high confidence');
+    expect(html).toContain('Reviewed');
+  });
+
+  it('shows an unreviewed badge for an unreviewed card', () => {
+    const html = renderResourcesTab({
+      ...baseArgs, cards: { status: 'ready', data: [card({ reviewed: false })], error: null },
+    });
+    expect(html).toContain('Unreviewed');
+  });
+
+  it('shows a stale badge for a stale card', () => {
+    const html = renderResourcesTab({
+      ...baseArgs, cards: { status: 'ready', data: [card({ stale: true })], error: null },
+    });
+    expect(html).toContain('Stale');
+  });
+
+  it('shows a flagged badge when latest_review is a flag', () => {
+    const html = renderResourcesTab({
+      ...baseArgs,
+      cards: {
+        status: 'ready',
+        data: [card({ latest_review: { decision: 'flagged', note: 'check this' } })],
+        error: null,
+      },
+    });
+    expect(html).toContain('Flagged');
+  });
+
+  it('shows source count, pluralized', () => {
+    const html = renderResourcesTab({
+      ...baseArgs, cards: { status: 'ready', data: [card({ source_count: 1 }), card({ source_count: 3, section: 's2' })], error: null },
+    });
+    expect(html).toContain('1 source<');
+    expect(html).toContain('3 sources');
+  });
+
+  it('groups cards by file with a file-group heading', () => {
+    const html = renderResourcesTab({
+      ...baseArgs,
+      cards: {
+        status: 'ready',
+        data: [card(), card({ file: '08-ultra-feeding.md', section: 'gaps', heading: 'Gaps' })],
+        error: null,
+      },
+    });
+    expect(html).toContain('07-strength-dryland.md');
+    expect(html).toContain('08-ultra-feeding.md');
+  });
+
+  it('renders filter chips, marking the active one', () => {
+    const html = renderResourcesTab({ ...baseArgs, filter: 'needs_review' });
+    const match = /<button[^>]*data-filter="needs_review"[^>]*>/.exec(html);
+    expect(match[0]).toContain('active');
+    const allMatch = /<button[^>]*data-filter="all"[^>]*>/.exec(html);
+    expect(allMatch[0]).not.toContain('active');
+  });
+
+  it('the needs_review filter excludes a reviewed, non-stale card', () => {
+    const html = renderResourcesTab({ ...baseArgs, filter: 'needs_review' });
+    expect(html).toContain('Nothing matches this filter.');
+  });
+
+  it('the needs_review filter includes an unreviewed card', () => {
+    const html = renderResourcesTab({
+      ...baseArgs,
+      filter: 'needs_review',
+      cards: { status: 'ready', data: [card({ reviewed: false })], error: null },
+    });
+    expect(html).toContain('Session duration: 45 minutes');
+  });
+
+  it('the flagged filter only shows flagged cards', () => {
+    const html = renderResourcesTab({
+      ...baseArgs,
+      filter: 'flagged',
+      cards: { status: 'ready', data: [card()], error: null },
+    });
+    expect(html).toContain('Nothing matches this filter.');
+  });
+
+  it('"Read full section" carries the file and the verbatim heading as the anchor', () => {
+    const html = renderResourcesTab(baseArgs);
+    expect(html).toContain('data-a="library:open-file"');
+    expect(html).toContain('data-file="07-strength-dryland.md"');
+    expect(html).toContain('data-anchor="Session duration: 45 minutes"');
+  });
+
+  it('hides Approvals when not admin', () => {
+    const html = renderResourcesTab({ ...baseArgs, isAdmin: false });
+    expect(html).not.toContain('Approvals');
+  });
+
+  it('shows Approvals when admin, with unreviewed/stale cards listed', () => {
+    const html = renderResourcesTab({
+      ...baseArgs,
+      isAdmin: true,
+      cards: {
+        status: 'ready',
+        data: [card({ reviewed: false }), card({ section: 's2', heading: 'Reviewed one', reviewed: true, stale: false })],
+        error: null,
+      },
+    });
+    const approvalsSection = html.slice(html.indexOf('<h2>Approvals'));
+    expect(html).toContain('Approvals');
+    expect(approvalsSection).toContain('Session duration: 45 minutes');
+    expect(approvalsSection).not.toContain('Reviewed one');
+  });
+
+  it('Approvals sorts needs-judgment cards first', () => {
+    const html = renderResourcesTab({
+      ...baseArgs,
+      isAdmin: true,
+      cards: {
+        status: 'ready',
+        data: [
+          card({ section: 'mech', heading: 'Mechanical one', reviewed: false, needs_judgment: false }),
+          card({ section: 'judge', heading: 'Judgment one', reviewed: false, needs_judgment: true }),
+        ],
+        error: null,
+      },
+    });
+    const approvalsSection = html.slice(html.indexOf('<h2>Approvals'));
+    expect(approvalsSection.indexOf('Judgment one')).toBeLessThan(approvalsSection.indexOf('Mechanical one'));
+  });
+
+  it('Approvals shows nothing-pending message when nothing needs review', () => {
+    const html = renderResourcesTab({ ...baseArgs, isAdmin: true });
+    expect(html).toContain('Nothing waiting on review.');
+  });
+
+  it('Approvals buttons carry file/section/hash and disable while submitting', () => {
+    const html = renderResourcesTab({
+      ...baseArgs,
+      isAdmin: true,
+      cards: { status: 'ready', data: [card({ reviewed: false })], error: null },
+      reviewSubmit: { status: 'submitting', error: null, key: '07-strength-dryland.md#session-duration-45-minutes' },
+    });
+    expect(html).toContain('data-a="library:review:accept"');
+    expect(html).toContain('data-a="library:review:flag"');
+    expect(html).toContain('data-section="session-duration-45-minutes"');
+    expect(html).toContain('data-hash="abc123"');
+    const acceptMatch = /<button[^>]*data-a="library:review:accept"[^>]*>/.exec(html);
+    expect(acceptMatch[0]).toContain('disabled');
+  });
+
+  it('Approvals shows a per-card error', () => {
+    const html = renderResourcesTab({
+      ...baseArgs,
+      isAdmin: true,
+      cards: { status: 'ready', data: [card({ reviewed: false })], error: null },
+      reviewSubmit: {
+        status: 'error', error: 'Add a note before flagging.', key: '07-strength-dryland.md#session-duration-45-minutes',
+      },
+    });
+    expect(html).toContain('Add a note before flagging.');
+  });
+
+  it('Approvals is disabled offline, with a message', () => {
+    const html = renderResourcesTab({
+      ...baseArgs, isAdmin: true, online: false, cards: { status: 'ready', data: [card({ reviewed: false })], error: null },
+    });
+    expect(html).toContain('Offline');
+  });
+
+  it('the offline banner shows when offline and cards are otherwise ready', () => {
+    const html = renderResourcesTab({ ...baseArgs, online: false });
+    expect(html).toContain('Offline');
+  });
+
+  it('opens the file view when openFile is set, with a back control', () => {
+    const html = renderResourcesTab({
+      ...baseArgs,
+      openFile: { name: '07-strength-dryland.md', anchor: 'Session duration: 45 minutes' },
+      file: { status: 'ready', data: { file: '07-strength-dryland.md', content: '# Strength\n\n## Session duration: 45 minutes\n\nBody text.' }, error: null },
+    });
+    expect(html).toContain('data-a="library:close-file"');
+    expect(html).toContain('id="library-file-content"');
+    expect(html).toContain('Body text.');
+  });
+
+  it('file view shows a loading state', () => {
+    const html = renderResourcesTab({
+      ...baseArgs,
+      openFile: { name: '07-strength-dryland.md', anchor: null },
+      file: { status: 'loading', data: null, error: null },
+    });
+    expect(html).toContain('Loading');
+  });
+
+  it('file view shows an error state', () => {
+    const html = renderResourcesTab({
+      ...baseArgs,
+      openFile: { name: '07-strength-dryland.md', anchor: null },
+      file: { status: 'error', data: null, error: 'not found' },
+    });
+    expect(html).toContain('not found');
+  });
+
+  it('file view shows an offline notice', () => {
+    const html = renderResourcesTab({
+      ...baseArgs,
+      online: false,
+      openFile: { name: '07-strength-dryland.md', anchor: null },
+      file: { status: 'ready', data: { file: '07-strength-dryland.md', content: '# T\n' }, error: null },
+    });
+    expect(html).toContain('Offline');
+  });
+
+  it('never leaks a raw <script> tag from card content (XSS baseline)', () => {
+    const html = renderResourcesTab({
+      ...baseArgs,
+      cards: {
+        status: 'ready',
+        data: [card({ summary: '<script>alert(1)</script>', recommendation: '<img src=x onerror=alert(1)>' })],
+        error: null,
+      },
+    });
+    expect(html).not.toContain('<script>alert(1)</script>');
+    expect(html).not.toContain('<img src=x');
   });
 });
 
