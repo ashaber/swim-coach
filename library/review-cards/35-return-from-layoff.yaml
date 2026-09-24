@@ -1,0 +1,65 @@
+schema_version: 1
+file: 35-return-from-layoff.md
+cards:
+- section: detraining-time-course-general-endurance
+  heading: 'Detraining time course: general endurance'
+  summary: Early fitness loss comes from falling blood volume, later from mitochondrial enzymes; losses
+    show up within 2 weeks; in masters athletes decline tracks volume lost, not age, and is largely recoverable.
+  recommendation: Frame layoff fitness loss as proportional to training stopped and substantially recoverable,
+    not an age-driven permanent drop.
+  content_hash: b33ff349905f628014dbf85b3d72baf188c0ca8c8f1d32e1081c32405cdaca64
+- section: detraining-time-course-swim-specific
+  heading: 'Detraining time course: swim-specific'
+  summary: 12 weeks off cut elite swimmers' threshold speed/power; in the COVID natural experiment, a
+    return about as long as the 2-4 month interruption restored performance almost fully.
+  recommendation: Tell a returning swimmer to expect the comeback to take about as long as the layoff,
+    and that performance does come back.
+  content_hash: 4b38ab445c4798ee03d77b95df48d89f401b9f0feb432ec90b996de0048f6659
+- section: strength-is-retained-far-longer-than-cardiovascular-fitness
+  heading: Strength is retained far longer than cardiovascular fitness
+  summary: Strength and muscle size persist for months off (about 12-24+ weeks); older men lost only 5-15%
+    strength in 12 weeks off and regained it in under 8 weeks.
+  recommendation: Expect strength to return faster than endurance; the first-session risk is unaccustomed
+    load, not lost strength.
+  content_hash: 5fdb73c53724112ba68d6815a6bc4792e3653e28c20e5e44440e0c6bef6d4b3d
+- section: retraining-muscle-memory-genuinely-contested-do-not-overclaim
+  heading: 'Retraining / "muscle memory": genuinely contested, do not overclaim'
+  summary: '''Muscle memory'' via retained myonuclei holds in mice but not humans (Rahmati 2022); faster
+    regain is supported practically, not mechanistically.'
+  recommendation: Coach may say regaining is often faster, but must not state the myonuclear mechanism
+    as settled human science.
+  content_hash: 6beebe968aaba887c1aef355edec5ced0347c15405a64700d5086404d0430fe9
+- section: the-core-reconciliation-does-a-layoff-return-break-the-8-week-rail
+  heading: 'The core reconciliation: does a layoff return break the +8%/week rail?'
+  summary: A layoff return keeps the +8%/week rail unchanged; only the starting point changes, proposed
+    at 25-35% of last peak weekly volume (low-confidence coach judgment), giving about 15-17 weeks back
+    to full volume.
+  recommendation: Start returning swimmers at ~25-35% of prior peak weekly volume and ramp at no more
+    than 8%/week; never raise the rail.
+  content_hash: 158ebc11b3190ea56ed776be77187e11321d140123e1203fb9506cd5724edd21
+- section: intensity-and-long-swim-reintroduction
+  heading: Intensity and long-swim reintroduction
+  summary: Returning swimmers resumed aerobic volume with no intensity at first; the existing long-swim
+    step cap already anchors on the last 30 days of real swims.
+  recommendation: Hold intensity easy/technique for the first 3-4 weeks back; no threshold or race-pace
+    work before week 4.
+  content_hash: 77e41d0c1f2ccb24c118f8ae514b9754e8161e544971de47717ebf0e0b5cbf55
+- section: strength-return-the-real-first-session-risk
+  heading: 'Strength return: the real first-session risk'
+  summary: The first-session risk is unaccustomed loading after inactivity, a classic rhabdomyolysis trigger;
+    no published quantitative return protocol exists, and USMS gives none.
+  recommendation: Cap the first 1-2 strength sessions conservatively regardless of remembered strength,
+    avoid heavy eccentric/novel volume, and progress on next-day response.
+  content_hash: 4a5043e19a1e988d1fb14498932eefb22ededc9de0bf0174de1f22859594f71a
+- section: load-monitoring-caveat-specific-to-a-layoff-return
+  heading: Load-monitoring caveat specific to a layoff return
+  summary: Right after a layoff the 28-day chronic load is near zero, so load-ratio spikes are noise.
+  recommendation: Don't gate a return on raw load-ratio flags in the first weeks; use the CTL-based framing
+    from 22.
+  content_hash: 6a1ceb7d636199d4bb4cb92078313d37abb4598456502739cc685a956f5db1e9
+- section: gaps
+  heading: Gaps
+  summary: No quantitative swim or strength return protocol exists, human muscle memory is unproven, and
+    detraining rates vary widely by study.
+  recommendation: none — background only
+  content_hash: 43ec74b9b89f6f3d93416da68ebe532c9f36e461c15515176bef3d4e4d3e78e6

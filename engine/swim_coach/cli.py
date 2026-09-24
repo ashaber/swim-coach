@@ -19,7 +19,7 @@ import os
 import statistics
 from datetime import date, timedelta
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import yaml
 from pydantic import ValidationError
@@ -54,6 +54,7 @@ from swim_coach.library_review import (
 from swim_coach.models import (
     Athlete,
     Event,
+    Feedback,
     HealthStatus,
     Session,
     ThresholdRecord,
@@ -72,6 +73,12 @@ from swim_coach.parse_files import (
 from swim_coach.plan import generate_week, scaffold_macro
 from swim_coach.provision import provision_athlete
 from swim_coach.quality import match_workout_to_session, workout_quality
+from swim_coach.research_queue import (
+    ResearchQueueError,
+    dismiss,
+    list_open_research_questions,
+    resolve,
+)
 from swim_coach.store import FileStore, StoreInterface
 from swim_coach.zones import css_from_test, zone_table
 
@@ -1251,6 +1258,155 @@ def _cmd_onboard(args: argparse.Namespace, store: StoreInterface) -> int:
     return 0
 
 
+def _feedback_summary(f: Feedback) -> dict[str, object]:
+    """Compact JSON-serializable view of a Feedback row for research-queue
+    CLI output -- never the full row (context can carry an AI provisional
+    answer / coach reply text not needed for triage at a glance)."""
+    return {
+        "id": str(f.id),
+        "created_at": f.created_at.isoformat(),
+        "topic": f.context.get("topic"),
+        "body": f.body,
+        "status": f.status,
+    }
+
+
+def _cmd_research_queue_list(args: argparse.Namespace, store: StoreInterface) -> int:
+    """List open `research_question` feedback rows -- optionally grouped by
+    `context.topic` -- so the coach's re-logged questions can be triaged
+    (deduped, dismissed, or queued for a research pass) instead of piling
+    up unseen. See docs/research-workflow.md step 1."""
+    result = list_open_research_questions(store, group_by_topic=args.group_by_topic)
+    if args.group_by_topic:
+        assert isinstance(result, dict)
+        output: dict[str, object] = {
+            "grouped_by_topic": {
+                topic: [_feedback_summary(f) for f in rows] for topic, rows in result.items()
+            },
+            "total_open": sum(len(rows) for rows in result.values()),
+        }
+    else:
+        assert isinstance(result, list)
+        output = {"open": [_feedback_summary(f) for f in result], "total_open": len(result)}
+    print(json.dumps(output))
+    return 0
+
+
+def _cmd_research_queue_resolve(args: argparse.Namespace, store: StoreInterface) -> int:
+    """Mark one or more open `research_question` rows resolved, citing the
+    library file(s) (and, once known, the PR number) that answered them.
+    Only meant to be run AFTER the answering content is merged AND
+    deployed -- see docs/research-workflow.md step 6; this command has no
+    way to verify that itself, `--dry-run` plus human judgment is the gate.
+    """
+    library_dir = Path(args.library_dir)
+    results: list[dict[str, object]] = []
+    errors: list[str] = []
+    for raw_id in args.ids:
+        try:
+            feedback_id = UUID(raw_id)
+        except ValueError:
+            errors.append(f"{raw_id}: not a valid UUID")
+            results.append({"id": raw_id, "status": "invalid-id"})
+            continue
+        if args.dry_run:
+            existing = store.get_feedback(feedback_id)
+            if existing is None:
+                errors.append(f"{raw_id}: no feedback row with that id")
+                results.append({"id": raw_id, "status": "not-found"})
+                continue
+            if existing.type != "research_question" or existing.status != "open":
+                errors.append(
+                    f"{raw_id}: type={existing.type!r} status={existing.status!r}, "
+                    "not an open research_question -- refusing"
+                )
+                results.append({"id": raw_id, "status": "refused"})
+                continue
+            missing = [f for f in args.library_file if not (library_dir / f).exists()]
+            if missing:
+                errors.append(f"{raw_id}: library file(s) do not exist: {missing}")
+                results.append({"id": raw_id, "status": "invalid-library-file"})
+                continue
+            results.append(
+                {
+                    "id": raw_id,
+                    "status": "would-resolve",
+                    "library_files": args.library_file,
+                    "note": args.note,
+                    "pr": args.pr,
+                }
+            )
+            continue
+        try:
+            updated = resolve(
+                store,
+                feedback_id,
+                library_files=args.library_file,
+                note=args.note,
+                pr=args.pr,
+                library_dir=library_dir,
+            )
+        except ResearchQueueError as exc:
+            errors.append(f"{raw_id}: {exc}")
+            results.append({"id": raw_id, "status": "refused"})
+            continue
+        results.append({"id": raw_id, "status": "resolved", "resolved_by": updated.context.get("resolved_by")})
+
+    if errors:
+        return _error("; ".join(errors), results=results, dry_run=args.dry_run)
+    print(json.dumps({"results": results, "dry_run": args.dry_run}))
+    return 0
+
+
+def _cmd_research_queue_dismiss(args: argparse.Namespace, store: StoreInterface) -> int:
+    """Mark one open `research_question` row dismissed -- for a duplicate of
+    another open row, a bug report mis-logged as a research question, or a
+    question that's no longer relevant. See docs/research-workflow.md
+    step 1 (triage)."""
+    try:
+        feedback_id = UUID(args.id)
+    except ValueError:
+        return _error(f"{args.id}: not a valid UUID")
+    duplicate_of = None
+    if args.duplicate_of is not None:
+        try:
+            duplicate_of = UUID(args.duplicate_of)
+        except ValueError:
+            return _error(f"{args.duplicate_of}: not a valid UUID for --duplicate-of")
+
+    if args.dry_run:
+        existing = store.get_feedback(feedback_id)
+        if existing is None:
+            return _error(f"{args.id}: no feedback row with that id")
+        if existing.type != "research_question" or existing.status != "open":
+            return _error(
+                f"{args.id}: type={existing.type!r} status={existing.status!r}, "
+                "not an open research_question -- refusing"
+            )
+        print(
+            json.dumps(
+                {
+                    "id": args.id,
+                    "status": "would-dismiss",
+                    "reason": args.reason,
+                    "note": args.note,
+                    "duplicate_of": args.duplicate_of,
+                    "dry_run": True,
+                }
+            )
+        )
+        return 0
+
+    try:
+        updated = dismiss(
+            store, feedback_id, reason=args.reason, note=args.note, duplicate_of=duplicate_of
+        )
+    except ResearchQueueError as exc:
+        return _error(str(exc))
+    print(json.dumps({"id": args.id, "status": updated.status, "dry_run": False}))
+    return 0
+
+
 def _cmd_review_queue(args: argparse.Namespace, store: StoreInterface) -> int:
     """Print the library/ review queue -- every claim covered by an
     UNREVIEWED marker, needs-judgment first. Human-readable by default;
@@ -1797,6 +1953,64 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="report what would change without writing anything"
     )
 
+    p_rq_list = subparsers.add_parser(
+        "research-queue-list",
+        help="list open research_question feedback rows, optionally grouped by topic",
+    )
+    p_rq_list.add_argument(
+        "--group-by-topic",
+        dest="group_by_topic",
+        action="store_true",
+        help="group the output by context.topic instead of a flat list",
+    )
+
+    p_rq_resolve = subparsers.add_parser(
+        "research-queue-resolve",
+        help="mark one or more open research_question rows resolved, citing the answering library file(s)",
+    )
+    p_rq_resolve.add_argument("ids", nargs="+", help="feedback row id(s) (UUIDs) to resolve")
+    p_rq_resolve.add_argument(
+        "--library-file",
+        dest="library_file",
+        action="append",
+        required=True,
+        help="library/ filename that answers this question, e.g. 34-kettlebell-strength-programming.md "
+        "(repeatable for multiple files)",
+    )
+    p_rq_resolve.add_argument("--note", required=True, help="human-readable summary of the resolution")
+    p_rq_resolve.add_argument("--pr", type=int, default=None, help="PR number that shipped the answering content")
+    p_rq_resolve.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help="validate and report what would happen; write nothing",
+    )
+
+    p_rq_dismiss = subparsers.add_parser(
+        "research-queue-dismiss",
+        help="mark one open research_question row dismissed (duplicate/not_research/obsolete)",
+    )
+    p_rq_dismiss.add_argument("id", help="feedback row id (UUID) to dismiss")
+    p_rq_dismiss.add_argument(
+        "--reason",
+        required=True,
+        choices=["duplicate", "not_research", "obsolete"],
+        help="why this row is being dismissed rather than resolved",
+    )
+    p_rq_dismiss.add_argument(
+        "--duplicate-of",
+        dest="duplicate_of",
+        default=None,
+        help="feedback row id (UUID) this is a duplicate of, when --reason duplicate",
+    )
+    p_rq_dismiss.add_argument("--note", required=True, help="human-readable reason for the dismissal")
+    p_rq_dismiss.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help="validate and report what would happen; write nothing",
+    )
+
     return parser
 
 
@@ -1820,6 +2034,9 @@ _COMMANDS = {
     "review-queue": _cmd_review_queue,
     "review-accept": _cmd_review_accept,
     "library-review-apply": _cmd_library_review_apply,
+    "research-queue-list": _cmd_research_queue_list,
+    "research-queue-resolve": _cmd_research_queue_resolve,
+    "research-queue-dismiss": _cmd_research_queue_dismiss,
 }
 
 

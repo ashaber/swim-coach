@@ -205,6 +205,17 @@ being built on branch `ci/library-evidence-gate` — see step 4.
    mark the originating `Feedback` rows `status="resolved"`, linking the
    merged file, so the same gap isn't independently re-researched next
    sweep.
+   - **2026-09-23: the manual close-out tooling + workflow doc now exist.**
+     `engine/swim_coach/research_queue.py` (pure functions over
+     `StoreInterface`: `list_open_research_questions`, `resolve`,
+     `dismiss`) plus three CLI commands (`research-queue-list`,
+     `research-queue-resolve`, `research-queue-dismiss`, the last two with
+     `--dry-run`) give a human/agent session everything needed to run
+     steps 1 and 6 of this loop by hand today. `docs/research-workflow.md`
+     documents the full cycle (triage -> research pass -> library PR ->
+     human review -> deploy -> close the loop) end to end. **Still not
+     built:** the automated weekly sweep job in step 2 above — every step
+     remains an ad hoc human/agent decision to run, not a scheduled job.
 7. **Why the library stays in git, not a DB or vector store — recorded
    here as a decision, not left implicit.** Even fully built out (files
    `01`–`12` at the ≤2,500-word cap), the corpus is ~30–35k tokens — the

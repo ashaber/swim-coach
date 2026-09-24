@@ -1,0 +1,61 @@
+schema_version: 1
+file: 33-daily-nutrition-and-supplements.md
+cards:
+- section: creatine
+  heading: Creatine
+  summary: Creatine does not improve swim performance (2024 swimmer meta-analysis null), but with resistance
+    training it adds lean mass/strength in older adults and preserves bone geometry (not BMD) postmenopause;
+    cramping myth rebutted; EAH interaction untested.
+  recommendation: If the athlete takes creatine, 3-5 g/day with no loading phase, framed as a strength/lean-mass/healthy-aging
+    aid, never a swim-performance aid; note the body-mass trade-off and the untested EAH interaction.
+  content_hash: 46b863db22f968477113967cfcb4b19818db2801c16c2869b09c362c911b7c8d
+- section: daily-and-periodized-carbohydrate
+  heading: Daily and periodized carbohydrate
+  summary: Varying carbohydrate by each session's purpose (high for quality/long sessions, lower for some
+    easy ones) is a theoretical framework, not swim-tested, and sits close to low-energy-availability
+    risk.
+  recommendation: Coach may vary carbs around an adequate total by session purpose, never as license to
+    under-fuel; always cross-reference 13's energy-availability caution.
+  content_hash: 775b44058e450c21d6be8a8128465336457bc04d271ce2cb1348ca44e6db8455
+- section: protein-per-meal-distribution-and-pre-sleep-timing
+  heading: 'Protein: per-meal distribution and pre-sleep timing'
+  summary: 'Adds per-meal distribution to 10''s daily protein target: older men need ~0.4 g/kg per meal
+    (male-only data); 40 g pre-sleep casein raised overnight protein synthesis ~22% in young men.'
+  recommendation: Flag meals under ~25 g protein adjacent to hard sessions as worth discussing; suggest
+    pre-sleep protein on hard-evening days as a low-cost add-on, not a rule.
+  content_hash: 00e05cf0e63cb283a7065f7b96dfd0b7e228207675272b715189d0a5410df8fb
+- section: gut-training-progression-rate
+  heading: Gut-training progression rate
+  summary: Gut training is trainable over several weeks (Cox 2010, Miall 2018), but no controlled trial
+    specifies a g/h-per-week step size; circulating '+10 g/h' figures are practitioner content.
+  recommendation: Progress in-swim carbohydrate gradually against the athlete's own tolerance; don't present
+    any specific weekly step as trial-derived.
+  content_hash: 23dd65958148ccf97b9e7a687c73ebb8d015ad81f3025781530bec0d61bdc727
+- section: carb-loading-the-female-nuance-cross-refs-16-not-a-duplicate
+  heading: 'Carb-loading: the female nuance (cross-refs 16, not a duplicate)'
+  summary: Women loaded glycogen only when carb-loading also raised total energy intake, not just carbohydrate's
+    share of the diet (Tarnopolsky 2001).
+  recommendation: Set the carb-load as an absolute g/kg target on top of adequate total calories, never
+    a percentage shift alone.
+  content_hash: 660a18ac19bb0f01889de9a9874c4e403bd26e00defa3f66e67ebdeec3beb11c
+- section: muscle-cramping-eamc-not-simply-dehydration-electrolytes
+  heading: 'Muscle cramping (EAMC): not simply dehydration/electrolytes'
+  summary: Cramping is better explained by fatigue-driven neuromuscular control (Schwellnus 2009) or,
+    more cautiously, multiple risk factors (Miller 2022) than by dehydration/electrolytes; no swim or
+    immersion evidence exists.
+  recommendation: Treat a mid-swim cramp first as local fatigue (ease effort) rather than defaulting to
+    electrolytes; weigh fluid/sodium causes only alongside other EAH signs per 08.
+  content_hash: c6efea76f03469650af4f18b114c8151b1586c424d795af65039eb412ebf18bc
+- section: other-supplements-briefly
+  heading: Other supplements, briefly
+  summary: Caffeine 3-6 mg/kg reliably helps (ISSN); vitamin D inadequacy is common; iron deficiency is
+    common in female athletes, with a post-exercise hepcidin absorption window.
+  recommendation: Trial caffeine in training before race day; vitamin D and iron decisions need bloodwork,
+    which is a medical call, not an inference.
+  content_hash: 11163095dd301aaf22b289b22c3f8ef453c01957cbc6851158025178d6b1244e
+- section: gaps
+  heading: Gaps
+  summary: No ultra/open-water creatine trial, no creatine x EAH study, male-only per-meal protein data,
+    no swim EAMC research, and no trial-derived gut-training step size.
+  recommendation: none — background only
+  content_hash: 50c39bc33ade5172f8dd4a525fca20709193ada8e9b8852a1b2d12df282c046f

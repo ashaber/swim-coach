@@ -175,6 +175,28 @@ contained fabricated URLs and embedded agent-directive text.
   Wagner (2012) and Cox (2002) below now cover the same feeding/hydration
   ground with real, verified citations — prefer those.
 
+### Creatine, daily nutrition & muscle cramping (grounds `33-daily-nutrition-and-supplements.md`)
+
+Dossier: `research-dossiers/2026-09-23-nutrition-creatine.md`.
+
+- **✓ Hultman E. et al. (1996)** — "Muscle creatine loading in men" — *J Appl Physiol*. Grounds `33`.
+- **✓ Kreider R.B. et al. (2017)** — "ISSN position stand: creatine supplementation" — *J Int Soc Sports Nutr*. Grounds `33`.
+- **✓ Chilibeck P.D. et al. (2017)** — "Creatine during resistance training: lean mass/strength in older adults" — *Open Access J Sports Med*. Grounds `33`.
+- **✓ Chilibeck P.D. et al. (2023)** — "A 2-Year RCT on Creatine Supplementation for Postmenopausal Bone Health" — *Med Sci Sports Exerc*. Grounds `33`.
+- **✓ Huang D. et al. (2024)** — "Creatine Supplementation: Performance, Physiology, Body Composition in Swimmers" — *Sports Med Open*. Grounds `33`.
+- **✓ Fernández-Landa J. et al. (2023)** — "Creatine Monohydrate on Endurance Performance, Trained Population" — *Sports Medicine*. Grounds `33`.
+- **✓ Dalbo V.J. et al. (2008)** — "Putting to rest the myth of creatine causing cramps/dehydration" — *Br J Sports Med*. Grounds `33`.
+- **✓ Schwellnus M.P. (2009)** — "Cause of exercise associated muscle cramps: neuromuscular control, dehydration, or electrolytes?" — *Br J Sports Med*. Grounds `33`.
+- **✓ Miller K.C. et al. (2022)** — "Pathophysiology, Treatment, Prevention of Exercise-Associated Muscle Cramps" — *J Athl Train*. Grounds `33`.
+- **✓ Impey S.G. et al. (2018)** — "Fuel for the Work Required: Carbohydrate Periodization and Glycogen Threshold" — *Sports Medicine*. Grounds `33`.
+- **✓ Moore D.R. et al. (2015)** — "Protein Ingestion Requires Greater Relative Intakes in Older vs. Younger Men" — *J Gerontol A*. Grounds `33`.
+- **✓ Res P.T. et al. (2012)** — "Protein Ingestion before Sleep Improves Overnight Recovery" — *Med Sci Sports Exerc*. Grounds `33`.
+- **✓ Cox G.R. et al. (2010)** — "Daily high carbohydrate availability increases exogenous CHO oxidation, cycling" — *J Appl Physiol*. Grounds `33`.
+- **✓ Tarnopolsky M.A. et al. (2001)** — "Gender differences in carbohydrate loading related to energy intake" — *J Appl Physiol*. Grounds `33`.
+- **✓ Guest N.S. et al. (2021)** — "ISSN position stand: caffeine, exercise performance" — *J Int Soc Sports Nutr*. Grounds `33`.
+- **✓ Owens D.J. et al. (2018)** — "Vitamin D and the Athlete: Perspectives and New Challenges" — *Sports Medicine*. Grounds `33`.
+- **✓ Sim M. et al. (2019)** — "Iron considerations for the athlete" — *Eur J Appl Physiol*. Grounds `33`.
+
 ## Fuelling, hydration & hyponatremia
 
 Curated for `08-ultra-feeding.md` (2026-07-13 pass;
@@ -993,6 +1015,42 @@ direct web search/fetch, not recalled from training data alone.
   practice with a mixed evidence record, not an established analgesic
   claim. `[ADAPTED: general-endurance]` Confidence: low. Marked `~`
   (record-confirmed, not fully read) rather than `✓`.
+
+### Kettlebell exercise selection & masters strength (grounds `34-kettlebell-strength-programming.md`)
+
+Dossier: `research-dossiers/2026-09-23-strength-kettlebell.md`. Extends
+`07` — no swim-specific kettlebell source exists.
+
+- **✓ Lyons B.C. et al. (2017)** — "EMG Comparison of Muscle Activation Across Three Kettlebell Exercises" — *J Strength Cond Res*. Grounds `34`.
+- **✓ Zebis M.K. et al. (2013)** — "Kettlebell swing targets semitendinosus, supine leg curl targets biceps femoris" — *Br J Sports Med*. Grounds `34`.
+- **✓ St-Onge E. et al. (2018)** — "Shoulder muscle activities during individual stages of the Turkish Get-Up" — *J Bodyw Mov Ther*, 23(1):23-31. Grounds `34`.
+- **✓ Ellestad S.H. et al. (2024)** — "Muscle Activation During the Loaded Carry Movement Pattern" — *Int J Exerc Sci*. Grounds `34`.
+- **✓ Hogan C. et al. (2021)** — "Scapular Dyskinesis Is Not an Isolated Risk Factor for Shoulder Injury" — *Am J Sports Med*. Grounds `34`.
+- **✓ Watson S.L. et al. (2018)** — "LIFTMOR: High-Intensity Resistance/Impact Training and BMD in Postmenopausal Women" — *J Bone Miner Res*. Grounds `34`.
+- **✓ Zhou Y. et al. (2026)** — "Resistance training on muscle mass, strength, and function in older women with sarcopenia" — *Front Public Health*, 13:1735899. Grounds `34`.
+- **✓ Wilson J.M. et al. (2012)** — "Concurrent Training: Interference of Aerobic and Resistance Exercises" — *J Strength Cond Res*. Grounds `34`.
+- **✓ Schumann M. et al. (2022)** — "Compatibility of Concurrent Aerobic/Strength Training for Muscle Size and Function" — *Sports Medicine*. Grounds `34`.
+- **✓ Huiberts R.O. et al. (2024)** — "Concurrent Strength and Endurance Training: Impact of Sex and Training Status" — *Sports Medicine*. Grounds `34`.
+- **✓ Vikmoen O., Rønnestad B.R. et al. (2016-2017)** — 3 trials, heavy strength training & endurance economy in trained women (*Scand J Med Sci Sports* 2016; *PLOS ONE* 2016; *Physiol Rep* 2017). Grounds `34`.
+
+### Return from a layoff (grounds `35-return-from-layoff.md`)
+
+Dossier: `research-dossiers/2026-09-23-return-from-layoff.md`. Reuses
+`Mujika & Padilla (2000)` above.
+
+- **✓ Chen Y.T. et al. (2022)** — "Two Weeks of Detraining Reduces Cardiopulmonary Function and Muscular Fitness" — *Eur J Sport Sci*. Grounds `35`.
+- **✓ Burtscher J. et al. (2022)** — "Cardiorespiratory Fitness Loss in Aging Masters Endurance Athletes" — *Int J Environ Res Public Health*. Grounds `35`.
+- **✓ Głyk W. et al. (2022)** — "12-Week Detraining: Physical Capacity, Power, Speed in Elite Swimmers" — *Int J Environ Res Public Health*. Grounds `35`.
+- **✓ Tsalis G., Mougios V. (2022)** — "Training-Volume Reduction (COVID-19) and Performance in 100m/400m Freestyle" — *Sports*. Grounds `35`.
+- **✓ Encarnação I.G.A. et al. (2022)** — "Detraining Effects on Strength and Hypertrophy" — *Muscles*. Grounds `35`.
+- **✓ Grgic J. (2022)** — "Resistance Training Cessation, Muscle Size in Older Adults" — *Int J Environ Res Public Health*. Grounds `35`.
+- **✓ Blocquiaux S. et al. (2020)** — "Training, Detraining, Retraining: Strength, Power, Myonuclei in Older Men" — *Exp Gerontol*. Grounds `35`.
+- **✓ Bruusgaard J.C. et al. (2010)** — "Myonuclei Acquired by Overload Exercise Are Not Lost on Detraining" — *PNAS*. Grounds `35` (rodent study).
+- **✓ Psilander N. et al. (2019)** — "Training, Detraining, Retraining: Strength, Hypertrophy, Myonuclear Number" — *J Appl Physiol*. Grounds `35`.
+- **✓ Snijders T. et al. (2020)** — "Concept of Skeletal Muscle Memory: Animal and Human Studies" — *Acta Physiol*. Grounds `35`.
+- **✓ Rahmati M. et al. (2022)** — "Myonuclear Permanence in Skeletal Muscle Memory" — *J Cachexia Sarcopenia Muscle*. Grounds `35`.
+- **✓ O'Connor F.G. et al. (2008)** — "Return to Activity After Exertional Rhabdomyolysis" — *Curr Sports Med Rep*. Grounds `35`.
+- **✓ Tietze D.C., Borchers J. (2014)** — "Exertional Rhabdomyolysis in the Athlete" — *Sports Health*. Grounds `35`.
 
 ## Cross-training load standardization (no-RPE/no-HR case)
 
@@ -1898,6 +1956,10 @@ resource itself and are kept.
 
 - Santa Barbara Channel Swimming Association — channel/marathon-swim training
   guidance: <https://santabarbarachannelswim.org/training>
+- U.S. Masters Swimming — Terry Heggy — "What Swimmers Should Know When
+  Returning After a Long Layoff":
+  <https://www.usms.org/fitness-and-training/articles-and-videos/articles/what-swimmers-should-know-when-returning-after-a-long-layoff>.
+  No percentage/yardage target given. Grounds `35`.
 - TrainingPeaks — "Calculating Swimming TSS Score" (confirmed by direct
   fetch this session): documents cubing (not squaring) the intensity
   factor for swim-specific Training Stress Score, with a stated physical
@@ -2099,3 +2161,5 @@ Provenance of the fixes applied while curating this list:
    intensity-distribution claims. See
    `research-dossiers/2026-07-28-strength-programming.md` and
    `research-dossiers/2026-07-28-swim-set-structure.md`.
+7. **Cox (2010), St-Onge (2018), Zhou (2026)** re-verified, upgraded `~` ->
+   `✓` (2026-09-24); Zhou's year corrected from 2025.

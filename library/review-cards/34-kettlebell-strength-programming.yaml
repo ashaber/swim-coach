@@ -1,0 +1,64 @@
+schema_version: 1
+file: 34-kettlebell-strength-programming.md
+cards:
+- section: still-true-no-swim-specific-kettlebell-source-exists
+  heading: 'Still true: no swim-specific kettlebell source exists'
+  summary: Every kettlebell study is in general lifters, other sports or lab populations; none in swimmers
+    or endurance-transfer designs.
+  recommendation: Treat kettlebell exercise choice as coach judgment, never as evidence it helps swimming.
+  content_hash: ed4e911ea2ff3877a669bf068a7d78b9ea070148a075075e85d3b3eaaa77d286
+- section: exercise-selection-mapped-to-movement-pattern
+  heading: Exercise selection mapped to movement pattern
+  summary: 'Mechanical EMG evidence (non-swimmer): swings load hamstrings/posterior chain, Turkish get-ups
+    genuinely load the rotator cuff, and walking carries drive anti-rotation trunk work.'
+  recommendation: Use swings/deadlifts for hip hinge, carries for anti-rotation core; gate get-ups on
+    the athlete's shoulder status per 21.
+  content_hash: ea2cd3dc80bbae1255ba1c148e155e4c4e64b40ea44a13d0ef378a776f0502fc
+- section: overhead-work-reframing-the-question-not-clearing-it
+  heading: 'Overhead work: reframing the question, not clearing it'
+  summary: Scapular dyskinesis alone doesn't predict shoulder injury (Hogan 2021), so 'avoid overhead
+    because of scapula' is a broken argument; the bottoms-up press under-recruits infraspinatus in one
+    pilot study.
+  recommendation: Keep loaded overhead pressing out of templates until 21's return-to-sport criteria are
+    met; don't assume the bottoms-up press is shoulder-safe.
+  content_hash: e40a33dab71d5f80cccacbe19cd31ffb17e9e3de390afd5d1581d19022c4e528
+- section: dosing-and-progression-with-limited-bell-increments
+  heading: Dosing and progression with limited bell increments
+  summary: No research on progressing with ~4 kg bell jumps; it's an equipment question.
+  recommendation: Progress reps, tempo, unilateral loading or density before jumping to the next bell.
+  content_hash: 22b4576154594173d23f0d140f9691fe910a1fb5b8a478bad32d6726e001f15c
+- section: masters-and-postmenopausal-heavy-loading
+  heading: Masters and postmenopausal heavy loading
+  summary: 'LIFTMOR: supervised twice-weekly heavy lifting plus impact was safe and improved BMD/function
+    in postmenopausal women with low bone mass; sarcopenia meta-analysis shows strength/function gains
+    more than muscle mass.'
+  recommendation: Don't default a postmenopausal athlete to light loads; if loading gets heavier at home,
+    watch for new joint pain for 2-3 weeks and track function, not visible muscle.
+  content_hash: 96ea51ef525566e178075db5ac3b11faae9e17db4d630dcf7af919e7f77c7902
+- section: concurrent-training-scheduling-sharper-than-not-on-pool-days
+  heading: Concurrent-training scheduling, sharper than "not on pool days"
+  summary: With matched volume, concurrent training doesn't blunt hypertrophy or max strength (Schumann
+    2022); power and same-session pairing are what suffer; training status matters more than sex.
+  recommendation: Keep strength sessions separated from pool sessions by hours, never stacked in the same
+    session; explosive KB work is the most interference-sensitive.
+  content_hash: 4c95296deb05104e407baf253152d66f10cd9207b50d4859fcc994a73f360d30
+- section: heavy-load-dosing-for-performance-population-upgrade-to-07
+  heading: Heavy-load dosing for performance (population upgrade to `07`)
+  summary: Three trials in trained female endurance athletes found heavy (~85-90% 1RM, 2x/week) strength
+    work improved cycling economy more consistently than running economy.
+  recommendation: Supports heavy-load work for performance as a secondary benefit; doesn't change the
+    engine's 2x10 default.
+  content_hash: 4df8b5699c13d6e40520132d20b44743ddb7b41a6dd6e0f850b14a5aee7ad40d
+- section: sample-session-templates
+  heading: Sample session templates
+  summary: 'Two draft 45-minute sessions: rotator-cuff/scapular work plus row, hinge and suitcase carry;
+    unilateral legs, goblet squat, light Turkish get-up and farmer''s carry.'
+  recommendation: Offer these as starting templates on non-pool weekdays; overhead press stays deferred
+    pending shoulder clearance.
+  content_hash: b18b2d60b79aed975bab4fe6020327812c4d96ead4a6e303a91d3b72403bd1cc
+- section: gaps
+  heading: Gaps
+  summary: No swim-transfer kettlebell evidence, no strength-periodization evidence for swimmers, no bell-increment
+    research, and only single-session EMG studies.
+  recommendation: none — background only
+  content_hash: 41d96806d3db3dae2d17c1f5471216d0ab9bca463fcc60ca29e40c46037be8e5
