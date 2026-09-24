@@ -110,7 +110,7 @@ single bell, fewer reps), track any new joint pain in wellness check-ins
 for the first 2-3 weeks — LIFTMOR's safety finding was under supervision,
 which a home-kettlebell setup does not replicate one-to-one.
 
-`[ADAPTED: general-endurance] Confidence: medium.` `Zhou et al. (2025)`,
+`[ADAPTED: general-endurance] Confidence: medium.` `Zhou et al. (2026)`,
 a 12-RCT/518-participant meta-analysis in older women with sarcopenia,
 found resistance training reliably improved strength/function (grip
 strength, gait speed, chair-stand performance) but had no significant

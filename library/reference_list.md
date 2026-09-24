@@ -177,28 +177,25 @@ contained fabricated URLs and embedded agent-directive text.
 
 ### Creatine, daily nutrition & muscle cramping (grounds `33-daily-nutrition-and-supplements.md`)
 
-Curated for the 2026-09-23 nutrition-and-supplements research pass
-(`research-dossiers/2026-09-23-nutrition-creatine.md` is the raw research
-input, not itself citable). One-line entries per this file's token-budget
-rule — see each dossier entry for the fuller summary.
+Dossier: `research-dossiers/2026-09-23-nutrition-creatine.md`.
 
-- **✓ Hultman E., Söderlund K., Timmons J.A., Cederblad G., Greenhaff P.L. (1996)** — "Muscle creatine loading in men" — *Journal of Applied Physiology*, 81(1):232-237. 20g/day x6d loading + 2g/day maintenance, or a slower 3g/day x28d no-load protocol, reach the same ~20% muscle-creatine rise. Grounds `33`'s dosing section.
-- **✓ Kreider R.B., Kalman D.S., Antonio J., Ziegenfuss T.N., Wildman R., Collins R., Candow D.G., Kleiner S.M., Almada A.L., Lopez H.L. (2017)** — "International Society of Sports Nutrition position stand: safety and efficacy of creatine supplementation in exercise, sport, and medicine" — *Journal of the International Society of Sports Nutrition*, 14:18. Position stand (COI note: panel includes prolific creatine researchers). Grounds `33`.
-- **✓ Chilibeck P.D., Kaviani M., Candow D.G., Zello G.A. (2017)** — "Effect of creatine supplementation during resistance training on lean tissue mass and muscular strength in older adults: a meta-analysis" — *Open Access Journal of Sports Medicine*, 8:213-226. 22 RCTs/721 older adults: +1.37kg lean mass, greater strength gains vs. resistance training alone. Grounds `33`'s masters section.
-- **✓ Chilibeck P.D., Candow D.G., Gordon J.J., Duff W.R.D., Mason R., Shaw K., Taylor-Gjevre R., Nair B., Zello G.A. (2023)** — "A 2-Year Randomized Controlled Trial on Creatine Supplementation During Exercise for Postmenopausal Bone Health" — *Medicine & Science in Sports & Exercise*, 55(10):1750-1760. No areal-BMD difference; preserved femoral-neck bone geometry, modest lean-mass/walking-speed gains. Grounds `33`'s postmenopausal-bone section.
-- **✓ Huang D., Wang X., Gonjo T., Takagi H., Huang B., Huang W., Shan Q., Chow D.H.-K. (2024)** — "Effects of Creatine Supplementation on the Performance, Physiological Response, and Body Composition Among Swimmers: A Systematic Review and Meta-Analysis of Randomized Controlled Trials" — *Sports Medicine - Open*, 10:115. 17 RCTs/361 swimmers: no meaningful performance/body-composition benefit — the swim-specific null. Grounds `33`'s headline.
-- **✓ Fernández-Landa J., Santibañez-Gutierrez A., Todorovic N., Stajer V., Ostojic S.M. (2023)** — "Effects of Creatine Monohydrate on Endurance Performance in a Trained Population: A Systematic Review and Meta-analysis" — *Sports Medicine*, 53(9):1811-1821. Creatine ineffective for aerobic endurance performance in trained athletes. Grounds `33`.
-- **✓ Dalbo V.J., Roberts M.D., Stout J.R., Kerksick C.M. (2008)** — "Putting to rest the myth of creatine supplementation leading to muscle cramps and dehydration" — *British Journal of Sports Medicine*, 42(7):567-573. Creatine users report fewer cramping/dehydration episodes than non-users; no compromised hydration/thermoregulation. Grounds `33`'s creatine-hydration/cramping section.
-- **✓ Schwellnus M.P. (2009)** — "Cause of exercise associated muscle cramps (EAMC)-altered neuromuscular control, dehydration or electrolyte depletion?" — *British Journal of Sports Medicine*, 43(6):401-408. Argues altered neuromuscular control over the dehydration/electrolyte hypotheses. Grounds `33`'s cramping mechanism section.
-- **✓ Miller K.C., McDermott B.P., Yeargin S.W., Fiol A., Schwellnus M.P. (2022)** — "An Evidence-Based Review of the Pathophysiology, Treatment, and Prevention of Exercise-Associated Muscle Cramps" — *Journal of Athletic Training*, 57(1):5-15. Revises to a multifactorial risk-factor model, not one singular cause. Grounds `33`.
-- **✓ Impey S.G., Hearris M.A., Hammond K.M., Bartlett J.D., Louis J., Close G.L., Morton J.P. (2018)** — "Fuel for the Work Required: A Theoretical Framework for Carbohydrate Periodization and the Glycogen Threshold Hypothesis" — *Sports Medicine*, 48(5):1031-1048. Vary daily carbohydrate by session purpose ("train low, compete high"), not a flat daily number. Grounds `33`'s daily-carbohydrate-periodization section.
-- **✓ Moore D.R., Churchward-Venne T.A., Witard O., Breen L., Burd N.A., Tipton K.D., Phillips S.M. (2015)** — "Protein Ingestion to Stimulate Myofibrillar Protein Synthesis Requires Greater Relative Protein Intakes in Healthy Older Versus Younger Men" — *The Journals of Gerontology: Series A*, 70(1):57-62. Older men need ~0.4g/kg/meal (~3g leucine) vs. ~0.24g/kg in younger men to maximally trigger muscle protein synthesis; male-only. Grounds `33`'s per-meal protein section.
-- **✓ Res P.T., Groen B., Pennings B., Beelen M., Wallis G.A., Gijsen A.P., Senden J.M., van Loon L.J.C. (2012)** — "Protein Ingestion before Sleep Improves Postexercise Overnight Recovery" — *Medicine & Science in Sports & Exercise*, 44(8):1560-1569. 40g casein ~30min pre-sleep raised overnight muscle protein synthesis ~22%. Grounds `33`'s pre-sleep-protein addition to `10-recovery-hrv.md`'s refeed window.
-- **~ Cox G.R., Clark S.A., Cox A.J., Halson S.L., Hargreaves M., Hawley J.A., Jeacocke N., Snow R.J., Yeo W.K., Burke L.M. (2010)** — "Daily training with high carbohydrate availability increases exogenous carbohydrate oxidation during endurance cycling" — *Journal of Applied Physiology*, 109(1):126-134. 28 days of daily high-carbohydrate training increased exogenous-carb oxidation; full author list not independently re-derived this pass. Grounds `33`'s gut-training-rate addendum to `08-ultra-feeding.md`.
-- **✓ Tarnopolsky M.A., Zawada C., Richmond L.B., Carter S., Shearer J., Graham T., Phillips S.M. (2001)** — "Gender differences in carbohydrate loading are related to energy intake" — *Journal of Applied Physiology*, 91(1):225-230. Women only successfully loaded muscle glycogen when carb-loading raised total energy intake, not just carbohydrate's diet share. Grounds `33`'s carb-loading female nuance (cross-refs `16-race-week.md`).
-- **✓ Guest N.S., VanDusseldorp T.A., Nelson M.T., Grgic J., Schoenfeld B.J., Jenkins N.D.M., Arent S.M., Antonio J., Stout J.R., Trexler E.T., Smith-Ryan A.E., Goldstein E.R., Kalman D.S., Campbell B.I. (2021)** — "International society of sports nutrition position stand: caffeine and exercise performance" — *Journal of the International Society of Sports Nutrition*, 18:1. 3-6mg/kg caffeine reliably improves performance measures; position stand. Grounds `33`'s brief caffeine mention.
-- **✓ Owens D.J., Allison R., Close G.L. (2018)** — "Vitamin D and the Athlete: Current Perspectives and New Challenges" — *Sports Medicine*, 48(Suppl 1):3-16. Vitamin D inadequacy common in athletes; serum vitamin D doesn't track bone health in athletes the way it does generally. Grounds `33`'s brief vitamin D mention.
-- **✓ Sim M., Garvican-Lewis L.A., Cox G.R., Govus A., McKay A.K.A., Stellingwerff T., Peeling P. (2019)** — "Iron considerations for the athlete: a narrative review" — *European Journal of Applied Physiology*, 119(7):1463-1478. Iron deficiency disproportionately common in female athletes; hepcidin peaks 3-6h post-exercise, a timing lever for iron-rich meals. Grounds `33`'s brief iron mention.
+- **✓ Hultman E. et al. (1996)** — "Muscle creatine loading in men" — *J Appl Physiol*. Grounds `33`.
+- **✓ Kreider R.B. et al. (2017)** — "ISSN position stand: creatine supplementation" — *J Int Soc Sports Nutr*. Grounds `33`.
+- **✓ Chilibeck P.D. et al. (2017)** — "Creatine during resistance training: lean mass/strength in older adults" — *Open Access J Sports Med*. Grounds `33`.
+- **✓ Chilibeck P.D. et al. (2023)** — "A 2-Year RCT on Creatine Supplementation for Postmenopausal Bone Health" — *Med Sci Sports Exerc*. Grounds `33`.
+- **✓ Huang D. et al. (2024)** — "Creatine Supplementation: Performance, Physiology, Body Composition in Swimmers" — *Sports Med Open*. Grounds `33`.
+- **✓ Fernández-Landa J. et al. (2023)** — "Creatine Monohydrate on Endurance Performance, Trained Population" — *Sports Medicine*. Grounds `33`.
+- **✓ Dalbo V.J. et al. (2008)** — "Putting to rest the myth of creatine causing cramps/dehydration" — *Br J Sports Med*. Grounds `33`.
+- **✓ Schwellnus M.P. (2009)** — "Cause of exercise associated muscle cramps: neuromuscular control, dehydration, or electrolytes?" — *Br J Sports Med*. Grounds `33`.
+- **✓ Miller K.C. et al. (2022)** — "Pathophysiology, Treatment, Prevention of Exercise-Associated Muscle Cramps" — *J Athl Train*. Grounds `33`.
+- **✓ Impey S.G. et al. (2018)** — "Fuel for the Work Required: Carbohydrate Periodization and Glycogen Threshold" — *Sports Medicine*. Grounds `33`.
+- **✓ Moore D.R. et al. (2015)** — "Protein Ingestion Requires Greater Relative Intakes in Older vs. Younger Men" — *J Gerontol A*. Grounds `33`.
+- **✓ Res P.T. et al. (2012)** — "Protein Ingestion before Sleep Improves Overnight Recovery" — *Med Sci Sports Exerc*. Grounds `33`.
+- **✓ Cox G.R. et al. (2010)** — "Daily high carbohydrate availability increases exogenous CHO oxidation, cycling" — *J Appl Physiol*. Grounds `33`.
+- **✓ Tarnopolsky M.A. et al. (2001)** — "Gender differences in carbohydrate loading related to energy intake" — *J Appl Physiol*. Grounds `33`.
+- **✓ Guest N.S. et al. (2021)** — "ISSN position stand: caffeine, exercise performance" — *J Int Soc Sports Nutr*. Grounds `33`.
+- **✓ Owens D.J. et al. (2018)** — "Vitamin D and the Athlete: Perspectives and New Challenges" — *Sports Medicine*. Grounds `33`.
+- **✓ Sim M. et al. (2019)** — "Iron considerations for the athlete" — *Eur J Appl Physiol*. Grounds `33`.
 
 ## Fuelling, hydration & hyponatremia
 
@@ -1021,45 +1018,39 @@ direct web search/fetch, not recalled from training data alone.
 
 ### Kettlebell exercise selection & masters strength (grounds `34-kettlebell-strength-programming.md`)
 
-Curated for the 2026-09-23 kettlebell-programming research pass
-(`research-dossiers/2026-09-23-strength-kettlebell.md` is the raw research
-input, not itself citable). Extends `07-strength-dryland.md`'s existing
-conclusion that no swim-specific kettlebell source exists — every entry
-below is general-population or masters-population evidence used for
-exercise-selection mapping, never a swim-transfer claim.
+Dossier: `research-dossiers/2026-09-23-strength-kettlebell.md`. Extends
+`07` — no swim-specific kettlebell source exists.
 
-- **✓ Lyons B.C., Mayo J.J., Tucker W.S., Wax B., Hendrix R.C. (2017)** — "Electromyographical Comparison of Muscle Activation Patterns Across Three Commonly Performed Kettlebell Exercises" — *Journal of Strength and Conditioning Research*, 31(9):2363-2370. General-lifter EMG across the swing/snatch/clean; supports exercise variety. Grounds `34`'s exercise-selection mapping.
-- **✓ Zebis M.K., Skotte J., Andersen C.H., Mortensen P., Kjær M., Sjøgaard G., Petersen L.G., Andersen L.L. (2013)** — "Kettlebell swing targets semitendinosus and supine leg curl targets biceps femoris: an EMG study with rehabilitation implications" — *British Journal of Sports Medicine*, 47(18):1192-1198. KB swing drives very high medial-hamstring/posterior-chain activation. Grounds `34`.
-- **~ St-Onge E., Robb A., Beach T.A.C., Howarth S.J. (2018)** — "A descriptive analysis of shoulder muscle activities during individual stages of the Turkish Get-Up exercise" — *Journal of Bodywork and Movement Therapies*. Print year/volume/issue unconfirmed this pass. Rotator-cuff/scapular EMG across the get-up's 7 stages. Grounds `34`.
-- **✓ Ellestad S.H., Holcomb T.P., Swiergol A.M., Holmstrup M.E., Dicus J.R. (2024)** — "The Quantification of Muscle Activation During the Loaded Carry Movement Pattern" — *International Journal of Exercise Science*, 17(1):480-490. Walking-with-load carries drive genuine anti-rotation/anti-lateral-flexion trunk demand. Grounds `34`.
-- **✓ Hogan C., Corbett J.-A., Ashton S., Perraton L., Frame R., Dakic J. (2021)** — "Scapular Dyskinesis Is Not an Isolated Risk Factor for Shoulder Injury in Athletes: A Systematic Review and Meta-analysis" — *American Journal of Sports Medicine*, 49(10):2843-2853. Scapular dyskinesis alone doesn't predict future shoulder injury in pooled athlete cohorts. Grounds `34`'s overhead-KB reframing (cross-refs `21-shoulder-health-and-load.md`'s actual return-to-sport criteria).
-- **✓ Watson S.L., Weeks B.K., Weis L.J., Harding A.T., Horan S.A., Beck B.R. (2018)** — "High-Intensity Resistance and Impact Training Improves Bone Mineral Density and Physical Function in Postmenopausal Women With Osteopenia and Osteoporosis: The LIFTMOR Randomized Controlled Trial" — *Journal of Bone and Mineral Research*, 33(2):211-220. Twice-weekly, ~30-min, supervised heavy resistance+impact training is safe and improves BMD/function vs. a low-intensity comparator. Grounds `34`'s masters/postmenopausal-strength section.
-- **~ Zhou Y., Wen K., Zhang X., Sun Y. (2025)** — "Effects of resistance training on muscle mass, strength, and physical function in older women with sarcopenia: a systematic review and meta-analysis" — *Frontiers in Public Health*. Publication-year discrepancy across listings (2025 vs. 2026), unconfirmed. 12 RCTs/518 older women: strength/function improve reliably; muscle-mass gains less consistent. Grounds `34`.
-- **✓ Wilson J.M., Marín P.J., Rhea M.R., Wilson S.M.C., Loenneke J.P., Anderson J.C. (2012)** — "Concurrent Training: A Meta-Analysis Examining Interference of Aerobic and Resistance Exercises" — *Journal of Strength and Conditioning Research*, 26(8):2293-2307. Small-to-moderate interference on strength/power (not hypertrophy), worse with same-day/same-session proximity. Grounds `34`'s scheduling section.
-- **✓ Schumann M., Feuerbacher J.F., Sünkeler M., Freitag N., Rønnestad B.R., Doma K., Lundberg T.R. (2022)** — "Compatibility of Concurrent Aerobic and Strength Training for Skeletal Muscle Size and Function: An Updated Systematic Review and Meta-Analysis" — *Sports Medicine*, 52:601-612. No hypertrophy/max-strength difference when volume/frequency matched; explosive/power strength still attenuated, worse when same-session. Grounds `34`'s scheduling section.
-- **✓ Huiberts R.O., Wüst R.C.I., van der Zwaard S. (2024)** — "Concurrent Strength and Endurance Training: A Systematic Review and Meta-Analysis on the Impact of Sex and Training Status" — *Sports Medicine*, 54(2):485-503. Training status, not sex, drives concurrent-training outcome differences. Grounds `34`.
-- **✓ Vikmoen O., Rønnestad B.R. et al. (2016-2017)** — three related trials on heavy strength training and endurance economy in well-trained female endurance athletes: "Strength training improves cycling performance, fractional utilization of VO2max and cycling economy in female cyclists" (*Scandinavian Journal of Medicine & Science in Sports*, 2016), "Effects of Heavy Strength Training on Running Performance and Determinants of Running Performance in Female Endurance Athletes" (*PLOS ONE*, 2016), and "Heavy strength training improves running and cycling performance following prolonged submaximal work in well-trained female athletes" (*Physiological Reports*, 2017). Heavy, low-volume (~4-10 reps, 2x/week) strength training improved cycling economy more consistently than running economy. Grounds `34`'s heavy-load-dosing note, a closer population match than `07-strength-dryland.md`'s existing Rønnestad & Mujika (2014) citation.
+- **✓ Lyons B.C. et al. (2017)** — "EMG Comparison of Muscle Activation Across Three Kettlebell Exercises" — *J Strength Cond Res*. Grounds `34`.
+- **✓ Zebis M.K. et al. (2013)** — "Kettlebell swing targets semitendinosus, supine leg curl targets biceps femoris" — *Br J Sports Med*. Grounds `34`.
+- **✓ St-Onge E. et al. (2018)** — "Shoulder muscle activities during individual stages of the Turkish Get-Up" — *J Bodyw Mov Ther*, 23(1):23-31. Grounds `34`.
+- **✓ Ellestad S.H. et al. (2024)** — "Muscle Activation During the Loaded Carry Movement Pattern" — *Int J Exerc Sci*. Grounds `34`.
+- **✓ Hogan C. et al. (2021)** — "Scapular Dyskinesis Is Not an Isolated Risk Factor for Shoulder Injury" — *Am J Sports Med*. Grounds `34`.
+- **✓ Watson S.L. et al. (2018)** — "LIFTMOR: High-Intensity Resistance/Impact Training and BMD in Postmenopausal Women" — *J Bone Miner Res*. Grounds `34`.
+- **✓ Zhou Y. et al. (2026)** — "Resistance training on muscle mass, strength, and function in older women with sarcopenia" — *Front Public Health*, 13:1735899. Grounds `34`.
+- **✓ Wilson J.M. et al. (2012)** — "Concurrent Training: Interference of Aerobic and Resistance Exercises" — *J Strength Cond Res*. Grounds `34`.
+- **✓ Schumann M. et al. (2022)** — "Compatibility of Concurrent Aerobic/Strength Training for Muscle Size and Function" — *Sports Medicine*. Grounds `34`.
+- **✓ Huiberts R.O. et al. (2024)** — "Concurrent Strength and Endurance Training: Impact of Sex and Training Status" — *Sports Medicine*. Grounds `34`.
+- **✓ Vikmoen O., Rønnestad B.R. et al. (2016-2017)** — 3 trials, heavy strength training & endurance economy in trained women (*Scand J Med Sci Sports* 2016; *PLOS ONE* 2016; *Physiol Rep* 2017). Grounds `34`.
 
 ### Return from a layoff (grounds `35-return-from-layoff.md`)
 
-Curated for the 2026-09-23 return-to-training research pass
-(`research-dossiers/2026-09-23-return-from-layoff.md` is the raw research
-input, not itself citable). Reuses `Mujika I., Padilla S. (2000)` above
-(not re-verified here).
+Dossier: `research-dossiers/2026-09-23-return-from-layoff.md`. Reuses
+`Mujika & Padilla (2000)` above.
 
-- **✓ Chen Y.T., Hsieh Y.Y., Ho J.Y., Lin T.Y., Lin J.C. (2022)** — "Two Weeks of Detraining Reduces Cardiopulmonary Function and Muscular Fitness in Endurance Athletes" — *European Journal of Sport Science*, 22(3):399-406. VO2max, time-to-exhaustion, and knee-extensor strength measurably drop within 2 weeks of complete cessation. Grounds `35`'s detraining-timeline section.
-- **✓ Burtscher J., Strasser B., Burtscher M., Millet G.P. (2022)** — "The Impact of Training on the Loss of Cardiorespiratory Fitness in Aging Masters Endurance Athletes" — *International Journal of Environmental Research and Public Health*, 19(17):11050. Masters VO2max decline tracks training-VOLUME change (54%/39% of variance in men/women), not age itself; largely recoverable on retraining. Grounds `35`'s masters-specific framing.
-- **✓ Głyk W., Hołub M., Karpiński J., Rejdych W., Sadowski W., Trybus A., Baron J., Rydzik Ł., Ambroży T., Stanula A. (2022)** — "Effects of a 12-Week Detraining Period on Physical Capacity, Power and Speed in Elite Swimmers" — *International Journal of Environmental Research and Public Health*, 19(8):4594. 12-week detraining reduced lactate-threshold speed and land/water power in elite swimmers. Grounds `35`'s swim-specific detraining evidence.
-- **✓ Tsalis G., Mougios V. (2022)** — "Effect of the Reduction in Training Volume during the COVID-19 Era on Performance in 100-m and 400-m Freestyle Events in Greek Swimming Championships" — *Sports*, 10(3):40. A natural-experiment 2-4 month training interruption, followed by a similar-length return, restored competitive performance almost fully; return resumed at higher aerobic volume but no intensity. Grounds `35`'s headline reassurance and intensity-reintroduction section.
-- **✓ Encarnação I.G.A., Viana R.B., Soares S.R.S., Freitas E.D.S., de Lira C.A.B., Ferreira-Junior J.B. (2022)** — "Effects of Detraining on Muscle Strength and Hypertrophy Induced by Resistance Training: A Systematic Review" — *Muscles*, 1(1):1-15. Strength gains maintained through roughly 16-24 weeks of detraining, similar to controls only after 32-48 weeks. Grounds `35`'s strength-retention section.
-- **✓ Grgic J. (2022)** — "Use It or Lose It? A Meta-Analysis on the Effects of Resistance Training Cessation (Detraining) on Muscle Size in Older Adults" — *International Journal of Environmental Research and Public Health*, 19(21):14048. No significant muscle-size decrease in older adults after 12-24 weeks of cessation; only after 31-52 weeks. Grounds `35`.
-- **✓ Blocquiaux S., Boonkerd M., Vandenbroucke E., Everaert I., Van Ryckeghem L., Vanheunis L., Pardaens S., Cyriac F., Mahaudens P., Van Roie E., Bogaerts S., Gundersen K., Derave W. (2020)** — "The Effect of Resistance Training, Detraining and Retraining on Muscle Strength and Power, Myofibre Size, Satellite Cells and Myonuclei in Older Men" — *Experimental Gerontology*, 133:110860. Older men lost only -5% to -15% strength after 12 full weeks off, then regained prior 1RM in under 8 weeks of retraining — faster than the original 12-week build. Grounds `35`'s strength-return risk section.
-- **✓ Bruusgaard J.C., Johansen I.B., Egner I.M., Rana Z.A., Gundersen K. (2010)** — "Myonuclei Acquired by Overload Exercise Precede Hypertrophy and Are Not Lost on Detraining" — *Proceedings of the National Academy of Sciences*, 107(34):15111-15116. Rodent study; the origin of the myonuclear "muscle memory" hypothesis, not itself human evidence. Grounds `35`'s contested-mechanism framing.
-- **✓ Psilander N., Eftestøl E., Cumming K.T., Juvkam I., Ekblom M.M., Sunding K., Wernbom M., Holmberg H.C., Ekblom B., Bruusgaard J.C., Raastad T., Gundersen K. (2019)** — "Effects of Training, Detraining, and Retraining on Strength, Hypertrophy, and Myonuclear Number in Human Skeletal Muscle" — *Journal of Applied Physiology*, 126(6):1636-1645. Human unilateral design: strength stayed ~60% above baseline through 20 weeks of detraining; the previously-trained leg showed no faster retraining than a naive control leg. Grounds `35`.
-- **✓ Snijders T., Aussieker T., Holwerda A., Parise G., van Loon L.J.C., Verdijk L.B. (2020)** — "The Concept of Skeletal Muscle Memory: Evidence from Animal and Human Studies" — *Acta Physiologica*, 229(3):e13465. Balanced review: human muscle-memory data are less consistent than the mouse data underlying the popular narrative. Grounds `35`.
-- **✓ Rahmati M., McCarthy J.J., Malakoutinia F. (2022)** — "Myonuclear Permanence in Skeletal Muscle Memory: A Systematic Review and Meta-Analysis of Human and Animal Studies" — *Journal of Cachexia, Sarcopenia and Muscle*, 13(5). 147 pooled studies: myonuclei retained with atrophy in rodents but NOT in humans — the sharpest counter-evidence to presenting myonuclear "muscle memory" as settled human physiology. Grounds `35`'s contested-mechanism framing.
-- **✓ O'Connor F.G., Brennan F.H., Campbell W., Heled Y., Deuster P. (2008)** — "Return to Physical Activity After Exertional Rhabdomyolysis" — *Current Sports Medicine Reports*, 7(6):328-331. Graded, monitored return-to-activity pathway after exertional rhabdomyolysis; distinguishes it from ordinary DOMS. Grounds `35`'s strength-return risk section.
-- **✓ Tietze D.C., Borchers J. (2014)** — "Exertional Rhabdomyolysis in the Athlete: A Clinical Review" — *Sports Health*, 6(4):336-339. Names "unaccustomed high-intensity exercise following a period of relative inactivity" as a classic exertional-rhabdomyolysis trigger. Grounds `35`.
+- **✓ Chen Y.T. et al. (2022)** — "Two Weeks of Detraining Reduces Cardiopulmonary Function and Muscular Fitness" — *Eur J Sport Sci*. Grounds `35`.
+- **✓ Burtscher J. et al. (2022)** — "Cardiorespiratory Fitness Loss in Aging Masters Endurance Athletes" — *Int J Environ Res Public Health*. Grounds `35`.
+- **✓ Głyk W. et al. (2022)** — "12-Week Detraining: Physical Capacity, Power, Speed in Elite Swimmers" — *Int J Environ Res Public Health*. Grounds `35`.
+- **✓ Tsalis G., Mougios V. (2022)** — "Training-Volume Reduction (COVID-19) and Performance in 100m/400m Freestyle" — *Sports*. Grounds `35`.
+- **✓ Encarnação I.G.A. et al. (2022)** — "Detraining Effects on Strength and Hypertrophy" — *Muscles*. Grounds `35`.
+- **✓ Grgic J. (2022)** — "Resistance Training Cessation, Muscle Size in Older Adults" — *Int J Environ Res Public Health*. Grounds `35`.
+- **✓ Blocquiaux S. et al. (2020)** — "Training, Detraining, Retraining: Strength, Power, Myonuclei in Older Men" — *Exp Gerontol*. Grounds `35`.
+- **✓ Bruusgaard J.C. et al. (2010)** — "Myonuclei Acquired by Overload Exercise Are Not Lost on Detraining" — *PNAS*. Grounds `35` (rodent study).
+- **✓ Psilander N. et al. (2019)** — "Training, Detraining, Retraining: Strength, Hypertrophy, Myonuclear Number" — *J Appl Physiol*. Grounds `35`.
+- **✓ Snijders T. et al. (2020)** — "Concept of Skeletal Muscle Memory: Animal and Human Studies" — *Acta Physiol*. Grounds `35`.
+- **✓ Rahmati M. et al. (2022)** — "Myonuclear Permanence in Skeletal Muscle Memory" — *J Cachexia Sarcopenia Muscle*. Grounds `35`.
+- **✓ O'Connor F.G. et al. (2008)** — "Return to Activity After Exertional Rhabdomyolysis" — *Curr Sports Med Rep*. Grounds `35`.
+- **✓ Tietze D.C., Borchers J. (2014)** — "Exertional Rhabdomyolysis in the Athlete" — *Sports Health*. Grounds `35`.
 
 ## Cross-training load standardization (no-RPE/no-HR case)
 
@@ -1965,17 +1956,10 @@ resource itself and are kept.
 
 - Santa Barbara Channel Swimming Association — channel/marathon-swim training
   guidance: <https://santabarbarachannelswim.org/training>
-- U.S. Masters Swimming — Terry Heggy (USMS-certified Level 4 Masters
-  coach, head coach of Saddlebrook Masters, Arizona) — "What Swimmers
-  Should Know When Returning After a Long Layoff" and "What Coaches Should
-  Do After a Long Layoff From Workouts." No URL independently confirmed
-  this pass — cite by title/author only. Deliberately gives no percentage/
-  yardage return target; qualitative guidance (ease in 2-3x/week, lead
-  with technique-focused warm-ups, track a repeatable weekly test set,
-  build work-set volume by adding a repeat or shortening rest rather than
-  jumping to a target distance, ramp "too flat rather than too steep").
-  Grounds `35-return-from-layoff.md`'s honest no-quantitative-source
-  finding and the shape of its proposed return template.
+- U.S. Masters Swimming — Terry Heggy — "What Swimmers Should Know When
+  Returning After a Long Layoff":
+  <https://www.usms.org/fitness-and-training/articles-and-videos/articles/what-swimmers-should-know-when-returning-after-a-long-layoff>.
+  No percentage/yardage target given. Grounds `35`.
 - TrainingPeaks — "Calculating Swimming TSS Score" (confirmed by direct
   fetch this session): documents cubing (not squaring) the intensity
   factor for swim-specific Training Stress Score, with a stated physical
@@ -2177,3 +2161,5 @@ Provenance of the fixes applied while curating this list:
    intensity-distribution claims. See
    `research-dossiers/2026-07-28-strength-programming.md` and
    `research-dossiers/2026-07-28-swim-set-structure.md`.
+7. **Cox (2010), St-Onge (2018), Zhou (2026)** re-verified, upgraded `~` ->
+   `✓` (2026-09-24); Zhou's year corrected from 2025.
