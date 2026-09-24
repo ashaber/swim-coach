@@ -168,6 +168,268 @@ def test_get_plan_summary_matches_engine_summarize_shape(athletes_dir) -> None:
     assert "compliance_pct" in result
 
 
+# --- get_week_plan (context-trim build) -------------------------------------
+# The per-request context no longer carries each session's `structured` step
+# tree (see app/context.py's `_slim_week_for_context`) -- this read-only tool
+# is the escape hatch: the FULL week/session, structured included, on demand.
+
+
+def _week_with_structured_session(athlete_id, iso_week: str = "2026-W40"):
+    """A self-contained two-session week (never mutated by the fixture tree,
+    so these tests don't depend on whatever real content the shared
+    `athletes_dir` fixture happens to carry) -- one session with a real
+    `structured` tree, one without."""
+    monday = date.fromisocalendar(2026, 40, 1)
+    structured = WorkoutStructure(
+        items=[
+            WorkoutStep(
+                label="main set",
+                role="interval",
+                duration_kind="distance_m",
+                duration_value=800,
+                target=WorkoutTarget(basis="absolute", low=90.0, high=95.0),
+                modality="swim",
+            ),
+        ]
+    )
+    week = WeekPlan(
+        id=uuid.uuid4(),
+        athlete_id=athlete_id,
+        iso_week=iso_week,
+        meso_block="build",
+        focus="test week",
+        target_volume_m=3000,
+        sessions=[
+            Session(
+                id=uuid.uuid4(),
+                athlete_id=athlete_id,
+                date=monday,
+                sport="swim_pool",
+                source="ai_coach",
+                duration_min=60.0,
+                distance_m=3000,
+                intensity={"zone": "Z3"},
+                purpose="main set work",
+                structure="4x200 @ css",
+                structured=structured,
+                status="planned",
+            ),
+            Session(
+                id=uuid.uuid4(),
+                athlete_id=athlete_id,
+                date=monday + timedelta(days=1),
+                sport="strength",
+                source="ai_coach",
+                duration_min=30.0,
+                distance_m=None,
+                intensity={"anchor": "rpe"},
+                purpose="dryland",
+                structure="core circuit",
+                status="planned",
+            ),
+        ],
+    )
+    return week, structured
+
+
+def test_get_week_plan_returns_full_week_including_structured(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    week, structured = _week_with_structured_session(athlete.id)
+    store.save_week("renee", week)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["get_week_plan"]({"iso_week": week.iso_week})
+
+    assert "error" not in result, result
+    assert result["iso_week"] == week.iso_week
+    sessions = result["week"]["sessions"]
+    swim = next(s for s in sessions if s["sport"] == "swim_pool")
+    assert swim["structured"] == structured.model_dump(mode="json")
+    # Internal fields the context render drops are still present here --
+    # this tool is the FULL-fidelity fetch.
+    assert "id" in swim and "athlete_id" in swim and "schema_version" in swim
+
+
+def test_get_week_plan_session_date_filter_returns_only_matching_session(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    week, structured = _week_with_structured_session(athlete.id)
+    store.save_week("renee", week)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["get_week_plan"](
+        {"iso_week": week.iso_week, "session_date": week.sessions[0].date.isoformat()}
+    )
+
+    assert "error" not in result, result
+    assert len(result["sessions"]) == 1
+    assert result["sessions"][0]["sport"] == "swim_pool"
+    assert result["sessions"][0]["structured"] == structured.model_dump(mode="json")
+
+
+def test_get_week_plan_session_date_and_sport_disambiguates(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    week, _structured = _week_with_structured_session(athlete.id)
+    # Add a second session on the same date as the first, different sport.
+    week.sessions.append(
+        week.sessions[0].model_copy(
+            update={"id": uuid.uuid4(), "sport": "strength", "structured": None, "purpose": "core"}
+        )
+    )
+    store.save_week("renee", week)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["get_week_plan"](
+        {
+            "iso_week": week.iso_week,
+            "session_date": week.sessions[0].date.isoformat(),
+            "sport": "strength",
+        }
+    )
+
+    assert "error" not in result, result
+    assert len(result["sessions"]) == 1
+    assert result["sessions"][0]["sport"] == "strength"
+
+
+def test_get_week_plan_invalid_iso_week_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["get_week_plan"]({"iso_week": "not-a-week"})
+    assert "error" in result
+
+
+def test_get_week_plan_no_week_persisted_is_a_clean_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["get_week_plan"]({"iso_week": "2026-W50"})
+    assert "error" in result
+
+
+def test_get_week_plan_current_and_next_aliases_resolve(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    today = date.today()
+    iso = today.isocalendar()
+    iso_week = f"{iso[0]}-W{iso[1]:02d}"
+    week, _ = _week_with_structured_session(athlete.id, iso_week=iso_week)
+    store.save_week("renee", week)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["get_week_plan"]({"iso_week": "current"})
+
+    assert "error" not in result, result
+    assert result["iso_week"] == iso_week
+
+
+def test_get_week_plan_in_schema_and_handlers(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    schema_names = {t["name"] for t in TOOLS_SCHEMA}
+    assert "get_week_plan" in schema_names
+    assert "get_week_plan" in handlers
+
+
+# --- context-trim CRITICAL safety check: patch_week_plan and `structured` ---
+# The per-request context no longer echoes any session's `structured` tree at
+# all (see app/context.py's `_slim_week_for_context`). `patch_week_plan`
+# operates directly on `store.load_week`'s own real object (never on
+# anything threaded through the model's context), so this must hold
+# regardless of what the context showed the model this turn.
+
+
+def test_patch_week_plan_preserves_untouched_sessions_structured(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    week, structured = _week_with_structured_session(athlete.id, iso_week="2026-W41")
+    store.save_week("renee", week)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["patch_week_plan"](
+        {
+            "iso_week": week.iso_week,
+            "session_overrides": [
+                {"date": week.sessions[1].date.isoformat(), "sport": "strength", "purpose": "updated dryland"}
+            ],
+            "confirm": True,
+        }
+    )
+
+    assert "error" not in result, result
+    after = FileStore(base_dir=athletes_dir).load_week("renee", week.iso_week)
+    untouched = next(s for s in after.sessions if s.sport == "swim_pool")
+    assert untouched.structured is not None
+    assert untouched.structured.model_dump(mode="json") == structured.model_dump(mode="json")
+
+
+def test_patch_week_plan_modifying_purpose_only_preserves_that_sessions_own_structured(
+    athletes_dir,
+) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    week, structured = _week_with_structured_session(athlete.id, iso_week="2026-W42")
+    store.save_week("renee", week)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    target_date = week.sessions[0].date.isoformat()
+
+    result = handlers["patch_week_plan"](
+        {
+            "iso_week": week.iso_week,
+            "session_overrides": [
+                {"date": target_date, "sport": "swim_pool", "purpose": "relabelled main set"}
+            ],
+            "confirm": True,
+        }
+    )
+
+    assert "error" not in result, result
+    after = FileStore(base_dir=athletes_dir).load_week("renee", week.iso_week)
+    patched = next(s for s in after.sessions if s.sport == "swim_pool")
+    assert patched.purpose == "relabelled main set"
+    assert patched.structured is not None
+    assert patched.structured.model_dump(mode="json") == structured.model_dump(mode="json")
+
+
+def test_patch_week_plan_rewriting_structure_without_structured_clears_it(athletes_dir) -> None:
+    """Documents the one real interaction with context-trim: setting
+    `structure` (prose) WITHOUT also setting `structured` clears any
+    existing structured tree for that session -- by design (a stale IR
+    built for the OLD content would otherwise silently mismatch the new
+    prose), not a context-trim regression. This is exactly why the persona
+    text now tells the model to call `get_week_plan` first before a
+    structure-only rewrite of a session whose existing step detail is worth
+    keeping."""
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    week, _structured = _week_with_structured_session(athlete.id, iso_week="2026-W43")
+    store.save_week("renee", week)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    target_date = week.sessions[0].date.isoformat()
+
+    result = handlers["patch_week_plan"](
+        {
+            "iso_week": week.iso_week,
+            "session_overrides": [
+                {
+                    "date": target_date,
+                    "sport": "swim_pool",
+                    "structure": "hand-rewritten prose",
+                    "distance_m": 3000,
+                }
+            ],
+            "confirm": True,
+        }
+    )
+
+    assert "error" not in result, result
+    after = FileStore(base_dir=athletes_dir).load_week("renee", week.iso_week)
+    patched = next(s for s in after.sessions if s.sport == "swim_pool")
+    assert patched.structure == "hand-rewritten prose"
+    assert patched.structured is None
+
+
 def test_flag_for_coach_review_research_gap_only_creates_research_question(
     athletes_dir, run_tag
 ) -> None:

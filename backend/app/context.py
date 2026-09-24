@@ -464,7 +464,13 @@ answer must still be a grounded, accurate one.
          bug shipped a session whose distance stat contradicted its own
          written content (600m warm-up + 10x200m + 400m cool-down = 3000m
          actually written, but an old unrelated 400m left on the distance
-         stat because it was never updated to match).
+         stat because it was never updated to match). Setting `structure`
+         WITHOUT also setting `structured` on a session that already has a
+         `structured` step tree clears that tree (by design -- a stale IR
+         built for the OLD content would otherwise silently mismatch the new
+         prose). If the session's existing step-level detail is worth
+         keeping, call `get_week_plan` first to see it before you overwrite
+         `structure`.
    - `merge_week_plan` when there's a real PROPOSED alternative to compare
      against the current week rather than a specific hand-described change
      -- a candidate regeneration, one new engine-generated session (e.g. a
@@ -711,7 +717,12 @@ confuse the two, and don't call a session by the wrong sport when its exact
 row is right there. That per-request context only reaches back ~28 days --
 if the athlete asks about a specific past workout or date range older than
 that, call the `get_workouts` tool rather than saying you have no record of
-it; don't call it for recent sessions, they're already above.
+it; don't call it for recent sessions, they're already above. The current/
+next week plan in the context below omits each session's step-level
+`structured` detail (it still has the prose `structure`, purpose, intensity,
+duration/distance, and status) -- call `get_week_plan` first whenever you
+need that step-level detail, or before authoring a `structure`-only edit to
+a session that already has bespoke step content worth preserving.
 
 Each logged session carries an `id`. When the athlete asks you to review,
 debrief, or assess how a BIKE race or ride went -- pacing, fade, lap-to-lap
@@ -1339,6 +1350,93 @@ def _week_or_none(store: StoreInterface, slug: str, iso_week: str) -> dict[str, 
     return week.model_dump(mode="json") if week is not None else None
 
 
+# --- context-trim: slim week/session rendering (context-trim build) --------
+# Full-fidelity `WeekPlan`/`Session` dumps used to go into the per-request
+# context pretty-printed (`indent=2`) with every field, including the
+# `structured` step tree (the per-step IR used for FIT/ZWO export and
+# `render_prose`'s own input) -- ~10k of a single busy week's ~15k JSON,
+# entirely duplicating the prose already in `structure`. Measured cost:
+# this context is rebuilt and re-written to the prompt cache on EVERY
+# message (see .claude/plans/context-trim-build.md), so every one of these
+# bytes is paid for repeatedly, not once. The `get_week_plan` tool (see
+# `app/tools.py`) returns the FULL session (structured included) for the
+# rare turn that actually needs to inspect or build on top of existing
+# step-level detail -- editing a session's steps, or explaining set
+# structure at that level -- so nothing here is a real capability loss,
+# only a per-turn cost one.
+#
+# Session fields DROPPED from context (each with its own reason -- never
+# silently; `get_week_plan` recovers all of them):
+#   - `structured`: the ~10k step tree itself (see above).
+#   - `id` / `athlete_id`: internal identifiers. Every plan-editing tool
+#     (`patch_week_plan`, `replace_week_plan`, `merge_week_plan`,
+#     `reschedule_session`, `propose_session_adjustment`) matches sessions
+#     by `date` (+ `sport` to disambiguate a multi-session day), never by
+#     `id` -- the model has never needed a session's `id` to act on it.
+#   - `schema_version`: internal migration bookkeeping, never
+#     coaching-relevant.
+#   - `source` / `is_indoor`: authorship provenance and device-export
+#     routing signals (does a bike session need the outdoor Garmin push or
+#     the indoor .zwo export) -- neither carries coaching-judgment weight
+#     turn to turn; recoverable via `get_week_plan` on the rare occasion
+#     either actually matters to the conversation.
+# Kept: `date`, `sport`, `purpose` (this Session model has no separate
+# `title` field -- `purpose` already plays that role, e.g. "over/unders
+# (Z3/Z4) -- fluctuating lactate production/clearance..."), `intensity`,
+# `structure` (the athlete-facing prose), `duration_min`/`distance_m`
+# (the volume fields), and `status`.
+_SESSION_CONTEXT_FIELDS = (
+    "date",
+    "sport",
+    "purpose",
+    "intensity",
+    "structure",
+    "duration_min",
+    "distance_m",
+    "status",
+)
+
+# WeekPlan fields DROPPED from context: `id` / `athlete_id` / `schema_version`
+# (same internal-bookkeeping reasons as the session fields above -- no tool
+# matches a week by its `id`, every call takes `iso_week`) and `drafted_at` /
+# `drafted_by` (HELD-draft bookkeeping for the confirm-flow mechanism itself,
+# already surfaced separately via `render_pending_drafts`'s "Drafts waiting"
+# block when a draft is actually pending -- rendering it again on every
+# already-persisted week is dead weight). Kept: everything a coach needs to
+# discuss or build on top of this week's plan -- `iso_week`, `meso_block`,
+# `focus`, `target_volume_m`, `adaptation_rationale`, `draft`,
+# `planning_warnings`, `race_week_checklist`.
+_WEEK_CONTEXT_FIELDS = (
+    "iso_week",
+    "meso_block",
+    "focus",
+    "target_volume_m",
+    "adaptation_rationale",
+    "draft",
+    "planning_warnings",
+    "race_week_checklist",
+)
+
+
+def _slim_session_for_context(session: dict[str, Any]) -> dict[str, Any]:
+    """One `Session.model_dump(mode="json")` dict, trimmed to
+    `_SESSION_CONTEXT_FIELDS` -- see that constant's comment for what's
+    dropped and why."""
+    return {k: session[k] for k in _SESSION_CONTEXT_FIELDS if k in session}
+
+
+def _slim_week_for_context(week: dict[str, Any] | None) -> dict[str, Any] | None:
+    """One `WeekPlan.model_dump(mode="json")` dict, trimmed to
+    `_WEEK_CONTEXT_FIELDS` with every session inside also slimmed via
+    `_slim_session_for_context`. `None` in, `None` out (no week persisted
+    for that ISO week yet)."""
+    if week is None:
+        return None
+    slim = {k: week[k] for k in _WEEK_CONTEXT_FIELDS if k in week}
+    slim["sessions"] = [_slim_session_for_context(s) for s in week.get("sessions", [])]
+    return slim
+
+
 def _render_recent_sessions(workouts: list[Workout], span_start: date, span_end: date) -> str:
     """Compact, chronological, one-row-per-workout rendering of every
     exactly-logged session in `[span_start, span_end]` -- each row keeps its
@@ -1850,14 +1948,14 @@ def render_focused_session(session: Session) -> str:
     return "\n".join(parts)
 
 
-def build_per_request_context(
+def build_per_request_context_and_sizes(
     store: StoreInterface,
     slug: str,
     *,
     expert_mode: bool,
     focused_workout: Workout | None = None,
     focused_session: Session | None = None,
-) -> str:
+) -> tuple[str, dict[str, int], str]:
     """The uncached, per-request text block: athlete profile + zones,
     current + next week plan, the last ~28 days' exact logged sessions
     (each with its own sport -- ground truth), events/races with dates, and
@@ -1874,7 +1972,17 @@ def build_per_request_context(
     practice -- routes/feedback.py's `ask_question` picks a workout OR a
     session, never both, per `Feedback.workout_id`/`session_date`'s mutual
     exclusion), but nothing here enforces that; both may be appended if a
-    caller passes both."""
+    caller passes both.
+
+    Returns `(context_text, section_char_counts, athlete_id)` -- the richer
+    shape `build_messages` needs for the "context sizes" log line
+    (context-trim build, Phase 3 measurement: per-section char counts so
+    before/after is visible in Cloud Run logs without guessing). `athlete_id`
+    (a UUID string), never `slug`, per the global logging standard's "never
+    log PII" rule -- a slug is a human-chosen, potentially identifying
+    string; the id is an opaque key. `build_per_request_context` below is
+    the plain-string-only convenience wrapper every existing caller/test
+    uses; it just discards the extra two return values."""
     # `athlete` loaded first so `today` can be this athlete's own local date
     # (`athlete_today`, honoring `Athlete.timezone` when set) rather than
     # server-UTC `date.today()` -- reordered from this function's own
@@ -1896,22 +2004,59 @@ def build_per_request_context(
     current_week_note = _non_swim_volume_note(primary_sport, current_week)
     next_week_note = _non_swim_volume_note(primary_sport, next_week)
 
+    held_drafts = render_pending_drafts(store, slug)
+    athlete_notes = render_athlete_notes(athlete)
+    race_debriefs = render_race_debriefs(athlete)
+
+    # Compact JSON (`separators=(",", ":")`) for profile/weeks/rollup --
+    # `indent=2` alone was 35-45% of these sections' bytes (context-trim
+    # build measurement). `sex`/`height_cm`/`weight_kg` are the ONLY profile
+    # fields dropped here, and only because they are PROVABLY duplicated,
+    # byte-for-byte, by the "Demographics" block immediately below whenever
+    # they're set -- `_render_demographics` copies each straight through
+    # under the exact same `is not None` guard, so keeping both is pure
+    # waste, never a capability loss (`dob` itself is NOT dropped: the
+    # Demographics block shows a derived `age`, not the raw date, so it is
+    # a transform, not a literal duplicate). Every other profile field
+    # (zones, css_pace_s_per_100m, ftp_watts, lthr_bpm, pool_schedule,
+    # weekly_template, training_days, constraints, ...) is kept in full --
+    # per `_render_threshold_history`'s own docstring, the coach is
+    # expected to read ftp_watts/lthr_bpm/css_pace_s_per_100m from HERE for
+    # "what's currently in effect," while the threshold-history section
+    # shows the full dated history behind that number. Those are
+    # complementary, not duplicates, so both stay.
+    profile_json = json.dumps(
+        athlete.model_dump(
+            mode="json",
+            exclude={"notes", "race_debriefs", "sex", "height_cm", "weight_kg"},
+        ),
+        separators=(",", ":"),
+    )
+    current_week_json = json.dumps(_slim_week_for_context(current_week), separators=(",", ":"))
+    next_week_json = json.dumps(_slim_week_for_context(next_week), separators=(",", ":"))
+    rollup_json = json.dumps(rollup, separators=(",", ":"))
+    recent_sessions_block = _render_recent_sessions(workouts, span_start, span_end)
+    pinned_events_block = _render_upcoming_events_pinned(events, today)
+    events_races_block = _render_events(events, today)
+    health_block = _render_active_health_status(store.list_health_status(slug))
+    thresholds_block = _render_threshold_history(store.list_threshold_records(slug))
+
     parts = [
         "## Athlete context (assembled per-request, not cached)",
         f"Asker mode: {'expert (professional coach/physiologist)' if expert_mode else 'athlete'}",
         f"Today: {today.isoformat()} (current week {current_iso}, next week {next_iso})",
         "",
-        *([held_drafts, ""] if (held_drafts := render_pending_drafts(store, slug)) else []),
-        *([athlete_notes, ""] if (athlete_notes := render_athlete_notes(athlete)) else []),
-        *([race_debriefs, ""] if (race_debriefs := render_race_debriefs(athlete)) else []),
+        *([held_drafts, ""] if held_drafts else []),
+        *([athlete_notes, ""] if athlete_notes else []),
+        *([race_debriefs, ""] if race_debriefs else []),
         "### Upcoming events (READ FIRST -- race dates are ground truth)",
-        _render_upcoming_events_pinned(events, today),
+        pinned_events_block,
         "Before you label or describe any planned session that falls on one "
         "of these dates, re-check this list: a session dated on a race day "
         "IS that race, not a training set.",
         "",
         "### Profile",
-        json.dumps(athlete.model_dump(mode="json", exclude={"notes", "race_debriefs"}), indent=2),
+        profile_json,
     ]
     if demographics is not None:
         parts += [
@@ -1923,27 +2068,27 @@ def build_per_request_context(
     parts += [
         "",
         "### Health status",
-        _render_active_health_status(store.list_health_status(slug)),
+        health_block,
         "",
         "### Threshold history (FTP / LTHR / CSS -- dated, per-sport)",
-        _render_threshold_history(store.list_threshold_records(slug)),
+        thresholds_block,
         "",
         f"### Current week plan ({current_iso})",
-        json.dumps(current_week, indent=2),
+        current_week_json,
         *([current_week_note] if current_week_note else []),
         "",
         f"### Next week plan ({next_iso})",
-        json.dumps(next_week, indent=2),
+        next_week_json,
         *([next_week_note] if next_week_note else []),
         "",
         "### Exact logged sessions (last 28 days) -- ground truth, each with its sport",
-        _render_recent_sessions(workouts, span_start, span_end),
+        recent_sessions_block,
         "",
         "### Events / races",
-        _render_events(events, today),
+        events_races_block,
         "",
         "### 28-day AGGREGATE rollup (derived from the sessions above)",
-        json.dumps(rollup, indent=2),
+        rollup_json,
     ]
     if focused_workout is not None:
         # `workouts` (the athlete's full history, already fetched above for
@@ -1955,7 +2100,44 @@ def build_per_request_context(
         parts += ["", render_focused_workout(focused_workout, athlete=athlete, hr_max=hr_max, wellness=wellness)]
     if focused_session is not None:
         parts += ["", render_focused_session(focused_session)]
-    return "\n".join(parts)
+
+    text = "\n".join(parts)
+    sizes = {
+        "profile_chars": len(profile_json) + len(demographics or ""),
+        "current_week_chars": len(current_week_json),
+        "next_week_chars": len(next_week_json),
+        "recent_sessions_chars": len(recent_sessions_block),
+        "rollup_chars": len(rollup_json),
+        "health_chars": len(health_block),
+        "thresholds_chars": len(thresholds_block),
+        "events_chars": len(pinned_events_block) + len(events_races_block),
+        "notes_debriefs_chars": len(held_drafts or "") + len(athlete_notes or "") + len(race_debriefs or ""),
+        "total_context_chars": len(text),
+    }
+    return text, sizes, str(athlete.id)
+
+
+def build_per_request_context(
+    store: StoreInterface,
+    slug: str,
+    *,
+    expert_mode: bool,
+    focused_workout: Workout | None = None,
+    focused_session: Session | None = None,
+) -> str:
+    """Plain-text convenience wrapper over `build_per_request_context_and_sizes`
+    for every caller that only needs the assembled context string (nearly all
+    of them -- see that function's own docstring for the section-sizes/
+    athlete-id return values this discards, used only by `build_messages`'
+    "context sizes" log line)."""
+    text, _sizes, _athlete_id = build_per_request_context_and_sizes(
+        store,
+        slug,
+        expert_mode=expert_mode,
+        focused_workout=focused_workout,
+        focused_session=focused_session,
+    )
+    return text
 
 
 class HistoryTurn(TypedDict):
@@ -2004,7 +2186,7 @@ def build_messages(
     (app.routes.feedback) resolves `session_date`/`session_sport` to a
     `Session` best-effort before calling this.
     """
-    context_text = build_per_request_context(
+    context_text, context_sizes, athlete_id = build_per_request_context_and_sizes(
         store,
         slug,
         expert_mode=expert_mode,
@@ -2018,10 +2200,28 @@ def build_messages(
         messages[-1]["content"] = [
             {"type": "text", "text": messages[-1]["content"], "cache_control": {"type": "ephemeral"}}
         ]
+    routed_library_chars = len(library_text) if library_text else 0
     if library_text:
         # IDEA 022 step 4: routed topic files ride the newest message too, so
         # nothing message-dependent sits in the cached system/history prefix.
         context_text = f"{library_text}\n\n---\n\n{context_text}"
     messages.append({"role": "user", "content": f"{context_text}\n\n---\n\n{message}"})
+
+    # Phase 3 (context-trim build): one structured log line per chat request
+    # with char counts per context section, so before/after is visible in
+    # Cloud Run logs -- same "structured JSON to stdout" standard as every
+    # other log line here. `athlete_id` (a UUID), never `slug` -- see
+    # `build_per_request_context_and_sizes`'s own docstring for the PII
+    # rationale. `history_chars` covers the ENTIRE stable/cacheable prefix
+    # (every prior turn), separate from `context_sizes`' per-section
+    # breakdown of the volatile part riding the newest message.
+    log.info(
+        "context sizes",
+        athlete_id=athlete_id,
+        **context_sizes,
+        routed_library_chars=routed_library_chars,
+        history_chars=sum(len(turn["content"]) for turn in history),
+        history_turns=len(history),
+    )
 
     return messages
