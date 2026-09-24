@@ -19,6 +19,7 @@ from app.context import (
     build_messages,
     build_routed_library_text,
     build_per_request_context,
+    build_per_request_context_and_sizes,
     build_routed_block,
     build_system,
     build_system_blocks,
@@ -1531,3 +1532,236 @@ def test_history_prefix_stays_byte_stable_when_the_topic_changes(app_env, librar
         library_text=build_routed_library_text(library_dir, "what pace should I swim at?"),
     )
     assert a[:-1] == b[:-1]
+
+
+# ===========================================================================
+# context-trim build (.claude/plans/context-trim-build.md): slim week/session
+# JSON (drop `structured` + internal ids/bookkeeping), compact JSON for
+# profile/weeks/rollup, and the "context sizes" measurement log line.
+# ===========================================================================
+
+
+def _week_with_full_fields(athlete_id, year: int, week: int):
+    from swim_coach.models import Session, WeekPlan, WorkoutStep, WorkoutStructure, WorkoutTarget
+
+    monday = date.fromisocalendar(year, week, 1)
+    iso_week = f"{year}-W{week:02d}"
+    structured = WorkoutStructure(
+        items=[
+            WorkoutStep(
+                label="main set",
+                role="interval",
+                duration_kind="distance_m",
+                duration_value=800,
+                target=WorkoutTarget(basis="absolute", low=90.0, high=95.0),
+                modality="swim",
+            ),
+        ]
+    )
+    session = Session(
+        id=uuid.uuid4(),
+        athlete_id=athlete_id,
+        date=monday,
+        sport="swim_pool",
+        source="pool_coach",
+        duration_min=60.0,
+        distance_m=3000,
+        intensity={"zone": "Z3"},
+        purpose="main set work",
+        structure="4x200 @ css",
+        structured=structured,
+        status="planned",
+        is_indoor=False,
+    )
+    return WeekPlan(
+        id=uuid.uuid4(),
+        athlete_id=athlete_id,
+        iso_week=iso_week,
+        meso_block="build",
+        focus="test week",
+        target_volume_m=3000,
+        sessions=[session],
+        adaptation_rationale="because reasons",
+        draft=False,
+        drafted_at=datetime.now(timezone.utc),
+        drafted_by="propose_adaptation",
+        planning_warnings=["watch the ramp"],
+    )
+
+
+def test_current_week_context_drops_structured_and_internal_fields(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    athlete = store.load_athlete("renee")
+    today = date.today()
+    year, week, _ = today.isocalendar()
+    store.save_week("renee", _week_with_full_fields(athlete.id, year, week))
+
+    text = build_per_request_context(store, "renee", expert_mode=False)
+    section = text.split("### Current week plan")[1].split("### Next week plan")[0]
+
+    # Dropped: the structured step tree, internal identifiers, schema
+    # version, and HELD-draft bookkeeping (already covered separately by
+    # "Drafts waiting" when a draft is actually pending).
+    for dropped_key in ('"structured"', '"id"', '"athlete_id"', '"schema_version"', '"drafted_at"', '"drafted_by"', '"source"', '"is_indoor"'):
+        assert dropped_key not in section, f"{dropped_key} should have been dropped from {section!r}"
+
+    # Kept: everything the coach needs to discuss or build on top of the week.
+    for kept_key in ('"iso_week"', '"meso_block"', '"focus"', '"target_volume_m"', '"adaptation_rationale"', '"planning_warnings"'):
+        assert kept_key in section
+    assert '"date"' in section
+    assert '"sport":"swim_pool"' in section  # compact separators: no space after colon
+    assert '"purpose":"main set work"' in section
+    assert '"structure":"4x200 @ css"' in section
+    assert '"duration_min":60.0' in section
+    assert '"distance_m":3000' in section
+    assert '"status":"planned"' in section
+
+
+def test_next_week_context_drops_structured_and_internal_fields(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    athlete = store.load_athlete("renee")
+    next_monday = date.today() + timedelta(days=7)
+    year, week, _ = next_monday.isocalendar()
+    store.save_week("renee", _week_with_full_fields(athlete.id, year, week))
+
+    text = build_per_request_context(store, "renee", expert_mode=False)
+    section = text.split("### Next week plan")[1].split("### Exact logged sessions")[0]
+
+    assert '"structured"' not in section
+    assert '"id"' not in section
+    assert '"athlete_id"' not in section
+    assert '"schema_version"' not in section
+    assert '"purpose":"main set work"' in section
+    assert '"target_volume_m"' in section
+
+
+def _first_json_line(text: str) -> str:
+    """The first whole line of `text` that starts with `{` -- headers like
+    `### Current week plan (2026-W39)` carry a parenthetical suffix on the
+    SAME line the section starts on, so "first line after the header" isn't
+    always the JSON line; "first line starting with `{`" always is."""
+    return next(ln for ln in text.splitlines() if ln.startswith("{"))
+
+
+def test_current_week_json_is_compact_not_pretty_printed(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    athlete = store.load_athlete("renee")
+    today = date.today()
+    year, week, _ = today.isocalendar()
+    store.save_week("renee", _week_with_full_fields(athlete.id, year, week))
+
+    text = build_per_request_context(store, "renee", expert_mode=False)
+    section = text.split("### Current week plan")[1].split("### Next week plan")[0]
+    week_json_line = _first_json_line(section)
+
+    parsed = json.loads(week_json_line)  # still valid JSON
+    assert parsed["iso_week"] is not None
+    assert '": ' not in week_json_line  # no space after a key's colon
+    assert ', "' not in week_json_line  # no space after a comma
+
+
+def test_profile_json_is_compact_and_drops_fields_duplicated_by_demographics(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    athlete = store.load_athlete("renee")
+    athlete = athlete.model_copy(
+        update={"dob": date(1980, 5, 1), "sex": "female", "height_cm": 170.0, "weight_kg": 60.0}
+    )
+    store.save_athlete(athlete)
+
+    text = build_per_request_context(store, "renee", expert_mode=False)
+    profile_section = text.split("### Profile")[1].split("### Health status")[0]
+    profile_json_line = _first_json_line(profile_section)
+
+    # Dropped from the profile JSON itself -- provably duplicated verbatim by
+    # the Demographics block immediately below whenever they're set.
+    assert '"sex"' not in profile_json_line
+    assert '"height_cm"' not in profile_json_line
+    assert '"weight_kg"' not in profile_json_line
+    # compact separators
+    assert '": ' not in profile_json_line
+    assert ', "' not in profile_json_line
+    # still valid JSON with real content
+    parsed = json.loads(profile_json_line)
+    assert parsed["slug"] == "renee"
+
+    # Still surfaced to the model -- via the Demographics block, unchanged.
+    assert '"sex": "female"' in profile_section
+    assert '"height_cm": 170.0' in profile_section
+    assert '"weight_kg": 60.0' in profile_section
+
+
+def test_rollup_json_is_compact(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    text = build_per_request_context(store, "renee", expert_mode=False)
+    rollup_section = text.split("### 28-day AGGREGATE rollup")[1]
+    rollup_json_line = _first_json_line(rollup_section)
+
+    assert '": ' not in rollup_json_line
+    assert ', "' not in rollup_json_line
+    parsed = json.loads(rollup_json_line)
+    assert parsed["athlete"] == "renee"
+    assert "volume_m" in parsed
+    assert "compliance_pct" in parsed
+
+
+def test_build_per_request_context_and_sizes_returns_athlete_id_not_slug(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    athlete = store.load_athlete("renee")
+
+    _text, sizes, athlete_id = build_per_request_context_and_sizes(store, "renee", expert_mode=False)
+
+    assert athlete_id == str(athlete.id)
+    assert athlete_id != "renee"
+    for key in (
+        "profile_chars", "current_week_chars", "next_week_chars", "recent_sessions_chars",
+        "rollup_chars", "health_chars", "thresholds_chars", "events_chars",
+        "notes_debriefs_chars", "total_context_chars",
+    ):
+        assert key in sizes
+        assert isinstance(sizes[key], int)
+
+
+def test_build_messages_logs_context_sizes_with_athlete_id_never_slug(app_env, capsys) -> None:
+    store = FileStore(base_dir=app_env)
+    athlete = store.load_athlete("renee")
+
+    build_messages(store, "renee", message="hi", history=[], expert_mode=False)
+
+    logged = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("{") and json.loads(line).get("msg") == "context sizes"
+    ]
+    assert len(logged) == 1
+    entry = logged[0]
+    assert entry["athlete_id"] == str(athlete.id)
+    assert "slug" not in entry
+    assert "renee" not in json.dumps(entry)
+    for key in (
+        "profile_chars", "current_week_chars", "next_week_chars", "recent_sessions_chars",
+        "rollup_chars", "health_chars", "thresholds_chars", "events_chars",
+        "notes_debriefs_chars", "total_context_chars", "routed_library_chars",
+        "history_chars", "history_turns",
+    ):
+        assert key in entry
+
+
+def test_build_messages_context_sizes_reflects_routed_library_and_history(app_env, capsys) -> None:
+    store = FileStore(base_dir=app_env)
+    history = _history_of(2)
+    expected_history_chars = sum(len(turn["content"]) for turn in history)
+
+    build_messages(
+        store, "renee", message="hi", history=history, expert_mode=False, library_text="x" * 500,
+    )
+
+    logged = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("{") and json.loads(line).get("msg") == "context sizes"
+    ]
+    assert len(logged) == 1
+    entry = logged[0]
+    assert entry["routed_library_chars"] == 500
+    assert entry["history_chars"] == expected_history_chars
+    assert entry["history_turns"] == len(history)

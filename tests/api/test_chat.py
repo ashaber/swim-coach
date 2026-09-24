@@ -54,6 +54,7 @@ def test_request_shape_includes_tools(client, fake_claude_chat_factory) -> None:
     assert tool_names == {
         "propose_adaptation",
         "get_plan_summary",
+        "get_week_plan",
         "flag_for_coach_review",
         "record_health_status",
         "record_threshold_test",

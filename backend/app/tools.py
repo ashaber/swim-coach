@@ -642,6 +642,40 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "get_week_plan",
+        "description": (
+            "Read-only: the FULL persisted week plan for one ISO week, "
+            "including each session's `structured` step tree -- the "
+            "per-request context below omits `structured` to keep every "
+            "message smaller (it still has each session's prose "
+            "`structure`, purpose, intensity, duration/distance, and "
+            "status). Call this before patching/replacing a session's "
+            "steps, or whenever the athlete asks about step-level detail "
+            "the context doesn't carry. Pass `session_date` (optionally "
+            "with `sport` to disambiguate a multi-session day) to get back "
+            "just the matching session(s) instead of the whole week."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "iso_week": {
+                    "type": "string",
+                    "description": "ISO week, e.g. '2026-W30', or 'current' / 'next'.",
+                },
+                "session_date": {
+                    "type": "string",
+                    "description": "Optional 'YYYY-MM-DD' to return only the session(s) on that date instead of the whole week.",
+                },
+                "sport": {
+                    "type": "string",
+                    "description": "Optional, only with session_date: disambiguates when more than one session falls on that date.",
+                },
+            },
+            "required": ["iso_week"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "flag_for_coach_review",
         "description": (
             "Flag something for the athlete's human coach's attention -- two "
@@ -2994,6 +3028,76 @@ def _handle_get_plan_summary(input_data: dict[str, Any], *, store: StoreInterfac
             },
         }
     return summary
+
+
+def _handle_get_week_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    """Read-only full-fidelity week/session fetch -- the context-trim
+    build's escape hatch for the `structured` step tree the per-request
+    context no longer carries (see `app/context.py`'s
+    `_slim_week_for_context`). Resolves `iso_week` the same "current" /
+    "next" / literal-ISO-week way `render_plan_table` already does;
+    `session_date` (+ optional `sport` to disambiguate a multi-session day)
+    narrows the result to just the matching session(s) instead of the whole
+    week, same date(+sport) matching convention every session-targeting
+    tool here already uses (`_apply_session_overrides`, `reschedule_session`,
+    `propose_session_adjustment`)."""
+    iso_week = (input_data.get("iso_week") or "").strip()
+    if not iso_week:
+        return {
+            "error": "iso_week is required: an ISO week id (e.g. '2026-W30'), 'current', or 'next'"
+        }
+
+    if iso_week.lower() == "current":
+        iso_week = iso_week_str(athlete_today(store.load_athlete(slug)))
+    elif iso_week.lower() == "next":
+        iso_week = iso_week_str(athlete_today(store.load_athlete(slug)) + timedelta(days=7))
+    else:
+        try:
+            year_str, week_str = iso_week.split("-W")
+            date.fromisocalendar(int(year_str), int(week_str), 1)
+        except (ValueError, IndexError):
+            return {
+                "error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn', 'current', or 'next'"
+            }
+
+    try:
+        week = store.load_week(slug, iso_week)
+    except Exception as exc:  # noqa: BLE001
+        log.error("storage read failed", what='week plan', exc_info=True)
+        return storage_error("week plan", exc)
+    if week is None:
+        return {"error": f"no week plan is persisted for {iso_week!r}"}
+
+    session_date_str = input_data.get("session_date")
+    if not session_date_str:
+        return {"iso_week": iso_week, "week": week.model_dump(mode="json")}
+
+    try:
+        target_date = date.fromisoformat(session_date_str)
+    except ValueError:
+        return {"error": f"invalid session_date {session_date_str!r}; expected 'YYYY-MM-DD'"}
+
+    sport = input_data.get("sport")
+    matches = [
+        s for s in week.sessions
+        if s.date == target_date and (not sport or s.sport == sport)
+    ]
+    if not matches:
+        same_day = [
+            {"sport": s.sport, "date": s.date.isoformat()} for s in week.sessions if s.date == target_date
+        ]
+        return {
+            "error": (
+                f"no session matching date {session_date_str!r}"
+                + (f" and sport {sport!r}" if sport else "")
+                + f" in {iso_week!r}; sessions on {session_date_str!r}: {same_day}"
+            )
+        }
+    return {
+        "iso_week": iso_week,
+        "session_date": session_date_str,
+        "sessions": [s.model_dump(mode="json") for s in matches],
+    }
 
 
 def _handle_flag_for_coach_review(
@@ -8368,6 +8472,9 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "get_plan_summary": lambda input_data: _handle_get_plan_summary(
+            input_data, store=store, slug=slug
+        ),
+        "get_week_plan": lambda input_data: _handle_get_week_plan(
             input_data, store=store, slug=slug
         ),
         "flag_for_coach_review": lambda input_data: _handle_flag_for_coach_review(
