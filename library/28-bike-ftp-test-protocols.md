@@ -14,6 +14,9 @@ surfaced to a swim-only athlete. Not yet wired into `context.py`'s routing
 (`_LIBRARY_FILE_SPORT_SCOPE`/keyword routes) -- same deferred state `24`
 and `25` are honestly left in.
 
+
+**UNREVIEWED**, pending human review.
+
 ## The real defect this grounds
 
 A real pool-coach-assigned "2x20 FTP test" was hand-authored in this app

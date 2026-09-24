@@ -14,6 +14,9 @@ in this pass (same "deferred to a future build stage" status those files
 already document for themselves) -- this build ships a pure function, not
 a wired `/coach` topic.
 
+
+**UNREVIEWED**, pending human review.
+
 ## The real, grounded problem
 
 A real cyclocross race (Andrew, 2026-09-19) recorded exactly one native

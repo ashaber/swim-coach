@@ -20,12 +20,15 @@ driven against tmp_path, same style as test_cli.py.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from swim_coach.cli import main
 from swim_coach.library_review import (
     CLAIM,
     FILE_HEADER,
+    INDEX_REVIEWED_SUFFIX,
+    INDEX_UNREVIEWED_SUFFIX,
     MECHANICAL,
     NEEDS_JUDGMENT,
     all_item_ids,
@@ -486,6 +489,58 @@ def test_real_library_surfaces_per_claim_items_from_the_new_wave():
         == "2026-07-13-reds-energy-availability.md"
     )
     assert all(i.dossier is None for i in items if i.file == "07-strength-dryland.md")
+
+
+# --- INDEX.md vs. scanner consistency (regression for the marker-drift bug) --------
+
+_INDEX_ROW_RE = re.compile(r"^\| `([\w.\-]+\.md)` \| (.*) \|$", re.MULTILINE)
+
+
+def _index_status_by_file() -> dict[str, str]:
+    """`{filename: "pending" | "reviewed"}`, read from `library/INDEX.md`'s
+    own Files-table row text -- the same `INDEX_UNREVIEWED_SUFFIX` /
+    `INDEX_REVIEWED_SUFFIX` strings `mark_index_reviewed` reads and writes.
+    A row ending in neither exact suffix (e.g. `11-workout-analytics.md`'s
+    "pending a full research pass" -- a Slice-1-stub status distinct from
+    the binary reviewed/unreviewed gate) is left out of both sets."""
+    text = (REPO_ROOT / "library" / "INDEX.md").read_text(encoding="utf-8")
+    status: dict[str, str] = {}
+    for m in _INDEX_ROW_RE.finditer(text):
+        filename, row = m.group(1), m.group(2).rstrip()
+        if row.endswith(INDEX_UNREVIEWED_SUFFIX):
+            status[filename] = "pending"
+        elif row.endswith(INDEX_REVIEWED_SUFFIX):
+            status[filename] = "reviewed"
+    return status
+
+
+def test_every_file_index_calls_pending_is_actually_detected():
+    """The exact defect this build's marker-normalization pass fixed: a
+    topic file's own in-body marker can silently drift out of sync with
+    `INDEX.md`'s row for it (wrong word -- "REVIEWED" instead of
+    "UNREVIEWED" -- or no marker at all), making the scanner miss a file
+    INDEX.md still lists as pending, or keep queuing one INDEX.md says is
+    done. `INDEX.md`'s own row text is the ground truth here."""
+    status = _index_status_by_file()
+    pending = {f for f, s in status.items() if s == "pending"}
+    reviewed = {f for f, s in status.items() if s == "reviewed"}
+    assert pending, "sanity: INDEX.md should list at least one pending file"
+    assert reviewed, "sanity: INDEX.md should list at least one reviewed file"
+
+    items = scan_library(REPO_ROOT / "library")
+    files_with_items = {i.file for i in items}
+
+    missing = pending - files_with_items
+    assert not missing, (
+        "INDEX.md marks these files pending human review, but the scanner "
+        f"finds no items for them -- a marker-form bug: {sorted(missing)}"
+    )
+
+    wrongly_queued = reviewed & files_with_items
+    assert not wrongly_queued, (
+        "INDEX.md marks these files Human-reviewed, but the scanner still "
+        f"finds items for them -- a stale/leftover marker: {sorted(wrongly_queued)}"
+    )
 
 
 # --- strip_marker ----------------------------------------------------------------------

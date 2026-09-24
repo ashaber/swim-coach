@@ -1,8 +1,8 @@
 # Swim set structure (warm-up / main-set / cool-down)
 
-**REVIEWED**: this file is agent-authored per `00-conventions.md`'s
-workflow and needs Andrew's human review before being treated as settled
-grounding truth.
+**Human-reviewed** (2026-07-28): this file is agent-authored per
+`00-conventions.md`'s workflow; Andrew has reviewed it and it is treated as
+settled grounding truth.
 
 Grounds `engine/swim_coach/plan.py`'s `_additional_swim_structure()` — the
 internal warm-up/main-set/cool-down composition of the "additional"

@@ -8,6 +8,9 @@ altitude-context signal only — never surfaced to a swim-only athlete, same
 scoping posture as `26-activity-stream-interval-analysis.md` and
 `28-bike-ftp-test-protocols.md`.
 
+
+**UNREVIEWED**, pending human review.
+
 ## The real request this grounds
 
 Andrew asked for the stream analyzer to be "aware of elevation change" in

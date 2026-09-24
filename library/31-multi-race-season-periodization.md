@@ -26,6 +26,9 @@ season? Short answer: yes — this is well-established, mainstream
 periodization theory, not a novel problem, and the answer converges from
 three independent angles below.
 
+
+**UNREVIEWED**, pending human review.
+
 ## Not every race is an A race
 
 **`[EVIDENCE: cycling]`** Per a Roadman Cycling interview with Joe Friel

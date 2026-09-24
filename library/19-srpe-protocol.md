@@ -9,6 +9,9 @@ for asking the question -- none of which `15-tiered-session-load.md`
 covers. See `00-conventions.md` for the tagging scheme and
 `reference_list.md` for full citations.
 
+
+**UNREVIEWED**, pending human review.
+
 ## The problem this fixes
 
 Before this build, the app's only RPE input was a bare `<input type="range"

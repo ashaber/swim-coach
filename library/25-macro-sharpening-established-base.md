@@ -16,6 +16,9 @@ docstring and `MacroBlock.name`'s docstring (`swim_coach/models.py`) for the
 explicit statement that the swim path never reaches a `"hold"`/`"sharpen"`
 block in practice.
 
+
+**UNREVIEWED**, pending human review.
+
 ## The shape itself
 
 **`[ADAPTED: general-endurance]`**, Confidence: medium — re-verified by a

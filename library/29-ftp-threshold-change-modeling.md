@@ -8,6 +8,9 @@ Not yet wired into `context.py`'s routing (`_LIBRARY_FILE_SPORT_SCOPE`/
 keyword routes) — same deferred state `24`/`25`/`28` are honestly left in.
 **Research-only pass: no engine code changed.**
 
+
+**UNREVIEWED**, pending human review.
+
 ## The real question this grounds
 
 Logged athlete feedback (2026-09-13): what real data/model exists for
