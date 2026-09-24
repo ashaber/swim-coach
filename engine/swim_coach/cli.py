@@ -35,10 +35,14 @@ from swim_coach.load import (
     weekly_volume_m,
     wellness_trend,
 )
+from swim_coach.library_cards import content_hash as card_content_hash
+from swim_coach.library_cards import section_text as card_section_text
+from swim_coach.library_cards import topic_sections
 from swim_coach.library_review import (
     MECHANICAL,
     NEEDS_JUDGMENT,
     all_item_ids,
+    find_markers,
     mark_index_reviewed,
     render_html,
     render_text,
@@ -1387,6 +1391,170 @@ def _cmd_review_accept(args: argparse.Namespace, store: StoreInterface) -> int:
     return 0
 
 
+def _cmd_library_review_apply(args: argparse.Namespace, store: StoreInterface) -> int:
+    """Applies ACCEPTED admin decisions from the review-card store (web
+    Resources tab, `POST /api/library/reviews`) back into `library/*.md` --
+    strips the marker(s) an accepted decision covers, the same edit
+    `review-accept` makes, but driven by store decisions instead of a
+    hand-typed review-queue id. Andrew runs this, reviews the resulting git
+    diff, and commits via PR -- this command edits the working tree only,
+    never commits.
+
+    For each `(file, section)` whose CURRENT decision (most recent by
+    `created_at`) is `"accepted"`:
+      - if `content_hash` no longer matches the section's live text, it's
+        skipped as stale (`reason: "stale-hash"`) -- the admin reviewed a
+        version of this section that's since changed; it needs re-review,
+        never a silent apply.
+      - if the section carries its OWN section-scoped UNREVIEWED marker
+        (exactly matching its span), that marker is stripped directly.
+      - if the section is covered by the file's own file-level marker
+        instead, nothing is stripped for it alone -- a file-level marker is
+        the unit `review-accept` already treats as atomic, so it's only
+        stripped once EVERY section in that file has a current accepted
+        decision with a matching hash. A file with any section not yet
+        accepted (or missing, or stale) reports `reason: "partial-file"`
+        with the sections still blocking it. Clearing a file-level marker
+        also updates `INDEX.md` to "Human-reviewed.", same as
+        `review-accept`.
+
+    `--dry-run` reports every action it WOULD take without writing anything.
+    """
+    library_dir = Path(args.library_dir)
+    if not library_dir.exists():
+        return _error(f"library dir not found: {library_dir}")
+    dry_run = bool(args.dry_run)
+
+    latest_by_key: dict[tuple[str, str], object] = {}
+    for review in store.list_library_reviews():
+        key = (review.file, review.section)
+        if key not in latest_by_key:
+            latest_by_key[key] = review
+
+    accepted_by_file: dict[str, list[tuple[str, object]]] = {}
+    for (filename, section), review in latest_by_key.items():
+        if review.decision != "accepted":
+            continue
+        accepted_by_file.setdefault(filename, []).append((section, review))
+
+    applied: list[dict[str, object]] = []
+    skipped: list[dict[str, object]] = []
+    index_updated: list[str] = []
+
+    index_path = library_dir / "INDEX.md"
+    index_text = index_path.read_text(encoding="utf-8") if index_path.exists() else None
+
+    for filename in sorted(accepted_by_file):
+        section_reviews = accepted_by_file[filename]
+        path = library_dir / filename
+        if not path.exists():
+            for section, _review in section_reviews:
+                skipped.append({"file": filename, "section": section, "reason": "no-such-file"})
+            continue
+
+        text = path.read_text(encoding="utf-8")
+        sections_by_slug = {s.slug: s for s in topic_sections(text)}
+        all_slugs = set(sections_by_slug)
+        markers = find_markers(text)
+        file_marker = next((m for m in markers if m.scope == "file"), None)
+
+        current_accepted_slugs: set[str] = set()
+        to_strip: list[tuple[str, object]] = []  # (section slug, Marker)
+
+        for section_slug, review in sorted(section_reviews):
+            section = sections_by_slug.get(section_slug)
+            if section is None:
+                skipped.append(
+                    {"file": filename, "section": section_slug, "reason": "section-not-found"}
+                )
+                continue
+            own_marker = next(
+                (
+                    m
+                    for m in markers
+                    if m.scope == "section"
+                    and m.scope_start == section.start
+                    and m.scope_end == section.end
+                ),
+                None,
+            )
+            covered_by_file_marker = file_marker is not None and (
+                file_marker.scope_start <= section.start and section.end <= file_marker.scope_end
+            )
+            if own_marker is None and not covered_by_file_marker:
+                # No active marker covers this section at all -- an earlier
+                # apply run already handled it (or it was never gated in the
+                # first place). Nothing to do, and the hash is irrelevant --
+                # stripping a marker necessarily changes the section's own
+                # text, so re-checking the hash here would misreport a
+                # successfully-applied section as "stale" on every
+                # subsequent run. Same "already-accepted" idempotence
+                # review-accept's own CLI command already guarantees.
+                continue
+
+            live_text = card_section_text(text, section)
+            if card_content_hash(live_text) != review.content_hash:
+                skipped.append({"file": filename, "section": section_slug, "reason": "stale-hash"})
+                continue
+            current_accepted_slugs.add(section_slug)
+            if own_marker is not None:
+                to_strip.append((section_slug, own_marker))
+
+        changed = False
+        for section_slug, marker in to_strip:
+            if dry_run:
+                applied.append(
+                    {"file": filename, "section": section_slug, "action": "would-strip-section-marker"}
+                )
+                continue
+            text = strip_marker(text, marker.start, marker.end)
+            changed = True
+            applied.append(
+                {"file": filename, "section": section_slug, "action": "stripped-section-marker"}
+            )
+
+        file_marker = next((m for m in find_markers(text) if m.scope == "file"), None)
+        if file_marker is not None:
+            missing = all_slugs - current_accepted_slugs
+            if all_slugs and not missing:
+                if dry_run:
+                    applied.append({"file": filename, "action": "would-strip-file-marker"})
+                else:
+                    text = strip_marker(text, file_marker.start, file_marker.end)
+                    changed = True
+                    applied.append({"file": filename, "action": "stripped-file-marker"})
+                    if index_text is not None:
+                        index_text, idx_changed = mark_index_reviewed(index_text, filename)
+                        if idx_changed:
+                            index_updated.append(filename)
+            else:
+                skipped.append(
+                    {
+                        "file": filename,
+                        "reason": "partial-file",
+                        "missing_sections": sorted(missing),
+                    }
+                )
+
+        if changed and not dry_run:
+            path.write_text(text, encoding="utf-8")
+
+    if index_updated and index_text is not None and not dry_run:
+        index_path.write_text(index_text, encoding="utf-8")
+
+    print(
+        json.dumps(
+            {
+                "applied": applied,
+                "skipped": skipped,
+                "index_updated": index_updated,
+                "dry_run": dry_run,
+            }
+        )
+    )
+    return 0
+
+
 def _add_database_url_arg(subparser: argparse.ArgumentParser, *, creates_athlete: bool = False) -> None:
     """Shared --database-url flag for the invite-family subcommands (and,
     with `creates_athlete=True`, `onboard`).
@@ -1621,6 +1789,14 @@ def build_parser() -> argparse.ArgumentParser:
         "ids", nargs="+", help="review-queue item id(s), e.g. 07-strength-dryland.md#session-duration-45-minutes"
     )
 
+    p_library_review_apply = subparsers.add_parser(
+        "library-review-apply",
+        help="apply ACCEPTED review-card decisions (POST /api/library/reviews) back into library/*.md",
+    )
+    p_library_review_apply.add_argument(
+        "--dry-run", action="store_true", help="report what would change without writing anything"
+    )
+
     return parser
 
 
@@ -1643,6 +1819,7 @@ _COMMANDS = {
     "onboard": _cmd_onboard,
     "review-queue": _cmd_review_queue,
     "review-accept": _cmd_review_accept,
+    "library-review-apply": _cmd_library_review_apply,
 }
 
 
