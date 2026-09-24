@@ -3224,7 +3224,16 @@ function setTab(tab) {
   // convention as Plan/Roster above -- fetch the card list the moment the
   // tab is actually opened, not eagerly. Falls back to whatever's cached in
   // localStorage while offline (see loadLibraryCards).
-  if (tab === 'resources' && (state.libraryCards.status === 'idle' || state.libraryCards.status === 'error')) {
+  //
+  // web/resources-hotfix fix 4 (privacy stopgap): GET /api/library/cards is
+  // now admin-only server-side (library topic files currently carry one
+  // athlete's personal health details/name -- de-identifying them is a
+  // separate follow-up build), so a non-admin never even attempts the
+  // fetch -- it would just 403 and show an error banner for a section
+  // renderResourcesTab already replaces with a "coming soon" note for
+  // non-admins (see there).
+  if (tab === 'resources' && state.identity?.isLibraryAdmin
+    && (state.libraryCards.status === 'idle' || state.libraryCards.status === 'error')) {
     loadLibraryCards(); // calls render() itself
     return;
   }

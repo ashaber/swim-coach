@@ -3136,11 +3136,16 @@ export function renderResourcesTab({
         </div>
       </header>
       ${!online ? '<div class="chat-banner">Offline -- showing the last-loaded cards.</div>' : ''}
+      ${isAdmin ? `
       <section>
         <div class="s-head"><h2>Research library</h2></div>
         ${renderLibraryFilterChips(filter)}
         ${renderLibraryCardGrid(cards, filter)}
-      </section>
+      </section>` : `
+      <section>
+        <div class="s-head"><h2>Research library</h2></div>
+        <p class="sub">Research library coming soon.</p>
+      </section>`}
       ${isAdmin ? renderApprovalsSection({
         cards, reviewDrafts, reviewSubmit, online,
       }) : ''}

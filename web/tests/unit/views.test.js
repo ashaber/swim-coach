@@ -2054,12 +2054,17 @@ describe('renderResourcesTab', () => {
     ...overrides,
   });
 
+  // isAdmin defaults to true here -- web/resources-hotfix fix 4 gates the
+  // whole Research library section (not just Approvals) on isAdmin, and
+  // most of these tests are about card/section CONTENT, not about who may
+  // see it -- see the dedicated 'hides the research library ... when not
+  // admin' test below for the isAdmin: false behavior itself.
   const baseArgs = {
     cards: { status: 'ready', data: [card()], error: null },
     filter: 'all',
     openFile: null,
     file: { status: 'idle', data: null, error: null },
-    isAdmin: false,
+    isAdmin: true,
     reviewDrafts: {},
     reviewSubmit: { status: 'idle', error: null, key: null },
     backendConfigured: true,
@@ -2175,16 +2180,19 @@ describe('renderResourcesTab', () => {
     expect(html).toContain('Nothing matches this filter.');
   });
 
-  it('"Read full section" carries the file and the verbatim heading as the anchor', () => {
+  it('the research library list\'s "Read full section" carries only the file, no anchor (fix 2: always scrolls to top)', () => {
     const html = renderResourcesTab(baseArgs);
     expect(html).toContain('data-a="library:open-file"');
     expect(html).toContain('data-file="07-strength-dryland.md"');
-    expect(html).toContain('data-anchor="Session duration: 45 minutes"');
+    expect(html).not.toContain('data-anchor="Session duration: 45 minutes"');
   });
 
-  it('hides Approvals when not admin', () => {
+  it('hides the research library and Approvals when not admin, showing a coming-soon note instead', () => {
     const html = renderResourcesTab({ ...baseArgs, isAdmin: false });
     expect(html).not.toContain('Approvals');
+    expect(html).not.toContain('library-card');
+    expect(html).not.toContain('Session duration: 45 minutes');
+    expect(html).toContain('Research library coming soon.');
   });
 
   it('shows Approvals when admin, with unreviewed/stale cards listed', () => {
