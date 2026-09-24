@@ -602,6 +602,23 @@ def test_section_evidence_unrecognized_confidence_string_ranks_lowest():
     assert ev.lowest_confidence == "weird-value"
 
 
+def test_section_evidence_needs_judgment_true_for_evidence_or_adapted():
+    start = DRAFTED_FILE.index("## Bone loading")
+    ev = section_evidence(DRAFTED_FILE, start, len(DRAFTED_FILE), _refs(), Path("/nonexistent"))
+    assert ev.needs_judgment is True
+
+
+def test_section_evidence_needs_judgment_false_for_coach_judgment_only():
+    # 07's "What's actually in a session" (NESTED_MARKER_FILE) is pure
+    # Coach judgment -- no EVIDENCE/ADAPTED tag -- so it's mechanical, not
+    # needs-judgment.
+    start = NESTED_MARKER_FILE.index("## What's actually in a session")
+    end = NESTED_MARKER_FILE.index("## Watch total load when ramping")
+    ev = section_evidence(NESTED_MARKER_FILE, start, end, _refs(), Path("/nonexistent"))
+    assert ev.needs_judgment is False
+    assert ev.reviewed is False  # its own inline section marker still covers it
+
+
 # --- strip_marker ----------------------------------------------------------------------
 
 

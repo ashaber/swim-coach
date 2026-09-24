@@ -751,6 +751,7 @@ class SectionEvidence:
     unresolved_citation_count: int
     dossier: str | None
     reviewed: bool
+    needs_judgment: bool  # any block tagged EVIDENCE/ADAPTED -- see _classify
 
 
 def section_evidence(
@@ -797,6 +798,7 @@ def section_evidence(
 
     lowest = min(confidences, key=_confidence_rank) if confidences else None
     dossier = find_dossier(text, dossiers_dir)
+    needs_judgment = any(_classify(b.tag_kind) == NEEDS_JUDGMENT for b in blocks)
 
     return SectionEvidence(
         lowest_confidence=lowest,
@@ -806,6 +808,7 @@ def section_evidence(
         unresolved_citation_count=unresolved_count,
         dossier=dossier,
         reviewed=reviewed,
+        needs_judgment=needs_judgment,
     )
 
 
