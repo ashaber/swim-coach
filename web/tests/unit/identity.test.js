@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
-  loadIdentity, saveIdentity, clearIdentity, currentIdentity,
+  loadIdentity, saveIdentity, clearIdentity, currentIdentity, mergeMeIntoIdentity,
 } from '../../src/identity.js';
 
 // Identity resolution (email -> athlete/role) is no longer client-side --
@@ -88,5 +88,41 @@ describe('identity persistence', () => {
       }),
     );
     expect(loadIdentity(storage).isLibraryAdmin).toBe(true);
+  });
+});
+
+// web/resources-hotfix fix 1: app-start refresh of isLibraryAdmin/coachFor
+// from a fresh GET /api/me, for a saved identity from before those fields
+// (or their current value) existed/changed server-side.
+describe('mergeMeIntoIdentity', () => {
+  const identity = {
+    name: 'Renee', athlete: 'renee', role: 'athlete', coachFor: [], isLibraryAdmin: false,
+  };
+
+  it('promotes isLibraryAdmin and coachFor from a successful /api/me response', () => {
+    const meResult = { ok: true, data: { is_library_admin: true, coach_for: ['andrew'] } };
+    expect(mergeMeIntoIdentity(identity, meResult)).toEqual({
+      ...identity, isLibraryAdmin: true, coachFor: ['andrew'],
+    });
+  });
+
+  it('demotes isLibraryAdmin when /api/me now reports false', () => {
+    const admin = { ...identity, isLibraryAdmin: true };
+    const meResult = { ok: true, data: { is_library_admin: false, coach_for: [] } };
+    expect(mergeMeIntoIdentity(admin, meResult).isLibraryAdmin).toBe(false);
+  });
+
+  it('keeps the saved identity unchanged when the /api/me call failed', () => {
+    const meResult = { ok: false, error: 'network error', status: 0 };
+    expect(mergeMeIntoIdentity(identity, meResult)).toBe(identity);
+  });
+
+  it('keeps the saved identity unchanged when there is no identity to merge into', () => {
+    expect(mergeMeIntoIdentity(null, { ok: true, data: { is_library_admin: true } })).toBeNull();
+  });
+
+  it('leaves fields as-is when the response omits them', () => {
+    const meResult = { ok: true, data: {} };
+    expect(mergeMeIntoIdentity(identity, meResult)).toEqual(identity);
   });
 });

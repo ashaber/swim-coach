@@ -62,10 +62,18 @@ UNREVIEWED_CARD = {
     'latest_review': None,
 }
 CARDS_JSON = json.dumps([REVIEWED_CARD, UNREVIEWED_CARD])
-FILE_BODY = json.dumps({
-    'file': '07-strength-dryland.md',
-    'content': '# Strength & dryland programming\n\n## Session duration: 45 minutes\n\nReal section body text.\n',
-})
+# Both cards' headings appear in this one mocked file body (the mocked route
+# below serves it for any requested filename), with a tall filler block
+# between them -- long enough that "scrolled to the heading" and "scrolled
+# to the top" are actually distinguishable by window.scrollY (web/
+# resources-hotfix fix 2's own scroll-position tests rely on this).
+FILE_CONTENT = (
+    '# Strength & dryland programming\n\n'
+    '## Session duration: 45 minutes\n\nReal section body text.\n\n'
+    + ('Filler paragraph text to create scroll height.\n\n' * 120)
+    + '## Gaps, stated bluntly\n\nApproval section body text.\n'
+)
+FILE_BODY = json.dumps({'file': '07-strength-dryland.md', 'content': FILE_CONTENT})
 
 ADMIN_IDENTITY = {'name': 'Andrew', 'athlete': 'andrew', 'role': 'athlete', 'coachFor': [], 'isLibraryAdmin': True}
 NON_ADMIN_IDENTITY = {'name': 'Renee', 'athlete': 'renee', 'role': 'athlete', 'coachFor': [], 'isLibraryAdmin': False}
@@ -174,12 +182,17 @@ def test_stale_saved_tab_falls_back_to_plan(page, stale_tab):
     assert active.get_attribute('data-a') == 'tab:plan'
 
 
-# --- Research library section -----------------------------------------------
+# --- Research library section (admin-only, web/resources-hotfix fix 4) ------
+# Library topic files currently carry one athlete's personal health details
+# and athlete names (de-identification is a separate follow-up build), so
+# these tests -- which care about the card grid/file-view itself, not about
+# who may see it -- all use `admin_page`. The "who may see it" question is
+# covered separately below (see "Admin-only visibility").
 
-def test_resources_tab_renders_cards_with_badges(page):
-    page.click('[data-a="tab:resources"]')
-    page.wait_for_selector('.library-card')
-    content = page.content()
+def test_resources_tab_renders_cards_with_badges(admin_page):
+    admin_page.click('[data-a="tab:resources"]')
+    admin_page.wait_for_selector('.library-card')
+    content = admin_page.content()
     assert 'Session duration: 45 minutes' in content
     assert 'high confidence' in content
     assert 'Reviewed' in content
@@ -187,34 +200,102 @@ def test_resources_tab_renders_cards_with_badges(page):
     assert 'Gaps, stated bluntly' in content
 
 
-def test_resources_filter_chips_narrow_the_list(page):
+def test_resources_filter_chips_narrow_the_list(admin_page):
+    admin_page.click('[data-a="tab:resources"]')
+    admin_page.wait_for_selector('.library-card')
+    admin_page.click('[data-filter="needs_review"]')
+    admin_page.wait_for_selector('text=Gaps, stated bluntly')
+    assert 'Session duration: 45 minutes' not in admin_page.content()
+
+
+def test_resources_read_full_section_opens_file_and_back_returns(admin_page):
+    admin_page.click('[data-a="tab:resources"]')
+    admin_page.wait_for_selector('.library-card')
+    admin_page.locator('[data-a="library:open-file"]').first.click()
+    admin_page.wait_for_selector('#library-file-content')
+    assert 'Real section body text.' in admin_page.content()
+
+    admin_page.click('[data-a="library:close-file"]')
+    admin_page.wait_for_selector('.library-card')
+
+
+# --- Detail-view scroll position (web/resources-hotfix fix 2) ---------------
+# Opening a file from the Research library list should land at the top;
+# opening it from an Approvals card (a specific to-be-reviewed section)
+# should land scrolled to that section's heading. Before this fix, both
+# just kept whatever scroll position the card grid happened to have.
+
+def test_opening_from_the_research_library_list_scrolls_to_top(admin_page):
+    admin_page.click('[data-a="tab:resources"]')
+    admin_page.wait_for_selector('.library-card')
+    # Scroll down first, so landing at the top is actually observable.
+    admin_page.evaluate('window.scrollTo(0, 400)')
+    assert admin_page.evaluate('window.scrollY') > 0
+    admin_page.locator('[data-a="library:open-file"]').first.click()
+    admin_page.wait_for_selector('#library-file-content')
+    assert admin_page.evaluate('window.scrollY') == 0
+
+
+def test_opening_from_an_approvals_card_scrolls_to_its_heading(admin_page):
+    admin_page.click('[data-a="tab:resources"]')
+    admin_page.wait_for_selector('.library-card')
+    admin_page.wait_for_selector('h2:has-text("Approvals")')
+    # The Approvals card's own "Read full section" button (UNREVIEWED_CARD,
+    # heading "Gaps, stated bluntly" -- far down FILE_CONTENT's filler
+    # block, well past a scroll-to-top position).
+    approvals = admin_page.locator('section', has=admin_page.locator('h2', has_text='Approvals'))
+    approvals.locator('[data-a="library:open-file"]').click()
+    admin_page.wait_for_selector('#library-file-content')
+    admin_page.wait_for_function('() => window.scrollY > 200')
+
+
+# --- Hardware/gesture back (web/resources-hotfix fix 3) ---------------------
+# The library detail view had no history entry at all before this fix, so a
+# hardware/gesture back press closed the whole PWA instead of just the
+# detail. page.go_back() is Playwright's proxy for that back press -- same
+# pattern as test_coach_roster.py's test_hardware_back_closes_workout_detail_
+# not_the_app / test_workout_detail.py's own hardware-back test.
+
+def test_hardware_back_closes_library_detail_not_the_app(admin_page):
+    admin_page.click('[data-a="tab:resources"]')
+    admin_page.wait_for_selector('.library-card')
+    admin_page.locator('[data-a="library:open-file"]').first.click()
+    admin_page.wait_for_selector('#library-file-content')
+
+    admin_page.go_back()
+    admin_page.wait_for_selector('.library-card')
+    assert admin_page.locator('#library-file-content').count() == 0
+    # Prove the app didn't navigate away entirely -- the tab bar is still
+    # there, not a blank/exited page.
+    assert admin_page.locator('.tabbar').count() == 1
+    assert admin_page.locator('[data-a="tab:resources"]').count() == 1
+
+
+# --- Admin-only visibility (web/resources-hotfix fix 4, privacy stopgap) ----
+# Library topic files currently carry one athlete's personal health details
+# and athlete names; de-identifying them is a separate follow-up build.
+# Until then, a non-admin sees neither the Research library section nor
+# Approvals -- just a one-line "coming soon" note -- and the client never
+# even attempts GET /api/library/cards (the backend now 403s it for a
+# non-admin anyway, see tests/api/test_library_route.py).
+
+def test_resources_shows_a_coming_soon_note_for_non_admin(page):
+    calls = []
+
+    def counting_cards_route(route):
+        calls.append(1)
+        route.fulfill(status=200, content_type='application/json', body=CARDS_JSON, headers=CORS_HEADERS)
+
+    page.route('**/api/library/cards*', counting_cards_route)
     page.click('[data-a="tab:resources"]')
-    page.wait_for_selector('.library-card')
-    page.click('[data-filter="needs_review"]')
-    page.wait_for_selector('text=Gaps, stated bluntly')
-    assert 'Session duration: 45 minutes' not in page.content()
-
-
-def test_resources_read_full_section_opens_file_and_back_returns(page):
-    page.click('[data-a="tab:resources"]')
-    page.wait_for_selector('.library-card')
-    page.locator('[data-a="library:open-file"]').first.click()
-    page.wait_for_selector('#library-file-content')
-    assert 'Real section body text.' in page.content()
-
-    page.click('[data-a="library:close-file"]')
-    page.wait_for_selector('.library-card')
-
-
-# --- Approvals (admin-only) --------------------------------------------------
-
-def test_resources_hides_approvals_for_non_admin(page):
-    page.click('[data-a="tab:resources"]')
-    page.wait_for_selector('.library-card')
-    # Scoped to #app (not the whole page.content(), which also contains
-    # this file's own inline <style> block -- and the word "Approvals" in
-    # one of its comments).
+    page.wait_for_selector('.s-head')
+    assert 'Research library coming soon.' in page.locator('#app').inner_text()
+    assert page.locator('.library-card').count() == 0
+    # Scoped to #app (not the whole page.content(), which also contains this
+    # file's own inline <style> block -- and the word "Approvals" in one of
+    # its comments).
     assert 'Approvals' not in page.locator('#app').inner_text()
+    assert calls == []  # never even attempted the now-403ing endpoint
 
 
 def test_resources_shows_approvals_for_admin(admin_page):
@@ -314,7 +395,9 @@ def test_resources_flag_with_note_posts_the_decision(admin_page):
 @pytest.mark.parametrize('cfg', BROWSERS)
 def test_resources_shows_cached_cards_when_offline(cfg, base_url):
     with sync_playwright() as pw:
-        browser, ctx = _make_ctx(pw, cfg, seed_cards_cache=[REVIEWED_CARD, UNREVIEWED_CARD])
+        browser, ctx = _make_ctx(
+            pw, cfg, identity=ADMIN_IDENTITY, seed_cards_cache=[REVIEWED_CARD, UNREVIEWED_CARD],
+        )
         pg = ctx.new_page()
         pg.goto(base_url)
         try:
@@ -335,7 +418,7 @@ def test_resources_shows_cached_cards_when_offline(cfg, base_url):
 def test_resources_shows_cached_file_when_offline(cfg, base_url):
     with sync_playwright() as pw:
         browser, ctx = _make_ctx(
-            pw, cfg,
+            pw, cfg, identity=ADMIN_IDENTITY,
             seed_cards_cache=[REVIEWED_CARD],
             seed_file_cache={'07-strength-dryland.md': '# Strength\n\n## Session duration: 45 minutes\n\nCached body text.'},
         )

@@ -26,12 +26,15 @@ import {
   fetchWorkoutPacing,
   postCoachWorkoutChatMessage, patchCoachWorkoutChatMuted,
   listLibraryCards, fetchLibraryFile, submitLibraryReview,
+  fetchMe,
 } from './api.js';
 import {
   serializeWorkoutForm, profileFormFromAthlete, serializeProfileForm,
   logFormFromDraft,
 } from './forms.js';
-import { currentIdentity, signIn, signOut, saveIdentity } from './identity.js';
+import {
+  currentIdentity, signIn, signOut, saveIdentity, mergeMeIntoIdentity,
+} from './identity.js';
 import {
   createOnboardingState, validateOnboardForm, onboardPayloadFromForm,
   loadOnboardingActive, saveOnboardingActive, startOnboardingSession, identityFromOnboardSession,
@@ -1732,17 +1735,18 @@ function handleSelectLoadWindow(key) {
 // Closes whichever detail view is open on a hardware/gesture back press.
 // Deliberately does NOT call history.back()/pushState itself -- it's the
 // *target* of a popstate that already happened, so doing either here would
-// create a pushState/popstate loop. All three handlers' own guards make this
-// safe to call unconditionally on every popstate, including ones unrelated
-// to any detail view. The three detail views live on different tabs (Log,
-// Plan, roster) and are mutually exclusive in practice, but calling all
-// three closers unconditionally needs no extra bookkeeping to stay correct
-// if that ever changes.
+// create a pushState/popstate loop. Each handler's own re-entrancy guard
+// makes this safe to call unconditionally on every popstate, including ones
+// unrelated to any detail view. These detail views live on different tabs
+// (Log, Plan, roster, Resources) and are mutually exclusive in practice, but
+// calling every closer unconditionally needs no extra bookkeeping to stay
+// correct if that ever changes.
 function handlePopState() {
   handleCloseHistoryDetail();
   handleCloseSessionDetail();
   handleCloseCoachWorkoutDetail();
   handleCloseCoachSessionDetail();
+  handleCloseLibraryFile();
 }
 
 /** Clears a stale detail selection after a history refresh whose new data
@@ -2300,12 +2304,30 @@ function handleSetLibraryFilter(filter) {
   render();
 }
 
-/** Opens the "read full section" view for one topic file, scrolled to
- * `anchor` -- fetches it if not already cached (offline: cache-only, same
- * fallback posture as loadLibraryCards). */
+/** Opens the "read full section" view for one topic file -- fetches it if
+ * not already cached (offline: cache-only, same fallback posture as
+ * loadLibraryCards). Two entry points, two scroll behaviors (web/
+ * resources-hotfix fix 2 -- was a gap before this fix, the view just landed
+ * wherever the window happened to be scrolled): the Research library list's
+ * card (renderLibraryCard) never passes `anchor`, so this scrolls straight
+ * to the top of the file, same as handleOpenSessionDetail's scrollToTop().
+ * An Approvals card (renderApprovalCard) DOES pass `anchor` (its own
+ * heading -- the specific to-be-reviewed section), so instead of jumping to
+ * the top this waits for the file to finish loading and scrolls to that
+ * heading -- see the anchor-gated effect in render() below
+ * (scrollToLibrarySectionAnchor), which fires once state.libraryFile is
+ * 'ready'. */
 async function handleOpenLibraryFile(name, anchor) {
   if (!name) return;
   state.libraryOpenFile = { name, anchor: anchor || null };
+  if (!anchor) scrollToTop();
+  // Pushes an in-app history entry so hardware/gesture back (a `popstate`,
+  // handled by handlePopState) closes the detail back to the Resources tile
+  // list instead of navigating the PWA away entirely -- web/resources-hotfix
+  // fix 3, exactly the same pushState/popstate/re-entrancy-guard shape as
+  // handleOpenSessionDetail/handleOpenCoachWorkoutDetail (this view had no
+  // history entry at all before this fix).
+  history.pushState({ libraryDetail: name }, '');
   const settings = state.settingsForm;
   const identity = state.identity;
 
@@ -2338,6 +2360,7 @@ async function handleOpenLibraryFile(name, anchor) {
 }
 
 function handleCloseLibraryFile() {
+  if (!state.libraryOpenFile) return; // avoids a redundant render on popstate re-entrancy
   state.libraryOpenFile = null;
   state.libraryFile = { status: 'idle', data: null, error: null };
   render();
@@ -3024,6 +3047,45 @@ function maybeLoadGrants() {
   loadGrants();
 }
 
+// web/resources-hotfix fix 1: a saved identity restored via currentIdentity()
+// at the top of this file (a plain localStorage read, see initialIdentity)
+// never picks up an admin-only entitlement that started existing/changing
+// AFTER that identity was last saved (isLibraryAdmin is only ever written
+// at Google sign-in -- see identity.js's signIn) -- e.g. an athlete promoted
+// to library admin server-side stays stuck showing the gated Resources
+// section until they explicitly sign out and back in. Called once at app
+// boot (see the bottom of this file) to re-resolve those flags from a fresh
+// GET /api/me, the same call signIn() already makes. Best-effort: offline
+// or any request failure just leaves the saved identity as-is (logged) --
+// this must never block app start or clobber a good cached identity with a
+// failed refresh, see identity.js's mergeMeIntoIdentity doc comment.
+async function maybeRefreshIdentityAdminFlags() {
+  if (!state.identity || !state.settingsForm.token || !state.online) return;
+  // api.js's fetchMe (-> apiRequest) already catches every fetch/network
+  // failure internally and resolves {ok: false, error} rather than
+  // rejecting -- this try/catch is pure belt-and-suspenders so a future
+  // change to that contract can never turn this best-effort boot-time
+  // refresh into an unhandled rejection (this fires on nearly every app
+  // boot, unlike a user-triggered action, so there's no click handler
+  // catching it either).
+  try {
+    const meResult = await fetchMe({ baseUrl: state.settingsForm.baseUrl, token: state.settingsForm.token });
+    if (!meResult.ok) {
+      log.warn('identity.refresh_admin_flags_failed', { error: meResult.error, status: meResult.status });
+      return;
+    }
+    const merged = mergeMeIntoIdentity(state.identity, meResult);
+    if (merged === state.identity) return;
+    state.identity = merged;
+    state.coachFor = merged.coachFor || [];
+    saveIdentity(merged);
+    log.info('identity.refresh_admin_flags_succeeded', { isLibraryAdmin: merged.isLibraryAdmin });
+    render();
+  } catch (err) {
+    log.warn('identity.refresh_admin_flags_failed', { error: err.message });
+  }
+}
+
 async function handleGrantSubmit() {
   if (state.grants.createSubmit.status === 'submitting') return;
   const settings = state.settingsForm;
@@ -3173,7 +3235,16 @@ function setTab(tab) {
   // convention as Plan/Roster above -- fetch the card list the moment the
   // tab is actually opened, not eagerly. Falls back to whatever's cached in
   // localStorage while offline (see loadLibraryCards).
-  if (tab === 'resources' && (state.libraryCards.status === 'idle' || state.libraryCards.status === 'error')) {
+  //
+  // web/resources-hotfix fix 4 (privacy stopgap): GET /api/library/cards is
+  // now admin-only server-side (library topic files currently carry one
+  // athlete's personal health details/name -- de-identifying them is a
+  // separate follow-up build), so a non-admin never even attempts the
+  // fetch -- it would just 403 and show an error banner for a section
+  // renderResourcesTab already replaces with a "coming soon" note for
+  // non-admins (see there).
+  if (tab === 'resources' && state.identity?.isLibraryAdmin
+    && (state.libraryCards.status === 'idle' || state.libraryCards.status === 'error')) {
     loadLibraryCards(); // calls render() itself
     return;
   }
@@ -3256,7 +3327,12 @@ async function onAppClick(e) {
     case 'health-status:submit': handleSubmitHealthStatusSelf(); break;
     case 'profile:submit': handleSubmitProfile(); break;
     case 'library:open-file': handleOpenLibraryFile(el.dataset.file, el.dataset.anchor); break;
-    case 'library:close-file': handleCloseLibraryFile(); break;
+    // Goes through history.back() (not handleCloseLibraryFile() directly) so
+    // both the in-app back control and hardware/gesture back close the
+    // detail via the exact same path -- see handlePopState. Same
+    // history.back()-not-direct-close reasoning as history:back/session:back
+    // above.
+    case 'library:close-file': history.back(); break;
     case 'library:filter': handleSetLibraryFilter(el.dataset.filter); break;
     case 'library:review:accept':
       await handleSubmitLibraryReview('accepted', el.dataset.file, el.dataset.section, el.dataset.hash);
@@ -3545,6 +3621,7 @@ loadPlan();
 loadPlanLoad();
 maybeLoadProfile();
 maybeLoadGrants();
+maybeRefreshIdentityAdminFlags();
 // loadPlan() above self-gates on isConfigured and is otherwise unconditional
 // at boot; loadHistory() has no such caller-independent self-gate -- until
 // now the only caller was setTab's Dashboard-tab branch, so history stayed

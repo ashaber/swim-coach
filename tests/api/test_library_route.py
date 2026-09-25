@@ -83,8 +83,18 @@ def test_list_cards_requires_auth(client) -> None:
     assert response.status_code == 401
 
 
+# web/resources-hotfix fix 4: GET /api/library/cards is now admin-only (see
+# require_library_admin), so every test below that only cares about card
+# shape/content -- not about who may read them -- uses `athlete=andrew` (the
+# configured admin, see this file's own `app_env` override) rather than
+# `renee`. andrew's profile carries no `sports` override by default, same as
+# renee's, so the sport-scope assertions (e.g. BIKE_FILE exclusion) still
+# hold unchanged. The "who may read them" question itself is covered
+# separately below (see "Admin-only access" section).
+
+
 def test_list_cards_returns_every_in_scope_file(client, allowlist) -> None:
-    response = client.get("/api/library/cards?athlete=renee", headers=auth_headers())
+    response = client.get("/api/library/cards?athlete=andrew", headers=auth_headers())
     assert response.status_code == 200
     cards = response.json()
     assert len(cards) > 100  # 158 authored across 28 files
@@ -94,7 +104,7 @@ def test_list_cards_returns_every_in_scope_file(client, allowlist) -> None:
 
 
 def test_list_cards_shape_and_derived_fields_for_a_pending_section(client, allowlist) -> None:
-    response = client.get("/api/library/cards?athlete=renee", headers=auth_headers())
+    response = client.get("/api/library/cards?athlete=andrew", headers=auth_headers())
     cards = {(c["file"], c["section"]): c for c in response.json()}
     card = cards[(PENDING_FILE, PENDING_SECTION)]
 
@@ -109,14 +119,14 @@ def test_list_cards_shape_and_derived_fields_for_a_pending_section(client, allow
 
 
 def test_list_cards_reviewed_section_has_no_active_marker(client, allowlist) -> None:
-    response = client.get("/api/library/cards?athlete=renee", headers=auth_headers())
+    response = client.get("/api/library/cards?athlete=andrew", headers=auth_headers())
     cards = {(c["file"], c["section"]): c for c in response.json()}
     card = cards[(REVIEWED_FILE, REVIEWED_SECTION)]
     assert card["reviewed"] is True
 
 
 def test_list_cards_excludes_bike_files_for_swim_only_athlete(client, allowlist) -> None:
-    response = client.get("/api/library/cards?athlete=renee", headers=auth_headers())
+    response = client.get("/api/library/cards?athlete=andrew", headers=auth_headers())
     files = {c["file"] for c in response.json()}
     assert BIKE_FILE not in files
 
@@ -137,8 +147,19 @@ def test_list_cards_includes_bike_files_for_an_athlete_with_bike_sport(
     assert BIKE_FILE in files
 
 
-def test_list_cards_athlete_session_sees_own_cards(client, allowlist, google) -> None:
+def test_list_cards_non_admin_athlete_session_403s(client, allowlist, google) -> None:
+    # web/resources-hotfix fix 4: renee is allowlisted but not configured as
+    # a library admin (only 'andrew' is, per this file's app_env override),
+    # so even a real signed-in athlete session reading their OWN implicit
+    # scope (no ?athlete= override needed) is now refused -- the privacy
+    # stopgap applies to every non-admin, not just cross-athlete access.
     headers = _renee_headers(client, allowlist, google)
+    response = client.get("/api/library/cards", headers=headers)
+    assert response.status_code == 403
+
+
+def test_list_cards_admin_athlete_session_200s(client, allowlist, google) -> None:
+    headers = _andrew_headers(client, allowlist, google)
     response = client.get("/api/library/cards", headers=headers)
     assert response.status_code == 200
     assert len(response.json()) > 100
@@ -188,9 +209,15 @@ def test_get_library_file_requires_auth(client) -> None:
     assert response.status_code == 401
 
 
+# Same fix-4 admin-only gate as GET /api/library/cards above -- every test
+# below that only cares about file-serving behavior (not "who may read
+# it") uses `athlete=andrew` for the same reasons as that section's own
+# comment.
+
+
 def test_get_library_file_returns_markdown(client, allowlist) -> None:
     response = client.get(
-        f"/api/library/files/{REVIEWED_FILE}?athlete=renee", headers=auth_headers()
+        f"/api/library/files/{REVIEWED_FILE}?athlete=andrew", headers=auth_headers()
     )
     assert response.status_code == 200
     body = response.json()
@@ -200,14 +227,14 @@ def test_get_library_file_returns_markdown(client, allowlist) -> None:
 
 def test_get_library_file_unknown_name_404s(client, allowlist) -> None:
     response = client.get(
-        "/api/library/files/does-not-exist.md?athlete=renee", headers=auth_headers()
+        "/api/library/files/does-not-exist.md?athlete=andrew", headers=auth_headers()
     )
     assert response.status_code == 404
 
 
 def test_get_library_file_rejects_path_traversal(client, allowlist) -> None:
     response = client.get(
-        "/api/library/files/..%2F..%2Fpyproject.toml?athlete=renee", headers=auth_headers()
+        "/api/library/files/..%2F..%2Fpyproject.toml?athlete=andrew", headers=auth_headers()
     )
     assert response.status_code == 404
 
@@ -216,16 +243,29 @@ def test_get_library_file_sport_scoped_file_404s_for_swim_only_athlete(
     client, allowlist
 ) -> None:
     response = client.get(
-        f"/api/library/files/{BIKE_FILE}?athlete=renee", headers=auth_headers()
+        f"/api/library/files/{BIKE_FILE}?athlete=andrew", headers=auth_headers()
     )
     assert response.status_code == 404
 
 
 def test_get_library_file_excludes_meta_files(client, allowlist) -> None:
     response = client.get(
-        "/api/library/files/INDEX.md?athlete=renee", headers=auth_headers()
+        "/api/library/files/INDEX.md?athlete=andrew", headers=auth_headers()
     )
     assert response.status_code == 404
+
+
+def test_get_library_file_non_admin_403s(client, allowlist) -> None:
+    response = client.get(
+        f"/api/library/files/{REVIEWED_FILE}?athlete=renee", headers=auth_headers()
+    )
+    assert response.status_code == 403
+
+
+def test_get_library_file_admin_athlete_session_200s(client, allowlist, google) -> None:
+    headers = _andrew_headers(client, allowlist, google)
+    response = client.get(f"/api/library/files/{REVIEWED_FILE}", headers=headers)
+    assert response.status_code == 200
 
 
 # --- POST /api/library/reviews ------------------------------------------------

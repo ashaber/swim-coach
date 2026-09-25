@@ -38,7 +38,7 @@ from swim_coach.library_cards import (
 from swim_coach.library_review import parse_reference_list, section_evidence
 from swim_coach.models import Feedback, LibraryReview
 
-from app.auth import Principal, require_auth, require_library_admin, resolve_athlete
+from app.auth import Principal, require_auth, require_library_admin
 from app.context import filter_files_by_sport_scope
 from app.logging_config import get_logger
 from app.store_factory import make_store
@@ -67,9 +67,18 @@ async def list_library_cards(
     `dossier`, `reviewed` (is an UNREVIEWED marker still covering this
     section), `needs_judgment`, `stale` (has the section's text drifted
     since the card was authored), and `latest_review` (this card's most
-    recent accept/flag decision, or null if never reviewed)."""
+    recent accept/flag decision, or null if never reviewed).
+
+    Privacy stopgap (web/resources-hotfix): library topic files currently
+    contain one athlete's personal health details and athlete names, with
+    de-identification a separate follow-up build -- until that lands, this
+    is admin-only, the same `require_library_admin` gate `POST
+    /api/library/reviews` already enforces (it also resolves+validates
+    `athlete` the same way `resolve_athlete` would, so the self-access/
+    service-token behavior for a non-admin is otherwise unchanged -- just
+    now followed by the admin check)."""
     settings = request.app.state.settings
-    athlete = resolve_athlete(principal, athlete)
+    athlete = require_library_admin(request, principal, athlete)
     store = make_store(settings)
     athlete_profile = store.load_athlete(athlete)
 
@@ -155,9 +164,12 @@ async def get_library_file(
     (every in-scope topic file's own real filename, per
     `library_cards.in_scope_topic_files`) -- no path traversal, and no
     exposure of `library/review-cards/`, `research-dossiers/`, or any other
-    non-topic-file content this route was never meant to serve."""
+    non-topic-file content this route was never meant to serve.
+
+    Privacy stopgap (web/resources-hotfix): same admin-only gate as
+    `list_library_cards` above -- see that route's doc comment for why."""
     settings = request.app.state.settings
-    athlete = resolve_athlete(principal, athlete)
+    athlete = require_library_admin(request, principal, athlete)
     store = make_store(settings)
     athlete_profile = store.load_athlete(athlete)
 

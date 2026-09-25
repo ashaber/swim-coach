@@ -3005,7 +3005,7 @@ function renderLibraryCard(card) {
       <p class="library-card-recommendation"><strong>Coach's call:</strong> ${esc(card.recommendation)}</p>
       <div class="library-card-meta mono">${card.source_count} source${card.source_count === 1 ? '' : 's'}${card.weak_source_count ? ` (${card.weak_source_count} to weigh)` : ''}</div>
       <div class="settings-actions">
-        <button type="button" class="btn-ghost" data-a="library:open-file" data-file="${esc(card.file)}" data-anchor="${esc(card.heading)}">Read full section</button>
+        <button type="button" class="btn-ghost" data-a="library:open-file" data-file="${esc(card.file)}">Read full section</button>
       </div>
     </div>`;
 }
@@ -3058,6 +3058,9 @@ function renderApprovalCard(card, reviewDrafts, reviewSubmit, online) {
       <div class="library-card-file mono">${esc(card.file)}</div>
       <p class="library-card-summary">${esc(card.summary)}</p>
       <p class="library-card-recommendation"><strong>Coach's call:</strong> ${esc(card.recommendation)}</p>
+      <div class="settings-actions">
+        <button type="button" class="btn-ghost" data-a="library:open-file" data-file="${esc(card.file)}" data-anchor="${esc(card.heading)}">Read full section</button>
+      </div>
       <label class="field">
         <span>Flag note (required to flag)</span>
         <textarea rows="2" data-form="library-review" data-field="note" data-key="${esc(key)}" placeholder="What needs a second look?" ${!online ? 'disabled' : ''}>${esc(draft)}</textarea>
@@ -3133,11 +3136,16 @@ export function renderResourcesTab({
         </div>
       </header>
       ${!online ? '<div class="chat-banner">Offline -- showing the last-loaded cards.</div>' : ''}
+      ${isAdmin ? `
       <section>
         <div class="s-head"><h2>Research library</h2></div>
         ${renderLibraryFilterChips(filter)}
         ${renderLibraryCardGrid(cards, filter)}
-      </section>
+      </section>` : `
+      <section>
+        <div class="s-head"><h2>Research library</h2></div>
+        <p class="sub">Research library coming soon.</p>
+      </section>`}
       ${isAdmin ? renderApprovalsSection({
         cards, reviewDrafts, reviewSubmit, online,
       }) : ''}

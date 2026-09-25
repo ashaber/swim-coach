@@ -338,10 +338,14 @@ def require_chat_rate_limit(request: Request, token: str) -> None:
 def require_library_admin(
     request: Request, principal: Principal, requested_athlete: str | None
 ) -> str:
-    """Raises 403/422 unless this request may act as a library-review admin
-    on `POST /api/library/reviews`; on success returns the resolved
-    athlete slug to record as the review's `reviewed_by` identity -- the
-    ONLY enforcement point that matters. The `is_library_admin` flag
+    """Raises 403/422 unless this request may act as a library-review admin.
+    Originally `POST /api/library/reviews` only; web/resources-hotfix reuses
+    it for `GET /api/library/cards`/`GET /api/library/files/{name}` too, as
+    a temporary privacy gate (library topic files currently carry one
+    athlete's personal health details/name; de-identifying them is a
+    separate follow-up build). On success returns the resolved athlete slug
+    (the review's `reviewed_by` identity on the POST route) -- the ONLY
+    enforcement point that matters. The `is_library_admin` flag
     `GET /api/me`/`POST /api/auth/google` return is UI convenience for the
     PWA to decide whether to render the Approvals section, never trusted on
     its own (a client could always lie about a boolean it doesn't send back

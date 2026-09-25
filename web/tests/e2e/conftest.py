@@ -6,7 +6,7 @@ import http.server
 from pathlib import Path
 
 import pytest
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import Browser, sync_playwright
 
 # rootpath for this pytest.ini is web/ (pytest sets config.rootpath to the
 # directory containing pytest.ini automatically).
@@ -41,6 +41,65 @@ MOCK_IDENTITY = {'name': 'Renee', 'athlete': 'renee', 'role': 'athlete'}
 # exercise that empty state; they configure it themselves
 # (`_configure_backend`) when a test needs it.
 MOCK_SETTINGS = {'baseUrl': 'https://mock-backend.test', 'token': 'test-e2e-token', 'version': 2}
+
+# Default GET /api/me mock, applied to EVERY browser context in this suite
+# (see the Browser.new_context monkeypatch just below) -- web/resources-
+# hotfix fix 1's boot-time admin-flag refresh (main.js's
+# maybeRefreshIdentityAdminFlags) now fires this unconditionally whenever a
+# saved identity + token exist, i.e. at the start of nearly every e2e test
+# in this suite, not just the ones that open a particular detail view (see
+# mock_plan_route's own doc comment for the identical WebKit hazard: app
+# code already handles an unmocked fetch cleanly -- apiRequest's try/catch
+# -- but WebKit still logs the blocked cross-origin request to the
+# console/page, which this harness's blanket "no uncaught JS errors"
+# assertion catches). A non-admin, no-coach-grants response is the safe
+# default for every test that doesn't care; a test that specifically
+# exercises this refresh (test_identity_admin_refresh.py) registers its own
+# more specific '**/api/me*' route AFTER context creation, which -- per
+# Playwright's route-matching order (most-recently-registered wins) --
+# overrides this default.
+# Deliberately EMPTY: identity.js's mergeMeIntoIdentity keeps the saved
+# identity's own isLibraryAdmin/coachFor for any field the response omits,
+# so this default is a true no-op. Asserting coach_for: [] here wiped every
+# coach-roster test's saved coach grants (PR #237 CI regression).
+_DEFAULT_ME_BODY = json.dumps({})
+
+
+def _default_me_route(route) -> None:
+    if route.request.method == 'OPTIONS':
+        route.fulfill(
+            status=204,
+            headers={
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
+                'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+            },
+        )
+        return
+    route.fulfill(
+        status=200, content_type='application/json', body=_DEFAULT_ME_BODY,
+        headers={'Access-Control-Allow-Origin': '*'},
+    )
+
+
+_original_new_context = Browser.new_context
+
+
+def _new_context_with_default_me_route(self, **kwargs):
+    """Every e2e file in this suite builds its own BrowserContext (there's
+    no single shared fixture every file goes through), so a per-fixture
+    default wouldn't actually be a *default* -- this patches context
+    creation itself, once, for the whole test session, so every context
+    picks up the '**/api/me*' mock above without every file needing its own
+    copy (the same hazard the identical, per-file '**/api/athlete*' mock
+    added in e58115f would otherwise repeat here for a route that now fires
+    on nearly every boot instead of just a few detail-open actions)."""
+    ctx = _original_new_context(self, **kwargs)
+    ctx.route('**/api/me*', _default_me_route)
+    return ctx
+
+
+Browser.new_context = _new_context_with_default_me_route
 
 
 def _web_root(config: pytest.Config) -> str:
