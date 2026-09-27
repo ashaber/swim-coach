@@ -73,11 +73,15 @@ from app.context import (
     build_system,
     find_workout_by_id,
     iso_week_str,
+    route_info_for_logging,
 )
+from app.logging_config import get_logger
 from app.notify import notify_coaches_of_feedback
 from app.routes.chat import get_claude_chat
 from app.store_factory import make_store
 from app.tools import TOOLS_SCHEMA, build_tool_handlers
+
+log = get_logger("app.routes.feedback")
 
 router = APIRouter()
 
@@ -349,6 +353,14 @@ async def ask_question(
         if in_message
         else None
     )
+    # IDEA 025 step 1: one request_id per HTTP request, joining this
+    # request's "library route" line to its "claude turn complete"/"route
+    # miss" lines -- same convention as POST /api/chat.
+    request_id = str(uuid4())
+    routing_info = route_info_for_logging(
+        settings.library_dir, body, athlete_sports=athlete_profile.effective_sports
+    )
+    log.info("library route", request_id=request_id, **routing_info)
     messages = build_messages(
         store,
         athlete,
@@ -359,10 +371,19 @@ async def ask_question(
         focused_session=focused_session,
         library_text=library_text,
     )
-    tool_handlers = build_tool_handlers(store, slug=athlete, expert_mode=False)
+    tool_handlers = build_tool_handlers(
+        store,
+        slug=athlete,
+        expert_mode=False,
+        library_dir=settings.library_dir,
+        request_id=request_id,
+        routed_files=routing_info["routed_files"],
+    )
 
     try:
-        provisional = claude_chat.run_once(system, messages, TOOLS_SCHEMA, tool_handlers)
+        provisional = claude_chat.run_once(
+            system, messages, TOOLS_SCHEMA, tool_handlers, request_id=request_id
+        )
     except RuntimeError as exc:
         # A real upstream failure (refusal/error/max-iterations from the
         # model call itself), not a client error -- 502, with a friendly
