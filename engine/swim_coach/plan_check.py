@@ -27,6 +27,21 @@ convention), without adding new prose to either file. `library/31-multi-
 race-season-periodization.md` gets a genuinely NEW section (verified
 short-event taper evidence -- Neary 2003, Houmard 1991, Rønnestad 2010 --
 see that file's own new section for the citations).
+
+**PR 3 update (engine/plan-check-red-team, 2026-09-27):** `library/36-
+plan-authoring-limits.md` now grounds the constants PR 1 left labelled
+PROVISIONAL, replacing that placeholder status with an honest verdict --
+several stay `Coach judgment` because no evidence exists (masters ramp/
+recovery cadence, time-feasibility margin), one changes on real evidence
+(`MASTERS_ANNUAL_DECLINE_FRACTION`, Rogers 1990), and one is confirmed
+already correct as-is (`GENERAL_TAPER_CUT_FRACTION_MIN/MAX`, Bosquet 2007).
+Per the dossier's own orchestrator correction: `Hellard et al. (2013)`
+studied a PREDEFINED overload/taper window and does not establish a
+3-week taper as optimal, so `TAPER_WEEKS_LONG` (`plan.py`, the retired
+scaffold's own constant) is NOT changed on that basis -- taper length is
+now the coach's own per-event choice (`author_macro_plan`), this module's
+taper constants only check the resulting plan's load reduction against
+the evidence band, never pick a length for the coach.
 """
 
 from __future__ import annotations
@@ -107,16 +122,18 @@ _SEVERITY_ORDER: dict[Severity, int] = {"high": 0, "medium": 1, "low": 2}
 # dedicated limits-research dossier is expected to replace several of these).
 # ============================================================================
 
-# --- CTL ramp rate (dossier-season-taper-2026-09-26.md Q4: convention only,
-# no peer-reviewed evidence found; Friel/TrainingPeaks practitioner
-# convention, "5-8 CTL points/week," individualized -- see that file's own
-# honest verdict). Mirrors `ai-coach/.claude/agents/red-team.md`'s own
-# framing verbatim ("+5 to +7 per week sustained is a flag for most
-# athletes, lower for masters athletes and anyone with an injury history").
-# Cited to library/03-periodization.md's existing CTL/ATL/TSB section (no
-# new prose added there -- see module docstring) since that is this
-# project's home for CTL/ATL/TSB monitoring conventions; NOT itself an
-# [EVIDENCE] claim.
+# --- CTL ramp rate (dossier-season-taper-2026-09-26.md Q4, reconfirmed by
+# library/36-plan-authoring-limits.md's "Masters ramp and recovery-week
+# cadence" section: convention only, no peer-reviewed evidence found for a
+# ramp-RATE number at all, masters or otherwise; Friel/TrainingPeaks
+# practitioner convention, "5-8 CTL points/week," individualized). Mirrors
+# `ai-coach/.claude/agents/red-team.md`'s own framing verbatim ("+5 to +7
+# per week sustained is a flag for most athletes, lower for masters
+# athletes and anyone with an injury history"). Coach judgment -- NOT an
+# [EVIDENCE] claim; library/36 explicitly declines to invent a masters-
+# specific ramp-rate number where none exists, and keeps this as a
+# ceiling, not a target. library/03-periodization.md (CTL/ATL/TSB section)
+# + library/36-plan-authoring-limits.md.
 CTL_RAMP_CAP_PER_WEEK = 7.0
 CTL_RAMP_CAP_PER_WEEK_MASTERS_OR_INJURY = 5.0
 MASTERS_AGE_THRESHOLD = 40
@@ -128,12 +145,13 @@ MASTERS_AGE_THRESHOLD = 40
 # tiers). library/03-periodization.md.
 
 # --- Recovery cadence (approved plan: "recovery cadence (3:1, or 2:1
-# masters)"). Coach judgment / PROVISIONAL, no direct citation -- this
-# project's dossier pass (Q3) covered in-season MAINTENANCE dose, not
-# recovery-WEEK cadence specifically; that gap is honest, not filled in
-# here. library/03-periodization.md (this project's existing home for
-# macro-block-shape conventions, e.g. BASE_SHARE/PEAK_WEEKS_LONG, all
-# similarly uncited "conventional shape" numbers).
+# masters)"). Coach judgment -- library/36-plan-authoring-limits.md
+# ("Masters ramp and recovery-week cadence") confirms no study tests 3:1
+# vs. 2:1 cadence in a real masters cohort; the 2:1 shift is a defensible
+# default given real, cited context (Hottenrott 2022's well-trained-
+# masters recovery-kinetics finding; Burtscher 2022's volume-matters-more-
+# than-age finding), not itself a cadence trial. library/03-
+# periodization.md (macro-block-shape conventions) + library/36.
 RECOVERY_CADENCE_WEEKS = 3
 RECOVERY_CADENCE_WEEKS_MASTERS_OR_INJURY = 2
 
@@ -167,6 +185,19 @@ GENERAL_TAPER_CUT_FRACTION_MAX = 0.60
 # library/03-periodization.md): the optimal full taper is a ~2-week
 # exponential volume reduction of 41-60%. Reused here unchanged for any
 # event NOT classified "short" (SHORT_EVENT_MAX_HOURS).
+#
+# PR 3 confirmation (library/36-plan-authoring-limits.md, "Swim taper
+# length"): this band is CONFIRMED, not changed -- it was already the
+# best-supported number in the dossier pass, and stays the load-based
+# check band regardless of event/sport. Explicitly NOT tightened toward a
+# "3-week taper" reading of `Hellard et al. (2013)` -- that paper studied
+# a PREDEFINED overload/taper window, not a length comparison, so it
+# cannot ground a 3-week optimum (dossier's own orchestrator correction).
+# `TAPER_WEEKS_LONG`/`TAPER_WEEKLY_DECAY` (plan.py's retired scaffold
+# constants) are correspondingly left unchanged here too -- taper LENGTH
+# is the coach's own per-event choice (`author_macro_plan`); this module
+# only checks the resulting volume cut against the band above, it never
+# picks a length. library/36-plan-authoring-limits.md.
 
 TAPER_BASELINE_LOOKBACK_WEEKS = 4
 # Coach judgment / PROVISIONAL: how many weeks back from the final
@@ -194,19 +225,45 @@ SUSTAINED_LOW_TSB_MIN_CONSECUTIVE_DAYS = 14
 # --- Time-reality buffer (approved plan, quoting
 # `ai-coach/.claude/agents/red-team.md` verbatim: "Plans routinely require
 # 10% more time than they claim"). Coach judgment -- a planning-discipline
-# heuristic, not a physiology citation. library/03-periodization.md.
+# heuristic, not a physiology citation; library/36-plan-authoring-limits.md
+# ("Time-feasibility margin") confirms no peer-reviewed source gives a
+# planned-vs-completed training-TIME adherence percentage for adult
+# endurance athletes (the one quantified figure found is a poor
+# population match -- junior netball, session-count not hours). Distinct
+# from `Inoue et al. (2022)`'s real but ADJACENT finding (easy days run
+# hotter than coaches plan, an intensity-perception gap, not a duration
+# one) -- not folded into this fraction. library/03-periodization.md +
+# library/36-plan-authoring-limits.md.
 TIME_REALITY_BUFFER_FRACTION = 0.10
 
 # --- Goal reality check (approved plan: "the implied rate of progress to
 # the stated goal ... against research-based progression rates and the
-# athlete's age"). Both numbers below are explicitly PROVISIONAL Coach-
-# judgment PLACEHOLDERS -- PR 3's dedicated limits-research dossier
-# (masters CTL ramp tolerance, realistic FTP/threshold progression rates by
-# training age/age, age-related decline) is expected to replace them; no
-# citation exists yet. library/24-cycling-periodization-intervals.md (this
-# project's existing home for cycling-specific training-age conventions).
+# athlete's age"). PR 3 update (library/36-plan-authoring-limits.md):
+#
+# MAX_REALISTIC_ANNUAL_GAIN_FRACTION stays Coach judgment, NOT PROVISIONAL
+# -- library/36's "Realistic progression rates" section confirms no
+# numeric W/kg (or annual-%) ceiling is evidence-backed for a trained
+# masters athlete; the QUALITATIVE shape is evidence-backed instead
+# (Bacon 2013: diminishing returns with training age; Cove 2024: modest,
+# single-digit-to-low-teens-% gains per block in trained cyclists, block
+# DURATION predicting improvement, not added weekly volume). 0.08 (8%/yr)
+# is a Coach-judgment pick inside that qualitative band, not a citation-
+# derived number -- false precision would misrepresent the evidence.
+#
+# MASTERS_ANNUAL_DECLINE_FRACTION CHANGES on real evidence: `Rogers et al.
+# (1990)`'s 8-year LONGITUDINAL cohort (not cross-sectional) found trained
+# masters athletes' VO2max declined ~5.5%/decade, roughly half the
+# sedentary rate (~12%/decade) -- library/36 flags `Pimentel et al.
+# (2003)`'s contradicting cross-sectional finding honestly rather than
+# picking a false-precision single "settled" number, but Rogers' same-
+# cohort longitudinal design is the stronger design for isolating a
+# training-maintenance effect, so it anchors this constant.
+#
+# GOAL_REALITY_CHECK_HORIZON_YEARS stays Coach judgment (review-cadence
+# heuristic, not a citation) -- library/36 makes no horizon-length claim.
+# library/36-plan-authoring-limits.md (all three).
 MAX_REALISTIC_ANNUAL_GAIN_FRACTION = 0.08
-MASTERS_ANNUAL_DECLINE_FRACTION = 0.01
+MASTERS_ANNUAL_DECLINE_FRACTION = 0.006
 GOAL_REALITY_CHECK_HORIZON_YEARS = 5.0
 
 # --- Polarization (library/24-cycling-periodization-intervals.md's own
