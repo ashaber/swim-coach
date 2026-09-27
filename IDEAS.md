@@ -1326,6 +1326,16 @@ usage mix differs, so this is not a controlled comparison).
 
 ## IDEA 025 - Route every turn into a CALL TYPE with Jev: one battery of questions, a few fixed buckets, each with its own cache
 
+**Step 1 shipped (2026-09-26): reference list on demand + miss logging (no classifier).**
+`library/reference_list.md` (~58k tokens) no longer rides system block A whole on every cold
+cache start -- `build_routed_library_text` now attaches only the entries the routed topic files
+actually cite (reusing `engine.swim_coach.library_review`'s citation-resolution machinery), and a
+new `lookup_reference` tool covers anything not cited by those files. New "library route" /
+"route miss" structured logs (joined by a per-request `request_id`, also added to "claude turn
+complete") make the miss rate and its extra cost measurable; `scripts/route_report.py` reports
+both per day from Cloud Run logs. This is the prefix-trimming half of the plan below, done
+without Jev or any classifier -- routing is still the existing deterministic keyword buckets.
+
 Andrew, 2026-09-21: *"JEV is a new classifier with a skill by typesafe ... decide light vs heavy, could also
 pre-decide tool calls, sport and library."* Corrected after review (my first framing -- a light/heavy gate with
 tools and library as add-ons -- was too small): *"We can send the whole battery of questions -- is it a
