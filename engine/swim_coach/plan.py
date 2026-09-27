@@ -161,6 +161,42 @@ B_TIER_MAX_DEDICATED_WEEKS = MIN_MACRO_WEEKS - 1
 # (`Coach judgment:` -- "extra time before a tune-up race is just more
 # training, not more tune-up," not a citation-pinned number).
 
+# --- Short-event (bike/CX) taper -- `scaffold_season_macro` ONLY -------------
+# Root-cause fix (2026-09-26, real production bug against Andrew's actual
+# 2026 CX season): TAPER_WEEKS_SHORT/LONG and MINI_TAPER_WEEKS above are all
+# swim/long-event taper LENGTHS (2-4 weeks), sized for the multi-week fatigue
+# of a long open-water swim. A ~1-hour cyclocross race carries nowhere near
+# that fatigue, so applying either figure to one produced a 2-week taper
+# that swallowed the season's only race-free build window AND still left
+# the actual race week completely unmodeled (the existing, unchanged
+# "race week itself is not modeled as a block" convention every macro
+# shape uses) -- see `library/31-multi-race-season-periodization.md`'s
+# "Short-event taper" section for the full citation.
+SHORT_EVENT_SPORTS = frozenset({"bike"})
+# The only signal this engine actually has for "how long does the event
+# itself last" -- `Event` has no expected-duration field (models.py:
+# `distance_m`/`target_value`, never a race-duration figure), and
+# `primary_sport` is ALREADY a bike/CX proxy in practice: `scaffold_
+# sharpening_macro`'s own docstring documents that its one real caller
+# (`backend/app/tools.py`'s `draft_macro_plan`) only ever invokes it when
+# `event.primary_sport == "bike"`. Extend this set, not a duration
+# threshold, if a future short-duration non-bike sport is added.
+
+TAPER_WEEKS_SHORT_EVENT = 1
+# `[ADAPTED: general-endurance]`, Confidence: medium -- `Wang Z., Wang Y.T.,
+# Gao W., Zhong Y. (2023)` (already cited in `library/reference_list.md`
+# and `library/10-recovery-hrv.md`'s own mini-taper section): a taper of
+# <=7 days still produced a positive performance effect in their 14-study
+# meta-analysis, even though 8-14 days showed the largest gains overall.
+# Combined with `Bosquet et al. (2007)`'s and `Mujika & Padilla (2003)`'s
+# taper-duration ranges (both already grounding TAPER_WEEKS_SHORT/LONG/
+# MINI_TAPER_WEEKS above), a single race week is a defensible floor for a
+# short (~1h) event's own taper -- not a number invented outside what the
+# literature actually examined. See `library/31`'s "Short-event taper"
+# section for the full writeup, including the `Coach judgment:` paragraph
+# on WHY this taper is placed to cover the race week itself (a placement
+# choice, not itself citation-backed).
+
 PEAK_WEEKS_LONG = 3
 PEAK_WEEKS_SHORT = 2
 # PROVISIONAL: library/03-periodization.md (to be authored).
@@ -1668,7 +1704,19 @@ def scaffold_sharpening_macro(
     block_specs.append(
         ("sharpen", sharpen_weeks, sharpen_end, "race-specific sharpening (Issurin transmutation block)")
     )
-    block_specs.append(("taper", taper_weeks, taper_end, "taper"))
+    if taper_weeks > 0:
+        block_specs.append(("taper", taper_weeks, taper_end, "taper"))
+    # `taper_weeks == 0` (new, `scaffold_season_macro`-only usage, 2026-09-26
+    # short-event-taper build): NO taper block at all -- every existing
+    # caller passes a real positive `taper_weeks` (TAPER_WEEKS_SHORT or
+    # MINI_TAPER_WEEKS, both > 0), so this branch is unreachable for any
+    # pre-existing behavior. `scaffold_season_macro` uses `taper_weeks=0`
+    # for a short (bike/CX) event's own dedicated cycle -- for an A-race it
+    # then appends its OWN, differently-placed taper block (covering the
+    # race week itself, not this function's pre-race-week placement); for a
+    # B-race it appends nothing at all, matching this build's "B race gets
+    # no dedicated taper" design (see `TAPER_WEEKS_SHORT_EVENT`'s own
+    # citation).
 
     blocks: list[MacroBlock] = []
     cursor = start_monday
@@ -2025,6 +2073,21 @@ def scaffold_season_macro(
         start_monday = _monday_on_or_after(cursor_start)
         event_monday = _monday_of_week(race.event_date)
         weeks_available = (event_monday - start_monday).days // 7
+        is_short_event = race.primary_sport in SHORT_EVENT_SPORTS
+        # Short-event (bike/CX) taper build (2026-09-26): for a short event,
+        # neither tier's dedicated cycle carves its taper OUT of
+        # `weeks_available` any more (that's what silently swallowed
+        # Andrew's only race-free build window) -- an "A" race's taper is
+        # appended AFTER, covering the race week itself (see the manual
+        # taper block built below); a "B" race gets no dedicated taper
+        # block at all. Both paths call `scaffold_sharpening_macro` with
+        # `taper_weeks=0`, so this shape's own minimum-runway floor is just
+        # `SHARPEN_WEEKS_MIN` for a short event, not `SHARPEN_WEEKS_MIN +`
+        # a taper length. Swim/long events are completely unaffected --
+        # `is_short_event` is False for them and every threshold below
+        # falls through to its original value.
+        a_tier_min_weeks = SHARPEN_WEEKS_MIN if is_short_event else SHARPENING_MIN_MACRO_WEEKS
+        b_tier_min_weeks = SHARPEN_WEEKS_MIN if is_short_event else SHARPEN_MIN_WEEKS_MINI_TAPER
 
         # --- IDEA 018, corrected 2026-09-19 (second correction): no separate
         # overlap-detection error. Instead, a race that needs FRESH building
@@ -2095,8 +2158,42 @@ def scaffold_season_macro(
                 sub_macro = scaffold_macro(
                     athlete, race, cursor_start, cursor_volume, peak_weekly_volume_m
                 )
-            elif established_base and weeks_available >= SHARPENING_MIN_MACRO_WEEKS:
-                sub_macro = scaffold_sharpening_macro(athlete, race, cursor_start, cursor_volume)
+                # KNOWN LIMITATION, stated plainly (Phase 1 scope,
+                # 2026-09-26 short-event-taper build): a short (bike/CX)
+                # A-race with THIS much runway still gets scaffold_macro's
+                # own swim/long-event taper (TAPER_WEEKS_SHORT/LONG, placed
+                # before race week) unchanged -- fixing that would mean
+                # threading taper-length/placement overrides through
+                # scaffold_macro itself, out of scope for this PR. Every
+                # real, currently-active short-event race this build was
+                # written against (Andrew's 2026 CX season) has far less
+                # runway than MIN_MACRO_WEEKS and never reaches this branch.
+            elif established_base and weeks_available >= a_tier_min_weeks:
+                if is_short_event:
+                    sub_macro = scaffold_sharpening_macro(
+                        athlete, race, cursor_start, cursor_volume, taper_weeks=0
+                    )
+                    # No taper block came back (taper_weeks=0) -- append a
+                    # short-event taper that actually covers the race week
+                    # itself (start==event_monday, end==race day), instead
+                    # of scaffold_sharpening_macro's own pre-race-week
+                    # placement. See TAPER_WEEKS_SHORT_EVENT's own citation.
+                    sharpen_end_volume = sub_macro.blocks[-1].weekly_volume_target_m
+                    taper_volume = max(
+                        0,
+                        round(sharpen_end_volume * (1 - TAPER_WEEKLY_DECAY * TAPER_WEEKS_SHORT_EVENT)),
+                    )
+                    sub_macro.blocks.append(
+                        MacroBlock(
+                            name="taper",
+                            start_date=event_monday,
+                            end_date=event_monday + timedelta(weeks=TAPER_WEEKS_SHORT_EVENT) - timedelta(days=1),
+                            weekly_volume_target_m=taper_volume,
+                            focus="taper",
+                        )
+                    )
+                else:
+                    sub_macro = scaffold_sharpening_macro(athlete, race, cursor_start, cursor_volume)
             elif established_base and is_extend_mode:
                 # IDEA 018 item 2: extending an already-active plan degrades
                 # a too-short A-tier runway to the same warn-and-fold-in
@@ -2110,7 +2207,7 @@ def scaffold_season_macro(
                 warnings_out.append(
                     f"only {weeks_available} whole weeks available before "
                     f"A-priority race {race.name!r} (from {cursor_start}) -- "
-                    f"normally needs at least {SHARPENING_MIN_MACRO_WEEKS} to "
+                    f"normally needs at least {a_tier_min_weeks} to "
                     "periodize safely, but proceeding without a dedicated "
                     "cycle (folded into whatever already covers this race's "
                     "date) because this call is extending an already-active "
@@ -2118,7 +2215,7 @@ def scaffold_season_macro(
                     "with the athlete rather than silently accepting it."
                 )
             else:
-                needed = SHARPENING_MIN_MACRO_WEEKS if established_base else MIN_MACRO_WEEKS
+                needed = a_tier_min_weeks if established_base else MIN_MACRO_WEEKS
                 raise ValueError(
                     f"only {weeks_available} whole weeks available before "
                     f"A-priority race {race.name!r} (from {cursor_start}) -- "
@@ -2131,19 +2228,24 @@ def scaffold_season_macro(
                 block.race_event_id = race.id
             blocks.extend(sub_macro.blocks)
             # Bug fix (2026-09-15, found comparing against a real hand-built
-            # macrocycle): `sub_macro.blocks[-1].end_date` is ALWAYS exactly
-            # `event_monday - 1 day` by construction (scaffold_macro's/
-            # scaffold_sharpening_macro's own "race week itself is not
-            # modeled as a block" convention) -- advancing the cursor to the
-            # day right after that end date lands exactly on THIS race's own
-            # implicit race week, letting the NEXT race's cycle immediately
-            # claim it. Skip past this race's own week too, so a race's real
-            # taper/race week can never be silently relabeled as a
-            # different race's build-up.
+            # macrocycle): for a swim/long event, `sub_macro.blocks[-1].
+            # end_date` is ALWAYS exactly `event_monday - 1 day` by
+            # construction (scaffold_macro's/scaffold_sharpening_macro's own
+            # "race week itself is not modeled as a block" convention) --
+            # advancing the cursor to the day right after that end date
+            # lands exactly on THIS race's own implicit race week, letting
+            # the NEXT race's cycle immediately claim it. For a short event
+            # (bike/CX), the manually-appended taper block above already
+            # ends at `event_monday + 6 days` (the race week itself, no
+            # longer an unmodeled gap) -- `event_monday + timedelta(weeks=1)`
+            # is still the correct next cursor position either way, so this
+            # line needs no branching on `is_short_event`. Skip past this
+            # race's own week too, so a race's real taper/race week can
+            # never be silently relabeled as a different race's build-up.
             cursor_start = event_monday + timedelta(weeks=1)
             cursor_volume = sub_macro.blocks[-1].weekly_volume_target_m
 
-        elif tier == "B" and established_base and weeks_available >= SHARPEN_MIN_WEEKS_MINI_TAPER:
+        elif tier == "B" and established_base and weeks_available >= b_tier_min_weeks:
             dedicated_weeks = min(weeks_available, B_TIER_MAX_DEDICATED_WEEKS)
             if dedicated_weeks < weeks_available:
                 filler_end = start_monday + timedelta(weeks=weeks_available - dedicated_weeks) - timedelta(
@@ -2159,8 +2261,17 @@ def scaffold_season_macro(
                     )
                 )
                 cursor_start = filler_end + timedelta(days=1)
+            # Short event (bike/CX): NO dedicated taper block at all for a
+            # B-priority race (`taper_weeks=0` -- its lighten-before-race
+            # stays within the race week, handled by existing race-week
+            # logic elsewhere, not built here). Swim/long events keep their
+            # existing MINI_TAPER_WEEKS mini-taper, unchanged.
             sub_macro = scaffold_sharpening_macro(
-                athlete, race, cursor_start, cursor_volume, taper_weeks=MINI_TAPER_WEEKS
+                athlete,
+                race,
+                cursor_start,
+                cursor_volume,
+                taper_weeks=0 if is_short_event else MINI_TAPER_WEEKS,
             )
             for block in sub_macro.blocks:
                 block.race_event_id = race.id

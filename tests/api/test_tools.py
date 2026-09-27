@@ -3301,24 +3301,16 @@ def test_draft_season_macro_plan_real_andrew_cx_calendar_end_to_end(athletes_dir
     assert reloaded.event_ids == [
         season_opener.id, peak_weekend.id, halloween_weekend.id, season_finale.id,
     ]
-    # Contiguous, EXCEPT for a deliberate 7-day gap after a dedicated
-    # cycle's own protected race week (2026-09-15 bug fix -- see
-    # scaffold_season_macro's own docstring): a race that got a dedicated
-    # cycle (Peak Weekend, Season Finale here) leaves its own race week
-    # unmodeled, same "race week itself is not a block" convention a
-    # single-race macro already has -- now correctly preserved when
-    # chained, instead of being silently claimed as the next race's
-    # build-up.
-    dedicated_ids = {peak_weekend.id, season_finale.id}
+    # Fully contiguous -- short-event-taper build (2026-09-26): every race
+    # here is bike/CX (a short event), so Peak Weekend's own dedicated A-tier
+    # taper block now COVERS its race week (rather than leaving it an
+    # unmodeled 7-day gap, the old swim/long-event convention this test used
+    # to pin here), and Season Finale is the season's own last block with no
+    # following race to leave a gap before. No 7/8-day gap survives anywhere
+    # in this real, all-bike calendar.
     for prev, curr in zip(reloaded.blocks, reloaded.blocks[1:]):
         gap_days = (curr.start_date - prev.end_date).days
-        if prev.race_event_id in dedicated_ids and prev.race_event_id != curr.race_event_id:
-            assert gap_days == 8, (
-                f"expected a 7-day protected-race-week gap after "
-                f"{prev.race_event_id}'s own dedicated cycle, got {gap_days - 1} days"
-            )
-        else:
-            assert gap_days == 1, f"unexpected gap between {prev.name} and {curr.name}"
+        assert gap_days == 1, f"unexpected gap between {prev.name} and {curr.name}"
 
 
 # --- IDEA 018: extend-an-active-plan mode, through the REAL tool handler ------------
@@ -3442,11 +3434,13 @@ def test_draft_season_macro_plan_surfaces_extend_mode_degrade_warning(athletes_d
 
     peak_monday = _monday_of_week(peak_weekend.event_date)
     cursor_start = peak_monday + timedelta(weeks=1)
-    # Only 2 weeks of runway for this second race -- below
-    # SHARPENING_MIN_MACRO_WEEKS (4).
+    # Only 1 week of runway for this second race -- below this shape's own
+    # minimum for a short (bike) event, SHARPEN_WEEKS_MIN (2, short-event-
+    # taper build, 2026-09-26; a swim/long-event A-race would instead need
+    # SHARPENING_MIN_MACRO_WEEKS, 4).
     tight_a = _add_bike_event(
         store, slug, athlete.id, name="Tight A",
-        event_date=cursor_start + timedelta(weeks=2), priority="A",
+        event_date=cursor_start + timedelta(weeks=1), priority="A",
     )
 
     new_start = _SHARPENING_AS_OF + timedelta(days=9)

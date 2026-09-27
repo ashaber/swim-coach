@@ -42,6 +42,7 @@ from swim_coach.plan import (
     STRENGTH_SESSIONS_PER_WEEK,
     TAPER_WEEKLY_DECAY,
     TAPER_WEEKS_SHORT,
+    TAPER_WEEKS_SHORT_EVENT,
     WEEKLY_VOLUME_RAMP_CAP,
     _additional_swim_structure,
     _additional_swim_structure_template,
@@ -3097,10 +3098,12 @@ def test_race_week_checklist_resolves_from_covering_block_not_event_param_bike_s
 
 def test_race_week_checklist_season_finales_own_week_stays_empty_when_b_priority():
     # Sanity companion to the test above: race2 (the season finale) is
-    # B-priority in that same fixture -- its OWN final taper week correctly
-    # stays empty too (not "fixed" into firing for a non-A race just
-    # because it's the last one in the macro) -- same qualifying gate, just
-    # correctly resolved per-block now.
+    # B-priority in that same fixture -- its OWN final week correctly stays
+    # empty too (not "fixed" into firing for a non-A race just because it's
+    # the last one in the macro) -- same qualifying gate, just correctly
+    # resolved per-block now. Since this build (short-event-taper,
+    # 2026-09-26), a bike/CX B-priority race gets no dedicated "taper"
+    # block at all -- its own last dedicated block is "sharpen" instead.
     athlete = make_athlete(sports=["bike"])
     race1 = _make_season_event(name="Race 1", event_date=START + timedelta(weeks=14), priority="A")
     race2 = _make_season_event(
@@ -3110,11 +3113,11 @@ def test_race_week_checklist_season_finales_own_week_stays_empty_when_b_priority
         athlete, [race1, race2], START, current_weekly_volume_m=1000, established_base=True,
         peak_weekly_volume_m=2000,
     )
-    race2_taper = next(
-        b for b in macro.blocks if b.name == "taper" and b.race_event_id == race2.id
-    )
-    weeks_in_block = (race2_taper.end_date - race2_taper.start_date).days // 7 + 1
-    final_week_start = race2_taper.start_date + timedelta(weeks=weeks_in_block - 1)
+    race2_blocks = [b for b in macro.blocks if b.race_event_id == race2.id]
+    assert all(b.name != "taper" for b in race2_blocks)
+    race2_last_block = race2_blocks[-1]
+    weeks_in_block = (race2_last_block.end_date - race2_last_block.start_date).days // 7 + 1
+    final_week_start = race2_last_block.start_date + timedelta(weeks=weeks_in_block - 1)
 
     week = generate_week(
         athlete, macro, _iso_week(final_week_start), final_week_start,
@@ -3663,11 +3666,14 @@ def test_scaffold_season_macro_a_tier_race_raises_when_runway_too_short():
 
 
 def test_scaffold_season_macro_b_tier_skipped_when_runway_too_short():
-    # Below SHARPEN_MIN_WEEKS_MINI_TAPER (3): no dedicated block for the
-    # B-priority race -- it gets absorbed into whatever covers its date.
+    # A bike/CX B-priority race gets no dedicated taper block at all (short-
+    # event-taper build, 2026-09-26) -- its own minimum runway floor is
+    # just SHARPEN_WEEKS_MIN, not SHARPEN_MIN_WEEKS_MINI_TAPER. Below EVEN
+    # that: no dedicated block for the B-priority race -- it gets absorbed
+    # into whatever covers its date.
     athlete = make_athlete(sports=["bike"])
     near_b = _make_season_event(
-        name="Near B", event_date=START + timedelta(weeks=2), priority="B"
+        name="Near B", event_date=START + timedelta(weeks=SHARPEN_WEEKS_MIN - 1), priority="B"
     )
     later_a = _make_season_event(
         name="Later A", event_date=START + timedelta(weeks=9), priority="A"
@@ -3701,20 +3707,26 @@ def test_scaffold_season_macro_b_tier_skipped_when_no_established_base():
     assert macro.blocks[0].name == "base"
 
 
-def test_scaffold_season_macro_b_tier_gets_shallower_taper_than_a_tier():
+def test_scaffold_season_macro_b_tier_short_event_gets_no_dedicated_taper_block():
+    # Root-cause fix (2026-09-26, short-event-taper build): a bike/CX
+    # B-priority race is a short (~1h) event -- its "lighten before race"
+    # stays inside the race week itself (existing race-week logic, not
+    # built here), not a dedicated swim-length taper block. This replaces
+    # the old assumption (pinned by this test before the fix) that EVERY
+    # B-priority race gets a shallower `MINI_TAPER_WEEKS` taper block
+    # regardless of sport -- see TAPER_WEEKS_SHORT_EVENT's own citation.
     athlete = make_athlete(sports=["bike"])
     b_race = _make_season_event(
-        name="B race", event_date=START + timedelta(weeks=SHARPEN_MIN_WEEKS_MINI_TAPER), priority="B"
+        name="B race", event_date=START + timedelta(weeks=SHARPEN_WEEKS_MIN), priority="B"
     )
     later_a = _make_season_event(name="Later A", event_date=START + timedelta(weeks=20), priority="A")
     macro, season_warnings = scaffold_season_macro(
         athlete, [b_race, later_a], START, current_weekly_volume_m=300, established_base=True,
         peak_weekly_volume_m=600,
     )
-    b_taper = next(b for b in macro.blocks if b.race_event_id == b_race.id and b.name == "taper")
-    weeks = (b_taper.end_date - b_taper.start_date).days // 7 + 1
-    assert weeks == MINI_TAPER_WEEKS
-    assert weeks < TAPER_WEEKS_SHORT
+    b_blocks = [b for b in macro.blocks if b.race_event_id == b_race.id]
+    assert b_blocks, "B race should still get its own dedicated sharpen cycle"
+    assert all(b.name != "taper" for b in b_blocks)
 
 
 def test_scaffold_season_macro_b_tier_excess_runway_gets_filler_then_capped_dedicated_cycle():
@@ -3772,13 +3784,17 @@ def test_scaffold_season_macro_ramp_cap_respected_across_race_to_race_transition
     assert any("ramp cap" in str(w.message) for w in caught)
     race2_blocks = [b for b in macro.blocks if b.race_event_id == race2.id]
     race2_peak = max(b.weekly_volume_target_m for b in race2_blocks)
-    race1_taper_end = next(
-        b.weekly_volume_target_m for b in macro.blocks if b.race_event_id == race1.id and b.name == "taper"
-    )
-    # Whatever it clamped to, it must derive from race1's own post-taper
+    # race1 is a B-priority bike/CX race: since this build, it gets no
+    # dedicated taper block at all (see test_scaffold_season_macro_b_tier_
+    # short_event_gets_no_dedicated_taper_block) -- its own LAST dedicated
+    # block's end volume is the real seed race2 gets chained from, taper
+    # or not.
+    race1_blocks = [b for b in macro.blocks if b.race_event_id == race1.id]
+    race1_end_volume = race1_blocks[-1].weekly_volume_target_m
+    # Whatever it clamped to, it must derive from race1's own end-of-cycle
     # volume, not from a fresh, unconstrained 300 -> 5000 climb.
     ramp_weeks_upper_bound = 20  # generous upper bound, just proving it's clamped at all
-    assert race2_peak <= race1_taper_end * (1 + WEEKLY_VOLUME_RAMP_CAP) ** ramp_weeks_upper_bound
+    assert race2_peak <= race1_end_volume * (1 + WEEKLY_VOLUME_RAMP_CAP) ** ramp_weeks_upper_bound
     assert race2_peak < 5000
 
 
@@ -3857,8 +3873,12 @@ def test_scaffold_season_macro_priority_is_case_insensitive_and_free_text_tolera
 
 
 def test_scaffold_season_macro_trailing_block_omitted_when_final_race_gets_dedicated_cycle():
-    # Matches scaffold_macro/scaffold_sharpening_macro's own convention:
-    # race week itself is not modeled as a macro block.
+    # No SEPARATE trailing filler block is needed since the final race got
+    # its own dedicated cycle. For a short (bike/CX) event, that cycle's
+    # own taper block now covers the race week itself (short-event-taper
+    # build, 2026-09-26) -- so the true last block ends ON race day, not
+    # the day before race week (the old swim/long-event convention this
+    # test used to pin for every sport, before this fix).
     athlete = make_athlete(sports=["bike"])
     race1 = _make_season_event(name="Race 1", event_date=START + timedelta(weeks=5), priority="B")
     race2 = _make_season_event(name="Race 2", event_date=START + timedelta(weeks=12), priority="A")
@@ -3868,7 +3888,9 @@ def test_scaffold_season_macro_trailing_block_omitted_when_final_race_gets_dedic
     )
     last_block = macro.blocks[-1]
     race2_monday = race2.event_date - timedelta(days=race2.event_date.weekday())
-    assert last_block.end_date == race2_monday - timedelta(days=1)
+    assert last_block.name == "taper"
+    assert last_block.race_event_id == race2.id
+    assert last_block.end_date == race2_monday + timedelta(days=6)
 
 
 def test_scaffold_season_macro_trailing_block_added_when_final_race_has_no_dedicated_cycle():
@@ -3935,6 +3957,92 @@ def test_scaffold_season_macro_andrews_real_cx_calendar_end_to_end():
         weeks_in_curr = (curr.end_date - curr.start_date).days // 7 + 1
         max_allowed = prev.weekly_volume_target_m * (1 + WEEKLY_VOLUME_RAMP_CAP) ** weeks_in_curr
         assert curr.weekly_volume_target_m <= max_allowed + 1  # +1: rounding
+
+
+# --- Short-event (bike/CX) taper -- root-cause regression, 2026-09-26 --------------
+#
+# Real production bug against Andrew's ACTUAL 2026 cyclocross season (read
+# from prod 2026-09-26): Wafflecross (9/19, B) already raced; the current
+# season macro came out as sharpen Sep 14-27, then a 2-week SWIM-length
+# taper Sep 28-Oct 11 sitting on the only race-free build window before
+# Masters CX Series Peak Weekend (Oct 17-18, A), race week Oct 12-18 in NO
+# block at all, sharpen Oct 19-Nov 8 (Halloween Weekend, Oct 31-Nov 1, B,
+# not modeled), taper Nov 9-15 (before Season Finale, Nov 21-22, B). Root
+# causes: TAPER_WEEKS_SHORT=2 (a swim/long-event taper length) applied to a
+# ~1h CX race, the taper carved OUT of (and placed before) race week instead
+# of covering it, and not every active B race chained. This test pins the
+# fix directly against the real calendar.
+
+
+def test_scaffold_season_macro_andrews_real_2026_cx_season_short_event_taper():
+    today = date(2026, 9, 26)  # a Saturday -- matches the real bug read date
+    athlete = make_athlete(sports=["bike"])
+    peak_weekend = _make_season_event(
+        name="Masters CX Series Peak Weekend", event_date=date(2026, 10, 17), priority="A"
+    )
+    halloween_weekend = _make_season_event(
+        name="Halloween Weekend", event_date=date(2026, 10, 31), priority="B"
+    )
+    season_finale = _make_season_event(
+        name="Season Finale", event_date=date(2026, 11, 21), priority="B"
+    )
+    races = [peak_weekend, halloween_weekend, season_finale]
+
+    macro, season_warnings = scaffold_season_macro(
+        athlete, races, today, current_weekly_volume_m=540, established_base=True
+    )
+
+    # Every active race is chained/known to the plan, even Halloween
+    # Weekend, which (per below) doesn't end up with its own dedicated
+    # block.
+    assert macro.event_ids == [r.id for r in races]
+
+    # Sep 28 - Oct 11 is a build/sharpen block, NOT a taper -- the real bug
+    # was a 2-week swim-length taper sitting on this exact window.
+    sep28_block = next(b for b in macro.blocks if b.start_date == date(2026, 9, 28))
+    assert sep28_block.name == "sharpen"
+    assert sep28_block.end_date == date(2026, 10, 11)
+    assert sep28_block.race_event_id == peak_weekend.id
+
+    # The A-race taper is exactly the race week (7 days), ending on race day.
+    peak_taper = next(
+        b for b in macro.blocks if b.race_event_id == peak_weekend.id and b.name == "taper"
+    )
+    assert peak_taper.start_date == date(2026, 10, 12)
+    assert peak_taper.end_date == date(2026, 10, 18)
+    assert (peak_taper.end_date - peak_taper.start_date).days + 1 == 7 == TAPER_WEEKS_SHORT_EVENT * 7
+
+    # No gap around the A-race: sharpen ends exactly where the taper begins.
+    assert peak_taper.start_date == sep28_block.end_date + timedelta(days=1)
+
+    # Every date from macro start through the last dedicated cycle's own
+    # start is covered by exactly one block -- no gaps (Halloween Weekend
+    # folds into Season Finale's own dedicated cycle, which starts
+    # immediately after Peak Weekend's taper).
+    _assert_contiguous(macro.blocks)
+    assert macro.blocks[0].start_date == date(2026, 9, 28)
+
+    # Halloween Weekend is chained (known to the plan) even though it's too
+    # close to Peak Weekend's own taper to get a dedicated cycle of its own.
+    tagged = {b.race_event_id for b in macro.blocks if b.race_event_id is not None}
+    assert halloween_weekend.id not in tagged
+
+    # After the A-race, the very next block is sharpen/maintain for Season
+    # Finale -- never "base" (the season never silently falls back to
+    # scaffold_macro's long-runway shape).
+    after_taper = next(
+        b for b in macro.blocks if b.start_date == peak_taper.end_date + timedelta(days=1)
+    )
+    assert after_taper.name == "sharpen"
+    assert after_taper.race_event_id == season_finale.id
+    # Halloween Weekend's own date falls inside this block -- real coverage,
+    # not a silent drop.
+    assert after_taper.start_date <= date(2026, 10, 31) <= after_taper.end_date
+
+    # Season Finale (B, bike) gets NO dedicated taper block -- its own
+    # lighten-before-race stays within the race week, not modeled here.
+    finale_blocks = [b for b in macro.blocks if b.race_event_id == season_finale.id]
+    assert all(b.name != "taper" for b in finale_blocks)
 
 
 # --- IDEA 018: extend-an-active-plan mode (existing_macro) -------------------------
@@ -4066,8 +4174,13 @@ def test_scaffold_season_macro_extend_mode_degrades_runway_raise_to_warning():
     new_start = original_start + timedelta(days=9)
     peak_monday = _monday_of_week(peak_weekend.event_date)
     cursor_start = peak_monday + timedelta(weeks=1)
+    # 1 week of runway -- below this shape's OWN minimum for a short (bike)
+    # event, SHARPEN_WEEKS_MIN (2, short-event-taper build, 2026-09-26; a
+    # swim/long-event A-race would instead need SHARPENING_MIN_MACRO_WEEKS,
+    # 4). Deliberately still too tight either way, so this test keeps
+    # exercising the "too short even for the sharpening shape" degrade.
     tight_a = _make_season_event(
-        name="Tight A", event_date=cursor_start + timedelta(weeks=2), priority="A"
+        name="Tight A", event_date=cursor_start + timedelta(weeks=1), priority="A"
     )
 
     macro, season_warnings = scaffold_season_macro(
