@@ -445,10 +445,17 @@ def test_every_bike_numbered_library_file_is_sport_scoped() -> None:
         assert context_module._LIBRARY_FILE_SPORT_SCOPE[matches[0]] == frozenset({"bike"})
 
 
-def test_routed_block_holds_only_topic_files_not_the_reference_list(library_dir) -> None:
-    block = build_routed_block(library_dir, "what pace should I swim at?")
-    assert "library/reference_list.md" not in block[0]["text"]
-    assert "Research Reference List" not in block[0]["text"]
+def test_routed_block_attaches_cited_entries_not_the_whole_bibliography(library_dir) -> None:
+    # IDEA 025 step 1 fix: COACH_ROUTED_LIBRARY_IN_MESSAGE is unset in
+    # production, so build_routed_block (system block B) -- not
+    # build_routed_library_text -- is the path that's actually live. It must
+    # attach the cited entries itself, or the coach loses citations
+    # entirely on the default config. It must still never embed the whole
+    # ~58k-token bibliography.
+    block = build_routed_block(library_dir, "is creatine worth taking daily?")
+    assert "## library/reference_list.md entries cited by the files above" in block[0]["text"]
+    assert "Chilibeck P.D. et al. (2017)" in block[0]["text"]
+    assert "Research Reference List" not in block[0]["text"]  # the file's own H1, never embedded
     assert block[0]["cache_control"] == {"type": "ephemeral"}
 
 
@@ -459,16 +466,15 @@ def test_block_a_is_identical_whatever_the_message_so_topic_changes_only_rewrite
     assert fuel[1] != pace[1]  # only the routed topic files differ
 
 
-def test_reference_list_never_rides_build_system_only_the_routed_message_text(library_dir) -> None:
-    # IDEA 025 step 1: reference_list.md is no longer part of build_system's
-    # output at all (neither block A nor block B) -- only
-    # build_routed_library_text attaches the entries the routed files cite,
-    # for a caller that puts routed content on the newest message instead of
-    # the cached prefix (COACH_ROUTED_LIBRARY_IN_MESSAGE).
+def test_reference_list_whole_bibliography_never_rides_build_system(library_dir) -> None:
+    # IDEA 025 step 1: the WHOLE ~58k-token bibliography is never part of
+    # build_system's output (neither block A nor block B) -- only the cited
+    # entries are, attached in block B by default (build_routed_block,
+    # production's live path since COACH_ROUTED_LIBRARY_IN_MESSAGE is unset)
+    # or on the message when that flag is set (build_routed_library_text).
     blocks = build_system(library_dir, "what pace should I swim at?")
     full = "\n".join(b["text"] for b in blocks)
-    assert "# library/reference_list.md" not in full
-    assert "Research Reference List" not in full
+    assert "Research Reference List" not in full  # the file's own H1 title
 
     library_text = build_routed_library_text(library_dir, "what pace should I swim at?")
     assert "## library/reference_list.md entries cited by the files above" in library_text
@@ -1542,6 +1548,17 @@ def test_creatine_question_attaches_chilibeck_entries_not_an_unrelated_cycling_o
     assert "Chilibeck P.D. et al. (2017)" in text
     assert "Chilibeck P.D. et al. (2023)" in text
     assert "Coggan" not in text
+
+
+def test_default_config_creatine_question_attaches_chilibeck_in_block_b(library_dir) -> None:
+    # Real bug caught before this PR merged: production leaves
+    # COACH_ROUTED_LIBRARY_IN_MESSAGE unset, so build_system's default
+    # (include_routed=True -> build_routed_block, system block B) is the
+    # path actually live -- not build_routed_library_text. Citations must
+    # attach there too, with no flag involved at all.
+    blocks = build_system(library_dir, "is creatine worth taking daily?")
+    block_b_text = blocks[1]["text"]
+    assert "Chilibeck P.D. et al. (2017)" in block_b_text
 
 
 def test_route_info_for_logging_matches_creatine_routing_and_citation_count(library_dir) -> None:

@@ -1178,14 +1178,36 @@ def route_library_files(
     return ordered[:max_files]
 
 
+def _routed_topic_files_text(
+    library_dir: Path, message: str, *, athlete_sports: list[str] | None = None
+) -> str:
+    """Just the concatenated routed topic files' own text -- no
+    `reference_list.md` entries, no header. The shared base both
+    `build_routed_block` (system block B) and `build_routed_library_text`
+    (the message, `COACH_ROUTED_LIBRARY_IN_MESSAGE`) attach cited entries
+    onto via `_cited_reference_bullets`."""
+    filenames = route_library_files(message, athlete_sports=athlete_sports)
+    parts = []
+    for filename in filenames:
+        content = _read_text(library_dir / filename)
+        parts.append(f"# library/{filename}\n\n{content}")
+    return "\n\n---\n\n".join(parts)
+
+
 def build_routed_block(
     library_dir: Path, message: str, *, athlete_sports: list[str] | None = None
 ) -> list[dict[str, Any]]:
-    """System block B: the routed topic files for `message`, as a single
-    cacheable text block. Just the topic files themselves -- no
-    `reference_list.md` entries here; see `build_routed_library_text` for
-    those (attached only when the routed text rides the newest message
-    instead of this cached block, `COACH_ROUTED_LIBRARY_IN_MESSAGE`).
+    """System block B: the routed topic files for `message`, plus the
+    verbatim `reference_list.md` entries those files actually cite (IDEA 025
+    step 1), as a single cacheable text block.
+
+    **This is the production default**: `COACH_ROUTED_LIBRARY_IN_MESSAGE` is
+    unset in Cloud Run, so the routed text rides HERE, not the message (see
+    `build_routed_library_text`) -- citations have to attach on this path or
+    the coach loses them entirely and hammers `lookup_reference` for
+    anything it would normally just cite. Real bug caught before this PR
+    merged: an earlier version of this build only attached entries in
+    `build_routed_library_text`, which production never calls.
 
     `athlete_sports` (optional, defaults to `None`, forwarded straight to
     `route_library_files` -- see that function's docstring) is the only
@@ -1193,12 +1215,14 @@ def build_routed_block(
     than the message alone; every existing call site (no kwarg passed)
     keeps producing byte-identical output.
     """
-    filenames = route_library_files(message, athlete_sports=athlete_sports)
-    parts = []
-    for filename in filenames:
-        content = _read_text(library_dir / filename)
-        parts.append(f"# library/{filename}\n\n{content}")
-    text = "\n\n---\n\n".join(parts)
+    body = _routed_topic_files_text(library_dir, message, athlete_sports=athlete_sports)
+    bullets = _cited_reference_bullets(library_dir, body)
+    text = body
+    if bullets:
+        text += (
+            "\n\n---\n\n## library/reference_list.md entries cited by the files above\n\n"
+            + "\n".join(bullets)
+        )
     return [
         {
             "type": "text",
@@ -1282,24 +1306,16 @@ def build_routed_library_text(
     library_dir: Path, message: str, *, athlete_sports: list[str] | None = None
 ) -> str:
     """The routed topic files for `message` as plain text for the newest user
-    message (IDEA 022 step 4) -- the same files `build_routed_block` would put
-    in system block B, under a header saying what they are -- followed by the
-    verbatim `reference_list.md` entries those files actually cite (IDEA 025
-    step 1; see `_cited_reference_bullets`). Anything the routed files don't
-    cite is reachable via the `lookup_reference` tool instead."""
+    message (IDEA 022 step 4) -- exactly what `build_routed_block` would put
+    in system block B (topic files + their cited `reference_list.md`
+    entries, IDEA 025 step 1), under a header saying what they are. Anything
+    the routed files don't cite is reachable via the `lookup_reference` tool
+    instead."""
     body = build_routed_block(library_dir, message, athlete_sports=athlete_sports)[0]["text"]
-    bullets = _cited_reference_bullets(library_dir, body)
-    ref_block = ""
-    if bullets:
-        ref_block = (
-            "\n\n---\n\n## library/reference_list.md entries cited by the files above\n\n"
-            + "\n".join(bullets)
-        )
     return (
         "## Library topic files for this question "
         "(reference material -- ground and cite from these, same rules as the system prompt)\n\n"
         + body
-        + ref_block
     )
 
 
@@ -1320,7 +1336,10 @@ def route_info_for_logging(
     exactly once per chat request either way."""
     routed_files = route_library_files(message, athlete_sports=athlete_sports)
     matched_keywords = _matched_routing_keywords(message)
-    body = build_routed_block(library_dir, message, athlete_sports=athlete_sports)[0]["text"]
+    # The topic files' OWN text, not build_routed_block's return value --
+    # that already has cited entries appended, and re-scanning THOSE for
+    # citations would double-count/spuriously match against bullet prose.
+    body = _routed_topic_files_text(library_dir, message, athlete_sports=athlete_sports)
     bullets = _cited_reference_bullets(library_dir, body)
     return {
         "routed_files": routed_files,
