@@ -930,8 +930,13 @@ _KEYWORD_ROUTES: dict[str, set[str]] = {
     # a planning question routes here via keyword bucket like any other
     # topic file. "taper" above also routes here (in addition to 03) since
     # taper placement/length is now a coach-authored planning decision,
-    # not just a load-monitoring question.
-    "plan": {"37-plan-authoring-guide.md"},
+    # not just a load-monitoring question. Deliberately NOT a bare "plan"
+    # keyword -- too generic a substring (matches ordinary phrasing like
+    # "why was my plan repeated, not advanced?", which must stay routed to
+    # 03-periodization.md alone for cache-sharing -- see
+    # test_system_prefix_is_byte_stable_across_two_different_messages).
+    # "build my plan" below is deliberately multi-word so it stays
+    # specific to an actual planning request.
     "macro": {"37-plan-authoring-guide.md"},
     "macrocycle": {"37-plan-authoring-guide.md"},
     "mesocycle": {"37-plan-authoring-guide.md"},
