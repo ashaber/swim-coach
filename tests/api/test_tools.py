@@ -7295,3 +7295,330 @@ def test_taper_and_season_macro_confirm_need_only_the_draft_id(athletes_dir, tap
     done = handlers["propose_injury_adapted_taper"]({"confirm": True, "draft_id": draft["draft_id"]})  # no event
 
     assert done["persisted"] is True and done["written_from_draft"] is True
+
+
+# ===========================================================================
+# author_macro_plan / author_week_plan / check_plan
+# (engine/plan-check-red-team PR 2: "the coach authors plans; the engine
+# red-teams them")
+# ===========================================================================
+
+
+def _simple_macro_weeks(start: date, n: int = 3) -> list[dict]:
+    return [
+        {
+            "week_start": (start + timedelta(weeks=i)).isoformat(),
+            "phase": "Base" if i == 0 else "Build",
+            "focus": "aerobic base" if i == 0 else "race-specific build",
+            "hours": 8.0 + i,
+            "load_tss": 400.0 + i * 20,
+            "ctl_target": 40.0 + i * 2,
+            "key_sessions": ["Tue: over/unders 3x8min"],
+            "recovery": False,
+            "notes": None,
+        }
+        for i in range(n)
+    ]
+
+
+def test_author_macro_plan_draft_then_confirm_with_decisions_persists(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    start = date(2026, 7, 6)  # matches the fixture macro's own base-block start
+
+    draft = handlers["author_macro_plan"]({
+        "event_names": [GREECE_EVENT_NAME],
+        "weeks": _simple_macro_weeks(start),
+        "architecture": "Base then build toward Greece, one dedicated A-race block.",
+    })
+
+    assert "error" not in draft, draft
+    assert draft["persisted"] is False
+    assert draft["draft_id"]
+    assert "report" in draft and "verdict" in draft["report"]
+    finding_ids = [f["id"] for f in draft["report"]["findings"]]
+
+    decisions = [{"id": fid, "decision": "accept", "reason": "known gap, acceptable for now"} for fid in finding_ids]
+    done = handlers["author_macro_plan"]({
+        "confirm": True,
+        "draft_id": draft["draft_id"],
+        "decisions": decisions,
+    })
+
+    assert "error" not in done, done
+    assert done["persisted"] is True
+    assert done["written_from_draft"] is True
+    assert done["verified"] is True
+    assert len(done["red_team"]) == len(finding_ids)
+
+    saved = FileStore(base_dir=athletes_dir).load_macro("renee")
+    assert saved is not None
+    assert len(saved.weeks) == 3
+    assert saved.architecture == "Base then build toward Greece, one dedicated A-race block."
+    assert saved.red_team is not None and len(saved.red_team) == len(finding_ids)
+
+
+def test_author_macro_plan_confirm_without_covering_every_finding_is_refused(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    start = date(2026, 7, 6)
+
+    draft = handlers["author_macro_plan"]({
+        "event_names": [GREECE_EVENT_NAME],
+        "weeks": _simple_macro_weeks(start),
+        "architecture": "Base then build toward Greece.",
+    })
+    assert draft["report"]["findings"], "expected at least one finding for this short/incomplete plan"
+
+    done = handlers["author_macro_plan"]({"confirm": True, "draft_id": draft["draft_id"], "decisions": []})
+
+    assert "error" in done
+    assert done["persisted"] is False
+    saved = FileStore(base_dir=athletes_dir).load_macro("renee")
+    assert saved.architecture != "Base then build toward Greece."  # unchanged from the fixture
+
+
+def test_author_macro_plan_unknown_event_name_names_existing_events(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["author_macro_plan"]({
+        "event_names": ["Not A Real Event"],
+        "weeks": _simple_macro_weeks(date(2026, 7, 6)),
+        "architecture": "x",
+    })
+    assert "error" in result
+    assert GREECE_EVENT_NAME in result["error"]
+
+
+def test_author_macro_plan_missing_required_fields_are_errors(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    assert "error" in handlers["author_macro_plan"]({"weeks": [], "architecture": "x"})
+    assert "error" in handlers["author_macro_plan"]({"event_names": [GREECE_EVENT_NAME], "architecture": "x"})
+    assert "error" in handlers["author_macro_plan"]({
+        "event_names": [GREECE_EVENT_NAME], "weeks": _simple_macro_weeks(date(2026, 7, 6)),
+    })
+
+
+def test_author_macro_plan_invalid_week_row_is_a_clear_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["author_macro_plan"]({
+        "event_names": [GREECE_EVENT_NAME],
+        "weeks": [{"week_start": "not-a-date", "phase": "Base", "focus": "x"}],
+        "architecture": "x",
+    })
+    assert "error" in result
+    assert "weeks[0]" in result["error"]
+
+
+def test_author_macro_plan_redraft_guard_refuses_the_third_draft(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    args = {
+        "event_names": [GREECE_EVENT_NAME],
+        "weeks": _simple_macro_weeks(date(2026, 7, 6)),
+        "architecture": "x",
+    }
+
+    first = handlers["author_macro_plan"](args)
+    second = handlers["author_macro_plan"](args)
+    third = handlers["author_macro_plan"](args)
+
+    assert "error" not in first
+    assert "error" not in second
+    assert "error" in third
+    assert "twice" in third["error"]
+
+
+def test_check_plan_reruns_check_macro_against_the_stored_plan(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["check_plan"]({})
+
+    assert "error" not in result
+    assert "macro" in result and "verdict" in result["macro"]
+
+
+def test_check_plan_no_macro_is_an_error(athletes_dir) -> None:
+    (athletes_dir / "renee" / "plan" / "macro.yaml").unlink()
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["check_plan"]({})
+    assert "error" in result
+    assert "author_macro_plan" in result["error"]
+
+
+def test_check_plan_with_iso_week_also_runs_check_week(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["check_plan"]({"iso_week": "2026-W28"})
+
+    assert "error" not in result
+    assert "week" in result
+    assert result["week"]["iso_week"] == "2026-W28"
+    assert "verdict" in result["week"]
+
+
+def test_check_plan_iso_week_with_no_persisted_week_says_so(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["check_plan"]({"iso_week": "2026-W50"})
+    assert "error" not in result
+    assert "week_error" in result
+
+
+# --- author_week_plan --------------------------------------------------------
+
+
+_AUTHOR_WEEK_SESSIONS = [
+    {
+        "date": "2026-07-06",
+        "sport": "swim_pool",
+        "duration_min": 60,
+        "purpose": "aerobic base",
+        "distance_m": 3000,
+        "structure": "warm-up 400, main set 20x100 @Z2, cool-down 200",
+    },
+    {
+        "date": "2026-07-08",
+        "sport": "swim_pool",
+        "duration_min": 50,
+        "purpose": "technique",
+        "distance_m": 2200,
+    },
+    {
+        "date": "2026-07-11",
+        "sport": "swim_ow",
+        "duration_min": 90,
+        "purpose": "long open water",
+        "distance_m": 4000,
+    },
+]
+
+
+def test_author_week_plan_draft_then_confirm_persists(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    draft = handlers["author_week_plan"]({"iso_week": "2026-W28", "sessions": _AUTHOR_WEEK_SESSIONS})
+
+    assert "error" not in draft, draft
+    assert draft["persisted"] is False
+    assert draft["draft_id"]
+    assert len(draft["sessions"]) == 3
+    assert "report" in draft and "verdict" in draft["report"]
+
+    done = handlers["author_week_plan"]({
+        "iso_week": "2026-W28", "confirm": True, "draft_id": draft["draft_id"],
+    })
+
+    assert "error" not in done, done
+    assert done["persisted"] is True
+    assert done["verified"] is True
+
+    saved = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    assert saved is not None
+    assert len(saved.sessions) == 3
+    assert saved.draft is False
+    assert saved.adaptation_rationale is None  # the check report JSON must never leak into the real plan
+
+
+def test_author_week_plan_missing_sessions_is_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["author_week_plan"]({"iso_week": "2026-W28", "sessions": []})
+    assert "error" in result
+
+
+def test_author_week_plan_invalid_session_entry_is_a_clear_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["author_week_plan"]({
+        "iso_week": "2026-W28",
+        "sessions": [{"date": "2026-07-06", "sport": "swim_pool"}],  # missing duration_min/purpose
+    })
+    assert "error" in result
+    assert "sessions[0]" in result["error"]
+
+
+def test_author_week_plan_drops_and_flags_sessions_not_in_the_new_list(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    existing = store.load_week("renee", "2026-W28")
+    assert len(existing.sessions) > len(_AUTHOR_WEEK_SESSIONS)
+
+    draft = handlers["author_week_plan"]({"iso_week": "2026-W28", "sessions": _AUTHOR_WEEK_SESSIONS})
+    assert any("DROPPED" in w for w in draft["planning_warnings"])
+    assert draft["dropped_sessions"]
+
+    done = handlers["author_week_plan"]({"iso_week": "2026-W28", "confirm": True, "draft_id": draft["draft_id"]})
+    assert any("DROPPED" in w for w in done["planning_warnings"])
+
+
+def test_author_week_plan_confirm_requires_athlete_confirmations_for_flagged_findings(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    prev = store.load_week("renee", "2026-W28")
+    # A long swim far past the +15% safety rail vs. 2026-W28's own longest swim.
+    big_sessions = [
+        {
+            "date": "2026-07-13",
+            "sport": "swim_ow",
+            "duration_min": 300,
+            "purpose": "very long open water",
+            "distance_m": max(s.distance_m or 0 for s in prev.sessions if s.sport in ("swim_pool", "swim_ow")) * 3,
+        }
+    ]
+
+    draft = handlers["author_week_plan"]({"iso_week": "2026-W29", "sessions": big_sessions})
+    confirm_ids = [f["id"] for f in draft["report"]["findings"] if f["id"].startswith("confirm-")]
+    assert confirm_ids, "expected a requires-athlete-confirmation finding for this oversized long swim"
+
+    refused = handlers["author_week_plan"]({
+        "iso_week": "2026-W29", "confirm": True, "draft_id": draft["draft_id"],
+    })
+    assert "error" in refused
+    assert refused["persisted"] is False
+
+    accepted = handlers["author_week_plan"]({
+        "iso_week": "2026-W29",
+        "confirm": True,
+        "draft_id": draft["draft_id"],
+        "athlete_confirmations": [{"finding_id": fid, "athlete_words": "yes, I want to push the long swim"} for fid in confirm_ids],
+    })
+    assert "error" not in accepted, accepted
+    assert accepted["persisted"] is True
+
+
+# --- propose_adaptation is now advisory-only ---------------------------------
+
+
+def test_propose_adaptation_no_longer_holds_a_writable_draft(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["propose_adaptation"]({"iso_week": "2026-W30"})
+
+    assert "error" not in result
+    assert "draft_id" not in result
+    assert "author_week_plan" in result["next"]
+
+
+# --- TOOLS_SCHEMA / handlers registration ------------------------------------
+
+
+def test_new_planning_tools_are_registered_and_old_ones_are_unexposed_but_kept(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    schema_names = {t["name"] for t in TOOLS_SCHEMA}
+
+    for name in ("author_macro_plan", "author_week_plan", "check_plan"):
+        assert name in schema_names
+        assert name in handlers
+
+    for name in ("draft_macro_plan", "replace_macro_plan", "draft_season_macro_plan", "create_week_plan", "replace_week_plan"):
+        assert name not in schema_names  # unexposed
+        assert name in handlers  # handler code kept in place, per the approved plan

@@ -180,7 +180,13 @@ from swim_coach.adapt import adapt_week
 from swim_coach.analytics import compute_analytics
 from swim_coach.athlete_time import athlete_today
 from swim_coach.gps_laps import GpsLapMetrics, analyze_gps_laps
-from swim_coach.load import _training_base_evidence, daily_loads, estimate_hr_max
+from swim_coach.load import (
+    _training_base_evidence,
+    ctl_atl_tsb_series,
+    daily_loads,
+    estimate_hr_max,
+    recent_weekly_hours,
+)
 from swim_coach.parse_files import parse_fit
 from swim_coach.quality import match_workout_to_session
 from swim_coach.race_phases import (
@@ -200,9 +206,12 @@ from swim_coach.models import (
     Athlete,
     AthleteNote,
     normalize_interval_type,
+    derive_blocks_from_macro_weeks,
     Event,
     Feedback,
     MacroPlan,
+    MacroRedTeamRecord,
+    MacroWeek,
     HealthStatus,
     RaceDebrief,
     Session,
@@ -212,6 +221,7 @@ from swim_coach.models import (
     WorkoutStructure,
 )
 from swim_coach.ow_session_templates import build_ow_session
+from swim_coach.plan_check import check_macro, check_week
 from swim_coach.plan import (
     MIN_MACRO_WEEKS,
     SESSION_ADJUSTMENT_INCREASE_CAP_PCT,
@@ -598,16 +608,141 @@ SESSION_OVERRIDES_SCHEMA: dict[str, Any] = {
     },
 }
 
+# One session entry -- the SAME add-mode field shape session_overrides' `add`
+# mode already uses (`_session_from_add_fields` is the shared validation
+# logic behind both this and `session_overrides`' `add` entries). Shared by
+# `merge_week_plan`'s `proposed_sessions` and `author_week_plan`'s `sessions`
+# (engine/plan-check-red-team PR 2) so the shape lives in one place rather
+# than drifting into two copies -- extracted here unchanged from what used
+# to be `merge_week_plan`'s own inline `proposed_sessions` items schema.
+SESSION_ENTRY_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "date": {
+            "type": "string",
+            "description": "Session's date, 'YYYY-MM-DD'.",
+        },
+        "sport": {
+            "type": "string",
+            "description": "Session's sport (e.g. 'swim_pool', 'swim_ow', 'bike', 'strength', 'recovery').",
+        },
+        "duration_min": {
+            "type": "number",
+            "description": "Session's duration, in minutes.",
+        },
+        "purpose": {
+            "type": "string",
+            "description": "Athlete-facing purpose/description for the session.",
+        },
+        "distance_m": {
+            "type": "number",
+            "description": "Optional distance for the session, in meters.",
+        },
+        "intensity": {
+            "type": "object",
+            "description": (
+                "Intensity dict, e.g. {\"zone\": \"Z2\"} or {\"anchor\": \"rpe\"}. Defaults to "
+                "{\"zone\": \"Z2\"} for bike, {\"anchor\": \"rpe\"} otherwise."
+            ),
+        },
+        "structure": {
+            "type": "string",
+            "description": (
+                "Athlete-facing prose for the session's real content. Prefer supplying `structured` "
+                "alongside this whenever there's real step structure."
+            ),
+        },
+        "structured": {
+            "type": "object",
+            "description": (
+                "Machine-readable WorkoutStructure IR for the session -- same shape as "
+                "session_overrides' own `structured` field."
+            ),
+        },
+    },
+    "required": ["date", "sport", "duration_min", "purpose"],
+    "additionalProperties": False,
+}
+
+# One MacroWeek row -- `author_macro_plan`'s `weeks` input (engine/
+# plan-check-red-team PR 2), mirroring `swim_coach.models.MacroWeek` field-
+# for-field. See that model's own docstring for the full rationale (a
+# macro-level row, not a workout -- real Sessions are authored separately,
+# by `author_week_plan`).
+MACRO_WEEK_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "week_start": {
+            "type": "string",
+            "description": "The Monday of this week, 'YYYY-MM-DD'.",
+        },
+        "phase": {
+            "type": "string",
+            "description": (
+                "Free-text phase label for this week (e.g. 'Base 2', 'Build 1', 'Peak', 'Taper', "
+                "'Recovery') -- your own words, not a fixed enum. check_macro judges whether the plan "
+                "actually tapers/recovers by the real hours/load_tss numbers below, never by this label."
+            ),
+        },
+        "focus": {
+            "type": "string",
+            "description": "One-line focus for this week, e.g. 'aerobic base, technique'.",
+        },
+        "hours": {
+            "type": "number",
+            "description": (
+                "Planned total training hours this week, across every sport. Set this (never load_tss "
+                "alone) for a bike-primary week -- bike volume is never recorded in meters."
+            ),
+        },
+        "load_tss": {
+            "type": "number",
+            "description": (
+                "Planned total training load for this week (TSS-like AU), if you have a real number in "
+                "mind. At least one of hours/load_tss should be set, or check_macro's CTL/TSB projection "
+                "and hours-reality checks have nothing to read for this week."
+            ),
+        },
+        "ctl_target": {
+            "type": "number",
+            "description": "Target CTL (fitness) by the end of this week -- check_macro's ramp check reads this week-over-week.",
+        },
+        "key_sessions": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Short free-text session highlights for this week (e.g. 'Tue: over/unders 3x8min', "
+                "'Sat: long open water 3hr'). Not full session authoring -- author_week_plan writes the "
+                "real sessions when this week actually needs authoring."
+            ),
+        },
+        "recovery": {
+            "type": "boolean",
+            "description": (
+                "True if this is a DELIBERATE, planned recovery/step-down week (distinct from an "
+                "unplanned bad week) -- check_macro's recovery-cadence check reads this flag directly."
+            ),
+        },
+        "notes": {
+            "type": "string",
+            "description": "Anything else worth recording about this week (e.g. a B/C race falling in it).",
+        },
+    },
+    "required": ["week_start", "phase", "focus"],
+    "additionalProperties": False,
+}
+
 TOOLS_SCHEMA: list[dict[str, Any]] = [
     {
         "name": "propose_adaptation",
         "description": (
-            "Run the deterministic adaptation engine's draft for the given ISO "
-            "week (e.g. '2026-W30') and return the draft WeekPlan + machine "
-            "rationale as JSON, for discussion with the athlete. Does NOT "
-            "persist anything -- only /adapt, with explicit confirmation, "
-            "writes a plan change. Requires an existing, non-draft week plan "
-            "for the week immediately before iso_week to adapt from."
+            "ADVISORY SUGGESTION only: runs the deterministic rule-table "
+            "adaptation engine for the given ISO week (e.g. '2026-W30') and "
+            "returns its numbers (target volume, direction, machine "
+            "rationale) as JSON, for discussion -- never writable directly. "
+            "Use its numbers to inform author_week_plan (which actually "
+            "authors and persists the week); requires an existing, "
+            "non-draft week plan for the week immediately before iso_week."
         ),
         "input_schema": {
             "type": "object",
@@ -1571,199 +1706,37 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "draft_macro_plan",
+        "name": "author_macro_plan",
         "description": (
-            "Scaffold a brand-new macro periodization plan toward an existing "
-            "event -- automatically picks ONE of two real periodization "
-            "shapes, never silently: (1) the standard base->build->peak->taper "
-            "shape (swim_coach.plan.scaffold_macro, the same function the "
-            "CLI's scaffold-macro command and /onboard-athlete use) whenever "
-            "at least MIN_MACRO_WEEKS (8) weeks of runway remain before the "
-            "event; (2) a shorter hold->sharpen->taper 'sharpening' shape "
-            "(swim_coach.plan.scaffold_sharpening_macro, grounded in Issurin's "
-            "block-periodization 'transmutation' block) whenever the runway is "
-            "shorter than that (but still >= 4 weeks) AND the athlete's REAL "
-            "logged workout history (never this conversation) shows an "
-            "already-established training base "
-            "(swim_coach.load.has_established_training_base) -- this is for "
-            "the athlete who is already consistently training and does not "
-            "need a base-building ramp, just a short block of race-specific "
-            "sharpening into a taper. If neither condition is met (not enough "
-            "runway for shape 1, and either not enough runway for shape 2 or "
-            "no established base on file), refuses with a clear error rather "
-            "than guessing or degenerating either shape. The response's own "
-            "`shape`/`shape_reason`/`established_base_evidence` fields always "
-            "say which shape was used (or why the refusal fired) and the real "
-            "evidence behind that call -- relay this honestly to the athlete, "
-            "never just that a macro was created. Both engine functions' own "
-            "ramp/taper/sizing math is what makes persisting the result "
-            "immediately safe. Use when the athlete has an event on file but "
-            "no macro plan for it yet. Refuses with an error if a macro plan "
-            "already exists for that event -- this tool is only for a "
-            "brand-new macro; use replace_macro_plan (draft-then-confirm) to "
-            "revise or replace an existing one instead."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "event_name": {
-                    "type": "string",
-                    "description": "Name of an existing event (must match exactly).",
-                },
-                "current_weekly_volume_m": {
-                    "type": "integer",
-                    "description": (
-                        "The athlete's current real weekly training volume "
-                        "(meters for swim, minutes for a duration_min-metric "
-                        "event like bike). Also doubles as the flat hold/"
-                        "sharpen volume for the shorter sharpening shape when "
-                        "that shape fires (see peak_weekly_volume_m below)."
-                    ),
-                },
-                "peak_weekly_volume_m": {
-                    "type": "integer",
-                    "description": (
-                        "For the standard base->build->peak->taper shape: "
-                        "target peak weekly volume in meters. Optional ONLY "
-                        "when the event's target_metric is 'distance_m' (the "
-                        "default for most events) -- there it defaults to "
-                        "event distance x 2.5, clamped by the ramp cap over "
-                        "the base+build weeks. REQUIRED for any other "
-                        "target_metric ('duration_min'/'load_au', e.g. a "
-                        "bike-primary or load-based event): no validated "
-                        "duration/load-driven default formula exists, and "
-                        "omitting it raises an error rather than guessing. "
-                        "For the shorter sharpening shape (when it fires "
-                        "instead): the same field is reused as the flat hold/"
-                        "sharpen weekly volume -- always optional there "
-                        "(defaults to current_weekly_volume_m, i.e. hold "
-                        "current volume rather than ramp), regardless of "
-                        "target_metric, since that shape has no ramp to size "
-                        "a peak for in the first place."
-                    ),
-                },
-                "start_date": {
-                    "type": "string",
-                    "description": "Macro start date, 'YYYY-MM-DD' (default today).",
-                },
-            },
-            "required": ["event_name", "current_weekly_volume_m"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "replace_macro_plan",
-        "description": (
-            "Replace the athlete's macro periodization plan by recomputing "
-            "swim_coach.plan.scaffold_macro -- the same engine function "
-            "draft_macro_plan uses. Unlike draft_macro_plan, this tool NEVER "
-            "refuses because a macro already exists -- that's exactly its "
-            "purpose: use it for the case draft_macro_plan's own error "
-            "message points at -- an existing macro for the resolved event, "
-            "the athlete changing target event, or an existing macro that's "
-            "broken/unusable (e.g. an all-zero-volume macro from the "
-            "since-fixed zero-current-volume ramp-cap bug). This can "
-            "invalidate an already-trained-against macro, so -- like "
-            "propose_adaptation -- it is draft-then-confirm, NOT "
-            "direct-persist: `confirm` defaults to false, which only "
-            "computes and returns the candidate replacement (plus a "
-            "comparison against the athlete's current macro, if one exists: "
-            "old vs. new target event, old vs. new peak weekly volume) as "
-            "JSON with `\"persisted\": false` -- it does NOT call "
-            "save_macro. Show this draft to the athlete and get their "
-            "explicit agreement before calling this tool again with "
-            "`confirm: true` -- only then does it persist "
-            "(store.save_macro), overwriting the athlete's active macro "
-            "plan. Never pass confirm=true on the first call for a given "
-            "request."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "event_name": {
-                    "type": "string",
-                    "description": "Name of an existing event (must match exactly).",
-                },
-                "current_weekly_volume_m": {
-                    "type": "integer",
-                    "description": "The athlete's current real weekly swim volume in meters.",
-                },
-                "peak_weekly_volume_m": {
-                    "type": "integer",
-                    "description": (
-                        "Target peak weekly volume in meters. Optional ONLY "
-                        "when the event's target_metric is 'distance_m' (the "
-                        "default for most events) -- there it defaults to "
-                        "event distance x 2.5, clamped by the ramp cap over "
-                        "the base+build weeks. REQUIRED for any other "
-                        "target_metric ('duration_min'/'load_au', e.g. a "
-                        "bike-primary or load-based event): no validated "
-                        "duration/load-driven default formula exists, and "
-                        "omitting it raises an error rather than guessing."
-                    ),
-                },
-                "start_date": {
-                    "type": "string",
-                    "description": "Macro start date, 'YYYY-MM-DD' (default today).",
-                },
-                "draft_id": {
-                    "type": "string",
-                    "description": (
-                        "The `draft_id` returned by the draft call (confirm omitted) that the athlete "
-                        "agreed to. With `confirm: true` this writes EXACTLY that draft -- nothing is "
-                        "recomputed. Always pass it. An unknown draft_id writes nothing."
-                    ),
-                },
-                "confirm": {
-                    "type": "boolean",
-                    "description": (
-                        "Default false: compute and return the candidate "
-                        "replacement macro as a draft only, never persisting. "
-                        "Set true ONLY after the athlete has explicitly agreed "
-                        "to the draft shown in a prior turn -- this then "
-                        "persists via store.save_macro, overwriting the "
-                        "athlete's current macro plan."
-                    ),
-                },
-            },
-            "required": ["event_name", "current_weekly_volume_m"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "draft_season_macro_plan",
-        "description": (
-            "Scaffold ONE season-spanning macro plan across MULTIPLE races "
-            "(multi-race-season-macro build) -- e.g. a cyclocross season "
-            "with several races a few weeks apart, not one isolated goal. "
-            "Chains a per-race sequence of the existing base->build->peak-"
-            "> taper / hold->sharpen->taper shapes (whichever fits each "
-            "race's own runway) into one MacroPlan, graduated by each "
-            "race's existing priority ('A' gets a full peak; 'B' gets a "
-            "shorter, shallower tune-up cycle if there's enough runway; "
-            "'C' or anything else gets no dedicated taper at all -- see "
-            "library/31-multi-race-season-periodization.md for the real "
-            "citations behind this). Use when the athlete has 2+ upcoming "
-            "races/events in the SAME sport they want one coherent plan "
-            "across, instead of drafting toward just one of them. This is "
-            "the fix for a real, logged failure mode: drafting a macro "
-            "toward one race with draft_macro_plan/replace_macro_plan could "
-            "silently stop covering a different race the athlete's existing "
-            "macro was already built around, because a macro plan used to "
-            "only ever target a single event. ALWAYS draft-then-confirm, "
-            "the same shape as replace_macro_plan, regardless of whether a "
-            "macro already exists: confirm defaults to false, returning "
-            "only a candidate plan plus a `coverage` field explicitly "
-            "listing any race the athlete's CURRENT macro covers that this "
-            "candidate would stop covering (`would_lose_coverage_for`) -- "
-            "relay that to the athlete and get explicit agreement before "
-            "calling again with confirm=true, which persists via "
-            "store.save_macro. Never pass confirm=true on the first call "
-            "for a given request. Every race named must share the same "
-            "primary_sport='bike' (cross-sport season planning, e.g. this "
-            "athlete's swim goals alongside a cyclocross season, is a "
-            "separate, deliberately unresolved coaching decision -- this "
-            "tool refuses rather than guessing at it)."
+            "AUTHOR the athlete's macro periodization plan directly, week by "
+            "week -- the coach decides the shape (periodization, taper "
+            "placement, which races get dedicated attention); the engine "
+            "only computes and RED-TEAMS it (engine/plan-check-red-team: "
+            "'the coach authors plans, the engine red-teams them'). Pass "
+            "the FULL week-by-week table (`weeks`, one MacroWeek row per "
+            "calendar week, covering at least through the last named "
+            "event), `event_names` (every race this plan is aware of), and "
+            "`architecture` (a short written rationale: why this "
+            "periodization, why this taper placement, why these races get "
+            "dedicated blocks). This is a full replacement of whatever "
+            "macro plan is currently on file for this athlete, not a "
+            "delta -- pass every week the plan should cover.\n\n"
+            "**Draft-then-confirm, always.** Call with `confirm` omitted/"
+            "false first: this validates the plan, computes the athlete's "
+            "REAL current CTL/ATL from her logged history, and runs "
+            "`swim_coach.plan_check.check_macro` -- a deterministic, "
+            "ADVISORY red-team review (never rejects or clamps the plan "
+            "you wrote; the only hard stop is pydantic validity). Show the "
+            "athlete the plan AND every finding the report returned, get an "
+            "explicit accept-or-decline (with a reason) for EACH ONE, then "
+            "call again with `confirm: true`, this draft_id, and "
+            "`decisions` covering every finding id -- a missing decision "
+            "refuses the confirm and writes nothing. Never pass "
+            "confirm=true on the first call for a given request, and never "
+            "re-draft more than twice in one request without stopping to "
+            "show the athlete what you have -- a third re-draft is refused "
+            "with an instruction to present the plan instead of iterating "
+            "again."
         ),
         "input_schema": {
             "type": "object",
@@ -1771,63 +1744,109 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 "event_names": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "minItems": 2,
+                    "minItems": 1,
                     "description": (
-                        "Names of 2+ existing events (each must match "
-                        "exactly), in any order -- they're sorted by date "
-                        "internally. Every named event must share "
-                        "primary_sport='bike'."
+                        "Names of every event (existing, must match exactly) this macro is aware "
+                        "of, in any order -- sorted by date internally. The plan's single 'target' "
+                        "event_id (for any consumer that only ever looks at one) is set to whichever "
+                        "named event is chronologically LAST."
                     ),
                 },
-                "current_weekly_volume_m": {
-                    "type": "integer",
+                "weeks": {
+                    "type": "array",
+                    "items": MACRO_WEEK_SCHEMA,
+                    "minItems": 1,
                     "description": (
-                        "The athlete's current real weekly training volume "
-                        "(minutes for a duration_min-metric sport like "
-                        "bike). Seeds the very first race's build/hold/"
-                        "sharpen cycle; every later race's own cycle is "
-                        "instead seeded off the previous race's own "
-                        "post-taper volume, not this value again."
+                        "The full week-by-week table, one row per calendar week -- this REPLACES "
+                        "whatever macro plan is currently on file, so include every week the plan "
+                        "should cover, not just what changed."
                     ),
                 },
-                "peak_weekly_volume_m": {
-                    "type": "integer",
-                    "description": (
-                        "Target peak weekly volume, forwarded ONLY to the "
-                        "first 'A'-priority race that ends up using the "
-                        "full base->build->peak->taper shape (same "
-                        "optionality rule scaffold_macro/draft_macro_plan "
-                        "already document: required for a non-distance_m "
-                        "event, e.g. any bike-primary event). Every other "
-                        "race's own volume is derived from cursor "
-                        "continuity, not this value."
-                    ),
-                },
-                "start_date": {
+                "architecture": {
                     "type": "string",
-                    "description": "Macro start date, 'YYYY-MM-DD' (default today).",
+                    "description": (
+                        "3-5 sentence written rationale: why this periodization, why this taper "
+                        "placement, why these races get dedicated blocks. Free text -- check_macro "
+                        "never validates it, but a later reviewer (human or a future coach turn) "
+                        "needs to see WHY the plan looks the way it does, not just the numbers."
+                    ),
                 },
                 "draft_id": {
                     "type": "string",
                     "description": (
-                        "The `draft_id` returned by the draft call (confirm omitted) that the athlete "
-                        "agreed to. With `confirm: true` this writes EXACTLY that draft -- nothing is "
-                        "recomputed. Always pass it. An unknown draft_id writes nothing."
+                        "The `draft_id` returned by the draft call (confirm omitted) that the "
+                        "athlete agreed to. With `confirm: true` this writes EXACTLY that draft -- "
+                        "nothing is recomputed. Always pass it. An unknown draft_id writes nothing."
                     ),
                 },
                 "confirm": {
                     "type": "boolean",
                     "description": (
-                        "Default false: compute and return the candidate "
-                        "season macro as a draft only, plus the `coverage` "
-                        "comparison against any existing macro, never "
-                        "persisting. Set true ONLY after the athlete has "
-                        "explicitly agreed to the draft shown in a prior "
-                        "turn -- this then persists via store.save_macro."
+                        "Default false: validate, run check_macro, and hold a draft -- never "
+                        "persisting. Set true ONLY after the athlete has explicitly accepted or "
+                        "declined every finding shown in a prior turn -- requires `decisions` "
+                        "covering every finding id, or the confirm is refused."
+                    ),
+                },
+                "decisions": {
+                    "type": "array",
+                    "description": (
+                        "Required WITH confirm:true -- one accept/decline decision (with a reason) "
+                        "for EVERY finding id the draft call's report returned. Missing a decision "
+                        "for any finding id refuses the confirm and writes nothing."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {
+                                "type": "string",
+                                "description": "A finding id from the draft call's report.",
+                            },
+                            "decision": {
+                                "type": "string",
+                                "enum": ["accept", "decline"],
+                            },
+                            "reason": {
+                                "type": "string",
+                                "description": (
+                                    "Why -- the coach's own reasoning, shown to the athlete and "
+                                    "stored on the plan for the next review."
+                                ),
+                            },
+                        },
+                        "required": ["id", "decision", "reason"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["event_names", "weeks", "architecture"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "check_plan",
+        "description": (
+            "Read-only: re-runs the engine's deterministic red-team review "
+            "(swim_coach.plan_check.check_macro, and check_week too if "
+            "iso_week is given) against whatever is CURRENTLY PERSISTED -- "
+            "the athlete's real macro plan and, if named, one real week -- "
+            "without drafting, authoring, or changing anything. Use after a "
+            "manual edit (patch_week_plan/merge_week_plan) or just to "
+            "re-check an already-confirmed plan against the athlete's "
+            "latest real CTL/history."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "iso_week": {
+                    "type": "string",
+                    "description": (
+                        "Optional ISO week, e.g. '2026-W30', to ALSO run check_week against (using "
+                        "its MacroWeek row and the persisted week plan). Omit to check only the macro."
                     ),
                 },
             },
-            "required": ["event_names", "current_weekly_volume_m"],
+            "required": [],
             "additionalProperties": False,
         },
     },
@@ -2026,48 +2045,107 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "create_week_plan",
+        "name": "author_week_plan",
         "description": (
-            "Generate and persist one brand-new WeekPlan from the athlete's "
-            "existing macro plan, via swim_coach.plan.generate_week -- the "
-            "same function /plan-week uses (pool-coach placeholders + a "
-            "weekend long open-water swim). Use when iso_week has no week "
-            "plan at all yet (e.g. filling a gap so propose_adaptation has "
-            "something to adapt from next). Refuses with an error if a week "
-            "plan already exists for iso_week -- use propose_adaptation (and "
-            "the /adapt skill's human confirmation) to change an existing "
-            "week instead. Not the right tool for a week that needs "
-            "hand-authored content (no pool coach on hand, real open-water "
-            "session structure needed) -- that's judgment-authored, not "
-            "generated.\n\n"
-            "`template_preference` (optional): honors a request like 'give "
-            "me more kettlebell work this week' or 'I want a threshold set' "
-            "by narrowing which main-set workout-library template the "
-            "generated week's pool-independent swim sessions use, instead "
-            "of always landing on whatever the normal deterministic "
-            "rotation picks. Fails with a clear error (rather than silently "
-            "falling back to the default rotation) if the preference "
-            "matches zero library templates for some session's macro block.\n\n"
-            "For a bike-primary week the response includes `planning_warnings` "
-            "-- the realism guardrail's verdict (too many hard bike days, too "
-            "many rideable days, back-to-back hard days). It is surfaced, "
-            "never silently applied; relay it to the athlete. Race dates "
-            "inside the week become RACE-labelled sessions, and a taper / "
-            "within-7-days-of-a-race week uses short 'openers' primers with "
-            "volume pulled down rather than a VO2 training ride. To place an "
-            "extra day the generator doesn't (a second race, an openers "
-            "session), use replace_week_plan's `session_overrides` add mode."
+            "AUTHOR the full session list for one ISO week directly -- the "
+            "coach writes the real sessions (reusing the same session shape "
+            "as merge_week_plan's `proposed_sessions`); the engine only "
+            "computes and RED-TEAMS the result (engine/plan-check-red-team). "
+            "This REPLACES whatever week plan is currently on file for "
+            "iso_week, if any -- pass the FULL session list, not just a "
+            "change (patch_week_plan is the tool for changing one or a few "
+            "already-planned sessions in place).\n\n"
+            "**Draft-then-confirm, always.** Call with `confirm` omitted/"
+            "false first: this validates the sessions and runs "
+            "`swim_coach.plan_check.check_week` against this iso_week's own "
+            "MacroWeek row (from the athlete's authored macro plan) and "
+            "recent history -- ADVISORY findings, never clamped. Show the "
+            "athlete the week and every finding, then call again with "
+            "`confirm: true` and this draft_id once they agree -- never "
+            "pass confirm=true on the first call for a given request. "
+            "**Safety rail (CLAUDE.md, the one hard stop this build keeps):** "
+            "if the report includes a `confirm-*` finding (weekly volume "
+            "+8%, long-swim step +15%), the confirm call MUST also include "
+            "`athlete_confirmations` with the athlete's OWN WORDS for each "
+            "one, or the confirm is refused and nothing is written."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "iso_week": {
                     "type": "string",
-                    "description": "ISO week to create, formatted 'YYYY-Wnn', e.g. '2026-W30'.",
+                    "description": "ISO week to author, formatted 'YYYY-Wnn', e.g. '2026-W30'.",
                 },
-                "template_preference": TEMPLATE_PREFERENCE_SCHEMA,
+                "sessions": {
+                    "type": "array",
+                    "items": SESSION_ENTRY_SCHEMA,
+                    "minItems": 1,
+                    "description": (
+                        "The FULL session list for this week -- every session, not just changes. "
+                        "This replaces whatever week plan is currently on file for iso_week. Same "
+                        "entry shape as merge_week_plan's proposed_sessions."
+                    ),
+                },
+                "focus": {
+                    "type": "string",
+                    "description": (
+                        "One-line focus for this week. Defaults to the athlete's macro plan's own "
+                        "MacroWeek row's `focus` for this week, if one exists."
+                    ),
+                },
+                "meso_block": {
+                    "type": "string",
+                    "description": (
+                        "Block/phase label for this week. Defaults to the macro's MacroWeek row's "
+                        "own `phase` for this week if one exists, else 'authored'."
+                    ),
+                },
+                "draft_id": {
+                    "type": "string",
+                    "description": (
+                        "The `draft_id` returned by the draft call (confirm omitted) that the "
+                        "athlete agreed to. With `confirm: true` this writes EXACTLY that draft -- "
+                        "nothing is recomputed. Always pass it. An unknown draft_id writes nothing."
+                    ),
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "description": (
+                        "Default false: validate the sessions, run check_week, and hold a draft -- "
+                        "never persisting. Set true ONLY after the athlete has explicitly agreed to "
+                        "the draft shown in a prior turn."
+                    ),
+                },
+                "athlete_confirmations": {
+                    "type": "array",
+                    "description": (
+                        "Required WITH confirm:true whenever the draft call's report included a "
+                        "requires-athlete-confirmation finding (id starting 'confirm-' -- CLAUDE.md's "
+                        "safety rail: +8%/week volume, +15% long-swim step). One entry per such "
+                        "finding id, carrying the athlete's OWN WORDS explicitly agreeing to it -- "
+                        "omitting a required entry refuses the confirm and writes nothing."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "finding_id": {
+                                "type": "string",
+                                "description": "A 'confirm-*' finding id from the draft call's report.",
+                            },
+                            "athlete_words": {
+                                "type": "string",
+                                "description": (
+                                    "The athlete's own words agreeing to this specific increase -- "
+                                    "not the coach's paraphrase."
+                                ),
+                            },
+                        },
+                        "required": ["finding_id", "athlete_words"],
+                        "additionalProperties": False,
+                    },
+                },
             },
-            "required": ["iso_week"],
+            "required": ["iso_week", "sessions"],
             "additionalProperties": False,
         },
     },
@@ -2118,155 +2196,6 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
             },
             "required": ["iso_week", "current_date", "sport", "new_date"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "replace_week_plan",
-        "description": (
-            "Replace one week's plan by recomputing swim_coach.plan.generate_week "
-            "-- the same engine function create_week_plan uses. Unlike "
-            "create_week_plan, this tool NEVER refuses because a week already "
-            "exists for iso_week -- that's exactly its purpose: use it for the "
-            "structural dead end where create_week_plan refuses ('use "
-            "propose_adaptation instead') AND propose_adaptation also refuses "
-            "(no valid prior week to adapt from) -- e.g. the athlete's "
-            "has_pool_coach status just changed and the existing week still "
-            "has stale placeholder sessions, or the week was built under a "
-            "stale/since-replaced macro. This can invalidate an "
-            "already-trained-against week, so -- like replace_macro_plan -- it "
-            "is draft-then-confirm, NOT direct-persist: `confirm` defaults to "
-            "false, which only computes and returns the candidate replacement "
-            "(plus a comparison against whatever week is currently on file for "
-            "iso_week, if any: old vs. new target_volume_m, old vs. new "
-            "session count) as JSON with `\"persisted\": false` -- it does NOT "
-            "call save_week. IMPORTANT: this ALWAYS regenerates the whole week "
-            "from scratch, even when session_overrides only targets one "
-            "session -- an already-persisted session with no counterpart in "
-            "the fresh regeneration (a manually add-ed session, an earlier "
-            "hand-authored content edit, a race day the deterministic engine "
-            "wouldn't otherwise place) silently vanishes unless you re-add it "
-            "via session_overrides too. Check the response's `dropped_sessions` "
-            "(also folded into `planning_warnings`) before ever confirming -- "
-            "if it names something the athlete still wants, add it back via "
-            "session_overrides' add mode in the SAME call before confirming, "
-            "don't confirm and fix it after. Show this draft to the athlete and get their "
-            "explicit agreement before calling this tool again with "
-            "`confirm: true` -- only then does it persist (store.save_week), "
-            "overwriting whatever week plan is currently on file for iso_week. "
-            "Never pass confirm=true on the first call for a given request, "
-            "and never chain another tool call in the same response after the "
-            "draft -- stop and wait for the athlete's explicit agreement in a "
-            "new message, same discipline as replace_macro_plan.\n\n"
-            "`session_overrides` (optional): use this to set one or more "
-            "sessions' distance_m/duration_min/purpose/structure directly, "
-            "applied on top of the otherwise-normal generated week, still "
-            "fully gated by the same draft-then-confirm flow -- never call "
-            "with confirm=true and a fresh override in the same turn the "
-            "athlete hasn't seen yet. Three distinct real uses:\n"
-            "  - distance_m/duration_min: the automatic ramp/volume math "
-            "won't always land on the exact number an athlete explicitly "
-            "wants -- e.g. a conservative first swim back after time off, "
-            "where the computed distance is technically ramp-safe but still "
-            "more than the athlete wants right now.\n"
-            "  - purpose/structure/structured: when the athlete wants a "
-            "specific session's actual CONTENT changed (a technique/drill "
-            "focus, a specific interval structure, a strength session with "
-            "exercises the canned library list doesn't cover) and no "
-            "`template_preference` value matches anything in the library "
-            "for that macro block -- write the session's real content "
-            "yourself (same as you'd describe verbally) rather than only "
-            "describing the workout in your chat reply with nowhere for it "
-            "to actually live. This is exactly how to unblock a request "
-            "like 'give me a technique session Thursday' when the template "
-            "library has no technique-purpose entry for that block yet, or "
-            "'give me a kettlebell/goblet-squat strength day' when those "
-            "exercises aren't in the canned strength list -- don't just "
-            "explain the gap and stop, author the content and persist it "
-            "here. Two ways to author it, and prefer supplying BOTH "
-            "together whenever the workout has real step/rep/exercise "
-            "structure (they describe the same session, one for each "
-            "audience -- there is nothing to reconcile between them, "
-            "neither is derived from the other):\n"
-            "    - `structured`: the machine-readable WorkoutStructure IR "
-            "-- an ordered list of steps and/or repeat blocks. This is "
-            "what renders as the step-by-step tree in the athlete's app "
-            "Plan tab and what exports to a Garmin watch as a real "
-            "lap-advancing workout (warm-up/interval/rest/cool-down laps, "
-            "or strength sets/reps). It is NOT limited to whatever "
-            "exercises `engine/swim_coach/plan.py`'s canned strength list "
-            "happens to contain -- author any exercise/step directly here, "
-            "same as you would in prose. Prefer this whenever the session "
-            "has real structure to describe, which is most of the time.\n"
-            "    - `structure`: athlete-facing prose -- author real "
-            "content here (warm-up/main set/cool-down or whatever shape "
-            "fits) exactly as you'd describe it in chat. Supply this "
-            "alongside `structured` as the human-readable narration of the "
-            "same session whenever you're setting `structured` anyway -- "
-            "it costs nothing and reads better in the app than a bare step "
-            "list.\n"
-            "  Setting `structure` WITHOUT also setting `structured` in "
-            "the same entry clears that session's existing `structured` "
-            "field (if any) -- this is a deliberate choice, not a side "
-            "effect, meaning 'this session is genuinely prose-only, there "
-            "is no real step structure to capture'; the cost is that the "
-            "athlete's Plan tab tree view and any Garmin export will have "
-            "nothing to render/export for this session until it's later "
-            "given real `structured` content. Setting BOTH `structure` and "
-            "`structured` together in the same entry persists both -- "
-            "neither clears the other.\n"
-            "  - `ow_template`: the same real-content-authoring need as "
-            "purpose/structure/structured above, but for a session that "
-            "matches one of the named open-water session-content templates "
-            "in `engine/swim_coach/ow_session_templates.py` (feed-window "
-            "practice, negative-split pacing, chop/wind adaptation, "
-            "sighting, breathing-pattern variation, back-to-back "
-            "multi-day-stage fatigue simulation, taper activation, race "
-            "dress rehearsal) -- prefer this over hand-authoring `structure`/"
-            "`structured` whenever a named template already matches what's "
-            "wanted; see this field's own schema description for the full "
-            "id list and each template's scaling behavior.\n\n"
-            "`template_preference` (optional): honors a request like 'give "
-            "me more kettlebell work this week' or 'I want a threshold set' "
-            "by narrowing which main-set workout-library template the "
-            "recomputed week's pool-independent swim sessions use, instead "
-            "of always landing on whatever the normal deterministic "
-            "rotation picks. Fails with a clear error (rather than silently "
-            "falling back to the default rotation) if the preference "
-            "matches zero library templates for some session's macro block."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "iso_week": {
-                    "type": "string",
-                    "description": "ISO week to replace, formatted 'YYYY-Wnn', e.g. '2026-W30'.",
-                },
-                "draft_id": {
-                    "type": "string",
-                    "description": (
-                        "The `draft_id` returned by the draft call (confirm omitted) that the "
-                        "athlete agreed to. With `confirm: true` this writes EXACTLY that draft -- "
-                        "the generator is NOT run again and any session_overrides/"
-                        "template_preference sent with the confirm are ignored (and flagged). Always "
-                        "pass it. An unknown draft_id writes nothing."
-                    ),
-                },
-                "confirm": {
-                    "type": "boolean",
-                    "description": (
-                        "Default false: compute and return the candidate "
-                        "replacement week as a draft only, never persisting. "
-                        "Set true ONLY after the athlete has explicitly agreed "
-                        "to the draft shown in a prior turn -- this then "
-                        "persists via store.save_week, overwriting whatever "
-                        "week plan is currently on file for iso_week."
-                    ),
-                },
-                "session_overrides": SESSION_OVERRIDES_SCHEMA,
-                "template_preference": TEMPLATE_PREFERENCE_SCHEMA,
-            },
-            "required": ["iso_week"],
             "additionalProperties": False,
         },
     },
@@ -2428,59 +2357,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                         "instead propose a fresh generate_week regeneration "
                         "of the whole week."
                     ),
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "date": {
-                                "type": "string",
-                                "description": "Proposed session's date, 'YYYY-MM-DD'.",
-                            },
-                            "sport": {
-                                "type": "string",
-                                "description": "Proposed session's sport (e.g. 'swim_pool', 'bike', 'strength', 'recovery').",
-                            },
-                            "duration_min": {
-                                "type": "number",
-                                "description": "Proposed session's duration, in minutes.",
-                            },
-                            "purpose": {
-                                "type": "string",
-                                "description": "Athlete-facing purpose/description for the proposed session.",
-                            },
-                            "distance_m": {
-                                "type": "number",
-                                "description": "Optional distance for the proposed session, in meters.",
-                            },
-                            "intensity": {
-                                "type": "object",
-                                "description": (
-                                    "Intensity dict, e.g. {\"zone\": \"Z2\"} or "
-                                    "{\"anchor\": \"rpe\"}. Defaults to {\"zone\": "
-                                    "\"Z2\"} for bike, {\"anchor\": \"rpe\"} otherwise."
-                                ),
-                            },
-                            "structure": {
-                                "type": "string",
-                                "description": (
-                                    "Athlete-facing prose for the proposed session's "
-                                    "real content. Prefer supplying `structured` "
-                                    "alongside this whenever there's real step "
-                                    "structure."
-                                ),
-                            },
-                            "structured": {
-                                "type": "object",
-                                "description": (
-                                    "Machine-readable WorkoutStructure IR for the "
-                                    "proposed session -- same shape as "
-                                    "replace_week_plan/patch_week_plan's "
-                                    "session_overrides `structured` field."
-                                ),
-                            },
-                        },
-                        "required": ["date", "sport", "duration_min", "purpose"],
-                        "additionalProperties": False,
-                    },
+                    "items": SESSION_ENTRY_SCHEMA,
                 },
                 "template_preference": TEMPLATE_PREFERENCE_SCHEMA,
                 "accept_from_proposed": {
@@ -2981,19 +2858,18 @@ def _handle_propose_adaptation(input_data: dict[str, Any], *, store: StoreInterf
     except ValueError as exc:
         return {"error": str(exc)}
 
-    draft_id = _hold_draft(store, slug, draft, tool="propose_adaptation")
+    # ADVISORY ONLY (engine/plan-check-red-team PR 2): this used to hold a
+    # directly-confirmable draft, written via `replace_week_plan` -- now
+    # retired from TOOLS_SCHEMA (the coach authors weeks directly via
+    # `author_week_plan`). No draft is held here any more; there is nothing
+    # for a later confirm to write, since `author_week_plan` is where the
+    # real sessions get authored and red-teamed (via `check_week`), not a
+    # verbatim re-play of this rule-table draft.
     return {
-        **(
-            {
-                "draft_id": draft_id,
-                "next": (
-                    "Nothing is written. When the athlete (or Andrew) agrees, write EXACTLY this adaptation "
-                    "by calling replace_week_plan with `confirm: true` and this draft_id -- do NOT regenerate "
-                    "the week, which would discard the adaptation."
-                ),
-            }
-            if draft_id
-            else {}
+        "next": (
+            "This is advisory only -- nothing is held or writable directly. Use these numbers "
+            "(target_volume_m, focus, rationale) to inform author_week_plan, which actually authors "
+            "and red-teams (check_week) the real sessions for this week."
         ),
         "iso_week": draft.iso_week,
         "draft": draft.draft,
@@ -8537,6 +8413,603 @@ def _handle_render_plan_table(
     }
 
 
+# ============================================================================
+# author_macro_plan / author_week_plan / check_plan
+# (engine/plan-check-red-team PR 2: "the coach authors plans; the engine
+# red-teams them" -- see ~/.claude/plans/just-exploring-a-design-cheeky-
+# pretzel.md's PR 2 section. Deterministic engine plan_check.check_macro/
+# check_week ONLY ever return advisory findings -- neither tool below
+# rejects or clamps anything the coach wrote; the sole hard stop is
+# author_week_plan's confirm-time athlete_confirmations gate, CLAUDE.md's
+# safety rail.)
+# ============================================================================
+
+_MAX_MACRO_REDRAFTS_PER_REQUEST = 2
+# Runaway guard (approved plan's "Token economics" section): a request that
+# keeps calling author_macro_plan's draft path (never confirming) is capped
+# at two re-drafts -- the third is refused with an instruction to present
+# what's already been drafted instead of iterating again. Counted via
+# `redraft_counts`, a dict built fresh per request in `build_tool_handlers`
+# below (never persisted, never shared across requests).
+
+
+def _macro_week_from_dict(entry: dict[str, Any]) -> tuple[MacroWeek | None, str | None]:
+    try:
+        return MacroWeek.model_validate(entry), None
+    except ValidationError as exc:
+        return None, str(exc)
+
+
+def _macro_weeks_json(weeks: list[MacroWeek]) -> list[dict[str, Any]]:
+    return [
+        {
+            "week_start": w.week_start.isoformat(),
+            "phase": w.phase,
+            "focus": w.focus,
+            "hours": w.hours,
+            "load_tss": w.load_tss,
+            "ctl_target": w.ctl_target,
+            "key_sessions": list(w.key_sessions),
+            "recovery": w.recovery,
+            "notes": w.notes,
+        }
+        for w in sorted(weeks, key=lambda w: w.week_start)
+    ]
+
+
+def _hold_author_macro_draft(
+    store: StoreInterface, slug: str, athlete: Athlete, macro: MacroPlan, report, *, tool: str
+) -> str | None:
+    """Same carrier convention `_hold_macro_draft` above already uses (a
+    `MacroPlan` riding inside a sentinel-`iso_week` `WeekPlan`'s
+    `adaptation_rationale` JSON) -- but with the `check_macro` report riding
+    alongside it, so `confirm` can require an accept/decline decision for
+    EXACTLY the findings the athlete was shown, without recomputing the
+    report (current_ctl/recent_weekly_hours/today can genuinely drift
+    between the draft and confirm calls; the athlete decides against what
+    they actually saw, not a possibly-different recomputation)."""
+    carrier = WeekPlan(
+        id=uuid.uuid4(),
+        athlete_id=athlete.id,
+        iso_week=_MACRO_CARRIER_WEEK,
+        meso_block="macro-draft",
+        focus="held macro draft",
+        target_volume_m=0,
+        sessions=[],
+        adaptation_rationale=json.dumps(
+            {"macro": macro.model_dump(mode="json"), "report": report.to_dict()}
+        ),
+        draft=True,
+    )
+    return _hold_draft(store, slug, carrier, tool=tool)
+
+
+def _handle_author_macro_plan(
+    input_data: dict[str, Any],
+    *,
+    store: StoreInterface,
+    slug: str,
+    redraft_counts: dict[str, int],
+) -> dict[str, Any]:
+    if bool(input_data.get("confirm", False)):
+        agreed = _confirm_author_macro_plan(store, slug, input_data, tool="author_macro_plan")
+        if agreed is not None:
+            return agreed
+
+    event_names = input_data.get("event_names")
+    if not event_names or not isinstance(event_names, list):
+        return {"error": "event_names is required and must be a non-empty array of existing event names"}
+    weeks_input = input_data.get("weeks")
+    if not weeks_input or not isinstance(weeks_input, list):
+        return {"error": "weeks is required and must be a non-empty array of MacroWeek rows"}
+    architecture = input_data.get("architecture")
+    if not architecture or not isinstance(architecture, str):
+        return {"error": "architecture is required -- a short written rationale for this plan's shape"}
+
+    redraft_count = redraft_counts.get("author_macro_plan", 0)
+    if redraft_count >= _MAX_MACRO_REDRAFTS_PER_REQUEST:
+        return {
+            "error": (
+                "author_macro_plan has already been (re-)drafted twice this request without a "
+                "confirm. Stop iterating on the plan yourself -- present the current draft and every "
+                "finding to the athlete, get accept/decline on each, then confirm."
+            )
+        }
+    redraft_counts["author_macro_plan"] = redraft_count + 1
+
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        log.error("storage read failed", what='athlete profile', exc_info=True)
+        return storage_error("athlete profile", exc)
+
+    try:
+        events = store.load_events(slug)
+    except Exception as exc:  # noqa: BLE001
+        log.error("storage read failed", what='events', exc_info=True)
+        return storage_error("events", exc)
+
+    resolved_events: list[Event] = []
+    for name in event_names:
+        event = next((e for e in events if e.name == name), None)
+        if event is None:
+            known_names = [e.name for e in events]
+            return {"error": f"no event named {name!r} for this athlete; known event names: {known_names}"}
+        resolved_events.append(event)
+    resolved_events.sort(key=lambda e: e.event_date)
+    event_ids = [e.id for e in resolved_events]
+    event_id = event_ids[-1]
+
+    weeks: list[MacroWeek] = []
+    for i, entry in enumerate(weeks_input):
+        if not isinstance(entry, dict):
+            return {"error": f"weeks[{i}] must be an object"}
+        week, error = _macro_week_from_dict(entry)
+        if error is not None:
+            return {"error": f"weeks[{i}]: invalid MacroWeek -- {error}"}
+        weeks.append(week)
+    weeks.sort(key=lambda w: w.week_start)
+
+    blocks = derive_blocks_from_macro_weeks(weeks)
+    macro = MacroPlan(
+        id=uuid.uuid4(),
+        athlete_id=athlete.id,
+        event_id=event_id,
+        blocks=blocks,
+        event_ids=event_ids,
+        weeks=weeks,
+        architecture=architecture,
+        red_team=None,
+    )
+
+    try:
+        workouts = store.list_workouts(slug)
+        wellness = store.list_wellness(slug)
+    except Exception as exc:  # noqa: BLE001
+        log.error("storage read failed", what='workout/wellness history', exc_info=True)
+        return storage_error("workout/wellness history", exc)
+
+    today = athlete_today(athlete)
+    loads = daily_loads(workouts, athlete=athlete, wellness=wellness)
+    series = ctl_atl_tsb_series(loads)
+    current_ctl = series[-1][1] if series else 0.0
+    current_atl = series[-1][2] if series else None
+    hours_history = recent_weekly_hours(workouts, today)
+
+    report = check_macro(
+        macro,
+        athlete,
+        current_ctl=current_ctl,
+        current_atl=current_atl,
+        recent_weekly_hours=hours_history,
+        events=events,
+        today=today,
+    )
+
+    draft_id = _hold_author_macro_draft(store, slug, athlete, macro, report, tool="author_macro_plan")
+    log.info(
+        "macro plan authored (draft)",
+        athlete=slug,
+        macro_id=str(macro.id),
+        verdict=report.verdict,
+        n_findings=len(report.findings),
+    )
+    return {
+        "event_names": [e.name for e in resolved_events],
+        "weeks": _macro_weeks_json(weeks),
+        "architecture": architecture,
+        "report": report.to_dict(),
+        "persisted": False,
+        **(
+            {
+                "draft_id": draft_id,
+                "next": (
+                    "Nothing is written yet. Show the athlete the architecture, the week table, and "
+                    "EVERY finding in `report.findings`. Once they've accepted or declined each one, call "
+                    "author_macro_plan again with `confirm: true`, this draft_id, and `decisions` covering "
+                    "every finding id -- a missing decision refuses the confirm."
+                ),
+            }
+            if draft_id
+            else {}
+        ),
+    }
+
+
+def _confirm_author_macro_plan(
+    store: StoreInterface, slug: str, input_data: dict[str, Any], *, tool: str
+) -> dict[str, Any] | None:
+    draft_id = input_data.get("draft_id")
+    carrier, stop = _load_draft_safely(store, slug, _MACRO_CARRIER_WEEK, draft_id, tool=tool)
+    if stop is not None:
+        return stop
+    if carrier is None:
+        if draft_id:
+            return {
+                "persisted": False,
+                "error": (
+                    f"macro draft {draft_id!r} was not found. Nothing was written. Call {tool} without "
+                    "`confirm` to make a new draft, show it to the athlete, then confirm with that draft_id."
+                ),
+            }
+        return None
+    if not draft_id and (carrier.drafted_by not in (None, tool) or _draft_is_stale(carrier)):
+        return None
+
+    envelope = json.loads(carrier.adaptation_rationale or "{}")
+    if "macro" not in envelope:
+        return None  # a different macro-drafting tool's carrier (e.g. replace_macro_plan) -- not ours
+    macro = MacroPlan.model_validate(envelope["macro"])
+    findings = envelope.get("report", {}).get("findings", [])
+    findings_by_id = {f["id"]: f for f in findings}
+
+    decisions_input = input_data.get("decisions")
+    if not isinstance(decisions_input, list):
+        decisions_input = []
+    decisions_by_id: dict[str, dict[str, Any]] = {
+        d["id"]: d for d in decisions_input if isinstance(d, dict) and d.get("id")
+    }
+
+    missing = sorted(set(findings_by_id) - set(decisions_by_id))
+    if missing:
+        return {
+            "persisted": False,
+            "error": (
+                f"confirm requires an accept/decline decision (with a reason) for every finding -- "
+                f"missing: {missing}. Nothing was written."
+            ),
+        }
+    for fid in findings_by_id:
+        d = decisions_by_id[fid]
+        if d.get("decision") not in ("accept", "decline"):
+            return {
+                "persisted": False,
+                "error": f"decisions for {fid!r}: `decision` must be 'accept' or 'decline'. Nothing was written.",
+            }
+        if not d.get("reason"):
+            return {
+                "persisted": False,
+                "error": f"decisions for {fid!r} needs a `reason`. Nothing was written.",
+            }
+
+    red_team = [
+        MacroRedTeamRecord(
+            id=f["id"],
+            severity=f["severity"],
+            evidence=f["evidence"],
+            consequence=f["consequence"],
+            fix=f["fix"],
+            decision=decisions_by_id[f["id"]]["decision"],
+            decision_reason=decisions_by_id[f["id"]]["reason"],
+        )
+        for f in findings_by_id.values()
+    ]
+    macro = macro.model_copy(update={"red_team": red_team})
+
+    warnings: list[str] = []
+    try:
+        current = store.load_macro(slug)
+    except Exception:  # noqa: BLE001
+        log.warn("swallowed exception, using a default", where='backend/app/tools.py', exc_info=True)
+        current = None
+    if current is not None and current.id != macro.id:
+        warnings.append(
+            f"This replaces the macro plan currently on file (id {current.id}). Written exactly as agreed."
+        )
+
+    store.save_macro(slug, macro)
+    reloaded = store.load_macro(slug)
+    verified = reloaded is not None and reloaded.id == macro.id
+    log.info(
+        "macro plan written from agreed draft", athlete=slug, tool=tool, macro_id=str(macro.id), verified=verified
+    )
+    return {
+        "weeks": _macro_weeks_json(macro.weeks),
+        "architecture": macro.architecture,
+        "red_team": [r.model_dump(mode="json") for r in red_team],
+        "persisted": True,
+        "written_from_draft": True,
+        "draft_id": str(carrier.id),
+        "verified": verified,
+        "warnings": warnings,
+    }
+
+
+def _resolve_macro_week_for_iso(store: StoreInterface, slug: str, week_start: date) -> MacroWeek | None:
+    try:
+        macro = store.load_macro(slug)
+    except Exception:  # noqa: BLE001
+        log.warn("swallowed exception, using a default", where='backend/app/tools.py', exc_info=True)
+        return None
+    if macro is None:
+        return None
+    return next((w for w in macro.weeks if w.week_start == week_start), None)
+
+
+def _handle_author_week_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    iso_week = input_data.get("iso_week")
+    if not iso_week:
+        return {"error": "iso_week is required"}
+    try:
+        year_str, week_str = iso_week.split("-W")
+        week_start = date.fromisocalendar(int(year_str), int(week_str), 1)
+    except (ValueError, IndexError):
+        return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+
+    if bool(input_data.get("confirm", False)):
+        agreed = _confirm_author_week_plan(store, slug, iso_week, input_data, tool="author_week_plan")
+        if agreed is not None:
+            return agreed
+
+    sessions_input = input_data.get("sessions")
+    if not sessions_input or not isinstance(sessions_input, list):
+        return {
+            "error": (
+                "sessions is required and must be a non-empty array -- the FULL session list for this "
+                "week, not just a change (use patch_week_plan to change one or a few already-planned "
+                "sessions in place)."
+            )
+        }
+
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        log.error("storage read failed", what='athlete profile', exc_info=True)
+        return storage_error("athlete profile", exc)
+
+    sessions: list[Session] = []
+    for i, entry in enumerate(sessions_input):
+        if not isinstance(entry, dict):
+            return {"error": f"sessions[{i}] must be an object"}
+        session, error = _session_from_add_fields(entry, athlete=athlete)
+        if error is not None:
+            return {"error": f"sessions[{i}]: {error}"}
+        sessions.append(session)
+
+    macro_week = _resolve_macro_week_for_iso(store, slug, week_start)
+    focus = input_data.get("focus") or (macro_week.focus if macro_week is not None else "")
+    meso_block = input_data.get("meso_block") or (macro_week.phase if macro_week is not None else "authored")
+    target_volume_m = int(sum(s.distance_m or 0 for s in sessions if s.sport in ("swim_pool", "swim_ow")))
+
+    candidate = WeekPlan(
+        id=uuid.uuid4(),
+        athlete_id=athlete.id,
+        iso_week=iso_week,
+        meso_block=meso_block,
+        focus=focus,
+        target_volume_m=target_volume_m,
+        sessions=sessions,
+    )
+
+    try:
+        current = store.load_week(slug, iso_week)
+    except Exception as exc:  # noqa: BLE001
+        log.error("storage read failed", what='existing week plan', exc_info=True)
+        return storage_error("existing week plan", exc)
+
+    prev_iso = iso_week_str(week_start - timedelta(days=7))
+    try:
+        prev_week = store.load_week(slug, prev_iso)
+    except Exception:  # noqa: BLE001
+        log.warn("swallowed exception, using a default", where='backend/app/tools.py', exc_info=True)
+        prev_week = None
+    recent_weeks = [prev_week] if prev_week is not None else []
+
+    report = check_week(candidate, macro_week, athlete, recent_weeks=recent_weeks)
+
+    dropped = _dropped_sessions(current, candidate)
+    warnings = list(candidate.planning_warnings)
+    if dropped:
+        summary = ", ".join(f"{d['date']} {d['sport']}" for d in dropped)
+        warnings.append(
+            f"{len(dropped)} session(s) currently on file for {iso_week} are NOT in this authored week "
+            f"and are DROPPED by writing it: {summary}."
+        )
+    candidate.planning_warnings = warnings
+
+    carrier = candidate.model_copy(
+        update={"adaptation_rationale": json.dumps({"report": report.to_dict()})}
+    )
+    draft_id = _hold_draft(store, slug, carrier, tool="author_week_plan")
+
+    log.info(
+        "week plan authored (draft)",
+        athlete=slug,
+        iso_week=iso_week,
+        verdict=report.verdict,
+        n_findings=len(report.findings),
+    )
+    response: dict[str, Any] = {
+        "iso_week": iso_week,
+        "meso_block": meso_block,
+        "focus": focus,
+        "target_volume_m": target_volume_m,
+        "sessions": _week_sessions_json(candidate),
+        "planning_warnings": list(candidate.planning_warnings),
+        "report": report.to_dict(),
+        "dropped_sessions": dropped,
+        "persisted": False,
+    }
+    if draft_id:
+        needs_confirmation = [f["id"] for f in report.to_dict()["findings"] if f["id"].startswith("confirm-")]
+        response["draft_id"] = draft_id
+        response["next"] = (
+            "Nothing is written yet. Show the athlete this week and every finding. "
+            + (
+                f"{needs_confirmation} require the athlete's OWN WORDS explicitly confirming them "
+                "(CLAUDE.md's safety rail) -- pass each as `athlete_confirmations` on the confirm call, "
+                "or the confirm is refused. "
+                if needs_confirmation
+                else ""
+            )
+            + "When they agree, call author_week_plan again with `confirm: true` and this draft_id."
+        )
+    return response
+
+
+def _confirm_author_week_plan(
+    store: StoreInterface, slug: str, iso_week: str, input_data: dict[str, Any], *, tool: str
+) -> dict[str, Any] | None:
+    draft_id = input_data.get("draft_id")
+    draft, stop = _load_draft_safely(store, slug, iso_week, draft_id, tool=tool)
+    if stop is not None:
+        return stop
+    if draft is not None and not draft_id and draft.drafted_by not in (None, tool):
+        return None
+    if draft is not None and not draft_id and _draft_is_stale(draft):
+        return None
+    if draft is None:
+        if draft_id:
+            return {
+                "persisted": False,
+                "error": (
+                    f"draft {draft_id!r} for {iso_week} was not found. Nothing was written. Call {tool} "
+                    "without `confirm` to make a new draft, show it to the athlete, then confirm with "
+                    "that draft_id."
+                ),
+            }
+        return None
+
+    envelope = json.loads(draft.adaptation_rationale or "{}")
+    findings = envelope.get("report", {}).get("findings", [])
+    confirm_finding_ids = {f["id"] for f in findings if str(f["id"]).startswith("confirm-")}
+
+    confirmations_input = input_data.get("athlete_confirmations")
+    if not isinstance(confirmations_input, list):
+        confirmations_input = []
+    confirmed_ids = {
+        c["finding_id"]
+        for c in confirmations_input
+        if isinstance(c, dict) and c.get("finding_id") and str(c.get("athlete_words", "")).strip()
+    }
+    missing = sorted(confirm_finding_ids - confirmed_ids)
+    if missing:
+        return {
+            "persisted": False,
+            "error": (
+                f"CLAUDE.md's safety rail: {missing} need the athlete's own words explicitly confirming "
+                "them (via `athlete_confirmations`) before this can be written. Nothing was written."
+            ),
+        }
+
+    try:
+        live_before = store.load_week(slug, iso_week)
+    except Exception:  # noqa: BLE001
+        log.warn("swallowed exception, using a default", where='backend/app/tools.py', exc_info=True)
+        live_before = None
+
+    agreed = draft.model_copy(
+        update={"draft": False, "drafted_at": None, "drafted_by": None, "adaptation_rationale": None},
+        deep=True,
+    )
+    warnings = [w for w in agreed.planning_warnings if "DROPPED" not in w]
+    dropped = _dropped_sessions(live_before, agreed)
+    if dropped:
+        summary = ", ".join(f"{d['date']} {d['sport']}" for d in dropped)
+        warnings.append(
+            f"{len(dropped)} session(s) in the week currently on file are NOT in the agreed draft and "
+            f"are DROPPED by writing it: {summary}. Written anyway, exactly as agreed -- tell the athlete."
+        )
+    agreed.planning_warnings = warnings
+
+    store.save_week(slug, agreed)
+    saved = store.load_week(slug, iso_week)
+    verified = saved is not None and {s.id for s in saved.sessions} == {s.id for s in agreed.sessions}
+    log.info(
+        "week plan written from agreed author draft",
+        athlete=slug,
+        iso_week=iso_week,
+        tool=tool,
+        verified=verified,
+        dropped_sessions=len(dropped),
+    )
+    return {
+        "iso_week": agreed.iso_week,
+        "meso_block": agreed.meso_block,
+        "focus": agreed.focus,
+        "target_volume_m": agreed.target_volume_m,
+        "planning_warnings": list(agreed.planning_warnings),
+        "sessions": _week_sessions_json(agreed),
+        "dropped_sessions": dropped,
+        "persisted": True,
+        "written_from_draft": True,
+        "draft_id": str(draft.id),
+        "verified": verified,
+    }
+
+
+def _handle_check_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        log.error("storage read failed", what='athlete profile', exc_info=True)
+        return storage_error("athlete profile", exc)
+    try:
+        macro = store.load_macro(slug)
+    except Exception as exc:  # noqa: BLE001
+        log.error("storage read failed", what='macro plan', exc_info=True)
+        return storage_error("macro plan", exc)
+    if macro is None:
+        return {"error": "no macro plan for this athlete; author one with author_macro_plan first"}
+    try:
+        events = store.load_events(slug)
+    except Exception as exc:  # noqa: BLE001
+        log.error("storage read failed", what='events', exc_info=True)
+        return storage_error("events", exc)
+
+    try:
+        workouts = store.list_workouts(slug)
+        wellness = store.list_wellness(slug)
+    except Exception as exc:  # noqa: BLE001
+        log.error("storage read failed", what='workout/wellness history', exc_info=True)
+        return storage_error("workout/wellness history", exc)
+
+    today = athlete_today(athlete)
+    loads = daily_loads(workouts, athlete=athlete, wellness=wellness)
+    series = ctl_atl_tsb_series(loads)
+    current_ctl = series[-1][1] if series else 0.0
+    current_atl = series[-1][2] if series else None
+    hours_history = recent_weekly_hours(workouts, today)
+
+    macro_report = check_macro(
+        macro,
+        athlete,
+        current_ctl=current_ctl,
+        current_atl=current_atl,
+        recent_weekly_hours=hours_history,
+        events=events,
+        today=today,
+    )
+    response: dict[str, Any] = {"macro": macro_report.to_dict()}
+
+    iso_week = input_data.get("iso_week")
+    if iso_week:
+        try:
+            year_str, week_str = iso_week.split("-W")
+            week_start = date.fromisocalendar(int(year_str), int(week_str), 1)
+        except (ValueError, IndexError):
+            return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+        try:
+            week = store.load_week(slug, iso_week)
+        except Exception as exc:  # noqa: BLE001
+            log.error("storage read failed", what='week plan', exc_info=True)
+            return storage_error("week plan", exc)
+        if week is None:
+            response["week_error"] = f"no persisted week plan for {iso_week!r}"
+        else:
+            macro_week = next((w for w in macro.weeks if w.week_start == week_start), None)
+            prev_iso = iso_week_str(week_start - timedelta(days=7))
+            try:
+                prev_week = store.load_week(slug, prev_iso)
+            except Exception:  # noqa: BLE001
+                log.warn("swallowed exception, using a default", where='backend/app/tools.py', exc_info=True)
+                prev_week = None
+            recent_weeks = [prev_week] if prev_week is not None else []
+            week_report = check_week(week, macro_week, athlete, recent_weeks=recent_weeks)
+            response["week"] = {"iso_week": iso_week, **week_report.to_dict()}
+    return response
+
+
 def build_tool_handlers(
     store: StoreInterface,
     *,
@@ -8559,8 +9032,24 @@ def build_tool_handlers(
     line back to the request's "library route"/"claude turn complete" logs,
     and `routed_files` is what `flag_for_coach_review`'s own miss line names
     as "what was actually routed/attached for this request"."""
+    # Runaway guard state for `author_macro_plan` (approved plan's "Token
+    # economics" section): a fresh, empty dict per call to this function --
+    # `build_tool_handlers` itself is called once per chat request (see
+    # routes/chat.py, routes/feedback.py), so this counter never survives
+    # past the request it was built for and is never shared across athletes/
+    # requests. Closed over by the lambda below.
+    redraft_counts: dict[str, int] = {}
     handlers: dict[str, ToolHandler] = {
         "propose_adaptation": lambda input_data: _handle_propose_adaptation(
+            input_data, store=store, slug=slug
+        ),
+        "author_macro_plan": lambda input_data: _handle_author_macro_plan(
+            input_data, store=store, slug=slug, redraft_counts=redraft_counts
+        ),
+        "author_week_plan": lambda input_data: _handle_author_week_plan(
+            input_data, store=store, slug=slug
+        ),
+        "check_plan": lambda input_data: _handle_check_plan(
             input_data, store=store, slug=slug
         ),
         "get_plan_summary": lambda input_data: _handle_get_plan_summary(

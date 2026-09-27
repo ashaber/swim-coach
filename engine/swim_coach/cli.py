@@ -33,6 +33,7 @@ from swim_coach.load import (
     ctl_atl_tsb_series,
     daily_loads,
     monotony,
+    recent_weekly_hours as _recent_weekly_hours,
     weekly_volume_m,
     wellness_trend,
 )
@@ -576,24 +577,6 @@ def _cmd_adapt(args: argparse.Namespace, store: StoreInterface) -> int:
         )
     )
     return 0
-
-
-def _recent_weekly_hours(workouts: list[Workout], as_of: date, *, weeks: int = 12) -> list[float]:
-    """Total logged hours per calendar week over the trailing `weeks`
-    weeks (Monday-start, ending at the Monday-start week containing
-    `as_of`) -- `check_macro`'s own `recent_weekly_hours` input (the "max
-    sustained recent hours" check, `plan_check.py`). Every sport counts
-    (unlike `load.weekly_volume_m`, which is swim-distance-only) -- hours
-    spent training is sport-agnostic, matching `load.daily_loads`'s own
-    "every sport counts" convention for total training stress."""
-    as_of_monday = as_of - timedelta(days=as_of.weekday())
-    week_starts = [as_of_monday - timedelta(weeks=i) for i in range(weeks - 1, -1, -1)]
-    totals = {ws: 0.0 for ws in week_starts}
-    for workout in workouts:
-        ws = workout.date - timedelta(days=workout.date.weekday())
-        if ws in totals:
-            totals[ws] += workout.duration_min / 60.0
-    return [totals[ws] for ws in week_starts]
 
 
 def _cmd_check_macro(args: argparse.Namespace, store: StoreInterface) -> int:

@@ -1,7 +1,9 @@
 """Every draft-then-confirm tool writes the AGREED draft on confirm -- never a
 recomputation (Andrew, 2026-09-21). Week tools: merge_week_plan,
-propose_session_adjustment, propose_adaptation (written via replace_week_plan).
-Macro tool: replace_macro_plan."""
+propose_session_adjustment, author_week_plan (engine/plan-check-red-team PR
+2 -- propose_adaptation itself is advisory-only now, no longer a writable
+draft; see test_tools.py's author_week_plan coverage). Macro tools:
+replace_macro_plan, author_macro_plan."""
 
 from __future__ import annotations
 
@@ -120,20 +122,18 @@ def test_merge_never_picks_up_another_tools_draft(athletes_dir) -> None:
 # --- propose_adaptation (written via replace_week_plan + draft_id) ----------------------------
 
 
-def test_an_agreed_adaptation_is_written_exactly_not_regenerated(athletes_dir) -> None:
+def test_propose_adaptation_is_advisory_only_and_points_at_author_week_plan(athletes_dir) -> None:
+    # engine/plan-check-red-team PR 2: propose_adaptation no longer holds a
+    # writable draft (its old write path, replace_week_plan, is retired from
+    # TOOLS_SCHEMA) -- it returns numbers for the coach to feed into
+    # author_week_plan, which is where "write exactly the agreed draft" now
+    # lives for a week's sessions (see test_tools.py's own
+    # test_author_week_plan_draft_then_confirm_persists for that coverage).
     store, h = _h(athletes_dir)
     draft = h["propose_adaptation"]({"iso_week": "2026-W30"})
-    assert draft["persisted"] is False and draft["draft_id"] and "replace_week_plan" in draft["next"]
-
-    done = h["replace_week_plan"]({"iso_week": "2026-W30", "confirm": True, "draft_id": draft["draft_id"]})
-
-    assert done["persisted"] is True and done["written_from_draft"] is True and done["verified"] is True
-    saved = store.load_week("renee", "2026-W30")
-    assert saved.draft is False
-    assert saved.adaptation_rationale is not None  # the adaptation's own rationale survived
-    assert sorted((s.date.isoformat(), s.sport, s.purpose) for s in saved.sessions) == sorted(
-        (s["date"], s["sport"], s["purpose"]) for s in draft["sessions"]
-    )
+    assert draft["persisted"] is False
+    assert "draft_id" not in draft
+    assert "author_week_plan" in draft["next"]
 
 
 # --- replace_macro_plan -----------------------------------------------------------------------

@@ -27,8 +27,15 @@ DRAFT_MAX_AGE = timedelta(hours=12)
 TAPER_CARRIER_WEEK = "9999-W01"
 MACRO_CARRIER_WEEK = "9999-W02"
 
-# Which tool WRITES a draft made by each tool (propose_adaptation never writes itself).
-WRITE_TOOL = {"propose_adaptation": "replace_week_plan"}
+# Which tool WRITES a draft made by each tool, for the rare case a draft's
+# own tool cannot confirm itself. Empty now (engine/plan-check-red-team PR
+# 2): `propose_adaptation` no longer holds a draft at all (it's advisory
+# only -- see its own handler docstring; its old draft used to be written
+# via `replace_week_plan`, now retired from TOOLS_SCHEMA), and every
+# draft-holding tool below (author_macro_plan, author_week_plan,
+# patch_week_plan, merge_week_plan, ...) confirms itself, which the
+# `_describe` fallback below already handles without an explicit entry here.
+WRITE_TOOL: dict[str, str] = {}
 
 
 def draft_is_stale(draft: WeekPlan) -> bool:

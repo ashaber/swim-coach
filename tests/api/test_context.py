@@ -153,7 +153,7 @@ def test_system_block_a_instructs_concise_plan_build_replies(library_dir) -> Non
     # full table.
     text = build_system_blocks(library_dir)[0]["text"]
     assert "render_plan_table" in text
-    assert "draft_macro_plan" in text and "create_week_plan" in text
+    assert "author_macro_plan" in text and "author_week_plan" in text
     # The instruction to keep the narrated reply short on a plan-build turn.
     lowered = text.lower()
     assert "short summary" in lowered or "keep your reply" in lowered or "concise" in lowered
@@ -1487,18 +1487,24 @@ def test_build_messages_threads_focused_session_into_first_message(app_env) -> N
 
 
 # ===========================================================================
-# Build E (race-week-content-refinement) -- persona gap fix: bike weeks
-# don't support template_preference, and the coach must not hand-author
-# taper/opener/primer content the engine already auto-generates.
+# Build E (race-week-content-refinement) -- persona gap fix: bike taper/
+# opener/primer content must be authored consistent with real pre-race
+# practice, not a disguised interval workout.
+#
+# engine/plan-check-red-team PR 2: there is no more separate generator to
+# defer to at all (author_week_plan is always coach-authored), so the
+# original "check whether the engine already produces it" framing is gone --
+# the real incident's lesson (don't author a stiffer/higher-intensity
+# opener than real pre-race practice) is kept as direct authoring guidance.
 # ===========================================================================
 
 
-def test_persona_warns_bike_template_preference_does_not_apply() -> None:
+def test_persona_warns_bike_openers_should_not_be_stiffer_than_real_practice() -> None:
     from app.context import PERSONA_AND_RULES
 
     text = PERSONA_AND_RULES
-    assert "template_preference` does NOT apply" in text
-    assert "session_overrides" in text
+    assert "authored directly" in text
+    assert "author_week_plan" in text
     # must explicitly connect this to the real incident that motivated it
     assert "stiffer" in text.lower() or "felt stiffer" in text.lower()
 
@@ -1510,7 +1516,7 @@ def test_persona_limits_retries_on_tool_error_to_once() -> None:
     assert "retry **at most once**" in text
     assert "MAX_TOOL_ITERATIONS" in text
     for tool_name in (
-        "create_week_plan", "replace_week_plan", "propose_adaptation", "propose_session_adjustment",
+        "author_macro_plan", "author_week_plan", "propose_adaptation", "propose_session_adjustment",
     ):
         assert tool_name in text
 

@@ -1093,6 +1093,30 @@ def ctl_atl_tsb_series(
     return series
 
 
+def recent_weekly_hours(workouts: list[Workout], as_of: date, *, weeks: int = 12) -> list[float]:
+    """Total logged hours per calendar week over the trailing `weeks` weeks
+    (Monday-start, ending at the Monday-start week containing `as_of`) --
+    `plan_check.check_macro`'s `recent_weekly_hours` input (the "max
+    sustained recent hours" check, `plan_check.py`). Every sport counts
+    (unlike `weekly_volume_m` above, which is swim-distance-only) -- hours
+    spent training is sport-agnostic, matching `daily_loads`'s own
+    "every sport counts" convention for total training stress.
+
+    Moved here (engine/plan-check-red-team PR 2) from `cli.py`'s own
+    private `_recent_weekly_hours` so both `cli.py`'s `check-macro` command
+    and `backend/app/tools.py`'s `author_macro_plan`/`check_plan` handlers
+    share one implementation rather than two copies drifting apart.
+    """
+    as_of_monday = as_of - timedelta(days=as_of.weekday())
+    week_starts = [as_of_monday - timedelta(weeks=i) for i in range(weeks - 1, -1, -1)]
+    totals = {ws: 0.0 for ws in week_starts}
+    for workout in workouts:
+        ws = workout.date - timedelta(days=workout.date.weekday())
+        if ws in totals:
+            totals[ws] += workout.duration_min / 60.0
+    return [totals[ws] for ws in week_starts]
+
+
 def _ctl_as_of(daily_load_values: dict[date, float], as_of: date) -> float:
     """CTL on exactly `as_of`, from the real `ctl_atl_tsb_series` walk --
     not a new load-computation, just a single-date read of it, handling the
