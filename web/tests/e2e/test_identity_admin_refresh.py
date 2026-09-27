@@ -83,20 +83,24 @@ def page(request, base_url):
 
 def test_saved_non_admin_identity_becomes_admin_after_api_me_refresh(page):
     # Before the boot-time /api/me refresh resolves, the saved identity is
-    # still non-admin -- the Resources tab's admin-only Approvals section
-    # (views.js's renderApprovalsSection, gated on isAdmin) is absent.
+    # still non-admin -- the Resources tab's admin-only filter chips
+    # (views.js's renderLibraryFilterChips, gated on isAdmin; the "Needs
+    # review" chip is web/review-fixes-chart-scale fix 3's single
+    # actionable list, replacing the old separate Approvals section) are
+    # absent, and the "Research library coming soon." placeholder shows
+    # instead.
     page.wait_for_selector('.tabbar')
     page.click('[data-a="tab:resources"]')
     page.wait_for_selector('.s-head')
     # The best-effort /api/me refresh (main.js's maybeRefreshIdentityAdminFlags,
     # fired once at boot) resolves asynchronously -- poll for the
-    # admin-only "Approvals" heading to appear once it does, rather than
-    # asserting an instantaneous state.
-    page.wait_for_selector('h2:has-text("Approvals")', timeout=5000)
-    assert page.locator('h2:has-text("Approvals")').count() == 1
+    # admin-only "Needs review" filter chip to appear once it does, rather
+    # than asserting an instantaneous state.
+    page.wait_for_selector('[data-a="library:filter"][data-filter="needs_review"]', timeout=5000)
+    assert page.locator('[data-a="library:filter"][data-filter="needs_review"]').count() == 1
 
     # And the refreshed flag survives a reload (persisted via saveIdentity).
     page.reload()
     page.wait_for_selector('.tabbar')
     page.click('[data-a="tab:resources"]')
-    page.wait_for_selector('h2:has-text("Approvals")', timeout=5000)
+    page.wait_for_selector('[data-a="library:filter"][data-filter="needs_review"]', timeout=5000)

@@ -2051,6 +2051,7 @@ describe('renderResourcesTab', () => {
     stale: false,
     content_hash: 'abc123',
     latest_review: null,
+    review_state: 'reviewed',
     ...overrides,
   });
 
@@ -2104,7 +2105,7 @@ describe('renderResourcesTab', () => {
 
   it('shows an unreviewed badge for an unreviewed card', () => {
     const html = renderResourcesTab({
-      ...baseArgs, cards: { status: 'ready', data: [card({ reviewed: false })], error: null },
+      ...baseArgs, cards: { status: 'ready', data: [card({ reviewed: false, review_state: 'unreviewed' })], error: null },
     });
     expect(html).toContain('Unreviewed');
   });
@@ -2116,16 +2117,26 @@ describe('renderResourcesTab', () => {
     expect(html).toContain('Stale');
   });
 
-  it('shows a flagged badge when latest_review is a flag', () => {
+  it('shows a flagged badge when review_state is flagged', () => {
     const html = renderResourcesTab({
       ...baseArgs,
       cards: {
         status: 'ready',
-        data: [card({ latest_review: { decision: 'flagged', note: 'check this' } })],
+        data: [card({ review_state: 'flagged', latest_review: { decision: 'flagged', note: 'check this' } })],
         error: null,
       },
     });
     expect(html).toContain('Flagged');
+  });
+
+  // web/review-fixes-chart-scale fix 2: a card's status now reflects a
+  // recorded decision immediately, before library-review-apply ever runs.
+  it('shows an "Accepted (pending apply)" badge when review_state is accepted', () => {
+    const html = renderResourcesTab({
+      ...baseArgs,
+      cards: { status: 'ready', data: [card({ review_state: 'accepted' })], error: null },
+    });
+    expect(html).toContain('Accepted (pending apply)');
   });
 
   it('shows source count, pluralized', () => {
@@ -2157,16 +2168,33 @@ describe('renderResourcesTab', () => {
     expect(allMatch[0]).not.toContain('active');
   });
 
-  it('the needs_review filter excludes a reviewed, non-stale card', () => {
-    const html = renderResourcesTab({ ...baseArgs, filter: 'needs_review' });
-    expect(html).toContain('Nothing matches this filter.');
+  // web/review-fixes-chart-scale fix 2: "Needs review" now excludes ONLY
+  // an accepted-and-current card -- a card that's merely marker-reviewed
+  // (never formally accepted through this UI) still needs that formal
+  // decision, so it stays in the list.
+  it('the needs_review filter excludes only an accepted-and-current card', () => {
+    const html = renderResourcesTab({
+      ...baseArgs,
+      filter: 'needs_review',
+      cards: { status: 'ready', data: [card({ review_state: 'accepted' })], error: null },
+    });
+    expect(html).toContain('Nothing waiting on review.');
   });
 
   it('the needs_review filter includes an unreviewed card', () => {
     const html = renderResourcesTab({
       ...baseArgs,
       filter: 'needs_review',
-      cards: { status: 'ready', data: [card({ reviewed: false })], error: null },
+      cards: { status: 'ready', data: [card({ reviewed: false, review_state: 'unreviewed' })], error: null },
+    });
+    expect(html).toContain('Session duration: 45 minutes');
+  });
+
+  it('the needs_review filter also includes a reviewed (marker-only, never formally accepted) card', () => {
+    const html = renderResourcesTab({
+      ...baseArgs,
+      filter: 'needs_review',
+      cards: { status: 'ready', data: [card()], error: null }, // default review_state: 'reviewed'
     });
     expect(html).toContain('Session duration: 45 minutes');
   });
@@ -2187,57 +2215,71 @@ describe('renderResourcesTab', () => {
     expect(html).not.toContain('data-anchor="Session duration: 45 minutes"');
   });
 
-  it('hides the research library and Approvals when not admin, showing a coming-soon note instead', () => {
+  it('hides the research library when not admin, showing a coming-soon note instead', () => {
     const html = renderResourcesTab({ ...baseArgs, isAdmin: false });
-    expect(html).not.toContain('Approvals');
     expect(html).not.toContain('library-card');
     expect(html).not.toContain('Session duration: 45 minutes');
     expect(html).toContain('Research library coming soon.');
   });
 
-  it('shows Approvals when admin, with unreviewed/stale cards listed', () => {
+  // web/review-fixes-chart-scale fix 3: "Needs review" IS the actionable
+  // list now -- Accept/Flag buttons render straight into the filtered
+  // grid (reusing renderApprovalCard), no separate "Approvals" section
+  // duplicating the same cards below it.
+  it('the "Needs review" filter renders actionable cards with Accept/Flag buttons -- no separate Approvals section', () => {
     const html = renderResourcesTab({
       ...baseArgs,
-      isAdmin: true,
-      cards: {
-        status: 'ready',
-        data: [card({ reviewed: false }), card({ section: 's2', heading: 'Reviewed one', reviewed: true, stale: false })],
-        error: null,
-      },
-    });
-    const approvalsSection = html.slice(html.indexOf('<h2>Approvals'));
-    expect(html).toContain('Approvals');
-    expect(approvalsSection).toContain('Session duration: 45 minutes');
-    expect(approvalsSection).not.toContain('Reviewed one');
-  });
-
-  it('Approvals sorts needs-judgment cards first', () => {
-    const html = renderResourcesTab({
-      ...baseArgs,
-      isAdmin: true,
+      filter: 'needs_review',
       cards: {
         status: 'ready',
         data: [
-          card({ section: 'mech', heading: 'Mechanical one', reviewed: false, needs_judgment: false }),
-          card({ section: 'judge', heading: 'Judgment one', reviewed: false, needs_judgment: true }),
+          card({ reviewed: false, review_state: 'unreviewed' }),
+          card({ section: 's2', heading: 'Accepted one', review_state: 'accepted' }),
         ],
         error: null,
       },
     });
-    const approvalsSection = html.slice(html.indexOf('<h2>Approvals'));
-    expect(approvalsSection.indexOf('Judgment one')).toBeLessThan(approvalsSection.indexOf('Mechanical one'));
+    expect(html).not.toContain('<h2>Approvals');
+    expect(html).toContain('Session duration: 45 minutes');
+    expect(html).not.toContain('Accepted one'); // accepted-and-current is excluded
+    expect(html).toContain('data-a="library:review:accept"');
+    expect(html).toContain('data-a="library:review:flag"');
   });
 
-  it('Approvals shows nothing-pending message when nothing needs review', () => {
-    const html = renderResourcesTab({ ...baseArgs, isAdmin: true });
+  it('"Needs review" sorts needs-judgment cards first', () => {
+    const html = renderResourcesTab({
+      ...baseArgs,
+      filter: 'needs_review',
+      cards: {
+        status: 'ready',
+        data: [
+          card({
+            section: 'mech', heading: 'Mechanical one', reviewed: false, review_state: 'unreviewed', needs_judgment: false,
+          }),
+          card({
+            section: 'judge', heading: 'Judgment one', reviewed: false, review_state: 'unreviewed', needs_judgment: true,
+          }),
+        ],
+        error: null,
+      },
+    });
+    expect(html.indexOf('Judgment one')).toBeLessThan(html.indexOf('Mechanical one'));
+  });
+
+  it('"Needs review" shows a nothing-pending message when every card is accepted-and-current', () => {
+    const html = renderResourcesTab({
+      ...baseArgs,
+      filter: 'needs_review',
+      cards: { status: 'ready', data: [card({ review_state: 'accepted' })], error: null },
+    });
     expect(html).toContain('Nothing waiting on review.');
   });
 
-  it('Approvals buttons carry file/section/hash and disable while submitting', () => {
+  it('"Needs review" buttons carry file/section/hash and disable while submitting', () => {
     const html = renderResourcesTab({
       ...baseArgs,
-      isAdmin: true,
-      cards: { status: 'ready', data: [card({ reviewed: false })], error: null },
+      filter: 'needs_review',
+      cards: { status: 'ready', data: [card({ reviewed: false, review_state: 'unreviewed' })], error: null },
       reviewSubmit: { status: 'submitting', error: null, key: '07-strength-dryland.md#session-duration-45-minutes' },
     });
     expect(html).toContain('data-a="library:review:accept"');
@@ -2248,11 +2290,11 @@ describe('renderResourcesTab', () => {
     expect(acceptMatch[0]).toContain('disabled');
   });
 
-  it('Approvals shows a per-card error', () => {
+  it('"Needs review" shows a per-card error', () => {
     const html = renderResourcesTab({
       ...baseArgs,
-      isAdmin: true,
-      cards: { status: 'ready', data: [card({ reviewed: false })], error: null },
+      filter: 'needs_review',
+      cards: { status: 'ready', data: [card({ reviewed: false, review_state: 'unreviewed' })], error: null },
       reviewSubmit: {
         status: 'error', error: 'Add a note before flagging.', key: '07-strength-dryland.md#session-duration-45-minutes',
       },
@@ -2260,15 +2302,28 @@ describe('renderResourcesTab', () => {
     expect(html).toContain('Add a note before flagging.');
   });
 
-  it('Approvals is disabled offline, with a message', () => {
+  it('"Needs review" is disabled offline, with a connection-specific message', () => {
     const html = renderResourcesTab({
-      ...baseArgs, isAdmin: true, online: false, cards: { status: 'ready', data: [card({ reviewed: false })], error: null },
+      ...baseArgs,
+      filter: 'needs_review',
+      online: false,
+      cards: { status: 'ready', data: [card({ reviewed: false, review_state: 'unreviewed' })], error: null },
     });
-    expect(html).toContain('Offline');
+    expect(html).toContain('Offline -- accept/flag needs a connection.');
     const acceptMatch = /<button[^>]*data-a="library:review:accept"[^>]*>/.exec(html);
     const flagMatch = /<button[^>]*data-a="library:review:flag"[^>]*>/.exec(html);
     expect(acceptMatch[0]).toContain('disabled');
     expect(flagMatch[0]).toContain('disabled');
+  });
+
+  it('the "all" and "flagged" filters never show Accept/Flag buttons, even for admin', () => {
+    const html = renderResourcesTab({
+      ...baseArgs,
+      filter: 'all',
+      cards: { status: 'ready', data: [card({ reviewed: false, review_state: 'unreviewed' })], error: null },
+    });
+    expect(html).not.toContain('data-a="library:review:accept"');
+    expect(html).not.toContain('data-a="library:review:flag"');
   });
 
   it('the offline banner shows when offline and cards are otherwise ready', () => {

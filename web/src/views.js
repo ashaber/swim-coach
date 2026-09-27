@@ -2969,9 +2969,14 @@ function libraryConfidenceBadgeClass(confidence) {
   return '';
 }
 
+/** web/review-fixes-chart-scale fix 2: filtering keys off the server-
+ * derived `review_state`, not the raw `reviewed`/`stale` markers -- an
+ * accepted-and-current card (`review_state === 'accepted'`) is done and
+ * drops out of "Needs review" even while `stale`/`reviewed` still reflect
+ * the pre-apply marker state (`library-review-apply` hasn't run yet). */
 function matchesLibraryFilter(card, filter) {
-  if (filter === 'needs_review') return !card.reviewed || card.stale;
-  if (filter === 'flagged') return card.latest_review?.decision === 'flagged';
+  if (filter === 'needs_review') return card.review_state !== 'accepted';
+  if (filter === 'flagged') return card.review_state === 'flagged';
   return true;
 }
 
@@ -2985,14 +2990,28 @@ function renderLibraryFilterChips(filter) {
     </div>`;
 }
 
+/** web/review-fixes-chart-scale fix 2: one status badge driven entirely by
+ * the server-derived `review_state`, replacing the old always-marker-based
+ * Reviewed/Unreviewed badge (which couldn't reflect a just-recorded
+ * decision until `library-review-apply` ran) plus a separately-bolted-on
+ * Flagged badge. "Stale" stays its own, separate badge -- it's about
+ * whether the section's TEXT has drifted since the card was authored, an
+ * orthogonal question to what decision (if any) was last recorded. */
+const LIBRARY_REVIEW_STATE_BADGE = {
+  accepted: { text: 'Accepted (pending apply)', cls: 'badge-ok' },
+  flagged: { text: 'Flagged', cls: 'badge-fail' },
+  reviewed: { text: 'Reviewed', cls: 'badge-ok' },
+  unreviewed: { text: 'Unreviewed', cls: 'badge-warn' },
+};
+
 function renderLibraryCardBadges(card) {
   const confidenceClass = libraryConfidenceBadgeClass(card.confidence);
+  const state = LIBRARY_REVIEW_STATE_BADGE[card.review_state] || LIBRARY_REVIEW_STATE_BADGE.unreviewed;
   return `
     <div class="library-card-badges">
       ${card.confidence ? `<span class="badge ${confidenceClass}">${esc(card.confidence)} confidence</span>` : ''}
-      <span class="badge ${card.reviewed ? 'badge-ok' : 'badge-warn'}">${card.reviewed ? 'Reviewed' : 'Unreviewed'}</span>
+      <span class="badge ${state.cls}">${esc(state.text)}</span>
       ${card.stale ? '<span class="badge badge-fail">Stale</span>' : ''}
-      ${card.latest_review?.decision === 'flagged' ? '<span class="badge badge-fail">Flagged</span>' : ''}
     </div>`;
 }
 
@@ -3011,7 +3030,15 @@ function renderLibraryCard(card) {
     </div>`;
 }
 
-function renderLibraryCardGrid(cardsState, filter) {
+/** `actionable` (web/review-fixes-chart-scale fix 3) is `{ reviewDrafts,
+ * reviewSubmit, online }` for the admin's "Needs review" filter, `null`
+ * otherwise -- when set, cards render via `renderApprovalCard` (Accept/
+ * Flag buttons, needs-judgment-first ordering), the SAME cards that used
+ * to live in a separate "Approvals" section below this one. That section
+ * is gone: "Needs review" already is exactly this list (see
+ * `matchesLibraryFilter`), so showing it twice -- once here without
+ * buttons, once again below with them -- was two lists for one job. */
+function renderLibraryCardGrid(cardsState, filter, actionable) {
   if (cardsState.status === 'loading' && !cardsState.data.length) {
     return '<p class="sub">Loading the research library&hellip;</p>';
   }
@@ -3020,7 +3047,20 @@ function renderLibraryCardGrid(cardsState, filter) {
   }
   const filtered = (cardsState.data || []).filter((c) => matchesLibraryFilter(c, filter));
   if (filtered.length === 0) {
-    return '<p class="sub">Nothing matches this filter.</p>';
+    return actionable
+      ? '<p class="sub">Nothing waiting on review.</p>'
+      : '<p class="sub">Nothing matches this filter.</p>';
+  }
+
+  if (actionable) {
+    // Needs-judgment-first -- same "the human most needs to weigh these"
+    // ordering the old, now-removed Approvals section used.
+    const sorted = [...filtered].sort(
+      (a, b) => (a.needs_judgment === b.needs_judgment ? 0 : a.needs_judgment ? -1 : 1),
+    );
+    return sorted.map(
+      (c) => renderApprovalCard(c, actionable.reviewDrafts, actionable.reviewSubmit, actionable.online),
+    ).join('');
   }
 
   const byFile = new Map();
@@ -3074,23 +3114,6 @@ function renderApprovalCard(card, reviewDrafts, reviewSubmit, online) {
     </div>`;
 }
 
-function renderApprovalsSection({
-  cards, reviewDrafts, reviewSubmit, online,
-}) {
-  const pending = (cards.data || [])
-    .filter((c) => !c.reviewed || c.stale)
-    .sort((a, b) => (a.needs_judgment === b.needs_judgment ? 0 : a.needs_judgment ? -1 : 1));
-
-  return `
-    <section>
-      <div class="s-head"><h2>Approvals</h2></div>
-      ${!online ? '<div class="chat-banner">Offline -- accept/flag needs a connection.</div>' : ''}
-      ${pending.length === 0
-        ? '<p class="sub">Nothing waiting on review.</p>'
-        : pending.map((c) => renderApprovalCard(c, reviewDrafts, reviewSubmit, online)).join('')}
-    </section>`;
-}
-
 /** "Read full section": the topic file's markdown, rendered via the same
  * markdown pipeline chat replies use (marked, `<` neutralized before
  * parsing -- see markdown.js's own security-posture doc comment). Scrolling
@@ -3127,6 +3150,12 @@ export function renderResourcesTab({
   if (openFile) {
     return renderLibraryFileView({ openFile, file, online });
   }
+  // web/review-fixes-chart-scale fix 3: "Needs review" (admin-only) IS the
+  // Approvals list now -- one actionable list, not this filtered-but-inert
+  // view plus a separate "Approvals" section below duplicating the same
+  // cards with buttons. `actionable` is null for every other filter (`all`/
+  // `flagged`), which stay plain, non-actionable cards.
+  const actionable = (isAdmin && filter === 'needs_review') ? { reviewDrafts, reviewSubmit, online } : null;
   return `
     <div class="wrap settings-wrap">
       <header class="mast" style="border-bottom:none;padding-bottom:0;">
@@ -3141,15 +3170,13 @@ export function renderResourcesTab({
       <section>
         <div class="s-head"><h2>Research library</h2></div>
         ${renderLibraryFilterChips(filter)}
-        ${renderLibraryCardGrid(cards, filter)}
+        ${actionable && !online ? '<div class="chat-banner">Offline -- accept/flag needs a connection.</div>' : ''}
+        ${renderLibraryCardGrid(cards, filter, actionable)}
       </section>` : `
       <section>
         <div class="s-head"><h2>Research library</h2></div>
         <p class="sub">Research library coming soon.</p>
       </section>`}
-      ${isAdmin ? renderApprovalsSection({
-        cards, reviewDrafts, reviewSubmit, online,
-      }) : ''}
     </div>`;
 }
 
