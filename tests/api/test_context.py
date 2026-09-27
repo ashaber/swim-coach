@@ -271,6 +271,24 @@ def test_route_library_files_unrelated_question_excludes_33_34_35() -> None:
     assert "35-return-from-layoff.md" not in files
 
 
+def test_route_library_files_planning_question_reaches_37() -> None:
+    # engine/plan-check-red-team PR 3: 37-plan-authoring-guide.md is routed
+    # ONLY on planning turns (never the always-on system-block-A prefix --
+    # see test_system_block_a_is_byte_identical_regardless_of_message).
+    files = route_library_files("Can you build my plan for the next block of the season?")
+    assert "37-plan-authoring-guide.md" in files
+
+
+def test_route_library_files_race_debrief_question_reaches_37() -> None:
+    files = route_library_files("Let's do the race debrief and adapt next block's plan.")
+    assert "37-plan-authoring-guide.md" in files
+
+
+def test_route_library_files_unrelated_question_excludes_37() -> None:
+    files = route_library_files("What pace should I swim my Z2 set at?")
+    assert "37-plan-authoring-guide.md" not in files
+
+
 # --- sport-scope filtering (IDEA 008: never surface cycling content to a ---
 # --- swim-only athlete, or vice versa; see context.filter_files_by_sport_
 # --- scope's own docstring) ---------------------------------------------

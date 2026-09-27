@@ -818,6 +818,7 @@ _LIBRARY_FILES_IN_PRIORITY_ORDER = [
     "13-reds-energy-availability.md",
     "33-daily-nutrition-and-supplements.md",
     "35-return-from-layoff.md",
+    "37-plan-authoring-guide.md",
 ]
 
 _KEYWORD_ROUTES: dict[str, set[str]] = {
@@ -831,7 +832,7 @@ _KEYWORD_ROUTES: dict[str, set[str]] = {
     "load": {"03-periodization.md"},
     "compliance": {"03-periodization.md"},
     "consisten": {"03-periodization.md"},
-    "taper": {"03-periodization.md"},
+    "taper": {"03-periodization.md", "37-plan-authoring-guide.md"},
     "pace": {"04-css-intensity-anchors.md"},
     "zone": {"04-css-intensity-anchors.md"},
     "css": {"04-css-intensity-anchors.md"},
@@ -921,6 +922,25 @@ _KEYWORD_ROUTES: dict[str, set[str]] = {
     "time off": {"35-return-from-layoff.md"},
     "months off": {"35-return-from-layoff.md"},
     "muscle memory": {"35-return-from-layoff.md"},
+    # 37-plan-authoring-guide.md -- routed ONLY on plan-authoring turns
+    # (engine/plan-check-red-team PR 3, 2026-09-27): the coach uses
+    # author_macro_plan/author_week_plan/check_plan, and this file is the
+    # compact, ported operating guide for those tools. Never in the
+    # always-on system-block-A prefix (see this module's own docstring) --
+    # a planning question routes here via keyword bucket like any other
+    # topic file. "taper" above also routes here (in addition to 03) since
+    # taper placement/length is now a coach-authored planning decision,
+    # not just a load-monitoring question.
+    "plan": {"37-plan-authoring-guide.md"},
+    "macro": {"37-plan-authoring-guide.md"},
+    "macrocycle": {"37-plan-authoring-guide.md"},
+    "mesocycle": {"37-plan-authoring-guide.md"},
+    "block": {"37-plan-authoring-guide.md"},
+    "season": {"37-plan-authoring-guide.md"},
+    "build my plan": {"37-plan-authoring-guide.md"},
+    "next weeks": {"37-plan-authoring-guide.md"},
+    "race debrief": {"37-plan-authoring-guide.md"},
+    "adapt": {"37-plan-authoring-guide.md"},
 }
 
 # Deterministic fallback bucket when no keyword matches -- "why is the plan
