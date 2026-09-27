@@ -3351,31 +3351,26 @@ describe('renderLoadChart', () => {
     expect(html.toLowerCase()).not.toContain('grey zone');
   });
 
-  it('flags an out-of-range TSB point with a clamp caret rather than silently drawing it at the edge', () => {
+  it('an extreme TSB value now widens the domain instead of clamping it (web/review-fixes-chart-scale '
+    + 'fix 4: the TSB domain is data-fit, not a fixed range every athlete shares -- so a real point is '
+    + 'never out of range against its own default domain any more)', () => {
     const extremeSeries = [
-      ['2026-07-01', 30, 30, -60], // below TSB_AXIS_DOMAIN.min
+      ['2026-07-01', 30, 30, -60],
       ['2026-07-02', 30, 30, 0],
     ];
     const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: extremeSeries }, error: null });
-    expect(html).toContain('load-chart-clamp-caret');
+    expect(html).not.toContain('load-chart-clamp-caret');
   });
 
-  it('draws a caret (not a circle) for the latest point when it is itself clamped', () => {
-    // Regression: the latest-point marker used to always draw a plain
-    // filled circle, painted on top of (and mostly hiding) the identical
-    // clamp caret drawn underneath it whenever the MOST RECENT point was
-    // itself out of TSB_AXIS_DOMAIN's range -- exactly the one point where
-    // an athlete most needs to see the "off the plot" flag.
+  it('an extreme value as the LATEST point still draws the plain circle marker, not a clamp caret, '
+    + 'now that the domain widens to include it rather than clamping it', () => {
     const extremeSeries = [
       ['2026-07-01', 30, 30, 0],
-      ['2026-07-02', 30, 30, -60], // below TSB_AXIS_DOMAIN.min, and the LAST point
+      ['2026-07-02', 30, 30, -60],
     ];
     const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: extremeSeries }, error: null });
-    expect(html).toContain('load-chart-clamp-caret-latest');
-    // Exactly one caret polygon total (the latest point's own combined
-    // marker) -- no separate plain circle marker duplicating/hiding it.
-    expect((html.match(/<polygon class="load-chart-clamp-caret/g) || []).length).toBe(1);
-    expect(html).not.toMatch(/<circle[^>]*r="3\.5"/);
+    expect(html).toMatch(/<circle[^>]*r="3\.5"/);
+    expect(html).not.toContain('load-chart-clamp-caret');
   });
 
   it('still draws the plain circle marker when the latest point is NOT clamped', () => {

@@ -1063,8 +1063,9 @@ function caretPolygonPoints(x, y, geo, size) {
 }
 
 /** A small caret at the TSB panel's top/bottom edge for every index
- * `ctlAtlTsbChartGeometry` had to clamp into `TSB_AXIS_DOMAIN` (plan.js's
- * `tsbClamped`) -- flags an out-of-range point as an alarm worth a second
+ * `ctlAtlTsbChartGeometry` had to clamp into its (now data-fit, not fixed --
+ * web/review-fixes-chart-scale fix 4) TSB domain (plan.js's `tsbClamped`)
+ * -- flags an out-of-range point as an alarm worth a second
  * look, rather than silently drawing it as if it were merely at the edge of
  * "normal". The LATEST point is excluded here even when clamped -- it gets
  * its own combined caret+value marker from `renderLoadChartLatestTsbLabel`
@@ -1170,7 +1171,7 @@ function renderLoadChartSvg(geo) {
   const raceActive = geo.latestTsb.band === 'race-ready';
 
   return `
-    <svg class="load-chart-svg" viewBox="0 0 ${geo.width} ${geo.height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Training load chart: fitness (CTL) and fatigue (ATL) on a shared axis in the top panel, form (TSB) on its own fixed-scale panel below with productive-training and race-day reference bands">
+    <svg class="load-chart-svg" viewBox="0 0 ${geo.width} ${geo.height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Training load chart: fitness (CTL) and fatigue (ATL) on a shared axis in the top panel, form (TSB) on its own panel below with productive-training and race-day reference bands">
       ${renderLoadChartBandRect(geo, geo.productiveBand, 'load-chart-band-productive', productiveActive)}
       ${renderLoadChartBandRect(geo, geo.raceBand, 'load-chart-band-race', raceActive)}
       ${loadGridlines}
@@ -1495,7 +1496,7 @@ export function renderLoadChart(load, {
       ${narrative}
       <details class="load-chart-methodology">
         <summary>How this chart works</summary>
-        <p class="load-chart-note">CTL ("fitness") and ATL ("fatigue") are 42-day/7-day exponentially weighted averages of daily training load; TSB ("form") is CTL minus ATL. These time constants are the standard cycling/TrainingPeaks convention, carried over as a starting point -- not yet verified for swimming specifically. The two shaded bands, in the panel below, are the same convention's other commonly-cited zones: the lower one (${PRODUCTIVE_TRAINING_TSB_BAND.low} to ${PRODUCTIVE_TRAINING_TSB_BAND.high} TSB) is where productive training typically happens; the upper one (+${RACE_DAY_TSB_BAND.low} to +${RACE_DAY_TSB_BAND.high} TSB) is a commonly-targeted range in cycling coaching practice on race day. Like the time constants above, this is not a swim-specific or peer-reviewed target for either band -- individual variation is large, so your own best-performance history is a better guide than either generic band. CTL and ATL share one axis in the top panel; TSB has its own fixed-scale panel below, sized to always contain both bands with margin so they sit in the same place every time you open the app.</p>
+        <p class="load-chart-note">CTL ("fitness") and ATL ("fatigue") are 42-day/7-day exponentially weighted averages of daily training load; TSB ("form") is CTL minus ATL. These time constants are the standard cycling/TrainingPeaks convention, carried over as a starting point -- not yet verified for swimming specifically. The two shaded bands, in the panel below, are the same convention's other commonly-cited zones: the lower one (${PRODUCTIVE_TRAINING_TSB_BAND.low} to ${PRODUCTIVE_TRAINING_TSB_BAND.high} TSB) is where productive training typically happens; the upper one (+${RACE_DAY_TSB_BAND.low} to +${RACE_DAY_TSB_BAND.high} TSB) is a commonly-targeted range in cycling coaching practice on race day. Like the time constants above, this is not a swim-specific or peer-reviewed target for either band -- individual variation is large, so your own best-performance history is a better guide than either generic band. CTL and ATL share one axis in the top panel, scaled to fit your own recent numbers rather than a fixed range; TSB has its own panel below, similarly scaled to your own recent form (plus room for the productive-training band) so the line isn't squashed flat -- the race-day band is drawn wherever it falls on that scale, which means it may sit off-screen on a week your form never gets that fresh.</p>
       </details>
       ${showWellnessInline ? renderWellnessBaselineDeviation(load.data.wellness_baseline_deviation) : ''}
     </div>`;
