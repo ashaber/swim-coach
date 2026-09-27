@@ -1,0 +1,38 @@
+schema_version: 1
+file: 36-plan-authoring-limits.md
+cards:
+- section: masters-ramp-and-recovery-week-cadence
+  heading: Masters ramp and recovery-week cadence
+  summary: No study tests ramp-rate or recovery cadence in masters athletes; Hottenrott 2022 counters the
+    "always need more recovery" assumption, Burtscher 2022 shows volume change matters more than age.
+  recommendation: Keep the general ramp cap as a ceiling, shift recovery-week cadence to 2:1 for a masters-age
+    athlete, and never apply an age-alone recovery penalty without her own data showing a real lag.
+  content_hash: bf91961eec45e821e3647c1204361616b0fac9b0ca6abd3cb66b5799b2cdd91f
+- section: realistic-progression-rates-diminishing-returns-no-numeric-ceiling
+  heading: 'Realistic progression rates: diminishing returns, no numeric ceiling'
+  summary: No numeric W/kg ceiling is evidence-backed; Bacon 2013 and Cove 2024 show diminishing returns and
+    modest per-block gains in trained athletes, and block duration beats added weekly hours.
+  recommendation: Tell an athlete to expect modest, single-digit-to-low-teens percent gains per block, never a
+    large jump, and never compare her raw W/kg to an elite table without an age-decline discount.
+  content_hash: e51c6fd68b0784ef1668d0314256c2fe4c66ef9c3da1b31b452946407ba19358
+- section: age-related-decline-for-a-training-maintaining-masters-athlete
+  heading: Age-related decline for a training-maintaining masters athlete
+  summary: Rogers 1990's longitudinal data anchors ~5-6%/decade decline for training-maintaining masters,
+    half the sedentary rate; Pimentel 2003 contradicts this and the tension is left open, not resolved.
+  recommendation: Model long-range goals against a ~5-6%/decade decline, trust this athlete's own longitudinal
+    trend over either population figure, and never present either number as settled.
+  content_hash: 194c3c252a8ce1ac405e45212f7819d19c592af2a1d1f2154c30e8b6e8e857b1
+- section: swim-taper-length-evidence-does-not-pin-3-or-4-weeks
+  heading: Swim taper length — evidence does NOT pin 3 or 4 weeks
+  summary: Bosquet 2007's ~2-week/41-60% cut is the only broad-evidence taper number; Hellard 2013 used a
+    predefined window and does not prove 3 weeks optimal; no source supports a fixed 4-week taper either.
+  recommendation: Default taper checks to the Bosquet band, but let the coach choose taper length per event/
+    athlete rather than presenting any fixed week count as evidence-backed.
+  content_hash: 7b9de1f3893448bb632cc678fdad7a790d44a2bc0536c22eb0377199d9cf54fb
+- section: time-feasibility-margin
+  heading: Time-feasibility margin
+  summary: No study gives a planned-vs-completed training-hours adherence percentage; Inoue 2022 separately
+    shows easy days run hotter than coaches plan, a distinct caution from the time-margin question.
+  recommendation: Keep the +10% time-reality buffer as a stated coaching heuristic, not a citation, and watch
+    easy-day RPE drift as its own separate signal.
+  content_hash: 3098547239b5164bc567a4141276a882d26b6b30694450e141538c623c02bf61
