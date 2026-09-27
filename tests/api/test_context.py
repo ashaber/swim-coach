@@ -26,6 +26,7 @@ from app.context import (
     find_workout_by_id,
     render_focused_session,
     render_focused_workout,
+    route_info_for_logging,
     route_library_files,
     summarize_rollup,
 )
@@ -90,12 +91,13 @@ def test_system_block_a_has_cache_control(library_dir) -> None:
     assert len(blocks) == 1
     assert blocks[0]["cache_control"] == {"type": "ephemeral"}
     assert "CRITICAL SAFETY WARNING" in blocks[0]["text"]
-    # reference_list.md (~35k tokens, never changes) lives in block A, the
-    # stable block, NOT block B: block B's text changes with the message's
-    # topic, and a cache miss rewrites the whole block -- with the list in it
-    # that was ~42k tokens of cache writes on nearly every turn (IDEA 022).
-    assert "# library/reference_list.md" in blocks[0]["text"]
-    assert "Research Reference List" in blocks[0]["text"]
+    # IDEA 025 step 1: reference_list.md (~58k tokens) no longer rides block A
+    # at all -- it was paid on every cold cache start regardless of whether
+    # the turn cited anything. Only the entries the routed topic files
+    # actually cite are attached now (see build_routed_library_text), plus
+    # the lookup_reference tool for anything else.
+    assert "# library/reference_list.md" not in blocks[0]["text"]
+    assert "Research Reference List" not in blocks[0]["text"]
 
 
 def test_system_block_a_preserves_safety_and_grounding_invariants(library_dir) -> None:
@@ -453,17 +455,23 @@ def test_routed_block_holds_only_topic_files_not_the_reference_list(library_dir)
 def test_block_a_is_identical_whatever_the_message_so_topic_changes_only_rewrite_block_b(library_dir) -> None:
     fuel = build_system(library_dir, "how should I fuel a 4 hour ride?")
     pace = build_system(library_dir, "what pace should I swim at?")
-    assert fuel[0] == pace[0]  # the stable, cached prefix (persona + index + reference list)
+    assert fuel[0] == pace[0]  # the stable, cached prefix (persona + conventions + index)
     assert fuel[1] != pace[1]  # only the routed topic files differ
 
 
-def test_reference_list_appears_exactly_once_and_before_the_routed_files(library_dir) -> None:
-    # The move must not change what the model reads or in what order: persona,
-    # conventions, index, reference list, THEN routed topic files.
+def test_reference_list_never_rides_build_system_only_the_routed_message_text(library_dir) -> None:
+    # IDEA 025 step 1: reference_list.md is no longer part of build_system's
+    # output at all (neither block A nor block B) -- only
+    # build_routed_library_text attaches the entries the routed files cite,
+    # for a caller that puts routed content on the newest message instead of
+    # the cached prefix (COACH_ROUTED_LIBRARY_IN_MESSAGE).
     blocks = build_system(library_dir, "what pace should I swim at?")
     full = "\n".join(b["text"] for b in blocks)
-    assert full.count("# library/reference_list.md") == 1
-    assert full.index("# library/reference_list.md") < full.index("# library/04-css-intensity-anchors.md")
+    assert "# library/reference_list.md" not in full
+    assert "Research Reference List" not in full
+
+    library_text = build_routed_library_text(library_dir, "what pace should I swim at?")
+    assert "## library/reference_list.md entries cited by the files above" in library_text
 
 
 def test_build_messages_shape_with_history(app_env) -> None:
@@ -1520,6 +1528,28 @@ def test_routed_library_text_is_the_routed_files_labelled_as_reference(library_d
     assert "library/08-ultra-feeding.md" in text
     assert "reference_list" not in text.lower().replace("reference_list.md", "")  # not the bibliography
     assert "Research Reference List" not in text
+
+
+def test_creatine_question_attaches_chilibeck_entries_not_an_unrelated_cycling_one(library_dir) -> None:
+    # IDEA 025 step 1's own acceptance test: a creatine question routes to
+    # 33-daily-nutrition-and-supplements.md (which cites Chilibeck twice --
+    # 2017 and 2023) and attaches those two reference_list.md entries
+    # verbatim, but never a cycling-only entry (Coggan, cited only by
+    # 23-cycling-training.md, which a creatine question never routes to).
+    text = build_routed_library_text(library_dir, "is creatine worth taking daily?")
+    assert "library/33-daily-nutrition-and-supplements.md" in text
+    assert "## library/reference_list.md entries cited by the files above" in text
+    assert "Chilibeck P.D. et al. (2017)" in text
+    assert "Chilibeck P.D. et al. (2023)" in text
+    assert "Coggan" not in text
+
+
+def test_route_info_for_logging_matches_creatine_routing_and_citation_count(library_dir) -> None:
+    info = route_info_for_logging(library_dir, "is creatine worth taking daily?")
+    assert info["routed_files"] == ["33-daily-nutrition-and-supplements.md"]
+    assert "creatine" in info["matched_keywords"]
+    assert info["n_ref_entries_attached"] >= 2  # at least both Chilibeck entries
+    assert info["ref_chars"] > 0
 
 
 def test_build_messages_puts_library_then_context_then_question_in_the_newest_message(app_env, library_dir) -> None:
