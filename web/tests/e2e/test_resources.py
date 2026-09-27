@@ -43,6 +43,12 @@ REVIEWED_CARD = {
     'stale': False,
     'content_hash': 'reviewedhash',
     'latest_review': None,
+    # Marker-reviewed (no active UNREVIEWED marker), but never run through
+    # the accept/flag UI -- web/review-fixes-chart-scale fix 2's
+    # review_state. Deliberately NOT 'accepted': the "Needs review" filter
+    # now excludes only an accepted-and-current card, so this one still
+    # shows there (see ACCEPTED_CARD below for that exclusion case).
+    'review_state': 'reviewed',
 }
 UNREVIEWED_CARD = {
     'file': '13-reds-energy-availability.md',
@@ -60,6 +66,28 @@ UNREVIEWED_CARD = {
     'stale': False,
     'content_hash': 'unreviewedhash',
     'latest_review': None,
+    'review_state': 'unreviewed',
+}
+# An accepted-and-current card (fix 2) -- used specifically to prove the
+# "Needs review" filter actually excludes something, now that a merely
+# marker-reviewed card (REVIEWED_CARD above) no longer counts as excluded.
+ACCEPTED_CARD = {
+    'file': '07-strength-dryland.md',
+    'section': 'already-accepted-section',
+    'heading': 'Already accepted section',
+    'summary': 'A section an admin has already accepted through this UI.',
+    'recommendation': 'none -- background only',
+    'confidence': 'high',
+    'tags': [],
+    'source_count': 1,
+    'weak_source_count': 0,
+    'dossier': None,
+    'reviewed': True,
+    'needs_judgment': False,
+    'stale': False,
+    'content_hash': 'acceptedhash',
+    'latest_review': {'decision': 'accepted', 'note': None},
+    'review_state': 'accepted',
 }
 CARDS_JSON = json.dumps([REVIEWED_CARD, UNREVIEWED_CARD])
 # Both cards' headings appear in this one mocked file body (the mocked route
@@ -201,11 +229,19 @@ def test_resources_tab_renders_cards_with_badges(admin_page):
 
 
 def test_resources_filter_chips_narrow_the_list(admin_page):
+    # web/review-fixes-chart-scale fix 2: "Needs review" excludes only an
+    # accepted-and-current card -- REVIEWED_CARD (marker-reviewed, never
+    # formally accepted) would still show there, so this uses ACCEPTED_CARD
+    # instead to prove the exclusion actually happens.
+    admin_page.route(
+        '**/api/library/cards*',
+        _cors_route(200, 'application/json', json.dumps([ACCEPTED_CARD, UNREVIEWED_CARD])),
+    )
     admin_page.click('[data-a="tab:resources"]')
     admin_page.wait_for_selector('.library-card')
     admin_page.click('[data-filter="needs_review"]')
     admin_page.wait_for_selector('text=Gaps, stated bluntly')
-    assert 'Session duration: 45 minutes' not in admin_page.content()
+    assert 'Already accepted section' not in admin_page.content()
 
 
 def test_resources_read_full_section_opens_file_and_back_returns(admin_page):
@@ -221,9 +257,12 @@ def test_resources_read_full_section_opens_file_and_back_returns(admin_page):
 
 # --- Detail-view scroll position (web/resources-hotfix fix 2) ---------------
 # Opening a file from the Research library list should land at the top;
-# opening it from an Approvals card (a specific to-be-reviewed section)
-# should land scrolled to that section's heading. Before this fix, both
-# just kept whatever scroll position the card grid happened to have.
+# opening it from an actionable "Needs review" card (a specific to-be-
+# reviewed section -- what used to be a separate Approvals card, before
+# web/review-fixes-chart-scale fix 3 merged it into this same filtered
+# list) should land scrolled to that section's heading. Before the
+# original fix, both just kept whatever scroll position the card grid
+# happened to have.
 
 def test_opening_from_the_research_library_list_scrolls_to_top(admin_page):
     admin_page.click('[data-a="tab:resources"]')
@@ -236,15 +275,16 @@ def test_opening_from_the_research_library_list_scrolls_to_top(admin_page):
     assert admin_page.evaluate('window.scrollY') == 0
 
 
-def test_opening_from_an_approvals_card_scrolls_to_its_heading(admin_page):
+def test_opening_from_an_actionable_needs_review_card_scrolls_to_its_heading(admin_page):
     admin_page.click('[data-a="tab:resources"]')
     admin_page.wait_for_selector('.library-card')
-    admin_page.wait_for_selector('h2:has-text("Approvals")')
-    # The Approvals card's own "Read full section" button (UNREVIEWED_CARD,
+    admin_page.click('[data-filter="needs_review"]')
+    admin_page.wait_for_selector('text=Gaps, stated bluntly')
+    # The actionable card's own "Read full section" button (UNREVIEWED_CARD,
     # heading "Gaps, stated bluntly" -- far down FILE_CONTENT's filler
     # block, well past a scroll-to-top position).
-    approvals = admin_page.locator('section', has=admin_page.locator('h2', has_text='Approvals'))
-    approvals.locator('[data-a="library:open-file"]').click()
+    unreviewed_card = admin_page.locator('.library-card', has_text='Gaps, stated bluntly')
+    unreviewed_card.locator('[data-a="library:open-file"]').click()
     admin_page.wait_for_selector('#library-file-content')
     admin_page.wait_for_function('() => window.scrollY > 200')
 
@@ -274,10 +314,10 @@ def test_hardware_back_closes_library_detail_not_the_app(admin_page):
 # --- Admin-only visibility (web/resources-hotfix fix 4, privacy stopgap) ----
 # Library topic files currently carry one athlete's personal health details
 # and athlete names; de-identifying them is a separate follow-up build.
-# Until then, a non-admin sees neither the Research library section nor
-# Approvals -- just a one-line "coming soon" note -- and the client never
-# even attempts GET /api/library/cards (the backend now 403s it for a
-# non-admin anyway, see tests/api/test_library_route.py).
+# Until then, a non-admin sees neither the Research library section nor its
+# "Needs review" filter -- just a one-line "coming soon" note -- and the
+# client never even attempts GET /api/library/cards (the backend now 403s
+# it for a non-admin anyway, see tests/api/test_library_route.py).
 
 def test_resources_shows_a_coming_soon_note_for_non_admin(page):
     calls = []
@@ -291,60 +331,72 @@ def test_resources_shows_a_coming_soon_note_for_non_admin(page):
     page.wait_for_selector('.s-head')
     assert 'Research library coming soon.' in page.locator('#app').inner_text()
     assert page.locator('.library-card').count() == 0
-    # Scoped to #app (not the whole page.content(), which also contains this
-    # file's own inline <style> block -- and the word "Approvals" in one of
-    # its comments).
-    assert 'Approvals' not in page.locator('#app').inner_text()
     assert calls == []  # never even attempted the now-403ing endpoint
 
 
-def test_resources_shows_approvals_for_admin(admin_page):
+def test_resources_needs_review_filter_shows_actionable_cards_for_admin(admin_page):
+    # web/review-fixes-chart-scale fix 3: "Needs review" IS the actionable
+    # list now (the old separate "Approvals" section is gone -- one list,
+    # not two).
     admin_page.click('[data-a="tab:resources"]')
     admin_page.wait_for_selector('.library-card')
+    admin_page.click('[data-filter="needs_review"]')
+    admin_page.wait_for_selector('text=Gaps, stated bluntly')
     content = admin_page.content()
-    assert 'Approvals' in content
-    # Only the unreviewed card shows in Approvals.
     assert 'Needs judgment' in content
+    assert 'data-a="library:review:accept"' in content
+    assert 'data-a="library:review:flag"' in content
 
 
-def test_resources_accept_flow_refreshes_the_card(admin_page):
-    accepted = dict(UNREVIEWED_CARD)
-    accepted['reviewed'] = True
-    accepted['latest_review'] = {'decision': 'accepted', 'note': None}
-
-    state = {'accepted': False}
-
-    def cards_handler(route):
-        body = json.dumps([REVIEWED_CARD, accepted if state['accepted'] else UNREVIEWED_CARD])
-        route.fulfill(status=200, content_type='application/json', body=body, headers=CORS_HEADERS)
+def test_resources_accept_flow_updates_the_card_in_place(admin_page):
+    # web/review-fixes-chart-scale fix 2: accept is optimistic now -- no
+    # refetch of GET /api/library/cards. The mocked review response's own
+    # content_hash matches UNREVIEWED_CARD's, so the client can flip
+    # review_state to 'accepted' from the response alone.
+    accepted_review = {
+        'id': 'r1', 'file': UNREVIEWED_CARD['file'], 'section': UNREVIEWED_CARD['section'],
+        'content_hash': UNREVIEWED_CARD['content_hash'], 'decision': 'accepted', 'note': None,
+        'reviewed_by': 'andrew', 'created_at': '2026-01-01T00:00:00Z',
+    }
 
     def review_handler(route):
         if route.request.method == 'OPTIONS':
             route.fulfill(status=204, headers=CORS_HEADERS)
             return
-        state['accepted'] = True
         route.fulfill(
             status=200, content_type='application/json',
-            body='{"id": "r1", "decision": "accepted"}', headers=CORS_HEADERS,
+            body=json.dumps(accepted_review), headers=CORS_HEADERS,
         )
 
-    admin_page.route('**/api/library/cards*', cards_handler)
+    # Just the one card this time -- REVIEWED_CARD is marker-reviewed, not
+    # accepted-and-current, so it would otherwise still be sitting in
+    # "Needs review" after the accept and this test's "nothing left" check
+    # would never pass.
+    admin_page.route(
+        '**/api/library/cards*',
+        _cors_route(200, 'application/json', json.dumps([UNREVIEWED_CARD])),
+    )
     admin_page.route('**/api/library/reviews*', review_handler)
 
     admin_page.click('[data-a="tab:resources"]')
     admin_page.wait_for_selector('.library-card')
-    admin_page.click('[data-a="library:review:accept"]')
+    admin_page.click('[data-filter="needs_review"]')
+    admin_page.wait_for_selector('text=Gaps, stated bluntly')
+    unreviewed_card = admin_page.locator('.library-card', has_text='Gaps, stated bluntly')
+    unreviewed_card.locator('[data-a="library:review:accept"]').click()
 
-    # The accept succeeds and triggers loadLibraryCards() to refetch -- the
-    # mocked route now serves the accepted version, so the card drops out
-    # of Approvals (no longer unreviewed/stale).
+    # The card drops out of "Needs review" once its review_state flips to
+    # 'accepted' in place (optimistic -- no refetch).
     admin_page.wait_for_selector('text=Nothing waiting on review.')
 
 
 def test_resources_flag_requires_a_note(admin_page):
     admin_page.click('[data-a="tab:resources"]')
     admin_page.wait_for_selector('.library-card')
-    admin_page.click('[data-a="library:review:flag"]')
+    admin_page.click('[data-filter="needs_review"]')
+    admin_page.wait_for_selector('text=Gaps, stated bluntly')
+    unreviewed_card = admin_page.locator('.library-card', has_text='Gaps, stated bluntly')
+    unreviewed_card.locator('[data-a="library:review:flag"]').click()
     admin_page.wait_for_selector('text=Add a note before flagging.')
 
 
@@ -364,16 +416,20 @@ def test_resources_flag_with_note_posts_the_decision(admin_page):
     admin_page.route('**/api/library/reviews*', review_handler)
     admin_page.click('[data-a="tab:resources"]')
     admin_page.wait_for_selector('.library-card')
-    note_field = '[data-form="library-review"][data-field="note"]'
-    admin_page.fill(note_field, 'the citation looks weak')
-    admin_page.click('[data-a="library:review:flag"]')
+    admin_page.click('[data-filter="needs_review"]')
+    admin_page.wait_for_selector('text=Gaps, stated bluntly')
+    unreviewed_card = admin_page.locator('.library-card', has_text='Gaps, stated bluntly')
+    note_key = f"{UNREVIEWED_CARD['file']}#{UNREVIEWED_CARD['section']}"
+    note_field_sel = f'[data-form="library-review"][data-field="note"][data-key="{note_key}"]'
+    unreviewed_card.locator('[data-form="library-review"][data-field="note"]').fill('the citation looks weak')
+    unreviewed_card.locator('[data-a="library:review:flag"]').click()
 
     # Success clears the just-submitted card's draft note -- the textarea
     # goes back to empty once the re-render lands (see main.js's
     # handleSubmitLibraryReview: `delete state.libraryReviewDrafts[key]`).
     admin_page.wait_for_function(
         "(sel) => { const el = document.querySelector(sel); return el === null || el.value === ''; }",
-        arg=note_field,
+        arg=note_field_sel,
     )
     assert posted['file'] == UNREVIEWED_CARD['file']
     assert posted['section'] == UNREVIEWED_CARD['section']
@@ -439,7 +495,7 @@ def test_resources_shows_cached_file_when_offline(cfg, base_url):
 
 
 @pytest.mark.parametrize('cfg', BROWSERS)
-def test_resources_approvals_disabled_offline_with_a_message(cfg, base_url):
+def test_resources_needs_review_disabled_offline_with_a_message(cfg, base_url):
     with sync_playwright() as pw:
         browser, ctx = _make_ctx(pw, cfg, identity=ADMIN_IDENTITY, seed_cards_cache=[UNREVIEWED_CARD])
         pg = ctx.new_page()
@@ -449,9 +505,10 @@ def test_resources_approvals_disabled_offline_with_a_message(cfg, base_url):
             pg.wait_for_function('() => !navigator.onLine')
             pg.click('[data-a="tab:resources"]')
             pg.wait_for_selector('.library-card')
+            pg.click('[data-filter="needs_review"]')
+            pg.wait_for_selector('text=Gaps, stated bluntly')
             content = pg.content()
-            assert 'Approvals' in content
-            assert 'Offline' in content
+            assert 'Offline -- accept/flag needs a connection.' in content
             assert pg.locator('[data-a="library:review:accept"]').first.is_disabled()
             assert pg.locator('[data-a="library:review:flag"]').first.is_disabled()
         finally:

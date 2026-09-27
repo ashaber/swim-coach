@@ -11,7 +11,7 @@ import {
   describeWellnessBaselineDeviation, WELLNESS_DEVIATION_CONCERNING_PCT,
   describeCtlAtlTsbTrend, CTL_COLD_START_DAYS, CTL_WARMED_UP_DAYS,
   CTL_ATL_TREND_WINDOW_DAYS, CTL_TREND_FLAT_THRESHOLD, LOAD_CHART_WINDOW_DAYS,
-  LOAD_CHART_WINDOW_OPTIONS, TSB_AXIS_DOMAIN, TSB_PANEL_RATIO, classifyTsbBand,
+  LOAD_CHART_WINDOW_OPTIONS, TSB_AXIS_PADDING, TSB_PANEL_RATIO, classifyTsbBand,
   formatMonthLabel, LOAD_CHART_HEIGHT, sessionDotColorVar,
   isFuelingPlanSession, parseFuelingSummary, sessionIconKey, isYogaSession,
 } from '../../src/plan.js';
@@ -1282,10 +1282,10 @@ describe('LOAD_CHART_WINDOW_OPTIONS', () => {
   });
 });
 
-describe('TSB_AXIS_DOMAIN', () => {
-  it('is a fixed range wide enough to hold both named bands with margin', () => {
-    expect(TSB_AXIS_DOMAIN.min).toBeLessThan(PRODUCTIVE_TRAINING_TSB_BAND.low);
-    expect(TSB_AXIS_DOMAIN.max).toBeGreaterThan(RACE_DAY_TSB_BAND.high);
+describe('TSB_AXIS_PADDING', () => {
+  it('is a small positive margin, not a fixed axis range any more (fix 4: the TSB domain is data-fit)', () => {
+    expect(TSB_AXIS_PADDING).toBeGreaterThan(0);
+    expect(TSB_AXIS_PADDING).toBeLessThan(PRODUCTIVE_TRAINING_TSB_BAND.high - PRODUCTIVE_TRAINING_TSB_BAND.low);
   });
 });
 
@@ -1426,7 +1426,7 @@ describe('ctlAtlTsbChartGeometry', () => {
     expect(geo.xTicks[0].label).toBe(series[0][0]);
   });
 
-  describe('top panel (CTL/ATL, "fitness & fatigue") -- one shared, 0-anchored axis', () => {
+  describe('top panel (CTL/ATL, "fitness & fatigue") -- one shared, data-fit axis (fix 4)', () => {
     it('a higher value plots higher on screen (smaller SVG y)', () => {
       const series = [
         ['2026-08-01', 10, 5, 5],
@@ -1474,66 +1474,112 @@ describe('ctlAtlTsbChartGeometry', () => {
       expect(geo.ctlPoints[1].y).toBeCloseTo(geo.atlPoints[1].y, 5);
     });
 
-    it('the shared axis is anchored at 0 even when all real CTL/ATL values are well above it', () => {
+    it('the shared axis is NO LONGER forced to include 0 when real CTL/ATL values sit well above it '
+      + '(fix 4: "chart lines squashed" -- the old 0-anchored axis compressed a tight CTL/ATL band '
+      + 'near the top of the panel)', () => {
       const series = [
-        ['2026-08-01', 40, 35, 0],
-        ['2026-08-02', 42, 33, 0],
+        ['2026-08-01', 65, 62, 3],
+        ['2026-08-02', 68, 60, 8],
       ];
       const geo = ctlAtlTsbChartGeometry(series);
       const values = geo.yTicks.map((t) => t.value);
-      expect(Math.min(...values)).toBeLessThanOrEqual(0);
+      expect(Math.min(...values)).toBeGreaterThan(0);
+      // The lines use most of the panel height now, not a sliver at the
+      // top of a 0..68 axis -- the first point's CTL (65) and ATL (62)
+      // shouldn't both land within the panel's top 20%.
+      const panelH = geo.loadPlot.bottom - geo.loadPlot.top;
+      expect(geo.ctlPoints[0].y - geo.loadPlot.top).toBeGreaterThan(panelH * 0.1);
     });
 
-    it('y ticks span from below the data minimum to above the data maximum', () => {
+    it('y ticks span from at/below the data minimum to at/above the data maximum, fit to the data '
+      + 'itself rather than always reaching down to 0', () => {
       const series = [
         ['2026-08-01', 10, 5, 5],
         ['2026-08-02', 20, 8, 12],
       ];
       const geo = ctlAtlTsbChartGeometry(series);
       const values = geo.yTicks.map((t) => t.value);
-      expect(Math.min(...values)).toBeLessThanOrEqual(0);
-      expect(Math.max(...values)).toBeGreaterThan(20);
+      expect(Math.min(...values)).toBeLessThanOrEqual(5); // data min across CTL+ATL
+      expect(Math.max(...values)).toBeGreaterThanOrEqual(20); // data max across CTL+ATL
+    });
+
+    it('y-tick values are "nice" round numbers (1/2/5 x a power of ten), not raw fractional splits', () => {
+      const series = [
+        ['2026-08-01', 61, 58, 3],
+        ['2026-08-02', 79, 64, 15],
+      ];
+      const geo = ctlAtlTsbChartGeometry(series);
+      for (const t of geo.yTicks) {
+        const exponent = Math.floor(Math.log10(Math.abs(t.value) || 1));
+        const unit = 10 ** Math.max(exponent - 1, 0);
+        // Every tick value should be a whole multiple of some nice step
+        // (1/2/5 x 10^k) -- checked loosely by confirming it divides evenly
+        // into a small set of nice steps at its own order of magnitude.
+        const niceSteps = [1, 2, 5, 10, 20, 50].map((f) => f * unit);
+        expect(niceSteps.some((step) => Math.abs(Math.round(t.value / step) * step - t.value) < 1e-6)).toBe(true);
+      }
     });
   });
 
-  describe('bottom panel (TSB, "form") -- fixed TSB_AXIS_DOMAIN, clamped', () => {
-    it('the race-day and productive-training bands are always inside the tsbPlot pixel span', () => {
+  describe('bottom panel (TSB, "form") -- data-fit domain (fix 4), clamped only via an explicit override', () => {
+    it('the productive-training band is always inside the tsbPlot pixel span -- it\'s part of the domain union', () => {
       const series = [
         ['2026-08-01', 30, 30, 0],
         ['2026-08-02', 30, 30, 0],
       ];
       const geo = ctlAtlTsbChartGeometry(series);
-      expect(geo.raceBand.top).toBeGreaterThanOrEqual(geo.tsbPlot.top);
-      expect(geo.raceBand.bottom).toBeLessThanOrEqual(geo.tsbPlot.bottom);
-      expect(geo.raceBand.top).toBeLessThan(geo.raceBand.bottom);
       expect(geo.productiveBand.top).toBeGreaterThanOrEqual(geo.tsbPlot.top);
       expect(geo.productiveBand.bottom).toBeLessThanOrEqual(geo.tsbPlot.bottom);
       expect(geo.productiveBand.top).toBeLessThan(geo.productiveBand.bottom);
-      // Productive band (-30..-10) is a lower TSB range than the race-day
-      // band (+5..+25), so it must plot BELOW it (larger pixel y).
-      expect(geo.productiveBand.top).toBeGreaterThan(geo.raceBand.bottom);
     });
 
-    it('the TSB domain (and therefore the bands) never moves with the data -- same pixel position regardless of series values', () => {
+    it('the race-day band is CLIPPED to near-zero height on a quiet week whose TSB never approaches it '
+      + '(fix 4: clipped, not forcing the domain wider to always show it)', () => {
+      const series = [
+        ['2026-08-01', 30, 30, 0],
+        ['2026-08-02', 30, 30, 0],
+      ];
+      const geo = ctlAtlTsbChartGeometry(series);
+      const raceH = geo.raceBand.bottom - geo.raceBand.top;
+      const prodH = geo.productiveBand.bottom - geo.productiveBand.top;
+      expect(raceH).toBeLessThan(1); // clipped to (near) nothing
+      expect(prodH).toBeGreaterThan(5); // still rendered at its real height
+    });
+
+    it('the race-day band renders at its real (unclipped) height once the domain stretches to include it', () => {
+      // Productive band and race-day band are both 20 TSB points wide
+      // (-30..-10 and +5..+25), so once both are fully inside the domain
+      // their pixel heights should match -- a direct check that the race
+      // band isn't still being silently clipped.
+      const series = [['2026-08-01', 30, 30, 20], ['2026-08-02', 30, 30, 20]];
+      const geo = ctlAtlTsbChartGeometry(series);
+      const raceH = geo.raceBand.bottom - geo.raceBand.top;
+      const prodH = geo.productiveBand.bottom - geo.productiveBand.top;
+      expect(raceH).toBeCloseTo(prodH, 0);
+    });
+
+    it('the TSB domain (and therefore the bands) DOES move with the data now -- it is no longer a fixed '
+      + 'range the same for every athlete (fix 4: "chart lines squashed")', () => {
       const flat = ctlAtlTsbChartGeometry([['2026-08-01', 30, 30, 0], ['2026-08-02', 30, 30, 0]]);
       const extreme = ctlAtlTsbChartGeometry([['2026-08-01', 30, 30, -35], ['2026-08-02', 30, 30, 30]]);
-      expect(extreme.raceBand).toEqual(flat.raceBand);
-      expect(extreme.productiveBand).toEqual(flat.productiveBand);
+      expect(extreme.raceBand).not.toEqual(flat.raceBand);
     });
 
-    it('a TSB value inside the fixed domain plots at its true value, unclamped', () => {
+    it('a TSB value always plots at its true value, unclamped, against the default data-fit domain '
+      + '(the domain is built to include every real value, plus padding)', () => {
       const series = [['2026-08-01', 40, 40, -10], ['2026-08-02', 40, 40, 10]];
       const geo = ctlAtlTsbChartGeometry(series);
       expect(geo.tsbClamped).toEqual([]);
     });
 
-    it('a TSB value outside the fixed domain is clamped to the nearest edge and flagged in tsbClamped', () => {
+    it('an explicit tsbDomain override still clamps an out-of-range value to the nearest edge, '
+      + 'flagged in tsbClamped (exercises the clamp path directly, since the default domain never triggers it)', () => {
       const series = [
-        ['2026-08-01', 40, 40, -60], // below TSB_AXIS_DOMAIN.min (-40)
+        ['2026-08-01', 40, 40, -60], // below the override's min (-40)
         ['2026-08-02', 40, 40, 0],
-        ['2026-08-03', 40, 40, 60], // above TSB_AXIS_DOMAIN.max (35)
+        ['2026-08-03', 40, 40, 60], // above the override's max (35)
       ];
-      const geo = ctlAtlTsbChartGeometry(series);
+      const geo = ctlAtlTsbChartGeometry(series, { tsbDomain: { min: -40, max: 35 } });
       expect(geo.tsbClamped).toEqual([0, 2]);
       // Clamped points land exactly on the tsbPlot edges.
       expect(geo.tsbPoints[0].y).toBeCloseTo(geo.tsbPlot.bottom, 1);

@@ -2366,10 +2366,15 @@ function handleCloseLibraryFile() {
   render();
 }
 
-/** Accept/flag a card (Approvals section, admin-only -- server-side
- * enforced regardless of what the client shows). Optimistic: on success,
- * the card list is refetched so its `latest_review`/`reviewed`/`stale`
- * fields reflect the just-recorded decision immediately. */
+/** Accept/flag a card ("Needs review" filter, admin-only -- server-side
+ * enforced regardless of what the client shows). Optimistic (web/
+ * review-fixes-chart-scale fix 2): on success, the ONE affected card is
+ * updated in place from the review response itself -- no refetch, so
+ * there's nothing for a flaky connection to fail on right after a
+ * decision that already succeeded. The response already carries
+ * everything `review_state` needs: the decision, and the hash the server
+ * computed it against (compared against this card's own `content_hash`,
+ * fetched moments earlier in the same list). */
 async function handleSubmitLibraryReview(decision, file, section, contentHash) {
   if (!file || !section) return;
   const key = `${file}#${section}`;
@@ -2406,7 +2411,21 @@ async function handleSubmitLibraryReview(decision, file, section, contentHash) {
     log.info('library.review_submit_success', { athlete: identity.athlete, file, section, decision });
     state.libraryReviewSubmit = { status: 'success', error: null, key };
     delete state.libraryReviewDrafts[key];
-    loadLibraryCards(); // refreshes latest_review/reviewed/stale -- calls render() itself
+    const card = state.libraryCards.data.find((c) => c.file === file && c.section === section);
+    if (card) {
+      card.latest_review = result.data;
+      if (decision === 'accepted' && result.data.content_hash === card.content_hash) {
+        card.review_state = 'accepted';
+      } else if (decision === 'flagged') {
+        card.review_state = 'flagged';
+      }
+      // else: an accept whose hash no longer matches (section changed out
+      // from under this submit) leaves review_state at its prior
+      // marker-based value -- same fallback GET /api/library/cards itself
+      // applies, never displayed as a false "accepted".
+    }
+    saveCachedLibraryCards(state.libraryCards.data);
+    render();
   } else {
     log.error('library.review_submit_failed', { file, section, error: result.error });
     state.libraryReviewSubmit = { status: 'error', error: result.error, key };

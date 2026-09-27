@@ -1226,10 +1226,10 @@ export const RACE_DAY_TSB_BAND = { low: 5, high: 25 };
  * Grey Zone/Transitional too) -- these are the two an athlete mid-block
  * actually needs: "here's where productive training lives" and "here's
  * where race-day freshness lives", with the taper being the deliberate
- * move from one to the other. The TSB panel's fixed domain
- * (`TSB_AXIS_DOMAIN` below) still leaves room to label the other three
- * zones (Grey Zone, Transitional, High Risk) as plain edge text, even
- * though only these two get a shaded rect. */
+ * move from one to the other. The TSB panel's data-fit domain (see
+ * `ctlAtlTsbChartGeometry`'s own doc comment) still leaves room to label
+ * the other three zones (Grey Zone, Transitional, High Risk) as plain edge
+ * text, even though only these two get a shaded rect. */
 export const PRODUCTIVE_TRAINING_TSB_BAND = { low: -30, high: -10 };
 
 const LOAD_CHART_WIDTH = 640;
@@ -1268,19 +1268,21 @@ export const TSB_PANEL_RATIO = 0.4;
  * not pinned by the design spec. */
 const LOAD_CHART_PANEL_GAP = 22;
 
-/** The TSB (bottom) panel's y-axis domain -- FIXED, not derived from the
- * series' actual min/max the way the old single-axis chart's domain was.
- * Wide enough to contain both `RACE_DAY_TSB_BAND` and
- * `PRODUCTIVE_TRAINING_TSB_BAND` with margin on both ends (for "Transitional"/
- * "High Risk" edge labels), and -- deliberately -- the SAME range every time,
- * for every athlete: the whole point is that the bands sit in the same
- * on-screen place every time the athlete opens the app, instead of drifting
- * because this week's TSB happened to be a little more or less extreme than
- * last week's. A TSB outside this range is clamped to the nearest edge and
- * flagged (see `tsbClamped` below) rather than causing the whole domain to
- * stretch -- an extreme TSB is an alarm, not a reason to rescale everything
- * else back down to a thin stripe again. */
-export const TSB_AXIS_DOMAIN = { min: -40, max: 35 };
+/** The TSB (bottom) panel's default y-axis padding (web/review-fixes-chart-
+ * scale fix 4) -- the domain itself is now FIT TO THE DATA (`series`' own
+ * TSB min/max, unioned with `PRODUCTIVE_TRAINING_TSB_BAND` and 0 so the
+ * axis still reads sensibly on a quiet week), not a fixed range the same
+ * for every athlete the old design used. That fixed -40..35 range squashed
+ * a typical +-15 TSB swing into a thin band in the middle of the panel --
+ * "chart lines squashed" -- the exact bug this fix closes. `RACE_DAY_TSB_BAND`
+ * is deliberately NOT unioned into the domain: it's drawn wherever it falls
+ * inside the data-fit domain, clipped (not forcing the domain wider) when
+ * the athlete's TSB never gets that high -- see `ctlAtlTsbChartGeometry`'s
+ * own `clampToDomain` for where that's applied to the band's own edges.
+ * `ctlAtlTsbChartGeometry`'s `tsbDomain` option can still override this
+ * default entirely (used to exercise the `tsbClamped` out-of-range-point
+ * path in tests with a narrow, explicit domain). */
+export const TSB_AXIS_PADDING = 5;
 
 /** Default chart window: 6 weeks (42 days) of the series, not the athlete's
  * whole history -- Coach judgment default among `LOAD_CHART_WINDOW_OPTIONS`
@@ -1317,6 +1319,40 @@ export const LOAD_CHART_WINDOW_OPTIONS = [
  * extra digits from the padding/tick math below. */
 function roundToTenth(value) {
   return Math.round(value * 10) / 10;
+}
+
+/** Rounds a raw per-tick step up to a "nice" 1/2/5 x a power of ten -- the
+ * standard axis-labeling heuristic -- so y-axis tick labels read as round
+ * numbers (10, 20, 25, 50...) instead of whatever odd fraction a data-fit
+ * domain's own min/max happens to produce (web/review-fixes-chart-scale
+ * fix 4). */
+function niceStep(rawStep) {
+  if (!(rawStep > 0)) return 1;
+  const exponent = Math.floor(Math.log10(rawStep));
+  const fraction = rawStep / 10 ** exponent;
+  let niceFraction;
+  if (fraction <= 1) niceFraction = 1;
+  else if (fraction <= 2) niceFraction = 2;
+  else if (fraction <= 5) niceFraction = 5;
+  else niceFraction = 10;
+  return niceFraction * 10 ** exponent;
+}
+
+/** Nice-rounded y-axis ticks covering at least `[min, max]` -- extends the
+ * domain OUTWARD only (never inward, so every already-padded value still
+ * fits) to the nearest nice-step multiple below `min` and above `max`.
+ * Returns both the (possibly slightly wider) domain to actually plot
+ * against and the tick values themselves, roughly `targetCount` of them. */
+function niceAxisTicks(min, max, targetCount) {
+  const span = (max - min) || 1;
+  const step = niceStep(span / targetCount);
+  const niceMin = Math.floor(min / step) * step;
+  const niceMax = Math.ceil(max / step) * step;
+  const ticks = [];
+  for (let v = niceMin; v <= niceMax + step / 2; v += step) {
+    ticks.push(roundToTenth(v));
+  }
+  return { min: niceMin, max: niceMax, ticks };
 }
 
 /** At most `maxCount` evenly spaced indices into an `n`-length array,
@@ -1378,7 +1414,7 @@ function monthTickIndices(series) {
  * tick's ISO-date label without having to re-derive which mode was used. */
 export function ctlAtlTsbChartGeometry(series, {
   width = LOAD_CHART_WIDTH, height = LOAD_CHART_HEIGHT, padding = LOAD_CHART_PADDING,
-  tsbPanelRatio = TSB_PANEL_RATIO, tsbDomain = TSB_AXIS_DOMAIN, xTickMode = 'date',
+  tsbPanelRatio = TSB_PANEL_RATIO, tsbDomain = null, xTickMode = 'date',
 } = {}) {
   if (!series || series.length === 0) {
     return { isEmpty: true, width, height };
@@ -1402,34 +1438,52 @@ export function ctlAtlTsbChartGeometry(series, {
   const tsbBottom = tsbTop + tsbPlotH;
 
   // Top ("fitness & fatigue") panel: CTL and ATL are the same kind of
-  // quantity -- EWMAs of daily load -- so they share ONE axis, anchored at
-  // 0 (see module comment for why this, not a dual axis, is the fix). Always
-  // includes 0 so the axis never silently omits the floor both lines are
-  // measured from.
-  const loadValues = [...ctlValues, ...atlValues, 0];
+  // quantity -- EWMAs of daily load -- so they share ONE axis (see module
+  // comment for why this, not a dual axis, is the fix). Fit to the DATA's
+  // own min/max (+-10% padding, then rounded out to nice tick values)
+  // rather than always forcing 0 into the domain (web/review-fixes-chart-
+  // scale fix 4) -- an athlete whose CTL/ATL both sit in, say, the 60-80
+  // range had both lines squashed into a thin sliver at the top of a
+  // 0-anchored axis. Nothing about "share one axis" requires that axis to
+  // start at 0; it only requires CTL and ATL to use the identical linear
+  // mapping (`loadYFor` below), which a data-fit domain still gives them.
+  const loadValues = [...ctlValues, ...atlValues];
   const loadRawMin = Math.min(...loadValues);
   const loadRawMax = Math.max(...loadValues);
   const loadSpan = (loadRawMax - loadRawMin) || 1;
-  const loadYMin = loadRawMin - loadSpan * 0.08;
-  const loadYMax = loadRawMax + loadSpan * 0.08;
+  const loadPaddedMin = loadRawMin - loadSpan * 0.1;
+  const loadPaddedMax = loadRawMax + loadSpan * 0.1;
+  const loadNice = niceAxisTicks(loadPaddedMin, loadPaddedMax, LOAD_CHART_Y_TICK_COUNT);
+  const loadYMin = loadNice.min;
+  const loadYMax = loadNice.max;
 
   const xFor = (i) => (n === 1 ? plotLeft + plotW / 2 : plotLeft + (i / (n - 1)) * plotW);
   const loadYFor = (v) => loadTop + (1 - (v - loadYMin) / (loadYMax - loadYMin)) * loadPlotH;
-  // Bottom ("form") panel: FIXED domain (`TSB_AXIS_DOMAIN`/`tsbDomain`),
-  // never derived from this athlete's actual TSB range -- see that
-  // constant's own doc comment for why. Values outside the domain are
-  // clamped to the nearest edge for plotting; `tsbClamped` records which
-  // indices that happened to, so the renderer can mark them (a caret at the
-  // boundary) instead of silently misrepresenting an out-of-range point as
-  // being on the edge of "normal".
-  const tsbYFor = (v) => tsbTop + (1 - (v - tsbDomain.min) / (tsbDomain.max - tsbDomain.min)) * tsbPlotH;
+  // Bottom ("form") panel: domain fits THIS athlete's own TSB range,
+  // unioned with `PRODUCTIVE_TRAINING_TSB_BAND` and 0 (so the axis still
+  // reads sensibly on a quiet week) and padded +-`TSB_AXIS_PADDING` --
+  // replacing the old fixed, always-the-same-for-every-athlete domain,
+  // which squashed a typical +-15 TSB swing into a thin band in the middle
+  // of the panel. `RACE_DAY_TSB_BAND` is deliberately NOT unioned in: it's
+  // drawn wherever it falls inside this data-fit domain, clipped via
+  // `clampToDomain` rather than forcing the domain wider, on a week where
+  // the athlete's TSB never gets that high. `tsbDomain` can still override
+  // this default entirely (tests use this to exercise the `tsbClamped`
+  // out-of-range-point path with a narrow, explicit domain).
+  const tsbUnion = [...tsbValues, PRODUCTIVE_TRAINING_TSB_BAND.low, PRODUCTIVE_TRAINING_TSB_BAND.high, 0];
+  const domain = tsbDomain || {
+    min: Math.min(...tsbUnion) - TSB_AXIS_PADDING,
+    max: Math.max(...tsbUnion) + TSB_AXIS_PADDING,
+  };
+  const tsbYFor = (v) => tsbTop + (1 - (v - domain.min) / (domain.max - domain.min)) * tsbPlotH;
+  const clampToDomain = (v) => Math.min(domain.max, Math.max(domain.min, v));
 
   const ctlPoints = series.map((_, i) => ({ x: xFor(i), y: loadYFor(ctlValues[i]) }));
   const atlPoints = series.map((_, i) => ({ x: xFor(i), y: loadYFor(atlValues[i]) }));
   const tsbClamped = [];
   const tsbPoints = series.map((_, i) => {
     const raw = tsbValues[i];
-    const clampedValue = Math.min(tsbDomain.max, Math.max(tsbDomain.min, raw));
+    const clampedValue = clampToDomain(raw);
     if (clampedValue !== raw) tsbClamped.push(i);
     return { x: xFor(i), y: tsbYFor(clampedValue) };
   });
@@ -1444,10 +1498,7 @@ export function ctlAtlTsbChartGeometry(series, {
 
   const xTickIndices = xTickMode === 'month' ? monthTickIndices(series) : evenIndices(n, LOAD_CHART_MAX_X_TICKS);
   const xTicks = xTickIndices.map((i) => ({ x: xFor(i), label: series[i][0] }));
-  const yTicks = Array.from({ length: LOAD_CHART_Y_TICK_COUNT + 1 }, (_, i) => {
-    const value = roundToTenth(loadYMin + (i / LOAD_CHART_Y_TICK_COUNT) * (loadYMax - loadYMin));
-    return { y: loadYFor(value), value };
-  });
+  const yTicks = loadNice.ticks.map((value) => ({ y: loadYFor(value), value }));
 
   return {
     isEmpty: false,
@@ -1463,14 +1514,14 @@ export function ctlAtlTsbChartGeometry(series, {
     tsbClamped,
     latestTsb,
     productiveBand: {
-      top: tsbYFor(PRODUCTIVE_TRAINING_TSB_BAND.high),
-      bottom: tsbYFor(PRODUCTIVE_TRAINING_TSB_BAND.low),
+      top: tsbYFor(clampToDomain(PRODUCTIVE_TRAINING_TSB_BAND.high)),
+      bottom: tsbYFor(clampToDomain(PRODUCTIVE_TRAINING_TSB_BAND.low)),
     },
     raceBand: {
-      top: tsbYFor(RACE_DAY_TSB_BAND.high),
-      bottom: tsbYFor(RACE_DAY_TSB_BAND.low),
+      top: tsbYFor(clampToDomain(RACE_DAY_TSB_BAND.high)),
+      bottom: tsbYFor(clampToDomain(RACE_DAY_TSB_BAND.low)),
     },
-    tsbZeroY: tsbYFor(0),
+    tsbZeroY: tsbYFor(clampToDomain(0)),
     xTicks,
     xTickMode,
     yTicks,
