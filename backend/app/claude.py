@@ -228,6 +228,7 @@ class ClaudeChat:
         tool_handlers: dict[str, ToolHandler],
         *,
         escalate: Callable[[], Escalation] | None = None,
+        request_id: str | None = None,
     ) -> Iterator[str]:
         """Yields SSE-framed JSON lines (`"data: {...}\\n\\n"`).
 
@@ -239,10 +240,16 @@ class ClaudeChat:
         emitted) once a turn's `stop_reason` isn't `tool_use`, or after
         `MAX_TOOL_ITERATIONS` turns (a runaway-tool-call guard).
 
+        `request_id` (optional), when given, rides every "claude turn
+        complete" log line (IDEA 025 step 1) so a turn's cost can be joined
+        back to that same request's "library route" log line.
+
         Thin wrapper over `_run_turns` (the shared tool-loop generator also
         used by `run_once`) -- SSE-frames each raw event dict it yields.
         """
-        for event in self._run_turns(system, messages, tools, tool_handlers, escalate=escalate):
+        for event in self._run_turns(
+            system, messages, tools, tool_handlers, escalate=escalate, request_id=request_id
+        ):
             yield _sse(event)
 
     def run_once(
@@ -251,6 +258,8 @@ class ClaudeChat:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         tool_handlers: dict[str, ToolHandler],
+        *,
+        request_id: str | None = None,
     ) -> str:
         """Non-streaming counterpart to `run_streaming`, for a caller that
         needs ONE complete answer string to persist (the direct-to-coach
@@ -275,7 +284,7 @@ class ClaudeChat:
         a caller forgets to check for it.
         """
         text_parts: list[str] = []
-        for event in self._run_turns(system, messages, tools, tool_handlers):
+        for event in self._run_turns(system, messages, tools, tool_handlers, request_id=request_id):
             event_type = event.get("type")
             if event_type == "text":
                 text_parts.append(event["text"])
@@ -298,6 +307,7 @@ class ClaudeChat:
         tool_handlers: dict[str, ToolHandler],
         *,
         escalate: Callable[[], Escalation] | None = None,
+        request_id: str | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Shared tool-loop generator behind both `run_streaming` (which
         SSE-frames each event) and `run_once` (which drains text events into
@@ -343,6 +353,9 @@ class ClaudeChat:
                 cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", 0),
                 cache_creation_input_tokens=getattr(usage, "cache_creation_input_tokens", 0),
                 tool_errors_so_far=tool_error_count,
+                # IDEA 025 step 1: joins this turn's cost back to the same
+                # request's "library route" log line (app.context/app.routes).
+                request_id=request_id,
             )
 
             # Checked before any content is read, per the task's exact API
