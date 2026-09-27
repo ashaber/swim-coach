@@ -30,6 +30,7 @@ from swim_coach.athlete_time import athlete_today
 from swim_coach.load import (
     acute_chronic_ratio,
     compute_compliance,
+    ctl_atl_tsb_series,
     daily_loads,
     monotony,
     weekly_volume_m,
@@ -56,6 +57,7 @@ from swim_coach.models import (
     Event,
     Feedback,
     HealthStatus,
+    MacroPlan,
     Session,
     ThresholdRecord,
     Wellness,
@@ -71,6 +73,7 @@ from swim_coach.parse_files import (
     parse_fit,
 )
 from swim_coach.plan import generate_week, scaffold_macro
+from swim_coach.plan_check import check_macro
 from swim_coach.provision import provision_athlete
 from swim_coach.quality import match_workout_to_session, workout_quality
 from swim_coach.research_queue import (
@@ -572,6 +575,76 @@ def _cmd_adapt(args: argparse.Namespace, store: StoreInterface) -> int:
             }
         )
     )
+    return 0
+
+
+def _recent_weekly_hours(workouts: list[Workout], as_of: date, *, weeks: int = 12) -> list[float]:
+    """Total logged hours per calendar week over the trailing `weeks`
+    weeks (Monday-start, ending at the Monday-start week containing
+    `as_of`) -- `check_macro`'s own `recent_weekly_hours` input (the "max
+    sustained recent hours" check, `plan_check.py`). Every sport counts
+    (unlike `load.weekly_volume_m`, which is swim-distance-only) -- hours
+    spent training is sport-agnostic, matching `load.daily_loads`'s own
+    "every sport counts" convention for total training stress."""
+    as_of_monday = as_of - timedelta(days=as_of.weekday())
+    week_starts = [as_of_monday - timedelta(weeks=i) for i in range(weeks - 1, -1, -1)]
+    totals = {ws: 0.0 for ws in week_starts}
+    for workout in workouts:
+        ws = workout.date - timedelta(days=workout.date.weekday())
+        if ws in totals:
+            totals[ws] += workout.duration_min / 60.0
+    return [totals[ws] for ws in week_starts]
+
+
+def _cmd_check_macro(args: argparse.Namespace, store: StoreInterface) -> int:
+    """Red-team a coach-authored macro plan and print the report
+    (`swim_coach.plan_check.check_macro`) -- advisory only, never clamps or
+    edits the plan on disk. `--plan-file` checks a draft YAML `MacroPlan`
+    (e.g. one the coach hasn't saved yet) instead of the athlete's stored
+    macro -- useful for the coach skill to preview a plan before it's
+    committed."""
+    slug = args.athlete
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return _error_from_exception(_error_label(store, slug, "profile.yaml"), exc)
+
+    if args.plan_file:
+        path = Path(args.plan_file)
+        try:
+            plan = MacroPlan.model_validate(_load_yaml_file(path))
+        except Exception as exc:  # noqa: BLE001
+            return _error_from_exception(path, exc)
+    else:
+        try:
+            plan = store.load_macro(slug)
+        except Exception as exc:  # noqa: BLE001
+            return _error_from_exception(_error_label(store, slug, "plan/macro.yaml"), exc)
+        if plan is None:
+            return _error("no macro plan for this athlete; run scaffold-macro first, or pass --plan-file")
+
+    try:
+        events = store.load_events(slug)
+    except Exception as exc:  # noqa: BLE001
+        return _error_from_exception(_error_label(store, slug, "events.yaml"), exc)
+
+    as_of = date.fromisoformat(args.as_of) if args.as_of else athlete_today(athlete)
+    workouts = store.list_workouts(slug)
+    wellness = store.list_wellness(slug)
+    loads = daily_loads(workouts, athlete=athlete, wellness=wellness)
+    series = ctl_atl_tsb_series(loads)
+    current_ctl = series[-1][1] if series else 0.0
+    recent_weekly_hours = _recent_weekly_hours(workouts, as_of)
+
+    report = check_macro(
+        plan,
+        athlete,
+        current_ctl=current_ctl,
+        recent_weekly_hours=recent_weekly_hours,
+        events=events,
+        today=as_of,
+    )
+    print(json.dumps({"athlete": slug, "as_of": as_of.isoformat(), **report.to_dict()}))
     return 0
 
 
@@ -1794,6 +1867,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="days since the last long-swim milestone, to gate the mandated recovery window",
     )
 
+    p_check_macro = subparsers.add_parser(
+        "check-macro", help="red-team a coach-authored macro plan (advisory only)"
+    )
+    p_check_macro.add_argument("--athlete", required=True)
+    p_check_macro.add_argument(
+        "--plan-file", dest="plan_file", help="check a draft YAML MacroPlan instead of the stored one"
+    )
+    p_check_macro.add_argument("--as-of", dest="as_of", help="YYYY-MM-DD, default today")
+
     p_parse_coach_text = subparsers.add_parser(
         "parse-coach-text",
         help="save a pool-coach workout text verbatim and deterministically parse it",
@@ -2021,6 +2103,7 @@ _COMMANDS = {
     "plan-week": _cmd_plan_week,
     "summarize": _cmd_summarize,
     "adapt": _cmd_adapt,
+    "check-macro": _cmd_check_macro,
     "parse-coach-text": _cmd_parse_coach_text,
     "ingest": _cmd_ingest,
     "analyze": _cmd_analyze,

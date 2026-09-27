@@ -1,0 +1,938 @@
+"""Deterministic red-team review of a coach-AUTHORED plan.
+
+Architecture (engine/plan-check-red-team, approved plan
+`~/.claude/plans/just-exploring-a-design-cheeky-pretzel.md`): the LLM coach
+authors macro/week plans directly (`MacroPlan.weeks`, real `Session`s); this
+module computes and RED-TEAMS them with advisory findings. **It never
+rejects or clamps a plan** -- `check_macro`/`check_week` always return a
+`PlanCheckReport`, never raise, no matter how bad the input plan is. Findings
+are bounded by research-based limits where evidence exists, and honestly
+labelled `Coach judgment` / `PROVISIONAL` where it doesn't (several
+constants below are explicitly placeholder values pending PR 3's dedicated
+limits research -- see each constant's own comment).
+
+Mirrors the shape of `ai-coach/.claude/agents/red-team.md`'s adversarial
+review (VERDICT + ranked, capped objections: severity / evidence /
+consequence / fix) -- deterministic engine code here instead of an LLM
+subagent, per the approved plan's token-economics section.
+
+Every named constant cites its `library/` file, per this project's own
+"every engine constant must cite its library/ file" standing rule
+(CLAUDE.md). Two already-cited files (`library/03-periodization.md`,
+`library/24-cycling-periodization-intervals.md`) are already at or near the
+2,500-word test cap (`tests/unit/test_library_discipline.py`'s Rule 5) --
+this module cites them by REFERENCE for constants whose underlying
+convention already lives there (CTL/ATL/TSB Banister model, ramp-rate
+convention), without adding new prose to either file. `library/31-multi-
+race-season-periodization.md` gets a genuinely NEW section (verified
+short-event taper evidence -- Neary 2003, Houmard 1991, Rønnestad 2010 --
+see that file's own new section for the citations).
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from datetime import date, timedelta
+from typing import Literal
+
+from swim_coach.adapt import SINGLE_SESSION_STEP_CAP
+from swim_coach.load import CTL_TIME_CONSTANT_DAYS, ATL_TIME_CONSTANT_DAYS, session_target_load_au
+from swim_coach.models import (
+    Athlete,
+    Event,
+    MacroPlan,
+    MacroWeek,
+    PlanCheckFinding,
+    Session,
+    WeekPlan,
+)
+from swim_coach.plan import WEEKLY_VOLUME_RAMP_CAP, evaluate_week_realism
+from swim_coach.taper_search import RACE_DAY_TSB_BAND
+
+Verdict = Literal["sound", "sound-with-caveats", "fragile", "not-feasible"]
+Severity = Literal["high", "medium", "low"]
+
+
+@dataclass(frozen=True)
+class PlanCheckReport:
+    """Computed/response shape only -- NOT persisted (same "no
+    schema_version" convention `WorkoutQuality`/`PlanCheckFinding` in
+    models.py already use for this codebase's other computed shapes; a
+    dataclass rather than a pydantic BaseModel since nothing here is ever
+    round-tripped through YAML/DB). `findings` is already ranked
+    (highest-consequence first) and capped at `MAX_FINDINGS` -- callers
+    never need to re-sort or re-truncate.
+
+    `MacroPlan.red_team` (models.py) is the PERSISTED counterpart: once a
+    coach reviews a report, PR 2's confirm flow copies each finding here
+    into a `MacroRedTeamRecord`, adding the coach's own accept/decline
+    decision -- this report itself is never written to disk.
+    """
+
+    verdict: Verdict
+    findings: list[PlanCheckFinding] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        """JSON-friendly shape for `cli.py`'s `check-macro`/`check-week`
+        commands (every CLI command prints exactly one JSON object -- see
+        that module's own docstring)."""
+        return {
+            "verdict": self.verdict,
+            "findings": [
+                {
+                    "id": f.id,
+                    "severity": f.severity,
+                    "evidence": f.evidence,
+                    "consequence": f.consequence,
+                    "fix": f.fix,
+                }
+                for f in self.findings
+            ],
+        }
+
+
+MAX_FINDINGS = 6
+# Cap, per the approved plan and mirroring `ai-coach/.claude/agents/red-
+# team.md`'s own "cap it at six objections... the three that matter are
+# getting burying" discipline. Coach judgment -- a review-quality rule, not
+# a physiology citation.
+
+_SEVERITY_ORDER: dict[Severity, int] = {"high": 0, "medium": 1, "low": 2}
+
+
+# ============================================================================
+# Constants -- one cited source per number. "PROVISIONAL"/"Coach judgment"
+# marks a placeholder this project has no direct evidence for yet (PR 3's
+# dedicated limits-research dossier is expected to replace several of these).
+# ============================================================================
+
+# --- CTL ramp rate (dossier-season-taper-2026-09-26.md Q4: convention only,
+# no peer-reviewed evidence found; Friel/TrainingPeaks practitioner
+# convention, "5-8 CTL points/week," individualized -- see that file's own
+# honest verdict). Mirrors `ai-coach/.claude/agents/red-team.md`'s own
+# framing verbatim ("+5 to +7 per week sustained is a flag for most
+# athletes, lower for masters athletes and anyone with an injury history").
+# Cited to library/03-periodization.md's existing CTL/ATL/TSB section (no
+# new prose added there -- see module docstring) since that is this
+# project's home for CTL/ATL/TSB monitoring conventions; NOT itself an
+# [EVIDENCE] claim.
+CTL_RAMP_CAP_PER_WEEK = 7.0
+CTL_RAMP_CAP_PER_WEEK_MASTERS_OR_INJURY = 5.0
+MASTERS_AGE_THRESHOLD = 40
+# The approved plan's own spec: "lower for masters age >=40 or injury
+# history." Coach judgment -- no citation pins 40 specifically as the
+# masters cutoff for CTL-ramp tolerance; 40 is this project's chosen
+# threshold, consistent with common masters-category conventions
+# (USMS/British Masters swimming and masters cycling both use 25-40+
+# tiers). library/03-periodization.md.
+
+# --- Recovery cadence (approved plan: "recovery cadence (3:1, or 2:1
+# masters)"). Coach judgment / PROVISIONAL, no direct citation -- this
+# project's dossier pass (Q3) covered in-season MAINTENANCE dose, not
+# recovery-WEEK cadence specifically; that gap is honest, not filled in
+# here. library/03-periodization.md (this project's existing home for
+# macro-block-shape conventions, e.g. BASE_SHARE/PEAK_WEEKS_LONG, all
+# similarly uncited "conventional shape" numbers).
+RECOVERY_CADENCE_WEEKS = 3
+RECOVERY_CADENCE_WEEKS_MASTERS_OR_INJURY = 2
+
+# --- Short-event taper (library/31-multi-race-season-periodization.md,
+# new "Short-event taper (<=1.5h)" section -- Neary et al. (2003), verified
+# this dossier pass: a 7-day, ~50%-volume-cut taper, intensity held,
+# significantly improved a ~25-30 min time-trial effort).
+SHORT_EVENT_MAX_HOURS = 1.5
+# Coach judgment: threshold below which an event counts as "short" for
+# taper-length purposes. Neary 2003 studied a ~25-30 min TT; 1.5h is a
+# generous ceiling that still comfortably covers a cyclocross race
+# (typically 40-60 min) with margin, not itself an evidence-pinned cutoff.
+SHORT_EVENT_TAPER_DAYS_MIN = 5
+SHORT_EVENT_TAPER_DAYS_MAX = 7
+SHORT_EVENT_TAPER_VOLUME_CUT_FRACTION = 0.50
+# [EVIDENCE: cycling] Neary, Bhambhani & McKenzie (2003) -- a 7-day taper
+# with a 50% volume cut (intensity held) produced a significant 5.4%
+# improvement in a simulated 20km TT; 30%/80% cuts did not reach
+# significance. library/31-multi-race-season-periodization.md.
+
+GENERAL_TAPER_DAYS_MIN = 4
+GENERAL_TAPER_DAYS_MAX = 28
+# [ADAPTED: general-endurance] Mujika & Padilla (2003) -- taper duration
+# studied across the literature spans 4-28 days (volume cut 60-90%,
+# intensity/frequency mostly held). Already cited in
+# library/31-multi-race-season-periodization.md and
+# library/24-cycling-periodization-intervals.md; reused here unchanged for
+# any event NOT classified "short" (SHORT_EVENT_MAX_HOURS).
+
+# --- Race-day TSB band (library/22-injury-adapted-taper.md's existing
+# `RACE_DAY_TSB_BAND`, imported and reused unchanged -- not redefined here;
+# see that module's own citation, Joe Friel via TrainingPeaks, Confidence:
+# medium).
+
+# --- Sustained low TSB (approved plan: "build TSB not sustained below -30
+# without a reason"). Coach judgment / PROVISIONAL -- no citation pins -30
+# specifically; chosen as a clearly-deep fatigue reading, well past the
+# -10 to -20 range typically described as a normal, recoverable build-phase
+# dip in cycling/TrainingPeaks practitioner literature (the same tier
+# `library/22-injury-adapted-taper.md`'s own race-day-TSB citation comes
+# from). library/03-periodization.md (CTL/ATL/TSB section).
+SUSTAINED_LOW_TSB_THRESHOLD = -30.0
+SUSTAINED_LOW_TSB_MIN_CONSECUTIVE_DAYS = 14
+
+# --- Time-reality buffer (approved plan, quoting
+# `ai-coach/.claude/agents/red-team.md` verbatim: "Plans routinely require
+# 10% more time than they claim"). Coach judgment -- a planning-discipline
+# heuristic, not a physiology citation. library/03-periodization.md.
+TIME_REALITY_BUFFER_FRACTION = 0.10
+
+# --- Goal reality check (approved plan: "the implied rate of progress to
+# the stated goal ... against research-based progression rates and the
+# athlete's age"). Both numbers below are explicitly PROVISIONAL Coach-
+# judgment PLACEHOLDERS -- PR 3's dedicated limits-research dossier
+# (masters CTL ramp tolerance, realistic FTP/threshold progression rates by
+# training age/age, age-related decline) is expected to replace them; no
+# citation exists yet. library/24-cycling-periodization-intervals.md (this
+# project's existing home for cycling-specific training-age conventions).
+MAX_REALISTIC_ANNUAL_GAIN_FRACTION = 0.08
+MASTERS_ANNUAL_DECLINE_FRACTION = 0.01
+GOAL_REALITY_CHECK_HORIZON_YEARS = 5.0
+
+# --- Polarization (library/24-cycling-periodization-intervals.md's own
+# existing Seiler-polarized citation, already grounding
+# `plan.evaluate_week_realism`'s `BIKE_MAX_HARD_DAYS_PER_WEEK`; reused here
+# as a session-count fraction rather than a raw day count, for a
+# session-count-based read on non-bike-primary weeks too).
+POLARIZED_MAX_HARD_SESSION_FRACTION = 1.0 / 3.0
+_HARD_ZONES = frozenset({"Z4", "Z5"})
+
+
+def _is_hard_session(session: Session) -> bool:
+    """A session counts as "hard" for the polarization check if it's
+    planned at Z4/Z5 -- the same zone-based hard/easy split
+    `plan.evaluate_week_realism`'s own hard-bike check already uses
+    (library/24, Seiler polarized distribution), generalized here to any
+    sport rather than bike-only."""
+    return session.intensity.get("zone") in _HARD_ZONES
+
+
+def _age_years(dob: date | None, as_of: date) -> float | None:
+    if dob is None:
+        return None
+    years = as_of.year - dob.year - ((as_of.month, as_of.day) < (dob.month, dob.day))
+    return float(years)
+
+
+def _project_ctl_atl_tsb(
+    current_ctl: float,
+    daily_loads_by_date: dict[date, float],
+    start: date,
+    end: date,
+) -> list[tuple[date, float, float, float]]:
+    """Project CTL/ATL/TSB day-by-day from `start` through `end` (inclusive),
+    SEEDED at the athlete's real, ACTUAL current CTL -- not from zero.
+
+    Same exact Banister recursion `load.ctl_atl_tsb_series` implements
+    (`CTL_t = CTL_{t-1} + (load_t - CTL_{t-1}) / CTL_TIME_CONSTANT_DAYS`,
+    same shape for ATL, both constants imported from `load.py` unchanged) --
+    but that function always seeds `CTL = ATL = 0` immediately before the
+    earliest day it walks (see its own "Known limitation -- cold start"
+    section), which is the WRONG behavior for a plan-check projection: a
+    macro review must start from where the athlete REALLY is today, not
+    climb from zero over the projected weeks. This is a small, deliberate
+    seeding fix, not a different model.
+
+    ATL is seeded equal to `current_ctl` (an assumed TSB=0 as of `start`) --
+    `check_macro`'s own signature (per the approved plan) takes only
+    `current_ctl`, no `current_atl`; a future revision could accept a real
+    current ATL once a calling context has one on hand.
+    """
+    ctl = current_ctl
+    atl = current_ctl
+    series: list[tuple[date, float, float, float]] = []
+    day = start
+    while day <= end:
+        load = daily_loads_by_date.get(day, 0.0)
+        ctl = ctl + (load - ctl) / CTL_TIME_CONSTANT_DAYS
+        atl = atl + (load - atl) / ATL_TIME_CONSTANT_DAYS
+        series.append((day, ctl, atl, ctl - atl))
+        day += timedelta(days=1)
+    return series
+
+
+def _spread_weekly_tss_to_daily(weeks: list[MacroWeek]) -> dict[date, float]:
+    """Planned weekly TSS, spread evenly across that week's 7 days --
+    the approved plan's own explicit instruction ("spread evenly per day
+    unless better info exists"; this module has no per-day breakdown to do
+    better with, since a `MacroWeek` is a macro-level row, not day-by-day
+    `Session`s). A week with `load_tss=None` contributes zero load days
+    (not a fabricated number) -- `_check_bike_weeks_missing_load` is the
+    dedicated finding for a week missing this data, not this function."""
+    out: dict[date, float] = {}
+    for week in weeks:
+        if week.load_tss is None:
+            continue
+        daily = week.load_tss / 7.0
+        for offset in range(7):
+            out[week.week_start + timedelta(days=offset)] = daily
+    return out
+
+
+def _week_for_date(weeks: list[MacroWeek], day: date) -> MacroWeek | None:
+    for week in weeks:
+        if week.week_start <= day < week.week_start + timedelta(days=7):
+            return week
+    return None
+
+
+def _sorted_weeks(weeks: list[MacroWeek]) -> list[MacroWeek]:
+    return sorted(weeks, key=lambda w: w.week_start)
+
+
+# ============================================================================
+# check_macro
+# ============================================================================
+
+
+def check_macro(
+    plan: MacroPlan,
+    athlete: Athlete,
+    *,
+    current_ctl: float,
+    recent_weekly_hours: list[float],
+    events: list[Event],
+    today: date,
+) -> PlanCheckReport:
+    """Red-team a coach-authored macro plan (`plan.weeks`). Never raises,
+    never clamps/edits `plan` -- always returns a `PlanCheckReport`, even
+    for a badly broken plan (see `test_plan_check.py`'s
+    `test_check_macro_never_raises_on_a_bad_plan`).
+
+    `current_ctl`: the athlete's REAL current CTL (e.g. from
+    `load.ctl_atl_tsb_series` over her actual logged history) -- the
+    projection below starts here, not from zero.
+    `recent_weekly_hours`: the athlete's actual weekly training hours over
+    (nominally) the trailing ~12 weeks, most-recent-last or in any order --
+    only `max()` is read.
+    `events`: every `Event` this athlete has on file (active and inactive);
+    only `active=True` events are checked.
+    `today`: the date this check is run as-of.
+    """
+    weeks = _sorted_weeks(plan.weeks)
+    active_events = [e for e in events if e.active]
+    findings: list[PlanCheckFinding] = []
+
+    if not weeks:
+        findings.append(
+            PlanCheckFinding(
+                id="no-weeks",
+                severity="high",
+                evidence="MacroPlan.weeks is empty.",
+                consequence="There is no week-by-week plan to check or for the athlete to follow.",
+                fix="Author at least one MacroWeek row before requesting a check.",
+            )
+        )
+        return PlanCheckReport(verdict=_verdict_from_findings(findings), findings=findings)
+
+    plan_start = weeks[0].week_start
+    plan_end_exclusive = weeks[-1].week_start + timedelta(days=7)
+
+    daily_loads_by_date = _spread_weekly_tss_to_daily(weeks)
+    projection_end = max(plan_end_exclusive - timedelta(days=1), today)
+    series = _project_ctl_atl_tsb(current_ctl, daily_loads_by_date, today, projection_end)
+    series_by_date = {d: (ctl, atl, tsb) for d, ctl, atl, tsb in series}
+
+    findings.extend(_check_uncovered_weeks(weeks, active_events, plan_start, plan_end_exclusive))
+    findings.extend(_check_ctl_ramp(weeks, athlete, today))
+    findings.extend(_check_recovery_cadence(weeks, athlete))
+    findings.extend(_check_taper_and_race_day(weeks, active_events, series_by_date))
+    findings.extend(_check_sustained_low_tsb(series))
+    findings.extend(_check_hours_reality(weeks, recent_weekly_hours))
+    findings.extend(_check_bc_races_labelled(weeks, active_events))
+    findings.extend(_check_bike_weeks_missing_load(weeks, active_events))
+    goal_finding = _check_goal_reality(plan, athlete, today)
+    if goal_finding is not None:
+        findings.append(goal_finding)
+
+    findings = _rank_and_cap(findings)
+    return PlanCheckReport(verdict=_verdict_from_findings(findings), findings=findings)
+
+
+def _rank_and_cap(findings: list[PlanCheckFinding]) -> list[PlanCheckFinding]:
+    ranked = sorted(findings, key=lambda f: _SEVERITY_ORDER[f.severity])
+    return ranked[:MAX_FINDINGS]
+
+
+def _verdict_from_findings(findings: list[PlanCheckFinding]) -> Verdict:
+    n_high = sum(1 for f in findings if f.severity == "high")
+    if n_high >= 2:
+        return "not-feasible"
+    if n_high == 1:
+        return "fragile"
+    if findings:
+        return "sound-with-caveats"
+    return "sound"
+
+
+def _check_uncovered_weeks(
+    weeks: list[MacroWeek],
+    active_events: list[Event],
+    plan_start: date,
+    plan_end_exclusive: date,
+) -> list[PlanCheckFinding]:
+    """No gap in weekly coverage through the last active event's date
+    (approved plan: "no uncovered weeks through the last active event").
+    Flags every distinct gap week once; a gap that also contains an active
+    event is called out by name and escalated to high severity."""
+    if not active_events:
+        last_event_date = plan_end_exclusive - timedelta(days=1)
+    else:
+        last_event_date = max(e.event_date for e in active_events)
+    if last_event_date < plan_start:
+        return []
+    findings: list[PlanCheckFinding] = []
+    cursor = plan_start
+    while cursor <= last_event_date:
+        week = _week_for_date(weeks, cursor)
+        if week is None:
+            events_in_gap = [
+                e for e in active_events if cursor <= e.event_date < cursor + timedelta(days=7)
+            ]
+            if events_in_gap:
+                names = ", ".join(f"{e.name} ({e.priority})" for e in events_in_gap)
+                findings.append(
+                    PlanCheckFinding(
+                        id=f"uncovered-race-week-{cursor.isoformat()}",
+                        severity="high",
+                        evidence=(
+                            f"No MacroWeek row covers {cursor.isoformat()}-"
+                            f"{(cursor + timedelta(days=6)).isoformat()}, the week "
+                            f"containing: {names}."
+                        ),
+                        consequence=(
+                            "The athlete has no plan at all for race week -- the exact "
+                            "week the whole campaign is aimed at."
+                        ),
+                        fix="Author a MacroWeek row for this week before the race.",
+                    )
+                )
+            else:
+                findings.append(
+                    PlanCheckFinding(
+                        id=f"uncovered-week-{cursor.isoformat()}",
+                        severity="medium",
+                        evidence=(
+                            f"No MacroWeek row covers {cursor.isoformat()}-"
+                            f"{(cursor + timedelta(days=6)).isoformat()}."
+                        ),
+                        consequence="A gap in the plan the athlete/coach has to fill blind.",
+                        fix="Author a MacroWeek row for this week.",
+                    )
+                )
+        cursor += timedelta(days=7)
+    return findings
+
+
+def _check_ctl_ramp(
+    weeks: list[MacroWeek], athlete: Athlete, today: date
+) -> list[PlanCheckFinding]:
+    """Week-over-week `ctl_target` delta vs `CTL_RAMP_CAP_PER_WEEK`
+    (lower for masters/injury-history athletes)."""
+    age = _age_years(athlete.dob, today)
+    cap = CTL_RAMP_CAP_PER_WEEK
+    if (age is not None and age >= MASTERS_AGE_THRESHOLD):
+        cap = CTL_RAMP_CAP_PER_WEEK_MASTERS_OR_INJURY
+    worst_delta = 0.0
+    worst_week: MacroWeek | None = None
+    prev: MacroWeek | None = None
+    for week in weeks:
+        if prev is not None and prev.ctl_target is not None and week.ctl_target is not None:
+            delta = week.ctl_target - prev.ctl_target
+            if delta > worst_delta:
+                worst_delta = delta
+                worst_week = week
+        prev = week
+    if worst_week is not None and worst_delta > cap:
+        return [
+            PlanCheckFinding(
+                id="ctl-ramp-too-steep",
+                severity="medium",
+                evidence=(
+                    f"ctl_target rises by {worst_delta:.1f}/week into the week starting "
+                    f"{worst_week.week_start.isoformat()}, above the {cap:.0f}/week cap."
+                ),
+                consequence="A ramp this steep risks overreaching before it's ever tested in a race.",
+                fix="Spread the CTL gain over more weeks, or confirm explicitly with the athlete.",
+            )
+        ]
+    return []
+
+
+def _check_recovery_cadence(
+    weeks: list[MacroWeek], athlete: Athlete
+) -> list[PlanCheckFinding]:
+    cadence = RECOVERY_CADENCE_WEEKS
+    age = _age_years(athlete.dob, weeks[0].week_start) if weeks else None
+    if age is not None and age >= MASTERS_AGE_THRESHOLD:
+        cadence = RECOVERY_CADENCE_WEEKS_MASTERS_OR_INJURY
+    run = 0
+    worst_run = 0
+    worst_week: MacroWeek | None = None
+    for week in weeks:
+        if week.recovery:
+            run = 0
+            continue
+        run += 1
+        if run > worst_run:
+            worst_run = run
+            worst_week = week
+    if worst_run > cadence:
+        assert worst_week is not None
+        return [
+            PlanCheckFinding(
+                id="recovery-cadence",
+                severity="low",
+                evidence=(
+                    f"{worst_run} consecutive non-recovery weeks through the week starting "
+                    f"{worst_week.week_start.isoformat()}, above the {cadence}:1 cadence."
+                ),
+                consequence="Fatigue accumulates with no deliberate release valve.",
+                fix="Insert a recovery week (recovery=True), or confirm the long run is intentional.",
+            )
+        ]
+    return []
+
+
+def _check_taper_and_race_day(
+    weeks: list[MacroWeek],
+    active_events: list[Event],
+    series_by_date: dict[date, tuple[float, float, float]],
+) -> list[PlanCheckFinding]:
+    findings: list[PlanCheckFinding] = []
+    a_events = [e for e in active_events if e.priority.strip().upper() == "A"]
+    for event in a_events:
+        findings.extend(_check_one_event_taper(weeks, event))
+        tsb_reading = series_by_date.get(event.event_date)
+        if tsb_reading is not None:
+            _ctl, _atl, tsb = tsb_reading
+            if not (RACE_DAY_TSB_BAND["low"] <= tsb <= RACE_DAY_TSB_BAND["high"]):
+                findings.append(
+                    PlanCheckFinding(
+                        id=f"race-day-tsb-{event.id}",
+                        severity="medium",
+                        evidence=(
+                            f"Projected TSB on {event.event_date.isoformat()} ({event.name}) is "
+                            f"{tsb:.1f}, outside the {RACE_DAY_TSB_BAND['low']:.0f} to "
+                            f"{RACE_DAY_TSB_BAND['high']:.0f} race-day band (library/22)."
+                        ),
+                        consequence="Racing too fresh (flat legs) or too fatigued (no snap) for the A race.",
+                        fix="Adjust the taper depth/length so projected race-day TSB lands in-band.",
+                    )
+                )
+    return findings
+
+
+_TAPER_OR_LEAD_IN_KEYWORDS = ("taper", "recovery", "peak", "race", "unload")
+
+
+def _looks_like_taper_or_lead_in(week: MacroWeek) -> bool:
+    """True if `week` reasonably continues a taper's lead-in to a race --
+    a genuine taper/recovery/peak/race/unload phase, or an explicit
+    `recovery=True` flag -- as opposed to active base/build/sharpen
+    training, which would mean the taper's freshness is being spent and
+    then trained straight through again before the actual race."""
+    if week.recovery:
+        return True
+    lowered = week.phase.strip().lower()
+    return any(kw in lowered for kw in _TAPER_OR_LEAD_IN_KEYWORDS)
+
+
+def _check_one_event_taper(weeks: list[MacroWeek], event: Event) -> list[PlanCheckFinding]:
+    """Taper length vs event duration, and whether an identified taper
+    block actually leads INTO this event (vs. being spent on an earlier,
+    disconnected window and then orphaned by a gap -- the real
+    architecture-doc bug: a 2-week taper placed on "the only race-free
+    build window," followed by an uncovered week, then the race)."""
+    is_short = _event_hours(event) is not None and _event_hours(event) <= SHORT_EVENT_MAX_HOURS
+    taper_days_min = SHORT_EVENT_TAPER_DAYS_MIN if is_short else GENERAL_TAPER_DAYS_MIN
+    taper_days_max = SHORT_EVENT_TAPER_DAYS_MAX if is_short else GENERAL_TAPER_DAYS_MAX
+
+    taper_weeks = [w for w in weeks if "taper" in w.phase.strip().lower() and w.week_start < event.event_date]
+    if not taper_weeks:
+        return [
+            PlanCheckFinding(
+                id=f"no-taper-{event.id}",
+                severity="medium",
+                evidence=f"No week with phase containing 'taper' found before {event.name} ({event.event_date.isoformat()}).",
+                consequence="The athlete may go into the A race carrying full training fatigue.",
+                fix=f"Add a {taper_days_min}-{taper_days_max}-day taper before this event.",
+            )
+        ]
+    last_taper_week = max(taper_weeks, key=lambda w: w.week_start)
+    race_week_start = event.event_date - timedelta(days=event.event_date.weekday())
+    weeks_by_start = {w.week_start: w for w in weeks}
+    cursor = last_taper_week.week_start + timedelta(days=7)
+    gap_weeks: list[date] = []
+    while cursor <= race_week_start:
+        w = weeks_by_start.get(cursor)
+        if w is None or not _looks_like_taper_or_lead_in(w):
+            gap_weeks.append(cursor)
+        cursor += timedelta(days=7)
+
+    findings: list[PlanCheckFinding] = []
+    if gap_weeks:
+        gap_str = ", ".join(d.isoformat() for d in gap_weeks)
+        findings.append(
+            PlanCheckFinding(
+                id=f"taper-orphaned-{event.id}",
+                severity="high",
+                evidence=(
+                    f"Taper block ends {(last_taper_week.week_start + timedelta(days=6)).isoformat()} "
+                    f"({last_taper_week.phase}), but the week(s) starting {gap_str} before "
+                    f"{event.name} ({event.event_date.isoformat()}) are missing or look like active "
+                    "training, not a continued taper/lead-in."
+                ),
+                consequence=(
+                    "The taper's freshness is spent, then trained through (or left unplanned) right "
+                    "before the race -- likely a taper placed on the wrong window, not one that "
+                    "actually leads into this event."
+                ),
+                fix="Move the taper so it ends immediately before race week, with no gap or resumed training in between.",
+            )
+        )
+    else:
+        taper_end = last_taper_week.week_start + timedelta(days=6)
+        gap_days = (event.event_date - taper_end).days
+        if not (taper_days_min <= gap_days + 1 <= taper_days_max):
+            findings.append(
+                PlanCheckFinding(
+                    id=f"taper-length-{event.id}",
+                    severity="low",
+                    evidence=(
+                        f"Taper ends {gap_days} day(s) before {event.name} "
+                        f"({event.event_date.isoformat()}); the evidence-based window for this "
+                        f"event is {taper_days_min}-{taper_days_max} days."
+                    ),
+                    consequence="A taper outside the studied window risks arriving flat or under-tapered.",
+                    fix=f"Target a {taper_days_min}-{taper_days_max}-day taper for this event.",
+                )
+            )
+    return findings
+
+
+def _event_hours(event: Event) -> float | None:
+    if event.target_metric == "duration_min" and event.target_value is not None:
+        return event.target_value / 60.0
+    return None
+
+
+def _check_sustained_low_tsb(
+    series: list[tuple[date, float, float, float]]
+) -> list[PlanCheckFinding]:
+    run = 0
+    worst_run = 0
+    worst_start: date | None = None
+    run_start: date | None = None
+    for day, _ctl, _atl, tsb in series:
+        if tsb < SUSTAINED_LOW_TSB_THRESHOLD:
+            if run == 0:
+                run_start = day
+            run += 1
+            if run > worst_run:
+                worst_run = run
+                worst_start = run_start
+        else:
+            run = 0
+    if worst_run >= SUSTAINED_LOW_TSB_MIN_CONSECUTIVE_DAYS:
+        return [
+            PlanCheckFinding(
+                id="sustained-low-tsb",
+                severity="medium",
+                evidence=(
+                    f"Projected TSB stays below {SUSTAINED_LOW_TSB_THRESHOLD:.0f} for "
+                    f"{worst_run} consecutive days starting {worst_start.isoformat()}."
+                ),
+                consequence="Extended deep fatigue without a planned release risks overreaching/illness.",
+                fix="Insert a recovery week, or confirm this depth is deliberate and time-boxed.",
+            )
+        ]
+    return []
+
+
+def _check_hours_reality(
+    weeks: list[MacroWeek], recent_weekly_hours: list[float]
+) -> list[PlanCheckFinding]:
+    if not recent_weekly_hours:
+        return []
+    ceiling = max(recent_weekly_hours)
+    worst_week: MacroWeek | None = None
+    worst_required = 0.0
+    for week in weeks:
+        if week.hours is None:
+            continue
+        required = week.hours * (1 + TIME_REALITY_BUFFER_FRACTION)
+        if required > ceiling and required > worst_required:
+            worst_required = required
+            worst_week = week
+    if worst_week is not None:
+        return [
+            PlanCheckFinding(
+                id="hours-optimistic",
+                severity="low",
+                evidence=(
+                    f"Week starting {worst_week.week_start.isoformat()} plans "
+                    f"{worst_week.hours:.1f}h (~{worst_required:.1f}h with the "
+                    f"{TIME_REALITY_BUFFER_FRACTION*100:.0f}% time-reality buffer), above the "
+                    f"athlete's max sustained recent week ({ceiling:.1f}h)."
+                ),
+                consequence="Plans routinely take longer than they claim; this week is likely to slip.",
+                fix="Trim the week's hours, or confirm the athlete genuinely has this much time free.",
+            )
+        ]
+    return []
+
+
+def _check_bc_races_labelled(
+    weeks: list[MacroWeek], active_events: list[Event]
+) -> list[PlanCheckFinding]:
+    findings: list[PlanCheckFinding] = []
+    for event in active_events:
+        if event.priority.strip().upper() == "A":
+            continue
+        week = _week_for_date(weeks, event.event_date)
+        if week is None:
+            continue  # caught by _check_uncovered_weeks
+        haystack = " ".join([week.notes or "", week.focus, *week.key_sessions]).lower()
+        if event.name.lower() not in haystack and "race" not in haystack:
+            findings.append(
+                PlanCheckFinding(
+                    id=f"bc-race-unlabelled-{event.id}",
+                    severity="low",
+                    evidence=(
+                        f"{event.name} ({event.priority}) falls in the week starting "
+                        f"{week.week_start.isoformat()}, which doesn't mention it or 'race'."
+                    ),
+                    consequence="The athlete may be surprised, or may over-taper for a training-stress race.",
+                    fix="Note the B/C race explicitly in that week's key_sessions/notes.",
+                )
+            )
+    return findings
+
+
+def _check_bike_weeks_missing_load(
+    weeks: list[MacroWeek], active_events: list[Event]
+) -> list[PlanCheckFinding]:
+    """The meters-for-bike defect: a bike-primary macro's week is
+    meaningless if it carries neither hours nor load_tss -- bike load is
+    not measured in meters (see the approved plan's context section:
+    "bike volume in 'meters' (actually minutes)")."""
+    is_bike_macro = any(e.primary_sport == "bike" for e in active_events)
+    if not is_bike_macro:
+        return []
+    offending = [w for w in weeks if w.hours is None and w.load_tss is None]
+    if not offending:
+        return []
+    dates = ", ".join(w.week_start.isoformat() for w in offending[:3])
+    more = f" (+{len(offending) - 3} more)" if len(offending) > 3 else ""
+    return [
+        PlanCheckFinding(
+            id="bike-weeks-missing-load",
+            severity="high",
+            evidence=f"{len(offending)} week(s) with neither hours nor load_tss set: {dates}{more}.",
+            consequence=(
+                "These weeks carry no usable training-load number at all -- CTL/TSB "
+                "projections and ramp checks silently skip them (treated as zero load)."
+            ),
+            fix="Set hours and/or load_tss for every bike week; never record bike volume in meters.",
+        )
+    ]
+
+
+_GOAL_PATTERN = re.compile(r"(\d+(?:\.\d+)?)\s*W\s*/\s*kg", re.IGNORECASE)
+
+
+def _check_goal_reality(
+    plan: MacroPlan, athlete: Athlete, today: date
+) -> PlanCheckFinding | None:
+    """Implied rate of progress to a stated W/kg goal vs. a research-based
+    (here: PROVISIONAL placeholder, see constants above) progression rate
+    and the athlete's age -- "the clock runs out first" framing from the
+    approved plan. The goal is read from `plan.architecture`'s free text
+    (Coach judgment: no structured goal field exists yet on any model;
+    `architecture` is the coach's own written rationale, a natural place
+    to state a numeric target -- PR 3 may add a dedicated field)."""
+    if not plan.architecture or athlete.ftp_watts is None or athlete.weight_kg is None:
+        return None
+    match = _GOAL_PATTERN.search(plan.architecture)
+    if match is None:
+        return None
+    goal_wkg = float(match.group(1))
+    current_wkg = athlete.ftp_watts / athlete.weight_kg
+    if goal_wkg <= current_wkg:
+        return None
+    age = _age_years(athlete.dob, today)
+    decline = MASTERS_ANNUAL_DECLINE_FRACTION if (age is not None and age >= MASTERS_AGE_THRESHOLD) else 0.0
+    net_annual_gain = MAX_REALISTIC_ANNUAL_GAIN_FRACTION - decline
+    required_fraction = (goal_wkg - current_wkg) / current_wkg
+    age_display = f"{age:.0f}" if age is not None else "unknown"
+    if net_annual_gain <= 0:
+        return PlanCheckFinding(
+            id="goal-reality-check",
+            severity="medium",
+            evidence=(
+                f"Goal {goal_wkg:.1f} W/kg from {current_wkg:.1f} W/kg at age "
+                f"{age_display}: age-related decline "
+                f"({decline*100:.0f}%/yr) meets or exceeds the realistic gain rate "
+                f"({MAX_REALISTIC_ANNUAL_GAIN_FRACTION*100:.0f}%/yr, PROVISIONAL placeholder)."
+            ),
+            consequence="This goal cannot be reached at any horizon at the current age on these assumptions.",
+            fix="Set a less aggressive goal, or revisit once PR 3's progression-rate research lands.",
+        )
+    years_needed = required_fraction / net_annual_gain
+    if years_needed <= GOAL_REALITY_CHECK_HORIZON_YEARS:
+        return None
+    estimated_date = today + timedelta(days=round(years_needed * 365))
+    return PlanCheckFinding(
+        id="goal-reality-check",
+        severity="medium",
+        evidence=(
+            f"Goal {goal_wkg:.1f} W/kg from {current_wkg:.1f} W/kg needs "
+            f"~{years_needed:.1f} years at a {net_annual_gain*100:.1f}%/yr net realistic "
+            f"gain rate (PROVISIONAL placeholder, PR 3 to replace) -- beyond the "
+            f"{GOAL_REALITY_CHECK_HORIZON_YEARS:.0f}-year horizon this check treats as reasonable."
+        ),
+        consequence=(
+            f"The clock runs out first: on these assumptions the goal isn't reached until "
+            f"roughly {estimated_date.isoformat()}."
+        ),
+        fix="Set an interim, reachable goal for this season; revisit the long-range target yearly.",
+    )
+
+
+# ============================================================================
+# check_week
+# ============================================================================
+
+
+def check_week(
+    week: WeekPlan,
+    macro_week: MacroWeek | None,
+    athlete: Athlete,
+    *,
+    recent_weeks: list[WeekPlan],
+) -> PlanCheckReport:
+    """Red-team one coach-authored WEEK of real `Session`s against its
+    macro row and recent history. Never raises. `+8%` volume / `+15%`
+    long-swim flags are `requires_athlete_confirmation` advisories (id
+    prefix `confirm-`), never clamps -- CLAUDE.md's safety rail already
+    requires explicit athlete confirmation past these thresholds; this
+    function surfaces that requirement, it does not enforce it."""
+    findings: list[PlanCheckFinding] = []
+
+    if macro_week is not None:
+        projected_total = sum(session_target_load_au(s, athlete) for s in week.sessions)
+        if macro_week.load_tss is not None and macro_week.load_tss > 0:
+            delta_pct = (projected_total / macro_week.load_tss - 1) * 100
+            if abs(delta_pct) > 20.0:
+                findings.append(
+                    PlanCheckFinding(
+                        id="week-tss-mismatch",
+                        severity="low",
+                        evidence=(
+                            f"This week's sessions project to {projected_total:.0f} AU vs. "
+                            f"the macro row's {macro_week.load_tss:.0f} TSS ({delta_pct:+.0f}%)."
+                        ),
+                        consequence="The week's real sessions don't match what the macro promised.",
+                        fix="Reconcile the week's sessions with the macro row, or update the macro.",
+                    )
+                )
+
+    bike_sessions = [s for s in week.sessions if s.sport == "bike"]
+    if bike_sessions:
+        prev_bike_volume = None
+        if recent_weeks:
+            last = recent_weeks[-1]
+            last_bike = [s for s in last.sessions if s.sport == "bike"]
+            if last_bike:
+                prev_bike_volume = sum(s.duration_min for s in last_bike)
+        for i, warning in enumerate(
+            evaluate_week_realism(week.sessions, prev_week_bike_volume_min=prev_bike_volume)
+        ):
+            findings.append(
+                PlanCheckFinding(
+                    id=f"week-realism-{i}",
+                    severity="medium",
+                    evidence=warning,
+                    consequence="Unrealistic session mix tends to get abandoned mid-week.",
+                    fix="See evidence above (plan.evaluate_week_realism).",
+                )
+            )
+
+    if week.sessions:
+        hard_count = sum(1 for s in week.sessions if _is_hard_session(s))
+        fraction = hard_count / len(week.sessions)
+        if fraction > POLARIZED_MAX_HARD_SESSION_FRACTION:
+            findings.append(
+                PlanCheckFinding(
+                    id="polarization",
+                    severity="low",
+                    evidence=(
+                        f"{hard_count}/{len(week.sessions)} sessions this week are hard "
+                        f"(Z4/Z5), above the polarized {POLARIZED_MAX_HARD_SESSION_FRACTION*100:.0f}% share."
+                    ),
+                    consequence="A grey-zone week plateaus performance (library/24, Seiler polarized distribution).",
+                    fix="Move an extra hard session to easy endurance.",
+                )
+            )
+
+    findings.extend(_check_week_volume_confirmation(week, recent_weeks))
+
+    findings = _rank_and_cap(findings)
+    return PlanCheckReport(verdict=_verdict_from_findings(findings), findings=findings)
+
+
+def _check_week_volume_confirmation(
+    week: WeekPlan, recent_weeks: list[WeekPlan]
+) -> list[PlanCheckFinding]:
+    if not recent_weeks:
+        return []
+    findings: list[PlanCheckFinding] = []
+    prev = recent_weeks[-1]
+    if prev.target_volume_m > 0:
+        growth = week.target_volume_m / prev.target_volume_m - 1
+        if growth > WEEKLY_VOLUME_RAMP_CAP:
+            findings.append(
+                PlanCheckFinding(
+                    id="confirm-weekly-volume-ramp",
+                    severity="low",
+                    evidence=(
+                        f"target_volume_m {week.target_volume_m} is +{growth*100:.0f}% over last "
+                        f"week ({prev.target_volume_m}), past the "
+                        f"+{WEEKLY_VOLUME_RAMP_CAP*100:.0f}%/week safety rail (CLAUDE.md)."
+                    ),
+                    consequence="Requires explicit athlete confirmation per CLAUDE.md's safety rail.",
+                    fix="Confirm with the athlete, or spread the increase over more weeks.",
+                )
+            )
+
+    def _longest_swim_m(w: WeekPlan) -> int:
+        swim = [s for s in w.sessions if s.sport in {"swim_pool", "swim_ow"} and s.distance_m]
+        return max((s.distance_m for s in swim), default=0)
+
+    this_longest = _longest_swim_m(week)
+    prev_longest = _longest_swim_m(prev)
+    if prev_longest > 0 and this_longest > 0:
+        growth = this_longest / prev_longest - 1
+        if growth > SINGLE_SESSION_STEP_CAP:
+            findings.append(
+                PlanCheckFinding(
+                    id="confirm-long-swim-step",
+                    severity="low",
+                    evidence=(
+                        f"Longest swim {this_longest}m is +{growth*100:.0f}% over last week's "
+                        f"{prev_longest}m, past the +{SINGLE_SESSION_STEP_CAP*100:.0f}% cap "
+                        "(library/06-long-swim-progression.md)."
+                    ),
+                    consequence="Requires explicit athlete confirmation per CLAUDE.md's safety rail.",
+                    fix="Confirm with the athlete, or step the long swim up more gradually.",
+                )
+            )
+    return findings
