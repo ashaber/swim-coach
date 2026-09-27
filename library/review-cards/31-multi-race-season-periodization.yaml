@@ -22,6 +22,14 @@ cards:
   recommendation: Give A-priority races the full ~2-week taper; give B-priority races only a brief ~1-week,
     shallower taper and a capped 2-4 week sharpen block, not a full build.
   content_hash: 896c6205f21c94fa51429e0ae624fd36e3a2b75afba41de56ee5b09b2a99f877
+- section: short-event-taper-the-taper-length-placement-bug-fix-2026-09-26
+  heading: 'Short-event taper: the taper-length/placement bug fix (2026-09-26)'
+  summary: A ~1-hour bike/CX race needs a 1-week taper (Wang et al. 2023's ≤7-day-taper finding), not
+    the swim-length 2-4 week TAPER_WEEKS_SHORT/LONG, and that taper should cover the race week itself,
+    not end before it.
+  recommendation: For a short (bike/CX) A-priority race, give it exactly a 1-week taper that covers the
+    race week; give a B-priority short event no dedicated taper block at all.
+  content_hash: ddf2f1484e6286fa05f8687940c1def80e4b856bc4e24916f94c5d28469e9734
 - section: cyclocross-specific-literature-genuinely-thin-said-plainly
   heading: 'Cyclocross-specific literature: genuinely thin, said plainly'
   summary: No peer-reviewed, cyclocross-specific research on racing frequency, recovery, or multi-peak

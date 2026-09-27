@@ -162,6 +162,39 @@ athlete's own real fitness trend, that is athlete-specific signal worth
 weighing against the model, not grounds to assume the block itself was
 designed wrong.
 
+## Short-event taper: the taper-length/placement bug fix (2026-09-26)
+
+**`[ADAPTED: general-endurance]` Confidence: medium.** Root-cause fix
+against real production data (Andrew's actual 2026 CX season, read
+2026-09-26): `TAPER_WEEKS_SHORT`/`TAPER_WEEKS_LONG`/`MINI_TAPER_WEEKS`
+above are all swim/long-event taper LENGTHS (1-4 weeks), sized for the
+multi-week fatigue of a long open-water swim — applying either to a ~1-hour
+cyclocross race produced a 2-week taper that swallowed the season's only
+race-free build window and STILL left the actual race week unmodeled
+(every macro shape's pre-existing "race week itself is not a block"
+convention). `Wang Z., Wang Y.T., Gao W., Zhong Y. (2023)` (already cited
+above and in `10-recovery-hrv.md`'s mini-taper section): tapers of ≤7 days
+still produced a positive effect in their 14-study meta-analysis, sitting
+at the short end of the same studied range `Bosquet et al. (2007)`/`Mujika
+& Padilla (2003)` already ground `TAPER_WEEKS_SHORT`/`MINI_TAPER_WEEKS`
+with above — not a number invented outside the literature. This grounds
+`TAPER_WEEKS_SHORT_EVENT = 1` (`plan.py`): a short (bike/CX) A-priority
+race's own taper is exactly one week.
+
+**Coach judgment:** two placement/scope choices the citation above doesn't
+itself settle. (1) The short-event taper is placed to COVER the race week
+itself (start/end on race day), rather than ending the day before it like
+every swim/long-event taper — a short event's taper IS the race week, not
+a separate block ahead of it; this is an engineering/placement choice, not
+a claim about physiology. (2) A B-priority short event gets NO dedicated
+taper block at all (Friel's B-race guidance above already says a B race
+doesn't need a full taper; for a ~1h event, its own lighten-before-race
+fits inside the existing race-week handling, not a new block). **Test:**
+if an A-priority short-event race's real post-race feedback shows
+under-freshness at this 1-week depth, that's athlete-specific signal
+worth lengthening toward `TAPER_WEEKS_SHORT` for that race next time — not
+grounds to assume the Wang/Bosquet/Mujika range itself is wrong.
+
 ## Cyclocross-specific literature: genuinely thin, said plainly
 
 Searched directly this build (Simple Endurance Coaching's cyclocross-
