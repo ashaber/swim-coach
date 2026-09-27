@@ -160,6 +160,27 @@ distinct from and not a replacement for `WEEKLY_VOLUME_RAMP_CAP`, which
 still governs the whole week's own volume trajectory untouched by this
 tool. No cap applies to "reduce" -- asking for less today is never the
 unsafe direction.
+
+`author_macro_plan`/`author_week_plan`/`check_plan` (engine/plan-check-red-team
+PR 2 -- "the coach authors plans; the engine red-teams them," see
+`~/.claude/plans/just-exploring-a-design-cheeky-pretzel.md`'s PR 2 section)
+supersede `draft_macro_plan`/`replace_macro_plan`/`draft_season_macro_plan`/
+`create_week_plan`/`replace_week_plan` as the coach's ONLY way to author a
+macro/week plan going forward -- those five are retired from `TOOLS_SCHEMA`
+below (handlers/engine code kept in place, unexposed, for one release before
+deletion). The coach supplies the plan directly (`MacroPlan.weeks`, real
+`Session`s); `swim_coach.plan_check.check_macro`/`check_week` compute
+projections from the athlete's REAL logged CTL/ATL/hours and red-team the
+result -- advisory findings only (severity/evidence/consequence/fix), never
+rejecting or clamping what the coach wrote. `author_macro_plan`'s confirm
+step requires an accept/decline decision (with a reason) for EVERY finding,
+persisted onto `MacroPlan.red_team`. `author_week_plan`'s confirm step keeps
+the one hard stop CLAUDE.md's safety rail requires: a `confirm-*` finding
+(weekly volume +8%, long-swim step +15%) needs the athlete's own words in
+`athlete_confirmations`, or nothing is written. `propose_adaptation` is now
+ADVISORY ONLY (its old write path, `replace_week_plan`, is retired) -- it
+hands the coach numbers to inform an `author_week_plan` draft, rather than
+holding a directly-confirmable one itself.
 """
 
 from __future__ import annotations
