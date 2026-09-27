@@ -1,18 +1,38 @@
 ---
 name: adapt
-description: The Sunday adaptation ritual — reviews the past week's training load, wellness, and compliance, runs the engine's deterministic adaptation draft, applies coaching judgment on top of it, and finalizes next week's plan. Use when the athlete (or Andrew) says it's time for the weekly check-in/adaptation, or asks "what should next week look like given how this week went?".
+description: The Sunday adaptation ritual — reviews the past week's training load, wellness, and compliance (or runs the race-weekend debrief flow if a race happened), authors next week's real sessions directly, red-teams them with the engine's advisory check, and finalizes the plan. Use when the athlete (or Andrew) says it's time for the weekly check-in/adaptation, or asks "what should next week look like given how this week went?".
 ---
 
 # adapt
 
-Sunday ritual: `cli summarize` + `cli adapt` → review the draft with
-judgment → finalize next week → append rationale to `notes/decisions.md` →
-commit.
+Sunday ritual: gather context → decide race-weekend or ordinary weekly
+review → author the week's real sessions directly (the coach's own
+judgment, red-teamed by the engine, never a rule-based generator) →
+finalize → append rationale to `notes/decisions.md` → commit.
+
+**Primary reference: `library/37-plan-authoring-guide.md`** ("Weekly
+review order" and "Race-weekend Sunday flow" sections) — this skill is a
+short pointer into that guide plus the file-path/commit mechanics
+specific to this offline/agent-session workflow; read it before an
+unusual week (a race, an injury, a big compliance gap) rather than relying
+on this skill's own summary alone.
 
 **Never hand-compute zones, loads, volumes, or ladder steps in chat**
-(CLAUDE.md standing rule). Every number in this skill comes from
-`python -m swim_coach.cli`; this skill's job is judgment on top of that
-output, not arithmetic.
+(CLAUDE.md standing rule). Every number comes from `python -m
+swim_coach.cli` or the engine's own `plan_check`/`load` modules; this
+skill's job is judgment on top of that output, not arithmetic.
+
+**The old rule-based generator is retired** (engine/plan-check-red-team,
+`draft_macro_plan`/`create_week_plan`/`replace_week_plan` and `propose_
+adaptation`'s generator path — CLAUDE.md's standing rule now reads "the
+coach authors plan structure and judgment; the engine only computes and
+red-teams"). `cli adapt`'s cut/repeat/hold/advance rule table and
+`cli scaffold-macro` still exist in `plan.py` but are unused scaffold code
+kept for one release before deletion — don't reach for either. Author the
+week directly instead (this skill's step 3), the same real `Session` list
+the chat coach's `author_week_plan` tool persists, checked against the
+engine's advisory `plan_check.check_week`/`check_macro`, never a generator
+draft.
 
 ## 1. Gather context
 
@@ -36,79 +56,79 @@ Also read (don't recompute):
   prior injury/illness history, a scheduled long-swim milestone, a known
   format-switch decision point).
 
-## 2. Run the engine's adaptation draft
+## 2. Race weekend, or an ordinary week?
 
-```
-python -m swim_coach.cli adapt --athlete <slug> --week <next_iso_week>
-```
+If a race (or key event) happened this week, follow `library/37`'s
+**"Race-weekend Sunday flow"** in full: debrief (`save_race_debrief`,
+objective data first), update the real FTP/CTL numbers, adapt the next
+block's limiter/key sessions with reasons, then go to step 3 to author
+sessions through the next race weekend or ~2 weeks (whichever is longer),
+not just the coming week.
 
-This writes `athletes/<slug>/plan/weeks/<next_iso_week>.yaml` with
-`draft: true` and prints the machine `rationale` JSON: which rule fired
-(`cut` / `repeat` / `hold` / `advance`), the wellness/load-ratio/compliance
-signals behind it, and the resulting volume and long-swim numbers (including
-which format ladder — `single_day` or `multi_day_stage` — drove the long
-swim). If a non-draft week already exists at that path and you deliberately
-mean to redo it, re-run with `--force`.
+Otherwise, follow `library/37`'s **"Weekly review order"**: did the work
+happen (compliance — which sessions were missed, and were they the right
+ones); is fitness moving as planned (CTL vs. the macro row —
+`plan_check.check_macro`'s ramp/recovery-cadence findings, not a rule you
+compute by hand); is fatigue tolerable (TSB trend + wellness — one bad
+night is noise, several consecutive red signals aren't); what do the
+sessions say (power/pace holding, hard sessions completed as written or
+quietly shortened). **"The plan is working, keep going" is a legitimate
+outcome — don't author a change just to have done something.**
 
-If the CLI errors (e.g. no macro, no finalized prior week to adapt from),
-**report the error to the athlete/Andrew — don't try to work around it by
-hand-computing a substitute plan.** Fix the underlying data gap (e.g. run
-`/plan-week` first, or `scaffold-macro`) and re-run.
+If there's no macro row to adapt from at all (no macro plan on file, or no
+finalized prior week), **report the gap to the athlete/Andrew — don't
+hand-compute a substitute plan.** Author (or ask for) the macro first.
 
-## 3. Judgment review — the draft is a draft
+## 3. Author the week, then check it — never a generator draft
 
-The engine enforces the hard caps (it will never exceed the +8%/week volume
-ramp, the long-swim step/peak-share caps, or skip a mandated cut on red
-wellness/load). Your job is everything the engine can't see:
+Write the coming week's real sessions directly (the same `Session` shape
+`author_week_plan` persists over chat): informed by the macro row's
+`focus`/`key_sessions`/`hours`/`load_tss`, the step-2 review, and your own
+judgment — not a rule table. Then red-team what you wrote, exactly as
+`library/37`'s "Handling `check_macro`/`check_week` findings" section
+describes:
 
-- **Real fixed events.** Cross-check the drafted week against known races,
-  travel, or the pool coach's actual (not estimated) session content if it's
-  already been shared. The engine's pool placeholders are estimates
-  (`source: pool_coach`, content assigned reactively) — if the pool coach
-  has already communicated this week's focus, reconcile it by hand in the
-  session's `purpose`/`structure`, don't silently trust the placeholder.
-- **Never loosen an engine cap.** If the draft's numbers look conservative
-  and you're tempted to push further (e.g. "she's clearly fine, let's add
-  more"), don't — the caps encode the safety rails from CLAUDE.md
-  (ramp cap, long-swim step cap) and from the athlete's own history
-  (injury/illness restarts, anaphylaxis, etc. — check `notes/decisions.md`).
-  You may *tighten* (hold back further than the draft suggests) based on
-  context the engine doesn't have, but never loosen.
-- **Milestone follow-through.** If the rationale's `long_swim.milestone` is
-  `true`, the engine has already marked the one post-milestone recovery day
-  it can see (Sunday) as easy — but per ROADMAP.md the full recovery window
-  is 3-5 days and spans into the *following* week. Note the milestone date
-  in `notes/decisions.md` so the *next* `/adapt` run can pass
-  `--days-since-last-milestone` accurately (the engine has no persistent
-  memory of this across CLI invocations — you are the state that carries
-  it forward).
-- **Compliance <70% ("repeat")**: read *why* before just repeating the
-  progression step — illness, life stress, and "the plan was unrealistic"
-  all produce the same number but want different conversations.
-- **Wellness or load-ratio red ("cut")**: this is not optional to soften.
-  Read the specific wellness fields that flagged red (sleep, stress,
-  soreness, motivation) and say so plainly when you present the plan.
-
-If you want to change something inside the engine's caps (e.g. move a
-strength day, adjust which day carries the "additional" swim), edit the
-`WeekPlan` sessions directly in the YAML, then re-validate (step 4) — don't
-regenerate through the CLI a second time with different flags to get a
-different number; the CLI's job is the rule table, not knob-turning.
+- Run `swim_coach.plan_check.check_week` against the drafted sessions (the
+  macro row, and recent weeks for the volume/long-swim-step comparison).
+  It never rejects or clamps — it's advisory, capped at six findings,
+  ranked by severity.
+- Show the athlete every finding — verdict, severity, evidence,
+  consequence, fix — and get an explicit accept-or-decline **with a
+  reason** for each. Declining is legitimate; don't manufacture a change
+  just because a finding exists.
+- **Never loosen a `confirm-*` finding without it** — the +8%/week volume
+  and +15% long-swim-step safety rails (CLAUDE.md) require an explicit
+  accepted decision before the week persists. You may *tighten* (hold back
+  further than the check requires) based on context it can't see — a
+  known injury/illness history, a scheduled milestone, an upcoming travel
+  week (`notes/decisions.md`) — but never loosen past its findings.
+- **Real fixed events and the pool coach's actual content.** Cross-check
+  against known races/travel, and reconcile the pool coach's actual
+  (not estimated) session content into the session's `purpose`/`structure`
+  once it's been shared — don't silently trust a placeholder.
+- **Milestone follow-through.** A long-swim milestone's full recovery
+  window is 3-5 days and spans into the *following* week (ROADMAP.md) —
+  note the milestone date in `notes/decisions.md` so the next review
+  accounts for it; there is no persistent engine memory of this across
+  sessions, you are the state that carries it forward.
+- **Wellness/compliance signals, read plainly.** A red wellness/load-ratio
+  signal, or low compliance, is not optional to soften — say so when you
+  present the week, and read *why* (illness, life stress, an unrealistic
+  plan all look similar in the numbers but want different conversations).
 
 ## 4. Finalize
 
-1. Edit `athletes/<slug>/plan/weeks/<next_iso_week>.yaml`: set `draft: false`
-   once you're done reviewing (leave it `true` if you're presenting the
-   draft to the athlete for confirmation before locking it in — check with
-   them first for any week that cuts volume or advances a long-swim
-   milestone, per CLAUDE.md's "weekly volume/long-swim caps need explicit
-   athlete confirmation" safety rail).
+1. Once the athlete has accepted or declined every finding, write the
+   final sessions to `athletes/<slug>/plan/weeks/<next_iso_week>.yaml` —
+   check with them first for any week a `confirm-*` finding covers, per
+   CLAUDE.md's explicit-confirmation safety rail.
 2. Validate: `python -m swim_coach.cli validate --athlete <slug>` — must
    exit 0 before committing.
-3. Append a dated entry to `athletes/<slug>/notes/decisions.md` with the
-   action taken, the rationale numbers, and any judgment calls you made on
-   top of the draft (fixed-event adjustments, tightened caps, milestone
-   date recorded for next week).
+3. Append a dated entry to `athletes/<slug>/notes/decisions.md`: what
+   changed and why, each finding's accept/decline and reason, and any
+   judgment calls on top (fixed-event adjustments, tightened caps,
+   milestone date recorded for next week) — the same record
+   `author_week_plan`'s `decisions` would persist over chat.
 4. Commit **directly to main** and push immediately (CLAUDE.md: athlete
    daily data — logs, wellness, weekly plans — commits straight to main,
    not a feature branch/PR; pull before write to avoid clobbering a
