@@ -3744,7 +3744,13 @@ def test_scaffold_season_macro_b_tier_excess_runway_gets_filler_then_capped_dedi
     )
     b_blocks = [b for b in macro.blocks if b.race_event_id == far_b.id]
     dedicated_weeks = sum((b.end_date - b.start_date).days // 7 + 1 for b in b_blocks)
-    assert dedicated_weeks == B_TIER_MAX_DEDICATED_WEEKS
+    # +1 (coverage fix, 2026-09-27): far_b is a short (bike) event with no
+    # dedicated taper block, so its own sharpen block is extended one more
+    # week to cover its race week itself, rather than leaving it an
+    # uncovered gap -- B_TIER_MAX_DEDICATED_WEEKS itself is unchanged (that
+    # still caps the pre-race-week sharpen/hold cycle), the race week is
+    # additional real coverage on top of it.
+    assert dedicated_weeks == B_TIER_MAX_DEDICATED_WEEKS + 1
     # A filler block (untagged -- doesn't belong to any one race) precedes it.
     filler = macro.blocks[0]
     assert filler.race_event_id is None
@@ -4040,9 +4046,20 @@ def test_scaffold_season_macro_andrews_real_2026_cx_season_short_event_taper():
     assert after_taper.start_date <= date(2026, 10, 31) <= after_taper.end_date
 
     # Season Finale (B, bike) gets NO dedicated taper block -- its own
-    # lighten-before-race stays within the race week, not modeled here.
+    # lighten-before-race stays within the race week, not modeled as a
+    # separate block here.
     finale_blocks = [b for b in macro.blocks if b.race_event_id == season_finale.id]
     assert all(b.name != "taper" for b in finale_blocks)
+
+    # Every date from macro start through the LAST race is covered by
+    # exactly one block, zero gaps -- an uncovered week previously caused a
+    # real production bug (no week generated + the PWA's
+    # pickCurrentAndNextWeek silently falling back to a stale week), so
+    # Season Finale's own sharpen block is extended to end ON race day
+    # instead of leaving its race week unmodeled.
+    for prev, curr in zip(macro.blocks, macro.blocks[1:]):
+        assert curr.start_date == prev.end_date + timedelta(days=1)
+    assert macro.blocks[-1].end_date == date(2026, 11, 22)  # Season Finale's own race day
 
 
 # --- IDEA 018: extend-an-active-plan mode (existing_macro) -------------------------

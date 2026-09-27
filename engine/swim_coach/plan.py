@@ -2261,7 +2261,7 @@ def scaffold_season_macro(
                     )
                 )
                 cursor_start = filler_end + timedelta(days=1)
-            # Short event (bike/CX): NO dedicated taper block at all for a
+            # Short event (bike/CX): NO dedicated TAPER block at all for a
             # B-priority race (`taper_weeks=0` -- its lighten-before-race
             # stays within the race week, handled by existing race-week
             # logic elsewhere, not built here). Swim/long events keep their
@@ -2273,6 +2273,15 @@ def scaffold_season_macro(
                 cursor_volume,
                 taper_weeks=0 if is_short_event else MINI_TAPER_WEEKS,
             )
+            if is_short_event:
+                # Coverage fix (2026-09-27): "no dedicated taper block"
+                # must not mean "race week goes uncovered" -- an uncovered
+                # week is exactly the class of bug that already caused a
+                # real production incident (no week generated + the PWA's
+                # pickCurrentAndNextWeek silently falling back to a stale
+                # week). Extend the sharpen block itself (not a separate
+                # taper block -- there isn't one) to end on race day.
+                sub_macro.blocks[-1].end_date = event_monday + timedelta(days=6)
             for block in sub_macro.blocks:
                 block.race_event_id = race.id
             blocks.extend(sub_macro.blocks)
