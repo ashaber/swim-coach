@@ -139,6 +139,30 @@ def test_tims_macro_is_sound_or_sound_with_caveats_and_has_no_high_findings():
     )
     assert report.verdict in ("sound", "sound-with-caveats")
     assert not any(f.severity == "high" for f in report.findings)
+    # Taper checks are load-based, not phase-name-based: Tim's table never
+    # writes the literal word "taper" (the peak race's lead-in is labelled
+    # "Peak"/"Sharpen 3"), and its real hours cut into the peak week
+    # (7.0h -> 4.5h, ~36%) falls inside the short-event evidence band --
+    # so no taper finding of any kind should fire.
+    assert not any("taper" in f.id for f in report.findings)
+
+
+def test_tims_macro_with_a_realistic_current_atl_reports_race_day_tsb():
+    """Same fixture, but seeded with a real (non-CTL-fallback) ATL --
+    exercises check_macro's optional current_atl parameter."""
+    plan = _macro(_tims_weeks())
+    report = check_macro(
+        plan,
+        _tims_athlete(),
+        current_ctl=43.0,
+        current_atl=48.0,  # somewhat fatigued entering the Sep-7 reset week
+        recent_weekly_hours=[6.5, 7.0, 7.5, 7.0, 6.8, 7.2, 7.0, 6.5, 7.0, 7.3],
+        events=_tims_events(),
+        today=date(2026, 9, 7),
+    )
+    tsb_finding = next((f for f in report.findings if f.id.startswith("race-day-tsb-")), None)
+    assert tsb_finding is not None
+    print(tsb_finding.evidence)
 
 
 # ============================================================================
@@ -178,7 +202,13 @@ def _buggy_events() -> list[Event]:
     ]
 
 
-def test_buggy_macro_flags_taper_placement_uncovered_week_and_meters_defect():
+def test_buggy_macro_flags_uncovered_race_week_and_meters_defect():
+    # Taper checks are load-based (see below) -- the buggy macro's actual
+    # race week (Oct 12-18, containing the Oct 17 A race) has no MacroWeek
+    # row at all, so there's no load number to judge a taper cut against;
+    # the taper-quality check silently skips (never fabricates a reading),
+    # and the missing week is caught instead by the uncovered-weeks check,
+    # which is the real, high-severity defect here.
     plan = _macro(_buggy_weeks())
     athlete = _athlete(dob=date(1975, 4, 7), ftp_watts=263.0, weight_kg=72.6)
     report = check_macro(
@@ -190,11 +220,10 @@ def test_buggy_macro_flags_taper_placement_uncovered_week_and_meters_defect():
         today=date(2026, 9, 14),
     )
     finding_ids = [f.id for f in report.findings]
-    print(report.to_dict())
 
-    assert any("taper-orphaned" in fid for fid in finding_ids), finding_ids
     assert any("uncovered" in fid for fid in finding_ids), finding_ids
     assert any(fid == "bike-weeks-missing-load" for fid in finding_ids), finding_ids
+    assert not any("taper" in fid for fid in finding_ids), finding_ids
     assert report.verdict in ("fragile", "not-feasible")
 
 

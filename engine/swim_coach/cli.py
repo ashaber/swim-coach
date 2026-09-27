@@ -634,12 +634,14 @@ def _cmd_check_macro(args: argparse.Namespace, store: StoreInterface) -> int:
     loads = daily_loads(workouts, athlete=athlete, wellness=wellness)
     series = ctl_atl_tsb_series(loads)
     current_ctl = series[-1][1] if series else 0.0
+    current_atl = series[-1][2] if series else None
     recent_weekly_hours = _recent_weekly_hours(workouts, as_of)
 
     report = check_macro(
         plan,
         athlete,
         current_ctl=current_ctl,
+        current_atl=current_atl,
         recent_weekly_hours=recent_weekly_hours,
         events=events,
         today=as_of,

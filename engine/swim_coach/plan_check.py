@@ -137,31 +137,44 @@ MASTERS_AGE_THRESHOLD = 40
 RECOVERY_CADENCE_WEEKS = 3
 RECOVERY_CADENCE_WEEKS_MASTERS_OR_INJURY = 2
 
-# --- Short-event taper (library/31-multi-race-season-periodization.md,
-# new "Short-event taper (<=1.5h)" section -- Neary et al. (2003), verified
-# this dossier pass: a 7-day, ~50%-volume-cut taper, intensity held,
-# significantly improved a ~25-30 min time-trial effort).
+# --- Taper: judged by ACTUAL LOAD REDUCTION, never by phase-name text.
+# `MacroWeek.phase` is free text the coach chooses ("Peak," "Sharpen 3,"
+# "Unload," ...) -- a plan that never once writes the literal word "taper"
+# can still taper correctly (see library/31-multi-race-season-
+# periodization.md's new "Short-event taper and in-season maintenance"
+# section, Neary et al. (2003), verified this dossier pass: a 7-day,
+# ~50%-volume-cut taper, intensity held, significantly improved a ~25-30
+# min time-trial effort).
 SHORT_EVENT_MAX_HOURS = 1.5
 # Coach judgment: threshold below which an event counts as "short" for
-# taper-length purposes. Neary 2003 studied a ~25-30 min TT; 1.5h is a
-# generous ceiling that still comfortably covers a cyclocross race
-# (typically 40-60 min) with margin, not itself an evidence-pinned cutoff.
-SHORT_EVENT_TAPER_DAYS_MIN = 5
-SHORT_EVENT_TAPER_DAYS_MAX = 7
-SHORT_EVENT_TAPER_VOLUME_CUT_FRACTION = 0.50
-# [EVIDENCE: cycling] Neary, Bhambhani & McKenzie (2003) -- a 7-day taper
-# with a 50% volume cut (intensity held) produced a significant 5.4%
-# improvement in a simulated 20km TT; 30%/80% cuts did not reach
-# significance. library/31-multi-race-season-periodization.md.
+# taper purposes. Neary 2003 studied a ~25-30 min TT; 1.5h is a generous
+# ceiling that still comfortably covers a cyclocross race (typically
+# 40-60 min) with margin, not itself an evidence-pinned cutoff.
 
-GENERAL_TAPER_DAYS_MIN = 4
-GENERAL_TAPER_DAYS_MAX = 28
-# [ADAPTED: general-endurance] Mujika & Padilla (2003) -- taper duration
-# studied across the literature spans 4-28 days (volume cut 60-90%,
-# intensity/frequency mostly held). Already cited in
-# library/31-multi-race-season-periodization.md and
-# library/24-cycling-periodization-intervals.md; reused here unchanged for
-# any event NOT classified "short" (SHORT_EVENT_MAX_HOURS).
+SHORT_EVENT_TAPER_CUT_FRACTION_MIN = 0.30
+SHORT_EVENT_TAPER_CUT_FRACTION_MAX = 0.65
+# [EVIDENCE: cycling] Neary, Bhambhani & McKenzie (2003) -- 30%/50%/80%
+# volume-cut tapers were tested; only the 50% cut reached significance.
+# MIN/MAX bracket a band around that single validated point, short of the
+# two non-significant tested extremes -- Coach judgment banding, not
+# itself a validated range (only 50% is directly evidence-backed).
+# library/31-multi-race-season-periodization.md.
+
+GENERAL_TAPER_CUT_FRACTION_MIN = 0.41
+GENERAL_TAPER_CUT_FRACTION_MAX = 0.60
+# [ADAPTED: general-endurance] Bosquet, Montpetit, Arvisais & Mujika
+# (2007) meta-analysis (already cited in library/31 and
+# library/03-periodization.md): the optimal full taper is a ~2-week
+# exponential volume reduction of 41-60%. Reused here unchanged for any
+# event NOT classified "short" (SHORT_EVENT_MAX_HOURS).
+
+TAPER_BASELINE_LOOKBACK_WEEKS = 4
+# Coach judgment / PROVISIONAL: how many weeks back from the final
+# pre-race week to look for the recent BUILD peak the cut is measured
+# against. No citation pins this window specifically -- chosen to
+# comfortably reach the recent build block without reaching back into an
+# unrelated earlier phase of a long macro. library/31-multi-race-season-
+# periodization.md.
 
 # --- Race-day TSB band (library/22-injury-adapted-taper.md's existing
 # `RACE_DAY_TSB_BAND`, imported and reused unchanged -- not redefined here;
@@ -226,6 +239,8 @@ def _project_ctl_atl_tsb(
     daily_loads_by_date: dict[date, float],
     start: date,
     end: date,
+    *,
+    current_atl: float | None = None,
 ) -> list[tuple[date, float, float, float]]:
     """Project CTL/ATL/TSB day-by-day from `start` through `end` (inclusive),
     SEEDED at the athlete's real, ACTUAL current CTL -- not from zero.
@@ -240,13 +255,15 @@ def _project_ctl_atl_tsb(
     climb from zero over the projected weeks. This is a small, deliberate
     seeding fix, not a different model.
 
-    ATL is seeded equal to `current_ctl` (an assumed TSB=0 as of `start`) --
-    `check_macro`'s own signature (per the approved plan) takes only
-    `current_ctl`, no `current_atl`; a future revision could accept a real
-    current ATL once a calling context has one on hand.
+    `current_atl`: the athlete's REAL current ATL, when the caller has one
+    (e.g. `load.ctl_atl_tsb_series` over her real logged history -- see
+    `cli.py`'s `check-macro` command). Falls back to `current_ctl` (an
+    assumed TSB=0 as of `start`) when omitted, same behavior as before this
+    parameter existed -- every existing caller that only ever had a CTL
+    number on hand keeps working unchanged.
     """
     ctl = current_ctl
-    atl = current_ctl
+    atl = current_ctl if current_atl is None else current_atl
     series: list[tuple[date, float, float, float]] = []
     day = start
     while day <= end:
@@ -297,6 +314,7 @@ def check_macro(
     athlete: Athlete,
     *,
     current_ctl: float,
+    current_atl: float | None = None,
     recent_weekly_hours: list[float],
     events: list[Event],
     today: date,
@@ -309,6 +327,10 @@ def check_macro(
     `current_ctl`: the athlete's REAL current CTL (e.g. from
     `load.ctl_atl_tsb_series` over her actual logged history) -- the
     projection below starts here, not from zero.
+    `current_atl`: the athlete's REAL current ATL from the same series,
+    when the caller has one. Optional -- falls back to `current_ctl` (an
+    assumed TSB=0 as of `today`) when omitted, same behavior as before
+    this parameter existed.
     `recent_weekly_hours`: the athlete's actual weekly training hours over
     (nominally) the trailing ~12 weeks, most-recent-last or in any order --
     only `max()` is read.
@@ -337,7 +359,9 @@ def check_macro(
 
     daily_loads_by_date = _spread_weekly_tss_to_daily(weeks)
     projection_end = max(plan_end_exclusive - timedelta(days=1), today)
-    series = _project_ctl_atl_tsb(current_ctl, daily_loads_by_date, today, projection_end)
+    series = _project_ctl_atl_tsb(
+        current_ctl, daily_loads_by_date, today, projection_end, current_atl=current_atl
+    )
     series_by_date = {d: (ctl, atl, tsb) for d, ctl, atl, tsb in series}
 
     findings.extend(_check_uncovered_weeks(weeks, active_events, plan_start, plan_end_exclusive))
@@ -530,92 +554,118 @@ def _check_taper_and_race_day(
     return findings
 
 
-_TAPER_OR_LEAD_IN_KEYWORDS = ("taper", "recovery", "peak", "race", "unload")
+def _final_pre_race_week(weeks: list[MacroWeek], event: Event) -> MacroWeek | None:
+    """The MacroWeek covering `event.event_date` -- for a Saturday/Sunday
+    race this is the week most of the taper's final days actually fall in
+    (Monday-Friday of race week, plus the race day itself), which is why
+    this is compared against the recent build peak below, not the week
+    strictly before it."""
+    race_week_start = event.event_date - timedelta(days=event.event_date.weekday())
+    return next((w for w in weeks if w.week_start == race_week_start), None)
 
 
-def _looks_like_taper_or_lead_in(week: MacroWeek) -> bool:
-    """True if `week` reasonably continues a taper's lead-in to a race --
-    a genuine taper/recovery/peak/race/unload phase, or an explicit
-    `recovery=True` flag -- as opposed to active base/build/sharpen
-    training, which would mean the taper's freshness is being spent and
-    then trained straight through again before the actual race."""
-    if week.recovery:
-        return True
-    lowered = week.phase.strip().lower()
-    return any(kw in lowered for kw in _TAPER_OR_LEAD_IN_KEYWORDS)
+def _week_volume(week: MacroWeek) -> float | None:
+    """Volume proxy for the load-based taper check: `hours` when set
+    (Neary et al.'s own studies measure a literal VOLUME cut, not a TSS
+    figure), else `load_tss` as a fallback, else `None` -- never a
+    fabricated number. `None` here is a real "no usable data," not a
+    zero -- callers must skip rather than treat it as zero volume."""
+    if week.hours is not None:
+        return week.hours
+    if week.load_tss is not None:
+        return week.load_tss
+    return None
 
 
 def _check_one_event_taper(weeks: list[MacroWeek], event: Event) -> list[PlanCheckFinding]:
-    """Taper length vs event duration, and whether an identified taper
-    block actually leads INTO this event (vs. being spent on an earlier,
-    disconnected window and then orphaned by a gap -- the real
-    architecture-doc bug: a 2-week taper placed on "the only race-free
-    build window," followed by an uncovered week, then the race)."""
-    is_short = _event_hours(event) is not None and _event_hours(event) <= SHORT_EVENT_MAX_HOURS
-    taper_days_min = SHORT_EVENT_TAPER_DAYS_MIN if is_short else GENERAL_TAPER_DAYS_MIN
-    taper_days_max = SHORT_EVENT_TAPER_DAYS_MAX if is_short else GENERAL_TAPER_DAYS_MAX
+    """Whether the plan actually TAPERS into this event -- judged purely by
+    the real load numbers (hours/load_tss), never by what the coach
+    happened to name the phase (`MacroWeek.phase` is free text; a week
+    literally never called "taper" can still taper correctly, and one
+    called "taper" can fail to). Compares the race week's own volume
+    against the recent build peak (`TAPER_BASELINE_LOOKBACK_WEEKS` back)
+    and checks the resulting cut fraction against the evidence-based band
+    for this event's duration (library/31).
 
-    taper_weeks = [w for w in weeks if "taper" in w.phase.strip().lower() and w.week_start < event.event_date]
-    if not taper_weeks:
+    Silently skips (returns no finding) whenever there isn't enough real
+    data to judge honestly: a missing race week is already flagged by
+    `_check_uncovered_weeks` (high severity); a race week or every
+    candidate baseline week with neither `hours` nor `load_tss` set is
+    already flagged by `_check_bike_weeks_missing_load`. Padding a second,
+    lower-confidence finding on top of either of those would violate this
+    module's own "don't manufacture objections" discipline
+    (`ai-coach/.claude/agents/red-team.md`).
+    """
+    race_week = _final_pre_race_week(weeks, event)
+    if race_week is None:
+        return []
+    race_volume = _week_volume(race_week)
+    if race_volume is None:
+        return []
+
+    weeks_by_start = {w.week_start: w for w in weeks}
+    baseline_candidates = [
+        v
+        for i in range(1, TAPER_BASELINE_LOOKBACK_WEEKS + 1)
+        if (w := weeks_by_start.get(race_week.week_start - timedelta(weeks=i))) is not None
+        and (v := _week_volume(w)) is not None
+    ]
+    if not baseline_candidates:
+        return []
+    baseline = max(baseline_candidates)
+    if baseline <= 0:
+        return []
+
+    cut_fraction = 1 - (race_volume / baseline)
+    is_short = _event_hours(event) is not None and _event_hours(event) <= SHORT_EVENT_MAX_HOURS
+    cut_min = SHORT_EVENT_TAPER_CUT_FRACTION_MIN if is_short else GENERAL_TAPER_CUT_FRACTION_MIN
+    cut_max = SHORT_EVENT_TAPER_CUT_FRACTION_MAX if is_short else GENERAL_TAPER_CUT_FRACTION_MAX
+
+    if cut_fraction < 0:
         return [
             PlanCheckFinding(
-                id=f"no-taper-{event.id}",
-                severity="medium",
-                evidence=f"No week with phase containing 'taper' found before {event.name} ({event.event_date.isoformat()}).",
-                consequence="The athlete may go into the A race carrying full training fatigue.",
-                fix=f"Add a {taper_days_min}-{taper_days_max}-day taper before this event.",
-            )
-        ]
-    last_taper_week = max(taper_weeks, key=lambda w: w.week_start)
-    race_week_start = event.event_date - timedelta(days=event.event_date.weekday())
-    weeks_by_start = {w.week_start: w for w in weeks}
-    cursor = last_taper_week.week_start + timedelta(days=7)
-    gap_weeks: list[date] = []
-    while cursor <= race_week_start:
-        w = weeks_by_start.get(cursor)
-        if w is None or not _looks_like_taper_or_lead_in(w):
-            gap_weeks.append(cursor)
-        cursor += timedelta(days=7)
-
-    findings: list[PlanCheckFinding] = []
-    if gap_weeks:
-        gap_str = ", ".join(d.isoformat() for d in gap_weeks)
-        findings.append(
-            PlanCheckFinding(
-                id=f"taper-orphaned-{event.id}",
+                id=f"taper-load-increased-{event.id}",
                 severity="high",
                 evidence=(
-                    f"Taper block ends {(last_taper_week.week_start + timedelta(days=6)).isoformat()} "
-                    f"({last_taper_week.phase}), but the week(s) starting {gap_str} before "
-                    f"{event.name} ({event.event_date.isoformat()}) are missing or look like active "
-                    "training, not a continued taper/lead-in."
+                    f"Race week ({race_week.week_start.isoformat()}) volume is HIGHER than the "
+                    f"recent build peak ({race_volume:g} vs {baseline:g}) going into "
+                    f"{event.name} ({event.event_date.isoformat()})."
                 ),
-                consequence=(
-                    "The taper's freshness is spent, then trained through (or left unplanned) right "
-                    "before the race -- likely a taper placed on the wrong window, not one that "
-                    "actually leads into this event."
+                consequence="The athlete races carrying full (or rising) training fatigue, not freshness.",
+                fix="Cut race week's volume below the recent build peak.",
+            )
+        ]
+    if cut_fraction < cut_min:
+        return [
+            PlanCheckFinding(
+                id=f"taper-insufficient-{event.id}",
+                severity="medium",
+                evidence=(
+                    f"Race week volume is only {cut_fraction*100:.0f}% below the recent build peak "
+                    f"({race_volume:g} vs {baseline:g}) going into {event.name} "
+                    f"({event.event_date.isoformat()}); the evidence-based cut for this event is "
+                    f"{cut_min*100:.0f}-{cut_max*100:.0f}%."
                 ),
-                fix="Move the taper so it ends immediately before race week, with no gap or resumed training in between.",
+                consequence="A shallower-than-evidenced cut risks arriving under-tapered.",
+                fix=f"Cut race week's volume {cut_min*100:.0f}-{cut_max*100:.0f}% below the recent build peak.",
             )
-        )
-    else:
-        taper_end = last_taper_week.week_start + timedelta(days=6)
-        gap_days = (event.event_date - taper_end).days
-        if not (taper_days_min <= gap_days + 1 <= taper_days_max):
-            findings.append(
-                PlanCheckFinding(
-                    id=f"taper-length-{event.id}",
-                    severity="low",
-                    evidence=(
-                        f"Taper ends {gap_days} day(s) before {event.name} "
-                        f"({event.event_date.isoformat()}); the evidence-based window for this "
-                        f"event is {taper_days_min}-{taper_days_max} days."
-                    ),
-                    consequence="A taper outside the studied window risks arriving flat or under-tapered.",
-                    fix=f"Target a {taper_days_min}-{taper_days_max}-day taper for this event.",
-                )
+        ]
+    if cut_fraction > cut_max:
+        return [
+            PlanCheckFinding(
+                id=f"taper-too-deep-{event.id}",
+                severity="low",
+                evidence=(
+                    f"Race week volume is {cut_fraction*100:.0f}% below the recent build peak "
+                    f"({race_volume:g} vs {baseline:g}) going into {event.name} "
+                    f"({event.event_date.isoformat()}); the evidence-based cut for this event is "
+                    f"{cut_min*100:.0f}-{cut_max*100:.0f}%."
+                ),
+                consequence="An unnecessarily deep cut risks arriving flat/stale rather than sharp.",
+                fix=f"Hold race week's volume closer to a {cut_min*100:.0f}-{cut_max*100:.0f}% cut.",
             )
-    return findings
+        ]
+    return []
 
 
 def _event_hours(event: Event) -> float | None:
