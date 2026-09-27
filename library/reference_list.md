@@ -1521,6 +1521,27 @@ one, and how much a "peak" can repeat between them.
   quoting the primary text" caveat this project already applies to Ric
   Stern's ramp-test figure, though that case had no primary text at all
   rather than an unreachable one).
+- **✓ Neary P.J., Bhambhani Y., McKenzie D.C. (2003)** — "Effects of
+  Different Stepwise Reduction Taper Protocols on Cycling Performance" —
+  *Canadian Journal of Applied Physiology*, 28(4):576-587. Verified via
+  the publisher (NRC Research Press) plus independent secondary
+  convergence. A 7-day, 50%-volume-cut taper (intensity held) produced a
+  significant 5.4% improvement in a simulated 20km time trial.
+  `[EVIDENCE: cycling]`, Confidence: medium — grounds `engine/swim_coach/
+  plan_check.py`'s short-event taper constants.
+- **✓ Houmard J.A. (1991)** — "Impact of Reduced Training on Performance
+  in Endurance Athletes" — *Sports Medicine*, 12(6):380-393. Verified via
+  Springer + PubMed. Review: performance maintained or improved with
+  60-90% volume cuts over 6-21 days, provided training frequency drops no
+  more than ~20%. `[EVIDENCE: cycling]`, Confidence: medium-high —
+  peer-reviewed backstop for this file's B-race mini-taper constant.
+- **✓ Rønnestad B.R., Hansen E.A., Raastad T. (2010)** — "In-season
+  strength maintenance training increases well-trained cyclists'
+  performance" — *European Journal of Applied Physiology*, 110(6):
+  1269-1282. Verified via Springer + PubMed. 1x/week strength maintenance
+  through 13 weeks of competition season preserved prep-period strength/
+  thigh-CSA gains with no negative effect on VO2max or cycling economy.
+  `[EVIDENCE: cycling]`, Confidence: high.
 
 ### Altitude & environmental power adjustment (grounds `30-altitude-power-adjustment.md`)
 
