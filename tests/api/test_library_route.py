@@ -8,8 +8,13 @@ same convention as test_feedback_route.py / test_grants_route.py.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from uuid import uuid4
+
 import pytest
 from fakes import auth_headers, google_token_for
+from swim_coach.models import LibraryReview
+from swim_coach.store import FileStore
 
 RENEE_EMAIL = "kline.renee@gmail.com"
 ANDREW_EMAIL = "andrewshaber@gmail.com"
@@ -116,6 +121,21 @@ def test_list_cards_shape_and_derived_fields_for_a_pending_section(client, allow
     assert card["confidence"] is not None
     assert card["source_count"] >= 1
     assert card["latest_review"] is None
+    # fix 1: the list response now carries the section's own current hash,
+    # server-computed (not authored, not client-supplied) -- a sha256 hexdigest.
+    assert card["content_hash"]
+    assert len(card["content_hash"]) == 64
+    # fix 2: no decision recorded yet -- falls back to the marker state.
+    assert card["review_state"] == "unreviewed"
+
+
+def test_list_cards_review_state_reviewed_when_marker_says_so_and_no_decision(
+    client, allowlist
+) -> None:
+    response = client.get("/api/library/cards?athlete=andrew", headers=auth_headers())
+    cards = {(c["file"], c["section"]): c for c in response.json()}
+    card = cards[(REVIEWED_FILE, REVIEWED_SECTION)]
+    assert card["review_state"] == "reviewed"
 
 
 def test_list_cards_reviewed_section_has_no_active_marker(client, allowlist) -> None:
@@ -185,20 +205,72 @@ def test_latest_review_reflected_after_a_decision(client, allowlist, google) -> 
         json={
             "file": PENDING_FILE,
             "section": PENDING_SECTION,
-            "content_hash": card["stale"] and "x" or "irrelevant-for-this-check",
             "decision": "accepted",
         },
         headers=andrew_headers,
     )
-    # content_hash isn't validated against the real hash server-side (the
-    # apply step does that) -- any non-empty string round-trips.
+    # fix 1: content_hash is no longer required (or trusted) from the client
+    # at all -- the server computes it from the section's current text.
     assert review_response.status_code == 200
+    assert review_response.json()["content_hash"] == card["content_hash"]
 
     cards_after = client.get("/api/library/cards?athlete=andrew", headers=andrew_headers).json()
     updated = next(
         c for c in cards_after if c["file"] == PENDING_FILE and c["section"] == PENDING_SECTION
     )
     assert updated["latest_review"]["decision"] == "accepted"
+    # fix 2: an accept whose recorded hash still matches the section's
+    # current hash reads back as "accepted", not just marker-based.
+    assert updated["review_state"] == "accepted"
+
+
+def test_review_state_flagged_after_a_flag_decision(client, allowlist, google) -> None:
+    andrew_headers = _andrew_headers(client, allowlist, google)
+    response = client.post(
+        "/api/library/reviews?athlete=andrew",
+        json={
+            "file": PENDING_FILE,
+            "section": PENDING_SECTION,
+            "decision": "flagged",
+            "note": "check this citation",
+        },
+        headers=andrew_headers,
+    )
+    assert response.status_code == 200
+
+    cards_after = client.get("/api/library/cards?athlete=andrew", headers=andrew_headers).json()
+    updated = next(
+        c for c in cards_after if c["file"] == PENDING_FILE and c["section"] == PENDING_SECTION
+    )
+    assert updated["review_state"] == "flagged"
+
+
+def test_review_state_falls_back_to_marker_when_accepted_hash_is_now_stale(
+    client, allowlist, google
+) -> None:
+    # An accepted decision whose recorded hash no longer matches the
+    # section's live text (the section changed after the accept) must not
+    # read back as "accepted" -- fix 2 falls back to the marker-based state.
+    andrew_headers = _andrew_headers(client, allowlist, google)
+    store = FileStore(base_dir=allowlist.base_dir)
+    reviewer = store.load_athlete("andrew")
+    store.save_library_review(
+        LibraryReview(
+            id=uuid4(),
+            file=PENDING_FILE,
+            section=PENDING_SECTION,
+            content_hash="stale-hash-does-not-match-anything",
+            decision="accepted",
+            reviewed_by=reviewer.id,
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+
+    cards = client.get("/api/library/cards?athlete=andrew", headers=andrew_headers).json()
+    card = next(c for c in cards if c["file"] == PENDING_FILE and c["section"] == PENDING_SECTION)
+    assert card["latest_review"]["decision"] == "accepted"
+    # Still under 13's file-level UNREVIEWED marker -- falls back to "unreviewed".
+    assert card["review_state"] == "unreviewed"
 
 
 # --- GET /api/library/files/{name} --------------------------------------------

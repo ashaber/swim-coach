@@ -29,6 +29,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from swim_coach.library_cards import (
     card_path_for,
+    content_hash,
     in_scope_topic_files,
     is_stale,
     load_card_file,
@@ -66,8 +67,17 @@ async def list_library_cards(
     section's tagged claims), `tags`, `source_count`/`weak_source_count`,
     `dossier`, `reviewed` (is an UNREVIEWED marker still covering this
     section), `needs_judgment`, `stale` (has the section's text drifted
-    since the card was authored), and `latest_review` (this card's most
-    recent accept/flag decision, or null if never reviewed).
+    since the card was authored), `content_hash` (the section's CURRENT
+    body-text hash, computed server-side -- see `create_library_review`'s
+    own doc comment for why the client never supplies this), `latest_review`
+    (this card's most recent accept/flag decision, or null if never
+    reviewed), and `review_state` (web/review-fixes-chart-scale fix 2):
+    `"accepted"` when the latest decision is an accept whose recorded hash
+    still matches `content_hash` (i.e. nothing changed under it since),
+    `"flagged"` when the latest decision is a flag, otherwise the marker-
+    based `"reviewed"`/`"unreviewed"` -- so an accepted-but-now-stale
+    decision (the section changed after the accept) falls back to the
+    marker state rather than lying about "accepted".
 
     Privacy stopgap (web/resources-hotfix): library topic files currently
     contain one athlete's personal health details and athlete names, with
@@ -124,13 +134,24 @@ async def list_library_cards(
                 # stale rather than crashing the whole list.
                 stale = True
                 evidence = None
+                current_hash = None
             else:
-                stale = is_stale(card, section_text(text, section))
+                current_section_text = section_text(text, section)
+                stale = is_stale(card, current_section_text)
                 evidence = section_evidence(
                     text, section.start, section.end, ref_entries, dossiers_dir
                 )
+                current_hash = content_hash(current_section_text)
 
+            reviewed_marker = evidence.reviewed if evidence else False
             latest = latest_by_key.get((topic_path.name, card.section))
+            if latest is not None and latest.decision == "accepted" and latest.content_hash == current_hash:
+                review_state = "accepted"
+            elif latest is not None and latest.decision == "flagged":
+                review_state = "flagged"
+            else:
+                review_state = "reviewed" if reviewed_marker else "unreviewed"
+
             cards.append(
                 {
                     "file": topic_path.name,
@@ -143,9 +164,11 @@ async def list_library_cards(
                     "source_count": evidence.source_count if evidence else 0,
                     "weak_source_count": evidence.weak_source_count if evidence else 0,
                     "dossier": evidence.dossier if evidence else None,
-                    "reviewed": evidence.reviewed if evidence else False,
+                    "reviewed": reviewed_marker,
                     "needs_judgment": evidence.needs_judgment if evidence else False,
                     "stale": stale,
+                    "content_hash": current_hash,
+                    "review_state": review_state,
                     "latest_review": latest.model_dump(mode="json") if latest else None,
                 }
             )
@@ -202,7 +225,18 @@ async def create_library_review(
     Server-side-enforced on every call (`require_library_admin`) -- never
     trusts a client-sent admin flag. A `"flagged"` decision also creates a
     `Feedback` row (`type="research_question"`, `source="coach"`) so it
-    lands in the same research queue every other unresolved gap does."""
+    lands in the same research queue every other unresolved gap does.
+
+    `content_hash` is never taken from the client (web/review-fixes-chart-
+    scale fix 1) -- the PWA has no reliable way to hand back the section's
+    current hash (`GET /api/library/cards` didn't even return one until this
+    same fix), so a client-sent value was either stale or, as the bug this
+    fix closes, an empty string that 422'd every Accept/Flag click. Instead
+    this route re-reads the topic file itself and hashes the section's
+    CURRENT body text (`library_cards.content_hash`/`section_text`), the
+    same computation `GET /api/library/cards` uses for its own
+    `content_hash` field -- so a decision recorded here always carries an
+    accurate hash of what the admin actually reviewed."""
     settings = request.app.state.settings
     reviewer_slug = require_library_admin(request, principal, athlete)
     store = make_store(settings)
@@ -210,7 +244,6 @@ async def create_library_review(
 
     file = payload.get("file")
     section = payload.get("section")
-    content_hash = payload.get("content_hash")
     decision = payload.get("decision")
     note = payload.get("note")
 
@@ -218,8 +251,6 @@ async def create_library_review(
         raise HTTPException(status_code=422, detail="file must be a non-empty string")
     if not isinstance(section, str) or not section:
         raise HTTPException(status_code=422, detail="section must be a non-empty string")
-    if not isinstance(content_hash, str) or not content_hash:
-        raise HTTPException(status_code=422, detail="content_hash must be a non-empty string")
     if decision not in ("accepted", "flagged"):
         raise HTTPException(status_code=422, detail="decision must be 'accepted' or 'flagged'")
     if note is not None and not isinstance(note, str):
@@ -235,11 +266,21 @@ async def create_library_review(
     if not any(c.section == section for c in card_file.cards):
         raise HTTPException(status_code=404, detail=f"no such section: {file}#{section}")
 
+    computed_hash = ""
+    topic_path = library_dir / file
+    if topic_path.exists():
+        topic_text = topic_path.read_text(encoding="utf-8")
+        section_obj = next(
+            (s for s in topic_sections(topic_text) if s.slug == section), None
+        )
+        if section_obj is not None:
+            computed_hash = content_hash(section_text(topic_text, section_obj))
+
     review = LibraryReview(
         id=uuid4(),
         file=file,
         section=section,
-        content_hash=content_hash,
+        content_hash=computed_hash,
         decision=decision,
         note=note,
         reviewed_by=reviewer.id,
