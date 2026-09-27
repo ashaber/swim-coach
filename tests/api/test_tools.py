@@ -533,6 +533,116 @@ def test_flag_for_coach_review_requires_question_and_topic(athletes_dir) -> None
     assert spy.saved == []
 
 
+# --- "route miss" logging (IDEA 025 step 1) ----------------------------------
+
+
+def _route_miss_lines(capsys) -> list[dict]:
+    return [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("{") and json.loads(line).get("msg") == "route miss"
+    ]
+
+
+def test_flag_for_coach_review_with_research_gap_logs_route_miss_kind_topic(
+    athletes_dir, run_tag, capsys
+) -> None:
+    spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir))
+    handlers = build_tool_handlers(
+        spy,
+        slug="renee",
+        expert_mode=False,
+        request_id="req-123",
+        routed_files=["33-daily-nutrition-and-supplements.md"],
+    )
+    handlers["flag_for_coach_review"](
+        {"question": f"gap question [{run_tag}]", "topic": "nutrition", "research_gap": True}
+    )
+    lines = _route_miss_lines(capsys)
+    assert len(lines) == 1
+    assert lines[0]["kind"] == "topic"
+    assert lines[0]["routed_files"] == ["33-daily-nutrition-and-supplements.md"]
+    assert lines[0]["request_id"] == "req-123"
+
+
+def test_flag_for_coach_review_without_research_gap_does_not_log_route_miss(
+    athletes_dir, run_tag, capsys
+) -> None:
+    spy = SpyFeedbackStore(FileStore(base_dir=athletes_dir))
+    handlers = build_tool_handlers(spy, slug="renee", expert_mode=False, request_id="req-456")
+    handlers["flag_for_coach_review"](
+        {
+            "question": f"safety question [{run_tag}]",
+            "topic": "safety",
+            "needs_human_review": True,
+            "reason": "pain report",
+        }
+    )
+    assert _route_miss_lines(capsys) == []
+
+
+# --- lookup_reference ---------------------------------------------------------
+
+
+def test_lookup_reference_finds_verbatim_entries_by_surname_and_year(
+    athletes_dir, library_dir, capsys
+) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(
+        store, slug="renee", expert_mode=False, library_dir=library_dir, request_id="req-789"
+    )
+    result = handlers["lookup_reference"]({"query": "Chilibeck 2017"})
+    assert result["found"] is True
+    assert len(result["entries"]) == 1
+    assert "Chilibeck P.D. et al. (2017)" in result["entries"][0]
+
+    lines = _route_miss_lines(capsys)
+    assert len(lines) == 1
+    assert lines[0]["level"] == "info"
+    assert lines[0]["logger"] == "app.tools"
+    assert lines[0]["kind"] == "reference"
+    assert lines[0]["query"] == "Chilibeck 2017"
+    assert lines[0]["found"] is True
+    assert lines[0]["request_id"] == "req-789"
+
+
+def test_lookup_reference_reports_not_in_reference_list_when_nothing_matches(
+    athletes_dir, library_dir, capsys
+) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False, library_dir=library_dir)
+    result = handlers["lookup_reference"]({"query": "a completely fabricated nonexistent author zzy2099"})
+    assert result == {"found": False, "message": "not in reference_list.md", "entries": []}
+
+    lines = _route_miss_lines(capsys)
+    assert len(lines) == 1
+    assert lines[0]["kind"] == "reference"
+    assert lines[0]["found"] is False
+
+
+def test_lookup_reference_without_library_dir_returns_an_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["lookup_reference"]({"query": "Chilibeck"})
+    assert result == {"error": "reference list unavailable"}
+
+
+def test_lookup_reference_requires_query(athletes_dir, library_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False, library_dir=library_dir)
+    result = handlers["lookup_reference"]({})
+    assert result == {"error": "query is required"}
+
+
+def test_lookup_reference_caps_at_five_entries(athletes_dir, library_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False, library_dir=library_dir)
+    # A single common token ("swim") matches far more than 5 bullets.
+    result = handlers["lookup_reference"]({"query": "swim"})
+    assert result["found"] is True
+    assert len(result["entries"]) <= 5
+
+
 # --- record_health_status ---------------------------------------------------
 
 

@@ -243,6 +243,7 @@ from swim_coach.workout_templates import TemplatePreference, render_prose, resol
 
 from app.context import (
     _active_health_statuses,
+    _parsed_reference_list,
     athlete_primary_sport,
     find_workout_by_id,
     iso_week_str,
@@ -714,6 +715,25 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
             },
             "required": ["question", "topic"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lookup_reference",
+        "description": (
+            "Look up a `reference_list.md` source not already attached to this message "
+            "(author surname and/or year and/or a few title words). Returns up to 5 "
+            "matching entries verbatim, or says plainly that nothing matched."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Author surname, year, and/or title words, e.g. 'Chilibeck 2017' or 'creatine cramps'.",
+                },
+            },
+            "required": ["query"],
             "additionalProperties": False,
         },
     },
@@ -3101,7 +3121,13 @@ def _handle_get_week_plan(input_data: dict[str, Any], *, store: StoreInterface, 
 
 
 def _handle_flag_for_coach_review(
-    input_data: dict[str, Any], *, store: StoreInterface, slug: str, expert_mode: bool
+    input_data: dict[str, Any],
+    *,
+    store: StoreInterface,
+    slug: str,
+    expert_mode: bool,
+    routed_files: list[str] | None = None,
+    request_id: str | None = None,
 ) -> dict[str, Any]:
     question = input_data.get("question")
     topic = input_data.get("topic")
@@ -3145,7 +3171,58 @@ def _handle_flag_for_coach_review(
         research_gap=research_gap,
         needs_human_review=needs_human_review,
     )
+    if research_gap:
+        # IDEA 025 step 1's "route miss" observability (kind="topic"): the
+        # model had to say "I don't know" despite whatever WAS routed/attached
+        # for this request -- `routed_files` names what that was, so a miss
+        # rate can be measured against what the routing actually offered.
+        log.info(
+            "route miss",
+            kind="topic",
+            routed_files=routed_files or [],
+            request_id=request_id,
+        )
     return {"logged": True, "id": str(entry.id), "type": entry.type}
+
+
+def _handle_lookup_reference(
+    input_data: dict[str, Any],
+    *,
+    library_dir: Path | None,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    """`lookup_reference` tool handler: a `reference_list.md` source not
+    already attached to this message (IDEA 025 step 1 -- only the entries the
+    routed topic files cite ride the message; this covers everything else).
+    Matches a query's whitespace-split tokens (author surname, year, title
+    words) against each entry's own verbatim bullet text, case-insensitively,
+    requiring every token to appear -- reuses `app.context._parsed_reference_list`
+    (built on `engine.swim_coach.library_review`'s parser), not a new one."""
+    query = input_data.get("query")
+    if not isinstance(query, str) or not query.strip():
+        return {"error": "query is required"}
+    if library_dir is None:
+        return {"error": "reference list unavailable"}
+
+    entries, bullet_text_by_key = _parsed_reference_list(library_dir)
+    tokens = [t for t in query.lower().split() if t]
+    matches: list[str] = []
+    for entry in entries:
+        bullet = bullet_text_by_key.get(entry.key, entry.key)
+        if tokens and all(token in bullet.lower() for token in tokens):
+            matches.append(bullet)
+        if len(matches) >= 5:
+            break
+
+    found = bool(matches)
+    # "route miss" (kind="reference"): logged on EVERY call, found or not --
+    # the call itself means the routed/attached content didn't already cover
+    # it, so it's a miss against routing regardless of whether reference_list.md
+    # itself has a source.
+    log.info("route miss", kind="reference", query=query, found=found, request_id=request_id)
+    if not found:
+        return {"found": False, "message": "not in reference_list.md", "entries": []}
+    return {"found": True, "entries": matches}
 
 
 _BODY_REGIONS = ("shoulder", "knee", "back", "hip", "ankle_foot", "elbow_wrist", "illness_systemic", "head_neck", "other")
@@ -8461,12 +8538,27 @@ def _handle_render_plan_table(
 
 
 def build_tool_handlers(
-    store: StoreInterface, *, slug: str, expert_mode: bool
+    store: StoreInterface,
+    *,
+    slug: str,
+    expert_mode: bool,
+    library_dir: Path | None = None,
+    request_id: str | None = None,
+    routed_files: list[str] | None = None,
 ) -> dict[str, ToolHandler]:
     """Binds the request's athlete slug / expert_mode / store into closures
     over the tool handlers above, so the tool schema the model sees never
     exposes `expert_mode` as something the model itself sets -- it's a
-    client-declared request flag, not a model decision."""
+    client-declared request flag, not a model decision.
+
+    `library_dir`/`request_id`/`routed_files` (all optional, defaulting to
+    `None`/empty so every existing call site keeps working unchanged) exist
+    only for `lookup_reference` (needs `library_dir` to read
+    `reference_list.md`) and the "route miss" log line both it and
+    `flag_for_coach_review` emit (IDEA 025 step 1) -- `request_id` joins that
+    line back to the request's "library route"/"claude turn complete" logs,
+    and `routed_files` is what `flag_for_coach_review`'s own miss line names
+    as "what was actually routed/attached for this request"."""
     handlers: dict[str, ToolHandler] = {
         "propose_adaptation": lambda input_data: _handle_propose_adaptation(
             input_data, store=store, slug=slug
@@ -8478,7 +8570,15 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "flag_for_coach_review": lambda input_data: _handle_flag_for_coach_review(
-            input_data, store=store, slug=slug, expert_mode=expert_mode
+            input_data,
+            store=store,
+            slug=slug,
+            expert_mode=expert_mode,
+            routed_files=routed_files,
+            request_id=request_id,
+        ),
+        "lookup_reference": lambda input_data: _handle_lookup_reference(
+            input_data, library_dir=library_dir, request_id=request_id
         ),
         "record_health_status": lambda input_data: _handle_record_health_status(
             input_data, store=store, slug=slug, expert_mode=expert_mode

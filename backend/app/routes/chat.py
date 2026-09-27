@@ -34,6 +34,7 @@ from app.context import (
     build_routed_library_text,
     build_system,
     find_workout_by_id,
+    route_info_for_logging,
 )
 from app.light_mode import (
     LIGHT_TOOLS,
@@ -267,6 +268,12 @@ async def chat(
         expert_mode=payload.expert_mode,
     )
 
+    # One request_id per HTTP request (IDEA 025 step 1) -- joins this
+    # request's "library route" log line to every "claude turn complete"
+    # (and any "route miss") line the same turn emits, so cost can be joined
+    # to routing without cross-referencing timestamps.
+    request_id = str(uuid.uuid4())
+
     def build_full_request():
         """The full-mode (system, messages, tools, handlers). A function so a
         light turn only pays for it (DB reads, engine math) if it escalates."""
@@ -285,6 +292,14 @@ async def chat(
             if in_message
             else None
         )
+        # IDEA 025 step 1: computed regardless of `in_message` (whether the
+        # routed text rides the message or block B) -- one log line either
+        # way, and `flag_for_coach_review`'s own "route miss" (kind="topic")
+        # needs `routed_files` too.
+        routing_info = route_info_for_logging(
+            settings.library_dir, effective_message, athlete_sports=athlete_profile.effective_sports
+        )
+        log.info("library route", request_id=request_id, **routing_info)
         messages = build_messages(
             store,
             athlete,
@@ -298,6 +313,9 @@ async def chat(
             store,
             slug=athlete,
             expert_mode=payload.expert_mode,
+            library_dir=settings.library_dir,
+            request_id=request_id,
+            routed_files=routing_info["routed_files"],
         )
         return system, messages, TOOLS_SCHEMA, tool_handlers
 
@@ -310,13 +328,15 @@ async def chat(
         )
 
         def event_stream():
-            yield from claude_chat.run_streaming(*light_request, escalate=build_full_request)
+            yield from claude_chat.run_streaming(
+                *light_request, escalate=build_full_request, request_id=request_id
+            )
 
     else:
         full_request = build_full_request()
 
         def event_stream():
-            yield from claude_chat.run_streaming(*full_request)
+            yield from claude_chat.run_streaming(*full_request, request_id=request_id)
 
     # Workout chat thread (IDEA 016): the athlete's message and the AI's reply get persisted
     # onto Workout.chat_messages -- replacing the old ephemeral, client-only history -- so a

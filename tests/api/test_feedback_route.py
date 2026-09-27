@@ -8,6 +8,7 @@ not a fake.
 
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
@@ -323,6 +324,33 @@ def test_ask_question_happy_path_persists_provisional_answer(
     )
     assert body["needs_human_review"] is False
     assert body["workout_id"] is None
+
+
+def test_ask_question_logs_library_route_joined_to_claude_turn_complete(
+    client, fake_claude_chat_factory, capsys
+) -> None:
+    # IDEA 025 step 1: same "library route"/request_id-join convention as
+    # POST /api/chat, for this endpoint's one-shot run_once call too.
+    final = make_final_message([make_text_block("60-90g carbs/hr.")], "end_turn")
+    fake_claude_chat_factory([(["60-90g carbs/hr."], final)])
+
+    response = client.post(
+        "/api/feedback/questions?athlete=renee",
+        json=_question_payload(body="is creatine worth taking daily?"),
+        headers=auth_headers(),
+    )
+    assert response.status_code == 200
+
+    logged = [
+        json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")
+    ]
+    route_lines = [line for line in logged if line.get("msg") == "library route"]
+    turn_lines = [line for line in logged if line.get("msg") == "claude turn complete"]
+    assert len(route_lines) == 1
+    assert len(turn_lines) == 1
+    assert route_lines[0]["request_id"] == turn_lines[0]["request_id"]
+    assert route_lines[0]["request_id"]
+    assert "33-daily-nutrition-and-supplements.md" in route_lines[0]["routed_files"]
 
 
 def test_ask_question_direct_to_coach_sets_needs_human_review(

@@ -6,9 +6,7 @@ build's task spec):
   System block A (cacheable, stable per athlete sport-scope): coach persona
     + hard rules (grounding/citation/safety, adapted from
     `.claude/skills/coach/SKILL.md`) + full text of
-    `library/00-conventions.md` + `library/INDEX.md` + `library/reference_list.md`
-    (the ~35k-token bibliography: never message-dependent, so it lives in the
-    STABLE block -- see `build_system_blocks`), with INDEX.md's own
+    `library/00-conventions.md` + `library/INDEX.md`, with INDEX.md's own
     sport-scoped spans (today, only the cycling file's row + its topic-
     routing rows -- see `_filter_scoped_index_sections`) stripped out unless
     the requesting athlete's effective sport scope covers them. No
@@ -17,7 +15,10 @@ build's task spec):
     content reaching a swim-only athlete's system prompt unconditionally),
     not a per-message one, so it stays byte-identical across every request
     for a given athlete's own fixed sport scope, just no longer literally
-    argument-free.
+    argument-free. `library/reference_list.md` (the ~58k-token bibliography)
+    NO LONGER lives here (IDEA 025 step 1: it was ~30% of every cold-start
+    prefix, needed only to cite) -- see `build_routed_library_text` for
+    where its entries go instead.
 
   System block B (cacheable): 1-3 topic files selected by deterministic
     keyword-bucket routing against INDEX.md's routing table. Same message (or any message landing in the same
@@ -50,6 +51,12 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from swim_coach.athlete_time import athlete_today
+from swim_coach.library_review import (
+    REF_ENTRY_RE,
+    RefEntry,
+    parse_reference_list,
+    resolve_citations,
+)
 from swim_coach.load import (
     acute_chronic_ratio,
     compute_compliance,
@@ -186,9 +193,9 @@ answer must still be a grounded, accurate one.
 ## Grounding rules
 
 1. Cite by title + author + year (e.g. "per Wakayoshi et al. (1992)"), never
-   by URL or PubMed/PMC ID -- `library/reference_list.md` is the only
-   trustworthy citation source in this repository; older sources elsewhere
-   in this project contained fabricated identifiers.
+   by URL or PubMed/PMC ID -- older identifiers elsewhere in this project
+   were fabricated. Reference entries for the routed topic files are
+   attached to the message; call `lookup_reference` for any other source.
 2. Every claim still has to be grounded in the library, but how much of the
    evidence machinery you show the asker depends on the "Asker mode" line in
    the per-request context below:
@@ -802,16 +809,18 @@ def _cache_control(ttl: str) -> dict[str, str]:
 def build_system_blocks(
     library_dir: Path, *, athlete_sports: list[str] | None = None, cache_ttl: str = "5m"
 ) -> list[dict[str, Any]]:
-    """System block A: persona + rules + 00-conventions.md + INDEX.md +
-    reference_list.md, as a single cacheable text block.
+    """System block A: persona + rules + 00-conventions.md + INDEX.md, as a
+    single cacheable text block.
 
-    reference_list.md (INDEX.md's "always load alongside for citations" file,
-    ~35k tokens and never message-dependent) lives HERE and not in block B:
-    block B's text changes with the message's topic, and a cache miss on a
-    block rewrites all of it -- with the list in block B that was ~42k tokens
-    of cache writes on nearly every turn (IDEA 022). The model reads the same
-    text in the same order either way (persona, conventions, index, reference
-    list, routed topic files); only the cache breakpoint moved.
+    `library/reference_list.md` (~58k tokens) does NOT live here (IDEA 025
+    step 1, reversing the earlier IDEA 022 decision that put it in this
+    block): it was paid on every cold cache start regardless of whether the
+    turn cited anything, for a bibliography most turns never reference in
+    full. It's no longer loaded whole anywhere -- `build_routed_library_text`
+    attaches only the entries the ROUTED topic files actually cite (reusing
+    `engine.swim_coach.library_review`'s citation-resolution machinery), and
+    the `lookup_reference` tool (app.tools) covers anything not cited by
+    those files. See PERSONA_AND_RULES rule 1 for the model-facing framing.
 
     `athlete_sports` (optional, defaults to `None`, same "undeclared
     resolves to swim-only" convention `filter_files_by_sport_scope` uses --
@@ -830,12 +839,10 @@ def build_system_blocks(
     effective_sports = set(athlete_sports) if athlete_sports is not None else set(_DEFAULT_SWIM_ONLY_SPORTS)
     conventions = _read_text(library_dir / "00-conventions.md")
     index = _filter_scoped_index_sections(_read_text(library_dir / "INDEX.md"), effective_sports)
-    reference_list = _read_text(library_dir / "reference_list.md")
     text = (
         f"{PERSONA_AND_RULES}\n\n"
         f"---\n\n# library/00-conventions.md\n\n{conventions}\n\n"
-        f"---\n\n# library/INDEX.md\n\n{index}\n\n"
-        f"---\n\n# library/reference_list.md\n\n{reference_list}"
+        f"---\n\n# library/INDEX.md\n\n{index}"
     )
     return [
         {
@@ -1121,8 +1128,11 @@ def route_library_files(
     max_files: int = MAX_ROUTED_FILES,
     athlete_sports: list[str] | None = None,
 ) -> list[str]:
-    """Deterministically route `message` to up to `max_files` topic files
-    (not counting reference_list.md, which is always included separately).
+    """Deterministically route `message` to up to `max_files` topic files.
+    (`reference_list.md` is no longer loaded whole anywhere -- see
+    `build_routed_library_text` for the per-citation entries attached
+    alongside these files, and the `lookup_reference` tool for anything not
+    cited by them.)
 
     Order is fixed by `_LIBRARY_FILES_IN_PRIORITY_ORDER`, not by keyword
     match order, so any two messages that hit the same bucket (for the same
@@ -1168,14 +1178,36 @@ def route_library_files(
     return ordered[:max_files]
 
 
+def _routed_topic_files_text(
+    library_dir: Path, message: str, *, athlete_sports: list[str] | None = None
+) -> str:
+    """Just the concatenated routed topic files' own text -- no
+    `reference_list.md` entries, no header. The shared base both
+    `build_routed_block` (system block B) and `build_routed_library_text`
+    (the message, `COACH_ROUTED_LIBRARY_IN_MESSAGE`) attach cited entries
+    onto via `_cited_reference_bullets`."""
+    filenames = route_library_files(message, athlete_sports=athlete_sports)
+    parts = []
+    for filename in filenames:
+        content = _read_text(library_dir / filename)
+        parts.append(f"# library/{filename}\n\n{content}")
+    return "\n\n---\n\n".join(parts)
+
+
 def build_routed_block(
     library_dir: Path, message: str, *, athlete_sports: list[str] | None = None
 ) -> list[dict[str, Any]]:
-    """System block B: the routed topic files for `message`, as a single
-    cacheable text block. (reference_list.md -- INDEX.md's "always load
-    alongside for citations" file -- is in block A, not here: see
-    `build_system_blocks`. Keeping it out of this message-dependent block is
-    what stops a topic change from rewriting ~35k tokens of unchanged text.)
+    """System block B: the routed topic files for `message`, plus the
+    verbatim `reference_list.md` entries those files actually cite (IDEA 025
+    step 1), as a single cacheable text block.
+
+    **This is the production default**: `COACH_ROUTED_LIBRARY_IN_MESSAGE` is
+    unset in Cloud Run, so the routed text rides HERE, not the message (see
+    `build_routed_library_text`) -- citations have to attach on this path or
+    the coach loses them entirely and hammers `lookup_reference` for
+    anything it would normally just cite. Real bug caught before this PR
+    merged: an earlier version of this build only attached entries in
+    `build_routed_library_text`, which production never calls.
 
     `athlete_sports` (optional, defaults to `None`, forwarded straight to
     `route_library_files` -- see that function's docstring) is the only
@@ -1183,12 +1215,14 @@ def build_routed_block(
     than the message alone; every existing call site (no kwarg passed)
     keeps producing byte-identical output.
     """
-    filenames = route_library_files(message, athlete_sports=athlete_sports)
-    parts = []
-    for filename in filenames:
-        content = _read_text(library_dir / filename)
-        parts.append(f"# library/{filename}\n\n{content}")
-    text = "\n\n---\n\n".join(parts)
+    body = _routed_topic_files_text(library_dir, message, athlete_sports=athlete_sports)
+    bullets = _cited_reference_bullets(library_dir, body)
+    text = body
+    if bullets:
+        text += (
+            "\n\n---\n\n## library/reference_list.md entries cited by the files above\n\n"
+            + "\n".join(bullets)
+        )
     return [
         {
             "type": "text",
@@ -1198,18 +1232,121 @@ def build_routed_block(
     ]
 
 
+# --- reference_list.md: on-demand citation attachment (IDEA 025 step 1) ----
+#
+# `library/reference_list.md` used to ride whole in system block A (~58k
+# tokens, paid on every cold cache start regardless of whether the turn
+# cited anything). It's now attached PER-REQUEST, and only the entries the
+# routed topic files actually cite -- reusing
+# `engine.swim_coach.library_review`'s citation-resolution machinery
+# (`parse_reference_list`/`resolve_citations`/`candidate_surnames`) rather
+# than writing a second parser for the same bullet format. Anything not
+# cited by the routed files is reachable via the `lookup_reference` tool
+# (app.tools) instead of being loaded speculatively.
+
+# A reference_list.md bullet's own text (REF_ENTRY_RE only captures the bold
+# citation key, e.g. "✓ Chilibeck P.D. et al. (2017)") runs from its "- **"
+# start to the next bullet or the next heading of any level -- `##`, `###`,
+# etc. (reference_list.md nests entries under `###` topic subheadings inside
+# each `##` section).
+_REFERENCE_HEADING_RE = re.compile(r"^#{2,6}[ \t]", re.MULTILINE)
+
+# Parsed (entries, {entry.key: verbatim bullet text}) per library_dir,
+# cached for the life of the process -- reference_list.md is static in the
+# deployed image, so re-parsing it on every chat turn would waste exactly
+# the latency (if not the tokens) this build exists to save.
+_PARSED_REFERENCE_LIST_CACHE: dict[Path, tuple[list[RefEntry], dict[str, str]]] = {}
+
+
+def _parsed_reference_list(library_dir: Path) -> tuple[list[RefEntry], dict[str, str]]:
+    """`(entries, bullet_text_by_key)` for `library_dir/reference_list.md`,
+    parsed once per process. `entries` is `parse_reference_list`'s own
+    return value (each entry's `key` is its bold citation text, whitespace-
+    normalized); `bullet_text_by_key` maps that same `key` to the entry's
+    FULL verbatim bullet (including the description after the bold key),
+    which `REF_ENTRY_RE` alone doesn't capture."""
+    path = library_dir / "reference_list.md"
+    cached = _PARSED_REFERENCE_LIST_CACHE.get(path)
+    if cached is not None:
+        return cached
+    text = _read_text(path)
+    entries = parse_reference_list(text)
+    bullet_starts = [m.start() for m in REF_ENTRY_RE.finditer(text)]
+    boundaries = sorted(set(bullet_starts) | {m.start() for m in _REFERENCE_HEADING_RE.finditer(text)})
+    bullet_text_by_key: dict[str, str] = {}
+    for entry, start in zip(entries, bullet_starts):
+        later = [b for b in boundaries if b > start]
+        end = later[0] if later else len(text)
+        bullet_text_by_key[entry.key] = text[start:end].strip()
+    result = (entries, bullet_text_by_key)
+    _PARSED_REFERENCE_LIST_CACHE[path] = result
+    return result
+
+
+def _cited_reference_bullets(library_dir: Path, routed_text: str) -> list[str]:
+    """Verbatim `reference_list.md` bullets cited (author-year, e.g.
+    `` `Chilibeck et al. (2017)` ``) within `routed_text` -- typically the
+    concatenated body of the routed topic files for one message. Order
+    follows `reference_list.md`'s own entry order (`resolve_citations`'
+    contract), not first-cited-in-text order."""
+    entries, bullet_text_by_key = _parsed_reference_list(library_dir)
+    sources, _unresolved = resolve_citations(routed_text, entries)
+    return [bullet_text_by_key[s.key] for s in sources if s.key in bullet_text_by_key]
+
+
+def _matched_routing_keywords(message: str) -> list[str]:
+    """Which `_KEYWORD_ROUTES` keys matched `message` -- routing observability
+    only (IDEA 025 step 1's "library route" log), never used to decide
+    routing itself (that stays `route_library_files`'s own logic)."""
+    lower = message.lower()
+    return sorted(keyword for keyword in _KEYWORD_ROUTES if keyword in lower)
+
+
 def build_routed_library_text(
     library_dir: Path, message: str, *, athlete_sports: list[str] | None = None
 ) -> str:
     """The routed topic files for `message` as plain text for the newest user
-    message (IDEA 022 step 4) -- the same files `build_routed_block` would put
-    in system block B, under a header saying what they are."""
+    message (IDEA 022 step 4) -- exactly what `build_routed_block` would put
+    in system block B (topic files + their cited `reference_list.md`
+    entries, IDEA 025 step 1), under a header saying what they are. Anything
+    the routed files don't cite is reachable via the `lookup_reference` tool
+    instead."""
     body = build_routed_block(library_dir, message, athlete_sports=athlete_sports)[0]["text"]
     return (
         "## Library topic files for this question "
         "(reference material -- ground and cite from these, same rules as the system prompt)\n\n"
         + body
     )
+
+
+class LibraryRouteInfo(TypedDict):
+    routed_files: list[str]
+    matched_keywords: list[str]
+    n_ref_entries_attached: int
+    ref_chars: int
+
+
+def route_info_for_logging(
+    library_dir: Path, message: str, *, athlete_sports: list[str] | None = None
+) -> LibraryRouteInfo:
+    """Routing + citation-attachment metadata for the "library route" log
+    line (IDEA 025 step 1) -- computed independently of whether the routed
+    text actually rides the message (`build_routed_library_text`) or the
+    cached system block B (`build_routed_block`), so a caller can log this
+    exactly once per chat request either way."""
+    routed_files = route_library_files(message, athlete_sports=athlete_sports)
+    matched_keywords = _matched_routing_keywords(message)
+    # The topic files' OWN text, not build_routed_block's return value --
+    # that already has cited entries appended, and re-scanning THOSE for
+    # citations would double-count/spuriously match against bullet prose.
+    body = _routed_topic_files_text(library_dir, message, athlete_sports=athlete_sports)
+    bullets = _cited_reference_bullets(library_dir, body)
+    return {
+        "routed_files": routed_files,
+        "matched_keywords": matched_keywords,
+        "n_ref_entries_attached": len(bullets),
+        "ref_chars": sum(len(b) for b in bullets),
+    }
 
 
 def build_system(

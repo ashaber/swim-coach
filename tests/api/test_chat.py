@@ -43,6 +43,42 @@ def test_request_shape_no_temperature_top_p_top_k(client, fake_claude_chat_facto
     assert kwargs["thinking"] == {"type": "adaptive"}
 
 
+def _all_logged(capsys) -> list[dict]:
+    # capsys.readouterr() is destructive (drains the buffer) -- read it
+    # exactly ONCE per test and filter the same list for each msg, rather
+    # than calling it once per msg (which would lose everything after the
+    # first call).
+    return [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("{")
+    ]
+
+
+def test_library_route_and_claude_turn_complete_share_a_request_id(
+    client, fake_claude_chat_factory, capsys
+) -> None:
+    # IDEA 025 step 1: one "library route" line per chat request, joined to
+    # "claude turn complete" by request_id so cost can be joined to routing.
+    final = make_final_message([make_text_block("ok")], "end_turn")
+    fake_claude_chat_factory([(["ok"], final)])
+
+    response = client.post("/api/chat", json=_chat_payload(), headers=auth_headers())
+    assert response.status_code == 200
+
+    logged = _all_logged(capsys)
+    route_lines = [line for line in logged if line.get("msg") == "library route"]
+    turn_lines = [line for line in logged if line.get("msg") == "claude turn complete"]
+    assert len(route_lines) == 1
+    assert len(turn_lines) == 1
+    assert route_lines[0]["request_id"] == turn_lines[0]["request_id"]
+    assert route_lines[0]["request_id"]  # non-empty
+    assert "routed_files" in route_lines[0]
+    assert "matched_keywords" in route_lines[0]
+    assert "n_ref_entries_attached" in route_lines[0]
+    assert "ref_chars" in route_lines[0]
+
+
 def test_request_shape_includes_tools(client, fake_claude_chat_factory) -> None:
     final = make_final_message([make_text_block("ok")], "end_turn")
     chat = fake_claude_chat_factory([(["ok"], final)])
@@ -56,6 +92,7 @@ def test_request_shape_includes_tools(client, fake_claude_chat_factory) -> None:
         "get_plan_summary",
         "get_week_plan",
         "flag_for_coach_review",
+        "lookup_reference",
         "record_health_status",
         "record_threshold_test",
         "update_athlete_profile",

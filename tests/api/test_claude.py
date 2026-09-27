@@ -453,6 +453,49 @@ def test_request_sizes_logged_once_on_the_first_iteration_only(capsys) -> None:
     assert logged[0]["model"] == "claude-sonnet-5"
 
 
+def test_claude_turn_complete_carries_the_request_id_when_given(capsys) -> None:
+    # IDEA 025 step 1: request_id joins a turn's cost back to the same
+    # request's "library route" log line (app.context.route_info_for_logging).
+    final = make_final_message([make_text_block("done")], "end_turn")
+    chat = ClaudeChat(_settings(), client=FakeAnthropicClient([([], final)]))
+
+    list(
+        chat.run_streaming(
+            [{"type": "text", "text": "sys"}],
+            [{"role": "user", "content": "q"}],
+            [],
+            {},
+            request_id="req-abc123",
+        )
+    )
+
+    logged = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("{") and json.loads(line).get("msg") == "claude turn complete"
+    ]
+    assert len(logged) == 1
+    assert logged[0]["request_id"] == "req-abc123"
+
+
+def test_claude_turn_complete_request_id_defaults_to_none(capsys) -> None:
+    final = make_final_message([make_text_block("done")], "end_turn")
+    chat = ClaudeChat(_settings(), client=FakeAnthropicClient([([], final)]))
+
+    list(
+        chat.run_streaming(
+            [{"type": "text", "text": "sys"}], [{"role": "user", "content": "q"}], [], {}
+        )
+    )
+
+    logged = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("{") and json.loads(line).get("msg") == "claude turn complete"
+    ]
+    assert logged[0]["request_id"] is None
+
+
 # --- moving cache breakpoint inside the tool loop (IDEA 022 step 2) ----------
 # Every tool-loop iteration re-sends the newest user message (per-request
 # context) and all tool results so far. Without a breakpoint after them they
