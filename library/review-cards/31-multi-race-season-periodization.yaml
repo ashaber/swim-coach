@@ -36,6 +36,13 @@ cards:
     needed.
   recommendation: none -- background only
   content_hash: 767be6ca4c9f29df44974a5a072372514b8212c29b97d9376eb1acc8d1fbb409
+- section: short-event-taper-and-in-season-maintenance
+  heading: Short-event taper and in-season maintenance
+  summary: A 7-day, ~50%-volume-cut taper significantly improved a short cycling TT (Neary 2003); B-race
+    mini-tapers and ~2x/week maintenance between B races don't cost fitness (Houmard 1991, Rønnestad 2010).
+  recommendation: Give a short (<=~1.5h) event a 5-7 day, ~50%-cut taper; treat a B-race's 1-week mini-taper
+    and ~2x/week between-race maintenance as evidence-backed, not just convention.
+  content_hash: 8dc29d8f2083a5a6ea7c62bc6f6abc77a957f1c593b4f4580cc223390d5431a7
 - section: what-s-not-resolved
   heading: What's not resolved
   summary: Cross-sport goal conflicts (e.g. swim vs. cyclocross), CX-specific research gaps, and automatic

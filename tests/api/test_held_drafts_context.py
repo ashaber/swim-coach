@@ -78,12 +78,18 @@ def test_a_stale_draft_is_not_offered(athletes_dir) -> None:
     assert SECTION not in _ctx(store)
 
 
-def test_an_adaptation_draft_says_to_write_it_with_replace_week_plan(athletes_dir) -> None:
+def test_an_authored_week_draft_says_to_write_it_with_author_week_plan(athletes_dir) -> None:
+    # engine/plan-check-red-team PR 2: propose_adaptation is advisory-only
+    # now (no draft held); author_week_plan is the tool whose held draft
+    # this "drafts waiting" context section describes.
     store = FileStore(base_dir=athletes_dir)
     h = build_tool_handlers(store, slug="renee", expert_mode=False)
-    draft = h["propose_adaptation"]({"iso_week": "2026-W30"})
+    draft = h["author_week_plan"]({
+        "iso_week": "2026-W30",
+        "sessions": [{"date": "2026-07-20", "sport": "swim_pool", "duration_min": 45, "purpose": "aerobic base"}],
+    })
     text = _ctx(store)
-    assert draft["draft_id"] in text and "`replace_week_plan`" in text
+    assert draft["draft_id"] in text and "`author_week_plan`" in text
 
 
 def test_a_macro_draft_is_described(athletes_dir) -> None:

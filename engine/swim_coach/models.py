@@ -9,7 +9,7 @@ so future migrations have a field to branch on.
 from __future__ import annotations
 
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Annotated, Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -877,6 +877,179 @@ class WeekPlan(BaseModel):
         return v
 
 
+class MacroWeek(BaseModel):
+    """One row of a coach-AUTHORED macro week-by-week table
+    (engine/plan-check-red-team, PR 1 -- "the coach authors plans; the
+    engine red-teams them," see that build's approved plan). Unlike
+    `MacroBlock` (which `plan.scaffold_macro`/`scaffold_sharpening_macro`/
+    `scaffold_season_macro` compute deterministically from a handful of
+    inputs), a `MacroWeek` is written directly by the LLM coach, one row
+    per calendar week, the same week-by-week shape a real cyclocross
+    macrocycle table uses (Tim's `ai-coach` golden fixture this build's own
+    tests transcribe). `engine.swim_coach.plan_check.check_macro` reads a
+    list of these against the athlete's actual logged history and returns
+    an advisory red-team report -- it never rejects or clamps a `MacroWeek`
+    the coach wrote.
+
+    No `schema_version` -- like `MacroBlock`, this is a value nested inside
+    `MacroPlan`, not itself a top-level persisted file (see this module's
+    own top-of-file convention comment: only models that map to a
+    persisted YAML file carry `schema_version`).
+
+    `week_start` is always the Monday of the week this row describes (same
+    Monday-start convention `WeekPlan.iso_week` already uses via
+    `date.fromisocalendar(..., 1)`). `hours`/`load_tss`/`ctl_target` are
+    all optional -- a coach drafting an early, distant week may reasonably
+    leave the far-out rows at table-level precision (Tim's own "false
+    precision" rule, see the approved plan's "Planning layers" section)
+    before the detailed numbers exist. `key_sessions` is a short free-text
+    list (e.g. "Tue: over/unders 3x[8 min]"), not structured `Session`
+    data -- this is a MACRO-level row, not a workout; the coach authors
+    real `Session`s separately (PR 2's `author_week_plan`). `recovery`
+    flags a deliberate, planned volume/intensity step-down week (distinct
+    from an unplanned bad week) -- `check_macro`'s recovery-cadence check
+    reads this flag directly rather than trying to infer "recovery" from
+    the load numbers alone.
+    """
+
+    week_start: date
+    phase: str
+    focus: str
+    hours: float | None = None
+    load_tss: float | None = None
+    ctl_target: float | None = None
+    key_sessions: list[str] = Field(default_factory=list)
+    recovery: bool = False
+    notes: str | None = None
+
+
+class PlanCheckFinding(BaseModel):
+    """One ranked, advisory red-team finding -- the shape
+    `engine.swim_coach.plan_check.check_macro`/`check_week` return inside
+    their `PlanCheckReport` (that report itself is NOT persisted -- a
+    computed/response shape only, same "no schema_version" convention as
+    `WorkoutQuality` above, so it lives in `plan_check.py`, not here).
+    `MacroRedTeamRecord` below mirrors these same five fields field-for-
+    field, plus the coach's own accept/decline decision, for the
+    PERSISTED copy that lives on `MacroPlan.red_team` once a coach has
+    actually reviewed a report (PR 2's confirm flow).
+
+    Mirrors the red-team agent's own objection shape
+    (`ai-coach/.claude/agents/red-team.md`: "severity / evidence /
+    consequence / fix"), deterministic here instead of LLM-authored.
+    `id` is a short, stable slug (e.g. "taper-too-short") so a later
+    confirm/decline can reference a specific finding without re-matching
+    free text.
+    """
+
+    id: str
+    severity: Literal["high", "medium", "low"]
+    evidence: str
+    consequence: str
+    fix: str
+
+
+class MacroRedTeamRecord(BaseModel):
+    """One PERSISTED red-team finding on a `MacroPlan`, plus the coach's
+    own accept/decline decision against it -- `MacroPlan.red_team`'s list
+    item shape (engine/plan-check-red-team PR 1; PR 2's confirm flow is
+    what actually populates `decision`/`decision_reason`, requiring one of
+    each per finding before a macro plan is confirmed -- see the approved
+    plan's PR 2 section). `id`/`severity`/`evidence`/`consequence`/`fix`
+    mirror `PlanCheckFinding` above field-for-field (kept as a separate
+    model, not a shared base class, because a persisted athlete-data
+    record and a computed/response shape are deliberately kept as distinct
+    types elsewhere in this file too -- see `WorkoutQuality`'s own
+    docstring). `decision`/`decision_reason` are both `None` until a coach
+    has actually reviewed this finding; PR 1 only ever WRITES reports via
+    `check_macro`, it never populates these two fields itself.
+    """
+
+    id: str
+    severity: Literal["high", "medium", "low"]
+    evidence: str
+    consequence: str
+    fix: str
+    decision: Literal["accept", "decline"] | None = None
+    decision_reason: str | None = None
+
+
+def derive_blocks_from_macro_weeks(weeks: list["MacroWeek"]) -> list["MacroBlock"]:
+    """Pure helper: collapse a coach-authored `weeks` table into the
+    coarser `MacroBlock` shape older consumers (anything reading
+    `MacroPlan.blocks` directly, written before `weeks` existed) already
+    understand -- backward compatibility only, never the source of truth
+    once a plan carries real `weeks`. Consecutive rows sharing the exact
+    same `MacroWeek.phase` string collapse into one block (Tim's real
+    table -- see the golden fixture in `tests/unit/test_plan_check.py` --
+    rarely repeats a phase label on adjacent weeks, so this often produces
+    one block per week, which is fine: the shape is preserved even when no
+    grouping actually happens).
+
+    `MacroBlock.name` is a closed `Literal["base", "build", "peak",
+    "taper", "hold", "sharpen"]`, but a coach-authored `phase` is free
+    text ("Reset", "Sharpen 2", "Unload", ...) -- `_normalize_phase_name`
+    below maps common keywords onto that literal set, defaulting to
+    `"base"` for anything unrecognized (Coach judgment: a safe, inert
+    default for a purely-informational derived view, not a claim about
+    what the week actually is -- the real source of truth stays the
+    `weeks` table itself, verbatim `phase` string included).
+
+    `weekly_volume_target_m` is always 0 on a derived block: `MacroWeek`
+    deliberately carries `hours`/`load_tss`, never a meters figure (the
+    architecture change this build is part of exists partly BECAUSE of a
+    real "bike volume in meters" defect upstream -- see the approved plan's
+    context section) -- fabricating a meters number here to satisfy
+    `MacroBlock`'s required field would reintroduce exactly that defect
+    one level up. `race_event_id` is always `None` (no per-week race
+    tagging exists in this shape yet).
+    """
+    if not weeks:
+        return []
+    ordered = sorted(weeks, key=lambda w: w.week_start)
+    groups: list[list[MacroWeek]] = []
+    for week in ordered:
+        if groups and groups[-1][-1].phase == week.phase:
+            groups[-1].append(week)
+        else:
+            groups.append([week])
+    blocks: list[MacroBlock] = []
+    for group in groups:
+        start = group[0].week_start
+        end = group[-1].week_start + timedelta(days=6)
+        blocks.append(
+            MacroBlock(
+                name=_normalize_phase_name(group[0].phase),
+                start_date=start,
+                end_date=end,
+                weekly_volume_target_m=0,
+                focus=group[0].focus,
+            )
+        )
+    return blocks
+
+
+def _normalize_phase_name(
+    phase: str,
+) -> Literal["base", "build", "peak", "taper", "hold", "sharpen"]:
+    """Best-effort keyword mapping from a free-text `MacroWeek.phase` onto
+    `MacroBlock.name`'s closed literal set -- see
+    `derive_blocks_from_macro_weeks`'s own docstring for why an unrecognized
+    phase defaults to `"base"` rather than raising."""
+    lowered = phase.strip().lower()
+    if "taper" in lowered:
+        return "taper"
+    if "peak" in lowered:
+        return "peak"
+    if "sharpen" in lowered:
+        return "sharpen"
+    if "hold" in lowered or "maintain" in lowered:
+        return "hold"
+    if "build" in lowered:
+        return "build"
+    return "base"
+
+
 class MacroBlock(BaseModel):
     """One block within a MacroPlan.
 
@@ -923,6 +1096,37 @@ class MacroBlock(BaseModel):
     # end-to-end and a reader can no longer assume "the whole plan is for
     # one event" the way a single-race macro's reader can -- see
     # `MacroPlan.event_ids`'s own docstring below.
+    purpose: str | None = None
+    limiter: str | None = None
+    # Meso-level fields (engine/plan-check-red-team PR 1, "Planning layers
+    # and the rolling horizon" section of the approved plan): a
+    # coach-authored block, not a `scaffold_macro`-computed one, carries
+    # WHY it exists (`purpose`, e.g. "fade resistance") and WHAT weakness
+    # it targets (`limiter`, e.g. "late-race fade" / "flat-power"). Both
+    # optional/`None` -- every existing MacroBlock (produced by the
+    # scaffold functions, or persisted before these fields existed) keeps
+    # validating unchanged, no schema_version bump, same additive
+    # convention as `race_event_id` above. Detailed for the current/next
+    # block only ("false precision" rule, approved plan) -- later blocks
+    # can leave these `None` and stay at table level.
+    key_sessions: list[str] | None = None
+    # Freeform "session type -- progression" strings (e.g. "over/unders:
+    # 3x8 -> 3x10 -> 4x10"), the same loose shape `MacroWeek.key_sessions`
+    # uses -- this is a block-level PROGRESSION across the whole
+    # mesocycle, not one week's session list. `None` (the default) means
+    # "not authored at this detail," distinct from `[]` ("authored, no key
+    # sessions") -- additive/optional, no schema_version bump.
+    hard_days_per_week: int | None = Field(default=None, ge=0)
+    intensity_distribution: str | None = None
+    # Freeform description (e.g. "polarized: 2 hard, rest easy"), not a
+    # structured split -- this project has no verified swim-specific 80/20
+    # citation (see library/03-periodization.md's "Informational-only:
+    # 80/20 intensity balance" section), so this field intentionally
+    # carries the coach's own stated distribution as text rather than a
+    # fabricated numeric split. Additive/optional, no schema_version bump.
+    closing_test: str | None = None
+    # The benchmark/test session that closes this block (e.g. "FTP
+    # re-test" / "time-trial"). Additive/optional, no schema_version bump.
 
 
 class MacroPlan(BaseModel):
@@ -966,6 +1170,33 @@ class MacroPlan(BaseModel):
     # -- so `event_ids` is the complete "races this plan is aware of" list,
     # while `{b.race_event_id for b in blocks if b.race_event_id}` is the
     # (possibly smaller) "races that got their own dedicated block" subset.
+    weeks: list[MacroWeek] = Field(default_factory=list)
+    # The coach-authored week-by-week table (engine/plan-check-red-team PR
+    # 1 -- "the coach authors plans; the engine red-teams them"). Empty
+    # (the default) for every existing MacroPlan (scaffold-produced or
+    # persisted before this field existed) -- additive/optional, no
+    # schema_version bump, same convention as `event_ids` above. Once a
+    # plan carries real `weeks`, THIS is the source of truth; `blocks`
+    # becomes a derived, backward-compatible view (see
+    # `derive_blocks_from_macro_weeks`) rather than the thing a coach
+    # edits directly.
+    architecture: str | None = None
+    # A 3-5 sentence coach-written rationale for this plan's shape (why
+    # this periodization, why this taper placement, why these races get
+    # dedicated blocks) -- free text, not machine-checked; `check_macro`
+    # never reads this field, it exists so a later reviewer (human or a
+    # future coach turn) can see WHY the plan looks the way it does, not
+    # just what the numbers are. `None` (the default) for every existing
+    # MacroPlan -- additive/optional, no schema_version bump.
+    red_team: list[MacroRedTeamRecord] | None = None
+    # The persisted red-team review for this plan: `check_macro`'s
+    # findings, each paired with the coach's own accept/decline decision
+    # and reason (PR 2's confirm flow populates `decision`/
+    # `decision_reason`; PR 1 only ever produces the report `check_macro`
+    # returns, it does not write here itself). `None` means "never
+    # red-teamed" -- distinct from `[]` ("red-teamed, zero findings").
+    # Additive/optional, no schema_version bump, same convention as
+    # `architecture` above.
 
 
 class WorkoutSet(BaseModel):

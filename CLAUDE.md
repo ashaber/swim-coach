@@ -5,7 +5,7 @@ AI coaching system + PWA for ultra-distance open-water swimmers. First athlete: 
 **The full approved plan is in `ROADMAP.md` — read it before doing anything.** Current status: the engine, FastAPI backend, PWA, and per-user Google auth are built and deployed (three athletes live). See ROADMAP's "Status & current roadmap" section for what's shipped and what's next. Still work test-first (write the failing test, then the code).
 
 ## Standing rules (from the approved plan)
-- Deterministic Python engine (`engine/swim_coach/`) owns ALL plan math — zones, load, progression, adaptation. Agent sessions call `python -m swim_coach.cli ...` and apply judgment; never hand-compute zones/loads/volumes in chat.
+- Engine owns calculations (zones, load, projections, checks); coach owns plan structure and judgment. The coach (chat, or an agent session via `python -m swim_coach.cli ...`) authors the macro periodization and each week's real sessions directly; the deterministic engine (`engine/swim_coach/`) only computes numbers (zones, load, CTL/ATL/TSB projections) and red-team-reviews what was authored (`swim_coach.plan_check.check_macro`/`check_week`) — advisory findings only, never rejecting or clamping a plan, except pydantic validity and the one hard safety rail below. Never hand-compute zones/loads/volumes in chat.
 - Data files: YAML (pydantic-validated, `schema_version` field) for plans/logs/profiles; Markdown for the research library and verbatim pool-coach texts. Coach text is saved verbatim to `logs/coach-texts/` BEFORE any parsing.
 - Run `python -m swim_coach.cli validate --athlete <slug>` before committing athlete-data changes.
 - Every engine constant (zone offsets, progression caps, adaptation thresholds) must cite its `library/` file.

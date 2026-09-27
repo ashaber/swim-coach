@@ -174,7 +174,7 @@ def test_tools_advertise_draft_id_and_the_persona_explains_the_draft_is_the_plan
     from app.context import PERSONA_AND_RULES
     from app.tools import TOOLS_SCHEMA
 
-    for name in ("replace_week_plan", "patch_week_plan"):
+    for name in ("author_week_plan", "patch_week_plan"):
         props = next(t for t in TOOLS_SCHEMA if t["name"] == name)["input_schema"]["properties"]
         assert "draft_id" in props
     assert "the draft IS the plan" in " ".join(PERSONA_AND_RULES.split())

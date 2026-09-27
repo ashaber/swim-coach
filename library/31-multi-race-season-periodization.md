@@ -203,6 +203,53 @@ full per-race decision logic and the cursor-continuity property that keeps
 the existing `WEEKLY_VOLUME_RAMP_CAP` safety rail enforced automatically
 across every race-to-race transition, never bypassed by chaining.
 
+## Short-event taper and in-season maintenance
+
+Curated for `engine/swim_coach/plan_check.py`'s `check_macro` (PR 1 of the
+engine/plan-check-red-team architecture change, 2026-09-27): a short
+(<=~1.5h) cycling event's
+taper is genuinely shallower/shorter than the general 8-14-day finding
+above, not just an extrapolation from it — and a B-race's own mini-taper,
+or a maintenance stretch between B races, does not cost real fitness.
+
+**✓ Neary P. J., Bhambhani Y., McKenzie D. C. (2003)** — "Effects of
+Different Stepwise Reduction Taper Protocols on Cycling Performance" —
+*Canadian Journal of Applied Physiology*, 28(4):576-587. 11 male cyclists,
+a 7-day taper at three volume-cut magnitudes (30%/50%/80%, intensity held
+at 85% pretaper): the 50%-cut protocol produced a significant 5.4%
+improvement in a simulated 20km time trial (a ~25-30 min effort); 30%/80%
+did not reach significance. `[EVIDENCE: cycling]`, Confidence: medium (lab
+TT, not a technical mass-start race). Directly grounds
+`plan_check.SHORT_EVENT_TAPER_DAYS_MIN/MAX` (5-7 days) and
+`SHORT_EVENT_TAPER_VOLUME_CUT_FRACTION` (0.50). **Test:** if a real
+cyclocross A-race reads flat despite a much deeper cut than 50%, the
+taper overshot depth, not necessarily duration.
+
+**✓ Houmard J. A. (1991)** — "Impact of Reduced Training on Performance in
+Endurance Athletes" — *Sports Medicine*, 12(6):380-393. Review: VO2max/max
+workload maintained 10-28 days with volume cuts up to 70-80%; performance
+maintained or improved with 60-90% cuts over 6-21 days, provided training
+frequency drops no more than ~20%. `[EVIDENCE: cycling]`, Confidence:
+medium-high. A 1-week B-race mini-taper (`MINI_TAPER_WEEKS` above) sits
+comfortably inside this no-fitness-loss window — a real peer-reviewed
+backstop for a constant this file previously grounded only via the Friel
+interview. **Test:** if repeated B-race mini-tapers correlate with an
+unintended downward CTL drift across a season, check the frequency cut
+(not volume cut) first — Houmard's own caveat.
+
+**✓ Rønnestad B. R., Hansen E. A., Raastad T. (2010)** — "In-season strength
+maintenance training increases well-trained cyclists' performance" —
+*European Journal of Applied Physiology*, 110(6):1269-1282. 1x/week
+strength maintenance through 13 weeks of competition season preserved
+prep-period strength/thigh-CSA gains with no negative effect on VO2max or
+cycling economy. `[EVIDENCE: cycling]`, Confidence: high. Grounds this
+project's between-B-races maintenance posture (~2x/week endurance-
+intensity, ~1x/7-10 days strength — see the dossier this section is
+condensed from, `library/research-dossiers/2026-09-26-season-taper.md`,
+for the full cross-discipline maintenance-dose picture). **Test:** if threshold power
+visibly slides across a multi-week B-race stretch at this dose, check
+intensity fidelity first, not just frequency.
+
 ## What's not resolved
 
 **The cross-sport swim-vs-cyclocross goal conflict is explicitly NOT
