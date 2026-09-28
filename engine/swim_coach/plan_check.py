@@ -364,22 +364,78 @@ def _project_ctl_atl_tsb(
     return series
 
 
-def _spread_weekly_tss_to_daily(weeks: list[MacroWeek]) -> dict[date, float]:
-    """Planned weekly TSS, spread evenly across that week's 7 days --
+def _spread_weekly_tss_to_daily(
+    weeks: list[MacroWeek], recent_tss_per_hour: float | None = None
+) -> tuple[dict[date, float], set[date], set[date]]:
+    """Planned weekly load, spread evenly across that week's 7 days --
     the approved plan's own explicit instruction ("spread evenly per day
     unless better info exists"; this module has no per-day breakdown to do
     better with, since a `MacroWeek` is a macro-level row, not day-by-day
-    `Session`s). A week with `load_tss=None` contributes zero load days
-    (not a fabricated number) -- `_check_bike_weeks_missing_load` is the
-    dedicated finding for a week missing this data, not this function."""
+    `Session`s).
+
+    Per-week resolution order: `load_tss` when the coach set it; else
+    `hours * recent_tss_per_hour` when BOTH are available -- an ESTIMATE,
+    tracked in the second return value (`estimated_week_starts`) so callers
+    can label evidence honestly; else UNRESOLVED (`unresolved_week_starts`),
+    **never silently zero-filled**. This replaces a real production defect:
+    a week with `load_tss=None` used to contribute zero load days
+    unconditionally, even when the coach had set real `hours` -- a 1-week
+    and a 2-week hours-only taper decayed to the IDENTICAL fake TSB
+    regardless of taper length, since both were silently treated as
+    untrained rest rather than real (if lighter) training. See
+    `check_macro`'s own "projection-unavailable" gate for what an
+    unresolved week does to the downstream TSB-dependent checks --
+    `_check_bike_weeks_missing_load` is a separate, independent finding for
+    a bike week missing this data, not this function's job.
+
+    Returns `(daily_loads_by_date, estimated_week_starts,
+    unresolved_week_starts)`.
+    """
     out: dict[date, float] = {}
+    estimated_week_starts: set[date] = set()
+    unresolved_week_starts: set[date] = set()
     for week in weeks:
-        if week.load_tss is None:
+        if week.load_tss is not None:
+            total = week.load_tss
+        elif week.hours is not None and recent_tss_per_hour is not None:
+            total = week.hours * recent_tss_per_hour
+            estimated_week_starts.add(week.week_start)
+        else:
+            unresolved_week_starts.add(week.week_start)
             continue
-        daily = week.load_tss / 7.0
+        daily = total / 7.0
         for offset in range(7):
             out[week.week_start + timedelta(days=offset)] = daily
-    return out
+    return out, estimated_week_starts, unresolved_week_starts
+
+
+def _projection_unavailable_finding(blocking_week_starts: list[date]) -> PlanCheckFinding:
+    """One honest, capped-detail finding replacing a silent zero-fill --
+    real production defect (engine/red-team-taper-gate): projecting an
+    hours-only week as zero load produced a misleadingly precise-looking
+    race-day TSB number that was actually meaningless. `blocking_week_starts`
+    is never empty when this is called (see `check_macro`'s own gate)."""
+    dates = ", ".join(ws.isoformat() for ws in blocking_week_starts[:3])
+    more = f" (+{len(blocking_week_starts) - 3} more)" if len(blocking_week_starts) > 3 else ""
+    return PlanCheckFinding(
+        id="projection-unavailable",
+        severity="medium",
+        evidence=(
+            f"{len(blocking_week_starts)} week(s) in the projected range have neither `load_tss` "
+            f"nor a usable hours-based estimate (no recent logged workout history to estimate a "
+            f"TSS/hour rate from): {dates}{more}."
+        ),
+        consequence=(
+            "The CTL/ATL/TSB projection would be unreliable from here on (a week's real load, "
+            "silently treated as zero, corrupts every later day's decay) -- race-day TSB and "
+            "sustained-low-TSB findings are skipped rather than reported on numbers that look "
+            "precise but aren't real."
+        ),
+        fix=(
+            "Set `load_tss` for these weeks, or log enough recent real workouts that a TSS/hour "
+            "rate can be estimated from `hours` instead."
+        ),
+    )
 
 
 def _week_for_date(weeks: list[MacroWeek], day: date) -> MacroWeek | None:
@@ -405,6 +461,7 @@ def check_macro(
     current_ctl: float,
     current_atl: float | None = None,
     recent_weekly_hours: list[float],
+    recent_tss_per_hour: float | None = None,
     events: list[Event],
     today: date,
 ) -> PlanCheckReport:
@@ -423,6 +480,17 @@ def check_macro(
     `recent_weekly_hours`: the athlete's actual weekly training hours over
     (nominally) the trailing ~12 weeks, most-recent-last or in any order --
     only `max()` is read.
+    `recent_tss_per_hour`: the athlete's own real median AU/hour over her
+    trailing logged history (`load.recent_tss_per_hour`), used ONLY to
+    estimate a week's load when the coach set `hours` but not `load_tss` --
+    see `_spread_weekly_tss_to_daily`. `None` (the default -- every
+    existing caller that doesn't pass this keeps working unchanged) means
+    an hours-only week can't be estimated; see the "projection-unavailable"
+    gate below for what that does to the TSB-dependent checks. Real
+    production fix (engine/red-team-taper-gate): an hours-only week used to
+    be silently projected as ZERO load, so a 1-week and a 2-week hours-only
+    taper decayed to the identical fake race-day TSB regardless of taper
+    length.
     `events`: every `Event` this athlete has on file (active and inactive);
     only `active=True` events are checked.
     `today`: the date this check is run as-of.
@@ -446,12 +514,32 @@ def check_macro(
     plan_start = weeks[0].week_start
     plan_end_exclusive = weeks[-1].week_start + timedelta(days=7)
 
-    daily_loads_by_date = _spread_weekly_tss_to_daily(weeks)
+    daily_loads_by_date, estimated_week_starts, unresolved_week_starts = _spread_weekly_tss_to_daily(
+        weeks, recent_tss_per_hour
+    )
     projection_end = max(plan_end_exclusive - timedelta(days=1), today)
     series = _project_ctl_atl_tsb(
         current_ctl, daily_loads_by_date, today, projection_end, current_atl=current_atl
     )
     series_by_date = {d: (ctl, atl, tsb) for d, ctl, atl, tsb in series}
+
+    # Projection-unavailable gate: a week in the ACTUALLY-PROJECTED range
+    # ([today, projection_end]) with neither a real load_tss nor a
+    # usable hours-based estimate corrupts every later day's CTL/ATL/TSB
+    # decay if silently treated as zero -- never do that silently. Skip
+    # the TSB-DEPENDENT findings (race-day TSB, sustained-low-TSB) and
+    # surface one honest "projection-unavailable" finding instead. Findings
+    # that read real per-week volume directly (`_week_volume`: hours OR
+    # load_tss, no projection involved) -- the taper cut-depth and
+    # taper-too-long checks -- are UNAFFECTED and still run normally.
+    blocking_week_starts = sorted(
+        ws for ws in unresolved_week_starts
+        if ws + timedelta(days=6) >= today and ws <= projection_end
+    )
+    projection_ok = not blocking_week_starts
+    any_estimated_in_projection = any(
+        ws + timedelta(days=6) >= today and ws <= projection_end for ws in estimated_week_starts
+    )
 
     findings.extend(_check_uncovered_weeks(weeks, active_events, plan_start, plan_end_exclusive))
     findings.extend(_check_ctl_ramp(weeks, athlete, today))
@@ -465,9 +553,14 @@ def check_macro(
         _check_taper_and_race_day(
             weeks, active_events, series_by_date,
             taper_too_long_event_ids=taper_too_long_event_ids,
+            estimated_week_starts=estimated_week_starts,
+            skip_tsb=not projection_ok,
         )
     )
-    findings.extend(_check_sustained_low_tsb(series))
+    if projection_ok:
+        findings.extend(_check_sustained_low_tsb(series, estimated=any_estimated_in_projection))
+    else:
+        findings.append(_projection_unavailable_finding(blocking_week_starts))
     findings.extend(_check_hours_reality(weeks, recent_weekly_hours))
     findings.extend(_check_bc_races_labelled(weeks, active_events))
     findings.extend(_check_bike_weeks_missing_load(weeks, active_events))
@@ -630,11 +723,20 @@ def _check_taper_and_race_day(
     series_by_date: dict[date, tuple[float, float, float]],
     *,
     taper_too_long_event_ids: frozenset[str] = frozenset(),
+    estimated_week_starts: frozenset[date] = frozenset(),
+    skip_tsb: bool = False,
 ) -> list[PlanCheckFinding]:
+    """`skip_tsb` (`check_macro`'s "projection-unavailable" gate): the
+    real per-week-volume taper checks (`_check_one_event_taper`, load-based
+    via `_week_volume` -- hours OR load_tss, no projection involved) always
+    run regardless; only the projected race-day TSB reading below is
+    skipped when the projection itself can't be trusted."""
     findings: list[PlanCheckFinding] = []
     a_events = [e for e in active_events if e.priority.strip().upper() == "A"]
     for event in a_events:
         findings.extend(_check_one_event_taper(weeks, event))
+        if skip_tsb:
+            continue
         tsb_reading = series_by_date.get(event.event_date)
         if tsb_reading is not None:
             _ctl, _atl, tsb = tsb_reading
@@ -654,6 +756,12 @@ def _check_taper_and_race_day(
                 severity: Severity = (
                     "high" if too_fresh and str(event.id) in taper_too_long_event_ids else "medium"
                 )
+                # Estimated-load note (real production fix): an hours-only
+                # week contributing to this reading used the athlete's own
+                # recent AU/hour rate, not a directly authored/logged TSS
+                # number -- said plainly rather than presenting an estimate
+                # as if it were as solid as a real figure.
+                used_estimate = any(ws <= event.event_date for ws in estimated_week_starts)
                 findings.append(
                     PlanCheckFinding(
                         id=f"race-day-tsb-{event.id}",
@@ -666,6 +774,13 @@ def _check_taper_and_race_day(
                                 " Coincides with a taper-too-long finding for this same race -- "
                                 "not an ambiguous signal on its own."
                                 if severity == "high"
+                                else ""
+                            )
+                            + (
+                                " Projection is partly ESTIMATED: some weeks used hours × the "
+                                "athlete's own recent logged AU/hour rate, not a directly authored "
+                                "or logged TSS number."
+                                if used_estimate
                                 else ""
                             )
                         ),
@@ -907,7 +1022,7 @@ def _event_hours(event: Event) -> float | None:
 
 
 def _check_sustained_low_tsb(
-    series: list[tuple[date, float, float, float]]
+    series: list[tuple[date, float, float, float]], *, estimated: bool = False
 ) -> list[PlanCheckFinding]:
     run = 0
     worst_run = 0
@@ -931,6 +1046,13 @@ def _check_sustained_low_tsb(
                 evidence=(
                     f"Projected TSB stays below {SUSTAINED_LOW_TSB_THRESHOLD:.0f} for "
                     f"{worst_run} consecutive days starting {worst_start.isoformat()}."
+                    + (
+                        " Projection is partly ESTIMATED: some weeks used hours × the "
+                        "athlete's own recent logged AU/hour rate, not a directly authored or "
+                        "logged TSS number."
+                        if estimated
+                        else ""
+                    )
                 ),
                 consequence="Extended deep fatigue without a planned release risks overreaching/illness.",
                 fix="Insert a recovery week, or confirm this depth is deliberate and time-boxed.",

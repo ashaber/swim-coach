@@ -1117,6 +1117,66 @@ def recent_weekly_hours(workouts: list[Workout], as_of: date, *, weeks: int = 12
     return [totals[ws] for ws in week_starts]
 
 
+def recent_tss_per_hour(
+    workouts: list[Workout],
+    as_of: date,
+    *,
+    athlete: Athlete | None = None,
+    wellness: list[Wellness] | None = None,
+    weeks: int = 12,
+) -> float | None:
+    """Median real training-load-per-hour (AU/hour -- the same tiered
+    `session_load` scale `daily_loads` totals; this codebase already treats
+    that scale as directly comparable to a coach-authored `MacroWeek.
+    load_tss` figure -- e.g. `tools._handle_author_week_plan`'s own
+    projected-AU-vs-macro-TSS check) over the trailing `weeks` (default 12,
+    6 is also a reasonable lookback per the same caller's own docstring)
+    weeks of REAL logged workouts with a real `duration_min > 0`. `None`
+    when there's no usable logged history in the window at all -- never a
+    fabricated ratio.
+
+    Fixes a real production failure (engine/red-team-taper-gate): a
+    coach-authored macro week that sets `hours` but not `load_tss` was
+    silently projected as ZERO load in `plan_check`'s CTL/ATL/TSB
+    projection (`_spread_weekly_tss_to_daily` had nothing else to spread
+    for that week) -- a 1-week and a 2-week hours-only taper both decayed
+    to the identical fake TSB regardless of taper length, masking the real
+    defect the taper-too-long check exists to catch. This gives
+    `plan_check.check_macro` the athlete's own recent logged intensity as
+    a real, athlete-specific rate to estimate an hours-only week's load
+    from, rather than silently treating unlogged hours as untrained rest.
+    """
+    as_of_monday = as_of - timedelta(days=as_of.weekday())
+    window_start = as_of_monday - timedelta(weeks=weeks)
+    window_end_exclusive = as_of_monday + timedelta(days=7)
+    wellness = wellness if wellness is not None else []
+    hr_max = estimate_hr_max(workouts)
+    sex = athlete.sex if athlete is not None else None
+    css_pace_s_per_100m = athlete.css_pace_s_per_100m if athlete is not None else None
+    lthr_bpm = athlete.lthr_bpm if athlete is not None else None
+    ftp_watts = athlete.ftp_watts if athlete is not None else None
+
+    ratios: list[float] = []
+    for workout in workouts:
+        if not (window_start <= workout.date < window_end_exclusive):
+            continue
+        if not workout.duration_min or workout.duration_min <= 0:
+            continue
+        load = session_load(
+            workout,
+            hr_max=hr_max,
+            hr_rest=estimate_hr_rest(wellness, workout.date),
+            sex=sex,
+            css_pace_s_per_100m=css_pace_s_per_100m,
+            lthr_bpm=lthr_bpm,
+            ftp_watts=ftp_watts,
+        ).value
+        ratios.append(load / (workout.duration_min / 60.0))
+    if not ratios:
+        return None
+    return statistics.median(ratios)
+
+
 def _ctl_as_of(daily_load_values: dict[date, float], as_of: date) -> float:
     """CTL on exactly `as_of`, from the real `ctl_atl_tsb_series` walk --
     not a new load-computation, just a single-date read of it, handling the

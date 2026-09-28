@@ -7321,6 +7321,32 @@ def _simple_macro_weeks(start: date, n: int = 3) -> list[dict]:
     ]
 
 
+def test_author_macro_plan_draft_labels_an_hours_only_week_with_an_estimated_load(athletes_dir) -> None:
+    # engine/red-team-taper-gate, real production fix: a week with `hours`
+    # set but no `load_tss` used to be silently projected as ZERO load.
+    # The draft response now fills a `load_tss_estimate` (from the
+    # athlete's own recent logged history) so the athlete sees a real
+    # number -- `load_tss` itself stays exactly what the coach authored
+    # (None here), never silently overwritten.
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    start = date(2026, 7, 6)
+    weeks = _simple_macro_weeks(start)
+    weeks[0]["load_tss"] = None  # hours-only: no load_tss authored for this week
+
+    draft = handlers["author_macro_plan"]({
+        "event_names": [GREECE_EVENT_NAME],
+        "weeks": weeks,
+        "architecture": "Base then build toward Greece.",
+    })
+
+    assert "error" not in draft, draft
+    week0 = next(w for w in draft["weeks"] if w["week_start"] == start.isoformat())
+    assert week0["load_tss"] is None  # unchanged, never silently overwritten
+    assert week0["load_tss_estimate"] is not None
+    assert week0["load_tss_estimate"] > 0
+
+
 def test_author_macro_plan_draft_then_confirm_with_decisions_persists(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)

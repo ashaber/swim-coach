@@ -12,7 +12,7 @@ advisory only -- they never raise, no matter how broken the plan is.
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -25,7 +25,12 @@ from swim_coach.models import (
     Session,
     WeekPlan,
 )
-from swim_coach.plan_check import check_macro, check_week
+from swim_coach.plan_check import (
+    check_macro,
+    check_week,
+    _project_ctl_atl_tsb,
+    _spread_weekly_tss_to_daily,
+)
 
 TODAY = date(2026, 9, 27)
 
@@ -372,6 +377,133 @@ def test_tims_macro_has_no_taper_too_long_finding():
         today=date(2026, 9, 7),
     )
     assert not any(f.id.startswith("taper-too-long-") for f in report.findings)
+
+
+# ============================================================================
+# Golden fixture 6: the real hours-only production defect -- a MacroWeek
+# with `hours` set but no `load_tss` used to be silently projected as ZERO
+# load, so a 1-week and a 2-week hours-only taper decayed to the IDENTICAL
+# fake race-day TSB regardless of taper length. `recent_tss_per_hour`
+# (estimated from the athlete's own real logged history via
+# `load.recent_tss_per_hour`) fixes this.
+# ============================================================================
+
+
+def _hours_only_weeks(*, two_week_taper: bool) -> list[MacroWeek]:
+    """All hours-only (`load_tss=None` throughout) -- the real production
+    macro's own shape (the coach authored `hours`, never `load_tss`).
+    `two_week_taper=False` is the evidence-backed shape this fix's own
+    taper-too-long check recommends: build volume held through Sep 28/
+    Oct 5, with the whole cut living inside race week itself (Oct 12,
+    ~3.25h, roughly half of the ~6.5-7h build weeks) -- exactly the
+    coordinator's own worked example. `two_week_taper=True` reproduces the
+    real bad draft: Sep 28/Oct 5 already reduced, race week barely cut
+    further."""
+    build = [
+        MacroWeek(week_start=date(2026, 8, 31), phase="build", focus="build", hours=7.0),
+        MacroWeek(week_start=date(2026, 9, 7), phase="build", focus="build", hours=7.0),
+        MacroWeek(week_start=date(2026, 9, 14), phase="build", focus="build", hours=6.5),
+        MacroWeek(week_start=date(2026, 9, 21), phase="build", focus="build", hours=7.0),
+    ]
+    if two_week_taper:
+        pre_race = [
+            MacroWeek(week_start=date(2026, 9, 28), phase="Taper", focus="freshen", hours=4.0),
+            MacroWeek(week_start=date(2026, 10, 5), phase="Taper", focus="freshen", hours=3.0),
+        ]
+        race = MacroWeek(week_start=date(2026, 10, 12), phase="Race", focus="race the CX weekend", hours=3.0)
+    else:
+        pre_race = [
+            MacroWeek(week_start=date(2026, 9, 28), phase="build", focus="build", hours=7.0),
+            MacroWeek(week_start=date(2026, 10, 5), phase="build", focus="build", hours=6.5),
+        ]
+        race = MacroWeek(week_start=date(2026, 10, 12), phase="Race", focus="race the CX weekend", hours=3.25)
+    return build + pre_race + [race]
+
+
+def test_hours_only_weeks_project_different_race_day_tsb_for_1_vs_2_week_taper():
+    # Real production bug: an hours-only week used to contribute ZERO load
+    # to the projection (no load_tss to spread), so these two genuinely
+    # different plans decayed to the SAME fake TSB. With a realistic
+    # recent-history rate (~55-65 AU/hour) to estimate from, they must
+    # actually differ.
+    rate = 60.0
+    today = date(2026, 8, 31)
+    event_date = date(2026, 10, 17)
+
+    def _projected_tsb_on_event_day(weeks: list[MacroWeek]) -> float:
+        daily, _estimated, unresolved = _spread_weekly_tss_to_daily(weeks, rate)
+        assert not unresolved, "every week here has `hours` set; nothing should be unresolved"
+        plan_end_exclusive = weeks[-1].week_start + timedelta(days=7)
+        projection_end = max(plan_end_exclusive - timedelta(days=1), today)
+        series = _project_ctl_atl_tsb(48.0, daily, today, projection_end, current_atl=48.0)
+        by_date = {d: tsb for d, _ctl, _atl, tsb in series}
+        return by_date[event_date]
+
+    tsb_1_week_taper = _projected_tsb_on_event_day(_hours_only_weeks(two_week_taper=False))
+    tsb_2_week_taper = _projected_tsb_on_event_day(_hours_only_weeks(two_week_taper=True))
+    assert tsb_1_week_taper != pytest.approx(tsb_2_week_taper, abs=0.5)
+
+
+def test_hours_only_weeks_without_a_rate_give_projection_unavailable_not_a_tsb_number():
+    # The "missing-everything" case (e.g. a brand-new athlete with no
+    # logged history yet to estimate a rate from): must NOT silently
+    # project zero load and report a precise-looking but fake TSB.
+    athlete = _athlete(dob=date(1975, 4, 7), ftp_watts=263.0, weight_kg=72.6)
+    plan = _macro(_hours_only_weeks(two_week_taper=True))
+    report = check_macro(
+        plan,
+        athlete,
+        current_ctl=48.0,
+        current_atl=48.0,
+        recent_weekly_hours=[6.5, 7.0, 7.0, 6.8, 7.0],
+        # recent_tss_per_hour omitted -- no usable rate.
+        events=_production_failure_events(),
+        today=date(2026, 8, 31),
+    )
+    finding_ids = [f.id for f in report.findings]
+    assert "projection-unavailable" in finding_ids, finding_ids
+    assert not any(fid.startswith("race-day-tsb-") for fid in finding_ids), finding_ids
+    assert "sustained-low-tsb" not in finding_ids, finding_ids
+
+
+def test_hours_only_weeks_with_a_rate_labels_the_race_day_tsb_finding_as_estimated():
+    # Same numbers as the production-failure golden fixture (test above),
+    # but authored hours-only and reconstructed via a real recent-history
+    # rate instead of directly-set load_tss -- proves the estimate path
+    # produces the same real finding (including the high-severity
+    # escalation via taper-too-long), clearly labelled as an estimate.
+    rate = 60.0
+
+    def h(tss: float) -> float:
+        return tss / rate
+
+    weeks = [
+        MacroWeek(week_start=date(2026, 8, 31), phase="build", focus="build", hours=h(400.0)),
+        MacroWeek(week_start=date(2026, 9, 7), phase="build", focus="build", hours=h(410.0)),
+        MacroWeek(week_start=date(2026, 9, 14), phase="build", focus="build", hours=h(390.0)),
+        MacroWeek(week_start=date(2026, 9, 21), phase="build", focus="build", hours=h(405.0)),
+        MacroWeek(week_start=date(2026, 9, 28), phase="Taper", focus="freshen", hours=h(40.0)),
+        MacroWeek(week_start=date(2026, 10, 5), phase="Taper", focus="freshen", hours=h(20.0)),
+        MacroWeek(week_start=date(2026, 10, 12), phase="Race", focus="race the CX weekend", hours=h(20.0)),
+    ]
+    athlete = _athlete(dob=date(1975, 4, 7), ftp_watts=263.0, weight_kg=72.6)
+    plan = _macro(weeks)
+    report = check_macro(
+        plan,
+        athlete,
+        current_ctl=48.0,
+        current_atl=48.0,
+        recent_weekly_hours=[6.5, 7.0, 7.0, 6.8, 7.0],
+        recent_tss_per_hour=rate,
+        events=_production_failure_events(),
+        today=date(2026, 8, 31),
+    )
+    finding_ids = [f.id for f in report.findings]
+    assert "projection-unavailable" not in finding_ids, finding_ids
+    tsb_finding = next((f for f in report.findings if f.id.startswith("race-day-tsb-")), None)
+    assert tsb_finding is not None, finding_ids
+    assert "estimated" in tsb_finding.evidence.lower()
+    assert tsb_finding.severity == "high"  # taper-too-long still coincides
 
 
 def test_check_week_never_raises_and_is_advisory_only():

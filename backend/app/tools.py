@@ -211,6 +211,7 @@ from swim_coach.load import (
     ctl_atl_tsb_series,
     daily_loads,
     estimate_hr_max,
+    recent_tss_per_hour,
     recent_weekly_hours,
 )
 from swim_coach.parse_files import parse_fit
@@ -8494,7 +8495,17 @@ def _macro_week_from_dict(entry: dict[str, Any]) -> tuple[MacroWeek | None, str 
         return None, str(exc)
 
 
-def _macro_weeks_json(weeks: list[MacroWeek]) -> list[dict[str, Any]]:
+def _macro_weeks_json(
+    weeks: list[MacroWeek], *, recent_tss_per_hour: float | None = None
+) -> list[dict[str, Any]]:
+    """`recent_tss_per_hour` (engine/red-team-taper-gate, real production
+    fix): when a week has `hours` set but the coach omitted `load_tss`,
+    attach `load_tss_estimate` (never overwriting the real `load_tss`
+    field, which stays exactly what the coach authored -- `None` if they
+    left it blank) so the athlete sees a REAL number instead of a bare
+    gap, clearly labelled as an estimate. `None` (every existing caller
+    that doesn't pass this) leaves `load_tss_estimate` `None` throughout,
+    same output as before this parameter existed."""
     return [
         {
             "week_start": w.week_start.isoformat(),
@@ -8502,6 +8513,11 @@ def _macro_weeks_json(weeks: list[MacroWeek]) -> list[dict[str, Any]]:
             "focus": w.focus,
             "hours": w.hours,
             "load_tss": w.load_tss,
+            "load_tss_estimate": (
+                round(w.hours * recent_tss_per_hour, 1)
+                if w.load_tss is None and w.hours is not None and recent_tss_per_hour is not None
+                else None
+            ),
             "ctl_target": w.ctl_target,
             "key_sessions": list(w.key_sessions),
             "recovery": w.recovery,
@@ -8629,6 +8645,7 @@ def _handle_author_macro_plan(
     current_ctl = series[-1][1] if series else 0.0
     current_atl = series[-1][2] if series else None
     hours_history = recent_weekly_hours(workouts, today)
+    tss_per_hour = recent_tss_per_hour(workouts, today, athlete=athlete, wellness=wellness)
 
     report = check_macro(
         macro,
@@ -8636,6 +8653,7 @@ def _handle_author_macro_plan(
         current_ctl=current_ctl,
         current_atl=current_atl,
         recent_weekly_hours=hours_history,
+        recent_tss_per_hour=tss_per_hour,
         events=events,
         today=today,
     )
@@ -8651,7 +8669,7 @@ def _handle_author_macro_plan(
     high_finding_ids = [f["id"] for f in report.to_dict()["findings"] if f["severity"] == "high"]
     return {
         "event_names": [e.name for e in resolved_events],
-        "weeks": _macro_weeks_json(weeks),
+        "weeks": _macro_weeks_json(weeks, recent_tss_per_hour=tss_per_hour),
         "architecture": architecture,
         "report": report.to_dict(),
         "persisted": False,
@@ -9084,6 +9102,7 @@ def _handle_check_plan(input_data: dict[str, Any], *, store: StoreInterface, slu
     current_ctl = series[-1][1] if series else 0.0
     current_atl = series[-1][2] if series else None
     hours_history = recent_weekly_hours(workouts, today)
+    tss_per_hour = recent_tss_per_hour(workouts, today, athlete=athlete, wellness=wellness)
 
     macro_report = check_macro(
         macro,
@@ -9091,6 +9110,7 @@ def _handle_check_plan(input_data: dict[str, Any], *, store: StoreInterface, slu
         current_ctl=current_ctl,
         current_atl=current_atl,
         recent_weekly_hours=hours_history,
+        recent_tss_per_hour=tss_per_hour,
         events=events,
         today=today,
     )

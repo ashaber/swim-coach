@@ -39,6 +39,7 @@ from swim_coach.load import (
     estimate_hr_rest,
     has_established_training_base,
     monotony,
+    recent_tss_per_hour,
     session_load,
     session_target_load_au,
     weekly_volume_m,
@@ -1665,6 +1666,36 @@ def test_session_target_load_au_always_positive():
 
 
 # --- threshold-history build: load.py behavior is completely unchanged -----
+
+
+def test_recent_tss_per_hour_computes_median_ratio_over_the_trailing_window():
+    # engine/red-team-taper-gate: plan_check.check_macro's estimate for an
+    # hours-only MacroWeek. sRPE tier (`duration_min * rpe`) with no
+    # lthr_bpm set is a no-op refinement, so the ratio is exactly
+    # `60 * rpe` AU/hour -- deterministic, easy to hand-verify.
+    as_of = date(2026, 7, 20)  # a Monday
+    workouts = [
+        make_workout(date=date(2026, 7, 6), duration_min=60.0, rpe=6),  # 360 AU/h
+        make_workout(date=date(2026, 7, 13), duration_min=30.0, rpe=4),  # 240 AU/h
+        make_workout(date=date(2026, 7, 20), duration_min=90.0, rpe=8),  # 480 AU/h
+    ]
+    rate = recent_tss_per_hour(workouts, as_of, athlete=make_athlete())
+    assert rate == pytest.approx(360.0)  # median of [240, 360, 480]
+
+
+def test_recent_tss_per_hour_ignores_workouts_outside_the_lookback_window():
+    as_of = date(2026, 7, 20)
+    in_window = make_workout(date=date(2026, 7, 20), duration_min=60.0, rpe=6)  # 360 AU/h
+    long_ago = make_workout(date=date(2024, 1, 1), duration_min=60.0, rpe=2)  # 120 AU/h, outside 12wk window
+    rate = recent_tss_per_hour([in_window, long_ago], as_of, athlete=make_athlete(), weeks=12)
+    assert rate == pytest.approx(360.0)
+
+
+def test_recent_tss_per_hour_returns_none_with_no_usable_workouts():
+    as_of = date(2026, 7, 20)
+    assert recent_tss_per_hour([], as_of, athlete=make_athlete()) is None
+    outside_window = make_workout(date=date(2020, 1, 1), duration_min=60.0, rpe=6)
+    assert recent_tss_per_hour([outside_window], as_of, athlete=make_athlete()) is None
 
 
 def test_load_module_has_no_threshold_record_dependency():

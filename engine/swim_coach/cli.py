@@ -33,6 +33,7 @@ from swim_coach.load import (
     ctl_atl_tsb_series,
     daily_loads,
     monotony,
+    recent_tss_per_hour as _recent_tss_per_hour,
     recent_weekly_hours as _recent_weekly_hours,
     weekly_volume_m,
     wellness_trend,
@@ -619,6 +620,7 @@ def _cmd_check_macro(args: argparse.Namespace, store: StoreInterface) -> int:
     current_ctl = series[-1][1] if series else 0.0
     current_atl = series[-1][2] if series else None
     recent_weekly_hours = _recent_weekly_hours(workouts, as_of)
+    tss_per_hour = _recent_tss_per_hour(workouts, as_of, athlete=athlete, wellness=wellness)
 
     report = check_macro(
         plan,
@@ -626,6 +628,7 @@ def _cmd_check_macro(args: argparse.Namespace, store: StoreInterface) -> int:
         current_ctl=current_ctl,
         current_atl=current_atl,
         recent_weekly_hours=recent_weekly_hours,
+        recent_tss_per_hour=tss_per_hour,
         events=events,
         today=as_of,
     )

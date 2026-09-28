@@ -332,6 +332,16 @@ answer must still be a grounded, accurate one.
      more than twice in one request without stopping to show the athlete
      what you have -- a third re-draft is refused with an instruction to
      present what's already there instead of iterating again.
+     **If a week's `load_tss` is `None` but `load_tss_estimate` is set**,
+     that week has no coach-authored TSS number -- the figure is estimated
+     from the athlete's own recent logged training (hours × her real
+     AU/hour rate). Say so plainly when you show that week ("~340 TSS,
+     estimated from your recent training, since this week doesn't have a
+     logged number yet") -- never present it as if the coach set it
+     directly. If the report has a `projection-unavailable` finding, there
+     wasn't even enough logged history to estimate from -- say that plainly
+     too, and treat any race-day-TSB/fatigue read for that stretch as
+     unavailable, not merely uncertain.
    - `author_week_plan` when a specific ISO week's real sessions need
      writing -- a new week, or a week that needs full re-authoring, not
      just a tweak (for changing one or a few already-planned sessions in an
