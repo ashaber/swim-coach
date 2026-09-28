@@ -4,10 +4,11 @@ cards:
 - section: the-three-tools-in-one-line-each
   heading: The three tools, in one line each
   summary: author_macro_plan and author_week_plan are coach-written draft-then-confirm tools red-teamed by
-    check_macro/check_week; check_plan is a read-only re-check of whatever is currently persisted.
+    check_macro/check_week, using a fix/keep_as_is decision per finding (never accept/decline); check_plan
+    is a read-only re-check of whatever is currently persisted.
   recommendation: Use author_macro_plan/author_week_plan to write plans directly, always via draft then confirm,
-    and check_plan to re-verify after any manual edit.
-  content_hash: 62e5543f7e42ac931549818b803d3e5df5071b2b9093cbce76e97ab615fe4afc
+    deciding fix or keep_as_is on each finding, and check_plan to re-verify after any manual edit.
+  content_hash: 7dd44077c6a3ea8747752507667bf2ddebcb631b101c3306d1c799de40bf1dcc
 - section: planning-layers-macro-meso-workouts
   heading: 'Planning layers: macro → meso → workouts'
   summary: Macro is the full season table, re-checked after every race; meso blocks get purpose/limiter/
@@ -18,11 +19,11 @@ cards:
   content_hash: 6f4d08a9552331030b28bc9a4d937c20fcb45d866fe5e3a352bd46ca40f9fc9a
 - section: author-the-macro-then-check-it-then-present-it
   heading: Author the macro, then check it, then present it
-  summary: Draft from the athlete's real CTL/hours, always run check_macro before presenting, show every
-    finding, get an accept/decline with reason for each, then confirm with those decisions.
-  recommendation: Never present a plan the check hasn't seen; never confirm without a decision recorded for
-    every finding; cap re-drafts at two per request before presenting instead of iterating further.
-  content_hash: a947d36d28f06942bd3fab95277f1542df163ab8b31a0896ef813e8a5bd22339
+  summary: Author from real events/history, never by copying the stored macro's own structure; run check_macro
+    before presenting; ask "fix it, or keep as-is?" per finding, never accept/decline; confirm with decisions.
+  recommendation: Never present a plan the check hasn't seen or one copied from the stored macro; never confirm
+    without a fix/keep_as_is decision for every finding; cap re-drafts at two per request.
+  content_hash: 6efa9ab15b03bb35650166ac5e1039878f62bca7b23c74e6a540482bd8dfa136
 - section: say-it-now-not-in-week-9
   heading: Say it now, not in week 9
   summary: If the ramp-cap or goal-reality findings say a goal isn't reachable in time, say so in the first
@@ -46,8 +47,8 @@ cards:
   content_hash: 09822232ea56a572551ecb039100980a6e4f63f1dd88743bc827498caaeaa7bc
 - section: handling-checkmacro-checkweek-findings-red-team-discipline
   heading: Handling `check_macro`/`check_week` findings (red-team discipline)
-  summary: Findings are advisory and capped at six; accept or decline each visibly with a real reason, don't
-    manufacture agreement, and treat the +8%/+15% confirm-* findings as the one hard stop.
-  recommendation: Always give a visible accept/decline with a real reason for each finding; never let a
-    confirm-* safety-rail finding persist without an explicit accepted decision.
-  content_hash: 314e688705f831907b336d7c5ed62895fb7e346a9938b1d217d7d2ad3ddd80d7
+  summary: Findings are advisory and capped at six; ask fix-or-keep-as-is (never accept/decline) visibly with
+    a real reason, don't manufacture agreement, and a HIGH keep_as_is also needs the athlete's own words.
+  recommendation: Always give a visible fix/keep_as_is decision with a real reason for each finding; never let
+    a confirm-* or HIGH-severity finding persist without an explicit, athlete-worded decision.
+  content_hash: 89c1965cea7436e04a162f63d22d1028bd23ef67b42d23a54b3f71d179ddcaf5

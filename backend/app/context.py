@@ -842,8 +842,23 @@ _LIBRARY_FILES_IN_PRIORITY_ORDER = [
     "13-reds-energy-availability.md",
     "33-daily-nutrition-and-supplements.md",
     "35-return-from-layoff.md",
+    "36-plan-authoring-limits.md",
     "37-plan-authoring-guide.md",
 ]
+
+# 37 always pulls 36 in alongside it (engine/red-team-taper-gate, real
+# production failure 2026-09-27): only 37 was routed on that turn (keywords
+# "macro"/"season") -- 36, the evidence dossier BEHIND `check_macro`'s own
+# constants (ramp caps, the taper cut-fraction band, the goal-reality
+# check), never routed at all, so the coach had no grounding to challenge
+# its own red-team finding honestly instead of arguing it away on
+# intuition. 36 has no keyword bucket of its own (deliberately -- it's a
+# companion to 37, not an independent topic a message would naturally
+# mention by name) -- this is a dedicated, minimal exception to
+# `MAX_ROUTED_FILES`, not a change to the cap itself: 36 rides along ONLY
+# when 37 actually routed, adding at most one extra file.
+_PLANNING_GUIDE_FILE = "37-plan-authoring-guide.md"
+_PLANNING_LIMITS_FILE = "36-plan-authoring-limits.md"
 
 _KEYWORD_ROUTES: dict[str, set[str]] = {
     "volume": {"03-periodization.md", "06-long-swim-progression.md"},
@@ -1170,7 +1185,16 @@ def route_library_files(
         # assuming that forever).
         fallback = [f for f in _LIBRARY_FILES_IN_PRIORITY_ORDER if f in set(DEFAULT_ROUTE_FILES)]
         ordered = filter_files_by_sport_scope(fallback, athlete_sports)
-    return ordered[:max_files]
+    result = ordered[:max_files]
+    if _PLANNING_GUIDE_FILE in result and _PLANNING_LIMITS_FILE not in result:
+        # The minimal MAX_ROUTED_FILES exception described above -- 36
+        # rides along with 37, past the cap, only when 37 itself routed.
+        # Re-sorted back into `_LIBRARY_FILES_IN_PRIORITY_ORDER`'s own
+        # order (36 before 37) rather than just appended, so the routed
+        # block's file order stays canonical/byte-stable regardless of
+        # which path added 36.
+        result = sorted(result + [_PLANNING_LIMITS_FILE], key=_LIBRARY_FILES_IN_PRIORITY_ORDER.index)
+    return result
 
 
 def _routed_topic_files_text(
