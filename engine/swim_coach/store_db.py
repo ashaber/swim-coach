@@ -699,6 +699,23 @@ class DbStore(StoreInterface):
             rows = cur.fetchall()
         return [row_to_week(r) for r in rows]
 
+    def delete_week_drafts(self, slug: str, iso_week: str) -> None:
+        """Removes the `<iso_week>.draft` "latest" pointer row AND every
+        `<iso_week>.draft.<id>` row -- never the live `iso_week` row itself,
+        since that key never has a `.draft` suffix. Idempotent."""
+        pointer_key = self._draft_key(iso_week, None)
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                delete from week_plans w
+                using athletes a
+                where w.athlete_id = a.athlete_id
+                  and a.slug = %s
+                  and (w.iso_week = %s or w.iso_week like %s)
+                """,
+                (slug, pointer_key, f"{pointer_key}.%"),
+            )
+
     def list_week_ids(self, slug: str) -> list[str]:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
