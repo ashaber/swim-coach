@@ -11,7 +11,8 @@ labelled `Coach judgment` / `PROVISIONAL` where it doesn't (several
 constants below are explicitly placeholder values pending PR 3's dedicated
 limits research -- see each constant's own comment).
 
-Mirrors the shape of `ai-coach/.claude/agents/red-team.md`'s adversarial
+Adapted, with permission, from Tim Curry's AI Endurance Coach (see README
+Acknowledgments): mirrors the shape of its `.claude/agents/red-team.md` adversarial
 review (VERDICT + ranked, capped objections: severity / evidence /
 consequence / fix) -- deterministic engine code here instead of an LLM
 subagent, per the approved plan's token-economics section.

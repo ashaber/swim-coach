@@ -508,8 +508,27 @@ the final taper week.
 
 ## Acknowledgments
 
-Tim Curry has been an ongoing consulting voice on this project's direction and
-design — including, for the multi-sport work, sharing the source of his
-own Claude-Code-based endurance-coaching app and giving explicit go-ahead
-to learn from its concepts (its "red team" adversarial plan-review pattern
-in particular). 
+**Tim Curry — co-author of the plan-authoring design.** Tim has been an
+ongoing consulting voice on this project's direction and design, and shared
+the source of his own Claude-Code-based endurance-coaching app, **AI
+Endurance Coach** (`ai-coach`), with explicit permission to adapt it. The
+following parts of swim-coach are adapted from his work and are credited to
+him:
+
+- **Coach-authors / red-team architecture.** The coach (LLM) writes the
+  macrocycle, blocks and weekly workouts; a separate reviewer attacks the
+  plan before the athlete sees it. Adapted from AI Endurance Coach's
+  `plan-macrocycle` workflow and its `red-team` reviewer (VERDICT plus ranked
+  objections with severity / evidence / consequence / fix).
+  `engine/swim_coach/plan_check.py` is a deterministic re-implementation of
+  that reviewer's arithmetic checks.
+- **Planning methodology.** `library/37-plan-authoring-guide.md` ports the
+  `plan-macrocycle`, `build-block` and `weekly-review` skills: plan from
+  actual CTL and sustained hours; work backwards from the A race; taper
+  length by event duration; B/C races as training stress; recovery-week
+  cadence; "say it now, not in week 9"; the week-by-week macro table format.
+- **Golden test fixture.** `tests/unit/test_plan_check.py` uses a real
+  cyclocross macrocycle produced by AI Endurance Coach as its reference
+  "sound plan".
+
+Any errors in the adaptation are ours, not Tim's.
