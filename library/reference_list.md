@@ -1970,6 +1970,22 @@ citable primary source — the underlying point is already covered by Cao
 after drinking" figures attributed to Oura/WHOOP user data (no traceable
 primary study found).
 
+## Plan-authoring limits (grounds `36-plan-authoring-limits.md`)
+
+Dossier: `research-dossiers/2026-09-27-planning-limits.md`, including its
+own orchestrator correction on the swim-taper question (Q4).
+
+- **✓ Hottenrott L., Möhle M., Feichtinger S., Ketelhut S., Stoll O., Hottenrott K. (2022)** — "Performance and Recovery of Well-Trained Younger and Older Athletes during Different HIIT Protocols" — *Sports*, 10(1):9. Grounds `36`.
+- **~ Reaburn P.R.J., Doering T.M., Borges N.R. (2019)** — "Masters athletes take longer to recover from high intensity exercise than training-matched younger athletes" — *J Sci Med Sport*, 22(Suppl 2):S32-S33 (conference abstract, not full peer review). Grounds `36`.
+- **✓ Bacon A.P., Carter R.E., Ogle E.A., Joyner M.J. (2013)** — "VO2max Trainability and High Intensity Interval Training in Humans: A Meta-Analysis" — *PLoS ONE*, 8(9):e73182. Grounds `36`.
+- **✓ Cove B. et al. (2024)** — "The effect of training distribution, duration, and volume on VO2max and performance in trained cyclists" — *J Sci Med Sport*, 28:423-434. Grounds `36`.
+- **✓ Valenzuela P.L., Muriel X., van Erp T., et al. (2022)** — "The Record Power Profile of Male Professional Cyclists" — *Int J Sports Physiol Perform*, 17(5):701-710. Grounds `36`.
+- **✓ Rogers M.A., Hagberg J.M., Martin W.H., Ehsani A.A., Holloszy J.O. (1990)** — "Decline in VO2max with aging in master athletes and sedentary men" — *J Appl Physiol*, 68(5):2195-2199. 8-year longitudinal: masters ~5.5%/decade decline vs. sedentary ~12%/decade. Primary anchor for `36`'s decline-rate constant.
+- **✓ Tanaka H., Seals D.R. (2008)** — "Endurance exercise performance in Masters athletes: age-associated changes and underlying physiological mechanisms" — *J Physiol*, 586(1):55-63. Grounds `36`.
+- **✓ Pimentel A.E., Gentile C.L., Tanaka H., Seals D.R., Gates P.E. (2003)** — "Greater rate of decline in maximal aerobic capacity with age in endurance-trained than in sedentary men" — *J Appl Physiol*, 94(6):2406-2413. Contradicts Rogers 1990's framing (cross-sectional vs. longitudinal); flagged honestly in `36`, not resolved.
+- **✓ Hellard P., Avalos M., Hausswirth C., Pyne D., Toussaint J.F., Mujika I. (2013)** — "Identifying Optimal Overload and Taper in Elite Swimmers over Time" — *J Sports Sci Med*, 12(4):668-678. A predefined 3-week-overload + 3-week-taper window, NOT a taper-length comparison — does not itself establish 3 weeks as optimal. Grounds `36`'s taper-length honesty note.
+- **✓ Inoue A., Bunn P.d.S., do Carmo E.C., Lattari E., da Silva E.B. (2022)** — "Internal Training Load Perceived by Athletes and Planned by Coaches: A Systematic Review and Meta-Analysis" — *Sports Med Open*, 8:35. Grounds `36`'s easy-day RPE-drift caution.
+
 ## Practical / non-journal resources
 
 These are web resources rather than journal citations, so their URLs are the
@@ -2184,3 +2200,11 @@ Provenance of the fixes applied while curating this list:
    `research-dossiers/2026-07-28-swim-set-structure.md`.
 7. **Cox (2010), St-Onge (2018), Zhou (2026)** re-verified, upgraded `~` ->
    `✓` (2026-09-24); Zhou's year corrected from 2025.
+8. **Plan-authoring-limits dossier (2026-09-27)**: added the "Plan-authoring
+   limits" section above for `36-plan-authoring-limits.md`. Note the
+   orchestrator's own correction to the dossier's initial Q4 read: `Hellard
+   et al. (2013)` studied a PREDEFINED 3-week-overload + 3-week-taper
+   window and did not compare taper lengths against each other — it does
+   not establish a 3-week taper as optimal, only that a predefined 3-week
+   window worked as designed. `36` states this plainly rather than citing
+   Hellard as "3 weeks is evidence-backed."

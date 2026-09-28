@@ -1,0 +1,53 @@
+schema_version: 1
+file: 37-plan-authoring-guide.md
+cards:
+- section: the-three-tools-in-one-line-each
+  heading: The three tools, in one line each
+  summary: author_macro_plan and author_week_plan are coach-written draft-then-confirm tools red-teamed by
+    check_macro/check_week; check_plan is a read-only re-check of whatever is currently persisted.
+  recommendation: Use author_macro_plan/author_week_plan to write plans directly, always via draft then confirm,
+    and check_plan to re-verify after any manual edit.
+  content_hash: 62e5543f7e42ac931549818b803d3e5df5071b2b9093cbce76e97ab615fe4afc
+- section: planning-layers-macro-meso-workouts
+  heading: 'Planning layers: macro → meso → workouts'
+  summary: Macro is the full season table, re-checked after every race; meso blocks get purpose/limiter/
+    progression detail only for the current and next block; workouts are written through the next race or
+    ~2 weeks.
+  recommendation: Detail only the current and next block fully; write real sessions through the next race
+    weekend or two weeks out, whichever is longer, and state the horizon explicitly.
+  content_hash: 6f4d08a9552331030b28bc9a4d937c20fcb45d866fe5e3a352bd46ca40f9fc9a
+- section: author-the-macro-then-check-it-then-present-it
+  heading: Author the macro, then check it, then present it
+  summary: Draft from the athlete's real CTL/hours, always run check_macro before presenting, show every
+    finding, get an accept/decline with reason for each, then confirm with those decisions.
+  recommendation: Never present a plan the check hasn't seen; never confirm without a decision recorded for
+    every finding; cap re-drafts at two per request before presenting instead of iterating further.
+  content_hash: a947d36d28f06942bd3fab95277f1542df163ab8b31a0896ef813e8a5bd22339
+- section: say-it-now-not-in-week-9
+  heading: Say it now, not in week 9
+  summary: If the ramp-cap or goal-reality findings say a goal isn't reachable in time, say so in the first
+    conversation rather than letting a plan run for months on an unreachable number.
+  recommendation: Surface a ramp or goal-reality flag to the athlete immediately, not after weeks of training
+    on a plan already known to be infeasible.
+  content_hash: 8c4c1486468346822d3043e213967218340726d954b4e2120bcb9a1b966ae7a5
+- section: race-weekend-sunday-flow
+  heading: Race-weekend Sunday flow
+  summary: Debrief via save_race_debrief and objective data, update FTP/CTL, adapt the next block's limiter
+    and key sessions, write and push through the next race after the athlete sees it, then log the decision.
+  recommendation: Run debrief, then numbers update, then meso adaptation with reasons shown, then write/push
+    only after the athlete has seen the summary, then log what changed and why.
+  content_hash: d3ab6119414065a96703ac8092fc87e9292bcfa3204be76ea91385b53b028f14
+- section: weekly-review-order-non-race-weeks
+  heading: Weekly review order (non-race weeks)
+  summary: Read compliance, then CTL vs. target, then TSB/wellness trend, then session texture, in that order;
+    adjust only the upcoming week unless goal or capacity truly changed.
+  recommendation: Follow the fixed read order every week, and say plainly when the plan needs no change rather
+    than tinkering for its own sake.
+  content_hash: 09822232ea56a572551ecb039100980a6e4f63f1dd88743bc827498caaeaa7bc
+- section: handling-checkmacro-checkweek-findings-red-team-discipline
+  heading: Handling `check_macro`/`check_week` findings (red-team discipline)
+  summary: Findings are advisory and capped at six; accept or decline each visibly with a real reason, don't
+    manufacture agreement, and treat the +8%/+15% confirm-* findings as the one hard stop.
+  recommendation: Always give a visible accept/decline with a real reason for each finding; never let a
+    confirm-* safety-rail finding persist without an explicit accepted decision.
+  content_hash: 314e688705f831907b336d7c5ed62895fb7e346a9938b1d217d7d2ad3ddd80d7
