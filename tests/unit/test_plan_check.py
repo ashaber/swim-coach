@@ -162,6 +162,11 @@ def test_tims_macro_with_a_realistic_current_atl_reports_race_day_tsb():
     )
     tsb_finding = next((f for f in report.findings if f.id.startswith("race-day-tsb-")), None)
     assert tsb_finding is not None
+    # No taper-too-long finding for Tim's plan (see the dedicated test
+    # below), so this stays medium -- the escalation to high only fires
+    # when a taper-too-long finding for the SAME race coincides with a
+    # too-FRESH (above-band) reading.
+    assert tsb_finding.severity == "medium"
     print(tsb_finding.evidence)
 
 
@@ -286,6 +291,87 @@ def test_check_macro_never_raises_on_a_bad_plan():
         today=TODAY,
     )
     assert report2.verdict in ("sound", "sound-with-caveats", "fragile", "not-feasible")
+
+
+# ============================================================================
+# Golden fixture 5: the real 2026-09-27 production failure -- a 2-week
+# taper (Sep 28, Oct 5) plus race week (Oct 12, containing the Oct 17-18 A
+# race) on the only race-free CX build window. The red team that day
+# returned only medium findings ("race-day TSB just outside band," "recovery
+# cadence") and the coach argued the TSB finding away instead of flagging
+# the actual defect: the build window was spent tapering, not building.
+# ============================================================================
+
+
+def _production_failure_weeks() -> list[MacroWeek]:
+    # Loads tuned (not hand-picked to be flattering) so the projected race-day
+    # TSB genuinely lands ABOVE `RACE_DAY_TSB_BAND` (>25) as well -- the real
+    # 2026-09-27 draft's own red-team run reported race-day TSB 25.5, "just
+    # outside 5-25" -- so this fixture exercises BOTH new behaviors at once:
+    # the taper-too-long finding, and its escalation of the race-day-tsb
+    # finding from medium to high.
+    return [
+        MacroWeek(week_start=date(2026, 8, 31), phase="build", focus="build", hours=7.0, load_tss=400.0, ctl_target=48.0),
+        MacroWeek(week_start=date(2026, 9, 7), phase="build", focus="build", hours=7.0, load_tss=410.0, ctl_target=49.0),
+        MacroWeek(week_start=date(2026, 9, 14), phase="build", focus="build", hours=6.5, load_tss=390.0, ctl_target=50.0),
+        MacroWeek(week_start=date(2026, 9, 21), phase="build", focus="build", hours=7.0, load_tss=405.0, ctl_target=51.0),
+        MacroWeek(week_start=date(2026, 9, 28), phase="Taper", focus="freshen", hours=1.5, load_tss=40.0, ctl_target=48.0),
+        MacroWeek(week_start=date(2026, 10, 5), phase="Taper", focus="freshen", hours=1.0, load_tss=20.0, ctl_target=44.0),
+        MacroWeek(week_start=date(2026, 10, 12), phase="Race", focus="race the CX weekend", hours=1.0, load_tss=20.0, ctl_target=41.0),
+    ]
+
+
+def _production_failure_events() -> list[Event]:
+    return [
+        _event(
+            name="CX A race",
+            event_date=date(2026, 10, 17),
+            priority="A",
+            primary_sport="bike",
+            target_metric="duration_min",
+            target_value=60.0,  # ~1h cyclocross
+        ),
+    ]
+
+
+def test_production_failure_draft_flags_high_taper_too_long():
+    plan = _macro(_production_failure_weeks())
+    athlete = _athlete(dob=date(1975, 4, 7), ftp_watts=263.0, weight_kg=72.6)
+    report = check_macro(
+        plan,
+        athlete,
+        current_ctl=48.0,
+        current_atl=48.0,
+        recent_weekly_hours=[6.5, 7.0, 7.0, 6.8, 7.0],
+        events=_production_failure_events(),
+        today=date(2026, 8, 31),
+    )
+    finding_ids = {f.id for f in report.findings}
+    taper_too_long = next((f for f in report.findings if f.id.startswith("taper-too-long-")), None)
+    assert taper_too_long is not None, finding_ids
+    assert taper_too_long.severity == "high"
+    # Real production behavior this fixes: the coach reasoned away a lone
+    # medium "race-day TSB just outside band" finding ("too fresh is a
+    # smaller risk than flat"). With a coinciding taper-too-long finding for
+    # the same race, that TSB finding is escalated to high too -- two highs,
+    # "not-feasible", nothing left to talk itself out of.
+    tsb_finding = next((f for f in report.findings if f.id.startswith("race-day-tsb-")), None)
+    assert tsb_finding is not None, finding_ids
+    assert tsb_finding.severity == "high"
+    assert report.verdict == "not-feasible"
+
+
+def test_tims_macro_has_no_taper_too_long_finding():
+    plan = _macro(_tims_weeks())
+    report = check_macro(
+        plan,
+        _tims_athlete(),
+        current_ctl=43.0,
+        recent_weekly_hours=[6.5, 7.0, 7.5, 7.0, 6.8, 7.2, 7.0, 6.5, 7.0, 7.3],
+        events=_tims_events(),
+        today=date(2026, 9, 7),
+    )
+    assert not any(f.id.startswith("taper-too-long-") for f in report.findings)
 
 
 def test_check_week_never_raises_and_is_advisory_only():

@@ -207,6 +207,36 @@ TAPER_BASELINE_LOOKBACK_WEEKS = 4
 # unrelated earlier phase of a long macro. library/31-multi-race-season-
 # periodization.md.
 
+# --- Taper-too-long (real production failure, 2026-09-27): a plan can pass
+# `_check_one_event_taper`'s "is race week's own cut deep enough" question
+# while still spending WEEKS of the build window already tapering before
+# race week ever arrives -- exactly what shipped on the first real run
+# ("Build my macro for the rest of the CX season"): Sep 28 Taper, Oct 5
+# Taper, Oct 12 Race (the only race-free build window spent tapering, not
+# building). The red team that day returned only medium findings (race-day
+# TSB just outside band; recovery cadence) and the coach talked itself out
+# of even those ("too fresh is a smaller risk than flat") -- contrary to
+# the evidence below. This is the dedicated, load-based check for that
+# failure mode.
+TAPER_TOO_LONG_CUT_FRACTION = 0.20
+# Coach judgment: a week counts as "already tapering" (not still build) once
+# its volume sits at least 20% below the recent build peak -- comfortably
+# below `SHORT_EVENT_TAPER_CUT_FRACTION_MIN` (0.30, the shallow end of the
+# evidence-backed RACE-WEEK cut band) so an ordinary lighter week deep in
+# the build isn't miscounted as the start of a taper run, while still
+# catching a real multi-week glide-down. library/31-multi-race-season-
+# periodization.md (Neary 2003, Houmard 1991), library/36-plan-authoring-
+# limits.md (Bosquet 2007).
+LONG_EVENT_MAX_TAPER_WEEKS_BEFORE_RACE = 2
+# `[ADAPTED: general-endurance] Bosquet et al. (2007)`: the optimal FULL
+# taper is a ~2-week exponential volume reduction (already-cited GROUNDS
+# `GENERAL_TAPER_CUT_FRACTION_MIN/MAX` above; library/36-plan-authoring-
+# limits.md's "Swim taper length" section, reconfirmed 2026-09-27). Weeks of
+# already-tapered load beyond that 2-week window, sitting before race week
+# itself, are "too long" for a long event -- not itself a citation for the
+# number 2 as a hard ceiling, but the same evidence already anchoring the
+# cut-depth band.
+
 # --- Race-day TSB band (library/22-injury-adapted-taper.md's existing
 # `RACE_DAY_TSB_BAND`, imported and reused unchanged -- not redefined here;
 # see that module's own citation, Joe Friel via TrainingPeaks, Confidence:
@@ -424,7 +454,17 @@ def check_macro(
     findings.extend(_check_uncovered_weeks(weeks, active_events, plan_start, plan_end_exclusive))
     findings.extend(_check_ctl_ramp(weeks, athlete, today))
     findings.extend(_check_recovery_cadence(weeks, athlete))
-    findings.extend(_check_taper_and_race_day(weeks, active_events, series_by_date))
+    taper_too_long_findings = _check_taper_too_long(weeks, active_events)
+    taper_too_long_event_ids = frozenset(
+        f.id[len("taper-too-long-"):] for f in taper_too_long_findings
+    )
+    findings.extend(taper_too_long_findings)
+    findings.extend(
+        _check_taper_and_race_day(
+            weeks, active_events, series_by_date,
+            taper_too_long_event_ids=taper_too_long_event_ids,
+        )
+    )
     findings.extend(_check_sustained_low_tsb(series))
     findings.extend(_check_hours_reality(weeks, recent_weekly_hours))
     findings.extend(_check_bc_races_labelled(weeks, active_events))
@@ -586,6 +626,8 @@ def _check_taper_and_race_day(
     weeks: list[MacroWeek],
     active_events: list[Event],
     series_by_date: dict[date, tuple[float, float, float]],
+    *,
+    taper_too_long_event_ids: frozenset[str] = frozenset(),
 ) -> list[PlanCheckFinding]:
     findings: list[PlanCheckFinding] = []
     a_events = [e for e in active_events if e.priority.strip().upper() == "A"]
@@ -595,19 +637,150 @@ def _check_taper_and_race_day(
         if tsb_reading is not None:
             _ctl, _atl, tsb = tsb_reading
             if not (RACE_DAY_TSB_BAND["low"] <= tsb <= RACE_DAY_TSB_BAND["high"]):
+                # Too FRESH (above the band) that coincides with an already-
+                # confirmed taper-too-long finding for this same event is
+                # escalated to high -- the real 2026-09-27 failure was the
+                # coach reading a merely-medium "TSB just outside band"
+                # finding in isolation and reasoning it away ("too fresh is
+                # a smaller risk than flat"); paired with the load-based
+                # taper-too-long finding for the SAME event, this is no
+                # longer an ambiguous single medium signal to argue with.
+                # Too FATIGUED (below the band) stays medium regardless --
+                # that direction isn't the failure mode this escalation
+                # targets, and isn't what a too-long taper produces anyway.
+                too_fresh = tsb > RACE_DAY_TSB_BAND["high"]
+                severity: Severity = (
+                    "high" if too_fresh and str(event.id) in taper_too_long_event_ids else "medium"
+                )
                 findings.append(
                     PlanCheckFinding(
                         id=f"race-day-tsb-{event.id}",
-                        severity="medium",
+                        severity=severity,
                         evidence=(
                             f"Projected TSB on {event.event_date.isoformat()} ({event.name}) is "
                             f"{tsb:.1f}, outside the {RACE_DAY_TSB_BAND['low']:.0f} to "
                             f"{RACE_DAY_TSB_BAND['high']:.0f} race-day band (library/22)."
+                            + (
+                                " Coincides with a taper-too-long finding for this same race -- "
+                                "not an ambiguous signal on its own."
+                                if severity == "high"
+                                else ""
+                            )
                         ),
                         consequence="Racing too fresh (flat legs) or too fatigued (no snap) for the A race.",
                         fix="Adjust the taper depth/length so projected race-day TSB lands in-band.",
                     )
                 )
+    return findings
+
+
+def _recent_build_peak(weeks_by_start: dict[date, MacroWeek], race_week_start: date) -> float | None:
+    """Max real volume (`_week_volume`) over the `TAPER_BASELINE_LOOKBACK_WEEKS`
+    weeks immediately before `race_week_start` -- the same recent-build-peak
+    window `_check_one_event_taper` measures the race week's own cut
+    against, reused here as the reference point for "how many of those
+    weeks were already tapering." `None` when there's no usable data in the
+    window (never a fabricated peak)."""
+    candidates = [
+        v
+        for i in range(1, TAPER_BASELINE_LOOKBACK_WEEKS + 1)
+        if (w := weeks_by_start.get(race_week_start - timedelta(weeks=i))) is not None
+        and (v := _week_volume(w)) is not None
+    ]
+    return max(candidates) if candidates else None
+
+
+def _consecutive_pre_race_tapered_weeks(weeks: list[MacroWeek], race_week: MacroWeek) -> int:
+    """How many CONSECUTIVE weeks immediately before `race_week` already sit
+    `TAPER_TOO_LONG_CUT_FRACTION` (20%) or more below the recent build peak
+    -- i.e. how many weeks of the build window were already spent tapering
+    before race week itself, as distinct from `_check_one_event_taper`'s
+    "is race week's OWN cut deep enough" question. Walks backward from the
+    week immediately before race week and stops at the first week that
+    ISN'T already cut this much (a real build week), so an ordinary
+    lighter week deep in the build isn't miscounted as part of a taper run.
+    Returns 0 when there's no usable peak to measure against (never
+    fabricates a reading)."""
+    weeks_by_start = {w.week_start: w for w in weeks}
+    peak = _recent_build_peak(weeks_by_start, race_week.week_start)
+    if peak is None or peak <= 0:
+        return 0
+    run = 0
+    i = 1
+    while True:
+        week = weeks_by_start.get(race_week.week_start - timedelta(weeks=i))
+        if week is None:
+            break
+        volume = _week_volume(week)
+        if volume is None:
+            break
+        if 1 - (volume / peak) < TAPER_TOO_LONG_CUT_FRACTION:
+            break
+        run += 1
+        i += 1
+    return run
+
+
+def _check_taper_too_long(
+    weeks: list[MacroWeek], active_events: list[Event]
+) -> list[PlanCheckFinding]:
+    """The real 2026-09-27 production failure: a plan can pass
+    `_check_one_event_taper`'s "is race week's own cut deep enough" question
+    while still spending weeks of the build window already tapering BEFORE
+    race week ever arrives -- Sep 28 Taper, Oct 5 Taper, Oct 12 Race, the
+    only race-free build window spent tapering instead of building. High
+    severity, always, for a short event with ANY such week (Neary 2003,
+    Houmard 1991 -- a multi-week taper buys a short event nothing extra and
+    spends real build window); high beyond `LONG_EVENT_MAX_TAPER_WEEKS_BEFORE_RACE`
+    (~2 weeks) for a long event (Bosquet 2007). Never fabricates a finding
+    when there's no usable load data to judge (see
+    `_consecutive_pre_race_tapered_weeks`)."""
+    findings: list[PlanCheckFinding] = []
+    a_events = [e for e in active_events if e.priority.strip().upper() == "A"]
+    for event in a_events:
+        race_week = _final_pre_race_week(weeks, event)
+        if race_week is None:
+            continue
+        run = _consecutive_pre_race_tapered_weeks(weeks, race_week)
+        if run <= 0:
+            continue
+        is_short = _event_hours(event) is not None and _event_hours(event) <= SHORT_EVENT_MAX_HOURS
+        if is_short:
+            too_long = True
+            evidence_cite = (
+                "Neary, Bhambhani & McKenzie (2003): only a 7-day, ~50% volume "
+                "cut (intensity held) reached significance for a short event -- "
+                "30%/80% cuts did not. Houmard (1991): fitness/performance holds "
+                "10-28 days at volume cuts up to 70-80%. A multi-week taper buys "
+                "a short event nothing extra and spends real build window "
+                "(library/31, library/36)."
+            )
+            fix = "Keep build load until race week; taper within race week itself (~50% cut, intensity held)."
+        else:
+            too_long = run > LONG_EVENT_MAX_TAPER_WEEKS_BEFORE_RACE
+            evidence_cite = (
+                f"Bosquet et al. (2007): the optimal full taper is a ~2-week "
+                f"exponential reduction (41-60% volume, intensity held) -- "
+                f"{run} already-tapered week(s) sit before race week itself, "
+                f"beyond that window (library/36)."
+            )
+            fix = "Shorten the taper toward Bosquet's ~2-week window; hold build load longer first."
+        if not too_long:
+            continue
+        findings.append(
+            PlanCheckFinding(
+                id=f"taper-too-long-{event.id}",
+                severity="high",
+                evidence=(
+                    f"{run} consecutive week(s) immediately before race week "
+                    f"({race_week.week_start.isoformat()}, {event.name}) already sit "
+                    f"{TAPER_TOO_LONG_CUT_FRACTION*100:.0f}%+ below the recent build peak. "
+                    + evidence_cite
+                ),
+                consequence="Loses the build window, detraining risk, flat not fresh.",
+                fix=fix,
+            )
+        )
     return findings
 
 
