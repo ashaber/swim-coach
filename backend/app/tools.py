@@ -5081,6 +5081,7 @@ def _confirm_macro_from_draft(
             f"{current.blocks[0].start_date} to {current.blocks[-1].end_date}). Written exactly as agreed."
         )
     store.save_macro(slug, macro)
+    _gc_consumed_drafts(store, slug, _MACRO_CARRIER_WEEK, tool=tool)
     reloaded = store.load_macro(slug)
     verified = reloaded is not None and reloaded.id == macro.id
     log.info("macro written from agreed draft", athlete=slug, tool=tool, macro_id=str(macro.id), verified=verified)
@@ -6730,6 +6731,18 @@ def _hold_draft(store: StoreInterface, slug: str, week: WeekPlan, *, tool: str) 
 _draft_is_stale = draft_is_stale  # shared with the per-request context (app.drafts)
 
 
+def _gc_consumed_drafts(store: StoreInterface, slug: str, iso_week: str, *, tool: str) -> None:
+    """Once a held draft's plan has been WRITTEN (consumed), its rows/files are
+    garbage -- delete them. GC must never turn a successful write into a failed
+    tool call: a storage problem here is logged and swallowed, never raised."""
+    try:
+        store.delete_week_drafts(slug, iso_week)
+    except NotImplementedError:
+        pass
+    except Exception:  # noqa: BLE001 - see docstring
+        log.warn("could not gc consumed draft", athlete=slug, iso_week=iso_week, tool=tool, exc_info=True)
+
+
 def _confirm_from_draft(
     store: StoreInterface,
     slug: str,
@@ -6816,6 +6829,7 @@ def _confirm_from_draft(
         )
     agreed.planning_warnings = warnings
     store.save_week(slug, agreed)
+    _gc_consumed_drafts(store, slug, iso_week, tool=tool)
     saved = store.load_week(slug, iso_week)
     verified = saved is not None and {s.id for s in saved.sessions} == {s.id for s in agreed.sessions}
     log.info(
@@ -7979,6 +7993,10 @@ def _confirm_taper_from_draft(
             }
         written.append({"iso_week": item["iso_week"], "verified": result["verified"]})
         warnings.extend(result["planning_warnings"])
+    # Every bundle week's own draft was just GC'd by its own `_confirm_from_draft` call
+    # above; the carrier record itself (held under _TAPER_CARRIER_WEEK) is this taper
+    # tool's own -- clean it up now that the whole bundle is written.
+    _gc_consumed_drafts(store, slug, _TAPER_CARRIER_WEEK, tool=_TAPER_TOOL)
     return {
         "event_name": carried.get("event_name"),
         "persisted": True,
@@ -8830,6 +8848,7 @@ def _confirm_author_macro_plan(
         )
 
     store.save_macro(slug, macro)
+    _gc_consumed_drafts(store, slug, _MACRO_CARRIER_WEEK, tool=tool)
     reloaded = store.load_macro(slug)
     verified = reloaded is not None and reloaded.id == macro.id
     log.info(
@@ -9045,6 +9064,7 @@ def _confirm_author_week_plan(
     agreed.planning_warnings = warnings
 
     store.save_week(slug, agreed)
+    _gc_consumed_drafts(store, slug, iso_week, tool=tool)
     saved = store.load_week(slug, iso_week)
     verified = saved is not None and {s.id for s in saved.sessions} == {s.id for s in agreed.sessions}
     log.info(

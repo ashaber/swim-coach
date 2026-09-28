@@ -70,12 +70,30 @@ def _is_written(store: StoreInterface, slug: str, draft: WeekPlan) -> bool:
         return False
 
 
+def _gc_stale_drafts(store: StoreInterface, slug: str, held: list[WeekPlan]) -> None:
+    """Opportunistic GC: a draft older than DRAFT_MAX_AGE is already treated as
+    absent (never offered to the coach, see `pending_drafts` below) -- delete it
+    for real here too, so the table/tree doesn't grow forever without a cron.
+    Cheap (runs once per request, only over the already-fetched `held` list) and
+    must never turn rendering the coach's context into a failure."""
+    for draft in held:
+        if not draft_is_stale(draft):
+            continue
+        try:
+            store.delete_week_drafts(slug, draft.iso_week)
+        except NotImplementedError:
+            pass
+        except Exception:  # noqa: BLE001 - opportunistic GC must never block rendering
+            log.warn("could not gc stale draft", athlete=slug, iso_week=draft.iso_week, exc_info=True)
+
+
 def pending_drafts(store: StoreInterface, slug: str) -> list[WeekPlan]:
     try:
         held = store.list_week_drafts(slug)
     except Exception:  # noqa: BLE001
         log.warn("swallowed exception, using a default", where='backend/app/drafts.py', line_hint=64, exc_info=True)
         return []
+    _gc_stale_drafts(store, slug, held)
     return [d for d in held if not draft_is_stale(d) and not _is_written(store, slug, d)]
 
 
