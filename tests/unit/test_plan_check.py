@@ -1,5 +1,6 @@
 """Golden-fixture tests for `swim_coach.plan_check` (engine/plan-check-red-
-team PR 1). Two real macros: Tim's real cyclocross macrocycle table
+team PR 1). Two real macros: a real cyclocross macrocycle table produced by Tim Curry's AI Endurance
+Coach (used with permission; see README Acknowledgments)
 (`ai-coach/athlete/plans/current/macrocycle.md`, transcribed verbatim below)
 should come back sound-ish with no high-severity findings; the swim-coach
 repo's own real, buggy Sep-Nov macro (misplaced taper, an uncovered race
@@ -78,7 +79,8 @@ def _macro(weeks: list[MacroWeek], **overrides) -> MacroPlan:
 
 
 # ============================================================================
-# Golden fixture 1: Tim's real cyclocross macrocycle
+# Golden fixture 1: a real cyclocross macrocycle produced by Tim Curry's
+# AI Endurance Coach (used with permission)
 # (ai-coach/athlete/plans/current/macrocycle.md, transcribed verbatim)
 # ============================================================================
 
