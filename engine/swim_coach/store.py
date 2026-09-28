@@ -105,6 +105,16 @@ class StoreInterface(ABC):
         that cannot hold drafts simply reports none."""
         return []
 
+    def delete_week_drafts(self, slug: str, iso_week: str) -> None:
+        """Remove every held draft for `iso_week` -- the `<iso_week>.draft` "latest"
+        pointer AND every `<iso_week>.draft.<id>` row/file -- once its plan has been
+        CONSUMED (written) or it is otherwise done being offered to the coach. Never
+        touches the live week of the same `iso_week` (a different key). Idempotent:
+        deleting an `iso_week` with no drafts on file is a no-op, never an error. Not
+        abstract, matching `save_week_draft`/`load_week_draft` -- a store that cannot
+        hold drafts never wrote any, so it has nothing to clean up."""
+        raise NotImplementedError
+
     @abstractmethod
     def list_week_ids(self, slug: str) -> list[str]:
         """Every ISO-week id (e.g. "2026-W28") this athlete has a week plan
@@ -536,6 +546,19 @@ class FileStore(StoreInterface):
             if data is not None:
                 drafts.append(WeekPlan.model_validate(data))
         return drafts
+
+    def delete_week_drafts(self, slug: str, iso_week: str) -> None:
+        weeks_dir = self._athlete_dir(slug) / "plan" / "weeks"
+        if not weeks_dir.exists():
+            return
+        pointer = weeks_dir / f"{iso_week}.draft.yaml"
+        if pointer.exists():
+            pointer.unlink()
+        # Every by-id row ("<iso_week>.draft.<id>.yaml") -- the glob's literal
+        # "{iso_week}.draft." prefix means a longer week id (e.g. "2026-W22")
+        # can never match a shorter one's ("2026-W2") deletion.
+        for path in weeks_dir.glob(f"{iso_week}.draft.*.yaml"):
+            path.unlink()
 
     def list_week_ids(self, slug: str) -> list[str]:
         weeks_dir = self._athlete_dir(slug) / "plan" / "weeks"

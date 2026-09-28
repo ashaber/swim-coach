@@ -441,6 +441,55 @@ class StoreContractTests:
         assert store.list_week_ids(SLUG) == ["2026-W28"]
         assert store.load_week(SLUG, "2026-W29") is None
 
+    def test_delete_week_drafts_removes_the_pointer_and_every_by_id_row(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        first = _week(athlete.id, "2026-W28")
+        second = _week(athlete.id, "2026-W28").model_copy(update={"focus": "second draft"})
+        store.save_week_draft(SLUG, first)
+        store.save_week_draft(SLUG, second)
+
+        store.delete_week_drafts(SLUG, "2026-W28")
+
+        assert store.load_week_draft(SLUG, "2026-W28") is None
+        assert store.load_week_draft(SLUG, "2026-W28", draft_id=str(first.id)) is None
+        assert store.load_week_draft(SLUG, "2026-W28", draft_id=str(second.id)) is None
+        assert store.list_week_drafts(SLUG) == []
+
+    def test_delete_week_drafts_is_idempotent_and_scoped_to_its_own_week(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        store.save_week_draft(SLUG, _week(athlete.id, "2026-W28"))
+        other = _week(athlete.id, "2026-W29")
+        store.save_week_draft(SLUG, other)
+
+        store.delete_week_drafts(SLUG, "2026-W28")
+        store.delete_week_drafts(SLUG, "2026-W28")  # idempotent -- no error calling it again
+
+        assert store.load_week_draft(SLUG, "2026-W28") is None
+        assert store.load_week_draft(SLUG, "2026-W29") == other  # a different week's draft is untouched
+
+    def test_delete_week_drafts_does_not_touch_the_live_week_of_the_same_iso_week(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        live = _week(athlete.id, "2026-W28")
+        store.save_week(SLUG, live)
+        store.save_week_draft(SLUG, _week(athlete.id, "2026-W28"))
+
+        store.delete_week_drafts(SLUG, "2026-W28")
+
+        assert store.load_week(SLUG, "2026-W28") == live
+        assert store.load_week_draft(SLUG, "2026-W28") is None
+
+    def test_delete_week_drafts_on_a_week_with_no_drafts_is_a_noop(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        store.save_week(SLUG, _week(athlete.id, "2026-W28"))
+
+        store.delete_week_drafts(SLUG, "2026-W28")  # no draft exists at all -- must not raise
+
+        assert store.load_week(SLUG, "2026-W28") is not None
+
     # --- workouts --------------------------------------------------------
 
     def test_workout_round_trip(self, store):
