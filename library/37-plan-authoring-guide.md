@@ -17,12 +17,14 @@ in the always-on prefix.
 - **`author_macro_plan`** — the coach writes the full week-by-week season
   table directly (phase, focus, hours, load, CTL target, key sessions,
   recovery flag) plus a 3-5 sentence `architecture` rationale. Draft, see
-  the `check_macro` report, accept/decline each finding, confirm.
+  the `check_macro` report, get a `fix`/`keep_as_is` decision on each
+  finding (never `accept`/`decline` — see "Say it in those words" below),
+  confirm.
 - **`author_week_plan`** — the coach writes one week's real sessions.
-  Draft, see the `check_week` report, accept/decline, confirm. A
-  `confirm-*` finding (weekly volume +8%, long-swim step +15%) requires an
-  explicit accepted decision before it will persist — CLAUDE.md's one hard
-  safety rail.
+  Draft, see the `check_week` report, decide, confirm. A `confirm-*`
+  finding (weekly volume +8%, long-swim step +15%) requires an explicit
+  accepted decision before it will persist — CLAUDE.md's one hard safety
+  rail.
 - **`check_plan`** — read-only re-check of whatever's currently persisted.
   Run it after any manual edit (`patch_week_plan`/`merge_week_plan`), or
   just to see how a plan reads against the athlete's latest real
@@ -62,20 +64,41 @@ let it silently lapse.
 
 1. Read the athlete's **actual** current CTL/ATL and actual sustained
    weekly hours (never a self-report best week) before drafting anything.
+   **Author the new table from the real events and this history — never
+   by copying the STORED macro's own structure.** A real production
+   failure (2026-09-27, "build my macro for the rest of the CX season")
+   anchored on the old stored macro's taper placement instead of reasoning
+   fresh from the actual race calendar, and reproduced its defect — the
+   stored plan may be exactly the thing this request means to replace.
 2. Call `author_macro_plan` with `confirm` omitted — this validates and
    runs `check_macro` automatically. **Always run the check before
    presenting** — never show a hand-reasoned plan the engine hasn't seen.
 3. Show the athlete the table, the architecture rationale, and **every
    finding** the report returned (verdict, severity, evidence,
    consequence, fix) — never summarize the review as a formality.
-4. Get an explicit accept-or-decline **with a reason** for each finding.
-   Declining is legitimate and must be visible — don't manufacture a
-   change just because a finding exists, and don't quietly drop a finding
-   the athlete didn't actually address.
-5. Call `author_macro_plan` again with `confirm: true`, the `draft_id`,
-   and `decisions` covering every finding id. A missing decision refuses
-   the confirm and writes nothing — this is deliberate, not a bug to work
-   around.
+4. **Say it in those words: "Fix it, or keep as-is?"** — never "accept or
+   decline". A real production failure (2026-09-27) came directly from
+   that ambiguity: the athlete said "decline on #1" meaning "reject this
+   taper, fix it"; the coach read "decline" as "decline the finding, keep
+   the plan" and persisted the bad taper unchanged. `fix` means the
+   finding is valid and the plan gets revised — you go re-author and
+   re-draft before any confirm, you never confirm a `fix` decision as-is.
+   `keep_as_is` means the plan is written exactly as drafted despite the
+   finding, **with a reason**, and — for a HIGH-severity finding — the
+   athlete's own words (`athlete_words`), not your paraphrase. If the
+   athlete's reply is ambiguous ("accept", "decline", "ok"), ask again
+   rather than guess which they mean. Keeping-as-is is legitimate and must
+   be visible — don't manufacture a change just because a finding exists,
+   and don't quietly drop a finding the athlete didn't actually address.
+5. If any finding got `fix`: revise the plan yourself, call
+   `author_macro_plan` again WITHOUT `confirm` to draft the revision, show
+   the athlete the new report, and get fresh decisions on it — a `fix`
+   decision can never be confirmed against the plan that drew the finding
+   in the first place. Once every finding is `keep_as_is` (or resolved by a
+   fix that no longer triggers it), call `author_macro_plan` again with
+   `confirm: true`, the `draft_id`, and `decisions` covering every finding
+   id. A missing decision refuses the confirm and writes nothing — this is
+   deliberate, not a bug to work around.
 6. Re-draft at most twice per request without stopping to show the
    athlete what you have. A third re-draft in one request is refused —
    present the plan instead of iterating silently.
@@ -143,16 +166,24 @@ a clamp, never a rejection (the engine's own rule: `plan_check.py` "never
 rejects or clamps a plan"). Treat them the way Tim's `red-team` agent asks
 a coach to treat adversarial review:
 
-- **Accept or decline, visibly, every time** — a decline with a real
+- **Ask "fix it, or keep as-is?", visibly, every time** — never "accept or
+  decline" (see "Say it in those words" above; that ambiguity is what
+  caused the 2026-09-27 production failure). A `keep_as_is` with a real
   reason ("the athlete has already run this exact taper twice and reads
   fine at this depth") is a legitimate outcome, not a failure to engage.
-- **Don't manufacture agreement with every finding** just because the
-  report produced one — a report with three real findings and three
-  reflexive accepts is worse than one with two findings and one honest
-  decline.
+- **Present findings neutrally — never argue one away against its own
+  evidence.** If you're the one recommending `keep_as_is`, say so with the
+  evidence, not intuition ("too fresh is a smaller risk than flat" is
+  exactly the kind of unsupported reasoning that shipped a bad taper).
+- **Don't manufacture a `fix` for every finding** just because the report
+  produced one — a report with three real findings and three reflexive
+  fixes is worse than one with two findings and one honest `keep_as_is`.
 - **Don't pad your own reasoning to sound more thorough** than the finding
   warrants — match the engine's own "cap it at six, the ones that matter
   get buried otherwise" discipline in how you respond, too.
 - The one place a finding is **not** advisory: a `confirm-*` id (the
-  +8%/+15% safety rails). These still require an explicit accepted
-  decision to persist — that's a hard stop, not a preference.
+  +8%/+15% safety rails) on `author_week_plan`. These still require an
+  explicit accepted decision to persist — that's a hard stop, not a
+  preference. `author_macro_plan`'s own hard stop is narrower: only a
+  `keep_as_is` on a HIGH-severity finding requires the athlete's own words
+  (`athlete_words`); a `fix` decision is never confirmable at all.

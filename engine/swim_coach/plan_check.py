@@ -81,8 +81,10 @@ class PlanCheckReport:
 
     `MacroPlan.red_team` (models.py) is the PERSISTED counterpart: once a
     coach reviews a report, PR 2's confirm flow copies each finding here
-    into a `MacroRedTeamRecord`, adding the coach's own accept/decline
-    decision -- this report itself is never written to disk.
+    into a `MacroRedTeamRecord`, adding the coach's own `fix`/`keep_as_is`
+    decision (engine/red-team-taper-gate: not `accept`/`decline`, which
+    caused a real bad outcome -- see that model's own docstring) -- this
+    report itself is never written to disk.
     """
 
     verdict: Verdict

@@ -18,6 +18,7 @@ from swim_coach.models import (
     HealthStatus,
     MacroBlock,
     MacroPlan,
+    MacroRedTeamRecord,
     RaceWeekChecklistItem,
     Session,
     ThresholdRecord,
@@ -1673,3 +1674,52 @@ def test_health_status_fully_populated_entry_round_trips():
     assert restored.onset == "gradual"
     assert restored.severity == "moderate"
     assert restored.related_status_id == related
+
+
+# ============================================================================
+# MacroRedTeamRecord.decision -- fix/keep_as_is vocabulary
+# (engine/red-team-taper-gate: replaces the earlier accept/decline pair,
+# which caused a real bad outcome -- the athlete said "decline on #1"
+# meaning "reject this taper, fix it," and the coach read "decline" as
+# "decline the finding, keep the plan," persisting the bad taper unchanged.)
+# ============================================================================
+
+
+def _red_team_record(**overrides) -> dict:
+    defaults = dict(
+        id="taper-too-long-x",
+        severity="high",
+        evidence="2 consecutive weeks already tapered before race week.",
+        consequence="Loses the build window, detraining risk, flat not fresh.",
+        fix="Keep build load until race week; taper within race week itself.",
+    )
+    defaults.update(overrides)
+    return defaults
+
+
+def test_macro_red_team_record_accepts_fix_and_keep_as_is():
+    fix = MacroRedTeamRecord(**_red_team_record(decision="fix", decision_reason="revising the taper"))
+    keep = MacroRedTeamRecord(
+        **_red_team_record(
+            decision="keep_as_is", decision_reason="athlete has raced this taper before", athlete_words="I'm fine with this"
+        )
+    )
+    assert fix.decision == "fix"
+    assert keep.decision == "keep_as_is"
+    assert keep.athlete_words == "I'm fine with this"
+
+
+def test_macro_red_team_record_rejects_unknown_decision():
+    with pytest.raises(ValidationError):
+        MacroRedTeamRecord(**_red_team_record(decision="maybe"))
+
+
+def test_macro_red_team_record_normalizes_legacy_accept_decline_on_read():
+    # Old persisted athlete data (pre engine/red-team-taper-gate) used
+    # accept/decline -- neither ever actually revised the plan (the confirm
+    # call always persisted exactly the drafted plan), so both normalize to
+    # keep_as_is on read rather than erroring on real historical data.
+    accepted = MacroRedTeamRecord(**_red_team_record(decision="accept", decision_reason="known gap"))
+    declined = MacroRedTeamRecord(**_red_team_record(decision="decline", decision_reason="disagree with finding"))
+    assert accepted.decision == "keep_as_is"
+    assert declined.decision == "keep_as_is"
