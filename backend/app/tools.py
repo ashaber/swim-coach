@@ -173,8 +173,13 @@ deletion). The coach supplies the plan directly (`MacroPlan.weeks`, real
 projections from the athlete's REAL logged CTL/ATL/hours and red-team the
 result -- advisory findings only (severity/evidence/consequence/fix), never
 rejecting or clamping what the coach wrote. `author_macro_plan`'s confirm
-step requires an accept/decline decision (with a reason) for EVERY finding,
-persisted onto `MacroPlan.red_team`. `author_week_plan`'s confirm step keeps
+step requires a `fix`/`keep_as_is` decision (with a reason) for EVERY
+finding, persisted onto `MacroPlan.red_team` -- NOT `accept`/`decline`,
+which caused a real bad outcome (the athlete meant "reject this taper, fix
+it" by "decline"; the coach read "decline" as "decline the finding, keep
+the plan" and persisted it unchanged). `keep_as_is` on a HIGH-severity
+finding additionally needs `athlete_words`, the same pattern
+`author_week_plan` already uses below. `author_week_plan`'s confirm step keeps
 the one hard stop CLAUDE.md's safety rail requires: a `confirm-*` finding
 (weekly volume +8%, long-swim step +15%) needs the athlete's own words in
 `athlete_confirmations`, or nothing is written. `propose_adaptation` is now
@@ -206,6 +211,7 @@ from swim_coach.load import (
     ctl_atl_tsb_series,
     daily_loads,
     estimate_hr_max,
+    recent_tss_per_hour,
     recent_weekly_hours,
 )
 from swim_coach.parse_files import parse_fit
@@ -1748,11 +1754,23 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "`swim_coach.plan_check.check_macro` -- a deterministic, "
             "ADVISORY red-team review (never rejects or clamps the plan "
             "you wrote; the only hard stop is pydantic validity). Show the "
-            "athlete the plan AND every finding the report returned, get an "
-            "explicit accept-or-decline (with a reason) for EACH ONE, then "
-            "call again with `confirm: true`, this draft_id, and "
-            "`decisions` covering every finding id -- a missing decision "
-            "refuses the confirm and writes nothing. Never pass "
+            "athlete the plan AND every finding, and for EACH ONE ask "
+            "plainly, in those words: 'Fix it, or keep as-is?' -- never "
+            "'accept or decline', which caused a real bad outcome (the "
+            "athlete meant 'reject this taper, fix it' by 'decline'; the "
+            "coach read 'decline' as 'decline the finding, keep the plan' "
+            "and persisted it unchanged). If the athlete's reply is "
+            "ambiguous ('accept', 'decline', 'ok'), ask again rather than "
+            "guess which they mean. `fix` means you revise the plan and "
+            "call author_macro_plan again WITHOUT confirm to draft the "
+            "revised version -- a `fix` decision can never be confirmed "
+            "against the plan that drew the finding. `keep_as_is` means "
+            "the plan is written exactly as drafted despite the finding "
+            "(reason required; for a HIGH-severity finding, `athlete_words` "
+            "quoting the athlete is ALSO required). Once every finding has "
+            "a decision, call again with `confirm: true`, this draft_id, "
+            "and `decisions` covering every finding id -- a missing "
+            "decision refuses the confirm and writes nothing. Never pass "
             "confirm=true on the first call for a given request, and never "
             "re-draft more than twice in one request without stopping to "
             "show the athlete what you have -- a third re-draft is refused "
@@ -1804,17 +1822,19 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "type": "boolean",
                     "description": (
                         "Default false: validate, run check_macro, and hold a draft -- never "
-                        "persisting. Set true ONLY after the athlete has explicitly accepted or "
-                        "declined every finding shown in a prior turn -- requires `decisions` "
-                        "covering every finding id, or the confirm is refused."
+                        "persisting. Set true ONLY after the athlete has explicitly said 'fix' or "
+                        "'keep as-is' for every finding shown in a prior turn -- requires "
+                        "`decisions` covering every finding id, or the confirm is refused."
                     ),
                 },
                 "decisions": {
                     "type": "array",
                     "description": (
-                        "Required WITH confirm:true -- one accept/decline decision (with a reason) "
-                        "for EVERY finding id the draft call's report returned. Missing a decision "
-                        "for any finding id refuses the confirm and writes nothing."
+                        "Required WITH confirm:true -- one 'fix' or 'keep_as_is' decision (with a "
+                        "reason) for EVERY finding id the draft call's report returned. Missing a "
+                        "decision for any finding id refuses the confirm and writes nothing. ANY "
+                        "'fix' decision also refuses the confirm outright -- it means the plan needs "
+                        "revising and re-drafting, not persisting."
                     ),
                     "items": {
                         "type": "object",
@@ -1825,13 +1845,27 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                             },
                             "decision": {
                                 "type": "string",
-                                "enum": ["accept", "decline"],
+                                "enum": ["fix", "keep_as_is"],
+                                "description": (
+                                    "'fix' = the finding is valid; revise the plan and re-draft "
+                                    "(never confirmable). 'keep_as_is' = persist the plan exactly "
+                                    "as drafted despite this finding -- an explicit override."
+                                ),
                             },
                             "reason": {
                                 "type": "string",
                                 "description": (
                                     "Why -- the coach's own reasoning, shown to the athlete and "
                                     "stored on the plan for the next review."
+                                ),
+                            },
+                            "athlete_words": {
+                                "type": "string",
+                                "description": (
+                                    "Required when `decision` is 'keep_as_is' AND this finding's "
+                                    "severity is 'high' -- the athlete's OWN WORDS confirming the "
+                                    "override, not the coach's paraphrase (CLAUDE.md's safety-rail "
+                                    "pattern). Omit/blank refuses the confirm for a high finding."
                                 ),
                             },
                         },
@@ -8461,7 +8495,17 @@ def _macro_week_from_dict(entry: dict[str, Any]) -> tuple[MacroWeek | None, str 
         return None, str(exc)
 
 
-def _macro_weeks_json(weeks: list[MacroWeek]) -> list[dict[str, Any]]:
+def _macro_weeks_json(
+    weeks: list[MacroWeek], *, recent_tss_per_hour: float | None = None
+) -> list[dict[str, Any]]:
+    """`recent_tss_per_hour` (engine/red-team-taper-gate, real production
+    fix): when a week has `hours` set but the coach omitted `load_tss`,
+    attach `load_tss_estimate` (never overwriting the real `load_tss`
+    field, which stays exactly what the coach authored -- `None` if they
+    left it blank) so the athlete sees a REAL number instead of a bare
+    gap, clearly labelled as an estimate. `None` (every existing caller
+    that doesn't pass this) leaves `load_tss_estimate` `None` throughout,
+    same output as before this parameter existed."""
     return [
         {
             "week_start": w.week_start.isoformat(),
@@ -8469,6 +8513,11 @@ def _macro_weeks_json(weeks: list[MacroWeek]) -> list[dict[str, Any]]:
             "focus": w.focus,
             "hours": w.hours,
             "load_tss": w.load_tss,
+            "load_tss_estimate": (
+                round(w.hours * recent_tss_per_hour, 1)
+                if w.load_tss is None and w.hours is not None and recent_tss_per_hour is not None
+                else None
+            ),
             "ctl_target": w.ctl_target,
             "key_sessions": list(w.key_sessions),
             "recovery": w.recovery,
@@ -8484,7 +8533,7 @@ def _hold_author_macro_draft(
     """Same carrier convention `_hold_macro_draft` above already uses (a
     `MacroPlan` riding inside a sentinel-`iso_week` `WeekPlan`'s
     `adaptation_rationale` JSON) -- but with the `check_macro` report riding
-    alongside it, so `confirm` can require an accept/decline decision for
+    alongside it, so `confirm` can require a fix/keep_as_is decision for
     EXACTLY the findings the athlete was shown, without recomputing the
     report (current_ctl/recent_weekly_hours/today can genuinely drift
     between the draft and confirm calls; the athlete decides against what
@@ -8533,7 +8582,7 @@ def _handle_author_macro_plan(
             "error": (
                 "author_macro_plan has already been (re-)drafted twice this request without a "
                 "confirm. Stop iterating on the plan yourself -- present the current draft and every "
-                "finding to the athlete, get accept/decline on each, then confirm."
+                "finding to the athlete, get a 'fix'/'keep_as_is' decision on each, then confirm."
             )
         }
     redraft_counts["author_macro_plan"] = redraft_count + 1
@@ -8596,6 +8645,7 @@ def _handle_author_macro_plan(
     current_ctl = series[-1][1] if series else 0.0
     current_atl = series[-1][2] if series else None
     hours_history = recent_weekly_hours(workouts, today)
+    tss_per_hour = recent_tss_per_hour(workouts, today, athlete=athlete, wellness=wellness)
 
     report = check_macro(
         macro,
@@ -8603,6 +8653,7 @@ def _handle_author_macro_plan(
         current_ctl=current_ctl,
         current_atl=current_atl,
         recent_weekly_hours=hours_history,
+        recent_tss_per_hour=tss_per_hour,
         events=events,
         today=today,
     )
@@ -8615,9 +8666,10 @@ def _handle_author_macro_plan(
         verdict=report.verdict,
         n_findings=len(report.findings),
     )
+    high_finding_ids = [f["id"] for f in report.to_dict()["findings"] if f["severity"] == "high"]
     return {
         "event_names": [e.name for e in resolved_events],
-        "weeks": _macro_weeks_json(weeks),
+        "weeks": _macro_weeks_json(weeks, recent_tss_per_hour=tss_per_hour),
         "architecture": architecture,
         "report": report.to_dict(),
         "persisted": False,
@@ -8626,9 +8678,24 @@ def _handle_author_macro_plan(
                 "draft_id": draft_id,
                 "next": (
                     "Nothing is written yet. Show the athlete the architecture, the week table, and "
-                    "EVERY finding in `report.findings`. Once they've accepted or declined each one, call "
-                    "author_macro_plan again with `confirm: true`, this draft_id, and `decisions` covering "
-                    "every finding id -- a missing decision refuses the confirm."
+                    "EVERY finding in `report.findings`. Present findings neutrally -- never argue one "
+                    "away against its own evidence; if you're recommending keeping the plan as-is, cite "
+                    "evidence, not intuition. For EACH finding, ask plainly, in those words: 'Fix it, or "
+                    "keep as-is?' -- never 'accept or decline' (real prior failure: the athlete meant "
+                    "'reject this taper, fix it' by 'decline', the coach read it as 'keep the plan' and "
+                    "persisted it unchanged). If the reply is ambiguous ('accept', 'decline', 'ok'), ask "
+                    "again rather than guess. 'fix' means you revise the plan and call author_macro_plan "
+                    "again WITHOUT confirm to draft the revision -- never confirm a 'fix' decision. "
+                    "Once every finding has a clear 'fix'/'keep_as_is' decision, call author_macro_plan "
+                    "again with `confirm: true`, this draft_id, and `decisions` covering every finding "
+                    "id -- a missing decision refuses the confirm. "
+                    + (
+                        f"{high_finding_ids} are HIGH severity: a `keep_as_is` decision for any of these "
+                        "MUST also carry `athlete_words` quoting the athlete's own reasoning (a `reason` "
+                        "alone is not enough), or the confirm is refused. "
+                        if high_finding_ids
+                        else ""
+                    )
                 ),
             }
             if draft_id
@@ -8676,22 +8743,65 @@ def _confirm_author_macro_plan(
         return {
             "persisted": False,
             "error": (
-                f"confirm requires an accept/decline decision (with a reason) for every finding -- "
-                f"missing: {missing}. Nothing was written."
+                f"confirm requires a 'fix' or 'keep_as_is' decision (with a reason) for every "
+                f"finding -- missing: {missing}. Nothing was written."
             ),
         }
+    # Vocabulary (engine/red-team-taper-gate, real production failure
+    # 2026-09-27): `accept`/`decline` caused a real bad outcome -- the
+    # athlete said "decline on #1" meaning "reject this taper, fix it," and
+    # the coach read "decline" as "decline the finding, keep the plan,"
+    # persisting the 2-week taper unchanged. `fix`/`keep_as_is` name the
+    # actual choice instead of an ambiguous verb pair. A `fix` decision can
+    # NEVER be confirmed here -- it means "revise the plan," which requires
+    # a fresh draft (new report, new findings), not a write of the plan
+    # that drew the finding in the first place.
+    fix_ids: list[str] = []
     for fid in findings_by_id:
         d = decisions_by_id[fid]
-        if d.get("decision") not in ("accept", "decline"):
+        if d.get("decision") not in ("fix", "keep_as_is"):
             return {
                 "persisted": False,
-                "error": f"decisions for {fid!r}: `decision` must be 'accept' or 'decline'. Nothing was written.",
+                "error": (
+                    f"decisions for {fid!r}: `decision` must be 'fix' (revise the plan, then "
+                    "re-draft) or 'keep_as_is' (persist the plan exactly as drafted, override). "
+                    "Nothing was written."
+                ),
             }
         if not d.get("reason"):
             return {
                 "persisted": False,
                 "error": f"decisions for {fid!r} needs a `reason`. Nothing was written.",
             }
+        if d["decision"] == "fix":
+            fix_ids.append(fid)
+            continue
+        # High-severity findings gate: keeping a HIGH finding as-is needs
+        # the athlete's OWN WORDS, same pattern as `author_week_plan`'s
+        # `athlete_confirmations` safety rail -- a `reason` alone is the
+        # coach's own judgment, which is exactly what must not be the sole
+        # gate on overriding a high-severity, evidence-cited finding.
+        if (
+            findings_by_id[fid].get("severity") == "high"
+            and not str(d.get("athlete_words", "")).strip()
+        ):
+            return {
+                "persisted": False,
+                "error": (
+                    f"decisions for {fid!r}: keeping a HIGH-severity finding as-is needs the "
+                    "athlete's own words (`athlete_words` on that decision), not just a `reason` -- "
+                    "same pattern as author_week_plan's athlete_confirmations. Nothing was written."
+                ),
+            }
+    if fix_ids:
+        return {
+            "persisted": False,
+            "error": (
+                f"decisions {sorted(fix_ids)} chose 'fix'. Nothing was written -- revise the plan "
+                "to address these findings, then call author_macro_plan again WITHOUT `confirm` to "
+                "draft the revised plan and get fresh decisions on its new report before confirming."
+            ),
+        }
 
     red_team = [
         MacroRedTeamRecord(
@@ -8702,6 +8812,7 @@ def _confirm_author_macro_plan(
             fix=f["fix"],
             decision=decisions_by_id[f["id"]]["decision"],
             decision_reason=decisions_by_id[f["id"]]["reason"],
+            athlete_words=decisions_by_id[f["id"]].get("athlete_words"),
         )
         for f in findings_by_id.values()
     ]
@@ -8991,6 +9102,7 @@ def _handle_check_plan(input_data: dict[str, Any], *, store: StoreInterface, slu
     current_ctl = series[-1][1] if series else 0.0
     current_atl = series[-1][2] if series else None
     hours_history = recent_weekly_hours(workouts, today)
+    tss_per_hour = recent_tss_per_hour(workouts, today, athlete=athlete, wellness=wellness)
 
     macro_report = check_macro(
         macro,
@@ -8998,6 +9110,7 @@ def _handle_check_plan(input_data: dict[str, Any], *, store: StoreInterface, slu
         current_ctl=current_ctl,
         current_atl=current_atl,
         recent_weekly_hours=hours_history,
+        recent_tss_per_hour=tss_per_hour,
         events=events,
         today=today,
     )

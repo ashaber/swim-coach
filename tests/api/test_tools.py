@@ -7321,6 +7321,32 @@ def _simple_macro_weeks(start: date, n: int = 3) -> list[dict]:
     ]
 
 
+def test_author_macro_plan_draft_labels_an_hours_only_week_with_an_estimated_load(athletes_dir) -> None:
+    # engine/red-team-taper-gate, real production fix: a week with `hours`
+    # set but no `load_tss` used to be silently projected as ZERO load.
+    # The draft response now fills a `load_tss_estimate` (from the
+    # athlete's own recent logged history) so the athlete sees a real
+    # number -- `load_tss` itself stays exactly what the coach authored
+    # (None here), never silently overwritten.
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    start = date(2026, 7, 6)
+    weeks = _simple_macro_weeks(start)
+    weeks[0]["load_tss"] = None  # hours-only: no load_tss authored for this week
+
+    draft = handlers["author_macro_plan"]({
+        "event_names": [GREECE_EVENT_NAME],
+        "weeks": weeks,
+        "architecture": "Base then build toward Greece.",
+    })
+
+    assert "error" not in draft, draft
+    week0 = next(w for w in draft["weeks"] if w["week_start"] == start.isoformat())
+    assert week0["load_tss"] is None  # unchanged, never silently overwritten
+    assert week0["load_tss_estimate"] is not None
+    assert week0["load_tss_estimate"] > 0
+
+
 def test_author_macro_plan_draft_then_confirm_with_decisions_persists(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
@@ -7337,8 +7363,17 @@ def test_author_macro_plan_draft_then_confirm_with_decisions_persists(athletes_d
     assert draft["draft_id"]
     assert "report" in draft and "verdict" in draft["report"]
     finding_ids = [f["id"] for f in draft["report"]["findings"]]
+    severity_by_id = {f["id"]: f["severity"] for f in draft["report"]["findings"]}
 
-    decisions = [{"id": fid, "decision": "accept", "reason": "known gap, acceptable for now"} for fid in finding_ids]
+    decisions = [
+        {
+            "id": fid,
+            "decision": "keep_as_is",
+            "reason": "known gap, acceptable for now",
+            **({"athlete_words": "I'm fine with this for now"} if severity_by_id[fid] == "high" else {}),
+        }
+        for fid in finding_ids
+    ]
     done = handlers["author_macro_plan"]({
         "confirm": True,
         "draft_id": draft["draft_id"],
@@ -7376,6 +7411,113 @@ def test_author_macro_plan_confirm_without_covering_every_finding_is_refused(ath
     assert done["persisted"] is False
     saved = FileStore(base_dir=athletes_dir).load_macro("renee")
     assert saved.architecture != "Base then build toward Greece."  # unchanged from the fixture
+
+
+# --- fix/keep_as_is vocabulary (engine/red-team-taper-gate) ----------------
+# Real production failure 2026-09-27: `accept`/`decline` caused a real bad
+# outcome -- the athlete said "decline on #1" meaning "reject this taper,
+# fix it," and the coach read "decline" as "decline the finding, keep the
+# plan," persisting the bad taper unchanged. These tests cover the
+# replacement vocabulary's confirm-time gates.
+
+
+def _draft_with_a_high_finding(athletes_dir) -> tuple[dict, str]:
+    """`_simple_macro_weeks`'s own short 3-week plan reliably produces a
+    HIGH `uncovered-race-week-*` finding (the Greece event falls outside
+    its 3-week table) -- reused here rather than inventing a second
+    fixture, since PR 1's own taper-too-long fixtures live in
+    `tests/unit/test_plan_check.py`, not here."""
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    draft = handlers["author_macro_plan"]({
+        "event_names": [GREECE_EVENT_NAME],
+        "weeks": _simple_macro_weeks(date(2026, 7, 6)),
+        "architecture": "Base then build toward Greece.",
+    })
+    high_ids = [f["id"] for f in draft["report"]["findings"] if f["severity"] == "high"]
+    assert high_ids, "expected at least one HIGH finding for this short/incomplete plan"
+    return draft, high_ids[0]
+
+
+def test_author_macro_plan_keep_as_is_on_high_finding_without_athlete_words_is_refused(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    draft, high_id = _draft_with_a_high_finding(athletes_dir)
+
+    decisions = [
+        {"id": fid, "decision": "keep_as_is", "reason": "reviewed"}
+        for fid in (f["id"] for f in draft["report"]["findings"])
+    ]
+    done = handlers["author_macro_plan"]({"confirm": True, "draft_id": draft["draft_id"], "decisions": decisions})
+
+    assert "error" in done
+    assert done["persisted"] is False
+    assert high_id in done["error"]
+    saved = FileStore(base_dir=athletes_dir).load_macro("renee")
+    assert saved.architecture != "Base then build toward Greece."
+
+
+def test_author_macro_plan_keep_as_is_on_high_finding_with_athlete_words_persists(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    draft, high_id = _draft_with_a_high_finding(athletes_dir)
+
+    decisions = [
+        {
+            "id": fid,
+            "decision": "keep_as_is",
+            "reason": "reviewed with the athlete",
+            **({"athlete_words": "yeah let's keep going, I'll add that week myself"} if fid == high_id else {}),
+        }
+        for fid in (f["id"] for f in draft["report"]["findings"])
+    ]
+    done = handlers["author_macro_plan"]({"confirm": True, "draft_id": draft["draft_id"], "decisions": decisions})
+
+    assert "error" not in done, done
+    assert done["persisted"] is True
+    record = next(r for r in done["red_team"] if r["id"] == high_id)
+    assert record["decision"] == "keep_as_is"
+    assert record["athlete_words"] == "yeah let's keep going, I'll add that week myself"
+
+
+def test_author_macro_plan_fix_decision_refuses_confirm(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    draft, high_id = _draft_with_a_high_finding(athletes_dir)
+
+    decisions = [
+        {
+            "id": fid,
+            "decision": "fix" if fid == high_id else "keep_as_is",
+            "reason": "revising the plan for this one" if fid == high_id else "reviewed",
+        }
+        for fid in (f["id"] for f in draft["report"]["findings"])
+    ]
+    done = handlers["author_macro_plan"]({"confirm": True, "draft_id": draft["draft_id"], "decisions": decisions})
+
+    assert "error" in done
+    assert done["persisted"] is False
+    assert high_id in done["error"]
+    saved = FileStore(base_dir=athletes_dir).load_macro("renee")
+    assert saved.architecture != "Base then build toward Greece."
+
+
+def test_author_macro_plan_legacy_accept_decline_values_are_rejected_at_confirm(athletes_dir) -> None:
+    """The ambiguous old vocabulary is refused as INPUT to a new confirm
+    call (only reading previously-persisted records normalizes it --
+    `MacroRedTeamRecord`'s own field validator, see test_models.py)."""
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    draft, _high_id = _draft_with_a_high_finding(athletes_dir)
+
+    decisions = [
+        {"id": fid, "decision": "accept", "reason": "reviewed"}
+        for fid in (f["id"] for f in draft["report"]["findings"])
+    ]
+    done = handlers["author_macro_plan"]({"confirm": True, "draft_id": draft["draft_id"], "decisions": decisions})
+
+    assert "error" in done
+    assert done["persisted"] is False
 
 
 def test_author_macro_plan_unknown_event_name_names_existing_events(athletes_dir) -> None:

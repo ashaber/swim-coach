@@ -289,6 +289,24 @@ def test_route_library_files_unrelated_question_excludes_37() -> None:
     assert "37-plan-authoring-guide.md" not in files
 
 
+def test_route_library_files_macro_season_question_reaches_37_and_36() -> None:
+    # Real production failure (2026-09-27): "Build my macro for the rest of
+    # the CX season" routed 37 alone (keywords "macro"/"season") -- 36, the
+    # evidence dossier behind check_macro's own constants (ramp caps, the
+    # taper cut-fraction band), never routed at all. 36 now always rides
+    # along with 37 (a minimal, dedicated MAX_ROUTED_FILES exception -- see
+    # route_library_files's own docstring/comments), so the coach has the
+    # evidence on hand to defend or challenge a red-team finding honestly.
+    files = route_library_files("Build my macro for the rest of the CX season and write workouts through Oct 18")
+    assert "37-plan-authoring-guide.md" in files
+    assert "36-plan-authoring-limits.md" in files
+
+
+def test_route_library_files_unrelated_question_excludes_36_too() -> None:
+    files = route_library_files("What pace should I swim my Z2 set at?")
+    assert "36-plan-authoring-limits.md" not in files
+
+
 # --- sport-scope filtering (IDEA 008: never surface cycling content to a ---
 # --- swim-only athlete, or vice versa; see context.filter_files_by_sport_
 # --- scope's own docstring) ---------------------------------------------

@@ -951,7 +951,7 @@ class PlanCheckFinding(BaseModel):
 
 class MacroRedTeamRecord(BaseModel):
     """One PERSISTED red-team finding on a `MacroPlan`, plus the coach's
-    own accept/decline decision against it -- `MacroPlan.red_team`'s list
+    own fix/keep_as_is decision against it -- `MacroPlan.red_team`'s list
     item shape (engine/plan-check-red-team PR 1; PR 2's confirm flow is
     what actually populates `decision`/`decision_reason`, requiring one of
     each per finding before a macro plan is confirmed -- see the approved
@@ -963,6 +963,25 @@ class MacroRedTeamRecord(BaseModel):
     docstring). `decision`/`decision_reason` are both `None` until a coach
     has actually reviewed this finding; PR 1 only ever WRITES reports via
     `check_macro`, it never populates these two fields itself.
+
+    **`fix` / `keep_as_is` (engine/red-team-taper-gate, real production
+    failure 2026-09-27):** replaces the earlier `accept`/`decline`
+    vocabulary, which caused a real bad outcome -- the athlete said
+    "decline on #1" meaning "reject this taper, fix it," and the coach read
+    "decline" as "decline the finding, keep the plan," persisting the
+    2-week taper unchanged. `fix` = the finding is valid, the plan gets
+    REVISED to address it (the coach re-authors and re-drafts -- see
+    `tools._confirm_author_macro_plan`, which refuses to confirm a `fix`
+    decision against the plan that drew the finding in the first place: a
+    `fix` decision is a instruction to go redraft, never something to
+    persist as-is). `keep_as_is` = the plan is being persisted exactly as
+    drafted despite the finding -- an explicit override, with a `reason`
+    always required and, for a HIGH-severity finding, `athlete_words`
+    (the athlete's own words, not the coach's paraphrase) required too.
+    `accept`/`decline` are still ACCEPTED on read (old persisted data),
+    normalized to `keep_as_is` -- see `_normalize_red_team_decision` below;
+    neither old value ever actually triggered a plan revision, so
+    `keep_as_is` is the only honest mapping for both.
     """
 
     id: str
@@ -970,8 +989,25 @@ class MacroRedTeamRecord(BaseModel):
     evidence: str
     consequence: str
     fix: str
-    decision: Literal["accept", "decline"] | None = None
+    decision: Literal["fix", "keep_as_is"] | None = None
     decision_reason: str | None = None
+    athlete_words: str | None = None
+    # The athlete's own words confirming a `keep_as_is` override of a
+    # HIGH-severity finding (CLAUDE.md's safety-rail pattern, same as
+    # `WeekPlan`'s `athlete_confirmations`) -- `None` for medium/low
+    # findings, which only require `decision_reason`.
+
+    @field_validator("decision", mode="before")
+    @classmethod
+    def _normalize_legacy_decision(cls, value: object) -> object:
+        """Backward compatibility: pre-`fix`/`keep_as_is` records on disk
+        say `accept` or `decline`. Neither old value ever caused a plan
+        revision (the confirm call always persisted exactly the drafted
+        plan) -- `keep_as_is` is the only honest read of both, so both
+        normalize to it rather than erroring on old athlete data."""
+        if value in ("accept", "decline"):
+            return "keep_as_is"
+        return value
 
 
 def derive_blocks_from_macro_weeks(weeks: list["MacroWeek"]) -> list["MacroBlock"]:

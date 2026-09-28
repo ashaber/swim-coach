@@ -290,17 +290,41 @@ answer must still be a grounded, accurate one.
      short written `architecture` (why this periodization, why this taper
      placement, why these races get dedicated attention) -- this REPLACES
      whatever macro is currently on file, so include every week the plan
-     should cover, not just what changed.
+     should cover, not just what changed. **Author the new table from the
+     athlete's real events and training history -- never by copying the
+     STORED macro's own structure.** The plan on file may be the exact
+     thing this request is asking you to replace (a real production
+     failure: asked to build the rest of a CX season, the coach anchored
+     on the old stored macro's taper placement instead of reasoning fresh
+     from the actual race calendar and recent load, and reproduced its
+     defect). Read the stored plan for continuity/context if useful, but
+     derive the periodization itself -- phase lengths, taper placement and
+     depth, which weeks get dedicated attention -- from the events and the
+     athlete's actual current CTL/hours, every time.
      **Always draft-then-confirm, always show every finding.** Call with
      `confirm` omitted first: this computes the athlete's REAL current
      CTL/ATL from her logged history and runs the engine's red-team check
      (`check_macro`), returning a verdict plus up to six ranked findings
      (severity/evidence/consequence/fix) -- ADVISORY, never a rejection.
-     Show the athlete the plan AND every finding, get an explicit
-     accept-or-decline (with a reason) for EACH ONE -- **say it now, not in
-     week 9** -- then call again with `confirm: true`, the `draft_id`, and
-     `decisions` covering every finding id; a missing decision refuses the
-     confirm and writes nothing.
+     Show the athlete the plan AND every finding, presented neutrally --
+     never argue one away against its own evidence; if you're recommending
+     keeping it as-is, cite the evidence, not intuition. For EACH ONE ask
+     plainly, in those words: **"Fix it, or keep as-is?"** -- never "accept
+     or decline" (a real production failure came directly from that
+     ambiguity: the athlete meant "reject this taper, fix it" by "decline,"
+     the coach read "decline" as "keep the plan," and persisted a bad taper
+     unchanged). If the reply is ambiguous ("accept", "decline", "ok"), ask
+     again rather than guess which they mean -- **say it now, not in week
+     9.** `fix` means the finding is valid: revise the plan yourself and
+     call `author_macro_plan` again WITHOUT `confirm` to draft the
+     revision, then get a fresh decision on the new report -- a `fix`
+     decision is never confirmable against the plan that drew the finding.
+     `keep_as_is` means the plan is written exactly as drafted despite the
+     finding, with a reason -- and for a HIGH-severity finding, the
+     athlete's own words (`athlete_words`), not your paraphrase. Once every
+     finding is `keep_as_is`, call again with `confirm: true`, the
+     `draft_id`, and `decisions` covering every finding id; a missing
+     decision refuses the confirm and writes nothing.
      **STOP after the draft call.** Do not call any other tool in the same
      response -- not `author_week_plan`, not anything else building on top
      of a macro that isn't persisted yet. End your turn on the draft and
@@ -308,6 +332,16 @@ answer must still be a grounded, accurate one.
      more than twice in one request without stopping to show the athlete
      what you have -- a third re-draft is refused with an instruction to
      present what's already there instead of iterating again.
+     **If a week's `load_tss` is `None` but `load_tss_estimate` is set**,
+     that week has no coach-authored TSS number -- the figure is estimated
+     from the athlete's own recent logged training (hours × her real
+     AU/hour rate). Say so plainly when you show that week ("~340 TSS,
+     estimated from your recent training, since this week doesn't have a
+     logged number yet") -- never present it as if the coach set it
+     directly. If the report has a `projection-unavailable` finding, there
+     wasn't even enough logged history to estimate from -- say that plainly
+     too, and treat any race-day-TSB/fatigue read for that stretch as
+     unavailable, not merely uncertain.
    - `author_week_plan` when a specific ISO week's real sessions need
      writing -- a new week, or a week that needs full re-authoring, not
      just a tweak (for changing one or a few already-planned sessions in an
@@ -818,8 +852,23 @@ _LIBRARY_FILES_IN_PRIORITY_ORDER = [
     "13-reds-energy-availability.md",
     "33-daily-nutrition-and-supplements.md",
     "35-return-from-layoff.md",
+    "36-plan-authoring-limits.md",
     "37-plan-authoring-guide.md",
 ]
+
+# 37 always pulls 36 in alongside it (engine/red-team-taper-gate, real
+# production failure 2026-09-27): only 37 was routed on that turn (keywords
+# "macro"/"season") -- 36, the evidence dossier BEHIND `check_macro`'s own
+# constants (ramp caps, the taper cut-fraction band, the goal-reality
+# check), never routed at all, so the coach had no grounding to challenge
+# its own red-team finding honestly instead of arguing it away on
+# intuition. 36 has no keyword bucket of its own (deliberately -- it's a
+# companion to 37, not an independent topic a message would naturally
+# mention by name) -- this is a dedicated, minimal exception to
+# `MAX_ROUTED_FILES`, not a change to the cap itself: 36 rides along ONLY
+# when 37 actually routed, adding at most one extra file.
+_PLANNING_GUIDE_FILE = "37-plan-authoring-guide.md"
+_PLANNING_LIMITS_FILE = "36-plan-authoring-limits.md"
 
 _KEYWORD_ROUTES: dict[str, set[str]] = {
     "volume": {"03-periodization.md", "06-long-swim-progression.md"},
@@ -1146,7 +1195,16 @@ def route_library_files(
         # assuming that forever).
         fallback = [f for f in _LIBRARY_FILES_IN_PRIORITY_ORDER if f in set(DEFAULT_ROUTE_FILES)]
         ordered = filter_files_by_sport_scope(fallback, athlete_sports)
-    return ordered[:max_files]
+    result = ordered[:max_files]
+    if _PLANNING_GUIDE_FILE in result and _PLANNING_LIMITS_FILE not in result:
+        # The minimal MAX_ROUTED_FILES exception described above -- 36
+        # rides along with 37, past the cap, only when 37 itself routed.
+        # Re-sorted back into `_LIBRARY_FILES_IN_PRIORITY_ORDER`'s own
+        # order (36 before 37) rather than just appended, so the routed
+        # block's file order stays canonical/byte-stable regardless of
+        # which path added 36.
+        result = sorted(result + [_PLANNING_LIMITS_FILE], key=_LIBRARY_FILES_IN_PRIORITY_ORDER.index)
+    return result
 
 
 def _routed_topic_files_text(
