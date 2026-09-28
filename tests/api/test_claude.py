@@ -561,13 +561,55 @@ def test_real_system_plus_history_plus_loop_marker_totals_exactly_four(app_env, 
 
     system = build_system(library_dir, "hello")
     messages = build_messages(
-        FileStore(base_dir=app_env),
-        "renee",
         message="q",
         history=[{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}],
-        expert_mode=False,
     )
     assert count_cache_breakpoints(system, with_loop_breakpoint(system, messages, None), None) == 4
+
+
+def test_real_system_with_context_block_plus_history_never_exceeds_four_breakpoints(
+    app_env, library_dir
+) -> None:
+    # Context-trim build, Phase 2: system now carries up to 3 breakpoints of its own (A, C, B),
+    # so a real request with history (a 4th, at the end of history) is already at the cap BEFORE
+    # with_loop_breakpoint ever runs -- it must be a safe no-op here, never a 5th breakpoint the
+    # API would reject.
+    from app.context import build_context_block, build_messages, build_system
+    from swim_coach.store import FileStore
+
+    store = FileStore(base_dir=app_env)
+    context_block = build_context_block(store, "renee", expert_mode=False)
+    system = build_system(library_dir, "hello", context_block=context_block)
+    assert len(system) == 3
+
+    messages = build_messages(
+        message="q",
+        history=[{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}],
+    )
+    assert count_cache_breakpoints(system, messages, None) == 4  # A + C + B + end-of-history
+
+    looped = with_loop_breakpoint(system, messages, None)
+    assert count_cache_breakpoints(system, looped, None) == 4  # unchanged -- already at the cap
+    assert looped == messages  # a true no-op, not a 5th breakpoint squeezed in somewhere
+
+
+def test_real_system_with_context_block_and_no_history_leaves_room_for_the_loop_marker(
+    app_env, library_dir
+) -> None:
+    # The FIRST turn of a conversation (no history yet) only reaches 3 breakpoints from the
+    # system array -- with_loop_breakpoint still gets its usual 4th, on the newest message.
+    from app.context import build_context_block, build_messages, build_system
+    from swim_coach.store import FileStore
+
+    store = FileStore(base_dir=app_env)
+    context_block = build_context_block(store, "renee", expert_mode=False)
+    system = build_system(library_dir, "hello", context_block=context_block)
+
+    messages = build_messages(message="q", history=[])
+    assert count_cache_breakpoints(system, messages, None) == 3
+
+    looped = with_loop_breakpoint(system, messages, None)
+    assert count_cache_breakpoints(system, looped, None) == 4
 
 
 def test_tool_loop_requests_carry_the_marker_on_the_current_last_message_only() -> None:

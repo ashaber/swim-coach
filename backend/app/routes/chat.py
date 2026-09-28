@@ -30,6 +30,7 @@ from app.auth import (
 )
 from app.claude import ClaudeChat, _sse
 from app.context import (
+    build_context_block,
     build_messages,
     build_routed_library_text,
     build_system,
@@ -278,12 +279,23 @@ async def chat(
         """The full-mode (system, messages, tools, handlers). A function so a
         light turn only pays for it (DB reads, engine math) if it escalates."""
         in_message = settings.routed_library_in_message
+        # System block C (context-trim build, Phase 2): the athlete's own per-request context,
+        # cached separately from block B (the routed topic files) so a topic/routing change on
+        # this turn never evicts it -- see app.context.build_context_block's own docstring.
+        context_block = build_context_block(
+            store,
+            athlete,
+            expert_mode=payload.expert_mode,
+            focused_workout=focused_workout,
+            cache_ttl=settings.prompt_cache_ttl_context,
+        )
         system = build_system(
             settings.library_dir,
             effective_message,
             athlete_sports=athlete_profile.effective_sports,
             include_routed=not in_message,
             cache_ttl=settings.prompt_cache_ttl,
+            context_block=context_block,
         )
         library_text = (
             build_routed_library_text(
@@ -301,12 +313,8 @@ async def chat(
         )
         log.info("library route", request_id=request_id, **routing_info)
         messages = build_messages(
-            store,
-            athlete,
             message=effective_message,
             history=history,
-            expert_mode=payload.expert_mode,
-            focused_workout=focused_workout,
             library_text=library_text,
         )
         tool_handlers = build_tool_handlers(

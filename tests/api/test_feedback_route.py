@@ -485,12 +485,13 @@ def test_ask_question_session_date_without_session_sport_is_422(
 def test_ask_question_resolvable_session_reaches_ai_context(
     client, fake_claude_chat_factory, athletes_dir
 ) -> None:
-    # A resolvable (date, sport) match against the athlete's current-week
-    # plan surfaces render_focused_session's block in the exact messages
-    # sent to the model -- same "check the request-shape assertion the
-    # workout test uses" convention (FakeMessagesAPI.calls). Builds its own
-    # current-ISO-week WeekPlan rather than relying on the fixture's fixed
-    # 2026-W28/W29 weeks, which fall outside `date.today()`'s real window.
+    # A resolvable (date, sport) match against the athlete's current-week plan surfaces
+    # render_focused_session's block in the exact request sent to the model -- same "check the
+    # request-shape assertion the workout test uses" convention (FakeMessagesAPI.calls).
+    # Context-trim build, Phase 2: this now rides system block C (build_context_block), not the
+    # messages array -- see that function's own docstring. Builds its own current-ISO-week
+    # WeekPlan rather than relying on the fixture's fixed 2026-W28/W29 weeks, which fall outside
+    # `date.today()`'s real window.
     import uuid
     from datetime import date
 
@@ -533,10 +534,13 @@ def test_ask_question_resolvable_session_reaches_ai_context(
     assert response.status_code == 200
 
     assert len(chat.client.messages.calls) == 1
-    sent_messages = chat.client.messages.calls[0]["messages"]
-    sent_text = "\n".join(message_text(m["content"]) for m in sent_messages)
-    assert "specific planned session the athlete is asking about" in sent_text
-    assert "a very specific test-only session purpose" in sent_text
+    call = chat.client.messages.calls[0]
+    system_text = "\n".join(block["text"] for block in call["system"])
+    assert "specific planned session the athlete is asking about" in system_text
+    assert "a very specific test-only session purpose" in system_text
+    # The message itself carries only the athlete's own question, never the session detail.
+    sent_text = "\n".join(message_text(m["content"]) for m in call["messages"])
+    assert "specific planned session the athlete is asking about" not in sent_text
 
 
 def test_ask_question_unresolvable_session_still_answers(
@@ -555,9 +559,9 @@ def test_ask_question_unresolvable_session_still_answers(
     )
     assert response.status_code == 200
     assert response.json()["ai_provisional_answer"] == "General fueling advice."
-    sent_messages = chat.client.messages.calls[0]["messages"]
-    sent_text = "\n".join(message_text(m["content"]) for m in sent_messages)
-    assert "specific planned session the athlete is asking about" not in sent_text
+    call = chat.client.messages.calls[0]
+    system_text = "\n".join(block["text"] for block in call["system"])
+    assert "specific planned session the athlete is asking about" not in system_text
 
 
 def test_ask_question_missing_body_is_422(client, fake_claude_chat_factory) -> None:

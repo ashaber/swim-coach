@@ -181,12 +181,23 @@ def with_loop_breakpoint(
 ) -> list[dict[str, Any]]:
     """`messages` with a cache breakpoint on the LAST block of the LAST message
     (IDEA 022 step 2). Each tool-loop iteration re-sends the newest user message
-    (the per-request context) plus every tool result so far; a breakpoint after
-    them lets the next iteration read all of it from cache instead of re-billing
-    it at full price. Returns copies -- the stored `messages` stay unmarked, so
-    the marker always sits on the CURRENT last message and never accumulates
-    (the API allows 4 breakpoints: 2 system + 1 end-of-history + this one).
-    Adds nothing when the request is already at the cap."""
+    plus every tool result so far; a breakpoint after them lets the next
+    iteration read all of it from cache instead of re-billing it at full price.
+    Returns copies -- the stored `messages` stay unmarked, so the marker always
+    sits on the CURRENT last message and never accumulates.
+
+    The API allows 4 breakpoints total. Before the context-trim build's Phase 2
+    (block C), that was 2 system (A + B) + 1 end-of-history + this one. With
+    block C (`app.context.build_context_block`) now also carrying its own
+    breakpoint, an ordinary request with history already reaches the cap
+    BEFORE this function ever runs (A + C + B + end-of-history = 4) -- this
+    function's own cap check (`>= MAX_CACHE_BREAKPOINTS`) then makes it a
+    correct no-op rather than a 5th breakpoint the API would reject. The
+    tradeoff is deliberate: cross-turn reuse of block C (every follow-up
+    message in a conversation) matters far more than this function's own
+    within-a-single-turn, multi-tool-call reuse (only relevant when one turn
+    loops more than once) -- see `count_cache_breakpoints`'s tests for the
+    exact accounting. Adds nothing when the request is already at the cap."""
     if not messages or count_cache_breakpoints(system, messages, tools) >= MAX_CACHE_BREAKPOINTS:
         return messages
     last = messages[-1]

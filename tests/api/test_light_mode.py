@@ -249,7 +249,8 @@ def test_light_escalation_builds_the_full_request_with_the_routed_library_layout
     app, client, fake_claude_chat_factory
 ) -> None:
     # light_mode + routed_library_in_message together: the escalated full request
-    # must honour the cache layout (block A only in system, library on the message).
+    # must honour the cache layout (block A + block C in system, no block B,
+    # library on the message -- context-trim build Phase 2 added block C).
     app.state.settings = dataclasses.replace(
         app.state.settings, light_mode=True, routed_library_in_message=True
     )
@@ -267,5 +268,5 @@ def test_light_escalation_builds_the_full_request_with_the_routed_library_layout
     )
     assert r.status_code == 200
     _, full_call = chat.client.messages.calls
-    assert len(full_call["system"]) == 1
+    assert len(full_call["system"]) == 2  # block A + block C -- no block B
     assert "## Library topic files for this question" in json.dumps(full_call["messages"])
