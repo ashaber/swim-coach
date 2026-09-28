@@ -125,15 +125,18 @@ def test_request_shape_includes_tools(client, fake_claude_chat_factory) -> None:
     }
 
 
-def test_request_shape_system_is_two_cacheable_blocks(client, fake_claude_chat_factory) -> None:
+def test_request_shape_system_is_three_cacheable_blocks(client, fake_claude_chat_factory) -> None:
+    # context-trim build, Phase 2: block C (the athlete's own per-request context) now rides
+    # here too, between block A and block B -- see app.context.build_system's docstring.
     final = make_final_message([make_text_block("ok")], "end_turn")
     chat = fake_claude_chat_factory([(["ok"], final)])
 
     client.post("/api/chat", json=_chat_payload(), headers=auth_headers())
 
     system = chat.client.messages.calls[0]["system"]
-    assert len(system) == 2
+    assert len(system) == 3
     assert all(block["cache_control"] == {"type": "ephemeral"} for block in system)
+    assert "## Athlete context" in system[1]["text"]
 
 
 def test_system_prefix_is_byte_stable_across_two_different_messages(
@@ -354,9 +357,12 @@ def _save_rich_workout(athletes_dir):
     return workout
 
 
-def test_workout_id_injects_focused_block_into_messages(
+def test_workout_id_injects_focused_block_into_system(
     client, fake_claude_chat_factory, athletes_dir
 ) -> None:
+    # context-trim build, Phase 2: the focused workout is stable for the whole scoped
+    # conversation, so it renders into system block C now, not the newest message -- see
+    # app.context.build_context_block's docstring.
     workout = _save_rich_workout(athletes_dir)
     final = make_final_message([make_text_block("Nice negative effort out there.")], "end_turn")
     chat = fake_claude_chat_factory([(["Nice negative effort out there."], final)])
@@ -368,18 +374,22 @@ def test_workout_id_injects_focused_block_into_messages(
     )
     assert response.status_code == 200
 
-    first_message = message_text(chat.client.messages.calls[0]["messages"][0]["content"])
-    assert "specific workout the athlete is asking about" in first_message
-    assert str(workout.id) in first_message
-    assert '"cardiac_drift_pct": 6.4' in first_message
-    assert '"source": "gap"' in first_message
+    call = chat.client.messages.calls[0]
+    system_text = "".join(block["text"] for block in call["system"])
+    assert "specific workout the athlete is asking about" in system_text
+    assert str(workout.id) in system_text
+    assert '"cardiac_drift_pct": 6.4' in system_text
+    assert '"source": "gap"' in system_text
+    # The newest message carries only the athlete's own question.
+    assert message_text(call["messages"][0]["content"]) == "how did this swim go?"
 
 
-def test_multi_turn_request_keeps_history_bare_and_context_on_newest_message(
+def test_multi_turn_request_keeps_history_and_newest_message_bare_context_in_block_c(
     client, fake_claude_chat_factory
 ) -> None:
-    # What reaches the Anthropic client: prior turns carry no per-request
-    # context (so the prefix is cacheable) and the newest message does.
+    # What reaches the Anthropic client: prior turns carry no per-request context (so the
+    # prefix is cacheable), the newest message carries only the athlete's own text, and the
+    # athlete context lives once, in system block C.
     final = make_final_message([make_text_block("ok")], "end_turn")
     chat = fake_claude_chat_factory([(["ok"], final)])
 
@@ -396,12 +406,14 @@ def test_multi_turn_request_keeps_history_bare_and_context_on_newest_message(
     )
     assert response.status_code == 200
 
-    sent = chat.client.messages.calls[0]["messages"]
+    call = chat.client.messages.calls[0]
+    sent = call["messages"]
     assert sent[0] == {"role": "user", "content": "hi"}
     assert sent[1]["content"][0]["cache_control"] == {"type": "ephemeral"}
-    assert "## Athlete context" not in str(sent[:2])
-    assert "## Athlete context" in message_text(sent[2]["content"])
-    assert message_text(sent[2]["content"]).endswith("and now?")
+    assert "## Athlete context" not in str(sent)
+    assert sent[2] == {"role": "user", "content": "and now?"}
+    system_text = "".join(block["text"] for block in call["system"])
+    assert "## Athlete context" in system_text
 
 
 def test_workout_id_prefix_also_resolves(client, fake_claude_chat_factory, athletes_dir) -> None:
@@ -415,8 +427,8 @@ def test_workout_id_prefix_also_resolves(client, fake_claude_chat_factory, athle
         headers=auth_headers(),
     )
     assert response.status_code == 200
-    first_message = message_text(chat.client.messages.calls[0]["messages"][0]["content"])
-    assert str(workout.id) in first_message
+    system_text = "".join(block["text"] for block in chat.client.messages.calls[0]["system"])
+    assert str(workout.id) in system_text
 
 
 def test_no_workout_id_means_no_focused_block(client, fake_claude_chat_factory) -> None:
@@ -426,8 +438,8 @@ def test_no_workout_id_means_no_focused_block(client, fake_claude_chat_factory) 
     response = client.post("/api/chat", json=_chat_payload(), headers=auth_headers())
     assert response.status_code == 200
 
-    first_message = message_text(chat.client.messages.calls[0]["messages"][0]["content"])
-    assert "specific workout the athlete is asking about" not in first_message
+    system_text = "".join(block["text"] for block in chat.client.messages.calls[0]["system"])
+    assert "specific workout the athlete is asking about" not in system_text
 
 
 def test_workout_chat_persists_both_the_athlete_message_and_the_ai_reply(
@@ -565,8 +577,9 @@ def test_flag_on_moves_routed_library_from_system_to_the_newest_message(
     assert response.status_code == 200
 
     call = chat.client.messages.calls[0]
-    assert len(call["system"]) == 1  # stable block A only
+    assert len(call["system"]) == 2  # block A + block C -- no block B
     assert "library/08-ultra-feeding.md" not in call["system"][0]["text"]
+    assert "library/08-ultra-feeding.md" not in call["system"][1]["text"]
     assert "library/08-ultra-feeding.md" in str(call["messages"][-1]["content"])
 
 
@@ -578,5 +591,5 @@ def test_flag_off_keeps_routed_library_in_the_system_prompt(client, fake_claude_
     )
     assert response.status_code == 200
     call = chat.client.messages.calls[0]
-    assert len(call["system"]) == 2
-    assert "library/08-ultra-feeding.md" in call["system"][1]["text"]
+    assert len(call["system"]) == 3  # block A + block C + block B
+    assert "library/08-ultra-feeding.md" in call["system"][2]["text"]

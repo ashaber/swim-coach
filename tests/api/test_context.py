@@ -16,6 +16,7 @@ from swim_coach.models import HealthStatus, ThresholdRecord, WorkoutAnalytics, W
 
 from app.context import (
     FOCUSED_WORKOUT_LAPS_CAP,
+    build_context_block,
     build_messages,
     build_routed_library_text,
     build_per_request_context,
@@ -516,24 +517,21 @@ def test_reference_list_whole_bibliography_never_rides_build_system(library_dir)
     assert "## library/reference_list.md entries cited by the files above" in library_text
 
 
-def test_build_messages_shape_with_history(app_env) -> None:
-    store = FileStore(base_dir=app_env)
+def test_build_messages_shape_with_history() -> None:
     history = [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "hello!"},
     ]
-    messages = build_messages(
-        store, "renee", message="what's next?", history=history, expert_mode=False
-    )
+    messages = build_messages(message="what's next?", history=history)
     assert len(messages) == 3
-    # History is replayed verbatim (byte-stable, cacheable); the per-request
-    # context rides on the NEW message at the end.
+    # History is replayed verbatim (byte-stable, cacheable); the newest
+    # message carries only the athlete's own text -- context-trim build,
+    # Phase 2 moved the athlete's per-request context into system block C
+    # (build_context_block), so it never touches `messages` at all any more.
     assert messages[0] == {"role": "user", "content": "hi"}
     assert messages[1]["role"] == "assistant"
     assert messages[1]["content"][0]["text"] == "hello!"
-    assert messages[2]["role"] == "user"
-    assert "## Athlete context" in messages[2]["content"]
-    assert messages[2]["content"].endswith("what's next?")
+    assert messages[2] == {"role": "user", "content": "what's next?"}
 
 
 def _history_of(n_turns: int) -> list[dict[str, str]]:
@@ -544,47 +542,43 @@ def _history_of(n_turns: int) -> list[dict[str, str]]:
     return history
 
 
-def test_build_messages_history_prefix_is_byte_stable_across_turns(app_env) -> None:
-    # Prompt caching needs an exact prefix match. Two requests in the same
-    # conversation must produce identical bytes for every message that isn't
-    # the new one, even though the per-request context differs between them.
+def test_build_messages_is_fully_determined_by_message_and_history(app_env) -> None:
+    # Nothing athlete-data-shaped rides `messages` any more -- build_messages doesn't even take
+    # a store/slug, so the SAME (message, history, library_text) always produces byte-identical
+    # output regardless of what the athlete's own data does between calls. (The athlete-data-
+    # sensitive half now lives in build_context_block -- see the tests below.)
     store = FileStore(base_dir=app_env)
     history = _history_of(3)
-    first = build_messages(store, "renee", message="q3", history=history, expert_mode=False)
+    first = build_messages(message="q3", history=history)
     store.save_workout("renee", make_workout(date=date.today(), sport="bike"))
-    second = build_messages(store, "renee", message="q3", history=history, expert_mode=False)
+    second = build_messages(message="q3", history=history)
 
-    assert first[:-1] == second[:-1]
-    assert first[-1] != second[-1]  # context moved with the data
+    assert first == second
 
 
-def test_build_messages_context_reflects_current_data_on_the_latest_turn(app_env) -> None:
-    # Freshness must survive the move: a workout logged between turns shows up
-    # in the very next request's context.
+def test_context_block_reflects_current_data_on_the_latest_call(app_env) -> None:
+    # Freshness must survive the move to a cached block: a workout logged between calls shows up
+    # in the very next request's block C.
     store = FileStore(base_dir=app_env)
     workout = make_workout(date=date.today(), sport="bike")
     store.save_workout("renee", workout)
 
-    messages = build_messages(
-        store, "renee", message="how was it?", history=_history_of(2), expert_mode=False
-    )
+    block = build_context_block(store, "renee", expert_mode=False)
 
-    assert f'"id": "{workout.id}"' in messages[-1]["content"]
-    assert not any(f'"id": "{workout.id}"' in str(m["content"]) for m in messages[:-1])
+    assert f'"id": "{workout.id}"' in block[0]["text"]
 
 
-def test_build_messages_marks_end_of_history_as_cache_breakpoint(app_env) -> None:
-    store = FileStore(base_dir=app_env)
+def test_build_messages_marks_end_of_history_as_cache_breakpoint() -> None:
     history = _history_of(2)
-    messages = build_messages(store, "renee", message="q2", history=history, expert_mode=False)
+    messages = build_messages(message="q2", history=history)
 
     breakpoint_msg = messages[-2]
     assert breakpoint_msg["role"] == "assistant"
     assert breakpoint_msg["content"] == [
         {"type": "text", "text": "answer 1", "cache_control": {"type": "ephemeral"}}
     ]
-    # exactly one breakpoint in messages -- the API allows 4 total and the two
-    # system blocks already use 2
+    # exactly one breakpoint in messages -- the API allows 4 total; system
+    # blocks A/C/B can use up to 3 of them (see build_system's docstring)
     marked = [
         m for m in messages if isinstance(m["content"], list)
         and any("cache_control" in b for b in m["content"])
@@ -592,13 +586,9 @@ def test_build_messages_marks_end_of_history_as_cache_breakpoint(app_env) -> Non
     assert len(marked) == 1
 
 
-def test_build_messages_shape_without_history(app_env) -> None:
-    store = FileStore(base_dir=app_env)
-    messages = build_messages(store, "renee", message="hello coach", history=[], expert_mode=False)
-    assert len(messages) == 1
-    assert messages[0]["role"] == "user"
-    assert "## Athlete context" in messages[0]["content"]
-    assert messages[0]["content"].endswith("hello coach")
+def test_build_messages_shape_without_history() -> None:
+    messages = build_messages(message="hello coach", history=[])
+    assert messages == [{"role": "user", "content": "hello coach"}]
 
 
 def test_per_request_context_computes_age_and_shows_sex_when_dob_set(app_env) -> None:
@@ -1196,28 +1186,22 @@ def test_per_request_context_pinned_events_exclude_past_and_archived(app_env) ->
     assert "Old Race" in text
 
 
-def test_build_messages_long_history_keeps_pinned_events_near_top_of_context(app_env) -> None:
+def test_context_block_keeps_pinned_events_near_top_of_context(app_env) -> None:
     store = FileStore(base_dir=app_env)
     today = date.today()
     store.save_events(
         "renee",
         [make_event(name="Pinned Race", event_date=today + timedelta(days=12), distance_m=10000)],
     )
-    long_history = []
-    for i in range(40):
-        long_history.append({"role": "user", "content": f"question {i} about pacing and fueling"})
-        long_history.append({"role": "assistant", "content": f"answer {i}"})
 
-    messages = build_messages(
-        store, "renee", message="is 9/19 a race or a training day?", history=long_history,
-        expert_mode=False,
-    )
-    first = messages[-1]["content"]
-    assert "Pinned Race" in first
+    block = build_context_block(store, "renee", expert_mode=False)
+    text = block[0]["text"]
+    assert "Pinned Race" in text
     # The pinned block is near the very top of the assembled context, not
-    # buried under the week JSON / session dump.
-    assert first.index("Upcoming events") < first.index("### Profile")
-    assert first.index("Pinned Race") < first.index("### Exact logged sessions")
+    # buried under the week JSON / session dump -- still true now that this
+    # text lives in system block C rather than the newest message.
+    assert text.index("Upcoming events") < text.index("### Profile")
+    assert text.index("Pinned Race") < text.index("### Exact logged sessions")
 
 
 # --- non-swim weekly volume target (defect 3: swim meters on a bike week) ----
@@ -1427,22 +1411,20 @@ def test_per_request_context_appends_focused_workout_only_when_given(app_env) ->
     assert with_focus.index("AGGREGATE") < with_focus.index("specific workout")
 
 
-def test_build_messages_threads_focused_workout_into_first_message(app_env) -> None:
+def test_context_block_carries_the_focused_workout_not_the_message(app_env) -> None:
+    # Context-trim build, Phase 2: focused_workout/focused_session are per-CONVERSATION, not
+    # per-message -- every turn of one scoped Log-tab chat is about the same workout -- so they
+    # render into system block C (cacheable across that conversation's own follow-ups), not the
+    # newest message (build_messages doesn't even accept a focused_workout argument any more).
     store = FileStore(base_dir=app_env)
     workout = _rich_workout()
 
-    messages = build_messages(
-        store,
-        "renee",
-        message="how did this one go?",
-        history=[],
-        expert_mode=False,
-        focused_workout=workout,
-    )
+    block = build_context_block(store, "renee", expert_mode=False, focused_workout=workout)
+    messages = build_messages(message="how did this one go?", history=[])
 
-    assert len(messages) == 1
-    assert "specific workout the athlete is asking about" in messages[0]["content"]
-    assert messages[0]["content"].endswith("how did this one go?")
+    assert "specific workout the athlete is asking about" in block[0]["text"]
+    assert str(workout.id) in block[0]["text"]
+    assert messages == [{"role": "user", "content": "how did this one go?"}]
 
 
 def test_system_prefix_untouched_by_focused_workout(library_dir) -> None:
@@ -1503,23 +1485,16 @@ def test_per_request_context_appends_focused_session_only_when_given(app_env) ->
     assert with_focus.index("AGGREGATE") < with_focus.index("specific planned session")
 
 
-def test_build_messages_threads_focused_session_into_first_message(app_env) -> None:
+def test_context_block_carries_the_focused_session_not_the_message(app_env) -> None:
     store = FileStore(base_dir=app_env)
     session = make_session(purpose="taper-week technique focus")
 
-    messages = build_messages(
-        store,
-        "renee",
-        message="what's today's session about?",
-        history=[],
-        expert_mode=False,
-        focused_session=session,
-    )
+    block = build_context_block(store, "renee", expert_mode=False, focused_session=session)
+    messages = build_messages(message="what's today's session about?", history=[])
 
-    assert len(messages) == 1
-    assert "specific planned session the athlete is asking about" in messages[0]["content"]
-    assert "taper-week technique focus" in messages[0]["content"]
-    assert messages[0]["content"].endswith("what's today's session about?")
+    assert "specific planned session the athlete is asking about" in block[0]["text"]
+    assert "taper-week technique focus" in block[0]["text"]
+    assert messages == [{"role": "user", "content": "what's today's session about?"}]
 
 
 # ===========================================================================
@@ -1571,6 +1546,96 @@ def test_build_system_can_omit_the_routed_block(library_dir) -> None:
     assert stable_only == full[:1]
 
 
+# --- system block C (context-trim build, Phase 2) --------------------------
+
+
+def test_build_system_places_context_block_between_a_and_b(app_env, library_dir) -> None:
+    store = FileStore(base_dir=app_env)
+    context_block = build_context_block(store, "renee", expert_mode=False)
+
+    system = build_system(library_dir, "how should I fuel a 4 hour ride?", context_block=context_block)
+
+    assert len(system) == 3
+    assert "swim-coach AI coaching agent" in system[0]["text"]  # sanity: block A is persona/rules/INDEX text
+    assert system[1] == context_block[0]
+    assert "## Athlete context" in system[1]["text"]
+    assert "library/08-ultra-feeding.md" in system[2]["text"]  # block B, still last
+
+
+def test_build_system_without_context_block_is_unchanged(library_dir) -> None:
+    # Every existing call site that doesn't pass context_block keeps producing exactly the old
+    # two-block shape -- no silent behavior change for a caller that hasn't adopted block C.
+    with_none = build_system(library_dir, "hi", context_block=None)
+    omitted = build_system(library_dir, "hi")
+    assert with_none == omitted
+    assert len(with_none) == 2
+
+
+def test_context_block_has_its_own_cache_control(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    block = build_context_block(store, "renee", expert_mode=False)
+    assert block[0]["cache_control"] == {"type": "ephemeral"}
+
+    block_1h = build_context_block(store, "renee", expert_mode=False, cache_ttl="1h")
+    assert block_1h[0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    # The TTL is a billing hint only -- text is unaffected.
+    assert block_1h[0]["text"] == block[0]["text"]
+
+
+def test_context_block_cache_key_is_unaffected_by_which_topic_file_follows_it(app_env, library_dir) -> None:
+    # The whole point of C sitting BEFORE B (build_system's own docstring): a request whose
+    # topic (and therefore block B) differs must still produce the IDENTICAL block A + block C
+    # prefix, so that cache read survives a routing change even when block B's own read doesn't.
+    store = FileStore(base_dir=app_env)
+    context_block = build_context_block(store, "renee", expert_mode=False)
+
+    fuel_system = build_system(library_dir, "how should I fuel a 4 hour ride?", context_block=context_block)
+    pace_system = build_system(library_dir, "what pace should I swim at?", context_block=context_block)
+
+    assert fuel_system[:2] == pace_system[:2]  # A + C identical regardless of B
+    assert fuel_system[2] != pace_system[2]  # B itself legitimately differs
+
+
+def test_context_block_is_byte_identical_across_calls_with_unchanged_data(app_env) -> None:
+    # Task acceptance test: two renders with nothing about the athlete's data changed must be
+    # byte-identical -- the premise this whole phase is built on (IDEA 022's original "context
+    # differs almost every turn" claim, re-measured false on 2026-09-23).
+    store = FileStore(base_dir=app_env)
+    first = build_context_block(store, "renee", expert_mode=False)
+    second = build_context_block(store, "renee", expert_mode=False)
+    assert first == second
+
+
+def test_context_block_logs_context_sizes_with_a_stable_hash(app_env, capsys) -> None:
+    store = FileStore(base_dir=app_env)
+    athlete = store.load_athlete("renee")
+
+    build_context_block(store, "renee", expert_mode=False)
+    build_context_block(store, "renee", expert_mode=False)
+
+    logged = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("{") and json.loads(line).get("msg") == "context sizes"
+    ]
+    assert len(logged) == 2
+    assert logged[0]["athlete_id"] == str(athlete.id)
+    assert "block_c_hash" in logged[0]
+    assert isinstance(logged[0]["block_c_hash"], str) and logged[0]["block_c_hash"]
+    # Same hash both times -- unchanged data, unchanged block C bytes.
+    assert logged[0]["block_c_hash"] == logged[1]["block_c_hash"]
+
+
+def test_context_block_hash_changes_when_data_changes(app_env) -> None:
+    from app.context import _stable_hash
+
+    store = FileStore(base_dir=app_env)
+    before = _stable_hash(build_context_block(store, "renee", expert_mode=False)[0]["text"])
+    store.save_workout("renee", make_workout(date=date.today(), sport="bike"))
+    after = _stable_hash(build_context_block(store, "renee", expert_mode=False)[0]["text"])
+    assert before != after
+
+
 def test_routed_library_text_is_the_routed_files_labelled_as_reference(library_dir) -> None:
     text = build_routed_library_text(library_dir, "how should I fuel a 4 hour ride?")
     assert "library/08-ultra-feeding.md" in text
@@ -1611,27 +1676,25 @@ def test_route_info_for_logging_matches_creatine_routing_and_citation_count(libr
     assert info["ref_chars"] > 0
 
 
-def test_build_messages_puts_library_then_context_then_question_in_the_newest_message(app_env, library_dir) -> None:
-    store = FileStore(base_dir=app_env)
+def test_build_messages_puts_library_then_question_in_the_newest_message(library_dir) -> None:
     library_text = build_routed_library_text(library_dir, "how should I fuel a 4 hour ride?")
-    messages = build_messages(
-        store, "renee", message="how should I fuel?", history=[], expert_mode=False,
-        library_text=library_text,
-    )
+    messages = build_messages(message="how should I fuel?", history=[], library_text=library_text)
     body = messages[-1]["content"]
-    assert body.index("library/08-ultra-feeding.md") < body.index("## Athlete context")
+    assert body.index("library/08-ultra-feeding.md") >= 0
     assert body.endswith("how should I fuel?")
+    # Context-trim build, Phase 2: the athlete context no longer rides this message at all --
+    # it moved to system block C (build_context_block).
+    assert "## Athlete context" not in body
 
 
-def test_history_prefix_stays_byte_stable_when_the_topic_changes(app_env, library_dir) -> None:
-    store = FileStore(base_dir=app_env)
+def test_history_prefix_stays_byte_stable_when_the_topic_changes(library_dir) -> None:
     history = _history_of(3)
     a = build_messages(
-        store, "renee", message="fuel?", history=history, expert_mode=False,
+        message="fuel?", history=history,
         library_text=build_routed_library_text(library_dir, "how should I fuel a 4 hour ride?"),
     )
     b = build_messages(
-        store, "renee", message="pace?", history=history, expert_mode=False,
+        message="pace?", history=history,
         library_text=build_routed_library_text(library_dir, "what pace should I swim at?"),
     )
     assert a[:-1] == b[:-1]
@@ -1824,11 +1887,11 @@ def test_build_per_request_context_and_sizes_returns_athlete_id_not_slug(app_env
         assert isinstance(sizes[key], int)
 
 
-def test_build_messages_logs_context_sizes_with_athlete_id_never_slug(app_env, capsys) -> None:
+def test_context_block_logs_context_sizes_with_athlete_id_never_slug(app_env, capsys) -> None:
     store = FileStore(base_dir=app_env)
     athlete = store.load_athlete("renee")
 
-    build_messages(store, "renee", message="hi", history=[], expert_mode=False)
+    build_context_block(store, "renee", expert_mode=False)
 
     logged = [
         json.loads(line)
@@ -1843,28 +1906,25 @@ def test_build_messages_logs_context_sizes_with_athlete_id_never_slug(app_env, c
     for key in (
         "profile_chars", "current_week_chars", "next_week_chars", "recent_sessions_chars",
         "rollup_chars", "health_chars", "thresholds_chars", "events_chars",
-        "notes_debriefs_chars", "total_context_chars", "routed_library_chars",
-        "history_chars", "history_turns",
+        "notes_debriefs_chars", "total_context_chars", "block_c_hash", "cache_ttl",
     ):
         assert key in entry
 
 
-def test_build_messages_context_sizes_reflects_routed_library_and_history(app_env, capsys) -> None:
-    store = FileStore(base_dir=app_env)
+def test_build_messages_logs_message_sizes_reflecting_routed_library_and_history(capsys) -> None:
     history = _history_of(2)
     expected_history_chars = sum(len(turn["content"]) for turn in history)
 
-    build_messages(
-        store, "renee", message="hi", history=history, expert_mode=False, library_text="x" * 500,
-    )
+    build_messages(message="hi", history=history, library_text="x" * 500)
 
     logged = [
         json.loads(line)
         for line in capsys.readouterr().out.splitlines()
-        if line.startswith("{") and json.loads(line).get("msg") == "context sizes"
+        if line.startswith("{") and json.loads(line).get("msg") == "message sizes"
     ]
     assert len(logged) == 1
     entry = logged[0]
     assert entry["routed_library_chars"] == 500
     assert entry["history_chars"] == expected_history_chars
     assert entry["history_turns"] == len(history)
+    assert entry["question_chars"] == len("hi")

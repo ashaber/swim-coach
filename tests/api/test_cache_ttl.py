@@ -60,3 +60,39 @@ def test_the_chat_route_sends_the_configured_ttl(app, client, fake_claude_chat_f
                                        "athlete": "renee", "expert_mode": False}, headers=auth_headers())
     assert r.status_code == 200
     assert chat.client.messages.calls[0]["system"][0]["cache_control"] == ONE_HOUR
+
+
+# --- PROMPT_CACHE_TTL_CONTEXT (context-trim build, Phase 2) -----------------
+# Block C (the athlete's own per-request context) gets its OWN TTL, independent of block A's
+# PROMPT_CACHE_TTL -- athlete data changes far more often than the persona/library.
+
+
+def test_context_block_ttl_setting_defaults_to_5m_and_reads_the_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("API_TOKEN", "t")
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "id.apps.googleusercontent.com")
+    monkeypatch.delenv("PROMPT_CACHE_TTL_CONTEXT", raising=False)
+    assert Settings.from_env().prompt_cache_ttl_context == "5m"
+    monkeypatch.setenv("PROMPT_CACHE_TTL_CONTEXT", "1h")
+    assert Settings.from_env().prompt_cache_ttl_context == "1h"
+
+
+def test_an_invalid_context_ttl_fails_fast(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("API_TOKEN", "t")
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "id.apps.googleusercontent.com")
+    monkeypatch.setenv("PROMPT_CACHE_TTL_CONTEXT", "2h")
+    with pytest.raises(ConfigError, match="PROMPT_CACHE_TTL_CONTEXT"):
+        Settings.from_env()
+
+
+def test_the_chat_route_sends_the_configured_context_ttl(app, client, fake_claude_chat_factory) -> None:
+    app.state.settings = dataclasses.replace(app.state.settings, prompt_cache_ttl_context="1h")
+    chat = fake_claude_chat_factory([(["ok"], make_final_message([make_text_block("ok")], "end_turn"))])
+    r = client.post("/api/chat", json={"message": "how should I fuel a 4 hour ride?", "history": [],
+                                       "athlete": "renee", "expert_mode": False}, headers=auth_headers())
+    assert r.status_code == 200
+    system = chat.client.messages.calls[0]["system"]
+    assert system[0]["cache_control"] == FIVE  # block A stays on the default here
+    assert system[1]["cache_control"] == ONE_HOUR  # block C picks up its own configured TTL
+    assert "## Athlete context" in system[1]["text"]

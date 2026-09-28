@@ -1145,6 +1145,24 @@ response and have the client echo it); log mode + reason per request; run the
 small live eval (incl. confirmation, illness, acute cases). Do NOT enable the
 flag until then.
 
+### IDEA 022 -- context-trim build, Phase 2 shipped (2026-09-28)
+
+Phase 2 (`.claude/plans/context-trim-build.md`, follow-up to Phase 1/PR #235): the per-request
+athlete context (profile, current/next week, recent sessions, rollup, drafts/notes/debriefs,
+focused workout/session) moved off the newest user message and into its own cached system
+block C, positioned `A -> C -> B` so a routed-topic change (block B) never evicts C's own cache
+read. Root cause #1's original premise above -- "the context differs almost every turn" -- was
+re-measured **FALSE** on 2026-09-23 (two renders of the same athlete's context a minute apart,
+no data changed, came back byte-identical) once a real instability was fixed: `app.drafts`'
+held-draft rendering used to show a `datetime.now()`-relative "%d min ago" figure that drifted
+every 60 seconds regardless of data changes -- it now renders `drafted_at`'s own absolute
+timestamp instead. Block C now changes only when the athlete's own data changes, so follow-up
+turns in a conversation read it from cache instead of re-paying its full write cost every
+message. New `PROMPT_CACHE_TTL_CONTEXT` env var (default 5m) controls C's own TTL, independent
+of block A's `PROMPT_CACHE_TTL`. See the PR for the exact breakpoint-budget accounting (system
+now carries up to 3 of the API's 4 allowed breakpoints) and how to verify cache reuse in logs
+(the new `block_c_hash` field on the "context sizes" log line).
+
 ---
 
 ## IDEA 023 - Athlete notes: durable, structured facts the coach remembers

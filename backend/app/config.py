@@ -98,6 +98,13 @@ class Settings:
     # write (60% of measured spend); "1h" keeps it warm across a planning session for a 2x (not
     # 1.25x) write. See app.context.build_system_blocks.
     prompt_cache_ttl: str = "5m"
+    # context-trim build, Phase 2. Prompt-cache TTL for system block C (the athlete's own
+    # per-request context -- profile, current/next week, recent sessions, rollup, drafts/notes/
+    # debriefs; see app.context.build_context_block), independent of `prompt_cache_ttl` above
+    # (block A's TTL). Athlete data changes far more often than the persona/library, so this
+    # defaults to the same "5m" starting point but is its own knob -- tune independently once
+    # real conversation-pacing data is in from PROMPT_CACHE_TTL_CONTEXT's own logs.
+    prompt_cache_ttl_context: str = "5m"
     # IDEA 022 step 4. When True, the message-routed library topic files ride
     # the newest user message instead of system block B, so system + history
     # are byte-stable across topic changes (a topic-dependent system block
@@ -156,6 +163,12 @@ class Settings:
         if prompt_cache_ttl not in ("5m", "1h"):
             raise ConfigError(f"PROMPT_CACHE_TTL must be '5m' or '1h', got {prompt_cache_ttl!r}")
 
+        prompt_cache_ttl_context = os.environ.get("PROMPT_CACHE_TTL_CONTEXT", "5m").strip() or "5m"
+        if prompt_cache_ttl_context not in ("5m", "1h"):
+            raise ConfigError(
+                f"PROMPT_CACHE_TTL_CONTEXT must be '5m' or '1h', got {prompt_cache_ttl_context!r}"
+            )
+
         athletes_dir = Path(os.environ.get("ATHLETES_DIR", "../athletes"))
         # research/open-questions.jsonl (IDEA 005) lives alongside
         # athletes/ and library/ rather than under either -- derived from
@@ -195,6 +208,7 @@ class Settings:
             resend_from_email=os.environ.get("RESEND_FROM_EMAIL", "onboarding@resend.dev"),
             light_mode=os.environ.get("COACH_LIGHT_MODE", "").strip().lower() in ("1", "true", "yes", "on"),
             prompt_cache_ttl=prompt_cache_ttl,
+            prompt_cache_ttl_context=prompt_cache_ttl_context,
             routed_library_in_message=os.environ.get("COACH_ROUTED_LIBRARY_IN_MESSAGE", "").strip().lower()
             in ("1", "true", "yes", "on"),
             library_admins=library_admins,

@@ -42,10 +42,21 @@ def draft_is_stale(draft: WeekPlan) -> bool:
     return draft.drafted_at is not None and datetime.now(timezone.utc) - draft.drafted_at > DRAFT_MAX_AGE
 
 
-def _age_minutes(draft: WeekPlan) -> int | None:
+def _drafted_at_label(draft: WeekPlan) -> str | None:
+    """An absolute, byte-stable timestamp for `render_pending_drafts`'s "drafted ... ago" line.
+
+    Context-trim build (Phase 2): this used to be a `datetime.now()`-relative "%d min ago"
+    figure, which changed every single minute -- the one thing in the per-request context that
+    was NOT stable when the athlete's own data was otherwise unchanged (verified: two renders a
+    minute apart, same held draft, produced different bytes). Now that this context is a cached
+    system block (`build_context_block`), that minute-level drift alone would evict the cache
+    every ~60s regardless of data changes. `drafted_at` is itself an absolute, already-stored
+    timestamp, so rendering it directly is exactly as informative (the athlete-facing "Today"
+    line elsewhere in this context gives the coach a same-day reference point) and never changes
+    between requests unless the draft itself does."""
     if draft.drafted_at is None:
         return None
-    return int((datetime.now(timezone.utc) - draft.drafted_at).total_seconds() // 60)
+    return draft.drafted_at.strftime("%Y-%m-%d %H:%M UTC")
 
 
 def _is_written(store: StoreInterface, slug: str, draft: WeekPlan) -> bool:
@@ -131,9 +142,9 @@ def render_pending_drafts(store: StoreInterface, slug: str) -> str | None:
     ]
     for draft in sorted(drafts, key=lambda d: d.drafted_at or datetime.min.replace(tzinfo=timezone.utc), reverse=True):
         what, tool, extra = _describe(draft)
-        age = _age_minutes(draft)
+        drafted_at = _drafted_at_label(draft)
         lines.append(
-            f"- {what}, drafted {'%d min ago' % age if age is not None else 'earlier'} by "
+            f"- {what}, drafted at {drafted_at if drafted_at is not None else 'an unknown time'} by "
             f"`{draft.drafted_by or 'unknown'}`. To write it: `{tool}` "
             f'{{"confirm": true, "draft_id": "{draft.id}"{extra}}}'
         )

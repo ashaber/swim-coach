@@ -68,6 +68,7 @@ from app.auth import (
 from app.claude import ClaudeChat
 from app.config import Settings
 from app.context import (
+    build_context_block,
     build_messages,
     build_routed_library_text,
     build_system,
@@ -341,12 +342,26 @@ async def ask_question(
     # Finding 1).
     athlete_profile = store.load_athlete(athlete)
     in_message = settings.routed_library_in_message
+    # System block C (context-trim build, Phase 2) -- see app.context.build_context_block and
+    # app.routes.chat's own build_full_request for the full rationale; this route's own
+    # focused_workout/focused_session render into C too, same "stable for the whole scoped
+    # conversation" reasoning (this endpoint has no history at all -- see `history=[]` below --
+    # so C is this request's only cacheable content besides blocks A/B).
+    context_block = build_context_block(
+        store,
+        athlete,
+        expert_mode=False,
+        focused_workout=focused_workout,
+        focused_session=focused_session,
+        cache_ttl=settings.prompt_cache_ttl_context,
+    )
     system = build_system(
         settings.library_dir,
         body,
         athlete_sports=athlete_profile.effective_sports,
         include_routed=not in_message,
         cache_ttl=settings.prompt_cache_ttl,
+        context_block=context_block,
     )
     library_text = (
         build_routed_library_text(settings.library_dir, body, athlete_sports=athlete_profile.effective_sports)
@@ -362,13 +377,8 @@ async def ask_question(
     )
     log.info("library route", request_id=request_id, **routing_info)
     messages = build_messages(
-        store,
-        athlete,
         message=body,
         history=[],
-        expert_mode=False,
-        focused_workout=focused_workout,
-        focused_session=focused_session,
         library_text=library_text,
     )
     tool_handlers = build_tool_handlers(

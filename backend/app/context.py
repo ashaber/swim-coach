@@ -1,7 +1,8 @@
 """Context assembly for the coach chat endpoint, built for prompt caching.
 
-Layout (stable -> volatile, per ROADMAP.md "Chat context assembly" and this
-build's task spec):
+Layout (stable -> volatile, per ROADMAP.md "Chat context assembly" and the
+context-trim build's Phase 1 + Phase 2 task specs, `.claude/plans/
+context-trim-build.md`):
 
   System block A (cacheable, stable per athlete sport-scope): coach persona
     + hard rules (grounding/citation/safety, adapted from
@@ -20,30 +21,45 @@ build's task spec):
     prefix, needed only to cite) -- see `build_routed_library_text` for
     where its entries go instead.
 
+  System block C (cacheable, `build_context_block`): the athlete's own
+    per-request context -- profile/zones, current + next week plan, the
+    exact logged sessions from the trailing ~28 days (each session keeps its
+    own `sport`, `distance_m`, `duration_min`, `rpe`, `avg_pace_s_per_100m`
+    -- ground truth, not narrated), events/races with `days_until`, the
+    engine's `summarize` rollup -- explicitly labelled as an AGGREGATE
+    derived from those same sessions (via `summarize_rollup`, which calls
+    straight into `swim_coach.load`'s functions -- the same ones `cli.py`'s
+    `summarize` command uses -- never recomputed in prose) -- held drafts/
+    notes/race debriefs, and (for a scoped chat) the one focused workout or
+    session. Positioned directly after block A and BEFORE block B: a
+    cache_control breakpoint caches the request's exact byte prefix up to
+    and including that block, so C sitting before the topic-dependent block
+    B means a routing/topic change never evicts C's own cache read (see
+    `build_system`'s docstring for the full argument). This block used to
+    ride the newest MESSAGE instead, rebuilt and re-written to the prompt
+    cache on every turn, on the premise that "the context differs almost
+    every turn" -- re-measured FALSE on 2026-09-23 (two renders a minute
+    apart, no data changed, came back byte-identical once `app.drafts`'
+    own minute-level instability was fixed -- see `_drafted_at_label`). C
+    now changes only when this athlete's OWN data changes, so a
+    conversation's follow-up turns read it from cache instead.
+
   System block B (cacheable): 1-3 topic files selected by deterministic
     keyword-bucket routing against INDEX.md's routing table. Same message (or any message landing in the same
     keyword bucket) always produces byte-identical block B text, so common
-    topics share a cache entry.
+    topics share a cache entry -- and, since B comes after C, a routing
+    change costs only a fresh B (+ whatever sits after it), never C.
 
-  Per-request (uncached): athlete profile + zones, current + next week
-  plan, the exact logged sessions from the trailing ~28 days (each session
-  keeps its own `sport`, `distance_m`, `duration_min`, `rpe`,
-  `avg_pace_s_per_100m` -- ground truth, not narrated), events/races with
-  `days_until`, and the engine's `summarize` rollup -- explicitly labelled
-  as an AGGREGATE derived from those same sessions, so exact-vs-aggregate is
-  unambiguous to the model (via `summarize_rollup`, which calls straight
-  into `swim_coach.load`'s functions -- the same ones `cli.py`'s
-  `summarize` command uses -- never recomputed in prose). This is merged
-  into the *first* message of the conversation (the first `history` entry
-  if there is one, else the new `message`) rather than inserted as a
-  separate message, because the Anthropic Messages API requires strictly
-  alternating user/assistant roles -- a lone synthetic "user" message in
-  front of history's own first (user) message would be two user turns in a
-  row and get rejected.
+  Newest message (uncached, `build_messages`): the athlete's own question
+  text, plus -- only when `COACH_ROUTED_LIBRARY_IN_MESSAGE` is set -- the
+  routed library text (`library_text`). Nothing athlete-data-shaped lives
+  here any more; it is deliberately the smallest, most turn-unique part of
+  the request.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from datetime import date, timedelta
@@ -1385,26 +1401,50 @@ def build_system(
     athlete_sports: list[str] | None = None,
     include_routed: bool = True,
     cache_ttl: str = "5m",
+    context_block: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """The full `system` param: block A then block B, each its own cache
-    breakpoint (stable prefix first, per Anthropic's prompt-caching rules --
-    a cache_control block also implicitly caches everything before it).
+    """The full `system` param: block A, then block C (`context_block`, when given), then
+    block B -- each its own cache breakpoint (stable-first, per Anthropic's prompt-caching
+    rules -- a cache_control block also implicitly caches everything before it, in request
+    order: tools, then each system block in the order given here, then messages).
+
+    **Order (context-trim build, Phase 2): A -> C -> B, never C after B.** A breakpoint caches
+    the request's exact byte PREFIX up to and including that block. Block B (the routed library
+    topic files) changes with the message's topic, so if C sat after B, C's own prefix would
+    include B's volatile bytes and a topic change would evict C's cache read right along with
+    B's -- exactly the coupling `build_context_block` exists to avoid (see its own docstring).
+    Putting C directly after A means C's cache entry depends only on (tools + A + C), so a
+    topic-driven change to B never touches it: a request can still hit C's cache even when B
+    itself has to be rewritten. This is a pure request-shape ordering fact, not the general
+    "later stuff can't affect earlier stuff" claim -- verified directly by
+    `test_context_block_cache_key_is_unaffected_by_which_topic_file_follows_it` alongside this
+    build's other cache-shape tests.
 
     `athlete_sports` (optional, defaults to `None`) is forwarded to BOTH
     `build_system_blocks` (block A's INDEX.md sport-scoped sections -- PR
     #167 review, Finding 1) and `build_routed_block` (block B's routed
     topic files) -- see each function's own docstring.
 
-    `include_routed=False` returns block A alone -- the caller then puts the
-    routed files on the newest message via `build_routed_library_text`.
+    `context_block` (optional, defaults to `None` -- every existing call site that doesn't pass
+    it keeps producing byte-identical output): block C, built by `build_context_block`. Omitted
+    entirely (not an empty placeholder) when `None`, so a caller with nothing athlete-specific
+    to show (there is none today, but nothing here assumes that) still gets a valid, breakpoint-
+    budget-respecting system array.
+
+    `include_routed=False` returns block A (+ block C, if given) without block B -- the caller
+    then puts the routed files on the newest message via `build_routed_library_text`.
     """
-    # `cache_ttl` applies to block A only: a longer-TTL entry must come BEFORE shorter ones, and the
-    # message-routed block B (changes with the topic) stays on the default 5 minutes.
-    if not include_routed:
-        return build_system_blocks(library_dir, athlete_sports=athlete_sports, cache_ttl=cache_ttl)
-    return build_system_blocks(library_dir, athlete_sports=athlete_sports, cache_ttl=cache_ttl) + build_routed_block(
-        library_dir, message, athlete_sports=athlete_sports
-    )
+    # `cache_ttl` applies to block A only: a longer-TTL entry must come BEFORE shorter ones.
+    # Block C carries its OWN ttl (`build_context_block`'s own `cache_ttl` argument, from
+    # `PROMPT_CACHE_TTL_CONTEXT`) baked into the block it's handed here -- athlete data changes
+    # far more often than the library/persona, so its default TTL is independent of block A's.
+    # Block B (changes with the topic) stays on the default 5 minutes either way.
+    blocks = build_system_blocks(library_dir, athlete_sports=athlete_sports, cache_ttl=cache_ttl)
+    if context_block:
+        blocks = blocks + context_block
+    if include_routed:
+        blocks = blocks + build_routed_block(library_dir, message, athlete_sports=athlete_sports)
+    return blocks
 
 
 # --- engine reuse: summarize rollup -----------------------------------------
@@ -2253,7 +2293,8 @@ def build_per_request_context_and_sizes(
     thresholds_block = _render_threshold_history(store.list_threshold_records(slug))
 
     parts = [
-        "## Athlete context (assembled per-request, not cached)",
+        "## Athlete context (cached separately from the routed library files -- see "
+        "build_context_block; invalidated only when this athlete's own data changes)",
         f"Asker mode: {'expert (professional coach/physiologist)' if expert_mode else 'athlete'}",
         f"Today: {today.isoformat()} (current week {current_iso}, next week {next_iso})",
         "",
@@ -2339,7 +2380,7 @@ def build_per_request_context(
     """Plain-text convenience wrapper over `build_per_request_context_and_sizes`
     for every caller that only needs the assembled context string (nearly all
     of them -- see that function's own docstring for the section-sizes/
-    athlete-id return values this discards, used only by `build_messages`'
+    athlete-id return values this discards, used only by `build_context_block`'s
     "context sizes" log line)."""
     text, _sizes, _athlete_id = build_per_request_context_and_sizes(
         store,
@@ -2351,59 +2392,123 @@ def build_per_request_context(
     return text
 
 
-class HistoryTurn(TypedDict):
-    role: str
-    content: str
+def _stable_hash(text: str) -> str:
+    """A short, deterministic hex digest of `text` -- context-trim build Phase 2's measurement
+    hook (task item 4): logged alongside block C so Cloud Run logs show whether the SAME
+    athlete-context bytes repeated across a conversation's turns (the whole point of moving it
+    into a cached system block) without diffing raw text or logging the text itself. sha256,
+    truncated to 16 hex chars -- an observability signal, not a cache key Anthropic itself uses,
+    so collision risk here is irrelevant and a short prefix keeps the log line compact."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
-def build_messages(
+def build_context_block(
     store: StoreInterface,
     slug: str,
     *,
-    message: str,
-    history: list[HistoryTurn],
     expert_mode: bool,
     focused_workout: Workout | None = None,
     focused_session: Session | None = None,
-    library_text: str | None = None,
+    cache_ttl: str = "5m",
 ) -> list[dict[str, Any]]:
-    """The `messages` param: `history` verbatim, then the new `message` with
-    the per-request context merged into it.
+    """System block C: the athlete's own per-request context (profile/zones, current + next
+    week plan, the last ~28 days' exact logged sessions, events/races, the aggregate rollup,
+    held drafts/notes/race debriefs, and -- for a scoped chat -- the one focused workout/
+    session), as its own cacheable text block, for `build_system`'s `context_block` argument.
 
-    The context goes on the NEWEST message, never `history[0]`. Anthropic
-    prompt caching matches an exact byte-prefix from the start of the
-    request, and the context is live data that differs almost every turn --
-    spliced into the first message it would rewrite the head of the
-    conversation each time and make the whole `messages` array uncacheable
-    (IDEA 022, root cause #1). On the newest message it leaves every prior
-    turn byte-identical, so the history is a stable, cacheable prefix.
+    **Context-trim build, Phase 2.** This block used to be assembled fresh and spliced into the
+    newest user MESSAGE on every turn (see this module's old top-of-file docstring and IDEA
+    022's original root cause #1): the stated premise was that "the context differs almost
+    every turn," which made caching it pointless. That premise was measured FALSE on
+    2026-09-23 -- two renders of the same athlete's context a minute apart, no data changed in
+    between, came back byte-identical (after this build's other fix: `drafts.render_pending_
+    drafts` used to render a `datetime.now()`-relative "%d min ago" figure that drifted every
+    60 seconds regardless of data changes -- see `app.drafts._drafted_at_label`). Block C
+    changes only when this athlete's OWN data changes: a logged workout, a plan edit, a new
+    day. So a conversation's follow-up turns now read it from cache (this block's own
+    `cache_control` breakpoint) instead of re-paying its full write cost every message, and a
+    plan-editing tool call mid-conversation simply re-writes C (+ the history breakpoint after
+    it) once for the rest of that conversation, same as any other data change would.
 
-    It is merged into (not sent as a separate message before) the new
-    message because the Messages API requires strictly alternating
-    user/assistant roles: a standalone synthetic "user" message would sit
-    next to the athlete's own user turn and the API would reject it.
+    **Position matters, not just existence.** `build_system` places this block directly after
+    block A and BEFORE block B (the routed library topic files) -- see that function's own
+    docstring for why the ORDER (not just "give it a breakpoint") is what keeps a routed-topic
+    change from invalidating this block's own cache read.
 
-    The last history message carries the one `cache_control` breakpoint in
-    `messages` (the two system blocks use 2 of the 4 allowed), so each request
-    reads all earlier turns from cache and only writes the newest exchange.
-    With no history there is nothing stable to cache yet.
+    `focused_workout`/`focused_session` render here too (via `build_per_request_context_and_
+    sizes`, unchanged), not on the newest message -- deliberately: every turn of one scoped
+    Log-tab/Plan-tab chat is about the SAME one workout/session, so it's stable for that whole
+    conversation, not "genuinely per-message" the way the athlete's actual question text is.
+    Keeping it here means a multi-turn focused chat's follow-ups can hit this same block C cache
+    entry too, not just the unscoped Coach tab. (A focused conversation's block C differs from
+    an unscoped one for the same athlete -- by construction, since the bytes differ -- so it
+    gets its own cache entry, shared across that one conversation's own turns, which is exactly
+    the win this build is after.)
 
-    `focused_workout` (the Log tab's embedded workout chat -- see
-    `render_focused_workout`) is threaded straight through to
-    `build_per_request_context`; the caller (app.routes.chat) is responsible
-    for resolving a `workout_id` to a `Workout` (or a 404) before calling
-    this. `focused_session` (the Plan tab's embedded session chat -- see
-    `render_focused_session`) is threaded through the same way; the caller
-    (app.routes.feedback) resolves `session_date`/`session_sport` to a
-    `Session` best-effort before calling this.
+    `cache_ttl` (from `Settings.prompt_cache_ttl_context` / `PROMPT_CACHE_TTL_CONTEXT`,
+    independent of block A's `PROMPT_CACHE_TTL`): athlete data changes far more often than the
+    persona/library, so this block's own default TTL is set separately -- a shorter TTL trades a
+    cheaper write against a shorter warm window, same tradeoff `build_system_blocks`' own
+    `cache_ttl` documents for block A.
+
+    Logs "context sizes" once per call (same log line `build_messages` used to emit when it
+    built this text inline) -- `athlete_id` (a UUID, never `slug`, per the global "never log
+    PII" rule), the per-section char counts, and `block_c_hash` (`_stable_hash` above) so a
+    repeated hash across a conversation's requests is directly visible in Cloud Run logs as
+    proof this block is actually being reused, not just theoretically cacheable.
     """
-    context_text, context_sizes, athlete_id = build_per_request_context_and_sizes(
+    text, sizes, athlete_id = build_per_request_context_and_sizes(
         store,
         slug,
         expert_mode=expert_mode,
         focused_workout=focused_workout,
         focused_session=focused_session,
     )
+    log.info(
+        "context sizes",
+        athlete_id=athlete_id,
+        block_c_hash=_stable_hash(text),
+        cache_ttl=cache_ttl,
+        **sizes,
+    )
+    return [{"type": "text", "text": text, "cache_control": _cache_control(cache_ttl)}]
+
+
+class HistoryTurn(TypedDict):
+    role: str
+    content: str
+
+
+def build_messages(
+    *,
+    message: str,
+    history: list[HistoryTurn],
+    library_text: str | None = None,
+) -> list[dict[str, Any]]:
+    """The `messages` param: `history` verbatim, then the new `message`.
+
+    **Context-trim build, Phase 2.** The athlete's per-request context used to be merged into
+    this newest message every turn (see `build_context_block`'s docstring for the "context
+    differs almost every turn" premise this build re-measured false, and where that text lives
+    now: system block C). The newest message here carries only the athlete's own text, plus --
+    when `COACH_ROUTED_LIBRARY_IN_MESSAGE` is set -- the routed library text (`library_text`);
+    neither of those is "per-request athlete data" the way the old merged context was, so
+    neither belongs in block C: `library_text` is deliberately message-scoped precisely because
+    the flag exists to keep topic-dependent content OUT of any cached prefix, and the athlete's
+    own question is unique to this one turn by definition.
+
+    It is merged into (not sent as a separate message before) the new message when `library_text`
+    is given because the Messages API requires strictly alternating user/assistant roles: a
+    standalone synthetic "user" message would sit next to the athlete's own user turn and the
+    API would reject it.
+
+    The last history message carries the one `cache_control` breakpoint in `messages`, so each
+    request reads all earlier turns from cache and only writes the newest exchange. With no
+    history there is nothing stable to cache yet. (The system array now carries up to 3
+    breakpoints of its own -- A, C, and B -- so this is the 4th and last one the Messages API
+    allows; see `app.claude.with_loop_breakpoint`'s docstring for what happens to the in-tool-
+    loop marker once this budget is already spent.)
+    """
     messages: list[dict[str, Any]] = [
         {"role": turn["role"], "content": turn["content"]} for turn in history
     ]
@@ -2412,25 +2517,16 @@ def build_messages(
             {"type": "text", "text": messages[-1]["content"], "cache_control": {"type": "ephemeral"}}
         ]
     routed_library_chars = len(library_text) if library_text else 0
-    if library_text:
-        # IDEA 022 step 4: routed topic files ride the newest message too, so
-        # nothing message-dependent sits in the cached system/history prefix.
-        context_text = f"{library_text}\n\n---\n\n{context_text}"
-    messages.append({"role": "user", "content": f"{context_text}\n\n---\n\n{message}"})
+    newest_text = f"{library_text}\n\n---\n\n{message}" if library_text else message
+    messages.append({"role": "user", "content": newest_text})
 
-    # Phase 3 (context-trim build): one structured log line per chat request
-    # with char counts per context section, so before/after is visible in
-    # Cloud Run logs -- same "structured JSON to stdout" standard as every
-    # other log line here. `athlete_id` (a UUID), never `slug` -- see
-    # `build_per_request_context_and_sizes`'s own docstring for the PII
-    # rationale. `history_chars` covers the ENTIRE stable/cacheable prefix
-    # (every prior turn), separate from `context_sizes`' per-section
-    # breakdown of the volatile part riding the newest message.
+    # Companion to build_context_block's "context sizes" log -- this half covers what actually
+    # rides the message array (never logged twice: block C's own sizes are logged once, from
+    # build_context_block, regardless of how many times a caller re-renders messages around it).
     log.info(
-        "context sizes",
-        athlete_id=athlete_id,
-        **context_sizes,
+        "message sizes",
         routed_library_chars=routed_library_chars,
+        question_chars=len(message),
         history_chars=sum(len(turn["content"]) for turn in history),
         history_turns=len(history),
     )
