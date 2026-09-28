@@ -78,6 +78,38 @@ def test_a_stale_draft_is_not_offered(athletes_dir) -> None:
     assert SECTION not in _ctx(store)
 
 
+def test_held_draft_rendering_is_byte_stable_across_different_wall_clock_times(
+    athletes_dir, monkeypatch
+) -> None:
+    # context-trim build, Phase 2, stability fix: this context section used to render a
+    # datetime.now()-relative "%d min ago" figure (app.drafts._age_minutes), which drifted
+    # every 60 seconds regardless of whether any real data changed -- exactly the kind of
+    # per-request instability that defeats caching a held-draft-bearing context in a system
+    # block. `drafted_at` itself never changes between these two renders; only the wall clock
+    # does (monkeypatched here to simulate a real minute passing between requests).
+    import app.drafts as drafts_module
+
+    store, h, iso = _setup(athletes_dir)
+    h["replace_week_plan"]({"iso_week": iso})
+
+    real_datetime = drafts_module.datetime
+
+    class _FrozenAt(real_datetime):
+        _now = real_datetime.now(timezone.utc)
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls._now
+
+    monkeypatch.setattr(drafts_module, "datetime", _FrozenAt)
+    first = _ctx(store)
+
+    _FrozenAt._now = real_datetime.now(timezone.utc) + timedelta(minutes=7)
+    second = _ctx(store)
+
+    assert first == second
+
+
 def test_an_authored_week_draft_says_to_write_it_with_author_week_plan(athletes_dir) -> None:
     # engine/plan-check-red-team PR 2: propose_adaptation is advisory-only
     # now (no draft held); author_week_plan is the tool whose held draft
