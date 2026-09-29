@@ -9,11 +9,12 @@ Phase 2 push as the PWA's chat tab, or Phase 3; see the report's TODOs).
 
 from __future__ import annotations
 
+import functools
 import json
 import uuid
 from collections.abc import Iterator
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -44,6 +45,7 @@ from app.light_mode import (
     is_light_turn,
 )
 from app.logging_config import get_logger
+from app.notify import notify_athlete_of_coach_plan_change
 from app.store_factory import make_store
 from app.tools import TOOLS_SCHEMA, build_tool_handlers
 
@@ -207,12 +209,57 @@ async def chat(
     principal: Principal = Depends(require_auth),
     claude_chat: ClaudeChat = Depends(get_claude_chat),
 ) -> StreamingResponse:
-    settings = request.app.state.settings
     # Athlete-session scoping: the session's athlete wins; a mismatched
     # `athlete` in the body is a 403 (the cross-athlete guarantee). A service
     # principal passes through unchanged -- the live PWA (shared token) still
     # sends `athlete` in the body and reaches whichever athlete it names.
     athlete = resolve_athlete(principal, payload.athlete)
+    return await stream_chat_response(payload, request, principal, claude_chat, athlete=athlete)
+
+
+def get_plan_change_notifier(request: Request) -> Callable[..., None]:
+    """Returns the real `notify_athlete_of_coach_plan_change` unless overridden via
+    `app.dependency_overrides[get_plan_change_notifier] = ...` (same seam convention as
+    `routes/coach.py`'s `get_athlete_notifier`/`get_workout_chat_notifier`) -- lets tests spy on
+    a coach-confirmed plan change firing the athlete notification without a real Resend call."""
+    return notify_athlete_of_coach_plan_change
+
+
+async def stream_chat_response(
+    payload: ChatRequest,
+    request: Request,
+    principal: Principal,
+    claude_chat: ClaudeChat,
+    *,
+    athlete: str,
+    confirmer_role: Literal["athlete", "coach"] = "athlete",
+    confirmer_id: str | None = None,
+    asker_note: str | None = None,
+    plan_change_notifier: Callable[..., None] | None = None,
+) -> StreamingResponse:
+    """The real body of `POST /api/chat` -- factored out (coach-ai-planning build) so `POST
+    /api/coach/athletes/{slug}/chat` (`routes/coach.py`) can reuse the EXACT same streaming
+    contract (SSE event shapes, light-mode escalation, workout-chat-thread persistence, muted-
+    thread short-circuit) rather than duplicating it, with only the caller-resolved `athlete`
+    slug and the confirmer/persona context differing.
+
+    `athlete` is resolved by the CALLER (`resolve_athlete` for the athlete-session route above,
+    `resolve_coach_athlete` for the coach-mode route) -- this function trusts it as-is; it never
+    re-derives athlete scoping from `payload.athlete` itself, so a caller cannot accidentally
+    reintroduce the cross-athlete bug this split is designed to keep impossible.
+
+    `confirmer_role`/`confirmer_id` (default: the unchanged athlete-session behavior, `role=
+    "athlete"`, no id) flow straight through to `app.tools.build_tool_handlers` -- see that
+    function's own docstring for why these are resolved from the authenticated `Principal` here,
+    never from anything the model itself could set. `asker_note`, when given, is one persona
+    line folded into the per-request context block (`app.context.build_context_block`'s own
+    `asker_note` parameter) -- e.g. the coach-mode route's "the asker is this athlete's human
+    coach" sentence. `plan_change_notifier` (the raw, unbound `app.notify.
+    notify_athlete_of_coach_plan_change`-shaped callable -- `None` for the athlete-session
+    route, which never needs it) is bound to THIS request's store/settings/athlete slug via
+    `functools.partial` only when `confirmer_role == "coach"` -- see `build_full_request` below.
+    """
+    settings = request.app.state.settings
     # Per-minute limiter keys off the raw token (per athlete-session now);
     # the per-athlete daily cap is a no-op for a service principal.
     require_chat_rate_limit(request, principal.token)
@@ -288,6 +335,7 @@ async def chat(
             expert_mode=payload.expert_mode,
             focused_workout=focused_workout,
             cache_ttl=settings.prompt_cache_ttl_context,
+            asker_note=asker_note,
         )
         system = build_system(
             settings.library_dir,
@@ -317,6 +365,11 @@ async def chat(
             history=history,
             library_text=library_text,
         )
+        bound_plan_change_notifier = (
+            functools.partial(plan_change_notifier, store, settings, athlete)
+            if confirmer_role == "coach" and plan_change_notifier is not None
+            else None
+        )
         tool_handlers = build_tool_handlers(
             store,
             slug=athlete,
@@ -324,6 +377,9 @@ async def chat(
             library_dir=settings.library_dir,
             request_id=request_id,
             routed_files=routing_info["routed_files"],
+            confirmer_role=confirmer_role,
+            confirmer_id=confirmer_id,
+            plan_change_notifier=bound_plan_change_notifier,
         )
         return system, messages, TOOLS_SCHEMA, tool_handlers
 

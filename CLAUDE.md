@@ -11,7 +11,7 @@ AI coaching system + PWA for ultra-distance open-water swimmers. First athlete: 
 - Every engine constant (zone offsets, progression caps, adaptation thresholds) must cite its `library/` file.
 - Library evidence discipline: claims tagged `[EVIDENCE: swim-ultra|swim]` or `[ADAPTED: cycling|running|tri|general-endurance]`; every `[ADAPTED]` block carries `Confidence:` and a `Test:` line. Unsourced statements labeled `Coach judgment:`.
 - Git: engine/library/skill changes via feature branch + PR; athlete daily data (logs, wellness, weekly plans) commits straight to main and pushes immediately; pull before write.
-- Safety rails: never delete logs; weekly volume +≤8% and long swim +≤15% without explicit athlete confirmation; any pain report → stop-and-assess.
+- Safety rails: never delete logs; weekly volume +≤8% and long swim +≤15% require explicit athlete confirmation, or the athlete's human coach confirming on their behalf (recorded — see `ConfirmationRecord`/`MacroRedTeamRecord.confirmed_by_role`); any pain report → stop-and-assess.
 - Tests: `pytest tests/unit -v` — no LLM or network in tests; all green before any task is "done".
 - Reference templates live in `../mtb-skills` (vite.config.js, .github/workflows/{ci,deploy}.yml, tests/e2e/conftest.py, src/{main,views,storage,log}.js).
 

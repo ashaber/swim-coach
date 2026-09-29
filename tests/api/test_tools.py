@@ -7735,6 +7735,177 @@ def test_author_week_plan_confirm_requires_athlete_confirmations_for_flagged_fin
     assert accepted["persisted"] is True
 
 
+# --- coach-ai-planning: confirmer attribution + athlete notification --------
+# A human coach may confirm a plan change on the athlete's behalf (Andrew's decision 1) --
+# `build_tool_handlers`' `confirmer_role`/`confirmer_id`/`plan_change_notifier` are always
+# resolved by the ROUTE from the authenticated Principal, never by the model's own tool-call
+# JSON -- these tests exercise the handler layer directly with those params, same as every
+# other test in this file exercises author_macro_plan/author_week_plan via `build_tool_handlers`.
+
+
+def test_author_week_plan_coach_confirm_is_recorded_with_role_coach_and_notifies(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    notified: list[tuple] = []
+    handlers = build_tool_handlers(
+        store, slug="renee", expert_mode=True,
+        confirmer_role="coach", confirmer_id="tim",
+        plan_change_notifier=lambda *args: notified.append(args),
+    )
+    prev = store.load_week("renee", "2026-W28")
+    big_sessions = [
+        {
+            "date": "2026-07-13",
+            "sport": "swim_ow",
+            "duration_min": 300,
+            "purpose": "very long open water",
+            "distance_m": max(s.distance_m or 0 for s in prev.sessions if s.sport in ("swim_pool", "swim_ow")) * 3,
+        }
+    ]
+    draft = handlers["author_week_plan"]({"iso_week": "2026-W29", "sessions": big_sessions})
+    confirm_ids = [f["id"] for f in draft["report"]["findings"] if f["id"].startswith("confirm-")]
+    assert confirm_ids
+
+    done = handlers["author_week_plan"]({
+        "iso_week": "2026-W29",
+        "confirm": True,
+        "draft_id": draft["draft_id"],
+        "athlete_confirmations": [
+            {"finding_id": fid, "athlete_words": "coach here, pushing the long swim this week"}
+            for fid in confirm_ids
+        ],
+    })
+
+    assert "error" not in done, done
+    assert done["persisted"] is True
+    assert done["confirmations"], "expected the confirm records to be echoed back"
+    for record in done["confirmations"]:
+        assert record["role"] == "coach"
+        assert record["id"] == "tim"
+        assert record["words"] == "coach here, pushing the long swim this week"
+
+    saved = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W29")
+    assert saved.confirmations, "expected the confirmations to be persisted onto the WeekPlan"
+    assert all(c.role == "coach" and c.id == "tim" for c in saved.confirmations)
+
+    assert len(notified) == 1
+    coach_slug, plan_kind, words = notified[0]
+    assert coach_slug == "tim"
+    assert plan_kind == "week"
+    assert "pushing the long swim" in words
+
+
+def test_author_week_plan_athlete_confirm_is_role_athlete_and_never_notifies(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    notified: list[tuple] = []
+    # Default confirmer_role -- exactly the athlete-session route's own call shape (no
+    # confirmer_role/confirmer_id/plan_change_notifier passed at all).
+    handlers = build_tool_handlers(
+        store, slug="renee", expert_mode=False, plan_change_notifier=lambda *args: notified.append(args),
+    )
+    prev = store.load_week("renee", "2026-W28")
+    big_sessions = [
+        {
+            "date": "2026-07-13",
+            "sport": "swim_ow",
+            "duration_min": 300,
+            "purpose": "very long open water",
+            "distance_m": max(s.distance_m or 0 for s in prev.sessions if s.sport in ("swim_pool", "swim_ow")) * 3,
+        }
+    ]
+    draft = handlers["author_week_plan"]({"iso_week": "2026-W29", "sessions": big_sessions})
+    confirm_ids = [f["id"] for f in draft["report"]["findings"] if f["id"].startswith("confirm-")]
+
+    done = handlers["author_week_plan"]({
+        "iso_week": "2026-W29",
+        "confirm": True,
+        "draft_id": draft["draft_id"],
+        "athlete_confirmations": [
+            {"finding_id": fid, "athlete_words": "yes, I want to push the long swim"} for fid in confirm_ids
+        ],
+    })
+
+    assert done["persisted"] is True
+    for record in done["confirmations"]:
+        assert record["role"] == "athlete"
+        assert record["id"] is None
+    assert notified == [], "an athlete's own confirm must never fire the coach-plan-change notifier"
+
+
+def test_author_macro_plan_coach_confirm_is_recorded_with_role_coach_and_notifies(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    notified: list[tuple] = []
+    handlers = build_tool_handlers(
+        store, slug="renee", expert_mode=True,
+        confirmer_role="coach", confirmer_id="tim",
+        plan_change_notifier=lambda *args: notified.append(args),
+    )
+    draft = handlers["author_macro_plan"]({
+        "event_names": [GREECE_EVENT_NAME],
+        "weeks": _simple_macro_weeks(date(2026, 7, 6)),
+        "architecture": "Base then build toward Greece.",
+    })
+    finding_ids = [f["id"] for f in draft["report"]["findings"]]
+    severity_by_id = {f["id"]: f["severity"] for f in draft["report"]["findings"]}
+    decisions = [
+        {
+            "id": fid,
+            "decision": "keep_as_is",
+            "reason": "known gap, coach reviewed",
+            **({"athlete_words": "coach confirming this on the athlete's behalf"} if severity_by_id[fid] == "high" else {}),
+        }
+        for fid in finding_ids
+    ]
+
+    done = handlers["author_macro_plan"]({"confirm": True, "draft_id": draft["draft_id"], "decisions": decisions})
+
+    assert "error" not in done, done
+    assert done["persisted"] is True
+    for record in done["red_team"]:
+        assert record["confirmed_by_role"] == "coach"
+        assert record["confirmed_by_id"] == "tim"
+
+    saved = FileStore(base_dir=athletes_dir).load_macro("renee")
+    assert all(r.confirmed_by_role == "coach" and r.confirmed_by_id == "tim" for r in saved.red_team)
+
+    assert len(notified) == 1
+    coach_slug, plan_kind, words = notified[0]
+    assert coach_slug == "tim"
+    assert plan_kind == "macro"
+    assert "coach confirming this on the athlete's behalf" in words
+
+
+def test_author_macro_plan_athlete_confirm_defaults_role_and_never_notifies(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    notified: list[tuple] = []
+    handlers = build_tool_handlers(
+        store, slug="renee", expert_mode=False, plan_change_notifier=lambda *args: notified.append(args),
+    )
+    draft = handlers["author_macro_plan"]({
+        "event_names": [GREECE_EVENT_NAME],
+        "weeks": _simple_macro_weeks(date(2026, 7, 6)),
+        "architecture": "Base then build toward Greece.",
+    })
+    finding_ids = [f["id"] for f in draft["report"]["findings"]]
+    severity_by_id = {f["id"]: f["severity"] for f in draft["report"]["findings"]}
+    decisions = [
+        {
+            "id": fid,
+            "decision": "keep_as_is",
+            "reason": "known gap, acceptable for now",
+            **({"athlete_words": "I'm fine with this for now"} if severity_by_id[fid] == "high" else {}),
+        }
+        for fid in finding_ids
+    ]
+
+    done = handlers["author_macro_plan"]({"confirm": True, "draft_id": draft["draft_id"], "decisions": decisions})
+
+    assert done["persisted"] is True
+    for record in done["red_team"]:
+        assert record["confirmed_by_role"] == "athlete"
+        assert record["confirmed_by_id"] is None
+    assert notified == []
+
+
 # --- propose_adaptation is now advisory-only ---------------------------------
 
 

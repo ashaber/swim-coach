@@ -28,7 +28,7 @@ returns. `RESEND_API_KEY` is intentionally NOT in `config.py`'s
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import httpx
 
@@ -483,4 +483,135 @@ def notify_athlete_of_workout_chat_message(
         log.error(
             "notify.workout_chat_unexpected_failure",
             athlete=athlete_slug, message_id=str(message.id), error=str(exc),
+        )
+
+
+# --- coach-ai-planning: human coach confirmed a plan change -> athlete email ---------------
+#
+# `notify_athlete_of_coach_plan_change` fires from `app/tools.py`'s `_confirm_author_macro_plan`/
+# `_confirm_author_week_plan`, called DIRECTLY (not via FastAPI `BackgroundTasks` -- tool
+# handlers run inside the streaming generator, with no `BackgroundTasks` object reachable from
+# there) immediately after the plan change has already been persisted -- same "notify after
+# save, never before" discipline every other notifier in this module uses, just without the
+# BackgroundTasks indirection. Best-effort, NEVER raises, same as every notifier above --
+# see `_handle_author_macro_plan`/`_handle_author_week_plan`'s own callers: a failed
+# notification must never turn an otherwise-successful coach-confirmed plan write into an
+# error response.
+
+
+def _build_plan_change_email(
+    athlete_name: str, coach_name: str, plan_kind: "Literal['macro', 'week']", words: str
+) -> dict:
+    what = "your macro training plan" if plan_kind == "macro" else "one of your weekly plans"
+    text = (
+        f"Hi {athlete_name}, your coach {coach_name} just confirmed a change to {what} on your "
+        f"behalf, in their own words:\n\n{words}\n\n"
+        "Open the app's Plan tab to see the full updated plan and the reasoning behind it."
+    )
+    return {"subject": "Your coach updated your training plan", "text": text}
+
+
+def _send_plan_change_email(
+    client: httpx.Client, settings: "Settings", athlete_email: str, athlete_name: str,
+    coach_name: str, plan_kind: "Literal['macro', 'week']", words: str,
+) -> None:
+    email_hash = hash_token(athlete_email)
+    payload = {
+        "from": settings.resend_from_email,
+        "to": [athlete_email],
+        **_build_plan_change_email(athlete_name, coach_name, plan_kind, words),
+    }
+    try:
+        response = client.post(
+            RESEND_API_URL,
+            headers={"Authorization": f"Bearer {settings.resend_api_key}"},
+            json=payload,
+        )
+    except Exception as exc:  # noqa: BLE001 - any transport error, this send just failed
+        log.error(
+            "notify.plan_change_send_failed", athlete_email_hash=email_hash,
+            plan_kind=plan_kind, error=str(exc),
+        )
+        return
+
+    if response.status_code not in _SUCCESS_STATUS_CODES:
+        log.error(
+            "notify.plan_change_send_failed", athlete_email_hash=email_hash,
+            plan_kind=plan_kind, status_code=response.status_code, error=response.text[:500],
+        )
+        return
+
+    log.info(
+        "notify.plan_change_sent", athlete_email_hash=email_hash,
+        plan_kind=plan_kind, status_code=response.status_code,
+    )
+
+
+def _notify_athlete_of_coach_plan_change(
+    store: "StoreInterface", settings: "Settings", athlete_slug: str, coach_slug: str,
+    plan_kind: "Literal['macro', 'week']", words: str, *, client: httpx.Client | None,
+) -> None:
+    if not settings.resend_api_key:
+        log.info("notify.plan_change_skipped_no_api_key", athlete=athlete_slug, plan_kind=plan_kind)
+        return
+
+    athlete = store.load_athlete(athlete_slug)
+    if not athlete.email_notifications_enabled:
+        log.info(
+            "notify.plan_change_skipped_notifications_disabled",
+            athlete=athlete_slug, plan_kind=plan_kind,
+        )
+        return
+
+    allowed_emails = store.list_allowed_emails()
+    email_by_slug = {
+        entry.athlete_slug: entry.email for entry in allowed_emails if entry.athlete_slug is not None
+    }
+    athlete_email = email_by_slug.get(athlete_slug)
+    if athlete_email is None:
+        log.warn(
+            "notify.plan_change_athlete_missing_allowlist_email",
+            athlete=athlete_slug, plan_kind=plan_kind,
+        )
+        return
+
+    # Best-effort coach display name -- falls back to the coach's own slug if, for whatever
+    # reason, their athlete profile can't be loaded (never fatal to the notification itself).
+    try:
+        coach_name = store.load_athlete(coach_slug).name if coach_slug else "your coach"
+    except Exception:  # noqa: BLE001 - a missing/unloadable coach profile never blocks the email
+        coach_name = "your coach"
+
+    owns_client = client is None
+    if client is None:
+        client = httpx.Client(timeout=_HTTP_TIMEOUT_S)
+    try:
+        _send_plan_change_email(client, settings, athlete_email, athlete.name, coach_name, plan_kind, words)
+    finally:
+        if owns_client:
+            client.close()
+
+
+def notify_athlete_of_coach_plan_change(
+    store: "StoreInterface", settings: "Settings", athlete_slug: str, coach_slug: str,
+    plan_kind: "Literal['macro', 'week']", words: str, *, client: httpx.Client | None = None,
+) -> None:
+    """Best-effort email notification to `athlete_slug` when their human coach confirms a
+    macro/week plan change on their behalf (coach-ai-planning build, Andrew's decision 1).
+    NEVER raises -- same reasoning as every other notifier in this module. No-ops (with a log
+    line) if `settings.resend_api_key` is unset, or if `athlete_slug`'s own
+    `email_notifications_enabled` is False.
+
+    `words` is the coach's own confirmation words (or a short summary of them) -- surfaced
+    directly in the email so the athlete sees what was actually said, not a paraphrase.
+
+    `client`, same test-injection convention as the rest of this module -- used as-is and NOT
+    closed by this function when given.
+    """
+    try:
+        _notify_athlete_of_coach_plan_change(store, settings, athlete_slug, coach_slug, plan_kind, words, client=client)
+    except Exception as exc:  # noqa: BLE001 - this IS the boundary; see module docstring
+        log.error(
+            "notify.plan_change_unexpected_failure",
+            athlete=athlete_slug, plan_kind=plan_kind, error=str(exc),
         )

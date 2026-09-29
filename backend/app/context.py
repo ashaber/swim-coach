@@ -2206,6 +2206,7 @@ def build_per_request_context_and_sizes(
     expert_mode: bool,
     focused_workout: Workout | None = None,
     focused_session: Session | None = None,
+    asker_note: str | None = None,
 ) -> tuple[str, dict[str, int], str]:
     """The uncached, per-request text block: athlete profile + zones,
     current + next week plan, the last ~28 days' exact logged sessions
@@ -2217,6 +2218,12 @@ def build_per_request_context_and_sizes(
     `focused_workout`, when given (the Log tab's embedded workout chat),
     appends `render_focused_workout`'s block -- still per-request/uncached,
     never the stable system prefix (see that function's docstring).
+    `asker_note` (coach-ai-planning build), when given, is one short line appended right after
+    the "Asker mode" line -- e.g. the coach-mode chat route's "the asker is this athlete's
+    human coach, who may confirm plan changes on the athlete's behalf" persona sentence. `None`
+    (the default) for every existing caller; purely additive text, never changes any other
+    section.
+
     `focused_session`, when given (the Plan tab's embedded "ask about this
     session" chat), likewise appends `render_focused_session`'s block. The
     two are independent (a caller resolves at most one per request in
@@ -2296,6 +2303,7 @@ def build_per_request_context_and_sizes(
         "## Athlete context (cached separately from the routed library files -- see "
         "build_context_block; invalidated only when this athlete's own data changes)",
         f"Asker mode: {'expert (professional coach/physiologist)' if expert_mode else 'athlete'}",
+        *([asker_note] if asker_note else []),
         f"Today: {today.isoformat()} (current week {current_iso}, next week {next_iso})",
         "",
         *([held_drafts, ""] if held_drafts else []),
@@ -2376,6 +2384,7 @@ def build_per_request_context(
     expert_mode: bool,
     focused_workout: Workout | None = None,
     focused_session: Session | None = None,
+    asker_note: str | None = None,
 ) -> str:
     """Plain-text convenience wrapper over `build_per_request_context_and_sizes`
     for every caller that only needs the assembled context string (nearly all
@@ -2388,6 +2397,7 @@ def build_per_request_context(
         expert_mode=expert_mode,
         focused_workout=focused_workout,
         focused_session=focused_session,
+        asker_note=asker_note,
     )
     return text
 
@@ -2410,6 +2420,7 @@ def build_context_block(
     focused_workout: Workout | None = None,
     focused_session: Session | None = None,
     cache_ttl: str = "5m",
+    asker_note: str | None = None,
 ) -> list[dict[str, Any]]:
     """System block C: the athlete's own per-request context (profile/zones, current + next
     week plan, the last ~28 days' exact logged sessions, events/races, the aggregate rollup,
@@ -2463,6 +2474,7 @@ def build_context_block(
         expert_mode=expert_mode,
         focused_workout=focused_workout,
         focused_session=focused_session,
+        asker_note=asker_note,
     )
     log.info(
         "context sizes",

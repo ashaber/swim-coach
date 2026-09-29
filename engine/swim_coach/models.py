@@ -790,6 +790,35 @@ class Session(BaseModel):
         return v
 
 
+class ConfirmationRecord(BaseModel):
+    """Who confirmed a safety-rail-gated plan change, and in their own words -- generalizes
+    the old "athlete_words"/"athlete_confirmations" convention (coach-ai-planning build,
+    Andrew's decision 1: a human coach may confirm a plan change ON THE ATHLETE'S BEHALF, and
+    that must be recorded as the coach's own confirmation, never silently passed off as the
+    athlete's own words).
+
+    `role` is "athlete" (the athlete typed these words themselves, in their own chat session)
+    or "coach" (the athlete's human coach, confirming on their behalf via the coach-mode chat
+    -- `POST /api/coach/athletes/{slug}/chat`). `id` is that person's own athlete slug (a coach
+    is always an athlete-kind principal in this system -- see `app/auth.py`'s
+    `Principal.coach_for` docstring) -- `None` only for a legacy/service-credential confirm
+    with no single identity to stamp. `words` is the confirming person's own reasoning/
+    confirmation text, verbatim -- the actual safety-rail requirement (CLAUDE.md's +8%/+15%
+    rail, or a HIGH-severity red-team finding kept as-is) is unchanged by who's confirming: it
+    always needs the confirmer's own words, never just the coach/AI's paraphrase.
+
+    `role` defaults to `"athlete"` so this stays additive/backward-compatible: every record
+    built before this generalization existed (an athlete confirming their own plan, the only
+    case that existed until this build) is indistinguishable from one explicitly tagged
+    `role="athlete"`.
+    """
+
+    finding_id: str
+    role: Literal["athlete", "coach"] = "athlete"
+    id: str | None = None
+    words: str
+
+
 class RaceWeekChecklistItem(BaseModel):
     """One dated, categorized action item surfaced on the final taper week
     immediately preceding an athlete's active A-priority event -- see
@@ -868,6 +897,13 @@ class WeekPlan(BaseModel):
     # jsonb row) has no `race_week_checklist` key and validates unchanged as
     # an empty list; no schema_version bump, same pattern as every other
     # additive field in this file.
+    confirmations: list[ConfirmationRecord] = Field(default_factory=list)
+    # Who confirmed each `confirm-*` safety-rail finding this week's plan drew at
+    # `author_week_plan`-confirm time, and in what words (coach-ai-planning build) -- see
+    # `ConfirmationRecord`'s own docstring. Empty for every week authored before this field
+    # existed (the confirmation itself was still required and gated the write, per CLAUDE.md's
+    # safety rail -- it just wasn't persisted onto the week; see `tools._confirm_author_week_
+    # plan`'s history). Additive/optional, no schema_version bump.
 
     @field_validator("iso_week")
     @classmethod
@@ -992,10 +1028,24 @@ class MacroRedTeamRecord(BaseModel):
     decision: Literal["fix", "keep_as_is"] | None = None
     decision_reason: str | None = None
     athlete_words: str | None = None
-    # The athlete's own words confirming a `keep_as_is` override of a
+    # The confirming person's own words backing a `keep_as_is` override of a
     # HIGH-severity finding (CLAUDE.md's safety-rail pattern, same as
-    # `WeekPlan`'s `athlete_confirmations`) -- `None` for medium/low
-    # findings, which only require `decision_reason`.
+    # `WeekPlan`'s `confirmations`) -- `None` for medium/low
+    # findings, which only require `decision_reason`. Field name kept as
+    # `athlete_words` for backward compatibility with every already-persisted
+    # record (YAML/DB) -- despite the name, as of the coach-ai-planning build
+    # these can now be a COACH's own words too; `confirmed_by_role`/
+    # `confirmed_by_id` below say whose.
+    confirmed_by_role: Literal["athlete", "coach"] = "athlete"
+    confirmed_by_id: str | None = None
+    # Who confirmed this decision (coach-ai-planning build, Andrew's decision 1) --
+    # generalizes the old implicit "it was always the athlete" assumption. `confirmed_by_role`
+    # defaults to `"athlete"` so every record persisted before this generalization existed
+    # validates unchanged (it always WAS the athlete confirming, until a coach-mode chat could
+    # do it too). `confirmed_by_id` is that person's own athlete slug -- `None` for a legacy
+    # record or a service-credential confirm with no single identity. Additive/optional, no
+    # schema_version bump (MacroPlan, the containing model, is unaffected by this field's
+    # addition either).
 
     @field_validator("decision", mode="before")
     @classmethod
