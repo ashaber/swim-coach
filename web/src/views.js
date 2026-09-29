@@ -945,6 +945,165 @@ function renderMacroSection(macro, event, weeks, events) {
     </section>`;
 }
 
+// --- Detailed plan view (coach-ai-planning build) ---------------------------
+// The coach-authored `MacroPlan` fields `renderMacroSection` above never shows: the
+// week-by-week `MacroWeek` table, the `architecture` rationale, per-block meso detail
+// (`purpose`/`limiter`/`key_sessions`/`hard_days_per_week`/`intensity_distribution`/
+// `closing_test`), and the persisted `red_team` review (severity, evidence, the coach's
+// fix/keep_as_is decision, and -- Andrew's decision 1 -- WHO decided: the athlete, or their
+// human coach confirming on the athlete's behalf, never indistinguishable from each other).
+// Shared, verbatim, by the athlete's own Plan tab (renderApp) and the roster's Training Plan
+// sub-tab (renderRosterTrainingPlanBody) below. Degrades gracefully for a legacy macro
+// authored before these fields existed: each section renders nothing (not an empty shell)
+// when its own data is absent, so an old blocks-only macro shows just renderMacroSection's
+// existing block chart, with no dangling empty sections trailing it.
+
+/** severity -> the app's existing status-badge classes (Settings/health-status already
+ * establish badge-fail=attention-worthy/red, badge-warn=amber, badge-ok=green) -- no new
+ * color vocabulary invented for this build. */
+function findingSeverityBadgeClass(severity) {
+  if (severity === 'high') return 'badge badge-fail';
+  if (severity === 'medium') return 'badge badge-warn';
+  return 'badge badge-ok';
+}
+
+/** "Athlete confirmed" / "Coach confirmed" (with the coach's own slug, when known) --
+ * `confirmed_by_role` defaults to 'athlete' server-side (engine/swim_coach/models.py's
+ * `MacroRedTeamRecord`) for every record persisted before the coach-ai-planning build, so an
+ * old finding with no `confirmed_by_role` key at all still reads correctly here. */
+function findingConfirmedByLabel(finding) {
+  const role = finding.confirmed_by_role || 'athlete';
+  if (role === 'coach') {
+    return finding.confirmed_by_id ? `Confirmed by coach (${finding.confirmed_by_id})` : 'Confirmed by coach';
+  }
+  return 'Confirmed by athlete';
+}
+
+function renderRedTeamFinding(finding) {
+  const decisionLabel = finding.decision === 'fix' ? 'Fixed'
+    : finding.decision === 'keep_as_is' ? 'Kept as-is'
+      : 'Undecided';
+  return `
+      <div class="finding-card">
+        <div class="finding-head">
+          <span class="${findingSeverityBadgeClass(finding.severity)}">${esc((finding.severity || '').toUpperCase())}</span>
+          <span class="finding-decision">${esc(decisionLabel)}</span>
+        </div>
+        <p class="finding-row"><b>Evidence:</b> ${esc(finding.evidence || '')}</p>
+        <p class="finding-row"><b>If unaddressed:</b> ${esc(finding.consequence || '')}</p>
+        <p class="finding-row"><b>Suggested fix:</b> ${esc(finding.fix || '')}</p>
+        ${finding.decision_reason ? `<p class="finding-row"><b>Reason:</b> ${esc(finding.decision_reason)}</p>` : ''}
+        ${finding.athlete_words ? `<p class="finding-words">&ldquo;${esc(finding.athlete_words)}&rdquo;</p>` : ''}
+        ${finding.decision ? `<p class="finding-confirmed-by">${esc(findingConfirmedByLabel(finding))}</p>` : ''}
+      </div>`;
+}
+
+function renderRedTeamSection(redTeam) {
+  if (!redTeam || redTeam.length === 0) return '';
+  return `
+      <details class="all-weeks plan-detail-section">
+        <summary data-a="plan-detail:toggle-red-team">Red-team review (${redTeam.length})</summary>
+        ${redTeam.map(renderRedTeamFinding).join('')}
+      </details>`;
+}
+
+function renderMacroWeekRow(week) {
+  const tss = week.load_tss != null ? Math.round(week.load_tss).toLocaleString('en-US') : '—';
+  const ctl = week.ctl_target != null ? Math.round(week.ctl_target) : '—';
+  const hours = week.hours != null ? week.hours : '—';
+  return `
+        <tr>
+          <td>${esc(formatShortDate(parseIsoDate(week.week_start)))}</td>
+          <td>${esc(week.phase || '')}</td>
+          <td>${esc(week.focus || '')}</td>
+          <td class="mono">${esc(String(hours))}</td>
+          <td class="mono">${esc(String(tss))}</td>
+          <td class="mono">${esc(String(ctl))}</td>
+          <td>${esc((week.key_sessions || []).join('; '))}</td>
+          <td>${week.recovery ? 'Recovery' : ''}</td>
+        </tr>`;
+}
+
+/** The `MacroWeek` table -- week, phase, focus, hours, TSS, CTL target, key sessions,
+ * recovery. `load_tss` renders "—" (never a fabricated number) for an hours-only week: the
+ * engine's own draft-time `load_tss_estimate` (backend/app/tools.py's
+ * `_handle_author_macro_plan`) is a response-only convenience for that one chat turn, never
+ * persisted onto `MacroWeek` itself, so this exported view has no estimate to show -- the
+ * table header's own `*` footnote says so rather than silently implying a real number. */
+function renderMacroWeekTable(weeks) {
+  if (!weeks || weeks.length === 0) return '';
+  const sorted = weeks.slice().sort((a, b) => (a.week_start < b.week_start ? -1 : a.week_start > b.week_start ? 1 : 0));
+  const rows = sorted.map(renderMacroWeekRow).join('');
+  return `
+      <details class="all-weeks plan-detail-section" open>
+        <summary data-a="plan-detail:toggle-week-table">Macro week-by-week table (${sorted.length})</summary>
+        <div class="laps-table-wrap">
+          <table class="laps-table macro-week-table">
+            <thead>
+              <tr><th>Week</th><th>Phase</th><th>Focus</th><th>Hours</th><th>TSS*</th><th>CTL target</th><th>Key sessions</th><th>Recovery</th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <p class="sub">* TSS is shown exactly as authored -- a blank cell means only hours were authored for that week, not a zero-load week.</p>
+      </details>`;
+}
+
+function renderMesoBlockCard(block) {
+  const rows = [];
+  if (block.purpose) rows.push(`<p class="meso-row"><b>Purpose:</b> ${esc(block.purpose)}</p>`);
+  if (block.limiter) rows.push(`<p class="meso-row"><b>Limiter:</b> ${esc(block.limiter)}</p>`);
+  if (block.key_sessions && block.key_sessions.length) {
+    rows.push(`<p class="meso-row"><b>Key sessions / progression:</b> ${esc(block.key_sessions.join('; '))}</p>`);
+  }
+  if (block.hard_days_per_week != null) rows.push(`<p class="meso-row"><b>Hard days/week:</b> ${esc(String(block.hard_days_per_week))}</p>`);
+  if (block.intensity_distribution) rows.push(`<p class="meso-row"><b>Intensity distribution:</b> ${esc(block.intensity_distribution)}</p>`);
+  if (block.closing_test) rows.push(`<p class="meso-row"><b>Closing test:</b> ${esc(block.closing_test)}</p>`);
+  if (rows.length === 0) return ''; // a block with no meso fields authored -- nothing to add here
+  return `
+      <div class="meso-card">
+        <h4>${esc(block.name)} · ${esc(formatShortDate(parseIsoDate(block.start_date)))}–${esc(formatShortDate(parseIsoDate(block.end_date)))}</h4>
+        ${rows.join('')}
+      </div>`;
+}
+
+function renderMesoBlockSection(blocks) {
+  const cards = (blocks || []).map(renderMesoBlockCard).filter(Boolean).join('');
+  if (!cards) return '';
+  return `
+      <details class="all-weeks plan-detail-section">
+        <summary data-a="plan-detail:toggle-meso">Block-by-block detail</summary>
+        ${cards}
+      </details>`;
+}
+
+function renderArchitectureSection(architecture) {
+  if (!architecture) return '';
+  return `
+      <details class="all-weeks plan-detail-section" open>
+        <summary data-a="plan-detail:toggle-architecture">Why this plan is shaped this way</summary>
+        <p class="architecture-text">${esc(architecture)}</p>
+      </details>`;
+}
+
+/** The detailed plan view -- exported for both call sites (renderApp / renderRosterTrainingPlanBody)
+ * and for direct unit testing. `null`/blocks-only `macro` renders '' (see module comment above). */
+export function renderMacroPlanDetail(macro) {
+  if (!macro) return '';
+  const sections = [
+    renderArchitectureSection(macro.architecture),
+    renderMacroWeekTable(macro.weeks),
+    renderMesoBlockSection(macro.blocks),
+    renderRedTeamSection(macro.red_team),
+  ].filter(Boolean).join('');
+  if (!sections) return '';
+  return `
+    <section class="plan-detail">
+      <div class="s-head"><h2>Plan detail &amp; reasoning</h2></div>
+      ${sections}
+    </section>`;
+}
+
 // --- CTL/ATL/TSB training-load chart (Dashboard tab + coach roster) --------
 // Shared, verbatim render function for both surfaces (see plan.js's
 // ctlAtlTsbChartGeometry module comment for the geometry math this
@@ -1594,6 +1753,7 @@ export function renderApp(data, planSessionDetailId) {
       ${renderMasthead(athlete, event)}
       ${renderWeeksSection(weeks, planSessionDetailId, sessionPush, allWeeksOpen, true, askCoach)}
       ${renderMacroSection(macro, event, weeks, events)}
+      ${renderMacroPlanDetail(macro)}
       <div class="foot">
         ${renderLegendPanel()}
         ${renderZonesPanel(athlete)}
@@ -3828,25 +3988,54 @@ function renderRosterConversationsPlaceholder() {
  * site (`renderRosterTab`) always passes `form: null` (read-only: coach
  * replies stay in the roster's own Feedback section reply UI, not
  * duplicated here). */
+/** The roster Plan sub-tab's "Ask the AI coach" panel (coach-ai-planning build, Andrew's
+ * decision 2 -- this chat lives here, NOT the Conversations sub-tab, which is reserved for a
+ * future coach<->athlete chat). Reuses the exact same chat-bubble/empty-state markup as the
+ * athlete's own Coach tab (`renderChatMessage`) so the two look and behave identically; its own
+ * `roster:chat:*` action/id namespace keeps it fully independent of the athlete's own Coach-tab
+ * chat state, since (acting-as-athlete mode) both could theoretically be open in the same
+ * browser session at once. No expert-mode toggle -- the backend forces `expert_mode` regardless
+ * (routes/coach.py's `coach_chat`): the asker here is always the coach, never the athlete. */
+function renderRosterAskCoachPanel({ messages, sending, online }) {
+  return `
+    <section class="ask-ai-coach">
+      <div class="s-head"><h2>Ask the AI coach</h2><span class="note">plans and confirms on this athlete's behalf</span></div>
+      ${!online ? '<div class="chat-banner">Offline -- Ask the AI coach needs a connection.</div>' : ''}
+      ${messages.length === 0
+        ? '<div class="chat-empty"><p>Ask the AI coach to draft or revise this athlete&rsquo;s macro plan or an upcoming week.</p></div>'
+        : `<div class="chat-messages" id="roster-chat-messages">${messages.map(renderChatMessage).join('')}</div>`}
+      <div class="chat-composer">
+        <textarea id="roster-chat-input" class="chat-input" placeholder="Ask the AI coach…" rows="2" ${sending || !online ? 'disabled' : ''}></textarea>
+        <div class="chat-composer-row">
+          <button type="button" class="btn-ghost" data-a="roster:chat:clear" ${messages.length === 0 ? 'disabled' : ''}>New conversation</button>
+          <button type="button" class="btn" data-a="roster:chat:send" ${sending || !online ? 'disabled' : ''}>${sending ? 'Sending…' : 'Send'}</button>
+        </div>
+      </div>
+    </section>`;
+}
+
 function renderRosterTrainingPlanBody({
-  plan, online, allWeeksOpen, detailId, askCoach,
+  plan, online, allWeeksOpen, detailId, askCoach, chat, chatSending,
 }) {
+  const chatPanel = renderRosterAskCoachPanel({ messages: chat?.messages || [], sending: !!chatSending, online });
   const status = plan?.status;
   if (status === 'error') {
-    return `<div class="hist-error">Couldn't load the training plan: ${esc(plan.error)}</div>`;
+    return `${chatPanel}<div class="hist-error">Couldn't load the training plan: ${esc(plan.error)}</div>`;
   }
   if (status === 'loading' && !plan?.data) {
-    return '<p class="sub">Loading plan&hellip;</p>';
+    return `${chatPanel}<p class="sub">Loading plan&hellip;</p>`;
   }
   if (!plan?.data) {
     const notice = !online ? 'This needs a connection -- reconnect to load it.' : 'Nothing planned yet.';
-    return `<p class="sub">${esc(notice)}</p>`;
+    return `${chatPanel}<p class="sub">${esc(notice)}</p>`;
   }
   const { events, macro, weeks } = plan.data;
   const event = macroTargetEvent(macro, events);
   return `
+    ${chatPanel}
     ${renderWeeksSection(weeks, detailId, null, allWeeksOpen, false, askCoach)}
-    ${renderMacroSection(macro, event, weeks, events)}`;
+    ${renderMacroSection(macro, event, weeks, events)}
+    ${renderMacroPlanDetail(macro)}`;
 }
 
 export function renderRosterTab({
@@ -3887,6 +4076,12 @@ export function renderRosterTab({
   // build, render idle rather than crash" way as the health-status slices
   // just above.
   workoutChatSubmit = { status: 'idle', error: null },
+  // coach-ai-planning build: the roster Plan sub-tab's "Ask the AI coach" chat session
+  // (`state.roster.chat`, main.js's own `createChatSession()`/`loadChatSession` reuse) and
+  // whether a turn is currently streaming -- same defaulting convention as the health-status/
+  // workoutChatSubmit slices above, for any test/call site that predates this build.
+  chat = { messages: [], expertMode: false },
+  chatSending = false,
 }) {
   if (!backendConfigured) {
     return rosterShell(renderBackendNeededNotice(
@@ -3963,7 +4158,7 @@ export function renderRosterTab({
     const subTabBody = (() => {
       if (activeSubTab === 'conversations') return renderRosterConversationsPlaceholder();
       if (activeSubTab === 'plan') return renderRosterTrainingPlanBody({
-        plan, online, allWeeksOpen, detailId: sessionDetailId, askCoach,
+        plan, online, allWeeksOpen, detailId: sessionDetailId, askCoach, chat, chatSending,
       });
       // Fourth sub-tab (web/coach-health-nav-and-athlete-self-log, fixing
       // the reported "injury form dominates the dashboard and workouts and

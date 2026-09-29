@@ -668,6 +668,28 @@
       height: 16px; padding: 0 4px; border-radius: var(--radius-pill); background: var(--c-signal); color: #fff;
       font-size: 10px; font-weight: 800; line-height: 16px; }
     .tab-btn .badge-count { position: absolute; top: 4px; right: 12px; }
+
+    /* coach-ai-planning build: the roster Plan sub-tab's "Ask the AI coach" panel, and the
+       detailed plan view (macro week table, architecture, meso-block detail, red-team review)
+       shared by the athlete's own Plan tab and that same sub-tab. Phone-first: no fixed widths,
+       wide content (the week table) scrolls its own container (.laps-table-wrap, reused)
+       rather than the page. */
+    .ask-ai-coach { margin-top: 28px; }
+    .plan-detail { margin-top: 28px; }
+    .plan-detail-section + .plan-detail-section { margin-top: 12px; }
+    .architecture-text { font-size: 14px; line-height: 1.55; color: var(--ink); white-space: pre-wrap; }
+    table.macro-week-table th, table.macro-week-table td { text-align: left; white-space: normal; }
+    table.macro-week-table td:nth-child(4), table.macro-week-table td:nth-child(5),
+    table.macro-week-table td:nth-child(6) { text-align: right; white-space: nowrap; }
+    .meso-card, .finding-card { margin-top: 12px; padding: 12px 14px; background: var(--paper);
+      border: 1px solid var(--line); border-radius: var(--radius-xs); }
+    .meso-card h4 { font-family: var(--display); font-size: 14px; font-weight: 700; margin: 0 0 6px; }
+    .meso-row, .finding-row { font-size: 13.5px; color: var(--ink-soft); margin: 4px 0; }
+    .finding-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .finding-decision { font-size: 12px; font-weight: 700; color: var(--ink-soft); }
+    .finding-words { font-size: 13.5px; color: var(--ink); font-style: italic; margin: 6px 0; }
+    .finding-confirmed-by { font-size: 11px; color: var(--ink-faint); text-transform: uppercase;
+      letter-spacing: .04em; margin: 6px 0 0; }
   </style>
 </head>
 <body>

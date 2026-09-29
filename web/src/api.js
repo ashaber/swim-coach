@@ -30,13 +30,18 @@ import { feedSSEBuffer } from './sse.js';
  * detail into the per-request context (see backend/app/routes/chat.py).
  * Omitted entirely for the ordinary Coach tab so its request body is
  * byte-identical to before this feature existed.
+ *
+ * `endpoint` (coach-ai-planning build) defaults to `/api/chat` -- the roster's "Ask the AI
+ * coach" panel (main.js's handleSendRosterChat) passes `/api/coach/athletes/<slug>/chat`
+ * instead, the coach-mode counterpart backend/app/routes/coach.py's `coach_chat` exposes,
+ * sharing this exact same streaming contract (routes/chat.py's `stream_chat_response`).
  */
 export async function streamChat({
-  baseUrl, token, athlete, message, history, expertMode, workoutId, onEvent, signal,
+  baseUrl, token, athlete, message, history, expertMode, workoutId, endpoint = '/api/chat', onEvent, signal,
 }) {
   let response;
   try {
-    response = await fetch(`${baseUrl}/api/chat`, {
+    response = await fetch(`${baseUrl}${endpoint}`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
