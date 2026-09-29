@@ -6,13 +6,21 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date, timedelta
 from pathlib import Path
 from uuid import UUID
 
 import pytest
 
-from fakes import auth_headers, google_token_for, make_workout
+from fakes import (
+    auth_headers,
+    google_token_for,
+    make_final_message,
+    make_text_block,
+    make_tool_use_block,
+    make_workout,
+)
 from swim_coach.store import FileStore
 
 ANDREW_EMAIL = "andrewshaber@gmail.com"
@@ -1072,3 +1080,162 @@ def test_coach_resolve_health_status_404_on_entry_belonging_to_different_athlete
         headers=headers,
     )
     assert response.status_code == 404
+
+
+# --- POST /api/coach/athletes/{slug}/chat (coach-ai-planning build) ----------
+# Same streaming contract as POST /api/chat (routes/chat.py's `stream_chat_response`, shared
+# rather than duplicated), scoped via `resolve_coach_athlete`, `expert_mode` forced true, plus
+# a short persona line -- Andrew's decisions 1 (coach confirms on the athlete's behalf,
+# recorded) and 2 (this chat lives in the roster's Plan sub-tab).
+
+
+def _renee_headers(client, allowlist, google) -> dict:
+    token = _sign_in(client, RENEE_EMAIL).json()["token"]
+    return _bearer(token)
+
+
+def test_coach_chat_requires_auth(client) -> None:
+    response = client.post("/api/coach/athletes/renee/chat", json={"message": "hi", "history": []})
+    assert response.status_code == 401
+
+
+def test_coach_chat_403_without_grant(client, allowlist, google) -> None:
+    headers = _tim_headers(client, allowlist, google)
+    response = client.post(
+        "/api/coach/athletes/renee/chat", json={"message": "hi", "history": []}, headers=headers
+    )
+    assert response.status_code == 403
+
+
+def test_coach_chat_athlete_session_cannot_use_coach_chat_for_another_athlete(
+    client, allowlist, store, google
+) -> None:
+    # renee is an athlete session, not a coach for tim -- she must never reach tim's coach chat.
+    headers = _renee_headers(client, allowlist, google)
+    response = client.post(
+        "/api/coach/athletes/tim/chat", json={"message": "hi", "history": []}, headers=headers
+    )
+    assert response.status_code == 403
+
+
+def test_coach_chat_forces_expert_mode_and_injects_persona(
+    client, allowlist, store, google, fake_claude_chat_factory
+) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    headers = _tim_headers(client, allowlist, google)
+    final = make_final_message([make_text_block("ok")], "end_turn")
+    chat = fake_claude_chat_factory([(["ok"], final)])
+
+    response = client.post(
+        "/api/coach/athletes/renee/chat",
+        json={"message": "how's renee's plan looking?", "history": [], "expert_mode": False},
+        headers=headers,
+    )
+    assert response.status_code == 200
+
+    system_text = "".join(
+        b.get("text", "") for b in chat.client.messages.calls[0]["system"] if isinstance(b, dict)
+    )
+    assert "Asker mode: expert" in system_text
+    assert "human coach" in system_text
+    assert "confirm" in system_text
+
+
+@pytest.fixture
+def spy_plan_change_notifier(app):
+    """Same spy-via-dependency-override pattern as `test_feedback_route.py`'s `spy_notifier`
+    (`get_notifier`) -- `get_plan_change_notifier` (routes/chat.py) is the equivalent seam for
+    the coach-ai-planning build's athlete notification. Called SYNCHRONOUSLY from inside the
+    tool handler (never via BackgroundTasks -- see app/notify.py's own docstring for why), so
+    the spy's calls are already populated by the time a test's `client.post(...)` returns."""
+    from app.routes.chat import get_plan_change_notifier
+
+    calls = []
+
+    def fake_notifier(store, settings, athlete_slug, coach_slug, plan_kind, words):
+        calls.append(
+            {"athlete": athlete_slug, "coach": coach_slug, "plan_kind": plan_kind, "words": words}
+        )
+
+    app.dependency_overrides[get_plan_change_notifier] = lambda: fake_notifier
+    yield calls
+    app.dependency_overrides.pop(get_plan_change_notifier, None)
+
+
+def test_coach_chat_author_week_plan_confirm_is_recorded_as_coach_and_notifies(
+    client, allowlist, store, google, fake_claude_chat_factory, spy_plan_change_notifier
+) -> None:
+    store.create_coach_grant(coach_slug="tim", athlete_slug="renee")
+    headers = _tim_headers(client, allowlist, google)
+
+    # Build the same over-sized-long-swim scenario test_tools.py's author_week_plan tests use,
+    # against the real fixture's own 2026-W28 week, so the draft's report reliably includes a
+    # `confirm-*` (safety-rail) finding.
+    prev = store.load_week("renee", "2026-W28")
+    big_distance = max(s.distance_m or 0 for s in prev.sessions if s.sport in ("swim_pool", "swim_ow")) * 3
+    draft_input = {
+        "iso_week": "2026-W29",
+        "sessions": [
+            {
+                "date": "2026-07-13",
+                "sport": "swim_ow",
+                "duration_min": 300,
+                "purpose": "very long open water",
+                "distance_m": big_distance,
+            }
+        ],
+    }
+
+    draft_tool_use = make_tool_use_block("toolu_draft", "author_week_plan", draft_input)
+    turn_1 = make_final_message([draft_tool_use], "tool_use")
+    turn_2_text = "Here's the draft -- want me to confirm it?"
+    turn_2 = make_final_message([make_text_block(turn_2_text)], "end_turn")
+    chat = fake_claude_chat_factory([([], turn_1), ([turn_2_text], turn_2)])
+
+    response = client.post(
+        "/api/coach/athletes/renee/chat",
+        json={"message": "author next week for renee", "history": []},
+        headers=headers,
+    )
+    assert response.status_code == 200
+
+    # Pull the draft_id and confirm-* finding ids back out of the tool_result the fake client
+    # was actually sent, exactly the way the real model would read them off the first turn's
+    # tool_result before making its own confirm call.
+    second_call_messages = chat.client.messages.calls[1]["messages"]
+    tool_result = json.loads(second_call_messages[-1]["content"][0]["content"])
+    draft_id = tool_result["draft_id"]
+    confirm_ids = [f["id"] for f in tool_result["report"]["findings"] if f["id"].startswith("confirm-")]
+    assert confirm_ids, "expected a requires-confirmation finding for this oversized long swim"
+
+    confirm_input = {
+        "iso_week": "2026-W29",
+        "confirm": True,
+        "draft_id": draft_id,
+        "athlete_confirmations": [
+            {"finding_id": fid, "athlete_words": "coach here, confirming this for renee"} for fid in confirm_ids
+        ],
+    }
+    confirm_tool_use = make_tool_use_block("toolu_confirm", "author_week_plan", confirm_input)
+    turn_1b = make_final_message([confirm_tool_use], "tool_use")
+    turn_2b = make_final_message([make_text_block("Confirmed and written.")], "end_turn")
+    fake_claude_chat_factory([([], turn_1b), (["Confirmed and written."], turn_2b)])
+
+    response2 = client.post(
+        "/api/coach/athletes/renee/chat",
+        json={"message": "yes, confirm it", "history": []},
+        headers=headers,
+    )
+    assert response2.status_code == 200
+
+    saved = FileStore(base_dir=store.base_dir).load_week("renee", "2026-W29")
+    assert saved is not None
+    assert saved.confirmations, "expected the confirmation to be persisted onto the WeekPlan"
+    assert all(c.role == "coach" and c.id == "tim" for c in saved.confirmations)
+
+    assert len(spy_plan_change_notifier) == 1
+    call = spy_plan_change_notifier[0]
+    assert call["athlete"] == "renee"
+    assert call["coach"] == "tim"
+    assert call["plan_kind"] == "week"
+    assert "coach here, confirming this for renee" in call["words"]

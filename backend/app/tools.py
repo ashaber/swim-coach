@@ -197,7 +197,7 @@ import tempfile
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from pydantic import ValidationError
 
@@ -234,6 +234,7 @@ from swim_coach.models import (
     AthleteNote,
     normalize_interval_type,
     derive_blocks_from_macro_weeks,
+    ConfirmationRecord,
     Event,
     Feedback,
     MacroPlan,
@@ -1863,9 +1864,13 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                                 "type": "string",
                                 "description": (
                                     "Required when `decision` is 'keep_as_is' AND this finding's "
-                                    "severity is 'high' -- the athlete's OWN WORDS confirming the "
-                                    "override, not the coach's paraphrase (CLAUDE.md's safety-rail "
-                                    "pattern). Omit/blank refuses the confirm for a high finding."
+                                    "severity is 'high' -- the OWN WORDS of whoever is actually "
+                                    "confirming the override (the athlete themselves, or, in a "
+                                    "coach-mode session, their human coach on the athlete's "
+                                    "behalf -- WHO confirmed is recorded automatically from the "
+                                    "session, never from this field), never the AI's own paraphrase "
+                                    "(CLAUDE.md's safety-rail pattern). Omit/blank refuses the "
+                                    "confirm for a high finding."
                                 ),
                             },
                         },
@@ -2177,8 +2182,11 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                         "Required WITH confirm:true whenever the draft call's report included a "
                         "requires-athlete-confirmation finding (id starting 'confirm-' -- CLAUDE.md's "
                         "safety rail: +8%/week volume, +15% long-swim step). One entry per such "
-                        "finding id, carrying the athlete's OWN WORDS explicitly agreeing to it -- "
-                        "omitting a required entry refuses the confirm and writes nothing."
+                        "finding id, carrying the OWN WORDS of whoever is actually confirming it -- "
+                        "the athlete themselves, or, in a coach-mode session, their human coach "
+                        "confirming on the athlete's behalf (WHO confirmed is recorded automatically "
+                        "from the session, never from this field) -- omitting a required entry "
+                        "refuses the confirm and writes nothing."
                     ),
                     "items": {
                         "type": "object",
@@ -2190,8 +2198,10 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                             "athlete_words": {
                                 "type": "string",
                                 "description": (
-                                    "The athlete's own words agreeing to this specific increase -- "
-                                    "not the coach's paraphrase."
+                                    "The confirming person's own words agreeing to this specific "
+                                    "increase (the athlete's, or, in a coach-mode session, their "
+                                    "coach's own words on the athlete's behalf) -- never the AI's "
+                                    "own paraphrase."
                                 ),
                             },
                         },
@@ -8578,9 +8588,16 @@ def _handle_author_macro_plan(
     store: StoreInterface,
     slug: str,
     redraft_counts: dict[str, int],
+    confirmer_role: Literal["athlete", "coach"] = "athlete",
+    confirmer_id: str | None = None,
+    plan_change_notifier: Callable[[str, str, str], None] | None = None,
 ) -> dict[str, Any]:
     if bool(input_data.get("confirm", False)):
-        agreed = _confirm_author_macro_plan(store, slug, input_data, tool="author_macro_plan")
+        agreed = _confirm_author_macro_plan(
+            store, slug, input_data, tool="author_macro_plan",
+            confirmer_role=confirmer_role, confirmer_id=confirmer_id,
+            plan_change_notifier=plan_change_notifier,
+        )
         if agreed is not None:
             return agreed
 
@@ -8723,7 +8740,10 @@ def _handle_author_macro_plan(
 
 
 def _confirm_author_macro_plan(
-    store: StoreInterface, slug: str, input_data: dict[str, Any], *, tool: str
+    store: StoreInterface, slug: str, input_data: dict[str, Any], *, tool: str,
+    confirmer_role: Literal["athlete", "coach"] = "athlete",
+    confirmer_id: str | None = None,
+    plan_change_notifier: Callable[[str, str, str], None] | None = None,
 ) -> dict[str, Any] | None:
     draft_id = input_data.get("draft_id")
     carrier, stop = _load_draft_safely(store, slug, _MACRO_CARRIER_WEEK, draft_id, tool=tool)
@@ -8831,6 +8851,8 @@ def _confirm_author_macro_plan(
             decision=decisions_by_id[f["id"]]["decision"],
             decision_reason=decisions_by_id[f["id"]]["reason"],
             athlete_words=decisions_by_id[f["id"]].get("athlete_words"),
+            confirmed_by_role=confirmer_role,
+            confirmed_by_id=confirmer_id,
         )
         for f in findings_by_id.values()
     ]
@@ -8854,6 +8876,15 @@ def _confirm_author_macro_plan(
     log.info(
         "macro plan written from agreed draft", athlete=slug, tool=tool, macro_id=str(macro.id), verified=verified
     )
+    # Athlete notification (coach-ai-planning build, Andrew's decision 1): a coach confirming
+    # on the athlete's behalf must tell the athlete their plan changed. Called directly (never
+    # via BackgroundTasks -- see app/notify.py's own docstring for why), best-effort, never
+    # raises. A no-op for an athlete's own confirm (no notifier bound -- see build_tool_handlers).
+    if confirmer_role == "coach" and plan_change_notifier is not None:
+        words = "; ".join(
+            w for w in (d.get("athlete_words") for d in decisions_by_id.values()) if w
+        ) or "(coach confirmed without additional comment)"
+        plan_change_notifier(confirmer_id or "", "macro", words)
     return {
         "weeks": _macro_weeks_json(macro.weeks),
         "architecture": macro.architecture,
@@ -8877,7 +8908,12 @@ def _resolve_macro_week_for_iso(store: StoreInterface, slug: str, week_start: da
     return next((w for w in macro.weeks if w.week_start == week_start), None)
 
 
-def _handle_author_week_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+def _handle_author_week_plan(
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str,
+    confirmer_role: Literal["athlete", "coach"] = "athlete",
+    confirmer_id: str | None = None,
+    plan_change_notifier: Callable[[str, str, str], None] | None = None,
+) -> dict[str, Any]:
     iso_week = input_data.get("iso_week")
     if not iso_week:
         return {"error": "iso_week is required"}
@@ -8888,7 +8924,11 @@ def _handle_author_week_plan(input_data: dict[str, Any], *, store: StoreInterfac
         return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
 
     if bool(input_data.get("confirm", False)):
-        agreed = _confirm_author_week_plan(store, slug, iso_week, input_data, tool="author_week_plan")
+        agreed = _confirm_author_week_plan(
+            store, slug, iso_week, input_data, tool="author_week_plan",
+            confirmer_role=confirmer_role, confirmer_id=confirmer_id,
+            plan_change_notifier=plan_change_notifier,
+        )
         if agreed is not None:
             return agreed
 
@@ -8999,7 +9039,10 @@ def _handle_author_week_plan(input_data: dict[str, Any], *, store: StoreInterfac
 
 
 def _confirm_author_week_plan(
-    store: StoreInterface, slug: str, iso_week: str, input_data: dict[str, Any], *, tool: str
+    store: StoreInterface, slug: str, iso_week: str, input_data: dict[str, Any], *, tool: str,
+    confirmer_role: Literal["athlete", "coach"] = "athlete",
+    confirmer_id: str | None = None,
+    plan_change_notifier: Callable[[str, str, str], None] | None = None,
 ) -> dict[str, Any] | None:
     draft_id = input_data.get("draft_id")
     draft, stop = _load_draft_safely(store, slug, iso_week, draft_id, tool=tool)
@@ -9049,8 +9092,24 @@ def _confirm_author_week_plan(
         log.warn("swallowed exception, using a default", where='backend/app/tools.py', exc_info=True)
         live_before = None
 
+    # Persisted confirmation records (coach-ai-planning build) -- every entry that actually
+    # satisfied a `confirm-*` finding above, tagged with WHO confirmed (the request's own
+    # confirmer_role/confirmer_id, never taken from `input_data` -- see build_tool_handlers'
+    # docstring for why this is a server-side stamp, not a model-suppliable field).
+    confirmations = [
+        ConfirmationRecord(
+            finding_id=c["finding_id"], role=confirmer_role, id=confirmer_id,
+            words=str(c["athlete_words"]).strip(),
+        )
+        for c in confirmations_input
+        if isinstance(c, dict) and c.get("finding_id") and str(c.get("athlete_words", "")).strip()
+    ]
+
     agreed = draft.model_copy(
-        update={"draft": False, "drafted_at": None, "drafted_by": None, "adaptation_rationale": None},
+        update={
+            "draft": False, "drafted_at": None, "drafted_by": None, "adaptation_rationale": None,
+            "confirmations": confirmations,
+        },
         deep=True,
     )
     warnings = [w for w in agreed.planning_warnings if "DROPPED" not in w]
@@ -9075,6 +9134,11 @@ def _confirm_author_week_plan(
         verified=verified,
         dropped_sessions=len(dropped),
     )
+    # Athlete notification (coach-ai-planning build, Andrew's decision 1) -- same discipline as
+    # _confirm_author_macro_plan's own notify call above in this file.
+    if confirmer_role == "coach" and plan_change_notifier is not None:
+        words = "; ".join(c.words for c in confirmations) or "(coach confirmed without additional comment)"
+        plan_change_notifier(confirmer_id or "", "week", words)
     return {
         "iso_week": agreed.iso_week,
         "meso_block": agreed.meso_block,
@@ -9082,6 +9146,7 @@ def _confirm_author_week_plan(
         "target_volume_m": agreed.target_volume_m,
         "planning_warnings": list(agreed.planning_warnings),
         "sessions": _week_sessions_json(agreed),
+        "confirmations": [c.model_dump(mode="json") for c in confirmations],
         "dropped_sessions": dropped,
         "persisted": True,
         "written_from_draft": True,
@@ -9172,6 +9237,9 @@ def build_tool_handlers(
     library_dir: Path | None = None,
     request_id: str | None = None,
     routed_files: list[str] | None = None,
+    confirmer_role: Literal["athlete", "coach"] = "athlete",
+    confirmer_id: str | None = None,
+    plan_change_notifier: Callable[[str, str, str], None] | None = None,
 ) -> dict[str, ToolHandler]:
     """Binds the request's athlete slug / expert_mode / store into closures
     over the tool handlers above, so the tool schema the model sees never
@@ -9185,7 +9253,20 @@ def build_tool_handlers(
     `flag_for_coach_review` emit (IDEA 025 step 1) -- `request_id` joins that
     line back to the request's "library route"/"claude turn complete" logs,
     and `routed_files` is what `flag_for_coach_review`'s own miss line names
-    as "what was actually routed/attached for this request"."""
+    as "what was actually routed/attached for this request".
+
+    `confirmer_role`/`confirmer_id` (coach-ai-planning build) name WHO is confirming a
+    `confirm-*` safety-rail finding or a HIGH red-team finding's `keep_as_is` override via
+    `author_macro_plan`/`author_week_plan` -- deliberately resolved by the ROUTE from the
+    authenticated `Principal` (see routes/chat.py's `_stream_chat_response` and routes/
+    coach.py's coach-chat route), never read from the model's own tool-call JSON: a coach
+    stamping their own confirmation as `role="coach"` must be a server-side fact, not
+    something the model (or a malicious/confused prompt) could claim on its own. Defaults
+    preserve the athlete-session route's exact prior behavior (`role="athlete"`, no id).
+    `plan_change_notifier`, when given (only for a coach-mode request -- see the same two
+    route call sites), is `app.notify.notify_athlete_of_coach_plan_change` pre-bound to this
+    request's `store`/`settings`/athlete slug via `functools.partial`; `None` for an
+    athlete-session request, where no such notification is needed."""
     # Runaway guard state for `author_macro_plan` (approved plan's "Token
     # economics" section): a fresh, empty dict per call to this function --
     # `build_tool_handlers` itself is called once per chat request (see
@@ -9198,10 +9279,14 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "author_macro_plan": lambda input_data: _handle_author_macro_plan(
-            input_data, store=store, slug=slug, redraft_counts=redraft_counts
+            input_data, store=store, slug=slug, redraft_counts=redraft_counts,
+            confirmer_role=confirmer_role, confirmer_id=confirmer_id,
+            plan_change_notifier=plan_change_notifier,
         ),
         "author_week_plan": lambda input_data: _handle_author_week_plan(
-            input_data, store=store, slug=slug
+            input_data, store=store, slug=slug,
+            confirmer_role=confirmer_role, confirmer_id=confirmer_id,
+            plan_change_notifier=plan_change_notifier,
         ),
         "check_plan": lambda input_data: _handle_check_plan(
             input_data, store=store, slug=slug

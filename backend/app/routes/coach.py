@@ -15,6 +15,7 @@ from typing import Any, Callable
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from swim_coach.athlete_time import athlete_today
 from swim_coach.load import estimate_hr_max
 from swim_coach.quality import match_workout_to_session, workout_quality
@@ -22,10 +23,17 @@ from swim_coach.models import Feedback, HealthStatus, Session, WorkoutChatMessag
 from swim_coach.store import StoreInterface
 
 from app.auth import Principal, require_auth, resolve_coach_athlete
+from app.claude import ClaudeChat
 from app.config import Settings
 from app.context import summarize_rollup
 from app.load_helpers import workout_load_au
 from app.notify import notify_athlete_of_coach_reply, notify_athlete_of_workout_chat_message
+from app.routes.chat import (
+    ChatRequest,
+    get_claude_chat,
+    get_plan_change_notifier,
+    stream_chat_response,
+)
 from app.routes.plan import (
     LOAD_GRAPH_DEFAULT_WEEKS,
     LOAD_GRAPH_MAX_WEEKS,
@@ -579,3 +587,72 @@ async def coach_set_workout_chat_muted(
     workout.chat_ai_muted = muted
     store.save_workout(slug, workout)
     return {"workout_id": str(workout_id), "chat_ai_muted": muted}
+
+
+@router.post("/api/coach/athletes/{slug}/chat")
+async def coach_chat(
+    slug: str,
+    payload: ChatRequest,
+    request: Request,
+    principal: Principal = Depends(require_auth),
+    claude_chat: ClaudeChat = Depends(get_claude_chat),
+    plan_change_notifier=Depends(get_plan_change_notifier),
+) -> StreamingResponse:
+    """The coach-mode counterpart to `POST /api/chat` -- the "Ask the AI coach" panel on the
+    roster's Plan sub-tab (coach-ai-planning build, Andrew's decision 2). Reuses
+    `routes.chat.stream_chat_response` directly (same streaming contract: SSE event shapes,
+    light-mode escalation, workout-chat-thread persistence, muted-thread short-circuit) rather
+    than duplicating it -- scoped via `resolve_coach_athlete` instead of `resolve_athlete`, so a
+    coach without an ACTIVE grant for `slug` 403s here exactly as it would on every other
+    coach-mode route in this file.
+
+    `expert_mode` is FORCED true regardless of what the client sends -- a human coach is always
+    the "expert (professional coach/physiologist)" asker (see `app.context`'s "Asker mode" doc
+    and `app.light_mode.is_light_turn`, which always escalates an expert-mode turn to full mode).
+    One short persona line is folded into the per-request context (`asker_note`) telling the
+    model who's actually asking, so it never mistakes the coach's own words for the athlete's.
+
+    `payload.athlete`, if the client sends one, is overridden to `slug` -- this route only ever
+    acts on the ONE athlete named in the URL path; there is no "which athlete" ambiguity for a
+    client to get wrong the way `POST /api/chat`'s body-level `athlete` field has for an
+    athlete-session client.
+
+    **Confirmer attribution (Andrew's decision 1):** `confirmer_role="coach"` and
+    `confirmer_id` (the coach's own athlete slug) are threaded straight through to
+    `app.tools.build_tool_handlers` -- resolved HERE, from the authenticated `Principal`, never
+    from anything in the request body or the model's own tool-call JSON (see
+    `build_tool_handlers`'s own docstring for why). A coach is always an athlete-kind principal
+    in this system (`Principal.coach_for`'s own docstring) -- mirrors `coach_reply_to_feedback`'s
+    identical reasoning just above in this file for a service credential, which has no single
+    "which coach" identity of its own: tagged `confirmer_id="service"` rather than refused
+    outright, since (unlike replying to feedback) merely chatting isn't itself a mutating
+    "who confirmed this" action -- only a plan CONFIRM inside the conversation is, and that
+    confirmation is honestly attributed either way.
+
+    The daily chat cap (`require_daily_chat_cap`, enforced inside `stream_chat_response`) counts
+    against the COACH's own principal -- a coach juggling several athletes' Plan-tab chats in
+    one day shares ONE cap across all of them, same as their own personal chat use would; it is
+    NOT per-coachee.
+    """
+    slug = resolve_coach_athlete(principal, slug)
+    coach_id = principal.athlete if principal.kind == "athlete" else "service"
+    persona_note = (
+        f"Asker identity: this is {slug}'s human coach (not {slug} themselves), using the "
+        "coach-mode \"Ask the AI coach\" panel to plan on the athlete's behalf. They may confirm "
+        "plan changes -- the +8%/+15% safety rail, or keeping a HIGH red-team finding as-is -- "
+        "FOR the athlete; when they do, their own words are what CLAUDE.md's safety rail "
+        "requires (never your own paraphrase), and the confirmation is recorded as the coach's, "
+        "attributed by role, never silently passed off as the athlete's own."
+    )
+    coach_payload = payload.model_copy(update={"expert_mode": True, "athlete": slug})
+    return await stream_chat_response(
+        coach_payload,
+        request,
+        principal,
+        claude_chat,
+        athlete=slug,
+        confirmer_role="coach",
+        confirmer_id=coach_id,
+        asker_note=persona_note,
+        plan_change_notifier=plan_change_notifier,
+    )
