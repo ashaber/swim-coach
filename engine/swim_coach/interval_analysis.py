@@ -69,9 +69,18 @@ from dataclasses import dataclass, field
 
 from swim_coach.models import (
     IntervalEffort,
+    IntervalRound,
     IntervalSubStructure,
     WorkoutIntervals,
     WorkoutStructure,
+)
+
+from swim_coach.prescription import (
+    Located,
+    PrescribedRep,
+    REP_COMPLETED_MIN_FRAC_OF_LOW,
+    locate_prescribed_reps,
+    window_indices,
 )
 
 # --- constants (library/26-activity-stream-interval-analysis.md) -------------------------------------
@@ -1306,6 +1315,176 @@ def tightened_decoupling(
     )
 
 
+def _build_interval_effort(
+    series: dict,
+    e: DetectedEffort,
+    eff_target: float | None,
+    in_band: float,
+    baseline_altitude_m: float | None,
+    baseline_altitude_source: str | None,
+    *,
+    with_sub_structure: bool = True,
+) -> IntervalEffort:
+    """One detected (or prescription-located) effort -> the persisted
+    `IntervalEffort`: `assess_effort` + sub-structure + altitude context."""
+    q = assess_effort(series, e, target_w=eff_target, in_band_frac=in_band)
+    altitude_m, altitude_gain_m, altitude_decrement_pct, altitude_context = (
+        _effort_altitude_context(series, e, baseline_altitude_m, baseline_altitude_source)
+    )
+    altitude_adjusted_target_w = None
+    cleared_altitude_adjusted_target = None
+    if altitude_decrement_pct is not None and eff_target is not None:
+        altitude_adjusted_target_w = round(eff_target * (1 - altitude_decrement_pct / 100), 1)
+        if q.avg_w is not None:
+            cleared_altitude_adjusted_target = q.avg_w >= altitude_adjusted_target_w
+    return IntervalEffort(
+        n=e.n,
+        start_s=round(e.start_s, 1),
+        duration_s=round(e.duration_s, 1),
+        avg_w=q.avg_w,
+        avg_hr=q.avg_hr,
+        target_w=round(eff_target, 1) if eff_target is not None else None,
+        pct_of_target=q.pct_of_target,
+        avg_vs_target_w=q.avg_vs_target_w,
+        time_in_band_pct=q.time_in_band_pct,
+        fade_pct=q.fade_pct,
+        hr_drift_bpm=q.hr_drift_bpm,
+        grade_delta_pct_pts=q.grade_delta_pct_pts,
+        terrain_flag=q.terrain_flag,
+        verdict=q.verdict,
+        sub_structure=_sub_structure(series, e) if with_sub_structure else None,
+        altitude_m=altitude_m,
+        altitude_gain_m=altitude_gain_m,
+        altitude_context=altitude_context,
+        altitude_decrement_pct=altitude_decrement_pct,
+        altitude_adjusted_target_w=altitude_adjusted_target_w,
+        cleared_altitude_adjusted_target=cleared_altitude_adjusted_target,
+    )
+
+
+def _pct_drop(first: float | None, last: float | None) -> float | None:
+    if first is None or last is None or first <= 0:
+        return None
+    return round((first - last) / first * 100, 1) + 0.0
+
+
+def _analyze_prescribed_reps(
+    series: dict,
+    located: Located,
+    *,
+    ftp_watts: float | None,
+    in_band: float,
+    baseline_altitude_m: float | None,
+    baseline_altitude_source: str | None,
+) -> dict | None:
+    """Per-rep / per-round read of reps located from the prescription (see
+    `prescription.py`). Returns the prescription-specific `WorkoutIntervals`
+    kwargs, or `None` when no located window has samples in the series."""
+    t_s = series.get("t_s") or []
+    efforts: list[IntervalEffort] = []
+    rep_of: dict[int, PrescribedRep] = {}
+    for win in located.windows:
+        idx = window_indices(t_s, win.start_s, win.end_s)
+        if idx is None:
+            continue
+        rep = win.rep
+        detected = DetectedEffort(
+            n=len(efforts) + 1, start_idx=idx[0], end_idx=idx[1],
+            start_s=t_s[idx[0]], end_s=t_s[idx[1]] + 1.0, kind="prescribed",
+        )
+        mid = None
+        if rep.low_w is not None and rep.high_w is not None:
+            mid = (rep.low_w + rep.high_w) / 2
+        elif rep.low_w is not None:
+            mid = rep.low_w
+        effort = _build_interval_effort(
+            series, detected, mid, in_band, baseline_altitude_m, baseline_altitude_source,
+            with_sub_structure=False,
+        )
+        in_target = None
+        if rep.low_w is not None and effort.avg_w is not None:
+            in_target = effort.avg_w >= rep.low_w and (
+                rep.high_w is None or effort.avg_w <= rep.high_w
+            )
+        rep_of[effort.n] = rep
+        efforts.append(
+            effort.model_copy(
+                update={
+                    "round_n": rep.round_n,
+                    "rep_in_round": rep.rep_in_round,
+                    "in_target_band": in_target,
+                }
+            )
+        )
+    if not efforts:
+        return None
+
+    def completed(e: IntervalEffort) -> bool:
+        low = rep_of[e.n].low_w
+        return e.avg_w is not None and (low is None or e.avg_w >= REP_COMPLETED_MIN_FRAC_OF_LOW * low)
+
+    done = [e for e in efforts if completed(e)]
+    banded = [e for e in done if e.in_target_band is not None]
+    reps_in_band_pct = (
+        round(sum(bool(e.in_target_band) for e in banded) / len(banded) * 100, 1) if banded else None
+    )
+
+    powers = [e.avg_w for e in done]
+    third = max(1, len(powers) // 3)
+    fade_reps = (
+        _pct_drop(statistics.fmean(powers[:third]), statistics.fmean(powers[-third:]))
+        if len(powers) >= 2 else None
+    )
+
+    round_ids = sorted({p.round_n for p in located.prescribed})
+    rounds: list[IntervalRound] = []
+    for rn in round_ids:
+        in_round = [e for e in done if e.round_n == rn]
+        prescribed_here = sum(1 for p in located.prescribed if p.round_n == rn)
+        pw = [e.avg_w for e in in_round]
+        hrs = [e.avg_hr for e in in_round if e.avg_hr is not None]
+        half = len(pw) // 2
+        rbanded = [e for e in in_round if e.in_target_band is not None]
+        rounds.append(
+            IntervalRound(
+                n=rn,
+                reps_prescribed=prescribed_here,
+                reps_completed=len(in_round),
+                avg_w=round(statistics.fmean(pw), 1) if pw else None,
+                avg_hr=round(statistics.fmean(hrs)) if hrs else None,
+                reps_in_band=sum(bool(e.in_target_band) for e in rbanded) if rbanded else None,
+                fade_within_pct=(
+                    _pct_drop(statistics.fmean(pw[:half]), statistics.fmean(pw[-half:]))
+                    if half >= 1 and len(pw) >= 2 else None
+                ),
+            )
+        )
+    active = [r for r in rounds if r.avg_w is not None]
+    fade_rounds = _pct_drop(active[0].avg_w, active[-1].avg_w) if len(active) >= 2 else None
+
+    all_reps = list(located.prescribed)
+    zones = {r.zone for r in all_reps}
+    bands = {(r.low_w, r.high_w) for r in all_reps}
+    band = next(iter(bands)) if len(bands) == 1 else None
+    return {
+        "efforts_detected": len(efforts),
+        "matched_to_prescription": True,
+        "prescribed_count": len(located.prescribed),
+        "efforts": efforts,
+        "detection_source": located.source,
+        "reps_completed": len(done),
+        "reps_in_band_pct": reps_in_band_pct,
+        "fade_across_reps_pct": fade_reps,
+        "fade_across_rounds_pct": fade_rounds,
+        "target_zone": next(iter(zones)) if len(zones) == 1 else None,
+        "target_band_w": (
+            (round(band[0], 1), round(band[1], 1))
+            if band and band[0] is not None and band[1] is not None else None
+        ),
+        "rounds": rounds,
+    }
+
+
 # --- public entry point ----------------------------------------------------------
 
 
@@ -1317,6 +1496,8 @@ def analyze(
     structure: WorkoutStructure | None = None,
     indoor: bool | None = None,
     home_elevation_m: float | None = None,
+    laps: list | None = None,
+    ftp_watts: float | None = None,
 ) -> WorkoutIntervals | None:
     """Full deterministic interval analysis for one ride. Returns a
     `models.WorkoutIntervals` for `sport == "bike"` rides that carry a
@@ -1334,6 +1515,13 @@ def analyze(
     signal to the athlete's real home elevation instead of this ride's own
     session-relative baseline -- see `_effective_baseline_altitude_m` and
     `library/30-altitude-power-adjustment.md`.
+
+    `laps` + `ftp_watts` drive the prescription-aware path: when `structure`
+    carries time-based interval reps, they are located in the ride from the
+    device laps (series fallback) and reported per rep / per round -- see
+    `prescription.py`. Zone targets resolve to watts from `ftp_watts`
+    (`zones.bike_zone_table`). If no rep can be located the free-detection
+    path below runs exactly as before.
 
     Orchestration:
     1. Gate: `sport == "bike"` and a usable power/HR series, else `None`.
@@ -1369,47 +1557,32 @@ def analyze(
         series, home_elevation_m
     )
 
+    located = None
+    if structure is not None:
+        located = locate_prescribed_reps(
+            structure, series=series, laps=laps, ftp_watts=ftp_watts
+        )
+    if located is not None:
+        prescription = _analyze_prescribed_reps(
+            series,
+            located,
+            ftp_watts=ftp_watts,
+            in_band=in_band,
+            baseline_altitude_m=baseline_altitude_m,
+            baseline_altitude_source=baseline_altitude_source,
+        )
+    else:
+        prescription = None
+
     out_efforts: list[IntervalEffort] = []
-    for e in efforts:
+    for e in efforts if prescription is None else []:
         rep_target = None
         if reps and e.n - 1 < len(reps):
             rep_target = reps[e.n - 1][1]
         eff_target = rep_target if rep_target is not None else target_w
-        q = assess_effort(series, e, target_w=eff_target, in_band_frac=in_band)
-        altitude_m, altitude_gain_m, altitude_decrement_pct, altitude_context = (
-            _effort_altitude_context(series, e, baseline_altitude_m, baseline_altitude_source)
-        )
-        altitude_adjusted_target_w = None
-        cleared_altitude_adjusted_target = None
-        if altitude_decrement_pct is not None and eff_target is not None:
-            altitude_adjusted_target_w = round(
-                eff_target * (1 - altitude_decrement_pct / 100), 1
-            )
-            if q.avg_w is not None:
-                cleared_altitude_adjusted_target = q.avg_w >= altitude_adjusted_target_w
         out_efforts.append(
-            IntervalEffort(
-                n=e.n,
-                start_s=round(e.start_s, 1),
-                duration_s=round(e.duration_s, 1),
-                avg_w=q.avg_w,
-                avg_hr=q.avg_hr,
-                target_w=round(eff_target, 1) if eff_target is not None else None,
-                pct_of_target=q.pct_of_target,
-                avg_vs_target_w=q.avg_vs_target_w,
-                time_in_band_pct=q.time_in_band_pct,
-                fade_pct=q.fade_pct,
-                hr_drift_bpm=q.hr_drift_bpm,
-                grade_delta_pct_pts=q.grade_delta_pct_pts,
-                terrain_flag=q.terrain_flag,
-                verdict=q.verdict,
-                sub_structure=_sub_structure(series, e),
-                altitude_m=altitude_m,
-                altitude_gain_m=altitude_gain_m,
-                altitude_context=altitude_context,
-                altitude_decrement_pct=altitude_decrement_pct,
-                altitude_adjusted_target_w=altitude_adjusted_target_w,
-                cleared_altitude_adjusted_target=cleared_altitude_adjusted_target,
+            _build_interval_effort(
+                series, e, eff_target, in_band, baseline_altitude_m, baseline_altitude_source
             )
         )
 
@@ -1418,6 +1591,16 @@ def analyze(
         decoupling_pct = None
         decoupling_note = (
             "all-interval session -- no steady aerobic block for a valid decoupling read"
+        )
+
+    if prescription is not None:
+        return WorkoutIntervals(
+            decoupling_tightened_pct=decoupling_pct,
+            decoupling_note=decoupling_note,
+            baseline_altitude_m=round(baseline_altitude_m, 1) if baseline_altitude_m is not None else None,
+            baseline_altitude_source=baseline_altitude_source,
+            detection_basis=basis,
+            **prescription,
         )
 
     return WorkoutIntervals(
