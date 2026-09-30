@@ -662,6 +662,15 @@ SESSION_ENTRY_SCHEMA: dict[str, Any] = {
             "type": "string",
             "description": "Athlete-facing purpose/description for the session.",
         },
+        "title": {
+            "type": "string",
+            "maxLength": 40,
+            "description": (
+                "ALWAYS supply: a short consumer title, <=~24 chars, shown on the phone, the Garmin and "
+                "intervals.icu -- e.g. '3x6 VO2 40/20', 'Over/unders 3x9', 'Endurance 100\''. Plain words "
+                "and numbers only: no brackets, no macro-phase name ('Base', 'Build'), no sentence."
+            ),
+        },
         "distance_m": {
             "type": "number",
             "description": "Optional distance for the session, in meters.",
@@ -7275,6 +7284,7 @@ def _session_from_add_fields(entry: dict[str, Any], *, athlete: Athlete) -> tupl
             distance_m=entry.get("distance_m"),
             intensity=intensity,
             purpose=purpose,
+            title=(entry.get("title") or None),
             structure=structure,
             structured=structured,
             status="planned",

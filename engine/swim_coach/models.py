@@ -751,6 +751,10 @@ class Session(BaseModel):
     distance_m: int | None = Field(default=None, ge=0)
     intensity: dict
     purpose: str
+    # Short consumer-facing name (<=40 chars; the coach is asked for <=~24), e.g.
+    # "3x6 VO2 40/20". Optional: `session_title.session_title` derives one from
+    # `structured` (then `purpose`) when absent -- never from the macro phase.
+    title: str | None = Field(default=None, max_length=40)
     structure: str | None = None
     structured: WorkoutStructure | None = None
     # Canonical structured IR alongside the legacy prose `structure` field

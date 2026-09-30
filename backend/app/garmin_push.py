@@ -41,7 +41,7 @@ from typing import Any
 from uuid import UUID
 
 from swim_coach.garmin_export import to_garmin_fit_workout
-from swim_coach.workout_templates import short_device_title
+from swim_coach.session_title import session_title
 from swim_coach.models import Session
 from swim_coach.store import StoreInterface
 
@@ -111,7 +111,7 @@ def build_workout_event(session: Session) -> dict[str, Any]:
     # and it's also passed into the FIT file's own internal workout_name so a device that reads
     # the FIT directly (rather than intervals.icu's own re-display of it) shows the same short
     # title, not the full purpose in one place and a short title in the other.
-    title = short_device_title(session.purpose)
+    title = session_title(session)
     fit_bytes = to_garmin_fit_workout(session.structured, sport=garmin_sport, name=title)
 
     return {

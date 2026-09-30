@@ -262,10 +262,18 @@ function cutAtFirstBoundary(text) {
  *   purpose-derived title rather than surfacing a blank one. */
 const BULLET_LINE_RE = /^\s*-\s/m;
 
+// Macro-phase / block names are never a session's name ("Build — 40/20s VO2"
+// once showed as just "Build").
+const PHASE_WORDS = new Set(['base', 'build', 'peak', 'taper', 'race', 'prep', 'transition', 'deload', 'maintenance']);
+
 export function deriveSessionTitle(session) {
+  // Coach-authored, or engine-derived from the structured workout (plan export).
+  const explicit = typeof session.title === 'string' ? session.title.replace(/[[\]]/g, '').trim() : '';
+  if (explicit) return explicit;
   const purposeTitle = () => {
-    const { title } = splitPurpose(session.purpose);
-    return capitalize(title.replace(RACE_TAG_RE, '').replace(/\s{2,}/g, ' ').trim());
+    const { title, detail } = splitPurpose(session.purpose);
+    const label = PHASE_WORDS.has(title.toLowerCase()) && detail ? detail : title;
+    return capitalize(label.replace(RACE_TAG_RE, '').replace(/\s{2,}/g, ' ').trim());
   };
   const { structure } = session;
   if (structure) {
