@@ -62,7 +62,9 @@ from swim_coach.models import (
     Session,
     WeekPlan,
 )
+from swim_coach.models import WorkoutRepeat, WorkoutStructure
 from swim_coach.plan import WEEKLY_VOLUME_RAMP_CAP, evaluate_week_realism
+from swim_coach.zones import bike_zone_for_pct
 from swim_coach.taper_search import RACE_DAY_TSB_BAND
 
 Verdict = Literal["sound", "sound-with-caveats", "fragile", "not-feasible"]
@@ -1288,6 +1290,8 @@ def check_week(
             )
 
     findings.extend(_check_week_volume_confirmation(week, recent_weeks))
+    for session in week.sessions:
+        findings.extend(_check_warmup_and_primer(session, athlete))
 
     findings = _rank_and_cap(findings)
     return PlanCheckReport(verdict=_verdict_from_findings(findings), findings=findings)
@@ -1339,4 +1343,106 @@ def _check_week_volume_confirmation(
                     fix="Confirm with the athlete, or step the long swim up more gradually.",
                 )
             )
+    return findings
+
+
+# --- Warm-up and primer (library/37-plan-authoring-guide.md, "Warm-up and primers") ---
+# Coach judgment (Andrew, 2026-09-29, after a 40/20 VO2 ride whose warm-up opened at
+# 150-210 W and went straight into rep 1); no source verified. Bike sessions only:
+# swim warm-ups are drill/pace-structured differently.
+WARMUP_HARD_ZONE_RANK = 4  # Z4+ (threshold and above) counts as a hard rep
+WARMUP_SHORT_SESSION_MIN = 50.0  # under this the expectation compresses
+WARMUP_MAIN_MIN_REPS = 3  # an enclosing repeat product this large marks the main block
+PRIMER_MAX_S = 120.0  # a hard step this short, before the main block, is a primer
+WARMUP_START_MAX_RANK = 1  # a normal-length session opens at Z1
+WARMUP_START_MAX_RANK_SHORT = 2  # a short one may open at Z2
+
+
+@dataclass(frozen=True)
+class _Leaf:
+    rank: int | None
+    duration_s: float
+    reps: int  # product of enclosing repeat counts
+
+
+def _zone_rank(step, ftp_watts: float | None) -> int | None:
+    target = step.target
+    if target is None:
+        return None
+    if target.zone:
+        return int(target.zone[1:])
+    if target.basis == "power_w" and ftp_watts:
+        bounds = [b for b in (target.low, target.high) if b is not None]
+        if bounds:
+            return int(bike_zone_for_pct(sum(bounds) / len(bounds) / ftp_watts * 100)[1:])
+    return None
+
+
+def _walk_leaves(structure: WorkoutStructure, ftp_watts: float | None) -> list[_Leaf]:
+    out: list[_Leaf] = []
+
+    def visit(items: list, reps: int) -> None:
+        for item in items:
+            if isinstance(item, WorkoutRepeat) or getattr(item, "kind", None) == "repeat":
+                visit(item.steps, reps * (item.count or 1))
+            elif item.duration_kind == "time_s" and item.duration_value:
+                out.append(_Leaf(_zone_rank(item, ftp_watts), float(item.duration_value), reps))
+
+    visit(structure.items, 1)
+    return out
+
+
+def _check_warmup_and_primer(session: Session, athlete: Athlete) -> list[PlanCheckFinding]:
+    if session.sport != "bike" or session.structured is None:
+        return []
+    leaves = _walk_leaves(session.structured, athlete.ftp_watts)
+    hard = [
+        i for i, leaf in enumerate(leaves)
+        if leaf.rank is not None and leaf.rank >= WARMUP_HARD_ZONE_RANK
+        and (leaf.duration_s > PRIMER_MAX_S or leaf.reps >= WARMUP_MAIN_MIN_REPS)
+    ]
+    if not hard:
+        return []
+    main = hard[0]
+    short = session.duration_min < WARMUP_SHORT_SESSION_MIN
+    day = session.date.isoformat()
+    findings: list[PlanCheckFinding] = []
+
+    first = leaves[0]
+    max_rank = WARMUP_START_MAX_RANK_SHORT if short else WARMUP_START_MAX_RANK
+    if first.rank is not None and first.rank > max_rank:
+        findings.append(
+            PlanCheckFinding(
+                id=f"warmup-start-{day}",
+                severity="medium" if first.rank >= 3 else "low",
+                evidence=(
+                    f"The {day} bike session's warm-up opens at Z{first.rank}, above the Z{max_rank} "
+                    f"start expected for a {'short' if short else 'normal-length'} session before hard reps."
+                ),
+                consequence="Starting hard skips the leg wake-up and makes the first reps cost more than the last.",
+                fix=(
+                    "Open the warm-up at Z1 (about 130 W or less), then ramp Z1 -> Z2 -> high Z2/low Z3 into the "
+                    "work; compress the ramp, don't drop it, for short sessions (library/37, Warm-up and primers)."
+                ),
+            )
+        )
+
+    primer = any(
+        leaves[i].rank is not None and leaves[i].rank >= WARMUP_HARD_ZONE_RANK and leaves[i].duration_s <= PRIMER_MAX_S
+        for i in range(main)
+    )
+    if not primer:
+        findings.append(
+            PlanCheckFinding(
+                id=f"primer-missing-{day}",
+                severity="low" if short else "medium",
+                evidence=f"The {day} bike session goes from warm-up straight into its first hard rep with no primer.",
+                consequence="The first hard rep does the job of the primer, so it is usually the worst or the most costly.",
+                fix=(
+                    "Add a primer after the ramp: 20 s at the target intensity, 1 min easy, 20 s at target, then "
+                    "2 min easy before rep 1 (one 20-30 s primer for a ~45 min session). Use a steady step, not an "
+                    "interval step, so it is not read as a rep."
+                ),
+            )
+        )
     return findings

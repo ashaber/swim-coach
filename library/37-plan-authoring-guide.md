@@ -159,6 +159,30 @@ shortened). Adjust the **upcoming week**, not the whole macro, unless the
 goal or capacity has genuinely changed. "The plan is working, keep going"
 is a legitimate output — constant tinkering is its own failure mode.
 
+## Warm-up and primers (intense sessions)
+
+**Coach judgment** (Andrew's coaching feedback on the 2026-09-29 40/20 VO2
+ride; no source verified). Two habits for any Z5+ or threshold session's
+`structured`:
+
+- **Start low, then ramp.** The warm-up opens easy — Z1, roughly ≤130 W for a
+  typical rider — to wake the legs, then ramps progressively (Z1 → Z2 → high
+  Z2/low Z3) into the work. A flat 150–210 W block straight into the first
+  hard rep is the failure to avoid.
+- **Prime before the first real rep.** Add a short preview of the target
+  effort: for 40/20s at 305 W, 20 s at target, 1 min easy, 20 s at target,
+  then 2 min easy before rep 1. Give the primer its own steps (role
+  `interval` would be counted as work, so use a `steady` step at the target
+  zone) so the analyzer does not read it as a rep.
+
+**Short sessions compress this, they don't drop it.** A ~45-minute session
+gets a ~10-minute ramp and a single 20–30 s primer; under ~30 minutes, one
+primer and a 5-minute ramp is enough. Always supply a `title` too — see
+`SESSION_ENTRY_SCHEMA`.
+
+`check_week` flags a hard session whose warm-up does not start at Z1 or has
+no primer before its first hard rep (advisory, low/medium).
+
 ## Handling `check_macro`/`check_week` findings (red-team discipline)
 
 These findings are **advisory, capped at six, ranked by severity** — never
