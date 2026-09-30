@@ -16,10 +16,13 @@ safety net and must keep passing unchanged.
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import timedelta
 from uuid import UUID, uuid4
 
 from swim_coach.analytics import compute_analytics
+from swim_coach.models import Athlete, Session, Workout
 from swim_coach.parse_files import WorkoutDraft
+from swim_coach.quality import match_workout_to_session
 from swim_coach.store import StoreInterface
 
 from app.logging_config import get_logger
@@ -64,10 +67,11 @@ def enrich_draft(
     any other activity failure).
     """
     try:
-        home_elevation_m = store.load_athlete(athlete).home_elevation_m
+        profile = store.load_athlete(athlete)
+        home_elevation_m, ftp_watts = profile.home_elevation_m, profile.ftp_watts
     except Exception as exc:  # noqa: BLE001 - analytics must still compute without it
         log.warn("workouts.enrich_home_elevation_lookup_failed", athlete=athlete, error=str(exc))
-        home_elevation_m = None
+        home_elevation_m, ftp_watts = None, None
 
     if hasattr(store, "save_raw_file"):
         draft.raw_ref = store.save_raw_file(athlete, tmp_path)
@@ -98,5 +102,68 @@ def enrich_draft(
         moving_min=draft.duration_min,
         sport=draft.sport,
         home_elevation_m=home_elevation_m,
+        ftp_watts=ftp_watts,
     )
     return draft
+
+
+def _iso_week(d) -> str:
+    year, week, _ = d.isocalendar()
+    return f"{year}-W{week:02d}"
+
+
+def find_planned_session(store: StoreInterface, slug: str, workout: Workout) -> Session | None:
+    """The planned `Session` this workout matches -- `quality.match_workout_to_session`
+    (id, then same sport+date, then the unique +-1 day fit) over the workout's own
+    week plus its two neighbours (a ride logged Sunday can belong to the week that
+    just rolled over). Other logged workouts around it are passed so a session
+    another workout already covers is never stolen."""
+    sessions: list[Session] = []
+    seen: set[str] = set()
+    for delta in (-7, 0, 7):
+        iso = _iso_week(workout.date + timedelta(days=delta))
+        if iso in seen:
+            continue
+        seen.add(iso)
+        week = store.load_week(slug, iso)
+        if week is not None:
+            sessions.extend(week.sessions)
+    nearby = [
+        w for w in store.list_workouts(slug) if abs((w.date - workout.date).days) <= 2 and w.id != workout.id
+    ]
+    return match_workout_to_session(workout, sessions, other_workouts=nearby)
+
+
+def attach_planned_session(
+    workout: Workout, *, store: StoreInterface, slug: str, profile: Athlete, series: dict | None
+) -> Workout:
+    """Link `workout` to its planned session and, for a ride, re-run the interval
+    analyzer WITH that session's `structured` prescription (zone targets resolved
+    against the athlete's FTP). Returns the workout unchanged when nothing matches.
+    Best-effort: a lookup/analysis failure logs and leaves the workout as-is."""
+    if workout.planned_session_id is not None:
+        return workout
+    try:
+        session = find_planned_session(store, slug, workout)
+    except Exception as exc:  # noqa: BLE001 - never block ingest on the plan lookup
+        log.warn("workouts.plan_match_failed", athlete=slug, error=str(exc))
+        return workout
+    if session is None:
+        return workout
+    updates: dict = {"planned_session_id": session.id}
+    if workout.sport == "bike" and session.structured is not None and series:
+        analytics = compute_analytics(
+            laps=workout.laps,
+            lengths=workout.lengths,
+            pauses=workout.pauses,
+            series=series,
+            elapsed_min=workout.analytics.elapsed_min if workout.analytics else None,
+            moving_min=workout.duration_min,
+            sport=workout.sport,
+            prescribed_structure=session.structured,
+            home_elevation_m=profile.home_elevation_m,
+            ftp_watts=profile.ftp_watts,
+        )
+        updates["analytics"] = analytics
+    log.info("workouts.plan_matched", athlete=slug, workout_id=str(workout.id), session_id=str(session.id))
+    return workout.model_copy(update=updates)

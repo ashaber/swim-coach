@@ -184,7 +184,7 @@ async def coach_view_workouts(
 
     result = []
     for workout in workouts:
-        session = match_workout_to_session(workout, sessions)
+        session = match_workout_to_session(workout, sessions, other_workouts=all_workouts)
         quality = workout_quality(workout, session, athlete=athlete)
         load_au, load_tier = workout_load_au(workout, athlete=athlete, hr_max=hr_max, wellness=wellness)
         result.append(

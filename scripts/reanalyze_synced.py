@@ -29,6 +29,7 @@ Flags:
     --athletes-dir DIR  FileStore root, only used with --store file (default: athletes)
     --store {file,db}   which StoreInterface backend to read/write (default: file)
     --database-url URL  Supabase DSN, only used with --store db (default: $DATABASE_URL)
+    --external-id ID    only the workout with this external_id (e.g. intervals:i191726407)
     --dry-run           report what WOULD change; write nothing (no raw-file/
                          series-sidecar writes either -- see _reanalyze_workout)
 
@@ -64,11 +65,12 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from swim_coach.analytics import compute_analytics  # noqa: E402
+from swim_coach.athlete_time import resolve_workout_date  # noqa: E402
 from swim_coach.models import Workout  # noqa: E402
 from swim_coach.parse_files import PARSERS_BY_EXTENSION  # noqa: E402
 from swim_coach.store import FileStore, StoreInterface  # noqa: E402
 
-from app.enrich import enrich_draft  # noqa: E402
+from app.enrich import attach_planned_session, enrich_draft  # noqa: E402
 from app.sync import IntervalsClient, SyncConfigError, load_sync_config  # noqa: E402
 
 
@@ -105,6 +107,16 @@ def _reanalyze_workout(
         tmp_path = tmp_dir / f"{activity_id}.fit"
         tmp_path.write_bytes(fit_bytes)
         draft = PARSERS_BY_EXTENSION[".fit"](tmp_path)
+        # Same local-calendar-day resolution as a fresh sync (provider local
+        # start -> athlete timezone -> the FIT's UTC date).
+        profile = store.load_athlete(slug)
+        activity = client.get_activity(activity_id) or {}
+        draft.date = resolve_workout_date(
+            utc_date=draft.date,
+            started_at=draft.started_at,
+            provider_local=activity.get("start_date_local"),
+            timezone=profile.timezone,
+        )
 
         if dry_run:
             # No raw-file copy / series sidecar write under --dry-run (both
@@ -120,7 +132,7 @@ def _reanalyze_workout(
                 moving_min=draft.duration_min,
             )
         else:
-            enrich_draft(draft, store=store, athlete=slug, tmp_path=tmp_path)
+            enrich_draft(draft, store=store, athlete=slug, tmp_path=tmp_path, workout_id=existing.id)
 
         rebuilt = Workout(
             id=existing.id,
@@ -147,6 +159,13 @@ def _reanalyze_workout(
             sport_detail=draft.sport_detail,
         )
 
+        # Link the planned session (+-1 day window) and re-run the analyzer
+        # against its prescription. A planned_session_id already on the row
+        # is athlete/coach-set and is never overwritten.
+        rebuilt = attach_planned_session(
+            rebuilt, store=store, slug=slug, profile=profile, series=draft.series
+        )
+
         if not dry_run:
             store.save_workout(slug, rebuilt)
 
@@ -154,6 +173,12 @@ def _reanalyze_workout(
             "workout_id": str(existing.id),
             "activity_id": activity_id,
             "date": str(existing.date),
+            "date_before": str(existing.date),
+            "date_after": str(rebuilt.date),
+            "planned_session_before": str(existing.planned_session_id) if existing.planned_session_id else None,
+            "planned_session_after": str(rebuilt.planned_session_id) if rebuilt.planned_session_id else None,
+            "efforts_before": _efforts(existing),
+            "efforts_after": _efforts(rebuilt),
             "sport": existing.sport,
             "pause_count_before": len(existing.pauses),
             "pause_count_after": len(rebuilt.pauses),
@@ -165,9 +190,17 @@ def _reanalyze_workout(
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+def _efforts(workout: Workout) -> int | None:
+    intervals = workout.analytics.intervals if workout.analytics else None
+    return intervals.efforts_detected if intervals else None
+
+
 def _changed(result: dict) -> bool:
     return (
-        result["pause_count_before"] != result["pause_count_after"]
+        result["date_before"] != result["date_after"]
+        or result["planned_session_before"] != result["planned_session_after"]
+        or result["efforts_before"] != result["efforts_after"]
+        or result["pause_count_before"] != result["pause_count_after"]
         or result["sport_detail_before"] != result["sport_detail_after"]
     )
 
@@ -178,6 +211,7 @@ def reanalyze_athlete(
     store: StoreInterface,
     dry_run: bool,
     client: IntervalsClient | None = None,
+    only_external_id: str | None = None,
 ) -> dict[str, int]:
     """Reanalyzes one athlete's intervals-synced workouts. Returns a summary
     tally. Never raises for anything short of a programming error -- a
@@ -204,6 +238,8 @@ def reanalyze_athlete(
 
     workouts = store.list_workouts(cfg.slug)
     synced = [w for w in workouts if w.external_id and w.external_id.startswith("intervals:")]
+    if only_external_id:
+        synced = [w for w in synced if w.external_id == only_external_id]
     _log("info", "athlete synced workouts found", athlete=cfg.slug, count=len(synced), dry_run=dry_run)
 
     owns_client = client is None
@@ -257,6 +293,11 @@ def main(argv: list[str] | None = None) -> int:
         "--database-url", default=None, help="Supabase DSN (default: $DATABASE_URL; only for --store db)"
     )
     parser.add_argument(
+        "--external-id",
+        default=None,
+        help="only the workout with this external_id (e.g. intervals:i191726407)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="report what would change; write nothing (no raw-file/series-sidecar writes either)",
@@ -302,7 +343,9 @@ def main(argv: list[str] | None = None) -> int:
             exit_code = 1
             continue
 
-        summary = reanalyze_athlete(cfg, store=store, dry_run=args.dry_run)
+        summary = reanalyze_athlete(
+            cfg, store=store, dry_run=args.dry_run, only_external_id=args.external_id
+        )
         for key in ("workouts_considered", "changed", "unchanged", "failed"):
             grand_total[key] += summary[key]
         if summary["failed"]:

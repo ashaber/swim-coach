@@ -215,7 +215,6 @@ from swim_coach.load import (
     recent_weekly_hours,
 )
 from swim_coach.parse_files import parse_fit
-from swim_coach.quality import match_workout_to_session
 from swim_coach.race_phases import (
     DEFAULT_SIGNIFICANCE_THRESHOLD_PCT,
     RacePhase,
@@ -287,6 +286,7 @@ from app.context import (
     iso_week_str,
     summarize_rollup,
 )
+from app.enrich import find_planned_session
 from app.drafts import MACRO_CARRIER_WEEK, TAPER_CARRIER_WEEK, draft_is_stale
 from app.garmin_push import push_on_demand
 from app.health_status_helpers import link_health_status_feedback
@@ -3946,22 +3946,8 @@ def _recover_prescribed_structure(
     store: StoreInterface, slug: str, workout: Workout
 ) -> WorkoutStructure | None:
     """The `WorkoutStructure` for the planned session this workout matches,
-    if one is recoverable -- same date+sport fallback
-    `quality.match_workout_to_session` uses, over the workout's own week
-    plus its two neighbours (a ride logged Sunday can belong to the week
-    that just rolled over)."""
-    weeks: list = []
-    seen: set[str] = set()
-    for delta in (-7, 0, 7):
-        iso = iso_week_str(workout.date + timedelta(days=delta))
-        if iso in seen:
-            continue
-        seen.add(iso)
-        wk = store.load_week(slug, iso)
-        if wk is not None:
-            weeks.append(wk)
-    sessions = [s for wk in weeks for s in wk.sessions]
-    session = match_workout_to_session(workout, sessions)
+    if one is recoverable (see `app.enrich.find_planned_session`)."""
+    session = find_planned_session(store, slug, workout)
     return session.structured if session is not None else None
 
 
@@ -4097,6 +4083,7 @@ def _handle_reanalyze_workout(
         interval_target_w=target_w,
         prescribed_structure=structure,
         home_elevation_m=store.load_athlete(slug).home_elevation_m,
+        ftp_watts=store.load_athlete(slug).ftp_watts,
     )
     workout.analytics = new_analytics
     # Re-key the series row to this real workout id so a later read resolves
@@ -4513,6 +4500,7 @@ def _handle_pull_activity_stream(
         interval_target_w=target_w,
         prescribed_structure=structure,
         home_elevation_m=store.load_athlete(slug).home_elevation_m,
+        ftp_watts=store.load_athlete(slug).ftp_watts,
     )
     intervals = new_analytics.intervals
 
