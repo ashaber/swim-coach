@@ -107,8 +107,8 @@ def test_reanalyze_athlete_updates_pauses_and_sport_detail_in_place(athletes_dir
     summary = reanalyze_athlete(cfg, store=store, dry_run=False, client=_make_client(handler))
 
     assert summary == {"workouts_considered": 1, "changed": 1, "unchanged": 0, "failed": 0}
-    # the activity summary (provider local start) is looked up best-effort, then the .fit
-    assert requested == ["/api/v1/activity/i-mtb", "/api/v1/activity/i-mtb/file"]
+    # the activity summary (provider local start) is looked up best-effort, after the .fit
+    assert requested == ["/api/v1/activity/i-mtb/file", "/api/v1/activity/i-mtb"]
 
     reloaded = [w for w in store.list_workouts("renee") if w.id == original.id]
     assert len(reloaded) == 1  # same id -- overwritten in place, not duplicated
