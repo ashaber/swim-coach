@@ -575,6 +575,18 @@
     .interval-row { border-left: 2px solid var(--line); padding-left: 10px; }
     .interval-row-head { font-size: 12px; color: var(--ink-soft); }
     .interval-row-verdict { font-size: 13px; color: var(--ink); margin-top: 2px; }
+    /* Workout shape chart (src/shape.js geometry, views.js renderShapeSection). Dark-only app,
+       so the fixed zone colours (shape.js ZONE_COLORS) are used inline; these are layout only. */
+    .shape-chart { display: block; width: 100%; height: auto; max-height: 240px; }
+    .shape-tick { font-size: 9px; fill: var(--ink-soft); font-family: var(--mono, monospace); }
+    .shape-legend { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 8px; font-size: 12px; color: var(--ink-soft); }
+    .shape-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+    .shape-swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+    /* Raw analysis panel */
+    .raw-analysis h5 { margin: 14px 0 6px; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-faint); }
+    .raw-score-headline { color: var(--accent-ink); text-transform: none; letter-spacing: 0; font-size: 14px; }
+    table.raw-table td:last-child, table.raw-table th:last-child { white-space: normal; text-align: left; min-width: 160px; }
+    .raw-analysis .sub { font-size: 12px; color: var(--ink-soft); margin: 6px 0; }
     .laps-table-wrap { overflow-x: auto; max-height: 260px; overflow-y: auto;
       border: 1px solid var(--line); border-radius: var(--radius-xs); }
     table.laps-table { width: 100%; min-width: 320px; border-collapse: collapse; font-size: 12px; }
