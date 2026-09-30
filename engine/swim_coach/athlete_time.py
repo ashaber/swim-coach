@@ -51,3 +51,32 @@ def athlete_today(athlete: Athlete) -> date:
     if not athlete.timezone:
         return date.today()
     return datetime.now(ZoneInfo(athlete.timezone)).date()
+
+
+def resolve_workout_date(
+    *,
+    utc_date: date,
+    started_at: datetime | None,
+    provider_local: str | None,
+    timezone: str | None,
+) -> date:
+    """The calendar date a synced/ingested workout belongs to, in the
+    athlete's LOCAL time (an evening ride is that day's, not tomorrow's).
+
+    Priority: (1) the provider's own local start time when the sync source
+    supplies one (intervals.icu `start_date_local`, an ISO local datetime) --
+    the most trustworthy signal, needs no timezone guess; (2) `started_at`
+    (a FIT `session.start_time`, naive UTC as fitparse returns it) converted
+    with the athlete's IANA `timezone`; (3) `utc_date`, the parser's
+    UTC-derived date (the prior behavior). Never raises on bad input -- an
+    unparseable provider string falls through to the next source.
+    """
+    if provider_local:
+        try:
+            return datetime.fromisoformat(provider_local).date()
+        except ValueError:
+            pass
+    if started_at is not None and timezone:
+        aware = started_at if started_at.tzinfo else started_at.replace(tzinfo=ZoneInfo("UTC"))
+        return aware.astimezone(ZoneInfo(timezone)).date()
+    return utc_date

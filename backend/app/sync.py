@@ -47,13 +47,13 @@ from typing import Any
 from uuid import uuid4
 
 import httpx
-from swim_coach.athlete_time import athlete_today
+from swim_coach.athlete_time import athlete_today, resolve_workout_date
 from swim_coach.models import Athlete, Wellness, Workout
 from swim_coach.parse_files import PARSERS_BY_EXTENSION, WorkoutDraft
 from swim_coach.store import StoreInterface
 
 from app.config import ConfigError, Settings
-from app.enrich import enrich_draft
+from app.enrich import attach_planned_session, enrich_draft
 from app.logging_config import get_logger
 from app.store_factory import make_store
 from app.wellness_merge import merge_wellness
@@ -217,6 +217,18 @@ class IntervalsClient:
         response.raise_for_status()
         return response.json()
 
+    def get_activity(self, activity_id: str) -> dict | None:
+        """`GET /activity/{id}` -- one activity's summary (carries the
+        provider's `start_date_local`). Best-effort: any HTTP/transport
+        failure returns `None` so a caller can fall back to the FIT date."""
+        try:
+            response = _request_with_retry(self._client, "GET", f"{API_BASE}/activity/{activity_id}")
+            response.raise_for_status()
+            body = response.json()
+        except (httpx.HTTPError, ValueError):
+            return None
+        return body if isinstance(body, dict) else None
+
     def get_wellness(self, *, oldest: date, newest: date) -> list[dict]:
         """`GET /athlete/{id}/wellness.json` -- a JSON array of per-day
         objects. Verified live 2026-07-12 (not re-independently-re-verified
@@ -333,6 +345,16 @@ def _ingest_activity(
         tmp_path = tmp_dir / f"{activity_id}.fit"
         tmp_path.write_bytes(fit_bytes)
         draft = PARSERS_BY_EXTENSION[".fit"](tmp_path)
+        # The FIT's own date is UTC; an evening ride belongs to the athlete's
+        # local calendar day (2026-09-29 ride was stored as 09-30 and never
+        # matched its planned session). Resolved before enrich so the series
+        # row is keyed with the same date.
+        draft.date = resolve_workout_date(
+            utc_date=draft.date,
+            started_at=draft.started_at,
+            provider_local=activity.get("start_date_local"),
+            timezone=profile.timezone,
+        )
         # Pre-generate the Workout id so the series row is keyed to the real
         # workout from the start (this caller, unlike the upload route,
         # knows the id before save) -- makes `store.load_series(slug,
@@ -375,6 +397,9 @@ def _ingest_activity(
             series_ref=draft.series_ref,
             external_id=f"intervals:{activity_id}",
             sport_detail=draft.sport_detail,
+        )
+        workout = attach_planned_session(
+            workout, store=store, slug=slug, profile=profile, series=draft.series
         )
         store.save_workout(slug, workout)
         log.info(

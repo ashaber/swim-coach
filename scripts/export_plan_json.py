@@ -30,6 +30,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from swim_coach.session_title import resolve_title
 from swim_coach.load import session_target_load_au
 from swim_coach.store import FileStore, StoreInterface
 
@@ -68,6 +69,9 @@ def export_athlete(store: StoreInterface, slug: str) -> dict:
         week_dict = week.model_dump(mode="json")
         for session, session_dict in zip(week.sessions, week_dict["sessions"]):
             session_dict["target_load_au"] = round(session_target_load_au(session, athlete), 1)
+            # Coach-authored or structure-derived short title (None = the PWA
+            # keeps deriving one from `structure`/`purpose` as before).
+            session_dict["title"] = resolve_title(session)
         week_dicts.append(week_dict)
 
     return {

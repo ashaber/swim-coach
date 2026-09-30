@@ -107,7 +107,8 @@ def test_reanalyze_athlete_updates_pauses_and_sport_detail_in_place(athletes_dir
     summary = reanalyze_athlete(cfg, store=store, dry_run=False, client=_make_client(handler))
 
     assert summary == {"workouts_considered": 1, "changed": 1, "unchanged": 0, "failed": 0}
-    assert requested == ["/api/v1/activity/i-mtb/file"]
+    # the activity summary (provider local start) is looked up best-effort, after the .fit
+    assert requested == ["/api/v1/activity/i-mtb/file", "/api/v1/activity/i-mtb"]
 
     reloaded = [w for w in store.list_workouts("renee") if w.id == original.id]
     assert len(reloaded) == 1  # same id -- overwritten in place, not duplicated
@@ -121,6 +122,24 @@ def test_reanalyze_athlete_updates_pauses_and_sport_detail_in_place(athletes_dir
     # Athlete-entered fields a .fit can never carry are preserved, not reset.
     assert updated.rpe == 7
     assert updated.notes == "felt strong"
+
+
+def test_reanalyze_athlete_external_id_filter_touches_only_that_workout(athletes_dir: Path) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    _save_synced_workout(store, "renee", activity_id="i-other", date=date(2026, 5, 1), distance_m=1, duration_min=1.0)
+    _save_synced_workout(
+        store, "renee", activity_id="i-mtb", date=MTB_DATE, sport=MTB_SPORT, distance_m=1, duration_min=1.0
+    )
+    cfg = IntervalsAthleteConfig(slug="renee", intervals_athlete_id="i999", api_key="test-key")
+    requested: list[str] = []
+    handler = _download_handler({"i-mtb": FIT_MTB_FIXTURE.read_bytes()}, requested=requested)
+
+    summary = reanalyze_athlete(
+        cfg, store=store, dry_run=True, client=_make_client(handler), only_external_id="intervals:i-mtb"
+    )
+
+    assert summary["workouts_considered"] == 1
+    assert all("i-other" not in path for path in requested)
 
 
 def test_reanalyze_athlete_dry_run_writes_nothing(athletes_dir: Path) -> None:

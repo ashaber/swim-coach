@@ -189,6 +189,21 @@ describe('sessionDisplay', () => {
 });
 
 describe('deriveSessionTitle', () => {
+  it('prefers the coach-authored / engine-derived session.title over prose, without brackets', () => {
+    const session = {
+      title: '3x6 40/20 VO2',
+      purpose: 'Build — 40/20s VO2 intervals',
+      structure: 'Main set: 3 rounds of [6 x (40s Z5 hard / 20s Z1 easy)]',
+    };
+    expect(deriveSessionTitle(session)).toBe('3x6 40/20 VO2');
+    expect(deriveSessionTitle({ ...session, title: '3x6 [VO2]' })).toBe('3x6 VO2');
+  });
+
+  it('never titles a session with just the macro phase name', () => {
+    const session = { purpose: 'Build — 40/20s VO2 intervals', structure: null };
+    expect(deriveSessionTitle(session)).toBe('40/20s VO2 intervals');
+  });
+
   it('derives the title from a swim session\'s "Main set:" line, cut at the first comma', () => {
     const session = {
       purpose: 'pool practice — no pool coach on hand, structure authored below',

@@ -751,6 +751,10 @@ class Session(BaseModel):
     distance_m: int | None = Field(default=None, ge=0)
     intensity: dict
     purpose: str
+    # Short consumer-facing name (<=40 chars; the coach is asked for <=~24), e.g.
+    # "3x6 VO2 40/20". Optional: `session_title.session_title` derives one from
+    # `structured` (then `purpose`) when absent -- never from the macro phase.
+    title: str | None = Field(default=None, max_length=40)
     structure: str | None = None
     structured: WorkoutStructure | None = None
     # Canonical structured IR alongside the legacy prose `structure` field
@@ -1444,6 +1448,26 @@ class IntervalEffort(BaseModel):
     # silently override" posture as `terrain_flag`/`altitude_context`.
     # `None` whenever no target was supplied or no altitude flag fired for
     # this effort. Additive/optional, no schema_version bump.
+    # Prescription-matched reps only (`interval_analysis` via `prescription.py`):
+    # which round (outermost prescribed repeat iteration) and which rep within
+    # it this effort is, and whether its average power sat inside the
+    # prescribed target band. All `None` for a free-detected effort.
+    round_n: int | None = None
+    rep_in_round: int | None = None
+    in_target_band: bool | None = None
+
+
+class IntervalRound(BaseModel):
+    """One round (outermost prescribed repeat iteration) of a prescription-
+    matched interval set -- the coarser read beside the per-rep `efforts`."""
+
+    n: int
+    reps_prescribed: int
+    reps_completed: int
+    avg_w: float | None = None  # mean of the completed reps' average power
+    avg_hr: int | None = None
+    reps_in_band: int | None = None  # None when no watts band was resolvable
+    fade_within_pct: float | None = None  # first-half vs second-half rep power, % drop
 
 
 class WorkoutIntervals(BaseModel):
@@ -1488,6 +1512,20 @@ class WorkoutIntervals(BaseModel):
     # flagged) effort can see at a glance whether the number reflects the
     # athlete's real home elevation or just wherever this particular ride
     # happened to start. Additive/optional, no schema_version bump.
+    # --- prescription-matched fields (interval_analysis + prescription.py) ---
+    # Set only when the planned session's `structured` was supplied and its
+    # interval reps were located in the ride. `detection_source` says whether
+    # the reps were read off the device laps (exact) or located in the power
+    # series (fallback). `efforts` then holds one entry per REP (not per
+    # free-detected block). Additive/optional, no schema_version bump.
+    detection_source: Literal["laps", "series"] | None = None
+    reps_completed: int | None = None
+    reps_in_band_pct: float | None = None  # % of completed reps whose avg sat in the band
+    fade_across_reps_pct: float | None = None  # first-third vs last-third rep power, % drop
+    fade_across_rounds_pct: float | None = None  # first round vs last round mean power, % drop
+    target_zone: str | None = None
+    target_band_w: tuple[float, float] | None = None  # resolved watts band (from FTP)
+    rounds: list[IntervalRound] = Field(default_factory=list)
 
 
 class WorkoutAnalytics(BaseModel):

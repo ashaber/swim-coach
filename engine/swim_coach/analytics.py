@@ -450,6 +450,7 @@ def compute_analytics(
     interval_target_w: float | None = None,
     prescribed_structure=None,
     home_elevation_m: float | None = None,
+    ftp_watts: float | None = None,
 ):
     """Build a swim_coach.models.WorkoutAnalytics from parsed workout parts.
 
@@ -468,6 +469,8 @@ def compute_analytics(
     a file that carried no structure); `prescribed_structure` is a
     `models.WorkoutStructure` when one is recoverable for the session, and
     its per-rep `power_w` targets win over `interval_target_w`.
+    `ftp_watts` (the athlete's `Athlete.ftp_watts`) resolves a zone-based
+    prescription (`Z5`) to watts for the prescription-aware rep analysis.
     `home_elevation_m` is the athlete's own `Athlete.home_elevation_m`,
     when the caller has it -- anchors `interval_analysis`'s altitude-context
     signal to the athlete's real home elevation (see
@@ -485,15 +488,23 @@ def compute_analytics(
     from swim_coach.models import WorkoutAnalytics
 
     drift = cardiac_drift(series, laps=laps, pauses=pauses)
-    split_label, first_pace, second_pace = split_analysis(laps)
     pauses_summary = pause_summary(pauses, elapsed_min=elapsed_min, moving_min=moving_min)
-    swolf = swolf_trend(lengths)
+    if sport is None or sport.startswith("swim"):
+        split_label, first_pace, second_pace = split_analysis(laps)
+        swolf = swolf_trend(lengths)
+    else:
+        # Pace-per-100m splits and SWOLF are swim concepts; on a ride/run they
+        # were nonsense numbers derived from speed (2026-09-29 bike showed a
+        # "first_half_pace_s_per_100m" of 11 s).
+        split_label, first_pace, second_pace, swolf = None, None, None, None
     intervals = interval_analysis.analyze(
         series,
         sport=sport,
         target_w=interval_target_w,
         structure=prescribed_structure,
         home_elevation_m=home_elevation_m,
+        laps=laps,
+        ftp_watts=ftp_watts,
     )
     avg_power = average_power_w(series)
     norm_power = normalized_power_w(series)

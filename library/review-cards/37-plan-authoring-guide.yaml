@@ -45,6 +45,13 @@ cards:
   recommendation: Follow the fixed read order every week, and say plainly when the plan needs no change rather
     than tinkering for its own sake.
   content_hash: 09822232ea56a572551ecb039100980a6e4f63f1dd88743bc827498caaeaa7bc
+- section: warm-up-and-primers-intense-sessions
+  heading: Warm-up and primers (intense sessions)
+  summary: Coach judgment, unsourced. A Z5+ or threshold bike session warms up from Z1 (about 130 W or less),
+    ramps, then does a short primer before rep 1; both compress for ~45 min sessions.
+  recommendation: Author the warm-up as a Z1-start ramp and add a steady-step primer before the first hard rep;
+    compress, never drop, for short sessions.
+  content_hash: 7be91f979fe2f03aac8533117f82ce0814c1b7df16e69b57e0d7798b006b3180
 - section: handling-checkmacro-checkweek-findings-red-team-discipline
   heading: Handling `check_macro`/`check_week` findings (red-team discipline)
   summary: Findings are advisory and capped at six; ask fix-or-keep-as-is (never accept/decline) visibly with

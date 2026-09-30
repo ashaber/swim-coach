@@ -51,6 +51,10 @@ from swim_coach.analytics import CARDIAC_DRIFT_FLAG_PCT
 from swim_coach.load import session_load, session_target_load_au
 from swim_coach.models import Athlete, Session, Workout, WorkoutAnalytics, WorkoutQuality
 
+ADJACENT_DAY_WINDOW = 1
+# Coach judgment: a workout may belong to a session planned one day either side
+# (calendar-day resolution of late-evening rides, or a session moved a day).
+
 SWOLF_DEGRADATION_FLAG_PCT = 5.0
 # Coach judgment: a first-quarter-to-last-quarter SWOLF increase of 5% or
 # more (i.e. `WorkoutAnalytics.swolf_degradation_pct >=
@@ -67,7 +71,12 @@ SWOLF_DEGRADATION_FLAG_PCT = 5.0
 # pass" framing, inherited here).
 
 
-def match_workout_to_session(workout: Workout, sessions: list[Session]) -> Session | None:
+def match_workout_to_session(
+    workout: Workout,
+    sessions: list[Session],
+    *,
+    other_workouts: list[Workout] | None = None,
+) -> Session | None:
     """Find the planned `Session` (if any) this `Workout` should be compared
     against.
 
@@ -80,7 +89,13 @@ def match_workout_to_session(workout: Workout, sessions: list[Session]) -> Sessi
        "coincidentally" match on sport+date.
     2. If no `planned_session_id` is set on the workout, fall back to the
        first `session` in `sessions` with matching `sport` and `date`.
-    3. Otherwise, `None`.
+    3. Still none: a +-1 day window on the same sport, accepted only when
+       EXACTLY ONE unmatched session fits (an evening ride the calendar
+       resolved a day off, or a session ridden a day early/late). "Unmatched"
+       means no other workout in `other_workouts` (when the caller supplies
+       them) links to it by `planned_session_id` or sits on its own date with
+       its sport. Two candidates is ambiguous and matches nothing.
+    4. Otherwise, `None`.
 
     Dangling-id edge case (deliberate, matches the JS original): if
     `workout.planned_session_id` IS set but no session in `sessions` carries
@@ -101,7 +116,19 @@ def match_workout_to_session(workout: Workout, sessions: list[Session]) -> Sessi
     for session in sessions:
         if session.sport == workout.sport and session.date == workout.date:
             return session
-    return None
+
+    others = [w for w in (other_workouts or []) if w.id != workout.id]
+    claimed_ids = {w.planned_session_id for w in others if w.planned_session_id is not None}
+    occupied = {(w.sport, w.date) for w in others}
+    candidates = [
+        s
+        for s in sessions
+        if s.sport == workout.sport
+        and abs((s.date - workout.date).days) <= ADJACENT_DAY_WINDOW
+        and s.id not in claimed_ids
+        and (s.sport, s.date) not in occupied
+    ]
+    return candidates[0] if len(candidates) == 1 else None
 
 
 def _quality_summary(analytics: WorkoutAnalytics) -> str:
