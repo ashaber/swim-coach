@@ -198,6 +198,7 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import ValidationError
 
@@ -1037,7 +1038,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
         "description": (
             "Directly set one or more low-risk athlete-profile fields: "
             "ftp_watts, lthr_bpm, css_pace_s_per_100m, carb_tolerance_g_per_hr, "
-            "or sports. Anything ELSE the athlete tells you (a preferred name, an equipment or style "
+            "sports, or timezone (IANA name). Anything ELSE the athlete tells you (a preferred name, an equipment or style "
             "preference ...) is saved as a durable note automatically -- never refused. This is "
             "the tool that actually changes what zones.py/load.py resolve "
             "this athlete's zones/load from -- call it AFTER you've judged "
@@ -1066,6 +1067,10 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 "css_pace_s_per_100m": {
                     "type": "number",
                     "description": "Swim critical-swim-speed pace, seconds per 100m. Must be a real, positive, realistically-paced number.",
+                },
+                "timezone": {
+                    "type": "string",
+                    "description": "The athlete's IANA timezone name, e.g. 'America/Denver'. Rejected if not a real zone.",
                 },
                 "carb_tolerance_g_per_hr": {
                     "type": "number",
@@ -3445,7 +3450,7 @@ def _handle_update_athlete_profile(
 ) -> dict[str, Any]:
     """Directly sets one or more low-risk `Athlete` profile fields
     (`ftp_watts`/`lthr_bpm`/`css_pace_s_per_100m`/`carb_tolerance_g_per_hr`/
-    `sports`) -- the tool that was simply missing before this build (see `ThresholdRecord`'s own
+    `sports`/`timezone`) -- the tool that was simply missing before this build (see `ThresholdRecord`'s own
     docstring: `record_health_status`/`create_event` existed as real coach
     tools, but nothing let the coach set `Athlete.ftp_watts`/`sports` at
     all). Same direct-persist (no draft/confirm step) posture
@@ -3464,7 +3469,7 @@ def _handle_update_athlete_profile(
         return {
             "error": (
                 "nothing to update: give a profile field (ftp_watts, lthr_bpm, css_pace_s_per_100m, "
-                "carb_tolerance_g_per_hr, sports) or, for a preference, use save_athlete_note"
+                "carb_tolerance_g_per_hr, sports, timezone) or, for a preference, use save_athlete_note"
             )
         }
 
@@ -3530,9 +3535,26 @@ def _handle_update_athlete_profile(
             return {"error": f"invalid sports {sports!r}; must be a non-empty list of valid sport values"}
         updates["sports"] = sports
 
+    if "timezone" in input_data:
+        tz_name = input_data["timezone"]
+        try:
+            if not isinstance(tz_name, str) or not tz_name.strip():
+                raise ValueError("empty")
+            ZoneInfo(tz_name.strip())
+        except (ValueError, ZoneInfoNotFoundError):
+            return {
+                "error": (
+                    f"invalid timezone {tz_name!r}; must be an IANA timezone name such as "
+                    "'America/Denver'"
+                )
+            }
+        updates["timezone"] = tz_name.strip()
+
     # Anything that is not a profile field (a preferred name, an equipment or style preference ...)
     # is a durable PREFERENCE: remember it as a note instead of rejecting the call.
-    profile_fields = ("ftp_watts", "lthr_bpm", "css_pace_s_per_100m", "carb_tolerance_g_per_hr", "sports")
+    profile_fields = (
+        "ftp_watts", "lthr_bpm", "css_pace_s_per_100m", "carb_tolerance_g_per_hr", "sports", "timezone",
+    )
     unknown = {k: v for k, v in input_data.items() if k not in profile_fields and k != "confirm"}
     note_texts: list[str] = []
     warnings: list[str] = []
@@ -3546,7 +3568,7 @@ def _handle_update_athlete_profile(
         return {
             "error": (
                 "nothing to update: the profile fields are ftp_watts, lthr_bpm, css_pace_s_per_100m, "
-                "carb_tolerance_g_per_hr and sports. For a preference or any other fact about the "
+                "carb_tolerance_g_per_hr, sports and timezone. For a preference or any other fact about the "
                 "athlete, use save_athlete_note."
             )
         }
