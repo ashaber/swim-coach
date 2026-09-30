@@ -13,6 +13,11 @@ export const TOOL_LABELS = {
   get_plan_summary: 'consulting the plan…',
   log_open_question: 'logging a question for research…',
   record_health_status: 'recording health status…',
+  // coach-ai-planning build: shows a friendlier chip than the raw tool name when the AI coach
+  // authors/confirms a macro or week plan -- on BOTH the athlete's own Coach tab and the
+  // roster's "Ask the AI coach" panel, since TOOL_LABELS is shared by renderChatMessage.
+  author_macro_plan: 'drafting the macro plan…',
+  author_week_plan: 'drafting the week…',
 };
 
 /** A fresh, empty chat session. */

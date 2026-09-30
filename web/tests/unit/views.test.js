@@ -4,6 +4,7 @@ import {
   renderTabBar, renderRosterTab, renderLoadChart,
   renderCr10SliderField, cr10AnchorLabel, loadTierLabel, renderWorkoutRow,
   renderAskCoachSection, renderCoachTab, renderResourcesTab,
+  renderMacroPlanDetail,
 } from '../../src/views.js';
 import { isoWeekMonday, addDays, dateKey, formatShortDate, formatDuration } from '../../src/plan.js';
 import { HISTORY_DISPLAY_CAP } from '../../src/workouts.js';
@@ -2695,6 +2696,87 @@ describe('renderRosterTab', () => {
       expect(html).not.toContain('<svg'); // no load chart in this sub-tab
     });
 
+    // --- coach-ai-planning build: "Ask the AI coach" panel + detailed plan view -----------
+
+    it('shows the "Ask the AI coach" panel on the Training Plan sub-tab', () => {
+      const html = renderRosterTab({
+        ...actingArgs,
+        subTab: 'plan',
+        plan: { status: 'ready', data: { events: [], macro: { blocks: [] }, weeks: [] }, error: null },
+        chat: { messages: [], expertMode: false },
+        chatSending: false,
+      });
+      expect(html).toContain('Ask the AI coach');
+      expect(html).toContain('data-a="roster:chat:send"');
+      expect(html).toContain('data-a="roster:chat:clear"');
+      expect(html).toContain('id="roster-chat-input"');
+    });
+
+    it('renders the roster chat conversation\'s messages, distinct from the athlete-tab chat markup ids', () => {
+      const html = renderRosterTab({
+        ...actingArgs,
+        subTab: 'plan',
+        plan: { status: 'ready', data: { events: [], macro: { blocks: [] }, weeks: [] }, error: null },
+        chat: { messages: [{ role: 'user', content: 'draft next week', status: 'done' }], expertMode: false },
+        chatSending: false,
+      });
+      expect(html).toContain('draft next week');
+      expect(html).toContain('id="roster-chat-messages"');
+      expect(html).not.toContain('id="chat-messages"');
+    });
+
+    it('disables the composer and shows "Sending…" while a roster chat turn is streaming', () => {
+      const html = renderRosterTab({
+        ...actingArgs,
+        subTab: 'plan',
+        plan: { status: 'ready', data: { events: [], macro: { blocks: [] }, weeks: [] }, error: null },
+        chat: { messages: [{ role: 'assistant', content: '', status: 'streaming', toolCalls: [] }], expertMode: false },
+        chatSending: true,
+      });
+      expect(html).toContain('Sending…');
+    });
+
+    it('still shows the chat panel even when the plan fetch is loading/errored', () => {
+      const loadingHtml = renderRosterTab({
+        ...actingArgs, subTab: 'plan', plan: { status: 'loading', data: null, error: null },
+      });
+      expect(loadingHtml).toContain('Ask the AI coach');
+      const errorHtml = renderRosterTab({
+        ...actingArgs, subTab: 'plan', plan: { status: 'error', data: null, error: 'boom' },
+      });
+      expect(errorHtml).toContain('Ask the AI coach');
+    });
+
+    it('renders the detailed plan view (architecture/red-team) on the Training Plan sub-tab', () => {
+      const html = renderRosterTab({
+        ...actingArgs,
+        subTab: 'plan',
+        plan: {
+          status: 'ready',
+          data: {
+            events: [],
+            macro: {
+              blocks: [],
+              architecture: 'Base then build toward the target race.',
+              weeks: [],
+              red_team: [
+                {
+                  id: 'confirm-x', severity: 'high', evidence: 'e', consequence: 'c', fix: 'f',
+                  decision: 'keep_as_is', decision_reason: 'r', athlete_words: 'coach words here',
+                  confirmed_by_role: 'coach', confirmed_by_id: 'tim',
+                },
+              ],
+            },
+            weeks: [],
+          },
+          error: null,
+        },
+      });
+      expect(html).toContain('Base then build toward the target race.');
+      expect(html).toContain('Confirmed by coach');
+      expect(html).toContain('coach words here');
+    });
+
     it('shows a loading state for the Training Plan sub-tab while the plan fetch is in flight', () => {
       const html = renderRosterTab({
         ...actingArgs, subTab: 'plan', plan: { status: 'loading', data: null, error: null },
@@ -4382,5 +4464,112 @@ describe('Build D: coach chat bubbles render real markdown (renderCoachTab wirin
     const html = renderCoachTab({ ...baseArgs, messages });
     expect(html).toContain('chat-cursor');
     expect(html).toContain('chat-md');
+  });
+});
+
+// --- renderMacroPlanDetail (coach-ai-planning build) -------------------------
+// The newer coach-authored MacroPlan fields (weeks/architecture/red_team, MacroBlock's meso
+// fields) that renderMacroSection never showed -- shared by the athlete's own Plan tab
+// (renderApp) and the roster's Training Plan sub-tab (renderRosterTab). See engine/swim_coach/
+// models.py's MacroWeek/MacroBlock/MacroRedTeamRecord for the exact field shapes mirrored here.
+
+describe('renderMacroPlanDetail', () => {
+  const FULL_MACRO = {
+    architecture: 'Base then build toward Greece, one dedicated A-race block.',
+    weeks: [
+      {
+        week_start: '2026-07-06', phase: 'Base', focus: 'aerobic base', hours: 8,
+        load_tss: 420, ctl_target: 40, key_sessions: ['Tue: over/unders 3x8min'], recovery: false,
+      },
+      {
+        week_start: '2026-07-13', phase: 'Base', focus: 'aerobic base, recovery', hours: 5,
+        load_tss: null, ctl_target: 41, key_sessions: [], recovery: true,
+      },
+    ],
+    blocks: [
+      {
+        name: 'base', start_date: '2026-07-06', end_date: '2026-07-19', weekly_volume_target_m: 0,
+        focus: 'aerobic base', purpose: 'fade resistance', limiter: 'late-race fade',
+        key_sessions: ['over/unders: 3x8 -> 3x10'], hard_days_per_week: 2,
+        intensity_distribution: 'polarized: 2 hard, rest easy', closing_test: 'FTP re-test',
+      },
+      // A block with no meso fields authored -- must contribute no card.
+      { name: 'build', start_date: '2026-07-20', end_date: '2026-08-02', weekly_volume_target_m: 0, focus: 'build' },
+    ],
+    red_team: [
+      {
+        id: 'confirm-volume-jump', severity: 'high',
+        evidence: 'Week 2 hours drop 8 -> 5 with no logged reason.',
+        consequence: 'Could mask an unplanned deload as a real recovery week.',
+        fix: 'Tag the week recovery=true or explain the drop.',
+        decision: 'keep_as_is', decision_reason: 'known gap, coach reviewed',
+        athlete_words: 'coach confirming this on the athlete\'s behalf',
+        confirmed_by_role: 'coach', confirmed_by_id: 'tim',
+      },
+      {
+        id: 'low-finding', severity: 'low', evidence: 'e', consequence: 'c', fix: 'f',
+        decision: 'keep_as_is', decision_reason: 'fine', athlete_words: null,
+      },
+    ],
+  };
+
+  it('renders nothing for a null macro', () => {
+    expect(renderMacroPlanDetail(null)).toBe('');
+  });
+
+  it('renders nothing for a legacy blocks-only macro with no weeks/architecture/red_team/meso fields', () => {
+    const legacy = { blocks: [{ name: 'base', start_date: '2026-07-06', end_date: '2026-07-19', weekly_volume_target_m: 20000, focus: 'aerobic base' }] };
+    expect(renderMacroPlanDetail(legacy)).toBe('');
+  });
+
+  it('renders the architecture rationale', () => {
+    const html = renderMacroPlanDetail(FULL_MACRO);
+    expect(html).toContain('Base then build toward Greece');
+  });
+
+  it('renders one row per MacroWeek with phase/focus/hours/ctl target/key sessions/recovery', () => {
+    const html = renderMacroPlanDetail(FULL_MACRO);
+    expect(html).toContain('aerobic base');
+    expect(html).toContain('over/unders 3x8min');
+    expect(html).toContain('Recovery');
+    expect(html).toContain('420'); // authored load_tss
+  });
+
+  it('marks a week with no authored load_tss as a dash, never a fabricated number', () => {
+    const html = renderMacroPlanDetail(FULL_MACRO);
+    expect(html).toContain('—</td>');
+  });
+
+  it('renders per-block meso detail only for blocks that authored it', () => {
+    const html = renderMacroPlanDetail(FULL_MACRO);
+    expect(html).toContain('fade resistance');
+    expect(html).toContain('late-race fade');
+    expect(html).toContain('FTP re-test');
+    expect(html).toContain('polarized: 2 hard, rest easy');
+    // 'build' block has no meso fields -- one meso-card only, not two.
+    const cardMatches = html.match(/class="meso-card"/g) || [];
+    expect(cardMatches.length).toBe(1);
+  });
+
+  it('renders red-team findings with severity, evidence, decision, and who confirmed', () => {
+    const html = renderMacroPlanDetail(FULL_MACRO);
+    expect(html).toContain('HIGH');
+    expect(html).toContain('Kept as-is');
+    expect(html).toContain('Week 2 hours drop');
+    expect(html).toContain('coach confirming this on the athlete&#39;s behalf');
+    expect(html).toContain('Confirmed by coach');
+    expect(html).toContain('tim');
+  });
+
+  it('defaults an old red-team record with no confirmed_by_role to "Confirmed by athlete"', () => {
+    const html = renderMacroPlanDetail(FULL_MACRO);
+    expect(html).toContain('Confirmed by athlete');
+  });
+
+  it('never crashes on a macro with weeks/blocks but no red_team at all (pre-confirm draft shape)', () => {
+    const noRedTeam = { ...FULL_MACRO, red_team: null };
+    expect(() => renderMacroPlanDetail(noRedTeam)).not.toThrow();
+    const html = renderMacroPlanDetail(noRedTeam);
+    expect(html).not.toContain('Red-team review');
   });
 });

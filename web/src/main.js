@@ -9,7 +9,7 @@ import {
 import { findSessionById, LOAD_CHART_WINDOW_DAYS, LOAD_CHART_WINDOW_OPTIONS } from './plan.js';
 import { buildHistoryFeed } from './history.js';
 import {
-  loadChatSession, saveChatSession, clearChatStorage,
+  loadChatSession, saveChatSession, clearChatStorage, createChatSession,
   appendUserMessage, applyStreamEvent, isStreaming, setExpertMode, clearMessages, toApiHistory,
 } from './chat.js';
 import { loadSettings, saveSettings, isConfigured } from './settings.js';
@@ -239,6 +239,12 @@ function createRosterState() {
     // No draft text here (the composer's own textarea, read by id on submit, same convention
     // handleSendWorkoutChat's athlete-side composer already uses -- no per-keystroke state).
     workoutChatSubmit: { status: 'idle', error: null },
+    // coach-ai-planning build: the roster Plan sub-tab's "Ask the AI coach" chat session --
+    // same createChatSession()/loadChatSession()/saveChatSession() reducers/persistence as the
+    // athlete's own Coach-tab `state.chat` (chat.js is athlete-agnostic; see
+    // handleSelectCoachedAthlete's own load call for the distinct `coach:<slug>` storage key
+    // this uses so it never collides with that athlete's own Coach-tab chat on the same device).
+    chat: createChatSession(),
   };
 }
 
@@ -653,6 +659,8 @@ function renderTabContent() {
         healthStatusSubmit: state.roster.healthStatusSubmit,
         healthStatusResolve: state.roster.healthStatusResolve,
         workoutChatSubmit: state.roster.workoutChatSubmit,
+        chat: state.roster.chat,
+        chatSending: isStreaming(state.roster.chat),
       });
     case 'settings':
       return renderSettingsTab({
@@ -723,6 +731,7 @@ function render() {
     })}`;
   if (state.tab === 'coach') stickChatScrollToBottom();
   if (state.tab === 'dashboard' && state.workoutChat) stickWorkoutChatScrollToBottom();
+  if (state.tab === 'roster' && state.roster.subTab === 'plan') stickRosterChatScrollToBottom();
   if (state.tab === 'settings' && !state.identity) mountGoogleSignIn();
   if (state.tab === 'resources' && state.libraryOpenFile?.anchor && state.libraryFile.status === 'ready') {
     scrollToLibrarySectionAnchor(state.libraryOpenFile.anchor);
@@ -1065,6 +1074,11 @@ function stickWorkoutChatScrollToBottom() {
   if (list) list.scrollTop = list.scrollHeight;
 }
 
+function stickRosterChatScrollToBottom() {
+  const list = document.getElementById('roster-chat-messages');
+  if (list) list.scrollTop = list.scrollHeight;
+}
+
 // --- Plan tab ----------------------------------------------------------------
 // Fetches the live GET /api/plan?athlete=<slug> from the backend (see
 // api.js's fetchPlan) instead of the static baked data/<slug>.json, so each
@@ -1343,6 +1357,89 @@ function handleToggleExpertMode(checked) {
 
 function persistChat() {
   saveChatSession(athleteSlug(), state.chat);
+}
+
+// --- Roster "Ask the AI coach" panel (coach-ai-planning build) --------------
+// The coach-mode counterpart to the Coach chat tab just above -- same reducers/persistence
+// (chat.js is athlete-agnostic), streaming the SAME SSE contract but against
+// POST /api/coach/athletes/<slug>/chat (backend/app/routes/coach.py's `coach_chat`) instead of
+// POST /api/chat, scoped to whichever athlete the coach is currently acting as
+// (state.roster.actingAsAthlete), never the signed-in coach's own athleteSlug().
+
+/** A storage key distinct from the coach's own Coach-tab chat (`athleteSlug()`) and from that
+ * athlete's OWN Coach-tab chat on their own device (this key only ever exists in the COACH's
+ * browser storage) -- see createRosterState's own comment. */
+function rosterChatStorageKey(slug) {
+  return `coach:${slug}`;
+}
+
+let rosterChatAbortController = null;
+
+function handleSendRosterChat() {
+  const slug = state.roster.actingAsAthlete;
+  if (!slug || isStreaming(state.roster.chat)) return;
+  const input = document.getElementById('roster-chat-input');
+  const text = input?.value.trim();
+  if (!text) return;
+
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) {
+    state.tab = 'settings';
+    saveActiveTab(state.tab);
+    render();
+    return;
+  }
+
+  const history = toApiHistory(state.roster.chat.messages);
+  state.roster.chat = appendUserMessage(state.roster.chat, text);
+  if (input) input.value = '';
+  render();
+  persistRosterChat(slug);
+
+  rosterChatAbortController = new AbortController();
+  log.info('roster.chat.send', { athlete: slug });
+
+  streamChat({
+    baseUrl: settings.baseUrl,
+    token: settings.token,
+    athlete: slug,
+    endpoint: `/api/coach/athletes/${slug}/chat`,
+    message: text,
+    history,
+    expertMode: true,
+    signal: rosterChatAbortController.signal,
+    onEvent: (event) => {
+      if (event.type === 'error' && event.status === 401) {
+        handleSessionExpired();
+        return;
+      }
+      state.roster.chat = applyStreamEvent(state.roster.chat, event);
+      if (event.type === 'done' || event.type === 'refusal' || event.type === 'error') {
+        persistRosterChat(slug);
+        log.info('roster.chat.turn_complete', { type: event.type });
+        // A confirmed plan change (author_macro_plan/author_week_plan persisting) may have
+        // just changed what GET /api/coach/athletes/<slug>/plan returns -- reload it so the
+        // Training Plan sub-tab's week table/macro detail below the chat reflects it without
+        // requiring a manual refresh. Harmless (one extra GET) when the turn touched nothing.
+        if (event.type === 'done') loadCoachPlan(slug);
+      }
+      render();
+    },
+  });
+}
+
+function handleClearRosterChat() {
+  const slug = state.roster.actingAsAthlete;
+  if (!slug) return;
+  if (isStreaming(state.roster.chat)) rosterChatAbortController?.abort();
+  state.roster.chat = clearMessages(state.roster.chat);
+  clearChatStorage(rosterChatStorageKey(slug));
+  log.info('roster.chat.cleared', { athlete: slug });
+  render();
+}
+
+function persistRosterChat(slug) {
+  saveChatSession(rosterChatStorageKey(slug), state.roster.chat);
 }
 
 // --- Log tab (workout logging) ------------------------------------------------
@@ -2873,6 +2970,9 @@ function handleSelectCoachedAthlete(slug) {
   };
   state.roster.healthStatusSubmit = { status: 'idle', error: null };
   state.roster.healthStatusResolve = { status: 'idle', error: null, id: null };
+  // coach-ai-planning build: this athlete's own "Ask the AI coach" conversation, keyed
+  // separately from the coach's own Coach-tab chat (see createRosterState's own comment).
+  state.roster.chat = loadChatSession(rosterChatStorageKey(slug));
   log.info('roster.athlete_selected', { athlete: slug });
   render();
   loadCoachWorkouts(slug); // calls render() itself
@@ -2919,6 +3019,8 @@ function handleBackToRoster() {
   };
   state.roster.healthStatusSubmit = { status: 'idle', error: null };
   state.roster.healthStatusResolve = { status: 'idle', error: null, id: null };
+  if (isStreaming(state.roster.chat)) rosterChatAbortController?.abort();
+  state.roster.chat = createChatSession();
   render();
 }
 
@@ -3357,6 +3459,8 @@ async function onAppClick(e) {
     case 'workout-chat:mute-toggle': await handleToggleWorkoutChatMute(); break;
     case 'roster:workout-chat:send': await handleSendRosterWorkoutChatMessage(); break;
     case 'roster:workout-chat:mute-toggle': await handleToggleRosterWorkoutChatMute(); break;
+    case 'roster:chat:send': handleSendRosterChat(); break;
+    case 'roster:chat:clear': handleClearRosterChat(); break;
     case 'log:submit': handleSubmitLog(); break;
     case 'sync:start': handleSyncWorkouts(); break;
     case 'log:toggle-manual': handleToggleManualLog(); break;
@@ -3596,6 +3700,10 @@ function onAppKeydown(e) {
   if (e.target.id === 'workout-chat-input' && e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     handleSendWorkoutChat();
+  }
+  if (e.target.id === 'roster-chat-input' && e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    handleSendRosterChat();
   }
 }
 
