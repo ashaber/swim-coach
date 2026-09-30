@@ -1667,6 +1667,31 @@ class Workout(BaseModel):
     chat_ai_muted: bool = False
 
 
+class ExecutionComponent(BaseModel):
+    """One scored part of an `ExecutionScore`. `score` is 0-100 (`None` when
+    this workout has no data for the component; it is then left out and the
+    remaining weights are renormalized). `weight` is the EFFECTIVE weight
+    after renormalization (sums to 1.0 over the scored components)."""
+
+    name: str
+    score: float | None = None
+    weight: float
+    detail: str
+
+
+class ExecutionScore(BaseModel):
+    """Deterministic 0-100 execution score with its full breakdown, computed
+    by `swim_coach.execution_score` -- response-only, never persisted.
+    `kind` is "workout" (interval analyzer vs. the matched prescription) or
+    "race" (race-phase / lap pacing). `score` is `None` with a `reason` when
+    the workout can't be scored honestly (e.g. no matched prescription)."""
+
+    kind: Literal["workout", "race"]
+    score: float | None = None
+    reason: str | None = None
+    components: list[ExecutionComponent] = Field(default_factory=list)
+
+
 class WorkoutQuality(BaseModel):
     """Per-workout planned-vs-actual interpretation, computed by
     `swim_coach.quality.workout_quality` -- NOT persisted (a
@@ -1696,6 +1721,7 @@ class WorkoutQuality(BaseModel):
     # never wired into `adapt.py`.
     intensity_match: Literal["match", "mismatch", "unknown"] = "unknown"
     quality_summary: str | None = None
+    execution: ExecutionScore | None = None
 
 
 FeedbackType = Literal[

@@ -191,6 +191,7 @@ holding a directly-confirmable one itself.
 from __future__ import annotations
 
 import json
+import math
 import re
 import shutil
 import tempfile
@@ -216,6 +217,7 @@ from swim_coach.load import (
     recent_weekly_hours,
 )
 from swim_coach.parse_files import parse_fit
+from swim_coach.execution_score import race_execution_score
 from swim_coach.race_phases import (
     DEFAULT_SIGNIFICANCE_THRESHOLD_PCT,
     RacePhase,
@@ -4186,6 +4188,28 @@ def _race_phases_json(phases: list[RacePhase]) -> list[dict[str, Any]]:
     return out
 
 
+POWER_PROFILE_MAX_POINTS = 400
+
+
+def _power_profile(series: dict[str, Any]) -> list[list[float]]:
+    """The ride's power as `[t_s, watts]` points, mean-bucketed to at most
+    POWER_PROFILE_MAX_POINTS so the PWA can draw it over the planned shape
+    without shipping the full 1 Hz series. Empty when there is no power channel."""
+    t_s, power = series.get("t_s"), series.get("power_w")
+    if not t_s or not power:
+        return []
+    pairs = [(t, p) for t, p in zip(t_s, power) if t is not None and p is not None]
+    if not pairs:
+        return []
+    t0 = pairs[0][0]
+    span = pairs[-1][0] - t0
+    bucket_s = max(1, math.ceil(span / POWER_PROFILE_MAX_POINTS)) if span > 0 else 1
+    buckets: dict[int, list[float]] = {}
+    for t, p in pairs:
+        buckets.setdefault(int((t - t0) // bucket_s), []).append(p)
+    return [[k * bucket_s, round(sum(v) / len(v), 1)] for k, v in sorted(buckets.items())]
+
+
 RIDE_PACING_INTERPRETATION = (
     "Read the lap metrics TOGETHER, never one alone. efficiency_mps_per_w "
     "(speed per watt of NP) rises for genuine improvement AND for fade/easing "
@@ -4270,6 +4294,8 @@ def _handle_get_ride_pacing(
             "phases": _race_phases_json(phases),
             "significance_threshold_pct": DEFAULT_SIGNIFICANCE_THRESHOLD_PCT,
         },
+        "race_execution": race_execution_score(phases, laps).model_dump(mode="json"),
+        "power_profile": _power_profile(series),
         "interpretation": RIDE_PACING_INTERPRETATION,
     }
 
