@@ -167,6 +167,21 @@ Moved to its own topic file, `26-activity-stream-interval-analysis.md` (this fil
 quality vs target, the adaptive in-band tolerance, terrain-confound flags, over/under sub-resolution, tightened decoupling and its
 all-interval guard, and match-to-prescription. `11` keeps only the cross-sport analytics constants (`analytics.py`).
 
+## Execution scores
+
+**Coach judgment:** `execution_score.py` turns the interval analyzer's and the race-phase splitter's existing outputs into one 0-100 score
+per workout, always shown with its component breakdown. No study supports a specific combining formula, so every weight and scale is a
+coach-judgment engineering default, not a validated model. The only evidence-backed number reused is the ~5% within-athlete variation
+floor (Mateo-March et al. 2025, `reference_list.md`): fade or phase-to-phase differences under it cost nothing.
+
+- Workout (needs a matched prescription, else no score and the reason is shown): intensity 50% (share of completed reps whose average sat
+  in the prescribed band), completion 30% (reps and duration vs planned), consistency 20% (worst fade across reps/rounds, 100 at <=5%, 0 at 20%).
+- Race: pacing evenness 35% (NP spread across post-start phases), late fade 30% (last phase vs phase 1), start control 15% (start NP over
+  phase 1, free to +20%), lap consistency 20% (lap NP CV, needs 3 laps). A component with no data is dropped and weights renormalized.
+- `intensity_match` is "match" at >=70% of reps in band.
+
+Read the breakdown, not the headline number; a low score is a prompt to look at why, not a verdict.
+
 ## What's still a gap
 
 - No citation exists yet for cardiac-drift/aerobic-decoupling thresholds in

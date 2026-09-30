@@ -50,6 +50,12 @@ cards:
     file hit its word cap; this file now retains only cross-sport analytics constants.
   recommendation: none -- background only
   content_hash: d742ef461eebe11840a324723ba77f4aaaee7a55be725f9742950e1cfb60d4e4
+- section: execution-scores
+  heading: Execution scores
+  summary: Defines coach-judgment 0-100 workout and race execution scores as weighted, transparent component
+    breakdowns; weights are unvalidated, only the ~5% variation floor is evidence-backed.
+  recommendation: Quote the breakdown, not the headline number; treat a low score as a prompt to ask why.
+  content_hash: 37d8b6fab6fe90423b81cad7e70d76e5232ecc2eee8eccdaf75ac10d925f7b96
 - section: what-s-still-a-gap
   heading: What's still a gap
   summary: 'Lists open gaps: no citation for cardiac-drift thresholds in swimming, the even-split ±2%

@@ -1328,6 +1328,30 @@ def test_update_athlete_profile_sets_multiple_fields_at_once(athletes_dir) -> No
     assert athlete.sports == ["swim_pool", "swim_ow", "bike"]
 
 
+def test_update_athlete_profile_sets_timezone(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+
+    result = handlers["update_athlete_profile"]({"timezone": "America/Denver"})
+
+    assert result["updated"] is True
+    assert result["timezone"] == "America/Denver"
+    assert store.load_athlete("renee").timezone == "America/Denver"
+    assert "saved_as_notes" not in result
+
+
+@pytest.mark.parametrize("bad", ["Mars/Olympus", "", 5, None])
+def test_update_athlete_profile_rejects_invalid_timezone(athletes_dir, bad) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    before = store.load_athlete("renee").timezone
+
+    result = handlers["update_athlete_profile"]({"timezone": bad})
+
+    assert "error" in result and "timezone" in result["error"]
+    assert store.load_athlete("renee").timezone == before
+
+
 def test_update_athlete_profile_leaves_other_fields_untouched(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)

@@ -211,3 +211,35 @@ def test_no_series_points_at_pull_activity_stream(athletes_dir) -> None:
     res = _handlers(store)["get_ride_pacing"]({"workout_id": str(w.id)})
     assert "no time-series data" in res["error"]
     assert "pull_activity_stream" in res["error"]
+
+
+def test_returns_race_execution_score_with_breakdown(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    w = _seed(store, _loop_series([200, 200, 200]))
+
+    res = _handlers(store)["get_ride_pacing"]({"workout_id": str(w.id)})
+
+    ex = res["race_execution"]
+    assert ex["kind"] == "race" and ex["score"] is not None
+    assert {c["name"] for c in ex["components"]} == {
+        "pacing_evenness", "late_fade", "start_control", "lap_consistency",
+    }
+
+
+def test_faded_race_scores_below_even_race(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    even = _handlers(store)["get_ride_pacing"]({"workout_id": str(_seed(store, _loop_series([200] * 3)).id)})
+    faded = _handlers(store)["get_ride_pacing"]({"workout_id": str(_seed(store, _loop_series([220, 180, 120])).id)})
+    assert faded["race_execution"]["score"] < even["race_execution"]["score"]
+
+
+def test_returns_a_downsampled_power_profile(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    w = _seed(store, _loop_series([200, 150, 100]))
+
+    res = _handlers(store)["get_ride_pacing"]({"workout_id": str(w.id)})
+
+    prof = res["power_profile"]
+    assert 2 <= len(prof) <= 400
+    assert prof[0][0] == 0 and prof[-1][0] > prof[0][0]
+    assert prof[0][1] == pytest.approx(200, abs=1) and prof[-1][1] == pytest.approx(100, abs=1)

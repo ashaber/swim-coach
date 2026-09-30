@@ -34,20 +34,19 @@ summary (cardiac-drift / SWOLF degradation). Different granularity,
 different callers; neither calls the other, and neither is a substitute for
 the other's number.
 
-Known Phase-1 gap: `intensity_match` can only ever return "unknown" today.
-Comparing a workout's *actual* training zone against `session.intensity`'s
-*planned* zone would require classifying the workout's actual pace/HR into
-a Z1-Z5 zone, and no such classification function exists yet anywhere in
-this codebase -- `zones.py` only builds the CSS-anchored zone table
-(`zone_table`) and infers an open-water pace estimate (`infer_ow_pace`); it
-has no "given this pace/HR, which zone was this" classifier. Inventing one
-here would be exactly the kind of un-cited physiology threshold CLAUDE.md's
-evidence-discipline rule prohibits, so this module deliberately does not.
+`intensity_match` is read from the prescription-aware interval analyzer
+(`execution_score.intensity_match`): "match"/"mismatch" from the share of
+completed reps whose average power sat in the prescribed band, "unknown"
+when no prescription was located or no watts band resolved. It still never
+classifies pace/HR into a zone itself -- that would be an un-cited threshold.
+`execution` is the 0-100 execution score with its breakdown
+(`execution_score.workout_execution_score`), `None` when unmatched.
 """
 
 from __future__ import annotations
 
 from swim_coach.analytics import CARDIAC_DRIFT_FLAG_PCT
+from swim_coach.execution_score import intensity_match, workout_execution_score
 from swim_coach.load import session_load, session_target_load_au
 from swim_coach.models import Athlete, Session, Workout, WorkoutAnalytics, WorkoutQuality
 
@@ -234,12 +233,14 @@ def workout_quality(workout: Workout, session: Session | None, *, athlete: Athle
     load_delta_pct = round((actual_load_au - target_load_au) / target_load_au * 100, 1)
 
     quality_summary = _quality_summary(workout.analytics) if workout.analytics is not None else None
+    intervals = workout.analytics.intervals if workout.analytics is not None else None
 
     return WorkoutQuality(
         matched=True,
         distance_delta_pct=distance_delta_pct,
         duration_delta_pct=duration_delta_pct,
         load_delta_pct=load_delta_pct,
-        intensity_match="unknown",  # see module docstring: Phase-1 gap, no zone classifier exists
+        intensity_match=intensity_match(intervals),
         quality_summary=quality_summary,
+        execution=workout_execution_score(intervals, workout, session),
     )

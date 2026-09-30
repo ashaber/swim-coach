@@ -47,6 +47,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 import time
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -54,11 +55,13 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from pydantic import ValidationError
 from swim_coach.load import estimate_hr_max
-from swim_coach.models import Workout
+from swim_coach.models import Session, Workout
+from swim_coach.quality import match_workout_to_session, workout_quality
 from swim_coach.parse_files import PARSERS_BY_EXTENSION
 
 from app.auth import Principal, require_auth, resolve_athlete
 from app.load_helpers import workout_load_au
+from app.routes.coach import _iso_week_date_range
 from app.enrich import enrich_draft
 from app.logging_config import get_logger
 from app.store_factory import make_store
@@ -119,6 +122,35 @@ def _attach_load(
     """
     load_au, load_tier = workout_load_au(workout, athlete=profile, hr_max=hr_max, wellness=wellness)
     return {**workout.model_dump(mode="json"), "load_au": load_au, "load_tier": load_tier}
+
+
+def _scored_quality(store: Any, slug: str, profile: Any, workouts: list[Workout]) -> dict[str, dict]:
+    """`workout_quality` (incl. the execution score) for each workout whose interval analysis was
+    matched to its prescription -- the only ones with something to score. Loads only the plan weeks
+    overlapping those workouts' dates. Keyed by workout id (str)."""
+    scorable = [
+        w for w in workouts
+        if w.analytics is not None and w.analytics.intervals is not None
+        and w.analytics.intervals.matched_to_prescription
+    ]
+    if not scorable:
+        return {}
+    lo = min(w.date for w in scorable) - timedelta(days=1)
+    hi = max(w.date for w in scorable) + timedelta(days=1)
+    sessions: list[Session] = []
+    for iso_week in store.list_week_ids(slug):
+        start, end = _iso_week_date_range(iso_week)
+        if end < lo or start > hi:
+            continue
+        week = store.load_week(slug, iso_week)
+        if week is not None:
+            sessions.extend(week.sessions)
+    return {
+        str(w.id): workout_quality(
+            w, match_workout_to_session(w, sessions, other_workouts=workouts), athlete=profile
+        ).model_dump(mode="json")
+        for w in scorable
+    }
 
 
 @router.post("/api/workouts")
@@ -428,4 +460,9 @@ async def list_workouts(
     # the wellness fetch tier 2 needs.
     wellness = store.list_wellness(athlete)
     hr_max = estimate_hr_max(workouts)
-    return [_attach_load(w, profile=profile, hr_max=hr_max, wellness=wellness) for w in workouts]
+    quality = _scored_quality(store, athlete, profile, workouts)
+    rows = [_attach_load(w, profile=profile, hr_max=hr_max, wellness=wellness) for w in workouts]
+    for row in rows:
+        if row["id"] in quality:
+            row["quality"] = quality[row["id"]]
+    return rows

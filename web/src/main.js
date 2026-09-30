@@ -388,6 +388,9 @@ const state = {
   // renderTrainingDashboardBody -- same "Show more" convention as
   // state.roster.feedExpanded. Reset on leaving the Dashboard tab (setTab).
   dashboardFeedExpanded: false,
+  // The workout detail's "Raw analysis" panel (read-only, from the cached workout). Closed on
+  // every open/close of a detail so it never carries over to another workout.
+  rawAnalysisOpen: false,
   // The Dashboard tab's training-load chart narrative (views.js's
   // renderCtlAtlTsbNarrative, web/two-panel-load-chart's truncation) --
   // same one-way "Show more" convention as dashboardFeedExpanded just
@@ -589,6 +592,11 @@ function renderTabContent() {
         loadNarrativeExpanded: state.loadNarrativeExpanded,
         pacing: state.pacingByWorkoutId,
         raceDebriefs: state.raceDebriefs.data,
+        detailExtras: {
+          weeks: state.plan.data?.weeks || [],
+          ftpWatts: state.plan.data?.athlete?.ftp_watts ?? null,
+          rawAnalysisOpen: state.rawAnalysisOpen,
+        },
         healthStatusForm: state.healthStatusForm,
         healthStatusSubmit: state.healthStatusSubmit,
         healthStatusFormOpen: state.healthStatusFormOpen,
@@ -1660,6 +1668,7 @@ async function handleSubmitHealthStatusSelf() {
 function handleOpenHistoryDetail(id, { rpeEdit = null } = {}) {
   if (!id) return;
   state.workoutDetailId = id;
+  state.rawAnalysisOpen = false;
   // A fresh, empty scoped chat thread for this workout (see
   // closeWorkoutChat for the matching teardown on every close path).
   state.workoutChat = { workoutId: id, messages: [] };
@@ -1773,10 +1782,19 @@ function closeWorkoutChat() {
 function handleCloseHistoryDetail() {
   if (!state.workoutDetailId) return; // avoids a redundant render on popstate re-entrancy
   state.workoutDetailId = null;
+  state.rawAnalysisOpen = false;
   closeWorkoutChat();
   state.workoutRpeEdit = null;
   state.askCoachForm = createAskCoachForm();
   state.askCoachSubmit = createAskCoachSubmit();
+  render();
+}
+
+/** Opens/closes the workout detail's read-only "Raw analysis" panel. Pure state flip -- the
+ * panel renders from the workout already cached in state, so it needs no network. */
+function handleToggleRawAnalysis() {
+  state.rawAnalysisOpen = !state.rawAnalysisOpen;
+  log.info('workout.raw_analysis_toggled', { athlete: athleteSlug(), workout_id: state.workoutDetailId, open: state.rawAnalysisOpen });
   render();
 }
 
@@ -3513,6 +3531,7 @@ async function onAppClick(e) {
     // so the in-app "back" affordance and a hardware/gesture back press
     // close the detail via the exact same path -- see handlePopState.
     case 'history:back': history.back(); break;
+    case 'workout:raw-analysis-toggle': handleToggleRawAnalysis(); break;
     // Shared data-a="session:open" markup between the athlete's own Plan tab
     // and the coach roster's Training Plan sub-tab (views.js's renderSession)
     // -- branch on state.tab to route the click to the right piece of state

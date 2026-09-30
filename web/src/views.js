@@ -18,6 +18,8 @@ import { TOOL_LABELS } from './chat.js';
 import { renderSessionIcon } from './icons.js';
 import { renderChatMarkdown } from './markdown.js';
 import { buildHistoryFeed } from './history.js';
+import { expandStructure, actualPoints, sessionForWorkout, shapeChartGeometry } from './shape.js';
+import { buildRawAnalysis } from './analysis.js';
 import { sportHasPlannedDistance, sportCanPushToGarmin, sportUsesPace } from './sports.js';
 import {
   sportLabel, sourceBadge, formatWorkoutDistance, formatAnalyticsLine,
@@ -472,7 +474,7 @@ function renderStructuredWorkoutSection(structured) {
  * roster's call site). `null`/absent entirely renders the section with an
  * empty question list and no input box, so a stale/legacy call site never
  * crashes on a missing prop. */
-function renderPlanSessionDetail(session, sessionPush, showGarminActions = true, askCoach = null) {
+function renderPlanSessionDetail(session, sessionPush, showGarminActions = true, askCoach = null, ftpWatts = null) {
   const classification = classifySession(session);
   const { title, detail, structure } = sessionDisplay(session);
   const dateLabel = formatLongDate(parseIsoDate(session.date));
@@ -520,6 +522,7 @@ function renderPlanSessionDetail(session, sessionPush, showGarminActions = true,
     </div>
     ${renderPlanSessionDetailStats(session)}
     ${hasStructured ? renderZoneDistributionSummary(session.structured) : ''}
+    ${hasStructured ? renderShapeSection({ structured: session.structured, ftpWatts, title: 'Workout shape' }) : ''}
     ${hasStructured
       ? renderStructuredWorkoutSection({ items: workoutItems })
         + (rationale ? renderStructureBlock({ label: 'Why', content: rationale }) : '')
@@ -711,14 +714,14 @@ function renderWeekCard(week, label) {
  * workouts. `showGarminActions` (default `true`) just threads through to
  * renderPlanSessionDetail -- see that function's doc comment; the coach's
  * call site (renderRosterTrainingPlanBody) passes `false`. */
-function renderWeeksSection(weeks, detailId, sessionPush, allWeeksOpen, showGarminActions = true, askCoach = null) {
+function renderWeeksSection(weeks, detailId, sessionPush, allWeeksOpen, showGarminActions = true, askCoach = null, ftpWatts = null) {
   if (detailId) {
     const session = findSessionById(weeks, detailId);
     if (session) {
       return `
     <section>
       <div class="s-head"><button type="button" class="btn-ghost" data-a="session:back">&larr; Back to plan</button></div>
-      ${renderPlanSessionDetail(session, sessionPush, showGarminActions, askCoach)}
+      ${renderPlanSessionDetail(session, sessionPush, showGarminActions, askCoach, ftpWatts)}
     </section>`;
     }
   }
@@ -1751,7 +1754,7 @@ export function renderApp(data, planSessionDetailId) {
   return `
     <div class="wrap">
       ${renderMasthead(athlete, event)}
-      ${renderWeeksSection(weeks, planSessionDetailId, sessionPush, allWeeksOpen, true, askCoach)}
+      ${renderWeeksSection(weeks, planSessionDetailId, sessionPush, allWeeksOpen, true, askCoach, athlete?.ftp_watts ?? null)}
       ${renderMacroSection(macro, event, weeks, events)}
       ${renderMacroPlanDetail(macro)}
       <div class="foot">
@@ -2359,6 +2362,9 @@ function renderTrainingDashboardBody({
   // safe to add there later; not wired for coach-mode this build).
   pacing = {},
   raceDebriefs = [],
+  // { weeks, ftpWatts, rawAnalysisOpen } -- the shape chart's matched-plan lookup and the
+  // Raw analysis toggle; absent on call sites that don't wire them (chart/panel just omit).
+  detailExtras = {},
 }) {
   const items = feed || [];
   const hasData = items.length > 0;
@@ -2371,7 +2377,7 @@ function renderTrainingDashboardBody({
           <div class="s-head"><button type="button" class="btn-ghost" data-a="${backAction}">&larr; Back</button></div>
           ${renderWorkoutDetail(match.workout, {
             chat: chat ? workoutChat : null, viewerRole: chat ? 'athlete' : 'coach', online, rpeEdit, editable,
-            pacing: pacing[match.workout.id], raceDebriefs, coachChatSubmitting,
+            pacing: pacing[match.workout.id], raceDebriefs, coachChatSubmitting, ...detailExtras,
           })}
         </section>`;
     }
@@ -2442,6 +2448,7 @@ export function renderDashboardTab({
   // predates this build renders the same as before rather than crashing.
   pacing = {},
   raceDebriefs = [],
+  detailExtras = {},
   // Athlete self-service health-status logging (web/coach-health-nav-and-
   // athlete-self-log, fixing the reported "need another option, log health
   // condition" gap) -- defaulted so every existing call site/test that
@@ -2473,7 +2480,7 @@ export function renderDashboardTab({
     ${!online ? '<div class="chat-banner">Offline -- some data may be out of date.</div>' : ''}
     ${renderTrainingDashboardBody({
       load, feed, status, error, online, detailId, workoutChat, actions, feedExpanded, rpeEdit, editable: true,
-      loadWindowDays, loadNarrativeExpanded, pacing, raceDebriefs,
+      loadWindowDays, loadNarrativeExpanded, pacing, raceDebriefs, detailExtras,
       // web/resources-tab-library-review: the Check-in tab (which used to
       // hold this block instead, see its own now-removed renderCheckinTab)
       // is gone -- showWellnessInline now stays at its `true` default here
@@ -2810,6 +2817,131 @@ function renderRaceDebriefSection(workout, debriefs) {
     </section>`;
 }
 
+// --- Workout shape chart (time x watts) --------------------------------------
+// Geometry lives in shape.js; this only turns it into SVG. Colours are the
+// shared ZONE_COLORS so the planned bars and the ridden line agree.
+
+function renderShapeSvg(g, { label }) {
+  const bars = g.bars.map((b) => `
+    <polygon points="${b.points}" fill="${b.color}" fill-opacity="0.55"><title>${esc(b.label)} ${b.lo}-${b.hi} W</title></polygon>
+    <rect x="${b.x.toFixed(1)}" y="${b.bandTop.toFixed(1)}" width="${b.w.toFixed(1)}" height="${Math.max(b.bandBottom - b.bandTop, 1).toFixed(1)}" fill="${b.color}" fill-opacity="0.35" stroke="${b.color}" stroke-width="0.5"/>`).join('');
+  const runs = g.actualRuns.map((r) => `
+    <polyline points="${r.points}" fill="none" stroke="#0f3138" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+    <polyline points="${r.points}" fill="none" stroke="${r.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`).join('');
+  const yTicks = g.yTicks.map((t) => `
+    <line x1="${g.plotLeft}" x2="${g.plotRight}" y1="${t.y.toFixed(1)}" y2="${t.y.toFixed(1)}" stroke="var(--line-soft)" stroke-width="0.5"/>
+    <text x="${g.plotLeft - 4}" y="${(t.y + 3).toFixed(1)}" text-anchor="end" class="shape-tick">${esc(t.label)}</text>`).join('');
+  const xTicks = g.xTicks.map((t) => `
+    <text x="${t.x.toFixed(1)}" y="${g.height - 8}" text-anchor="middle" class="shape-tick">${esc(t.label)}</text>`).join('');
+  return `
+    <svg class="shape-chart" viewBox="0 0 ${g.width} ${g.height}" role="img" aria-label="${esc(label)}" preserveAspectRatio="xMidYMid meet">
+      ${yTicks}${xTicks}
+      <line x1="${g.plotLeft}" x2="${g.plotRight}" y1="${g.ftpY.toFixed(1)}" y2="${g.ftpY.toFixed(1)}" stroke="var(--ink-soft)" stroke-width="0.75" stroke-dasharray="3 3"/>
+      <text x="${g.plotRight}" y="${(g.ftpY - 3).toFixed(1)}" text-anchor="end" class="shape-tick">FTP</text>
+      ${bars}${runs}
+    </svg>`;
+}
+
+function renderShapeLegend(g) {
+  return `
+    <div class="shape-legend">
+      ${g.legend.map((l) => `<span class="shape-legend-item"><i class="shape-swatch" style="background:${l.color}"></i>${esc(l.zone)} ${esc(l.name)} <span class="mono">${esc(l.range)}</span></span>`).join('')}
+    </div>`;
+}
+
+function renderShapeSection({ structured, ftpWatts, title, actual = [], caption = null }) {
+  if (!ftpWatts) {
+    return `
+    <section class="detail-section">
+      <h4>${esc(title)}</h4>
+      <p class="sub">Set your FTP in Settings to see this workout drawn in watts.</p>
+    </section>`;
+  }
+  const plan = structured ? expandStructure(structured, ftpWatts) : { segments: [], total_s: 0 };
+  const g = shapeChartGeometry({ ...plan, actual, ftp: ftpWatts });
+  if (g.isEmpty) return '';
+  const label = g.hasActual && g.hasPlan
+    ? 'Planned power targets with the ridden power overlaid, watts over time'
+    : (g.hasActual ? 'Ridden power, watts over time' : 'Planned power targets, watts over time');
+  return `
+    <section class="detail-section shape-section">
+      <h4>${esc(title)}</h4>
+      ${caption ? `<p class="sub">${esc(caption)}</p>` : ''}
+      ${renderShapeSvg(g, { label })}
+      ${renderShapeLegend(g)}
+    </section>`;
+}
+
+/** Completed bike ride: the matched plan's shape with the ridden power on top.
+ * Only shown when the ride is matched to a planned session (Andrew, 2026-09-29). */
+function renderCompletedShapeSection(workout, pacing, weeks, ftpWatts) {
+  if (workout.sport !== 'bike') return '';
+  const session = sessionForWorkout(workout, weeks);
+  if (!session) return '';
+  const actual = actualPoints(pacing?.data?.power_profile, workout.laps);
+  return renderShapeSection({
+    structured: session.structured,
+    ftpWatts,
+    title: 'Plan vs ridden',
+    actual,
+    caption: actual.length ? null : 'Power detail is still loading or unavailable offline -- showing the plan only.',
+  });
+}
+
+// --- Raw analysis (read-only, from the cached workout) -------------------------
+
+function renderRawTable(columns, rows) {
+  return `
+      <div class="laps-table-wrap">
+        <table class="laps-table raw-table">
+          <thead><tr>${columns.map((c) => `<th>${esc(c)}</th>`).join('')}</tr></thead>
+          <tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody>
+        </table>
+      </div>`;
+}
+
+function renderScoreBreakdown(score) {
+  if (!score) return '';
+  return `
+      <div class="raw-score">
+        <h5>${esc(score.title)}: <span class="raw-score-headline">${esc(score.headline)}</span></h5>
+        ${score.reason ? `<p class="sub">${esc(score.reason)}</p>` : ''}
+        ${score.components.length ? renderRawTable(
+    ['Component', 'Score', 'Weight', 'Detail'],
+    score.components.map((c) => [c.name, c.score, c.weight, c.detail]),
+  ) : ''}
+      </div>`;
+}
+
+function renderRawAnalysisSection(workout, pacing, open) {
+  const model = buildRawAnalysis(workout, pacing);
+  if (!model) return '';
+  const button = `<button type="button" class="btn-ghost" data-a="workout:raw-analysis-toggle" aria-expanded="${open ? 'true' : 'false'}">${open ? 'Hide raw analysis' : 'Raw analysis'}</button>`;
+  if (!open) {
+    return `
+    <section class="detail-section">
+      ${button}
+    </section>`;
+  }
+  const race = model.race;
+  return `
+    <section class="detail-section raw-analysis">
+      <div class="chat-thread-head"><h4>Raw analysis</h4>${button}</div>
+      <p class="sub">The analyzer's full deterministic output for this ride. Read-only. Score weights are coach judgment, not a validated formula -- read the breakdown, not just the number.</p>
+      ${model.summary.length ? `<div class="detail-analytics-list">${model.summary.map(([k, v]) => `<div><strong>${esc(k)}:</strong> ${esc(v)}</div>`).join('')}</div>` : ''}
+      ${renderScoreBreakdown(model.score)}
+      ${model.efforts ? `<h5>Efforts (${model.efforts.rows.length})</h5>${model.efforts.rows.length ? renderRawTable(model.efforts.columns, model.efforts.rows) : '<p class="sub">No sustained efforts detected.</p>'}` : ''}
+      ${model.rounds ? `<h5>Rounds</h5>${renderRawTable(model.rounds.columns, model.rounds.rows)}` : ''}
+      ${race ? `
+      <h5>Race analysis</h5>
+      ${renderScoreBreakdown(race.score)}
+      ${race.phases.length ? renderRawTable(['Phase', 'Span', 'NP', 'Speed', 'vs phase 1'], race.phases) : ''}
+      ${race.laps.length ? renderRawTable(['Lap', 'Time', 'NP', 'Speed', 'Work', 'VI', 'Coasting'], race.laps) : `<p class="sub">${esc(race.lapsNote || 'No laps detected.')}</p>`}` : ''}
+      ${model.racePending ? '<p class="sub">Loading race analysis…</p>' : ''}
+      ${model.raceError ? `<p class="sub">${esc(model.raceError)}</p>` : ''}
+    </section>`;
+}
+
 function renderLengthsSummarySection(lengths) {
   const summary = formatLengthsSummary(lengths?.length);
   if (!summary) return '';
@@ -2915,6 +3047,7 @@ function renderWorkoutThread({
 function renderWorkoutDetail(workout, {
   chat, online, rpeEdit = null, editable = false, pacing = null, raceDebriefs = [],
   viewerRole = 'athlete', coachChatSubmitting = false,
+  weeks = [], ftpWatts = null, rawAnalysisOpen = null,
 } = {}) {
   const badge = sourceBadge(workout.source);
   // `renderAskCoachSection` (the old single-turn Feedback-based Q&A) is gone from here
@@ -2926,11 +3059,13 @@ function renderWorkoutDetail(workout, {
       <div class="hist-meta mono">${esc(formatLongDate(parseIsoDate(workout.date.slice(0, 10))))}${badge ? ` <span class="chat-chip">${esc(badge)}</span>` : ''}</div>
     </div>
     ${renderDetailStats(workout)}
+    ${renderCompletedShapeSection(workout, pacing, weeks, ftpWatts)}
     ${editable ? renderRpeEditSection(workout, rpeEdit) : ''}
     ${renderRaceDebriefSection(workout, raceDebriefs)}
     ${renderDetailAnalytics(workout.analytics)}
     ${renderIntervalsSection(workout.analytics?.intervals)}
     ${renderRaceAnalysisSection(workout, pacing)}
+    ${rawAnalysisOpen === null ? '' : renderRawAnalysisSection(workout, pacing, rawAnalysisOpen)}
     ${renderLapsTable(workout.laps, workout.sport)}
     ${renderPausesList(workout.pauses)}
     ${renderLengthsSummarySection(workout.lengths)}
@@ -4033,7 +4168,7 @@ function renderRosterTrainingPlanBody({
   const event = macroTargetEvent(macro, events);
   return `
     ${chatPanel}
-    ${renderWeeksSection(weeks, detailId, null, allWeeksOpen, false, askCoach)}
+    ${renderWeeksSection(weeks, detailId, null, allWeeksOpen, false, askCoach, plan.data.athlete?.ftp_watts ?? null)}
     ${renderMacroSection(macro, event, weeks, events)}
     ${renderMacroPlanDetail(macro)}`;
 }

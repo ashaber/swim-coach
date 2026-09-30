@@ -9,8 +9,15 @@ immediately visible to a subsequent GET, exactly like it would be against
 
 from __future__ import annotations
 
+import json
+import uuid
+from pathlib import Path
+
 import pytest
 from fakes import auth_headers
+from swim_coach.interval_analysis import analyze
+from swim_coach.models import Session, WeekPlan, Workout, WorkoutLap
+from swim_coach.store import FileStore
 
 
 def _valid_payload(**overrides) -> dict:
@@ -412,3 +419,53 @@ def test_list_workouts_attaches_load_au_and_tier(client) -> None:
     assert len(matching) == 1
     assert matching[0]["load_tier"] == "srpe"
     assert matching[0]["load_au"] == 400.0
+
+
+# --- execution score on the athlete's own list -------------------------------------
+
+_FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "ride_2026_09_29_vo2_40_20.json"
+
+
+def _seed_matched_ride(athletes_dir):
+    """Saves the real 9/29 ride's planned session (in its ISO week) and the
+    workout (with prescription-matched analytics) for athlete renee."""
+    ride = json.loads(_FIXTURE.read_text())
+    store = FileStore(base_dir=athletes_dir)
+    profile = store.load_athlete("renee")
+    session = Session.model_validate({**ride["planned_session"], "athlete_id": str(profile.id)})
+    year, week, _ = session.date.isocalendar()
+    store.save_week(
+        "renee",
+        WeekPlan(
+            id=uuid.uuid4(), athlete_id=profile.id, iso_week=f"{year}-W{week:02d}",
+            meso_block="build", focus="test", target_volume_m=0, sessions=[session],
+        ),
+    )
+    laps = [WorkoutLap.model_validate(x) for x in ride["workout"]["laps"]]
+    intervals = analyze(
+        ride["series"], sport="bike", structure=session.structured, laps=laps, ftp_watts=276.0
+    )
+    raw = {**ride["workout"], "athlete_id": str(profile.id), "date": "2026-09-29"}
+    raw["planned_session_id"] = str(session.id)
+    workout = Workout.model_validate(raw)
+    workout.analytics = workout.analytics.model_copy(update={"intervals": intervals})
+    store.save_workout("renee", workout)
+    return workout
+
+
+def test_list_workouts_attaches_execution_score_for_a_matched_ride(client, athletes_dir) -> None:
+    workout = _seed_matched_ride(athletes_dir)
+    body = client.get("/api/workouts?athlete=renee", headers=auth_headers()).json()
+    row = next(w for w in body if w["id"] == str(workout.id))
+    assert row["quality"]["matched"] is True
+    assert row["quality"]["intensity_match"] == "match"
+    assert row["quality"]["execution"]["score"] >= 99.0
+    assert {c["name"] for c in row["quality"]["execution"]["components"]} == {
+        "intensity", "completion", "consistency",
+    }
+
+
+def test_list_workouts_has_no_quality_for_a_non_interval_workout(client) -> None:
+    created = _create(client)
+    body = client.get("/api/workouts?athlete=renee", headers=auth_headers()).json()
+    assert "quality" not in next(w for w in body if w["id"] == created["id"])
