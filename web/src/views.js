@@ -17,6 +17,7 @@ import {
 import { TOOL_LABELS } from './chat.js';
 import { renderSessionIcon } from './icons.js';
 import { renderChatMarkdown } from './markdown.js';
+import { createThreadState } from './conversation.js';
 import { buildHistoryFeed } from './history.js';
 import { expandStructure, actualPoints, sessionForWorkout, shapeChartGeometry } from './shape.js';
 import { buildRawAnalysis } from './analysis.js';
@@ -1812,6 +1813,8 @@ function renderUnreadBadge(count) {
  *   conditionally hidden today -- a single named flag says exactly that,
  *   rather than every call site having to enumerate every tab id just to
  *   hide one.
+ * - `coachUnread` (IDEA 016 Part 2): unread human-coach messages in the athlete's "My coach"
+ *   thread, badged on the Coach tab. Defaults to 0 (no badge).
  * - `rosterUnread` (B3): unread count (main.js's src/unread.js) rendered as
  *   a small badge (`renderUnreadBadge`) on the My Athletes tab (coach-
  *   facing: new athlete questions). Defaults to 0 (no badge) -- every
@@ -1823,9 +1826,9 @@ function renderUnreadBadge(count) {
  * Omitting the second arg entirely keeps the old "every tab always shows,
  * no badge" behavior.
  */
-export function renderTabBar(activeTab, { hideRoster = false, rosterUnread = 0 } = {}) {
+export function renderTabBar(activeTab, { hideRoster = false, rosterUnread = 0, coachUnread = 0 } = {}) {
   const tabs = hideRoster ? TABS.filter((tab) => tab.id !== 'roster') : TABS;
-  const unreadByTabId = { roster: rosterUnread };
+  const unreadByTabId = { roster: rosterUnread, coach: coachUnread };
   return `
     <nav class="tabbar" aria-label="Main">
       ${tabs.map((tab) => `
@@ -1894,6 +1897,45 @@ function renderChatEmptyState(backendConfigured) {
 
 export function renderCoachTab({
   messages, expertMode, sending, backendConfigured, online, role,
+  // IDEA 016 Part 2: the athlete's "My coach" thread. `myCoach` is a conversation.js slice
+  // (null/absent, or `coachId` null, when the athlete has no active coach -- the tab is then
+  // exactly the AI chat it always was); `coachView` is 'ai' | 'coach'; `myCoachUnread` badges
+  // the "My coach" switch.
+  myCoach = null, coachView = 'ai', myCoachUnread = 0,
+}) {
+  if (myCoach?.coachId) {
+    const switcher = `
+      <nav class="subtab-bar" aria-label="Coach chat">
+        <button type="button" class="subtab-btn${coachView === 'ai' ? ' active' : ''}" data-a="coach:view:ai" aria-current="${coachView === 'ai' ? 'page' : 'false'}">AI coach</button>
+        <button type="button" class="subtab-btn${coachView === 'coach' ? ' active' : ''}" data-a="coach:view:coach" aria-current="${coachView === 'coach' ? 'page' : 'false'}">My coach${renderUnreadBadge(myCoachUnread)}</button>
+      </nav>`;
+    if (coachView === 'coach') {
+      return `
+    <div class="wrap chat-wrap">
+      <header class="mast chat-mast">
+        <div>
+          <span class="mark">swim-coach · my coach</span>
+          <h1>My coach</h1>
+          <p class="sub">A shared thread with your coach. The AI coach can chime in too, and you can mute it.</p>
+        </div>
+      </header>
+      ${switcher}
+      ${renderConversationThread({
+        thread: myCoach, viewerRole: 'athlete', online,
+        inputId: 'my-coach-input', sendAction: 'my-coach:send', muteAction: 'my-coach:mute-toggle',
+        draftForm: 'my-coach', messagesId: 'my-coach-messages',
+      })}
+    </div>`;
+    }
+    return renderAiCoachTab({
+      messages, expertMode, sending, backendConfigured, online, role, switcher,
+    });
+  }
+  return renderAiCoachTab({ messages, expertMode, sending, backendConfigured, online, role, switcher: '' });
+}
+
+function renderAiCoachTab({
+  messages, expertMode, sending, backendConfigured, online, role, switcher,
 }) {
   const showComposer = backendConfigured;
   // Expert mode (physiologist/coach-facing detail) is gated to the coach
@@ -1914,6 +1956,8 @@ export function renderCoachTab({
           <span>Expert mode<small>physiologist / coach input</small></span>
         </label>` : ''}
       </header>
+
+      ${switcher}
 
       ${!online ? '<div class="chat-banner">Offline -- Coach Chat needs a connection. The Plan tab still works offline.</div>' : ''}
 
@@ -3034,6 +3078,55 @@ function renderWorkoutThread({
     </section>`;
 }
 
+/** The general athlete<->coach conversation thread (IDEA 016 Part 2): the same three parties and
+ * perspective-based bubbles as a workout's thread (`renderWorkoutThreadMessage`), shown as "My
+ * coach" in the athlete's Coach tab (`viewerRole: 'athlete'`) and on the roster's Conversations
+ * sub-tab (`viewerRole: 'coach'`). `thread` is a `conversation.js` slice: messages are rendered
+ * as stored; `pending` (the athlete's just-sent message awaiting its persisted copy) and
+ * `stream` (the AI reply still arriving) are transient overlays. Offline, the cached messages
+ * stay readable but the composer is disabled. The draft lives in state (`data-form` /
+ * `data-field="draft"`), so a polling re-render never wipes half-typed text. */
+function renderConversationThread({
+  thread, viewerRole, online, inputId, sendAction, muteAction, draftForm, messagesId,
+}) {
+  const muted = thread.muted;
+  const rows = thread.messages.map((m) => renderWorkoutThreadMessage(m, viewerRole)).join('');
+  const pendingRow = thread.pending
+    ? renderWorkoutThreadMessage({ sender_role: 'athlete', body: thread.pending }, viewerRole) : '';
+  const streamRow = thread.stream && !muted
+    ? `<div class="chat-row coach"><div class="chat-chips"><span class="chat-chip">AI coach</span></div>
+        <div class="chat-bubble"><div class="chat-md">${renderChatMarkdown(thread.stream)}</div><span class="chat-cursor">▍</span></div></div>`
+    : '';
+  const blocked = thread.sending || !online;
+  const hasAnything = rows || pendingRow || streamRow;
+  const mutedNote = viewerRole === 'coach'
+    ? 'The AI coach is muted in this thread -- only you and the athlete will reply.'
+    : 'The AI coach is muted in this thread -- only you and your coach will reply.';
+  return `
+    <section class="detail-section conversation-thread" data-thread="${esc(viewerRole)}">
+      <div class="chat-thread-head">
+        <h4>${viewerRole === 'coach' ? 'Chat with athlete' : 'My coach'}</h4>
+        <button type="button" class="btn-ghost chat-mute-btn" data-a="${esc(muteAction)}" ${online ? '' : 'disabled'}>${muted ? 'Unmute AI' : 'Mute AI'}</button>
+      </div>
+      ${muted ? `<p class="sub">${mutedNote}</p>` : ''}
+      ${!online ? '<div class="chat-banner">Offline -- showing saved messages. Sending needs a connection.</div>' : ''}
+      ${thread.status === 'error' && !hasAnything ? `<div class="hist-error">Couldn't load the conversation: ${esc(thread.error)}</div>` : ''}
+      ${thread.status === 'loading' && !hasAnything ? '<p class="sub">Loading&hellip;</p>' : ''}
+      ${hasAnything ? `
+      <div class="chat-messages" id="${esc(messagesId)}">
+        ${rows}${pendingRow}${streamRow}
+      </div>` : (thread.status === 'ready' ? '<p class="sub">No messages yet.</p>' : '')}
+      ${thread.status === 'error' && hasAnything ? `<div class="hist-error">${esc(thread.error)}</div>` : ''}
+      <div class="chat-composer">
+        <textarea id="${esc(inputId)}" class="chat-input" data-form="${esc(draftForm)}" data-field="draft" placeholder="${viewerRole === 'coach' ? 'Message your athlete…' : 'Message your coach…'}" rows="2" ${blocked ? 'disabled' : ''}>${esc(thread.draft || '')}</textarea>
+        <div class="chat-composer-row">
+          <span></span>
+          <button type="button" class="btn" data-a="${esc(sendAction)}" ${blocked ? 'disabled' : ''}>${thread.sending ? 'Sending…' : 'Send'}</button>
+        </div>
+      </div>
+    </section>`;
+}
+
 /** `askCoach` (coach-mode Q&A build): `{ feedback, form, submit }`, same
  * shape `renderPlanSessionDetail` takes -- `feedback` is filtered here (via
  * `feedbackForWorkout`) down to just this workout's own questions. This
@@ -4069,22 +4162,27 @@ export const ROSTER_SUB_TABS = [
   { id: 'health', label: 'Health' },
 ];
 
-function renderRosterSubTabBar(activeSubTab) {
+function renderRosterSubTabBar(activeSubTab, conversationsUnread = 0) {
   return `
     <nav class="subtab-bar" aria-label="Athlete view">
       ${ROSTER_SUB_TABS.map((t) => `
-        <button type="button" class="subtab-btn${t.id === activeSubTab ? ' active' : ''}" data-a="roster:subtab:${t.id}" aria-current="${t.id === activeSubTab ? 'page' : 'false'}">${esc(t.label)}</button>`).join('')}
+        <button type="button" class="subtab-btn${t.id === activeSubTab ? ' active' : ''}" data-a="roster:subtab:${t.id}" aria-current="${t.id === activeSubTab ? 'page' : 'false'}">${esc(t.label)}${t.id === 'conversations' ? renderUnreadBadge(conversationsUnread) : ''}</button>`).join('')}
     </nav>`;
 }
 
-/** Honest, explicitly non-functional placeholder -- Andrew's own words when
- * asking for this: "save chat as a placeholder, I needed to visualize the
- * UI," not real messaging. No fetch, no state, no send action. */
-function renderRosterConversationsPlaceholder() {
+/** The roster's Conversations sub-tab (IDEA 016 Part 2): the coach's view of the athlete<->coach
+ * thread -- replaces the old "coming soon" placeholder. `conversation` is a conversation.js
+ * slice (`state.roster.conversation`). */
+function renderRosterConversationsBody({ conversation, online }) {
   return `
     <section class="hist-section">
       <div class="s-head"><h2>Conversations</h2></div>
-      <p class="sub">Coach-athlete conversation -- coming soon.</p>
+      ${renderConversationThread({
+        thread: conversation, viewerRole: 'coach', online,
+        inputId: 'roster-conversation-input', sendAction: 'roster:conversation:send',
+        muteAction: 'roster:conversation:mute-toggle', draftForm: 'roster-conversation',
+        messagesId: 'roster-conversation-messages',
+      })}
     </section>`;
 }
 
@@ -4180,6 +4278,9 @@ export function renderRosterTab({
   // device's coach "last seen" timestamp (main.js's src/unread.js) -- 0/
   // absent renders no badge at all (see renderUnreadBadge).
   feedbackUnread = 0,
+  // IDEA 016 Part 2: the coach's thread with the acted-as athlete (a conversation.js slice) and
+  // its unread count (the athlete's messages newer than this device's last-seen for the thread).
+  conversation = createThreadState(), conversationsUnread = 0,
   // Two-panel load chart (web/two-panel-load-chart): `loadWindowDays` is the
   // SAME app-level `state.loadWindowDays` the athlete's own Dashboard tab
   // uses (not a separate `state.roster.loadWindowDays`) -- a shared,
@@ -4291,7 +4392,7 @@ export function renderRosterTab({
 
     const activeSubTab = subTab || 'dashboard';
     const subTabBody = (() => {
-      if (activeSubTab === 'conversations') return renderRosterConversationsPlaceholder();
+      if (activeSubTab === 'conversations') return renderRosterConversationsBody({ conversation, online });
       if (activeSubTab === 'plan') return renderRosterTrainingPlanBody({
         plan, online, allWeeksOpen, detailId: sessionDetailId, askCoach, chat, chatSending,
       });
@@ -4317,7 +4418,7 @@ export function renderRosterTab({
     return rosterShell(`
       <div class="s-head"><button type="button" class="btn-ghost" data-a="roster:back">&larr; Back to My Athletes</button></div>
       <p class="sub">Coaching <b>${esc(name)}</b> (${esc(actingAsAthlete)}).</p>
-      ${renderRosterSubTabBar(activeSubTab)}
+      ${renderRosterSubTabBar(activeSubTab, conversationsUnread)}
       ${subTabBody}`);
   }
 

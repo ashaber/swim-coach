@@ -574,7 +574,7 @@ def test_health_status_section_only_shows_on_the_health_sub_tab(page):
     assert page.locator('.health-status-active, .health-status-empty').count() == 0
 
     page.click('[data-a="roster:subtab:conversations"]')
-    page.wait_for_selector('text=coming soon')
+    page.wait_for_selector('[data-a="roster:conversation:send"]')
     assert page.locator('.health-status-active, .health-status-empty').count() == 0
 
     page.click('[data-a="roster:subtab:plan"]')
@@ -593,16 +593,17 @@ def test_defaults_to_workouts_and_dashboard_sub_tab(page):
     assert 'active' in page.locator('[data-a="roster:subtab:dashboard"]').get_attribute('class')
 
 
-def test_conversations_sub_tab_shows_an_honest_non_functional_placeholder(page):
+def test_conversations_sub_tab_is_the_real_thread_not_a_placeholder(page):
+    """IDEA 016 Part 2 replaced the "coming soon" placeholder -- full coverage (send, mute,
+    badge, polling, offline) lives in test_conversation.py; this just guards the swap."""
     _open_roster(page)
     page.click('[data-a="roster:select-athlete"]')
     page.wait_for_selector('[data-a="roster:subtab:conversations"]')
     page.click('[data-a="roster:subtab:conversations"]')
-    page.wait_for_selector('text=coming soon')
+    page.wait_for_selector('[data-a="roster:conversation:send"]')
 
     content = page.content()
-    assert 'Conversations' in content
-    # Not wired to anything -- no real workouts/feedback content or actions.
+    assert 'coming soon' not in content
     assert page.locator('[data-a="roster:open-workout"]').count() == 0
     assert page.locator('[data-a="roster:reply-submit"]').count() == 0
     assert page.locator('[data-a="roster:subtab:conversations"]').get_attribute('class').find('active') != -1

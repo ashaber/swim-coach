@@ -25,6 +25,8 @@ import {
   askAboutSession, askAboutWorkout,
   fetchWorkoutPacing,
   postCoachWorkoutChatMessage, patchCoachWorkoutChatMuted,
+  listConversations, fetchConversationMessages, patchConversationMuted, conversationMessagesPath,
+  fetchCoachConversation, postCoachConversationMessage, patchCoachConversationMuted,
   listLibraryCards, fetchLibraryFile, submitLibraryReview,
   fetchMe,
 } from './api.js';
@@ -45,7 +47,13 @@ import {
   createPwaUpdateState, markNeedRefresh, markOfflineReady,
   dismissNeedRefresh, dismissOfflineReady, triggerUpdate,
 } from './pwaUpdate.js';
-import { loadLastSeen, saveLastSeen, countUnread } from './unread.js';
+import {
+  loadLastSeen, saveLastSeen, countUnread, loadThreadLastSeen, saveThreadLastSeen, countUnreadThread,
+} from './unread.js';
+import {
+  createThreadState, mergeThreadMessages, threadCursor, shouldPoll, loadCachedThread, saveCachedThread,
+  applyThreadPayload, CONVERSATION_POLL_INTERVAL_MS,
+} from './conversation.js';
 
 const appEl = document.getElementById('app');
 const ACTIVE_TAB_KEY = 'swimcoach_active_tab';
@@ -245,6 +253,10 @@ function createRosterState() {
     // handleSelectCoachedAthlete's own load call for the distinct `coach:<slug>` storage key
     // this uses so it never collides with that athlete's own Coach-tab chat on the same device).
     chat: createChatSession(),
+    // IDEA 016 Part 2: the coach's thread with the acted-as athlete (conversation.js slice) --
+    // shown on the Conversations sub-tab, polled while visible. Reset with the other
+    // per-athlete slices in handleSelectCoachedAthlete/handleBackToRoster.
+    conversation: createThreadState(),
   };
 }
 
@@ -314,6 +326,11 @@ const state = {
   // conventions as workoutDetailId below.
   planSessionDetailId: null,
   chat: loadChatSession(initialIdentity?.athlete || SIGNED_OUT_CHAT_KEY),
+  // IDEA 016 Part 2: the athlete's "My coach" thread (conversation.js slice; `coachId` stays null
+  // when the athlete has no active coach, and the Coach tab is then just the AI chat) and which
+  // Coach-tab pane is showing ('ai' | 'coach').
+  myCoach: createThreadState(),
+  coachView: 'ai',
   settingsForm: initialSettingsForm,
   online: navigator.onLine,
   // The "new version -- reload" prompt (see src/pwaUpdate.js / views.js's
@@ -610,6 +627,9 @@ function renderTabContent() {
         backendConfigured,
         online: state.online,
         role: state.identity?.role,
+        myCoach: state.myCoach,
+        coachView: state.coachView,
+        myCoachUnread: myCoachUnreadCount(),
       });
     case 'resources':
       return renderResourcesTab({
@@ -661,6 +681,8 @@ function renderTabContent() {
         workoutChatSubmit: state.roster.workoutChatSubmit,
         chat: state.roster.chat,
         chatSending: isStreaming(state.roster.chat),
+        conversation: state.roster.conversation,
+        conversationsUnread: rosterConversationUnreadCount(),
       });
     case 'settings':
       return renderSettingsTab({
@@ -724,12 +746,17 @@ function render() {
   // that, and this build doesn't add one); 0 before any athlete has been
   // selected, same accepted tradeoff as the roster's own section-level
   // badge (renderTabContent's 'roster' case).
+  markVisibleThreadsSeen();
   appEl.innerHTML = `${renderUpdateBanner(state.pwaUpdate)}${renderTabContent()}${
     renderTabBar(state.tab, {
       hideRoster: !state.coachFor.length,
-      rosterUnread: countUnread(state.roster.feedback.data, loadLastSeen('coach'), 'coach'),
+      rosterUnread: countUnread(state.roster.feedback.data, loadLastSeen('coach'), 'coach')
+        + rosterConversationUnreadCount(),
+      coachUnread: myCoachUnreadCount(),
     })}`;
-  if (state.tab === 'coach') stickChatScrollToBottom();
+  if (state.tab === 'coach' && state.coachView === 'coach') scrollToBottomOf('my-coach-messages');
+  else if (state.tab === 'coach') stickChatScrollToBottom();
+  if (state.tab === 'roster' && state.roster.subTab === 'conversations') scrollToBottomOf('roster-conversation-messages');
   if (state.tab === 'dashboard' && state.workoutChat) stickWorkoutChatScrollToBottom();
   if (state.tab === 'roster' && state.roster.subTab === 'plan') stickRosterChatScrollToBottom();
   if (state.tab === 'settings' && !state.identity) mountGoogleSignIn();
@@ -835,6 +862,8 @@ function applyAthleteSession(identity, token) {
   closeWorkoutChat();
   state.roster = createRosterState();
   state.grants = createGrantsState();
+  state.myCoach = createThreadState();
+  state.coachView = 'ai';
 }
 
 /** Fired once per real Google sign-in attempt with the outcome of the
@@ -855,6 +884,7 @@ function handleIdentityResolved(outcome) {
   render();
   maybeLoadProfile();
   maybeLoadGrants();
+  loadMyCoach();
 }
 
 /** Resets every identity-scoped slice of state back to signed-out and
@@ -908,6 +938,8 @@ function resetToSignedOut({ identityError = null } = {}) {
   state.healthStatusFormOpen = false;
   state.healthStatusVersion = 0;
   closeWorkoutChat();
+  state.myCoach = createThreadState();
+  state.coachView = 'ai';
   state.tab = 'settings';
   saveActiveTab('settings');
 }
@@ -1013,6 +1045,7 @@ async function handleOnboardSubmit() {
     loadPlanLoad(); // calls render() itself
     maybeLoadProfile();
     maybeLoadGrants();
+    loadMyCoach();
   } catch (err) {
     // A 401 here means the onboarding session itself expired/was revoked
     // mid-fill -- no amount of retrying the form will fix that, so route
@@ -1440,6 +1473,312 @@ function handleClearRosterChat() {
 
 function persistRosterChat(slug) {
   saveChatSession(rosterChatStorageKey(slug), state.roster.chat);
+}
+
+// --- Athlete<->coach conversation (IDEA 016 Part 2) ---------------------------------------------
+// One persisted three-party thread (athlete, AI coach, human coach) per athlete-coach pair --
+// the athlete's "My coach" pane inside the Coach tab (`state.myCoach`) and the roster's
+// Conversations sub-tab (`state.roster.conversation`). Both are conversation.js slices; the
+// server is the source of truth, polled while the page is visible and online (CONVERSATION_
+// POLL_INTERVAL_MS), with the newest messages cached in localStorage so the thread stays
+// readable (send disabled) offline. Backend: backend/app/routes/conversation.py.
+
+const THREAD_INPUT_IDS = ['my-coach-input', 'roster-conversation-input'];
+
+function myCoachKey() {
+  return `athlete:${state.myCoach.coachId}`;
+}
+
+function rosterConversationKey(slug) {
+  return `coach:${slug}`;
+}
+
+function myCoachUnreadCount() {
+  if (!state.myCoach.coachId) return 0;
+  return countUnreadThread(state.myCoach.messages, loadThreadLastSeen(myCoachKey()), 'athlete');
+}
+
+function rosterConversationUnreadCount() {
+  const slug = state.roster.actingAsAthlete;
+  if (!slug) return 0;
+  return countUnreadThread(state.roster.conversation.messages, loadThreadLastSeen(rosterConversationKey(slug)), 'coach');
+}
+
+/** A thread that is on screen counts as read: called at the top of every render(), so the badge
+ * clears while looking at it and reappears for a message that lands when looking elsewhere. */
+function markVisibleThreadsSeen() {
+  if (state.tab === 'coach' && state.coachView === 'coach' && state.myCoach.coachId) {
+    saveThreadLastSeen(myCoachKey(), threadCursor(state.myCoach.messages));
+  }
+  const slug = state.roster.actingAsAthlete;
+  if (state.tab === 'roster' && slug && state.roster.subTab === 'conversations') {
+    saveThreadLastSeen(rosterConversationKey(slug), threadCursor(state.roster.conversation.messages));
+  }
+}
+
+function scrollToBottomOf(id) {
+  const list = document.getElementById(id);
+  if (list) list.scrollTop = list.scrollHeight;
+}
+
+/** render() for a background update (a poll landing, a reply streaming in): render() rebuilds the
+ * whole DOM, so the composer's focus and caret are put back afterwards -- the draft text itself
+ * already lives in state and is re-emitted by the view. */
+function renderKeepingComposerFocus() {
+  const active = document.activeElement;
+  const focusedId = active && THREAD_INPUT_IDS.includes(active.id) ? active.id : null;
+  const start = focusedId ? active.selectionStart : null;
+  const end = focusedId ? active.selectionEnd : null;
+  render();
+  if (!focusedId) return;
+  const next = document.getElementById(focusedId);
+  if (!next || next.disabled) return;
+  next.focus();
+  if (start !== null) next.setSelectionRange(start, end);
+}
+
+function conversationRequestContext() {
+  const settings = state.settingsForm;
+  return isConfigured(settings, state.identity)
+    ? { baseUrl: settings.baseUrl, token: settings.token }
+    : null;
+}
+
+/** Finds the athlete's coach thread(s): GET /api/conversations (cached for offline) -> adopt the
+ * first (the UI shows one "My coach" thread; the API supports one per coach) -> load it. */
+async function loadMyCoach() {
+  const athlete = athleteSlug();
+  const ctx = conversationRequestContext();
+  if (!athlete || !ctx) return;
+  const listKey = `conversations:${athlete}`;
+  const result = await listConversations({ ...ctx, athlete });
+  if (handleUnauthorized(result)) return;
+  let threads;
+  if (result.ok) {
+    threads = result.data;
+    saveCachedThread(listKey, threads);
+  } else {
+    log.warn('my_coach.list_failed', { error: result.error });
+    threads = loadCachedThread(listKey);
+  }
+  const first = threads[0];
+  if (!first) {
+    if (state.myCoach.coachId) {
+      state.myCoach = createThreadState();
+      render();
+    }
+    return;
+  }
+  if (state.myCoach.coachId !== first.coach_athlete_id) {
+    state.myCoach = {
+      ...createThreadState(), coachId: first.coach_athlete_id, muted: !!first.ai_muted,
+      status: 'loading', messages: [],
+    };
+    state.myCoach.messages = loadCachedThread(myCoachKey());
+  }
+  render();
+  await refreshMyCoach();
+}
+
+/** Fetches what's newer than the thread's cursor (all of it the first time) and merges it in;
+ * only re-renders when something visible changed, so an idle poll is invisible. */
+async function refreshMyCoach() {
+  const athlete = athleteSlug();
+  const ctx = conversationRequestContext();
+  const coachId = state.myCoach.coachId;
+  if (!athlete || !ctx || !coachId) return;
+  const result = await fetchConversationMessages({
+    ...ctx, athlete, coachId, since: threadCursor(state.myCoach.messages),
+  });
+  if (handleUnauthorized(result)) return;
+  if (state.myCoach.coachId !== coachId) return; // signed out / switched while in flight
+  if (!result.ok) {
+    log.warn('my_coach.refresh_failed', { error: result.error });
+    if (state.myCoach.status !== 'ready') {
+      state.myCoach = { ...state.myCoach, status: state.myCoach.messages.length ? 'ready' : 'error', error: result.error };
+      renderKeepingComposerFocus();
+    }
+    return;
+  }
+  const { thread, changed } = applyThreadPayload(state.myCoach, result.data);
+  state.myCoach = thread;
+  saveCachedThread(myCoachKey(), thread.messages);
+  if (changed) renderKeepingComposerFocus();
+}
+
+async function handleSendMyCoach() {
+  const thread = state.myCoach;
+  const athlete = athleteSlug();
+  if (!thread.coachId || thread.sending || !state.online || !athlete) return;
+  const text = thread.draft.trim();
+  if (!text) return;
+  const ctx = conversationRequestContext();
+  if (!ctx) {
+    state.tab = 'settings';
+    saveActiveTab(state.tab);
+    render();
+    return;
+  }
+
+  state.myCoach = { ...thread, draft: '', sending: true, pending: text, stream: null, error: null };
+  render();
+  log.info('my_coach.send', { athlete });
+
+  let failure = null;
+  await streamChat({
+    ...ctx, athlete, message: text, history: [], expertMode: false,
+    endpoint: conversationMessagesPath(thread.coachId),
+    onEvent: (event) => {
+      if (event.type === 'error') {
+        if (event.status === 401) {
+          handleSessionExpired();
+          return;
+        }
+        failure = event;
+      } else if (event.type === 'text') {
+        state.myCoach = { ...state.myCoach, stream: (state.myCoach.stream || '') + (event.text || '') };
+        renderKeepingComposerFocus();
+      }
+    },
+  });
+  if (!state.identity) return; // the session expired mid-stream
+
+  // An error WITH a status means the request was refused before anything was saved (cap, grant,
+  // validation) -> give the text back to the composer. One without (a dropped stream) means the
+  // message was already persisted -> the refetch below shows it; restoring would double-send.
+  const unsent = failure && failure.status !== undefined;
+  state.myCoach = {
+    ...state.myCoach, sending: false, pending: null, stream: null,
+    draft: unsent && !state.myCoach.draft ? text : state.myCoach.draft,
+    error: failure ? failure.error : null,
+  };
+  if (failure) log.error('my_coach.send_failed', { athlete, error: failure.error });
+  render();
+  await refreshMyCoach();
+}
+
+async function handleToggleMyCoachMute() {
+  const thread = state.myCoach;
+  const athlete = athleteSlug();
+  const ctx = conversationRequestContext();
+  if (!thread.coachId || !athlete || !ctx) return;
+  const result = await patchConversationMuted({ ...ctx, athlete, coachId: thread.coachId, muted: !thread.muted });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    state.myCoach = { ...state.myCoach, muted: result.data.ai_muted };
+    log.info('my_coach.mute_toggled', { athlete, muted: result.data.ai_muted });
+  } else {
+    log.error('my_coach.mute_toggle_failed', { athlete, error: result.error });
+    state.myCoach = { ...state.myCoach, error: result.error };
+  }
+  render();
+}
+
+function handleSelectCoachView(view) {
+  if (view !== 'ai' && view !== 'coach') return;
+  state.coachView = view;
+  log.info('coach.view_switch', { view });
+  render();
+  if (view === 'coach') refreshMyCoach();
+}
+
+/** Coach side: opens the thread for the acted-as athlete (cached messages first, then a fetch). */
+function loadRosterConversation(slug) {
+  state.roster.conversation = {
+    ...createThreadState(), status: 'loading', messages: loadCachedThread(rosterConversationKey(slug)),
+  };
+  refreshRosterConversation(slug);
+}
+
+async function refreshRosterConversation(slug) {
+  const ctx = conversationRequestContext();
+  if (!slug || !ctx) return;
+  const result = await fetchCoachConversation({
+    ...ctx, athlete: slug, since: threadCursor(state.roster.conversation.messages),
+  });
+  if (handleUnauthorized(result)) return;
+  if (state.roster.actingAsAthlete !== slug) return; // a different athlete was selected meanwhile
+  if (!result.ok) {
+    log.warn('roster.conversation_refresh_failed', { athlete: slug, error: result.error });
+    if (state.roster.conversation.status !== 'ready') {
+      const messages = state.roster.conversation.messages;
+      state.roster.conversation = {
+        ...state.roster.conversation, status: messages.length ? 'ready' : 'error', error: result.error,
+      };
+      renderKeepingComposerFocus();
+    }
+    return;
+  }
+  const { thread, changed } = applyThreadPayload(state.roster.conversation, result.data);
+  state.roster.conversation = thread;
+  saveCachedThread(rosterConversationKey(slug), thread.messages);
+  if (changed) renderKeepingComposerFocus();
+}
+
+async function handleSendRosterConversation() {
+  const slug = state.roster.actingAsAthlete;
+  const thread = state.roster.conversation;
+  const ctx = conversationRequestContext();
+  if (!slug || !ctx || thread.sending || !state.online) return;
+  const text = thread.draft.trim();
+  if (!text) return;
+
+  state.roster.conversation = { ...thread, sending: true, error: null };
+  render();
+  log.info('roster.conversation_send', { athlete: slug });
+  const result = await postCoachConversationMessage({ ...ctx, athlete: slug, body: text });
+  if (handleUnauthorized(result)) return;
+  if (state.roster.actingAsAthlete !== slug) return;
+  const current = state.roster.conversation;
+  if (result.ok) {
+    const messages = mergeThreadMessages(current.messages, [result.data]);
+    state.roster.conversation = {
+      ...current, messages, sending: false, error: null, draft: current.draft === text ? '' : current.draft,
+    };
+    saveCachedThread(rosterConversationKey(slug), messages);
+  } else {
+    log.error('roster.conversation_send_failed', { athlete: slug, error: result.error });
+    state.roster.conversation = { ...current, sending: false, error: result.error };
+  }
+  render();
+}
+
+async function handleToggleRosterConversationMute() {
+  const slug = state.roster.actingAsAthlete;
+  const ctx = conversationRequestContext();
+  if (!slug || !ctx) return;
+  const result = await patchCoachConversationMuted({
+    ...ctx, athlete: slug, muted: !state.roster.conversation.muted,
+  });
+  if (handleUnauthorized(result)) return;
+  if (state.roster.actingAsAthlete !== slug) return;
+  if (result.ok) {
+    state.roster.conversation = { ...state.roster.conversation, muted: result.data.ai_muted };
+    log.info('roster.conversation_mute_toggled', { athlete: slug, muted: result.data.ai_muted });
+  } else {
+    log.error('roster.conversation_mute_toggle_failed', { athlete: slug, error: result.error });
+    state.roster.conversation = { ...state.roster.conversation, error: result.error };
+  }
+  render();
+}
+
+/** One poll tick. The athlete's own thread is polled on every tab (it feeds the Coach tab's unread
+ * badge); the coach's thread only while the roster is open on an athlete. Skips entirely when the
+ * page is hidden or offline, and while a send is in flight. */
+function conversationPollTick() {
+  const base = {
+    visible: document.visibilityState !== 'hidden',
+    online: state.online,
+    configured: isConfigured(state.settingsForm, state.identity),
+  };
+  if (shouldPoll({ ...base, hasThread: !!state.myCoach.coachId, busy: state.myCoach.sending })) {
+    refreshMyCoach();
+  }
+  const slug = state.roster.actingAsAthlete;
+  if (state.tab === 'roster' && slug
+    && shouldPoll({ ...base, hasThread: true, busy: state.roster.conversation.sending })) {
+    refreshRosterConversation(slug);
+  }
 }
 
 // --- Log tab (workout logging) ------------------------------------------------
@@ -2973,6 +3312,7 @@ function handleSelectCoachedAthlete(slug) {
   // coach-ai-planning build: this athlete's own "Ask the AI coach" conversation, keyed
   // separately from the coach's own Coach-tab chat (see createRosterState's own comment).
   state.roster.chat = loadChatSession(rosterChatStorageKey(slug));
+  state.roster.conversation = createThreadState();
   log.info('roster.athlete_selected', { athlete: slug });
   render();
   loadCoachWorkouts(slug); // calls render() itself
@@ -2980,6 +3320,7 @@ function handleSelectCoachedAthlete(slug) {
   loadCoachLoad(slug); // calls render() itself
   loadCoachPlan(slug); // calls render() itself
   loadCoachHealthStatus(slug); // calls render() itself
+  loadRosterConversation(slug); // renders itself once it lands
 }
 
 /** B3: leaving the roster's 'dashboard' sub-tab -- where the roster's own
@@ -3003,6 +3344,7 @@ function markCoachFeedbackSeenIfLeavingDashboardSubTab(subTab) {
 function handleBackToRoster() {
   markCoachFeedbackSeenIfLeavingDashboardSubTab(state.roster.subTab);
   state.roster.actingAsAthlete = null;
+  state.roster.conversation = createThreadState();
   state.roster.workouts = { status: 'idle', data: [], error: null };
   state.roster.feedback = { status: 'idle', data: [], error: null };
   state.roster.load = { status: 'idle', data: null, error: null };
@@ -3055,6 +3397,7 @@ function handleSelectRosterSubTab(subTab) {
   state.roster.subTab = subTab;
   log.info('roster.subtab_switch', { subtab: subTab });
   render();
+  if (subTab === 'conversations') refreshRosterConversation(state.roster.actingAsAthlete);
 }
 
 /** Opens one coached athlete's workout detail view (read-only -- no
@@ -3428,6 +3771,7 @@ function setTab(tab) {
   render();
   maybeLoadProfile();
   maybeLoadGrants();
+  if (tab === 'coach') refreshMyCoach();
 }
 
 // --- Event delegation ---------------------------------------------------------
@@ -3454,6 +3798,12 @@ async function onAppClick(e) {
   }
   switch (action) {
     case 'chat:send': handleSendChat(); break;
+    case 'coach:view:ai': handleSelectCoachView('ai'); break;
+    case 'coach:view:coach': handleSelectCoachView('coach'); break;
+    case 'my-coach:send': await handleSendMyCoach(); break;
+    case 'my-coach:mute-toggle': await handleToggleMyCoachMute(); break;
+    case 'roster:conversation:send': await handleSendRosterConversation(); break;
+    case 'roster:conversation:mute-toggle': await handleToggleRosterConversationMute(); break;
     case 'chat:clear': handleClearChat(); break;
     case 'workout-chat:send': handleSendWorkoutChat(); break;
     case 'workout-chat:mute-toggle': await handleToggleWorkoutChatMute(); break;
@@ -3612,6 +3962,10 @@ function onAppInput(e) {
   // sites (Plan tab session detail, Dashboard tab workout detail) -- see
   // createAskCoachForm's doc comment for why one flat slice covers both.
   else if (formName === 'askCoach') state.askCoachForm[field] = el.value;
+  // IDEA 016 Part 2: the conversation composers' drafts live in state (not read off the DOM at
+  // send time like the AI chat's), so a polling re-render can never wipe half-typed text.
+  else if (formName === 'my-coach') state.myCoach.draft = el.value;
+  else if (formName === 'roster-conversation') state.roster.conversation.draft = el.value;
   // Keyed by per-row feedback id (data-id), not a flat form field like every
   // other case here -- see state.roster.replyDrafts's doc comment at its
   // declaration for why a plain object keyed this way is enough.
@@ -3705,6 +4059,14 @@ function onAppKeydown(e) {
     e.preventDefault();
     handleSendRosterChat();
   }
+  if (e.target.id === 'my-coach-input' && e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    handleSendMyCoach();
+  }
+  if (e.target.id === 'roster-conversation-input' && e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    handleSendRosterConversation();
+  }
 }
 
 // --- Offline (unchanged) -------------------------------------------------
@@ -3728,7 +4090,8 @@ const TABS_SENSITIVE_TO_ONLINE_STATE = ['coach', 'dashboard', 'resources'];
 function updateOnlineState() {
   state.online = navigator.onLine;
   updateOfflineBanner();
-  if (TABS_SENSITIVE_TO_ONLINE_STATE.includes(state.tab)) render();
+  if (TABS_SENSITIVE_TO_ONLINE_STATE.includes(state.tab) || state.tab === 'roster') render();
+  if (state.online) conversationPollTick();
 }
 
 window.addEventListener('online', updateOnlineState);
@@ -3768,6 +4131,9 @@ loadPlanLoad();
 maybeLoadProfile();
 maybeLoadGrants();
 maybeRefreshIdentityAdminFlags();
+loadMyCoach();
+setInterval(conversationPollTick, CONVERSATION_POLL_INTERVAL_MS);
+document.addEventListener('visibilitychange', conversationPollTick);
 // loadPlan() above self-gates on isConfigured and is otherwise unconditional
 // at boot; loadHistory() has no such caller-independent self-gate -- until
 // now the only caller was setTab's Dashboard-tab branch, so history stayed

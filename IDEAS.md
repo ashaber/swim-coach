@@ -625,6 +625,13 @@ where they can ask questions and for adjustments.  I also see this as a
 compelling feature for a coach to augment their work instead of replace 
 them.  
 
+Status: Part 1 (per-workout three-party thread, PR #233) shipped. Part 2 -- the general
+athlete<->coach conversation (athlete "My coach" pane in the Coach tab, roster Conversations
+sub-tab, `conversation_messages`/`conversations` tables, polling, unread badges, email) built
+on `feature/coach-athlete-conversation`. Not built: an AI tool to mute the thread from chat
+(the workout thread has `set_workout_chat_muted`), per-coach labels when an athlete has several
+coaches (the UI shows the first thread; the API supports one per coach).
+
 ## IDEA 017 - Trainer Road collaboration mode
 
 TR has significant workout library and primary goal to give the right workout 

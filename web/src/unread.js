@@ -75,3 +75,43 @@ export function countUnread(entries, lastSeen, role) {
     return ms > lastSeenMs ? count + 1 : count;
   }, 0);
 }
+
+// --- Athlete<->coach conversation threads (IDEA 016 Part 2) --------------------------------
+// Same "last seen" idea as the feedback badge above, but per THREAD (not per role): the athlete
+// has one thread per coach (`athlete:<coachId>`), a coach one per coached athlete
+// (`coach:<athleteSlug>`). Client-side only, same accepted tradeoff as above.
+
+const THREAD_STORAGE_KEY_PREFIX = 'swimcoach_thread_last_seen_';
+
+export function loadThreadLastSeen(threadKey, storage = localStorage) {
+  try {
+    return storage.getItem(`${THREAD_STORAGE_KEY_PREFIX}${threadKey}`);
+  } catch {
+    return null;
+  }
+}
+
+/** Marks a thread seen up to `iso` -- callers pass the newest message's own `created_at`
+ * (server time), not the device clock, so clock skew can never hide a real unread message. */
+export function saveThreadLastSeen(threadKey, iso, storage = localStorage) {
+  if (!iso) return;
+  try {
+    storage.setItem(`${THREAD_STORAGE_KEY_PREFIX}${threadKey}`, iso);
+  } catch {
+    // ignore -- see saveLastSeen
+  }
+}
+
+/** Counts messages from the OTHER human party newer than `lastSeen`: for the athlete that is
+ * the human coach's comments (`sender_role === 'coach'`), for the coach the athlete's messages
+ * (`'athlete'`). The AI's replies never count -- an athlete watches those stream in live, and a
+ * coach does not need a badge for the AI talking to the athlete. */
+export function countUnreadThread(messages, lastSeen, viewerRole) {
+  const wanted = viewerRole === 'coach' ? 'athlete' : 'coach';
+  const lastSeenMs = lastSeen ? Date.parse(lastSeen) : 0;
+  return (messages || []).reduce((count, m) => {
+    if (m?.sender_role !== wanted) return count;
+    const ms = Date.parse(m.created_at);
+    return !Number.isNaN(ms) && ms > lastSeenMs ? count + 1 : count;
+  }, 0);
+}

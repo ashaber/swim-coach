@@ -28,6 +28,7 @@ import pytest
 from swim_coach.models import (
     Athlete,
     CoachGrant,
+    ConversationMessage,
     Event,
     Feedback,
     HealthStatus,
@@ -1641,6 +1642,94 @@ class StoreContractTests:
         found = store.get_session("hash-pending-email")
         assert found is not None
         assert found.pending_email == "future.athlete@example.com"
+
+    # --- athlete<->coach conversation (IDEA 016 Part 2) --------------------
+
+    def _conversation_setup(self, store):
+        athlete = _athlete()
+        coach = _coach_athlete()
+        store.save_athlete(athlete)
+        store.save_athlete(coach)
+        return athlete, coach
+
+    def _conv_msg(self, athlete, coach, role="athlete", body="hi", at=None, **kw):
+        return ConversationMessage(
+            id=kw.pop("id", uuid.uuid4()), athlete_id=athlete.id, coach_athlete_id=coach.id,
+            sender_role=role, body=body,
+            created_at=at or datetime.now(timezone.utc), **kw,
+        )
+
+    def test_conversation_empty_when_none(self, store):
+        athlete, coach = self._conversation_setup(store)
+        assert store.list_conversation_messages(SLUG, coach.id) == []
+
+    def test_conversation_message_round_trip_oldest_first(self, store):
+        athlete, coach = self._conversation_setup(store)
+        t0 = datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc)
+        second = self._conv_msg(athlete, coach, "coach", "second", t0 + timedelta(minutes=1))
+        first = self._conv_msg(athlete, coach, "athlete", "first", t0)
+        third = self._conv_msg(athlete, coach, "ai_coach", "third", t0 + timedelta(minutes=2))
+        for m in (second, first, third):
+            store.append_conversation_message(SLUG, m)
+        loaded = store.list_conversation_messages(SLUG, coach.id)
+        assert loaded == [first, second, third]
+
+    def test_conversation_since_is_inclusive(self, store):
+        athlete, coach = self._conversation_setup(store)
+        t0 = datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc)
+        old = self._conv_msg(athlete, coach, "athlete", "old", t0)
+        edge = self._conv_msg(athlete, coach, "coach", "edge", t0 + timedelta(minutes=5))
+        new = self._conv_msg(athlete, coach, "ai_coach", "new", t0 + timedelta(minutes=9))
+        for m in (old, edge, new):
+            store.append_conversation_message(SLUG, m)
+        loaded = store.list_conversation_messages(SLUG, coach.id, since=edge.created_at)
+        assert [m.id for m in loaded] == [edge.id, new.id]
+
+    def test_conversation_limit_keeps_most_recent_oldest_first(self, store):
+        athlete, coach = self._conversation_setup(store)
+        t0 = datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc)
+        msgs = [
+            self._conv_msg(athlete, coach, "athlete", f"m{i}", t0 + timedelta(minutes=i))
+            for i in range(5)
+        ]
+        for m in msgs:
+            store.append_conversation_message(SLUG, m)
+        loaded = store.list_conversation_messages(SLUG, coach.id, limit=2)
+        assert [m.body for m in loaded] == ["m3", "m4"]
+
+    def test_conversation_threads_are_isolated_per_coach_and_athlete(self, store):
+        athlete, coach = self._conversation_setup(store)
+        other_coach = Athlete(id=uuid.uuid4(), slug="other-coach", name="Other Coach")
+        other_athlete = Athlete(id=uuid.uuid4(), slug="other-athlete", name="Other")
+        store.save_athlete(other_coach)
+        store.save_athlete(other_athlete)
+        mine = self._conv_msg(athlete, coach, body="mine")
+        store.append_conversation_message(SLUG, mine)
+        store.append_conversation_message(
+            SLUG, self._conv_msg(athlete, other_coach, body="other coach thread"))
+        store.append_conversation_message(
+            "other-athlete", self._conv_msg(other_athlete, coach, body="other athlete thread"))
+        assert store.list_conversation_messages(SLUG, coach.id) == [mine]
+
+    def test_conversation_defaults_to_unmuted_then_mute_round_trip(self, store):
+        athlete, coach = self._conversation_setup(store)
+        assert store.get_conversation(SLUG, coach.id).ai_muted is False
+        muted = store.set_conversation_muted(SLUG, coach.id, True)
+        assert muted.ai_muted is True
+        assert store.get_conversation(SLUG, coach.id).ai_muted is True
+        # per thread: another coach's thread with this athlete stays unmuted
+        other = Athlete(id=uuid.uuid4(), slug="other-coach", name="Other Coach")
+        store.save_athlete(other)
+        assert store.get_conversation(SLUG, other.id).ai_muted is False
+        assert store.set_conversation_muted(SLUG, coach.id, False).ai_muted is False
+        assert store.get_conversation(SLUG, coach.id).ai_muted is False
+
+    def test_conversation_unknown_slug_raises(self, store):
+        athlete, coach = self._conversation_setup(store)
+        with pytest.raises(FileNotFoundError):
+            store.list_conversation_messages("nobody", coach.id)
+        with pytest.raises(FileNotFoundError):
+            store.get_conversation("nobody", coach.id)
 
     def test_athlete_bound_session_has_no_pending_email(self, store):
         store.save_athlete(_athlete())

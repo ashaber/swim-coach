@@ -8,6 +8,7 @@ import {
 } from '../../src/views.js';
 import { isoWeekMonday, addDays, dateKey, formatShortDate, formatDuration } from '../../src/plan.js';
 import { HISTORY_DISPLAY_CAP } from '../../src/workouts.js';
+import { createThreadState } from '../../src/conversation.js';
 
 // Real fixture workouts from the task brief -- andrew's 2026-07-09
 // cross_train (analytics-rich, no distance/pace since it's not a swim) and
@@ -2667,11 +2668,43 @@ describe('renderRosterTab', () => {
       expect(html).toContain('class="subtab-btn active"');
     });
 
-    it('shows the honest non-functional Conversations placeholder, not wired to anything', () => {
-      const html = renderRosterTab({ ...actingArgs, subTab: 'conversations' });
-      expect(html).toContain('coming soon');
+    it('Conversations sub-tab renders the real thread: bubbles with role labels, composer, mute toggle', () => {
+      const conversation = {
+        ...createThreadState(), status: 'ready', muted: false,
+        messages: [
+          { id: 'm1', sender_role: 'athlete', body: 'legs are heavy', created_at: '2026-09-29T10:00:00Z' },
+          { id: 'm2', sender_role: 'ai_coach', body: 'ease off today', created_at: '2026-09-29T10:00:05Z' },
+          { id: 'm3', sender_role: 'coach', body: 'agree, easy day', created_at: '2026-09-29T10:05:00Z' },
+        ],
+      };
+      const html = renderRosterTab({ ...actingArgs, subTab: 'conversations', conversation });
+      expect(html).not.toContain('coming soon');
+      expect(html).toContain('legs are heavy');
+      expect(html).toContain('ease off today');
+      expect(html).toContain('AI coach');
+      expect(html).toContain('data-a="roster:conversation:send"');
+      expect(html).toContain('data-a="roster:conversation:mute-toggle"');
+      expect(html).toContain('>Mute AI<');
       expect(html).not.toContain('data-a="roster:open-workout"');
-      expect(html).not.toContain('data-a="roster:reply-submit"');
+    });
+
+    it('Conversations sub-tab: muted note, unread badge on the sub-tab, and offline = read-only', () => {
+      const conversation = { ...createThreadState(), status: 'ready', muted: true, messages: [] };
+      const html = renderRosterTab({
+        ...actingArgs, subTab: 'conversations', conversation, conversationsUnread: 3, online: false,
+      });
+      expect(html).toContain('>Unmute AI<');
+      expect(html).toContain('The AI coach is muted in this thread');
+      expect(html).toMatch(/Conversations<span class="badge-count">3<\/span>/);
+      expect(html).toContain('Offline -- showing saved messages');
+      expect(html).toMatch(/<textarea[^>]*disabled/);
+      expect(html).toMatch(/data-a="roster:conversation:send"[^>]*disabled/);
+    });
+
+    it('keeps the unsent draft in the composer', () => {
+      const conversation = { ...createThreadState(), status: 'ready', draft: 'half <typed>' };
+      const html = renderRosterTab({ ...actingArgs, subTab: 'conversations', conversation });
+      expect(html).toContain('half &lt;typed&gt;</textarea>');
     });
 
     it('shows the Training Plan sub-tab\'s weeks/macro sections from the coach-plan endpoint data, without the load chart', () => {
@@ -4571,5 +4604,65 @@ describe('renderMacroPlanDetail', () => {
     expect(() => renderMacroPlanDetail(noRedTeam)).not.toThrow();
     const html = renderMacroPlanDetail(noRedTeam);
     expect(html).not.toContain('Red-team review');
+  });
+});
+
+describe('IDEA 016 Part 2: the athlete Coach tab "My coach" thread', () => {
+  const baseArgs = { messages: [], expertMode: false, sending: false, backendConfigured: true, online: true, role: 'athlete' };
+  const thread = (over = {}) => ({
+    ...createThreadState(), status: 'ready', coachId: 'c1',
+    messages: [{ id: 'm1', sender_role: 'coach', body: 'nice week', created_at: '2026-09-29T10:00:00Z' }],
+    ...over,
+  });
+
+  it('with no active coach the tab is exactly the AI chat, with no switcher', () => {
+    const html = renderCoachTab({ ...baseArgs, myCoach: createThreadState() });
+    expect(html).not.toContain('data-a="coach:view:coach"');
+    expect(html).toContain('data-a="chat:send"');
+  });
+
+  it('with a coach it adds the AI / My coach switcher, badging unread on My coach', () => {
+    const html = renderCoachTab({ ...baseArgs, myCoach: thread(), myCoachUnread: 2 });
+    expect(html).toContain('data-a="coach:view:ai"');
+    expect(html).toMatch(/My coach<span class="badge-count">2<\/span>/);
+    expect(html).toContain('data-a="chat:send"'); // AI pane is still the default
+  });
+
+  it('the My coach pane shows the thread and its own composer, not the AI composer', () => {
+    const html = renderCoachTab({ ...baseArgs, myCoach: thread(), coachView: 'coach' });
+    expect(html).toContain('nice week');
+    expect(html).toContain('data-a="my-coach:send"');
+    expect(html).toContain('data-a="my-coach:mute-toggle"');
+    expect(html).not.toContain('data-a="chat:send"');
+  });
+
+  it('shows the just-sent message and the streaming AI reply as transient overlays', () => {
+    const html = renderCoachTab({
+      ...baseArgs, coachView: 'coach',
+      myCoach: thread({ pending: 'is my taper ok?', stream: 'Looks fine', sending: true }),
+    });
+    expect(html).toContain('is my taper ok?');
+    expect(html).toContain('Looks fine');
+    expect(html).toMatch(/data-a="my-coach:send"[^>]*disabled/);
+  });
+
+  it('hides the streaming overlay when the thread is muted', () => {
+    const html = renderCoachTab({
+      ...baseArgs, coachView: 'coach', myCoach: thread({ muted: true, stream: '(Saved. muted)' }),
+    });
+    expect(html).not.toContain('(Saved. muted)');
+    expect(html).toContain('>Unmute AI<');
+  });
+
+  it('offline: cached messages stay visible, composer and send disabled', () => {
+    const html = renderCoachTab({ ...baseArgs, online: false, coachView: 'coach', myCoach: thread() });
+    expect(html).toContain('nice week');
+    expect(html).toContain('Offline -- showing saved messages');
+    expect(html).toMatch(/data-a="my-coach:send"[^>]*disabled/);
+  });
+
+  it('tab bar badges the Coach tab with unread human-coach messages', () => {
+    expect(renderTabBar('plan', { coachUnread: 4 })).toMatch(/Coach<\/span>\s*<span class="badge-count">4<\/span>/);
+    expect(renderTabBar('plan')).not.toContain('badge-count');
   });
 });
