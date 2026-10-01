@@ -54,6 +54,8 @@ from swim_coach.models import (
     Athlete,
     AuthSession,
     CoachGrant,
+    Conversation,
+    ConversationMessage,
     Event,
     Feedback,
     HealthStatus,
@@ -288,6 +290,19 @@ def row_to_coach_grant(row: dict[str, Any]) -> CoachGrant:
         chat_visibility=row["chat_visibility"],
         granted_at=row["granted_at"],
         revoked_at=row["revoked_at"],
+    )
+
+
+def row_to_conversation_message(row: dict[str, Any]) -> ConversationMessage:
+    """`conversation_messages` has no `data` JSONB blob -- every field is its own column."""
+    return ConversationMessage(
+        schema_version=1,
+        id=row["id"],
+        athlete_id=row["athlete_id"],
+        coach_athlete_id=row["coach_athlete_id"],
+        sender_role=row["sender_role"],
+        body=row["body"],
+        created_at=row["created_at"],
     )
 
 
@@ -1151,6 +1166,80 @@ class DbStore(StoreInterface):
             )
             row = cur.fetchone()
         return row_to_coach_grant(row) if row is not None else None
+
+    # --- Athlete<->coach conversation (IDEA 016 Part 2) ------------------
+
+    def append_conversation_message(self, slug: str, message: ConversationMessage) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            athlete_id = self._athlete_id(cur, slug)  # raises FileNotFoundError if unknown
+            cur.execute(
+                """
+                insert into conversation_messages
+                    (id, athlete_id, coach_athlete_id, sender_role, body, created_at)
+                values (%s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    message.id, athlete_id, message.coach_athlete_id,
+                    message.sender_role, message.body, message.created_at,
+                ),
+            )
+
+    def list_conversation_messages(
+        self,
+        slug: str,
+        coach_athlete_id: UUID,
+        *,
+        since: datetime | None = None,
+        limit: int | None = None,
+    ) -> list[ConversationMessage]:
+        with self._connect() as conn, conn.cursor() as cur:
+            athlete_id = self._athlete_id(cur, slug)  # raises FileNotFoundError if unknown
+            query = (
+                "select * from conversation_messages "
+                "where athlete_id = %s and coach_athlete_id = %s"
+            )
+            params: list[Any] = [athlete_id, coach_athlete_id]
+            if since is not None:
+                query += " and created_at >= %s"
+                params.append(since)
+            # Newest-first in SQL so `limit` keeps the most recent N; reversed below to
+            # the oldest-first order the interface promises.
+            query += " order by created_at desc, id desc"
+            if limit is not None:
+                query += " limit %s"
+                params.append(max(limit, 0))
+            cur.execute(query, params)
+            rows = cur.fetchall()
+        return [row_to_conversation_message(r) for r in reversed(rows)]
+
+    def get_conversation(self, slug: str, coach_athlete_id: UUID) -> Conversation:
+        with self._connect() as conn, conn.cursor() as cur:
+            athlete_id = self._athlete_id(cur, slug)  # raises FileNotFoundError if unknown
+            cur.execute(
+                "select ai_muted from conversations where athlete_id = %s and coach_athlete_id = %s",
+                (athlete_id, coach_athlete_id),
+            )
+            row = cur.fetchone()
+        return Conversation(
+            athlete_id=athlete_id, coach_athlete_id=coach_athlete_id,
+            ai_muted=bool(row["ai_muted"]) if row is not None else False,
+        )
+
+    def set_conversation_muted(
+        self, slug: str, coach_athlete_id: UUID, muted: bool
+    ) -> Conversation:
+        with self._connect() as conn, conn.cursor() as cur:
+            athlete_id = self._athlete_id(cur, slug)  # raises FileNotFoundError if unknown
+            cur.execute(
+                """
+                insert into conversations (athlete_id, coach_athlete_id, ai_muted)
+                values (%s, %s, %s)
+                on conflict (athlete_id, coach_athlete_id)
+                do update set ai_muted = excluded.ai_muted, updated_at = now()
+                """,
+                (athlete_id, coach_athlete_id, muted),
+            )
+        return Conversation(athlete_id=athlete_id, coach_athlete_id=coach_athlete_id, ai_muted=muted)
 
     # --- Library reviews (web/resources-tab-library-review) -----------------
 

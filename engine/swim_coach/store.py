@@ -22,6 +22,8 @@ from swim_coach.models import (
     Athlete,
     AuthSession,
     CoachGrant,
+    Conversation,
+    ConversationMessage,
     Event,
     Feedback,
     HealthStatus,
@@ -306,6 +308,46 @@ class StoreInterface(ABC):
         updated grant, or None if no grant has that id. Idempotent-safe:
         revoking an already-revoked grant just re-sets `revoked_at` again,
         no special-casing."""
+        ...
+
+    # --- Athlete<->coach conversation (IDEA 016 Part 2) ----------------------
+
+    @abstractmethod
+    def append_conversation_message(self, slug: str, message: ConversationMessage) -> None:
+        """Append one message to the thread between athlete `slug` and
+        `message.coach_athlete_id`. Append-only: never overwrites or deletes.
+        Raises FileNotFoundError for an unknown `slug`."""
+        ...
+
+    @abstractmethod
+    def list_conversation_messages(
+        self,
+        slug: str,
+        coach_athlete_id: UUID,
+        *,
+        since: datetime | None = None,
+        limit: int | None = None,
+    ) -> list[ConversationMessage]:
+        """The thread between athlete `slug` and `coach_athlete_id`, OLDEST first
+        (ties broken by id). `since`, if given, keeps only messages with
+        `created_at >= since` -- inclusive on purpose, so a polling client that
+        passes its newest `created_at` can never miss a message sharing that
+        exact timestamp (it de-duplicates by id). `limit` keeps only the most
+        recent N, still returned oldest-first. Empty list for a thread that
+        has no messages. Raises FileNotFoundError for an unknown `slug`."""
+        ...
+
+    @abstractmethod
+    def get_conversation(self, slug: str, coach_athlete_id: UUID) -> Conversation:
+        """Thread state; the default (unmuted) when nothing was ever stored."""
+        ...
+
+    @abstractmethod
+    def set_conversation_muted(
+        self, slug: str, coach_athlete_id: UUID, muted: bool
+    ) -> Conversation:
+        """Mute/unmute the AI in this thread (creates the state row if needed)
+        and return the updated state."""
         ...
 
     # --- Library reviews (web/resources-tab-library-review) ----------------
@@ -910,6 +952,65 @@ class FileStore(StoreInterface):
             for entry in entries:
                 fh.write(json.dumps(entry.model_dump(mode="json")) + "\n")
         return updated
+
+    # --- Athlete<->coach conversation (IDEA 016 Part 2) ---------------------
+
+    def _conversation_dir(self, slug: str) -> Path:
+        return self._athlete_dir(slug) / "conversations"
+
+    def _conversation_messages_path(self, slug: str, coach_athlete_id: UUID) -> Path:
+        return self._conversation_dir(slug) / f"{coach_athlete_id}.jsonl"
+
+    def _conversation_state_path(self, slug: str, coach_athlete_id: UUID) -> Path:
+        return self._conversation_dir(slug) / f"{coach_athlete_id}.state.json"
+
+    def append_conversation_message(self, slug: str, message: ConversationMessage) -> None:
+        self.load_athlete(slug)  # raises FileNotFoundError if unknown
+        path = self._conversation_messages_path(slug, message.coach_athlete_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(message.model_dump(mode="json")) + "\n")
+
+    def list_conversation_messages(
+        self,
+        slug: str,
+        coach_athlete_id: UUID,
+        *,
+        since: datetime | None = None,
+        limit: int | None = None,
+    ) -> list[ConversationMessage]:
+        self.load_athlete(slug)  # raises FileNotFoundError if unknown
+        path = self._conversation_messages_path(slug, coach_athlete_id)
+        messages: list[ConversationMessage] = []
+        if path.exists():
+            with path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line:
+                        messages.append(ConversationMessage.model_validate(json.loads(line)))
+        if since is not None:
+            messages = [m for m in messages if m.created_at >= since]
+        messages.sort(key=lambda m: (m.created_at, str(m.id)))
+        if limit is not None:
+            messages = messages[-limit:] if limit > 0 else []
+        return messages
+
+    def get_conversation(self, slug: str, coach_athlete_id: UUID) -> Conversation:
+        athlete_id = self.load_athlete(slug).id
+        path = self._conversation_state_path(slug, coach_athlete_id)
+        muted = False
+        if path.exists():
+            muted = bool(json.loads(path.read_text(encoding="utf-8")).get("ai_muted", False))
+        return Conversation(athlete_id=athlete_id, coach_athlete_id=coach_athlete_id, ai_muted=muted)
+
+    def set_conversation_muted(
+        self, slug: str, coach_athlete_id: UUID, muted: bool
+    ) -> Conversation:
+        athlete_id = self.load_athlete(slug).id
+        path = self._conversation_state_path(slug, coach_athlete_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"ai_muted": muted}), encoding="utf-8")
+        return Conversation(athlete_id=athlete_id, coach_athlete_id=coach_athlete_id, ai_muted=muted)
 
     # --- Library reviews (web/resources-tab-library-review) -----------------
 

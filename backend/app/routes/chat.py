@@ -19,7 +19,7 @@ from typing import Any, Callable, Literal
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from swim_coach.models import Workout, WorkoutChatMessage
+from swim_coach.models import ConversationMessage, Workout, WorkoutChatMessage
 from swim_coach.store import StoreInterface
 
 from app.auth import (
@@ -71,6 +71,14 @@ class ChatRequest(BaseModel):
     workout_id: str | None = None
 
 
+CONVERSATION_ASKER_NOTE = (
+    "Thread context: this turn is in the athlete's shared \"My coach\" conversation -- their "
+    "human coach can read every message here, and the coach's own comments reach you labelled "
+    "\"[Your human coach]\". Answer the athlete as usual, but don't contradict or speak for the "
+    "human coach; defer to them where they have already advised on the same point."
+)
+
+
 def get_claude_chat(request: Request) -> ClaudeChat:
     """Lazily builds (and caches on `app.state`) the real `ClaudeChat`.
 
@@ -85,9 +93,10 @@ def get_claude_chat(request: Request) -> ClaudeChat:
 
 
 def _history_from_workout_chat(
-    messages: list[WorkoutChatMessage],
+    messages: list[WorkoutChatMessage] | list[ConversationMessage],
 ) -> tuple[list[dict[str, str]], str | None]:
-    """Folds a workout's persisted three-party thread into strict user/assistant turns -- the
+    """Folds a persisted three-party thread (a workout's, or the athlete<->coach conversation's
+    -- both only need `sender_role` and `body`) into strict user/assistant turns -- the
     Messages API allows no third role, so an athlete message and a human coach's comment
     (labelled, so the model can tell them apart) both become "user" turns, merging into ONE
     turn when they're consecutive rather than alternating awkwardly; an `ai_coach` message
@@ -161,23 +170,49 @@ def _parse_sse(line: str) -> dict[str, Any] | None:
         return None
 
 
-def _muted_workout_chat_stream(
-    store: StoreInterface, athlete: str, workout_id: uuid.UUID, message: str
-) -> Iterator[str]:
+ThreadAppend = Callable[[str, str], None]
+"""`(sender_role, body) -> None`: appends one message to whichever three-party thread (a
+workout's, or the athlete<->coach conversation) the current turn belongs to."""
+
+
+def _append_conversation_message(
+    store: StoreInterface, athlete: str, coach_athlete_id: uuid.UUID, sender_role: str, body: str
+) -> None:
+    """Appends one message to the athlete<->coach conversation thread. The conversation table is
+    append-only (a plain INSERT / line append), so unlike `_append_workout_chat_message` there is
+    no read-modify-write to race a coach's concurrent comment. Same log-and-swallow failure
+    policy: losing the persisted copy of a message the athlete already saw stream by must never
+    become a 500 on an otherwise-successful turn."""
+    try:
+        store.append_conversation_message(
+            athlete,
+            ConversationMessage(
+                id=uuid.uuid4(), athlete_id=store.load_athlete(athlete).id,
+                coach_athlete_id=coach_athlete_id, sender_role=sender_role, body=body,
+                created_at=datetime.now(timezone.utc),
+            ),
+        )
+    except Exception:  # noqa: BLE001
+        log.error(
+            "conversation message save failed", athlete=athlete,
+            coach_athlete_id=str(coach_athlete_id), sender_role=sender_role, exc_info=True,
+        )
+
+
+def _muted_thread_stream(append: ThreadAppend, message: str) -> Iterator[str]:
     """The athlete's message still saves (visible in the thread, and to whoever un-mutes it
     later); no model call happens at all. Yields a short, honest notice + done, SSE-framed the
     same way `claude.run_streaming` frames its own events, so the existing streaming UI (which
     expects at least one text event before done) has something to show -- without persisting
     that notice itself as an ai_coach turn."""
     notice = "(Saved. The coach's replies are muted in this thread right now.)"
-    _append_workout_chat_message(store, athlete, workout_id, "athlete", message)
+    append("athlete", message)
     yield _sse({"type": "text", "text": notice})
     yield _sse({"type": "done", "stop_reason": "end_turn"})
 
 
-def _persisting_workout_chat_stream(
-    store: StoreInterface, athlete: str, workout_id: uuid.UUID, message: str,
-    inner: Iterator[str],
+def _persisting_thread_stream(
+    append: ThreadAppend, message: str, inner: Iterator[str], *, user_first: bool = False,
 ) -> Iterator[str]:
     """Wraps `inner` (the real, already-SSE-framed `claude_chat.run_streaming` generator) to
     forward every line to the client completely unchanged, while peeking at each one (via
@@ -185,9 +220,15 @@ def _persisting_workout_chat_stream(
     `applyStreamEvent` does (concatenating `text` events in order). Once `inner` is exhausted,
     persists the athlete's message and -- only on a clean `done` with real text, never on a
     `refusal`/`error`/empty turn -- the AI's reply, replacing the old ephemeral, client-only
-    workout-chat history (IDEA 016)."""
+    workout-chat history (IDEA 016).
+
+    `user_first` saves the athlete's message BEFORE the model call instead of after it: the
+    conversation thread is polled by the human coach, who should see the athlete's message
+    right away (and in order) rather than only once the AI's reply has finished streaming."""
     reply_text_parts: list[str] = []
     ended_cleanly = False
+    if user_first:
+        append("athlete", message)
     for line in inner:
         event = _parse_sse(line)
         if event is not None:
@@ -196,10 +237,11 @@ def _persisting_workout_chat_stream(
             elif event.get("type") == "done":
                 ended_cleanly = True
         yield line
-    _append_workout_chat_message(store, athlete, workout_id, "athlete", message)
+    if not user_first:
+        append("athlete", message)
     reply_text = "".join(reply_text_parts).strip()
     if ended_cleanly and reply_text:
-        _append_workout_chat_message(store, athlete, workout_id, "ai_coach", reply_text)
+        append("ai_coach", reply_text)
 
 
 @router.post("/api/chat")
@@ -236,6 +278,7 @@ async def stream_chat_response(
     confirmer_id: str | None = None,
     asker_note: str | None = None,
     plan_change_notifier: Callable[..., None] | None = None,
+    conversation_coach_id: uuid.UUID | None = None,
 ) -> StreamingResponse:
     """The real body of `POST /api/chat` -- factored out (coach-ai-planning build) so `POST
     /api/coach/athletes/{slug}/chat` (`routes/coach.py`) can reuse the EXACT same streaming
@@ -258,6 +301,12 @@ async def stream_chat_response(
     notify_athlete_of_coach_plan_change`-shaped callable -- `None` for the athlete-session
     route, which never needs it) is bound to THIS request's store/settings/athlete slug via
     `functools.partial` only when `confirmer_role == "coach"` -- see `build_full_request` below.
+
+    `conversation_coach_id` (IDEA 016 Part 2), when given, scopes the turn to the athlete<->
+    coach conversation thread with that coach instead of an ad-hoc client-supplied history: the
+    persisted thread (human coach's comments included) is the history, the athlete's message is
+    saved up front and the AI's reply after. Only `routes/conversation.py` passes it, AFTER
+    checking an active grant and the thread's mute state -- never derived from the request body.
     """
     settings = request.app.state.settings
     # Per-minute limiter keys off the raw token (per athlete-session now);
@@ -292,8 +341,12 @@ async def stream_chat_response(
     # AND deterministic (no dependence on the model itself declining to answer, per Andrew's
     # own "not hope-the-LLM-complies" steer). Checked here, before anything else gets built.
     if focused_workout is not None and focused_workout.chat_ai_muted:
+        workout_append: ThreadAppend = functools.partial(
+            _append_workout_chat_message, store, athlete, focused_workout.id
+        )
+
         def event_stream():
-            yield from _muted_workout_chat_stream(store, athlete, focused_workout.id, payload.message)
+            yield from _muted_thread_stream(workout_append, payload.message)
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -303,8 +356,13 @@ async def stream_chat_response(
     # (see _history_from_workout_chat's own docstring for why: it's the only way a human
     # coach's comment, which this browser tab never fetched, reaches the AI's context).
     effective_message = payload.message
+    thread_messages: list[Any] | None = None
     if focused_workout is not None:
-        history, pending_coach_text = _history_from_workout_chat(focused_workout.chat_messages)
+        thread_messages = focused_workout.chat_messages
+    elif conversation_coach_id is not None:
+        thread_messages = store.list_conversation_messages(athlete, conversation_coach_id)
+    if thread_messages is not None:
+        history, pending_coach_text = _history_from_workout_chat(thread_messages)
         if pending_coach_text:
             effective_message = f"{pending_coach_text}\n\n{payload.message}"
     else:
@@ -335,7 +393,7 @@ async def stream_chat_response(
             expert_mode=payload.expert_mode,
             focused_workout=focused_workout,
             cache_ttl=settings.prompt_cache_ttl_context,
-            asker_note=asker_note,
+            asker_note=asker_note or (CONVERSATION_ASKER_NOTE if conversation_coach_id else None),
         )
         system = build_system(
             settings.library_dir,
@@ -410,10 +468,25 @@ async def stream_chat_response(
     # tab is untouched.
     if focused_workout is not None:
         workout_id = focused_workout.id
+        append_to_workout: ThreadAppend = functools.partial(
+            _append_workout_chat_message, store, athlete, workout_id
+        )
 
         def persisted_event_stream():
-            yield from _persisting_workout_chat_stream(store, athlete, workout_id, payload.message, event_stream())
+            yield from _persisting_thread_stream(append_to_workout, payload.message, event_stream())
 
         return StreamingResponse(persisted_event_stream(), media_type="text/event-stream")
+
+    if conversation_coach_id is not None:
+        append_to_conversation: ThreadAppend = functools.partial(
+            _append_conversation_message, store, athlete, conversation_coach_id
+        )
+
+        def persisted_conversation_stream():
+            yield from _persisting_thread_stream(
+                append_to_conversation, payload.message, event_stream(), user_first=True
+            )
+
+        return StreamingResponse(persisted_conversation_stream(), media_type="text/event-stream")
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

@@ -1592,6 +1592,41 @@ class WorkoutChatMessage(BaseModel):
     created_at: datetime
 
 
+class ConversationMessage(BaseModel):
+    """One message in the general athlete<->coach conversation (IDEA 016 "Part 2") -- the
+    athlete's "My coach" thread, the same three parties as a workout's chat thread
+    (`WorkoutChatMessage`) but NOT scoped to any workout. Unlike that bounded, embedded thread,
+    this one grows without limit for the life of the athlete-coach relationship, so it is its
+    own append-only table, never an embedded list: appends never race a concurrent read-modify-
+    write, and polling reads only what is newer than a cursor.
+
+    A thread is identified by the pair `(athlete_id, coach_athlete_id)` -- one per athlete-coach
+    pair, so an athlete with several coaches has several threads. `coach_athlete_id` is set on
+    every message, including the athlete's and the AI's (it names the thread, not the sender;
+    contrast `WorkoutChatMessage`, where it names which coach commented). The thread outlives a
+    revoked/re-created `CoachGrant`: it is keyed on the people, not the grant.
+    Never deleted or edited.
+    """
+
+    schema_version: int = 1
+    id: UUID
+    athlete_id: UUID
+    coach_athlete_id: UUID
+    sender_role: WorkoutChatSenderRole
+    body: str
+    created_at: datetime
+
+
+class Conversation(BaseModel):
+    """Per-thread state for one athlete-coach conversation: whether the AI is muted in it (the
+    thread-level analogue of `Workout.chat_ai_muted`). A thread with no stored row is simply
+    the default -- unmuted -- so reading never needs a write first."""
+
+    athlete_id: UUID
+    coach_athlete_id: UUID
+    ai_muted: bool = False
+
+
 class Workout(BaseModel):
     """A completed workout, logged manually or ingested from a file/coach text."""
 

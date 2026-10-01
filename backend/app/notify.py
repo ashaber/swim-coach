@@ -28,6 +28,7 @@ returns. `RESEND_API_KEY` is intentionally NOT in `config.py`'s
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import TYPE_CHECKING, Literal
 
 import httpx
@@ -36,7 +37,7 @@ from app.auth import hash_token
 from app.logging_config import get_logger
 
 if TYPE_CHECKING:
-    from swim_coach.models import Feedback, WorkoutChatMessage
+    from swim_coach.models import ConversationMessage, Feedback, WorkoutChatMessage
     from swim_coach.store import StoreInterface
 
     from app.config import Settings
@@ -614,4 +615,142 @@ def notify_athlete_of_coach_plan_change(
         log.error(
             "notify.plan_change_unexpected_failure",
             athlete=athlete_slug, plan_kind=plan_kind, error=str(exc),
+        )
+
+
+# --- athlete<->coach conversation (IDEA 016 Part 2) -> email, both directions ---------------
+#
+# Email is the out-of-app counterpart of the in-app unread badge (src/unread.js): it reaches
+# someone who has the app closed. Fires from `routes/conversation.py` via BackgroundTasks after
+# the message is saved (coach -> athlete) or after the athlete's streamed turn is accepted
+# (athlete -> coach). Throttled: a message is NOT emailed if the same sender already sent one
+# in this thread within `_CONVERSATION_EMAIL_THROTTLE` -- a back-and-forth chat must not become
+# one email per message. Same best-effort, never-raises contract as every notifier above.
+
+_CONVERSATION_EMAIL_THROTTLE = timedelta(minutes=10)
+
+
+def _conversation_recently_notified(
+    store: "StoreInterface", athlete_slug: str, message: "ConversationMessage"
+) -> bool:
+    window_start = message.created_at - _CONVERSATION_EMAIL_THROTTLE
+    recent = store.list_conversation_messages(
+        athlete_slug, message.coach_athlete_id, since=window_start
+    )
+    return any(m.id != message.id and m.sender_role == message.sender_role for m in recent)
+
+
+def _send_conversation_email(
+    client: httpx.Client, settings: "Settings", to_email: str, subject: str, text: str,
+    message: "ConversationMessage",
+) -> None:
+    email_hash = hash_token(to_email)
+    payload = {
+        "from": settings.resend_from_email, "to": [to_email], "subject": subject, "text": text,
+    }
+    try:
+        response = client.post(
+            RESEND_API_URL,
+            headers={"Authorization": f"Bearer {settings.resend_api_key}"},
+            json=payload,
+        )
+    except Exception as exc:  # noqa: BLE001 - any transport error, this send just failed
+        log.error(
+            "notify.conversation_send_failed", to_email_hash=email_hash,
+            message_id=str(message.id), error=str(exc),
+        )
+        return
+    if response.status_code not in _SUCCESS_STATUS_CODES:
+        log.error(
+            "notify.conversation_send_failed", to_email_hash=email_hash,
+            message_id=str(message.id), status_code=response.status_code, error=response.text[:500],
+        )
+        return
+    log.info(
+        "notify.conversation_sent", to_email_hash=email_hash,
+        message_id=str(message.id), status_code=response.status_code,
+    )
+
+
+def _notify_conversation_recipient(
+    store: "StoreInterface", settings: "Settings", message: "ConversationMessage",
+    athlete_slug: str, *, to_coach: bool, client: httpx.Client | None,
+) -> None:
+    if not settings.resend_api_key:
+        log.info("notify.conversation_skipped_no_api_key", athlete=athlete_slug, message_id=str(message.id))
+        return
+
+    allowed = store.list_allowed_emails()
+    email_by_slug = {e.athlete_slug: e.email for e in allowed if e.athlete_slug is not None}
+    athlete = store.load_athlete(athlete_slug)
+    if to_coach:
+        slug_by_id = {store.load_athlete(s).id: s for s in email_by_slug}
+        recipient_slug = slug_by_id.get(message.coach_athlete_id)
+    else:
+        recipient_slug = athlete_slug
+    recipient_email = email_by_slug.get(recipient_slug) if recipient_slug is not None else None
+    if recipient_email is None:
+        log.warn("notify.conversation_missing_allowlist_email", athlete=athlete_slug, message_id=str(message.id))
+        return
+    recipient = store.load_athlete(recipient_slug)
+    if not recipient.email_notifications_enabled:
+        log.info("notify.conversation_skipped_notifications_disabled", athlete=athlete_slug, message_id=str(message.id))
+        return
+    if _conversation_recently_notified(store, athlete_slug, message):
+        log.info("notify.conversation_skipped_throttled", athlete=athlete_slug, message_id=str(message.id))
+        return
+
+    if to_coach:
+        subject = f"New message from {athlete.name}"
+        text = (
+            f"Hi {recipient.name}, {athlete.name} sent a message in your conversation:\n\n"
+            f"{message.body}\n\nOpen the app's My Athletes tab, Conversations, to reply."
+        )
+    else:
+        subject = "Your coach sent you a message"
+        text = (
+            f"Hi {athlete.name}, your coach sent you a message:\n\n{message.body}\n\n"
+            "Open the app's Coach tab to reply."
+        )
+    owns_client = client is None
+    if client is None:
+        client = httpx.Client(timeout=_HTTP_TIMEOUT_S)
+    try:
+        _send_conversation_email(client, settings, recipient_email, subject, text, message)
+    finally:
+        if owns_client:
+            client.close()
+
+
+def notify_athlete_of_conversation_message(
+    store: "StoreInterface", settings: "Settings", message: "ConversationMessage",
+    athlete_slug: str, *, client: httpx.Client | None = None,
+) -> None:
+    """Best-effort, throttled email to `athlete_slug` when their human coach posts in the
+    conversation thread. NEVER raises. Gated on the athlete's own
+    `email_notifications_enabled`; no-ops without `settings.resend_api_key`."""
+    try:
+        _notify_conversation_recipient(
+            store, settings, message, athlete_slug, to_coach=False, client=client)
+    except Exception as exc:  # noqa: BLE001 - this IS the boundary; see module docstring
+        log.error(
+            "notify.conversation_unexpected_failure",
+            athlete=athlete_slug, message_id=str(message.id), error=str(exc),
+        )
+
+
+def notify_coach_of_conversation_message(
+    store: "StoreInterface", settings: "Settings", message: "ConversationMessage",
+    athlete_slug: str, *, client: httpx.Client | None = None,
+) -> None:
+    """Mirror of `notify_athlete_of_conversation_message`: best-effort, throttled email to the
+    thread's coach (`message.coach_athlete_id`) when the athlete posts. NEVER raises. Gated on
+    the COACH's own `email_notifications_enabled`."""
+    try:
+        _notify_conversation_recipient(
+            store, settings, message, athlete_slug, to_coach=True, client=client)
+    except Exception as exc:  # noqa: BLE001 - this IS the boundary; see module docstring
+        log.error(
+            "notify.conversation_unexpected_failure",
+            athlete=athlete_slug, message_id=str(message.id), error=str(exc),
         )

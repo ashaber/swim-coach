@@ -42,6 +42,8 @@ _TABLES = [
     "sessions",
     "auth_sessions",
     "allowed_emails",
+    "conversation_messages",
+    "conversations",
     "feedback",
     "library_reviews",
     "health_status",

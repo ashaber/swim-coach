@@ -25,6 +25,7 @@ from app.routes.athlete import router as athlete_router
 from app.routes.auth import router as auth_router
 from app.routes.chat import router as chat_router
 from app.routes.coach import router as coach_router
+from app.routes.conversation import router as conversation_router
 from app.routes.feedback import router as feedback_router
 from app.routes.garmin import router as garmin_router
 from app.routes.grants import router as grants_router
@@ -131,6 +132,7 @@ def create_app() -> FastAPI:
     app.include_router(garmin_router)
     app.include_router(grants_router)
     app.include_router(coach_router)
+    app.include_router(conversation_router)
     app.include_router(health_status_router)
     app.include_router(library_router)
 
