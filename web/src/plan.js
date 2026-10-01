@@ -1010,6 +1010,35 @@ export function pickCurrentAndNextWeek(weeks, now = new Date()) {
   };
 }
 
+/** Split a plan's weeks for the Plan view: the "focus" week first, every
+ * later week after it in order, and past weeks separately (hidden behind a
+ * collapsed control, never lost). `focus` is the earliest week whose Sunday
+ * hasn't passed -- the week containing `now` normally, or the next planned
+ * week when there is a gap (`focusIsCurrent` tells those apart so the label
+ * never calls a future week "This week"). With no current/future week at
+ * all, `focus` is null and `upcoming` empty: the caller shows an explicit
+ * empty state, never a past week (2026-08-18 defect, see
+ * `pickCurrentAndNextWeek`).
+ *
+ * "Today" is the DEVICE's local date (`now`), not Athlete.timezone: the web
+ * payload does not carry the athlete's timezone, and the athlete's device
+ * is normally in it. A coach viewing from another timezone can therefore
+ * see the active week flip up to a day off. */
+export function partitionPlanWeeks(weeks, now = new Date()) {
+  const sorted = sortedByIsoWeek(weeks);
+  const firstLive = sorted.findIndex(
+    (week) => daysBetween(now, addDays(isoWeekMonday(week.iso_week), 6)) >= 0,
+  );
+  if (firstLive === -1) return { focus: null, focusIsCurrent: false, upcoming: [], past: sorted };
+  const focus = sorted[firstLive];
+  return {
+    focus,
+    focusIsCurrent: daysBetween(isoWeekMonday(focus.iso_week), now) >= 0,
+    upcoming: sorted.slice(firstLive + 1),
+    past: sorted.slice(0, firstLive),
+  };
+}
+
 /** Days remaining (>=0) until `eventDate` (a Date), rounded up so "today" and
  * "tomorrow morning" both read as at least 1 day out once the date has passed
  * midnight, and 0 on/after the event date itself. */

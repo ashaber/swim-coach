@@ -4,7 +4,7 @@
 import {
   formatShortDate, formatLongDate, formatDuration, formatDistance, formatPace,
   parseIsoDate, sessionsByDay, classifySession, sessionDisplay, sessionDotColorVar,
-  pickCurrentAndNextWeek, sortedByIsoWeek, daysUntil, macroTargetEvent, currentBlockIndex,
+  partitionPlanWeeks, sortedByIsoWeek, daysUntil, macroTargetEvent, currentBlockIndex,
   longSwimLadder,
   findSessionById, parseStructureBlocks, parseMainSetIntervals, renderStructuredWorkout,
   splitStructuredRationale, sessionZoneDistribution, formatZoneDistributionSummary,
@@ -384,7 +384,7 @@ function safeHref(url) {
  * `<details>`/`<summary>` -- collapsed by default (just the label/detail,
  * identical markup to the plain-line case), the cue text revealed on tap.
  * Native `<details>`, not a click handler, matching this app's only other
- * expand/collapse affordance (`renderAllWeeksAccordion`'s `.all-weeks`) --
+ * expand/collapse affordance (`renderPastWeeksAccordion`'s `.all-weeks`) --
  * works with no JS wiring, keyboard-accessible for free, and survives
  * offline. A line with no cue renders exactly as before (a plain `<div>`,
  * not wrapped in `<details>`) -- most lines (anything not matching the real
@@ -727,28 +727,29 @@ function renderWeeksSection(weeks, detailId, sessionPush, allWeeksOpen, showGarm
     }
   }
 
-  const { current, next, stale } = pickCurrentAndNextWeek(weeks);
-  const allWeeks = renderAllWeeksAccordion(weeks, allWeeksOpen);
+  const { focus, focusIsCurrent, upcoming, past } = partitionPlanWeeks(weeks);
+  const pastWeeks = renderPastWeeksAccordion(past, allWeeksOpen);
 
-  // Two genuinely different empty states, and neither one may resurrect a
-  // past week as "This week" (the 2026-08-18 defect -- see plan.js's
-  // pickCurrentAndNextWeek doc comment). `stale` means weeks exist but the
-  // newest one already ended: the plan ran out and needs regenerating, so
-  // say so and still let the athlete page back through what was planned.
-  if (!current) {
-    const message = stale
-      ? 'No plan generated for this week yet — ask the coach to plan it.'
-      : 'No weeks planned yet.';
+  // No current or future week: an explicit empty state, never a past week
+  // (the 2026-08-18 defect -- see plan.js's pickCurrentAndNextWeek). Past
+  // weeks stay reachable behind the collapsed control.
+  if (!focus) {
+    const hint = showGarminActions
+      ? 'Ask the coach to plan it.'
+      : 'Use &ldquo;Ask the AI coach&rdquo; above to draft one.';
     return `
     <section>
       <div class="s-head"><h2>The plan, day by day</h2></div>
-      <p class="sub">${message}</p>
-      ${allWeeks}
+      <p class="sub">No current plan yet. ${hint}</p>
+      ${pastWeeks}
     </section>`;
   }
 
-  const cards = [renderWeekCard(current, `This week · ${weekRangeLabel(current)}`)];
-  if (next) cards.push(renderWeekCard(next, `Next week · ${weekRangeLabel(next)}`));
+  const cards = [renderWeekCard(focus, `${focusIsCurrent ? 'This week' : 'Upcoming'} · ${weekRangeLabel(focus)}`)];
+  upcoming.forEach((week, i) => {
+    const label = i === 0 && focusIsCurrent ? 'Next week' : 'Upcoming';
+    cards.push(renderWeekCard(week, `${label} · ${weekRangeLabel(week)}`));
+  });
 
   return `
     <section>
@@ -757,28 +758,22 @@ function renderWeeksSection(weeks, detailId, sessionPush, allWeeksOpen, showGarm
         <span class="note">built around real fixed events</span>
       </div>
       ${cards.join('')}
-      ${allWeeks}
+      ${pastWeeks}
     </section>`;
 }
 
-/** Every week on file, past and future, in a collapsed `<details>` -- the
- * current/next cards above are the day-to-day view, this is the "show me
- * the whole plan" affordance that previously didn't exist at all (only two
- * cards were ever reachable). Native `<details>` rather than a JS toggle:
- * it works with no click handler, keyboard-accessible for free, and stays
- * usable if the accordion ever renders while offline. `data-a` is present
- * for e2e/unit selection and for main.js's logging convention; the open/
- * close behaviour itself is the browser's. Renders nothing when there are
- * no weeks at all. */
-function renderAllWeeksAccordion(weeks, allWeeksOpen) {
-  const sorted = sortedByIsoWeek(weeks);
-  if (sorted.length === 0) return '';
-  const cards = sorted
+/** Past weeks in a collapsed `<details>` at the bottom of the Plan view --
+ * hidden by default so the plan opens on the active week, but never lost.
+ * Native `<details>`; main.js mirrors its open state (`weeks:toggle-all`)
+ * so re-renders don't snap it shut. Renders nothing when there are none. */
+function renderPastWeeksAccordion(pastWeeks, allWeeksOpen) {
+  if (pastWeeks.length === 0) return '';
+  const cards = pastWeeks
     .map((week) => renderWeekCard(week, `${week.iso_week} · ${weekRangeLabel(week)}`))
     .join('');
   return `
-      <details class="all-weeks"${allWeeksOpen ? ' open' : ''}>
-        <summary data-a="weeks:toggle-all">All planned weeks (${sorted.length})</summary>
+      <details class="all-weeks past-weeks"${allWeeksOpen ? ' open' : ''}>
+        <summary data-a="weeks:toggle-all">Past weeks (${pastWeeks.length})</summary>
         ${cards}
       </details>`;
 }
@@ -1717,7 +1712,7 @@ function renderLegendPanel() {
  * sense without a coach walking through them, so the terms/zones used
  * throughout this tab need to be reachable, but a wall of definitions
  * bolted permanently onto the page would be exactly the wrong fix).
- * Native `<details>`, matching `renderAllWeeksAccordion`'s own affordance
+ * Native `<details>`, matching `renderPastWeeksAccordion`'s own affordance
  * (works with no JS, keyboard-accessible, survives offline) -- deliberately
  * its own `.glossary` class rather than reusing `.all-weeks` so main.js's
  * capture-phase `toggle` listener can track this accordion's open state
@@ -2762,7 +2757,7 @@ function formatSpeedKmh(mps) {
  * compute fetched lazily by main.js's maybeLoadPacing -- `pacing` is
  * `state.pacingByWorkoutId[workout.id]` (`undefined` before that fires).
  * Collapsed `<details>` (this app's only collapsible-section convention --
- * see renderAllWeeksAccordion/renderGlossaryPanel) rather than always-open:
+ * see renderPastWeeksAccordion/renderGlossaryPanel) rather than always-open:
  * a full lap table for a multi-hour ride is exactly the "long" content
  * Andrew flagged. Shown for any bike workout with something to say (laps,
  * phases, or an informative reason there's neither) -- never silently

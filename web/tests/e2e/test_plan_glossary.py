@@ -15,7 +15,7 @@ from playwright.sync_api import sync_playwright
 from conftest import BROWSERS, seed_identity, seed_settings
 
 # A far-future week (so it's never "stale" regardless of the wall clock the
-# suite runs under) purely so the all-weeks accordion also exists in this
+# suite runs under) plus a past week, so the Past weeks accordion also exists in this
 # fixture's DOM -- needed to prove the two accordions track independent
 # open/closed state (see test_toggling_the_glossary_does_not_affect_the_
 # unrelated_all_weeks_accordion below).
@@ -29,9 +29,12 @@ WEEK = {
     }],
 }
 
+# A deep-past week so the collapsed "Past weeks" accordion exists too.
+PAST_WEEK = {**WEEK, 'iso_week': '2020-W01', 'sessions': []}
+
 PLAN_STUB = json.dumps({
     'slug': 'renee', 'athlete': {'name': 'Renee'}, 'events': [],
-    'macro': {'blocks': []}, 'weeks': [WEEK],
+    'macro': {'blocks': []}, 'weeks': [PAST_WEEK, WEEK],
 })
 
 
