@@ -1,4 +1,5 @@
 import json
+import re
 import os
 import subprocess
 import threading
@@ -82,6 +83,33 @@ def _default_me_route(route) -> None:
     )
 
 
+# Default empty athlete<->coach conversation (IDEA 016 Part 2): main.js's boot-time loadMyCoach
+# (GET /api/conversations) fires for every configured identity, and the roster's Conversations
+# sub-tab polls GET /api/coach/athletes/<slug>/conversation -- same unmocked-route hazard as
+# /api/me above, same fix: an empty-but-valid default every context gets, which a conversation
+# test overrides with a more specific route registered after context creation.
+def _default_conversation_route(route) -> None:
+    request = route.request
+    if request.method == 'OPTIONS':
+        route.fulfill(
+            status=204,
+            headers={
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
+                'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+            },
+        )
+        return
+    path = request.url.split('?')[0]
+    body = '[]' if path.endswith('/api/conversations') else json.dumps({'messages': [], 'ai_muted': False})
+    route.fulfill(
+        status=200, content_type='application/json', body=body,
+        headers={'Access-Control-Allow-Origin': '*'},
+    )
+
+
+_DEFAULT_CONVERSATION_URL = re.compile(r'/api/(conversations|coach/athletes/[^/?]+/conversation)(?=[/?]|$)')
+
 _original_new_context = Browser.new_context
 
 
@@ -96,6 +124,7 @@ def _new_context_with_default_me_route(self, **kwargs):
     on nearly every boot instead of just a few detail-open actions)."""
     ctx = _original_new_context(self, **kwargs)
     ctx.route('**/api/me*', _default_me_route)
+    ctx.route(_DEFAULT_CONVERSATION_URL, _default_conversation_route)
     return ctx
 
 

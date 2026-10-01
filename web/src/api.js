@@ -562,6 +562,70 @@ export async function patchCoachWorkoutChatMuted({ baseUrl, token, athlete, work
   });
 }
 
+// --- Athlete<->coach conversation (IDEA 016 Part 2) -- see backend/app/routes/conversation.py.
+// The athlete's POST goes through `streamChat` (it answers with the same SSE contract as
+// /api/chat) with `endpoint: conversationMessagesPath(coachId)`.
+
+/** Path of one conversation thread's message collection, athlete side. */
+export function conversationMessagesPath(coachId) {
+  return `/api/conversations/${encodeURIComponent(coachId)}/messages`;
+}
+
+/** GET /api/conversations -- the athlete's threads, one per active coach. */
+export async function listConversations({ baseUrl, token, athlete }) {
+  return apiRequest({ baseUrl, token, path: `/api/conversations?athlete=${encodeURIComponent(athlete)}` });
+}
+
+function sinceQuery(since) {
+  return since ? `&since=${encodeURIComponent(since)}` : '';
+}
+
+/** GET /api/conversations/<coachId>/messages -- `since` (ISO, inclusive) is the polling cursor. */
+export async function fetchConversationMessages({ baseUrl, token, athlete, coachId, since = null }) {
+  return apiRequest({
+    baseUrl, token,
+    path: `${conversationMessagesPath(coachId)}?athlete=${encodeURIComponent(athlete)}${sinceQuery(since)}`,
+  });
+}
+
+/** PATCH /api/conversations/<coachId> -- the athlete's mute/unmute of the AI in that thread. */
+export async function patchConversationMuted({ baseUrl, token, athlete, coachId, muted }) {
+  return apiRequest({
+    baseUrl, token,
+    path: `/api/conversations/${encodeURIComponent(coachId)}?athlete=${encodeURIComponent(athlete)}`,
+    method: 'PATCH',
+    body: { ai_muted: muted },
+  });
+}
+
+/** GET /api/coach/athletes/<athlete>/conversation -- the coach's view of the thread. */
+export async function fetchCoachConversation({ baseUrl, token, athlete, since = null }) {
+  return apiRequest({
+    baseUrl, token,
+    path: `/api/coach/athletes/${encodeURIComponent(athlete)}/conversation${since ? `?since=${encodeURIComponent(since)}` : ''}`,
+  });
+}
+
+/** POST /api/coach/athletes/<athlete>/conversation/messages -- the coach's comment (no AI call). */
+export async function postCoachConversationMessage({ baseUrl, token, athlete, body }) {
+  return apiRequest({
+    baseUrl, token,
+    path: `/api/coach/athletes/${encodeURIComponent(athlete)}/conversation/messages`,
+    method: 'POST',
+    body: { body },
+  });
+}
+
+/** PATCH /api/coach/athletes/<athlete>/conversation -- the coach's mute/unmute of the AI. */
+export async function patchCoachConversationMuted({ baseUrl, token, athlete, muted }) {
+  return apiRequest({
+    baseUrl, token,
+    path: `/api/coach/athletes/${encodeURIComponent(athlete)}/conversation`,
+    method: 'PATCH',
+    body: { ai_muted: muted },
+  });
+}
+
 /** GET {baseUrl}/api/coach/athletes/<athlete>/feedback -- the coach-side view
  * of one coached athlete's durable feedback log (full visibility, no
  * chat_visibility filtering in Phase 1). Path segment, same as
