@@ -43,7 +43,7 @@ PAST_WEEKS = [
     _week('2020-W02', '2020-01-06', 12000, 's-past-2'),
 ]
 
-# Far-future weeks, so the first is always "This week" and the second "Next".
+# Far-future weeks: always live, shown first, in order, labelled "Upcoming".
 FUTURE_WEEKS = [
     _week('2099-W01', '2098-12-29', 13000, 's-future-1'),
     _week('2099-W02', '2099-01-05', 14000, 's-future-2'),
@@ -121,7 +121,7 @@ def empty_page(request, base_url):
 def test_all_past_weeks_shows_an_honest_gap_not_a_stale_this_week(stale_page):
     stale_page.wait_for_selector('[data-a="weeks:toggle-all"]')
     content = stale_page.content()
-    assert 'No plan generated for this week yet' in content
+    assert 'No current plan yet' in content
     # The defect itself: a five-week-old week rendered under "This week".
     assert 'This week ·' not in content
     assert 'Next week ·' not in content
@@ -130,7 +130,7 @@ def test_all_past_weeks_shows_an_honest_gap_not_a_stale_this_week(stale_page):
 def test_past_weeks_stay_browsable_behind_the_accordion(stale_page):
     summary = stale_page.locator('[data-a="weeks:toggle-all"]')
     summary.wait_for()
-    assert summary.text_content().strip() == 'All planned weeks (2)'
+    assert summary.text_content().strip() == 'Past weeks (2)'
     # Collapsed by default -- the week cards are not visible until opened.
     assert not stale_page.locator('details.all-weeks').get_attribute('open')
     assert stale_page.locator('.week').count() == 2  # in the DOM, collapsed
@@ -168,19 +168,18 @@ def test_accordion_stays_open_across_a_re_render(stale_page):
 def test_current_and_next_cards_still_render_alongside_the_accordion(current_page):
     current_page.wait_for_selector('.week')
     content = current_page.content()
-    assert 'This week ·' in content
-    assert 'Next week ·' in content
-    assert 'No plan generated for this week yet' not in content
-    # Accordion lists every week on file -- the two future ones and the two past.
+    assert 'Upcoming ·' in content  # far-future fixture: focus week, not "this week"
+    assert content.index('focus 2099-W01') < content.index('focus 2099-W02') < content.index('Past weeks (2)')
+    assert 'No current plan yet' not in content
+    # Accordion holds only the two past weeks; both future weeks sit open above it.
     assert current_page.locator('[data-a="weeks:toggle-all"]').text_content().strip() \
-        == 'All planned weeks (4)'
+        == 'Past weeks (2)'
 
 
-def test_no_weeks_at_all_reads_differently_and_offers_no_accordion(empty_page):
+def test_no_weeks_at_all_shows_the_empty_state_and_offers_no_accordion(empty_page):
     empty_page.wait_for_selector('.wrap')
     content = empty_page.content()
-    assert 'No weeks planned yet' in content
-    assert 'No plan generated for this week yet' not in content
+    assert 'No current plan yet' in content
     assert empty_page.locator('[data-a="weeks:toggle-all"]').count() == 0
 
 

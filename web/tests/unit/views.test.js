@@ -2691,7 +2691,7 @@ describe('renderRosterTab', () => {
           error: null,
         },
       });
-      expect(html).toContain('No weeks planned yet.');
+      expect(html).toContain('No current plan yet.');
       expect(html).toContain('No macro plan scaffolded yet.');
       expect(html).not.toContain('<svg'); // no load chart in this sub-tab
     });
@@ -3275,15 +3275,14 @@ describe('renderApp weeks section: stale / empty states', () => {
 
   it('says no plan exists for this week -- and does NOT label a past week "This week"', () => {
     const html = renderApp({ ...BASE, weeks: PAST_WEEKS }, null);
-    expect(html).toContain('No plan generated for this week yet');
+    expect(html).toContain('No current plan yet');
     expect(html).not.toContain('This week ·');
     expect(html).not.toContain('Next week ·');
   });
 
-  it('distinguishes "nothing planned at all" from "this week is missing"', () => {
+  it('shows the same explicit empty state when nothing is planned at all', () => {
     const html = renderApp({ ...BASE, weeks: [] }, null);
-    expect(html).toContain('No weeks planned yet');
-    expect(html).not.toContain('No plan generated for this week yet');
+    expect(html).toContain('No current plan yet');
   });
 
   it('still offers the all-weeks accordion when the plan is stale, so past weeks stay readable', () => {
@@ -3303,7 +3302,7 @@ describe('renderApp weeks section: all-weeks accordion', () => {
   const FUTURE = '2099-W01';
   const monday = isoWeekMonday(FUTURE);
   const makeWeek = (iso, volume) => ({
-    iso_week: iso, meso_block: 'base', focus: 'aerobic base',
+    iso_week: iso, meso_block: 'base', focus: `focus ${iso}`,
     target_volume_m: volume, sessions: [], adaptation_rationale: null,
   });
   const DATA = {
@@ -3311,24 +3310,27 @@ describe('renderApp weeks section: all-weeks accordion', () => {
     weeks: [makeWeek('2099-W02', 13000), makeWeek(FUTURE, 12000), makeWeek('2019-W40', 9000)],
   };
 
-  it('renders current + next cards as before', () => {
+  it('renders the active week first, then future weeks', () => {
     const html = renderApp(DATA, null);
-    expect(html).toContain('This week ·');
-    expect(html).toContain('Next week ·');
+    // Far-future fixture weeks: the first is the focus but not "this week".
+    expect(html).toContain('Upcoming ·');
+    expect(html).not.toContain('This week ·');
     expect(dateKey(addDays(monday, 0))).toBeTruthy(); // sanity: fixture week resolves
   });
 
-  it('lists every week, past ones included, inside a collapsed <details> accordion', () => {
+  it('puts only past weeks inside a collapsed Past weeks accordion, after the future weeks', () => {
     const html = renderApp(DATA, null);
-    expect(html).toContain('<details');
-    expect(html).toContain('data-a="weeks:toggle-all"');
-    // All three weeks appear in the accordion, chronologically.
-    const i2019 = html.indexOf('2019-W40');
-    const i2099w1 = html.indexOf('2099-W01', html.indexOf('data-a="weeks:toggle-all"'));
-    const i2099w2 = html.indexOf('2099-W02', html.indexOf('data-a="weeks:toggle-all"'));
-    expect(i2019).toBeGreaterThan(-1);
-    expect(i2019).toBeLessThan(i2099w1);
+    const accordion = html.indexOf('data-a="weeks:toggle-all"');
+    expect(accordion).toBeGreaterThan(-1);
+    expect(html).toContain('Past weeks (1)');
+    // Both future weeks render before (outside) the accordion, in order.
+    const i2099w1 = html.indexOf('focus 2099-W01');
+    const i2099w2 = html.indexOf('focus 2099-W02');
+    expect(i2099w1).toBeGreaterThan(-1);
     expect(i2099w1).toBeLessThan(i2099w2);
+    expect(i2099w2).toBeLessThan(accordion);
+    // The past week is only inside the accordion.
+    expect(html.indexOf('focus 2019-W40')).toBeGreaterThan(accordion);
   });
 
   it('does not open the accordion by default (no `open` attribute)', () => {

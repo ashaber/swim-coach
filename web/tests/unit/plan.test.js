@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   isoWeekMonday, formatDuration, formatDistance, formatPace, splitPurpose,
   classifySession, sessionDisplay, deriveSessionTitle, findSessionById,
-  pickCurrentAndNextWeek, sortedByIsoWeek, daysUntil,
+  pickCurrentAndNextWeek, partitionPlanWeeks, sortedByIsoWeek, daysUntil,
   priorityEvent, macroTargetEvent, currentBlockIndex, longSwimLadder, sessionsByDay,
   parseStructureBlocks, parseMainSetIntervals, renderStructuredWorkout,
   splitStructuredRationale, sessionZoneDistribution, formatZoneDistributionSummary,
@@ -1062,6 +1062,45 @@ describe('pickCurrentAndNextWeek', () => {
     const { current, stale } = pickCurrentAndNextWeek(weeks, new Date(2026, 6, 19));
     expect(current.iso_week).toBe('2026-W29');
     expect(stale).toBe(false);
+  });
+});
+
+describe('partitionPlanWeeks', () => {
+  const wk = (iso) => ({ iso_week: iso, sessions: [] });
+  // 2026-W28 = Jul 6-12, W29 = Jul 13-19, W30 = Jul 20-26, W32 = Aug 3-9
+
+  it('no weeks: no focus, nothing else', () => {
+    expect(partitionPlanWeeks([], new Date(2026, 6, 8))).toEqual({
+      focus: null, focusIsCurrent: false, upcoming: [], past: [],
+    });
+  });
+
+  it('only past weeks: no focus, all weeks go to past', () => {
+    const r = partitionPlanWeeks([wk('2026-W28'), wk('2026-W29')], new Date(2026, 7, 18));
+    expect(r.focus).toBeNull();
+    expect(r.past.map((w) => w.iso_week)).toEqual(['2026-W28', '2026-W29']);
+    expect(r.upcoming).toEqual([]);
+  });
+
+  it('current + future: active week first, later weeks in order, earlier in past', () => {
+    const r = partitionPlanWeeks([wk('2026-W30'), wk('2026-W27'), wk('2026-W28'), wk('2026-W29')], new Date(2026, 6, 15));
+    expect(r.focus.iso_week).toBe('2026-W29');
+    expect(r.focusIsCurrent).toBe(true);
+    expect(r.upcoming.map((w) => w.iso_week)).toEqual(['2026-W30']);
+    expect(r.past.map((w) => w.iso_week)).toEqual(['2026-W27', '2026-W28']);
+  });
+
+  it('gap: focus is the next planned week and is not labelled current', () => {
+    const r = partitionPlanWeeks([wk('2026-W28'), wk('2026-W32')], new Date(2026, 6, 20));
+    expect(r.focus.iso_week).toBe('2026-W32');
+    expect(r.focusIsCurrent).toBe(false);
+    expect(r.past.map((w) => w.iso_week)).toEqual(['2026-W28']);
+  });
+
+  it('Sunday still counts as the active week', () => {
+    const r = partitionPlanWeeks([wk('2026-W29')], new Date(2026, 6, 19));
+    expect(r.focus.iso_week).toBe('2026-W29');
+    expect(r.focusIsCurrent).toBe(true);
   });
 });
 
