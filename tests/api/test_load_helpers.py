@@ -58,10 +58,15 @@ def test_falls_through_to_duration_only_when_no_rpe_no_hr_and_hr_max_unknown():
     assert load_au == pytest.approx(45 * 5, abs=0.01)  # DURATION_ONLY_ASSUMED_INTENSITY = 5
 
 
-def test_srpe_tier_wins_over_hr_trimp_when_rpe_is_present():
-    # rpe present AND avg_hr/hr_max present -- tier 1 (sRPE) still takes
-    # priority over tier 2, matching session_load's own documented order.
+def test_hr_trimp_wins_over_srpe_when_both_present():
+    # Measured beats self-report (session_load's documented order).
     w = _workout(rpe=5, avg_hr=140, duration_min=150)
+    _, load_tier = workout_load_au(w, athlete=_athlete(), hr_max=180.0, wellness=[])
+    assert load_tier == "hr_trimp"
+
+
+def test_srpe_tier_used_when_no_measured_signal():
+    w = _workout(rpe=5, avg_hr=None, duration_min=150)
     load_au, load_tier = workout_load_au(w, athlete=_athlete(), hr_max=180.0, wellness=[])
     assert load_tier == "srpe"
     assert load_au == 750.0  # duration_min * rpe

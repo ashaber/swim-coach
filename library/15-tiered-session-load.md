@@ -1,4 +1,4 @@
-# Tiered session load: sRPE > HR-based TRIMP > swim pace-IF > duration-only
+# Tiered session load: power TSS > HR-based TRIMP > swim pace-IF > sRPE > duration-only
 
 Grounds `engine/swim_coach/load.py`'s `session_load`/`daily_loads` tiered
 fallback (moved out of `03-periodization.md`'s "Load monitoring" section).
@@ -46,10 +46,12 @@ TSS of **155**; **2026-08-29** (no RPE) scored **78.6 AU** after
 LTHR-normalization vs. TrainingPeaks' TSS of **85** -- ~1.8x apart on
 TrainingPeaks, but **~10x apart** in this engine.
 
-**Power outranks sRPE (2026-10):** a ride with `normalized_power_w` and positive
-`ftp_watts` scores by power TSS even if rated (RPE stays stored and shown).
-Real rides: sRPE 30-50 vs. power TSS 90-109. HR-TRIMP does NOT outrank sRPE:
-nothing here supports measured HR beating a validated athlete rating.
+**Measured beats self-report (2026-10):** order is power TSS, HR-TRIMP, swim
+pace, then sRPE, then duration-only. **Coach judgment**: Foster 2001 validates
+sRPE as a correlate/stand-in for HR-based load, not as an override of a
+measurement. Replayed rides: sRPE overshot HR-TRIMP ~2x (RPE rates overall
+difficulty, not each minute's %HRR) and undercounted power rides. RPE stays
+stored/shown.
 
 **The fix:** when `workout.rpe` is set AND tier 2's own four preconditions
 are also met (`hr_max`, `hr_rest` with `hr_max > hr_rest`, `lthr_bpm`), the
@@ -57,8 +59,8 @@ RPE converts to an estimated %HRR fraction (piecewise-linear, see the
 Arney block below; CR-10's own endpoints 0 = "Rest / Nothing at all" ~0%
 HRR, 10 = "Maximal / Exhausting" ~100% HRR, per `19-srpe-protocol.md`) and runs through the *exact same*
 Banister weighting + LTHR-normalization pipeline tier 2 already uses -- no
-new formula. **Tier priority is unchanged**: sRPE still wins over measured
-HR whenever logged; only the output value changes. Missing any one
+new formula. This path is reached only when
+no avg HR/power/pace exists. Missing any one
 precondition (most profiles have no `lthr_bpm` yet) falls back to
 byte-identical `duration_min * rpe`.
 

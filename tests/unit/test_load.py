@@ -120,15 +120,20 @@ def test_session_load_is_duration_times_rpe():
     assert result.value == 420.0
 
 
-def test_session_load_srpe_wins_even_when_hr_and_pace_context_also_available():
-    # RPE is the highest-fidelity signal -- if it's logged, it's used,
-    # regardless of what other context the caller also happens to pass.
+def test_session_load_hr_trimp_wins_over_srpe_when_both_available():
+    # Option A (Andrew, 2026-10): measured load beats self-report. RPE stays
+    # stored/displayed; real rated rides with HR scored ~2x too high via sRPE.
     workout = make_workout(rpe=7, duration_min=60.0, avg_hr=150, avg_pace_s_per_100m=85.0)
     result = session_load(
         workout, hr_max=190.0, hr_rest=50.0, sex="female", css_pace_s_per_100m=90.0
     )
-    assert result.tier == "srpe"
-    assert result.value == 420.0
+    assert result.tier == "hr_trimp"
+
+
+def test_session_load_pace_wins_over_srpe_when_no_hr():
+    workout = make_workout(rpe=7, duration_min=60.0, avg_pace_s_per_100m=85.0)
+    result = session_load(workout, css_pace_s_per_100m=90.0)
+    assert result.tier == "pace_if"
 
 
 # --- session_load: power-based TSS (bike, Build I) -----------------------------------
@@ -221,12 +226,11 @@ def test_session_load_srpe_used_when_rated_bike_has_no_ftp():
     assert result.value == 420.0
 
 
-def test_session_load_srpe_still_beats_hr_trimp_when_rated():
-    # Library 15/19: sRPE is the validated athlete-reported tier; nothing
-    # supports measured HR overriding it, so HR-TRIMP does not beat sRPE.
-    workout = make_workout(sport="bike", rpe=7, duration_min=60.0, avg_hr=140, distance_m=0)
+def test_session_load_srpe_used_when_nothing_measured():
+    workout = make_workout(sport="bike", rpe=7, duration_min=60.0, distance_m=0)
     result = session_load(workout, hr_max=180.0, hr_rest=50.0, sex="male")
     assert result.tier == "srpe"
+    assert result.value == 420.0
 
 
 def test_rpe_to_hrr_fraction_matches_arney_points_and_endpoints():

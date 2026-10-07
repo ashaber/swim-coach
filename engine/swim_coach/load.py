@@ -139,11 +139,9 @@ own HR-TRIMP + LTHR-normalization path already requires are ALSO met
 converted to an estimated %HRR fraction (Arney 2019 piecewise-linear
 interpolation, `RPE_TO_HRR_POINTS`) and run through the *exact
 same* already-cited Banister weighting + LTHR-normalization pipeline tier 2
-uses -- no new formula, only a new input feeding the existing one. Tier
-PRIORITY vs. HR is unchanged: sRPE still wins over measured HR whenever
-`workout.rpe` is set -- this refines tier 1's OUTPUT VALUE, not which
-tier fires first. (2026-10 update: power TSS now wins over sRPE on a
-bike ride with NP + FTP, since sRPE roughly halved real rides' load, and
+uses -- no new formula, only a new input feeding the existing one.
+(2026-10 update: measured signals -- power TSS, then HR-TRIMP, then swim
+pace -- now outrank sRPE, which only sets load when none exists; and
 the figures quoted next are from the original linear `rpe / 10` mapping,
 since replaced by the interpolation above.) Recomputing the 2026-08-30 ride through
 this refined path (real profile: `hr_max=190`, `hr_rest=52`,
@@ -737,30 +735,24 @@ def session_load(
     not "estimated from the next-best signal"). Always returns a real
     `SessionLoad`, never ``None`` -- the last tier is unconditional.
 
-    0. **Power-based TSS** is checked FIRST (documented as tier 2 below):
-       when `normalized_power_w` and a positive `ftp_watts` are both
-       available it wins even over a logged RPE (`test_session_load_power_
-       tss_wins_over_srpe_when_athlete_rated_it`). RPE stays stored and
-       displayed; only the load source changes.
-    1. **sRPE** (`duration_min * rpe`) when `workout.rpe` is set and power
-       TSS isn't reachable -- the original Foster session-RPE model,
-       highest fidelity of the remaining tiers because it's athlete-
-       reported. It still wins over measured HR (see `test_session_load_
-       srpe_wins_even_when_hr_and_pace_context_also_available`).
+    **Measured beats self-report (Andrew, 2026-10, "Option A").** Actual
+    order: power TSS, HR-TRIMP, swim pace-IF, then sRPE, then duration-only.
+    RPE stays stored and displayed (and is the internal-load signal for a
+    later internal-vs-external comparison), but sets the load only when no
+    measured signal exists. Rationale: Foster 2001 validates sRPE as a
+    correlate of / stand-in for HR-based load; it does not show a rating
+    should override a measurement. Replayed on real rides, sRPE-with-HR
+    overshot HR-TRIMP ~2x (RPE rates overall difficulty, but the mapping
+    applies it as the mean %HRR of every minute). Numbering below is
+    historical.
 
-       **Refinement (see `_srpe_via_hrr_normalization` and the module
-       docstring's third "orthogonal fix" paragraph):** when `hr_max`,
-       `hr_rest` (`hr_max > hr_rest`), and `lthr_bpm` are ALL also known --
-       the same four preconditions tier 2's own HR-TRIMP + LTHR-
-       normalization path already requires -- the sRPE OUTPUT VALUE (not
-       its priority) is refined from the raw `duration_min * rpe` onto
-       tier 2's own normalized scale, by estimating an HRR fraction from
-       the RPE (`_rpe_to_hrr_fraction`, Arney 2019 interpolation) and running it through the exact same
-       Banister-weighting + LTHR-normalization pipeline tier 2 uses. A
-       no-op (falls back to the unchanged `duration_min * rpe`) whenever
-       any one of those four preconditions is missing -- most profiles
-       have no `lthr_bpm` set, and get byte-identical output to before
-       this refinement existed.
+    1. **sRPE** (`duration_min * rpe`) when `workout.rpe` is set and no
+       measured tier (power, HR, swim pace) is reachable -- the original
+       Foster session-RPE model. When `hr_max`, `hr_rest` (`hr_max >
+       hr_rest`) and `lthr_bpm` are all known (but no avg HR, else tier 3
+       would have fired), the value is refined onto the normalized scale
+       via `_srpe_via_hrr_normalization` (RPE -> %HRR through
+       `RPE_TO_HRR_POINTS`); otherwise raw `duration_min * rpe`.
     2. **Power-based TSS** (bike, Build I -- see `BIKE_TSS_INTENSITY_
        EXPONENT`'s own citation comment above) when `workout.analytics.
        normalized_power_w` and a positive `ftp_watts` are both available.
@@ -818,16 +810,6 @@ def session_load(
         power_tss = duration_hours * (intensity_factor**BIKE_TSS_INTENSITY_EXPONENT) * 100.0
         return SessionLoad(value=power_tss, tier="power_tss")
 
-    if workout.rpe is not None:
-        if _has_lthr_context(hr_max, hr_rest, lthr_bpm):
-            return SessionLoad(
-                value=_srpe_via_hrr_normalization(
-                    workout, hr_max=hr_max, hr_rest=hr_rest, lthr_bpm=lthr_bpm, sex=sex
-                ),
-                tier="srpe",
-            )
-        return SessionLoad(value=workout.duration_min * workout.rpe, tier="srpe")
-
     if (
         workout.avg_hr is not None
         and hr_max is not None
@@ -856,6 +838,16 @@ def session_load(
         duration_hours = workout.duration_min / 60.0
         swim_tss = duration_hours * (intensity_factor**SWIM_TSS_INTENSITY_EXPONENT) * 100.0
         return SessionLoad(value=swim_tss, tier="pace_if")
+
+    if workout.rpe is not None:
+        if _has_lthr_context(hr_max, hr_rest, lthr_bpm):
+            return SessionLoad(
+                value=_srpe_via_hrr_normalization(
+                    workout, hr_max=hr_max, hr_rest=hr_rest, lthr_bpm=lthr_bpm, sex=sex
+                ),
+                tier="srpe",
+            )
+        return SessionLoad(value=workout.duration_min * workout.rpe, tier="srpe")
 
     if _has_lthr_context(hr_max, hr_rest, lthr_bpm):
         # Same normalized scale as the other tiers (100 = one hour at

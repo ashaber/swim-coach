@@ -11,11 +11,11 @@ cards:
   content_hash: 4ae29a923537c84e522b3b9022a5de0fb1b830bf997c6d87f70a73e784e973bf
 - section: the-four-tiers
   heading: The four tiers
-  summary: Load uses power TSS when a ride has power, else sRPE (HRR-normalized with LTHR), HR-based TRIMP,
-    swim pace intensity, then duration-only.
-  recommendation: Log RPE when you can; it drives load for sessions without power, and the engine estimates
-    from HR, pace, or duration if you skip it.
-  content_hash: 50424216e5644928ec361db175e51ffa2fd236abfd04d02faac34dcb08d3c4d9
+  summary: Load uses measured signals first -- power TSS, HR-based TRIMP, swim pace intensity -- then sRPE
+    (HRR-normalized with LTHR), then duration-only.
+  recommendation: Keep logging RPE; it stays on record and sets load only for sessions with no power, HR, or
+    pace data.
+  content_hash: decb23c27d95e1e04b11f11239c0d2b46db021f81b4aca443e95a55e155a3dc9
 - section: known-limitation-the-tiers-are-not-on-one-numeric-scale
   heading: 'Known limitation: the tiers are not on one numeric scale'
   summary: sRPE and HR-based TRIMP scores aren't directly comparable -- TRIMP typically scores a third
