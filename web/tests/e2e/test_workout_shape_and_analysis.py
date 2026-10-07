@@ -5,6 +5,7 @@ Same mocked-backend conventions as test_workout_detail.py: no real backend, ever
 
 import json
 import re
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -23,7 +24,14 @@ CORS_HEADERS = {
 FIXTURE = json.loads(
     (Path(__file__).resolve().parents[3] / 'tests' / 'fixtures' / 'ride_2026_09_29_vo2_40_20.json').read_text()
 )
-SESSION = {**FIXTURE['planned_session'], 'title': '3x6 VO2 40/20', 'target_load_au': 90}
+# The Plan tab only shows the current/next week expanded (older weeks collapse into "past weeks"), so the
+# planned session must sit in the week the test actually runs in, not the fixture ride's own 2026-W40.
+_TODAY = date.today()
+_ISO_YEAR, _ISO_WEEK, _ = _TODAY.isocalendar()
+_SESSION_DATE = _TODAY - timedelta(days=_TODAY.weekday()) + timedelta(days=1)
+SESSION = {
+    **FIXTURE['planned_session'], 'date': _SESSION_DATE.isoformat(), 'title': '3x6 VO2 40/20', 'target_load_au': 90,
+}
 SESSION_ID = SESSION['id']
 
 PLAN = {
@@ -33,7 +41,7 @@ PLAN = {
     'events': [],
     'macro': {'blocks': []},
     'weeks': [{
-        'iso_week': '2026-W40', 'meso_block': 'build', 'focus': 'VO2', 'target_volume_m': 0,
+        'iso_week': f'{_ISO_YEAR}-W{_ISO_WEEK:02d}', 'meso_block': 'build', 'focus': 'VO2', 'target_volume_m': 0,
         'sessions': [SESSION],
     }],
 }
