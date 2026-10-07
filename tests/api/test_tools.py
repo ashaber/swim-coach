@@ -7345,16 +7345,22 @@ def _simple_macro_weeks(start: date, n: int = 3) -> list[dict]:
     ]
 
 
-def test_author_macro_plan_draft_labels_an_hours_only_week_with_an_estimated_load(athletes_dir) -> None:
+def test_author_macro_plan_draft_labels_an_hours_only_week_with_an_estimated_load(
+    athletes_dir, monkeypatch
+) -> None:
     # engine/red-team-taper-gate, real production fix: a week with `hours`
     # set but no `load_tss` used to be silently projected as ZERO load.
     # The draft response now fills a `load_tss_estimate` (from the
     # athlete's own recent logged history) so the athlete sees a real
     # number -- `load_tss` itself stays exactly what the coach authored
     # (None here), never silently overwritten.
+    # The estimate reads a trailing window back from "today"; pin today to
+    # just after renee's one fixture workout (2026-07-06) so the test
+    # doesn't start failing once the wall clock leaves that window.
+    start = date(2026, 7, 6)
+    monkeypatch.setattr("app.tools.athlete_today", lambda athlete: start + timedelta(days=1))
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    start = date(2026, 7, 6)
     weeks = _simple_macro_weeks(start)
     weeks[0]["load_tss"] = None  # hours-only: no load_tss authored for this week
 
