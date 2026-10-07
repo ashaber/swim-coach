@@ -33,7 +33,7 @@ def test_flags_prose_only_bike_session_as_advisory() -> None:
     athlete = _athlete()
     bike = _session(athlete, "bike", date(2026, 10, 6))
     report = check_week(_week(athlete, [bike]), None, athlete, recent_weeks=[])
-    finding = next(f for f in report.findings if f.id == "no-structured-workout-2026-10-06-bike")
+    finding = next(f for f in report.findings if f.id == "no-structured-workout")
     assert "2026-10-06" in finding.evidence
     assert "structured" in finding.fix
     assert not finding.id.startswith("confirm-")

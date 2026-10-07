@@ -1290,11 +1290,45 @@ def check_week(
             )
 
     findings.extend(_check_week_volume_confirmation(week, recent_weeks))
+    findings.extend(_check_prose_only_pushable(week))
     for session in week.sessions:
         findings.extend(_check_warmup_and_primer(session, athlete))
 
     findings = _rank_and_cap(findings)
     return PlanCheckReport(verdict=_verdict_from_findings(findings), findings=findings)
+
+
+# Sports whose structured workout can be pushed to Garmin. Mirrors `canPushToGarmin` in
+# web/src/sports.js (swim/strength pushes corrupt the FIT data, 2026-09-12, so only bike is on).
+# Keep the two in step.
+GARMIN_PUSHABLE_SPORTS = frozenset({"bike"})
+
+
+def prose_only_pushable_sessions(sessions: list[Session]) -> list[Session]:
+    """Sessions of a Garmin-pushable sport that carry prose `structure` but no `structured` workout."""
+    return [
+        s for s in sessions
+        if s.sport in GARMIN_PUSHABLE_SPORTS and s.structured is None and (s.structure or "").strip()
+    ]
+
+
+def _check_prose_only_pushable(week: WeekPlan) -> list[PlanCheckFinding]:
+    gaps = prose_only_pushable_sessions(week.sessions)
+    if not gaps:
+        return []
+    listed = ", ".join(f"{s.date.isoformat()} {s.sport} ({s.id})" for s in gaps)
+    return [
+        PlanCheckFinding(
+            id="no-structured-workout",
+            severity="medium",
+            evidence=f"{len(gaps)} session(s) have workout text but no structured workout: {listed}.",
+            consequence=(
+                "No structured workout: it can't be pushed to Garmin and the analyzer can't match the "
+                "ride's reps to the prescription."
+            ),
+            fix="Author `structured` (the step tree) alongside `structure` for each, via patch_week_plan session_overrides.",
+        )
+    ]
 
 
 def _check_week_volume_confirmation(
