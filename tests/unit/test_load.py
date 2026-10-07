@@ -19,6 +19,7 @@ from swim_coach.load import (
     BIKE_TSS_INTENSITY_EXPONENT,
     CTL_TIME_CONSTANT_DAYS,
     DURATION_ONLY_ASSUMED_INTENSITY,
+    _rpe_to_hrr_fraction,
     HR_REST_GENERIC_FALLBACK_BPM,
     SWIM_TSS_INTENSITY_EXPONENT,
     TRIMP_FEMALE_COEFFICIENT,
@@ -194,11 +195,10 @@ def test_session_load_power_tss_wins_over_hr_trimp_when_both_available():
     assert result.value == pytest.approx(64.0)
 
 
-def test_session_load_srpe_still_wins_over_power_tss_when_athlete_rated_it():
-    # sRPE stays highest-priority, unchanged -- once the athlete actually
-    # rates a session, that stays authoritative even with NP + ftp_watts
-    # both available (mirrors test_session_load_srpe_wins_even_when_hr_
-    # and_pace_context_also_available above).
+def test_session_load_power_tss_wins_over_srpe_when_athlete_rated_it():
+    # Measured power beats self-report for LOAD (RPE stays stored/displayed).
+    # Real 2026-10 prod data: RPE 5 on a 124-min NP 200 / FTP 276 ride scored
+    # ~50 by sRPE vs ~109 by power TSS.
     workout = make_workout(
         sport="bike",
         rpe=7,
@@ -207,8 +207,53 @@ def test_session_load_srpe_still_wins_over_power_tss_when_athlete_rated_it():
         analytics=WorkoutAnalytics(normalized_power_w=200.0),
     )
     result = session_load(workout, ftp_watts=250.0)
+    assert result.tier == "power_tss"
+    assert result.value == pytest.approx(64.0)
+
+
+def test_session_load_srpe_used_when_rated_bike_has_no_ftp():
+    workout = make_workout(
+        sport="bike", rpe=7, duration_min=60.0, distance_m=0,
+        analytics=WorkoutAnalytics(normalized_power_w=200.0),
+    )
+    result = session_load(workout)
     assert result.tier == "srpe"
     assert result.value == 420.0
+
+
+def test_session_load_srpe_still_beats_hr_trimp_when_rated():
+    # Library 15/19: sRPE is the validated athlete-reported tier; nothing
+    # supports measured HR overriding it, so HR-TRIMP does not beat sRPE.
+    workout = make_workout(sport="bike", rpe=7, duration_min=60.0, avg_hr=140, distance_m=0)
+    result = session_load(workout, hr_max=180.0, hr_rest=50.0, sex="male")
+    assert result.tier == "srpe"
+
+
+def test_rpe_to_hrr_fraction_matches_arney_points_and_endpoints():
+    from swim_coach.load import _rpe_to_hrr_fraction
+
+    assert _rpe_to_hrr_fraction(0) == pytest.approx(0.0)
+    assert _rpe_to_hrr_fraction(3.1) == pytest.approx(0.638)
+    assert _rpe_to_hrr_fraction(6.5) == pytest.approx(0.900)
+    assert _rpe_to_hrr_fraction(8.9) == pytest.approx(0.974)
+    assert _rpe_to_hrr_fraction(10) == pytest.approx(1.0)
+    # interpolation: monotonic and well above the old linear rpe/10 mid-range
+    assert _rpe_to_hrr_fraction(5) > 0.5
+    assert _rpe_to_hrr_fraction(4) < _rpe_to_hrr_fraction(5) < _rpe_to_hrr_fraction(6)
+
+
+def test_session_load_duration_only_normalized_when_lthr_context_present():
+    # 20-min unrated no-signal session: raw 5 AU/min scored 100 (= one hour at
+    # threshold) -- must land on the normalized scale, well under 100.
+    workout = make_workout(
+        rpe=None, duration_min=20.0, avg_hr=None, avg_pace_s_per_100m=None,
+        sport="bike", distance_m=0,
+    )
+    raw = session_load(workout)
+    assert raw.value == pytest.approx(100.0)
+    normalized = session_load(workout, hr_max=182.0, hr_rest=50.0, lthr_bpm=172.0)
+    assert normalized.tier == "duration"
+    assert 0 < normalized.value < 50.0
 
 
 def test_session_load_power_tss_requires_ftp_watts():
@@ -602,12 +647,13 @@ def test_daily_loads_threads_lthr_bpm_from_athlete():
 
 
 def test_session_load_srpe_with_full_hr_context_uses_hrr_normalized_value():
-    # RPE=7 estimates HRR_fraction=0.7 (rpe/10.0), run through the exact
+    # RPE=7 estimates HRR_fraction via the Arney-2019 piecewise-linear
+    # mapping (`_rpe_to_hrr_fraction`), run through the exact
     # same Banister-weighting + LTHR-normalization pipeline tier 2 uses --
     # NOT simply duration_min * rpe any more. tier stays "srpe".
     workout = make_workout(rpe=7, duration_min=60.0)
     result = session_load(workout, hr_max=190.0, hr_rest=50.0, sex="female", lthr_bpm=165.0)
-    hrr_fraction = 7 / 10.0
+    hrr_fraction = _rpe_to_hrr_fraction(7)
     weight = TRIMP_FEMALE_COEFFICIENT * math.exp(TRIMP_FEMALE_EXPONENT * hrr_fraction)
     raw = 60.0 * hrr_fraction * weight
     lthr_fraction = (165.0 - 50.0) / (190.0 - 50.0)
@@ -617,7 +663,7 @@ def test_session_load_srpe_with_full_hr_context_uses_hrr_normalized_value():
     assert result.tier == "srpe"
     assert result.value != pytest.approx(60.0 * 7)  # not the old duration*rpe value
     assert result.value == pytest.approx(expected)
-    assert result.value == pytest.approx(69.576, abs=0.01)
+    assert result.value == pytest.approx(130.381, abs=0.01)
 
 
 def test_session_load_srpe_falls_back_to_duration_times_rpe_when_lthr_bpm_missing():
@@ -661,7 +707,12 @@ def test_session_load_srpe_real_mtb_ride_regression_closes_scale_gap():
     # hr_rest=52, lthr_bpm=172, sex unset (None, same convention as this
     # module's other "Andrew's own numbers" tests above).
     #
-    # New path: HRR_fraction = 5/10.0 = 0.5, run through the same
+    # (Superseded numbers below: the original linear rpe/10 mapping gave
+    # 78.468 AU, ~2x UNDER TrainingPeaks' 155. With the Arney-2019
+    # interpolated mapping the same ride is ~204.6 AU, ~1.3x over TP's 155
+    # and ~1.7x the 121.9 AU HR-TRIMP figure -- no longer systematically low.)
+    #
+    # Original path: HRR_fraction = 5/10.0 = 0.5, run through the same
     # Banister-weighting + LTHR-normalization tier 2 already uses. Hand-
     # computed (and confirmed via the module's own formula): raw HRR-based
     # TRIMP = 144.775, normalized to the LTHR-hour=100 scale = 78.468 AU --
@@ -680,8 +731,8 @@ def test_session_load_srpe_real_mtb_ride_regression_closes_scale_gap():
     result = session_load(workout, hr_max=190.0, hr_rest=52.0, sex=None, lthr_bpm=172.0)
     old_raw_srpe = 158.5 * 5
     assert result.tier == "srpe"
-    assert result.value == pytest.approx(78.468, abs=0.01)
-    assert result.value < old_raw_srpe / 5  # meaningfully lower, not a token reduction
+    assert result.value == pytest.approx(204.617, abs=0.01)
+    assert result.value < old_raw_srpe / 3  # meaningfully lower, not a token reduction
 
     # Tier-2 equivalent for the SAME ride, using its own real avg_hr=138
     # instead of the RPE estimate -- confirms the RPE-based estimate lands
@@ -693,7 +744,7 @@ def test_session_load_srpe_real_mtb_ride_regression_closes_scale_gap():
     )
     assert hr_equivalent.tier == "hr_trimp"
     ratio = hr_equivalent.value / result.value
-    assert 1.0 < ratio < 3.0  # same order of magnitude, not the old ~10x gap
+    assert 0.3 < ratio < 3.0  # same order of magnitude, not the old ~10x gap
 
 
 # --- session_load: tier 3 (swim pace-based intensity) -------------------------------

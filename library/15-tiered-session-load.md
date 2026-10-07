@@ -46,18 +46,26 @@ TSS of **155**; **2026-08-29** (no RPE) scored **78.6 AU** after
 LTHR-normalization vs. TrainingPeaks' TSS of **85** -- ~1.8x apart on
 TrainingPeaks, but **~10x apart** in this engine.
 
+**Power outranks sRPE (2026-10):** a bike ride with `normalized_power_w` and
+a positive `ftp_watts` is scored by power TSS even when the athlete rated
+it (RPE is still stored and shown; only the load source changes). Real prod
+rides: RPE-based sRPE gave 30-50 where power TSS gave 90-109. HR-TRIMP does
+NOT outrank sRPE: nothing in this library supports measured HR beating a
+validated athlete-reported rating (HR drifts with heat, caffeine, fatigue),
+so that order is unchanged.
+
 **The fix:** when `workout.rpe` is set AND tier 2's own four preconditions
 are also met (`hr_max`, `hr_rest` with `hr_max > hr_rest`, `lthr_bpm`), the
-RPE converts to an estimated %HRR fraction (`rpe / 10.0` -- CR-10's own
-endpoints: 0 = "Rest / Nothing at all" ~0% HRR, 10 = "Maximal / Exhausting"
-~100% HRR, per `19-srpe-protocol.md`) and runs through the *exact same*
+RPE converts to an estimated %HRR fraction (piecewise-linear, see the
+Arney block below; CR-10's own endpoints 0 = "Rest / Nothing at all" ~0%
+HRR, 10 = "Maximal / Exhausting" ~100% HRR, per `19-srpe-protocol.md`) and runs through the *exact same*
 Banister weighting + LTHR-normalization pipeline tier 2 already uses -- no
 new formula. **Tier priority is unchanged**: sRPE still wins over measured
 HR whenever logged; only the output value changes. Missing any one
 precondition (most profiles have no `lthr_bpm` yet) falls back to
 byte-identical `duration_min * rpe`.
 
-**Coach judgment / PROVISIONAL** -- `rpe / 10.0` is not a fitted
+**Coach judgment / PROVISIONAL** -- the mapping is not a fitted
 regression. **✓ Verified by direct fetch this session** (full primary text
 obtained): **Arney et al. (2019)**, "Comparison of Rating of Perceived
 Exertion Scales During Incremental and Interval Exercise," *Kinesiology*,
@@ -69,13 +77,16 @@ regression equation is published (its own quadratic equations interconvert
 BORG-RPE 6-20 and BORG-CR10 against each other, not either scale against
 %HRR) -- a least-squares line through those three points extrapolates to a
 nonsensical ~47% %HRR at CR-10=0 (they only span moderate-to-hard
-efforts), confirming `rpe / 10.0`'s honest simplicity over fabricating
-precision the source doesn't support. **[ADAPTED: general-endurance]
-Confidence: low-medium.** **Test:** once this athlete has enough
+efforts), so the engine instead INTERPOLATES piecewise-linearly through the
+endpoints (0, 0.0), (10, 1.0) and those three measured points
+(`RPE_TO_HRR_POINTS`). This replaced an earlier linear `rpe / 10.0`, which
+undercounted (CR-10 3.1 -> 31% vs. measured 63.8%; 6.5 -> 65% vs. 90.0%).
+**[ADAPTED: general-endurance] Confidence: low-medium.** **Test:** once this athlete has enough
 dual-logged (RPE + real HR) workouts, fit a personal RPE-to-%HRR
 relationship instead.
 
-Recomputing 2026-08-30 through this refined path (`hr_max=190`,
+(Figures below are from the original linear mapping; with the
+interpolated mapping that ride is ~204.6 AU.) Recomputing 2026-08-30 through this refined path (`hr_max=190`,
 `hr_rest=52`, `lthr_bpm=172`) gives **~78.5 AU** -- close to 8/29's 78.6 AU
 (a coincidental convergence, not a general claim). Recomputing that same
 ride through tier 2 instead (real `avg_hr=138`) gives **~121.9 AU** -- a
@@ -264,7 +275,10 @@ from a load total for lack of one specific signal. Replaces the old
 `assume_default_rpe`/`DEFAULT_RPE_WHEN_MISSING` opt-in escape hatch
 (removed as dead code): that let a caller *choose* to fake an RPE for
 coverage; this fires automatically, only after every richer signal above
-has already failed.
+has already failed. When `hr_max`/`hr_rest`/`lthr_bpm` are all known, the
+assumed RPE 5 is normalized through the same pipeline as sRPE (raw 5 AU/min
+scored 20 minutes as 100, i.e. "one hour at threshold"); with no such
+context it stays raw `duration_min * 5`.
 
 ## Known limitation: the tiers are not on one numeric scale
 
