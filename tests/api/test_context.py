@@ -906,9 +906,9 @@ def test_summarize_rollup_ctl_atl_tsb_uses_full_history_but_windows_output(app_e
     as_of = date(2026, 7, 6)  # Monday
     workouts = [
         # Well before the 1-week window -- exists only to warm up CTL/ATL.
-        make_workout(date=as_of - timedelta(days=100), rpe=6, duration_min=60.0),
+        make_workout(date=as_of - timedelta(days=100), rpe=6, duration_min=60.0, avg_pace_s_per_100m=None),
         # Inside the window.
-        make_workout(date=as_of + timedelta(days=1), rpe=7, duration_min=45.0),
+        make_workout(date=as_of + timedelta(days=1), rpe=7, duration_min=45.0, avg_pace_s_per_100m=None),
     ]
     for w in workouts:
         store.save_workout("renee", w)

@@ -1,4 +1,4 @@
-# Tiered session load: sRPE > HR-based TRIMP > swim pace-IF > duration-only
+# Tiered session load: power TSS > HR-based TRIMP > swim pace-IF > sRPE > duration-only
 
 Grounds `engine/swim_coach/load.py`'s `session_load`/`daily_loads` tiered
 fallback (moved out of `03-periodization.md`'s "Load monitoring" section).
@@ -46,36 +46,28 @@ TSS of **155**; **2026-08-29** (no RPE) scored **78.6 AU** after
 LTHR-normalization vs. TrainingPeaks' TSS of **85** -- ~1.8x apart on
 TrainingPeaks, but **~10x apart** in this engine.
 
+**Measured beats self-report (2026-10):** order is power TSS, HR-TRIMP, swim
+pace, then sRPE, then duration-only. **Coach judgment**: Foster 2001 validates
+sRPE as a correlate/stand-in for HR-based load, not as an override of a
+measurement. Replayed rides: sRPE overshot HR-TRIMP ~2x (RPE rates overall
+difficulty, not each minute's %HRR) and undercounted power rides. RPE stays
+stored/shown.
+
 **The fix:** when `workout.rpe` is set AND tier 2's own four preconditions
 are also met (`hr_max`, `hr_rest` with `hr_max > hr_rest`, `lthr_bpm`), the
-RPE converts to an estimated %HRR fraction (`rpe / 10.0` -- CR-10's own
-endpoints: 0 = "Rest / Nothing at all" ~0% HRR, 10 = "Maximal / Exhausting"
-~100% HRR, per `19-srpe-protocol.md`) and runs through the *exact same*
+RPE converts to an estimated %HRR fraction (piecewise-linear, see the
+Arney block below; CR-10's own endpoints 0 = "Rest / Nothing at all" ~0%
+HRR, 10 = "Maximal / Exhausting" ~100% HRR, per `19-srpe-protocol.md`) and runs through the *exact same*
 Banister weighting + LTHR-normalization pipeline tier 2 already uses -- no
-new formula. **Tier priority is unchanged**: sRPE still wins over measured
-HR whenever logged; only the output value changes. Missing any one
+new formula. This path is reached only when
+no avg HR/power/pace exists. Missing any one
 precondition (most profiles have no `lthr_bpm` yet) falls back to
 byte-identical `duration_min * rpe`.
 
-**Coach judgment / PROVISIONAL** -- `rpe / 10.0` is not a fitted
-regression. **✓ Verified by direct fetch this session** (full primary text
-obtained): **Arney et al. (2019)**, "Comparison of Rating of Perceived
-Exertion Scales During Incremental and Interval Exercise," *Kinesiology*,
-51(2):150-157 (full author list in `reference_list.md`) -- corroborates a
-strong, roughly-linear CR-10-vs-%HRR relationship ("very large"
-correlations: r=.87 incremental, r=.84 interval), with a real (CR-10,
-%HRR) table: (3.1, 63.8%), (6.5, 90.0%), (8.9, 97.4%). No full-range
-regression equation is published (its own quadratic equations interconvert
-BORG-RPE 6-20 and BORG-CR10 against each other, not either scale against
-%HRR) -- a least-squares line through those three points extrapolates to a
-nonsensical ~47% %HRR at CR-10=0 (they only span moderate-to-hard
-efforts), confirming `rpe / 10.0`'s honest simplicity over fabricating
-precision the source doesn't support. **[ADAPTED: general-endurance]
-Confidence: low-medium.** **Test:** once this athlete has enough
-dual-logged (RPE + real HR) workouts, fit a personal RPE-to-%HRR
-relationship instead.
+**Coach judgment / PROVISIONAL** -- RPE-to-%HRR is piecewise-linear interpolation through
+measured points (Arney 2019, cited in `19-srpe-protocol.md`), replacing a linear `rpe / 10.0`.
 
-Recomputing 2026-08-30 through this refined path (`hr_max=190`,
+(Original linear mapping; ~204.6 AU with interpolation.) Recomputing 2026-08-30 through this refined path (`hr_max=190`,
 `hr_rest=52`, `lthr_bpm=172`) gives **~78.5 AU** -- close to 8/29's 78.6 AU
 (a coincidental convergence, not a general claim). Recomputing that same
 ride through tier 2 instead (real `avg_hr=138`) gives **~121.9 AU** -- a
@@ -264,7 +256,10 @@ from a load total for lack of one specific signal. Replaces the old
 `assume_default_rpe`/`DEFAULT_RPE_WHEN_MISSING` opt-in escape hatch
 (removed as dead code): that let a caller *choose* to fake an RPE for
 coverage; this fires automatically, only after every richer signal above
-has already failed.
+has already failed. When `hr_max`/`hr_rest`/`lthr_bpm` are all known, the
+assumed RPE 5 is normalized through the same pipeline as sRPE (raw 5 AU/min
+scored 20 minutes as 100, i.e. "one hour at threshold"); with no such
+context it stays raw `duration_min * 5`.
 
 ## Known limitation: the tiers are not on one numeric scale
 

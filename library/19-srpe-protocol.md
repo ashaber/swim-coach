@@ -106,6 +106,20 @@ implementation detail of the reminder mechanism, not a claim requiring its
 own falsifiable test -- the underlying CR-10 instrument's validity (the
 paragraph above) is the part that carries a citation.
 
+## Mapping RPE to %HRR
+
+`[ADAPTED: general-endurance]` **Arney B.E., Glover R., Fusco A., Cortis C.,
+de Koning J.J., van Erp T., Jaime S., Mikat R.P., Porcari J.P., Foster C.
+(2019)**, "Comparison of Rating of Perceived Exertion Scales During
+Incremental and Interval Exercise," *Kinesiology*, 51(2):150-157, Table 2
+(cycle ergometer): CR-10 3.1 at 63.8% HRR, 6.5 at 90.0%, 8.9 at 97.4%. No
+full-range equation is published, so the engine interpolates piecewise-
+linearly through those points plus CR-10's own endpoints (0 -> 0%, 10 ->
+100%) rather than fitting a line (which extrapolates to ~47% at RPE 0).
+Confidence: low-medium (cycling subjects, aggregate points).
+Test: with enough dual-logged RPE + HR workouts, fit a personal
+RPE-to-%HRR curve and compare.
+
 ## What this file does not cover
 
 This file documents the survey instrument only -- the scale, anchors,
