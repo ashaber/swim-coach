@@ -251,7 +251,7 @@ from swim_coach.models import (
     WorkoutStructure,
 )
 from swim_coach.ow_session_templates import build_ow_session
-from swim_coach.plan_check import check_macro, check_week
+from swim_coach.plan_check import check_macro, check_week, prose_only_pushable_sessions
 from swim_coach.plan import (
     MIN_MACRO_WEEKS,
     SESSION_ADJUSTMENT_INCREASE_CAP_PCT,
@@ -5876,10 +5876,28 @@ def _safe_realism(sessions: Any, **kwargs: Any) -> list[str]:
     """`evaluate_week_realism`, degrading to a visible warning if it ever crashes: the realism check is
     ADVICE about a plan, so a bug in it must not stop the plan being drafted or written."""
     try:
-        return evaluate_week_realism(sessions, **kwargs)
+        warnings = evaluate_week_realism(sessions, **kwargs)
     except Exception:  # noqa: BLE001
         log.error("optional step failed", step="realism check", exc_info=True)
-        return [_REALISM_UNAVAILABLE]
+        warnings = [_REALISM_UNAVAILABLE]
+    return [*warnings, *_structured_gap_warnings(sessions)]
+
+
+def _structured_gap_warnings(sessions: Any) -> list[str]:
+    """Advisory, same finding `check_week` raises: Garmin-pushable sessions with prose but no `structured`
+    workout can't be pushed and the analyzer can't match their reps. Never blocks the write."""
+    try:
+        gaps = prose_only_pushable_sessions(list(sessions))
+    except Exception:  # noqa: BLE001
+        log.error("optional step failed", step="structured gap check", exc_info=True)
+        return []
+    if not gaps:
+        return []
+    listed = ", ".join(f"{s.date.isoformat()} {s.sport} ({s.id})" for s in gaps)
+    return [
+        f"{len(gaps)} session(s) have no structured workout -- can't be pushed to Garmin and the analyzer "
+        f"can't match reps; author `structured` for: {listed}."
+    ]
 
 
 def _generate_week_tolerant(
@@ -6520,6 +6538,12 @@ def _apply_session_overrides(
         if structure is not None:
             session.structure = structure
             if structured is None:
+                if session.structured is not None:
+                    notes.append(
+                        f"{raw_date} {session.sport}: `structure` was written without `structured`, so the "
+                        "session's existing structured workout was CLEARED (no Garmin push, no rep matching). "
+                        "Pass the matching `structured` step tree in the same override to keep it."
+                    )
                 # The session's structured IR (if any) was built by the
                 # template pipeline for the OLD content -- leaving it in
                 # place would mean the UI's tree-walk rendering and Garmin
