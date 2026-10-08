@@ -666,7 +666,8 @@ def test_ride_baseline_altitude_m_none_without_enough_data():
 
 def test_altitude_context_silent_below_flag_threshold():
     # Effort sits ~600m above baseline -- below ALTITUDE_FLAG_THRESHOLD_M
-    # (1000m) -- so no context note, even though the raw numbers are filled in.
+    # (1000m) but above ALTITUDE_NOTE_THRESHOLD_M (500m) -- so a note-only
+    # context (targets explicitly not adjusted) rather than none.
     s = _steady_effort_series_with_altitude(
         power=240, seconds=720, altitude=1400.0, baseline=800.0
     )
@@ -674,7 +675,8 @@ def test_altitude_context_silent_below_flag_threshold():
     e = block.efforts[0]
     assert e.altitude_m == pytest.approx(1400.0, abs=1)
     assert e.altitude_gain_m == pytest.approx(600.0, abs=1)
-    assert e.altitude_context is None
+    assert "not adjusted" in e.altitude_context
+    assert e.altitude_adjusted_target_w is None
 
 
 def test_altitude_context_flags_and_estimates_decrement_above_threshold():
@@ -828,8 +830,8 @@ def test_altitude_adjusted_target_none_when_flag_does_not_fire():
     )
     block = ia.analyze(s, sport="bike", target_w=260.0, home_elevation_m=800.0)
     e = block.efforts[0]
-    assert e.altitude_context is None
-    assert e.altitude_decrement_pct is None
+    assert "not adjusted" in e.altitude_context  # 600 m: note band, not the adjust band
+    assert e.altitude_decrement_pct == pytest.approx(3.6, abs=0.05)
     assert e.altitude_adjusted_target_w is None
     assert e.cleared_altitude_adjusted_target is None
 
@@ -845,4 +847,5 @@ def test_sept12_ride_with_home_elevation_near_baseline_still_no_flag():
     )
     block = ia.analyze(s, sport="bike", target_w=309.1, home_elevation_m=823.0)
     assert block.baseline_altitude_source == "home_elevation"
-    assert block.efforts[0].altitude_context is None
+    assert "not adjusted" in block.efforts[0].altitude_context
+    assert block.efforts[0].altitude_adjusted_target_w is None

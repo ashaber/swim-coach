@@ -1426,7 +1426,12 @@ def _build_interval_effort(
     )
     altitude_adjusted_target_w = None
     cleared_altitude_adjusted_target = None
-    if altitude_decrement_pct is not None and eff_target is not None:
+    if (
+        altitude_decrement_pct is not None
+        and eff_target is not None
+        and altitude_gain_m is not None
+        and altitude_gain_m >= ALTITUDE_FLAG_THRESHOLD_M
+    ):
         altitude_adjusted_target_w = round(eff_target * (1 - altitude_decrement_pct / 100), 1)
         if q.avg_w is not None:
             cleared_altitude_adjusted_target = q.avg_w >= altitude_adjusted_target_w
