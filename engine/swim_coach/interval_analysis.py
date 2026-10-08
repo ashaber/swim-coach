@@ -75,6 +75,7 @@ from swim_coach.models import (
     WorkoutStructure,
 )
 
+from swim_coach.zones import bike_zone_table
 from swim_coach.prescription import (
     Located,
     PrescribedRep,
@@ -287,6 +288,12 @@ ALL_INTERVAL_MIN_EFFORTS = 3
 # requires three or more distinct dynamic efforts before it will null the
 # decoupling read. library/26-activity-stream-interval-analysis.md.
 
+ALL_INTERVAL_EXEMPT_PLANNED_ZONES = frozenset({"Z1", "Z2"})
+# Coach judgment: when the matched planned session is Z1/Z2 endurance, the
+# plan itself says there is no interval content, so the ride is never
+# "all-interval" -- cardiac drift / decoupling is exactly the right metric
+# for it. Zone names are the Coggan Z1/Z2 of library/23-cycling-training.md.
+
 OVER_UNDER_MIN_CYCLES = 3
 # Coach judgment: an over/under set is "roughly regular" alternation -- at
 # least three OVER segments (`library/24` describes 2-4 over/under blocks
@@ -352,6 +359,17 @@ ALTITUDE_FLAG_THRESHOLD_M = 1000.0
 # convergence zone, deliberately on the conservative side -- same "flag
 # real signal, don't cry wolf" posture as `GRADE_DROP_FLAG`. No source
 # pins this exact number. library/30-altitude-power-adjustment.md.
+
+ALTITUDE_NOTE_THRESHOLD_M = 500.0
+# Coach judgment: gain above baseline at which a ride/effort gets an
+# informational altitude NOTE (actual altitude, difference from baseline,
+# expected power decrement) with targets explicitly NOT adjusted. Distinct
+# from `ALTITUDE_FLAG_THRESHOLD_M` (1000 m), where the elevation-adjusted
+# target comparison applies. library/30-altitude-power-adjustment.md
+# documents the ~6%/1000 m rate and measurable decrements in the 1000-2000 m
+# absolute band; half the adjust threshold is where the estimate is worth
+# stating. No source pins this exact number.
+# library/30-altitude-power-adjustment.md.
 
 ALTITUDE_POWER_DECREMENT_PCT_PER_1000M = 6.0
 # [EVIDENCE: cycling] Confidence: high (population/modality match). Garvican-
@@ -789,7 +807,7 @@ def _effort_altitude_context(
     if altitude_m is None:
         return None, None, None, None
     gain_m = altitude_m - baseline_m
-    if gain_m < ALTITUDE_FLAG_THRESHOLD_M:
+    if gain_m < ALTITUDE_NOTE_THRESHOLD_M:
         return round(altitude_m, 1), round(gain_m, 1), None, None
 
     decrement_pct = gain_m / 1000.0 * ALTITUDE_POWER_DECREMENT_PCT_PER_1000M
@@ -797,6 +815,16 @@ def _effort_altitude_context(
     altitude_ft = altitude_m * 3.28084
     baseline_ft = baseline_m * 3.28084
     baseline_label = "home elevation" if baseline_source == "home_elevation" else "this ride's baseline"
+    if gain_m < ALTITUDE_FLAG_THRESHOLD_M:
+        note = (
+            f"~{altitude_m:.0f}m/~{altitude_ft:.0f}ft, "
+            f"~{gain_m:.0f}m/~{gain_ft:.0f}ft above {baseline_label} "
+            f"(~{baseline_m:.0f}m/~{baseline_ft:.0f}ft) -- expect roughly "
+            f"{decrement_pct:.1f}% less sustainable power than at baseline. "
+            f"Targets not adjusted (adjusts at +{ALTITUDE_FLAG_THRESHOLD_M:.0f} m) "
+            f"(library/30-altitude-power-adjustment.md)"
+        )
+        return round(altitude_m, 1), round(gain_m, 1), round(decrement_pct, 2), note
     note = (
         f"climbed to ~{altitude_m:.0f}m/~{altitude_ft:.0f}ft, "
         f"~{gain_m:.0f}m/~{gain_ft:.0f}ft above {baseline_label} "
@@ -805,6 +833,46 @@ def _effort_altitude_context(
         f"(library/30-altitude-power-adjustment.md)"
     )
     return round(altitude_m, 1), round(gain_m, 1), round(decrement_pct, 2), note
+
+
+def _ride_altitude_summary(
+    series: dict, baseline_m: float | None, baseline_source: str | None
+) -> dict:
+    """Ride-level altitude fields for `WorkoutIntervals`: mean altitude over
+    working samples (power above `COASTING_FLOOR_W`; every sample when the
+    ride has no power channel), its gain over `baseline_m`, and -- from
+    `ALTITUDE_NOTE_THRESHOLD_M` up -- the expected decrement plus a note
+    saying whether targets are adjusted (only from `ALTITUDE_FLAG_THRESHOLD_M`
+    up, matching `_build_interval_effort`). Empty dict when there is no
+    altitude channel or baseline. `library/30-altitude-power-adjustment.md`."""
+    altitude = series.get("altitude_m")
+    if not altitude or baseline_m is None:
+        return {}
+    power = series.get("power_w")
+    if power and any(p is not None for p in power):
+        vals = [a for a, p in zip(altitude, power) if a is not None and p is not None and p > COASTING_FLOOR_W]
+    else:
+        vals = [a for a in altitude if a is not None]
+    mean_alt = _mean(vals)
+    if mean_alt is None:
+        return {}
+    gain = mean_alt - baseline_m
+    out: dict = {"ride_altitude_m": round(mean_alt, 1), "ride_altitude_gain_m": round(gain, 1)}
+    if gain < ALTITUDE_NOTE_THRESHOLD_M:
+        return out
+    decrement = gain / 1000.0 * ALTITUDE_POWER_DECREMENT_PCT_PER_1000M
+    label = "home" if baseline_source == "home_elevation" else "this ride's low point"
+    adjusted = (
+        f"Targets adjusted (adjusts at +{ALTITUDE_FLAG_THRESHOLD_M:.0f} m)."
+        if gain >= ALTITUDE_FLAG_THRESHOLD_M
+        else f"Targets not adjusted (adjusts at +{ALTITUDE_FLAG_THRESHOLD_M:.0f} m)."
+    )
+    out["ride_altitude_decrement_pct"] = round(decrement, 2)
+    out["ride_altitude_note"] = (
+        f"Rode at ~{mean_alt:.0f} m (~{mean_alt * 3.28084:,.0f} ft), ~{gain:.0f} m above {label} "
+        f"({baseline_m:.0f} m): expect ~{decrement:.0f}% less sustainable power. {adjusted}"
+    )
+    return out
 
 
 # --- per-effort quality --------------------------------------------------------------
@@ -1209,18 +1277,43 @@ def match_efforts_to_structure(
 # --- tightened decoupling ----------------------------------------------------------
 
 
-def _is_all_interval(series: dict) -> bool:
+def _tempo_floor_w(ftp_watts: float) -> float:
+    """Lower bound (watts) of Coggan Z3 (tempo) for this FTP, from
+    `zones.bike_zone_table` (library/23-cycling-training.md)."""
+    return float(bike_zone_table(ftp_watts)["Z3"]["watts_lo"])
+
+
+def _is_all_interval(
+    series: dict, *, ftp_watts: float | None = None, planned_zone: str | None = None
+) -> bool:
     """`True` when the ride is a pure VO2/threshold session with no steady
     aerobic block for a decoupling read to describe: its own
     *dynamic-threshold* efforts (detected with no supplied target, so this
     is a property of the ride and not of the coach's query) number
     `>= ALL_INTERVAL_MIN_EFFORTS` and together cover
     `>= ALL_INTERVAL_EFFORT_COVERAGE` of the ride's working time. See those
-    two constants."""
+    two constants.
+
+    Two refinements stop a rolling steady ride reading as intervals:
+    `planned_zone` Z1/Z2 (`ALL_INTERVAL_EXEMPT_PLANNED_ZONES`) is never
+    all-interval, and when `ftp_watts` is known only efforts averaging at
+    least the Coggan Z3 lower bound (`_tempo_floor_w`) count -- the dynamic
+    threshold is relative to the ride's own distribution, so on an
+    endurance ride it flags sub-tempo surges."""
+    if planned_zone is not None and planned_zone.strip().upper() in ALL_INTERVAL_EXEMPT_PLANNED_ZONES:
+        return False
     t_s = series.get("t_s")
     if not t_s:
         return False
     efforts = detect_efforts(series, target_w=None)
+    if ftp_watts:
+        floor_w = _tempo_floor_w(ftp_watts)
+        power = series.get("power_w") or []
+        efforts = [
+            e
+            for e in efforts
+            if (avg := _mean(power[e.start_idx : e.end_idx + 1])) is not None and avg >= floor_w
+        ]
     if len(efforts) < ALL_INTERVAL_MIN_EFFORTS:
         return False
 
@@ -1498,6 +1591,7 @@ def analyze(
     home_elevation_m: float | None = None,
     laps: list | None = None,
     ftp_watts: float | None = None,
+    planned_zone: str | None = None,
 ) -> WorkoutIntervals | None:
     """Full deterministic interval analysis for one ride. Returns a
     `models.WorkoutIntervals` for `sport == "bike"` rides that carry a
@@ -1515,6 +1609,10 @@ def analyze(
     signal to the athlete's real home elevation instead of this ride's own
     session-relative baseline -- see `_effective_baseline_altitude_m` and
     `library/30-altitude-power-adjustment.md`.
+
+    `planned_zone` (the matched planned session's intensity zone, e.g. "Z2")
+    tells the all-interval guard the plan was endurance -- see
+    `_is_all_interval`.
 
     `laps` + `ftp_watts` drive the prescription-aware path: when `structure`
     carries time-based interval reps, they are located in the ride from the
@@ -1587,14 +1685,19 @@ def analyze(
         )
 
     decoupling_pct, decoupling_note = tightened_decoupling(series)
-    if decoupling_pct is not None and _is_all_interval(series):
+    if decoupling_pct is not None and _is_all_interval(
+        series, ftp_watts=ftp_watts, planned_zone=planned_zone
+    ):
         decoupling_pct = None
         decoupling_note = (
             "all-interval session -- no steady aerobic block for a valid decoupling read"
         )
 
+    ride_altitude = _ride_altitude_summary(series, baseline_altitude_m, baseline_altitude_source)
+
     if prescription is not None:
         return WorkoutIntervals(
+            **ride_altitude,
             decoupling_tightened_pct=decoupling_pct,
             decoupling_note=decoupling_note,
             baseline_altitude_m=round(baseline_altitude_m, 1) if baseline_altitude_m is not None else None,
@@ -1604,6 +1707,7 @@ def analyze(
         )
 
     return WorkoutIntervals(
+        **ride_altitude,
         efforts_detected=len(efforts),
         detection_basis=basis,
         matched_to_prescription=match.matched,

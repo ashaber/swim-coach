@@ -1512,6 +1512,20 @@ class WorkoutIntervals(BaseModel):
     # flagged) effort can see at a glance whether the number reflects the
     # athlete's real home elevation or just wherever this particular ride
     # happened to start. Additive/optional, no schema_version bump.
+    ride_altitude_m: float | None = None
+    # Mean altitude over the ride's working samples. `None` without an
+    # altitude channel or a resolvable baseline. Additive/optional, no
+    # schema_version bump.
+    ride_altitude_gain_m: float | None = None
+    # `ride_altitude_m` minus `baseline_altitude_m`. Additive/optional.
+    ride_altitude_decrement_pct: float | None = None
+    # Estimated %-power-capability reduction
+    # (`ALTITUDE_POWER_DECREMENT_PCT_PER_1000M` x gain); set only when the
+    # gain clears `ALTITUDE_NOTE_THRESHOLD_M`. Additive/optional.
+    ride_altitude_note: str | None = None
+    # Short human-readable statement of the actual altitude, the difference
+    # from baseline, the expected impact, and whether targets were adjusted.
+    # `None` below `ALTITUDE_NOTE_THRESHOLD_M`. Additive/optional.
     # --- prescription-matched fields (interval_analysis + prescription.py) ---
     # Set only when the planned session's `structured` was supplied and its
     # interval reps were located in the ride. `detection_source` says whether
