@@ -281,6 +281,15 @@ ALL_INTERVAL_EFFORT_COVERAGE = 0.45
 # rides (all keep their real number). The fraction is a fitted cutoff.
 # library/26-activity-stream-interval-analysis.md.
 
+DECOUPLING_STEADY_POWER_TOLERANCE_PCT = 5.0
+# Coach judgment: decoupling is only a clean read on steady output. If mean
+# power differs between the first and second half of the working samples by
+# more than this, part of the HR:power change reflects an intensity change
+# the rider chose (or fatigue-forced), not only aerobic drift, and
+# `tightened_decoupling` says so in its note. Engineering default, not a
+# validated cutoff. library/11-workout-analytics.md (decoupling needs a
+# steady-state effort) and library/26-activity-stream-interval-analysis.md.
+
 ALL_INTERVAL_MIN_EFFORTS = 3
 # Coach judgment: a single long sustained block (a 40k TT, one 30-min
 # tempo) can cover a high fraction of a short ride's working time without
@@ -1402,10 +1411,21 @@ def tightened_decoupling(
     if r1 == 0:
         return None, "degenerate first-half efficiency (zero)"
     pct = round((r2 / r1 - 1) * 100, 1)
-    return pct, (
+    note = (
         f"measured on the {frac * 100:.0f}% of moving time spent working "
         f"(above {floor:g}{'W' if use_power else ' m/s'})"
     )
+    if use_power:
+        p1 = statistics.fmean(e for _, e in first)
+        p2 = statistics.fmean(e for _, e in second)
+        change_pct = (p2 / p1 - 1) * 100
+        if abs(change_pct) > DECOUPLING_STEADY_POWER_TOLERANCE_PCT:
+            verb = "fell" if change_pct < 0 else "rose"
+            note += (
+                f"; power {verb} {abs(change_pct):.0f}% from first to second half; part of this "
+                "decoupling reflects an intensity change, not only drift"
+            )
+    return pct, note
 
 
 def _build_interval_effort(

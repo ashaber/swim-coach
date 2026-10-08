@@ -128,3 +128,27 @@ def test_ride_altitude_fields_absent_without_altitude_channel():
     del s["altitude_m"]
     r = analyze(s, sport="bike", ftp_watts=278.0)
     assert r.ride_altitude_m is None and r.ride_altitude_note is None
+
+
+# --- intensity-change confound note -------------------------------------------------
+
+
+def test_decoupling_note_flags_intensity_change_on_1007_ride():
+    r = _run("ride_2026_10_07_endurance_altitude.json")
+    assert "power fell" in r.decoupling_note
+    assert "intensity change" in r.decoupling_note
+
+
+def test_steady_ride_has_no_intensity_change_note():
+    n = 1200
+    s = {"t_s": list(range(n)), "power_w": [200.0] * n, "hr": [140.0] * 600 + [143.0] * 600}
+    r = analyze(s, sport="bike", ftp_watts=278.0)
+    assert r.decoupling_tightened_pct is not None
+    assert "intensity change" not in r.decoupling_note
+
+
+def test_rising_power_also_flagged():
+    n = 1200
+    s = {"t_s": list(range(n)), "power_w": [180.0] * 600 + [220.0] * 600, "hr": [140.0] * n}
+    r = analyze(s, sport="bike", ftp_watts=278.0, planned_zone="Z2")
+    assert "power rose" in r.decoupling_note

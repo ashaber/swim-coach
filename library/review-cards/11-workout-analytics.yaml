@@ -9,6 +9,14 @@ cards:
   recommendation: Use a flagged >5% cardiac-drift day as a prompt to check for under-fueling, heat, or
     fatigue that day, not as a validated fitness verdict on its own.
   content_hash: 9fba86ab9cda80465fe1acc5f8a7fb4e47202af183ce5b8d26613bb8f5bc6025
+- section: bike-cardiac-drift-hr-per-power-and-the-steady-output-caveat
+  heading: 'Bike cardiac drift: HR-per-power and the steady-output caveat'
+  summary: On rides with a power meter cardiac drift is computed as HR-per-power rather than HR-per-speed
+    because speed is wind-dominated; a first-to-second-half power change above 5% is flagged as an intensity-change
+    confound on decoupling.
+  recommendation: Read a bike decoupling number alongside any power-change note; do not call it pure aerobic
+    drift when the note says the rider changed intensity.
+  content_hash: 03e924dbd5549468886c5b815a1e450cac635a7cd719675eff10156b146fed5c
 - section: swolf-as-a-stroke-efficiency-proxy
   heading: SWOLF as a stroke-efficiency proxy
   summary: SWOLF (stroke count + time per length) is a practical, uncited pool-efficiency proxy; a rising
