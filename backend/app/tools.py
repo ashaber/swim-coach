@@ -289,7 +289,7 @@ from app.context import (
     iso_week_str,
     summarize_rollup,
 )
-from app.enrich import find_planned_session
+from app.enrich import find_planned_session, planned_intensity_zone
 from app.drafts import MACRO_CARRIER_WEEK, TAPER_CARRIER_WEEK, draft_is_stale
 from app.garmin_push import push_on_demand
 from app.health_status_helpers import link_health_status_feedback
@@ -3984,6 +3984,12 @@ def _recover_prescribed_structure(
     return session.structured if session is not None else None
 
 
+def _recover_planned_zone(store: StoreInterface, slug: str, workout: Workout) -> str | None:
+    """The matched planned session's intensity zone (e.g. "Z2"), if any."""
+    session = find_planned_session(store, slug, workout)
+    return planned_intensity_zone(session) if session is not None else None
+
+
 def _load_workout_series(
     store: StoreInterface, slug: str, workout: Workout
 ) -> tuple[dict | None, str, str | None]:
@@ -4117,6 +4123,7 @@ def _handle_reanalyze_workout(
         prescribed_structure=structure,
         home_elevation_m=store.load_athlete(slug).home_elevation_m,
         ftp_watts=store.load_athlete(slug).ftp_watts,
+        planned_zone=_recover_planned_zone(store, slug, workout),
     )
     workout.analytics = new_analytics
     # Re-key the series row to this real workout id so a later read resolves
@@ -4558,6 +4565,7 @@ def _handle_pull_activity_stream(
         prescribed_structure=structure,
         home_elevation_m=store.load_athlete(slug).home_elevation_m,
         ftp_watts=store.load_athlete(slug).ftp_watts,
+        planned_zone=_recover_planned_zone(store, slug, workout) if workout is not None else None,
     )
     intervals = new_analytics.intervals
 

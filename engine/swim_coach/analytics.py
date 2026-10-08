@@ -451,6 +451,7 @@ def compute_analytics(
     prescribed_structure=None,
     home_elevation_m: float | None = None,
     ftp_watts: float | None = None,
+    planned_zone: str | None = None,
 ):
     """Build a swim_coach.models.WorkoutAnalytics from parsed workout parts.
 
@@ -471,6 +472,8 @@ def compute_analytics(
     its per-rep `power_w` targets win over `interval_target_w`.
     `ftp_watts` (the athlete's `Athlete.ftp_watts`) resolves a zone-based
     prescription (`Z5`) to watts for the prescription-aware rep analysis.
+    `planned_zone` is the matched planned session's intensity zone (e.g.
+    "Z2"), forwarded to the analyzer's all-interval guard.
     `home_elevation_m` is the athlete's own `Athlete.home_elevation_m`,
     when the caller has it -- anchors `interval_analysis`'s altitude-context
     signal to the athlete's real home elevation (see
@@ -505,6 +508,7 @@ def compute_analytics(
         home_elevation_m=home_elevation_m,
         laps=laps,
         ftp_watts=ftp_watts,
+        planned_zone=planned_zone,
     )
     avg_power = average_power_w(series)
     norm_power = normalized_power_w(series)
