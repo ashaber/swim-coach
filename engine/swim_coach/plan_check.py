@@ -62,7 +62,7 @@ from swim_coach.models import (
     Session,
     WeekPlan,
 )
-from swim_coach.models import WorkoutRepeat, WorkoutStructure
+from swim_coach.models import WorkoutRepeat, WorkoutStep, WorkoutStructure
 from swim_coach.plan import WEEKLY_VOLUME_RAMP_CAP, evaluate_week_realism
 from swim_coach.zones import bike_zone_for_pct
 from swim_coach.taper_search import RACE_DAY_TSB_BAND
@@ -1291,6 +1291,7 @@ def check_week(
 
     findings.extend(_check_week_volume_confirmation(week, recent_weeks))
     findings.extend(_check_prose_only_pushable(week))
+    findings.extend(_check_bike_swim_basis(week))
     for session in week.sessions:
         findings.extend(_check_warmup_and_primer(session, athlete))
 
@@ -1309,6 +1310,57 @@ def prose_only_pushable_sessions(sessions: list[Session]) -> list[Session]:
     return [
         s for s in sessions
         if s.sport in GARMIN_PUSHABLE_SPORTS and s.structured is None and (s.structure or "").strip()
+    ]
+
+
+SWIM_PACE_BASES = ("absolute", "percent_css")
+
+
+def _leaf_steps(items: list) -> list[WorkoutStep]:
+    steps: list[WorkoutStep] = []
+    for item in items:
+        if isinstance(item, WorkoutRepeat):
+            steps.extend(_leaf_steps(item.steps))
+        else:
+            steps.append(item)
+    return steps
+
+
+def bike_swim_basis_steps(session: Session) -> list[WorkoutStep]:
+    """Steps of a BIKE session's `structured` tree whose target uses a swim-pace
+    basis (`absolute` = s/100m, `percent_css`). Watts belong in `power_w`.
+    Real incident, prod 2026-10-10: watts written as `absolute` would export to
+    Garmin as a pace target and the analyzer (which only resolves `power_w`)
+    lost the rep targets."""
+    if session.sport != "bike" or session.structured is None:
+        return []
+    return swim_basis_steps(session.structured)
+
+
+def swim_basis_steps(structured: WorkoutStructure) -> list[WorkoutStep]:
+    """Leaf steps of `structured` whose target basis is a swim-pace one."""
+    return [
+        s for s in _leaf_steps(structured.items)
+        if s.target is not None and s.target.basis in SWIM_PACE_BASES
+    ]
+
+
+def _check_bike_swim_basis(week: WeekPlan) -> list[PlanCheckFinding]:
+    bad = [s for s in week.sessions if bike_swim_basis_steps(s)]
+    if not bad:
+        return []
+    listed = ", ".join(f"{s.date.isoformat()} bike ({s.id})" for s in bad)
+    return [
+        PlanCheckFinding(
+            id="bike-swim-pace-basis",
+            severity="medium",
+            evidence=f"{len(bad)} bike session(s) have step targets on a swim-pace basis (absolute/percent_css): {listed}.",
+            consequence=(
+                "`absolute` means swim pace in s/100m: a Garmin export would push a pace target, and the "
+                "analyzer only resolves `power_w`, so rep matching loses its targets."
+            ),
+            fix="Rewrite those steps' targets with basis `power_w` (watts low/high) or basis `zone`, via patch_week_plan.",
+        )
     ]
 
 

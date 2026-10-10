@@ -251,7 +251,7 @@ from swim_coach.models import (
     WorkoutStructure,
 )
 from swim_coach.ow_session_templates import build_ow_session
-from swim_coach.plan_check import check_macro, check_week, prose_only_pushable_sessions
+from swim_coach.plan_check import check_macro, check_week, prose_only_pushable_sessions, swim_basis_steps
 from swim_coach.plan import (
     MIN_MACRO_WEEKS,
     SESSION_ADJUSTMENT_INCREASE_CAP_PCT,
@@ -6226,6 +6226,24 @@ def _salvage_prose(node: Any) -> list[str]:
     return lines
 
 
+def _bike_basis_error(sport: Any, structured: WorkoutStructure, *, when: str) -> str | None:
+    """Data-validity rail: a bike `structured` tree may not use a swim-pace target basis
+    (`absolute` = s/100m, `percent_css`). Real incident, prod 2026-10-10: watts written as
+    `absolute` would export to Garmin as a pace target and the analyzer (which only resolves
+    `power_w`) lost the rep targets."""
+    if sport != "bike":
+        return None
+    bad = swim_basis_steps(structured)
+    if not bad:
+        return None
+    labels = ", ".join(repr(s.label) for s in bad[:5])
+    return (
+        f"{when}: bike step target(s) use basis {sorted({s.target.basis for s in bad})} (steps: {labels}), "
+        "which is SWIM pace (s/100m or % of CSS). For watts use basis `power_w` with `low`/`high` in watts; "
+        "or use basis `zone`. Nothing was changed for this session -- resend with `power_w` or `zone` targets."
+    )
+
+
 def _coerce_structured(
     raw: Any, *, when: str, prose_given: bool, notes: list[str]
 ) -> tuple[WorkoutStructure | None, str | None, str | None]:
@@ -6381,6 +6399,10 @@ def _apply_session_overrides(
                 )
                 if structured_error:
                     return structured_error, notes
+                if add_structured is not None:
+                    basis_error = _bike_basis_error(sport, add_structured, when=raw_date)
+                    if basis_error:
+                        return basis_error, notes
                 if salvaged and add_structure is None:
                     add_structure = salvaged
             if add_structure is None and add_structured is not None:
@@ -6536,6 +6558,9 @@ def _apply_session_overrides(
             if structured_error:
                 return structured_error, notes
             if coerced is not None:
+                basis_error = _bike_basis_error(session.sport, coerced, when=raw_date)
+                if basis_error:
+                    return basis_error, notes
                 session.structured = coerced
             elif salvaged:
                 session.structure = salvaged
@@ -7342,6 +7367,9 @@ def _session_from_add_fields(entry: dict[str, Any], *, athlete: Athlete) -> tupl
             structured = WorkoutStructure.model_validate(structured_raw)
         except ValidationError as exc:
             return None, f"invalid proposed_sessions structured for {date_str!r}: {exc}"
+        basis_error = _bike_basis_error(sport, structured, when=date_str)
+        if basis_error:
+            return None, basis_error
     structure = entry.get("structure")
     if structure is None and structured is not None:
         structure = render_prose(structured)
