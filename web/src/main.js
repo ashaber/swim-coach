@@ -1,7 +1,7 @@
 import './fonts.js';
 import { registerSW } from 'virtual:pwa-register';
 import log from './log.js';
-import { setDraft, clearDraft } from './composerDrafts.js';
+import { getDraft, setDraft, clearDraft } from './composerDrafts.js';
 import {
   renderApp, renderLoading, renderError, renderTabBar, renderCoachTab, renderSettingsTab,
   renderDashboardTab, renderBackendNeededNotice, renderUpdateBanner,
@@ -1344,10 +1344,17 @@ function pruneSessionDetailIdIfMissing(weeks) {
 
 let chatAbortController = null;
 
+/** A failed send must not cost the user their text: put it back in the composer's draft (unless
+ * they've already typed something new). */
+function restoreDraftAfterFailure(key, text) {
+  if (key && !getDraft(key)) setDraft(key, text);
+}
+
 function handleSendChat() {
   if (isStreaming(state.chat)) return;
   const input = document.getElementById('chat-input');
   const text = input?.value.trim();
+  const draftKey = input?.dataset.draftKey;
   if (!text) return;
 
   const settings = state.settingsForm;
@@ -1381,6 +1388,7 @@ function handleSendChat() {
         return;
       }
       state.chat = applyStreamEvent(state.chat, event);
+      if (event.type === 'error') restoreDraftAfterFailure(draftKey, text);
       if (event.type === 'done' || event.type === 'refusal' || event.type === 'error') {
         persistChat();
         log.info('chat.turn_complete', { type: event.type });
@@ -1430,6 +1438,7 @@ function handleSendRosterChat() {
   if (!slug || isStreaming(state.roster.chat)) return;
   const input = document.getElementById('roster-chat-input');
   const text = input?.value.trim();
+  const draftKey = input?.dataset.draftKey;
   if (!text) return;
 
   const settings = state.settingsForm;
@@ -1464,6 +1473,7 @@ function handleSendRosterChat() {
         return;
       }
       state.roster.chat = applyStreamEvent(state.roster.chat, event);
+      if (event.type === 'error') restoreDraftAfterFailure(draftKey, text);
       if (event.type === 'done' || event.type === 'refusal' || event.type === 'error') {
         persistRosterChat(slug);
         log.info('roster.chat.turn_complete', { type: event.type });
@@ -1484,7 +1494,7 @@ function handleClearRosterChat() {
   if (isStreaming(state.roster.chat)) rosterChatAbortController?.abort();
   state.roster.chat = clearMessages(state.roster.chat);
   clearChatStorage(rosterChatStorageKey(slug));
-  clearDraft('roster-chat-input');
+  clearDraft(`roster-chat-input:${slug}`);
   log.info('roster.chat.cleared', { athlete: slug });
   render();
 }
@@ -2243,6 +2253,7 @@ function handleSendWorkoutChat() {
   if (!chat || isStreaming(chat)) return;
   const input = document.getElementById('workout-chat-input');
   const text = input?.value.trim();
+  const draftKey = input?.dataset.draftKey;
   if (!text) return;
 
   const settings = state.settingsForm;
@@ -2276,6 +2287,7 @@ function handleSendWorkoutChat() {
       // fresh thread.
       if (!state.workoutChat || state.workoutChat.workoutId !== workoutId) return;
       state.workoutChat = applyStreamEvent(state.workoutChat, event);
+      if (event.type === 'error') restoreDraftAfterFailure(draftKey, text);
       if (event.type === 'done' || event.type === 'refusal' || event.type === 'error') {
         log.info('workout_chat.turn_complete', { workout_id: workoutId, type: event.type });
       }
@@ -2336,6 +2348,7 @@ async function handleSendRosterWorkoutChatMessage() {
   if (state.roster.workoutChatSubmit.status === 'submitting') return;
   const input = document.getElementById('roster-workout-chat-input');
   const text = input?.value.trim();
+  const draftKey = input?.dataset.draftKey;
   if (!text) return;
   const settings = state.settingsForm;
   if (!isConfigured(settings, state.identity)) return;
@@ -2360,6 +2373,7 @@ async function handleSendRosterWorkoutChatMessage() {
   } else {
     log.error('roster.workout_chat_send_failed', { athlete, workout_id: workoutId, error: result.error });
     state.roster.workoutChatSubmit = { status: 'error', error: result.error };
+    restoreDraftAfterFailure(draftKey, text);
   }
   render();
 }

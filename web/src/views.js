@@ -4225,7 +4225,7 @@ function renderRosterConversationsBody({ conversation, online }) {
  * chat state, since (acting-as-athlete mode) both could theoretically be open in the same
  * browser session at once. No expert-mode toggle -- the backend forces `expert_mode` regardless
  * (routes/coach.py's `coach_chat`): the asker here is always the coach, never the athlete. */
-function renderRosterAskCoachPanel({ messages, sending, online }) {
+function renderRosterAskCoachPanel({ messages, sending, online, athleteSlug }) {
   return `
     <section class="ask-ai-coach">
       <div class="s-head"><h2>Ask the AI coach</h2><span class="note">plans and confirms on this athlete's behalf</span></div>
@@ -4234,7 +4234,7 @@ function renderRosterAskCoachPanel({ messages, sending, online }) {
         ? '<div class="chat-empty"><p>Ask the AI coach to draft or revise this athlete&rsquo;s macro plan or an upcoming week.</p></div>'
         : `<div class="chat-messages" id="roster-chat-messages">${messages.map(renderChatMessage).join('')}</div>`}
       <div class="chat-composer">
-        <textarea id="roster-chat-input" class="chat-input" data-draft-key="roster-chat-input" placeholder="Ask the AI coach…" rows="2" ${sending || !online ? 'disabled' : ''}>${esc(getDraft('roster-chat-input'))}</textarea>
+        <textarea id="roster-chat-input" class="chat-input" data-draft-key="roster-chat-input:${esc(athleteSlug)}" placeholder="Ask the AI coach…" rows="2" ${sending || !online ? 'disabled' : ''}>${esc(getDraft(`roster-chat-input:${athleteSlug}`))}</textarea>
         <div class="chat-composer-row">
           <button type="button" class="btn-ghost" data-a="roster:chat:clear" ${messages.length === 0 ? 'disabled' : ''}>New conversation</button>
           <button type="button" class="btn" data-a="roster:chat:send" ${sending || !online ? 'disabled' : ''}>${sending ? 'Sending…' : 'Send'}</button>
@@ -4244,9 +4244,9 @@ function renderRosterAskCoachPanel({ messages, sending, online }) {
 }
 
 export function renderRosterTrainingPlanBody({
-  plan, online, allWeeksOpen, detailId, askCoach, chat, chatSending,
+  plan, online, allWeeksOpen, detailId, askCoach, chat, chatSending, athleteSlug = '',
 }) {
-  const chatPanel = renderRosterAskCoachPanel({ messages: chat?.messages || [], sending: !!chatSending, online });
+  const chatPanel = renderRosterAskCoachPanel({ messages: chat?.messages || [], sending: !!chatSending, online, athleteSlug });
   const status = plan?.status;
   if (status === 'error') {
     return `${chatPanel}<div class="hist-error">Couldn't load the training plan: ${esc(plan.error)}</div>`;
@@ -4390,7 +4390,7 @@ export function renderRosterTab({
     const subTabBody = (() => {
       if (activeSubTab === 'conversations') return renderRosterConversationsBody({ conversation, online });
       if (activeSubTab === 'plan') return renderRosterTrainingPlanBody({
-        plan, online, allWeeksOpen, detailId: sessionDetailId, askCoach, chat, chatSending,
+        plan, online, allWeeksOpen, detailId: sessionDetailId, askCoach, chat, chatSending, athleteSlug: actingAsAthlete,
       });
       // Fourth sub-tab (web/coach-health-nav-and-athlete-self-log, fixing
       // the reported "injury form dominates the dashboard and workouts and

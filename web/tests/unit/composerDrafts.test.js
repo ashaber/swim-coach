@@ -39,10 +39,15 @@ describe('chat composer drafts survive a re-render', () => {
     clearDraft('roster-workout-chat-input:w1');
   });
 
-  it('roster AI chat composer re-emits its draft', () => {
-    setDraft('roster-chat-input', XSS);
-    const html = renderRosterTrainingPlanBody({ plan: { status: 'loading' }, online: true, chat: null, chatSending: false });
-    expect(taOf(html, 'roster-chat-input')).toBe(ESCAPED);
-    clearDraft('roster-chat-input');
+  it('roster AI chat composer drafts are per coached athlete', () => {
+    const render = (slug) => renderRosterTrainingPlanBody({
+      plan: { status: 'loading' }, online: true, chat: null, chatSending: false, athleteSlug: slug,
+    });
+    setDraft('roster-chat-input:ann', XSS);
+    expect(taOf(render('ann'), 'roster-chat-input')).toBe(ESCAPED);
+    expect(taOf(render('bob'), 'roster-chat-input')).toBe('');
+    expect(render('bob')).toContain('data-draft-key="roster-chat-input:bob"');
+    expect(taOf(render('ann'), 'roster-chat-input')).toBe(ESCAPED);
+    clearDraft('roster-chat-input:ann');
   });
 });

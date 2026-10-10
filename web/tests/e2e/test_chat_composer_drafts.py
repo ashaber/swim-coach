@@ -91,3 +91,14 @@ def test_workout_composer_keeps_text_and_focus_when_a_late_load_renders(page):
     assert page.input_value('#workout-chat-input') == TYPED
     assert page.evaluate("() => document.activeElement && document.activeElement.id") == 'workout-chat-input'
 
+
+def test_failed_send_keeps_the_draft_in_the_box(page):
+    page.route('**/api/chat', _cors_route(422, 'application/json', '{"error": "malformed request"}'))
+    _configure_backend(page)
+    page.click('[data-a="tab:coach"]')
+    page.wait_for_selector('#chat-input')
+    page.fill('#chat-input', TYPED)
+    page.click('[data-a="chat:send"]')
+    page.wait_for_selector('.chat-bubble.is-error')
+    assert page.input_value('#chat-input') == TYPED
+
