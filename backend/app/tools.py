@@ -6481,11 +6481,16 @@ def _apply_session_overrides(
                 "Pass the real total as `distance_m` (in a patch_week_plan) to correct it."
             )
 
+        if distance_m is not None and distance_m <= 0:
+            # Real incident, prod 2026-10-10: `distance_m: 0` on a bike session
+            # fell into the swim-pace re-estimate below and reset its duration
+            # to the 15 min floor. A zero/negative distance is "no distance".
+            distance_m = None
         if distance_m is not None:
             session.distance_m = distance_m
         if duration_min is not None:
             session.duration_min = duration_min
-        elif distance_m is not None and css_pace_s is not None:
+        elif distance_m is not None and css_pace_s is not None and session.sport in ("swim_pool", "swim_ow"):
             # No explicit duration override -- re-estimate from the new
             # distance at the athlete's own CSS pace, same rough-estimate
             # math the engine itself uses (_duration_min_for_distance),
