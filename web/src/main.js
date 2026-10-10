@@ -1,6 +1,7 @@
 import './fonts.js';
 import { registerSW } from 'virtual:pwa-register';
 import log from './log.js';
+import { getDraft, setDraft, clearDraft } from './composerDrafts.js';
 import {
   renderApp, renderLoading, renderError, renderTabBar, renderCoachTab, renderSettingsTab,
   renderDashboardTab, renderBackendNeededNotice, renderUpdateBanner,
@@ -719,7 +720,22 @@ function renderTabContent() {
   }
 }
 
+/** Every render rebuilds the DOM, so a focused chat composer (its text already lives in state /
+ * composerDrafts and is re-emitted by the view) would lose focus and caret: put them back. */
 function render() {
+  const active = document.activeElement;
+  const focusedId = active && COMPOSER_INPUT_IDS.includes(active.id) ? active.id : null;
+  const start = focusedId ? active.selectionStart : null;
+  const end = focusedId ? active.selectionEnd : null;
+  renderAppDom();
+  if (!focusedId) return;
+  const next = document.getElementById(focusedId);
+  if (!next || next.disabled) return;
+  next.focus();
+  if (start !== null) next.setSelectionRange(start, end);
+}
+
+function renderAppDom() {
   // Onboarding is a full-screen gate, same spirit as the sign-in gate but
   // replacing the tab bar entirely rather than just one tab's content --
   // there's nothing else useful to navigate to yet (no athlete, so no plan/
@@ -1328,10 +1344,17 @@ function pruneSessionDetailIdIfMissing(weeks) {
 
 let chatAbortController = null;
 
+/** A failed send must not cost the user their text: put it back in the composer's draft (unless
+ * they've already typed something new). */
+function restoreDraftAfterFailure(key, text) {
+  if (key && !getDraft(key)) setDraft(key, text);
+}
+
 function handleSendChat() {
   if (isStreaming(state.chat)) return;
   const input = document.getElementById('chat-input');
   const text = input?.value.trim();
+  const draftKey = input?.dataset.draftKey;
   if (!text) return;
 
   const settings = state.settingsForm;
@@ -1344,7 +1367,7 @@ function handleSendChat() {
 
   const history = toApiHistory(state.chat.messages);
   state.chat = appendUserMessage(state.chat, text);
-  if (input) input.value = '';
+  if (input) { input.value = ''; clearDraft(input.dataset.draftKey); }
   render();
   persistChat();
 
@@ -1365,6 +1388,7 @@ function handleSendChat() {
         return;
       }
       state.chat = applyStreamEvent(state.chat, event);
+      if (event.type === 'error') restoreDraftAfterFailure(draftKey, text);
       if (event.type === 'done' || event.type === 'refusal' || event.type === 'error') {
         persistChat();
         log.info('chat.turn_complete', { type: event.type });
@@ -1378,6 +1402,7 @@ function handleClearChat() {
   if (isStreaming(state.chat)) chatAbortController?.abort();
   state.chat = clearMessages(state.chat);
   clearChatStorage(athleteSlug());
+  clearDraft('chat-input');
   log.info('chat.cleared', { athlete: athleteSlug() });
   render();
 }
@@ -1413,6 +1438,7 @@ function handleSendRosterChat() {
   if (!slug || isStreaming(state.roster.chat)) return;
   const input = document.getElementById('roster-chat-input');
   const text = input?.value.trim();
+  const draftKey = input?.dataset.draftKey;
   if (!text) return;
 
   const settings = state.settingsForm;
@@ -1425,7 +1451,7 @@ function handleSendRosterChat() {
 
   const history = toApiHistory(state.roster.chat.messages);
   state.roster.chat = appendUserMessage(state.roster.chat, text);
-  if (input) input.value = '';
+  if (input) { input.value = ''; clearDraft(input.dataset.draftKey); }
   render();
   persistRosterChat(slug);
 
@@ -1447,6 +1473,7 @@ function handleSendRosterChat() {
         return;
       }
       state.roster.chat = applyStreamEvent(state.roster.chat, event);
+      if (event.type === 'error') restoreDraftAfterFailure(draftKey, text);
       if (event.type === 'done' || event.type === 'refusal' || event.type === 'error') {
         persistRosterChat(slug);
         log.info('roster.chat.turn_complete', { type: event.type });
@@ -1467,6 +1494,7 @@ function handleClearRosterChat() {
   if (isStreaming(state.roster.chat)) rosterChatAbortController?.abort();
   state.roster.chat = clearMessages(state.roster.chat);
   clearChatStorage(rosterChatStorageKey(slug));
+  clearDraft(`roster-chat-input:${slug}`);
   log.info('roster.chat.cleared', { athlete: slug });
   render();
 }
@@ -1483,7 +1511,10 @@ function persistRosterChat(slug) {
 // POLL_INTERVAL_MS), with the newest messages cached in localStorage so the thread stays
 // readable (send disabled) offline. Backend: backend/app/routes/conversation.py.
 
-const THREAD_INPUT_IDS = ['my-coach-input', 'roster-conversation-input'];
+const COMPOSER_INPUT_IDS = [
+  'my-coach-input', 'roster-conversation-input', 'chat-input', 'workout-chat-input',
+  'roster-chat-input', 'roster-workout-chat-input',
+];
 
 function myCoachKey() {
   return `athlete:${state.myCoach.coachId}`;
@@ -1525,16 +1556,7 @@ function scrollToBottomOf(id) {
  * whole DOM, so the composer's focus and caret are put back afterwards -- the draft text itself
  * already lives in state and is re-emitted by the view. */
 function renderKeepingComposerFocus() {
-  const active = document.activeElement;
-  const focusedId = active && THREAD_INPUT_IDS.includes(active.id) ? active.id : null;
-  const start = focusedId ? active.selectionStart : null;
-  const end = focusedId ? active.selectionEnd : null;
   render();
-  if (!focusedId) return;
-  const next = document.getElementById(focusedId);
-  if (!next || next.disabled) return;
-  next.focus();
-  if (start !== null) next.setSelectionRange(start, end);
 }
 
 function conversationRequestContext() {
@@ -2231,6 +2253,7 @@ function handleSendWorkoutChat() {
   if (!chat || isStreaming(chat)) return;
   const input = document.getElementById('workout-chat-input');
   const text = input?.value.trim();
+  const draftKey = input?.dataset.draftKey;
   if (!text) return;
 
   const settings = state.settingsForm;
@@ -2239,7 +2262,7 @@ function handleSendWorkoutChat() {
   const workoutId = chat.workoutId;
   const history = toApiHistory(chat.messages);
   state.workoutChat = appendUserMessage(chat, text);
-  if (input) input.value = '';
+  if (input) { input.value = ''; clearDraft(input.dataset.draftKey); }
   render();
 
   workoutChatAbortController = new AbortController();
@@ -2264,6 +2287,7 @@ function handleSendWorkoutChat() {
       // fresh thread.
       if (!state.workoutChat || state.workoutChat.workoutId !== workoutId) return;
       state.workoutChat = applyStreamEvent(state.workoutChat, event);
+      if (event.type === 'error') restoreDraftAfterFailure(draftKey, text);
       if (event.type === 'done' || event.type === 'refusal' || event.type === 'error') {
         log.info('workout_chat.turn_complete', { workout_id: workoutId, type: event.type });
       }
@@ -2324,6 +2348,7 @@ async function handleSendRosterWorkoutChatMessage() {
   if (state.roster.workoutChatSubmit.status === 'submitting') return;
   const input = document.getElementById('roster-workout-chat-input');
   const text = input?.value.trim();
+  const draftKey = input?.dataset.draftKey;
   if (!text) return;
   const settings = state.settingsForm;
   if (!isConfigured(settings, state.identity)) return;
@@ -2332,7 +2357,7 @@ async function handleSendRosterWorkoutChatMessage() {
   if (!athlete || !workoutId) return;
 
   state.roster.workoutChatSubmit = { status: 'submitting', error: null };
-  if (input) input.value = '';
+  if (input) { input.value = ''; clearDraft(input.dataset.draftKey); }
   render();
   log.info('roster.workout_chat_send', { athlete, workout_id: workoutId });
 
@@ -2348,6 +2373,7 @@ async function handleSendRosterWorkoutChatMessage() {
   } else {
     log.error('roster.workout_chat_send_failed', { athlete, workout_id: workoutId, error: result.error });
     state.roster.workoutChatSubmit = { status: 'error', error: result.error };
+    restoreDraftAfterFailure(draftKey, text);
   }
   render();
 }
@@ -3930,6 +3956,10 @@ function onAppChange(e) {
 // render() call here.
 function onAppInput(e) {
   const el = e.target;
+  if (el.dataset.draftKey) {
+    setDraft(el.dataset.draftKey, el.value);
+    return;
+  }
   const formName = el.dataset.form;
   const field = el.dataset.field;
   if (!formName || !field) return;
