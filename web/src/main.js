@@ -1,6 +1,7 @@
 import './fonts.js';
 import { registerSW } from 'virtual:pwa-register';
 import log from './log.js';
+import { setDraft, clearDraft } from './composerDrafts.js';
 import {
   renderApp, renderLoading, renderError, renderTabBar, renderCoachTab, renderSettingsTab,
   renderDashboardTab, renderBackendNeededNotice, renderUpdateBanner,
@@ -719,7 +720,22 @@ function renderTabContent() {
   }
 }
 
+/** Every render rebuilds the DOM, so a focused chat composer (its text already lives in state /
+ * composerDrafts and is re-emitted by the view) would lose focus and caret: put them back. */
 function render() {
+  const active = document.activeElement;
+  const focusedId = active && COMPOSER_INPUT_IDS.includes(active.id) ? active.id : null;
+  const start = focusedId ? active.selectionStart : null;
+  const end = focusedId ? active.selectionEnd : null;
+  renderAppDom();
+  if (!focusedId) return;
+  const next = document.getElementById(focusedId);
+  if (!next || next.disabled) return;
+  next.focus();
+  if (start !== null) next.setSelectionRange(start, end);
+}
+
+function renderAppDom() {
   // Onboarding is a full-screen gate, same spirit as the sign-in gate but
   // replacing the tab bar entirely rather than just one tab's content --
   // there's nothing else useful to navigate to yet (no athlete, so no plan/
@@ -1344,7 +1360,7 @@ function handleSendChat() {
 
   const history = toApiHistory(state.chat.messages);
   state.chat = appendUserMessage(state.chat, text);
-  if (input) input.value = '';
+  if (input) { input.value = ''; clearDraft(input.dataset.draftKey); }
   render();
   persistChat();
 
@@ -1378,6 +1394,7 @@ function handleClearChat() {
   if (isStreaming(state.chat)) chatAbortController?.abort();
   state.chat = clearMessages(state.chat);
   clearChatStorage(athleteSlug());
+  clearDraft('chat-input');
   log.info('chat.cleared', { athlete: athleteSlug() });
   render();
 }
@@ -1425,7 +1442,7 @@ function handleSendRosterChat() {
 
   const history = toApiHistory(state.roster.chat.messages);
   state.roster.chat = appendUserMessage(state.roster.chat, text);
-  if (input) input.value = '';
+  if (input) { input.value = ''; clearDraft(input.dataset.draftKey); }
   render();
   persistRosterChat(slug);
 
@@ -1467,6 +1484,7 @@ function handleClearRosterChat() {
   if (isStreaming(state.roster.chat)) rosterChatAbortController?.abort();
   state.roster.chat = clearMessages(state.roster.chat);
   clearChatStorage(rosterChatStorageKey(slug));
+  clearDraft('roster-chat-input');
   log.info('roster.chat.cleared', { athlete: slug });
   render();
 }
@@ -1483,7 +1501,10 @@ function persistRosterChat(slug) {
 // POLL_INTERVAL_MS), with the newest messages cached in localStorage so the thread stays
 // readable (send disabled) offline. Backend: backend/app/routes/conversation.py.
 
-const THREAD_INPUT_IDS = ['my-coach-input', 'roster-conversation-input'];
+const COMPOSER_INPUT_IDS = [
+  'my-coach-input', 'roster-conversation-input', 'chat-input', 'workout-chat-input',
+  'roster-chat-input', 'roster-workout-chat-input',
+];
 
 function myCoachKey() {
   return `athlete:${state.myCoach.coachId}`;
@@ -1525,16 +1546,7 @@ function scrollToBottomOf(id) {
  * whole DOM, so the composer's focus and caret are put back afterwards -- the draft text itself
  * already lives in state and is re-emitted by the view. */
 function renderKeepingComposerFocus() {
-  const active = document.activeElement;
-  const focusedId = active && THREAD_INPUT_IDS.includes(active.id) ? active.id : null;
-  const start = focusedId ? active.selectionStart : null;
-  const end = focusedId ? active.selectionEnd : null;
   render();
-  if (!focusedId) return;
-  const next = document.getElementById(focusedId);
-  if (!next || next.disabled) return;
-  next.focus();
-  if (start !== null) next.setSelectionRange(start, end);
 }
 
 function conversationRequestContext() {
@@ -2239,7 +2251,7 @@ function handleSendWorkoutChat() {
   const workoutId = chat.workoutId;
   const history = toApiHistory(chat.messages);
   state.workoutChat = appendUserMessage(chat, text);
-  if (input) input.value = '';
+  if (input) { input.value = ''; clearDraft(input.dataset.draftKey); }
   render();
 
   workoutChatAbortController = new AbortController();
@@ -2332,7 +2344,7 @@ async function handleSendRosterWorkoutChatMessage() {
   if (!athlete || !workoutId) return;
 
   state.roster.workoutChatSubmit = { status: 'submitting', error: null };
-  if (input) input.value = '';
+  if (input) { input.value = ''; clearDraft(input.dataset.draftKey); }
   render();
   log.info('roster.workout_chat_send', { athlete, workout_id: workoutId });
 
@@ -3930,6 +3942,10 @@ function onAppChange(e) {
 // render() call here.
 function onAppInput(e) {
   const el = e.target;
+  if (el.dataset.draftKey) {
+    setDraft(el.dataset.draftKey, el.value);
+    return;
+  }
   const formName = el.dataset.form;
   const field = el.dataset.field;
   if (!formName || !field) return;

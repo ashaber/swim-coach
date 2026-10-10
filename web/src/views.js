@@ -18,6 +18,7 @@ import { TOOL_LABELS } from './chat.js';
 import { renderSessionIcon } from './icons.js';
 import { renderChatMarkdown } from './markdown.js';
 import { createThreadState } from './conversation.js';
+import { getDraft } from './composerDrafts.js';
 import { buildHistoryFeed } from './history.js';
 import { expandStructure, actualPoints, sessionForWorkout, shapeChartGeometry } from './shape.js';
 import { buildRawAnalysis } from './analysis.js';
@@ -1965,7 +1966,7 @@ function renderAiCoachTab({
 
       ${showComposer ? `
         <div class="chat-composer">
-          <textarea id="chat-input" class="chat-input" placeholder="Ask your coach…" rows="2" ${sending || !online ? 'disabled' : ''}></textarea>
+          <textarea id="chat-input" class="chat-input" data-draft-key="chat-input" placeholder="Ask your coach…" rows="2" ${sending || !online ? 'disabled' : ''}>${esc(getDraft('chat-input'))}</textarea>
           <div class="chat-composer-row">
             <button type="button" class="btn-ghost" data-a="chat:clear" ${messages.length === 0 ? 'disabled' : ''}>New conversation</button>
             <button type="button" class="btn" data-a="chat:send" ${sending || !online ? 'disabled' : ''}>${sending ? 'Sending…' : 'Send'}</button>
@@ -3064,7 +3065,7 @@ function renderWorkoutThread({
         ${rows}${streamingRows}
       </div>` : '<p class="sub">No messages yet.</p>'}
       <div class="chat-composer">
-        <textarea id="${esc(inputId)}" class="chat-input" placeholder="${viewerRole === 'coach' ? 'Comment on this workout…' : 'Ask about this workout…'}" rows="2" ${sendingLive || !online ? 'disabled' : ''}></textarea>
+        <textarea id="${esc(inputId)}" class="chat-input" data-draft-key="${esc(`${inputId}:${workout.id}`)}" placeholder="${viewerRole === 'coach' ? 'Comment on this workout…' : 'Ask about this workout…'}" rows="2" ${sendingLive || !online ? 'disabled' : ''}>${esc(getDraft(`${inputId}:${workout.id}`))}</textarea>
         <div class="chat-composer-row">
           <span></span>
           <button type="button" class="btn" data-a="${esc(sendAction)}" ${sendingLive || !online ? 'disabled' : ''}>${sendingLive ? 'Sending…' : 'Send'}</button>
@@ -3132,7 +3133,7 @@ function renderConversationThread({
  * coach's roster view of the same workout (`form: null`/absent, read-only;
  * `chat` stays `null` there too, so `renderWorkoutChatSection` still renders
  * nothing on that surface -- unchanged). */
-function renderWorkoutDetail(workout, {
+export function renderWorkoutDetail(workout, {
   chat, online, rpeEdit = null, editable = false, pacing = null, raceDebriefs = [],
   viewerRole = 'athlete', coachChatSubmitting = false,
   weeks = [], ftpWatts = null, rawAnalysisOpen = null,
@@ -4233,7 +4234,7 @@ function renderRosterAskCoachPanel({ messages, sending, online }) {
         ? '<div class="chat-empty"><p>Ask the AI coach to draft or revise this athlete&rsquo;s macro plan or an upcoming week.</p></div>'
         : `<div class="chat-messages" id="roster-chat-messages">${messages.map(renderChatMessage).join('')}</div>`}
       <div class="chat-composer">
-        <textarea id="roster-chat-input" class="chat-input" placeholder="Ask the AI coach…" rows="2" ${sending || !online ? 'disabled' : ''}></textarea>
+        <textarea id="roster-chat-input" class="chat-input" data-draft-key="roster-chat-input" placeholder="Ask the AI coach…" rows="2" ${sending || !online ? 'disabled' : ''}>${esc(getDraft('roster-chat-input'))}</textarea>
         <div class="chat-composer-row">
           <button type="button" class="btn-ghost" data-a="roster:chat:clear" ${messages.length === 0 ? 'disabled' : ''}>New conversation</button>
           <button type="button" class="btn" data-a="roster:chat:send" ${sending || !online ? 'disabled' : ''}>${sending ? 'Sending…' : 'Send'}</button>
@@ -4242,7 +4243,7 @@ function renderRosterAskCoachPanel({ messages, sending, online }) {
     </section>`;
 }
 
-function renderRosterTrainingPlanBody({
+export function renderRosterTrainingPlanBody({
   plan, online, allWeeksOpen, detailId, askCoach, chat, chatSending,
 }) {
   const chatPanel = renderRosterAskCoachPanel({ messages: chat?.messages || [], sending: !!chatSending, online });
