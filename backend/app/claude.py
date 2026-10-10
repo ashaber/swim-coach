@@ -26,6 +26,7 @@ import anthropic
 
 from app.config import Settings
 from app.logging_config import get_logger
+from app.save_claims import UNVERIFIED_SAVE_NOTICE, claims_a_save, write_succeeded
 from app.tool_errors import internal_tool_error
 from app.tools import ToolHandler
 
@@ -331,6 +332,7 @@ class ClaudeChat:
         messages = list(messages)
         tool_names_available = [t.get("name") for t in tools] if tools else []
         tools_invoked: list[str] = []
+        turn_wrote = False  # a WRITE_TOOLS call returned its success shape this turn
         tool_error_count = 0  # the "failure tax": every errored tool call costs another paid API call
 
         log.info(
@@ -344,9 +346,11 @@ class ClaudeChat:
                 self.settings, system, with_loop_breakpoint(system, messages, tools), tools
             )
 
+            iteration_text: list[str] = []
             try:
                 with self.client.messages.stream(**request_kwargs) as stream:
                     for text in stream.text_stream:
+                        iteration_text.append(text)
                         yield {"type": "text", "text": text}
                     final = stream.get_final_message()
             except anthropic.APIError as exc:
@@ -395,6 +399,14 @@ class ClaudeChat:
                 yield {"type": "text", "text": MAX_TOKENS_TRUNCATION_MARKER}
 
             if final.stop_reason != "tool_use":
+                if not turn_wrote and claims_a_save("".join(iteration_text)):
+                    log.warn(
+                        "unverified_save_claim",
+                        iteration=iteration,
+                        tools_invoked=list(tools_invoked),
+                        request_id=request_id,
+                    )
+                    yield {"type": "text", "text": UNVERIFIED_SAVE_NOTICE}
                 yield {"type": "done", "stop_reason": final.stop_reason}
                 return
 
@@ -480,6 +492,8 @@ class ClaudeChat:
                 )
                 if isinstance(result, dict) and "error" in result:
                     tool_error_count += 1
+                if write_succeeded(block.name, result):
+                    turn_wrote = True
                 tool_results.append(
                     {
                         "type": "tool_result",
