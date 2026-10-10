@@ -31,6 +31,10 @@ drift day coincides with the athlete's own reports of under-fueling, heat,
 or fatigue more often than non-flagged days — if it doesn't, the threshold
 needs recalibrating from the athlete's own data rather than trusted as-is.
 
+## Bike cardiac drift: HR-per-power and the steady-output caveat
+
+**[ADAPTED: cycling] Confidence: low.** On a ride with a power meter, `cardiac_drift` is computed as HR-per-power (power:HR, the standard cycling form of the Pa:HR metric above), not HR-per-speed: speed is wind- and terrain-dominated on the road. Decoupling is only a clean read on steady output, so a first-to-second-half mean-power change above `DECOUPLING_STEADY_POWER_TOLERANCE_PCT` (5%, Coach judgment) is appended to the decoupling note as an intensity-change confound. **Test:** on rides with a known deliberate pacing change, check that the note fires and that steady rides stay silent; recalibrate the tolerance from the athlete's own steady-ride variability if it over- or under-fires.
+
 ## SWOLF as a stroke-efficiency proxy
 
 **Coach judgment:** SWOLF (stroke count + seconds per length — literally a

@@ -122,6 +122,46 @@ def _series_halves_hr_per_speed(
     return hr_per_speed(first_half), hr_per_speed(second_half)
 
 
+def _series_halves_hr_per_power(
+    series: dict, pauses: list[WorkoutPause] | None
+) -> tuple[float, float] | None:
+    """Mean HR / mean power for each half of the working samples (HR present,
+    power above `interval_analysis.COASTING_FLOOR_W`, pause spans excluded).
+    The cycling form of the same Pa:HR metric (power:HR). Returns None if
+    there is no usable power or HR data. See library/11-workout-analytics.md."""
+    from swim_coach.interval_analysis import COASTING_FLOOR_W
+
+    t_s = series.get("t_s")
+    hr = series.get("hr")
+    power = series.get("power_w")
+    if not t_s or not hr or not power:
+        return None
+
+    pauses = pauses or []
+
+    def in_pause(t: float) -> bool:
+        return any(p.start_offset_s <= t < p.start_offset_s + p.duration_s for p in pauses)
+
+    samples = [
+        (t, h, w)
+        for t, h, w in zip(t_s, hr, power)
+        if h is not None and w is not None and w > COASTING_FLOOR_W and not in_pause(t)
+    ]
+    if len(samples) < 4:
+        return None
+
+    mid_t = (samples[0][0] + samples[-1][0]) / 2
+    first_half = [(h, w) for t, h, w in samples if t < mid_t]
+    second_half = [(h, w) for t, h, w in samples if t >= mid_t]
+    if not first_half or not second_half:
+        return None
+
+    def hr_per_power(pairs: list[tuple[float, float]]) -> float:
+        return statistics.mean(h for h, _ in pairs) / statistics.mean(w for _, w in pairs)
+
+    return hr_per_power(first_half), hr_per_power(second_half)
+
+
 def _lap_pace_s_per_100m(lap: WorkoutLap) -> float | None:
     """`avg_pace_s_per_100m` when set, else derived from duration_s/distance_m."""
     if lap.avg_pace_s_per_100m is not None:
@@ -165,8 +205,11 @@ def cardiac_drift(
     pauses: list[WorkoutPause] | None = None,
 ) -> float | None:
     """Pa:HR aerobic decoupling between the first and second half of moving
-    time. Prefers the time-series (HR vs. speed, pause spans excluded) when
-    available; falls back to per-lap avg_hr + avg_pace when at least 2 laps
+    time. Positive = HR cost per unit output rose. With a usable power
+    channel (bike) the series metric is HR-per-POWER (power:HR, the cycling
+    form of Pa:HR -- speed is wind/terrain-dominated on a ride); otherwise
+    HR-per-speed (swims/runs, and rides with no power). Pause spans are
+    excluded either way. Falls back to falls back to per-lap avg_hr + avg_pace when at least 2 laps
     carry both. Returns None when no HR data exists at all.
 
     See library/11-workout-analytics.md ("Cardiac drift / aerobic
@@ -174,7 +217,9 @@ def cardiac_drift(
     not applied inside this function.
     """
     if series:
-        halves = _series_halves_hr_per_speed(series, pauses)
+        halves = _series_halves_hr_per_power(series, pauses)
+        if halves is None:
+            halves = _series_halves_hr_per_speed(series, pauses)
         if halves is not None:
             first, second = halves
             if first == 0:
@@ -451,6 +496,7 @@ def compute_analytics(
     prescribed_structure=None,
     home_elevation_m: float | None = None,
     ftp_watts: float | None = None,
+    planned_zone: str | None = None,
 ):
     """Build a swim_coach.models.WorkoutAnalytics from parsed workout parts.
 
@@ -471,6 +517,8 @@ def compute_analytics(
     its per-rep `power_w` targets win over `interval_target_w`.
     `ftp_watts` (the athlete's `Athlete.ftp_watts`) resolves a zone-based
     prescription (`Z5`) to watts for the prescription-aware rep analysis.
+    `planned_zone` is the matched planned session's intensity zone (e.g.
+    "Z2"), forwarded to the analyzer's all-interval guard.
     `home_elevation_m` is the athlete's own `Athlete.home_elevation_m`,
     when the caller has it -- anchors `interval_analysis`'s altitude-context
     signal to the athlete's real home elevation (see
@@ -505,6 +553,7 @@ def compute_analytics(
         home_elevation_m=home_elevation_m,
         laps=laps,
         ftp_watts=ftp_watts,
+        planned_zone=planned_zone,
     )
     avg_power = average_power_w(series)
     norm_power = normalized_power_w(series)

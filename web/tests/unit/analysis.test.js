@@ -65,8 +65,24 @@ describe('buildRawAnalysis', () => {
     expect(rows['Reps in band']).toBe('100%');
     expect(rows['Fade across reps']).toBe('+0.4%');
     expect(rows['Decoupling (working time)']).toBe('+20.8%');
-    expect(rows['Baseline altitude']).toBe('823 m (home elevation)');
+    expect(rows['Baseline altitude']).toBeUndefined();
+    expect(rows['Home altitude (baseline)']).toBe('823 m (home elevation)');
+    expect(rows['Altitude']).toBeUndefined();
     expect(m.score.headline).toBe('87 / 100');
+  });
+
+  it('shows the ride-level altitude note, keeping the baseline labeled as home', () => {
+    const note = 'Rode at ~1650 m (~5,410 ft), ~827 m above home (823 m): expect ~5% less sustainable power. Targets not adjusted (adjusts at +1000 m).';
+    const w = { analytics: { intervals: { ...INTERVALS, ride_altitude_m: 1650, ride_altitude_gain_m: 827, ride_altitude_note: note } } };
+    const rows = Object.fromEntries(buildRawAnalysis(w, undefined).summary);
+    expect(rows['Altitude']).toBe(note);
+    expect(rows['Home altitude (baseline)']).toBe('823 m (home elevation)');
+  });
+
+  it('falls back to the altitude vs home when there is no note', () => {
+    const w = { analytics: { intervals: { ...INTERVALS, ride_altitude_m: 1100, ride_altitude_gain_m: 277, ride_altitude_note: null } } };
+    const rows = Object.fromEntries(buildRawAnalysis(w, undefined).summary);
+    expect(rows['Altitude']).toBe('~1100 m (+277 m vs home 823 m)');
   });
 
   it('builds one row per effort with target band, verdict, fade and drift', () => {

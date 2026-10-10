@@ -376,3 +376,36 @@ def test_normalized_power_w_none_when_series_is_none():
 
 def test_normalized_power_w_none_with_fewer_than_two_samples():
     assert normalized_power_w({"t_s": [0.0], "power_w": [200]}) is None
+
+
+# --- cardiac_drift on a bike ride: HR-per-POWER, not HR-per-speed -------------------
+
+
+def test_cardiac_drift_bike_uses_power_not_speed():
+    import json
+    from pathlib import Path
+
+    fx = json.loads(
+        (Path(__file__).resolve().parents[1] / "fixtures" / "ride_2026_10_07_endurance_altitude.json").read_text()
+    )
+    drift = cardiac_drift(fx["series"], laps=[])
+    assert drift is not None and 4.0 < drift < 10.0  # was -5.4% on HR-per-speed (wind-dominated)
+
+
+def test_cardiac_drift_bike_power_halves_hand_computed():
+    t_s = list(range(8))
+    series = {
+        "t_s": t_s,
+        "hr": [100.0] * 4 + [110.0] * 4,
+        "power_w": [200.0] * 8,
+        "speed_mps": [10.0] * 4 + [20.0] * 4,  # speed doubles; must be ignored
+    }
+    assert cardiac_drift(series, laps=[]) == pytest.approx(10.0)
+
+
+def test_cardiac_drift_without_power_keeps_speed_result():
+    t_s = list(range(8))
+    series = {"t_s": t_s, "hr": [100.0] * 4 + [110.0] * 4, "speed_mps": [2.0] * 8}
+    assert cardiac_drift(series, laps=[]) == pytest.approx(10.0)
+    series["speed_mps"] = [2.0] * 4 + [4.0] * 4
+    assert cardiac_drift(series, laps=[]) < 0

@@ -40,6 +40,13 @@ export function scoreView(execution, title) {
   };
 }
 
+function altitudeVsBaseline(iv) {
+  const here = `~${Math.round(iv.ride_altitude_m)} m`;
+  if (!num(iv.ride_altitude_gain_m) || !num(iv.baseline_altitude_m)) return here;
+  const g = Math.round(iv.ride_altitude_gain_m);
+  return `${here} (${g >= 0 ? '+' : ''}${g} m vs home ${Math.round(iv.baseline_altitude_m)} m)`;
+}
+
 function summaryRows(iv) {
   const rows = [];
   rows.push(['Matched to prescription', iv.matched_to_prescription ? 'yes' : 'no']);
@@ -55,7 +62,9 @@ function summaryRows(iv) {
   if (num(iv.fade_across_rounds_pct)) rows.push(['Fade across rounds', signed(iv.fade_across_rounds_pct)]);
   if (num(iv.decoupling_tightened_pct)) rows.push(['Decoupling (working time)', signed(iv.decoupling_tightened_pct)]);
   if (iv.decoupling_note) rows.push(['Decoupling note', iv.decoupling_note]);
-  if (num(iv.baseline_altitude_m)) rows.push(['Baseline altitude', `${Math.round(iv.baseline_altitude_m)} m (${(iv.baseline_altitude_source || '').replace('_', ' ')})`]);
+  if (iv.ride_altitude_note) rows.push(['Altitude', iv.ride_altitude_note]);
+  else if (num(iv.ride_altitude_m)) rows.push(['Altitude', altitudeVsBaseline(iv)]);
+  if (num(iv.baseline_altitude_m)) rows.push(['Home altitude (baseline)', `${Math.round(iv.baseline_altitude_m)} m (${(iv.baseline_altitude_source || '').replace('_', ' ')})`]);
   return rows;
 }
 

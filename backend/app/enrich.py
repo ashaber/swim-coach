@@ -134,6 +134,13 @@ def find_planned_session(store: StoreInterface, slug: str, workout: Workout) -> 
     return match_workout_to_session(workout, sessions, other_workouts=nearby)
 
 
+def planned_intensity_zone(session: Session) -> str | None:
+    """The planned session's intensity zone label (e.g. "Z2"), if it set one --
+    tells the analyzer an endurance plan is never an all-interval ride."""
+    zone = (session.intensity or {}).get("zone")
+    return zone if isinstance(zone, str) else None
+
+
 def attach_planned_session(
     workout: Workout, *, store: StoreInterface, slug: str, profile: Athlete, series: dict | None
 ) -> Workout:
@@ -151,7 +158,8 @@ def attach_planned_session(
     if session is None:
         return workout
     updates: dict = {"planned_session_id": session.id}
-    if workout.sport == "bike" and session.structured is not None and series:
+    planned_zone = planned_intensity_zone(session)
+    if workout.sport == "bike" and (session.structured is not None or planned_zone is not None) and series:
         analytics = compute_analytics(
             laps=workout.laps,
             lengths=workout.lengths,
@@ -163,6 +171,7 @@ def attach_planned_session(
             prescribed_structure=session.structured,
             home_elevation_m=profile.home_elevation_m,
             ftp_watts=profile.ftp_watts,
+            planned_zone=planned_zone,
         )
         updates["analytics"] = analytics
     log.info("workouts.plan_matched", athlete=slug, workout_id=str(workout.id), session_id=str(session.id))
