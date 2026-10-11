@@ -9,4 +9,4 @@ cards:
   recommendation: Coach reads the analyzer's objective per-ride output (efforts found, on-target %, terrain-vs-fade
     flags, decoupling) to give athletes accurate post-ride feedback instead of eyeballing power files
     by hand.
-  content_hash: 5089cc01d7cc79e046db73514aa3d7f069395c7d3237957b3e764511d9e83288
+  content_hash: eae6f5ddfd413da5cf061c7f89fbcb823500fe7ff734b8a053519160b4d05eb4
