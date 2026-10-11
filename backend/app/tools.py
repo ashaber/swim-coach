@@ -290,7 +290,7 @@ from app.context import (
     iso_week_str,
     summarize_rollup,
 )
-from app.enrich import annotate_power_curve_bests, find_planned_session, planned_intensity_zone
+from app.enrich import analysis_context, annotate_power_curve_bests, find_planned_session, planned_intensity_zone
 from app.drafts import MACRO_CARRIER_WEEK, TAPER_CARRIER_WEEK, draft_is_stale
 from app.garmin_push import push_on_demand
 from app.health_status_helpers import link_health_status_feedback
@@ -4068,6 +4068,17 @@ def _recover_planned_zone(store: StoreInterface, slug: str, workout: Workout) ->
     return planned_intensity_zone(session) if session is not None else None
 
 
+def _recover_analysis_context(
+    store: StoreInterface, slug: str, workout: Workout, *, ride_date, sport
+) -> dict:
+    """`app.enrich.analysis_context` for the planned session this workout matches."""
+    session = find_planned_session(store, slug, workout) if workout is not None else None
+    return analysis_context(
+        store, slug, ride_date=ride_date, sport=sport, session=session,
+        lthr_bpm=store.load_athlete(slug).lthr_bpm,
+    )
+
+
 def _load_workout_series(
     store: StoreInterface, slug: str, workout: Workout
 ) -> tuple[dict | None, str, str | None]:
@@ -4202,6 +4213,7 @@ def _handle_reanalyze_workout(
         home_elevation_m=store.load_athlete(slug).home_elevation_m,
         ftp_watts=store.load_athlete(slug).ftp_watts,
         planned_zone=_recover_planned_zone(store, slug, workout),
+        **_recover_analysis_context(store, slug, workout, ride_date=workout.date, sport=workout.sport),
     )
     new_analytics = annotate_power_curve_bests(
         new_analytics, store=store, slug=slug, ride_date=workout.date, workout_id=workout.id
@@ -4647,6 +4659,9 @@ def _handle_pull_activity_stream(
         home_elevation_m=store.load_athlete(slug).home_elevation_m,
         ftp_watts=store.load_athlete(slug).ftp_watts,
         planned_zone=_recover_planned_zone(store, slug, workout) if workout is not None else None,
+        **_recover_analysis_context(
+            store, slug, workout, ride_date=workout.date if workout is not None else draft.date, sport=draft.sport
+        ),
     )
     new_analytics = annotate_power_curve_bests(
         new_analytics,

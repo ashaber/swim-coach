@@ -31,6 +31,34 @@ from app.logging_config import get_logger
 log = get_logger("app.enrich")
 
 
+RACE_PURPOSE_PREFIX = "RACE — "
+
+
+def analysis_context(
+    store: StoreInterface,
+    slug: str,
+    *,
+    ride_date: date,
+    sport: str | None,
+    session: Session | None,
+    lthr_bpm: float | None,
+) -> dict:
+    """Extra `compute_analytics` kwargs for a bike ride: `lthr_bpm`, `race` (the matched
+    session is a RACE session, or the athlete has a bike event on that date) and
+    `session_text` (the matched session's purpose + structure text). Best-effort: an event
+    lookup failure logs and reads as "not a race"."""
+    race = bool(session is not None and session.purpose.strip().upper().startswith(RACE_PURPOSE_PREFIX))
+    if not race and sport == "bike":
+        try:
+            race = any(
+                ev.event_date == ride_date and ev.primary_sport == "bike" for ev in store.load_events(slug)
+            )
+        except Exception as exc:  # noqa: BLE001 - a missing event list must not block analytics
+            log.warn("workouts.race_event_lookup_failed", athlete=slug, error=str(exc))
+    text = " ".join(t for t in ((session.purpose, session.structure) if session else ()) if t) or None
+    return {"lthr_bpm": lthr_bpm, "race": race, "session_text": text}
+
+
 def enrich_draft(
     draft: WorkoutDraft,
     *,
@@ -70,9 +98,10 @@ def enrich_draft(
     try:
         profile = store.load_athlete(athlete)
         home_elevation_m, ftp_watts = profile.home_elevation_m, profile.ftp_watts
+        lthr_bpm = profile.lthr_bpm
     except Exception as exc:  # noqa: BLE001 - analytics must still compute without it
         log.warn("workouts.enrich_home_elevation_lookup_failed", athlete=athlete, error=str(exc))
-        home_elevation_m, ftp_watts = None, None
+        home_elevation_m, ftp_watts, lthr_bpm = None, None, None
 
     if hasattr(store, "save_raw_file"):
         draft.raw_ref = store.save_raw_file(athlete, tmp_path)
@@ -104,6 +133,9 @@ def enrich_draft(
         sport=draft.sport,
         home_elevation_m=home_elevation_m,
         ftp_watts=ftp_watts,
+        **analysis_context(
+            store, athlete, ride_date=draft.date, sport=draft.sport, session=None, lthr_bpm=lthr_bpm
+        ),
     )
     draft.analytics = annotate_power_curve_bests(
         draft.analytics, store=store, slug=athlete, ride_date=draft.date, workout_id=workout_id
@@ -192,7 +224,12 @@ def attach_planned_session(
         return workout
     updates: dict = {"planned_session_id": session.id}
     planned_zone = planned_intensity_zone(session)
-    if workout.sport == "bike" and (session.structured is not None or planned_zone is not None) and series:
+    is_race = session.purpose.strip().upper().startswith(RACE_PURPOSE_PREFIX)
+    if (
+        workout.sport == "bike"
+        and (session.structured is not None or planned_zone is not None or is_race)
+        and series
+    ):
         analytics = compute_analytics(
             laps=workout.laps,
             lengths=workout.lengths,
@@ -205,6 +242,10 @@ def attach_planned_session(
             home_elevation_m=profile.home_elevation_m,
             ftp_watts=profile.ftp_watts,
             planned_zone=planned_zone,
+            **analysis_context(
+                store, slug, ride_date=workout.date, sport=workout.sport, session=session,
+                lthr_bpm=profile.lthr_bpm,
+            ),
         )
         updates["analytics"] = annotate_power_curve_bests(
             analytics, store=store, slug=slug, ride_date=workout.date, workout_id=workout.id
