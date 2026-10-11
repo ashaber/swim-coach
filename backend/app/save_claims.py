@@ -63,6 +63,7 @@ NON_PLAN_OR_READ_ONLY: frozenset[str] = frozenset({
     "get_plan_summary",
     "get_week_plan",
     "flag_for_coach_review",
+    "log_app_feedback",
     "lookup_reference",
     "get_race_debriefs",
     "get_workouts",

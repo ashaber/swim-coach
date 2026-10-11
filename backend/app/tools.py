@@ -870,7 +870,8 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "athlete questions and, in expert mode, a professional coach/"
             "physiologist's proposed correction the library doesn't yet "
             "cover), AND separately whenever something needs a human coach's "
-            "attention even though you DO have a grounded answer to give."
+            "attention even though you DO have a grounded answer to give. "
+            "Not for app bugs, feature ideas or app feedback -- use log_app_feedback."
         ),
         "input_schema": {
             "type": "object",
@@ -894,6 +895,29 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
             },
             "required": ["question", "topic"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "log_app_feedback",
+        "description": (
+            "Log a note FOR THE APP DEVELOPER (never a human coach; no one is paged). Use when the "
+            "athlete asks you to log a bug/defect, feedback or a feature idea, when YOU notice a tool "
+            "misbehaving (e.g. a tool error you had to work around), or a clearly good/bad outcome worth "
+            "recording. type: `bug` (app/coach defect), `feature_request` (missing capability), `comment` "
+            "(what worked well or badly; set `sentiment`). Research-library gaps and pain/safety/human-coach "
+            "requests stay on flag_for_coach_review -- never use that for app defects."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "type": {"type": "string", "enum": ["bug", "feature_request", "comment"]},
+                "summary": {"type": "string", "description": "The athlete's words verbatim or close, or a one-line summary."},
+                "what_happened": {"type": "string", "description": "What happened / the context: tool, inputs, error text."},
+                "topic": {"type": "string", "description": "Optional short label, e.g. 'bike structured steps'."},
+                "sentiment": {"type": "string", "enum": ["positive", "negative"], "description": "For `comment` only."},
+            },
+            "required": ["type", "summary"],
             "additionalProperties": False,
         },
     },
@@ -3143,6 +3167,55 @@ def _handle_flag_for_coach_review(
             routed_files=routed_files or [],
             request_id=request_id,
         )
+    return {"logged": True, "id": str(entry.id), "type": entry.type}
+
+
+_APP_FEEDBACK_TYPES = ("bug", "feature_request", "comment")
+
+
+def _handle_log_app_feedback(
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str, expert_mode: bool
+) -> dict[str, Any]:
+    """`log_app_feedback`: a coach-authored `bug` / `feature_request` / `comment` Feedback row for
+    the app developer. Deliberately never notifies coaches (only the feedback ROUTES do, and
+    `needs_human_review` stays False so it never lands in the human-coach queue)."""
+    fb_type = input_data.get("type")
+    if fb_type not in _APP_FEEDBACK_TYPES:
+        return {"error": f"type must be one of {', '.join(_APP_FEEDBACK_TYPES)}"}
+    summary = input_data.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        return {"error": "summary is required"}
+    sentiment = input_data.get("sentiment")
+    if sentiment not in (None, "positive", "negative"):
+        return {"error": "sentiment must be 'positive' or 'negative'"}
+
+    context: dict[str, Any] = {"expert_mode": expert_mode}
+    for key in ("topic", "sentiment"):
+        if input_data.get(key):
+            context[key] = input_data[key]
+    what_happened = input_data.get("what_happened")
+    if isinstance(what_happened, str) and what_happened.strip():
+        context["what_happened"] = what_happened.strip()
+
+    try:
+        athlete_id = store.load_athlete(slug).id
+    except Exception:  # noqa: BLE001 - feedback must still log if the profile can't be resolved
+        log.warn("could not resolve athlete for app feedback", athlete=slug, exc_info=True)
+        athlete_id = None
+
+    entry = Feedback(
+        id=uuid.uuid4(),
+        athlete_id=athlete_id,
+        type=fb_type,
+        source="coach",
+        body=summary.strip(),
+        context=context,
+        status="open",
+        created_at=datetime.now(timezone.utc),
+        needs_human_review=False,
+    )
+    store.save_feedback(entry)
+    log.info("app feedback logged", athlete=slug, feedback_type=fb_type)
     return {"logged": True, "id": str(entry.id), "type": entry.type}
 
 
@@ -9427,6 +9500,9 @@ def build_tool_handlers(
             expert_mode=expert_mode,
             routed_files=routed_files,
             request_id=request_id,
+        ),
+        "log_app_feedback": lambda input_data: _handle_log_app_feedback(
+            input_data, store=store, slug=slug, expert_mode=expert_mode
         ),
         "lookup_reference": lambda input_data: _handle_lookup_reference(
             input_data, library_dir=library_dir, request_id=request_id
