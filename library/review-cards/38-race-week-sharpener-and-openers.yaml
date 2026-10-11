@@ -1,0 +1,28 @@
+schema_version: 1
+file: 38-race-week-sharpener-and-openers.md
+cards:
+- section: the-sharpener-about-3-4-days-before-a-priority-race
+  heading: The sharpener (about 3-4 days before a priority race)
+  summary: A short ~60 min sharpener (IF ~0.65-0.75, TSS ~45-60) is the last real stimulus, applying the cut-volume-hold-intensity
+    taper principle (Mujika & Padilla 2003; Bosquet 2007); figures are practitioner shapes.
+  recommendation: Program one small sharpener 3-4 days out and shrink or move it earlier if the athlete arrives
+    flat.
+  content_hash: dc55e7eb2dc88f0f4eb84e1d64816a4854a2ebfad3cf800917ef0062031ed45b
+- section: the-openers-the-day-before-the-race
+  heading: The openers (the day before the race)
+  summary: Openers (~20-40 min, a few short builds to race pace) wake the legs the day before and are distinct from
+    the sharpener; neither replaces the other.
+  recommendation: Keep openers very low load and never hard enough to be a stimulus; still schedule the sharpener.
+  content_hash: d6ec07d67e9908d09d107b07e3cc3470183f719379d71edfadeefa0f3b1aca47
+- section: the-cyclocross-hard-start
+  heading: The cyclocross "hard start"
+  summary: 'Coach judgment: rehearse lap 1 as one continuous 10-20 s all-out launch straight into 2-4 min at threshold/race
+    pace, not separate starts plus separate VO2 intervals.'
+  recommendation: Write the hard start as a single continuous effort with no easing between launch and threshold.
+  content_hash: 70a80fed2275a8ebf5675a581827e318d01723c018dbfffeab184a0a29e10e79
+- section: the-8-week-ramp-rail-in-a-race-week
+  heading: The +8%/week ramp rail in a race week
+  summary: Race days and warm-ups inflate race-week minutes, so the build-phase +8%/week minutes rail is low-signal
+    there; a TSS-based bike rail is a future idea and plan_check is unchanged.
+  recommendation: Surface the rail finding in a race week but call it low-signal rather than rewriting a sound taper.
+  content_hash: 34d8de2843fb9c01d3b7224a1369ac2173c82b6adffef4d2a58f761a6b124025

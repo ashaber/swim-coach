@@ -2989,11 +2989,32 @@ async function handleSubmitAskCoachForSession() {
       ...state.feedbackEntries,
       data: [result.data, ...state.feedbackEntries.data],
     };
+    render();
+    // The coach may have rewritten this very session (the answer is one-shot but its tools can
+    // write the plan) -- reload so the card is not stale, and keep the detail open: a patch keeps
+    // session ids, a full week regenerate does not, so re-find the session by date + sport.
+    await loadPlan();
+    reopenSessionDetail(session);
+    return;
   } else {
     log.error('ask_coach.submit_failed', { athlete: athleteSlug(), scope: 'session', error: result.error });
     state.askCoachSubmit = { status: 'error', error: result.error };
   }
   render();
+}
+
+/** After a plan reload, point the open session detail back at the same (date, sport) session if
+ * its id changed (pruneSessionDetailIdIfMissing clears the id when it vanished). */
+function reopenSessionDetail(previous) {
+  if (state.planSessionDetailId) return;
+  for (const week of state.plan.data?.weeks || []) {
+    const match = (week.sessions || []).find((s) => s.date === previous.date && s.sport === previous.sport);
+    if (match) {
+      state.planSessionDetailId = match.id;
+      render();
+      return;
+    }
+  }
 }
 
 async function handleSubmitAskCoachForWorkout() {
@@ -3027,6 +3048,7 @@ async function handleSubmitAskCoachForWorkout() {
       ...state.feedbackEntries,
       data: [result.data, ...state.feedbackEntries.data],
     };
+    loadPlan(); // the coach may have changed the plan while answering
   } else {
     log.error('ask_coach.submit_failed', { athlete: athleteSlug(), scope: 'workout', error: result.error });
     state.askCoachSubmit = { status: 'error', error: result.error };

@@ -536,11 +536,15 @@ SESSION_OVERRIDES_SCHEMA: dict[str, Any] = {
                     "\"recovery\"|\"cooldown\"|\"open\", \"duration_kind\": "
                     "\"time_s\"|\"distance_m\"|\"reps\"|\"open\", "
                     "\"duration_value\": number, \"modality\": \"swim\"|"
-                    "\"strength\" (default \"swim\"), and for swim steps "
+                    "\"strength\"|\"bike\" (default \"swim\"), and for swim steps "
                     "optionally \"stroke\"/\"equipment\" plus a \"target\": "
                     "{\"basis\": \"zone\"|\"percent_css\"|\"absolute\"|\"rpe\"|"
-                    "\"open\", \"zone\": \"Z1\"-\"Z5\"|null, \"low\": number|"
-                    "null, \"high\": number|null}. Prefer \"zone\"/\"percent_css\" "
+                    "\"open\"|\"power_w\", \"zone\": \"Z1\"-\"Z5\"|null, \"low\": number|"
+                    "null, \"high\": number|null}. BIKE steps (modality \"bike\"): "
+                    "the target is watts -- basis \"power_w\" with low/high in watts; "
+                    "\"absolute\" and \"percent_css\" are swim pace only (rejected on "
+                    "bike); \"rpe\"/\"open\" are fine for bike recoveries and all-out "
+                    "efforts. For swim steps prefer \"zone\"/\"percent_css\" "
                     "whenever the athlete's CSS pace is known -- that's what "
                     "renders as a real pace range and exports to the watch as an "
                     "actual target. Reach for \"rpe\" only when effort, not pace, "
@@ -866,7 +870,8 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "athlete questions and, in expert mode, a professional coach/"
             "physiologist's proposed correction the library doesn't yet "
             "cover), AND separately whenever something needs a human coach's "
-            "attention even though you DO have a grounded answer to give."
+            "attention even though you DO have a grounded answer to give. "
+            "Not for app bugs, feature ideas or app feedback -- use log_app_feedback."
         ),
         "input_schema": {
             "type": "object",
@@ -890,6 +895,29 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
             },
             "required": ["question", "topic"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "log_app_feedback",
+        "description": (
+            "Log a note FOR THE APP DEVELOPER (never a human coach; no one is paged). Use when the "
+            "athlete asks you to log a bug/defect, feedback or a feature idea, when YOU notice a tool "
+            "misbehaving (e.g. a tool error you had to work around), or a clearly good/bad outcome worth "
+            "recording. type: `bug` (app/coach defect), `feature_request` (missing capability), `comment` "
+            "(what worked well or badly; set `sentiment`). Research-library gaps and pain/safety/human-coach "
+            "requests stay on flag_for_coach_review -- never use that for app defects."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "type": {"type": "string", "enum": ["bug", "feature_request", "comment"]},
+                "summary": {"type": "string", "description": "The athlete's words verbatim or close, or a one-line summary."},
+                "what_happened": {"type": "string", "description": "What happened / the context: tool, inputs, error text."},
+                "topic": {"type": "string", "description": "Optional short label, e.g. 'bike structured steps'."},
+                "sentiment": {"type": "string", "enum": ["positive", "negative"], "description": "For `comment` only."},
+            },
+            "required": ["type", "summary"],
             "additionalProperties": False,
         },
     },
@@ -3139,6 +3167,55 @@ def _handle_flag_for_coach_review(
             routed_files=routed_files or [],
             request_id=request_id,
         )
+    return {"logged": True, "id": str(entry.id), "type": entry.type}
+
+
+_APP_FEEDBACK_TYPES = ("bug", "feature_request", "comment")
+
+
+def _handle_log_app_feedback(
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str, expert_mode: bool
+) -> dict[str, Any]:
+    """`log_app_feedback`: a coach-authored `bug` / `feature_request` / `comment` Feedback row for
+    the app developer. Deliberately never notifies coaches (only the feedback ROUTES do, and
+    `needs_human_review` stays False so it never lands in the human-coach queue)."""
+    fb_type = input_data.get("type")
+    if fb_type not in _APP_FEEDBACK_TYPES:
+        return {"error": f"type must be one of {', '.join(_APP_FEEDBACK_TYPES)}"}
+    summary = input_data.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        return {"error": "summary is required"}
+    sentiment = input_data.get("sentiment")
+    if sentiment not in (None, "positive", "negative"):
+        return {"error": "sentiment must be 'positive' or 'negative'"}
+
+    context: dict[str, Any] = {"expert_mode": expert_mode}
+    for key in ("topic", "sentiment"):
+        if input_data.get(key):
+            context[key] = input_data[key]
+    what_happened = input_data.get("what_happened")
+    if isinstance(what_happened, str) and what_happened.strip():
+        context["what_happened"] = what_happened.strip()
+
+    try:
+        athlete_id = store.load_athlete(slug).id
+    except Exception:  # noqa: BLE001 - feedback must still log if the profile can't be resolved
+        log.warn("could not resolve athlete for app feedback", athlete=slug, exc_info=True)
+        athlete_id = None
+
+    entry = Feedback(
+        id=uuid.uuid4(),
+        athlete_id=athlete_id,
+        type=fb_type,
+        source="coach",
+        body=summary.strip(),
+        context=context,
+        status="open",
+        created_at=datetime.now(timezone.utc),
+        needs_human_review=False,
+    )
+    store.save_feedback(entry)
+    log.info("app feedback logged", athlete=slug, feedback_type=fb_type)
     return {"logged": True, "id": str(entry.id), "type": entry.type}
 
 
@@ -6829,20 +6906,28 @@ def _hold_draft(store: StoreInterface, slug: str, week: WeekPlan, *, tool: str) 
     """Keep the PROPOSED week so `confirm` can write exactly what was shown and
     agreed, instead of running the generator a second time. Returns its id, or
     `None` when the store cannot hold drafts (the tool then falls back to the old
-    regenerate-on-confirm behaviour and says so)."""
+    regenerate-on-confirm behaviour and says so).
+
+    A draft copied from the LIVE week (patch / merge / session adjustment) would carry the live
+    week's id, and `app.drafts._is_written` (live.id == draft.id) would then call it already
+    written -- hiding it from the coach on the next turn. Such a draft gets a fresh WeekPlan id;
+    session ids are untouched."""
+    update: dict[str, Any] = {"draft": True, "drafted_at": datetime.now(timezone.utc), "drafted_by": tool}
     try:
-        store.save_week_draft(
-            slug,
-            week.model_copy(
-                update={"draft": True, "drafted_at": datetime.now(timezone.utc), "drafted_by": tool}, deep=True
-            ),
-        )
+        live = store.load_week(slug, week.iso_week)
+    except Exception:  # noqa: BLE001 - a read problem must not block drafting
+        live = None
+    if live is not None and live.id == week.id:
+        update["id"] = uuid.uuid4()
+    held = week.model_copy(update=update, deep=True)
+    try:
+        store.save_week_draft(slug, held)
     except NotImplementedError:
         return None
     except Exception:  # noqa: BLE001 - draft storage must never block drafting; degrade to no draft_id
         log.error("could not hold draft", athlete=slug, iso_week=week.iso_week, exc_info=True)
         return None
-    return str(week.id)
+    return str(held.id)
 
 
 _draft_is_stale = draft_is_stale  # shared with the per-request context (app.drafts)
@@ -9415,6 +9500,9 @@ def build_tool_handlers(
             expert_mode=expert_mode,
             routed_files=routed_files,
             request_id=request_id,
+        ),
+        "log_app_feedback": lambda input_data: _handle_log_app_feedback(
+            input_data, store=store, slug=slug, expert_mode=expert_mode
         ),
         "lookup_reference": lambda input_data: _handle_lookup_reference(
             input_data, library_dir=library_dir, request_id=request_id

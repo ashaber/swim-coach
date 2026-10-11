@@ -92,6 +92,7 @@ def test_request_shape_includes_tools(client, fake_claude_chat_factory) -> None:
         "get_plan_summary",
         "get_week_plan",
         "flag_for_coach_review",
+        "log_app_feedback",
         "lookup_reference",
         "record_health_status",
         "record_threshold_test",
