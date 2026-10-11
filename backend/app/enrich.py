@@ -16,12 +16,13 @@ safety net and must keep passing unchanged.
 from __future__ import annotations
 
 from pathlib import Path
-from datetime import timedelta
+from datetime import date, timedelta
 from uuid import UUID, uuid4
 
 from swim_coach.analytics import compute_analytics
-from swim_coach.models import Athlete, Session, Workout
+from swim_coach.models import Athlete, Session, Workout, WorkoutAnalytics
 from swim_coach.parse_files import WorkoutDraft
+from swim_coach.power_curve import BEST_WINDOWS_DAYS, annotate_bests
 from swim_coach.quality import match_workout_to_session
 from swim_coach.store import StoreInterface
 
@@ -104,7 +105,39 @@ def enrich_draft(
         home_elevation_m=home_elevation_m,
         ftp_watts=ftp_watts,
     )
+    draft.analytics = annotate_power_curve_bests(
+        draft.analytics, store=store, slug=athlete, ride_date=draft.date, workout_id=workout_id
+    )
     return draft
+
+
+def annotate_power_curve_bests(
+    analytics: WorkoutAnalytics | None,
+    *,
+    store: StoreInterface,
+    slug: str,
+    ride_date: date,
+    workout_id: UUID | None = None,
+) -> WorkoutAnalytics | None:
+    """Fill the curve's 42/90-day-best comparison from the athlete's earlier rides'
+    stored curves (rides without a curve are skipped; older rides need re-analysis to
+    get one). Best-effort: a store failure logs and leaves the curve un-annotated."""
+    if analytics is None or not analytics.power_curve:
+        return analytics
+    try:
+        since = ride_date - timedelta(days=max(BEST_WINDOWS_DAYS))
+        prior = [
+            ((ride_date - w.date).days, w.analytics.power_curve)
+            for w in store.list_workouts(slug, since=since)
+            if w.id != workout_id
+            and w.date < ride_date
+            and w.analytics is not None
+            and w.analytics.power_curve
+        ]
+    except Exception as exc:  # noqa: BLE001 - the curve is still valid without the comparison
+        log.warn("workouts.power_curve_bests_failed", athlete=slug, error=str(exc))
+        return analytics
+    return analytics.model_copy(update={"power_curve": annotate_bests(analytics.power_curve, prior)})
 
 
 def _iso_week(d) -> str:
@@ -173,6 +206,8 @@ def attach_planned_session(
             ftp_watts=profile.ftp_watts,
             planned_zone=planned_zone,
         )
-        updates["analytics"] = analytics
+        updates["analytics"] = annotate_power_curve_bests(
+            analytics, store=store, slug=slug, ride_date=workout.date, workout_id=workout.id
+        )
     log.info("workouts.plan_matched", athlete=slug, workout_id=str(workout.id), session_id=str(session.id))
     return workout.model_copy(update=updates)

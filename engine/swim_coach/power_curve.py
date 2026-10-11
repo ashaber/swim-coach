@@ -108,6 +108,42 @@ def power_curve(series: dict | None) -> list[PowerCurvePoint] | None:
 
 BEST_WINDOWS_DAYS = (42, 90)
 
+COACH_DURATIONS_S = (1, 5, 15, 30, 60, 300, 600, 1200, 3600)
+
+
+def _label(d: int) -> str:
+    return f"{d}s" if d < 60 else f"{d // 60}min"
+
+
+def coach_summary(curve: list[PowerCurvePoint] | None) -> list[dict]:
+    """Compact curve for the coach: only `COACH_DURATIONS_S`, each with the prior
+    42/90-day bests and new-best flags (the full array stays in storage)."""
+    if not curve:
+        return []
+    return [
+        {
+            "duration": _label(p.duration_s),
+            "watts": p.watts,
+            "best_42d_w": p.best_42d_w,
+            "best_90d_w": p.best_90d_w,
+            "new_best_42d": p.is_best_42d,
+            "new_best_90d": p.is_best_90d,
+        }
+        for p in curve
+        if p.duration_s in COACH_DURATIONS_S
+    ]
+
+
+def analytics_for_coach(analytics) -> dict | None:
+    """`WorkoutAnalytics` as a JSON dict with the power curve swapped for its compact
+    coach view (used by the per-workout detail surfaces, never the always-loaded context)."""
+    if analytics is None:
+        return None
+    out = analytics.model_dump(mode="json")
+    if out.get("power_curve"):
+        out["power_curve"] = coach_summary(analytics.power_curve)
+    return out
+
 
 def annotate_bests(
     curve: list[PowerCurvePoint], prior: list[tuple[int, list[PowerCurvePoint]]]
