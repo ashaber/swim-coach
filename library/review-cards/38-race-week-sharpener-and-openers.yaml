@@ -26,3 +26,17 @@ cards:
     there; a TSS-based bike rail is a future idea and plan_check is unchanged.
   recommendation: Surface the rail finding in a race week but call it low-signal rather than rewriting a sound taper.
   content_hash: 34d8de2843fb9c01d3b7224a1369ac2173c82b6adffef4d2a58f761a6b124025
+- section: writing-starts-and-technical-course-reps
+  heading: Writing starts and technical-course reps
+  summary: 'Coach judgment: end start and technical-rep recoveries with lap-key steps, launch on the athlete''s own
+    1-10 s count, compare starts to the best so far, and score technical reps by HR vs LTHR.'
+  recommendation: Author lap-key recoveries and a self-counted launch for starts; score technical reps by HR, and
+    stop a start set only on a drop of more than 10% below the best start so far.
+  content_hash: ec0f080fde876fa526c35ea6e3ff608da3e19de5de9f3fe10efc4a7ee00961f0
+- section: how-the-analyzer-reads-these-sessions
+  heading: How the analyzer reads these sessions
+  summary: 'Coach judgment constants behind the analyzer: double-burst starts, HR-scored technical reps, lap-shape
+    detection without a plan, the race-start read, and no decoupling on interval, starts or race rides.'
+  recommendation: Read the per-start burst table, technical-rep HR numbers and race-start block as the analyzer's
+    objective output; treat the thresholds as fitted to a few real rides, not cited values.
+  content_hash: 59162946548ea0a97f6080e084999017f8ff91d2dda9a9b9889db6bb70fe9144

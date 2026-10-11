@@ -11,7 +11,7 @@ Two things the prescription-aware path (`prescription.py`) cannot do alone:
   scored like a planned session.
 
 Every constant is `Coach judgment:` (no source pins the numbers) with a `Test:`
-line; see `library/26-activity-stream-interval-analysis.md`
+line; see `library/38-race-week-sharpener-and-openers.md`
 ("Technical-course reps", "Lap-shape detection").
 """
 
@@ -33,7 +33,7 @@ TECH_LOW_POWER_FRAC_FTP = 0.5
 TECH_LOW_POWER_TIME_PCT = 20.0
 # Variability measure: the share of the rep's time spent under 50% of FTP (braking for
 # corners, the run-up, the remount, coasting). A rep with >= 20% of its time that low is
-# "technical": power there reflects the course, not the effort. Coach judgment (library/26).
+# "technical": power there reflects the course, not the effort. Coach judgment (library/38).
 # Test: on the real 10/10 reps 2-5 (27-37%) and 9/26 reps (40-44%) it fires; on a smooth
 # 3 min rep at 280 W (1%), the 10/06 over/under work blocks (1-9%) it does not.
 

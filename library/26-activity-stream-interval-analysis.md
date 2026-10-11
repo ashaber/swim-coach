@@ -284,7 +284,8 @@ thirds-based fade only reads the ramp to peak and the coast-out. **Coach
 judgment:** find the real burst in the stream near the expected time (lap
 presses and pauses move it) and report peak 1 s, seconds to peak, best 5 s,
 length and average. `START_STOP_RULE_DROP_PCT = 10.0`: flag a start whose
-best 5 s is >10% below the first start — the human coach's "stop if a start
-reads clearly weaker than your first" rule. No source pins 10%; the
+best 5 s is >10% below the BEST start so far — the human coach's "stop once a start
+reads clearly weaker than your best" rule. No source pins 10%; the
 burst-edge constants (`BURST_EDGE_FRAC_OF_PEAK = 0.4`,
 `BURST_MIN_PEAK_FRAC_FTP = 1.5`, `BURST_SEARCH_*`) are fitted to one session.
+Double bursts, technical reps, lap shape and race start: `38-...md`.

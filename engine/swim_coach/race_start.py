@@ -4,7 +4,7 @@ Finds the first major burst of the race (the start), reports its peak and best
 5/15/30 s, how long it lasted and how long the athlete took to settle to race
 pace, and compares the opening five minutes to the whole race. Constants are
 `Coach judgment:` (no source pins the numbers); see
-`library/26-activity-stream-interval-analysis.md` ("Race start").
+`library/38-race-week-sharpener-and-openers.md` ("Race start").
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ RACE_BURST_SEARCH_S = 20
 RACE_BURST_EDGE_FRAC = 0.4
 RACE_BURST_MAX_GAP_S = 2
 # Burst length uses the same edge rule as the training-start burst (power >= 40% of the
-# peak, <= 2 s dropouts). Coach judgment (library/26).
+# peak, <= 2 s dropouts). Coach judgment (library/38).
 
 RACE_SETTLE_WINDOW_S = 30
 RACE_SETTLE_BAND_FRAC = 0.10

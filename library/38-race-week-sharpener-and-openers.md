@@ -58,3 +58,55 @@ should still surface the finding, but treat it as low-signal for a race week
 and say so plainly rather than rewriting a sound taper to satisfy it. A
 load-based (TSS) bike rail that ignores warm-up and race minutes is a future
 idea, not built; `plan_check` behaviour is unchanged.
+
+## Writing starts and technical-course reps
+
+**`Coach judgment:`** Starts and technical reps are timed by hand on the
+day, so write them that way. End each recovery after a start or a
+technical rep with a lap-key step (`duration_kind: "open"`, "recover until
+lap key"); on a Garmin it exports as a lap-button step, so the athlete
+rides the recovery they need rather than a clock that ignores a
+remount. A start itself is a fixed short step: tell the athlete to press
+lap, then launch on their own count of 1-10 s, because the watch cannot
+randomize the gap and a fixed countdown teaches the body to anticipate it.
+Judge a set of starts against the BEST start so far, not the first: the
+first one or two are often ridden at about 90% on purpose and built from, and
+the stop rule (stop once a start's best 5 s is more than 10% under the best
+so far) must not fire on a deliberate build. On a tight technical course
+(corner sequence, barrier or run-up, remount) continuous power is
+impossible, so judge those reps by heart rate against LTHR, not by average
+power against a watts target.
+
+## How the analyzer reads these sessions
+
+All of these numbers are `Coach judgment:` fitted to a handful of real
+rides, not cited values; each carries a `Test:` line in its code comment.
+
+- **Double-burst starts.** A start ridden as a launch, a brake for a
+  corner, then a second effort out of it carries `burst2_*` and the dip
+  between them (`BURST2_MAX_GAP_S = 20`, `BURST2_DIP_FRAC_OF_PEAK = 0.5`,
+  `BURST2_MIN_FRAC_OF_MAIN_PEAK = 0.6`). The stop rule scores a start on the
+  better of its two bursts. Sets of reps under `START_MIN_PRESCRIBED_S = 10`
+  s (5 s builds) are openers: a peak read, no stop rule.
+- **Technical reps (HR-scored).** A work rep of at least
+  `TECH_MIN_REP_S = 120` s is technical when its step label names technical
+  terrain, or when at least `TECH_LOW_POWER_TIME_PCT = 20` % of it is spent
+  under half of FTP (half that, `TECH_LABEL_ASSISTED_TIME_PCT = 10`, when only
+  the plan text says technical). Such a rep reports average power, NP, average
+  HR, % of LTHR and seconds at or above 90% of LTHR, and reads "effort
+  held" at `TECH_HR_HELD_PCT_LTHR = 85`; it gets no under-target or fade verdict.
+  A rep with under `STREAM_MIN_COVERAGE = 0.8` of its seconds recorded is
+  reported from the lap summary and not scored.
+- **Lap shape.** With no plan, or a plan the analyzer cannot time-align (lap-key
+  steps), at least `SHAPE_MIN_REPEATS = 3` alternating work/recovery laps with
+  matching durations (`SHAPE_DURATION_TOL_*`) are treated as the prescription
+  with open targets (`detection_source = "lap_shape"`). Work laps of at least
+  60 s must average `SHAPE_WORK_VS_REST_POWER = 1.25` x their recovery; shorter
+  ones must show a 1.5 x FTP burst nearby.
+- **Race start.** On a race (`race=True`), the first sample at or above
+  `RACE_BURST_MIN_FRAC_FTP = 1.5` x FTP that is followed by 5 min averaging at
+  least `RACE_FOLLOW_MIN_FRAC_FTP = 0.6` x FTP is the start. Reported: peak, best
+  5/15/30 s, burst length, seconds until the trailing 30 s mean sits within
+  `RACE_SETTLE_BAND_FRAC = 10` % of the following 5 min, and the first 5 min NP
+  against the race's NP from the start onward. No decoupling read is emitted
+  for a race, nor for an interval or starts session.

@@ -441,7 +441,7 @@ BURST_SEARCH_AFTER_S = 60.0
 START_MIN_PRESCRIBED_S = 10.0
 # A short open set whose reps are shorter than this (Tim's 5 s "builds") is an opener, not a
 # race-start set: it still gets a peak/best-5 s read per rep but no stop-rule and no row in
-# the starts table. Coach judgment (library/26).
+# the starts table. Coach judgment (library/38). Test: the real 9/26 5 s builds are openers.
 
 START_STOP_RULE_DROP_PCT = 10.0
 # Flag a start whose best 5 s is more than this % below the BEST best-5 s of the earlier
@@ -453,17 +453,17 @@ BURST2_MAX_GAP_S = 20
 # A start ridden as two efforts (launch, brake for a corner, effort out of it): the second
 # burst must begin/end within this many seconds of the first. Coach judgment; the real
 # 9/26 technical-loop starts had 2-4 s dips and the second burst within ~10 s.
-# library/26-activity-stream-interval-analysis.md.
+# library/38-race-week-sharpener-and-openers.md. Test: 9/26 starts 2-4 read as two bursts.
 
 BURST2_MIN_FRAC_OF_MAIN_PEAK = 0.6
 # ...and its peak must be at least this fraction of the start's main (highest) peak, so a
 # tail of pedalling after a clean single burst is not read as a second effort. Coach
 # judgment: the real 9/26 second bursts ran 0.87-1.0x the main peak; a spurious 10/10 tail
-# was 0.50x. library/26-activity-stream-interval-analysis.md.
+# was 0.50x. library/38-race-week-sharpener-and-openers.md. Test: 10/10 starts stay single.
 
 BURST2_DIP_FRAC_OF_PEAK = 0.5
 # ...and the power between the two must fall to at most this fraction of the second burst's
-# peak (a real brake/corner, not a wobble inside one effort). Coach judgment (library/26).
+# peak (a real brake/corner, not a wobble inside one effort). Coach judgment (library/38).
 
 
 # --- result types (internal; analyze() returns the pydantic WorkoutIntervals) ------
