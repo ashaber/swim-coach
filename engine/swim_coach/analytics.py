@@ -17,6 +17,7 @@ import statistics
 from typing import Literal
 
 from swim_coach.models import WorkoutLap, WorkoutLength, WorkoutPause
+from swim_coach.power_curve import power_curve
 
 # --- constants (library/11-workout-analytics.md) --------------------------------------
 
@@ -557,6 +558,7 @@ def compute_analytics(
     )
     avg_power = average_power_w(series)
     norm_power = normalized_power_w(series)
+    curve = power_curve(series)
 
     return WorkoutAnalytics(
         cardiac_drift_pct=drift,
@@ -573,4 +575,5 @@ def compute_analytics(
         intervals=intervals,
         avg_power_w=avg_power,
         normalized_power_w=norm_power,
+        power_curve=curve,
     )
