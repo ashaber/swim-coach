@@ -1109,6 +1109,7 @@ _LIBRARY_FILE_SPORT_SCOPE: dict[str, frozenset[str]] = {
     "30-altitude-power-adjustment.md": frozenset({"bike"}),
     "31-multi-race-season-periodization.md": frozenset({"bike"}),
     "32-gps-lap-detection.md": frozenset({"bike"}),
+    "38-race-week-sharpener-and-openers.md": frozenset({"bike"}),
 }
 
 
