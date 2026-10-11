@@ -67,6 +67,7 @@ class PrescribedRep:
     high_w: float | None  # None for an unbounded top zone or an unresolved band
     offset_s: float
     basis: str | None = None  # the step target's basis (power_w / zone / rpe / open ...), None if no target
+    label: str | None = None  # the step's label (e.g. "Race-pace on technical loop"), None if unlabeled
 
 
 @dataclass(frozen=True)
@@ -87,7 +88,7 @@ class RepWindow:
 @dataclass(frozen=True)
 class Located:
     windows: list[RepWindow]
-    source: str  # "laps" | "series"
+    source: str  # "laps" | "series" | "lap_shape" (no plan: inferred from the device laps)
     prescribed: list[PrescribedRep]  # every prescribed rep, located or not
 
 
@@ -151,6 +152,7 @@ def flatten_prescription(
                 index=state["index"], round_n=round_n, rep_in_round=state["rep"],
                 duration_s=dur, zone=zone, low_w=low, high_w=high, offset_s=state["offset"],
                 basis=step.target.basis if step.target is not None else None,
+                label=getattr(step, "label", None),
             )
         leaves.append(PrescribedLeaf(step.role, dur, state["offset"], rep))
         state["offset"] += dur

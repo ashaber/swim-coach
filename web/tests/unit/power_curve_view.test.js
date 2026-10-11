@@ -36,10 +36,10 @@ describe('power curve and race starts', () => {
   it('builds the starts table with the stop-rule flag', () => {
     const iv = {
       efforts_detected: 0, detection_basis: 'power', efforts: [],
-      starts_flag: 'best-5 s fell more than 10% below the first start: start 3',
+      starts_flag: 'best-5 s fell more than 10% below the best start so far: start 3',
       starts: [
-        { n: 1, prescribed_s: 30, burst_start_s: 1474, burst_s: 13, peak_w: 1079, s_to_peak: 3, best_5s_w: 956, avg_w: 700, drop_vs_first_pct: null, verdict: 'peak 1079 W (reference start)' },
-        { n: 3, prescribed_s: 30, burst_start_s: 1975, burst_s: 21, peak_w: 919, s_to_peak: 2, best_5s_w: 805, avg_w: 600, drop_vs_first_pct: 15.8, verdict: 'x (stop-rule)' },
+        { n: 1, prescribed_s: 30, burst_start_s: 1474, burst_s: 13, peak_w: 1079, s_to_peak: 3, best_5s_w: 956, avg_w: 700, drop_vs_best_pct: null, verdict: 'peak 1079 W (reference start)' },
+        { n: 3, prescribed_s: 30, burst_start_s: 1975, burst_s: 21, peak_w: 919, s_to_peak: 2, best_5s_w: 805, avg_w: 600, drop_vs_best_pct: 15.8, verdict: 'x (stop-rule)' },
       ],
     };
     const m = buildRawAnalysis({ analytics: { intervals: iv } }, undefined);

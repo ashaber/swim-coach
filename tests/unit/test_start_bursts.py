@@ -40,14 +40,14 @@ def test_five_starts_match_stream(result):
         assert st.prescribed_s == 30.0
 
 
-def test_drop_vs_first_and_flag_fires_at_start_3(result):
-    drops = [s.drop_vs_first_pct for s in result.starts]
+def test_drop_vs_best_and_flag_fires_at_start_3(result):
+    drops = [s.drop_vs_best_pct for s in result.starts]
     assert drops[0] is None
     assert abs(drops[1] - 1) <= 1 and abs(drops[2] - 16) <= 1
     assert abs(drops[3] - 6) <= 1 and abs(drops[4] - 14) <= 1
     assert [s.stop_rule_flag for s in result.starts] == [False, False, True, False, True]
     assert result.starts_flag and "start 3" in result.starts_flag
-    assert "16% below start 1" in result.starts[2].verdict
+    assert "16% below your best so far (start 1)" in result.starts[2].verdict
 
 
 def test_start_efforts_carry_burst_verdicts_not_fade(result):
