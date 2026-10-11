@@ -203,3 +203,47 @@ def test_endurance_ride_keeps_its_decoupling_read():
     r = _run("ride_2026_10_07_endurance_altitude.json", plan=False)
     assert r.decoupling_tightened_pct == 7.5 and "intensity change" in r.decoupling_note
     assert r.session_shape is None
+
+
+# --- lap-key (open) steps -----------------------------------------------------------------
+
+
+def test_plan_with_lap_key_recoveries_falls_back_to_lap_shape():
+    d = json.loads((FIX / "ride_2026_09_26_starts_technical_5x5.json").read_text())
+    s = Session.model_validate(d["planned_session"])
+    tree = s.structured.model_dump(mode="json")
+
+    def open_recoveries(items):
+        for it in items:
+            if it["kind"] == "repeat":
+                open_recoveries(it["steps"])
+            elif it["role"] == "recovery":
+                it["duration_kind"], it["duration_value"] = "open", None
+
+    open_recoveries(tree["items"])
+    structure = type(s.structured).model_validate(tree)
+    laps = [WorkoutLap.model_validate(x) for x in d["workout"]["laps"]]
+    p = d["athlete_profile"]
+    r = analyze(d["series"], sport="bike", structure=structure, laps=laps, ftp_watts=p["ftp_watts"], lthr_bpm=p["lthr_bpm"])
+    assert r.detection_source == "lap_shape" and len(r.starts) == 4 and r.technical_reps == 3
+
+
+def test_open_duration_bike_step_exports_as_a_lap_button_step():
+    import fitdecode
+    from swim_coach.garmin_export import to_garmin_fit_workout
+    from swim_coach.models import WorkoutStep, WorkoutStructure, WorkoutTarget
+
+    structure = WorkoutStructure(items=[
+        WorkoutStep(label="Start", role="interval", duration_kind="time_s", duration_value=30.0, modality="bike",
+                    target=WorkoutTarget(basis="open")),
+        WorkoutStep(label="Recover until lap key", role="recovery", duration_kind="open", modality="bike",
+                    target=WorkoutTarget(basis="power_w", low=143.0, high=143.0)),
+    ])
+    data = to_garmin_fit_workout(structure, "bike", "starts")
+    with fitdecode.FitReader(data) as fit:
+        steps = [
+            {f.name: f.value for f in fr.fields}
+            for fr in fit
+            if fr.frame_type == fitdecode.FIT_FRAME_DATA and fr.name == "workout_step"
+        ]
+    assert [st["duration_type"] for st in steps] == ["time", "open"]

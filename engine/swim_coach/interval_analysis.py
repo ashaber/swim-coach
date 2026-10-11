@@ -2181,7 +2181,9 @@ def analyze(
         located = locate_prescribed_reps(
             structure, series=series, laps=laps, ftp_watts=ftp_watts
         )
-    elif not race:
+    if located is None and not race:
+        # No plan, or a plan this module cannot time-align (e.g. lap-key "open" steps):
+        # fall back to the repeating work/recovery shape of the device laps.
         located = infer_lap_shape(
             laps, series, burst_floor_w=BURST_MIN_PEAK_FRAC_FTP * ftp_watts if ftp_watts else None
         )
