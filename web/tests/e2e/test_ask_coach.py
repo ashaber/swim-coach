@@ -247,3 +247,41 @@ def test_session_ask_coach_waiting_on_coach_state_when_flagged_for_review(page):
     page.wait_for_selector('#ask-coach')
 
     assert 'Waiting on your coach to reply.' in page.content()
+
+
+def test_session_card_refreshes_after_the_coach_rewrites_it(page):
+    """The one-shot answer's tools can write the plan: after a successful ask the plan is
+    reloaded and the open session detail shows the rewritten session (same id, as a patch keeps)."""
+    rewritten = json.loads(PLAN_STUB)
+    rewritten['weeks'][0]['sessions'][0]['purpose'] = 'Rewritten by the coach: threshold repeats'
+    plan_body = [PLAN_STUB]
+
+    def plan_handler(route):
+        if route.request.method == 'OPTIONS':
+            route.fulfill(status=204, headers=CORS_HEADERS)
+            return
+        route.fulfill(status=200, content_type='application/json', body=plan_body[0], headers=CORS_HEADERS)
+
+    def questions_handler(route):
+        if route.request.method == 'OPTIONS':
+            route.fulfill(status=204, headers=CORS_HEADERS)
+            return
+        plan_body[0] = json.dumps(rewritten)  # the coach "wrote" the plan while answering
+        _questions_route([])(route)
+
+    page.route('**/api/plan?*', plan_handler)
+    page.route('**/api/feedback/questions*', questions_handler)
+    page.route('**/api/feedback*', _cors_route(200, 'application/json', '[]'))
+
+    page.wait_for_selector('[data-a="tab:plan"]')
+    page.click('[data-a="tab:plan"]')
+    page.wait_for_selector(f'[data-a="session:open"][data-id="{PLANNED_SESSION["id"]}"]')
+    page.click(f'[data-a="session:open"][data-id="{PLANNED_SESSION["id"]}"]')
+    page.wait_for_selector('#ask-coach')
+    assert 'Aerobic base' in page.content()
+
+    page.fill('[data-form="askCoach"][data-field="body"]', 'make it threshold repeats')
+    page.click('[data-a="ask-coach:submit"]')
+
+    page.wait_for_selector('text=Rewritten by the coach: threshold repeats')
+    assert page.locator('#ask-coach').count() == 1  # still on the session detail
