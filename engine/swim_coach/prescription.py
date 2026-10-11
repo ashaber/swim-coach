@@ -66,6 +66,7 @@ class PrescribedRep:
     low_w: float | None
     high_w: float | None  # None for an unbounded top zone or an unresolved band
     offset_s: float
+    basis: str | None = None  # the step target's basis (power_w / zone / rpe / open ...), None if no target
 
 
 @dataclass(frozen=True)
@@ -149,6 +150,7 @@ def flatten_prescription(
             rep = PrescribedRep(
                 index=state["index"], round_n=round_n, rep_in_round=state["rep"],
                 duration_s=dur, zone=zone, low_w=low, high_w=high, offset_s=state["offset"],
+                basis=step.target.basis if step.target is not None else None,
             )
         leaves.append(PrescribedLeaf(step.role, dur, state["offset"], rep))
         state["offset"] += dur

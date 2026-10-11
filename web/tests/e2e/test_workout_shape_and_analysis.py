@@ -72,7 +72,22 @@ WORKOUT = {
             'target_zone': 'Z5', 'target_band_w': [289.8, 331.2], 'efforts': EFFORTS,
             'rounds': [{'n': 1, 'reps_prescribed': 6, 'reps_completed': 6, 'avg_w': 307.9, 'avg_hr': 150,
                         'reps_in_band': 6, 'fade_within_pct': 0.5}],
+            'starts_flag': 'best-5 s fell more than 10% below the first start: start 2 (16% below start 1)',
+            'starts': [
+                {'n': 1, 'prescribed_s': 30, 'burst_start_s': 1474, 'burst_s': 13, 'peak_w': 1079, 's_to_peak': 3,
+                 'best_5s_w': 956, 'avg_w': 700, 'drop_vs_first_pct': None, 'stop_rule_flag': False,
+                 'verdict': 'peak 1079 W, best 5 s 956 W (reference start)'},
+                {'n': 2, 'prescribed_s': 30, 'burst_start_s': 1975, 'burst_s': 21, 'peak_w': 919, 's_to_peak': 2,
+                 'best_5s_w': 805, 'avg_w': 600, 'drop_vs_first_pct': 15.8, 'stop_rule_flag': True,
+                 'verdict': 'peak 919 W, best 5 s 805 W -- 16% below start 1 (stop-rule)'},
+            ],
         },
+        'power_curve': [
+            {'duration_s': d, 'watts': w, 'best_42d_w': b, 'best_90d_w': b, 'is_best_42d': b is not None and w > b,
+             'is_best_90d': b is not None and w > b}
+            for d, w, b in [(1, 1100, 1000), (5, 956, 980), (15, 794, None), (30, 624, None), (60, 353, None),
+                            (300, 290, None), (600, 270, None), (1200, 250, None), (3600, 200, None)]
+        ],
     },
     'quality': {'matched': True, 'intensity_match': 'match', 'execution': EXECUTION},
     'laps': [{'index': 0, 'duration_s': 900, 'start_offset_s': 0, 'avg_power_w': 189, 'distance_m': 7777, 'avg_hr': 131}],
@@ -221,3 +236,19 @@ def test_raw_analysis_button_opens_the_breakdown_and_works_offline(page):
 
     page.locator('[data-a="workout:raw-analysis-toggle"]').click()
     page.wait_for_selector('.raw-analysis', state='detached')
+
+
+def test_raw_analysis_shows_starts_table_and_power_curve_without_scrolling(page):
+    _open_ride(page)
+    page.locator('[data-a="workout:raw-analysis-toggle"]').click()
+    page.wait_for_selector('.raw-starts')
+    starts = page.locator('.raw-starts table.raw-table')
+    assert starts.locator('tbody tr').count() == 2
+    assert '16% below start 1' in starts.inner_text()
+    assert 'stop-rule' in page.locator('.raw-starts').inner_text()
+    curve = page.locator('.raw-power-curve')
+    assert curve.locator('svg.power-curve-chart polyline').count() == 2  # this ride + 90-day best
+    text = curve.inner_text()
+    assert 'new 90-day best' in text and '1100 W' in text
+    assert curve.locator('table.raw-table tbody tr').count() == 9
+    assert _no_horizontal_scroll(page)

@@ -272,6 +272,7 @@ from swim_coach.plan import (
     scaffold_season_macro,
     scaffold_sharpening_macro,
 )
+from swim_coach.power_curve import analytics_for_coach
 from swim_coach.store import StoreInterface
 from swim_coach.taper_search import (
     MIN_TAPER_RUNWAY_DAYS,
@@ -289,7 +290,7 @@ from app.context import (
     iso_week_str,
     summarize_rollup,
 )
-from app.enrich import find_planned_session, planned_intensity_zone
+from app.enrich import annotate_power_curve_bests, find_planned_session, planned_intensity_zone
 from app.drafts import MACRO_CARRIER_WEEK, TAPER_CARRIER_WEEK, draft_is_stale
 from app.garmin_push import push_on_demand
 from app.health_status_helpers import link_health_status_feedback
@@ -3987,7 +3988,7 @@ def _summarize_workout(w: Workout, *, athlete: Athlete, hr_max: float | None, we
         "notes": w.notes,
         "avg_hr": w.avg_hr,
         "max_hr": w.max_hr,
-        "analytics": w.analytics.model_dump(mode="json") if w.analytics is not None else None,
+        "analytics": analytics_for_coach(w.analytics),
         "lap_count": len(w.laps),
         "length_count": len(w.lengths),
         "pause_count": len(w.pauses),
@@ -4201,6 +4202,9 @@ def _handle_reanalyze_workout(
         home_elevation_m=store.load_athlete(slug).home_elevation_m,
         ftp_watts=store.load_athlete(slug).ftp_watts,
         planned_zone=_recover_planned_zone(store, slug, workout),
+    )
+    new_analytics = annotate_power_curve_bests(
+        new_analytics, store=store, slug=slug, ride_date=workout.date, workout_id=workout.id
     )
     workout.analytics = new_analytics
     # Re-key the series row to this real workout id so a later read resolves
@@ -4643,6 +4647,13 @@ def _handle_pull_activity_stream(
         home_elevation_m=store.load_athlete(slug).home_elevation_m,
         ftp_watts=store.load_athlete(slug).ftp_watts,
         planned_zone=_recover_planned_zone(store, slug, workout) if workout is not None else None,
+    )
+    new_analytics = annotate_power_curve_bests(
+        new_analytics,
+        store=store,
+        slug=slug,
+        ride_date=workout.date if workout is not None else draft.date,
+        workout_id=workout.id if workout is not None else None,
     )
     intervals = new_analytics.intervals
 

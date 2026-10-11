@@ -85,6 +85,7 @@ from swim_coach.load import (
     wellness_trend,
 )
 from swim_coach.models import Athlete, Event, HealthStatus, Session, ThresholdRecord, Workout
+from swim_coach.power_curve import analytics_for_coach
 from swim_coach.store import StoreInterface
 
 from app.drafts import render_pending_drafts
@@ -2135,7 +2136,7 @@ def render_focused_workout(
         "notes": workout.notes,
         "avg_hr": workout.avg_hr,
         "max_hr": workout.max_hr,
-        "analytics": workout.analytics.model_dump(mode="json") if workout.analytics is not None else None,
+        "analytics": analytics_for_coach(workout.analytics),
         "load_au": load_au,
         "load_tier": load_tier,
     }

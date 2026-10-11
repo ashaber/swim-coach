@@ -265,3 +265,26 @@ the ride's own surface roughness:
   `INDOOR_ROUGHNESS_MAX` keeps the tight floor; a caller that knows the FIT
   `sub_sport`/`trainer` flag can force it via `analyze(..., indoor=...)`.
   The multiplier is a fitted constant, not cited.
+
+### Mean-maximal power curve (`power_curve.py`; practitioner convention)
+
+Per duration, the highest average power over any contiguous window — the
+power-duration profile of Allen & Coggan's *Training and Racing with a Power
+Meter* (`reference_list.md`). **Coach judgment:** the duration set
+(1/2/5/10/15/20/30 s, 1–120 min, then every 30 min) and the 42/90-day
+comparison windows are practitioner convention matched to intervals.icu.
+**Nulls count as 0 W** so short windows are not inflated (within ±2 W of
+intervals.icu on a real ride). A gap above `PAUSE_GAP_S = 5` s is a timer
+pause and is removed, not zero-filled.
+
+### Race starts (short open-target bursts; coach judgment)
+
+For a rep under `BURST_MAX_PRESCRIBED_S = 60` s with an open/RPE target, a
+thirds-based fade only reads the ramp to peak and the coast-out. **Coach
+judgment:** find the real burst in the stream near the expected time (lap
+presses and pauses move it) and report peak 1 s, seconds to peak, best 5 s,
+length and average. `START_STOP_RULE_DROP_PCT = 10.0`: flag a start whose
+best 5 s is >10% below the first start — the human coach's "stop if a start
+reads clearly weaker than your first" rule. No source pins 10%; the
+burst-edge constants (`BURST_EDGE_FRAC_OF_PEAK = 0.4`,
+`BURST_MIN_PEAK_FRAC_FTP = 1.5`, `BURST_SEARCH_*`) are fitted to one session.

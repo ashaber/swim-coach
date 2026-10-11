@@ -2953,6 +2953,24 @@ function renderScoreBreakdown(score) {
       </div>`;
 }
 
+function renderPowerCurveSvg(g) {
+  const yTicks = g.yTicks.map((t) => `
+    <line x1="${g.plotLeft}" x2="${g.plotRight}" y1="${t.y.toFixed(1)}" y2="${t.y.toFixed(1)}" stroke="var(--line-soft)" stroke-width="0.5"/>
+    <text x="${g.plotLeft - 4}" y="${(t.y + 3).toFixed(1)}" text-anchor="end" class="shape-tick">${esc(t.label)}</text>`).join('');
+  const xTicks = g.xTicks.map((t) => `
+    <text x="${t.x.toFixed(1)}" y="${g.height - 8}" text-anchor="middle" class="shape-tick">${esc(t.label)}</text>`).join('');
+  return `
+      <svg class="shape-chart power-curve-chart" viewBox="0 0 ${g.width} ${g.height}" role="img" aria-label="Power curve: best average watts for each duration, this ride against the 90-day best" preserveAspectRatio="xMidYMid meet">
+        ${yTicks}${xTicks}
+        ${g.hasBest90 ? `<polyline points="${g.best90}" fill="none" stroke="var(--ink-soft)" stroke-width="1.5" stroke-dasharray="4 3"/>` : ''}
+        <polyline points="${g.ride}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+      </svg>
+      <div class="shape-legend">
+        <span class="shape-legend-item"><i class="shape-swatch" style="background:var(--accent)"></i>This ride</span>
+        ${g.hasBest90 ? '<span class="shape-legend-item"><i class="shape-swatch" style="background:var(--ink-soft)"></i>90-day best</span>' : ''}
+      </div>`;
+}
+
 function renderRawAnalysisSection(workout, pacing, open) {
   const model = buildRawAnalysis(workout, pacing);
   if (!model) return '';
@@ -2972,6 +2990,8 @@ function renderRawAnalysisSection(workout, pacing, open) {
       ${renderScoreBreakdown(model.score)}
       ${model.efforts ? `<h5>Efforts (${model.efforts.rows.length})</h5>${model.efforts.rows.length ? renderRawTable(model.efforts.columns, model.efforts.rows) : '<p class="sub">No sustained efforts detected.</p>'}` : ''}
       ${model.rounds ? `<h5>Rounds</h5>${renderRawTable(model.rounds.columns, model.rounds.rows)}` : ''}
+      ${model.starts ? `<div class="raw-starts"><h5>Starts</h5>${model.starts.flag ? `<p class="sub">${esc(model.starts.flag)}</p>` : ''}${renderRawTable(model.starts.columns, model.starts.rows)}</div>` : ''}
+      ${model.powerCurve ? `<div class="raw-power-curve"><h5>Power curve</h5>${model.powerCurve.note ? `<p class="sub">${esc(model.powerCurve.note)}</p>` : ''}${model.powerCurve.geometry ? renderPowerCurveSvg(model.powerCurve.geometry) : ''}${renderRawTable(model.powerCurve.columns, model.powerCurve.rows)}</div>` : ''}
       ${race ? `
       <h5>Race analysis</h5>
       ${renderScoreBreakdown(race.score)}

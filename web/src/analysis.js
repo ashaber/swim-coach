@@ -139,6 +139,89 @@ function raceView(pacing) {
   };
 }
 
+
+// --- Power curve + race starts --------------------------------------------------
+
+// Durations shown in the table (the chart plots every stored point).
+const CURVE_TABLE_S = [1, 5, 15, 30, 60, 300, 600, 1200, 3600];
+
+function durationLabel(d) {
+  return d < 60 ? `${d}s` : `${Math.round(d / 60)}min`;
+}
+
+export const POWER_CURVE_COLUMNS = ['Duration', 'This ride', '42-day best', '90-day best', ''];
+
+function curveFlag(p) {
+  if (p.is_best_90d === true) return 'new 90-day best';
+  if (p.is_best_42d === true) return 'new 42-day best';
+  return '';
+}
+
+/** SVG-ready geometry for the mean-max curve: log10(duration) on x, watts on y.
+ * Two lines: this ride and the prior 90-day best (only where one exists). */
+export function powerCurveGeometry(curve, { width = 320, height = 170 } = {}) {
+  const pts = (curve || []).filter((p) => num(p.duration_s) && num(p.watts) && p.duration_s > 0);
+  if (pts.length < 2) return null;
+  const left = 38;
+  const right = width - 8;
+  const top = 8;
+  const bottom = height - 24;
+  const xs = pts.map((p) => Math.log10(p.duration_s));
+  const x0 = xs[0];
+  const x1 = xs[xs.length - 1];
+  const maxW = Math.max(...pts.map((p) => Math.max(p.watts, p.best_90d_w || 0)));
+  const yMax = Math.ceil(maxW / 100) * 100 || 100;
+  const X = (d) => left + ((Math.log10(d) - x0) / (x1 - x0 || 1)) * (right - left);
+  const Y = (w) => bottom - (w / yMax) * (bottom - top);
+  const line = (rows, key) => rows.filter((p) => num(p[key])).map((p) => `${X(p.duration_s).toFixed(1)},${Y(p[key]).toFixed(1)}`).join(' ');
+  const yTicks = [0, 0.5, 1].map((f) => ({ y: Y(yMax * f), label: `${Math.round(yMax * f)}` }));
+  const xTicks = pts.filter((p) => CURVE_TABLE_S.includes(p.duration_s)).map((p) => ({ x: X(p.duration_s), label: durationLabel(p.duration_s) }));
+  return {
+    width, height, plotLeft: left, plotRight: right, yTicks, xTicks,
+    ride: line(pts, 'watts'),
+    best90: line(pts, 'best_90d_w'),
+    hasBest90: pts.some((p) => num(p.best_90d_w)),
+  };
+}
+
+function powerCurveView(curve) {
+  if (!Array.isArray(curve) || curve.length === 0) return null;
+  const byDur = new Map(curve.map((p) => [p.duration_s, p]));
+  const rows = CURVE_TABLE_S.filter((d) => byDur.has(d)).map((d) => {
+    const p = byDur.get(d);
+    return [durationLabel(d), watts(p.watts), watts(p.best_42d_w), watts(p.best_90d_w), curveFlag(p)];
+  });
+  const anyCompared = curve.some((p) => p.is_best_42d !== null && p.is_best_42d !== undefined);
+  return {
+    columns: POWER_CURVE_COLUMNS,
+    rows,
+    geometry: powerCurveGeometry(curve),
+    note: anyCompared ? null : 'No earlier rides have a stored curve yet, so no best is flagged.',
+  };
+}
+
+export const STARTS_COLUMNS = ['Start', 'At', 'Burst', 'Peak', 'To peak', 'Best 5 s', 'Avg', 'vs start 1', 'Verdict'];
+
+function startsView(iv) {
+  const starts = iv?.starts || [];
+  if (starts.length === 0) return null;
+  return {
+    columns: STARTS_COLUMNS,
+    rows: starts.map((s) => [
+      String(s.n),
+      num(s.burst_start_s) ? formatClock(s.burst_start_s) : dash,
+      num(s.burst_s) ? `${Math.round(s.burst_s)} s (of ${Math.round(s.prescribed_s)})` : dash,
+      watts(s.peak_w),
+      num(s.s_to_peak) ? `${Math.round(s.s_to_peak)} s` : dash,
+      watts(s.best_5s_w),
+      watts(s.avg_w),
+      num(s.drop_vs_first_pct) ? signed(-s.drop_vs_first_pct, 0) : dash,
+      s.verdict || dash,
+    ]),
+    flag: iv.starts_flag || null,
+  };
+}
+
 /** Everything the panel shows, or null when there is nothing analyzer-made to
  * show (no interval analysis and no pacing). `pacing` is
  * `state.pacingByWorkoutId[id]` (`{status, data, error}`) or undefined. */
@@ -146,12 +229,15 @@ export function buildRawAnalysis(workout, pacing) {
   const iv = workout?.analytics?.intervals || null;
   const execution = workout?.quality?.execution || null;
   const race = raceView(pacing);
-  if (!iv && !race && !execution) return null;
+  const powerCurve = powerCurveView(workout?.analytics?.power_curve);
+  if (!iv && !race && !execution && !powerCurve) return null;
   return {
     summary: iv ? summaryRows(iv) : [],
     score: scoreView(execution, 'Execution score'),
     efforts: iv ? { columns: EFFORT_COLUMNS, rows: effortRows(iv) } : null,
     rounds: iv && (iv.rounds || []).length ? { columns: ROUND_COLUMNS, rows: roundRows(iv) } : null,
+    starts: startsView(iv),
+    powerCurve,
     race,
     racePending: pacing?.status === 'loading',
     raceError: pacing?.status === 'error' ? (pacing.error || 'Race analysis is not available.') : null,

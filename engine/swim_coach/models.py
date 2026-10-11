@@ -1470,6 +1470,41 @@ class IntervalRound(BaseModel):
     fade_within_pct: float | None = None  # first-half vs second-half rep power, % drop
 
 
+class PowerCurvePoint(BaseModel):
+    """One duration of a ride's mean-maximal power curve -- see
+    `swim_coach.power_curve`. `best_42d_w`/`best_90d_w` are the athlete's best
+    for the same duration over the 42 / 90 days BEFORE this ride (from other
+    rides' stored curves; `None` when none had a curve), and `is_best_*` says
+    whether this ride beat them (`None` = nothing to compare against)."""
+
+    duration_s: int
+    watts: int
+    start_s: float  # start of the best window, seconds on the ride's own t_s timeline
+    best_42d_w: int | None = None
+    best_90d_w: int | None = None
+    is_best_42d: bool | None = None
+    is_best_90d: bool | None = None
+
+
+class StartBurst(BaseModel):
+    """One short all-out start (< 60 s, open/RPE target) read from the power
+    stream instead of the prescribed window -- see
+    `interval_analysis.analyze_start_bursts`. `None` numeric fields mean no
+    burst was found near the expected time."""
+
+    n: int  # 1-based, in prescription order
+    prescribed_s: float
+    burst_start_s: float | None = None
+    burst_s: float | None = None
+    peak_w: int | None = None
+    s_to_peak: float | None = None
+    best_5s_w: int | None = None
+    avg_w: int | None = None
+    drop_vs_first_pct: float | None = None  # best-5s drop vs the set's first start (None for start 1)
+    stop_rule_flag: bool = False
+    verdict: str
+
+
 class WorkoutIntervals(BaseModel):
     """The compact interval block on `WorkoutAnalytics` -- deterministic
     output of `swim_coach.interval_analysis.analyze`, computed inside
@@ -1540,6 +1575,11 @@ class WorkoutIntervals(BaseModel):
     target_zone: str | None = None
     target_band_w: tuple[float, float] | None = None  # resolved watts band (from FTP)
     rounds: list[IntervalRound] = Field(default_factory=list)
+    # Short-burst sets (race starts): per-start numbers read from the stream, and a
+    # set-level note when a start's best-5s fell past the stop-rule threshold.
+    # Additive/optional -- empty / None on every row that predates them.
+    starts: list[StartBurst] = Field(default_factory=list)
+    starts_flag: str | None = None
 
 
 class WorkoutAnalytics(BaseModel):
@@ -1577,6 +1617,9 @@ class WorkoutAnalytics(BaseModel):
     # convention as every other additive field in this file.
     avg_power_w: float | None = None
     normalized_power_w: float | None = None
+    # Mean-maximal power curve (`swim_coach.power_curve`) for any ride with a power
+    # channel; `None` otherwise and on rows that predate it. Additive/optional.
+    power_curve: list[PowerCurvePoint] | None = None
 
 
 WorkoutChatSenderRole = Literal["athlete", "ai_coach", "coach"]
