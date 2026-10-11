@@ -7965,3 +7965,11 @@ def test_new_planning_tools_are_registered_and_old_ones_are_unexposed_but_kept(a
     for name in ("draft_macro_plan", "replace_macro_plan", "draft_season_macro_plan", "create_week_plan", "replace_week_plan"):
         assert name not in schema_names  # unexposed
         assert name in handlers  # handler code kept in place, per the approved plan
+
+
+def test_structured_schema_documents_bike_watts() -> None:
+    from app.tools import SESSION_OVERRIDES_SCHEMA
+
+    text = json.dumps(SESSION_OVERRIDES_SCHEMA)
+    assert "power_w" in text
+    assert "BIKE steps" in text and "swim pace only" in text
