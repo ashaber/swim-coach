@@ -65,12 +65,14 @@ interval-shape taxonomy, `library/24-cycling-periodization-intervals.md`).
 from __future__ import annotations
 
 import statistics
+from bisect import bisect_left
 from dataclasses import dataclass, field
 
 from swim_coach.models import (
     IntervalEffort,
     IntervalRound,
     IntervalSubStructure,
+    StartBurst,
     WorkoutIntervals,
     WorkoutStructure,
 )
@@ -395,6 +397,39 @@ ALTITUDE_POWER_DECREMENT_PCT_PER_1000M = 6.0
 # Test: if this athlete's own elevated-ride efforts consistently under- or
 # over-shoot this estimate relative to their near-baseline performance,
 # recalibrate against their own data. library/30-altitude-power-adjustment.md.
+
+
+# --- short-burst sets (race starts) -------------------------------------------------
+
+BURST_MAX_PRESCRIBED_S = 60.0
+# A prescribed rep shorter than this whose target is open/RPE/absent is a "start":
+# an all-out burst whose first-vs-last-third fade is meaningless (it is mostly
+# the ramp up to peak and coasting out), so it is scored on its peak and best 5 s
+# instead. Coach judgment. library/26-activity-stream-interval-analysis.md.
+
+BURST_EDGE_FRAC_OF_PEAK = 0.4
+# The burst runs while power stays >= this fraction of its own peak (gaps of up to
+# `BURST_MAX_GAP_S` s allowed). Coach judgment, tuned so burst length on the real
+# 10/10 starts agrees with a contiguous-above-~400 W read.
+# library/26-activity-stream-interval-analysis.md.
+
+BURST_MAX_GAP_S = 2
+# Dropout seconds tolerated inside one burst. Coach judgment (library/26).
+
+BURST_MIN_PEAK_FRAC_FTP = 1.5
+# With an FTP known, a region whose 1 s peak is below this multiple of FTP has no
+# burst in it (the athlete skipped or soft-pedalled the start). Coach judgment (library/26).
+
+BURST_SEARCH_BEFORE_S = 30.0
+BURST_SEARCH_AFTER_S = 60.0
+# Where to look for a start relative to its expected window: laps are pressed by
+# hand and a timer pause shifts everything after it, so the prescribed window is a
+# hint, not a boundary. Coach judgment (library/26).
+
+START_STOP_RULE_DROP_PCT = 10.0
+# Flag a start whose best 5 s is more than this % below the set's FIRST start.
+# Coach judgment: implements Tim's "stop if a start reads clearly weaker than your
+# first" rule; no source pins 10%. library/26-activity-stream-interval-analysis.md.
 
 
 # --- result types (internal; analyze() returns the pydantic WorkoutIntervals) ------
@@ -1486,6 +1521,176 @@ def _pct_drop(first: float | None, last: float | None) -> float | None:
     return round((first - last) / first * 100, 1) + 0.0
 
 
+def _is_short_open_rep(rep: PrescribedRep) -> bool:
+    return (
+        rep.duration_s < BURST_MAX_PRESCRIBED_S
+        and rep.low_w is None
+        and rep.basis in (None, "open", "rpe")
+    )
+
+
+def _short_open_groups(reps: list[PrescribedRep]) -> list[list[PrescribedRep]]:
+    """Runs of consecutive prescribed reps that are short/open with the same duration
+    (one set of starts; the 5 s warm-up bursts are a separate group from the 30 s starts)."""
+    groups: list[list[PrescribedRep]] = []
+    for rep in reps:
+        if not _is_short_open_rep(rep):
+            continue
+        prev = groups[-1][-1] if groups else None
+        if prev is not None and prev.index == rep.index - 1 and prev.duration_s == rep.duration_s:
+            groups[-1].append(rep)
+        else:
+            groups.append([rep])
+    return groups
+
+
+@dataclass(frozen=True)
+class _Burst:
+    start_s: float
+    length_s: float
+    peak_w: int
+    s_to_peak: float
+    best_5s_w: int
+    avg_w: int
+
+
+def _find_burst(
+    t_s: list[float], power: list, lo_s: float, hi_s: float, *, ftp_watts: float | None
+) -> _Burst | None:
+    """The burst (contiguous run around the highest 1 s sample) inside [lo_s, hi_s)."""
+    lo, hi = bisect_left(t_s, lo_s), bisect_left(t_s, hi_s)
+    if hi <= lo:
+        return None
+    w = [float(x) if x is not None else 0.0 for x in power[lo:hi]]
+    peak = max(w)
+    if peak <= 0 or (ftp_watts and peak < BURST_MIN_PEAK_FRAC_FTP * ftp_watts):
+        return None
+    ip = w.index(peak)
+    edge = BURST_EDGE_FRAC_OF_PEAK * peak
+    a = ip
+    gap = 0
+    for i in range(ip - 1, -1, -1):
+        if w[i] >= edge:
+            a, gap = i, 0
+        else:
+            gap += 1
+            if gap > BURST_MAX_GAP_S:
+                break
+    b = ip
+    gap = 0
+    for i in range(ip + 1, len(w)):
+        if w[i] >= edge:
+            b, gap = i, 0
+        else:
+            gap += 1
+            if gap > BURST_MAX_GAP_S:
+                break
+    run = w[a : b + 1]
+    n5 = min(5, len(run))
+    best5 = max(sum(run[i : i + n5]) / n5 for i in range(len(run) - n5 + 1))
+    start_t = t_s[lo + a]
+    return _Burst(
+        start_s=start_t,
+        length_s=t_s[lo + b] - start_t + 1.0,
+        peak_w=int(round(peak)),
+        s_to_peak=t_s[lo + ip] - start_t,
+        best_5s_w=int(round(best5)),
+        avg_w=int(round(statistics.fmean(run))),
+    )
+
+
+def _burst_verdict(b: _Burst | None, drop_pct: float | None, flagged: bool) -> str:
+    if b is None:
+        return "no clear burst found near the prescribed window"
+    head = f"peak {b.peak_w} W, best 5 s {b.best_5s_w} W"
+    if drop_pct is None:
+        return f"{head} (reference start)"
+    if drop_pct <= 0:
+        return f"{head} -- as strong as start 1"
+    tail = f"{drop_pct:.0f}% below start 1"
+    return f"{head} -- {tail} (stop-rule)" if flagged else f"{head} -- {tail}"
+
+
+def analyze_start_bursts(
+    series: dict, located: Located, *, ftp_watts: float | None
+) -> list[tuple[PrescribedRep, StartBurst, _Burst | None]]:
+    """Score every short, open/RPE-target set of reps ("race starts") from the stream.
+
+    Each start's burst is searched for around its expected time (the located
+    windows give the schedule shift; the window itself is only a hint -- see
+    `BURST_SEARCH_*`), then reported as peak 1 s W, seconds to peak, best 5 s W,
+    burst length and average W, with the best-5 s drop vs the set's first start.
+    A drop above `START_STOP_RULE_DROP_PCT` raises that start's `stop_rule_flag`."""
+    t_s = series.get("t_s") or []
+    power = series.get("power_w") or []
+    shifts = [w.start_s - w.rep.offset_s for w in located.windows]
+    if not t_s or not power or not shifts:
+        return []
+    shift = statistics.median(shifts)
+    out: list[tuple[PrescribedRep, StartBurst, _Burst | None]] = []
+    for group in _short_open_groups(list(located.prescribed)):
+        expected = [r.offset_s + shift for r in group]
+        found: list[_Burst | None] = []
+        for i, rep in enumerate(group):
+            lo = expected[i] - BURST_SEARCH_BEFORE_S
+            hi = expected[i] + rep.duration_s + BURST_SEARCH_AFTER_S
+            if i > 0:
+                lo = max(lo, (expected[i - 1] + expected[i]) / 2)
+            if i + 1 < len(group):
+                hi = min(hi, (expected[i] + expected[i + 1]) / 2)
+            found.append(_find_burst(t_s, power, lo, hi, ftp_watts=ftp_watts))
+        first = next((b for b in found if b is not None), None)
+        for i, (rep, b) in enumerate(zip(group, found)):
+            drop = None
+            if b is not None and first is not None and b is not first and first.best_5s_w > 0:
+                drop = round((first.best_5s_w - b.best_5s_w) / first.best_5s_w * 100, 1) + 0.0
+            flagged = drop is not None and drop > START_STOP_RULE_DROP_PCT
+            out.append(
+                (
+                    rep,
+                    StartBurst(
+                        n=i + 1,
+                        prescribed_s=rep.duration_s,
+                        burst_start_s=round(b.start_s, 1) if b else None,
+                        burst_s=round(b.length_s, 1) if b else None,
+                        peak_w=b.peak_w if b else None,
+                        s_to_peak=round(b.s_to_peak, 1) if b else None,
+                        best_5s_w=b.best_5s_w if b else None,
+                        avg_w=b.avg_w if b else None,
+                        drop_vs_first_pct=drop,
+                        stop_rule_flag=flagged,
+                        verdict=_burst_verdict(b, drop, flagged),
+                    ),
+                    b,
+                )
+            )
+    return out
+
+
+def _starts_with_any_burst(
+    scored: list[tuple[PrescribedRep, StartBurst, _Burst | None]]
+) -> list[StartBurst]:
+    """`StartBurst`s of the groups (consecutive same-set reps, `n` restarting at 1)
+    in which at least one burst was found."""
+    groups: list[list[StartBurst]] = []
+    for _rep, sb, _b in scored:
+        if sb.n == 1:
+            groups.append([])
+        groups[-1].append(sb)
+    return [sb for g in groups if any(x.peak_w is not None for x in g) for sb in g]
+
+
+def _starts_flag(starts: list[StartBurst]) -> str | None:
+    bad = [s for s in starts if s.stop_rule_flag]
+    if not bad:
+        return None
+    parts = ", ".join(f"start {s.n} ({s.drop_vs_first_pct:.0f}% below start 1)" for s in bad)
+    return (
+        f"best-5 s fell more than {START_STOP_RULE_DROP_PCT:.0f}% below the first start: {parts} "
+        "-- stop-rule (stop if a start reads clearly weaker than your first)"
+    )
+
+
 def _analyze_prescribed_reps(
     series: dict,
     located: Located,
@@ -1536,6 +1741,21 @@ def _analyze_prescribed_reps(
         )
     if not efforts:
         return None
+
+    scored = analyze_start_bursts(series, located, ftp_watts=ftp_watts)
+    by_index = {rep.index: (sb, b) for rep, sb, b in scored}
+    # A set where no burst was found at all (e.g. 5 s warm-up "bursts" ridden easy) is
+    # not a starts table -- its efforts just lose the meaningless fade verdict.
+    starts = _starts_with_any_burst(scored)
+    for i, e in enumerate(efforts):
+        hit = by_index.get(rep_of[e.n].index)
+        if hit is None:
+            continue
+        sb, b = hit
+        upd: dict = {"fade_pct": None, "terrain_flag": None, "time_in_band_pct": None, "verdict": sb.verdict}
+        if b is not None:
+            upd.update(start_s=round(b.start_s, 1), duration_s=round(b.length_s, 1), avg_w=float(b.avg_w))
+        efforts[i] = e.model_copy(update=upd)
 
     def completed(e: IntervalEffort) -> bool:
         low = rep_of[e.n].low_w
@@ -1600,6 +1820,8 @@ def _analyze_prescribed_reps(
             if band and band[0] is not None and band[1] is not None else None
         ),
         "rounds": rounds,
+        "starts": starts,
+        "starts_flag": _starts_flag(starts),
     }
 
 
