@@ -6829,20 +6829,28 @@ def _hold_draft(store: StoreInterface, slug: str, week: WeekPlan, *, tool: str) 
     """Keep the PROPOSED week so `confirm` can write exactly what was shown and
     agreed, instead of running the generator a second time. Returns its id, or
     `None` when the store cannot hold drafts (the tool then falls back to the old
-    regenerate-on-confirm behaviour and says so)."""
+    regenerate-on-confirm behaviour and says so).
+
+    A draft copied from the LIVE week (patch / merge / session adjustment) would carry the live
+    week's id, and `app.drafts._is_written` (live.id == draft.id) would then call it already
+    written -- hiding it from the coach on the next turn. Such a draft gets a fresh WeekPlan id;
+    session ids are untouched."""
+    update: dict[str, Any] = {"draft": True, "drafted_at": datetime.now(timezone.utc), "drafted_by": tool}
     try:
-        store.save_week_draft(
-            slug,
-            week.model_copy(
-                update={"draft": True, "drafted_at": datetime.now(timezone.utc), "drafted_by": tool}, deep=True
-            ),
-        )
+        live = store.load_week(slug, week.iso_week)
+    except Exception:  # noqa: BLE001 - a read problem must not block drafting
+        live = None
+    if live is not None and live.id == week.id:
+        update["id"] = uuid.uuid4()
+    held = week.model_copy(update=update, deep=True)
+    try:
+        store.save_week_draft(slug, held)
     except NotImplementedError:
         return None
     except Exception:  # noqa: BLE001 - draft storage must never block drafting; degrade to no draft_id
         log.error("could not hold draft", athlete=slug, iso_week=week.iso_week, exc_info=True)
         return None
-    return str(week.id)
+    return str(held.id)
 
 
 _draft_is_stale = draft_is_stale  # shared with the per-request context (app.drafts)
