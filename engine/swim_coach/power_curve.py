@@ -146,6 +146,16 @@ STARTS_COACH_NOTE = (
 )
 
 
+def _tag_start_efforts(iv: dict) -> None:
+    """Coach view only: renumber the visible efforts 1..N (stored `n` is untouched) and give
+    each effort at a start's burst `start_n`, the number in the starts table."""
+    start_n = {s.get("burst_start_s"): s["n"] for s in iv.get("starts") or []}
+    for i, e in enumerate(iv["efforts"], 1):
+        e["n"] = i
+        if e.get("start_s") in start_n:
+            e["start_n"] = start_n[e["start_s"]]
+
+
 def analytics_for_coach(analytics) -> dict | None:
     """`WorkoutAnalytics` as a JSON dict in the order the coach should read it, with the power
     curve swapped for its compact coach view (used by the per-workout detail surfaces, never
@@ -163,6 +173,7 @@ def analytics_for_coach(analytics) -> dict | None:
             iv["starts_note"] = STARTS_COACH_NOTE
         if iv.get("efforts"):
             iv["efforts"] = [e for e in iv["efforts"] if e.get("verdict") != WARMUP_BUILD_VERDICT]
+            _tag_start_efforts(iv)
         lead = [k for k in ("starts", "starts_flag", "starts_note") if k in iv]
         rest = [k for k in iv if k not in lead and k != "efforts"]
         out["intervals"] = {k: iv[k] for k in [*lead, *rest, *(["efforts"] if "efforts" in iv else [])]}

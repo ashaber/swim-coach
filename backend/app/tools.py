@@ -4706,7 +4706,7 @@ def _handle_pull_activity_stream(
         "cached": persisted,
         "sport_corrected": sport_corrected,
         "previous_sport": previous_sport,
-        "intervals": intervals.model_dump(mode="json") if intervals is not None else None,
+        "analytics": analytics_for_coach(new_analytics),
     }
 
 

@@ -67,3 +67,11 @@ def test_efforts_include_start_1_and_match_the_starts_table(reanalysed) -> None:
         e = by_start[s["burst_start_s"]]
         assert e["avg_w"] == pytest.approx(s["avg_w"], abs=2)
         assert f"peak {s['peak_w']} W, best 5 s {s['best_5s_w']} W" in e["verdict"]
+
+
+def test_coach_efforts_are_renumbered_and_starts_carry_their_table_number(reanalysed) -> None:
+    iv = reanalysed[0]["analytics"]["intervals"]
+    assert [e["n"] for e in iv["efforts"]] == list(range(1, len(iv["efforts"]) + 1))
+    tagged = {e["start_n"]: e["start_s"] for e in iv["efforts"] if "start_n" in e}
+    assert tagged == {s["n"]: s["burst_start_s"] for s in iv["starts"]}
+    assert iv["efforts"][0]["start_n"] == 1

@@ -110,3 +110,15 @@ def test_coach_view_drops_warmup_builds_and_leads_with_starts_and_curve():
     five = next(p for p in view["power_curve"] if p["duration"] == "5s")
     assert abs(five["watts"] - 956) <= 2
     assert not any(e["verdict"] == "warm-up build (not scored)" for e in view["intervals"]["efforts"])
+
+
+def test_coach_view_renumbers_efforts_and_tags_start_n(result):
+    from swim_coach.power_curve import _tag_start_efforts
+
+    iv = {
+        "starts": [{"n": s.n, "burst_start_s": s.burst_start_s} for s in result.starts],
+        "efforts": [{"n": e.n, "start_s": e.start_s} for e in result.efforts if e.duration_s > 5],
+    }
+    _tag_start_efforts(iv)
+    assert [e["n"] for e in iv["efforts"]] == list(range(1, len(iv["efforts"]) + 1))
+    assert [e.get("start_n") for e in iv["efforts"][:6]] == [1, 2, 3, 4, 5, None]
