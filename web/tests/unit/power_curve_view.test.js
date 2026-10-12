@@ -33,18 +33,19 @@ describe('power curve and race starts', () => {
     expect(buildRawAnalysis({ analytics: {} }, undefined)).toBeNull();
   });
 
-  it('builds the starts table with the stop-rule flag', () => {
+  it('builds the starts table with held seconds and the weak-start note', () => {
     const iv = {
       efforts_detected: 0, detection_basis: 'power', efforts: [],
-      starts_flag: 'best-5 s fell more than 10% below the best start so far: start 3',
+      starts_flag: 'start 3 off (likely execution) -- skill rep, not fatigue',
       starts: [
         { n: 1, prescribed_s: 30, burst_start_s: 1474, burst_s: 13, peak_w: 1079, s_to_peak: 3, best_5s_w: 956, avg_w: 700, drop_vs_best_pct: null, verdict: 'peak 1079 W (reference start)' },
-        { n: 3, prescribed_s: 30, burst_start_s: 1975, burst_s: 21, peak_w: 919, s_to_peak: 2, best_5s_w: 805, avg_w: 600, drop_vs_best_pct: 15.8, verdict: 'x (stop-rule)' },
+        { n: 3, prescribed_s: 30, burst_start_s: 1975, burst_s: 21, peak_w: 919, s_to_peak: 2, best_5s_w: 805, avg_w: 600, drop_vs_best_pct: 15.8, held_s: 21, intended_s: 30, verdict: 'x' },
       ],
     };
     const m = buildRawAnalysis({ analytics: { intervals: iv } }, undefined);
     expect(m.starts.flag).toMatch(/start 3/);
     expect(m.starts.rows[0].slice(0, 8)).toEqual(['1', '24:34', '13 s (of 30)', '1079 W', '3 s', '956 W', '700 W', '—']);
     expect(m.starts.rows[1][7]).toBe('-16%');
+    expect(m.starts.rows[1][2]).toBe('21 of 30 s');
   });
 });

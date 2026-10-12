@@ -279,3 +279,11 @@ def test_held_seconds_count_both_bursts_on_9_26(r926):
     assert held[0] == 7.0 and 14 <= held[1] <= 18 and all(s.intended_s == 22.0 for s in r926.starts)
     assert r926.starts[1].verdict.startswith("held 16 of 22 s; burst 1 peak")
     assert "4 s dip to 105 W" in r926.starts[1].verdict
+
+
+def test_coach_view_carries_the_skill_rep_note(r926):
+    from swim_coach.models import WorkoutAnalytics
+    from swim_coach.power_curve import analytics_for_coach
+
+    out = analytics_for_coach(WorkoutAnalytics(intervals=r926))
+    assert "skill rep" in out["intervals"]["starts_note"]

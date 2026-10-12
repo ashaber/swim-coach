@@ -72,14 +72,14 @@ WORKOUT = {
             'target_zone': 'Z5', 'target_band_w': [289.8, 331.2], 'efforts': EFFORTS,
             'rounds': [{'n': 1, 'reps_prescribed': 6, 'reps_completed': 6, 'avg_w': 307.9, 'avg_hr': 150,
                         'reps_in_band': 6, 'fade_within_pct': 0.5}],
-            'starts_flag': 'best-5 s fell more than 10% below the best start so far: start 2 (16% below your best)',
+            'starts_flag': 'start 2 off (likely execution) -- skill rep, not fatigue',
             'starts': [
                 {'n': 1, 'prescribed_s': 30, 'burst_start_s': 1474, 'burst_s': 13, 'peak_w': 1079, 's_to_peak': 3,
-                 'best_5s_w': 956, 'avg_w': 700, 'drop_vs_best_pct': None, 'stop_rule_flag': False,
-                 'verdict': 'peak 1079 W, best 5 s 956 W (reference start)'},
+                 'best_5s_w': 956, 'avg_w': 700, 'drop_vs_best_pct': None, 'weak_start': False,
+                 'verdict': 'held 13 of 30 s; peak 1079 W, best 5 s 956 W (reference start)'},
                 {'n': 2, 'prescribed_s': 30, 'burst_start_s': 1975, 'burst_s': 21, 'peak_w': 919, 's_to_peak': 2,
-                 'best_5s_w': 805, 'avg_w': 600, 'drop_vs_best_pct': 15.8, 'stop_rule_flag': True,
-                 'verdict': 'peak 919 W, best 5 s 805 W -- 16% below your best so far (start 1) (stop-rule)'},
+                 'best_5s_w': 805, 'avg_w': 600, 'drop_vs_best_pct': 15.8, 'weak_start': True,
+                 'verdict': 'held 21 of 30 s; peak 919 W, best 5 s 805 W -- 16% below best start (start 1) -- likely execution, not fatigue'},
             ],
         },
         'power_curve': [
@@ -244,8 +244,8 @@ def test_raw_analysis_shows_starts_table_and_power_curve_without_scrolling(page)
     page.wait_for_selector('.raw-starts')
     starts = page.locator('.raw-starts table.raw-table')
     assert starts.locator('tbody tr').count() == 2
-    assert '16% below your best so far' in starts.inner_text()
-    assert 'stop-rule' in page.locator('.raw-starts').inner_text()
+    assert '16% below best start' in starts.inner_text()
+    assert 'skill rep, not fatigue' in page.locator('.raw-starts').inner_text()
     curve = page.locator('.raw-power-curve')
     assert curve.locator('svg.power-curve-chart polyline').count() == 2  # this ride + 90-day best
     text = curve.inner_text()

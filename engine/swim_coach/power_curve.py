@@ -134,6 +134,14 @@ def coach_summary(curve: list[PowerCurvePoint] | None) -> list[dict]:
     ]
 
 
+STARTS_COACH_NOTE = (
+    "Starts are skill practice. A single weak start (missed clip, slow launch) is a skill rep, "
+    "not fatigue and not a reason to stop; only consecutive or steadily declining starts read as "
+    "fatigue. The drop vs the best start is a post-ride review number -- the athlete cannot see "
+    "10% mid-ride. Judge a start by held seconds vs intended, not only by peak power."
+)
+
+
 def analytics_for_coach(analytics) -> dict | None:
     """`WorkoutAnalytics` as a JSON dict with the power curve swapped for its compact
     coach view (used by the per-workout detail surfaces, never the always-loaded context)."""
@@ -142,6 +150,8 @@ def analytics_for_coach(analytics) -> dict | None:
     out = analytics.model_dump(mode="json")
     if out.get("power_curve"):
         out["power_curve"] = coach_summary(analytics.power_curve)
+    if (out.get("intervals") or {}).get("starts"):
+        out["intervals"]["starts_note"] = STARTS_COACH_NOTE
     return out
 
 
