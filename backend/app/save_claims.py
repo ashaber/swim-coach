@@ -52,6 +52,7 @@ WRITE_TOOLS: dict[str, str] = {
     "save_race_debrief": "saved",
     "retire_athlete_note": "retired",
     "reschedule_session": "rescheduled",
+    "set_workout_kind": "updated",
 }
 
 # Every other real tool: reads, drafts that never persist (propose_adaptation

@@ -16,13 +16,13 @@ safety net and must keep passing unchanged.
 from __future__ import annotations
 
 from pathlib import Path
-from datetime import date, timedelta
+from datetime import timedelta
 from uuid import UUID, uuid4
 
-from swim_coach.analytics import compute_analytics
-from swim_coach.models import Athlete, Session, Workout, WorkoutAnalytics
+from swim_coach.analysis import AnalysisContext
+from swim_coach.analysis import build_analysis_context as engine_build_analysis_context
+from swim_coach.models import Session, Workout
 from swim_coach.parse_files import WorkoutDraft
-from swim_coach.power_curve import BEST_WINDOWS_DAYS, annotate_bests
 from swim_coach.quality import match_workout_to_session
 from swim_coach.store import StoreInterface
 
@@ -31,32 +31,29 @@ from app.logging_config import get_logger
 log = get_logger("app.enrich")
 
 
-RACE_PURPOSE_PREFIX = "RACE — "
-
-
-def analysis_context(
+def build_analysis_context(
     store: StoreInterface,
     slug: str,
+    workout: Workout,
     *,
-    ride_date: date,
-    sport: str | None,
-    session: Session | None,
-    lthr_bpm: float | None,
-) -> dict:
-    """Extra `compute_analytics` kwargs for a bike ride: `lthr_bpm`, `race` (the matched
-    session is a RACE session, or the athlete has a bike event on that date) and
-    `session_text` (the matched session's purpose + structure text). Best-effort: an event
-    lookup failure logs and reads as "not a race"."""
-    race = bool(session is not None and session.purpose.strip().upper().startswith(RACE_PURPOSE_PREFIX))
-    if not race and sport == "bike":
+    series: dict | None,
+    target_w: float | None = None,
+    elapsed_min: float | None = None,
+    session: Session | None = None,
+    match_session: bool = False,
+) -> AnalysisContext:
+    """The `AnalysisContext` for `workout.analyze(...)`: thresholds from the athlete, the
+    workout's kind (stamped on `workout.kind`), prior workouts for the power-curve bests.
+    `match_session=True` looks up the planned session this workout matches (best-effort: a
+    lookup failure logs and analyses without it); an explicit `session` skips the lookup."""
+    if session is None and match_session:
         try:
-            race = any(
-                ev.event_date == ride_date and ev.primary_sport == "bike" for ev in store.load_events(slug)
-            )
-        except Exception as exc:  # noqa: BLE001 - a missing event list must not block analytics
-            log.warn("workouts.race_event_lookup_failed", athlete=slug, error=str(exc))
-    text = " ".join(t for t in ((session.purpose, session.structure) if session else ()) if t) or None
-    return {"lthr_bpm": lthr_bpm, "race": race, "session_text": text}
+            session = find_planned_session(store, slug, workout)
+        except Exception as exc:  # noqa: BLE001 - never block analysis on the plan lookup
+            log.warn("workouts.plan_match_failed", athlete=slug, error=str(exc))
+    return engine_build_analysis_context(
+        store, slug, workout, session=session, series=series, target_w=target_w, elapsed_min=elapsed_min
+    )
 
 
 def enrich_draft(
@@ -95,14 +92,6 @@ def enrich_draft(
     into an HTTP 409; the sync job's per-activity try/except treats it like
     any other activity failure).
     """
-    try:
-        profile = store.load_athlete(athlete)
-        home_elevation_m, ftp_watts = profile.home_elevation_m, profile.ftp_watts
-        lthr_bpm = profile.lthr_bpm
-    except Exception as exc:  # noqa: BLE001 - analytics must still compute without it
-        log.warn("workouts.enrich_home_elevation_lookup_failed", athlete=athlete, error=str(exc))
-        home_elevation_m, ftp_watts, lthr_bpm = None, None, None
-
     if hasattr(store, "save_raw_file"):
         draft.raw_ref = store.save_raw_file(athlete, tmp_path)
     else:
@@ -123,53 +112,11 @@ def enrich_draft(
             athlete, draft.date, draft.sport, workout_id or uuid4(), draft.series
         )
 
-    draft.analytics = compute_analytics(
-        laps=draft.laps,
-        lengths=draft.lengths,
-        pauses=draft.pauses,
-        series=draft.series,
-        elapsed_min=draft.elapsed_min,
-        moving_min=draft.duration_min,
-        sport=draft.sport,
-        home_elevation_m=home_elevation_m,
-        ftp_watts=ftp_watts,
-        **analysis_context(
-            store, athlete, ride_date=draft.date, sport=draft.sport, session=None, lthr_bpm=lthr_bpm
-        ),
-    )
-    draft.analytics = annotate_power_curve_bests(
-        draft.analytics, store=store, slug=athlete, ride_date=draft.date, workout_id=workout_id
-    )
+    workout = draft.to_workout(athlete_id=uuid4(), workout_id=workout_id)
+    ctx = build_analysis_context(store, athlete, workout, series=draft.series, elapsed_min=draft.elapsed_min)
+    draft.analytics = workout.analyze(ctx)
+    draft.kind = workout.kind
     return draft
-
-
-def annotate_power_curve_bests(
-    analytics: WorkoutAnalytics | None,
-    *,
-    store: StoreInterface,
-    slug: str,
-    ride_date: date,
-    workout_id: UUID | None = None,
-) -> WorkoutAnalytics | None:
-    """Fill the curve's 42/90-day-best comparison from the athlete's earlier rides'
-    stored curves (rides without a curve are skipped; older rides need re-analysis to
-    get one). Best-effort: a store failure logs and leaves the curve un-annotated."""
-    if analytics is None or not analytics.power_curve:
-        return analytics
-    try:
-        since = ride_date - timedelta(days=max(BEST_WINDOWS_DAYS))
-        prior = [
-            ((ride_date - w.date).days, w.analytics.power_curve)
-            for w in store.list_workouts(slug, since=since)
-            if w.id != workout_id
-            and w.date < ride_date
-            and w.analytics is not None
-            and w.analytics.power_curve
-        ]
-    except Exception as exc:  # noqa: BLE001 - the curve is still valid without the comparison
-        log.warn("workouts.power_curve_bests_failed", athlete=slug, error=str(exc))
-        return analytics
-    return analytics.model_copy(update={"power_curve": annotate_bests(analytics.power_curve, prior)})
 
 
 def _iso_week(d) -> str:
@@ -199,20 +146,11 @@ def find_planned_session(store: StoreInterface, slug: str, workout: Workout) -> 
     return match_workout_to_session(workout, sessions, other_workouts=nearby)
 
 
-def planned_intensity_zone(session: Session) -> str | None:
-    """The planned session's intensity zone label (e.g. "Z2"), if it set one --
-    tells the analyzer an endurance plan is never an all-interval ride."""
-    zone = (session.intensity or {}).get("zone")
-    return zone if isinstance(zone, str) else None
-
-
-def attach_planned_session(
-    workout: Workout, *, store: StoreInterface, slug: str, profile: Athlete, series: dict | None
-) -> Workout:
-    """Link `workout` to its planned session and, for a ride, re-run the interval
-    analyzer WITH that session's `structured` prescription (zone targets resolved
-    against the athlete's FTP). Returns the workout unchanged when nothing matches.
-    Best-effort: a lookup/analysis failure logs and leaves the workout as-is."""
+def attach_planned_session(workout: Workout, *, store: StoreInterface, slug: str, series: dict | None) -> Workout:
+    """Link `workout` to its planned session and re-run its analyzer WITH that session in the
+    context (prescription, zone, kind, thresholds from the athlete). Returns the workout
+    unchanged when nothing matches. Best-effort: a lookup/analysis failure logs and leaves the
+    workout as-is."""
     if workout.planned_session_id is not None:
         return workout
     try:
@@ -222,33 +160,9 @@ def attach_planned_session(
         return workout
     if session is None:
         return workout
-    updates: dict = {"planned_session_id": session.id}
-    planned_zone = planned_intensity_zone(session)
-    is_race = session.purpose.strip().upper().startswith(RACE_PURPOSE_PREFIX)
-    if (
-        workout.sport == "bike"
-        and (session.structured is not None or planned_zone is not None or is_race)
-        and series
-    ):
-        analytics = compute_analytics(
-            laps=workout.laps,
-            lengths=workout.lengths,
-            pauses=workout.pauses,
-            series=series,
-            elapsed_min=workout.analytics.elapsed_min if workout.analytics else None,
-            moving_min=workout.duration_min,
-            sport=workout.sport,
-            prescribed_structure=session.structured,
-            home_elevation_m=profile.home_elevation_m,
-            ftp_watts=profile.ftp_watts,
-            planned_zone=planned_zone,
-            **analysis_context(
-                store, slug, ride_date=workout.date, sport=workout.sport, session=session,
-                lthr_bpm=profile.lthr_bpm,
-            ),
-        )
-        updates["analytics"] = annotate_power_curve_bests(
-            analytics, store=store, slug=slug, ride_date=workout.date, workout_id=workout.id
-        )
+    linked = workout.model_copy(update={"planned_session_id": session.id})
+    ctx = build_analysis_context(store, slug, linked, series=series, session=session)  # also stamps kind
+    if series:
+        linked.analytics = linked.analyze(ctx)
     log.info("workouts.plan_matched", athlete=slug, workout_id=str(workout.id), session_id=str(session.id))
-    return workout.model_copy(update=updates)
+    return linked

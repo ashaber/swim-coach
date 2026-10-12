@@ -198,14 +198,14 @@ import tempfile
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Literal, get_args
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import ValidationError
 
 from swim_coach import fueling as fueling_module
 from swim_coach.adapt import adapt_week
-from swim_coach.analytics import compute_analytics
+from swim_coach.analysis import has_detailed_analyzer
 from swim_coach.athlete_time import athlete_today
 from swim_coach.gps_laps import GpsLapMetrics, analyze_gps_laps
 from swim_coach.load import (
@@ -234,6 +234,7 @@ from swim_coach.race_phases import (
 from swim_coach.models import (
     Athlete,
     AthleteNote,
+    SessionKind,
     normalize_interval_type,
     derive_blocks_from_macro_weeks,
     ConfirmationRecord,
@@ -257,6 +258,7 @@ from swim_coach.plan import (
     SESSION_ADJUSTMENT_INCREASE_CAP_PCT,
     SHARPENING_MIN_MACRO_WEEKS,
     WEEKLY_VOLUME_RAMP_CAP,
+    counts_toward_bike_ramp,
     _template_week_sessions,
     bike_session_as,
     template_normalization_notes,
@@ -290,7 +292,7 @@ from app.context import (
     iso_week_str,
     summarize_rollup,
 )
-from app.enrich import analysis_context, annotate_power_curve_bests, find_planned_session, planned_intensity_zone
+from app.enrich import build_analysis_context, find_planned_session
 from app.drafts import MACRO_CARRIER_WEEK, TAPER_CARRIER_WEEK, draft_is_stale
 from app.garmin_push import push_on_demand
 from app.health_status_helpers import link_health_status_feedback
@@ -383,6 +385,15 @@ TEMPLATE_PREFERENCE_SCHEMA: dict[str, Any] = {
 # handler) -- both drive the exact same `_apply_session_overrides` match/
 # modify/remove/add semantics, so one schema describes the shape for both
 # rather than drifting into two copies that quietly diverge over time.
+_SESSION_KIND_SCHEMA: dict[str, Any] = {
+    "type": "string",
+    "enum": ["workout", "race", "free_ride", "warmup"],
+    "description": (
+        "Optional. workout = structured prescription, scored; race = an event; "
+        "free_ride = unstructured, even if scheduled; warmup = race-day warm-up/openers, never scored."
+    ),
+}
+
 SESSION_OVERRIDES_SCHEMA: dict[str, Any] = {
     "type": "array",
     "description": (
@@ -445,6 +456,7 @@ SESSION_OVERRIDES_SCHEMA: dict[str, Any] = {
                     "zero or more than one session matches date(+sport)."
                 ),
             },
+            "kind": _SESSION_KIND_SCHEMA,
             "interval_type": {
                 "type": "string",
                 "description": (
@@ -674,6 +686,7 @@ SESSION_ENTRY_SCHEMA: dict[str, Any] = {
             "type": "string",
             "description": "Athlete-facing purpose/description for the session.",
         },
+        "kind": _SESSION_KIND_SCHEMA,
         "title": {
             "type": "string",
             "maxLength": 40,
@@ -1448,6 +1461,23 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
             },
             "required": ["workout_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "set_workout_kind",
+        "description": (
+            "Retag a LOGGED workout's kind when the automatic one is wrong: workout (has a structured "
+            "prescription, scored), race (an event), free_ride (no structure, even if scheduled), warmup "
+            "(race-day warm-up/openers, never scored). Saves the override and re-runs its analysis."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "workout_id": {"type": "string", "description": "The id (or a unique prefix) of the logged workout."},
+                "kind": {"type": "string", "enum": ["workout", "race", "free_ride", "warmup"]},
+            },
+            "required": ["workout_id", "kind"],
             "additionalProperties": False,
         },
     },
@@ -4057,32 +4087,6 @@ def _handle_get_workouts(input_data: dict[str, Any], *, store: StoreInterface, s
     }
 
 
-def _recover_prescribed_structure(
-    store: StoreInterface, slug: str, workout: Workout
-) -> WorkoutStructure | None:
-    """The `WorkoutStructure` for the planned session this workout matches,
-    if one is recoverable (see `app.enrich.find_planned_session`)."""
-    session = find_planned_session(store, slug, workout)
-    return session.structured if session is not None else None
-
-
-def _recover_planned_zone(store: StoreInterface, slug: str, workout: Workout) -> str | None:
-    """The matched planned session's intensity zone (e.g. "Z2"), if any."""
-    session = find_planned_session(store, slug, workout)
-    return planned_intensity_zone(session) if session is not None else None
-
-
-def _recover_analysis_context(
-    store: StoreInterface, slug: str, workout: Workout, *, ride_date, sport
-) -> dict:
-    """`app.enrich.analysis_context` for the planned session this workout matches."""
-    session = find_planned_session(store, slug, workout) if workout is not None else None
-    return analysis_context(
-        store, slug, ride_date=ride_date, sport=sport, session=session,
-        lthr_bpm=store.load_athlete(slug).lthr_bpm,
-    )
-
-
 def _load_workout_series(
     store: StoreInterface, slug: str, workout: Workout
 ) -> tuple[dict | None, str, str | None]:
@@ -4126,20 +4130,7 @@ def _handle_reanalyze_workout(
     that file is still on disk. Persists the recomputed `analytics` in
     place -- no draft/confirm step (it only rewrites a derived field, never
     plan/volume).
-
-    The `workout.sport != "bike"` gate just below is legitimate and
-    DELIBERATELY left as-is, unlike the equivalent local-tag gates removed
-    from `pull_activity_stream` (see that function's docstring for the full
-    reasoning): this tool, by design, only ever re-runs analysis over data
-    ALREADY ON OUR SIDE (a stored series, or a re-parsable local raw .fit)
-    -- it never re-pulls anything, so it has no fresher, more-authoritative
-    signal than `workout.sport` to defer to. Refusing here on the only sport
-    data available is the correct conservative behavior, not the same bug.
-    A workout that's mistagged `cross_train` locally but is really a bike
-    ride should go through `pull_activity_stream` instead (its error
-    message says so below) -- that tool re-pulls the fresh source of truth
-    and, as a side effect of a successful pull, corrects the stale local
-    tag so a LATER `reanalyze_workout` call on the same workout succeeds."""
+    """
     workout_id = (input_data.get("workout_id") or "").strip()
     if not workout_id:
         return {"error": "workout_id is required"}
@@ -4148,21 +4139,6 @@ def _handle_reanalyze_workout(
     workout = find_workout_by_id(workouts, workout_id)
     if workout is None:
         return {"error": f"no workout matching id {workout_id!r}"}
-    if workout.sport != "bike":
-        hint = (
-            " -- if this was actually a bike ride (e.g. logged before the bike vs "
-            "cross_train classifier fix), use pull_activity_stream instead: it re-pulls "
-            "the fresh source of truth and corrects the local sport tag"
-            if workout.sport == "cross_train"
-            else ""
-        )
-        return {
-            "error": (
-                f"interval analysis only runs on bike rides; this workout is "
-                f"{workout.sport!r}{hint}"
-            )
-        }
-
     target_w: float | None = None
     target_source = "none"
     tw = input_data.get("target_watts")
@@ -4186,11 +4162,9 @@ def _handle_reanalyze_workout(
         target_w = round(float(ftp) * float(pct) / 100, 1)
         target_source = f"{pct:g}% of {ftp:g}W FTP"
 
-    structure = None
-    if target_w is None:
-        structure = _recover_prescribed_structure(store, slug, workout)
-        if structure is not None:
-            target_source = "matched planned session structure"
+    session = find_planned_session(store, slug, workout)
+    if target_w is None and session is not None and session.structured is not None:
+        target_source = "matched planned session structure"
 
     series, series_source, load_error = _load_workout_series(store, slug, workout)
     if load_error is not None:
@@ -4204,25 +4178,9 @@ def _handle_reanalyze_workout(
             )
         }
 
-    new_analytics = compute_analytics(
-        laps=workout.laps,
-        lengths=workout.lengths,
-        pauses=workout.pauses,
-        series=series,
-        elapsed_min=workout.analytics.elapsed_min if workout.analytics else None,
-        moving_min=workout.duration_min,
-        sport=workout.sport,
-        interval_target_w=target_w,
-        prescribed_structure=structure,
-        home_elevation_m=store.load_athlete(slug).home_elevation_m,
-        ftp_watts=store.load_athlete(slug).ftp_watts,
-        planned_zone=_recover_planned_zone(store, slug, workout),
-        **_recover_analysis_context(store, slug, workout, ride_date=workout.date, sport=workout.sport),
-    )
-    new_analytics = annotate_power_curve_bests(
-        new_analytics, store=store, slug=slug, ride_date=workout.date, workout_id=workout.id
-    )
-    workout.analytics = new_analytics
+    ctx = build_analysis_context(store, slug, workout, series=series, target_w=target_w, session=session)
+    new_analytics = workout.analyze(ctx)
+    workout.analytics = new_analytics  # build_analysis_context also stamped workout.kind
     # Re-key the series row to this real workout id so a later read resolves
     # without another re-parse (harmless no-op if it was already keyed here).
     store.save_series(slug, workout.date, workout.sport, workout.id, series)
@@ -4236,15 +4194,24 @@ def _handle_reanalyze_workout(
         target_source=target_source,
         efforts=intervals.efforts_detected if intervals else 0,
     )
-    return {
+    result: dict[str, Any] = {
         "reanalyzed": True,
         "workout_id": str(workout.id),
         "date": workout.date.isoformat(),
+        "kind": workout.effective_kind,
         "target_watts": target_w,
         "target_source": target_source,
         "series_source": series_source,
         "intervals": intervals.model_dump(mode="json") if intervals is not None else None,
     }
+    if not has_detailed_analyzer(workout.sport):
+        result["note"] = f"re-ran analysis; no detailed analyzer for {workout.sport} yet" + (
+            " -- if this was actually a bike ride, use pull_activity_stream (re-pulls the source and "
+            "corrects the local sport tag)"
+            if workout.sport == "cross_train"
+            else ""
+        )
+    return result
 
 
 def _round_or_none(value: float | None, ndigits: int) -> float | None:
@@ -4402,6 +4369,38 @@ def _handle_get_ride_pacing(
         "power_profile": _power_profile(series),
         "interpretation": RIDE_PACING_INTERPRETATION,
     }
+
+
+def _handle_set_workout_kind(
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str
+) -> dict[str, Any]:
+    """Sets `Workout.kind_override` (the athlete/coach's retag; it wins over the derived kind) and
+    re-runs the workout's analysis under it. A workout with no stream keeps the override and
+    simply is not re-analysed."""
+    workout_id_str = (input_data.get("workout_id") or "").strip()
+    kind, kind_error = _session_kind_or_error(input_data.get("kind"), when="set_workout_kind")
+    if not workout_id_str:
+        return {"error": "workout_id is required"}
+    if kind is None or kind_error:
+        return {"error": kind_error or "kind is required"}
+
+    workout = find_workout_by_id(store.list_workouts(slug), workout_id_str)
+    if workout is None:
+        return {"error": f"no workout matching id {workout_id_str!r}"}
+    try:
+        workout.kind_override = kind
+        store.save_workout(slug, workout)
+    except Exception as exc:  # noqa: BLE001
+        log.error("storage write failed", what="workout kind", exc_info=True)
+        return storage_error("workout", exc)
+    log.info("workout kind set", athlete=slug, workout_id=str(workout.id), kind=kind)
+
+    result: dict[str, Any] = {"updated": True, "workout_id": str(workout.id), "kind": kind}
+    reanalysis = _handle_reanalyze_workout({"workout_id": str(workout.id)}, store=store, slug=slug)
+    result["reanalyzed"] = bool(reanalysis.get("reanalyzed"))
+    if "error" in reanalysis:
+        result["note"] = f"kind saved; analysis not re-run: {reanalysis['error']}"
+    return result
 
 
 def _handle_set_workout_chat_muted(
@@ -4612,11 +4611,9 @@ def _handle_pull_activity_stream(
             target_w, target_source, target_err = _resolve_interval_target_watts(input_data)
             if target_err is not None:
                 return target_err
-            structure = None
-            if target_w is None and workout is not None:
-                structure = _recover_prescribed_structure(store, slug, workout)
-                if structure is not None:
-                    target_source = "matched planned session structure"
+            session = find_planned_session(store, slug, workout) if workout is not None else None
+            if target_w is None and session is not None and session.structured is not None:
+                target_source = "matched planned session structure"
 
             try:
                 fit_bytes = client.download_fit(activity_id)
@@ -4650,30 +4647,17 @@ def _handle_pull_activity_stream(
     if not draft.series:
         return {"error": f"the fetched .fit for {activity_id} carried no usable time-series"}
 
-    new_analytics = compute_analytics(
-        laps=draft.laps,
-        lengths=draft.lengths,
-        pauses=draft.pauses,
-        series=draft.series,
-        elapsed_min=draft.analytics.elapsed_min if draft.analytics else None,
-        moving_min=draft.duration_min,
-        sport=draft.sport,
-        interval_target_w=target_w,
-        prescribed_structure=structure,
-        home_elevation_m=store.load_athlete(slug).home_elevation_m,
-        ftp_watts=store.load_athlete(slug).ftp_watts,
-        planned_zone=_recover_planned_zone(store, slug, workout) if workout is not None else None,
-        **_recover_analysis_context(
-            store, slug, workout, ride_date=workout.date if workout is not None else draft.date, sport=draft.sport
-        ),
-    )
-    new_analytics = annotate_power_curve_bests(
-        new_analytics,
-        store=store,
-        slug=slug,
-        ride_date=workout.date if workout is not None else draft.date,
+    # Analyse the FRESH parse as this workout (fresh sport/laps/duration), keeping its identity.
+    subject = draft.to_workout(
+        athlete_id=workout.athlete_id if workout is not None else uuid.uuid4(),
         workout_id=workout.id if workout is not None else None,
     )
+    if workout is not None:
+        subject.date, subject.kind_override = workout.date, workout.kind_override
+    ctx = build_analysis_context(
+        store, slug, subject, series=draft.series, target_w=target_w, elapsed_min=draft.elapsed_min, session=session
+    )
+    new_analytics = subject.analyze(ctx)
     intervals = new_analytics.intervals
 
     persisted = False
@@ -4694,6 +4678,7 @@ def _handle_pull_activity_stream(
             sport_corrected = True
         store.save_series(slug, workout.date, workout.sport, workout.id, draft.series)
         workout.analytics = new_analytics
+        workout.kind = subject.kind
         store.save_workout(slug, workout)
         persisted = True
 
@@ -6060,9 +6045,7 @@ def _held_bike_minutes(store: StoreInterface, slug: str, week_start: date) -> fl
         minutes = sum(
             s.duration_min
             for s in existing.sessions
-            if s.sport == "bike"
-            and not s.purpose.strip().upper().startswith("RACE — ")
-            and "skills" not in s.purpose.lower()
+            if counts_toward_bike_ramp(s) and "skills" not in s.purpose.lower()
         )
         if minutes > 0:
             return minutes
@@ -6388,6 +6371,15 @@ _HARD_WORK_WORDS = re.compile(
 )
 
 
+def _session_kind_or_error(raw: Any, *, when: str) -> tuple[str | None, str | None]:
+    """`(kind, error)` for an optional coach-supplied session `kind`."""
+    if raw is None:
+        return None, None
+    if raw not in get_args(SessionKind):
+        return None, f"invalid session kind {raw!r} for {when}; expected one of {list(get_args(SessionKind))}"
+    return raw, None
+
+
 def _apply_session_overrides(
     week, overrides: list[dict[str, Any]], athlete: Athlete
 ) -> tuple[str | None, list[str]]:
@@ -6530,6 +6522,9 @@ def _apply_session_overrides(
             add_intensity = override.get("intensity")
             if not isinstance(add_intensity, dict) or not add_intensity:
                 add_intensity = {"zone": "Z2"} if sport == "bike" else {"anchor": "rpe"}
+            add_kind, kind_error = _session_kind_or_error(override.get("kind"), when=raw_date)
+            if kind_error:
+                return kind_error, notes
             try:
                 new_session = Session(
                     id=uuid.uuid4(),
@@ -6537,6 +6532,7 @@ def _apply_session_overrides(
                     date=override_date,
                     sport=sport,
                     source="ai_coach",
+                    kind=add_kind,
                     duration_min=add_duration,
                     distance_m=override.get("distance_m"),
                     intensity=add_intensity,
@@ -6572,8 +6568,12 @@ def _apply_session_overrides(
         ow_template = override.get("ow_template")
         intensity = override.get("intensity")
         interval_type = override.get("interval_type")
+        kind, kind_error = _session_kind_or_error(override.get("kind"), when=raw_date)
+        if kind_error:
+            return kind_error, notes
         if (
             distance_m is None
+            and kind is None
             and duration_min is None
             and purpose is None
             and structure is None
@@ -6584,7 +6584,7 @@ def _apply_session_overrides(
         ):
             return (
                 f"session_overrides: entry for {raw_date!r} needs at least one of "
-                "distance_m, duration_min, purpose, structure, structured, ow_template, intensity, interval_type"
+                "distance_m, duration_min, purpose, structure, structured, ow_template, intensity, interval_type, kind"
             ), notes
         if intensity is not None:
             zone_ok = intensity.get("zone") is None or (
@@ -6648,6 +6648,8 @@ def _apply_session_overrides(
             else:
                 for field, value in bike_session_as(session, wanted, athlete.ftp_watts).items():
                     setattr(session, field, value)
+        if kind is not None:
+            session.kind = kind
         if purpose is not None:
             session.purpose = purpose
         if intensity is not None:
@@ -6745,7 +6747,7 @@ def _apply_session_overrides(
 
 
 
-_TEXT_ONLY_KEYS = ("date", "sport", "add", "remove", "duration_min", "distance_m", "purpose", "structure")
+_TEXT_ONLY_KEYS = ("date", "sport", "add", "remove", "duration_min", "distance_m", "purpose", "structure", "kind")
 
 
 def _text_only(override: dict[str, Any]) -> dict[str, Any] | None:
@@ -7226,8 +7228,7 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
             prev_bike_min = sum(
                 s.duration_min
                 for s in existing_week.sessions
-                if s.sport == "bike"
-                and not s.purpose.strip().upper().startswith("RACE — ")
+                if counts_toward_bike_ramp(s)
             )
         week.planning_warnings = _safe_realism(
             week.sessions, prev_week_bike_volume_min=prev_bike_min
@@ -7414,7 +7415,7 @@ def _handle_patch_week_plan(input_data: dict[str, Any], *, store: StoreInterface
     prev_bike_min = sum(
         s.duration_min
         for s in week.sessions
-        if s.sport == "bike" and not s.purpose.strip().upper().startswith("RACE — ")
+        if counts_toward_bike_ramp(s)
     )
     candidate.planning_warnings = _safe_realism(
         candidate.sessions, prev_week_bike_volume_min=prev_bike_min or None
@@ -7501,6 +7502,10 @@ def _session_from_add_fields(entry: dict[str, Any], *, athlete: Athlete) -> tupl
     if not isinstance(intensity, dict) or not intensity:
         intensity = {"zone": "Z2"} if sport == "bike" else {"anchor": "rpe"}
 
+    kind, kind_error = _session_kind_or_error(entry.get("kind"), when=date_str)
+    if kind_error:
+        return None, kind_error
+
     try:
         session = Session(
             id=uuid.uuid4(),
@@ -7508,6 +7513,7 @@ def _session_from_add_fields(entry: dict[str, Any], *, athlete: Athlete) -> tupl
             date=target_date,
             sport=sport,
             source="ai_coach",
+            kind=kind,
             duration_min=duration_min,
             distance_m=entry.get("distance_m"),
             intensity=intensity,
@@ -7831,7 +7837,7 @@ def _handle_merge_week_plan(input_data: dict[str, Any], *, store: StoreInterface
     prev_bike_min = sum(
         s.duration_min
         for s in current.sessions
-        if s.sport == "bike" and not s.purpose.strip().upper().startswith("RACE — ")
+        if counts_toward_bike_ramp(s)
     )
     merged.planning_warnings = _safe_realism(
         merged.sessions, prev_week_bike_volume_min=prev_bike_min or None
@@ -9568,6 +9574,9 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "get_ride_pacing": lambda input_data: _handle_get_ride_pacing(
+            input_data, store=store, slug=slug
+        ),
+        "set_workout_kind": lambda input_data: _handle_set_workout_kind(
             input_data, store=store, slug=slug
         ),
         "set_workout_chat_muted": lambda input_data: _handle_set_workout_chat_muted(

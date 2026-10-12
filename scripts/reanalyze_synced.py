@@ -64,13 +64,12 @@ BACKEND_DIR = REPO_ROOT / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from swim_coach.analytics import compute_analytics  # noqa: E402
 from swim_coach.athlete_time import resolve_workout_date  # noqa: E402
 from swim_coach.models import Workout  # noqa: E402
 from swim_coach.parse_files import PARSERS_BY_EXTENSION  # noqa: E402
 from swim_coach.store import FileStore, StoreInterface  # noqa: E402
 
-from app.enrich import attach_planned_session, enrich_draft  # noqa: E402
+from app.enrich import attach_planned_session, build_analysis_context, enrich_draft  # noqa: E402
 from app.sync import IntervalsClient, SyncConfigError, load_sync_config  # noqa: E402
 
 
@@ -123,14 +122,12 @@ def _reanalyze_workout(
             # are real disk/DB writes -- see enrich_draft's docstring).
             # Analytics is a pure function over the in-memory parse, so it's
             # still computed here purely for an accurate dry-run report.
-            draft.analytics = compute_analytics(
-                laps=draft.laps,
-                lengths=draft.lengths,
-                pauses=draft.pauses,
-                series=draft.series,
-                elapsed_min=draft.elapsed_min,
-                moving_min=draft.duration_min,
+            subject = draft.to_workout(athlete_id=existing.athlete_id, workout_id=existing.id)
+            ctx = build_analysis_context(
+                store, slug, subject, series=draft.series, elapsed_min=draft.elapsed_min
             )
+            draft.analytics = subject.analyze(ctx)
+            draft.kind = subject.kind
         else:
             enrich_draft(draft, store=store, athlete=slug, tmp_path=tmp_path, workout_id=existing.id)
 
@@ -157,14 +154,14 @@ def _reanalyze_workout(
             series_ref=draft.series_ref if not dry_run else existing.series_ref,
             external_id=existing.external_id,
             sport_detail=draft.sport_detail,
+            kind=draft.kind,
+            kind_override=existing.kind_override,  # athlete/coach retag -- preserved
         )
 
         # Link the planned session (+-1 day window) and re-run the analyzer
         # against its prescription. A planned_session_id already on the row
         # is athlete/coach-set and is never overwritten.
-        rebuilt = attach_planned_session(
-            rebuilt, store=store, slug=slug, profile=profile, series=draft.series
-        )
+        rebuilt = attach_planned_session(rebuilt, store=store, slug=slug, series=draft.series)
 
         if not dry_run:
             store.save_workout(slug, rebuilt)

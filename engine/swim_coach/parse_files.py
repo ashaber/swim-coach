@@ -19,7 +19,7 @@ from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
 from typing import Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import fitdecode
 from pydantic import BaseModel, Field
@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 from swim_coach.analytics import GAP_THRESHOLD_S
 from swim_coach.analytics import stationary_pauses as _stationary_pauses
 from swim_coach.models import (
+    SessionKind,
     Sport,
     Workout,
     WorkoutAnalytics,
@@ -94,6 +95,35 @@ class WorkoutDraft(BaseModel):
     # below); tcx/csv parsers don't extract an equivalent field and always
     # leave this None.
     started_at: datetime | None = None
+    # Mirrors Workout.kind (derived, see swim_coach.analysis); stamped by app.enrich.enrich_draft.
+    kind: SessionKind | None = None
+
+    def to_workout(self, *, athlete_id: UUID, workout_id: UUID | None = None, raw_ref: str | None = None) -> Workout:
+        """The draft as a `Workout` (fresh id unless given); `raw_ref` defaults to the draft's own."""
+        return Workout(
+            id=workout_id or uuid4(),
+            athlete_id=athlete_id,
+            date=self.date,
+            sport=self.sport,
+            source=self.source,
+            distance_m=self.distance_m,
+            duration_min=self.duration_min,
+            avg_pace_s_per_100m=self.avg_pace_s_per_100m,
+            rpe=self.rpe,
+            sets=self.sets,
+            planned_session_id=self.planned_session_id,
+            raw_ref=raw_ref if raw_ref is not None else self.raw_ref,
+            notes=self.notes,
+            avg_hr=self.avg_hr,
+            max_hr=self.max_hr,
+            laps=self.laps,
+            lengths=self.lengths,
+            pauses=self.pauses,
+            analytics=self.analytics,
+            sport_detail=self.sport_detail,
+            started_at=self.started_at,
+            kind=self.kind,
+        )
 
 
 # --- shared helpers ------------------------------------------------------------------

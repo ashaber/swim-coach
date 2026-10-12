@@ -54,6 +54,7 @@ def test_attach_planned_session_annotates_bests_against_earlier_curves(
 ) -> None:
     store = FileStore(base_dir=athletes_dir)
     profile = store.load_athlete("renee").model_copy(update={"ftp_watts": 278.0, "home_elevation_m": 823.0})
+    store.save_athlete(profile)  # the analyzer reads thresholds from the stored athlete
     session = Session.model_validate(ride["planned_session"])
     monkeypatch.setattr(enrich, "find_planned_session", lambda *_a, **_k: session)
     w = _workout(ride)
@@ -62,7 +63,7 @@ def test_attach_planned_session_annotates_bests_against_earlier_curves(
     store.save_workout("renee", _prior(ride, 200, 5000))  # outside both
     store.save_workout("renee", w.model_copy(update={"id": uuid4(), "analytics": None}))  # no curve: skipped
 
-    out = enrich.attach_planned_session(w, store=store, slug="renee", profile=profile, series=ride["series"])
+    out = enrich.attach_planned_session(w, store=store, slug="renee", series=ride["series"])
 
     five = next(p for p in out.analytics.power_curve if p.duration_s == 5)
     assert (five.best_42d_w, five.is_best_42d) == (900, True)  # 956 W beats 900

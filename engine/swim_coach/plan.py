@@ -577,7 +577,7 @@ _BIKE_HARD_ZONES = {"Z3", "Z4", "Z5"}
 # purposes when its top-level `Session.intensity["zone"]` sits here (every
 # easy endurance ride is "Z2"; every interval template's session zone is
 # Z4/Z5, and the final-taper opener is Z3). Race sessions are identified
-# structurally by their "RACE — ..." purpose prefix, not by zone.
+# by `Session.kind == "race"`, not by zone.
 
 BIKE_OPENERS_PROXIMITY_DAYS = 7
 # Coach judgment: a week whose end is within this many days of the next race
@@ -3681,30 +3681,27 @@ def _strength_sessions(athlete: Athlete, week_start: date, offsets: list[int]) -
     return sessions
 
 
-_RACE_PURPOSE_PREFIX = "RACE — "
 _PRERACE_PRIMER_PURPOSE_PREFIX = "PRE-RACE PRIMER — "
-# Build E: structural identifier for `_bike_prerace_primer_session`, same
-# "uppercase prefix on `purpose`" convention `_RACE_PURPOSE_PREFIX` already
-# established -- lets `generate_week`'s own lookahead-primer dedup check
-# and tests identify the standalone primer unambiguously, without a
-# substring collision against the "openers" template's own purpose text
-# (which also mentions ramps/race-intensity work).
+# Display label of `_bike_prerace_primer_session` (athlete-facing text only; the session is
+# identified by `kind == "warmup"`).
 
 
 def _session_is_race(s: Session) -> bool:
-    """A generated race-day session -- identified structurally by its
-    "RACE — ..." purpose prefix (`_bike_race_session`), not by zone, since
-    races are an ADDITIVE slot that doesn't count against the hard-bike-day
-    ceiling. The prefix is specific enough not to catch the pre-existing
-    "race-week opener — ..." final-taper purpose string."""
-    return s.sport == "bike" and s.purpose.strip().upper().startswith(_RACE_PURPOSE_PREFIX)
+    """A generated race-day session (`_bike_race_session` sets `kind="race"`). Races are an
+    ADDITIVE slot that doesn't count against the hard-bike-day ceiling."""
+    return s.sport == "bike" and s.kind == "race"
+
+
+def counts_toward_bike_ramp(s: Session) -> bool:
+    """Whether a session's minutes count in the bike weekly-volume ramp rail (+8%/week): a
+    ride that is not a race and not a race-day warm-up/opener (`kind` race / warmup)."""
+    return s.sport == "bike" and s.kind not in ("race", "warmup")
 
 
 def _session_is_prerace_primer(s: Session) -> bool:
-    """A generated standalone pre-race primer session -- identified
-    structurally by its "PRE-RACE PRIMER — ..." purpose prefix
-    (`_bike_prerace_primer_session`), same convention as `_session_is_race`."""
-    return s.sport == "bike" and s.purpose.strip().upper().startswith(_PRERACE_PRIMER_PURPOSE_PREFIX)
+    """A generated standalone pre-race primer session (`_bike_prerace_primer_session` sets
+    `kind="warmup"`)."""
+    return s.sport == "bike" and s.kind == "warmup"
 
 
 def _session_is_hard_bike(s: Session) -> bool:
@@ -4145,8 +4142,8 @@ def _bike_prerace_primer_session(
 ) -> Session:
     """The standalone day-before-race primer `Session` -- see this
     section's own header comment. Purpose text deliberately does NOT start
-    with `_RACE_PURPOSE_PREFIX` ("RACE — "), so `_session_is_race` never
-    mistakes it for the race itself; it DOES carry `BIKE_OPENERS_ZONE`
+    with the race label ("RACE — ") and carries `kind="warmup"`, so `_session_is_race`
+    never mistakes it for the race itself; it DOES carry `BIKE_OPENERS_ZONE`
     ("Z4") as its top-level zone, so `_session_is_hard_bike` correctly
     counts it as hard (protects the day before it, counts toward the
     hard-day guardrail) -- a real intensity-touching session, just a short
@@ -4167,6 +4164,7 @@ def _bike_prerace_primer_session(
             "(Z3 build → Z4 → brief Z5), the day before the race: prime "
             "race-pace legs without adding fatigue"
         ),
+        kind="warmup",
         structure=render_prose(structured),
         structured=structured,
         status="planned",
@@ -4381,6 +4379,7 @@ def _bike_race_session(
             f"RACE — {label}: structured warm-up with 2–3 short openers, then race. "
             "This is the day the taper pays off — no extra training load."
         ),
+        kind="race",
         structure=render_prose(structured),
         structured=structured,
         status="planned",
@@ -4440,7 +4439,7 @@ def evaluate_week_realism(
         )
 
     if prev_week_bike_volume_min is not None and prev_week_bike_volume_min > 0:
-        this_vol = sum(s.duration_min for s in non_race_bike)
+        this_vol = sum(s.duration_min for s in bike if counts_toward_bike_ramp(s))
         cap = prev_week_bike_volume_min * (1 + BIKE_WEEKLY_VOLUME_RAMP_CAP_FRACTION)
         if this_vol > cap:
             pct = (this_vol / prev_week_bike_volume_min - 1) * 100

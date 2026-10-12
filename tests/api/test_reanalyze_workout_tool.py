@@ -178,35 +178,42 @@ def test_reanalyze_errors_on_unknown_workout(athletes_dir) -> None:
     assert "error" in res and "no workout matching" in res["error"]
 
 
-def test_reanalyze_errors_on_non_bike_workout(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
+def _seed_other_sport(store, sport: str, *, series: bool) -> Workout:
     profile = store.load_athlete("renee")
     w = Workout(
-        id=uuid.uuid4(), athlete_id=profile.id, date=RIDE_DATE, sport="swim_pool",
+        id=uuid.uuid4(), athlete_id=profile.id, date=RIDE_DATE, sport=sport,
         source="fit", distance_m=2000, duration_min=40.0,
     )
     store.save_workout("renee", w)
+    if series:
+        store.save_series("renee", w.date, w.sport, w.id, {"t_s": [0.0, 1.0, 2.0], "heart_rate": [100, 101, 102]})
+    return w
+
+
+def test_reanalyze_non_bike_workout_gets_default_analytics_and_a_note(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    w = _seed_other_sport(store, "swim_pool", series=True)
     res = _handlers(store)["reanalyze_workout"]({"workout_id": str(w.id), "target_watts": 239})
-    assert "error" in res and "only runs on bike" in res["error"]
-    # A genuinely non-bike sport (not cross_train) gets no mis-tag hint.
-    assert "pull_activity_stream" not in res["error"]
+    assert res["reanalyzed"] is True and res["intervals"] is None
+    assert "no detailed analyzer for swim_pool yet" in res["note"]
+    assert "pull_activity_stream" not in res["note"]  # a genuinely non-bike sport gets no mis-tag hint
+    assert store.list_workouts("renee")[-1].analytics.intervals is None
 
 
 def test_reanalyze_on_cross_train_workout_hints_at_pull_activity_stream(athletes_dir) -> None:
-    """This tool's gate is legitimate (it has no fresh source to defer to
-    -- see its docstring), but a cross_train tag specifically is plausibly
-    stale historical data (predating the bike carve-out), so the error
-    should point the coach at the tool that CAN re-pull and correct it."""
+    """A cross_train tag is plausibly stale historical data (predating the bike carve-out), so the
+    note points the coach at the tool that CAN re-pull and correct it."""
     store = FileStore(base_dir=athletes_dir)
-    profile = store.load_athlete("renee")
-    w = Workout(
-        id=uuid.uuid4(), athlete_id=profile.id, date=RIDE_DATE, sport="cross_train",
-        source="fit", distance_m=20000, duration_min=45.0,
-    )
-    store.save_workout("renee", w)
-    res = _handlers(store)["reanalyze_workout"]({"workout_id": str(w.id), "target_watts": 239})
-    assert "error" in res and "only runs on bike" in res["error"]
-    assert "pull_activity_stream" in res["error"]
+    w = _seed_other_sport(store, "cross_train", series=True)
+    res = _handlers(store)["reanalyze_workout"]({"workout_id": str(w.id)})
+    assert res["reanalyzed"] is True and "pull_activity_stream" in res["note"]
+
+
+def test_reanalyze_non_bike_without_a_series_keeps_the_no_data_error(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    w = _seed_other_sport(store, "swim_pool", series=False)
+    res = _handlers(store)["reanalyze_workout"]({"workout_id": str(w.id)})
+    assert "no time-series data" in res["error"]
 
 
 def test_reanalyze_errors_on_bad_ftp_pct_pairing(athletes_dir) -> None:
@@ -214,3 +221,33 @@ def test_reanalyze_errors_on_bad_ftp_pct_pairing(athletes_dir) -> None:
     w = _seed_bike_workout(store)
     res = _handlers(store)["reanalyze_workout"]({"workout_id": str(w.id), "ftp_watts": 263})
     assert "error" in res and "together" in res["error"]
+
+
+# --- set_workout_kind ----------------------------------------------------------------------
+
+
+def test_set_workout_kind_persists_override_and_reruns_analysis(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    w = _seed_bike_workout(store)
+    res = _handlers(store)["set_workout_kind"]({"workout_id": str(w.id), "kind": "warmup"})
+    assert res["updated"] is True and res["kind"] == "warmup" and res["reanalyzed"] is True
+    saved = store.list_workouts("renee")[-1]
+    assert saved.kind_override == "warmup" and saved.effective_kind == "warmup"
+    assert saved.analytics.intervals is None  # a warmup is never evaluated
+
+
+def test_set_workout_kind_keeps_override_when_there_is_no_series(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    w = _seed_bike_workout(store, with_series=False)
+    res = _handlers(store)["set_workout_kind"]({"workout_id": str(w.id), "kind": "race"})
+    assert res["updated"] is True and res["reanalyzed"] is False and "analysis not re-run" in res["note"]
+    assert store.list_workouts("renee")[-1].kind_override == "race"
+
+
+def test_set_workout_kind_rejects_bad_input(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    w = _seed_bike_workout(store)
+    h = _handlers(store)["set_workout_kind"]
+    assert "invalid session kind" in h({"workout_id": str(w.id), "kind": "tempo"})["error"]
+    assert "required" in h({"workout_id": str(w.id)})["error"]
+    assert "no workout matching" in h({"workout_id": str(uuid.uuid4()), "kind": "race"})["error"]
