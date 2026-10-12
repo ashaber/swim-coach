@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { buildRawAnalysis, scoreView, EFFORT_COLUMNS } from '../../src/analysis.js';
+import {
+  buildRawAnalysis, scoreView, EFFORT_COLUMNS, effectiveKind, kindLabel, shouldLoadPacing, startTraceGeometry,
+} from '../../src/analysis.js';
 
 const effort = (n, extra = {}) => ({
   n, start_s: 900 + (n - 1) * 60, duration_s: 40, avg_w: 308.4, avg_hr: 150, target_w: 310.5,
@@ -122,11 +124,67 @@ describe('buildRawAnalysis', () => {
         gps_laps: { laps: [], note: 'No laps detected' },
       },
     };
-    const m = buildRawAnalysis(workout, pacing);
+    const race = { ...workout, kind: 'race' };
+    expect(buildRawAnalysis(workout, pacing).race).toBeNull(); // a workout-kind ride never shows the race panel
+    expect(buildRawAnalysis({ ...workout, kind: 'race', kind_override: 'workout' }, pacing).race).toBeNull();
+    const m = buildRawAnalysis(race, pacing);
     expect(m.race.score.headline).toBe('73 / 100');
     expect(m.race.phases[1]).toEqual(['phase_2', '11:40–21:40', '230 W', '21.6 km/h', '-8.1% (real)']);
     expect(m.race.lapsNote).toBe('No laps detected');
-    expect(buildRawAnalysis(workout, { status: 'loading' }).racePending).toBe(true);
-    expect(buildRawAnalysis(workout, { status: 'error', error: 'no series' }).raceError).toBe('no series');
+    expect(buildRawAnalysis(workout, { status: 'loading' }).racePending).toBe(false);
+    expect(buildRawAnalysis(race, { status: 'loading' }).racePending).toBe(true);
+    expect(buildRawAnalysis(race, { status: 'error', error: 'no series' }).raceError).toBe('no series');
+  });
+});
+
+describe('workout kind', () => {
+  it('lets the retag win over the derived kind and labels it', () => {
+    expect(effectiveKind({ kind: 'workout', kind_override: 'race' })).toBe('race');
+    expect(effectiveKind({ kind: 'free_ride' })).toBe('free_ride');
+    expect(effectiveKind({})).toBeNull();
+    expect(kindLabel('free_ride')).toBe('Free ride');
+    expect(kindLabel(null)).toBeNull();
+  });
+
+  it('fetches pacing only for a bike race or a ride matched to a planned session', () => {
+    const session = { id: 's1', sport: 'bike', date: '2026-09-29', title: 'x' };
+    const weeks = [{ sessions: [session] }];
+    const ride = { id: 'w', sport: 'bike', date: '2026-09-29', kind: 'workout', planned_session_id: 's1' };
+    const loose = { ...ride, planned_session_id: null, date: '2026-09-30' };
+    expect(shouldLoadPacing(loose, weeks)).toBe(false);
+    expect(shouldLoadPacing({ ...loose, kind_override: 'race' }, weeks)).toBe(true);
+    expect(shouldLoadPacing(ride, weeks)).toBe(true);
+    expect(shouldLoadPacing({ ...ride, sport: 'swim_pool', kind: 'race' }, weeks)).toBe(false);
+    expect(shouldLoadPacing(null, weeks)).toBe(false);
+  });
+});
+
+describe('start traces', () => {
+  const start = {
+    n: 4, intended_s: 30, stopped_at_s: 21, trace_t0: 0, verdict: 'launch 0->1100 W in 5 s',
+    trace_w: [0, 187, 302, 649, 864, 1100, 721, 843, 925, 883, 857, 830, 765, 668, 639, 711, 704, 707, 694, 655, 603, 5, 22, 365, 445, 547, 543, 498, 67, 2, 2, 2, 5, 1, 0, 0, 0],
+  };
+
+  it('builds a polyline with the launch, stop and intended-end marks inside the trace', () => {
+    const g = startTraceGeometry(start);
+    expect(g.points.split(' ')).toHaveLength(start.trace_w.length);
+    expect(g.peakW).toBe(1100);
+    expect(g.launchX).toBe(2);
+    expect(g.stopX).toBeGreaterThan(g.launchX);
+    expect(g.plannedEndX).toBeGreaterThan(g.stopX);
+    const ys = g.points.split(' ').map((p) => Number(p.split(',')[1]));
+    expect(Math.min(...ys)).toBeGreaterThanOrEqual(0);
+    expect(Math.max(...ys)).toBeLessThanOrEqual(g.height);
+  });
+
+  it('drops marks outside the trace and returns null without a trace', () => {
+    expect(startTraceGeometry({ ...start, intended_s: 90 }).plannedEndX).toBeNull();
+    expect(startTraceGeometry({ n: 1 })).toBeNull();
+  });
+
+  it('puts a trace on each start in the starts model', () => {
+    const m = buildRawAnalysis({ analytics: { intervals: { efforts_detected: 0, starts: [start, { n: 5 }] } } }, undefined);
+    expect(m.starts.traces).toHaveLength(1);
+    expect(m.starts.traces[0].verdict).toBe('launch 0->1100 W in 5 s');
   });
 });

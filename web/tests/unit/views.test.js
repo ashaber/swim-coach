@@ -93,6 +93,7 @@ const BIKE_FIT_WORKOUT = {
   pauses: [],
   load_au: 118.6, load_tier: 'power_tss',
 };
+const BIKE_RACE = { ...BIKE_FIT_WORKOUT, kind: 'race' };
 
 // Build 1 (Log+History merge, wellness-ingestion + training-dashboard plan):
 // renderLogTab, renderHistoryTab, and renderHistorySection are retired in
@@ -400,9 +401,29 @@ describe('renderDashboardTab', () => {
         expect(html).not.toContain('Race analysis');
       });
 
+      it('is absent for a bike ride of kind workout (or retagged to workout) even with pacing loaded', () => {
+        const pacing = { 'w-bike': { status: 'ready', data: { gps_laps: { laps: [] }, race_phases: { phases: [] } } } };
+        const asWorkout = { ...BIKE_FIT_WORKOUT, kind: 'workout' };
+        const retagged = { ...BIKE_FIT_WORKOUT, kind: 'race', kind_override: 'workout' };
+        [asWorkout, retagged].forEach((w) => {
+          const html = renderDashboardTab({ ...DASHBOARD_BASE_ARGS, feed: feedOf([w]), detailId: 'w-bike', pacing });
+          expect(html).not.toContain('Race analysis');
+        });
+      });
+
+      it('shows the kind label, and a retag select only when the detail is editable', () => {
+        const base = { ...DASHBOARD_BASE_ARGS, feed: feedOf([{ ...BIKE_FIT_WORKOUT, kind: 'workout' }]), detailId: 'w-bike' };
+        const html = renderDashboardTab(base);
+        expect(html).toContain('class="chat-chip kind-label">Workout<');
+        const editable = renderDashboardTab({ ...base, detailExtras: { kindEdit: { status: 'submitting' } } });
+        expect(editable).toContain('data-a="workout:kind-select"');
+        expect(editable).toMatch(/<option value="workout" selected>/);
+        expect(editable).toContain('Re-analysing');
+      });
+
       it('shows a loading message while pacing is in flight', () => {
         const html = renderDashboardTab({
-          ...DASHBOARD_BASE_ARGS, feed: feedOf([BIKE_FIT_WORKOUT]), detailId: 'w-bike',
+          ...DASHBOARD_BASE_ARGS, feed: feedOf([BIKE_RACE]), detailId: 'w-bike',
           pacing: { 'w-bike': { status: 'loading' } },
         });
         expect(html).toContain('<details class="race-analysis">');
@@ -411,7 +432,7 @@ describe('renderDashboardTab', () => {
 
       it('shows the tool\'s own plain-language error rather than a raw failure', () => {
         const html = renderDashboardTab({
-          ...DASHBOARD_BASE_ARGS, feed: feedOf([BIKE_FIT_WORKOUT]), detailId: 'w-bike',
+          ...DASHBOARD_BASE_ARGS, feed: feedOf([BIKE_RACE]), detailId: 'w-bike',
           pacing: { 'w-bike': { status: 'error', error: 'no time-series data is available for this workout' } },
         });
         expect(html).toContain('no time-series data is available');
@@ -419,7 +440,7 @@ describe('renderDashboardTab', () => {
 
       it('renders the lap table (Lap/Time/NP/Speed/Work/VI/Coasting) and the race-phase table when ready', () => {
         const html = renderDashboardTab({
-          ...DASHBOARD_BASE_ARGS, feed: feedOf([BIKE_FIT_WORKOUT]), detailId: 'w-bike',
+          ...DASHBOARD_BASE_ARGS, feed: feedOf([BIKE_RACE]), detailId: 'w-bike',
           pacing: {
             'w-bike': {
               status: 'ready',
@@ -452,7 +473,7 @@ describe('renderDashboardTab', () => {
 
       it('shows the no-laps note instead of an empty table when none were detected', () => {
         const html = renderDashboardTab({
-          ...DASHBOARD_BASE_ARGS, feed: feedOf([BIKE_FIT_WORKOUT]), detailId: 'w-bike',
+          ...DASHBOARD_BASE_ARGS, feed: feedOf([BIKE_RACE]), detailId: 'w-bike',
           pacing: {
             'w-bike': {
               status: 'ready',
