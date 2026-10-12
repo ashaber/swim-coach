@@ -43,25 +43,26 @@ def r1010():
     return _run("ride_2026_10_10_starts_race_pace.json", session_text="3min @ 278-286W technical section, barrier")
 
 
-# --- 1. running-best stop rule ----------------------------------------------------------
+# --- 1. running-best weak-start read ----------------------------------------------------------
 
 
-def test_stop_rule_uses_best_start_so_far(r926):
+def test_weak_start_uses_best_start_so_far(r926):
     assert [s.n for s in r926.starts] == [1, 2, 3, 4]
     s1, s2, s3, s4 = r926.starts
-    assert s1.drop_vs_best_pct is None and not s1.stop_rule_flag
-    assert s2.stop_rule_flag and abs(s2.drop_vs_best_pct - 13.6) <= 1
+    assert s1.drop_vs_best_pct is None and not s1.weak_start
+    assert s2.weak_start and s2.weak_kind == "execution_miss" and abs(s2.drop_vs_best_pct - 13.6) <= 1
     # starts 3 and 4 beat start 1's best 5 s, so they are "as strong as the best so far"
     assert s3.drop_vs_best_pct is None and s4.drop_vs_best_pct is None
     assert "as strong as your best start so far" in s3.verdict
-    assert "start 2" in r926.starts_flag and "start 3" not in r926.starts_flag
+    assert r926.starts_flag == "start 2 off (likely execution) -- skill rep, not fatigue"
+    assert "stop" not in r926.starts_flag and "stop" not in s2.verdict.lower()
 
 
 def test_old_stored_rows_with_drop_vs_first_load():
     sb = StartBurst.model_validate(
         {"n": 2, "prescribed_s": 30.0, "drop_vs_first_pct": 15.8, "stop_rule_flag": True, "verdict": "x"}
     )
-    assert sb.drop_vs_best_pct is None and sb.stop_rule_flag
+    assert sb.drop_vs_best_pct is None and sb.weak_start
 
 
 # --- 2. double bursts -------------------------------------------------------------------
@@ -247,3 +248,34 @@ def test_open_duration_bike_step_exports_as_a_lap_button_step():
             if fr.frame_type == fitdecode.FIT_FRAME_DATA and fr.name == "workout_step"
         ]
     assert [st["duration_type"] for st in steps] == ["time", "open"]
+
+
+# --- weak-start classification, held seconds ------------------------------------------------
+
+
+def test_classify_weak_starts():
+    from swim_coach.interval_analysis import _classify_weak
+
+    # isolated miss, next start recovers
+    assert _classify_weak([900, 700, 890], [False, True, False]) == [None, "execution_miss", None]
+    # two consecutive weak starts are fatigue
+    assert _classify_weak([900, 700, 650], [False, True, True]) == [None, "fatigue", "fatigue"]
+    # last start weak after a steady decline: fatigue; last weak after a fine one: a miss
+    assert _classify_weak([950, 900, 800], [False, False, True]) == [None, None, "fatigue"]
+    assert _classify_weak([900, 950, 800], [False, False, True]) == [None, None, "execution_miss"]
+
+
+def test_intended_hold_parses_the_label_shape():
+    from swim_coach.interval_analysis import intended_hold_s
+
+    assert intended_hold_s("Start rep (12s all-out, brake for corner, ~10s out)", 30.0) == 22.0
+    assert intended_hold_s("Race start", 30.0) == 30.0
+    assert intended_hold_s("15 s launch -> hold race pace to beep", 30.0) == 15.0
+    assert intended_hold_s("40s then 50s", 30.0) == 30.0  # does not fit inside the step
+
+
+def test_held_seconds_count_both_bursts_on_9_26(r926):
+    held = [s.held_s for s in r926.starts]
+    assert held[0] == 7.0 and 14 <= held[1] <= 18 and all(s.intended_s == 22.0 for s in r926.starts)
+    assert r926.starts[1].verdict.startswith("held 16 of 22 s; burst 1 peak")
+    assert "4 s dip to 105 W" in r926.starts[1].verdict

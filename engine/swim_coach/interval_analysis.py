@@ -64,6 +64,7 @@ interval-shape taxonomy, `library/24-cycling-periodization-intervals.md`).
 
 from __future__ import annotations
 
+import re
 import statistics
 from bisect import bisect_left
 from dataclasses import dataclass, field
@@ -440,14 +441,26 @@ BURST_SEARCH_AFTER_S = 60.0
 
 START_MIN_PRESCRIBED_S = 10.0
 # A short open set whose reps are shorter than this (Tim's 5 s "builds") is an opener, not a
-# race-start set: it still gets a peak/best-5 s read per rep but no stop-rule and no row in
+# race-start set: it still gets a peak/best-5 s read per rep but no weak-start read and no row in
 # the starts table. Coach judgment (library/38). Test: the real 9/26 5 s builds are openers.
 
-START_STOP_RULE_DROP_PCT = 10.0
-# Flag a start whose best 5 s is more than this % below the BEST best-5 s of the earlier
-# starts in the set (running best -- the first start is often a deliberate ~90% build).
-# Coach judgment: implements Tim's "stop once a start reads clearly weaker than your best"
-# rule; no source pins 10%. library/26-activity-stream-interval-analysis.md.
+WEAK_START_DROP_PCT = 10.0
+# Mark a start "weak" when its best 5 s is more than this % below the BEST best-5 s of the
+# earlier starts in the set (running best -- the first start is often a deliberate ~90%
+# build). A post-ride read (the athlete cannot see a 10% drop mid-ride), not a stop
+# instruction. Coach judgment: from Tim's "clearly weaker than your best" rule; no source
+# pins 10%. library/26-activity-stream-interval-analysis.md.
+
+LAUNCH_SLOW_MARGIN_S = 2.0
+# Launch clue: time-to-peak at least this many seconds longer than the set's median marks a
+# "slow launch" (a missed clip / false start) on a weak start. Coach judgment.
+# library/38-race-week-sharpener-and-openers.md. Test: only labels isolated weak starts.
+
+LAUNCH_CADENCE_WINDOW_S = 3.0
+LAUNCH_LOW_CADENCE_FRAC = 0.8
+# Launch clue: mean cadence over the first 3 s of the burst under 80% of the set's median
+# marks a "low launch cadence". Coach judgment (library/38). Test: the real 10/10 launches
+# ran 43-77 rpm, so none is flagged there.
 
 BURST2_MAX_GAP_S = 20
 # A start ridden as two efforts (launch, brake for a corner, effort out of it): the second
@@ -1586,6 +1599,7 @@ class _Burst:
     s_to_peak: float
     best_5s_w: int
     avg_w: int
+    held_s: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -1597,6 +1611,25 @@ class _StartRead:
     second: _Burst | None = None
     dip_w: int | None = None
     dip_s: float | None = None
+
+    @property
+    def held_s(self) -> float:
+        """Seconds held at/above the hold floor across both bursts (the corner dip excluded)."""
+        return self.first.held_s + (self.second.held_s if self.second else 0.0)
+
+
+def _held_seconds(run: list[float], floor: float) -> float:
+    """Seconds of `run` at/above `floor`, dropouts of up to `BURST_MAX_GAP_S` s between
+    such samples counted as held."""
+    above = [i for i, x in enumerate(run) if x >= floor]
+    if not above:
+        return 0.0
+    held, prev = 1, above[0]
+    for i in above[1:]:
+        gap = i - prev - 1
+        held += 1 + (gap if gap <= BURST_MAX_GAP_S else 0)
+        prev = i
+    return float(held)
 
 
 def _grow_burst(
@@ -1628,8 +1661,11 @@ def _grow_burst(
     return a, b
 
 
-def _burst_from_run(t_s: list[float], w: list[float], lo: int, a: int, b: int, ip: int) -> _Burst:
+def _burst_from_run(
+    t_s: list[float], w: list[float], lo: int, a: int, b: int, ip: int, *, ftp_watts: float | None
+) -> _Burst:
     run = w[a : b + 1]
+    floor = BURST_MIN_PEAK_FRAC_FTP * ftp_watts if ftp_watts else 0.6 * w[ip]
     n5 = min(5, len(run))
     best5 = max(sum(run[i : i + n5]) / n5 for i in range(len(run) - n5 + 1))
     start_t = t_s[lo + a]
@@ -1640,6 +1676,7 @@ def _burst_from_run(t_s: list[float], w: list[float], lo: int, a: int, b: int, i
         s_to_peak=t_s[lo + ip] - start_t,
         best_5s_w=int(round(best5)),
         avg_w=int(round(statistics.fmean(run))),
+        held_s=_held_seconds(run, floor),
     )
 
 
@@ -1677,7 +1714,7 @@ def _find_second_burst(
         dip_s = t_s[lo + a] - t_s[lo + s_b] - 1.0
     else:
         dip_s = t_s[lo + s_a] - t_s[lo + b] - 1.0
-    return _burst_from_run(t_s, w, lo, s_a, s_b, ip), int(round(dip)), max(0.0, dip_s)
+    return _burst_from_run(t_s, w, lo, s_a, s_b, ip, ftp_watts=ftp_watts), int(round(dip)), max(0.0, dip_s)
 
 
 def _find_start(
@@ -1695,7 +1732,7 @@ def _find_start(
         return None
     ip = w.index(peak)
     a, b = _grow_burst(w, ip)
-    main = _burst_from_run(t_s, w, lo, a, b, ip)
+    main = _burst_from_run(t_s, w, lo, a, b, ip, ftp_watts=ftp_watts)
     other = _find_second_burst(t_s, w, lo, a, b, ftp_watts=ftp_watts)
     if other is None:
         return _StartRead(main)
@@ -1706,30 +1743,81 @@ def _find_start(
 
 
 def _start_score_w(read: _StartRead) -> int:
-    """A start's strength for the stop-rule: the best 5 s of its strongest burst (a start
+    """A start's strength for the weak-start read: the best 5 s of its strongest burst (a start
     ridden as launch + brake + second effort is judged on the better of the two)."""
     return max(read.first.best_5s_w, read.second.best_5s_w if read.second else 0)
+
+
+_INTENDED_SECONDS_RE = re.compile(r"(?<![\d.])(\d{1,2})\s*(?:s|sec|secs)\b", re.I)
+
+
+def intended_hold_s(label: str | None, prescribed_s: float) -> float:
+    """The seconds of real effort a start intends: the sum of the "NNs" figures in a step
+    label that names its shape ("12s all-out, brake for corner, ~10s out" -> 22), when they
+    fit inside the step; else the step's own duration."""
+    if label:
+        nums = [float(n) for n in _INTENDED_SECONDS_RE.findall(label)]
+        if nums and 0 < sum(nums) <= prescribed_s:
+            return sum(nums)
+    return prescribed_s
+
+
+def _launch_cadence_rpm(series: dict, burst: _Burst) -> int | None:
+    """Mean cadence over the first `LAUNCH_CADENCE_WINDOW_S` s of a burst."""
+    t_s = series.get("t_s") or []
+    cad = series.get("cadence_rpm") or []
+    if not t_s or len(cad) != len(t_s):
+        return None
+    lo = bisect_left(t_s, burst.start_s)
+    hi = bisect_left(t_s, burst.start_s + LAUNCH_CADENCE_WINDOW_S)
+    vals = [float(c) for c in cad[lo:hi] if c is not None]
+    return int(round(statistics.fmean(vals))) if vals else None
+
+
+def _classify_weak(scores: list[int | None], weak: list[bool]) -> list[str | None]:
+    """"fatigue" for weak starts that are consecutive with another weak start or end a
+    steady decline over the last three starts (the set's last start); "execution_miss" for an isolated weak start
+    (the next start recovers, or it is the last and the one before was fine)."""
+    kinds: list[str | None] = [None] * len(weak)
+    for i, is_weak in enumerate(weak):
+        if not is_weak:
+            continue
+        consecutive = (i > 0 and weak[i - 1]) or (i + 1 < len(weak) and weak[i + 1])
+        declining = (
+            i >= 2
+            and i == len(weak) - 1  # an earlier weak start whose next start recovered is isolated
+            and scores[i] is not None
+            and scores[i - 1] is not None
+            and scores[i - 2] is not None
+            and scores[i - 2] > scores[i - 1] > scores[i]
+        )
+        kinds[i] = "fatigue" if consecutive or declining else "execution_miss"
+    return kinds
 
 
 def _burst_verdict(
     read: _StartRead | None,
     drop_pct: float | None,
-    flagged: bool,
     ref_n: int | None,
     *,
+    held_s: float | None,
+    intended_s: float,
+    kind: str | None,
+    clue: str | None,
     opener: bool = False,
 ) -> str:
     if read is None:
         return "no clear burst found near the prescribed window"
     b = read.first
+    held = f"held {held_s:.0f} of {intended_s:.0f} s; " if held_s is not None else ""
     if read.second is not None:
         s2 = read.second
         head = (
-            f"burst 1 peak {b.peak_w} W, best 5 s {b.best_5s_w} W; {read.dip_s:.0f} s dip to "
+            f"{held}burst 1 peak {b.peak_w} W, best 5 s {b.best_5s_w} W; {read.dip_s:.0f} s dip to "
             f"{read.dip_w} W; burst 2 peak {s2.peak_w} W, best 5 s {s2.best_5s_w} W"
         )
     else:
-        head = f"peak {b.peak_w} W, best 5 s {b.best_5s_w} W"
+        head = f"{held}peak {b.peak_w} W, best 5 s {b.best_5s_w} W"
     if opener:
         return f"opener: {head}"
     if ref_n is None:
@@ -1737,9 +1825,11 @@ def _burst_verdict(
     elif drop_pct is None:
         tail = " -- as strong as your best start so far"
     else:
-        tail = f" -- {drop_pct:.0f}% below your best so far (start {ref_n})"
-        if flagged:
-            tail += " (stop-rule)"
+        tail = f" -- {drop_pct:.0f}% below best start (start {ref_n})"
+        if kind == "execution_miss":
+            tail += f" -- likely execution{': ' + clue if clue else ''}, not fatigue"
+        elif kind == "fatigue":
+            tail += " -- consecutive/declining starts, fatigue"
     return head + tail
 
 
@@ -1751,10 +1841,12 @@ def analyze_start_bursts(
     Each start's burst is searched for around its expected time (a lap-located rep is
     expected at its own lap start; a series-located one at its scheduled time plus the
     median schedule shift -- the window is only a hint, see `BURST_SEARCH_*`), then
-    reported as peak 1 s W, seconds to peak, best 5 s W, burst length and average W
-    (and a second burst + dip when the start was ridden as two efforts), with the
+    reported as seconds held vs intended, peak 1 s W, seconds to peak, best 5 s W, burst
+    length and average W (and a second burst + dip when ridden as two efforts), with the
     best-5 s drop vs the BEST earlier start in the set. A drop above
-    `START_STOP_RULE_DROP_PCT` raises that start's `stop_rule_flag`."""
+    `WEAK_START_DROP_PCT` marks the start `weak_start`, classified as an `execution_miss`
+    (isolated) or `fatigue` (consecutive / declining) -- a post-ride read, not an in-ride
+    instruction."""
     t_s = series.get("t_s") or []
     power = series.get("power_w") or []
     shifts = [w.start_s - w.rep.offset_s for w in located.windows]
@@ -1777,44 +1869,75 @@ def analyze_start_bursts(
             if i + 1 < len(group):
                 hi = min(hi, (expected[i] + expected[i + 1]) / 2)
             found.append(_find_start(t_s, power, lo, hi, ftp_watts=ftp_watts))
+
         opener = group[0].duration_s < START_MIN_PRESCRIBED_S
+        scores = [_start_score_w(r) if r else None for r in found]
+        drops: list[float | None] = []
+        refs: list[int | None] = []
         best: tuple[int, int] | None = None  # (start score W, start n) so far
-        for i, (rep, read) in enumerate(zip(group, found)):
-            b = read.first if read else None
-            score = _start_score_w(read) if read else None
+        for i, score in enumerate(scores):
             drop = None
             if score is not None and best is not None and best[0] > 0 and not opener:
                 d = round((best[0] - score) / best[0] * 100, 1) + 0.0
                 drop = d if d > 0 else None
-            flagged = drop is not None and drop > START_STOP_RULE_DROP_PCT
+            drops.append(drop)
+            refs.append(best[1] if best and not opener else None)
+            if score is not None and (best is None or score > best[0]):
+                best = (score, i + 1)
+        weak = [d is not None and d > WEAK_START_DROP_PCT for d in drops]
+        kinds = _classify_weak(scores, weak)
+
+        peaks_to = [r.first.s_to_peak for r in found if r is not None]
+        med_to_peak = statistics.median(peaks_to) if peaks_to else None
+        cadences = [_launch_cadence_rpm(series, r.first) if r else None for r in found]
+        cad_vals = [c for c in cadences if c is not None]
+        med_cad = statistics.median(cad_vals) if cad_vals else None
+
+        for i, (rep, read) in enumerate(zip(group, found)):
+            b = read.first if read else None
             s2 = read.second if read else None
+            clues = []
+            if b is not None and med_to_peak is not None and b.s_to_peak >= med_to_peak + LAUNCH_SLOW_MARGIN_S:
+                clues.append("slow launch")
+            cad = cadences[i]
+            if cad is not None and med_cad and cad < LAUNCH_LOW_CADENCE_FRAC * med_cad:
+                clues.append("low launch cadence")
+            clue = ", ".join(clues) or None
+            intended = intended_hold_s(rep.label, rep.duration_s)
+            held = round(read.held_s, 1) if read else None
             out.append(
                 (
                     rep,
                     StartBurst(
                         n=i + 1,
                         prescribed_s=rep.duration_s,
+                        intended_s=intended,
+                        held_s=held,
                         burst_start_s=round(b.start_s, 1) if b else None,
                         burst_s=round(b.length_s, 1) if b else None,
                         peak_w=b.peak_w if b else None,
                         s_to_peak=round(b.s_to_peak, 1) if b else None,
                         best_5s_w=b.best_5s_w if b else None,
                         avg_w=b.avg_w if b else None,
-                        drop_vs_best_pct=drop,
-                        stop_rule_flag=flagged,
+                        launch_cadence_rpm=cad,
+                        drop_vs_best_pct=drops[i],
+                        weak_start=weak[i],
+                        weak_kind=kinds[i],
+                        launch_clue=clue if weak[i] else None,
                         burst2_start_s=round(s2.start_s, 1) if s2 else None,
                         burst2_s=round(s2.length_s, 1) if s2 else None,
                         burst2_peak_w=s2.peak_w if s2 else None,
                         burst2_best_5s_w=s2.best_5s_w if s2 else None,
                         dip_w=read.dip_w if s2 and read else None,
                         dip_s=round(read.dip_s, 1) if s2 and read and read.dip_s is not None else None,
-                        verdict=_burst_verdict(read, drop, flagged, best[1] if best and not opener else None, opener=opener),
+                        verdict=_burst_verdict(
+                            read, drops[i], refs[i], held_s=held, intended_s=intended,
+                            kind=kinds[i], clue=clue, opener=opener,
+                        ),
                     ),
                     read,
                 )
             )
-            if score is not None and (best is None or score > best[0]):
-                best = (score, i + 1)
     return out
 
 
@@ -1837,14 +1960,19 @@ def _starts_with_any_burst(
 
 
 def _starts_flag(starts: list[StartBurst]) -> str | None:
-    bad = [s for s in starts if s.stop_rule_flag]
-    if not bad:
-        return None
-    parts = ", ".join(f"start {s.n} ({s.drop_vs_best_pct:.0f}% below your best)" for s in bad)
-    return (
-        f"best-5 s fell more than {START_STOP_RULE_DROP_PCT:.0f}% below the best start so far: {parts} "
-        "-- stop-rule (stop once a start reads clearly weaker than your best)"
-    )
+    """Set-level note. A weak start is only a post-ride read: an isolated one is a skill
+    rep, not a reason to stop; only consecutive/declining weak starts read as fatigue."""
+    fatigue = [s for s in starts if s.weak_kind == "fatigue"]
+    misses = [s for s in starts if s.weak_kind == "execution_miss"]
+    parts = []
+    if fatigue:
+        parts.append(f"starts faded from start {fatigue[0].n} -- consider stopping earlier next time")
+    if misses:
+        names = " and ".join(f"start {s.n}" for s in misses)
+        clues = sorted({s.launch_clue for s in misses if s.launch_clue})
+        why = f"likely execution: {', '.join(clues)}" if clues else "likely execution"
+        parts.append(f"{names} off ({why}) -- skill rep, not fatigue")
+    return "; ".join(parts) or None
 
 
 def _partial_stream_effort(

@@ -1514,9 +1514,16 @@ class StartBurst(BaseModel):
     avg_w: int | None = None
     # best-5s drop vs the BEST best-5s of the earlier starts in the set (running best);
     # None for start 1 and whenever this start is at least as strong as the best so far.
-    # (Rows stored before 2026-10 carried `drop_vs_first_pct`; it is ignored on load.)
+    # (Rows stored before 2026-10 carried `drop_vs_first_pct`, ignored on load.)
     drop_vs_best_pct: float | None = None
-    stop_rule_flag: bool = False
+    weak_start: bool = False  # drop_vs_best_pct above the weak-start threshold
+    # Why a weak start was weak: "execution_miss" (isolated, a skill rep -- missed clip, slow
+    # launch) or "fatigue" (consecutive weak starts / a steady decline). None when not weak.
+    weak_kind: Literal["execution_miss", "fatigue"] | None = None
+    launch_clue: str | None = None  # "slow launch" / "low launch cadence" when seen
+    held_s: float | None = None  # seconds at/above the hold floor (both bursts; not the dip)
+    intended_s: float | None = None  # the intended hold: shape named in the label, else prescribed_s
+    launch_cadence_rpm: int | None = None  # mean cadence over the first 3 s of burst 1
     burst2_start_s: float | None = None
     burst2_s: float | None = None
     burst2_peak_w: int | None = None
@@ -1524,6 +1531,16 @@ class StartBurst(BaseModel):
     dip_w: int | None = None  # lowest 1 s power between the two bursts
     dip_s: float | None = None  # seconds between the end of burst 1 and the start of burst 2
     verdict: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_stop_rule_flag(cls, data):
+        # Rows stored before the neutral "weak start" wording carried `stop_rule_flag`.
+        if isinstance(data, dict) and "stop_rule_flag" in data:
+            data = dict(data)
+            legacy = data.pop("stop_rule_flag")
+            data.setdefault("weak_start", legacy)
+        return data
 
 
 class RaceStart(BaseModel):
@@ -1624,7 +1641,7 @@ class WorkoutIntervals(BaseModel):
     target_band_w: tuple[float, float] | None = None  # resolved watts band (from FTP)
     rounds: list[IntervalRound] = Field(default_factory=list)
     # Short-burst sets (race starts): per-start numbers read from the stream, and a
-    # set-level note when a start's best-5s fell past the stop-rule threshold.
+    # set-level note when a start's best-5s fell past the weak-start threshold.
     # Additive/optional -- empty / None on every row that predates them.
     starts: list[StartBurst] = Field(default_factory=list)
     starts_flag: str | None = None
