@@ -1026,14 +1026,17 @@ export function pickCurrentAndNextWeek(weeks, now = new Date()) {
  * see the active week flip up to a day off. */
 export function partitionPlanWeeks(weeks, now = new Date()) {
   const sorted = sortedByIsoWeek(weeks);
+  // Compare whole days: with the time of day left in, `daysBetween`'s rounding
+  // made the current week read as past from Sunday noon onward.
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const firstLive = sorted.findIndex(
-    (week) => daysBetween(now, addDays(isoWeekMonday(week.iso_week), 6)) >= 0,
+    (week) => daysBetween(today, addDays(isoWeekMonday(week.iso_week), 6)) >= 0,
   );
   if (firstLive === -1) return { focus: null, focusIsCurrent: false, upcoming: [], past: sorted };
   const focus = sorted[firstLive];
   return {
     focus,
-    focusIsCurrent: daysBetween(isoWeekMonday(focus.iso_week), now) >= 0,
+    focusIsCurrent: daysBetween(isoWeekMonday(focus.iso_week), today) >= 0,
     upcoming: sorted.slice(firstLive + 1),
     past: sorted.slice(0, firstLive),
   };
