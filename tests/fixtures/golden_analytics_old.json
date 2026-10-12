@@ -2,7 +2,7 @@
  "race_2026_09_19_cyclocross.json": {
   "no_session": {
    "avg_power_w": 202.4681066486669,
-   "cardiac_drift_pct": 9.676415751775735,
+   "cardiac_drift_pct": 9.999802415417447,
    "elapsed_min": 49.37668333333333,
    "first_half_pace_s_per_100m": null,
    "intervals": {
@@ -64,8 +64,8 @@
    },
    "moving_min": 49.4,
    "normalized_power_w": 237.11540010844612,
-   "pause_count": 0,
-   "pause_total_min": 0.0,
+   "pause_count": 1,
+   "pause_total_min": 4.166666666666667,
    "power_curve": [
     {
      "best_42d_w": null,
@@ -213,7 +213,7 @@
  "ride_2026_09_26_starts_technical_5x5.json": {
   "no_session": {
    "avg_power_w": 123.63383906800325,
-   "cardiac_drift_pct": 25.50204586795932,
+   "cardiac_drift_pct": 25.512115000707226,
    "elapsed_min": 152.03268333333332,
    "first_half_pace_s_per_100m": null,
    "intervals": {
@@ -630,8 +630,8 @@
    },
    "moving_min": 124.0,
    "normalized_power_w": 200.282062516957,
-   "pause_count": 0,
-   "pause_total_min": 0.0,
+   "pause_count": 10,
+   "pause_total_min": 35.333333333333336,
    "power_curve": [
     {
      "best_42d_w": null,
@@ -804,7 +804,7 @@
   },
   "with_session": {
    "avg_power_w": 123.63383906800325,
-   "cardiac_drift_pct": 25.50204586795932,
+   "cardiac_drift_pct": 25.512115000707226,
    "elapsed_min": 152.03268333333332,
    "first_half_pace_s_per_100m": null,
    "intervals": {
@@ -1359,8 +1359,8 @@
    },
    "moving_min": 124.0,
    "normalized_power_w": 200.282062516957,
-   "pause_count": 0,
-   "pause_total_min": 0.0,
+   "pause_count": 10,
+   "pause_total_min": 35.333333333333336,
    "power_curve": [
     {
      "best_42d_w": null,
@@ -2842,8 +2842,8 @@
    },
    "moving_min": 69.3,
    "normalized_power_w": 201.24573538995924,
-   "pause_count": 0,
-   "pause_total_min": 0.0,
+   "pause_count": 1,
+   "pause_total_min": 2.5166666666666666,
    "power_curve": [
     {
      "best_42d_w": null,
@@ -3211,8 +3211,8 @@
    },
    "moving_min": 69.3,
    "normalized_power_w": 201.24573538995924,
-   "pause_count": 0,
-   "pause_total_min": 0.0,
+   "pause_count": 1,
+   "pause_total_min": 2.5166666666666666,
    "power_curve": [
     {
      "best_42d_w": null,
@@ -3681,8 +3681,8 @@
    },
    "moving_min": 85.6,
    "normalized_power_w": 169.96092440428274,
-   "pause_count": 0,
-   "pause_total_min": 0.0,
+   "pause_count": 3,
+   "pause_total_min": 6.033333333333333,
    "power_curve": [
     {
      "best_42d_w": null,
@@ -4149,8 +4149,8 @@
    },
    "moving_min": 85.6,
    "normalized_power_w": 169.96092440428274,
-   "pause_count": 0,
-   "pause_total_min": 0.0,
+   "pause_count": 3,
+   "pause_total_min": 6.033333333333333,
    "power_curve": [
     {
      "best_42d_w": null,
@@ -4814,8 +4814,8 @@
    },
    "moving_min": 130.1,
    "normalized_power_w": 211.30683196692087,
-   "pause_count": 0,
-   "pause_total_min": 0.0,
+   "pause_count": 3,
+   "pause_total_min": 3.066666666666667,
    "power_curve": [
     {
      "best_42d_w": null,
@@ -5618,8 +5618,8 @@
    },
    "moving_min": 130.1,
    "normalized_power_w": 211.30683196692087,
-   "pause_count": 0,
-   "pause_total_min": 0.0,
+   "pause_count": 3,
+   "pause_total_min": 3.066666666666667,
    "power_curve": [
     {
      "best_42d_w": null,
