@@ -1067,6 +1067,14 @@ describe('pickCurrentAndNextWeek', () => {
 
 describe('partitionPlanWeeks', () => {
   const wk = (iso) => ({ iso_week: iso, sessions: [] });
+
+  it('keeps the current week in focus through Sunday evening, not only until Sunday noon', () => {
+    // Sunday 2026-07-12 23:17 local: W28 (Jul 6-12) still has today left.
+    const r = partitionPlanWeeks([wk('2026-W28'), wk('2026-W29')], new Date(2026, 6, 12, 23, 17));
+    expect(r.focus.iso_week).toBe('2026-W28');
+    expect(r.focusIsCurrent).toBe(true);
+    expect(r.past).toEqual([]);
+  });
   // 2026-W28 = Jul 6-12, W29 = Jul 13-19, W30 = Jul 20-26, W32 = Aug 3-9
 
   it('no weeks: no focus, nothing else', () => {

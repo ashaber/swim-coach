@@ -5,7 +5,7 @@ Same mocked-backend conventions as test_workout_detail.py: no real backend, ever
 
 import json
 import re
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -24,11 +24,13 @@ CORS_HEADERS = {
 FIXTURE = json.loads(
     (Path(__file__).resolve().parents[3] / 'tests' / 'fixtures' / 'ride_2026_09_29_vo2_40_20.json').read_text()
 )
-# The Plan tab only shows the current/next week expanded (older weeks collapse into "past weeks"), so the
-# planned session must sit in the week the test actually runs in, not the fixture ride's own 2026-W40.
-_TODAY = date.today()
-_ISO_YEAR, _ISO_WEEK, _ = _TODAY.isocalendar()
-_SESSION_DATE = _TODAY - timedelta(days=_TODAY.weekday()) + timedelta(days=1)
+# The Plan tab only expands the current/next week (older weeks collapse into "past weeks"), so the
+# browser clock is pinned inside the fixture ride's own week (2026-W40, Mon Sep 28 - Sun Oct 4) rather
+# than following the real date. Pinned to SUNDAY 23:30 on purpose: the week must still read as current
+# on its last evening (the plan used to roll over to next week from Sunday noon).
+FROZEN_NOW = '2026-10-04T23:30:00'
+_SESSION_DATE = date(2026, 9, 29)
+_ISO_YEAR, _ISO_WEEK, _ = _SESSION_DATE.isocalendar()
 SESSION = {
     **FIXTURE['planned_session'], 'date': _SESSION_DATE.isoformat(), 'title': '3x6 VO2 40/20', 'target_load_au': 90,
 }
@@ -119,6 +121,7 @@ def _make_page(request, base_url, plan):
         pw.stop()
         pytest.skip(f'{cfg["name"]} unavailable in this environment: {e}')
     ctx = browser.new_context(viewport=cfg['vp'], service_workers='block')
+    ctx.clock.set_fixed_time(FROZEN_NOW)
     seed_identity(ctx)
     ctx.route('**/api/athlete*', _cors_route(200, {'slug': 'renee', 'name': 'Renee', 'race_debriefs': []}))
     ctx.route('**/api/grants*', _cors_route(200, []))
