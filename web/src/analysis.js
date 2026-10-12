@@ -200,7 +200,7 @@ function powerCurveView(curve) {
   };
 }
 
-export const STARTS_COLUMNS = ['Start', 'At', 'Burst', 'Peak', 'To peak', 'Best 5 s', 'Avg', 'vs start 1', 'Verdict'];
+export const STARTS_COLUMNS = ['Start', 'At', 'Held', 'Peak', 'To peak', 'Best 5 s', 'Avg', 'vs best', 'Verdict'];
 
 function startsView(iv) {
   const starts = iv?.starts || [];
@@ -210,12 +210,14 @@ function startsView(iv) {
     rows: starts.map((s) => [
       String(s.n),
       num(s.burst_start_s) ? formatClock(s.burst_start_s) : dash,
-      num(s.burst_s) ? `${Math.round(s.burst_s)} s (of ${Math.round(s.prescribed_s)})` : dash,
+      num(s.held_s)
+        ? `${Math.round(s.held_s)} of ${Math.round(s.intended_s ?? s.prescribed_s)} s`
+        : num(s.burst_s) ? `${Math.round(s.burst_s)} s (of ${Math.round(s.prescribed_s)})` : dash,
       watts(s.peak_w),
       num(s.s_to_peak) ? `${Math.round(s.s_to_peak)} s` : dash,
       watts(s.best_5s_w),
       watts(s.avg_w),
-      num(s.drop_vs_first_pct) ? signed(-s.drop_vs_first_pct, 0) : dash,
+      num(s.drop_vs_best_pct) ? signed(-s.drop_vs_best_pct, 0) : dash,
       s.verdict || dash,
     ]),
     flag: iv.starts_flag || null,

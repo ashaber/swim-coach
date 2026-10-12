@@ -1455,6 +1455,15 @@ class IntervalEffort(BaseModel):
     round_n: int | None = None
     rep_in_round: int | None = None
     in_target_band: bool | None = None
+    # Technical-course reps (`interval_analysis.is_technical_rep`): power is not a fair
+    # read of effort on a tight course, so the rep is scored on HR. Additive/optional.
+    technical: bool | None = None
+    technical_reason: str | None = None  # "label" | "variability"
+    np_w: float | None = None  # normalized power of the rep window
+    pct_lthr: float | None = None  # avg HR as % of LTHR
+    time_ge90_lthr_s: float | None = None  # seconds in the rep at >= 90% LTHR
+    low_power_time_pct: float | None = None  # % of the rep spent under 50% FTP (the variability read)
+    stream_coverage_pct: float | None = None  # % of the rep window that has stream samples
 
 
 class IntervalRound(BaseModel):
@@ -1490,7 +1499,10 @@ class StartBurst(BaseModel):
     """One short all-out start (< 60 s, open/RPE target) read from the power
     stream instead of the prescribed window -- see
     `interval_analysis.analyze_start_bursts`. `None` numeric fields mean no
-    burst was found near the expected time."""
+    burst was found near the expected time. The top-level peak/best-5/length
+    describe BURST 1 (the first burst in time, the standing launch); a start
+    ridden as two bursts (launch, brake for a corner, second effort out of it)
+    also carries `burst2_*` and the dip between them."""
 
     n: int  # 1-based, in prescription order
     prescribed_s: float
@@ -1500,9 +1512,62 @@ class StartBurst(BaseModel):
     s_to_peak: float | None = None
     best_5s_w: int | None = None
     avg_w: int | None = None
-    drop_vs_first_pct: float | None = None  # best-5s drop vs the set's first start (None for start 1)
-    stop_rule_flag: bool = False
+    # best-5s drop vs the BEST best-5s of the earlier starts in the set (running best);
+    # None for start 1 and whenever this start is at least as strong as the best so far.
+    # (Rows stored before 2026-10 carried `drop_vs_first_pct`, ignored on load.)
+    drop_vs_best_pct: float | None = None
+    weak_start: bool = False  # drop_vs_best_pct above the weak-start threshold
+    # Why a weak start was weak: "execution_miss" (isolated, a skill rep -- missed clip, slow
+    # launch) or "fatigue" (consecutive weak starts / a steady decline). None when not weak.
+    weak_kind: Literal["execution_miss", "fatigue"] | None = None
+    launch_clue: str | None = None  # "slow launch" / "low launch cadence" when seen
+    held_s: float | None = None  # seconds at/above the hold floor (both bursts; not the dip)
+    intended_s: float | None = None  # the intended hold: shape named in the label, else prescribed_s
+    launch_cadence_rpm: int | None = None  # mean cadence over the first 3 s of burst 1
+    burst2_start_s: float | None = None
+    burst2_s: float | None = None
+    burst2_peak_w: int | None = None
+    burst2_best_5s_w: int | None = None
+    dip_w: int | None = None  # lowest 1 s power between the two bursts
+    dip_s: float | None = None  # seconds between the end of burst 1 and the start of burst 2
     verdict: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_stop_rule_flag(cls, data):
+        # Rows stored before the neutral "weak start" wording carried `stop_rule_flag`.
+        if isinstance(data, dict) and "stop_rule_flag" in data:
+            data = dict(data)
+            legacy = data.pop("stop_rule_flag")
+            data.setdefault("weak_start", legacy)
+        return data
+
+
+class RaceStart(BaseModel):
+    """The first major burst of a race and how the athlete settled after it --
+    `race_start.analyze_race_start`. Powers are watts; times are seconds."""
+
+    start_s: float  # t_s of the first sample >= the burst threshold
+    peak_w: int
+    best_5s_w: int
+    best_15s_w: int | None = None
+    best_30s_w: int | None = None
+    burst_s: float
+    time_to_settle_s: float | None = None
+    first_5min_avg_w: int | None = None
+    first_5min_np_w: int | None = None
+    race_np_w: int | None = None
+    first_5min_vs_race_np_pct: float | None = None  # first-5-min NP as % of whole-race NP
+    note: str
+
+
+class RaceLap(BaseModel):
+    """One device lap of a race: duration and the lap's own average power / HR."""
+
+    n: int
+    duration_s: float
+    avg_w: float | None = None
+    avg_hr: int | None = None
 
 
 class WorkoutIntervals(BaseModel):
@@ -1567,7 +1632,7 @@ class WorkoutIntervals(BaseModel):
     # the reps were read off the device laps (exact) or located in the power
     # series (fallback). `efforts` then holds one entry per REP (not per
     # free-detected block). Additive/optional, no schema_version bump.
-    detection_source: Literal["laps", "series"] | None = None
+    detection_source: Literal["laps", "series", "lap_shape"] | None = None
     reps_completed: int | None = None
     reps_in_band_pct: float | None = None  # % of completed reps whose avg sat in the band
     fade_across_reps_pct: float | None = None  # first-third vs last-third rep power, % drop
@@ -1576,10 +1641,21 @@ class WorkoutIntervals(BaseModel):
     target_band_w: tuple[float, float] | None = None  # resolved watts band (from FTP)
     rounds: list[IntervalRound] = Field(default_factory=list)
     # Short-burst sets (race starts): per-start numbers read from the stream, and a
-    # set-level note when a start's best-5s fell past the stop-rule threshold.
+    # set-level note when a start's best-5s fell past the weak-start threshold.
     # Additive/optional -- empty / None on every row that predates them.
     starts: list[StartBurst] = Field(default_factory=list)
     starts_flag: str | None = None
+    # Technical-course reps are scored on HR, not power fade: how many reps were read
+    # that way, and the first-to-last-rep HR rise across them. Additive/optional.
+    technical_reps: int | None = None
+    hr_rise_across_reps_bpm: float | None = None
+    # Race rides (analyze(race=True), no repeating lap shape): the opening burst and
+    # per-lap numbers. Additive/optional.
+    race_start: RaceStart | None = None
+    race_laps: list[RaceLap] = Field(default_factory=list)
+    # Why a steady-state decoupling read was withheld ("interval" / "race" / "starts"); None
+    # when the ride is steady. Additive/optional.
+    session_shape: str | None = None
 
 
 class WorkoutAnalytics(BaseModel):

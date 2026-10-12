@@ -64,6 +64,7 @@ interval-shape taxonomy, `library/24-cycling-periodization-intervals.md`).
 
 from __future__ import annotations
 
+import re
 import statistics
 from bisect import bisect_left
 from dataclasses import dataclass, field
@@ -72,11 +73,23 @@ from swim_coach.models import (
     IntervalEffort,
     IntervalRound,
     IntervalSubStructure,
+    RaceLap,
     StartBurst,
     WorkoutIntervals,
     WorkoutStructure,
 )
 
+from swim_coach.race_start import analyze_race_start
+from swim_coach.rep_shape import (
+    TECH_HR_HELD_PCT_LTHR,
+    TECH_MIN_REP_S,
+    infer_lap_shape,
+    is_technical,
+    mentions_technical,
+    read_rep,
+    technical_verdict,
+    STREAM_MIN_COVERAGE,
+)
 from swim_coach.zones import bike_zone_table
 from swim_coach.prescription import (
     Located,
@@ -426,10 +439,44 @@ BURST_SEARCH_AFTER_S = 60.0
 # hand and a timer pause shifts everything after it, so the prescribed window is a
 # hint, not a boundary. Coach judgment (library/26).
 
-START_STOP_RULE_DROP_PCT = 10.0
-# Flag a start whose best 5 s is more than this % below the set's FIRST start.
-# Coach judgment: implements Tim's "stop if a start reads clearly weaker than your
-# first" rule; no source pins 10%. library/26-activity-stream-interval-analysis.md.
+START_MIN_PRESCRIBED_S = 10.0
+# A short open set whose reps are shorter than this (Tim's 5 s "builds") is an opener, not a
+# race-start set: it still gets a peak/best-5 s read per rep but no weak-start read and no row in
+# the starts table. Coach judgment (library/38). Test: the real 9/26 5 s builds are openers.
+
+WEAK_START_DROP_PCT = 10.0
+# Mark a start "weak" when its best 5 s is more than this % below the BEST best-5 s of the
+# earlier starts in the set (running best -- the first start is often a deliberate ~90%
+# build). A post-ride read (the athlete cannot see a 10% drop mid-ride), not a stop
+# instruction. Coach judgment: from Tim's "clearly weaker than your best" rule; no source
+# pins 10%. library/26-activity-stream-interval-analysis.md.
+
+LAUNCH_SLOW_MARGIN_S = 2.0
+# Launch clue: time-to-peak at least this many seconds longer than the set's median marks a
+# "slow launch" (a missed clip / false start) on a weak start. Coach judgment.
+# library/38-race-week-sharpener-and-openers.md. Test: only labels isolated weak starts.
+
+LAUNCH_CADENCE_WINDOW_S = 3.0
+LAUNCH_LOW_CADENCE_FRAC = 0.8
+# Launch clue: mean cadence over the first 3 s of the burst under 80% of the set's median
+# marks a "low launch cadence". Coach judgment (library/38). Test: the real 10/10 launches
+# ran 43-77 rpm, so none is flagged there.
+
+BURST2_MAX_GAP_S = 20
+# A start ridden as two efforts (launch, brake for a corner, effort out of it): the second
+# burst must begin/end within this many seconds of the first. Coach judgment; the real
+# 9/26 technical-loop starts had 2-4 s dips and the second burst within ~10 s.
+# library/38-race-week-sharpener-and-openers.md. Test: 9/26 starts 2-4 read as two bursts.
+
+BURST2_MIN_FRAC_OF_MAIN_PEAK = 0.6
+# ...and its peak must be at least this fraction of the start's main (highest) peak, so a
+# tail of pedalling after a clean single burst is not read as a second effort. Coach
+# judgment: the real 9/26 second bursts ran 0.87-1.0x the main peak; a spurious 10/10 tail
+# was 0.50x. library/38-race-week-sharpener-and-openers.md. Test: 10/10 starts stay single.
+
+BURST2_DIP_FRAC_OF_PEAK = 0.5
+# ...and the power between the two must fall to at most this fraction of the second burst's
+# peak (a real brake/corner, not a wobble inside one effort). Coach judgment (library/38).
 
 
 # --- result types (internal; analyze() returns the pydantic WorkoutIntervals) ------
@@ -1552,24 +1599,50 @@ class _Burst:
     s_to_peak: float
     best_5s_w: int
     avg_w: int
+    held_s: float = 0.0
 
 
-def _find_burst(
-    t_s: list[float], power: list, lo_s: float, hi_s: float, *, ftp_watts: float | None
-) -> _Burst | None:
-    """The burst (contiguous run around the highest 1 s sample) inside [lo_s, hi_s)."""
-    lo, hi = bisect_left(t_s, lo_s), bisect_left(t_s, hi_s)
-    if hi <= lo:
-        return None
-    w = [float(x) if x is not None else 0.0 for x in power[lo:hi]]
-    peak = max(w)
-    if peak <= 0 or (ftp_watts and peak < BURST_MIN_PEAK_FRAC_FTP * ftp_watts):
-        return None
-    ip = w.index(peak)
-    edge = BURST_EDGE_FRAC_OF_PEAK * peak
+@dataclass(frozen=True)
+class _StartRead:
+    """A start window's burst 1, and burst 2 + the dip between them when the start was
+    ridden as two efforts (launch, brake for a corner, effort out of it)."""
+
+    first: _Burst
+    second: _Burst | None = None
+    dip_w: int | None = None
+    dip_s: float | None = None
+
+    @property
+    def held_s(self) -> float:
+        """Seconds held at/above the hold floor across both bursts (the corner dip excluded)."""
+        return self.first.held_s + (self.second.held_s if self.second else 0.0)
+
+
+def _held_seconds(run: list[float], floor: float) -> float:
+    """Seconds of `run` at/above `floor`, dropouts of up to `BURST_MAX_GAP_S` s between
+    such samples counted as held."""
+    above = [i for i, x in enumerate(run) if x >= floor]
+    if not above:
+        return 0.0
+    held, prev = 1, above[0]
+    for i in above[1:]:
+        gap = i - prev - 1
+        held += 1 + (gap if gap <= BURST_MAX_GAP_S else 0)
+        prev = i
+    return float(held)
+
+
+def _grow_burst(
+    w: list[float], ip: int, *, lo_bound: int = 0, hi_bound: int | None = None
+) -> tuple[int, int]:
+    """Index range of the contiguous run around the peak sample `ip` (power >= its edge
+    fraction of the peak, dropouts of up to `BURST_MAX_GAP_S` s tolerated), kept inside
+    [lo_bound, hi_bound]."""
+    hi_bound = len(w) - 1 if hi_bound is None else hi_bound
+    edge = BURST_EDGE_FRAC_OF_PEAK * w[ip]
     a = ip
     gap = 0
-    for i in range(ip - 1, -1, -1):
+    for i in range(ip - 1, lo_bound - 1, -1):
         if w[i] >= edge:
             a, gap = i, 0
         else:
@@ -1578,59 +1651,216 @@ def _find_burst(
                 break
     b = ip
     gap = 0
-    for i in range(ip + 1, len(w)):
+    for i in range(ip + 1, hi_bound + 1):
         if w[i] >= edge:
             b, gap = i, 0
         else:
             gap += 1
             if gap > BURST_MAX_GAP_S:
                 break
+    return a, b
+
+
+def _burst_from_run(
+    t_s: list[float], w: list[float], lo: int, a: int, b: int, ip: int, *, ftp_watts: float | None
+) -> _Burst:
     run = w[a : b + 1]
+    floor = BURST_MIN_PEAK_FRAC_FTP * ftp_watts if ftp_watts else 0.6 * w[ip]
     n5 = min(5, len(run))
     best5 = max(sum(run[i : i + n5]) / n5 for i in range(len(run) - n5 + 1))
     start_t = t_s[lo + a]
     return _Burst(
         start_s=start_t,
         length_s=t_s[lo + b] - start_t + 1.0,
-        peak_w=int(round(peak)),
+        peak_w=int(round(w[ip])),
         s_to_peak=t_s[lo + ip] - start_t,
         best_5s_w=int(round(best5)),
         avg_w=int(round(statistics.fmean(run))),
+        held_s=_held_seconds(run, floor),
     )
 
 
-def _burst_verdict(b: _Burst | None, drop_pct: float | None, flagged: bool) -> str:
-    if b is None:
+def _find_second_burst(
+    t_s: list[float], w: list[float], lo: int, a: int, b: int, *, ftp_watts: float | None
+) -> tuple[_Burst, int, float] | None:
+    """A second burst within `BURST2_MAX_GAP_S` s of the first run [a, b], separated by a
+    dip: `(burst, dip_w, dip_s)`, or `None`."""
+    floor = BURST_MIN_PEAK_FRAC_FTP * ftp_watts if ftp_watts else 0.0
+    floor = max(floor, BURST2_MIN_FRAC_OF_MAIN_PEAK * max(w[a : b + 1]))
+    best: tuple[float, int] | None = None
+    for i in range(len(w)):
+        if a <= i <= b:
+            continue
+        gap = (a - i) if i < a else (i - b)
+        if gap > BURST2_MAX_GAP_S or w[i] < floor or w[i] <= 0:
+            continue
+        if best is None or w[i] > best[0]:
+            best = (w[i], i)
+    if best is None:
+        return None
+    peak, ip = best
+    if ip < a:
+        s_a, s_b = _grow_burst(w, ip, hi_bound=a - 1)
+        between = w[s_b + 1 : a]
+    else:
+        s_a, s_b = _grow_burst(w, ip, lo_bound=b + 1)
+        between = w[b + 1 : s_a]
+    if not between:
+        return None
+    dip = min(between)
+    if dip > BURST2_DIP_FRAC_OF_PEAK * peak:
+        return None
+    if ip < a:
+        dip_s = t_s[lo + a] - t_s[lo + s_b] - 1.0
+    else:
+        dip_s = t_s[lo + s_a] - t_s[lo + b] - 1.0
+    return _burst_from_run(t_s, w, lo, s_a, s_b, ip, ftp_watts=ftp_watts), int(round(dip)), max(0.0, dip_s)
+
+
+def _find_start(
+    t_s: list[float], power: list, lo_s: float, hi_s: float, *, ftp_watts: float | None
+) -> _StartRead | None:
+    """The start (one burst, or two around a brake dip) inside [lo_s, hi_s). The burst
+    around the highest 1 s sample anchors the search; a second burst is looked for beside
+    it, and the two are reported in time order."""
+    lo, hi = bisect_left(t_s, lo_s), bisect_left(t_s, hi_s)
+    if hi <= lo:
+        return None
+    w = [float(x) if x is not None else 0.0 for x in power[lo:hi]]
+    peak = max(w)
+    if peak <= 0 or (ftp_watts and peak < BURST_MIN_PEAK_FRAC_FTP * ftp_watts):
+        return None
+    ip = w.index(peak)
+    a, b = _grow_burst(w, ip)
+    main = _burst_from_run(t_s, w, lo, a, b, ip, ftp_watts=ftp_watts)
+    other = _find_second_burst(t_s, w, lo, a, b, ftp_watts=ftp_watts)
+    if other is None:
+        return _StartRead(main)
+    second, dip_w, dip_s = other
+    if second.start_s < main.start_s:
+        return _StartRead(second, main, dip_w, dip_s)
+    return _StartRead(main, second, dip_w, dip_s)
+
+
+def _start_score_w(read: _StartRead) -> int:
+    """A start's strength for the weak-start read: the best 5 s of its strongest burst (a start
+    ridden as launch + brake + second effort is judged on the better of the two)."""
+    return max(read.first.best_5s_w, read.second.best_5s_w if read.second else 0)
+
+
+_INTENDED_SECONDS_RE = re.compile(r"(?<![\d.])(\d{1,2})\s*(?:s|sec|secs)\b", re.I)
+
+
+def intended_hold_s(label: str | None, prescribed_s: float) -> float:
+    """The seconds of real effort a start intends: the sum of the "NNs" figures in a step
+    label that names its shape ("12s all-out, brake for corner, ~10s out" -> 22), when they
+    fit inside the step; else the step's own duration."""
+    if label:
+        nums = [float(n) for n in _INTENDED_SECONDS_RE.findall(label)]
+        if nums and 0 < sum(nums) <= prescribed_s:
+            return sum(nums)
+    return prescribed_s
+
+
+def _launch_cadence_rpm(series: dict, burst: _Burst) -> int | None:
+    """Mean cadence over the first `LAUNCH_CADENCE_WINDOW_S` s of a burst."""
+    t_s = series.get("t_s") or []
+    cad = series.get("cadence_rpm") or []
+    if not t_s or len(cad) != len(t_s):
+        return None
+    lo = bisect_left(t_s, burst.start_s)
+    hi = bisect_left(t_s, burst.start_s + LAUNCH_CADENCE_WINDOW_S)
+    vals = [float(c) for c in cad[lo:hi] if c is not None]
+    return int(round(statistics.fmean(vals))) if vals else None
+
+
+def _classify_weak(scores: list[int | None], weak: list[bool]) -> list[str | None]:
+    """"fatigue" for weak starts that are consecutive with another weak start or end a
+    steady decline over the last three starts (the set's last start); "execution_miss" for an isolated weak start
+    (the next start recovers, or it is the last and the one before was fine)."""
+    kinds: list[str | None] = [None] * len(weak)
+    for i, is_weak in enumerate(weak):
+        if not is_weak:
+            continue
+        consecutive = (i > 0 and weak[i - 1]) or (i + 1 < len(weak) and weak[i + 1])
+        declining = (
+            i >= 2
+            and i == len(weak) - 1  # an earlier weak start whose next start recovered is isolated
+            and scores[i] is not None
+            and scores[i - 1] is not None
+            and scores[i - 2] is not None
+            and scores[i - 2] > scores[i - 1] > scores[i]
+        )
+        kinds[i] = "fatigue" if consecutive or declining else "execution_miss"
+    return kinds
+
+
+def _burst_verdict(
+    read: _StartRead | None,
+    drop_pct: float | None,
+    ref_n: int | None,
+    *,
+    held_s: float | None,
+    intended_s: float,
+    kind: str | None,
+    clue: str | None,
+    opener: bool = False,
+) -> str:
+    if read is None:
         return "no clear burst found near the prescribed window"
-    head = f"peak {b.peak_w} W, best 5 s {b.best_5s_w} W"
-    if drop_pct is None:
-        return f"{head} (reference start)"
-    if drop_pct <= 0:
-        return f"{head} -- as strong as start 1"
-    tail = f"{drop_pct:.0f}% below start 1"
-    return f"{head} -- {tail} (stop-rule)" if flagged else f"{head} -- {tail}"
+    b = read.first
+    held = f"held {held_s:.0f} of {intended_s:.0f} s; " if held_s is not None else ""
+    if read.second is not None:
+        s2 = read.second
+        head = (
+            f"{held}burst 1 peak {b.peak_w} W, best 5 s {b.best_5s_w} W; {read.dip_s:.0f} s dip to "
+            f"{read.dip_w} W; burst 2 peak {s2.peak_w} W, best 5 s {s2.best_5s_w} W"
+        )
+    else:
+        head = f"{held}peak {b.peak_w} W, best 5 s {b.best_5s_w} W"
+    if opener:
+        return f"opener: {head}"
+    if ref_n is None:
+        tail = " (reference start)"
+    elif drop_pct is None:
+        tail = " -- as strong as your best start so far"
+    else:
+        tail = f" -- {drop_pct:.0f}% below best start (start {ref_n})"
+        if kind == "execution_miss":
+            tail += f" -- likely execution{': ' + clue if clue else ''}, not fatigue"
+        elif kind == "fatigue":
+            tail += " -- consecutive/declining starts, fatigue"
+    return head + tail
 
 
 def analyze_start_bursts(
     series: dict, located: Located, *, ftp_watts: float | None
-) -> list[tuple[PrescribedRep, StartBurst, _Burst | None]]:
+) -> list[tuple[PrescribedRep, StartBurst, _StartRead | None]]:
     """Score every short, open/RPE-target set of reps ("race starts") from the stream.
 
-    Each start's burst is searched for around its expected time (the located
-    windows give the schedule shift; the window itself is only a hint -- see
-    `BURST_SEARCH_*`), then reported as peak 1 s W, seconds to peak, best 5 s W,
-    burst length and average W, with the best-5 s drop vs the set's first start.
-    A drop above `START_STOP_RULE_DROP_PCT` raises that start's `stop_rule_flag`."""
+    Each start's burst is searched for around its expected time (a lap-located rep is
+    expected at its own lap start; a series-located one at its scheduled time plus the
+    median schedule shift -- the window is only a hint, see `BURST_SEARCH_*`), then
+    reported as seconds held vs intended, peak 1 s W, seconds to peak, best 5 s W, burst
+    length and average W (and a second burst + dip when ridden as two efforts), with the
+    best-5 s drop vs the BEST earlier start in the set. A drop above
+    `WEAK_START_DROP_PCT` marks the start `weak_start`, classified as an `execution_miss`
+    (isolated) or `fatigue` (consecutive / declining) -- a post-ride read, not an in-ride
+    instruction."""
     t_s = series.get("t_s") or []
     power = series.get("power_w") or []
     shifts = [w.start_s - w.rep.offset_s for w in located.windows]
     if not t_s or not power or not shifts:
         return []
     shift = statistics.median(shifts)
-    out: list[tuple[PrescribedRep, StartBurst, _Burst | None]] = []
+    window_start = {w.rep.index: w.start_s for w in located.windows}
+    out: list[tuple[PrescribedRep, StartBurst, _StartRead | None]] = []
     for group in _short_open_groups(list(located.prescribed)):
-        expected = [r.offset_s + shift for r in group]
-        found: list[_Burst | None] = []
+        if located.source == "series":
+            expected = [r.offset_s + shift for r in group]
+        else:
+            expected = [window_start.get(r.index, r.offset_s + shift) for r in group]
+        found: list[_StartRead | None] = []
         for i, rep in enumerate(group):
             lo = expected[i] - BURST_SEARCH_BEFORE_S
             hi = expected[i] + rep.duration_s + BURST_SEARCH_AFTER_S
@@ -1638,37 +1868,81 @@ def analyze_start_bursts(
                 lo = max(lo, (expected[i - 1] + expected[i]) / 2)
             if i + 1 < len(group):
                 hi = min(hi, (expected[i] + expected[i + 1]) / 2)
-            found.append(_find_burst(t_s, power, lo, hi, ftp_watts=ftp_watts))
-        first = next((b for b in found if b is not None), None)
-        for i, (rep, b) in enumerate(zip(group, found)):
+            found.append(_find_start(t_s, power, lo, hi, ftp_watts=ftp_watts))
+
+        opener = group[0].duration_s < START_MIN_PRESCRIBED_S
+        scores = [_start_score_w(r) if r else None for r in found]
+        drops: list[float | None] = []
+        refs: list[int | None] = []
+        best: tuple[int, int] | None = None  # (start score W, start n) so far
+        for i, score in enumerate(scores):
             drop = None
-            if b is not None and first is not None and b is not first and first.best_5s_w > 0:
-                drop = round((first.best_5s_w - b.best_5s_w) / first.best_5s_w * 100, 1) + 0.0
-            flagged = drop is not None and drop > START_STOP_RULE_DROP_PCT
+            if score is not None and best is not None and best[0] > 0 and not opener:
+                d = round((best[0] - score) / best[0] * 100, 1) + 0.0
+                drop = d if d > 0 else None
+            drops.append(drop)
+            refs.append(best[1] if best and not opener else None)
+            if score is not None and (best is None or score > best[0]):
+                best = (score, i + 1)
+        weak = [d is not None and d > WEAK_START_DROP_PCT for d in drops]
+        kinds = _classify_weak(scores, weak)
+
+        peaks_to = [r.first.s_to_peak for r in found if r is not None]
+        med_to_peak = statistics.median(peaks_to) if peaks_to else None
+        cadences = [_launch_cadence_rpm(series, r.first) if r else None for r in found]
+        cad_vals = [c for c in cadences if c is not None]
+        med_cad = statistics.median(cad_vals) if cad_vals else None
+
+        for i, (rep, read) in enumerate(zip(group, found)):
+            b = read.first if read else None
+            s2 = read.second if read else None
+            clues = []
+            if b is not None and med_to_peak is not None and b.s_to_peak >= med_to_peak + LAUNCH_SLOW_MARGIN_S:
+                clues.append("slow launch")
+            cad = cadences[i]
+            if cad is not None and med_cad and cad < LAUNCH_LOW_CADENCE_FRAC * med_cad:
+                clues.append("low launch cadence")
+            clue = ", ".join(clues) or None
+            intended = intended_hold_s(rep.label, rep.duration_s)
+            held = round(read.held_s, 1) if read else None
             out.append(
                 (
                     rep,
                     StartBurst(
                         n=i + 1,
                         prescribed_s=rep.duration_s,
+                        intended_s=intended,
+                        held_s=held,
                         burst_start_s=round(b.start_s, 1) if b else None,
                         burst_s=round(b.length_s, 1) if b else None,
                         peak_w=b.peak_w if b else None,
                         s_to_peak=round(b.s_to_peak, 1) if b else None,
                         best_5s_w=b.best_5s_w if b else None,
                         avg_w=b.avg_w if b else None,
-                        drop_vs_first_pct=drop,
-                        stop_rule_flag=flagged,
-                        verdict=_burst_verdict(b, drop, flagged),
+                        launch_cadence_rpm=cad,
+                        drop_vs_best_pct=drops[i],
+                        weak_start=weak[i],
+                        weak_kind=kinds[i],
+                        launch_clue=clue if weak[i] else None,
+                        burst2_start_s=round(s2.start_s, 1) if s2 else None,
+                        burst2_s=round(s2.length_s, 1) if s2 else None,
+                        burst2_peak_w=s2.peak_w if s2 else None,
+                        burst2_best_5s_w=s2.best_5s_w if s2 else None,
+                        dip_w=read.dip_w if s2 and read else None,
+                        dip_s=round(read.dip_s, 1) if s2 and read and read.dip_s is not None else None,
+                        verdict=_burst_verdict(
+                            read, drops[i], refs[i], held_s=held, intended_s=intended,
+                            kind=kinds[i], clue=clue, opener=opener,
+                        ),
                     ),
-                    b,
+                    read,
                 )
             )
     return out
 
 
 def _starts_with_any_burst(
-    scored: list[tuple[PrescribedRep, StartBurst, _Burst | None]]
+    scored: list[tuple[PrescribedRep, StartBurst, _StartRead | None]]
 ) -> list[StartBurst]:
     """`StartBurst`s of the groups (consecutive same-set reps, `n` restarting at 1)
     in which at least one burst was found."""
@@ -1677,17 +1951,61 @@ def _starts_with_any_burst(
         if sb.n == 1:
             groups.append([])
         groups[-1].append(sb)
-    return [sb for g in groups if any(x.peak_w is not None for x in g) for sb in g]
+    return [
+        sb
+        for g in groups
+        if g[0].prescribed_s >= START_MIN_PRESCRIBED_S and any(x.peak_w is not None for x in g)
+        for sb in g
+    ]
 
 
 def _starts_flag(starts: list[StartBurst]) -> str | None:
-    bad = [s for s in starts if s.stop_rule_flag]
-    if not bad:
-        return None
-    parts = ", ".join(f"start {s.n} ({s.drop_vs_first_pct:.0f}% below start 1)" for s in bad)
-    return (
-        f"best-5 s fell more than {START_STOP_RULE_DROP_PCT:.0f}% below the first start: {parts} "
-        "-- stop-rule (stop if a start reads clearly weaker than your first)"
+    """Set-level note. A weak start is only a post-ride read: an isolated one is a skill
+    rep, not a reason to stop; only consecutive/declining weak starts read as fatigue."""
+    fatigue = [s for s in starts if s.weak_kind == "fatigue"]
+    misses = [s for s in starts if s.weak_kind == "execution_miss"]
+    parts = []
+    if fatigue:
+        parts.append(f"starts faded from start {fatigue[0].n} -- consider stopping earlier next time")
+    if misses:
+        names = " and ".join(f"start {s.n}" for s in misses)
+        clues = sorted({s.launch_clue for s in misses if s.launch_clue})
+        why = f"likely execution: {', '.join(clues)}" if clues else "likely execution"
+        parts.append(f"{names} off ({why}) -- skill rep, not fatigue")
+    return "; ".join(parts) or None
+
+
+def _partial_stream_effort(
+    e: IntervalEffort, read, rep: PrescribedRep, start_s: float, laps: list | None
+) -> IntervalEffort:
+    """A rep window the stream only partly covers (recording gap / timer pause inside the
+    lap): report the lap's own summary and score nothing against target or fade."""
+    lap = next(
+        (l for l in laps or [] if l.start_offset_s is not None and abs(float(l.start_offset_s) - start_s) <= 1.5),
+        None,
+    )
+    avg_w = float(lap.avg_power_w) if lap is not None and lap.avg_power_w is not None else e.avg_w
+    avg_hr = int(lap.avg_hr) if lap is not None and lap.avg_hr is not None else e.avg_hr
+    got = round(read.coverage * rep.duration_s)
+    src = "lap avg" if lap is not None else "recorded avg"
+    bits = [f"partial stream: {got:.0f} of {rep.duration_s:.0f} s recorded"]
+    if avg_w is not None:
+        bits.append(f"{src} {avg_w:.0f} W" + (f", HR {avg_hr}" if avg_hr is not None else ""))
+    return e.model_copy(
+        update={
+            "avg_w": avg_w,
+            "avg_hr": avg_hr,
+            "duration_s": rep.duration_s,
+            "pct_of_target": None,
+            "avg_vs_target_w": None,
+            "time_in_band_pct": None,
+            "fade_pct": None,
+            "hr_drift_bpm": None,
+            "terrain_flag": None,
+            "in_target_band": None,
+            "stream_coverage_pct": round(read.coverage * 100, 1),
+            "verdict": "; ".join(bits) + " -- not scored against target or fade",
+        }
     )
 
 
@@ -1699,13 +2017,18 @@ def _analyze_prescribed_reps(
     in_band: float,
     baseline_altitude_m: float | None,
     baseline_altitude_source: str | None,
+    lthr_bpm: float | None = None,
+    session_text: str | None = None,
+    laps: list | None = None,
 ) -> dict | None:
     """Per-rep / per-round read of reps located from the prescription (see
-    `prescription.py`). Returns the prescription-specific `WorkoutIntervals`
-    kwargs, or `None` when no located window has samples in the series."""
+    `prescription.py`) or inferred from the device laps (`rep_shape.infer_lap_shape`).
+    Returns the prescription-specific `WorkoutIntervals` kwargs, or `None` when no
+    located window has samples in the series."""
     t_s = series.get("t_s") or []
     efforts: list[IntervalEffort] = []
     rep_of: dict[int, PrescribedRep] = {}
+    win_of: dict[int, tuple[float, float]] = {}
     for win in located.windows:
         idx = window_indices(t_s, win.start_s, win.end_s)
         if idx is None:
@@ -1730,6 +2053,7 @@ def _analyze_prescribed_reps(
                 rep.high_w is None or effort.avg_w <= rep.high_w
             )
         rep_of[effort.n] = rep
+        win_of[effort.n] = (win.start_s, win.end_s)
         efforts.append(
             effort.model_copy(
                 update={
@@ -1751,13 +2075,55 @@ def _analyze_prescribed_reps(
         hit = by_index.get(rep_of[e.n].index)
         if hit is None:
             continue
-        sb, b = hit
+        sb, read = hit
+        b = read.first if read is not None else None
         upd: dict = {"fade_pct": None, "terrain_flag": None, "time_in_band_pct": None, "verdict": sb.verdict}
         if b is not None:
             upd.update(start_s=round(b.start_s, 1), duration_s=round(b.length_s, 1), avg_w=float(b.avg_w))
         efforts[i] = e.model_copy(update=upd)
 
+    plan_says_technical = mentions_technical(session_text)
+    technical_ns: set[int] = set()
+    held_ns: set[int] = set()
+    unscored_ns: set[int] = set()
+    for i, e in enumerate(efforts):
+        r = rep_of[e.n]
+        if _is_short_open_rep(r) or r.duration_s < TECH_MIN_REP_S:
+            continue
+        start_s, end_s = win_of[e.n]
+        read = read_rep(series, start_s, end_s, ftp_watts=ftp_watts, lthr_bpm=lthr_bpm)
+        if read is None:
+            continue
+        if read.coverage < STREAM_MIN_COVERAGE:
+            efforts[i] = _partial_stream_effort(e, read, r, start_s, laps)
+            unscored_ns.add(e.n)
+            continue
+        reason = is_technical(
+            read, label_says=mentions_technical(r.label), plan_text_says=plan_says_technical
+        )
+        upd = {"np_w": read.np_w, "low_power_time_pct": read.low_power_time_pct}
+        if reason is not None:
+            upd.update(
+                technical=True,
+                technical_reason=reason,
+                pct_lthr=read.pct_lthr,
+                time_ge90_lthr_s=read.time_ge90_lthr_s,
+                fade_pct=None,
+                terrain_flag=None,
+                time_in_band_pct=None,
+                in_target_band=None,
+                verdict=technical_verdict(read),
+            )
+            technical_ns.add(e.n)
+            if read.pct_lthr is not None and read.pct_lthr >= TECH_HR_HELD_PCT_LTHR:
+                held_ns.add(e.n)
+        efforts[i] = efforts[i].model_copy(update=upd)
+
     def completed(e: IntervalEffort) -> bool:
+        if e.n in unscored_ns:
+            return False
+        if e.n in held_ns:
+            return True
         low = rep_of[e.n].low_w
         return e.avg_w is not None and (low is None or e.avg_w >= REP_COMPLETED_MIN_FRAC_OF_LOW * low)
 
@@ -1767,7 +2133,14 @@ def _analyze_prescribed_reps(
         round(sum(bool(e.in_target_band) for e in banded) / len(banded) * 100, 1) if banded else None
     )
 
-    powers = [e.avg_w for e in done]
+    # Fade across reps is a power read: starts (own scoring) and technical reps (scored on HR
+    # instead) are left out.
+    powers = [
+        e.avg_w for e in done
+        if e.n not in technical_ns and not _is_short_open_rep(rep_of[e.n])
+    ]
+    tech_hr = [e.avg_hr for e in done if e.n in technical_ns and e.avg_hr is not None]
+    hr_rise = round(float(tech_hr[-1] - tech_hr[0]), 1) if len(tech_hr) >= 2 else None
     third = max(1, len(powers) // 3)
     fade_reps = (
         _pct_drop(statistics.fmean(powers[:third]), statistics.fmean(powers[-third:]))
@@ -1793,12 +2166,15 @@ def _analyze_prescribed_reps(
                 reps_in_band=sum(bool(e.in_target_band) for e in rbanded) if rbanded else None,
                 fade_within_pct=(
                     _pct_drop(statistics.fmean(pw[:half]), statistics.fmean(pw[-half:]))
-                    if half >= 1 and len(pw) >= 2 else None
+                    if half >= 1 and len(pw) >= 2 and not any(e.n in technical_ns for e in in_round)
+                    else None
                 ),
             )
         )
     active = [r for r in rounds if r.avg_w is not None]
-    fade_rounds = _pct_drop(active[0].avg_w, active[-1].avg_w) if len(active) >= 2 else None
+    fade_rounds = (
+        _pct_drop(active[0].avg_w, active[-1].avg_w) if len(active) >= 2 and not technical_ns else None
+    )
 
     all_reps = list(located.prescribed)
     zones = {r.zone for r in all_reps}
@@ -1822,7 +2198,22 @@ def _analyze_prescribed_reps(
         "rounds": rounds,
         "starts": starts,
         "starts_flag": _starts_flag(starts),
+        "technical_reps": len(technical_ns) or None,
+        "hr_rise_across_reps_bpm": hr_rise,
     }
+
+
+def _session_shape(prescription: dict | None, *, race: bool, planned_zone: str | None) -> str | None:
+    """Why a steady-state decoupling read does not apply: `"race"`, `"starts"` (the ride
+    has a start-burst set) or `"interval"` (prescribed / lap-shape reps); `None` for a
+    steady ride. A Z1/Z2 plan is never withheld (`ALL_INTERVAL_EXEMPT_PLANNED_ZONES`)."""
+    if race:
+        return "race"
+    if planned_zone is not None and planned_zone.strip().upper() in ALL_INTERVAL_EXEMPT_PLANNED_ZONES:
+        return None
+    if prescription is None:
+        return None
+    return "starts" if prescription.get("starts") else "interval"
 
 
 # --- public entry point ----------------------------------------------------------
@@ -1839,6 +2230,9 @@ def analyze(
     laps: list | None = None,
     ftp_watts: float | None = None,
     planned_zone: str | None = None,
+    lthr_bpm: float | None = None,
+    race: bool = False,
+    session_text: str | None = None,
 ) -> WorkoutIntervals | None:
     """Full deterministic interval analysis for one ride. Returns a
     `models.WorkoutIntervals` for `sport == "bike"` rides that carry a
@@ -1860,6 +2254,14 @@ def analyze(
     `planned_zone` (the matched planned session's intensity zone, e.g. "Z2")
     tells the all-interval guard the plan was endurance -- see
     `_is_all_interval`.
+
+    `lthr_bpm` turns a technical-course rep's average HR into % of LTHR;
+    `session_text` (the planned session's purpose + structure text) lets the plan's own
+    mention of technical terrain count -- see `rep_shape`. `race=True` marks the ride as a
+    race (a matched RACE session or an athlete event that day): a `race_start` block and
+    per-lap numbers are reported and no decoupling read is emitted. With no `structure` and
+    not a race, a repeating work/recovery lap pattern is treated as the prescription
+    (`detection_source == "lap_shape"`).
 
     `laps` + `ftp_watts` drive the prescription-aware path: when `structure`
     carries time-based interval reps, they are located in the ride from the
@@ -1907,6 +2309,12 @@ def analyze(
         located = locate_prescribed_reps(
             structure, series=series, laps=laps, ftp_watts=ftp_watts
         )
+    if located is None and not race:
+        # No plan, or a plan this module cannot time-align (e.g. lap-key "open" steps):
+        # fall back to the repeating work/recovery shape of the device laps.
+        located = infer_lap_shape(
+            laps, series, burst_floor_w=BURST_MIN_PEAK_FRAC_FTP * ftp_watts if ftp_watts else None
+        )
     if located is not None:
         prescription = _analyze_prescribed_reps(
             series,
@@ -1915,12 +2323,32 @@ def analyze(
             in_band=in_band,
             baseline_altitude_m=baseline_altitude_m,
             baseline_altitude_source=baseline_altitude_source,
+            lthr_bpm=lthr_bpm,
+            session_text=session_text,
+            laps=laps,
         )
+        if prescription is not None and located.source == "lap_shape":
+            prescription["matched_to_prescription"] = False
     else:
         prescription = None
 
+    race_extra: dict = {}
+    if race:
+        race_extra = {
+            "race_start": analyze_race_start(series, ftp_watts=ftp_watts),
+            "race_laps": [
+                RaceLap(
+                    n=i + 1,
+                    duration_s=round(float(l.duration_s), 1),
+                    avg_w=l.avg_power_w,
+                    avg_hr=l.avg_hr,
+                )
+                for i, l in enumerate(laps or [])
+            ],
+        }
+
     out_efforts: list[IntervalEffort] = []
-    for e in efforts if prescription is None else []:
+    for e in efforts if prescription is None and not race else []:
         rep_target = None
         if reps and e.n - 1 < len(reps):
             rep_target = reps[e.n - 1][1]
@@ -1932,7 +2360,12 @@ def analyze(
         )
 
     decoupling_pct, decoupling_note = tightened_decoupling(series)
-    if decoupling_pct is not None and _is_all_interval(
+    session_shape = _session_shape(prescription, race=race, planned_zone=planned_zone)
+    if session_shape is not None:
+        # Interval / starts / race sessions have no steady aerobic block: no decoupling
+        # read, and none of its intensity-change confound note either.
+        decoupling_pct, decoupling_note = None, None
+    elif decoupling_pct is not None and _is_all_interval(
         series, ftp_watts=ftp_watts, planned_zone=planned_zone
     ):
         decoupling_pct = None
@@ -1950,13 +2383,17 @@ def analyze(
             baseline_altitude_m=round(baseline_altitude_m, 1) if baseline_altitude_m is not None else None,
             baseline_altitude_source=baseline_altitude_source,
             detection_basis=basis,
+            session_shape=session_shape,
+            **race_extra,
             **prescription,
         )
 
     return WorkoutIntervals(
         **ride_altitude,
-        efforts_detected=len(efforts),
+        efforts_detected=0 if race else len(efforts),
         detection_basis=basis,
+        session_shape=session_shape,
+        **race_extra,
         matched_to_prescription=match.matched,
         prescribed_count=match.prescribed_count or (len(reps) or None),
         efforts=out_efforts,

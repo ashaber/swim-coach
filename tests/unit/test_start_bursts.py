@@ -40,14 +40,23 @@ def test_five_starts_match_stream(result):
         assert st.prescribed_s == 30.0
 
 
-def test_drop_vs_first_and_flag_fires_at_start_3(result):
-    drops = [s.drop_vs_first_pct for s in result.starts]
+def test_drop_vs_best_and_weak_starts_are_isolated_execution_misses(result):
+    drops = [s.drop_vs_best_pct for s in result.starts]
     assert drops[0] is None
     assert abs(drops[1] - 1) <= 1 and abs(drops[2] - 16) <= 1
     assert abs(drops[3] - 6) <= 1 and abs(drops[4] - 14) <= 1
-    assert [s.stop_rule_flag for s in result.starts] == [False, False, True, False, True]
-    assert result.starts_flag and "start 3" in result.starts_flag
-    assert "16% below start 1" in result.starts[2].verdict
+    assert [s.weak_start for s in result.starts] == [False, False, True, False, True]
+    # start 4 recovered after start 3, and start 4 -> 5 is no steady decline: both are isolated
+    assert [s.weak_kind for s in result.starts] == [None, None, "execution_miss", None, "execution_miss"]
+    assert result.starts_flag == "start 3 and start 5 off (likely execution) -- skill rep, not fatigue"
+    assert "16% below best start (start 1)" in result.starts[2].verdict
+    assert "stop" not in result.starts[2].verdict.lower()
+
+
+def test_held_seconds_lead_the_verdict(result):
+    assert [s.held_s for s in result.starts] == [13.0, 16.0, 21.0, 18.0, 26.0]
+    assert all(s.intended_s == 30.0 for s in result.starts)
+    assert result.starts[2].verdict.startswith("held 21 of 30 s; peak 919 W, best 5 s 805 W")
 
 
 def test_start_efforts_carry_burst_verdicts_not_fade(result):
