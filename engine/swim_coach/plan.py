@@ -3683,7 +3683,7 @@ def _strength_sessions(athlete: Athlete, week_start: date, offsets: list[int]) -
 
 _PRERACE_PRIMER_PURPOSE_PREFIX = "PRE-RACE PRIMER — "
 # Display label of `_bike_prerace_primer_session` (athlete-facing text only; the session is
-# identified by `kind == "warmup"`).
+# identified by `kind == "opener"`).
 
 
 def _session_is_race(s: Session) -> bool:
@@ -3694,14 +3694,15 @@ def _session_is_race(s: Session) -> bool:
 
 def counts_toward_bike_ramp(s: Session) -> bool:
     """Whether a session's minutes count in the bike weekly-volume ramp rail (+8%/week): a
-    ride that is not a race and not a race-day warm-up/opener (`kind` race / warmup)."""
+    ride that is not a race and not a race-day warm-up (`kind` race / warmup). Openers (the day
+    before) DO count: they are real riding."""
     return s.sport == "bike" and s.kind not in ("race", "warmup")
 
 
 def _session_is_prerace_primer(s: Session) -> bool:
     """A generated standalone pre-race primer session (`_bike_prerace_primer_session` sets
-    `kind="warmup"`)."""
-    return s.sport == "bike" and s.kind == "warmup"
+    `kind="opener"`)."""
+    return s.sport == "bike" and s.kind == "opener"
 
 
 def _session_is_hard_bike(s: Session) -> bool:
@@ -4142,7 +4143,7 @@ def _bike_prerace_primer_session(
 ) -> Session:
     """The standalone day-before-race primer `Session` -- see this
     section's own header comment. Purpose text deliberately does NOT start
-    with the race label ("RACE — ") and carries `kind="warmup"`, so `_session_is_race`
+    with the race label ("RACE — ") and carries `kind="opener"`, so `_session_is_race`
     never mistakes it for the race itself; it DOES carry `BIKE_OPENERS_ZONE`
     ("Z4") as its top-level zone, so `_session_is_hard_bike` correctly
     counts it as hard (protects the day before it, counts toward the
@@ -4164,7 +4165,7 @@ def _bike_prerace_primer_session(
             "(Z3 build → Z4 → brief Z5), the day before the race: prime "
             "race-pace legs without adding fatigue"
         ),
-        kind="warmup",
+        kind="opener",
         structure=render_prose(structured),
         structured=structured,
         status="planned",

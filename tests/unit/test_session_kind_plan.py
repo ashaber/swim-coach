@@ -32,15 +32,16 @@ def test_generator_tags_the_race_session_and_keeps_its_display_label():
     assert race.kind == "race" and race.purpose.startswith("RACE — ")
 
 
-def test_generator_tags_the_pre_race_primer_as_a_warmup():
-    assert _bike_prerace_primer_session(ATHLETE, DAY, 250.0).kind == "warmup"
+def test_generator_tags_the_pre_race_primer_as_an_opener():
+    assert _bike_prerace_primer_session(ATHLETE, DAY, 250.0).kind == "opener"
 
 
-def test_ramp_rail_counts_neither_race_nor_warmup_minutes():
+def test_ramp_rail_skips_race_and_warmup_but_counts_openers():
     assert counts_toward_bike_ramp(_bike(DAY, 60, kind="workout"))
     assert counts_toward_bike_ramp(_bike(DAY, 60, kind="free_ride"))
     assert not counts_toward_bike_ramp(_bike(DAY, 60, kind="race"))
     assert not counts_toward_bike_ramp(_bike(DAY, 60, kind="warmup"))
+    assert counts_toward_bike_ramp(_bike(DAY, 60, kind="opener"))  # real riding the day before
 
 
 def test_realism_ramp_rail_ignores_race_and_warmup_minutes():

@@ -1,7 +1,8 @@
 """One-time backfill of `Session.kind` on live week plans (drafts are never touched).
 
 Sessions without an explicit `kind` get a PROPOSED one from their purpose/title
-(`swim_coach.session_kind_backfill.propose_kind`): race, warmup, or nothing (left untagged = workout).
+(`swim_coach.session_kind_backfill.propose_kinds`): race, opener (only with a race the next day),
+warmup (only with a race the same day), or nothing (left untagged = workout).
 Sessions that already carry a kind are skipped, so re-running is idempotent.
 
 Default is a DRY RUN that prints a table; `--apply` saves only the changed weeks (via the store's
@@ -19,7 +20,7 @@ import os
 import sys
 from pathlib import Path
 
-from swim_coach.session_kind_backfill import propose_kind
+from swim_coach.session_kind_backfill import propose_kinds
 from swim_coach.store import FileStore, StoreInterface
 
 
@@ -35,22 +36,20 @@ def _slugs(store: StoreInterface, args: argparse.Namespace) -> list[str]:
 
 def backfill(store: StoreInterface, slugs: list[str], *, apply: bool) -> list[dict]:
     """Rows `{slug, iso_week, date, sport, kind, purpose}` for every proposed change; writes the
-    changed weeks when `apply`."""
+    changed weeks when `apply`. All of an athlete's live weeks are loaded first so a race in the
+    adjacent week confirms an opener / warm-up."""
     rows: list[dict] = []
     for slug in slugs:
-        for iso_week in store.list_week_ids(slug):
-            week = store.load_week(slug, iso_week)
-            if week is None:
-                continue
+        weeks = [w for w in (store.load_week(slug, i) for i in store.list_week_ids(slug)) if w is not None]
+        proposed = propose_kinds([s for w in weeks for s in w.sessions])
+        for week in weeks:
             changed = False
             for s in week.sessions:
-                if s.kind is not None:
-                    continue
-                kind = propose_kind(s.purpose, s.title)
+                kind = proposed.get(s.id)
                 if kind is None:
                     continue
                 rows.append(
-                    {"slug": slug, "iso_week": iso_week, "date": s.date.isoformat(), "sport": s.sport,
+                    {"slug": slug, "iso_week": week.iso_week, "date": s.date.isoformat(), "sport": s.sport,
                      "kind": kind, "purpose": s.purpose}
                 )
                 if apply:

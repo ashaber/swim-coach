@@ -38,9 +38,11 @@ Sport = Literal["swim_pool", "swim_ow", "strength", "recovery", "cross_train", "
 #   workout   -- has a prescription (structured steps) to execute and be scored against
 #   race      -- an event
 #   free_ride -- no structure, even when it sits on the schedule (e.g. a standing group ride)
-#   warmup    -- race-day warm-up or openers: may be structured, never evaluated/scored
-#                (still gets load, base analytics and the power curve)
-SessionKind = Literal["workout", "race", "free_ride", "warmup"]
+#                (includes a race-week "sharpening" session earlier in the week, library/38)
+#   opener    -- the session the DAY BEFORE a race: never evaluated/scored
+#   warmup    -- the race-day warm-up, earlier the same day as the race: never evaluated/scored
+#                (opener and warmup still get load, base analytics and the power curve)
+SessionKind = Literal["workout", "race", "free_ride", "opener", "warmup"]
 
 _ISO_WEEK_RE = re.compile(r"^\d{4}-W\d{2}$")
 _VALID_ZONES = {"Z1", "Z2", "Z3", "Z4", "Z5"}

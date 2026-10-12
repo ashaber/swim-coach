@@ -55,10 +55,11 @@ def test_golden_with_matched_session(name):
     assert workout.analyze(ctx).model_dump(mode="json") == GOLDEN[name]["with_session"]
 
 
-def test_warmup_gets_base_numbers_and_curve_but_no_intervals():
+@pytest.mark.parametrize("kind", ["opener", "warmup"])
+def test_opener_and_warmup_get_base_numbers_and_curve_but_no_intervals(kind):
     workout, session, athlete, series = _fixture("ride_2026_10_10_starts_race_pace.json")
     full = workout.analyze(AnalysisContext(athlete=athlete, session=session, kind="workout", series=series))
-    warm = workout.analyze(AnalysisContext(athlete=athlete, session=session, kind="warmup", series=series))
+    warm = workout.analyze(AnalysisContext(athlete=athlete, session=session, kind=kind, series=series))
     assert full.intervals is not None and warm.intervals is None
     assert warm.power_curve and warm.normalized_power_w == full.normalized_power_w
     assert warm.avg_power_w == full.avg_power_w
@@ -125,6 +126,7 @@ def _session(**kw) -> Session:
 def test_kind_from_matched_session_wins():
     w = _swim()
     assert derive_workout_kind(w, _session(kind="warmup"), [_event(w.date, "swim")]) == "warmup"
+    assert derive_workout_kind(w, _session(kind="opener"), []) == "opener"
 
 
 def test_event_on_the_date_makes_a_race_for_any_matching_sport():

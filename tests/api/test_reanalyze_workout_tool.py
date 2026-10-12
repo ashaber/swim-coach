@@ -236,6 +236,13 @@ def test_set_workout_kind_persists_override_and_reruns_analysis(athletes_dir) ->
     assert saved.analytics.intervals is None  # a warmup is never evaluated
 
 
+def test_set_workout_kind_accepts_opener(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    w = _seed_bike_workout(store)
+    res = _handlers(store)["set_workout_kind"]({"workout_id": str(w.id), "kind": "opener"})
+    assert res["kind"] == "opener" and store.list_workouts("renee")[-1].analytics.intervals is None
+
+
 def test_set_workout_kind_keeps_override_when_there_is_no_series(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     w = _seed_bike_workout(store, with_series=False)

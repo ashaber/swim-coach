@@ -387,10 +387,11 @@ TEMPLATE_PREFERENCE_SCHEMA: dict[str, Any] = {
 # rather than drifting into two copies that quietly diverge over time.
 _SESSION_KIND_SCHEMA: dict[str, Any] = {
     "type": "string",
-    "enum": ["workout", "race", "free_ride", "warmup"],
+    "enum": ["workout", "race", "free_ride", "opener", "warmup"],
     "description": (
-        "Optional. workout = structured prescription, scored; race = an event; "
-        "free_ride = unstructured, even if scheduled; warmup = race-day warm-up/openers, never scored."
+        "Optional. workout = structured training (incl. race-week sharpeners), scored; race = an event; "
+        "free_ride = unstructured, even if scheduled; opener = day-before-race session, never scored; "
+        "warmup = race-day warm-up, never scored."
     ),
 }
 
@@ -1468,14 +1469,14 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
         "name": "set_workout_kind",
         "description": (
             "Retag a LOGGED workout's kind when the automatic one is wrong: workout (has a structured "
-            "prescription, scored), race (an event), free_ride (no structure, even if scheduled), warmup "
-            "(race-day warm-up/openers, never scored). Saves the override and re-runs its analysis."
+            "prescription, scored), race (an event), free_ride (no structure, even if scheduled), opener "
+            "(day before a race, never scored), warmup (race-day warm-up, never scored). Saves the override and re-runs its analysis."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "workout_id": {"type": "string", "description": "The id (or a unique prefix) of the logged workout."},
-                "kind": {"type": "string", "enum": ["workout", "race", "free_ride", "warmup"]},
+                "kind": {"type": "string", "enum": ["workout", "race", "free_ride", "opener", "warmup"]},
             },
             "required": ["workout_id", "kind"],
             "additionalProperties": False,

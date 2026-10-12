@@ -13,7 +13,7 @@ Behaviour of `BikeAnalyzer` by kind (`models.SessionKind`):
   workout   -- prescription path: the matched session's structure / zone / text steer the reps
   race      -- race path: race-start read and per-lap numbers, no decoupling read
   free_ride -- free effort detection (a repeating work/recovery lap pattern counts as structure)
-  warmup    -- base analytics + power curve only: never evaluated or scored
+  opener / warmup -- base analytics + power curve only: never evaluated or scored
 """
 
 from __future__ import annotations
@@ -111,12 +111,15 @@ class DefaultAnalyzer:
         return annotate_power_curve_bests(workout, _base_analytics(workout, ctx, with_intervals=False), ctx)
 
 
+UNSCORED_KINDS: tuple[SessionKind, ...] = ("opener", "warmup")  # load + base analytics + curve only
+
+
 class BikeAnalyzer:
     """Rides: base analytics + interval analysis + power curve + bests; the interval layer
     follows `ctx.kind` (see the module docstring)."""
 
     def analyze(self, workout: Workout, ctx: AnalysisContext) -> WorkoutAnalytics:
-        if ctx.kind == "warmup":
+        if ctx.kind in UNSCORED_KINDS:
             return annotate_power_curve_bests(workout, _base_analytics(workout, ctx, with_intervals=False), ctx)
         athlete, session = ctx.athlete, ctx.session
         analytics = _base_analytics(

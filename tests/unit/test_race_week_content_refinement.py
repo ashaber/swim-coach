@@ -28,7 +28,6 @@ from swim_coach.plan import (
     BIKE_OPENERS_MAX_REPS,
     BIKE_OPENERS_MIN_REPS,
     BIKE_OPENERS_PROXIMITY_DAYS,
-    counts_toward_bike_ramp,
     BIKE_OPENERS_RAMP_Z3_S,
     BIKE_OPENERS_RAMP_Z4_S,
     BIKE_OPENERS_RAMP_Z5_S,
@@ -547,7 +546,7 @@ def test_race_week_volume_stays_meaningfully_below_a_normal_week():
     athlete, ws, week = _week_with_andrews_real_pattern()
     race_week_bike_min = sum(
         s.duration_min for s in week.sessions
-        if counts_toward_bike_ramp(s)  # training minutes: not the race, not the pre-race primer
+        if s.sport == "bike" and s.kind not in ("race", "opener")  # the "light touches": not the race, not the day-before opener
     )
     athlete2, event2, macro2 = _bike_setup()
     normal_ws = macro2.blocks[0].start_date
