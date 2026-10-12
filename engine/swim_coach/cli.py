@@ -787,7 +787,7 @@ def _cmd_analyze(args: argparse.Namespace, store: StoreInterface) -> int:
     as skipped, not an error."""
     slug = args.athlete
     try:
-        athlete = store.load_athlete(slug)
+        store.load_athlete(slug)  # fail early if the athlete is missing
     except Exception as exc:  # noqa: BLE001
         return _error_from_exception(_error_label(store, slug, "profile.yaml"), exc)
 

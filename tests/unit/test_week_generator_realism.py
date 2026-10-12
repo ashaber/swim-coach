@@ -336,13 +336,13 @@ def test_week_containing_two_back_to_back_races_gets_two_race_sessions():
     week = generate_week(
         athlete, macro, _iso_week(ws), ws, primary_sport="bike", event=event, events=[event, r1, r2]
     )
-    race_sessions = [s for s in week.sessions if s.purpose.strip().upper().startswith("RACE — ")]
+    race_sessions = [s for s in week.sessions if s.kind == "race"]
     assert len(race_sessions) == 2
     assert {(s.date - ws).days for s in race_sessions} == {5, 6}
     # no VO2/threshold training ride the same week -- just a primer + races
     non_race_bike = [
         s for s in week.sessions
-        if s.sport == "bike" and not s.purpose.strip().upper().startswith("RACE — ")
+        if s.sport == "bike" and not s.kind == "race"
     ]
     for s in non_race_bike:
         assert "opener" in s.purpose.lower() or s.intensity.get("zone") in ("Z1", "Z2")
@@ -357,7 +357,7 @@ def test_race_week_bike_sessions_do_not_appear_without_events_param():
     week = generate_week(
         athlete, macro, _iso_week(ws), ws, primary_sport="bike", event=event
     )
-    assert not any(s.purpose.strip().upper().startswith("RACE — ") for s in week.sessions)
+    assert not any(s.kind == "race" for s in week.sessions)
 
 
 # ===========================================================================

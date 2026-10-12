@@ -353,7 +353,7 @@ def test_primer_is_additive_not_a_replacement_for_race_session():
     week = generate_week(
         athlete, macro, _iso_week(ws), ws, primary_sport="bike", event=event, events=[event, race]
     )
-    race_sessions = [s for s in week.sessions if s.purpose.strip().upper().startswith("RACE — ")]
+    race_sessions = [s for s in week.sessions if s.kind == "race"]
     primers = [s for s in week.sessions if "primer" in s.purpose.lower()]
     assert len(race_sessions) == 1
     assert len(primers) == 1
@@ -546,7 +546,7 @@ def test_race_week_volume_stays_meaningfully_below_a_normal_week():
     athlete, ws, week = _week_with_andrews_real_pattern()
     race_week_bike_min = sum(
         s.duration_min for s in week.sessions
-        if s.sport == "bike" and not s.purpose.strip().upper().startswith("RACE")
+        if s.sport == "bike" and not s.kind == "race"
     )
     athlete2, event2, macro2 = _bike_setup()
     normal_ws = macro2.blocks[0].start_date
