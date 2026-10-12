@@ -122,3 +122,15 @@ rides, not cited values; each carries a `Test:` line in its code comment.
   `RACE_SETTLE_BAND_FRAC = 10` % of the following 5 min, and the first 5 min NP
   against the race's NP from the start onward. No decoupling read is emitted
   for a race, nor for an interval or starts session.
+
+## Reading a start trace
+
+**`Coach judgment:`** Each start in the starts table carries a 1 Hz power trace and a
+phase read (launch, shift dips, sustain, stop against the planned end, restart). The bands,
+thresholds and the finding -> cause -> practice-cue table live in
+`39-cycling-start-analysis.md` (sections 2, 6 and 7), which cites the start evidence; the
+analyzer constants cite that file, not this one.
+
+**Test:** on the real 10/10 start 4 the trace reads a 1100 W launch in ~5 s, a shift dip to
+721 W, a stop ~9 s before the 30 s mark and a weak ~480 W restart, against the athlete's own
+read of the graph.

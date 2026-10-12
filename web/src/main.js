@@ -24,13 +24,14 @@ import {
   fetchCoachHealthStatus, postCoachHealthStatus, resolveCoachHealthStatus,
   fetchHealthStatus, postHealthStatus,
   askAboutSession, askAboutWorkout,
-  fetchWorkoutPacing,
+  fetchWorkoutPacing, postWorkoutKind,
   postCoachWorkoutChatMessage, patchCoachWorkoutChatMuted,
   listConversations, fetchConversationMessages, patchConversationMuted, conversationMessagesPath,
   fetchCoachConversation, postCoachConversationMessage, patchCoachConversationMuted,
   listLibraryCards, fetchLibraryFile, submitLibraryReview,
   fetchMe,
 } from './api.js';
+import { shouldLoadPacing } from './analysis.js';
 import {
   serializeWorkoutForm, profileFormFromAthlete, serializeProfileForm,
   logFormFromDraft,
@@ -409,6 +410,8 @@ const state = {
   // The workout detail's "Raw analysis" panel (read-only, from the cached workout). Closed on
   // every open/close of a detail so it never carries over to another workout.
   rawAnalysisOpen: false,
+  // The workout detail's kind retag (POST /api/workouts/{id}/kind): null or {status, error}.
+  workoutKindEdit: null,
   // The Dashboard tab's training-load chart narrative (views.js's
   // renderCtlAtlTsbNarrative, web/two-panel-load-chart's truncation) --
   // same one-way "Show more" convention as dashboardFeedExpanded just
@@ -614,6 +617,7 @@ function renderTabContent() {
           weeks: state.plan.data?.weeks || [],
           ftpWatts: state.plan.data?.athlete?.ftp_watts ?? null,
           rawAnalysisOpen: state.rawAnalysisOpen,
+          kindEdit: state.workoutKindEdit,
         },
         healthStatusForm: state.healthStatusForm,
         healthStatusSubmit: state.healthStatusSubmit,
@@ -1157,6 +1161,7 @@ async function loadPlan() {
     });
     state.plan = { status: 'ready', data: result.data, error: null };
     pruneSessionDetailIdIfMissing(result.data.weeks);
+    if (state.workoutDetailId) maybeLoadPacing(state.workoutHistory.data.find((w) => w.id === state.workoutDetailId));
   } else {
     log.error('app.plan.load_failed', { error: result.error });
     state.plan = { status: 'error', data: null, error: result.error };
@@ -2030,6 +2035,7 @@ function handleOpenHistoryDetail(id, { rpeEdit = null } = {}) {
   if (!id) return;
   state.workoutDetailId = id;
   state.rawAnalysisOpen = false;
+  state.workoutKindEdit = null;
   // A fresh, empty scoped chat thread for this workout (see
   // closeWorkoutChat for the matching teardown on every close path).
   state.workoutChat = { workoutId: id, messages: [] };
@@ -2051,7 +2057,7 @@ function handleOpenHistoryDetail(id, { rpeEdit = null } = {}) {
   // in both handlers, not just the Plan tab's.
   maybeLoadFeedback(); // so the section's past Q&A actually has data to show
   maybeLoadRaceDebriefs(); // so the race-debrief section has data to match against
-  maybeLoadPacing(state.workoutHistory.data.find((w) => w.id === id)); // bike-only, no-op otherwise
+  maybeLoadPacing(state.workoutHistory.data.find((w) => w.id === id)); // races and plan-matched rides only
 }
 
 /** A6c: the "Rate this workout" row chip's action -- opens the same detail
@@ -2144,10 +2150,40 @@ function handleCloseHistoryDetail() {
   if (!state.workoutDetailId) return; // avoids a redundant render on popstate re-entrancy
   state.workoutDetailId = null;
   state.rawAnalysisOpen = false;
+  state.workoutKindEdit = null;
   closeWorkoutChat();
   state.workoutRpeEdit = null;
   state.askCoachForm = createAskCoachForm();
   state.askCoachSubmit = createAskCoachSubmit();
+  render();
+}
+
+/** Retags the open workout's kind via POST /api/workouts/{id}/kind (override + re-analysis on
+ * the backend), then swaps the returned workout into the cached history so the detail shows the
+ * new kind, starts and (for a race) the pacing panel without a refetch. */
+async function handleSetWorkoutKind(kind) {
+  const settings = state.settingsForm;
+  const workoutId = state.workoutDetailId;
+  if (!workoutId || !kind || !isConfigured(settings, state.identity)) return;
+  if (state.workoutKindEdit?.status === 'submitting') return;
+  state.workoutKindEdit = { status: 'submitting', error: null };
+  render();
+  const result = await postWorkoutKind({
+    baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), workoutId, kind,
+  });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    log.info('workout.kind_set', { athlete: athleteSlug(), workout_id: workoutId, kind });
+    state.workoutKindEdit = null;
+    state.workoutHistory = {
+      ...state.workoutHistory,
+      data: state.workoutHistory.data.map((w) => (w.id === workoutId ? result.data : w)),
+    };
+    maybeLoadPacing(result.data);
+  } else {
+    log.error('workout.kind_set_failed', { athlete: athleteSlug(), workout_id: workoutId, error: result.error });
+    state.workoutKindEdit = { status: 'error', error: result.error };
+  }
   render();
 }
 
@@ -2628,13 +2664,13 @@ function maybeLoadRaceDebriefs() {
 
 /** GPS-lap/race-phase pacing for one bike workout (Andrew, 2026-09-22: visible
  * directly on the race activity's own detail view). Lazy, per-workout, real
- * compute -- only fires for a bike workout, only once per workout id (a
+ * compute -- only fires for a bike race or a plan-matched ride (`shouldLoadPacing`), once per workout id (a
  * cached error is NOT retried automatically -- most "error" cases here are
  * "not actually analyzable", e.g. no series data, so refetching on every
  * open would just repeat the same 422 -- see renderRaceAnalysisSection's own
  * retry affordance for the athlete-initiated path back in). */
 function maybeLoadPacing(workout) {
-  if (!workout || workout.sport !== 'bike') return;
+  if (!shouldLoadPacing(workout, state.plan.data?.weeks)) return;
   if (!isConfigured(state.settingsForm, state.identity)) return;
   const existing = state.pacingByWorkoutId[workout.id];
   if (existing && (existing.status === 'loading' || existing.status === 'ready' || existing.status === 'error')) return;
@@ -3966,6 +4002,8 @@ function onAppChange(e) {
     handleToggleExpertMode(e.target.checked);
   } else if (e.target.matches('[data-a="log:file-select"]')) {
     handleLogFileSelected(e.target.files?.[0]);
+  } else if (e.target.matches('[data-a="workout:kind-select"]')) {
+    handleSetWorkoutKind(e.target.value);
   }
 }
 

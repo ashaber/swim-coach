@@ -389,6 +389,20 @@ export async function getAthlete({ baseUrl, token, athlete }) {
   return apiRequest({ baseUrl, token, path: `/api/athlete?athlete=${encodeURIComponent(athlete)}` });
 }
 
+/** POST {baseUrl}/api/workouts/{workoutId}/kind?athlete=<slug> -- retags a workout's kind
+ * (workout / race / free_ride / opener / warmup); the backend stores the override and re-runs
+ * the analysis under it (the same handler as the coach's `set_workout_kind` tool), then returns
+ * the updated workout with its load. */
+export async function postWorkoutKind({ baseUrl, token, athlete, workoutId, kind }) {
+  return apiRequest({
+    baseUrl,
+    token,
+    path: `/api/workouts/${encodeURIComponent(workoutId)}/kind?athlete=${encodeURIComponent(athlete)}`,
+    method: 'POST',
+    body: { kind },
+  });
+}
+
 /** GET {baseUrl}/api/workouts/{workoutId}/pacing?athlete=<slug> -- GPS-lap
  * detection + race-phase pacing split for one bike workout (Andrew,
  * 2026-09-22: the race activity's own detail view, not only through chat

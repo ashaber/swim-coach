@@ -152,7 +152,7 @@ def test_reanalyze_no_target_still_detects_on_dynamic_threshold(athletes_dir) ->
     assert res["target_source"] == "none"
     intervals = res["analytics"]["intervals"]
     assert intervals["efforts_detected"] > 0
-    assert all(e["target_w"] is None for e in intervals["efforts"])
+    assert all(e.get("target_w") is None for e in intervals["efforts"])
 
 
 def test_reanalyze_falls_back_to_reparsing_raw_ref_when_no_stored_series(athletes_dir) -> None:
@@ -194,7 +194,7 @@ def test_reanalyze_non_bike_workout_gets_default_analytics_and_a_note(athletes_d
     store = FileStore(base_dir=athletes_dir)
     w = _seed_other_sport(store, "swim_pool", series=True)
     res = _handlers(store)["reanalyze_workout"]({"workout_id": str(w.id), "target_watts": 239})
-    assert res["reanalyzed"] is True and res["analytics"]["intervals"] is None
+    assert res["reanalyzed"] is True and "intervals" not in res["analytics"]
     assert "no detailed analyzer for swim_pool yet" in res["note"]
     assert "pull_activity_stream" not in res["note"]  # a genuinely non-bike sport gets no mis-tag hint
     assert store.list_workouts("renee")[-1].analytics.intervals is None

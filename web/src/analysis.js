@@ -8,6 +8,7 @@
 // views.js turns the returned rows into markup.
 
 import { formatClock } from './workouts.js';
+import { sessionForWorkout } from './shape.js';
 
 const num = (v) => v !== null && v !== undefined && Number.isFinite(v);
 const dash = '—';
@@ -140,6 +141,32 @@ function raceView(pacing) {
 }
 
 
+// --- Workout kind ---------------------------------------------------------------
+
+export const KIND_OPTIONS = [
+  ['workout', 'Workout'], ['race', 'Race'], ['free_ride', 'Free ride'], ['opener', 'Opener'], ['warmup', 'Warm-up'],
+];
+
+/** The kind the analyzer uses: the athlete's retag wins over the derived kind; null on rows
+ * stored before kinds existed. */
+export function effectiveKind(workout) {
+  return workout?.kind_override || workout?.kind || null;
+}
+
+export function kindLabel(kind) {
+  const hit = KIND_OPTIONS.find(([k]) => k === kind);
+  return hit ? hit[1] : null;
+}
+
+/** Whether the detail view needs `GET /api/workouts/{id}/pacing`: only a bike ride, and then
+ * only for a race (the race pacing panel) or a ride matched to a planned session (its
+ * plan-vs-ridden overlay is drawn from the pacing response's power profile). */
+export function shouldLoadPacing(workout, weeks) {
+  if (!workout || workout.sport !== 'bike') return false;
+  if (effectiveKind(workout) === 'race') return true;
+  return sessionForWorkout(workout, weeks) !== null;
+}
+
 // --- Power curve + race starts --------------------------------------------------
 
 // Durations shown in the table (the chart plots every stored point).
@@ -200,6 +227,27 @@ function powerCurveView(curve) {
   };
 }
 
+/** SVG-ready geometry for one start's 1 Hz power trace (`trace_w`): a polyline plus x positions
+ * for the launch, the point it stopped, and the intended end (each only when inside the trace). */
+export function startTraceGeometry(start, { width = 160, height = 40 } = {}) {
+  const w = start?.trace_w;
+  if (!Array.isArray(w) || w.length < 2) return null;
+  const pad = 2;
+  const yMax = Math.max(...w, 1);
+  const X = (i) => pad + (i / (w.length - 1)) * (width - 2 * pad);
+  const Y = (v) => height - pad - (v / yMax) * (height - 2 * pad);
+  const t0 = num(start.trace_t0) ? start.trace_t0 : 0;
+  const mark = (sec) => (num(sec) && t0 + sec >= 0 && t0 + sec <= w.length - 1 ? Number(X(t0 + sec).toFixed(1)) : null);
+  return {
+    width, height,
+    points: w.map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(' '),
+    launchX: mark(0),
+    stopX: mark(start.stopped_at_s),
+    plannedEndX: mark(start.intended_s),
+    peakW: Math.max(...w),
+  };
+}
+
 export const STARTS_COLUMNS = ['Start', 'At', 'Held', 'Peak', 'To peak', 'Best 5 s', 'Avg', 'vs best', 'Verdict'];
 
 function startsView(iv) {
@@ -221,6 +269,9 @@ function startsView(iv) {
       s.verdict || dash,
     ]),
     flag: iv.starts_flag || null,
+    traces: starts
+      .map((s) => ({ n: s.n, geometry: startTraceGeometry(s), verdict: s.verdict || '' }))
+      .filter((t) => t.geometry),
   };
 }
 
@@ -230,7 +281,8 @@ function startsView(iv) {
 export function buildRawAnalysis(workout, pacing) {
   const iv = workout?.analytics?.intervals || null;
   const execution = workout?.quality?.execution || null;
-  const race = raceView(pacing);
+  const isRace = effectiveKind(workout) === 'race';
+  const race = isRace ? raceView(pacing) : null;
   const powerCurve = powerCurveView(workout?.analytics?.power_curve);
   if (!iv && !race && !execution && !powerCurve) return null;
   return {
@@ -241,7 +293,7 @@ export function buildRawAnalysis(workout, pacing) {
     starts: startsView(iv),
     powerCurve,
     race,
-    racePending: pacing?.status === 'loading',
-    raceError: pacing?.status === 'error' ? (pacing.error || 'Race analysis is not available.') : null,
+    racePending: isRace && pacing?.status === 'loading',
+    raceError: isRace && pacing?.status === 'error' ? (pacing.error || 'Race analysis is not available.') : null,
   };
 }

@@ -21,7 +21,7 @@ import { createThreadState } from './conversation.js';
 import { getDraft } from './composerDrafts.js';
 import { buildHistoryFeed } from './history.js';
 import { expandStructure, actualPoints, sessionForWorkout, shapeChartGeometry } from './shape.js';
-import { buildRawAnalysis } from './analysis.js';
+import { buildRawAnalysis, effectiveKind, kindLabel, KIND_OPTIONS } from './analysis.js';
 import { sportHasPlannedDistance, sportCanPushToGarmin, sportUsesPace } from './sports.js';
 import {
   sportLabel, sourceBadge, formatWorkoutDistance, formatAnalyticsLine,
@@ -2765,7 +2765,7 @@ function formatSpeedKmh(mps) {
  * absent, so an athlete who expects race analysis and doesn't see it isn't
  * left guessing why. */
 function renderRaceAnalysisSection(workout, pacing) {
-  if (workout.sport !== 'bike' || !pacing || pacing.status === 'idle') return '';
+  if (workout.sport !== 'bike' || effectiveKind(workout) !== 'race' || !pacing || pacing.status === 'idle') return '';
 
   let body;
   if (pacing.status === 'loading') {
@@ -2953,6 +2953,42 @@ function renderScoreBreakdown(score) {
       </div>`;
 }
 
+function renderStartTrace(t) {
+  const g = t.geometry;
+  const line = (x, color) => (x === null ? '' : `<line x1="${x}" x2="${x}" y1="0" y2="${g.height}" stroke="${color}" stroke-width="1" stroke-dasharray="2 2"/>`);
+  return `
+        <div class="start-trace">
+          <svg class="start-trace-chart" viewBox="0 0 ${g.width} ${g.height}" role="img" aria-label="Start ${esc(t.n)} power, peak ${esc(g.peakW)} watts" preserveAspectRatio="none">
+            ${line(g.plannedEndX, 'var(--ink-faint)')}${line(g.launchX, 'var(--ink-soft)')}${line(g.stopX, 'var(--bad, #d9534f)')}
+            <polyline points="${g.points}" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+          </svg>
+          <div class="start-trace-text"><strong>Start ${esc(t.n)}</strong> ${esc(t.verdict)}</div>
+        </div>`;
+}
+
+function renderStartTraces(traces) {
+  if (!traces || traces.length === 0) return '';
+  return `<div class="start-traces" aria-label="Power traces of each start"><p class="sub">1 s power per start. Dashed: launch, intended end, stop.</p>${traces.map(renderStartTrace).join('')}</div>`;
+}
+
+function renderKindRow(workout, editable, kindEdit) {
+  const kind = effectiveKind(workout);
+  const label = kindLabel(kind);
+  if (!label && !editable) return '';
+  const busy = kindEdit?.status === 'submitting';
+  const control = editable ? `
+      <select class="kind-select" data-a="workout:kind-select" aria-label="Workout kind" ${busy ? 'disabled' : ''}>
+        ${kind ? '' : '<option value="" selected>Not set</option>'}
+        ${KIND_OPTIONS.map(([k, name]) => `<option value="${esc(k)}" ${k === kind ? 'selected' : ''}>${esc(name)}</option>`).join('')}
+      </select>` : '';
+  return `
+    <div class="kind-row">
+      <span class="chat-chip kind-label">${esc(label || 'Kind not set')}</span>${control}
+      ${busy ? '<span class="sub">Re-analysing…</span>' : ''}
+      ${kindEdit?.status === 'error' ? `<span class="hist-error">${esc(kindEdit.error)}</span>` : ''}
+    </div>`;
+}
+
 function renderPowerCurveSvg(g) {
   const yTicks = g.yTicks.map((t) => `
     <line x1="${g.plotLeft}" x2="${g.plotRight}" y1="${t.y.toFixed(1)}" y2="${t.y.toFixed(1)}" stroke="var(--line-soft)" stroke-width="0.5"/>
@@ -2990,7 +3026,7 @@ function renderRawAnalysisSection(workout, pacing, open) {
       ${renderScoreBreakdown(model.score)}
       ${model.efforts ? `<h5>Efforts (${model.efforts.rows.length})</h5>${model.efforts.rows.length ? renderRawTable(model.efforts.columns, model.efforts.rows) : '<p class="sub">No sustained efforts detected.</p>'}` : ''}
       ${model.rounds ? `<h5>Rounds</h5>${renderRawTable(model.rounds.columns, model.rounds.rows)}` : ''}
-      ${model.starts ? `<div class="raw-starts"><h5>Starts</h5>${model.starts.flag ? `<p class="sub">${esc(model.starts.flag)}</p>` : ''}${renderRawTable(model.starts.columns, model.starts.rows)}</div>` : ''}
+      ${model.starts ? `<div class="raw-starts"><h5>Starts</h5>${model.starts.flag ? `<p class="sub">${esc(model.starts.flag)}</p>` : ''}${renderRawTable(model.starts.columns, model.starts.rows)}${renderStartTraces(model.starts.traces)}</div>` : ''}
       ${model.powerCurve ? `<div class="raw-power-curve"><h5>Power curve</h5>${model.powerCurve.note ? `<p class="sub">${esc(model.powerCurve.note)}</p>` : ''}${model.powerCurve.geometry ? renderPowerCurveSvg(model.powerCurve.geometry) : ''}${renderRawTable(model.powerCurve.columns, model.powerCurve.rows)}</div>` : ''}
       ${race ? `
       <h5>Race analysis</h5>
@@ -3156,7 +3192,7 @@ function renderConversationThread({
 export function renderWorkoutDetail(workout, {
   chat, online, rpeEdit = null, editable = false, pacing = null, raceDebriefs = [],
   viewerRole = 'athlete', coachChatSubmitting = false,
-  weeks = [], ftpWatts = null, rawAnalysisOpen = null,
+  weeks = [], ftpWatts = null, rawAnalysisOpen = null, kindEdit = null,
 } = {}) {
   const badge = sourceBadge(workout.source);
   // `renderAskCoachSection` (the old single-turn Feedback-based Q&A) is gone from here
@@ -3167,6 +3203,7 @@ export function renderWorkoutDetail(workout, {
       <h3>${esc(sportLabel(workout.sport, workout.sport_detail))}</h3>
       <div class="hist-meta mono">${esc(formatLongDate(parseIsoDate(workout.date.slice(0, 10))))}${badge ? ` <span class="chat-chip">${esc(badge)}</span>` : ''}</div>
     </div>
+    ${renderKindRow(workout, editable, kindEdit)}
     ${renderDetailStats(workout)}
     ${renderCompletedShapeSection(workout, pacing, weeks, ftpWatts)}
     ${editable ? renderRpeEditSection(workout, rpeEdit) : ''}

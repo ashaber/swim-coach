@@ -1111,6 +1111,8 @@ _LIBRARY_FILE_SPORT_SCOPE: dict[str, frozenset[str]] = {
     "31-multi-race-season-periodization.md": frozenset({"bike"}),
     "32-gps-lap-detection.md": frozenset({"bike"}),
     "38-race-week-sharpener-and-openers.md": frozenset({"bike"}),
+    "39-cycling-start-analysis.md": frozenset({"bike"}),
+    "40-cycling-start-technique-and-drills.md": frozenset({"bike"}),
 }
 
 
@@ -2136,7 +2138,7 @@ def render_focused_workout(
         "notes": workout.notes,
         "avg_hr": workout.avg_hr,
         "max_hr": workout.max_hr,
-        "analytics": analytics_for_coach(workout.analytics),
+        "analytics": analytics_for_coach(workout.analytics, sport=workout.sport),
         "load_au": load_au,
         "load_tier": load_tier,
     }
