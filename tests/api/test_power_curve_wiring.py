@@ -81,4 +81,4 @@ def test_coach_gets_compact_curve_in_focused_workout(ride: dict, athletes_dir: P
     w = _workout(ride).model_copy(update={"analytics": a})
     text = render_focused_workout(w, athlete=profile, hr_max=None, wellness=[])
     assert '"power_curve"' in text and '"duration": "5s"' in text
-    assert '"duration_s"' not in text.split('"power_curve"')[1].split("load_au")[0]  # compact, not the raw array
+    assert '"duration_s"' not in text.split('"power_curve"')[1].split("]")[0]  # compact, not the raw array
