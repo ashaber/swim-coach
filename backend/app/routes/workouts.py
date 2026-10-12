@@ -196,10 +196,13 @@ async def create_workout(
     # workout save, same "one connection per operation" cost profile
     # store_db.py's own module docstring already accepts for this
     # single-athlete-app design.
-    all_workouts = store.list_workouts(athlete)
-    wellness = store.list_wellness(athlete)
-    hr_max = estimate_hr_max(all_workouts)
-    return _attach_load(workout, profile=profile, hr_max=hr_max, wellness=wellness)
+    return _workout_with_load(store, athlete, profile, workout)
+
+
+def _workout_with_load(store: Any, athlete: str, profile: Any, workout: Workout) -> dict:
+    """`workout` as JSON with `load_au`/`load_tier` (hr_max from the athlete's full history)."""
+    hr_max = estimate_hr_max(store.list_workouts(athlete))
+    return _attach_load(workout, profile=profile, hr_max=hr_max, wellness=store.list_wellness(athlete))
 
 
 @router.patch("/api/workouts/{workout_id}")
@@ -242,6 +245,38 @@ async def patch_workout(
 
     store.save_workout(athlete, updated)
     return updated.model_dump(mode="json")
+
+
+@router.post("/api/workouts/{workout_id}/kind")
+async def set_workout_kind(
+    workout_id: UUID,
+    payload: dict[str, Any],
+    request: Request,
+    athlete: str | None = Query(None),
+    principal: Principal = Depends(require_auth),
+) -> dict:
+    """Retag a workout's kind (workout / race / free_ride / opener / warmup): sets
+    `kind_override` and re-runs the analysis under it -- the `set_workout_kind` chat tool's own
+    handler, so the PWA control and the coach behave identically. Returns the updated workout
+    (with load), like `POST /api/workouts`."""
+    settings = request.app.state.settings
+    athlete = resolve_athlete(principal, athlete)
+    store = make_store(settings)
+    try:
+        profile = store.load_athlete(athlete)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"no such athlete: {athlete}") from exc
+    if store.get_workout(athlete, workout_id) is None:
+        raise HTTPException(status_code=404, detail=f"no such workout: {workout_id}")
+
+    handlers = build_tool_handlers(store, slug=athlete, expert_mode=False)
+    result = handlers["set_workout_kind"]({"workout_id": str(workout_id), "kind": payload.get("kind")})
+    if "error" in result:
+        raise HTTPException(status_code=422, detail=result["error"])
+    updated = store.get_workout(athlete, workout_id)
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"no such workout: {workout_id}")
+    return _workout_with_load(store, athlete, profile, updated)
 
 
 @router.get("/api/workouts/{workout_id}/pacing")
