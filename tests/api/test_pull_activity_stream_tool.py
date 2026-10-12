@@ -166,7 +166,7 @@ def test_pull_by_activity_id_matches_local_workout_and_caches(athletes_dir, wire
     assert res["cached"] is True
     assert res["workout_id"] == str(w.id)
     assert res["target_source"] == "none"
-    assert all(e["target_w"] is None for e in res["analytics"]["intervals"]["efforts"])
+    assert all(e.get("target_w") is None for e in res["analytics"]["intervals"]["efforts"])
 
 
 def test_pull_recovers_target_from_matched_planned_session(athletes_dir, wired) -> None:
