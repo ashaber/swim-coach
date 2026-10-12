@@ -1,5 +1,5 @@
 """Workout.analyze(ctx): golden regression against the pre-refactor path, registry dispatch,
-kind derivation, the Session.kind backfill and the override."""
+kind derivation, untagged-session defaults and the override."""
 
 from __future__ import annotations
 
@@ -196,27 +196,23 @@ def test_power_curve_bests_annotated_inside_analysis():
     assert out.model_dump(mode="json")["power_curve"] != base.model_dump(mode="json")["power_curve"]
 
 
-# --- Session.kind backfill ------------------------------------------------------------------
+# --- Session.kind: no string guessing ------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "purpose, structured, expected",
-    [
-        ("RACE — Cross", None, "race"),
-        ("  race — lower", None, "race"),
-        ("Build — VO2", "x", "workout"),
-        ("coach prose session, structured lost in a past bug", None, "workout"),
-    ],
-)
-def test_session_kind_backfilled_on_load(purpose, structured, expected):
+@pytest.mark.parametrize("purpose", ["RACE — Cross", "RACE -- Season Opener", "Build — VO2", "prose session"])
+def test_untagged_session_stays_none_and_reads_as_workout(purpose):
     s = _session(purpose=purpose, sport="bike")
-    assert s.kind == expected
+    assert s.kind is None and s.effective_kind == "workout"
 
 
 def test_explicit_kind_is_kept_and_roundtrips():
     s = _session(purpose="RACE — x", kind="free_ride")
-    assert s.kind == "free_ride"
+    assert s.kind == "free_ride" and s.effective_kind == "free_ride"
     assert Session.model_validate(s.model_dump(mode="json")).kind == "free_ride"
-    legacy = s.model_dump(mode="json")
-    del legacy["kind"]
-    assert Session.model_validate(legacy).kind == "race"
+
+
+def test_untagged_session_on_an_event_day_defers_to_the_event():
+    w = _swim()
+    assert derive_workout_kind(w, _session(), [_event(w.date, "swim")]) == "race"
+    assert derive_workout_kind(w, _session(kind="workout"), [_event(w.date, "swim")]) == "workout"
+    assert derive_workout_kind(w, _session(), []) == "workout"

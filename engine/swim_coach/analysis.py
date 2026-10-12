@@ -162,15 +162,16 @@ def _event_sport(workout_sport: str) -> str | None:
 
 
 def derive_workout_kind(workout: Workout, session: Session | None, events: Sequence[Event]) -> SessionKind:
-    """The matched planned session's kind; else an athlete event on that date in the workout's
-    sport -> race; else free_ride. (`kind_override` is applied by the caller, see
+    """The matched session's explicit kind; else an athlete event on that date in the workout's
+    sport -> race (this also rescues a not-yet-backfilled untagged session); else the session's
+    default ("workout"), or free_ride with no session. (`kind_override` is applied by the caller, see
     `Workout.effective_kind`.)"""
     if session is not None and session.kind is not None:
         return session.kind
     sport = _event_sport(workout.sport)
     if sport is not None and any(e.event_date == workout.date and e.primary_sport == sport for e in events):
         return "race"
-    return "free_ride"
+    return session.effective_kind if session is not None else "free_ride"
 
 
 def build_analysis_context(

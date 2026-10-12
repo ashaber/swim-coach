@@ -69,7 +69,7 @@ def _override(week, **entry):
 
 def test_override_can_set_kind_on_an_existing_session():
     week = _Week([_bike(DAY, 60, purpose="Race: club crit")])
-    assert week.sessions[0].kind == "workout"  # legacy backfill: no RACE — prefix
+    assert week.sessions[0].kind is None and week.sessions[0].effective_kind == "workout"
     error, _ = _override(week, sport="bike", kind="race")
     assert error is None and week.sessions[0].kind == "race"
 

@@ -41,7 +41,7 @@ def test_context_carries_the_athlete_and_the_session_kind(athletes_dir: Path) ->
     athlete = store.load_athlete("renee")
     w = _workout(athlete.id)
     ctx = build_analysis_context(
-        store, "renee", w, series=None, session=_session(athlete.id, "RACE — cross opener", structure="barrier")
+        store, "renee", w, series=None, session=_session(athlete.id, "RACE — cross opener", structure="barrier", kind="race")
     )
     assert ctx.kind == "race" and w.kind == "race"
     assert ctx.athlete.lthr_bpm == athlete.lthr_bpm and ctx.athlete.ftp_watts == athlete.ftp_watts
@@ -62,7 +62,7 @@ def test_matched_training_session_keeps_its_own_kind_on_an_event_day(athletes_di
     athlete = store.load_athlete("renee")
     store.save_events("renee", [_event(athlete.id)])
     ctx = build_analysis_context(
-        store, "renee", _workout(athlete.id), series=None, session=_session(athlete.id, "tempo")
+        store, "renee", _workout(athlete.id), series=None, session=_session(athlete.id, "tempo", kind="workout")
     )
     assert ctx.kind == "workout"
 

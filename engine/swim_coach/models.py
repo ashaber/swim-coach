@@ -42,10 +42,6 @@ Sport = Literal["swim_pool", "swim_ow", "strength", "recovery", "cross_train", "
 #                (still gets load, base analytics and the power curve)
 SessionKind = Literal["workout", "race", "free_ride", "warmup"]
 
-# Legacy marker on a race session's athlete-facing `purpose`; read ONLY by the `Session.kind`
-# backfill below (rows written before `kind` existed). Everything else reads `kind`.
-_LEGACY_RACE_PURPOSE_PREFIX = "RACE — "
-
 _ISO_WEEK_RE = re.compile(r"^\d{4}-W\d{2}$")
 _VALID_ZONES = {"Z1", "Z2", "Z3", "Z4", "Z5"}
 _VALID_ANCHORS = {"css_pace", "rpe", "hr"}
@@ -778,11 +774,9 @@ class Session(BaseModel):
     # additive field in this file.
     status: Literal["planned", "completed", "skipped", "replaced"] = "planned"
     is_indoor: bool | None = None
-    # See `SessionKind`. Additive/optional (stored in JSONB, no SQL migration): the validator
-    # below fills it on load for rows that predate it, and the plan generator / coach set it
-    # explicitly. Legacy backfill rule: purpose "RACE — ..." -> race; EVERYTHING else ->
-    # workout, including prose-only planned sessions whose `structured` was lost in a past bug
-    # (they were coach-prescribed, so they must not be reclassified as free rides).
+    # See `SessionKind`. Additive/optional (stored in JSONB, no SQL migration). NO string guessing:
+    # the coach/generator tag new sessions; rows that predate it stay None (read as "workout" via
+    # `effective_kind`) until `scripts/backfill_session_kind.py` tags the real races/warm-ups.
     kind: SessionKind | None = None
     # Engine/cycling-coach Part C (delivery/logging): the lightweight signal
     # this build's own brief asked for -- "does this bike session need the
@@ -798,12 +792,12 @@ class Session(BaseModel):
     # additive/optional, no schema_version bump, same convention as every
     # other additive field in this file.
 
-    @model_validator(mode="after")
-    def _backfill_kind(self) -> "Session":
-        if self.kind is None:
-            is_race = self.purpose.strip().upper().startswith(_LEGACY_RACE_PURPOSE_PREFIX)
-            self.kind = "race" if is_race else "workout"
-        return self
+    @property
+    def effective_kind(self) -> SessionKind:
+        """`kind`, defaulting to "workout" for a session nobody tagged (rows that predate `kind`
+        keep `kind=None` in storage so the one-time backfill, `scripts/backfill_session_kind.py`,
+        can tell untagged from explicitly tagged)."""
+        return self.kind or "workout"
 
     @field_validator("intensity")
     @classmethod
