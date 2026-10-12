@@ -1,0 +1,29 @@
+schema_version: 1
+file: 40-cycling-start-technique-and-drills.md
+cards:
+- section: 1-technique-determinants-of-the-launch
+  heading: 1. Technique determinants of the launch
+  summary: Standing and a lead-pedal crank angle near 71 degrees gave faster initial acceleration in track studies; lead-leg
+    force and clipping in matter; torso position after the launch does not.
+  recommendation: Cue a standing launch with the clipped pedal at 2 o'clock and a hard first stroke; skip torso-position drills.
+  content_hash: c98ffa78da5efd4d1f5863e2ee4ac7c5518d540a2d8ee74c012e847d392aa49d
+- section: 2-gear-selection-and-shifting-in-the-start
+  heading: 2. Gear selection and shifting in the start
+  summary: A bigger launch gear raised BMX peak power without slowing time to peak; no study covers shifting during a start,
+    so shift cues are practitioner advice and Coach judgment.
+  recommendation: Pick the gear where cadence passes about 90-110 rpm within 3 s and shift once, not in the first two strokes.
+  content_hash: c4e2e7cf64207f3d36835cdedca23d4e65986783b698c67add71f4352e8c47ea
+- section: 3-training-that-improves-sprint-launch-capacity
+  heading: 3. Training that improves sprint/launch capacity
+  summary: Six weeks of 3x4 standstill sprints beat heavy strength for 6-s sprint power in cyclists; on-bike low-cadence work
+    matches squats; strength correlates with starts but reaction drills do not transfer.
+  recommendation: Add short standstill sprints twice a week for chronically low peaks; practise the whole start, not reflex
+    drills.
+  content_hash: 399deb0522427e060d6a1add3a742e570de50ffcdc1fd2f6bc36413601f37879
+- section: 4-structuring-start-practice
+  heading: 4. Structuring start practice
+  summary: No controlled study of start-practice structure exists; Kristoffersen's 3x4 sprints with 2 and 5 minute rests is
+    the best template, and practitioner sets are labeled as such.
+  recommendation: Run one technique cue per session, review each trace, and stop the set when peak falls about 10% below the
+    best.
+  content_hash: e990cfd11ca76c63f51af58b7062368283974c6e84e7467723b725432601b2bb

@@ -1638,6 +1638,18 @@ All located and read (abstract minimum) 2026-10; no DOIs kept (see header). `[AD
 - **✓ Macdermid P.W., Morton R.H. (2012)** — "A longitudinal analysis of start position and the outcome of World Cup cross-country mountain bike racing" — *Journal of Sports Sciences, 30(2):175-182*. Supports: finish position depends strongly on start position.
 - Wolfe K. (2014) TrainingPeaks blog "Power Analysis of a Cyclocross Race" (one CX start, 1100 W peak / 743 W 15-s mean; n=1 anecdote); Matheny F., RoadBikeRider "Improving bicycling sprinting form" and Liv Cycling "How to sprint" (ease pedal pressure while shifting). Practical resources, not EVIDENCE/ADAPTED.
 
+- **Companion sources for `40-cycling-start-technique-and-drills.md`** (all located and read, abstract minimum; no DOIs kept):
+- **✓ Padulo J., Laffaye G., Bertucci W., Chaouachi A., Viggiano D. (2014)** — "Optimisation of starting conditions in track cycling" — *Sport Sciences for Health*. Supports: standing +10% over 5 m; crank angle 71 deg beats 47 deg. Volume and pages unverified.
+- **✓ Kristoffersen M., Sandbakk Ø., Rønnestad B.R., Gundersen H. (2019)** — "Comparison of short-sprint and heavy strength training on cycling performance" — *Frontiers in Physiology, 10:1132*. Supports: 3x4 standstill sprints of 4-8 s, 2x/week for 6 weeks: 6-s sprint +4.7% vs heavy strength.
+- **✓ Barranco-Gil D., Hernández-Belmonte A., Rodríguez-Rielves V., et al. (2025)** — "Off- and on-bike resistance training in cyclists: a randomized controlled trial" — *Medicine & Science in Sports & Exercise, 57(2):296-304*. Supports: squats and on-bike low-cadence work gave similar Wingate gains (+4.1%, +4.3%).
+- **✓ Stone M.H., Sands W.A., Carlock J., et al. (2004)** — "The importance of isometric maximum strength and peak rate-of-force development in sprint cycling" — *Journal of Strength and Conditioning Research, 18(4):878-884*. Supports: isometric max strength correlates with standing-start sprint times (n=50).
+- **✓ Gross M., Gross T. (2019)** — "Relationship between cyclic and non-cyclic force-velocity characteristics in BMX cyclists" — *Sports, 7(11):232*. Supports: 12 elite BMX: squat-jump force vs start torque r=0.77; high-velocity qualities did not transfer.
+- **✓ Bertucci W.M., Hourde C. (2011)** — "Laboratory testing and field performance in BMX riders" — *Journal of Sports Science and Medicine, 10:417-419*. Supports: lab tests explained 41-66% of 5-75 m time, nothing of the first 5.2 m.
+- **✓ Merkes P.F.J., Menaspà P., Abbiss C.R. (2020)** — "Power output, cadence, and torque are similar between the forward standing and traditional sprint cycling positions" — *Scandinavian Journal of Medicine & Science in Sports*. Supports: similar power in both standing positions. Title as paraphrased by the record, unverified.
+- **✓ Connolly S., Peeling P., Binnie M.J., et al. (2023)** — "Assessing the rate of torque development in sprint cycling: a methodological study" — *European Journal of Sport Science, 23(6):964-974*. Supports: rate of torque development most reliable over downstrokes 2-3 of a 5-s or longer sprint.
+- **✓ Grigg J. (2019)** — "A biomechanical analysis of the BMX SX gate start" — *doctoral thesis, Bond University (weak: thesis, tiny n)*. Supports: back set position faster; reaction training did not transfer to ramp start time.
+- Practitioner, not evidence: Overton F. (2022) FasCat "The Perfect Cyclocross Race Start" (clipped foot at 2 o'clock, clip-in reps, gear by surface); Myerson A. (2017) Cycle-Smart "Where it all starts" (gear one cog off the easiest, shift as speed rises).
+
 ## Recovery, sleep & HRV
 
 - **✓ Driller M., Leabeater A. (2023)** — "Fundamentals or Icing on Top of

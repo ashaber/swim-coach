@@ -182,18 +182,17 @@ prefer 3–5 s means.
 
 ## 7. Finding -> likely cause -> practice cue
 
-The analyzer emits `start_findings` with a `cue_key`; each key is a row
-here. Everything below is **`Coach judgment:`** unless a source is named; a
-sourced practice-cue pass (drills, set design) is still to be merged. One
-cause and one thing to practice per finding; the athlete's own best start
-is the reference.
+The analyzer emits `start_findings` with a `cue_key`; each key is a row here. Causes and cues are
+**`Coach judgment:`** unless a source is named; the evidence behind the technique cues is in
+`40-cycling-start-technique-and-drills.md`. One cause and one thing to practice per finding; the
+athlete's own best start is the reference.
 
 | `cue_key` | Finding (engine) | Likely cause | Practice cue |
 |---|---|---|---|
-| `slow_launch` | time to peak above 6 s (typical 2-3.5 s, BMX field/lab) | gear too small or too big for a standing clip-in; soft first stroke | Rylands et al. (2017): a modestly bigger gear raised peak power with time to peak unchanged, so test one gear up on 4-6 clean starts; otherwise rehearse clip-in and a hard first stroke at 80 rpm |
-| `low_peak` | best 3-5 s mean well under the athlete's best start | cadence under 80 rpm (torque-limited) or over 140 (spun out); early sit-down | Start in a gear that reaches 100-130 rpm by the third second; stay standing until the peak |
-| `early_shift_dip` | a sharp dip in the first 8 s that recovers | shifting under load or a late shift | Shift once, early, with a half-stroke of eased pressure (electronic shifting needs less); set the gear before the start |
-| `stopped_early` | power under half of peak for 3 s or more well before the planned end | ending the effort on feel, not on the timer | Hold to the beep; count the planned seconds aloud; finish the step before easing |
-| `weak_restart` | a restart after the stop at under 60% of the peak | trying to rescue a step that already ended | Treat the restart as a new rep or skip it; do not pad the step |
-| `execution_miss` | one start well below the rest, the others steady | missed clip, bad shift, traffic | Repeat the rep; practice clip-in and the first stroke; do not read it as fatigue |
-| `fatigue_decline` | starts fall rep after rep | too little recovery or too many reps | Longer recovery (3-5 min) or fewer reps; stop the set when peak drops by about 10% |
+| `slow_launch` | time to peak over 3.5 s (typical 2-3.5 s, BMX field/lab) | late or missed clip-in; crank too low at the start; seated launch; gear too big | "Clipped pedal at 2 o'clock, stand and drive the first stroke" (Padulo et al. 2014, graded in 40; clip-in advice is practitioner) |
+| `low_peak` | best 3-5 s mean well under the athlete's best, on a low launch cadence | gear too small (spun out above 140 rpm) or too big (under 80 rpm); fatigue; low force capacity if chronic | check cadence at peak: above 130 rpm go one gear bigger (Rylands et al. 2017: bigger gear raised peak power, time to peak unchanged); if chronic, add short standstill sprints 2x/week (Kristoffersen et al. 2019, in 40) |
+| `early_shift_dip` | a sharp dip in the first 8 s that recovers | shifting too early or under full load (no research; practitioner advice only) | "One gear, hold it to about 110 rpm, ease off for half a stroke to shift" |
+| `stopped_early` | power under half of peak for 3 s or more before the planned end | pacing (went too hard), unclear target, traffic | "Count the full step; the start is the effort, not the peak" |
+| `weak_restart` | a restart after the stop at under 60% of the peak | lost clip or wrong gear after a stall | "Reset: unclip, easy gear, full rest before the next rep" |
+| `execution_miss` | one start well below the others, which are steady | missed clip, gear, start style (baseline CV 2-5%, Coleman et al. 2005, Mendez-Villanueva et al. 2007) | "Same gear, same foot, same crank angle every rep" |
+| `fatigue_decline` | starts fall rep after rep | not enough rest, or fatigue/glycogen (Glaister et al. 2005, Dale et al. 2022) | "Lengthen rest to 3 min or more; stop the set at about -10% from the best" |
