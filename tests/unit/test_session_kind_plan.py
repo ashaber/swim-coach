@@ -1,5 +1,5 @@
 """Session kind in the plan: the generator tags race / warm-up sessions, the ramp rail counts
-neither, and the coach's session overrides can set it."""
+neither. The coach-override side lives in tests/api/test_session_kind_overrides.py."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from swim_coach.plan import (
     evaluate_week_realism,
 )
 
-from app.tools import _apply_session_overrides
 
 DAY = date(2026, 9, 19)
 ATHLETE = Athlete(id=uuid.uuid4(), slug="t", name="T", ftp_watts=250.0)
@@ -56,27 +55,3 @@ def test_realism_ramp_rail_ignores_race_and_warmup_minutes():
     assert not any("safety" in w for w in warnings)
     over = evaluate_week_realism([_bike(date(2026, 9, 14), cap + 5)], prev_week_bike_volume_min=prev)
     assert any("safety" in w for w in over)
-
-
-class _Week:
-    def __init__(self, sessions):
-        self.sessions = sessions
-
-
-def _override(week, **entry):
-    return _apply_session_overrides(week, [{"date": DAY.isoformat(), **entry}], ATHLETE)
-
-
-def test_override_can_set_kind_on_an_existing_session():
-    week = _Week([_bike(DAY, 60, purpose="Race: club crit")])
-    assert week.sessions[0].kind is None and week.sessions[0].effective_kind == "workout"
-    error, _ = _override(week, sport="bike", kind="race")
-    assert error is None and week.sessions[0].kind == "race"
-
-
-def test_override_add_mode_accepts_kind_and_rejects_unknown_kinds():
-    week = _Week([])
-    error, _ = _override(week, sport="bike", add=True, duration_min=20, purpose="openers", kind="warmup")
-    assert error is None and week.sessions[0].kind == "warmup"
-    error, _ = _override(_Week([_bike(DAY, 60)]), sport="bike", kind="tempo")
-    assert error is not None and "invalid session kind" in error
