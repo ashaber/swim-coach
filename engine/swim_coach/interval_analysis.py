@@ -80,6 +80,7 @@ from swim_coach.models import (
 )
 
 from swim_coach.race_start import analyze_race_start
+from swim_coach.start_trace import StartTrace, read_start_trace, trace_clauses
 from swim_coach.rep_shape import (
     TECH_HR_HELD_PCT_LTHR,
     TECH_MIN_REP_S,
@@ -1807,6 +1808,7 @@ def _burst_verdict(
     kind: str | None,
     clue: str | None,
     opener: bool = False,
+    trace: StartTrace | None = None,
 ) -> str:
     if read is None:
         return WARMUP_BUILD_VERDICT if opener else "no clear burst found near the prescribed window"
@@ -1822,6 +1824,9 @@ def _burst_verdict(
         head = f"{held}peak {b.peak_w} W, best 5 s {b.best_5s_w} W"
     if opener:
         return f"opener: {head}"
+    phases = trace_clauses(trace, intended_s=intended_s)
+    if phases:
+        head = f"{head}; {phases}"
     if ref_n is None:
         tail = " (reference start)"
     elif drop_pct is None:
@@ -1907,6 +1912,25 @@ def analyze_start_bursts(
             clue = ", ".join(clues) or None
             intended = intended_hold_s(rep.label, rep.duration_s)
             held = round(read.held_s, 1) if read else None
+            trace = None
+            if read is not None and not opener:
+                last = read.second or read.first
+                trace = read_start_trace(
+                    series, burst_start_s=read.first.start_s,
+                    first_end_s=read.first.start_s + read.first.length_s,
+                    last_start_s=last.start_s, effort_end_s=last.start_s + last.length_s,
+                    intended_s=intended, ftp_watts=ftp_watts,
+                )
+            trace_fields = (
+                {
+                    k: getattr(trace, k)
+                    for k in ("trace_w", "trace_cadence", "trace_t0", "launch_s", "launch_rate_w_per_s",
+                              "dips", "sustained_s", "sustain_floor_w", "stopped_at_s",
+                              "stopped_early_s", "restart")
+                }
+                if trace is not None
+                else {}
+            )
             out.append(
                 (
                     rep,
@@ -1932,9 +1956,10 @@ def analyze_start_bursts(
                         burst2_best_5s_w=s2.best_5s_w if s2 else None,
                         dip_w=read.dip_w if s2 and read else None,
                         dip_s=round(read.dip_s, 1) if s2 and read and read.dip_s is not None else None,
+                        **trace_fields,
                         verdict=_burst_verdict(
                             read, drops[i], refs[i], held_s=held, intended_s=intended,
-                            kind=kinds[i], clue=clue, opener=opener,
+                            kind=kinds[i], clue=clue, opener=opener, trace=trace,
                         ),
                     ),
                     read,

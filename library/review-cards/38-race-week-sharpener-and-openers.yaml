@@ -40,3 +40,10 @@ cards:
   recommendation: Read the per-start burst table, technical-rep HR numbers and race-start block as the analyzer's
     objective output; treat the thresholds as fitted to a few real rides, not cited values.
   content_hash: 2fc918a6691be7e43e29344ee01addd03c7558028db5ead2a7901893846a1b61
+- section: reading-a-start-trace
+  heading: Reading a start trace
+  summary: 'Coach judgment: read each start by launch, shift dips, seconds sustained, stop versus the planned end, and
+    any restart, from its 1 Hz trace; thresholds are fitted to real rides.'
+  recommendation: Quote the start's phases (launch, dip, stop vs the step end, restart) instead of the lap average,
+    and call a short dip a likely shift, not a fitness loss.
+  content_hash: b383151865d03a9b61a204dd31d6a9921d852d47bbfbc412b1eaedf47135b29a

@@ -50,7 +50,7 @@ def test_drop_vs_best_and_weak_starts_are_isolated_execution_misses(result):
     assert [s.weak_kind for s in result.starts] == [None, None, "execution_miss", None, "execution_miss"]
     assert result.starts_flag == "start 3 and start 5 off (likely execution) -- skill rep, not fatigue"
     assert "16% below best start (start 1)" in result.starts[2].verdict
-    assert "stop" not in result.starts[2].verdict.lower()
+    assert "consider stopping" not in result.starts[2].verdict.lower()
 
 
 def test_held_seconds_lead_the_verdict(result):
@@ -122,3 +122,42 @@ def test_coach_view_renumbers_efforts_and_tags_start_n(result):
     _tag_start_efforts(iv)
     assert [e["n"] for e in iv["efforts"]] == list(range(1, len(iv["efforts"]) + 1))
     assert [e.get("start_n") for e in iv["efforts"][:6]] == [1, 2, 3, 4, 5, None]
+
+
+def test_start_4_trace_matches_the_athletes_read_of_the_graph(result):
+    """Athlete's read of start 4 (intervals.icu graph): 0 -> 1100 W in ~6 s, dip to ~720 W at
+    ~7 s, ~700 W plateau, stops ~19 s, ~2 s coast, weak restart ~360-550 W for ~5 s (30 s step)."""
+    s = result.starts[3]
+    assert 0 < len(s.trace_w) <= 45 and s.trace_cadence is not None
+    assert max(s.trace_w) == s.peak_w == 1100
+    assert abs(s.launch_s - 6) <= 1 and s.trace_w[s.trace_t0] < 100
+    assert len(s.dips) == 1
+    d = s.dips[0]
+    assert abs(d.at_s - 7) <= 1 and abs(d.to_w - 720) <= 50 and d.recovered_to_w > d.to_w + 100
+    assert abs(s.stopped_at_s - 19) <= 2
+    assert abs(s.stopped_early_s - (30 - s.stopped_at_s)) < 0.01
+    r = s.restart
+    assert abs(r.after_gap_s - 2) <= 1 and abs(r.duration_s - 5) <= 1
+    assert 360 <= r.avg_w <= 550 and r.peak_w <= 560
+    assert "dip to 721 W" in s.verdict and "likely shift/bobble" in s.verdict
+    assert "weak restart" in s.verdict and "before the 30 s mark" in s.verdict
+
+
+def test_every_start_has_a_bounded_trace_and_a_stop(result):
+    for s in result.starts:
+        assert 30 <= len(s.trace_w) <= 45
+        assert s.stopped_at_s is not None and s.sustained_s > 0
+    assert result.starts[4].stopped_early_s is None  # held to within 1 s of the 30 s mark
+
+
+def test_926_double_burst_brake_is_not_a_stop():
+    d = json.loads((FIX / "ride_2026_09_26_starts_technical_5x5.json").read_text())
+    s = Session.model_validate(d["planned_session"])
+    laps = [WorkoutLap.model_validate(x) for x in d["workout"]["laps"]]
+    p = d["athlete_profile"]
+    r = analyze(d["series"], sport="bike", structure=s.structured, laps=laps,
+                ftp_watts=p["ftp_watts"], home_elevation_m=p["home_elevation_m"])
+    assert len(r.starts) == 4
+    assert all(st.trace_w for st in r.starts)
+    assert [st.stopped_early_s is None for st in r.starts[1:]] == [True, True, True]
+    assert r.starts[0].stopped_early_s is not None  # start 1 stopped after a 7 s burst of a 22 s shape

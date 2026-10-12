@@ -1516,6 +1516,25 @@ class PowerCurvePoint(BaseModel):
     is_best_90d: bool | None = None
 
 
+class StartDip(BaseModel):
+    """A sharp, quickly recovered drop inside a start (likely a gear shift or bobble).
+    `at_s` counts from the start's launch (`StartBurst.trace_t0`)."""
+
+    at_s: float
+    from_w: int
+    to_w: int
+    recovered_to_w: int
+
+
+class StartRestart(BaseModel):
+    """Power rising again after the effort stopped, inside the start's trace window."""
+
+    after_gap_s: float  # seconds of coasting between the stop and the restart
+    duration_s: float
+    avg_w: int
+    peak_w: int
+
+
 class StartBurst(BaseModel):
     """One short all-out start (< 60 s, open/RPE target) read from the power
     stream instead of the prescribed window -- see
@@ -1551,6 +1570,21 @@ class StartBurst(BaseModel):
     burst2_best_5s_w: int | None = None
     dip_w: int | None = None  # lowest 1 s power between the two bursts
     dip_s: float | None = None  # seconds between the end of burst 1 and the start of burst 2
+    # 1 Hz power/cadence trace from 3 s before the burst to 3 s after the effort ends
+    # (<= 45 samples) and the phase read derived from it -- `interval_analysis.read_start_trace`.
+    # Stored rows from before carry none of these. Times are seconds from the launch
+    # (sample `trace_t0` of the trace).
+    trace_w: list[int] = Field(default_factory=list)
+    trace_cadence: list[int | None] | None = None
+    trace_t0: int | None = None
+    launch_s: float | None = None  # launch start -> peak
+    launch_rate_w_per_s: float | None = None
+    dips: list[StartDip] = Field(default_factory=list)
+    sustained_s: float | None = None  # seconds at/above `sustain_floor_w` while the effort ran
+    sustain_floor_w: int | None = None
+    stopped_at_s: float | None = None  # power fell below FTP and stayed there
+    stopped_early_s: float | None = None  # intended_s minus stopped_at_s, when clearly positive
+    restart: StartRestart | None = None
     verdict: str
 
     @model_validator(mode="before")
