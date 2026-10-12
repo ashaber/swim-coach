@@ -106,6 +106,10 @@ def power_curve(series: dict | None) -> list[PowerCurvePoint] | None:
     return points or None
 
 
+# Verdict of a prescribed warm-up build (a <10 s rep) in which no burst was ridden: not a
+# start, not scored. Set by interval_analysis; the coach view leaves these out of `efforts`.
+WARMUP_BUILD_VERDICT = "warm-up build (not scored)"
+
 BEST_WINDOWS_DAYS = (42, 90)
 
 COACH_DURATIONS_S = (1, 5, 15, 30, 60, 300, 600, 1200, 3600)
@@ -142,16 +146,44 @@ STARTS_COACH_NOTE = (
 )
 
 
+def _tag_start_efforts(iv: dict) -> None:
+    """Coach view only: renumber the visible efforts 1..N (stored `n` is untouched) and give
+    each effort at a start's burst `start_n`, the number in the starts table."""
+    start_n = {s.get("burst_start_s"): s["n"] for s in iv.get("starts") or []}
+    for i, e in enumerate(iv["efforts"], 1):
+        e["n"] = i
+        if e.get("start_s") in start_n:
+            e["start_n"] = start_n[e["start_s"]]
+
+
 def analytics_for_coach(analytics) -> dict | None:
-    """`WorkoutAnalytics` as a JSON dict with the power curve swapped for its compact
-    coach view (used by the per-workout detail surfaces, never the always-loaded context)."""
+    """`WorkoutAnalytics` as a JSON dict in the order the coach should read it, with the power
+    curve swapped for its compact coach view (used by the per-workout detail surfaces, never
+    the always-loaded context). The power curve leads, then within `intervals` the starts
+    table, its flag and note, then the rest, and `efforts` last. Prescribed warm-up builds in
+    which no burst was ridden are not scored efforts and are left out of `efforts`."""
     if analytics is None:
         return None
     out = analytics.model_dump(mode="json")
     if out.get("power_curve"):
         out["power_curve"] = coach_summary(analytics.power_curve)
-    if (out.get("intervals") or {}).get("starts"):
-        out["intervals"]["starts_note"] = STARTS_COACH_NOTE
+    iv = out.get("intervals")
+    if iv:
+        if iv.get("starts"):
+            iv["starts_note"] = STARTS_COACH_NOTE
+        if iv.get("efforts"):
+            iv["efforts"] = [e for e in iv["efforts"] if e.get("verdict") != WARMUP_BUILD_VERDICT]
+            _tag_start_efforts(iv)
+        lead = [k for k in ("starts", "starts_flag", "starts_note") if k in iv]
+        rest = [k for k in iv if k not in lead and k != "efforts"]
+        out["intervals"] = {k: iv[k] for k in [*lead, *rest, *(["efforts"] if "efforts" in iv else [])]}
+        out = {
+            **{k: out[k] for k in ("power_curve",) if k in out},
+            **{k: v for k, v in out.items() if k not in ("power_curve", "intervals")},
+            "intervals": out["intervals"],
+        }
+    elif "power_curve" in out:
+        out = {"power_curve": out.pop("power_curve"), **out}
     return out
 
 

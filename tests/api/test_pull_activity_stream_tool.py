@@ -134,7 +134,7 @@ def test_pull_by_workout_id_fetches_analyzes_and_caches(athletes_dir, wired) -> 
     assert res["series_source"] == "re-pulled from intervals.icu"
     assert res["target_watts"] == 239
     assert _FakeIntervalsClient.last_id == ACTIVITY_ID
-    intervals = res["intervals"]
+    intervals = res["analytics"]["intervals"]
     assert intervals is not None and intervals["efforts_detected"] > 0
     assert all(e["target_w"] == 239 for e in intervals["efforts"])
     # cached: series row + analytics persisted in place
@@ -154,7 +154,7 @@ def test_pull_by_explicit_activity_id_without_local_workout(athletes_dir, wired)
     assert res["cached"] is False
     assert res["workout_id"] is None
     assert _FakeIntervalsClient.last_id == "i999999"
-    assert res["intervals"]["efforts_detected"] > 0
+    assert res["analytics"]["intervals"]["efforts_detected"] > 0
 
 
 def test_pull_by_activity_id_matches_local_workout_and_caches(athletes_dir, wired) -> None:
@@ -166,7 +166,7 @@ def test_pull_by_activity_id_matches_local_workout_and_caches(athletes_dir, wire
     assert res["cached"] is True
     assert res["workout_id"] == str(w.id)
     assert res["target_source"] == "none"
-    assert all(e["target_w"] is None for e in res["intervals"]["efforts"])
+    assert all(e["target_w"] is None for e in res["analytics"]["intervals"]["efforts"])
 
 
 def test_pull_recovers_target_from_matched_planned_session(athletes_dir, wired) -> None:
@@ -206,7 +206,7 @@ def test_pull_recovers_target_from_matched_planned_session(athletes_dir, wired) 
     res = _handlers(store)["pull_activity_stream"]({"workout_id": str(w.id)})
 
     assert res["target_source"] == "matched planned session structure"
-    assert res["intervals"]["efforts"][0]["target_w"] == 248
+    assert res["analytics"]["intervals"]["efforts"][0]["target_w"] == 248
 
 
 def test_pull_with_ftp_and_pct(athletes_dir, wired) -> None:
@@ -267,7 +267,7 @@ def test_pull_repulls_and_corrects_stale_local_cross_train_tag(athletes_dir, wir
     assert res["previous_sport"] == "cross_train"
     reloaded = store.get_workout("renee", w.id)
     assert reloaded.sport == "bike"
-    assert reloaded.analytics.intervals.efforts_detected == res["intervals"]["efforts_detected"]
+    assert reloaded.analytics.intervals.efforts_detected == res["analytics"]["intervals"]["efforts_detected"]
 
 
 def test_pull_by_activity_id_match_also_corrects_stale_local_tag(athletes_dir, wired) -> None:

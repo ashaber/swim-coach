@@ -4203,7 +4203,8 @@ def _handle_reanalyze_workout(
         "target_watts": target_w,
         "target_source": target_source,
         "series_source": series_source,
-        "intervals": intervals.model_dump(mode="json") if intervals is not None else None,
+        # The same coach-facing view `get_workouts` renders (power curve, starts table, efforts).
+        "analytics": analytics_for_coach(new_analytics),
     }
     if not has_detailed_analyzer(workout.sport):
         result["note"] = f"re-ran analysis; no detailed analyzer for {workout.sport} yet" + (
@@ -4705,7 +4706,7 @@ def _handle_pull_activity_stream(
         "cached": persisted,
         "sport_corrected": sport_corrected,
         "previous_sport": previous_sport,
-        "intervals": intervals.model_dump(mode="json") if intervals is not None else None,
+        "analytics": analytics_for_coach(new_analytics),
     }
 
 

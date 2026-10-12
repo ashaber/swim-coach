@@ -72,3 +72,53 @@ def test_race_pace_reps_unchanged(result):
     reps = [e for e in result.efforts if e.duration_s == 180.0]
     assert [e.avg_w for e in reps] == [280.5, 218.0, 247.7, 219.9, 238.0]
     assert reps[0].fade_pct is not None and "target" in reps[0].verdict
+
+
+def test_efforts_include_every_start_and_agree_with_the_starts_table(result):
+    """Start 1's series window fell in a recording gap and was dropped; the burst search
+    still found it, so `efforts` must carry it with the table's numbers."""
+    by_start = {e.start_s: e for e in result.efforts}
+    for st in result.starts:
+        e = by_start[st.burst_start_s]
+        assert abs(e.avg_w - st.avg_w) <= 2
+        assert f"peak {st.peak_w} W, best 5 s {st.best_5s_w} W" in e.verdict
+
+
+def test_warmup_builds_are_labelled_not_scored(result):
+    builds = [e for e in result.efforts if e.duration_s <= 5]
+    assert [e.avg_w for e in builds] == [161.2, 130.8]
+    assert all(e.verdict == "warm-up build (not scored)" for e in builds)
+
+
+def test_coach_view_drops_warmup_builds_and_leads_with_starts_and_curve():
+    from swim_coach.models import Athlete
+    from swim_coach.analysis import AnalysisContext
+    from swim_coach.models import Workout
+    from swim_coach.power_curve import analytics_for_coach
+    import uuid
+
+    d = json.loads((FIX / "ride_2026_10_10_starts_race_pace.json").read_text())
+    s = Session.model_validate(d["planned_session"])
+    athlete = Athlete(id=uuid.UUID(int=1), slug="t", name="T", **d["athlete_profile"])
+    an = Workout.model_validate(d["workout"]).analyze(
+        AnalysisContext(athlete=athlete, session=s, kind=s.kind, series=d["series"])
+    )
+    view = analytics_for_coach(an)
+    keys = list(view["intervals"])
+    assert keys.index("starts") < keys.index("starts_note") < keys.index("efforts")
+    assert list(view).index("power_curve") < list(view).index("intervals")
+    five = next(p for p in view["power_curve"] if p["duration"] == "5s")
+    assert abs(five["watts"] - 956) <= 2
+    assert not any(e["verdict"] == "warm-up build (not scored)" for e in view["intervals"]["efforts"])
+
+
+def test_coach_view_renumbers_efforts_and_tags_start_n(result):
+    from swim_coach.power_curve import _tag_start_efforts
+
+    iv = {
+        "starts": [{"n": s.n, "burst_start_s": s.burst_start_s} for s in result.starts],
+        "efforts": [{"n": e.n, "start_s": e.start_s} for e in result.efforts if e.duration_s > 5],
+    }
+    _tag_start_efforts(iv)
+    assert [e["n"] for e in iv["efforts"]] == list(range(1, len(iv["efforts"]) + 1))
+    assert [e.get("start_n") for e in iv["efforts"][:6]] == [1, 2, 3, 4, 5, None]

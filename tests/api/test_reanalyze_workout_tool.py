@@ -73,7 +73,7 @@ def test_reanalyze_with_explicit_target_watts(athletes_dir) -> None:
     assert res["target_watts"] == 239
     assert res["target_source"] == "target_watts"
     assert res["series_source"] == "stored series"
-    intervals = res["intervals"]
+    intervals = res["analytics"]["intervals"]
     assert intervals is not None and intervals["efforts_detected"] > 0
     assert all(e["target_w"] == 239 for e in intervals["efforts"])
     # Persisted in place.
@@ -138,7 +138,7 @@ def test_reanalyze_recovers_target_from_matched_planned_session(athletes_dir) ->
     res = _handlers(store)["reanalyze_workout"]({"workout_id": str(w.id)})
     assert res["reanalyzed"] is True
     assert res["target_source"] == "matched planned session structure"
-    intervals = res["intervals"]
+    intervals = res["analytics"]["intervals"]
     # first two detected efforts get the prescribed 245W rep target
     assert intervals["efforts"][0]["target_w"] == 245
     assert intervals["prescribed_count"] == 2
@@ -150,7 +150,7 @@ def test_reanalyze_no_target_still_detects_on_dynamic_threshold(athletes_dir) ->
     res = _handlers(store)["reanalyze_workout"]({"workout_id": str(w.id)})
     assert res["reanalyzed"] is True
     assert res["target_source"] == "none"
-    intervals = res["intervals"]
+    intervals = res["analytics"]["intervals"]
     assert intervals["efforts_detected"] > 0
     assert all(e["target_w"] is None for e in intervals["efforts"])
 
@@ -194,7 +194,7 @@ def test_reanalyze_non_bike_workout_gets_default_analytics_and_a_note(athletes_d
     store = FileStore(base_dir=athletes_dir)
     w = _seed_other_sport(store, "swim_pool", series=True)
     res = _handlers(store)["reanalyze_workout"]({"workout_id": str(w.id), "target_watts": 239})
-    assert res["reanalyzed"] is True and res["intervals"] is None
+    assert res["reanalyzed"] is True and res["analytics"]["intervals"] is None
     assert "no detailed analyzer for swim_pool yet" in res["note"]
     assert "pull_activity_stream" not in res["note"]  # a genuinely non-bike sport gets no mis-tag hint
     assert store.list_workouts("renee")[-1].analytics.intervals is None

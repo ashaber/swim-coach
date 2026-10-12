@@ -90,10 +90,12 @@ from swim_coach.rep_shape import (
     technical_verdict,
     STREAM_MIN_COVERAGE,
 )
+from swim_coach.power_curve import WARMUP_BUILD_VERDICT
 from swim_coach.zones import bike_zone_table
 from swim_coach.prescription import (
     Located,
     PrescribedRep,
+    RepWindow,
     REP_COMPLETED_MIN_FRAC_OF_LOW,
     locate_prescribed_reps,
     window_indices,
@@ -1807,7 +1809,7 @@ def _burst_verdict(
     opener: bool = False,
 ) -> str:
     if read is None:
-        return "no clear burst found near the prescribed window"
+        return WARMUP_BUILD_VERDICT if opener else "no clear burst found near the prescribed window"
     b = read.first
     held = f"held {held_s:.0f} of {intended_s:.0f} s; " if held_s is not None else ""
     if read.second is not None:
@@ -2009,6 +2011,21 @@ def _partial_stream_effort(
     )
 
 
+def _windows_with_found_bursts(
+    located: Located, scored: list[tuple[PrescribedRep, StartBurst, _StartRead | None]]
+) -> list[RepWindow]:
+    """`located.windows` plus a window at the located burst for every start rep that has none
+    (the series fallback drops a window the stream only half covers, yet the burst search
+    still finds that start), in prescription order -- so `efforts` agrees with `starts`."""
+    have = {w.rep.index for w in located.windows}
+    extra = [
+        RepWindow(rep, read.first.start_s, read.first.start_s + read.first.length_s)
+        for rep, _sb, read in scored
+        if read is not None and rep.index not in have
+    ]
+    return sorted([*located.windows, *extra], key=lambda w: w.rep.index)
+
+
 def _analyze_prescribed_reps(
     series: dict,
     located: Located,
@@ -2029,7 +2046,8 @@ def _analyze_prescribed_reps(
     efforts: list[IntervalEffort] = []
     rep_of: dict[int, PrescribedRep] = {}
     win_of: dict[int, tuple[float, float]] = {}
-    for win in located.windows:
+    scored = analyze_start_bursts(series, located, ftp_watts=ftp_watts)
+    for win in _windows_with_found_bursts(located, scored):
         idx = window_indices(t_s, win.start_s, win.end_s)
         if idx is None:
             continue
@@ -2066,7 +2084,6 @@ def _analyze_prescribed_reps(
     if not efforts:
         return None
 
-    scored = analyze_start_bursts(series, located, ftp_watts=ftp_watts)
     by_index = {rep.index: (sb, b) for rep, sb, b in scored}
     # A set where no burst was found at all (e.g. 5 s warm-up "bursts" ridden easy) is
     # not a starts table -- its efforts just lose the meaningless fade verdict.
