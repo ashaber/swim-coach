@@ -91,7 +91,7 @@ def _bike_setup(**event_overrides):
     return athlete, event, macro
 
 
-def _mk_session(offset: int, sport: str, zone: str | None, purpose: str = "x", *, week_start=START):
+def _mk_session(offset: int, sport: str, zone: str | None, purpose: str = "x", *, week_start=START, kind=None):
     return Session(
         id=uuid.uuid4(),
         athlete_id=ATHLETE_ID,
@@ -103,6 +103,7 @@ def _mk_session(offset: int, sport: str, zone: str | None, purpose: str = "x", *
         intensity={"zone": zone} if zone else {"anchor": "rpe"},
         purpose=purpose,
         status="planned",
+        kind=kind,
     )
 
 
@@ -154,8 +155,8 @@ def test_realism_ok_for_a_realistic_multimodal_week():
         _mk_session(3, "bike", "Z2"),
         _mk_session(3, "strength", None),
         _mk_session(4, "strength", None),
-        _mk_session(5, "bike", "Z5", "RACE — CX #1"),
-        _mk_session(6, "bike", "Z5", "RACE — CX #2"),
+        _mk_session(5, "bike", "Z5", "RACE — CX #1", kind="race"),
+        _mk_session(6, "bike", "Z5", "RACE — CX #2", kind="race"),
     ]
     assert evaluate_week_realism(sessions) == []
 
@@ -182,8 +183,8 @@ def test_realism_races_are_additive_not_counted_against_bike_ceiling():
     # 5 easy bike days + 2 race days = 7 bike sessions, but races don't
     # count -> only the 5 training days matter, which is under the ceiling.
     sessions = [_mk_session(i, "bike", "Z2") for i in range(5)] + [
-        _mk_session(5, "bike", "Z5", "RACE — CX #1"),
-        _mk_session(6, "bike", "Z5", "RACE — CX #2"),
+        _mk_session(5, "bike", "Z5", "RACE — CX #1", kind="race"),
+        _mk_session(6, "bike", "Z5", "RACE — CX #2", kind="race"),
     ]
     assert evaluate_week_realism(sessions) == []
 
@@ -336,13 +337,13 @@ def test_week_containing_two_back_to_back_races_gets_two_race_sessions():
     week = generate_week(
         athlete, macro, _iso_week(ws), ws, primary_sport="bike", event=event, events=[event, r1, r2]
     )
-    race_sessions = [s for s in week.sessions if s.purpose.strip().upper().startswith("RACE — ")]
+    race_sessions = [s for s in week.sessions if s.kind == "race"]
     assert len(race_sessions) == 2
     assert {(s.date - ws).days for s in race_sessions} == {5, 6}
     # no VO2/threshold training ride the same week -- just a primer + races
     non_race_bike = [
         s for s in week.sessions
-        if s.sport == "bike" and not s.purpose.strip().upper().startswith("RACE — ")
+        if s.sport == "bike" and not s.kind == "race"
     ]
     for s in non_race_bike:
         assert "opener" in s.purpose.lower() or s.intensity.get("zone") in ("Z1", "Z2")
@@ -357,7 +358,7 @@ def test_race_week_bike_sessions_do_not_appear_without_events_param():
     week = generate_week(
         athlete, macro, _iso_week(ws), ws, primary_sport="bike", event=event
     )
-    assert not any(s.purpose.strip().upper().startswith("RACE — ") for s in week.sessions)
+    assert not any(s.kind == "race" for s in week.sessions)
 
 
 # ===========================================================================

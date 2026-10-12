@@ -25,7 +25,8 @@ import yaml
 from pydantic import ValidationError
 
 from swim_coach.adapt import adapt_week
-from swim_coach.analytics import CARDIAC_DRIFT_FLAG_PCT, compute_analytics
+from swim_coach.analysis import build_analysis_context
+from swim_coach.analytics import CARDIAC_DRIFT_FLAG_PCT
 from swim_coach.athlete_time import athlete_today
 from swim_coach.load import (
     acute_chronic_ratio,
@@ -702,28 +703,7 @@ def _analytics_summary_text(analytics) -> str:
 
 
 def _build_workout_from_draft(draft: WorkoutDraft, athlete_id, *, raw_ref: str | None) -> Workout:
-    return Workout(
-        id=uuid4(),
-        athlete_id=athlete_id,
-        date=draft.date,
-        sport=draft.sport,
-        source=draft.source,
-        distance_m=draft.distance_m,
-        duration_min=draft.duration_min,
-        avg_pace_s_per_100m=draft.avg_pace_s_per_100m,
-        rpe=draft.rpe,
-        sets=draft.sets,
-        planned_session_id=draft.planned_session_id,
-        raw_ref=raw_ref,
-        notes=draft.notes,
-        avg_hr=draft.avg_hr,
-        max_hr=draft.max_hr,
-        laps=draft.laps,
-        lengths=draft.lengths,
-        pauses=draft.pauses,
-        sport_detail=draft.sport_detail,
-        started_at=draft.started_at,
-    )
+    return draft.to_workout(athlete_id=athlete_id, raw_ref=raw_ref).model_copy(update={"analytics": None})
 
 
 def _cmd_ingest(args: argparse.Namespace, store: StoreInterface) -> int:
@@ -781,16 +761,8 @@ def _cmd_ingest(args: argparse.Namespace, store: StoreInterface) -> int:
             series_ref = store.save_series(slug, workout.date, workout.sport, workout.id, draft.series)
         workout.series_ref = series_ref
 
-        workout.analytics = compute_analytics(
-            laps=workout.laps,
-            lengths=workout.lengths,
-            pauses=workout.pauses,
-            series=draft.series,
-            elapsed_min=draft.elapsed_min,
-            moving_min=workout.duration_min,
-            sport=workout.sport,
-            home_elevation_m=athlete.home_elevation_m,
-        )
+        ctx = build_analysis_context(store, slug, workout, series=draft.series, elapsed_min=draft.elapsed_min)
+        workout.analytics = workout.analyze(ctx)
 
         store.save_workout(slug, workout)
         output["saved"] = True
@@ -815,7 +787,7 @@ def _cmd_analyze(args: argparse.Namespace, store: StoreInterface) -> int:
     as skipped, not an error."""
     slug = args.athlete
     try:
-        athlete = store.load_athlete(slug)
+        store.load_athlete(slug)  # fail early if the athlete is missing
     except Exception as exc:  # noqa: BLE001
         return _error_from_exception(_error_label(store, slug, "profile.yaml"), exc)
 
@@ -867,16 +839,8 @@ def _cmd_analyze(args: argparse.Namespace, store: StoreInterface) -> int:
             series_ref = store.save_series(slug, workout.date, workout.sport, workout.id, draft.series)
         workout.series_ref = series_ref
 
-        workout.analytics = compute_analytics(
-            laps=workout.laps,
-            lengths=workout.lengths,
-            pauses=workout.pauses,
-            series=draft.series,
-            elapsed_min=draft.elapsed_min,
-            moving_min=workout.duration_min,
-            sport=workout.sport,
-            home_elevation_m=athlete.home_elevation_m,
-        )
+        ctx = build_analysis_context(store, slug, workout, series=draft.series, elapsed_min=draft.elapsed_min)
+        workout.analytics = workout.analyze(ctx)
 
         store.save_workout(slug, workout)
         entry["sport"] = workout.sport

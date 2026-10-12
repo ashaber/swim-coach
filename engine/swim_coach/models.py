@@ -34,6 +34,16 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 # comment.
 Sport = Literal["swim_pool", "swim_ow", "strength", "recovery", "cross_train", "bike"]
 
+# What a session/workout IS, for every sport (the single place that decides how it is analysed):
+#   workout   -- has a prescription (structured steps) to execute and be scored against
+#   race      -- an event
+#   free_ride -- no structure, even when it sits on the schedule (e.g. a standing group ride)
+#                (includes a race-week "sharpening" session earlier in the week, library/38)
+#   opener    -- the session the DAY BEFORE a race: never evaluated/scored
+#   warmup    -- the race-day warm-up, earlier the same day as the race: never evaluated/scored
+#                (opener and warmup still get load, base analytics and the power curve)
+SessionKind = Literal["workout", "race", "free_ride", "opener", "warmup"]
+
 _ISO_WEEK_RE = re.compile(r"^\d{4}-W\d{2}$")
 _VALID_ZONES = {"Z1", "Z2", "Z3", "Z4", "Z5"}
 _VALID_ANCHORS = {"css_pace", "rpe", "hr"}
@@ -766,6 +776,10 @@ class Session(BaseModel):
     # additive field in this file.
     status: Literal["planned", "completed", "skipped", "replaced"] = "planned"
     is_indoor: bool | None = None
+    # See `SessionKind`. Additive/optional (stored in JSONB, no SQL migration). NO string guessing:
+    # the coach/generator tag new sessions; rows that predate it stay None (read as "workout" via
+    # `effective_kind`) until `scripts/backfill_session_kind.py` tags the real races/warm-ups.
+    kind: SessionKind | None = None
     # Engine/cycling-coach Part C (delivery/logging): the lightweight signal
     # this build's own brief asked for -- "does this bike session need the
     # outdoor Garmin/intervals.icu push, or the indoor/trainer .zwo export"
@@ -779,6 +793,13 @@ class Session(BaseModel):
     # `sport == "bike"` today; every other sport ignores this field. Purely
     # additive/optional, no schema_version bump, same convention as every
     # other additive field in this file.
+
+    @property
+    def effective_kind(self) -> SessionKind:
+        """`kind`, defaulting to "workout" for a session nobody tagged (rows that predate `kind`
+        keep `kind=None` in storage so the one-time backfill, `scripts/backfill_session_kind.py`,
+        can tell untagged from explicitly tagged)."""
+        return self.kind or "workout"
 
     @field_validator("intensity")
     @classmethod
@@ -1827,12 +1848,29 @@ class Workout(BaseModel):
     # Additive/optional so every existing Workout YAML/row (with neither key)
     # keeps validating unchanged -- no schema_version bump.
     chat_messages: list[WorkoutChatMessage] = Field(default_factory=list)
+    # See `SessionKind`. `kind` is DERIVED (`swim_coach.analysis.derive_workout_kind`: matched
+    # session's kind, else a same-sport event that day -> race, else free_ride); `kind_override`
+    # is the athlete/coach's own correction and wins (`effective_kind`). Additive/optional.
+    kind: SessionKind | None = None
+    kind_override: SessionKind | None = None
     # Deterministic mute switch: a plain boolean, not something inferred from
     # scanning message history, so it's a reliable control either party (or
     # the AI itself, told to recognize an explicit "stop responding here")
     # can flip -- see `set_workout_chat_muted` (backend/app/tools.py) and
     # PATCH /api/workouts/{id}'s `chat_ai_muted` field.
     chat_ai_muted: bool = False
+
+    @property
+    def effective_kind(self) -> SessionKind | None:
+        """The athlete/coach override when set, else the derived `kind`."""
+        return self.kind_override or self.kind
+
+    def analyze(self, ctx: "AnalysisContext") -> "WorkoutAnalytics":
+        """Analytics for this workout via the sport's registered analyzer
+        (`swim_coach.analysis`). Lazy import: analysis -> analytics -> models."""
+        from swim_coach.analysis import analyze_workout
+
+        return analyze_workout(self, ctx)
 
 
 class ExecutionComponent(BaseModel):

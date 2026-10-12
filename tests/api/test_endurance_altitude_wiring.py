@@ -33,12 +33,13 @@ def test_attach_planned_session_runs_analyzer_for_unstructured_session(
 ) -> None:
     store = FileStore(base_dir=athletes_dir)
     profile = store.load_athlete("renee").model_copy(update={"ftp_watts": 278.0, "home_elevation_m": 823.0})
+    store.save_athlete(profile)  # the analyzer reads thresholds from the stored athlete
     session = Session.model_validate(ride["planned_session"])
     assert session.structured is None
     monkeypatch.setattr(enrich, "find_planned_session", lambda *_a, **_k: session)
 
     out = enrich.attach_planned_session(
-        _workout(ride), store=store, slug="renee", profile=profile, series=ride["series"]
+        _workout(ride), store=store, slug="renee", series=ride["series"]
     )
 
     assert out.planned_session_id == session.id
@@ -53,10 +54,11 @@ def test_coach_focused_workout_context_carries_ride_altitude_note(
 ) -> None:
     store = FileStore(base_dir=athletes_dir)
     profile = store.load_athlete("renee").model_copy(update={"ftp_watts": 278.0, "home_elevation_m": 823.0})
+    store.save_athlete(profile)  # the analyzer reads thresholds from the stored athlete
     session = Session.model_validate(ride["planned_session"])
     monkeypatch.setattr(enrich, "find_planned_session", lambda *_a, **_k: session)
     out = enrich.attach_planned_session(
-        _workout(ride), store=store, slug="renee", profile=profile, series=ride["series"]
+        _workout(ride), store=store, slug="renee", series=ride["series"]
     )
 
     text = render_focused_workout(out, athlete=profile, hr_max=None, wellness=[])

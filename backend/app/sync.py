@@ -397,10 +397,9 @@ def _ingest_activity(
             series_ref=draft.series_ref,
             external_id=f"intervals:{activity_id}",
             sport_detail=draft.sport_detail,
+            kind=draft.kind,
         )
-        workout = attach_planned_session(
-            workout, store=store, slug=slug, profile=profile, series=draft.series
-        )
+        workout = attach_planned_session(workout, store=store, slug=slug, series=draft.series)
         store.save_workout(slug, workout)
         log.info(
             "sync.workout_saved",

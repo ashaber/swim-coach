@@ -501,8 +501,13 @@ def compute_analytics(
     lthr_bpm: float | None = None,
     race: bool = False,
     session_text: str | None = None,
+    with_intervals: bool = True,
 ):
     """Build a swim_coach.models.WorkoutAnalytics from parsed workout parts.
+
+    Internal numeric-args helper: the public path is `Workout.analyze(ctx)`
+    (`swim_coach.analysis`), which owns the kind/threshold decisions and calls this.
+    `with_intervals=False` skips the interval/verdict layer (base numbers only).
 
     Imports WorkoutAnalytics lazily (function-local) to avoid a circular
     import at module load time (models.py does not import analytics.py, but
@@ -552,7 +557,7 @@ def compute_analytics(
         # were nonsense numbers derived from speed (2026-09-29 bike showed a
         # "first_half_pace_s_per_100m" of 11 s).
         split_label, first_pace, second_pace, swolf = None, None, None, None
-    intervals = interval_analysis.analyze(
+    intervals = None if not with_intervals else interval_analysis.analyze(
         series,
         sport=sport,
         target_w=interval_target_w,
