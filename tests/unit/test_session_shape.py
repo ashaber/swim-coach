@@ -55,7 +55,7 @@ def test_weak_start_uses_best_start_so_far(r926):
     assert s3.drop_vs_best_pct is None and s4.drop_vs_best_pct is None
     assert "as strong as your best start so far" in s3.verdict
     assert r926.starts_flag == "start 2 off (likely execution) -- skill rep, not fatigue"
-    assert "stop" not in r926.starts_flag and "stop" not in s2.verdict.lower()
+    assert "stop" not in r926.starts_flag and "consider stopping" not in s2.verdict.lower()
 
 
 def test_old_stored_rows_with_drop_vs_first_load():

@@ -80,7 +80,7 @@ from swim_coach.models import (
 )
 
 from swim_coach.race_start import analyze_race_start
-from swim_coach.start_trace import StartTrace, read_start_trace, trace_clauses
+from swim_coach.start_trace import StartTrace, build_start_findings, read_start_trace, trace_clauses
 from swim_coach.rep_shape import (
     TECH_HR_HELD_PCT_LTHR,
     TECH_MIN_REP_S,
@@ -1926,7 +1926,7 @@ def analyze_start_bursts(
                     k: getattr(trace, k)
                     for k in ("trace_w", "trace_cadence", "trace_t0", "launch_s", "launch_rate_w_per_s",
                               "dips", "sustained_s", "sustain_floor_w", "stopped_at_s",
-                              "stopped_early_s", "restart")
+                              "stopped_early_s", "restart", "launch_read", "launch_note")
                 }
                 if trace is not None
                 else {}
@@ -2240,6 +2240,7 @@ def _analyze_prescribed_reps(
         "rounds": rounds,
         "starts": starts,
         "starts_flag": _starts_flag(starts),
+        "start_findings": build_start_findings(starts),
         "technical_reps": len(technical_ns) or None,
         "hr_rise_across_reps_bpm": hr_rise,
     }

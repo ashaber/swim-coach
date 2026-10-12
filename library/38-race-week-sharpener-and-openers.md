@@ -125,31 +125,12 @@ rides, not cited values; each carries a `Test:` line in its code comment.
 
 ## Reading a start trace
 
-**`Coach judgment:`** Each start in the starts table carries a 1 Hz power trace
-(3 s before the burst to 3 s after the effort) and a phase read; no source pins
-any threshold below, they are fitted to the real 10/10 and 9/26 rides. Read a
-start in this order, and quote the phases, not the prescribed lap average.
+**`Coach judgment:`** Each start in the starts table carries a 1 Hz power trace and a
+phase read (launch, shift dips, sustain, stop against the planned end, restart). The bands,
+thresholds and the finding -> cause -> practice-cue table live in
+`39-cycling-start-analysis.md` (sections 2, 6 and 7), which cites the start evidence; the
+analyzer constants cite that file, not this one.
 
-- **Launch.** From the last sample at or under `LAUNCH_RISE_FRAC_FTP = 0.5` x FTP
-  to the peak, in seconds and watts per second. A slow launch or a low peak is
-  usually a missed clip or a wrong gear.
-- **Shift dips.** A drop of at least `DIP_MIN_DROP_FRAC_PEAK = 0.2` of the peak
-  within `DIP_MAX_DROP_S = 2` s that stays above `DIP_FLOOR_FRAC_PEAK = 0.4` of
-  the peak and recovers by `DIP_RECOVER_W = 100` W within `DIP_RECOVER_S = 3` s
-  is "likely shift/bobble", a skill note and not a fitness one. A deeper or
-  slower drop is a brake or a stop.
-- **Sustain.** Seconds at or above `SUSTAIN_FRAC_FTP = 2` x FTP before the stop.
-- **Stop vs the planned end.** The effort stops when power falls under
-  `STOP_FRAC_FTP = 1` x FTP and stays there `STOP_MIN_S = 2` s; it is "stopped
-  early" when that is at least `STOPPED_EARLY_MIN_S = 2` s before the intended
-  hold. Say it plainly: the athlete quit before the step ended. The stop is
-  searched after the last burst, so the prescribed brake of a double-burst
-  start is not a stop.
-- **Restart.** Power back over FTP after the stop is a restart (gap, length,
-  average, peak); under `RESTART_WEAK_FRAC_PEAK = 0.6` of the start's peak it
-  reads "weak" and is usually the athlete trying to finish the step.
-
-**Test:** on the real 10/10 start 4 the trace reads a 1100 W launch in ~5 s, a
-shift dip to 721 W, a stop ~9 s before the 30 s mark, and a weak ~480 W
-restart, against the athlete's own read of the graph; recalibrate if his reads
-of other starts disagree by more than 1-2 s.
+**Test:** on the real 10/10 start 4 the trace reads a 1100 W launch in ~5 s, a shift dip to
+721 W, a stop ~9 s before the 30 s mark and a weak ~480 W restart, against the athlete's own
+read of the graph.

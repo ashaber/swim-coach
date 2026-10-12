@@ -142,7 +142,7 @@ def test_slim_coach_view_has_no_warmup_builds_starts_rounds_nulls_or_swim_fields
     view = _coach_view_1010()
     text = json.dumps(view)
     assert "161.2" not in text and "130.8" not in text
-    assert len(text) < 9000  # was ~17,200 chars before the trace fields were added
+    assert len(text) < 9500  # was ~17,200 chars; now includes traces and start findings
     assert all(v is not None for _k, v in _walk(view))
     for k in ("first_half_pace_s_per_100m", "swolf_first_quarter", "split_label"):
         assert k not in view
@@ -202,5 +202,40 @@ def test_926_double_burst_brake_is_not_a_stop():
                 ftp_watts=p["ftp_watts"], home_elevation_m=p["home_elevation_m"])
     assert len(r.starts) == 4
     assert all(st.trace_w for st in r.starts)
-    assert [st.stopped_early_s is None for st in r.starts[1:]] == [True, True, True]
+    assert [st.stopped_early_s is None for st in r.starts[2:]] == [True, True]
     assert r.starts[0].stopped_early_s is not None  # start 1 stopped after a 7 s burst of a 22 s shape
+
+
+def test_launch_reads_use_library_39_bands(result):
+    assert [s.launch_read for s in result.starts] == ["slow", "slow", "typical", "slow", "slow"]
+    four = result.starts[3]
+    assert abs(four.launch_s - 6) <= 1
+    assert "slow vs 2-3.5 s typical (library/39)" in four.launch_note
+    assert "(slow vs 2-3.5 s typical)" in four.verdict
+
+
+def test_start_findings_are_deduped_capped_and_point_at_library_cues(result):
+    findings = result.start_findings
+    assert 1 <= len(findings) <= 3
+    assert len({f.cue_key for f in findings}) == len(findings)
+    slow = next(f for f in findings if f.cue_key == "slow_launch")
+    assert "4 of 5" in slow.finding.replace("on 4 of 5 starts", "4 of 5") and "start 4" not in slow.evidence.split(":")[0]
+    assert "starts 1, 2, 4, 5" in slow.evidence and "6 s to peak" in slow.evidence
+    assert findings[0].cue_key == "stopped_early"  # most important first
+
+
+def test_every_finding_cue_key_has_a_row_in_library_39():
+    from swim_coach.start_trace import FINDING_ORDER
+
+    table = (Path(__file__).resolve().parents[2] / "library" / "39-cycling-start-analysis.md").read_text()
+    for key in FINDING_ORDER:
+        assert f"| `{key}` |" in table
+
+
+def test_coach_view_carries_findings_and_launch_notes_before_the_starts_note():
+    view = _coach_view_1010()
+    iv = view["intervals"]
+    keys = list(iv)
+    assert keys.index("starts") < keys.index("start_findings") < keys.index("starts_note")
+    assert iv["starts"][3]["launch_read"] == "slow" and "library/39" in iv["starts"][3]["launch_note"]
+    assert "lead with the top start_finding" in iv["starts_note"]

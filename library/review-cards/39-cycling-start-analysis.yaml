@@ -1,0 +1,52 @@
+schema_version: 1
+file: 39-cycling-start-analysis.md
+cards:
+- section: 1-metrics-used-to-analyze-a-maximal-start
+  heading: 1. Metrics used to analyze a maximal start
+  summary: Starts are read by peak power, time to peak, torque and cadence at peak and decline; fatigue index is the least
+    reliable metric, so use mean power over a fixed window.
+  recommendation: Judge a start on its 3-5 s mean power and time to peak, never on fatigue index.
+  content_hash: d32c244ad3aa7ec44ba59fae9f7c1f9ba81ccd33ef5afbb2d77e8f4237d337f6
+- section: 2-time-course-of-a-maximal-start
+  heading: 2. Time-course of a maximal start
+  summary: Time to peak is about 2-3.5 s in BMX field starts; peak sits near 100-130 rpm; power falls steadily per revolution.
+    Evidence is adapted from BMX, track and lab sprints, not CX.
+  recommendation: Call a launch slow above 3.5 s to peak and a rolling build above 8 s; compare an athlete only with their
+    own best start.
+  content_hash: df187132be60005bcaee6253ea3e0471180d7b6d7027a46a9888fc4e6a1659de
+- section: 3-gear-choice-and-shift-dips
+  heading: 3. Gear choice and shift dips
+  summary: A modestly bigger gear raised BMX peak power without slowing time to peak; no research exists on shift dips, only
+    practitioner advice to ease pressure while shifting.
+  recommendation: Suggest testing one gear up on clean starts and shifting once, early, with a half-stroke of eased pressure.
+  content_hash: e555425779ee24120db6d0078a13c05e41aaa1fc37ac4c98266b6b042c42c93c
+- section: 4-repeated-starts-recovery-decline-variability
+  heading: '4. Repeated starts: recovery, decline, variability'
+  summary: Repeated-sprint decline across reps is fatigue; one low rep among steady ones is execution. Recovery over 3 minutes
+    should hold peak within about 5%.
+  recommendation: Treat an isolated weak start as a skill rep and only a steady decline as fatigue.
+  content_hash: b011238e710dae3b391981c06c9e7e8c5043bd3fd0e8b3d7f985317e4eaa83fd
+- section: 5-cyclocross-mtb-starts-and-the-holeshot
+  heading: 5. Cyclocross/MTB starts and the holeshot
+  summary: XCO and BMX evidence shows a fast start then steadier pacing, and start position strongly predicts finish; cyclocross
+    itself has only practitioner material.
+  recommendation: Tell the athlete the start matters, and check that the first minute of a race exceeds the lap average.
+  content_hash: 3067f47ac5cbe5656411cefc57999a7181f78f1d6d97ce6c1c5836f548c110a0
+- section: 6-reading-one-start-s-trace
+  heading: 6. Reading one start's trace
+  summary: Power meters are unreliable above 500 W at 1 Hz, so use 3-5 s means. Phase labels (launch, shift dip, sustain,
+    stopped early, restart) are Coach judgment with stated thresholds.
+  recommendation: Describe a start by its phases and name stops against the planned end, not by the 1 s peak.
+  content_hash: 8805d640489f461b88955fec929ed24e5e15d7823658b80f1c552e012c7ddb22
+- section: what-this-means-for-the-analyzer
+  heading: What this means for the analyzer
+  summary: 'Maps the evidence to analyzer outputs: launch time and rate, shift dips, sustained power as window mean, stop
+    against intended length, restart and rep-to-rep variability.'
+  recommendation: none -- background only
+  content_hash: 6686c2becc832bfa689526aae1f6bf7922a650644f9d6e16de72589fcb7d3929
+- section: 7-finding-likely-cause-practice-cue
+  heading: 7. Finding -> likely cause -> practice cue
+  summary: Table from each analyzer start finding to a likely cause and one practice cue; Coach judgment except the gear lever
+    from BMX gear-ratio work.
+  recommendation: Lead with the top start finding and give its one cause and one practice cue from the table.
+  content_hash: 6ff025afce65fd179a99442ac35f4abe46e18fa11107209eaea168dbb4dfd86e

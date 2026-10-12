@@ -37,6 +37,7 @@
     "rounds": [],
     "starts": [],
     "starts_flag": null,
+    "start_findings": [],
     "technical_reps": null,
     "hr_rise_across_reps_bpm": null,
     "race_start": {
@@ -244,7 +245,7 @@
       "hr_drift_bpm": 8.2,
       "grade_delta_pct_pts": -2.9,
       "terrain_flag": null,
-      "verdict": "held 7 of 30 s; peak 977 W, best 5 s 877 W; launch 46->977 W in 6 s; sustained >=552 W for 7 s; stopped at 9 s, 21 s before the 30 s mark (reference start)",
+      "verdict": "held 7 of 30 s; peak 977 W, best 5 s 877 W; launch 46->977 W in 6 s (slow vs 2-3.5 s typical); sustained >=552 W for 7 s; stopped at 9 s, 21 s before the 30 s mark (reference start)",
       "sub_structure": null,
       "altitude_m": 837.3,
       "altitude_gain_m": 14.3,
@@ -277,7 +278,7 @@
       "hr_drift_bpm": 37.9,
       "grade_delta_pct_pts": -4.7,
       "terrain_flag": null,
-      "verdict": "held 16 of 30 s; burst 1 peak 989 W, best 5 s 698 W; 4 s dip to 105 W; burst 2 peak 882 W, best 5 s 758 W; launch 0->989 W in 2 s; sustained >=552 W for 10 s; stopped at 22 s, 8 s before the 30 s mark; weak restart ~565 W for 4 s after a 3 s gap -- 14% below best start (start 1) -- likely execution, not fatigue",
+      "verdict": "held 16 of 30 s; burst 1 peak 989 W, best 5 s 698 W; 4 s dip to 105 W; burst 2 peak 882 W, best 5 s 758 W; launch 0->989 W in 2 s; sustained >=552 W for 10 s; stopped at 18 s, 12 s before the 30 s mark; weak restart ~565 W for 4 s after a 3 s gap -- 14% below best start (start 1) -- likely execution, not fatigue",
       "sub_structure": null,
       "altitude_m": 837.6,
       "altitude_gain_m": 14.6,
@@ -310,7 +311,7 @@
       "hr_drift_bpm": 48.4,
       "grade_delta_pct_pts": -3.1,
       "terrain_flag": null,
-      "verdict": "held 24 of 30 s; burst 1 peak 887 W, best 5 s 709 W; 4 s dip to 203 W; burst 2 peak 967 W, best 5 s 890 W; launch 0->887 W in 4 s; sustained >=552 W for 22 s -- as strong as your best start so far",
+      "verdict": "held 24 of 30 s; burst 1 peak 887 W, best 5 s 709 W; 4 s dip to 203 W; burst 2 peak 967 W, best 5 s 890 W; launch 0->887 W in 5 s (slow vs 2-3.5 s typical); sustained >=552 W for 22 s -- as strong as your best start so far",
       "sub_structure": null,
       "altitude_m": 840.1,
       "altitude_gain_m": 17.1,
@@ -640,7 +641,9 @@
       "stopped_at_s": 9.0,
       "stopped_early_s": 21.0,
       "restart": null,
-      "verdict": "held 7 of 30 s; peak 977 W, best 5 s 877 W; launch 46->977 W in 6 s; sustained >=552 W for 7 s; stopped at 9 s, 21 s before the 30 s mark (reference start)"
+      "launch_read": "slow",
+      "launch_note": "launch 6 s to peak -- slow vs 2-3.5 s typical (library/39)",
+      "verdict": "held 7 of 30 s; peak 977 W, best 5 s 877 W; launch 46->977 W in 6 s (slow vs 2-3.5 s typical); sustained >=552 W for 7 s; stopped at 9 s, 21 s before the 30 s mark (reference start)"
      },
      {
       "n": 2,
@@ -748,15 +751,17 @@
       "dips": [],
       "sustained_s": 10.0,
       "sustain_floor_w": 552,
-      "stopped_at_s": 22.0,
-      "stopped_early_s": 8.0,
+      "stopped_at_s": 18.0,
+      "stopped_early_s": 12.0,
       "restart": {
        "after_gap_s": 3.0,
        "duration_s": 4.0,
        "avg_w": 565,
        "peak_w": 586
       },
-      "verdict": "held 16 of 30 s; burst 1 peak 989 W, best 5 s 698 W; 4 s dip to 105 W; burst 2 peak 882 W, best 5 s 758 W; launch 0->989 W in 2 s; sustained >=552 W for 10 s; stopped at 22 s, 8 s before the 30 s mark; weak restart ~565 W for 4 s after a 3 s gap -- 14% below best start (start 1) -- likely execution, not fatigue"
+      "launch_read": "typical",
+      "launch_note": "launch 2 s to peak -- typical (2-3.5 s, library/39)",
+      "verdict": "held 16 of 30 s; burst 1 peak 989 W, best 5 s 698 W; 4 s dip to 105 W; burst 2 peak 882 W, best 5 s 758 W; launch 0->989 W in 2 s; sustained >=552 W for 10 s; stopped at 18 s, 12 s before the 30 s mark; weak restart ~565 W for 4 s after a 3 s gap -- 14% below best start (start 1) -- likely execution, not fatigue"
      },
      {
       "n": 3,
@@ -859,15 +864,17 @@
        92
       ],
       "trace_t0": 0,
-      "launch_s": 4.0,
-      "launch_rate_w_per_s": 221.8,
+      "launch_s": 5.0,
+      "launch_rate_w_per_s": 177.4,
       "dips": [],
       "sustained_s": 22.0,
       "sustain_floor_w": 552,
       "stopped_at_s": 31.0,
       "stopped_early_s": null,
       "restart": null,
-      "verdict": "held 24 of 30 s; burst 1 peak 887 W, best 5 s 709 W; 4 s dip to 203 W; burst 2 peak 967 W, best 5 s 890 W; launch 0->887 W in 4 s; sustained >=552 W for 22 s -- as strong as your best start so far"
+      "launch_read": "slow",
+      "launch_note": "launch 5 s to peak -- slow vs 2-3.5 s typical (library/39)",
+      "verdict": "held 24 of 30 s; burst 1 peak 887 W, best 5 s 709 W; 4 s dip to 203 W; burst 2 peak 967 W, best 5 s 890 W; launch 0->887 W in 5 s (slow vs 2-3.5 s typical); sustained >=552 W for 22 s -- as strong as your best start so far"
      },
      {
       "n": 4,
@@ -978,10 +985,29 @@
       "stopped_at_s": 28.0,
       "stopped_early_s": 2.0,
       "restart": null,
+      "launch_read": "typical",
+      "launch_note": "launch 3 s to peak -- typical (2-3.5 s, library/39)",
       "verdict": "held 23 of 30 s; burst 1 peak 1094 W, best 5 s 849 W; 3 s dip to 52 W; burst 2 peak 954 W, best 5 s 912 W; launch 55->1094 W in 3 s; sustained >=552 W for 22 s; stopped at 28 s, 2 s before the 30 s mark -- as strong as your best start so far"
      }
     ],
     "starts_flag": "start 2 off (likely execution) -- skill rep, not fatigue",
+    "start_findings": [
+     {
+      "finding": "power stopped well before the planned end on 3 of 4 starts",
+      "evidence": "starts 1, 2, 4: stopped at 9 s, 21 s before the 30 s mark; stopped at 18 s, 12 s before the 30 s mark; stopped at 28 s, 2 s before the 30 s mark",
+      "cue_key": "stopped_early"
+     },
+     {
+      "finding": "slow launch (time to peak over 3.5 s; typical 2-3.5 s, library/39) on 2 of 4 starts",
+      "evidence": "starts 1, 3: 6 s to peak; 5 s to peak",
+      "cue_key": "slow_launch"
+     },
+     {
+      "finding": "an isolated weak start (execution, not fatigue) on 1 of 4 starts",
+      "evidence": "start 2: best 5 s 698 W, 14% under the best start",
+      "cue_key": "execution_miss"
+     }
+    ],
     "technical_reps": 3,
     "hr_rise_across_reps_bpm": 8.0,
     "race_start": null,
@@ -1254,7 +1280,7 @@
       "hr_drift_bpm": 8.2,
       "grade_delta_pct_pts": -2.9,
       "terrain_flag": null,
-      "verdict": "held 7 of 22 s; peak 977 W, best 5 s 877 W; launch 46->977 W in 6 s; sustained >=552 W for 7 s; stopped at 9 s, 13 s before the 22 s mark (reference start)",
+      "verdict": "held 7 of 22 s; peak 977 W, best 5 s 877 W; launch 46->977 W in 6 s (slow vs 2-3.5 s typical); sustained >=552 W for 7 s; stopped at 9 s, 13 s before the 22 s mark (reference start)",
       "sub_structure": null,
       "altitude_m": 837.3,
       "altitude_gain_m": 14.3,
@@ -1287,7 +1313,7 @@
       "hr_drift_bpm": 37.9,
       "grade_delta_pct_pts": -4.7,
       "terrain_flag": null,
-      "verdict": "held 16 of 22 s; burst 1 peak 989 W, best 5 s 698 W; 4 s dip to 105 W; burst 2 peak 882 W, best 5 s 758 W; launch 0->989 W in 2 s; sustained >=552 W for 10 s; weak restart ~584 W for 2 s after a 3 s gap -- 14% below best start (start 1) -- likely execution, not fatigue",
+      "verdict": "held 16 of 22 s; burst 1 peak 989 W, best 5 s 698 W; 4 s dip to 105 W; burst 2 peak 882 W, best 5 s 758 W; launch 0->989 W in 2 s; sustained >=552 W for 10 s; stopped at 18 s, 4 s before the 22 s mark; weak restart ~584 W for 2 s after a 3 s gap -- 14% below best start (start 1) -- likely execution, not fatigue",
       "sub_structure": null,
       "altitude_m": 837.6,
       "altitude_gain_m": 14.6,
@@ -1320,7 +1346,7 @@
       "hr_drift_bpm": 48.4,
       "grade_delta_pct_pts": -3.1,
       "terrain_flag": null,
-      "verdict": "held 24 of 22 s; burst 1 peak 887 W, best 5 s 709 W; 4 s dip to 203 W; burst 2 peak 967 W, best 5 s 890 W; launch 0->887 W in 4 s; sustained >=552 W for 22 s -- as strong as your best start so far",
+      "verdict": "held 24 of 22 s; burst 1 peak 887 W, best 5 s 709 W; 4 s dip to 203 W; burst 2 peak 967 W, best 5 s 890 W; launch 0->887 W in 5 s (slow vs 2-3.5 s typical); sustained >=552 W for 22 s -- as strong as your best start so far",
       "sub_structure": null,
       "altitude_m": 840.1,
       "altitude_gain_m": 17.1,
@@ -1706,7 +1732,9 @@
       "stopped_at_s": 9.0,
       "stopped_early_s": 13.0,
       "restart": null,
-      "verdict": "held 7 of 22 s; peak 977 W, best 5 s 877 W; launch 46->977 W in 6 s; sustained >=552 W for 7 s; stopped at 9 s, 13 s before the 22 s mark (reference start)"
+      "launch_read": "slow",
+      "launch_note": "launch 6 s to peak -- slow vs 2-3.5 s typical (library/39)",
+      "verdict": "held 7 of 22 s; peak 977 W, best 5 s 877 W; launch 46->977 W in 6 s (slow vs 2-3.5 s typical); sustained >=552 W for 7 s; stopped at 9 s, 13 s before the 22 s mark (reference start)"
      },
      {
       "n": 2,
@@ -1798,15 +1826,17 @@
       "dips": [],
       "sustained_s": 10.0,
       "sustain_floor_w": 552,
-      "stopped_at_s": 22.0,
-      "stopped_early_s": null,
+      "stopped_at_s": 18.0,
+      "stopped_early_s": 4.0,
       "restart": {
        "after_gap_s": 3.0,
        "duration_s": 2.0,
        "avg_w": 584,
        "peak_w": 586
       },
-      "verdict": "held 16 of 22 s; burst 1 peak 989 W, best 5 s 698 W; 4 s dip to 105 W; burst 2 peak 882 W, best 5 s 758 W; launch 0->989 W in 2 s; sustained >=552 W for 10 s; weak restart ~584 W for 2 s after a 3 s gap -- 14% below best start (start 1) -- likely execution, not fatigue"
+      "launch_read": "typical",
+      "launch_note": "launch 2 s to peak -- typical (2-3.5 s, library/39)",
+      "verdict": "held 16 of 22 s; burst 1 peak 989 W, best 5 s 698 W; 4 s dip to 105 W; burst 2 peak 882 W, best 5 s 758 W; launch 0->989 W in 2 s; sustained >=552 W for 10 s; stopped at 18 s, 4 s before the 22 s mark; weak restart ~584 W for 2 s after a 3 s gap -- 14% below best start (start 1) -- likely execution, not fatigue"
      },
      {
       "n": 3,
@@ -1905,15 +1935,17 @@
        0
       ],
       "trace_t0": 0,
-      "launch_s": 4.0,
-      "launch_rate_w_per_s": 221.8,
+      "launch_s": 5.0,
+      "launch_rate_w_per_s": 177.4,
       "dips": [],
       "sustained_s": 22.0,
       "sustain_floor_w": 552,
       "stopped_at_s": 31.0,
       "stopped_early_s": null,
       "restart": null,
-      "verdict": "held 24 of 22 s; burst 1 peak 887 W, best 5 s 709 W; 4 s dip to 203 W; burst 2 peak 967 W, best 5 s 890 W; launch 0->887 W in 4 s; sustained >=552 W for 22 s -- as strong as your best start so far"
+      "launch_read": "slow",
+      "launch_note": "launch 5 s to peak -- slow vs 2-3.5 s typical (library/39)",
+      "verdict": "held 24 of 22 s; burst 1 peak 887 W, best 5 s 709 W; 4 s dip to 203 W; burst 2 peak 967 W, best 5 s 890 W; launch 0->887 W in 5 s (slow vs 2-3.5 s typical); sustained >=552 W for 22 s -- as strong as your best start so far"
      },
      {
       "n": 4,
@@ -2016,10 +2048,29 @@
       "stopped_at_s": 28.0,
       "stopped_early_s": null,
       "restart": null,
+      "launch_read": "typical",
+      "launch_note": "launch 3 s to peak -- typical (2-3.5 s, library/39)",
       "verdict": "held 23 of 22 s; burst 1 peak 1094 W, best 5 s 849 W; 3 s dip to 52 W; burst 2 peak 954 W, best 5 s 912 W; launch 55->1094 W in 3 s; sustained >=552 W for 22 s -- as strong as your best start so far"
      }
     ],
     "starts_flag": "start 2 off (likely execution) -- skill rep, not fatigue",
+    "start_findings": [
+     {
+      "finding": "power stopped well before the planned end on 2 of 4 starts",
+      "evidence": "starts 1, 2: stopped at 9 s, 13 s before the 22 s mark; stopped at 18 s, 4 s before the 22 s mark",
+      "cue_key": "stopped_early"
+     },
+     {
+      "finding": "slow launch (time to peak over 3.5 s; typical 2-3.5 s, library/39) on 2 of 4 starts",
+      "evidence": "starts 1, 3: 6 s to peak; 5 s to peak",
+      "cue_key": "slow_launch"
+     },
+     {
+      "finding": "an isolated weak start (execution, not fatigue) on 1 of 4 starts",
+      "evidence": "start 2: best 5 s 698 W, 14% under the best start",
+      "cue_key": "execution_miss"
+     }
+    ],
     "technical_reps": 3,
     "hr_rise_across_reps_bpm": 8.0,
     "race_start": null,
@@ -2332,6 +2383,7 @@
     "rounds": [],
     "starts": [],
     "starts_flag": null,
+    "start_findings": [],
     "technical_reps": null,
     "hr_rise_across_reps_bpm": null,
     "race_start": null,
@@ -3141,6 +3193,7 @@
     ],
     "starts": [],
     "starts_flag": null,
+    "start_findings": [],
     "technical_reps": null,
     "hr_rise_across_reps_bpm": null,
     "race_start": null,
@@ -3503,6 +3556,7 @@
     "rounds": [],
     "starts": [],
     "starts_flag": null,
+    "start_findings": [],
     "technical_reps": null,
     "hr_rise_across_reps_bpm": null,
     "race_start": null,
@@ -3872,6 +3926,7 @@
     "rounds": [],
     "starts": [],
     "starts_flag": null,
+    "start_findings": [],
     "technical_reps": null,
     "hr_rise_across_reps_bpm": null,
     "race_start": null,
@@ -4342,6 +4397,7 @@
     "rounds": [],
     "starts": [],
     "starts_flag": null,
+    "start_findings": [],
     "technical_reps": null,
     "hr_rise_across_reps_bpm": null,
     "race_start": null,
@@ -4810,6 +4866,7 @@
     "rounds": [],
     "starts": [],
     "starts_flag": null,
+    "start_findings": [],
     "technical_reps": null,
     "hr_rise_across_reps_bpm": null,
     "race_start": null,
@@ -5000,7 +5057,7 @@
       "hr_drift_bpm": -0.8,
       "grade_delta_pct_pts": 0.2,
       "terrain_flag": null,
-      "verdict": "held 8 of 30 s; peak 1079 W, best 5 s 956 W; launch 27->1079 W in 6 s; dip to 585 W at 9 s (likely shift/bobble); sustained >=556 W for 13 s; stopped at 17 s, 13 s before the 30 s mark (reference start)",
+      "verdict": "held 8 of 30 s; peak 1079 W, best 5 s 956 W; launch 27->1079 W in 5 s (slow vs 2-3.5 s typical); dip to 585 W at 9 s (likely shift/bobble); sustained >=556 W for 13 s; stopped at 16 s, 14 s before the 30 s mark (reference start)",
       "sub_structure": null,
       "altitude_m": 1643.4,
       "altitude_gain_m": 820.4,
@@ -5033,7 +5090,7 @@
       "hr_drift_bpm": 29.0,
       "grade_delta_pct_pts": -0.3,
       "terrain_flag": null,
-      "verdict": "held 16 of 30 s; peak 1065 W, best 5 s 946 W; launch 0->1065 W in 7 s; dip to 478 W at 9 s (likely shift/bobble); sustained >=556 W for 14 s; stopped at 19 s, 11 s before the 30 s mark -- 1% below best start (start 1)",
+      "verdict": "held 16 of 30 s; peak 1065 W, best 5 s 946 W; launch 0->1065 W in 6 s (slow vs 2-3.5 s typical); dip to 478 W at 9 s (likely shift/bobble); sustained >=556 W for 14 s; stopped at 19 s, 11 s before the 30 s mark -- 1% below best start (start 1)",
       "sub_structure": null,
       "altitude_m": 1656.7,
       "altitude_gain_m": 833.7,
@@ -5066,7 +5123,7 @@
       "hr_drift_bpm": 36.5,
       "grade_delta_pct_pts": -0.9,
       "terrain_flag": null,
-      "verdict": "held 21 of 30 s; peak 919 W, best 5 s 805 W; launch 63->919 W in 4 s; dip to 618 W at 6 s (likely shift/bobble); sustained >=556 W for 21 s; stopped at 23 s, 7 s before the 30 s mark -- 16% below best start (start 1) -- likely execution, not fatigue",
+      "verdict": "held 21 of 30 s; peak 919 W, best 5 s 805 W; launch 63->919 W in 3 s; dip to 618 W at 6 s (likely shift/bobble); sustained >=556 W for 21 s; stopped at 23 s, 7 s before the 30 s mark -- 16% below best start (start 1) -- likely execution, not fatigue",
       "sub_structure": null,
       "altitude_m": 1672.2,
       "altitude_gain_m": 849.2,
@@ -5099,7 +5156,7 @@
       "hr_drift_bpm": 32.6,
       "grade_delta_pct_pts": -1.0,
       "terrain_flag": null,
-      "verdict": "held 18 of 30 s; peak 1100 W, best 5 s 894 W; launch 0->1100 W in 5 s; dip to 721 W at 6 s (likely shift/bobble); sustained >=556 W for 18 s; stopped at 21 s, 9 s before the 30 s mark; weak restart ~480 W for 5 s after a 2 s gap -- 6% below best start (start 1)",
+      "verdict": "held 18 of 30 s; peak 1100 W, best 5 s 894 W; launch 0->1100 W in 5 s (slow vs 2-3.5 s typical); dip to 721 W at 6 s (likely shift/bobble); sustained >=556 W for 18 s; stopped at 21 s, 9 s before the 30 s mark; weak restart ~480 W for 5 s after a 2 s gap -- 6% below best start (start 1)",
       "sub_structure": null,
       "altitude_m": 1690.6,
       "altitude_gain_m": 867.6,
@@ -5132,7 +5189,7 @@
       "hr_drift_bpm": 37.2,
       "grade_delta_pct_pts": -0.5,
       "terrain_flag": null,
-      "verdict": "held 26 of 30 s; peak 978 W, best 5 s 826 W; launch 2->978 W in 6 s; sustained >=556 W for 24 s -- 14% below best start (start 1) -- likely execution, not fatigue",
+      "verdict": "held 26 of 30 s; peak 978 W, best 5 s 826 W; launch 2->978 W in 6 s (slow vs 2-3.5 s typical); sustained >=556 W for 24 s -- 14% below best start (start 1) -- likely execution, not fatigue",
       "sub_structure": null,
       "altitude_m": 1704.3,
       "altitude_gain_m": 881.3,
@@ -5454,8 +5511,8 @@
        77
       ],
       "trace_t0": 0,
-      "launch_s": 6.0,
-      "launch_rate_w_per_s": 175.3,
+      "launch_s": 5.0,
+      "launch_rate_w_per_s": 210.4,
       "dips": [
        {
         "at_s": 9.0,
@@ -5466,10 +5523,12 @@
       ],
       "sustained_s": 13.0,
       "sustain_floor_w": 556,
-      "stopped_at_s": 17.0,
-      "stopped_early_s": 13.0,
+      "stopped_at_s": 16.0,
+      "stopped_early_s": 14.0,
       "restart": null,
-      "verdict": "held 8 of 30 s; peak 1079 W, best 5 s 956 W; launch 27->1079 W in 6 s; dip to 585 W at 9 s (likely shift/bobble); sustained >=556 W for 13 s; stopped at 17 s, 13 s before the 30 s mark (reference start)"
+      "launch_read": "slow",
+      "launch_note": "launch 5 s to peak -- slow vs 2-3.5 s typical (library/39)",
+      "verdict": "held 8 of 30 s; peak 1079 W, best 5 s 956 W; launch 27->1079 W in 5 s (slow vs 2-3.5 s typical); dip to 585 W at 9 s (likely shift/bobble); sustained >=556 W for 13 s; stopped at 16 s, 14 s before the 30 s mark (reference start)"
      },
      {
       "n": 2,
@@ -5572,8 +5631,8 @@
        86
       ],
       "trace_t0": 0,
-      "launch_s": 7.0,
-      "launch_rate_w_per_s": 152.1,
+      "launch_s": 6.0,
+      "launch_rate_w_per_s": 177.5,
       "dips": [
        {
         "at_s": 9.0,
@@ -5587,7 +5646,9 @@
       "stopped_at_s": 19.0,
       "stopped_early_s": 11.0,
       "restart": null,
-      "verdict": "held 16 of 30 s; peak 1065 W, best 5 s 946 W; launch 0->1065 W in 7 s; dip to 478 W at 9 s (likely shift/bobble); sustained >=556 W for 14 s; stopped at 19 s, 11 s before the 30 s mark -- 1% below best start (start 1)"
+      "launch_read": "slow",
+      "launch_note": "launch 6 s to peak -- slow vs 2-3.5 s typical (library/39)",
+      "verdict": "held 16 of 30 s; peak 1065 W, best 5 s 946 W; launch 0->1065 W in 6 s (slow vs 2-3.5 s typical); dip to 478 W at 9 s (likely shift/bobble); sustained >=556 W for 14 s; stopped at 19 s, 11 s before the 30 s mark -- 1% below best start (start 1)"
      },
      {
       "n": 3,
@@ -5690,14 +5751,14 @@
        83
       ],
       "trace_t0": 1,
-      "launch_s": 4.0,
-      "launch_rate_w_per_s": 214.0,
+      "launch_s": 3.0,
+      "launch_rate_w_per_s": 285.3,
       "dips": [
        {
         "at_s": 6.0,
         "from_w": 919,
         "to_w": 618,
-        "recovered_to_w": 726
+        "recovered_to_w": 718
        }
       ],
       "sustained_s": 21.0,
@@ -5705,7 +5766,9 @@
       "stopped_at_s": 23.0,
       "stopped_early_s": 7.0,
       "restart": null,
-      "verdict": "held 21 of 30 s; peak 919 W, best 5 s 805 W; launch 63->919 W in 4 s; dip to 618 W at 6 s (likely shift/bobble); sustained >=556 W for 21 s; stopped at 23 s, 7 s before the 30 s mark -- 16% below best start (start 1) -- likely execution, not fatigue"
+      "launch_read": "typical",
+      "launch_note": "launch 3 s to peak -- typical (2-3.5 s, library/39)",
+      "verdict": "held 21 of 30 s; peak 919 W, best 5 s 805 W; launch 63->919 W in 3 s; dip to 618 W at 6 s (likely shift/bobble); sustained >=556 W for 21 s; stopped at 23 s, 7 s before the 30 s mark -- 16% below best start (start 1) -- likely execution, not fatigue"
      },
      {
       "n": 4,
@@ -5828,7 +5891,9 @@
        "avg_w": 480,
        "peak_w": 547
       },
-      "verdict": "held 18 of 30 s; peak 1100 W, best 5 s 894 W; launch 0->1100 W in 5 s; dip to 721 W at 6 s (likely shift/bobble); sustained >=556 W for 18 s; stopped at 21 s, 9 s before the 30 s mark; weak restart ~480 W for 5 s after a 2 s gap -- 6% below best start (start 1)"
+      "launch_read": "slow",
+      "launch_note": "launch 5 s to peak -- slow vs 2-3.5 s typical (library/39)",
+      "verdict": "held 18 of 30 s; peak 1100 W, best 5 s 894 W; launch 0->1100 W in 5 s (slow vs 2-3.5 s typical); dip to 721 W at 6 s (likely shift/bobble); sustained >=556 W for 18 s; stopped at 21 s, 9 s before the 30 s mark; weak restart ~480 W for 5 s after a 2 s gap -- 6% below best start (start 1)"
      },
      {
       "n": 5,
@@ -5939,10 +6004,29 @@
       "stopped_at_s": 29.0,
       "stopped_early_s": null,
       "restart": null,
-      "verdict": "held 26 of 30 s; peak 978 W, best 5 s 826 W; launch 2->978 W in 6 s; sustained >=556 W for 24 s -- 14% below best start (start 1) -- likely execution, not fatigue"
+      "launch_read": "slow",
+      "launch_note": "launch 6 s to peak -- slow vs 2-3.5 s typical (library/39)",
+      "verdict": "held 26 of 30 s; peak 978 W, best 5 s 826 W; launch 2->978 W in 6 s (slow vs 2-3.5 s typical); sustained >=556 W for 24 s -- 14% below best start (start 1) -- likely execution, not fatigue"
      }
     ],
     "starts_flag": "start 3 and start 5 off (likely execution) -- skill rep, not fatigue",
+    "start_findings": [
+     {
+      "finding": "power stopped well before the planned end on 4 of 5 starts",
+      "evidence": "starts 1, 2, 3, 4: stopped at 16 s, 14 s before the 30 s mark; stopped at 19 s, 11 s before the 30 s mark; stopped at 23 s, 7 s before the 30 s mark; stopped at 21 s, 9 s before the 30 s mark",
+      "cue_key": "stopped_early"
+     },
+     {
+      "finding": "slow launch (time to peak over 3.5 s; typical 2-3.5 s, library/39) on 4 of 5 starts",
+      "evidence": "starts 1, 2, 4, 5: 5 s to peak; 6 s to peak; 5 s to peak; 6 s to peak",
+      "cue_key": "slow_launch"
+     },
+     {
+      "finding": "an isolated weak start (execution, not fatigue) on 2 of 5 starts",
+      "evidence": "starts 3, 5: best 5 s 805 W, 16% under the best start; best 5 s 826 W, 14% under the best start",
+      "cue_key": "execution_miss"
+     }
+    ],
     "technical_reps": 4,
     "hr_rise_across_reps_bpm": 2.0,
     "race_start": null,
@@ -6215,7 +6299,7 @@
       "hr_drift_bpm": 25.0,
       "grade_delta_pct_pts": -1.7,
       "terrain_flag": null,
-      "verdict": "held 13 of 30 s; peak 1079 W, best 5 s 956 W; launch 27->1079 W in 6 s; dip to 585 W at 9 s (likely shift/bobble); sustained >=556 W for 13 s; stopped at 17 s, 13 s before the 30 s mark (reference start)",
+      "verdict": "held 13 of 30 s; peak 1079 W, best 5 s 956 W; launch 27->1079 W in 5 s (slow vs 2-3.5 s typical); dip to 585 W at 9 s (likely shift/bobble); sustained >=556 W for 13 s; stopped at 16 s, 14 s before the 30 s mark (reference start)",
       "sub_structure": null,
       "altitude_m": 1644.2,
       "altitude_gain_m": 821.2,
@@ -6248,7 +6332,7 @@
       "hr_drift_bpm": 32.1,
       "grade_delta_pct_pts": -0.2,
       "terrain_flag": null,
-      "verdict": "held 16 of 30 s; peak 1065 W, best 5 s 946 W; launch 0->1065 W in 7 s; dip to 478 W at 9 s (likely shift/bobble); sustained >=556 W for 14 s; stopped at 19 s, 11 s before the 30 s mark -- 1% below best start (start 1)",
+      "verdict": "held 16 of 30 s; peak 1065 W, best 5 s 946 W; launch 0->1065 W in 6 s (slow vs 2-3.5 s typical); dip to 478 W at 9 s (likely shift/bobble); sustained >=556 W for 14 s; stopped at 19 s, 11 s before the 30 s mark -- 1% below best start (start 1)",
       "sub_structure": null,
       "altitude_m": 1656.8,
       "altitude_gain_m": 833.8,
@@ -6281,7 +6365,7 @@
       "hr_drift_bpm": 36.5,
       "grade_delta_pct_pts": -0.4,
       "terrain_flag": null,
-      "verdict": "held 21 of 30 s; peak 919 W, best 5 s 805 W; launch 63->919 W in 4 s; dip to 618 W at 6 s (likely shift/bobble); sustained >=556 W for 21 s; stopped at 23 s, 7 s before the 30 s mark -- 16% below best start (start 1) -- likely execution, not fatigue",
+      "verdict": "held 21 of 30 s; peak 919 W, best 5 s 805 W; launch 63->919 W in 3 s; dip to 618 W at 6 s (likely shift/bobble); sustained >=556 W for 21 s; stopped at 23 s, 7 s before the 30 s mark -- 16% below best start (start 1) -- likely execution, not fatigue",
       "sub_structure": null,
       "altitude_m": 1672.3,
       "altitude_gain_m": 849.3,
@@ -6314,7 +6398,7 @@
       "hr_drift_bpm": 32.6,
       "grade_delta_pct_pts": -1.1,
       "terrain_flag": null,
-      "verdict": "held 18 of 30 s; peak 1100 W, best 5 s 894 W; launch 0->1100 W in 5 s; dip to 721 W at 6 s (likely shift/bobble); sustained >=556 W for 18 s; stopped at 21 s, 9 s before the 30 s mark; weak restart ~480 W for 5 s after a 2 s gap -- 6% below best start (start 1)",
+      "verdict": "held 18 of 30 s; peak 1100 W, best 5 s 894 W; launch 0->1100 W in 5 s (slow vs 2-3.5 s typical); dip to 721 W at 6 s (likely shift/bobble); sustained >=556 W for 18 s; stopped at 21 s, 9 s before the 30 s mark; weak restart ~480 W for 5 s after a 2 s gap -- 6% below best start (start 1)",
       "sub_structure": null,
       "altitude_m": 1690.6,
       "altitude_gain_m": 867.6,
@@ -6347,7 +6431,7 @@
       "hr_drift_bpm": 36.5,
       "grade_delta_pct_pts": -0.2,
       "terrain_flag": null,
-      "verdict": "held 26 of 30 s; peak 978 W, best 5 s 826 W; launch 2->978 W in 6 s; sustained >=556 W for 24 s -- 14% below best start (start 1) -- likely execution, not fatigue",
+      "verdict": "held 26 of 30 s; peak 978 W, best 5 s 826 W; launch 2->978 W in 6 s (slow vs 2-3.5 s typical); sustained >=556 W for 24 s -- 14% below best start (start 1) -- likely execution, not fatigue",
       "sub_structure": null,
       "altitude_m": 1704.5,
       "altitude_gain_m": 881.5,
@@ -6759,8 +6843,8 @@
        77
       ],
       "trace_t0": 0,
-      "launch_s": 6.0,
-      "launch_rate_w_per_s": 175.3,
+      "launch_s": 5.0,
+      "launch_rate_w_per_s": 210.4,
       "dips": [
        {
         "at_s": 9.0,
@@ -6771,10 +6855,12 @@
       ],
       "sustained_s": 13.0,
       "sustain_floor_w": 556,
-      "stopped_at_s": 17.0,
-      "stopped_early_s": 13.0,
+      "stopped_at_s": 16.0,
+      "stopped_early_s": 14.0,
       "restart": null,
-      "verdict": "held 13 of 30 s; peak 1079 W, best 5 s 956 W; launch 27->1079 W in 6 s; dip to 585 W at 9 s (likely shift/bobble); sustained >=556 W for 13 s; stopped at 17 s, 13 s before the 30 s mark (reference start)"
+      "launch_read": "slow",
+      "launch_note": "launch 5 s to peak -- slow vs 2-3.5 s typical (library/39)",
+      "verdict": "held 13 of 30 s; peak 1079 W, best 5 s 956 W; launch 27->1079 W in 5 s (slow vs 2-3.5 s typical); dip to 585 W at 9 s (likely shift/bobble); sustained >=556 W for 13 s; stopped at 16 s, 14 s before the 30 s mark (reference start)"
      },
      {
       "n": 2,
@@ -6877,8 +6963,8 @@
        86
       ],
       "trace_t0": 0,
-      "launch_s": 7.0,
-      "launch_rate_w_per_s": 152.1,
+      "launch_s": 6.0,
+      "launch_rate_w_per_s": 177.5,
       "dips": [
        {
         "at_s": 9.0,
@@ -6892,7 +6978,9 @@
       "stopped_at_s": 19.0,
       "stopped_early_s": 11.0,
       "restart": null,
-      "verdict": "held 16 of 30 s; peak 1065 W, best 5 s 946 W; launch 0->1065 W in 7 s; dip to 478 W at 9 s (likely shift/bobble); sustained >=556 W for 14 s; stopped at 19 s, 11 s before the 30 s mark -- 1% below best start (start 1)"
+      "launch_read": "slow",
+      "launch_note": "launch 6 s to peak -- slow vs 2-3.5 s typical (library/39)",
+      "verdict": "held 16 of 30 s; peak 1065 W, best 5 s 946 W; launch 0->1065 W in 6 s (slow vs 2-3.5 s typical); dip to 478 W at 9 s (likely shift/bobble); sustained >=556 W for 14 s; stopped at 19 s, 11 s before the 30 s mark -- 1% below best start (start 1)"
      },
      {
       "n": 3,
@@ -6995,14 +7083,14 @@
        83
       ],
       "trace_t0": 1,
-      "launch_s": 4.0,
-      "launch_rate_w_per_s": 214.0,
+      "launch_s": 3.0,
+      "launch_rate_w_per_s": 285.3,
       "dips": [
        {
         "at_s": 6.0,
         "from_w": 919,
         "to_w": 618,
-        "recovered_to_w": 726
+        "recovered_to_w": 718
        }
       ],
       "sustained_s": 21.0,
@@ -7010,7 +7098,9 @@
       "stopped_at_s": 23.0,
       "stopped_early_s": 7.0,
       "restart": null,
-      "verdict": "held 21 of 30 s; peak 919 W, best 5 s 805 W; launch 63->919 W in 4 s; dip to 618 W at 6 s (likely shift/bobble); sustained >=556 W for 21 s; stopped at 23 s, 7 s before the 30 s mark -- 16% below best start (start 1) -- likely execution, not fatigue"
+      "launch_read": "typical",
+      "launch_note": "launch 3 s to peak -- typical (2-3.5 s, library/39)",
+      "verdict": "held 21 of 30 s; peak 919 W, best 5 s 805 W; launch 63->919 W in 3 s; dip to 618 W at 6 s (likely shift/bobble); sustained >=556 W for 21 s; stopped at 23 s, 7 s before the 30 s mark -- 16% below best start (start 1) -- likely execution, not fatigue"
      },
      {
       "n": 4,
@@ -7133,7 +7223,9 @@
        "avg_w": 480,
        "peak_w": 547
       },
-      "verdict": "held 18 of 30 s; peak 1100 W, best 5 s 894 W; launch 0->1100 W in 5 s; dip to 721 W at 6 s (likely shift/bobble); sustained >=556 W for 18 s; stopped at 21 s, 9 s before the 30 s mark; weak restart ~480 W for 5 s after a 2 s gap -- 6% below best start (start 1)"
+      "launch_read": "slow",
+      "launch_note": "launch 5 s to peak -- slow vs 2-3.5 s typical (library/39)",
+      "verdict": "held 18 of 30 s; peak 1100 W, best 5 s 894 W; launch 0->1100 W in 5 s (slow vs 2-3.5 s typical); dip to 721 W at 6 s (likely shift/bobble); sustained >=556 W for 18 s; stopped at 21 s, 9 s before the 30 s mark; weak restart ~480 W for 5 s after a 2 s gap -- 6% below best start (start 1)"
      },
      {
       "n": 5,
@@ -7244,10 +7336,29 @@
       "stopped_at_s": 29.0,
       "stopped_early_s": null,
       "restart": null,
-      "verdict": "held 26 of 30 s; peak 978 W, best 5 s 826 W; launch 2->978 W in 6 s; sustained >=556 W for 24 s -- 14% below best start (start 1) -- likely execution, not fatigue"
+      "launch_read": "slow",
+      "launch_note": "launch 6 s to peak -- slow vs 2-3.5 s typical (library/39)",
+      "verdict": "held 26 of 30 s; peak 978 W, best 5 s 826 W; launch 2->978 W in 6 s (slow vs 2-3.5 s typical); sustained >=556 W for 24 s -- 14% below best start (start 1) -- likely execution, not fatigue"
      }
     ],
     "starts_flag": "start 3 and start 5 off (likely execution) -- skill rep, not fatigue",
+    "start_findings": [
+     {
+      "finding": "power stopped well before the planned end on 4 of 5 starts",
+      "evidence": "starts 1, 2, 3, 4: stopped at 16 s, 14 s before the 30 s mark; stopped at 19 s, 11 s before the 30 s mark; stopped at 23 s, 7 s before the 30 s mark; stopped at 21 s, 9 s before the 30 s mark",
+      "cue_key": "stopped_early"
+     },
+     {
+      "finding": "slow launch (time to peak over 3.5 s; typical 2-3.5 s, library/39) on 4 of 5 starts",
+      "evidence": "starts 1, 2, 4, 5: 5 s to peak; 6 s to peak; 5 s to peak; 6 s to peak",
+      "cue_key": "slow_launch"
+     },
+     {
+      "finding": "an isolated weak start (execution, not fatigue) on 2 of 5 starts",
+      "evidence": "starts 3, 5: best 5 s 805 W, 16% under the best start; best 5 s 826 W, 14% under the best start",
+      "cue_key": "execution_miss"
+     }
+    ],
     "technical_reps": 4,
     "hr_rise_across_reps_bpm": 2.0,
     "race_start": null,

@@ -142,7 +142,9 @@ STARTS_COACH_NOTE = (
     "Starts are skill practice. A single weak start (missed clip, slow launch) is a skill rep, "
     "not fatigue and not a reason to stop; only consecutive or steadily declining starts read as "
     "fatigue. The drop vs the best start is a post-ride review number -- the athlete cannot see "
-    "10% mid-ride. Judge a start by held seconds vs intended, not only by peak power."
+    "10% mid-ride. Judge a start by held seconds vs intended, not only by peak power. "
+    "For starts, lead with the top start_finding and its library/39 cue (the cue_key row): one cause, "
+    "one thing to practice."
 )
 
 
@@ -150,7 +152,10 @@ SWIM_ONLY_FIELDS = (
     "split_label", "first_half_pace_s_per_100m", "second_half_pace_s_per_100m",
     "swolf_first_quarter", "swolf_last_quarter", "swolf_degradation_pct",
 )
-COACH_START_DROP = ("trace_cadence", "prescribed_s", "s_to_peak")
+COACH_START_DROP = (
+    "trace_cadence", "prescribed_s", "s_to_peak", "launch_rate_w_per_s", "sustain_floor_w", "burst_s", "avg_w",
+    "launch_cadence_rpm", "held_s",
+)
 POWER_ONLY_FIELDS = ("power_curve", "avg_power_w", "normalized_power_w", "intervals")
 
 
@@ -223,7 +228,7 @@ def analytics_for_coach(analytics, sport: str | None = None) -> dict | None:
             if not st.get("weak_start"):
                 st.pop("weak_start", None)
         _slim_efforts_and_rounds(iv)
-        lead = [k for k in ("starts", "starts_flag", "starts_note") if k in iv]
+        lead = [k for k in ("starts", "start_findings", "starts_flag", "starts_note") if k in iv]
         rest = [k for k in iv if k not in lead and k != "efforts"]
         out["intervals"] = {k: iv[k] for k in [*lead, *rest, *(["efforts"] if "efforts" in iv else [])]}
         out = {
