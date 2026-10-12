@@ -4023,7 +4023,7 @@ def _summarize_workout(w: Workout, *, athlete: Athlete, hr_max: float | None, we
         "notes": w.notes,
         "avg_hr": w.avg_hr,
         "max_hr": w.max_hr,
-        "analytics": analytics_for_coach(w.analytics),
+        "analytics": analytics_for_coach(w.analytics, sport=w.sport),
         "lap_count": len(w.laps),
         "length_count": len(w.lengths),
         "pause_count": len(w.pauses),
@@ -4204,7 +4204,7 @@ def _handle_reanalyze_workout(
         "target_source": target_source,
         "series_source": series_source,
         # The same coach-facing view `get_workouts` renders (power curve, starts table, efforts).
-        "analytics": analytics_for_coach(new_analytics),
+        "analytics": analytics_for_coach(new_analytics, sport=workout.sport),
     }
     if not has_detailed_analyzer(workout.sport):
         result["note"] = f"re-ran analysis; no detailed analyzer for {workout.sport} yet" + (
@@ -4706,7 +4706,7 @@ def _handle_pull_activity_stream(
         "cached": persisted,
         "sport_corrected": sport_corrected,
         "previous_sport": previous_sport,
-        "analytics": analytics_for_coach(new_analytics),
+        "analytics": analytics_for_coach(new_analytics, sport=draft.sport),
     }
 
 

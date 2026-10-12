@@ -60,18 +60,9 @@ def test_warmup_builds_are_not_presented_as_starts(reanalysed) -> None:
     assert not any(round(e["avg_w"] or 0) in (161, 131) and e["duration_s"] <= 5 for e in efforts)
 
 
-def test_efforts_include_start_1_and_match_the_starts_table(reanalysed) -> None:
+def test_starts_live_in_the_starts_table_not_in_efforts(reanalysed) -> None:
     iv = reanalysed[0]["analytics"]["intervals"]
-    by_start = {e["start_s"]: e for e in iv["efforts"]}
-    for s in iv["starts"]:
-        e = by_start[s["burst_start_s"]]
-        assert e["avg_w"] == pytest.approx(s["avg_w"], abs=2)
-        assert f"peak {s['peak_w']} W, best 5 s {s['best_5s_w']} W" in e["verdict"]
-
-
-def test_coach_efforts_are_renumbered_and_starts_carry_their_table_number(reanalysed) -> None:
-    iv = reanalysed[0]["analytics"]["intervals"]
+    assert len(iv["starts"]) == 5 and iv["starts"][0]["trace_w"]
     assert [e["n"] for e in iv["efforts"]] == list(range(1, len(iv["efforts"]) + 1))
-    tagged = {e["start_n"]: e["start_s"] for e in iv["efforts"] if "start_n" in e}
-    assert tagged == {s["n"]: s["burst_start_s"] for s in iv["starts"]}
-    assert iv["efforts"][0]["start_n"] == 1
+    assert all(e["start_s"] not in {s["burst_start_s"] for s in iv["starts"]} for e in iv["efforts"])
+    assert "161.2" not in json.dumps(reanalysed[0]["analytics"])

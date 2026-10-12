@@ -112,16 +112,59 @@ def test_coach_view_drops_warmup_builds_and_leads_with_starts_and_curve():
     assert not any(e["verdict"] == "warm-up build (not scored)" for e in view["intervals"]["efforts"])
 
 
-def test_coach_view_renumbers_efforts_and_tags_start_n(result):
-    from swim_coach.power_curve import _tag_start_efforts
+def _coach_view_1010():
+    import uuid
 
-    iv = {
-        "starts": [{"n": s.n, "burst_start_s": s.burst_start_s} for s in result.starts],
-        "efforts": [{"n": e.n, "start_s": e.start_s} for e in result.efforts if e.duration_s > 5],
-    }
-    _tag_start_efforts(iv)
+    from swim_coach.analysis import AnalysisContext
+    from swim_coach.models import Athlete, Workout
+    from swim_coach.power_curve import analytics_for_coach
+
+    d = json.loads((FIX / "ride_2026_10_10_starts_race_pace.json").read_text())
+    s = Session.model_validate(d["planned_session"])
+    athlete = Athlete(id=uuid.UUID(int=1), slug="t", name="T", **d["athlete_profile"])
+    an = Workout.model_validate(d["workout"]).analyze(
+        AnalysisContext(athlete=athlete, session=s, kind=s.kind, series=d["series"])
+    )
+    return analytics_for_coach(an, sport="bike")
+
+
+def _walk(x):
+    if isinstance(x, dict):
+        for k, v in x.items():
+            yield k, v
+            yield from _walk(v)
+    elif isinstance(x, list):
+        for v in x:
+            yield from _walk(v)
+
+
+def test_slim_coach_view_has_no_warmup_builds_starts_rounds_nulls_or_swim_fields():
+    view = _coach_view_1010()
+    text = json.dumps(view)
+    assert "161.2" not in text and "130.8" not in text
+    assert len(text) < 9000  # was ~17,200 chars before the trace fields were added
+    assert all(v is not None for _k, v in _walk(view))
+    for k in ("first_half_pace_s_per_100m", "swolf_first_quarter", "split_label"):
+        assert k not in view
+    iv = view["intervals"]
     assert [e["n"] for e in iv["efforts"]] == list(range(1, len(iv["efforts"]) + 1))
-    assert [e.get("start_n") for e in iv["efforts"][:6]] == [1, 2, 3, 4, 5, None]
+    assert all(e["duration_s"] > 60 for e in iv["efforts"])  # starts live only in `starts`
+    assert "rounds" not in iv  # every round was a single rep, repeating its effort
+    assert len(iv["starts"]) == 5 and all(len(s["trace_w"]) >= 30 for s in iv["starts"])
+    assert "trace_cadence" not in iv["starts"][0]
+    four = iv["starts"][3]
+    assert four["dips"][0]["to_w"] == 721 and four["stopped_early_s"] == 9.0
+
+
+def test_swim_coach_view_drops_power_fields():
+    from swim_coach.models import WorkoutAnalytics
+    from swim_coach.power_curve import analytics_for_coach
+
+    out = analytics_for_coach(
+        WorkoutAnalytics(first_half_pace_s_per_100m=95.0, swolf_first_quarter=40.0, elapsed_min=30.0),
+        sport="swim",
+    )
+    assert out == {"first_half_pace_s_per_100m": 95.0, "swolf_first_quarter": 40.0, "elapsed_min": 30.0}
 
 
 def test_start_4_trace_matches_the_athletes_read_of_the_graph(result):

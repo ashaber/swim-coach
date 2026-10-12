@@ -146,34 +146,83 @@ STARTS_COACH_NOTE = (
 )
 
 
-def _tag_start_efforts(iv: dict) -> None:
-    """Coach view only: renumber the visible efforts 1..N (stored `n` is untouched) and give
-    each effort at a start's burst `start_n`, the number in the starts table."""
-    start_n = {s.get("burst_start_s"): s["n"] for s in iv.get("starts") or []}
-    for i, e in enumerate(iv["efforts"], 1):
+SWIM_ONLY_FIELDS = (
+    "split_label", "first_half_pace_s_per_100m", "second_half_pace_s_per_100m",
+    "swolf_first_quarter", "swolf_last_quarter", "swolf_degradation_pct",
+)
+COACH_START_DROP = ("trace_cadence", "prescribed_s", "s_to_peak")
+POWER_ONLY_FIELDS = ("power_curve", "avg_power_w", "normalized_power_w", "intervals")
+
+
+def _prune(x):
+    """Drop None values and empty lists/dicts recursively (the coach does not need to read
+    what is absent)."""
+    if isinstance(x, dict):
+        return {k: v for k, v in ((k, _prune(v)) for k, v in x.items()) if v is not None and v != [] and v != {}}
+    if isinstance(x, list):
+        return [_prune(v) for v in x]
+    return x
+
+
+def _is_bike(analytics, sport: str | None) -> bool:
+    if sport is not None:
+        return sport == "bike"
+    return analytics.intervals is not None or analytics.power_curve is not None or analytics.avg_power_w is not None
+
+
+def _slim_efforts_and_rounds(iv: dict) -> None:
+    """Coach view only. Every start lives in the `starts` table, so its effort and its
+    prescription round are dropped (as are warm-up builds, whose 5 s averages the coach
+    once quoted as starts); the remaining efforts are renumbered 1..N (stored `n` is untouched)
+    and shed the per-effort altitude fields (`ride_altitude_*` say it once). Rounds keep their
+    stored `n` (efforts point at it with `round_n`) and are left out entirely when every round
+    is a single rep, since each such round repeats its effort."""
+    start_s = {s.get("burst_start_s") for s in iv.get("starts") or []}
+    gone = [
+        e for e in iv.get("efforts") or []
+        if e.get("verdict") == WARMUP_BUILD_VERDICT or e.get("start_s") in start_s
+    ]
+    drop_rounds = {e.get("round_n") for e in gone} - {None}
+    efforts = [e for e in iv.get("efforts") or [] if e not in gone]
+    for i, e in enumerate(efforts, 1):
         e["n"] = i
-        if e.get("start_s") in start_n:
-            e["start_n"] = start_n[e["start_s"]]
+        for k in ("altitude_context", "altitude_m", "altitude_gain_m", "altitude_decrement_pct"):
+            e.pop(k, None)
+    iv["efforts"] = efforts
+    rounds = [r for r in iv.get("rounds") or [] if r.get("n") not in drop_rounds]
+    if any((r.get("reps_prescribed") or 0) > 1 for r in rounds):
+        iv["rounds"] = rounds
+    else:
+        iv.pop("rounds", None)
 
 
-def analytics_for_coach(analytics) -> dict | None:
+def analytics_for_coach(analytics, sport: str | None = None) -> dict | None:
     """`WorkoutAnalytics` as a JSON dict in the order the coach should read it, with the power
     curve swapped for its compact coach view (used by the per-workout detail surfaces, never
     the always-loaded context). The power curve leads, then within `intervals` the starts
-    table, its flag and note, then the rest, and `efforts` last. Prescribed warm-up builds in
-    which no burst was ridden are not scored efforts and are left out of `efforts`."""
+    table, its flag and note, then the rest, and `efforts` last. Null keys are dropped; swim-only
+    fields are dropped for a ride (and power fields for anything else) -- `sport` says which,
+    inferred from what the analytics hold when omitted; starts, warm-up builds and
+    single-rep rounds are not repeated as efforts/rounds (see `_slim_efforts_and_rounds`)."""
     if analytics is None:
         return None
     out = analytics.model_dump(mode="json")
+    bike = _is_bike(analytics, sport)
+    for k in SWIM_ONLY_FIELDS if bike else POWER_ONLY_FIELDS:
+        out.pop(k, None)
     if out.get("power_curve"):
         out["power_curve"] = coach_summary(analytics.power_curve)
     iv = out.get("intervals")
     if iv:
         if iv.get("starts"):
             iv["starts_note"] = STARTS_COACH_NOTE
-        if iv.get("efforts"):
-            iv["efforts"] = [e for e in iv["efforts"] if e.get("verdict") != WARMUP_BUILD_VERDICT]
-            _tag_start_efforts(iv)
+        iv.pop("schema_version", None)
+        for st in iv.get("starts") or []:
+            for k in COACH_START_DROP:  # stored for the PWA; the verdict/launch fields carry these
+                st.pop(k, None)
+            if not st.get("weak_start"):
+                st.pop("weak_start", None)
+        _slim_efforts_and_rounds(iv)
         lead = [k for k in ("starts", "starts_flag", "starts_note") if k in iv]
         rest = [k for k in iv if k not in lead and k != "efforts"]
         out["intervals"] = {k: iv[k] for k in [*lead, *rest, *(["efforts"] if "efforts" in iv else [])]}
@@ -184,7 +233,7 @@ def analytics_for_coach(analytics) -> dict | None:
         }
     elif "power_curve" in out:
         out = {"power_curve": out.pop("power_curve"), **out}
-    return out
+    return _prune(out)
 
 
 def annotate_bests(
