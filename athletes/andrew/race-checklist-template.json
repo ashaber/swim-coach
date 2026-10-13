@@ -1,0 +1,404 @@
+{
+  "schema_version": 1,
+  "sections": [
+    {
+      "id": "bike-prep",
+      "title": "Bike prep",
+      "items": [
+        {
+          "id": "clean",
+          "text": "Clean",
+          "tags": [],
+          "default_checked": false
+        },
+        {
+          "id": "headset",
+          "text": "Headset",
+          "tags": [],
+          "default_checked": false
+        },
+        {
+          "id": "brakes-rear-brake-check",
+          "text": "Brakes (rear brake check)",
+          "tags": [],
+          "default_checked": false
+        },
+        {
+          "id": "swap-wheels",
+          "text": "Swap wheels",
+          "tags": [
+            "mud"
+          ],
+          "default_checked": false
+        },
+        {
+          "id": "tire-pressure",
+          "text": "Tire pressure",
+          "tags": [],
+          "default_checked": false
+        },
+        {
+          "id": "lube-chain",
+          "text": "Lube chain",
+          "tags": [],
+          "default_checked": false
+        },
+        {
+          "id": "remove-bottle-cage",
+          "text": "Remove bottle cage",
+          "tags": [],
+          "default_checked": false
+        },
+        {
+          "id": "adjust-brakes",
+          "text": "Adjust brakes",
+          "tags": [],
+          "default_checked": false
+        },
+        {
+          "id": "toe-spikes",
+          "text": "Toe spikes",
+          "tags": [
+            "mud"
+          ],
+          "default_checked": false
+        }
+      ]
+    },
+    {
+      "id": "load-car",
+      "title": "Load car",
+      "items": [
+        {
+          "id": "rack-to-truck",
+          "text": "Rack to truck",
+          "tags": [],
+          "default_checked": false
+        },
+        {
+          "id": "changing-mat-board",
+          "text": "Changing mat + board",
+          "tags": [],
+          "default_checked": false
+        },
+        {
+          "id": "pump-and-gauge",
+          "text": "Pump and gauge",
+          "tags": [],
+          "default_checked": false
+        },
+        {
+          "id": "tools",
+          "text": "Tools",
+          "tags": [],
+          "default_checked": false
+        },
+        {
+          "id": "spare-pins-zip-ties",
+          "text": "Spare pins + zip ties",
+          "tags": [],
+          "default_checked": false
+        },
+        {
+          "id": "towel-water-bucket",
+          "text": "Towel + water bucket",
+          "tags": [
+            "mud"
+          ],
+          "default_checked": false
+        }
+      ]
+    },
+    {
+      "id": "kit",
+      "title": "Kit",
+      "items": [
+        {
+          "id": "helmet",
+          "text": "Helmet",
+          "tags": [],
+          "default_checked": false
+        },
+        {
+          "id": "shoes",
+          "text": "Shoes",
+          "tags": [],
+          "default_checked": false
+        },
+        {
+          "id": "shoe-covers",
+          "text": "Shoe covers",
+          "tags": [
+            "cold",
+            "wet"
+          ],
+          "default_checked": false
+        },
+        {
+          "id": "socks",
+          "text": "Socks",
+          "tags": [],
+          "default_checked": false
+        },
+        {
+          "id": "extra-socks",
+          "text": "Extra socks",
+          "tags": [],
+          "default_checked": false
+        },
+        {
+          "id": "winter-jersey-warm-up",
+          "text": "Winter jersey (warm-up)",
+          "tags": [],
+          "default_checked": false
+        },
+        {
+          "id": "jacket",
+          "text": "Jacket",
+          "tags": [],
+          "default_checked": false
+        },
+        {
+          "id": "arm-warmers",
+          "text": "Arm warmers",
+          "tags": [
+            "cool"
+          ],
+          "default_checked": false
+        },
+        {
+          "id": "knee-warmers",
+          "text": "Knee warmers",
+          "tags": [
+            "cool"
+          ],
+          "default_checked": false
+        },
+        {
+          "id": "leg-warmers",
+          "text": "Leg warmers",
+          "tags": [
+            "cold"
+          ],
+          "default_checked": false
+        },
+        {
+          "id": "gloves-medium",
+          "text": "Gloves medium",
+          "tags": [],
+          "default_checked": false
+        },
+        {
+          "id": "gloves-cold",
+          "text": "Gloves cold",
+          "tags": [
+            "cold"
+          ],
+          "default_checked": false
+        },
+        {
+          "id": "toe-warmers",
+          "text": "Toe warmers",
+          "tags": [
+            "cold"
+          ],
+          "default_checked": false
+        }
+      ]
+    },
+    {
+      "id": "electronics-charged",
+      "title": "Electronics (charged)",
+      "items": [
+        {
+          "id": "computer",
+          "text": "Computer",
+          "tags": [],
+          "default_checked": false
+        },
+        {
+          "id": "hrm",
+          "text": "HRM",
+          "tags": [],
+          "default_checked": false
+        },
+        {
+          "id": "gopro",
+          "text": "GoPro",
+          "tags": [],
+          "default_checked": false
+        }
+      ]
+    },
+    {
+      "id": "fuel-recovery",
+      "title": "Fuel + recovery",
+      "items": [
+        {
+          "id": "water-bottle",
+          "text": "Water bottle",
+          "tags": [],
+          "default_checked": false
+        },
+        {
+          "id": "erth-switchel-after-race",
+          "text": "ERTH Switchel (after race)",
+          "tags": [],
+          "default_checked": false
+        },
+        {
+          "id": "chamois-butter",
+          "text": "Chamois butter",
+          "tags": [],
+          "default_checked": false
+        }
+      ]
+    },
+    {
+      "id": "after-race",
+      "title": "After race",
+      "items": [
+        {
+          "id": "down-jacket",
+          "text": "Down jacket",
+          "tags": [],
+          "default_checked": false
+        },
+        {
+          "id": "jeans",
+          "text": "Jeans",
+          "tags": [],
+          "default_checked": false
+        },
+        {
+          "id": "rain-shell",
+          "text": "Rain shell",
+          "tags": [
+            "wet"
+          ],
+          "default_checked": false
+        },
+        {
+          "id": "warm-hat",
+          "text": "Warm hat",
+          "tags": [],
+          "default_checked": false
+        }
+      ]
+    }
+  ],
+  "timeline": [
+    {
+      "id": "eve-openers",
+      "label": "Openers",
+      "day": "eve",
+      "at": "18:00",
+      "is_start": false
+    },
+    {
+      "id": "eve-dinner",
+      "label": "Dinner",
+      "day": "eve",
+      "at": "19:00",
+      "is_start": false
+    },
+    {
+      "id": "eve-yoga",
+      "label": "Yoga",
+      "day": "eve",
+      "at": "20:00",
+      "is_start": false
+    },
+    {
+      "id": "eve-bed",
+      "label": "Bed",
+      "day": "eve",
+      "at": "21:00",
+      "is_start": false
+    },
+    {
+      "id": "wake-up",
+      "label": "Wake up",
+      "day": "race",
+      "offset_min": -315,
+      "is_start": false
+    },
+    {
+      "id": "yoga-race",
+      "label": "Yoga",
+      "day": "race",
+      "offset_min": -270,
+      "is_start": false
+    },
+    {
+      "id": "breakfast",
+      "label": "Breakfast",
+      "day": "race",
+      "offset_min": -180,
+      "is_start": false
+    },
+    {
+      "id": "shower-and-potty",
+      "label": "Shower and potty",
+      "day": "race",
+      "offset_min": -165,
+      "is_start": false
+    },
+    {
+      "id": "leave-home",
+      "label": "Leave home",
+      "day": "race",
+      "offset_min": -120,
+      "is_start": false
+    },
+    {
+      "id": "arrive-register-pin-number",
+      "label": "Arrive, register, pin number",
+      "day": "race",
+      "offset_min": -105,
+      "is_start": false
+    },
+    {
+      "id": "pre-ride",
+      "label": "Pre-ride",
+      "day": "race",
+      "offset_min": -95,
+      "is_start": false
+    },
+    {
+      "id": "warm-up",
+      "label": "Warm-up",
+      "day": "race",
+      "offset_min": -60,
+      "is_start": false
+    },
+    {
+      "id": "final-prep",
+      "label": "Final prep",
+      "day": "race",
+      "offset_min": -25,
+      "is_start": false
+    },
+    {
+      "id": "stage",
+      "label": "Stage",
+      "day": "race",
+      "offset_min": -10,
+      "is_start": false
+    },
+    {
+      "id": "start",
+      "label": "Start",
+      "day": "race",
+      "offset_min": 0,
+      "is_start": true
+    },
+    {
+      "id": "cooldown-recovery-drink-within",
+      "label": "Cooldown + recovery drink within 30 min",
+      "day": "race",
+      "offset_min": 60,
+      "is_start": false
+    }
+  ]
+}
