@@ -33,6 +33,7 @@ from app.routes.health_status import router as health_status_router
 from app.routes.library import router as library_router
 from app.routes.onboard import router as onboard_router
 from app.routes.plan import router as plan_router
+from app.routes.race_day import router as race_day_router
 from app.routes.wellness import router as wellness_router
 from app.routes.workouts import router as workouts_router
 
@@ -123,6 +124,7 @@ def create_app() -> FastAPI:
 
     app.include_router(chat_router)
     app.include_router(plan_router)
+    app.include_router(race_day_router)
     app.include_router(workouts_router)
     app.include_router(wellness_router)
     app.include_router(athlete_router)
