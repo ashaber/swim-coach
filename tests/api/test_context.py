@@ -1353,7 +1353,7 @@ def test_render_focused_workout_includes_summary_analytics_laps_pauses_sport_det
     assert str(workout.id) in text
     assert '"sport_detail": "cycling/mountain"' in text
     assert '"cardiac_drift_pct": 6.4' in text
-    assert '"split_label": "positive"' in text
+    assert "split_label" not in text  # a swim-only field; this workout is not a swim
     assert '"avg_hr": 132' in text
     assert "Choppy back half." in text
     # Laps table (both laps) and pauses (both, with their sources).

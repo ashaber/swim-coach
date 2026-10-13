@@ -283,7 +283,7 @@ def test_held_seconds_count_both_bursts_on_9_26(r926):
 
 def test_coach_view_carries_the_skill_rep_note(r926):
     from swim_coach.models import WorkoutAnalytics
-    from swim_coach.power_curve import analytics_for_coach
+    from swim_coach.analysis import analytics_for_coach
 
-    out = analytics_for_coach(WorkoutAnalytics(intervals=r926))
+    out = analytics_for_coach(WorkoutAnalytics(intervals=r926), sport="bike")
     assert "skill rep" in out["intervals"]["starts_note"]

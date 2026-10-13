@@ -66,6 +66,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, TypedDict
 
+from swim_coach.analysis import analytics_for_coach
 from swim_coach.athlete_time import athlete_today
 from swim_coach.library_review import (
     REF_ENTRY_RE,
@@ -85,7 +86,6 @@ from swim_coach.load import (
     wellness_trend,
 )
 from swim_coach.models import Athlete, Event, HealthStatus, Session, ThresholdRecord, Workout
-from swim_coach.power_curve import analytics_for_coach
 from swim_coach.store import StoreInterface
 
 from app.drafts import render_pending_drafts

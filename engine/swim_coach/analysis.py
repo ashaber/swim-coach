@@ -5,9 +5,10 @@ Every caller (upload ingest, intervals.icu sync, plan matching, `reanalyze_worko
 The context carries the athlete (ALL thresholds come from it: FTP, LTHR, home elevation, ...),
 the matched planned session, the workout's `SessionKind`, the stream, and the athlete's earlier
 workouts (for the power-curve 42/90-day bests). A per-sport `WorkoutAnalyzer`, looked up in
-`ANALYZERS`, decides what to compute; a sport with no analyzer gets `DefaultAnalyzer` (the base
-numbers -- pace splits, SWOLF, drift, pauses, power -- with no interval/verdict layer). Adding a
-run or swim analyzer is one registry entry; no call site changes.
+`ANALYZERS`, decides what to compute AND owns its `WorkoutAnalytics` fields and its coach view
+(`coach_view`): `BASE_FIELDS` are common to every sport, each analyzer's `fields` are its own.
+A sport with no analyzer gets `DefaultAnalyzer` (base numbers, no interval/verdict layer; coach
+view = BASE_FIELDS only). Adding a run analyzer is one registry entry; no call site changes.
 
 Behaviour of `BikeAnalyzer` by kind (`models.SessionKind`):
   workout   -- prescription path: the matched session's structure / zone / text steer the reps
@@ -25,6 +26,7 @@ from typing import TYPE_CHECKING, Protocol, Sequence
 
 from swim_coach.analytics import compute_analytics
 from swim_coach.models import Athlete, Event, Session, SessionKind, Workout, WorkoutAnalytics
+from swim_coach.bike_coach_view import shape_ride_view
 from swim_coach.power_curve import BEST_WINDOWS_DAYS, annotate_bests
 
 if TYPE_CHECKING:
@@ -53,8 +55,60 @@ class AnalysisContext:
     prior_workouts: Sequence[Workout] = field(default_factory=tuple)
 
 
+# Sport-agnostic fields every analyzer's coach view keeps.
+BASE_FIELDS: frozenset[str] = frozenset(
+    {"cardiac_drift_pct", "elapsed_min", "moving_min", "pause_total_min", "pause_count"}
+)
+SWIM_FIELDS: frozenset[str] = frozenset(
+    {
+        "split_label",
+        "first_half_pace_s_per_100m",
+        "second_half_pace_s_per_100m",
+        "swolf_first_quarter",
+        "swolf_last_quarter",
+        "swolf_degradation_pct",
+    }
+)
+BIKE_FIELDS: frozenset[str] = frozenset({"intervals", "avg_power_w", "normalized_power_w", "power_curve"})
+
+
+def prune_nulls(x):
+    """Drop None values and empty lists/dicts recursively (the coach does not need to read
+    what is absent)."""
+    if isinstance(x, dict):
+        return {
+            k: v for k, v in ((k, prune_nulls(v)) for k, v in x.items()) if v is not None and v != [] and v != {}
+        }
+    if isinstance(x, list):
+        return [prune_nulls(v) for v in x]
+    return x
+
+
 class WorkoutAnalyzer(Protocol):
+    fields: frozenset[str]
+    detailed: bool  # has an interval/verdict layer
+
     def analyze(self, workout: Workout, ctx: AnalysisContext) -> WorkoutAnalytics: ...
+
+    def coach_view(self, analytics: WorkoutAnalytics | None) -> dict | None: ...
+
+
+class _CoachViewMixin:
+    """`coach_view`: the dump restricted to BASE_FIELDS plus this analyzer's own `fields`, shaped by
+    `_shape` (identity by default), nulls pruned."""
+
+    fields: frozenset[str] = frozenset()
+    detailed: bool = False
+
+    def _shape(self, out: dict, analytics: WorkoutAnalytics) -> dict:
+        return out
+
+    def coach_view(self, analytics: WorkoutAnalytics | None) -> dict | None:
+        if analytics is None:
+            return None
+        keep = BASE_FIELDS | self.fields
+        out = {k: v for k, v in analytics.model_dump(mode="json").items() if k in keep}
+        return prune_nulls(self._shape(out, analytics))
 
 
 def _elapsed_min(workout: Workout, ctx: AnalysisContext) -> float | None:
@@ -104,7 +158,7 @@ def annotate_power_curve_bests(workout: Workout, analytics: WorkoutAnalytics, ct
     return analytics.model_copy(update={"power_curve": annotate_bests(analytics.power_curve, prior)})
 
 
-class DefaultAnalyzer:
+class DefaultAnalyzer(_CoachViewMixin):
     """Every sport without its own analyzer: the base numbers, no interval/verdict layer."""
 
     def analyze(self, workout: Workout, ctx: AnalysisContext) -> WorkoutAnalytics:
@@ -114,9 +168,25 @@ class DefaultAnalyzer:
 UNSCORED_KINDS: tuple[SessionKind, ...] = ("opener", "warmup")  # load + base analytics + curve only
 
 
-class BikeAnalyzer:
+class SwimAnalyzer(_CoachViewMixin):
+    """Pool and open-water swims: the base analytics (pace halves, SWOLF, drift, pauses),
+    no interval/verdict layer."""
+
+    fields = SWIM_FIELDS
+
+    def analyze(self, workout: Workout, ctx: AnalysisContext) -> WorkoutAnalytics:
+        return annotate_power_curve_bests(workout, _base_analytics(workout, ctx, with_intervals=False), ctx)
+
+
+class BikeAnalyzer(_CoachViewMixin):
     """Rides: base analytics + interval analysis + power curve + bests; the interval layer
-    follows `ctx.kind` (see the module docstring)."""
+    follows `ctx.kind` (see the module docstring). Coach view: `bike_coach_view`."""
+
+    fields = BIKE_FIELDS
+    detailed = True
+
+    def _shape(self, out: dict, analytics: WorkoutAnalytics) -> dict:
+        return shape_ride_view(out, analytics)
 
     def analyze(self, workout: Workout, ctx: AnalysisContext) -> WorkoutAnalytics:
         if ctx.kind in UNSCORED_KINDS:
@@ -138,7 +208,8 @@ class BikeAnalyzer:
         return annotate_power_curve_bests(workout, analytics, ctx)
 
 
-ANALYZERS: dict[str, WorkoutAnalyzer] = {"bike": BikeAnalyzer()}
+_SWIM = SwimAnalyzer()
+ANALYZERS: dict[str, WorkoutAnalyzer] = {"bike": BikeAnalyzer(), "swim_pool": _SWIM, "swim_ow": _SWIM}
 DEFAULT_ANALYZER: WorkoutAnalyzer = DefaultAnalyzer()
 
 
@@ -147,7 +218,13 @@ def analyzer_for(sport: str) -> WorkoutAnalyzer:
 
 
 def has_detailed_analyzer(sport: str) -> bool:
-    return sport in ANALYZERS
+    return analyzer_for(sport).detailed
+
+
+def analytics_for_coach(analytics: WorkoutAnalytics | None, sport: str) -> dict | None:
+    """`WorkoutAnalytics` as the JSON dict the coach reads on per-workout detail surfaces (never
+    the always-loaded context): the sport's analyzer decides which fields and in what order."""
+    return analyzer_for(sport).coach_view(analytics)
 
 
 def analyze_workout(workout: Workout, ctx: AnalysisContext) -> WorkoutAnalytics:
