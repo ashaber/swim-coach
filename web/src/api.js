@@ -955,3 +955,58 @@ export async function logout({ baseUrl, token }) {
     log.error('auth.logout_request_failed', { error: err.message });
   }
 }
+
+// --- Race week + race-day checklist -------------------------------------------------------
+// See backend/app/routes/race_day.py. Mutations are absolute state (idempotent), so the PWA's
+// offline queue (raceDay.js) can replay them safely. A result with `ok: false` and NO `status`
+// means the network was unreachable (apiRequest's catch branch) -- the caller queues those.
+
+/** GET /api/race-day -- the race-day plan for a race, created from the template on first open. */
+export async function fetchRaceDay({
+  baseUrl, token, athlete, date, sessionId, name,
+}) {
+  const q = new URLSearchParams({ athlete, date });
+  if (sessionId) q.set('session_id', sessionId);
+  if (name) q.set('name', name);
+  return apiRequest({ baseUrl, token, path: `/api/race-day?${q.toString()}` });
+}
+
+/** PATCH /api/race-day/{id}/items -- `states` is `{ itemId: boolean }`. */
+export async function patchRaceDayItems({
+  baseUrl, token, athlete, planId, states,
+}) {
+  return apiRequest({
+    baseUrl,
+    token,
+    path: `/api/race-day/${encodeURIComponent(planId)}/items?athlete=${encodeURIComponent(athlete)}`,
+    method: 'PATCH',
+    body: { states },
+  });
+}
+
+/** PATCH /api/race-day/{id} -- `payload` holds any of start_time, active_tags, notes. */
+export async function patchRaceDay({
+  baseUrl, token, athlete, planId, payload,
+}) {
+  return apiRequest({
+    baseUrl,
+    token,
+    path: `/api/race-day/${encodeURIComponent(planId)}?athlete=${encodeURIComponent(athlete)}`,
+    method: 'PATCH',
+    body: payload,
+  });
+}
+
+/** PATCH /api/plan/weeks/{isoWeek}/race-week-items/{itemId} -- tick/untick a race-week item. */
+export async function patchRaceWeekItem({
+  baseUrl, token, athlete, isoWeek, itemId, done,
+}) {
+  return apiRequest({
+    baseUrl,
+    token,
+    path: `/api/plan/weeks/${encodeURIComponent(isoWeek)}/race-week-items/${encodeURIComponent(itemId)}`
+      + `?athlete=${encodeURIComponent(athlete)}`,
+    method: 'PATCH',
+    body: { done },
+  });
+}

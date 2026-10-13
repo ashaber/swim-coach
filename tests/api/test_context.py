@@ -1928,3 +1928,25 @@ def test_build_messages_logs_message_sizes_reflecting_routed_library_and_history
     assert entry["history_chars"] == expected_history_chars
     assert entry["history_turns"] == len(history)
     assert entry["question_chars"] == len("hi")
+
+
+def test_profile_json_leaves_race_checklists_to_the_tool(app_env) -> None:
+    # The race-day template and per-race plans grow with every race; the coach reads them
+    # with `get_race_checklist`, so they must not ride in every request's profile block.
+    from swim_coach.models import RaceChecklistTemplate, RaceDayPlan
+
+    store = FileStore(base_dir=app_env)
+    athlete = store.load_athlete("renee")
+    template = RaceChecklistTemplate.model_validate(
+        {"sections": [{"id": "kit", "title": "Kit", "items": [{"id": "k1", "text": "Helmet-xyz"}]}], "timeline": []}
+    )
+    plan = RaceDayPlan.model_validate(
+        {"id": "p1", "date": "2026-10-17", "name": "Race-xyz", "sections": template.model_dump()["sections"]}
+    )
+    store.save_athlete(athlete.model_copy(update={"race_checklist_template": template, "race_day_plans": [plan]}))
+
+    text = build_per_request_context(store, "renee", expert_mode=False)
+    profile_section = text.split("### Profile")[1].split("### Current week plan")[0]
+    assert "race_checklist_template" not in profile_section
+    assert "race_day_plans" not in profile_section
+    assert "Helmet-xyz" not in text

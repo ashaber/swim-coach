@@ -65,6 +65,12 @@ const RACE_WEEK_CATEGORY_LABELS = {
   carb_load: 'Carb-load',
   bodywork: 'Bodywork',
   logistics: 'Logistics',
+  bike: 'Bike',
+  gear: 'Gear',
+  weather: 'Weather',
+  nutrition: 'Fuel',
+  sleep: 'Sleep',
+  recovery: 'Recovery',
 };
 
 export function raceWeekCategoryLabel(category) {

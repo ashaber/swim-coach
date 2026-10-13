@@ -5,10 +5,14 @@ import { getDraft, setDraft, clearDraft } from './composerDrafts.js';
 import {
   renderApp, renderLoading, renderError, renderTabBar, renderCoachTab, renderSettingsTab,
   renderDashboardTab, renderBackendNeededNotice, renderUpdateBanner,
-  renderOnboardingForm, renderRosterTab, renderResourcesTab, cr10AnchorLabel, ROSTER_SUB_TABS as ROSTER_SUB_TAB_DEFS,
+  renderRaceDayOverlay, renderOnboardingForm, renderRosterTab, renderResourcesTab, cr10AnchorLabel, ROSTER_SUB_TABS as ROSTER_SUB_TAB_DEFS,
 } from './views.js';
 import { findSessionById, LOAD_CHART_WINDOW_DAYS, LOAD_CHART_WINDOW_OPTIONS } from './plan.js';
 import { buildHistoryFeed } from './history.js';
+import {
+  loadOpenOverlay, saveOpenOverlay, loadCachedPlan, saveCachedPlan, loadQueue, saveQueue, enqueue,
+  applyChecked, toggleTag,
+} from './raceDay.js';
 import {
   loadChatSession, saveChatSession, clearChatStorage, createChatSession,
   appendUserMessage, applyStreamEvent, isStreaming, setExpertMode, clearMessages, toApiHistory,
@@ -18,6 +22,7 @@ import {
   streamChat, postWorkout, fetchPlan, fetchPlanLoad, getAthlete, patchAthlete, patchWorkout,
   listFeedback, uploadWorkoutFile, listWorkouts, syncWorkouts, logout, onboard,
   pushSessionToIntervals,
+  fetchRaceDay, patchRaceDayItems, patchRaceDay, patchRaceWeekItem,
   downloadGarminFit,
   createGrant, listGrants, revokeGrant,
   listCoachedAthletes, fetchCoachWorkouts, fetchCoachFeedback, fetchCoachLoad, fetchCoachPlan, replyToCoachFeedback,
@@ -740,6 +745,16 @@ function render() {
 }
 
 function renderAppDom() {
+  const overlayBody = document.getElementById('race-overlay-body');
+  const overlayScroll = overlayBody ? overlayBody.scrollTop : 0;
+  renderAppDomInner();
+  const raceOverlayOpen = Boolean(state.raceDay.open && state.identity);
+  document.body.classList.toggle('rd-locked', raceOverlayOpen);
+  const nextBody = document.getElementById('race-overlay-body');
+  if (nextBody && overlayScroll) nextBody.scrollTop = overlayScroll;
+}
+
+function renderAppDomInner() {
   // Onboarding is a full-screen gate, same spirit as the sign-in gate but
   // replacing the tab bar entirely rather than just one tab's content --
   // there's nothing else useful to navigate to yet (no athlete, so no plan/
@@ -773,7 +788,7 @@ function renderAppDom() {
       rosterUnread: countUnread(state.roster.feedback.data, loadLastSeen('coach'), 'coach')
         + rosterConversationUnreadCount(),
       coachUnread: myCoachUnreadCount(),
-    })}`;
+    })}${state.identity ? renderRaceDayOverlay(state.raceDay, state.online) : ''}`;
   if (state.tab === 'coach' && state.coachView === 'coach') scrollToBottomOf('my-coach-messages');
   else if (state.tab === 'coach') stickChatScrollToBottom();
   if (state.tab === 'roster' && state.roster.subTab === 'conversations') scrollToBottomOf('roster-conversation-messages');
@@ -2254,6 +2269,7 @@ function handleSelectLoadWindow(key) {
 // calling every closer unconditionally needs no extra bookkeeping to stay
 // correct if that ever changes.
 function handlePopState() {
+  handleCloseRaceDay();
   handleCloseHistoryDetail();
   handleCloseSessionDetail();
   handleCloseCoachWorkoutDetail();
@@ -3965,6 +3981,14 @@ async function onAppClick(e) {
     // so the in-app "back" affordance and a hardware/gesture back press
     // close the detail via the exact same path -- see handlePopState.
     case 'history:back': history.back(); break;
+    case 'raceday:open':
+      handleOpenRaceDay({ sessionId: el.dataset.id, date: el.dataset.date, name: el.dataset.name });
+      break;
+    case 'raceday:close': requestCloseRaceDay(); break;
+    case 'raceday:check': handleRaceDayCheck(el.dataset.id); break;
+    case 'raceday:tag': handleRaceDayTag(el.dataset.tag); break;
+    case 'raceday:tab': handleRaceDayTab(el.dataset.tab); break;
+    case 'raceweek:toggle': handleRaceWeekToggle(el.dataset.week, el.dataset.id); break;
     case 'workout:raw-analysis-toggle': handleToggleRawAnalysis(); break;
     // Shared data-a="session:open" markup between the athlete's own Plan tab
     // and the coach roster's Training Plan sub-tab (views.js's renderSession)
@@ -4004,6 +4028,8 @@ function onAppChange(e) {
     handleLogFileSelected(e.target.files?.[0]);
   } else if (e.target.matches('[data-a="workout:kind-select"]')) {
     handleSetWorkoutKind(e.target.value);
+  } else if (e.target.matches('[data-form="raceday"][data-field="start_time"]')) {
+    handleRaceDayStartTime(e.target.value);
   }
 }
 
@@ -4159,6 +4185,224 @@ function onAppKeydown(e) {
   }
 }
 
+// --- Race-day checklist overlay + race-week ticks ---------------------------------------------
+// The overlay is state (state.raceDay), so render()'s innerHTML rebuild keeps it, and its identity
+// (date/session/name/tab) is mirrored to localStorage so a reload reopens it. Every mutation is an
+// absolute-state op written to a durable localStorage queue FIRST, then flushed; offline simply
+// leaves the queue for the next 'online' event (raceDay.js documents the merge rules).
+
+function createRaceDay() {
+  return {
+    open: false, status: 'idle', plan: null, error: null, tab: 'list',
+    date: null, sessionId: null, name: null, pending: 0,
+  };
+}
+
+function restoreRaceDay() {
+  const saved = initialIdentity ? loadOpenOverlay(initialIdentity.athlete) : null;
+  if (!saved) return createRaceDay();
+  return {
+    ...createRaceDay(), open: true, status: 'loading', tab: saved.tab === 'timeline' ? 'timeline' : 'list',
+    date: saved.date, sessionId: saved.sessionId || null, name: saved.name || null,
+  };
+}
+
+state.raceDay = restoreRaceDay();
+
+function persistRaceDayOverlay() {
+  const rd = state.raceDay;
+  saveOpenOverlay(rd.open
+    ? { athlete: athleteSlug(), date: rd.date, sessionId: rd.sessionId, name: rd.name, tab: rd.tab }
+    : null);
+}
+
+function raceDayPendingCount() {
+  const athlete = athleteSlug();
+  return loadQueue().filter((q) => q.athlete === athlete).length;
+}
+
+function applyQueuedToPlan(plan) {
+  let next = plan;
+  loadQueue().filter((q) => q.athlete === athleteSlug() && q.planId === plan.id).forEach((q) => {
+    if (q.kind === 'items') Object.entries(q.payload).forEach(([id, on]) => { next = applyChecked(next, id, on); });
+    if (q.kind === 'meta') next = { ...next, ...q.payload };
+  });
+  return next;
+}
+
+function handleOpenRaceDay({ sessionId, date, name }) {
+  if (!date || state.tab !== 'plan') return;
+  state.raceDay = {
+    ...createRaceDay(), open: true, status: 'loading', date, sessionId: sessionId || null, name: name || null,
+  };
+  persistRaceDayOverlay();
+  history.pushState({ raceDay: true }, '');
+  log.info('raceday.opened', { athlete: athleteSlug(), date, session_id: sessionId });
+  render();
+  loadRaceDay();
+}
+
+/** Called once at boot when the overlay was open at last unload: re-adds the history entry (the
+ * browser keeps `history.state` across a reload, so only push when it is gone) and loads. */
+function resumeRaceDay() {
+  if (!state.raceDay.open) return;
+  if (!history.state?.raceDay) history.pushState({ raceDay: true }, '');
+  loadRaceDay();
+}
+
+async function loadRaceDay() {
+  const { date, sessionId, name } = state.raceDay;
+  const settings = state.settingsForm;
+  const athlete = athleteSlug();
+  if (!athlete || !isConfigured(settings, state.identity)) return;
+  await flushRaceDayQueue();
+  const result = await fetchRaceDay({
+    baseUrl: settings.baseUrl, token: settings.token, athlete, date, sessionId, name,
+  });
+  if (handleUnauthorized(result)) return;
+  if (!state.raceDay.open || state.raceDay.date !== date) return;
+  const cached = loadCachedPlan(athlete, date);
+  if (result.ok) {
+    const plan = applyQueuedToPlan(result.data);
+    saveCachedPlan(athlete, plan);
+    state.raceDay = { ...state.raceDay, status: 'ready', plan, error: null, pending: raceDayPendingCount() };
+  } else if (!result.status && cached) {
+    state.raceDay = {
+      ...state.raceDay, status: 'ready', plan: applyQueuedToPlan(cached), error: null, pending: raceDayPendingCount(),
+    };
+  } else {
+    log.error('raceday.load_failed', { athlete, date, error: result.error });
+    state.raceDay = { ...state.raceDay, status: 'error', error: result.error };
+  }
+  render();
+}
+
+function handleCloseRaceDay() {
+  if (!state.raceDay.open) return; // avoids a redundant render on popstate re-entrancy
+  state.raceDay = createRaceDay();
+  persistRaceDayOverlay();
+  render();
+}
+
+/** Same history.back()-not-direct-close reasoning as history:back: the in-app Back, the close
+ * button, swipe-down and hardware back all close through the one popstate path. */
+function requestCloseRaceDay() {
+  if (history.state?.raceDay) history.back();
+  else handleCloseRaceDay();
+}
+
+function mutateRaceDayPlan(nextPlan, op) {
+  state.raceDay = { ...state.raceDay, plan: nextPlan };
+  saveCachedPlan(athleteSlug(), nextPlan);
+  enqueue({ athlete: athleteSlug(), planId: nextPlan.id, ...op });
+  state.raceDay.pending = raceDayPendingCount();
+  render();
+  flushRaceDayQueue();
+}
+
+function handleRaceDayCheck(itemId) {
+  const plan = state.raceDay.plan;
+  if (!plan || !itemId) return;
+  const on = !(plan.checked || []).includes(itemId);
+  mutateRaceDayPlan(applyChecked(plan, itemId, on), { kind: 'items', payload: { [itemId]: on } });
+}
+
+function handleRaceDayTag(tag) {
+  const plan = state.raceDay.plan;
+  if (!plan || !tag) return;
+  const next = toggleTag(plan, tag);
+  mutateRaceDayPlan(next, { kind: 'meta', payload: { active_tags: next.active_tags } });
+}
+
+function handleRaceDayStartTime(value) {
+  const plan = state.raceDay.plan;
+  if (!plan) return;
+  const startTime = value || null;
+  mutateRaceDayPlan({ ...plan, start_time: startTime }, { kind: 'meta', payload: { start_time: startTime } });
+}
+
+function handleRaceDayTab(tab) {
+  state.raceDay = { ...state.raceDay, tab: tab === 'timeline' ? 'timeline' : 'list' };
+  persistRaceDayOverlay();
+  render();
+}
+
+function handleRaceWeekToggle(isoWeek, itemId) {
+  if (state.tab !== 'plan' || !isoWeek || !itemId) return;
+  const week = (state.plan.data?.weeks || []).find((w) => w.iso_week === isoWeek);
+  const item = week?.race_week_checklist?.find((i) => i.id === itemId);
+  if (!item) return;
+  item.done = !item.done;
+  enqueue({ athlete: athleteSlug(), planId: isoWeek, kind: 'week', payload: { [itemId]: item.done } });
+  log.info('raceweek.toggled', { athlete: athleteSlug(), iso_week: isoWeek, item_id: itemId, done: item.done });
+  render();
+  flushRaceDayQueue();
+}
+
+async function sendQueuedOp(op, settings) {
+  const base = { baseUrl: settings.baseUrl, token: settings.token, athlete: op.athlete };
+  if (op.kind === 'items') return patchRaceDayItems({ ...base, planId: op.planId, states: op.payload });
+  if (op.kind === 'meta') return patchRaceDay({ ...base, planId: op.planId, payload: op.payload });
+  let last = { ok: true };
+  for (const [itemId, done] of Object.entries(op.payload)) {
+    // eslint-disable-next-line no-await-in-loop
+    last = await patchRaceWeekItem({ ...base, isoWeek: op.planId, itemId, done });
+    if (!last.ok && !last.status) return last; // offline: stop, keep the op
+  }
+  return last;
+}
+
+let raceDayFlushing = false;
+
+/** Sends queued ops oldest first. A network failure (no HTTP status) stops the flush and keeps the
+ * op; any other failure drops it (a 404 for a deleted plan must not wedge the queue). An op that
+ * was merged with a newer edit while in flight stays queued and re-sends (idempotent). */
+async function flushRaceDayQueue() {
+  const settings = state.settingsForm;
+  const athlete = athleteSlug();
+  if (raceDayFlushing || !athlete || !state.online || !isConfigured(settings, state.identity)) return;
+  raceDayFlushing = true;
+  try {
+    for (;;) {
+      const op = loadQueue().find((q) => q.athlete === athlete);
+      if (!op) break;
+      // eslint-disable-next-line no-await-in-loop
+      const result = await sendQueuedOp(op, settings);
+      if (handleUnauthorized(result)) break;
+      if (!result.ok && !result.status) break;
+      if (!result.ok) log.error('raceday.sync_dropped', { kind: op.kind, status: result.status, error: result.error });
+      const current = loadQueue();
+      const idx = current.findIndex((q) => q.athlete === op.athlete && q.planId === op.planId && q.kind === op.kind);
+      if (idx >= 0 && JSON.stringify(current[idx].payload) === JSON.stringify(op.payload)) {
+        current.splice(idx, 1);
+        saveQueue(current);
+      }
+    }
+  } finally {
+    raceDayFlushing = false;
+    if (state.raceDay.open) {
+      state.raceDay.pending = raceDayPendingCount();
+      render();
+    }
+  }
+}
+
+let raceDaySwipeStart = null;
+
+function onRaceDayTouchStart(e) {
+  const head = e.target.closest?.('#race-overlay-head');
+  const body = document.getElementById('race-overlay-body');
+  raceDaySwipeStart = head || (body && body.scrollTop === 0 && body.contains(e.target))
+    ? e.touches[0].clientY : null;
+}
+
+function onRaceDayTouchEnd(e) {
+  if (raceDaySwipeStart === null) return;
+  const dy = e.changedTouches[0].clientY - raceDaySwipeStart;
+  raceDaySwipeStart = null;
+  if (dy > 120) requestCloseRaceDay();
+}
+
 // --- Offline (unchanged) -------------------------------------------------
 
 function updateOfflineBanner() {
@@ -4181,7 +4425,10 @@ function updateOnlineState() {
   state.online = navigator.onLine;
   updateOfflineBanner();
   if (TABS_SENSITIVE_TO_ONLINE_STATE.includes(state.tab) || state.tab === 'roster') render();
-  if (state.online) conversationPollTick();
+  if (state.online) {
+    conversationPollTick();
+    flushRaceDayQueue();
+  }
 }
 
 window.addEventListener('online', updateOnlineState);
@@ -4212,10 +4459,18 @@ appEl.addEventListener('toggle', (event) => {
 appEl.addEventListener('change', onAppChange);
 appEl.addEventListener('input', onAppInput);
 appEl.addEventListener('keydown', onAppKeydown);
+appEl.addEventListener('touchstart', onRaceDayTouchStart, { passive: true });
+appEl.addEventListener('touchend', onRaceDayTouchEnd, { passive: true });
+// Re-render once a minute while the timeline is showing so the current/next highlight advances.
+setInterval(() => {
+  if (state.raceDay.open && state.raceDay.tab === 'timeline') render();
+}, 60000);
 
 log.info('app.init', { version: __APP_VERSION__ ?? 'dev' });
 updateOfflineBanner();
 render();
+resumeRaceDay();
+flushRaceDayQueue();
 loadPlan();
 loadPlanLoad();
 maybeLoadProfile();

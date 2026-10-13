@@ -53,6 +53,8 @@ WRITE_TOOLS: dict[str, str] = {
     "retire_athlete_note": "retired",
     "reschedule_session": "rescheduled",
     "set_workout_kind": "updated",
+    "set_race_week_checklist": "persisted",
+    "update_race_checklist": "updated",
 }
 
 # Every other real tool: reads, drafts that never persist (propose_adaptation
@@ -67,6 +69,7 @@ NON_PLAN_OR_READ_ONLY: frozenset[str] = frozenset({
     "log_app_feedback",
     "lookup_reference",
     "get_race_debriefs",
+    "get_race_checklist",
     "get_workouts",
     "reanalyze_workout",
     "get_ride_pacing",

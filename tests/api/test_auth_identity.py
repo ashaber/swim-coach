@@ -269,6 +269,15 @@ def _scoped_requests(client, headers: dict, target: str = "renee"):
         f"/api/health-status?athlete={target}", json={}, headers=headers
     )
     yield "GET /api/plan", client.get(f"/api/plan?athlete={target}", headers=headers)
+    yield "GET /api/race-checklist/template", client.get(
+        f"/api/race-checklist/template?athlete={target}", headers=headers
+    )
+    yield "GET /api/race-day", client.get(
+        f"/api/race-day?athlete={target}&date=2026-10-17", headers=headers
+    )
+    yield "PATCH /api/race-day/x/items", client.patch(
+        f"/api/race-day/x/items?athlete={target}", json={"states": {"a": True}}, headers=headers
+    )
     yield "GET /api/feedback", client.get(f"/api/feedback?athlete={target}", headers=headers)
     yield "POST /api/feedback", client.post(
         f"/api/feedback?athlete={target}", json={}, headers=headers

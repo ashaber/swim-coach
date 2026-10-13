@@ -231,8 +231,14 @@ from swim_coach.race_phases import (
 # public wrapper) only so this handler can ALSO surface the real evidence
 # behind that boolean (`established_base_evidence` in the response below)
 # without computing it twice.
+from swim_coach.race_day import find_plan as find_race_plan, new_plan_from_template as new_race_plan
 from swim_coach.models import (
     Athlete,
+    ChecklistItem,
+    ChecklistSection,
+    RaceChecklistTemplate,
+    RaceDayPlan,
+    RaceWeekChecklistItem,
     AthleteNote,
     SessionKind,
     normalize_interval_type,
@@ -1228,6 +1234,81 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 "tactical_note": {"type": "string", "description": "A race-day (not training) proposal -- staging, positioning, pacing. Flagged as a proposal, not a decision."},
             },
             "required": ["event_name", "event_date"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "set_race_week_checklist",
+        "description": (
+            "Author/replace a week's race-week checklist (small dated items shown as per-day headers). "
+            "Pass the FULL list. Items already ticked keep done=true when date+category+label match. "
+            "Draft first (confirm omitted), show the athlete, then confirm: true."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "iso_week": {"type": "string", "description": "'YYYY-Wnn'; must have a persisted week."},
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "date": {"type": "string", "description": "YYYY-MM-DD; may fall outside the week."},
+                            "category": {
+                                "type": "string",
+                                "enum": ["carb_load", "bodywork", "logistics", "bike", "gear", "weather", "nutrition", "sleep", "recovery"],
+                            },
+                            "label": {"type": "string", "description": "Short (<=60 chars)."},
+                            "note": {"type": "string"},
+                        },
+                        "required": ["date", "category", "label"],
+                    },
+                },
+                "confirm": {"type": "boolean", "description": "true only after the athlete agreed to the draft."},
+            },
+            "required": ["iso_week", "items"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "get_race_checklist",
+        "description": (
+            "Read the race-day checklist: the reusable template, or with `date` that race's plan "
+            "(sections, tags, checked ids, start_time, active_tags, timeline)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"date": {"type": "string", "description": "YYYY-MM-DD of the race; omit for the template."}},
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "update_race_checklist",
+        "description": (
+            "Tailor the race-day checklist. With `date`: that race's plan (created from the template if "
+            "absent) -- add/remove items, set active_tags (weather: mud, cold, wet, cool), start_time. "
+            "Without `date`: edit the reusable template (items only). Saves immediately."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "date": {"type": "string", "description": "YYYY-MM-DD of the race; omit to edit the template."},
+                "add_items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "section": {"type": "string", "description": "Section title; created if new."},
+                            "text": {"type": "string"},
+                            "tags": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["section", "text"],
+                    },
+                },
+                "remove_items": {"type": "array", "items": {"type": "string"}, "description": "Item texts (case-insensitive)."},
+                "active_tags": {"type": "array", "items": {"type": "string"}, "description": "Replaces the race's active weather tags."},
+                "start_time": {"type": "string", "description": "HH:MM race start."},
+            },
             "additionalProperties": False,
         },
     },
@@ -3912,6 +3993,145 @@ def _handle_retire_athlete_note(input_data: dict[str, Any], *, store: StoreInter
 _DEBRIEF_TEXT_MAX_CHARS = 2000
 _DEBRIEF_FINDING_MAX_CHARS = 300
 _DEBRIEF_FINDINGS_MAX = 12
+
+
+def _handle_set_race_week_checklist(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    iso_week = input_data.get("iso_week")
+    items_in = input_data.get("items")
+    if not iso_week or not isinstance(items_in, list):
+        return {"error": "iso_week and items (array) are required"}
+    try:
+        week = store.load_week(slug, iso_week)
+    except Exception as exc:  # noqa: BLE001
+        log.error("storage read failed", what="week plan", exc_info=True)
+        return storage_error("week plan", exc)
+    if week is None:
+        return {"error": f"no persisted week plan for {iso_week!r}"}
+    done_before = {(str(i.date), i.category, i.label) for i in week.race_week_checklist if i.done}
+    items: list[RaceWeekChecklistItem] = []
+    for n, entry in enumerate(items_in):
+        try:
+            key = (str(entry["date"]), entry["category"], str(entry["label"]).strip()[:80])
+            items.append(RaceWeekChecklistItem(
+                date=entry["date"], category=entry["category"], label=key[2],
+                note=(str(entry["note"])[:200] if entry.get("note") else None), done=key in done_before,
+            ))
+        except (KeyError, TypeError, ValueError) as exc:
+            return {"error": f"items[{n}] invalid: {exc}"}
+    candidate = WeekPlan(**{**week.model_dump(), "race_week_checklist": [i.model_dump() for i in items]})
+    response: dict[str, Any] = {
+        "iso_week": iso_week,
+        "items": [i.model_dump(mode="json") for i in candidate.race_week_checklist],
+        "persisted": False,
+    }
+    if not bool(input_data.get("confirm", False)):
+        response["next"] = "Nothing is written yet. Show the athlete; when they agree call again with confirm: true."
+        return response
+    store.save_week(slug, candidate)
+    log.info("race-week checklist saved", athlete=slug, iso_week=iso_week, n=len(items))
+    response["persisted"] = True
+    return response
+
+
+def _race_plan_summary(plan: RaceDayPlan) -> dict[str, Any]:
+    return {
+        "date": str(plan.date),
+        "name": plan.name,
+        "start_time": plan.start_time,
+        "active_tags": plan.active_tags,
+        "checked": plan.checked,
+        "sections": [
+            {"title": s.title, "items": [
+                {"id": i.id, "text": i.text, **({"tags": i.tags} if i.tags else {})} for i in s.items
+            ]}
+            for s in plan.sections
+        ],
+        "timeline": [t.model_dump(mode="json", exclude_none=True) for t in plan.timeline],
+    }
+
+
+def _handle_get_race_checklist(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        log.error("storage read failed", what="athlete profile", exc_info=True)
+        return storage_error("athlete profile", exc)
+    raw = input_data.get("date")
+    if not raw:
+        template = athlete.race_checklist_template
+        return {
+            "template": template.model_dump(mode="json") if template else None,
+            "race_day_plans": [str(p.date) for p in athlete.race_day_plans],
+        }
+    try:
+        race_date = date.fromisoformat(str(raw))
+    except ValueError:
+        return {"error": f"date must be YYYY-MM-DD, got {raw!r}"}
+    plan = find_race_plan(athlete, session_id=None, race_date=race_date)
+    if plan is None:
+        return {"error": f"no race-day plan for {raw} yet (created when the athlete first opens that race's checklist)"}
+    return _race_plan_summary(plan)
+
+
+def _checklist_slug(text: str, taken: set[str]) -> str:
+    base = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:30] or "item"
+    candidate, n = base, 1
+    while candidate in taken:
+        n += 1
+        candidate = f"{base}-{n}"
+    taken.add(candidate)
+    return candidate
+
+
+def _edit_checklist_sections(sections: list[ChecklistSection], add_items: list, remove_items: list) -> None:
+    taken = {i.id for s in sections for i in s.items}
+    remove = {str(t).strip().lower() for t in remove_items}
+    for s in sections:
+        s.items = [i for i in s.items if i.text.strip().lower() not in remove]
+    for entry in add_items:
+        title = str(entry["section"]).strip()
+        section = next((s for s in sections if s.title.lower() == title.lower()), None)
+        if section is None:
+            section = ChecklistSection(id=_checklist_slug(title, {s.id for s in sections}), title=title)
+            sections.append(section)
+        tags = [str(t).strip().lower() for t in entry.get("tags") or [] if str(t).strip()]
+        text = str(entry["text"]).strip()
+        section.items.append(ChecklistItem(id=_checklist_slug(text, taken), text=text, tags=tags))
+
+
+def _handle_update_race_checklist(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        log.error("storage read failed", what="athlete profile", exc_info=True)
+        return storage_error("athlete profile", exc)
+    add_items = input_data.get("add_items") or []
+    remove_items = input_data.get("remove_items") or []
+    try:
+        raw = input_data.get("date")
+        if not raw:
+            template = athlete.race_checklist_template or RaceChecklistTemplate()
+            _edit_checklist_sections(template.sections, add_items, remove_items)
+            athlete.race_checklist_template = RaceChecklistTemplate(**template.model_dump())
+            store.save_athlete(athlete)
+            return {"updated": True, "scope": "template", "items": sum(len(s.items) for s in template.sections)}
+        race_date = date.fromisoformat(str(raw))
+        plan = find_race_plan(athlete, session_id=None, race_date=race_date)
+        if plan is None:
+            if athlete.race_checklist_template is None:
+                return {"error": "no template yet -- add items without `date` first"}
+            plan = new_race_plan(athlete.race_checklist_template, race_date=race_date)
+            athlete.race_day_plans.append(plan)
+        _edit_checklist_sections(plan.sections, add_items, remove_items)
+        if "active_tags" in input_data:
+            plan.active_tags = [str(t).strip().lower() for t in input_data["active_tags"] or [] if str(t).strip()]
+        if input_data.get("start_time"):
+            plan.start_time = str(input_data["start_time"])
+        athlete.race_day_plans = [RaceDayPlan(**p.model_dump()) for p in athlete.race_day_plans]
+        store.save_athlete(athlete)
+    except (KeyError, TypeError, ValueError) as exc:
+        return {"error": f"invalid input: {exc}"}
+    return {"updated": True, "scope": str(race_date), **_race_plan_summary(plan)}
 
 
 def _handle_save_race_debrief(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
@@ -9561,6 +9781,15 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "save_race_debrief": lambda input_data: _handle_save_race_debrief(
+            input_data, store=store, slug=slug
+        ),
+        "set_race_week_checklist": lambda input_data: _handle_set_race_week_checklist(
+            input_data, store=store, slug=slug
+        ),
+        "get_race_checklist": lambda input_data: _handle_get_race_checklist(
+            input_data, store=store, slug=slug
+        ),
+        "update_race_checklist": lambda input_data: _handle_update_race_checklist(
             input_data, store=store, slug=slug
         ),
         "get_race_debriefs": lambda input_data: _handle_get_race_debriefs(

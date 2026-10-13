@@ -2295,7 +2295,12 @@ def build_per_request_context_and_sizes(
     profile_json = json.dumps(
         athlete.model_dump(
             mode="json",
-            exclude={"notes", "race_debriefs", "sex", "height_cm", "weight_kg"},
+            # The race-day checklist template and per-race plans are read on demand with
+            # `get_race_checklist`; they grow per race and must not ride in every request.
+            exclude={
+                "notes", "race_debriefs", "sex", "height_cm", "weight_kg",
+                "race_checklist_template", "race_day_plans",
+            },
         ),
         separators=(",", ":"),
     )
