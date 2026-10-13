@@ -12,8 +12,12 @@ import {
   describeWellnessBaselineDeviation, describeCtlAtlTsbTrend, RACE_DAY_TSB_BAND,
   PRODUCTIVE_TRAINING_TSB_BAND, LOAD_CHART_WINDOW_DAYS, LOAD_CHART_WINDOW_OPTIONS,
   CTL_ATL_TREND_WINDOW_DAYS, formatMonthLabel, isFuelingPlanSession, parseFuelingSummary,
-  sessionIconKey,
+  sessionIconKey, dateKey,
 } from './plan.js';
+import {
+  raceWeekCategoryIcon, groupRaceWeekItems, raceWeekSummary, visibleSections, planProgress, allTags,
+  timelineClock, timelinePosition, formatClockTime,
+} from './raceDay.js';
 import { TOOL_LABELS } from './chat.js';
 import { renderSessionIcon } from './icons.js';
 import { renderChatMarkdown } from './markdown.js';
@@ -115,7 +119,7 @@ function renderSessionMarker(iconKey, colorVar) {
   return `<span class="dot" style="background:var(${colorVar})"></span>`;
 }
 
-function renderSession(session) {
+function renderSession(session, interactive = true) {
   const classification = classifySession(session);
   const { title, detail } = sessionDisplay(session);
   const dotVar = sessionDotColorVar(session, classification);
@@ -140,8 +144,17 @@ function renderSession(session) {
         <div class="title">${esc(title)}${classification.tag ? `<span class="tag">${esc(classification.tag)}</span>` : ''}</div>
         <div class="meta mono">${metaParts.join(' · ')}</div>
         ${detail ? `<div class="desc">${esc(detail)}</div>` : ''}
+        ${interactive ? renderRaceChecklistButton(session) : ''}
       </div>
     </div>`;
+}
+
+/** "Checklist" button on a race session (kind === 'race'): opens the race-day overlay. Its own
+ * data-a wins over the enclosing tile's session:open because the click handler uses closest(). */
+function renderRaceChecklistButton(session) {
+  if (session.kind !== 'race') return '';
+  return `<button type="button" class="btn-ghost rd-open" data-a="raceday:open" data-id="${esc(session.id)}"`
+    + ` data-date="${esc(session.date)}" data-name="${esc(sessionDisplay(session).title)}">Checklist</button>`;
 }
 
 // --- Ask-the-coach Q&A (shared component, coach-mode Q&A build) ------------
@@ -531,6 +544,8 @@ function renderPlanSessionDetail(session, sessionPush, showGarminActions = true,
       : (isFuelingPlanSession(session)
         ? renderFuelingPlanSection(session)
         : (structure ? parseStructureBlocks(structure).map(renderStructureBlock).join('') : ''))}
+    ${showGarminActions && session.kind === 'race'
+      ? `<section class="detail-section">${renderRaceChecklistButton(session)}</section>` : ''}
     ${session.structured && sportCanPushToGarmin(session.sport)
       ? (showGarminActions
         ? renderGarminDownload(session) + renderGarminPush(session, sessionPush)
@@ -611,32 +626,45 @@ function renderGarminPush(session, sessionPush) {
     </section>`;
 }
 
-/** `week.race_week_checklist` (engine/swim_coach/models.py's
- * RaceWeekChecklistItem list) -- only ever non-empty for the final taper
- * week immediately preceding the athlete's active, priority-"A" event (see
- * plan.py's generate_week/_race_week_checklist and library/16-race-week.md).
- * Sorted by date since carb-load/bodywork/logistics items can legitimately
- * carry dates outside this WeekPlan's own 7-day span (a race that doesn't
- * fall on a Monday pushes the carb-load date into the following, not-yet-
- * generated event week) -- date order, not category order, is what makes
- * that visible rather than confusing. Renders nothing when the list is
- * empty (an ordinary taper week, or any non-final-taper week). */
-function renderRaceWeekChecklist(checklist) {
+/** One race-week item as a compact chip. `showDate` adds the short date (used for items dated
+ * outside the week). Tapping toggles `done` (raceweek:toggle) -- only when the item has an id and
+ * the view is interactive. */
+function renderRaceWeekChip(item, isoWeek, { showDate = false, interactive = true } = {}) {
+  const label = raceWeekCategoryLabel(item.category);
+  const toggle = interactive && item.id
+    ? ` data-a="raceweek:toggle" data-week="${esc(isoWeek)}" data-id="${esc(item.id)}" aria-pressed="${item.done ? 'true' : 'false'}"`
+    : ' disabled';
+  return `
+      <button type="button" class="rw-chip rw-chip-${esc(item.category)}${item.done ? ' done' : ''}"${toggle}>
+        <span class="rw-ic" aria-hidden="true">${raceWeekCategoryIcon(item.category)}</span>
+        <span class="rw-cat">${esc(label)}</span>
+        ${showDate ? `<span class="rw-date mono">${esc(formatShortDate(parseIsoDate(item.date)))}</span>` : ''}
+        <span class="rw-label">${esc(item.label)}</span>
+        ${item.note ? `<span class="rw-note">${esc(item.note)}</span>` : ''}
+      </button>`;
+}
+
+/** The week header's race-week summary: "Race week: N items, M done" plus any items dated outside
+ * this week's own 7 days (a race that is not on a Monday pushes carb-loading etc. into the
+ * following week). The in-week items render as per-day strips (renderRaceWeekDayStrip). Renders
+ * nothing for an empty/missing list. */
+function renderRaceWeekChecklist(week, interactive = true) {
+  const checklist = week.race_week_checklist;
   if (!checklist || checklist.length === 0) return '';
-  const rows = [...checklist]
-    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
-    .map((item) => `
-      <div class="race-week-item race-week-item-${esc(item.category)}">
-        <span class="race-week-date mono">${esc(formatShortDate(parseIsoDate(item.date)))}</span>
-        <span class="race-week-cat">${esc(raceWeekCategoryLabel(item.category))}</span>
-        <span class="race-week-label">${esc(item.label)}</span>
-      </div>`)
-    .join('');
+  const dayKeys = sessionsByDay(week).map((d) => dateKey(d.date));
+  const { outside } = groupRaceWeekItems(checklist, dayKeys);
+  const { total, done } = raceWeekSummary(checklist);
   return `
     <div class="race-week-checklist" data-a="week:race-week-checklist">
-      <h4>Race week checklist</h4>
-      ${rows}
+      <h4>Race week: ${total} item${total === 1 ? '' : 's'}, ${done} done</h4>
+      ${outside.length ? `<div class="rw-strip rw-outside">${outside.map((i) => renderRaceWeekChip(i, week.iso_week, { showDate: true, interactive })).join('')}</div>` : ''}
     </div>`;
+}
+
+/** One day's race-week items as a compact strip above that day's sessions. */
+function renderRaceWeekDayStrip(items, isoWeek, interactive) {
+  if (!items || items.length === 0) return '';
+  return `<div class="rw-strip">${items.map((i) => renderRaceWeekChip(i, isoWeek, { interactive })).join('')}</div>`;
 }
 
 /** Renders a pre-event fueling-plan Session's `structure` text (see
@@ -681,16 +709,17 @@ function weekVolumeLabel(week) {
   return `total <b>${formatDuration(totalMin)}</b>`;
 }
 
-function renderWeekCard(week, label) {
+function renderWeekCard(week, label, interactive = true) {
   const days = sessionsByDay(week);
+  const { byDay: raceWeekByDay } = groupRaceWeekItems(week.race_week_checklist, days.map((d) => dateKey(d.date)));
   const hasHighlight = (daySessions) => daySessions.some((s) => classifySession(s).highlight);
 
   const dayRows = days.map((day) => `
     <div class="day-row${hasHighlight(day.sessions) ? ' hi' : ''}">
       <div class="dlabel"><div class="dow">${day.dow}</div><div class="date mono">${esc(formatShortDate(day.date))}</div></div>
-      <div>${
+      <div>${renderRaceWeekDayStrip(raceWeekByDay[dateKey(day.date)], week.iso_week, interactive)}${
         day.sessions.length > 0
-          ? day.sessions.map(renderSession).join('')
+          ? day.sessions.map((sess) => renderSession(sess, interactive)).join('')
           : '<div class="sess"><div class="body"><div class="meta">—</div></div></div>'
       }</div>
     </div>`).join('');
@@ -703,7 +732,7 @@ function renderWeekCard(week, label) {
         <span class="vol mono">${weekVolumeLabel(week)}</span>
       </div>
       ${week.adaptation_rationale ? `<div class="rationale"><b>Why this shape:</b> ${esc(week.adaptation_rationale)}</div>` : ''}
-      ${renderRaceWeekChecklist(week.race_week_checklist)}
+      ${renderRaceWeekChecklist(week, interactive)}
       <div class="days">${dayRows}</div>
     </div>`;
 }
@@ -729,7 +758,7 @@ function renderWeeksSection(weeks, detailId, sessionPush, allWeeksOpen, showGarm
   }
 
   const { focus, focusIsCurrent, upcoming, past } = partitionPlanWeeks(weeks);
-  const pastWeeks = renderPastWeeksAccordion(past, allWeeksOpen);
+  const pastWeeks = renderPastWeeksAccordion(past, allWeeksOpen, showGarminActions);
 
   // No current or future week: an explicit empty state, never a past week
   // (the 2026-08-18 defect -- see plan.js's pickCurrentAndNextWeek). Past
@@ -746,10 +775,10 @@ function renderWeeksSection(weeks, detailId, sessionPush, allWeeksOpen, showGarm
     </section>`;
   }
 
-  const cards = [renderWeekCard(focus, `${focusIsCurrent ? 'This week' : 'Upcoming'} · ${weekRangeLabel(focus)}`)];
+  const cards = [renderWeekCard(focus, `${focusIsCurrent ? 'This week' : 'Upcoming'} · ${weekRangeLabel(focus)}`, showGarminActions)];
   upcoming.forEach((week, i) => {
     const label = i === 0 && focusIsCurrent ? 'Next week' : 'Upcoming';
-    cards.push(renderWeekCard(week, `${label} · ${weekRangeLabel(week)}`));
+    cards.push(renderWeekCard(week, `${label} · ${weekRangeLabel(week)}`, showGarminActions));
   });
 
   return `
@@ -767,10 +796,10 @@ function renderWeeksSection(weeks, detailId, sessionPush, allWeeksOpen, showGarm
  * hidden by default so the plan opens on the active week, but never lost.
  * Native `<details>`; main.js mirrors its open state (`weeks:toggle-all`)
  * so re-renders don't snap it shut. Renders nothing when there are none. */
-function renderPastWeeksAccordion(pastWeeks, allWeeksOpen) {
+function renderPastWeeksAccordion(pastWeeks, allWeeksOpen, interactive = true) {
   if (pastWeeks.length === 0) return '';
   const cards = pastWeeks
-    .map((week) => renderWeekCard(week, `${week.iso_week} · ${weekRangeLabel(week)}`))
+    .map((week) => renderWeekCard(week, `${week.iso_week} · ${weekRangeLabel(week)}`, interactive))
     .join('');
   return `
       <details class="all-weeks past-weeks"${allWeeksOpen ? ' open' : ''}>
@@ -1760,6 +1789,80 @@ export function renderApp(data, planSessionDetailId) {
       </div>
       ${renderGlossaryPanel(glossaryOpen)}
       <p class="disc">Generated from ${esc(athlete.name)}'s live plan data on the swim-coach engine. Distances marked ~ are estimates until each session is logged.</p>
+    </div>`;
+}
+
+// --- Race-day checklist overlay ----------------------------------------------------------
+// Full-screen, state-driven (main.js state.raceDay), so it survives the innerHTML re-render and
+// a reload. `rd` = { open, status: 'loading'|'ready'|'error', plan, error, tab, name, date,
+// pending }.
+
+function renderRaceDayChecklistBody(plan) {
+  const sections = visibleSections(plan);
+  if (sections.length === 0) return '<p class="sub">No items for the active weather tags.</p>';
+  return sections.map((sec) => `
+      <section class="rd-section">
+        <h3>${esc(sec.title)} <span class="rd-count mono">${sec.done}/${sec.total}</span></h3>
+        ${sec.items.map((i) => `
+        <button type="button" class="rd-item${i.checked ? ' checked' : ''}" data-a="raceday:check" data-id="${esc(i.id)}" aria-pressed="${i.checked ? 'true' : 'false'}">
+          <span class="rd-box" aria-hidden="true">${i.checked ? '✓' : ''}</span>
+          <span class="rd-text">${esc(i.text)}</span>
+          ${(i.tags || []).length ? `<span class="rd-tags">${i.tags.map((t) => esc(t)).join(' · ')}</span>` : ''}
+        </button>`).join('')}
+      </section>`).join('');
+}
+
+function renderRaceDayTimelineBody(plan, now) {
+  const clock = timelineClock(plan);
+  const pos = timelinePosition(clock, plan.date, now);
+  const hint = plan.start_time ? '' : '<p class="sub">Set a start time to see clock times.</p>';
+  const rows = clock.map((e) => {
+    const cls = ['rd-tl-row', e.is_start ? 'start' : '', e.id === pos.currentId ? 'current' : '', e.id === pos.nextId ? 'next' : ''].filter(Boolean).join(' ');
+    const when = e.time ? formatClockTime(e.time) : `${e.offset_min > 0 ? '+' : ''}${e.offset_min} min`;
+    return `
+        <li class="${cls}" data-tl="${esc(e.id)}">
+          <span class="rd-tl-time mono">${esc(when)}</span>
+          <span class="rd-tl-label">${esc(e.label)}${e.day === 'eve' ? ' <span class="rd-tl-eve">evening before</span>' : ''}${e.id === pos.currentId ? ' <span class="rd-tl-now">now</span>' : ''}${e.id === pos.nextId ? ' <span class="rd-tl-now">next</span>' : ''}</span>
+        </li>`;
+  }).join('');
+  return `${hint}<ol class="rd-timeline">${rows}</ol>`;
+}
+
+export function renderRaceDayOverlay(rd, online = true, now = new Date()) {
+  if (!rd || !rd.open) return '';
+  const plan = rd.status === 'ready' ? rd.plan : null;
+  const tab = rd.tab === 'timeline' ? 'timeline' : 'list';
+  const progress = plan ? planProgress(plan) : null;
+  let body;
+  if (rd.status === 'loading') body = '<p class="sub">Loading checklist…</p>';
+  else if (!plan) body = `<div class="conn-result fail">${esc(rd.error || 'Could not load the checklist.')}</div>`;
+  else {
+    body = `
+      <div class="rd-controls">
+        <label class="rd-start">Start time
+          <input type="time" id="raceday-start" data-form="raceday" data-field="start_time" value="${esc(plan.start_time || '')}">
+        </label>
+        <div class="rd-tags-row" role="group" aria-label="Weather and conditions">
+          ${allTags(plan).map((t) => `<button type="button" class="rd-tag${(plan.active_tags || []).includes(t) ? ' on' : ''}" data-a="raceday:tag" data-tag="${esc(t)}" aria-pressed="${(plan.active_tags || []).includes(t) ? 'true' : 'false'}">${esc(t)}</button>`).join('')}
+        </div>
+        <div class="rd-tabs" role="tablist">
+          <button type="button" role="tab" class="rd-tab${tab === 'list' ? ' on' : ''}" data-a="raceday:tab" data-tab="list" aria-selected="${tab === 'list'}">Checklist ${progress.done}/${progress.total}</button>
+          <button type="button" role="tab" class="rd-tab${tab === 'timeline' ? ' on' : ''}" data-a="raceday:tab" data-tab="timeline" aria-selected="${tab === 'timeline'}">Timeline</button>
+        </div>
+      </div>
+      ${tab === 'list' ? renderRaceDayChecklistBody(plan) : renderRaceDayTimelineBody(plan, now)}`;
+  }
+  const status = !online ? 'Offline -- changes sync when you reconnect' : (rd.pending ? 'Syncing…' : '');
+  return `
+    <div class="rd-overlay" id="race-overlay" role="dialog" aria-modal="true" aria-label="Race-day checklist">
+      <div class="rd-head" id="race-overlay-head">
+        <button type="button" class="btn-ghost" data-a="raceday:close">&larr; Back</button>
+        <div class="rd-title"><strong>${esc(rd.name || (plan && plan.name) || 'Race day')}</strong>
+          <span class="mono">${esc(formatShortDate(parseIsoDate(rd.date)))}</span></div>
+        <button type="button" class="btn-ghost rd-x" data-a="raceday:close" aria-label="Close">✕</button>
+      </div>
+      ${status ? `<div class="rd-status">${esc(status)}</div>` : ''}
+      <div class="rd-body" id="race-overlay-body">${body}</div>
     </div>`;
 }
 
