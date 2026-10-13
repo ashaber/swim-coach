@@ -36,6 +36,26 @@ def test_dry_run_writes_nothing_and_apply_writes(tmp_path, capsys) -> None:
     assert isinstance(stored, RaceChecklistTemplate) and len(stored.sections) == 6
 
 
+def test_andrew_template_timeline_follows_per_race_start_time() -> None:
+    from datetime import date
+
+    from swim_coach.race_day import new_plan_from_template, timeline_clock
+
+    t = seed_race_checklist.load_template(REPO / "athletes" / "andrew" / "race-checklist-template.json")
+    plan = new_plan_from_template(t, race_date=date(2026, 10, 17), start_time="11:15")
+    by_id = {c["id"]: c["time"] for c in timeline_clock(plan)}
+    assert (by_id["wake-up"], by_id["breakfast"], by_id["warm-up"], by_id["stage"], by_id["start"]) == (
+        "06:00", "08:15", "10:15", "11:05", "11:15",
+    )
+    eve_before = {c["id"]: c["time"] for c in timeline_clock(plan) if c["day"] == "eve"}
+    plan.start_time = "09:30"
+    clock = {c["id"]: c for c in timeline_clock(plan)}
+    assert (clock["wake-up"]["time"], clock["warm-up"]["time"], clock["start"]["time"]) == ("04:15", "08:30", "09:30")
+    assert {k: v["time"] for k, v in clock.items() if v["day"] == "eve"} == eve_before
+    unset = new_plan_from_template(t, race_date=date(2026, 10, 17))
+    assert all(c["time"] is None for c in timeline_clock(unset) if c["day"] == "race")
+
+
 def test_bad_file_is_an_error(tmp_path, capsys) -> None:
     bad = tmp_path / "bad.json"
     bad.write_text('{"timeline": [{"id": "x", "label": "x", "day": "eve"}]}')
