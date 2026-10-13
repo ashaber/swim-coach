@@ -208,7 +208,8 @@
      "is_best_42d": null,
      "is_best_90d": null
     }
-   ]
+   ],
+   "free_ride": null
   }
  },
  "ride_2026_09_26_starts_technical_5x5.json": {
@@ -1179,7 +1180,206 @@
      "is_best_42d": null,
      "is_best_90d": null
     }
-   ]
+   ],
+   "free_ride": {
+    "moving_s": 7448,
+    "coasting_s": 2213,
+    "coasting_pct": 29.7,
+    "zero_or_null_power_pct": 23.5,
+    "power_zones": [
+     {
+      "zone": "Z1",
+      "seconds": 2776,
+      "pct": 53.0
+     },
+     {
+      "zone": "Z2",
+      "seconds": 1060,
+      "pct": 20.2
+     },
+     {
+      "zone": "Z3",
+      "seconds": 449,
+      "pct": 8.6
+     },
+     {
+      "zone": "Z4",
+      "seconds": 249,
+      "pct": 4.8
+     },
+     {
+      "zone": "Z5",
+      "seconds": 198,
+      "pct": 3.8
+     },
+     {
+      "zone": "Z6",
+      "seconds": 227,
+      "pct": 4.3
+     },
+     {
+      "zone": "Z7",
+      "seconds": 276,
+      "pct": 5.3
+     }
+    ],
+    "hr_zones": [
+     {
+      "zone": "Z1",
+      "seconds": 5663,
+      "pct": 77.8
+     },
+     {
+      "zone": "Z2",
+      "seconds": 640,
+      "pct": 8.8
+     },
+     {
+      "zone": "Z3",
+      "seconds": 361,
+      "pct": 5.0
+     },
+     {
+      "zone": "Z4",
+      "seconds": 581,
+      "pct": 8.0
+     },
+     {
+      "zone": "Z5",
+      "seconds": 32,
+      "pct": 0.4
+     }
+    ],
+    "intent_zone": null,
+    "z3_plus_pct": 26.7,
+    "tempo_creep": null,
+    "tempo_creep_note": null,
+    "notable_efforts": [
+     {
+      "duration_s": 1200,
+      "start_offset_s": 5495.0,
+      "avg_w": 166,
+      "pct_ftp": 60.1,
+      "avg_hr": 151,
+      "altitude_gain_m": -1.2,
+      "avg_grade_pct": -0.0,
+      "label": null,
+      "new_best_42d": null,
+      "new_best_90d": null
+     },
+     {
+      "duration_s": 300,
+      "start_offset_s": 6408.0,
+      "avg_w": 227,
+      "pct_ftp": 82.2,
+      "avg_hr": 163,
+      "altitude_gain_m": 0.4,
+      "avg_grade_pct": 0.0,
+      "label": "tempo effort",
+      "new_best_42d": null,
+      "new_best_90d": null
+     },
+     {
+      "duration_s": 60,
+      "start_offset_s": 4116.0,
+      "avg_w": 364,
+      "pct_ftp": 131.9,
+      "avg_hr": 124,
+      "altitude_gain_m": 8.1,
+      "avg_grade_pct": 1.8,
+      "label": "anaerobic effort",
+      "new_best_42d": null,
+      "new_best_90d": null
+     }
+    ],
+    "matches": {
+     "count": 10,
+     "time_above_ftp_s": 282,
+     "kj_above_ftp": 49.6,
+     "efforts": [
+      {
+       "start_offset_s": 4142.0,
+       "duration_s": 40,
+       "avg_w": 448,
+       "peak_w": 912,
+       "kj_above_ftp": 10.5
+      },
+      {
+       "start_offset_s": 3019.0,
+       "duration_s": 34,
+       "avg_w": 532,
+       "peak_w": 890,
+       "kj_above_ftp": 10.0
+      },
+      {
+       "start_offset_s": 4456.0,
+       "duration_s": 33,
+       "avg_w": 424,
+       "peak_w": 836,
+       "kj_above_ftp": 7.7
+      },
+      {
+       "start_offset_s": 2552.0,
+       "duration_s": 31,
+       "avg_w": 453,
+       "peak_w": 758,
+       "kj_above_ftp": 7.1
+      },
+      {
+       "start_offset_s": 6423.0,
+       "duration_s": 27,
+       "avg_w": 323,
+       "peak_w": 588,
+       "kj_above_ftp": 3.3
+      },
+      {
+       "start_offset_s": 6501.0,
+       "duration_s": 28,
+       "avg_w": 313,
+       "peak_w": 627,
+       "kj_above_ftp": 3.3
+      },
+      {
+       "start_offset_s": 6654.0,
+       "duration_s": 27,
+       "avg_w": 289,
+       "peak_w": 509,
+       "kj_above_ftp": 2.7
+      },
+      {
+       "start_offset_s": 1521.0,
+       "duration_s": 32,
+       "avg_w": 335,
+       "peak_w": 391,
+       "kj_above_ftp": 1.9
+      },
+      {
+       "start_offset_s": 6578.0,
+       "duration_s": 18,
+       "avg_w": 317,
+       "peak_w": 523,
+       "kj_above_ftp": 1.9
+      },
+      {
+       "start_offset_s": 1027.0,
+       "duration_s": 12,
+       "avg_w": 332,
+       "peak_w": 513,
+       "kj_above_ftp": 1.2
+      }
+     ]
+    },
+    "cost": {
+     "tss": 109.0,
+     "intensity_factor": 0.73,
+     "adjacent_key_sessions": [],
+     "note": "TSS 109, IF 0.73"
+    },
+    "steady_drift": [],
+    "steady_note": "No steady stretch of 20 min or more (power varied or stops); no drift read.",
+    "altitude_range_m": 107.0,
+    "data_quality_notes": []
+   }
   },
   "with_session": {
    "cardiac_drift_pct": 25.512115000707226,
@@ -2242,7 +2442,8 @@
      "is_best_42d": null,
      "is_best_90d": null
     }
-   ]
+   ],
+   "free_ride": null
   }
  },
  "ride_2026_09_29_vo2_40_20.json": {
@@ -2528,7 +2729,208 @@
      "is_best_42d": null,
      "is_best_90d": null
     }
-   ]
+   ],
+   "free_ride": {
+    "moving_s": 3329,
+    "coasting_s": 45,
+    "coasting_pct": 1.4,
+    "zero_or_null_power_pct": 1.4,
+    "power_zones": [
+     {
+      "zone": "Z1",
+      "seconds": 1665,
+      "pct": 50.7
+     },
+     {
+      "zone": "Z2",
+      "seconds": 780,
+      "pct": 23.8
+     },
+     {
+      "zone": "Z3",
+      "seconds": 136,
+      "pct": 4.1
+     },
+     {
+      "zone": "Z4",
+      "seconds": 13,
+      "pct": 0.4
+     },
+     {
+      "zone": "Z5",
+      "seconds": 649,
+      "pct": 19.8
+     },
+     {
+      "zone": "Z6",
+      "seconds": 40,
+      "pct": 1.2
+     },
+     {
+      "zone": "Z7",
+      "seconds": 1,
+      "pct": 0.0
+     }
+    ],
+    "hr_zones": [
+     {
+      "zone": "Z1",
+      "seconds": 1981,
+      "pct": 59.5
+     },
+     {
+      "zone": "Z2",
+      "seconds": 362,
+      "pct": 10.9
+     },
+     {
+      "zone": "Z3",
+      "seconds": 353,
+      "pct": 10.6
+     },
+     {
+      "zone": "Z4",
+      "seconds": 614,
+      "pct": 18.4
+     },
+     {
+      "zone": "Z5",
+      "seconds": 19,
+      "pct": 0.6
+     }
+    ],
+    "intent_zone": null,
+    "z3_plus_pct": 25.5,
+    "tempo_creep": null,
+    "tempo_creep_note": null,
+    "notable_efforts": [
+     {
+      "duration_s": 1200,
+      "start_offset_s": 642.0,
+      "avg_w": 217,
+      "pct_ftp": 78.6,
+      "avg_hr": 149,
+      "altitude_gain_m": 0.0,
+      "avg_grade_pct": 0.0,
+      "label": "tempo effort",
+      "new_best_42d": null,
+      "new_best_90d": null
+     },
+     {
+      "duration_s": 300,
+      "start_offset_s": 881.0,
+      "avg_w": 254,
+      "pct_ftp": 92.0,
+      "avg_hr": 153,
+      "altitude_gain_m": 0.0,
+      "avg_grade_pct": 0.0,
+      "label": "threshold effort",
+      "new_best_42d": null,
+      "new_best_90d": null
+     },
+     {
+      "duration_s": 60,
+      "start_offset_s": 884.0,
+      "avg_w": 258,
+      "pct_ftp": 93.5,
+      "avg_hr": 140,
+      "altitude_gain_m": 0.0,
+      "avg_grade_pct": 0.0,
+      "label": "threshold effort",
+      "new_best_42d": null,
+      "new_best_90d": null
+     }
+    ],
+    "matches": {
+     "count": 18,
+     "time_above_ftp_s": 378,
+     "kj_above_ftp": 13.5,
+     "efforts": [
+      {
+       "start_offset_s": 970.0,
+       "duration_s": 21,
+       "avg_w": 312,
+       "peak_w": 317,
+       "kj_above_ftp": 0.8
+      },
+      {
+       "start_offset_s": 1210.0,
+       "duration_s": 20,
+       "avg_w": 314,
+       "peak_w": 320,
+       "kj_above_ftp": 0.8
+      },
+      {
+       "start_offset_s": 1570.0,
+       "duration_s": 22,
+       "avg_w": 312,
+       "peak_w": 317,
+       "kj_above_ftp": 0.8
+      },
+      {
+       "start_offset_s": 1750.0,
+       "duration_s": 22,
+       "avg_w": 311,
+       "peak_w": 316,
+       "kj_above_ftp": 0.8
+      },
+      {
+       "start_offset_s": 1810.0,
+       "duration_s": 21,
+       "avg_w": 313,
+       "peak_w": 320,
+       "kj_above_ftp": 0.8
+      },
+      {
+       "start_offset_s": 2170.0,
+       "duration_s": 21,
+       "avg_w": 313,
+       "peak_w": 318,
+       "kj_above_ftp": 0.8
+      },
+      {
+       "start_offset_s": 2230.0,
+       "duration_s": 21,
+       "avg_w": 313,
+       "peak_w": 322,
+       "kj_above_ftp": 0.8
+      },
+      {
+       "start_offset_s": 2350.0,
+       "duration_s": 21,
+       "avg_w": 313,
+       "peak_w": 318,
+       "kj_above_ftp": 0.8
+      },
+      {
+       "start_offset_s": 2409.0,
+       "duration_s": 21,
+       "avg_w": 314,
+       "peak_w": 320,
+       "kj_above_ftp": 0.8
+      },
+      {
+       "start_offset_s": 909.0,
+       "duration_s": 22,
+       "avg_w": 309,
+       "peak_w": 311,
+       "kj_above_ftp": 0.7
+      }
+     ]
+    },
+    "cost": {
+     "tss": 55.0,
+     "intensity_factor": 0.77,
+     "adjacent_key_sessions": [],
+     "note": "TSS 55, IF 0.77"
+    },
+    "steady_drift": [],
+    "steady_note": "No steady stretch of 20 min or more (power varied or stops); no drift read.",
+    "altitude_range_m": 0.4,
+    "data_quality_notes": [
+     "Altitude range is only 0 m (flat or unreliable altitude): climb calls skipped."
+    ]
+   }
   },
   "with_session": {
    "cardiac_drift_pct": 20.77142428166876,
@@ -3338,7 +3740,8 @@
      "is_best_42d": null,
      "is_best_90d": null
     }
-   ]
+   ],
+   "free_ride": null
   }
  },
  "ride_2026_10_06_over_unders_altitude.json": {
@@ -3710,7 +4113,178 @@
      "is_best_42d": null,
      "is_best_90d": null
     }
-   ]
+   ],
+   "free_ride": {
+    "moving_s": 4158,
+    "coasting_s": 318,
+    "coasting_pct": 7.6,
+    "zero_or_null_power_pct": 5.2,
+    "power_zones": [
+     {
+      "zone": "Z1",
+      "seconds": 1591,
+      "pct": 41.4
+     },
+     {
+      "zone": "Z2",
+      "seconds": 992,
+      "pct": 25.8
+     },
+     {
+      "zone": "Z3",
+      "seconds": 560,
+      "pct": 14.6
+     },
+     {
+      "zone": "Z4",
+      "seconds": 371,
+      "pct": 9.7
+     },
+     {
+      "zone": "Z5",
+      "seconds": 201,
+      "pct": 5.2
+     },
+     {
+      "zone": "Z6",
+      "seconds": 109,
+      "pct": 2.8
+     },
+     {
+      "zone": "Z7",
+      "seconds": 16,
+      "pct": 0.4
+     }
+    ],
+    "hr_zones": [
+     {
+      "zone": "Z1",
+      "seconds": 2529,
+      "pct": 60.8
+     },
+     {
+      "zone": "Z2",
+      "seconds": 554,
+      "pct": 13.3
+     },
+     {
+      "zone": "Z3",
+      "seconds": 188,
+      "pct": 4.5
+     },
+     {
+      "zone": "Z4",
+      "seconds": 603,
+      "pct": 14.5
+     },
+     {
+      "zone": "Z5",
+      "seconds": 284,
+      "pct": 6.8
+     }
+    ],
+    "intent_zone": null,
+    "z3_plus_pct": 32.7,
+    "tempo_creep": null,
+    "tempo_creep_note": null,
+    "notable_efforts": [
+     {
+      "duration_s": 1200,
+      "start_offset_s": 2196.0,
+      "avg_w": 214,
+      "pct_ftp": 77.0,
+      "avg_hr": 155,
+      "altitude_gain_m": 8.6,
+      "avg_grade_pct": 0.1,
+      "label": "tempo effort",
+      "new_best_42d": null,
+      "new_best_90d": null
+     },
+     {
+      "duration_s": 300,
+      "start_offset_s": 3096.0,
+      "avg_w": 269,
+      "pct_ftp": 96.8,
+      "avg_hr": 170,
+      "altitude_gain_m": -20.2,
+      "avg_grade_pct": -0.6,
+      "label": "threshold effort",
+      "new_best_42d": null,
+      "new_best_90d": null
+     },
+     {
+      "duration_s": 60,
+      "start_offset_s": 2642.0,
+      "avg_w": 320,
+      "pct_ftp": 115.1,
+      "avg_hr": 170,
+      "altitude_gain_m": 4.0,
+      "avg_grade_pct": 0.7,
+      "label": "VO2max effort",
+      "new_best_42d": null,
+      "new_best_90d": null
+     }
+    ],
+    "matches": {
+     "count": 6,
+     "time_above_ftp_s": 322,
+     "kj_above_ftp": 9.5,
+     "efforts": [
+      {
+       "start_offset_s": 2644.0,
+       "duration_s": 72,
+       "avg_w": 313,
+       "peak_w": 368,
+       "kj_above_ftp": 2.9
+      },
+      {
+       "start_offset_s": 3304.0,
+       "duration_s": 77,
+       "avg_w": 303,
+       "peak_w": 357,
+       "kj_above_ftp": 2.1
+      },
+      {
+       "start_offset_s": 1654.0,
+       "duration_s": 44,
+       "avg_w": 314,
+       "peak_w": 382,
+       "kj_above_ftp": 2.0
+      },
+      {
+       "start_offset_s": 3145.0,
+       "duration_s": 53,
+       "avg_w": 293,
+       "peak_w": 342,
+       "kj_above_ftp": 1.3
+      },
+      {
+       "start_offset_s": 2473.0,
+       "duration_s": 46,
+       "avg_w": 291,
+       "peak_w": 324,
+       "kj_above_ftp": 0.8
+      },
+      {
+       "start_offset_s": 1847.0,
+       "duration_s": 30,
+       "avg_w": 279,
+       "peak_w": 340,
+       "kj_above_ftp": 0.4
+      }
+     ]
+    },
+    "cost": {
+     "tss": 61.0,
+     "intensity_factor": 0.72,
+     "adjacent_key_sessions": [],
+     "note": "TSS 61, IF 0.72"
+    },
+    "steady_drift": [],
+    "steady_note": "No steady stretch of 20 min or more (power varied or stops); no drift read.",
+    "altitude_range_m": 56.2,
+    "data_quality_notes": []
+   }
   },
   "with_session": {
    "cardiac_drift_pct": 10.269466186699706,
@@ -4080,7 +4654,8 @@
      "is_best_42d": null,
      "is_best_90d": null
     }
-   ]
+   ],
+   "free_ride": null
   }
  },
  "ride_2026_10_07_endurance_altitude.json": {
@@ -4551,7 +5126,143 @@
      "is_best_42d": null,
      "is_best_90d": null
     }
-   ]
+   ],
+   "free_ride": {
+    "moving_s": 5139,
+    "coasting_s": 657,
+    "coasting_pct": 12.8,
+    "zero_or_null_power_pct": 9.9,
+    "power_zones": [
+     {
+      "zone": "Z1",
+      "seconds": 1319,
+      "pct": 29.4
+     },
+     {
+      "zone": "Z2",
+      "seconds": 2497,
+      "pct": 55.7
+     },
+     {
+      "zone": "Z3",
+      "seconds": 455,
+      "pct": 10.2
+     },
+     {
+      "zone": "Z4",
+      "seconds": 99,
+      "pct": 2.2
+     },
+     {
+      "zone": "Z5",
+      "seconds": 44,
+      "pct": 1.0
+     },
+     {
+      "zone": "Z6",
+      "seconds": 45,
+      "pct": 1.0
+     },
+     {
+      "zone": "Z7",
+      "seconds": 23,
+      "pct": 0.5
+     }
+    ],
+    "hr_zones": [
+     {
+      "zone": "Z1",
+      "seconds": 3843,
+      "pct": 74.8
+     },
+     {
+      "zone": "Z2",
+      "seconds": 1260,
+      "pct": 24.5
+     },
+     {
+      "zone": "Z3",
+      "seconds": 35,
+      "pct": 0.7
+     },
+     {
+      "zone": "Z4",
+      "seconds": 0,
+      "pct": 0.0
+     },
+     {
+      "zone": "Z5",
+      "seconds": 0,
+      "pct": 0.0
+     }
+    ],
+    "intent_zone": null,
+    "z3_plus_pct": 14.9,
+    "tempo_creep": null,
+    "tempo_creep_note": null,
+    "notable_efforts": [
+     {
+      "duration_s": 1200,
+      "start_offset_s": 438.0,
+      "avg_w": 182,
+      "pct_ftp": 65.5,
+      "avg_hr": 139,
+      "altitude_gain_m": 66.6,
+      "avg_grade_pct": 0.7,
+      "label": null,
+      "new_best_42d": null,
+      "new_best_90d": null
+     },
+     {
+      "duration_s": 300,
+      "start_offset_s": 872.0,
+      "avg_w": 195,
+      "pct_ftp": 70.1,
+      "avg_hr": 143,
+      "altitude_gain_m": 16.0,
+      "avg_grade_pct": 0.6,
+      "label": null,
+      "new_best_42d": null,
+      "new_best_90d": null
+     },
+     {
+      "duration_s": 60,
+      "start_offset_s": 2800.0,
+      "avg_w": 271,
+      "pct_ftp": 97.5,
+      "avg_hr": 142,
+      "altitude_gain_m": 6.4,
+      "avg_grade_pct": 1.4,
+      "label": "threshold effort",
+      "new_best_42d": null,
+      "new_best_90d": null
+     }
+    ],
+    "matches": {
+     "count": 1,
+     "time_above_ftp_s": 27,
+     "kj_above_ftp": 3.4,
+     "efforts": [
+      {
+       "start_offset_s": 2830.0,
+       "duration_s": 27,
+       "avg_w": 359,
+       "peak_w": 551,
+       "kj_above_ftp": 3.4
+      }
+     ]
+    },
+    "cost": {
+     "tss": 53.0,
+     "intensity_factor": 0.61,
+     "adjacent_key_sessions": [],
+     "note": "TSS 53, IF 0.61"
+    },
+    "steady_drift": [],
+    "steady_note": "No steady stretch of 20 min or more (power varied or stops); no drift read.",
+    "altitude_range_m": 129.8,
+    "data_quality_notes": []
+   }
   },
   "with_session": {
    "cardiac_drift_pct": 7.541015192796219,
@@ -5020,7 +5731,8 @@
      "is_best_42d": null,
      "is_best_90d": null
     }
-   ]
+   ],
+   "free_ride": null
   }
  },
  "ride_2026_10_10_starts_race_pace.json": {
@@ -6198,7 +6910,206 @@
      "is_best_42d": null,
      "is_best_90d": null
     }
-   ]
+   ],
+   "free_ride": {
+    "moving_s": 7806,
+    "coasting_s": 1029,
+    "coasting_pct": 13.2,
+    "zero_or_null_power_pct": 8.9,
+    "power_zones": [
+     {
+      "zone": "Z1",
+      "seconds": 2801,
+      "pct": 41.3
+     },
+     {
+      "zone": "Z2",
+      "seconds": 2585,
+      "pct": 38.1
+     },
+     {
+      "zone": "Z3",
+      "seconds": 544,
+      "pct": 8.0
+     },
+     {
+      "zone": "Z4",
+      "seconds": 284,
+      "pct": 4.2
+     },
+     {
+      "zone": "Z5",
+      "seconds": 160,
+      "pct": 2.4
+     },
+     {
+      "zone": "Z6",
+      "seconds": 175,
+      "pct": 2.6
+     },
+     {
+      "zone": "Z7",
+      "seconds": 228,
+      "pct": 3.4
+     }
+    ],
+    "hr_zones": [
+     {
+      "zone": "Z1",
+      "seconds": 3632,
+      "pct": 46.5
+     },
+     {
+      "zone": "Z2",
+      "seconds": 2829,
+      "pct": 36.2
+     },
+     {
+      "zone": "Z3",
+      "seconds": 335,
+      "pct": 4.3
+     },
+     {
+      "zone": "Z4",
+      "seconds": 662,
+      "pct": 8.5
+     },
+     {
+      "zone": "Z5",
+      "seconds": 348,
+      "pct": 4.5
+     }
+    ],
+    "intent_zone": null,
+    "z3_plus_pct": 20.5,
+    "tempo_creep": null,
+    "tempo_creep_note": null,
+    "notable_efforts": [
+     {
+      "duration_s": 1200,
+      "start_offset_s": 1715.0,
+      "avg_w": 186,
+      "pct_ftp": 66.9,
+      "avg_hr": 144,
+      "altitude_gain_m": 69.7,
+      "avg_grade_pct": 0.7,
+      "label": null,
+      "new_best_42d": null,
+      "new_best_90d": null
+     },
+     {
+      "duration_s": 300,
+      "start_offset_s": 2661.0,
+      "avg_w": 233,
+      "pct_ftp": 83.8,
+      "avg_hr": 153,
+      "altitude_gain_m": 19.0,
+      "avg_grade_pct": 0.7,
+      "label": "tempo effort",
+      "new_best_42d": null,
+      "new_best_90d": null
+     },
+     {
+      "duration_s": 60,
+      "start_offset_s": 2478.0,
+      "avg_w": 353,
+      "pct_ftp": 127.0,
+      "avg_hr": 138,
+      "altitude_gain_m": 5.0,
+      "avg_grade_pct": 1.1,
+      "label": "anaerobic effort",
+      "new_best_42d": null,
+      "new_best_90d": null
+     }
+    ],
+    "matches": {
+     "count": 12,
+     "time_above_ftp_s": 379,
+     "kj_above_ftp": 58.9,
+     "efforts": [
+      {
+       "start_offset_s": 2506.0,
+       "duration_s": 35,
+       "avg_w": 536,
+       "peak_w": 826,
+       "kj_above_ftp": 11.0
+      },
+      {
+       "start_offset_s": 2237.0,
+       "duration_s": 34,
+       "avg_w": 493,
+       "peak_w": 894,
+       "kj_above_ftp": 9.8
+      },
+      {
+       "start_offset_s": 1968.0,
+       "duration_s": 32,
+       "avg_w": 489,
+       "peak_w": 805,
+       "kj_above_ftp": 9.4
+      },
+      {
+       "start_offset_s": 1710.0,
+       "duration_s": 29,
+       "avg_w": 434,
+       "peak_w": 946,
+       "kj_above_ftp": 7.6
+      },
+      {
+       "start_offset_s": 1468.0,
+       "duration_s": 27,
+       "avg_w": 443,
+       "peak_w": 956,
+       "kj_above_ftp": 6.9
+      },
+      {
+       "start_offset_s": 3517.0,
+       "duration_s": 32,
+       "avg_w": 325,
+       "peak_w": 480,
+       "kj_above_ftp": 3.1
+      },
+      {
+       "start_offset_s": 2784.0,
+       "duration_s": 82,
+       "avg_w": 301,
+       "peak_w": 411,
+       "kj_above_ftp": 2.1
+      },
+      {
+       "start_offset_s": 3881.0,
+       "duration_s": 24,
+       "avg_w": 302,
+       "peak_w": 464,
+       "kj_above_ftp": 2.0
+      },
+      {
+       "start_offset_s": 4246.0,
+       "duration_s": 24,
+       "avg_w": 292,
+       "peak_w": 418,
+       "kj_above_ftp": 2.0
+      },
+      {
+       "start_offset_s": 5178.0,
+       "duration_s": 22,
+       "avg_w": 367,
+       "peak_w": 444,
+       "kj_above_ftp": 2.0
+      }
+     ]
+    },
+    "cost": {
+     "tss": 125.0,
+     "intensity_factor": 0.76,
+     "adjacent_key_sessions": [],
+     "note": "TSS 125, IF 0.76"
+    },
+    "steady_drift": [],
+    "steady_note": "No steady stretch of 20 min or more (power varied or stops); no drift read.",
+    "altitude_range_m": 173.2,
+    "data_quality_notes": []
+   }
   },
   "with_session": {
    "cardiac_drift_pct": 15.15966432134437,
@@ -7530,7 +8441,8 @@
      "is_best_42d": null,
      "is_best_90d": null
     }
-   ]
+   ],
+   "free_ride": null
   }
  }
 }
