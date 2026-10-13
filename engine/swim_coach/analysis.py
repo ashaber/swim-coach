@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Protocol, Sequence
 from swim_coach.analytics import compute_analytics
 from swim_coach.models import Athlete, Event, Session, SessionKind, Workout, WorkoutAnalytics
 from swim_coach.bike_coach_view import shape_ride_view
-from swim_coach.free_ride import is_key_session, read_free_ride
+from swim_coach.free_ride import FREE_READ_KINDS, is_key_session, read_free_ride
 from swim_coach.power_curve import BEST_WINDOWS_DAYS, annotate_bests
 
 if TYPE_CHECKING:
@@ -100,6 +100,11 @@ class WorkoutAnalyzer(Protocol):
 
     def coach_view(self, analytics: WorkoutAnalytics | None) -> dict | None: ...
 
+    def needs_neighbors(self, kind: SessionKind) -> bool:
+        """Whether analysing a workout of this kind reads the planned sessions around it
+        (`AnalysisContext.neighbors`); the context builder only loads them when asked."""
+        ...
+
 
 class _CoachViewMixin:
     """`coach_view`: the dump restricted to BASE_FIELDS plus this analyzer's own `fields`, shaped by
@@ -107,6 +112,9 @@ class _CoachViewMixin:
 
     fields: frozenset[str] = frozenset()
     detailed: bool = False
+
+    def needs_neighbors(self, kind: SessionKind) -> bool:
+        return False
 
     def _shape(self, out: dict, analytics: WorkoutAnalytics) -> dict:
         return out
@@ -227,6 +235,9 @@ class BikeAnalyzer(_CoachViewMixin):
         )
         return analytics.model_copy(update={"free_ride": read})
 
+    def needs_neighbors(self, kind: SessionKind) -> bool:
+        return kind in FREE_READ_KINDS
+
     @staticmethod
     def _reads_as_free_ride(ctx: AnalysisContext) -> bool:
         """A free ride, or a "workout" ride whose session prescribes no structure (nothing to
@@ -282,15 +293,11 @@ def derive_workout_kind(workout: Workout, session: Session | None, events: Seque
     return session.effective_kind if session is not None else "free_ride"
 
 
-FREE_READ_KINDS: tuple[SessionKind, ...] = ("free_ride", "workout")
-
-
 def _neighbor_sessions(
     store: "StoreInterface", slug: str, workout: Workout, session: Session | None
 ) -> tuple[Session, ...]:
-    """Key sessions planned the day before / after the workout (best-effort, like every lookup)."""
-    if workout.sport != "bike":
-        return ()
+    """Key sessions (any sport) planned the day before / after the workout (best-effort, like
+    every lookup)."""
     found: dict[str, Session] = {}
     for day in (workout.date - timedelta(days=1), workout.date + timedelta(days=1)):
         year, week, _ = day.isocalendar()
@@ -346,5 +353,5 @@ def build_analysis_context(
         target_w=target_w,
         elapsed_min=elapsed_min,
         prior_workouts=prior,
-        neighbors=_neighbor_sessions(store, slug, workout, session) if kind in FREE_READ_KINDS else (),
+        neighbors=_neighbor_sessions(store, slug, workout, session) if analyzer_for(workout.sport).needs_neighbors(kind) else (),
     )

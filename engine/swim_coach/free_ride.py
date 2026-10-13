@@ -34,6 +34,7 @@ from swim_coach.models import (
     FreeRideRead,
     FreeRideZoneTime,
     Session,
+    SessionKind,
     Workout,
     WorkoutAnalytics,
 )
@@ -83,6 +84,9 @@ STEADY_MAX_SEGMENTS = 2
 # power-based reads are not trustworthy. An altitude range under 30 m cannot support a climb call.
 POWER_MISSING_PCT = 50.0
 FLAT_ALTITUDE_RANGE_M = 30.0
+
+# Kinds whose rides get the free-ride read (a "workout" only when its session has no structure).
+FREE_READ_KINDS: tuple[SessionKind, ...] = ("free_ride", "workout")
 
 KEY_ZONES: frozenset[str] = frozenset({"Z4", "Z5"})  # a planned workout this hard is "key"
 
