@@ -8,6 +8,7 @@ so future migrations have a field to branch on.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from datetime import date, datetime, timedelta
 from typing import Annotated, Literal
@@ -112,6 +113,69 @@ class RaceDebrief(BaseModel):
     tactical_note: str | None = None
 
 
+class ChecklistItem(BaseModel):
+    """One packing/prep line in a race-day checklist section. An item with `tags` is only
+    shown while one of its tags is active on the race-day plan; untagged items always show."""
+
+    id: str
+    text: str
+    tags: list[str] = Field(default_factory=list)
+    default_checked: bool = False
+
+
+class ChecklistSection(BaseModel):
+    id: str
+    title: str
+    items: list[ChecklistItem] = Field(default_factory=list)
+
+
+class TimelineEntry(BaseModel):
+    """One step of the race-day timeline. `day="race"` entries sit `offset_min` minutes from
+    the start (negative = before); `day="eve"` entries (the evening before) carry a clock time
+    `at` ("HH:MM") instead. One entry is the start (`is_start`)."""
+
+    id: str
+    label: str
+    day: Literal["race", "eve"] = "race"
+    offset_min: int | None = None
+    at: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    is_start: bool = False
+
+    @model_validator(mode="after")
+    def _timing_matches_day(self) -> "TimelineEntry":
+        if self.day == "eve" and self.at is None:
+            raise ValueError("an eve timeline entry needs a clock time `at`")
+        if self.day == "race" and self.offset_min is None:
+            raise ValueError("a race-day timeline entry needs `offset_min`")
+        return self
+
+
+class RaceChecklistTemplate(BaseModel):
+    """The athlete's reusable race-day checklist + timeline, stored on the Athlete (JSONB).
+    A `RaceDayPlan` copies it the first time a race is opened."""
+
+    schema_version: int = 1
+    sections: list[ChecklistSection] = Field(default_factory=list)
+    timeline: list[TimelineEntry] = Field(default_factory=list)
+
+
+class RaceDayPlan(BaseModel):
+    """One race's instance of the checklist, stored on the Athlete (JSONB). A CX weekend is two
+    plans (two dates). Matched by `session_id` (the race Session) first, then by `date`."""
+
+    schema_version: int = 1
+    id: str
+    date: date
+    name: str = ""
+    session_id: str | None = None
+    start_time: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    active_tags: list[str] = Field(default_factory=list)
+    checked: list[str] = Field(default_factory=list)
+    sections: list[ChecklistSection] = Field(default_factory=list)
+    timeline: list[TimelineEntry] = Field(default_factory=list)
+    notes: str | None = None
+
+
 class Athlete(BaseModel):
     """The athlete profile: identity, CSS pace, zones, constraints, pool schedule."""
 
@@ -124,6 +188,10 @@ class Athlete(BaseModel):
     constraints: dict = Field(default_factory=dict)
     pool_schedule: list[str | dict] = Field(default_factory=list)
     training_days: dict[str, list[str | dict]] | None = None
+    # Race-day checklist: the reusable template and per-race instances (additive JSONB, no
+    # migration). See `RaceChecklistTemplate` / `RaceDayPlan` and swim_coach/race_day.py.
+    race_checklist_template: RaceChecklistTemplate | None = None
+    race_day_plans: list[RaceDayPlan] = Field(default_factory=list)
     # IDEA 023 phase 1 -- scheduling preferences the week GENERATOR honors, so
     # they survive every regeneration of a week (they live on the athlete, not
     # in a chat). A `training_days` entry may be a dict carrying, besides its
@@ -876,8 +944,15 @@ class RaceWeekChecklistItem(BaseModel):
 
     schema_version: int = 1
     date: date
-    category: Literal["carb_load", "bodywork", "logistics"]
+    category: Literal[
+        "carb_load", "bodywork", "logistics", "bike", "gear", "weather", "nutrition", "sleep", "recovery"
+    ]
     label: str
+    # Stable id (backfilled deterministically by `WeekPlan` when absent), whether the athlete has
+    # ticked it, and an optional short note. All additive: old rows validate unchanged.
+    id: str = ""
+    done: bool = False
+    note: str | None = None
 
 
 class WeekPlan(BaseModel):
@@ -936,6 +1011,21 @@ class WeekPlan(BaseModel):
         if not _ISO_WEEK_RE.match(v):
             raise ValueError(f"iso_week must look like '2026-W28', got {v!r}")
         return v
+
+    @model_validator(mode="after")
+    def _backfill_race_week_item_ids(self) -> "WeekPlan":
+        seen: set[str] = {i.id for i in self.race_week_checklist if i.id}
+        for item in self.race_week_checklist:
+            if item.id:
+                continue
+            base = hashlib.sha1(f"{item.date}|{item.category}|{item.label}".encode()).hexdigest()[:8]
+            candidate, n = base, 1
+            while candidate in seen:
+                n += 1
+                candidate = f"{base}-{n}"
+            item.id = candidate
+            seen.add(candidate)
+        return self
 
 
 class MacroWeek(BaseModel):
