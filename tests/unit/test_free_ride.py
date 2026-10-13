@@ -250,6 +250,7 @@ def test_coach_view_leads_with_the_compact_free_ride_block():
     analytics, _ = _read("08_30")
     view = analytics_for_coach(analytics, "bike")
     assert list(view)[0] == "free_ride"
+    assert "cardiac_drift_pct" not in view  # no whole-ride drift verdict on a free ride
     block = view["free_ride"]
     assert block["coach_note"].startswith("For a free ride, lead with what mattered")
     assert len(block["notable_efforts"]) == 3 and block["notable_efforts"][0].endswith("tempo climb")

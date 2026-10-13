@@ -154,5 +154,6 @@ def shape_ride_view(out: dict, analytics: WorkoutAnalytics) -> dict:
     if "power_curve" in out:
         out = {"power_curve": out.pop("power_curve"), **out}
     if out.get("free_ride"):
+        out.pop("cardiac_drift_pct", None)  # no whole-ride drift verdict; the block carries steady-stretch drift
         out = {"free_ride": free_ride_coach_view(out.pop("free_ride")), **out}
     return out

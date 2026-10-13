@@ -25,7 +25,7 @@ import { createThreadState } from './conversation.js';
 import { getDraft } from './composerDrafts.js';
 import { buildHistoryFeed } from './history.js';
 import { expandStructure, actualPoints, sessionForWorkout, shapeChartGeometry } from './shape.js';
-import { buildRawAnalysis, effectiveKind, kindLabel, KIND_OPTIONS } from './analysis.js';
+import { buildFreeRide, buildRawAnalysis, effectiveKind, kindLabel, KIND_OPTIONS } from './analysis.js';
 import { sportHasPlannedDistance, sportCanPushToGarmin, sportUsesPace } from './sports.js';
 import {
   sportLabel, sourceBadge, formatWorkoutDistance, formatAnalyticsLine,
@@ -2738,7 +2738,8 @@ function renderRpeEditSection(workout, rpeEdit) {
 function renderDetailAnalytics(analytics) {
   if (!analytics) return '';
   const lines = [
-    formatDrift(analytics.cardiac_drift_pct),
+    // a free ride's drift is read only over its steady stretches (the Free ride section)
+    analytics.free_ride ? null : formatDrift(analytics.cardiac_drift_pct),
     formatSplit(analytics),
     formatMovingVsElapsed(analytics),
     formatPauses(analytics),
@@ -3110,6 +3111,27 @@ function renderPowerCurveSvg(g) {
       </div>`;
 }
 
+/** "Free ride" section: where the pedalling time went (stacked zone bar), the notable efforts,
+ * matches burned and the cost note. Always shown for a ride that has `analytics.free_ride`. */
+function renderFreeRideSection(workout) {
+  const m = buildFreeRide(workout);
+  if (!m) return '';
+  const bar = m.zoneBar.filter((z) => z.drawn)
+    .map((z) => `<i style="flex:${z.pct} 0 0;background:${z.color}" title="${esc(z.label)}"></i>`).join('');
+  const legend = m.zoneBar.map((z) => `<li><i style="background:${z.color}"></i>${esc(z.label)}</li>`).join('');
+  return `
+    <section class="detail-section free-ride">
+      <h4>Free ride</h4>
+      ${m.quality.map((q) => `<p class="sub">${esc(q)}</p>`).join('')}
+      ${m.cost ? `<div class="detail-analytics-list"><div><strong>Cost:</strong> ${esc(m.cost)}</div></div>` : ''}
+      ${m.creep ? `<p class="sub">${esc(m.creep)}</p>` : ''}
+      ${m.zoneBar.length ? `<h5>Time in power zones</h5><div class="free-ride-zonebar" role="img" aria-label="Pedalling time by power zone">${bar}</div><ul class="free-ride-legend">${legend}</ul><p class="sub">${esc(m.coasting)}</p>` : ''}
+      ${m.efforts ? `<h5>Notable efforts</h5>${renderRawTable(m.efforts.columns, m.efforts.rows)}` : ''}
+      ${m.matches ? `<h5>Matches burned</h5><p class="sub">${esc(m.matches.summary)}</p>${renderRawTable(m.matches.columns, m.matches.rows)}` : ''}
+      ${m.drift.length ? `<h5>Steady-stretch drift</h5>${m.drift.map((d) => `<p class="sub">${esc(d)}</p>`).join('')}` : (m.driftNote ? `<p class="sub">${esc(m.driftNote)}</p>` : '')}
+    </section>`;
+}
+
 function renderRawAnalysisSection(workout, pacing, open) {
   const model = buildRawAnalysis(workout, pacing);
   if (!model) return '';
@@ -3311,6 +3333,7 @@ export function renderWorkoutDetail(workout, {
     ${renderCompletedShapeSection(workout, pacing, weeks, ftpWatts)}
     ${editable ? renderRpeEditSection(workout, rpeEdit) : ''}
     ${renderRaceDebriefSection(workout, raceDebriefs)}
+    ${renderFreeRideSection(workout)}
     ${renderDetailAnalytics(workout.analytics)}
     ${renderIntervalsSection(workout.analytics?.intervals)}
     ${renderRaceAnalysisSection(workout, pacing)}
