@@ -1372,6 +1372,8 @@
     "cost": {
      "tss": 109.0,
      "intensity_factor": 0.73,
+     "load_au": 109.0,
+     "cost_basis": "power",
      "adjacent_key_sessions": [],
      "note": "TSS 109, IF 0.73"
     },
@@ -2921,6 +2923,8 @@
     "cost": {
      "tss": 55.0,
      "intensity_factor": 0.77,
+     "load_au": 55.0,
+     "cost_basis": "power",
      "adjacent_key_sessions": [],
      "note": "TSS 55, IF 0.77"
     },
@@ -4277,6 +4281,8 @@
     "cost": {
      "tss": 61.0,
      "intensity_factor": 0.72,
+     "load_au": 61.0,
+     "cost_basis": "power",
      "adjacent_key_sessions": [],
      "note": "TSS 61, IF 0.72"
     },
@@ -5255,6 +5261,8 @@
     "cost": {
      "tss": 53.0,
      "intensity_factor": 0.61,
+     "load_au": 53.0,
+     "cost_basis": "power",
      "adjacent_key_sessions": [],
      "note": "TSS 53, IF 0.61"
     },
@@ -7102,6 +7110,8 @@
     "cost": {
      "tss": 125.0,
      "intensity_factor": 0.76,
+     "load_au": 125.0,
+     "cost_basis": "power",
      "adjacent_key_sessions": [],
      "note": "TSS 125, IF 0.76"
     },

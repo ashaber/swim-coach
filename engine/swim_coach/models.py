@@ -1867,8 +1867,10 @@ class FreeRideNeighbor(BaseModel):
 
 
 class FreeRideCost(BaseModel):
-    tss: float | None = None
-    intensity_factor: float | None = None
+    tss: float | None = None  # power basis only
+    intensity_factor: float | None = None  # power basis only
+    load_au: float | None = None
+    cost_basis: Literal["power", "hr", "srpe", "duration"] | None = None
     adjacent_key_sessions: list[FreeRideNeighbor] = Field(default_factory=list)
     note: str | None = None
 

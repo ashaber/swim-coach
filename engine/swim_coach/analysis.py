@@ -232,6 +232,7 @@ class BikeAnalyzer(_CoachViewMixin):
             lthr_bpm=athlete.lthr_bpm if athlete else None,
             intent_zone=_planned_zone(session),
             neighbors=ctx.neighbors,
+            prior_workouts=ctx.prior_workouts,
         )
         return analytics.model_copy(update={"free_ride": read})
 

@@ -93,6 +93,19 @@ def test_sep_28_is_a_data_quality_case():
     assert fr.steady_drift == [] and fr.steady_note is None
 
 
+def test_sep_28_cost_does_not_use_unreliable_power():
+    analytics, fr = _read("09_28")
+    assert fr.cost.cost_basis == "hr"
+    assert fr.cost.tss is None and fr.cost.intensity_factor is None
+    assert fr.cost.load_au > 0 and "from hr (power unreliable: no TSS or IF)" in fr.cost.note
+    assert analytics.normalized_power_w  # the NP exists; it is just not trusted for cost
+
+
+def test_reliable_power_cost_is_labelled_power():
+    _, fr = _read("08_30")
+    assert fr.cost.cost_basis == "power" and fr.cost.tss == fr.cost.load_au
+
+
 def test_sep_28_gives_no_tempo_verdict_even_with_an_easy_intent():
     workout, athlete, series = _fixture("09_28")
     session = _session(RIDE_DAY, zone="Z2")

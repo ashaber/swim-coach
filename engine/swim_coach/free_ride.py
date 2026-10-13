@@ -23,7 +23,7 @@ from typing import Sequence
 
 from swim_coach.analytics import cardiac_drift
 from swim_coach.interval_analysis import COASTING_FLOOR_W
-from swim_coach.load import session_load
+from swim_coach.load import estimate_hr_max, estimate_hr_rest, session_load
 from swim_coach.models import (
     FreeRideCost,
     FreeRideDrift,
@@ -374,22 +374,47 @@ def _neighbors(ride_date: date, sessions: Sequence[Session]) -> list[FreeRideNei
     return out
 
 
+_COST_BASIS = {"power_tss": "power", "hr_trimp": "hr", "srpe": "srpe", "pace_if": "duration", "duration": "duration"}
+
+
 def _cost(
-    workout: Workout, analytics: WorkoutAnalytics, ftp: float, neighbors: Sequence[Session]
+    workout: Workout,
+    analytics: WorkoutAnalytics,
+    ftp: float,
+    lthr: float | None,
+    neighbors: Sequence[Session],
+    prior: Sequence[Workout],
+    *,
+    power_ok: bool,
 ) -> FreeRideCost:
-    """TSS from `load.session_load` (the same power-TSS the load model uses) and IF = NP / FTP."""
-    rated = workout.model_copy(update={"analytics": analytics})
-    load = session_load(rated, ftp_watts=ftp)
-    np_w = analytics.normalized_power_w
-    if load.tier != "power_tss" or np_w is None:
-        return FreeRideCost()
-    tss, intensity_factor = round(load.value, 0), round(np_w / ftp, 2)
+    """What the ride cost, from `load.session_load` (the load model's own tiers, never a new
+    formula). With reliable power that is the power tier: TSS and IF = NP / FTP. With unreliable
+    power the power tier is skipped and the next tier is used (HR-TRIMP when HR exists, with
+    HRmax from the athlete's history and the generic resting-HR fallback), labelled by
+    `cost_basis`; there is then no TSS or IF."""
+    usable = analytics if power_ok else analytics.model_copy(update={"normalized_power_w": None})
+    load = session_load(
+        workout.model_copy(update={"analytics": usable}),
+        hr_max=estimate_hr_max([*prior, workout]),
+        hr_rest=estimate_hr_rest([], workout.date),
+        lthr_bpm=lthr,
+        ftp_watts=ftp,
+    )
+    basis = _COST_BASIS[load.tier]
     adjacent = _neighbors(workout.date, neighbors)
-    note = f"TSS {tss:.0f}, IF {intensity_factor:.2f}"
+    if basis == "power" and analytics.normalized_power_w is not None:
+        tss, intensity_factor = round(load.value, 0), round(analytics.normalized_power_w / ftp, 2)
+        note = f"TSS {tss:.0f}, IF {intensity_factor:.2f}"
+    else:
+        tss = intensity_factor = None
+        note = f"Load about {load.value:.0f} AU from {basis} (power unreliable: no TSS or IF)"
     for n in adjacent:
         where = "the day before" if n.relation == "after" else "the day after"
         note += f"; {where} {_WEEKDAYS[n.date.weekday()]}'s key session ({n.title})"
-    return FreeRideCost(tss=tss, intensity_factor=intensity_factor, adjacent_key_sessions=adjacent, note=note)
+    return FreeRideCost(
+        tss=tss, intensity_factor=intensity_factor, load_au=round(load.value, 0), cost_basis=basis,
+        adjacent_key_sessions=adjacent, note=note,
+    )
 
 
 def _altitude_range(tl: _Timeline) -> float | None:
@@ -424,6 +449,7 @@ def read_free_ride(
     lthr_bpm: float | None,
     intent_zone: str | None = None,
     neighbors: Sequence[Session] = (),
+    prior_workouts: Sequence[Workout] = (),
 ) -> FreeRideRead | None:
     """The free-ride read, or `None` without a power channel or an FTP to anchor zones to.
     `analytics` is the ride's finished analytics (power curve with its bests, NP)."""
@@ -463,7 +489,7 @@ def read_free_ride(
         tempo_creep_note=creep_note,
         notable_efforts=_notable_efforts(tl, analytics, ftp_watts, label_ok=power_ok, climbs_ok=climbs_ok),
         matches=_matches(tl, ftp_watts),
-        cost=_cost(workout, analytics, ftp_watts, neighbors),
+        cost=_cost(workout, analytics, ftp_watts, lthr_bpm, neighbors, prior_workouts, power_ok=power_ok),
         steady_drift=drift,
         steady_note=(
             None
