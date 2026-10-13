@@ -74,3 +74,27 @@ def test_override_wins_in_the_context(athletes_dir: Path) -> None:
     w.kind_override = "warmup"
     assert build_analysis_context(store, "renee", w, series=None).kind == "warmup"
     assert w.kind == "free_ride"
+
+
+def test_context_carries_the_key_sessions_around_a_ride(athletes_dir: Path) -> None:
+    from datetime import timedelta
+
+    from swim_coach.models import WeekPlan
+
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    key = _session(athlete.id, "threshold", kind="workout").model_copy(update={"date": DAY + timedelta(days=1)})
+    easy = _session(athlete.id, "spin", kind="workout").model_copy(
+        update={"date": DAY - timedelta(days=1), "intensity": {"zone": "Z2"}}
+    )
+    year, week, _ = key.date.isocalendar()
+    store.save_week(
+        "renee",
+        WeekPlan(
+            id=uuid.uuid4(), athlete_id=athlete.id, iso_week=f"{year}-W{week:02d}", meso_block="b", focus="f",
+            target_volume_m=0, sessions=[key, easy],
+        ),
+    )
+    ctx = build_analysis_context(store, "renee", _workout(athlete.id), series=None)
+    assert ctx.kind == "free_ride" and [s.id for s in ctx.neighbors] == [key.id]
+    assert build_analysis_context(store, "renee", _workout(athlete.id, "swim_pool"), series=None).neighbors == ()
