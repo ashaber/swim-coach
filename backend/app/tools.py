@@ -205,7 +205,7 @@ from pydantic import ValidationError
 
 from swim_coach import fueling as fueling_module
 from swim_coach.adapt import adapt_week
-from swim_coach.analysis import has_detailed_analyzer
+from swim_coach.analysis import analytics_for_coach, has_detailed_analyzer
 from swim_coach.athlete_time import athlete_today
 from swim_coach.gps_laps import GpsLapMetrics, analyze_gps_laps
 from swim_coach.load import (
@@ -280,7 +280,6 @@ from swim_coach.plan import (
     scaffold_season_macro,
     scaffold_sharpening_macro,
 )
-from swim_coach.power_curve import analytics_for_coach
 from swim_coach.store import StoreInterface
 from swim_coach.taper_search import (
     MIN_TAPER_RUNWAY_DAYS,

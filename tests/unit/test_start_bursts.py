@@ -94,7 +94,7 @@ def test_coach_view_drops_warmup_builds_and_leads_with_starts_and_curve():
     from swim_coach.models import Athlete
     from swim_coach.analysis import AnalysisContext
     from swim_coach.models import Workout
-    from swim_coach.power_curve import analytics_for_coach
+    from swim_coach.analysis import analytics_for_coach
     import uuid
 
     d = json.loads((FIX / "ride_2026_10_10_starts_race_pace.json").read_text())
@@ -103,7 +103,7 @@ def test_coach_view_drops_warmup_builds_and_leads_with_starts_and_curve():
     an = Workout.model_validate(d["workout"]).analyze(
         AnalysisContext(athlete=athlete, session=s, kind=s.kind, series=d["series"])
     )
-    view = analytics_for_coach(an)
+    view = analytics_for_coach(an, sport="bike")
     keys = list(view["intervals"])
     assert keys.index("starts") < keys.index("starts_note") < keys.index("efforts")
     assert list(view).index("power_curve") < list(view).index("intervals")
@@ -117,7 +117,7 @@ def _coach_view_1010():
 
     from swim_coach.analysis import AnalysisContext
     from swim_coach.models import Athlete, Workout
-    from swim_coach.power_curve import analytics_for_coach
+    from swim_coach.analysis import analytics_for_coach
 
     d = json.loads((FIX / "ride_2026_10_10_starts_race_pace.json").read_text())
     s = Session.model_validate(d["planned_session"])
@@ -158,11 +158,11 @@ def test_slim_coach_view_has_no_warmup_builds_starts_rounds_nulls_or_swim_fields
 
 def test_swim_coach_view_drops_power_fields():
     from swim_coach.models import WorkoutAnalytics
-    from swim_coach.power_curve import analytics_for_coach
+    from swim_coach.analysis import analytics_for_coach
 
     out = analytics_for_coach(
         WorkoutAnalytics(first_half_pace_s_per_100m=95.0, swolf_first_quarter=40.0, elapsed_min=30.0),
-        sport="swim",
+        sport="swim_pool",
     )
     assert out == {"first_half_pace_s_per_100m": 95.0, "swolf_first_quarter": 40.0, "elapsed_min": 30.0}
 
