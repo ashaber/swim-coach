@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  buildRawAnalysis, scoreView, EFFORT_COLUMNS, effectiveKind, kindLabel, shouldLoadPacing, startTraceGeometry,
+  buildFreeRide, buildRawAnalysis, scoreView, EFFORT_COLUMNS, effectiveKind, kindLabel, shouldLoadPacing, startTraceGeometry,
 } from '../../src/analysis.js';
 
 const effort = (n, extra = {}) => ({
@@ -186,5 +186,63 @@ describe('start traces', () => {
     const m = buildRawAnalysis({ analytics: { intervals: { efforts_detected: 0, starts: [start, { n: 5 }] } } }, undefined);
     expect(m.starts.traces).toHaveLength(1);
     expect(m.starts.traces[0].verdict).toBe('launch 0->1100 W in 5 s');
+  });
+});
+
+const FREE_RIDE = {
+  moving_s: 9513, coasting_s: 3590, coasting_pct: 37.7,
+  power_zones: [
+    { zone: 'Z1', seconds: 1376, pct: 23.2 }, { zone: 'Z2', seconds: 1310, pct: 22.1 },
+    { zone: 'Z3', seconds: 0, pct: 0 }, { zone: 'Z4', seconds: 870, pct: 54.4 }, { zone: 'Z7', seconds: 10, pct: 0.3 },
+  ],
+  tempo_creep_note: null,
+  notable_efforts: [
+    { duration_s: 1200, start_offset_s: 1766, avg_w: 236, pct_ftp: 85.5, avg_hr: 156, altitude_gain_m: 185.4, avg_grade_pct: 3.5, label: 'tempo climb', new_best_90d: true },
+    { duration_s: 60, start_offset_s: 2616, avg_w: 346, pct_ftp: 125.4, avg_hr: null, altitude_gain_m: null, avg_grade_pct: null, label: null },
+  ],
+  matches: {
+    count: 27, time_above_ftp_s: 723, kj_above_ftp: 45.4,
+    efforts: [1, 2, 3, 4].map((i) => ({ start_offset_s: 100 * i, duration_s: 40, avg_w: 370, peak_w: 440, kj_above_ftp: 4.5 })),
+  },
+  cost: { note: 'TSS 151, IF 0.76' },
+  steady_drift: [], steady_note: 'No steady stretch of 20 min or more (power varied or stops); no drift read.',
+  data_quality_notes: ['Altitude range is only 14 m.'],
+};
+
+describe('buildFreeRide', () => {
+  it('is null without a free_ride block', () => {
+    expect(buildFreeRide({ analytics: {} })).toBeNull();
+    expect(buildFreeRide(null)).toBeNull();
+  });
+
+  it('builds the zone bar from non-empty zones and hides slivers from the bar but not the legend', () => {
+    const m = buildFreeRide({ analytics: { free_ride: FREE_RIDE } });
+    expect(m.zoneBar.map((z) => z.zone)).toEqual(['Z1', 'Z2', 'Z4', 'Z7']);
+    expect(m.zoneBar.map((z) => z.drawn)).toEqual([true, true, true, false]);
+    expect(m.zoneBar[0].label).toBe('Z1 Recovery 23 min (23%)');
+    expect(m.coasting).toBe('Coasting 38% of moving time (not in the bar).');
+  });
+
+  it('formats efforts, flags new bests, and keeps only the top three matches', () => {
+    const m = buildFreeRide({ analytics: { free_ride: FREE_RIDE } });
+    expect(m.efforts.rows[0]).toEqual(['20 min', '29:26', '236 W', '86%', '156', '+185 m at 3.5%', 'tempo climb (new 90-day best)']);
+    expect(m.efforts.rows[1].slice(4)).toEqual(['—', '—', '']);
+    expect(m.matches.summary).toBe('27 matches burned: 12:03 above FTP, 45.4 kJ over FTP.');
+    expect(m.matches.rows).toHaveLength(3);
+  });
+
+  it('carries the cost, quality and no-steady-stretch notes', () => {
+    const m = buildFreeRide({ analytics: { free_ride: FREE_RIDE } });
+    expect(m.cost).toBe('TSS 151, IF 0.76');
+    expect(m.quality).toEqual(['Altitude range is only 14 m.']);
+    expect(m.drift).toEqual([]);
+    expect(m.driftNote).toMatch(/No steady stretch/);
+  });
+
+  it('lists steady-stretch drift instead of the note when there is one', () => {
+    const fr = { ...FREE_RIDE, steady_drift: [{ start_offset_s: 600, duration_min: 45, avg_w: 200, drift_pct: 5.4 }] };
+    const m = buildFreeRide({ analytics: { free_ride: fr } });
+    expect(m.drift).toEqual(['Steady 45 min from 10:00: 200 W, drift +5.4%.']);
+    expect(m.driftNote).toBeNull();
   });
 });

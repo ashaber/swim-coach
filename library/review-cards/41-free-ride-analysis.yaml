@@ -1,0 +1,44 @@
+schema_version: 1
+file: 41-free-ride-analysis.md
+cards:
+- section: 1-where-the-time-went
+  heading: 1. Where the time went
+  summary: Time is binned into Coggan/Allen power zones over pedalling time, with coasting reported separately; heart-rate
+    zones use LTHR bands that are Coach judgment.
+  recommendation: Read the zone split as distribution, and quote coasting separately rather than as Z1.
+  content_hash: 8c0002ca9d65f0dcc0ecec05aabe683578c974e637975f059e1b58f38e914fc8
+- section: 2-intent-and-tempo-creep
+  heading: 2. Intent and tempo creep
+  summary: An easy stated zone plus over 20% and 15 minutes at Z3 or harder flags tempo creep, grounded in Seiler's 80/20
+    distribution; with no stated intent there is no verdict.
+  recommendation: Say the ride drifted into tempo only when the plan said easy; otherwise just report the split.
+  content_hash: 0f90aeddb2537bd0b807586598660359c7224dc1be3467c6ce86b8776ed24bdd
+- section: 3-notable-efforts
+  heading: 3. Notable efforts
+  summary: The best 20, 5 and 1 minute windows are reported with offset, power, %FTP, HR, altitude gain and grade, and labelled
+    by zone or climb.
+  recommendation: Lead with the biggest notable effort and say where in the ride it happened.
+  content_hash: 633cf21b7a6851fe32d14f8236b16bd6d398da4ccae5f856aca93f772e2d952a
+- section: 4-matches-burned
+  heading: 4. Matches burned
+  summary: Matches are 10-second-plus stretches of 30-second power above FTP, merged across short gaps, totalled in count,
+    time and kilojoules; a stand-in until W' is fitted.
+  recommendation: Count matches burned against what the plan intended, and treat the numbers as approximate.
+  content_hash: 2a4063d567c2c971afa8271409de8fbfc123a612cdf84c0d143e6db82691586e
+- section: 5-cost-against-the-week
+  heading: 5. Cost against the week
+  summary: TSS and IF reuse the existing power-TSS tier; a free ride next to a key session is noted with its IF.
+  recommendation: Say what the ride cost and whether it sat before or after a key session.
+  content_hash: a0116dda2be8b1b78b311c02e3802f2fcf7d4438ce4f5996ffc6b70d52790b1a
+- section: 6-steady-stretch-drift
+  heading: 6. Steady-stretch drift
+  summary: Drift is read only on steady 20-minute-plus stretches with low power variation and few stops, never on the whole
+    stop-start ride.
+  recommendation: Quote drift only for the named steady segment; otherwise say there was no steady stretch.
+  content_hash: 609d1bff48785f04ce1e1a4d54193b4c690640c59c9e80d70738d992a6e73125
+- section: 7-data-quality
+  heading: 7. Data quality
+  summary: When half or more of moving time has zero or missing power, or altitude barely varies, the read says so and drops
+    the dependent verdicts.
+  recommendation: Open with the data-quality limit and avoid power-based conclusions on that ride.
+  content_hash: 5545ebf5085575f2fb306880b320d313f254bba3cc78f42ebf1624977cb00af7

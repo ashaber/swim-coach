@@ -8,7 +8,7 @@
 // views.js turns the returned rows into markup.
 
 import { formatClock } from './workouts.js';
-import { sessionForWorkout } from './shape.js';
+import { sessionForWorkout, ZONE_COLORS, ZONE_LABELS } from './shape.js';
 
 const num = (v) => v !== null && v !== undefined && Number.isFinite(v);
 const dash = '—';
@@ -295,5 +295,68 @@ export function buildRawAnalysis(workout, pacing) {
     race,
     racePending: isRace && pacing?.status === 'loading',
     raceError: isRace && pacing?.status === 'error' ? (pacing.error || 'Race analysis is not available.') : null,
+  };
+}
+
+// --- Free ride -------------------------------------------------------------------
+
+export const FREE_RIDE_EFFORT_COLUMNS = ['Window', 'At', 'Avg', '% FTP', 'HR', 'Climb', ''];
+export const FREE_RIDE_MATCH_COLUMNS = ['At', 'Dur', 'Avg', 'Peak', 'kJ over FTP'];
+const FREE_RIDE_TOP = 3;
+const MIN_ZONE_SEGMENT_PCT = 0.5; // thinner slivers are not drawn (they stay in the legend)
+
+function effortRow(e) {
+  const climb = num(e.altitude_gain_m)
+    ? `${signed(e.altitude_gain_m, 0, ' m')}${num(e.avg_grade_pct) ? ` at ${e.avg_grade_pct}%` : ''}`
+    : dash;
+  const best = e.new_best_90d ? ' (new 90-day best)' : e.new_best_42d ? ' (new 42-day best)' : '';
+  return [
+    `${Math.round(e.duration_s / 60)} min`,
+    formatClock(e.start_offset_s),
+    watts(e.avg_w),
+    num(e.pct_ftp) ? `${Math.round(e.pct_ftp)}%` : dash,
+    num(e.avg_hr) ? `${e.avg_hr}` : dash,
+    climb,
+    `${e.label || ''}${best}`.trim(),
+  ];
+}
+
+function matchRow(m) {
+  return [formatClock(m.start_offset_s), `${m.duration_s} s`, watts(m.avg_w), watts(m.peak_w), `${m.kj_above_ftp}`];
+}
+
+/** The "Free ride" section model (`analytics.free_ride`), or null when the ride has none.
+ * `zoneBar` is the pedalling-time split (width % per zone, drawn as stacked CSS segments);
+ * everything else is plain rows/strings for views.js. */
+export function buildFreeRide(workout) {
+  const fr = workout?.analytics?.free_ride;
+  if (!fr) return null;
+  const m = fr.matches;
+  return {
+    zoneBar: (fr.power_zones || []).filter((z) => z.seconds > 0).map((z) => ({
+      zone: z.zone,
+      pct: z.pct,
+      color: ZONE_COLORS[z.zone],
+      label: `${z.zone} ${ZONE_LABELS[z.zone]} ${Math.round(z.seconds / 60)} min (${Math.round(z.pct)}%)`,
+      drawn: z.pct >= MIN_ZONE_SEGMENT_PCT,
+    })),
+    coasting: `Coasting ${Math.round(fr.coasting_pct)}% of moving time (not in the bar).`,
+    creep: fr.tempo_creep_note || null,
+    efforts: fr.notable_efforts?.length
+      ? { columns: FREE_RIDE_EFFORT_COLUMNS, rows: fr.notable_efforts.map(effortRow) }
+      : null,
+    matches: m && m.count
+      ? {
+        summary: `${m.count} match${m.count === 1 ? '' : 'es'} burned: ${formatClock(m.time_above_ftp_s)} above FTP, ${m.kj_above_ftp} kJ over FTP.`,
+        columns: FREE_RIDE_MATCH_COLUMNS,
+        rows: m.efforts.slice(0, FREE_RIDE_TOP).map(matchRow),
+      }
+      : null,
+    cost: fr.cost?.note || null,
+    drift: (fr.steady_drift || []).map(
+      (d) => `Steady ${Math.round(d.duration_min)} min from ${formatClock(d.start_offset_s)}: ${watts(d.avg_w)}, drift ${signed(d.drift_pct, 1)}.`,
+    ),
+    driftNote: fr.steady_drift?.length ? null : fr.steady_note || null,
+    quality: fr.data_quality_notes || [],
   };
 }

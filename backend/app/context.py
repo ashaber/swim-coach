@@ -1113,6 +1113,7 @@ _LIBRARY_FILE_SPORT_SCOPE: dict[str, frozenset[str]] = {
     "38-race-week-sharpener-and-openers.md": frozenset({"bike"}),
     "39-cycling-start-analysis.md": frozenset({"bike"}),
     "40-cycling-start-technique-and-drills.md": frozenset({"bike"}),
+    "41-free-ride-analysis.md": frozenset({"bike"}),
 }
 
 

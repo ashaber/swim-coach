@@ -112,7 +112,7 @@ def _cors_route(status, body):
     return handler
 
 
-def _make_page(request, base_url, plan):
+def _make_page(request, base_url, plan, workouts=None):
     cfg = request.param
     pw = sync_playwright().start()
     try:
@@ -128,7 +128,7 @@ def _make_page(request, base_url, plan):
     ctx.route('**/api/plan*', _cors_route(200, plan))
     ctx.route('**/api/plan/load*', _cors_route(200, {'athlete': 'renee', 'weeks': 12, 'ctl_atl_tsb': []}))
     ctx.route('**/api/feedback*', _cors_route(200, []))
-    ctx.route('**/api/workouts*', _cors_route(200, [WORKOUT]))
+    ctx.route('**/api/workouts*', _cors_route(200, workouts or [WORKOUT]))
     ctx.route(re.compile(r'/api/workouts/[^/]+/pacing'), _cors_route(200, PACING))
     pg = ctx.new_page()
     errors: list[str] = []
@@ -148,6 +148,43 @@ def _finish(pw, browser, ctx, errors):
 @pytest.fixture(params=BROWSERS)
 def page(request, base_url):
     pw, browser, ctx, pg, errors = _make_page(request, base_url, PLAN)
+    try:
+        yield pg
+    finally:
+        _finish(pw, browser, ctx, errors)
+
+
+FREE_RIDE = {
+    'moving_s': 9513, 'coasting_s': 3590, 'coasting_pct': 37.7, 'zero_or_null_power_pct': 35.8,
+    'power_zones': [
+        {'zone': z, 'seconds': s, 'pct': p}
+        for z, s, p in [('Z1', 1376, 23.2), ('Z2', 1310, 22.1), ('Z3', 1112, 18.8), ('Z4', 870, 14.7),
+                        ('Z5', 501, 8.5), ('Z6', 505, 8.5), ('Z7', 249, 4.2)]
+    ],
+    'hr_zones': [], 'intent_zone': None, 'z3_plus_pct': 54.7, 'tempo_creep': None, 'tempo_creep_note': None,
+    'notable_efforts': [
+        {'duration_s': 1200, 'start_offset_s': 1766, 'avg_w': 236, 'pct_ftp': 85.5, 'avg_hr': 156,
+         'altitude_gain_m': 185.4, 'avg_grade_pct': 3.5, 'label': 'tempo climb'},
+        {'duration_s': 300, 'start_offset_s': 2036, 'avg_w': 267, 'pct_ftp': 96.7, 'avg_hr': 157,
+         'altitude_gain_m': 66.4, 'avg_grade_pct': 6.9, 'label': 'threshold climb'},
+    ],
+    'matches': {'count': 27, 'time_above_ftp_s': 723, 'kj_above_ftp': 45.4, 'efforts': [
+        {'start_offset_s': 2152, 'duration_s': 43, 'avg_w': 377, 'peak_w': 441, 'kj_above_ftp': 4.5}]},
+    'cost': {'tss': 151, 'intensity_factor': 0.76, 'adjacent_key_sessions': [], 'note': 'TSS 151, IF 0.76'},
+    'steady_drift': [], 'steady_note': 'No steady stretch of 20 min or more (power varied or stops); no drift read.',
+    'altitude_range_m': 605.2, 'data_quality_notes': [],
+}
+FREE_WORKOUT = {
+    'id': 'w-free', 'date': '2026-09-29', 'sport': 'bike', 'source': 'fit', 'distance_m': 35595,
+    'duration_min': 158.5, 'rpe': 5, 'avg_hr': 138, 'max_hr': 175, 'planned_session_id': None, 'kind': 'free_ride',
+    'analytics': {'avg_power_w': 138, 'normalized_power_w': 210, 'cardiac_drift_pct': 11.0, 'free_ride': FREE_RIDE},
+    'quality': None, 'laps': [], 'lengths': [], 'pauses': [], 'notes': None,
+}
+
+
+@pytest.fixture(params=BROWSERS)
+def page_free_ride(request, base_url):
+    pw, browser, ctx, pg, errors = _make_page(request, base_url, PLAN, workouts=[FREE_WORKOUT])
     try:
         yield pg
     finally:
@@ -254,4 +291,20 @@ def test_raw_analysis_shows_starts_table_and_power_curve_without_scrolling(page)
     text = curve.inner_text()
     assert 'new 90-day best' in text and '1100 W' in text
     assert curve.locator('table.raw-table tbody tr').count() == 9
+    assert _no_horizontal_scroll(page)
+
+
+def test_free_ride_section_shows_zones_efforts_matches_and_cost_without_scrolling(page_free_ride):
+    page = page_free_ride
+    _open_ride(page)
+    section = page.locator('.free-ride')
+    section.wait_for()
+    assert section.locator('.free-ride-zonebar > i').count() == 7
+    text = section.inner_text()
+    assert 'Z1 Recovery 23 min (23%)' in text and 'Coasting 38% of moving time' in text
+    assert 'tempo climb' in text and 'threshold climb' in text
+    assert '27 matches burned' in text and 'TSS 151, IF 0.76' in text
+    assert 'No steady stretch' in text
+    # a free ride has no whole-ride drift line in the Analytics section
+    assert 'drift +11.0%' not in page.locator('.detail-view, body').first.inner_text()
     assert _no_horizontal_scroll(page)

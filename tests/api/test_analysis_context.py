@@ -74,3 +74,64 @@ def test_override_wins_in_the_context(athletes_dir: Path) -> None:
     w.kind_override = "warmup"
     assert build_analysis_context(store, "renee", w, series=None).kind == "warmup"
     assert w.kind == "free_ride"
+
+
+def test_context_carries_the_key_sessions_around_a_ride(athletes_dir: Path) -> None:
+    from datetime import timedelta
+
+    from swim_coach.models import WeekPlan
+
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    key = _session(athlete.id, "threshold", kind="workout").model_copy(update={"date": DAY + timedelta(days=1)})
+    easy = _session(athlete.id, "spin", kind="workout").model_copy(
+        update={"date": DAY - timedelta(days=1), "intensity": {"zone": "Z2"}}
+    )
+    year, week, _ = key.date.isocalendar()
+    store.save_week(
+        "renee",
+        WeekPlan(
+            id=uuid.uuid4(), athlete_id=athlete.id, iso_week=f"{year}-W{week:02d}", meso_block="b", focus="f",
+            target_volume_m=0, sessions=[key, easy],
+        ),
+    )
+    ctx = build_analysis_context(store, "renee", _workout(athlete.id), series=None)
+    assert ctx.kind == "free_ride" and [s.id for s in ctx.neighbors] == [key.id]
+    # a swim analyzer does not ask for neighbours, so none are loaded
+    assert build_analysis_context(store, "renee", _workout(athlete.id, "swim_pool"), series=None).neighbors == ()
+
+
+def test_the_analyzer_not_the_context_builder_decides_who_gets_neighbours(athletes_dir: Path, monkeypatch) -> None:
+    """Capability, not a sport check: a swim analyzer that asks for neighbours gets them."""
+    from datetime import timedelta
+
+    from swim_coach import analysis
+    from swim_coach.models import WeekPlan
+
+    class _NeedsNeighbors(analysis.SwimAnalyzer):
+        def needs_neighbors(self, kind) -> bool:
+            return True
+
+    monkeypatch.setitem(analysis.ANALYZERS, "swim_pool", _NeedsNeighbors())
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    key = _session(athlete.id, "race", kind="race").model_copy(update={"date": DAY + timedelta(days=1)})
+    year, week, _ = key.date.isocalendar()
+    store.save_week(
+        "renee",
+        WeekPlan(
+            id=uuid.uuid4(), athlete_id=athlete.id, iso_week=f"{year}-W{week:02d}", meso_block="b", focus="f",
+            target_volume_m=0, sessions=[key],
+        ),
+    )
+    ctx = build_analysis_context(store, "renee", _workout(athlete.id, "swim_pool"), series=None)
+    assert [s.id for s in ctx.neighbors] == [key.id]
+
+
+def test_context_builder_source_has_no_sport_comparisons() -> None:
+    import inspect
+
+    from swim_coach import analysis
+
+    src = inspect.getsource(analysis.build_analysis_context) + inspect.getsource(analysis._neighbor_sessions)
+    assert "sport ==" not in src and "sport !=" not in src and "FREE_READ_KINDS" not in src

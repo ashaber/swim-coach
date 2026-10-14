@@ -49,27 +49,38 @@ def standard_durations(riding_s: int) -> list[int]:
     return out
 
 
-def _riding_timeline(t_s: list, power_w: list) -> tuple[list[float], list[float]]:
-    """1 Hz riding-time power values (nulls and short gaps as 0 W, long gaps
-    removed) and the original `t_s` second each value sits at."""
-    watts: list[float] = []
+def riding_samples(t_s: list) -> tuple[list[float], list[int | None]]:
+    """The 1 Hz riding timeline: each entry's original `t_s` second and the index of the
+    source sample it came from (`None` = a filled signal dropout). Short gaps are filled,
+    long gaps (timer pauses) are removed, duplicate/out-of-order stamps are skipped -- the
+    conventions in the module docstring. Shared with `free_ride`, so every per-second read
+    of a ride lines up with the power curve's windows."""
     clock: list[float] = []
+    src: list[int | None] = []
     prev_t: float | None = None
-    for t, p in zip(t_s, power_w):
+    for i, t in enumerate(t_s):
         if t is None:
             continue
         if prev_t is not None:
             gap = t - prev_t
             if gap <= 0:
-                continue  # duplicate / out-of-order timestamp
+                continue
             if gap <= PAUSE_GAP_S:
                 for k in range(1, int(round(gap))):
-                    watts.append(0.0)
                     clock.append(prev_t + k)
+                    src.append(None)
             # else: a timer pause -- nothing is inserted
-        watts.append(float(p) if p is not None else 0.0)
         clock.append(float(t))
+        src.append(i)
         prev_t = t
+    return clock, src
+
+
+def _riding_timeline(t_s: list, power_w: list) -> tuple[list[float], list[float]]:
+    """1 Hz riding-time power values (nulls and short gaps as 0 W, long gaps
+    removed) and the original `t_s` second each value sits at."""
+    clock, src = riding_samples(t_s)
+    watts = [0.0 if i is None or i >= len(power_w) or power_w[i] is None else float(power_w[i]) for i in src]
     return watts, clock
 
 

@@ -13,7 +13,10 @@ view = BASE_FIELDS only). Adding a run analyzer is one registry entry; no call s
 Behaviour of `BikeAnalyzer` by kind (`models.SessionKind`):
   workout   -- prescription path: the matched session's structure / zone / text steer the reps
   race      -- race path: race-start read and per-lap numbers, no decoupling read
-  free_ride -- free effort detection (a repeating work/recovery lap pattern counts as structure)
+  free_ride -- free effort detection (a repeating work/recovery lap pattern counts as structure),
+               plus the `free_ride` read (`free_ride.py`: where the time went, notable efforts,
+               matches burned, cost vs the week, steady-stretch drift, data quality). A "workout"
+               ride whose matched session carries no structured prescription gets the same read.
   opener / warmup -- base analytics + power curve only: never evaluated or scored
 """
 
@@ -27,6 +30,7 @@ from typing import TYPE_CHECKING, Protocol, Sequence
 from swim_coach.analytics import compute_analytics
 from swim_coach.models import Athlete, Event, Session, SessionKind, Workout, WorkoutAnalytics
 from swim_coach.bike_coach_view import shape_ride_view
+from swim_coach.free_ride import FREE_READ_KINDS, is_key_session, read_free_ride
 from swim_coach.power_curve import BEST_WINDOWS_DAYS, annotate_bests
 
 if TYPE_CHECKING:
@@ -53,6 +57,8 @@ class AnalysisContext:
     elapsed_min: float | None = None
     # The athlete's other workouts, for the power curve's 42/90-day bests.
     prior_workouts: Sequence[Workout] = field(default_factory=tuple)
+    # Planned sessions on the days around the workout (the free-ride read's cost-vs-week note).
+    neighbors: Sequence[Session] = field(default_factory=tuple)
 
 
 # Sport-agnostic fields every analyzer's coach view keeps.
@@ -69,7 +75,9 @@ SWIM_FIELDS: frozenset[str] = frozenset(
         "swolf_degradation_pct",
     }
 )
-BIKE_FIELDS: frozenset[str] = frozenset({"intervals", "avg_power_w", "normalized_power_w", "power_curve"})
+BIKE_FIELDS: frozenset[str] = frozenset(
+    {"intervals", "avg_power_w", "normalized_power_w", "power_curve", "free_ride"}
+)
 
 
 def prune_nulls(x):
@@ -92,6 +100,11 @@ class WorkoutAnalyzer(Protocol):
 
     def coach_view(self, analytics: WorkoutAnalytics | None) -> dict | None: ...
 
+    def needs_neighbors(self, kind: SessionKind) -> bool:
+        """Whether analysing a workout of this kind reads the planned sessions around it
+        (`AnalysisContext.neighbors`); the context builder only loads them when asked."""
+        ...
+
 
 class _CoachViewMixin:
     """`coach_view`: the dump restricted to BASE_FIELDS plus this analyzer's own `fields`, shaped by
@@ -99,6 +112,9 @@ class _CoachViewMixin:
 
     fields: frozenset[str] = frozenset()
     detailed: bool = False
+
+    def needs_neighbors(self, kind: SessionKind) -> bool:
+        return False
 
     def _shape(self, out: dict, analytics: WorkoutAnalytics) -> dict:
         return out
@@ -205,7 +221,31 @@ class BikeAnalyzer(_CoachViewMixin):
             race=ctx.kind == "race",
             session_text=_session_text(session),
         )
-        return annotate_power_curve_bests(workout, analytics, ctx)
+        analytics = annotate_power_curve_bests(workout, analytics, ctx)
+        if not self._reads_as_free_ride(ctx):
+            return analytics
+        read = read_free_ride(
+            workout=workout,
+            analytics=analytics,
+            series=ctx.series,
+            ftp_watts=athlete.ftp_watts if athlete else None,
+            lthr_bpm=athlete.lthr_bpm if athlete else None,
+            intent_zone=_planned_zone(session),
+            neighbors=ctx.neighbors,
+            prior_workouts=ctx.prior_workouts,
+        )
+        return analytics.model_copy(update={"free_ride": read})
+
+    def needs_neighbors(self, kind: SessionKind) -> bool:
+        return kind in FREE_READ_KINDS
+
+    @staticmethod
+    def _reads_as_free_ride(ctx: AnalysisContext) -> bool:
+        """A free ride, or a "workout" ride whose session prescribes no structure (nothing to
+        score the reps against, so the free-ride read is the useful one)."""
+        if ctx.kind == "free_ride":
+            return True
+        return ctx.kind == "workout" and (ctx.session is None or ctx.session.structured is None)
 
 
 _SWIM = SwimAnalyzer()
@@ -254,6 +294,25 @@ def derive_workout_kind(workout: Workout, session: Session | None, events: Seque
     return session.effective_kind if session is not None else "free_ride"
 
 
+def _neighbor_sessions(
+    store: "StoreInterface", slug: str, workout: Workout, session: Session | None
+) -> tuple[Session, ...]:
+    """Key sessions (any sport) planned the day before / after the workout (best-effort, like
+    every lookup)."""
+    found: dict[str, Session] = {}
+    for day in (workout.date - timedelta(days=1), workout.date + timedelta(days=1)):
+        year, week, _ = day.isocalendar()
+        try:
+            plan = store.load_week(slug, f"{year}-W{week:02d}")
+        except Exception as exc:  # noqa: BLE001 - the cost note reads fine without neighbours
+            _warn("neighbor sessions", slug, exc)
+            continue
+        for s in (plan.sessions if plan else []):
+            if s.date == day and (session is None or s.id != session.id) and is_key_session(s):
+                found[str(s.id)] = s
+    return tuple(found.values())
+
+
 def build_analysis_context(
     store: "StoreInterface",
     slug: str,
@@ -286,12 +345,14 @@ def build_analysis_context(
         except Exception as exc:  # noqa: BLE001 - the curve is still valid without the comparison
             _warn("prior_workouts", slug, exc)
     workout.kind = derive_workout_kind(workout, session, events)
+    kind = workout.effective_kind or workout.kind
     return AnalysisContext(
         athlete=athlete,
         session=session,
-        kind=workout.effective_kind or workout.kind,
+        kind=kind,
         series=series,
         target_w=target_w,
         elapsed_min=elapsed_min,
         prior_workouts=prior,
+        neighbors=_neighbor_sessions(store, slug, workout, session) if analyzer_for(workout.sport).needs_neighbors(kind) else (),
     )

@@ -1817,6 +1817,98 @@ class WorkoutIntervals(BaseModel):
     session_shape: str | None = None
 
 
+class FreeRideZoneTime(BaseModel):
+    """Time in one power or HR zone (see `swim_coach.free_ride`)."""
+
+    zone: str
+    seconds: int
+    pct: float  # share of the zone family's own total (pedalling time for power, HR-sampled time for HR)
+
+
+class FreeRideEffort(BaseModel):
+    """A notable effort: the ride's best 20 / 5 / 1 min window (the power curve's own window)."""
+
+    duration_s: int
+    start_offset_s: float  # elapsed seconds into the ride
+    avg_w: int
+    pct_ftp: float | None = None
+    avg_hr: int | None = None
+    altitude_gain_m: float | None = None
+    avg_grade_pct: float | None = None
+    label: str | None = None  # e.g. "threshold climb"; None when the window is not a notable zone
+    new_best_42d: bool | None = None
+    new_best_90d: bool | None = None
+
+
+class FreeRideMatch(BaseModel):
+    """One stretch above FTP: 30 s centred power > FTP for >= 10 s (gaps < 10 s merged)."""
+
+    start_offset_s: float
+    duration_s: int
+    avg_w: int
+    peak_w: int  # best 5 s average inside the stretch
+    kj_above_ftp: float
+
+
+class FreeRideMatches(BaseModel):
+    count: int = 0
+    time_above_ftp_s: int = 0
+    kj_above_ftp: float = 0.0
+    efforts: list[FreeRideMatch] = Field(default_factory=list)
+
+
+class FreeRideNeighbor(BaseModel):
+    """A planned key session (workout/race) on the day before or after the ride."""
+
+    relation: Literal["before", "after"]  # where the key session sits relative to the ride
+    date: date
+    title: str
+    kind: SessionKind
+
+
+class FreeRideCost(BaseModel):
+    tss: float | None = None  # power basis only
+    intensity_factor: float | None = None  # power basis only
+    load_au: float | None = None
+    cost_basis: Literal["power", "hr", "srpe", "duration"] | None = None
+    adjacent_key_sessions: list[FreeRideNeighbor] = Field(default_factory=list)
+    note: str | None = None
+
+
+class FreeRideDrift(BaseModel):
+    """Power:HR decoupling over one steady stretch (never the whole ride)."""
+
+    start_offset_s: float
+    duration_min: float
+    avg_w: int
+    power_cv_pct: float
+    drift_pct: float
+
+
+class FreeRideRead(BaseModel):
+    """What a coach looks for in a ride with no prescribed structure -- see `swim_coach.free_ride`
+    and `library/41-free-ride-analysis.md`. Verdicts are only ever against a STATED intent
+    (the matched session's structured intensity zone); with none, distribution only."""
+
+    moving_s: int
+    coasting_s: int
+    coasting_pct: float
+    zero_or_null_power_pct: float
+    power_zones: list[FreeRideZoneTime] = Field(default_factory=list)  # pedalling time only
+    hr_zones: list[FreeRideZoneTime] = Field(default_factory=list)
+    intent_zone: str | None = None
+    z3_plus_pct: float | None = None  # share of pedalling time at/above Z3 (tempo and up)
+    tempo_creep: bool | None = None  # None = no stated easy intent, or power unreadable
+    tempo_creep_note: str | None = None
+    notable_efforts: list[FreeRideEffort] = Field(default_factory=list)
+    matches: FreeRideMatches | None = None
+    cost: FreeRideCost | None = None
+    steady_drift: list[FreeRideDrift] = Field(default_factory=list)
+    steady_note: str | None = None
+    altitude_range_m: float | None = None
+    data_quality_notes: list[str] = Field(default_factory=list)
+
+
 class WorkoutAnalytics(BaseModel):
     """Derived workout analytics computed at ingest time by
     `swim_coach.analytics.compute_analytics` -- see that module for the
@@ -1855,6 +1947,8 @@ class WorkoutAnalytics(BaseModel):
     # Mean-maximal power curve (`swim_coach.power_curve`) for any ride with a power
     # channel; `None` otherwise and on rows that predate it. Additive/optional.
     power_curve: list[PowerCurvePoint] | None = None
+    # Free-ride read (`swim_coach.free_ride`): bike rides with no prescription to score. Additive/optional.
+    free_ride: FreeRideRead | None = None
 
 
 WorkoutChatSenderRole = Literal["athlete", "ai_coach", "coach"]
