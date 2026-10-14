@@ -288,6 +288,7 @@ from swim_coach.session_lookup import (
     day_order,
     describe_all,
     find_session,
+    resolve_in_store,
 )
 from swim_coach.store import StoreInterface
 from swim_coach.taper_search import (
@@ -4964,6 +4965,11 @@ def _handle_push_to_garmin(input_data: dict[str, Any], *, store: StoreInterface,
     session_id = input_data.get("session_id")
     if not iso_week and not session_id:
         return {"error": "pass session_id (one session) or iso_week (a whole week)"}
+    if session_id:
+        try:
+            session_id = str(resolve_in_store(store, slug, session_id).id)
+        except SessionLookupError as exc:
+            return {"error": str(exc)}
     return push_on_demand(store, slug, iso_week=iso_week, session_id=session_id)
 
 
@@ -4980,19 +4986,14 @@ def _handle_export_zwo_workout(input_data: dict[str, Any], *, store: StoreInterf
     session_id_str = input_data.get("session_id")
     if not session_id_str:
         return {"error": "session_id is required"}
-    try:
-        session_id = uuid.UUID(session_id_str)
-    except ValueError:
-        return {"error": f"invalid session_id: {session_id_str!r}"}
 
-    # Deferred imports: same circular-import shape as
-    # app.garmin_push's own deferred `_find_session` import.
-    from app.routes.garmin import _find_session
+    # Deferred import: same circular-import shape as app.garmin_push's own deferred imports.
     from app.zwo_export import build_zwo_export
 
-    session = _find_session(store, slug, session_id)
-    if session is None:
-        return {"error": f"no such session: {session_id}"}
+    try:
+        session = resolve_in_store(store, slug, session_id_str)
+    except SessionLookupError as exc:
+        return {"error": str(exc)}
     if session.sport != "bike":
         return {"error": f"zwo export isn't supported for sport {session.sport!r}"}
     if session.structured is None:

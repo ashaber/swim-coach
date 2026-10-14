@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import date as Date
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from swim_coach.models import Session
@@ -124,11 +124,6 @@ def find_session(
     return hits[0]
 
 
-def resolve_ref(sessions: Iterable[Session], ref: dict[str, Any]) -> Session:
-    """`find_session` from a tool-input dict carrying `session_id` and/or `date` + `sport`."""
-    return find_session(sessions, session_id=ref.get("session_id"), date=ref.get("date"), sport=ref.get("sport"))
-
-
 def find_in_store(store: StoreInterface, athlete: str, session_id: UUID) -> Session | None:
     """The session with exactly this id in any of `athlete`'s weeks (`StoreInterface` has no by-id
     lookup -- weeks are the unit of storage -- so this scans `list_week_ids`)."""
@@ -138,3 +133,14 @@ def find_in_store(store: StoreInterface, athlete: str, session_id: UUID) -> Sess
             if session.id == session_id:
                 return session
     return None
+
+
+def resolve_in_store(store: StoreInterface, athlete: str, ref: str | UUID) -> Session:
+    """`find_session(session_id=ref)` across every week on file -- accepts the full id or the unique
+    short prefix the plan context shows. Raises `SessionNotFound` / `AmbiguousSession`."""
+    pool: list[Session] = []
+    for iso_week in store.list_week_ids(athlete):
+        week = store.load_week(athlete, iso_week)
+        if week is not None:
+            pool.extend(week.sessions)
+    return find_session(pool, session_id=ref)
