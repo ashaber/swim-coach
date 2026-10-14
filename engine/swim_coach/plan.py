@@ -4410,22 +4410,24 @@ def evaluate_week_realism(
     """
     warnings_out: list[str] = []
     bike = [s for s in sessions if s.sport == "bike"]
-    non_race_bike = [s for s in bike if not _session_is_race(s)]
+    # Days, not sessions: two rides on one day (a double) are one bike day.
+    non_race_bike_days = {s.date for s in bike if not _session_is_race(s) and s.kind != "warmup"}
     hard = [s for s in bike if _session_is_hard_bike(s)]
+    hard_day_count = len({s.date for s in hard})
 
-    if len(hard) > BIKE_MAX_HARD_DAYS_PER_WEEK:
+    if hard_day_count > BIKE_MAX_HARD_DAYS_PER_WEEK:
         zones = sorted({str(s.intensity.get("zone")) for s in hard})
         warnings_out.append(
-            f"{len(hard)} hard bike days planned this week (zones {zones}); the "
+            f"{hard_day_count} hard bike days planned this week (zones {zones}); the "
             f"realistic ceiling is {BIKE_MAX_HARD_DAYS_PER_WEEK} hard bike day(s) "
             "(library/24 — Seiler polarized distribution: a 4th hard day tips the "
             "week into the moderate 'grey zone' that plateaus performance). Move "
             "the extra hard day(s) to easy endurance, or drop them."
         )
 
-    if len(non_race_bike) > BIKE_MAX_BIKE_DAYS_PER_WEEK:
+    if len(non_race_bike_days) > BIKE_MAX_BIKE_DAYS_PER_WEEK:
         warnings_out.append(
-            f"{len(non_race_bike)} bike training days planned (races excluded); "
+            f"{len(non_race_bike_days)} bike training days planned (races excluded); "
             f"{BIKE_MAX_BIKE_DAYS_PER_WEEK}+ rideable days a week tends to perform "
             "poorly (library/23 — no session-count gain observed past a handful of "
             "well-structured sessions). Consolidate onto fewer, better days."
