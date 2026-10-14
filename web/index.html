@@ -175,6 +175,13 @@
     .rd-timeline { list-style: none; margin: 0; padding: 0; }
     .rd-tl-row { display: grid; grid-template-columns: 92px 1fr; gap: 10px; padding: 12px 8px; border-bottom: 1px solid var(--line-soft); font-size: 16px; }
     .rd-tl-row.start { font-weight: 800; }
+    .rd-tl-bar { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+    .rd-tl-edit { list-style: none; padding: 10px 8px; border-bottom: 1px solid var(--line-soft); display: grid; gap: 8px; }
+    .rd-tl-edit-head { display: flex; justify-content: space-between; align-items: center; }
+    .rd-tl-name { width: 100%; box-sizing: border-box; font-size: 16px; }
+    .rd-tl-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .rd-tl-f { display: grid; gap: 2px; font-size: 13px; min-width: 0; }
+    .rd-tl-f input { width: 100%; box-sizing: border-box; font-size: 16px; min-width: 0; }
     .rd-tl-row.current { background: var(--c-signal-wash); border-left: 3px solid var(--c-signal); }
     .rd-tl-row.next { background: var(--paper-2); }
     .rd-tl-time { color: var(--ink-soft); }

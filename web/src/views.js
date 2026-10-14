@@ -1826,20 +1826,59 @@ function renderRaceDayChecklistBody(plan) {
       </section>`).join('');
 }
 
-function renderRaceDayTimelineBody(plan, now) {
+const TL_RULE_INPUTS = [
+  ['not_later_than', 'Not later than'],
+  ['not_earlier_than', 'Not earlier than'],
+  ['only_if_start_after', 'Only if start after'],
+  ['only_if_start_before', 'Only if start before'],
+];
+
+function renderTimelineEditRows(plan) {
+  const shown = new Map(timelineClock(plan).map((e) => [e.id, e]));
+  const field = (e, name) => `data-form="raceday-tl" data-tl="${esc(e.id)}" data-field="${name}"`;
+  return plan.timeline.map((e) => {
+    const c = shown.get(e.id);
+    const when = c ? (c.time ? formatClockTime(c.time) : 'no start time') : 'hidden at this start';
+    const anchor = e.after ? (plan.timeline.find((t) => t.id === e.after)?.label || e.after) : '';
+    const timing = e.day === 'eve'
+      ? `<label class="rd-tl-f">At <input type="time" ${field(e, 'at')} value="${esc(e.at || '')}"></label>`
+      : e.after
+        ? `<label class="rd-tl-f">Min after ${esc(anchor)} <input type="number" inputmode="numeric" step="5" ${field(e, 'after_min')} value="${esc(e.after_min ?? 0)}"></label>`
+        : `<label class="rd-tl-f">Min from start <input type="number" inputmode="numeric" step="5" ${field(e, 'offset_min')} value="${esc(e.offset_min ?? 0)}"></label>`;
+    const rules = e.day === 'eve' ? '' : TL_RULE_INPUTS
+      .map(([name, text]) => `<label class="rd-tl-f">${text} <input type="time" ${field(e, name)} value="${esc(e[name] || '')}"></label>`)
+      .join('');
+    return `
+        <li class="rd-tl-edit${e.is_start ? ' start' : ''}" data-tl="${esc(e.id)}">
+          <div class="rd-tl-edit-head"><span class="rd-tl-time mono">${esc(when)}</span>
+            ${e.is_start ? '' : `<button type="button" class="btn-ghost rd-tl-rm" data-a="raceday:tl-remove" data-tl="${esc(e.id)}" aria-label="Remove ${esc(e.label)}">Remove</button>`}</div>
+          <input type="text" class="rd-tl-name" aria-label="Name" ${field(e, 'label')} value="${esc(e.label)}" maxlength="80">
+          <div class="rd-tl-fields">${timing}${rules}</div>
+        </li>`;
+  }).join('');
+}
+
+function renderRaceDayTimelineBody(plan, now, editing = false) {
+  const hint = plan.start_time ? '' : '<p class="sub">Set a start time to see clock times.</p>';
+  const toggle = `<div class="rd-tl-bar">
+      <button type="button" class="btn-ghost" data-a="raceday:tl-edit" aria-pressed="${editing ? 'true' : 'false'}">${editing ? 'Done' : 'Edit timeline'}</button>
+      ${editing ? '<button type="button" class="btn-ghost" data-a="raceday:tl-add">Add item</button><button type="button" class="btn-ghost" data-a="raceday:tl-add-eve">Add evening item</button>' : ''}
+      ${editing && plan.timeline_edited ? '<button type="button" class="btn-ghost" data-a="raceday:tl-reset">Reset to template</button>' : ''}
+    </div>`;
+  if (editing) return `${hint}${toggle}<ol class="rd-timeline rd-timeline-edit">${renderTimelineEditRows(plan)}</ol>`;
   const clock = timelineClock(plan);
   const pos = timelinePosition(clock, plan.date, now);
-  const hint = plan.start_time ? '' : '<p class="sub">Set a start time to see clock times.</p>';
   const rows = clock.map((e) => {
     const cls = ['rd-tl-row', e.is_start ? 'start' : '', e.id === pos.currentId ? 'current' : '', e.id === pos.nextId ? 'next' : ''].filter(Boolean).join(' ');
-    const when = e.time ? formatClockTime(e.time) : `${e.offset_min > 0 ? '+' : ''}${e.offset_min} min`;
+    const when = e.time ? formatClockTime(e.time)
+      : (e.after ? `+${e.after_min || 0} min after` : `${e.offset_min > 0 ? '+' : ''}${e.offset_min} min`);
     return `
         <li class="${cls}" data-tl="${esc(e.id)}">
           <span class="rd-tl-time mono">${esc(when)}</span>
           <span class="rd-tl-label">${esc(e.label)}${e.day === 'eve' ? ' <span class="rd-tl-eve">evening before</span>' : ''}${e.id === pos.currentId ? ' <span class="rd-tl-now">now</span>' : ''}${e.id === pos.nextId ? ' <span class="rd-tl-now">next</span>' : ''}</span>
         </li>`;
   }).join('');
-  return `${hint}<ol class="rd-timeline">${rows}</ol>`;
+  return `${hint}${toggle}<ol class="rd-timeline">${rows}</ol>`;
 }
 
 export function renderRaceDayOverlay(rd, online = true, now = new Date()) {
@@ -1864,9 +1903,9 @@ export function renderRaceDayOverlay(rd, online = true, now = new Date()) {
           <button type="button" role="tab" class="rd-tab${tab === 'timeline' ? ' on' : ''}" data-a="raceday:tab" data-tab="timeline" aria-selected="${tab === 'timeline'}">Timeline</button>
         </div>
       </div>
-      ${tab === 'list' ? renderRaceDayChecklistBody(plan) : renderRaceDayTimelineBody(plan, now)}`;
+      ${tab === 'list' ? renderRaceDayChecklistBody(plan) : renderRaceDayTimelineBody(plan, now, Boolean(rd.editTimeline))}`;
   }
-  const status = !online ? 'Offline -- changes sync when you reconnect' : (rd.pending ? 'Syncing…' : '');
+  const status = rd.notice || (!online ? 'Offline -- changes sync when you reconnect' : (rd.pending ? 'Syncing…' : ''));
   return `
     <div class="rd-overlay" id="race-overlay" role="dialog" aria-modal="true" aria-label="Race-day checklist">
       <div class="rd-head" id="race-overlay-head">

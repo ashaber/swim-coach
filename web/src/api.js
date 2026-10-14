@@ -997,6 +997,20 @@ export async function patchRaceDay({
   });
 }
 
+/** PATCH /api/race-day/{id}/timeline -- `payload` is `{ timeline: [...] }` (replace this race's list)
+ * or `{ reset: true }` (restore the template's). */
+export async function patchRaceDayTimeline({
+  baseUrl, token, athlete, planId, payload,
+}) {
+  return apiRequest({
+    baseUrl,
+    token,
+    path: `/api/race-day/${encodeURIComponent(planId)}/timeline?athlete=${encodeURIComponent(athlete)}`,
+    method: 'PATCH',
+    body: payload,
+  });
+}
+
 /** PATCH /api/plan/weeks/{isoWeek}/race-week-items/{itemId} -- tick/untick a race-week item. */
 export async function patchRaceWeekItem({
   baseUrl, token, athlete, isoWeek, itemId, done,
