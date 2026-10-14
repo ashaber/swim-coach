@@ -321,21 +321,32 @@
       "label": "Wake up",
       "day": "race",
       "offset_min": -315,
-      "is_start": false
+      "is_start": false,
+      "not_later_than": "07:00"
     },
     {
       "id": "yoga-race",
       "label": "Yoga",
       "day": "race",
       "offset_min": -270,
-      "is_start": false
+      "is_start": false,
+      "not_later_than": "07:45"
     },
     {
       "id": "breakfast",
       "label": "Breakfast",
       "day": "race",
       "offset_min": -180,
-      "is_start": false
+      "is_start": false,
+      "not_later_than": "08:00"
+    },
+    {
+      "id": "lunch-last-meal",
+      "label": "Lunch — last real meal",
+      "day": "race",
+      "offset_min": -180,
+      "is_start": false,
+      "only_if_start_after": "12:00"
     },
     {
       "id": "shower-and-potty",
@@ -364,6 +375,14 @@
       "day": "race",
       "offset_min": -95,
       "is_start": false
+    },
+    {
+      "id": "carb-snack",
+      "label": "Small carb snack or bottle",
+      "day": "race",
+      "offset_min": -90,
+      "is_start": false,
+      "only_if_start_after": "12:00"
     },
     {
       "id": "warm-up",

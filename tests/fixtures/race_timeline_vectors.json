@@ -1,0 +1,218 @@
+{
+ "_comment": "Shared vectors: tests/unit/test_race_day.py and web/tests/unit/raceDay.test.js both evaluate these; timeline mirrors athletes/andrew/race-checklist-template.json.",
+ "timeline": [
+  {
+   "id": "eve-openers",
+   "label": "Openers",
+   "day": "eve",
+   "at": "18:00",
+   "is_start": false
+  },
+  {
+   "id": "eve-dinner",
+   "label": "Dinner",
+   "day": "eve",
+   "at": "19:00",
+   "is_start": false
+  },
+  {
+   "id": "eve-yoga",
+   "label": "Yoga",
+   "day": "eve",
+   "at": "20:00",
+   "is_start": false
+  },
+  {
+   "id": "eve-bed",
+   "label": "Bed",
+   "day": "eve",
+   "at": "21:00",
+   "is_start": false
+  },
+  {
+   "id": "wake-up",
+   "label": "Wake up",
+   "day": "race",
+   "offset_min": -315,
+   "is_start": false,
+   "not_later_than": "07:00"
+  },
+  {
+   "id": "yoga-race",
+   "label": "Yoga",
+   "day": "race",
+   "offset_min": -270,
+   "is_start": false,
+   "not_later_than": "07:45"
+  },
+  {
+   "id": "breakfast",
+   "label": "Breakfast",
+   "day": "race",
+   "offset_min": -180,
+   "is_start": false,
+   "not_later_than": "08:00"
+  },
+  {
+   "id": "lunch-last-meal",
+   "label": "Lunch — last real meal",
+   "day": "race",
+   "offset_min": -180,
+   "is_start": false,
+   "only_if_start_after": "12:00"
+  },
+  {
+   "id": "shower-and-potty",
+   "label": "Shower and potty",
+   "day": "race",
+   "offset_min": -165,
+   "is_start": false
+  },
+  {
+   "id": "leave-home",
+   "label": "Leave home",
+   "day": "race",
+   "offset_min": -120,
+   "is_start": false
+  },
+  {
+   "id": "arrive-register-pin-number",
+   "label": "Arrive, register, pin number",
+   "day": "race",
+   "offset_min": -105,
+   "is_start": false
+  },
+  {
+   "id": "pre-ride",
+   "label": "Pre-ride",
+   "day": "race",
+   "offset_min": -95,
+   "is_start": false
+  },
+  {
+   "id": "carb-snack",
+   "label": "Small carb snack or bottle",
+   "day": "race",
+   "offset_min": -90,
+   "is_start": false,
+   "only_if_start_after": "12:00"
+  },
+  {
+   "id": "warm-up",
+   "label": "Warm-up",
+   "day": "race",
+   "offset_min": -60,
+   "is_start": false
+  },
+  {
+   "id": "final-prep",
+   "label": "Final prep",
+   "day": "race",
+   "offset_min": -25,
+   "is_start": false
+  },
+  {
+   "id": "stage",
+   "label": "Stage",
+   "day": "race",
+   "offset_min": -10,
+   "is_start": false
+  },
+  {
+   "id": "start",
+   "label": "Start",
+   "day": "race",
+   "offset_min": 0,
+   "is_start": true
+  },
+  {
+   "id": "cooldown-recovery-drink-within",
+   "label": "Cooldown + recovery drink within 30 min",
+   "day": "race",
+   "offset_min": 60,
+   "is_start": false
+  }
+ ],
+ "cases": [
+  {
+   "name": "11:15 start: clamps pull wake/yoga earlier, no lunch",
+   "start_time": "11:15",
+   "expect": {
+    "wake-up": "06:00",
+    "yoga-race": "06:45",
+    "breakfast": "08:00",
+    "shower-and-potty": "08:30",
+    "leave-home": "09:15",
+    "warm-up": "10:15",
+    "final-prep": "10:50",
+    "stage": "11:05",
+    "start": "11:15",
+    "cooldown-recovery-drink-within": "12:15"
+   },
+   "absent": [
+    "lunch-last-meal",
+    "carb-snack"
+   ]
+  },
+  {
+   "name": "15:15 start: typical-day wake/breakfast, lunch and snack appear",
+   "start_time": "15:15",
+   "expect": {
+    "wake-up": "07:00",
+    "yoga-race": "07:45",
+    "breakfast": "08:00",
+    "lunch-last-meal": "12:15",
+    "shower-and-potty": "12:30",
+    "leave-home": "13:15",
+    "arrive-register-pin-number": "13:30",
+    "pre-ride": "13:40",
+    "carb-snack": "13:45",
+    "warm-up": "14:15",
+    "final-prep": "14:50",
+    "stage": "15:05",
+    "start": "15:15"
+   },
+   "absent": []
+  },
+  {
+   "name": "08:00 start: clamps do not fire, earlier wake, no lunch",
+   "start_time": "08:00",
+   "expect": {
+    "wake-up": "02:45",
+    "yoga-race": "03:30",
+    "breakfast": "05:00",
+    "warm-up": "07:00",
+    "stage": "07:50",
+    "start": "08:00"
+   },
+   "absent": [
+    "lunch-last-meal",
+    "carb-snack"
+   ]
+  },
+  {
+   "name": "12:00 start: only_if_start_after is strict",
+   "start_time": "12:00",
+   "expect": {
+    "wake-up": "06:45",
+    "breakfast": "08:00"
+   },
+   "absent": [
+    "lunch-last-meal",
+    "carb-snack"
+   ]
+  },
+  {
+   "name": "no start time: race entries untimed, conditionals hidden",
+   "start_time": null,
+   "expect": {
+    "eve-dinner": "19:00",
+    "wake-up": null,
+    "start": null
+   },
+   "absent": [
+    "lunch-last-meal"
+   ]
+  }
+ ]
+}

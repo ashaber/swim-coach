@@ -6,7 +6,7 @@ web/src/raceDay.js."""
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import date
 
 from swim_coach.models import (
     Athlete,
@@ -15,8 +15,6 @@ from swim_coach.models import (
     RaceDayPlan,
     TimelineEntry,
 )
-
-_BASE_DAY = date(2000, 1, 2)
 
 
 def new_plan_from_template(
@@ -77,21 +75,48 @@ def set_checked(plan: RaceDayPlan, states: dict[str, bool]) -> None:
 
 
 def timeline_clock(plan: RaceDayPlan) -> list[dict]:
-    """Timeline entries with a computed `time` ("HH:MM") and `day_shift` (-1 for the evening
-    before, or a race-day offset landing before midnight). Race entries have `time=None` until
-    a start_time is set. Order: eve by clock, then race by offset."""
-    out = [_clock_entry(e, plan.start_time) for e in plan.timeline]
-    eve = sorted((o for o in out if o["day"] == "eve"), key=lambda o: o["time"])
-    race = sorted((o for o in out if o["day"] == "race"), key=lambda o: o["offset_min"])
-    return eve + race
+    """Timeline entries with a computed `time` ("HH:MM"), `abs_min` (minutes from race-day
+    midnight; None until a start_time is set) and `day_shift` (-1 for the evening before, or a
+    race-day offset landing before midnight).
+
+    Rules on race-day entries: `offset_min` from the start, then `not_later_than` /
+    `not_earlier_than` clamp the clock time into the athlete's normal day; `only_if_start_after`
+    / `only_if_start_before` (strict) drop the entry for starts outside the window -- and with no
+    start_time conditional entries are hidden. Sorted by clock time (eve entries first)."""
+    start = _hhmm_to_min(plan.start_time) if plan.start_time else None
+    out = [c for c in (_clock_entry(e, start) for e in plan.timeline) if c is not None]
+    timed = sorted((o for o in out if o["abs_min"] is not None), key=lambda o: o["abs_min"])
+    untimed = sorted((o for o in out if o["abs_min"] is None), key=lambda o: o["offset_min"] or 0)
+    return timed + untimed
 
 
-def _clock_entry(e: TimelineEntry, start_time: str | None) -> dict:
+def _hhmm_to_min(hhmm: str) -> int:
+    h, m = hhmm.split(":")
+    return int(h) * 60 + int(m)
+
+
+def _visible_for_start(e: TimelineEntry, start: int | None) -> bool:
+    if e.day == "eve" or not (e.only_if_start_after or e.only_if_start_before):
+        return True
+    if start is None:
+        return False
+    if e.only_if_start_after and not start > _hhmm_to_min(e.only_if_start_after):
+        return False
+    return not (e.only_if_start_before and not start < _hhmm_to_min(e.only_if_start_before))
+
+
+def _clock_entry(e: TimelineEntry, start: int | None) -> dict | None:
+    if not _visible_for_start(e, start):
+        return None
     base = {"id": e.id, "label": e.label, "day": e.day, "is_start": e.is_start, "offset_min": e.offset_min}
     if e.day == "eve":
-        return {**base, "time": e.at, "day_shift": -1}
-    if start_time is None:
-        return {**base, "time": None, "day_shift": 0}
-    start = datetime.combine(_BASE_DAY, datetime.strptime(start_time, "%H:%M").time())
-    at = start + timedelta(minutes=e.offset_min or 0)
-    return {**base, "time": at.strftime("%H:%M"), "day_shift": (at.date() - _BASE_DAY).days}
+        abs_min = -1440 + _hhmm_to_min(e.at or "00:00")
+        return {**base, "time": e.at, "day_shift": -1, "abs_min": abs_min}
+    if start is None:
+        return {**base, "time": None, "day_shift": 0, "abs_min": None}
+    abs_min = start + (e.offset_min or 0)
+    if e.not_later_than:
+        abs_min = min(abs_min, _hhmm_to_min(e.not_later_than))
+    if e.not_earlier_than:
+        abs_min = max(abs_min, _hhmm_to_min(e.not_earlier_than))
+    return {**base, "time": f"{abs_min % 1440 // 60:02d}:{abs_min % 60:02d}", "day_shift": abs_min // 1440, "abs_min": abs_min}

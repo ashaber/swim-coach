@@ -129,6 +129,9 @@ class ChecklistSection(BaseModel):
     items: list[ChecklistItem] = Field(default_factory=list)
 
 
+_HHMM_RE = r"^([01]\d|2[0-3]):[0-5]\d$"
+
+
 class TimelineEntry(BaseModel):
     """One step of the race-day timeline. `day="race"` entries sit `offset_min` minutes from
     the start (negative = before); `day="eve"` entries (the evening before) carry a clock time
@@ -140,6 +143,12 @@ class TimelineEntry(BaseModel):
     offset_min: int | None = None
     at: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     is_start: bool = False
+    # Rules (race-day entries only; see race_day.timeline_clock). The clamps keep an offset item on
+    # the athlete's normal day; the conditionals drop the item for starts outside the window.
+    not_later_than: str | None = Field(default=None, pattern=_HHMM_RE)
+    not_earlier_than: str | None = Field(default=None, pattern=_HHMM_RE)
+    only_if_start_after: str | None = Field(default=None, pattern=_HHMM_RE)
+    only_if_start_before: str | None = Field(default=None, pattern=_HHMM_RE)
 
     @model_validator(mode="after")
     def _timing_matches_day(self) -> "TimelineEntry":
@@ -173,6 +182,7 @@ class RaceDayPlan(BaseModel):
     checked: list[str] = Field(default_factory=list)
     sections: list[ChecklistSection] = Field(default_factory=list)
     timeline: list[TimelineEntry] = Field(default_factory=list)
+    timeline_edited: bool = False  # True once this race's timeline was hand-edited (not re-derived)
     notes: str | None = None
 
 
