@@ -196,6 +196,7 @@ import re
 import shutil
 import tempfile
 import uuid
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Literal, get_args
@@ -284,6 +285,7 @@ from swim_coach.session_lookup import (
     AmbiguousSession,
     SessionLookupError,
     candidates_on,
+    day_order,
     describe_all,
     find_session,
 )
@@ -2624,8 +2626,12 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                                 "type": "string",
                                 "description": "Sport of the diffed slot to accept from proposed.",
                             },
+                            "kind": {
+                                "type": "string",
+                                "description": "Optional: picks the slot when a day has two same-sport sessions (e.g. race).",
+                            },
+                            "session_id": _SESSION_ID_SCHEMA,
                         },
-                        "required": ["date", "sport"],
                         "additionalProperties": False,
                     },
                 },
@@ -7105,17 +7111,24 @@ def _dropped_sessions(existing_week, week) -> list[dict[str, Any]]:
     EVERY session "dropped" even when nothing meaningful changed."""
     if existing_week is None:
         return []
-    new_keys = {(s.date, s.sport) for s in week.sessions}
-    return [
-        {
-            "date": s.date.isoformat(),
-            "sport": s.sport,
-            "duration_min": s.duration_min,
-            "purpose": s.purpose,
-        }
-        for s in existing_week.sessions
-        if (s.date, s.sport) not in new_keys
-    ]
+    new_counts = Counter((s.date, s.sport) for s in week.sessions)
+    seen: dict[tuple[date, str], int] = {}
+    dropped: list[dict[str, Any]] = []
+    for s in sorted(existing_week.sessions, key=day_order):
+        pair = (s.date, s.sport)
+        seen[pair] = seen.get(pair, 0) + 1
+        if seen[pair] > new_counts.get(pair, 0):
+            dropped.append(
+                {
+                    "id": str(s.id),
+                    "date": s.date.isoformat(),
+                    "sport": s.sport,
+                    "kind": s.effective_kind,
+                    "duration_min": s.duration_min,
+                    "purpose": s.purpose,
+                }
+            )
+    return dropped
 
 
 def _iso_week_for_date(target_date: date) -> str:
@@ -7788,8 +7801,10 @@ def _build_proposed_sessions_from_fields(
         session, error = _session_from_add_fields(entry, athlete=athlete)
         if error is not None:
             return None, error
-        key = (session.date, session.sport)
-        proposed = [s for s in proposed if (s.date, s.sport) != key]
+        proposed = [
+            s for s in proposed
+            if (s.date, s.sport, s.effective_kind) != (session.date, session.sport, session.effective_kind)
+        ]
         proposed.append(session)
     return proposed, None
 
@@ -7861,27 +7876,41 @@ def _session_content_dict(session: Session) -> dict[str, Any]:
     }
 
 
+SlotKey = tuple[date, str, str, int]  # (date, sport, kind, nth session of that date+sport+kind)
+
+
+def _slot_keys(sessions: list[Session]) -> dict[SlotKey, Session]:
+    """Every session under a slot key. Sessions are not matched by id (a regenerated/proposed week
+    has fresh ids) but by position: date, sport, kind, then nth-of-that -- so a warm-up ride and a
+    race ride on one day are two slots, and an ordinary one-session day is one slot."""
+    seen: dict[tuple[date, str, str], int] = {}
+    keyed: dict[SlotKey, Session] = {}
+    for session in sorted(sessions, key=day_order):
+        base = (session.date, session.sport, session.effective_kind)
+        keyed[(*base, seen.get(base, 0))] = session
+        seen[base] = seen.get(base, 0) + 1
+    return keyed
+
+
 def _diff_week_sessions(
     current_sessions: list[Session], proposed_sessions: list[Session]
-) -> tuple[list[dict[str, Any]], dict[tuple[date, str], str], dict[tuple[date, str], Session]]:
-    """Classifies every (date, sport) slot across `current_sessions` and
+) -> tuple[list[dict[str, Any]], dict[SlotKey, str], dict[SlotKey, Session], dict[SlotKey, Session]]:
+    """Classifies every slot (see `_slot_keys`) across `current_sessions` and
     `proposed_sessions` into exactly one of `"unchanged"` / `"differs"` /
     `"new_in_proposed"` / `"missing_in_proposed"` -- the read-only Phase 1
     of `merge_week_plan` (see that tool's own docstring). Returns
-    `(diff_items, status_by_key, proposed_by_key)`: `diff_items` is the
-    JSON-ready list for the response; `status_by_key`/`proposed_by_key`
-    (both keyed by `(date, sport)` with a real `date` object, not a string)
-    are reused by Phase 2's merge so a selection can be validated against
-    the SAME classification the coach was just shown, not a re-derived
-    approximation of it."""
-    current_by_key = {(s.date, s.sport): s for s in current_sessions}
-    proposed_by_key = {(s.date, s.sport): s for s in proposed_sessions}
+    `(diff_items, status_by_key, proposed_by_key, current_by_key)`: `diff_items` is the
+    JSON-ready list for the response; the keyed dicts are reused by Phase 2's merge so a
+    selection can be validated against the SAME classification the coach was just shown, not a
+    re-derived approximation of it."""
+    current_by_key = _slot_keys(current_sessions)
+    proposed_by_key = _slot_keys(proposed_sessions)
     all_keys = sorted(set(current_by_key) | set(proposed_by_key))
 
     diff_items: list[dict[str, Any]] = []
-    status_by_key: dict[tuple[date, str], str] = {}
+    status_by_key: dict[SlotKey, str] = {}
     for key in all_keys:
-        session_date, sport = key
+        session_date, sport, kind, _ = key
         current_session = current_by_key.get(key)
         proposed_session = proposed_by_key.get(key)
         if current_session is not None and proposed_session is not None:
@@ -7899,12 +7928,57 @@ def _diff_week_sessions(
             {
                 "date": session_date.isoformat(),
                 "sport": sport,
+                "kind": kind,
                 "status": status,
                 "current": _session_summary_json(current_session) if current_session is not None else None,
                 "proposed": _session_summary_json(proposed_session) if proposed_session is not None else None,
             }
         )
-    return diff_items, status_by_key, proposed_by_key
+    return diff_items, status_by_key, proposed_by_key, current_by_key
+
+
+def _resolve_slot(
+    entry: dict[str, Any],
+    status_by_key: dict[SlotKey, str],
+    proposed_by_key: dict[SlotKey, Session],
+    current_by_key: dict[SlotKey, Session],
+) -> tuple[SlotKey | None, str | None]:
+    """The one diff slot an `accept_from_proposed` entry names: by `session_id` (a current or
+    proposed session's id, as shown in the diff), else by date + sport (+ optional `kind`).
+    `(key, error)`; a date+sport that fits several slots is an ambiguity error listing them."""
+    session_id = entry.get("session_id")
+    raw_date = entry.get("date")
+    sport = entry.get("sport")
+    if session_id:
+        text = str(session_id).lower()
+        hits = [
+            k for k in status_by_key
+            if any(str(x.id).startswith(text) for x in (current_by_key.get(k), proposed_by_key.get(k)) if x)
+        ]
+    else:
+        if not raw_date or not sport:
+            return None, f"accept_from_proposed entries need `session_id`, or `date` and `sport`, got {entry!r}"
+        try:
+            picked_date = date.fromisoformat(raw_date)
+        except ValueError:
+            return None, f"invalid accept_from_proposed date {raw_date!r}; expected 'YYYY-MM-DD'"
+        hits = [
+            k for k in status_by_key
+            if k[0] == picked_date and k[1] == sport and entry.get("kind") in (None, k[2])
+        ]
+    if not hits:
+        return None, (
+            f"accept_from_proposed: no diffed item for {session_id or raw_date!r}"
+            + (f" sport {sport!r}" if sport and not session_id else "")
+            + " -- it doesn't appear in either the current or proposed plan for this call"
+        )
+    if len(hits) > 1:
+        listing = "; ".join(
+            f"{k[2]} {', '.join(str(x.id)[:8] for x in (current_by_key.get(k), proposed_by_key.get(k)) if x)}"
+            for k in hits
+        )
+        return None, f"accept_from_proposed: {len(hits)} diffed slots fit -- pass session_id or kind to pick one: {listing}"
+    return hits[0], None
 
 
 def _handle_merge_week_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
@@ -8015,7 +8089,9 @@ def _handle_merge_week_plan(input_data: dict[str, Any], *, store: StoreInterface
         if gen_error is not None:
             return {"error": gen_error}
 
-    diff_items, status_by_key, proposed_by_key = _diff_week_sessions(current.sessions, proposed_sessions)
+    diff_items, status_by_key, proposed_by_key, current_by_key = _diff_week_sessions(
+        current.sessions, proposed_sessions
+    )
 
     accept_from_proposed = input_data.get("accept_from_proposed")
     if accept_from_proposed is None:
@@ -8037,46 +8113,36 @@ def _handle_merge_week_plan(input_data: dict[str, Any], *, store: StoreInterface
     merged = current.model_copy(deep=True)
     accepted_summary: list[dict[str, Any]] = []
     for entry in accept_from_proposed:
-        raw_date = entry.get("date") if isinstance(entry, dict) else None
-        sport = entry.get("sport") if isinstance(entry, dict) else None
-        if not raw_date or not sport:
-            return {"error": f"accept_from_proposed entries need `date` and `sport`, got {entry!r}"}
-        try:
-            picked_date = date.fromisoformat(raw_date)
-        except ValueError:
-            return {"error": f"invalid accept_from_proposed date {raw_date!r}; expected 'YYYY-MM-DD'"}
-
-        key = (picked_date, sport)
-        status = status_by_key.get(key)
-        if status is None:
-            return {
-                "error": (
-                    f"accept_from_proposed: no diffed item for date {raw_date!r} "
-                    f"sport {sport!r} -- it doesn't appear in either the current or "
-                    "proposed plan for this call"
-                )
-            }
+        if not isinstance(entry, dict):
+            return {"error": f"accept_from_proposed entries need `session_id`, or `date` and `sport`, got {entry!r}"}
+        key, slot_error = _resolve_slot(entry, status_by_key, proposed_by_key, current_by_key)
+        if key is None:
+            return {"error": slot_error}
+        label = f"{key[0].isoformat()}/{key[1]} ({key[2]})"
+        status = status_by_key[key]
         if status == "unchanged":
             return {
                 "error": (
-                    f"accept_from_proposed: {raw_date!r}/{sport!r} is already unchanged "
+                    f"accept_from_proposed: {label} is already unchanged "
                     "between current and proposed -- nothing to accept"
                 )
             }
         if status == "missing_in_proposed":
             return {
                 "error": (
-                    f"accept_from_proposed: {raw_date!r}/{sport!r} exists only in the "
+                    f"accept_from_proposed: {label} exists only in the "
                     "CURRENT plan (missing from proposed) -- there is nothing on the "
                     "proposed side to accept for it; use patch_week_plan's `remove` "
                     "mode instead if the intent is to drop it"
                 )
             }
 
-        proposed_session = proposed_by_key[key]
-        merged.sessions = [s for s in merged.sessions if (s.date, s.sport) != key]
-        merged.sessions.append(proposed_session.model_copy(deep=True))
-        accepted_summary.append({"date": raw_date, "sport": sport, "status": status})
+        replaced = current_by_key.get(key)
+        merged.sessions = [s for s in merged.sessions if replaced is None or s.id != replaced.id]
+        merged.sessions.append(proposed_by_key[key].model_copy(deep=True))
+        accepted_summary.append(
+            {"date": key[0].isoformat(), "sport": key[1], "status": status}
+        )
 
     prev_bike_min = sum(
         s.duration_min
