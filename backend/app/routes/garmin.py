@@ -31,6 +31,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from swim_coach.garmin_export import to_garmin_fit_workout
 from swim_coach.session_title import session_title
 from swim_coach.models import Session
+from swim_coach.session_lookup import find_in_store
 from swim_coach.store import StoreInterface
 
 from app.auth import Principal, require_auth, resolve_athlete
@@ -90,21 +91,9 @@ def _reject_indoor_bike(session: Session) -> None:
 
 
 def _find_session(store: StoreInterface, athlete: str, session_id: UUID) -> Session | None:
-    """Search every week on file for `athlete` for a session matching
-    `session_id`. `StoreInterface` has no by-id session lookup -- weeks are
-    the unit of storage -- so this is a linear scan over
-    `list_week_ids`/`load_week`, the same access pattern
-    `scripts/export_plan_json.py` already uses to enumerate all of an
-    athlete's sessions. Fine at this scale (a handful of weeks per athlete).
-    """
-    for iso_week in store.list_week_ids(athlete):
-        week = store.load_week(athlete, iso_week)
-        if week is None:
-            continue
-        for session in week.sessions:
-            if session.id == session_id:
-                return session
-    return None
+    """The session matching `session_id` in any of `athlete`'s weeks (see
+    `session_lookup.find_in_store`)."""
+    return find_in_store(store, athlete, session_id)
 
 
 @router.get("/api/sessions/{session_id}/garmin.fit")

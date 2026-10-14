@@ -2224,6 +2224,12 @@ class Feedback(BaseModel):
     # pattern as `workout_id` above.
     session_date: date | None = None
     session_sport: Sport | None = None
+    # The planned Session's id at question time. Resolved FIRST when it still exists; the
+    # (date, sport) pair above is the fallback after a regenerate (ids don't survive one), and
+    # the only link on rows that predate this field. A day can hold two same-sport sessions
+    # (warm-up + race), which only the id tells apart. DbStore keeps it inside `context`
+    # (JSONB) so no SQL migration is needed -- see store_db.feedback_to_row.
+    session_id: UUID | None = None
     needs_human_review: bool = False  # independently settable by AI or athlete
     ai_provisional_answer: str | None = None
     coach_athlete_id: UUID | None = None  # which coach (an athlete_id) replied

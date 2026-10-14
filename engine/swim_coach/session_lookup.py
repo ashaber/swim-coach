@@ -14,10 +14,13 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import date as Date
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from swim_coach.models import Session
+
+if TYPE_CHECKING:
+    from swim_coach.store import StoreInterface
 
 # Compact id shown in coach context: 8 hex chars is unique within any realistic athlete-week
 # and cheap in tokens; `find_session` accepts any unique prefix of at least MIN_PREFIX_LEN.
@@ -124,3 +127,14 @@ def find_session(
 def resolve_ref(sessions: Iterable[Session], ref: dict[str, Any]) -> Session:
     """`find_session` from a tool-input dict carrying `session_id` and/or `date` + `sport`."""
     return find_session(sessions, session_id=ref.get("session_id"), date=ref.get("date"), sport=ref.get("sport"))
+
+
+def find_in_store(store: StoreInterface, athlete: str, session_id: UUID) -> Session | None:
+    """The session with exactly this id in any of `athlete`'s weeks (`StoreInterface` has no by-id
+    lookup -- weeks are the unit of storage -- so this scans `list_week_ids`)."""
+    for iso_week in store.list_week_ids(athlete):
+        week = store.load_week(athlete, iso_week)
+        for session in week.sessions if week is not None else []:
+            if session.id == session_id:
+                return session
+    return None

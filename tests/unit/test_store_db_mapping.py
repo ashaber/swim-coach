@@ -344,6 +344,20 @@ def test_feedback_mapping_round_trip():
     assert row_to_feedback(row) == f
 
 
+def test_feedback_session_id_rides_in_context_without_a_new_column():
+    f = _feedback(session_id=uuid.uuid4())
+    row = feedback_to_row(f)
+    assert "session_id" not in row  # no SQL column: stored inside the context JSONB
+    assert row["context"]["session_id"] == str(f.session_id)
+    assert f.context == {"screen": "log"}  # the model's own context is not mutated
+    assert row_to_feedback(row) == f
+
+
+def test_feedback_row_without_session_id_still_loads():
+    f = _feedback()
+    assert row_to_feedback(feedback_to_row(f)).session_id is None
+
+
 def test_feedback_mapping_round_trip_with_null_athlete_id():
     f = _feedback(athlete_id=None, type="research_question", source="coach")
     row = feedback_to_row(f)
