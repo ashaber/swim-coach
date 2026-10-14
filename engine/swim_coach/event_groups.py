@@ -70,21 +70,18 @@ def planning_targets(events: list[Event]) -> list[Event]:
 
 
 def race_dates(events: list[Event]) -> set[date]:
-    """Every race day of the active events: member dates plus every day inside a group's span."""
-    active = [e for e in events if e.active]
-    days = {e.event_date for e in active}
-    for g in groups(active):
+    """Race days: the active members' own dates only. A rest day inside a group's span is NOT a
+    race day (see `group_span`)."""
+    return {e.event_date for e in events if e.active}
+
+
+def group_span(events: list[Event]) -> set[date]:
+    """Every day from the first to the last race of each active group, rest days included. Use it
+    only where "no hard training inside the event" is meant, never to decide a day is a race."""
+    days: set[date] = set()
+    for g in groups([e for e in events if e.active]):
         days.update(g.first_date + timedelta(days=i) for i in range((g.last_date - g.first_date).days + 1))
     return days
-
-
-def peak_covering(day: date, events: list[Event]) -> Event | None:
-    """The peak race of an active group whose span covers `day` (None when no group does)."""
-    active = [e for e in events if e.active]
-    for g in groups(active):
-        if g.first_date <= day <= g.last_date:
-            return next(e for e in active if e.id == g.peak_event_id)
-    return None
 
 
 _UNGROUPED = {"group_id": None, "group_name": None, "group_type": None, "group_peak": False}

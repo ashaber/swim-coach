@@ -28,7 +28,7 @@ from datetime import date, timedelta
 from typing import Any, Callable, Literal
 from uuid import UUID, uuid4
 
-from swim_coach.event_groups import effective_target, peak_covering, planning_targets, race_dates
+from swim_coach.event_groups import effective_target, group_span, planning_targets, race_dates
 from swim_coach.models import (
     Athlete,
     Event,
@@ -5142,7 +5142,7 @@ def generate_week(
             bike_events = [
                 e for e in events if e.active and e.primary_sport == "bike"
             ]
-            # a group's whole first..last span is race days, not just its member dates
+            # race days are the members' own dates; a rest day inside a group's span is not one
             bike_race_days = race_dates(bike_events)
             in_week_race_dates = sorted(d for d in bike_race_days if week_start <= d <= week_end)
             future_race_dates = [d for d in bike_race_days if d > week_end]
@@ -5264,7 +5264,7 @@ def generate_week(
                         if e.event_date == d and e.primary_sport == "bike" and e.active
                     ),
                     event if (event is not None and event.event_date == d) else None,
-                ) or peak_covering(d, events or [])
+                )
                 race_sessions.append(
                     _bike_race_session(athlete, d, ev, ftp_watts, is_indoor=bike_indoor)
                 )
@@ -5315,9 +5315,12 @@ def generate_week(
                 effective_strength_count,
                 strength_day_offsets=strength_day_offsets,
             )
-            bike_only_with_strength = bike_only + _strength_sessions(
-                athlete, week_start, strength_offsets
-            )
+            rest_days_in_span = group_span(bike_events) - set(in_week_race_dates)
+            bike_only_with_strength = bike_only + [
+                s
+                for s in _strength_sessions(athlete, week_start, strength_offsets)
+                if s.date not in rest_days_in_span  # no training inside the event's span
+            ]
             bike_sessions, strength_prerace_reduced = _filter_strength_prerace_window(
                 bike_only_with_strength, week_start, in_week_race_offsets, race_within_days
             )
@@ -5416,7 +5419,7 @@ def generate_week(
                     and (e.event_date - week_end).days == 1
                 ),
                 None,
-            ) or peak_covering(week_end + timedelta(days=1), events)
+            )
             sunday_off = 6
             if lookahead_race is not None and sunday_off not in {
                 (s.date - week_start).days for s in bike_sessions

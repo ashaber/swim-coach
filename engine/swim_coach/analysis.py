@@ -29,7 +29,6 @@ from typing import TYPE_CHECKING, Protocol, Sequence
 
 from swim_coach.analytics import compute_analytics
 from swim_coach.models import Athlete, Event, Session, SessionKind, Workout, WorkoutAnalytics
-from swim_coach.event_groups import peak_covering
 from swim_coach.bike_coach_view import shape_ride_view
 from swim_coach.free_ride import FREE_READ_KINDS, read_free_ride
 from swim_coach.power_curve import BEST_WINDOWS_DAYS, annotate_bests
@@ -315,8 +314,8 @@ def derive_workout_kind(workout: Workout, session: Session | None, events: Seque
     sport = _event_sport(workout.sport)
     if sport is not None:
         same_sport = [e for e in events if e.primary_sport == sport]
-        # any race date of an event, and any day inside a group's span, is a race day
-        if any(e.event_date == workout.date for e in same_sport) or peak_covering(workout.date, same_sport):
+        # any member race date (of a group or not) is a race day; a rest day in a span is not
+        if any(e.event_date == workout.date for e in same_sport):
             return "race"
     return session.effective_kind if session is not None else "free_ride"
 

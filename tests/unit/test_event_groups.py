@@ -13,7 +13,7 @@ from swim_coach.event_groups import (
     effective_target,
     group_of,
     groups,
-    peak_covering,
+    group_span,
     planning_targets,
     race_dates,
     set_group,
@@ -88,15 +88,14 @@ def test_set_group_validation_and_disband():
     assert all(e.group_id is None for e in disband_group(events, gid))
 
 
-def test_span_days_are_race_days_and_cover_a_gap():
+def test_span_includes_rest_days_but_race_days_are_members_only():
     a, c = _event("Stage 1", date(2026, 6, 1), sport="swim"), _event("Stage 3", date(2026, 6, 3), sport="swim")
     _gid, events = set_group([a, c], name="Greece", group_type="stage_race", member_ids=[a.id, c.id])
-    assert race_dates(events) == {date(2026, 6, 1), date(2026, 6, 2), date(2026, 6, 3)}
-    assert peak_covering(date(2026, 6, 2), events).id == a.id
-    assert peak_covering(date(2026, 6, 4), events) is None
+    assert race_dates(events) == {date(2026, 6, 1), date(2026, 6, 3)}  # members only
+    assert group_span(events) == {date(2026, 6, 1), date(2026, 6, 2), date(2026, 6, 3)}
     # an inactive group contributes nothing
     off = [e.model_copy(update={"active": False}) for e in events]
-    assert race_dates(off) == set()
+    assert race_dates(off) == set() and group_span(off) == set()
 
 
 def _ride(day: date) -> Workout:
@@ -105,13 +104,14 @@ def _ride(day: date) -> Workout:
     )
 
 
-def test_untagged_ride_on_day_two_or_a_gap_day_derives_race():
+def test_untagged_ride_on_day_two_derives_race_but_a_rest_day_does_not():
     events, sat, sun = _weekend()
     assert derive_workout_kind(_ride(date(2026, 10, 18)), None, events) == "race"
     assert derive_workout_kind(_ride(date(2026, 10, 19)), None, events) == "free_ride"
     a, c = _event("D1", date(2026, 10, 1)), _event("D3", date(2026, 10, 3))
     _gid, gap = set_group([a, c], name="G", group_type="stage_race", member_ids=[a.id, c.id])
-    assert derive_workout_kind(_ride(date(2026, 10, 2)), None, gap) == "race"
+    assert derive_workout_kind(_ride(date(2026, 10, 2)), None, gap) == "free_ride"  # rest day in the span
+    assert derive_workout_kind(_ride(date(2026, 10, 3)), None, gap) == "race"
     # a swim on a bike group's race day is not a race
     swim = _ride(date(2026, 10, 18)).model_copy(update={"sport": "swim_pool"})
     assert derive_workout_kind(swim, None, events) == "free_ride"
@@ -165,17 +165,16 @@ def test_race_week_checklist_is_dated_to_the_group_peak_not_member_two():
     assert [(i.date, i.category) for i in week.race_week_checklist] == [(i.date, i.category) for i in expected]
 
 
-def test_group_span_gap_day_is_a_race_session_in_the_week():
+def test_stage_race_rest_day_is_not_a_race_session_and_gets_no_strength():
     from swim_coach.plan import scaffold_macro
 
     athlete = _athlete()
-    d1 = _event("D1", START + timedelta(weeks=10, days=4), priority="A")  # Friday
-    d3 = _event("D3", START + timedelta(weeks=10, days=6), priority="A")  # Sunday; Saturday is the gap
-    _gid, events = set_group([d1, d3], name="Stage", group_type="stage_race", member_ids=[d1.id, d3.id])
-    macro = scaffold_macro(athlete, _event("Finale", START + timedelta(weeks=24)), START, 1000, 2000)
     week_start = START + timedelta(weeks=10)
+    days = [_event(f"D{i}", week_start + timedelta(days=i), priority="A") for i in (3, 4, 6)]  # Thu, Fri, Sun
+    _gid, events = set_group(days, name="Stage", group_type="stage_race", member_ids=[e.id for e in days])
+    macro = scaffold_macro(athlete, _event("Finale", START + timedelta(weeks=24)), START, 1000, 2000)
     iso = f"{week_start.isocalendar()[0]}-W{week_start.isocalendar()[1]:02d}"
     week = generate_week(athlete, macro, iso, week_start, primary_sport="bike", event=events[0], events=events)
-    assert {s.date for s in week.sessions if s.kind == "race"} == {
-        week_start + timedelta(days=4), week_start + timedelta(days=5), week_start + timedelta(days=6)
-    }
+    rest_day = week_start + timedelta(days=5)
+    assert {s.date for s in week.sessions if s.kind == "race"} == {e.event_date for e in events}
+    assert not [s for s in week.sessions if s.date == rest_day]
