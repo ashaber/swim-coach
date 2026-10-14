@@ -88,22 +88,10 @@ FLAT_ALTITUDE_RANGE_M = 30.0
 # Kinds whose rides get the free-ride read (a "workout" only when its session has no structure).
 FREE_READ_KINDS: tuple[SessionKind, ...] = ("free_ride", "workout")
 
-KEY_ZONES: frozenset[str] = frozenset({"Z4", "Z5"})  # a planned workout this hard is "key"
-
 POWER_MISSING_NOTE = (
     "Power is zero or missing for {pct:.0f}% of moving time (outdoor coasting is typically about 30%), "
     "so power reads are limited: no tempo verdict, no effort labels, no steady-stretch drift."
 )
-
-
-def is_key_session(session: Session) -> bool:
-    """A race, or a planned workout that is structured or sits in Z4/Z5 (Coach judgment)."""
-    if session.effective_kind == "race":
-        return True
-    if session.effective_kind != "workout":
-        return False
-    zone = (session.intensity or {}).get("zone")
-    return session.structured is not None or zone in KEY_ZONES
 
 
 @dataclass(frozen=True)
@@ -358,11 +346,12 @@ def _steady_drift(tl: _Timeline) -> list[FreeRideDrift]:
 _WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 
 
+# `sessions` are already the key ones (`analysis.is_key_session` filters before the read).
 def _neighbors(ride_date: date, sessions: Sequence[Session]) -> list[FreeRideNeighbor]:
     out: list[FreeRideNeighbor] = []
     for s in sorted(sessions, key=lambda s: s.date):
         delta = (s.date - ride_date).days
-        if delta in (-1, 1) and is_key_session(s):
+        if delta in (-1, 1):
             out.append(
                 FreeRideNeighbor(
                     relation="after" if delta == 1 else "before",
