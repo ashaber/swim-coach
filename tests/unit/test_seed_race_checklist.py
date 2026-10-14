@@ -61,3 +61,31 @@ def test_bad_file_is_an_error(tmp_path, capsys) -> None:
     bad.write_text('{"timeline": [{"id": "x", "label": "x", "day": "eve"}]}')
     assert seed_race_checklist.main(["--athlete", "andrew", "--file", str(bad)]) == 1
     assert "error" in json.loads(capsys.readouterr().out)
+
+
+def test_rederive_plans_skips_hand_edited_and_is_dry_run_by_default(tmp_path, capsys) -> None:
+    from datetime import date
+
+    from swim_coach.race_day import new_plan_from_template
+
+    shutil.copytree(REPO / "athletes" / "andrew", tmp_path / "andrew")
+    store = FileStore(base_dir=tmp_path)
+    old = RaceChecklistTemplate(timeline=[{"id": "start", "label": "Start", "day": "race", "offset_min": 0, "is_start": True}])
+    athlete = store.load_athlete("andrew")
+    athlete.race_checklist_template = old
+    fresh = new_plan_from_template(old, race_date=date(2026, 10, 17))
+    edited = new_plan_from_template(old, race_date=date(2026, 10, 18))
+    edited.timeline_edited = True
+    athlete.race_day_plans = [fresh, edited]
+    store.save_athlete(athlete)
+
+    args = ["--athlete", "andrew", "--athletes-dir", str(tmp_path), "--rederive-plans"]
+    assert seed_race_checklist.main(args) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["dry_run"] is True and out["plans_rederived"] == ["2026-10-17"] and out["plans_skipped_edited"] == ["2026-10-18"]
+    assert len(store.load_athlete("andrew").race_day_plans[0].timeline) == 1  # nothing written
+
+    assert seed_race_checklist.main(args + ["--apply"]) == 0
+    plans = store.load_athlete("andrew").race_day_plans
+    assert len(plans[0].timeline) > 10 and plans[0].timeline_edited is False
+    assert len(plans[1].timeline) == 1 and plans[1].timeline_edited is True
