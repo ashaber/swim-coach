@@ -68,6 +68,7 @@ from typing import Any, TypedDict
 
 from swim_coach.analysis import analytics_for_coach
 from swim_coach.athlete_time import athlete_today
+from swim_coach.event_groups import group_of
 from swim_coach.library_review import (
     REF_ENTRY_RE,
     RefEntry,
@@ -1961,6 +1962,15 @@ def render_race_debriefs(athlete: Athlete) -> str | None:
     return "\n".join(lines)
 
 
+def _group_fields(e: Event, events: list[Event]) -> dict[str, Any]:
+    """Terse group tag for an event row: group name/type and whether this race is the group's
+    taper peak ({} for an ungrouped event)."""
+    g = group_of(e, events)
+    if g is None:
+        return {}
+    return {"group": g.name, "group_type": g.group_type, "group_peak": g.peak_event_id == e.id}
+
+
 def _render_upcoming_events_pinned(events: list[Event], today: date) -> str:
     """A high-salience block for the TOP of the per-request context: only
     the ACTIVE, still-upcoming events, soonest first, each with `days_until`
@@ -1995,6 +2005,7 @@ def _render_upcoming_events_pinned(events: list[Event], today: date) -> str:
                     "event_format": e.event_format,
                     "active": e.active,
                     "soon": days_until <= PINNED_EVENT_SOON_DAYS,
+                    **_group_fields(e, events),
                 }
             )
         )
@@ -2064,6 +2075,7 @@ def _render_events(events: list[Event], today: date) -> str:
                 "event_format": e.event_format,
                 "days_until": (e.event_date - today).days,
                 "active": e.active,
+                **_group_fields(e, events),
             }
         )
         for e in ordered

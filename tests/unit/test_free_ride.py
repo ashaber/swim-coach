@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from swim_coach.analysis import AnalysisContext, analytics_for_coach
-from swim_coach.free_ride import is_key_session
+from swim_coach.analysis import is_key_session
 from swim_coach.models import Athlete, Session, Workout, WorkoutStructure
 
 FIX = Path(__file__).resolve().parents[1] / "fixtures"

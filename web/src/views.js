@@ -4,7 +4,7 @@
 import {
   formatShortDate, formatLongDate, formatDuration, formatDistance, formatPace,
   parseIsoDate, sessionsByDay, classifySession, sessionDisplay, sessionDotColorVar,
-  partitionPlanWeeks, sortedByIsoWeek, daysUntil, macroTargetEvent, currentBlockIndex,
+  partitionPlanWeeks, sortedByIsoWeek, daysUntil, macroTargetEvent, eventGroup, currentBlockIndex,
   longSwimLadder,
   findSessionById, parseStructureBlocks, parseMainSetIntervals, renderStructuredWorkout,
   splitStructuredRationale, sessionZoneDistribution, formatZoneDistributionSummary,
@@ -84,8 +84,18 @@ const SESSION_LEGEND = [
   { key: null, colorVar: '--c-signal', label: 'Milestone / race' },
 ];
 
-function renderMasthead(athlete, event) {
+/** A multi-race event group as ONE item: its member races (dates) with the taper peak marked. */
+function renderEventGroup(group) {
+  const races = group.races.map((r) => {
+    const peak = r.id === group.peak.id;
+    return `<li class="eg-race${peak ? ' eg-peak' : ''}">${esc(formatShortDate(parseIsoDate(r.event_date)))} · ${esc(r.name)}${peak ? ' <span class="eg-flag">peak</span>' : ''}</li>`;
+  }).join('');
+  return `<div class="event-group" data-testid="event-group"><b>${esc(group.name)}</b><ul class="eg-races">${races}</ul></div>`;
+}
+
+function renderMasthead(athlete, event, events) {
   const days = event ? daysUntil(parseIsoDate(event.event_date)) : null;
+  const group = eventGroup(event, events);
 
   return `
     <header class="mast">
@@ -97,6 +107,7 @@ function renderMasthead(athlete, event) {
             ? `Ultra-distance build toward <b>${esc(event.name)}</b>.`
             : 'No events scheduled yet.'
         }</p>
+        ${group ? renderEventGroup(group) : ''}
       </div>
       ${event ? `
       <div class="count">
@@ -1782,7 +1793,7 @@ export function renderApp(data, planSessionDetailId) {
 
   return `
     <div class="wrap">
-      ${renderMasthead(athlete, event)}
+      ${renderMasthead(athlete, event, events)}
       ${renderWeeksSection(weeks, planSessionDetailId, sessionPush, allWeeksOpen, true, askCoach, athlete?.ftp_watts ?? null)}
       ${renderMacroSection(macro, event, weeks, events)}
       ${renderMacroPlanDetail(macro)}

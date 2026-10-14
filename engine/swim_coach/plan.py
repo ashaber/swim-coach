@@ -28,6 +28,7 @@ from datetime import date, timedelta
 from typing import Any, Callable, Literal
 from uuid import UUID, uuid4
 
+from swim_coach.event_groups import effective_target, group_span, planning_targets, race_dates
 from swim_coach.models import (
     Athlete,
     Event,
@@ -1939,6 +1940,7 @@ def scaffold_season_macro(
     it in its own never-persisted result dict, same way it already
     surfaces `coverage`.
     """
+    races = planning_targets(races)  # an event group is ONE target (its peak race), not N
     if len(races) < 2:
         raise ValueError(
             "scaffold_season_macro needs at least 2 races to chain into a "
@@ -5039,6 +5041,9 @@ def generate_week(
     qualifying_event = event
     if events is not None and block.race_event_id is not None:
         qualifying_event = next((e for e in events if e.id == block.race_event_id), event)
+    if events is not None and qualifying_event is not None:
+        # a grouped event's taper/race-week content aims at the GROUP's peak race
+        qualifying_event = effective_target(qualifying_event, events)
 
     start_volume = _block_start_volume(macro, block_index, block)
     end_volume = block.weekly_volume_target_m
@@ -5137,10 +5142,10 @@ def generate_week(
             bike_events = [
                 e for e in events if e.active and e.primary_sport == "bike"
             ]
-            in_week_race_dates = sorted(
-                {e.event_date for e in bike_events if week_start <= e.event_date <= week_end}
-            )
-            future_race_dates = [e.event_date for e in bike_events if e.event_date > week_end]
+            # race days are the members' own dates; a rest day inside a group's span is not one
+            bike_race_days = race_dates(bike_events)
+            in_week_race_dates = sorted(d for d in bike_race_days if week_start <= d <= week_end)
+            future_race_dates = [d for d in bike_race_days if d > week_end]
             if future_race_dates:
                 race_within_days = min((d - week_end).days for d in future_race_dates)
 
@@ -5310,9 +5315,12 @@ def generate_week(
                 effective_strength_count,
                 strength_day_offsets=strength_day_offsets,
             )
-            bike_only_with_strength = bike_only + _strength_sessions(
-                athlete, week_start, strength_offsets
-            )
+            rest_days_in_span = group_span(bike_events) - set(in_week_race_dates)
+            bike_only_with_strength = bike_only + [
+                s
+                for s in _strength_sessions(athlete, week_start, strength_offsets)
+                if s.date not in rest_days_in_span  # no training inside the event's span
+            ]
             bike_sessions, strength_prerace_reduced = _filter_strength_prerace_window(
                 bike_only_with_strength, week_start, in_week_race_offsets, race_within_days
             )
