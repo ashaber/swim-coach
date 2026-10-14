@@ -1,5 +1,6 @@
 schema_version: 1
 file: 04-css-intensity-anchors.md
+added: 2026-07-05
 cards:
 - section: why-anchor-to-css-not-power-or-heart-rate
   heading: Why anchor to CSS, not power or heart rate

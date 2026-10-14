@@ -55,6 +55,9 @@ materially changes an existing one), add/update its card in the matching
    practice: run the assembly the same way this build's card-authoring
    pass did (read the file, get its sections, hash each one) rather than
    hand-computing a sha256 digest.
+   For a brand-new topic file, also set the card file's top-level
+   `added: YYYY-MM-DD` (today) -- the Resources tab's "Recently added" sort
+   and "New" badge key off it, and the test below requires it.
 3. `pytest tests/unit/test_library_cards.py` pins three things against the
    REAL repo content: every in-scope section has a card, every card stays
    within the word limits, and every card's `content_hash` matches its

@@ -101,6 +101,7 @@ grouped by subject area, not by number — is the index).
   being treated as grounding truth. Until reviewed, a new/changed section
   should be marked **`UNREVIEWED`** inline, so `/coach` and future readers
   know not to treat a draft claim as settled.
+- A new topic file's `review-cards/<stem>.yaml` must carry a top-level `added: YYYY-MM-DD` (CI-enforced).
 - Engine constants (in `zones.py`, `plan.py`, `load.py`, `adapt.py`) cite a
   specific library file in a code comment. **Every constant citing a topic
   file must have a matching claim in that file** — if you change an engine

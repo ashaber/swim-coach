@@ -1,5 +1,6 @@
 schema_version: 1
 file: 32-gps-lap-detection.md
+added: 2026-09-19
 cards:
 - section: the-real-grounded-problem
   heading: The real, grounded problem

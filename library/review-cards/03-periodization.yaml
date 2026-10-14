@@ -1,5 +1,6 @@
 schema_version: 1
 file: 03-periodization.md
+added: 2026-07-05
 cards:
 - section: macro-block-structure-base-build-peak-taper
   heading: Macro block structure (base -> build -> peak -> taper)

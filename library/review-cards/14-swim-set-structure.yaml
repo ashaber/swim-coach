@@ -1,5 +1,6 @@
 schema_version: 1
 file: 14-swim-set-structure.md
+added: 2026-07-28
 cards:
 - section: scope-boundary-this-is-not-a-pace-zone-math-file
   heading: 'Scope boundary: this is not a pace-zone-math file'

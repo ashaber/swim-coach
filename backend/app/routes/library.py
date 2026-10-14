@@ -155,6 +155,7 @@ async def list_library_cards(
             cards.append(
                 {
                     "file": topic_path.name,
+                    "added": card_file.added.isoformat() if card_file.added else None,
                     "section": card.section,
                     "heading": card.heading,
                     "summary": card.summary,

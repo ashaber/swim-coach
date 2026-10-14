@@ -24,6 +24,9 @@ import { renderChatMarkdown } from './markdown.js';
 import { createThreadState } from './conversation.js';
 import { getDraft } from './composerDrafts.js';
 import { buildHistoryFeed } from './history.js';
+import {
+  LIBRARY_SORTS, DEFAULT_LIBRARY_SORT, sortLibraryFiles, fileAddedDate, isNewFile, formatAddedLabel,
+} from './librarySort.js';
 import { expandStructure, actualPoints, sessionForWorkout, shapeChartGeometry } from './shape.js';
 import { buildFreeRide, buildRawAnalysis, effectiveKind, kindLabel, KIND_OPTIONS } from './analysis.js';
 import { sportHasPlannedDistance, sportCanPushToGarmin, sportUsesPace } from './sports.js';
@@ -3547,6 +3550,17 @@ function matchesLibraryFilter(card, filter) {
   return true;
 }
 
+function renderLibrarySortControl(sort) {
+  return `
+    <div class="chip-row library-sort-row" role="group" aria-label="Sort files">
+      <span class="library-sort-label">Sort</span>
+      ${LIBRARY_SORTS.map((o) => `
+        <button type="button" class="chip${o.id === sort ? ' active' : ''}" data-a="library:sort" data-sort="${o.id}" aria-pressed="${o.id === sort}">
+          ${esc(o.label)}
+        </button>`).join('')}
+    </div>`;
+}
+
 function renderLibraryFilterChips(filter) {
   return `
     <div class="chip-row" role="group" aria-label="Filter cards">
@@ -3605,7 +3619,7 @@ function renderLibraryCard(card) {
  * is gone: "Needs review" already is exactly this list (see
  * `matchesLibraryFilter`), so showing it twice -- once here without
  * buttons, once again below with them -- was two lists for one job. */
-function renderLibraryCardGrid(cardsState, filter, actionable) {
+function renderLibraryCardGrid(cardsState, filter, actionable, sort) {
   if (cardsState.status === 'loading' && !cardsState.data.length) {
     return '<p class="sub">Loading the research library&hellip;</p>';
   }
@@ -3619,10 +3633,14 @@ function renderLibraryCardGrid(cardsState, filter, actionable) {
       : '<p class="sub">Nothing matches this filter.</p>';
   }
 
+  const fileOrder = sortLibraryFiles(filtered, sort);
+  const fileRank = new Map(fileOrder.map((f, i) => [f, i]));
+
   if (actionable) {
     // Needs-judgment-first -- same "the human most needs to weigh these"
-    // ordering the old, now-removed Approvals section used.
-    const sorted = [...filtered].sort(
+    // ordering the old, now-removed Approvals section used; the chosen file
+    // sort orders cards within each judgment group (Array.sort is stable).
+    const sorted = [...filtered].sort((a, b) => fileRank.get(a.file) - fileRank.get(b.file)).sort(
       (a, b) => (a.needs_judgment === b.needs_judgment ? 0 : a.needs_judgment ? -1 : 1),
     );
     return sorted.map(
@@ -3636,11 +3654,20 @@ function renderLibraryCardGrid(cardsState, filter, actionable) {
     byFile.get(card.file).push(card);
   });
 
-  return [...byFile.entries()].map(([file, cards]) => `
+  const now = new Date();
+  return fileOrder.map((file) => {
+    const cards = byFile.get(file);
+    const added = fileAddedDate(cards, file);
+    const addedLabel = formatAddedLabel(added);
+    return `
     <div class="library-file-group">
-      <h4 class="library-file-group-heading mono">${esc(file)}</h4>
+      <h4 class="library-file-group-heading mono">${esc(file)}
+        ${isNewFile(added, now) ? '<span class="badge badge-ok library-new-badge">New</span>' : ''}
+        ${addedLabel ? `<span class="library-added-label">${esc(addedLabel)}</span>` : ''}
+      </h4>
       ${cards.map(renderLibraryCard).join('')}
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 /** Approvals (admin-only): unreviewed + stale cards, needs-judgment first --
@@ -3709,7 +3736,7 @@ function renderLibraryFileView({ openFile, file, online }) {
 }
 
 export function renderResourcesTab({
-  cards, filter, openFile, file, isAdmin, reviewDrafts, reviewSubmit, backendConfigured, online,
+  cards, filter, sort = DEFAULT_LIBRARY_SORT, openFile, file, isAdmin, reviewDrafts, reviewSubmit, backendConfigured, online,
 }) {
   if (!backendConfigured) {
     return renderBackendNeededNotice('Resources needs you to sign in and set a backend URL and token first.');
@@ -3737,8 +3764,9 @@ export function renderResourcesTab({
       <section>
         <div class="s-head"><h2>Research library</h2></div>
         ${renderLibraryFilterChips(filter)}
+        ${renderLibrarySortControl(sort)}
         ${actionable && !online ? '<div class="chat-banner">Offline -- accept/flag needs a connection.</div>' : ''}
-        ${renderLibraryCardGrid(cards, filter, actionable)}
+        ${renderLibraryCardGrid(cards, filter, actionable, sort)}
       </section>` : `
       <section>
         <div class="s-head"><h2>Research library</h2></div>

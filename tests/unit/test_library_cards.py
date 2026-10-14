@@ -292,3 +292,23 @@ def test_real_cards_file_field_matches_its_own_filename():
         if card_file.file != topic_path.name:
             mismatched.append((card_path.name, card_file.file, topic_path.name))
     assert not mismatched, f"card file field mismatches: {mismatched}"
+
+
+def test_real_cards_all_carry_an_added_date():
+    # New library files must set `added:` (YYYY-MM-DD) in their card YAML --
+    # the Resources tab sorts "Recently added" by it.
+    missing = []
+    for topic_path in in_scope_topic_files(LIBRARY_DIR):
+        card_path = card_path_for(LIBRARY_DIR, topic_path.name)
+        if card_path.exists() and load_card_file(card_path).added is None:
+            missing.append(topic_path.name)
+    assert not missing, f"card files missing top-level `added: YYYY-MM-DD`: {missing}"
+
+
+def test_card_file_parses_added_date_and_allows_absence():
+    base = {"schema_version": 1, "file": "x.md", "cards": []}
+    assert ReviewCardFile.model_validate(base).added is None
+    parsed = ReviewCardFile.model_validate({**base, "added": "2026-10-12"})
+    assert parsed.added.isoformat() == "2026-10-12"
+    with pytest.raises(ValidationError):
+        ReviewCardFile.model_validate({**base, "added": "not-a-date"})

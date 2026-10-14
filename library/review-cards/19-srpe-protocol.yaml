@@ -1,5 +1,6 @@
 schema_version: 1
 file: 19-srpe-protocol.md
+added: 2026-08-30
 cards:
 - section: the-problem-this-fixes
   heading: The problem this fixes
