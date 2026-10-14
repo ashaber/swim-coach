@@ -1827,7 +1827,7 @@ def test_export_zwo_workout_unknown_session_is_a_clean_error(athletes_dir) -> No
     result = handlers["export_zwo_workout"]({"session_id": str(uuid.uuid4())})
 
     assert "error" in result
-    assert "no such session" in result["error"]
+    assert "no session with id" in result["error"]
 
 
 def test_export_zwo_workout_missing_ftp_watts_is_a_clean_error(athletes_dir) -> None:
