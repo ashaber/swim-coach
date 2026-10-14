@@ -52,6 +52,7 @@ from datetime import date, timedelta
 from typing import Literal
 
 from swim_coach.adapt import SINGLE_SESSION_STEP_CAP
+from swim_coach.event_groups import planning_targets
 from swim_coach.load import CTL_TIME_CONSTANT_DAYS, ATL_TIME_CONSTANT_DAYS, session_target_load_au
 from swim_coach.models import (
     Athlete,
@@ -499,6 +500,8 @@ def check_macro(
     """
     weeks = _sorted_weeks(plan.weeks)
     active_events = [e for e in events if e.active]
+    # taper / race-day TSB / B-C labelling check a GROUP once, at its peak race
+    target_events = planning_targets(active_events)
     findings: list[PlanCheckFinding] = []
 
     if not weeks:
@@ -546,14 +549,14 @@ def check_macro(
     findings.extend(_check_uncovered_weeks(weeks, active_events, plan_start, plan_end_exclusive))
     findings.extend(_check_ctl_ramp(weeks, athlete, today))
     findings.extend(_check_recovery_cadence(weeks, athlete))
-    taper_too_long_findings = _check_taper_too_long(weeks, active_events)
+    taper_too_long_findings = _check_taper_too_long(weeks, target_events)
     taper_too_long_event_ids = frozenset(
         f.id[len("taper-too-long-"):] for f in taper_too_long_findings
     )
     findings.extend(taper_too_long_findings)
     findings.extend(
         _check_taper_and_race_day(
-            weeks, active_events, series_by_date,
+            weeks, target_events, series_by_date,
             taper_too_long_event_ids=taper_too_long_event_ids,
             estimated_week_starts=estimated_week_starts,
             skip_tsb=not projection_ok,
@@ -564,7 +567,7 @@ def check_macro(
     else:
         findings.append(_projection_unavailable_finding(blocking_week_starts))
     findings.extend(_check_hours_reality(weeks, recent_weekly_hours))
-    findings.extend(_check_bc_races_labelled(weeks, active_events))
+    findings.extend(_check_bc_races_labelled(weeks, target_events))
     findings.extend(_check_bike_weeks_missing_load(weeks, active_events))
     goal_finding = _check_goal_reality(plan, athlete, today)
     if goal_finding is not None:

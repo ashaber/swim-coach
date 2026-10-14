@@ -28,6 +28,7 @@ from datetime import date, timedelta
 from typing import Any, Callable, Literal
 from uuid import UUID, uuid4
 
+from swim_coach.event_groups import effective_target, peak_covering, planning_targets, race_dates
 from swim_coach.models import (
     Athlete,
     Event,
@@ -1939,6 +1940,7 @@ def scaffold_season_macro(
     it in its own never-persisted result dict, same way it already
     surfaces `coverage`.
     """
+    races = planning_targets(races)  # an event group is ONE target (its peak race), not N
     if len(races) < 2:
         raise ValueError(
             "scaffold_season_macro needs at least 2 races to chain into a "
@@ -5039,6 +5041,9 @@ def generate_week(
     qualifying_event = event
     if events is not None and block.race_event_id is not None:
         qualifying_event = next((e for e in events if e.id == block.race_event_id), event)
+    if events is not None and qualifying_event is not None:
+        # a grouped event's taper/race-week content aims at the GROUP's peak race
+        qualifying_event = effective_target(qualifying_event, events)
 
     start_volume = _block_start_volume(macro, block_index, block)
     end_volume = block.weekly_volume_target_m
@@ -5137,10 +5142,10 @@ def generate_week(
             bike_events = [
                 e for e in events if e.active and e.primary_sport == "bike"
             ]
-            in_week_race_dates = sorted(
-                {e.event_date for e in bike_events if week_start <= e.event_date <= week_end}
-            )
-            future_race_dates = [e.event_date for e in bike_events if e.event_date > week_end]
+            # a group's whole first..last span is race days, not just its member dates
+            bike_race_days = race_dates(bike_events)
+            in_week_race_dates = sorted(d for d in bike_race_days if week_start <= d <= week_end)
+            future_race_dates = [d for d in bike_race_days if d > week_end]
             if future_race_dates:
                 race_within_days = min((d - week_end).days for d in future_race_dates)
 
@@ -5259,7 +5264,7 @@ def generate_week(
                         if e.event_date == d and e.primary_sport == "bike" and e.active
                     ),
                     event if (event is not None and event.event_date == d) else None,
-                )
+                ) or peak_covering(d, events or [])
                 race_sessions.append(
                     _bike_race_session(athlete, d, ev, ftp_watts, is_indoor=bike_indoor)
                 )
@@ -5411,7 +5416,7 @@ def generate_week(
                     and (e.event_date - week_end).days == 1
                 ),
                 None,
-            )
+            ) or peak_covering(week_end + timedelta(days=1), events)
             sunday_off = 6
             if lookahead_race is not None and sunday_off not in {
                 (s.date - week_start).days for s in bike_sessions

@@ -24,6 +24,7 @@ from uuid import UUID, uuid4
 import yaml
 from pydantic import ValidationError
 
+from swim_coach.event_groups import effective_target
 from swim_coach.adapt import adapt_week
 from swim_coach.analysis import build_analysis_context
 from swim_coach.analytics import CARDIAC_DRIFT_FLAG_PCT
@@ -273,6 +274,7 @@ def _cmd_scaffold_macro(args: argparse.Namespace, store: StoreInterface) -> int:
     event = _find_event(events, args.event)
     if event is None:
         return _error(f"no event matching {args.event!r}")
+    event = effective_target(event, events)
 
     # `athlete` loaded above -- an omitted `--start` defaults to this
     # athlete's own local today (`athlete_today`, honoring `Athlete.
