@@ -149,14 +149,38 @@ class TimelineEntry(BaseModel):
     not_earlier_than: str | None = Field(default=None, pattern=_HHMM_RE)
     only_if_start_after: str | None = Field(default=None, pattern=_HHMM_RE)
     only_if_start_before: str | None = Field(default=None, pattern=_HHMM_RE)
+    # Follows another entry instead of the start: its computed time + `after_min` (validated by
+    # validate_timeline_refs: the target exists, is a race-day entry, and there are no cycles).
+    after: str | None = None
+    after_min: int = 0
 
     @model_validator(mode="after")
     def _timing_matches_day(self) -> "TimelineEntry":
         if self.day == "eve" and self.at is None:
             raise ValueError("an eve timeline entry needs a clock time `at`")
-        if self.day == "race" and self.offset_min is None:
-            raise ValueError("a race-day timeline entry needs `offset_min`")
+        if self.day == "race" and (self.offset_min is None) == (self.after is None):
+            raise ValueError("a race-day timeline entry needs exactly one of `offset_min` or `after`")
+        if self.day == "eve" and self.after is not None:
+            raise ValueError("an eve timeline entry cannot follow another entry")
         return self
+
+
+def validate_timeline_refs(entries: "list[TimelineEntry]") -> None:
+    """Unique ids; every `after` names an existing race-day entry; no `after` cycles."""
+    by_id = {e.id: e for e in entries}
+    if len(by_id) != len(entries):
+        raise ValueError("timeline entry ids must be unique")
+    for e in entries:
+        if e.after is None:
+            continue
+        if e.after not in by_id or by_id[e.after].day != "race":
+            raise ValueError(f"timeline entry {e.id!r} follows unknown race-day entry {e.after!r}")
+        seen, cur = {e.id}, e
+        while cur.after is not None:
+            if cur.after in seen:
+                raise ValueError(f"timeline `after` cycle through {cur.after!r}")
+            seen.add(cur.after)
+            cur = by_id[cur.after]
 
 
 class RaceChecklistTemplate(BaseModel):
@@ -166,6 +190,11 @@ class RaceChecklistTemplate(BaseModel):
     schema_version: int = 1
     sections: list[ChecklistSection] = Field(default_factory=list)
     timeline: list[TimelineEntry] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _timeline_refs(self) -> "RaceChecklistTemplate":
+        validate_timeline_refs(self.timeline)
+        return self
 
 
 class RaceDayPlan(BaseModel):

@@ -31,7 +31,7 @@ def test_vector_timeline_matches_shipped_andrew_template() -> None:
 
 @pytest.mark.parametrize("case", VECTORS["cases"], ids=lambda c: c["name"])
 def test_shared_timeline_vectors(case) -> None:
-    template = RaceChecklistTemplate(timeline=[TimelineEntry(**e) for e in VECTORS["timeline"]])
+    template = RaceChecklistTemplate(timeline=[TimelineEntry(**e) for e in case.get("timeline", VECTORS["timeline"])])
     plan = new_plan_from_template(template, race_date=date(2026, 10, 17), start_time=case["start_time"])
     clock = timeline_clock(plan)
     by_id = {c["id"]: c["time"] for c in clock}
@@ -58,6 +58,30 @@ def test_not_earlier_than_floors_and_only_if_start_before() -> None:
 def test_plain_offset_entries_still_work() -> None:
     entries = [TimelineEntry(id="w", label="Wake", offset_min=-315), TimelineEntry(id="s", label="Start", offset_min=0)]
     assert _clock(entries, "09:00") == {"w": "03:45", "s": "09:00"}
+
+
+def _e(id_: str, **kw) -> dict:
+    return {"id": id_, "label": id_, **kw}
+
+
+def test_after_validation() -> None:
+    from swim_coach.race_day import parse_timeline
+
+    start = _e("start", offset_min=0, is_start=True)
+    assert parse_timeline([_e("a", after="start", after_min=5), start])  # forward reference is fine
+    bad = [
+        [_e("a", after="nope"), start],  # unknown target
+        [_e("a", after="b"), _e("b", after="a"), start],  # cycle
+        [_e("a", after="a"), start],  # self
+        [_e("a", offset_min=-5, after="start"), start],  # offset and after
+        [_e("a", day="eve", at="19:00", after="start"), start],  # eve cannot follow
+        [_e("a", after="e"), _e("e", day="eve", at="19:00"), start],  # target must be race-day
+    ]
+    for entries in bad:
+        with pytest.raises(ValueError):
+            parse_timeline(entries)
+    with pytest.raises(ValueError):
+        RaceChecklistTemplate(timeline=[TimelineEntry(**_e("a", after="b")), TimelineEntry(**_e("b", after="a"))])
 
 
 def test_rule_fields_validate_hhmm() -> None:

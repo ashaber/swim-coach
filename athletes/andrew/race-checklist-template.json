@@ -352,8 +352,9 @@
       "id": "shower-and-potty",
       "label": "Shower and potty",
       "day": "race",
-      "offset_min": -165,
-      "is_start": false
+      "is_start": false,
+      "after": "breakfast",
+      "after_min": 15
     },
     {
       "id": "leave-home",

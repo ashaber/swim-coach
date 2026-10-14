@@ -1,5 +1,5 @@
 {
- "_comment": "Shared vectors: tests/unit/test_race_day.py and web/tests/unit/raceDay.test.js both evaluate these; timeline mirrors athletes/andrew/race-checklist-template.json.",
+ "_comment": "Shared vectors: tests/unit/test_race_timeline_rules.py and web/tests/unit/raceTimelineRules.test.js both evaluate these; the default timeline mirrors athletes/andrew/race-checklist-template.json (a case may carry its own `timeline`).",
  "timeline": [
   {
    "id": "eve-openers",
@@ -65,8 +65,9 @@
    "id": "shower-and-potty",
    "label": "Shower and potty",
    "day": "race",
-   "offset_min": -165,
-   "is_start": false
+   "is_start": false,
+   "after": "breakfast",
+   "after_min": 15
   },
   {
    "id": "leave-home",
@@ -141,7 +142,7 @@
     "wake-up": "06:00",
     "yoga-race": "06:45",
     "breakfast": "08:00",
-    "shower-and-potty": "08:30",
+    "shower-and-potty": "08:15",
     "leave-home": "09:15",
     "warm-up": "10:15",
     "final-prep": "10:50",
@@ -161,8 +162,8 @@
     "wake-up": "07:00",
     "yoga-race": "07:45",
     "breakfast": "08:00",
+    "shower-and-potty": "08:15",
     "lunch-last-meal": "12:15",
-    "shower-and-potty": "12:30",
     "leave-home": "13:15",
     "arrive-register-pin-number": "13:30",
     "pre-ride": "13:40",
@@ -181,6 +182,7 @@
     "wake-up": "02:45",
     "yoga-race": "03:30",
     "breakfast": "05:00",
+    "shower-and-potty": "05:15",
     "warm-up": "07:00",
     "stage": "07:50",
     "start": "08:00"
@@ -208,10 +210,96 @@
    "expect": {
     "eve-dinner": "19:00",
     "wake-up": null,
+    "shower-and-potty": null,
     "start": null
    },
    "absent": [
     "lunch-last-meal"
+   ]
+  },
+  {
+   "name": "followers chain off a conditional entry; present at 15:15 and clamped",
+   "start_time": "15:15",
+   "timeline": [
+    {
+     "id": "lunch",
+     "label": "Lunch",
+     "day": "race",
+     "offset_min": -180,
+     "only_if_start_after": "12:00"
+    },
+    {
+     "id": "dessert",
+     "label": "Dessert",
+     "day": "race",
+     "after": "lunch",
+     "after_min": 10
+    },
+    {
+     "id": "pre",
+     "label": "Pre",
+     "day": "race",
+     "after": "dessert",
+     "after_min": 5,
+     "not_later_than": "09:00"
+    },
+    {
+     "id": "start",
+     "label": "Start",
+     "day": "race",
+     "offset_min": 0,
+     "is_start": true
+    }
+   ],
+   "expect": {
+    "lunch": "12:15",
+    "dessert": "12:25",
+    "pre": "09:00",
+    "start": "15:15"
+   },
+   "absent": []
+  },
+  {
+   "name": "followers of a dropped conditional entry are dropped too",
+   "start_time": "10:00",
+   "timeline": [
+    {
+     "id": "lunch",
+     "label": "Lunch",
+     "day": "race",
+     "offset_min": -180,
+     "only_if_start_after": "12:00"
+    },
+    {
+     "id": "dessert",
+     "label": "Dessert",
+     "day": "race",
+     "after": "lunch",
+     "after_min": 10
+    },
+    {
+     "id": "pre",
+     "label": "Pre",
+     "day": "race",
+     "after": "dessert",
+     "after_min": 5,
+     "not_later_than": "09:00"
+    },
+    {
+     "id": "start",
+     "label": "Start",
+     "day": "race",
+     "offset_min": 0,
+     "is_start": true
+    }
+   ],
+   "expect": {
+    "start": "10:00"
+   },
+   "absent": [
+    "lunch",
+    "dessert",
+    "pre"
    ]
   }
  ]

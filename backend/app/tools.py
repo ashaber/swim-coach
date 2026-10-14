@@ -1318,7 +1318,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "type": "array",
                     "description": (
                         "Replaces the whole timeline (send every entry, one is_start). Race entry: {id,label,offset_min "
-                        "from start, optional not_later_than/not_earlier_than HH:MM clamps, only_if_start_after/"
+                        "from start OR after:<entry id>+after_min, optional not_later_than/not_earlier_than HH:MM clamps, only_if_start_after/"
                         "only_if_start_before HH:MM}; eve entry: {id,label,day:'eve',at:HH:MM}."
                     ),
                     "items": {"type": "object"},
