@@ -232,7 +232,13 @@ from swim_coach.race_phases import (
 # public wrapper) only so this handler can ALSO surface the real evidence
 # behind that boolean (`established_base_evidence` in the response below)
 # without computing it twice.
-from swim_coach.race_day import find_plan as find_race_plan, new_plan_from_template as new_race_plan
+from swim_coach.race_day import (
+    find_plan as find_race_plan,
+    new_plan_from_template as new_race_plan,
+    parse_timeline as parse_race_timeline,
+    reset_timeline as reset_race_timeline,
+    set_timeline as set_race_timeline,
+)
 from swim_coach.models import (
     Athlete,
     ChecklistItem,
@@ -1286,8 +1292,8 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
         "name": "update_race_checklist",
         "description": (
             "Tailor the race-day checklist. With `date`: that race's plan (created from the template if "
-            "absent) -- add/remove items, set active_tags (weather: mud, cold, wet, cool), start_time. "
-            "Without `date`: edit the reusable template (items only). Saves immediately."
+            "absent) -- add/remove items, set active_tags (weather: mud, cold, wet, cool), start_time, "
+            "timeline. Without `date`: edit the reusable template (items, timeline). Saves immediately."
         ),
         "input_schema": {
             "type": "object",
@@ -1308,6 +1314,16 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 "remove_items": {"type": "array", "items": {"type": "string"}, "description": "Item texts (case-insensitive)."},
                 "active_tags": {"type": "array", "items": {"type": "string"}, "description": "Replaces the race's active weather tags."},
                 "start_time": {"type": "string", "description": "HH:MM race start."},
+                "timeline": {
+                    "type": "array",
+                    "description": (
+                        "Replaces the whole timeline (send every entry, one is_start). Race entry: {id,label,offset_min "
+                        "from start OR after:<entry id>+after_min, optional not_later_than/not_earlier_than HH:MM clamps, only_if_start_after/"
+                        "only_if_start_before HH:MM}; eve entry: {id,label,day:'eve',at:HH:MM}."
+                    ),
+                    "items": {"type": "object"},
+                },
+                "reset_timeline": {"type": "boolean", "description": "With `date`: restore this race's timeline from the template."},
             },
             "additionalProperties": False,
         },
@@ -4075,6 +4091,7 @@ def _race_plan_summary(plan: RaceDayPlan) -> dict[str, Any]:
             for s in plan.sections
         ],
         "timeline": [t.model_dump(mode="json", exclude_none=True) for t in plan.timeline],
+        "timeline_edited": plan.timeline_edited,
     }
 
 
@@ -4140,9 +4157,14 @@ def _handle_update_race_checklist(input_data: dict[str, Any], *, store: StoreInt
         if not raw:
             template = athlete.race_checklist_template or RaceChecklistTemplate()
             _edit_checklist_sections(template.sections, add_items, remove_items)
+            if "timeline" in input_data:
+                template.timeline = parse_race_timeline(input_data["timeline"])
             athlete.race_checklist_template = RaceChecklistTemplate(**template.model_dump())
             store.save_athlete(athlete)
-            return {"updated": True, "scope": "template", "items": sum(len(s.items) for s in template.sections)}
+            return {
+                "updated": True, "scope": "template", "items": sum(len(s.items) for s in template.sections),
+                "timeline_entries": len(template.timeline),
+            }
         race_date = date.fromisoformat(str(raw))
         plan = find_race_plan(athlete, session_id=None, race_date=race_date)
         if plan is None:
@@ -4155,6 +4177,10 @@ def _handle_update_race_checklist(input_data: dict[str, Any], *, store: StoreInt
             plan.active_tags = [str(t).strip().lower() for t in input_data["active_tags"] or [] if str(t).strip()]
         if input_data.get("start_time"):
             plan.start_time = str(input_data["start_time"])
+        if input_data.get("reset_timeline"):
+            reset_race_timeline(plan, athlete.race_checklist_template)
+        if "timeline" in input_data:
+            set_race_timeline(plan, parse_race_timeline(input_data["timeline"]))
         athlete.race_day_plans = [RaceDayPlan(**p.model_dump()) for p in athlete.race_day_plans]
         store.save_athlete(athlete)
     except (KeyError, TypeError, ValueError) as exc:

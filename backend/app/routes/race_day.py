@@ -13,7 +13,14 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, ValidationError
 from swim_coach.models import Athlete, RaceChecklistTemplate, RaceDayPlan
-from swim_coach.race_day import find_plan, new_plan_from_template, set_checked
+from swim_coach.race_day import (
+    find_plan,
+    new_plan_from_template,
+    parse_timeline,
+    reset_timeline,
+    set_checked,
+    set_timeline,
+)
 
 from app.auth import Principal, require_auth, resolve_athlete
 from app.logging_config import get_logger
@@ -147,6 +154,32 @@ async def patch_race_day(
         plan.notes = patch.notes
     store.save_athlete(profile)
     log.info("race-day plan updated", athlete=slug, plan_id=plan_id, keys=sorted(payload))
+    return plan.model_dump(mode="json")
+
+
+@router.patch("/api/race-day/{plan_id}/timeline")
+async def patch_race_day_timeline(
+    plan_id: str,
+    payload: dict[str, Any],
+    request: Request,
+    athlete: str | None = Query(None),
+    principal: Principal = Depends(require_auth),
+) -> dict:
+    """Replace this race's timeline (`{timeline: [...]}`) or restore the template's
+    (`{reset: true}`). The template itself is never touched. Absolute state, so replay-safe."""
+    store, slug, profile = _load_athlete(request, athlete, principal)
+    plan = _plan_or_404(profile, plan_id)
+    try:
+        if payload.get("reset") is True:
+            reset_timeline(plan, profile.race_checklist_template or RaceChecklistTemplate())
+        elif isinstance(payload.get("timeline"), list):
+            set_timeline(plan, parse_timeline(payload["timeline"]))
+        else:
+            raise ValueError("send `timeline` (a list) or `reset: true`")
+    except (ValidationError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    store.save_athlete(profile)
+    log.info("race-day timeline updated", athlete=slug, plan_id=plan_id, entries=len(plan.timeline), reset=bool(payload.get("reset")))
     return plan.model_dump(mode="json")
 
 

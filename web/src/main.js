@@ -12,7 +12,7 @@ import { buildHistoryFeed } from './history.js';
 import { loadLibrarySort, saveLibrarySort } from './librarySort.js';
 import {
   loadOpenOverlay, saveOpenOverlay, loadCachedPlan, saveCachedPlan, loadQueue, saveQueue, enqueue,
-  applyChecked, toggleTag,
+  applyChecked, toggleTag, editTimelineEntry, removeTimelineEntry, addTimelineEntry,
 } from './raceDay.js';
 import {
   loadChatSession, saveChatSession, clearChatStorage, createChatSession,
@@ -23,7 +23,7 @@ import {
   streamChat, postWorkout, fetchPlan, fetchPlanLoad, getAthlete, patchAthlete, patchWorkout,
   listFeedback, uploadWorkoutFile, listWorkouts, syncWorkouts, logout, onboard,
   pushSessionToIntervals,
-  fetchRaceDay, patchRaceDayItems, patchRaceDay, patchRaceWeekItem,
+  fetchRaceDay, patchRaceDayItems, patchRaceDay, patchRaceDayTimeline, patchRaceWeekItem,
   downloadGarminFit,
   createGrant, listGrants, revokeGrant,
   listCoachedAthletes, fetchCoachWorkouts, fetchCoachFeedback, fetchCoachLoad, fetchCoachPlan, replyToCoachFeedback,
@@ -4000,6 +4000,11 @@ async function onAppClick(e) {
     case 'raceday:check': handleRaceDayCheck(el.dataset.id); break;
     case 'raceday:tag': handleRaceDayTag(el.dataset.tag); break;
     case 'raceday:tab': handleRaceDayTab(el.dataset.tab); break;
+    case 'raceday:tl-edit': handleRaceDayTimelineEditToggle(); break;
+    case 'raceday:tl-add': handleRaceDayTimelineAdd('race'); break;
+    case 'raceday:tl-add-eve': handleRaceDayTimelineAdd('eve'); break;
+    case 'raceday:tl-remove': handleRaceDayTimelineRemove(el.dataset.tl); break;
+    case 'raceday:tl-reset': handleRaceDayTimelineReset(); break;
     case 'raceweek:toggle': handleRaceWeekToggle(el.dataset.week, el.dataset.id); break;
     case 'workout:raw-analysis-toggle': handleToggleRawAnalysis(); break;
     // Shared data-a="session:open" markup between the athlete's own Plan tab
@@ -4042,6 +4047,8 @@ function onAppChange(e) {
     handleSetWorkoutKind(e.target.value);
   } else if (e.target.matches('[data-form="raceday"][data-field="start_time"]')) {
     handleRaceDayStartTime(e.target.value);
+  } else if (e.target.matches('[data-form="raceday-tl"]')) {
+    handleRaceDayTimelineEdit(e.target.dataset.tl, e.target.dataset.field, e.target.value);
   }
 }
 
@@ -4205,7 +4212,7 @@ function onAppKeydown(e) {
 
 function createRaceDay() {
   return {
-    open: false, status: 'idle', plan: null, error: null, tab: 'list',
+    open: false, status: 'idle', plan: null, error: null, tab: 'list', editTimeline: false, notice: null,
     date: null, sessionId: null, name: null, pending: 0,
   };
 }
@@ -4238,6 +4245,7 @@ function applyQueuedToPlan(plan) {
   loadQueue().filter((q) => q.athlete === athleteSlug() && q.planId === plan.id).forEach((q) => {
     if (q.kind === 'items') Object.entries(q.payload).forEach(([id, on]) => { next = applyChecked(next, id, on); });
     if (q.kind === 'meta') next = { ...next, ...q.payload };
+    if (q.kind === 'timeline' && q.payload.timeline) next = { ...next, timeline: q.payload.timeline, timeline_edited: true };
   });
   return next;
 }
@@ -4333,6 +4341,58 @@ function handleRaceDayStartTime(value) {
   mutateRaceDayPlan({ ...plan, start_time: startTime }, { kind: 'meta', payload: { start_time: startTime } });
 }
 
+function mutateRaceDayTimeline(plan, timeline) {
+  mutateRaceDayPlan(
+    { ...plan, timeline, timeline_edited: true },
+    { kind: 'timeline', payload: { timeline } },
+  );
+}
+
+function handleRaceDayTimelineEdit(id, field, value) {
+  const plan = state.raceDay.plan;
+  if (plan && id) mutateRaceDayTimeline(plan, editTimelineEntry(plan.timeline, id, field, value));
+}
+
+function handleRaceDayTimelineAdd(day) {
+  const plan = state.raceDay.plan;
+  if (plan) mutateRaceDayTimeline(plan, addTimelineEntry(plan.timeline, day));
+}
+
+function handleRaceDayTimelineRemove(id) {
+  const plan = state.raceDay.plan;
+  if (plan && id) mutateRaceDayTimeline(plan, removeTimelineEntry(plan.timeline, id));
+}
+
+function handleRaceDayTimelineEditToggle() {
+  state.raceDay = { ...state.raceDay, editTimeline: !state.raceDay.editTimeline, notice: null };
+  render();
+}
+
+/** Reset is online-only (the template's timeline lives on the server); once the server confirms
+ * it drops any queued timeline edit for this plan. */
+async function handleRaceDayTimelineReset() {
+  const plan = state.raceDay.plan;
+  const settings = state.settingsForm;
+  const athlete = athleteSlug();
+  if (!plan || !athlete) return;
+  const result = await patchRaceDayTimeline({
+    baseUrl: settings.baseUrl, token: settings.token, athlete, planId: plan.id, payload: { reset: true },
+  });
+  if (handleUnauthorized(result)) return;
+  if (!result.ok) {
+    log.warn('raceday.timeline_reset_failed', { athlete, plan_id: plan.id, error: result.error });
+    state.raceDay = { ...state.raceDay, notice: result.status ? 'Could not reset the timeline.' : 'Reset needs a connection.' };
+    render();
+    return;
+  }
+  saveQueue(loadQueue().filter((q) => !(q.athlete === athlete && q.planId === plan.id && q.kind === 'timeline')));
+  const next = applyQueuedToPlan(result.data);
+  saveCachedPlan(athlete, next);
+  state.raceDay = { ...state.raceDay, plan: next, notice: null, pending: raceDayPendingCount() };
+  log.info('raceday.timeline_reset', { athlete, plan_id: plan.id });
+  render();
+}
+
 function handleRaceDayTab(tab) {
   state.raceDay = { ...state.raceDay, tab: tab === 'timeline' ? 'timeline' : 'list' };
   persistRaceDayOverlay();
@@ -4355,6 +4415,7 @@ async function sendQueuedOp(op, settings) {
   const base = { baseUrl: settings.baseUrl, token: settings.token, athlete: op.athlete };
   if (op.kind === 'items') return patchRaceDayItems({ ...base, planId: op.planId, states: op.payload });
   if (op.kind === 'meta') return patchRaceDay({ ...base, planId: op.planId, payload: op.payload });
+  if (op.kind === 'timeline') return patchRaceDayTimeline({ ...base, planId: op.planId, payload: op.payload });
   let last = { ok: true };
   for (const [itemId, done] of Object.entries(op.payload)) {
     // eslint-disable-next-line no-await-in-loop

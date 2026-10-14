@@ -33,10 +33,16 @@ def _new_server_plan():
         ],
         'timeline': [
             {'id': 'dinner', 'label': 'Dinner', 'day': 'eve', 'at': '19:00', 'offset_min': None, 'is_start': False},
-            {'id': 'wake', 'label': 'Wake up', 'day': 'race', 'at': None, 'offset_min': -315, 'is_start': False},
+            {'id': 'wake', 'label': 'Wake up', 'day': 'race', 'at': None, 'offset_min': -315, 'is_start': False,
+             'not_later_than': '07:00'},
+            {'id': 'lunch', 'label': 'Lunch', 'day': 'race', 'at': None, 'offset_min': -180, 'is_start': False,
+             'only_if_start_after': '12:00'},
             {'id': 'start', 'label': 'Start', 'day': 'race', 'at': None, 'offset_min': 0, 'is_start': True},
         ],
     }
+
+
+TEMPLATE_TIMELINE = _new_server_plan()['timeline']
 
 
 def _plan_json(week_items):
@@ -85,6 +91,14 @@ class Backend:
             for item_id, on in body['states'].items():
                 checked = [c for c in self.plan['checked'] if c != item_id]
                 self.plan['checked'] = checked + ([item_id] if on else [])
+            self._json(route, self.plan)
+        elif path.endswith('/timeline'):
+            if body.get('reset'):
+                self.plan['timeline'] = json.loads(json.dumps(TEMPLATE_TIMELINE))
+                self.plan['timeline_edited'] = False
+            else:
+                self.plan['timeline'] = body['timeline']
+                self.plan['timeline_edited'] = True
             self._json(route, self.plan)
         elif '/race-day/' in path:
             self.plan.update(body)
@@ -224,3 +238,55 @@ def test_no_horizontal_scroll_at_390(env):
     page.click('.rd-tag[data-tag="wet"]')
     assert page.evaluate('() => document.documentElement.scrollWidth <= document.documentElement.clientWidth')
     assert page.evaluate('() => { const b = document.getElementById("race-overlay-body"); return b.scrollWidth <= b.clientWidth; }')
+
+
+def _timeline_texts(page):
+    return page.inner_text('#race-overlay-body')
+
+
+def test_start_time_1515_adds_lunch_and_keeps_normal_wake(env):
+    page, _, backend = env
+    _open_overlay(page)
+    page.click('.rd-tab[data-tab="timeline"]')
+    page.fill('#raceday-start', '11:15')
+    page.wait_for_selector('text=6:00 AM')
+    assert 'Lunch' not in _timeline_texts(page)
+    page.fill('#raceday-start', '15:15')
+    page.wait_for_selector('.rd-tl-row:has-text("Lunch")')
+    assert '12:15 PM' in _timeline_texts(page)
+    assert page.locator('.rd-tl-row[data-tl="wake"] .rd-tl-time').inner_text() == '7:00 AM'
+
+
+def test_edit_timeline_item_persists_across_reload_and_reset_restores(env):
+    page, _, backend = env
+    _open_overlay(page)
+    page.click('.rd-tab[data-tab="timeline"]')
+    page.fill('#raceday-start', '15:15')
+    page.wait_for_selector('.rd-tl-row:has-text("Lunch")')
+    page.click('[data-a="raceday:tl-edit"]')
+    page.fill('input[data-tl="wake"][data-field="label"]', 'Get up')
+    page.press('input[data-tl="wake"][data-field="label"]', 'Tab')
+    page.wait_for_function('() => document.querySelector("input[data-tl=wake][data-field=label]").value === "Get up"')
+    page.wait_for_timeout(300)
+    assert backend.plan['timeline_edited'] is True
+    assert backend.plan['timeline'][1]['label'] == 'Get up'
+    page.reload()
+    page.wait_for_selector('#race-overlay .rd-tl-row:has-text("Get up")')
+    page.click('[data-a="raceday:tl-edit"]')
+    page.click('[data-a="raceday:tl-reset"]')
+    page.wait_for_function('() => document.querySelector("input[data-tl=wake][data-field=label]").value === "Wake up"')
+    assert backend.plan['timeline_edited'] is False
+
+
+def test_offline_timeline_edit_syncs_when_back_online(env):
+    page, ctx, backend = env
+    _open_overlay(page)
+    page.click('.rd-tab[data-tab="timeline"]')
+    page.click('[data-a="raceday:tl-edit"]')
+    ctx.set_offline(True)
+    page.click('[data-a="raceday:tl-add"]')
+    page.wait_for_selector('li[data-tl="custom-1"]')
+    assert len(backend.plan['timeline']) == 4  # not synced yet
+    ctx.set_offline(False)
+    page.wait_for_function('() => !localStorage.getItem("swimcoach_raceday_queue")')
+    assert [t['id'] for t in backend.plan['timeline']][-1] == 'custom-1'
