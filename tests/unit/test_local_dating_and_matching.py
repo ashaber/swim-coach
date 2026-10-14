@@ -119,3 +119,55 @@ def test_real_ride_fixture_matches_its_session_dated_locally_or_in_utc():
     for day in ("2026-09-29", "2026-09-30"):
         workout = Workout.model_validate({**fx["workout"], "date": day})
         assert match_workout_to_session(workout, [session]) is session
+
+
+# --- two same-sport sessions on one day (warm-up ride + race) ---------------------------
+
+
+def _race_day():
+    warm = make_session(kind="warmup", duration_min=30.0, purpose="warm-up")
+    race = make_session(kind="race", duration_min=90.0, purpose="race")
+    # list order deliberately race-first: matching must not depend on list order
+    return warm, race, [race, warm]
+
+
+def _ride(hour: int, minutes: float, **kw) -> Workout:
+    return make_workout(
+        date=date(2026, 9, 29), duration_min=minutes,
+        started_at=datetime(2026, 9, 29, hour, 0), **kw,
+    )
+
+
+def test_two_rides_two_sessions_matched_by_start_order():
+    warm, race, sessions = _race_day()
+    early, late = _ride(8, 28.0), _ride(10, 88.0)
+    others = [early, late]
+    assert match_workout_to_session(early, sessions, other_workouts=others) is warm
+    assert match_workout_to_session(late, sessions, other_workouts=others) is race
+
+
+def test_two_rides_never_share_a_session():
+    warm, race, sessions = _race_day()
+    early, late = _ride(8, 28.0), _ride(10, 88.0)
+    got = {match_workout_to_session(w, sessions, other_workouts=[early, late]).id for w in (early, late)}
+    assert got == {warm.id, race.id}
+
+
+def test_lone_ride_matches_by_duration_when_other_not_logged_yet():
+    warm, race, sessions = _race_day()
+    assert match_workout_to_session(_ride(8, 27.0), sessions, other_workouts=[]) is warm
+    assert match_workout_to_session(_ride(10, 85.0), sessions, other_workouts=[]) is race
+
+
+def test_session_claimed_by_other_workout_is_not_reused():
+    warm, race, sessions = _race_day()
+    done = _ride(8, 30.0, planned_session_id=warm.id)
+    assert match_workout_to_session(_ride(10, 30.0), sessions, other_workouts=[done]) is race
+
+
+def test_rides_without_start_times_order_by_duration():
+    warm, race, sessions = _race_day()
+    a = make_workout(date=date(2026, 9, 29), duration_min=95.0)
+    b = make_workout(date=date(2026, 9, 29), duration_min=25.0)
+    assert match_workout_to_session(b, sessions, other_workouts=[a, b]) is warm
+    assert match_workout_to_session(a, sessions, other_workouts=[a, b]) is race
