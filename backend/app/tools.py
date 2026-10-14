@@ -280,6 +280,13 @@ from swim_coach.plan import (
     scaffold_season_macro,
     scaffold_sharpening_macro,
 )
+from swim_coach.session_lookup import (
+    AmbiguousSession,
+    SessionLookupError,
+    candidates_on,
+    describe_all,
+    find_session,
+)
 from swim_coach.store import StoreInterface
 from swim_coach.taper_search import (
     MIN_TAPER_RUNWAY_DAYS,
@@ -400,6 +407,15 @@ _SESSION_KIND_SCHEMA: dict[str, Any] = {
     ),
 }
 
+_SESSION_ID_SCHEMA: dict[str, Any] = {
+    "type": "string",
+    "description": (
+        "Preferred way to name an existing session: its id (or the unique 8-char prefix shown in the "
+        "plan). Required when a day has more than one session of the same sport; date+sport is then "
+        "rejected as ambiguous."
+    ),
+}
+
 SESSION_OVERRIDES_SCHEMA: dict[str, Any] = {
     "type": "array",
     "description": (
@@ -440,17 +456,18 @@ SESSION_OVERRIDES_SCHEMA: dict[str, Any] = {
     "items": {
         "type": "object",
         "properties": {
+            "session_id": _SESSION_ID_SCHEMA,
             "date": {
                 "type": "string",
-                "description": "Session date, 'YYYY-MM-DD', must fall within iso_week.",
+                "description": "Session date, 'YYYY-MM-DD', must fall within iso_week. Omit when passing session_id.",
             },
             "add": {
                 "type": "boolean",
                 "description": (
                     "Set true to CREATE a new session on `date` (append "
                     "mode) instead of modifying an existing one. Requires "
-                    "`sport`, `duration_min`, `purpose`. Errors if a "
-                    "session already exists on that date/sport."
+                    "`sport`, `duration_min`, `purpose`. A second same-sport "
+                    "session on a day needs a different `kind` (e.g. warmup + race)."
                 ),
             },
             "remove": {
@@ -459,7 +476,7 @@ SESSION_OVERRIDES_SCHEMA: dict[str, Any] = {
                     "Set true to DELETE the matching session(s) instead "
                     "of modifying them. Mutually exclusive with `add` on "
                     "the same entry (an error if both are set). Errors if "
-                    "zero or more than one session matches date(+sport)."
+                    "zero or more than one session matches date(+sport); use session_id."
                 ),
             },
             "kind": _SESSION_KIND_SCHEMA,
@@ -661,7 +678,6 @@ SESSION_OVERRIDES_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
             },
         },
-        "required": ["date"],
         "additionalProperties": False,
     },
 }
@@ -866,6 +882,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "ISO week, e.g. '2026-W30', or 'current' / 'next'.",
                 },
+                "session_id": _SESSION_ID_SCHEMA,
                 "session_date": {
                     "type": "string",
                     "description": "Optional 'YYYY-MM-DD' to return only the session(s) on that date instead of the whole week.",
@@ -2399,9 +2416,10 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "ISO week the session belongs to, formatted 'YYYY-Wnn', e.g. '2026-W30'.",
                 },
+                "session_id": _SESSION_ID_SCHEMA,
                 "current_date": {
                     "type": "string",
-                    "description": "The session's date as currently planned, 'YYYY-MM-DD'.",
+                    "description": "The session's date as currently planned, 'YYYY-MM-DD'. Not needed with session_id.",
                 },
                 "sport": {
                     "type": "string",
@@ -2420,7 +2438,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     ),
                 },
             },
-            "required": ["iso_week", "current_date", "sport", "new_date"],
+            "required": ["iso_week", "new_date"],
             "additionalProperties": False,
         },
     },
@@ -2746,9 +2764,10 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "ISO week the session belongs to, formatted 'YYYY-Wnn', e.g. '2026-W30'.",
                 },
+                "session_id": _SESSION_ID_SCHEMA,
                 "date": {
                     "type": "string",
-                    "description": "The session's date as currently planned, 'YYYY-MM-DD'.",
+                    "description": "The session's date as currently planned, 'YYYY-MM-DD'. Not needed with session_id.",
                 },
                 "sport": {
                     "type": "string",
@@ -2814,7 +2833,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     ),
                 },
             },
-            "required": ["iso_week", "date", "direction", "reason"],
+            "required": ["iso_week", "direction", "reason"],
             "additionalProperties": False,
         },
     },
@@ -3189,34 +3208,24 @@ def _handle_get_week_plan(input_data: dict[str, Any], *, store: StoreInterface, 
     if week is None:
         return {"error": f"no week plan is persisted for {iso_week!r}"}
 
+    session_id = input_data.get("session_id")
     session_date_str = input_data.get("session_date")
-    if not session_date_str:
+    if not session_date_str and not session_id:
         return {"iso_week": iso_week, "week": week.model_dump(mode="json")}
 
+    # By id: exactly that session. By date (+ sport): every match, a multi-session day returns all.
     try:
-        target_date = date.fromisoformat(session_date_str)
-    except ValueError:
-        return {"error": f"invalid session_date {session_date_str!r}; expected 'YYYY-MM-DD'"}
-
-    sport = input_data.get("sport")
-    matches = [
-        s for s in week.sessions
-        if s.date == target_date and (not sport or s.sport == sport)
-    ]
-    if not matches:
-        same_day = [
-            {"sport": s.sport, "date": s.date.isoformat()} for s in week.sessions if s.date == target_date
-        ]
-        return {
-            "error": (
-                f"no session matching date {session_date_str!r}"
-                + (f" and sport {sport!r}" if sport else "")
-                + f" in {iso_week!r}; sessions on {session_date_str!r}: {same_day}"
-            )
-        }
+        if session_id:
+            matches = [find_session(week.sessions, session_id=session_id)]
+        else:
+            matches = candidates_on(week.sessions, date=session_date_str, sport=input_data.get("sport") or None)
+            if not matches:
+                find_session(week.sessions, date=session_date_str, sport=input_data.get("sport") or None)
+    except SessionLookupError as exc:
+        return {"error": f"{exc} (in {iso_week!r})"}
     return {
         "iso_week": iso_week,
-        "session_date": session_date_str,
+        "session_date": matches[0].date.isoformat(),
         "sessions": [s.model_dump(mode="json") for s in matches],
     }
 
@@ -6413,12 +6422,14 @@ def _handle_reschedule_session(input_data: dict[str, Any], *, store: StoreInterf
     iso_week = input_data.get("iso_week")
     if not iso_week:
         return {"error": "iso_week is required"}
+    session_id = input_data.get("session_id")
     current_date_str = input_data.get("current_date")
-    if not current_date_str:
-        return {"error": "current_date is required"}
     sport = input_data.get("sport")
-    if not sport:
-        return {"error": "sport is required"}
+    if not session_id:
+        if not current_date_str:
+            return {"error": "pass session_id, or current_date and sport"}
+        if not sport:
+            return {"error": "sport is required (or pass session_id)"}
     new_date_str = input_data.get("new_date")
     if not new_date_str:
         return {"error": "new_date is required"}
@@ -6428,11 +6439,6 @@ def _handle_reschedule_session(input_data: dict[str, Any], *, store: StoreInterf
         week_start = date.fromisocalendar(int(year_str), int(week_str), 1)
     except (ValueError, IndexError):
         return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
-
-    try:
-        current_date = date.fromisoformat(current_date_str)
-    except ValueError:
-        return {"error": f"invalid current_date {current_date_str!r}; expected format 'YYYY-MM-DD'"}
 
     try:
         new_date = date.fromisoformat(new_date_str)
@@ -6461,20 +6467,13 @@ def _handle_reschedule_session(input_data: dict[str, Any], *, store: StoreInterf
             )
         }
 
-    matches = [s for s in week.sessions if s.date == current_date and s.sport == sport]
-    if len(matches) != 1:
-        same_day = [
-            {"sport": s.sport, "date": s.date.isoformat()} for s in week.sessions if s.date == current_date
-        ]
-        return {
-            "error": (
-                f"expected exactly one session matching current_date "
-                f"{current_date_str!r} and sport {sport!r} in {iso_week!r}, found "
-                f"{len(matches)}; sessions on {current_date_str!r}: {same_day}"
-            )
-        }
+    try:
+        session = find_session(week.sessions, session_id=session_id, date=current_date_str, sport=sport)
+    except SessionLookupError as exc:
+        return {"error": f"{exc} (in {iso_week!r})"}
 
-    session = matches[0]
+    previous_date_str = session.date.isoformat()
+    sport = session.sport
     session.date = new_date
     store.save_week(slug, week)
 
@@ -6483,14 +6482,16 @@ def _handle_reschedule_session(input_data: dict[str, Any], *, store: StoreInterf
         athlete=slug,
         iso_week=iso_week,
         sport=sport,
-        previous_date=current_date_str,
+        session_id=str(session.id),
+        previous_date=previous_date_str,
         new_date=new_date_str,
     )
     return {
         "rescheduled": True,
         "iso_week": iso_week,
+        "session_id": str(session.id),
         "sport": sport,
-        "previous_date": current_date_str,
+        "previous_date": previous_date_str,
         "new_date": new_date_str,
     }
 
@@ -6601,6 +6602,12 @@ def _session_kind_or_error(raw: Any, *, when: str) -> tuple[str | None, str | No
     return raw, None
 
 
+def _adds_distinct_kind(override: dict[str, Any], existing: list[Session]) -> bool:
+    """True when an `add` entry names a `kind` none of the day's existing same-sport sessions has."""
+    kind = override.get("kind")
+    return kind is not None and all(kind != s.effective_kind for s in existing)
+
+
 def _apply_session_overrides(
     week, overrides: list[dict[str, Any]], athlete: Athlete
 ) -> tuple[str | None, list[str]]:
@@ -6628,20 +6635,28 @@ def _apply_session_overrides(
     css_pace_s = athlete.css_pace_s_per_100m
     notes: list[str] = []
     for override in overrides:
-        raw_date = override.get("date")
-        try:
-            override_date = date.fromisoformat(raw_date)
-        except (TypeError, ValueError):
-            return f"invalid session_overrides date {raw_date!r}; expected 'YYYY-MM-DD'", notes
+        if override.get("session_id"):
+            # By id: that one session, whatever its date/sport (the id is the whole address).
+            if override.get("add"):
+                return "session_overrides: `add` creates a new session; `session_id` selects an existing one", notes
+            try:
+                target = find_session(week.sessions, session_id=override["session_id"])
+            except SessionLookupError as exc:
+                return f"session_overrides: {exc}", notes
+            raw_date, override_date = target.date.isoformat(), target.date
+            raw_sport, sport, matches = target.sport, target.sport, [target]
+        else:
+            raw_date = override.get("date")
+            try:
+                override_date = date.fromisoformat(raw_date)
+            except (TypeError, ValueError):
+                return f"invalid session_overrides date {raw_date!r}; expected 'YYYY-MM-DD'", notes
 
-        raw_sport = override.get("sport")
-        sport, sport_note = _normalize_plan_sport(raw_sport)
-        if sport_note and override.get("add"):
-            notes.append(f"{raw_date}: {sport_note}")
-        matches = [
-            s for s in week.sessions
-            if s.date == override_date and (sport is None or s.sport == sport)
-        ]
+            raw_sport = override.get("sport")
+            sport, sport_note = _normalize_plan_sport(raw_sport)
+            if sport_note and override.get("add"):
+                notes.append(f"{raw_date}: {sport_note}")
+            matches = candidates_on(week.sessions, date=override_date, sport=sport)
 
         if override.get("remove"):
             # REMOVE MODE (Build E, engine/race-week-content-refinement):
@@ -6660,7 +6675,7 @@ def _apply_session_overrides(
                     notes,
                 )
             if len(matches) == 0:
-                same_day = [{"sport": s.sport, "date": s.date.isoformat()} for s in week.sessions if s.date == override_date]
+                same_day = describe_all(candidates_on(week.sessions, date=override_date))
                 return (
                     f"session_overrides: `remove` set for {raw_date!r} but no session "
                     f"matches" + (f" sport {sport!r}" if sport else "")
@@ -6670,8 +6685,7 @@ def _apply_session_overrides(
             if len(matches) > 1:
                 return (
                     f"session_overrides: `remove` set for {raw_date!r} but "
-                    f"{len(matches)} sessions match ({', '.join(s.sport for s in matches)}) "
-                    "-- pass `sport` to disambiguate",
+                    f"{len(matches)} sessions match -- pass `session_id` to disambiguate: {describe_all(matches)}",
                     notes,
                 )
             removed = matches[0]
@@ -6687,6 +6701,11 @@ def _apply_session_overrides(
                 )
             continue
 
+        if override.get("add") and matches and _adds_distinct_kind(override, matches):
+            # A day may hold several same-sport sessions (a warm-up ride + the race; a road race AM
+            # + a crit PM): an `add` whose `kind` differs from every session already there is a
+            # genuinely new session, not an edit.
+            matches = []
         if override.get("add") and len(matches) == 1 and not override.get("remove"):
             # `add` onto a date that already has a session of that sport used to be an error (it
             # blocked a write in production, 2026-09-20). Flag-don't-block: edit the existing session.
@@ -6705,9 +6724,10 @@ def _apply_session_overrides(
                 return f"session_overrides: `add` entry for {raw_date!r} needs `sport`", notes
             if matches:
                 return (
-                    f"session_overrides: `add` set for {raw_date!r} but a "
-                    f"{matches[0].sport!r} session already exists that date -- drop "
-                    "`add` to modify the existing one instead"
+                    f"session_overrides: `add` set for {raw_date!r} but {len(matches)} "
+                    f"{matches[0].sport!r} sessions already exist that date -- to edit one pass its "
+                    f"`session_id` (drop `add`); to add another give it a different `kind`: "
+                    f"{describe_all(matches)}"
                 ), notes
             add_duration = override.get("duration_min")
             add_purpose = override.get("purpose")
@@ -6768,7 +6788,7 @@ def _apply_session_overrides(
             continue
 
         if len(matches) == 0:
-            same_day = [{"sport": s.sport, "date": s.date.isoformat()} for s in week.sessions if s.date == override_date]
+            same_day = describe_all(candidates_on(week.sessions, date=override_date))
             return (
                 f"session_overrides: no session matching date {raw_date!r}"
                 + (f" and sport {sport!r}" if sport else "")
@@ -6776,8 +6796,9 @@ def _apply_session_overrides(
             ), notes
         if len(matches) > 1:
             return (
-                f"session_overrides: {len(matches)} sessions found on {raw_date!r} "
-                f"({', '.join(s.sport for s in matches)}) -- pass `sport` to disambiguate"
+                f"session_overrides: {len(matches)} sessions found on {raw_date!r}"
+                + (f" for sport {sport!r}" if sport else "")
+                + f" -- pass `session_id` to disambiguate: {describe_all(matches)}"
             ), notes
 
         session = matches[0]
@@ -6968,7 +6989,7 @@ def _apply_session_overrides(
 
 
 
-_TEXT_ONLY_KEYS = ("date", "sport", "add", "remove", "duration_min", "distance_m", "purpose", "structure", "kind")
+_TEXT_ONLY_KEYS = ("session_id", "date", "sport", "add", "remove", "duration_min", "distance_m", "purpose", "structure", "kind")
 
 
 def _text_only(override: dict[str, Any]) -> dict[str, Any] | None:
@@ -6976,7 +6997,7 @@ def _text_only(override: dict[str, Any]) -> dict[str, Any] | None:
     text) -- what is left when the detailed parts (structured workout, intensity, interval type,
     ow_template) could not be applied. `None` when nothing but date/sport would remain."""
     reduced = {k: v for k, v in override.items() if k in _TEXT_ONLY_KEYS}
-    has_text_detail = any(k not in ("date", "sport") for k in reduced)
+    has_text_detail = any(k not in ("session_id", "date", "sport") for k in reduced)
     # nothing to retry unless there is some text to save AND something was actually dropped
     return reduced if has_text_detail and reduced != override else None
 
@@ -7048,8 +7069,10 @@ def _apply_overrides_tolerant(
 def _week_sessions_json(week) -> list[dict[str, Any]]:
     return [
         {
+            "id": str(s.id),
             "date": s.date.isoformat(),
             "sport": s.sport,
+            "kind": s.effective_kind,
             "source": s.source,
             "distance_m": s.distance_m,
             "duration_min": s.duration_min,
@@ -8104,8 +8127,10 @@ def _session_summary_json(session) -> dict[str, Any]:
     the full structured IR (kept compact, same reasoning as `_week_sessions_
     json`'s own `has_structured` boolean)."""
     return {
+        "id": str(session.id),
         "date": session.date.isoformat(),
         "sport": session.sport,
+        "kind": session.effective_kind,
         "distance_m": session.distance_m,
         "duration_min": session.duration_min,
         "purpose": session.purpose,
@@ -8139,30 +8164,32 @@ def _handle_propose_session_adjustment(
         # Before ANY other validation: on the confirm turn the coach has lost every input from
         # the draft turn (history is text only), so the draft_id must be enough on its own.
         date_arg = input_data.get("date")
+        confirm_session_id = input_data.get("session_id")
         agreed = _confirm_from_draft(
             store, slug, iso_week, input_data, tool="propose_session_adjustment",
             ignored_inputs=(), expected_dates={str(date_arg)} if date_arg else None,
         )
         if agreed is not None:
-            if agreed.get("persisted") and date_arg:
+            if agreed.get("persisted") and (date_arg or confirm_session_id):
                 # keep this tool's own response contract: the adjusted session's summary
                 written = store.load_week(slug, iso_week)
-                sport_filter = input_data.get("sport")
-                target = next(
-                    (
-                        x for x in (written.sessions if written else [])
-                        if x.date.isoformat() == str(date_arg) and (not sport_filter or x.sport == sport_filter)
-                    ),
-                    None,
-                )
+                try:
+                    target = find_session(
+                        written.sessions if written else [],
+                        session_id=confirm_session_id, date=date_arg, sport=input_data.get("sport"),
+                    )
+                except SessionLookupError:
+                    target = None
                 if target is not None:
-                    agreed["date"] = str(date_arg)
+                    agreed["date"] = target.date.isoformat()
                     agreed["sport"] = target.sport
+                    agreed["session_id"] = str(target.id)
                     agreed["session"] = _session_summary_json(target)
             return agreed
+    session_id = input_data.get("session_id")
     date_str = input_data.get("date")
-    if not date_str:
-        return {"error": "date is required"}
+    if not date_str and not session_id:
+        return {"error": "pass session_id, or date (+ sport)"}
     direction = input_data.get("direction")
     if direction not in ("reduce", "increase"):
         return {"error": "direction is required and must be 'reduce' or 'increase'"}
@@ -8194,11 +8221,6 @@ def _handle_propose_session_adjustment(
     except (ValueError, IndexError):
         return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
 
-    try:
-        target_date = date.fromisoformat(date_str)
-    except ValueError:
-        return {"error": f"invalid date {date_str!r}; expected format 'YYYY-MM-DD'"}
-
     week = store.load_week(slug, iso_week)
     if week is None:
         return {
@@ -8209,20 +8231,11 @@ def _handle_propose_session_adjustment(
             )
         }
 
-    matches = [s for s in week.sessions if s.date == target_date and (sport is None or s.sport == sport)]
-    if len(matches) != 1:
-        same_day = [
-            {"sport": s.sport, "date": s.date.isoformat()} for s in week.sessions if s.date == target_date
-        ]
-        return {
-            "error": (
-                f"expected exactly one session matching date {date_str!r}"
-                + (f" and sport {sport!r}" if sport else "")
-                + f" in {iso_week!r}, found {len(matches)}; sessions on {date_str!r}: {same_day}"
-            )
-        }
-
-    original = matches[0]
+    try:
+        original = find_session(week.sessions, session_id=session_id, date=date_str, sport=sport)
+    except SessionLookupError as exc:
+        return {"error": f"{exc} (in {iso_week!r})"}
+    date_str = original.date.isoformat()
 
     try:
         athlete = store.load_athlete(slug)
@@ -8252,6 +8265,7 @@ def _handle_propose_session_adjustment(
         "iso_week": iso_week,
         "date": date_str,
         "sport": original.sport,
+        "session_id": str(original.id),
         "direction": direction,
         "magnitude_pct": applied_magnitude_pct,
         "focus": focus,

@@ -109,13 +109,13 @@ def find_session(
     if not hits:
         same_day = candidates_on(pool, date=date)
         raise SessionNotFound(
-            f"no session on {date}" + (f" with sport {sport!r}" if sport else "")
+            f"found 0 sessions on {date}" + (f" with sport {sport!r}" if sport else "")
             + (f"; sessions that day: {describe_all(same_day)}" if same_day else "")
         )
     if len(hits) > 1:
         raise AmbiguousSession(
-            f"{len(hits)} sessions on {date}" + (f" with sport {sport!r}" if sport else "")
-            + f" -- pass session_id to pick one: {describe_all(hits)}",
+            f"found {len(hits)} sessions on {date}" + (f" with sport {sport!r}" if sport else "")
+            + f" -- pass session_id to disambiguate: {describe_all(hits)}",
             hits,
         )
     return hits[0]
