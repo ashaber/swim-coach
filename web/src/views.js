@@ -1839,9 +1839,12 @@ function renderTimelineEditRows(plan) {
   return plan.timeline.map((e) => {
     const c = shown.get(e.id);
     const when = c ? (c.time ? formatClockTime(c.time) : 'no start time') : 'hidden at this start';
+    const anchor = e.after ? (plan.timeline.find((t) => t.id === e.after)?.label || e.after) : '';
     const timing = e.day === 'eve'
       ? `<label class="rd-tl-f">At <input type="time" ${field(e, 'at')} value="${esc(e.at || '')}"></label>`
-      : `<label class="rd-tl-f">Min from start <input type="number" inputmode="numeric" step="5" ${field(e, 'offset_min')} value="${esc(e.offset_min ?? 0)}"></label>`;
+      : e.after
+        ? `<label class="rd-tl-f">Min after ${esc(anchor)} <input type="number" inputmode="numeric" step="5" ${field(e, 'after_min')} value="${esc(e.after_min ?? 0)}"></label>`
+        : `<label class="rd-tl-f">Min from start <input type="number" inputmode="numeric" step="5" ${field(e, 'offset_min')} value="${esc(e.offset_min ?? 0)}"></label>`;
     const rules = e.day === 'eve' ? '' : TL_RULE_INPUTS
       .map(([name, text]) => `<label class="rd-tl-f">${text} <input type="time" ${field(e, name)} value="${esc(e[name] || '')}"></label>`)
       .join('');
@@ -1867,7 +1870,8 @@ function renderRaceDayTimelineBody(plan, now, editing = false) {
   const pos = timelinePosition(clock, plan.date, now);
   const rows = clock.map((e) => {
     const cls = ['rd-tl-row', e.is_start ? 'start' : '', e.id === pos.currentId ? 'current' : '', e.id === pos.nextId ? 'next' : ''].filter(Boolean).join(' ');
-    const when = e.time ? formatClockTime(e.time) : `${e.offset_min > 0 ? '+' : ''}${e.offset_min} min`;
+    const when = e.time ? formatClockTime(e.time)
+      : (e.after ? `+${e.after_min || 0} min after` : `${e.offset_min > 0 ? '+' : ''}${e.offset_min} min`);
     return `
         <li class="${cls}" data-tl="${esc(e.id)}">
           <span class="rd-tl-time mono">${esc(when)}</span>
@@ -1901,7 +1905,7 @@ export function renderRaceDayOverlay(rd, online = true, now = new Date()) {
       </div>
       ${tab === 'list' ? renderRaceDayChecklistBody(plan) : renderRaceDayTimelineBody(plan, now, Boolean(rd.editTimeline))}`;
   }
-  const status = !online ? 'Offline -- changes sync when you reconnect' : (rd.pending ? 'Syncing…' : '');
+  const status = rd.notice || (!online ? 'Offline -- changes sync when you reconnect' : (rd.pending ? 'Syncing…' : ''));
   return `
     <div class="rd-overlay" id="race-overlay" role="dialog" aria-modal="true" aria-label="Race-day checklist">
       <div class="rd-head" id="race-overlay-head">

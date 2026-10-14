@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import {
   timelineClock, editTimelineEntry, removeTimelineEntry, addTimelineEntry, mergeOp, loadQueue, enqueue,
@@ -11,7 +11,7 @@ const VECTORS = JSON.parse(readFileSync(new URL('../../../tests/fixtures/race_ti
 describe('shared timeline vectors', () => {
   VECTORS.cases.forEach((c) => {
     it(c.name, () => {
-      const clock = timelineClock({ start_time: c.start_time, timeline: VECTORS.timeline });
+      const clock = timelineClock({ start_time: c.start_time, timeline: c.timeline || VECTORS.timeline });
       const byId = Object.fromEntries(clock.map((e) => [e.id, e.time]));
       Object.entries(c.expect).forEach(([id, time]) => expect(byId[id], id).toBe(time));
       c.absent.forEach((id) => expect(Object.keys(byId)).not.toContain(id));
@@ -41,6 +41,15 @@ describe('timeline editing helpers', () => {
     const added = addTimelineEntry(addTimelineEntry(tl), 'eve');
     expect(added.slice(2).map((e) => [e.id, e.day])).toEqual([['custom-1', 'race'], ['custom-2', 'eve']]);
   });
+  it('removing an anchor re-anchors followers; after_min is editable', () => {
+    const chain = [
+      { id: 'a', label: 'A', day: 'race', offset_min: -60 },
+      { id: 'b', label: 'B', day: 'race', after: 'a', after_min: 10 },
+      { id: 'start', label: 'Start', day: 'race', offset_min: 0, is_start: true },
+    ];
+    expect(removeTimelineEntry(chain, 'a')[0]).toMatchObject({ id: 'b', after: null, offset_min: -50 });
+    expect(editTimelineEntry(chain, 'b', 'after_min', '20')[1].after_min).toBe(20);
+  });
   it('a timeline op replaces rather than merges field-wise', () => {
     const base = { athlete: 'a', planId: 'p', kind: 'timeline' };
     const q = mergeOp(mergeOp([], { ...base, payload: { timeline: [1] } }), { ...base, payload: { reset: true } });
@@ -50,7 +59,14 @@ describe('timeline editing helpers', () => {
 });
 
 describe('timeline edit queue', () => {
-  beforeEach(() => localStorage.clear());
+  beforeEach(() => {
+    const mem = new Map();
+    vi.stubGlobal('localStorage', {
+      getItem: (k) => (mem.has(k) ? mem.get(k) : null),
+      setItem: (k, v) => { mem.set(k, String(v)); },
+      removeItem: (k) => { mem.delete(k); },
+    });
+  });
   it('keeps only the newest timeline edit per plan', () => {
     enqueue({ athlete: 'a', planId: 'p', kind: 'timeline', payload: { timeline: [{ id: 'x' }] } });
     enqueue({ athlete: 'a', planId: 'p', kind: 'timeline', payload: { timeline: [{ id: 'y' }] } });
