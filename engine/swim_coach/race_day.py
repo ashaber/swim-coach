@@ -74,6 +74,28 @@ def set_checked(plan: RaceDayPlan, states: dict[str, bool]) -> None:
     plan.checked = current
 
 
+def parse_timeline(raw: list[dict]) -> list[TimelineEntry]:
+    """Validate a full replacement timeline: each entry valid, ids unique, exactly one start."""
+    entries = [TimelineEntry(**e) for e in raw]
+    ids = [e.id for e in entries]
+    if len(set(ids)) != len(ids):
+        raise ValueError("timeline entry ids must be unique")
+    if sum(1 for e in entries if e.is_start) != 1:
+        raise ValueError("timeline needs exactly one start entry (is_start)")
+    return entries
+
+
+def set_timeline(plan: RaceDayPlan, entries: list[TimelineEntry]) -> None:
+    """Replace this race's timeline (the template is untouched); marks it hand-edited."""
+    plan.timeline = entries
+    plan.timeline_edited = True
+
+
+def reset_timeline(plan: RaceDayPlan, template: RaceChecklistTemplate) -> None:
+    plan.timeline = [t.model_copy(deep=True) for t in template.timeline]
+    plan.timeline_edited = False
+
+
 def timeline_clock(plan: RaceDayPlan) -> list[dict]:
     """Timeline entries with a computed `time` ("HH:MM"), `abs_min` (minutes from race-day
     midnight; None until a start_time is set) and `day_shift` (-1 for the evening before, or a
