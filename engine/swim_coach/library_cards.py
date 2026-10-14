@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 import yaml
@@ -88,6 +89,10 @@ class ReviewCardEntry(BaseModel):
 class ReviewCardFile(BaseModel):
     schema_version: int
     file: str
+    # Date the topic file landed in the library (YYYY-MM-DD) -- the Resources
+    # tab's "Recently added" sort. Optional in the model so old cards still
+    # load; test_library_cards requires it on every real card file.
+    added: date | None = None
     cards: list[ReviewCardEntry]
 
 

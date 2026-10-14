@@ -1,5 +1,6 @@
 schema_version: 1
 file: 39-cycling-start-analysis.md
+added: 2026-10-11
 cards:
 - section: 1-metrics-used-to-analyze-a-maximal-start
   heading: 1. Metrics used to analyze a maximal start

@@ -1,5 +1,6 @@
 schema_version: 1
 file: 15-tiered-session-load.md
+added: 2026-08-26
 cards:
 - section: the-problem-this-fixes
   heading: The problem this fixes
