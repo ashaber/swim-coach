@@ -68,6 +68,7 @@ from typing import Any, TypedDict
 
 from swim_coach.analysis import analytics_for_coach
 from swim_coach.athlete_time import athlete_today
+from swim_coach.session_lookup import SHORT_ID_LEN
 from swim_coach.library_review import (
     REF_ENTRY_RE,
     RefEntry,
@@ -1629,11 +1630,11 @@ def _week_or_none(store: StoreInterface, slug: str, iso_week: str) -> dict[str, 
 # Session fields DROPPED from context (each with its own reason -- never
 # silently; `get_week_plan` recovers all of them):
 #   - `structured`: the ~10k step tree itself (see above).
-#   - `id` / `athlete_id`: internal identifiers. Every plan-editing tool
-#     (`patch_week_plan`, `author_week_plan`, `merge_week_plan`,
-#     `reschedule_session`, `propose_session_adjustment`) matches sessions
-#     by `date` (+ `sport` to disambiguate a multi-session day), never by
-#     `id` -- the model has never needed a session's `id` to act on it.
+#   - `athlete_id`: internal identifier, never needed.
+#   - `id` is KEPT but SHORTENED to its 8-char prefix (`session_lookup.short_id`), and `kind`
+#     is kept when set: every session-editing tool takes `session_id` (preferred, and the only
+#     way to name one of two same-sport sessions on a day -- warm-up + race), resolving a
+#     unique prefix. ~12 tokens a session.
 #   - `schema_version`: internal migration bookkeeping, never
 #     coaching-relevant.
 #   - `source` / `is_indoor`: authorship provenance and device-export
@@ -1683,7 +1684,12 @@ def _slim_session_for_context(session: dict[str, Any]) -> dict[str, Any]:
     """One `Session.model_dump(mode="json")` dict, trimmed to
     `_SESSION_CONTEXT_FIELDS` -- see that constant's comment for what's
     dropped and why."""
-    return {k: session[k] for k in _SESSION_CONTEXT_FIELDS if k in session}
+    slim = {k: session[k] for k in _SESSION_CONTEXT_FIELDS if k in session}
+    if session.get("id"):
+        slim = {"id": str(session["id"])[:SHORT_ID_LEN], **slim}
+    if session.get("kind"):
+        slim["kind"] = session["kind"]
+    return slim
 
 
 def _slim_week_for_context(week: dict[str, Any] | None) -> dict[str, Any] | None:

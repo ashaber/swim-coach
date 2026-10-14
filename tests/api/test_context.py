@@ -4,6 +4,7 @@ and keyword routing must pick sensible library files."""
 
 from __future__ import annotations
 
+import re
 import json
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -1768,7 +1769,7 @@ def test_current_week_context_drops_structured_and_internal_fields(app_env) -> N
     # Dropped: the structured step tree, internal identifiers, schema
     # version, and HELD-draft bookkeeping (already covered separately by
     # "Drafts waiting" when a draft is actually pending).
-    for dropped_key in ('"structured"', '"id"', '"athlete_id"', '"schema_version"', '"drafted_at"', '"drafted_by"', '"source"', '"is_indoor"'):
+    for dropped_key in ('"structured"', '"athlete_id"', '"schema_version"', '"drafted_at"', '"drafted_by"', '"source"', '"is_indoor"'):
         assert dropped_key not in section, f"{dropped_key} should have been dropped from {section!r}"
 
     # Kept: everything the coach needs to discuss or build on top of the week.
@@ -1794,7 +1795,8 @@ def test_next_week_context_drops_structured_and_internal_fields(app_env) -> None
     section = text.split("### Next week plan")[1].split("### Exact logged sessions")[0]
 
     assert '"structured"' not in section
-    assert '"id"' not in section
+    assert re.search(r'"id":"[0-9a-f]{8}"', section)  # short id only, so tools can take session_id
+    assert not re.search(r'[0-9a-f]{8}-[0-9a-f]{4}-', section)  # never the full uuid
     assert '"athlete_id"' not in section
     assert '"schema_version"' not in section
     assert '"purpose":"main set work"' in section
