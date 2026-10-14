@@ -228,13 +228,13 @@ function feedbackForWorkout(feedback, workoutId) {
   return (feedback || []).filter((entry) => entry.workout_id === workoutId);
 }
 
-/** Same idea as `feedbackForWorkout`, for a planned Session instead --
- * linked by `(session_date, session_sport)`, NOT a raw session id (see
- * `Feedback.session_date`'s own doc comment in engine/swim_coach/models.py
- * for why: `Session.id` doesn't survive `replace_week_plan`'s full
- * regenerate, so a raw-id link would silently orphan). */
-function feedbackForSession(feedback, date, sport) {
-  return (feedback || []).filter((entry) => entry.session_date === date && entry.session_sport === sport);
+/** Same idea as `feedbackForWorkout`, for a planned Session instead. A row stamped with a
+ * `session_id` belongs to exactly that session (two same-sport sessions on one day stay apart); a
+ * row without one -- older rows -- falls back to `(session_date, session_sport)`. */
+export function feedbackForSession(feedback, session) {
+  return (feedback || []).filter((entry) => (entry.session_id
+    ? entry.session_id === session.id
+    : entry.session_date === session.date && entry.session_sport === session.sport));
 }
 
 /** `questions`: the (already-filtered) list of past Q&A for this one
@@ -557,7 +557,7 @@ function renderPlanSessionDetail(session, sessionPush, showGarminActions = true,
       <p class="detail-notes">${esc(purpose)}</p>
     </section>` : ''}
     ${renderAskCoachSection({
-      questions: feedbackForSession(askCoach?.feedback, session.date, session.sport),
+      questions: feedbackForSession(askCoach?.feedback, session),
       form: askCoach?.form ?? null,
       submit: askCoach?.submit,
     })}`;

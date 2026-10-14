@@ -961,7 +961,17 @@ export function findSessionById(weeks, id) {
   return null;
 }
 
-/** Group a week's sessions by calendar date across the week's Mon..Sun span. */
+// Order a day's sessions the way they happen: a warm-up/opener before the race. Same ranks as
+// engine/swim_coach/session_lookup.KIND_RANK; any other kind (or none) is an ordinary workout.
+const KIND_ORDER = { warmup: 0, opener: 1, workout: 2, free_ride: 3, race: 4 };
+
+function kindRank(session) {
+  return KIND_ORDER[session.kind || 'workout'] ?? KIND_ORDER.workout;
+}
+
+/** Group a week's sessions by calendar date across the week's Mon..Sun span. Within a day,
+ * sessions are ordered warm-up/opener before race (stable otherwise), so a race-day warm-up ride
+ * and the race ride -- two same-sport sessions -- render in the order they are ridden. */
 export function sessionsByDay(week) {
   const monday = isoWeekMonday(week.iso_week);
   const days = [];
@@ -971,7 +981,7 @@ export function sessionsByDay(week) {
     days.push({
       date,
       dow: dowLabel(i),
-      sessions: week.sessions.filter((s) => s.date === key),
+      sessions: week.sessions.filter((s) => s.date === key).sort((a, b) => kindRank(a) - kindRank(b)),
     });
   }
   return days;

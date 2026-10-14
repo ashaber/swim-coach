@@ -3,7 +3,7 @@ import {
   renderDashboardTab, renderSettingsTab, renderUpdateBanner, renderApp,
   renderTabBar, renderRosterTab, renderLoadChart,
   renderCr10SliderField, cr10AnchorLabel, loadTierLabel, renderWorkoutRow,
-  renderAskCoachSection, renderCoachTab, renderResourcesTab,
+  renderAskCoachSection, feedbackForSession, renderCoachTab, renderResourcesTab,
   renderMacroPlanDetail,
 } from '../../src/views.js';
 import { isoWeekMonday, addDays, dateKey, formatShortDate, formatDuration } from '../../src/plan.js';
@@ -1935,6 +1935,26 @@ describe('renderSettingsTab', () => {
   it('shows a loading state for the sports & thresholds panel while the profile is loading', () => {
     const html = renderSettingsTab({ ...profilePanelArgs, profileLoad: { status: 'loading', error: null } });
     expect(html).toContain('Sports &amp; thresholds');
+  });
+});
+
+describe('feedbackForSession', () => {
+  const warm = { id: 'w', date: '2026-07-10', sport: 'bike' };
+  const race = { id: 'r', date: '2026-07-10', sport: 'bike' };
+  const feedback = [
+    { id: 'f1', session_id: 'r', session_date: '2026-07-10', session_sport: 'bike' },
+    { id: 'f2', session_date: '2026-07-10', session_sport: 'bike' },
+    { id: 'f3', session_id: 'w', session_date: '2026-07-10', session_sport: 'bike' },
+  ];
+
+  it('an id-stamped question belongs to exactly that session', () => {
+    expect(feedbackForSession(feedback, race).map((f) => f.id)).toEqual(['f1', 'f2']);
+    expect(feedbackForSession(feedback, warm).map((f) => f.id)).toEqual(['f2', 'f3']);
+  });
+
+  it('an older question without session_id still links by date + sport', () => {
+    expect(feedbackForSession([feedback[1]], { id: 'x', date: '2026-07-10', sport: 'bike' })).toHaveLength(1);
+    expect(feedbackForSession([feedback[1]], { id: 'x', date: '2026-07-11', sport: 'bike' })).toHaveLength(0);
   });
 });
 

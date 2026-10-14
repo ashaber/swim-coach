@@ -3024,7 +3024,7 @@ async function handleSubmitAskCoachForSession() {
 
   const result = await askAboutSession({
     baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(),
-    date: session.date, sport: session.sport, body,
+    id: session.id, date: session.date, sport: session.sport, body,
   });
   if (handleUnauthorized(result)) return;
   if (result.ok) {
@@ -3055,12 +3055,14 @@ async function handleSubmitAskCoachForSession() {
   render();
 }
 
-/** After a plan reload, point the open session detail back at the same (date, sport) session if
- * its id changed (pruneSessionDetailIdIfMissing clears the id when it vanished). */
+/** After a plan reload, point the open session detail back at the same (date, sport, kind) session
+ * if its id changed (pruneSessionDetailIdIfMissing clears the id when it vanished). */
 function reopenSessionDetail(previous) {
   if (state.planSessionDetailId) return;
   for (const week of state.plan.data?.weeks || []) {
-    const match = (week.sessions || []).find((s) => s.date === previous.date && s.sport === previous.sport);
+    const match = (week.sessions || []).find(
+      (s) => s.date === previous.date && s.sport === previous.sport && (s.kind || null) === (previous.kind || null),
+    );
     if (match) {
       state.planSessionDetailId = match.id;
       render();

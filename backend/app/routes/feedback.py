@@ -239,12 +239,14 @@ def _find_planned_session(
 ) -> Session | None:
     """Best-effort resolution of the actual current `Session` for a session-linked question, for
     `render_focused_session` context only -- NEVER 404s on a miss (the caller still answers, just
-    without that one session's detail). By `session_id` when given (a regenerated week has fresh
-    ids, so a miss just means "not found"); else by (date, sport) within that date's week -- an
+    without that one session's detail). By `session_id` when it still exists (a regenerated week has
+    fresh ids); else by (date, sport) within that date's week -- an
     AMBIGUOUS pair (two same-sport sessions that day) raises `AmbiguousSession` for the route to
     turn into a 422 asking for `session_id`."""
     if session_id is not None:
-        return find_in_store(store, slug, session_id)
+        found = find_in_store(store, slug, session_id)
+        if found is not None:
+            return found
     if session_date is None:
         return None
     week = store.load_week(slug, iso_week_str(session_date))

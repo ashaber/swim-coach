@@ -1220,6 +1220,32 @@ describe('sessionsByDay', () => {
   });
 });
 
+describe('sessionsByDay with two same-sport sessions on one day', () => {
+  it('orders warm-up/opener before race regardless of list order and keeps both', () => {
+    const week = {
+      iso_week: '2026-W28',
+      sessions: [
+        { id: 'r', date: '2026-07-10', sport: 'bike', kind: 'race' },
+        { id: 'w', date: '2026-07-10', sport: 'bike', kind: 'warmup' },
+        { id: 'o', date: '2026-07-10', sport: 'strength' },
+      ],
+    };
+    const friday = sessionsByDay(week)[4];
+    expect(friday.sessions.map((s) => s.id)).toEqual(['w', 'o', 'r']);
+  });
+
+  it('keeps the input order for sessions of equal rank', () => {
+    const week = {
+      iso_week: '2026-W28',
+      sessions: [
+        { id: 'a', date: '2026-07-10', sport: 'bike' },
+        { id: 'b', date: '2026-07-10', sport: 'bike' },
+      ],
+    };
+    expect(sessionsByDay(week)[4].sessions.map((s) => s.id)).toEqual(['a', 'b']);
+  });
+});
+
 describe('longSwimLadder', () => {
   it('derives the biggest swim, a peak estimate, and the event from real-shaped data', () => {
     const weeks = [
