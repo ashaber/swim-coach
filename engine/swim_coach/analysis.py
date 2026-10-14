@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Protocol, Sequence
 from swim_coach.analytics import compute_analytics
 from swim_coach.models import Athlete, Event, Session, SessionKind, Workout, WorkoutAnalytics
 from swim_coach.bike_coach_view import shape_ride_view
-from swim_coach.free_ride import FREE_READ_KINDS, is_key_session, read_free_ride
+from swim_coach.free_ride import FREE_READ_KINDS, read_free_ride
 from swim_coach.power_curve import BEST_WINDOWS_DAYS, annotate_bests
 
 if TYPE_CHECKING:
@@ -95,6 +95,7 @@ def prune_nulls(x):
 class WorkoutAnalyzer(Protocol):
     fields: frozenset[str]
     detailed: bool  # has an interval/verdict layer
+    structured_is_key: bool  # a structured session of this sport is a key (interval) session
 
     def analyze(self, workout: Workout, ctx: AnalysisContext) -> WorkoutAnalytics: ...
 
@@ -112,6 +113,10 @@ class _CoachViewMixin:
 
     fields: frozenset[str] = frozenset()
     detailed: bool = False
+    # Whether a structured session of this sport is an interval session that fatigues the
+    # neighbouring days (Coach judgment; library/03 load monitoring: hard endurance work, not
+    # strength/recovery, is what the next day's quality depends on). Endurance analyzers set True.
+    structured_is_key: bool = False
 
     def needs_neighbors(self, kind: SessionKind) -> bool:
         return False
@@ -189,6 +194,7 @@ class SwimAnalyzer(_CoachViewMixin):
     no interval/verdict layer."""
 
     fields = SWIM_FIELDS
+    structured_is_key = True
 
     def analyze(self, workout: Workout, ctx: AnalysisContext) -> WorkoutAnalytics:
         return annotate_power_curve_bests(workout, _base_analytics(workout, ctx, with_intervals=False), ctx)
@@ -200,6 +206,7 @@ class BikeAnalyzer(_CoachViewMixin):
 
     fields = BIKE_FIELDS
     detailed = True
+    structured_is_key = True
 
     def _shape(self, out: dict, analytics: WorkoutAnalytics) -> dict:
         return shape_ride_view(out, analytics)
@@ -231,7 +238,7 @@ class BikeAnalyzer(_CoachViewMixin):
             ftp_watts=athlete.ftp_watts if athlete else None,
             lthr_bpm=athlete.lthr_bpm if athlete else None,
             intent_zone=_planned_zone(session),
-            neighbors=ctx.neighbors,
+            neighbors=[s for s in ctx.neighbors if is_key_session(s)],
             prior_workouts=ctx.prior_workouts,
         )
         return analytics.model_copy(update={"free_ride": read})
@@ -255,6 +262,22 @@ DEFAULT_ANALYZER: WorkoutAnalyzer = DefaultAnalyzer()
 
 def analyzer_for(sport: str) -> WorkoutAnalyzer:
     return ANALYZERS.get(sport, DEFAULT_ANALYZER)
+
+
+KEY_ZONES: frozenset[str] = frozenset({"Z4", "Z5"})  # a planned workout this hard is "key"
+
+
+def is_key_session(session: Session) -> bool:
+    """A session hurt by fatigue the day before/after: a race, or a planned workout in Z4/Z5, or a
+    structured one of a sport whose analyzer says structured work is key (endurance sports;
+    strength/recovery never, however structured)."""
+    if session.effective_kind == "race":
+        return True
+    if session.effective_kind != "workout":
+        return False
+    if (session.intensity or {}).get("zone") in KEY_ZONES:
+        return True
+    return session.structured is not None and analyzer_for(session.sport).structured_is_key
 
 
 def has_detailed_analyzer(sport: str) -> bool:
@@ -289,8 +312,11 @@ def derive_workout_kind(workout: Workout, session: Session | None, events: Seque
     if session is not None and session.kind is not None:
         return session.kind
     sport = _event_sport(workout.sport)
-    if sport is not None and any(e.event_date == workout.date and e.primary_sport == sport for e in events):
-        return "race"
+    if sport is not None:
+        same_sport = [e for e in events if e.primary_sport == sport]
+        # any member race date (of a group or not) is a race day; a rest day in a span is not
+        if any(e.event_date == workout.date for e in same_sport):
+            return "race"
     return session.effective_kind if session is not None else "free_ride"
 
 

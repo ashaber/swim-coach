@@ -127,6 +127,8 @@ def test_list_cards_shape_and_derived_fields_for_a_pending_section(client, allow
     assert len(card["content_hash"]) == 64
     # fix 2: no decision recorded yet -- falls back to the marker state.
     assert card["review_state"] == "unreviewed"
+    # Resources "Recently added" sort: the card file's `added` date, ISO string.
+    assert len(card["added"]) == 10 and card["added"][4] == "-"
 
 
 def test_list_cards_review_state_reviewed_when_marker_says_so_and_no_decision(

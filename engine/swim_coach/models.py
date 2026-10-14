@@ -644,6 +644,18 @@ class Event(BaseModel):
     # do NOT filter on this field -- it only changes how the coach *talks
     # about* events in conversation, never which events those lookups find.
 
+    # Event group membership (see `event_groups.py`): multi-race events on the same or
+    # consecutive days (stage race, cyclocross double header, omnium) are several member Events
+    # sharing a `group_id`. The group is stored ON its members (JSONB `data`, no SQL migration,
+    # saved atomically with the event set by `save_events`); `event_groups.group_of` derives the
+    # `EventGroup` view. `group_name`/`group_type` repeat on every member (written together by
+    # the group tool); `group_peak` marks the coach's taper-peak override (none -> earliest race).
+    # All additive: an Event with no group_id validates and behaves exactly as before.
+    group_id: UUID | None = None
+    group_name: str | None = None
+    group_type: Literal["stage_race", "double_header", "omnium"] | None = None
+    group_peak: bool = False
+
     @model_validator(mode="after")
     def _validate_target_metric_fields(self) -> "Event":
         """Cross-field rule: `distance_m` is required when target_metric ==
@@ -664,6 +676,22 @@ class Event(BaseModel):
                 "(not 'distance_m')"
             )
         return self
+
+
+class EventGroup(BaseModel):
+    """Derived view of member Events sharing a `group_id` (see `event_groups.py`). Taper and
+    macro planning target the GROUP: its peak race (default earliest, coach may override) and its
+    first..last span. Combined-points scoring is out of scope: a group is a training concept."""
+
+    id: UUID
+    athlete_id: UUID
+    name: str
+    group_type: Literal["stage_race", "double_header", "omnium"]
+    races: list[UUID]  # member Event ids, ordered by date then id
+    peak_event_id: UUID
+    priority: str  # the peak race's A/B/C: a group is ONE target
+    first_date: date
+    last_date: date
 
 
 class WorkoutTarget(BaseModel):

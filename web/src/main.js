@@ -9,6 +9,7 @@ import {
 } from './views.js';
 import { findSessionById, LOAD_CHART_WINDOW_DAYS, LOAD_CHART_WINDOW_OPTIONS } from './plan.js';
 import { buildHistoryFeed } from './history.js';
+import { loadLibrarySort, saveLibrarySort } from './librarySort.js';
 import {
   loadOpenOverlay, saveOpenOverlay, loadCachedPlan, saveCachedPlan, loadQueue, saveQueue, enqueue,
   applyChecked, toggleTag,
@@ -482,6 +483,7 @@ const state = {
   libraryCards: { status: 'idle', data: [], error: null },
   libraryFile: { status: 'idle', data: null, error: null },
   libraryFilter: 'all',
+  librarySort: loadLibrarySort(),
   libraryOpenFile: null,
   // Approvals section (admin-only, `is_library_admin`): per-card accept/flag
   // submit state, keyed by `${file}#${section}` -- same per-row-keyed
@@ -645,6 +647,7 @@ function renderTabContent() {
       return renderResourcesTab({
         cards: state.libraryCards,
         filter: state.libraryFilter,
+        sort: state.librarySort,
         openFile: state.libraryOpenFile,
         file: state.libraryFile,
         isAdmin: !!state.identity?.isLibraryAdmin,
@@ -2829,6 +2832,14 @@ async function loadLibraryCards() {
   render();
 }
 
+function handleSetLibrarySort(sort) {
+  if (!sort || sort === state.librarySort) return;
+  state.librarySort = sort;
+  saveLibrarySort(sort);
+  log.info('library.sort_changed', { sort });
+  render();
+}
+
 function handleSetLibraryFilter(filter) {
   if (!filter || filter === state.libraryFilter) return;
   state.libraryFilter = filter;
@@ -3927,6 +3938,7 @@ async function onAppClick(e) {
     // above.
     case 'library:close-file': history.back(); break;
     case 'library:filter': handleSetLibraryFilter(el.dataset.filter); break;
+    case 'library:sort': handleSetLibrarySort(el.dataset.sort); break;
     case 'library:review:accept':
       await handleSubmitLibraryReview('accepted', el.dataset.file, el.dataset.section, el.dataset.hash);
       break;
@@ -4494,6 +4506,12 @@ document.addEventListener('visibilitychange', conversationPollTick);
 // populated state setTab would.
 if (state.tab === 'dashboard' && shouldLoadHistoryNow()) {
   loadHistory();
+}
+// Same restored-active-tab gap for Resources: a reload while it is the
+// persisted tab never goes through setTab, so the cards would never load.
+if (state.tab === 'resources' && state.identity?.isLibraryAdmin
+  && isConfigured(state.settingsForm, state.identity)) {
+  loadLibraryCards();
 }
 
 // Registers the service worker with an explicit update *prompt* (see

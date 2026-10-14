@@ -1,5 +1,6 @@
 schema_version: 1
 file: 10-recovery-hrv.md
+added: 2026-07-10
 cards:
 - section: recovery-windows-between-hard-efforts-5-10-days
   heading: Recovery windows between hard efforts (5-10 days)

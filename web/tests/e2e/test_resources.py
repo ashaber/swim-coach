@@ -9,6 +9,7 @@ routes with CORS headers attached.
 """
 
 import json
+from datetime import date, timedelta
 
 import pytest
 from playwright.sync_api import sync_playwright
@@ -515,3 +516,56 @@ def test_resources_needs_review_disabled_offline_with_a_message(cfg, base_url):
             ctx.set_offline(False)
             ctx.close()
             browser.close()
+
+
+# --- sort: "Recently added" (default) / Library order / Needs review --------
+
+def _sort_card(file, section, added, review_state='unreviewed'):
+    return {**UNREVIEWED_CARD, 'file': file, 'section': section, 'heading': f'Heading {section}',
+            'added': added, 'review_state': review_state, 'content_hash': f'h-{section}'}
+
+
+def _file_order(pg):
+    return pg.locator('.library-file-group-heading').evaluate_all(
+        "els => els.map(e => e.childNodes[0].textContent.trim())"
+    )
+
+
+def test_resources_sorts_recently_added_first_and_persists_the_choice(admin_page):
+    today = date.today()
+
+    def days_ago(n):
+        return (today - timedelta(days=n)).isoformat()
+
+    cards = [
+        _sort_card('03-old.md', 'a', '2026-07-05', 'reviewed'),
+        _sort_card('38-race-week-sharpener-and-openers.md', 'b', days_ago(3)),
+        _sort_card('39-cycling-start-analysis.md', 'c', days_ago(2)),
+        _sort_card('40-cycling-start-technique-and-drills.md', 'd', days_ago(2)),
+        _sort_card('41-free-ride-analysis.md', 'e', days_ago(1)),
+    ]
+    admin_page.route('**/api/library/cards*', _cors_route(200, 'application/json', json.dumps(cards)))
+    admin_page.click('[data-a="tab:resources"]')
+    admin_page.wait_for_selector('.library-card')
+
+    expected_recent = [
+        '41-free-ride-analysis.md', '40-cycling-start-technique-and-drills.md',
+        '39-cycling-start-analysis.md', '38-race-week-sharpener-and-openers.md', '03-old.md',
+    ]
+    assert _file_order(admin_page) == expected_recent
+    assert admin_page.locator('.library-new-badge').count() == 4
+    assert admin_page.locator('.library-added-label').first.inner_text().startswith('added ')
+
+    admin_page.click('[data-a="library:sort"][data-sort="library"]')
+    assert _file_order(admin_page)[0] == '03-old.md'
+
+    admin_page.reload()
+    admin_page.click('[data-a="tab:resources"]')
+    admin_page.wait_for_selector('.library-card')
+    assert _file_order(admin_page)[0] == '03-old.md'
+    assert admin_page.locator('[data-sort="library"].active').count() == 1
+
+    admin_page.click('[data-a="library:sort"][data-sort="recent"]')
+    assert _file_order(admin_page) == expected_recent
+    overflow = admin_page.evaluate('document.documentElement.scrollWidth > document.documentElement.clientWidth')
+    assert not overflow

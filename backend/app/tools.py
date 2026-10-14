@@ -208,6 +208,7 @@ from swim_coach import fueling as fueling_module
 from swim_coach.adapt import adapt_week
 from swim_coach.analysis import analytics_for_coach, has_detailed_analyzer
 from swim_coach.athlete_time import athlete_today
+from swim_coach.event_groups import disband_group, effective_target, groups, set_group
 from swim_coach.gps_laps import GpsLapMetrics, analyze_gps_laps
 from swim_coach.load import (
     _training_base_evidence,
@@ -2659,6 +2660,34 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "required": ["iso_week"],
             "additionalProperties": False,
         },
+    },
+    {
+        "name": "set_event_group",
+        "description": (
+            "Group existing events that are one multi-race target (stage race, cyclocross double "
+            "header, omnium): taper/macro/race-week then aim at the group's peak race and the "
+            "first..last span is race days. Create each race as its own event first. peak defaults "
+            "to the earliest race; set peak_event_name when the athlete's real target is another "
+            "(e.g. a qualifier). Re-call with the same group_name to change members/peak. "
+            "disband=true ungroups (events kept). Persists immediately."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "group_name": {"type": "string"},
+                "group_type": {"type": "string", "enum": ["stage_race", "double_header", "omnium"]},
+                "event_names": {"type": "array", "items": {"type": "string"}, "description": "Exact member event names (2+)."},
+                "peak_event_name": {"type": "string", "description": "Optional override; default earliest race."},
+                "disband": {"type": "boolean"},
+            },
+            "required": ["group_name"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "get_event_groups",
+        "description": "List the athlete's event groups: member races (dates), peak, span, priority.",
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {
         "name": "set_event_active_status",
@@ -5264,6 +5293,8 @@ def _handle_draft_macro_plan(input_data: dict[str, Any], *, store: StoreInterfac
             )
         }
 
+    event = effective_target(event, events)  # a grouped event plans toward its group's peak race
+
     try:
         existing_macro = store.load_macro(slug)
     except Exception as exc:  # noqa: BLE001
@@ -5564,6 +5595,8 @@ def _handle_replace_macro_plan(input_data: dict[str, Any], *, store: StoreInterf
                 f"event names: {known_names}"
             )
         }
+
+    event = effective_target(event, events)  # a grouped event plans toward its group's peak race
 
     try:
         existing_macro = store.load_macro(slug)
@@ -8615,6 +8648,7 @@ def _handle_propose_injury_adapted_taper(
     if event is None:
         known = [{"id": str(e.id), "name": e.name} for e in events]
         return {"error": f"no event matching {event_ref!r}; known events: {known}"}
+    event = effective_target(event, events)  # a grouped event tapers toward its group's peak race
 
     try:
         workouts = store.list_workouts(slug)
@@ -8844,6 +8878,72 @@ def _handle_propose_injury_adapted_taper(
     )
     response["persisted"] = True
     return response
+
+
+def _handle_set_event_group(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    """Tag member events as one group (or disband it); persists via `store.save_events`."""
+    name = (input_data.get("group_name") or "").strip()
+    if not name:
+        return {"error": "group_name is required"}
+    try:
+        events = store.load_events(slug)
+    except Exception as exc:  # noqa: BLE001
+        log.error("storage read failed", what='events', exc_info=True)
+        return storage_error("events", exc)
+    existing = next((e.group_id for e in events if e.group_id and e.group_name == name), None)
+    if input_data.get("disband"):
+        if existing is None:
+            return {"error": f"no group named {name!r}"}
+        store.save_events(slug, disband_group(events, existing))
+        return {"updated": True, "group_name": name, "disbanded": True}
+    group_type = input_data.get("group_type")
+    if group_type not in ("stage_race", "double_header", "omnium"):
+        return {"error": "group_type must be stage_race, double_header or omnium"}
+    members: list[Event] = []
+    for n in input_data.get("event_names") or []:
+        found = [e for e in events if e.name == n]
+        if len(found) != 1:
+            return {"error": f"expected exactly one event named {n!r}, found {len(found)}; known: {[e.name for e in events]}"}
+        members.append(found[0])
+    peak_name = input_data.get("peak_event_name")
+    peak_id = None
+    if peak_name:
+        peak = next((m for m in members if m.name == peak_name), None)
+        if peak is None:
+            return {"error": f"peak_event_name {peak_name!r} must be one of event_names"}
+        peak_id = peak.id
+    try:
+        gid, updated = set_group(
+            events, name=name, group_type=group_type, member_ids=[m.id for m in members],
+            peak_event_id=peak_id, group_id=existing,
+        )
+    except ValueError as exc:
+        return {"error": str(exc)}
+    store.save_events(slug, updated)
+    log.info("event group set", athlete=slug, group_name=name, members=len(members))
+    return {"updated": True, **_group_summary(updated, gid)}
+
+
+def _group_summary(events: list[Event], group_id: Any) -> dict[str, Any]:
+    g = next(g for g in groups(events) if g.id == group_id)
+    by_id = {e.id: e for e in events}
+    return {
+        "group_name": g.name,
+        "group_type": g.group_type,
+        "priority": g.priority,
+        "span": [g.first_date.isoformat(), g.last_date.isoformat()],
+        "peak": by_id[g.peak_event_id].name,
+        "races": [{"name": by_id[r].name, "date": by_id[r].event_date.isoformat()} for r in g.races],
+    }
+
+
+def _handle_get_event_groups(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    try:
+        events = store.load_events(slug)
+    except Exception as exc:  # noqa: BLE001
+        log.error("storage read failed", what='events', exc_info=True)
+        return storage_error("events", exc)
+    return {"groups": [_group_summary(events, g.id) for g in groups(events)]}
 
 
 def _handle_set_event_active_status(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
@@ -9903,6 +10003,12 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "export_zwo_workout": lambda input_data: _handle_export_zwo_workout(
+            input_data, store=store, slug=slug
+        ),
+        "set_event_group": lambda input_data: _handle_set_event_group(
+            input_data, store=store, slug=slug
+        ),
+        "get_event_groups": lambda input_data: _handle_get_event_groups(
             input_data, store=store, slug=slug
         ),
         "create_event": lambda input_data: _handle_create_event(

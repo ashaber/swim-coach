@@ -1071,7 +1071,26 @@ export function priorityEvent(events) {
   if (!events || events.length === 0) return null;
   const aEvents = events.filter((e) => e.priority === 'A');
   const pool = aEvents.length > 0 ? aEvents : events;
-  return [...pool].sort((a, b) => a.event_date.localeCompare(b.event_date))[0];
+  return effectiveTarget([...pool].sort((a, b) => a.event_date.localeCompare(b.event_date))[0], events);
+}
+
+/** The event group `event` belongs to (members share `group_id`; see engine event_groups.py):
+ * `{ id, name, type, races (by date), peak }`, peak = the member flagged `group_peak`, else the
+ * earliest race. null for an ungrouped event. */
+export function eventGroup(event, events) {
+  if (!event || !event.group_id) return null;
+  const races = (events || [])
+    .filter((e) => e.group_id === event.group_id)
+    .sort((a, b) => a.event_date.localeCompare(b.event_date));
+  if (races.length === 0) return null;
+  const peak = races.find((e) => e.group_peak) || races[0];
+  return { id: event.group_id, name: peak.group_name || peak.name, type: peak.group_type, races, peak };
+}
+
+/** The event planning aims at: the group's peak race for a grouped event, else the event. */
+export function effectiveTarget(event, events) {
+  const group = eventGroup(event, events);
+  return group ? group.peak : event;
 }
 
 /** The event the CURRENT macro plan is actually built toward, if one exists
@@ -1085,7 +1104,7 @@ export function priorityEvent(events) {
 export function macroTargetEvent(macro, events) {
   if (macro && macro.event_id) {
     const matched = (events || []).find((e) => e.id === macro.event_id);
-    if (matched) return matched;
+    if (matched) return effectiveTarget(matched, events);
   }
   return priorityEvent(events);
 }
