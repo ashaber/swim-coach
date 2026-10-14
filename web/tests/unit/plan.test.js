@@ -3,7 +3,7 @@ import {
   isoWeekMonday, formatDuration, formatDistance, formatPace, splitPurpose,
   classifySession, sessionDisplay, deriveSessionTitle, findSessionById,
   pickCurrentAndNextWeek, partitionPlanWeeks, sortedByIsoWeek, daysUntil,
-  priorityEvent, macroTargetEvent, currentBlockIndex, longSwimLadder, sessionsByDay,
+  priorityEvent, macroTargetEvent, eventGroup, effectiveTarget, currentBlockIndex, longSwimLadder, sessionsByDay,
   parseStructureBlocks, parseMainSetIntervals, renderStructuredWorkout,
   splitStructuredRationale, sessionZoneDistribution, formatZoneDistributionSummary,
   stepCoachingCue, ZONE_GLOSSARY, TERM_GLOSSARY,
@@ -1155,6 +1155,30 @@ describe('priorityEvent', () => {
   });
   it('returns null for no events', () => {
     expect(priorityEvent([])).toBeNull();
+  });
+});
+
+describe('event groups', () => {
+  const grp = { group_id: 'g', group_name: 'Peak Weekend', group_type: 'double_header' };
+  const sat = { id: 'sat', name: 'Sat', event_date: '2026-10-17', priority: 'A', ...grp };
+  const sun = { id: 'sun', name: 'Sun', event_date: '2026-10-18', priority: 'A', ...grp };
+  const solo = { id: 'solo', name: 'Solo', event_date: '2026-12-01', priority: 'B' };
+
+  it('ungrouped events have no group and are their own target', () => {
+    expect(eventGroup(solo, [solo, sat, sun])).toBeNull();
+    expect(effectiveTarget(solo, [solo])).toBe(solo);
+  });
+
+  it('peak defaults to the earliest race and the coach flag overrides it', () => {
+    expect(eventGroup(sun, [sun, sat]).peak.id).toBe('sat');
+    expect(eventGroup(sun, [sun, sat]).races.map((r) => r.id)).toEqual(['sat', 'sun']);
+    const flagged = [sat, { ...sun, group_peak: true }];
+    expect(effectiveTarget(sat, flagged).id).toBe('sun');
+  });
+
+  it('the macro target and priority event resolve to the group peak', () => {
+    expect(macroTargetEvent({ event_id: 'sun', blocks: [] }, [sat, sun, solo]).id).toBe('sat');
+    expect(priorityEvent([sun, sat, solo]).id).toBe('sat');
   });
 });
 
