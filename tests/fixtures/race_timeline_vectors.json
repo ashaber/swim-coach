@@ -51,7 +51,7 @@
    "day": "race",
    "offset_min": -180,
    "is_start": false,
-   "not_later_than": "08:00"
+   "not_later_than": "08:15"
   },
   {
    "id": "lunch-last-meal",
@@ -141,8 +141,8 @@
    "expect": {
     "wake-up": "06:00",
     "yoga-race": "06:45",
-    "breakfast": "08:00",
-    "shower-and-potty": "08:15",
+    "breakfast": "08:15",
+    "shower-and-potty": "08:30",
     "leave-home": "09:15",
     "warm-up": "10:15",
     "final-prep": "10:50",
@@ -161,8 +161,8 @@
    "expect": {
     "wake-up": "07:00",
     "yoga-race": "07:45",
-    "breakfast": "08:00",
-    "shower-and-potty": "08:15",
+    "breakfast": "08:15",
+    "shower-and-potty": "08:30",
     "lunch-last-meal": "12:15",
     "leave-home": "13:15",
     "arrive-register-pin-number": "13:30",
@@ -197,7 +197,7 @@
    "start_time": "12:00",
    "expect": {
     "wake-up": "06:45",
-    "breakfast": "08:00"
+    "breakfast": "08:15"
    },
    "absent": [
     "lunch-last-meal",
