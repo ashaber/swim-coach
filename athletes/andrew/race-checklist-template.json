@@ -338,7 +338,7 @@
       "day": "race",
       "offset_min": -180,
       "is_start": false,
-      "not_later_than": "08:00"
+      "not_later_than": "08:15"
     },
     {
       "id": "lunch-last-meal",

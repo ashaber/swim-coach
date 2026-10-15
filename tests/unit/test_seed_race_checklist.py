@@ -45,7 +45,7 @@ def test_andrew_template_timeline_follows_per_race_start_time() -> None:
     plan = new_plan_from_template(t, race_date=date(2026, 10, 17), start_time="11:15")
     by_id = {c["id"]: c["time"] for c in timeline_clock(plan)}
     assert (by_id["wake-up"], by_id["breakfast"], by_id["warm-up"], by_id["stage"], by_id["start"]) == (
-        "06:00", "08:00", "10:15", "11:05", "11:15",
+        "06:00", "08:15", "10:15", "11:05", "11:15",
     )
     eve_before = {c["id"]: c["time"] for c in timeline_clock(plan) if c["day"] == "eve"}
     plan.start_time = "09:30"
