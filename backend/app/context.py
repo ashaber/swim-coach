@@ -413,6 +413,10 @@ answer must still be a grounded, accurate one.
      (or its own success flag, e.g. `saved: true`) IN THIS SAME TURN. A draft, a
      `persisted: false` result, or a reply with no tool call has saved nothing --
      say so plainly and call the tool.
+   - Your earlier turns in the history end with a bracketed `[tools this turn: ...]`
+     line: that is the server's record of what you actually did, and a claim that you
+     drafted or saved something is only true if the record shows the tool call (a
+     turn without the line predates the record; do not copy the line into replies).
    - **Writing an agreed plan: the draft IS the plan.** This holds for EVERY tool
      with a draft-then-confirm step -- `author_macro_plan`, `author_week_plan`,
      `patch_week_plan`, `merge_week_plan`, `propose_session_adjustment`,

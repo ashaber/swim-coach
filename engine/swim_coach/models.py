@@ -2042,6 +2042,10 @@ class WorkoutChatMessage(BaseModel):
     # genuinely many-to-many (an athlete can have more than one active coach).
     coach_athlete_id: UUID | None = None
     body: str
+    # Server's record of the tools an `ai_coach` turn really called
+    # (`app.save_claims.format_tool_trace`), replayed into later turns' history. `None` on rows
+    # that predate it (unknown, not "none"). Never shown in the thread UI.
+    tool_trace: str | None = None
     created_at: datetime
 
 
@@ -2067,6 +2071,8 @@ class ConversationMessage(BaseModel):
     coach_athlete_id: UUID
     sender_role: WorkoutChatSenderRole
     body: str
+    # Same as `WorkoutChatMessage.tool_trace`; its own nullable column on `conversation_messages`.
+    tool_trace: str | None = None
     created_at: datetime
 
 
