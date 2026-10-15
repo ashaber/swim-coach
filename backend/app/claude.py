@@ -23,16 +23,28 @@ import json
 from typing import Any, Callable, Iterator
 
 import anthropic
+import httpx
 
 from app.config import Settings
 from app.logging_config import get_logger
-from app.save_claims import UNVERIFIED_SAVE_NOTICE, claims_a_save, write_succeeded
+from app.save_claims import (
+    DRAFT_TOOLS,
+    UNVERIFIED_DRAFT_NOTICE,
+    UNVERIFIED_SAVE_NOTICE,
+    claims_a_draft,
+    claims_a_save,
+    write_succeeded,
+)
 from app.tool_errors import internal_tool_error
 from app.tools import ToolHandler
 
 log = get_logger(__name__)
 
 MAX_TOOL_ITERATIONS = 5
+STREAM_DROPPED_MESSAGE = (
+    "The connection to the AI dropped mid-reply. Nothing after the last tool call "
+    "was saved. Please try again."
+)
 # max_tokens caps thinking + text COMBINED. On Sonnet 5 with adaptive
 # thinking, a hard question can spend >2048 tokens thinking alone, leaving
 # zero text (seen in prod 2026-07-15: coach_smoke prompts b/c returned empty
@@ -353,6 +365,17 @@ class ClaudeChat:
                         iteration_text.append(text)
                         yield {"type": "text", "text": text}
                     final = stream.get_final_message()
+            except (httpx.HTTPError, anthropic.APIConnectionError) as exc:
+                # Upstream dropped mid-reply (prod 2026-10-15: RemoteProtocolError, incomplete
+                # chunked read). Must end with a terminal event or the PWA spinner never stops.
+                log.error(
+                    "anthropic stream dropped",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                    iteration=iteration,
+                )
+                yield {"type": "error", "error": STREAM_DROPPED_MESSAGE}
+                return
             except anthropic.APIError as exc:
                 log.error("anthropic api error", error=str(exc), iteration=iteration)
                 yield {"type": "error", "error": str(exc)}
@@ -407,6 +430,16 @@ class ClaudeChat:
                         request_id=request_id,
                     )
                     yield {"type": "text", "text": UNVERIFIED_SAVE_NOTICE}
+                elif not DRAFT_TOOLS.intersection(tools_invoked) and claims_a_draft(
+                    "".join(iteration_text)
+                ):
+                    log.warn(
+                        "unverified_draft_claim",
+                        iteration=iteration,
+                        tools_invoked=list(tools_invoked),
+                        request_id=request_id,
+                    )
+                    yield {"type": "text", "text": UNVERIFIED_DRAFT_NOTICE}
                 yield {"type": "done", "stop_reason": final.stop_reason}
                 return
 

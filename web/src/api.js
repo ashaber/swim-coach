@@ -16,6 +16,8 @@
 import log from './log.js';
 import { feedSSEBuffer } from './sse.js';
 
+const TERMINAL_EVENT_TYPES = new Set(['done', 'refusal', 'error']);
+
 /**
  * Streams one /api/chat turn. Calls `onEvent(event)` for every parsed SSE
  * event in arrival order (see backend app/claude.py for the event union:
@@ -80,6 +82,7 @@ export async function streamChat({
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let terminal = false;
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -87,7 +90,14 @@ export async function streamChat({
       const chunk = decoder.decode(value, { stream: true });
       const fed = feedSSEBuffer(buffer, chunk);
       buffer = fed.remainder;
-      for (const event of fed.events) onEvent(event);
+      for (const event of fed.events) {
+        if (TERMINAL_EVENT_TYPES.has(event.type)) terminal = true;
+        onEvent(event);
+      }
+    }
+    if (!terminal) {
+      log.warn('chat.stream_closed_without_terminal_event', {});
+      onEvent({ type: 'error', error: 'Connection closed before the reply finished.' });
     }
   } catch (err) {
     if (err.name === 'AbortError') return;

@@ -28,6 +28,11 @@ UNVERIFIED_SAVE_NOTICE = (
     "Nothing on your plan changed; ask me to save it."
 )
 
+UNVERIFIED_DRAFT_NOTICE = (
+    "\n\n⚠️ Check: no draft was made in this reply. "
+    "Nothing was proposed to your plan."
+)
+
 # Tools whose success persists plan/profile data, mapped to the success key
 # their handler returns (each verified against the handler's return in
 # app/tools.py). A `persisted: True` result always counts (draft-only results
@@ -124,6 +129,31 @@ def claims_a_save(text: str) -> bool:
         if _HEDGE.search(sentence):
             continue
         return True
+    return False
+
+
+# Any tool that drafts or writes plan data. A turn that called none of these has
+# no draft to claim (prod 2026-10-15: "Draft is clean, no planning warnings"
+# with ZERO tool calls). `propose_adaptation` and `check_plan` draft/check
+# without persisting, so they are not in WRITE_TOOLS.
+DRAFT_TOOLS: frozenset[str] = frozenset(WRITE_TOOLS) | {"propose_adaptation", "check_plan"}
+
+# Tight on purpose: only phrasings that assert a draft/check result exists.
+_DRAFT_CLAIM = re.compile(
+    r"\bdraft\s+(?:is|looks)\s+(?:clean|ready|good)\b"
+    r"|\bno\s+planning\s+warnings?\b"
+    r"|\b(?:i'?ve|i’ve|i have|i)\s+(?:now\s+)?drafted\b"
+    r"|\b(?:confirm|say the word|say go)\b[^.]{0,30}\bi(?:'|’)ll\s+(?:persist|save|lock)\b",
+    re.IGNORECASE,
+)
+_DRAFT_HEDGE = re.compile(r"\bnot\b|n't\b|n’t\b|\bif\b|\bwhether\b|\bonce\b|\?", re.IGNORECASE)
+
+
+def claims_a_draft(text: str) -> bool:
+    """True if some sentence of `text` asserts a plan draft/check result exists."""
+    for sentence in _SENTENCE_SPLIT.split(text or ""):
+        if _DRAFT_CLAIM.search(sentence) and not _DRAFT_HEDGE.search(sentence):
+            return True
     return False
 
 
