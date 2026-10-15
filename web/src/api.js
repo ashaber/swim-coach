@@ -328,18 +328,18 @@ export async function submitLibraryReview({
 
 /** Asks a question about a specific PLANNED session (Plan tab's
  * `renderPlanSessionDetail` -- there is no Workout yet for a session that
- * hasn't been swum, so this links by `(date, sport)`, the same stability
- * fallback `Feedback.session_date`'s own doc comment explains: a raw
- * `Session.id` does NOT survive `replace_week_plan`'s full regenerate). */
+ * hasn't been swum). Sends the session `id` -- the only thing that tells two
+ * same-sport sessions on one day apart (warm-up + race) -- plus `(date,
+ * sport)`, the fallback after a full week regenerate gives sessions new ids). */
 export async function askAboutSession({
-  baseUrl, token, athlete = 'renee', date, sport, body,
+  baseUrl, token, athlete = 'renee', id, date, sport, body,
 }) {
   return apiRequest({
     baseUrl,
     token,
     path: `/api/feedback/questions?athlete=${encodeURIComponent(athlete)}`,
     method: 'POST',
-    body: { session_date: date, session_sport: sport, body },
+    body: { session_id: id, session_date: date, session_sport: sport, body },
   });
 }
 

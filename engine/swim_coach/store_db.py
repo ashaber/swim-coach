@@ -219,6 +219,17 @@ def row_to_threshold_record(row: dict[str, Any]) -> ThresholdRecord:
     return ThresholdRecord.model_validate(row["data"])
 
 
+_FEEDBACK_SESSION_ID_KEY = "session_id"
+
+
+def _context_with_session_id(feedback: Feedback) -> dict[str, Any]:
+    """`Feedback.session_id` rides in the `context` JSONB column (the table has no column for it
+    and a migration is applied by hand); `row_to_feedback` lifts it back out."""
+    if feedback.session_id is None:
+        return feedback.context
+    return {**feedback.context, _FEEDBACK_SESSION_ID_KEY: str(feedback.session_id)}
+
+
 def feedback_to_row(feedback: Feedback) -> dict[str, Any]:
     """Unlike the other `*_to_row` mappers, `feedback` has no `data` JSONB
     blob -- every Feedback field maps directly onto its own column (the
@@ -230,7 +241,7 @@ def feedback_to_row(feedback: Feedback) -> dict[str, Any]:
         "type": feedback.type,
         "source": feedback.source,
         "body": feedback.body,
-        "context": feedback.context,
+        "context": _context_with_session_id(feedback),
         "status": feedback.status,
         "created_at": feedback.created_at,
         "workout_id": feedback.workout_id,
@@ -245,6 +256,8 @@ def feedback_to_row(feedback: Feedback) -> dict[str, Any]:
 
 
 def row_to_feedback(row: dict[str, Any]) -> Feedback:
+    context = dict(row["context"] or {})
+    session_id = context.pop(_FEEDBACK_SESSION_ID_KEY, None)
     return Feedback(
         schema_version=1,
         id=row["id"],
@@ -252,12 +265,13 @@ def row_to_feedback(row: dict[str, Any]) -> Feedback:
         type=row["type"],
         source=row["source"],
         body=row["body"],
-        context=row["context"] or {},
+        context=context,
         status=row["status"],
         created_at=row["created_at"],
         workout_id=row["workout_id"],
         session_date=row["session_date"],
         session_sport=row["session_sport"],
+        session_id=session_id,
         needs_human_review=row["needs_human_review"],
         ai_provisional_answer=row["ai_provisional_answer"],
         coach_athlete_id=row["coach_athlete_id"],

@@ -511,6 +511,17 @@ describe('askAboutSession', () => {
     expect(result).toEqual({ ok: true, data: created });
   });
 
+  it('sends the session id alongside date/sport so two same-sport sessions on a day stay apart', async () => {
+    global.fetch = fakeFetch({ id: 'f2' });
+    await askAboutSession({
+      baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee',
+      id: 'sess-1', date: '2026-08-10', sport: 'bike', body: 'warm up how long?',
+    });
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body)).toEqual({
+      session_id: 'sess-1', session_date: '2026-08-10', session_sport: 'bike', body: 'warm up how long?',
+    });
+  });
+
   it('returns a normalized error on a non-2xx response', async () => {
     global.fetch = fakeFetch({ error: 'the coach could not answer that just now' }, { ok: false, status: 502 });
     const result = await askAboutSession({

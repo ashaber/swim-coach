@@ -1827,7 +1827,7 @@ def test_export_zwo_workout_unknown_session_is_a_clean_error(athletes_dir) -> No
     result = handlers["export_zwo_workout"]({"session_id": str(uuid.uuid4())})
 
     assert "error" in result
-    assert "no such session" in result["error"]
+    assert "no session with id" in result["error"]
 
 
 def test_export_zwo_workout_missing_ftp_watts_is_a_clean_error(athletes_dir) -> None:
@@ -4022,6 +4022,7 @@ def test_reschedule_session_moves_date_and_leaves_rest_of_week_untouched(athlete
     assert result == {
         "rescheduled": True,
         "iso_week": "2026-W28",
+        "session_id": result["session_id"],
         "sport": "strength",
         "previous_date": "2026-07-07",
         "new_date": "2026-07-12",
@@ -4427,8 +4428,8 @@ def test_replace_week_plan_session_override_sets_distance_and_reestimates_durati
     assert overridden["duration_min"] != original_duration
 
     # Every other session is untouched.
-    others_before = [s for s in baseline["sessions"] if s["date"] != target["date"] or s["sport"] != target["sport"]]
-    others_after = [s for s in result["sessions"] if s["date"] != target["date"] or s["sport"] != target["sport"]]
+    others_before = [{k: v for k, v in s.items() if k != "id"} for s in baseline["sessions"] if s["date"] != target["date"] or s["sport"] != target["sport"]]
+    others_after = [{k: v for k, v in s.items() if k != "id"} for s in result["sessions"] if s["date"] != target["date"] or s["sport"] != target["sport"]]
     assert others_before == others_after
 
 

@@ -49,6 +49,7 @@ from swim_coach.analytics import CARDIAC_DRIFT_FLAG_PCT
 from swim_coach.execution_score import intensity_match, workout_execution_score
 from swim_coach.load import session_load, session_target_load_au
 from swim_coach.models import Athlete, Session, Workout, WorkoutAnalytics, WorkoutQuality
+from swim_coach.session_lookup import candidates_on
 
 ADJACENT_DAY_WINDOW = 1
 # Coach judgment: a workout may belong to a session planned one day either side
@@ -70,6 +71,33 @@ SWOLF_DEGRADATION_FLAG_PCT = 5.0
 # pass" framing, inherited here).
 
 
+def _pick_among_same_day(workout: Workout, sessions: list[Session], others: list[Workout]) -> Session | None:
+    """A day with 2+ same-sport planned sessions (a warm-up ride + the race): never give one
+    session to two workouts. Drop sessions another workout already links to; if peers (same
+    sport+day workouts not yet linked) exist, pair them with the open sessions in order -- peers
+    by start time (else shorter first), sessions warm-up before race (`day_order`); a lone
+    workout takes the open session whose planned duration is closest to what was ridden."""
+    claimed = {w.planned_session_id for w in others if w.planned_session_id is not None}
+    open_sessions = [s for s in sessions if s.id not in claimed]
+    peers = [
+        w for w in others
+        if w.planned_session_id is None and w.sport == workout.sport and w.date == workout.date
+    ]
+    if not open_sessions:
+        return None
+    if not peers:
+        return min(open_sessions, key=lambda s: abs(s.duration_min - workout.duration_min))
+    group = _in_ride_order([workout, *peers])
+    rank = next(i for i, w in enumerate(group) if w.id == workout.id)
+    return open_sessions[rank] if rank < len(open_sessions) else None
+
+
+def _in_ride_order(workouts: list[Workout]) -> list[Workout]:
+    if all(w.started_at is not None for w in workouts):
+        return sorted(workouts, key=lambda w: (w.started_at.replace(tzinfo=None), str(w.id)))
+    return sorted(workouts, key=lambda w: (w.duration_min, str(w.id)))
+
+
 def match_workout_to_session(
     workout: Workout,
     sessions: list[Session],
@@ -87,7 +115,10 @@ def match_workout_to_session(
        outright -- even if some OTHER session in the list would also
        "coincidentally" match on sport+date.
     2. If no `planned_session_id` is set on the workout, fall back to the
-       first `session` in `sessions` with matching `sport` and `date`.
+       `session` with matching `sport` and `date`. When the day holds 2+ such
+       sessions (warm-up ride + race), `_pick_among_same_day` assigns by ride
+       order (start time, else duration) against warm-up-before-race session
+       order, never giving one session to two workouts.
     3. Still none: a +-1 day window on the same sport, accepted only when
        EXACTLY ONE unmatched session fits (an evening ride the calendar
        resolved a day off, or a session ridden a day early/late). "Unmatched"
@@ -112,11 +143,14 @@ def match_workout_to_session(
                 return session
         return None
 
-    for session in sessions:
-        if session.sport == workout.sport and session.date == workout.date:
-            return session
+    same_day = candidates_on(sessions, date=workout.date, sport=workout.sport)
+    if len(same_day) == 1:
+        return same_day[0]
 
     others = [w for w in (other_workouts or []) if w.id != workout.id]
+    if same_day:
+        return _pick_among_same_day(workout, same_day, others)
+
     claimed_ids = {w.planned_session_id for w in others if w.planned_session_id is not None}
     occupied = {(w.sport, w.date) for w in others}
     candidates = [

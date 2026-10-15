@@ -56,6 +56,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from pydantic import ValidationError
 from swim_coach.models import Feedback, Session
+from swim_coach.session_lookup import AmbiguousSession, SessionNotFound, find_in_store, find_session
 from swim_coach.store import StoreInterface
 
 from app.auth import (
@@ -234,22 +235,27 @@ async def update_feedback(
 
 
 def _find_planned_session(
-    store: StoreInterface, slug: str, session_date: date, session_sport: str
+    store: StoreInterface, slug: str, session_id: UUID | None, session_date: date | None, session_sport: str | None
 ) -> Session | None:
-    """Best-effort resolution of the actual current `Session` for a
-    session-linked question, for `render_focused_session` context only --
-    NEVER raises/404s on a miss (the caller still answers, just without that
-    one session's detail). Same lookup shape `quality.match_workout_to_session`
-    already uses for a Workout (match by `date`+`sport` within the relevant
-    week's sessions), adapted here for a bare (date, sport) pair since there's
-    no Workout to read a `planned_session_id` off of."""
+    """Best-effort resolution of the actual current `Session` for a session-linked question, for
+    `render_focused_session` context only -- NEVER 404s on a miss (the caller still answers, just
+    without that one session's detail). By `session_id` when it still exists (a regenerated week has
+    fresh ids); else by (date, sport) within that date's week -- an
+    AMBIGUOUS pair (two same-sport sessions that day) raises `AmbiguousSession` for the route to
+    turn into a 422 asking for `session_id`."""
+    if session_id is not None:
+        found = find_in_store(store, slug, session_id)
+        if found is not None:
+            return found
+    if session_date is None:
+        return None
     week = store.load_week(slug, iso_week_str(session_date))
     if week is None:
         return None
-    for session in week.sessions:
-        if session.date == session_date and session.sport == session_sport:
-            return session
-    return None
+    try:
+        return find_session(week.sessions, date=session_date, sport=session_sport)
+    except SessionNotFound:
+        return None
 
 
 @router.post("/api/feedback/questions")
@@ -285,6 +291,13 @@ async def ask_question(
     session_sport = payload.get("session_sport")
     if session_sport is not None and not isinstance(session_sport, str):
         raise HTTPException(status_code=422, detail="session_sport must be a string")
+    session_id_raw = payload.get("session_id")
+    session_id: UUID | None = None
+    if session_id_raw is not None:
+        try:
+            session_id = UUID(str(session_id_raw))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="session_id must be a UUID") from exc
     direct_to_coach = payload.get("direct_to_coach", False)
     if not isinstance(direct_to_coach, bool):
         raise HTTPException(status_code=422, detail="direct_to_coach must be a boolean")
@@ -296,16 +309,16 @@ async def ask_question(
     # codebase (see Feedback.session_date's docstring for why a raw
     # session_id can't be used instead).
     has_workout = workout_id is not None
-    has_session = session_date_raw is not None
+    has_session = session_date_raw is not None or session_id is not None
     if has_workout and has_session:
         raise HTTPException(
-            status_code=422, detail="give either workout_id or session_date, not both"
+            status_code=422, detail="give either workout_id or session_id/session_date, not both"
         )
     if not has_workout and not has_session:
         raise HTTPException(
-            status_code=422, detail="must link the question to either workout_id or session_date"
+            status_code=422, detail="must link the question to either workout_id or session_id/session_date"
         )
-    if has_session and session_sport is None:
+    if session_id is None and has_session and session_sport is None:
         raise HTTPException(
             status_code=422, detail="session_sport is required alongside session_date"
         )
@@ -333,8 +346,16 @@ async def ask_question(
     # without that one session's detail in context. See
     # `_find_planned_session`'s docstring.
     focused_session = None
-    if session_date is not None:
-        focused_session = _find_planned_session(store, athlete, session_date, session_sport)
+    if has_session:
+        try:
+            focused_session = _find_planned_session(store, athlete, session_id, session_date, session_sport)
+        except AmbiguousSession as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if focused_session is not None:
+        # Linked by id: record the session's own date/sport too, so older readers still resolve it.
+        session_date = session_date or focused_session.date
+        session_sport = session_sport or focused_session.sport
+        session_id = focused_session.id
 
     # Same sport-scope-filtering wiring as /api/chat -- see that route's
     # own comment and app.context.filter_files_by_sport_scope. Passes
@@ -414,6 +435,7 @@ async def ask_question(
         workout_id=UUID(str(focused_workout.id)) if focused_workout is not None else None,
         session_date=session_date,
         session_sport=session_sport,
+        session_id=session_id,
         needs_human_review=direct_to_coach,
         ai_provisional_answer=provisional,
     )
