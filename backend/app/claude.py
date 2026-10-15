@@ -27,7 +27,14 @@ import httpx
 
 from app.config import Settings
 from app.logging_config import get_logger
-from app.save_claims import UNVERIFIED_SAVE_NOTICE, claims_a_save, write_succeeded
+from app.save_claims import (
+    DRAFT_TOOLS,
+    UNVERIFIED_DRAFT_NOTICE,
+    UNVERIFIED_SAVE_NOTICE,
+    claims_a_draft,
+    claims_a_save,
+    write_succeeded,
+)
 from app.tool_errors import internal_tool_error
 from app.tools import ToolHandler
 
@@ -423,6 +430,16 @@ class ClaudeChat:
                         request_id=request_id,
                     )
                     yield {"type": "text", "text": UNVERIFIED_SAVE_NOTICE}
+                elif not DRAFT_TOOLS.intersection(tools_invoked) and claims_a_draft(
+                    "".join(iteration_text)
+                ):
+                    log.warn(
+                        "unverified_draft_claim",
+                        iteration=iteration,
+                        tools_invoked=list(tools_invoked),
+                        request_id=request_id,
+                    )
+                    yield {"type": "text", "text": UNVERIFIED_DRAFT_NOTICE}
                 yield {"type": "done", "stop_reason": final.stop_reason}
                 return
 
