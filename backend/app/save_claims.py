@@ -167,3 +167,46 @@ def write_succeeded(tool: str, result: Any) -> bool:
     if tool == "update_athlete_profile" and result.get("saved_as_notes"):
         return True
     return key != "persisted" and result.get(key) is True
+
+
+_TRACE_ERROR_CHARS = 60
+_TRACE_MAX_ENTRIES = 12
+
+
+def _trace_entry(name: str, tool_input: Any, result: Any) -> str:
+    """One compact trace item: the tool name plus, for plan/profile writes, the outcome
+    essentials (draft id + saved / not saved). Never includes input or result bodies."""
+    if not isinstance(result, dict):
+        return name
+    if "error" in result:
+        return f"{name} → error: {str(result['error'])[:_TRACE_ERROR_CHARS]}"
+    if name not in WRITE_TOOLS:
+        return name
+    draft_id = result.get("draft_id")
+    if draft_id is None and isinstance(tool_input, dict):
+        draft_id = tool_input.get("draft_id")
+    draft = f"draft {str(draft_id)[:8]} " if draft_id else ""
+    if write_succeeded(name, result):
+        return f"{name} → {draft}SAVED"
+    if result.get("persisted") is False:
+        return f"{name} → {draft}NOT saved"
+    return name
+
+
+def format_tool_trace(calls: list[tuple[str, Any, Any]]) -> str:
+    """The server's record of a coach turn's tool calls, `(name, input, result)` in order, as one
+    short deterministic line ("none" when no tool ran). Stored with the reply and replayed into
+    later turns' history so the model can't mistake its own narration for evidence a tool ran."""
+    if not calls:
+        return "none"
+    entries: list[tuple[str, int]] = []
+    for name, tool_input, result in calls:
+        entry = _trace_entry(name, tool_input, result)
+        if entries and entries[-1][0] == entry:
+            entries[-1] = (entry, entries[-1][1] + 1)
+        else:
+            entries.append((entry, 1))
+    parts = [e if n == 1 else f"{e} ×{n}" for e, n in entries]
+    if len(parts) > _TRACE_MAX_ENTRIES:
+        parts = parts[:_TRACE_MAX_ENTRIES] + [f"+{len(parts) - _TRACE_MAX_ENTRIES} more"]
+    return "; ".join(parts)

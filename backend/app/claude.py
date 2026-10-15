@@ -29,6 +29,7 @@ from app.config import Settings
 from app.logging_config import get_logger
 from app.save_claims import (
     DRAFT_TOOLS,
+    format_tool_trace,
     UNVERIFIED_DRAFT_NOTICE,
     UNVERIFIED_SAVE_NOTICE,
     claims_a_draft,
@@ -344,6 +345,7 @@ class ClaudeChat:
         messages = list(messages)
         tool_names_available = [t.get("name") for t in tools] if tools else []
         tools_invoked: list[str] = []
+        trace_calls: list[tuple[str, Any, Any]] = []  # (name, input, result) for the tool_trace event
         turn_wrote = False  # a WRITE_TOOLS call returned its success shape this turn
         tool_error_count = 0  # the "failure tax": every errored tool call costs another paid API call
 
@@ -440,6 +442,7 @@ class ClaudeChat:
                         request_id=request_id,
                     )
                     yield {"type": "text", "text": UNVERIFIED_DRAFT_NOTICE}
+                yield {"type": "tool_trace", "trace": format_tool_trace(trace_calls)}
                 yield {"type": "done", "stop_reason": final.stop_reason}
                 return
 
@@ -523,6 +526,7 @@ class ClaudeChat:
                     error_code=(result.get("code") if isinstance(result, dict) else None),
                     persisted=(result.get("persisted") if isinstance(result, dict) else None),
                 )
+                trace_calls.append((block.name, block.input, result))
                 if isinstance(result, dict) and "error" in result:
                     tool_error_count += 1
                 if write_succeeded(block.name, result):

@@ -116,6 +116,8 @@ def _history_from_workout_chat(
     for msg in messages:
         if msg.sender_role == "ai_coach":
             role, text = "assistant", msg.body
+            if msg.tool_trace is not None:  # legacy turns (None) get no line: unknown != none
+                text = f"{text}\n\n[tools this turn: {msg.tool_trace}]"
         elif msg.sender_role == "coach":
             role, text = "user", f"[Your human coach]: {msg.body}"
         else:
@@ -129,7 +131,8 @@ def _history_from_workout_chat(
 
 
 def _append_workout_chat_message(
-    store: StoreInterface, athlete: str, workout_id: uuid.UUID, sender_role: str, body: str
+    store: StoreInterface, athlete: str, workout_id: uuid.UUID, sender_role: str, body: str,
+    tool_trace: str | None = None,
 ) -> None:
     """Appends one message to `workout_id`'s chat thread and saves -- reloading the workout
     FRESH right before writing (not reusing whatever was loaded at request start), so a human
@@ -144,7 +147,7 @@ def _append_workout_chat_message(
             return
         workout.chat_messages.append(
             WorkoutChatMessage(
-                id=uuid.uuid4(), sender_role=sender_role, body=body,
+                id=uuid.uuid4(), sender_role=sender_role, body=body, tool_trace=tool_trace,
                 created_at=datetime.now(timezone.utc),
             )
         )
@@ -170,13 +173,14 @@ def _parse_sse(line: str) -> dict[str, Any] | None:
         return None
 
 
-ThreadAppend = Callable[[str, str], None]
-"""`(sender_role, body) -> None`: appends one message to whichever three-party thread (a
-workout's, or the athlete<->coach conversation) the current turn belongs to."""
+ThreadAppend = Callable[..., None]
+"""`(sender_role, body, tool_trace=None) -> None`: appends one message to whichever three-party
+thread (a workout's, or the athlete<->coach conversation) the current turn belongs to."""
 
 
 def _append_conversation_message(
-    store: StoreInterface, athlete: str, coach_athlete_id: uuid.UUID, sender_role: str, body: str
+    store: StoreInterface, athlete: str, coach_athlete_id: uuid.UUID, sender_role: str, body: str,
+    tool_trace: str | None = None,
 ) -> None:
     """Appends one message to the athlete<->coach conversation thread. The conversation table is
     append-only (a plain INSERT / line append), so unlike `_append_workout_chat_message` there is
@@ -189,7 +193,7 @@ def _append_conversation_message(
             ConversationMessage(
                 id=uuid.uuid4(), athlete_id=store.load_athlete(athlete).id,
                 coach_athlete_id=coach_athlete_id, sender_role=sender_role, body=body,
-                created_at=datetime.now(timezone.utc),
+                tool_trace=tool_trace, created_at=datetime.now(timezone.utc),
             ),
         )
     except Exception:  # noqa: BLE001
@@ -227,6 +231,7 @@ def _persisting_thread_stream(
     right away (and in order) rather than only once the AI's reply has finished streaming."""
     reply_text_parts: list[str] = []
     ended_cleanly = False
+    tool_trace: str | None = None
     if user_first:
         append("athlete", message)
     for line in inner:
@@ -234,6 +239,8 @@ def _persisting_thread_stream(
         if event is not None:
             if event.get("type") == "text":
                 reply_text_parts.append(event.get("text") or "")
+            elif event.get("type") == "tool_trace":
+                tool_trace = event.get("trace")
             elif event.get("type") == "done":
                 ended_cleanly = True
         yield line
@@ -241,7 +248,7 @@ def _persisting_thread_stream(
         append("athlete", message)
     reply_text = "".join(reply_text_parts).strip()
     if ended_cleanly and reply_text:
-        append("ai_coach", reply_text)
+        append("ai_coach", reply_text, tool_trace)
 
 
 @router.post("/api/chat")

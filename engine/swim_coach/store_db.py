@@ -316,6 +316,7 @@ def row_to_conversation_message(row: dict[str, Any]) -> ConversationMessage:
         coach_athlete_id=row["coach_athlete_id"],
         sender_role=row["sender_role"],
         body=row["body"],
+        tool_trace=row.get("tool_trace"),
         created_at=row["created_at"],
     )
 
@@ -1186,16 +1187,27 @@ class DbStore(StoreInterface):
     def append_conversation_message(self, slug: str, message: ConversationMessage) -> None:
         with self._connect() as conn, conn.cursor() as cur:
             athlete_id = self._athlete_id(cur, slug)  # raises FileNotFoundError if unknown
+            base = (
+                message.id, athlete_id, message.coach_athlete_id,
+                message.sender_role, message.body, message.created_at,
+            )
+            if message.tool_trace is None:  # the pre-migration column set keeps working
+                cur.execute(
+                    """
+                    insert into conversation_messages
+                        (id, athlete_id, coach_athlete_id, sender_role, body, created_at)
+                    values (%s, %s, %s, %s, %s, %s)
+                    """,
+                    base,
+                )
+                return
             cur.execute(
                 """
                 insert into conversation_messages
-                    (id, athlete_id, coach_athlete_id, sender_role, body, created_at)
-                values (%s, %s, %s, %s, %s, %s)
+                    (id, athlete_id, coach_athlete_id, sender_role, body, created_at, tool_trace)
+                values (%s, %s, %s, %s, %s, %s, %s)
                 """,
-                (
-                    message.id, athlete_id, message.coach_athlete_id,
-                    message.sender_role, message.body, message.created_at,
-                ),
+                (*base, message.tool_trace),
             )
 
     def list_conversation_messages(
