@@ -203,11 +203,27 @@ def test_bike_fields_own_the_new_blocks():
 
 
 @pytest.mark.parametrize("kind", ["race", "free_ride", "workout", "warmup"])
-def test_bike_analyzer_fills_blocks_for_every_kind(kind):
-    ctx = AnalysisContext(kind=kind, series=fx.build_series())
-    a = _workout().analyze(ctx)
+def test_bike_analyzer_fills_dynamics_for_every_kind(kind):
+    a = _workout().analyze(AnalysisContext(kind=kind, series=fx.build_series()))
     assert a.mtb_dynamics is not None and a.mtb_dynamics.total_grit == _device().total_grit
+
+
+@pytest.mark.parametrize("kind", ["race", "free_ride", "workout"])  # workout with no session = unstructured
+def test_course_sectors_for_races_and_unstructured_rides(kind):
+    a = _workout().analyze(AnalysisContext(kind=kind, series=fx.build_series()))
     assert a.course_sectors is not None
+
+
+def test_course_sectors_skip_structured_workouts_whose_laps_are_reps():
+    from swim_coach.models import Session
+
+    session = Session(
+        id=uuid.uuid4(), athlete_id=uuid.uuid4(), date=date(2026, 10, 4), sport="bike", source="ai_coach",
+        duration_min=60.0, distance_m=0, intensity={"zone": "Z4"}, purpose="intervals",
+        structured={"schema_version": 1, "items": [{"kind": "step", "role": "interval", "label": "rep", "duration_kind": "time_s", "duration_s": 300}]},
+    )
+    a = _workout().analyze(AnalysisContext(kind="workout", session=session, series=fx.build_series()))
+    assert a.course_sectors is None and a.mtb_dynamics is not None
 
 
 def test_non_bike_workout_gets_no_blocks():

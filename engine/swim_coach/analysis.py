@@ -215,10 +215,16 @@ class BikeAnalyzer(_CoachViewMixin):
 
     def analyze(self, workout: Workout, ctx: AnalysisContext) -> WorkoutAnalytics:
         analytics = self._analyze_by_kind(workout, ctx)
-        # Device dynamics and lap sectors are descriptive, so every kind gets them when the data is there.
+        # Device dynamics are descriptive, so every kind gets them when the data is there. Course
+        # sectors compare repeated laps of a course: a race or an unstructured ride, never a
+        # structured workout whose laps are its reps.
         found = {
             "mtb_dynamics": build_mtb_dynamics(workout, ctx.series),
-            "course_sectors": build_course_sectors(workout, ctx.series),
+            "course_sectors": (
+                build_course_sectors(workout, ctx.series)
+                if ctx.kind == "race" or self._reads_as_free_ride(ctx)
+                else None
+            ),
         }
         return analytics.model_copy(update={k: v for k, v in found.items() if v is not None})
 
