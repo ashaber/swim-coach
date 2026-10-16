@@ -423,6 +423,26 @@ def _fit_value(frame: "fitdecode.FitDataMessage", name: str) -> object | None:
     return frame.get_value(name, fallback=None)
 
 
+RECOVERY_TRAINING_SUB_SPORTS: frozenset[str] = frozenset({"yoga", "pilates", "flexibility_training", "breathing"})
+"""FIT `sub_sport` values under `session.sport == "training"` that are mobility/recovery work,
+not lifting: they map to this engine's `recovery` Sport (the Sport a planned yoga session has,
+see `models.Session` kind "yoga"), so they match planned yoga and carry no strength load.
+
+Names are the FIT SDK `sub_sport` enum entries fitdecode emits. Coach judgment: yoga, pilates,
+stretching and breathing sessions are recovery sessions in this system's taxonomy. Strength
+(`strength_training`) and everything else under "training" (`cardio_training`, `hiit`, ...)
+stay `strength`."""
+
+
+def is_recovery_training_detail(sport_detail: str | None) -> bool:
+    """Whether a stored `sport_detail` (`"training/yoga"`) is a recovery-type training session.
+    The backfill's selector; shares `RECOVERY_TRAINING_SUB_SPORTS` with `_fit_sport`."""
+    if not sport_detail or "/" not in sport_detail:
+        return False
+    head, _, sub = sport_detail.lower().partition("/")
+    return head == "training" and sub in RECOVERY_TRAINING_SUB_SPORTS
+
+
 def _fit_sport(session_sport: object | None, session_sub_sport: object | None, warnings: list[str]) -> Sport:
     """Map a FIT session's sport/sub_sport to this engine's Sport values.
 
@@ -433,7 +453,9 @@ def _fit_sport(session_sport: object | None, session_sub_sport: object | None, w
     warning since both are unambiguous:
       - Garmin encodes a logged strength workout as session.sport=="training"
         (sub_sport typically "strength_training", surfaces in intervals.icu
-        as "WeightTraining") -- maps to this engine's own "strength" Sport.
+        as "WeightTraining") -- maps to this engine's own "strength" Sport,
+        EXCEPT the mobility sub_sports in `RECOVERY_TRAINING_SUB_SPORTS`
+        (yoga, pilates, ...), which map to "recovery".
       - engine/cycling-coach Part C: session.sport=="cycling" (road/mountain/
         gravel/cyclocross all share this same raw FIT sport, distinguished
         only by sub_sport -- see `_is_cycling_sport`, which this reuses) maps
@@ -460,6 +482,8 @@ def _fit_sport(session_sport: object | None, session_sub_sport: object | None, w
     session_sport_lower = str(session_sport).lower()
     if "swim" in session_sport_lower:
         return "swim_pool"
+    if session_sport_lower == "training" and str(session_sub_sport or "").lower() in RECOVERY_TRAINING_SUB_SPORTS:
+        return "recovery"
     if session_sport_lower == "training" or "strength" in str(session_sub_sport or "").lower():
         return "strength"
     if _is_cycling_sport(session_sport):

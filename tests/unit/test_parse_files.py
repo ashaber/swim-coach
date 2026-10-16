@@ -198,6 +198,20 @@ def test_fit_sport_training_no_sub_sport_maps_to_strength():
     assert warnings == []
 
 
+@pytest.mark.parametrize("sub_sport", ["yoga", "pilates", "flexibility_training", "breathing"])
+def test_fit_sport_training_mobility_sub_sports_map_to_recovery(sub_sport):
+    # Garmin logs yoga/pilates/stretching as session.sport="training" too; they are
+    # recovery sessions (match planned yoga, carry no lifting load), never strength.
+    warnings: list[str] = []
+    assert _fit_sport("training", sub_sport, warnings) == "recovery"
+    assert warnings == []
+
+
+@pytest.mark.parametrize("sub_sport", ["strength_training", "cardio_training", "hiit", None])
+def test_fit_sport_training_other_sub_sports_stay_strength(sub_sport):
+    assert _fit_sport("training", sub_sport, []) == "strength"
+
+
 def test_fit_sport_cycling_maps_to_bike():
     # engine/cycling-coach Part 1: a real cycling FIT activity must classify
     # as the first-class, plannable "bike" Sport, not the generic

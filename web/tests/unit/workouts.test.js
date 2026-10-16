@@ -8,6 +8,11 @@ import {
 } from '../../src/workouts.js';
 
 describe('sportLabel', () => {
+  it('shows the sub-sport for a recovery workout (synced yoga)', () => {
+    expect(sportLabel('recovery', 'training/yoga')).toBe('Recovery · Yoga');
+    expect(sportLabel('recovery')).toBe('Recovery');
+  });
+
   it('labels every known sport including cross_train', () => {
     expect(sportLabel('swim_pool')).toBe('Pool swim');
     expect(sportLabel('swim_ow')).toBe('Open water swim');

@@ -101,7 +101,9 @@ export const SPORTS = {
     label: 'Recovery',
     category: 'recovery',
     hasPlannedDistance: false,
-    hasSportDetail: false,
+    // A synced yoga/pilates/stretching workout is stored as recovery with sport_detail
+    // "training/yoga" (engine parse_files.RECOVERY_TRAINING_SUB_SPORTS): "Recovery · Yoga".
+    hasSportDetail: true,
     colorVar: '--c-recovery',
     // No recovery-specific Garmin structured-workout export exists.
     canPushToGarmin: false,
