@@ -30,7 +30,9 @@ from typing import TYPE_CHECKING, Protocol, Sequence
 from swim_coach.analytics import compute_analytics
 from swim_coach.models import Athlete, Event, Session, SessionKind, Workout, WorkoutAnalytics
 from swim_coach.bike_coach_view import shape_ride_view
+from swim_coach.course_sectors import build_course_sectors
 from swim_coach.free_ride import FREE_READ_KINDS, read_free_ride
+from swim_coach.mtb_dynamics import build_mtb_dynamics
 from swim_coach.power_curve import BEST_WINDOWS_DAYS, annotate_bests
 
 if TYPE_CHECKING:
@@ -76,7 +78,7 @@ SWIM_FIELDS: frozenset[str] = frozenset(
     }
 )
 BIKE_FIELDS: frozenset[str] = frozenset(
-    {"intervals", "avg_power_w", "normalized_power_w", "power_curve", "free_ride"}
+    {"intervals", "avg_power_w", "normalized_power_w", "power_curve", "free_ride", "mtb_dynamics", "course_sectors"}
 )
 
 
@@ -212,6 +214,21 @@ class BikeAnalyzer(_CoachViewMixin):
         return shape_ride_view(out, analytics)
 
     def analyze(self, workout: Workout, ctx: AnalysisContext) -> WorkoutAnalytics:
+        analytics = self._analyze_by_kind(workout, ctx)
+        # Device dynamics are descriptive, so every kind gets them when the data is there. Course
+        # sectors compare repeated laps of a course: a race or an unstructured ride, never a
+        # structured workout whose laps are its reps.
+        found = {
+            "mtb_dynamics": build_mtb_dynamics(workout, ctx.series),
+            "course_sectors": (
+                build_course_sectors(workout, ctx.series)
+                if ctx.kind == "race" or self._reads_as_free_ride(ctx)
+                else None
+            ),
+        }
+        return analytics.model_copy(update={k: v for k, v in found.items() if v is not None})
+
+    def _analyze_by_kind(self, workout: Workout, ctx: AnalysisContext) -> WorkoutAnalytics:
         if ctx.kind in UNSCORED_KINDS:
             return annotate_power_curve_bests(workout, _base_analytics(workout, ctx, with_intervals=False), ctx)
         athlete, session = ctx.athlete, ctx.session

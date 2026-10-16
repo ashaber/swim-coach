@@ -28,7 +28,7 @@ import {
   LIBRARY_SORTS, DEFAULT_LIBRARY_SORT, sortLibraryFiles, fileAddedDate, isNewFile, formatAddedLabel,
 } from './librarySort.js';
 import { expandStructure, actualPoints, sessionForWorkout, shapeChartGeometry } from './shape.js';
-import { buildFreeRide, buildRawAnalysis, effectiveKind, kindLabel, KIND_OPTIONS } from './analysis.js';
+import { buildCourseSectors, buildFreeRide, buildMtbDynamics, buildRawAnalysis, effectiveKind, kindLabel, KIND_OPTIONS } from './analysis.js';
 import { sportHasPlannedDistance, sportCanPushToGarmin, sportUsesPace } from './sports.js';
 import {
   sportLabel, sourceBadge, formatWorkoutDistance, formatAnalyticsLine,
@@ -3185,6 +3185,29 @@ function renderFreeRideSection(workout) {
     </section>`;
 }
 
+/** "Mountain bike dynamics" (Garmin Grit / Flow / jumps, per lap) and the lap-over-lap "Course
+ * sectors" table. Each shows only when the ride has that analytics block. */
+function renderMtbSections(workout) {
+  const m = buildMtbDynamics(workout);
+  const cs = buildCourseSectors(workout);
+  const mtb = m ? `
+    <section class="detail-section mtb-dynamics">
+      <h4>Mountain bike dynamics</h4>
+      ${m.summary.length ? `<p>${m.summary.map(esc).join(' · ')}</p>` : ''}
+      <p class="sub">${esc(m.note)}</p>
+      ${m.laps ? renderRawTable(m.laps.columns, m.laps.rows) : ''}
+    </section>` : '';
+  const sectors = cs ? `
+    <section class="detail-section course-sectors">
+      <h4>Course sectors</h4>
+      <p>${esc(cs.trend)}</p>
+      <p class="sub">${esc(cs.note)}</p>
+      ${renderRawTable(cs.laps.columns, cs.laps.rows)}
+      ${cs.losses ? `<h5>Where the time went</h5>${renderRawTable(cs.losses.columns, cs.losses.rows)}` : ''}
+    </section>` : '';
+  return mtb + sectors;
+}
+
 function renderRawAnalysisSection(workout, pacing, open) {
   const model = buildRawAnalysis(workout, pacing);
   if (!model) return '';
@@ -3387,6 +3410,7 @@ export function renderWorkoutDetail(workout, {
     ${editable ? renderRpeEditSection(workout, rpeEdit) : ''}
     ${renderRaceDebriefSection(workout, raceDebriefs)}
     ${renderFreeRideSection(workout)}
+    ${renderMtbSections(workout)}
     ${renderDetailAnalytics(workout.analytics)}
     ${renderIntervalsSection(workout.analytics?.intervals)}
     ${renderRaceAnalysisSection(workout, pacing)}

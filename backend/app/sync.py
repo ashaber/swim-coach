@@ -398,6 +398,7 @@ def _ingest_activity(
             external_id=f"intervals:{activity_id}",
             sport_detail=draft.sport_detail,
             kind=draft.kind,
+            device_dynamics=draft.device_dynamics,
         )
         workout = attach_planned_session(workout, store=store, slug=slug, series=draft.series)
         store.save_workout(slug, workout)

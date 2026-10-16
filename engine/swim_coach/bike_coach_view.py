@@ -143,6 +143,90 @@ def free_ride_coach_view(fr: dict) -> dict:
     return {k: v for k, v in out.items() if v not in (None, "", [], {})}
 
 
+MTB_COACH_NOTE = (
+    "Garmin device metrics (proprietary, read-only): Grit = how difficult the ride was (elevation, gradient, "
+    "rapid direction changes); Flow = how consistently speed/smoothness is held through turns, so lower Flow "
+    "is smoother. Grit is a course-difficulty number: compare laps on the same course, never across courses. "
+    "Lap Flow is the mean of the lap's non-zero Flow samples, so it reads higher than the session avg_flow "
+    "(whose definition Garmin does not publish): compare laps with each other. No thresholds exist; read the trend."
+)
+COURSE_SECTORS_COACH_NOTE = (
+    "Each similar-distance lap is cut into equal-distance sectors (Coach judgment: 8), so sector N lines up "
+    "across laps without GPS. The data cannot name course features: ask the rider which feature each top "
+    "loss sector is (run-up, off-camber, sand, climb) before explaining it. Flow worsening while power holds "
+    "reads as technique slipping under fatigue, not fitness."
+)
+COACH_TOP_JUMPS = 3
+
+
+def _lap_line(lap: dict) -> str:
+    bits = [f"Lap {lap['lap']}: {_clock(lap['duration_s'])}"]
+    if lap.get("avg_power_w") is not None:
+        bits.append(f"{lap['avg_power_w']:.0f}W")
+    if lap.get("grit") is not None:
+        bits.append(f"grit {lap['grit']}")
+    if lap.get("avg_flow") is not None:
+        bits.append(f"flow {lap['avg_flow']}")
+    if lap.get("jumps"):
+        bits.append(f"{lap['jumps']} jumps")
+    return ", ".join(bits)
+
+
+def mtb_coach_view(m: dict) -> dict:
+    """Compact MTB-dynamics block: totals, one line per lap, a jumps summary. `m` is the dumped
+    `MtbDynamics`."""
+    j = m.get("jumps") or {}
+    jumps = None
+    if j:
+        parts = [f"{j['count']} jumps"]
+        for key, label, unit in (("max_height_m", "max height", "m"), ("max_hang_time_s", "max hang time", "s"),
+                                 ("max_distance_m", "longest", "m"), ("best_score", "best score", "")):
+            if j.get(key) is not None:
+                parts.append(f"{label} {j[key]}{unit}")
+        jumps = ", ".join(parts)
+    out = {
+        "coach_note": MTB_COACH_NOTE,
+        "total_grit": m.get("total_grit"),
+        "avg_flow": m.get("avg_flow"),
+        "jump_count": m.get("jump_count"),
+        "jumps": jumps,
+        "laps": [_lap_line(lap) for lap in m.get("laps") or []],
+    }
+    return {k: v for k, v in out.items() if v not in (None, "", [], {})}
+
+
+def course_sectors_coach_view(cs: dict) -> dict:
+    """Lap trend + the top loss sectors (the full sector table stays in the stored analytics)."""
+    fade = cs.get("fade") or {}
+    trend = [f"time {fade['time_change_pct']:+.1f}% first to last lap"]
+    if fade.get("power_change_pct") is not None:
+        trend.append(f"power {fade['power_change_pct']:+.1f}%")
+    if fade.get("flow_change") is not None:
+        trend.append(f"flow {fade['flow_change']:+.2f} ({fade.get('flow_slope_per_lap', 0):+.2f}/lap)")
+    laps = [
+        f"Lap {lap['lap']}: {_clock(lap['time_s'])}"
+        + (f" (+{lap['time_vs_best_s']:.1f}s vs best)" if lap["time_vs_best_s"] else " (best)")
+        + (f", flow {lap['avg_flow']}" if lap.get("avg_flow") is not None else "")
+        for lap in cs.get("laps") or []
+    ]
+    by_n = {s["sector"]: s for s in cs.get("sectors") or []}
+    top = []
+    for n in cs.get("top_loss_sectors") or []:
+        s = by_n[n]
+        line = f"Sector {n} of {cs['sector_count']}: loses {s['total_loss_s']:.1f}s total ({s['mean_loss_s']:.1f}s per lap) vs best lap"
+        if s.get("flow_vs_best") is not None:
+            line += f", flow {s['flow_vs_best']:+.2f} vs best"
+        if s.get("avg_grit") is not None:
+            line += f", grit {s['avg_grit']}"
+        top.append(line)
+    return {
+        "coach_note": COURSE_SECTORS_COACH_NOTE,
+        "lap_trend": ", ".join(trend),
+        "laps": laps,
+        "top_loss_sectors": top,
+    }
+
+
 def shape_ride_view(out: dict, analytics: WorkoutAnalytics) -> dict:
     """`out` is the field-restricted dump; returns it with the compact curve first and the
     intervals reordered and slimmed; a free ride's compact `free_ride` block leads everything.
@@ -153,6 +237,14 @@ def shape_ride_view(out: dict, analytics: WorkoutAnalytics) -> dict:
         out["intervals"] = _shape_intervals(out["intervals"])
     if "power_curve" in out:
         out = {"power_curve": out.pop("power_curve"), **out}
+    dynamics = {}
+    if out.get("mtb_dynamics"):
+        dynamics["mtb_dynamics"] = mtb_coach_view(out.pop("mtb_dynamics"))
+    if out.get("course_sectors"):
+        dynamics["course_sectors"] = course_sectors_coach_view(out.pop("course_sectors"))
+    out.pop("mtb_dynamics", None)
+    out.pop("course_sectors", None)
+    out = {**dynamics, **out}
     if out.get("free_ride"):
         out.pop("cardiac_drift_pct", None)  # no whole-ride drift verdict; the block carries steady-stretch drift
         out = {"free_ride": free_ride_coach_view(out.pop("free_ride")), **out}

@@ -27,6 +27,8 @@ from pydantic import BaseModel, Field
 from swim_coach.analytics import GAP_THRESHOLD_S
 from swim_coach.analytics import stationary_pauses as _stationary_pauses
 from swim_coach.models import (
+    DeviceDynamics,
+    JumpRecord,
     SessionKind,
     Sport,
     Workout,
@@ -97,6 +99,8 @@ class WorkoutDraft(BaseModel):
     started_at: datetime | None = None
     # Mirrors Workout.kind (derived, see swim_coach.analysis); stamped by app.enrich.enrich_draft.
     kind: SessionKind | None = None
+    # Garmin MTB dynamics totals + jumps from the FIT session/jump messages (parse_fit; None otherwise).
+    device_dynamics: DeviceDynamics | None = None
 
     def to_workout(self, *, athlete_id: UUID, workout_id: UUID | None = None, raw_ref: str | None = None) -> Workout:
         """The draft as a `Workout` (fresh id unless given); `raw_ref` defaults to the draft's own."""
@@ -123,6 +127,7 @@ class WorkoutDraft(BaseModel):
             sport_detail=self.sport_detail,
             started_at=self.started_at,
             kind=self.kind,
+            device_dynamics=self.device_dynamics,
         )
 
 
@@ -423,6 +428,26 @@ def _fit_value(frame: "fitdecode.FitDataMessage", name: str) -> object | None:
     return frame.get_value(name, fallback=None)
 
 
+RECOVERY_TRAINING_SUB_SPORTS: frozenset[str] = frozenset({"yoga", "pilates", "flexibility_training", "breathing"})
+"""FIT `sub_sport` values under `session.sport == "training"` that are mobility/recovery work,
+not lifting: they map to this engine's `recovery` Sport (the Sport a planned yoga session has,
+see `models.Session` kind "yoga"), so they match planned yoga and carry no strength load.
+
+Names are the FIT SDK `sub_sport` enum entries fitdecode emits. Coach judgment: yoga, pilates,
+stretching and breathing sessions are recovery sessions in this system's taxonomy. Strength
+(`strength_training`) and everything else under "training" (`cardio_training`, `hiit`, ...)
+stay `strength`."""
+
+
+def is_recovery_training_detail(sport_detail: str | None) -> bool:
+    """Whether a stored `sport_detail` (`"training/yoga"`) is a recovery-type training session.
+    The backfill's selector; shares `RECOVERY_TRAINING_SUB_SPORTS` with `_fit_sport`."""
+    if not sport_detail or "/" not in sport_detail:
+        return False
+    head, _, sub = sport_detail.lower().partition("/")
+    return head == "training" and sub in RECOVERY_TRAINING_SUB_SPORTS
+
+
 def _fit_sport(session_sport: object | None, session_sub_sport: object | None, warnings: list[str]) -> Sport:
     """Map a FIT session's sport/sub_sport to this engine's Sport values.
 
@@ -433,7 +458,9 @@ def _fit_sport(session_sport: object | None, session_sub_sport: object | None, w
     warning since both are unambiguous:
       - Garmin encodes a logged strength workout as session.sport=="training"
         (sub_sport typically "strength_training", surfaces in intervals.icu
-        as "WeightTraining") -- maps to this engine's own "strength" Sport.
+        as "WeightTraining") -- maps to this engine's own "strength" Sport,
+        EXCEPT the mobility sub_sports in `RECOVERY_TRAINING_SUB_SPORTS`
+        (yoga, pilates, ...), which map to "recovery".
       - engine/cycling-coach Part C: session.sport=="cycling" (road/mountain/
         gravel/cyclocross all share this same raw FIT sport, distinguished
         only by sub_sport -- see `_is_cycling_sport`, which this reuses) maps
@@ -460,6 +487,8 @@ def _fit_sport(session_sport: object | None, session_sub_sport: object | None, w
     session_sport_lower = str(session_sport).lower()
     if "swim" in session_sport_lower:
         return "swim_pool"
+    if session_sport_lower == "training" and str(session_sub_sport or "").lower() in RECOVERY_TRAINING_SUB_SPORTS:
+        return "recovery"
     if session_sport_lower == "training" or "strength" in str(session_sub_sport or "").lower():
         return "strength"
     if _is_cycling_sport(session_sport):
@@ -972,6 +1001,9 @@ def _build_series(
     altitude_m: list[object] = []
     any_hr = any_speed = any_dist = any_lat = any_lng = False
     any_power = any_cadence = any_alt = False
+    grit: list[object] = []
+    flow: list[object] = []
+    any_grit = any_flow = False
     prev_t: float | None = None
     prev_dist: float | None = None
 
@@ -1017,12 +1049,18 @@ def _build_series(
                 a = record.get("altitude")
             altitude_m.append(a)
             any_alt = any_alt or a is not None
+            g = record.get("grit")
+            grit.append(g)
+            any_grit = any_grit or g is not None
+            fl = record.get("flow")
+            flow.append(fl)
+            any_flow = any_flow or fl is not None
 
         prev_t = t
         if d is not None:
             prev_dist = d
 
-    if not (any_hr or any_speed or any_dist or any_lat or any_lng or any_power or any_cadence or any_alt):
+    if not (any_hr or any_speed or any_dist or any_lat or any_lng or any_power or any_cadence or any_alt or any_grit or any_flow):
         return None
 
     series: dict[str, list] = {"t_s": t_s}
@@ -1040,6 +1078,10 @@ def _build_series(
         series["power_w"] = power_w
     if any_cadence:
         series["cadence_rpm"] = cadence_rpm
+    if any_grit:
+        series["grit"] = grit  # Garmin MTB dynamics, raw per-record (see swim_coach.mtb_dynamics)
+    if any_flow:
+        series["flow"] = flow
     if any_alt:
         series["altitude_m"] = altitude_m
         if any_dist:
@@ -1047,6 +1089,24 @@ def _build_series(
             if grade is not None:
                 series["grade"] = grade
     return series
+
+
+def _device_dynamics(session: dict, jumps_raw: list[dict], t0: datetime | None) -> DeviceDynamics | None:
+    """Garmin MTB dynamics from the session totals and `jump` frames; None when the file has none."""
+    jumps = [
+        JumpRecord(
+            offset_s=(j["timestamp"] - t0).total_seconds() if t0 is not None and isinstance(j["timestamp"], datetime) else None,
+            distance_m=j["distance"], height_m=j["height"], hang_time_s=j["hang_time"],
+            score=j["score"], speed_mps=j["speed"],
+        )
+        for j in jumps_raw
+    ]
+    if not jumps and all(v is None for v in session.values()):
+        return None
+    return DeviceDynamics(
+        total_grit=session.get("total_grit"), avg_flow=session.get("avg_flow"),
+        jump_count=session.get("jump_count"), jumps=jumps,
+    )
 
 
 def parse_fit(path: str | Path) -> WorkoutDraft:
@@ -1078,6 +1138,8 @@ def parse_fit(path: str | Path) -> WorkoutDraft:
     session_start_time: object | None = None
     session_avg_hr: int | None = None
     session_max_hr: int | None = None
+    session_dynamics: dict = {}
+    jumps_raw: list[dict] = []
 
     sets: list[WorkoutSet] = []
     laps_raw: list[dict] = []
@@ -1100,6 +1162,11 @@ def parse_fit(path: str | Path) -> WorkoutDraft:
                 session_start_time = _fit_value(frame, "start_time")
                 session_avg_hr = _fit_value(frame, "avg_heart_rate")
                 session_max_hr = _fit_value(frame, "max_heart_rate")
+                session_dynamics = {
+                    "total_grit": _fit_value(frame, "total_grit"),
+                    "avg_flow": _fit_value(frame, "avg_flow"),
+                    "jump_count": _fit_value(frame, "jump_count"),
+                }
             elif frame.name == "lap":
                 lap_distance = _fit_value(frame, "total_distance")
                 lap_time = _fit_value(frame, "total_elapsed_time")
@@ -1166,6 +1233,20 @@ def parse_fit(path: str | Path) -> WorkoutDraft:
                         "cadence": _fit_value(frame, "cadence"),
                         "enhanced_altitude": _fit_value(frame, "enhanced_altitude"),
                         "altitude": _fit_value(frame, "altitude"),
+                        "grit": _fit_value(frame, "grit"),
+                        "flow": _fit_value(frame, "flow"),
+                    }
+                )
+            elif frame.name == "jump":
+                # position_lat/position_long deliberately never read (location is sensitive)
+                jumps_raw.append(
+                    {
+                        "timestamp": _fit_value(frame, "timestamp"),
+                        "distance": _fit_value(frame, "distance"),
+                        "height": _fit_value(frame, "height"),
+                        "hang_time": _fit_value(frame, "hang_time"),
+                        "score": _fit_value(frame, "score"),
+                        "speed": _fit_value(frame, "enhanced_speed") or _fit_value(frame, "speed"),
                     }
                 )
             elif frame.name == "event":
@@ -1259,6 +1340,7 @@ def parse_fit(path: str | Path) -> WorkoutDraft:
         elapsed_min=session_elapsed_s / 60 if session_elapsed_s is not None else None,
         sport_detail=detail,
         started_at=started_at,
+        device_dynamics=_device_dynamics(session_dynamics, jumps_raw, t0),
     )
 
 
