@@ -1976,6 +1976,110 @@ class FreeRideRead(BaseModel):
     data_quality_notes: list[str] = Field(default_factory=list)
 
 
+class JumpRecord(BaseModel):
+    """One Garmin `jump` message (MTB dynamics). Device-reported values, read-only. GPS position
+    fields are deliberately NOT carried (this repo is public; athlete data is location-sensitive)."""
+
+    offset_s: float | None = None  # seconds from the activity start
+    distance_m: float | None = None
+    height_m: float | None = None
+    hang_time_s: float | None = None
+    score: float | None = None
+    speed_mps: float | None = None
+
+
+class DeviceDynamics(BaseModel):
+    """Garmin MTB dynamics reported by the device in the FIT `session` / `jump` messages.
+
+    Grit = ride difficulty from elevation, gradient and rapid direction changes; Flow = how
+    consistently speed/smoothness is held through turns (lower = smoother) -- Garmin Edge manual
+    definitions. Both algorithms are proprietary: values are read-only device metrics, never
+    recomputed, never given thresholds here. `total_grit` is in the device's session unit (kGrit).
+    Persisted on `Workout` so a re-analysis (which has the stored series, not the FIT file) can
+    rebuild `WorkoutAnalytics.mtb_dynamics`."""
+
+    total_grit: float | None = None
+    avg_flow: float | None = None
+    jump_count: int | None = None
+    jumps: list[JumpRecord] = Field(default_factory=list)
+
+
+class MtbLap(BaseModel):
+    """Grit / Flow / jumps for one device lap."""
+
+    lap: int  # 1-based
+    start_offset_s: float | None = None
+    duration_s: float
+    distance_m: float | None = None
+    avg_power_w: float | None = None
+    grit: float | None = None  # sum of the lap's per-record grit / mtb_dynamics.GRIT_RECORD_SCALE (kGrit)
+    avg_flow: float | None = None  # mean of the lap's non-zero flow samples
+    jumps: int | None = None
+
+
+class JumpsSummary(BaseModel):
+    count: int
+    max_height_m: float | None = None
+    max_hang_time_s: float | None = None
+    max_distance_m: float | None = None
+    best_score: float | None = None
+
+
+class MtbDynamics(BaseModel):
+    """`WorkoutAnalytics.mtb_dynamics`: the device's Grit / Flow / jump numbers for a ride, with
+    per-lap splits (a CX pre-ride with a lap per section, or race laps). Present only when the
+    ride carries them -- see `swim_coach.mtb_dynamics`."""
+
+    total_grit: float | None = None
+    avg_flow: float | None = None
+    jump_count: int | None = None
+    laps: list[MtbLap] = Field(default_factory=list)
+    jumps: JumpsSummary | None = None
+
+
+class SectorLap(BaseModel):
+    lap: int  # 1-based device lap number
+    time_s: float
+    avg_power_w: float | None = None
+    avg_flow: float | None = None
+    grit: float | None = None
+    time_vs_best_s: float
+    sector_times_s: list[float]
+
+
+class SectorLoss(BaseModel):
+    """One equal-distance sector across the compared laps, vs the best lap."""
+
+    sector: int  # 1-based
+    best_time_s: float
+    mean_loss_s: float  # mean over the non-best laps of (sector time - best lap's sector time)
+    total_loss_s: float
+    avg_flow: float | None = None
+    flow_vs_best: float | None = None  # mean over the non-best laps of (flow - best lap's flow)
+    avg_grit: float | None = None
+
+
+class LapFade(BaseModel):
+    """First compared lap -> last compared lap."""
+
+    time_change_pct: float
+    power_change_pct: float | None = None
+    flow_change: float | None = None
+    flow_slope_per_lap: float | None = None
+
+
+class CourseSectors(BaseModel):
+    """`WorkoutAnalytics.course_sectors`: lap-over-lap fade and a where-did-the-time-go table, for a
+    ride with 2+ laps of similar distance (see `swim_coach.course_sectors`)."""
+
+    sector_count: int
+    best_lap: int
+    laps: list[SectorLap]
+    fade: LapFade
+    sectors: list[SectorLoss]
+    top_loss_sectors: list[int]
+
+
 class WorkoutAnalytics(BaseModel):
     """Derived workout analytics computed at ingest time by
     `swim_coach.analytics.compute_analytics` -- see that module for the
@@ -2016,6 +2120,10 @@ class WorkoutAnalytics(BaseModel):
     power_curve: list[PowerCurvePoint] | None = None
     # Free-ride read (`swim_coach.free_ride`): bike rides with no prescription to score. Additive/optional.
     free_ride: FreeRideRead | None = None
+    # Garmin MTB dynamics (grit / flow / jumps) with per-lap splits, and lap-over-lap course sectors.
+    # Bike-owned; present only when the ride has the data. Additive/optional.
+    mtb_dynamics: MtbDynamics | None = None
+    course_sectors: CourseSectors | None = None
 
 
 WorkoutChatSenderRole = Literal["athlete", "ai_coach", "coach"]
@@ -2164,6 +2272,9 @@ class Workout(BaseModel):
     # can flip -- see `set_workout_chat_muted` (backend/app/tools.py) and
     # PATCH /api/workouts/{id}'s `chat_ai_muted` field.
     chat_ai_muted: bool = False
+    # Garmin MTB dynamics totals + jump list from the FIT session/jump messages (None for every
+    # other file). Additive/optional, no schema_version bump; the Workout JSONB holds it as-is.
+    device_dynamics: DeviceDynamics | None = None
 
     @property
     def effective_kind(self) -> SessionKind | None:

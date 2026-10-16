@@ -37,6 +37,13 @@ def _fixture(name: str):
     return Workout.model_validate(d["workout"]), session, _athlete(d["athlete_profile"]), d["series"]
 
 
+def _without_dynamics(analytics) -> dict:
+    """The dump minus the MTB-dynamics blocks (added after the goldens were pinned); these
+    fixtures carry no grit/flow, so both must be absent."""
+    assert analytics.mtb_dynamics is None
+    return analytics.model_dump(mode="json", exclude={"mtb_dynamics", "course_sectors"})
+
+
 # --- golden: the new path reproduces the old one -------------------------------------------
 
 
@@ -45,14 +52,14 @@ def test_golden_no_session(name):
     workout, _, athlete, series = _fixture(name)
     kind = "race" if name.startswith("race_") else "free_ride"
     new = workout.analyze(AnalysisContext(athlete=athlete, kind=kind, series=series))
-    assert new.model_dump(mode="json") == GOLDEN[name]["no_session"]
+    assert _without_dynamics(new) == GOLDEN[name]["no_session"]
 
 
 @pytest.mark.parametrize("name", [n for n in NAMES if "with_session" in GOLDEN[n]])
 def test_golden_with_matched_session(name):
     workout, session, athlete, series = _fixture(name)
     ctx = AnalysisContext(athlete=athlete, session=session, kind=session.kind, series=series)
-    assert workout.analyze(ctx).model_dump(mode="json") == GOLDEN[name]["with_session"]
+    assert _without_dynamics(workout.analyze(ctx)) == GOLDEN[name]["with_session"]
 
 
 @pytest.mark.parametrize("kind", ["opener", "warmup"])

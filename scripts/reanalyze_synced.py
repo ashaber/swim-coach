@@ -155,6 +155,7 @@ def _reanalyze_workout(
             external_id=existing.external_id,
             sport_detail=draft.sport_detail,
             kind=draft.kind,
+            device_dynamics=draft.device_dynamics,
             kind_override=existing.kind_override,  # athlete/coach retag -- preserved
         )
 

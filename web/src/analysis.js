@@ -360,3 +360,88 @@ export function buildFreeRide(workout) {
     quality: fr.data_quality_notes || [],
   };
 }
+
+// --- MTB dynamics (Garmin Grit / Flow / jumps) and course sectors ------------------------------
+// Device metrics: shown as recorded, no thresholds. Grit is course difficulty (compare laps on the
+// same course); lower Flow is smoother.
+
+export const MTB_LAP_COLUMNS = ['Lap', 'Time', 'Power', 'Grit', 'Flow', 'Jumps'];
+export const SECTOR_LAP_COLUMNS = ['Lap', 'Time', 'vs best', 'Power', 'Flow'];
+export const SECTOR_LOSS_COLUMNS = ['Sector', 'Best', 'Lost (total)', 'Lost / lap', 'Flow vs best', 'Grit'];
+
+function jumpsLine(j) {
+  if (!j) return null;
+  const parts = [`${j.count} jump${j.count === 1 ? '' : 's'}`];
+  if (num(j.max_height_m)) parts.push(`max height ${j.max_height_m} m`);
+  if (num(j.max_hang_time_s)) parts.push(`max hang time ${j.max_hang_time_s} s`);
+  if (num(j.best_score)) parts.push(`best score ${j.best_score}`);
+  return parts.join(', ');
+}
+
+/** The "Mountain bike dynamics" section model (`analytics.mtb_dynamics`), or null when absent. */
+export function buildMtbDynamics(workout) {
+  const m = workout?.analytics?.mtb_dynamics;
+  if (!m) return null;
+  const summary = [];
+  if (num(m.total_grit)) summary.push(`Total grit ${m.total_grit}`);
+  if (num(m.avg_flow)) summary.push(`Avg flow ${m.avg_flow}`);
+  const jumps = jumpsLine(m.jumps) || (num(m.jump_count) ? `${m.jump_count} jumps` : null);
+  if (jumps) summary.push(jumps);
+  const laps = m.laps || [];
+  return {
+    summary,
+    note: 'Garmin device metrics: Grit is course difficulty (compare laps on the same course); lower Flow is smoother.',
+    laps: laps.length
+      ? {
+        columns: MTB_LAP_COLUMNS,
+        rows: laps.map((l) => [
+          String(l.lap),
+          formatClock(l.duration_s),
+          watts(l.avg_power_w),
+          num(l.grit) ? String(l.grit) : dash,
+          num(l.avg_flow) ? String(l.avg_flow) : dash,
+          num(l.jumps) ? String(l.jumps) : dash,
+        ]),
+      }
+      : null,
+  };
+}
+
+/** The "Course sectors" section model (`analytics.course_sectors`), or null when absent. */
+export function buildCourseSectors(workout) {
+  const cs = workout?.analytics?.course_sectors;
+  if (!cs) return null;
+  const f = cs.fade || {};
+  const trend = [`Time ${signed(f.time_change_pct)} first to last lap`];
+  if (num(f.power_change_pct)) trend.push(`power ${signed(f.power_change_pct)}`);
+  if (num(f.flow_change)) trend.push(`flow ${signed(f.flow_change, 2, '')}`);
+  const bySector = new Map((cs.sectors || []).map((s) => [s.sector, s]));
+  const top = (cs.top_loss_sectors || []).map((n) => bySector.get(n)).filter(Boolean);
+  return {
+    trend: trend.join(', '),
+    note: `Each lap is cut into ${cs.sector_count} equal-distance sectors; sector numbers line up across laps. Ask which course feature each sector is.`,
+    laps: {
+      columns: SECTOR_LAP_COLUMNS,
+      rows: (cs.laps || []).map((l) => [
+        `${l.lap}${l.lap === cs.best_lap ? ' (best)' : ''}`,
+        formatClock(l.time_s),
+        l.time_vs_best_s ? signed(l.time_vs_best_s, 1, ' s') : dash,
+        watts(l.avg_power_w),
+        num(l.avg_flow) ? String(l.avg_flow) : dash,
+      ]),
+    },
+    losses: top.length
+      ? {
+        columns: SECTOR_LOSS_COLUMNS,
+        rows: top.map((s) => [
+          String(s.sector),
+          `${s.best_time_s.toFixed(1)} s`,
+          `${s.total_loss_s.toFixed(1)} s`,
+          `${s.mean_loss_s.toFixed(1)} s`,
+          num(s.flow_vs_best) ? signed(s.flow_vs_best, 2, '') : dash,
+          num(s.avg_grit) ? String(s.avg_grit) : dash,
+        ]),
+      }
+      : null,
+  };
+}

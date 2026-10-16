@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  buildFreeRide, buildRawAnalysis, scoreView, EFFORT_COLUMNS, effectiveKind, kindLabel, shouldLoadPacing, startTraceGeometry,
+  buildCourseSectors, buildMtbDynamics, buildFreeRide, buildRawAnalysis, scoreView, EFFORT_COLUMNS, effectiveKind, kindLabel, shouldLoadPacing, startTraceGeometry,
 } from '../../src/analysis.js';
 
 const effort = (n, extra = {}) => ({
@@ -244,5 +244,56 @@ describe('buildFreeRide', () => {
     const m = buildFreeRide({ analytics: { free_ride: fr } });
     expect(m.drift).toEqual(['Steady 45 min from 10:00: 200 W, drift +5.4%.']);
     expect(m.driftNote).toBeNull();
+  });
+});
+
+describe('buildMtbDynamics', () => {
+  it('is null without the block', () => {
+    expect(buildMtbDynamics({ analytics: {} })).toBeNull();
+    expect(buildMtbDynamics(null)).toBeNull();
+  });
+
+  it('shows totals, jumps and a per-lap table', () => {
+    const m = buildMtbDynamics({
+      analytics: {
+        mtb_dynamics: {
+          total_grit: 92.05, avg_flow: 4.4, jump_count: 28,
+          jumps: { count: 28, max_height_m: 1.2, max_hang_time_s: 0.8, best_score: 70 },
+          laps: [
+            { lap: 1, duration_s: 300, avg_power_w: 210, grit: 11.3, avg_flow: 6.1, jumps: 3 },
+            { lap: 2, duration_s: 312, avg_power_w: 208, grit: 11.9, avg_flow: null, jumps: null },
+          ],
+        },
+      },
+    });
+    expect(m.summary).toEqual(['Total grit 92.05', 'Avg flow 4.4', '28 jumps, max height 1.2 m, max hang time 0.8 s, best score 70']);
+    expect(m.laps.rows[0]).toEqual(['1', '5:00', '210 W', '11.3', '6.1', '3']);
+    expect(m.laps.rows[1].slice(4)).toEqual(['—', '—']);
+    expect(m.note).toMatch(/lower Flow is smoother/);
+  });
+});
+
+describe('buildCourseSectors', () => {
+  const cs = {
+    sector_count: 8, best_lap: 1,
+    fade: { time_change_pct: 12, power_change_pct: -1.5, flow_change: 1.6 },
+    laps: [
+      { lap: 1, time_s: 300, time_vs_best_s: 0, avg_power_w: 210, avg_flow: 3 },
+      { lap: 2, time_s: 336, time_vs_best_s: 36, avg_power_w: 207, avg_flow: 4.6 },
+    ],
+    sectors: [{ sector: 5, best_time_s: 40, mean_loss_s: 9.2, total_loss_s: 9.2, flow_vs_best: 1.4, avg_grit: 0.3 }],
+    top_loss_sectors: [5],
+  };
+
+  it('is null without the block', () => {
+    expect(buildCourseSectors({ analytics: {} })).toBeNull();
+  });
+
+  it('shows the fade, the laps and the top loss sectors', () => {
+    const m = buildCourseSectors({ analytics: { course_sectors: cs } });
+    expect(m.trend).toBe('Time +12% first to last lap, power -1.5%, flow +1.6');
+    expect(m.laps.rows[0][0]).toBe('1 (best)');
+    expect(m.laps.rows[1]).toEqual(['2', '5:36', '+36 s', '207 W', '4.6']);
+    expect(m.losses.rows).toEqual([['5', '40.0 s', '9.2 s', '9.2 s', '+1.4', '0.3']]);
   });
 });
