@@ -285,3 +285,56 @@ def test_device_dynamics_round_trips_through_the_db_row_mapping():
     w = _workout()
     row = workout_to_row(w)
     assert row_to_workout({"data": row["data"], "created_at": None}).device_dynamics == w.device_dynamics
+
+
+# --- course track (low-fidelity map) -------------------------------------------------------------
+
+
+def _loop_gps() -> dict:
+    """Fixture series plus a SYNTHETIC circular course (centre 40.0, -100.0; ~160 m radius), each lap
+    driving the same loop in proportion to its own distance."""
+    import math
+
+    series = fx.build_series()
+    lat, lng = [], []
+    for n, start in zip(fx.LAP_S, fx.lap_starts()):
+        for i in range(n):
+            a = 2 * math.pi * ((series["dist_m"][start + i] % fx.LAP_M) / fx.LAP_M)
+            lat.append(40.0 + 0.0015 * math.sin(a))
+            lng.append(-100.0 + 0.0015 * math.cos(a))
+    series["lat"], series["lng"] = lat, lng
+    return series
+
+
+def test_track_is_projected_metres_centred_on_the_lap_with_eight_sector_polylines():
+    cs = build_course_sectors(_workout(), _loop_gps())
+    assert cs.track is not None and [t.sector for t in cs.track.sectors] == list(range(1, 9))
+    pts = [p for t in cs.track.sectors for p in t.points]
+    assert 150 <= len(pts) <= 260  # ~200 points for the lap (Coach judgment), plus shared joins
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    assert max(xs) - min(xs) == pytest.approx(2 * 0.0015 * 111_320 * 0.766, rel=0.05)  # east-west extent
+    assert max(ys) - min(ys) == pytest.approx(2 * 0.0015 * 111_320, rel=0.05)  # north-south extent
+    assert abs(sum(xs) / len(xs)) < 25 and abs(sum(ys) / len(ys)) < 25  # centred: no absolute position
+    assert all(len(t.points) >= 2 and len(t.label) == 2 for t in cs.track.sectors)
+
+
+def test_track_sectors_join_end_to_start_and_stores_no_raw_coordinates():
+    cs = build_course_sectors(_workout(), _loop_gps())
+    sectors = cs.track.sectors
+    for a, b in zip(sectors, sectors[1:]):
+        assert a.points[-1] == b.points[0]
+    dumped = json.dumps(cs.model_dump(mode="json"))
+    assert "lat" not in dumped and "lng" not in dumped
+    assert all(abs(c) < 1000 and round(c, 1) == c for t in sectors for p in t.points for c in p)  # metres, not degrees
+
+
+def test_track_absent_without_gps_but_sectors_still_built():
+    cs = build_course_sectors(_workout(), fx.build_series())
+    assert cs is not None and cs.track is None
+
+
+def test_coach_view_strips_the_track():
+    ctx = AnalysisContext(kind="race", series=_loop_gps())
+    view = analytics_for_coach(_workout().analyze(ctx), "bike")
+    assert "track" not in view["course_sectors"]
+    assert "points" not in json.dumps(view)

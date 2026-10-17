@@ -6,7 +6,7 @@ without GPS matching. Output: per-lap time / power / flow / grit, the fade first
 (including the flow trend: flow worsening while power holds reads as technique slipping under
 fatigue), and a per-sector loss table vs the fastest lap with the top-3 loss sectors.
 
-Constants are Coach judgment, not sourced: SECTOR_COUNT, LAP_DISTANCE_TOLERANCE, MIN_LAP_S, MAX_LAPS.
+Constants are Coach judgment, not sourced: SECTOR_COUNT, TRACK_POINTS, START_LINE_RADIUS_M, LAP_DISTANCE_TOLERANCE, MIN_LAP_S, MAX_LAPS.
 Flow and grit are Garmin's proprietary device metrics (see `mtb_dynamics`); they are shown beside
 the time loss, never thresholded. The data cannot name course features -- the coach asks the rider.
 """
@@ -18,7 +18,9 @@ from bisect import bisect_left
 from statistics import median
 from typing import Sequence
 
-from swim_coach.models import CourseSectors, LapFade, SectorLap, SectorLoss, Workout, WorkoutLap
+from swim_coach.models import (
+    CourseSectors, CourseTrack, LapFade, SectorLap, SectorLoss, TrackSector, Workout, WorkoutLap,
+)
 from swim_coach.mtb_dynamics import (
     GRIT_RECORD_SCALE, has_channel, lap_windows, mean_moving, mean_present, window_indices,
 )
@@ -29,6 +31,7 @@ MIN_LAP_S = 120  # Coach judgment: shorter than this is a split, not a lap worth
 MAX_LAPS = 12  # Coach judgment: more than this is auto-lap noise (e.g. every km), not a course
 TOP_LOSS_SECTORS = 3
 START_LINE_RADIUS_M = 30.0  # Coach judgment: a lap starting farther than this from the reference lap's start is not the same lap
+TRACK_POINTS = 200  # Coach judgment: enough to draw a recognisable lap outline, small enough to store
 EARTH_M_PER_DEG = 111_320.0  # metres per degree of latitude (spherical earth, plenty for a 30 m test)
 
 
@@ -108,11 +111,49 @@ def _lap_sectors(series: dict, idx: range) -> dict | None:
         flows.append(mean_moving(flow, speed, sec) if flow else None)
         vals = [grit[i] for i in sec if grit[i] is not None] if grit else []
         grits.append(round(sum(vals) / GRIT_RECORD_SCALE, 3) if vals else None)
-    return {"time_s": round(edges[-1] - edges[0], 1), "times": times, "flows": flows, "grits": grits,
+    return {"edges": edges, "idx": idx, "time_s": round(edges[-1] - edges[0], 1), "times": times, "flows": flows, "grits": grits,
             "power": mean_present(power, idx) if power else None,
             "flow": mean_moving(flow, speed, idx) if flow else None,
             "grit": round(sum(v for v in (grit[i] for i in idx) if v is not None) / GRIT_RECORD_SCALE, 2)
             if has_channel(series, "grit") else None}
+
+
+def _evenly(indices: list[int], limit: int) -> list[int]:
+    """At most `limit` of `indices`, evenly spread, always keeping the first and the last."""
+    if len(indices) <= limit:
+        return indices
+    step = (len(indices) - 1) / (limit - 1)
+    return [indices[round(i * step)] for i in range(limit)]
+
+
+def build_track(series: dict, lap: dict) -> CourseTrack | None:
+    """The lap's outline as per-sector polylines in local metres (equirectangular projection around
+    the lap centroid, north up), ~TRACK_POINTS points in all; None without usable GPS."""
+    lat, lng = series.get("lat") or [], series.get("lng") or []
+    idx, edges, t_s = lap["idx"], lap["edges"], series["t_s"]
+    fixes = [i for i in idx if i < len(lat) and i < len(lng) and lat[i] is not None and lng[i] is not None]
+    if len(fixes) < SECTOR_COUNT + 1:
+        return None
+    lat0 = sum(lat[i] for i in fixes) / len(fixes)
+    lng0 = sum(lng[i] for i in fixes) / len(fixes)
+    kx = EARTH_M_PER_DEG * math.cos(math.radians(lat0))
+
+    def xy(i: int) -> tuple[float, float]:
+        return round((lng[i] - lng0) * kx, 1), round((lat[i] - lat0) * EARTH_M_PER_DEG, 1)
+
+    per_sector = max(2, TRACK_POINTS // SECTOR_COUNT)
+    sectors, joined = [], None
+    for k in range(SECTOR_COUNT):
+        last = k == SECTOR_COUNT - 1
+        mine = [i for i in fixes if edges[k] <= t_s[i] and (t_s[i] <= edges[k + 1] if last else t_s[i] < edges[k + 1])]
+        if not mine:
+            return None
+        points = [xy(i) for i in _evenly(mine, per_sector)]
+        if joined is not None:  # start where the previous sector ended so the outline is continuous
+            points = [joined, *points[1:]] if len(points) > 1 else [joined, points[0]]
+        joined = points[-1]
+        sectors.append(TrackSector(sector=k + 1, points=points, label=points[len(points) // 2]))
+    return CourseTrack(sectors=sectors)
 
 
 def _slope(values: list[float]) -> float | None:
@@ -177,4 +218,5 @@ def build_course_sectors(workout: Workout, series: dict | None) -> CourseSectors
     return CourseSectors(
         sector_count=SECTOR_COUNT, best_lap=cut[best_i][0], laps=laps, fade=fade, sectors=sectors,
         top_loss_sectors=[s.sector for s in ranked[:TOP_LOSS_SECTORS]],
+        track=build_track(series, best),
     )
