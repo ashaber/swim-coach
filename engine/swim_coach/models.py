@@ -2013,7 +2013,7 @@ class MtbLap(BaseModel):
     distance_m: float | None = None
     avg_power_w: float | None = None
     grit: float | None = None  # sum of the lap's per-record grit / mtb_dynamics.GRIT_RECORD_SCALE (kGrit)
-    avg_flow: float | None = None  # mean of the lap's non-zero flow samples
+    avg_flow: float | None = None  # mean flow over the lap's moving records (mtb_dynamics.MOVING_SPEED_MPS)
     jumps: int | None = None
 
 
@@ -2068,6 +2068,21 @@ class LapFade(BaseModel):
     flow_slope_per_lap: float | None = None
 
 
+class TrackSector(BaseModel):
+    """One sector of the course map: a polyline in local metres (x east, y north, centred on the lap)."""
+
+    sector: int  # 1-based
+    points: list[tuple[float, float]]
+    label: tuple[float, float]
+
+
+class CourseTrack(BaseModel):
+    """Low-fidelity map of the best lap (`swim_coach.course_sectors`). Projected x/y metres only --
+    the raw GPS never reaches analytics. Consecutive sectors share their join point."""
+
+    sectors: list[TrackSector]
+
+
 class CourseSectors(BaseModel):
     """`WorkoutAnalytics.course_sectors`: lap-over-lap fade and a where-did-the-time-go table, for a
     ride with 2+ laps of similar distance (see `swim_coach.course_sectors`)."""
@@ -2078,6 +2093,7 @@ class CourseSectors(BaseModel):
     fade: LapFade
     sectors: list[SectorLoss]
     top_loss_sectors: list[int]
+    track: CourseTrack | None = None  # PWA map only; never in the coach view
 
 
 class WorkoutAnalytics(BaseModel):

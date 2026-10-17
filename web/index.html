@@ -640,6 +640,31 @@
       border-radius: var(--radius-xs); }
     .start-trace-text { flex: 1 1 0; min-width: 0; font-size: 12px; color: var(--ink-soft); overflow-wrap: anywhere; }
     /* Raw analysis panel */
+    /* Course sectors map (inline SVG, no tiles). Tones: neutral -> warm -> hot by time lost. */
+    .cs-map { display: block; width: 100%; height: auto; max-width: 420px; margin: 8px auto 0; background: var(--paper-2); border: 1px solid var(--line-soft); border-radius: var(--radius-xs); }
+    .cs-map-wrap { position: relative; max-width: 420px; margin: 8px auto 0; }
+    .cs-map-wrap .cs-map { margin: 0 auto; touch-action: pan-y; user-select: none; -webkit-user-select: none; overflow: hidden; }
+    .cs-reset { position: absolute; top: 6px; left: 6px; min-height: 32px; padding: 4px 10px; font-size: 12px; background: var(--paper); }
+    .cs-reset[hidden] { display: none; }
+    .cs-line, .cs-hit { vector-effect: non-scaling-stroke; }
+    .cs-num, .cs-start circle { transform-box: fill-box; transform-origin: center; transform: scale(var(--cs-k, 1)); }
+    .cs-seg { cursor: pointer; outline: none; }
+    .cs-hit { stroke: transparent; stroke-width: 22; }
+    .cs-line { stroke: var(--ink-soft); stroke-width: 4; }
+    .cs-seg--warm .cs-line { stroke: var(--amber); stroke-width: 5; }
+    .cs-seg--hot .cs-line { stroke: var(--c-signal); stroke-width: 6; }
+    .cs-seg--selected .cs-line { stroke-width: 9; }
+    .cs-seg--dim { opacity: .35; }
+    .cs-seg:focus-visible .cs-line { stroke: var(--accent-ink); }
+    .cs-num { font-size: 11px; font-weight: 700; fill: var(--ink); paint-order: stroke; stroke: var(--ground); stroke-width: 3px; stroke-linejoin: round; pointer-events: none; }
+    .cs-start circle { fill: var(--accent-ink); stroke: var(--ground); stroke-width: 2; }
+    .cs-north { font-size: 10px; fill: var(--ink-soft); }
+    .cs-key--neutral { background: var(--ink-soft); }
+    .cs-key--warm { background: var(--amber); }
+    .cs-key--hot { background: var(--c-signal); }
+    .cs-key--start { background: var(--accent-ink); border-radius: 50%; }
+    .cs-row { cursor: pointer; }
+    .cs-row--selected td { background: var(--note-bg); color: var(--accent-ink); }
     .free-ride h5 { margin: 14px 0 6px; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-faint); }
     .free-ride .sub { font-size: 12px; color: var(--ink-soft); margin: 6px 0; }
     .free-ride-zonebar { display: flex; height: 16px; border-radius: 4px; overflow: hidden; background: var(--line-soft); }

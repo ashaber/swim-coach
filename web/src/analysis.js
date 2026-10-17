@@ -7,7 +7,7 @@
 // fetched pacing result when it has arrived), so it renders offline. DOM-free:
 // views.js turns the returned rows into markup.
 
-import { formatClock } from './workouts.js';
+import { formatClock, formatDrift, formatPauses } from './workouts.js';
 import { sessionForWorkout, ZONE_COLORS, ZONE_LABELS } from './shape.js';
 
 const num = (v) => v !== null && v !== undefined && Number.isFinite(v);
@@ -211,7 +211,7 @@ export function powerCurveGeometry(curve, { width = 320, height = 170 } = {}) {
   };
 }
 
-function powerCurveView(curve) {
+export function powerCurveView(curve) {
   if (!Array.isArray(curve) || curve.length === 0) return null;
   const byDur = new Map(curve.map((p) => [p.duration_s, p]));
   const rows = CURVE_TABLE_S.filter((d) => byDur.has(d)).map((d) => {
@@ -275,6 +275,18 @@ function startsView(iv) {
   };
 }
 
+/** Drift, pause count and the pause list: diagnostics that live in the Raw analysis panel, not the
+ * main view. A free ride's whole-ride drift is meaningless (its steady stretches carry the read). */
+function diagnosticsView(workout) {
+  const an = workout?.analytics || {};
+  const free = buildFreeRide(workout);
+  const lines = [an.free_ride ? null : formatDrift(an.cardiac_drift_pct), formatPauses(an)].filter(Boolean);
+  const pauses = Array.isArray(workout?.pauses) ? workout.pauses : [];
+  const steady = free ? [...free.drift, ...(free.driftNote ? [free.driftNote] : [])] : [];
+  if (!lines.length && !pauses.length && !steady.length) return null;
+  return { lines, steady, pauses };
+}
+
 /** Everything the panel shows, or null when there is nothing analyzer-made to
  * show (no interval analysis and no pacing). `pacing` is
  * `state.pacingByWorkoutId[id]` (`{status, data, error}`) or undefined. */
@@ -283,15 +295,15 @@ export function buildRawAnalysis(workout, pacing) {
   const execution = workout?.quality?.execution || null;
   const isRace = effectiveKind(workout) === 'race';
   const race = isRace ? raceView(pacing) : null;
-  const powerCurve = powerCurveView(workout?.analytics?.power_curve);
-  if (!iv && !race && !execution && !powerCurve) return null;
+  const diagnostics = diagnosticsView(workout);
+  if (!iv && !race && !execution && !diagnostics) return null;
   return {
     summary: iv ? summaryRows(iv) : [],
     score: scoreView(execution, 'Execution score'),
     efforts: iv ? { columns: EFFORT_COLUMNS, rows: effortRows(iv) } : null,
     rounds: iv && (iv.rounds || []).length ? { columns: ROUND_COLUMNS, rows: roundRows(iv) } : null,
     starts: startsView(iv),
-    powerCurve,
+    diagnostics,
     race,
     racePending: isRace && pacing?.status === 'loading',
     raceError: isRace && pacing?.status === 'error' ? (pacing.error || 'Race analysis is not available.') : null,
@@ -407,8 +419,80 @@ export function buildMtbDynamics(workout) {
   };
 }
 
-/** The "Course sectors" section model (`analytics.course_sectors`), or null when absent. */
-export function buildCourseSectors(workout) {
+import { boundsOfPoints, fitBounds, isZoomed, viewBoxAttr } from './mapView.js';
+
+const MAP_WIDTH = 320;
+const MAP_MAX_HEIGHT = 340;
+const MAP_PAD = 18;
+
+/** Tapping the selected sector again clears the highlight. */
+export function nextSector(current, tapped) {
+  return current === tapped ? null : tapped;
+}
+
+/** Loss tone per sector: the worst top-loss sector is `hot`, the other top-loss sectors `warm`,
+ * everything else `neutral` (CSS maps the tones to colour tokens). */
+function sectorTones(cs) {
+  const tones = new Map();
+  const bySector = new Map((cs.sectors || []).map((s) => [s.sector, s]));
+  const ranked = (cs.top_loss_sectors || []).map((n) => bySector.get(n)).filter(Boolean)
+    .sort((a, b) => b.total_loss_s - a.total_loss_s);
+  ranked.forEach((s, i) => tones.set(s.sector, i === 0 ? 'hot' : 'warm'));
+  return tones;
+}
+
+/** SVG-ready model of the best lap's outline (`course_sectors.track`: local metres, x east / y north):
+ * north up, uniform scale, per-sector polyline + number label, start/finish marker, loss tone and
+ * the highlight state. Null when the ride has no track. */
+export function buildCourseMap(cs, selected = null, gestureView = null) {
+  const track = cs?.track?.sectors;
+  if (!Array.isArray(track) || track.length === 0) return null;
+  const pts = track.flatMap((t) => t.points);
+  if (pts.length < 2) return null;
+  const xs = pts.map((p) => p[0]);
+  const ys = pts.map((p) => p[1]);
+  const minX = Math.min(...xs);
+  const maxY = Math.max(...ys);
+  const spanX = Math.max(Math.max(...xs) - minX, 1);
+  const spanY = Math.max(maxY - Math.min(...ys), 1);
+  const scale = Math.min((MAP_WIDTH - 2 * MAP_PAD) / spanX, (MAP_MAX_HEIGHT - 2 * MAP_PAD) / spanY);
+  const X = (x) => Number((MAP_PAD + (x - minX) * scale).toFixed(1));
+  const Y = (y) => Number((MAP_PAD + (maxY - y) * scale).toFixed(1)); // SVG y runs down; north is up
+  const tones = sectorTones(cs);
+  const bySector = new Map((cs.sectors || []).map((s) => [s.sector, s]));
+  const hasSelection = selected !== null && selected !== undefined;
+  const width = MAP_WIDTH;
+  const height = Math.round(spanY * scale + 2 * MAP_PAD);
+  const full = { x: 0, y: 0, w: width, h: height };
+  const sectors = track.map((t) => {
+    const loss = bySector.get(t.sector);
+    return {
+      sector: t.sector,
+      points: t.points.map((p) => `${X(p[0])},${Y(p[1])}`).join(' '),
+      label: { x: X(t.label[0]), y: Y(t.label[1]) },
+      tone: tones.get(t.sector) || 'neutral',
+      selected: hasSelection && t.sector === selected,
+      dim: hasSelection && t.sector !== selected,
+      aria: `Sector ${t.sector}${loss ? `, loses ${loss.total_loss_s.toFixed(1)} s in total` : ''}`,
+    };
+  });
+  // A pinch/pan view wins; otherwise a selected sector is framed; otherwise the whole lap.
+  const picked = sectors.find((s) => s.selected);
+  const view = gestureView || (picked ? fitBounds(boundsOfPoints(picked.points), full) : full);
+  return {
+    width,
+    height,
+    viewBox: viewBoxAttr(view),
+    k: Number((view.w / full.w).toFixed(4)),
+    zoomed: isZoomed(view, full),
+    start: { x: X(track[0].points[0][0]), y: Y(track[0].points[0][1]) },
+    sectors,
+  };
+}
+
+/** The "Course sectors" section model (`analytics.course_sectors`), or null when absent.
+ * `selected` is the highlighted sector number (map and table share it). */
+export function buildCourseSectors(workout, selected = null, gestureView = null) {
   const cs = workout?.analytics?.course_sectors;
   if (!cs) return null;
   const f = cs.fade || {};
@@ -417,9 +501,14 @@ export function buildCourseSectors(workout) {
   if (num(f.flow_change)) trend.push(`flow ${signed(f.flow_change, 2, '')}`);
   const bySector = new Map((cs.sectors || []).map((s) => [s.sector, s]));
   const top = (cs.top_loss_sectors || []).map((n) => bySector.get(n)).filter(Boolean);
+  const picked = bySector.get(selected);
   return {
     trend: trend.join(', '),
     note: `Each lap is cut into ${cs.sector_count} equal-distance sectors; sector numbers line up across laps. Ask which course feature each sector is.`,
+    map: buildCourseMap(cs, selected, gestureView),
+    selected: picked
+      ? `Sector ${picked.sector}: best lap ${picked.best_time_s.toFixed(1)} s, loses ${picked.total_loss_s.toFixed(1)} s in total (${picked.mean_loss_s.toFixed(1)} s per lap).`
+      : null,
     laps: {
       columns: SECTOR_LAP_COLUMNS,
       rows: (cs.laps || []).map((l) => [
@@ -433,6 +522,7 @@ export function buildCourseSectors(workout) {
     losses: top.length
       ? {
         columns: SECTOR_LOSS_COLUMNS,
+        sectors: top.map((s) => s.sector),
         rows: top.map((s) => [
           String(s.sector),
           `${s.best_time_s.toFixed(1)} s`,

@@ -278,19 +278,22 @@ def test_raw_analysis_button_opens_the_breakdown_and_works_offline(page):
     page.wait_for_selector('.raw-analysis', state='detached')
 
 
-def test_raw_analysis_shows_starts_table_and_power_curve_without_scrolling(page):
+def test_raw_analysis_shows_starts_table_and_main_view_shows_power_curve_without_scrolling(page):
     _open_ride(page)
-    page.locator('[data-a="workout:raw-analysis-toggle"]').click()
-    page.wait_for_selector('.raw-starts')
-    starts = page.locator('.raw-starts table.raw-table')
-    assert starts.locator('tbody tr').count() == 2
-    assert '16% below best start' in starts.inner_text()
-    assert 'skill rep, not fatigue' in page.locator('.raw-starts').inner_text()
-    curve = page.locator('.raw-power-curve')
+    curve = page.locator('section.power-curve')  # main view: visible before Raw analysis is opened
+    curve.wait_for()
     assert curve.locator('svg.power-curve-chart polyline').count() == 2  # this ride + 90-day best
     text = curve.inner_text()
     assert 'new 90-day best' in text and '1100 W' in text
     assert curve.locator('table.raw-table tbody tr').count() == 9
+    assert page.locator('.raw-analysis').count() == 0
+    page.locator('[data-a="workout:raw-analysis-toggle"]').click()
+    page.wait_for_selector('.raw-starts')
+    assert page.locator('.raw-analysis .power-curve').count() == 0
+    starts = page.locator('.raw-starts table.raw-table')
+    assert starts.locator('tbody tr').count() == 2
+    assert '16% below best start' in starts.inner_text()
+    assert 'skill rep, not fatigue' in page.locator('.raw-starts').inner_text()
     assert _no_horizontal_scroll(page)
 
 
@@ -304,7 +307,9 @@ def test_free_ride_section_shows_zones_efforts_matches_and_cost_without_scrollin
     assert 'Z1 Recovery 23 min (23%)' in text and 'Coasting 38% of moving time' in text
     assert 'tempo climb' in text and 'threshold climb' in text
     assert '27 matches burned' in text and 'TSS 151, IF 0.76' in text
-    assert 'No steady stretch' in text
+    assert 'No steady stretch' not in text  # steady drift now lives in Raw analysis
+    page.locator('[data-a="workout:raw-analysis-toggle"]').click()
+    assert 'No steady stretch' in page.locator('.raw-analysis').inner_text()
     # a free ride has no whole-ride drift line in the Analytics section
     assert 'drift +11.0%' not in page.locator('.detail-view, body').first.inner_text()
     assert _no_horizontal_scroll(page)

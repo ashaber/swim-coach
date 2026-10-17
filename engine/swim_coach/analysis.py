@@ -188,6 +188,8 @@ class DefaultAnalyzer(_CoachViewMixin):
         return annotate_power_curve_bests(workout, _base_analytics(workout, ctx, with_intervals=False), ctx)
 
 
+COURSE_LAP_KINDS: tuple[SessionKind, ...] = ("race", "opener")  # kinds whose laps are course repeats
+GPS_LAP_KINDS: tuple[SessionKind, ...] = ("race",)  # kinds whose laps come from the GPS start marker first
 UNSCORED_KINDS: tuple[SessionKind, ...] = ("opener", "warmup")  # load + base analytics + curve only
 
 
@@ -221,8 +223,8 @@ class BikeAnalyzer(_CoachViewMixin):
         found = {
             "mtb_dynamics": build_mtb_dynamics(workout, ctx.series),
             "course_sectors": (
-                build_course_sectors(workout, ctx.series)
-                if ctx.kind == "race" or self._reads_as_free_ride(ctx)
+                build_course_sectors(workout, ctx.series, prefer_gps=ctx.kind in GPS_LAP_KINDS)
+                if self._compares_course_laps(ctx)
                 else None
             ),
         }
@@ -262,6 +264,12 @@ class BikeAnalyzer(_CoachViewMixin):
 
     def needs_neighbors(self, kind: SessionKind) -> bool:
         return kind in FREE_READ_KINDS
+
+    @staticmethod
+    def _compares_course_laps(ctx: AnalysisContext) -> bool:
+        """Races, pre-race openers (a lap-per-circuit pre-ride) and unstructured rides repeat a
+        course; a structured workout's laps are its reps."""
+        return ctx.kind in COURSE_LAP_KINDS or BikeAnalyzer._reads_as_free_ride(ctx)
 
     @staticmethod
     def _reads_as_free_ride(ctx: AnalysisContext) -> bool:

@@ -37,7 +37,8 @@ import {
   listLibraryCards, fetchLibraryFile, submitLibraryReview,
   fetchMe,
 } from './api.js';
-import { shouldLoadPacing } from './analysis.js';
+import { nextSector, shouldLoadPacing } from './analysis.js';
+import { attachMapGestures } from './mapGestures.js';
 import {
   serializeWorkoutForm, profileFormFromAthlete, serializeProfileForm,
   logFormFromDraft,
@@ -416,6 +417,8 @@ const state = {
   // The workout detail's "Raw analysis" panel (read-only, from the cached workout). Closed on
   // every open/close of a detail so it never carries over to another workout.
   rawAnalysisOpen: false,
+  selectedSector: null,
+  mapView: null, // pinch/pan view of the course map; null = framed by the selection, else the whole lap
   // The workout detail's kind retag (POST /api/workouts/{id}/kind): null or {status, error}.
   workoutKindEdit: null,
   // The Dashboard tab's training-load chart narrative (views.js's
@@ -624,6 +627,8 @@ function renderTabContent() {
           weeks: state.plan.data?.weeks || [],
           ftpWatts: state.plan.data?.athlete?.ftp_watts ?? null,
           rawAnalysisOpen: state.rawAnalysisOpen,
+          selectedSector: state.selectedSector,
+          mapView: state.mapView,
           kindEdit: state.workoutKindEdit,
         },
         healthStatusForm: state.healthStatusForm,
@@ -2053,6 +2058,8 @@ function handleOpenHistoryDetail(id, { rpeEdit = null } = {}) {
   if (!id) return;
   state.workoutDetailId = id;
   state.rawAnalysisOpen = false;
+  state.selectedSector = null;
+  state.mapView = null;
   state.workoutKindEdit = null;
   // A fresh, empty scoped chat thread for this workout (see
   // closeWorkoutChat for the matching teardown on every close path).
@@ -2168,6 +2175,8 @@ function handleCloseHistoryDetail() {
   if (!state.workoutDetailId) return; // avoids a redundant render on popstate re-entrancy
   state.workoutDetailId = null;
   state.rawAnalysisOpen = false;
+  state.selectedSector = null;
+  state.mapView = null;
   state.workoutKindEdit = null;
   closeWorkoutChat();
   state.workoutRpeEdit = null;
@@ -2202,6 +2211,20 @@ async function handleSetWorkoutKind(kind) {
     log.error('workout.kind_set_failed', { athlete: athleteSlug(), workout_id: workoutId, error: result.error });
     state.workoutKindEdit = { status: 'error', error: result.error };
   }
+  render();
+}
+
+/** Highlights (or clears) a course sector on the workout detail; the map and table share it. */
+function handleSelectSector(sector) {
+  state.selectedSector = nextSector(state.selectedSector, Number(sector));
+  state.mapView = null; // the selection (or the whole lap) frames the map again
+  render();
+}
+
+/** Back to the whole lap: clears the zoom and the sector selection. */
+function resetCourseMap() {
+  state.selectedSector = null;
+  state.mapView = null;
   render();
 }
 
@@ -4009,6 +4032,8 @@ async function onAppClick(e) {
     case 'raceday:tl-reset': handleRaceDayTimelineReset(); break;
     case 'raceweek:toggle': handleRaceWeekToggle(el.dataset.week, el.dataset.id); break;
     case 'workout:raw-analysis-toggle': handleToggleRawAnalysis(); break;
+    case 'workout:sector-select': handleSelectSector(el.dataset.sector); break;
+    case 'workout:map-reset': resetCourseMap(); break;
     // Shared data-a="session:open" markup between the athlete's own Plan tab
     // and the coach roster's Training Plan sub-tab (views.js's renderSession)
     // -- branch on state.tab to route the click to the right piece of state
@@ -4184,6 +4209,12 @@ function onAppInput(e) {
 }
 
 function onAppKeydown(e) {
+  const sector = e.target.closest?.('[data-a="workout:sector-select"]');
+  if (sector && (e.key === 'Enter' || e.key === ' ')) {
+    e.preventDefault();
+    handleSelectSector(sector.dataset.sector);
+    return;
+  }
   if (e.target.id === 'chat-input' && e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     handleSendChat();
@@ -4534,6 +4565,7 @@ appEl.addEventListener('toggle', (event) => {
 appEl.addEventListener('change', onAppChange);
 appEl.addEventListener('input', onAppInput);
 appEl.addEventListener('keydown', onAppKeydown);
+attachMapGestures(appEl, { commit: (view) => { state.mapView = view; }, reset: resetCourseMap });
 appEl.addEventListener('touchstart', onRaceDayTouchStart, { passive: true });
 appEl.addEventListener('touchend', onRaceDayTouchEnd, { passive: true });
 // Re-render once a minute while the timeline is showing so the current/next highlight advances.
