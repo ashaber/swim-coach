@@ -62,6 +62,18 @@ export function visibleSections(plan) {
     .filter((s) => s.total > 0);
 }
 
+/** The list as the overlay shows it: each section keeps only its unchecked items (header counts
+ * still cover the whole section), and checked items move to `completed`, each tagged with the
+ * section it came from. Nothing is stored -- unchecking an item puts it back in that section. */
+export function checklistView(plan) {
+  const all = visibleSections(plan);
+  const sections = all
+    .map((s) => ({ ...s, items: s.items.filter((i) => !i.checked) }))
+    .filter((s) => s.items.length > 0);
+  const completed = all.flatMap((s) => s.items.filter((i) => i.checked).map((i) => ({ ...i, sectionTitle: s.title })));
+  return { sections, completed };
+}
+
 export function planProgress(plan) {
   const sections = visibleSections(plan);
   return {
@@ -81,6 +93,43 @@ export function applyChecked(plan, itemId, on) {
   const checked = (plan.checked || []).filter((c) => c !== itemId);
   if (on) checked.push(itemId);
   return { ...plan, checked };
+}
+
+/** The plan without item `itemId` (also un-checked). Per-plan only -- the template never changes. */
+export function removeItem(plan, itemId) {
+  return {
+    ...plan,
+    checked: (plan.checked || []).filter((c) => c !== itemId),
+    sections: (plan.sections || []).map((s) => ({ ...s, items: s.items.filter((i) => i.id !== itemId) })),
+  };
+}
+
+export const MISC_SECTION_ID = 'misc-added';
+export const MAX_ITEM_TEXT = 200;
+
+/** A client-chosen item id; the server accepts it as-is, so replaying the same add is a no-op. */
+export function newItemId() {
+  const rand = typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID().replace(/-/g, '').slice(0, 12)
+    : Math.random().toString(16).slice(2, 14).padEnd(12, '0');
+  return `u${rand}`;
+}
+
+/** The plan with a new free-text item appended to its "Misc" section (created at the TOP of the
+ * list on first use). Mirrors race_day.add_item; null for blank or over-long text. */
+export function addItem(plan, id, text) {
+  const clean = String(text || '').trim();
+  if (!clean || clean.length > MAX_ITEM_TEXT) return null;
+  const sections = plan.sections || [];
+  if (sections.some((s) => s.items.some((i) => i.id === id))) return plan;
+  const item = { id, text: clean, tags: [], default_checked: false };
+  const hasMisc = sections.some((s) => s.id === MISC_SECTION_ID);
+  return {
+    ...plan,
+    sections: hasMisc
+      ? sections.map((s) => (s.id === MISC_SECTION_ID ? { ...s, items: [...s.items, item] } : s))
+      : [{ id: MISC_SECTION_ID, title: 'Misc', items: [item] }, ...sections],
+  };
 }
 
 export function toggleTag(plan, tag) {
@@ -250,11 +299,21 @@ export function saveCachedPlan(athlete, plan) {
 // Ops are absolute state (never toggles), so replay is idempotent. Later ops for the same plan
 // merge into earlier ones: `items` ops merge their {itemId: bool} maps, `meta` ops merge fields.
 
+// `checklist` ops carry {add: [{id, text}], remove: [ids]} edits; the server applies them in one request, so they
+// accumulate (union) rather than overwrite.
+function mergeChecklistPayload(a, b) {
+  const remove = [...new Set([...(a.remove || []), ...(b.remove || [])])];
+  const seen = new Set();
+  const add = [...(a.add || []), ...(b.add || [])].filter((i) => !seen.has(i.id) && seen.add(i.id));
+  return { ...(add.length ? { add } : {}), ...(remove.length ? { remove } : {}) };
+}
+
 export function mergeOp(queue, op) {
   const next = queue.map((q) => ({ ...q, payload: { ...q.payload } }));
   const existing = next.find((q) => q.athlete === op.athlete && q.planId === op.planId && q.kind === op.kind);
   // a `timeline` op carries the whole list: the newest replaces, it never merges field-wise
-  if (existing) existing.payload = op.kind === 'timeline' ? { ...op.payload } : { ...existing.payload, ...op.payload };
+  if (existing && op.kind === 'checklist') existing.payload = mergeChecklistPayload(existing.payload, op.payload);
+  else if (existing) existing.payload = op.kind === 'timeline' ? { ...op.payload } : { ...existing.payload, ...op.payload };
   else next.push({ ...op, payload: { ...op.payload } });
   return next;
 }

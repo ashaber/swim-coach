@@ -166,11 +166,19 @@
     .rd-section h3 { font-family: var(--display); font-size: 13px; text-transform: uppercase; letter-spacing: .06em; margin: 0 0 6px; display: flex; justify-content: space-between; }
     .rd-count { color: var(--ink-faint); }
     .rd-item { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 8px 12px; margin-bottom: 6px; border-radius: 10px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); font: inherit; font-size: 16px; text-align: left; cursor: pointer; }
+    .rd-row { display: flex; align-items: stretch; gap: 14px; margin-bottom: 6px; }
+    .rd-row .rd-item { flex: 1; width: auto; min-width: 0; margin-bottom: 0; }
+    .rd-del { flex: none; width: 48px; min-height: 52px; border-radius: 10px; border: 1px solid var(--line); background: var(--paper); color: var(--ink-faint); font: inherit; font-size: 18px; cursor: pointer; }
     .rd-box { flex: none; width: 28px; height: 28px; border-radius: 8px; border: 2px solid var(--ink-faint); display: inline-flex; align-items: center; justify-content: center; font-weight: 800; }
     .rd-item.checked { opacity: .65; }
     .rd-item.checked .rd-text { text-decoration: line-through; }
     .rd-item.checked .rd-box { background: var(--c-signal); border-color: var(--c-signal); color: #fff; }
     .rd-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+    .rd-origin { font-size: 11px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .05em; }
+    .rd-completed .rd-item { opacity: .65; }
+    .rd-add { display: flex; gap: 10px; margin: 8px 0 24px; }
+    .rd-add input { flex: 1; min-width: 0; min-height: 48px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); font: inherit; font-size: 16px; }
+    .rd-add-btn { min-height: 48px; min-width: 72px; }
     .rd-tags { font-size: 11px; color: var(--ink-faint); }
     .rd-timeline { list-style: none; margin: 0; padding: 0; }
     .rd-tl-row { display: grid; grid-template-columns: 92px 1fr; gap: 10px; padding: 12px 8px; border-bottom: 1px solid var(--line-soft); font-size: 16px; }

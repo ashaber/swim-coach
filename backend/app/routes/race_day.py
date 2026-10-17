@@ -8,15 +8,19 @@ Everything lives in existing JSONB (`athletes.data` for the template and `race_d
 from __future__ import annotations
 
 from datetime import date
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 from swim_coach.models import Athlete, RaceChecklistTemplate, RaceDayPlan
 from swim_coach.race_day import (
+    MAX_ITEM_TEXT,
+    UnknownItemError,
+    add_item,
     find_plan,
     new_plan_from_template,
     parse_timeline,
+    remove_items,
     reset_timeline,
     set_checked,
     set_timeline,
@@ -34,6 +38,25 @@ _HHMM = r"^([01]\d|2[0-3]):[0-5]\d$"
 
 class ItemStates(BaseModel):
     states: dict[str, bool] = Field(min_length=1)
+
+
+ItemId = Annotated[str, Field(min_length=1, max_length=64)]
+
+
+class NewItem(BaseModel):
+    id: ItemId | None = None  # client-chosen so an offline replay of the same add is a no-op
+    text: str = Field(min_length=1, max_length=MAX_ITEM_TEXT)
+
+
+class ChecklistEdit(BaseModel):
+    add: list[NewItem] = Field(default_factory=list, max_length=50)
+    remove: list[ItemId] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def _not_empty(self) -> "ChecklistEdit":
+        if not self.add and not self.remove:
+            raise ValueError("send `add` and/or `remove`")
+        return self
 
 
 class PlanPatch(BaseModel):
@@ -129,6 +152,32 @@ async def patch_race_day_items(
     set_checked(plan, body.states)
     store.save_athlete(profile)
     log.info("race-day items set", athlete=slug, plan_id=plan_id, n=len(body.states))
+    return plan.model_dump(mode="json")
+
+
+@router.patch("/api/race-day/{plan_id}/checklist")
+async def patch_race_day_checklist(
+    plan_id: str,
+    body: ChecklistEdit,
+    request: Request,
+    athlete: str | None = Query(None),
+    principal: Principal = Depends(require_auth),
+) -> dict:
+    """Edit THIS race's checklist (never the template): `add` appends free-text items under a "Misc"
+    section at the top, `remove` drops items by id (adds are applied first). All-or-nothing: an
+    unknown remove id is a 404 and nothing is saved."""
+    store, slug, profile = _load_athlete(request, athlete, principal)
+    plan = _plan_or_404(profile, plan_id)
+    try:
+        for new in body.add:
+            add_item(plan, new.text, new.id)
+        remove_items(plan, body.remove)
+    except UnknownItemError as exc:
+        raise HTTPException(status_code=404, detail=f"no checklist item {exc.args[0]!r}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    store.save_athlete(profile)
+    log.info("race-day checklist edited", athlete=slug, plan_id=plan_id, added=len(body.add), removed=len(body.remove))
     return plan.model_dump(mode="json")
 
 

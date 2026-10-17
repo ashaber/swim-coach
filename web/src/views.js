@@ -15,8 +15,8 @@ import {
   sessionIconKey, dateKey,
 } from './plan.js';
 import {
-  raceWeekCategoryIcon, groupRaceWeekItems, raceWeekSummary, visibleSections, planProgress, allTags,
-  timelineClock, timelinePosition, formatClockTime,
+  raceWeekCategoryIcon, groupRaceWeekItems, raceWeekSummary, checklistView, planProgress, allTags,
+  timelineClock, timelinePosition, formatClockTime, MAX_ITEM_TEXT,
 } from './raceDay.js';
 import { TOOL_LABELS } from './chat.js';
 import { renderSessionIcon } from './icons.js';
@@ -1811,19 +1811,42 @@ export function renderApp(data, planSessionDetailId) {
 // a reload. `rd` = { open, status: 'loading'|'ready'|'error', plan, error, tab, name, date,
 // pending }.
 
-function renderRaceDayChecklistBody(plan) {
-  const sections = visibleSections(plan);
-  if (sections.length === 0) return '<p class="sub">No items for the active weather tags.</p>';
-  return sections.map((sec) => `
+function renderRaceDayItemRow(i) {
+  const origin = i.sectionTitle ? `<span class="rd-origin">${esc(i.sectionTitle)}</span>` : '';
+  return `
+        <div class="rd-row">
+          <button type="button" class="rd-item${i.checked ? ' checked' : ''}" data-a="raceday:check" data-id="${esc(i.id)}" aria-pressed="${i.checked ? 'true' : 'false'}">
+            <span class="rd-box" aria-hidden="true">${i.checked ? '✓' : ''}</span>
+            <span class="rd-text">${esc(i.text)}</span>
+            ${origin}
+            ${(i.tags || []).length ? `<span class="rd-tags">${i.tags.map((t) => esc(t)).join(' · ')}</span>` : ''}
+          </button>
+          <button type="button" class="rd-del" data-a="raceday:remove" data-id="${esc(i.id)}" aria-label="Remove ${esc(i.text)}"><span aria-hidden="true">✕</span></button>
+        </div>`;
+}
+
+function renderRaceDayAddForm(draft) {
+  return `
+      <div class="rd-add">
+        <input type="text" id="raceday-add-input" data-form="raceday-add" data-field="draft" maxlength="${MAX_ITEM_TEXT}" placeholder="Add an item" aria-label="New checklist item" value="${esc(draft || '')}" autocomplete="off" enterkeyhint="done">
+        <button type="button" class="btn-ghost rd-add-btn" data-a="raceday:add">Add</button>
+      </div>`;
+}
+
+function renderRaceDayChecklistBody(plan, draft = '') {
+  const { sections, completed } = checklistView(plan);
+  if (sections.length === 0 && completed.length === 0) return `<p class="sub">No items for the active weather tags.</p>${renderRaceDayAddForm(draft)}`;
+  const open = sections.map((sec) => `
       <section class="rd-section">
         <h3>${esc(sec.title)} <span class="rd-count mono">${sec.done}/${sec.total}</span></h3>
-        ${sec.items.map((i) => `
-        <button type="button" class="rd-item${i.checked ? ' checked' : ''}" data-a="raceday:check" data-id="${esc(i.id)}" aria-pressed="${i.checked ? 'true' : 'false'}">
-          <span class="rd-box" aria-hidden="true">${i.checked ? '✓' : ''}</span>
-          <span class="rd-text">${esc(i.text)}</span>
-          ${(i.tags || []).length ? `<span class="rd-tags">${i.tags.map((t) => esc(t)).join(' · ')}</span>` : ''}
-        </button>`).join('')}
+        ${sec.items.map((i) => renderRaceDayItemRow(i)).join('')}
       </section>`).join('');
+  const done = completed.length === 0 ? '' : `
+      <section class="rd-section rd-completed">
+        <h3>Completed <span class="rd-count mono">${completed.length}</span></h3>
+        ${completed.map((i) => renderRaceDayItemRow(i)).join('')}
+      </section>`;
+  return open + done + renderRaceDayAddForm(draft);
 }
 
 const TL_RULE_INPUTS = [
@@ -1903,7 +1926,7 @@ export function renderRaceDayOverlay(rd, online = true, now = new Date()) {
           <button type="button" role="tab" class="rd-tab${tab === 'timeline' ? ' on' : ''}" data-a="raceday:tab" data-tab="timeline" aria-selected="${tab === 'timeline'}">Timeline</button>
         </div>
       </div>
-      ${tab === 'list' ? renderRaceDayChecklistBody(plan) : renderRaceDayTimelineBody(plan, now, Boolean(rd.editTimeline))}`;
+      ${tab === 'list' ? renderRaceDayChecklistBody(plan, rd.addDraft) : renderRaceDayTimelineBody(plan, now, Boolean(rd.editTimeline))}`;
   }
   const status = rd.notice || (!online ? 'Offline -- changes sync when you reconnect' : (rd.pending ? 'Syncing…' : ''));
   return `

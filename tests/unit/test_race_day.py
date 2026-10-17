@@ -17,8 +17,13 @@ from swim_coach.models import (
     WeekPlan,
 )
 from swim_coach.race_day import (
+    MAX_ITEM_TEXT,
+    MISC_SECTION_ID,
+    UnknownItemError,
+    add_item,
     find_plan,
     new_plan_from_template,
+    remove_items,
     set_checked,
     timeline_clock,
     visible_items,
@@ -129,3 +134,33 @@ def test_find_plan_prefers_session_id_then_date() -> None:
     assert find_plan(athlete, session_id="s1", race_date=date(2030, 1, 1)) is athlete.race_day_plans[0]
     assert find_plan(athlete, session_id="other", race_date=date(2026, 10, 17)) is athlete.race_day_plans[0]
     assert find_plan(athlete, session_id="other", race_date=date(2026, 10, 18)) is None
+
+
+def test_remove_items_drops_and_unchecks_and_is_all_or_nothing() -> None:
+    plan = _plan()
+    with pytest.raises(UnknownItemError):
+        remove_items(plan, ["covers", "ghost"])
+    assert [i.id for i in plan.sections[0].items] == ["helmet", "covers", "arm"]  # untouched
+    remove_items(plan, ["helmet"])
+    assert [i.id for i in plan.sections[0].items] == ["covers", "arm"]
+    assert "helmet" not in plan.checked
+
+
+def test_add_item_creates_misc_section_first_then_reuses_it() -> None:
+    plan = _plan()
+    first = add_item(plan, " Spare tube ", "u1")
+    assert first.text == "Spare tube"
+    assert [s.id for s in plan.sections] == [MISC_SECTION_ID, "kit"]
+    add_item(plan, "Gels")
+    assert [s.id for s in plan.sections] == [MISC_SECTION_ID, "kit"]
+    assert [i.text for i in plan.sections[0].items] == ["Spare tube", "Gels"]
+    assert add_item(plan, "different text", "u1") is first  # same id replays as a no-op
+    assert len(plan.sections[0].items) == 2
+
+
+def test_add_item_rejects_blank_and_overlong_text() -> None:
+    plan = _plan()
+    for bad in ("", "  ", "x" * (MAX_ITEM_TEXT + 1)):
+        with pytest.raises(ValueError):
+            add_item(plan, bad)
+    assert [s.id for s in plan.sections] == ["kit"]

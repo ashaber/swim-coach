@@ -11,7 +11,7 @@ import { findSessionById, LOAD_CHART_WINDOW_DAYS, LOAD_CHART_WINDOW_OPTIONS } fr
 import { buildHistoryFeed } from './history.js';
 import { loadLibrarySort, saveLibrarySort } from './librarySort.js';
 import {
-  loadOpenOverlay, saveOpenOverlay, loadCachedPlan, saveCachedPlan, loadQueue, saveQueue, enqueue,
+  removeItem, addItem, newItemId, MAX_ITEM_TEXT, loadOpenOverlay, saveOpenOverlay, loadCachedPlan, saveCachedPlan, loadQueue, saveQueue, enqueue,
   applyChecked, toggleTag, editTimelineEntry, removeTimelineEntry, addTimelineEntry,
 } from './raceDay.js';
 import {
@@ -23,7 +23,7 @@ import {
   streamChat, postWorkout, fetchPlan, fetchPlanLoad, getAthlete, patchAthlete, patchWorkout,
   listFeedback, uploadWorkoutFile, listWorkouts, syncWorkouts, logout, onboard,
   pushSessionToIntervals,
-  fetchRaceDay, patchRaceDayItems, patchRaceDay, patchRaceDayTimeline, patchRaceWeekItem,
+  fetchRaceDay, patchRaceDayItems, patchRaceDayChecklist, patchRaceDay, patchRaceDayTimeline, patchRaceWeekItem,
   downloadGarminFit,
   createGrant, listGrants, revokeGrant,
   listCoachedAthletes, fetchCoachWorkouts, fetchCoachFeedback, fetchCoachLoad, fetchCoachPlan, replyToCoachFeedback,
@@ -1548,7 +1548,7 @@ function persistRosterChat(slug) {
 
 const COMPOSER_INPUT_IDS = [
   'my-coach-input', 'roster-conversation-input', 'chat-input', 'workout-chat-input',
-  'roster-chat-input', 'roster-workout-chat-input',
+  'roster-chat-input', 'roster-workout-chat-input', 'raceday-add-input',
 ];
 
 function myCoachKey() {
@@ -4083,6 +4083,8 @@ async function onAppClick(e) {
       break;
     case 'raceday:close': requestCloseRaceDay(); break;
     case 'raceday:check': handleRaceDayCheck(el.dataset.id); break;
+    case 'raceday:add': handleRaceDayAddItem(); break;
+    case 'raceday:remove': handleRaceDayRemoveItem(el.dataset.id); break;
     case 'raceday:tag': handleRaceDayTag(el.dataset.tag); break;
     case 'raceday:tab': handleRaceDayTab(el.dataset.tab); break;
     case 'raceday:tl-edit': handleRaceDayTimelineEditToggle(); break;
@@ -4209,6 +4211,7 @@ function onAppInput(e) {
   // never collide.
   else if (formName === 'health-status') state.healthStatusForm[field] = el.value;
   else if (formName === 'grants') state.grants.createForm[field] = el.value;
+  else if (formName === 'raceday-add') state.raceDay.addDraft = el.value;
   // A6b: the workout-detail RPE editor's own slider -- guarded on
   // workoutRpeEdit still being set (defensive against a stray late event
   // after Cancel/Save already cleared it).
@@ -4277,6 +4280,11 @@ function onAppKeydown(e) {
     handleSelectSector(sector.dataset.sector);
     return;
   }
+  if (e.target.id === 'raceday-add-input' && e.key === 'Enter' && !e.isComposing) {
+    e.preventDefault();
+    handleRaceDayAddItem();
+    return;
+  }
   if (e.target.id === 'chat-input' && e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     handleSendChat();
@@ -4308,7 +4316,7 @@ function onAppKeydown(e) {
 function createRaceDay() {
   return {
     open: false, status: 'idle', plan: null, error: null, tab: 'list', editTimeline: false, notice: null,
-    date: null, sessionId: null, name: null, pending: 0,
+    date: null, sessionId: null, name: null, pending: 0, addDraft: '',
   };
 }
 
@@ -4339,6 +4347,10 @@ function applyQueuedToPlan(plan) {
   let next = plan;
   loadQueue().filter((q) => q.athlete === athleteSlug() && q.planId === plan.id).forEach((q) => {
     if (q.kind === 'items') Object.entries(q.payload).forEach(([id, on]) => { next = applyChecked(next, id, on); });
+    if (q.kind === 'checklist') {
+      (q.payload.add || []).forEach((i) => { next = addItem(next, i.id, i.text) || next; });
+      (q.payload.remove || []).forEach((id) => { next = removeItem(next, id); });
+    }
     if (q.kind === 'meta') next = { ...next, ...q.payload };
     if (q.kind === 'timeline' && q.payload.timeline) next = { ...next, timeline: q.payload.timeline, timeline_edited: true };
   });
@@ -4420,6 +4432,27 @@ function handleRaceDayCheck(itemId) {
   if (!plan || !itemId) return;
   const on = !(plan.checked || []).includes(itemId);
   mutateRaceDayPlan(applyChecked(plan, itemId, on), { kind: 'items', payload: { [itemId]: on } });
+}
+
+function handleRaceDayRemoveItem(itemId) {
+  const plan = state.raceDay.plan;
+  if (!plan || !itemId) return;
+  log.info('raceday.item_removed', { athlete: athleteSlug(), plan_id: plan.id, item_id: itemId });
+  mutateRaceDayPlan(removeItem(plan, itemId), { kind: 'checklist', payload: { remove: [itemId] } });
+}
+
+function handleRaceDayAddItem() {
+  const plan = state.raceDay.plan;
+  if (!plan) return;
+  const text = (state.raceDay.addDraft || '').trim();
+  if (!text || text.length > MAX_ITEM_TEXT) return;
+  const id = newItemId();
+  const next = addItem(plan, id, text);
+  if (!next) return;
+  state.raceDay = { ...state.raceDay, addDraft: '' };
+  log.info('raceday.item_added', { athlete: athleteSlug(), plan_id: plan.id, item_id: id });
+  mutateRaceDayPlan(next, { kind: 'checklist', payload: { add: [{ id, text }] } });
+  document.getElementById('raceday-add-input')?.focus();
 }
 
 function handleRaceDayTag(tag) {
@@ -4509,6 +4542,7 @@ function handleRaceWeekToggle(isoWeek, itemId) {
 async function sendQueuedOp(op, settings) {
   const base = { baseUrl: settings.baseUrl, token: settings.token, athlete: op.athlete };
   if (op.kind === 'items') return patchRaceDayItems({ ...base, planId: op.planId, states: op.payload });
+  if (op.kind === 'checklist') return patchRaceDayChecklist({ ...base, planId: op.planId, payload: op.payload });
   if (op.kind === 'meta') return patchRaceDay({ ...base, planId: op.planId, payload: op.payload });
   if (op.kind === 'timeline') return patchRaceDayTimeline({ ...base, planId: op.planId, payload: op.payload });
   let last = { ok: true };

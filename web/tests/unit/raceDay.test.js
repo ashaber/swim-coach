@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
-  groupRaceWeekItems, raceWeekSummary, visibleSections, planProgress, allTags, applyChecked, toggleTag,
+  groupRaceWeekItems, raceWeekSummary, visibleSections, planProgress, allTags, applyChecked, removeItem, addItem, newItemId, checklistView, toggleTag,
   timelineClock, timelinePosition, formatClockTime, mergeOp, loadQueue, enqueue, saveQueue,
   loadOpenOverlay, saveOpenOverlay,
 } from '../../src/raceDay.js';
@@ -71,6 +71,85 @@ describe('weather tag filtering and progress', () => {
   });
 });
 
+describe('completed partition', () => {
+  const wet = toggleTag(PLAN, 'wet');
+  it('moves checked items to completed, remembering their section', () => {
+    const view = checklistView(wet);
+    expect(view.sections.map((s) => [s.title, s.items.map((i) => i.id)])).toEqual([['Kit', ['covers']]]);
+    expect(view.sections[0]).toMatchObject({ done: 1, total: 2 }); // header still counts the whole section
+    expect(view.completed.map((i) => [i.id, i.sectionTitle])).toEqual([['helmet', 'Kit']]);
+  });
+  it('unchecking restores the item to its original section, in its original place', () => {
+    const view = checklistView(applyChecked(wet, 'helmet', false));
+    expect(view.sections[0].items.map((i) => i.id)).toEqual(['helmet', 'covers']);
+    expect(view.completed).toEqual([]);
+  });
+  it('drops a section that has nothing left to do, but keeps its items under completed', () => {
+    const view = checklistView(applyChecked(PLAN, 'helmet', true));
+    expect(view.sections).toEqual([]);
+    expect(view.completed.map((i) => i.id)).toEqual(['helmet']);
+  });
+  it('renders a Completed section below the open ones with a labelled origin', () => {
+    const html = renderRaceDayOverlay({
+      open: true, status: 'ready', plan: wet, tab: 'list', date: '2026-10-17', name: 'Day 1', pending: 0,
+    });
+    expect(html.indexOf('Completed')).toBeGreaterThan(html.indexOf('Shoe covers'));
+    expect(html).toContain('class="rd-origin">Kit<');
+  });
+});
+
+describe('adding an item', () => {
+  it('creates a Misc section at the top on first add, then reuses it', () => {
+    const one = addItem(PLAN, 'u1', '  Spare tube ');
+    expect(one.sections.map((s) => s.title)).toEqual(['Misc', 'Kit', 'Bike prep']);
+    expect(one.sections[0].items).toEqual([{ id: 'u1', text: 'Spare tube', tags: [], default_checked: false }]);
+    const two = addItem(one, 'u2', 'Gels');
+    expect(two.sections.map((s) => s.title)).toEqual(['Misc', 'Kit', 'Bike prep']);
+    expect(two.sections[0].items.map((i) => i.id)).toEqual(['u1', 'u2']);
+    expect(PLAN.sections).toHaveLength(2); // input not mutated
+  });
+  it('shows Misc first in the rendered list, and an unchecked Misc item stays out of Completed', () => {
+    const view = checklistView(addItem(PLAN, 'u1', 'Gels'));
+    expect(view.sections.map((s) => s.title)).toEqual(['Misc']);
+    expect(view.completed.map((i) => i.id)).toEqual(['helmet']);
+  });
+  it('a checked Misc item goes to Completed and returns to Misc when unchecked', () => {
+    const checked = applyChecked(addItem(PLAN, 'u1', 'Gels'), 'u1', true);
+    expect(checklistView(checked).completed.map((i) => [i.id, i.sectionTitle])).toContainEqual(['u1', 'Misc']);
+    expect(checklistView(applyChecked(checked, 'u1', false)).sections[0].items.map((i) => i.id)).toEqual(['u1']);
+  });
+  it('ignores blank or over-long text and replays of the same id', () => {
+    expect(addItem(PLAN, 'u1', '   ')).toBeNull();
+    expect(addItem(PLAN, 'u1', 'x'.repeat(201))).toBeNull();
+    const once = addItem(PLAN, 'u1', 'Gels');
+    expect(addItem(once, 'u1', 'Gels').sections[0].items).toHaveLength(1);
+  });
+  it('generates distinct ids', () => {
+    expect(newItemId()).not.toBe(newItemId());
+  });
+  it('renders the add entry with the draft text and an Add button', () => {
+    const html = renderRaceDayOverlay({
+      open: true, status: 'ready', plan: PLAN, tab: 'list', date: '2026-10-17', name: 'Day 1', pending: 0, addDraft: 'Gels "x"',
+    });
+    expect(html).toContain('id="raceday-add-input"');
+    expect(html).toContain('value="Gels &quot;x&quot;"');
+    expect(html).toContain('data-a="raceday:add"');
+  });
+});
+
+describe('removing an item from the plan', () => {
+  it('drops it from its section and the checked list without touching other items', () => {
+    const next = removeItem(PLAN, 'helmet');
+    expect(next.sections[0].items.map((i) => i.id)).toEqual(['covers']);
+    expect(next.checked).toEqual([]);
+    expect(next.sections[1]).toEqual(PLAN.sections[1]);
+    expect(PLAN.sections[0].items).toHaveLength(2); // input not mutated
+  });
+  it('is a no-op for an unknown id', () => {
+    expect(removeItem(PLAN, 'nope').sections[0].items).toHaveLength(2);
+  });
+});
+
 describe('timeline clock', () => {
   it('computes clock times from the start time, eve entries at their own clock time', () => {
     const clock = timelineClock(PLAN);
@@ -120,6 +199,15 @@ describe('offline queue', () => {
     expect(q).toHaveLength(3);
     expect(q[0].payload).toEqual({ x: false, y: true });
   });
+  it('accumulates checklist edits for a plan instead of overwriting them', () => {
+    let q = mergeOp([], { athlete: 'a', planId: 'p1', kind: 'checklist', payload: { remove: ['a'] } });
+    q = mergeOp(q, { athlete: 'a', planId: 'p1', kind: 'checklist', payload: { remove: ['b', 'a'] } });
+    expect(q).toHaveLength(1);
+    expect(q[0].payload).toEqual({ remove: ['a', 'b'] });
+    q = mergeOp(q, { athlete: 'a', planId: 'p1', kind: 'checklist', payload: { add: [{ id: 'u1', text: 'Gels' }] } });
+    q = mergeOp(q, { athlete: 'a', planId: 'p1', kind: 'checklist', payload: { add: [{ id: 'u1', text: 'Gels' }, { id: 'u2', text: 'Tube' }] } });
+    expect(q[0].payload).toEqual({ remove: ['a', 'b'], add: [{ id: 'u1', text: 'Gels' }, { id: 'u2', text: 'Tube' }] });
+  });
   it('does not mutate its input', () => {
     const base = [{ athlete: 'a', planId: 'p1', kind: 'items', payload: { x: true } }];
     mergeOp(base, { athlete: 'a', planId: 'p1', kind: 'items', payload: { x: false } });
@@ -168,6 +256,11 @@ describe('renderRaceDayOverlay', () => {
     expect(html).toContain('evening before');
     expect(html).toContain('rd-tl-row start');
     expect(html).toContain('rd-tl-row current');
+  });
+  it('renders a separate, labelled remove button per item', () => {
+    const html = renderRaceDayOverlay(rd());
+    expect(html).toContain('data-a="raceday:remove" data-id="helmet"');
+    expect(html).toContain('aria-label="Remove Helmet"');
   });
   it('shows an error message when the plan failed to load', () => {
     expect(renderRaceDayOverlay({ open: true, status: 'error', error: 'no template yet', date: '2026-10-17' })).toContain('no template yet');
