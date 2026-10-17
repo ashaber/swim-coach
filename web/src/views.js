@@ -3181,8 +3181,26 @@ function renderFreeRideSection(workout, { zoneKeyShown = false } = {}) {
     </section>`;
 }
 
-function sectorRowAttrs(sector, selected) {
-  return ` class="cs-row${sector === selected ? ' cs-row--selected' : ''}" data-a="workout:sector-select" data-sector="${sector}" tabindex="0" aria-pressed="${sector === selected}"`;
+/** Lap x sector grid: cells are seconds lost vs the best time through that sector, heat-tinted. The
+ * first column sticks while the table scrolls sideways inside its own wrapper; tapping a sector
+ * header selects that sector (same selection as the map). */
+function renderSectorGrid(grid) {
+  const sel = (on) => (on ? ' cs-col--selected' : '');
+  const head = grid.sectors.map((s) => `
+            <th class="cs-col${sel(s.selected)}" scope="col" data-a="workout:sector-select" data-sector="${s.sector}" tabindex="0" role="button" aria-pressed="${s.selected}" aria-label="Sector ${s.sector}, best ${esc(s.best)} s">${esc(s.label)}<small>${esc(s.best)}</small></th>`).join('');
+  const body = grid.rows.map((r) => `
+          <tr><th scope="row" class="cs-lap">${esc(r.label)} <small>${esc(r.time)} · ${esc(r.gap)}</small></th>${r.cells.map((c) => `<td class="cs-cell cs-heat-${c.heat}${c.best ? ' cs-cell--best' : ''}${sel(c.selected)}">${esc(c.text)}</td>`).join('')}</tr>`).join('');
+  const foot = (label, key) => `<tr><th scope="row" class="cs-lap">${label}</th>${grid.sectors.map((s) => `<td class="cs-cell${sel(s.selected)}">${esc(s[key])}</td>`).join('')}</tr>`;
+  return `
+      <p class="sub">${esc(grid.ideal)}</p>
+      <div class="cs-grid-wrap">
+        <table class="cs-grid">
+          <thead><tr><th scope="col" class="cs-lap">Lap</th>${head}</tr></thead>
+          <tbody>${body}</tbody>
+          <tfoot>${foot('Lost (total)', 'total')}${foot('Spread', 'spread')}</tfoot>
+        </table>
+      </div>
+      <p class="sub">${esc(grid.caption)}</p>`;
 }
 
 /** Inline SVG of the best lap (no tiles, no requests): each sector stroked by loss tone, numbered,
@@ -3232,7 +3250,7 @@ function renderMtbSections(workout, selectedSector = null, mapView = null) {
       ${cs.map ? renderCourseMap(cs.map) : ''}
       ${cs.selected ? `<p class="sub">${esc(cs.selected)}</p>` : ''}
       ${renderRawTable(cs.laps.columns, cs.laps.rows)}
-      ${cs.losses ? `<h5>Where the time went</h5>${renderRawTable(cs.losses.columns, cs.losses.rows, (_, i) => sectorRowAttrs(cs.losses.sectors[i], selectedSector))}` : ''}
+      ${cs.grid ? `<h5>Where the time went</h5>${renderSectorGrid(cs.grid)}` : ''}
     </section>` : '';
   return mtb + sectors;
 }
