@@ -93,6 +93,12 @@ class Backend:
                 self.plan['checked'] = checked + ([item_id] if on else [])
             self._json(route, self.plan)
         elif path.endswith('/checklist'):
+            for new in body.get('add', []):
+                misc = next((s for s in self.plan['sections'] if s['id'] == 'misc-added'), None)
+                if misc is None:
+                    misc = {'id': 'misc-added', 'title': 'Misc', 'items': []}
+                    self.plan['sections'].insert(0, misc)
+                misc['items'].append({'id': new['id'], 'text': new['text'], 'tags': [], 'default_checked': False})
             gone = set(body.get('remove', []))
             for sec in self.plan['sections']:
                 sec['items'] = [i for i in sec['items'] if i['id'] not in gone]
@@ -210,6 +216,45 @@ def test_checked_items_move_to_completed_and_back(env):
     page.click('.rd-completed .rd-item:has-text("Helmet")')
     page.wait_for_selector('.rd-section:not(.rd-completed) .rd-item:has-text("Helmet")')
     assert page.locator('.rd-completed .rd-item:has-text("Helmet")').count() == 0
+
+
+def test_add_item_goes_to_misc_at_top_and_persists(env):
+    page, ctx, backend = env
+    _open_overlay(page)
+    page.fill('#raceday-add-input', 'Spare tube')
+    page.press('#raceday-add-input', 'Enter')
+    page.wait_for_selector('.rd-item:has-text("Spare tube")')
+    assert page.input_value('#raceday-add-input') == ''
+    assert page.evaluate('() => document.activeElement.id') == 'raceday-add-input'
+    assert page.locator('.rd-section h3').first.inner_text().upper().startswith('MISC')
+    page.fill('#raceday-add-input', 'Gels')
+    page.click('[data-a="raceday:add"]')
+    page.wait_for_selector('.rd-item:has-text("Gels")')
+    page.wait_for_timeout(300)
+    assert [i['text'] for i in backend.plan['sections'][0]['items']] == ['Spare tube', 'Gels']
+    page.reload()
+    page.wait_for_selector('#race-overlay .rd-item:has-text("Spare tube")')
+    assert page.locator('.rd-section h3').first.inner_text().upper().startswith('MISC')
+    # a blank entry adds nothing
+    page.click('[data-a="raceday:add"]')
+    page.wait_for_timeout(200)
+    assert len(backend.plan['sections'][0]['items']) == 2
+
+
+def test_offline_add_and_remove_sync_when_back_online(env):
+    page, ctx, backend = env
+    _open_overlay(page)
+    ctx.set_offline(True)
+    page.fill('#raceday-add-input', 'Spare tube')
+    page.press('#raceday-add-input', 'Enter')
+    page.wait_for_selector('.rd-item:has-text("Spare tube")')
+    page.click('[aria-label="Remove Shoes"]')
+    page.wait_for_selector('.rd-item:has-text("Shoes")', state='detached')
+    assert backend.plan['sections'][0]['id'] == 'kit'
+    ctx.set_offline(False)
+    page.wait_for_function('() => !localStorage.getItem("swimcoach_raceday_queue")')
+    assert [i['text'] for i in backend.plan['sections'][0]['items']] == ['Spare tube']
+    assert 'shoes' not in [i['id'] for s in backend.plan['sections'] for i in s['items']]
 
 
 def test_reload_keeps_overlay_open_with_checks_and_back_closes_it(env):

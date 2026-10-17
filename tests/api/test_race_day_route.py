@@ -174,3 +174,62 @@ def test_checklist_remove_validates_body(client, run_tag) -> None:
     assert client.patch(url, json={"remove": [""]}, headers=auth_headers()).status_code == 422
     assert client.patch(url, json={"remove": ["x"] * 101}, headers=auth_headers()).status_code == 422
     assert client.patch(url, json={"remove": ["helmet"]}).status_code == 401
+
+
+def test_checklist_add_creates_misc_section_at_top(client, run_tag) -> None:
+    _put_template(client)
+    plan = _open(client, run_tag).json()
+    url = f"/api/race-day/{plan['id']}/checklist?athlete=renee"
+    r = client.patch(url, json={"add": [{"text": "  Spare tube  "}]}, headers=auth_headers())
+    assert r.status_code == 200
+    sections = r.json()["sections"]
+    assert [s["title"] for s in sections] == ["Misc", "Kit"]
+    assert [i["text"] for i in sections[0]["items"]] == ["Spare tube"]
+    assert sections[0]["items"][0]["id"]  # generated server-side when not supplied
+    again = client.patch(url, json={"add": [{"id": "u1", "text": "Gels"}]}, headers=auth_headers()).json()
+    assert [s["title"] for s in again["sections"]] == ["Misc", "Kit"]  # one Misc section
+    assert [i["text"] for i in again["sections"][0]["items"]] == ["Spare tube", "Gels"]
+    persisted = _open(client, run_tag).json()
+    assert [i["id"] for i in persisted["sections"][0]["items"]][1] == "u1"
+    template = client.get("/api/race-checklist/template?athlete=renee", headers=auth_headers()).json()
+    assert [s["title"] for s in template["sections"]] == ["Kit"]
+
+
+def test_checklist_add_with_same_id_is_replay_safe(client, run_tag) -> None:
+    _put_template(client)
+    plan = _open(client, run_tag).json()
+    url = f"/api/race-day/{plan['id']}/checklist?athlete=renee"
+    for _ in range(2):
+        r = client.patch(url, json={"add": [{"id": "u1", "text": "Gels"}]}, headers=auth_headers())
+        assert r.status_code == 200
+    assert [i["id"] for i in r.json()["sections"][0]["items"]] == ["u1"]
+
+
+def test_checklist_add_then_remove_in_one_request(client, run_tag) -> None:
+    _put_template(client)
+    plan = _open(client, run_tag).json()
+    url = f"/api/race-day/{plan['id']}/checklist?athlete=renee"
+    r = client.patch(url, json={"add": [{"id": "u1", "text": "Gels"}], "remove": ["u1"]}, headers=auth_headers())
+    assert r.status_code == 200
+    assert [i["id"] for s in r.json()["sections"] for i in s["items"]] == ["helmet", "covers"]
+
+
+def test_checklist_add_rejects_empty_and_overlong_text(client, run_tag) -> None:
+    _put_template(client)
+    plan = _open(client, run_tag).json()
+    url = f"/api/race-day/{plan['id']}/checklist?athlete=renee"
+    for bad in ("", "   ", "x" * 201):
+        r = client.patch(url, json={"add": [{"text": bad}]}, headers=auth_headers())
+        assert r.status_code == 422, bad
+    assert client.patch(url, json={"add": [{"text": "x" * 200}]}, headers=auth_headers()).status_code == 200
+    assert client.patch(url, json={"add": [{"id": "", "text": "ok"}]}, headers=auth_headers()).status_code == 422
+    assert client.patch(url, json={"add": [{}]}, headers=auth_headers()).status_code == 422
+
+
+def test_checklist_add_with_unknown_remove_saves_nothing(client, run_tag) -> None:
+    _put_template(client)
+    plan = _open(client, run_tag).json()
+    url = f"/api/race-day/{plan['id']}/checklist?athlete=renee"
+    r = client.patch(url, json={"add": [{"text": "Gels"}], "remove": ["nope"]}, headers=auth_headers())
+    assert r.status_code == 404
+    assert [s["title"] for s in _open(client, run_tag).json()["sections"]] == ["Kit"]
