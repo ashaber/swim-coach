@@ -28,7 +28,7 @@ import {
   LIBRARY_SORTS, DEFAULT_LIBRARY_SORT, sortLibraryFiles, fileAddedDate, isNewFile, formatAddedLabel,
 } from './librarySort.js';
 import { expandStructure, actualPoints, sessionForWorkout, shapeChartGeometry } from './shape.js';
-import { buildCourseSectors, buildFreeRide, buildMtbDynamics, buildRawAnalysis, effectiveKind, kindLabel, KIND_OPTIONS } from './analysis.js';
+import { buildCourseSectors, buildFreeRide, powerCurveView, buildMtbDynamics, buildRawAnalysis, effectiveKind, kindLabel, KIND_OPTIONS } from './analysis.js';
 import { sportHasPlannedDistance, sportCanPushToGarmin, sportUsesPace } from './sports.js';
 import {
   sportLabel, sourceBadge, formatWorkoutDistance, formatAnalyticsLine,
@@ -2791,11 +2791,9 @@ function renderRpeEditSection(workout, rpeEdit) {
 function renderDetailAnalytics(analytics) {
   if (!analytics) return '';
   const lines = [
-    // a free ride's drift is read only over its steady stretches (the Free ride section)
-    analytics.free_ride ? null : formatDrift(analytics.cardiac_drift_pct),
+    // drift and pauses live in the Raw analysis panel
     formatSplit(analytics),
     formatMovingVsElapsed(analytics),
-    formatPauses(analytics),
     formatSwolf(analytics),
   ].filter(Boolean);
   if (lines.length === 0) return '';
@@ -2888,18 +2886,13 @@ function renderLapsTable(laps, sport) {
     </section>`;
 }
 
-function renderPausesList(pauses) {
-  if (!pauses || pauses.length === 0) return '';
+function renderPauseRows(pauses) {
   const rows = pauses.map((pause) => {
     const offset = formatOffset(pause.start_offset_s);
     const duration = formatClock(pause.duration_s);
     return `<div class="pause-row mono">${esc(offset)} · ${esc(duration)} · ${esc(pause.source)}</div>`;
   }).join('');
-  return `
-    <section class="detail-section">
-      <h4>Pauses (${pauses.length})</h4>
-      <div class="pauses-list">${rows}</div>
-    </section>`;
+  return `<h5>Pauses (${pauses.length})</h5><div class="pauses-list">${rows}</div>`;
 }
 
 function formatSpeedKmh(mps) {
@@ -3039,9 +3032,11 @@ function renderShapeSvg(g, { label }) {
     </svg>`;
 }
 
+const SHAPE_LEGEND_MARK = 'data-zone-key';
+
 function renderShapeLegend(g) {
   return `
-    <div class="shape-legend">
+    <div class="shape-legend" ${SHAPE_LEGEND_MARK}>
       ${g.legend.map((l) => `<span class="shape-legend-item"><i class="shape-swatch" style="background:${l.color}"></i>${esc(l.zone)} ${esc(l.name)} <span class="mono">${esc(l.range)}</span></span>`).join('')}
     </div>`;
 }
@@ -3166,12 +3161,14 @@ function renderPowerCurveSvg(g) {
 
 /** "Free ride" section: where the pedalling time went (stacked zone bar), the notable efforts,
  * matches burned and the cost note. Always shown for a ride that has `analytics.free_ride`. */
-function renderFreeRideSection(workout) {
+function renderFreeRideSection(workout, { zoneKeyShown = false } = {}) {
   const m = buildFreeRide(workout);
   if (!m) return '';
   const bar = m.zoneBar.filter((z) => z.drawn)
     .map((z) => `<i style="flex:${z.pct} 0 0;background:${z.color}" title="${esc(z.label)}"></i>`).join('');
-  const legend = m.zoneBar.map((z) => `<li><i style="background:${z.color}"></i>${esc(z.label)}</li>`).join('');
+  // The workout graph's key already names every zone colour; when it is on the page the bar lists
+  // only the labels and percentages, without a second colour key.
+  const legend = m.zoneBar.map((z) => `<li>${zoneKeyShown ? '' : `<i style="background:${z.color}"></i>`}${esc(z.label)}</li>`).join('');
   return `
     <section class="detail-section free-ride">
       <h4>Free ride</h4>
@@ -3181,7 +3178,6 @@ function renderFreeRideSection(workout) {
       ${m.zoneBar.length ? `<h5>Time in power zones</h5><div class="free-ride-zonebar" role="img" aria-label="Pedalling time by power zone">${bar}</div><ul class="free-ride-legend">${legend}</ul><p class="sub">${esc(m.coasting)}</p>` : ''}
       ${m.efforts ? `<h5>Notable efforts</h5>${renderRawTable(m.efforts.columns, m.efforts.rows)}` : ''}
       ${m.matches ? `<h5>Matches burned</h5><p class="sub">${esc(m.matches.summary)}</p>${renderRawTable(m.matches.columns, m.matches.rows)}` : ''}
-      ${m.drift.length ? `<h5>Steady-stretch drift</h5>${m.drift.map((d) => `<p class="sub">${esc(d)}</p>`).join('')}` : (m.driftNote ? `<p class="sub">${esc(m.driftNote)}</p>` : '')}
     </section>`;
 }
 
@@ -3238,6 +3234,28 @@ function renderMtbSections(workout, selectedSector = null) {
   return mtb + sectors;
 }
 
+/** Mean-maximal power curve: this ride against the 90-day best. Main analysis view. */
+function renderPowerCurveSection(workout) {
+  const curve = powerCurveView(workout?.analytics?.power_curve);
+  if (!curve) return '';
+  return `
+    <section class="detail-section power-curve">
+      <h4>Power curve</h4>
+      ${curve.note ? `<p class="sub">${esc(curve.note)}</p>` : ''}
+      ${curve.geometry ? renderPowerCurveSvg(curve.geometry) : ''}
+      ${renderRawTable(curve.columns, curve.rows)}
+    </section>`;
+}
+
+function renderDiagnostics(d) {
+  if (!d) return '';
+  return `
+      <h5>Drift and pauses</h5>
+      ${d.lines.length ? `<div class="detail-analytics-list">${d.lines.map((line) => `<div>${highlightDrift(line)}</div>`).join('')}</div>` : ''}
+      ${d.steady.map((line) => `<p class="sub">${esc(line)}</p>`).join('')}
+      ${d.pauses.length ? renderPauseRows(d.pauses) : ''}`;
+}
+
 function renderRawAnalysisSection(workout, pacing, open) {
   const model = buildRawAnalysis(workout, pacing);
   if (!model) return '';
@@ -3258,7 +3276,7 @@ function renderRawAnalysisSection(workout, pacing, open) {
       ${model.efforts ? `<h5>Efforts (${model.efforts.rows.length})</h5>${model.efforts.rows.length ? renderRawTable(model.efforts.columns, model.efforts.rows) : '<p class="sub">No sustained efforts detected.</p>'}` : ''}
       ${model.rounds ? `<h5>Rounds</h5>${renderRawTable(model.rounds.columns, model.rounds.rows)}` : ''}
       ${model.starts ? `<div class="raw-starts"><h5>Starts</h5>${model.starts.flag ? `<p class="sub">${esc(model.starts.flag)}</p>` : ''}${renderRawTable(model.starts.columns, model.starts.rows)}${renderStartTraces(model.starts.traces)}</div>` : ''}
-      ${model.powerCurve ? `<div class="raw-power-curve"><h5>Power curve</h5>${model.powerCurve.note ? `<p class="sub">${esc(model.powerCurve.note)}</p>` : ''}${model.powerCurve.geometry ? renderPowerCurveSvg(model.powerCurve.geometry) : ''}${renderRawTable(model.powerCurve.columns, model.powerCurve.rows)}</div>` : ''}
+      ${renderDiagnostics(model.diagnostics)}
       ${race ? `
       <h5>Race analysis</h5>
       ${renderScoreBreakdown(race.score)}
@@ -3426,6 +3444,7 @@ export function renderWorkoutDetail(workout, {
   weeks = [], ftpWatts = null, rawAnalysisOpen = null, kindEdit = null, selectedSector = null,
 } = {}) {
   const badge = sourceBadge(workout.source);
+  const shapeSection = renderCompletedShapeSection(workout, pacing, weeks, ftpWatts);
   // `renderAskCoachSection` (the old single-turn Feedback-based Q&A) is gone from here
   // entirely -- superseded by the unified thread below (IDEA 016); it's still used,
   // unchanged, for PLAN SESSIONS (renderPlanSessionDetail).
@@ -3436,17 +3455,17 @@ export function renderWorkoutDetail(workout, {
     </div>
     ${renderKindRow(workout, editable, kindEdit)}
     ${renderDetailStats(workout)}
-    ${renderCompletedShapeSection(workout, pacing, weeks, ftpWatts)}
+    ${shapeSection}
     ${editable ? renderRpeEditSection(workout, rpeEdit) : ''}
     ${renderRaceDebriefSection(workout, raceDebriefs)}
-    ${renderFreeRideSection(workout)}
+    ${renderFreeRideSection(workout, { zoneKeyShown: shapeSection.includes(SHAPE_LEGEND_MARK) })}
     ${renderMtbSections(workout, selectedSector)}
+    ${renderPowerCurveSection(workout)}
     ${renderDetailAnalytics(workout.analytics)}
     ${renderIntervalsSection(workout.analytics?.intervals)}
     ${renderRaceAnalysisSection(workout, pacing)}
     ${rawAnalysisOpen === null ? '' : renderRawAnalysisSection(workout, pacing, rawAnalysisOpen)}
     ${renderLapsTable(workout.laps, workout.sport)}
-    ${renderPausesList(workout.pauses)}
     ${renderLengthsSummarySection(workout.lengths)}
     ${renderDetailNotes(workout.notes)}
     ${renderWorkoutThread(viewerRole === 'coach' ? {

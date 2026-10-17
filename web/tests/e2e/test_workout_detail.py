@@ -194,10 +194,14 @@ def test_open_detail_from_row_shows_all_sections(page):
     assert '7/10' in content
     assert '132 bpm' in content
     assert '158 bpm' in content
-    # Full analytics block.
-    assert 'drift +6.4% ⚠' in content
+    # Analytics block; drift and pauses live in Raw analysis.
     assert 'positive split' in content
     assert 'SWOLF 38.2' in content
+    assert 'drift +6.4%' not in content and page.locator('.pauses-list').count() == 0
+    page.locator('[data-a="workout:raw-analysis-toggle"]').click()
+    page.wait_for_selector('.raw-analysis')
+    content = page.content()
+    assert 'drift +6.4% ⚠' in content
     assert '2 pauses · 3 min stopped' in content
     # Laps table.
     assert page.locator('table.laps-table').count() == 1

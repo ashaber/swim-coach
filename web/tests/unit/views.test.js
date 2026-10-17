@@ -307,15 +307,29 @@ describe('renderDashboardTab', () => {
       expect(html).toContain('158 bpm');
     });
 
-    it('renders the full analytics block with drift warning, split, moving-vs-elapsed, pauses, and swolf', () => {
+    it('renders split, moving-vs-elapsed and swolf in the main view, with drift and pauses left to Raw analysis', () => {
       const html = renderDashboardTab({
         ...DASHBOARD_BASE_ARGS, feed: feedOf([RICH_FIT_WORKOUT]), detailId: 'w-rich',
       });
-      expect(html).toContain('drift +6.4% ⚠');
       expect(html).toContain('positive split (1:48 → 2:00)');
       expect(html).toContain('1 h 35 min moving of 1 h 38 min');
-      expect(html).toContain('2 pauses · 3 min stopped');
       expect(html).toContain('SWOLF 38.2→44.9 (+17.5%)');
+      expect(html).not.toContain('drift +6.4%');
+      expect(html).not.toContain('2 pauses');
+      expect(html).not.toContain('pauses-list');
+    });
+
+    it('shows drift, the pause count and the pause list inside the opened Raw analysis panel', () => {
+      const html = renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS, feed: feedOf([RICH_FIT_WORKOUT]), detailId: 'w-rich',
+        detailExtras: { rawAnalysisOpen: true },
+      });
+      const raw = html.slice(html.indexOf('class="detail-section raw-analysis"'));
+      expect(raw).toContain('drift +6.4% ⚠');
+      expect(raw).toContain('2 pauses · 3 min stopped');
+      expect(raw).toContain('0:12:34'); // 754s offset
+      expect(raw).toContain('gap');
+      expect(raw).toContain('timer');
     });
 
     it('renders a laps table with index, distance, duration, pace, and HR', () => {
@@ -527,15 +541,6 @@ describe('renderDashboardTab', () => {
         expect(html).not.toContain('<script>alert(1)</script>');
         expect(html).not.toContain('<img src=x onerror=alert(1)>');
       });
-    });
-
-    it('renders a pauses list with offset (h:mm:ss), duration, and source', () => {
-      const html = renderDashboardTab({
-        ...DASHBOARD_BASE_ARGS, feed: feedOf([RICH_FIT_WORKOUT]), detailId: 'w-rich',
-      });
-      expect(html).toContain('0:12:34'); // 754s offset
-      expect(html).toContain('gap');
-      expect(html).toContain('timer');
     });
 
     it('renders notes verbatim (escaped)', () => {

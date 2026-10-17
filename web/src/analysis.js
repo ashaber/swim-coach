@@ -7,7 +7,7 @@
 // fetched pacing result when it has arrived), so it renders offline. DOM-free:
 // views.js turns the returned rows into markup.
 
-import { formatClock } from './workouts.js';
+import { formatClock, formatDrift, formatPauses } from './workouts.js';
 import { sessionForWorkout, ZONE_COLORS, ZONE_LABELS } from './shape.js';
 
 const num = (v) => v !== null && v !== undefined && Number.isFinite(v);
@@ -211,7 +211,7 @@ export function powerCurveGeometry(curve, { width = 320, height = 170 } = {}) {
   };
 }
 
-function powerCurveView(curve) {
+export function powerCurveView(curve) {
   if (!Array.isArray(curve) || curve.length === 0) return null;
   const byDur = new Map(curve.map((p) => [p.duration_s, p]));
   const rows = CURVE_TABLE_S.filter((d) => byDur.has(d)).map((d) => {
@@ -275,6 +275,18 @@ function startsView(iv) {
   };
 }
 
+/** Drift, pause count and the pause list: diagnostics that live in the Raw analysis panel, not the
+ * main view. A free ride's whole-ride drift is meaningless (its steady stretches carry the read). */
+function diagnosticsView(workout) {
+  const an = workout?.analytics || {};
+  const free = buildFreeRide(workout);
+  const lines = [an.free_ride ? null : formatDrift(an.cardiac_drift_pct), formatPauses(an)].filter(Boolean);
+  const pauses = Array.isArray(workout?.pauses) ? workout.pauses : [];
+  const steady = free ? [...free.drift, ...(free.driftNote ? [free.driftNote] : [])] : [];
+  if (!lines.length && !pauses.length && !steady.length) return null;
+  return { lines, steady, pauses };
+}
+
 /** Everything the panel shows, or null when there is nothing analyzer-made to
  * show (no interval analysis and no pacing). `pacing` is
  * `state.pacingByWorkoutId[id]` (`{status, data, error}`) or undefined. */
@@ -283,15 +295,15 @@ export function buildRawAnalysis(workout, pacing) {
   const execution = workout?.quality?.execution || null;
   const isRace = effectiveKind(workout) === 'race';
   const race = isRace ? raceView(pacing) : null;
-  const powerCurve = powerCurveView(workout?.analytics?.power_curve);
-  if (!iv && !race && !execution && !powerCurve) return null;
+  const diagnostics = diagnosticsView(workout);
+  if (!iv && !race && !execution && !diagnostics) return null;
   return {
     summary: iv ? summaryRows(iv) : [],
     score: scoreView(execution, 'Execution score'),
     efforts: iv ? { columns: EFFORT_COLUMNS, rows: effortRows(iv) } : null,
     rounds: iv && (iv.rounds || []).length ? { columns: ROUND_COLUMNS, rows: roundRows(iv) } : null,
     starts: startsView(iv),
-    powerCurve,
+    diagnostics,
     race,
     racePending: isRace && pacing?.status === 'loading',
     raceError: isRace && pacing?.status === 'error' ? (pacing.error || 'Race analysis is not available.') : null,

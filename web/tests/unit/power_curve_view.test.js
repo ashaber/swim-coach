@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildRawAnalysis } from '../../src/analysis.js';
+import { buildRawAnalysis, powerCurveView } from '../../src/analysis.js';
 
 describe('power curve and race starts', () => {
   const curve = [
@@ -10,14 +10,14 @@ describe('power curve and race starts', () => {
   ];
 
   it('builds the curve table with prior bests and new-best flags', () => {
-    const m = buildRawAnalysis({ analytics: { power_curve: curve } }, undefined);
-    expect(m.powerCurve.rows[0]).toEqual(['1s', '1100 W', '1000 W', '1050 W', 'new 90-day best']);
-    expect(m.powerCurve.rows[1]).toEqual(['5s', '956 W', '900 W', '980 W', 'new 42-day best']);
-    expect(m.powerCurve.rows[2]).toEqual(['1min', '353 W', '—', '—', '']);
+    const m = powerCurveView(curve);
+    expect(m.rows[0]).toEqual(['1s', '1100 W', '1000 W', '1050 W', 'new 90-day best']);
+    expect(m.rows[1]).toEqual(['5s', '956 W', '900 W', '980 W', 'new 42-day best']);
+    expect(m.rows[2]).toEqual(['1min', '353 W', '—', '—', '']);
   });
 
   it('puts duration on a log axis and draws the 90-day line only where it exists', () => {
-    const g = buildRawAnalysis({ analytics: { power_curve: curve } }, undefined).powerCurve.geometry;
+    const g = powerCurveView(curve).geometry;
     const xs = g.ride.split(' ').map((p) => Number(p.split(',')[0]));
     expect(xs[0]).toBe(g.plotLeft);
     expect(xs[xs.length - 1]).toBe(g.plotRight);
@@ -29,8 +29,9 @@ describe('power curve and race starts', () => {
 
   it('says so when no earlier ride has a curve, and has no panel for a ride without one', () => {
     const bare = curve.map((p) => ({ ...p, is_best_42d: null, is_best_90d: null }));
-    expect(buildRawAnalysis({ analytics: { power_curve: bare } }, undefined).powerCurve.note).toMatch(/No earlier rides/);
-    expect(buildRawAnalysis({ analytics: {} }, undefined)).toBeNull();
+    expect(powerCurveView(bare).note).toMatch(/No earlier rides/);
+    expect(powerCurveView(undefined)).toBeNull();
+    expect(buildRawAnalysis({ analytics: { power_curve: curve } }, undefined)).toBeNull(); // the curve is no longer a raw-panel item
   });
 
   it('builds the starts table with held seconds and the weak-start note', () => {
