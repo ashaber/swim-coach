@@ -646,6 +646,12 @@
     .cs-map-wrap .cs-map { margin: 0 auto; touch-action: none; user-select: none; -webkit-user-select: none; overflow: hidden; }
     .cs-reset { position: absolute; top: 6px; left: 6px; min-height: 32px; padding: 4px 10px; font-size: 12px; background: var(--paper); }
     .cs-reset[hidden] { display: none; }
+    .cs-expand { position: absolute; top: 6px; right: 6px; min-height: 32px; padding: 4px 10px; font-size: 12px; background: var(--paper); }
+    body.cs-locked { overflow: hidden; }
+    .cs-overlay { z-index: 60; }
+    .cs-overlay .cs-map-wrap { max-width: none; }
+    .cs-overlay .cs-map { max-width: none; width: 100%; max-height: 55vh; }
+    .cs-summary { margin: 10px 0; font-size: 14px; font-weight: 600; color: var(--ink); }
     .cs-line, .cs-hit { vector-effect: non-scaling-stroke; }
     .cs-num, .cs-start circle { transform-box: fill-box; transform-origin: center; transform: scale(var(--cs-k, 1)); }
     .cs-seg { cursor: pointer; outline: none; }
