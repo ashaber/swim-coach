@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
-  groupRaceWeekItems, raceWeekSummary, visibleSections, planProgress, allTags, applyChecked, toggleTag,
+  groupRaceWeekItems, raceWeekSummary, visibleSections, planProgress, allTags, applyChecked, removeItem, toggleTag,
   timelineClock, timelinePosition, formatClockTime, mergeOp, loadQueue, enqueue, saveQueue,
   loadOpenOverlay, saveOpenOverlay,
 } from '../../src/raceDay.js';
@@ -71,6 +71,19 @@ describe('weather tag filtering and progress', () => {
   });
 });
 
+describe('removing an item from the plan', () => {
+  it('drops it from its section and the checked list without touching other items', () => {
+    const next = removeItem(PLAN, 'helmet');
+    expect(next.sections[0].items.map((i) => i.id)).toEqual(['covers']);
+    expect(next.checked).toEqual([]);
+    expect(next.sections[1]).toEqual(PLAN.sections[1]);
+    expect(PLAN.sections[0].items).toHaveLength(2); // input not mutated
+  });
+  it('is a no-op for an unknown id', () => {
+    expect(removeItem(PLAN, 'nope').sections[0].items).toHaveLength(2);
+  });
+});
+
 describe('timeline clock', () => {
   it('computes clock times from the start time, eve entries at their own clock time', () => {
     const clock = timelineClock(PLAN);
@@ -120,6 +133,12 @@ describe('offline queue', () => {
     expect(q).toHaveLength(3);
     expect(q[0].payload).toEqual({ x: false, y: true });
   });
+  it('accumulates checklist edits for a plan instead of overwriting them', () => {
+    let q = mergeOp([], { athlete: 'a', planId: 'p1', kind: 'checklist', payload: { remove: ['a'] } });
+    q = mergeOp(q, { athlete: 'a', planId: 'p1', kind: 'checklist', payload: { remove: ['b', 'a'] } });
+    expect(q).toHaveLength(1);
+    expect(q[0].payload).toEqual({ remove: ['a', 'b'] });
+  });
   it('does not mutate its input', () => {
     const base = [{ athlete: 'a', planId: 'p1', kind: 'items', payload: { x: true } }];
     mergeOp(base, { athlete: 'a', planId: 'p1', kind: 'items', payload: { x: false } });
@@ -168,6 +187,11 @@ describe('renderRaceDayOverlay', () => {
     expect(html).toContain('evening before');
     expect(html).toContain('rd-tl-row start');
     expect(html).toContain('rd-tl-row current');
+  });
+  it('renders a separate, labelled remove button per item', () => {
+    const html = renderRaceDayOverlay(rd());
+    expect(html).toContain('data-a="raceday:remove" data-id="helmet"');
+    expect(html).toContain('aria-label="Remove Helmet"');
   });
   it('shows an error message when the plan failed to load', () => {
     expect(renderRaceDayOverlay({ open: true, status: 'error', error: 'no template yet', date: '2026-10-17' })).toContain('no template yet');

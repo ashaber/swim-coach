@@ -138,3 +138,39 @@ def test_race_week_item_toggle(client, app_env) -> None:
         "/api/plan/weeks/2099-W01/race-week-items/x?athlete=renee", json={"done": True}, headers=auth_headers()
     )
     assert nowk.status_code == 404
+
+
+def test_checklist_remove_is_per_plan_and_leaves_template(client, run_tag) -> None:
+    _put_template(client)
+    plan = _open(client, run_tag).json()
+    url = f"/api/race-day/{plan['id']}/checklist?athlete=renee"
+    r = client.patch(url, json={"remove": ["helmet"]}, headers=auth_headers())
+    assert r.status_code == 200
+    body = r.json()
+    assert [i["id"] for i in body["sections"][0]["items"]] == ["covers"]
+    assert body["checked"] == []  # a removed item is no longer counted as checked
+    assert _open(client, run_tag).json()["sections"][0]["items"][0]["id"] == "covers"
+    template = client.get("/api/race-checklist/template?athlete=renee", headers=auth_headers()).json()
+    assert [i["id"] for i in template["sections"][0]["items"]] == ["helmet", "covers"]
+
+
+def test_checklist_remove_unknown_id_404_and_changes_nothing(client, run_tag) -> None:
+    _put_template(client)
+    plan = _open(client, run_tag).json()
+    url = f"/api/race-day/{plan['id']}/checklist?athlete=renee"
+    r = client.patch(url, json={"remove": ["covers", "nope"]}, headers=auth_headers())
+    assert r.status_code == 404 and "error" in r.json()
+    assert len(_open(client, run_tag).json()["sections"][0]["items"]) == 2
+    missing = client.patch("/api/race-day/missing/checklist?athlete=renee", json={"remove": ["a"]}, headers=auth_headers())
+    assert missing.status_code == 404
+
+
+def test_checklist_remove_validates_body(client, run_tag) -> None:
+    _put_template(client)
+    plan = _open(client, run_tag).json()
+    url = f"/api/race-day/{plan['id']}/checklist?athlete=renee"
+    assert client.patch(url, json={"remove": "helmet"}, headers=auth_headers()).status_code == 422
+    assert client.patch(url, json={}, headers=auth_headers()).status_code == 422
+    assert client.patch(url, json={"remove": [""]}, headers=auth_headers()).status_code == 422
+    assert client.patch(url, json={"remove": ["x"] * 101}, headers=auth_headers()).status_code == 422
+    assert client.patch(url, json={"remove": ["helmet"]}).status_code == 401

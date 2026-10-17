@@ -1811,18 +1811,25 @@ export function renderApp(data, planSessionDetailId) {
 // a reload. `rd` = { open, status: 'loading'|'ready'|'error', plan, error, tab, name, date,
 // pending }.
 
+function renderRaceDayItemRow(i) {
+  return `
+        <div class="rd-row">
+          <button type="button" class="rd-item${i.checked ? ' checked' : ''}" data-a="raceday:check" data-id="${esc(i.id)}" aria-pressed="${i.checked ? 'true' : 'false'}">
+            <span class="rd-box" aria-hidden="true">${i.checked ? '✓' : ''}</span>
+            <span class="rd-text">${esc(i.text)}</span>
+            ${(i.tags || []).length ? `<span class="rd-tags">${i.tags.map((t) => esc(t)).join(' · ')}</span>` : ''}
+          </button>
+          <button type="button" class="rd-del" data-a="raceday:remove" data-id="${esc(i.id)}" aria-label="Remove ${esc(i.text)}"><span aria-hidden="true">✕</span></button>
+        </div>`;
+}
+
 function renderRaceDayChecklistBody(plan) {
   const sections = visibleSections(plan);
   if (sections.length === 0) return '<p class="sub">No items for the active weather tags.</p>';
   return sections.map((sec) => `
       <section class="rd-section">
         <h3>${esc(sec.title)} <span class="rd-count mono">${sec.done}/${sec.total}</span></h3>
-        ${sec.items.map((i) => `
-        <button type="button" class="rd-item${i.checked ? ' checked' : ''}" data-a="raceday:check" data-id="${esc(i.id)}" aria-pressed="${i.checked ? 'true' : 'false'}">
-          <span class="rd-box" aria-hidden="true">${i.checked ? '✓' : ''}</span>
-          <span class="rd-text">${esc(i.text)}</span>
-          ${(i.tags || []).length ? `<span class="rd-tags">${i.tags.map((t) => esc(t)).join(' · ')}</span>` : ''}
-        </button>`).join('')}
+        ${sec.items.map((i) => renderRaceDayItemRow(i)).join('')}
       </section>`).join('');
 }
 

@@ -11,6 +11,7 @@ from datetime import date
 from swim_coach.models import (
     Athlete,
     ChecklistItem,
+    ChecklistSection,
     RaceChecklistTemplate,
     RaceDayPlan,
     TimelineEntry,
@@ -158,3 +159,46 @@ def _clock_entry(e: TimelineEntry, start: int | None, by_id: dict[str, TimelineE
         return {**base, "time": None, "day_shift": 0, "abs_min": None}
     abs_min = _abs_minute(e, start, by_id)
     return {**base, "time": f"{abs_min % 1440 // 60:02d}:{abs_min % 60:02d}", "day_shift": abs_min // 1440, "abs_min": abs_min}
+
+
+MISC_SECTION_ID = "misc-added"
+MISC_SECTION_TITLE = "Misc"
+MAX_ITEM_TEXT = 200
+
+
+class UnknownItemError(KeyError):
+    """A checklist edit named an item id that is not on this race-day plan."""
+
+
+def remove_items(plan: RaceDayPlan, item_ids: list[str]) -> None:
+    """Drop items from THIS plan only (the template is untouched) and un-check them. Every id is
+    validated before anything changes, so a bad id leaves the plan as it was."""
+    known = {i.id for s in plan.sections for i in s.items}
+    missing = [i for i in item_ids if i not in known]
+    if missing:
+        raise UnknownItemError(missing[0])
+    gone = set(item_ids)
+    for section in plan.sections:
+        section.items = [i for i in section.items if i.id not in gone]
+    plan.checked = [c for c in plan.checked if c not in gone]
+
+
+def add_item(plan: RaceDayPlan, text: str, item_id: str | None = None) -> ChecklistItem:
+    """Append a free-text item to this plan's "Misc" section (created at the top on first use).
+    A supplied id that already exists is a no-op returning the existing item, so an offline
+    queue replaying the same add cannot duplicate it."""
+    clean = text.strip()
+    if not clean or len(clean) > MAX_ITEM_TEXT:
+        raise ValueError(f"item text must be 1-{MAX_ITEM_TEXT} characters")
+    new_id = item_id or uuid.uuid4().hex[:12]
+    for section in plan.sections:
+        for existing in section.items:
+            if existing.id == new_id:
+                return existing
+    misc = next((s for s in plan.sections if s.id == MISC_SECTION_ID), None)
+    if misc is None:
+        misc = ChecklistSection(id=MISC_SECTION_ID, title=MISC_SECTION_TITLE)
+        plan.sections.insert(0, misc)
+    item = ChecklistItem(id=new_id, text=clean)
+    misc.items.append(item)
+    return item

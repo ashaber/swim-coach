@@ -83,6 +83,15 @@ export function applyChecked(plan, itemId, on) {
   return { ...plan, checked };
 }
 
+/** The plan without item `itemId` (also un-checked). Per-plan only -- the template never changes. */
+export function removeItem(plan, itemId) {
+  return {
+    ...plan,
+    checked: (plan.checked || []).filter((c) => c !== itemId),
+    sections: (plan.sections || []).map((s) => ({ ...s, items: s.items.filter((i) => i.id !== itemId) })),
+  };
+}
+
 export function toggleTag(plan, tag) {
   const active = plan.active_tags || [];
   return { ...plan, active_tags: active.includes(tag) ? active.filter((t) => t !== tag) : [...active, tag] };
@@ -250,11 +259,19 @@ export function saveCachedPlan(athlete, plan) {
 // Ops are absolute state (never toggles), so replay is idempotent. Later ops for the same plan
 // merge into earlier ones: `items` ops merge their {itemId: bool} maps, `meta` ops merge fields.
 
+// `checklist` ops carry {remove: [ids]} edits; the server applies them in one request, so they
+// accumulate (union) rather than overwrite.
+function mergeChecklistPayload(a, b) {
+  const remove = [...new Set([...(a.remove || []), ...(b.remove || [])])];
+  return remove.length ? { remove } : {};
+}
+
 export function mergeOp(queue, op) {
   const next = queue.map((q) => ({ ...q, payload: { ...q.payload } }));
   const existing = next.find((q) => q.athlete === op.athlete && q.planId === op.planId && q.kind === op.kind);
   // a `timeline` op carries the whole list: the newest replaces, it never merges field-wise
-  if (existing) existing.payload = op.kind === 'timeline' ? { ...op.payload } : { ...existing.payload, ...op.payload };
+  if (existing && op.kind === 'checklist') existing.payload = mergeChecklistPayload(existing.payload, op.payload);
+  else if (existing) existing.payload = op.kind === 'timeline' ? { ...op.payload } : { ...existing.payload, ...op.payload };
   else next.push({ ...op, payload: { ...op.payload } });
   return next;
 }

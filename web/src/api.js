@@ -994,6 +994,19 @@ export async function patchRaceDayItems({
   });
 }
 
+/** PATCH /api/race-day/{id}/checklist -- `payload` is `{ remove: [itemId, ...] }` (this race only). */
+export async function patchRaceDayChecklist({
+  baseUrl, token, athlete, planId, payload,
+}) {
+  return apiRequest({
+    baseUrl,
+    token,
+    path: `/api/race-day/${encodeURIComponent(planId)}/checklist?athlete=${encodeURIComponent(athlete)}`,
+    method: 'PATCH',
+    body: payload,
+  });
+}
+
 /** PATCH /api/race-day/{id} -- `payload` holds any of start_time, active_tags, notes. */
 export async function patchRaceDay({
   baseUrl, token, athlete, planId, payload,

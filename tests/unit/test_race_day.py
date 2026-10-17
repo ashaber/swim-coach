@@ -19,6 +19,8 @@ from swim_coach.models import (
 from swim_coach.race_day import (
     find_plan,
     new_plan_from_template,
+    UnknownItemError,
+    remove_items,
     set_checked,
     timeline_clock,
     visible_items,
@@ -129,3 +131,13 @@ def test_find_plan_prefers_session_id_then_date() -> None:
     assert find_plan(athlete, session_id="s1", race_date=date(2030, 1, 1)) is athlete.race_day_plans[0]
     assert find_plan(athlete, session_id="other", race_date=date(2026, 10, 17)) is athlete.race_day_plans[0]
     assert find_plan(athlete, session_id="other", race_date=date(2026, 10, 18)) is None
+
+
+def test_remove_items_drops_and_unchecks_and_is_all_or_nothing() -> None:
+    plan = _plan()
+    with pytest.raises(UnknownItemError):
+        remove_items(plan, ["covers", "ghost"])
+    assert [i.id for i in plan.sections[0].items] == ["helmet", "covers", "arm"]  # untouched
+    remove_items(plan, ["helmet"])
+    assert [i.id for i in plan.sections[0].items] == ["covers", "arm"]
+    assert "helmet" not in plan.checked

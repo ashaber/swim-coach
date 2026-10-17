@@ -92,6 +92,12 @@ class Backend:
                 checked = [c for c in self.plan['checked'] if c != item_id]
                 self.plan['checked'] = checked + ([item_id] if on else [])
             self._json(route, self.plan)
+        elif path.endswith('/checklist'):
+            gone = set(body.get('remove', []))
+            for sec in self.plan['sections']:
+                sec['items'] = [i for i in sec['items'] if i['id'] not in gone]
+            self.plan['checked'] = [c for c in self.plan['checked'] if c not in gone]
+            self._json(route, self.plan)
         elif path.endswith('/timeline'):
             if body.get('reset'):
                 self.plan['timeline'] = json.loads(json.dumps(TEMPLATE_TIMELINE))
@@ -174,6 +180,23 @@ def test_overlay_check_tag_filter_and_progress(env):
     page.wait_for_function('() => document.querySelector(".rd-tab.on").innerText.includes("2/3")')
     page.wait_for_timeout(300)
     assert 'shoes' in backend.plan['checked'] and backend.plan['active_tags'] == ['wet']
+
+
+def test_remove_item_persists_and_is_a_separate_tap_target(env):
+    page, _, backend = env
+    _open_overlay(page)
+    page.click('.rd-tag[data-tag="wet"]')
+    page.wait_for_selector('.rd-item:has-text("Shoe covers")')
+    box = page.locator('[aria-label="Remove Shoe covers"]').bounding_box()
+    assert box['width'] >= 44 and box['height'] >= 44
+    page.click('[aria-label="Remove Shoe covers"]')
+    page.wait_for_selector('.rd-item:has-text("Shoe covers")', state='detached')
+    page.wait_for_timeout(300)
+    assert ('PATCH', '/api/race-day/plan1/checklist', {'remove': ['covers']}) in backend.requests
+    assert 'covers' not in [i['id'] for s in backend.plan['sections'] for i in s['items']]
+    page.reload()
+    page.wait_for_selector('#race-overlay .rd-item')
+    assert page.locator('.rd-item:has-text("Shoe covers")').count() == 0
 
 
 def test_reload_keeps_overlay_open_with_checks_and_back_closes_it(env):

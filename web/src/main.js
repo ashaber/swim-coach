@@ -11,7 +11,7 @@ import { findSessionById, LOAD_CHART_WINDOW_DAYS, LOAD_CHART_WINDOW_OPTIONS } fr
 import { buildHistoryFeed } from './history.js';
 import { loadLibrarySort, saveLibrarySort } from './librarySort.js';
 import {
-  loadOpenOverlay, saveOpenOverlay, loadCachedPlan, saveCachedPlan, loadQueue, saveQueue, enqueue,
+  removeItem, loadOpenOverlay, saveOpenOverlay, loadCachedPlan, saveCachedPlan, loadQueue, saveQueue, enqueue,
   applyChecked, toggleTag, editTimelineEntry, removeTimelineEntry, addTimelineEntry,
 } from './raceDay.js';
 import {
@@ -23,7 +23,7 @@ import {
   streamChat, postWorkout, fetchPlan, fetchPlanLoad, getAthlete, patchAthlete, patchWorkout,
   listFeedback, uploadWorkoutFile, listWorkouts, syncWorkouts, logout, onboard,
   pushSessionToIntervals,
-  fetchRaceDay, patchRaceDayItems, patchRaceDay, patchRaceDayTimeline, patchRaceWeekItem,
+  fetchRaceDay, patchRaceDayItems, patchRaceDayChecklist, patchRaceDay, patchRaceDayTimeline, patchRaceWeekItem,
   downloadGarminFit,
   createGrant, listGrants, revokeGrant,
   listCoachedAthletes, fetchCoachWorkouts, fetchCoachFeedback, fetchCoachLoad, fetchCoachPlan, replyToCoachFeedback,
@@ -4023,6 +4023,7 @@ async function onAppClick(e) {
       break;
     case 'raceday:close': requestCloseRaceDay(); break;
     case 'raceday:check': handleRaceDayCheck(el.dataset.id); break;
+    case 'raceday:remove': handleRaceDayRemoveItem(el.dataset.id); break;
     case 'raceday:tag': handleRaceDayTag(el.dataset.tag); break;
     case 'raceday:tab': handleRaceDayTab(el.dataset.tab); break;
     case 'raceday:tl-edit': handleRaceDayTimelineEditToggle(); break;
@@ -4277,6 +4278,7 @@ function applyQueuedToPlan(plan) {
   let next = plan;
   loadQueue().filter((q) => q.athlete === athleteSlug() && q.planId === plan.id).forEach((q) => {
     if (q.kind === 'items') Object.entries(q.payload).forEach(([id, on]) => { next = applyChecked(next, id, on); });
+    if (q.kind === 'checklist') (q.payload.remove || []).forEach((id) => { next = removeItem(next, id); });
     if (q.kind === 'meta') next = { ...next, ...q.payload };
     if (q.kind === 'timeline' && q.payload.timeline) next = { ...next, timeline: q.payload.timeline, timeline_edited: true };
   });
@@ -4358,6 +4360,13 @@ function handleRaceDayCheck(itemId) {
   if (!plan || !itemId) return;
   const on = !(plan.checked || []).includes(itemId);
   mutateRaceDayPlan(applyChecked(plan, itemId, on), { kind: 'items', payload: { [itemId]: on } });
+}
+
+function handleRaceDayRemoveItem(itemId) {
+  const plan = state.raceDay.plan;
+  if (!plan || !itemId) return;
+  log.info('raceday.item_removed', { athlete: athleteSlug(), plan_id: plan.id, item_id: itemId });
+  mutateRaceDayPlan(removeItem(plan, itemId), { kind: 'checklist', payload: { remove: [itemId] } });
 }
 
 function handleRaceDayTag(tag) {
@@ -4447,6 +4456,7 @@ function handleRaceWeekToggle(isoWeek, itemId) {
 async function sendQueuedOp(op, settings) {
   const base = { baseUrl: settings.baseUrl, token: settings.token, athlete: op.athlete };
   if (op.kind === 'items') return patchRaceDayItems({ ...base, planId: op.planId, states: op.payload });
+  if (op.kind === 'checklist') return patchRaceDayChecklist({ ...base, planId: op.planId, payload: op.payload });
   if (op.kind === 'meta') return patchRaceDay({ ...base, planId: op.planId, payload: op.payload });
   if (op.kind === 'timeline') return patchRaceDayTimeline({ ...base, planId: op.planId, payload: op.payload });
   let last = { ok: true };

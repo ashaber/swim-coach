@@ -8,15 +8,17 @@ Everything lives in existing JSONB (`athletes.data` for the template and `race_d
 from __future__ import annotations
 
 from datetime import date
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, ValidationError
 from swim_coach.models import Athlete, RaceChecklistTemplate, RaceDayPlan
 from swim_coach.race_day import (
+    UnknownItemError,
     find_plan,
     new_plan_from_template,
     parse_timeline,
+    remove_items,
     reset_timeline,
     set_checked,
     set_timeline,
@@ -34,6 +36,13 @@ _HHMM = r"^([01]\d|2[0-3]):[0-5]\d$"
 
 class ItemStates(BaseModel):
     states: dict[str, bool] = Field(min_length=1)
+
+
+ItemId = Annotated[str, Field(min_length=1, max_length=64)]
+
+
+class ChecklistEdit(BaseModel):
+    remove: list[ItemId] = Field(min_length=1, max_length=100)
 
 
 class PlanPatch(BaseModel):
@@ -129,6 +138,27 @@ async def patch_race_day_items(
     set_checked(plan, body.states)
     store.save_athlete(profile)
     log.info("race-day items set", athlete=slug, plan_id=plan_id, n=len(body.states))
+    return plan.model_dump(mode="json")
+
+
+@router.patch("/api/race-day/{plan_id}/checklist")
+async def patch_race_day_checklist(
+    plan_id: str,
+    body: ChecklistEdit,
+    request: Request,
+    athlete: str | None = Query(None),
+    principal: Principal = Depends(require_auth),
+) -> dict:
+    """Edit THIS race's checklist (never the template): `remove` drops items by id. All-or-nothing:
+    an unknown id is a 404 and nothing changes."""
+    store, slug, profile = _load_athlete(request, athlete, principal)
+    plan = _plan_or_404(profile, plan_id)
+    try:
+        remove_items(plan, body.remove)
+    except UnknownItemError as exc:
+        raise HTTPException(status_code=404, detail=f"no checklist item {exc.args[0]!r}") from exc
+    store.save_athlete(profile)
+    log.info("race-day checklist edited", athlete=slug, plan_id=plan_id, removed=len(body.remove))
     return plan.model_dump(mode="json")
 
 
