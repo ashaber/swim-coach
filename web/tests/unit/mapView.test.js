@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  zoomAbout, panBy, fitBounds, resetView, clampView, zoomLevel, isZoomed, boundsOfPoints, clientToMap, viewBoxAttr,
+  zoomAbout, panBy, fitBounds, resetView, clampView, zoomLevel, isZoomed, boundsOfPoints, clientToMap, viewBoxAttr, dragAction, pageScrollDelta,
 } from '../../src/mapView.js';
 
 const FULL = { x: 0, y: 0, w: 320, h: 200 };
@@ -77,5 +77,28 @@ describe('mapView', () => {
 
   it('formats the viewBox attribute', () => {
     expect(viewBoxAttr({ x: 1.234, y: 2, w: 100, h: 62.5 })).toBe('1.23 2 100 62.5');
+  });
+});
+
+describe('map gesture decisions', () => {
+  it('two fingers always pinch, zoomed or not, in any direction', () => {
+    expect(dragAction(2, false)).toBe('pinch');
+    expect(dragAction(2, true)).toBe('pinch');
+  });
+
+  it('one finger pans the map while zoomed and scrolls the page at 1x', () => {
+    expect(dragAction(1, true)).toBe('pan');
+    expect(dragAction(1, false)).toBe('scroll');
+  });
+
+  it('ignores no-finger and 3+ finger states', () => {
+    expect(dragAction(0, false)).toBe('none');
+    expect(dragAction(3, true)).toBe('none');
+  });
+
+  it('page scroll follows only the vertical finger movement', () => {
+    expect(pageScrollDelta({ x: 10, y: 100 }, { x: 80, y: 90 })).toBe(10);
+    expect(pageScrollDelta({ x: 10, y: 100 }, { x: -50, y: 130 })).toBe(-30);
+    expect(pageScrollDelta({ x: 10, y: 100 }, { x: 60, y: 100 })).toBe(0);
   });
 });

@@ -81,3 +81,17 @@ export function viewBoxAttr(view) {
   const r = (v) => Number(v.toFixed(2));
   return `${r(view.x)} ${r(view.y)} ${r(view.w)} ${r(view.h)}`;
 }
+
+/** What a pointer move means: two fingers always pinch (any direction); one finger pans the map
+ * while zoomed and otherwise scrolls the page (the SVG is `touch-action: none`, so the browser
+ * never claims part of a gesture). */
+export function dragAction(pointerCount, zoomed) {
+  if (pointerCount === 2) return 'pinch';
+  if (pointerCount === 1) return zoomed ? 'pan' : 'scroll';
+  return 'none';
+}
+
+/** Page scroll (px, positive = down) for a one-finger move at 1x: vertical movement only. */
+export function pageScrollDelta(prev, cur) {
+  return prev.y - cur.y;
+}

@@ -294,7 +294,62 @@ describe('buildCourseSectors', () => {
     expect(m.trend).toBe('Time +12% first to last lap, power -1.5%, flow +1.6');
     expect(m.laps.rows[0][0]).toBe('1 (best)');
     expect(m.laps.rows[1]).toEqual(['2', '5:36', '+36 s', '207 W', '4.6']);
-    expect(m.losses.rows).toEqual([['5', '40.0 s', '9.2 s', '9.2 s', '+1.4', '0.3']]);
+  });
+
+  describe('lap x sector grid', () => {
+    // Lap 2 wins sector 1, lap 1 wins sector 2, lap 3 is slowest everywhere.
+    const g = {
+      sector_count: 3, best_lap: 1, fade: { time_change_pct: 5 }, top_loss_sectors: [2],
+      ideal_lap_s: 59, ideal_gap_s: 1,
+      laps: [
+        { lap: 1, time_s: 60, time_vs_best_s: 0, sector_times_s: [21, 19, 20] },
+        { lap: 2, time_s: 61, time_vs_best_s: 1, sector_times_s: [20, 21, 20] },
+        { lap: 3, time_s: 66, time_vs_best_s: 6, sector_times_s: [23, 23, 20] },
+      ],
+      sectors: [],
+    };
+    const grid = (selected) => buildCourseSectors({ analytics: { course_sectors: g } }, selected).grid;
+
+    it('is null without per-lap sector times', () => {
+      const bare = { ...g, laps: g.laps.map(({ sector_times_s: _, ...l }) => l) };
+      expect(buildCourseSectors({ analytics: { course_sectors: bare } }).grid).toBeNull();
+    });
+
+    it('measures every cell against the best time through that sector, never below zero', () => {
+      const m = grid();
+      expect(m.sectors.map((s) => s.best)).toEqual(['20.0', '19.0', '20.0']);
+      expect(m.rows.map((r) => r.cells.map((c) => c.text))).toEqual([
+        ['1.0', '0.0', '0.0'], ['0.0', '2.0', '0.0'], ['3.0', '4.0', '0.0'],
+      ]);
+      expect(m.rows.flatMap((r) => r.cells).every((c) => c.loss >= 0)).toBe(true);
+    });
+
+    it('marks the best cell per sector and heat-tints the rest by loss', () => {
+      const m = grid();
+      expect(m.rows[0].cells[1].best).toBe(true);
+      expect(m.rows[1].cells[0].best).toBe(true);
+      expect(m.rows[0].cells[1].heat).toBe(0);
+      expect(m.rows[2].cells[1].heat).toBe(4); // the biggest loss in the grid
+      expect(m.rows[0].cells[0].heat).toBeGreaterThan(0);
+      expect(m.rows[2].cells[0].heat).toBeGreaterThan(m.rows[0].cells[0].heat);
+    });
+
+    it('labels each lap with its time and gap to the ideal lap, and sums the footer', () => {
+      const m = grid();
+      expect(m.rows.map((r) => [r.label, r.time, r.gap])).toEqual([
+        ['Lap 1', '1:00', '+1.0 s'], ['Lap 2', '1:01', '+2.0 s'], ['Lap 3', '1:06', '+7.0 s'],
+      ]);
+      expect(m.sectors.map((s) => s.total)).toEqual(['4.0', '6.0', '0.0']);
+      expect(m.sectors.map((s) => s.spread)).toEqual(['3.0', '4.0', '0.0']);
+      expect(m.ideal).toBe('Ideal lap 0:59 · best lap is 1.0 s slower');
+      expect(m.caption).toBe('Each cell: seconds slower than your best time through that sector. Ideal lap = your best sectors combined.');
+    });
+
+    it('flags the selected sector column', () => {
+      const m = grid(2);
+      expect(m.sectors.map((s) => s.selected)).toEqual([false, true, false]);
+      expect(m.rows[0].cells.map((c) => c.selected)).toEqual([false, true, false]);
+    });
   });
 });
 
@@ -311,7 +366,7 @@ describe('course map', () => {
     sector_count: 3, best_lap: 1, fade: { time_change_pct: 1 }, laps: [], track,
     sectors: [
       { sector: 1, best_time_s: 20, mean_loss_s: 0, total_loss_s: 0 },
-      { sector: 2, best_time_s: 10, mean_loss_s: 3, total_loss_s: 6 },
+      { sector: 2, best_time_s: 10, mean_loss_s: 3, total_loss_s: 6, spread_s: 4 },
       { sector: 3, best_time_s: 20, mean_loss_s: 1, total_loss_s: 2 },
     ],
     top_loss_sectors: [2, 3],
@@ -365,8 +420,8 @@ describe('course map', () => {
 
   it('shares the selection with the table and toggles it', () => {
     const m = buildCourseSectors({ analytics: { course_sectors: cs } }, 2);
-    expect(m.selected).toMatch(/^Sector 2: best lap 10.0 s, loses 6.0 s in total/);
-    expect(m.losses.sectors).toEqual([2, 3]);
+    expect(m.selected).toMatch(/^Sector 2: best time 10.0 s, loses 6.0 s in total/);
+    expect(m.selected).toMatch(/spread 4.0 s/);
     expect(nextSector(null, 2)).toBe(2);
     expect(nextSector(2, 2)).toBeNull();
     expect(nextSector(2, 3)).toBe(3);

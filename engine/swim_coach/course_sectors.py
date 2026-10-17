@@ -4,7 +4,8 @@ For a ride with 2+ laps of similar distance (CX/MTB race laps, a lap-per-circuit
 compared lap is cut into `SECTOR_COUNT` equal-DISTANCE sectors, so sector k lines up across laps
 without GPS matching. Output: per-lap time / power / flow / grit, the fade first -> last lap
 (including the flow trend: flow worsening while power holds reads as technique slipping under
-fatigue), and a per-sector loss table vs the fastest lap with the top-3 loss sectors.
+fatigue), and a per-sector loss table with the top-3 loss sectors. Loss is measured against the fastest time
+through THAT sector on any lap (the motorsport "ideal lap"), so it is never negative.
 
 Constants are Coach judgment, not sourced: SECTOR_COUNT, TRACK_POINTS, START_LINE_RADIUS_M, LAP_DISTANCE_TOLERANCE, MIN_LAP_S, MAX_LAPS.
 Flow and grit are Garmin's proprietary device metrics (see `mtb_dynamics`); they are shown beside
@@ -218,19 +219,22 @@ def build_course_sectors(workout: Workout, series: dict | None, prefer_gps: bool
                   time_vs_best_s=round(s["time_s"] - best["time_s"], 1), sector_times_s=s["times"])
         for n, s in cut
     ]
-    others = [s for i, (_, s) in enumerate(cut) if i != best_i]
     sectors = []
     for k in range(SECTOR_COUNT):
-        losses = [s["times"][k] - best["times"][k] for s in others]
-        dflow = [s["flows"][k] - best["flows"][k] for s in others
-                 if s["flows"][k] is not None and best["flows"][k] is not None]
+        times = [s["times"][k] for _, s in cut]
+        fastest = min(range(len(cut)), key=lambda i: times[i])
+        ref = cut[fastest][1]
+        losses = [t - times[fastest] for t in times]
+        dflow = [s["flows"][k] - ref["flows"][k] for i, (_, s) in enumerate(cut)
+                 if i != fastest and s["flows"][k] is not None and ref["flows"][k] is not None]
         flows = [s["flows"][k] for _, s in cut if s["flows"][k] is not None]
         grits = [s["grits"][k] for _, s in cut if s["grits"][k] is not None]
         sectors.append(SectorLoss(
-            sector=k + 1, best_time_s=best["times"][k], mean_loss_s=round(sum(losses) / len(losses), 2),
-            total_loss_s=round(sum(losses), 2), avg_flow=_mean(flows), flow_vs_best=_mean(dflow),
-            avg_grit=_mean(grits),
+            sector=k + 1, best_time_s=times[fastest], mean_loss_s=round(sum(losses) / len(losses), 2),
+            total_loss_s=round(sum(losses), 2), spread_s=round(max(times) - times[fastest], 2),
+            avg_flow=_mean(flows), flow_vs_best=_mean(dflow), avg_grit=_mean(grits),
         ))
+    ideal = round(sum(s.best_time_s for s in sectors), 1)
     ranked = sorted((s for s in sectors if s.total_loss_s > 0), key=lambda s: -s.total_loss_s)
     first, last = cut[0][1], cut[-1][1]
     flow_by_lap = [s["flow"] for _, s in cut if s["flow"] is not None]
@@ -243,5 +247,6 @@ def build_course_sectors(workout: Workout, series: dict | None, prefer_gps: bool
     return CourseSectors(
         sector_count=SECTOR_COUNT, best_lap=cut[best_i][0], laps=laps, fade=fade, sectors=sectors,
         top_loss_sectors=[s.sector for s in ranked[:TOP_LOSS_SECTORS]],
+        ideal_lap_s=ideal, ideal_gap_s=round(max(best["time_s"] - ideal, 0.0), 1),
         track=build_track(series, best),
     )

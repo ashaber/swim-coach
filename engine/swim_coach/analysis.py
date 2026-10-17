@@ -188,7 +188,7 @@ class DefaultAnalyzer(_CoachViewMixin):
         return annotate_power_curve_bests(workout, _base_analytics(workout, ctx, with_intervals=False), ctx)
 
 
-COURSE_LAP_KINDS: tuple[SessionKind, ...] = ("race", "opener")  # kinds whose laps are course repeats
+COURSE_LAP_KINDS: tuple[SessionKind, ...] = ("race", "opener", "warmup")  # kinds whose laps are course repeats
 GPS_LAP_KINDS: tuple[SessionKind, ...] = ("race",)  # kinds whose laps come from the GPS start marker first
 UNSCORED_KINDS: tuple[SessionKind, ...] = ("opener", "warmup")  # load + base analytics + curve only
 

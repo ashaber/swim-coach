@@ -379,7 +379,6 @@ export function buildFreeRide(workout) {
 
 export const MTB_LAP_COLUMNS = ['Lap', 'Time', 'Power', 'Grit', 'Flow', 'Jumps'];
 export const SECTOR_LAP_COLUMNS = ['Lap', 'Time', 'vs best', 'Power', 'Flow'];
-export const SECTOR_LOSS_COLUMNS = ['Sector', 'Best', 'Lost (total)', 'Lost / lap', 'Flow vs best', 'Grit'];
 
 function jumpsLine(j) {
   if (!j) return null;
@@ -490,8 +489,55 @@ export function buildCourseMap(cs, selected = null, gestureView = null) {
   };
 }
 
+const GRID_CAPTION = 'Each cell: seconds slower than your best time through that sector. Ideal lap = your best sectors combined.';
+const HEAT_LEVELS = 4;
+const BEST_EPSILON_S = 0.05;
+
+const tenths = (v) => v.toFixed(1);
+
+/** Lap x sector grid: every cell is the lap's time through that sector minus the fastest time through
+ * that sector on any lap (so never negative), heat-tinted 0 (best) to 4 (biggest loss in the grid).
+ * Derived from the per-lap sector times, so it also repairs stored data from before the ideal-lap
+ * baseline. Null without sector times. */
+function buildSectorGrid(cs, selected) {
+  const laps = (cs.laps || []).filter((l) => Array.isArray(l.sector_times_s) && l.sector_times_s.length);
+  if (!laps.length || laps.length !== (cs.laps || []).length) return null;
+  const count = laps[0].sector_times_s.length;
+  const best = Array.from({ length: count }, (_, k) => Math.min(...laps.map((l) => l.sector_times_s[k])));
+  const loss = laps.map((l) => best.map((b, k) => Math.max(l.sector_times_s[k] - b, 0)));
+  const peak = Math.max(...loss.flat(), 0);
+  const heatOf = (v) => (v < BEST_EPSILON_S || peak <= 0 ? 0 : Math.max(1, Math.ceil((v / peak) * HEAT_LEVELS)));
+  const ideal = num(cs.ideal_lap_s) ? cs.ideal_lap_s : best.reduce((a, b) => a + b, 0);
+  const fastest = Math.min(...laps.map((l) => l.time_s));
+  const column = (k) => loss.map((row) => row[k]);
+  return {
+    caption: GRID_CAPTION,
+    ideal: `Ideal lap ${formatClock(ideal)} · best lap is ${tenths(Math.max(fastest - ideal, 0))} s slower`,
+    sectors: best.map((b, k) => ({
+      sector: k + 1,
+      label: `S${k + 1}`,
+      best: tenths(b),
+      total: tenths(column(k).reduce((a, v) => a + v, 0)),
+      spread: tenths(Math.max(...column(k))),
+      selected: selected === k + 1,
+    })),
+    rows: laps.map((l, i) => ({
+      label: `Lap ${l.lap}`,
+      time: formatClock(l.time_s),
+      gap: `+${tenths(Math.max(l.time_s - ideal, 0))} s`,
+      cells: loss[i].map((v, k) => ({
+        loss: v,
+        text: tenths(v),
+        heat: heatOf(v),
+        best: v < BEST_EPSILON_S,
+        selected: selected === k + 1,
+      })),
+    })),
+  };
+}
+
 /** The "Course sectors" section model (`analytics.course_sectors`), or null when absent.
- * `selected` is the highlighted sector number (map and table share it). */
+ * `selected` is the highlighted sector number (map and grid share it). */
 export function buildCourseSectors(workout, selected = null, gestureView = null) {
   const cs = workout?.analytics?.course_sectors;
   if (!cs) return null;
@@ -500,14 +546,14 @@ export function buildCourseSectors(workout, selected = null, gestureView = null)
   if (num(f.power_change_pct)) trend.push(`power ${signed(f.power_change_pct)}`);
   if (num(f.flow_change)) trend.push(`flow ${signed(f.flow_change, 2, '')}`);
   const bySector = new Map((cs.sectors || []).map((s) => [s.sector, s]));
-  const top = (cs.top_loss_sectors || []).map((n) => bySector.get(n)).filter(Boolean);
   const picked = bySector.get(selected);
+  const spread = picked && num(picked.spread_s) ? `, spread ${picked.spread_s.toFixed(1)} s` : '';
   return {
     trend: trend.join(', '),
-    note: `Each lap is cut into ${cs.sector_count} equal-distance sectors; sector numbers line up across laps. Ask which course feature each sector is.`,
+    note: `Each lap is cut into ${cs.sector_count} equal-distance sectors; sector numbers line up across laps. Loss is measured against your own best time through that sector; a big spread means an inconsistent section, so ask what was different on the fast lap.`,
     map: buildCourseMap(cs, selected, gestureView),
     selected: picked
-      ? `Sector ${picked.sector}: best lap ${picked.best_time_s.toFixed(1)} s, loses ${picked.total_loss_s.toFixed(1)} s in total (${picked.mean_loss_s.toFixed(1)} s per lap).`
+      ? `Sector ${picked.sector}: best time ${picked.best_time_s.toFixed(1)} s, loses ${picked.total_loss_s.toFixed(1)} s in total (${picked.mean_loss_s.toFixed(1)} s per lap${spread}).`
       : null,
     laps: {
       columns: SECTOR_LAP_COLUMNS,
@@ -519,19 +565,6 @@ export function buildCourseSectors(workout, selected = null, gestureView = null)
         num(l.avg_flow) ? String(l.avg_flow) : dash,
       ]),
     },
-    losses: top.length
-      ? {
-        columns: SECTOR_LOSS_COLUMNS,
-        sectors: top.map((s) => s.sector),
-        rows: top.map((s) => [
-          String(s.sector),
-          `${s.best_time_s.toFixed(1)} s`,
-          `${s.total_loss_s.toFixed(1)} s`,
-          `${s.mean_loss_s.toFixed(1)} s`,
-          num(s.flow_vs_best) ? signed(s.flow_vs_best, 2, '') : dash,
-          num(s.avg_grit) ? String(s.avg_grit) : dash,
-        ]),
-      }
-      : null,
+    grid: buildSectorGrid(cs, selected),
   };
 }

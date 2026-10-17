@@ -63,7 +63,11 @@ describe('workout analysis layout', () => {
 
 describe('course sectors section', () => {
   const cs = {
-    sector_count: 2, best_lap: 1, fade: { time_change_pct: 2 }, laps: [],
+    sector_count: 2, best_lap: 1, fade: { time_change_pct: 2 },
+    laps: [
+      { lap: 1, time_s: 50, time_vs_best_s: 0, sector_times_s: [30, 24] },
+      { lap: 2, time_s: 52, time_vs_best_s: 2, sector_times_s: [32, 20] },
+    ],
     track: { sectors: [
       { sector: 1, points: [[0, 0], [100, 0]], label: [50, 0] },
       { sector: 2, points: [[100, 0], [100, 80]], label: [100, 40] },
@@ -83,8 +87,11 @@ describe('course sectors section', () => {
     expect(html).toContain('cs-seg--neutral cs-seg--dim');
     expect(html).toContain('Start / finish');
     expect(html).toContain('aria-label="Sector 2, loses 4.0 s in total"');
-    expect(html).toContain('data-a="workout:sector-select" data-sector="2" tabindex="0" aria-pressed="true"');
-    expect(html).toContain('cs-row cs-row--selected');
+    expect(html).toContain('class="cs-col cs-col--selected" scope="col" data-a="workout:sector-select" data-sector="2"');
+    expect(html).toContain('class="cs-grid"');
+    expect(html).toContain('cs-heat-4');
+    expect(html).toContain('cs-cell--best');
+    expect(html).toContain('Each cell: seconds slower than your best time through that sector.');
     expect(html).not.toContain('http'); // no tiles, no external requests
   });
 

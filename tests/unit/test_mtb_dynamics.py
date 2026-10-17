@@ -175,6 +175,26 @@ def test_course_sectors_loss_lands_in_the_slow_sector():
     assert cs.sectors[0].total_loss_s < worst.total_loss_s
 
 
+def test_course_sectors_baseline_is_the_best_time_per_sector_not_the_best_lap():
+    cs = build_course_sectors(_workout(), fx.build_series())
+    cut = [lap.sector_times_s for lap in cs.laps]
+    for k, sector in enumerate(cs.sectors):
+        times = [t[k] for t in cut]
+        assert sector.best_time_s == min(times)
+        assert sector.total_loss_s == pytest.approx(sum(times) - len(times) * min(times), abs=0.02)
+        assert sector.total_loss_s >= 0 and sector.mean_loss_s >= 0
+        assert sector.spread_s == pytest.approx(max(times) - min(times), abs=0.01)
+    assert cs.ideal_lap_s == pytest.approx(sum(s.best_time_s for s in cs.sectors), abs=0.05)
+    assert cs.ideal_gap_s == pytest.approx(min(lap.time_s for lap in cs.laps) - cs.ideal_lap_s, abs=0.05)
+    assert cs.ideal_gap_s >= 0
+
+
+def test_course_sectors_negative_loss_is_impossible_when_another_lap_wins_a_sector():
+    series = fx.build_series()
+    cs = build_course_sectors(_workout(), series)
+    assert all(t - cs.sectors[k].best_time_s >= -1e-9 for lap in cs.laps for k, t in enumerate(lap.sector_times_s))
+
+
 def test_course_sectors_fade_reports_time_power_and_flow_trend():
     cs = build_course_sectors(_workout(), fx.build_series())
     assert cs.fade.time_change_pct == pytest.approx((336 - 300) / 300 * 100, abs=0.5)
@@ -239,7 +259,7 @@ def test_bike_analyzer_fills_dynamics_for_every_kind(kind):
     assert a.mtb_dynamics is not None and a.mtb_dynamics.total_grit == _device().total_grit
 
 
-@pytest.mark.parametrize("kind", ["race", "opener", "free_ride", "workout"])  # workout with no session = unstructured
+@pytest.mark.parametrize("kind", ["race", "opener", "warmup", "free_ride", "workout"])  # workout with no session = unstructured
 def test_course_sectors_for_races_and_unstructured_rides(kind):
     a = _workout().analyze(AnalysisContext(kind=kind, series=fx.build_series()))
     assert a.course_sectors is not None
@@ -273,6 +293,9 @@ def test_coach_view_is_compact_and_has_notes():
     assert "Lap 1" in mtb["laps"][0] and "grit" in mtb["laps"][0].lower() and "flow" in mtb["laps"][0].lower()
     assert len(cs["top_loss_sectors"]) == 3 and "sector 5" in cs["top_loss_sectors"][0].lower()
     assert "which feature" in cs["coach_note"].lower()
+    assert "own best time through that sector" in cs["coach_note"] and "what was different on the fast lap" in cs["coach_note"]
+    assert cs["ideal_lap"].startswith("Ideal lap ") and "best lap" in cs["ideal_lap"]
+    assert "vs best lap" not in cs["top_loss_sectors"][0] and "spread" in cs["top_loss_sectors"][0]
     assert len(json.dumps(view)) < 6000  # no per-record arrays leak
     assert "sectors" not in cs  # the full table stays in the stored analytics
     keys = list(view)
