@@ -259,7 +259,7 @@ def test_bike_analyzer_fills_dynamics_for_every_kind(kind):
     assert a.mtb_dynamics is not None and a.mtb_dynamics.total_grit == _device().total_grit
 
 
-@pytest.mark.parametrize("kind", ["race", "opener", "free_ride", "workout"])  # workout with no session = unstructured
+@pytest.mark.parametrize("kind", ["race", "opener", "warmup", "free_ride", "workout"])  # workout with no session = unstructured
 def test_course_sectors_for_races_and_unstructured_rides(kind):
     a = _workout().analyze(AnalysisContext(kind=kind, series=fx.build_series()))
     assert a.course_sectors is not None
