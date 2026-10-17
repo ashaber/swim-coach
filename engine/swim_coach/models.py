@@ -2048,14 +2048,15 @@ class SectorLap(BaseModel):
 
 
 class SectorLoss(BaseModel):
-    """One equal-distance sector across the compared laps, vs the best lap."""
+    """One equal-distance sector across the compared laps, vs the fastest time through THAT sector."""
 
     sector: int  # 1-based
-    best_time_s: float
-    mean_loss_s: float  # mean over the non-best laps of (sector time - best lap's sector time)
+    best_time_s: float  # fastest time through this sector over all compared laps
+    mean_loss_s: float  # mean over all laps of (sector time - best_time_s); always >= 0
     total_loss_s: float
+    spread_s: float = 0.0  # slowest - fastest time through this sector: a consistency measure
     avg_flow: float | None = None
-    flow_vs_best: float | None = None  # mean over the non-best laps of (flow - best lap's flow)
+    flow_vs_best: float | None = None  # mean over the laps other than the fastest of (flow - the fastest lap's flow)
     avg_grit: float | None = None
 
 
@@ -2093,6 +2094,8 @@ class CourseSectors(BaseModel):
     fade: LapFade
     sectors: list[SectorLoss]
     top_loss_sectors: list[int]
+    ideal_lap_s: float | None = None  # sum of the best time in every sector
+    ideal_gap_s: float | None = None  # fastest actual lap - ideal_lap_s
     track: CourseTrack | None = None  # PWA map only; never in the coach view
 
 

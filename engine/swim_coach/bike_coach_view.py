@@ -154,7 +154,9 @@ COURSE_SECTORS_COACH_NOTE = (
     "Each similar-distance lap is cut into equal-distance sectors (Coach judgment: 8), so sector N lines up "
     "across laps without GPS. The data cannot name course features: ask the rider which feature each top "
     "loss sector is (run-up, off-camber, sand, climb) before explaining it. Flow worsening while power holds "
-    "reads as technique slipping under fatigue, not fitness."
+    "reads as technique slipping under fatigue, not fitness. Sector loss is measured against the rider's "
+    "own best time through that sector on any lap (so it is never negative): a big spread means an "
+    "inconsistent section, so ask what was different on the fast lap."
 )
 COACH_TOP_JUMPS = 3
 
@@ -213,15 +215,20 @@ def course_sectors_coach_view(cs: dict) -> dict:
     top = []
     for n in cs.get("top_loss_sectors") or []:
         s = by_n[n]
-        line = f"Sector {n} of {cs['sector_count']}: loses {s['total_loss_s']:.1f}s total ({s['mean_loss_s']:.1f}s per lap) vs best lap"
+        line = f"Sector {n} of {cs['sector_count']}: loses {s['total_loss_s']:.1f}s total ({s['mean_loss_s']:.1f}s per lap) vs its own best {s['best_time_s']:.1f}s, spread {s.get('spread_s', 0):.1f}s"
         if s.get("flow_vs_best") is not None:
             line += f", flow {s['flow_vs_best']:+.2f} vs best"
         if s.get("avg_grit") is not None:
             line += f", grit {s['avg_grit']}"
         top.append(line)
+    ideal = None
+    if cs.get("ideal_lap_s") is not None:
+        ideal = (f"Ideal lap {_clock(cs['ideal_lap_s'])} (best sectors combined); the best lap is "
+                 f"{cs['ideal_gap_s']:.1f}s slower than that")
     return {
         "coach_note": COURSE_SECTORS_COACH_NOTE,
         "lap_trend": ", ".join(trend),
+        "ideal_lap": ideal,
         "laps": laps,
         "top_loss_sectors": top,
     }
