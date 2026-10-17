@@ -150,9 +150,11 @@ def attach_planned_session(workout: Workout, *, store: StoreInterface, slug: str
     """Link `workout` to its planned session and re-run its analyzer WITH that session in the
     context (prescription, zone, kind, thresholds from the athlete). Returns the workout
     unchanged when nothing matches. Best-effort: a lookup/analysis failure logs and leaves the
-    workout as-is."""
-    if workout.planned_session_id is not None:
-        return workout
+    workout as-is.
+
+    An existing `planned_session_id` (athlete/coach-set, or an earlier match) is never replaced,
+    but the workout is still re-analysed with THAT session: skipping it left a re-analysed race
+    tagged free_ride (prod 2026-10-17)."""
     try:
         session = find_planned_session(store, slug, workout)
     except Exception as exc:  # noqa: BLE001 - never block ingest on the plan lookup
@@ -160,9 +162,13 @@ def attach_planned_session(workout: Workout, *, store: StoreInterface, slug: str
         return workout
     if session is None:
         return workout
+    already_linked = workout.planned_session_id is not None
+    if already_linked and session.id != workout.planned_session_id:
+        return workout
     linked = workout.model_copy(update={"planned_session_id": session.id})
     ctx = build_analysis_context(store, slug, linked, series=series, session=session)  # also stamps kind
     if series:
         linked.analytics = linked.analyze(ctx)
-    log.info("workouts.plan_matched", athlete=slug, workout_id=str(workout.id), session_id=str(session.id))
+    if not already_linked:
+        log.info("workouts.plan_matched", athlete=slug, workout_id=str(workout.id), session_id=str(session.id))
     return linked
