@@ -199,6 +199,28 @@ def test_course_sectors_ignore_a_dissimilar_warmup_lap():
     assert [lap.lap for lap in cs.laps] == [2, 3]
 
 
+def _with_gps(start_lng_by_lap: tuple[float, ...]) -> dict:
+    """Fixture series plus SYNTHETIC coordinates: each lap sits at one fixed point."""
+    series = fx.build_series()
+    lng = []
+    for lap, n in enumerate(fx.LAP_S):
+        lng += [start_lng_by_lap[lap]] * n
+    series["lat"] = [40.0] * len(lng)
+    series["lng"] = lng
+    return series
+
+
+def test_course_sectors_drop_a_lap_that_did_not_start_at_the_line():
+    # lap 2 starts ~250 m (0.003 deg of longitude at 40N) from the others
+    cs = build_course_sectors(_workout(), _with_gps((-100.0, -99.997, -100.0)))
+    assert [lap.lap for lap in cs.laps] == [1, 3]
+
+
+def test_course_sectors_keep_laps_starting_within_the_radius():
+    cs = build_course_sectors(_workout(), _with_gps((-100.0, -99.9998, -100.0)))  # ~17 m
+    assert [lap.lap for lap in cs.laps] == [1, 2, 3]
+
+
 def test_course_sectors_absent_without_distance_channel():
     series = {k: v for k, v in fx.build_series().items() if k != "dist_m"}
     assert build_course_sectors(_workout(), series) is None
@@ -217,7 +239,7 @@ def test_bike_analyzer_fills_dynamics_for_every_kind(kind):
     assert a.mtb_dynamics is not None and a.mtb_dynamics.total_grit == _device().total_grit
 
 
-@pytest.mark.parametrize("kind", ["race", "free_ride", "workout"])  # workout with no session = unstructured
+@pytest.mark.parametrize("kind", ["race", "opener", "free_ride", "workout"])  # workout with no session = unstructured
 def test_course_sectors_for_races_and_unstructured_rides(kind):
     a = _workout().analyze(AnalysisContext(kind=kind, series=fx.build_series()))
     assert a.course_sectors is not None

@@ -13,6 +13,7 @@ the time loss, never thresholded. The data cannot name course features -- the co
 
 from __future__ import annotations
 
+import math
 from bisect import bisect_left
 from statistics import median
 from typing import Sequence
@@ -27,20 +28,47 @@ LAP_DISTANCE_TOLERANCE = 0.10  # Coach judgment: laps within +-10% of each other
 MIN_LAP_S = 120  # Coach judgment: shorter than this is a split, not a lap worth sectoring
 MAX_LAPS = 12  # Coach judgment: more than this is auto-lap noise (e.g. every km), not a course
 TOP_LOSS_SECTORS = 3
+START_LINE_RADIUS_M = 30.0  # Coach judgment: a lap starting farther than this from the reference lap's start is not the same lap
+EARTH_M_PER_DEG = 111_320.0  # metres per degree of latitude (spherical earth, plenty for a 30 m test)
 
 
-def _similar_laps(windows: list[tuple[WorkoutLap, float, float]]) -> list[tuple[int, WorkoutLap, float, float]]:
-    """The largest group of laps whose distance is within tolerance of one anchor lap (earliest
-    anchor wins ties), as `(device lap number, lap, start, stop)`."""
+def _start_point(series: dict, start_s: float) -> tuple[float, float] | None:
+    """The (lat, lng) at the first record at/after `start_s`, or None without GPS there."""
+    lat, lng = series.get("lat") or [], series.get("lng") or []
+    i = next((i for i, t in enumerate(series["t_s"]) if t >= start_s), None)
+    if i is None or i >= len(lat) or i >= len(lng) or lat[i] is None or lng[i] is None:
+        return None
+    return lat[i], lng[i]
+
+
+def _metres_apart(a: tuple[float, float], b: tuple[float, float]) -> float:
+    dy = (a[0] - b[0]) * EARTH_M_PER_DEG
+    dx = (a[1] - b[1]) * EARTH_M_PER_DEG * math.cos(math.radians((a[0] + b[0]) / 2))
+    return math.hypot(dx, dy)
+
+
+def _starts_together(series: dict, anchor_start: float, start: float) -> bool:
+    """Same start line: within START_LINE_RADIUS_M of the anchor's start. Without GPS, assumed."""
+    a, b = _start_point(series, anchor_start), _start_point(series, start)
+    return a is None or b is None or _metres_apart(a, b) <= START_LINE_RADIUS_M
+
+
+def _similar_laps(
+    windows: list[tuple[WorkoutLap, float, float]], series: dict
+) -> list[tuple[int, WorkoutLap, float, float]]:
+    """The largest group of laps whose distance is within tolerance of one anchor lap and (with
+    GPS) which start at the anchor's start line (earliest anchor wins ties), as
+    `(device lap number, lap, start, stop)`."""
     numbered = [
         (n, lap, a, b) for n, (lap, a, b) in enumerate(windows, 1)
         if lap.distance_m and lap.duration_s >= MIN_LAP_S
     ]
     best: list = []
-    for _, anchor, _, _ in numbered:
+    for _, anchor, anchor_start, _ in numbered:
         group = [
             item for item in numbered
             if abs(item[1].distance_m - anchor.distance_m) <= LAP_DISTANCE_TOLERANCE * anchor.distance_m
+            and _starts_together(series, anchor_start, item[2])
         ]
         if len(group) > len(best):
             best = group
@@ -108,7 +136,7 @@ def build_course_sectors(workout: Workout, series: dict | None) -> CourseSectors
     """The sector comparison, or None unless 2..MAX_LAPS similar-distance laps can be cut by distance."""
     if not series or not series.get("t_s") or not has_channel(series, "dist_m"):
         return None
-    group = _similar_laps(lap_windows(workout.laps, series["t_s"][-1] + 1))
+    group = _similar_laps(lap_windows(workout.laps, series["t_s"][-1] + 1), series)
     if not 2 <= len(group) <= MAX_LAPS:
         return None
     cut = []
