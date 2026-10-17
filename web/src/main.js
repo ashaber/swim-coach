@@ -5,7 +5,7 @@ import { getDraft, setDraft, clearDraft } from './composerDrafts.js';
 import {
   renderApp, renderLoading, renderError, renderTabBar, renderCoachTab, renderSettingsTab,
   renderDashboardTab, renderBackendNeededNotice, renderUpdateBanner,
-  renderRaceDayOverlay, renderOnboardingForm, renderRosterTab, renderResourcesTab, cr10AnchorLabel, ROSTER_SUB_TABS as ROSTER_SUB_TAB_DEFS,
+  renderRaceDayOverlay, renderSectorOverlay, renderOnboardingForm, renderRosterTab, renderResourcesTab, cr10AnchorLabel, ROSTER_SUB_TABS as ROSTER_SUB_TAB_DEFS,
 } from './views.js';
 import { findSessionById, LOAD_CHART_WINDOW_DAYS, LOAD_CHART_WINDOW_OPTIONS } from './plan.js';
 import { buildHistoryFeed } from './history.js';
@@ -37,7 +37,8 @@ import {
   listLibraryCards, fetchLibraryFile, submitLibraryReview,
   fetchMe,
 } from './api.js';
-import { nextSector, shouldLoadPacing } from './analysis.js';
+import { shouldLoadPacing } from './analysis.js';
+import { createSectorOverlay, openSectorOverlay, switchOverlaySector, closeSectorOverlay } from './sectorOverlay.js';
 import { attachMapGestures } from './mapGestures.js';
 import {
   serializeWorkoutForm, profileFormFromAthlete, serializeProfileForm,
@@ -418,6 +419,7 @@ const state = {
   // every open/close of a detail so it never carries over to another workout.
   rawAnalysisOpen: false,
   selectedSector: null,
+  sectorOverlay: createSectorOverlay(), // full-screen course-sectors overlay (history entry, like the race-day checklist)
   mapView: null, // pinch/pan view of the course map; null = framed by the selection, else the whole lap
   // The workout detail's kind retag (POST /api/workouts/{id}/kind): null or {status, error}.
   workoutKindEdit: null,
@@ -755,7 +757,12 @@ function render() {
 function renderAppDom() {
   const overlayBody = document.getElementById('race-overlay-body');
   const overlayScroll = overlayBody ? overlayBody.scrollTop : 0;
+  const sectorBody = document.getElementById('sector-overlay-body');
+  const sectorScroll = sectorBody ? sectorBody.scrollTop : 0;
   renderAppDomInner();
+  document.body.classList.toggle('cs-locked', sectorOverlayShown());
+  const nextSectorBody = document.getElementById('sector-overlay-body');
+  if (nextSectorBody && sectorScroll) nextSectorBody.scrollTop = sectorScroll;
   const raceOverlayOpen = Boolean(state.raceDay.open && state.identity);
   document.body.classList.toggle('rd-locked', raceOverlayOpen);
   const nextBody = document.getElementById('race-overlay-body');
@@ -796,7 +803,7 @@ function renderAppDomInner() {
       rosterUnread: countUnread(state.roster.feedback.data, loadLastSeen('coach'), 'coach')
         + rosterConversationUnreadCount(),
       coachUnread: myCoachUnreadCount(),
-    })}${state.identity ? renderRaceDayOverlay(state.raceDay, state.online) : ''}`;
+    })}${state.identity ? renderRaceDayOverlay(state.raceDay, state.online) : ''}${sectorOverlayHtml()}`;
   if (state.tab === 'coach' && state.coachView === 'coach') scrollToBottomOf('my-coach-messages');
   else if (state.tab === 'coach') stickChatScrollToBottom();
   if (state.tab === 'roster' && state.roster.subTab === 'conversations') scrollToBottomOf('roster-conversation-messages');
@@ -2060,6 +2067,7 @@ function handleOpenHistoryDetail(id, { rpeEdit = null } = {}) {
   state.rawAnalysisOpen = false;
   state.selectedSector = null;
   state.mapView = null;
+  state.sectorOverlay = createSectorOverlay();
   state.workoutKindEdit = null;
   // A fresh, empty scoped chat thread for this workout (see
   // closeWorkoutChat for the matching teardown on every close path).
@@ -2177,6 +2185,7 @@ function handleCloseHistoryDetail() {
   state.rawAnalysisOpen = false;
   state.selectedSector = null;
   state.mapView = null;
+  state.sectorOverlay = createSectorOverlay();
   state.workoutKindEdit = null;
   closeWorkoutChat();
   state.workoutRpeEdit = null;
@@ -2214,11 +2223,58 @@ async function handleSetWorkoutKind(kind) {
   render();
 }
 
-/** Highlights (or clears) a course sector on the workout detail; the map and table share it. */
-function handleSelectSector(sector) {
-  state.selectedSector = nextSector(state.selectedSector, Number(sector));
-  state.mapView = null; // the selection (or the whole lap) frames the map again
+function openWorkout() {
+  return (state.workoutHistory.data || []).find((w) => w.id === state.workoutDetailId) || null;
+}
+
+function sectorOverlayShown() {
+  return Boolean(state.sectorOverlay.open && state.workoutDetailId);
+}
+
+function sectorOverlayHtml() {
+  if (!sectorOverlayShown()) return '';
+  return renderSectorOverlay(openWorkout(), state.selectedSector, state.mapView);
+}
+
+/** Opens the course-sectors overlay (a history entry, like the race-day checklist). `sector` null =
+ * the in-page Expand button. Remembers the page scroll so closing lands back where the user was. */
+function handleOpenSectorOverlay(sector) {
+  if (!state.workoutDetailId || state.sectorOverlay.open) return;
+  const next = openSectorOverlay(sector, window.scrollY);
+  state.sectorOverlay = next.overlay;
+  state.selectedSector = next.selectedSector;
+  state.mapView = next.mapView;
+  history.pushState({ sectorOverlay: true }, '');
+  log.info('workout.sector_overlay_opened', { athlete: athleteSlug(), workout_id: state.workoutDetailId, sector: next.selectedSector });
   render();
+}
+
+function handleCloseSectorOverlay() {
+  if (!state.sectorOverlay.open) return; // avoids a redundant render on popstate re-entrancy
+  const next = closeSectorOverlay(state.sectorOverlay);
+  state.sectorOverlay = next.overlay;
+  state.selectedSector = next.selectedSector;
+  state.mapView = next.mapView;
+  render();
+  window.scrollTo(0, next.overlay.scrollY);
+}
+
+/** Same history.back()-not-direct-close reasoning as requestCloseRaceDay. */
+function requestCloseSectorOverlay() {
+  if (history.state?.sectorOverlay) history.back();
+  else handleCloseSectorOverlay();
+}
+
+/** Selects a course sector. In-page it highlights (or clears) the sector and the tap opens the
+ * overlay; inside the overlay a tap switches the selection in place. */
+function handleSelectSector(sector) {
+  if (state.sectorOverlay.open) {
+    state.selectedSector = switchOverlaySector(state.selectedSector, sector);
+    state.mapView = null; // the selection frames the map again
+    render();
+    return;
+  }
+  handleOpenSectorOverlay(Number(sector));
 }
 
 /** Back to the whole lap: clears the zoom and the sector selection. */
@@ -2295,6 +2351,10 @@ function handleSelectLoadWindow(key) {
 // calling every closer unconditionally needs no extra bookkeeping to stay
 // correct if that ever changes.
 function handlePopState() {
+  if (state.sectorOverlay.open) {
+    handleCloseSectorOverlay();
+    return;
+  }
   handleCloseRaceDay();
   handleCloseHistoryDetail();
   handleCloseSessionDetail();
@@ -4034,6 +4094,8 @@ async function onAppClick(e) {
     case 'workout:raw-analysis-toggle': handleToggleRawAnalysis(); break;
     case 'workout:sector-select': handleSelectSector(el.dataset.sector); break;
     case 'workout:map-reset': resetCourseMap(); break;
+    case 'sector-overlay:open': handleOpenSectorOverlay(null); break;
+    case 'sector-overlay:close': requestCloseSectorOverlay(); break;
     // Shared data-a="session:open" markup between the athlete's own Plan tab
     // and the coach roster's Training Plan sub-tab (views.js's renderSession)
     // -- branch on state.tab to route the click to the right piece of state
@@ -4509,6 +4571,26 @@ function onRaceDayTouchEnd(e) {
   if (dy > 120) requestCloseRaceDay();
 }
 
+// Swipe down from the header, or from the top of the body (but never from the map, which owns its
+// own drags), closes the sector overlay.
+let sectorSwipeStart = null;
+
+function onSectorOverlayTouchStart(e) {
+  const body = document.getElementById('sector-overlay-body');
+  const inOverlay = e.target.closest?.('#sector-overlay');
+  const onMap = e.target.closest?.('svg.cs-map');
+  const fromHead = e.target.closest?.('#sector-overlay-head');
+  sectorSwipeStart = inOverlay && !onMap && (fromHead || (body && body.scrollTop === 0))
+    ? e.touches[0].clientY : null;
+}
+
+function onSectorOverlayTouchEnd(e) {
+  if (sectorSwipeStart === null) return;
+  const dy = e.changedTouches[0].clientY - sectorSwipeStart;
+  sectorSwipeStart = null;
+  if (dy > 120) requestCloseSectorOverlay();
+}
+
 // --- Offline (unchanged) -------------------------------------------------
 
 function updateOfflineBanner() {
@@ -4568,6 +4650,11 @@ appEl.addEventListener('keydown', onAppKeydown);
 attachMapGestures(appEl, { commit: (view) => { state.mapView = view; }, reset: resetCourseMap });
 appEl.addEventListener('touchstart', onRaceDayTouchStart, { passive: true });
 appEl.addEventListener('touchend', onRaceDayTouchEnd, { passive: true });
+appEl.addEventListener('touchstart', onSectorOverlayTouchStart, { passive: true });
+appEl.addEventListener('touchend', onSectorOverlayTouchEnd, { passive: true });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && state.sectorOverlay.open) requestCloseSectorOverlay();
+});
 // Re-render once a minute while the timeline is showing so the current/next highlight advances.
 setInterval(() => {
   if (state.raceDay.open && state.raceDay.tab === 'timeline') render();

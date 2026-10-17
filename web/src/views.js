@@ -3205,7 +3205,7 @@ function renderSectorGrid(grid) {
 
 /** Inline SVG of the best lap (no tiles, no requests): each sector stroked by loss tone, numbered,
  * with a start/finish marker. Tapping a sector (or its table row) highlights both. */
-function renderCourseMap(map) {
+export function renderCourseMap(map, { expand = true } = {}) {
   const segs = map.sectors.map((s) => `
         <g class="cs-seg cs-seg--${s.tone}${s.selected ? ' cs-seg--selected' : ''}${s.dim ? ' cs-seg--dim' : ''}" data-a="workout:sector-select" data-sector="${s.sector}" role="button" tabindex="0" aria-pressed="${s.selected}" aria-label="${esc(s.aria)}">
           <title>${esc(s.aria)}</title>
@@ -3221,6 +3221,7 @@ function renderCourseMap(map) {
         <text class="cs-north" x="${map.width - 8}" y="14" text-anchor="end">N &#8593;</text>
       </svg>
       <button type="button" class="btn-ghost cs-reset" data-a="workout:map-reset" ${map.zoomed ? '' : 'hidden'}>Reset view</button>
+      ${expand ? '<button type="button" class="btn-ghost cs-expand" data-a="sector-overlay:open" aria-label="Expand course map to full screen">Expand</button>' : ''}
       </div>
       <div class="shape-legend">
         <span class="shape-legend-item"><i class="shape-swatch cs-key--neutral"></i>little lost</span>
@@ -3228,6 +3229,26 @@ function renderCourseMap(map) {
         <span class="shape-legend-item"><i class="shape-swatch cs-key--hot"></i>biggest loss</span>
         <span class="shape-legend-item"><i class="shape-swatch cs-key--start"></i>start / finish</span>
       </div>`;
+}
+
+/** Full-screen "Course sectors" overlay: just the map, the lap x sector grid, the selected-sector
+ * summary and the ideal-lap line. Empty string when the workout has no course sectors. */
+export function renderSectorOverlay(workout, selectedSector = null, mapView = null) {
+  const cs = buildCourseSectors(workout, selectedSector, mapView);
+  if (!cs) return '';
+  return `
+    <div class="rd-overlay cs-overlay" id="sector-overlay" role="dialog" aria-modal="true" aria-label="Course sectors">
+      <div class="rd-head" id="sector-overlay-head">
+        <button type="button" class="btn-ghost" data-a="sector-overlay:close">&larr; Back</button>
+        <div class="rd-title"><strong>Course sectors</strong></div>
+        <button type="button" class="btn-ghost rd-x" data-a="sector-overlay:close" aria-label="Close">✕</button>
+      </div>
+      <div class="rd-body" id="sector-overlay-body">
+        ${cs.map ? renderCourseMap(cs.map, { expand: false }) : ''}
+        <p class="cs-summary" aria-live="polite">${esc(cs.selected || 'Tap a sector on the map or a column in the grid.')}</p>
+        ${cs.grid ? renderSectorGrid(cs.grid) : ''}
+      </div>
+    </div>`;
 }
 
 /** "Mountain bike dynamics" (Garmin Grit / Flow / jumps, per lap) and the lap-over-lap "Course
