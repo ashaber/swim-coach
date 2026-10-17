@@ -199,6 +199,19 @@ def test_remove_item_persists_and_is_a_separate_tap_target(env):
     assert page.locator('.rd-item:has-text("Shoe covers")').count() == 0
 
 
+def test_checked_items_move_to_completed_and_back(env):
+    page, _, _ = env
+    _open_overlay(page)
+    # helmet starts checked: it sits under Completed, not under Kit
+    page.wait_for_selector('.rd-completed .rd-item:has-text("Helmet")')
+    assert page.locator('.rd-section:not(.rd-completed) .rd-item:has-text("Helmet")').count() == 0
+    page.click('.rd-section:not(.rd-completed) .rd-item:has-text("Shoes")')
+    page.wait_for_selector('.rd-completed .rd-item:has-text("Shoes")')
+    page.click('.rd-completed .rd-item:has-text("Helmet")')
+    page.wait_for_selector('.rd-section:not(.rd-completed) .rd-item:has-text("Helmet")')
+    assert page.locator('.rd-completed .rd-item:has-text("Helmet")').count() == 0
+
+
 def test_reload_keeps_overlay_open_with_checks_and_back_closes_it(env):
     page, _, backend = env
     _open_overlay(page)

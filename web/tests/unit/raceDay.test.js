@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
-  groupRaceWeekItems, raceWeekSummary, visibleSections, planProgress, allTags, applyChecked, removeItem, toggleTag,
+  groupRaceWeekItems, raceWeekSummary, visibleSections, planProgress, allTags, applyChecked, removeItem, checklistView, toggleTag,
   timelineClock, timelinePosition, formatClockTime, mergeOp, loadQueue, enqueue, saveQueue,
   loadOpenOverlay, saveOpenOverlay,
 } from '../../src/raceDay.js';
@@ -68,6 +68,33 @@ describe('weather tag filtering and progress', () => {
   });
   it('lists every tag, sorted', () => {
     expect(allTags(PLAN)).toEqual(['cold', 'mud', 'wet']);
+  });
+});
+
+describe('completed partition', () => {
+  const wet = toggleTag(PLAN, 'wet');
+  it('moves checked items to completed, remembering their section', () => {
+    const view = checklistView(wet);
+    expect(view.sections.map((s) => [s.title, s.items.map((i) => i.id)])).toEqual([['Kit', ['covers']]]);
+    expect(view.sections[0]).toMatchObject({ done: 1, total: 2 }); // header still counts the whole section
+    expect(view.completed.map((i) => [i.id, i.sectionTitle])).toEqual([['helmet', 'Kit']]);
+  });
+  it('unchecking restores the item to its original section, in its original place', () => {
+    const view = checklistView(applyChecked(wet, 'helmet', false));
+    expect(view.sections[0].items.map((i) => i.id)).toEqual(['helmet', 'covers']);
+    expect(view.completed).toEqual([]);
+  });
+  it('drops a section that has nothing left to do, but keeps its items under completed', () => {
+    const view = checklistView(applyChecked(PLAN, 'helmet', true));
+    expect(view.sections).toEqual([]);
+    expect(view.completed.map((i) => i.id)).toEqual(['helmet']);
+  });
+  it('renders a Completed section below the open ones with a labelled origin', () => {
+    const html = renderRaceDayOverlay({
+      open: true, status: 'ready', plan: wet, tab: 'list', date: '2026-10-17', name: 'Day 1', pending: 0,
+    });
+    expect(html.indexOf('Completed')).toBeGreaterThan(html.indexOf('Shoe covers'));
+    expect(html).toContain('class="rd-origin">Kit<');
   });
 });
 

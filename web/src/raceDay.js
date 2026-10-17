@@ -62,6 +62,18 @@ export function visibleSections(plan) {
     .filter((s) => s.total > 0);
 }
 
+/** The list as the overlay shows it: each section keeps only its unchecked items (header counts
+ * still cover the whole section), and checked items move to `completed`, each tagged with the
+ * section it came from. Nothing is stored -- unchecking an item puts it back in that section. */
+export function checklistView(plan) {
+  const all = visibleSections(plan);
+  const sections = all
+    .map((s) => ({ ...s, items: s.items.filter((i) => !i.checked) }))
+    .filter((s) => s.items.length > 0);
+  const completed = all.flatMap((s) => s.items.filter((i) => i.checked).map((i) => ({ ...i, sectionTitle: s.title })));
+  return { sections, completed };
+}
+
 export function planProgress(plan) {
   const sections = visibleSections(plan);
   return {

@@ -15,7 +15,7 @@ import {
   sessionIconKey, dateKey,
 } from './plan.js';
 import {
-  raceWeekCategoryIcon, groupRaceWeekItems, raceWeekSummary, visibleSections, planProgress, allTags,
+  raceWeekCategoryIcon, groupRaceWeekItems, raceWeekSummary, checklistView, planProgress, allTags,
   timelineClock, timelinePosition, formatClockTime,
 } from './raceDay.js';
 import { TOOL_LABELS } from './chat.js';
@@ -1812,11 +1812,13 @@ export function renderApp(data, planSessionDetailId) {
 // pending }.
 
 function renderRaceDayItemRow(i) {
+  const origin = i.sectionTitle ? `<span class="rd-origin">${esc(i.sectionTitle)}</span>` : '';
   return `
         <div class="rd-row">
           <button type="button" class="rd-item${i.checked ? ' checked' : ''}" data-a="raceday:check" data-id="${esc(i.id)}" aria-pressed="${i.checked ? 'true' : 'false'}">
             <span class="rd-box" aria-hidden="true">${i.checked ? '✓' : ''}</span>
             <span class="rd-text">${esc(i.text)}</span>
+            ${origin}
             ${(i.tags || []).length ? `<span class="rd-tags">${i.tags.map((t) => esc(t)).join(' · ')}</span>` : ''}
           </button>
           <button type="button" class="rd-del" data-a="raceday:remove" data-id="${esc(i.id)}" aria-label="Remove ${esc(i.text)}"><span aria-hidden="true">✕</span></button>
@@ -1824,13 +1826,19 @@ function renderRaceDayItemRow(i) {
 }
 
 function renderRaceDayChecklistBody(plan) {
-  const sections = visibleSections(plan);
-  if (sections.length === 0) return '<p class="sub">No items for the active weather tags.</p>';
-  return sections.map((sec) => `
+  const { sections, completed } = checklistView(plan);
+  if (sections.length === 0 && completed.length === 0) return '<p class="sub">No items for the active weather tags.</p>';
+  const open = sections.map((sec) => `
       <section class="rd-section">
         <h3>${esc(sec.title)} <span class="rd-count mono">${sec.done}/${sec.total}</span></h3>
         ${sec.items.map((i) => renderRaceDayItemRow(i)).join('')}
       </section>`).join('');
+  const done = completed.length === 0 ? '' : `
+      <section class="rd-section rd-completed">
+        <h3>Completed <span class="rd-count mono">${completed.length}</span></h3>
+        ${completed.map((i) => renderRaceDayItemRow(i)).join('')}
+      </section>`;
+  return open + done;
 }
 
 const TL_RULE_INPUTS = [
