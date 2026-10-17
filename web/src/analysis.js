@@ -407,8 +407,68 @@ export function buildMtbDynamics(workout) {
   };
 }
 
-/** The "Course sectors" section model (`analytics.course_sectors`), or null when absent. */
-export function buildCourseSectors(workout) {
+const MAP_WIDTH = 320;
+const MAP_MAX_HEIGHT = 340;
+const MAP_PAD = 18;
+
+/** Tapping the selected sector again clears the highlight. */
+export function nextSector(current, tapped) {
+  return current === tapped ? null : tapped;
+}
+
+/** Loss tone per sector: the worst top-loss sector is `hot`, the other top-loss sectors `warm`,
+ * everything else `neutral` (CSS maps the tones to colour tokens). */
+function sectorTones(cs) {
+  const tones = new Map();
+  const bySector = new Map((cs.sectors || []).map((s) => [s.sector, s]));
+  const ranked = (cs.top_loss_sectors || []).map((n) => bySector.get(n)).filter(Boolean)
+    .sort((a, b) => b.total_loss_s - a.total_loss_s);
+  ranked.forEach((s, i) => tones.set(s.sector, i === 0 ? 'hot' : 'warm'));
+  return tones;
+}
+
+/** SVG-ready model of the best lap's outline (`course_sectors.track`: local metres, x east / y north):
+ * north up, uniform scale, per-sector polyline + number label, start/finish marker, loss tone and
+ * the highlight state. Null when the ride has no track. */
+export function buildCourseMap(cs, selected = null) {
+  const track = cs?.track?.sectors;
+  if (!Array.isArray(track) || track.length === 0) return null;
+  const pts = track.flatMap((t) => t.points);
+  if (pts.length < 2) return null;
+  const xs = pts.map((p) => p[0]);
+  const ys = pts.map((p) => p[1]);
+  const minX = Math.min(...xs);
+  const maxY = Math.max(...ys);
+  const spanX = Math.max(Math.max(...xs) - minX, 1);
+  const spanY = Math.max(maxY - Math.min(...ys), 1);
+  const scale = Math.min((MAP_WIDTH - 2 * MAP_PAD) / spanX, (MAP_MAX_HEIGHT - 2 * MAP_PAD) / spanY);
+  const X = (x) => Number((MAP_PAD + (x - minX) * scale).toFixed(1));
+  const Y = (y) => Number((MAP_PAD + (maxY - y) * scale).toFixed(1)); // SVG y runs down; north is up
+  const tones = sectorTones(cs);
+  const bySector = new Map((cs.sectors || []).map((s) => [s.sector, s]));
+  const hasSelection = selected !== null && selected !== undefined;
+  return {
+    width: MAP_WIDTH,
+    height: Math.round(spanY * scale + 2 * MAP_PAD),
+    start: { x: X(track[0].points[0][0]), y: Y(track[0].points[0][1]) },
+    sectors: track.map((t) => {
+      const loss = bySector.get(t.sector);
+      return {
+        sector: t.sector,
+        points: t.points.map((p) => `${X(p[0])},${Y(p[1])}`).join(' '),
+        label: { x: X(t.label[0]), y: Y(t.label[1]) },
+        tone: tones.get(t.sector) || 'neutral',
+        selected: hasSelection && t.sector === selected,
+        dim: hasSelection && t.sector !== selected,
+        aria: `Sector ${t.sector}${loss ? `, loses ${loss.total_loss_s.toFixed(1)} s in total` : ''}`,
+      };
+    }),
+  };
+}
+
+/** The "Course sectors" section model (`analytics.course_sectors`), or null when absent.
+ * `selected` is the highlighted sector number (map and table share it). */
+export function buildCourseSectors(workout, selected = null) {
   const cs = workout?.analytics?.course_sectors;
   if (!cs) return null;
   const f = cs.fade || {};
@@ -417,9 +477,14 @@ export function buildCourseSectors(workout) {
   if (num(f.flow_change)) trend.push(`flow ${signed(f.flow_change, 2, '')}`);
   const bySector = new Map((cs.sectors || []).map((s) => [s.sector, s]));
   const top = (cs.top_loss_sectors || []).map((n) => bySector.get(n)).filter(Boolean);
+  const picked = bySector.get(selected);
   return {
     trend: trend.join(', '),
     note: `Each lap is cut into ${cs.sector_count} equal-distance sectors; sector numbers line up across laps. Ask which course feature each sector is.`,
+    map: buildCourseMap(cs, selected),
+    selected: picked
+      ? `Sector ${picked.sector}: best lap ${picked.best_time_s.toFixed(1)} s, loses ${picked.total_loss_s.toFixed(1)} s in total (${picked.mean_loss_s.toFixed(1)} s per lap).`
+      : null,
     laps: {
       columns: SECTOR_LAP_COLUMNS,
       rows: (cs.laps || []).map((l) => [
@@ -433,6 +498,7 @@ export function buildCourseSectors(workout) {
     losses: top.length
       ? {
         columns: SECTOR_LOSS_COLUMNS,
+        sectors: top.map((s) => s.sector),
         rows: top.map((s) => [
           String(s.sector),
           `${s.best_time_s.toFixed(1)} s`,

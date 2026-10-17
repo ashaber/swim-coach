@@ -3087,12 +3087,12 @@ function renderCompletedShapeSection(workout, pacing, weeks, ftpWatts) {
 
 // --- Raw analysis (read-only, from the cached workout) -------------------------
 
-function renderRawTable(columns, rows) {
+function renderRawTable(columns, rows, rowAttrs = () => '') {
   return `
       <div class="laps-table-wrap">
         <table class="laps-table raw-table">
           <thead><tr>${columns.map((c) => `<th>${esc(c)}</th>`).join('')}</tr></thead>
-          <tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody>
+          <tbody>${rows.map((r, i) => `<tr${rowAttrs(r, i)}>${r.map((c) => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody>
         </table>
       </div>`;
 }
@@ -3185,11 +3185,39 @@ function renderFreeRideSection(workout) {
     </section>`;
 }
 
+function sectorRowAttrs(sector, selected) {
+  return ` class="cs-row${sector === selected ? ' cs-row--selected' : ''}" data-a="workout:sector-select" data-sector="${sector}" tabindex="0" aria-pressed="${sector === selected}"`;
+}
+
+/** Inline SVG of the best lap (no tiles, no requests): each sector stroked by loss tone, numbered,
+ * with a start/finish marker. Tapping a sector (or its table row) highlights both. */
+function renderCourseMap(map) {
+  const segs = map.sectors.map((s) => `
+        <g class="cs-seg cs-seg--${s.tone}${s.selected ? ' cs-seg--selected' : ''}${s.dim ? ' cs-seg--dim' : ''}" data-a="workout:sector-select" data-sector="${s.sector}" role="button" tabindex="0" aria-pressed="${s.selected}" aria-label="${esc(s.aria)}">
+          <title>${esc(s.aria)}</title>
+          <polyline class="cs-hit" points="${s.points}" fill="none"/>
+          <polyline class="cs-line" points="${s.points}" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          <text class="cs-num" x="${s.label.x}" y="${s.label.y}" text-anchor="middle" dominant-baseline="central">${s.sector}</text>
+        </g>`).join('');
+  return `
+      <svg class="cs-map" viewBox="0 0 ${map.width} ${map.height}" preserveAspectRatio="xMidYMid meet" role="group" aria-label="Map of the best lap split into numbered sectors, north up. Warmer colour means more time lost.">
+        ${segs}
+        <g class="cs-start"><title>Start / finish</title><circle cx="${map.start.x}" cy="${map.start.y}" r="5"/></g>
+        <text class="cs-north" x="${map.width - 8}" y="14" text-anchor="end">N &#8593;</text>
+      </svg>
+      <div class="shape-legend">
+        <span class="shape-legend-item"><i class="shape-swatch cs-key--neutral"></i>little lost</span>
+        <span class="shape-legend-item"><i class="shape-swatch cs-key--warm"></i>top-3 loss</span>
+        <span class="shape-legend-item"><i class="shape-swatch cs-key--hot"></i>biggest loss</span>
+        <span class="shape-legend-item"><i class="shape-swatch cs-key--start"></i>start / finish</span>
+      </div>`;
+}
+
 /** "Mountain bike dynamics" (Garmin Grit / Flow / jumps, per lap) and the lap-over-lap "Course
  * sectors" table. Each shows only when the ride has that analytics block. */
-function renderMtbSections(workout) {
+function renderMtbSections(workout, selectedSector = null) {
   const m = buildMtbDynamics(workout);
-  const cs = buildCourseSectors(workout);
+  const cs = buildCourseSectors(workout, selectedSector);
   const mtb = m ? `
     <section class="detail-section mtb-dynamics">
       <h4>Mountain bike dynamics</h4>
@@ -3202,8 +3230,10 @@ function renderMtbSections(workout) {
       <h4>Course sectors</h4>
       <p>${esc(cs.trend)}</p>
       <p class="sub">${esc(cs.note)}</p>
+      ${cs.map ? renderCourseMap(cs.map) : ''}
+      ${cs.selected ? `<p class="sub">${esc(cs.selected)}</p>` : ''}
       ${renderRawTable(cs.laps.columns, cs.laps.rows)}
-      ${cs.losses ? `<h5>Where the time went</h5>${renderRawTable(cs.losses.columns, cs.losses.rows)}` : ''}
+      ${cs.losses ? `<h5>Where the time went</h5>${renderRawTable(cs.losses.columns, cs.losses.rows, (_, i) => sectorRowAttrs(cs.losses.sectors[i], selectedSector))}` : ''}
     </section>` : '';
   return mtb + sectors;
 }
@@ -3393,7 +3423,7 @@ function renderConversationThread({
 export function renderWorkoutDetail(workout, {
   chat, online, rpeEdit = null, editable = false, pacing = null, raceDebriefs = [],
   viewerRole = 'athlete', coachChatSubmitting = false,
-  weeks = [], ftpWatts = null, rawAnalysisOpen = null, kindEdit = null,
+  weeks = [], ftpWatts = null, rawAnalysisOpen = null, kindEdit = null, selectedSector = null,
 } = {}) {
   const badge = sourceBadge(workout.source);
   // `renderAskCoachSection` (the old single-turn Feedback-based Q&A) is gone from here
@@ -3410,7 +3440,7 @@ export function renderWorkoutDetail(workout, {
     ${editable ? renderRpeEditSection(workout, rpeEdit) : ''}
     ${renderRaceDebriefSection(workout, raceDebriefs)}
     ${renderFreeRideSection(workout)}
-    ${renderMtbSections(workout)}
+    ${renderMtbSections(workout, selectedSector)}
     ${renderDetailAnalytics(workout.analytics)}
     ${renderIntervalsSection(workout.analytics?.intervals)}
     ${renderRaceAnalysisSection(workout, pacing)}

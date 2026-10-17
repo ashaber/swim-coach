@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  buildCourseSectors, buildMtbDynamics, buildFreeRide, buildRawAnalysis, scoreView, EFFORT_COLUMNS, effectiveKind, kindLabel, shouldLoadPacing, startTraceGeometry,
+  buildCourseSectors, buildCourseMap, nextSector, buildMtbDynamics, buildFreeRide, buildRawAnalysis, scoreView, EFFORT_COLUMNS, effectiveKind, kindLabel, shouldLoadPacing, startTraceGeometry,
 } from '../../src/analysis.js';
 
 const effort = (n, extra = {}) => ({
@@ -295,5 +295,65 @@ describe('buildCourseSectors', () => {
     expect(m.laps.rows[0][0]).toBe('1 (best)');
     expect(m.laps.rows[1]).toEqual(['2', '5:36', '+36 s', '207 W', '4.6']);
     expect(m.losses.rows).toEqual([['5', '40.0 s', '9.2 s', '9.2 s', '+1.4', '0.3']]);
+  });
+});
+
+describe('course map', () => {
+  // Synthetic loop in local metres: sector 1 runs east along the south edge, sector 2 north, sector 3 west.
+  const track = {
+    sectors: [
+      { sector: 1, points: [[0, 0], [100, 0]], label: [50, 0] },
+      { sector: 2, points: [[100, 0], [100, 50]], label: [100, 25] },
+      { sector: 3, points: [[100, 50], [0, 50]], label: [50, 50] },
+    ],
+  };
+  const cs = {
+    sector_count: 3, best_lap: 1, fade: { time_change_pct: 1 }, laps: [], track,
+    sectors: [
+      { sector: 1, best_time_s: 20, mean_loss_s: 0, total_loss_s: 0 },
+      { sector: 2, best_time_s: 10, mean_loss_s: 3, total_loss_s: 6 },
+      { sector: 3, best_time_s: 20, mean_loss_s: 1, total_loss_s: 2 },
+    ],
+    top_loss_sectors: [2, 3],
+  };
+  const xy = (points) => points.split(' ').map((p) => p.split(',').map(Number));
+
+  it('is null without a track', () => {
+    expect(buildCourseMap({ ...cs, track: undefined })).toBeNull();
+    expect(buildCourseSectors({ analytics: { course_sectors: { ...cs, track: undefined } } }).map).toBeNull();
+  });
+
+  it('projects north-up with one uniform scale that fits the width', () => {
+    const m = buildCourseMap(cs);
+    expect(m.width).toBe(320);
+    const [a, b] = xy(m.sectors[0].points);
+    const [, north] = xy(m.sectors[1].points);
+    expect(b[0]).toBeGreaterThan(a[0]); // east is right
+    expect(b[1]).toBe(a[1]);
+    expect(north[1]).toBeLessThan(a[1]); // north is up (smaller SVG y)
+    const allX = m.sectors.flatMap((s) => xy(s.points).map((p) => p[0]));
+    expect(Math.max(...allX)).toBeLessThanOrEqual(320);
+    expect(m.start).toEqual({ x: a[0], y: a[1] });
+  });
+
+  it('colours the worst loss hot, the other top-loss sectors warm, the rest neutral', () => {
+    expect(buildCourseMap(cs).sectors.map((s) => s.tone)).toEqual(['neutral', 'hot', 'warm']);
+  });
+
+  it('highlights the selected sector and dims the rest', () => {
+    const m = buildCourseMap(cs, 2);
+    expect(m.sectors.map((s) => s.selected)).toEqual([false, true, false]);
+    expect(m.sectors.map((s) => s.dim)).toEqual([true, false, true]);
+    expect(buildCourseMap(cs).sectors.some((s) => s.dim || s.selected)).toBe(false);
+    expect(m.sectors[1].aria).toBe('Sector 2, loses 6.0 s in total');
+  });
+
+  it('shares the selection with the table and toggles it', () => {
+    const m = buildCourseSectors({ analytics: { course_sectors: cs } }, 2);
+    expect(m.selected).toMatch(/^Sector 2: best lap 10.0 s, loses 6.0 s in total/);
+    expect(m.losses.sectors).toEqual([2, 3]);
+    expect(nextSector(null, 2)).toBe(2);
+    expect(nextSector(2, 2)).toBeNull();
+    expect(nextSector(2, 3)).toBe(3);
   });
 });
