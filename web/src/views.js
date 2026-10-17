@@ -3197,7 +3197,7 @@ function renderCourseMap(map) {
         </g>`).join('');
   return `
       <div class="cs-map-wrap">
-      <svg class="cs-map" viewBox="${map.viewBox}" data-w="${map.width}" data-h="${map.height}" style="--cs-k:${map.k};touch-action:${map.zoomed ? 'none' : 'pan-y'}" preserveAspectRatio="xMidYMid meet" role="group" aria-label="Map of the best lap split into numbered sectors, north up. Warmer colour means more time lost. Pinch or scroll with ctrl to zoom, drag to pan when zoomed, double-tap to reset.">
+      <svg class="cs-map" viewBox="${map.viewBox}" data-w="${map.width}" data-h="${map.height}" style="--cs-k:${map.k}" preserveAspectRatio="xMidYMid meet" role="group" aria-label="Map of the best lap split into numbered sectors, north up. Warmer colour means more time lost. Pinch or scroll with ctrl to zoom, drag to pan when zoomed, double-tap to reset.">
         ${segs}
         <g class="cs-start"><title>Start / finish</title><circle cx="${map.start.x}" cy="${map.start.y}" r="5"/></g>
         <text class="cs-north" x="${map.width - 8}" y="14" text-anchor="end">N &#8593;</text>

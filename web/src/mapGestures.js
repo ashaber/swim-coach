@@ -1,10 +1,10 @@
 // Pointer-event glue for the course map: two-finger pinch zooms about the pinch midpoint, one-finger
-// drag pans only while zoomed (at 1x a finger scrolls the page: touch-action is pan-y), mouse wheel
-// zooms, double-tap resets. All maths lives in mapView.js; this file only reads pointers and writes
+// drag pans while zoomed and scrolls the page at 1x (the SVG is always touch-action: none, so the
+// browser never takes half a pinch; see mapView.dragAction), mouse wheel zooms, double-tap resets. All maths lives in mapView.js; this file only reads pointers and writes
 // the SVG's viewBox, so a gesture never re-renders the page. The final view is handed to `commit`.
 
 import {
-  clampView, clientToMap, isZoomed, panBy, pixelsPerUnit, viewBoxAttr, zoomAbout,
+  clampView, clientToMap, dragAction, isZoomed, pageScrollDelta, panBy, pixelsPerUnit, viewBoxAttr, zoomAbout,
 } from './mapView.js';
 
 const TAP_MOVE_PX = 6;
@@ -23,7 +23,6 @@ function paint(svg, view) {
   const zoomed = isZoomed(view, full);
   svg.setAttribute('viewBox', viewBoxAttr(view));
   svg.style.setProperty('--cs-k', String(Number((view.w / full.w).toFixed(4))));
-  svg.style.touchAction = zoomed ? 'none' : 'pan-y';
   const reset = svg.closest('.cs-map-wrap')?.querySelector('.cs-reset');
   if (reset) reset.hidden = !zoomed;
 }
@@ -71,7 +70,8 @@ export function attachMapGestures(root, { commit, reset }) {
     const full = fullOf(svg);
     const view = viewOf(svg);
     const rect = svg.getBoundingClientRect();
-    if (pointers.size === 2 && pinchDist) {
+    const action = dragAction(pointers.size, isZoomed(view, full));
+    if (action === 'pinch' && pinchDist) {
       const [a, b] = [...pointers.values()];
       const d = dist(a, b);
       const mid = clientToMap(view, rect, (a.x + b.x) / 2, (a.y + b.y) / 2);
@@ -80,9 +80,14 @@ export function attachMapGestures(root, { commit, reset }) {
       pinchDist = d;
       return;
     }
-    if (pointers.size !== 1 || !isZoomed(view, full)) return;
+    if (action !== 'pan' && action !== 'scroll') return;
     travelled += Math.hypot(cur.x - prev.x, cur.y - prev.y);
     if (travelled < TAP_MOVE_PX) return;
+    if (action === 'scroll') { // 1x: the map owns the touch, so hand vertical movement to the page
+      moved = true;
+      window.scrollBy(0, pageScrollDelta(prev, cur));
+      return;
+    }
     if (!moved) svg.setPointerCapture?.(e.pointerId); // only a real drag captures, so taps still reach their sector
     moved = true;
     const k = pixelsPerUnit(view, rect);
