@@ -8,7 +8,11 @@ only sums and averages what the device recorded, and invents no thresholds.
 Units (verified on a real 2026-10-04 MTB FIT): the per-record `grit` channel is an increment
 scaled x1000 (the records sum to ~92053 for a session `total_grit` of 92.05 kGrit), so a lap's
 grit is the sum of its records / `GRIT_RECORD_SCALE`. Per-record `flow` is 0 while stopped, and the
-session `avg_flow` excludes those samples, so a lap's flow is the mean of its NON-ZERO samples.
+session `avg_flow` excludes those samples. A lap's (and sector's) flow is the mean of the record
+flow over MOVING records (`speed_mps > MOVING_SPEED_MPS`), which tracks the session `avg_flow` far
+more closely than the non-zero mean (verified on 3 real FIT files: 3.89 vs 4.40, 3.29 vs 3.50,
+3.87 vs 3.96; the non-zero mean ran ~2x high). Garmin's formula is unpublished, so this is
+approximately on its scale, not exact.
 
 Data presence drives everything: the block exists when the ride carries a grit/flow channel or
 device totals, whatever the sport label says.
@@ -23,6 +27,10 @@ from swim_coach.models import JumpsSummary, MtbDynamics, MtbLap, Workout, Workou
 GRIT_RECORD_SCALE = 1000.0
 """Per-record grit increments sum to the session total_grit x 1000 (device definition, verified
 against a real FIT; see module docstring)."""
+
+
+MOVING_SPEED_MPS = 1.0
+"""Coach judgment: records faster than this count as moving for the flow mean (Garmin's formula is unpublished)."""
 
 
 def has_channel(series: dict | None, name: str) -> bool:
@@ -56,6 +64,15 @@ def mean_nonzero(values: Sequence[float | None], idx: range) -> float | None:
     return round(sum(vals) / len(vals), 2) if vals else None
 
 
+def mean_moving(values: Sequence[float | None], speed: Sequence[float | None] | None, idx: range) -> float | None:
+    """Mean of `values` over the records moving faster than MOVING_SPEED_MPS; without a speed
+    channel, the mean of the non-zero samples."""
+    if not speed:
+        return mean_nonzero(values, idx)
+    vals = [values[i] for i in idx if values[i] is not None and speed[i] is not None and speed[i] > MOVING_SPEED_MPS]
+    return round(sum(vals) / len(vals), 2) if vals else None
+
+
 def mean_present(values: Sequence[float | None], idx: range) -> float | None:
     vals = [values[i] for i in idx if values[i] is not None]
     return round(sum(vals) / len(vals), 1) if vals else None
@@ -86,6 +103,7 @@ def _lap_rows(workout: Workout, series: dict | None) -> list[MtbLap]:
     if not t_s:
         return []
     grit, flow, power = series.get("grit") or [], series.get("flow") or [], series.get("power_w") or []
+    speed = series.get("speed_mps") or []
     jumps = workout.device_dynamics.jumps if workout.device_dynamics else []
     rows = []
     for n, (lap, start, stop) in enumerate(lap_windows(workout.laps, t_s[-1] + 1), 1):
@@ -99,7 +117,7 @@ def _lap_rows(workout: Workout, series: dict | None) -> list[MtbLap]:
                 distance_m=lap.distance_m,
                 avg_power_w=lap.avg_power_w if lap.avg_power_w is not None else (mean_present(power, idx) if power else None),
                 grit=sum_grit(grit, idx) if grit else None,
-                avg_flow=mean_nonzero(flow, idx) if flow else None,
+                avg_flow=mean_moving(flow, speed, idx) if flow else None,
                 jumps=len(in_lap) if jumps else None,
             )
         )

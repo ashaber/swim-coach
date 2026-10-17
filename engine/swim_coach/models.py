@@ -2013,7 +2013,7 @@ class MtbLap(BaseModel):
     distance_m: float | None = None
     avg_power_w: float | None = None
     grit: float | None = None  # sum of the lap's per-record grit / mtb_dynamics.GRIT_RECORD_SCALE (kGrit)
-    avg_flow: float | None = None  # mean of the lap's non-zero flow samples
+    avg_flow: float | None = None  # mean flow over the lap's moving records (mtb_dynamics.MOVING_SPEED_MPS)
     jumps: int | None = None
 
 

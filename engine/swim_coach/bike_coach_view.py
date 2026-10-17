@@ -147,8 +147,8 @@ MTB_COACH_NOTE = (
     "Garmin device metrics (proprietary, read-only): Grit = how difficult the ride was (elevation, gradient, "
     "rapid direction changes); Flow = how consistently speed/smoothness is held through turns, so lower Flow "
     "is smoother. Grit is a course-difficulty number: compare laps on the same course, never across courses. "
-    "Lap Flow is the mean of the lap's non-zero Flow samples, so it reads higher than the session avg_flow "
-    "(whose definition Garmin does not publish): compare laps with each other. No thresholds exist; read the trend."
+    "Lap Flow is the mean over the lap's moving records, approximately on Garmin's scale (the exact formula is "
+    "unpublished): compare laps with each other. No thresholds exist; read the trend."
 )
 COURSE_SECTORS_COACH_NOTE = (
     "Each similar-distance lap is cut into equal-distance sectors (Coach judgment: 8), so sector N lines up "

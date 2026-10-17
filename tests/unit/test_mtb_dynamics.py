@@ -115,17 +115,26 @@ def test_lap_grit_is_record_sum_over_scale_and_ride_total_ties_to_device():
     assert sum(lap.grit for lap in m.laps) == pytest.approx(m.total_grit, abs=0.02)
 
 
-def test_lap_flow_averages_nonzero_samples_and_ride_average_ties_to_device():
+def test_lap_flow_averages_moving_records_and_ride_average_ties_to_device():
     series = fx.build_series()
     m = build_mtb_dynamics(_workout(), series)
     s = fx.lap_starts()
-    nonzero = [f for f in series["flow"][s[0]:s[1]] if f]
-    assert m.laps[0].avg_flow == pytest.approx(sum(nonzero) / len(nonzero), abs=0.01)
+    moving = [f for f, v in zip(series["flow"][s[0]:s[1]], series["speed_mps"][s[0]:s[1]]) if v > 1.0]
+    assert m.laps[0].avg_flow == pytest.approx(sum(moving) / len(moving), abs=0.01)
     assert m.avg_flow == _device().avg_flow
-    # whole-ride mean of the non-zero samples agrees with the device average (zeros excluded)
-    allnz = [f for f in series["flow"] if f]
-    assert m.avg_flow == pytest.approx(sum(allnz) / len(allnz), abs=0.01)
     assert m.laps[0].avg_flow < m.laps[1].avg_flow < m.laps[2].avg_flow
+
+
+def test_lap_flow_ignores_slow_records_even_when_flow_is_nonzero():
+    series = fx.build_series()
+    s = fx.lap_starts()
+    series["speed_mps"] = list(series["speed_mps"])
+    series["flow"] = list(series["flow"])
+    for i in range(s[0], s[0] + 50):  # a stopped stretch that still reports a big flow value
+        series["speed_mps"][i] = 0.2
+        series["flow"][i] = 40.0
+    m = build_mtb_dynamics(_workout(), series)
+    assert m.laps[0].avg_flow < 10
 
 
 def test_jumps_land_in_their_lap_and_are_summarised():

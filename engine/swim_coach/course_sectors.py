@@ -19,7 +19,7 @@ from typing import Sequence
 
 from swim_coach.models import CourseSectors, LapFade, SectorLap, SectorLoss, Workout, WorkoutLap
 from swim_coach.mtb_dynamics import (
-    GRIT_RECORD_SCALE, has_channel, lap_windows, mean_nonzero, mean_present, window_indices,
+    GRIT_RECORD_SCALE, has_channel, lap_windows, mean_moving, mean_present, window_indices,
 )
 
 SECTOR_COUNT = 8  # Coach judgment: enough resolution to localise a loss, still ~10+ s per sector
@@ -71,17 +71,18 @@ def _lap_sectors(series: dict, idx: range) -> dict | None:
         return None
     edges = [_t_at(d, t, d[0] + total * k / SECTOR_COUNT) for k in range(SECTOR_COUNT + 1)]
     flow, grit, power = series.get("flow") or [], series.get("grit") or [], series.get("power_w") or []
+    speed = series.get("speed_mps") or []
     times, flows, grits = [], [], []
     for k in range(SECTOR_COUNT):
         sec = window_indices(t_s, edges[k], edges[k + 1] if k < SECTOR_COUNT - 1 else edges[-1] + 1e-6)
         sec = range(max(sec.start, idx.start), min(sec.stop, idx.stop))
         times.append(round(edges[k + 1] - edges[k], 2))
-        flows.append(mean_nonzero(flow, sec) if flow else None)
+        flows.append(mean_moving(flow, speed, sec) if flow else None)
         vals = [grit[i] for i in sec if grit[i] is not None] if grit else []
         grits.append(round(sum(vals) / GRIT_RECORD_SCALE, 3) if vals else None)
     return {"time_s": round(edges[-1] - edges[0], 1), "times": times, "flows": flows, "grits": grits,
             "power": mean_present(power, idx) if power else None,
-            "flow": mean_nonzero(flow, idx) if flow else None,
+            "flow": mean_moving(flow, speed, idx) if flow else None,
             "grit": round(sum(v for v in (grit[i] for i in idx) if v is not None) / GRIT_RECORD_SCALE, 2)
             if has_channel(series, "grit") else None}
 
