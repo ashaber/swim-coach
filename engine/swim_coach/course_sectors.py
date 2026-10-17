@@ -18,6 +18,7 @@ from bisect import bisect_left
 from statistics import median
 from typing import Sequence
 
+from swim_coach.gps_laps import detect_gps_laps
 from swim_coach.models import (
     CourseSectors, CourseTrack, LapFade, SectorLap, SectorLoss, TrackSector, Workout, WorkoutLap,
 )
@@ -76,6 +77,29 @@ def _similar_laps(
         if len(group) > len(best):
             best = group
     return best
+
+
+def _gps_windows(series: dict) -> list[tuple[WorkoutLap, float, float]]:
+    """Laps found from the GPS start marker (`gps_laps.detect_gps_laps`, boundaries reused as is),
+    shaped like the device-lap windows. Distance comes from the `dist_m` channel."""
+    dist = series.get("dist_m") or []
+    windows = []
+    for gps in detect_gps_laps(series):
+        a, b = dist[gps.start_idx], dist[gps.end_idx]
+        if a is None or b is None:
+            continue
+        lap = WorkoutLap(index=gps.n, start_offset_s=gps.start_s, duration_s=gps.duration_s, distance_m=b - a)
+        windows.append((lap, gps.start_s, gps.end_s))
+    return windows
+
+
+def _course_laps(workout: Workout, series: dict, prefer_gps: bool) -> list[tuple[int, WorkoutLap, float, float]]:
+    """Native device laps and GPS-detected laps, each filtered to similar distance from one start
+    line; the preferred source wins when it yields 2+ laps, else the other is tried."""
+    native = _similar_laps(lap_windows(workout.laps, series["t_s"][-1] + 1), series)
+    gps = _similar_laps(_gps_windows(series), series)
+    first, second = (gps, native) if prefer_gps else (native, gps)
+    return first if len(first) >= 2 else second
 
 
 def _t_at(dist: Sequence[float], t: Sequence[float], d: float) -> float:
@@ -173,11 +197,12 @@ def _mean(vals: list[float]) -> float | None:
     return round(sum(vals) / len(vals), 2) if vals else None
 
 
-def build_course_sectors(workout: Workout, series: dict | None) -> CourseSectors | None:
-    """The sector comparison, or None unless 2..MAX_LAPS similar-distance laps can be cut by distance."""
+def build_course_sectors(workout: Workout, series: dict | None, prefer_gps: bool = False) -> CourseSectors | None:
+    """The sector comparison, or None unless 2..MAX_LAPS similar-distance laps can be cut by distance.
+    `prefer_gps`: use GPS-detected laps before the device's own laps (a race whose laps were never pressed)."""
     if not series or not series.get("t_s") or not has_channel(series, "dist_m"):
         return None
-    group = _similar_laps(lap_windows(workout.laps, series["t_s"][-1] + 1), series)
+    group = _course_laps(workout, series, prefer_gps)
     if not 2 <= len(group) <= MAX_LAPS:
         return None
     cut = []

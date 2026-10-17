@@ -338,3 +338,36 @@ def test_coach_view_strips_the_track():
     view = analytics_for_coach(_workout().analyze(ctx), "bike")
     assert "track" not in view["course_sectors"]
     assert "points" not in json.dumps(view)
+
+
+# --- GPS-detected laps (races whose device laps were never pressed) ------------------------------
+
+
+def test_course_sectors_from_gps_laps_when_there_are_no_native_laps():
+    cs = build_course_sectors(_workout(laps=[]), _loop_gps(), prefer_gps=True)
+    assert cs is not None and len(cs.laps) >= 2
+    assert cs.track is not None and len(cs.track.sectors) == SECTOR_COUNT
+    assert cs.laps[0].time_vs_best_s >= 0
+
+
+def test_race_prefers_gps_laps_over_native_laps_but_other_kinds_prefer_native():
+    one_native = _laps()[:1]  # a race with a single pressed lap
+    race = build_course_sectors(_workout(laps=one_native), _loop_gps(), prefer_gps=True)
+    assert race is not None and len(race.laps) >= 2
+    native = build_course_sectors(_workout(), _loop_gps(), prefer_gps=False)
+    assert [lap.lap for lap in native.laps] == [1, 2, 3]  # the device's own laps
+
+
+def test_non_race_falls_back_to_gps_laps_when_native_laps_fail_the_filter():
+    cs = build_course_sectors(_workout(laps=_laps()[:1]), _loop_gps(), prefer_gps=False)
+    assert cs is not None and len(cs.laps) >= 2
+
+
+def test_no_gps_and_no_native_laps_gives_no_sectors():
+    assert build_course_sectors(_workout(laps=[]), fx.build_series(), prefer_gps=True) is None
+
+
+def test_bike_analyzer_builds_sectors_for_an_unpressed_race():
+    ctx = AnalysisContext(kind="race", series=_loop_gps())
+    a = _workout(laps=[]).analyze(ctx)
+    assert a.course_sectors is not None and a.course_sectors.track is not None
