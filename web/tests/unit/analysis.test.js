@@ -348,6 +348,21 @@ describe('course map', () => {
     expect(m.sectors[1].aria).toBe('Sector 2, loses 6.0 s in total');
   });
 
+  it('frames the whole lap, the selected sector, or a gesture view (which wins)', () => {
+    const whole = buildCourseMap(cs);
+    expect(whole.viewBox).toBe(`0 0 ${whole.width} ${whole.height}`);
+    expect(whole.zoomed).toBe(false);
+    expect(whole.k).toBe(1);
+    const small = { ...cs, track: { sectors: [...track.sectors.slice(0, 2), { sector: 3, points: [[100, 50], [90, 50]], label: [95, 50] }] } };
+    const framed = buildCourseMap(small, 3);
+    expect(framed.zoomed).toBe(true);
+    expect(framed.k).toBeLessThan(1);
+    const gesture = { x: 10, y: 10, w: 80, h: 50 };
+    const g = buildCourseMap(cs, 2, gesture);
+    expect(g.viewBox).toBe('10 10 80 50');
+    expect(g.k).toBeCloseTo(80 / whole.width, 3);
+  });
+
   it('shares the selection with the table and toggles it', () => {
     const m = buildCourseSectors({ analytics: { course_sectors: cs } }, 2);
     expect(m.selected).toMatch(/^Sector 2: best lap 10.0 s, loses 6.0 s in total/);

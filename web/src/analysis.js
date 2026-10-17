@@ -419,6 +419,8 @@ export function buildMtbDynamics(workout) {
   };
 }
 
+import { boundsOfPoints, fitBounds, isZoomed, viewBoxAttr } from './mapView.js';
+
 const MAP_WIDTH = 320;
 const MAP_MAX_HEIGHT = 340;
 const MAP_PAD = 18;
@@ -442,7 +444,7 @@ function sectorTones(cs) {
 /** SVG-ready model of the best lap's outline (`course_sectors.track`: local metres, x east / y north):
  * north up, uniform scale, per-sector polyline + number label, start/finish marker, loss tone and
  * the highlight state. Null when the ride has no track. */
-export function buildCourseMap(cs, selected = null) {
+export function buildCourseMap(cs, selected = null, gestureView = null) {
   const track = cs?.track?.sectors;
   if (!Array.isArray(track) || track.length === 0) return null;
   const pts = track.flatMap((t) => t.points);
@@ -459,28 +461,38 @@ export function buildCourseMap(cs, selected = null) {
   const tones = sectorTones(cs);
   const bySector = new Map((cs.sectors || []).map((s) => [s.sector, s]));
   const hasSelection = selected !== null && selected !== undefined;
+  const width = MAP_WIDTH;
+  const height = Math.round(spanY * scale + 2 * MAP_PAD);
+  const full = { x: 0, y: 0, w: width, h: height };
+  const sectors = track.map((t) => {
+    const loss = bySector.get(t.sector);
+    return {
+      sector: t.sector,
+      points: t.points.map((p) => `${X(p[0])},${Y(p[1])}`).join(' '),
+      label: { x: X(t.label[0]), y: Y(t.label[1]) },
+      tone: tones.get(t.sector) || 'neutral',
+      selected: hasSelection && t.sector === selected,
+      dim: hasSelection && t.sector !== selected,
+      aria: `Sector ${t.sector}${loss ? `, loses ${loss.total_loss_s.toFixed(1)} s in total` : ''}`,
+    };
+  });
+  // A pinch/pan view wins; otherwise a selected sector is framed; otherwise the whole lap.
+  const picked = sectors.find((s) => s.selected);
+  const view = gestureView || (picked ? fitBounds(boundsOfPoints(picked.points), full) : full);
   return {
-    width: MAP_WIDTH,
-    height: Math.round(spanY * scale + 2 * MAP_PAD),
+    width,
+    height,
+    viewBox: viewBoxAttr(view),
+    k: Number((view.w / full.w).toFixed(4)),
+    zoomed: isZoomed(view, full),
     start: { x: X(track[0].points[0][0]), y: Y(track[0].points[0][1]) },
-    sectors: track.map((t) => {
-      const loss = bySector.get(t.sector);
-      return {
-        sector: t.sector,
-        points: t.points.map((p) => `${X(p[0])},${Y(p[1])}`).join(' '),
-        label: { x: X(t.label[0]), y: Y(t.label[1]) },
-        tone: tones.get(t.sector) || 'neutral',
-        selected: hasSelection && t.sector === selected,
-        dim: hasSelection && t.sector !== selected,
-        aria: `Sector ${t.sector}${loss ? `, loses ${loss.total_loss_s.toFixed(1)} s in total` : ''}`,
-      };
-    }),
+    sectors,
   };
 }
 
 /** The "Course sectors" section model (`analytics.course_sectors`), or null when absent.
  * `selected` is the highlighted sector number (map and table share it). */
-export function buildCourseSectors(workout, selected = null) {
+export function buildCourseSectors(workout, selected = null, gestureView = null) {
   const cs = workout?.analytics?.course_sectors;
   if (!cs) return null;
   const f = cs.fade || {};
@@ -493,7 +505,7 @@ export function buildCourseSectors(workout, selected = null) {
   return {
     trend: trend.join(', '),
     note: `Each lap is cut into ${cs.sector_count} equal-distance sectors; sector numbers line up across laps. Ask which course feature each sector is.`,
-    map: buildCourseMap(cs, selected),
+    map: buildCourseMap(cs, selected, gestureView),
     selected: picked
       ? `Sector ${picked.sector}: best lap ${picked.best_time_s.toFixed(1)} s, loses ${picked.total_loss_s.toFixed(1)} s in total (${picked.mean_loss_s.toFixed(1)} s per lap).`
       : null,

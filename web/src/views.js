@@ -3196,11 +3196,14 @@ function renderCourseMap(map) {
           <text class="cs-num" x="${s.label.x}" y="${s.label.y}" text-anchor="middle" dominant-baseline="central">${s.sector}</text>
         </g>`).join('');
   return `
-      <svg class="cs-map" viewBox="0 0 ${map.width} ${map.height}" preserveAspectRatio="xMidYMid meet" role="group" aria-label="Map of the best lap split into numbered sectors, north up. Warmer colour means more time lost.">
+      <div class="cs-map-wrap">
+      <svg class="cs-map" viewBox="${map.viewBox}" data-w="${map.width}" data-h="${map.height}" style="--cs-k:${map.k};touch-action:${map.zoomed ? 'none' : 'pan-y'}" preserveAspectRatio="xMidYMid meet" role="group" aria-label="Map of the best lap split into numbered sectors, north up. Warmer colour means more time lost. Pinch or scroll with ctrl to zoom, drag to pan when zoomed, double-tap to reset.">
         ${segs}
         <g class="cs-start"><title>Start / finish</title><circle cx="${map.start.x}" cy="${map.start.y}" r="5"/></g>
         <text class="cs-north" x="${map.width - 8}" y="14" text-anchor="end">N &#8593;</text>
       </svg>
+      <button type="button" class="btn-ghost cs-reset" data-a="workout:map-reset" ${map.zoomed ? '' : 'hidden'}>Reset view</button>
+      </div>
       <div class="shape-legend">
         <span class="shape-legend-item"><i class="shape-swatch cs-key--neutral"></i>little lost</span>
         <span class="shape-legend-item"><i class="shape-swatch cs-key--warm"></i>top-3 loss</span>
@@ -3211,9 +3214,9 @@ function renderCourseMap(map) {
 
 /** "Mountain bike dynamics" (Garmin Grit / Flow / jumps, per lap) and the lap-over-lap "Course
  * sectors" table. Each shows only when the ride has that analytics block. */
-function renderMtbSections(workout, selectedSector = null) {
+function renderMtbSections(workout, selectedSector = null, mapView = null) {
   const m = buildMtbDynamics(workout);
-  const cs = buildCourseSectors(workout, selectedSector);
+  const cs = buildCourseSectors(workout, selectedSector, mapView);
   const mtb = m ? `
     <section class="detail-section mtb-dynamics">
       <h4>Mountain bike dynamics</h4>
@@ -3441,7 +3444,7 @@ function renderConversationThread({
 export function renderWorkoutDetail(workout, {
   chat, online, rpeEdit = null, editable = false, pacing = null, raceDebriefs = [],
   viewerRole = 'athlete', coachChatSubmitting = false,
-  weeks = [], ftpWatts = null, rawAnalysisOpen = null, kindEdit = null, selectedSector = null,
+  weeks = [], ftpWatts = null, rawAnalysisOpen = null, kindEdit = null, selectedSector = null, mapView = null,
 } = {}) {
   const badge = sourceBadge(workout.source);
   const shapeSection = renderCompletedShapeSection(workout, pacing, weeks, ftpWatts);
@@ -3459,7 +3462,7 @@ export function renderWorkoutDetail(workout, {
     ${editable ? renderRpeEditSection(workout, rpeEdit) : ''}
     ${renderRaceDebriefSection(workout, raceDebriefs)}
     ${renderFreeRideSection(workout, { zoneKeyShown: shapeSection.includes(SHAPE_LEGEND_MARK) })}
-    ${renderMtbSections(workout, selectedSector)}
+    ${renderMtbSections(workout, selectedSector, mapView)}
     ${renderPowerCurveSection(workout)}
     ${renderDetailAnalytics(workout.analytics)}
     ${renderIntervalsSection(workout.analytics?.intervals)}
