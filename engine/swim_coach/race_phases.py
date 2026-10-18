@@ -185,6 +185,7 @@ def split_race_phases(
     *,
     start_phase_s: float = DEFAULT_START_PHASE_S,
     num_remaining_phases: int = DEFAULT_NUM_REMAINING_PHASES,
+    race_start_s: float | None = None,
 ) -> list[RacePhase]:
     """Splits a race's `series` (the columnar dict `parse_files.
     _build_series` produces / `store.load_series` returns -- same shape
@@ -200,6 +201,10 @@ def split_race_phases(
     `normalized_power_w`/`avg_speed_mps` of `None` means that specific
     phase had no usable power/speed data -- distinct from the whole call
     returning `[]`.
+
+    `race_start_s` (the detected or athlete/coach-set start of the race on the activity clock,
+    for a one-file warm-up + race ride) moves phase 0 there: phases cover only the race, so
+    the warm-up and waiting on the line never count as "phase 1".
     """
     if not series:
         return []
@@ -209,11 +214,11 @@ def split_race_phases(
     valid_t = [t for t in t_s if t is not None]
     if not valid_t:
         return []
-    total_s = max(valid_t) - min(valid_t)
+    t0 = max(min(valid_t), race_start_s) if race_start_s is not None else min(valid_t)
+    total_s = max(valid_t) - t0
     if total_s <= start_phase_s or num_remaining_phases < 1:
         return []
 
-    t0 = min(valid_t)
     phases = [_phase(series, "start", t0, t0 + start_phase_s)]
     remaining_s = total_s - start_phase_s
     phase_len = remaining_s / num_remaining_phases

@@ -4589,6 +4589,16 @@ RIDE_PACING_INTERPRETATION = (
 )
 
 
+def _race_start_s(workout: Workout) -> float | None:
+    """Where the race begins on the activity clock: the athlete/coach override, else the start the
+    analysis detected, else `None` (a ride with no separate warm-up is analysed from 0)."""
+    if workout.race_start_s is not None:
+        return workout.race_start_s
+    intervals = workout.analytics.intervals if workout.analytics else None
+    detected = intervals.race_start if intervals else None
+    return detected.start_s if detected else None
+
+
 def _handle_get_ride_pacing(
     input_data: dict[str, Any], *, store: StoreInterface, slug: str
 ) -> dict[str, Any]:
@@ -4624,8 +4634,9 @@ def _handle_get_ride_pacing(
             )
         }
 
-    laps = analyze_gps_laps(series)
-    phases = split_race_phases(series)
+    race_start_s = _race_start_s(workout)
+    laps = analyze_gps_laps(series, from_s=race_start_s)
+    phases = split_race_phases(series, race_start_s=race_start_s)
     laps_truncated = len(laps) > RIDE_PACING_LAPS_CAP
 
     gps_laps: dict[str, Any] = {
@@ -4653,6 +4664,7 @@ def _handle_get_ride_pacing(
         "date": workout.date.isoformat(),
         "series_source": series_source,
         "gps_laps": gps_laps,
+        "race_start_s": race_start_s,
         "race_phases": {
             "phases": _race_phases_json(phases),
             "significance_threshold_pct": DEFAULT_SIGNIFICANCE_THRESHOLD_PCT,

@@ -42,6 +42,14 @@
     "hr_rise_across_reps_bpm": null,
     "race_start": {
      "start_s": 253.0,
+     "source": "detected",
+     "warmup": {
+      "duration_s": 253.0,
+      "avg_w": 2,
+      "np_w": 4,
+      "openers": 0,
+      "note": "warm-up 4 min before the race start: avg 2 W, NP 4 W, 0 openers"
+     },
      "peak_w": 862,
      "best_5s_w": 695,
      "best_15s_w": 582,
@@ -52,7 +60,7 @@
      "first_5min_np_w": 266,
      "race_np_w": 241,
      "first_5min_vs_race_np_pct": 110.3,
-     "note": "race start at 253 s: peak 862 W, best 5 s 695 W, burst 18 s, settled to race pace in 48 s; first 5 min NP 266 W = 110% of race NP 241 W"
+     "note": "race start at 253 s: peak 862 W, best 5 s 695 W, burst 18 s, settled to race pace in 48 s; first 5 min NP 266 W = 110% of race NP 241 W. warm-up 4 min before the race start: avg 2 W, NP 4 W, 0 openers"
     },
     "race_laps": [
      {

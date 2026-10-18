@@ -12,7 +12,7 @@ from __future__ import annotations
 import statistics
 
 from swim_coach.analytics import normalized_power_w
-from swim_coach.models import RaceStart
+from swim_coach.models import RaceStart, WarmupSummary
 from swim_coach.power_curve import _riding_timeline
 
 RACE_BURST_MIN_FRAC_FTP = 1.5
@@ -75,9 +75,53 @@ def _burst_end(w: list[float], i0: int, ip: int) -> int:
     return b
 
 
-def analyze_race_start(series: dict | None, *, ftp_watts: float | None) -> RaceStart | None:
+WARMUP_MIN_S = 60
+# A pre-start span shorter than this is just the line-up, not worth a warm-up line. Coach judgment.
+
+WARMUP_OPENER_GAP_S = 10
+# Warm-up openers = separate bursts >= RACE_BURST_MIN_FRAC_FTP x FTP; bursts closer than this
+# many seconds count as one. Coach judgment.
+
+
+def _count_openers(w: list[float], ftp_watts: float) -> int:
+    floor = RACE_BURST_MIN_FRAC_FTP * ftp_watts
+    count, last = 0, None
+    for i, x in enumerate(w):
+        if x >= floor:
+            if last is None or i - last > WARMUP_OPENER_GAP_S:
+                count += 1
+            last = i
+    return count
+
+
+def _warmup_summary(w: list[float], clock: list[float], i0: int, ftp_watts: float) -> WarmupSummary | None:
+    if i0 < WARMUP_MIN_S:
+        return None
+    pre = w[:i0]
+    avg = statistics.fmean(pre)
+    np_w = normalized_power_w({"t_s": clock[:i0], "power_w": pre})
+    openers = _count_openers(pre, ftp_watts)
+    note = f"warm-up {i0 / 60:.0f} min before the race start: avg {avg:.0f} W"
+    if np_w:
+        note += f", NP {np_w:.0f} W"
+    note += f", {openers} opener{'s' if openers != 1 else ''}"
+    return WarmupSummary(
+        duration_s=float(i0), avg_w=int(round(avg)), np_w=int(round(np_w)) if np_w else None,
+        openers=openers, note=note,
+    )
+
+
+def _override_index(clock: list[float], start_s: float) -> int | None:
+    return next((i for i, t in enumerate(clock) if t >= start_s), None)
+
+
+def analyze_race_start(
+    series: dict | None, *, ftp_watts: float | None, start_s_override: float | None = None
+) -> RaceStart | None:
     """The race-start block, or `None` without a power channel / FTP or without a
-    qualifying burst."""
+    qualifying burst. `start_s_override` (the athlete/coach-set start on the activity clock)
+    wins over detection; everything race-level is then measured from it, and everything before
+    it is summarised apart as `warmup`."""
     if not series or not ftp_watts:
         return None
     t_s = series.get("t_s") or []
@@ -85,7 +129,10 @@ def analyze_race_start(series: dict | None, *, ftp_watts: float | None) -> RaceS
     if not t_s or not power or all(p is None for p in power):
         return None
     w, clock = _riding_timeline(t_s, power)
-    i0 = _first_race_burst(w, ftp_watts)
+    i0 = _override_index(clock, start_s_override) if start_s_override is not None else None
+    source = "override" if i0 is not None else "detected"
+    if i0 is None:
+        i0 = _first_race_burst(w, ftp_watts)
     if i0 is None:
         return None
     ip = max(range(i0, min(len(w), i0 + RACE_BURST_SEARCH_S + 1)), key=lambda k: w[k])
@@ -114,8 +161,13 @@ def analyze_race_start(series: dict | None, *, ftp_watts: float | None) -> RaceS
     note += f", settled to race pace in {settle:.0f} s" if settle is not None else ", no clear settle to race pace"
     if pct is not None:
         note += f"; first 5 min NP {np5:.0f} W = {pct:.0f}% of race NP {np_race:.0f} W"
+    warmup = _warmup_summary(w, clock, i0, ftp_watts)
+    if warmup:
+        note += f". {warmup.note}"
     return RaceStart(
         start_s=round(clock[i0], 1),
+        source=source,
+        warmup=warmup,
         peak_w=peak,
         best_5s_w=b5,
         best_15s_w=_best_mean(rest[:90], 15),

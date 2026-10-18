@@ -2246,6 +2246,17 @@ def _analyze_prescribed_reps(
     }
 
 
+def _laps_from(laps: list, start_s: float | None) -> list:
+    """The device laps that belong to the race: those ending after `start_s`. A lap that ends
+    before the race start is warm-up. Laps without a start offset are kept (cannot be placed)."""
+    if start_s is None:
+        return list(laps)
+    return [
+        l for l in laps
+        if getattr(l, "start_offset_s", None) is None or l.start_offset_s + l.duration_s > start_s
+    ]
+
+
 def _session_shape(prescription: dict | None, *, race: bool, planned_zone: str | None) -> str | None:
     """Why a steady-state decoupling read does not apply: `"race"`, `"starts"` (the ride
     has a start-burst set) or `"interval"` (prescribed / lap-shape reps); `None` for a
@@ -2275,6 +2286,7 @@ def analyze(
     planned_zone: str | None = None,
     lthr_bpm: float | None = None,
     race: bool = False,
+    race_start_s: float | None = None,
     session_text: str | None = None,
 ) -> WorkoutIntervals | None:
     """Full deterministic interval analysis for one ride. Returns a
@@ -2377,8 +2389,9 @@ def analyze(
 
     race_extra: dict = {}
     if race:
+        race_start = analyze_race_start(series, ftp_watts=ftp_watts, start_s_override=race_start_s)
         race_extra = {
-            "race_start": analyze_race_start(series, ftp_watts=ftp_watts),
+            "race_start": race_start,
             "race_laps": [
                 RaceLap(
                     n=i + 1,
@@ -2386,7 +2399,7 @@ def analyze(
                     avg_w=l.avg_power_w,
                     avg_hr=l.avg_hr,
                 )
-                for i, l in enumerate(laps or [])
+                for i, l in enumerate(_laps_from(laps or [], race_start.start_s if race_start else None))
             ],
         }
 

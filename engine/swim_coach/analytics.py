@@ -494,6 +494,7 @@ def compute_analytics(
     planned_zone: str | None = None,
     lthr_bpm: float | None = None,
     race: bool = False,
+    race_start_s: float | None = None,
     session_text: str | None = None,
     with_intervals: bool = True,
 ):
@@ -562,6 +563,7 @@ def compute_analytics(
         planned_zone=planned_zone,
         lthr_bpm=lthr_bpm,
         race=race,
+        race_start_s=race_start_s,
         session_text=session_text,
     )
     avg_power = average_power_w(series)

@@ -1768,11 +1768,24 @@ class StartBurst(BaseModel):
         return data
 
 
+class WarmupSummary(BaseModel):
+    """Everything before the race start in a one-file warm-up + race activity --
+    `race_start.analyze_race_start`. Kept apart from every race-level number."""
+
+    duration_s: float  # riding seconds before the race start
+    avg_w: int | None = None
+    np_w: int | None = None
+    openers: int = 0  # separate bursts >= RACE_BURST_MIN_FRAC_FTP x FTP
+    note: str
+
+
 class RaceStart(BaseModel):
     """The first major burst of a race and how the athlete settled after it --
     `race_start.analyze_race_start`. Powers are watts; times are seconds."""
 
-    start_s: float  # t_s of the first sample >= the burst threshold
+    start_s: float  # t_s of the race start (detected burst, or the athlete/coach override)
+    source: Literal["detected", "override"] = "detected"
+    warmup: WarmupSummary | None = None
     peak_w: int
     best_5s_w: int
     best_15s_w: int | None = None
@@ -2285,6 +2298,9 @@ class Workout(BaseModel):
     # is the athlete/coach's own correction and wins (`effective_kind`). Additive/optional.
     kind: SessionKind | None = None
     kind_override: SessionKind | None = None
+    # Athlete/coach-set race start (seconds on the activity clock, `t_s`) for a one-file warm-up +
+    # race ride; wins over the detected start (`race_start.analyze_race_start`). Additive/optional.
+    race_start_s: float | None = Field(default=None, ge=0)
     # Deterministic mute switch: a plain boolean, not something inferred from
     # scanning message history, so it's a reliable control either party (or
     # the AI itself, told to recognize an explicit "stop responding here")
