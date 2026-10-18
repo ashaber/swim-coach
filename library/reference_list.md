@@ -2252,3 +2252,5 @@ Provenance of the fixes applied while curating this list:
    not establish a 3-week taper as optimal, only that a predefined 3-week
    window worked as designed. `36` states this plainly rather than citing
    Hellard as "3 weeks is evidence-backed."
+- **~ Bishop D. (2003)** — "Warm up II: performance changes following active warm up and how to structure the warm up" — *Sports Medicine* 33(7); cited from memory in `38`, not source-checked.
+- **~ Burnley M., Doust J.H., Jones A.M. (2002)** — prior heavy exercise and VO2 kinetics — cited from memory in `38`, title not source-checked.
