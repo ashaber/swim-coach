@@ -620,3 +620,34 @@ export function buildCourseSectors(workout, selected = null, gestureView = null)
     grid: buildSectorGrid(cs, selected),
   };
 }
+
+export const RACE_EFFICIENCY_COLUMNS = ['Lap', 'Time', 'NP', 'HR', 'EF', 'Flow'];
+
+/** The "Race efficiency" section model (`analytics.race_efficiency`), or null when absent: the
+ * engine's one-line verdict plus a compact per-lap table (EF = NP / avg HR, watts per bpm). */
+export function buildRaceEfficiency(workout) {
+  const re = workout?.analytics?.race_efficiency;
+  if (!re || !(re.laps || []).length) return null;
+  const t = re.trend || {};
+  const slopes = [];
+  if (num(t.ef_slope_per_lap)) slopes.push(`EF ${signed(t.ef_slope_per_lap, 3, '')}/lap`);
+  if (num(t.hr_slope_bpm_per_lap)) slopes.push(`HR ${signed(t.hr_slope_bpm_per_lap, 1, ' bpm')}/lap`);
+  if (num(t.power_slope_w_per_lap)) slopes.push(`NP ${signed(t.power_slope_w_per_lap, 1, ' W')}/lap`);
+  return {
+    verdict: re.verdict,
+    decoupled: num(t.decoupling_pct) && t.decoupling_pct <= -5,
+    slopes: slopes.join(', '),
+    note: 'EF is Normalized Power divided by average HR (watts per bpm). Decoupling compares EF in the first half of the laps with the second half; 5% is an engineering default, not a validated cutoff.',
+    laps: {
+      columns: RACE_EFFICIENCY_COLUMNS,
+      rows: re.laps.map((l) => [
+        String(l.lap),
+        formatClock(l.time_s),
+        watts(l.np_w),
+        num(l.avg_hr) ? String(Math.round(l.avg_hr)) : dash,
+        num(l.ef) ? l.ef.toFixed(2) : dash,
+        num(l.avg_flow) ? String(l.avg_flow) : dash,
+      ]),
+    },
+  };
+}

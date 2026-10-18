@@ -287,7 +287,7 @@ def race_efficiency_coach_view(re: dict) -> dict:
                 line += f", {label} " + fmt.format(lap[key])
         laps.append(line)
     t = re.get("trend") or {}
-    slopes = [f"{label} {t[key]:+.1f}/lap" for key, label in (
+    slopes = [f"{label} {t[key]:+.{3 if key == 'ef_slope_per_lap' else 1}f}/lap" for key, label in (
         ("time_slope_s_per_lap", "time s"), ("power_slope_w_per_lap", "NP W"),
         ("hr_slope_bpm_per_lap", "HR bpm"), ("ef_slope_per_lap", "EF")) if t.get(key) is not None]
     return {
