@@ -20,11 +20,12 @@ from swim_coach.race_phases import (
 )
 
 
-def _synthetic_series(duration_s: float, power_w: float, n_samples: int = 200) -> dict:
+def _synthetic_series(duration_s: float, power_w: float, n_samples: int | None = None) -> dict:
     """A flat-power synthetic series (constant power_w/speed_mps every
     second) -- simple enough that NP == power_w exactly (no variability
     for the rolling-average algorithm to weight), so phase NP values are
     hand-verifiable, not just "it returns something"."""
+    n_samples = n_samples or int(duration_s)  # 1 Hz, as a head unit records
     step = duration_s / n_samples
     t_s = [round(i * step, 3) for i in range(n_samples + 1)]
     power = [power_w] * len(t_s)

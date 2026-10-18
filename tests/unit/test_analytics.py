@@ -328,42 +328,44 @@ def test_normalized_power_w_exceeds_average_for_variable_power():
     assert normalized_power_w(variable) > normalized_power_w(steady)
 
 
-def test_trailing_moving_average_hand_verified_small_example():
-    # Small enough to hand-verify independently of the implementation.
-    # window_s=2.0, 1 Hz samples: lo advances while t_s[lo] < t_s[i] -
-    # window_s, so each window covers the last <= 3 one-second samples.
-    from swim_coach.analytics import _trailing_moving_average
-
-    t_s = [0.0, 1.0, 2.0, 3.0, 4.0]
-    power = [10.0, 20.0, 30.0, 40.0, 50.0]
-    rolling = _trailing_moving_average(power, t_s, window_s=2.0)
-    # i=0: [10] -> 10; i=1: [10,20] -> 15; i=2: [10,20,30] -> 20;
-    # i=3: [20,30,40] -> 30; i=4: [30,40,50] -> 40.
-    assert rolling == pytest.approx([10.0, 15.0, 20.0, 30.0, 40.0])
+def test_normalized_power_w_hand_verified_ramp():
+    # A 1 W/s ramp over 60 s: the full 30 s trailing means run 14.5 .. 44.5 (first at t=29 s).
+    power = [float(i) for i in range(60)]
+    t_s = [float(i) for i in range(60)]
+    rolling = [statistics.fmean(power[i - 29 : i + 1]) for i in range(29, 60)]
+    expected = statistics.fmean(v**4 for v in rolling) ** 0.25
+    assert normalized_power_w({"t_s": t_s, "power_w": power}) == pytest.approx(expected)
 
 
-def test_normalized_power_w_hand_verified_small_example():
-    # normalized_power_w always uses the real POWER_ROLLING_WINDOW_S
-    # (30s) -- with only 5 one-second samples, that window covers the
-    # whole series at every point, so the "rolling average" degenerates to
-    # a plain expanding cumulative mean: [10, 15, 20, 25, 30].
-    from swim_coach.analytics import POWER_ROLLING_WINDOW_S, _trailing_moving_average
-
-    t_s = [0.0, 1.0, 2.0, 3.0, 4.0]
-    power = [10.0, 20.0, 30.0, 40.0, 50.0]
-    rolling = _trailing_moving_average(power, t_s, POWER_ROLLING_WINDOW_S)
-    assert rolling == pytest.approx([10.0, 15.0, 20.0, 25.0, 30.0])
-    expected_np = (statistics.fmean(v**4 for v in rolling)) ** 0.25
-    assert normalized_power_w({"t_s": t_s, "power_w": power}) == pytest.approx(expected_np)
+def test_normalized_power_w_ignores_the_partial_window_at_the_start():
+    # A 900 W burst in the first seconds then steady 200 W: partial windows at the start must
+    # not let the burst count as a 1-sample "average" (the 2026-10-17 race over-read by ~12%).
+    n = 120
+    power = [900.0] * 3 + [200.0] * (n - 3)
+    np_w = normalized_power_w({"t_s": [float(i) for i in range(n)], "power_w": power})
+    assert 200.0 < np_w < 260.0
 
 
-def test_normalized_power_w_ignores_none_samples_but_keeps_timing():
-    # A gap in the power channel (record present, power missing) must not
-    # shift the time base of surrounding samples -- filtered out by pairing
-    # (t, p) before building the rolling window, not by index position.
-    t_s = [0.0, 1.0, 2.0, 3.0, 4.0]
-    power = [200, None, 200, None, 200]
-    assert normalized_power_w({"t_s": t_s, "power_w": power}) == pytest.approx(200.0)
+def test_normalized_power_w_is_time_based_across_dropped_records():
+    # 60 s of 300 W with every 2nd record missing (a 2 s step): index-based windows would cover
+    # 60 s of ride per 30 samples; the time-based 1 Hz timeline covers 30 s per window and reads
+    # the dropout seconds as 0 W, so NP lands near the 150 W true mean, not 300 W.
+    t_s = [float(i) for i in range(0, 120, 2)]
+    power = [300.0] * len(t_s)
+    np_w = normalized_power_w({"t_s": t_s, "power_w": power})
+    assert np_w == pytest.approx(150.0, rel=0.02)
+
+
+def test_normalized_power_w_nulls_are_zero_watts_not_skipped():
+    t_s = [float(i) for i in range(60)]
+    power = [200 if i % 2 == 0 else None for i in range(60)]
+    assert normalized_power_w({"t_s": t_s, "power_w": power}) == pytest.approx(100.0, rel=0.02)
+
+
+def test_normalized_power_w_removes_timer_pauses_instead_of_filling_zeros():
+    # 40 s of 200 W, a 600 s timer pause, 40 s of 200 W: NP stays 200 W (the pause is removed).
+    t_s = [float(i) for i in range(40)] + [float(640 + i) for i in range(40)]
+    assert normalized_power_w({"t_s": t_s, "power_w": [200.0] * 80}) == pytest.approx(200.0)
 
 
 def test_normalized_power_w_none_when_no_power_channel():
@@ -374,8 +376,9 @@ def test_normalized_power_w_none_when_series_is_none():
     assert normalized_power_w(None) is None
 
 
-def test_normalized_power_w_none_with_fewer_than_two_samples():
+def test_normalized_power_w_none_below_one_full_window():
     assert normalized_power_w({"t_s": [0.0], "power_w": [200]}) is None
+    assert normalized_power_w({"t_s": [float(i) for i in range(29)], "power_w": [200] * 29}) is None
 
 
 # --- cardiac_drift on a bike ride: HR-per-POWER, not HR-per-speed -------------------
