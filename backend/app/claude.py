@@ -4,8 +4,8 @@ manual tool loop, streams text back to the caller as SSE-framed chunks.
 Verified-current API usage (see this build's task brief for the exact,
 checked patterns):
   - `client.messages.stream(model=..., max_tokens=settings.claude_max_tokens, system=[...],
-    messages=[...], tools=[...])` as a context manager; `stream.text_stream`
-    yields text deltas, `stream.get_final_message()` returns the full
+    messages=[...], tools=[...])` as a context manager; iterating the stream
+    yields events (`text`, `content_block_start`, `input_json`), `stream.get_final_message()` returns the full
     message (content blocks, stop_reason, usage) once the stream ends.
   - Never pass `temperature`, `top_p`, or `top_k` -- 400 on Sonnet 5.
   - `thinking` is passed EXPLICITLY: `{"type": "adaptive"}` for
@@ -20,6 +20,7 @@ checked patterns):
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Callable, Iterator
 
 import anthropic
@@ -225,6 +226,43 @@ def with_loop_breakpoint(
     return [*messages[:-1], {**last, "content": blocks}]
 
 
+# Patched in tests; the real clock otherwise.
+_monotonic = time.monotonic
+
+# While the model writes a long tool input nothing else streams to the client (prod 2026-10-18: a
+# phone saw 4.5 min of silence and gave up). `status` events say what is happening and double as a
+# keepalive for proxies.
+STATUS_HEARTBEAT_S = 10.0
+TOOL_STATUS_LABELS = {
+    "author_week_plan": "Writing your week plan…",
+    "patch_week_plan": "Updating your plan…",
+    "merge_week_plan": "Updating your plan…",
+    "author_macro_plan": "Writing your season plan…",
+}
+DEFAULT_STATUS_LABEL = "Working…"
+
+
+class _StatusBeat:
+    """Status text for one tool call being written: once at start, then at most every
+    `STATUS_HEARTBEAT_S` while its input keeps arriving."""
+
+    def __init__(self, tool_name: str) -> None:
+        self._label = TOOL_STATUS_LABELS.get(tool_name, DEFAULT_STATUS_LABEL)
+        self._started = _monotonic()
+        self._last = self._started
+
+    @property
+    def start_text(self) -> str:
+        return self._label
+
+    def beat(self) -> str | None:
+        now = _monotonic()
+        if now - self._last < STATUS_HEARTBEAT_S:
+            return None
+        self._last = now
+        return f"{self._label.rstrip('…')}… ({int(now - self._started)}s)"
+
+
 def _sse(payload: dict[str, Any]) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
@@ -362,9 +400,21 @@ class ClaudeChat:
             iteration_text: list[str] = []
             try:
                 with self.client.messages.stream(**request_kwargs) as stream:
-                    for text in stream.text_stream:
-                        iteration_text.append(text)
-                        yield {"type": "text", "text": text}
+                    beat: _StatusBeat | None = None
+                    for event in stream:
+                        event_type = getattr(event, "type", None)
+                        if event_type == "text":
+                            iteration_text.append(event.text)
+                            yield {"type": "text", "text": event.text}
+                        elif event_type == "content_block_start" and getattr(
+                            event.content_block, "type", None
+                        ) == "tool_use":
+                            beat = _StatusBeat(event.content_block.name)
+                            yield {"type": "status", "text": beat.start_text}
+                        elif event_type == "input_json" and beat is not None:
+                            heartbeat = beat.beat()
+                            if heartbeat:
+                                yield {"type": "status", "text": heartbeat}
                     final = stream.get_final_message()
             except (httpx.HTTPError, anthropic.APIConnectionError) as exc:
                 # Upstream dropped mid-reply (prod 2026-10-15: RemoteProtocolError, incomplete
