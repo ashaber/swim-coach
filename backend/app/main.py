@@ -80,7 +80,7 @@ def create_app() -> FastAPI:
         # e2e suite's Playwright route-mocking fulfills the OPTIONS
         # preflight itself, so it never exercises this middleware.
         allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type"],
+        allow_headers=["Authorization", "Content-Type", "If-None-Match"],
         # `Content-Disposition` isn't one of the CORS "simple response
         # headers" a cross-origin `fetch` can read by default -- without
         # exposing it explicitly here, `response.headers.get(
@@ -92,7 +92,7 @@ def create_app() -> FastAPI:
         # backend through a real browser (GET /api/sessions/{id}/garmin.fit),
         # not by the API test suite alone (TestClient doesn't enforce CORS
         # header-exposure rules either).
-        expose_headers=["Content-Disposition"],
+        expose_headers=["Content-Disposition", "ETag"],
     )
 
     @app.middleware("http")

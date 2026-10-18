@@ -15,12 +15,14 @@ scripts/` step.
 from __future__ import annotations
 
 import sys
+from typing import Any
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from app.auth import Principal, require_auth, resolve_athlete
 from app.context import summarize_rollup
+from app.etag import make_etag, respond_with_etag
 from app.store_factory import make_store
 
 _REPO_ROOT_SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts"
@@ -51,14 +53,19 @@ async def get_plan(
     request: Request,
     athlete: str | None = Query(None),
     principal: Principal = Depends(require_auth),
-) -> dict:
+) -> Response:
     settings = request.app.state.settings
     athlete = resolve_athlete(principal, athlete)
     store = make_store(settings)
-    try:
-        return export_athlete(store, athlete)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=f"no such athlete: {athlete}") from exc
+    etag = make_etag(store, principal, athlete, "plan")
+
+    def build() -> dict:
+        try:
+            return export_athlete(store, athlete)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=f"no such athlete: {athlete}") from exc
+
+    return respond_with_etag(request, etag, build)
 
 
 @router.get("/api/plan/load")
@@ -67,7 +74,7 @@ async def get_plan_load(
     athlete: str | None = Query(None),
     weeks: int = Query(LOAD_GRAPH_DEFAULT_WEEKS, ge=LOAD_GRAPH_MIN_WEEKS, le=LOAD_GRAPH_MAX_WEEKS),
     principal: Principal = Depends(require_auth),
-) -> dict:
+) -> Response:
     """The Banister CTL/ATL/TSB series (`summarize_rollup`'s `ctl_atl_tsb`
     field) plus the `wellness_baseline_deviation` resting-HR/HRV cross-check
     for the athlete's own Plan-tab chart -- a minimal, graph-shaped slice of
@@ -77,6 +84,11 @@ async def get_plan_load(
     settings = request.app.state.settings
     athlete = resolve_athlete(principal, athlete)
     store = make_store(settings)
+    etag = make_etag(store, principal, athlete, "workouts", variant=f"weeks={weeks}")
+    return respond_with_etag(request, etag, lambda: _build_load(store, athlete, weeks))
+
+
+def _build_load(store: Any, athlete: str, weeks: int) -> dict:
     try:
         fetched_athlete = store.load_athlete(athlete)
     except FileNotFoundError as exc:
