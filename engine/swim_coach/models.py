@@ -2061,7 +2061,8 @@ class SectorLap(BaseModel):
 
 
 class SectorLoss(BaseModel):
-    """One equal-distance sector across the compared laps, vs the fastest time through THAT sector."""
+    """One section (a course feature, or an equal-distance sector on the fallback) across the compared
+    laps, vs the fastest time through THAT section."""
 
     sector: int  # 1-based
     best_time_s: float  # fastest time through this sector over all compared laps
@@ -2071,6 +2072,17 @@ class SectorLoss(BaseModel):
     avg_flow: float | None = None
     flow_vs_best: float | None = None  # mean over the laps other than the fastest of (flow - the fastest lap's flow)
     avg_grit: float | None = None
+    # Course-feature sections (None on the equal-distance fallback):
+    kind: str | None = None  # "straight" | "corners"
+    label: str | None = None  # "S1" / "C2", numbered within the kind in lap order
+    length_m: float | None = None  # along the reference lap
+    avg_speed_mps: float | None = None  # mean over the compared laps
+    avg_power_w: float | None = None
+    entry_speed_mps: float | None = None  # speed on entering / slowest point / speed on leaving (mean over laps)
+    min_speed_mps: float | None = None
+    exit_speed_mps: float | None = None
+    flow_by_lap: list[float | None] = Field(default_factory=list)  # moving-mean flow in this section, per compared lap
+    flow_slope_per_lap: float | None = None
 
 
 class LapFade(BaseModel):
@@ -2088,6 +2100,8 @@ class TrackSector(BaseModel):
     sector: int  # 1-based
     points: list[tuple[float, float]]
     label: tuple[float, float]
+    kind: str | None = None  # "straight" | "corners" for course-feature sections
+    name: str | None = None  # "S1" / "C2"
 
 
 class CourseTrack(BaseModel):

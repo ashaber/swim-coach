@@ -114,7 +114,7 @@ def _workout(series: dict, lap_len_s: float, n: int) -> Workout:
         for i in range(n)
     ]
     return Workout(id=uuid.uuid4(), athlete_id=uuid.uuid4(), date=date(2026, 10, 17), sport="bike", source="fit",
-                   distance_m=sc.loop_length(PTS) * n, duration_min=n * lap_len_s / 60, laps=laps)
+                   distance_m=round(sc.loop_length(PTS) * n), duration_min=n * lap_len_s / 60, laps=laps)
 
 
 def _three_laps(length_scale: float = 1.0, slow: dict | None = None) -> tuple[Workout, dict]:
