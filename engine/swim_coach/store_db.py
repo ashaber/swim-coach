@@ -43,6 +43,7 @@ pool (`putconn`) instead of closing the underlying socket.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import threading
 from datetime import date, datetime
@@ -568,6 +569,38 @@ class DbStore(StoreInterface):
         if row is None:
             raise FileNotFoundError(f"no athlete with slug {slug!r}")
         return row["athlete_id"]
+
+    # --- Change token ---------------------------------------------------
+
+    # Tables a scope's response is derived from; fixed constants (never user input) because the
+    # names are interpolated into SQL. See CHANGE_TOKEN_SCOPES.
+    _PLAN_TABLES = ("events", "macro_plans", "week_plans")
+    _CHANGE_TOKEN_TABLES = {
+        "plan": _PLAN_TABLES,
+        "workouts": _PLAN_TABLES + ("workouts", "wellness_checkins"),
+    }
+
+    def change_token(self, slug: str, scope: str) -> str:
+        tables = self._CHANGE_TOKEN_TABLES.get(scope)
+        if tables is None:
+            raise ValueError(f"unknown change-token scope {scope!r}")
+        # One round trip: the athlete row's own updated_at, then count + max(updated_at) per table.
+        query = "select 'athletes' as t, count(*) as n, max(updated_at)::text as m from athletes where slug = %s"
+        params: list[Any] = [slug]
+        for table in tables:
+            query += (
+                f" union all select '{table}', count(*), max(updated_at)::text from {table}"
+                " where athlete_id = (select athlete_id from athletes where slug = %s)"
+            )
+            params.append(slug)
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(query, params)
+            rows = cur.fetchall()
+        by_table = {r["t"]: r for r in rows}
+        if by_table["athletes"]["n"] == 0:
+            raise FileNotFoundError(f"no athlete profile for slug {slug!r}")
+        stamp = "|".join(f"{t}:{by_table[t]['n']}:{by_table[t]['m']}" for t in ("athletes", *tables))
+        return hashlib.sha1(stamp.encode()).hexdigest()
 
     # --- Athlete --------------------------------------------------------
 
