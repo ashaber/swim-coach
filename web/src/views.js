@@ -3228,7 +3228,7 @@ function renderFreeRideSection(workout, { zoneKeyShown = false } = {}) {
 function renderSectorGrid(grid) {
   const sel = (on) => (on ? ' cs-col--selected' : '');
   const head = grid.sectors.map((s) => `
-            <th class="cs-col${sel(s.selected)}" scope="col" data-a="workout:sector-select" data-sector="${s.sector}" tabindex="0" role="button" aria-pressed="${s.selected}" aria-label="Sector ${s.sector}, best ${esc(s.best)} s">${esc(s.label)}<small>${esc(s.best)}</small></th>`).join('');
+            <th class="cs-col${sel(s.selected)}${s.kind ? ` cs-col--${s.kind}` : ''}" scope="col" data-a="workout:sector-select" data-sector="${s.sector}" tabindex="0" role="button" aria-pressed="${s.selected}" aria-label="${esc(s.aria)}, best ${esc(s.best)} s">${esc(s.label)}<small>${esc(s.best)}</small></th>`).join('');
   const body = grid.rows.map((r) => `
           <tr><th scope="row" class="cs-lap">${esc(r.label)} <small>${esc(r.time)} · ${esc(r.gap)}</small></th>${r.cells.map((c) => `<td class="cs-cell cs-heat-${c.heat}${c.best ? ' cs-cell--best' : ''}${sel(c.selected)}">${esc(c.text)}</td>`).join('')}</tr>`).join('');
   const foot = (label, key) => `<tr><th scope="row" class="cs-lap">${label}</th>${grid.sectors.map((s) => `<td class="cs-cell${sel(s.selected)}">${esc(s[key])}</td>`).join('')}</tr>`;
@@ -3248,15 +3248,15 @@ function renderSectorGrid(grid) {
  * with a start/finish marker. Tapping a sector (or its table row) highlights both. */
 export function renderCourseMap(map, { expand = true } = {}) {
   const segs = map.sectors.map((s) => `
-        <g class="cs-seg cs-seg--${s.tone}${s.selected ? ' cs-seg--selected' : ''}${s.dim ? ' cs-seg--dim' : ''}" data-a="workout:sector-select" data-sector="${s.sector}" role="button" tabindex="0" aria-pressed="${s.selected}" aria-label="${esc(s.aria)}">
+        <g class="cs-seg cs-seg--${s.tone}${s.kind ? ` cs-seg--${s.kind}` : ''}${s.selected ? ' cs-seg--selected' : ''}${s.dim ? ' cs-seg--dim' : ''}" data-a="workout:sector-select" data-sector="${s.sector}" role="button" tabindex="0" aria-pressed="${s.selected}" aria-label="${esc(s.aria)}">
           <title>${esc(s.aria)}</title>
           <polyline class="cs-hit" points="${s.points}" fill="none"/>
           <polyline class="cs-line" points="${s.points}" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-          <text class="cs-num" x="${s.label.x}" y="${s.label.y}" text-anchor="middle" dominant-baseline="central">${s.sector}</text>
+          <text class="cs-num" x="${s.label.x}" y="${s.label.y}" text-anchor="middle" dominant-baseline="central">${esc(s.name)}</text>
         </g>`).join('');
   return `
       <div class="cs-map-wrap">
-      <svg class="cs-map" viewBox="${map.viewBox}" data-w="${map.width}" data-h="${map.height}" style="--cs-k:${map.k}" preserveAspectRatio="xMidYMid meet" role="group" aria-label="Map of the best lap split into numbered sectors, north up. Warmer colour means more time lost. Pinch or scroll with ctrl to zoom, drag to pan when zoomed, double-tap to reset.">
+      <svg class="cs-map" viewBox="${map.viewBox}" data-w="${map.width}" data-h="${map.height}" style="--cs-k:${map.k}" preserveAspectRatio="xMidYMid meet" role="group" aria-label="Map of the best lap split into numbered sections (S straight, C corner sequence), north up. Warmer colour means more time lost. Pinch or scroll with ctrl to zoom, drag to pan when zoomed, double-tap to reset.">
         ${segs}
         <g class="cs-start"><title>Start / finish</title><circle cx="${map.start.x}" cy="${map.start.y}" r="5"/></g>
         <text class="cs-north" x="${map.width - 8}" y="14" text-anchor="end">N &#8593;</text>
@@ -3268,6 +3268,7 @@ export function renderCourseMap(map, { expand = true } = {}) {
         <span class="shape-legend-item"><i class="shape-swatch cs-key--neutral"></i>little lost</span>
         <span class="shape-legend-item"><i class="shape-swatch cs-key--warm"></i>top-3 loss</span>
         <span class="shape-legend-item"><i class="shape-swatch cs-key--hot"></i>biggest loss</span>
+        ${map.sectors.some((s) => s.kind) ? '<span class="shape-legend-item"><i class="shape-swatch cs-key--corners"></i>dashed = corner sequence (C)</span>' : ''}
         <span class="shape-legend-item"><i class="shape-swatch cs-key--start"></i>start / finish</span>
       </div>`;
 }
