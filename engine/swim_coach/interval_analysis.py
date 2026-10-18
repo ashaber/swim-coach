@@ -79,6 +79,7 @@ from swim_coach.models import (
     WorkoutStructure,
 )
 
+from swim_coach.lap_normalise import merge_double_trigger_laps
 from swim_coach.race_start import analyze_race_start
 from swim_coach.start_trace import StartTrace, build_start_findings, read_start_trace, trace_clauses
 from swim_coach.rep_shape import (
@@ -2399,7 +2400,9 @@ def analyze(
                     avg_w=l.avg_power_w,
                     avg_hr=l.avg_hr,
                 )
-                for i, l in enumerate(_laps_from(laps or [], race_start.start_s if race_start else None))
+                for i, l in enumerate(
+                    _laps_from(merge_double_trigger_laps(laps or [], series), race_start.start_s if race_start else None)
+                )
             ],
         }
 

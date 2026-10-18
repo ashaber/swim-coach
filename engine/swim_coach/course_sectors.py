@@ -20,6 +20,7 @@ from statistics import median
 from typing import Sequence
 
 from swim_coach.gps_laps import detect_gps_laps
+from swim_coach.lap_normalise import EARTH_M_PER_DEG, START_LINE_RADIUS_M, merge_double_trigger_laps, metres_apart, start_point
 from swim_coach.models import (
     CourseSectors, CourseTrack, LapFade, SectorLap, SectorLoss, TrackSector, Workout, WorkoutLap,
 )
@@ -32,30 +33,13 @@ LAP_DISTANCE_TOLERANCE = 0.10  # Coach judgment: laps within +-10% of each other
 MIN_LAP_S = 120  # Coach judgment: shorter than this is a split, not a lap worth sectoring
 MAX_LAPS = 12  # Coach judgment: more than this is auto-lap noise (e.g. every km), not a course
 TOP_LOSS_SECTORS = 3
-START_LINE_RADIUS_M = 30.0  # Coach judgment: a lap starting farther than this from the reference lap's start is not the same lap
 TRACK_POINTS = 200  # Coach judgment: enough to draw a recognisable lap outline, small enough to store
-EARTH_M_PER_DEG = 111_320.0  # metres per degree of latitude (spherical earth, plenty for a 30 m test)
-
-
-def _start_point(series: dict, start_s: float) -> tuple[float, float] | None:
-    """The (lat, lng) at the first record at/after `start_s`, or None without GPS there."""
-    lat, lng = series.get("lat") or [], series.get("lng") or []
-    i = next((i for i, t in enumerate(series["t_s"]) if t >= start_s), None)
-    if i is None or i >= len(lat) or i >= len(lng) or lat[i] is None or lng[i] is None:
-        return None
-    return lat[i], lng[i]
-
-
-def _metres_apart(a: tuple[float, float], b: tuple[float, float]) -> float:
-    dy = (a[0] - b[0]) * EARTH_M_PER_DEG
-    dx = (a[1] - b[1]) * EARTH_M_PER_DEG * math.cos(math.radians((a[0] + b[0]) / 2))
-    return math.hypot(dx, dy)
 
 
 def _starts_together(series: dict, anchor_start: float, start: float) -> bool:
     """Same start line: within START_LINE_RADIUS_M of the anchor's start. Without GPS, assumed."""
-    a, b = _start_point(series, anchor_start), _start_point(series, start)
-    return a is None or b is None or _metres_apart(a, b) <= START_LINE_RADIUS_M
+    a, b = start_point(series, anchor_start), start_point(series, start)
+    return a is None or b is None or metres_apart(a, b) <= START_LINE_RADIUS_M
 
 
 def _similar_laps(
@@ -95,9 +79,10 @@ def _gps_windows(series: dict) -> list[tuple[WorkoutLap, float, float]]:
 
 
 def _course_laps(workout: Workout, series: dict, prefer_gps: bool) -> list[tuple[int, WorkoutLap, float, float]]:
-    """Native device laps and GPS-detected laps, each filtered to similar distance from one start
+    """Native device laps (double-trigger fragments merged into full laps) and GPS-detected laps, each filtered to similar distance from one start
     line; the preferred source wins when it yields 2+ laps, else the other is tried."""
-    native = _similar_laps(lap_windows(workout.laps, series["t_s"][-1] + 1), series)
+    laps = merge_double_trigger_laps(workout.laps, series)
+    native = _similar_laps(lap_windows(laps, series["t_s"][-1] + 1), series)
     gps = _similar_laps(_gps_windows(series), series)
     first, second = (gps, native) if prefer_gps else (native, gps)
     return first if len(first) >= 2 else second
