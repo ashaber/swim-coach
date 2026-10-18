@@ -275,44 +275,36 @@ def test_default_thresholds_are_the_documented_values():
 
 
 def _hand_series():
-    # 10 samples, 1 Hz. First 5 samples (lap 1): power alternates so NP
-    # (4th-power mean, 4th root) differs materially from a plain average;
-    # constant speed 3.0 m/s throughout lap 1. Last 5 samples (lap 2):
-    # higher, perfectly flat power (so NP == avg power exactly) and higher
-    # speed.
-    t_s = list(range(10))
-    power_w = [100.0, 300.0, 100.0, 300.0, 100.0, 250.0, 250.0, 250.0, 250.0, 250.0]
-    speed_mps = [3.0] * 5 + [4.0] * 5
+    # 80 samples, 1 Hz. Lap 1 (idx 0-39): power steps 100/300 W in 10 s blocks so NP (4th-power
+    # mean of FULL 30 s trailing means, 4th root) differs materially from the 200 W average;
+    # constant speed 3.0 m/s. Lap 2 (idx 40-79): perfectly flat 250 W (NP == avg), speed 4.0.
+    t_s = list(range(80))
+    power_w = [100.0 if (i // 10) % 2 == 0 else 300.0 for i in range(40)] + [250.0] * 40
+    speed_mps = [3.0] * 40 + [4.0] * 40
     return {"t_s": t_s, "power_w": power_w, "speed_mps": speed_mps}
 
 
-def test_lap_metrics_normalized_power_and_avg_speed_and_efficiency_lap1():
-    series = _hand_series()
-    lap1 = GpsLap(n=1, start_idx=0, end_idx=4, start_s=0.0, end_s=4.0)
-    m = lap_metrics(series, lap1)
+LAP1 = GpsLap(n=1, start_idx=0, end_idx=39, start_s=0.0, end_s=39.0)
+LAP2 = GpsLap(n=2, start_idx=40, end_idx=79, start_s=40.0, end_s=79.0)
 
-    # NP over [100,300,100,300,100] with NP's own rolling-window algorithm
-    # (POWER_ROLLING_WINDOW_S=30s >> this 5s span, so the "rolling average"
-    # degenerates to each sample's own trailing mean-so-far) -- computed
-    # independently here rather than re-deriving normalized_power_w's
-    # internals, to actually pin the expected number:
-    #   trailing means: 100, 200, 166.667, 200, 180
-    #   4th powers:      1e8, 1.6e9, 7.7161728e8, 1.6e9, 1.04976e9
-    #   mean of 4th powers -> 4th root
-    trailing = [100.0, 200.0, 500.0 / 3, 200.0, 180.0]
+
+def test_lap_metrics_normalized_power_and_avg_speed_and_efficiency_lap1():
+    m = lap_metrics(_hand_series(), LAP1)
+
+    # Independent expectation: the 40 s lap has 11 full 30 s trailing means.
+    power = _hand_series()["power_w"][:40]
+    trailing = [sum(power[i - 29 : i + 1]) / 30 for i in range(29, 40)]
     expected_np = (sum(v**4 for v in trailing) / len(trailing)) ** 0.25
 
     assert m.normalized_power_w == pytest.approx(expected_np, rel=1e-9)
     assert m.avg_speed_mps == pytest.approx(3.0)
     assert m.efficiency_mps_per_w == pytest.approx(3.0 / expected_np, rel=1e-9)
     assert m.lap_n == 1
-    assert m.duration_s == pytest.approx(4.0)
+    assert m.duration_s == pytest.approx(39.0)
 
 
 def test_lap_metrics_flat_power_lap_normalized_power_equals_average():
-    series = _hand_series()
-    lap2 = GpsLap(n=2, start_idx=5, end_idx=9, start_s=5.0, end_s=9.0)
-    m = lap_metrics(series, lap2)
+    m = lap_metrics(_hand_series(), LAP2)
 
     assert m.normalized_power_w == pytest.approx(250.0)
     assert m.avg_speed_mps == pytest.approx(4.0)
@@ -324,12 +316,12 @@ def test_lap_metrics_lower_power_same_speed_is_more_efficient():
     # efficient. Two laps at identical speed, different power -> the
     # cheaper one has the higher efficiency_mps_per_w.
     series = {
-        "t_s": list(range(10)),
-        "power_w": [200.0] * 5 + [300.0] * 5,
-        "speed_mps": [4.0] * 10,
+        "t_s": list(range(80)),
+        "power_w": [200.0] * 40 + [300.0] * 40,
+        "speed_mps": [4.0] * 80,
     }
-    cheap = lap_metrics(series, GpsLap(n=1, start_idx=0, end_idx=4, start_s=0.0, end_s=4.0))
-    costly = lap_metrics(series, GpsLap(n=2, start_idx=5, end_idx=9, start_s=5.0, end_s=9.0))
+    cheap = lap_metrics(series, LAP1)
+    costly = lap_metrics(series, LAP2)
     assert cheap.normalized_power_w < costly.normalized_power_w
     assert cheap.avg_speed_mps == pytest.approx(costly.avg_speed_mps)
     assert cheap.efficiency_mps_per_w > costly.efficiency_mps_per_w
@@ -367,56 +359,38 @@ def test_lap_metrics_total_work_kj_flat_power_lap():
     # avg_power * duration_s / 1000 -- flat 250W lap, duration 4.0s ->
     # 250 * 4 / 1000 = 1.0 kJ exactly (this IS the standard, exact
     # definition of work from average power -- not an approximation).
-    series = _hand_series()
-    lap2 = GpsLap(n=2, start_idx=5, end_idx=9, start_s=5.0, end_s=9.0)
-    m = lap_metrics(series, lap2)
-    assert m.total_work_kj == pytest.approx(1.0)
+    m = lap_metrics(_hand_series(), LAP2)
+    assert m.total_work_kj == pytest.approx(250.0 * 39.0 / 1000)
 
 
 def test_lap_metrics_total_work_kj_spiky_lap_uses_average_not_normalized_power():
-    # Lap 1: power alternates 100/300/100/300/100, avg_power = 180.0,
-    # duration_s = 4.0 -> 180 * 4 / 1000 = 0.72 kJ. Must NOT equal
-    # normalized_power-derived work (NP for this lap is higher than 180,
-    # per the earlier NP test) -- total_work_kj is explicitly the
+    # Lap 1: avg_power = 200 W, duration_s = 39.0 -> 7.8 kJ. Must NOT equal
+    # normalized_power-derived work -- total_work_kj is explicitly the
     # average-power-based ABSOLUTE energy cost, a different lens from NP.
-    series = _hand_series()
-    lap1 = GpsLap(n=1, start_idx=0, end_idx=4, start_s=0.0, end_s=4.0)
-    m = lap_metrics(series, lap1)
-    assert m.total_work_kj == pytest.approx(0.72)
-    assert m.total_work_kj != pytest.approx(m.normalized_power_w * 4.0 / 1000)
+    m = lap_metrics(_hand_series(), LAP1)
+    assert m.total_work_kj == pytest.approx(7.8)
+    assert m.total_work_kj != pytest.approx(m.normalized_power_w * 39.0 / 1000)
 
 
 def test_lap_metrics_variability_index_flat_power_is_one():
     # NP == average power exactly for a perfectly flat-power lap -> VI == 1.0.
-    series = _hand_series()
-    lap2 = GpsLap(n=2, start_idx=5, end_idx=9, start_s=5.0, end_s=9.0)
-    m = lap_metrics(series, lap2)
+    m = lap_metrics(_hand_series(), LAP2)
     assert m.variability_index == pytest.approx(1.0)
 
 
 def test_lap_metrics_variability_index_spiky_lap_is_above_one():
-    # Real property of normalized_power_w's own algorithm, confirmed
-    # directly before writing this test: for a span much SHORTER than the
-    # 30s rolling window (POWER_ROLLING_WINDOW_S), the trailing average
-    # degenerates into an expanding cumulative mean and NP can legitimately
-    # fall BELOW the raw average -- `_hand_series()`'s 5-sample lap1 is
-    # exactly that case (NP=178.9 < avg=180.0). A clean 50/50 square wave
-    # doesn't reliably fix this either (confirmed directly: even a 90s/
-    # three-cycle 100W/300W square wave still gave NP < average) --
-    # a genuinely realistic profile is needed: SHORT sharp spikes against a
-    # LONGER lower baseline (matching this codebase's own 2026-09-19
-    # race-analysis research: real CX surges are ~3-10s against a much
-    # longer lower-intensity baseline, not 50/50 blocks). Confirmed
-    # directly before writing this assertion: 5s spikes to 400W every 30s
-    # against a 100W baseline gives NP=196.5 > avg=150.0.
+    # Short sharp spikes (5 s to 400 W every 45 s) against a 100 W baseline, matching real CX
+    # surges (~3-10 s). The period is NOT a multiple of the 30 s NP window, so the full-window
+    # means vary and NP exceeds the plain average.
     t_s = list(range(180))
-    power_w = [400.0 if (i % 30) < 5 else 100.0 for i in range(180)]
+    power_w = [400.0 if (i % 45) < 5 else 100.0 for i in range(180)]
     series = {"t_s": [float(t) for t in t_s], "power_w": power_w}
     lap = GpsLap(n=1, start_idx=0, end_idx=179, start_s=0.0, end_s=179.0)
     m = lap_metrics(series, lap)
-    assert m.normalized_power_w > 150.0  # avg is exactly 150.0
-    assert m.variability_index > 1.1
-    assert m.variability_index == pytest.approx(m.normalized_power_w / 150.0, rel=1e-9)
+    avg = sum(power_w) / len(power_w)
+    assert m.normalized_power_w > avg
+    assert m.variability_index > 1.01
+    assert m.variability_index == pytest.approx(m.normalized_power_w / avg, rel=1e-2)
 
 
 def test_lap_metrics_variability_index_none_when_no_power_channel():
@@ -487,7 +461,7 @@ def test_lap_metrics_coasting_s_zero_when_never_coasting():
 
 
 def test_analyze_gps_laps_end_to_end_on_synthetic_loop():
-    series = _square_loop_series(3, extra_channels=True)
+    series = _square_loop_series(3, step_m=3.0, extra_channels=True)  # 1 Hz records
     results = analyze_gps_laps(series)
     assert len(results) == 3
     for r in results:

@@ -279,6 +279,37 @@ async def set_workout_kind(
     return _workout_with_load(store, athlete, profile, updated)
 
 
+@router.post("/api/workouts/{workout_id}/race-start")
+async def set_workout_race_start(
+    workout_id: UUID,
+    payload: dict[str, Any],
+    request: Request,
+    athlete: str | None = Query(None),
+    principal: Principal = Depends(require_auth),
+) -> dict:
+    """Set (or clear, with a null `race_start`) the race-start override of a one-file warm-up +
+    race ride and re-run its analysis -- the `set_race_start` chat tool's own handler, so the PWA
+    control and the coach behave identically. Returns the updated workout (with load)."""
+    settings = request.app.state.settings
+    athlete = resolve_athlete(principal, athlete)
+    store = make_store(settings)
+    try:
+        profile = store.load_athlete(athlete)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"no such athlete: {athlete}") from exc
+    if store.get_workout(athlete, workout_id) is None:
+        raise HTTPException(status_code=404, detail=f"no such workout: {workout_id}")
+
+    handlers = build_tool_handlers(store, slug=athlete, expert_mode=False)
+    result = handlers["set_race_start"]({"workout_id": str(workout_id), "race_start": payload.get("race_start")})
+    if "error" in result:
+        raise HTTPException(status_code=422, detail=result["error"])
+    updated = store.get_workout(athlete, workout_id)
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"no such workout: {workout_id}")
+    return _workout_with_load(store, athlete, profile, updated)
+
+
 @router.get("/api/workouts/{workout_id}/pacing")
 async def get_workout_pacing(
     workout_id: UUID,

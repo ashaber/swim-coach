@@ -30,14 +30,14 @@ import {
   fetchCoachHealthStatus, postCoachHealthStatus, resolveCoachHealthStatus,
   fetchHealthStatus, postHealthStatus,
   askAboutSession, askAboutWorkout,
-  fetchWorkoutPacing, postWorkoutKind,
+  fetchWorkoutPacing, postWorkoutKind, postWorkoutRaceStart,
   postCoachWorkoutChatMessage, patchCoachWorkoutChatMuted,
   listConversations, fetchConversationMessages, patchConversationMuted, conversationMessagesPath,
   fetchCoachConversation, postCoachConversationMessage, patchCoachConversationMuted,
   listLibraryCards, fetchLibraryFile, submitLibraryReview,
   fetchMe,
 } from './api.js';
-import { shouldLoadPacing } from './analysis.js';
+import { shouldLoadPacing, parseRaceStartInput } from './analysis.js';
 import { createSectorOverlay, openSectorOverlay, switchOverlaySector, closeSectorOverlay } from './sectorOverlay.js';
 import { attachMapGestures } from './mapGestures.js';
 import {
@@ -423,6 +423,7 @@ const state = {
   mapView: null, // pinch/pan view of the course map; null = framed by the selection, else the whole lap
   // The workout detail's kind retag (POST /api/workouts/{id}/kind): null or {status, error}.
   workoutKindEdit: null,
+  raceStartEdit: null,
   // The Dashboard tab's training-load chart narrative (views.js's
   // renderCtlAtlTsbNarrative, web/two-panel-load-chart's truncation) --
   // same one-way "Show more" convention as dashboardFeedExpanded just
@@ -632,6 +633,7 @@ function renderTabContent() {
           selectedSector: state.selectedSector,
           mapView: state.mapView,
           kindEdit: state.workoutKindEdit,
+          raceStartEdit: state.raceStartEdit,
         },
         healthStatusForm: state.healthStatusForm,
         healthStatusSubmit: state.healthStatusSubmit,
@@ -2187,6 +2189,7 @@ function handleCloseHistoryDetail() {
   state.mapView = null;
   state.sectorOverlay = createSectorOverlay();
   state.workoutKindEdit = null;
+  state.raceStartEdit = null;
   closeWorkoutChat();
   state.workoutRpeEdit = null;
   state.askCoachForm = createAskCoachForm();
@@ -2219,6 +2222,40 @@ async function handleSetWorkoutKind(kind) {
   } else {
     log.error('workout.kind_set_failed', { athlete: athleteSlug(), workout_id: workoutId, error: result.error });
     state.workoutKindEdit = { status: 'error', error: result.error };
+  }
+  render();
+}
+
+/** Saves the typed race start (mm:ss) via POST /api/workouts/{id}/race-start, swaps the returned
+ * workout into the cached history and re-fetches the pacing read measured from the new start. */
+async function handleSaveRaceStart() {
+  const settings = state.settingsForm;
+  const workoutId = state.workoutDetailId;
+  if (!workoutId || !isConfigured(settings, state.identity)) return;
+  if (state.raceStartEdit?.status === 'submitting') return;
+  const raceStartS = parseRaceStartInput(document.querySelector('[data-a="race-start:input"]')?.value);
+  if (raceStartS === null) {
+    state.raceStartEdit = { open: true, status: 'error', error: 'Enter the race start as mm:ss, e.g. 47:57.' };
+    render();
+    return;
+  }
+  state.raceStartEdit = { open: true, status: 'submitting', error: null };
+  render();
+  const result = await postWorkoutRaceStart({
+    baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), workoutId, raceStartS,
+  });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    log.info('workout.race_start_set', { athlete: athleteSlug(), workout_id: workoutId, race_start_s: raceStartS });
+    state.raceStartEdit = null;
+    state.workoutHistory = {
+      ...state.workoutHistory,
+      data: state.workoutHistory.data.map((w) => (w.id === workoutId ? result.data : w)),
+    };
+    await loadPacing(workoutId); // the cached read was measured from the old start
+  } else {
+    log.error('workout.race_start_failed', { athlete: athleteSlug(), workout_id: workoutId, error: result.error });
+    state.raceStartEdit = { open: true, status: 'error', error: result.error };
   }
   render();
 }
@@ -4094,6 +4131,9 @@ async function onAppClick(e) {
     case 'raceday:tl-reset': handleRaceDayTimelineReset(); break;
     case 'raceweek:toggle': handleRaceWeekToggle(el.dataset.week, el.dataset.id); break;
     case 'workout:raw-analysis-toggle': handleToggleRawAnalysis(); break;
+    case 'race-start:edit': state.raceStartEdit = { open: true, status: 'idle', error: null }; render(); break;
+    case 'race-start:cancel': state.raceStartEdit = null; render(); break;
+    case 'race-start:save': await handleSaveRaceStart(); break;
     case 'workout:sector-select': handleSelectSector(el.dataset.sector); break;
     case 'workout:map-reset': resetCourseMap(); break;
     case 'sector-overlay:open': handleOpenSectorOverlay(null); break;

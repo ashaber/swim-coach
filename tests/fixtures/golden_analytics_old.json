@@ -42,6 +42,14 @@
     "hr_rise_across_reps_bpm": null,
     "race_start": {
      "start_s": 253.0,
+     "source": "detected",
+     "warmup": {
+      "duration_s": 253.0,
+      "avg_w": 2,
+      "np_w": 4,
+      "openers": 0,
+      "note": "warm-up 4 min before the race start: avg 2 W, NP 4 W, 0 openers"
+     },
      "peak_w": 862,
      "best_5s_w": 695,
      "best_15s_w": 582,
@@ -49,10 +57,10 @@
      "burst_s": 18.0,
      "time_to_settle_s": 48.0,
      "first_5min_avg_w": 245,
-     "first_5min_np_w": 332,
-     "race_np_w": 254,
-     "first_5min_vs_race_np_pct": 130.6,
-     "note": "race start at 253 s: peak 862 W, best 5 s 695 W, burst 18 s, settled to race pace in 48 s; first 5 min NP 332 W = 131% of race NP 254 W"
+     "first_5min_np_w": 266,
+     "race_np_w": 241,
+     "first_5min_vs_race_np_pct": 110.3,
+     "note": "race start at 253 s: peak 862 W, best 5 s 695 W, burst 18 s, settled to race pace in 48 s; first 5 min NP 266 W = 110% of race NP 241 W. warm-up 4 min before the race start: avg 2 W, NP 4 W, 0 openers"
     },
     "race_laps": [
      {
@@ -71,7 +79,7 @@
     "session_shape": "race"
    },
    "avg_power_w": 202.4681066486669,
-   "normalized_power_w": 237.11540010844612,
+   "normalized_power_w": 238.443395748822,
    "power_curve": [
     {
      "duration_s": 1,
@@ -411,7 +419,7 @@
       "hr_drift_bpm": 13.2,
       "grade_delta_pct_pts": -0.1,
       "terrain_flag": null,
-      "verdict": "technical rep: avg 210 W / NP 213 W, HR 154 (90% LTHR), 232 s at >=90% LTHR -- effort held",
+      "verdict": "technical rep: avg 210 W / NP 210 W, HR 154 (90% LTHR), 232 s at >=90% LTHR -- effort held",
       "sub_structure": null,
       "altitude_m": 833.5,
       "altitude_gain_m": 10.5,
@@ -424,7 +432,7 @@
       "in_target_band": null,
       "technical": true,
       "technical_reason": "variability",
-      "np_w": 213.3,
+      "np_w": 210.0,
       "pct_lthr": 89.5,
       "time_ge90_lthr_s": 232.0,
       "low_power_time_pct": 40.3,
@@ -444,7 +452,7 @@
       "hr_drift_bpm": 16.4,
       "grade_delta_pct_pts": 0.0,
       "terrain_flag": null,
-      "verdict": "technical rep: avg 199 W / NP 208 W, HR 160 (93% LTHR), 250 s at >=90% LTHR -- effort held",
+      "verdict": "technical rep: avg 199 W / NP 204 W, HR 160 (93% LTHR), 250 s at >=90% LTHR -- effort held",
       "sub_structure": null,
       "altitude_m": 833.0,
       "altitude_gain_m": 10.0,
@@ -457,7 +465,7 @@
       "in_target_band": null,
       "technical": true,
       "technical_reason": "variability",
-      "np_w": 208.3,
+      "np_w": 204.1,
       "pct_lthr": 93.0,
       "time_ge90_lthr_s": 250.0,
       "low_power_time_pct": 44.3,
@@ -477,7 +485,7 @@
       "hr_drift_bpm": 22.2,
       "grade_delta_pct_pts": -0.1,
       "terrain_flag": null,
-      "verdict": "technical rep: avg 226 W / NP 241 W, HR 162 (94% LTHR), 250 s at >=90% LTHR -- effort held",
+      "verdict": "technical rep: avg 226 W / NP 248 W, HR 162 (94% LTHR), 250 s at >=90% LTHR -- effort held",
       "sub_structure": null,
       "altitude_m": 832.4,
       "altitude_gain_m": 9.4,
@@ -490,7 +498,7 @@
       "in_target_band": null,
       "technical": true,
       "technical_reason": "variability",
-      "np_w": 240.9,
+      "np_w": 247.5,
       "pct_lthr": 94.2,
       "time_ge90_lthr_s": 250.0,
       "low_power_time_pct": 41.3,
@@ -1016,7 +1024,7 @@
     "session_shape": "starts"
    },
    "avg_power_w": 123.63383906800325,
-   "normalized_power_w": 200.282062516957,
+   "normalized_power_w": 193.8902220060209,
    "power_curve": [
     {
      "duration_s": 1,
@@ -1370,12 +1378,12 @@
      ]
     },
     "cost": {
-     "tss": 109.0,
-     "intensity_factor": 0.73,
-     "load_au": 109.0,
+     "tss": 102.0,
+     "intensity_factor": 0.7,
+     "load_au": 102.0,
      "cost_basis": "power",
      "adjacent_key_sessions": [],
-     "note": "TSS 109, IF 0.73"
+     "note": "TSS 102, IF 0.70"
     },
     "steady_drift": [],
     "steady_note": "No steady stretch of 20 min or more (power varied or stops); no drift read.",
@@ -1647,7 +1655,7 @@
       "hr_drift_bpm": 13.2,
       "grade_delta_pct_pts": -0.1,
       "terrain_flag": null,
-      "verdict": "technical rep: avg 210 W / NP 213 W, HR 154 (90% LTHR), 232 s at >=90% LTHR -- effort held",
+      "verdict": "technical rep: avg 210 W / NP 210 W, HR 154 (90% LTHR), 232 s at >=90% LTHR -- effort held",
       "sub_structure": null,
       "altitude_m": 833.5,
       "altitude_gain_m": 10.5,
@@ -1660,7 +1668,7 @@
       "in_target_band": null,
       "technical": true,
       "technical_reason": "label",
-      "np_w": 213.3,
+      "np_w": 210.0,
       "pct_lthr": 89.5,
       "time_ge90_lthr_s": 232.0,
       "low_power_time_pct": 40.3,
@@ -1680,7 +1688,7 @@
       "hr_drift_bpm": 16.4,
       "grade_delta_pct_pts": 0.0,
       "terrain_flag": null,
-      "verdict": "technical rep: avg 199 W / NP 208 W, HR 160 (93% LTHR), 250 s at >=90% LTHR -- effort held",
+      "verdict": "technical rep: avg 199 W / NP 204 W, HR 160 (93% LTHR), 250 s at >=90% LTHR -- effort held",
       "sub_structure": null,
       "altitude_m": 833.0,
       "altitude_gain_m": 10.0,
@@ -1693,7 +1701,7 @@
       "in_target_band": null,
       "technical": true,
       "technical_reason": "label",
-      "np_w": 208.3,
+      "np_w": 204.1,
       "pct_lthr": 93.0,
       "time_ge90_lthr_s": 250.0,
       "low_power_time_pct": 44.3,
@@ -1713,7 +1721,7 @@
       "hr_drift_bpm": 22.2,
       "grade_delta_pct_pts": -0.1,
       "terrain_flag": null,
-      "verdict": "technical rep: avg 226 W / NP 241 W, HR 162 (94% LTHR), 250 s at >=90% LTHR -- effort held",
+      "verdict": "technical rep: avg 226 W / NP 248 W, HR 162 (94% LTHR), 250 s at >=90% LTHR -- effort held",
       "sub_structure": null,
       "altitude_m": 832.4,
       "altitude_gain_m": 9.4,
@@ -1726,7 +1734,7 @@
       "in_target_band": null,
       "technical": true,
       "technical_reason": "label",
-      "np_w": 240.9,
+      "np_w": 247.5,
       "pct_lthr": 94.2,
       "time_ge90_lthr_s": 250.0,
       "low_power_time_pct": 41.3,
@@ -2280,7 +2288,7 @@
     "session_shape": "starts"
    },
    "avg_power_w": 123.63383906800325,
-   "normalized_power_w": 200.282062516957,
+   "normalized_power_w": 193.8902220060209,
    "power_curve": [
     {
      "duration_s": 1,
@@ -2594,7 +2602,7 @@
     "session_shape": null
    },
    "avg_power_w": 186.47131270651846,
-   "normalized_power_w": 212.05595362228019,
+   "normalized_power_w": 212.78962091889917,
    "power_curve": [
     {
      "duration_s": 1,
@@ -3607,7 +3615,7 @@
     "session_shape": "interval"
    },
    "avg_power_w": 186.47131270651846,
-   "normalized_power_w": 212.05595362228019,
+   "normalized_power_w": 212.78962091889917,
    "power_curve": [
     {
      "duration_s": 1,
@@ -3971,7 +3979,7 @@
     "session_shape": null
    },
    "avg_power_w": 165.4224200144335,
-   "normalized_power_w": 201.24573538995924,
+   "normalized_power_w": 201.68960120075985,
    "power_curve": [
     {
      "duration_s": 1,
@@ -4280,11 +4288,11 @@
     },
     "cost": {
      "tss": 61.0,
-     "intensity_factor": 0.72,
+     "intensity_factor": 0.73,
      "load_au": 61.0,
      "cost_basis": "power",
      "adjacent_key_sessions": [],
-     "note": "TSS 61, IF 0.72"
+     "note": "TSS 61, IF 0.73"
     },
     "steady_drift": [],
     "steady_note": "No steady stretch of 20 min or more (power varied or stops); no drift read.",
@@ -4514,7 +4522,7 @@
     "session_shape": null
    },
    "avg_power_w": 165.4224200144335,
-   "normalized_power_w": 201.24573538995924,
+   "normalized_power_w": 201.68960120075985,
    "power_curve": [
     {
      "duration_s": 1,
@@ -4986,7 +4994,7 @@
     "session_shape": null
    },
    "avg_power_w": 150.41778556139326,
-   "normalized_power_w": 169.96092440428274,
+   "normalized_power_w": 170.36862398575494,
    "power_curve": [
     {
      "duration_s": 1,
@@ -5259,12 +5267,12 @@
      ]
     },
     "cost": {
-     "tss": 53.0,
+     "tss": 54.0,
      "intensity_factor": 0.61,
-     "load_au": 53.0,
+     "load_au": 54.0,
      "cost_basis": "power",
      "adjacent_key_sessions": [],
-     "note": "TSS 53, IF 0.61"
+     "note": "TSS 54, IF 0.61"
     },
     "steady_drift": [],
     "steady_note": "No steady stretch of 20 min or more (power varied or stops); no drift read.",
@@ -5593,7 +5601,7 @@
     "session_shape": null
    },
    "avg_power_w": 150.41778556139326,
-   "normalized_power_w": 169.96092440428274,
+   "normalized_power_w": 170.36862398575494,
    "power_curve": [
     {
      "duration_s": 1,
@@ -5955,7 +5963,7 @@
       "in_target_band": null,
       "technical": null,
       "technical_reason": null,
-      "np_w": 295.0,
+      "np_w": 279.3,
       "pct_lthr": null,
       "time_ge90_lthr_s": null,
       "low_power_time_pct": 0.0,
@@ -5975,7 +5983,7 @@
       "hr_drift_bpm": 27.6,
       "grade_delta_pct_pts": -0.2,
       "terrain_flag": null,
-      "verdict": "technical rep: avg 218 W / NP 230 W, HR 159 (92% LTHR), 132 s at >=90% LTHR -- effort held",
+      "verdict": "technical rep: avg 218 W / NP 229 W, HR 159 (92% LTHR), 132 s at >=90% LTHR -- effort held",
       "sub_structure": null,
       "altitude_m": 1738.4,
       "altitude_gain_m": 915.4,
@@ -5988,7 +5996,7 @@
       "in_target_band": null,
       "technical": true,
       "technical_reason": "variability",
-      "np_w": 229.6,
+      "np_w": 229.3,
       "pct_lthr": 92.4,
       "time_ge90_lthr_s": 132.0,
       "low_power_time_pct": 37.2,
@@ -6008,7 +6016,7 @@
       "hr_drift_bpm": 24.8,
       "grade_delta_pct_pts": 0.1,
       "terrain_flag": null,
-      "verdict": "technical rep: avg 248 W / NP 262 W, HR 163 (95% LTHR), 147 s at >=90% LTHR -- effort held",
+      "verdict": "technical rep: avg 248 W / NP 261 W, HR 163 (95% LTHR), 147 s at >=90% LTHR -- effort held",
       "sub_structure": null,
       "altitude_m": 1739.2,
       "altitude_gain_m": 916.2,
@@ -6021,7 +6029,7 @@
       "in_target_band": null,
       "technical": true,
       "technical_reason": "variability",
-      "np_w": 262.5,
+      "np_w": 261.0,
       "pct_lthr": 94.8,
       "time_ge90_lthr_s": 147.0,
       "low_power_time_pct": 27.2,
@@ -6041,7 +6049,7 @@
       "hr_drift_bpm": 26.7,
       "grade_delta_pct_pts": 0.0,
       "terrain_flag": null,
-      "verdict": "technical rep: avg 220 W / NP 246 W, HR 160 (93% LTHR), 137 s at >=90% LTHR -- effort held",
+      "verdict": "technical rep: avg 220 W / NP 249 W, HR 160 (93% LTHR), 137 s at >=90% LTHR -- effort held",
       "sub_structure": null,
       "altitude_m": 1739.0,
       "altitude_gain_m": 916.0,
@@ -6054,7 +6062,7 @@
       "in_target_band": null,
       "technical": true,
       "technical_reason": "variability",
-      "np_w": 246.4,
+      "np_w": 249.1,
       "pct_lthr": 93.0,
       "time_ge90_lthr_s": 137.0,
       "low_power_time_pct": 33.3,
@@ -6074,7 +6082,7 @@
       "hr_drift_bpm": 28.8,
       "grade_delta_pct_pts": -0.2,
       "terrain_flag": null,
-      "verdict": "technical rep: avg 237 W / NP 239 W, HR 161 (94% LTHR), 135 s at >=90% LTHR -- effort held",
+      "verdict": "technical rep: avg 237 W / NP 249 W, HR 161 (94% LTHR), 135 s at >=90% LTHR -- effort held",
       "sub_structure": null,
       "altitude_m": 1739.4,
       "altitude_gain_m": 916.4,
@@ -6087,7 +6095,7 @@
       "in_target_band": null,
       "technical": true,
       "technical_reason": "variability",
-      "np_w": 239.2,
+      "np_w": 248.9,
       "pct_lthr": 93.6,
       "time_ge90_lthr_s": 135.0,
       "low_power_time_pct": 28.3,
@@ -6754,7 +6762,7 @@
     "session_shape": "starts"
    },
    "avg_power_w": 154.7956795679568,
-   "normalized_power_w": 211.30683196692087,
+   "normalized_power_w": 207.53169923201466,
    "power_curve": [
     {
      "duration_s": 1,
@@ -7108,12 +7116,12 @@
      ]
     },
     "cost": {
-     "tss": 125.0,
-     "intensity_factor": 0.76,
-     "load_au": 125.0,
+     "tss": 121.0,
+     "intensity_factor": 0.75,
+     "load_au": 121.0,
      "cost_basis": "power",
      "adjacent_key_sessions": [],
-     "note": "TSS 125, IF 0.76"
+     "note": "TSS 121, IF 0.75"
     },
     "steady_drift": [],
     "steady_note": "No steady stretch of 20 min or more (power varied or stops); no drift read.",
@@ -7398,7 +7406,7 @@
       "in_target_band": true,
       "technical": null,
       "technical_reason": null,
-      "np_w": 301.4,
+      "np_w": 278.7,
       "pct_lthr": null,
       "time_ge90_lthr_s": null,
       "low_power_time_pct": 0.6,
@@ -7418,7 +7426,7 @@
       "hr_drift_bpm": 26.9,
       "grade_delta_pct_pts": -0.2,
       "terrain_flag": null,
-      "verdict": "technical rep: avg 218 W / NP 234 W, HR 159 (92% LTHR), 133 s at >=90% LTHR -- effort held",
+      "verdict": "technical rep: avg 218 W / NP 229 W, HR 159 (92% LTHR), 133 s at >=90% LTHR -- effort held",
       "sub_structure": null,
       "altitude_m": 1738.4,
       "altitude_gain_m": 915.4,
@@ -7431,7 +7439,7 @@
       "in_target_band": null,
       "technical": true,
       "technical_reason": "variability",
-      "np_w": 234.0,
+      "np_w": 228.9,
       "pct_lthr": 92.4,
       "time_ge90_lthr_s": 133.0,
       "low_power_time_pct": 37.2,
@@ -7451,7 +7459,7 @@
       "hr_drift_bpm": 23.9,
       "grade_delta_pct_pts": 0.1,
       "terrain_flag": null,
-      "verdict": "technical rep: avg 248 W / NP 266 W, HR 164 (95% LTHR), 148 s at >=90% LTHR -- effort held",
+      "verdict": "technical rep: avg 248 W / NP 261 W, HR 164 (95% LTHR), 148 s at >=90% LTHR -- effort held",
       "sub_structure": null,
       "altitude_m": 1739.2,
       "altitude_gain_m": 916.2,
@@ -7464,7 +7472,7 @@
       "in_target_band": null,
       "technical": true,
       "technical_reason": "variability",
-      "np_w": 266.4,
+      "np_w": 260.6,
       "pct_lthr": 95.3,
       "time_ge90_lthr_s": 148.0,
       "low_power_time_pct": 27.2,
@@ -7497,7 +7505,7 @@
       "in_target_band": null,
       "technical": true,
       "technical_reason": "variability",
-      "np_w": 248.9,
+      "np_w": 248.7,
       "pct_lthr": 93.0,
       "time_ge90_lthr_s": 138.0,
       "low_power_time_pct": 33.3,
@@ -7517,7 +7525,7 @@
       "hr_drift_bpm": 28.3,
       "grade_delta_pct_pts": -0.2,
       "terrain_flag": null,
-      "verdict": "technical rep: avg 238 W / NP 240 W, HR 161 (94% LTHR), 136 s at >=90% LTHR -- effort held",
+      "verdict": "technical rep: avg 238 W / NP 249 W, HR 161 (94% LTHR), 136 s at >=90% LTHR -- effort held",
       "sub_structure": null,
       "altitude_m": 1739.4,
       "altitude_gain_m": 916.4,
@@ -7530,7 +7538,7 @@
       "in_target_band": null,
       "technical": true,
       "technical_reason": "variability",
-      "np_w": 240.2,
+      "np_w": 249.4,
       "pct_lthr": 93.6,
       "time_ge90_lthr_s": 136.0,
       "low_power_time_pct": 27.8,
@@ -8287,7 +8295,7 @@
     "session_shape": "starts"
    },
    "avg_power_w": 154.7956795679568,
-   "normalized_power_w": 211.30683196692087,
+   "normalized_power_w": 207.53169923201466,
    "power_curve": [
     {
      "duration_s": 1,

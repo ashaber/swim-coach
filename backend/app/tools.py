@@ -1600,6 +1600,28 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "set_race_start",
+        "description": (
+            "Set (or clear) where the RACE starts inside a LOGGED ride that recorded warm-up and race as one "
+            "activity, when the automatic race-start detection is wrong. Seconds on the activity clock, or "
+            "mm:ss / h:mm:ss. It wins over detection: phases, race NP, laps and the execution score are then "
+            "measured from there, and the warm-up is summarised apart. Omit race_start to clear it. Saves the "
+            "override and re-runs the ride's analysis."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "workout_id": {"type": "string", "description": "The id (or a unique prefix) of the logged bike workout."},
+                "race_start": {
+                    "type": ["number", "string", "null"],
+                    "description": "Race start on the activity clock: seconds, or 'mm:ss' / 'h:mm:ss'. Null/omitted clears.",
+                },
+            },
+            "required": ["workout_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "set_workout_chat_muted",
         "description": (
             "Silence (or restore) YOUR OWN replies in one workout's chat thread -- call this the "
@@ -4589,6 +4611,16 @@ RIDE_PACING_INTERPRETATION = (
 )
 
 
+def _race_start_s(workout: Workout) -> float | None:
+    """Where the race begins on the activity clock: the athlete/coach override, else the start the
+    analysis detected, else `None` (a ride with no separate warm-up is analysed from 0)."""
+    if workout.race_start_s is not None:
+        return workout.race_start_s
+    intervals = workout.analytics.intervals if workout.analytics else None
+    detected = intervals.race_start if intervals else None
+    return detected.start_s if detected else None
+
+
 def _handle_get_ride_pacing(
     input_data: dict[str, Any], *, store: StoreInterface, slug: str
 ) -> dict[str, Any]:
@@ -4624,8 +4656,9 @@ def _handle_get_ride_pacing(
             )
         }
 
-    laps = analyze_gps_laps(series)
-    phases = split_race_phases(series)
+    race_start_s = _race_start_s(workout)
+    laps = analyze_gps_laps(series, from_s=race_start_s)
+    phases = split_race_phases(series, race_start_s=race_start_s)
     laps_truncated = len(laps) > RIDE_PACING_LAPS_CAP
 
     gps_laps: dict[str, Any] = {
@@ -4653,6 +4686,7 @@ def _handle_get_ride_pacing(
         "date": workout.date.isoformat(),
         "series_source": series_source,
         "gps_laps": gps_laps,
+        "race_start_s": race_start_s,
         "race_phases": {
             "phases": _race_phases_json(phases),
             "significance_threshold_pct": DEFAULT_SIGNIFICANCE_THRESHOLD_PCT,
@@ -4692,6 +4726,57 @@ def _handle_set_workout_kind(
     result["reanalyzed"] = bool(reanalysis.get("reanalyzed"))
     if "error" in reanalysis:
         result["note"] = f"kind saved; analysis not re-run: {reanalysis['error']}"
+    return result
+
+
+def _parse_clock_seconds(value: Any) -> float | None:
+    """Seconds from a number or 'mm:ss' / 'h:mm:ss' string; `None` for empty. Raises ValueError."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        raise ValueError("race_start must be seconds or mm:ss")
+    if isinstance(value, (int, float)):
+        seconds = float(value)
+    else:
+        parts = str(value).strip().split(":")
+        if not 1 <= len(parts) <= 3:
+            raise ValueError("race_start must be seconds or mm:ss")
+        seconds = 0.0
+        for part in parts:
+            seconds = seconds * 60 + float(part)
+    if seconds < 0:
+        raise ValueError("race_start cannot be negative")
+    return seconds
+
+
+def _handle_set_race_start(
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str
+) -> dict[str, Any]:
+    """Sets `Workout.race_start_s` (the athlete/coach's race-start override; it wins over detection)
+    and re-runs the ride's analysis, like `set_workout_kind`."""
+    workout_id_str = (input_data.get("workout_id") or "").strip()
+    if not workout_id_str:
+        return {"error": "workout_id is required"}
+    try:
+        race_start_s = _parse_clock_seconds(input_data.get("race_start"))
+    except ValueError as exc:
+        return {"error": str(exc)}
+    workout = find_workout_by_id(store.list_workouts(slug), workout_id_str)
+    if workout is None:
+        return {"error": f"no workout matching id {workout_id_str!r}"}
+    try:
+        workout.race_start_s = race_start_s
+        store.save_workout(slug, workout)
+    except Exception as exc:  # noqa: BLE001
+        log.error("storage write failed", what="race start", exc_info=True)
+        return storage_error("workout", exc)
+    log.info("race start set", athlete=slug, workout_id=str(workout.id), race_start_s=race_start_s)
+
+    result: dict[str, Any] = {"updated": True, "workout_id": str(workout.id), "race_start_s": race_start_s}
+    reanalysis = _handle_reanalyze_workout({"workout_id": str(workout.id)}, store=store, slug=slug)
+    result["reanalyzed"] = bool(reanalysis.get("reanalyzed"))
+    if "error" in reanalysis:
+        result["note"] = f"race start saved; analysis not re-run: {reanalysis['error']}"
     return result
 
 
@@ -10014,6 +10099,9 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "set_workout_kind": lambda input_data: _handle_set_workout_kind(
+            input_data, store=store, slug=slug
+        ),
+        "set_race_start": lambda input_data: _handle_set_race_start(
             input_data, store=store, slug=slug
         ),
         "set_workout_chat_muted": lambda input_data: _handle_set_workout_chat_muted(

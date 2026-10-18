@@ -153,6 +153,24 @@ export function effectiveKind(workout) {
   return workout?.kind_override || workout?.kind || null;
 }
 
+/** Seconds from a race-start text: "47:57", "1:02:03" or plain seconds ("2877"); null when it
+ * is not one of those (or negative), so the caller can refuse it before any request. */
+export function parseRaceStartInput(text) {
+  const raw = String(text ?? '').trim();
+  if (!/^\d+(:\d{1,2}){0,2}$/.test(raw)) return null;
+  const parts = raw.split(':').map(Number);
+  if (parts.slice(1).some((p) => p > 59)) return null;
+  return parts.reduce((total, p) => total * 60 + p, 0);
+}
+
+/** The race start the pacing read was measured from: `{ seconds, source }` with source
+ * "set" (the athlete's/coach's override) or "detected"; null when the ride has none. */
+export function raceStartInfo(workout, pacing) {
+  const seconds = pacing?.data?.race_start_s;
+  if (seconds === null || seconds === undefined) return null;
+  return { seconds, source: workout?.race_start_s === null || workout?.race_start_s === undefined ? 'detected' : 'set' };
+}
+
 export function kindLabel(kind) {
   const hit = KIND_OPTIONS.find(([k]) => k === kind);
   return hit ? hit[1] : null;

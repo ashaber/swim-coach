@@ -413,6 +413,20 @@ export async function postWorkoutKind({ baseUrl, token, athlete, workoutId, kind
   });
 }
 
+/** POST {baseUrl}/api/workouts/{workoutId}/race-start?athlete=<slug> -- sets (seconds on the
+ * activity clock) or clears (null) the race-start override of a one-file warm-up + race ride;
+ * the backend re-runs the analysis (the same handler as the coach's `set_race_start` tool) and
+ * returns the updated workout with its load. */
+export async function postWorkoutRaceStart({ baseUrl, token, athlete, workoutId, raceStartS }) {
+  return apiRequest({
+    baseUrl,
+    token,
+    path: `/api/workouts/${encodeURIComponent(workoutId)}/race-start?athlete=${encodeURIComponent(athlete)}`,
+    method: 'POST',
+    body: { race_start: raceStartS },
+  });
+}
+
 /** GET {baseUrl}/api/workouts/{workoutId}/pacing?athlete=<slug> -- GPS-lap
  * detection + race-phase pacing split for one bike workout (Andrew,
  * 2026-09-22: the race activity's own detail view, not only through chat

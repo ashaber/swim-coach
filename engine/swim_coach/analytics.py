@@ -17,7 +17,7 @@ import statistics
 from typing import Literal
 
 from swim_coach.models import WorkoutLap, WorkoutLength, WorkoutPause
-from swim_coach.power_curve import power_curve
+from swim_coach.power_curve import _riding_timeline, power_curve
 
 # --- constants (library/11-workout-analytics.md) --------------------------------------
 
@@ -75,10 +75,12 @@ POWER_ROLLING_WINDOW_S = 30.0
 # or intervals.icu computes for the same file, re-derive this rolling-
 # window implementation step by step before trusting either number.
 #
-# The cited algorithm doesn't specify edge-of-ride behavior for samples
-# less than 30s into the series -- `_trailing_moving_average` below uses a
-# shorter (not padded/fabricated) window for those, an engineering
-# convention, not itself part of the cited algorithm.
+# Edge of ride: the standard algorithm's first rolling value is at 30 s, so
+# only full 30 s windows are averaged (a partial window lets a 900 W start
+# burst count as a 1-sample "average"; on a real race that overstated race NP
+# by ~12%, first-5-min NP by ~57%). Gaps: the series is resampled to 1 Hz
+# with dropouts as 0 W and timer pauses removed (Coach judgment, matching
+# `power_curve` and intervals.icu; library/26).
 
 
 # --- cardiac drift ----------------------------------------------------------------
@@ -321,48 +323,40 @@ def average_power_w(series: dict | None) -> float | None:
     return statistics.fmean(values)
 
 
-def _trailing_moving_average(vals: list[float], t_s: list[float], window_s: float) -> list[float]:
-    """Trailing moving average of `vals` over the `window_s` seconds ending
-    at (and including) each sample -- the shape `POWER_ROLLING_WINDOW_S`'s
-    NP algorithm calls for, distinct from `interval_analysis.
-    _centred_moving_average`'s CENTRED window. O(n) via a two-pointer
-    sliding sum (samples are ~1 Hz and monotonic in `t_s`, mirroring that
-    function's own convention); tolerates real gaps in `t_s` (a dropped
-    record, a pause) correctly since the window is time-based, not a fixed
-    sample count."""
-    n = len(vals)
-    out = [0.0] * n
-    lo = 0
-    run = 0.0
-    for i in range(n):
-        run += vals[i]
-        while t_s[lo] < t_s[i] - window_s:
-            run -= vals[lo]
-            lo += 1
-        out[i] = run / (i - lo + 1)
-    return out
+def _full_window_means(watts_1hz: list[float], window: int) -> list[float]:
+    """Mean of each FULL `window`-sample trailing window of a 1 Hz series (the
+    first value is at index `window - 1`); no partial windows."""
+    cum = [0.0]
+    for w in watts_1hz:
+        cum.append(cum[-1] + w)
+    return [(cum[i + window] - cum[i]) / window for i in range(len(watts_1hz) - window + 1)]
 
 
 def normalized_power_w(series: dict | None) -> float | None:
-    """Normalized Power (watts) -- see `POWER_ROLLING_WINDOW_S`'s own
-    docstring for the full citation and the 4-step algorithm. `None` when
-    `series` is absent, carries no usable `power_w` channel, or has fewer
-    than 2 timestamped power samples (not enough to form any rolling
-    window)."""
+    """Normalized Power (watts) -- see `POWER_ROLLING_WINDOW_S` for the citation
+    and the 4-step algorithm. The ONE NP implementation: every caller (whole
+    ride, race, phases, laps, reps) goes through here.
+
+    The series is first resampled onto the 1 Hz riding timeline
+    (`power_curve._riding_timeline`: null/short-gap samples are 0 W, timer
+    pauses longer than `PAUSE_GAP_S` removed) so the rolling window is
+    time-based, never a count of records. Only FULL 30 s windows enter the
+    mean, as in the standard algorithm (the first rolling value is at 30 s);
+    a shorter window at the start would let a race-start burst dominate the
+    4th-power mean. `None` when `series` is absent, has no usable `power_w`,
+    or covers less than one full window (`POWER_ROLLING_WINDOW_S`)."""
     if not series:
         return None
     power = series.get("power_w")
     t_s = series.get("t_s")
-    if not power or not t_s:
+    if not power or not t_s or all(p is None for p in power):
         return None
-    samples = [(t, p) for t, p in zip(t_s, power) if p is not None]
-    if len(samples) < 2:
+    watts, _clock = _riding_timeline(t_s, power)
+    window = int(POWER_ROLLING_WINDOW_S)
+    if len(watts) < window:
         return None
-    ts = [t for t, _ in samples]
-    vals = [float(p) for _, p in samples]
-    rolling = _trailing_moving_average(vals, ts, POWER_ROLLING_WINDOW_S)
-    mean_fourth_power = statistics.fmean(v**4 for v in rolling)
-    return mean_fourth_power**0.25
+    rolling = _full_window_means(watts, window)
+    return statistics.fmean(v**4 for v in rolling) ** 0.25
 
 
 # --- splits -------------------------------------------------------------------------
@@ -500,6 +494,7 @@ def compute_analytics(
     planned_zone: str | None = None,
     lthr_bpm: float | None = None,
     race: bool = False,
+    race_start_s: float | None = None,
     session_text: str | None = None,
     with_intervals: bool = True,
 ):
@@ -568,6 +563,7 @@ def compute_analytics(
         planned_zone=planned_zone,
         lthr_bpm=lthr_bpm,
         race=race,
+        race_start_s=race_start_s,
         session_text=session_text,
     )
     avg_power = average_power_w(series)

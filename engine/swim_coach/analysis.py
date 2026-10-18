@@ -61,6 +61,8 @@ class AnalysisContext:
     prior_workouts: Sequence[Workout] = field(default_factory=tuple)
     # Planned sessions on the days around the workout (the free-ride read's cost-vs-week note).
     neighbors: Sequence[Session] = field(default_factory=tuple)
+    # The workout's athlete/coach-set race start (`Workout.race_start_s`); wins over detection.
+    race_start_s: float | None = None
 
 
 # Sport-agnostic fields every analyzer's coach view keeps.
@@ -245,6 +247,7 @@ class BikeAnalyzer(_CoachViewMixin):
             ftp_watts=athlete.ftp_watts if athlete else None,
             lthr_bpm=athlete.lthr_bpm if athlete else None,
             race=ctx.kind == "race",
+            race_start_s=ctx.race_start_s,
             session_text=_session_text(session),
         )
         analytics = annotate_power_curve_bests(workout, analytics, ctx)
@@ -405,5 +408,6 @@ def build_analysis_context(
         target_w=target_w,
         elapsed_min=elapsed_min,
         prior_workouts=prior,
+        race_start_s=workout.race_start_s,
         neighbors=_neighbor_sessions(store, slug, workout, session) if analyzer_for(workout.sport).needs_neighbors(kind) else (),
     )

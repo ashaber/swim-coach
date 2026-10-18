@@ -501,12 +501,13 @@ def lap_metrics(series: dict, lap: GpsLap) -> GpsLapMetrics:
     )
 
 
-def analyze_gps_laps(series: dict | None, **detect_kwargs) -> list[GpsLapMetrics]:
+def analyze_gps_laps(series: dict | None, *, from_s: float | None = None, **detect_kwargs) -> list[GpsLapMetrics]:
     """Convenience orchestrator: `detect_gps_laps(series, **detect_kwargs)`
     then `lap_metrics` for each detected lap. `[]` whenever `detect_gps_laps`
     itself returns `[]` -- see that function's docstring for every such
     case. `**detect_kwargs` forwards `proximity_m`/`min_away_m`/
-    `min_lap_duration_s` overrides straight through.
+    `min_lap_duration_s` overrides straight through. `from_s` (a race start on the activity
+    clock) drops laps that END at or before it: those are warm-up laps, not race laps.
     """
     laps = detect_gps_laps(series, **detect_kwargs)
-    return [lap_metrics(series, lap) for lap in laps]
+    return [lap_metrics(series, lap) for lap in laps if from_s is None or lap.end_s > from_s]
