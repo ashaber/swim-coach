@@ -2046,7 +2046,9 @@ function renderChatMessage(msg) {
     // than trailing inline text, which is a cosmetic streaming-only
     // difference from the old plain-text behavior, not a defect.
     const cursor = msg.status === 'streaming' ? '<span class="chat-cursor">▍</span>' : '';
-    bubbleHtml = `<div class="chat-bubble"><div class="chat-md">${renderChatMarkdown(msg.content)}</div>${cursor}</div>`;
+    const statusLine = msg.status === 'streaming' && msg.statusText
+      ? `<div class="chat-status" role="status">${esc(msg.statusText)}</div>` : '';
+    bubbleHtml = `<div class="chat-bubble"><div class="chat-md">${renderChatMarkdown(msg.content)}</div>${statusLine}${cursor}</div>`;
   }
 
   return `

@@ -36,6 +36,11 @@ export function appendUserMessage(session, text) {
   return { ...session, messages };
 }
 
+function withoutStatus(msg) {
+  const { statusText, ...rest } = msg; // eslint-disable-line no-unused-vars
+  return rest;
+}
+
 /** Fold one parsed SSE event (see sse.js) into the session, mutating only
  * the most recent (in-progress) assistant message. Unknown event types
  * and a missing/finalized last message are no-ops -- defensive against a
@@ -48,20 +53,26 @@ export function applyStreamEvent(session, event) {
 
   let next = last;
   switch (event?.type) {
+    case 'status':
+      // "Still working" signal while the model writes a long tool input: shown muted in the
+      // pending bubble, dropped as soon as text arrives or the turn ends.
+      if (typeof event.text !== 'string' || !event.text) return session;
+      next = { ...last, statusText: event.text };
+      break;
     case 'text':
-      next = { ...last, content: last.content + (event.text ?? '') };
+      next = { ...withoutStatus(last), content: last.content + (event.text ?? '') };
       break;
     case 'tool_use':
       next = { ...last, toolCalls: [...(last.toolCalls || []), { name: event.name, input: event.input }] };
       break;
     case 'done':
-      next = { ...last, status: 'done', stopReason: event.stop_reason };
+      next = { ...withoutStatus(last), status: 'done', stopReason: event.stop_reason };
       break;
     case 'refusal':
-      next = { ...last, status: 'refusal', content: last.content || REFUSAL_TEXT };
+      next = { ...withoutStatus(last), status: 'refusal', content: last.content || REFUSAL_TEXT };
       break;
     case 'error':
-      next = { ...last, status: 'error', error: event.error || 'Something went wrong.' };
+      next = { ...withoutStatus(last), status: 'error', error: event.error || 'Something went wrong.' };
       break;
     default:
       return session; // unrecognized event type -- ignore rather than throw
