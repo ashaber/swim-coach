@@ -79,7 +79,7 @@ def _gps_windows(series: dict) -> list[tuple[WorkoutLap, float, float]]:
     return windows
 
 
-def _course_laps(workout: Workout, series: dict, prefer_gps: bool) -> list[tuple[int, WorkoutLap, float, float]]:
+def course_laps(workout: Workout, series: dict, prefer_gps: bool) -> list[tuple[int, WorkoutLap, float, float]]:
     """Native device laps (double-trigger fragments merged into full laps) and GPS-detected laps, each filtered to similar distance from one start
     line; the preferred source wins when it yields 2+ laps, else the other is tried."""
     laps = merge_double_trigger_laps(workout.laps, series)
@@ -277,7 +277,7 @@ def build_course_sectors(workout: Workout, series: dict | None, prefer_gps: bool
     whose laps were never pressed)."""
     if not series or not series.get("t_s") or not has_channel(series, "dist_m"):
         return None
-    group = _course_laps(workout, series, prefer_gps)
+    group = course_laps(workout, series, prefer_gps)
     if not 2 <= len(group) <= MAX_LAPS:
         return None
     cut = []

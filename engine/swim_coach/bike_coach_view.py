@@ -266,6 +266,39 @@ def course_sectors_coach_view(cs: dict) -> dict:
     }
 
 
+RACE_EFFICIENCY_COACH_NOTE = (
+    "Efficiency across the race is the first thing to cover: lead the debrief with this lap-to-lap read "
+    "(the verdict, then the laps), and only then use the course sections to explain WHERE it changed. "
+    "EF is Normalized Power / average HR (watts per bpm) per lap; decoupling is the EF change from the "
+    "first half of the laps to the second half, flagged at 5% (an engineering default, not a validated "
+    "cutoff). A lap's HR lags power and rises with heat, caffeine and sleep debt, so name those before "
+    "calling it fitness. Flow is Garmin's proprietary score: read it only relative between laps."
+)
+
+
+def race_efficiency_coach_view(re: dict) -> dict:
+    """Verdict first, then one compact line per lap."""
+    laps = []
+    for lap in re.get("laps") or []:
+        line = f"Lap {lap['lap']}: {_clock(lap['time_s'])}"
+        for key, label, fmt in (("np_w", "NP", "{:.0f} W"), ("avg_hr", "HR", "{:.0f}"), ("ef", "EF", "{:.2f}"),
+                                ("speed_per_100w", "speed/100 W", "{:.2f} m/s"), ("avg_flow", "flow", "{:.1f}")):
+            if lap.get(key) is not None:
+                line += f", {label} " + fmt.format(lap[key])
+        laps.append(line)
+    t = re.get("trend") or {}
+    slopes = [f"{label} {t[key]:+.1f}/lap" for key, label in (
+        ("time_slope_s_per_lap", "time s"), ("power_slope_w_per_lap", "NP W"),
+        ("hr_slope_bpm_per_lap", "HR bpm"), ("ef_slope_per_lap", "EF")) if t.get(key) is not None]
+    return {
+        "coach_note": RACE_EFFICIENCY_COACH_NOTE,
+        "verdict": re["verdict"],
+        "laps": laps,
+        "slopes": ", ".join(slopes) or None,
+        "decoupling_pct": t.get("decoupling_pct"),
+    }
+
+
 def shape_ride_view(out: dict, analytics: WorkoutAnalytics) -> dict:
     """`out` is the field-restricted dump; returns it with the compact curve first and the
     intervals reordered and slimmed; a free ride's compact `free_ride` block leads everything.
@@ -283,12 +316,15 @@ def shape_ride_view(out: dict, analytics: WorkoutAnalytics) -> dict:
         dynamics["course_sectors"] = course_sectors_coach_view(out.pop("course_sectors"))
     out.pop("mtb_dynamics", None)
     out.pop("course_sectors", None)
+    efficiency = race_efficiency_coach_view(out.pop("race_efficiency")) if out.get("race_efficiency") else None
     if (out.get("intervals") or {}).get("race_start"):
         # A race leads with its summary and lap-to-lap block; the device/sector detail is the
         # drill-down after it, so the lap-to-lap read keeps the focus.
         out = {**out, **dynamics}
     else:
         out = {**dynamics, **out}
+    if efficiency:
+        out = {"race_efficiency": efficiency, **out}
     if out.get("free_ride"):
         out.pop("cardiac_drift_pct", None)  # no whole-ride drift verdict; the block carries steady-stretch drift
         out = {"free_ride": free_ride_coach_view(out.pop("free_ride")), **out}
