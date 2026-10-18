@@ -2,6 +2,7 @@ import './fonts.js';
 import { registerSW } from 'virtual:pwa-register';
 import log from './log.js';
 import { getDraft, setDraft, clearDraft } from './composerDrafts.js';
+import { shouldRefreshOnResume } from './resumeRefresh.js';
 import {
   renderApp, renderLoading, renderError, renderTabBar, renderCoachTab, renderSettingsTab,
   renderDashboardTab, renderBackendNeededNotice, renderUpdateBanner,
@@ -2600,6 +2601,23 @@ function historyFeedStatus() {
   return 'ready';
 }
 
+// When the workout list last loaded successfully; read by refreshOnResume().
+let historyLoadedAt = null;
+
+/** Refetch workouts, plan and load when the app returns to the foreground with stale data. */
+function refreshOnResume() {
+  const configured = isConfigured(state.settingsForm, state.identity);
+  if (!shouldRefreshOnResume({
+    visible: document.visibilityState === 'visible', online: state.online, configured,
+    lastLoadedAt: historyLoadedAt, now: Date.now(),
+  })) return;
+  log.info('app.resume_refresh', { athlete: state.identity?.athlete });
+  historyLoadedAt = Date.now();  // claim the refresh now so focus + visibilitychange don't double-fire
+  loadHistory();
+  loadPlan();
+  loadPlanLoad();
+}
+
 function shouldLoadHistoryNow() {
   return (state.workoutHistory.status === 'idle' || state.workoutHistory.status === 'error')
     && isConfigured(state.settingsForm, state.identity) && state.online;
@@ -2630,6 +2648,7 @@ async function loadHistory() {
     const sorted = sortWorkoutsNewestFirst(result.data);
     log.info('history.loaded', { athlete: identity.athlete, count: sorted.length });
     state.workoutHistory = { status: 'ready', data: sorted, error: null };
+    historyLoadedAt = Date.now();
     pruneDetailIdIfMissing(sorted);
   } else if (result.ok) {
     // Defensive: an unexpected (non-array) 2xx body shouldn't crash the
@@ -4747,6 +4766,8 @@ maybeRefreshIdentityAdminFlags();
 loadMyCoach();
 setInterval(conversationPollTick, CONVERSATION_POLL_INTERVAL_MS);
 document.addEventListener('visibilitychange', conversationPollTick);
+document.addEventListener('visibilitychange', refreshOnResume);
+window.addEventListener('focus', refreshOnResume);
 // loadPlan() above self-gates on isConfigured and is otherwise unconditional
 // at boot; loadHistory() has no such caller-independent self-gate -- until
 // now the only caller was setTab's Dashboard-tab branch, so history stayed
