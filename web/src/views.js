@@ -28,7 +28,7 @@ import {
   LIBRARY_SORTS, DEFAULT_LIBRARY_SORT, sortLibraryFiles, fileAddedDate, isNewFile, formatAddedLabel,
 } from './librarySort.js';
 import { expandStructure, actualPoints, sessionForWorkout, shapeChartGeometry } from './shape.js';
-import { buildCourseSectors, buildFreeRide, powerCurveView, buildMtbDynamics, buildRawAnalysis, effectiveKind, kindLabel, KIND_OPTIONS } from './analysis.js';
+import { buildCourseSectors, buildFreeRide, powerCurveView, buildMtbDynamics, buildRawAnalysis, effectiveKind, kindLabel, raceStartInfo, KIND_OPTIONS } from './analysis.js';
 import { sportHasPlannedDistance, sportCanPushToGarmin, sportUsesPace } from './sports.js';
 import {
   sportLabel, sourceBadge, formatWorkoutDistance, formatAnalyticsLine,
@@ -2937,7 +2937,25 @@ function formatSpeedKmh(mps) {
  * phases, or an informative reason there's neither) -- never silently
  * absent, so an athlete who expects race analysis and doesn't see it isn't
  * left guessing why. */
-function renderRaceAnalysisSection(workout, pacing) {
+function renderRaceStartControl(workout, pacing, edit, editable) {
+  const info = raceStartInfo(workout, pacing);
+  if (!info) return '';
+  const busy = edit?.status === 'submitting';
+  const error = edit?.error ? `<span class="hist-error">${esc(edit.error)}</span>` : '';
+  if (edit?.open && editable) {
+    return `
+      <p class="sub race-start-line">Race start (mm:ss):
+        <input type="text" class="race-start-input" data-a="race-start:input" inputmode="numeric" value="${esc(formatClock(info.seconds))}" aria-label="Race start, mm:ss" ${busy ? 'disabled' : ''}>
+        <button type="button" class="btn-ghost" data-a="race-start:save" ${busy ? 'disabled' : ''}>Save</button>
+        <button type="button" class="btn-ghost" data-a="race-start:cancel" ${busy ? 'disabled' : ''}>Cancel</button>
+        ${busy ? 'Re-analysing…' : ''} ${error}
+      </p>`;
+  }
+  const change = editable ? ' · <button type="button" class="btn-ghost" data-a="race-start:edit">Change</button>' : '';
+  return `<p class="sub race-start-line">Race start: ${esc(formatClock(info.seconds))} (${info.source})${change} ${error}</p>`;
+}
+
+function renderRaceAnalysisSection(workout, pacing, raceStartEdit = null, editable = false) {
   if (workout.sport !== 'bike' || effectiveKind(workout) !== 'race' || !pacing || pacing.status === 'idle') return '';
 
   let body;
@@ -2989,7 +3007,7 @@ function renderRaceAnalysisSection(workout, pacing) {
           <tbody>${phaseRows}</tbody>
         </table>
       </div>` : '';
-    body = lapsTable + phasesTable;
+    body = renderRaceStartControl(workout, pacing, raceStartEdit, editable) + lapsTable + phasesTable;
   }
 
   return `
@@ -3507,6 +3525,7 @@ export function renderWorkoutDetail(workout, {
   chat, online, rpeEdit = null, editable = false, pacing = null, raceDebriefs = [],
   viewerRole = 'athlete', coachChatSubmitting = false,
   weeks = [], ftpWatts = null, rawAnalysisOpen = null, kindEdit = null, selectedSector = null, mapView = null,
+  raceStartEdit = null,
 } = {}) {
   const badge = sourceBadge(workout.source);
   const shapeSection = renderCompletedShapeSection(workout, pacing, weeks, ftpWatts);
@@ -3528,7 +3547,7 @@ export function renderWorkoutDetail(workout, {
     ${renderPowerCurveSection(workout)}
     ${renderDetailAnalytics(workout.analytics)}
     ${renderIntervalsSection(workout.analytics?.intervals)}
-    ${renderRaceAnalysisSection(workout, pacing)}
+    ${renderRaceAnalysisSection(workout, pacing, raceStartEdit, editable)}
     ${rawAnalysisOpen === null ? '' : renderRawAnalysisSection(workout, pacing, rawAnalysisOpen)}
     ${renderLapsTable(workout.laps, workout.sport)}
     ${renderLengthsSummarySection(workout.lengths)}
