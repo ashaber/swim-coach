@@ -168,3 +168,29 @@ def test_without_gps_the_equal_distance_sectors_remain():
     series = {k: v for k, v in series.items() if k not in ("lat", "lng")}
     cs = build_course_sectors(workout, series)
     assert cs.sector_count == SECTOR_COUNT and all(s.kind is None for s in cs.sectors)
+
+
+# --- coach view ---------------------------------------------------------------------------------
+
+
+def test_coach_view_names_the_section_kind_and_what_precedes_it():
+    from swim_coach.bike_coach_view import course_sectors_coach_view
+
+    workout, series = _three_laps(slow={2: (120.0, 140.0, 3.0)})
+    view = course_sectors_coach_view(build_course_sectors(workout, series).model_dump())
+    assert view["top_loss_sectors"][0].startswith("Section S1 (straight, 150 m)")
+    assert "Sector " not in view["top_loss_sectors"][0]
+
+
+def test_coach_view_corner_line_has_speeds_and_flow_trend():
+    from swim_coach.bike_coach_view import course_sectors_coach_view
+
+    straight = {"sector": 1, "kind": "straight", "label": "S1", "length_m": 212.0}
+    corner = {"sector": 2, "kind": "corners", "label": "C1", "length_m": 90.0, "total_loss_s": 4.0, "mean_loss_s": 0.5,
+              "best_time_s": 12.0, "spread_s": 1.0, "entry_speed_mps": 7.5, "min_speed_mps": 3.1, "exit_speed_mps": 5.2,
+              "flow_by_lap": [4.0, 5.0, 6.5], "avg_speed_mps": 5.0}
+    cs = {"sector_count": 2, "sectors": [straight, corner], "top_loss_sectors": [2], "laps": [],
+          "fade": {"time_change_pct": 1.0}}
+    line = course_sectors_coach_view(cs)["top_loss_sectors"][0]
+    assert line.startswith("Section C1 (corner sequence, 90 m, after S1 (212 m straight))")
+    assert "speed in 7.5 / slowest 3.1 / out 5.2 m/s" in line and "flow 4.0 -> 6.5 across laps" in line

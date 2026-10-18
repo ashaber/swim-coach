@@ -151,9 +151,13 @@ MTB_COACH_NOTE = (
     "unpublished): compare laps with each other. No thresholds exist; read the trend."
 )
 COURSE_SECTORS_COACH_NOTE = (
-    "Each similar-distance lap is cut into equal-distance sectors (Coach judgment: 8), so sector N lines up "
-    "across laps without GPS. The data cannot name course features: ask the rider which feature each top "
-    "loss sector is (run-up, off-camber, sand, climb) before explaining it. Flow worsening while power holds "
+    "Each similar-distance lap is cut into course sections: with GPS the best lap is split into straights (S) "
+    "and corner sequences (C: corners within ~25 m of each other count as one), numbered in lap order, and "
+    "every lap is read through the same sections by track position (so odometer differences do not matter); "
+    "without GPS it is cut into 8 equal-distance sectors. The data cannot name what a section is: ask the "
+    "rider which feature each top loss section is (run-up, off-camber, sand, climb) before explaining it. "
+    "For a corner sequence, entry/min/exit speed show where the time went: slow exit speed costs time all the "
+    "way down the next straight. Flow worsening while power holds "
     "reads as technique slipping under fatigue, not fitness. Sector loss is measured against the rider's "
     "own best time through that sector on any lap (so it is never negative): a big spread means an "
     "inconsistent section, so ask what was different on the fast lap. Sector flow is Garmin's per-record "
@@ -205,6 +209,30 @@ def mtb_coach_view(m: dict) -> dict:
     return {k: v for k, v in out.items() if v not in (None, "", [], {})}
 
 
+def _section_line(s: dict, prev: dict | None, count: int) -> str:
+    """One top-loss line. Course-feature sections say what they are and what precedes them; the
+    equal-distance fallback keeps the plain "Sector N of M" wording."""
+    if s.get("kind"):
+        what = "corner sequence" if s["kind"] == "corners" else "straight"
+        after = f", after {prev['label']} ({prev['length_m']:.0f} m {'corner sequence' if prev['kind'] == 'corners' else 'straight'})" if prev else ""
+        head = f"Section {s['label']} ({what}, {s['length_m']:.0f} m{after})"
+    else:
+        head = f"Sector {s['sector']} of {count}"
+    line = f"{head}: loses {s['total_loss_s']:.1f}s total ({s['mean_loss_s']:.1f}s per lap) vs its own best {s['best_time_s']:.1f}s, spread {s.get('spread_s', 0):.1f}s"
+    if s.get("kind") == "corners" and s.get("entry_speed_mps") is not None:
+        line += f", speed in {s['entry_speed_mps']:.1f} / slowest {s['min_speed_mps']:.1f} / out {s['exit_speed_mps']:.1f} m/s"
+    elif s.get("kind") and s.get("avg_speed_mps") is not None:
+        line += f", avg {s['avg_speed_mps']:.1f} m/s"
+    by_lap = [f for f in s.get("flow_by_lap") or [] if f is not None]
+    if s.get("kind") == "corners" and len(by_lap) >= 2:
+        line += f", flow {by_lap[0]:.1f} -> {by_lap[-1]:.1f} across laps"
+    elif s.get("flow_vs_best") is not None:
+        line += f", flow {s['flow_vs_best']:+.2f} vs best"
+    if s.get("avg_grit") is not None:
+        line += f", grit {s['avg_grit']}"
+    return line
+
+
 def course_sectors_coach_view(cs: dict) -> dict:
     """Lap trend + the top loss sectors (the full sector table stays in the stored analytics)."""
     fade = cs.get("fade") or {}
@@ -219,16 +247,12 @@ def course_sectors_coach_view(cs: dict) -> dict:
         + (f", flow {lap['avg_flow']}" if lap.get("avg_flow") is not None else "")
         for lap in cs.get("laps") or []
     ]
-    by_n = {s["sector"]: s for s in cs.get("sectors") or []}
+    rows = cs.get("sectors") or []
+    by_n = {s["sector"]: (i, s) for i, s in enumerate(rows)}
     top = []
     for n in (cs.get("top_loss_sectors") or [])[:COACH_TOP_LOSS_SECTORS]:
-        s = by_n[n]
-        line = f"Sector {n} of {cs['sector_count']}: loses {s['total_loss_s']:.1f}s total ({s['mean_loss_s']:.1f}s per lap) vs its own best {s['best_time_s']:.1f}s, spread {s.get('spread_s', 0):.1f}s"
-        if s.get("flow_vs_best") is not None:
-            line += f", flow {s['flow_vs_best']:+.2f} vs best"
-        if s.get("avg_grit") is not None:
-            line += f", grit {s['avg_grit']}"
-        top.append(line)
+        i, s = by_n[n]
+        top.append(_section_line(s, rows[i - 1] if i and s.get("kind") else None, cs["sector_count"]))
     ideal = None
     if cs.get("ideal_lap_s") is not None:
         ideal = (f"Ideal lap {_clock(cs['ideal_lap_s'])} (best sectors combined); the best lap is "
