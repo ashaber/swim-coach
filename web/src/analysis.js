@@ -447,6 +447,17 @@ export function nextSector(current, tapped) {
   return current === tapped ? null : tapped;
 }
 
+const KIND_NAMES = { straight: 'straight', corners: 'corner sequence' };
+
+/** Short label for a section: the course-feature name ("C3" / "S2") when the analytics has one,
+ * else its number. */
+const sectionName = (row, fallback) => row?.label || String(fallback);
+
+/** "Section C3 (corner sequence)" for course-feature sections, "Sector 3" for equal-distance ones. */
+function sectionTitle(row, n) {
+  return row?.kind ? `Section ${row.label} (${KIND_NAMES[row.kind] || row.kind})` : `Sector ${n}`;
+}
+
 /** Loss tone per sector: the worst top-loss sector is `hot`, the other top-loss sectors `warm`,
  * everything else `neutral` (CSS maps the tones to colour tokens). */
 function sectorTones(cs) {
@@ -483,14 +494,17 @@ export function buildCourseMap(cs, selected = null, gestureView = null) {
   const full = { x: 0, y: 0, w: width, h: height };
   const sectors = track.map((t) => {
     const loss = bySector.get(t.sector);
+    const row = loss || { kind: t.kind, label: t.name };
     return {
       sector: t.sector,
+      name: sectionName(row, t.sector),
+      kind: row.kind || null,
       points: t.points.map((p) => `${X(p[0])},${Y(p[1])}`).join(' '),
       label: { x: X(t.label[0]), y: Y(t.label[1]) },
       tone: tones.get(t.sector) || 'neutral',
       selected: hasSelection && t.sector === selected,
       dim: hasSelection && t.sector !== selected,
-      aria: `Sector ${t.sector}${loss ? `, loses ${loss.total_loss_s.toFixed(1)} s in total` : ''}`,
+      aria: `${sectionTitle(row, t.sector)}${loss ? `, loses ${loss.total_loss_s.toFixed(1)} s in total` : ''}`,
     };
   });
   // A pinch/pan view wins; otherwise a selected sector is framed; otherwise the whole lap.
@@ -533,7 +547,9 @@ function buildSectorGrid(cs, selected) {
     ideal: `Ideal lap ${formatClock(ideal)} · best lap is ${tenths(Math.max(fastest - ideal, 0))} s slower`,
     sectors: best.map((b, k) => ({
       sector: k + 1,
-      label: `S${k + 1}`,
+      label: cs.sectors?.[k]?.label || `S${k + 1}`,
+      kind: cs.sectors?.[k]?.kind || null,
+      aria: sectionTitle(cs.sectors?.[k], k + 1),
       best: tenths(b),
       total: tenths(column(k).reduce((a, v) => a + v, 0)),
       spread: tenths(Math.max(...column(k))),
@@ -554,6 +570,22 @@ function buildSectorGrid(cs, selected) {
   };
 }
 
+function selectedSummary(picked, spread) {
+  const length = num(picked.length_m) ? `${picked.length_m.toFixed(0)} m, ` : '';
+  const head = picked.kind
+    ? `${sectionTitle(picked, picked.sector)}: ${length}best time`
+    : `Sector ${picked.sector}: best time`;
+  let line = `${head} ${picked.best_time_s.toFixed(1)} s, loses ${picked.total_loss_s.toFixed(1)} s in total (${picked.mean_loss_s.toFixed(1)} s per lap${spread}).`;
+  if (picked.kind === 'corners' && num(picked.entry_speed_mps) && num(picked.exit_speed_mps)) {
+    line += ` Speed in ${picked.entry_speed_mps.toFixed(1)}, slowest ${picked.min_speed_mps.toFixed(1)}, out ${picked.exit_speed_mps.toFixed(1)} m/s.`;
+  } else if (picked.kind && num(picked.avg_speed_mps)) {
+    line += ` Average ${picked.avg_speed_mps.toFixed(1)} m/s.`;
+  }
+  const flows = (picked.flow_by_lap || []).filter(num);
+  if (picked.kind === 'corners' && flows.length >= 2) line += ` Flow ${flows[0].toFixed(1)} to ${flows[flows.length - 1].toFixed(1)} across laps.`;
+  return line;
+}
+
 /** The "Course sectors" section model (`analytics.course_sectors`), or null when absent.
  * `selected` is the highlighted sector number (map and grid share it). */
 export function buildCourseSectors(workout, selected = null, gestureView = null) {
@@ -566,13 +598,15 @@ export function buildCourseSectors(workout, selected = null, gestureView = null)
   const bySector = new Map((cs.sectors || []).map((s) => [s.sector, s]));
   const picked = bySector.get(selected);
   const spread = picked && num(picked.spread_s) ? `, spread ${picked.spread_s.toFixed(1)} s` : '';
+  const featured = (cs.sectors || []).some((s) => s.kind);
   return {
     trend: trend.join(', '),
-    note: `Each lap is cut into ${cs.sector_count} equal-distance sectors; sector numbers line up across laps. Loss is measured against your own best time through that sector; a big spread means an inconsistent section, so ask what was different on the fast lap.`,
+    featured,
+    note: featured
+      ? `The best lap is split into straights (S) and corner sequences (C, corners close together ride as one); every lap is read through the same sections by position on the track. Loss is measured against your own best time through that section; a big spread means an inconsistent section, so ask what was different on the fast lap.`
+      : `Each lap is cut into ${cs.sector_count} equal-distance sectors; sector numbers line up across laps. Loss is measured against your own best time through that sector; a big spread means an inconsistent section, so ask what was different on the fast lap.`,
     map: buildCourseMap(cs, selected, gestureView),
-    selected: picked
-      ? `Sector ${picked.sector}: best time ${picked.best_time_s.toFixed(1)} s, loses ${picked.total_loss_s.toFixed(1)} s in total (${picked.mean_loss_s.toFixed(1)} s per lap${spread}).`
-      : null,
+    selected: picked ? selectedSummary(picked, spread) : null,
     laps: {
       columns: SECTOR_LAP_COLUMNS,
       rows: (cs.laps || []).map((l) => [
