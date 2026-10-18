@@ -36,7 +36,11 @@ def _rep(count: int, *steps: dict) -> dict:
     return {"kind": "repeat", "count": count, "steps": list(steps)}
 
 
-def _ids(items: list[dict], kind: str = "warmup") -> list[str]:
+def _ids(items: list[dict], kind: str = "warmup", race_min: float | None = 50.0) -> list[str]:
+    race = None if race_min is None else Session(
+        id=uuid.uuid4(), athlete_id=ATHLETE_ID, date=date(2026, 10, 17), sport="bike", source="ai_coach",
+        duration_min=race_min, intensity={"zone": "Z4"}, purpose="Race", kind="race",
+    )
     session = Session(
         id=uuid.uuid4(), athlete_id=ATHLETE_ID, date=date(2026, 10, 17), sport="bike", source="ai_coach",
         duration_min=45, intensity={"zone": "Z3"}, purpose="Race warm-up", kind=kind,
@@ -44,7 +48,7 @@ def _ids(items: list[dict], kind: str = "warmup") -> list[str]:
     )
     week = WeekPlan(
         id=uuid.uuid4(), athlete_id=ATHLETE_ID, iso_week="2026-W42", meso_block="race", focus="race",
-        target_volume_m=0, sessions=[session],
+        target_volume_m=0, sessions=[session] + ([race] if race else []),
     )
     report = check_week(week, None, _athlete(), recent_weeks=[])
     return [f.id.rsplit("-2026", 1)[0] for f in report.findings if f.id.startswith("race-warmup-")]
@@ -80,3 +84,24 @@ def test_untimed_step_is_flagged():
 
 def test_non_warmup_kind_is_ignored():
     assert _ids([_pw(600, 0.5, 0.7, "warmup")], kind="workout") == []
+
+
+def test_mid_length_race_gets_only_a_soft_note_without_priming():
+    assert _ids([_pw(600, 0.5, 0.7, "warmup")], race_min=120) == ["race-warmup-no-priming"]
+
+
+def test_mid_length_race_with_short_priming_effort_is_clean():
+    items = [_pw(600, 0.5, 0.7, "warmup"), _pw(90, 0.9, 0.95), _pw(120, 0.5, 0.54, "recovery")]
+    assert _ids(items, race_min=120) == []
+
+
+def test_ultra_race_is_never_flagged_for_missing_threshold_work():
+    assert _ids([_pw(900, 0.5, 0.6, "warmup")], race_min=480) == []
+
+
+def test_unknown_race_duration_gets_no_priming_finding():
+    assert _ids([_pw(900, 0.5, 0.6, "warmup")], race_min=None) == []
+
+
+def test_ultra_race_still_flags_rpe_only_steps():
+    assert _ids([_rpe(60)], race_min=480) == ["race-warmup-rpe-target"]

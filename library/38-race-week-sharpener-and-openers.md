@@ -55,7 +55,19 @@ study and neither prescribes this exact shape. **Confidence: medium.** **Test:**
 race HR still takes more than ~5 minutes to reach about 90% of LTHR after a warm-up
 of this shape, lengthen the race-pace efforts or finish the warm-up closer to the start.
 
-**Structure (a model, from a coach-tool warm-up the athlete used):**
+**Match the warm-up to the event class.** **`Coach judgment:`** The thresholds below are
+practitioner shapes, not sourced.
+
+- **(a) Short, maximal-start (CX, XC short track, crits; under ~75 min at or near
+  threshold):** the race-pace priming below. This is the class the rest of this section details.
+- **(b) Mid-length (XC, ~75-180 min):** lighter priming: easy spin plus one or two 1-2 min
+  efforts at ~90% FTP and a couple of short pickups; no full race-pace block.
+- **(c) Endurance / ultra (multi-hour MTB, gravel, long road; over ~3 h):** an easy spin and a
+  couple of brief pickups, or essentially none. Start conservatively; the first km is the
+  warm-up. Prioritise fuelling and glycogen sparing over priming. Never prescribe threshold
+  work as a warm-up here.
+
+**Structure for class (a) (a model, from a coach-tool warm-up the athlete used):**
 
 - 12 min ramp, 50% to 70% FTP.
 - 2 x [3 min at 91-96% FTP (race pace; aim HR low/mid 160s, about 90% of LTHR) / 2 min at 52%].
@@ -71,9 +83,12 @@ minutes and sip carb drink. Pre-riding the course can count as the first part.
 targets on short steps render as unreadable scrolling text on the Garmin, and an untimed
 "warmup" step gives no cue. Record the warm-up as its own activity, separate from the race file.
 
-`plan_check.check_week` flags (advisory) a `warmup`-kind bike session with no work step of
-at least `RACE_WARMUP_EFFORT_MIN_S = 120` s at `RACE_WARMUP_EFFORT_MIN_FRAC_FTP = 0.88` of
-FTP, plus steps with RPE-only targets or no duration.
+`plan_check.check_week` (advisory) reads the class from the same-day `race` session's planned
+duration. Class (a), under `RACE_WARMUP_SHORT_MAX_MIN = 75`: no work step of at least
+`RACE_WARMUP_EFFORT_MIN_S = 120` s at `RACE_WARMUP_EFFORT_MIN_FRAC_FTP = 0.88` of FTP. Class (b),
+up to `RACE_WARMUP_MID_MAX_MIN = 180`: a low-severity note if no step of
+`RACE_WARMUP_MID_EFFORT_MIN_S = 60` s reaches that power. Class (c), or no race session that day:
+no priming finding. In every class, steps with RPE-only targets or no duration are flagged.
 
 ## The cyclocross "hard start"
 

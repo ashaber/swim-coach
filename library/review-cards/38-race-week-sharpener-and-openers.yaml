@@ -16,9 +16,9 @@ cards:
   content_hash: d6ec07d67e9908d09d107b07e3cc3470183f719379d71edfadeefa0f3b1aca47
 - section: race-day-warm-up-cx-short-course-race
   heading: Race-day warm-up (CX / short-course race)
-  summary: Openers-only warm-ups prime legs, not HR. Add 2+ race-pace efforts (2-4 min, ~90-96% FTP) plus short openers, watt bands and timed steps, ending 5-10 min pre-start.
+  summary: Match warm-up to event class. Short maximal-start races need 2+ race-pace efforts (~90-96% FTP) plus openers; mid-length lighter; ultra easy spin only. Watt bands, timed steps.
   recommendation: Author the race warm-up as its own warmup session with race-pace efforts and watt bands on every step.
-  content_hash: 0edf14bc4bad70203f68c9f47da08e01c66689624ef66787ff768eb12e1134af
+  content_hash: ed7de4d46ca52127ff774ddb5b43050bd6043895f1d097c54ab4187b6f0f2821
 - section: the-cyclocross-hard-start
   heading: The cyclocross "hard start"
   summary: 'Coach judgment: rehearse lap 1 as one continuous 10-20 s all-out launch straight into 2-4 min at threshold/race

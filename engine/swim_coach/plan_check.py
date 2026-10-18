@@ -1297,7 +1297,7 @@ def check_week(
     findings.extend(_check_bike_swim_basis(week))
     for session in week.sessions:
         findings.extend(_check_warmup_and_primer(session, athlete))
-        findings.extend(_check_race_warmup(session, athlete))
+        findings.extend(_check_race_warmup(session, athlete, week))
 
     findings = _rank_and_cap(findings)
     return PlanCheckReport(verdict=_verdict_from_findings(findings), findings=findings)
@@ -1546,10 +1546,30 @@ RACE_WARMUP_EFFORT_MIN_FRAC_FTP = 0.88  # ...at roughly 88%+ FTP (the ask is 91-
 RACE_WARMUP_EFFORT_MIN_ZONE_RANK = 4  # a zone-only target counts from Z4 up
 
 
-def _is_race_pace_effort(step: WorkoutStep, ftp_watts: float | None) -> bool:
+# Event classes by planned race duration (Coach judgment, Andrew 2026-10-17; library/38):
+# short maximal-start (CX, XC short track, crit) < 75 min -> race-pace priming is required;
+# mid-length 75-180 min -> a lighter priming effort is suggested; endurance/ultra > 180 min ->
+# never flagged for lacking threshold work (the race's first km is the warm-up).
+RACE_WARMUP_SHORT_MAX_MIN = 75.0
+RACE_WARMUP_MID_MAX_MIN = 180.0
+RACE_WARMUP_MID_EFFORT_MIN_S = 60.0
+
+
+def _race_duration_min(session: Session, week: WeekPlan) -> float | None:
+    """Planned duration of the same-day, same-sport `race` session, or None if the week has none."""
+    races = [
+        s for s in week.sessions
+        if s.kind == "race" and s.sport == session.sport and s.date == session.date
+    ]
+    return max((r.duration_min for r in races), default=None)
+
+
+def _is_race_pace_effort(
+    step: WorkoutStep, ftp_watts: float | None, min_s: float = RACE_WARMUP_EFFORT_MIN_S
+) -> bool:
     if step.duration_kind != "time_s" or not step.duration_value or step.target is None:
         return False
-    if step.duration_value < RACE_WARMUP_EFFORT_MIN_S:
+    if step.duration_value < min_s:
         return False
     if step.target.basis == "power_w" and ftp_watts:
         bounds = [b for b in (step.target.low, step.target.high) if b is not None]
@@ -1558,7 +1578,7 @@ def _is_race_pace_effort(step: WorkoutStep, ftp_watts: float | None) -> bool:
     return rank is not None and rank >= RACE_WARMUP_EFFORT_MIN_ZONE_RANK
 
 
-def _check_race_warmup(session: Session, athlete: Athlete) -> list[PlanCheckFinding]:
+def _check_race_warmup(session: Session, athlete: Athlete, week: WeekPlan) -> list[PlanCheckFinding]:
     """Advisory only. A `warmup`-kind bike session needs numeric targets and explicit durations on
     every step, and at least one race-pace effort so HR reaches race level before the start."""
     if session.sport != "bike" or session.kind != "warmup" or session.structured is None:
@@ -1592,6 +1612,26 @@ def _check_race_warmup(session: Session, athlete: Athlete) -> list[PlanCheckFind
                 fix="Give every warm-up step a time in seconds so it ends 5-10 min before the start (library/38).",
             )
         )
+    race_min = _race_duration_min(session, week)
+    if race_min is None or race_min > RACE_WARMUP_MID_MAX_MIN:
+        return findings  # class undeterminable or endurance/ultra: no priming requirement
+    if race_min >= RACE_WARMUP_SHORT_MAX_MIN:
+        if not any(
+            _is_race_pace_effort(s, athlete.ftp_watts, RACE_WARMUP_MID_EFFORT_MIN_S) for s in steps
+        ):
+            findings.append(
+                PlanCheckFinding(
+                    id=f"race-warmup-no-priming-{day}",
+                    severity="low",
+                    evidence=(
+                        f"The {day} race warm-up (race ~{race_min:.0f} min) has no step of at least "
+                        f"{RACE_WARMUP_MID_EFFORT_MIN_S:.0f} s at {RACE_WARMUP_EFFORT_MIN_FRAC_FTP*100:.0f}% FTP or more."
+                    ),
+                    consequence="A mid-length race still benefits from a brief race-level priming effort (library/38).",
+                    fix="Add one or two 1-2 min efforts at ~90% FTP, with easy spinning between.",
+                )
+            )
+        return findings
     if not any(_is_race_pace_effort(s, athlete.ftp_watts) for s in steps):
         findings.append(
             PlanCheckFinding(
