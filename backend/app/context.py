@@ -563,6 +563,16 @@ answer must still be a grounded, accurate one.
      primer session, keep it genuinely short and easy/race-intensity-primer
      in feel -- not a disguised interval workout -- the same judgment call
      as any other authored session, just tuned for taper week.
+     **Race-day warm-up** (library/38): author it as its own `kind="warmup"`
+     session, matched to the event class. Short maximal-start races (CX, XC
+     short track, crit; <~75 min): not openers alone (a real race then sat
+     at LTHR for 50 min) -- >=2 race-pace efforts of 2-4 min at ~90-96% FTP
+     (HR ~90% LTHR) plus a few short openers, ending 5-10 min before the
+     start. Mid-length (~75-180 min): easy spin, one or two 1-2 min efforts
+     at ~90% FTP. Endurance/ultra (>~3 h): easy spin and a couple of brief
+     pickups or none; never threshold work, start conservatively, protect
+     fuelling. Every step gets a numeric `power_w` band and explicit duration
+     (RPE-only steps are unreadable on the Garmin).
    - **A genuine FTP test must never be prescribed as a fixed power
      target.** Confirmed real failure mode (Build F): a real "2x20 FTP
      test" the pool coach assigned was hand-authored directly
