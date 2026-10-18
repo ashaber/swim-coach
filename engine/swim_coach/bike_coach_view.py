@@ -156,8 +156,16 @@ COURSE_SECTORS_COACH_NOTE = (
     "loss sector is (run-up, off-camber, sand, climb) before explaining it. Flow worsening while power holds "
     "reads as technique slipping under fatigue, not fitness. Sector loss is measured against the rider's "
     "own best time through that sector on any lap (so it is never negative): a big spread means an "
-    "inconsistent section, so ask what was different on the fast lap."
+    "inconsistent section, so ask what was different on the fast lap. Sector flow is Garmin's per-record "
+    "flow averaged over the sector: approximate (Garmin's formula is unpublished), so read it relative "
+    "between laps of the same sector, never as an absolute. Verified on a real race file: per-second flow is "
+    "~0 on straights (58% of samples), rises with turning rate (mean ~2 below 10 deg/s, ~13 at 30-60 deg/s, "
+    "~20 above 60 deg/s), is higher at lower speed, and has ~1-2 s memory -- so sector flow reflects that "
+    "sector's cornering and how cleanly it was ridden. Compare the SAME sector across laps, never different "
+    "sectors. Grit per second showed no relation to turning, speed or power (|r| < 0.11): treat it as course "
+    "roughness/difficulty."
 )
+COACH_TOP_LOSS_SECTORS = 3
 COACH_TOP_JUMPS = 3
 
 
@@ -213,7 +221,7 @@ def course_sectors_coach_view(cs: dict) -> dict:
     ]
     by_n = {s["sector"]: s for s in cs.get("sectors") or []}
     top = []
-    for n in cs.get("top_loss_sectors") or []:
+    for n in (cs.get("top_loss_sectors") or [])[:COACH_TOP_LOSS_SECTORS]:
         s = by_n[n]
         line = f"Sector {n} of {cs['sector_count']}: loses {s['total_loss_s']:.1f}s total ({s['mean_loss_s']:.1f}s per lap) vs its own best {s['best_time_s']:.1f}s, spread {s.get('spread_s', 0):.1f}s"
         if s.get("flow_vs_best") is not None:
@@ -251,7 +259,12 @@ def shape_ride_view(out: dict, analytics: WorkoutAnalytics) -> dict:
         dynamics["course_sectors"] = course_sectors_coach_view(out.pop("course_sectors"))
     out.pop("mtb_dynamics", None)
     out.pop("course_sectors", None)
-    out = {**dynamics, **out}
+    if (out.get("intervals") or {}).get("race_start"):
+        # A race leads with its summary and lap-to-lap block; the device/sector detail is the
+        # drill-down after it, so the lap-to-lap read keeps the focus.
+        out = {**out, **dynamics}
+    else:
+        out = {**dynamics, **out}
     if out.get("free_ride"):
         out.pop("cardiac_drift_pct", None)  # no whole-ride drift verdict; the block carries steady-stretch drift
         out = {"free_ride": free_ride_coach_view(out.pop("free_ride")), **out}
