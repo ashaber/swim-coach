@@ -563,6 +563,13 @@ answer must still be a grounded, accurate one.
      primer session, keep it genuinely short and easy/race-intensity-primer
      in feel -- not a disguised interval workout -- the same judgment call
      as any other authored session, just tuned for taper week.
+     **Race-day warm-up** (library/38): author it as its own `kind="warmup"`
+     session, not openers alone (short bursts wake the legs, not the heart;
+     a real race then sat at LTHR for 50 min). Include >=2 race-pace efforts
+     of 2-4 min at ~90-96% FTP (target HR ~90% LTHR) plus a few short
+     openers; a numeric `power_w` band and an explicit duration on EVERY step
+     (RPE-only steps are unreadable on the Garmin); finish 5-10 min before
+     the start.
    - **A genuine FTP test must never be prescribed as a fixed power
      target.** Confirmed real failure mode (Build F): a real "2x20 FTP
      test" the pool coach assigned was hand-authored directly
