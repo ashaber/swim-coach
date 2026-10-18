@@ -101,7 +101,7 @@ def test_9_26_reps_are_hr_scored(r926):
         for banned in ("under target", "faded", "built through"):
             assert banned not in e.verdict
         assert "effort held" in e.verdict and "NP" in e.verdict and "LTHR" in e.verdict
-        assert e.np_w > e.avg_w and e.time_ge90_lthr_s > 200
+        assert e.np_w >= e.avg_w and e.time_ge90_lthr_s > 200  # full-window NP: rounds equal on a steady rep
     assert [round(e.pct_lthr) for e in technical] == [90, 93, 94]
     assert r926.technical_reps == 3 and r926.hr_rise_across_reps_bpm == 8.0
     assert r926.fade_across_reps_pct is None
