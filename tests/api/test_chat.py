@@ -129,6 +129,7 @@ def test_request_shape_includes_tools(client, fake_claude_chat_factory) -> None:
         "get_race_debriefs",
         "set_workout_chat_muted",
         "set_workout_kind",
+        "set_race_start",
     }
 
 

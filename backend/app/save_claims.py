@@ -59,6 +59,7 @@ WRITE_TOOLS: dict[str, str] = {
     "retire_athlete_note": "retired",
     "reschedule_session": "rescheduled",
     "set_workout_kind": "updated",
+    "set_race_start": "updated",
     "set_race_week_checklist": "persisted",
     "update_race_checklist": "updated",
 }
