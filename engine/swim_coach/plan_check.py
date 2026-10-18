@@ -1297,6 +1297,7 @@ def check_week(
     findings.extend(_check_bike_swim_basis(week))
     for session in week.sessions:
         findings.extend(_check_warmup_and_primer(session, athlete))
+        findings.extend(_check_race_warmup(session, athlete, week))
 
     findings = _rank_and_cap(findings)
     return PlanCheckReport(verdict=_verdict_from_findings(findings), findings=findings)
@@ -1532,6 +1533,119 @@ def _check_warmup_and_primer(session: Session, athlete: Athlete) -> list[PlanChe
                     "2 min easy before rep 1 (one 20-30 s primer for a ~45 min session). Use a steady step, not an "
                     "interval step, so it is not read as a rep."
                 ),
+            )
+        )
+    return findings
+
+
+# --- Race-day warm-up (library/38-race-week-sharpener-and-openers.md, "Race-day warm-up") ---
+# Coach judgment (Andrew, 2026-10-17: an openers-only warm-up primed the legs but race HR then
+# sat at 175-178 bpm, about LTHR, for 50 min); thresholds are practitioner shapes, not study results.
+RACE_WARMUP_EFFORT_MIN_S = 120.0  # a race-pace effort in the warm-up lasts at least 2 min
+RACE_WARMUP_EFFORT_MIN_FRAC_FTP = 0.88  # ...at roughly 88%+ FTP (the ask is 91-96%)
+RACE_WARMUP_EFFORT_MIN_ZONE_RANK = 4  # a zone-only target counts from Z4 up
+
+
+# Event classes by planned race duration (Coach judgment, Andrew 2026-10-17; library/38):
+# short maximal-start (CX, XC short track, crit) < 75 min -> race-pace priming is required;
+# mid-length 75-180 min -> a lighter priming effort is suggested; endurance/ultra > 180 min ->
+# never flagged for lacking threshold work (the race's first km is the warm-up).
+RACE_WARMUP_SHORT_MAX_MIN = 75.0
+RACE_WARMUP_MID_MAX_MIN = 180.0
+RACE_WARMUP_MID_EFFORT_MIN_S = 60.0
+
+
+def _race_duration_min(session: Session, week: WeekPlan) -> float | None:
+    """Planned duration of the same-day, same-sport `race` session, or None if the week has none."""
+    races = [
+        s for s in week.sessions
+        if s.kind == "race" and s.sport == session.sport and s.date == session.date
+    ]
+    return max((r.duration_min for r in races), default=None)
+
+
+def _is_race_pace_effort(
+    step: WorkoutStep, ftp_watts: float | None, min_s: float = RACE_WARMUP_EFFORT_MIN_S
+) -> bool:
+    if step.duration_kind != "time_s" or not step.duration_value or step.target is None:
+        return False
+    if step.duration_value < min_s:
+        return False
+    if step.target.basis == "power_w" and ftp_watts:
+        bounds = [b for b in (step.target.low, step.target.high) if b is not None]
+        return bool(bounds) and sum(bounds) / len(bounds) >= RACE_WARMUP_EFFORT_MIN_FRAC_FTP * ftp_watts
+    rank = _zone_rank(step, ftp_watts)
+    return rank is not None and rank >= RACE_WARMUP_EFFORT_MIN_ZONE_RANK
+
+
+def _check_race_warmup(session: Session, athlete: Athlete, week: WeekPlan) -> list[PlanCheckFinding]:
+    """Advisory only. A `warmup`-kind bike session needs numeric targets and explicit durations on
+    every step, and at least one race-pace effort so HR reaches race level before the start."""
+    if session.sport != "bike" or session.kind != "warmup" or session.structured is None:
+        return []
+    steps = _leaf_steps(session.structured.items)
+    day = session.date.isoformat()
+    findings: list[PlanCheckFinding] = []
+
+    bad_target = [s for s in steps if s.target is None or s.target.basis in ("rpe", "open")]
+    if bad_target:
+        findings.append(
+            PlanCheckFinding(
+                id=f"race-warmup-rpe-target-{day}",
+                severity="medium",
+                evidence=(
+                    f"The {day} race warm-up has {len(bad_target)} step(s) with no numeric power target "
+                    "(RPE or open)."
+                ),
+                consequence="RPE-only targets on short steps render as unreadable scrolling text on the Garmin.",
+                fix="Give every step a power band in watts (basis power_w), including the easy recoveries (library/38).",
+            )
+        )
+    untimed = [s for s in steps if s.duration_kind != "time_s" or not s.duration_value]
+    if untimed:
+        findings.append(
+            PlanCheckFinding(
+                id=f"race-warmup-untimed-{day}",
+                severity="medium",
+                evidence=f"The {day} race warm-up has {len(untimed)} step(s) without an explicit duration.",
+                consequence="An untimed warm-up step gives no cue to start the race-pace effort or finish on time.",
+                fix="Give every warm-up step a time in seconds so it ends 5-10 min before the start (library/38).",
+            )
+        )
+    race_min = _race_duration_min(session, week)
+    if race_min is None or race_min > RACE_WARMUP_MID_MAX_MIN:
+        return findings  # class undeterminable or endurance/ultra: no priming requirement
+    if race_min >= RACE_WARMUP_SHORT_MAX_MIN:
+        if not any(
+            _is_race_pace_effort(s, athlete.ftp_watts, RACE_WARMUP_MID_EFFORT_MIN_S) for s in steps
+        ):
+            findings.append(
+                PlanCheckFinding(
+                    id=f"race-warmup-no-priming-{day}",
+                    severity="low",
+                    evidence=(
+                        f"The {day} race warm-up (race ~{race_min:.0f} min) has no step of at least "
+                        f"{RACE_WARMUP_MID_EFFORT_MIN_S:.0f} s at {RACE_WARMUP_EFFORT_MIN_FRAC_FTP*100:.0f}% FTP or more."
+                    ),
+                    consequence="A mid-length race still benefits from a brief race-level priming effort (library/38).",
+                    fix="Add one or two 1-2 min efforts at ~90% FTP, with easy spinning between.",
+                )
+            )
+        return findings
+    if not any(_is_race_pace_effort(s, athlete.ftp_watts) for s in steps):
+        findings.append(
+            PlanCheckFinding(
+                id=f"race-warmup-no-race-pace-{day}",
+                severity="medium",
+                evidence=(
+                    f"The {day} race warm-up has no work step of at least {RACE_WARMUP_EFFORT_MIN_S:.0f} s at "
+                    f"{RACE_WARMUP_EFFORT_MIN_FRAC_FTP*100:.0f}% FTP or more."
+                ),
+                consequence=(
+                    "Race warm-up has no race-pace effort -- HR may not reach race level before the start "
+                    "(library/38); short openers prime the legs, not the heart and lungs."
+                ),
+                fix="Add 2 x 3 min at 91-96% FTP (HR about 90% LTHR) with 2 min easy between, then the short openers.",
             )
         )
     return findings

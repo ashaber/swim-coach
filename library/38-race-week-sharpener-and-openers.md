@@ -38,6 +38,58 @@ readiness. Skipping the sharpener because "openers are coming" leaves the
 last real intensity a week or more out; making the openers hard enough to be
 a stimulus spends freshness the day before the race.
 
+## Race-day warm-up (CX / short-course race)
+
+**UNREVIEWED**, added 2026-10-17. Real incident: an openers-only warm-up (short
+bursts) primed the legs but not the heart and lungs; race HR then sat at 175-178 bpm
+(about LTHR) for 50 minutes, so the first minutes paid for the missing HR ramp.
+
+**Purpose.** Raise HR and VO2 toward race level before the gun, not only wake the legs.
+
+`[ADAPTED: general-endurance]` Bishop (2003, "Warm up II: performance changes following
+active warm up and how to structure the warm up", *Sports Medicine*) reviews active
+warm-ups improving short, high-intensity performance, partly through higher muscle
+temperature and a faster oxygen-uptake response. Burnley, Doust & Jones (2002) found
+prior heavy exercise speeds VO2 kinetics in the next bout. Neither is a cyclocross
+study and neither prescribes this exact shape. **Confidence: medium.** **Test:** if
+race HR still takes more than ~5 minutes to reach about 90% of LTHR after a warm-up
+of this shape, lengthen the race-pace efforts or finish the warm-up closer to the start.
+
+**Match the warm-up to the event class.** **`Coach judgment:`** The thresholds below are
+practitioner shapes, not sourced.
+
+- **(a) Short, maximal-start (CX, XC short track, crits; under ~75 min at or near
+  threshold):** the race-pace priming below. This is the class the rest of this section details.
+- **(b) Mid-length (XC, ~75-180 min):** lighter priming: easy spin plus one or two 1-2 min
+  efforts at ~90% FTP and a couple of short pickups; no full race-pace block.
+- **(c) Endurance / ultra (multi-hour MTB, gravel, long road; over ~3 h):** an easy spin and a
+  couple of brief pickups, or essentially none. Start conservatively; the first km is the
+  warm-up. Prioritise fuelling and glycogen sparing over priming. Never prescribe threshold
+  work as a warm-up here.
+
+**Structure for class (a) (a model, from a coach-tool warm-up the athlete used):**
+
+- 12 min ramp, 50% to 70% FTP.
+- 2 x [3 min at 91-96% FTP (race pace; aim HR low/mid 160s, about 90% of LTHR) / 2 min at 52%].
+- 3 x [20 s free/hard burst / 1 min 40 s at 50%].
+- 5 min at 50%.
+
+**`Coach judgment:`** The race-pace efforts (at least 2, each 2-4 min at about 90-96% FTP)
+are what carry HR up; the short bursts are the openers, not the warm-up. Finish 5-10
+minutes before the start and keep rolling; if staging drags, add a ~10 s surge every few
+minutes and sip carb drink. Pre-riding the course can count as the first part.
+
+**`Coach judgment:`** Give every step a numeric power band and an explicit duration. RPE-only
+targets on short steps render as unreadable scrolling text on the Garmin, and an untimed
+"warmup" step gives no cue. Record the warm-up as its own activity, separate from the race file.
+
+`plan_check.check_week` (advisory) reads the class from the same-day `race` session's planned
+duration. Class (a), under `RACE_WARMUP_SHORT_MAX_MIN = 75`: no work step of at least
+`RACE_WARMUP_EFFORT_MIN_S = 120` s at `RACE_WARMUP_EFFORT_MIN_FRAC_FTP = 0.88` of FTP. Class (b),
+up to `RACE_WARMUP_MID_MAX_MIN = 180`: a low-severity note if no step of
+`RACE_WARMUP_MID_EFFORT_MIN_S = 60` s reaches that power. Class (c), or no race session that day:
+no priming finding. In every class, steps with RPE-only targets or no duration are flagged.
+
 ## The cyclocross "hard start"
 
 **`Coach judgment:`** Rehearse the lap-1 launch-then-settle as ONE
