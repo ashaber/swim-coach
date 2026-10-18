@@ -38,10 +38,10 @@ def _fixture(name: str):
 
 
 def _without_dynamics(analytics) -> dict:
-    """The dump minus the MTB-dynamics blocks (added after the goldens were pinned); these
+    """The dump minus the MTB-dynamics and race-efficiency blocks (added after the goldens were pinned); these
     fixtures carry no grit/flow, so both must be absent."""
     assert analytics.mtb_dynamics is None
-    return analytics.model_dump(mode="json", exclude={"mtb_dynamics", "course_sectors"})
+    return analytics.model_dump(mode="json", exclude={"mtb_dynamics", "course_sectors", "race_efficiency"})
 
 
 # --- golden: the new path reproduces the old one -------------------------------------------
