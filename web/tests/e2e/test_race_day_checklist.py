@@ -193,9 +193,18 @@ def test_remove_item_persists_and_is_a_separate_tap_target(env):
     _open_overlay(page)
     page.click('.rd-tag[data-tag="wet"]')
     page.wait_for_selector('.rd-item:has-text("Shoe covers")')
-    box = page.locator('[aria-label="Remove Shoe covers"]').bounding_box()
-    assert box['width'] >= 44 and box['height'] >= 44
-    page.click('[aria-label="Remove Shoe covers"]')
+    # the tag tap renders optimistically, then again when its PATCH returns: measure only after
+    # that second render, or the button can detach mid-measurement (flaky in CI)
+    for _ in range(50):
+        if backend.plan['active_tags'] == ['wet']:
+            break
+        page.wait_for_timeout(50)
+    page.wait_for_load_state('networkidle')
+    remove = page.locator('.rd-del[aria-label="Remove Shoe covers"]')
+    remove.wait_for(state='visible')
+    box = remove.bounding_box()
+    assert box is not None and box['width'] >= 44 and box['height'] >= 44
+    remove.click()
     page.wait_for_selector('.rd-item:has-text("Shoe covers")', state='detached')
     page.wait_for_timeout(300)
     assert ('PATCH', '/api/race-day/plan1/checklist', {'remove': ['covers']}) in backend.requests
