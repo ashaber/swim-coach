@@ -3,7 +3,7 @@ manual tool loop, streams text back to the caller as SSE-framed chunks.
 
 Verified-current API usage (see this build's task brief for the exact,
 checked patterns):
-  - `client.messages.stream(model=..., max_tokens=MAX_TOKENS, system=[...],
+  - `client.messages.stream(model=..., max_tokens=settings.claude_max_tokens, system=[...],
     messages=[...], tools=[...])` as a context manager; `stream.text_stream`
     yields text deltas, `stream.get_final_message()` returns the full
     message (content blocks, stop_reason, usage) once the stream ends.
@@ -51,15 +51,14 @@ STREAM_DROPPED_MESSAGE = (
 # zero text (seen in prod 2026-07-15: coach_smoke prompts b/c returned empty
 # replies with stop_reason=max_tokens at exactly 2048 output tokens; Opus 4.8
 # never hit this because omitted/disabled thinking left the full budget to
-# text). 16384 leaves generous thinking headroom while still bounding the
-# worst-case per-message output spend.
-MAX_TOKENS = 16384
+# text). The cap (Settings.claude_max_tokens, env CLAUDE_MAX_TOKENS, default 32000) must also hold a
+# whole tool call: 2026-10-18 a 2-week plan hit the old 16384 cap.
 
 # Appended verbatim to the streamed text of any turn whose `stop_reason` is
 # `max_tokens`, so a truncated answer is NEVER silent in the PWA (prod
 # 2026-09-10: a "redraft this week" turn hit max_tokens at exactly 16384
 # output tokens and the PWA showed a cut-off answer with no indication).
-# The ceiling is deliberately NOT being raised -- every hit is instead made
+# Every hit is made
 # visible here and logged (see `_run_turns`) as a signal to review chunking/
 # optimization for that path (Andrew's direction). Plain-ASCII spine
 # ("cut off at the token limit") so it survives SSE JSON-encoding for
@@ -92,7 +91,7 @@ def build_request_kwargs(
     tests can assert on its shape without touching the network."""
     kwargs: dict[str, Any] = {
         "model": settings.claude_model,
-        "max_tokens": MAX_TOKENS,
+        "max_tokens": settings.claude_max_tokens,
         "system": system,
         "messages": messages,
     }
