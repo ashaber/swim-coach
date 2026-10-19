@@ -3,6 +3,8 @@ end the turn with a terminal `error` event instead of escaping the generator."""
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import anthropic
 import httpx
 import pytest
@@ -21,9 +23,8 @@ class _DroppingStream:
     def __exit__(self, *exc: object) -> bool:
         return False
 
-    @property
-    def text_stream(self):
-        yield "partial "
+    def __iter__(self):
+        yield SimpleNamespace(type="text", text="partial ")
         raise self._exc
 
 

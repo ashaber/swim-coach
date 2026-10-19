@@ -3,9 +3,9 @@ manual tool loop, streams text back to the caller as SSE-framed chunks.
 
 Verified-current API usage (see this build's task brief for the exact,
 checked patterns):
-  - `client.messages.stream(model=..., max_tokens=MAX_TOKENS, system=[...],
-    messages=[...], tools=[...])` as a context manager; `stream.text_stream`
-    yields text deltas, `stream.get_final_message()` returns the full
+  - `client.messages.stream(model=..., max_tokens=settings.claude_max_tokens, system=[...],
+    messages=[...], tools=[...])` as a context manager; iterating the stream
+    yields events (`text`, `content_block_start`, `input_json`), `stream.get_final_message()` returns the full
     message (content blocks, stop_reason, usage) once the stream ends.
   - Never pass `temperature`, `top_p`, or `top_k` -- 400 on Sonnet 5.
   - `thinking` is passed EXPLICITLY: `{"type": "adaptive"}` for
@@ -20,6 +20,7 @@ checked patterns):
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Callable, Iterator
 
 import anthropic
@@ -51,15 +52,14 @@ STREAM_DROPPED_MESSAGE = (
 # zero text (seen in prod 2026-07-15: coach_smoke prompts b/c returned empty
 # replies with stop_reason=max_tokens at exactly 2048 output tokens; Opus 4.8
 # never hit this because omitted/disabled thinking left the full budget to
-# text). 16384 leaves generous thinking headroom while still bounding the
-# worst-case per-message output spend.
-MAX_TOKENS = 16384
+# text). The cap (Settings.claude_max_tokens, env CLAUDE_MAX_TOKENS, default 32000) must also hold a
+# whole tool call: 2026-10-18 a 2-week plan hit the old 16384 cap.
 
 # Appended verbatim to the streamed text of any turn whose `stop_reason` is
 # `max_tokens`, so a truncated answer is NEVER silent in the PWA (prod
 # 2026-09-10: a "redraft this week" turn hit max_tokens at exactly 16384
 # output tokens and the PWA showed a cut-off answer with no indication).
-# The ceiling is deliberately NOT being raised -- every hit is instead made
+# Every hit is made
 # visible here and logged (see `_run_turns`) as a signal to review chunking/
 # optimization for that path (Andrew's direction). Plain-ASCII spine
 # ("cut off at the token limit") so it survives SSE JSON-encoding for
@@ -92,7 +92,7 @@ def build_request_kwargs(
     tests can assert on its shape without touching the network."""
     kwargs: dict[str, Any] = {
         "model": settings.claude_model,
-        "max_tokens": MAX_TOKENS,
+        "max_tokens": settings.claude_max_tokens,
         "system": system,
         "messages": messages,
     }
@@ -224,6 +224,43 @@ def with_loop_breakpoint(
         return messages
     blocks[-1] = {**blocks[-1], "cache_control": {"type": "ephemeral"}}
     return [*messages[:-1], {**last, "content": blocks}]
+
+
+# Patched in tests; the real clock otherwise.
+_monotonic = time.monotonic
+
+# While the model writes a long tool input nothing else streams to the client (prod 2026-10-18: a
+# phone saw 4.5 min of silence and gave up). `status` events say what is happening and double as a
+# keepalive for proxies.
+STATUS_HEARTBEAT_S = 10.0
+TOOL_STATUS_LABELS = {
+    "author_week_plan": "Writing your week plan…",
+    "patch_week_plan": "Updating your plan…",
+    "merge_week_plan": "Updating your plan…",
+    "author_macro_plan": "Writing your season plan…",
+}
+DEFAULT_STATUS_LABEL = "Working…"
+
+
+class _StatusBeat:
+    """Status text for one tool call being written: once at start, then at most every
+    `STATUS_HEARTBEAT_S` while its input keeps arriving."""
+
+    def __init__(self, tool_name: str) -> None:
+        self._label = TOOL_STATUS_LABELS.get(tool_name, DEFAULT_STATUS_LABEL)
+        self._started = _monotonic()
+        self._last = self._started
+
+    @property
+    def start_text(self) -> str:
+        return self._label
+
+    def beat(self) -> str | None:
+        now = _monotonic()
+        if now - self._last < STATUS_HEARTBEAT_S:
+            return None
+        self._last = now
+        return f"{self._label.rstrip('…')}… ({int(now - self._started)}s)"
 
 
 def _sse(payload: dict[str, Any]) -> str:
@@ -363,9 +400,21 @@ class ClaudeChat:
             iteration_text: list[str] = []
             try:
                 with self.client.messages.stream(**request_kwargs) as stream:
-                    for text in stream.text_stream:
-                        iteration_text.append(text)
-                        yield {"type": "text", "text": text}
+                    beat: _StatusBeat | None = None
+                    for event in stream:
+                        event_type = getattr(event, "type", None)
+                        if event_type == "text":
+                            iteration_text.append(event.text)
+                            yield {"type": "text", "text": event.text}
+                        elif event_type == "content_block_start" and getattr(
+                            event.content_block, "type", None
+                        ) == "tool_use":
+                            beat = _StatusBeat(event.content_block.name)
+                            yield {"type": "status", "text": beat.start_text}
+                        elif event_type == "input_json" and beat is not None:
+                            heartbeat = beat.beat()
+                            if heartbeat:
+                                yield {"type": "status", "text": heartbeat}
                     final = stream.get_final_message()
             except (httpx.HTTPError, anthropic.APIConnectionError) as exc:
                 # Upstream dropped mid-reply (prod 2026-10-15: RemoteProtocolError, incomplete

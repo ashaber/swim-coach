@@ -168,3 +168,32 @@ describe('localStorage persistence round-trip', () => {
     expect(loadChatSession('renee', storage)).toEqual({ messages: [], expertMode: false });
   });
 });
+
+describe('applyStreamEvent status events', () => {
+  it('shows the latest status on the streaming message and clears it when text arrives', () => {
+    let session = appendUserMessage(createChatSession(), 'next week?');
+    session = applyStreamEvent(session, { type: 'status', text: 'Writing your week plan…' });
+    expect(session.messages.at(-1).statusText).toBe('Writing your week plan…');
+    expect(session.messages.at(-1).content).toBe('');
+    session = applyStreamEvent(session, { type: 'status', text: 'Writing your week plan… (11s)' });
+    expect(session.messages.at(-1).statusText).toBe('Writing your week plan… (11s)');
+    session = applyStreamEvent(session, { type: 'text', text: 'Here it is' });
+    expect(session.messages.at(-1).statusText).toBeUndefined();
+    expect(session.messages.at(-1).content).toBe('Here it is');
+  });
+
+  it('clears status on done, error and refusal', () => {
+    for (const end of [{ type: 'done', stop_reason: 'end_turn' }, { type: 'error', error: 'x' }, { type: 'refusal' }]) {
+      let session = appendUserMessage(createChatSession(), 'hi');
+      session = applyStreamEvent(session, { type: 'status', text: 'Working…' });
+      session = applyStreamEvent(session, end);
+      expect(session.messages.at(-1).statusText).toBeUndefined();
+    }
+  });
+
+  it('ignores a status event with no text and unknown event types', () => {
+    const session = appendUserMessage(createChatSession(), 'hi');
+    expect(applyStreamEvent(session, { type: 'status' })).toBe(session);
+    expect(applyStreamEvent(session, { type: 'wat' })).toBe(session);
+  });
+});

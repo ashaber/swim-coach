@@ -633,3 +633,8 @@ def test_tool_loop_requests_carry_the_marker_on_the_current_last_message_only() 
     first, second = (c["messages"] for c in client.messages.calls)
     assert _marked(first) == [0]
     assert _marked(second) == [2]  # moved to the newest (tool_result) message; not left on message 0
+
+
+def test_build_request_kwargs_max_tokens_comes_from_settings() -> None:
+    assert build_request_kwargs(_settings(), system=[], messages=[])["max_tokens"] == 32000
+    assert build_request_kwargs(_settings(claude_max_tokens=20000), system=[], messages=[])["max_tokens"] == 20000

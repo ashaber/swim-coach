@@ -4546,6 +4546,17 @@ describe('Build D: coach chat bubbles render real markdown (renderCoachTab wirin
     expect(html).toContain('chat-cursor');
     expect(html).toContain('chat-md');
   });
+
+  it('shows the muted status line in a streaming bubble, escaped, and not once done', () => {
+    const streaming = [{
+      role: 'assistant', status: 'streaming', content: '', statusText: 'Writing your week plan… <b>',
+    }];
+    const html = renderCoachTab({ ...baseArgs, messages: streaming });
+    expect(html).toContain('class="chat-status"');
+    expect(html).toContain('Writing your week plan… &lt;b&gt;');
+    const done = [{ role: 'assistant', status: 'done', content: 'ok', statusText: 'stale' }];
+    expect(renderCoachTab({ ...baseArgs, messages: done })).not.toContain('chat-status');
+  });
 });
 
 // --- renderMacroPlanDetail (coach-ai-planning build) -------------------------

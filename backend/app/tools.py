@@ -304,6 +304,7 @@ from swim_coach.taper_search import (
     generate_taper_sessions,
     search_taper_grid,
 )
+from swim_coach.workout_notation import NotationError, parse_workout_notation
 from swim_coach.workout_templates import TemplatePreference, render_prose, resolve_template
 
 from app.context import (
@@ -401,6 +402,16 @@ TEMPLATE_PREFERENCE_SCHEMA: dict[str, Any] = {
     },
     "additionalProperties": False,
 }
+
+# Compact bike-workout notation (engine/swim_coach/workout_notation.py): far fewer output tokens than
+# `structured` JSON. Parsed server-side into `structured`; a parse error names the session + position.
+NOTATION_DESCRIPTION = (
+    "PREFERRED for bike workouts (much cheaper than `structured` JSON; give this OR `structured`). "
+    "Steps separated by `;`, e.g. `12m ramp 50-70%; 2x[3m 91-96% / 2m 52%]; 3x[20s free / 1m40s 50%]; 5m 50%`. "
+    "Durations 20s/3m/1m40s/1h30m; targets `91-96%` or `55%` (of FTP), `250W`, `230-250W`, `z2`, `ramp 50-70%`, "
+    "`free`; repeats `Nx[a / b]`; optional `wu:`/`cd:`/`rec:` role prefix and a \"label\"; first/last step "
+    "default to warm-up/cool-down. Bike only."
+)
 
 # Shared by `replace_week_plan` (applied to a freshly-regenerated week) and
 # `patch_week_plan` (applied to the actual persisted week, see that tool's
@@ -565,6 +576,7 @@ SESSION_OVERRIDES_SCHEMA: dict[str, Any] = {
                     "you just wrote."
                 ),
             },
+            "structure_notation": {"type": "string", "description": NOTATION_DESCRIPTION},
             "structured": {
                 "type": "object",
                 "description": (
@@ -746,6 +758,7 @@ SESSION_ENTRY_SCHEMA: dict[str, Any] = {
                 "alongside this whenever there's real step structure."
             ),
         },
+        "structure_notation": {"type": "string", "description": NOTATION_DESCRIPTION},
         "structured": {
             "type": "object",
             "description": (
@@ -6715,6 +6728,28 @@ def _bike_basis_error(sport: Any, structured: WorkoutStructure, *, when: str) ->
     )
 
 
+def _expand_structure_notation(
+    entry: dict[str, Any], athlete: Athlete, *, when: str, sport: Any = None
+) -> tuple[dict[str, Any], str | None]:
+    """`(entry, error)`: if `entry` carries compact `structure_notation`, parse it (bike only) into
+    `structured` on a COPY of the entry. Parse failure names the session and the position; nothing
+    is persisted by the caller on error. Entries without notation are returned untouched."""
+    notation = entry.get("structure_notation")
+    if notation is None:
+        return entry, None
+    if entry.get("structured") is not None:
+        return entry, f"{when}: give `structure_notation` OR `structured`, not both"
+    if sport is not None and sport != "bike":
+        return entry, f"{when}: `structure_notation` is bike-only; use `structured` JSON for {sport}"
+    try:
+        parsed = parse_workout_notation(notation, ftp_watts=athlete.ftp_watts)
+    except NotationError as exc:
+        return entry, f"{when}: structure_notation {exc}"
+    expanded = {k: v for k, v in entry.items() if k != "structure_notation"}
+    expanded["structured"] = parsed.model_dump(mode="json")
+    return expanded, None
+
+
 def _coerce_structured(
     raw: Any, *, when: str, prose_given: bool, notes: list[str]
 ) -> tuple[WorkoutStructure | None, str | None, str | None]:
@@ -6786,6 +6821,11 @@ def _apply_session_overrides(
     css_pace_s = athlete.css_pace_s_per_100m
     notes: list[str] = []
     for override in overrides:
+        override, notation_error = _expand_structure_notation(
+            override, athlete, when=str(override.get("date") or override.get("session_id")), sport=override.get("sport")
+        )
+        if notation_error:
+            return notation_error, notes
         if override.get("session_id"):
             # By id: that one session, whatever its date/sport (the id is the whole address).
             if override.get("add"):
@@ -7886,6 +7926,9 @@ def _session_from_add_fields(entry: dict[str, Any], *, athlete: Athlete) -> tupl
     if duration_min is None or not purpose:
         return None, f"proposed_sessions entry for {date_str!r} needs `duration_min` and `purpose`"
 
+    entry, notation_error = _expand_structure_notation(entry, athlete, when=date_str, sport=sport)
+    if notation_error:
+        return None, notation_error
     structured_raw = entry.get("structured")
     structured = None
     if structured_raw is not None:

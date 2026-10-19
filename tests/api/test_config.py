@@ -105,3 +105,21 @@ def test_routed_library_in_message_defaults_off_and_reads_env(monkeypatch: pytes
     assert Settings.from_env().routed_library_in_message is True
     monkeypatch.setenv("COACH_ROUTED_LIBRARY_IN_MESSAGE", "0")
     assert Settings.from_env().routed_library_in_message is False
+
+
+def test_claude_max_tokens_default_and_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("API_TOKEN", "some-token")
+    monkeypatch.delenv("CLAUDE_MAX_TOKENS", raising=False)
+    assert Settings.from_env().claude_max_tokens == 32000
+    monkeypatch.setenv("CLAUDE_MAX_TOKENS", "48000")
+    assert Settings.from_env().claude_max_tokens == 48000
+
+
+@pytest.mark.parametrize("bad", ["abc", "10", "100000"])
+def test_claude_max_tokens_invalid_fails_fast(monkeypatch: pytest.MonkeyPatch, bad: str) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("API_TOKEN", "some-token")
+    monkeypatch.setenv("CLAUDE_MAX_TOKENS", bad)
+    with pytest.raises(ConfigError, match="CLAUDE_MAX_TOKENS"):
+        Settings.from_env()

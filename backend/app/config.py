@@ -25,6 +25,20 @@ except ImportError:  # pragma: no cover - python-dotenv is a listed dependency
 
 _REQUIRED_VARS = ("ANTHROPIC_API_KEY", "API_TOKEN", "GOOGLE_CLIENT_ID")
 _VALID_THINKING_MODES = ("adaptive", "disabled")
+
+# Streaming output cap bounds: below ~1k a turn cannot finish a tool call; the configured models allow 64k.
+_MIN_MAX_TOKENS = 1024
+_MAX_MAX_TOKENS = 64000
+
+
+def _parse_max_tokens(raw: str) -> int:
+    try:
+        value = int(raw.strip())
+    except ValueError as exc:
+        raise ConfigError(f"CLAUDE_MAX_TOKENS must be an integer, got {raw!r}") from exc
+    if not _MIN_MAX_TOKENS <= value <= _MAX_MAX_TOKENS:
+        raise ConfigError(f"CLAUDE_MAX_TOKENS must be {_MIN_MAX_TOKENS}-{_MAX_MAX_TOKENS}, got {value}")
+    return value
 _VALID_STORE_BACKENDS = ("file", "db")
 
 
@@ -121,6 +135,9 @@ class Settings:
     # the `is_library_admin` flag GET /api/me returns is UI-convenience only,
     # never trusted on its own.
     library_admins: frozenset[str] = frozenset()
+    # Output-token cap per model call (thinking + text + tool input combined). A week of bike
+    # sessions authored as `structured` JSON blew through 16384 in prod 2026-10-18. CLAUDE_MAX_TOKENS.
+    claude_max_tokens: int = 32000
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -169,6 +186,8 @@ class Settings:
                 f"PROMPT_CACHE_TTL_CONTEXT must be '5m' or '1h', got {prompt_cache_ttl_context!r}"
             )
 
+        claude_max_tokens = _parse_max_tokens(os.environ.get("CLAUDE_MAX_TOKENS", "32000"))
+
         athletes_dir = Path(os.environ.get("ATHLETES_DIR", "../athletes"))
         # research/open-questions.jsonl (IDEA 005) lives alongside
         # athletes/ and library/ rather than under either -- derived from
@@ -212,6 +231,7 @@ class Settings:
             routed_library_in_message=os.environ.get("COACH_ROUTED_LIBRARY_IN_MESSAGE", "").strip().lower()
             in ("1", "true", "yes", "on"),
             library_admins=library_admins,
+            claude_max_tokens=claude_max_tokens,
         )
 
     def token_matches(self, provided_token: str) -> bool:

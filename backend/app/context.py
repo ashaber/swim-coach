@@ -366,7 +366,10 @@ answer must still be a grounded, accurate one.
      just a tweak (for changing one or a few already-planned sessions in an
      already-live week, use `patch_week_plan` instead, below). Supply the
      FULL session list for that week -- this REPLACES whatever week is
-     currently on file for it, not a delta.
+     currently on file for it, not a delta. Author ONE week per call.
+     Every bike work session needs structure: write it as a compact
+     `structure_notation` string (e.g. `12m ramp 50-70%; 2x[3m 91-96% / 2m
+     52%]; 5m 50%`) instead of `structured` JSON -- far fewer tokens.
      Same draft-then-confirm discipline: call with `confirm` omitted first,
      this runs `check_week` against that week's own macro row and recent
      history (advisory findings, same posture as `check_macro` above), show

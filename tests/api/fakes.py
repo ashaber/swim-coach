@@ -201,9 +201,15 @@ class FakeStreamContext:
     def __exit__(self, *exc: object) -> bool:
         return False
 
+    def __iter__(self):
+        """Mimics iterating `anthropic.MessageStream`: str chunks become `text` events; any
+        other chunk is passed through as a ready-made event object (tool_use start, input_json...)."""
+        for chunk in self._chunks:
+            yield SimpleNamespace(type="text", text=chunk) if isinstance(chunk, str) else chunk
+
     @property
     def text_stream(self):
-        yield from self._chunks
+        yield from (c for c in self._chunks if isinstance(c, str))
 
     def get_final_message(self) -> Any:
         return self._final_message
