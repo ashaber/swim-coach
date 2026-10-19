@@ -52,7 +52,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
 from pydantic import ValidationError
 from swim_coach.load import estimate_hr_max
 from swim_coach.models import Session, Workout
@@ -63,6 +63,7 @@ from app.auth import Principal, require_auth, resolve_athlete
 from app.load_helpers import workout_load_au
 from app.routes.coach import _iso_week_date_range
 from app.enrich import enrich_draft
+from app.etag import make_etag, respond_with_etag
 from app.logging_config import get_logger
 from app.store_factory import make_store
 from app.sync import ON_DEMAND_SYNC_WINDOW_DAYS, sync_on_demand
@@ -509,10 +510,15 @@ async def list_workouts(
     request: Request,
     athlete: str | None = Query(None),
     principal: Principal = Depends(require_auth),
-) -> list[dict]:
+) -> Response:
     settings = request.app.state.settings
     athlete = resolve_athlete(principal, athlete)
     store = make_store(settings)
+    etag = make_etag(store, principal, athlete, "workouts")
+    return respond_with_etag(request, etag, lambda: _build_workout_list(store, athlete))
+
+
+def _build_workout_list(store: Any, athlete: str) -> list[dict]:
     try:
         profile = store.load_athlete(athlete)
     except FileNotFoundError as exc:

@@ -272,7 +272,62 @@ def _wellness(athlete_id: uuid.UUID, d: date) -> Wellness:
     )
 
 
-class StoreContractTests:
+class ChangeTokenContractTests:
+    """`StoreInterface.change_token` -- the cheap fingerprint behind the HTTP ETag on the list
+    endpoints. Base of StoreContractTests so every backend runs it."""
+
+    def test_change_token_is_stable_when_nothing_changed(self, store):
+        store.save_athlete(_athlete())
+        for scope in ("plan", "workouts"):
+            assert store.change_token(SLUG, scope) == store.change_token(SLUG, scope)
+
+    def test_change_token_unknown_athlete_raises(self, store):
+        with pytest.raises(FileNotFoundError):
+            store.change_token("nobody", "plan")
+
+    def test_change_token_rejects_unknown_scope(self, store):
+        store.save_athlete(_athlete())
+        with pytest.raises(ValueError):
+            store.change_token(SLUG, "everything")
+
+    def test_workout_write_changes_workouts_scope_only(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        plan_before = store.change_token(SLUG, "plan")
+        workouts_before = store.change_token(SLUG, "workouts")
+        store.save_workout(SLUG, _workout(athlete.id, date(2026, 7, 1)))
+        assert store.change_token(SLUG, "workouts") != workouts_before
+        assert store.change_token(SLUG, "plan") == plan_before
+
+    def test_week_write_changes_both_scopes(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        plan_before = store.change_token(SLUG, "plan")
+        workouts_before = store.change_token(SLUG, "workouts")
+        store.save_week(SLUG, _week(athlete.id, "2026-W28"))
+        assert store.change_token(SLUG, "plan") != plan_before
+        assert store.change_token(SLUG, "workouts") != workouts_before
+
+    def test_wellness_write_changes_workouts_scope(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        before = store.change_token(SLUG, "workouts")
+        store.save_wellness(SLUG, _wellness(athlete.id, date(2026, 7, 1)))
+        assert store.change_token(SLUG, "workouts") != before
+
+    def test_events_and_macro_writes_change_plan_scope(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        event = _event(athlete.id)
+        before = store.change_token(SLUG, "plan")
+        store.save_events(SLUG, [event])
+        after_events = store.change_token(SLUG, "plan")
+        assert after_events != before
+        store.save_macro(SLUG, _macro(athlete.id, event.id))
+        assert store.change_token(SLUG, "plan") != after_events
+
+
+class StoreContractTests(ChangeTokenContractTests):
     """Behaviors every StoreInterface implementation must honor."""
 
     # --- athlete ---------------------------------------------------------
@@ -1739,3 +1794,4 @@ class StoreContractTests:
         found = store.get_session("hash-athlete-bound")
         assert found is not None
         assert found.pending_email is None
+

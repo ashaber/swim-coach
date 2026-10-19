@@ -519,3 +519,21 @@ def test_detail_view_has_no_horizontal_overflow_on_narrow_viewport(page):
 
     overflow = page.evaluate('document.documentElement.scrollWidth - window.innerWidth')
     assert overflow <= 1, f'page overflows horizontally by {overflow}px'
+
+
+def test_returning_to_the_app_refetches_a_stale_workout_list(page):
+    """A desktop PWA left open for hours never showed newly synced rides until restarted
+    (2026-10-18). Coming back to the app with data older than 2 min refetches it."""
+    _open_log_tab_with_workouts(page, [BARE_MANUAL_WORKOUT])
+    assert page.locator('.hist-row').count() == 1
+    page.unroute('**/api/workouts*')
+    page.route('**/api/workouts*', _cors_route(
+        200, 'application/json', json.dumps([RICH_FIT_WORKOUT, BARE_MANUAL_WORKOUT])))
+    # a quick focus (data still fresh) must not refetch
+    page.evaluate("() => window.dispatchEvent(new Event('focus'))")
+    page.wait_for_timeout(300)
+    assert page.locator('.hist-row').count() == 1
+    # pretend 3 minutes passed, then return to the app
+    page.evaluate("() => { const real = Date.now.bind(Date); Date.now = () => real() + 180000; }")
+    page.evaluate("() => window.dispatchEvent(new Event('focus'))")
+    page.wait_for_function("() => document.querySelectorAll('.hist-row').length === 2")

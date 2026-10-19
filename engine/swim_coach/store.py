@@ -7,6 +7,7 @@ Behind a small interface (`StoreInterface`) so Phase 2 can swap in a
 from __future__ import annotations
 
 import filecmp
+import hashlib
 import json
 import shutil
 from abc import ABC, abstractmethod
@@ -57,12 +58,26 @@ def _read_yaml(path: Path) -> dict | list | None:
         return yaml.safe_load(fh)
 
 
+# Change-token scopes: which stored entities a cached list-endpoint response is derived from.
+# "plan" backs GET /api/plan; "workouts" backs GET /api/workouts and /api/plan/load, which also
+# read wellness and (for quality scoring / load) the plan weeks, so it is a superset.
+CHANGE_TOKEN_SCOPES = ("plan", "workouts")
+
+
 class StoreInterface(ABC):
     """Swappable persistence seam.
 
     `FileStore` implements this against a YAML tree today; Phase 2's
     `DbStore` implements the same interface against Supabase.
     """
+
+    @abstractmethod
+    def change_token(self, slug: str, scope: str) -> str:
+        """A cheap fingerprint of everything a `scope` response is derived from (see
+        CHANGE_TOKEN_SCOPES): equal tokens mean nothing relevant changed, so an HTTP ETag can be
+        answered with 304 without building the payload. Raises FileNotFoundError for an unknown
+        athlete and ValueError for an unknown scope."""
+        ...
 
     @abstractmethod
     def load_athlete(self, slug: str) -> Athlete: ...
@@ -514,6 +529,32 @@ class FileStore(StoreInterface):
 
     def _athlete_dir(self, slug: str) -> Path:
         return self.base_dir / slug
+
+    # --- Change token ----------------------------------------------------
+
+    def change_token(self, slug: str, scope: str) -> str:
+        if scope not in CHANGE_TOKEN_SCOPES:
+            raise ValueError(f"unknown change-token scope {scope!r}")
+        root = self._athlete_dir(slug)
+        if not (root / "profile.yaml").exists():
+            raise FileNotFoundError(f"no athlete profile for slug {slug!r}")
+        parts = [root / "profile.yaml", root / "events.yaml", root / "plan" / "macro.yaml"]
+        parts += self._yaml_files(root / "plan" / "weeks")
+        if scope == "workouts":
+            parts += self._yaml_files(root / "logs" / "workouts")
+            parts += self._yaml_files(root / "logs" / "wellness")
+        stats = []
+        for path in parts:
+            try:
+                st = path.stat()
+            except FileNotFoundError:
+                continue
+            stats.append(f"{path.name}:{st.st_mtime_ns}:{st.st_size}")
+        return hashlib.sha1("|".join(stats).encode()).hexdigest()
+
+    @staticmethod
+    def _yaml_files(directory: Path) -> list[Path]:
+        return sorted(directory.glob("*.yaml")) if directory.exists() else []
 
     # --- Athlete ---------------------------------------------------------
 
