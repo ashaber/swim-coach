@@ -111,16 +111,17 @@ def _near(series: dict, ref: tuple[float, float] | None, at_s: float) -> bool:
 
 
 def _best_group(laps: Sequence[CanonicalLap], series: dict, mark: tuple[float, float] | None) -> list[CanonicalLap]:
-    """The largest group of full laps (not the start lap) within the distance tolerance of one anchor
-    lap that start at the mark (with no mark: at the anchor's own start); the earliest anchor wins ties."""
-    pool = [l for l in laps if not l.start_lap and l.distance_m and l.duration_s >= MIN_LAP_S]
+    """The largest group of full laps (not the start lap) within the size tolerance of one anchor
+    lap that start at the mark (with no mark: at the anchor's own start); the earliest anchor wins
+    ties. Size is distance, or duration when the laps carry no distance (no distance channel)."""
+    pool = [l for l in laps if not l.start_lap and l.duration_s >= MIN_LAP_S]
+    size = (lambda l: l.distance_m) if pool and all(l.distance_m for l in pool) else (lambda l: l.duration_s)
     best: list[CanonicalLap] = []
     for anchor in pool:
         ref = mark if mark is not None else start_point(series, anchor.start_s)
         group = [
             l for l in pool
-            if abs(l.distance_m - anchor.distance_m) <= LAP_DISTANCE_TOLERANCE * anchor.distance_m
-            and _near(series, ref, l.start_s)
+            if abs(size(l) - size(anchor)) <= LAP_DISTANCE_TOLERANCE * size(anchor) and _near(series, ref, l.start_s)
         ]
         if len(group) > len(best):
             best = group

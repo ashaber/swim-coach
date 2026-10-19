@@ -28,7 +28,7 @@ import {
   LIBRARY_SORTS, DEFAULT_LIBRARY_SORT, sortLibraryFiles, fileAddedDate, isNewFile, formatAddedLabel,
 } from './librarySort.js';
 import { expandStructure, actualPoints, sessionForWorkout, shapeChartGeometry } from './shape.js';
-import { buildCourseSectors, buildRaceEfficiency, buildFreeRide, powerCurveView, buildMtbDynamics, buildRawAnalysis, effectiveKind, kindLabel, raceStartInfo, KIND_OPTIONS } from './analysis.js';
+import { buildCourseSectors, buildRaceEfficiency, buildFreeRide, powerCurveView, buildMtbDynamics, buildRawAnalysis, buildCanonicalLaps, canonicalLapLabel, effectiveKind, kindLabel, raceStartInfo, KIND_OPTIONS } from './analysis.js';
 import { sportHasPlannedDistance, sportCanPushToGarmin, sportUsesPace } from './sports.js';
 import {
   sportLabel, sourceBadge, formatWorkoutDistance, formatAnalyticsLine,
@@ -2911,6 +2911,19 @@ function renderLapsTable(laps, sport) {
     </section>`;
 }
 
+/** The workout's laps: a ride with canonical laps shows those (the device's raw laps live under Raw
+ * analysis); every other workout shows the device laps as recorded. */
+function renderMainLapsSection(workout) {
+  const canonical = buildCanonicalLaps(workout);
+  if (!canonical) return renderLapsTable(workout.laps, workout.sport);
+  return `
+    <section class="detail-section canonical-laps">
+      <h4>Laps (${canonical.rows.length})</h4>
+      ${renderRawTable(canonical.columns, canonical.rows)}
+      <p class="sub">${esc(canonical.note)}</p>
+    </section>`;
+}
+
 function renderPauseRows(pauses) {
   const rows = pauses.map((pause) => {
     const offset = formatOffset(pause.start_offset_s);
@@ -2974,7 +2987,7 @@ function renderRaceAnalysisSection(workout, pacing, raceStartEdit = null, editab
     const phases = pacing.data?.race_phases?.phases ?? [];
     const lapRows = laps.map((lap) => `
       <tr>
-        <td>${esc(lap.lap_n)}</td>
+        <td>${esc(canonicalLapLabel({ n: lap.lap_n, start_lap: lap.start_lap, comparable: lap.comparable !== false }))}</td>
         <td>${esc(formatClock(lap.duration_s) || '—')}</td>
         <td>${lap.normalized_power_w !== null ? esc(formatPower(lap.normalized_power_w)) : '—'}</td>
         <td>${lap.avg_speed_mps !== null ? esc(formatSpeedKmh(lap.avg_speed_mps)) : '—'}</td>
@@ -3382,6 +3395,7 @@ function renderRawAnalysisSection(workout, pacing, open) {
       ${renderScoreBreakdown(race.score)}
       ${race.phases.length ? renderRawTable(['Phase', 'Span', 'NP', 'Speed', 'vs phase 1'], race.phases) : ''}
       ${race.laps.length ? renderRawTable(['Lap', 'Time', 'NP', 'Speed', 'Work', 'VI', 'Coasting'], race.laps) : `<p class="sub">${esc(race.lapsNote || 'No laps detected.')}</p>`}` : ''}
+      ${model.deviceLaps ? `<h5>Device laps (${model.deviceLaps.rows.length}, as recorded)</h5>${renderRawTable(model.deviceLaps.columns, model.deviceLaps.rows)}<p class="sub">The watch's own laps: raw, before double-trigger fragments are merged, the race is cut at the gun and missed laps are filled. Nothing else in the analysis uses them.</p>` : ''}
       ${model.racePending ? '<p class="sub">Loading race analysis…</p>' : ''}
       ${model.raceError ? `<p class="sub">${esc(model.raceError)}</p>` : ''}
     </section>`;
@@ -3567,7 +3581,7 @@ export function renderWorkoutDetail(workout, {
     ${renderIntervalsSection(workout.analytics?.intervals)}
     ${renderRaceAnalysisSection(workout, pacing, raceStartEdit, editable)}
     ${rawAnalysisOpen === null ? '' : renderRawAnalysisSection(workout, pacing, rawAnalysisOpen)}
-    ${renderLapsTable(workout.laps, workout.sport)}
+    ${renderMainLapsSection(workout)}
     ${renderLengthsSummarySection(workout.lengths)}
     ${renderDetailNotes(workout.notes)}
     ${renderWorkoutThread(viewerRole === 'coach' ? {

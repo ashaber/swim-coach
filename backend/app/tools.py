@@ -209,7 +209,8 @@ from swim_coach.adapt import adapt_week
 from swim_coach.analysis import analytics_for_coach, has_detailed_analyzer
 from swim_coach.athlete_time import athlete_today
 from swim_coach.event_groups import disband_group, effective_target, groups, set_group
-from swim_coach.gps_laps import GpsLapMetrics, analyze_gps_laps
+from swim_coach.canonical_laps import build_canonical_laps
+from swim_coach.gps_laps import GpsLapMetrics, analyze_laps
 from swim_coach.load import (
     _training_base_evidence,
     ctl_atl_tsb_series,
@@ -4548,6 +4549,9 @@ def _round_or_none(value: float | None, ndigits: int) -> float | None:
 def _gps_lap_json(m: GpsLapMetrics) -> dict[str, Any]:
     return {
         "lap_n": m.lap_n,
+        "start_s": round(m.start_s, 1),
+        "start_lap": m.start_lap,
+        "comparable": m.comparable,
         "duration_s": round(m.duration_s, 1),
         "normalized_power_w": _round_or_none(m.normalized_power_w, 1),
         "avg_speed_mps": _round_or_none(m.avg_speed_mps, 2),
@@ -4637,10 +4641,10 @@ def _race_start_s(workout: Workout) -> float | None:
 def _handle_get_ride_pacing(
     input_data: dict[str, Any], *, store: StoreInterface, slug: str
 ) -> dict[str, Any]:
-    """Read-only: runs `gps_laps.analyze_gps_laps` and
-    `race_phases.split_race_phases` over the ride's stored series. Neither
-    result is persisted on the Workout (see their module docstrings), so
-    this is the only way the coach can see them."""
+    """Read-only: runs `gps_laps.analyze_laps` over the ride's canonical laps (the stored
+    `analytics.laps`, else derived now) and `race_phases.split_race_phases` over the ride's stored
+    series. Neither result is persisted on the Workout (see their module docstrings), so this is the
+    only way the coach can see them."""
     workout_id = (input_data.get("workout_id") or "").strip()
     if not workout_id:
         return {"error": "workout_id is required"}
@@ -4670,7 +4674,10 @@ def _handle_get_ride_pacing(
         }
 
     race_start_s = _race_start_s(workout)
-    laps = analyze_gps_laps(series, from_s=race_start_s)
+    canonical = (workout.analytics.laps if workout.analytics else []) or build_canonical_laps(
+        workout.laps, series, race_start_s=race_start_s
+    )
+    laps = analyze_laps(series, canonical)
     phases = split_race_phases(series, race_start_s=race_start_s)
     laps_truncated = len(laps) > RIDE_PACING_LAPS_CAP
 
@@ -4681,9 +4688,8 @@ def _handle_get_ride_pacing(
     }
     if not laps:
         gps_laps["note"] = (
-            "No laps detected: the ride has no usable GPS track, isn't a looped "
-            "course that returns to its start, or no loop was long enough "
-            "to count as a lap."
+            "No laps found: the ride has no device laps and no usable GPS track, isn't a "
+            "looped course that returns to its start, or no loop was long enough to count as a lap."
         )
 
     log.info(

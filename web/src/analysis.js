@@ -7,7 +7,7 @@
 // fetched pacing result when it has arrived), so it renders offline. DOM-free:
 // views.js turns the returned rows into markup.
 
-import { formatClock, formatDrift, formatPauses } from './workouts.js';
+import { formatClock, formatDrift, formatPauses, formatWorkoutDistance } from './workouts.js';
 import { sessionForWorkout, ZONE_COLORS, ZONE_LABELS } from './shape.js';
 
 const num = (v) => v !== null && v !== undefined && Number.isFinite(v);
@@ -111,6 +111,47 @@ function roundRows(iv) {
   ]);
 }
 
+/** A canonical lap's label: the start lap (from the gun) and laps outside the comparison are marked. */
+export function canonicalLapLabel(lap) {
+  if (lap.start_lap) return `${lap.n} (start)`;
+  return lap.comparable ? String(lap.n) : `${lap.n} (partial)`;
+}
+
+export const CANONICAL_LAP_COLUMNS = ['Lap', 'Dist', 'Time', 'Power', 'HR'];
+export const DEVICE_LAP_COLUMNS = ['#', 'Dist', 'Time', 'Power', 'HR'];
+const CANONICAL_LAPS_NOTE = 'Lap 1 of a race runs from the gun, so the warm-up and the wait on the line are not in it. '
+  + 'Laps marked (start) or (partial) are shown but left out of lap-to-lap comparisons. These are the laps every table in this analysis uses.';
+
+function lapCells(lap, label) {
+  const dist = formatWorkoutDistance(lap.distance_m);
+  return [
+    label,
+    dist || dash,
+    formatClock(lap.duration_s) || dash,
+    watts(lap.avg_power_w),
+    num(lap.avg_hr) ? String(lap.avg_hr) : dash,
+  ];
+}
+
+/** The ride's canonical laps (`analytics.laps`) as a table model, or null when the analysis has none. */
+export function buildCanonicalLaps(workout) {
+  const laps = workout?.analytics?.laps || [];
+  if (!laps.length) return null;
+  return {
+    columns: CANONICAL_LAP_COLUMNS,
+    rows: laps.map((l) => lapCells(l, canonicalLapLabel(l))),
+    note: CANONICAL_LAPS_NOTE,
+  };
+}
+
+/** The device's own laps as recorded (never merged or trimmed): Raw analysis only, and only when the
+ * canonical laps replace them elsewhere. */
+export function buildDeviceLaps(workout) {
+  const raw = workout?.laps || [];
+  if (!raw.length || !(workout?.analytics?.laps || []).length) return null;
+  return { columns: DEVICE_LAP_COLUMNS, rows: raw.map((l) => lapCells(l, String(l.index))) };
+}
+
 export const PHASE_COLUMNS = ['Phase', 'Span', 'NP', 'Speed', 'vs phase 1'];
 export const LAP_COLUMNS = ['Lap', 'Time', 'NP', 'Speed', 'Work', 'VI', 'Coasting'];
 
@@ -128,7 +169,7 @@ function raceView(pacing) {
       num(p.vs_phase_1_pct) ? `${signed(p.vs_phase_1_pct)}${p.vs_phase_1_significant ? ' (real)' : ''}` : dash,
     ]),
     laps: (d.gps_laps?.laps || []).map((l) => [
-      String(l.lap_n),
+      canonicalLapLabel({ n: l.lap_n, start_lap: l.start_lap, comparable: l.comparable !== false }),
       formatClock(l.duration_s) || dash,
       watts(l.normalized_power_w),
       speed(l.avg_speed_mps),
@@ -323,6 +364,7 @@ export function buildRawAnalysis(workout, pacing) {
     starts: startsView(iv),
     diagnostics,
     race,
+    deviceLaps: buildDeviceLaps(workout),
     racePending: isRace && pacing?.status === 'loading',
     raceError: isRace && pacing?.status === 'error' ? (pacing.error || 'Race analysis is not available.') : null,
   };
@@ -637,11 +679,11 @@ export function buildRaceEfficiency(workout) {
     verdict: re.verdict,
     decoupled: num(t.decoupling_pct) && t.decoupling_pct <= -5,
     slopes: slopes.join(', '),
-    note: 'EF is Normalized Power divided by average HR (watts per bpm). Decoupling compares EF in the first half of the laps with the second half; 5% is an engineering default, not a validated cutoff.',
+    note: 'EF is Normalized Power divided by average HR (watts per bpm); the start lap is shown but left out of the trend. Decoupling compares EF in the first half of the laps with the second half; 5% is an engineering default, not a validated cutoff.',
     laps: {
       columns: RACE_EFFICIENCY_COLUMNS,
       rows: re.laps.map((l) => [
-        String(l.lap),
+        l.start_lap ? `${l.lap} (start)` : String(l.lap),
         formatClock(l.time_s),
         watts(l.np_w),
         num(l.avg_hr) ? String(Math.round(l.avg_hr)) : dash,

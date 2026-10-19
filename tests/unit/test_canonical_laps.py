@@ -10,6 +10,7 @@ from swim_coach.canonical_laps import build_canonical_laps
 from swim_coach.course_sectors import build_course_sectors
 from swim_coach.gps_laps import analyze_laps, detect_gps_laps, mark_crossings
 from swim_coach.lap_normalise import start_point
+from swim_coach.load import session_load
 from swim_coach.models import WorkoutLap
 from swim_coach.mtb_dynamics import build_mtb_dynamics
 from swim_coach.race_efficiency import build_race_efficiency
@@ -126,3 +127,14 @@ def test_the_analyzer_stores_the_canonical_laps_and_the_race_lap_table_uses_them
 
 def test_analytics_without_series_have_no_laps():
     assert race_workout().analyze(AnalysisContext(kind="race", series=None)).laps == []
+
+
+def test_load_trimp_still_reads_the_raw_device_laps(series):
+    """TRIMP sums the whole session's device laps (warm-up included: that time is real load), so
+    analysing a ride never changes its load and never touches `Workout.laps`."""
+    workout = race_workout(series)
+    before = session_load(workout, hr_max=190.0, hr_rest=50.0, sex="male")
+    raw = [l.model_dump() for l in workout.laps]
+    workout.analyze(AnalysisContext(kind="race", series=series, race_start_s=RACE_START_S))
+    assert session_load(workout, hr_max=190.0, hr_rest=50.0, sex="male") == before
+    assert [l.model_dump() for l in workout.laps] == raw

@@ -319,7 +319,7 @@ async def get_workout_pacing(
     principal: Principal = Depends(require_auth),
 ) -> dict:
     """Bike-only GPS-lap/race-phase analysis for one workout -- the same
-    `analyze_gps_laps`/`split_race_phases` output the coach's own
+    `analyze_laps` (over the canonical laps) and `split_race_phases` output the coach's own
     `get_ride_pacing` chat tool returns, exposed as a plain REST read so the
     PWA can show it directly on a race activity's detail view (Andrew,
     2026-09-22) rather than the athlete having to ask the coach for it.

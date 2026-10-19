@@ -2178,9 +2178,13 @@ def render_focused_workout(
         "load_au": load_au,
         "load_tier": load_tier,
     }
-    laps = workout.laps[:FOCUSED_WORKOUT_LAPS_CAP]
-    laps_truncated = len(workout.laps) > FOCUSED_WORKOUT_LAPS_CAP
-    laps_header = f"### Laps ({len(laps)} of {len(workout.laps)} shown"
+    canonical = workout.analytics.laps if workout.analytics else []
+    if canonical:  # the one lap set every lap number in the analysis refers to; the raw device laps stay out
+        summary["analytics"] = {k: v for k, v in (summary["analytics"] or {}).items() if k != "laps"}
+    all_laps = canonical or workout.laps
+    laps = all_laps[:FOCUSED_WORKOUT_LAPS_CAP]
+    laps_truncated = len(all_laps) > FOCUSED_WORKOUT_LAPS_CAP
+    laps_header = f"### {'Canonical laps' if canonical else 'Laps'} ({len(laps)} of {len(all_laps)} shown"
     laps_header += ", truncated)" if laps_truncated else ")"
 
     parts = [
