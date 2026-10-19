@@ -160,3 +160,22 @@ def test_structured_workout_gets_no_race_efficiency():
     )
     ctx = AnalysisContext(kind="workout", session=session, series=_series([250.0] * n, [170.0] * n))
     assert wo.analyze(ctx).race_efficiency is None
+
+
+def test_steady_first_to_last_drift_under_the_half_threshold_is_not_called_held():
+    """Sunday 10/18 race: power -3%, HR +10 bpm, EF -9% first to last, but only ~-4% half over
+    half -- the verdict said "Efficiency held" next to "EF -9%"."""
+    power = [238.5, 235.7, 233.5, 239.4, 238.5, 233.4, 231.2]
+    hr = [161.4, 165.7, 166.2, 165.6, 169.6, 169.5, 171.6]
+    re = build_race_efficiency(_workout(len(power)), _series(power, hr))
+    assert -DECOUPLING_FLAG_PCT < re.trend.decoupling_pct < 0
+    assert re.trend.ef_change_pct <= -DECOUPLING_FLAG_PCT
+    assert re.verdict.startswith("Gradual drift")
+    assert "half over half" in re.verdict
+
+
+def test_laps_at_very_different_efforts_get_no_efficiency_verdict():
+    """Fri 10/16 pre-ride: a race-pace lap then an easy scouting lap read as "Decoupled, power -35%"."""
+    re = build_race_efficiency(_workout(2), _series([170.0, 82.0], [165.0, 130.0]))
+    assert re.verdict.startswith("Laps ridden at different efforts")
+    assert "82" in re.verdict and "170" in re.verdict
