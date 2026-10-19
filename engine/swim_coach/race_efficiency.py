@@ -26,6 +26,9 @@ from swim_coach.mtb_dynamics import has_channel, mean_moving, mean_present, wind
 
 DECOUPLING_FLAG_PCT = CARDIAC_DRIFT_FLAG_PCT  # EF this far down (or up) first half -> second half is a real change
 FLOW_STEADY_BAND = 0.05  # Coach judgment: a first -> last flow change inside +-0.05 reads as "flow steady"
+# Coach judgment: comparable laps whose NP spans more than this (max vs min) were ridden at different
+# efforts (a race-pace lap and a scouting lap), so EF / decoupling across them means nothing.
+MIXED_EFFORT_SPREAD_PCT = 20.0
 
 
 def _lap_row(series: dict, lap: CanonicalLap) -> RaceEfficiencyLap:
@@ -100,8 +103,20 @@ def _flow_word(change: float | None) -> str | None:
     return "flow smoother" if change > 0 else "flow rougher"
 
 
-def _verdict(t: RaceEfficiencyTrend) -> str:
-    """One line: decoupled (EF down by the flag threshold half over half), improved (up by it), or held."""
+def _mixed_effort(rows: Sequence[RaceEfficiencyLap]) -> str | None:
+    """The verdict for laps ridden at clearly different efforts, else None."""
+    nps = [r.np_w for r in rows if r.np_w]
+    if len(nps) < 2 or min(nps) <= 0 or (max(nps) / min(nps) - 1) * 100 <= MIXED_EFFORT_SPREAD_PCT:
+        return None
+    return f"Laps ridden at different efforts (NP {min(nps):.0f}-{max(nps):.0f} W): lap efficiency isn't comparable"
+
+
+def _verdict(t: RaceEfficiencyTrend, rows: Sequence[RaceEfficiencyLap] = ()) -> str:
+    """One line: decoupled (EF down by the flag threshold half over half), a gradual drift (half over
+    half under the flag but first -> last EF past it), improved, or held -- or a mixed-effort note."""
+    mixed = _mixed_effort(rows)
+    if mixed:
+        return mixed
     if t.decoupling_pct is None:
         parts = [f"time {t.time_change_pct:+.0f}%" if t.time_change_pct is not None else None,
                  f"power {t.power_change_pct:+.0f}%" if t.power_change_pct is not None else None]
@@ -113,6 +128,11 @@ def _verdict(t: RaceEfficiencyTrend) -> str:
         parts = [ef, f"HR {t.hr_change_bpm:+.0f} bpm" if t.hr_change_bpm is not None else None,
                  f"power {t.power_change_pct:+.0f}%" if t.power_change_pct is not None else None, flow]
         return f"{head}: " + ", ".join(p for p in parts if p)
+    if t.ef_change_pct is not None and t.ef_change_pct <= -DECOUPLING_FLAG_PCT:
+        parts = [f"EF {t.ef_change_pct:+.0f}% first to last ({t.decoupling_pct:+.0f}% half over half)",
+                 f"HR {t.hr_change_bpm:+.0f} bpm" if t.hr_change_bpm is not None else None,
+                 f"power {t.power_change_pct:+.0f}%" if t.power_change_pct is not None else None, flow]
+        return "Gradual drift: " + ", ".join(p for p in parts if p)
     head = "Efficiency improved" if t.decoupling_pct >= DECOUPLING_FLAG_PCT else "Efficiency held"
     parts = [f"power {t.power_change_pct:+.0f}%" if t.power_change_pct is not None else None,
              f"HR {t.hr_change_bpm:+.0f} bpm" if t.hr_change_bpm is not None else None, ef, flow]
@@ -132,4 +152,4 @@ def build_race_efficiency(laps: Sequence[CanonicalLap], series: dict | None) -> 
     start = [lap for lap in laps if lap.start_lap and not lap.comparable]
     rows = [_lap_row(series, lap) for lap in comparable]
     trend = _trend(rows)
-    return RaceEfficiency(laps=[*(_lap_row(series, lap) for lap in start), *rows], trend=trend, verdict=_verdict(trend))
+    return RaceEfficiency(laps=[*(_lap_row(series, lap) for lap in start), *rows], trend=trend, verdict=_verdict(trend, rows))
