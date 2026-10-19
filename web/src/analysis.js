@@ -184,17 +184,22 @@ export function buildMasterLaps(workout, pacing) {
 }
 
 /** The device's own laps as recorded (never merged or trimmed): Raw analysis only. A ride with canonical
- * laps always gets it; a bike ride without them gets it too, as its only lap table. */
+ * laps, or with focused lap tables, gets it; any other ride shows them in the main view. */
 export function buildDeviceLaps(workout) {
   const raw = workout?.laps || [];
   const canonical = (workout?.analytics?.laps || []).length > 0;
-  if (!raw.length || !(canonical || workout?.sport === 'bike')) return null;
+  if (!raw.length || showsMainLapsTable(workout)) return null;
   return { columns: DEVICE_LAP_COLUMNS, rows: raw.map((l) => lapCells(l, String(l.index))), canonical };
 }
 
-/** Whether the main view shows the device's laps table: every sport but a bike ride, whose laps
- * live in Raw analysis (the focused tables above it each take a slice). */
-export const showsMainLapsTable = (workout) => workout?.sport !== 'bike';
+/** Whether the main view shows the device's laps table. Not when the analysis already has canonical laps
+ * or renders focused lap tables (efficiency, handling, sectors): their laps live in those and the Raw
+ * analysis master table. Older rides and other sports, with none of those blocks, keep it. */
+export function showsMainLapsTable(workout) {
+  const an = workout?.analytics || {};
+  if ((an.laps || []).length) return false;
+  return !((an.race_efficiency?.laps || []).length || (an.mtb_dynamics?.laps || []).length || an.course_sectors);
+}
 
 export const PHASE_COLUMNS = ['Phase', 'Span', 'NP', 'Speed', 'vs phase 1'];
 export const LAP_COLUMNS = ['Lap', 'VI', 'Coasting', 'Work (kJ)'];

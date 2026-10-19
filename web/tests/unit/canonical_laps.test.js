@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { renderWorkoutDetail } from '../../src/views.js';
-import { buildMasterLaps, buildDeviceLaps, buildRawAnalysis, buildRaceEfficiency, buildPacingEffort, buildMtbDynamics, buildCourseSectors } from '../../src/analysis.js';
+import { buildMasterLaps, showsMainLapsTable, buildDeviceLaps, buildRawAnalysis, buildRaceEfficiency, buildPacingEffort, buildMtbDynamics, buildCourseSectors } from '../../src/analysis.js';
 
 const CANONICAL = [
   { n: 1, start_s: 480, end_s: 630, duration_s: 150, distance_m: 450, avg_power_w: 250, avg_hr: 170, source: 'split_at_start', start_lap: true, comparable: false },
@@ -71,12 +71,28 @@ describe('master lap table (Raw analysis)', () => {
     expect(raw.indexOf('master-laps-table')).toBeLessThan(raw.indexOf('Device laps (3'));
   });
 
-  it('keeps device laps in Raw only for a bike ride without canonical laps, and no lap table in the main view', () => {
+  it('decides the main Laps table by which analytics blocks are present, not by sport', () => {
+    expect(showsMainLapsTable({ ...WORKOUT, analytics: {} })).toBe(true);
+    expect(showsMainLapsTable({ sport: 'swim', analytics: {} })).toBe(true);
+    expect(showsMainLapsTable(WORKOUT)).toBe(false); // canonical laps
+    expect(showsMainLapsTable({ sport: 'bike', analytics: { mtb_dynamics: MTB } })).toBe(false); // focused table
+    expect(showsMainLapsTable({ sport: 'swim', analytics: { laps: CANONICAL } })).toBe(false);
+  });
+
+  it('keeps an older bike ride (no lap analytics) as before: device laps in the main view, none in Raw', () => {
     const plain = { ...WORKOUT, kind: 'workout', analytics: {} };
     const open = renderWorkoutDetail(plain, { rawAnalysisOpen: true });
-    expect(mainPart(open)).not.toContain('laps-table');
-    expect(rawPart(open)).toContain('Device laps (3, as recorded)');
-    expect(buildRawAnalysis(plain, undefined).deviceLaps.rows).toHaveLength(3);
+    expect(mainPart(open)).toContain('<h4>Laps (3)</h4>');
+    expect(buildDeviceLaps(plain)).toBeNull();
+  });
+
+  it('shows the master table in the main view where Raw analysis is not wired, so laps are not lost', () => {
+    const html = renderWorkoutDetail(WITH_BLOCKS, { rawAnalysisOpen: null, pacing: PACING });
+    expect(html).toContain('class="detail-section master-laps"');
+    expect(html).toContain('master-laps-table');
+    expect(html).toContain('4 (partial)');
+    const wired = renderWorkoutDetail(WITH_BLOCKS, { rawAnalysisOpen: false, pacing: PACING });
+    expect(wired).not.toContain('master-laps-table');
   });
 
   it('still shows a swim\'s device laps in the main view', () => {

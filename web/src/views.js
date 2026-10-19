@@ -28,7 +28,7 @@ import {
   LIBRARY_SORTS, DEFAULT_LIBRARY_SORT, sortLibraryFiles, fileAddedDate, isNewFile, formatAddedLabel,
 } from './librarySort.js';
 import { expandStructure, actualPoints, sessionForWorkout, shapeChartGeometry } from './shape.js';
-import { buildCourseSectors, buildRaceEfficiency, buildFreeRide, powerCurveView, buildMtbDynamics, buildRawAnalysis, buildPacingEffort, showsMainLapsTable, effectiveKind, kindLabel, raceStartInfo, KIND_OPTIONS } from './analysis.js';
+import { buildCourseSectors, buildRaceEfficiency, buildFreeRide, powerCurveView, buildMtbDynamics, buildRawAnalysis, buildPacingEffort, buildMasterLaps, showsMainLapsTable, effectiveKind, kindLabel, raceStartInfo, KIND_OPTIONS } from './analysis.js';
 import { sportHasPlannedDistance, sportCanPushToGarmin, sportUsesPace } from './sports.js';
 import {
   sportLabel, sourceBadge, formatWorkoutDistance, formatAnalyticsLine,
@@ -2911,10 +2911,21 @@ function renderLapsTable(laps, sport) {
     </section>`;
 }
 
-/** The workout's own laps table in the main view: every sport but a bike ride, whose laps are split
- * into the focused tables and the Raw analysis master table. */
-function renderMainLapsSection(workout) {
-  return showsMainLapsTable(workout) ? renderLapsTable(workout.laps, workout.sport) : '';
+/** The main view's lap table: the device laps unless the analysis has its own lap tables. Those keep the
+ * full lap table in Raw analysis; where that panel is not wired (`rawOpen` null) the master table
+ * stands in, so the laps are never lost. */
+function renderMainLapsSection(workout, pacing, rawOpen) {
+  if (showsMainLapsTable(workout)) return renderLapsTable(workout.laps, workout.sport);
+  const master = rawOpen === null ? buildMasterLaps(workout, pacing) : null;
+  if (master) {
+    return `
+    <section class="detail-section master-laps">
+      <h4>Laps (${master.rows.length})</h4>
+      ${renderRawTable(master.columns, master.rows, () => '', 'master-laps-table')}
+      <p class="sub">${esc(master.note)}</p>
+    </section>`;
+  }
+  return rawOpen === null ? renderLapsTable(workout.laps, workout.sport) : '';
 }
 
 function renderPauseRows(pauses) {
@@ -3530,7 +3541,7 @@ export function renderWorkoutDetail(workout, {
     ${renderIntervalsSection(workout.analytics?.intervals)}
     ${renderRaceAnalysisSection(workout, pacing, raceStartEdit, editable)}
     ${rawAnalysisOpen === null ? '' : renderRawAnalysisSection(workout, pacing, rawAnalysisOpen)}
-    ${renderMainLapsSection(workout)}
+    ${renderMainLapsSection(workout, pacing, rawAnalysisOpen)}
     ${renderLengthsSummarySection(workout.lengths)}
     ${renderDetailNotes(workout.notes)}
     ${renderWorkoutThread(viewerRole === 'coach' ? {
