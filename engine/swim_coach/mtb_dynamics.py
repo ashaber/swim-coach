@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from swim_coach.models import JumpsSummary, MtbDynamics, MtbLap, Workout, WorkoutLap
+from swim_coach.models import CanonicalLap, JumpsSummary, MtbDynamics, MtbLap, Workout
 
 GRIT_RECORD_SCALE = 1000.0
 """Per-record grit increments sum to the session total_grit x 1000 (device definition, verified
@@ -35,17 +35,6 @@ MOVING_SPEED_MPS = 1.0
 
 def has_channel(series: dict | None, name: str) -> bool:
     return bool(series) and any(v is not None for v in series.get(name) or [])
-
-
-def lap_windows(laps: Sequence[WorkoutLap], end_s: float) -> list[tuple[WorkoutLap, float, float]]:
-    """`(lap, start_s, end_s)` for laps with a start offset; each lap runs to the next lap's start
-    (the last to `end_s`), so paused time inside a lap stays in that lap's window."""
-    timed = sorted((lap for lap in laps if lap.start_offset_s is not None), key=lambda lap: lap.start_offset_s)
-    out = []
-    for i, lap in enumerate(timed):
-        stop = timed[i + 1].start_offset_s if i + 1 < len(timed) else end_s
-        out.append((lap, float(lap.start_offset_s), float(stop)))
-    return out
 
 
 def window_indices(t_s: Sequence[float], start_s: float, stop_s: float) -> range:
@@ -96,7 +85,7 @@ def _summarise_jumps(workout: Workout) -> JumpsSummary | None:
     )
 
 
-def _lap_rows(workout: Workout, series: dict | None) -> list[MtbLap]:
+def _lap_rows(workout: Workout, series: dict | None, laps: Sequence[CanonicalLap]) -> list[MtbLap]:
     if not series or not (has_channel(series, "grit") or has_channel(series, "flow")):
         return []
     t_s = series.get("t_s") or []
@@ -106,13 +95,14 @@ def _lap_rows(workout: Workout, series: dict | None) -> list[MtbLap]:
     speed = series.get("speed_mps") or []
     jumps = workout.device_dynamics.jumps if workout.device_dynamics else []
     rows = []
-    for n, (lap, start, stop) in enumerate(lap_windows(workout.laps, t_s[-1] + 1), 1):
+    for lap in laps:
+        start, stop = lap.start_s, lap.end_s
         idx = window_indices(t_s, start, stop)
         in_lap = [j for j in jumps if j.offset_s is not None and start <= j.offset_s < stop]
         rows.append(
             MtbLap(
-                lap=n,
-                start_offset_s=lap.start_offset_s,
+                lap=lap.n,
+                start_offset_s=lap.start_s,
                 duration_s=lap.duration_s,
                 distance_m=lap.distance_m,
                 avg_power_w=lap.avg_power_w if lap.avg_power_w is not None else (mean_present(power, idx) if power else None),
@@ -124,8 +114,9 @@ def _lap_rows(workout: Workout, series: dict | None) -> list[MtbLap]:
     return rows
 
 
-def build_mtb_dynamics(workout: Workout, series: dict | None) -> MtbDynamics | None:
-    """The ride's Grit / Flow / jump block, or None when the ride carries none of them."""
+def build_mtb_dynamics(workout: Workout, series: dict | None, laps: Sequence[CanonicalLap] = ()) -> MtbDynamics | None:
+    """The ride's Grit / Flow / jump block, or None when the ride carries none of them. `laps`: the
+    canonical laps (`canonical_laps.build_canonical_laps`) the per-lap splits are cut at."""
     dev = workout.device_dynamics
     has_series = has_channel(series, "grit") or has_channel(series, "flow")
     if dev is None and not has_series:
@@ -143,6 +134,6 @@ def build_mtb_dynamics(workout: Workout, series: dict | None) -> MtbDynamics | N
         total_grit=total_grit,
         avg_flow=avg_flow,
         jump_count=jump_count,
-        laps=_lap_rows(workout, series),
+        laps=_lap_rows(workout, series, laps),
         jumps=_summarise_jumps(workout),
     )

@@ -19,12 +19,13 @@ import math
 
 import pytest
 
+from swim_coach.models import CanonicalLap
 from swim_coach.gps_laps import (
     GPS_LAP_MIN_AWAY_M,
     GPS_LAP_MIN_DURATION_S,
     GPS_LAP_PROXIMITY_M,
     GpsLap,
-    analyze_gps_laps,
+    analyze_laps,
     detect_gps_laps,
     haversine_distance_m,
     lap_metrics,
@@ -457,19 +458,27 @@ def test_lap_metrics_coasting_s_zero_when_never_coasting():
     assert m.coasting_s == pytest.approx(0.0)
 
 
-# --- analyze_gps_laps: end-to-end orchestrator -------------------------------------------
+# --- analyze_laps: per-canonical-lap metrics -------------------------------------------
 
 
-def test_analyze_gps_laps_end_to_end_on_synthetic_loop():
+def _canonical(series: dict) -> list[CanonicalLap]:
+    return [
+        CanonicalLap(n=g.n, start_s=g.start_s, end_s=g.end_s, duration_s=g.duration_s, source="gps", comparable=True)
+        for g in detect_gps_laps(series)
+    ]
+
+
+def test_analyze_laps_end_to_end_on_synthetic_loop():
     series = _square_loop_series(3, step_m=3.0, extra_channels=True)  # 1 Hz records
-    results = analyze_gps_laps(series)
+    results = analyze_laps(series, _canonical(series))
     assert len(results) == 3
     for r in results:
         assert r.normalized_power_w == pytest.approx(200.0)
         assert r.avg_speed_mps == pytest.approx(3.0)
         assert r.efficiency_mps_per_w == pytest.approx(3.0 / 200.0)
+        assert r.comparable and not r.start_lap
 
 
-def test_analyze_gps_laps_no_gps_returns_empty_list_not_raises():
-    series = {"t_s": [0.0, 60.0], "power_w": [200.0, 210.0]}
-    assert analyze_gps_laps(series) == []
+def test_analyze_laps_without_a_series_returns_empty_list_not_raises():
+    assert analyze_laps(None, []) == []
+    assert analyze_laps({"t_s": []}, []) == []

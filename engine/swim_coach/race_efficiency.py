@@ -1,8 +1,8 @@
 """Race efficiency: how the same course cost the rider lap after lap.
 
-For a race (or an opener / unstructured ride) with 2+ comparable laps -- the SAME lap selection as
-`course_sectors` (double-trigger fragments merged, same distance, same start line; laps that end
-before the race start are warm-up and dropped) -- each lap gets time, average power, Normalized
+For a race (or an opener / unstructured ride) with 2+ comparable canonical laps (`canonical_laps`,
+the same laps as `course_sectors`: full laps from the lap mark; the warm-up and line wait are not
+part of any lap) -- plus the start lap from the gun, shown but kept out of every trend -- each lap gets time, average power, Normalized
 Power (the shared full-window NP, `analytics.normalized_power_w`), average HR, the efficiency
 factor EF = NP / avg HR (watts per bpm), speed per 100 W of NP and Garmin flow. The trend reads
 first -> last lap and the per-lap slope; decoupling is the EF change from the first half of the
@@ -17,16 +17,19 @@ word "smoother"/"rougher" in the verdict, it is never a finding on its own).
 
 from __future__ import annotations
 
+from typing import Sequence
+
 from swim_coach.analytics import CARDIAC_DRIFT_FLAG_PCT, normalized_power_w
-from swim_coach.course_sectors import MAX_LAPS, _mean, _pct, _slope, course_laps
-from swim_coach.models import RaceEfficiency, RaceEfficiencyLap, RaceEfficiencyTrend, Workout
+from swim_coach.course_sectors import MAX_LAPS, _mean, _pct, _slope
+from swim_coach.models import CanonicalLap, RaceEfficiency, RaceEfficiencyLap, RaceEfficiencyTrend
 from swim_coach.mtb_dynamics import has_channel, mean_moving, mean_present, window_indices
 
 DECOUPLING_FLAG_PCT = CARDIAC_DRIFT_FLAG_PCT  # EF this far down (or up) first half -> second half is a real change
 FLOW_STEADY_BAND = 0.05  # Coach judgment: a first -> last flow change inside +-0.05 reads as "flow steady"
 
 
-def _lap_row(series: dict, n: int, start: float, stop: float, distance_m: float) -> RaceEfficiencyLap:
+def _lap_row(series: dict, lap: CanonicalLap) -> RaceEfficiencyLap:
+    n, start, stop, distance_m = lap.n, lap.start_s, lap.end_s, lap.distance_m or 0.0
     idx = window_indices(series["t_s"], start, stop)
     t_s, power, hr = series["t_s"], series["power_w"], series.get("hr") or []
     flow, speed = series.get("flow") or [], series.get("speed_mps") or []
@@ -35,7 +38,7 @@ def _lap_row(series: dict, n: int, start: float, stop: float, distance_m: float)
     avg_hr = mean_present(hr, idx) if hr and len(idx) else None
     time_s = round(stop - start, 1)
     return RaceEfficiencyLap(
-        lap=n, time_s=time_s,
+        lap=n, start_lap=lap.start_lap, time_s=time_s,
         avg_power_w=mean_present(power, idx) if len(idx) else None,
         np_w=round(np_w, 1) if np_w else None,
         avg_hr=avg_hr,
@@ -116,19 +119,17 @@ def _verdict(t: RaceEfficiencyTrend) -> str:
     return f"{head}: " + ", ".join(p for p in parts if p)
 
 
-def build_race_efficiency(
-    workout: Workout, series: dict | None, prefer_gps: bool = False, race_start_s: float | None = None
-) -> RaceEfficiency | None:
-    """The lap-to-lap efficiency read, or None unless 2..MAX_LAPS comparable laps (same selection as
-    `course_sectors`) end after `race_start_s` and the ride has power and distance channels. HR is
-    optional: without it the laps carry power and time but no EF or decoupling."""
+def build_race_efficiency(laps: Sequence[CanonicalLap], series: dict | None) -> RaceEfficiency | None:
+    """The lap-to-lap efficiency read over the canonical laps, or None unless 2..MAX_LAPS are
+    `comparable` and the ride has power and distance channels. The start lap (from the gun) is
+    listed first but kept out of the trend and the verdict. HR is optional: without it the laps carry
+    power and time but no EF or decoupling."""
     if not series or not series.get("t_s") or not has_channel(series, "power_w") or not has_channel(series, "dist_m"):
         return None
-    group = course_laps(workout, series, prefer_gps)
-    if race_start_s is not None:
-        group = [item for item in group if item[3] > race_start_s]
-    if not 2 <= len(group) <= MAX_LAPS:
+    comparable = [lap for lap in laps if lap.comparable]
+    if not 2 <= len(comparable) <= MAX_LAPS:
         return None
-    laps = [_lap_row(series, n, start, stop, lap.distance_m) for n, lap, start, stop in group]
-    trend = _trend(laps)
-    return RaceEfficiency(laps=laps, trend=trend, verdict=_verdict(trend))
+    start = [lap for lap in laps if lap.start_lap and not lap.comparable]
+    rows = [_lap_row(series, lap) for lap in comparable]
+    trend = _trend(rows)
+    return RaceEfficiency(laps=[*(_lap_row(series, lap) for lap in start), *rows], trend=trend, verdict=_verdict(trend))

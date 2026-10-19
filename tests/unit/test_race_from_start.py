@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 
 from swim_coach.bike_coach_view import COURSE_SECTORS_COACH_NOTE, course_sectors_coach_view
-from swim_coach.interval_analysis import _laps_from
+from swim_coach.canonical_laps import build_canonical_laps
 from swim_coach.models import WorkoutLap
 from swim_coach.race_phases import split_race_phases
 from swim_coach.race_start import analyze_race_start
@@ -77,11 +77,11 @@ def test_device_laps_ending_before_the_start_are_not_race_laps() -> None:
         WorkoutLap(index=0, start_offset_s=0.0, duration_s=600.0),
         WorkoutLap(index=1, start_offset_s=600.0, duration_s=420.0),  # ends exactly at the start
         WorkoutLap(index=2, start_offset_s=1020.0, duration_s=300.0),
-        WorkoutLap(index=3, duration_s=300.0),  # no offset: cannot be placed, kept
     ]
-    kept = _laps_from(laps, float(RACE_START_S))
-    assert [l.index for l in kept] == [2, 3]
-    assert _laps_from(laps, None) == laps
+    race = build_canonical_laps(laps, _series(), race_start_s=float(RACE_START_S))
+    assert [(l.start_s, l.source) for l in race][0] == (float(RACE_START_S), "device")
+    assert race[0].start_lap  # pressed at the gun: it begins at the start, not at a (GPS-less) mark
+    assert build_canonical_laps(laps, _series(), race_start_s=None)[0].start_s == 0.0
 
 
 def test_sector_flow_stays_in_the_coach_view_labelled_approximate() -> None:

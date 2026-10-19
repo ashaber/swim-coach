@@ -110,9 +110,12 @@ from __future__ import annotations
 
 import math
 import statistics
-from dataclasses import dataclass
+from bisect import bisect_left
+from dataclasses import dataclass, replace
+from typing import Sequence
 
 from swim_coach import analytics
+from swim_coach.models import CanonicalLap
 
 # --- constants (library/32-gps-lap-detection.md) --------------------------------------
 
@@ -206,16 +209,89 @@ class GpsLap:
         return self.end_s - self.start_s
 
 
-def _first_valid_gps_index(lat: list, lng: list) -> int | None:
-    for i, (la, lo) in enumerate(zip(lat, lng)):
-        if la is not None and lo is not None:
-            return i
-    return None
+def _approach_minimum(t_s: list, lat: list, lng: list, ref: tuple[float, float], i: int, n: int) -> int:
+    """The index of the closest approach to `ref` in the run of samples from `i` onward that keeps
+    getting closer, so a crossing lands on the mark itself, not on the first sample inside the radius."""
+    best = haversine_distance_m(*ref, lat[i], lng[i])
+    while i + 1 < n and lat[i + 1] is not None and lng[i + 1] is not None:
+        nxt = haversine_distance_m(*ref, lat[i + 1], lng[i + 1])
+        if nxt >= best:
+            break
+        best, i = nxt, i + 1
+    return i
+
+
+def _crossing_indices(
+    series: dict | None,
+    reference: tuple[float, float] | None,
+    from_s: float | None,
+    proximity_m: float,
+    min_away_m: float,
+    min_lap_duration_s: float,
+    *,
+    include_start: bool,
+) -> list[int]:
+    """Indices of the samples where the track returns to `reference` (default: the first GPS sample)
+    after leaving it, scanning from `from_s` (default: the start). `include_start` puts the first
+    scanned sample in as the opening boundary (laps are measured from it); without it only real
+    crossings come back. `[]` for every "nothing usable" case."""
+    if not series:
+        return []
+    t_s, lat, lng = series.get("t_s"), series.get("lat"), series.get("lng")
+    if not t_s or not lat or not lng:
+        return []
+    first = next(
+        (i for i, (t, la, lo) in enumerate(zip(t_s, lat, lng)) if la is not None and lo is not None and (from_s is None or t >= from_s)),
+        None,
+    )
+    n = len(t_s)
+    if first is None or n - first < MIN_USABLE_GPS_SAMPLES:
+        return []
+    ref = reference if reference is not None else (lat[first], lng[first])
+
+    boundaries: list[int] = [first] if include_start else []
+    armed = False
+    last_boundary_t = t_s[first]
+    i = first if reference is not None else first + 1
+    while i < n:
+        la, lo = lat[i], lng[i]
+        if la is None or lo is None:
+            i += 1
+            continue
+        dist = haversine_distance_m(ref[0], ref[1], la, lo)
+        if not armed:
+            if dist >= min_away_m:
+                armed = True
+        elif dist <= proximity_m and t_s[i] - last_boundary_t >= min_lap_duration_s:
+            at = _approach_minimum(t_s, lat, lng, ref, i, n)
+            boundaries.append(at)
+            last_boundary_t = t_s[at]
+            armed = False
+            i = at
+        i += 1
+    return boundaries
+
+
+def mark_crossings(
+    series: dict | None,
+    reference: tuple[float, float],
+    *,
+    from_s: float | None = None,
+    proximity_m: float = GPS_LAP_PROXIMITY_M,
+    min_away_m: float = GPS_LAP_MIN_AWAY_M,
+    min_lap_duration_s: float = GPS_LAP_MIN_DURATION_S,
+) -> list[float]:
+    """Times (activity clock) at which the track crosses `reference` (a lap mark), at least
+    `min_lap_duration_s` apart; the start of the scan is not a crossing. `[]` without usable GPS."""
+    found = _crossing_indices(series, reference, from_s, proximity_m, min_away_m, min_lap_duration_s, include_start=False)
+    return [series["t_s"][i] for i in found]
 
 
 def detect_gps_laps(
     series: dict | None,
     *,
+    reference: tuple[float, float] | None = None,
+    from_s: float | None = None,
     proximity_m: float = GPS_LAP_PROXIMITY_M,
     min_away_m: float = GPS_LAP_MIN_AWAY_M,
     min_lap_duration_s: float = GPS_LAP_MIN_DURATION_S,
@@ -223,54 +299,19 @@ def detect_gps_laps(
     """Detect real per-course-lap boundaries from GPS position on a looped
     course. See the module docstring for the full algorithm and edge-case
     posture. Never raises -- see module docstring for every `[]` case.
+
+    `reference` is the lap mark (default: the first GPS sample at/after `from_s`, which is the
+    warm-up start on a one-file warm-up + race and finds nothing -- pass the mark instead);
+    laps are measured from the first sample at/after `from_s`.
     """
-    if not series:
+    boundaries = _crossing_indices(series, reference, from_s, proximity_m, min_away_m, min_lap_duration_s, include_start=True)
+    if not boundaries:
         return []
-    t_s = series.get("t_s")
-    lat = series.get("lat")
-    lng = series.get("lng")
-    if not t_s or not lat or not lng:
-        return []
-
-    ref_idx = _first_valid_gps_index(lat, lng)
-    if ref_idx is None:
-        return []
-
-    n = len(t_s)
-    if n - ref_idx < MIN_USABLE_GPS_SAMPLES:
-        return []
-
-    ref_lat, ref_lng = lat[ref_idx], lng[ref_idx]
-
-    boundaries: list[int] = [ref_idx]
-    armed = False
-    last_boundary_t = t_s[ref_idx]
-
-    for i in range(ref_idx + 1, n):
-        la, lo = lat[i], lng[i]
-        if la is None or lo is None:
-            continue
-        dist = haversine_distance_m(ref_lat, ref_lng, la, lo)
-        if not armed:
-            if dist >= min_away_m:
-                armed = True
-            continue
-        if dist <= proximity_m and t_s[i] - last_boundary_t >= min_lap_duration_s:
-            boundaries.append(i)
-            last_boundary_t = t_s[i]
-            armed = False
-
-    laps = [
-        GpsLap(
-            n=k + 1,
-            start_idx=boundaries[k],
-            end_idx=boundaries[k + 1],
-            start_s=t_s[boundaries[k]],
-            end_s=t_s[boundaries[k + 1]],
-        )
+    t_s = series["t_s"]
+    return [
+        GpsLap(n=k + 1, start_idx=boundaries[k], end_idx=boundaries[k + 1], start_s=t_s[boundaries[k]], end_s=t_s[boundaries[k + 1]])
         for k in range(len(boundaries) - 1)
     ]
-    return laps
 
 
 # --- per-lap metrics ----------------------------------------------------------------
@@ -399,6 +440,11 @@ class GpsLapMetrics:
     simply choosing tighter, slower lines -- read it as one more component
     to combine, same posture as every other field on this class.
     """
+    comparable: bool = True
+    """The canonical lap is a full lap from the lap mark (`canonical_laps`): the laps a lap-to-lap
+    consistency read may compare. False for the start lap and a finish remainder."""
+    start_lap: bool = False
+    """The canonical lap begins at the race start, not at the lap mark."""
 
 
 def _slice_series(series: dict, start_idx: int, end_idx: int) -> dict:
@@ -501,13 +547,22 @@ def lap_metrics(series: dict, lap: GpsLap) -> GpsLapMetrics:
     )
 
 
-def analyze_gps_laps(series: dict | None, *, from_s: float | None = None, **detect_kwargs) -> list[GpsLapMetrics]:
-    """Convenience orchestrator: `detect_gps_laps(series, **detect_kwargs)`
-    then `lap_metrics` for each detected lap. `[]` whenever `detect_gps_laps`
-    itself returns `[]` -- see that function's docstring for every such
-    case. `**detect_kwargs` forwards `proximity_m`/`min_away_m`/
-    `min_lap_duration_s` overrides straight through. `from_s` (a race start on the activity
-    clock) drops laps that END at or before it: those are warm-up laps, not race laps.
-    """
-    laps = detect_gps_laps(series, **detect_kwargs)
-    return [lap_metrics(series, lap) for lap in laps if from_s is None or lap.end_s > from_s]
+def _index_span(t_s: list[float], start_s: float, end_s: float) -> tuple[int, int]:
+    """`(start_idx, end_idx)` (inclusive) of the samples from the first at/after `start_s` to the
+    first at/after `end_s`, as `detect_gps_laps` shares its boundary sample between laps."""
+    start = bisect_left(t_s, start_s)
+    end = min(bisect_left(t_s, end_s), len(t_s) - 1)
+    return min(start, end), end
+
+
+def analyze_laps(series: dict | None, laps: Sequence[CanonicalLap]) -> list[GpsLapMetrics]:
+    """`lap_metrics` for each canonical lap (`canonical_laps.build_canonical_laps`), numbered as the
+    canonical laps are, carrying their `comparable` / `start_lap` flags. `[]` without a series."""
+    if not series or not series.get("t_s"):
+        return []
+    out = []
+    for lap in laps:
+        a, b = _index_span(series["t_s"], lap.start_s, lap.end_s)
+        gps = GpsLap(n=lap.n, start_idx=a, end_idx=b, start_s=series["t_s"][a], end_s=series["t_s"][b])
+        out.append(replace(lap_metrics(series, gps), comparable=lap.comparable, start_lap=lap.start_lap))
+    return out

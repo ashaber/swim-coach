@@ -280,7 +280,7 @@ def race_efficiency_coach_view(re: dict) -> dict:
     """Verdict first, then one compact line per lap."""
     laps = []
     for lap in re.get("laps") or []:
-        line = f"Lap {lap['lap']}: {_clock(lap['time_s'])}"
+        line = f"Lap {lap['lap']}{' (start lap, not in the trend)' if lap.get('start_lap') else ''}: {_clock(lap['time_s'])}"
         for key, label, fmt in (("np_w", "NP", "{:.0f} W"), ("avg_hr", "HR", "{:.0f}"), ("ef", "EF", "{:.2f}"),
                                 ("speed_per_100w", "speed/100 W", "{:.2f} m/s"), ("avg_flow", "flow", "{:.1f}")):
             if lap.get(key) is not None:
@@ -297,6 +297,32 @@ def race_efficiency_coach_view(re: dict) -> dict:
         "slopes": ", ".join(slopes) or None,
         "decoupling_pct": t.get("decoupling_pct"),
     }
+
+
+LAPS_COACH_NOTE = (
+    "These are the ride's canonical laps, the one lap set every lap number in this analysis refers to "
+    "(device laps merged where one lap fired twice, a race trimmed to the gun so lap 1 excludes the "
+    "warm-up and the wait on the line, missed laps found from the GPS lap mark). A start lap begins at "
+    "the race start, not at the mark, so it is shown but never compared with the full laps."
+)
+
+
+def laps_coach_view(laps: list[dict]) -> dict:
+    """One compact line per canonical lap, with a note on what the laps are."""
+    lines = []
+    for lap in laps:
+        label = " (start lap, from the gun)" if lap.get("start_lap") else "" if lap.get("comparable") else " (not compared)"
+        bits = [_clock(lap["duration_s"])]
+        if lap.get("distance_m") is not None:
+            bits.append(f"{lap['distance_m']:.0f} m")
+        if lap.get("avg_power_w") is not None:
+            bits.append(f"{lap['avg_power_w']:.0f} W")
+        if lap.get("avg_hr") is not None:
+            bits.append(f"HR {lap['avg_hr']}")
+        if lap.get("source") == "gps_filled":
+            bits.append("found by GPS")
+        lines.append(f"Lap {lap['n']}{label}: " + ", ".join(bits))
+    return {"coach_note": LAPS_COACH_NOTE, "laps": lines}
 
 
 def shape_ride_view(out: dict, analytics: WorkoutAnalytics) -> dict:
@@ -317,6 +343,8 @@ def shape_ride_view(out: dict, analytics: WorkoutAnalytics) -> dict:
     out.pop("mtb_dynamics", None)
     out.pop("course_sectors", None)
     efficiency = race_efficiency_coach_view(out.pop("race_efficiency")) if out.get("race_efficiency") else None
+    if out.get("laps"):
+        dynamics = {"laps": laps_coach_view(out.pop("laps")), **dynamics}
     if (out.get("intervals") or {}).get("race_start"):
         # A race leads with its summary and lap-to-lap block; the device/sector detail is the
         # drill-down after it, so the lap-to-lap read keeps the focus.

@@ -9,6 +9,7 @@ import pytest
 
 import synthetic_course as sc
 from swim_coach.course_features import align_edges, project_xy, segment_course
+from swim_coach.canonical_laps import build_canonical_laps
 from swim_coach.course_sectors import SECTOR_COUNT, build_course_sectors
 from swim_coach.models import Workout, WorkoutLap
 
@@ -105,6 +106,10 @@ def test_edges_reject_a_lap_that_never_reaches_the_end():
     assert align_edges(xy, bounds, half, t[: len(half)]) is None
 
 
+def _sectors(workout: Workout, series: dict):
+    return build_course_sectors(build_canonical_laps(workout.laps, series), series)
+
+
 # --- through build_course_sectors ---------------------------------------------------------------
 
 
@@ -127,7 +132,7 @@ def _three_laps(length_scale: float = 1.0, slow: dict | None = None) -> tuple[Wo
 
 def test_build_uses_course_sections_when_the_course_has_features():
     workout, series = _three_laps()
-    cs = build_course_sectors(workout, series)
+    cs = _sectors(workout, series)
     assert cs is not None and cs.sector_count == 11 != SECTOR_COUNT
     assert [s.kind for s in cs.sectors] == EXPECTED_KINDS
     assert [s.label for s in cs.sectors][:3] == ["S1", "C1", "S2"]
@@ -140,16 +145,16 @@ def test_build_uses_course_sections_when_the_course_has_features():
 def test_the_slow_stretch_lands_in_the_matching_section():
     # lap 3 rides 120-140 m of the lap at 3 m/s: that is inside the first long straight (S1)
     workout, series = _three_laps(slow={2: (120.0, 140.0, 3.0)})
-    cs = build_course_sectors(workout, series)
+    cs = _sectors(workout, series)
     assert cs.top_loss_sectors[0] == 1
     assert cs.sectors[0].kind == "straight" and cs.sectors[0].total_loss_s > 3
 
 
 def test_odometer_scaling_does_not_move_the_sections():
-    base = build_course_sectors(*_three_laps())
+    base = _sectors(*_three_laps())
     for scale in (0.95, 1.05):
         workout, series = _three_laps(length_scale=scale)
-        cs = build_course_sectors(workout, series)
+        cs = _sectors(workout, series)
         assert cs.sector_count == base.sector_count
         assert [s.kind for s in cs.sectors] == [s.kind for s in base.sectors]
         for a, b in zip(cs.laps[0].sector_times_s, base.laps[0].sector_times_s):
@@ -158,7 +163,7 @@ def test_odometer_scaling_does_not_move_the_sections():
 
 def test_corner_sections_carry_speed_and_straights_do_not_need_them():
     workout, series = _three_laps()
-    cs = build_course_sectors(workout, series)
+    cs = _sectors(workout, series)
     corner = next(s for s in cs.sectors if s.kind == "corners")
     assert corner.entry_speed_mps == pytest.approx(SPEED, abs=0.1) and corner.min_speed_mps is not None
 
@@ -166,7 +171,7 @@ def test_corner_sections_carry_speed_and_straights_do_not_need_them():
 def test_without_gps_the_equal_distance_sectors_remain():
     workout, series = _three_laps()
     series = {k: v for k, v in series.items() if k not in ("lat", "lng")}
-    cs = build_course_sectors(workout, series)
+    cs = _sectors(workout, series)
     assert cs.sector_count == SECTOR_COUNT and all(s.kind is None for s in cs.sectors)
 
 
@@ -177,7 +182,7 @@ def test_coach_view_names_the_section_kind_and_what_precedes_it():
     from swim_coach.bike_coach_view import course_sectors_coach_view
 
     workout, series = _three_laps(slow={2: (120.0, 140.0, 3.0)})
-    view = course_sectors_coach_view(build_course_sectors(workout, series).model_dump())
+    view = course_sectors_coach_view(_sectors(workout, series).model_dump())
     assert view["top_loss_sectors"][0].startswith("Section S1 (straight, 150 m)")
     assert "Sector " not in view["top_loss_sectors"][0]
 

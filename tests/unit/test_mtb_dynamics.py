@@ -17,6 +17,7 @@ import pytest
 import mtb_fit_builder as fx
 from swim_coach.analysis import AnalysisContext, BIKE_FIELDS, analytics_for_coach
 from swim_coach.models import DeviceDynamics, JumpRecord, Workout, WorkoutLap
+from swim_coach.canonical_laps import build_canonical_laps
 from swim_coach.mtb_dynamics import GRIT_RECORD_SCALE, build_mtb_dynamics
 from swim_coach.course_sectors import SECTOR_COUNT, build_course_sectors
 from swim_coach.parse_files import parse_fit
@@ -49,6 +50,14 @@ def _workout(**kw) -> Workout:
     )
     data.update(kw)
     return Workout(**data)
+
+
+def _sectors(workout: Workout, series: dict | None):
+    return build_course_sectors(build_canonical_laps(workout.laps, series), series)
+
+
+def _dynamics(workout: Workout, series: dict | None):
+    return build_mtb_dynamics(workout, series, build_canonical_laps(workout.laps, series))
 
 
 # --- fixture file stays in sync with the builder ------------------------------------------------
@@ -106,7 +115,7 @@ def test_draft_carries_dynamics_to_workout(tmp_path):
 
 def test_lap_grit_is_record_sum_over_scale_and_ride_total_ties_to_device():
     series = fx.build_series()
-    m = build_mtb_dynamics(_workout(), series)
+    m = _dynamics(_workout(), series)
     assert m.total_grit == _device().total_grit
     starts = fx.lap_starts() + [sum(fx.LAP_S)]
     for i, lap in enumerate(m.laps):
@@ -117,7 +126,7 @@ def test_lap_grit_is_record_sum_over_scale_and_ride_total_ties_to_device():
 
 def test_lap_flow_averages_moving_records_and_ride_average_ties_to_device():
     series = fx.build_series()
-    m = build_mtb_dynamics(_workout(), series)
+    m = _dynamics(_workout(), series)
     s = fx.lap_starts()
     moving = [f for f, v in zip(series["flow"][s[0]:s[1]], series["speed_mps"][s[0]:s[1]]) if v > 1.0]
     assert m.laps[0].avg_flow == pytest.approx(sum(moving) / len(moving), abs=0.01)
@@ -133,31 +142,31 @@ def test_lap_flow_ignores_slow_records_even_when_flow_is_nonzero():
     for i in range(s[0], s[0] + 50):  # a stopped stretch that still reports a big flow value
         series["speed_mps"][i] = 0.2
         series["flow"][i] = 40.0
-    m = build_mtb_dynamics(_workout(), series)
+    m = _dynamics(_workout(), series)
     assert m.laps[0].avg_flow < 10
 
 
 def test_jumps_land_in_their_lap_and_are_summarised():
-    m = build_mtb_dynamics(_workout(), fx.build_series())
+    m = _dynamics(_workout(), fx.build_series())
     assert [lap.jumps for lap in m.laps] == [3, 2, 1]  # offsets 40/95/150 | 340/420 | 700
     assert m.jumps.count == 6 and m.jumps.max_height_m == 6.0 and m.jumps.max_hang_time_s == 6.0
     assert m.jumps.best_score == 45.0 and m.jumps.max_distance_m == 9.0
 
 
 def test_totals_fall_back_to_the_series_without_session_totals():
-    m = build_mtb_dynamics(_workout(device_dynamics=None), fx.build_series())
+    m = _dynamics(_workout(device_dynamics=None), fx.build_series())
     assert m.total_grit == pytest.approx(sum(fx.build_series()["grit"]) / 1000, abs=0.01)
     assert m.jumps is None
 
 
 def test_absent_when_no_data():
     series = {k: v for k, v in fx.build_series().items() if k not in ("grit", "flow")}
-    assert build_mtb_dynamics(_workout(device_dynamics=None), series) is None
-    assert build_mtb_dynamics(_workout(device_dynamics=None), None) is None
+    assert _dynamics(_workout(device_dynamics=None), series) is None
+    assert _dynamics(_workout(device_dynamics=None), None) is None
 
 
 def test_session_totals_alone_still_yield_a_block_without_laps():
-    m = build_mtb_dynamics(_workout(laps=[]), None)
+    m = _dynamics(_workout(laps=[]), None)
     assert m.total_grit == _device().total_grit and m.laps == []
 
 
@@ -165,7 +174,7 @@ def test_session_totals_alone_still_yield_a_block_without_laps():
 
 
 def test_course_sectors_loss_lands_in_the_slow_sector():
-    cs = build_course_sectors(_workout(), fx.build_series())
+    cs = _sectors(_workout(), fx.build_series())
     assert cs.sector_count == SECTOR_COUNT == 8
     assert [lap.lap for lap in cs.laps] == [1, 2, 3] and cs.best_lap == 1
     assert cs.laps[0].time_vs_best_s == 0 and cs.laps[2].time_vs_best_s > cs.laps[1].time_vs_best_s > 0
@@ -176,7 +185,7 @@ def test_course_sectors_loss_lands_in_the_slow_sector():
 
 
 def test_course_sectors_baseline_is_the_best_time_per_sector_not_the_best_lap():
-    cs = build_course_sectors(_workout(), fx.build_series())
+    cs = _sectors(_workout(), fx.build_series())
     cut = [lap.sector_times_s for lap in cs.laps]
     for k, sector in enumerate(cs.sectors):
         times = [t[k] for t in cut]
@@ -191,12 +200,12 @@ def test_course_sectors_baseline_is_the_best_time_per_sector_not_the_best_lap():
 
 def test_course_sectors_negative_loss_is_impossible_when_another_lap_wins_a_sector():
     series = fx.build_series()
-    cs = build_course_sectors(_workout(), series)
+    cs = _sectors(_workout(), series)
     assert all(t - cs.sectors[k].best_time_s >= -1e-9 for lap in cs.laps for k, t in enumerate(lap.sector_times_s))
 
 
 def test_course_sectors_fade_reports_time_power_and_flow_trend():
-    cs = build_course_sectors(_workout(), fx.build_series())
+    cs = _sectors(_workout(), fx.build_series())
     assert cs.fade.time_change_pct == pytest.approx((336 - 300) / 300 * 100, abs=0.5)
     assert cs.fade.flow_change > 0 and cs.fade.flow_slope_per_lap > 0
     assert abs(cs.fade.power_change_pct) < 5
@@ -204,18 +213,18 @@ def test_course_sectors_fade_reports_time_power_and_flow_trend():
 
 def test_course_sectors_need_two_similar_laps():
     one_lap = _workout(laps=_laps()[:1])
-    assert build_course_sectors(one_lap, fx.build_series()) is None
+    assert _sectors(one_lap, fx.build_series()) is None
     odd = _laps()
     odd[1] = odd[1].model_copy(update={"distance_m": 400.0})
     odd[2] = odd[2].model_copy(update={"distance_m": 2500.0})
-    assert build_course_sectors(_workout(laps=odd), fx.build_series()) is None
+    assert _sectors(_workout(laps=odd), fx.build_series()) is None
 
 
 def test_course_sectors_ignore_a_dissimilar_warmup_lap():
     series = fx.build_series()
     laps = _laps()
     laps[0] = laps[0].model_copy(update={"distance_m": 300.0})
-    cs = build_course_sectors(_workout(laps=laps), series)
+    cs = _sectors(_workout(laps=laps), series)
     assert [lap.lap for lap in cs.laps] == [2, 3]
 
 
@@ -232,18 +241,18 @@ def _with_gps(start_lng_by_lap: tuple[float, ...]) -> dict:
 
 def test_course_sectors_drop_a_lap_that_did_not_start_at_the_line():
     # lap 2 starts ~250 m (0.003 deg of longitude at 40N) from the others
-    cs = build_course_sectors(_workout(), _with_gps((-100.0, -99.997, -100.0)))
+    cs = _sectors(_workout(), _with_gps((-100.0, -99.997, -100.0)))
     assert [lap.lap for lap in cs.laps] == [1, 3]
 
 
 def test_course_sectors_keep_laps_starting_within_the_radius():
-    cs = build_course_sectors(_workout(), _with_gps((-100.0, -99.9998, -100.0)))  # ~17 m
+    cs = _sectors(_workout(), _with_gps((-100.0, -99.9998, -100.0)))  # ~17 m
     assert [lap.lap for lap in cs.laps] == [1, 2, 3]
 
 
 def test_course_sectors_absent_without_distance_channel():
     series = {k: v for k, v in fx.build_series().items() if k != "dist_m"}
-    assert build_course_sectors(_workout(), series) is None
+    assert _sectors(_workout(), series) is None
 
 
 # --- analyzer wiring + coach view ---------------------------------------------------------------
@@ -330,7 +339,7 @@ def _loop_gps() -> dict:
 
 
 def test_track_is_projected_metres_centred_on_the_lap_with_eight_sector_polylines():
-    cs = build_course_sectors(_workout(), _loop_gps())
+    cs = _sectors(_workout(), _loop_gps())
     assert cs.track is not None and [t.sector for t in cs.track.sectors] == list(range(1, 9))
     pts = [p for t in cs.track.sectors for p in t.points]
     assert 150 <= len(pts) <= 260  # ~200 points for the lap (Coach judgment), plus shared joins
@@ -342,7 +351,7 @@ def test_track_is_projected_metres_centred_on_the_lap_with_eight_sector_polyline
 
 
 def test_track_sectors_join_end_to_start_and_stores_no_raw_coordinates():
-    cs = build_course_sectors(_workout(), _loop_gps())
+    cs = _sectors(_workout(), _loop_gps())
     sectors = cs.track.sectors
     for a, b in zip(sectors, sectors[1:]):
         assert a.points[-1] == b.points[0]
@@ -352,7 +361,7 @@ def test_track_sectors_join_end_to_start_and_stores_no_raw_coordinates():
 
 
 def test_track_absent_without_gps_but_sectors_still_built():
-    cs = build_course_sectors(_workout(), fx.build_series())
+    cs = _sectors(_workout(), fx.build_series())
     assert cs is not None and cs.track is None
 
 
@@ -367,27 +376,27 @@ def test_coach_view_strips_the_track():
 
 
 def test_course_sectors_from_gps_laps_when_there_are_no_native_laps():
-    cs = build_course_sectors(_workout(laps=[]), _loop_gps(), prefer_gps=True)
+    cs = _sectors(_workout(laps=[]), _loop_gps())
     assert cs is not None and len(cs.laps) >= 2
     assert cs.track is not None and len(cs.track.sectors) == SECTOR_COUNT
     assert cs.laps[0].time_vs_best_s >= 0
 
 
-def test_race_prefers_gps_laps_over_native_laps_but_other_kinds_prefer_native():
+def test_a_single_pressed_lap_falls_back_to_gps_laps_and_device_laps_are_kept_when_they_are_enough():
     one_native = _laps()[:1]  # a race with a single pressed lap
-    race = build_course_sectors(_workout(laps=one_native), _loop_gps(), prefer_gps=True)
+    race = _sectors(_workout(laps=one_native), _loop_gps())
     assert race is not None and len(race.laps) >= 2
-    native = build_course_sectors(_workout(), _loop_gps(), prefer_gps=False)
+    native = _sectors(_workout(), _loop_gps())
     assert [lap.lap for lap in native.laps] == [1, 2, 3]  # the device's own laps
 
 
-def test_non_race_falls_back_to_gps_laps_when_native_laps_fail_the_filter():
-    cs = build_course_sectors(_workout(laps=_laps()[:1]), _loop_gps(), prefer_gps=False)
+def test_a_non_race_ride_with_one_pressed_lap_falls_back_to_gps_laps():
+    cs = _sectors(_workout(laps=_laps()[:1]), _loop_gps())
     assert cs is not None and len(cs.laps) >= 2
 
 
 def test_no_gps_and_no_native_laps_gives_no_sectors():
-    assert build_course_sectors(_workout(laps=[]), fx.build_series(), prefer_gps=True) is None
+    assert _sectors(_workout(laps=[]), fx.build_series()) is None
 
 
 def test_bike_analyzer_builds_sectors_for_an_unpressed_race():

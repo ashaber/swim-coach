@@ -29,8 +29,9 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Protocol, Sequence
 
 from swim_coach.analytics import compute_analytics
-from swim_coach.models import Athlete, Event, Session, SessionKind, Workout, WorkoutAnalytics
+from swim_coach.models import Athlete, Event, RaceLap, Session, SessionKind, Workout, WorkoutAnalytics
 from swim_coach.bike_coach_view import shape_ride_view
+from swim_coach.canonical_laps import build_canonical_laps
 from swim_coach.course_sectors import build_course_sectors
 from swim_coach.free_ride import FREE_READ_KINDS, read_free_ride
 from swim_coach.mtb_dynamics import build_mtb_dynamics
@@ -82,7 +83,7 @@ SWIM_FIELDS: frozenset[str] = frozenset(
     }
 )
 BIKE_FIELDS: frozenset[str] = frozenset(
-    {"intervals", "avg_power_w", "normalized_power_w", "power_curve", "free_ride", "mtb_dynamics", "course_sectors", "race_efficiency"}
+    {"intervals", "avg_power_w", "normalized_power_w", "power_curve", "free_ride", "mtb_dynamics", "course_sectors", "race_efficiency", "laps"}
 )
 
 
@@ -193,7 +194,6 @@ class DefaultAnalyzer(_CoachViewMixin):
 
 
 COURSE_LAP_KINDS: tuple[SessionKind, ...] = ("race", "opener", "warmup")  # kinds whose laps are course repeats
-GPS_LAP_KINDS: tuple[SessionKind, ...] = ("race",)  # kinds whose laps come from the GPS start marker first
 UNSCORED_KINDS: tuple[SessionKind, ...] = ("opener", "warmup")  # load + base analytics + curve only
 
 
@@ -221,25 +221,34 @@ class BikeAnalyzer(_CoachViewMixin):
 
     def analyze(self, workout: Workout, ctx: AnalysisContext) -> WorkoutAnalytics:
         analytics = self._analyze_by_kind(workout, ctx)
-        # Device dynamics are descriptive, so every kind gets them when the data is there. Course
-        # sectors compare repeated laps of a course: a race or an unstructured ride, never a
-        # structured workout whose laps are its reps.
+        # ONE lap set (`canonical_laps`) feeds every lap-based read below and the race lap table.
+        # Course sectors / race efficiency compare repeated laps of a course: a race or an
+        # unstructured ride. A structured workout's laps are its reps: they pass through as the raw
+        # device laps (never stored as canonical, never comparable). Device dynamics are descriptive,
+        # so every kind gets them.
+        course = self._compares_course_laps(ctx)
+        laps = build_canonical_laps(
+            workout.laps,
+            ctx.series,
+            race_start_s=self._race_start_s(analytics, ctx) if ctx.kind == "race" else None,
+            course=course,
+        )
         found = {
-            "mtb_dynamics": build_mtb_dynamics(workout, ctx.series),
-            "course_sectors": (
-                build_course_sectors(workout, ctx.series, prefer_gps=ctx.kind in GPS_LAP_KINDS)
-                if self._compares_course_laps(ctx)
-                else None
-            ),
-            "race_efficiency": (
-                build_race_efficiency(
-                    workout, ctx.series, prefer_gps=ctx.kind in GPS_LAP_KINDS, race_start_s=self._race_start_s(analytics, ctx)
-                )
-                if self._compares_course_laps(ctx)
-                else None
-            ),
+            "laps": (laps or None) if course else None,
+            "mtb_dynamics": build_mtb_dynamics(workout, ctx.series, laps),
+            "course_sectors": build_course_sectors(laps, ctx.series) if course else None,
+            "race_efficiency": build_race_efficiency(laps, ctx.series) if course else None,
         }
-        return analytics.model_copy(update={k: v for k, v in found.items() if v is not None})
+        analytics = analytics.model_copy(update={k: v for k, v in found.items() if v is not None})
+        return self._with_race_laps(analytics, laps, ctx)
+
+    @staticmethod
+    def _with_race_laps(analytics: WorkoutAnalytics, laps: Sequence, ctx: AnalysisContext) -> WorkoutAnalytics:
+        """A race's lap table (`intervals.race_laps`) is the canonical laps."""
+        if ctx.kind != "race" or analytics.intervals is None or not laps:
+            return analytics
+        table = [RaceLap(n=l.n, duration_s=round(l.duration_s, 1), avg_w=l.avg_power_w, avg_hr=l.avg_hr) for l in laps]
+        return analytics.model_copy(update={"intervals": analytics.intervals.model_copy(update={"race_laps": table})})
 
     def _analyze_by_kind(self, workout: Workout, ctx: AnalysisContext) -> WorkoutAnalytics:
         if ctx.kind in UNSCORED_KINDS:

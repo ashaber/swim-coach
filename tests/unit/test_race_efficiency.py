@@ -14,7 +14,8 @@ import pytest
 from swim_coach.analysis import BIKE_FIELDS, AnalysisContext, analytics_for_coach
 from swim_coach.bike_coach_view import RACE_EFFICIENCY_COACH_NOTE
 from swim_coach.models import Session, Workout, WorkoutLap, WorkoutStep, WorkoutStructure
-from swim_coach.race_efficiency import DECOUPLING_FLAG_PCT, build_race_efficiency
+from swim_coach.canonical_laps import build_canonical_laps
+from swim_coach.race_efficiency import DECOUPLING_FLAG_PCT, build_race_efficiency as _build
 
 LAP_S = 300
 LAP_M = 1000.0
@@ -56,6 +57,10 @@ def _workout(n: int, warmup_s: int = 0) -> Workout:
     ]
     return Workout(id=uuid.uuid4(), athlete_id=uuid.uuid4(), date=date(2026, 10, 17), sport="bike", source="fit",
                    distance_m=n * LAP_M, duration_min=n * LAP_S / 60, laps=laps)
+
+
+def build_race_efficiency(workout: Workout, series: dict | None, race_start_s: float | None = None):
+    return _build(build_canonical_laps(workout.laps, series, race_start_s=race_start_s), series)
 
 
 def test_held_efficiency_has_per_lap_numbers_and_a_held_verdict():
@@ -103,10 +108,13 @@ def test_warmup_lap_of_different_distance_is_left_out():
     assert [lap.lap for lap in re.laps] == [2, 3, 4]
 
 
-def test_laps_before_race_start_are_trimmed():
+def test_laps_before_race_start_are_trimmed_and_the_start_lap_stays_out_of_the_trend():
     n = 4
-    re = build_race_efficiency(_workout(n), _series([250.0] * n, [170.0] * n), race_start_s=LAP_S + 10.0)
-    assert [lap.lap for lap in re.laps] == [2, 3, 4]
+    re = build_race_efficiency(_workout(n), _series([250.0, 300.0, 200.0, 200.0], [170.0] * n), race_start_s=LAP_S + 10.0)
+    assert [lap.lap for lap in re.laps] == [1, 2, 3]  # lap 1 = the start lap, cut at the gun
+    assert re.laps[0].start_lap and re.laps[0].time_s == pytest.approx(LAP_S - 10.0, abs=2)
+    assert not any(lap.start_lap for lap in re.laps[1:])
+    assert re.trend.power_change_pct == pytest.approx(0.0, abs=0.5)  # laps 2 -> 3, not 1 -> 3
 
 
 def test_none_without_two_laps_or_power():
