@@ -117,9 +117,8 @@ export function canonicalLapLabel(lap) {
   return lap.comparable ? String(lap.n) : `${lap.n} (partial)`;
 }
 
-export const CANONICAL_LAP_COLUMNS = ['Lap', 'Dist', 'Time', 'Power', 'HR'];
 export const DEVICE_LAP_COLUMNS = ['#', 'Dist', 'Time', 'Power', 'HR'];
-const CANONICAL_LAPS_NOTE = 'Lap 1 of a race runs from the gun, so the warm-up and the wait on the line are not in it. '
+const MASTER_LAPS_NOTE = 'Lap 1 of a race runs from the gun, so the warm-up and the wait on the line are not in it. '
   + 'Laps marked (start) or (partial) are shown but left out of lap-to-lap comparisons. These are the laps every table in this analysis uses.';
 
 function lapCells(lap, label) {
@@ -133,52 +132,109 @@ function lapCells(lap, label) {
   ];
 }
 
-/** The ride's canonical laps (`analytics.laps`) as a table model, or null when the analysis has none. */
-export function buildCanonicalLaps(workout) {
+/** A lap's label by number: the canonical lap's own label when the ride has canonical laps. */
+function lapLabelFor(workout, n) {
+  const lap = (workout?.analytics?.laps || []).find((l) => l.n === n);
+  return lap ? canonicalLapLabel(lap) : String(n);
+}
+
+const byLap = (rows, key) => new Map((rows || []).map((r) => [r[key], r]));
+const text = (v, fmt = String) => (num(v) ? fmt(v) : dash);
+
+/** The master lap table: the ride's canonical laps (`analytics.laps`) with every lap metric any block
+ * of the analysis holds (efficiency, handling, pacing), by lap number. Columns nothing fills are
+ * left out. Null without canonical laps. This is the one place all lap metrics sit together. */
+export function buildMasterLaps(workout, pacing) {
   const laps = workout?.analytics?.laps || [];
   if (!laps.length) return null;
+  const eff = byLap(workout.analytics.race_efficiency?.laps, 'lap');
+  const dyn = byLap(workout.analytics.mtb_dynamics?.laps, 'lap');
+  const gps = byLap(pacing?.status === 'ready' ? pacing.data?.gps_laps?.laps : [], 'lap_n');
+  const columns = ['Lap', 'Source', 'Start', 'Dist', 'Time', 'Speed', 'Avg W', 'NP', 'HR', 'EF', 'VI', 'Coasting', 'Work (kJ)', 'Grit', 'Flow', 'Jumps'];
+  const rows = laps.map((l) => {
+    const e = eff.get(l.n) || {};
+    const d = dyn.get(l.n) || {};
+    const g = gps.get(l.n) || {};
+    const speed = num(l.distance_m) && num(l.duration_s) && l.duration_s > 0 ? `${((l.distance_m / l.duration_s) * 3.6).toFixed(1)} km/h` : dash;
+    return [
+      canonicalLapLabel(l),
+      l.source || dash,
+      num(l.start_s) ? formatClock(l.start_s) : dash,
+      formatWorkoutDistance(l.distance_m) || dash,
+      formatClock(l.duration_s) || dash,
+      speed,
+      watts(l.avg_power_w),
+      watts(num(e.np_w) ? e.np_w : g.normalized_power_w),
+      num(l.avg_hr) ? String(l.avg_hr) : dash,
+      text(e.ef, (v) => v.toFixed(2)),
+      text(g.variability_index),
+      num(g.coasting_s) ? formatClock(g.coasting_s) : dash,
+      text(g.total_work_kj),
+      text(d.grit),
+      text(num(d.avg_flow) ? d.avg_flow : e.avg_flow),
+      text(d.jumps),
+    ];
+  });
+  const keep = columns.map((_, i) => i === 0 || rows.some((r) => r[i] !== dash));
   return {
-    columns: CANONICAL_LAP_COLUMNS,
-    rows: laps.map((l) => lapCells(l, canonicalLapLabel(l))),
-    note: CANONICAL_LAPS_NOTE,
+    columns: columns.filter((_, i) => keep[i]),
+    rows: rows.map((r) => r.filter((_, i) => keep[i])),
+    note: MASTER_LAPS_NOTE,
   };
 }
 
-/** The device's own laps as recorded (never merged or trimmed): Raw analysis only, and only when the
- * canonical laps replace them elsewhere. */
+/** The device's own laps as recorded (never merged or trimmed): Raw analysis only. A ride with canonical
+ * laps always gets it; a bike ride without them gets it too, as its only lap table. */
 export function buildDeviceLaps(workout) {
   const raw = workout?.laps || [];
-  if (!raw.length || !(workout?.analytics?.laps || []).length) return null;
-  return { columns: DEVICE_LAP_COLUMNS, rows: raw.map((l) => lapCells(l, String(l.index))) };
+  const canonical = (workout?.analytics?.laps || []).length > 0;
+  if (!raw.length || !(canonical || workout?.sport === 'bike')) return null;
+  return { columns: DEVICE_LAP_COLUMNS, rows: raw.map((l) => lapCells(l, String(l.index))), canonical };
 }
 
+/** Whether the main view shows the device's laps table: every sport but a bike ride, whose laps
+ * live in Raw analysis (the focused tables above it each take a slice). */
+export const showsMainLapsTable = (workout) => workout?.sport !== 'bike';
+
 export const PHASE_COLUMNS = ['Phase', 'Span', 'NP', 'Speed', 'vs phase 1'];
-export const LAP_COLUMNS = ['Lap', 'Time', 'NP', 'Speed', 'Work', 'VI', 'Coasting'];
+export const LAP_COLUMNS = ['Lap', 'VI', 'Coasting', 'Work (kJ)'];
+
+const kmh = (v) => (num(v) ? `${(v * 3.6).toFixed(1)} km/h` : dash);
+
+/** "Pacing & effort": the race phases and the per-lap effort distribution (VI, coasting, work), or
+ * null while the pacing read is not ready. */
+export function buildPacingEffort(workout, pacing) {
+  if (!pacing || pacing.status !== 'ready' || !pacing.data) return null;
+  const d = pacing.data;
+  const phases = d.race_phases?.phases || [];
+  const laps = d.gps_laps?.laps || [];
+  return {
+    phases: {
+      columns: PHASE_COLUMNS,
+      rows: phases.map((p) => [
+        p.name,
+        `${formatClock(p.start_s)}–${formatClock(p.end_s)}`,
+        watts(p.normalized_power_w),
+        kmh(p.avg_speed_mps),
+        num(p.vs_phase_1_pct) ? `${signed(p.vs_phase_1_pct)}${p.vs_phase_1_significant ? ' (real)' : ''}` : dash,
+      ]),
+    },
+    laps: {
+      columns: LAP_COLUMNS,
+      rows: laps.map((l) => [
+        canonicalLapLabel({ n: l.lap_n, start_lap: l.start_lap, comparable: l.comparable !== false }),
+        text(l.variability_index),
+        num(l.coasting_s) ? formatClock(l.coasting_s) : dash,
+        text(l.total_work_kj),
+      ]),
+    },
+    lapsNote: d.gps_laps?.note || null,
+  };
+}
 
 function raceView(pacing) {
   if (!pacing || pacing.status !== 'ready' || !pacing.data) return null;
-  const d = pacing.data;
-  const speed = (v) => (num(v) ? `${(v * 3.6).toFixed(1)} km/h` : dash);
-  return {
-    score: scoreView(d.race_execution, 'Race execution score'),
-    phases: (d.race_phases?.phases || []).map((p) => [
-      p.name,
-      `${formatClock(p.start_s)}–${formatClock(p.end_s)}`,
-      watts(p.normalized_power_w),
-      speed(p.avg_speed_mps),
-      num(p.vs_phase_1_pct) ? `${signed(p.vs_phase_1_pct)}${p.vs_phase_1_significant ? ' (real)' : ''}` : dash,
-    ]),
-    laps: (d.gps_laps?.laps || []).map((l) => [
-      canonicalLapLabel({ n: l.lap_n, start_lap: l.start_lap, comparable: l.comparable !== false }),
-      formatClock(l.duration_s) || dash,
-      watts(l.normalized_power_w),
-      speed(l.avg_speed_mps),
-      num(l.total_work_kj) ? `${l.total_work_kj} kJ` : dash,
-      num(l.variability_index) ? String(l.variability_index) : dash,
-      num(l.coasting_s) ? formatClock(l.coasting_s) : dash,
-    ]),
-    lapsNote: d.gps_laps?.note || null,
-  };
+  return { score: scoreView(pacing.data.race_execution, 'Race execution score') };
 }
 
 
@@ -355,7 +411,9 @@ export function buildRawAnalysis(workout, pacing) {
   const isRace = effectiveKind(workout) === 'race';
   const race = isRace ? raceView(pacing) : null;
   const diagnostics = diagnosticsView(workout);
-  if (!iv && !race && !execution && !diagnostics) return null;
+  const masterLaps = buildMasterLaps(workout, pacing);
+  const deviceLaps = buildDeviceLaps(workout);
+  if (!iv && !race && !execution && !diagnostics && !masterLaps && !deviceLaps) return null;
   return {
     summary: iv ? summaryRows(iv) : [],
     score: scoreView(execution, 'Execution score'),
@@ -364,7 +422,8 @@ export function buildRawAnalysis(workout, pacing) {
     starts: startsView(iv),
     diagnostics,
     race,
-    deviceLaps: buildDeviceLaps(workout),
+    masterLaps,
+    deviceLaps,
     racePending: isRace && pacing?.status === 'loading',
     raceError: isRace && pacing?.status === 'error' ? (pacing.error || 'Race analysis is not available.') : null,
   };
@@ -437,8 +496,7 @@ export function buildFreeRide(workout) {
 // Device metrics: shown as recorded, no thresholds. Grit is course difficulty (compare laps on the
 // same course); lower Flow is smoother.
 
-export const MTB_LAP_COLUMNS = ['Lap', 'Time', 'Power', 'Grit', 'Flow', 'Jumps'];
-export const SECTOR_LAP_COLUMNS = ['Lap', 'Time', 'vs best', 'Power', 'Flow'];
+export const MTB_LAP_COLUMNS = ['Lap', 'Flow', 'Grit', 'Jumps'];
 
 function jumpsLine(j) {
   if (!j) return null;
@@ -466,11 +524,9 @@ export function buildMtbDynamics(workout) {
       ? {
         columns: MTB_LAP_COLUMNS,
         rows: laps.map((l) => [
-          String(l.lap),
-          formatClock(l.duration_s),
-          watts(l.avg_power_w),
-          num(l.grit) ? String(l.grit) : dash,
+          lapLabelFor(workout, l.lap),
           num(l.avg_flow) ? String(l.avg_flow) : dash,
+          num(l.grit) ? String(l.grit) : dash,
           num(l.jumps) ? String(l.jumps) : dash,
         ]),
       }
@@ -649,21 +705,24 @@ export function buildCourseSectors(workout, selected = null, gestureView = null)
       : `Each lap is cut into ${cs.sector_count} equal-distance sectors; sector numbers line up across laps. Loss is measured against your own best time through that sector; a big spread means an inconsistent section, so ask what was different on the fast lap.`,
     map: buildCourseMap(cs, selected, gestureView),
     selected: picked ? selectedSummary(picked, spread) : null,
-    laps: {
-      columns: SECTOR_LAP_COLUMNS,
-      rows: (cs.laps || []).map((l) => [
-        `${l.lap}${l.lap === cs.best_lap ? ' (best)' : ''}`,
-        formatClock(l.time_s),
-        l.time_vs_best_s ? signed(l.time_vs_best_s, 1, ' s') : dash,
-        watts(l.avg_power_w),
-        num(l.avg_flow) ? String(l.avg_flow) : dash,
-      ]),
-    },
     grid: buildSectorGrid(cs, selected),
   };
 }
 
-export const RACE_EFFICIENCY_COLUMNS = ['Lap', 'Time', 'NP', 'HR', 'EF', 'Flow'];
+export const RACE_EFFICIENCY_COLUMNS = ['Lap', 'Time', '+best', 'NP', 'HR', 'EF'];
+
+/** Time behind the fastest comparable lap: "best" for that lap, a dash for the start lap and any lap
+ * outside the comparison. Comparable comes from the canonical laps; without them, every non-start lap. */
+function plusBest(workout, laps) {
+  const flags = byLap(workout?.analytics?.laps, 'n');
+  const comparable = (l) => (flags.has(l.lap) ? flags.get(l.lap).comparable : !l.start_lap);
+  const times = laps.filter(comparable).map((l) => l.time_s).filter(num);
+  const best = times.length ? Math.min(...times) : null;
+  return (l) => {
+    if (best === null || !comparable(l) || !num(l.time_s)) return dash;
+    return l.time_s === best ? 'best' : signed(l.time_s - best, 1, ' s');
+  };
+}
 
 /** The "Race efficiency" section model (`analytics.race_efficiency`), or null when absent: the
  * engine's one-line verdict plus a compact per-lap table (EF = NP / avg HR, watts per bpm). */
@@ -675,6 +734,7 @@ export function buildRaceEfficiency(workout) {
   if (num(t.ef_slope_per_lap)) slopes.push(`EF ${signed(t.ef_slope_per_lap, 3, '')}/lap`);
   if (num(t.hr_slope_bpm_per_lap)) slopes.push(`HR ${signed(t.hr_slope_bpm_per_lap, 1, ' bpm')}/lap`);
   if (num(t.power_slope_w_per_lap)) slopes.push(`NP ${signed(t.power_slope_w_per_lap, 1, ' W')}/lap`);
+  const behind = plusBest(workout, re.laps);
   return {
     verdict: re.verdict,
     decoupled: num(t.decoupling_pct) && t.decoupling_pct <= -5,
@@ -685,10 +745,10 @@ export function buildRaceEfficiency(workout) {
       rows: re.laps.map((l) => [
         l.start_lap ? `${l.lap} (start)` : String(l.lap),
         formatClock(l.time_s),
+        behind(l),
         watts(l.np_w),
         num(l.avg_hr) ? String(Math.round(l.avg_hr)) : dash,
         num(l.ef) ? l.ef.toFixed(2) : dash,
-        num(l.avg_flow) ? String(l.avg_flow) : dash,
       ]),
     },
   };

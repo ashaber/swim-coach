@@ -28,7 +28,7 @@ import {
   LIBRARY_SORTS, DEFAULT_LIBRARY_SORT, sortLibraryFiles, fileAddedDate, isNewFile, formatAddedLabel,
 } from './librarySort.js';
 import { expandStructure, actualPoints, sessionForWorkout, shapeChartGeometry } from './shape.js';
-import { buildCourseSectors, buildRaceEfficiency, buildFreeRide, powerCurveView, buildMtbDynamics, buildRawAnalysis, buildCanonicalLaps, canonicalLapLabel, effectiveKind, kindLabel, raceStartInfo, KIND_OPTIONS } from './analysis.js';
+import { buildCourseSectors, buildRaceEfficiency, buildFreeRide, powerCurveView, buildMtbDynamics, buildRawAnalysis, buildPacingEffort, showsMainLapsTable, effectiveKind, kindLabel, raceStartInfo, KIND_OPTIONS } from './analysis.js';
 import { sportHasPlannedDistance, sportCanPushToGarmin, sportUsesPace } from './sports.js';
 import {
   sportLabel, sourceBadge, formatWorkoutDistance, formatAnalyticsLine,
@@ -2911,17 +2911,10 @@ function renderLapsTable(laps, sport) {
     </section>`;
 }
 
-/** The workout's laps: a ride with canonical laps shows those (the device's raw laps live under Raw
- * analysis); every other workout shows the device laps as recorded. */
+/** The workout's own laps table in the main view: every sport but a bike ride, whose laps are split
+ * into the focused tables and the Raw analysis master table. */
 function renderMainLapsSection(workout) {
-  const canonical = buildCanonicalLaps(workout);
-  if (!canonical) return renderLapsTable(workout.laps, workout.sport);
-  return `
-    <section class="detail-section canonical-laps">
-      <h4>Laps (${canonical.rows.length})</h4>
-      ${renderRawTable(canonical.columns, canonical.rows)}
-      <p class="sub">${esc(canonical.note)}</p>
-    </section>`;
+  return showsMainLapsTable(workout) ? renderLapsTable(workout.laps, workout.sport) : '';
 }
 
 function renderPauseRows(pauses) {
@@ -2931,11 +2924,6 @@ function renderPauseRows(pauses) {
     return `<div class="pause-row mono">${esc(offset)} · ${esc(duration)} · ${esc(pause.source)}</div>`;
   }).join('');
   return `<h5>Pauses (${pauses.length})</h5><div class="pauses-list">${rows}</div>`;
-}
-
-function formatSpeedKmh(mps) {
-  if (mps === null || mps === undefined) return null;
-  return `${(mps * 3.6).toFixed(1)} km/h`;
 }
 
 /** GPS-lap detection + race-phase pacing split (Andrew, 2026-09-22: "visible
@@ -2982,53 +2970,18 @@ function renderRaceAnalysisSection(workout, pacing, raceStartEdit = null, editab
     // get_ride_pacing's own error shapes.
     body = `<p class="sub">${esc(pacing.error || 'Race analysis is not available for this ride.')}</p>`;
   } else {
-    const laps = pacing.data?.gps_laps?.laps ?? [];
-    const lapsNote = pacing.data?.gps_laps?.note;
-    const phases = pacing.data?.race_phases?.phases ?? [];
-    const lapRows = laps.map((lap) => `
-      <tr>
-        <td>${esc(canonicalLapLabel({ n: lap.lap_n, start_lap: lap.start_lap, comparable: lap.comparable !== false }))}</td>
-        <td>${esc(formatClock(lap.duration_s) || '—')}</td>
-        <td>${lap.normalized_power_w !== null ? esc(formatPower(lap.normalized_power_w)) : '—'}</td>
-        <td>${lap.avg_speed_mps !== null ? esc(formatSpeedKmh(lap.avg_speed_mps)) : '—'}</td>
-        <td>${lap.total_work_kj !== null ? `${esc(lap.total_work_kj)} kJ` : '—'}</td>
-        <td>${lap.variability_index !== null ? esc(lap.variability_index) : '—'}</td>
-        <td>${lap.coasting_s !== null ? esc(formatClock(lap.coasting_s)) : '—'}</td>
-      </tr>`).join('');
-    const lapsTable = laps.length > 0 ? `
-      <div class="laps-table-wrap">
-        <table class="laps-table">
-          <thead><tr><th>Lap</th><th>Time</th><th>NP</th><th>Speed</th><th>Work</th><th>VI</th><th>Coasting</th></tr></thead>
-          <tbody>${lapRows}</tbody>
-        </table>
-      </div>` : `<p class="sub">${esc(lapsNote || 'No laps detected.')}</p>`;
-    const phaseRows = phases.map((p) => {
-      const vs = p.vs_phase_1_pct === null || p.vs_phase_1_pct === undefined
-        ? '—'
-        : `${p.vs_phase_1_pct > 0 ? '+' : ''}${p.vs_phase_1_pct}%${p.vs_phase_1_significant ? ' (real)' : ''}`;
-      return `
-      <tr>
-        <td>${esc(p.name)}</td>
-        <td>${esc(formatClock(p.start_s))}–${esc(formatClock(p.end_s))}</td>
-        <td>${p.normalized_power_w !== null ? esc(formatPower(p.normalized_power_w)) : '—'}</td>
-        <td>${p.avg_speed_mps !== null ? esc(formatSpeedKmh(p.avg_speed_mps)) : '—'}</td>
-        <td>${esc(vs)}</td>
-      </tr>`;
-    }).join('');
-    const phasesTable = phases.length > 0 ? `
-      <div class="laps-table-wrap" style="margin-top:10px">
-        <table class="laps-table">
-          <thead><tr><th>Phase</th><th>Span</th><th>NP</th><th>Speed</th><th>vs phase 1</th></tr></thead>
-          <tbody>${phaseRows}</tbody>
-        </table>
-      </div>` : '';
+    const effort = buildPacingEffort(workout, pacing);
+    const lapsTable = effort.laps.rows.length > 0
+      ? renderRawTable(effort.laps.columns, effort.laps.rows)
+      : `<p class="sub">${esc(effort.lapsNote || 'No laps detected.')}</p>`;
+    const phasesTable = effort.phases.rows.length > 0 ? renderRawTable(effort.phases.columns, effort.phases.rows) : '';
     body = renderRaceStartControl(workout, pacing, raceStartEdit, editable) + lapsTable + phasesTable;
   }
 
   return `
     <section class="detail-section">
       <details class="race-analysis">
-        <summary>Race analysis</summary>
+        <summary>Pacing &amp; effort</summary>
         ${body}
       </details>
     </section>`;
@@ -3138,10 +3091,10 @@ function renderCompletedShapeSection(workout, pacing, weeks, ftpWatts) {
 
 // --- Raw analysis (read-only, from the cached workout) -------------------------
 
-function renderRawTable(columns, rows, rowAttrs = () => '') {
+function renderRawTable(columns, rows, rowAttrs = () => '', tableClass = '') {
   return `
-      <div class="laps-table-wrap">
-        <table class="laps-table raw-table">
+      <div class="laps-table-wrap${tableClass ? ' scroll-wide' : ''}">
+        <table class="laps-table raw-table${tableClass ? ` ${tableClass}` : ''}">
           <thead><tr>${columns.map((c) => `<th>${esc(c)}</th>`).join('')}</tr></thead>
           <tbody>${rows.map((r, i) => `<tr${rowAttrs(r, i)}>${r.map((c) => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody>
         </table>
@@ -3315,20 +3268,19 @@ function renderMtbSections(workout, selectedSector = null, mapView = null) {
   const cs = buildCourseSectors(workout, selectedSector, mapView);
   const mtb = m ? `
     <section class="detail-section mtb-dynamics">
-      <h4>Mountain bike dynamics</h4>
+      <h4>Handling &amp; terrain</h4>
       ${m.summary.length ? `<p>${m.summary.map(esc).join(' · ')}</p>` : ''}
       <p class="sub">${esc(m.note)}</p>
       ${m.laps ? renderRawTable(m.laps.columns, m.laps.rows) : ''}
     </section>` : '';
   const sectors = cs ? `
     <section class="detail-section course-sectors">
-      <h4>Course sectors</h4>
+      <h4>Where the time went</h4>
       <p>${esc(cs.trend)}</p>
       <p class="sub">${esc(cs.note)}</p>
       ${cs.map ? renderCourseMap(cs.map) : ''}
       ${cs.selected ? `<p class="sub">${esc(cs.selected)}</p>` : ''}
-      ${renderRawTable(cs.laps.columns, cs.laps.rows)}
-      ${cs.grid ? `<h5>Where the time went</h5>${renderSectorGrid(cs.grid)}` : ''}
+      ${cs.grid ? renderSectorGrid(cs.grid) : ''}
     </section>` : '';
   return mtb + sectors;
 }
@@ -3339,7 +3291,7 @@ function renderRaceEfficiencySection(workout) {
   if (!re) return '';
   return `
     <section class="detail-section race-efficiency">
-      <h4>Race efficiency</h4>
+      <h4>Lap efficiency</h4>
       <p class="${re.decoupled ? 're-verdict re-decoupled' : 're-verdict'}"><strong>${esc(re.verdict)}</strong></p>
       ${renderRawTable(re.laps.columns, re.laps.rows)}
       ${re.slopes ? `<p class="sub">${esc(re.slopes)}</p>` : ''}
@@ -3390,12 +3342,9 @@ function renderRawAnalysisSection(workout, pacing, open) {
       ${model.rounds ? `<h5>Rounds</h5>${renderRawTable(model.rounds.columns, model.rounds.rows)}` : ''}
       ${model.starts ? `<div class="raw-starts"><h5>Starts</h5>${model.starts.flag ? `<p class="sub">${esc(model.starts.flag)}</p>` : ''}${renderRawTable(model.starts.columns, model.starts.rows)}${renderStartTraces(model.starts.traces)}</div>` : ''}
       ${renderDiagnostics(model.diagnostics)}
-      ${race ? `
-      <h5>Race analysis</h5>
-      ${renderScoreBreakdown(race.score)}
-      ${race.phases.length ? renderRawTable(['Phase', 'Span', 'NP', 'Speed', 'vs phase 1'], race.phases) : ''}
-      ${race.laps.length ? renderRawTable(['Lap', 'Time', 'NP', 'Speed', 'Work', 'VI', 'Coasting'], race.laps) : `<p class="sub">${esc(race.lapsNote || 'No laps detected.')}</p>`}` : ''}
-      ${model.deviceLaps ? `<h5>Device laps (${model.deviceLaps.rows.length}, as recorded)</h5>${renderRawTable(model.deviceLaps.columns, model.deviceLaps.rows)}<p class="sub">The watch's own laps: raw, before double-trigger fragments are merged, the race is cut at the gun and missed laps are filled. Nothing else in the analysis uses them.</p>` : ''}
+      ${race?.score ? `<h5>Race analysis</h5>${renderScoreBreakdown(race.score)}` : ''}
+      ${model.masterLaps ? `<div class="master-laps"><h5>Laps (${model.masterLaps.rows.length})</h5>${renderRawTable(model.masterLaps.columns, model.masterLaps.rows, () => '', 'master-laps-table')}<p class="sub">${esc(model.masterLaps.note)}</p></div>` : ''}
+      ${model.deviceLaps ? `<h5>Device laps (${model.deviceLaps.rows.length}, as recorded)</h5>${renderRawTable(model.deviceLaps.columns, model.deviceLaps.rows)}${model.deviceLaps.canonical ? "<p class=\"sub\">The watch's own laps: raw, before double-trigger fragments are merged, the race is cut at the gun and missed laps are filled. Nothing else in the analysis uses them.</p>" : ''}` : ''}
       ${model.racePending ? '<p class="sub">Loading race analysis…</p>' : ''}
       ${model.raceError ? `<p class="sub">${esc(model.raceError)}</p>` : ''}
     </section>`;
