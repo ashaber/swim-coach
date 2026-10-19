@@ -100,7 +100,8 @@ def _lap(n: int, span: _Span, series: dict) -> CanonicalLap:
         hr = round(mean_hr) if mean_hr is not None else None
     return CanonicalLap(
         n=n, start_s=span.start_s, end_s=span.end_s, duration_s=round(span.end_s - span.start_s, 3),
-        distance_m=dist, avg_power_w=power, avg_hr=hr, source=span.source, start_lap=span.trimmed,
+        distance_m=round(dist, 2) if dist is not None else None,
+        avg_power_w=round(power, 1) if power is not None else None, avg_hr=hr, source=span.source, start_lap=span.trimmed,
     )
 
 
@@ -163,7 +164,7 @@ def _gps_spans(series: dict, race_start_s: float | None) -> list[_Span]:
     """Laps from GPS crossings of the mark alone: the track position at the race start, else the first fix."""
     ref = start_point(series, race_start_s) if race_start_s is not None else None
     found = detect_gps_laps(series, reference=ref, from_s=race_start_s)
-    return [_Span(g.start_s, g.end_s, "gps") for g in found]
+    return [_Span(g.start_s, g.end_s, "gps", trimmed=race_start_s is not None and k == 0) for k, g in enumerate(found)]
 
 
 def _typical_s(laps: Sequence[CanonicalLap], series: dict, mark: tuple[float, float] | None) -> float | None:
@@ -172,13 +173,13 @@ def _typical_s(laps: Sequence[CanonicalLap], series: dict, mark: tuple[float, fl
 
 
 def _finish(spans: list[_Span], series: dict, mark: tuple[float, float] | None) -> list[CanonicalLap]:
-    """Number the spans and set `start_lap` / `comparable`."""
+    """Number the spans and set `start_lap` / `comparable`. The lap from the gun is a start lap unless
+    it is a full lap from the mark like the others."""
     laps = [_lap(n, s, series) for n, s in enumerate(spans, 1)]
-    flagged = [
-        l.model_copy(update={"start_lap": l.start_lap and not _near_known(series, mark, l.start_s)}) for l in laps
-    ]
+    from_gun = {l.n for l in laps if l.start_lap}
+    flagged = [l.model_copy(update={"start_lap": l.start_lap and not _near_known(series, mark, l.start_s)}) for l in laps]
     group = {l.n for l in _best_group(flagged, series, mark)}
-    return [l.model_copy(update={"comparable": l.n in group}) for l in flagged]
+    return [l.model_copy(update={"comparable": l.n in group, "start_lap": l.n in from_gun and l.n not in group}) for l in flagged]
 
 
 def _near_known(series: dict, mark: tuple[float, float] | None, at_s: float) -> bool:
