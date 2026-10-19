@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from swim_coach.canonical_laps import build_canonical_laps
 from swim_coach.course_sectors import SECTOR_COUNT, build_course_sectors
 from swim_coach.lap_normalise import merge_double_trigger_laps
 from swim_coach.models import Workout, WorkoutLap
@@ -96,7 +97,7 @@ def test_course_sectors_cover_the_hairpin_after_merging():
     t_s = [float(t) for t in range(int(sum(l.duration_s for l in laps)))]
     dist = [(t + 1) * (LONG_M + SHORT_M) / (LONG_S + SHORT_S) for t in range(len(t_s))]
     series = {"t_s": t_s, "dist_m": dist, "power_w": [300.0] * len(t_s)}
-    cs = build_course_sectors(Workout.model_construct(laps=laps), series)
+    cs = build_course_sectors(build_canonical_laps(laps, series), series)
     assert cs is not None and len(cs.laps) == 3 and cs.sector_count == SECTOR_COUNT
     assert all(336 <= l.time_s <= 337 for l in cs.laps)  # 1 Hz fencepost; the raw long piece alone would be 320
     assert 336 <= cs.ideal_lap_s <= 337

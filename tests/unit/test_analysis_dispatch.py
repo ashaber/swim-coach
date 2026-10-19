@@ -38,10 +38,18 @@ def _fixture(name: str):
 
 
 def _without_dynamics(analytics) -> dict:
-    """The dump minus the MTB-dynamics and race-efficiency blocks (added after the goldens were pinned); these
-    fixtures carry no grit/flow, so both must be absent."""
+    """The dump minus the MTB-dynamics, race-efficiency and canonical-lap blocks (added after the goldens were
+    pinned) and the race lap table (now cut from the canonical laps, see test_canonical_laps); these
+    fixtures carry no grit/flow, so the dynamics must be absent."""
     assert analytics.mtb_dynamics is None
-    return analytics.model_dump(mode="json", exclude={"mtb_dynamics", "course_sectors", "race_efficiency"})
+    return _golden_shape(analytics.model_dump(mode="json", exclude={"mtb_dynamics", "course_sectors", "race_efficiency", "laps"}))
+
+
+def _golden_shape(dump: dict) -> dict:
+    """The dump with the race lap table left out (compared elsewhere)."""
+    if dump.get("intervals"):
+        dump = {**dump, "intervals": {k: v for k, v in dump["intervals"].items() if k != "race_laps"}}
+    return dump
 
 
 # --- golden: the new path reproduces the old one -------------------------------------------
@@ -52,14 +60,14 @@ def test_golden_no_session(name):
     workout, _, athlete, series = _fixture(name)
     kind = "race" if name.startswith("race_") else "free_ride"
     new = workout.analyze(AnalysisContext(athlete=athlete, kind=kind, series=series))
-    assert _without_dynamics(new) == GOLDEN[name]["no_session"]
+    assert _without_dynamics(new) == _golden_shape(GOLDEN[name]["no_session"])
 
 
 @pytest.mark.parametrize("name", [n for n in NAMES if "with_session" in GOLDEN[n]])
 def test_golden_with_matched_session(name):
     workout, session, athlete, series = _fixture(name)
     ctx = AnalysisContext(athlete=athlete, session=session, kind=session.kind, series=series)
-    assert _without_dynamics(workout.analyze(ctx)) == GOLDEN[name]["with_session"]
+    assert _without_dynamics(workout.analyze(ctx)) == _golden_shape(GOLDEN[name]["with_session"])
 
 
 @pytest.mark.parametrize("kind", ["opener", "warmup"])

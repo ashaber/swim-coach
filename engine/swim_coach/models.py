@@ -1800,7 +1800,7 @@ class RaceStart(BaseModel):
 
 
 class RaceLap(BaseModel):
-    """One device lap of a race: duration and the lap's own average power / HR."""
+    """One canonical lap of a race (`WorkoutAnalytics.laps`): duration and the lap's own average power / HR."""
 
     n: int
     duration_s: float
@@ -2018,9 +2018,9 @@ class DeviceDynamics(BaseModel):
 
 
 class MtbLap(BaseModel):
-    """Grit / Flow / jumps for one device lap."""
+    """Grit / Flow / jumps for one canonical lap."""
 
-    lap: int  # 1-based
+    lap: int  # 1-based canonical lap number
     start_offset_s: float | None = None
     duration_s: float
     distance_m: float | None = None
@@ -2051,7 +2051,7 @@ class MtbDynamics(BaseModel):
 
 
 class SectorLap(BaseModel):
-    lap: int  # 1-based device lap number
+    lap: int  # 1-based canonical lap number (`WorkoutAnalytics.laps`)
     time_s: float
     avg_power_w: float | None = None
     avg_flow: float | None = None
@@ -2097,7 +2097,8 @@ class LapFade(BaseModel):
 class RaceEfficiencyLap(BaseModel):
     """One race lap's efficiency numbers (`swim_coach.race_efficiency`)."""
 
-    lap: int  # 1-based device lap number
+    lap: int  # 1-based canonical lap number (`WorkoutAnalytics.laps`)
+    start_lap: bool = False  # the lap from the gun: shown, never part of the trends
     time_s: float
     avg_power_w: float | None = None
     np_w: float | None = None
@@ -2164,6 +2165,27 @@ class CourseSectors(BaseModel):
     track: CourseTrack | None = None  # PWA map only; never in the coach view
 
 
+CanonicalLapSource = Literal["device", "merged", "split_at_start", "gps_filled", "gps"]
+
+
+class CanonicalLap(BaseModel):
+    """One lap of the single canonical lap set (`swim_coach.canonical_laps`) every lap-based
+    calculation and view reads. Times are on the activity clock; a lap runs to the next lap's start."""
+
+    n: int  # 1-based; lap 1 of a race is the start lap from the gun
+    start_s: float
+    end_s: float
+    duration_s: float
+    distance_m: float | None = None
+    avg_power_w: float | None = None
+    avg_hr: int | None = None
+    # device: untouched device lap; merged: double-trigger fragments folded in; split_at_start: cut
+    # at the race start; gps_filled: a missed lap found by the lap-mark crossing; gps: no device laps.
+    source: CanonicalLapSource
+    start_lap: bool = False  # begins at the race start, not at the lap mark
+    comparable: bool = False  # starts at the lap mark and covers a similar distance to its peers
+
+
 class WorkoutAnalytics(BaseModel):
     """Derived workout analytics computed at ingest time by
     `swim_coach.analytics.compute_analytics` -- see that module for the
@@ -2210,6 +2232,10 @@ class WorkoutAnalytics(BaseModel):
     course_sectors: CourseSectors | None = None
     # Lap-to-lap NP / HR efficiency of a race (or any ride with 2+ comparable laps). Additive/optional.
     race_efficiency: RaceEfficiency | None = None
+    # The one canonical lap set (device laps merged / trimmed to the race start / gap-filled by the
+    # lap mark) that mtb_dynamics, course_sectors, race_efficiency, pacing and the race lap table all
+    # read; the raw device laps stay on `Workout.laps`. Additive/optional.
+    laps: list[CanonicalLap] = Field(default_factory=list)
 
 
 WorkoutChatSenderRole = Literal["athlete", "ai_coach", "coach"]

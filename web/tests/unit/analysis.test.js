@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  buildCourseSectors, buildRaceEfficiency, buildCourseMap, nextSector, buildMtbDynamics, buildFreeRide, buildRawAnalysis, scoreView, EFFORT_COLUMNS, effectiveKind, kindLabel, shouldLoadPacing, startTraceGeometry,
+  buildCourseSectors, buildRaceEfficiency, buildCourseMap, nextSector, buildMtbDynamics, buildFreeRide, buildRawAnalysis, buildPacingEffort, scoreView, EFFORT_COLUMNS, effectiveKind, kindLabel, shouldLoadPacing, startTraceGeometry,
 } from '../../src/analysis.js';
 
 const effort = (n, extra = {}) => ({
@@ -129,8 +129,8 @@ describe('buildRawAnalysis', () => {
     expect(buildRawAnalysis({ ...workout, kind: 'race', kind_override: 'workout' }, pacing).race).toBeNull();
     const m = buildRawAnalysis(race, pacing);
     expect(m.race.score.headline).toBe('73 / 100');
-    expect(m.race.phases[1]).toEqual(['phase_2', '11:40–21:40', '230 W', '21.6 km/h', '-8.1% (real)']);
-    expect(m.race.lapsNote).toBe('No laps detected');
+    expect(buildPacingEffort(race, pacing).phases.rows[1]).toEqual(['phase_2', '11:40–21:40', '230 W', '21.6 km/h', '-8.1% (real)']);
+    expect(buildPacingEffort(race, pacing).lapsNote).toBe('No laps detected');
     expect(buildRawAnalysis(workout, { status: 'loading' }).racePending).toBe(false);
     expect(buildRawAnalysis(race, { status: 'loading' }).racePending).toBe(true);
     expect(buildRawAnalysis(race, { status: 'error', error: 'no series' }).raceError).toBe('no series');
@@ -267,8 +267,9 @@ describe('buildMtbDynamics', () => {
       },
     });
     expect(m.summary).toEqual(['Total grit 92.05', 'Avg flow 4.4', '28 jumps, max height 1.2 m, max hang time 0.8 s, best score 70']);
-    expect(m.laps.rows[0]).toEqual(['1', '5:00', '210 W', '11.3', '6.1', '3']);
-    expect(m.laps.rows[1].slice(4)).toEqual(['—', '—']);
+    expect(m.laps.columns).toEqual(['Lap', 'Flow', 'Grit', 'Jumps']);
+    expect(m.laps.rows[0]).toEqual(['1', '6.1', '11.3', '3']);
+    expect(m.laps.rows[1]).toEqual(['2', '—', '11.9', '—']);
     expect(m.note).toMatch(/lower Flow is smoother/);
   });
 });
@@ -292,8 +293,7 @@ describe('buildCourseSectors', () => {
   it('shows the fade, the laps and the top loss sectors', () => {
     const m = buildCourseSectors({ analytics: { course_sectors: cs } });
     expect(m.trend).toBe('Time +12% first to last lap, power -1.5%, flow +1.6');
-    expect(m.laps.rows[0][0]).toBe('1 (best)');
-    expect(m.laps.rows[1]).toEqual(['2', '5:36', '+36 s', '207 W', '4.6']);
+    expect(m.laps).toBeUndefined(); // the lap table lives in Lap efficiency and the Raw master table
   });
 
   describe('lap x sector grid', () => {
@@ -447,9 +447,9 @@ describe('buildRaceEfficiency', () => {
     const m = buildRaceEfficiency({ analytics: { race_efficiency: re } });
     expect(m.verdict).toBe(re.verdict);
     expect(m.decoupled).toBe(true);
-    expect(m.laps.columns).toEqual(['Lap', 'Time', 'NP', 'HR', 'EF', 'Flow']);
-    expect(m.laps.rows[0]).toEqual(['11', '5:42', '238 W', '170', '1.40', '5.95']);
-    expect(m.laps.rows[1][5]).toBe('—');
+    expect(m.laps.columns).toEqual(['Lap', 'Time', '+best', 'NP', 'HR', 'EF']);
+    expect(m.laps.rows[0]).toEqual(['11', '5:42', '+6 s', '238 W', '170', '1.40']);
+    expect(m.laps.rows[1]).toEqual(['12', '5:36', 'best', '237 W', '175', '1.35']);
     expect(m.slopes).toBe('EF -0.052/lap, HR +5.6 bpm/lap, NP -1.4 W/lap');
   });
 

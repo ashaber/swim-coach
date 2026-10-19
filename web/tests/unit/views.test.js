@@ -359,9 +359,9 @@ describe('renderDashboardTab', () => {
         expect(html).not.toContain('>Pace<');
       });
 
-      it('laps table shows a Power column with real per-lap watts, no Pace column, for a bike workout', () => {
+      it('device laps table (Raw analysis) shows a Power column with real per-lap watts, no Pace column, for a bike workout', () => {
         const html = renderDashboardTab({
-          ...DASHBOARD_BASE_ARGS, feed: feedOf([BIKE_FIT_WORKOUT]), detailId: 'w-bike',
+          ...DASHBOARD_BASE_ARGS, feed: feedOf([BIKE_FIT_WORKOUT]), detailId: 'w-bike', detailExtras: { rawAnalysisOpen: true },
         });
         expect(html).toContain('laps-table');
         expect(html).toContain('180 W');
@@ -391,7 +391,7 @@ describe('renderDashboardTab', () => {
           laps: BIKE_FIT_WORKOUT.laps.map((lap) => ({ ...lap, avg_power_w: null })),
         };
         const html = renderDashboardTab({
-          ...DASHBOARD_BASE_ARGS, feed: feedOf([noPowerBike]), detailId: 'w-bike-no-power',
+          ...DASHBOARD_BASE_ARGS, feed: feedOf([noPowerBike]), detailId: 'w-bike-no-power', detailExtras: { rawAnalysisOpen: true },
         });
         expect(html).toContain('<th>Power</th>');
         expect(html).not.toContain('<th>Pace</th>');
@@ -452,7 +452,7 @@ describe('renderDashboardTab', () => {
         expect(html).toContain('no time-series data is available');
       });
 
-      it('renders the lap table (Lap/Time/NP/Speed/Work/VI/Coasting) and the race-phase table when ready', () => {
+      it('renders the effort-only lap table (Lap/VI/Coasting/Work) and the race-phase table when ready', () => {
         const html = renderDashboardTab({
           ...DASHBOARD_BASE_ARGS, feed: feedOf([BIKE_RACE]), detailId: 'w-bike',
           pacing: {
@@ -476,10 +476,13 @@ describe('renderDashboardTab', () => {
           },
         });
         expect(html).toContain('<details class="race-analysis">');
-        expect(html).toContain('<summary>Race analysis</summary>');
-        expect(html).toContain('337 W'); // lap NP
-        expect(html).toContain('13.4 km/h'); // 3.71 m/s
-        expect(html).toContain('85.4 kJ');
+        expect(html).toContain('<summary>Pacing &amp; effort</summary>');
+        expect(html).toContain('<th>Work (kJ)</th>');
+        expect(html).toContain('<td>85.4</td>');
+        expect(html).toContain('<td>1.2</td>'); // VI
+        expect(html).not.toContain('<th>Speed</th><th>Work');
+        expect(html).not.toContain('<th>Time</th><th>NP</th><th>Speed</th><th>Work');
+        expect(html).toContain('14.4 km/h'); // phase "start" speed, 4.0 m/s
         expect(html).toContain('phase_2');
         expect(html).toContain('-16.3%');
         expect(html).toContain('(real)'); // vs_phase_1_significant

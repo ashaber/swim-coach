@@ -1,7 +1,7 @@
 """Lap-over-lap course sectors: where on a repeated course the time (and smoothness) went.
 
-For a ride with 2+ laps of similar distance (CX/MTB race laps, a lap-per-circuit pre-ride), each
-compared lap is cut into sections that line up across laps. With GPS the sections are course
+For a ride with 2+ comparable canonical laps (`canonical_laps`: CX/MTB race laps, a lap-per-circuit
+pre-ride -- full laps from the lap mark of similar distance), each compared lap is cut into sections that line up across laps. With GPS the sections are course
 features (`course_features`: straights vs corner sequences found on the best lap, every lap read
 through them by track position, so odometer differences do not matter); without GPS, or when the
 track has no usable features, into `SECTOR_COUNT` equal-DISTANCE sectors. Output: per-lap time / power / flow / grit, the fade first -> last lap
@@ -9,7 +9,7 @@ track has no usable features, into `SECTOR_COUNT` equal-DISTANCE sectors. Output
 fatigue), and a per-sector loss table with the top-3 loss sectors. Loss is measured against the fastest time
 through THAT sector on any lap (the motorsport "ideal lap"), so it is never negative.
 
-Constants are Coach judgment, not sourced: SECTOR_COUNT, TRACK_POINTS, START_LINE_RADIUS_M, LAP_DISTANCE_TOLERANCE, MIN_LAP_S, MAX_LAPS.
+Constants are Coach judgment, not sourced: SECTOR_COUNT, TRACK_POINTS, MAX_LAPS.
 Flow and grit are Garmin's proprietary device metrics (see `mtb_dynamics`); they are shown beside
 the time loss, never thresholded. The data cannot name what a section IS (run-up, sand, off-camber) -- the coach asks the rider.
 """
@@ -20,73 +20,13 @@ from bisect import bisect_left
 from typing import Sequence
 
 from swim_coach.course_features import MIN_SECTIONS, Section, align_edges, project_xy, segment_course
-from swim_coach.gps_laps import detect_gps_laps
-from swim_coach.lap_normalise import START_LINE_RADIUS_M, merge_double_trigger_laps, metres_apart, start_point
-from swim_coach.models import (
-    CourseSectors, CourseTrack, LapFade, SectorLap, SectorLoss, TrackSector, Workout, WorkoutLap,
-)
-from swim_coach.mtb_dynamics import (
-    GRIT_RECORD_SCALE, has_channel, lap_windows, mean_moving, mean_present, window_indices,
-)
+from swim_coach.models import CanonicalLap, CourseSectors, CourseTrack, LapFade, SectorLap, SectorLoss, TrackSector
+from swim_coach.mtb_dynamics import GRIT_RECORD_SCALE, has_channel, mean_moving, mean_present, window_indices
 
 SECTOR_COUNT = 8  # Coach judgment: enough resolution to localise a loss, still ~10+ s per sector
-LAP_DISTANCE_TOLERANCE = 0.10  # Coach judgment: laps within +-10% of each other are "the same course"
-MIN_LAP_S = 120  # Coach judgment: shorter than this is a split, not a lap worth sectoring
 MAX_LAPS = 12  # Coach judgment: more than this is auto-lap noise (e.g. every km), not a course
 TOP_LOSS_SECTORS = 3
 TRACK_POINTS = 200  # Coach judgment: enough to draw a recognisable lap outline, small enough to store
-
-
-def _starts_together(series: dict, anchor_start: float, start: float) -> bool:
-    """Same start line: within START_LINE_RADIUS_M of the anchor's start. Without GPS, assumed."""
-    a, b = start_point(series, anchor_start), start_point(series, start)
-    return a is None or b is None or metres_apart(a, b) <= START_LINE_RADIUS_M
-
-
-def _similar_laps(
-    windows: list[tuple[WorkoutLap, float, float]], series: dict
-) -> list[tuple[int, WorkoutLap, float, float]]:
-    """The largest group of laps whose distance is within tolerance of one anchor lap and (with
-    GPS) which start at the anchor's start line (earliest anchor wins ties), as
-    `(device lap number, lap, start, stop)`."""
-    numbered = [
-        (n, lap, a, b) for n, (lap, a, b) in enumerate(windows, 1)
-        if lap.distance_m and lap.duration_s >= MIN_LAP_S
-    ]
-    best: list = []
-    for _, anchor, anchor_start, _ in numbered:
-        group = [
-            item for item in numbered
-            if abs(item[1].distance_m - anchor.distance_m) <= LAP_DISTANCE_TOLERANCE * anchor.distance_m
-            and _starts_together(series, anchor_start, item[2])
-        ]
-        if len(group) > len(best):
-            best = group
-    return best
-
-
-def _gps_windows(series: dict) -> list[tuple[WorkoutLap, float, float]]:
-    """Laps found from the GPS start marker (`gps_laps.detect_gps_laps`, boundaries reused as is),
-    shaped like the device-lap windows. Distance comes from the `dist_m` channel."""
-    dist = series.get("dist_m") or []
-    windows = []
-    for gps in detect_gps_laps(series):
-        a, b = dist[gps.start_idx], dist[gps.end_idx]
-        if a is None or b is None:
-            continue
-        lap = WorkoutLap(index=gps.n, start_offset_s=gps.start_s, duration_s=gps.duration_s, distance_m=b - a)
-        windows.append((lap, gps.start_s, gps.end_s))
-    return windows
-
-
-def course_laps(workout: Workout, series: dict, prefer_gps: bool) -> list[tuple[int, WorkoutLap, float, float]]:
-    """Native device laps (double-trigger fragments merged into full laps) and GPS-detected laps, each filtered to similar distance from one start
-    line; the preferred source wins when it yields 2+ laps, else the other is tried."""
-    laps = merge_double_trigger_laps(workout.laps, series)
-    native = _similar_laps(lap_windows(laps, series["t_s"][-1] + 1), series)
-    gps = _similar_laps(_gps_windows(series), series)
-    first, second = (gps, native) if prefer_gps else (native, gps)
-    return first if len(first) >= 2 else second
 
 
 def _t_at(dist: Sequence[float], t: Sequence[float], d: float) -> float:
@@ -269,20 +209,21 @@ def _section_row(k: int, cut: list[tuple[int, dict]], section: Section | None) -
     return row
 
 
-def build_course_sectors(workout: Workout, series: dict | None, prefer_gps: bool = False) -> CourseSectors | None:
-    """The section comparison, or None unless 2..MAX_LAPS similar-distance laps can be cut by distance.
+def build_course_sectors(laps: Sequence[CanonicalLap], series: dict | None) -> CourseSectors | None:
+    """The section comparison over the canonical laps that are `comparable` (`canonical_laps`), or
+    None unless 2..MAX_LAPS of them can be cut by distance.
     With GPS the best lap is split into straights and corner sequences (`course_features`) and every
     lap is read through those sections by position; otherwise (or if that fails) into SECTOR_COUNT
-    equal-distance sectors. `prefer_gps`: use GPS-detected laps before the device's own laps (a race
-    whose laps were never pressed)."""
+    equal-distance sectors."""
     if not series or not series.get("t_s") or not has_channel(series, "dist_m"):
         return None
-    group = course_laps(workout, series, prefer_gps)
+    group = [lap for lap in laps if lap.comparable]
     if not 2 <= len(group) <= MAX_LAPS:
         return None
     cut = []
-    for n, lap, start, stop in group:
-        idx = window_indices(series["t_s"], start, stop)
+    for lap in group:
+        n = lap.n
+        idx = window_indices(series["t_s"], lap.start_s, lap.end_s)
         edges = _even_edges(series, idx)
         if edges is None:
             return None

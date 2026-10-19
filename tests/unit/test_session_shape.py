@@ -171,7 +171,6 @@ def test_race_start_on_9_19():
     assert rs.best_5s_w > rs.best_15s_w > rs.best_30s_w
     assert 20 <= rs.time_to_settle_s <= 90
     assert rs.first_5min_np_w > rs.race_np_w and rs.first_5min_vs_race_np_pct > 110
-    assert len(r.race_laps) == 2 and r.race_laps[1].avg_w == 217.0
     assert r.decoupling_tightened_pct is None and r.decoupling_note is None and r.session_shape == "race"
     assert r.efforts == []
 

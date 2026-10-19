@@ -7,7 +7,7 @@ Pure functions, no I/O, no LLM:
   (`interval_analysis.analyze` -> `WorkoutIntervals`).
 - `race_execution_score` scores a race ride from the deterministic race
   outputs that already exist (`race_phases.split_race_phases` and
-  `gps_laps.analyze_gps_laps`): pacing evenness, late-race fade, start
+  `gps_laps.analyze_laps` over the canonical laps): pacing evenness, late-race fade, start
   control, lap-to-lap consistency.
 
 Every weight and scale below is `Coach judgment:` -- no study supports a
@@ -194,7 +194,7 @@ def race_execution_score(phases: list[RacePhase], laps: list[GpsLapMetrics]) -> 
     else:
         parts["start_control"] = (None, "no usable start-phase power")
 
-    lap_nps = [m.normalized_power_w for m in laps if m.normalized_power_w]
+    lap_nps = [m.normalized_power_w for m in laps if m.comparable and m.normalized_power_w]  # not the start lap or a finish remainder
     if len(lap_nps) >= LAP_MIN_COUNT:
         cv = statistics.pstdev(lap_nps) / statistics.fmean(lap_nps) * 100
         parts["lap_consistency"] = (

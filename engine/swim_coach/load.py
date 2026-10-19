@@ -508,6 +508,11 @@ def _trimp_from_laps(
     (summing the convex Banister weighting per lap is mathematically >= the
     single whole-session-average result, never a mere alternative estimate).
 
+    Deliberately reads the RAW device laps, not `WorkoutAnalytics.laps` (the canonical laps): load
+    covers the whole recording, warm-up and wait on the line included, and the per-lap HR weighting
+    needs laps that tile the session (`TRIMP_LAP_COVERAGE_TOLERANCE`), which a race trimmed to the
+    gun does not. Pinned by `test_load_trimp_still_reads_the_raw_device_laps`.
+
     Applies the *exact same* per-slice formula `session_load`'s
     whole-session tier-2 branch already uses -- `duration_min *
     hrr_fraction * weight(hrr_fraction)`, HRR fraction clamped to
