@@ -70,6 +70,11 @@ export default defineConfig({
         // offline -- unlike /api/chat, this is safe to cache since a stale
         // plan is still useful and a fresh fetch is preferred whenever
         // there's a connection.
+        //
+        // This is compatible with the app's conditional GETs (api.js): the page sends
+        // If-None-Match itself, NetworkFirst passes the request straight to the network, and a 304
+        // is returned uncached (Workbox only caches 200s), so the offline copy is always the last
+        // full 200. /api/workouts and /api/plan/load are not matched here and never cached.
         runtimeCaching: [
           {
             urlPattern: /\/api\/plan(\?.*)?$/,

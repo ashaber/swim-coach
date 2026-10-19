@@ -124,13 +124,14 @@ async function safeErrorMessage(response) {
  * into `{ ok: false, error }` so callers only ever need one branch. Success
  * returns `{ ok: true, data }`.
  */
-async function apiRequest({ baseUrl, token, path, method = 'GET', body }) {
+async function apiRequest({ baseUrl, token, path, method = 'GET', body, ifNoneMatch }) {
   let response;
   try {
     response = await fetch(`${baseUrl}${path}`, {
       method,
       headers: {
         Authorization: `Bearer ${token}`,
+        ...(ifNoneMatch ? { 'If-None-Match': ifNoneMatch } : {}),
         ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -139,6 +140,8 @@ async function apiRequest({ baseUrl, token, path, method = 'GET', body }) {
     log.error('api.request_failed', { path, error: err.message });
     return { ok: false, error: 'Could not reach the coach backend. Check your connection and Settings.' };
   }
+
+  if (response.status === 304) return { ok: true, notModified: true, status: 304 };
 
   if (!response.ok) {
     const message = await safeErrorMessage(response);
@@ -151,11 +154,55 @@ async function apiRequest({ baseUrl, token, path, method = 'GET', body }) {
 
   try {
     const data = await response.json();
-    return { ok: true, data };
+    const etag = response.headers?.get?.('etag') ?? null;
+    return etag ? { ok: true, data, etag } : { ok: true, data };
   } catch (err) {
     log.error('api.parse_failed', { path, error: err.message });
     return { ok: false, error: 'Unexpected response from backend.', status: response.status };
   }
+}
+
+// --- Conditional GETs ---------------------------------------------------------
+// The polled reads (workout list, plan, load) are re-checked on tab switch and app resume. The
+// backend answers them with a weak ETag derived from a cheap change fingerprint, so an unchanged
+// check is a 304 with no body. We remember the last ETag + data per (token, URL) in memory only
+// (nothing persisted: the service worker owns offline fallback) and replay it as If-None-Match.
+// A 304 resolves with the cached data plus `notModified: true` so callers can skip re-rendering.
+// Identical in-flight checks share one request.
+const conditionalCache = new Map();
+const conditionalInflight = new Map();
+
+/** Forgets every remembered ETag/response (sign-out, tests). */
+export function resetApiCache() {
+  conditionalCache.clear();
+  conditionalInflight.clear();
+}
+
+function conditionalGet({ baseUrl, token, path }) {
+  const key = `${token}|${baseUrl}${path}`;
+  const pending = conditionalInflight.get(key);
+  if (pending) return pending;
+  const request = runConditionalGet({ baseUrl, token, path, key })
+    .finally(() => conditionalInflight.delete(key));
+  conditionalInflight.set(key, request);
+  return request;
+}
+
+async function runConditionalGet({ baseUrl, token, path, key }) {
+  const cached = conditionalCache.get(key);
+  let result = await apiRequest({ baseUrl, token, path, ifNoneMatch: cached?.etag });
+  if (result.notModified && !cached) {
+    // A 304 we cannot answer (cache dropped mid-flight): ask again unconditionally.
+    result = await apiRequest({ baseUrl, token, path });
+  }
+  if (result.notModified) return { ok: true, data: cached.data, notModified: true };
+  if (!result.ok) {
+    conditionalCache.delete(key);
+    return result;
+  }
+  if (result.etag) conditionalCache.set(key, { etag: result.etag, data: result.data });
+  else conditionalCache.delete(key);
+  return { ok: true, data: result.data };
 }
 
 /**
@@ -216,7 +263,7 @@ export async function postWorkout({ baseUrl, token, athlete = 'renee', payload }
 
 /** GET {baseUrl}/api/workouts?athlete=<slug> -- lists logged workouts. */
 export async function listWorkouts({ baseUrl, token, athlete = 'renee' }) {
-  return apiRequest({ baseUrl, token, path: `/api/workouts?athlete=${encodeURIComponent(athlete)}` });
+  return conditionalGet({ baseUrl, token, path: `/api/workouts?athlete=${encodeURIComponent(athlete)}` });
 }
 
 /** PATCH {baseUrl}/api/workouts/{workoutId}?athlete=<slug> -- corrects a
@@ -375,7 +422,7 @@ export async function askAboutWorkout({
  * athlete comes from the signed-in identity (src/identity.js) rather than a
  * build-time default -- see main.js's loadPlan(). */
 export async function fetchPlan({ baseUrl, token, athlete }) {
-  return apiRequest({ baseUrl, token, path: `/api/plan?athlete=${encodeURIComponent(athlete)}` });
+  return conditionalGet({ baseUrl, token, path: `/api/plan?athlete=${encodeURIComponent(athlete)}` });
 }
 
 /** GET {baseUrl}/api/plan/load?athlete=<slug> -- the athlete's own
@@ -388,7 +435,7 @@ export async function fetchPlan({ baseUrl, token, athlete }) {
  * consumer of this field and the two are cached under this repo's
  * NetworkFirst service-worker strategy independently either way. */
 export async function fetchPlanLoad({ baseUrl, token, athlete }) {
-  return apiRequest({ baseUrl, token, path: `/api/plan/load?athlete=${encodeURIComponent(athlete)}` });
+  return conditionalGet({ baseUrl, token, path: `/api/plan/load?athlete=${encodeURIComponent(athlete)}` });
 }
 
 /** GET {baseUrl}/api/athlete?athlete=<slug> -- fetches the athlete's own

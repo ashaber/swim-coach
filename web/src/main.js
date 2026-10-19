@@ -1172,7 +1172,7 @@ function stickRosterChatScrollToBottom() {
 // NetworkFirst runtimeCaching entry for /api/plan (see vite.config.js) keeps
 // this working offline after the first successful load.
 
-async function loadPlan() {
+async function loadPlan({ background = false } = {}) {
   const settings = state.settingsForm;
   const identity = state.identity;
   if (!isConfigured(settings, identity)) {
@@ -1181,11 +1181,20 @@ async function loadPlan() {
     return;
   }
 
-  state.plan = { status: 'loading', data: state.plan.data, error: null };
-  render();
+  // A background check (tab switch, resume, end of a coach turn) over data we already hold is
+  // silent: no loading state, no render unless the server says something changed.
+  const quiet = background && state.plan.status === 'ready';
+  if (!quiet) {
+    state.plan = { status: 'loading', data: state.plan.data, error: null };
+    render();
+  }
 
   const result = await fetchPlan({ baseUrl: settings.baseUrl, token: settings.token, athlete: identity.athlete });
   if (handleUnauthorized(result)) return;
+  if (quiet && (result.notModified || !result.ok)) {
+    if (!result.ok) log.warn('app.plan.background_check_failed', { error: result.error });
+    return;
+  }
   if (result.ok) {
     log.info('app.plan.loaded', {
       athlete_slug: result.data.slug,
@@ -1209,7 +1218,7 @@ async function loadPlan() {
  * (initial load, tab-visit, History tab's shared Plan fetch) rather than
  * inventing a new refresh trigger -- the chart refreshes exactly when the
  * rest of the Plan tab's data does. */
-async function loadPlanLoad() {
+async function loadPlanLoad({ background = false } = {}) {
   const settings = state.settingsForm;
   const identity = state.identity;
   if (!isConfigured(settings, identity)) {
@@ -1218,11 +1227,18 @@ async function loadPlanLoad() {
     return;
   }
 
-  state.planLoad = { status: 'loading', data: state.planLoad.data, error: null };
-  render();
+  const quiet = background && state.planLoad.status === 'ready';
+  if (!quiet) {
+    state.planLoad = { status: 'loading', data: state.planLoad.data, error: null };
+    render();
+  }
 
   const result = await fetchPlanLoad({ baseUrl: settings.baseUrl, token: settings.token, athlete: identity.athlete });
   if (handleUnauthorized(result)) return;
+  if (quiet && (result.notModified || !result.ok)) {
+    if (!result.ok) log.warn('app.plan_load.background_check_failed', { error: result.error });
+    return;
+  }
   if (result.ok) {
     log.info('app.plan_load.loaded', { points: result.data.ctl_atl_tsb?.length ?? 0 });
     state.planLoad = { status: 'ready', data: result.data, error: null };
@@ -1430,6 +1446,8 @@ function handleSendChat() {
       if (event.type === 'done' || event.type === 'refusal' || event.type === 'error') {
         persistChat();
         log.info('chat.turn_complete', { type: event.type });
+        // The coach may have just authored or changed the plan: check for it (a 304 if not).
+        if (event.type === 'done') checkForUpdates();
       }
       render();
     },
@@ -2601,21 +2619,29 @@ function historyFeedStatus() {
   return 'ready';
 }
 
-// When the workout list last loaded successfully; read by refreshOnResume().
-let historyLoadedAt = null;
+// When the app last ran a resume change-check; read by refreshOnResume().
+let lastResumeCheckAt = null;
 
-/** Refetch workouts, plan and load when the app returns to the foreground with stale data. */
+/** Background-check workouts, plan and load for changes (cheap conditional GETs; the UI only
+ * re-renders if the server reports something new). Shared by resume, tab switches and the end of
+ * a coach chat turn. */
+function checkForUpdates() {
+  if (!isConfigured(state.settingsForm, state.identity) || !state.online) return;
+  loadHistory({ background: true });
+  loadPlan({ background: true });
+  loadPlanLoad({ background: true });
+}
+
+/** Check for new data when the app returns to the foreground (debounced, see resumeRefresh.js). */
 function refreshOnResume() {
   const configured = isConfigured(state.settingsForm, state.identity);
   if (!shouldRefreshOnResume({
     visible: document.visibilityState === 'visible', online: state.online, configured,
-    lastLoadedAt: historyLoadedAt, now: Date.now(),
+    lastCheckedAt: lastResumeCheckAt, now: Date.now(),
   })) return;
   log.info('app.resume_refresh', { athlete: state.identity?.athlete });
-  historyLoadedAt = Date.now();  // claim the refresh now so focus + visibilitychange don't double-fire
-  loadHistory();
-  loadPlan();
-  loadPlanLoad();
+  lastResumeCheckAt = Date.now();  // claim the check now so focus + visibilitychange don't double-fire
+  checkForUpdates();
 }
 
 function shouldLoadHistoryNow() {
@@ -2623,7 +2649,7 @@ function shouldLoadHistoryNow() {
     && isConfigured(state.settingsForm, state.identity) && state.online;
 }
 
-async function loadHistory() {
+async function loadHistory({ background = false } = {}) {
   const settings = state.settingsForm;
   const identity = state.identity;
   if (!isConfigured(settings, identity)) {
@@ -2632,11 +2658,18 @@ async function loadHistory() {
     return;
   }
 
-  state.workoutHistory = { status: 'loading', data: state.workoutHistory.data, error: null };
-  render();
+  const quiet = background && state.workoutHistory.status === 'ready';
+  if (!quiet) {
+    state.workoutHistory = { status: 'loading', data: state.workoutHistory.data, error: null };
+    render();
+  }
 
   const result = await listWorkouts({ baseUrl: settings.baseUrl, token: settings.token, athlete: identity.athlete });
   if (handleUnauthorized(result)) return;
+  if (quiet && (result.notModified || !result.ok)) {
+    if (!result.ok) log.warn('history.background_check_failed', { error: result.error });
+    return;
+  }
   if (result.ok && Array.isArray(result.data)) {
     // Keeps the FULL list in state; HISTORY_DISPLAY_CAP is applied at
     // render time by the Dashboard tab instead (see
@@ -2648,7 +2681,7 @@ async function loadHistory() {
     const sorted = sortWorkoutsNewestFirst(result.data);
     log.info('history.loaded', { athlete: identity.athlete, count: sorted.length });
     state.workoutHistory = { status: 'ready', data: sorted, error: null };
-    historyLoadedAt = Date.now();
+    lastResumeCheckAt = Date.now();  // a full load counts as a check for the resume debounce
     pruneDetailIdIfMissing(sorted);
   } else if (result.ok) {
     // Defensive: an unexpected (non-array) 2xx body shouldn't crash the
@@ -3965,6 +3998,11 @@ function setTab(tab) {
     loadPlan(); // calls render() itself
     return;
   }
+  // Already loaded: just ask the server whether the plan changed since (e.g. the coach edited it).
+  if (tab === 'plan' && state.plan.status === 'ready' && state.online
+    && isConfigured(state.settingsForm, state.identity)) {
+    loadPlan({ background: true });
+  }
   // Resources tab (web/resources-tab-library-review): same lazy-load
   // convention as Plan/Roster above -- fetch the card list the moment the
   // tab is actually opened, not eagerly. Falls back to whatever's cached in
@@ -4018,6 +4056,8 @@ function setTab(tab) {
       loadHistory();
       requested = true;
     }
+    // Whatever is already loaded gets a silent change-check instead of a full reload.
+    if (!requested) checkForUpdates();
     if (requested) return;
   }
   render();
