@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  buildCourseSectors, buildCourseMap, nextSector, buildMtbDynamics, buildFreeRide, buildRawAnalysis, scoreView, EFFORT_COLUMNS, effectiveKind, kindLabel, shouldLoadPacing, startTraceGeometry,
+  buildCourseSectors, buildRaceEfficiency, buildCourseMap, nextSector, buildMtbDynamics, buildFreeRide, buildRawAnalysis, scoreView, EFFORT_COLUMNS, effectiveKind, kindLabel, shouldLoadPacing, startTraceGeometry,
 } from '../../src/analysis.js';
 
 const effort = (n, extra = {}) => ({
@@ -425,5 +425,37 @@ describe('course map', () => {
     expect(nextSector(null, 2)).toBe(2);
     expect(nextSector(2, 2)).toBeNull();
     expect(nextSector(2, 3)).toBe(3);
+  });
+});
+
+describe('buildRaceEfficiency', () => {
+  const re = {
+    verdict: 'Decoupled: EF -8%, HR +8 bpm, power -4%, flow rougher',
+    laps: [
+      { lap: 11, time_s: 342, np_w: 238.3, avg_hr: 169.7, ef: 1.404, avg_flow: 5.95 },
+      { lap: 12, time_s: 336, np_w: 236.9, avg_hr: 175.3, ef: 1.352, avg_flow: null },
+    ],
+    trend: { decoupling_pct: -5.2, ef_slope_per_lap: -0.052, hr_slope_bpm_per_lap: 5.6, power_slope_w_per_lap: -1.4 },
+  };
+
+  it('is null without the block or laps', () => {
+    expect(buildRaceEfficiency({ analytics: {} })).toBeNull();
+    expect(buildRaceEfficiency({ analytics: { race_efficiency: { ...re, laps: [] } } })).toBeNull();
+  });
+
+  it('carries the verdict, the per-lap rows and the slopes', () => {
+    const m = buildRaceEfficiency({ analytics: { race_efficiency: re } });
+    expect(m.verdict).toBe(re.verdict);
+    expect(m.decoupled).toBe(true);
+    expect(m.laps.columns).toEqual(['Lap', 'Time', 'NP', 'HR', 'EF', 'Flow']);
+    expect(m.laps.rows[0]).toEqual(['11', '5:42', '238 W', '170', '1.40', '5.95']);
+    expect(m.laps.rows[1][5]).toBe('—');
+    expect(m.slopes).toBe('EF -0.052/lap, HR +5.6 bpm/lap, NP -1.4 W/lap');
+  });
+
+  it('is not decoupled when efficiency held', () => {
+    const m = buildRaceEfficiency({ analytics: { race_efficiency: { ...re, trend: { decoupling_pct: -1 } } } });
+    expect(m.decoupled).toBe(false);
+    expect(m.slopes).toBe('');
   });
 });

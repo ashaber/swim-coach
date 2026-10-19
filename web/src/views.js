@@ -28,7 +28,7 @@ import {
   LIBRARY_SORTS, DEFAULT_LIBRARY_SORT, sortLibraryFiles, fileAddedDate, isNewFile, formatAddedLabel,
 } from './librarySort.js';
 import { expandStructure, actualPoints, sessionForWorkout, shapeChartGeometry } from './shape.js';
-import { buildCourseSectors, buildFreeRide, powerCurveView, buildMtbDynamics, buildRawAnalysis, effectiveKind, kindLabel, raceStartInfo, KIND_OPTIONS } from './analysis.js';
+import { buildCourseSectors, buildRaceEfficiency, buildFreeRide, powerCurveView, buildMtbDynamics, buildRawAnalysis, effectiveKind, kindLabel, raceStartInfo, KIND_OPTIONS } from './analysis.js';
 import { sportHasPlannedDistance, sportCanPushToGarmin, sportUsesPace } from './sports.js';
 import {
   sportLabel, sourceBadge, formatWorkoutDistance, formatAnalyticsLine,
@@ -3320,6 +3320,20 @@ function renderMtbSections(workout, selectedSector = null, mapView = null) {
   return mtb + sectors;
 }
 
+/** "Race efficiency": the lap-to-lap verdict and per-lap NP / HR / EF, first in the race analysis. */
+function renderRaceEfficiencySection(workout) {
+  const re = buildRaceEfficiency(workout);
+  if (!re) return '';
+  return `
+    <section class="detail-section race-efficiency">
+      <h4>Race efficiency</h4>
+      <p class="${re.decoupled ? 're-verdict re-decoupled' : 're-verdict'}"><strong>${esc(re.verdict)}</strong></p>
+      ${renderRawTable(re.laps.columns, re.laps.rows)}
+      ${re.slopes ? `<p class="sub">${esc(re.slopes)}</p>` : ''}
+      <p class="sub">${esc(re.note)}</p>
+    </section>`;
+}
+
 /** Mean-maximal power curve: this ride against the 90-day best. Main analysis view. */
 function renderPowerCurveSection(workout) {
   const curve = powerCurveView(workout?.analytics?.power_curve);
@@ -3545,6 +3559,7 @@ export function renderWorkoutDetail(workout, {
     ${shapeSection}
     ${editable ? renderRpeEditSection(workout, rpeEdit) : ''}
     ${renderRaceDebriefSection(workout, raceDebriefs)}
+    ${renderRaceEfficiencySection(workout)}
     ${renderFreeRideSection(workout, { zoneKeyShown: shapeSection.includes(SHAPE_LEGEND_MARK) })}
     ${renderMtbSections(workout, selectedSector, mapView)}
     ${renderPowerCurveSection(workout)}

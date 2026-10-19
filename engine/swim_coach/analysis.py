@@ -12,7 +12,8 @@ view = BASE_FIELDS only). Adding a run analyzer is one registry entry; no call s
 
 Behaviour of `BikeAnalyzer` by kind (`models.SessionKind`):
   workout   -- prescription path: the matched session's structure / zone / text steer the reps
-  race      -- race path: race-start read and per-lap numbers, no decoupling read
+  race      -- race path: race-start read and per-lap numbers, no steady-ride decoupling read
+               (the lap-to-lap `race_efficiency` block is the race's efficiency read)
   free_ride -- free effort detection (a repeating work/recovery lap pattern counts as structure),
                plus the `free_ride` read (`free_ride.py`: where the time went, notable efforts,
                matches burned, cost vs the week, steady-stretch drift, data quality). A "workout"
@@ -33,6 +34,7 @@ from swim_coach.bike_coach_view import shape_ride_view
 from swim_coach.course_sectors import build_course_sectors
 from swim_coach.free_ride import FREE_READ_KINDS, read_free_ride
 from swim_coach.mtb_dynamics import build_mtb_dynamics
+from swim_coach.race_efficiency import build_race_efficiency
 from swim_coach.power_curve import BEST_WINDOWS_DAYS, annotate_bests
 
 if TYPE_CHECKING:
@@ -80,7 +82,7 @@ SWIM_FIELDS: frozenset[str] = frozenset(
     }
 )
 BIKE_FIELDS: frozenset[str] = frozenset(
-    {"intervals", "avg_power_w", "normalized_power_w", "power_curve", "free_ride", "mtb_dynamics", "course_sectors"}
+    {"intervals", "avg_power_w", "normalized_power_w", "power_curve", "free_ride", "mtb_dynamics", "course_sectors", "race_efficiency"}
 )
 
 
@@ -229,6 +231,13 @@ class BikeAnalyzer(_CoachViewMixin):
                 if self._compares_course_laps(ctx)
                 else None
             ),
+            "race_efficiency": (
+                build_race_efficiency(
+                    workout, ctx.series, prefer_gps=ctx.kind in GPS_LAP_KINDS, race_start_s=self._race_start_s(analytics, ctx)
+                )
+                if self._compares_course_laps(ctx)
+                else None
+            ),
         }
         return analytics.model_copy(update={k: v for k, v in found.items() if v is not None})
 
@@ -267,6 +276,13 @@ class BikeAnalyzer(_CoachViewMixin):
 
     def needs_neighbors(self, kind: SessionKind) -> bool:
         return kind in FREE_READ_KINDS
+
+    @staticmethod
+    def _race_start_s(analytics: WorkoutAnalytics, ctx: AnalysisContext) -> float | None:
+        """Where the race began on the activity clock: the detected / set start the race read found
+        (races only), else the athlete's own override."""
+        found = analytics.intervals.race_start if analytics.intervals and ctx.kind == "race" else None
+        return found.start_s if found else ctx.race_start_s
 
     @staticmethod
     def _compares_course_laps(ctx: AnalysisContext) -> bool:

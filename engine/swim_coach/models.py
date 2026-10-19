@@ -2094,6 +2094,44 @@ class LapFade(BaseModel):
     flow_slope_per_lap: float | None = None
 
 
+class RaceEfficiencyLap(BaseModel):
+    """One race lap's efficiency numbers (`swim_coach.race_efficiency`)."""
+
+    lap: int  # 1-based device lap number
+    time_s: float
+    avg_power_w: float | None = None
+    np_w: float | None = None
+    avg_hr: float | None = None
+    ef: float | None = None  # efficiency factor: NP / avg HR, watts per bpm
+    speed_per_100w: float | None = None  # lap speed (m/s) per 100 W of NP
+    avg_flow: float | None = None
+
+
+class RaceEfficiencyTrend(BaseModel):
+    """First -> last race lap and the per-lap slope of time / power / HR / EF, plus decoupling."""
+
+    time_change_pct: float | None = None
+    power_change_pct: float | None = None
+    hr_change_bpm: float | None = None
+    ef_change_pct: float | None = None
+    flow_change: float | None = None
+    time_slope_s_per_lap: float | None = None
+    power_slope_w_per_lap: float | None = None
+    hr_slope_bpm_per_lap: float | None = None
+    ef_slope_per_lap: float | None = None
+    decoupling_pct: float | None = None  # EF change %, first half of the laps -> second half (negative = less efficient)
+    decoupled_from_lap: int | None = None  # first lap from which EF stays below the early-race baseline by the flag threshold
+
+
+class RaceEfficiency(BaseModel):
+    """`WorkoutAnalytics.race_efficiency`: lap-to-lap efficiency of a repeated-lap ride, the first
+    thing a race review reads (see `swim_coach.race_efficiency`)."""
+
+    laps: list[RaceEfficiencyLap]
+    trend: RaceEfficiencyTrend
+    verdict: str
+
+
 class TrackSector(BaseModel):
     """One sector of the course map: a polyline in local metres (x east, y north, centred on the lap)."""
 
@@ -2170,6 +2208,8 @@ class WorkoutAnalytics(BaseModel):
     # Bike-owned; present only when the ride has the data. Additive/optional.
     mtb_dynamics: MtbDynamics | None = None
     course_sectors: CourseSectors | None = None
+    # Lap-to-lap NP / HR efficiency of a race (or any ride with 2+ comparable laps). Additive/optional.
+    race_efficiency: RaceEfficiency | None = None
 
 
 WorkoutChatSenderRole = Literal["athlete", "ai_coach", "coach"]
