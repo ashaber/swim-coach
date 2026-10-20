@@ -9,6 +9,7 @@ Constants are Coach judgment, tuned on the 2026-10-18 CX race file (7 laps, 13 s
 
 from __future__ import annotations
 
+from statistics import median
 from typing import Literal, Mapping, Sequence
 
 from swim_coach.models import FreeSpeed, SectorPass
@@ -19,6 +20,8 @@ TERRAIN_MIN_CHANGE_M = 2.0  # Coach judgment: a barometric altitude change under
 EFFICIENCY_MIN_DESCENT_S = 10.0  # Coach judgment: a descent shorter than this is a drop, not a stretch to coast and save watts
 # "As fast" means within the section's own timing sigma (`section_noise`), not a fixed number of seconds.
 FREE_SPEED_MIN_SAVED_W = 30.0  # Coach judgment: under 30 W less is within pass-to-pass variation of a section average
+FREE_SPEED_MIN_SECTION_S = 10.0  # Coach judgment: on a section shorter than this the timing sigma is a large share of the time (same minimum as a drill-down piece)
+FREE_SPEED_MAX_TOL_S = 0.3  # Coach judgment: "as fast" for free speed never allows more than 0.3 s, whatever the section sigma
 FREE_SPEED_MAX = 3  # Coach judgment: the debrief names the three biggest, not every pair
 
 
@@ -70,5 +73,9 @@ def _best_pair(label: str, passes: Sequence[SectorPass], tol_s: float) -> FreeSp
 def free_speed(passes_by_label: Mapping[str, Sequence[SectorPass]], tol_by_label: Mapping[str, float]) -> list[FreeSpeed]:
     """Up to FREE_SPEED_MAX free-speed passes, largest `watts_saved` first, one per section. The
     caller passes efficiency sections only."""
-    found = [pair for label, passes in passes_by_label.items() if (pair := _best_pair(label, passes, tol_by_label[label]))]
+    found = [
+        pair for label, passes in passes_by_label.items()
+        if median(p.time_s for p in passes) >= FREE_SPEED_MIN_SECTION_S
+        and (pair := _best_pair(label, passes, min(tol_by_label[label], FREE_SPEED_MAX_TOL_S)))
+    ]
     return sorted(found, key=lambda f: -f.watts_saved)[:FREE_SPEED_MAX]

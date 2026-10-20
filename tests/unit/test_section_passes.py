@@ -88,3 +88,11 @@ def test_free_speed_caps_at_three_largest_first() -> None:
     passes = {f"C{i}": [_p(1, 10.0, 100.0 + 10 * i), _p(2, 10.0, 100.0)] for i in range(1, 7)}
     found = free_speed(passes, TOL)
     assert [f.label for f in found] == ["C6", "C5", "C4"]
+
+
+def test_free_speed_skips_short_sections_and_caps_the_time_tolerance() -> None:
+    short = [_p(1, 8.0, 180.0), _p(2, 8.1, 60.0)]  # median 8 s: too short to judge
+    assert free_speed({"C2": short}, {"C2": 0.4}) == []
+    long = [_p(1, 16.0, 200.0), _p(2, 16.35, 120.0)]  # 0.35 s slower: inside sigma 0.5 but over the 0.3 s cap
+    assert free_speed({"C4": long}, {"C4": 0.5}) == []
+    assert len(free_speed({"C4": [_p(1, 16.0, 200.0), _p(2, 16.25, 120.0)]}, {"C4": 0.5})) == 1
