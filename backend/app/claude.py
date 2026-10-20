@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator
 
 import anthropic
@@ -69,6 +70,18 @@ MAX_TOKENS_TRUNCATION_MARKER = (
     "\n\n⚠️ _[Response was cut off at the token limit — "
     "reply 'continue' to resume.]_"
 )
+
+
+@dataclass
+class TurnStats:
+    """Passive record of what one Sonnet turn actually did, filled in by `_run_turns` when a caller
+    passes one (the Haiku router's shadow log compares it with Haiku's decision). Never read by the
+    turn itself, so passing it cannot change the stream."""
+
+    output_tokens: int = 0
+    tools: list[str] = field(default_factory=list)
+    wrote: bool = False  # a WRITE_TOOLS call returned its success shape
+    completed: bool = False  # the turn reached its `done` event
 
 
 # What an `escalate` callback returns: the full-mode (system, messages, tools,
@@ -293,6 +306,7 @@ class ClaudeChat:
         *,
         escalate: Callable[[], Escalation] | None = None,
         request_id: str | None = None,
+        stats: TurnStats | None = None,
     ) -> Iterator[str]:
         """Yields SSE-framed JSON lines (`"data: {...}\\n\\n"`).
 
@@ -312,7 +326,7 @@ class ClaudeChat:
         used by `run_once`) -- SSE-frames each raw event dict it yields.
         """
         for event in self._run_turns(
-            system, messages, tools, tool_handlers, escalate=escalate, request_id=request_id
+            system, messages, tools, tool_handlers, escalate=escalate, request_id=request_id, stats=stats
         ):
             yield _sse(event)
 
@@ -372,6 +386,7 @@ class ClaudeChat:
         *,
         escalate: Callable[[], Escalation] | None = None,
         request_id: str | None = None,
+        stats: TurnStats | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Shared tool-loop generator behind both `run_streaming` (which
         SSE-frames each event) and `run_once` (which drains text events into
@@ -438,6 +453,8 @@ class ClaudeChat:
                 return
 
             usage = final.usage
+            if stats is not None:
+                stats.output_tokens += getattr(usage, "output_tokens", 0) or 0
             log.info(
                 "claude turn complete",
                 iteration=iteration,
@@ -497,6 +514,8 @@ class ClaudeChat:
                     )
                     yield {"type": "text", "text": UNVERIFIED_DRAFT_NOTICE}
                 yield {"type": "tool_trace", "trace": format_tool_trace(trace_calls)}
+                if stats is not None:
+                    stats.completed = True
                 yield {"type": "done", "stop_reason": final.stop_reason}
                 return
 
@@ -530,6 +549,8 @@ class ClaudeChat:
                     continue
                 handler = tool_handlers.get(block.name)
                 tools_invoked.append(block.name)
+                if stats is not None:
+                    stats.tools.append(block.name)
                 yield {"type": "tool_use", "name": block.name, "input": block.input}
                 try:
                     result = (
@@ -585,6 +606,8 @@ class ClaudeChat:
                     tool_error_count += 1
                 if write_succeeded(block.name, result):
                     turn_wrote = True
+                    if stats is not None:
+                        stats.wrote = True
                 tool_results.append(
                     {
                         "type": "tool_result",

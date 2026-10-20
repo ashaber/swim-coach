@@ -30,6 +30,7 @@ from swim_coach.models import (
     HealthStatus,
     LibraryReview,
     MacroPlan,
+    RouterShadowCapture,
     Sport,
     ThresholdRecord,
     Wellness,
@@ -323,6 +324,20 @@ class StoreInterface(ABC):
         updated grant, or None if no grant has that id. Idempotent-safe:
         revoking an already-revoked grant just re-sets `revoked_at` again,
         no special-casing."""
+        ...
+
+    # --- Haiku router shadow captures ------------------------------------------
+
+    @abstractmethod
+    def save_router_capture(self, slug: str, capture: RouterShadowCapture) -> None:
+        """Append one shadow-mode comparison (question, Haiku reply, Sonnet reply, decision) for
+        athlete `slug`. Append-only. Raises FileNotFoundError for an unknown `slug`."""
+        ...
+
+    @abstractmethod
+    def list_router_captures(self, slug: str, *, limit: int | None = None) -> list[RouterShadowCapture]:
+        """Captures for `slug`, newest first (`limit` keeps the newest N). Raises
+        FileNotFoundError for an unknown `slug`."""
         ...
 
     # --- Athlete<->coach conversation (IDEA 016 Part 2) ----------------------
@@ -993,6 +1008,30 @@ class FileStore(StoreInterface):
             for entry in entries:
                 fh.write(json.dumps(entry.model_dump(mode="json")) + "\n")
         return updated
+
+    # --- Haiku router shadow captures ------------------------------------------
+
+    def _router_captures_path(self, slug: str) -> Path:
+        return self._athlete_dir(slug) / "router_shadow_captures.jsonl"
+
+    def save_router_capture(self, slug: str, capture: RouterShadowCapture) -> None:
+        self.load_athlete(slug)  # raises FileNotFoundError if unknown
+        path = self._router_captures_path(slug)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(capture.model_dump(mode="json")) + "\n")
+
+    def list_router_captures(self, slug: str, *, limit: int | None = None) -> list[RouterShadowCapture]:
+        self.load_athlete(slug)  # raises FileNotFoundError if unknown
+        path = self._router_captures_path(slug)
+        captures: list[RouterShadowCapture] = []
+        if path.exists():
+            with path.open("r", encoding="utf-8") as fh:
+                captures = [RouterShadowCapture.model_validate(json.loads(line)) for line in fh if line.strip()]
+        captures.sort(key=lambda c: (c.created_at, str(c.id)), reverse=True)
+        if limit is not None:
+            captures = captures[:limit] if limit > 0 else []
+        return captures
 
     # --- Athlete<->coach conversation (IDEA 016 Part 2) ---------------------
 

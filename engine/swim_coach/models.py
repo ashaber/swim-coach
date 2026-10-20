@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -2406,6 +2406,23 @@ class Conversation(BaseModel):
     athlete_id: UUID
     coach_athlete_id: UUID
     ai_muted: bool = False
+
+
+class RouterShadowCapture(BaseModel):
+    """One shadow-mode comparison for the Haiku coach router: the athlete's question, what Haiku
+    would have replied, what Sonnet actually replied, and the routing decision, stored for a human
+    to review. Written ONLY for athletes named in COACH_ROUTER_CAPTURE_ATHLETES; the text never goes
+    to logs. Append-only. `decision` is a small JSON object (route, confidence, tools called...)."""
+
+    schema_version: int = 1
+    id: UUID
+    athlete_id: UUID
+    request_id: str
+    question: str
+    haiku_reply: str | None = None
+    sonnet_reply: str | None = None
+    decision: dict = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class Workout(BaseModel):

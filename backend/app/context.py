@@ -2268,6 +2268,7 @@ def build_per_request_context_and_sizes(
     focused_workout: Workout | None = None,
     focused_session: Session | None = None,
     asker_note: str | None = None,
+    recent_session_days: int | None = None,
 ) -> tuple[str, dict[str, int], str]:
     """The uncached, per-request text block: athlete profile + zones,
     current + next week plan, the last ~28 days' exact logged sessions
@@ -2359,7 +2360,12 @@ def build_per_request_context_and_sizes(
     current_week_json = json.dumps(_slim_week_for_context(current_week), separators=(",", ":"))
     next_week_json = json.dumps(_slim_week_for_context(next_week), separators=(",", ":"))
     rollup_json = json.dumps(rollup, separators=(",", ":"))
-    recent_sessions_block = _render_recent_sessions(workouts, span_start, span_end)
+    # `recent_session_days` (the Haiku router's token-budget trim only; None = the unchanged
+    # default window) shortens ONLY the exact-sessions list -- the rollup keeps its 4 weeks.
+    sessions_start = span_start if recent_session_days is None else max(
+        span_start, today - timedelta(days=recent_session_days)
+    )
+    recent_sessions_block = _render_recent_sessions(workouts, sessions_start, span_end)
     pinned_events_block = _render_upcoming_events_pinned(events, today)
     events_races_block = _render_events(events, today)
     health_block = _render_active_health_status(store.list_health_status(slug))
@@ -2407,7 +2413,7 @@ def build_per_request_context_and_sizes(
         next_week_json,
         *([next_week_note] if next_week_note else []),
         "",
-        "### Exact logged sessions (last 28 days) -- ground truth, each with its sport",
+        f"### Exact logged sessions (last {recent_session_days or 28} days) -- ground truth, each with its sport",
         recent_sessions_block,
         "",
         "### Events / races",
@@ -2487,6 +2493,7 @@ def build_context_block(
     focused_session: Session | None = None,
     cache_ttl: str = "5m",
     asker_note: str | None = None,
+    recent_session_days: int | None = None,
 ) -> list[dict[str, Any]]:
     """System block C: the athlete's own per-request context (profile/zones, current + next
     week plan, the last ~28 days' exact logged sessions, events/races, the aggregate rollup,
@@ -2541,6 +2548,7 @@ def build_context_block(
         focused_workout=focused_workout,
         focused_session=focused_session,
         asker_note=asker_note,
+        recent_session_days=recent_session_days,
     )
     log.info(
         "context sizes",
