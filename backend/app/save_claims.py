@@ -64,31 +64,38 @@ WRITE_TOOLS: dict[str, str] = {
     "update_race_checklist": "updated",
 }
 
-# Every other real tool: reads, drafts that never persist (propose_adaptation
-# always returns persisted: false), or writes to workout analytics / feedback
-# rather than the plan or profile. tests/api/test_write_tools_registry.py
-# fails when a real tool is in neither set.
-NON_PLAN_OR_READ_ONLY: frozenset[str] = frozenset({
-    "propose_adaptation",
+# Every other real tool, classified once (tests/api/test_write_tools_registry.py fails when a real
+# tool is in none of these sets or in two). Everything that asks "is this tool safe to run without
+# changing anything?" derives from here: the Haiku router's read-only allowlist is READ_ONLY_TOOLS,
+# and its shadow log's "write tool" flag is WRITE_TOOLS | SIDE_EFFECT_TOOLS.
+#
+# Pure reads: nothing is persisted, pushed or sent (each verified against its handler).
+READ_ONLY_TOOLS: frozenset[str] = frozenset({
     "get_plan_summary",
     "get_week_plan",
-    "flag_for_coach_review",
-    "log_app_feedback",
     "lookup_reference",
     "get_race_debriefs",
     "get_event_groups",
     "get_race_checklist",
     "get_workouts",
-    "reanalyze_workout",
     "get_ride_pacing",
-    "set_workout_chat_muted",
+    "render_plan_table",
+})
+# Draft/check tools that never persist (propose_adaptation always returns persisted: false).
+DRAFT_ONLY_TOOLS: frozenset[str] = frozenset({"propose_adaptation", "check_plan"})
+# Side effects outside the plan/profile: workout analytics/series writes, device/calendar pushes,
+# feedback rows, thread muting.
+SIDE_EFFECT_TOOLS: frozenset[str] = frozenset({
+    "reanalyze_workout",
     "pull_activity_stream",
     "sync_workouts",
     "push_to_garmin",
     "export_zwo_workout",
-    "check_plan",
-    "render_plan_table",
+    "flag_for_coach_review",
+    "log_app_feedback",
+    "set_workout_chat_muted",
 })
+NON_PLAN_OR_READ_ONLY: frozenset[str] = READ_ONLY_TOOLS | DRAFT_ONLY_TOOLS | SIDE_EFFECT_TOOLS
 
 _CLAIM = re.compile(
     r"\bpersisted\b|\bsaved\b|\blocked in\b|\bnow on your plan\b|\bwritten to\b"
@@ -137,7 +144,7 @@ def claims_a_save(text: str) -> bool:
 # no draft to claim (prod 2026-10-15: "Draft is clean, no planning warnings"
 # with ZERO tool calls). `propose_adaptation` and `check_plan` draft/check
 # without persisting, so they are not in WRITE_TOOLS.
-DRAFT_TOOLS: frozenset[str] = frozenset(WRITE_TOOLS) | {"propose_adaptation", "check_plan"}
+DRAFT_TOOLS: frozenset[str] = frozenset(WRITE_TOOLS) | DRAFT_ONLY_TOOLS
 
 # Tight on purpose: only phrasings that assert a draft/check result exists.
 _DRAFT_CLAIM = re.compile(

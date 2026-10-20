@@ -24,9 +24,10 @@ PROPOSAL = [
 ]
 
 
-def category(message: str, *, history=None, pending=False, active_health=False) -> str | None:
+def category(message: str, *, history=None, pending=False, active_health=False, sports=None) -> str | None:
     hit = match_pre_rule(
-        message, history=history or [], has_pending_draft=pending, has_active_health_status=active_health
+        message, history=history or [], has_pending_draft=pending, has_active_health_status=active_health,
+        sports=sports,
     )
     return hit.category if hit else None
 
@@ -186,3 +187,14 @@ def test_hit_names_the_rule_but_never_echoes_the_message() -> None:
     assert hit is not None
     assert hit.rule_id in {r.id for r in PRE_RULES}
     assert "knee" not in repr(hit).lower()
+
+
+def test_sport_specific_health_terms_apply_by_athlete_sport() -> None:
+    assert category("I had a crash on the descent", sports=["bike"]) == CATEGORY_HEALTH
+    assert category("I had a crash on the descent", sports=["swim_pool"]) is None
+    assert category("got stung by a jellyfish", sports=["swim_ow"]) == CATEGORY_HEALTH
+
+
+def test_known_slang_does_not_force_sonnet_but_real_reports_still_do() -> None:
+    assert category("I was in the pain cave all day") is None
+    assert category("pain cave, and now my knee hurts") == CATEGORY_HEALTH

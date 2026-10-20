@@ -436,6 +436,7 @@ async def stream_chat_response(
         history_len=len(history),
         focused=focused_workout is not None,
         expert_mode=payload.expert_mode,
+        sports=athlete_profile.effective_sports,
     )
 
     # One request_id per HTTP request (IDEA 025 step 1) -- joins this

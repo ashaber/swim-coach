@@ -32,6 +32,7 @@ import httpx
 from app.claude import with_loop_breakpoint
 from app.logging_config import get_logger
 from app.model_prices import split_cache_writes, usage_cost
+from app.save_claims import READ_ONLY_TOOLS
 from app.tool_errors import internal_tool_error
 from app.tools import TOOLS_SCHEMA, ToolHandler
 
@@ -39,26 +40,12 @@ log = get_logger(__name__)
 
 TRIAGE_TOOL_NAME = "triage"
 
-# Read-only coach tools Haiku may call, verified one by one against their handlers in app/tools.py
-# (none writes; each is also absent from save_claims.WRITE_TOOLS/DRAFT_TOOLS). Chosen conservatively:
-#   get_plan_summary / get_week_plan  -- plan reads
-#   get_workouts / get_ride_pacing    -- logged-workout reads (pacing is computed on demand, persisted nowhere)
-#   get_race_debriefs / get_race_checklist / get_event_groups -- race reads
-#   lookup_reference                  -- library reference-list lookup (the library topic files themselves
-#                                        already ride the prompt; there is no separate read-file tool)
-# Deliberately NOT here: reanalyze_workout and pull_activity_stream (write workout analytics/series),
-# sync_workouts, push_to_garmin, export_zwo_workout (side effects), check_plan, render_plan_table,
-# propose_adaptation (draft/analysis tools), flag_for_coach_review, log_app_feedback (write feedback).
-HAIKU_TOOL_ALLOWLIST: tuple[str, ...] = (
-    "get_plan_summary",
-    "get_week_plan",
-    "get_workouts",
-    "get_ride_pacing",
-    "get_race_debriefs",
-    "get_race_checklist",
-    "get_event_groups",
-    "lookup_reference",
-)
+# Read-only coach tools Haiku may call: exactly save_claims.READ_ONLY_TOOLS (pure reads, each
+# verified against its handler in app/tools.py), in sorted order so the tools prefix is cache-stable.
+# `lookup_reference` is the library reference-list lookup; the library topic files themselves already
+# ride the prompt, and there is no separate read-file tool. Writes, pushes, drafts and side-effect
+# tools are never here by construction (see save_claims for the classification).
+HAIKU_TOOL_ALLOWLIST: tuple[str, ...] = tuple(sorted(READ_ONLY_TOOLS))
 
 TRIAGE_CATEGORIES: tuple[str, ...] = (
     "greeting/thanks",
@@ -172,6 +159,9 @@ class TriageDecision:
     reason: str
     reply: str | None
     invalid: bool = False
+    # Haiku called the message health-related but had set route=answer: coerced to escalate. The
+    # safety rail is that ANY health category escalates, even when no keyword rule fired.
+    health_forced: bool = False
 
     @classmethod
     def from_tool_input(cls, data: dict[str, Any]) -> "TriageDecision":
@@ -180,18 +170,23 @@ class TriageDecision:
         reply = data.get("reply")
         reply = reply.strip() if isinstance(reply, str) and reply.strip() else None
         invalid = False
+        health_forced = False
+        category = category if category in TRIAGE_CATEGORIES else "other"
         if route not in ("answer", "escalate"):
             route, invalid = "escalate", True
         elif route == "answer" and reply is None:
             route, invalid = "escalate", True
+        elif route == "answer" and category == "health":
+            route, health_forced = "escalate", True
         return cls(
             route=route,
             complexity=_unit_interval(data.get("complexity")),
             confidence=_unit_interval(data.get("confidence")),
-            category=category if category in TRIAGE_CATEGORIES else "other",
+            category=category,
             reason=str(data.get("reason") or "")[:200],
             reply=reply if route == "answer" else None,
             invalid=invalid,
+            health_forced=health_forced,
         )
 
     def would_answer(self, confidence_threshold: float, complexity_threshold: float = 0.5) -> bool:

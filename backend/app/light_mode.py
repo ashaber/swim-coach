@@ -17,14 +17,16 @@ Nothing here is used unless `Settings.light_mode` (COACH_LIGHT_MODE) is on.
 
 from __future__ import annotations
 
-import re
+from collections.abc import Sequence
 from datetime import timedelta
 from typing import Any
 
 from swim_coach.athlete_time import athlete_today
+from swim_coach.health_vocab import mentions_health
 
 from app import context as context_module
 from app.context import HistoryTurn, StoreInterface
+from app.intent_vocab import ACTION_WORDS, DATA_WORDS, is_short_affirmation, word_pattern
 
 NEED_MORE_TOOL_NAME = "need_more"
 
@@ -33,37 +35,11 @@ LIGHT_MAX_MESSAGE_CHARS = 240
 LIGHT_MAX_HISTORY_MESSAGES = 8
 LIGHT_RECENT_SESSION_DAYS = 7
 
-# Coach judgment: word lists tuned to send anything ambiguous to full mode --
-# a wrong "full" costs tokens, a wrong "light" costs answer quality. The
-# `need_more` escape hatch covers what these miss.
-_HEALTH_WORDS = (
-    "pain", "hurt", "hurts", "injur", "injury", "sore", "soreness", "ache", "aching", "sick", "ill",
-    "illness", "dizzy", "dizziness", "chest", "faint", "fainted", "palpitation", "palpitations",
-    "cramp", "cramps", "shiver", "shivering", "hypothermia", "heatstroke", "numb", "numbness",
-    "swollen", "swelling", "sprain", "sprained", "strain", "strained", "fever", "nausea", "nauseous",
-    "vomit", "breathe", "breathing", "doctor", "physio", "surgery", "concussion", "tweak", "tweaked",
-    "niggle", "knee", "shoulder", "ankle", "medication", "medical",
-)
-_DATA_WORDS = (
-    "review", "analyze", "analyse", "analysis", "pacing", "paced", "laps", "lap", "power", "watts",
-    "hr", "heart", "data", "numbers", "compare", "compared", "why", "should", "recommend", "advice",
-    "tss", "ctl", "atl", "tsb", "rpe", "score", "stats", "metrics", "efficiency", "fade", "faded",
-    "how did", "how much", "how many", "how long", "what should", "what is", "what's", "when should",
-)
-_ACTION_WORDS = (
-    "plan", "week", "schedule", "session", "workout", "move", "swap", "change", "adjust",
-    "reschedule", "skip", "cancel", "log", "record", "add", "remove", "delete", "sync", "upload",
-    "generate", "create", "update", "edit", "propose", "confirm", "athlete profile", "ftp",
-)
-
-
-def _word_pattern(words: tuple[str, ...]) -> re.Pattern[str]:
-    return re.compile(r"\b(?:" + "|".join(re.escape(w) for w in words) + r")\b", re.IGNORECASE)
-
-
-_HEALTH_RE = _word_pattern(_HEALTH_WORDS)
-_DATA_RE = _word_pattern(_DATA_WORDS)
-_ACTION_RE = _word_pattern(_ACTION_WORDS)
+# Word lists live in app.intent_vocab (actions, data) and swim_coach.health_vocab (health), shared
+# with the Haiku router. Coach judgment: anything ambiguous goes to full mode -- a wrong "full" costs
+# tokens, a wrong "light" costs answer quality. The `need_more` escape hatch covers what these miss.
+_DATA_RE = word_pattern(DATA_WORDS)
+_ACTION_RE = word_pattern(ACTION_WORDS)
 
 
 def is_light_turn(
@@ -72,6 +48,7 @@ def is_light_turn(
     history_len: int,
     focused: bool = False,
     expert_mode: bool = False,
+    sports: Sequence[str] | None = None,
 ) -> bool:
     """True when `message` can be answered conversationally with no tools,
     library or full context. Conservative: see the module docstring."""
@@ -82,7 +59,12 @@ def is_light_turn(
     lowered = message.lower()
     if any(keyword in lowered for keyword in context_module._KEYWORD_ROUTES):
         return False
-    return not (_HEALTH_RE.search(message) or _DATA_RE.search(message) or _ACTION_RE.search(message))
+    if history_len > 0 and is_short_affirmation(message):
+        # PR #215 review hole: "yes, go ahead" answers a proposal; the light coach has no tools.
+        return False
+    if mentions_health(message, sports):
+        return False
+    return not (_DATA_RE.search(message) or _ACTION_RE.search(message))
 
 
 LIGHT_TOOLS: list[dict[str, Any]] = [

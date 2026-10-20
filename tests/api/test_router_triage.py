@@ -91,8 +91,15 @@ def test_allowlist_is_read_only_and_real() -> None:
     assert not set(HAIKU_TOOL_ALLOWLIST) & DRAFT_TOOLS
     for forbidden in ("push_to_garmin", "sync_workouts", "export_zwo_workout", "reanalyze_workout",
                       "pull_activity_stream", "flag_for_coach_review", "log_app_feedback",
-                      "set_workout_chat_muted", "render_plan_table", "check_plan"):
+                      "set_workout_chat_muted", "check_plan"):
         assert forbidden not in HAIKU_TOOL_ALLOWLIST
+
+
+def test_allowlist_is_derived_from_the_single_tool_classification() -> None:
+    from app.save_claims import DRAFT_ONLY_TOOLS, READ_ONLY_TOOLS, SIDE_EFFECT_TOOLS
+
+    assert set(HAIKU_TOOL_ALLOWLIST) == set(READ_ONLY_TOOLS)
+    assert not set(HAIKU_TOOL_ALLOWLIST) & (SIDE_EFFECT_TOOLS | DRAFT_ONLY_TOOLS)
 
 
 def test_haiku_tools_are_allowlist_plus_triage_only() -> None:
@@ -133,6 +140,15 @@ def test_decision_clamps_and_defaults() -> None:
 def test_decision_unknown_route_escalates() -> None:
     d = TriageDecision.from_tool_input({"route": "maybe", "complexity": 0.5, "confidence": 0.5})
     assert d.route == "escalate" and d.invalid is True
+
+
+def test_health_category_forces_escalate_even_with_an_answer() -> None:
+    d = TriageDecision.from_tool_input(
+        {"route": "answer", "complexity": 0.1, "confidence": 0.99, "category": "health", "reason": "r",
+         "reply": "rest up"}
+    )
+    assert d.route == "escalate" and d.health_forced is True and d.reply is None
+    assert not d.would_answer(0.0)
 
 
 def test_would_answer_threshold() -> None:

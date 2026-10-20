@@ -38,9 +38,9 @@ from app.config import Settings
 from app.context import build_messages, build_routed_block, build_system_blocks
 from app.logging_config import get_logger
 from app.model_prices import price_for
-from app.router_rules import PreRuleHit, match_pre_rule
+from app.router_rules import CATEGORY_HEALTH, PreRuleHit, match_pre_rule
 from app.router_triage import HaikuContext, TriageOutcome, run_triage
-from app.save_claims import DRAFT_TOOLS, WRITE_TOOLS
+from app.save_claims import DRAFT_ONLY_TOOLS, SIDE_EFFECT_TOOLS, WRITE_TOOLS
 from app.tools import ToolHandler
 
 log = get_logger(__name__)
@@ -50,19 +50,6 @@ log = get_logger(__name__)
 # (tests/api/test_router_shadow.py asserts the real renderers still emit them).
 PENDING_DRAFTS_MARKER = "Drafts waiting for the athlete's yes"
 ACTIVE_HEALTH_MARKER = "ACTIVE HEALTH STATUS"
-
-# Tools with side effects outside the plan/profile (so not in WRITE_TOOLS) that a router answer
-# must never replace either.
-SIDE_EFFECT_TOOLS: frozenset[str] = frozenset({
-    "push_to_garmin",
-    "sync_workouts",
-    "export_zwo_workout",
-    "reanalyze_workout",
-    "pull_activity_stream",
-    "flag_for_coach_review",
-    "log_app_feedback",
-    "set_workout_chat_muted",
-})
 
 _THREADS: set[threading.Thread] = set()
 _THREADS_LOCK = threading.Lock()
@@ -87,7 +74,7 @@ def sonnet_tool_flags(tools: Sequence[str]) -> dict[str, Any]:
     return {
         "sonnet_tools": list(tools),
         "sonnet_write_tool": any(t in WRITE_TOOLS or t in SIDE_EFFECT_TOOLS for t in tools),
-        "sonnet_draft_tool": any(t in DRAFT_TOOLS and t not in WRITE_TOOLS for t in tools),
+        "sonnet_draft_tool": any(t in DRAFT_ONLY_TOOLS for t in tools),
     }
 
 
@@ -156,8 +143,11 @@ class _Recorder:
             self._emitted = True
             fields = {**self.base, **self._haiku, **self._sonnet}
             haiku_reply, sonnet_reply = self._haiku_reply, self._sonnet_reply
+        if fields.get("pre_rule"):
+            fields["route"] = "escalate"  # a pre-rule decides; a probe's Haiku answer is never used
         fields["disagree_write"] = bool(
-            fields.get("haiku_route") == "answer"
+            not fields.get("pre_rule")
+            and fields.get("haiku_route") == "answer"
             and (fields["sonnet_write_tool"] or fields["sonnet_draft_tool"])
         )
         log.info("router shadow", **fields)
@@ -191,6 +181,8 @@ def haiku_log_fields(
         "confidence": decision.confidence if decision else None,
         "category": decision.category if decision else None,
         "haiku_invalid": decision.invalid if decision else None,
+        # Haiku's own read that the message is health-related (it escalates on this alone).
+        "haiku_health_escalate": decision.category == "health" if decision else None,
         "haiku_prompt_tokens": outcome.prompt_tokens or None,
         "haiku_measured_tokens": outcome.measured_tokens,
         "haiku_cached_tokens": outcome.cached_tokens,
@@ -324,7 +316,7 @@ def begin_shadow(inputs: ShadowInputs) -> ShadowSession | None:
         pending, active_health = context_flags(inputs.context_block)
         hit: PreRuleHit | None = match_pre_rule(
             inputs.message, history=inputs.history, has_pending_draft=pending,
-            has_active_health_status=active_health,
+            has_active_health_status=active_health, sports=inputs.athlete_sports,
         )
         base: dict[str, Any] = {
             "request_id": inputs.request_id,
@@ -335,10 +327,15 @@ def begin_shadow(inputs: ShadowInputs) -> ShadowSession | None:
             "pre_rule": hit.category if hit else None,
             "pre_rule_id": hit.rule_id if hit else None,
         }
+        # A health keyword hit still gets a Haiku PROBE (its answer is never used; the turn goes to
+        # Sonnet regardless) so the report can count "keywords caught what Haiku called non-health".
+        # Every other pre-rule skips Haiku entirely.
+        probe = hit is not None and hit.category == CATEGORY_HEALTH
+        base["haiku_probe"] = probe
         recorder = _Recorder(
-            base=base, expects_haiku=hit is None, question=inputs.message, capture=_make_capture(inputs)
+            base=base, expects_haiku=hit is None or probe, question=inputs.message, capture=_make_capture(inputs)
         )
-        if hit is not None:
+        if hit is not None and not probe:
             recorder.set_haiku(
                 {"status": "skipped_pre_rule", "haiku_route": None, "route": "escalate", "over_budget": False},
                 None,

@@ -126,7 +126,17 @@ def build_report(payloads: list[dict[str, Any]]) -> dict[str, Any]:
             "missing_sonnet_cost": sum(1 for p in safe if p.get("request_id") not in sonnet_cost),
         }
 
+    # Health cross-check. Haiku only judges messages no keyword rule caught (triaged) plus health-keyword
+    # hits it is run on as a probe, so both directions are measurable.
+    probes = [p for p in shadow if p.get("pre_rule") and p.get("haiku_probe") and p.get("status") == "ok"]
+    health = {
+        "haiku_caught_keywords_missed": sum(1 for p in triaged if p.get("haiku_health_escalate")),
+        "keywords_caught_haiku_nonhealth": sum(1 for p in probes if not p.get("haiku_health_escalate")),
+        "probes": len(probes),
+    }
+
     return {
+        "health": health,
         "messages": len(shadow),
         "pre_rule": {"count": len(pre_rule), "share": len(pre_rule) / len(shadow) if shadow else 0.0,
                      "by_category": dict(by_pre_rule)},
@@ -161,6 +171,11 @@ def format_report(report: dict[str, Any]) -> str:
         f"  triaged by Haiku: {report['triaged']}  (with a decision: {report['decided']}; "
         f"no decision: {report['not_decided']})",
         f"Haiku routed: answer {report['answer_share']:.0%} / escalate {report['escalate_share']:.0%}",
+        "",
+        "Health cross-check:",
+        f"  Haiku caught health the keywords missed: {report['health']['haiku_caught_keywords_missed']}",
+        f"  keywords caught what Haiku called non-health: {report['health']['keywords_caught_haiku_nonhealth']}"
+        f" (of {report['health']['probes']} probed keyword hits)",
         "",
         "Confidence histogram (decided messages):",
     ]

@@ -253,6 +253,7 @@ from swim_coach.models import (
     RaceWeekChecklistItem,
     AthleteNote,
     SessionKind,
+    Sport,
     normalize_interval_type,
     derive_blocks_from_macro_weeks,
     ConfirmationRecord,
@@ -424,7 +425,7 @@ NOTATION_DESCRIPTION = (
 # rather than drifting into two copies that quietly diverge over time.
 _SESSION_KIND_SCHEMA: dict[str, Any] = {
     "type": "string",
-    "enum": ["workout", "race", "free_ride", "opener", "warmup"],
+    "enum": list(get_args(SessionKind)),
     "description": (
         "Optional. workout = structured training (incl. race-week sharpeners), scored; race = an event; "
         "free_ride = unstructured, even if scheduled; opener = day-before-race session, never scored; "
@@ -1098,7 +1099,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "properties": {
                 "sport": {
                     "type": "string",
-                    "enum": ["swim_pool", "swim_ow", "strength", "recovery", "cross_train", "bike"],
+                    "enum": list(get_args(Sport)),
                     "description": "Which sport this threshold reading is for.",
                 },
                 "metric": {
@@ -1182,7 +1183,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "type": "array",
                     "items": {
                         "type": "string",
-                        "enum": ["swim_pool", "swim_ow", "strength", "recovery", "cross_train", "bike"],
+                        "enum": list(get_args(Sport)),
                     },
                     "description": "The full list of sports this athlete's own training actually spans -- replaces Athlete.sports wholesale (not a merge/append). Only set this when the athlete's actual sport scope is genuinely changing/being declared for the first time.",
                 },
@@ -1607,7 +1608,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "workout_id": {"type": "string", "description": "The id (or a unique prefix) of the logged workout."},
-                "kind": {"type": "string", "enum": ["workout", "race", "free_ride", "opener", "warmup"]},
+                "kind": {"type": "string", "enum": list(get_args(SessionKind))},
             },
             "required": ["workout_id", "kind"],
             "additionalProperties": False,
@@ -3631,7 +3632,7 @@ def _handle_record_health_status(
     return result
 
 
-_THRESHOLD_SPORTS = ("swim_pool", "swim_ow", "strength", "recovery", "cross_train", "bike")
+_THRESHOLD_SPORTS = get_args(Sport)
 _THRESHOLD_METRICS = ("ftp_watts", "lthr_bpm", "css_pace_s_per_100m", "carb_tolerance_g_per_hr")
 _THRESHOLD_SOURCES = ("field_test", "ramp_test", "race_file", "app_estimate", "self_reported_historical")
 
@@ -6724,7 +6725,7 @@ def _handle_reschedule_session(input_data: dict[str, Any], *, store: StoreInterf
     }
 
 
-_PLAN_SPORTS = ("swim_pool", "swim_ow", "strength", "recovery", "cross_train", "bike")
+_PLAN_SPORTS = get_args(Sport)
 _SPORT_WORDS: dict[str, str] = {
     **dict.fromkeys(("kettlebell", "kettlebells", "kb", "weights", "weight", "lifting", "gym", "core",
                      "strength training", "dryland", "resistance", "strength"), "strength"),

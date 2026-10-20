@@ -131,13 +131,38 @@ def test_haiku_answer_while_sonnet_wrote_is_flagged_as_disagreement(shadow_clien
 def test_pre_rule_skips_haiku_and_is_logged(shadow_client, capsys) -> None:
     sc, make, _ = shadow_client
     fake, router = make(_sonnet_text(), [])
-    r = sc.post("/api/chat", json=_payload("my knee hurts when I kick"), headers=auth_headers())
+    r = sc.post("/api/chat", json=_payload("please move tomorrow's session to Friday"), headers=auth_headers())
     join_shadow_threads()
     assert r.status_code == 200
     assert router.creates == [] and router.counts == []
     line = [l for l in _logged(capsys) if l.get("msg") == "router shadow"][0]
-    assert line["pre_rule"] == "health_safety" and line["pre_rule_id"]
+    assert line["pre_rule"] == "write_intent" and line["pre_rule_id"]
     assert line["route"] == "escalate" and line["status"] == "skipped_pre_rule"
+    assert line["haiku_probe"] is False
+
+
+def test_health_keyword_hit_probes_haiku_but_still_goes_to_sonnet(shadow_client, capsys) -> None:
+    sc, make, _ = shadow_client
+    probe = _haiku_answer(category="other")  # Haiku thinks it is NOT health: the keywords disagree
+    fake, router = make(_sonnet_text(), [probe])
+    r = sc.post("/api/chat", json=_payload("my knee hurts when I kick"), headers=auth_headers())
+    join_shadow_threads()
+    assert r.status_code == 200
+    assert len(router.creates) == 1
+    line = [l for l in _logged(capsys) if l.get("msg") == "router shadow"][0]
+    assert line["pre_rule"] == "health_safety" and line["haiku_probe"] is True
+    assert line["route"] == "escalate" and line["haiku_health_escalate"] is False
+    assert line["disagree_write"] is False
+
+
+def test_haiku_health_category_escalates_without_a_keyword(shadow_client, capsys) -> None:
+    sc, make, _ = shadow_client
+    make(_sonnet_text(), [_haiku_answer(category="health")])
+    sc.post("/api/chat", json=_payload("my left thing feels odd after intervals"), headers=auth_headers())
+    join_shadow_threads()
+    line = [l for l in _logged(capsys) if l.get("msg") == "router shadow"][0]
+    assert line["pre_rule"] is None
+    assert line["haiku_route"] == "escalate" and line["haiku_health_escalate"] is True
 
 
 def test_haiku_failure_never_reaches_the_athlete(shadow_client, client, fake_claude_chat_factory, capsys) -> None:

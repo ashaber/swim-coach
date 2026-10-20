@@ -77,3 +77,16 @@ def test_format_and_extract() -> None:
 
 def test_empty_input_does_not_crash() -> None:
     assert "Messages shadowed: 0" in format_report(build_report([]))
+
+
+def test_health_cross_check_counts_both_directions() -> None:
+    payloads = [
+        shadow("h1", haiku_health_escalate=True, haiku_route="escalate", category="health"),  # keywords missed
+        shadow("h2"),
+        shadow("p1", pre_rule="health_safety", haiku_probe=True, haiku_health_escalate=True),
+        shadow("p2", pre_rule="health_safety", haiku_probe=True, haiku_health_escalate=False),  # Haiku disagreed
+        shadow("p3", pre_rule="write_intent", haiku_probe=False, status="skipped_pre_rule"),
+    ]
+    health = build_report(payloads)["health"]
+    assert health == {"haiku_caught_keywords_missed": 1, "keywords_caught_haiku_nonhealth": 1, "probes": 2}
+    assert "Haiku caught health the keywords missed: 1" in format_report(build_report(payloads))
