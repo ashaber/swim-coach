@@ -32,7 +32,7 @@ def test_request_shape_no_temperature_top_p_top_k(client, fake_claude_chat_facto
 
     assert len(chat.client.messages.calls) == 1
     kwargs = chat.client.messages.calls[0]
-    assert kwargs["model"] == "claude-sonnet-5"
+    assert kwargs["model"] == client.app.state.settings.claude_model  # default pinned in test_config
     # 32000 (CLAUDE_MAX_TOKENS default), not 2048: max_tokens covers adaptive thinking + text on Sonnet 5,
     # and 2048 produced empty replies in prod (thinking consumed it all).
     assert kwargs["max_tokens"] == 32000
@@ -176,6 +176,7 @@ def test_system_prefix_is_byte_stable_across_two_different_messages(
 
 def test_disabled_thinking_mode_is_passed_explicitly(app_env, monkeypatch) -> None:
     monkeypatch.setenv("CLAUDE_THINKING", "disabled")
+    monkeypatch.setenv("CLAUDE_MODEL", "claude-sonnet-5")  # 5.5 rejects disabled thinking
     # app_env's app fixture already built an app with the default (adaptive)
     # setting, so build a fresh one here with CLAUDE_THINKING=disabled.
     from app.main import create_app

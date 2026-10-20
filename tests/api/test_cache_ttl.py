@@ -73,6 +73,7 @@ def test_context_block_ttl_setting_defaults_to_5m_and_reads_the_env(monkeypatch:
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "id.apps.googleusercontent.com")
     monkeypatch.delenv("PROMPT_CACHE_TTL_CONTEXT", raising=False)
     assert Settings.from_env().prompt_cache_ttl_context == "5m"
+    monkeypatch.setenv("PROMPT_CACHE_TTL", "1h")  # block A must be >= the context TTL
     monkeypatch.setenv("PROMPT_CACHE_TTL_CONTEXT", "1h")
     assert Settings.from_env().prompt_cache_ttl_context == "1h"
 

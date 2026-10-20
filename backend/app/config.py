@@ -26,6 +26,10 @@ except ImportError:  # pragma: no cover - python-dotenv is a listed dependency
 _REQUIRED_VARS = ("ANTHROPIC_API_KEY", "API_TOKEN", "GOOGLE_CLIENT_ID")
 _VALID_THINKING_MODES = ("adaptive", "disabled")
 
+# Model-ID prefixes that reject `thinking: {"type": "disabled"}` with a 400 (Anthropic models
+# docs, checked 2026-10-20: Sonnet 5.5 supports adaptive thinking only).
+_MODEL_PREFIXES_REJECTING_DISABLED_THINKING = ("claude-sonnet-5-5",)
+
 # Streaming output cap bounds: below ~1k a turn cannot finish a tool call; the configured models allow 64k.
 _MIN_MAX_TOKENS = 1024
 _MAX_MAX_TOKENS = 64000
@@ -154,6 +158,15 @@ class Settings:
                 f"CLAUDE_THINKING must be one of {_VALID_THINKING_MODES}, got {claude_thinking!r}"
             )
 
+        claude_model = os.environ.get("CLAUDE_MODEL", "claude-sonnet-5-5")
+        if claude_thinking == "disabled" and claude_model.startswith(
+            _MODEL_PREFIXES_REJECTING_DISABLED_THINKING
+        ):
+            raise ConfigError(
+                f"CLAUDE_THINKING=disabled is rejected by {claude_model!r} (the API returns a 400); "
+                "use CLAUDE_THINKING=adaptive"
+            )
+
         # Store backend cutover flag. Defaults to "file" so the live backend is
         # UNCHANGED until Andrew provisions Supabase and flips this to "db".
         # "db" additionally requires DATABASE_URL -- fail fast if it's missing
@@ -186,6 +199,14 @@ class Settings:
                 f"PROMPT_CACHE_TTL_CONTEXT must be '5m' or '1h', got {prompt_cache_ttl_context!r}"
             )
 
+        # TTLs must be non-increasing along the prompt (tools -> system -> messages): block A
+        # (PROMPT_CACHE_TTL) comes first, everything after it follows the context TTL.
+        if prompt_cache_ttl == "5m" and prompt_cache_ttl_context == "1h":
+            raise ConfigError(
+                "PROMPT_CACHE_TTL (block A) must be at least as long as PROMPT_CACHE_TTL_CONTEXT: "
+                "the API rejects a 1h cache breakpoint after a 5m one"
+            )
+
         claude_max_tokens = _parse_max_tokens(os.environ.get("CLAUDE_MAX_TOKENS", "32000"))
 
         athletes_dir = Path(os.environ.get("ATHLETES_DIR", "../athletes"))
@@ -205,7 +226,7 @@ class Settings:
         return cls(
             anthropic_api_key=os.environ["ANTHROPIC_API_KEY"].strip(),
             api_token_hash=_sha256_hex(os.environ["API_TOKEN"].strip()),
-            claude_model=os.environ.get("CLAUDE_MODEL", "claude-sonnet-5"),
+            claude_model=claude_model,
             claude_thinking=claude_thinking,
             allowed_origins=allowed_origins,
             athletes_dir=athletes_dir,
