@@ -25,6 +25,8 @@ from swim_coach.models import (
     CoachGrant,
     Conversation,
     ConversationMessage,
+    SessionChatMessage,
+    SessionThread,
     Event,
     Feedback,
     HealthStatus,
@@ -378,6 +380,30 @@ class StoreInterface(ABC):
     ) -> Conversation:
         """Mute/unmute the AI in this thread (creates the state row if needed)
         and return the updated state."""
+        ...
+
+    # --- Planned-session chat thread -------------------------------------------
+
+    @abstractmethod
+    def append_session_message(self, slug: str, message: SessionChatMessage) -> None:
+        """Append one message to the chat thread of planned session `message.session_id`.
+        Append-only. Raises FileNotFoundError for an unknown `slug`."""
+        ...
+
+    @abstractmethod
+    def list_session_messages(self, slug: str, session_id: UUID) -> list[SessionChatMessage]:
+        """The thread for `session_id`, OLDEST first (ties broken by id); empty when it has no
+        messages. Raises FileNotFoundError for an unknown `slug`."""
+        ...
+
+    @abstractmethod
+    def get_session_thread(self, slug: str, session_id: UUID) -> SessionThread:
+        """Thread state; the default (unmuted) when nothing was ever stored."""
+        ...
+
+    @abstractmethod
+    def set_session_thread_muted(self, slug: str, session_id: UUID, muted: bool) -> SessionThread:
+        """Mute/unmute the AI in this session's thread and return the updated state."""
         ...
 
     # --- Library reviews (web/resources-tab-library-review) ----------------
@@ -1091,6 +1117,43 @@ class FileStore(StoreInterface):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"ai_muted": muted}), encoding="utf-8")
         return Conversation(athlete_id=athlete_id, coach_athlete_id=coach_athlete_id, ai_muted=muted)
+
+    # --- Planned-session chat thread ------------------------------------------
+
+    def _session_thread_dir(self, slug: str) -> Path:
+        return self._athlete_dir(slug) / "session_threads"
+
+    def append_session_message(self, slug: str, message: SessionChatMessage) -> None:
+        self.load_athlete(slug)  # raises FileNotFoundError if unknown
+        path = self._session_thread_dir(slug) / f"{message.session_id}.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(message.model_dump(mode="json")) + "\n")
+
+    def list_session_messages(self, slug: str, session_id: UUID) -> list[SessionChatMessage]:
+        self.load_athlete(slug)  # raises FileNotFoundError if unknown
+        path = self._session_thread_dir(slug) / f"{session_id}.jsonl"
+        messages: list[SessionChatMessage] = []
+        if path.exists():
+            with path.open("r", encoding="utf-8") as fh:
+                messages = [
+                    SessionChatMessage.model_validate(json.loads(line)) for line in fh if line.strip()
+                ]
+        messages.sort(key=lambda m: (m.created_at, str(m.id)))
+        return messages
+
+    def get_session_thread(self, slug: str, session_id: UUID) -> SessionThread:
+        athlete_id = self.load_athlete(slug).id
+        path = self._session_thread_dir(slug) / f"{session_id}.state.json"
+        muted = bool(json.loads(path.read_text(encoding="utf-8")).get("ai_muted", False)) if path.exists() else False
+        return SessionThread(athlete_id=athlete_id, session_id=session_id, ai_muted=muted)
+
+    def set_session_thread_muted(self, slug: str, session_id: UUID, muted: bool) -> SessionThread:
+        athlete_id = self.load_athlete(slug).id
+        path = self._session_thread_dir(slug) / f"{session_id}.state.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"ai_muted": muted}), encoding="utf-8")
+        return SessionThread(athlete_id=athlete_id, session_id=session_id, ai_muted=muted)
 
     # --- Library reviews (web/resources-tab-library-review) -----------------
 

@@ -29,6 +29,7 @@ from swim_coach.models import (
     Athlete,
     CoachGrant,
     ConversationMessage,
+    SessionChatMessage,
     Event,
     Feedback,
     HealthStatus,
@@ -1786,6 +1787,51 @@ class StoreContractTests(ChangeTokenContractTests):
             store.list_conversation_messages("nobody", coach.id)
         with pytest.raises(FileNotFoundError):
             store.get_conversation("nobody", coach.id)
+
+    # --- planned-session chat thread ---------------------------------------
+
+    def _session_msg(self, athlete, session_id, role="athlete", body="hi", at=None, **kw):
+        return SessionChatMessage(
+            id=kw.pop("id", uuid.uuid4()), athlete_id=athlete.id, session_id=session_id,
+            sender_role=role, body=body, created_at=at or datetime.now(timezone.utc), **kw,
+        )
+
+    def test_session_thread_round_trip_oldest_first_with_tool_trace(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        sid = uuid.uuid4()
+        t0 = datetime(2026, 10, 20, 9, 0, tzinfo=timezone.utc)
+        second = self._session_msg(athlete, sid, "ai_coach", "second", t0 + timedelta(minutes=1), tool_trace="none")
+        first = self._session_msg(athlete, sid, "athlete", "first", t0)
+        store.append_session_message(SLUG, second)
+        store.append_session_message(SLUG, first)
+        assert store.list_session_messages(SLUG, sid) == [first, second]
+
+    def test_session_threads_are_isolated_per_session(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        a, b = uuid.uuid4(), uuid.uuid4()
+        mine = self._session_msg(athlete, a, body="mine")
+        store.append_session_message(SLUG, mine)
+        store.append_session_message(SLUG, self._session_msg(athlete, b, body="other session"))
+        assert store.list_session_messages(SLUG, a) == [mine]
+        assert store.list_session_messages(SLUG, uuid.uuid4()) == []
+
+    def test_session_thread_defaults_unmuted_then_mute_round_trip(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        sid, other = uuid.uuid4(), uuid.uuid4()
+        assert store.get_session_thread(SLUG, sid).ai_muted is False
+        assert store.set_session_thread_muted(SLUG, sid, True).ai_muted is True
+        assert store.get_session_thread(SLUG, sid).ai_muted is True
+        assert store.get_session_thread(SLUG, other).ai_muted is False
+        assert store.set_session_thread_muted(SLUG, sid, False).ai_muted is False
+
+    def test_session_thread_unknown_slug_raises(self, store):
+        with pytest.raises(FileNotFoundError):
+            store.list_session_messages("nobody", uuid.uuid4())
+        with pytest.raises(FileNotFoundError):
+            store.get_session_thread("nobody", uuid.uuid4())
 
     def test_athlete_bound_session_has_no_pending_email(self, store):
         store.save_athlete(_athlete())
