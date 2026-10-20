@@ -54,6 +54,7 @@ WRITE_TOOLS: dict[str, str] = {
     "set_event_group": "updated",
     "record_threshold_test": "logged",
     "record_health_status": "logged",
+    "resolve_health_status": "updated",
     "save_athlete_note": "saved",
     "save_race_debrief": "saved",
     "retire_athlete_note": "retired",

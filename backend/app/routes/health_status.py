@@ -183,6 +183,31 @@ async def create_health_status(
     return result
 
 
+@router.patch("/api/health-status/{health_status_id}")
+async def resolve_own_health_status(
+    health_status_id: UUID,
+    payload: dict[str, Any],
+    request: Request,
+    athlete: str | None = Query(None),
+    principal: Principal = Depends(require_auth),
+) -> dict:
+    """Marks one of the athlete's OWN health-status entries resolved -- the self-scoped mirror of
+    routes/coach.py's `coach_resolve_health_status`. `resolved` must be explicitly `true` (this
+    closes a status out; it never reopens one). `store.update_health_status` scopes its lookup to
+    this athlete's slug, so another athlete's id is a 404, never a cross-athlete write."""
+    settings = request.app.state.settings
+    slug = resolve_athlete(principal, athlete)
+    if payload.get("resolved") is not True:
+        raise HTTPException(status_code=422, detail="resolved must be true")
+    store = make_store(settings)
+    updated = store.update_health_status(
+        slug, health_status_id, resolved=True, resolved_at=datetime.now(timezone.utc)
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"no such health status entry: {health_status_id}")
+    return updated.model_dump(mode="json")
+
+
 @router.get("/api/health-status")
 async def list_own_health_status(
     request: Request,
