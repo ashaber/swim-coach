@@ -762,8 +762,8 @@
     .rv-laprow > span:nth-child(n+4), .rv-drillrow > span:nth-child(n+4) { text-align: right; }
     .rv-laphead { font-family: var(--sans); font-size: 11px; color: var(--ink-faint); border-bottom: 0; min-height: 0; }
     .rv-lapbar { display: flex; align-items: center; gap: 6px; min-width: 0; text-align: left !important; }
-    .rv-lapbar .rv-bar { flex: none; }
-    .rv-lapbar small { font-size: 11px; color: var(--ink-soft); }
+    .rv-lapbar .rv-bar { flex: 0 1 auto; max-width: 70%; }
+    .rv-lapbar small { white-space: nowrap; flex: none; font-size: 11px; color: var(--ink-soft); }
     .rv-best { color: var(--accent-ink); }
     .rv-smooth { color: var(--accent-ink); font-weight: 700; }
     .rv-pill { font-size: 12px; font-weight: 600; color: var(--ink); background: var(--paper-2); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; }
