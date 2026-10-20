@@ -46,6 +46,7 @@ from app.light_mode import (
 )
 from app.logging_config import get_logger
 from app.notify import notify_athlete_of_coach_plan_change
+from app.router_shadow import ShadowInputs, begin_shadow
 from app.store_factory import make_store
 from app.tools import TOOLS_SCHEMA, build_tool_handlers
 
@@ -251,6 +252,62 @@ def _persisting_thread_stream(
         append("ai_coach", reply_text, tool_trace)
 
 
+def _begin_router_shadow(
+    settings: Any,
+    claude_chat: ClaudeChat,
+    store: StoreInterface,
+    request_id: str,
+    athlete: str,
+    athlete_profile: Any,
+    message: str,
+    history: list[dict[str, str]],
+    context_block: list[dict[str, Any]],
+    payload: ChatRequest,
+    focused_workout: Workout | None,
+    confirmer_role: str,
+    confirmer_id: str | None,
+    asker_note: str | None,
+) -> Any:
+    """Starts the Haiku router's shadow run for this message (COACH_ROUTER_MODE=shadow), or returns
+    None when the router is off. Never raises: the router is an observer of the Sonnet turn."""
+    if settings.router_mode != "shadow":
+        return None
+    client = getattr(claude_chat, "client", None)
+    if client is None:
+        return None
+    return begin_shadow(
+        ShadowInputs(
+            settings=settings,
+            client=client,
+            store=store,
+            request_id=request_id,
+            athlete_slug=athlete,
+            athlete_id=str(athlete_profile.id),
+            message=message,
+            history=history,
+            context_block=context_block,
+            athlete_sports=athlete_profile.effective_sports,
+            rebuild_context_block=lambda days: build_context_block(
+                store,
+                athlete,
+                expert_mode=payload.expert_mode,
+                focused_workout=focused_workout,
+                cache_ttl=settings.prompt_cache_ttl_context,
+                asker_note=asker_note,
+                recent_session_days=days,
+            ),
+            build_handlers=lambda: build_tool_handlers(
+                store,
+                slug=athlete,
+                expert_mode=payload.expert_mode,
+                library_dir=settings.library_dir,
+                confirmer_role=confirmer_role,
+                confirmer_id=confirmer_id,
+            ),
+        )
+    )
+
+
 @router.post("/api/chat")
 async def chat(
     payload: ChatRequest,
@@ -386,6 +443,7 @@ async def stream_chat_response(
     # (and any "route miss") line the same turn emits, so cost can be joined
     # to routing without cross-referencing timestamps.
     request_id = str(uuid.uuid4())
+    built: dict[str, Any] = {}  # pieces of the full request the router shadow reuses (see below)
 
     def build_full_request():
         """The full-mode (system, messages, tools, handlers). A function so a
@@ -402,6 +460,7 @@ async def stream_chat_response(
             cache_ttl=settings.prompt_cache_ttl_context,
             asker_note=asker_note or (CONVERSATION_ASKER_NOTE if conversation_coach_id else None),
         )
+        built["context_block"] = context_block
         system = build_system(
             settings.library_dir,
             effective_message,
@@ -426,6 +485,7 @@ async def stream_chat_response(
             settings.library_dir, effective_message, athlete_sports=athlete_profile.effective_sports
         )
         log.info("library route", request_id=request_id, **routing_info)
+        built["routed_files"] = routing_info["routed_files"]
         messages = build_messages(
             message=effective_message,
             history=history,
@@ -465,9 +525,32 @@ async def stream_chat_response(
 
     else:
         full_request = build_full_request()
+        shadow = _begin_router_shadow(
+            settings, claude_chat, store, request_id, athlete, athlete_profile, effective_message,
+            history, built["context_block"], payload, focused_workout, confirmer_role, confirmer_id,
+            asker_note or (CONVERSATION_ASKER_NOTE if conversation_coach_id else None),
+        )
+
+        # Prompt metadata for the cost dashboard's `coach request shape` line (never any text).
+        shape_extra = {
+            "athlete": athlete,
+            "routed_files": built.get("routed_files", []),
+            "router_pre_rule": shadow.pre_rule if shadow else None,
+            "router_pre_rule_id": shadow.pre_rule_id if shadow else None,
+        }
 
         def event_stream():
-            yield from claude_chat.run_streaming(*full_request, request_id=request_id)
+            if shadow is None:  # router off (the default): the stream is exactly what it always was
+                yield from claude_chat.run_streaming(
+                    *full_request, request_id=request_id, shape_extra=shape_extra
+                )
+                return
+            # Shadow mode: Sonnet's stream is passed through byte-for-byte; the wrapper only watches.
+            yield from shadow.wrap(
+                claude_chat.run_streaming(
+                    *full_request, request_id=request_id, stats=shadow.stats, shape_extra=shape_extra
+                )
+            )
 
     # Workout chat thread (IDEA 016): the athlete's message and the AI's reply get persisted
     # onto Workout.chat_messages -- replacing the old ephemeral, client-only history -- so a

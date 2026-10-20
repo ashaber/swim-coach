@@ -31,6 +31,7 @@ import httpx
 
 from app.claude import with_loop_breakpoint
 from app.logging_config import get_logger
+from app.model_prices import split_cache_writes, usage_cost
 from app.tool_errors import internal_tool_error
 from app.tools import TOOLS_SCHEMA, ToolHandler
 
@@ -84,14 +85,6 @@ PRICE_STEP_TOKENS = 100_000
 # Session-history windows (days) the athlete context is re-rendered with, in order, when trimming
 # "the oldest workout detail" (the default context carries 28 days).
 SESSION_DAYS_LADDER: tuple[int, ...] = (14, 7)
-
-# $/MTok at or below the step; everything is multiplied by PRICE_STEP_MULTIPLIER above it.
-_PRICE_INPUT = 0.10
-_PRICE_OUTPUT = 0.50
-_PRICE_CACHE_READ = 0.01
-_PRICE_CACHE_WRITE_5M = 0.125
-_PRICE_CACHE_WRITE_1H = 0.20
-PRICE_STEP_MULTIPLIER = 5
 
 ESTIMATE_CHARS_PER_TOKEN = 3.5  # conservative fallback when count_tokens is unavailable
 
@@ -215,38 +208,28 @@ class TriageDecision:
 
 
 def estimate_cost_usd(
-    *, input_tokens: int, cache_read: int, cache_write_5m: int, cache_write_1h: int, output: int
+    *, input_tokens: int, cache_read: int, cache_write_5m: int, cache_write_1h: int, output: int,
+    model: str = "claude-haiku-5-5",
 ) -> float:
-    """USD for ONE Haiku request. The whole request is priced 5x when its prompt length (every input
-    token, cache reads and writes included) exceeds PRICE_STEP_TOKENS."""
-    prompt = input_tokens + cache_read + cache_write_5m + cache_write_1h
-    multiplier = PRICE_STEP_MULTIPLIER if prompt > PRICE_STEP_TOKENS else 1
-    total = (
-        input_tokens * _PRICE_INPUT
-        + cache_read * _PRICE_CACHE_READ
-        + cache_write_5m * _PRICE_CACHE_WRITE_5M
-        + cache_write_1h * _PRICE_CACHE_WRITE_1H
-        + output * _PRICE_OUTPUT
-    )
-    return total * multiplier / 1_000_000
+    """USD for ONE request (prices live in app.model_prices; Haiku's 5x step above 100k is there)."""
+    cost = usage_cost(
+        model, input_tokens=input_tokens, cache_read=cache_read, cache_write_5m=cache_write_5m,
+        cache_write_1h=cache_write_1h, output=output,
+    )["est_cost_usd"]
+    return float(cost or 0.0)
 
 
-def _usage_cost(usage: Any, default_write_ttl: str) -> tuple[int, int, int, float]:
+def _usage_cost(usage: Any, model: str, default_write_ttl: str) -> tuple[int, int, int, float]:
     """(prompt_tokens, cache_read, output, cost_usd) for one response's usage."""
     input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
     cache_read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
-    cache_write = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
     output = int(getattr(usage, "output_tokens", 0) or 0)
-    breakdown = getattr(usage, "cache_creation", None)
-    write_1h = getattr(breakdown, "ephemeral_1h_input_tokens", None)
-    write_5m = getattr(breakdown, "ephemeral_5m_input_tokens", None)
-    if not isinstance(write_1h, int) or not isinstance(write_5m, int):
-        write_1h, write_5m = (cache_write, 0) if default_write_ttl == "1h" else (0, cache_write)
+    write_5m, write_1h = split_cache_writes(usage, default_write_ttl)
     cost = estimate_cost_usd(
         input_tokens=input_tokens, cache_read=cache_read, cache_write_5m=write_5m, cache_write_1h=write_1h,
-        output=output,
+        output=output, model=model,
     )
-    return input_tokens + cache_read + cache_write, cache_read, output, cost
+    return input_tokens + cache_read + write_5m + write_1h, cache_read, output, cost
 
 
 # --- Haiku's context ---------------------------------------------------------------------------
@@ -414,7 +397,7 @@ def run_triage(
             thinking={"type": "adaptive"},
         )
         outcome.iterations += 1
-        prompt, cache_read, output, cost = _usage_cost(response.usage, context.cache_ttl)
+        prompt, cache_read, output, cost = _usage_cost(response.usage, model, context.cache_ttl)
         outcome.prompt_tokens = max(outcome.prompt_tokens, prompt)
         outcome.cached_tokens += cache_read
         outcome.output_tokens += output

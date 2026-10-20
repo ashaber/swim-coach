@@ -37,6 +37,7 @@ from app.claude import TurnStats
 from app.config import Settings
 from app.context import build_messages, build_routed_block, build_system_blocks
 from app.logging_config import get_logger
+from app.model_prices import price_for
 from app.router_rules import PreRuleHit, match_pre_rule
 from app.router_triage import HaikuContext, TriageOutcome, run_triage
 from app.save_claims import DRAFT_TOOLS, WRITE_TOOLS
@@ -170,7 +171,9 @@ class _Recorder:
                 log.error("router capture failed", request_id=fields.get("request_id"), exc_info=True)
 
 
-def haiku_log_fields(outcome: TriageOutcome | None, latency_ms: int, status: str | None = None) -> dict[str, Any]:
+def haiku_log_fields(
+    outcome: TriageOutcome | None, latency_ms: int, status: str | None = None, model: str | None = None
+) -> dict[str, Any]:
     """The Haiku half of the log line. `outcome=None` (worker crashed) logs status only."""
     if outcome is None:
         return {
@@ -193,6 +196,9 @@ def haiku_log_fields(outcome: TriageOutcome | None, latency_ms: int, status: str
         "haiku_cached_tokens": outcome.cached_tokens,
         "haiku_output_tokens": outcome.output_tokens,
         "haiku_cost_usd": round(outcome.cost_usd, 6),
+        "est_cost_usd": round(outcome.cost_usd, 6) if price_for(model) is not None else None,
+        "prompt_tokens_total": outcome.prompt_tokens,
+        "over_100k": outcome.prompt_tokens > 100_000,
         "haiku_tools": outcome.tools_called,
         "iterations": outcome.iterations,
         "over_budget": outcome.over_budget,
@@ -245,7 +251,7 @@ def _haiku_worker(inputs: ShadowInputs, recorder: _Recorder) -> None:
     latency_ms = int((time.monotonic() - started) * 1000)
     reply = outcome.decision.reply if outcome and outcome.decision else None
     try:
-        recorder.set_haiku(haiku_log_fields(outcome, latency_ms, status), reply)
+        recorder.set_haiku(haiku_log_fields(outcome, latency_ms, status, inputs.settings.router_model), reply)
     except Exception:  # noqa: BLE001
         log.error("router shadow record failed", request_id=inputs.request_id, exc_info=True)
 
@@ -284,6 +290,8 @@ class ShadowSession:
     def __init__(self, recorder: _Recorder, stats: TurnStats) -> None:
         self._recorder = recorder
         self.stats = stats
+        self.pre_rule: str | None = recorder.base.get("pre_rule")
+        self.pre_rule_id: str | None = recorder.base.get("pre_rule_id")
 
     def wrap(self, stream: Iterator[str]) -> Iterator[str]:
         reply_parts: list[str] = []
@@ -322,7 +330,8 @@ def begin_shadow(inputs: ShadowInputs) -> ShadowSession | None:
             "request_id": inputs.request_id,
             "athlete_id": inputs.athlete_id,
             "mode": "shadow",
-            "router_model": inputs.settings.router_model,
+            "model": inputs.settings.router_model,
+            "sonnet_model": inputs.settings.claude_model,
             "pre_rule": hit.category if hit else None,
             "pre_rule_id": hit.rule_id if hit else None,
         }
