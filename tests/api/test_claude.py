@@ -517,7 +517,7 @@ def test_with_loop_breakpoint_marks_last_block_of_last_message_without_mutating(
     messages = [
         {"role": "user", "content": "ctx\n\n---\n\nq"},
     ]
-    out = with_loop_breakpoint([], messages, None)
+    out = with_loop_breakpoint([], messages, None, cache_ttl="5m")
 
     assert out[-1]["content"] == [{"type": "text", "text": "ctx\n\n---\n\nq", "cache_control": EPHEMERAL}]
     assert messages == [{"role": "user", "content": "ctx\n\n---\n\nq"}]  # input untouched
@@ -533,7 +533,7 @@ def test_with_loop_breakpoint_marks_last_tool_result_block() -> None:
         {"role": "assistant", "content": [{"type": "text", "text": "x"}]},
         {"role": "user", "content": results},
     ]
-    out = with_loop_breakpoint([], messages, None)
+    out = with_loop_breakpoint([], messages, None, cache_ttl="5m")
 
     assert "cache_control" not in out[-1]["content"][0]
     assert out[-1]["content"][1]["cache_control"] == EPHEMERAL
@@ -550,7 +550,7 @@ def test_with_loop_breakpoint_never_exceeds_four_breakpoints() -> None:
     messages = [{"role": "user", "content": "u"}, history_marked, {"role": "user", "content": "q"}]
 
     assert count_cache_breakpoints(system, messages, tools) == 4
-    out = with_loop_breakpoint(system, messages, tools)  # already at the cap
+    out = with_loop_breakpoint(system, messages, tools, cache_ttl="5m")  # already at the cap
     assert count_cache_breakpoints(system, out, tools) == 4
     assert out[-1]["content"] == "q"
 
@@ -559,12 +559,12 @@ def test_real_system_plus_history_plus_loop_marker_totals_exactly_four(app_env, 
     from app.context import build_messages, build_system
     from swim_coach.store import FileStore
 
-    system = build_system(library_dir, "hello")
+    system = build_system(library_dir, "hello", context_cache_ttl="5m")
     messages = build_messages(
         message="q",
-        history=[{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}],
+        history=[{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}], cache_ttl="5m",
     )
-    assert count_cache_breakpoints(system, with_loop_breakpoint(system, messages, None), None) == 4
+    assert count_cache_breakpoints(system, with_loop_breakpoint(system, messages, None, cache_ttl="5m"), None) == 4
 
 
 def test_real_system_with_context_block_plus_history_never_exceeds_four_breakpoints(
@@ -579,16 +579,16 @@ def test_real_system_with_context_block_plus_history_never_exceeds_four_breakpoi
 
     store = FileStore(base_dir=app_env)
     context_block = build_context_block(store, "renee", expert_mode=False)
-    system = build_system(library_dir, "hello", context_block=context_block)
+    system = build_system(library_dir, "hello", context_block=context_block, context_cache_ttl="5m")
     assert len(system) == 3
 
     messages = build_messages(
         message="q",
-        history=[{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}],
+        history=[{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}], cache_ttl="5m",
     )
     assert count_cache_breakpoints(system, messages, None) == 4  # A + C + B + end-of-history
 
-    looped = with_loop_breakpoint(system, messages, None)
+    looped = with_loop_breakpoint(system, messages, None, cache_ttl="5m")
     assert count_cache_breakpoints(system, looped, None) == 4  # unchanged -- already at the cap
     assert looped == messages  # a true no-op, not a 5th breakpoint squeezed in somewhere
 
@@ -603,12 +603,12 @@ def test_real_system_with_context_block_and_no_history_leaves_room_for_the_loop_
 
     store = FileStore(base_dir=app_env)
     context_block = build_context_block(store, "renee", expert_mode=False)
-    system = build_system(library_dir, "hello", context_block=context_block)
+    system = build_system(library_dir, "hello", context_block=context_block, context_cache_ttl="5m")
 
-    messages = build_messages(message="q", history=[])
+    messages = build_messages(message="q", history=[], cache_ttl="5m")
     assert count_cache_breakpoints(system, messages, None) == 3
 
-    looped = with_loop_breakpoint(system, messages, None)
+    looped = with_loop_breakpoint(system, messages, None, cache_ttl="5m")
     assert count_cache_breakpoints(system, looped, None) == 4
 
 

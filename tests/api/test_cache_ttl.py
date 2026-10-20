@@ -19,18 +19,18 @@ ONE_HOUR = {"type": "ephemeral", "ttl": "1h"}
 
 def test_default_is_byte_identical_to_before(library_dir) -> None:
     assert build_system_blocks(library_dir)[0]["cache_control"] == FIVE
-    assert build_system(library_dir, "hi")[0]["cache_control"] == FIVE
+    assert build_system(library_dir, "hi", context_cache_ttl="5m")[0]["cache_control"] == FIVE
 
 
 def test_one_hour_applies_to_block_a_only(library_dir) -> None:
-    system = build_system(library_dir, "how should I fuel?", cache_ttl="1h")
+    system = build_system(library_dir, "how should I fuel?", cache_ttl="1h", context_cache_ttl="5m")
     assert system[0]["cache_control"] == ONE_HOUR   # the long-lived entry comes first
     assert system[1]["cache_control"] == FIVE       # message-routed block stays short
 
 
 def test_block_text_is_unchanged_by_the_ttl(library_dir) -> None:
-    a = build_system(library_dir, "hi")[0]["text"]
-    b = build_system(library_dir, "hi", cache_ttl="1h")[0]["text"]
+    a = build_system(library_dir, "hi", context_cache_ttl="5m")[0]["text"]
+    b = build_system(library_dir, "hi", cache_ttl="1h", context_cache_ttl="5m")[0]["text"]
     assert a == b  # the TTL is a billing hint, never a prompt change
 
 

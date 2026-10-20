@@ -230,7 +230,7 @@ def with_loop_breakpoint(
     system: list[dict[str, Any]] | None,
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None,
-    cache_ttl: str = "5m",
+    cache_ttl: str,
 ) -> list[dict[str, Any]]:
     """`messages` with a cache breakpoint on the LAST block of the LAST message
     (IDEA 022 step 2). Each tool-loop iteration re-sends the newest user message
