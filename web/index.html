@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="theme-color" content="#fbf8f0">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#1f4a59">
   <meta name="color-scheme" content="light">
   <meta name="description" content="Renee's training plan — read-only view of the swim-coach engine's plan for the current athlete.">
   <link rel="icon" type="image/png" href="icon-192.png">
@@ -19,7 +19,11 @@
        there is no theme toggle. Palette is WCAG-checked: text tokens are
        >=4.9:1 on every surface, sport colours >=3:1 on white. */
     :root {
-      --ground:#fbf8f0; --paper:#ffffff; --paper-2:#f6f1e6; --inset:#f3eee2; --control-border:#c2b8a0;
+      --ground:#1f4a59; --paper:#fbf8f0; --paper-2:#f6f1e6; --inset:#f3eee2; --control-border:#c2b8a0;
+      --card-border:#2e5d6d; --chip-off:#ffffff;
+      /* Background C: text/lines drawn straight on the deep page, and the light-teal header bands. */
+      --on-ground:#f2f7f8; --on-ground-soft:#c5d8de; --on-ground-link:#a3e4d7;
+      --band:#b5dee7; --band-border:#9fd3df; --on-band:#0b2a36; --on-band-soft:#23434f; --on-band-link:#0e5e75;
       --ink:#0b2a36; --ink-soft:#33505b; --ink-faint:#4d6670;
       --line:#e6decb; --line-soft:#ede6d6;
       --accent:#45afc6; --accent-ink:#137590; --on-accent:#0b2a36;
@@ -56,7 +60,7 @@
       --c-attn:#b04e0e;
       --c-signal:#c42b25; --c-signal-wash:#fbe9e6;
       --brand-gradient: linear-gradient(135deg, #137590, #2e93ad, #d45a15);
-      --bubble-out-bg:#a3e4d7; --bubble-out-ink:#0b2a36; --bubble-out-border:#7fcfbf;
+      --bubble-out-bg:#b5dee7; --bubble-out-ink:#0b2a36; --bubble-out-border:#9fd3df;
       --note-bg:#f3eee2; --note-border:#e6decb; --note-label:#137590;
       --tab-active: #137590; --tab-inactive: #4d6670;
       --shadow:0 1px 2px rgba(11,42,54,.06),0 6px 18px rgba(11,42,54,.07);
@@ -104,7 +108,7 @@
     .s-head .note { color: var(--ink-faint); font-size: 13px; margin-left: auto; text-align: right; }
 
     /* week */
-    .week { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+    .week { background: var(--paper); border: 1px solid var(--card-border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
     .week + .week { margin-top: 16px; }
     .all-weeks { margin-top: 16px; }
     .all-weeks > summary, .glossary > summary, .load-chart-methodology > summary, .race-analysis > summary, .race-debrief > summary { cursor: pointer; list-style: none; padding: 12px 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper-2); color: var(--ink-soft); font-size: 13px; font-weight: 700; }
@@ -171,12 +175,12 @@
     .rd-row .rd-item { flex: 1; width: auto; min-width: 0; margin-bottom: 0; }
     .rd-del { flex: none; width: 48px; min-height: 52px; border-radius: 10px; border: 1px solid var(--line); background: var(--paper); color: var(--ink-faint); font: inherit; font-size: 18px; cursor: pointer; }
     .rd-box { flex: none; width: 28px; height: 28px; border-radius: 8px; border: 2px solid var(--ink-faint); display: inline-flex; align-items: center; justify-content: center; font-weight: 800; }
-    .rd-item.checked { opacity: .65; }
+    .rd-item.checked { opacity: .8; }
     .rd-item.checked .rd-text { text-decoration: line-through; }
     .rd-item.checked .rd-box { background: var(--c-signal); border-color: var(--c-signal); color: #fff; }
     .rd-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
     .rd-origin { font-size: 11px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .05em; }
-    .rd-completed .rd-item { opacity: .65; }
+    .rd-completed .rd-item { opacity: .8; }
     .rd-add { display: flex; gap: 10px; margin: 8px 0 24px; }
     .rd-add input { flex: 1; min-width: 0; min-height: 48px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); font: inherit; font-size: 16px; }
     .rd-add-btn { min-height: 48px; min-width: 72px; }
@@ -232,7 +236,7 @@
     .tag { display:inline-block; font-family: var(--display); font-size:10px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; padding:2px 7px; border-radius:var(--radius-pill); margin-left:8px; vertical-align:middle; color:#fff; background:var(--c-signal); }
 
     /* macro */
-    .macro { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 22px 22px 16px; }
+    .macro { background: var(--paper); border: 1px solid var(--card-border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 22px 22px 16px; }
     .macro-scroll { overflow-x: auto; }
     .blocks { display: flex; gap: 6px; min-width: 560px; align-items: flex-end; height: 168px; }
     .block { position: relative; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; border-radius: 8px 8px 0 0; min-width: 140px; }
@@ -255,7 +259,7 @@
     /* panels */
     .foot { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 24px; }
     @media (max-width: 720px){ .foot { grid-template-columns: 1fr; } }
-    .panel { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px 18px; }
+    .panel { background: var(--paper); border: 1px solid var(--card-border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px 18px; }
     .panel h3 { font-family: var(--display); font-size: 12px; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-faint); font-weight: 700; margin-bottom: 12px; }
     .legend { display: flex; flex-wrap: wrap; gap: 10px 16px; }
     .legend .li { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-soft); }
@@ -466,7 +470,7 @@
     .chat-row { display: flex; flex-direction: column; gap: 5px; max-width: 82%; }
     .chat-row.me { align-self: flex-end; align-items: flex-end; }
     .chat-row.coach { align-self: flex-start; align-items: flex-start; }
-    .chat-bubble { background: var(--paper); border: 1px solid var(--line); border-radius: 14px 14px 14px 4px;
+    .chat-bubble { background: var(--paper); border: 1px solid var(--card-border); border-radius: 14px 14px 14px 4px;
       padding: 10px 15px; font-size: 14.5px; line-height: 1.5; box-shadow: var(--shadow);
       word-break: break-word;
       /* max-width: 100% + min-width: 0 -- .chat-bubble is a flex item of
@@ -623,7 +627,7 @@
        handoff's Workout Detail stat cards -- boxed, bordered, radius 14px. */
     .detail-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); gap: 8px; padding: 14px 0;
       border-bottom: 1px solid var(--line-soft); }
-    .detail-stat { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 10px; }
+    .detail-stat { background: var(--paper); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 12px 10px; }
     .detail-stat .l { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-soft); }
     .detail-stat .v { font-family: var(--display); font-size: 19px; font-weight: 800; margin-top: 4px; }
     .detail-section { margin-top: 18px; }
@@ -673,8 +677,8 @@
     .cs-seg--corners .cs-line { stroke-dasharray: 9 5; stroke-linecap: butt; }
     .cs-seg--dim { opacity: .35; }
     .cs-seg:focus-visible .cs-line { stroke: var(--accent-ink); }
-    .cs-num { font-size: 11px; font-weight: 700; fill: var(--ink); paint-order: stroke; stroke: var(--ground); stroke-width: 3px; stroke-linejoin: round; pointer-events: none; }
-    .cs-start circle { fill: var(--accent-ink); stroke: var(--ground); stroke-width: 2; }
+    .cs-num { font-size: 11px; font-weight: 700; fill: var(--ink); paint-order: stroke; stroke: var(--paper); stroke-width: 3px; stroke-linejoin: round; pointer-events: none; }
+    .cs-start circle { fill: var(--accent-ink); stroke: var(--paper); stroke-width: 2; }
     .cs-north { font-size: 10px; fill: var(--ink-soft); }
     .cs-key--neutral { background: var(--ink-soft); }
     .cs-key--warm { background: var(--amber); }
@@ -701,7 +705,7 @@
     .cs-heat-4 { background: color-mix(in srgb, var(--c-signal) 65%, transparent); font-weight: 700; }
     .cs-grid tfoot td { font-weight: 700; }
     /* Race view (src/raceViewRender.js). Tokens only; map/bar colours come from src/raceHeat.js inline. */
-    .rv-card { margin-top: 14px; padding: 14px 12px; background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-lg); display: flex; flex-direction: column; gap: 10px; }
+    .rv-card { margin-top: 14px; padding: 14px 12px; background: var(--paper); border: 1px solid var(--card-border); border-radius: var(--radius-lg); display: flex; flex-direction: column; gap: 10px; }
     .rv-card h4 { margin: 0; font-family: var(--display); font-size: 17px; font-weight: 700; color: var(--ink); text-transform: none; letter-spacing: 0; }
     .rv-h5 { margin: 4px 0 0; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-faint); }
     .rv-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
@@ -720,7 +724,7 @@
     .rv-emph { color: var(--amber); }
     .rv-btn, .rv-chip, .rv-tab { min-height: 44px; border-radius: 10px; border: 1px solid var(--line); background: transparent; color: var(--accent-ink); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; padding: 0 12px; }
     .rv-chip, .rv-tab { border-radius: 999px; color: var(--ink-soft); }
-    .rv-chip.on, .rv-tab.on { background: var(--accent); border-color: var(--accent); color: var(--accent-on, #0B2A36); }
+    .rv-chip.on, .rv-tab.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
     .rv-lapchip { min-width: 44px; padding: 0 8px; }
     .rv-chips { display: flex; gap: 6px; flex-wrap: wrap; }
     .rv-tabs { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; -webkit-overflow-scrolling: touch; }
@@ -736,8 +740,8 @@
     .rv-seg { cursor: pointer; outline: none; }
     .rv-seg:focus-visible .rv-stroke { stroke-width: 9; }
     .rv-dim { opacity: .4; }
-    .rv-seglabel { font-size: 11px; font-weight: 700; fill: var(--ink); paint-order: stroke; stroke: var(--ground); stroke-width: 3px; pointer-events: none; }
-    .rv-start { fill: var(--ink); stroke: var(--ground); stroke-width: 2; }
+    .rv-seglabel { font-size: 11px; font-weight: 700; fill: var(--ink); paint-order: stroke; stroke: var(--paper); stroke-width: 3px; pointer-events: none; }
+    .rv-start { fill: var(--ink); stroke: var(--paper); stroke-width: 2; }
     .rv-axis, .rv-grid { stroke: var(--line); stroke-width: 1; }
     .rv-grid { stroke-dasharray: 2 4; }
     .rv-tick { font-size: 10px; fill: var(--ink-faint); }
@@ -786,7 +790,7 @@
     .rv-drillmap { background: var(--paper-2); }
     .rv-drillmap .rv-outline { stroke: #A3B0B5; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
     .rv-drillmap .rv-heat path { stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
-    .rv-entry { fill: var(--ink); stroke: var(--ground); stroke-width: 2; }
+    .rv-entry { fill: var(--ink); stroke: var(--paper); stroke-width: 2; }
     .rv-notelabel { font-size: 13px; font-weight: 600; color: var(--accent-ink); }
     .rv-input { min-height: 44px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--paper-2); color: var(--ink); font: inherit; font-size: 16px; }
     .free-ride h5 { margin: 14px 0 6px; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-faint); }
@@ -924,6 +928,37 @@
     .finding-words { font-size: 13.5px; color: var(--ink); font-style: italic; margin: 6px 0; }
     .finding-confirmed-by { font-size: 11px; color: var(--ink-faint); text-transform: uppercase;
       letter-spacing: .04em; margin: 6px 0 0; }
+
+    /* ---- Background C: deep page, cream cards, light-teal header bands ----
+       Anything NOT inside a card or band reads from the --on-ground tokens;
+       cards keep the cream-theme ink tokens above. */
+    .mast { padding: 16px 18px; background: var(--band); color: var(--on-band); border: 1px solid var(--band-border);
+      border-radius: var(--radius); }
+    .mast .mark { background: none; -webkit-background-clip: border-box; background-clip: border-box;
+      color: var(--on-band-link); }
+    .mast h1 { color: var(--on-band); }
+    .mast .sub, .mast .event-group { color: var(--on-band-soft); }
+    .mast .event-group .eg-peak { color: var(--on-band-link); }
+    .detail-header { padding: 12px 16px; background: var(--band); color: var(--on-band); border: 1px solid var(--band-border);
+      border-radius: var(--radius); }
+    .detail-header .hist-meta { color: var(--on-band-soft); }
+    .rd-head { background: var(--band); color: var(--on-band); border-bottom: 1px solid var(--band-border); }
+    .rd-head .rd-title .mono { color: var(--on-band-soft); }
+    .s-head h2, .rd-section h3 { color: var(--on-ground); }
+    .s-head .note, .rd-count, .disc, .loading { color: var(--on-ground-soft); }
+    .rd-overlay { color: var(--on-ground); }
+    .btn-ghost, .subtab-btn, .chip, .rd-tag, .rd-tab, .rv-chip, .rv-tab { background: var(--chip-off); }
+    .btn-ghost { border-color: var(--card-border); }
+    .tabbar { border-top-color: var(--card-border); }
+    .mast { margin-bottom: 16px; }
+    .glossary-content, #workout-chat, #ask-coach { padding: 14px 16px; background: var(--paper); border: 1px solid var(--card-border);
+      border-radius: var(--radius); box-shadow: var(--shadow); }
+    section:not(.detail-section):not(.rv-card) > p.sub, .rd-start { color: var(--on-ground-soft); }
+    .detail-section:not(:has(.rv-card, details, .panel, .rv-more, .chat-thread-head)) { padding: 14px 16px; background: var(--paper);
+      border: 1px solid var(--card-border); border-radius: var(--radius); }
+    .rv-drillhead { padding: 10px 14px; background: var(--band); border: 1px solid var(--band-border); border-radius: var(--radius); }
+    .rv-drillhead h3 { color: var(--on-band); }
+    .rv-drillhead .rv-sub { color: var(--on-band-soft); }
   </style>
 </head>
 <body>
