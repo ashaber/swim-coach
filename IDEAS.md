@@ -1453,3 +1453,67 @@ Jev-style routing is cutting COST, and a self-hosted model with real infra overh
 this scale versus Jev's pay-per-call pricing. Revisit once real traffic grows enough to make the shadow-mode
 replay in this section's step 1-3 plan meaningful; run that same offline shadow-eval against Laya before any
 self-hosting decision, not instead of it.
+
+## IDEA 026 - Coach cost and router dashboard: Cloud Logging → BigQuery → Claude Dashboards
+
+**Status:** idea only (2026-10-20). Andrew wants to build this hands-on, so it is written as a guided walkthrough rather than a build brief. Don't delegate it.
+
+**Why.**
+- What we can't see today:
+  - whether the Haiku-first router (shadow mode, `router shadow` log lines) would answer safely
+  - what each request costs (`claude turn complete` log lines: fresh, cache-read, cache-write and output tokens per model call)
+  - whether the 1h cache and the Sonnet 5.5 switch paid off
+- Today these numbers come from ad-hoc `gcloud logging read` scripts, and Cloud Run keeps logs for only ~30 days.
+- Claude Dashboards (beta, paid plans, launched 2026-10-08) builds a live dashboard from a plain-language question over a data connector: BigQuery, Redshift, ClickHouse, Databricks, Snowflake or Salesforce. We are on Google Cloud already, so BigQuery is the natural bridge.
+- The Claude Console's own usage and cost pages already cover spend per model. This idea covers what only our logs know: routing decisions, per-request cost, cache behaviour and prompt size against Haiku's 100k price step.
+
+**The pieces, and what each one does.**
+1. **Cloud Logging sink.** A standing rule in GCP that copies matching log entries somewhere else as they arrive. Ours would copy only the coach's structured lines:
+   - filter: `jsonPayload.msg="claude turn complete" OR jsonPayload.msg="router shadow"`
+   - destination: a BigQuery dataset
+   - Log lines carry token counts and routing decisions, never message text (`router shadow` is built that way on purpose). Nothing sensitive lands in BigQuery.
+2. **BigQuery dataset.** A table store Claude Dashboards can query.
+   - The sink creates one table per log, per day, with `jsonPayload.*` as columns.
+   - At our volume (tens of rows a day) this sits inside BigQuery's free tier.
+   - It also fixes the 30-day log expiry for this history.
+3. **Sink service account.** The sink writes as its own Google identity, which must be granted BigQuery Data Editor on the dataset. This is the step that's easiest to miss.
+4. **claude.ai BigQuery connector.** Andrew connects it with his own Google sign-in, so Claude Dashboards can read the dataset.
+5. **The dashboards themselves.** Plain-language questions, for example:
+   - Haiku answer-vs-escalate share per day
+   - Haiku confidence histogram
+   - estimated $ saved at confidence thresholds 0.7, 0.8 and 0.9
+   - turns where Haiku said "answer" but Sonnet called a write tool (the disagreements that matter)
+   - cost per request per day, split by model
+   - cache-read vs cache-write share, before and after the 1h TTL change
+   - Haiku prompt size distribution against the 100k line
+
+**Hands-on steps (project `open-swim-coach-ashaber`).**
+```bash
+# 1. dataset (US multi-region matches the default)
+bq --project_id=open-swim-coach-ashaber mk --dataset coach_logs
+
+# 2. sink: only the coach's structured lines
+gcloud logging sinks create coach-logs-bq \
+  bigquery.googleapis.com/projects/open-swim-coach-ashaber/datasets/coach_logs \
+  --project=open-swim-coach-ashaber \
+  --use-partitioned-tables \
+  --log-filter='resource.type="cloud_run_revision" AND resource.labels.service_name="swim-coach-api" AND (jsonPayload.msg="claude turn complete" OR jsonPayload.msg="router shadow")'
+
+# 3. let the sink write: copy the writerIdentity it prints, then grant it on the dataset
+gcloud logging sinks describe coach-logs-bq --project=open-swim-coach-ashaber --format='value(writerIdentity)'
+#    BigQuery console → coach_logs → Sharing → Permissions → add that identity as "BigQuery Data Editor"
+
+# 4. check rows arrive after the next coach message
+bq --project_id=open-swim-coach-ashaber query --use_legacy_sql=false \
+  'SELECT timestamp, jsonPayload.msg FROM `coach_logs.*` ORDER BY timestamp DESC LIMIT 5'
+```
+Then connect BigQuery in claude.ai, point Claude Dashboards at `coach_logs`, and start asking.
+
+**Gotchas.**
+- The sink only captures lines from the moment it's created. Older history stays in Cloud Logging, about 30 days. A one-off backfill is possible with `gcloud logging read … --format=json`, then `bq load`.
+- Column names come from the JSON keys. Renaming a log field later starts a new column; keep log keys stable.
+- Cost estimates in a dashboard need the per-model prices, which aren't in the logs. Either add a small price table (model → $/MTok per token type) or log an estimated cost on each line.
+- Router rows only start once the shadow-mode router PR merges and the backend deploys with `COACH_ROUTER_MODE=shadow`.
+- Claude Dashboards is beta: expect changes.
+
+**Related:** IDEA 022 (cost audit), IDEA 025 (routing), `scripts/route_report.py`, and the shadow report script from the router PR.
