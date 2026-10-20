@@ -126,10 +126,12 @@ def test_workout_quality_carries_score_and_intensity_match(ride, session, interv
 # --- race ---------------------------------------------------------------------
 
 
-def _phases(start: float, nps: list[float]) -> list[RacePhase]:
+def _phases(start: float, nps: list[float], phase_s: float = 600) -> list[RacePhase]:
     out = [RacePhase("start", 0, 90, 90, start, 5.0)]
     for i, np_w in enumerate(nps):
-        out.append(RacePhase(f"phase_{i + 1}", 90 + i * 600, 690 + i * 600, 600, np_w, 6.0))
+        out.append(
+            RacePhase(f"phase_{i + 1}", 90 + i * phase_s, 90 + (i + 1) * phase_s, phase_s, np_w, 6.0)
+        )
     return out
 
 
@@ -152,7 +154,7 @@ def test_even_race_scores_100():
 
 def test_faded_hot_start_race_scores_lower():
     even = race_execution_score(_phases(260, [250, 250, 250]), _laps([250, 250, 250]))
-    bad = race_execution_score(_phases(400, [260, 240, 200]), _laps([270, 250, 200]))
+    bad = race_execution_score(_phases(400, [260, 240, 200], phase_s=3600), _laps([270, 250, 200]))
     by = {c.name: c for c in bad.components}
     assert bad.score < even.score - 30
     assert by["late_fade"].score < 50 and by["start_control"].score < 50
@@ -164,3 +166,48 @@ def test_race_without_laps_renormalizes_and_short_ride_unscored():
     assert lap.score is None and lap.weight == 0.0 and s.score == 100.0
     short = race_execution_score([RacePhase("start", 0, 90, 90, 200, 5.0)], [])
     assert short.score is None and short.reason
+
+
+# --- start judgement scales with race duration --------------------------------
+
+
+def _by(score):
+    return {c.name: c for c in score.components}
+
+
+def test_short_race_start_is_information_not_scored():
+    # ~50 min race (90 s start + 3 x 1000 s), start +40% over phase 1
+    s = race_execution_score(_phases(350, [250, 250, 250], phase_s=1000), _laps([250, 250, 250]))
+    sc = _by(s)["start_control"]
+    assert sc.score is None and sc.weight == 0.0
+    assert "+40.0%" in sc.detail and "not scored" in sc.detail
+    assert s.score == 100.0
+    assert sum(c.weight for c in s.components) == pytest.approx(1.0)
+
+
+def test_long_race_hot_start_is_penalised():
+    # ~8 h race, start +25% over phase 1: free to +10, zero at +40 -> 50
+    s = race_execution_score(_phases(312.5, [250, 250, 250], phase_s=9600), _laps([250, 250, 250]))
+    sc = _by(s)["start_control"]
+    assert sc.score == 50.0 and sc.weight > 0
+    assert s.score < 100.0
+
+
+def test_start_thresholds_boundaries():
+    from swim_coach.execution_score import start_overshoot_scale
+
+    assert start_overshoot_scale(90 * 60) is None  # at/below 90 min: not scored
+    assert start_overshoot_scale(30 * 60) is None
+    assert start_overshoot_scale(90 * 60 + 1) == pytest.approx((20.0, 60.0), abs=0.01)
+    assert start_overshoot_scale(240 * 60) == (10.0, 40.0)
+    assert start_overshoot_scale(24 * 3600) == (10.0, 40.0)
+    free, zero = start_overshoot_scale(165 * 60)  # midpoint
+    assert (free, zero) == pytest.approx((15.0, 50.0))
+
+
+def test_mid_length_race_scored_with_interpolated_thresholds():
+    # 165 min race: scale (15, 50); start +32.5% -> 50
+    total = 165 * 60
+    phase_s = (total - 90) / 3
+    s = race_execution_score(_phases(250 * 1.325, [250, 250, 250], phase_s=phase_s), _laps([250] * 3))
+    assert _by(s)["start_control"].score == 50.0

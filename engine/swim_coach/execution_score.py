@@ -54,11 +54,21 @@ EVENNESS_ZERO_PCT = 25.0
 # Coach judgment: NP drop from phase 1 to the last phase, same free/zero shape.
 LATE_FADE_FREE_PCT = DEFAULT_SIGNIFICANCE_THRESHOLD_PCT
 LATE_FADE_ZERO_PCT = 25.0
-# Coach judgment: the start phase legitimately runs hot (positioning sprint);
-# only NP more than 20% above phase 1 starts costing, reaching 0 at +60%.
-# A start BELOW phase 1 is not penalised (a wait at the line is 0 W).
-START_OVERSHOOT_FREE_PCT = 20.0
-START_OVERSHOOT_ZERO_PCT = 60.0
+# Coach judgment: start judgement scales with race duration, because the right
+# start differs by race type. In a short mass-start race (cyclocross, ~45-60
+# min) a start well above race pace is the goal -- holding back off the line
+# gives up position that cannot be won back -- so the start is reported but not
+# scored. In an ultra (8 h, 24 h) a hot first few minutes is paid for later, so
+# it is scored, and more strictly than before. Between the two the free/zero
+# thresholds interpolate linearly in race duration (start phase + post-start
+# phases, i.e. the race window, not the warm-up).
+START_UNSCORED_MAX_RACE_S = 90 * 60
+START_STRICT_MIN_RACE_S = 240 * 60
+# (free %, zero %) just past the unscored cutoff: NP over phase 1 starts costing
+# above FREE and reaches 0 at ZERO. A start BELOW phase 1 is never penalised.
+START_OVERSHOOT_MODERATE = (20.0, 60.0)
+# (free %, zero %) at and beyond the strict duration.
+START_OVERSHOOT_STRICT = (10.0, 40.0)
 # Coach judgment: coefficient of variation of lap NP; needs >= 3 laps.
 LAP_CV_FREE_PCT = 3.0
 LAP_CV_ZERO_PCT = 15.0
@@ -72,6 +82,20 @@ def _linear(value: float, free: float, zero: float) -> float:
     if value >= zero:
         return 0.0
     return round(100.0 * (zero - value) / (zero - free), 1)
+
+
+def start_overshoot_scale(race_duration_s: float) -> tuple[float, float] | None:
+    """(free_pct, zero_pct) for start-phase overshoot at this race duration, or
+    None when the race is short enough that the start is not scored."""
+    if race_duration_s <= START_UNSCORED_MAX_RACE_S:
+        return None
+    if race_duration_s >= START_STRICT_MIN_RACE_S:
+        return START_OVERSHOOT_STRICT
+    frac = (race_duration_s - START_UNSCORED_MAX_RACE_S) / (
+        START_STRICT_MIN_RACE_S - START_UNSCORED_MAX_RACE_S
+    )
+    (f0, z0), (f1, z1) = START_OVERSHOOT_MODERATE, START_OVERSHOOT_STRICT
+    return (f0 + (f1 - f0) * frac, z0 + (z1 - z0) * frac)
 
 
 def _assemble(
@@ -187,10 +211,20 @@ def race_execution_score(phases: list[RacePhase], laps: list[GpsLapMetrics]) -> 
 
     if start is not None and start.normalized_power_w:
         over = (start.normalized_power_w - nps[0]) / nps[0] * 100
-        parts["start_control"] = (
-            _linear(over, START_OVERSHOOT_FREE_PCT, START_OVERSHOOT_ZERO_PCT),
-            f"start-phase NP {over:+.1f}% vs phase 1 ({START_OVERSHOOT_FREE_PCT:g}% over is expected)",
-        )
+        race_s = sum(p.duration_s for p in phases if p.name == "start" or p.name.startswith("phase_"))
+        scale = start_overshoot_scale(race_s)
+        if scale is None:
+            parts["start_control"] = (
+                None,
+                f"start-phase NP {over:+.1f}% vs phase 1 -- expected for a short mass-start race "
+                f"(under {START_UNSCORED_MAX_RACE_S // 60} min), not scored",
+            )
+        else:
+            parts["start_control"] = (
+                _linear(over, *scale),
+                f"start-phase NP {over:+.1f}% vs phase 1 ({scale[0]:g}% over is expected "
+                f"for a {race_s / 3600:.1f} h race)",
+            )
     else:
         parts["start_control"] = (None, "no usable start-phase power")
 
