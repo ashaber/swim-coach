@@ -251,10 +251,12 @@ export function renderSectionDrill(d, note = {}) {
       <div class="rd-body" id="section-drill-body">
         <div class="rv-tabs" role="group" aria-label="Section">${tabs}</div>
         <div class="rv-drillhead"><h3 style="--rv-c:${d.colour}"><span class="rv-dot" style="background:${d.colour}"></span>${esc(d.label)}</h3><span class="rv-sub">${esc(d.meta)}</span></div>
-        ${drillMap(d)}
-        <div class="rv-chips" role="group" aria-label="Heat map colour">${modes}</div>
-        ${chips}
-        ${ready ? `${legend(d.legend)}<p class="rv-sub">${esc(d.explain)}</p>` : ''}
+        <section class="rv-card" aria-label="Section map">
+          ${drillMap(d)}
+          <div class="rv-chips" role="group" aria-label="Heat map colour">${modes}</div>
+          ${chips}
+          ${ready ? `${legend(d.legend)}<p class="rv-sub">${esc(d.explain)}</p>` : ''}
+        </section>
         ${speeds}
         ${drillTable(d.rows)}
         <section class="rv-card" aria-label="What is in this section">

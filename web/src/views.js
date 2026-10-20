@@ -2637,7 +2637,7 @@ function renderTrainingDashboardBody({
 function dashboardShell(body) {
   return `
     <div class="wrap settings-wrap">
-      <header class="mast" style="border-bottom:none;padding-bottom:0;">
+      <header class="mast">
         <div>
           <span class="mark">swim-coach · dashboard</span>
           <h1>Training dashboard</h1>
@@ -3953,7 +3953,7 @@ function renderLibraryFileView({ openFile, file, online }) {
 
   return `
     <div class="wrap settings-wrap">
-      <header class="mast" style="border-bottom:none;padding-bottom:0;">
+      <header class="mast">
         <div class="s-head"><button type="button" class="btn-ghost" data-a="library:close-file">&larr; Back</button></div>
         <span class="mark mono">${esc(openFile.name)}</span>
       </header>
@@ -3979,7 +3979,7 @@ export function renderResourcesTab({
   const actionable = (isAdmin && filter === 'needs_review') ? { reviewDrafts, reviewSubmit, online } : null;
   return `
     <div class="wrap settings-wrap">
-      <header class="mast" style="border-bottom:none;padding-bottom:0;">
+      <header class="mast">
         <div>
           <span class="mark">swim-coach · resources</span>
           <h1>Resources</h1>
@@ -4553,7 +4553,7 @@ function renderRosterHealthStatusSection({
 function rosterShell(body) {
   return `
     <div class="wrap settings-wrap">
-      <header class="mast" style="border-bottom:none;padding-bottom:0;">
+      <header class="mast">
         <div>
           <span class="mark">swim-coach · my athletes</span>
           <h1>My Athletes</h1>
@@ -4893,7 +4893,7 @@ export function renderOnboardingForm({ form, submitting, error }) {
 
   return `
     <div class="wrap settings-wrap">
-      <header class="mast" style="border-bottom:none;padding-bottom:0;">
+      <header class="mast">
         <div>
           <span class="mark">swim-coach · welcome</span>
           <h1>Let's set up your plan</h1>
@@ -5091,7 +5091,7 @@ export function renderSettingsTab({
 }) {
   return `
     <div class="wrap settings-wrap">
-      <header class="mast" style="border-bottom:none;padding-bottom:0;">
+      <header class="mast">
         <div>
           <span class="mark">swim-coach · settings</span>
           <h1>Settings</h1>
