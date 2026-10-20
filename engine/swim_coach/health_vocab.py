@@ -12,6 +12,8 @@ Two kinds of content:
     -> Sonnet", so every list here is tuned to OVER-match. A false positive only costs a bigger
     model call; a miss is the failure that matters.
 
+False positives only cost a Sonnet call, so when in doubt, leave a phrase OFF the NOT-HEALTH list.
+
 Coach judgment: all term lists below (no research citation; they encode what athletes and coaches
 actually type, including the IDEA 022 PR #215 misses: "blacked out", "coming down with something",
 "headache", "scratchy throat").
@@ -76,12 +78,14 @@ ILLNESS_TERMS: tuple[str, ...] = (
     "sore throat", "scratchy throat", "headache", "migraine", "nausea", "nauseous", "vomit*", "diarrh*",
     "infection", "infected", "rash", "virus", "viral", "stomach bug", "food poisoning", "dehydrat*",
     "hypotherm*", "heatstroke", "heat stroke", "cold and", "a cold", "head cold", "chest cold",
-    "coming down with", "under the weather", "feel off", "feeling off", "feel unwell", "feeling unwell",
+    "coming down with", "under the weather", "caught the bug", "caught a bug", "bug going around",
+    "shiver*", "cold shock", "cold water shock", "feel off", "feeling off", "feel unwell", "feeling unwell",
     "feel rough", "feeling rough", "feel awful", "feeling awful", "feel terrible", "feeling terrible",
     "feel weird", "feeling weird", "feel faint", "feeling faint",
 )
 ACUTE_TERMS: tuple[str, ...] = (
-    "dizzy", "dizziness", "light-headed", "lightheaded", "faint*", "blacked out", "blacking out", "black out",
+    "irregular", "afib", "a-fib", "arrhythmia", "skipped beat", "spiked at rest", "breath away", "gasp*",
+    "hyperventilat*", "dizzy", "dizziness", "light-headed", "lightheaded", "faint*", "blacked out", "blacking out", "black out",
     "passed out", "palpitation*", "shortness of breath", "short of breath", "can't breathe", "breathless",
     "breathe", "breathing", "chest", "heart racing", "racing heart", "irregular heartbeat", "confus*",
     "disorient*", "concussion", "seiz*", "bleed*", "blood",
@@ -135,9 +139,7 @@ NOT_HEALTH_PHRASES: tuple[str, ...] = (
     "sick set", "sick session", "sick trail", "sick line", "sick time", "sick pace", "shoulder of the road",
     "hard shoulder", "road shoulder", "shoulder season", "bilateral breathing", "breathing drill",
     "breathing pattern", "breathe every", "breathe to the", "breathing every", "breathing side",
-    "cold water", "cold lake", "cold ocean", "cold swim", "cold plunge", "killer climb", "killer set",
-    "heart rate", "chest strap", "chest press", "chest fly", "blood flow", "blood lactate", "blood glucose",
-    "scan the", "the bug", "racing bug",
+    "cold plunge", "killer climb", "killer set", "chest press", "chest fly",
 )
 
 

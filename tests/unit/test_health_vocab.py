@@ -54,14 +54,45 @@ def test_real_reports_are_detected(text: str) -> None:
         "that was a sick descent",
         "we stopped on the shoulder of the road",
         "we did bilateral breathing drills",
-        "cold water swimming is great",
-        "check my heart rate zones",
         "what is on my plan tomorrow?",
         "thanks, that helps",
     ],
 )
 def test_known_slang_is_not_health(text: str) -> None:
     assert not hv.mentions_health(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "think I caught the bug going around",
+        "my heart rate went irregular on the climb",
+        "heart rate spiked at rest and I felt dizzy",
+        "cold water shock took my breath away",
+        "couldn't stop shivering after the cold lake swim",
+        "blood glucose crashed and I felt faint",
+    ],
+)
+def test_phrases_removed_from_the_not_health_list_are_health(text: str) -> None:
+    assert hv.mentions_health(text)
+
+
+# Pure slang/technique phrases that deliberately contain a health word; each is an explicit exception.
+_EXCEPTIONS = {
+    "pain cave", "pain locker", "hurt locker",  # race slang
+    "sick descent", "sick climb", "sick ride", "sick swim", "sick set", "sick session", "sick trail",
+    "sick line", "sick time", "sick pace",  # "sick" = great
+    "bilateral breathing", "breathing drill", "breathing pattern", "breathe every", "breathe to the",
+    "breathing every", "breathing side",  # swim technique
+    "chest press", "chest fly",  # gym exercises
+}
+
+
+def test_not_health_phrases_carry_no_symptom_word_unless_excepted() -> None:
+    symptom = hv.compile_terms([*hv.PAIN_TERMS, *hv.ILLNESS_TERMS, *hv.ACUTE_TERMS, *hv.MEDICAL_TERMS])
+    offenders = [p for p in hv.NOT_HEALTH_PHRASES if symptom.search(p) and p not in _EXCEPTIONS]
+    assert offenders == []
+    assert _EXCEPTIONS <= set(hv.NOT_HEALTH_PHRASES)
 
 
 @pytest.mark.parametrize(
