@@ -409,6 +409,7 @@ async def stream_chat_response(
             include_routed=not in_message,
             cache_ttl=settings.prompt_cache_ttl,
             context_block=context_block,
+            context_cache_ttl=settings.prompt_cache_ttl_context,
         )
         library_text = (
             build_routed_library_text(
@@ -429,6 +430,7 @@ async def stream_chat_response(
             message=effective_message,
             history=history,
             library_text=library_text,
+            cache_ttl=settings.prompt_cache_ttl_context,
         )
         bound_plan_change_notifier = (
             functools.partial(plan_change_notifier, store, settings, athlete)
