@@ -90,3 +90,15 @@ def test_health_cross_check_counts_both_directions() -> None:
     health = build_report(payloads)["health"]
     assert health == {"haiku_caught_keywords_missed": 1, "keywords_caught_haiku_nonhealth": 1, "probes": 2}
     assert "Haiku caught health the keywords missed: 1" in format_report(build_report(payloads))
+
+
+def test_report_counts_triage_fallbacks_and_their_cost() -> None:
+    payloads = [
+        shadow("f1", triage_fallback=True, triage_fallback_cost_usd=0.002),
+        shadow("f2", triage_fallback=True, triage_fallback_cost_usd=0.003),
+        shadow("f3", triage_fallback=False),
+    ]
+    report = build_report(payloads)
+    assert report["triage_fallback"]["count"] == 2
+    assert abs(report["triage_fallback"]["cost_usd"] - 0.005) < 1e-9
+    assert "Forced-triage fallbacks: 2" in format_report(report)

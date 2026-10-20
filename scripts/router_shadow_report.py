@@ -135,7 +135,12 @@ def build_report(payloads: list[dict[str, Any]]) -> dict[str, Any]:
         "probes": len(probes),
     }
 
+    fallbacks = [p for p in triaged if p.get("triage_fallback")]
     return {
+        "triage_fallback": {
+            "count": len(fallbacks),
+            "cost_usd": sum(p.get("triage_fallback_cost_usd") or 0 for p in fallbacks),
+        },
         "health": health,
         "messages": len(shadow),
         "pre_rule": {"count": len(pre_rule), "share": len(pre_rule) / len(shadow) if shadow else 0.0,
@@ -171,6 +176,8 @@ def format_report(report: dict[str, Any]) -> str:
         f"  triaged by Haiku: {report['triaged']}  (with a decision: {report['decided']}; "
         f"no decision: {report['not_decided']})",
         f"Haiku routed: answer {report['answer_share']:.0%} / escalate {report['escalate_share']:.0%}",
+        f"  Forced-triage fallbacks: {report['triage_fallback']['count']} "
+        f"(${report['triage_fallback']['cost_usd']:.4f})",
         "",
         "Health cross-check:",
         f"  Haiku caught health the keywords missed: {report['health']['haiku_caught_keywords_missed']}",

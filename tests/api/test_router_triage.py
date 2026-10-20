@@ -275,13 +275,14 @@ def test_tool_loop_is_capped() -> None:
     reads = [_msg([make_tool_use_block(f"t{i}", "get_week_plan", {"iso_week": "current"})]) for i in range(10)]
     outcome, fake = _run(reads, handlers={"get_week_plan": lambda inp: {"ok": True}})
     assert HAIKU_MAX_ITERATIONS == 3
-    assert len(fake.creates) == 3
+    assert len(fake.creates) == 4, "3 loop calls plus the one forced-triage fallback"
     assert outcome.iterations == 3
+    assert outcome.triage_fallback is True
     assert outcome.decision is None and outcome.status == "no_triage"
 
 
 def test_text_only_reply_without_triage_is_no_triage() -> None:
-    outcome, _ = _run([_msg([make_text_block("hi there")], "end_turn")])
+    outcome, _ = _run([_msg([make_text_block("hi there")], "end_turn"), _msg([make_text_block("still no")], "end_turn")])
     assert outcome.decision is None and outcome.status == "no_triage"
 
 
@@ -388,3 +389,67 @@ def test_instructions_escalate_on_symptoms_but_do_not_treat_an_open_status_as_a_
     text = " ".join(HAIKU_INSTRUCTIONS.split())
     assert "relates to one of them or reports any symptom, escalate" in text
     assert "never prescribe or loosen training restrictions" in text
+
+
+# --- forced-triage fallback ----------------------------------------------------------------------
+# Haiku 5.5 accepts forced tool_choice with adaptive thinking (only Opus 5.5 / Sonnet 5.5 / Fable 5.1 /
+# Mythos 5.1 reject it): https://platform.claude.com/docs/en/build-with-claude/thinking#limits-and-feature-compatibility
+
+
+def test_text_only_reply_triggers_one_forced_triage_followup() -> None:
+    outcome, fake = _run(
+        [
+            _msg([make_text_block("Rest day tomorrow.")], "end_turn", input_tokens=100, output_tokens=50),
+            _msg([make_triage_block()], "tool_use", input_tokens=120, output_tokens=30),
+        ]
+    )
+    assert outcome.status == "ok" and outcome.decision is not None
+    assert outcome.triage_fallback is True
+    assert len(fake.creates) == 2
+    follow = fake.creates[1]
+    assert follow["tool_choice"] == {"type": "tool", "name": "triage"}
+    assert follow["thinking"] == {"type": "adaptive"}, "same thinking config as the first call keeps the cache prefix"
+    msgs = follow["messages"]
+    assert msgs[-1]["role"] == "user"
+    assistant = msgs[-2]
+    assert assistant["role"] == "assistant"
+    assert "Rest day tomorrow." in json.dumps(assistant["content"])
+    assert "tool_choice" not in fake.creates[0]
+
+
+def test_fallback_tokens_and_cost_are_tracked_separately_and_in_totals() -> None:
+    outcome, _ = _run(
+        [
+            _msg([make_text_block("hi")], "end_turn", input_tokens=1000, output_tokens=100),
+            _msg([make_triage_block()], "tool_use", input_tokens=2000, output_tokens=200),
+        ]
+    )
+    assert outcome.fallback_cost_usd > 0
+    assert outcome.fallback_output_tokens == 200
+    assert outcome.cost_usd > outcome.fallback_cost_usd
+    assert outcome.output_tokens == 300
+
+
+def test_no_fallback_when_the_first_call_triaged() -> None:
+    outcome, fake = _run([_msg([make_triage_block()])])
+    assert outcome.triage_fallback is False and len(fake.creates) == 1
+
+
+def test_fallback_is_attempted_only_once() -> None:
+    outcome, fake = _run(
+        [_msg([make_text_block("a")], "end_turn"), _msg([make_text_block("b")], "end_turn")]
+    )
+    assert len(fake.creates) == 2
+    assert outcome.triage_fallback is True and outcome.status == "no_triage" and outcome.decision is None
+
+
+def test_fallback_skipped_after_a_refusal() -> None:
+    outcome, fake = _run([_msg([make_text_block("no")], "refusal")])
+    assert len(fake.creates) == 1 and outcome.triage_fallback is False
+
+
+def test_fallback_respects_the_token_budget() -> None:
+    huge = "z" * ((CEILING_TOKENS + 10_000) * 4)
+    outcome, fake = _run([_msg([make_text_block(huge)], "end_turn")])
+    assert len(fake.creates) == 1, "the over-budget follow-up is never sent"
+    assert outcome.status == "over_budget" and outcome.triage_fallback is False

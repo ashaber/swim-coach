@@ -318,6 +318,11 @@ class TriageOutcome:
     count_method: str = "count_tokens"  # "estimate" if count_tokens was ever unavailable
     trimmed: list[str] = field(default_factory=list)
     tools_called: list[str] = field(default_factory=list)
+    # The forced-triage follow-up (see _forced_triage_fallback). Its tokens/cost are ALSO in the totals.
+    triage_fallback: bool = False
+    fallback_prompt_tokens: int = 0
+    fallback_output_tokens: int = 0
+    fallback_cost_usd: float = 0.0
 
     @property
     def over_budget(self) -> bool:
@@ -368,10 +373,88 @@ def _execute_read_tool(name: str, tool_input: Any, handlers: dict[str, ToolHandl
         return internal_tool_error(name, exc)
 
 
+FALLBACK_PROMPT = (
+    f"Now classify your answer above by calling the `{TRIAGE_TOOL_NAME}` tool. Use route=answer only if "
+    "your draft reply is complete and safe to send as is; put it in `reply`."
+)
+
+
+def _create(
+    client: Any, model: str, context: HaikuContext, tools: list[dict[str, Any]], outcome: TriageOutcome,
+    **extra: Any,
+) -> tuple[Any, float, int, int]:
+    """One Haiku request + usage accounting. Returns (response, cost, prompt_tokens, output_tokens)."""
+    system = context.system()
+    messages = with_loop_breakpoint(system, context.messages(), tools, context.cache_ttl)
+    response = client.messages.create(
+        model=model,
+        max_tokens=HAIKU_MAX_OUTPUT_TOKENS,
+        system=system,
+        messages=messages,
+        tools=tools,
+        thinking={"type": "adaptive"},
+        **extra,
+    )
+    prompt, cache_read, output, cost = _usage_cost(response.usage, model, context.cache_ttl)
+    outcome.prompt_tokens = max(outcome.prompt_tokens, prompt)
+    outcome.cached_tokens += cache_read
+    outcome.output_tokens += output
+    outcome.cost_usd += cost
+    return response, cost, prompt, output
+
+
+def _text_of(response: Any) -> str:
+    return "\n".join(
+        str(getattr(b, "text", "")) for b in response.content if getattr(b, "type", None) == "text"
+    ).strip()
+
+
+def _forced_triage_fallback(
+    client: Any, model: str, context: HaikuContext, tools: list[dict[str, Any]], outcome: TriageOutcome,
+    reply_text: str,
+) -> None:
+    """Haiku sometimes answers in plain text and never calls `triage` (tool_choice has to stay auto
+    for the main call so it can use the read tools). ONE follow-up forces the call: Haiku's text goes
+    back as the assistant turn so the follow-up only has to classify it.
+
+    Valid combination per the Anthropic docs: Haiku 5.5 accepts forced `tool_choice` together with
+    adaptive thinking (only Opus 5.5, Sonnet 5.5, Fable 5.1 and Mythos 5.1 reject forced tool use), and
+    the response then starts with the tool call, no thinking block. We keep `thinking: adaptive`
+    unchanged because a thinking-config change starts a new cache prefix.
+    https://platform.claude.com/docs/en/build-with-claude/thinking#limits-and-feature-compatibility
+    """
+    extra = context.extra_messages
+    if reply_text:
+        extra.append({"role": "assistant", "content": reply_text})
+        extra.append({"role": "user", "content": FALLBACK_PROMPT})
+    elif extra and extra[-1]["role"] == "user" and isinstance(extra[-1]["content"], list):
+        extra[-1]["content"] = [*extra[-1]["content"], {"type": "text", "text": FALLBACK_PROMPT}]
+    else:
+        extra.append({"role": "user", "content": FALLBACK_PROMPT})
+    measured = _fit_budget(client, model, context, tools, outcome)
+    if measured is None:
+        outcome.status = "over_budget"
+        return
+    outcome.measured_tokens.append(measured)
+    outcome.triage_fallback = True
+    response, cost, prompt, output = _create(
+        client, model, context, tools, outcome, tool_choice={"type": "tool", "name": TRIAGE_TOOL_NAME}
+    )
+    outcome.fallback_prompt_tokens, outcome.fallback_output_tokens, outcome.fallback_cost_usd = prompt, output, cost
+    triage = next(
+        (b for b in response.content if getattr(b, "type", None) == "tool_use" and b.name == TRIAGE_TOOL_NAME),
+        None,
+    )
+    if triage is not None:
+        outcome.decision = TriageDecision.from_tool_input(triage.input if isinstance(triage.input, dict) else {})
+        outcome.status = "ok"
+
+
 def run_triage(
     client: Any, *, model: str, context: HaikuContext, handlers: dict[str, ToolHandler]
 ) -> TriageOutcome:
-    """One Haiku triage: at most HAIKU_MAX_ITERATIONS calls, budget re-measured before each.
+    """One Haiku triage: at most HAIKU_MAX_ITERATIONS calls (plus one forced-triage fallback when none
+    of them called `triage`), budget re-measured before each.
 
     Raises anthropic.APIError / httpx.HTTPError from `messages.create` -- the caller (run_shadow)
     owns catching them so a failure can never reach the athlete."""
@@ -383,22 +466,8 @@ def run_triage(
             outcome.status = "over_budget"
             return outcome
         outcome.measured_tokens.append(measured)
-        system = context.system()
-        messages = with_loop_breakpoint(system, context.messages(), tools, context.cache_ttl)
-        response = client.messages.create(
-            model=model,
-            max_tokens=HAIKU_MAX_OUTPUT_TOKENS,
-            system=system,
-            messages=messages,
-            tools=tools,
-            thinking={"type": "adaptive"},
-        )
+        response, _, _, _ = _create(client, model, context, tools, outcome)
         outcome.iterations += 1
-        prompt, cache_read, output, cost = _usage_cost(response.usage, model, context.cache_ttl)
-        outcome.prompt_tokens = max(outcome.prompt_tokens, prompt)
-        outcome.cached_tokens += cache_read
-        outcome.output_tokens += output
-        outcome.cost_usd += cost
 
         tool_uses = [b for b in response.content if getattr(b, "type", None) == "tool_use"]
         triage = next((b for b in tool_uses if b.name == TRIAGE_TOOL_NAME), None)
@@ -409,7 +478,9 @@ def run_triage(
             outcome.status = "ok"
             return outcome
         if not tool_uses or response.stop_reason != "tool_use":
-            return outcome  # text-only / refusal / max_tokens: no decision
+            if response.stop_reason != "refusal":
+                _forced_triage_fallback(client, model, context, tools, outcome, _text_of(response))
+            return outcome
 
         context.extra_messages.append(
             {"role": "assistant", "content": [b.model_dump(exclude_none=True) for b in response.content]}
@@ -420,6 +491,7 @@ def run_triage(
             result = _execute_read_tool(block.name, block.input, handlers)
             results.append({"type": "tool_result", "tool_use_id": block.id, "content": json.dumps(result, default=str)})
         context.extra_messages.append({"role": "user", "content": results})
+    _forced_triage_fallback(client, model, context, tools, outcome, "")
     return outcome
 
 
