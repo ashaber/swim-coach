@@ -33,13 +33,13 @@ export const Z7_DISPLAY_HI_PCT = 200;
 
 /** Cool -> hot, one hue per zone; shared by the planned bars and the actual line. */
 export const ZONE_COLORS = {
-  Z1: '#4f9fd9',
-  Z2: '#35b7a6',
-  Z3: '#a3cf4f',
-  Z4: '#f2c94c',
-  Z5: '#f49342',
-  Z6: '#e5534b',
-  Z7: '#d6407f',
+  Z1: '#24619a',
+  Z2: '#2e93ad',
+  Z3: '#7f8a2a',
+  Z4: '#b07c0a',
+  Z5: '#d45a15',
+  Z6: '#c42b25',
+  Z7: '#a8236b',
 };
 
 export const ZONE_LABELS = {

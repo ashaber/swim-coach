@@ -1156,7 +1156,7 @@ export function renderMacroPlanDetail(macro) {
 // calls this same function with different `load` state; only the data
 // source differs (main.js's loadPlanLoad vs. loadCoachLoad).
 
-const LOAD_CHART_LINE_COLOR_VAR = { ctl: '--accent', atl: '--c-strength', tsb: '--c-form' };
+const LOAD_CHART_LINE_COLOR_VAR = { ctl: '--accent-ink', atl: '--c-strength', tsb: '--c-form' };
 
 function loadChartPointsAttr(points) {
   return points.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
@@ -3036,7 +3036,7 @@ function renderShapeSvg(g, { label }) {
     <polygon points="${b.points}" fill="${b.color}" fill-opacity="0.55"><title>${esc(b.label)} ${b.lo}-${b.hi} W</title></polygon>
     <rect x="${b.x.toFixed(1)}" y="${b.bandTop.toFixed(1)}" width="${b.w.toFixed(1)}" height="${Math.max(b.bandBottom - b.bandTop, 1).toFixed(1)}" fill="${b.color}" fill-opacity="0.35" stroke="${b.color}" stroke-width="0.5"/>`).join('');
   const runs = g.actualRuns.map((r) => `
-    <polyline points="${r.points}" fill="none" stroke="#0f3138" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+    <polyline points="${r.points}" fill="none" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
     <polyline points="${r.points}" fill="none" stroke="${r.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`).join('');
   const yTicks = g.yTicks.map((t) => `
     <line x1="${g.plotLeft}" x2="${g.plotRight}" y1="${t.y.toFixed(1)}" y2="${t.y.toFixed(1)}" stroke="var(--line-soft)" stroke-width="0.5"/>
@@ -3131,8 +3131,8 @@ function renderStartTrace(t) {
   return `
         <div class="start-trace">
           <svg class="start-trace-chart" viewBox="0 0 ${g.width} ${g.height}" role="img" aria-label="Start ${esc(t.n)} power, peak ${esc(g.peakW)} watts" preserveAspectRatio="none">
-            ${line(g.plannedEndX, 'var(--ink-faint)')}${line(g.launchX, 'var(--ink-soft)')}${line(g.stopX, 'var(--bad, #d9534f)')}
-            <polyline points="${g.points}" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+            ${line(g.plannedEndX, 'var(--ink-faint)')}${line(g.launchX, 'var(--ink-soft)')}${line(g.stopX, 'var(--c-signal)')}
+            <polyline points="${g.points}" fill="none" stroke="var(--accent-ink)" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
           </svg>
           <div class="start-trace-text"><strong>Start ${esc(t.n)}</strong> ${esc(t.verdict)}</div>
         </div>`;
@@ -3171,10 +3171,10 @@ function renderPowerCurveSvg(g) {
       <svg class="shape-chart power-curve-chart" viewBox="0 0 ${g.width} ${g.height}" role="img" aria-label="Power curve: best average watts for each duration, this ride against the 90-day best" preserveAspectRatio="xMidYMid meet">
         ${yTicks}${xTicks}
         ${g.hasBest90 ? `<polyline points="${g.best90}" fill="none" stroke="var(--ink-soft)" stroke-width="1.5" stroke-dasharray="4 3"/>` : ''}
-        <polyline points="${g.ride}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+        <polyline points="${g.ride}" fill="none" stroke="var(--accent-ink)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
       </svg>
       <div class="shape-legend">
-        <span class="shape-legend-item"><i class="shape-swatch" style="background:var(--accent)"></i>This ride</span>
+        <span class="shape-legend-item"><i class="shape-swatch" style="background:var(--accent-ink)"></i>This ride</span>
         ${g.hasBest90 ? '<span class="shape-legend-item"><i class="shape-swatch" style="background:var(--ink-soft)"></i>90-day best</span>' : ''}
       </div>`;
 }

@@ -3610,7 +3610,7 @@ describe('renderLoadChart', () => {
       ['2026-07-02', 30, 30, 0],
     ];
     const html = renderLoadChart({ status: 'ready', data: { ctl_atl_tsb: closeSeries }, error: null });
-    const ctlY = Number(html.match(/y="(-?[\d.]+)"[^>]*fill:var\(--accent\)">CTL</)?.[1]);
+    const ctlY = Number(html.match(/y="(-?[\d.]+)"[^>]*fill:var\(--accent-ink\)">CTL</)?.[1]);
     const atlY = Number(html.match(/y="(-?[\d.]+)"[^>]*fill:var\(--c-strength\)">ATL</)?.[1]);
     expect(Number.isFinite(ctlY)).toBe(true);
     expect(Number.isFinite(atlY)).toBe(true);
