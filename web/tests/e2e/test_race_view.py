@@ -24,6 +24,7 @@ PLAN = {'slug': 'renee', 'name': 'Renee', 'athlete': {'name': 'Renee'}, 'events'
 VIEWPORTS = [
     pytest.param({'width': 390, 'height': 844}, id='390x844'),
     pytest.param({'width': 412, 'height': 915}, id='412x915'),
+    pytest.param({'width': 360, 'height': 740}, id='360x740'),
 ]
 SHOTS = os.environ.get('RACE_SHOTS_DIR')
 
@@ -194,3 +195,32 @@ def test_drill_down_offline_shows_course_map_and_note(race):
     assert 'needs a connection' in page.locator('#section-drill').inner_text()
     assert page.locator('#section-drill svg.rv-map').count() == 1
     assert calls['sections'] == 0
+
+
+ROW_OVERFLOW_JS = """(sel) => [...document.querySelectorAll(sel)].flatMap((row) => {
+  const kids = [...row.children];
+  const bad = [];
+  kids.forEach((k, i) => {
+    if (k.scrollWidth > k.clientWidth + 1) bad.push('overflow:' + k.textContent.trim());
+    const next = kids[i + 1];
+    if (next && k.getBoundingClientRect().right > next.getBoundingClientRect().left + 1) bad.push('overlap:' + k.textContent.trim());
+  });
+  if (row.scrollWidth > row.clientWidth + 1) bad.push('row-overflow');
+  return bad;
+})"""
+
+
+def test_lap_rows_do_not_overflow_or_overlap(race):
+    page, _, _ = race
+    assert page.evaluate(ROW_OVERFLOW_JS, '.rv-laprow') == []
+    page.click('[aria-label="Section analysis"] [data-a="race:section-open"][data-label="C5"]')
+    page.wait_for_selector('#section-drill svg.rv-drillmap')
+    assert page.evaluate(ROW_OVERFLOW_JS, '.rv-drillrow') == []
+
+
+def test_selected_chip_uses_the_accent_fill(race):
+    page, _, _ = race
+    fill = page.locator('[data-a="race:metric"].on').evaluate('e => getComputedStyle(e).backgroundColor')
+    accent = page.evaluate('getComputedStyle(document.documentElement).getPropertyValue("--accent").trim()')
+    js = '(c) => { const d = document.createElement("div"); d.style.color = c; document.body.appendChild(d); const v = getComputedStyle(d).color; d.remove(); return v; }'
+    assert fill == page.evaluate(js, accent)

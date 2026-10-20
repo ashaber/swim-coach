@@ -240,6 +240,22 @@ describe('whole view', () => {
   });
 });
 
+describe('fixture frames', () => {
+  it('keeps every section trace inside the course outline bbox (one frame)', () => {
+    const xs = SECTIONS.outline.map((p) => p[0]);
+    const ys = SECTIONS.outline.map((p) => p[1]);
+    const [minX, maxX, minY, maxY] = [Math.min(...xs) - 10, Math.max(...xs) + 10, Math.min(...ys) - 10, Math.max(...ys) + 10];
+    Object.values(SECTIONS.sections).forEach((sec) => {
+      Object.values(sec.laps).forEach((lap) => lap.points.forEach(([x, y]) => {
+        expect(x).toBeGreaterThanOrEqual(minX);
+        expect(x).toBeLessThanOrEqual(maxX);
+        expect(y).toBeGreaterThanOrEqual(minY);
+        expect(y).toBeLessThanOrEqual(maxY);
+      }));
+    });
+  });
+});
+
 describe('drill-down', () => {
   const ready = { status: 'ready', data: SECTIONS, error: null };
   it('defaults to the section fastest lap and the time-lost mode', () => {

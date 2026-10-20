@@ -719,7 +719,7 @@
     .rv-emph { color: var(--amber); }
     .rv-btn, .rv-chip, .rv-tab { min-height: 44px; border-radius: 10px; border: 1px solid var(--line); background: transparent; color: var(--accent-ink); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; padding: 0 12px; }
     .rv-chip, .rv-tab { border-radius: 999px; color: var(--ink-soft); }
-    .rv-chip.on, .rv-tab.on { background: var(--c-signal-wash); border-color: var(--accent); color: var(--ink); }
+    .rv-chip.on, .rv-tab.on { background: var(--accent); border-color: var(--accent); color: var(--accent-on, #0B2A36); }
     .rv-lapchip { min-width: 44px; padding: 0 8px; }
     .rv-chips { display: flex; gap: 6px; flex-wrap: wrap; }
     .rv-tabs { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; -webkit-overflow-scrolling: touch; }
@@ -761,9 +761,9 @@
     .rv-drillrow { grid-template-columns: 28px 52px minmax(0, 1fr) 48px 40px; }
     .rv-laprow > span:nth-child(n+4), .rv-drillrow > span:nth-child(n+4) { text-align: right; }
     .rv-laphead { font-family: var(--sans); font-size: 11px; color: var(--ink-faint); border-bottom: 0; min-height: 0; }
-    .rv-lapbar { display: flex; align-items: center; gap: 6px; min-width: 0; text-align: left !important; }
-    .rv-lapbar .rv-bar { flex: 0 1 auto; max-width: 70%; }
-    .rv-lapbar small { white-space: nowrap; flex: none; font-size: 11px; color: var(--ink-soft); }
+    .rv-lapbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-align: left !important; }
+    .rv-lapbar .rv-bar { min-width: 3px; max-width: 100%; }
+    .rv-lapbar small { white-space: nowrap; font-size: 11px; color: var(--ink-soft); }
     .rv-best { color: var(--accent-ink); }
     .rv-smooth { color: var(--accent-ink); font-weight: 700; }
     .rv-pill { font-size: 12px; font-weight: 600; color: var(--ink); background: var(--paper-2); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; }
