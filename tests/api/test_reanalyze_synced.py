@@ -124,6 +124,21 @@ def test_reanalyze_athlete_updates_pauses_and_sport_detail_in_place(athletes_dir
     assert updated.notes == "felt strong"
 
 
+def test_reanalyze_athlete_keeps_race_start_section_splits_and_notes(athletes_dir: Path) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    original = _save_synced_workout(
+        store, "renee", activity_id="i-mtb", date=MTB_DATE, sport=MTB_SPORT, distance_m=1, duration_min=1.0,
+        race_start_s=120.0, section_splits={"C3": 3}, section_notes={"C1": "sand"},
+    )
+    cfg = IntervalsAthleteConfig(slug="renee", intervals_athlete_id="i999", api_key="test-key")
+    handler = _download_handler({"i-mtb": FIT_MTB_FIXTURE.read_bytes()}, requested=[])
+
+    reanalyze_athlete(cfg, store=store, dry_run=False, client=_make_client(handler))
+
+    updated = [w for w in store.list_workouts("renee") if w.id == original.id][0]
+    assert (updated.race_start_s, updated.section_splits, updated.section_notes) == (120.0, {"C3": 3}, {"C1": "sand"})
+
+
 def test_reanalyze_athlete_external_id_filter_touches_only_that_workout(athletes_dir: Path) -> None:
     store = FileStore(base_dir=athletes_dir)
     _save_synced_workout(store, "renee", activity_id="i-other", date=date(2026, 5, 1), distance_m=1, duration_min=1.0)

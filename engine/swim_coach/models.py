@@ -2488,6 +2488,7 @@ class Workout(BaseModel):
     section_splits: dict[str, Annotated[int, Field(ge=2, le=4)]] = Field(default_factory=dict)
     # Athlete/coach notes per course-section label (<= 280 chars each), shown beside the section.
     section_notes: dict[str, Annotated[str, Field(max_length=280)]] = Field(default_factory=dict)
+
     @field_validator("section_notes")
     @classmethod
     def _drop_blank_section_notes(cls, v: dict[str, str]) -> dict[str, str]:

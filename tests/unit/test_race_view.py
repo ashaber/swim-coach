@@ -132,3 +132,20 @@ def test_coach_lines_are_terse_and_mention_the_dip_and_the_previous_race() -> No
     assert "242 W at 7s" in lines["race_start_trace"] and "200 W" in lines["race_overview"]
     assert "finish_sprint" not in lines
     assert sum(len(v) for v in lines.values()) < 600
+
+
+def test_analysis_context_carries_the_previous_race_start_and_the_splits(tmp_path) -> None:
+    from swim_coach.analysis import build_analysis_context
+    from swim_coach.models import Athlete
+    from swim_coach.store import FileStore
+
+    store = FileStore(base_dir=tmp_path)
+    store.save_athlete(Athlete(id=uuid.uuid4(), slug="a", name="A"))
+    sat, sun = _race(17, "cycling/cyclocross", True), _race(18, "cycling/cyclocross", False)
+    sun.kind_override = "race"
+    sun.section_splits = {"C3": 3}
+    store.save_workout("a", sat)
+    store.save_workout("a", sun)
+    ctx = build_analysis_context(store, "a", sun, series={"t_s": [0.0], "power_w": [1.0]})
+    assert dict(ctx.section_splits) == {"C3": 3}
+    assert ctx.previous_race_start is not None and ctx.previous_race_start.workout_id == str(sat.id)
