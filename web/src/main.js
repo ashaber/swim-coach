@@ -6,7 +6,7 @@ import { shouldRefreshOnResume } from './resumeRefresh.js';
 import {
   renderApp, renderLoading, renderError, renderTabBar, renderCoachTab, renderSettingsTab,
   renderDashboardTab, renderBackendNeededNotice, renderUpdateBanner,
-  renderRaceDayOverlay, renderSectorOverlay, renderOnboardingForm, renderRosterTab, renderResourcesTab, cr10AnchorLabel, ROSTER_SUB_TABS as ROSTER_SUB_TAB_DEFS,
+  renderRaceDayOverlay, renderSectorOverlay, renderRaceDrill, renderOnboardingForm, renderRosterTab, renderResourcesTab, cr10AnchorLabel, ROSTER_SUB_TABS as ROSTER_SUB_TAB_DEFS,
 } from './views.js';
 import { findSessionById, LOAD_CHART_WINDOW_DAYS, LOAD_CHART_WINDOW_OPTIONS } from './plan.js';
 import { buildHistoryFeed } from './history.js';
@@ -31,7 +31,7 @@ import {
   fetchCoachHealthStatus, postCoachHealthStatus, resolveCoachHealthStatus,
   fetchHealthStatus, postHealthStatus,
   askAboutSession, askAboutWorkout,
-  fetchWorkoutPacing, postWorkoutKind, postWorkoutRaceStart,
+  fetchWorkoutPacing, postWorkoutKind, postWorkoutRaceStart, fetchWorkoutSections, postWorkoutSectionSplits,
   postCoachWorkoutChatMessage, patchCoachWorkoutChatMuted,
   listConversations, fetchConversationMessages, patchConversationMuted, conversationMessagesPath,
   fetchCoachConversation, postCoachConversationMessage, patchCoachConversationMuted,
@@ -41,6 +41,8 @@ import {
 import { shouldLoadPacing, parseRaceStartInput } from './analysis.js';
 import { createSectorOverlay, openSectorOverlay, switchOverlaySector, closeSectorOverlay } from './sectorOverlay.js';
 import { attachMapGestures } from './mapGestures.js';
+import { attachChartProbes } from './chartProbe.js';
+import { hasRaceView, nextSplits } from './raceView.js';
 import {
   serializeWorkoutForm, profileFormFromAthlete, serializeProfileForm,
   logFormFromDraft,
@@ -425,6 +427,12 @@ const state = {
   // The workout detail's kind retag (POST /api/workouts/{id}/kind): null or {status, error}.
   workoutKindEdit: null,
   raceStartEdit: null,
+  // The race view (views.js renderWorkoutDetail's race branch): map metric, "More numbers" toggle and the
+  // section-split request. The drill-down is a full-screen history entry like the sector overlay.
+  raceUi: { metric: 'loss', moreOpen: false, splitBusy: false, splitError: null },
+  sectionDrill: { open: false, scrollY: 0, label: null, mode: 'loss', lap: null },
+  sectionNote: { label: null, draft: null, status: 'idle', error: null },
+  sectionsByWorkoutId: {}, // GET /sections per workout: {status, data, error}; cached for the session
   // The Dashboard tab's training-load chart narrative (views.js's
   // renderCtlAtlTsbNarrative, web/two-panel-load-chart's truncation) --
   // same one-way "Show more" convention as dashboardFeedExpanded just
@@ -635,6 +643,7 @@ function renderTabContent() {
           mapView: state.mapView,
           kindEdit: state.workoutKindEdit,
           raceStartEdit: state.raceStartEdit,
+          raceUi: state.raceUi,
         },
         healthStatusForm: state.healthStatusForm,
         healthStatusSubmit: state.healthStatusSubmit,
@@ -762,8 +771,12 @@ function renderAppDom() {
   const overlayScroll = overlayBody ? overlayBody.scrollTop : 0;
   const sectorBody = document.getElementById('sector-overlay-body');
   const sectorScroll = sectorBody ? sectorBody.scrollTop : 0;
+  const drillBody = document.getElementById('section-drill-body');
+  const drillScroll = drillBody ? drillBody.scrollTop : 0;
   renderAppDomInner();
-  document.body.classList.toggle('cs-locked', sectorOverlayShown());
+  document.body.classList.toggle('cs-locked', sectorOverlayShown() || sectionDrillShown());
+  const nextDrillBody = document.getElementById('section-drill-body');
+  if (nextDrillBody && drillScroll) nextDrillBody.scrollTop = drillScroll;
   const nextSectorBody = document.getElementById('sector-overlay-body');
   if (nextSectorBody && sectorScroll) nextSectorBody.scrollTop = sectorScroll;
   const raceOverlayOpen = Boolean(state.raceDay.open && state.identity);
@@ -806,7 +819,7 @@ function renderAppDomInner() {
       rosterUnread: countUnread(state.roster.feedback.data, loadLastSeen('coach'), 'coach')
         + rosterConversationUnreadCount(),
       coachUnread: myCoachUnreadCount(),
-    })}${state.identity ? renderRaceDayOverlay(state.raceDay, state.online) : ''}${sectorOverlayHtml()}`;
+    })}${state.identity ? renderRaceDayOverlay(state.raceDay, state.online) : ''}${sectorOverlayHtml()}${sectionDrillHtml()}`;
   if (state.tab === 'coach' && state.coachView === 'coach') scrollToBottomOf('my-coach-messages');
   else if (state.tab === 'coach') stickChatScrollToBottom();
   if (state.tab === 'roster' && state.roster.subTab === 'conversations') scrollToBottomOf('roster-conversation-messages');
@@ -1550,6 +1563,7 @@ function persistRosterChat(slug) {
 // readable (send disabled) offline. Backend: backend/app/routes/conversation.py.
 
 const COMPOSER_INPUT_IDS = [
+  'race-section-note',
   'my-coach-input', 'roster-conversation-input', 'chat-input', 'workout-chat-input',
   'roster-chat-input', 'roster-workout-chat-input', 'raceday-add-input',
 ];
@@ -2071,6 +2085,7 @@ function handleOpenHistoryDetail(id, { rpeEdit = null } = {}) {
   state.selectedSector = null;
   state.mapView = null;
   state.sectorOverlay = createSectorOverlay();
+  resetRaceView();
   state.workoutKindEdit = null;
   // A fresh, empty scoped chat thread for this workout (see
   // closeWorkoutChat for the matching teardown on every close path).
@@ -2189,6 +2204,7 @@ function handleCloseHistoryDetail() {
   state.selectedSector = null;
   state.mapView = null;
   state.sectorOverlay = createSectorOverlay();
+  resetRaceView();
   state.workoutKindEdit = null;
   state.raceStartEdit = null;
   closeWorkoutChat();
@@ -2315,6 +2331,151 @@ function handleSelectSector(sector) {
   handleOpenSectorOverlay(Number(sector));
 }
 
+// --- Race view ------------------------------------------------------------------------------
+
+function resetRaceView() {
+  state.raceUi = { metric: 'loss', moreOpen: false, splitBusy: false, splitError: null };
+  state.sectionDrill = { open: false, scrollY: 0, label: null, mode: 'loss', lap: null };
+  state.sectionNote = { label: null, draft: null, status: 'idle', error: null };
+  state.mapView = null;
+}
+
+function sectionDrillShown() {
+  return Boolean(state.sectionDrill.open && state.workoutDetailId);
+}
+
+function sectionDrillHtml() {
+  const workout = openWorkout();
+  if (!sectionDrillShown() || !workout) return '';
+  return renderRaceDrill(workout, {
+    drill: state.sectionDrill,
+    fetched: state.sectionsByWorkoutId[workout.id],
+    online: state.online,
+    mapView: state.mapView,
+    note: state.sectionNote.label === state.sectionDrill.label ? state.sectionNote : {},
+  });
+}
+
+/** Lazy, cached GET /sections: the first drill-down open of a race fetches it, later opens reuse it.
+ * Offline there is no request (the overlay falls back to the course map). `force` retries an error. */
+async function loadSections(workoutId, { force = false } = {}) {
+  const settings = state.settingsForm;
+  const identity = state.identity;
+  if (!isConfigured(settings, identity) || !state.online) return;
+  const existing = state.sectionsByWorkoutId[workoutId];
+  if (existing && (existing.status === 'loading' || existing.status === 'ready')) return;
+  if (existing && existing.status === 'error' && !force) return;
+  state.sectionsByWorkoutId = { ...state.sectionsByWorkoutId, [workoutId]: { status: 'loading', data: null, error: null } };
+  render();
+  const started = Date.now();
+  const result = await fetchWorkoutSections({
+    baseUrl: settings.baseUrl, token: settings.token, athlete: identity.athlete, workoutId,
+  });
+  if (handleUnauthorized(result)) return;
+  const durationMs = Date.now() - started;
+  if (result.ok) {
+    log.info('sections.loaded', { athlete: identity.athlete, workout_id: workoutId, duration_ms: durationMs });
+    state.sectionsByWorkoutId = { ...state.sectionsByWorkoutId, [workoutId]: { status: 'ready', data: result.data, error: null } };
+  } else {
+    log.warn('sections.load_failed', { athlete: identity.athlete, workout_id: workoutId, duration_ms: durationMs, error: result.error });
+    state.sectionsByWorkoutId = { ...state.sectionsByWorkoutId, [workoutId]: { status: 'error', data: null, error: result.error } };
+  }
+  render();
+}
+
+function handleOpenSectionDrill(label) {
+  const workout = openWorkout();
+  if (!workout || !label || !hasRaceView(workout)) return;
+  if (state.sectionDrill.open) {
+    state.sectionDrill = { ...state.sectionDrill, label, lap: null };
+  } else {
+    state.sectionDrill = { open: true, scrollY: window.scrollY, label, mode: 'loss', lap: null };
+    history.pushState({ sectionDrill: true }, '');
+  }
+  state.sectionNote = { label, draft: null, status: 'idle', error: null };
+  state.mapView = null;
+  log.info('race.section_opened', { athlete: athleteSlug(), workout_id: workout.id, section: label });
+  render();
+  loadSections(workout.id);
+}
+
+function handleCloseSectionDrill() {
+  if (!state.sectionDrill.open) return; // avoids a redundant render on popstate re-entrancy
+  const { scrollY } = state.sectionDrill;
+  state.sectionDrill = { open: false, scrollY, label: null, mode: 'loss', lap: null };
+  state.mapView = null;
+  render();
+  window.scrollTo(0, scrollY);
+}
+
+function requestCloseSectionDrill() {
+  if (history.state?.sectionDrill) history.back();
+  else handleCloseSectionDrill();
+}
+
+function handleDrillChoice(patch) {
+  state.sectionDrill = { ...state.sectionDrill, ...patch };
+  state.mapView = null;
+  render();
+}
+
+/** Splits (or unsplits) a long section: POSTs the full desired splits map, then swaps the re-analysed
+ * workout into the cache and drops the cached /sections trace (its sections changed). */
+async function handleSectionSplit(label, isSplit) {
+  const settings = state.settingsForm;
+  const workout = openWorkout();
+  if (!workout || !isConfigured(settings, state.identity) || state.raceUi.splitBusy) return;
+  const splits = nextSplits(workout.analytics?.course_sectors?.splits ?? workout.section_splits, label, isSplit);
+  state.raceUi = { ...state.raceUi, splitBusy: true, splitError: null };
+  render();
+  const result = await postWorkoutSectionSplits({
+    baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), workoutId: workout.id, splits,
+  });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    log.info('race.sections_split', { athlete: athleteSlug(), workout_id: workout.id, section: label, unsplit: isSplit });
+    state.workoutHistory = {
+      ...state.workoutHistory,
+      data: state.workoutHistory.data.map((w) => (w.id === workout.id ? result.data : w)),
+    };
+    const rest = { ...state.sectionsByWorkoutId };
+    delete rest[workout.id];
+    state.sectionsByWorkoutId = rest;
+    state.raceUi = { ...state.raceUi, splitBusy: false };
+  } else {
+    log.error('race.sections_split_failed', { athlete: athleteSlug(), workout_id: workout.id, section: label, error: result.error });
+    state.raceUi = { ...state.raceUi, splitBusy: false, splitError: result.error };
+  }
+  render();
+}
+
+async function handleSaveSectionNote(label) {
+  const settings = state.settingsForm;
+  const workout = openWorkout();
+  if (!workout || !isConfigured(settings, state.identity) || state.sectionNote.status === 'submitting') return;
+  const text = (state.sectionNote.draft ?? workout.section_notes?.[label] ?? '').trim();
+  state.sectionNote = { ...state.sectionNote, label, status: 'submitting', error: null };
+  render();
+  const result = await patchWorkout({
+    baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), workoutId: workout.id,
+    payload: { section_notes: { [label]: text } },
+  });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    log.info('race.section_note_saved', { athlete: athleteSlug(), workout_id: workout.id, section: label });
+    state.workoutHistory = {
+      ...state.workoutHistory,
+      data: state.workoutHistory.data.map((w) => (w.id === workout.id
+        ? { ...w, section_notes: { ...(w.section_notes || {}), [label]: text } } : w)),
+    };
+    state.sectionNote = { label, draft: null, status: 'saved', error: null };
+  } else {
+    log.error('race.section_note_failed', { athlete: athleteSlug(), workout_id: workout.id, section: label, error: result.error });
+    state.sectionNote = { ...state.sectionNote, status: 'error', error: result.error };
+  }
+  render();
+}
+
 /** Back to the whole lap: clears the zoom and the sector selection. */
 function resetCourseMap() {
   state.selectedSector = null;
@@ -2389,6 +2550,10 @@ function handleSelectLoadWindow(key) {
 // calling every closer unconditionally needs no extra bookkeeping to stay
 // correct if that ever changes.
 function handlePopState() {
+  if (state.sectionDrill.open) {
+    handleCloseSectionDrill();
+    return;
+  }
   if (state.sectorOverlay.open) {
     handleCloseSectorOverlay();
     return;
@@ -4153,6 +4318,16 @@ async function onAppClick(e) {
     case 'race-start:edit': state.raceStartEdit = { open: true, status: 'idle', error: null }; render(); break;
     case 'race-start:cancel': state.raceStartEdit = null; render(); break;
     case 'race-start:save': await handleSaveRaceStart(); break;
+    case 'race:more-toggle': state.raceUi = { ...state.raceUi, moreOpen: !state.raceUi.moreOpen }; render(); break;
+    case 'race:metric': state.raceUi = { ...state.raceUi, metric: el.dataset.metric }; render(); break;
+    case 'race:section-open':
+    case 'race:section-tab': handleOpenSectionDrill(el.dataset.label); break;
+    case 'race:drill-mode': handleDrillChoice({ mode: el.dataset.mode }); break;
+    case 'race:drill-lap': handleDrillChoice({ lap: Number(el.dataset.lap) }); break;
+    case 'race:drill-close': requestCloseSectionDrill(); break;
+    case 'race:sections-retry': loadSections(state.workoutDetailId, { force: true }); break;
+    case 'race:split': await handleSectionSplit(el.dataset.label, el.dataset.split === 'true'); break;
+    case 'race:note-save': await handleSaveSectionNote(el.dataset.label); break;
     case 'workout:sector-select': handleSelectSector(el.dataset.sector); break;
     case 'workout:map-reset': resetCourseMap(); break;
     case 'sector-overlay:open': handleOpenSectorOverlay(null); break;
@@ -4247,6 +4422,7 @@ function onAppInput(e) {
   // sites (Plan tab session detail, Dashboard tab workout detail) -- see
   // createAskCoachForm's doc comment for why one flat slice covers both.
   else if (formName === 'askCoach') state.askCoachForm[field] = el.value;
+  else if (formName === 'sectionNote') state.sectionNote = { ...state.sectionNote, draft: el.value, status: 'idle' };
   // IDEA 016 Part 2: the conversation composers' drafts live in state (not read off the DOM at
   // send time like the AI chat's), so a polling re-render can never wipe half-typed text.
   else if (formName === 'my-coach') state.myCoach.draft = el.value;
@@ -4333,6 +4509,12 @@ function onAppInput(e) {
 }
 
 function onAppKeydown(e) {
+  const section = e.target.closest?.('g[data-a="race:section-open"]');
+  if (section && (e.key === 'Enter' || e.key === ' ')) {
+    e.preventDefault();
+    handleOpenSectionDrill(section.dataset.label);
+    return;
+  }
   const sector = e.target.closest?.('[data-a="workout:sector-select"]');
   if (sector && (e.key === 'Enter' || e.key === ' ')) {
     e.preventDefault();
@@ -4740,13 +4922,15 @@ appEl.addEventListener('toggle', (event) => {
 appEl.addEventListener('change', onAppChange);
 appEl.addEventListener('input', onAppInput);
 appEl.addEventListener('keydown', onAppKeydown);
+attachChartProbes(appEl);
 attachMapGestures(appEl, { commit: (view) => { state.mapView = view; }, reset: resetCourseMap });
 appEl.addEventListener('touchstart', onRaceDayTouchStart, { passive: true });
 appEl.addEventListener('touchend', onRaceDayTouchEnd, { passive: true });
 appEl.addEventListener('touchstart', onSectorOverlayTouchStart, { passive: true });
 appEl.addEventListener('touchend', onSectorOverlayTouchEnd, { passive: true });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && state.sectorOverlay.open) requestCloseSectorOverlay();
+  if (e.key === 'Escape' && state.sectionDrill.open) requestCloseSectionDrill();
+  else if (e.key === 'Escape' && state.sectorOverlay.open) requestCloseSectorOverlay();
 });
 // Re-render once a minute while the timeline is showing so the current/next highlight advances.
 setInterval(() => {
