@@ -181,7 +181,13 @@ floor (Mateo-March et al. 2025, `reference_list.md`): fade or phase-to-phase dif
 - Workout (needs a matched prescription, else no score and the reason is shown): intensity 50% (share of completed reps whose average sat
   in the prescribed band), completion 30% (reps and duration vs planned), consistency 20% (worst fade across reps/rounds, 100 at <=5%, 0 at 20%).
 - Race: pacing evenness 35% (NP spread across post-start phases), late fade 30% (last phase vs phase 1), start control 15% (start NP over
-  phase 1, free to +20%), lap consistency 20% (lap NP CV, needs 3 laps). A component with no data is dropped and weights renormalized.
+  phase 1; scored by race duration, below), lap consistency 20% (lap NP CV, needs 3 laps). A component with no data is dropped and weights renormalized.
+- Start control scales with race duration (**Coach judgment**; race duration = start phase + post-start phases, not the warm-up). Races of
+  <=90 min (cyclocross, short mass-start): NOT scored and weights renormalized -- a start well above race pace is the goal there (holding
+  back off the line costs position that cannot be won back), so the overshoot is shown as information ("expected for a short mass-start race,
+  not scored"). Races of >=4 h: scored strictly, free to +10% over phase 1, 0 at +40% -- an ultra paced hot early is paid for later, so
+  even pacing is the aim (Coach judgment; not tied to a specific study). Between 90 min and 4 h the free/zero thresholds interpolate
+  linearly from +20%/+60% to +10%/+40%.
 - `intensity_match` is "match" at >=70% of reps in band.
 
 Read the breakdown, not the headline number; a low score is a prompt to look at why, not a verdict.

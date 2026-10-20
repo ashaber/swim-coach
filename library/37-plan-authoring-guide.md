@@ -132,11 +132,19 @@ flow"):
 2. **Update the numbers.** FTP/threshold anchor from real race power/pace
    files; real CTL/TSB from logged history. Run `check_plan` against the
    updated state — don't reason about the next block from stale numbers.
-3. **Adapt the meso.** Map what the debrief surfaced to the next block's
-   limiter and key sessions (e.g. "faded late → over/unders; weak on flats
-   → sustained threshold; strong start → keep one start-rep set"). Propose
-   the change with reasons and the fresh `check_macro`/`check_week`
-   findings; the athlete approves.
+3. **Adapt the meso -- on patterns, not one race.** One race's
+   observations are discussed with the athlete and logged as observations
+   to watch; they do not by themselves change the plan. A training change
+   needs a pattern across several races (>=2-3, Coach judgment), a cause the
+   athlete has confirmed, or a large clear effect. Present several
+   observations as a discussion -- what the data shows, what it can't show,
+   questions for the athlete -- not one headline finding with a
+   prescription. Differences within measurement noise (e.g. section losses
+   under the timing-noise floor) are not findings. When a pattern does
+   justify a change, map it to the next block's limiter and key sessions
+   (e.g. "faded late in three races -> over/unders"), propose it with
+   reasons and the fresh `check_macro`/`check_week` findings; the athlete
+   approves.
 4. **Write and push.** Author sessions through the next race weekend (or
    ~2 weeks, whichever is longer) via `author_week_plan`, check each week,
    and push to the calendar **only after** the athlete has seen the
