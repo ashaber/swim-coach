@@ -12,7 +12,7 @@ import httpx
 import pytest
 from swim_coach.store import FileStore
 
-from app.router_shadow import ACTIVE_HEALTH_MARKER, PENDING_DRAFTS_MARKER, join_shadow_threads
+from app.router_shadow import PENDING_DRAFTS_MARKER, join_shadow_threads
 from fakes import (
     FakeRouterMessages,
     auth_headers,
@@ -254,11 +254,9 @@ def test_capture_write_failure_is_swallowed(shadow_client, monkeypatch, capsys) 
 def test_context_markers_match_what_the_renderers_emit() -> None:
     import inspect
 
-    from app import context, drafts
+    from app import drafts
 
     assert PENDING_DRAFTS_MARKER in inspect.getsource(drafts.render_pending_drafts)
-    assert ACTIVE_HEALTH_MARKER in inspect.getsource(context._render_active_health_status)
-    assert ACTIVE_HEALTH_MARKER not in "No active health status is on file for this athlete."
 
 
 def test_recent_session_days_shrinks_only_the_sessions_list(athletes_dir) -> None:

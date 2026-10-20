@@ -270,3 +270,46 @@ def test_health_status_entries_scoped_to_the_athlete_that_created_them(client) -
     assert andrew_response.status_code == 200
     andrew_ids = [e["id"] for e in andrew_response.json()]
     assert created["id"] not in andrew_ids
+
+def test_resolve_own_health_status_marks_it_resolved(client) -> None:
+    created = client.post("/api/health-status?athlete=renee", json=_valid_payload(), headers=auth_headers()).json()
+    response = client.patch(
+        f"/api/health-status/{created['id']}?athlete=renee", json={"resolved": True}, headers=auth_headers()
+    )
+    assert response.status_code == 200
+    assert response.json()["resolved"] is True and response.json()["resolved_at"]
+    listed = client.get("/api/health-status?athlete=renee", headers=auth_headers()).json()
+    assert next(e for e in listed if e["id"] == created["id"])["resolved"] is True
+
+
+def test_resolve_own_health_status_requires_auth(client) -> None:
+    response = client.patch(
+        "/api/health-status/00000000-0000-0000-0000-000000000000?athlete=renee", json={"resolved": True}
+    )
+    assert response.status_code == 401
+
+
+def test_resolve_must_say_resolved_true(client) -> None:
+    created = client.post("/api/health-status?athlete=renee", json=_valid_payload(), headers=auth_headers()).json()
+    response = client.patch(
+        f"/api/health-status/{created['id']}?athlete=renee", json={"resolved": False}, headers=auth_headers()
+    )
+    assert response.status_code == 422
+
+
+def test_resolve_unknown_id_is_404(client) -> None:
+    response = client.patch(
+        "/api/health-status/00000000-0000-0000-0000-000000000000?athlete=renee",
+        json={"resolved": True}, headers=auth_headers(),
+    )
+    assert response.status_code == 404
+
+
+def test_resolve_never_touches_another_athletes_entry(client) -> None:
+    created = client.post("/api/health-status?athlete=renee", json=_valid_payload(), headers=auth_headers()).json()
+    other = client.patch(
+        f"/api/health-status/{created['id']}?athlete=tim", json={"resolved": True}, headers=auth_headers()
+    )
+    assert other.status_code in (403, 404)
+    listed = client.get("/api/health-status?athlete=renee", headers=auth_headers()).json()
+    assert next(e for e in listed if e["id"] == created["id"])["resolved"] is False

@@ -204,7 +204,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import ValidationError
 
-from swim_coach.health_vocab import BODY_REGIONS, BODY_REGION_WORDS, ONSETS, RESTRICTIONS, SEVERITIES, SOURCES
+from swim_coach.health_vocab import BODY_REGIONS, BODY_REGION_WORDS, ONSETS, RESTRICTION_SEVERITY, RESTRICTIONS, SEVERITIES, SOURCES
 from swim_coach import fueling as fueling_module
 from swim_coach.adapt import adapt_week
 from swim_coach.analysis import analytics_for_coach, has_detailed_analyzer
@@ -1024,7 +1024,10 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "block any plan -- it only makes the status durable and visible. "
             "body_region/onset/severity/related_status_id are all optional "
             "structured extras -- set ONLY what's genuinely clear from what "
-            "was actually said; leave the rest unset rather than guessing."
+            "was actually said; leave the rest unset rather than guessing. "
+            "If an open status for the same body region is already on file, this "
+            "does not add another (unless the restriction is worse): update or "
+            "resolve it instead. To remove or close a status use resolve_health_status."
         ),
         "input_schema": {
             "type": "object",
@@ -1064,10 +1067,39 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
                 "related_status_id": {
                     "type": "string",
-                    "description": "If this is clearly a continuation/recurrence of a specific PRIOR health status already on file (the athlete or coach explicitly says so, or it's unmistakable from context), the id of that earlier entry. Leave unset otherwise -- do not guess at a connection between unrelated reports.",
+                    "description": "If this is clearly a continuation/recurrence of a specific PRIOR health status already on file (the athlete or coach explicitly says so, or it's unmistakable from context), the id of that earlier entry. Also the way to log a same-region update while that status is still open. Leave unset otherwise -- do not guess at a connection between unrelated reports.",
                 },
             },
             "required": ["description", "restriction", "source"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "resolve_health_status",
+        "description": (
+            "Close out health status entries that are over (the athlete says it healed, or asks you to "
+            "remove/clear stale ones). Use the Ids shown in the athlete context's health section, or "
+            "all_open to close every open one. This is the ONLY way to remove a status -- "
+            "record_health_status only ever adds. Nothing is deleted; entries stay in the history marked "
+            "resolved. Only resolve what the athlete (or coach) actually said is resolved."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Ids of the open health status entries to resolve (from the athlete context).",
+                },
+                "all_open": {
+                    "type": "boolean",
+                    "description": "true to resolve every open entry. Use instead of ids, never together with it.",
+                },
+                "note": {
+                    "type": "string",
+                    "description": "Optional short note on why (e.g. 'athlete says healed'); logged, not stored on the entry.",
+                },
+            },
             "additionalProperties": False,
         },
     },
@@ -3486,6 +3518,97 @@ def _normalize_body_region(raw: Any) -> tuple[str | None, str | None]:
     return region, f"body_region {raw!r} was recorded as {region!r} (the coarse region); the description keeps the exact words"
 
 
+def _duplicate_open_region(
+    store: StoreInterface, slug: str, body_region: str | None, restriction: str,
+    related_status_id: uuid.UUID | None,
+) -> dict[str, Any] | None:
+    """The refusal result when an OPEN status for the same body region is already on file, else None.
+
+    Not a duplicate (so it is recorded): no region given; a worse restriction than every open entry
+    in the region (an escalation must always be recordable); or `related_status_id` naming one of the
+    open entries (an explicit same-region update). Nothing is written when this refuses."""
+    if body_region is None:
+        return None
+    same_region = [
+        s for s in store.list_health_status(slug) if not s.resolved and s.body_region == body_region
+    ]
+    if not same_region:
+        return None
+    if related_status_id is not None and any(s.id == related_status_id for s in same_region):
+        return None
+    new_rank = RESTRICTION_SEVERITY.get(restriction, 0)
+    if new_rank > max(RESTRICTION_SEVERITY.get(s.restriction, 0) for s in same_region):
+        return None
+    ids = [str(s.id) for s in same_region]
+    return {
+        "logged": False,
+        "duplicate_of": ids,
+        "message": (
+            f"An open {body_region} status is already on file (id {', '.join(ids)}); nothing was added. "
+            "If it has healed, call resolve_health_status with that id. If this is a change to it, call "
+            "record_health_status again with related_status_id set to that id."
+        ),
+    }
+
+
+def _handle_resolve_health_status(
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str
+) -> dict[str, Any]:
+    """Marks open health status entries resolved (the one in-place mutation the log allows) through
+    `store.update_health_status`, the same call the coach-roster and athlete PATCH routes use.
+    Scoped to `slug`: another athlete's id is reported `not_found`."""
+    ids = input_data.get("ids")
+    all_open = input_data.get("all_open") is True
+    if all_open == bool(ids):
+        return {"error": "pass either ids (a non-empty list) or all_open=true, not both and not neither"}
+
+    entries = store.list_health_status(slug)
+    by_id = {e.id: e for e in entries}
+    targets: list[uuid.UUID] = []
+    missing: list[str] = []
+    if all_open:
+        targets = [e.id for e in entries if not e.resolved]
+    else:
+        if not isinstance(ids, list):
+            return {"error": "ids must be a list of health status ids"}
+        for raw in ids:
+            try:
+                parsed = uuid.UUID(str(raw))
+            except ValueError:
+                return {"error": f"invalid id {raw!r}, expected a UUID from the athlete context"}
+            if parsed in by_id:
+                targets.append(parsed)
+            else:
+                missing.append(str(parsed))
+
+    resolved: list[dict[str, Any]] = []
+    already: list[str] = []
+    now = datetime.now(timezone.utc)
+    for target in dict.fromkeys(targets):
+        entry = by_id[target]
+        if entry.resolved:
+            already.append(str(target))
+            continue
+        updated = store.update_health_status(slug, target, resolved=True, resolved_at=now)
+        if updated is None:
+            missing.append(str(target))
+            continue
+        resolved.append({
+            "id": str(updated.id), "body_region": updated.body_region,
+            "restriction": updated.restriction, "description": updated.description[:120],
+        })
+    log.info(
+        "health statuses resolved", athlete=slug, count=len(resolved), all_open=all_open,
+        note=str(input_data.get("note") or "")[:200],
+    )
+    result: dict[str, Any] = {"updated": bool(resolved), "resolved": resolved}
+    if already:
+        result["already_resolved"] = already
+    if missing:
+        result["not_found"] = missing
+    return result
+
+
 def _handle_record_health_status(
     input_data: dict[str, Any], *, store: StoreInterface, slug: str, expert_mode: bool
 ) -> dict[str, Any]:
@@ -3561,6 +3684,10 @@ def _handle_record_health_status(
         # a health status genuinely cannot be saved without it -- surface the
         # failure rather than silently dropping the record.
         return {"error": f"could not resolve athlete_id for slug {slug!r}"}
+
+    duplicate = _duplicate_open_region(store, slug, body_region, restriction, related_status_id)
+    if duplicate:
+        return duplicate
 
     now = datetime.now(timezone.utc)
     status = HealthStatus(
@@ -10164,6 +10291,9 @@ def build_tool_handlers(
         ),
         "record_health_status": lambda input_data: _handle_record_health_status(
             input_data, store=store, slug=slug, expert_mode=expert_mode
+        ),
+        "resolve_health_status": lambda input_data: _handle_resolve_health_status(
+            input_data, store=store, slug=slug
         ),
         "record_threshold_test": lambda input_data: _handle_record_threshold_test(
             input_data, store=store, slug=slug

@@ -1952,3 +1952,46 @@ def test_profile_json_leaves_race_checklists_to_the_tool(app_env) -> None:
     assert "race_checklist_template" not in profile_section
     assert "race_day_plans" not in profile_section
     assert "Helmet-xyz" not in text
+
+
+def _health_section(app_env) -> str:
+    store = FileStore(base_dir=app_env)
+    text = build_per_request_context(store, "renee", expert_mode=False)
+    return text.split("### Health status")[1].split("### Current week plan")[0]
+
+
+def test_active_health_status_lists_id_age_and_region(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    athlete = store.load_athlete("renee")
+    entry = _health_status(
+        athlete.id, body_region="head_neck", restriction="light_only",
+        reported_at=datetime.now(timezone.utc) - timedelta(days=10),
+    )
+    store.save_health_status("renee", entry)
+    section = _health_section(app_env)
+    assert f"Id: {entry.id}" in section
+    assert "Body region: head_neck" in section
+    assert "10 days ago" in section
+    assert "may be stale" not in section
+
+
+def test_old_unrestricted_status_gets_a_stale_hint(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    athlete = store.load_athlete("renee")
+    old = _health_status(
+        athlete.id, restriction="none", reported_at=datetime.now(timezone.utc) - timedelta(days=40)
+    )
+    store.save_health_status("renee", old)
+    section = _health_section(app_env)
+    assert "40 days ago" in section
+    assert "may be stale" in section and "resolve_health_status" in section
+
+
+def test_stale_hint_needs_age_over_threshold_and_no_restriction(app_env) -> None:
+    store = FileStore(base_dir=app_env)
+    athlete = store.load_athlete("renee")
+    store.save_health_status("renee", _health_status(
+        athlete.id, restriction="none", reported_at=datetime.now(timezone.utc) - timedelta(days=20)))
+    store.save_health_status("renee", _health_status(
+        athlete.id, restriction="light_only", reported_at=datetime.now(timezone.utc) - timedelta(days=90)))
+    assert "may be stale" not in _health_section(app_env)
