@@ -38,11 +38,11 @@ def _fixture(name: str):
 
 
 def _without_dynamics(analytics) -> dict:
-    """The dump minus the MTB-dynamics, race-efficiency and canonical-lap blocks (added after the goldens were
+    """The dump minus the MTB-dynamics, race-efficiency, race-view and canonical-lap blocks (added after the goldens were
     pinned) and the race lap table (now cut from the canonical laps, see test_canonical_laps); these
     fixtures carry no grit/flow, so the dynamics must be absent."""
     assert analytics.mtb_dynamics is None
-    return _golden_shape(analytics.model_dump(mode="json", exclude={"mtb_dynamics", "course_sectors", "race_efficiency", "laps"}))
+    return _golden_shape(analytics.model_dump(mode="json", exclude={"mtb_dynamics", "course_sectors", "race_efficiency", "laps", "race_overview", "race_start", "finish_sprint"}))
 
 
 def _golden_shape(dump: dict) -> dict:

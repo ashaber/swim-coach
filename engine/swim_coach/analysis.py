@@ -88,7 +88,7 @@ SWIM_FIELDS: frozenset[str] = frozenset(
     }
 )
 BIKE_FIELDS: frozenset[str] = frozenset(
-    {"intervals", "avg_power_w", "normalized_power_w", "power_curve", "free_ride", "mtb_dynamics", "course_sectors", "race_efficiency", "laps"}
+    {"intervals", "avg_power_w", "normalized_power_w", "power_curve", "free_ride", "mtb_dynamics", "course_sectors", "race_efficiency", "laps", "race_overview", "race_start", "finish_sprint"}
 )
 
 
@@ -111,7 +111,7 @@ class WorkoutAnalyzer(Protocol):
 
     def analyze(self, workout: Workout, ctx: AnalysisContext) -> WorkoutAnalytics: ...
 
-    def coach_view(self, analytics: WorkoutAnalytics | None) -> dict | None: ...
+    def coach_view(self, analytics: WorkoutAnalytics | None, section_notes: Mapping[str, str] | None = None) -> dict | None: ...
 
     def needs_neighbors(self, kind: SessionKind) -> bool:
         """Whether analysing a workout of this kind reads the planned sessions around it
@@ -133,15 +133,15 @@ class _CoachViewMixin:
     def needs_neighbors(self, kind: SessionKind) -> bool:
         return False
 
-    def _shape(self, out: dict, analytics: WorkoutAnalytics) -> dict:
+    def _shape(self, out: dict, analytics: WorkoutAnalytics, section_notes: Mapping[str, str] | None = None) -> dict:
         return out
 
-    def coach_view(self, analytics: WorkoutAnalytics | None) -> dict | None:
+    def coach_view(self, analytics: WorkoutAnalytics | None, section_notes: Mapping[str, str] | None = None) -> dict | None:
         if analytics is None:
             return None
         keep = BASE_FIELDS | self.fields
         out = {k: v for k, v in analytics.model_dump(mode="json").items() if k in keep}
-        return prune_nulls(self._shape(out, analytics))
+        return prune_nulls(self._shape(out, analytics, section_notes))
 
 
 def _elapsed_min(workout: Workout, ctx: AnalysisContext) -> float | None:
@@ -221,8 +221,8 @@ class BikeAnalyzer(_CoachViewMixin):
     detailed = True
     structured_is_key = True
 
-    def _shape(self, out: dict, analytics: WorkoutAnalytics) -> dict:
-        return shape_ride_view(out, analytics)
+    def _shape(self, out: dict, analytics: WorkoutAnalytics, section_notes: Mapping[str, str] | None = None) -> dict:
+        return shape_ride_view(out, analytics, dict(section_notes or {}))
 
     def analyze(self, workout: Workout, ctx: AnalysisContext) -> WorkoutAnalytics:
         analytics = self._analyze_by_kind(workout, ctx)
@@ -357,10 +357,10 @@ def has_detailed_analyzer(sport: str) -> bool:
     return analyzer_for(sport).detailed
 
 
-def analytics_for_coach(analytics: WorkoutAnalytics | None, sport: str) -> dict | None:
+def analytics_for_coach(analytics: WorkoutAnalytics | None, sport: str, section_notes: Mapping[str, str] | None = None) -> dict | None:
     """`WorkoutAnalytics` as the JSON dict the coach reads on per-workout detail surfaces (never
     the always-loaded context): the sport's analyzer decides which fields and in what order."""
-    return analyzer_for(sport).coach_view(analytics)
+    return analyzer_for(sport).coach_view(analytics, section_notes)
 
 
 def analyze_workout(workout: Workout, ctx: AnalysisContext) -> WorkoutAnalytics:

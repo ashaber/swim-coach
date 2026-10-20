@@ -167,7 +167,10 @@ COURSE_SECTORS_COACH_NOTE = (
     "~20 above 60 deg/s), is higher at lower speed, and has ~1-2 s memory -- so sector flow reflects that "
     "sector's cornering and how cleanly it was ridden. Compare the SAME sector across laps, never different "
     "sectors. Grit per second showed no relation to turning, speed or power (|r| < 0.11): treat it as course "
-    "roughness/difficulty."
+    "roughness/difficulty. Every section edge carries timing noise (1 Hz GPS): a section's loss is only a "
+    "finding when it clears the noise floor, so losses inside it are never findings and top_loss_sectors "
+    "may be empty. Extra watts (efficiency sections: corners, descents of 10+ s) is a pass's power over "
+    "the cheapest pass that was at least as fast; free speed is a pass as fast as another on 30+ W less."
 )
 COACH_TOP_LOSS_SECTORS = 3
 COACH_TOP_JUMPS = 3
@@ -233,8 +236,24 @@ def _section_line(s: dict, prev: dict | None, count: int) -> str:
     return line
 
 
-def course_sectors_coach_view(cs: dict) -> dict:
-    """Lap trend + the top loss sectors (the full sector table stays in the stored analytics)."""
+def _free_speed_line(f: dict) -> str:
+    return (f"{f['label']} lap {f['lap']} matched lap {f['vs_lap']} ({f['time_s']:.1f} vs {f['vs_time_s']:.1f} s) "
+            f"on {f['watts_saved']:.0f} W less ({f['power_w']:.0f} vs {f['vs_power_w']:.0f} W)")
+
+
+def _noise_line(cs: dict) -> str | None:
+    if cs.get("edge_noise_s") is None:
+        return None
+    line = f"section edge timing noise ~{cs['edge_noise_s']:.1f}s; losses inside each section's noise floor are not findings"
+    if cs.get("ideal_gap_noise_s") is not None:
+        line += (f"; of the {cs['ideal_gap_s']:.1f}s best-lap-to-ideal gap ~{cs['ideal_gap_noise_s']:.1f}s is what noise alone "
+                 f"produces ({cs['ideal_gap_beyond_noise_s']:.1f}s beyond it)")
+    return line
+
+
+def course_sectors_coach_view(cs: dict, section_notes: dict | None = None) -> dict:
+    """Lap trend + the top loss sectors (the full sector table stays in the stored analytics), free-speed
+    passes, the timing-noise statement and the athlete's notes on sections."""
     fade = cs.get("fade") or {}
     trend = [f"time {fade['time_change_pct']:+.1f}% first to last lap"]
     if fade.get("power_change_pct") is not None:
@@ -257,12 +276,19 @@ def course_sectors_coach_view(cs: dict) -> dict:
     if cs.get("ideal_lap_s") is not None:
         ideal = (f"Ideal lap {_clock(cs['ideal_lap_s'])} (best sectors combined); the best lap is "
                  f"{cs['ideal_gap_s']:.1f}s slower than that")
+    extra = [f"{s['label']} {s['mean_extra_w']:.0f} W" for s in sorted(
+        (r for r in rows if r.get("mean_extra_w") is not None), key=lambda r: -r["mean_extra_w"])[:COACH_TOP_LOSS_SECTORS]]
+    notes = [f"{label}: {text}" for label, text in (section_notes or {}).items() if any(r.get("label") == label for r in rows)]
     return {
         "coach_note": COURSE_SECTORS_COACH_NOTE,
         "lap_trend": ", ".join(trend),
         "ideal_lap": ideal,
+        "timing_noise": _noise_line(cs),
         "laps": laps,
-        "top_loss_sectors": top,
+        "top_loss_sectors": top or ("none clears the timing noise" if rows else None),
+        "free_speed": [_free_speed_line(f) for f in cs.get("free_speed") or []],
+        "most_extra_watts_per_pass": ", ".join(extra) or None,
+        "athlete_notes_on_sections": notes,
     }
 
 
@@ -325,7 +351,7 @@ def laps_coach_view(laps: list[dict]) -> dict:
     return {"coach_note": LAPS_COACH_NOTE, "laps": lines}
 
 
-def shape_ride_view(out: dict, analytics: WorkoutAnalytics) -> dict:
+def shape_ride_view(out: dict, analytics: WorkoutAnalytics, section_notes: dict | None = None) -> dict:
     """`out` is the field-restricted dump; returns it with the compact curve first and the
     intervals reordered and slimmed; a free ride's compact `free_ride` block leads everything.
     Null pruning is left to the caller."""
@@ -339,9 +365,10 @@ def shape_ride_view(out: dict, analytics: WorkoutAnalytics) -> dict:
     if out.get("mtb_dynamics"):
         dynamics["mtb_dynamics"] = mtb_coach_view(out.pop("mtb_dynamics"))
     if out.get("course_sectors"):
-        dynamics["course_sectors"] = course_sectors_coach_view(out.pop("course_sectors"))
+        dynamics["course_sectors"] = course_sectors_coach_view(out.pop("course_sectors"), section_notes)
     out.pop("mtb_dynamics", None)
     out.pop("course_sectors", None)
+    race_lines = race_view_lines(out.pop("race_overview", None), out.pop("race_start", None), out.pop("finish_sprint", None))
     efficiency = race_efficiency_coach_view(out.pop("race_efficiency")) if out.get("race_efficiency") else None
     if out.get("laps"):
         dynamics = {"laps": laps_coach_view(out.pop("laps")), **dynamics}
@@ -353,7 +380,40 @@ def shape_ride_view(out: dict, analytics: WorkoutAnalytics) -> dict:
         out = {**dynamics, **out}
     if efficiency:
         out = {"race_efficiency": efficiency, **out}
+    if race_lines:
+        out = {"race_view": race_lines, **out}
     if out.get("free_ride"):
         out.pop("cardiac_drift_pct", None)  # no whole-ride drift verdict; the block carries steady-stretch drift
         out = {"free_ride": free_ride_coach_view(out.pop("free_ride")), **out}
+    return out
+
+
+def race_view_lines(overview: dict | None, start: dict | None, sprint: dict | None) -> dict:
+    """Terse lines for the race window, the first 40 s (dip, previous race) and a finish sprint."""
+    out: dict = {}
+    if overview:
+        bits = [f"{_clock(overview['duration_s'])} from the start to the line"]
+        if overview.get("distance_m") is not None:
+            bits.append(f"{overview['distance_m'] / 1000:.1f} km")
+        if overview.get("avg_power_w") is not None:
+            bits.append(f"avg {overview['avg_power_w']} W / NP {overview.get('np_w')} W / max {overview.get('max_power_w')} W, {overview.get('work_kj')} kJ")
+        if overview.get("avg_hr") is not None:
+            bits.append(f"HR {overview['avg_hr']} avg / {overview.get('max_hr')} max")
+        if overview.get("avg_speed_kmh") is not None:
+            bits.append(f"{overview['avg_speed_kmh']} km/h avg / {overview.get('max_speed_kmh')} max")
+        if overview.get("avg_cadence_rpm") is not None:
+            bits.append(f"cadence {overview['avg_cadence_rpm']}")
+        out["race_overview"] = ", ".join(bits)
+    if start:
+        line = (f"peak {start['peak_w']} W at {start['peak_at_s']}s, 5s avg {start['mean_5s_w']} W, 15s avg {start['mean_15s_w']} W, "
+                f"top {start['top_speed_kmh']} km/h at {start['top_speed_at_s']}s")
+        if start.get("dip"):
+            line += f"; power fell to {start['dip']['power_w']} W at {start['dip']['at_s']}s (a shift or bobble?)"
+        prev = start.get("previous")
+        if prev:
+            line += f"; previous race ({prev['date']}): 15s avg {prev.get('mean_15s_w')} W, top {prev.get('top_speed_kmh')} km/h"
+        out["race_start_trace"] = line
+    if sprint:
+        out["finish_sprint"] = (f"{sprint['duration_s']}s avg {sprint['avg_w']} W (peak {sprint['peak_w']} W), "
+                                f"{sprint.get('entry_speed_kmh')} -> {sprint.get('exit_speed_kmh')} km/h to the line")
     return out

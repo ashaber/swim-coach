@@ -2242,7 +2242,7 @@ class RaceOverview(BaseModel):
     total_grit: float | None = None
 
 
-class StartDip(BaseModel):
+class RaceStartDip(BaseModel):
     at_s: int
     power_w: int
 
@@ -2268,7 +2268,7 @@ class RaceStartTrace(BaseModel):
     mean_15s_w: int
     top_speed_kmh: float
     top_speed_at_s: int
-    dip: StartDip | None = None
+    dip: RaceStartDip | None = None
     previous: PreviousRaceStart | None = None
 
 
@@ -2488,6 +2488,11 @@ class Workout(BaseModel):
     section_splits: dict[str, Annotated[int, Field(ge=2, le=4)]] = Field(default_factory=dict)
     # Athlete/coach notes per course-section label (<= 280 chars each), shown beside the section.
     section_notes: dict[str, Annotated[str, Field(max_length=280)]] = Field(default_factory=dict)
+    @field_validator("section_notes")
+    @classmethod
+    def _drop_blank_section_notes(cls, v: dict[str, str]) -> dict[str, str]:
+        return {label.strip(): text.strip() for label, text in v.items() if label.strip() and text.strip()}
+
     # Deterministic mute switch: a plain boolean, not something inferred from
     # scanning message history, so it's a reliable control either party (or
     # the AI itself, told to recognize an explicit "stop responding here")

@@ -2174,7 +2174,7 @@ def render_focused_workout(
         "notes": workout.notes,
         "avg_hr": workout.avg_hr,
         "max_hr": workout.max_hr,
-        "analytics": analytics_for_coach(workout.analytics, sport=workout.sport),
+        "analytics": analytics_for_coach(workout.analytics, sport=workout.sport, section_notes=workout.section_notes),
         "load_au": load_au,
         "load_tier": load_tier,
     }

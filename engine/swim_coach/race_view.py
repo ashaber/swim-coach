@@ -20,7 +20,7 @@ from swim_coach.models import (
     PreviousRaceStart,
     RaceOverview,
     RaceStartTrace,
-    StartDip,
+    RaceStartDip,
     Workout,
 )
 from swim_coach.mtb_dynamics import has_channel, mean_nonzero, mean_present, sum_grit, window_indices
@@ -99,7 +99,7 @@ def build_race_start_trace(series: dict, start_s: float, previous: PreviousRaceS
     peak = max(power)
     top = max(speed)
     dip_at = min(range(DIP_FROM_S, DIP_TO_S + 1), key=lambda k: power[k])
-    dip = StartDip(at_s=dip_at, power_w=power[dip_at]) if power[dip_at] < DIP_FRAC_OF_MEAN * mean_15 else None
+    dip = RaceStartDip(at_s=dip_at, power_w=power[dip_at]) if power[dip_at] < DIP_FRAC_OF_MEAN * mean_15 else None
     return RaceStartTrace(
         power_w=power, speed_kmh=speed, peak_w=peak, peak_at_s=power.index(peak), mean_5s_w=mean_5, mean_15s_w=mean_15,
         top_speed_kmh=top, top_speed_at_s=speed.index(top), dip=dip, previous=previous,

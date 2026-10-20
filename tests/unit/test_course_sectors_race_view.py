@@ -117,6 +117,25 @@ def test_splitting_a_section_recomputes_the_table() -> None:
     assert [t.name for t in split.track.sectors][:5] == labels[:5]
 
 
+def test_coach_view_states_the_noise_notes_and_never_presents_noise_as_a_finding() -> None:
+    from swim_coach.bike_coach_view import course_sectors_coach_view
+
+    _, cs = _build()
+    view = course_sectors_coach_view(cs.model_dump(), {"C1": "sand pit before the barriers", "ZZ": "not a section"})
+    assert view["top_loss_sectors"] == "none clears the timing noise"
+    assert "timing noise" in view["timing_noise"] and "best-lap-to-ideal gap" in view["timing_noise"]
+    assert view["athlete_notes_on_sections"] == ["C1: sand pit before the barriers"]
+
+
+def test_coach_view_lists_free_speed_passes() -> None:
+    from swim_coach.bike_coach_view import course_sectors_coach_view
+
+    _, cs = _build()
+    dumped = cs.model_dump()
+    dumped["free_speed"] = [{"label": "C4", "lap": 5, "time_s": 16.0, "power_w": 134.0, "vs_lap": 4, "vs_time_s": 16.3, "vs_power_w": 183.0, "watts_saved": 49.0}]
+    assert course_sectors_coach_view(dumped)["free_speed"] == ["C4 lap 5 matched lap 4 (16.0 vs 16.3 s) on 49 W less (134 vs 183 W)"]
+
+
 def test_splits_outside_two_to_four_parts_are_ignored() -> None:
     _, cs = _build(section_splits={"C1": 9, "S1": 1})
     assert cs.splits == {} and cs.sector_count == _build()[1].sector_count
