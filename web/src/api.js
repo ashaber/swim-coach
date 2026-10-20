@@ -444,6 +444,31 @@ export async function fetchWorkoutPacing({ baseUrl, token, athlete, workoutId })
   });
 }
 
+/** GET {baseUrl}/api/workouts/{workoutId}/sections?athlete=<slug> -- the race view's section
+ * drill-down data: the course outline plus, per section, its bounding box and every lap's
+ * per-second points and pieces. Fetched lazily on the first drill-down open (never with the list). */
+export async function fetchWorkoutSections({ baseUrl, token, athlete, workoutId }) {
+  return apiRequest({
+    baseUrl, token,
+    path: `/api/workouts/${encodeURIComponent(workoutId)}/sections?athlete=${encodeURIComponent(athlete)}`,
+  });
+}
+
+/** POST {baseUrl}/api/workouts/{workoutId}/section-splits?athlete=<slug> -- splits long sections
+ * into equal parts (`{ "C3": 3 }`); an empty map undoes every split. The backend re-runs the
+ * analysis and returns the updated workout. */
+export async function postWorkoutSectionSplits({
+  baseUrl, token, athlete, workoutId, splits,
+}) {
+  return apiRequest({
+    baseUrl,
+    token,
+    path: `/api/workouts/${encodeURIComponent(workoutId)}/section-splits?athlete=${encodeURIComponent(athlete)}`,
+    method: 'POST',
+    body: { splits },
+  });
+}
+
 /**
  * GET {baseUrl}/api/sessions/{sessionId}/garmin.fit?athlete=<slug> --
  * downloads a session's structured workout as a real Garmin .FIT file (see

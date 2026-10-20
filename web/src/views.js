@@ -19,6 +19,9 @@ import {
   timelineClock, timelinePosition, formatClockTime, MAX_ITEM_TEXT,
 } from './raceDay.js';
 import { TOOL_LABELS } from './chat.js';
+import { esc } from './html.js';
+import { buildDrill, buildRaceView } from './raceView.js';
+import { renderRaceCards, renderSectionDrill } from './raceViewRender.js';
 import { renderSessionIcon } from './icons.js';
 import { renderChatMarkdown } from './markdown.js';
 import { createThreadState } from './conversation.js';
@@ -36,13 +39,6 @@ import {
   formatOffset, formatClock, formatLengthsSummary, formatSyncResult,
   formatWorkoutChatLabel, HISTORY_DISPLAY_CAP, formatPower,
 } from './workouts.js';
-
-function esc(value) {
-  if (value === null || value === undefined) return '';
-  return String(value).replace(/[&<>"']/g, (c) => (
-    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-  ));
-}
 
 // D2: which of `session_load`'s four fidelity tiers produced a logged
 // workout's `load_au` (see `engine/swim_coach/load.py`'s `SessionLoad.tier`
@@ -3502,6 +3498,27 @@ function renderConversationThread({
     </section>`;
 }
 
+/** The race view's folded extras: power curve, race-start adjust, ride details, then the raw analysis
+ * (its own toggle, wired by main.js; hidden where that panel is not wired). */
+function renderRaceFolds(workout, pacing, { raceStartEdit, editable, rawAnalysisOpen }) {
+  const fold = (title, body) => (body ? `<details class="rv-fold"><summary>${title}</summary>${body}</details>` : '');
+  const startControl = renderRaceStartControl(workout, pacing, raceStartEdit, editable);
+  return `
+    ${fold('Power curve', renderPowerCurveSection(workout))}
+    ${fold('Race start', startControl)}
+    ${fold('Ride details', renderDetailStats(workout))}
+    ${rawAnalysisOpen === null ? '' : renderRawAnalysisSection(workout, pacing, rawAnalysisOpen)}`;
+}
+
+/** Full-screen drill-down for one section of a race. `drill` is main.js's `{label, mode, lap}`. */
+export function renderRaceDrill(workout, {
+  drill, fetched, online, mapView, note,
+}) {
+  return renderSectionDrill(buildDrill(workout, {
+    label: drill.label, mode: drill.mode, lap: drill.lap, fetched, online, mapView,
+  }), note);
+}
+
 /** `askCoach` (coach-mode Q&A build): `{ feedback, form, submit }`, same
  * shape `renderPlanSessionDetail` takes -- `feedback` is filtered here (via
  * `feedbackForWorkout`) down to just this workout's own questions. This
@@ -3516,19 +3533,36 @@ export function renderWorkoutDetail(workout, {
   chat, online, rpeEdit = null, editable = false, pacing = null, raceDebriefs = [],
   viewerRole = 'athlete', coachChatSubmitting = false,
   weeks = [], ftpWatts = null, rawAnalysisOpen = null, kindEdit = null, selectedSector = null, mapView = null,
-  raceStartEdit = null,
+  raceStartEdit = null, raceUi = {},
 } = {}) {
   const badge = sourceBadge(workout.source);
   const shapeSection = renderCompletedShapeSection(workout, pacing, weeks, ftpWatts);
   // `renderAskCoachSection` (the old single-turn Feedback-based Q&A) is gone from here
   // entirely -- superseded by the unified thread below (IDEA 016); it's still used,
   // unchanged, for PLAN SESSIONS (renderPlanSessionDetail).
-  return `
+  const thread = renderWorkoutThread(viewerRole === 'coach' ? {
+    workout, viewerRole, online, submitting: coachChatSubmitting,
+    inputId: 'roster-workout-chat-input', sendAction: 'roster:workout-chat:send', muteAction: 'roster:workout-chat:mute-toggle',
+  } : {
+    workout, viewerRole, streamingChat: chat, online,
+    inputId: 'workout-chat-input', sendAction: 'workout-chat:send', muteAction: 'workout-chat:mute-toggle',
+  });
+  const header = `
     <div class="detail-header">
       <h3>${esc(sportLabel(workout.sport, workout.sport_detail))}</h3>
       <div class="hist-meta mono">${esc(formatLongDate(parseIsoDate(workout.date.slice(0, 10))))}${badge ? ` <span class="chat-chip">${esc(badge)}</span>` : ''}</div>
     </div>
-    ${renderKindRow(workout, editable, kindEdit)}
+    ${renderKindRow(workout, editable, kindEdit)}`;
+  const raceModel = buildRaceView(workout, { metric: raceUi.metric });
+  if (raceModel) {
+    return `${header}
+    ${renderRaceCards(raceModel, raceUi)}
+    ${renderRaceFolds(workout, pacing, { raceStartEdit, editable, rawAnalysisOpen })}
+    ${editable ? renderRpeEditSection(workout, rpeEdit) : ''}
+    ${renderRaceDebriefSection(workout, raceDebriefs)}
+    ${thread}`;
+  }
+  return `${header}
     ${renderDetailStats(workout)}
     ${shapeSection}
     ${editable ? renderRpeEditSection(workout, rpeEdit) : ''}
@@ -3544,13 +3578,7 @@ export function renderWorkoutDetail(workout, {
     ${renderMainLapsSection(workout, pacing, rawAnalysisOpen)}
     ${renderLengthsSummarySection(workout.lengths)}
     ${renderDetailNotes(workout.notes)}
-    ${renderWorkoutThread(viewerRole === 'coach' ? {
-      workout, viewerRole, online, submitting: coachChatSubmitting,
-      inputId: 'roster-workout-chat-input', sendAction: 'roster:workout-chat:send', muteAction: 'roster:workout-chat:mute-toggle',
-    } : {
-      workout, viewerRole, streamingChat: chat, online,
-      inputId: 'workout-chat-input', sendAction: 'workout-chat:send', muteAction: 'workout-chat:mute-toggle',
-    })}`;
+    ${thread}`;
 }
 
 // --- Profile edit (Settings tab section) --------------------------------------
