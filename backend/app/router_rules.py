@@ -129,19 +129,17 @@ def match_pre_rule(
     *,
     history: Sequence[dict[str, Any]],
     has_pending_draft: bool,
-    has_active_health_status: bool,
     sports: Iterable[str] | None = None,
 ) -> PreRuleHit | None:
     """The first rule that fires for this turn, or None (then Haiku may triage it).
 
     `history` is the conversation before `message` (any non-empty history means an assistant turn
     exists, since turns alternate). `sports` (the athlete's effective sports) selects the
-    sport-specific health terms. The two flags come from the athlete context the request already
-    built (see app.router_shadow.context_flags)."""
+    sport-specific health terms. `has_pending_draft` comes from the athlete context the request already
+    built (see app.router_shadow.context_flag). An open health status is deliberately NOT a rule: only
+    a REPORTED symptom (the health keyword rules, or Haiku's own health category) escalates."""
     if has_pending_draft:
         return PreRuleHit(CATEGORY_CONFIRMATION, "pending_draft")
-    if has_active_health_status:
-        return PreRuleHit(CATEGORY_HEALTH, "active_health_status")
     words = _words(message)
     groups = health_group_matches(message, sports)
     for rule in PRE_RULES:

@@ -94,8 +94,10 @@ using only facts from the context or tool results (never invent numbers, dates o
 route = "escalate" for: anything that would create, change, move, swap, save, log or push a plan or
 profile item; any pain, injury, illness, symptom or other health concern (however minor); deep or
 multi-step analysis (race debriefs, why-did-I-fade, season or macro planning); advice you are not
-sure of; a short "yes/ok/do it" reply to a proposal; anything where you are uncertain. When you
-escalate, `reply` is not needed. Never claim to have saved, changed, logged or pushed anything.
+sure of; a short "yes/ok/do it" reply to a proposal; anything where you are uncertain. Open health statuses are
+listed in the athlete context: if the message relates to one of them or reports any symptom,
+escalate. Otherwise you may answer, and you must never prescribe or loosen training restrictions.
+When you escalate, `reply` is not needed. Never claim to have saved, changed, logged or pushed anything.
 
 Also set: `complexity` 0-1 (0 = trivial lookup or greeting, 0.5 = the line above which the full
 coach is warranted, 1 = deep multi-step analysis); `confidence` 0-1 in your route decision;

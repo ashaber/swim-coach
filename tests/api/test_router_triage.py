@@ -13,6 +13,7 @@ import pytest
 from app.claude import with_loop_breakpoint
 from app.router_triage import (
     CEILING_TOKENS,
+    HAIKU_INSTRUCTIONS,
     HAIKU_MAX_ITERATIONS,
     HAIKU_TOOL_ALLOWLIST,
     PRICE_STEP_TOKENS,
@@ -381,3 +382,9 @@ def test_api_error_propagates_to_the_caller() -> None:
     req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
     with pytest.raises(anthropic.APIConnectionError):
         _run([anthropic.APIConnectionError(request=req)])
+
+
+def test_instructions_escalate_on_symptoms_but_do_not_treat_an_open_status_as_a_trigger() -> None:
+    text = " ".join(HAIKU_INSTRUCTIONS.split())
+    assert "relates to one of them or reports any symptom, escalate" in text
+    assert "never prescribe or loosen training restrictions" in text
