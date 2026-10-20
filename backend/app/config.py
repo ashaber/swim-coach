@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +26,8 @@ except ImportError:  # pragma: no cover - python-dotenv is a listed dependency
 
 _REQUIRED_VARS = ("ANTHROPIC_API_KEY", "API_TOKEN", "GOOGLE_CLIENT_ID")
 _VALID_THINKING_MODES = ("adaptive", "disabled")
+_VALID_ROUTER_MODES = ("off", "shadow")  # "on" is a reserved seam, deliberately not accepted yet
+_ROUTER_MODEL_RE = re.compile(r"claude-[A-Za-z0-9._-]+")
 
 # Model-ID prefixes that reject `thinking: {"type": "disabled"}` with a 400 (Anthropic models
 # docs, checked 2026-10-20: Sonnet 5.5 supports adaptive thinking only).
@@ -142,6 +145,16 @@ class Settings:
     # Output-token cap per model call (thinking + text + tool input combined). A week of bike
     # sessions authored as `structured` JSON blew through 16384 in prod 2026-10-18. CLAUDE_MAX_TOKENS.
     claude_max_tokens: int = 32000
+    # Haiku-first coach router (backend/app/router_shadow.py). COACH_ROUTER_MODE: "off" (default,
+    # nothing runs) | "shadow" (Haiku triages every eligible message alongside the normal Sonnet
+    # turn; its decision is only logged, the athlete still gets Sonnet's answer). "on" (Haiku's
+    # answer is shown, Sonnet only on escalate) is the reserved seam for a later PR and is rejected
+    # at startup until it exists.
+    router_mode: str = "off"
+    router_model: str = "claude-haiku-5-5"
+    # COACH_ROUTER_CAPTURE_ATHLETES: slugs whose Haiku reply (and question + Sonnet reply) is stored
+    # in router_shadow_captures for human comparison. Empty = nothing stored. Never logged.
+    router_capture_athletes: frozenset[str] = frozenset()
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -209,6 +222,19 @@ class Settings:
 
         claude_max_tokens = _parse_max_tokens(os.environ.get("CLAUDE_MAX_TOKENS", "32000"))
 
+        router_mode = os.environ.get("COACH_ROUTER_MODE", "off").strip().lower() or "off"
+        if router_mode not in _VALID_ROUTER_MODES:
+            raise ConfigError(
+                f"COACH_ROUTER_MODE must be one of {_VALID_ROUTER_MODES} ('on' is not implemented yet), "
+                f"got {router_mode!r}"
+            )
+        router_model = os.environ.get("COACH_ROUTER_MODEL", "claude-haiku-5-5").strip() or "claude-haiku-5-5"
+        if not _ROUTER_MODEL_RE.fullmatch(router_model):
+            raise ConfigError(f"COACH_ROUTER_MODEL must look like 'claude-...', got {router_model!r}")
+        router_capture_athletes = frozenset(
+            s.strip() for s in os.environ.get("COACH_ROUTER_CAPTURE_ATHLETES", "").split(",") if s.strip()
+        )
+
         athletes_dir = Path(os.environ.get("ATHLETES_DIR", "../athletes"))
         # research/open-questions.jsonl (IDEA 005) lives alongside
         # athletes/ and library/ rather than under either -- derived from
@@ -253,6 +279,9 @@ class Settings:
             in ("1", "true", "yes", "on"),
             library_admins=library_admins,
             claude_max_tokens=claude_max_tokens,
+            router_mode=router_mode,
+            router_model=router_model,
+            router_capture_athletes=router_capture_athletes,
         )
 
     def token_matches(self, provided_token: str) -> bool:
