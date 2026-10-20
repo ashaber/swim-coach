@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { renderCoachTab, renderWorkoutDetail, renderRosterTrainingPlanBody } from '../../src/views.js';
 import { setDraft, getDraft, clearDraft } from '../../src/composerDrafts.js';
+import { setOpenSheetKey } from '../../src/threadSheet.js';
 
 const XSS = 'hi <b>"x"</b> & more';
 const ESCAPED = 'hi &lt;b&gt;&quot;x&quot;&lt;/b&gt; &amp; more';
@@ -29,12 +30,16 @@ describe('chat composer drafts survive a re-render', () => {
 
   it('workout and roster-workout composers re-emit a draft keyed per workout', () => {
     const workout = { id: 'w1', sport: 'swim_pool', date: '2026-10-01T00:00:00Z', chat_messages: [] };
+    setOpenSheetKey('workout:w1');
     setDraft('workout-chat-input:w1', XSS);
     setDraft('roster-workout-chat-input:w1', XSS);
     expect(taOf(renderWorkoutDetail(workout, { online: true, chat: null }), 'workout-chat-input')).toBe(ESCAPED);
+    setOpenSheetKey('roster-workout:w1');
     expect(taOf(renderWorkoutDetail(workout, { online: true, viewerRole: 'coach' }), 'roster-workout-chat-input')).toBe(ESCAPED);
     const other = { ...workout, id: 'w2' };
+    setOpenSheetKey('workout:w2');
     expect(taOf(renderWorkoutDetail(other, { online: true, chat: null }), 'workout-chat-input')).toBe('');
+    setOpenSheetKey(null);
     clearDraft('workout-chat-input:w1');
     clearDraft('roster-workout-chat-input:w1');
   });

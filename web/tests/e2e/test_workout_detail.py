@@ -230,8 +230,11 @@ def test_shows_the_real_persisted_chat_thread_not_the_old_ask_coach_box(page):
     assert '#coach-conversation' not in content
     assert 'coming soon' not in content
     assert page.locator('[data-form="askCoach"]').count() == 0
-    # The real, persisted thread -- input box, send, and mute toggle.
-    assert 'Ask your coach about this workout' in content
+    # The real, persisted thread lives in the sheet: a pinned button opens it; input box, send, mute inside.
+    assert page.locator('[data-a="thread-sheet:open"]').count() == 1
+    page.click('[data-a="thread-sheet:open"]')
+    page.wait_for_selector('#workout-chat-input')
+    assert 'This workout only' in page.content()
     assert page.locator('#workout-chat-input').count() == 1
     assert page.locator('[data-a="workout-chat:mute-toggle"]').count() == 1
 

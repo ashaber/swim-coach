@@ -27,6 +27,7 @@ import { renderChatMarkdown } from './markdown.js';
 import { createThreadState } from './conversation.js';
 import { getDraft } from './composerDrafts.js';
 import { renderChatPanel } from './chatPanel.js';
+import { isSheetOpen, sheetKeyFor } from './threadSheet.js';
 import { buildHistoryFeed } from './history.js';
 import {
   LIBRARY_SORTS, DEFAULT_LIBRARY_SORT, sortLibraryFiles, fileAddedDate, isNewFile, formatAddedLabel,
@@ -567,7 +568,9 @@ function renderPlanSessionDetail(session, sessionPush, showGarminActions = true,
       <h4>Purpose</h4>
       <p class="detail-notes">${esc(purpose)}</p>
     </section>` : ''}
-    ${renderAskCoachSection({
+    ${askCoach?.thread
+    ? renderSessionThread({ session, thread: askCoach.thread, online: askCoach.online !== false })
+    : renderAskCoachSection({
       questions: feedbackForSession(askCoach?.feedback, session),
       form: askCoach?.form ?? null,
       submit: askCoach?.submit,
@@ -2150,7 +2153,7 @@ function renderAiCoachTab({
   return `
     <div class="wrap chat-wrap chat-panel">
       ${renderChatPanel({
-        header, banner, body, composer, pillId: 'chat-new-pill', pillAction: 'chat:jump-bottom',
+        header, banner, body, composer, pillId: 'chat-new-pill', pillAction: 'chat:jump-bottom', pillExtra: 'data-list="chat-messages"',
       })}
     </div>`;
 }
@@ -3419,8 +3422,13 @@ function renderWorkoutThreadMessage(msg, viewerRole) {
 function renderWorkoutThread({
   workout, viewerRole, streamingChat = null, online, inputId, sendAction, muteAction, submitting = false,
 }) {
+  const key = sheetKeyFor(viewerRole === 'coach' ? 'roster-workout' : 'workout', workout.id);
   const messages = workout.chat_messages || [];
+  const button = renderThreadButton(key, messages.length);
+  if (!isSheetOpen(key)) return button;
+
   const muted = workout.chat_ai_muted;
+  const listId = `${inputId.replace(/-input$/, '')}-messages`;
   const rows = messages.map((m) => renderWorkoutThreadMessage(m, viewerRole)).join('');
   const isStreamingHere = viewerRole === 'athlete' && streamingChat && streamingChat.workoutId === workout.id;
   const streamingMessages = isStreamingHere ? streamingChat.messages || [] : [];
@@ -3428,28 +3436,105 @@ function renderWorkoutThread({
   const sendingLive = submitting
     || (isStreamingHere && !!lastStreaming && lastStreaming.role === 'assistant' && lastStreaming.status === 'streaming');
   const streamingRows = isStreamingHere ? streamingMessages.map(renderChatMessage).join('') : '';
-  const hasAnything = rows || streamingRows;
+  const draftKey = `${inputId}:${workout.id}`;
 
-  return `
-    <section class="detail-section" id="workout-chat">
-      <div class="chat-thread-head">
-        <h4>${viewerRole === 'coach' ? 'Chat with athlete' : 'Ask your coach about this workout'}</h4>
-        <button type="button" class="btn-ghost chat-mute-btn" data-a="${esc(muteAction)}">${muted ? 'Unmute AI' : 'Mute AI'}</button>
-      </div>
-      ${muted ? '<p class="sub">The AI coach is muted in this thread -- only you and your coach will reply.</p>' : ''}
-      ${!online ? '<div class="chat-banner">Offline -- this needs a connection.</div>' : ''}
-      ${hasAnything ? `
-      <div class="chat-messages" id="workout-chat-messages">
-        ${rows}${streamingRows}
-      </div>` : '<p class="sub">No messages yet.</p>'}
+  return button + renderThreadSheetShell({
+    label: 'This workout only',
+    title: `${sportLabel(workout.sport, workout.sport_detail)} · ${dayWord(workout.date)}`,
+    listId,
+    tools: `<button type="button" class="btn-ghost chat-mute-btn" data-a="${esc(muteAction)}">${muted ? 'Unmute AI' : 'Mute AI'}</button>`,
+    notes: muted ? '<p class="sub thread-note">The AI coach is muted in this thread -- only you and your coach will reply.</p>' : '',
+    banner: !online ? '<div class="chat-banner">Offline -- this needs a connection.</div>' : '',
+    messagesHtml: rows || streamingRows ? `<div class="chat-messages" id="${esc(listId)}">${rows}${streamingRows}</div>` : '',
+    emptyHtml: '<p class="sub thread-note">No messages yet.</p>',
+    composer: `
       <div class="chat-composer">
-        <textarea id="${esc(inputId)}" class="chat-input" data-draft-key="${esc(`${inputId}:${workout.id}`)}" placeholder="${viewerRole === 'coach' ? 'Comment on this workout…' : 'Ask about this workout…'}" rows="2" ${sendingLive || !online ? 'disabled' : ''}>${esc(getDraft(`${inputId}:${workout.id}`))}</textarea>
+        <textarea id="${esc(inputId)}" class="chat-input" data-draft-key="${esc(draftKey)}" placeholder="${viewerRole === 'coach' ? 'Comment on this workout…' : 'Ask about this workout…'}" rows="2" ${sendingLive || !online ? 'disabled' : ''}>${esc(getDraft(draftKey))}</textarea>
         <div class="chat-composer-row">
           <span></span>
           <button type="button" class="btn" data-a="${esc(sendAction)}" ${sendingLive || !online ? 'disabled' : ''}>${sendingLive ? 'Sending…' : 'Send'}</button>
         </div>
+      </div>`,
+  });
+}
+
+/** Short weekday for a sheet title ("Tue"). */
+function dayWord(isoDate) {
+  return new Date(`${String(isoDate).slice(0, 10)}T12:00:00`).toLocaleDateString('en-US', { weekday: 'short' });
+}
+
+/** The "Chat with coach" button pinned above the tab bar, with the thread's message count, plus a
+ * spacer so the page's last section is never hidden behind it. */
+function renderThreadButton(key, count) {
+  return `
+    <div class="thread-btn-spacer" aria-hidden="true"></div>
+    <button type="button" class="thread-btn" data-a="thread-sheet:open" data-key="${esc(key)}">Chat with coach <span class="thread-btn-count">${count}</span></button>`;
+}
+
+/** The full-screen bottom sheet (ThreadSheet design): dimmed page behind, a sheet starting ~36px
+ * below the top with a drag handle, a light-teal header band (label, title, 44px close), and the
+ * shared chat panel inside -- message list scrolls, composer pinned at the bottom above the
+ * keyboard/safe area, "↓ New reply" pill when scrolled up (chatPanel.js behaviour). */
+function renderThreadSheetShell({
+  label, title, listId, tools = '', notes = '', banner = '', messagesHtml, emptyHtml, composer,
+}) {
+  const header = `
+      <div class="thread-head-text">
+        <span class="thread-label">${esc(label)}</span>
+        <b>${esc(title)}</b>
       </div>
-    </section>`;
+      ${tools}
+      <button type="button" class="thread-close" data-a="thread-sheet:close" aria-label="Close chat">×</button>`;
+  return `
+    <div class="thread-sheet-root">
+      <div class="thread-backdrop" data-a="thread-sheet:close"></div>
+      <div class="thread-sheet" role="dialog" aria-modal="true" aria-label="Chat about ${esc(title)}">
+        <div class="thread-handle" aria-hidden="true"><span></span></div>
+        ${renderChatPanel({
+    header, banner: banner + notes, body: messagesHtml || emptyHtml, composer,
+    pillId: `${listId}-pill`, pillAction: 'chat:jump-bottom', pillLabel: '↓ New reply',
+    pillExtra: `data-list="${esc(listId)}"`,
+  })}
+      </div>
+    </div>`;
+}
+
+/** A PLANNED session's scoped thread (the Plan tab's session detail): the same button + sheet as a
+ * workout's, over the persisted session thread (`thread` is a conversation.js slice). */
+function renderSessionThread({ session, thread, online }) {
+  const key = sheetKeyFor('session', session.id);
+  const button = renderThreadButton(key, thread.messages.length);
+  if (!isSheetOpen(key)) return button;
+  const muted = thread.muted;
+  const listId = 'session-thread-messages';
+  const rows = thread.messages.map((m) => renderWorkoutThreadMessage(m, 'athlete')).join('');
+  const pendingRow = thread.pending
+    ? renderWorkoutThreadMessage({ sender_role: 'athlete', body: thread.pending }, 'athlete') : '';
+  const streamRow = thread.stream && !muted
+    ? `<div class="chat-row coach" data-stream-row><div class="chat-chips"><span class="chat-chip">AI coach</span></div>
+        <div class="chat-bubble"><div class="chat-md">${renderChatMarkdown(thread.stream)}</div><span class="chat-cursor">▍</span></div></div>`
+    : '';
+  const blocked = thread.sending || !online;
+  const hasAnything = rows || pendingRow || streamRow;
+  return button + renderThreadSheetShell({
+    label: 'This session only',
+    title: `${sessionDisplay(session).title} · ${dayWord(session.date)}`,
+    listId,
+    tools: `<button type="button" class="btn-ghost chat-mute-btn" data-a="session-thread:mute-toggle" ${online ? '' : 'disabled'}>${muted ? 'Unmute AI' : 'Mute AI'}</button>`,
+    notes: muted ? '<p class="sub thread-note">The AI coach is muted in this thread -- only you and your coach will reply.</p>' : '',
+    banner: (!online ? '<div class="chat-banner">Offline -- showing saved messages. Sending needs a connection.</div>' : '')
+      + (thread.error ? `<div class="hist-error">${esc(thread.error)}</div>` : ''),
+    messagesHtml: hasAnything ? `<div class="chat-messages" id="${listId}">${rows}${pendingRow}${streamRow}</div>` : '',
+    emptyHtml: thread.status === 'loading' ? '<p class="sub thread-note">Loading&hellip;</p>' : '<p class="sub thread-note">No messages yet.</p>',
+    composer: `
+      <div class="chat-composer">
+        <textarea id="session-thread-input" class="chat-input" data-form="session-thread" data-field="draft" placeholder="Ask about this session…" rows="2" ${blocked ? 'disabled' : ''}>${esc(thread.draft || '')}</textarea>
+        <div class="chat-composer-row">
+          <span></span>
+          <button type="button" class="btn" data-a="session-thread:send" ${blocked ? 'disabled' : ''}>${thread.sending ? 'Sending…' : 'Send'}</button>
+        </div>
+      </div>`,
+  });
 }
 
 /** The general athlete<->coach conversation thread (IDEA 016 Part 2): the same three parties and

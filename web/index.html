@@ -604,6 +604,44 @@
     .chat-panel .btn, .chat-panel .btn-ghost { min-height: 44px; }
     @media (max-width: 560px) { .chat-panel-head .sub { display: none; } }
 
+    /* Thread sheet (ThreadSheet design): workout and planned-session chat in a full-screen bottom
+       sheet, opened by a button pinned above the tab bar. Same chat-panel behaviour as the Coach
+       tab (chatPanel.js); sized from the visual viewport so the composer rides above the keyboard. */
+    body.sheet-locked { overflow: hidden; }
+    .thread-btn-spacer { height: 84px; }
+    .thread-btn { position: fixed; left: 16px; right: 16px; bottom: calc(var(--tabbar-h, 64px) + 12px);
+      max-width: 1008px; margin: 0 auto; z-index: 15; min-height: 52px; border-radius: 14px; border: 0;
+      background: var(--accent); color: var(--on-accent); font: 700 15px var(--sans, Inter, system-ui, sans-serif);
+      display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer;
+      box-shadow: 0 6px 18px rgba(0,0,0,.3); }
+    .thread-btn-count { background: var(--ink); color: var(--paper); border-radius: 999px; padding: 1px 8px; font-size: 12px; }
+    .thread-sheet-root { position: fixed; left: 0; right: 0; top: var(--vv-top, 0px); height: var(--vv-h, 100dvh); z-index: 40; }
+    .thread-backdrop { position: absolute; inset: 0; background: rgba(6,20,26,.55); }
+    .thread-sheet { position: absolute; left: 0; right: 0; top: 36px; bottom: 0; max-width: 1040px; margin: 0 auto;
+      background: var(--ground); color: var(--ink); border-radius: 20px 20px 0 0; display: flex; flex-direction: column;
+      box-shadow: 0 -8px 24px rgba(0,0,0,.35); overflow: hidden; }
+    .thread-handle { flex: none; display: flex; justify-content: center; padding-top: 8px; }
+    .thread-handle span { width: 40px; height: 4px; border-radius: 2px; background: var(--band-border); }
+    .thread-sheet .chat-panel-head { margin: 8px 12px 0; border: 0; border-radius: 14px; padding: 8px 8px 8px 14px;
+      flex-wrap: nowrap; justify-content: flex-start; gap: 10px; }
+    .thread-head-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+    .thread-head-text b { font-family: var(--display); font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .thread-label { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--on-band-link); }
+    .thread-close { width: 44px; height: 44px; border: 0; border-radius: 12px; background: var(--paper); color: var(--ink);
+      font: 700 18px var(--sans, Inter, sans-serif); cursor: pointer; flex: none; }
+    .thread-sheet .chat-mute-btn { min-height: 44px; background: var(--paper); flex: none; }
+    .thread-sheet .chat-banner, .thread-sheet .thread-note, .thread-sheet .hist-error { flex: none; margin: 8px 12px 0; }
+    .thread-sheet .thread-note { color: var(--on-ground-soft); }
+    .thread-sheet .chat-panel-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+    .thread-sheet .chat-messages { flex: 1 1 auto; min-height: 0; max-height: none; margin-top: 0; overflow-y: auto;
+      overscroll-behavior: contain; padding: 14px 12px; }
+    .thread-sheet .chat-new-pill { min-height: 44px; padding: 0 16px; background: var(--paper); color: var(--ink); border-color: var(--paper); font-size: 12.5px; }
+    .thread-sheet .chat-composer { flex: none; margin: 0; border-radius: 0; border-width: 1px 0 0; background: var(--ground);
+      border-color: var(--card-border); padding: 10px 12px calc(12px + env(safe-area-inset-bottom, 0px)); }
+    body.kb-open .thread-sheet .chat-composer { padding-bottom: 12px; }
+    .thread-sheet .chat-input { resize: none; max-height: 120px; }
+    .thread-sheet .btn { min-height: 44px; }
+
     .btn, .btn-ghost { font-family: var(--display); font-size: 13.5px; font-weight: 800; border-radius: var(--radius-sm);
       padding: 9px 16px; cursor: pointer; }
     .btn { background: var(--accent); color: var(--on-accent); border: 1px solid var(--accent); }

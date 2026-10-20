@@ -81,14 +81,14 @@ export function trackViewport(win = window, doc = document) {
  * empty state); `composer` is the already-rendered composer. The pill is part of the body area so
  * it floats just above the composer, and starts hidden. */
 export function renderChatPanel({
-  header, banner = '', body, composer, pillId, pillAction, pillLabel = '↓ new',
+  header, banner = '', body, composer, pillId, pillAction, pillLabel = '↓ new', pillExtra = '',
 }) {
   return `
     <header class="chat-panel-head">${header}</header>
     ${banner}
     <div class="chat-panel-body">
       ${body}
-      <button type="button" class="chat-new-pill" id="${pillId}" data-a="${pillAction}" hidden>${pillLabel}</button>
+      <button type="button" class="chat-new-pill" id="${pillId}" data-a="${pillAction}" ${pillExtra} hidden>${pillLabel}</button>
     </div>
     ${composer}`;
 }

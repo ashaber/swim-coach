@@ -139,7 +139,7 @@ def _configure_backend(page, base_url=BASE_URL, token=TOKEN):
     page.wait_for_selector('.settings-wrap')
 
 
-def _open_workout_detail(page):
+def _open_workout_detail(page, open_sheet=True):
     """Configures the backend, opens the merged Dashboard tab (Build 1:
     Log+History), waits for the history fetch to settle (the row is the
     settled marker), then opens the rich workout's detail view and waits
@@ -151,13 +151,16 @@ def _open_workout_detail(page):
     page.wait_for_selector('.hist-row')
     page.click('.hist-row')
     page.wait_for_selector('[data-a="history:back"]')
-    page.wait_for_selector('#workout-chat-input')
+    page.wait_for_selector('[data-a="thread-sheet:open"]')
+    if open_sheet:
+        page.click('[data-a="thread-sheet:open"]')
+        page.wait_for_selector('#workout-chat-input')
 
 
 def test_detail_shows_the_thread_section(page):
     _open_workout_detail(page)
     content = page.content()
-    assert 'Ask your coach about this workout' in content
+    assert 'This workout only' in content
     assert 'Mute AI' in content
     assert 'No messages yet.' in content
 
@@ -204,9 +207,9 @@ def test_send_message_streams_then_settles_into_the_persisted_thread(page):
     page.click('[data-a="workout-chat:send"]')
 
     # User bubble renders immediately (the ephemeral overlay); reply streams in.
-    page.wait_for_selector('#workout-chat .chat-row.me .chat-bubble')
+    page.wait_for_selector('.thread-sheet .chat-row.me .chat-bubble')
     page.wait_for_function(
-        "() => { const b = document.querySelectorAll('#workout-chat .chat-row.coach .chat-bubble'); "
+        "() => { const b = document.querySelectorAll('.thread-sheet .chat-row.coach .chat-bubble'); "
         "return b.length > 0 && b[b.length-1].textContent.includes('solid effort'); }",
         timeout=5000,
     )
@@ -223,7 +226,7 @@ def test_send_message_streams_then_settles_into_the_persisted_thread(page):
     # And -- the actual new behavior -- the content is still there once the refetch settles,
     # not just transiently during the stream: the persisted version replaced the overlay.
     page.wait_for_function(
-        "() => { const b = document.querySelectorAll('#workout-chat .chat-row.coach .chat-bubble'); "
+        "() => { const b = document.querySelectorAll('.thread-sheet .chat-row.coach .chat-bubble'); "
         "return b.length > 0 && b[b.length-1].textContent.includes('solid effort'); }",
         timeout=5000,
     )
@@ -254,19 +257,22 @@ def test_thread_is_persisted_not_cleared_when_reopening_the_same_workout(page):
 
     page.fill('#workout-chat-input', 'quick thoughts?')
     page.click('[data-a="workout-chat:send"]')
-    page.wait_for_selector('#workout-chat .chat-row.coach .chat-bubble')
+    page.wait_for_selector('.thread-sheet .chat-row.coach .chat-bubble')
 
-    # Back to the list, then reopen the same workout -- the thread is STILL there.
+    # Close the sheet, back to the list, then reopen the same workout -- the thread is STILL there.
+    page.click('.thread-close')
+    page.wait_for_selector('.thread-sheet-root', state='detached')
     page.click('[data-a="history:back"]')
     page.wait_for_selector('.hist-row')
     page.click('.hist-row')
+    page.click('[data-a="thread-sheet:open"]')
     page.wait_for_selector('#workout-chat-input')
     assert 'quick thoughts?' in page.content()
     assert 'A strong swim.' in page.content()
 
 
 def test_back_button_still_returns_to_history_list(page):
-    _open_workout_detail(page)
+    _open_workout_detail(page, open_sheet=False)
     page.click('[data-a="history:back"]')
     page.wait_for_selector('.hist-row')
     assert page.locator('[data-a="history:back"]').count() == 0
@@ -280,7 +286,7 @@ def test_chat_error_response_shows_error_bubble(page):
     page.fill('#workout-chat-input', 'hello?')
     page.click('[data-a="workout-chat:send"]')
 
-    page.wait_for_selector('#workout-chat .chat-bubble.is-error')
+    page.wait_for_selector('.thread-sheet .chat-bubble.is-error')
     assert 'no workout matching id' in page.content()
 
 
@@ -291,7 +297,7 @@ def test_offline_disables_scoped_chat_input_with_notice(page):
     ctx.set_offline(True)
     try:
         page.wait_for_function('() => !navigator.onLine')
-        page.wait_for_selector('#workout-chat .chat-banner', timeout=5000)
+        page.wait_for_selector('.thread-sheet .chat-banner', timeout=5000)
         assert page.locator('#workout-chat-input').is_disabled()
         assert page.locator('[data-a="workout-chat:send"]').is_disabled()
     finally:

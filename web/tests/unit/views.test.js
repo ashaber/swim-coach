@@ -1,14 +1,15 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   renderDashboardTab, renderSettingsTab, renderUpdateBanner, renderApp,
   renderTabBar, renderRosterTab, renderLoadChart,
   renderCr10SliderField, cr10AnchorLabel, loadTierLabel, renderWorkoutRow,
   renderAskCoachSection, feedbackForSession, renderCoachTab, renderResourcesTab,
-  renderMacroPlanDetail,
+  renderMacroPlanDetail, renderWorkoutDetail,
 } from '../../src/views.js';
 import { isoWeekMonday, addDays, dateKey, formatShortDate, formatDuration } from '../../src/plan.js';
 import { HISTORY_DISPLAY_CAP } from '../../src/workouts.js';
 import { createThreadState } from '../../src/conversation.js';
+import { setOpenSheetKey } from '../../src/threadSheet.js';
 
 // Real fixture workouts from the task brief -- andrew's 2026-07-09
 // cross_train (analytics-rich, no distance/pace since it's not a swim) and
@@ -610,6 +611,9 @@ describe('renderDashboardTab', () => {
   });
 
   describe('embedded workout chat (Phase C slice 1)', () => {
+    beforeEach(() => setOpenSheetKey('workout:w-rich'));
+    afterEach(() => setOpenSheetKey(null));
+
     const openDetailArgs = {
       ...DASHBOARD_BASE_ARGS, feed: feedOf([RICH_FIT_WORKOUT]), detailId: 'w-rich',
     };
@@ -622,14 +626,14 @@ describe('renderDashboardTab', () => {
       const html = renderDashboardTab({
         ...openDetailArgs, workoutChat: { workoutId: 'w-rich', messages: [] },
       });
-      expect(html).toContain('Ask your coach about this workout');
+      expect(html).toContain('This workout only');
       expect(html).toContain('id="workout-chat-input"');
       expect(html).toContain('data-a="workout-chat:send"');
     });
 
     it('still renders the thread section and composer when workoutChat is null', () => {
       const html = renderDashboardTab({ ...openDetailArgs, workoutChat: null });
-      expect(html).toContain('Ask your coach about this workout');
+      expect(html).toContain('This workout only');
       expect(html).toContain('workout-chat-input');
     });
 
@@ -637,7 +641,7 @@ describe('renderDashboardTab', () => {
       const html = renderDashboardTab({
         ...openDetailArgs, workoutChat: { workoutId: 'w-other', messages: [] },
       });
-      expect(html).toContain('Ask your coach about this workout');
+      expect(html).toContain('This workout only');
     });
 
     it('renders thread messages with the coach-tab bubble classes', () => {
@@ -700,6 +704,9 @@ describe('renderDashboardTab', () => {
   });
 
   describe('workout chat thread (IDEA 016 -- replaces the old ephemeral AI-only box AND the old single-turn Feedback Q&A)', () => {
+    beforeEach(() => setOpenSheetKey('workout:w-rich'));
+    afterEach(() => setOpenSheetKey(null));
+
     it('renders the persisted thread with a mute toggle and composer, and the old boxes are gone', () => {
       const html = renderDashboardTab({
         ...DASHBOARD_BASE_ARGS,
@@ -713,8 +720,8 @@ describe('renderDashboardTab', () => {
       expect(html).not.toContain('coming soon');
       expect(html).not.toContain("it clears when you leave this workout");
       // The real thing.
-      expect(html).toContain('id="workout-chat"');
-      expect(html).toContain('Ask your coach about this workout');
+      expect(html).toContain('role="dialog"');
+      expect(html).toContain('This workout only');
       expect(html).toContain('id="workout-chat-input"');
       expect(html).toContain('data-a="workout-chat:send"');
       expect(html).toContain('data-a="workout-chat:mute-toggle"');
@@ -1698,6 +1705,31 @@ describe('renderApp plan session detail view (click-to-detail)', () => {
       expect(headings).not.toContain('<h4>training rationale</h4>');
     });
   });
+
+  describe('planned session thread sheet', () => {
+    afterEach(() => setOpenSheetKey(null));
+    const thread = (messages) => ({ ...createThreadState(), sessionId: MAIN_SET_SESSION.id, status: 'ready', messages });
+    const data = (t) => ({ ...PLAN_DATA, askCoach: { feedback: [], form: { body: '' }, submit: null, thread: t, online: true } });
+
+    it('replaces the old Ask-coach box with the Chat with coach button and a count', () => {
+      const html = renderApp(data(thread([{ id: 'm1', sender_role: 'athlete', body: 'q' }])), MAIN_SET_SESSION.id);
+      expect(html).not.toContain('id="ask-coach"');
+      expect(html).toContain(`data-key="session:${MAIN_SET_SESSION.id}"`);
+      expect(html).toMatch(/thread-btn-count">1</);
+      expect(html).not.toContain('thread-sheet-root');
+    });
+
+    it('opens the sheet with the session label, the thread messages, mute toggle and composer', () => {
+      setOpenSheetKey(`session:${MAIN_SET_SESSION.id}`);
+      const html = renderApp(data(thread([{ id: 'm1', sender_role: 'athlete', body: 'how heavy?' }])), MAIN_SET_SESSION.id);
+      expect(html).toContain('This session only');
+      expect(html).toContain('how heavy?');
+      expect(html).toContain('id="session-thread-input"');
+      expect(html).toContain('data-a="session-thread:send"');
+      expect(html).toContain('data-a="session-thread:mute-toggle"');
+    });
+  });
+
 });
 
 describe('renderWeekCard race-week checklist (engine/swim_coach/models.py RaceWeekChecklistItem)', () => {
@@ -2650,6 +2682,7 @@ describe('renderRosterTab', () => {
   });
 
   it('shows the workout detail view with a real, writable chat thread (not read-only) when workoutDetailId matches a loaded workout', () => {
+    setOpenSheetKey('roster-workout:w1');
     const html = renderRosterTab({
       ...baseArgs,
       athletes: { status: 'ready', data: [{ slug: 'renee', name: 'Renee' }], error: null },
@@ -2669,7 +2702,8 @@ describe('renderRosterTab', () => {
     // and unlike either predecessor, the COACH can write into it now.
     expect(html).not.toContain('Ask your coach about this workout');
     expect(html).not.toContain('id="ask-coach"');
-    expect(html).toContain('Chat with athlete');
+    expect(html).toContain('This workout only');
+    setOpenSheetKey(null);
     expect(html).toContain('data-a="roster:workout-chat:send"');
     expect(html).toContain('id="roster-workout-chat-input"');
     expect(html).toContain('data-a="roster:workout-chat:mute-toggle"');
@@ -4726,5 +4760,33 @@ describe('IDEA 016 Part 2: the athlete Coach tab "My coach" thread', () => {
   it('tab bar badges the Coach tab with unread human-coach messages', () => {
     expect(renderTabBar('plan', { coachUnread: 4 })).toMatch(/Coach<\/span>\s*<span class="badge-count">4<\/span>/);
     expect(renderTabBar('plan')).not.toContain('badge-count');
+  });
+});
+
+describe('thread sheet button (workout and session detail)', () => {
+  afterEach(() => setOpenSheetKey(null));
+
+  it('shows only the pinned "Chat with coach" button, with the message count, until the sheet is opened', () => {
+    const workout = { id: 'w1', sport: 'swim_pool', date: '2026-10-01T00:00:00Z', chat_messages: [{ id: 'a', sender_role: 'athlete', body: 'hi' }, { id: 'b', sender_role: 'ai_coach', body: 'yo' }] };
+    const html = renderWorkoutDetail(workout, { online: true, chat: null });
+    expect(html).toContain('data-a="thread-sheet:open"');
+    expect(html).toContain('data-key="workout:w1"');
+    expect(html).toMatch(/Chat with coach <span class="thread-btn-count">2<\/span>/);
+    expect(html).not.toContain('thread-sheet-root');
+    expect(html).not.toContain('workout-chat-input');
+  });
+
+  it('renders the sheet (dim backdrop, dialog, close, chat panel with pill and composer) when its key is open', () => {
+    setOpenSheetKey('workout:w1');
+    const workout = { id: 'w1', sport: 'swim_pool', date: '2026-10-01T00:00:00Z', chat_messages: [] };
+    const html = renderWorkoutDetail(workout, { online: true, chat: null });
+    expect(html).toContain('thread-backdrop');
+    expect(html).toContain('role="dialog"');
+    expect(html).toContain('data-a="thread-sheet:close"');
+    expect(html).toContain('This workout only');
+    expect(html).toContain('↓ New reply');
+    expect(html).toContain('data-list="workout-chat-messages"');
+    // another workout's detail does not show this key's sheet
+    expect(renderWorkoutDetail({ ...workout, id: 'w2' }, { online: true, chat: null })).not.toContain('thread-sheet-root');
   });
 });

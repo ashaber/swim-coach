@@ -10,7 +10,7 @@ import {
   fetchCoachHealthStatus, postCoachHealthStatus, resolveCoachHealthStatus,
   listLibraryCards, fetchLibraryFile, submitLibraryReview,
   fetchHealthStatus, postHealthStatus,
-  askAboutSession, askAboutWorkout,
+  askAboutWorkout, fetchSessionThread, patchSessionThreadMuted, streamChat,
   postCoachWorkoutChatMessage, patchCoachWorkoutChatMuted,
 } from '../../src/api.js';
 
@@ -488,46 +488,31 @@ describe('submitLibraryReview', () => {
   });
 });
 
-describe('askAboutSession', () => {
-  it('POSTs to /api/feedback/questions with session_date/session_sport and no workout_id', async () => {
-    const created = {
-      id: 'f1', type: 'question', body: 'how hard should this be?', session_date: '2026-08-10', session_sport: 'swim_pool',
-    };
-    global.fetch = fakeFetch(created);
-
-    const result = await askAboutSession({
-      baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee',
-      date: '2026-08-10', sport: 'swim_pool', body: 'how hard should this be?',
-    });
-
-    expect(global.fetch).toHaveBeenCalledTimes(1);
+describe('session thread api', () => {
+  it('fetchSessionThread GETs the session thread scoped to the athlete', async () => {
+    global.fetch = fakeFetch({ messages: [], ai_muted: false });
+    const result = await fetchSessionThread({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee', sessionId: 's-1' });
     const [url, init] = global.fetch.mock.calls[0];
-    expect(url).toBe('https://api.example.com/api/feedback/questions?athlete=renee');
-    expect(init.method).toBe('POST');
+    expect(url).toBe('https://api.example.com/api/sessions/s-1/thread?athlete=renee');
     expect(init.headers.Authorization).toBe('Bearer tok');
-    expect(JSON.parse(init.body)).toEqual({
-      session_date: '2026-08-10', session_sport: 'swim_pool', body: 'how hard should this be?',
-    });
-    expect(result).toEqual({ ok: true, data: created });
+    expect(result).toEqual({ ok: true, data: { messages: [], ai_muted: false } });
   });
 
-  it('sends the session id alongside date/sport so two same-sport sessions on a day stay apart', async () => {
-    global.fetch = fakeFetch({ id: 'f2' });
-    await askAboutSession({
-      baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee',
-      id: 'sess-1', date: '2026-08-10', sport: 'bike', body: 'warm up how long?',
-    });
-    expect(JSON.parse(global.fetch.mock.calls[0][1].body)).toEqual({
-      session_id: 'sess-1', session_date: '2026-08-10', session_sport: 'bike', body: 'warm up how long?',
-    });
+  it('patchSessionThreadMuted PATCHes ai_muted', async () => {
+    global.fetch = fakeFetch({ session_id: 's-1', ai_muted: true });
+    await patchSessionThreadMuted({ baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee', sessionId: 's-1', muted: true });
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/sessions/s-1/thread?athlete=renee');
+    expect(init.method).toBe('PATCH');
+    expect(JSON.parse(init.body)).toEqual({ ai_muted: true });
   });
 
-  it('returns a normalized error on a non-2xx response', async () => {
-    global.fetch = fakeFetch({ error: 'the coach could not answer that just now' }, { ok: false, status: 502 });
-    const result = await askAboutSession({
-      baseUrl: 'https://api.example.com', token: 't', athlete: 'renee', date: '2026-08-10', sport: 'swim_pool', body: 'x',
-    });
-    expect(result).toEqual({ ok: false, error: 'the coach could not answer that just now', status: 502 });
+  it('streamChat sends session_id when scoped to a session and omits it otherwise', async () => {
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, body: { getReader: () => ({ read: async () => ({ done: true }) }) } });
+    await streamChat({ baseUrl: 'https://api.example.com', token: 't', athlete: 'a', message: 'hi', history: [], sessionId: 's-1', onEvent: () => {} });
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body).session_id).toBe('s-1');
+    await streamChat({ baseUrl: 'https://api.example.com', token: 't', athlete: 'a', message: 'hi', history: [], onEvent: () => {} });
+    expect('session_id' in JSON.parse(global.fetch.mock.calls[1][1].body)).toBe(false);
   });
 });
 

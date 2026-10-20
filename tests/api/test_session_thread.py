@@ -206,7 +206,7 @@ def test_old_feedback_questions_appear_as_earlier_messages_without_being_lost(cl
     legacy_no_id = Feedback(
         id=uuid.uuid4(), athlete_id=profile.id, type="question", source="athlete", body="oldest question",
         created_at=asked - timedelta(hours=1), session_date=session.date, session_sport=session.sport,
-        coach_reply="human reply", coach_reply_at=asked,
+        coach_reply="human reply", coach_reply_at=asked - timedelta(minutes=30),
     )
     other_session = Feedback(
         id=uuid.uuid4(), athlete_id=profile.id, type="question", source="athlete", body="elsewhere",
