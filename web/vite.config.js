@@ -20,8 +20,8 @@ export default defineConfig({
         short_name: 'swim-coach',
         description: "Renee's training plan, read-only, on your phone.",
         display: 'standalone',
-        theme_color: '#fbf8f0',
-        background_color: '#fbf8f0',
+        theme_color: '#1f4a59',
+        background_color: '#1f4a59',
         start_url: '.',
         // "any" icons are the design-handoff artwork verbatim (its own rounded
         // tile); "maskable" ones re-seat the figure inside the 80% safe zone so
