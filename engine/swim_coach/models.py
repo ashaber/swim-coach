@@ -2060,6 +2060,17 @@ class SectorLap(BaseModel):
     sector_times_s: list[float]
 
 
+class SectorPass(BaseModel):
+    """One lap's pass through one section: its time, power and flow, and (efficiency sections only)
+    how many watts more it spent than the cheapest pass that was at least as fast."""
+
+    lap: int  # canonical lap number
+    time_s: float
+    avg_power_w: float | None = None
+    avg_flow: float | None = None
+    extra_w: float | None = None  # None where efficiency does not apply (power buys speed there)
+
+
 class SectorLoss(BaseModel):
     """One section (a course feature, or an equal-distance sector on the fallback) across the compared
     laps, vs the fastest time through THAT section."""
@@ -2083,6 +2094,14 @@ class SectorLoss(BaseModel):
     exit_speed_mps: float | None = None
     flow_by_lap: list[float | None] = Field(default_factory=list)  # moving-mean flow in this section, per compared lap
     flow_slope_per_lap: float | None = None
+    split_of: str | None = None  # label of the course section this part was split from (athlete's `section_splits`)
+    terrain: Literal["descent", "climb", "flat"] | None = None  # from the net altitude change across the section
+    efficiency_applies: bool | None = None  # corners and descents of 10+ s: speed there is not bought with watts
+    passes: list[SectorPass] = Field(default_factory=list)
+    mean_extra_w: float | None = None  # mean `extra_w` over the passes (None where efficiency does not apply)
+    sigma_s: float | None = None  # timing noise of this section's time (`swim_coach.section_noise`)
+    noise_floor_s: float | None = None  # mean loss that timing noise alone produces over this many laps
+    loss_significant: bool | None = None  # mean loss above the noise floor AND over sigma on half the laps
 
 
 class LapFade(BaseModel):
@@ -2150,6 +2169,19 @@ class CourseTrack(BaseModel):
     sectors: list[TrackSector]
 
 
+class FreeSpeed(BaseModel):
+    """A pass through an efficiency section that was as fast as another on far fewer watts."""
+
+    label: str
+    lap: int
+    time_s: float
+    power_w: float
+    vs_lap: int
+    vs_time_s: float
+    vs_power_w: float
+    watts_saved: float
+
+
 class CourseSectors(BaseModel):
     """`WorkoutAnalytics.course_sectors`: lap-over-lap fade and a where-did-the-time-go table, for a
     ride with 2+ laps of similar distance (see `swim_coach.course_sectors`)."""
@@ -2163,6 +2195,11 @@ class CourseSectors(BaseModel):
     ideal_lap_s: float | None = None  # sum of the best time in every sector
     ideal_gap_s: float | None = None  # fastest actual lap - ideal_lap_s
     track: CourseTrack | None = None  # PWA map only; never in the coach view
+    free_speed: list[FreeSpeed] = Field(default_factory=list)  # up to 3, largest watts_saved first
+    splits: dict[str, int] = Field(default_factory=dict)  # the athlete's `section_splits` that were applied
+    edge_noise_s: float | None = None  # pooled sigma of a section edge's timing, from adjacent-section covariance
+    ideal_gap_noise_s: float | None = None  # the best-lap-to-ideal gap that timing noise alone would produce
+    ideal_gap_beyond_noise_s: float | None = None  # max(0, ideal_gap_s - ideal_gap_noise_s)
 
 
 CanonicalLapSource = Literal["device", "merged", "split_at_start", "gps_filled", "gps"]
@@ -2184,6 +2221,67 @@ class CanonicalLap(BaseModel):
     source: CanonicalLapSource
     start_lap: bool = False  # begins at the race start, not at the lap mark
     comparable: bool = False  # starts at the lap mark and covers a similar distance to its peers
+
+
+class RaceOverview(BaseModel):
+    """The race window (race start -> finish line) in numbers (`swim_coach.race_view`)."""
+
+    start_s: float
+    end_s: float
+    duration_s: float
+    distance_m: float | None = None
+    avg_hr: int | None = None
+    max_hr: int | None = None
+    avg_power_w: int | None = None
+    max_power_w: int | None = None
+    np_w: int | None = None
+    work_kj: int | None = None
+    avg_speed_kmh: float | None = None
+    max_speed_kmh: float | None = None
+    avg_cadence_rpm: int | None = None  # mean of the non-zero samples (coasting excluded)
+    total_grit: float | None = None
+
+
+class StartDip(BaseModel):
+    at_s: int
+    power_w: int
+
+
+class PreviousRaceStart(BaseModel):
+    """The same athlete's previous race start (same `sport_detail`), for the side-by-side."""
+
+    workout_id: str
+    date: date
+    power_w: list[int]
+    mean_15s_w: int | None = None
+    top_speed_kmh: float | None = None
+
+
+class RaceStartTrace(BaseModel):
+    """The first 40 s from the gun at 1 Hz (`swim_coach.race_view`); index i = seconds since the start."""
+
+    power_w: list[int]
+    speed_kmh: list[float]
+    peak_w: int
+    peak_at_s: int
+    mean_5s_w: int
+    mean_15s_w: int
+    top_speed_kmh: float
+    top_speed_at_s: int
+    dip: StartDip | None = None
+    previous: PreviousRaceStart | None = None
+
+
+class FinishSprint(BaseModel):
+    """A sprint to the line; the arrays are the final ~15 s (index i = seconds-to-line len-1-i)."""
+
+    duration_s: int
+    avg_w: int
+    peak_w: int
+    entry_speed_kmh: float | None = None
+    exit_speed_kmh: float | None = None
+    power_w: list[int]
+    speed_kmh: list[float]
 
 
 class WorkoutAnalytics(BaseModel):
@@ -2232,6 +2330,10 @@ class WorkoutAnalytics(BaseModel):
     course_sectors: CourseSectors | None = None
     # Lap-to-lap NP / HR efficiency of a race (or any ride with 2+ comparable laps). Additive/optional.
     race_efficiency: RaceEfficiency | None = None
+    # Race-view numbers (`swim_coach.race_view`): the race window, the first 40 s, a sprint to the line.
+    race_overview: RaceOverview | None = None
+    race_start: RaceStartTrace | None = None
+    finish_sprint: FinishSprint | None = None
     # The one canonical lap set (device laps merged / trimmed to the race start / gap-filled by the
     # lap mark) that mtb_dynamics, course_sectors, race_efficiency, pacing and the race lap table all
     # read; the raw device laps stay on `Workout.laps`. Additive/optional.
@@ -2381,6 +2483,11 @@ class Workout(BaseModel):
     # Athlete/coach-set race start (seconds on the activity clock, `t_s`) for a one-file warm-up +
     # race ride; wins over the detected start (`race_start.analyze_race_start`). Additive/optional.
     race_start_s: float | None = Field(default=None, ge=0)
+    # Athlete-chosen splits of a course section into 2..4 equal-distance parts ("C3": 3 -> C3a..C3c);
+    # read by the course-sector analysis, so setting it re-runs the analysis. Additive/optional.
+    section_splits: dict[str, Annotated[int, Field(ge=2, le=4)]] = Field(default_factory=dict)
+    # Athlete/coach notes per course-section label (<= 280 chars each), shown beside the section.
+    section_notes: dict[str, Annotated[str, Field(max_length=280)]] = Field(default_factory=dict)
     # Deterministic mute switch: a plain boolean, not something inferred from
     # scanning message history, so it's a reliable control either party (or
     # the AI itself, told to recognize an explicit "stop responding here")
