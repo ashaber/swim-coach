@@ -19,7 +19,8 @@ from typing import Any, Callable, Literal
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from swim_coach.models import ConversationMessage, Workout, WorkoutChatMessage
+from swim_coach.models import ConversationMessage, Session, Workout, WorkoutChatMessage
+from swim_coach.session_lookup import find_in_store
 from swim_coach.store import StoreInterface
 
 from app.auth import (
@@ -46,6 +47,8 @@ from app.light_mode import (
 )
 from app.logging_config import get_logger
 from app.notify import notify_athlete_of_coach_plan_change
+from app.session_thread import append_message as append_session_message
+from app.session_thread import thread_messages as session_thread_messages
 from app.router_shadow import ShadowInputs, begin_shadow
 from app.store_factory import make_store
 from app.tools import TOOLS_SCHEMA, build_tool_handlers
@@ -70,6 +73,10 @@ class ChatRequest(BaseModel):
     # Matched by exact id or case-insensitive prefix (same convention as the
     # CLI's --workout-id); an unknown id is a 404 before any streaming starts.
     workout_id: str | None = None
+    # Scopes this chat to one PLANNED session (the Plan tab's session detail): that session's
+    # prescription goes into the context and its own persisted thread (`app.session_thread`) is the
+    # history. Mutually exclusive with `workout_id`; an unknown id is a 404.
+    session_id: uuid.UUID | None = None
 
 
 CONVERSATION_ASKER_NOTE = (
@@ -264,6 +271,7 @@ def _begin_router_shadow(
     context_block: list[dict[str, Any]],
     payload: ChatRequest,
     focused_workout: Workout | None,
+    focused_session: Session | None,
     confirmer_role: str,
     confirmer_id: str | None,
     asker_note: str | None,
@@ -292,6 +300,7 @@ def _begin_router_shadow(
                 athlete,
                 expert_mode=payload.expert_mode,
                 focused_workout=focused_workout,
+                focused_session=focused_session,
                 cache_ttl=settings.prompt_cache_ttl_context,
                 asker_note=asker_note,
                 recent_session_days=days,
@@ -379,6 +388,8 @@ async def stream_chat_response(
     require_daily_chat_cap(request, principal)
 
     store = make_store(settings)
+    if payload.session_id is not None and payload.workout_id is not None:
+        raise HTTPException(status_code=422, detail="give either workout_id or session_id, not both")
 
     # Resolve the scoped workout (if any) BEFORE the stream starts -- an
     # unknown workout_id must be an ordinary 404 {"error": ...} JSON
@@ -393,6 +404,12 @@ async def stream_chat_response(
             raise HTTPException(
                 status_code=404, detail=f"no workout matching id {payload.workout_id!r}"
             )
+
+    focused_session: Session | None = None
+    if payload.session_id is not None:
+        focused_session = find_in_store(store, athlete, payload.session_id)
+        if focused_session is None:
+            raise HTTPException(status_code=404, detail=f"no planned session with id {payload.session_id}")
 
     # Fetched once here so build_system's sport-scope filtering (IDEA 008 --
     # never surface cycling content to a swim-only athlete, or vice versa)
@@ -414,6 +431,14 @@ async def stream_chat_response(
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
+    if focused_session is not None and store.get_session_thread(athlete, focused_session.id).ai_muted:
+        session_append: ThreadAppend = functools.partial(append_session_message, store, athlete, focused_session.id)
+
+        def session_muted_stream():
+            yield from _muted_thread_stream(session_append, payload.message)
+
+        return StreamingResponse(session_muted_stream(), media_type="text/event-stream")
+
     athlete_profile = store.load_athlete(athlete)
     # Once a workout is focused (and, per the check above, not muted), the athlete's browser-
     # supplied `payload.history` is no longer the source of truth -- the persisted thread is
@@ -423,6 +448,8 @@ async def stream_chat_response(
     thread_messages: list[Any] | None = None
     if focused_workout is not None:
         thread_messages = focused_workout.chat_messages
+    elif focused_session is not None:
+        thread_messages = session_thread_messages(store, athlete, focused_session)
     elif conversation_coach_id is not None:
         thread_messages = store.list_conversation_messages(athlete, conversation_coach_id)
     if thread_messages is not None:
@@ -434,7 +461,7 @@ async def stream_chat_response(
     light = settings.light_mode and is_light_turn(
         effective_message,
         history_len=len(history),
-        focused=focused_workout is not None,
+        focused=focused_workout is not None or focused_session is not None,
         expert_mode=payload.expert_mode,
         sports=athlete_profile.effective_sports,
     )
@@ -458,6 +485,7 @@ async def stream_chat_response(
             athlete,
             expert_mode=payload.expert_mode,
             focused_workout=focused_workout,
+            focused_session=focused_session,
             cache_ttl=settings.prompt_cache_ttl_context,
             asker_note=asker_note or (CONVERSATION_ASKER_NOTE if conversation_coach_id else None),
         )
@@ -528,7 +556,8 @@ async def stream_chat_response(
         full_request = build_full_request()
         shadow = _begin_router_shadow(
             settings, claude_chat, store, request_id, athlete, athlete_profile, effective_message,
-            history, built["context_block"], payload, focused_workout, confirmer_role, confirmer_id,
+            history, built["context_block"], payload, focused_workout, focused_session, confirmer_role,
+            confirmer_id,
             asker_note or (CONVERSATION_ASKER_NOTE if conversation_coach_id else None),
         )
 
@@ -569,6 +598,16 @@ async def stream_chat_response(
             yield from _persisting_thread_stream(append_to_workout, payload.message, event_stream())
 
         return StreamingResponse(persisted_event_stream(), media_type="text/event-stream")
+
+    if focused_session is not None:
+        append_to_session: ThreadAppend = functools.partial(
+            append_session_message, store, athlete, focused_session.id
+        )
+
+        def persisted_session_stream():
+            yield from _persisting_thread_stream(append_to_session, payload.message, event_stream())
+
+        return StreamingResponse(persisted_session_stream(), media_type="text/event-stream")
 
     if conversation_coach_id is not None:
         append_to_conversation: ThreadAppend = functools.partial(

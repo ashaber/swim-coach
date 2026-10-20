@@ -44,6 +44,8 @@ _TABLES = [
     "allowed_emails",
     "conversation_messages",
     "conversations",
+    "session_chat_messages",
+    "session_threads",
     "feedback",
     "library_reviews",
     "health_status",

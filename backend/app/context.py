@@ -2259,6 +2259,10 @@ def render_focused_session(session: Session) -> str:
     parts = [
         "## The specific planned session the athlete is asking about "
         "(NOT the same as the 28-day exact-sessions list above)",
+        "This is the athlete's saved thread about this one session: the conversation history you "
+        "see is only this session's own thread, not their general Coach-tab chat. Answer about "
+        "this session; use the athlete profile, thresholds, week plan and recent logged sessions "
+        "above for context.",
         json.dumps(summary, indent=2),
     ]
     return "\n".join(parts)
