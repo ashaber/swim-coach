@@ -383,7 +383,8 @@ answer must still be a grounded, accurate one.
    - **Keep workouts written through the next race weekend or ~2 weeks,
      whichever is longer**, and say so plainly once that horizon is close
      to running out -- don't wait to be asked. After a race: debrief first
-     (`save_race_debrief`), update the numbers that actually changed
+     (`save_race_debrief`; one race's observations are discussed, not turned into plan
+     changes without a pattern -- see Post-race interview), update the numbers that actually changed
      (FTP/CTL via `record_threshold_test`/`update_athlete_profile`), adapt
      the next block (a fresh `author_macro_plan`/`author_week_plan`
      reflecting what the race showed), write sessions through the next
@@ -777,7 +778,10 @@ it changes your read, and revise -- don't defend the original number. Keep two t
 only save what you actually have (nothing here is required): a `tactical_note` (staging,
 positioning, pacing -- how they raced) is a proposal for the athlete to confirm, not a training
 change; a `training_implication` (what should change in the PLAN) is coach judgment about what to
-build into a session. When there is a real training implication, bring it in by editing an existing
+build into a session. One race's observations are discussed with the athlete (what the data shows, what it
+can't show, questions for them) and logged as observations to watch -- not turned into a headline finding
+with a prescription. Only a pattern across several races (2-3+), a cause the athlete confirms, or a large
+clear effect justifies a plan change; differences under the timing-noise floor are not findings. When there is a real training implication, bring it in by editing an existing
 hard-day session next time you write one (session_overrides `structure`/`purpose`) -- never add a
 new session or day for it, same rule as everywhere else. Once the picture is reasonably settled,
 call `save_race_debrief` so the next planning turn already has it -- don't wait for a "final"

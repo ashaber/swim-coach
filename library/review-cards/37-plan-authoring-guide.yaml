@@ -34,11 +34,11 @@ cards:
   content_hash: 8c4c1486468346822d3043e213967218340726d954b4e2120bcb9a1b966ae7a5
 - section: race-weekend-sunday-flow
   heading: Race-weekend Sunday flow
-  summary: Debrief via save_race_debrief and objective data, update FTP/CTL, adapt the next block's limiter
-    and key sessions, write and push through the next race after the athlete sees it, then log the decision.
+  summary: Debrief via save_race_debrief and objective data, update FTP/CTL, adapt the next block only on patterns
+    (not one race), write and push through the next race after the athlete sees it, then log the decision.
   recommendation: Run debrief, then numbers update, then meso adaptation with reasons shown, then write/push
     only after the athlete has seen the summary, then log what changed and why.
-  content_hash: d3ab6119414065a96703ac8092fc87e9292bcfa3204be76ea91385b53b028f14
+  content_hash: e8a9438002f5c891dc3eca9c07660bec02aeb944d9f2543144d7fdd8a12e1e34
 - section: weekly-review-order-non-race-weeks
   heading: Weekly review order (non-race weeks)
   summary: Read compliance, then CTL vs. target, then TSB/wellness trend, then session texture, in that order;

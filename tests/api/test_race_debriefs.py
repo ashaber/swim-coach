@@ -139,3 +139,10 @@ def test_tools_are_registered_and_the_persona_describes_the_interview_protocol()
     assert "what did you do well" in text.lower() or "what went well" in text.lower()
     assert "what would you like to work on" in text.lower()
     assert "one new thing per turn" in text.lower() or "never a checklist" in text.lower()
+
+
+def test_persona_requires_patterns_before_a_race_changes_the_plan() -> None:
+    text = " ".join(PERSONA_AND_RULES.split()).lower()
+    assert "pattern across" in text
+    assert "observations to watch" in text
+    assert "timing-noise" in text
