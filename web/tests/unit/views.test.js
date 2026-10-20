@@ -961,6 +961,38 @@ describe('renderDashboardTab', () => {
       expect(html).toContain('network down');
     });
 
+    describe('own "Mark resolved" action', () => {
+      const entry = (over) => ({
+        id: 'h1', description: 'Sharp shoulder pain', restriction: 'light_only',
+        source: 'self_reported', reported_by: 'athlete', reported_at: '2026-08-30T09:00:00Z',
+        resolved: false, resolved_at: null, expected_review_date: null, ...over,
+      });
+      const render = (data, healthStatusResolve) => renderDashboardTab({
+        ...DASHBOARD_BASE_ARGS, feed: [], healthStatusFormOpen: true,
+        healthStatus: { status: 'ready', data, error: null },
+        ...(healthStatusResolve ? { healthStatusResolve } : {}),
+      });
+
+      it('shows a Mark resolved button only on unresolved entries, carrying the entry id', () => {
+        const html = render([entry({ id: 'open1' }), entry({ id: 'done1', resolved: true })]);
+        expect(html).toContain('data-a="health-status:resolve" data-id="open1"');
+        expect(html).not.toContain('data-id="done1"');
+        expect(html).toContain('Mark resolved');
+      });
+
+      it('disables the button for the entry being resolved', () => {
+        const html = render([entry({ id: 'open1' })], { status: 'submitting', error: null, id: 'open1' });
+        const btn = /<button[^>]*data-a="health-status:resolve"[^>]*>/.exec(html);
+        expect(btn[0]).toContain('disabled');
+        expect(html).toContain('Marking resolved');
+      });
+
+      it('shows the error next to the entry it failed for', () => {
+        const html = render([entry({ id: 'open1' })], { status: 'error', error: 'boom', id: 'open1' });
+        expect(html).toContain('boom');
+      });
+    });
+
     it('never renders the coach roster\'s own health-status form/action markup on the athlete\'s Dashboard', () => {
       const html = renderDashboardTab({ ...DASHBOARD_BASE_ARGS, feed: [], healthStatusFormOpen: true });
       expect(html).not.toContain('data-form="roster-health-status"');

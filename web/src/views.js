@@ -2679,6 +2679,7 @@ export function renderDashboardTab({
   healthStatusSubmit = { status: 'idle', error: null },
   healthStatusFormOpen = false,
   healthStatus = { status: 'idle', data: [], error: null },
+  healthStatusResolve = { status: 'idle', error: null, id: null },
 }) {
   if (!backendConfigured) {
     return dashboardShell(renderBackendNeededNotice(
@@ -2691,6 +2692,7 @@ export function renderDashboardTab({
     ${renderManualLogSection({ form, submit, ingest, online, open: !!manualOpen })}
     ${renderHealthStatusLogSection({
       form: healthStatusForm, submit: healthStatusSubmit, open: !!healthStatusFormOpen, history: healthStatus,
+      resolveAction: healthStatusResolve,
     })}`;
 
   return dashboardShell(`
@@ -4382,7 +4384,18 @@ function renderHealthStatusForm(form, submit, history) {
     </div>`;
 }
 
-function renderHealthStatusHistoryEntry(entry) {
+function renderOwnResolveButton(entry, resolveAction) {
+  if (!resolveAction || entry.resolved) return '';
+  const resolving = resolveAction.status === 'submitting' && resolveAction.id === entry.id;
+  const error = resolveAction.status === 'error' && resolveAction.id === entry.id
+    ? `<div class="conn-result fail">${esc(resolveAction.error)}</div>` : '';
+  return `
+      <div class="settings-actions">
+        <button type="button" class="btn-ghost" data-a="health-status:resolve" data-id="${esc(entry.id)}" ${resolving ? 'disabled' : ''}>${resolving ? 'Marking resolved…' : 'Mark resolved'}</button>
+      </div>${error}`;
+}
+
+function renderHealthStatusHistoryEntry(entry, resolveAction) {
   return `
     <div class="health-status-history-entry">
       <div class="feedback-entry-head">
@@ -4392,7 +4405,7 @@ function renderHealthStatusHistoryEntry(entry) {
       </div>
       ${renderHealthStatusExtraChips(entry)}
       <p class="feedback-entry-body">${esc(entry.description)}</p>
-      <p class="hs-meta">${esc(entry.reported_by)} &middot; ${esc(HEALTH_SOURCE_LABELS[entry.source] || entry.source)}</p>
+      <p class="hs-meta">${esc(entry.reported_by)} &middot; ${esc(HEALTH_SOURCE_LABELS[entry.source] || entry.source)}</p>${renderOwnResolveButton(entry, resolveAction)}
     </div>`;
 }
 
@@ -4410,11 +4423,10 @@ function renderHealthStatusHistoryEntry(entry) {
 /** Read-only "your recent entries" list -- rendered inside the log
  * section below, using the already-fetched GET /api/health-status data
  * (main.js's state.healthStatus) so opening the form isn't a log-only dead
- * end with zero visibility into what's already on file. Deliberately no
- * active-status callout or resolve action here (unlike the coach roster's
- * renderHealthStatusActiveBox) -- this is a simple history list, not a
- * duplicate of the roster's own "is anything currently active" UI. */
-function renderHealthStatusOwnHistory(history) {
+ * end with zero visibility into what's already on file. No active-status callout here (unlike the
+ * coach roster's renderHealthStatusActiveBox); each unresolved entry just carries a "Mark resolved"
+ * button (data-a="health-status:resolve"), so she can close out a stale one herself. */
+function renderHealthStatusOwnHistory(history, resolveAction) {
   if (history.status === 'error') {
     return `<p class="sub">Couldn't load your health status history: ${esc(history.error)}</p>`;
   }
@@ -4427,7 +4439,7 @@ function renderHealthStatusOwnHistory(history) {
   return `
     <div class="detail-section">
       <h4>Your recent entries</h4>
-      ${history.data.map(renderHealthStatusHistoryEntry).join('')}
+      ${history.data.map((entry) => renderHealthStatusHistoryEntry(entry, resolveAction)).join('')}
     </div>`;
 }
 
@@ -4446,7 +4458,7 @@ function renderHealthStatusOwnHistory(history) {
  * onAppInput/onAppClick dispatch never conflates the two independent
  * forms. */
 function renderHealthStatusLogSection({
-  form, submit, open, history,
+  form, submit, open, history, resolveAction,
 }) {
   const toggleLabel = open ? 'Hide health condition log' : 'Log health condition';
   const toggleButton = `
@@ -4513,7 +4525,7 @@ function renderHealthStatusLogSection({
       </div>
       ${submitError}
     </div>
-    ${renderHealthStatusOwnHistory(history)}`;
+    ${renderHealthStatusOwnHistory(history, resolveAction)}`;
 }
 
 /** The coach roster's health-status section: the active status (loud, see
