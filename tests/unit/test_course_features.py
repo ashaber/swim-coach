@@ -146,7 +146,7 @@ def test_the_slow_stretch_lands_in_the_matching_section():
     # lap 3 rides 120-140 m of the lap at 3 m/s: that is inside the first long straight (S1)
     workout, series = _three_laps(slow={2: (120.0, 140.0, 3.0)})
     cs = _sectors(workout, series)
-    assert cs.top_loss_sectors[0] == 1
+    assert max(cs.sectors, key=lambda r: r.total_loss_s).sector == 1  # one slow lap of three is not a *significant* loss
     assert cs.sectors[0].kind == "straight" and cs.sectors[0].total_loss_s > 3
 
 
@@ -182,7 +182,9 @@ def test_coach_view_names_the_section_kind_and_what_precedes_it():
     from swim_coach.bike_coach_view import course_sectors_coach_view
 
     workout, series = _three_laps(slow={2: (120.0, 140.0, 3.0)})
-    view = course_sectors_coach_view(_sectors(workout, series).model_dump())
+    dumped = _sectors(workout, series).model_dump()
+    dumped["top_loss_sectors"] = [1]
+    view = course_sectors_coach_view(dumped)
     assert view["top_loss_sectors"][0].startswith("Section S1 (straight, 150 m)")
     assert "Sector " not in view["top_loss_sectors"][0]
 

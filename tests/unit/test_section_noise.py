@@ -59,3 +59,11 @@ def test_expected_max_normal_matches_the_order_statistic_tables() -> None:
 
 def test_noise_floor_is_the_expected_mean_loss_of_pure_noise() -> None:
     assert loss_noise_floor(0.5, 7) == pytest.approx(0.5 * 1.352, abs=0.002)
+
+
+def test_the_reference_lap_is_left_out_of_the_estimate() -> None:
+    # The reference lap's edges are its own sample times: no jitter at all. Counting it dilutes the estimate.
+    rows = _laps_with_jitter(7, [10.0] * 9, 0.4, seed=3)
+    with_ref = [[10.0] * 9, *rows]
+    assert section_sigmas(with_ref, skip=0).pooled_edge_s == section_sigmas(rows).pooled_edge_s
+    assert section_sigmas(with_ref).pooled_edge_s != section_sigmas(rows).pooled_edge_s
