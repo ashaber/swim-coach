@@ -104,7 +104,9 @@ _MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 # append-only log with its own dedicated write path (app.routes.chat's
 # persistence hook, app.routes.coach's human-coach send route), never a
 # bulk client overwrite.
-_PATCHABLE_WORKOUT_FIELDS = {"rpe", "notes", "chat_ai_muted"}
+# `section_notes`: label -> text (<= 280 chars each, enforced by the Workout model), REPLACING the
+# stored map; a blank text deletes that section's note.
+_PATCHABLE_WORKOUT_FIELDS = {"rpe", "notes", "chat_ai_muted", "section_notes"}
 
 
 def _attach_load(
@@ -309,6 +311,58 @@ async def set_workout_race_start(
     if updated is None:
         raise HTTPException(status_code=404, detail=f"no such workout: {workout_id}")
     return _workout_with_load(store, athlete, profile, updated)
+
+
+@router.post("/api/workouts/{workout_id}/section-splits")
+async def set_workout_section_splits(
+    workout_id: UUID,
+    payload: dict[str, Any],
+    request: Request,
+    athlete: str | None = Query(None),
+    principal: Principal = Depends(require_auth),
+) -> dict:
+    """Split course sections into 2..4 equal-distance parts and re-run the analysis -- the
+    `set_section_splits` handler. The body's `splits` map REPLACES the stored one (the PWA always sends
+    the full desired map; `{}` clears it). Returns the updated workout (with load)."""
+    settings = request.app.state.settings
+    athlete = resolve_athlete(principal, athlete)
+    store = make_store(settings)
+    try:
+        profile = store.load_athlete(athlete)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"no such athlete: {athlete}") from exc
+    if store.get_workout(athlete, workout_id) is None:
+        raise HTTPException(status_code=404, detail=f"no such workout: {workout_id}")
+
+    handlers = build_tool_handlers(store, slug=athlete, expert_mode=False)
+    result = handlers["set_section_splits"]({"workout_id": str(workout_id), "splits": payload.get("splits", {})})
+    if "error" in result:
+        raise HTTPException(status_code=422, detail=result["error"])
+    updated = store.get_workout(athlete, workout_id)
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"no such workout: {workout_id}")
+    return _workout_with_load(store, athlete, profile, updated)
+
+
+@router.get("/api/workouts/{workout_id}/sections")
+async def get_workout_sections(
+    workout_id: UUID,
+    request: Request,
+    athlete: str | None = Query(None),
+    principal: Principal = Depends(require_auth),
+) -> dict:
+    """The drill-down map data for a race's course sections (`section_detail`): the lap outline and,
+    per section label, every lap's 1 Hz points and graded pieces. Lazy like `/pacing`: computed from
+    the stored series on request, never part of the list payload. Same error shape as `/pacing`."""
+    settings = request.app.state.settings
+    athlete = resolve_athlete(principal, athlete)
+    store = make_store(settings)
+    handlers = build_tool_handlers(store, slug=athlete, expert_mode=False)
+    result = handlers["get_section_detail"]({"workout_id": str(workout_id)})
+    if "error" in result:
+        status = 404 if "no workout matching id" in result["error"] else 422
+        raise HTTPException(status_code=status, detail=result["error"])
+    return result
 
 
 @router.get("/api/workouts/{workout_id}/pacing")

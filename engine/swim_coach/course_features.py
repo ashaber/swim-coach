@@ -14,7 +14,8 @@ Constants are Coach judgment, tuned on the 2026-10-17 CX race file (per-second f
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from bisect import bisect_right
+from dataclasses import dataclass, replace
 from typing import Sequence
 
 from swim_coach.lap_normalise import EARTH_M_PER_DEG
@@ -29,6 +30,8 @@ CORNER_JOIN_M = 25.0  # Coach judgment: corners closer together than this ride a
 MIN_STRAIGHT_M = 30.0  # Coach judgment: a start/finish straight shorter than this is absorbed into its corner
 TURN_EXTEND_DEG_S = 8.0  # Coach judgment: a corner reaches out to neighbouring samples still turning this fast (1 Hz smears an arc)
 MIN_CORNER_TURN_DEG = 35.0  # Coach judgment: a bend that turns less than this in total is a kink in a straight, not a corner
+MIN_SPLIT_PARTS = 2  # Coach judgment: a split into one part is no split
+MAX_SPLIT_PARTS = 4  # Coach judgment: more parts than this are shorter than the timing noise of a 1 Hz edge
 MIN_SECTIONS = 4  # Coach judgment: fewer than this is no more informative than equal-distance sectors
 MAX_SECTIONS = 24  # Coach judgment: more than this is too fine to read in a phone grid
 ALIGN_WINDOW_FRAC = 0.125  # Coach judgment: the match may move at most this share of the reference lap ahead per sample
@@ -44,10 +47,11 @@ class Section:
     index: int  # 1-based
     kind: str  # "straight" | "corners"
     label: str  # "S1" / "C2": numbered within its kind, in lap order
-    start_i: int
-    end_i: int
+    start_i: float  # fractional only for the parts of a split section
+    end_i: float
     start_m: float
     end_m: float
+    split_of: str | None = None  # the label of the section this part was split from
 
     @property
     def length_m(self) -> float:
@@ -88,7 +92,7 @@ def turn_rates(xy: Sequence[XY], t: Sequence[float]) -> list[float]:
     return [sum(raw[max(0, i - half): i + half + 1]) / len(raw[max(0, i - half): i + half + 1]) for i in range(n)]
 
 
-def _cumulative_m(xy: Sequence[XY]) -> list[float]:
+def cumulative_m(xy: Sequence[XY]) -> list[float]:
     cum = [0.0]
     for i in range(1, len(xy)):
         cum.append(cum[-1] + math.dist(xy[i - 1], xy[i]))
@@ -168,7 +172,7 @@ def segment_course(xy: Sequence[XY], t: Sequence[float], flow: Sequence[float | 
     rate = turn_rates(xy, t)
     corner = [rate[i] >= TURN_RATE_DEG_S or (flow is not None and (flow[i] or 0.0) >= FLOW_CORNER) for i in range(n)]
     corner = _extend(corner, rate)
-    cum = _cumulative_m(xy)
+    cum = cumulative_m(xy)
     turn = _running_turn(rate, t)
     raw = _runs(corner)
     for scale in _RELAX_STEPS:
@@ -239,3 +243,27 @@ def align_edges(ref_xy: Sequence[XY], bounds: Sequence[int], lap_xy: Sequence[XY
         edges.append(t0 + (t1 - t0) * ((b - p0) / (p1 - p0) if p1 > p0 else 0.0))
     edges.append(fixed[-1][1])
     return [max(e, edges[i - 1]) if i else e for i, e in enumerate(edges)]
+
+
+def _index_at(cum: Sequence[float], d: float) -> float:
+    """Fractional sample index at distance `d` along the track."""
+    k = min(max(bisect_right(cum, d) - 1, 0), len(cum) - 2)
+    span = cum[k + 1] - cum[k]
+    return k + (0.0 if span <= 0 else (d - cum[k]) / span)
+
+
+def split_sections(sections: Sequence[Section], cum: Sequence[float], splits: dict[str, int]) -> list[Section]:
+    """`sections` with each section named in `splits` cut into that many equal-DISTANCE parts, labelled
+    `<label>a`, `<label>b`, ...; a count outside MIN..MAX_SPLIT_PARTS or an unknown label is ignored."""
+    out: list[Section] = []
+    for sec in sections:
+        n = splits.get(sec.label, 0)
+        if not MIN_SPLIT_PARTS <= n <= MAX_SPLIT_PARTS:
+            out.append(replace(sec, index=len(out) + 1))
+            continue
+        d0, d1 = cum[int(sec.start_i)], cum[int(sec.end_i)]
+        cuts = [sec.start_i, *(_index_at(cum, d0 + (d1 - d0) * j / n) for j in range(1, n)), sec.end_i]
+        for j in range(n):
+            out.append(Section(index=len(out) + 1, kind=sec.kind, label=f"{sec.label}{chr(97 + j)}", start_i=cuts[j], end_i=cuts[j + 1],
+                               start_m=round(d0 + (d1 - d0) * j / n, 1), end_m=round(d0 + (d1 - d0) * (j + 1) / n, 1), split_of=sec.label))
+    return out

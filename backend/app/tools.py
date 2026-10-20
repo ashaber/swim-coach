@@ -207,6 +207,8 @@ from pydantic import ValidationError
 from swim_coach import fueling as fueling_module
 from swim_coach.adapt import adapt_week
 from swim_coach.analysis import analytics_for_coach, has_detailed_analyzer
+from swim_coach.course_features import MAX_SPLIT_PARTS, MIN_SPLIT_PARTS
+from swim_coach.section_detail import build_section_detail
 from swim_coach.athlete_time import athlete_today
 from swim_coach.event_groups import disband_group, effective_target, groups, set_group
 from swim_coach.canonical_laps import build_canonical_laps
@@ -4349,7 +4351,7 @@ def _summarize_workout(w: Workout, *, athlete: Athlete, hr_max: float | None, we
         "notes": w.notes,
         "avg_hr": w.avg_hr,
         "max_hr": w.max_hr,
-        "analytics": analytics_for_coach(w.analytics, sport=w.sport),
+        "analytics": analytics_for_coach(w.analytics, sport=w.sport, section_notes=w.section_notes),
         "lap_count": len(w.laps),
         "length_count": len(w.lengths),
         "pause_count": len(w.pauses),
@@ -4530,7 +4532,7 @@ def _handle_reanalyze_workout(
         "target_source": target_source,
         "series_source": series_source,
         # The same coach-facing view `get_workouts` renders (power curve, starts table, efforts).
-        "analytics": analytics_for_coach(new_analytics, sport=workout.sport),
+        "analytics": analytics_for_coach(new_analytics, sport=workout.sport, section_notes=workout.section_notes),
     }
     if not has_detailed_analyzer(workout.sport):
         result["note"] = f"re-ran analysis; no detailed analyzer for {workout.sport} yet" + (
@@ -4797,6 +4799,80 @@ def _handle_set_race_start(
     if "error" in reanalysis:
         result["note"] = f"race start saved; analysis not re-run: {reanalysis['error']}"
     return result
+
+
+def _splits_or_error(raw: Any) -> tuple[dict[str, int], str | None]:
+    """`{label: parts}` from the request, parts 2..4 (`course_features.MIN/MAX_SPLIT_PARTS`)."""
+    if raw is None:
+        return {}, None
+    if not isinstance(raw, dict):
+        return {}, "splits must be an object of section label -> number of parts"
+    out: dict[str, int] = {}
+    for label, parts in raw.items():
+        if not isinstance(label, str) or not label.strip():
+            return {}, "every split needs a section label like 'C3'"
+        if isinstance(parts, bool) or not isinstance(parts, int) or not MIN_SPLIT_PARTS <= parts <= MAX_SPLIT_PARTS:
+            return {}, f"split parts for {label!r} must be a whole number from {MIN_SPLIT_PARTS} to {MAX_SPLIT_PARTS}"
+        out[label.strip()] = parts
+    return out, None
+
+
+def _handle_set_section_splits(
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str
+) -> dict[str, Any]:
+    """REPLACES `Workout.section_splits` (the athlete's equal-distance split of course sections, label ->
+    2..4 parts; an empty map clears it) and re-runs the ride's analysis, like `set_race_start`. Not an
+    LLM tool: the PWA's section-splits control is its only caller."""
+    workout_id_str = (input_data.get("workout_id") or "").strip()
+    if not workout_id_str:
+        return {"error": "workout_id is required"}
+    splits, split_error = _splits_or_error(input_data.get("splits"))
+    if split_error:
+        return {"error": split_error}
+    workout = find_workout_by_id(store.list_workouts(slug), workout_id_str)
+    if workout is None:
+        return {"error": f"no workout matching id {workout_id_str!r}"}
+    try:
+        workout.section_splits = splits
+        store.save_workout(slug, workout)
+    except Exception as exc:  # noqa: BLE001
+        log.error("storage write failed", what="section splits", exc_info=True)
+        return storage_error("workout", exc)
+    log.info("section splits set", athlete=slug, workout_id=str(workout.id), splits=splits)
+
+    result: dict[str, Any] = {"updated": True, "workout_id": str(workout.id), "section_splits": splits}
+    reanalysis = _handle_reanalyze_workout({"workout_id": str(workout.id)}, store=store, slug=slug)
+    result["reanalyzed"] = bool(reanalysis.get("reanalyzed"))
+    if "error" in reanalysis:
+        result["note"] = f"splits saved; analysis not re-run: {reanalysis['error']}"
+    return result
+
+
+def _handle_get_section_detail(
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str
+) -> dict[str, Any]:
+    """Read-only drill-down for the PWA's section map: every lap's 1 Hz pass through each course
+    section and its graded pieces (`section_detail`), computed from the stored series on request and
+    never persisted. Not an LLM tool."""
+    workout_id = (input_data.get("workout_id") or "").strip()
+    if not workout_id:
+        return {"error": "workout_id is required"}
+    workout = find_workout_by_id(store.list_workouts(slug), workout_id)
+    if workout is None:
+        return {"error": f"no workout matching id {workout_id!r}"}
+    analytics = workout.analytics
+    if workout.sport != "bike" or analytics is None or analytics.course_sectors is None or not analytics.laps:
+        return {"error": "this workout has no course sections to drill into (needs a bike race or ride with 2+ comparable laps)"}
+    series, _source, load_error = _load_workout_series(store, slug, workout)
+    if load_error is not None:
+        return {"error": load_error}
+    if series is None:
+        return {"error": "no time-series data is available for this workout (no stored series and no re-parsable raw .fit)"}
+    detail = build_section_detail(series, analytics.laps, analytics.course_sectors)
+    if detail is None:
+        return {"error": "this workout's series has no usable GPS track for a section map"}
+    log.info("get_section_detail", athlete=slug, workout_id=str(workout.id), sections=len(detail["sections"]))
+    return {"workout_id": str(workout.id), **detail}
 
 
 def _handle_set_workout_chat_muted(
@@ -10151,6 +10227,12 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "set_race_start": lambda input_data: _handle_set_race_start(
+            input_data, store=store, slug=slug
+        ),
+        "set_section_splits": lambda input_data: _handle_set_section_splits(
+            input_data, store=store, slug=slug
+        ),
+        "get_section_detail": lambda input_data: _handle_get_section_detail(
             input_data, store=store, slug=slug
         ),
         "set_workout_chat_muted": lambda input_data: _handle_set_workout_chat_muted(

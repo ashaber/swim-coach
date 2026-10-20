@@ -26,16 +26,17 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import TYPE_CHECKING, Protocol, Sequence
+from typing import TYPE_CHECKING, Mapping, Protocol, Sequence
 
 from swim_coach.analytics import compute_analytics
-from swim_coach.models import Athlete, Event, RaceLap, Session, SessionKind, Workout, WorkoutAnalytics
+from swim_coach.models import Athlete, Event, PreviousRaceStart, RaceLap, Session, SessionKind, Workout, WorkoutAnalytics
 from swim_coach.bike_coach_view import shape_ride_view
 from swim_coach.canonical_laps import build_canonical_laps
 from swim_coach.course_sectors import build_course_sectors
 from swim_coach.free_ride import FREE_READ_KINDS, read_free_ride
 from swim_coach.mtb_dynamics import build_mtb_dynamics
 from swim_coach.race_efficiency import build_race_efficiency
+from swim_coach.race_view import pick_previous_race_start, build_finish_sprint, build_race_overview, build_race_start_trace, finish_s
 from swim_coach.power_curve import BEST_WINDOWS_DAYS, annotate_bests
 
 if TYPE_CHECKING:
@@ -66,6 +67,10 @@ class AnalysisContext:
     neighbors: Sequence[Session] = field(default_factory=tuple)
     # The workout's athlete/coach-set race start (`Workout.race_start_s`); wins over detection.
     race_start_s: float | None = None
+    # The workout's athlete-set section splits (`Workout.section_splits`) for the course-sector analysis.
+    section_splits: Mapping[str, int] = field(default_factory=dict)
+    # The athlete's previous race start of the same kind of race, for the side-by-side (`race_view`).
+    previous_race_start: PreviousRaceStart | None = None
 
 
 # Sport-agnostic fields every analyzer's coach view keeps.
@@ -83,7 +88,7 @@ SWIM_FIELDS: frozenset[str] = frozenset(
     }
 )
 BIKE_FIELDS: frozenset[str] = frozenset(
-    {"intervals", "avg_power_w", "normalized_power_w", "power_curve", "free_ride", "mtb_dynamics", "course_sectors", "race_efficiency", "laps"}
+    {"intervals", "avg_power_w", "normalized_power_w", "power_curve", "free_ride", "mtb_dynamics", "course_sectors", "race_efficiency", "laps", "race_overview", "race_start", "finish_sprint"}
 )
 
 
@@ -106,7 +111,7 @@ class WorkoutAnalyzer(Protocol):
 
     def analyze(self, workout: Workout, ctx: AnalysisContext) -> WorkoutAnalytics: ...
 
-    def coach_view(self, analytics: WorkoutAnalytics | None) -> dict | None: ...
+    def coach_view(self, analytics: WorkoutAnalytics | None, section_notes: Mapping[str, str] | None = None) -> dict | None: ...
 
     def needs_neighbors(self, kind: SessionKind) -> bool:
         """Whether analysing a workout of this kind reads the planned sessions around it
@@ -128,15 +133,15 @@ class _CoachViewMixin:
     def needs_neighbors(self, kind: SessionKind) -> bool:
         return False
 
-    def _shape(self, out: dict, analytics: WorkoutAnalytics) -> dict:
+    def _shape(self, out: dict, analytics: WorkoutAnalytics, section_notes: Mapping[str, str] | None = None) -> dict:
         return out
 
-    def coach_view(self, analytics: WorkoutAnalytics | None) -> dict | None:
+    def coach_view(self, analytics: WorkoutAnalytics | None, section_notes: Mapping[str, str] | None = None) -> dict | None:
         if analytics is None:
             return None
         keep = BASE_FIELDS | self.fields
         out = {k: v for k, v in analytics.model_dump(mode="json").items() if k in keep}
-        return prune_nulls(self._shape(out, analytics))
+        return prune_nulls(self._shape(out, analytics, section_notes))
 
 
 def _elapsed_min(workout: Workout, ctx: AnalysisContext) -> float | None:
@@ -216,8 +221,8 @@ class BikeAnalyzer(_CoachViewMixin):
     detailed = True
     structured_is_key = True
 
-    def _shape(self, out: dict, analytics: WorkoutAnalytics) -> dict:
-        return shape_ride_view(out, analytics)
+    def _shape(self, out: dict, analytics: WorkoutAnalytics, section_notes: Mapping[str, str] | None = None) -> dict:
+        return shape_ride_view(out, analytics, dict(section_notes or {}))
 
     def analyze(self, workout: Workout, ctx: AnalysisContext) -> WorkoutAnalytics:
         analytics = self._analyze_by_kind(workout, ctx)
@@ -236,11 +241,26 @@ class BikeAnalyzer(_CoachViewMixin):
         found = {
             "laps": (laps or None) if course else None,
             "mtb_dynamics": build_mtb_dynamics(workout, ctx.series, laps),
-            "course_sectors": build_course_sectors(laps, ctx.series) if course else None,
+            "course_sectors": build_course_sectors(laps, ctx.series, ctx.section_splits) if course else None,
             "race_efficiency": build_race_efficiency(laps, ctx.series) if course else None,
         }
         analytics = analytics.model_copy(update={k: v for k, v in found.items() if v is not None})
+        analytics = self._with_race_view(analytics, laps, ctx)
         return self._with_race_laps(analytics, laps, ctx)
+
+    def _with_race_view(self, analytics: WorkoutAnalytics, laps: Sequence, ctx: AnalysisContext) -> WorkoutAnalytics:
+        """The race window, the first 40 s and a sprint to the line: only for a race with a start."""
+        start = self._race_start_s(analytics, ctx) if ctx.kind == "race" else None
+        if start is None or not ctx.series:
+            return analytics
+        end = finish_s(laps) or ctx.series["t_s"][-1] + 1
+        overview = build_race_overview(ctx.series, start, end)
+        update = {
+            "race_overview": overview,
+            "race_start": build_race_start_trace(ctx.series, start, ctx.previous_race_start),
+            "finish_sprint": build_finish_sprint(ctx.series, end, overview.np_w) if overview and laps and finish_s(laps) else None,
+        }
+        return analytics.model_copy(update=update)
 
     @staticmethod
     def _with_race_laps(analytics: WorkoutAnalytics, laps: Sequence, ctx: AnalysisContext) -> WorkoutAnalytics:
@@ -337,10 +357,10 @@ def has_detailed_analyzer(sport: str) -> bool:
     return analyzer_for(sport).detailed
 
 
-def analytics_for_coach(analytics: WorkoutAnalytics | None, sport: str) -> dict | None:
+def analytics_for_coach(analytics: WorkoutAnalytics | None, sport: str, section_notes: Mapping[str, str] | None = None) -> dict | None:
     """`WorkoutAnalytics` as the JSON dict the coach reads on per-workout detail surfaces (never
     the always-loaded context): the sport's analyzer decides which fields and in what order."""
-    return analyzer_for(sport).coach_view(analytics)
+    return analyzer_for(sport).coach_view(analytics, section_notes)
 
 
 def analyze_workout(workout: Workout, ctx: AnalysisContext) -> WorkoutAnalytics:
@@ -392,6 +412,21 @@ def _neighbor_sessions(
     return tuple(found.values())
 
 
+PREVIOUS_RACE_LOOKBACK_DAYS = 400  # Coach judgment: a race start is compared with the last race of the same kind within a season or so
+
+
+def _previous_race_start(store: "StoreInterface", slug: str, workout: Workout, kind: SessionKind) -> PreviousRaceStart | None:
+    """The previous same-kind race's start trace, for the side-by-side (races only; best-effort like every lookup)."""
+    if kind != "race":
+        return None
+    try:
+        since = workout.date - timedelta(days=PREVIOUS_RACE_LOOKBACK_DAYS)
+        return pick_previous_race_start(store.list_workouts(slug, since=since), workout)
+    except Exception as exc:  # noqa: BLE001 - the start reads fine without a comparison
+        _warn("previous race start", slug, exc)
+        return None
+
+
 def build_analysis_context(
     store: "StoreInterface",
     slug: str,
@@ -434,5 +469,7 @@ def build_analysis_context(
         elapsed_min=elapsed_min,
         prior_workouts=prior,
         race_start_s=workout.race_start_s,
+        section_splits=dict(workout.section_splits),
+        previous_race_start=_previous_race_start(store, slug, workout, kind),
         neighbors=_neighbor_sessions(store, slug, workout, session) if analyzer_for(workout.sport).needs_neighbors(kind) else (),
     )

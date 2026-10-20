@@ -157,7 +157,16 @@ def _reanalyze_workout(
             kind=draft.kind,
             device_dynamics=draft.device_dynamics,
             kind_override=existing.kind_override,  # athlete/coach retag -- preserved
+            race_start_s=existing.race_start_s,  # athlete/coach-set race start -- preserved
+            section_splits=existing.section_splits,  # athlete-chosen section splits -- preserved
+            section_notes=existing.section_notes,  # athlete/coach notes on sections -- preserved
         )
+        if existing.race_start_s is not None or existing.section_splits:
+            # These steer the analysis itself (race window / canonical laps / section table): re-run it
+            # with them, since the draft was analysed without them.
+            rebuilt.analytics = rebuilt.analyze(
+                build_analysis_context(store, slug, rebuilt, series=draft.series, elapsed_min=draft.elapsed_min)
+            )
 
         # Link the planned session (+-1 day window) and re-run the analyzer
         # against its prescription. A planned_session_id already on the row
