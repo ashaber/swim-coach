@@ -26,6 +26,7 @@ import { renderSessionIcon } from './icons.js';
 import { renderChatMarkdown } from './markdown.js';
 import { createThreadState } from './conversation.js';
 import { getDraft } from './composerDrafts.js';
+import { renderChatPanel } from './chatPanel.js';
 import { buildHistoryFeed } from './history.js';
 import {
   LIBRARY_SORTS, DEFAULT_LIBRARY_SORT, sortLibraryFiles, fileAddedDate, isNewFile, formatAddedLabel,
@@ -2013,7 +2014,7 @@ export function renderTabBar(activeTab, { hideRoster = false, rosterUnread = 0, 
 
 // --- Coach chat tab ----------------------------------------------------------
 
-function renderChatMessage(msg) {
+export function renderChatMessage(msg) {
   const roleClass = msg.role === 'user' ? 'me' : 'coach';
   const chips = (msg.toolCalls || [])
     .map((t) => `<span class="chat-chip">${esc(TOOL_LABELS[t.name] || t.name)}</span>`)
@@ -2115,40 +2116,42 @@ function renderAiCoachTab({
   // role -- it's not tied to a security boundary (see identity.js), just
   // keeps the athlete-facing UI from surfacing a toggle that isn't for them.
   const showExpertToggle = role === 'coach';
-  return `
-    <div class="wrap chat-wrap">
-      <header class="mast chat-mast">
-        <div>
-          <span class="mark">swim-coach · coach chat</span>
-          <h1>Ask your coach</h1>
-          <p class="sub">Grounded in your plan and the research library.</p>
+  // Full-height panel (chatPanel.js): header band, a list that is the only scroller, composer
+  // fixed at the bottom. The list is a STABLE container -- main.js patches the streaming bubble
+  // inside it rather than rebuilding it per delta.
+  const header = `
+      <div class="chat-panel-title">
+        <span class="mark">swim-coach · coach chat</span>
+        <h1>Ask your coach</h1>
+        <p class="sub">Grounded in your plan and the research library.</p>
+      </div>
+      ${showExpertToggle ? `
+      <label class="expert-toggle">
+        <input type="checkbox" data-a="chat:expert-toggle" ${expertMode ? 'checked' : ''}>
+        <span>Expert mode<small>physiologist / coach input</small></span>
+      </label>` : ''}
+      ${switcher}`;
+  const banner = !online
+    ? '<div class="chat-banner">Offline -- Coach Chat needs a connection. The Plan tab still works offline.</div>' : '';
+  const body = !backendConfigured || messages.length === 0
+    ? renderChatEmptyState(backendConfigured)
+    : `
+      <div class="chat-messages" id="chat-messages">
+        ${messages.map(renderChatMessage).join('')}
+      </div>`;
+  const composer = showComposer ? `
+      <div class="chat-composer">
+        <textarea id="chat-input" class="chat-input" data-draft-key="chat-input" placeholder="Ask your coach…" rows="2" ${sending || !online ? 'disabled' : ''}>${esc(getDraft('chat-input'))}</textarea>
+        <div class="chat-composer-row">
+          <button type="button" class="btn-ghost" data-a="chat:clear" ${messages.length === 0 ? 'disabled' : ''}>New conversation</button>
+          <button type="button" class="btn" data-a="chat:send" ${sending || !online ? 'disabled' : ''}>${sending ? 'Sending…' : 'Send'}</button>
         </div>
-        ${showExpertToggle ? `
-        <label class="expert-toggle">
-          <input type="checkbox" data-a="chat:expert-toggle" ${expertMode ? 'checked' : ''}>
-          <span>Expert mode<small>physiologist / coach input</small></span>
-        </label>` : ''}
-      </header>
-
-      ${switcher}
-
-      ${!online ? '<div class="chat-banner">Offline -- Coach Chat needs a connection. The Plan tab still works offline.</div>' : ''}
-
-      ${!backendConfigured || messages.length === 0
-        ? renderChatEmptyState(backendConfigured)
-        : `
-        <div class="chat-messages" id="chat-messages">
-          ${messages.map(renderChatMessage).join('')}
-        </div>`}
-
-      ${showComposer ? `
-        <div class="chat-composer">
-          <textarea id="chat-input" class="chat-input" data-draft-key="chat-input" placeholder="Ask your coach…" rows="2" ${sending || !online ? 'disabled' : ''}>${esc(getDraft('chat-input'))}</textarea>
-          <div class="chat-composer-row">
-            <button type="button" class="btn-ghost" data-a="chat:clear" ${messages.length === 0 ? 'disabled' : ''}>New conversation</button>
-            <button type="button" class="btn" data-a="chat:send" ${sending || !online ? 'disabled' : ''}>${sending ? 'Sending…' : 'Send'}</button>
-          </div>
-        </div>` : ''}
+      </div>` : '';
+  return `
+    <div class="wrap chat-wrap chat-panel">
+      ${renderChatPanel({
+        header, banner, body, composer, pillId: 'chat-new-pill', pillAction: 'chat:jump-bottom',
+      })}
     </div>`;
 }
 

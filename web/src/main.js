@@ -3,8 +3,9 @@ import { registerSW } from 'virtual:pwa-register';
 import log from './log.js';
 import { getDraft, setDraft, clearDraft } from './composerDrafts.js';
 import { shouldRefreshOnResume } from './resumeRefresh.js';
+import { ChatScroll, syncViewport, trackViewport } from './chatPanel.js';
 import {
-  renderApp, renderLoading, renderError, renderTabBar, renderCoachTab, renderSettingsTab,
+  renderApp, renderChatMessage, renderLoading, renderError, renderTabBar, renderCoachTab, renderSettingsTab,
   renderDashboardTab, renderBackendNeededNotice, renderUpdateBanner,
   renderRaceDayOverlay, renderSectorOverlay, renderRaceDrill, renderOnboardingForm, renderRosterTab, renderResourcesTab, cr10AnchorLabel, ROSTER_SUB_TABS as ROSTER_SUB_TAB_DEFS,
 } from './views.js';
@@ -751,6 +752,10 @@ function renderTabContent() {
   }
 }
 
+// Scroll anchoring for the Coach tab's message list (chatPanel.js): follows a stream only while
+// the reader is at the bottom, keeps their place across re-renders, shows a "new" pill otherwise.
+const coachScroll = new ChatScroll({ listId: 'chat-messages', pillId: 'chat-new-pill' });
+
 /** Every render rebuilds the DOM, so a focused chat composer (its text already lives in state /
  * composerDrafts and is re-emitted by the view) would lose focus and caret: put them back. */
 function render() {
@@ -773,7 +778,13 @@ function renderAppDom() {
   const sectorScroll = sectorBody ? sectorBody.scrollTop : 0;
   const drillBody = document.getElementById('section-drill-body');
   const drillScroll = drillBody ? drillBody.scrollTop : 0;
+  coachScroll.beforeRender();
   renderAppDomInner();
+  coachScroll.afterRender();
+  // The Coach tab's chat panel is a fixed, full-height layout: the page itself must not scroll
+  // behind it, and its box follows the visual viewport (keyboard).
+  document.body.classList.toggle('chat-locked', Boolean(document.querySelector('.chat-panel')));
+  syncViewport();
   document.body.classList.toggle('cs-locked', sectorOverlayShown() || sectionDrillShown());
   const nextDrillBody = document.getElementById('section-drill-body');
   if (nextDrillBody && drillScroll) nextDrillBody.scrollTop = drillScroll;
@@ -821,7 +832,6 @@ function renderAppDomInner() {
       coachUnread: myCoachUnreadCount(),
     })}${state.identity ? renderRaceDayOverlay(state.raceDay, state.online) : ''}${sectorOverlayHtml()}${sectionDrillHtml()}`;
   if (state.tab === 'coach' && state.coachView === 'coach') scrollToBottomOf('my-coach-messages');
-  else if (state.tab === 'coach') stickChatScrollToBottom();
   if (state.tab === 'roster' && state.roster.subTab === 'conversations') scrollToBottomOf('roster-conversation-messages');
   if (state.tab === 'dashboard' && state.workoutChat) stickWorkoutChatScrollToBottom();
   if (state.tab === 'roster' && state.roster.subTab === 'plan') stickRosterChatScrollToBottom();
@@ -1163,11 +1173,6 @@ function scrollToTop() {
   window.scrollTo(0, 0);
 }
 
-function stickChatScrollToBottom() {
-  const list = document.getElementById('chat-messages');
-  if (list) list.scrollTop = list.scrollHeight;
-}
-
 function stickWorkoutChatScrollToBottom() {
   const list = document.getElementById('workout-chat-messages');
   if (list) list.scrollTop = list.scrollHeight;
@@ -1419,6 +1424,7 @@ function handleSendChat() {
   const history = toApiHistory(state.chat.messages);
   state.chat = appendUserMessage(state.chat, text);
   if (input) { input.value = ''; clearDraft(input.dataset.draftKey); }
+  coachScroll.pinNext(); // sending scrolls to the bottom, once
   render();
   persistChat();
 
@@ -1444,9 +1450,26 @@ function handleSendChat() {
         persistChat();
         log.info('chat.turn_complete', { type: event.type });
       }
-      render();
+      if (!patchStreamingBubble(event)) render();
     },
   });
+}
+
+/** A streamed delta only changes the in-flight assistant bubble, so patch that one row inside the
+ * stable message list instead of rebuilding the whole app (which collapsed and re-grew the
+ * document on every delta -- the bounce -- and reset the reader's scroll). Returns false when a
+ * full render is needed (turn end, error, list not on screen, rows out of step). */
+function patchStreamingBubble(event) {
+  if (event.type !== 'text' && event.type !== 'status' && event.type !== 'tool_use') return false;
+  if (state.tab !== 'coach' || state.coachView !== 'ai') return false;
+  const list = document.getElementById('chat-messages');
+  const messages = state.chat.messages;
+  if (!list || list.children.length !== messages.length) return false;
+  const row = list.lastElementChild;
+  coachScroll.contentChanged(() => {
+    row.outerHTML = renderChatMessage(messages[messages.length - 1]);
+  });
+  return true;
 }
 
 function handleClearChat() {
@@ -4215,6 +4238,7 @@ async function onAppClick(e) {
   }
   switch (action) {
     case 'chat:send': handleSendChat(); break;
+    case 'chat:jump-bottom': coachScroll.jumpToBottom(); break;
     case 'coach:view:ai': handleSelectCoachView('ai'); break;
     case 'coach:view:coach': handleSelectCoachView('coach'); break;
     case 'my-coach:send': await handleSendMyCoach(); break;
@@ -4894,6 +4918,8 @@ function updateOnlineState() {
   }
 }
 
+coachScroll.attach();
+trackViewport();
 window.addEventListener('online', updateOnlineState);
 window.addEventListener('offline', updateOnlineState);
 // See handleOpenHistoryDetail/handleCloseHistoryDetail/setTab for the rest

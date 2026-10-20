@@ -559,6 +559,51 @@
     .chat-input:disabled { opacity: .6; }
     .chat-composer-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 10px; }
 
+    /* Chat panel (src/chatPanel.js): a full-height column -- header band, a message list that is
+       the ONLY scroller, and the composer pinned at the bottom just above the tab bar. Sized from
+       the VISUAL viewport (--vv-h/--vv-top, kept current by chatPanel.js's syncViewport) so the
+       composer sits above the on-screen keyboard on iOS and Android; the tab bar's own height
+       (it already includes the safe-area inset) is reserved at the bottom, and released while the
+       keyboard is open (the bar is then behind it). */
+    body.chat-locked { overflow: hidden; padding-bottom: 0; }
+    body.chat-locked .update-banner { position: fixed; top: 0; left: 0; right: 0; z-index: 30; }
+    .chat-wrap.chat-panel { position: fixed; top: var(--vv-top, 0px); left: 0; right: 0; margin: 0 auto;
+      width: 100%; max-width: 1040px; height: var(--vv-h, 100dvh); padding: 0;
+      padding-bottom: var(--tabbar-h, 64px); display: flex; flex-direction: column; z-index: 10;
+      overflow: hidden; }
+    body.kb-open .chat-wrap.chat-panel { padding-bottom: 0; }
+    .chat-panel-head { flex: none; background: var(--band); color: var(--on-band);
+      border-bottom: 1px solid var(--band-border);
+      padding: max(10px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) 10px max(16px, env(safe-area-inset-left, 0px));
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 14px; }
+    .chat-panel-head .mark { font-family: var(--display); font-size: 11px; letter-spacing: .07em; text-transform: uppercase;
+      font-weight: 800; color: var(--on-band-link); display: inline-flex; align-items: center; gap: 8px; }
+    .chat-panel-head .mark::before { content:""; width: 30px; height: 15px; flex: none;
+      background-image: url('/logo-mark.png'); background-size: contain;
+      background-repeat: no-repeat; background-position: left center; }
+    .chat-panel-head h1 { font-family: var(--display); font-size: 19px; line-height: 1.15; letter-spacing: -.02em;
+      font-weight: 800; margin-top: 4px; }
+    .chat-panel-head .sub { color: var(--on-band-soft); font-size: 13px; margin-top: 2px; }
+    .chat-panel-head .subtab-bar { flex-basis: 100%; margin: 0; }
+    .chat-panel-head .subtab-btn { min-height: 44px; background: var(--paper); }
+    .chat-panel-head .expert-toggle { min-height: 44px; }
+    .chat-panel > .chat-banner { flex: none; margin: 8px 16px 0; }
+    .chat-panel-body { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+    .chat-panel-body > .chat-empty { margin: 16px; }
+    .chat-panel .chat-messages { flex: 1 1 auto; min-height: 0; max-height: none; margin-top: 0; overflow-y: auto;
+      overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+      padding: 14px max(16px, env(safe-area-inset-right, 0px)) 14px max(16px, env(safe-area-inset-left, 0px)); }
+    .chat-new-pill { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); z-index: 2;
+      min-height: 44px; padding: 0 18px; border-radius: var(--radius-pill); border: 1px solid var(--accent);
+      background: var(--accent); color: var(--on-accent); font-family: var(--display); font-size: 13.5px;
+      font-weight: 800; box-shadow: var(--shadow); cursor: pointer; }
+    .chat-new-pill[hidden] { display: none; }
+    .chat-panel .chat-composer { flex: none; margin: 0; border-radius: 0; border-width: 1px 0 0;
+      padding: 10px max(16px, env(safe-area-inset-right, 0px)) 10px max(16px, env(safe-area-inset-left, 0px)); }
+    .chat-panel .chat-input { resize: none; max-height: 96px; }
+    .chat-panel .btn, .chat-panel .btn-ghost { min-height: 44px; }
+    @media (max-width: 560px) { .chat-panel-head .sub { display: none; } }
+
     .btn, .btn-ghost { font-family: var(--display); font-size: 13.5px; font-weight: 800; border-radius: var(--radius-sm);
       padding: 9px 16px; cursor: pointer; }
     .btn { background: var(--accent); color: var(--on-accent); border: 1px solid var(--accent); }
