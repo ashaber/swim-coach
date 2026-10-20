@@ -184,6 +184,29 @@ def _time_at_index(times: Sequence[float], b: float) -> float:
     return times[lo] + (times[lo + 1] - times[lo]) * (b - lo)
 
 
+def _with_parts(series: dict, edges: list[float], parts: Sequence[int]) -> list[float]:
+    """`edges` with every section that is split into n parts cut at n-1 more times, equal-DISTANCE on
+    this lap's own odometer between the section's (position-aligned) edges. Cutting by the odometer,
+    not by track position, keeps a long section that runs close to itself from mis-aligning."""
+    t_s, dist = series["t_s"], series["dist_m"]
+    out = [edges[0]]
+    for k, n in enumerate(parts):
+        a, b = edges[k], edges[k + 1]
+        if n > 1:
+            idx = window_indices(t_s, a - 1.0, b + 1.0)
+            pts = [(t_s[i], dist[i]) for i in idx if dist[i] is not None]
+            da, db = _value_at([t for t, _ in pts], [d for _, d in pts], a), _value_at([t for t, _ in pts], [d for _, d in pts], b)
+            if pts and da is not None and db is not None:
+                d_run = [max(d, pts[0][1]) for _, d in pts]
+                for i in range(1, len(d_run)):
+                    d_run[i] = max(d_run[i], d_run[i - 1])
+                out.extend(min(max(_t_at(d_run, [t for t, _ in pts], da + (db - da) * j / n), a), b) for j in range(1, n))
+            else:
+                out.extend(a + (b - a) * j / n for j in range(1, n))
+        out.append(b)
+    return out
+
+
 def _feature_edges(
     series: dict, cut: list[tuple[int, dict]], best_i: int, splits: Mapping[str, int] | None = None
 ) -> tuple[list[Section], list[list[float]]] | None:
@@ -208,9 +231,12 @@ def _feature_edges(
     sections = segment_course(ref_xy, fix_t, [flow[i] for i in fixes] if flow else None)
     if sections is None:
         return None
-    if splits:
-        sections = split_sections(sections, cumulative_m(ref_xy), dict(splits))
     bounds = [s.start_i for s in sections] + [sections[-1].end_i]
+    parts = [1] * len(sections)
+    if splits:
+        split = split_sections(sections, cumulative_m(ref_xy), dict(splits))
+        parts = [sum(1 for p in split if (p.split_of or p.label) == s.label) for s in sections]
+        sections = split
     all_edges = []
     for k, (_, lap) in enumerate(cut):
         if k == best_i:
@@ -221,7 +247,8 @@ def _feature_edges(
             if mine is None:
                 return None
         mine[0], mine[-1] = lap["edges"][0], lap["edges"][-1]  # the lap's own span, as for the even cut
-        all_edges.append([max(e, mine[j - 1]) if j else e for j, e in enumerate(mine)])
+        mine = [max(e, mine[j - 1]) if j else e for j, e in enumerate(mine)]
+        all_edges.append(_with_parts(series, mine, parts))
     return sections, all_edges
 
 
