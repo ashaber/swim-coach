@@ -204,6 +204,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import ValidationError
 
+from swim_coach.health_vocab import BODY_REGIONS, BODY_REGION_WORDS, ONSETS, RESTRICTIONS, SEVERITIES, SOURCES
 from swim_coach import fueling as fueling_module
 from swim_coach.adapt import adapt_week
 from swim_coach.analysis import analytics_for_coach, has_detailed_analyzer
@@ -1033,12 +1034,12 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
                 "restriction": {
                     "type": "string",
-                    "enum": ["none", "light_only", "no_training"],
+                    "enum": list(RESTRICTIONS),
                     "description": "Coarse training-capacity read: 'none' (no restriction), 'light_only' (reduced/easy training only), 'no_training' (stop training entirely).",
                 },
                 "source": {
                     "type": "string",
-                    "enum": ["self_reported", "practitioner"],
+                    "enum": list(SOURCES),
                     "description": "'self_reported' -- the athlete's own account of how she feels. 'practitioner' -- a physio/doctor's actual clinical guidance (typically relayed by the coach).",
                 },
                 "expected_review_date": {
@@ -1047,20 +1048,17 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
                 "body_region": {
                     "type": "string",
-                    "enum": [
-                        "shoulder", "knee", "back", "hip", "ankle_foot", "elbow_wrist",
-                        "illness_systemic", "head_neck", "other",
-                    ],
+                    "enum": list(BODY_REGIONS),
                     "description": "The coarse body region this affects, only if reasonably clear from what was said -- never guess.",
                 },
                 "onset": {
                     "type": "string",
-                    "enum": ["acute", "gradual"],
+                    "enum": list(ONSETS),
                     "description": "Whether this came on suddenly (acute) or built up gradually (gradual/overuse), only if the athlete or coach said something that makes this clear.",
                 },
                 "severity": {
                     "type": "string",
-                    "enum": ["slight", "minimal", "mild", "moderate", "serious", "long_term"],
+                    "enum": list(SEVERITIES),
                     "description": "A time-loss-based severity estimate (slight/minimal/mild/moderate/serious/long_term), ONLY if a real clinical assessment or clear timeline was actually given (e.g. a physio's stated recovery estimate) -- this is a real clinical judgment, not something to infer from how the athlete describes feeling. Leave unset far more often than not, especially for a first report right after something happens.",
                 },
                 "related_status_id": {
@@ -2991,7 +2989,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
                 "restriction_override": {
                     "type": "string",
-                    "enum": ["none", "light_only", "no_training"],
+                    "enum": list(RESTRICTIONS),
                     "description": (
                         "Force a specific restriction assumption instead of "
                         "reading the athlete's current active HealthStatus -- "
@@ -3474,20 +3472,6 @@ def _handle_lookup_reference(
     return {"found": True, "entries": matches}
 
 
-_BODY_REGIONS = ("shoulder", "knee", "back", "hip", "ankle_foot", "elbow_wrist", "illness_systemic", "head_neck", "other")
-_BODY_REGION_WORDS: dict[str, str] = {
-    **dict.fromkeys(("neck", "head", "headache", "concussion", "jaw", "cervical"), "head_neck"),
-    **dict.fromkeys(("hamstring", "quad", "quads", "quadriceps", "glute", "glutes", "groin", "adductor", "hip flexor",
-                     "thigh", "pelvis", "it band", "itb"), "hip"),
-    **dict.fromkeys(("calf", "achilles", "shin", "foot", "ankle", "plantar", "heel", "toe", "arch"), "ankle_foot"),
-    **dict.fromkeys(("wrist", "elbow", "forearm", "hand", "thumb", "finger"), "elbow_wrist"),
-    **dict.fromkeys(("lower back", "upper back", "spine", "spinal", "lumbar", "thoracic", "ribs", "rib"), "back"),
-    **dict.fromkeys(("flu", "cold", "covid", "fever", "sick", "illness", "virus", "infection", "stomach", "gi"), "illness_systemic"),
-    **dict.fromkeys(("patella", "kneecap", "meniscus"), "knee"),
-    **dict.fromkeys(("rotator cuff", "scapula", "clavicle", "collarbone", "deltoid", "bicep", "tricep"), "shoulder"),
-}
-
-
 def _normalize_body_region(raw: Any) -> tuple[str | None, str | None]:
     """`(region, note)`: the coarse body region for whatever body part was named. An injury is
     ALWAYS recordable -- an unlisted part maps to the nearest region (or `other`) with a note; the
@@ -3495,9 +3479,9 @@ def _normalize_body_region(raw: Any) -> tuple[str | None, str | None]:
     if not isinstance(raw, str) or not raw.strip():
         return None, None
     word = raw.strip().lower()
-    if word in _BODY_REGIONS:
+    if word in BODY_REGIONS:
         return word, None
-    region = _BODY_REGION_WORDS.get(word, "other")
+    region = BODY_REGION_WORDS.get(word, "other")
     return region, f"body_region {raw!r} was recorded as {region!r} (the coarse region); the description keeps the exact words"
 
 
@@ -3530,9 +3514,9 @@ def _handle_record_health_status(
     source = input_data.get("source")
     if not description or not restriction or not source:
         return {"error": "description, restriction, and source are all required"}
-    if restriction not in ("none", "light_only", "no_training"):
+    if restriction not in RESTRICTIONS:
         return {"error": f"invalid restriction {restriction!r}"}
-    if source not in ("self_reported", "practitioner"):
+    if source not in SOURCES:
         return {"error": f"invalid source {source!r}"}
 
     expected_review_date = None
@@ -3552,13 +3536,11 @@ def _handle_record_health_status(
     body_region, region_note = _normalize_body_region(input_data.get("body_region"))
 
     onset = input_data.get("onset")
-    if onset is not None and onset not in ("acute", "gradual"):
+    if onset is not None and onset not in ONSETS:
         return {"error": f"invalid onset {onset!r}"}
 
     severity = input_data.get("severity")
-    if severity is not None and severity not in (
-        "slight", "minimal", "mild", "moderate", "serious", "long_term",
-    ):
+    if severity is not None and severity not in SEVERITIES:
         return {"error": f"invalid severity {severity!r}"}
 
     related_status_id = None
@@ -8862,9 +8844,7 @@ def _handle_propose_injury_adapted_taper(
         return {"error": "event is required"}
 
     restriction_override = input_data.get("restriction_override")
-    if restriction_override is not None and restriction_override not in (
-        "none", "light_only", "no_training",
-    ):
+    if restriction_override is not None and restriction_override not in RESTRICTIONS:
         return {"error": f"invalid restriction_override {restriction_override!r}"}
 
     confirm = bool(input_data.get("confirm", False))

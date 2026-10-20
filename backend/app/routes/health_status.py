@@ -39,6 +39,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from swim_coach.models import HealthStatus
 
+from swim_coach.health_vocab import BODY_REGIONS, ONSETS, RESTRICTIONS, SEVERITIES, SOURCES
 from app.auth import Principal, require_auth, resolve_athlete
 from app.health_status_helpers import link_health_status_feedback
 from app.store_factory import make_store
@@ -50,14 +51,11 @@ router = APIRouter()
 # convention of each route/tool module owning its own inline copy of these
 # validation sets (see tools.py's _handle_record_health_status for a third
 # independent copy).
-_VALID_RESTRICTIONS = {"none", "light_only", "no_training"}
-_VALID_HEALTH_SOURCES = {"self_reported", "practitioner"}
-_VALID_BODY_REGIONS = {
-    "shoulder", "knee", "back", "hip", "ankle_foot", "elbow_wrist",
-    "illness_systemic", "head_neck", "other",
-}
-_VALID_ONSETS = {"acute", "gradual"}
-_VALID_SEVERITIES = {"slight", "minimal", "mild", "moderate", "serious", "long_term"}
+_VALID_RESTRICTIONS = set(RESTRICTIONS)
+_VALID_HEALTH_SOURCES = set(SOURCES)
+_VALID_BODY_REGIONS = set(BODY_REGIONS)
+_VALID_ONSETS = set(ONSETS)
+_VALID_SEVERITIES = set(SEVERITIES)
 
 
 @router.post("/api/health-status")

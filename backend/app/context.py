@@ -66,6 +66,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, TypedDict
 
+from swim_coach.health_vocab import RESTRICTION_SEVERITY
 from swim_coach.analysis import analytics_for_coach
 from swim_coach.athlete_time import athlete_today
 from swim_coach.event_groups import group_of
@@ -1794,7 +1795,7 @@ def _render_demographics(athlete: Athlete, today: date) -> str | None:
 # Ordering severity for _active_health_statuses below -- higher sorts
 # first when an athlete has more than one concurrently-unresolved entry.
 # Not exported/reused elsewhere; purely a local rendering-priority choice.
-_RESTRICTION_SEVERITY = {"no_training": 2, "light_only": 1, "none": 0}
+_RESTRICTION_SEVERITY = RESTRICTION_SEVERITY
 
 
 def _active_health_statuses(statuses: list[HealthStatus]) -> list[HealthStatus]:

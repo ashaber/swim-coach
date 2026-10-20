@@ -15,6 +15,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from swim_coach.health_vocab import BodyRegion, HealthSource, Onset, Restriction, Severity
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 # cross_train: logged non-swim endurance activity (kayak, run, ride, ...).
@@ -2842,18 +2843,15 @@ class HealthStatus(BaseModel):
     athlete_id: UUID
     reported_at: datetime
     reported_by: Literal["athlete", "coach"]
-    source: Literal["self_reported", "practitioner"]
+    source: HealthSource
     description: str
-    restriction: Literal["none", "light_only", "no_training"]
+    restriction: Restriction
     expected_review_date: date | None = None
     resolved: bool = False
     resolved_at: datetime | None = None
-    body_region: Literal[
-        "shoulder", "knee", "back", "hip", "ankle_foot", "elbow_wrist",
-        "illness_systemic", "head_neck", "other",
-    ] | None = None
-    onset: Literal["acute", "gradual"] | None = None
-    severity: Literal["slight", "minimal", "mild", "moderate", "serious", "long_term"] | None = None
+    body_region: BodyRegion | None = None
+    onset: Onset | None = None
+    severity: Severity | None = None
     related_status_id: UUID | None = None
 
 
