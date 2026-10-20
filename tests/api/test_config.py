@@ -123,3 +123,48 @@ def test_claude_max_tokens_invalid_fails_fast(monkeypatch: pytest.MonkeyPatch, b
     monkeypatch.setenv("CLAUDE_MAX_TOKENS", bad)
     with pytest.raises(ConfigError, match="CLAUDE_MAX_TOKENS"):
         Settings.from_env()
+
+
+def _base_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("API_TOKEN", "some-token")
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "id.apps.googleusercontent.com")
+
+
+def test_router_defaults_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    _base_env(monkeypatch)
+    for name in ("COACH_ROUTER_MODE", "COACH_ROUTER_MODEL", "COACH_ROUTER_CAPTURE_ATHLETES"):
+        monkeypatch.delenv(name, raising=False)
+    settings = Settings.from_env()
+    assert settings.router_mode == "off"
+    assert settings.router_model == "claude-haiku-5-5"
+    assert settings.router_capture_athletes == frozenset()
+
+
+def test_router_shadow_and_capture_read_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    _base_env(monkeypatch)
+    monkeypatch.setenv("COACH_ROUTER_MODE", " Shadow ")
+    monkeypatch.setenv("COACH_ROUTER_MODEL", "claude-haiku-5-5-test")
+    monkeypatch.setenv("COACH_ROUTER_CAPTURE_ATHLETES", "andrew, renee ,")
+    settings = Settings.from_env()
+    assert settings.router_mode == "shadow"
+    assert settings.router_model == "claude-haiku-5-5-test"
+    assert settings.router_capture_athletes == frozenset({"andrew", "renee"})
+
+
+@pytest.mark.parametrize("bad", ["on", "true", "haiku"])
+def test_router_mode_invalid_fails_fast(monkeypatch: pytest.MonkeyPatch, bad: str) -> None:
+    # "on" is the reserved enable seam (a later PR): rejected until it is implemented, so a
+    # stray env var cannot silently run as something else.
+    _base_env(monkeypatch)
+    monkeypatch.setenv("COACH_ROUTER_MODE", bad)
+    with pytest.raises(ConfigError, match="COACH_ROUTER_MODE"):
+        Settings.from_env()
+
+
+@pytest.mark.parametrize("bad", ["gpt-5", "haiku", "claude haiku"])
+def test_router_model_invalid_fails_fast(monkeypatch: pytest.MonkeyPatch, bad: str) -> None:
+    _base_env(monkeypatch)
+    monkeypatch.setenv("COACH_ROUTER_MODEL", bad)
+    with pytest.raises(ConfigError, match="COACH_ROUTER_MODEL"):
+        Settings.from_env()

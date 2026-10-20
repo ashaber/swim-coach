@@ -270,3 +270,12 @@ def test_light_escalation_builds_the_full_request_with_the_routed_library_layout
     _, full_call = chat.client.messages.calls
     assert len(full_call["system"]) == 2  # block A + block C -- no block B
     assert "## Library topic files for this question" in json.dumps(full_call["messages"])
+
+
+def test_affirmation_after_history_is_never_light_and_health_follows_sports() -> None:
+    assert is_light_turn("yes, go ahead", history_len=2) is False  # PR #215 review: confirmations routed light
+    assert is_light_turn("sounds good, thanks", history_len=2) is False
+    assert is_light_turn("I blacked out on the climb", history_len=0) is False
+    assert is_light_turn("coming down with something", history_len=0) is False
+    assert is_light_turn("I had a crash today", history_len=0, sports=["bike"]) is False
+    assert is_light_turn("good morning coach", history_len=2) is True

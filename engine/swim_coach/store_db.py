@@ -62,6 +62,7 @@ from swim_coach.models import (
     HealthStatus,
     LibraryReview,
     MacroPlan,
+    RouterShadowCapture,
     Sport,
     ThresholdRecord,
     Wellness,
@@ -1214,6 +1215,42 @@ class DbStore(StoreInterface):
             )
             row = cur.fetchone()
         return row_to_coach_grant(row) if row is not None else None
+
+    # --- Haiku router shadow captures ------------------------------------------
+
+    def save_router_capture(self, slug: str, capture: RouterShadowCapture) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            athlete_id = self._athlete_id(cur, slug)  # raises FileNotFoundError if unknown
+            cur.execute(
+                """
+                insert into router_shadow_captures
+                    (id, athlete_id, request_id, question, haiku_reply, sonnet_reply, decision, created_at)
+                values (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    capture.id, athlete_id, capture.request_id, capture.question, capture.haiku_reply,
+                    capture.sonnet_reply, self._Jsonb(capture.decision), capture.created_at,
+                ),
+            )
+
+    def list_router_captures(self, slug: str, *, limit: int | None = None) -> list[RouterShadowCapture]:
+        with self._connect() as conn, conn.cursor() as cur:
+            athlete_id = self._athlete_id(cur, slug)  # raises FileNotFoundError if unknown
+            query = "select * from router_shadow_captures where athlete_id = %s order by created_at desc, id desc"
+            params: list[Any] = [athlete_id]
+            if limit is not None:
+                query += " limit %s"
+                params.append(max(limit, 0))
+            cur.execute(query, params)
+            rows = cur.fetchall()
+        return [
+            RouterShadowCapture(
+                id=r["id"], athlete_id=r["athlete_id"], request_id=r["request_id"], question=r["question"],
+                haiku_reply=r["haiku_reply"], sonnet_reply=r["sonnet_reply"], decision=r["decision"] or {},
+                created_at=r["created_at"],
+            )
+            for r in rows
+        ]
 
     # --- Athlete<->coach conversation (IDEA 016 Part 2) ------------------
 

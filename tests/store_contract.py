@@ -35,6 +35,7 @@ from swim_coach.models import (
     LibraryReview,
     MacroBlock,
     MacroPlan,
+    RouterShadowCapture,
     Session,
     ThresholdRecord,
     Wellness,
@@ -1794,4 +1795,33 @@ class StoreContractTests(ChangeTokenContractTests):
         found = store.get_session("hash-athlete-bound")
         assert found is not None
         assert found.pending_email is None
+
+    # --- Haiku router shadow captures -----------------------------------------
+
+    def _capture(self, athlete, request_id="req-1", at=None, **kw):
+        return RouterShadowCapture(
+            id=uuid.uuid4(), athlete_id=athlete.id, request_id=request_id,
+            question=kw.pop("question", "what is on my plan tomorrow?"),
+            haiku_reply=kw.pop("haiku_reply", "A 60 minute easy swim."),
+            sonnet_reply=kw.pop("sonnet_reply", "Tomorrow: easy swim, 60 minutes."),
+            decision=kw.pop("decision", {"route": "answer", "confidence": 0.9, "sonnet_tools": []}),
+            created_at=at or datetime.now(timezone.utc), **kw,
+        )
+
+    def test_router_capture_round_trip_newest_first(self, store):
+        athlete = _athlete()
+        store.save_athlete(athlete)
+        t0 = datetime(2026, 10, 20, 9, 0, tzinfo=timezone.utc)
+        old = self._capture(athlete, "req-old", t0)
+        new = self._capture(athlete, "req-new", t0 + timedelta(minutes=5), haiku_reply=None)
+        store.save_router_capture(SLUG, old)
+        store.save_router_capture(SLUG, new)
+        assert store.list_router_captures(SLUG) == [new, old]
+        assert store.list_router_captures(SLUG, limit=1) == [new]
+
+    def test_router_capture_empty_and_unknown_slug(self, store):
+        store.save_athlete(_athlete())
+        assert store.list_router_captures(SLUG) == []
+        with pytest.raises(FileNotFoundError):
+            store.save_router_capture("nobody", self._capture(_athlete()))
 

@@ -164,6 +164,7 @@ from swim_coach.load import (
     ctl_atl_tsb_series,
     daily_loads,
 )
+from swim_coach.health_vocab import Restriction
 from swim_coach.models import Athlete, Event, Session, Wellness, Workout
 from swim_coach.plan import (
     RECOVERY_SESSION_MIN,
@@ -172,7 +173,6 @@ from swim_coach.plan import (
     _z2_pace_s_per_100m,
 )
 
-Restriction = Literal["none", "light_only", "no_training"]
 
 RACE_DAY_TSB_BAND = {"low": 5.0, "high": 25.0}
 # See module docstring's citation block (Joe Friel / TrainingPeaks). This

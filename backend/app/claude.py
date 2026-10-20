@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator
 
 import anthropic
@@ -29,6 +30,7 @@ import httpx
 from app.config import Settings
 from app.context import _cache_control
 from app.logging_config import get_logger
+from app.model_prices import split_cache_writes, usage_cost
 from app.save_claims import (
     DRAFT_TOOLS,
     format_tool_trace,
@@ -37,6 +39,7 @@ from app.save_claims import (
     claims_a_draft,
     claims_a_save,
     write_succeeded,
+    WRITE_TOOLS,
 )
 from app.tool_errors import internal_tool_error
 from app.tools import ToolHandler
@@ -69,6 +72,18 @@ MAX_TOKENS_TRUNCATION_MARKER = (
     "\n\n⚠️ _[Response was cut off at the token limit — "
     "reply 'continue' to resume.]_"
 )
+
+
+@dataclass
+class TurnStats:
+    """Passive record of what one Sonnet turn actually did, filled in by `_run_turns` when a caller
+    passes one (the Haiku router's shadow log compares it with Haiku's decision). Never read by the
+    turn itself, so passing it cannot change the stream."""
+
+    output_tokens: int = 0
+    tools: list[str] = field(default_factory=list)
+    wrote: bool = False  # a WRITE_TOOLS call returned its success shape
+    completed: bool = False  # the turn reached its `done` event
 
 
 # What an `escalate` callback returns: the full-mode (system, messages, tools,
@@ -170,6 +185,28 @@ def request_segment_sizes(
         "question_chars": question_chars,
         "est_input_tokens": (system_chars + tools_chars + history_chars + latest_chars) // 4,
     }
+def request_shape(
+    system: list[dict[str, Any]],
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+    *,
+    cache_ttl_system: str,
+    cache_ttl_context: str,
+) -> dict[str, Any]:
+    """Prompt METADATA for the cost dashboard: sizes and counts only, never any text. System
+    blocks are in request order (A persona/INDEX, C athlete context, B routed library; a block
+    absent from this request simply isn't listed)."""
+    history = messages[:-1]
+    return {
+        "system_block_chars": [len(b.get("text", "")) for b in system],
+        "history_chars": sum(_content_chars(m["content"]) for m in history),
+        "history_turns": len(history),
+        "tool_count": len(tools) if tools else 0,
+        "cache_ttl_system": cache_ttl_system,
+        "cache_ttl_context": cache_ttl_context,
+    }
+
+
 # The Messages API allows at most 4 cache_control breakpoints per request.
 MAX_CACHE_BREAKPOINTS = 4
 
@@ -293,6 +330,8 @@ class ClaudeChat:
         *,
         escalate: Callable[[], Escalation] | None = None,
         request_id: str | None = None,
+        stats: TurnStats | None = None,
+        shape_extra: dict[str, Any] | None = None,
     ) -> Iterator[str]:
         """Yields SSE-framed JSON lines (`"data: {...}\\n\\n"`).
 
@@ -312,7 +351,8 @@ class ClaudeChat:
         used by `run_once`) -- SSE-frames each raw event dict it yields.
         """
         for event in self._run_turns(
-            system, messages, tools, tool_handlers, escalate=escalate, request_id=request_id
+            system, messages, tools, tool_handlers, escalate=escalate, request_id=request_id, stats=stats,
+            shape_extra=shape_extra,
         ):
             yield _sse(event)
 
@@ -372,6 +412,8 @@ class ClaudeChat:
         *,
         escalate: Callable[[], Escalation] | None = None,
         request_id: str | None = None,
+        stats: TurnStats | None = None,
+        shape_extra: dict[str, Any] | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Shared tool-loop generator behind both `run_streaming` (which
         SSE-frames each event) and `run_once` (which drains text events into
@@ -392,6 +434,17 @@ class ClaudeChat:
             "claude request sizes",
             model=self.settings.claude_model,
             **request_segment_sizes(system, messages, tools),
+        )
+        log.info(
+            "coach request shape",
+            request_id=request_id,
+            model=self.settings.claude_model,
+            **request_shape(
+                system, messages, tools,
+                cache_ttl_system=self.settings.prompt_cache_ttl,
+                cache_ttl_context=self.settings.prompt_cache_ttl_context,
+            ),
+            **(shape_extra or {}),
         )
 
         for iteration in range(MAX_TOOL_ITERATIONS):
@@ -438,6 +491,10 @@ class ClaudeChat:
                 return
 
             usage = final.usage
+            write_5m, write_1h = split_cache_writes(usage, self.settings.prompt_cache_ttl_context)
+            called = [b.name for b in final.content if getattr(b, "type", None) == "tool_use"]
+            if stats is not None:
+                stats.output_tokens += getattr(usage, "output_tokens", 0) or 0
             log.info(
                 "claude turn complete",
                 iteration=iteration,
@@ -447,6 +504,17 @@ class ClaudeChat:
                 cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", 0),
                 cache_creation_input_tokens=getattr(usage, "cache_creation_input_tokens", 0),
                 tool_errors_so_far=tool_error_count,
+                model=request_kwargs["model"],
+                tools_called=called,
+                write_tool_called=any(t in WRITE_TOOLS for t in called),
+                **usage_cost(
+                    request_kwargs["model"],
+                    input_tokens=getattr(usage, "input_tokens", 0) or 0,
+                    cache_read=getattr(usage, "cache_read_input_tokens", 0) or 0,
+                    cache_write_5m=write_5m,
+                    cache_write_1h=write_1h,
+                    output=getattr(usage, "output_tokens", 0) or 0,
+                ),
                 # IDEA 025 step 1: joins this turn's cost back to the same
                 # request's "library route" log line (app.context/app.routes).
                 request_id=request_id,
@@ -497,6 +565,8 @@ class ClaudeChat:
                     )
                     yield {"type": "text", "text": UNVERIFIED_DRAFT_NOTICE}
                 yield {"type": "tool_trace", "trace": format_tool_trace(trace_calls)}
+                if stats is not None:
+                    stats.completed = True
                 yield {"type": "done", "stop_reason": final.stop_reason}
                 return
 
@@ -530,6 +600,8 @@ class ClaudeChat:
                     continue
                 handler = tool_handlers.get(block.name)
                 tools_invoked.append(block.name)
+                if stats is not None:
+                    stats.tools.append(block.name)
                 yield {"type": "tool_use", "name": block.name, "input": block.input}
                 try:
                     result = (
@@ -585,6 +657,8 @@ class ClaudeChat:
                     tool_error_count += 1
                 if write_succeeded(block.name, result):
                     turn_wrote = True
+                    if stats is not None:
+                        stats.wrote = True
                 tool_results.append(
                     {
                         "type": "tool_result",

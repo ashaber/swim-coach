@@ -263,3 +263,48 @@ def message_text(content) -> str:
     if isinstance(content, str):
         return content
     return "".join(b.get("text", "") for b in content if isinstance(b, dict))
+
+
+class FakeRouterMessages:
+    """Fake of the `client.messages` surface the Haiku router uses: non-streaming `create` (pops
+    the next scripted response, records kwargs in `.creates`) and the free `count_tokens`
+    (deterministic: serialized length // 4; records kwargs in `.counts`). Drop-in for the
+    router tests; chat tests mix it onto the same client as the streaming fake."""
+
+    def __init__(self, responses: list[Any] | None = None, *, count_error: Exception | None = None) -> None:
+        self._responses = list(responses or [])
+        self.creates: list[dict[str, Any]] = []
+        self.counts: list[dict[str, Any]] = []
+        self._count_error = count_error
+
+    def create(self, **kwargs: Any) -> Any:
+        self.creates.append(kwargs)
+        if not self._responses:
+            raise AssertionError("FakeRouterMessages.create called more times than responses configured")
+        response = self._responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    def count_tokens(self, **kwargs: Any) -> Any:
+        import json
+
+        self.counts.append(kwargs)
+        if self._count_error is not None:
+            raise self._count_error
+        size = len(json.dumps([kwargs.get("system"), kwargs.get("messages"), kwargs.get("tools")], default=str))
+        return SimpleNamespace(input_tokens=size // 4)
+
+
+def make_triage_block(block_id: str = "tu_triage", **fields: Any) -> SimpleNamespace:
+    """A `triage` tool_use block; `fields` override a valid 'answer' decision."""
+    data: dict[str, Any] = dict(
+        route="answer",
+        complexity=0.2,
+        confidence=0.9,
+        category="greeting/thanks",
+        reason="simple greeting",
+        reply="Hi! Ready when you are.",
+    )
+    data.update(fields)
+    return make_tool_use_block(block_id, "triage", data)

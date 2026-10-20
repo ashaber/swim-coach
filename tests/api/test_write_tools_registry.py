@@ -57,3 +57,11 @@ def test_success_shapes() -> None:
     assert write_succeeded("set_pool_coach_status", {"updated": True})
     assert write_succeeded("create_event", {"created": True})
     assert not write_succeeded("propose_adaptation", {"persisted": True})  # read-only tool
+
+
+def test_non_write_tool_classification_is_a_clean_partition() -> None:
+    from app.save_claims import DRAFT_ONLY_TOOLS, READ_ONLY_TOOLS, SIDE_EFFECT_TOOLS
+
+    groups = [set(READ_ONLY_TOOLS), set(DRAFT_ONLY_TOOLS), set(SIDE_EFFECT_TOOLS), set(WRITE_TOOLS)]
+    assert sum(len(g) for g in groups) == len(set().union(*groups)), "a tool is classified twice"
+    assert set(NON_PLAN_OR_READ_ONLY) == groups[0] | groups[1] | groups[2]

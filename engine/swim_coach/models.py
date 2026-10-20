@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import hashlib
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from swim_coach.health_vocab import BodyRegion, HealthSource, Onset, Restriction, Severity
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 # cross_train: logged non-swim endurance activity (kayak, run, ride, ...).
@@ -2408,6 +2409,23 @@ class Conversation(BaseModel):
     ai_muted: bool = False
 
 
+class RouterShadowCapture(BaseModel):
+    """One shadow-mode comparison for the Haiku coach router: the athlete's question, what Haiku
+    would have replied, what Sonnet actually replied, and the routing decision, stored for a human
+    to review. Written ONLY for athletes named in COACH_ROUTER_CAPTURE_ATHLETES; the text never goes
+    to logs. Append-only. `decision` is a small JSON object (route, confidence, tools called...)."""
+
+    schema_version: int = 1
+    id: UUID
+    athlete_id: UUID
+    request_id: str
+    question: str
+    haiku_reply: str | None = None
+    sonnet_reply: str | None = None
+    decision: dict = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class Workout(BaseModel):
     """A completed workout, logged manually or ingested from a file/coach text."""
 
@@ -2825,18 +2843,15 @@ class HealthStatus(BaseModel):
     athlete_id: UUID
     reported_at: datetime
     reported_by: Literal["athlete", "coach"]
-    source: Literal["self_reported", "practitioner"]
+    source: HealthSource
     description: str
-    restriction: Literal["none", "light_only", "no_training"]
+    restriction: Restriction
     expected_review_date: date | None = None
     resolved: bool = False
     resolved_at: datetime | None = None
-    body_region: Literal[
-        "shoulder", "knee", "back", "hip", "ankle_foot", "elbow_wrist",
-        "illness_systemic", "head_neck", "other",
-    ] | None = None
-    onset: Literal["acute", "gradual"] | None = None
-    severity: Literal["slight", "minimal", "mild", "moderate", "serious", "long_term"] | None = None
+    body_region: BodyRegion | None = None
+    onset: Onset | None = None
+    severity: Severity | None = None
     related_status_id: UUID | None = None
 
 
