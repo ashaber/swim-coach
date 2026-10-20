@@ -27,6 +27,7 @@ import anthropic
 import httpx
 
 from app.config import Settings
+from app.context import _cache_control
 from app.logging_config import get_logger
 from app.save_claims import (
     DRAFT_TOOLS,
@@ -192,6 +193,7 @@ def with_loop_breakpoint(
     system: list[dict[str, Any]] | None,
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None,
+    cache_ttl: str,
 ) -> list[dict[str, Any]]:
     """`messages` with a cache breakpoint on the LAST block of the LAST message
     (IDEA 022 step 2). Each tool-loop iteration re-sends the newest user message
@@ -222,7 +224,7 @@ def with_loop_breakpoint(
         blocks = [dict(b) for b in content]
     if not blocks:
         return messages
-    blocks[-1] = {**blocks[-1], "cache_control": {"type": "ephemeral"}}
+    blocks[-1] = {**blocks[-1], "cache_control": _cache_control(cache_ttl)}
     return [*messages[:-1], {**last, "content": blocks}]
 
 
@@ -394,7 +396,10 @@ class ClaudeChat:
 
         for iteration in range(MAX_TOOL_ITERATIONS):
             request_kwargs = build_request_kwargs(
-                self.settings, system, with_loop_breakpoint(system, messages, tools), tools
+                self.settings, system, with_loop_breakpoint(
+                    system, messages, tools, self.settings.prompt_cache_ttl_context
+                ),
+                tools,
             )
 
             iteration_text: list[str] = []

@@ -203,14 +203,14 @@ def test_full_system_is_byte_identical_across_two_different_questions_in_same_bu
     library_dir,
 ) -> None:
     # Both route to 03-periodization.md via different keywords ("cut" vs "repeat").
-    system_1 = build_system(library_dir, "why did this week get cut?")
-    system_2 = build_system(library_dir, "why was this week repeated instead of advanced?")
+    system_1 = build_system(library_dir, "why did this week get cut?", context_cache_ttl="5m")
+    system_2 = build_system(library_dir, "why was this week repeated instead of advanced?", context_cache_ttl="5m")
     assert system_1 == system_2
 
 
 def test_system_differs_across_different_buckets(library_dir) -> None:
-    pace_system = build_system(library_dir, "what pace should I swim the long set at?")
-    ow_system = build_system(library_dir, "what pace should I expect in a wetsuit?")
+    pace_system = build_system(library_dir, "what pace should I swim the long set at?", context_cache_ttl="5m")
+    ow_system = build_system(library_dir, "what pace should I expect in a wetsuit?", context_cache_ttl="5m")
     # Block A (index 0) is identical; block B (index 1) differs by bucket.
     assert pace_system[0] == ow_system[0]
     assert pace_system[1] != ow_system[1]
@@ -490,7 +490,7 @@ def test_routed_block_attaches_cited_entries_not_the_whole_bibliography(library_
     # attach the cited entries itself, or the coach loses citations
     # entirely on the default config. It must still never embed the whole
     # ~58k-token bibliography.
-    block = build_routed_block(library_dir, "is creatine worth taking daily?")
+    block = build_routed_block(library_dir, "is creatine worth taking daily?", cache_ttl="5m")
     assert "## library/reference_list.md entries cited by the files above" in block[0]["text"]
     assert "Chilibeck P.D. et al. (2017)" in block[0]["text"]
     assert "Research Reference List" not in block[0]["text"]  # the file's own H1, never embedded
@@ -498,8 +498,8 @@ def test_routed_block_attaches_cited_entries_not_the_whole_bibliography(library_
 
 
 def test_block_a_is_identical_whatever_the_message_so_topic_changes_only_rewrite_block_b(library_dir) -> None:
-    fuel = build_system(library_dir, "how should I fuel a 4 hour ride?")
-    pace = build_system(library_dir, "what pace should I swim at?")
+    fuel = build_system(library_dir, "how should I fuel a 4 hour ride?", context_cache_ttl="5m")
+    pace = build_system(library_dir, "what pace should I swim at?", context_cache_ttl="5m")
     assert fuel[0] == pace[0]  # the stable, cached prefix (persona + conventions + index)
     assert fuel[1] != pace[1]  # only the routed topic files differ
 
@@ -510,7 +510,7 @@ def test_reference_list_whole_bibliography_never_rides_build_system(library_dir)
     # entries are, attached in block B by default (build_routed_block,
     # production's live path since COACH_ROUTED_LIBRARY_IN_MESSAGE is unset)
     # or on the message when that flag is set (build_routed_library_text).
-    blocks = build_system(library_dir, "what pace should I swim at?")
+    blocks = build_system(library_dir, "what pace should I swim at?", context_cache_ttl="5m")
     full = "\n".join(b["text"] for b in blocks)
     assert "Research Reference List" not in full  # the file's own H1 title
 
@@ -523,7 +523,7 @@ def test_build_messages_shape_with_history() -> None:
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "hello!"},
     ]
-    messages = build_messages(message="what's next?", history=history)
+    messages = build_messages(message="what's next?", history=history, cache_ttl="5m")
     assert len(messages) == 3
     # History is replayed verbatim (byte-stable, cacheable); the newest
     # message carries only the athlete's own text -- context-trim build,
@@ -550,9 +550,9 @@ def test_build_messages_is_fully_determined_by_message_and_history(app_env) -> N
     # sensitive half now lives in build_context_block -- see the tests below.)
     store = FileStore(base_dir=app_env)
     history = _history_of(3)
-    first = build_messages(message="q3", history=history)
+    first = build_messages(message="q3", history=history, cache_ttl="5m")
     store.save_workout("renee", make_workout(date=date.today(), sport="bike"))
-    second = build_messages(message="q3", history=history)
+    second = build_messages(message="q3", history=history, cache_ttl="5m")
 
     assert first == second
 
@@ -571,7 +571,7 @@ def test_context_block_reflects_current_data_on_the_latest_call(app_env) -> None
 
 def test_build_messages_marks_end_of_history_as_cache_breakpoint() -> None:
     history = _history_of(2)
-    messages = build_messages(message="q2", history=history)
+    messages = build_messages(message="q2", history=history, cache_ttl="5m")
 
     breakpoint_msg = messages[-2]
     assert breakpoint_msg["role"] == "assistant"
@@ -588,7 +588,7 @@ def test_build_messages_marks_end_of_history_as_cache_breakpoint() -> None:
 
 
 def test_build_messages_shape_without_history() -> None:
-    messages = build_messages(message="hello coach", history=[])
+    messages = build_messages(message="hello coach", history=[], cache_ttl="5m")
     assert messages == [{"role": "user", "content": "hello coach"}]
 
 
@@ -1421,7 +1421,7 @@ def test_context_block_carries_the_focused_workout_not_the_message(app_env) -> N
     workout = _rich_workout()
 
     block = build_context_block(store, "renee", expert_mode=False, focused_workout=workout)
-    messages = build_messages(message="how did this one go?", history=[])
+    messages = build_messages(message="how did this one go?", history=[], cache_ttl="5m")
 
     assert "specific workout the athlete is asking about" in block[0]["text"]
     assert str(workout.id) in block[0]["text"]
@@ -1433,7 +1433,7 @@ def test_system_prefix_untouched_by_focused_workout(library_dir) -> None:
     # (build_system) takes no workout argument at all, so scoped and unscoped
     # chats about the same message share the same cache entry by construction.
     message = "how did this workout go?"
-    assert build_system(library_dir, message) == build_system(library_dir, message)
+    assert build_system(library_dir, message, context_cache_ttl="5m") == build_system(library_dir, message, context_cache_ttl="5m")
 
 
 # --- focused session (Plan tab's embedded "ask about this session" chat) ----
@@ -1491,7 +1491,7 @@ def test_context_block_carries_the_focused_session_not_the_message(app_env) -> N
     session = make_session(purpose="taper-week technique focus")
 
     block = build_context_block(store, "renee", expert_mode=False, focused_session=session)
-    messages = build_messages(message="what's today's session about?", history=[])
+    messages = build_messages(message="what's today's session about?", history=[], cache_ttl="5m")
 
     assert "specific planned session the athlete is asking about" in block[0]["text"]
     assert "taper-week technique focus" in block[0]["text"]
@@ -1541,8 +1541,8 @@ def test_persona_limits_retries_on_tool_error_to_once() -> None:
 
 
 def test_build_system_can_omit_the_routed_block(library_dir) -> None:
-    full = build_system(library_dir, "how should I fuel a 4 hour ride?")
-    stable_only = build_system(library_dir, "how should I fuel a 4 hour ride?", include_routed=False)
+    full = build_system(library_dir, "how should I fuel a 4 hour ride?", context_cache_ttl="5m")
+    stable_only = build_system(library_dir, "how should I fuel a 4 hour ride?", include_routed=False, context_cache_ttl="5m")
     assert len(full) == 2 and len(stable_only) == 1
     assert stable_only == full[:1]
 
@@ -1554,7 +1554,7 @@ def test_build_system_places_context_block_between_a_and_b(app_env, library_dir)
     store = FileStore(base_dir=app_env)
     context_block = build_context_block(store, "renee", expert_mode=False)
 
-    system = build_system(library_dir, "how should I fuel a 4 hour ride?", context_block=context_block)
+    system = build_system(library_dir, "how should I fuel a 4 hour ride?", context_block=context_block, context_cache_ttl="5m")
 
     assert len(system) == 3
     assert "swim-coach AI coaching agent" in system[0]["text"]  # sanity: block A is persona/rules/INDEX text
@@ -1566,8 +1566,8 @@ def test_build_system_places_context_block_between_a_and_b(app_env, library_dir)
 def test_build_system_without_context_block_is_unchanged(library_dir) -> None:
     # Every existing call site that doesn't pass context_block keeps producing exactly the old
     # two-block shape -- no silent behavior change for a caller that hasn't adopted block C.
-    with_none = build_system(library_dir, "hi", context_block=None)
-    omitted = build_system(library_dir, "hi")
+    with_none = build_system(library_dir, "hi", context_block=None, context_cache_ttl="5m")
+    omitted = build_system(library_dir, "hi", context_cache_ttl="5m")
     assert with_none == omitted
     assert len(with_none) == 2
 
@@ -1590,8 +1590,8 @@ def test_context_block_cache_key_is_unaffected_by_which_topic_file_follows_it(ap
     store = FileStore(base_dir=app_env)
     context_block = build_context_block(store, "renee", expert_mode=False)
 
-    fuel_system = build_system(library_dir, "how should I fuel a 4 hour ride?", context_block=context_block)
-    pace_system = build_system(library_dir, "what pace should I swim at?", context_block=context_block)
+    fuel_system = build_system(library_dir, "how should I fuel a 4 hour ride?", context_block=context_block, context_cache_ttl="5m")
+    pace_system = build_system(library_dir, "what pace should I swim at?", context_block=context_block, context_cache_ttl="5m")
 
     assert fuel_system[:2] == pace_system[:2]  # A + C identical regardless of B
     assert fuel_system[2] != pace_system[2]  # B itself legitimately differs
@@ -1664,7 +1664,7 @@ def test_default_config_creatine_question_attaches_chilibeck_in_block_b(library_
     # (include_routed=True -> build_routed_block, system block B) is the
     # path actually live -- not build_routed_library_text. Citations must
     # attach there too, with no flag involved at all.
-    blocks = build_system(library_dir, "is creatine worth taking daily?")
+    blocks = build_system(library_dir, "is creatine worth taking daily?", context_cache_ttl="5m")
     block_b_text = blocks[1]["text"]
     assert "Chilibeck P.D. et al. (2017)" in block_b_text
 
@@ -1679,7 +1679,7 @@ def test_route_info_for_logging_matches_creatine_routing_and_citation_count(libr
 
 def test_build_messages_puts_library_then_question_in_the_newest_message(library_dir) -> None:
     library_text = build_routed_library_text(library_dir, "how should I fuel a 4 hour ride?")
-    messages = build_messages(message="how should I fuel?", history=[], library_text=library_text)
+    messages = build_messages(message="how should I fuel?", history=[], library_text=library_text, cache_ttl="5m")
     body = messages[-1]["content"]
     assert body.index("library/08-ultra-feeding.md") >= 0
     assert body.endswith("how should I fuel?")
@@ -1692,11 +1692,11 @@ def test_history_prefix_stays_byte_stable_when_the_topic_changes(library_dir) ->
     history = _history_of(3)
     a = build_messages(
         message="fuel?", history=history,
-        library_text=build_routed_library_text(library_dir, "how should I fuel a 4 hour ride?"),
+        library_text=build_routed_library_text(library_dir, "how should I fuel a 4 hour ride?"), cache_ttl="5m",
     )
     b = build_messages(
         message="pace?", history=history,
-        library_text=build_routed_library_text(library_dir, "what pace should I swim at?"),
+        library_text=build_routed_library_text(library_dir, "what pace should I swim at?"), cache_ttl="5m",
     )
     assert a[:-1] == b[:-1]
 
@@ -1917,7 +1917,7 @@ def test_build_messages_logs_message_sizes_reflecting_routed_library_and_history
     history = _history_of(2)
     expected_history_chars = sum(len(turn["content"]) for turn in history)
 
-    build_messages(message="hi", history=history, library_text="x" * 500)
+    build_messages(message="hi", history=history, library_text="x" * 500, cache_ttl="5m")
 
     logged = [
         json.loads(line)

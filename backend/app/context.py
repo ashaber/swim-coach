@@ -1273,7 +1273,11 @@ def _routed_topic_files_text(
 
 
 def build_routed_block(
-    library_dir: Path, message: str, *, athlete_sports: list[str] | None = None
+    library_dir: Path,
+    message: str,
+    *,
+    athlete_sports: list[str] | None = None,
+    cache_ttl: str,
 ) -> list[dict[str, Any]]:
     """System block B: the routed topic files for `message`, plus the
     verbatim `reference_list.md` entries those files actually cite (IDEA 025
@@ -1305,7 +1309,7 @@ def build_routed_block(
         {
             "type": "text",
             "text": text,
-            "cache_control": {"type": "ephemeral"},
+            "cache_control": _cache_control(cache_ttl),
         }
     ]
 
@@ -1389,7 +1393,10 @@ def build_routed_library_text(
     entries, IDEA 025 step 1), under a header saying what they are. Anything
     the routed files don't cite is reachable via the `lookup_reference` tool
     instead."""
-    body = build_routed_block(library_dir, message, athlete_sports=athlete_sports)[0]["text"]
+    # Only the block's text is used here (no cache_control rides the message), so the TTL is moot.
+    body = build_routed_block(library_dir, message, athlete_sports=athlete_sports, cache_ttl="5m")[0][
+        "text"
+    ]
     return (
         "## Library topic files for this question "
         "(reference material -- ground and cite from these, same rules as the system prompt)\n\n"
@@ -1435,6 +1442,7 @@ def build_system(
     include_routed: bool = True,
     cache_ttl: str = "5m",
     context_block: list[dict[str, Any]] | None = None,
+    context_cache_ttl: str,
 ) -> list[dict[str, Any]]:
     """The full `system` param: block A, then block C (`context_block`, when given), then
     block B -- each its own cache breakpoint (stable-first, per Anthropic's prompt-caching
@@ -1468,6 +1476,7 @@ def build_system(
     then puts the routed files on the newest message via `build_routed_library_text`.
     """
     # `cache_ttl` applies to block A only: a longer-TTL entry must come BEFORE shorter ones.
+    # Block B takes `context_cache_ttl` (the same setting as block C), so A >= C == B holds.
     # Block C carries its OWN ttl (`build_context_block`'s own `cache_ttl` argument, from
     # `PROMPT_CACHE_TTL_CONTEXT`) baked into the block it's handed here -- athlete data changes
     # far more often than the library/persona, so its default TTL is independent of block A's.
@@ -1476,7 +1485,9 @@ def build_system(
     if context_block:
         blocks = blocks + context_block
     if include_routed:
-        blocks = blocks + build_routed_block(library_dir, message, athlete_sports=athlete_sports)
+        blocks = blocks + build_routed_block(
+            library_dir, message, athlete_sports=athlete_sports, cache_ttl=context_cache_ttl
+        )
     return blocks
 
 
@@ -2554,6 +2565,7 @@ def build_messages(
     message: str,
     history: list[HistoryTurn],
     library_text: str | None = None,
+    cache_ttl: str,
 ) -> list[dict[str, Any]]:
     """The `messages` param: `history` verbatim, then the new `message`.
 
@@ -2584,7 +2596,7 @@ def build_messages(
     ]
     if messages:
         messages[-1]["content"] = [
-            {"type": "text", "text": messages[-1]["content"], "cache_control": {"type": "ephemeral"}}
+            {"type": "text", "text": messages[-1]["content"], "cache_control": _cache_control(cache_ttl)}
         ]
     routed_library_chars = len(library_text) if library_text else 0
     newest_text = f"{library_text}\n\n---\n\n{message}" if library_text else message
