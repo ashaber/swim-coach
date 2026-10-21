@@ -7974,3 +7974,134 @@ def test_structured_schema_documents_bike_watts() -> None:
     text = json.dumps(SESSION_OVERRIDES_SCHEMA)
     assert "power_w" in text
     assert "BIKE steps" in text and "swim pace only" in text
+
+
+# --- resolve_health_status + duplicate guard ------------------------------------------------------
+
+
+def _open_status(store, slug="renee", **overrides):
+    athlete = store.load_athlete(slug)
+    data = dict(
+        id=uuid.uuid4(), athlete_id=athlete.id, reported_at=datetime.now(timezone.utc),
+        reported_by="athlete", source="self_reported", description="old niggle", restriction="none",
+    )
+    data.update(overrides)
+    entry = HealthStatus(**data)
+    store.save_health_status(slug, entry)
+    return entry
+
+
+def _states(store, slug="renee"):
+    return {s.id: s.resolved for s in store.list_health_status(slug)}
+
+
+def test_resolve_health_status_by_ids_resolves_only_those(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    a, b = _open_status(store, body_region="head_neck"), _open_status(store, body_region="shoulder")
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["resolve_health_status"]({"ids": [str(a.id)], "note": "athlete says healed"})
+    assert result["updated"] is True
+    assert [r["id"] for r in result["resolved"]] == [str(a.id)]
+    assert result["resolved"][0]["body_region"] == "head_neck"
+    assert _states(store) == {a.id: True, b.id: False}
+
+
+def test_resolve_health_status_all_open(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    a, b = _open_status(store), _open_status(store, body_region="knee")
+    done = _open_status(store, resolved=True, resolved_at=datetime.now(timezone.utc))
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["resolve_health_status"]({"all_open": True})
+    assert {r["id"] for r in result["resolved"]} == {str(a.id), str(b.id)}
+    assert all(_states(store).values()) and done.id in _states(store)
+
+
+def test_resolve_health_status_reports_unknown_and_already_resolved_ids(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    a = _open_status(store)
+    done = _open_status(store, resolved=True, resolved_at=datetime.now(timezone.utc))
+    ghost = uuid.uuid4()
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["resolve_health_status"]({"ids": [str(a.id), str(done.id), str(ghost)]})
+    assert [r["id"] for r in result["resolved"]] == [str(a.id)]
+    assert result["already_resolved"] == [str(done.id)]
+    assert result["not_found"] == [str(ghost)]
+
+
+def test_resolve_health_status_nothing_resolved_is_not_a_success(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["resolve_health_status"]({"all_open": True})
+    assert result["updated"] is False and result["resolved"] == []
+
+
+@pytest.mark.parametrize("bad", [{}, {"ids": []}, {"ids": ["nope"]}, {"ids": ["x"], "all_open": True}])
+def test_resolve_health_status_validates_input(athletes_dir, bad) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    assert "error" in handlers["resolve_health_status"](bad)
+
+
+def test_resolve_health_status_never_touches_another_athletes_entries(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    theirs = _open_status(store, slug="tim")
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["resolve_health_status"]({"ids": [str(theirs.id)]})
+    assert result["not_found"] == [str(theirs.id)]
+    assert _states(store, "tim") == {theirs.id: False}
+
+
+def test_resolve_health_status_is_a_write_tool_and_not_haiku_readable() -> None:
+    from app.router_triage import HAIKU_TOOL_ALLOWLIST
+    from app.save_claims import READ_ONLY_TOOLS, WRITE_TOOLS, write_succeeded
+
+    assert "resolve_health_status" in WRITE_TOOLS
+    assert "resolve_health_status" not in READ_ONLY_TOOLS and "resolve_health_status" not in HAIKU_TOOL_ALLOWLIST
+    assert write_succeeded("resolve_health_status", {"updated": True, "resolved": []})
+
+
+def test_record_health_status_blocks_a_duplicate_open_region(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    existing = _open_status(store, body_region="head_neck", restriction="none")
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["record_health_status"](
+        {"description": "neck is still fine", "restriction": "none", "source": "self_reported", "body_region": "head_neck"}
+    )
+    assert result["logged"] is False
+    assert result["duplicate_of"] == [str(existing.id)]
+    assert "resolve_health_status" in result["message"]
+    assert len(store.list_health_status("renee")) == 1
+
+
+def test_record_health_status_allows_an_escalation_in_the_same_region(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    _open_status(store, body_region="shoulder", restriction="none")
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["record_health_status"](
+        {"description": "now sharp, cannot swim", "restriction": "no_training", "source": "self_reported", "body_region": "shoulder"}
+    )
+    assert result["logged"] is True and len(store.list_health_status("renee")) == 2
+
+
+def test_record_health_status_allows_a_linked_update_and_other_regions(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    existing = _open_status(store, body_region="shoulder", restriction="light_only")
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    linked = handlers["record_health_status"](
+        {"description": "same spot, same", "restriction": "light_only", "source": "self_reported",
+         "body_region": "shoulder", "related_status_id": str(existing.id)}
+    )
+    other = handlers["record_health_status"](
+        {"description": "knee ache", "restriction": "none", "source": "self_reported", "body_region": "knee"}
+    )
+    assert linked["logged"] is True and other["logged"] is True
+
+
+def test_record_health_status_ignores_resolved_entries_for_the_guard(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    _open_status(store, body_region="shoulder", resolved=True, resolved_at=datetime.now(timezone.utc))
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["record_health_status"](
+        {"description": "shoulder again", "restriction": "none", "source": "self_reported", "body_region": "shoulder"}
+    )
+    assert result["logged"] is True

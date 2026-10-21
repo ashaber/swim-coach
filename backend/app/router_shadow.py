@@ -46,10 +46,9 @@ from app.tools import ToolHandler
 log = get_logger(__name__)
 
 # Substrings of the per-request athlete context (system block C) that say an unconfirmed draft is
-# waiting / a health status is active. Kept next to their producers by tests
-# (tests/api/test_router_shadow.py asserts the real renderers still emit them).
+# waiting. Kept next to its producer by a test (tests/api/test_router_shadow.py asserts the real
+# renderer still emits it).
 PENDING_DRAFTS_MARKER = "Drafts waiting for the athlete's yes"
-ACTIVE_HEALTH_MARKER = "ACTIVE HEALTH STATUS"
 
 _THREADS: set[threading.Thread] = set()
 _THREADS_LOCK = threading.Lock()
@@ -63,10 +62,10 @@ def join_shadow_threads(timeout: float = 5.0) -> None:
         thread.join(timeout)
 
 
-def context_flags(context_block: Sequence[dict[str, Any]]) -> tuple[bool, bool]:
-    """(has_pending_draft, has_active_health_status) read off the already-built athlete context."""
+def has_pending_draft(context_block: Sequence[dict[str, Any]]) -> bool:
+    """Whether the already-built athlete context says a draft is waiting for the athlete's yes."""
     text = "".join(str(b.get("text", "")) for b in context_block)
-    return PENDING_DRAFTS_MARKER in text, ACTIVE_HEALTH_MARKER in text
+    return PENDING_DRAFTS_MARKER in text
 
 
 def sonnet_tool_flags(tools: Sequence[str]) -> dict[str, Any]:
@@ -192,6 +191,11 @@ def haiku_log_fields(
         "prompt_tokens_total": outcome.prompt_tokens,
         "over_100k": outcome.prompt_tokens > 100_000,
         "haiku_tools": outcome.tools_called,
+        "triage_fallback": outcome.triage_fallback,
+        "triage_fallback_tokens": (outcome.fallback_prompt_tokens + outcome.fallback_output_tokens) or None,
+        "triage_fallback_prompt_tokens": outcome.fallback_prompt_tokens or None,
+        "triage_fallback_output_tokens": outcome.fallback_output_tokens or None,
+        "triage_fallback_cost_usd": round(outcome.fallback_cost_usd, 6) if outcome.triage_fallback else None,
         "iterations": outcome.iterations,
         "over_budget": outcome.over_budget,
         "trimmed": outcome.trimmed,
@@ -313,10 +317,10 @@ def begin_shadow(inputs: ShadowInputs) -> ShadowSession | None:
     """Start shadowing one message. Returns None (and the chat proceeds untouched) if anything at
     all goes wrong while setting up."""
     try:
-        pending, active_health = context_flags(inputs.context_block)
+        pending = has_pending_draft(inputs.context_block)
         hit: PreRuleHit | None = match_pre_rule(
             inputs.message, history=inputs.history, has_pending_draft=pending,
-            has_active_health_status=active_health, sports=inputs.athlete_sports,
+            sports=inputs.athlete_sports,
         )
         base: dict[str, Any] = {
             "request_id": inputs.request_id,

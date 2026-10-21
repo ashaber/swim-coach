@@ -32,7 +32,7 @@ import {
   createGrant, listGrants, revokeGrant,
   listCoachedAthletes, fetchCoachWorkouts, fetchCoachFeedback, fetchCoachLoad, fetchCoachPlan, replyToCoachFeedback,
   fetchCoachHealthStatus, postCoachHealthStatus, resolveCoachHealthStatus,
-  fetchHealthStatus, postHealthStatus,
+  fetchHealthStatus, postHealthStatus, resolveHealthStatus,
   askAboutWorkout, fetchSessionThread, patchSessionThreadMuted,
   fetchWorkoutPacing, postWorkoutKind, postWorkoutRaceStart, fetchWorkoutSections, postWorkoutSectionSplits,
   postCoachWorkoutChatMessage, patchCoachWorkoutChatMuted,
@@ -403,6 +403,8 @@ const state = {
   // Submitting the athlete's own health-status form -- same {status, error}
   // shape as state.roster.healthStatusSubmit.
   healthStatusSubmit: { status: 'idle', error: null },
+  // Marking one of her own entries resolved -- same shape as state.roster.healthStatusResolve.
+  healthStatusResolve: { status: 'idle', error: null, id: null },
   // The athlete's own health-status history (GET /api/health-status),
   // fetched lazily the first time she opens the log form (see
   // maybeLoadHealthStatus) -- same {status, data, error} async-state shape
@@ -653,6 +655,7 @@ function renderTabContent() {
         healthStatusForm: state.healthStatusForm,
         healthStatusSubmit: state.healthStatusSubmit,
         healthStatusFormOpen: state.healthStatusFormOpen,
+        healthStatusResolve: state.healthStatusResolve,
         healthStatus: state.healthStatus,
       });
     case 'coach':
@@ -948,6 +951,7 @@ function applyAthleteSession(identity, token) {
   };
   state.healthStatusSubmit = { status: 'idle', error: null };
   state.healthStatusFormOpen = false;
+  state.healthStatusResolve = { status: 'idle', error: null, id: null };
   state.healthStatusVersion = 0;
   closeWorkoutChat();
   state.roster = createRosterState();
@@ -2095,6 +2099,36 @@ async function handleSubmitHealthStatusSelf() {
   } else {
     log.error('health_status.submit_failed', { athlete: athleteSlug(), error: result.error });
     state.healthStatusSubmit = { status: 'error', error: result.error };
+  }
+  render();
+}
+
+/** Marks one of the athlete's OWN health-status entries resolved (PATCH /api/health-status/<id>),
+ * patching the loaded history locally on success -- same convention as handleResolveHealthStatus
+ * (the roster's coach-side equivalent). */
+async function handleResolveHealthStatusSelf(healthStatusId) {
+  if (!healthStatusId || state.healthStatusResolve.status === 'submitting') return;
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) return;
+
+  state.healthStatusResolve = { status: 'submitting', error: null, id: healthStatusId };
+  render();
+  log.info('health_status.resolve', { athlete: athleteSlug(), health_status_id: healthStatusId });
+
+  const result = await resolveHealthStatus({
+    baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), healthStatusId,
+  });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    state.healthStatus = {
+      ...state.healthStatus,
+      data: state.healthStatus.data.map((entry) => (entry.id === result.data.id ? result.data : entry)),
+    };
+    state.healthStatusVersion += 1; // see its own doc comment (stale-GET guard)
+    state.healthStatusResolve = { status: 'idle', error: null, id: null };
+  } else {
+    log.error('health_status.resolve_failed', { athlete: athleteSlug(), health_status_id: healthStatusId, error: result.error });
+    state.healthStatusResolve = { status: 'error', error: result.error, id: healthStatusId };
   }
   render();
 }
@@ -4383,6 +4417,7 @@ async function onAppClick(e) {
     case 'log:toggle-manual': handleToggleManualLog(); break;
     case 'health-status:toggle': handleToggleHealthStatusForm(); break;
     case 'health-status:submit': handleSubmitHealthStatusSelf(); break;
+    case 'health-status:resolve': handleResolveHealthStatusSelf(el.dataset.id); break;
     case 'profile:submit': handleSubmitProfile(); break;
     case 'library:open-file': handleOpenLibraryFile(el.dataset.file, el.dataset.anchor); break;
     // Goes through history.back() (not handleCloseLibraryFile() directly) so

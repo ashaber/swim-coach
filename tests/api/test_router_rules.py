@@ -24,9 +24,9 @@ PROPOSAL = [
 ]
 
 
-def category(message: str, *, history=None, pending=False, active_health=False, sports=None) -> str | None:
+def category(message: str, *, history=None, pending=False, sports=None) -> str | None:
     hit = match_pre_rule(
-        message, history=history or [], has_pending_draft=pending, has_active_health_status=active_health,
+        message, history=history or [], has_pending_draft=pending,
         sports=sports,
     )
     return hit.category if hit else None
@@ -49,8 +49,12 @@ def test_pending_draft_forces_sonnet_for_any_message() -> None:
     assert category("thanks", pending=True) == CATEGORY_CONFIRMATION
 
 
-def test_active_health_status_forces_sonnet() -> None:
-    assert category("what's my week look like?", active_health=True) == CATEGORY_HEALTH
+def test_open_health_status_does_not_force_sonnet() -> None:
+    # An existing status no longer routes anything: only a reported symptom (keywords / Haiku) does.
+    import inspect
+
+    assert "has_active_health_status" not in inspect.signature(match_pre_rule).parameters
+    assert category("what's my week look like?") is None
 
 
 @pytest.mark.parametrize(
@@ -175,14 +179,13 @@ def test_health_wins_over_write_intent() -> None:
         "move my swim, my shoulder hurts",
         history=[],
         has_pending_draft=False,
-        has_active_health_status=False,
     )
     assert hit is not None and hit.category == CATEGORY_HEALTH
 
 
 def test_hit_names_the_rule_but_never_echoes_the_message() -> None:
     hit = match_pre_rule(
-        "my knee hurts", history=[], has_pending_draft=False, has_active_health_status=False
+        "my knee hurts", history=[], has_pending_draft=False
     )
     assert hit is not None
     assert hit.rule_id in {r.id for r in PRE_RULES}

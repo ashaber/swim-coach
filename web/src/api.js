@@ -778,9 +778,7 @@ export async function resolveCoachHealthStatus({
 // Self-scoped counterparts to fetchCoachHealthStatus/postCoachHealthStatus
 // above -- hits /api/health-status (backend/app/routes/health_status.py's
 // resolve_athlete-gated routes), never the coach-scoped
-// /api/coach/athletes/<slug>/health-status path. No resolve action here --
-// unlike the coach roster, the athlete's own Dashboard-tab action has no
-// "mark resolved" affordance (see views.js's renderHealthStatusLogSection).
+// /api/coach/athletes/<slug>/health-status path.
 
 /** GET {baseUrl}/api/health-status?athlete=<slug> -- the athlete's own
  * health-status history, most-recent-first. Same `athlete = 'renee'`
@@ -789,6 +787,20 @@ export async function resolveCoachHealthStatus({
  * signed in; see backend/app/routes/health_status.py). */
 export async function fetchHealthStatus({ baseUrl, token, athlete = 'renee' }) {
   return apiRequest({ baseUrl, token, path: `/api/health-status?athlete=${encodeURIComponent(athlete)}` });
+}
+
+/** PATCH {baseUrl}/api/health-status/<id>?athlete=<slug> -- the athlete marking one of her OWN
+ * entries resolved (self-scoped mirror of `resolveCoachHealthStatus`). */
+export async function resolveHealthStatus({
+  baseUrl, token, athlete = 'renee', healthStatusId,
+}) {
+  return apiRequest({
+    baseUrl,
+    token,
+    path: `/api/health-status/${encodeURIComponent(healthStatusId)}?athlete=${encodeURIComponent(athlete)}`,
+    method: 'PATCH',
+    body: { resolved: true },
+  });
 }
 
 /** POST {baseUrl}/api/health-status?athlete=<slug> -- the athlete logging

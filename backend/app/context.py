@@ -170,6 +170,9 @@ you talk to her right now. Do this even when you also called
 tools serve different purposes and either may still be worth calling for
 its own reason.
 
+"Remove", "clear" or "that's healed" for a status on file means `resolve_health_status` (use the
+Id shown in the context), never `record_health_status`, which only adds a new entry.
+
 If the per-request context below shows an athlete already has an active
 (unresolved) health status on file, read it before answering and factor it
 into your judgment -- do not cheerfully propose a full volume week to an
@@ -1826,7 +1829,12 @@ def _active_health_statuses(statuses: list[HealthStatus]) -> list[HealthStatus]:
     )
 
 
-def _render_active_health_status(statuses: list[HealthStatus]) -> str:
+# Coach judgment: an open status with no restriction that is older than this many days is probably
+# healed and just never closed; the coach asks the athlete rather than leaving it open forever.
+STALE_UNRESTRICTED_STATUS_DAYS = 21
+
+
+def _render_active_health_status(statuses: list[HealthStatus], today: date) -> str:
     """A prominent, hard-to-miss block for the model's per-request context:
     EVERY one of the athlete's current active (unresolved) health statuses,
     if any -- not just the newest, see `_active_health_statuses` above.
@@ -1852,11 +1860,13 @@ def _render_active_health_status(statuses: list[HealthStatus]) -> str:
     blocks = [header]
     for i, entry in enumerate(active, start=1):
         prefix = f"  [{i}/{len(active)}] " if len(active) > 1 else "  "
+        age_days = max(0, (today - entry.reported_at.date()).days)
         lines = [
             f"{prefix}Restriction: {entry.restriction}",
             f"  Description: {entry.description}",
-            f"  Reported: {entry.reported_at.date().isoformat()} "
+            f"  Reported: {entry.reported_at.date().isoformat()}, {age_days} days ago "
             f"(by {entry.reported_by}, {entry.source.replace('_', ' ')})",
+            f"  Id: {entry.id}",
         ]
         # Second-iteration fields (industry-modeling evolution) -- only
         # shown when actually known, same "only show what's actually known"
@@ -1873,6 +1883,11 @@ def _render_active_health_status(statuses: list[HealthStatus]) -> str:
             lines.append(f"  Severity: {entry.severity}")
         if entry.expected_review_date is not None:
             lines.append(f"  Expected review date: {entry.expected_review_date.isoformat()}")
+        if entry.restriction == "none" and age_days > STALE_UNRESTRICTED_STATUS_DAYS:
+            lines.append(
+                f"  (may be stale: open {age_days} days with no restriction -- ask the athlete whether "
+                "it has resolved; if so, call resolve_health_status with this Id)"
+            )
         blocks.append("\n".join(lines))
     return "\n".join(blocks)
 
@@ -2376,7 +2391,7 @@ def build_per_request_context_and_sizes(
     recent_sessions_block = _render_recent_sessions(workouts, sessions_start, span_end)
     pinned_events_block = _render_upcoming_events_pinned(events, today)
     events_races_block = _render_events(events, today)
-    health_block = _render_active_health_status(store.list_health_status(slug))
+    health_block = _render_active_health_status(store.list_health_status(slug), today)
     thresholds_block = _render_threshold_history(store.list_threshold_records(slug))
 
     parts = [

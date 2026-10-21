@@ -9,7 +9,7 @@ import {
   listCoachedAthletes, fetchCoachWorkouts, fetchCoachFeedback, fetchCoachLoad, fetchCoachPlan, replyToCoachFeedback,
   fetchCoachHealthStatus, postCoachHealthStatus, resolveCoachHealthStatus,
   listLibraryCards, fetchLibraryFile, submitLibraryReview,
-  fetchHealthStatus, postHealthStatus,
+  fetchHealthStatus, postHealthStatus, resolveHealthStatus,
   askAboutWorkout, fetchSessionThread, patchSessionThreadMuted, streamChat,
   postCoachWorkoutChatMessage, patchCoachWorkoutChatMuted,
 } from '../../src/api.js';
@@ -1125,5 +1125,22 @@ describe('postHealthStatus', () => {
       description: '', restriction: 'light_only', source: 'self_reported',
     });
     expect(result).toEqual({ ok: false, error: 'description must be a non-empty string', status: 422 });
+  });
+});
+
+describe('resolveHealthStatus', () => {
+  it('PATCHes /api/health-status/<id>?athlete=<athlete> with resolved: true (self-scoped, not the coach path)', async () => {
+    const updated = { id: 'h1', resolved: true, resolved_at: '2026-09-01T08:00:00Z' };
+    global.fetch = fakeFetch(updated);
+
+    const result = await resolveHealthStatus({
+      baseUrl: 'https://api.example.com', token: 'tok', athlete: 'renee', healthStatusId: 'h1',
+    });
+
+    const [url, init] = global.fetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/api/health-status/h1?athlete=renee');
+    expect(init.method).toBe('PATCH');
+    expect(JSON.parse(init.body)).toEqual({ resolved: true });
+    expect(result).toEqual({ ok: true, data: updated });
   });
 });

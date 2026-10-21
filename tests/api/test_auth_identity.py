@@ -268,6 +268,10 @@ def _scoped_requests(client, headers: dict, target: str = "renee"):
     yield "POST /api/health-status", client.post(
         f"/api/health-status?athlete={target}", json={}, headers=headers
     )
+    yield "PATCH /api/health-status/{id}", client.patch(
+        f"/api/health-status/00000000-0000-0000-0000-000000000000?athlete={target}",
+        json={"resolved": True}, headers=headers,
+    )
     yield "GET /api/plan", client.get(f"/api/plan?athlete={target}", headers=headers)
     yield "GET /api/race-checklist/template", client.get(
         f"/api/race-checklist/template?athlete={target}", headers=headers
