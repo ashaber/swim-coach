@@ -53,6 +53,17 @@ def athlete_today(athlete: Athlete) -> date:
     return datetime.now(ZoneInfo(athlete.timezone)).date()
 
 
+def athlete_local_date(athlete: Athlete, moment: datetime) -> date:
+    """The calendar date an aware `moment` falls on from this athlete's point of view -- the
+    counterpart of `athlete_today` for a stored timestamp, so `athlete_today(a) -
+    athlete_local_date(a, t)` is a day count on ONE calendar. Without a timezone it uses the
+    same server-local clock `athlete_today` falls back to. (A bare `moment.date()` is the UTC
+    date, which reads a day off against a local "today" near midnight UTC.)"""
+    if not athlete.timezone:
+        return moment.astimezone().date()
+    return moment.astimezone(ZoneInfo(athlete.timezone)).date()
+
+
 def resolve_workout_date(
     *,
     utc_date: date,
