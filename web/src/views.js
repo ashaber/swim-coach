@@ -4198,7 +4198,7 @@ function renderCoachWorkoutRow(workout, now) {
   const qualitySummary = workout.quality?.quality_summary;
 
   return `
-    <button type="button" class="hist-row hist-row-skipped" data-a="roster:open-workout" data-id="${esc(workout.id)}">
+    <button type="button" class="hist-row" data-a="roster:open-workout" data-id="${esc(workout.id)}">
       <div class="hist-date mono">${esc(formatShortDate(parseIsoDate(workout.date.slice(0, 10))))}</div>
       <div class="hist-body">
         <div class="hist-title">
