@@ -1,0 +1,44 @@
+schema_version: 1
+file: 42-ultra-mtb-endurance.md
+added: 2026-10-22
+cards:
+- section: 1-what-6-24-h-mtb-demands-unreviewed
+  heading: 1. What 6-24 h MTB demands (UNREVIEWED)
+  summary: Ultra-cycling race speeds fall steeply from 6 to 24 h, and stops, sleep and night riding drive the 24-h figure.
+  recommendation: Plan stops and night laps as seriously as watts.
+  content_hash: 6737636132ae2beda10bcd64048622ef9502cab2dcdec9c5b0108eda0d967c6c
+- section: 2-pacing-unreviewed
+  heading: 2. Pacing (UNREVIEWED)
+  summary: A conference abstract reports positive pacing at 24-h worlds; no peer-reviewed %FTP bands exist, so pacing bands
+    are Coach judgment.
+  recommendation: Start conservatively and treat any %FTP band as untested.
+  content_hash: 64d292bca7b9203b0a1762604be43a7639b9563b0f53e3c4054de2581f6a7c15
+- section: 3-heart-rate-declines-in-ultras-not-a-fatigue-failure-unreviewed
+  heading: 3. Heart rate declines in ultras (not a fatigue failure) (UNREVIEWED)
+  summary: Heart rate relative to maximum fell over a 525 km ride; HR drift in ultras is expected, not fatigue failure on
+    its own.
+  recommendation: Do not call falling late HR a failure; read it with lap decay and fueling.
+  content_hash: f2c5adbac854b4558819b7e69c746737d57d6ca5d33525d8aca68fcc25ae5a91
+- section: 4-durability-and-what-ftp-gain-should-i-expect-from-a-24-h-build-unreviewed
+  heading: 4. Durability and "what FTP gain should I expect from a 24-h build?" (UNREVIEWED)
+  summary: No controlled study shows FTP gain from a 24-h build; durability is separable from fresh FTP, and the target is
+    retained late-ride power.
+  recommendation: Expect little fresh FTP change; track late-ride power after fixed kJ.
+  content_hash: 62f62924ef2c846f2d50f359583d98f0e6fd229d1e503c556af5dad934ce8a94
+- section: 5-long-ride-progression-recovery-and-taper-unreviewed
+  heading: 5. Long-ride progression, recovery and taper (UNREVIEWED)
+  summary: No study gives long-ride length or ultra taper structure; the taper range is coaching practice, the rest is Coach
+    judgment.
+  recommendation: Use the season file's rails and test the taper against freshness.
+  content_hash: 78ecd78d50b8043de59c7ab90e649d14e91186f187157f9bd4c1ab6da5ad5a04
+- section: 6-fueling-hydration-and-sleep-at-12-24-h-unreviewed
+  heading: 6. Fueling, hydration and sleep at 12-24 h (UNREVIEWED)
+  summary: Energy deficit is large and expected at 12-24 h; carbohydrate guidance is up to 90 g/h, sodium and sleep strategy
+    lack direct evidence.
+  recommendation: Plan a sustainable deficit, drink to thirst, and decide the nap policy in advance.
+  content_hash: ffaab81bb7464732a3132178321d2c84f48b18dbcdd0c4071f9ffbcb0968a7ec
+- section: 7-analyzing-an-ultra-file-unreviewed
+  heading: 7. Analyzing an ultra file (UNREVIEWED)
+  summary: Lap-time decay, EF by lap and post-kJ power describe an ultra file, but no validated thresholds exist at 6-24 h.
+  recommendation: Compare against the athlete's own past rides; never use as pass or fail.
+  content_hash: fcc5454b2545b06c2832141839cf46c303cd89a37920e2ea1bacb6681efd9364
