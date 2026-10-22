@@ -2053,3 +2053,39 @@ def test_ultra_mtb_file_is_bike_sport_scoped() -> None:
     import app.context as context_module
 
     assert context_module._LIBRARY_FILE_SPORT_SCOPE[_ULTRA_MTB_FILE] == frozenset({"bike"})
+
+
+# --- 43-skate-ski-cross-training.md routing ---------------------------------
+# Not sport-scoped (unlike the bike-only files above): any athlete, swim or
+# bike, may cross-train on skis, so the file must route for every athlete.
+def test_route_library_files_ski_keywords_reach_43() -> None:
+    for message in (
+        "Can skate skiing replace my trainer base this winter?",
+        "I want to try cross-country skiing for cross training",
+        "Is cross country ski training good for my fitness?",
+        "How should I set heart rate zones on my xc ski days?",
+        "Is nordic training worth it?",
+        "I bought roller skis for the fall",
+        "Will skiing keep my bike fitness?",
+        "Best winter cross-training for a racer?",
+    ):
+        files = route_library_files(message, athlete_sports=["bike"])
+        assert "43-skate-ski-cross-training.md" in files, message
+
+
+def test_route_library_files_ski_file_is_not_sport_scoped() -> None:
+    for sports in (None, ["swim_pool", "swim_ow"], ["bike"]):
+        files = route_library_files("how do I load-count skate skiing?", athlete_sports=sports)
+        assert "43-skate-ski-cross-training.md" in files, sports
+
+
+def test_route_library_files_ski_keywords_do_not_collide_with_skill_words() -> None:
+    # "skills", "risking" etc. contain "ski" as a substring; the routes use
+    # longer phrases so they must not pull in the ski file.
+    for message in (
+        "work on my cyclocross skills this week",
+        "I am risking an injury if I push the long swim",
+        "a skinny wetsuit fit question",
+    ):
+        files = route_library_files(message, athlete_sports=["bike"])
+        assert "43-skate-ski-cross-training.md" not in files, message
