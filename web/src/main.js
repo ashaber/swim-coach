@@ -3,8 +3,11 @@ import { registerSW } from 'virtual:pwa-register';
 import log from './log.js';
 import { getDraft, setDraft, clearDraft } from './composerDrafts.js';
 import { shouldRefreshOnResume } from './resumeRefresh.js';
+import { ChatScroll, syncViewport, trackViewport } from './chatPanel.js';
+import { getOpenSheetKey, setOpenSheetKey } from './threadSheet.js';
+import { renderChatMarkdown } from './markdown.js';
 import {
-  renderApp, renderLoading, renderError, renderTabBar, renderCoachTab, renderSettingsTab,
+  renderApp, renderChatMessage, renderLoading, renderError, renderTabBar, renderCoachTab, renderSettingsTab,
   renderDashboardTab, renderBackendNeededNotice, renderUpdateBanner,
   renderRaceDayOverlay, renderSectorOverlay, renderRaceDrill, renderOnboardingForm, renderRosterTab, renderResourcesTab, cr10AnchorLabel, ROSTER_SUB_TABS as ROSTER_SUB_TAB_DEFS,
 } from './views.js';
@@ -30,7 +33,7 @@ import {
   listCoachedAthletes, fetchCoachWorkouts, fetchCoachFeedback, fetchCoachLoad, fetchCoachPlan, replyToCoachFeedback,
   fetchCoachHealthStatus, postCoachHealthStatus, resolveCoachHealthStatus,
   fetchHealthStatus, postHealthStatus, resolveHealthStatus,
-  askAboutSession, askAboutWorkout,
+  askAboutWorkout, fetchSessionThread, patchSessionThreadMuted,
   fetchWorkoutPacing, postWorkoutKind, postWorkoutRaceStart, fetchWorkoutSections, postWorkoutSectionSplits,
   postCoachWorkoutChatMessage, patchCoachWorkoutChatMuted,
   listConversations, fetchConversationMessages, patchConversationMuted, conversationMessagesPath,
@@ -484,6 +487,8 @@ const state = {
   // reset paths -- every open/close of either detail view.
   askCoachForm: createAskCoachForm(),
   askCoachSubmit: createAskCoachSubmit(),
+  // The open planned session's scoped chat thread (conversation.js slice + the session it is for).
+  sessionThread: { ...createThreadState(), sessionId: null },
   profileForm: createProfileForm(),
   profileLoad: { status: 'idle', error: null },
   profileSubmit: { status: 'idle', message: null },
@@ -747,12 +752,25 @@ function renderTabContent() {
           // Coach-mode Q&A build: same shape/rationale as the Dashboard
           // tab's own `askCoach` above, just scoped to a planned Session
           // instead of a completed Workout.
-          askCoach: { feedback: state.feedbackEntries.data, form: state.askCoachForm, submit: state.askCoachSubmit },
+          askCoach: {
+            feedback: state.feedbackEntries.data, form: state.askCoachForm, submit: state.askCoachSubmit,
+            thread: sessionThreadFor(state.planSessionDetailId), online: state.online,
+          },
         },
         state.planSessionDetailId,
       );
   }
 }
+
+// Scroll anchoring for the Coach tab's message list (chatPanel.js): follows a stream only while
+// the reader is at the bottom, keeps their place across re-renders, shows a "new" pill otherwise.
+const coachScroll = new ChatScroll({ listId: 'chat-messages', pillId: 'chat-new-pill' });
+// The thread sheets' lists (workout, coach-roster workout, planned session) behave the same way.
+const sheetScrolls = Object.fromEntries(
+  ['workout-chat-messages', 'roster-workout-chat-messages', 'session-thread-messages']
+    .map((id) => [id, new ChatScroll({ listId: id, pillId: `${id}-pill` })]),
+);
+const allScrolls = [coachScroll, ...Object.values(sheetScrolls)];
 
 /** Every render rebuilds the DOM, so a focused chat composer (its text already lives in state /
  * composerDrafts and is re-emitted by the view) would lose focus and caret: put them back. */
@@ -776,7 +794,14 @@ function renderAppDom() {
   const sectorScroll = sectorBody ? sectorBody.scrollTop : 0;
   const drillBody = document.getElementById('section-drill-body');
   const drillScroll = drillBody ? drillBody.scrollTop : 0;
+  allScrolls.forEach((sc) => sc.beforeRender());
   renderAppDomInner();
+  allScrolls.forEach((sc) => sc.afterRender());
+  // The Coach tab's chat panel is a fixed, full-height layout: the page itself must not scroll
+  // behind it, and its box follows the visual viewport (keyboard).
+  document.body.classList.toggle('chat-locked', Boolean(document.querySelector('.chat-wrap.chat-panel')));
+  document.body.classList.toggle('sheet-locked', Boolean(document.querySelector('.thread-sheet-root')));
+  syncViewport();
   document.body.classList.toggle('cs-locked', sectorOverlayShown() || sectionDrillShown());
   const nextDrillBody = document.getElementById('section-drill-body');
   if (nextDrillBody && drillScroll) nextDrillBody.scrollTop = drillScroll;
@@ -824,7 +849,6 @@ function renderAppDomInner() {
       coachUnread: myCoachUnreadCount(),
     })}${state.identity ? renderRaceDayOverlay(state.raceDay, state.online) : ''}${sectorOverlayHtml()}${sectionDrillHtml()}`;
   if (state.tab === 'coach' && state.coachView === 'coach') scrollToBottomOf('my-coach-messages');
-  else if (state.tab === 'coach') stickChatScrollToBottom();
   if (state.tab === 'roster' && state.roster.subTab === 'conversations') scrollToBottomOf('roster-conversation-messages');
   if (state.tab === 'dashboard' && state.workoutChat) stickWorkoutChatScrollToBottom();
   if (state.tab === 'roster' && state.roster.subTab === 'plan') stickRosterChatScrollToBottom();
@@ -1167,11 +1191,6 @@ function scrollToTop() {
   window.scrollTo(0, 0);
 }
 
-function stickChatScrollToBottom() {
-  const list = document.getElementById('chat-messages');
-  if (list) list.scrollTop = list.scrollHeight;
-}
-
 function stickWorkoutChatScrollToBottom() {
   const list = document.getElementById('workout-chat-messages');
   if (list) list.scrollTop = list.scrollHeight;
@@ -1284,6 +1303,7 @@ function handleOpenSessionDetail(id) {
   // pushState.
   history.pushState({ planSessionDetail: id }, '');
   log.info('plan.session_detail_opened', { athlete: athleteSlug(), session_id: id });
+  openSessionThread(id);
   render();
   scrollToTop(); // land on the detail content -- was a gap in both this and
   // handleOpenHistoryDetail (neither scrolled), so the page previously
@@ -1423,6 +1443,7 @@ function handleSendChat() {
   const history = toApiHistory(state.chat.messages);
   state.chat = appendUserMessage(state.chat, text);
   if (input) { input.value = ''; clearDraft(input.dataset.draftKey); }
+  coachScroll.pinNext(); // sending scrolls to the bottom, once
   render();
   persistChat();
 
@@ -1448,9 +1469,26 @@ function handleSendChat() {
         persistChat();
         log.info('chat.turn_complete', { type: event.type });
       }
-      render();
+      if (!patchStreamingBubble(event)) render();
     },
   });
+}
+
+/** A streamed delta only changes the in-flight assistant bubble, so patch that one row inside the
+ * stable message list instead of rebuilding the whole app (which collapsed and re-grew the
+ * document on every delta -- the bounce -- and reset the reader's scroll). Returns false when a
+ * full render is needed (turn end, error, list not on screen, rows out of step). */
+function patchStreamingBubble(event) {
+  if (event.type !== 'text' && event.type !== 'status' && event.type !== 'tool_use') return false;
+  if (state.tab !== 'coach' || state.coachView !== 'ai') return false;
+  const list = document.getElementById('chat-messages');
+  const messages = state.chat.messages;
+  if (!list || list.children.length !== messages.length) return false;
+  const row = list.lastElementChild;
+  coachScroll.contentChanged(() => {
+    row.outerHTML = renderChatMessage(messages[messages.length - 1]);
+  });
+  return true;
 }
 
 function handleClearChat() {
@@ -1569,7 +1607,7 @@ function persistRosterChat(slug) {
 const COMPOSER_INPUT_IDS = [
   'race-section-note',
   'my-coach-input', 'roster-conversation-input', 'chat-input', 'workout-chat-input',
-  'roster-chat-input', 'roster-workout-chat-input', 'raceday-add-input',
+  'roster-chat-input', 'roster-workout-chat-input', 'session-thread-input', 'raceday-add-input',
 ];
 
 function myCoachKey() {
@@ -2584,6 +2622,10 @@ function handleSelectLoadWindow(key) {
 // calling every closer unconditionally needs no extra bookkeeping to stay
 // correct if that ever changes.
 function handlePopState() {
+  if (getOpenSheetKey()) {
+    closeThreadSheetState();
+    return;
+  }
   if (state.sectionDrill.open) {
     handleCloseSectionDrill();
     return;
@@ -3351,55 +3393,163 @@ async function handleSubmitProfile() {
 // to the right one of these two, same "branch on state, not a second action
 // name" convention `session:open`'s click-dispatch case already uses.
 
-async function handleSubmitAskCoachForSession() {
-  if (state.askCoachSubmit.status === 'submitting') return;
-  const id = state.planSessionDetailId;
-  if (!id) return;
-  const session = findSessionById(state.plan.data?.weeks || [], id);
-  if (!session) return;
-  const settings = state.settingsForm;
-  if (!isConfigured(settings, state.identity)) return;
 
-  const body = (state.askCoachForm.body || '').trim();
-  if (!body) {
-    state.askCoachSubmit = { status: 'error', error: 'Ask something first.' };
+// --- Thread sheet + planned-session thread -----------------------------------------------------
+// A workout's or planned session's chat opens in a full-screen sheet (views.js
+// renderThreadSheetShell). Opening pushes a history entry so the device back button closes the
+// sheet (handlePopState); the page scroll is remembered and restored on close.
+
+let sheetPageScrollY = 0;
+
+function handleOpenThreadSheet(key) {
+  if (!key || getOpenSheetKey()) return;
+  sheetPageScrollY = window.scrollY;
+  setOpenSheetKey(key);
+  history.pushState({ threadSheet: key }, '');
+  log.info('thread_sheet.opened', { athlete: athleteSlug(), key });
+  render();
+}
+
+/** Back/Esc/x all arrive here via history.back() -> popstate. */
+function closeThreadSheetState() {
+  setOpenSheetKey(null);
+  render();
+  window.scrollTo(0, sheetPageScrollY);
+  log.info('thread_sheet.closed', { athlete: athleteSlug() });
+}
+
+/** The thread slice to render for `sessionId` (an empty loading one until it is opened). */
+function sessionThreadFor(sessionId) {
+  return state.sessionThread.sessionId === sessionId
+    ? state.sessionThread
+    : { ...createThreadState(), sessionId, status: 'loading' };
+}
+
+function sessionThreadKey(id) {
+  return `session:${id}`;
+}
+
+function openSessionThread(id) {
+  state.sessionThread = {
+    ...createThreadState(), sessionId: id, status: 'loading', messages: loadCachedThread(sessionThreadKey(id)),
+  };
+  refreshSessionThread();
+}
+
+async function refreshSessionThread() {
+  const athlete = athleteSlug();
+  const ctx = conversationRequestContext();
+  const id = state.sessionThread.sessionId;
+  if (!athlete || !ctx || !id) return;
+  let result;
+  try {
+    result = await fetchSessionThread({ ...ctx, athlete, sessionId: id });
+  } catch (err) {
+    log.error('session_thread.refresh_threw', { error: err.message });
+    result = { ok: false, error: "Couldn't load this chat." };
+  }
+  if (handleUnauthorized(result)) return;
+  if (state.sessionThread.sessionId !== id) return; // another session was opened meanwhile
+  if (!result.ok) {
+    log.warn('session_thread.refresh_failed', { error: result.error });
+    state.sessionThread = {
+      ...state.sessionThread, status: state.sessionThread.messages.length ? 'ready' : 'error', error: result.error,
+    };
     render();
     return;
   }
+  const { thread, changed } = applyThreadPayload(state.sessionThread, result.data);
+  state.sessionThread = thread;
+  saveCachedThread(sessionThreadKey(id), thread.messages);
+  if (changed) render();
+}
 
-  state.askCoachSubmit = { status: 'submitting', error: null };
-  render();
-  log.info('ask_coach.submit', { athlete: athleteSlug(), scope: 'session', session_id: id });
-
-  const result = await askAboutSession({
-    baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(),
-    id: session.id, date: session.date, sport: session.sport, body,
-  });
-  if (handleUnauthorized(result)) return;
-  if (result.ok) {
-    log.info('ask_coach.submit_success', { athlete: athleteSlug(), scope: 'session' });
-    state.askCoachForm = createAskCoachForm();
-    state.askCoachSubmit = createAskCoachSubmit();
-    // Optimistically prepend the new entry (the same shape a subsequent
-    // GET /api/feedback would return it in -- most-recent-first) rather than
-    // a full loadFeedback() refetch -- this is a one-shot AI answer already
-    // fully resolved server-side by the time this response lands, so there's
-    // nothing further for a refetch to pick up that this response doesn't
-    // already have.
-    state.feedbackEntries = {
-      ...state.feedbackEntries,
-      data: [result.data, ...state.feedbackEntries.data],
-    };
+async function handleSendSessionThread() {
+  const thread = state.sessionThread;
+  const id = state.planSessionDetailId;
+  const athlete = athleteSlug();
+  if (!id || thread.sessionId !== id || thread.sending || !state.online || !athlete) return;
+  const text = thread.draft.trim();
+  if (!text) return;
+  const ctx = conversationRequestContext();
+  if (!ctx) {
+    state.tab = 'settings';
+    saveActiveTab(state.tab);
     render();
-    // The coach may have rewritten this very session (the answer is one-shot but its tools can
-    // write the plan) -- reload so the card is not stale, and keep the detail open: a patch keeps
-    // session ids, a full week regenerate does not, so re-find the session by date + sport.
+    return;
+  }
+  const session = findSessionById(state.plan.data?.weeks || [], id);
+
+  state.sessionThread = { ...thread, draft: '', sending: true, pending: text, stream: null, error: null };
+  sheetScrolls['session-thread-messages'].pinNext();
+  render();
+  log.info('session_thread.send', { athlete, session_id: id });
+
+  let failure = null;
+  await streamChat({
+    ...ctx, athlete, message: text, history: [], expertMode: false, sessionId: id,
+    onEvent: (event) => {
+      if (event.type === 'error') {
+        if (event.status === 401) {
+          handleSessionExpired();
+          return;
+        }
+        failure = event;
+      } else if (event.type === 'text') {
+        const hadStream = Boolean(state.sessionThread.stream);
+        state.sessionThread = { ...state.sessionThread, stream: (state.sessionThread.stream || '') + (event.text || '') };
+        patchSessionStream(hadStream);
+      }
+    },
+  });
+  if (!state.identity) return; // the session expired mid-stream
+
+  // An error WITH a status means nothing was saved (cap, validation): give the text back. One
+  // without (a dropped stream) means the message already persisted; the refetch shows it.
+  const unsent = failure && failure.status !== undefined;
+  state.sessionThread = {
+    ...state.sessionThread, sending: false, pending: null, stream: null,
+    draft: unsent && !state.sessionThread.draft ? text : state.sessionThread.draft,
+    error: failure ? failure.error : null,
+  };
+  if (failure) log.error('session_thread.send_failed', { athlete, error: failure.error });
+  render();
+  await refreshSessionThread();
+  // The coach may have rewritten this very session while answering: reload the plan and keep the
+  // detail open (a patch keeps session ids; a full regenerate does not, so re-find by date+sport).
+  if (session) {
     await loadPlan();
     reopenSessionDetail(session);
+  }
+}
+
+/** A streamed delta only changes the in-flight bubble: patch it in place (the first delta, which
+ * creates the bubble, takes a full render) so the sheet is not rebuilt per delta. */
+function patchSessionStream(hadStream) {
+  const list = document.getElementById('session-thread-messages');
+  const row = list && list.querySelector('[data-stream-row] .chat-md');
+  if (!hadStream || !row) {
+    render();
     return;
+  }
+  sheetScrolls['session-thread-messages'].contentChanged(() => {
+    row.innerHTML = renderChatMarkdown(state.sessionThread.stream);
+  });
+}
+
+async function handleToggleSessionThreadMute() {
+  const thread = state.sessionThread;
+  const athlete = athleteSlug();
+  const ctx = conversationRequestContext();
+  if (!thread.sessionId || !athlete || !ctx) return;
+  const result = await patchSessionThreadMuted({ ...ctx, athlete, sessionId: thread.sessionId, muted: !thread.muted });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    state.sessionThread = { ...state.sessionThread, muted: result.data.ai_muted };
+    log.info('session_thread.mute_toggled', { athlete, muted: result.data.ai_muted });
   } else {
-    log.error('ask_coach.submit_failed', { athlete: athleteSlug(), scope: 'session', error: result.error });
-    state.askCoachSubmit = { status: 'error', error: result.error };
+    log.error('session_thread.mute_toggle_failed', { athlete, error: result.error });
+    state.sessionThread = { ...state.sessionThread, error: result.error };
   }
   render();
 }
@@ -3414,6 +3564,7 @@ function reopenSessionDetail(previous) {
     );
     if (match) {
       state.planSessionDetailId = match.id;
+      openSessionThread(match.id);
       render();
       return;
     }
@@ -4249,6 +4400,11 @@ async function onAppClick(e) {
   }
   switch (action) {
     case 'chat:send': handleSendChat(); break;
+    case 'chat:jump-bottom': (allScrolls.find((sc) => sc.listId === el.dataset.list) || coachScroll).jumpToBottom(); break;
+    case 'thread-sheet:open': handleOpenThreadSheet(el.dataset.key); break;
+    case 'thread-sheet:close': history.back(); break;
+    case 'session-thread:send': await handleSendSessionThread(); break;
+    case 'session-thread:mute-toggle': await handleToggleSessionThreadMute(); break;
     case 'coach:view:ai': handleSelectCoachView('ai'); break;
     case 'coach:view:coach': handleSelectCoachView('coach'); break;
     case 'my-coach:send': await handleSendMyCoach(); break;
@@ -4292,8 +4448,7 @@ async function onAppClick(e) {
     // them) is simply a no-op, since both handlers bail out when their own
     // detail id is unset.
     case 'ask-coach:submit':
-      if (state.tab === 'plan') handleSubmitAskCoachForSession();
-      else handleSubmitAskCoachForWorkout();
+      handleSubmitAskCoachForWorkout();
       break;
     case 'roster:select-athlete': handleSelectCoachedAthlete(el.dataset.slug); break;
     case 'roster:back': handleBackToRoster(); break;
@@ -4461,6 +4616,7 @@ function onAppInput(e) {
   // IDEA 016 Part 2: the conversation composers' drafts live in state (not read off the DOM at
   // send time like the AI chat's), so a polling re-render can never wipe half-typed text.
   else if (formName === 'my-coach') state.myCoach.draft = el.value;
+  else if (formName === 'session-thread') state.sessionThread.draft = el.value;
   else if (formName === 'roster-conversation') state.roster.conversation.draft = el.value;
   // Keyed by per-row feedback id (data-id), not a flat form field like every
   // other case here -- see state.roster.replyDrafts's doc comment at its
@@ -4576,6 +4732,10 @@ function onAppKeydown(e) {
   if (e.target.id === 'my-coach-input' && e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     handleSendMyCoach();
+  }
+  if (e.target.id === 'session-thread-input' && e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    handleSendSessionThread();
   }
   if (e.target.id === 'roster-conversation-input' && e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
@@ -4917,7 +5077,7 @@ function updateOfflineBanner() {
 // the athlete next interacts with them). `resources`: the Approvals
 // section's Accept/Flag buttons disable while offline (nothing to
 // optimistically apply against -- see renderResourcesTab).
-const TABS_SENSITIVE_TO_ONLINE_STATE = ['coach', 'dashboard', 'resources'];
+const TABS_SENSITIVE_TO_ONLINE_STATE = ['coach', 'dashboard', 'resources', 'plan'];
 
 function updateOnlineState() {
   state.online = navigator.onLine;
@@ -4929,6 +5089,8 @@ function updateOnlineState() {
   }
 }
 
+coachScroll.attach();
+trackViewport();
 window.addEventListener('online', updateOnlineState);
 window.addEventListener('offline', updateOnlineState);
 // See handleOpenHistoryDetail/handleCloseHistoryDetail/setTab for the rest
@@ -4964,7 +5126,8 @@ appEl.addEventListener('touchend', onRaceDayTouchEnd, { passive: true });
 appEl.addEventListener('touchstart', onSectorOverlayTouchStart, { passive: true });
 appEl.addEventListener('touchend', onSectorOverlayTouchEnd, { passive: true });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && state.sectionDrill.open) requestCloseSectionDrill();
+  if (e.key === 'Escape' && getOpenSheetKey()) history.back();
+  else if (e.key === 'Escape' && state.sectionDrill.open) requestCloseSectionDrill();
   else if (e.key === 'Escape' && state.sectorOverlay.open) requestCloseSectorOverlay();
 });
 // Re-render once a minute while the timeline is showing so the current/next highlight advances.

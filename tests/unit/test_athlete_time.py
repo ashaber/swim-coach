@@ -11,7 +11,7 @@ import uuid
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from swim_coach.athlete_time import athlete_today
+from swim_coach.athlete_time import athlete_local_date, athlete_today
 from swim_coach.models import Athlete
 
 ATHLETE_ID = uuid.uuid4()
@@ -82,3 +82,18 @@ def test_athlete_today_uses_server_today_for_an_athlete_in_a_zone_that_agrees_wi
     # in UTC.
     athlete = make_athlete(timezone="UTC")
     assert athlete_today(athlete) == datetime.now(ZoneInfo("UTC")).date()
+
+
+def test_athlete_local_date_puts_a_utc_timestamp_on_the_athletes_own_calendar_day():
+    # 01:30 UTC on the 21st is still the evening of the 20th in Denver (UTC-6).
+    athlete = make_athlete(timezone="America/Denver")
+    moment = datetime(2026, 10, 21, 1, 30, tzinfo=ZoneInfo("UTC"))
+    assert athlete_local_date(athlete, moment) == date(2026, 10, 20)
+
+
+def test_athlete_local_date_without_a_timezone_matches_athlete_today_server_time():
+    # No timezone: the same server-local clock athlete_today falls back to, so an age of
+    # (athlete_today - athlete_local_date) never crosses a UTC/local date boundary.
+    athlete = make_athlete()
+    moment = datetime(2026, 10, 21, 1, 30, tzinfo=ZoneInfo("UTC"))
+    assert athlete_local_date(athlete, moment) == moment.astimezone().date()

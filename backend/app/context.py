@@ -68,7 +68,7 @@ from typing import Any, TypedDict
 
 from swim_coach.health_vocab import RESTRICTION_SEVERITY
 from swim_coach.analysis import analytics_for_coach
-from swim_coach.athlete_time import athlete_today
+from swim_coach.athlete_time import athlete_local_date, athlete_today
 from swim_coach.event_groups import group_of
 from swim_coach.library_review import (
     REF_ENTRY_RE,
@@ -1834,7 +1834,7 @@ def _active_health_statuses(statuses: list[HealthStatus]) -> list[HealthStatus]:
 STALE_UNRESTRICTED_STATUS_DAYS = 21
 
 
-def _render_active_health_status(statuses: list[HealthStatus], today: date) -> str:
+def _render_active_health_status(statuses: list[HealthStatus], today: date, athlete: Athlete) -> str:
     """A prominent, hard-to-miss block for the model's per-request context:
     EVERY one of the athlete's current active (unresolved) health statuses,
     if any -- not just the newest, see `_active_health_statuses` above.
@@ -1860,11 +1860,12 @@ def _render_active_health_status(statuses: list[HealthStatus], today: date) -> s
     blocks = [header]
     for i, entry in enumerate(active, start=1):
         prefix = f"  [{i}/{len(active)}] " if len(active) > 1 else "  "
-        age_days = max(0, (today - entry.reported_at.date()).days)
+        reported_on = athlete_local_date(athlete, entry.reported_at)
+        age_days = max(0, (today - reported_on).days)
         lines = [
             f"{prefix}Restriction: {entry.restriction}",
             f"  Description: {entry.description}",
-            f"  Reported: {entry.reported_at.date().isoformat()}, {age_days} days ago "
+            f"  Reported: {reported_on.isoformat()}, {age_days} days ago "
             f"(by {entry.reported_by}, {entry.source.replace('_', ' ')})",
             f"  Id: {entry.id}",
         ]
@@ -2274,6 +2275,10 @@ def render_focused_session(session: Session) -> str:
     parts = [
         "## The specific planned session the athlete is asking about "
         "(NOT the same as the 28-day exact-sessions list above)",
+        "This is the athlete's saved thread about this one session: the conversation history you "
+        "see is only this session's own thread, not their general Coach-tab chat. Answer about "
+        "this session; use the athlete profile, thresholds, week plan and recent logged sessions "
+        "above for context.",
         json.dumps(summary, indent=2),
     ]
     return "\n".join(parts)
@@ -2387,7 +2392,7 @@ def build_per_request_context_and_sizes(
     recent_sessions_block = _render_recent_sessions(workouts, sessions_start, span_end)
     pinned_events_block = _render_upcoming_events_pinned(events, today)
     events_races_block = _render_events(events, today)
-    health_block = _render_active_health_status(store.list_health_status(slug), today)
+    health_block = _render_active_health_status(store.list_health_status(slug), today, athlete)
     thresholds_block = _render_threshold_history(store.list_threshold_records(slug))
 
     parts = [

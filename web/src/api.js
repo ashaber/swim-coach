@@ -39,7 +39,7 @@ const TERMINAL_EVENT_TYPES = new Set(['done', 'refusal', 'error']);
  * sharing this exact same streaming contract (routes/chat.py's `stream_chat_response`).
  */
 export async function streamChat({
-  baseUrl, token, athlete, message, history, expertMode, workoutId, endpoint = '/api/chat', onEvent, signal,
+  baseUrl, token, athlete, message, history, expertMode, workoutId, sessionId, endpoint = '/api/chat', onEvent, signal,
 }) {
   let response;
   try {
@@ -52,6 +52,7 @@ export async function streamChat({
       body: JSON.stringify({
         message, history, athlete, expert_mode: !!expertMode,
         ...(workoutId ? { workout_id: workoutId } : {}),
+        ...(sessionId ? { session_id: sessionId } : {}),
       }),
       signal,
     });
@@ -335,23 +336,6 @@ export async function submitLibraryReview({
 // distinct callers of that one endpoint, one per linkage kind, mirroring
 // `fetchCoachWorkouts`/`fetchCoachFeedback` being separate named functions
 // over the same coach.py module rather than one generic call.
-
-/** Asks a question about a specific PLANNED session (Plan tab's
- * `renderPlanSessionDetail` -- there is no Workout yet for a session that
- * hasn't been swum). Sends the session `id` -- the only thing that tells two
- * same-sport sessions on one day apart (warm-up + race) -- plus `(date,
- * sport)`, the fallback after a full week regenerate gives sessions new ids). */
-export async function askAboutSession({
-  baseUrl, token, athlete = 'renee', id, date, sport, body,
-}) {
-  return apiRequest({
-    baseUrl,
-    token,
-    path: `/api/feedback/questions?athlete=${encodeURIComponent(athlete)}`,
-    method: 'POST',
-    body: { session_id: id, session_date: date, session_sport: sport, body },
-  });
-}
 
 /** Asks a question about a specific completed Workout (the workout-detail
  * view's Ask-the-coach section -- replaces the old, explicitly non-
@@ -1096,5 +1080,24 @@ export async function patchRaceWeekItem({
       + `?athlete=${encodeURIComponent(athlete)}`,
     method: 'PATCH',
     body: { done },
+  });
+}
+
+/** GET /api/sessions/<id>/thread -- a planned session's persisted chat thread (old single-turn Q&A
+ * imported as earlier messages) and its AI mute state. */
+export async function fetchSessionThread({ baseUrl, token, athlete, sessionId }) {
+  return apiRequest({
+    baseUrl, token,
+    path: `/api/sessions/${encodeURIComponent(sessionId)}/thread?athlete=${encodeURIComponent(athlete)}`,
+  });
+}
+
+/** PATCH /api/sessions/<id>/thread -- mute/unmute the AI in that session's thread. */
+export async function patchSessionThreadMuted({ baseUrl, token, athlete, sessionId, muted }) {
+  return apiRequest({
+    baseUrl, token,
+    path: `/api/sessions/${encodeURIComponent(sessionId)}/thread?athlete=${encodeURIComponent(athlete)}`,
+    method: 'PATCH',
+    body: { ai_muted: muted },
   });
 }

@@ -2409,6 +2409,41 @@ class Conversation(BaseModel):
     ai_muted: bool = False
 
 
+class SessionChatMessage(BaseModel):
+    """One message in a PLANNED session's own chat thread (the Plan tab's session detail) -- the
+    scoped-thread model workouts already use (`WorkoutChatMessage`), keyed by `Session.id`
+    instead of embedded on the session: a session lives inside a week plan the coach rewrites
+    (`patch_week_plan`, regenerate), and an embedded list would race those writes. Append-only,
+    its own table, like `ConversationMessage`. History for a session turn is ONLY this thread;
+    it never includes the Coach tab's conversation.
+
+    When the session is later matched to a completed workout, these messages are copied (same
+    ids, so a re-run never duplicates) onto `Workout.chat_messages` -- see
+    `app.session_thread.carry_over_to_workout`. `Session.id` does not survive a full week
+    regenerate, so a thread follows its session only until then (the same limit `Feedback`
+    documents for `session_id`). Never deleted or edited.
+    """
+
+    schema_version: int = 1
+    id: UUID
+    athlete_id: UUID
+    session_id: UUID
+    sender_role: WorkoutChatSenderRole
+    body: str
+    # Same as `WorkoutChatMessage.tool_trace`.
+    tool_trace: str | None = None
+    created_at: datetime
+
+
+class SessionThread(BaseModel):
+    """Per-session thread state: whether the AI is muted in it. A session with no stored row is
+    the default (unmuted), so reading never needs a write first."""
+
+    athlete_id: UUID
+    session_id: UUID
+    ai_muted: bool = False
+
+
 class RouterShadowCapture(BaseModel):
     """One shadow-mode comparison for the Haiku coach router: the athlete's question, what Haiku
     would have replied, what Sonnet actually replied, and the routing decision, stored for a human

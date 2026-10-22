@@ -27,6 +27,7 @@ from swim_coach.quality import match_workout_to_session
 from swim_coach.store import StoreInterface
 
 from app.logging_config import get_logger
+from app.session_thread import carry_over_to_workout
 
 log = get_logger("app.enrich")
 
@@ -146,6 +147,16 @@ def find_planned_session(store: StoreInterface, slug: str, workout: Workout) -> 
     return match_workout_to_session(workout, sessions, other_workouts=nearby)
 
 
+def _carry_over_thread(workout: Workout, store: StoreInterface, slug: str, session: Session) -> Workout:
+    """The session's chat thread continues on the workout. Best-effort like the rest of the match:
+    a read failure logs and leaves the workout as it was."""
+    try:
+        return carry_over_to_workout(workout, store, slug, session)
+    except Exception as exc:  # noqa: BLE001 - never block ingest on the thread copy
+        log.warn("workouts.thread_carry_over_failed", athlete=slug, session_id=str(session.id), error=str(exc))
+        return workout
+
+
 def attach_planned_session(workout: Workout, *, store: StoreInterface, slug: str, series: dict | None) -> Workout:
     """Link `workout` to its planned session and re-run its analyzer WITH that session in the
     context (prescription, zone, kind, thresholds from the athlete). Returns the workout
@@ -169,6 +180,7 @@ def attach_planned_session(workout: Workout, *, store: StoreInterface, slug: str
     ctx = build_analysis_context(store, slug, linked, series=series, session=session)  # also stamps kind
     if series:
         linked.analytics = linked.analyze(ctx)
+    linked = _carry_over_thread(linked, store, slug, session)
     if not already_linked:
         log.info("workouts.plan_matched", athlete=slug, workout_id=str(workout.id), session_id=str(session.id))
     return linked

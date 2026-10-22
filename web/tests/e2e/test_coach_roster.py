@@ -403,7 +403,10 @@ def test_clicking_a_workout_opens_its_detail_view_with_a_real_writable_chat_thre
     assert page.locator('#ask-coach').count() == 0
     assert page.locator('[data-form="askCoach"]').count() == 0
     assert page.locator('[data-a="ask-coach:submit"]').count() == 0
-    assert 'Chat with athlete' in content
+    assert page.locator('[data-a="thread-sheet:open"]').count() == 1
+    page.click('[data-a="thread-sheet:open"]')
+    page.wait_for_selector('#roster-workout-chat-input')
+    assert 'This workout only' in page.content()
     assert page.locator('#roster-workout-chat-input').count() == 1
     assert page.locator('[data-a="roster:workout-chat:send"]').count() == 1
     assert page.locator('[data-a="roster:workout-chat:mute-toggle"]').count() == 1
@@ -432,13 +435,14 @@ def test_coach_sends_a_workout_chat_comment_and_sees_it_appear(page):
     page.click('[data-a="roster:select-athlete"]')
     page.wait_for_selector('[data-a="roster:open-workout"]')
     page.click('[data-a="roster:open-workout"]')
+    page.click('[data-a="thread-sheet:open"]')
     page.wait_for_selector('#roster-workout-chat-input')
 
     page.fill('#roster-workout-chat-input', 'nice negative split here')
     page.click('[data-a="roster:workout-chat:send"]')
 
     page.wait_for_function(
-        "() => document.querySelector('#workout-chat').textContent.includes('nice negative split here')",
+        "() => document.querySelector('.thread-sheet').textContent.includes('nice negative split here')",
         timeout=5000,
     )
     assert captured['body'] == {'body': 'nice negative split here'}
@@ -480,6 +484,7 @@ def test_coach_toggles_mute_on_a_workout_thread(page):
     page.click('[data-a="roster:select-athlete"]')
     page.wait_for_selector('[data-a="roster:open-workout"]')
     page.click('[data-a="roster:open-workout"]')
+    page.click('[data-a="thread-sheet:open"]')
     page.wait_for_selector('[data-a="roster:workout-chat:mute-toggle"]')
 
     assert page.locator('[data-a="roster:workout-chat:mute-toggle"]').inner_text().strip() == 'Mute AI'

@@ -57,6 +57,8 @@ from swim_coach.models import (
     CoachGrant,
     Conversation,
     ConversationMessage,
+    SessionChatMessage,
+    SessionThread,
     Event,
     Feedback,
     HealthStatus,
@@ -316,6 +318,20 @@ def row_to_conversation_message(row: dict[str, Any]) -> ConversationMessage:
         id=row["id"],
         athlete_id=row["athlete_id"],
         coach_athlete_id=row["coach_athlete_id"],
+        sender_role=row["sender_role"],
+        body=row["body"],
+        tool_trace=row.get("tool_trace"),
+        created_at=row["created_at"],
+    )
+
+
+def row_to_session_message(row: dict[str, Any]) -> SessionChatMessage:
+    """`session_chat_messages` has no `data` JSONB blob -- every field is its own column."""
+    return SessionChatMessage(
+        schema_version=1,
+        id=row["id"],
+        athlete_id=row["athlete_id"],
+        session_id=row["session_id"],
         sender_role=row["sender_role"],
         body=row["body"],
         tool_trace=row.get("tool_trace"),
@@ -1336,6 +1352,61 @@ class DbStore(StoreInterface):
                 (athlete_id, coach_athlete_id, muted),
             )
         return Conversation(athlete_id=athlete_id, coach_athlete_id=coach_athlete_id, ai_muted=muted)
+
+    # --- Planned-session chat thread -------------------------------------
+
+    def append_session_message(self, slug: str, message: SessionChatMessage) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            athlete_id = self._athlete_id(cur, slug)  # raises FileNotFoundError if unknown
+            cur.execute(
+                """
+                insert into session_chat_messages
+                    (id, athlete_id, session_id, sender_role, body, tool_trace, created_at)
+                values (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    message.id, athlete_id, message.session_id, message.sender_role,
+                    message.body, message.tool_trace, message.created_at,
+                ),
+            )
+
+    def list_session_messages(self, slug: str, session_id: UUID) -> list[SessionChatMessage]:
+        with self._connect() as conn, conn.cursor() as cur:
+            athlete_id = self._athlete_id(cur, slug)  # raises FileNotFoundError if unknown
+            cur.execute(
+                "select * from session_chat_messages where athlete_id = %s and session_id = %s "
+                "order by created_at, id",
+                (athlete_id, session_id),
+            )
+            rows = cur.fetchall()
+        return [row_to_session_message(r) for r in rows]
+
+    def get_session_thread(self, slug: str, session_id: UUID) -> SessionThread:
+        with self._connect() as conn, conn.cursor() as cur:
+            athlete_id = self._athlete_id(cur, slug)  # raises FileNotFoundError if unknown
+            cur.execute(
+                "select ai_muted from session_threads where athlete_id = %s and session_id = %s",
+                (athlete_id, session_id),
+            )
+            row = cur.fetchone()
+        return SessionThread(
+            athlete_id=athlete_id, session_id=session_id,
+            ai_muted=bool(row["ai_muted"]) if row is not None else False,
+        )
+
+    def set_session_thread_muted(self, slug: str, session_id: UUID, muted: bool) -> SessionThread:
+        with self._connect() as conn, conn.cursor() as cur:
+            athlete_id = self._athlete_id(cur, slug)  # raises FileNotFoundError if unknown
+            cur.execute(
+                """
+                insert into session_threads (athlete_id, session_id, ai_muted)
+                values (%s, %s, %s)
+                on conflict (athlete_id, session_id)
+                do update set ai_muted = excluded.ai_muted, updated_at = now()
+                """,
+                (athlete_id, session_id, muted),
+            )
+        return SessionThread(athlete_id=athlete_id, session_id=session_id, ai_muted=muted)
 
     # --- Library reviews (web/resources-tab-library-review) -----------------
 

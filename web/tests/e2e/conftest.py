@@ -108,6 +108,29 @@ def _default_conversation_route(route) -> None:
     )
 
 
+# Default empty planned-session thread: opening any session detail fires GET
+# /api/sessions/<id>/thread (main.js openSessionThread). Same unmocked-route hazard as above (WebKit
+# reports the blocked cross-origin fetch as a page error); a thread test overrides it.
+def _default_session_thread_route(route) -> None:
+    request = route.request
+    if request.method == 'OPTIONS':
+        route.fulfill(
+            status=204,
+            headers={
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
+                'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+            },
+        )
+        return
+    route.fulfill(
+        status=200, content_type='application/json', body=json.dumps({'messages': [], 'ai_muted': False}),
+        headers={'Access-Control-Allow-Origin': '*'},
+    )
+
+
+_SESSION_THREAD_URL = re.compile(r'/api/sessions/[^/?]+/thread')
+
 _DEFAULT_CONVERSATION_URL = re.compile(r'/api/(conversations|coach/athletes/[^/?]+/conversation)(?=[/?]|$)')
 
 _original_new_context = Browser.new_context
@@ -125,6 +148,7 @@ def _new_context_with_default_me_route(self, **kwargs):
     ctx = _original_new_context(self, **kwargs)
     ctx.route('**/api/me*', _default_me_route)
     ctx.route(_DEFAULT_CONVERSATION_URL, _default_conversation_route)
+    ctx.route(_SESSION_THREAD_URL, _default_session_thread_route)
     return ctx
 
 

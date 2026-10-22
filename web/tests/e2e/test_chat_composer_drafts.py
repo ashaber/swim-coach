@@ -78,6 +78,7 @@ def test_workout_composer_keeps_text_and_focus_when_a_late_load_renders(page):
     page.click('[data-a="tab:dashboard"]')
     page.wait_for_selector('.hist-row')
     page.click('.hist-row')
+    page.click('[data-a="thread-sheet:open"]')
     page.wait_for_selector('#workout-chat-input')
 
     page.click('#workout-chat-input')
