@@ -758,3 +758,45 @@ export function buildRaceEfficiency(workout) {
     },
   };
 }
+
+// --- Swim pace and sets (engine/swim_coach/swim_sets.py) -----------------------------------
+// Pool swims carry a moving pace (rest excluded, the Garmin/Strava headline) and an elapsed pace
+// per 100 of the pool's own unit, plus the set list. Rows stored before these fields existed
+// have none of them: every builder returns null so the caller falls back to the old display.
+
+function mmss(seconds) {
+  const s = Math.round(seconds);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+/** Headline moving pace, elapsed pace and total rest for a swim, or null for an old row. */
+export function buildSwimPace(analytics) {
+  const unit = analytics?.pool_unit;
+  const moving = unit ? analytics.moving_pace_s_per_100_unit : analytics?.moving_pace_s_per_100m;
+  if (moving === null || moving === undefined) return null;
+  const elapsed = unit ? analytics.elapsed_pace_s_per_100_unit : analytics.elapsed_pace_s_per_100m;
+  const per = unit ? `/100${unit}` : '/100m';
+  const rest = analytics.rest_total_s;
+  return {
+    moving: `${mmss(moving)} ${per}`,
+    elapsed: elapsed === null || elapsed === undefined ? null : `${mmss(elapsed)} ${per}`,
+    rest: rest > 0 ? mmss(rest) : null,
+  };
+}
+
+/** The set list (description line plus one line per rep) and the segmentation note, or null. */
+export function buildSwimSets(analytics) {
+  const sets = analytics?.swim_sets;
+  if (!Array.isArray(sets) || sets.length === 0) return null;
+  return {
+    unit: analytics.pool_unit || 'm',
+    note: analytics.segmentation_note || null,
+    sets: sets.map((s) => ({
+      description: s.description,
+      reps: (s.reps || []).map((r) => {
+        const rest = r.rest_after_s ? ` · rest ${mmss(r.rest_after_s)}` : '';
+        return `${r.distance} ${r.stroke} in ${mmss(r.swim_time_s)} (${mmss(r.pace_s_per_100)}/100)${rest}`;
+      }),
+    })),
+  };
+}
