@@ -302,3 +302,31 @@ def test_offline_disables_scoped_chat_input_with_notice(page):
         assert page.locator('[data-a="workout-chat:send"]').is_disabled()
     finally:
         ctx.set_offline(False)
+
+
+def test_athlete_thread_never_shows_coach_only_messages(page):
+    """A human coach's private "Ask AI coach" exchange is stripped server-side; even if one ever
+    arrived in the payload, the athlete's thread (and its count) must not show it."""
+    workout = {
+        **RICH_FIT_WORKOUT,
+        'chat_messages': [
+            {'id': 'm1', 'sender_role': 'coach', 'body': 'public note for you', 'created_at': '2026-06-01T08:00:00Z'},
+            {'id': 'm2', 'sender_role': 'coach', 'body': 'SECRET reanalyze this', 'visibility': 'coach_only',
+             'created_at': '2026-06-01T08:01:00Z'},
+            {'id': 'm3', 'sender_role': 'ai_coach', 'body': 'SECRET reanalysis done', 'visibility': 'coach_only',
+             'created_at': '2026-06-01T08:01:05Z'},
+        ],
+    }
+    page.route('**/api/workouts*', _cors_route(200, 'application/json', json.dumps([workout])))
+    _configure_backend(page)
+    page.click('[data-a="tab:dashboard"]')
+    page.wait_for_selector('.hist-row')
+    page.click('.hist-row')
+    page.wait_for_selector('[data-a="thread-sheet:open"]')
+    assert page.locator('.thread-btn-count').inner_text().strip() == '1'
+    page.click('[data-a="thread-sheet:open"]')
+    page.wait_for_selector('#workout-chat-input')
+    content = page.locator('.thread-sheet').inner_text()
+    assert 'public note for you' in content
+    assert 'SECRET' not in content
+    assert 'Only you can see this' not in content

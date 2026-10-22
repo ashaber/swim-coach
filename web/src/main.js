@@ -2795,6 +2795,66 @@ async function handleSendRosterWorkoutChatMessage() {
   render();
 }
 
+/** "Ask AI coach" in the coach's workout thread: runs the AI as the coach on this workout via the
+ * coach chat route with a workout_id. The server persists the question and reply as coach-only;
+ * `workout.coach_ask` is just the live overlay until the durable copy is refetched. */
+let rosterWorkoutAskAbort = null;
+
+function handleAskAiAboutRosterWorkout() {
+  const input = document.getElementById('roster-workout-chat-input');
+  const text = input?.value.trim();
+  const draftKey = input?.dataset.draftKey;
+  if (!text) return;
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) return;
+  const athlete = state.roster.actingAsAthlete;
+  const workoutId = state.roster.workoutDetailId;
+  const workout = state.roster.workouts.data.find((w) => w.id === workoutId);
+  if (!athlete || !workout || workout.coach_ask?.status === 'streaming') return;
+
+  workout.coach_ask = { question: text, answer: '', status: 'streaming', error: null };
+  if (input) { input.value = ''; clearDraft(input.dataset.draftKey); }
+  render();
+  log.info('roster.workout_ask_ai', { athlete, workout_id: workoutId });
+
+  rosterWorkoutAskAbort = new AbortController();
+  streamChat({
+    baseUrl: settings.baseUrl,
+    token: settings.token,
+    athlete,
+    endpoint: `/api/coach/athletes/${athlete}/chat`,
+    message: text,
+    history: [],
+    expertMode: true,
+    workoutId,
+    signal: rosterWorkoutAskAbort.signal,
+    onEvent: (event) => {
+      if (event.type === 'error' && event.status === 401) {
+        handleSessionExpired();
+        return;
+      }
+      const ask = workout.coach_ask;
+      if (!ask) return;
+      if (event.type === 'text') ask.answer += event.text || '';
+      if (event.type === 'refusal' || event.type === 'error') {
+        workout.coach_ask = { ...ask, status: 'error', error: event.error || event.text || 'The AI coach could not answer.' };
+        restoreDraftAfterFailure(draftKey, text);
+        log.error('roster.workout_ask_ai_failed', { athlete, workout_id: workoutId, type: event.type });
+      }
+      if (event.type === 'done') {
+        log.info('roster.workout_ask_ai_done', { athlete, workout_id: workoutId });
+        // The server saved both sides as coach-only: refetch so the durable copy replaces the overlay.
+        loadCoachWorkouts(athlete).then(() => {
+          const fresh = state.roster.workouts.data.find((w) => w.id === workoutId);
+          if (fresh) delete fresh.coach_ask;
+          render();
+        });
+      }
+      render();
+    },
+  });
+}
+
 /** The coach's own manual mute/unmute toggle -- immediate, deterministic, same underlying
  * field the athlete's own toggle and the AI tool flip (see `coach_set_workout_chat_muted`,
  * backend/app/routes/coach.py). */
@@ -4415,6 +4475,7 @@ async function onAppClick(e) {
     case 'workout-chat:send': handleSendWorkoutChat(); break;
     case 'workout-chat:mute-toggle': await handleToggleWorkoutChatMute(); break;
     case 'roster:workout-chat:send': await handleSendRosterWorkoutChatMessage(); break;
+    case 'roster:workout-chat:ask-ai': handleAskAiAboutRosterWorkout(); break;
     case 'roster:workout-chat:mute-toggle': await handleToggleRosterWorkoutChatMute(); break;
     case 'roster:chat:send': handleSendRosterChat(); break;
     case 'roster:chat:clear': handleClearRosterChat(); break;
