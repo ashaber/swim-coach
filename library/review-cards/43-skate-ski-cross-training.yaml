@@ -1,0 +1,54 @@
+schema_version: 1
+file: 43-skate-ski-cross-training.md
+added: 2026-10-22
+cards:
+- section: 1-scope-and-honesty-box
+  heading: 1. Scope and honesty box
+  summary: No study trains cyclists on skis and measures cycling; all ski-to-bike transfer claims are adapted from other sports
+    or coach judgment.
+  recommendation: Say plainly that ski-to-bike transfer is unproven, and label advice as adapted or judgment.
+  content_hash: 7d8445dfa86801f5ee59a0a6960dca76ebb210566255036876579638dea84802
+- section: 2-what-cross-training-can-and-cannot-hold
+  heading: 2. What cross-training can and cannot hold
+  summary: Cross-training helps less than specific training; arm fitness barely reaches the legs; unused fitness decays within
+    weeks. All evidence is from running, swimming or general endurance.
+  recommendation: Expect ski fitness to carry over only partly, and check the bike power curve every four weeks.
+  content_hash: ab739a6c59a490d5a35bc2f88671399ae977e4762276593b973dd0dfe21236da
+- section: 3-keeping-bike-fitness-during-the-ski-block
+  heading: 3. Keeping bike fitness during the ski block
+  summary: Endurance is maintained at far lower volume if intensity is kept, but data on athletes is thin. A dose of one or
+    two hard bike sessions weekly is coach judgment.
+  recommendation: Keep one or two hard bike sessions a week all winter; raise the dose if the power curve falls.
+  content_hash: e10b733051bad29c995e22cc7f965718932364e1184d8beaf36f53564136e7a2
+- section: 4-ski-physiology-versus-cycling
+  heading: 4. Ski physiology versus cycling
+  summary: No same-athlete ski versus bike threshold heart rate comparison exists; only specificity of ski testing is supported.
+    Ski zones need a field test.
+  recommendation: Run a ski field threshold test before trusting any heart-rate zones on skis; use RPE until then.
+  content_hash: 32a470c1eede2e74259288986fbe9cce7ff5065125f1455a9e5bab88968ed3e1
+- section: 5-load-accounting-for-ski-sessions
+  heading: 5. Load accounting for ski sessions
+  summary: Skiing has no power, so load uses heart rate or sRPE, which scale differently; time-in-zone under-credits interval
+    days. Taking the higher of both is coach judgment.
+  recommendation: On ski days, take the higher of heart-rate and sRPE load until calibrated, and never present a ski-to-bike
+    conversion as validated.
+  content_hash: 3b9063e2d870afde8b1aa6c697f6a42a2f3d9de42fde87c23c94160da84ebafe
+- section: 6-ski-to-bike-phasing-for-an-april-target
+  heading: 6. Ski-to-bike phasing for an April target
+  summary: No source gives the time course of bike power returning after a ski block; the phasing from eight to ten weeks
+    out is coach judgment gated by power-curve checks.
+  recommendation: Reintroduce bike volume from about eight to ten weeks out, within the ramp rails, gated by power-curve checks.
+  content_hash: 6314ef7e3bf26305faef85cf4bafb01e1c4f19b2bd3bef0dd03ff74aad78e8bf
+- section: 7-safety-and-practicalities
+  heading: 7. Safety and practicalities
+  summary: Injury and cold-air evidence for recreational skate skiers is thin; falls and knee, hand and ankle injuries are
+    the sourced risks. Heavy strength stays, separated from hard ski days.
+  recommendation: Ramp ski time gradually, log falls and new pain, stop and assess on any pain report, and separate heavy
+    lifting from hard skiing.
+  content_hash: 59ec3b7a4066aafd385572f03ac35b71dd59663bddc9cabc8527e0fdd1b4b425
+- section: 8-open-questions
+  heading: 8. Open questions
+  summary: Open questions cover bike power preservation, ski versus bike threshold heart rate, minimum bike dose, load equivalence,
+    beginner learning curve and overuse injury rates.
+  recommendation: Treat these as unanswered and say so rather than inventing numbers.
+  content_hash: 3ecbde8f5e01a3cabed40385acb2cce5b78df2eb0450f2cc29b629e0704c5d18

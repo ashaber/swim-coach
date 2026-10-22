@@ -1146,6 +1146,25 @@ _ULTRA_MTB_KEYWORD_ROUTES: dict[str, set[str]] = {
 _KEYWORD_ROUTES.update(_ULTRA_MTB_KEYWORD_ROUTES)
 _LIBRARY_FILES_IN_PRIORITY_ORDER.append("42-ultra-mtb-endurance.md")
 
+
+# --- 43-skate-ski-cross-training.md: ski cross-training routing ------------
+# Mirrors INDEX.md's skate-ski routing row. Deliberately NOT in
+# `_LIBRARY_FILE_SPORT_SCOPE`: any athlete (swim or bike) may cross-train on
+# skis, so the file routes for everyone. Keywords are whole phrases, never a
+# bare "ski", which is a substring of "skills" and "risking".
+_SKATE_SKI_KEYWORD_ROUTES: dict[str, set[str]] = {
+    "skate ski": {"43-skate-ski-cross-training.md"},
+    "cross-country ski": {"43-skate-ski-cross-training.md"},
+    "cross country ski": {"43-skate-ski-cross-training.md"},
+    "xc ski": {"43-skate-ski-cross-training.md"},
+    "nordic": {"43-skate-ski-cross-training.md"},
+    "roller ski": {"43-skate-ski-cross-training.md"},
+    "skiing": {"43-skate-ski-cross-training.md"},
+    "winter cross-training": {"43-skate-ski-cross-training.md"},
+}
+_KEYWORD_ROUTES.update(_SKATE_SKI_KEYWORD_ROUTES)
+_LIBRARY_FILES_IN_PRIORITY_ORDER.append("43-skate-ski-cross-training.md")
+
 # --- sport-scope filtering (Athlete.sports <-> library file sport scope) ---
 # IDEA 008's hard requirement, made structural (adversarial critique
 # objection 3: INDEX.md's own prose note alone had no code/test/model-field

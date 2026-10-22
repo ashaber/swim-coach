@@ -1174,6 +1174,26 @@ modality-specific constant.
   speed clearly below gait-transition pace is very likely a walk that was
   recorded under the wrong Garmin activity profile).
 
+### Skate-ski cross-training for a cyclist (grounds `43-skate-ski-cross-training.md`)
+
+- **✓ Spiering B.A., Mujika I., Sharp M.A., Foulis S.A. (2021)** — "Maintaining Physical Performance: The Minimal Dose of Exercise Needed to Preserve Endurance and Strength Over Time" — *J Strength Cond Res*, 35(5):1449-1458. Grounds `43-skate-ski-cross-training.md`.
+- **✓ Foster C., Hector L.L., Welsh R., Schrager M., Green M.A., Snyder A.C. (1995)** — "Effects of Specific Versus Cross-Training on Running Performance" — *Eur J Appl Physiol*, 70(4):367-372. Grounds `43-skate-ski-cross-training.md`.
+- **✓ Millet G.P., Vleck V.E., Bentley D.J. (2009)** — "Physiological Differences Between Cycling and Running: Lessons from Triathletes" — *Sports Medicine*, 39(3):179-206. Grounds `43-skate-ski-cross-training.md`.
+- **✓ Mujika I., Padilla S. (2000)** — "Detraining: Loss of Training-Induced Physiological and Performance Adaptations" (Parts I and II) — *Sports Medicine*, 30(2):79-87 and 30(3):145-154. Grounds `43-skate-ski-cross-training.md` (full entry above).
+- **✓ Mujika I. (2010)** — "Intense Training: The Key to Optimal Performance Before and During the Taper" — *Scand J Med Sci Sports*, 20(S2):24-31. Grounds `43-skate-ski-cross-training.md`.
+- **✓ Impellizzeri F., Marcora S., Rampinini E., Mognoni P., Sassi A. (2005)** — "Correlations Between Physiological Variables and Performance in High Level Cross Country Off Road Cyclists" — *Br J Sports Med*, 39(10):747-751. Grounds `43-skate-ski-cross-training.md`.
+- **✓ Rundell K.W. (1995)** — "Treadmill Roller Ski Test Predicts Biathlon Roller Ski Race Results of Elite U.S. Biathlon Women" — *Med Sci Sports Exerc*, 27(12):1677-1685 (volume 27 is 1995; one catalog record says 1996). Grounds `43-skate-ski-cross-training.md`.
+- **✓ Holmberg H.-C., Calbet J.A.L., van Hall G., Saltin B., Jensen-Urstad M. (2002)** — "Peak Oxygen Uptake in Upper Body, Leg and Whole-Body Exercise in Elite Cross-Country Skiers" — *J Physiol*, 539:58P-59P (conference abstract). Grounds `43-skate-ski-cross-training.md`.
+- **~ Marterer N. et al. (2023)** — "Effects of Upper Body Exercise Training on Aerobic Fitness and Performance in Healthy People: A Systematic Review" — *Biology (MDPI)*, 12(3):355; author list not fully confirmed. Grounds `43-skate-ski-cross-training.md`.
+- **~ Millet G.P. et al. (1998)** — "Cycle Rate Variations in Roller Ski Skating: Effects on Oxygen Uptake and Poling Forces" — *Int J Sports Med*, 19(8):521-525; full author list not captured. Grounds `43-skate-ski-cross-training.md`.
+- **~ Seiler K.S., Kjerland G.Ø. (2006)** — "Quantifying Training Intensity Distribution in Elite Endurance Athletes: Is There Evidence for 'Optimal' Distribution?" — *Scand J Med Sci Sports*, 16:49-56; abstract only. Grounds `43-skate-ski-cross-training.md`.
+- **✓ Sandbakk Ø., Hegge A.M., Losnegard T., Skattebo Ø., Tønnessen E., Holmberg H.-C. (2016)** — "The Physiological Capacity of the World's Highest Ranked Female Cross-Country Skiers" — *Med Sci Sports Exerc*, 48:1091-1100. Grounds `43-skate-ski-cross-training.md`.
+- **✓ Sylta Ø., Tønnessen E., Seiler S. (2014)** — "From Heart-Rate Data to Training Quantification: A Comparison of 3 Methods of Training-Intensity Analysis" — *Int J Sports Physiol Perform*, 9(1):100-107. Grounds `43-skate-ski-cross-training.md`.
+- **✓ Foster C. et al. (2001)** — "A New Approach to Monitoring Exercise Training" — *J Strength Cond Res*, 15(1):109-115 (full entry above). Grounds `43-skate-ski-cross-training.md`.
+- **✓ Wilson J.M. et al. (2012)** — "Concurrent Training: A Meta-Analysis Examining Interference of Aerobic and Resistance Exercises" — *J Strength Cond Res*, 26(8):2293-2307. Grounds `43-skate-ski-cross-training.md`.
+- **✓ Rønnestad B.R., Mujika I. (2014)** — "Optimizing Strength Training for Running and Cycling Endurance Performance: A Review" — *Scand J Med Sci Sports*, 24(4):603-612 (full entry above). Grounds `43-skate-ski-cross-training.md`.
+- **✓ Kelsall H.L., Finch C.F. (1996)** — "A Review of Injury Countermeasures and Their Effectiveness for Cross-Country Skiing" — Monash University Accident Research Centre report (non-peer-reviewed). Grounds `43-skate-ski-cross-training.md`.
+
 ## Cycling training (native)
 
 Curated for `23-cycling-training.md` (2026-09-07 pass;
