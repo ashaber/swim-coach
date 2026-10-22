@@ -4547,6 +4547,41 @@ def _load_workout_series(
     return None, "stored series", None
 
 
+# Swim fields recomputed from `lengths` + `pauses` alone; everything else on the stored analytics
+# (cardiac drift, SWOLF/halves) comes from the series and is preserved.
+_SWIM_LENGTH_FIELDS: tuple[str, ...] = (
+    "moving_min", "pool_unit", "pool_length_m", "moving_pace_s_per_100m", "elapsed_pace_s_per_100m",
+    "moving_pace_s_per_100_unit", "elapsed_pace_s_per_100_unit", "rest_total_s", "swim_sets",
+    "segmentation_note", "data_quality_note",
+)
+# Length-derived pace/SWOLF fields, also cleared when the lengths are flagged corrupt.
+_SWIM_CORRUPT_CLEARED_FIELDS: tuple[str, ...] = (
+    "split_label", "first_half_pace_s_per_100m", "second_half_pace_s_per_100m",
+    "swolf_first_quarter", "swolf_last_quarter", "swolf_degradation_pct",
+)
+
+
+def _reanalyze_swim_from_lengths(
+    workout: Workout, *, store: StoreInterface, slug: str, session: Session | None
+) -> dict[str, Any]:
+    """Old pool swims have no stored series but carry `lengths` + `pauses`, which is all swim pace and
+    sets need: re-run the analysis and merge only the swim fields into the existing analytics."""
+    ctx = build_analysis_context(store, slug, workout, series=None, session=session)
+    fresh = workout.analyze(ctx)
+    fields = _SWIM_LENGTH_FIELDS + (_SWIM_CORRUPT_CLEARED_FIELDS if fresh.data_quality_note else ())
+    update = {name: getattr(fresh, name) for name in fields}
+    workout.analytics = (workout.analytics or fresh).model_copy(update=update)
+    store.save_workout(slug, workout)
+    log.info("reanalyze_workout", athlete=slug, workout_id=str(workout.id), target_source="swim lengths")
+    return {
+        "reanalyzed": True,
+        "workout_id": str(workout.id),
+        "date": workout.date.isoformat(),
+        "series_source": "lengths + pauses (no series)",
+        "analytics": analytics_for_coach(workout.analytics, sport=workout.sport, section_notes=workout.section_notes),
+    }
+
+
 def _handle_reanalyze_workout(
     input_data: dict[str, Any], *, store: StoreInterface, slug: str
 ) -> dict[str, Any]:
@@ -4608,6 +4643,8 @@ def _handle_reanalyze_workout(
     series, series_source, load_error = _load_workout_series(store, slug, workout)
     if load_error is not None:
         return {"error": load_error}
+    if series is None and workout.sport == "swim_pool" and workout.lengths:
+        return _reanalyze_swim_from_lengths(workout, store=store, slug=slug, session=session)
     if series is None:
         return {
             "error": (
