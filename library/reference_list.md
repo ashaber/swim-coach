@@ -1650,6 +1650,28 @@ All located and read (abstract minimum) 2026-10; no DOIs kept (see header). `[AD
 - **✓ Grigg J. (2019)** — "A biomechanical analysis of the BMX SX gate start" — *doctoral thesis, Bond University (weak: thesis, tiny n)*. Supports: back set position faster; reaction training did not transfer to ramp start time.
 - Practitioner, not evidence: Overton F. (2022) FasCat "The Perfect Cyclocross Race Start" (clipped foot at 2 o'clock, clip-in reps, gear by surface); Myerson A. (2017) Cycle-Smart "Where it all starts" (gear one cog off the easiest, shift as speed rises).
 
+### Ultra MTB / 6-24 h cycling (grounds `42-ultra-mtb-endurance.md`)
+
+- **✓ Matta G. et al. (2020)** — "Pacing and performance during the World 24-hour Mountain Bike Championships" — *ECSS Congress abstract*. ⚠ Abstract only. Grounds `42-ultra-mtb-endurance.md`.
+- **✓ Knechtle B., Bragazzi N.L., Rosemann T., Rüst C.A. (2015)** — "Pacing in a self-paced world record attempt in 24-h road cycling" — *SpringerPlus, 4:650*. ⚠ n=1. Grounds `42-ultra-mtb-endurance.md`.
+- **✓ Scholz H. et al. (2021)** — "Changes in sex difference in time-limited ultra-cycling races from 6 hours to 24 hours" — *Medicina, 57(9):923*. Grounds `42-ultra-mtb-endurance.md`.
+- **✓ Neumayr G. et al. (2004)** — "Effect of ultramarathon cycling on the heart rate in elite cyclists" — *British Journal of Sports Medicine, 38(1):55-59*. ⚠ n=10. Grounds `42-ultra-mtb-endurance.md`.
+- **✓ Martin L. et al. (2012)** — "Even between-lap pacing despite high within-lap variation during mountain biking" — *International Journal of Sports Physiology and Performance, 7(3):261-270*. ⚠ n=6. Grounds `42-ultra-mtb-endurance.md`.
+- **✓ Abbiss C.R., Laursen P.B. (2008)** — "Describing and understanding pacing strategies during athletic competition" — *Sports Medicine, 38(3):239-252*. Grounds `42-ultra-mtb-endurance.md`.
+- **✓ Abbiss C.R. et al. (2006)** — "Dynamic pacing strategies during the cycle phase of an Ironman triathlon" — *Medicine & Science in Sports & Exercise, 38(4):726-734*. ⚠ n=6. Grounds `42-ultra-mtb-endurance.md`.
+- **✓ Deusch H. et al. (2021)** — "Pacing in time-limited ultramarathons from 6 to 24 hours—the aspects of age, sex and performance level" — *Sustainability, 13(5):2705*. ⚠ Running. Grounds `42-ultra-mtb-endurance.md`.
+- **✓ Bescós R. et al. (2012)** — "High energy deficit in an ultraendurance athlete in a 24-hour ultracycling race" — *Proceedings (Baylor University Medical Center), 25(2):124-128*. ⚠ n=1. Grounds `42-ultra-mtb-endurance.md`.
+- **✓ Chlíbková D. et al. (2014)** — "The prevalence of exercise-associated hyponatremia in 24-hour ultra-mountain bikers, 24-hour ultra-runners and multi-stage ultra-mountain bikers in the Czech Republic" — *Journal of the International Society of Sports Nutrition, 11:3*. Grounds `42-ultra-mtb-endurance.md`.
+- **✓ Lahart I.M. et al. (2013)** — "Challenges in maintaining emotion regulation in a sleep and energy deprived state induced by the 4800 km ultra-endurance bicycle race; the Race Across AMerica (RAAM)" — *Journal of Sports Science & Medicine, 12:481-488*. ⚠ Four-man team. Grounds `42-ultra-mtb-endurance.md`.
+- **~ Maunder E. et al. (2021)** — "The importance of 'durability' in the physiological profiling of endurance athletes" — *Sports Medicine, 51*. Author list unconfirmed. Grounds `42-ultra-mtb-endurance.md`.
+- **✓ Hamilton K. et al. (2024)** — "Durability of the moderate-to-heavy-intensity transition is related to the effects of prolonged exercise on severe-intensity performance" — *European Journal of Applied Physiology, 124(8):2427-2438*. ⚠ n=13. Grounds `42-ultra-mtb-endurance.md`.
+- **✓ Hunter B. et al. (2025)** — "Durability as an index of endurance exercise performance: methodological considerations" — *Experimental Physiology*. Grounds `42-ultra-mtb-endurance.md`.
+- **✓ Leo P. et al. (2024)** — "The influence of high-intensity work on the record power profile of under-23, pro team, and World Tour cyclists" — *International Journal of Sports Physiology and Performance, 19(6):545-549*. ⚠ Pro road. Grounds `42-ultra-mtb-endurance.md`.
+- **✓ Manunzio C. et al. (2016)** — "Training intensity distribution and changes in performance and physiology of a 2nd place finisher team of the Race Across America over a 6 month preparation period" — *Frontiers in Physiology, 7:642*. ⚠ n=4. Grounds `42-ultra-mtb-endurance.md`.
+- **✓ Impellizzeri F.M., Marcora S.M. (2007)** — "The physiology of mountain biking" — *Sports Medicine, 37(1):59-71*. Grounds `42-ultra-mtb-endurance.md`.
+- **✓ Abou Shoak M. et al. (2013)** — "Participation and performance trends in ultracycling" — *Open Access Journal of Sports Medicine, 4:41-51*. Grounds `42-ultra-mtb-endurance.md`.
+- **✓ Podlogar T. et al. (2022)** — "Increased exogenous but unaltered endogenous carbohydrate oxidation with combined fructose-maltodextrin ingested at 120 g/h versus 90 g/h at different ratios" — *European Journal of Applied Physiology, 122(11):2393-2401*. ⚠ n=11, lab. Grounds `42-ultra-mtb-endurance.md`.
+
 ## Recovery, sleep & HRV
 
 - **✓ Driller M., Leabeater A. (2023)** — "Fundamentals or Icing on Top of
