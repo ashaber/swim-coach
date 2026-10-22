@@ -19,7 +19,7 @@ from fastapi.responses import StreamingResponse
 from swim_coach.athlete_time import athlete_today
 from swim_coach.load import estimate_hr_max
 from swim_coach.quality import match_workout_to_session, workout_quality
-from swim_coach.models import Feedback, HealthStatus, Session, WorkoutChatMessage
+from swim_coach.models import Feedback, HealthStatus, Session, WorkoutChatMessage, visible_workout_chat
 from swim_coach.store import StoreInterface
 
 from swim_coach.health_vocab import BODY_REGIONS, ONSETS, RESTRICTIONS, SEVERITIES, SOURCES
@@ -183,6 +183,12 @@ async def coach_view_workouts(
         if week is not None:
             sessions.extend(week.sessions)
 
+    # coach-only "Ask AI coach" messages: only the coach who asked sees their own (a service
+    # credential has no coach identity, so it sees the public thread only).
+    viewer_coach_id = (
+        store.load_athlete(principal.athlete).id
+        if principal.kind == "athlete" and principal.athlete is not None else None
+    )
     result = []
     for workout in workouts:
         session = match_workout_to_session(workout, sessions, other_workouts=all_workouts)
@@ -190,7 +196,11 @@ async def coach_view_workouts(
         load_au, load_tier = workout_load_au(workout, athlete=athlete, hr_max=hr_max, wellness=wellness)
         result.append(
             {
-                **workout.model_dump(mode="json"),
+                **workout.model_dump(mode="json", exclude={"chat_messages"}),
+                "chat_messages": [
+                    m.model_dump(mode="json")
+                    for m in visible_workout_chat(workout.chat_messages, viewer_coach_id=viewer_coach_id)
+                ],
                 "quality": quality.model_dump(mode="json"),
                 "load_au": load_au,
                 "load_tier": load_tier,
@@ -642,6 +652,22 @@ async def coach_chat(
         "requires (never your own paraphrase), and the confirmation is recorded as the coach's, "
         "attributed by role, never silently passed off as the athlete's own."
     )
+    # A workout-scoped coach turn is the coach-only "Ask AI coach" in that workout's thread: it
+    # persists privately (visibility="coach_only", tagged with THIS coach) rather than into the
+    # athlete's own thread, so it needs a real single coach identity, same as commenting does.
+    private_coach_id = None
+    if payload.workout_id is not None:
+        if principal.kind != "athlete" or principal.athlete is None:
+            raise HTTPException(
+                status_code=403,
+                detail="asking the AI about a workout as coach requires a single coach identity; "
+                "a service credential has none",
+            )
+        private_coach_id = make_store(request.app.state.settings).load_athlete(principal.athlete).id
+        persona_note += (
+            " This turn is in the coach's PRIVATE thread on one of the athlete's workouts: the "
+            "athlete cannot see this question or your reply, so write to the coach, not the athlete."
+        )
     coach_payload = payload.model_copy(update={"expert_mode": True, "athlete": slug})
     return await stream_chat_response(
         coach_payload,
@@ -653,4 +679,5 @@ async def coach_chat(
         confirmer_id=coach_id,
         asker_note=persona_note,
         plan_change_notifier=plan_change_notifier,
+        private_coach_id=private_coach_id,
     )

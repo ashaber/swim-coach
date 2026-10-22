@@ -55,7 +55,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
 from pydantic import ValidationError
 from swim_coach.load import estimate_hr_max
-from swim_coach.models import Session, Workout
+from swim_coach.models import Session, Workout, visible_workout_chat
 from swim_coach.quality import match_workout_to_session, workout_quality
 from swim_coach.parse_files import PARSERS_BY_EXTENSION
 
@@ -109,6 +109,15 @@ _MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 _PATCHABLE_WORKOUT_FIELDS = {"rpe", "notes", "chat_ai_muted", "section_notes"}
 
 
+def athlete_view_dump(workout: Workout) -> dict:
+    """`workout` as JSON for the athlete: coach-only chat messages (a human coach's private "Ask AI
+    coach" exchange) are stripped. EVERY athlete-facing serialization of a Workout goes through here."""
+    return {
+        **workout.model_dump(mode="json", exclude={"chat_messages"}),
+        "chat_messages": [m.model_dump(mode="json") for m in visible_workout_chat(workout.chat_messages)],
+    }
+
+
 def _attach_load(
     workout: Workout, *, profile: Any, hr_max: float | None, wellness: list[Any]
 ) -> dict:
@@ -124,7 +133,7 @@ def _attach_load(
     `Workout` model -- response-only, computed fresh every call.
     """
     load_au, load_tier = workout_load_au(workout, athlete=profile, hr_max=hr_max, wellness=wellness)
-    return {**workout.model_dump(mode="json"), "load_au": load_au, "load_tier": load_tier}
+    return {**athlete_view_dump(workout), "load_au": load_au, "load_tier": load_tier}
 
 
 def _scored_quality(store: Any, slug: str, profile: Any, workouts: list[Workout]) -> dict[str, dict]:
@@ -247,7 +256,7 @@ async def patch_workout(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     store.save_workout(athlete, updated)
-    return updated.model_dump(mode="json")
+    return athlete_view_dump(updated)
 
 
 @router.post("/api/workouts/{workout_id}/kind")

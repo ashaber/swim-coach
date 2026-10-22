@@ -2389,6 +2389,10 @@ class WorkoutAnalytics(BaseModel):
 
 
 WorkoutChatSenderRole = Literal["athlete", "ai_coach", "coach"]
+# "all": the whole thread sees it. "coach_only": a human coach's private "Ask AI coach" exchange --
+# visible only to the coach named by `coach_athlete_id`, never to the athlete (see
+# `visible_workout_chat`). Additive field with a default, so existing rows need no migration.
+WorkoutChatVisibility = Literal["all", "coach_only"]
 
 
 class WorkoutChatMessage(BaseModel):
@@ -2416,7 +2420,20 @@ class WorkoutChatMessage(BaseModel):
     # (`app.save_claims.format_tool_trace`), replayed into later turns' history. `None` on rows
     # that predate it (unknown, not "none"). Never shown in the thread UI.
     tool_trace: str | None = None
+    visibility: WorkoutChatVisibility = "all"
     created_at: datetime
+
+
+def visible_workout_chat(
+    messages: list[WorkoutChatMessage], *, viewer_coach_id: UUID | None = None
+) -> list[WorkoutChatMessage]:
+    """The messages a viewer may see: every `visibility="all"` message, plus `coach_only` ones
+    belonging to `viewer_coach_id` (the coach who asked; their `coach_athlete_id`). The athlete
+    and any other coach pass no id (or a different one) and get the public thread only."""
+    return [
+        m for m in messages
+        if m.visibility == "all" or (viewer_coach_id is not None and m.coach_athlete_id == viewer_coach_id)
+    ]
 
 
 class ConversationMessage(BaseModel):

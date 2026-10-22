@@ -19,7 +19,9 @@ from typing import Any, Callable, Literal
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from swim_coach.models import ConversationMessage, Session, Workout, WorkoutChatMessage
+from swim_coach.models import (
+    ConversationMessage, Session, Workout, WorkoutChatMessage, visible_workout_chat,
+)
 from swim_coach.session_lookup import find_in_store
 from swim_coach.store import StoreInterface
 
@@ -126,6 +128,8 @@ def _history_from_workout_chat(
             role, text = "assistant", msg.body
             if msg.tool_trace is not None:  # legacy turns (None) get no line: unknown != none
                 text = f"{text}\n\n[tools this turn: {msg.tool_trace}]"
+        elif msg.sender_role == "coach" and getattr(msg, "visibility", "all") == "coach_only":
+            role, text = "user", msg.body  # the asker's own private words -- not a third party
         elif msg.sender_role == "coach":
             role, text = "user", f"[Your human coach]: {msg.body}"
         else:
@@ -140,7 +144,8 @@ def _history_from_workout_chat(
 
 def _append_workout_chat_message(
     store: StoreInterface, athlete: str, workout_id: uuid.UUID, sender_role: str, body: str,
-    tool_trace: str | None = None,
+    tool_trace: str | None = None, *,
+    visibility: str = "all", coach_athlete_id: uuid.UUID | None = None,
 ) -> None:
     """Appends one message to `workout_id`'s chat thread and saves -- reloading the workout
     FRESH right before writing (not reusing whatever was loaded at request start), so a human
@@ -156,6 +161,7 @@ def _append_workout_chat_message(
         workout.chat_messages.append(
             WorkoutChatMessage(
                 id=uuid.uuid4(), sender_role=sender_role, body=body, tool_trace=tool_trace,
+                visibility=visibility, coach_athlete_id=coach_athlete_id,
                 created_at=datetime.now(timezone.utc),
             )
         )
@@ -165,6 +171,20 @@ def _append_workout_chat_message(
             "workout chat message save failed", athlete=athlete, workout_id=str(workout_id),
             sender_role=sender_role, exc_info=True,
         )
+
+
+def _private_coach_append(
+    store: StoreInterface, athlete: str, workout_id: uuid.UUID, coach_id: uuid.UUID
+) -> ThreadAppend:
+    """A `ThreadAppend` for a coach-only turn: `_persisting_thread_stream` appends the asker's
+    message as "athlete", which here is really the human coach asking; both sides are stored
+    `coach_only` and tagged with the asking coach so only they can read them back."""
+    def append(sender_role: str, body: str, tool_trace: str | None = None) -> None:
+        _append_workout_chat_message(
+            store, athlete, workout_id, "coach" if sender_role == "athlete" else sender_role, body,
+            tool_trace, visibility="coach_only", coach_athlete_id=coach_id,
+        )
+    return append
 
 
 def _parse_sse(line: str) -> dict[str, Any] | None:
@@ -352,6 +372,7 @@ async def stream_chat_response(
     asker_note: str | None = None,
     plan_change_notifier: Callable[..., None] | None = None,
     conversation_coach_id: uuid.UUID | None = None,
+    private_coach_id: uuid.UUID | None = None,
 ) -> StreamingResponse:
     """The real body of `POST /api/chat` -- factored out (coach-ai-planning build) so `POST
     /api/coach/athletes/{slug}/chat` (`routes/coach.py`) can reuse the EXACT same streaming
@@ -380,6 +401,14 @@ async def stream_chat_response(
     persisted thread (human coach's comments included) is the history, the athlete's message is
     saved up front and the AI's reply after. Only `routes/conversation.py` passes it, AFTER
     checking an active grant and the thread's mute state -- never derived from the request body.
+
+    `private_coach_id`, when given (with a `workout_id`), makes this a coach-only "Ask AI coach"
+    turn: the human coach's question and the AI's reply persist onto the workout thread with
+    `visibility="coach_only"` (the coach's question as `sender_role="coach"`), the AI's history
+    is the thread as THAT coach sees it (public messages plus their own private ones), and the
+    athlete's mute is bypassed (it silences the AI toward the athlete, not toward the coach).
+    Only `routes/coach.py` passes it, from the authenticated principal -- never the body.
+    Every other workout turn replays only the public thread (`visible_workout_chat`).
     """
     settings = request.app.state.settings
     # Per-minute limiter keys off the raw token (per athlete-session now);
@@ -421,7 +450,7 @@ async def stream_chat_response(
     # Workout chat thread (IDEA 016): a muted thread skips the model call entirely -- cheaper
     # AND deterministic (no dependence on the model itself declining to answer, per Andrew's
     # own "not hope-the-LLM-complies" steer). Checked here, before anything else gets built.
-    if focused_workout is not None and focused_workout.chat_ai_muted:
+    if focused_workout is not None and focused_workout.chat_ai_muted and private_coach_id is None:
         workout_append: ThreadAppend = functools.partial(
             _append_workout_chat_message, store, athlete, focused_workout.id
         )
@@ -447,7 +476,9 @@ async def stream_chat_response(
     effective_message = payload.message
     thread_messages: list[Any] | None = None
     if focused_workout is not None:
-        thread_messages = focused_workout.chat_messages
+        thread_messages = visible_workout_chat(
+            focused_workout.chat_messages, viewer_coach_id=private_coach_id
+        )
     elif focused_session is not None:
         thread_messages = session_thread_messages(store, athlete, focused_session)
     elif conversation_coach_id is not None:
@@ -593,6 +624,8 @@ async def stream_chat_response(
         append_to_workout: ThreadAppend = functools.partial(
             _append_workout_chat_message, store, athlete, workout_id
         )
+        if private_coach_id is not None:
+            append_to_workout = _private_coach_append(store, athlete, workout_id, private_coach_id)
 
         def persisted_event_stream():
             yield from _persisting_thread_stream(append_to_workout, payload.message, event_stream())
