@@ -449,7 +449,7 @@ def test_coach_sends_a_workout_chat_comment_and_sees_it_appear(page):
     # Merged straight from the response, no extra round trip -- the input clears and re-enables.
     assert page.locator('#roster-workout-chat-input').input_value() == ''
     send_btn = page.locator('[data-a="roster:workout-chat:send"]')
-    assert send_btn.inner_text().strip() == 'Send'
+    assert send_btn.inner_text().strip() == 'Send to athlete'
     assert not send_btn.is_disabled()
 
 
@@ -812,3 +812,64 @@ def test_roster_tab_does_not_overflow_horizontally(page):
     overflow = page.evaluate(
         'document.documentElement.scrollWidth - document.documentElement.clientWidth')
     assert overflow <= 1, f'horizontal overflow of {overflow}px'
+
+
+def _open_roster_workout_thread(page):
+    _open_roster(page)
+    page.click('[data-a="roster:select-athlete"]')
+    page.wait_for_selector('[data-a="roster:open-workout"]')
+    page.click('[data-a="roster:open-workout"]')
+    page.click('[data-a="thread-sheet:open"]')
+    page.wait_for_selector('#roster-workout-chat-input')
+
+
+def test_coach_composer_offers_send_to_athlete_and_ask_ai_coach(page):
+    _open_roster_workout_thread(page)
+    assert page.locator('[data-a="roster:workout-chat:send"]').inner_text().strip() == 'Send to athlete'
+    assert page.locator('[data-a="roster:workout-chat:ask-ai"]').inner_text().strip() == 'Ask AI coach'
+    assert 'only you see the question and the reply' in page.locator('.thread-sheet').inner_text()
+
+
+def test_ask_ai_coach_streams_privately_and_never_posts_to_the_athlete_thread(page):
+    chat_requests = []
+    posted_to_athlete = []
+
+    def chat_handler(route):
+        if route.request.method == 'OPTIONS':
+            route.fulfill(status=204, headers=CORS_HEADERS)
+            return
+        chat_requests.append(json.loads(route.request.post_data))
+        body = ('data: {"type":"text","text":"Re-ran it: the last 400m faded."}\n\n'
+                'data: {"type":"done","stop_reason":"end_turn"}\n\n')
+        route.fulfill(status=200, content_type='text/event-stream', body=body, headers=CORS_HEADERS)
+
+    def athlete_post_handler(route):
+        posted_to_athlete.append(route.request.url)
+        route.fulfill(status=500, body='{}', headers=CORS_HEADERS)
+
+    page.route('**/api/coach/athletes/renee/chat', chat_handler)
+    page.route('**/api/coach/athletes/renee/workouts/w1/chat-messages', athlete_post_handler)
+
+    _open_roster_workout_thread(page)
+    # What the server persisted as coach-only, returned by the refetch after the stream ends.
+    persisted = json.loads(WORKOUT_STUB)
+    persisted[0]['chat_messages'] = [
+        {'id': 'q1', 'sender_role': 'coach', 'coach_athlete_id': 'tim-id', 'visibility': 'coach_only',
+         'body': 'reanalyze this workout', 'created_at': '2026-08-20T13:00:00Z'},
+        {'id': 'a1', 'sender_role': 'ai_coach', 'coach_athlete_id': 'tim-id', 'visibility': 'coach_only',
+         'body': 'Re-ran it: the last 400m faded.', 'created_at': '2026-08-20T13:00:05Z'},
+    ]
+    page.route('**/api/coach/athletes/renee/workouts*', _cors_route(200, 'application/json', json.dumps(persisted)))
+
+    page.fill('#roster-workout-chat-input', 'reanalyze this workout')
+    page.click('[data-a="roster:workout-chat:ask-ai"]')
+    page.wait_for_function(
+        "() => document.querySelector('.thread-sheet').textContent.includes('the last 400m faded')",
+        timeout=5000,
+    )
+    assert chat_requests[0]['workout_id'] == 'w1'
+    assert chat_requests[0]['message'] == 'reanalyze this workout'
+    assert posted_to_athlete == []
+    sheet = page.locator('.thread-sheet').inner_text()
+    assert sheet.count('Only you can see this') >= 2
+    assert page.locator('#roster-workout-chat-input').input_value() == ''

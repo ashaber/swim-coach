@@ -34,6 +34,7 @@ import {
 } from './librarySort.js';
 import { expandStructure, actualPoints, sessionForWorkout, shapeChartGeometry } from './shape.js';
 import { buildCourseSectors, buildRaceEfficiency, buildFreeRide, powerCurveView, buildMtbDynamics, buildRawAnalysis, buildPacingEffort, buildMasterLaps, showsMainLapsTable, effectiveKind, kindLabel, raceStartInfo, KIND_OPTIONS, buildSwimPace, buildSwimSets } from './analysis.js';
+import { visibleThreadMessages, COACH_ONLY, COACH_ONLY_LABEL } from './threadVisibility.js';
 import { sportHasPlannedDistance, sportCanPushToGarmin, sportUsesPace } from './sports.js';
 import {
   sportLabel, sourceBadge, formatWorkoutDistance, formatAnalyticsLine,
@@ -3436,9 +3437,10 @@ function renderWorkoutThreadMessage(msg, viewerRole) {
   const isMine = msg.sender_role === viewerRole;
   const roleClass = isMine ? 'me' : 'coach';
   const label = isMine ? '' : { athlete: 'Athlete', ai_coach: 'AI coach', coach: 'Coach' }[msg.sender_role] || '';
+  const chips = [label, msg.visibility === COACH_ONLY ? COACH_ONLY_LABEL : ''].filter(Boolean);
   return `
     <div class="chat-row ${roleClass}">
-      ${label ? `<div class="chat-chips"><span class="chat-chip">${esc(label)}</span></div>` : ''}
+      ${chips.length ? `<div class="chat-chips">${chips.map((c) => `<span class="chat-chip">${esc(c)}</span>`).join('')}</div>` : ''}
       <div class="chat-bubble"><div class="chat-md">${renderChatMarkdown(msg.body)}</div></div>
     </div>`;
 }
@@ -3457,10 +3459,10 @@ function renderWorkoutThreadMessage(msg, viewerRole) {
  * `inputId`/`sendAction`/`muteAction` are threaded through rather than hardcoded so ONE
  * function serves both surfaces with their own distinct DOM ids/dispatch actions. */
 function renderWorkoutThread({
-  workout, viewerRole, streamingChat = null, online, inputId, sendAction, muteAction, submitting = false,
+  workout, viewerRole, streamingChat = null, online, inputId, sendAction, muteAction, askAction = '', submitting = false,
 }) {
   const key = sheetKeyFor(viewerRole === 'coach' ? 'roster-workout' : 'workout', workout.id);
-  const messages = workout.chat_messages || [];
+  const messages = visibleThreadMessages(workout.chat_messages, viewerRole);
   const button = renderThreadButton(key, messages.length);
   if (!isSheetOpen(key)) return button;
 
@@ -3474,6 +3476,9 @@ function renderWorkoutThread({
     || (isStreamingHere && !!lastStreaming && lastStreaming.role === 'assistant' && lastStreaming.status === 'streaming');
   const streamingRows = isStreamingHere ? streamingMessages.map(renderChatMessage).join('') : '';
   const draftKey = `${inputId}:${workout.id}`;
+  const ask = viewerRole === 'coach' ? workout.coach_ask || null : null;
+  const askRows = ask ? renderCoachAskRows(ask) : '';
+  const busy = sendingLive || !online || (ask && ask.status === 'streaming');
 
   return button + renderThreadSheetShell({
     label: 'This workout only',
@@ -3482,17 +3487,31 @@ function renderWorkoutThread({
     tools: `<button type="button" class="btn-ghost chat-mute-btn" data-a="${esc(muteAction)}">${muted ? 'Unmute AI' : 'Mute AI'}</button>`,
     notes: muted ? '<p class="sub thread-note">The AI coach is muted in this thread -- only you and your coach will reply.</p>' : '',
     banner: !online ? '<div class="chat-banner">Offline -- this needs a connection.</div>' : '',
-    messagesHtml: rows || streamingRows ? `<div class="chat-messages" id="${esc(listId)}">${rows}${streamingRows}</div>` : '',
+    messagesHtml: rows || streamingRows || askRows ? `<div class="chat-messages" id="${esc(listId)}">${rows}${streamingRows}${askRows}</div>` : '',
     emptyHtml: '<p class="sub thread-note">No messages yet.</p>',
     composer: `
       <div class="chat-composer">
-        <textarea id="${esc(inputId)}" class="chat-input" data-draft-key="${esc(draftKey)}" placeholder="${viewerRole === 'coach' ? 'Comment on this workout…' : 'Ask about this workout…'}" rows="2" ${sendingLive || !online ? 'disabled' : ''}>${esc(getDraft(draftKey))}</textarea>
+        <textarea id="${esc(inputId)}" class="chat-input" data-draft-key="${esc(draftKey)}" placeholder="${viewerRole === 'coach' ? 'Write to the athlete, or ask the AI coach…' : 'Ask about this workout…'}" rows="2" ${busy ? 'disabled' : ''}>${esc(getDraft(draftKey))}</textarea>
+        ${viewerRole === 'coach' ? '<p class="sub thread-note">Send to athlete posts in her thread. Ask AI coach is private: only you see the question and the reply.</p>' : ''}
         <div class="chat-composer-row">
-          <span></span>
-          <button type="button" class="btn" data-a="${esc(sendAction)}" ${sendingLive || !online ? 'disabled' : ''}>${sendingLive ? 'Sending…' : 'Send'}</button>
+          ${viewerRole === 'coach' ? `<button type="button" class="btn-ghost" data-a="${esc(askAction)}" ${busy ? 'disabled' : ''}>Ask AI coach</button>` : '<span></span>'}
+          <button type="button" class="btn" data-a="${esc(sendAction)}" ${busy ? 'disabled' : ''}>${sendingLive ? 'Sending…' : viewerRole === 'coach' ? 'Send to athlete' : 'Send'}</button>
         </div>
       </div>`,
   });
+}
+
+/** The coach's in-flight (or just-failed) "Ask AI coach" turn, shown under the persisted thread
+ * until main.js refetches the durable copy (`workout.coach_ask`, a client-only overlay). */
+function renderCoachAskRows(ask) {
+  const question = renderWorkoutThreadMessage(
+    { sender_role: 'coach', body: ask.question, visibility: COACH_ONLY }, 'coach',
+  );
+  const answer = ask.status === 'error'
+    ? `<div class="chat-row coach"><div class="chat-bubble"><div class="chat-md">${esc(ask.error || 'The AI coach could not answer.')}</div></div></div>`
+    : `<div class="chat-row coach" data-stream-row><div class="chat-chips"><span class="chat-chip">AI coach</span><span class="chat-chip">${esc(COACH_ONLY_LABEL)}</span></div>
+        <div class="chat-bubble"><div class="chat-md">${ask.answer ? renderChatMarkdown(ask.answer) : '<span class="sub">Thinking…</span>'}</div>${ask.status === 'streaming' ? '<span class="chat-cursor">▍</span>' : ''}</div></div>`;
+  return question + answer;
 }
 
 /** Short weekday for a sheet title ("Tue"). */
@@ -3669,6 +3688,7 @@ export function renderWorkoutDetail(workout, {
   const thread = renderWorkoutThread(viewerRole === 'coach' ? {
     workout, viewerRole, online, submitting: coachChatSubmitting,
     inputId: 'roster-workout-chat-input', sendAction: 'roster:workout-chat:send', muteAction: 'roster:workout-chat:mute-toggle',
+    askAction: 'roster:workout-chat:ask-ai',
   } : {
     workout, viewerRole, streamingChat: chat, online,
     inputId: 'workout-chat-input', sendAction: 'workout-chat:send', muteAction: 'workout-chat:mute-toggle',
