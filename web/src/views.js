@@ -5222,9 +5222,38 @@ function renderGrantsPanel({ grants, form, submit }) {
     </div>`;
 }
 
+export function renderUpdateCheckPanel({ check = 'idle', online = true, registered = false, buildId = '' } = {}) {
+  const heading = '<h3 style="margin:0 0 12px;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);">App version</h3>';
+  if (!registered) {
+    return `
+    <div class="panel settings-panel" data-update-check="unsupported">
+      ${heading}
+      <p class="field-hint" style="margin:0;">Updates aren't available here -- the app isn't installed as a PWA in this browser.</p>
+    </div>`;
+  }
+  const busy = check === 'checking' || check === 'updating';
+  const label = check === 'checking' ? 'Checking…' : 'Check for update';
+  let message = '';
+  if (!online) message = '<p class="field-hint" style="margin:10px 0 0;">Needs a connection.</p>';
+  else if (check === 'updating') message = '<p class="field-hint" style="margin:10px 0 0;">New version found -- reloading…</p>';
+  else if (check === 'error') message = '<div class="conn-result fail">Couldn\'t check for updates. Try again.</div>';
+  else if (check === 'latest') {
+    message = `<p class="field-hint" style="margin:10px 0 0;">You're on the latest version${buildId ? ` <span class="mono">(${esc(buildId)})</span>` : ''}.</p>`;
+  }
+  return `
+    <div class="panel settings-panel" data-update-check="${esc(check)}">
+      ${heading}
+      <div class="settings-actions">
+        <button type="button" class="btn" data-a="pwa:check" ${busy || !online ? 'disabled' : ''}>${label}</button>
+        ${check === 'latest' ? '<button type="button" class="btn-ghost" data-a="pwa:reload-anyway">Reload anyway</button>' : ''}
+      </div>
+      ${message}
+    </div>`;
+}
+
 export function renderSettingsTab({
   identity, identityError, backendConfigured, profileForm, profileLoad, profileSubmit,
-  grants, grantsForm, grantsSubmit,
+  grants, grantsForm, grantsSubmit, updateCheck,
 }) {
   return `
     <div class="wrap settings-wrap">
@@ -5249,6 +5278,7 @@ export function renderSettingsTab({
       ${backendConfigured ? renderGrantsPanel({ grants, form: grantsForm, submit: grantsSubmit }) : ''}
       ${backendConfigured ? renderSportsThresholdsPanel({ form: profileForm, load: profileLoad }) : ''}
       ${backendConfigured ? renderProfilePanel({ form: profileForm, load: profileLoad, submit: profileSubmit }) : ''}
+      ${updateCheck ? renderUpdateCheckPanel(updateCheck) : ''}
     </div>`;
 }
 

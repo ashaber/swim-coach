@@ -15,6 +15,8 @@ export function createPwaUpdateState() {
   return {
     needRefresh: false, needRefreshDismissed: false,
     offlineReady: false, offlineReadyDismissed: false,
+    // Manual "Check for update" (Settings): idle | checking | latest | updating | error.
+    check: 'idle',
   };
 }
 
@@ -22,7 +24,7 @@ export function createPwaUpdateState() {
  * waiting -- show the "New version -- Reload" banner. Un-dismisses it even
  * if a previous one had been dismissed (a fresh update is worth re-surfacing). */
 export function markNeedRefresh(state) {
-  return { ...state, needRefresh: true, needRefreshDismissed: false };
+  return { ...state, needRefresh: true, needRefreshDismissed: false, check: state.check === 'latest' ? 'idle' : state.check };
 }
 
 /** registerSW's onOfflineReady fired: the first install finished precaching
@@ -64,4 +66,51 @@ export function shouldShowOfflineReadyNote(state) {
  * never having run because `'serviceWorker' in navigator` was false). */
 export function triggerUpdate(updateSW) {
   if (typeof updateSW === 'function') updateSW(true);
+}
+
+/** Minimum gap between automatic (resume / back-online) update checks. */
+export const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+
+/** How long a manual check waits for a newly found worker to finish installing. */
+const INSTALL_WAIT_MS = 15000;
+
+export function startCheck(state) {
+  return { ...state, check: 'checking' };
+}
+
+/** outcome: 'latest' | 'update' | 'error' | 'unsupported' (from checkForUpdate). */
+export function finishCheck(state, outcome) {
+  const check = outcome === 'update' ? 'updating' : outcome === 'latest' ? 'latest' : 'error';
+  return { ...state, check };
+}
+
+/** Pure throttle for the quiet resume / back-online check. */
+export function shouldCheckOnResume({ now, lastCheckAt, online, hasRegistration, intervalMs = UPDATE_CHECK_INTERVAL_MS }) {
+  if (!online || !hasRegistration) return false;
+  return !lastCheckAt || now - lastCheckAt >= intervalMs;
+}
+
+function waitForInstall(worker, timeoutMs) {
+  return new Promise((resolve) => {
+    const done = () => { clearTimeout(timer); worker.removeEventListener('statechange', onChange); resolve(); };
+    const onChange = () => { if (worker.state === 'installed' || worker.state === 'redundant') done(); };
+    const timer = setTimeout(done, timeoutMs);
+    worker.addEventListener('statechange', onChange);
+    onChange();
+  });
+}
+
+/** Asks the browser to look for a newer service worker. Resolves 'update' (a
+ * new worker is waiting), 'latest', 'error', or 'unsupported' (no registration). */
+export async function checkForUpdate(registration, { installTimeoutMs = INSTALL_WAIT_MS } = {}) {
+  if (!registration) return 'unsupported';
+  try {
+    await registration.update();
+    if (!registration.waiting && registration.installing) {
+      await waitForInstall(registration.installing, installTimeoutMs);
+    }
+    return registration.waiting ? 'update' : 'latest';
+  } catch {
+    return 'error';
+  }
 }

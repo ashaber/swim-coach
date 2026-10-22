@@ -5,6 +5,10 @@ export default defineConfig({
   base: process.env.GITHUB_PAGES ? '/swim-coach/' : '/',
   define: {
     __APP_VERSION__: JSON.stringify(process.env.npm_package_version),
+    // Shown in Settings -> App version: build timestamp (+ short git SHA in CI).
+    __BUILD_ID__: JSON.stringify(
+      `${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC${process.env.GITHUB_SHA ? ` · ${process.env.GITHUB_SHA.slice(0, 7)}` : ''}`,
+    ),
   },
   plugins: [
     VitePWA({
