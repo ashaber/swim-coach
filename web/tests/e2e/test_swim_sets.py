@@ -55,6 +55,20 @@ def test_pool_swim_shows_moving_pace_and_sets(page):  # noqa: F811
     assert 'in 19:04' in sets.locator('.swim-reps').first.inner_text()
 
 
+def test_sets_section_sits_on_a_paper_card(page):  # noqa: F811
+    # The generic card rule skips sections holding <details>; the Sets section must still be a
+    # card, or its dark text lands on the dark page ground.
+    _open_log_tab_with_workouts(page, [POOL_SWIM])
+    page.click('.hist-row')
+    page.wait_for_selector('#swim-sets')
+    card = page.eval_on_selector('#swim-sets', 'e => getComputedStyle(e).backgroundColor')
+    analytics = page.eval_on_selector(
+        '.detail-section:has(.detail-analytics-list)', 'e => getComputedStyle(e).backgroundColor'
+    )
+    assert card == analytics
+    assert card not in ('rgba(0, 0, 0, 0)', 'transparent')
+
+
 def test_old_swim_without_new_fields_renders_as_before(page):  # noqa: F811
     _open_log_tab_with_workouts(page, [{**BARE_MANUAL_WORKOUT, 'avg_pace_s_per_100m': 120}])
     page.click('.hist-row')
