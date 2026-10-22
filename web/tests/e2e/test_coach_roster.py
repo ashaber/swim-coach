@@ -384,6 +384,18 @@ def test_back_button_returns_to_the_athlete_list(page):
     assert page.locator('[data-a="roster:back"]').count() == 0
 
 
+def test_athlete_workout_rows_are_solid_cards_not_the_skipped_style(page):
+    """A logged workout in the coach's list is a real, tappable row: the paper card the athlete's
+    own history uses, not the transparent dashed 'skipped session' style (unreadable on the ground)."""
+    _open_roster(page)
+    page.click('[data-a="roster:select-athlete"]')
+    page.wait_for_selector('[data-a="roster:open-workout"]')
+    row = page.locator('[data-a="roster:open-workout"]').first
+    assert 'hist-row-skipped' not in (row.get_attribute('class') or '')
+    background = row.evaluate('e => getComputedStyle(e).backgroundColor')
+    assert background not in ('rgba(0, 0, 0, 0)', 'transparent')
+
+
 # --- Workout detail click-through ---------------------------------------------
 
 def test_clicking_a_workout_opens_its_detail_view_with_a_real_writable_chat_thread(page):
