@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import TYPE_CHECKING, Mapping, Protocol, Sequence
 
-from swim_coach.analytics import compute_analytics
+from swim_coach.analytics import compute_analytics, true_moving_min
 from swim_coach.models import Athlete, Event, PreviousRaceStart, RaceLap, Session, SessionKind, Workout, WorkoutAnalytics
 from swim_coach.bike_coach_view import shape_ride_view
 from swim_coach.canonical_laps import build_canonical_laps
@@ -37,6 +37,7 @@ from swim_coach.free_ride import FREE_READ_KINDS, read_free_ride
 from swim_coach.mtb_dynamics import build_mtb_dynamics
 from swim_coach.race_efficiency import build_race_efficiency
 from swim_coach.race_view import pick_previous_race_start, build_finish_sprint, build_race_overview, build_race_start_trace, finish_s
+from swim_coach.swim_sets import infer_pool, segment_swim, swim_pace_block
 from swim_coach.power_curve import BEST_WINDOWS_DAYS, annotate_bests
 
 if TYPE_CHECKING:
@@ -85,6 +86,15 @@ SWIM_FIELDS: frozenset[str] = frozenset(
         "swolf_first_quarter",
         "swolf_last_quarter",
         "swolf_degradation_pct",
+        "pool_unit",
+        "pool_length_m",
+        "moving_pace_s_per_100m",
+        "elapsed_pace_s_per_100m",
+        "moving_pace_s_per_100_unit",
+        "elapsed_pace_s_per_100_unit",
+        "rest_total_s",
+        "swim_sets",
+        "segmentation_note",
     }
 )
 BIKE_FIELDS: frozenset[str] = frozenset(
@@ -168,7 +178,12 @@ def _base_analytics(workout: Workout, ctx: AnalysisContext, **interval_kwargs) -
         pauses=workout.pauses,
         series=ctx.series,
         elapsed_min=_elapsed_min(workout, ctx),
-        moving_min=workout.duration_min,
+        moving_min=true_moving_min(
+            elapsed_min=_elapsed_min(workout, ctx),
+            duration_min=workout.duration_min,
+            lengths=workout.lengths,
+            pauses=workout.pauses,
+        ),
         sport=workout.sport,
         **interval_kwargs,
     )
@@ -204,13 +219,44 @@ UNSCORED_KINDS: tuple[SessionKind, ...] = ("opener", "warmup")  # load + base an
 
 class SwimAnalyzer(_CoachViewMixin):
     """Pool and open-water swims: the base analytics (pace halves, SWOLF, drift, pauses),
-    no interval/verdict layer."""
+    moving vs elapsed pace, and (pool) the set breakdown; no interval/verdict layer.
+    `avg_pace_s_per_100m` on the workout stays elapsed-based; the coach view carries both paces."""
 
     fields = SWIM_FIELDS
     structured_is_key = True
 
+    def _shape(self, out: dict, analytics: WorkoutAnalytics, section_notes: Mapping[str, str] | None = None) -> dict:
+        # Descriptions only: the coach reads the set list, not every rep.
+        out["swim_sets"] = [s.description for s in analytics.swim_sets]
+        return out
+
     def analyze(self, workout: Workout, ctx: AnalysisContext) -> WorkoutAnalytics:
-        return annotate_power_curve_bests(workout, _base_analytics(workout, ctx, with_intervals=False), ctx)
+        analytics = annotate_power_curve_bests(workout, _base_analytics(workout, ctx, with_intervals=False), ctx)
+        return analytics.model_copy(update=_swim_pace_and_sets(workout, analytics))
+
+
+def _swim_pace_and_sets(workout: Workout, analytics: WorkoutAnalytics) -> dict:
+    """Pool geometry (parsed, else inferred), moving/elapsed paces and the set list."""
+    is_pool = workout.sport == "swim_pool"
+    pool_length_m, unit = workout.pool_length_m, workout.pool_unit
+    if is_pool and unit is None:
+        pool_length_m, unit = infer_pool(workout.distance_m, len(workout.lengths))
+    elapsed_s = (analytics.elapsed_min or workout.duration_min) * 60
+    moving_s = (analytics.moving_min or workout.duration_min) * 60
+    update: dict = swim_pace_block(
+        moving_s=moving_s, elapsed_s=elapsed_s, distance_m=workout.distance_m, pool_unit=unit if is_pool else None
+    )
+    if not is_pool:
+        return update
+    update["pool_unit"] = unit
+    update["pool_length_m"] = pool_length_m
+    if pool_length_m and workout.lengths:
+        sets, note = segment_swim(
+            workout.lengths, workout.pauses, pool_length_m=pool_length_m, pool_unit=unit, elapsed_s=elapsed_s
+        )
+        update["swim_sets"] = sets
+        update["segmentation_note"] = note
+    return update
 
 
 class BikeAnalyzer(_CoachViewMixin):

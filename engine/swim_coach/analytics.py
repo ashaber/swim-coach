@@ -427,6 +427,39 @@ def pause_summary(
     }
 
 
+def merged_pause_s(pauses: list[WorkoutPause]) -> float:
+    """Total seconds covered by the pauses, overlapping spans (a timer stop that is also an idle
+    length or a stationary stretch) counted once."""
+    total = 0.0
+    end = None
+    for p in sorted(pauses, key=lambda p: p.start_offset_s):
+        start, stop = p.start_offset_s, p.start_offset_s + p.duration_s
+        if end is None or start > end:
+            total += stop - start
+            end = stop
+        elif stop > end:
+            total += stop - end
+            end = stop
+    return total
+
+
+def true_moving_min(
+    *,
+    elapsed_min: float | None,
+    duration_min: float,
+    lengths: list[WorkoutLength],
+    pauses: list[WorkoutPause],
+) -> float:
+    """Minutes actually moving: the sum of active pool-length durations when lengths exist, else
+    elapsed minus merged pauses. `duration_min` is the device TIMER time, which still runs through
+    rests the timer was not stopped for, so it is only the fallback when elapsed is unknown."""
+    if lengths:
+        return sum(length.duration_s for length in lengths) / 60.0
+    if elapsed_min is None:
+        return duration_min
+    return max(0.0, elapsed_min - merged_pause_s(pauses) / 60.0)
+
+
 def projected_stop_time_min(feed_every_min: float, feed_len_min: float, total_hours: float) -> float:
     """Total minutes of planned feed stops over `total_hours`, feeding every
     `feed_every_min` minutes for `feed_len_min` minutes each time.
