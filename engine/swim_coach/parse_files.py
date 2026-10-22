@@ -57,6 +57,9 @@ class WorkoutDraft(BaseModel):
     distance_m: int = Field(ge=0)
     duration_min: float = Field(gt=0)
     avg_pace_s_per_100m: float | None = None
+    # Mirrors Workout.pool_length_m / pool_unit (FIT session pool_length + pool_length_unit).
+    pool_length_m: float | None = None
+    pool_unit: Literal["yd", "m"] | None = None
     # 0-10 Foster CR-10 modified-Borg scale, mirrors Workout.rpe -- see
     # library/19-srpe-protocol.md.
     rpe: int | None = Field(default=None, ge=0, le=10)
@@ -113,6 +116,8 @@ class WorkoutDraft(BaseModel):
             distance_m=self.distance_m,
             duration_min=self.duration_min,
             avg_pace_s_per_100m=self.avg_pace_s_per_100m,
+            pool_length_m=self.pool_length_m,
+            pool_unit=self.pool_unit,
             rpe=self.rpe,
             sets=self.sets,
             planned_session_id=self.planned_session_id,
@@ -826,6 +831,7 @@ def _build_lengths(
                     strokes=strokes,
                     stroke=str(stroke) if stroke is not None else None,
                     swolf=swolf,
+                    start_offset_s=start_offset_s,
                 )
             )
             active_index += 1
@@ -1109,6 +1115,15 @@ def _device_dynamics(session: dict, jumps_raw: list[dict], t0: datetime | None) 
     )
 
 
+def _pool_geometry(sport: Sport, length: object, unit: object) -> tuple[float | None, Literal["yd", "m"] | None]:
+    """FIT session `pool_length` (metres) + `pool_length_unit` ('statute' -> yards, else metres);
+    pool swims only. Unreadable or missing -> (None, None) so the unit is inferred later."""
+    if sport != "swim_pool" or not isinstance(length, (int, float)) or length <= 0:
+        return None, None
+    statute = str(unit).lower() in ("statute", "1")
+    return float(length), "yd" if statute else "m"
+
+
 def parse_fit(path: str | Path) -> WorkoutDraft:
     """Parse a Garmin .fit file's session + lap + length + record + event
     data into a WorkoutDraft.
@@ -1139,6 +1154,8 @@ def parse_fit(path: str | Path) -> WorkoutDraft:
     session_avg_hr: int | None = None
     session_max_hr: int | None = None
     session_dynamics: dict = {}
+    session_pool_length: object | None = None
+    session_pool_unit: object | None = None
     jumps_raw: list[dict] = []
 
     sets: list[WorkoutSet] = []
@@ -1162,6 +1179,8 @@ def parse_fit(path: str | Path) -> WorkoutDraft:
                 session_start_time = _fit_value(frame, "start_time")
                 session_avg_hr = _fit_value(frame, "avg_heart_rate")
                 session_max_hr = _fit_value(frame, "max_heart_rate")
+                session_pool_length = _fit_value(frame, "pool_length")
+                session_pool_unit = _fit_value(frame, "pool_length_unit")
                 session_dynamics = {
                     "total_grit": _fit_value(frame, "total_grit"),
                     "avg_flow": _fit_value(frame, "avg_flow"),
@@ -1295,6 +1314,8 @@ def parse_fit(path: str | Path) -> WorkoutDraft:
         "session duration is 0; duration_min floored to satisfy the Workout schema",
     )
 
+    pool_length_m, pool_unit = _pool_geometry(sport, session_pool_length, session_pool_unit)
+
     # Computed here (moved ahead of its original position below) so both
     # _build_laps' avg_power_w extraction and _build_series' extended=
     # power/cadence/altitude channels share the exact same cycling gate --
@@ -1328,6 +1349,8 @@ def parse_fit(path: str | Path) -> WorkoutDraft:
         distance_m=round(session_distance),
         duration_min=duration_min,
         avg_pace_s_per_100m=avg_pace,
+        pool_length_m=pool_length_m,
+        pool_unit=pool_unit,
         sets=sets,
         raw_ref=str(path),
         warnings=warnings,

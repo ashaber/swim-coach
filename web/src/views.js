@@ -33,7 +33,7 @@ import {
   LIBRARY_SORTS, DEFAULT_LIBRARY_SORT, sortLibraryFiles, fileAddedDate, isNewFile, formatAddedLabel,
 } from './librarySort.js';
 import { expandStructure, actualPoints, sessionForWorkout, shapeChartGeometry } from './shape.js';
-import { buildCourseSectors, buildRaceEfficiency, buildFreeRide, powerCurveView, buildMtbDynamics, buildRawAnalysis, buildPacingEffort, buildMasterLaps, showsMainLapsTable, effectiveKind, kindLabel, raceStartInfo, KIND_OPTIONS } from './analysis.js';
+import { buildCourseSectors, buildRaceEfficiency, buildFreeRide, powerCurveView, buildMtbDynamics, buildRawAnalysis, buildPacingEffort, buildMasterLaps, showsMainLapsTable, effectiveKind, kindLabel, raceStartInfo, KIND_OPTIONS, buildSwimPace, buildSwimSets } from './analysis.js';
 import { sportHasPlannedDistance, sportCanPushToGarmin, sportUsesPace } from './sports.js';
 import {
   sportLabel, sourceBadge, formatWorkoutDistance, formatAnalyticsLine,
@@ -2756,6 +2756,9 @@ function renderLoadDetailStat(workout) {
 function renderDetailStats(workout) {
   const usesPace = sportUsesPace(workout.sport);
   const pace = formatPace(workout.avg_pace_s_per_100m);
+  const swimPace = usesPace ? buildSwimPace(workout.analytics) : null;
+  // The engine withheld paces (impossible pool length / turn count): don't fall back to the stored average.
+  const suspectPace = usesPace && !!workout.analytics?.data_quality_note;
   const avgPower = formatPower(workout.analytics?.avg_power_w);
   const np = formatPower(workout.analytics?.normalized_power_w);
   const hasRpe = workout.rpe !== null && workout.rpe !== undefined;
@@ -2764,7 +2767,13 @@ function renderDetailStats(workout) {
   const stats = [
     renderDetailStat('Distance', formatWorkoutDistance(workout.distance_m)),
     renderDetailStat('Duration', formatDuration(workout.duration_min)),
-    usesPace
+    suspectPace
+      ? ''
+      : swimPace
+      ? renderDetailStat('Pace · moving', swimPace.moving, 'pace')
+        + renderDetailStat('Pace · elapsed', swimPace.elapsed, 'pace')
+        + renderDetailStat('Rest', swimPace.rest)
+      : usesPace
       ? renderDetailStat('Pace', pace ? `${pace} /100m` : null, 'pace')
       : renderDetailStat('Avg Power', avgPower, 'power') + renderDetailStat('NP', np, 'power'),
     renderDetailStat('RPE', hasRpe ? `${workout.rpe}/10` : null),
@@ -2830,6 +2839,32 @@ function renderDetailAnalytics(analytics) {
     <section class="detail-section">
       <h4>Analytics</h4>
       <div class="detail-analytics-list">${lines.map((line) => `<div>${highlightDrift(line)}</div>`).join('')}</div>
+    </section>`;
+}
+
+/** Pool-swim "Sets" section: one line per set (standard notation), each expandable to its reps
+ * (native `<details>`, this app's collapsible convention), plus the segmentation note. Nothing
+ * for a workout stored before the engine produced sets. */
+function renderSwimSetsSection(analytics) {
+  const view = buildSwimSets(analytics);
+  if (!view && analytics?.data_quality_note) {
+    return `
+    <section class="detail-section" id="swim-sets">
+      <h4>Pace and sets</h4>
+      <p class="hist-meta swim-sets-note">${esc(analytics.data_quality_note)}</p>
+    </section>`;
+  }
+  if (!view) return '';
+  const rows = view.sets.map((set) => `
+      <details class="swim-set">
+        <summary class="mono">${esc(set.description)}</summary>
+        <ol class="swim-reps mono">${set.reps.map((r) => `<li>${esc(r)}</li>`).join('')}</ol>
+      </details>`).join('');
+  return `
+    <section class="detail-section" id="swim-sets">
+      <h4>Sets <span class="hist-meta">(${esc(view.unit)})</span></h4>
+      ${rows}
+      ${view.note ? `<p class="hist-meta swim-sets-note">${esc(view.note)}</p>` : ''}
     </section>`;
 }
 
@@ -3663,6 +3698,7 @@ export function renderWorkoutDetail(workout, {
     ${renderMtbSections(workout, selectedSector, mapView)}
     ${renderPowerCurveSection(workout)}
     ${renderDetailAnalytics(workout.analytics)}
+    ${renderSwimSetsSection(workout.analytics)}
     ${renderIntervalsSection(workout.analytics?.intervals)}
     ${renderRaceAnalysisSection(workout, pacing, raceStartEdit, editable)}
     ${rawAnalysisOpen === null ? '' : renderRawAnalysisSection(workout, pacing, rawAnalysisOpen)}

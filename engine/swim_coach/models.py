@@ -1518,6 +1518,9 @@ class WorkoutLength(BaseModel):
     strokes: int | None = None
     stroke: str | None = None
     swolf: float | None = None
+    # Seconds from the session start (FIT length `start_time`); None on rows stored before it was
+    # kept -- `swim_sets` then rebuilds the timeline from cumulative durations + pause offsets.
+    start_offset_s: float | None = None
 
 
 class WorkoutPause(BaseModel):
@@ -2285,6 +2288,36 @@ class FinishSprint(BaseModel):
     speed_kmh: list[float]
 
 
+class SwimRep(BaseModel):
+    """One continuous run of active pool lengths ended by recorded rest (`swim_coach.swim_sets`).
+    Distances and paces are in the workout's pool unit (`WorkoutAnalytics.pool_unit`)."""
+
+    start_offset_s: float
+    distance: int
+    swim_time_s: float
+    pace_s_per_100: float
+    # None when no stroke is clearly dominant (the watch's stroke tags are unreliable).
+    stroke: str | None = None
+    rest_after_s: float | None = None
+    # "recorded" (idle length / lap press) or "detected" (an inflated length that absorbed wall rest).
+    rest_source: Literal["recorded", "detected"] | None = None
+
+
+class SwimSet(BaseModel):
+    """Consecutive reps of one distance and stroke category, in standard swim notation."""
+
+    count: int
+    rep_distance: int
+    stroke: str | None = None
+    send_off_s: int | None = None
+    avg_pace_s_per_100: float
+    avg_rest_s: float | None = None
+    rest_source: Literal["recorded", "detected"] | None = None
+    total_distance: int
+    description: str
+    reps: list[SwimRep] = Field(default_factory=list)
+
+
 class WorkoutAnalytics(BaseModel):
     """Derived workout analytics computed at ingest time by
     `swim_coach.analytics.compute_analytics` -- see that module for the
@@ -2301,6 +2334,20 @@ class WorkoutAnalytics(BaseModel):
     swolf_first_quarter: float | None = None
     swolf_last_quarter: float | None = None
     swolf_degradation_pct: float | None = None
+    # Swim pace and sets (`swim_coach.swim_sets`), additive/optional. "Moving" = active-length time
+    # (rest excluded; the Garmin/Strava-style headline pool pace), "elapsed" = wall clock. `*_per_100_unit`
+    # is per 100 of `pool_unit` ("yd"/"m"); `*_per_100m` per 100 metres.
+    pool_unit: Literal["yd", "m"] | None = None
+    pool_length_m: float | None = None
+    moving_pace_s_per_100m: float | None = None
+    elapsed_pace_s_per_100m: float | None = None
+    moving_pace_s_per_100_unit: float | None = None
+    elapsed_pace_s_per_100_unit: float | None = None
+    rest_total_s: float | None = None
+    swim_sets: list[SwimSet] = Field(default_factory=list)
+    segmentation_note: str | None = None
+    # Set when the swim's lengths look wrong (e.g. an impossible pace): paces and sets are then withheld.
+    data_quality_note: str | None = None
     # Interval-analyzer block (deterministic, no LLM) -- populated only for
     # `sport == "bike"` rides with a usable power/HR series; `None` for
     # every swim/kayak/strength workout. See `WorkoutIntervals` and
@@ -2473,6 +2520,10 @@ class Workout(BaseModel):
     distance_m: int = Field(ge=0)
     duration_min: float = Field(gt=0)
     avg_pace_s_per_100m: float | None = None
+    # Pool geometry from the FIT session (`pool_length` metres, `pool_length_unit` -> "yd"/"m");
+    # None on rows stored before it was kept (`swim_sets.infer_pool` then infers it). Additive.
+    pool_length_m: float | None = None
+    pool_unit: Literal["yd", "m"] | None = None
     # 0-10 Foster CR-10 modified-Borg scale (0 = "Rest / Nothing at all"),
     # see library/19-srpe-protocol.md -- not 1-10, so 0 is a real, valid
     # response, not an unreachable floor.

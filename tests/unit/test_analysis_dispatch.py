@@ -37,16 +37,25 @@ def _fixture(name: str):
     return Workout.model_validate(d["workout"]), session, _athlete(d["athlete_profile"]), d["series"]
 
 
+# Swim pace/set fields added after the goldens were pinned (None/empty on a ride).
+_SWIM_ADDED = {
+    "pool_unit", "pool_length_m", "moving_pace_s_per_100m", "elapsed_pace_s_per_100m",
+    "moving_pace_s_per_100_unit", "elapsed_pace_s_per_100_unit", "rest_total_s", "swim_sets", "segmentation_note", "data_quality_note",
+}
+
+
 def _without_dynamics(analytics) -> dict:
     """The dump minus the MTB-dynamics, race-efficiency, race-view and canonical-lap blocks (added after the goldens were
     pinned) and the race lap table (now cut from the canonical laps, see test_canonical_laps); these
     fixtures carry no grit/flow, so the dynamics must be absent."""
     assert analytics.mtb_dynamics is None
-    return _golden_shape(analytics.model_dump(mode="json", exclude={"mtb_dynamics", "course_sectors", "race_efficiency", "laps", "race_overview", "race_start", "finish_sprint"}))
+    return _golden_shape(analytics.model_dump(mode="json", exclude={"mtb_dynamics", "course_sectors", "race_efficiency", "laps", "race_overview", "race_start", "finish_sprint", *_SWIM_ADDED}))
 
 
 def _golden_shape(dump: dict) -> dict:
-    """The dump with the race lap table left out (compared elsewhere)."""
+    """The dump with the race lap table left out (compared elsewhere). `moving_min` is dropped: the
+    goldens pinned the old device-timer value; it is now elapsed minus pauses (test_swim_sets)."""
+    dump = {k: v for k, v in dump.items() if k != "moving_min"}
     if dump.get("intervals"):
         dump = {**dump, "intervals": {k: v for k, v in dump["intervals"].items() if k != "race_laps"}}
     return dump
@@ -100,7 +109,9 @@ def test_non_bike_sports_get_unchanged_base_analytics(sport):
         moving_min=w.duration_min, sport=sport,
     )
     new = w.analyze(AnalysisContext(athlete=_athlete({"ftp_watts": 250.0}), kind="free_ride"))
-    assert new.model_dump(mode="json") == old.model_dump(mode="json")
+    # moving_min (now true moving time) and the swim pace/set fields are covered in test_swim_sets.
+    skip = {"moving_min", *_SWIM_ADDED}
+    assert new.model_dump(mode="json", exclude=skip) == old.model_dump(mode="json", exclude=skip)
     assert new.intervals is None
 
 
