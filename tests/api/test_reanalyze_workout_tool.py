@@ -258,3 +258,32 @@ def test_set_workout_kind_rejects_bad_input(athletes_dir) -> None:
     assert "invalid session kind" in h({"workout_id": str(w.id), "kind": "tempo"})["error"]
     assert "required" in h({"workout_id": str(w.id)})["error"]
     assert "no workout matching" in h({"workout_id": str(uuid.uuid4()), "kind": "race"})["error"]
+
+
+def _seed_old_pool_swim(store: FileStore) -> Workout:
+    from swim_coach.models import WorkoutAnalytics, WorkoutLength
+
+    profile = store.load_athlete("renee")
+    lengths = [
+        WorkoutLength(index=i, duration_s=30.0, stroke="freestyle", strokes=16, start_offset_s=i * 30.0)
+        for i in range(16)
+    ]
+    w = Workout(
+        id=uuid.uuid4(), athlete_id=profile.id, date=RIDE_DATE, sport="swim_pool", source="fit",
+        distance_m=400.0, duration_min=8.0, lengths=lengths,
+        analytics=WorkoutAnalytics(elapsed_min=8.0, cardiac_drift_pct=3.2, swolf_first_quarter=44.0),
+    )
+    store.save_workout("renee", w)
+    return w
+
+
+def test_reanalyze_pool_swim_without_series_uses_lengths_and_keeps_series_fields(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    w = _seed_old_pool_swim(store)
+    res = _handlers(store)["reanalyze_workout"]({"workout_id": str(w.id)})
+    assert res["reanalyzed"] is True and "error" not in res
+    saved = next(x for x in store.list_workouts("renee") if x.id == w.id).analytics
+    assert saved.cardiac_drift_pct == 3.2 and saved.swolf_first_quarter == 44.0
+    assert saved.pool_length_m == 25.0 and saved.pool_unit == "m"
+    assert saved.moving_pace_s_per_100m == pytest.approx(120.0)
+    assert saved.swim_sets

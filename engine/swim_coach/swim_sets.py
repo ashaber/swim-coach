@@ -49,6 +49,18 @@ DETECT_STROKE_MARGIN = 3
 # Coach judgment: a pace faster than this per 100 m (elite sprint territory) means the pool length
 # or turn count is wrong; paces and sets are withheld rather than published as fact.
 MIN_PLAUSIBLE_PACE_S_PER_100M = 50.0
+# Coach judgment: a pace slower than this per 100 m (10:00) means the length data is corrupt (a stuck
+# timer folded into the lengths), not a real swim; paces and sets are withheld.
+MAX_PLAUSIBLE_PACE_S_PER_100M = 600.0
+# Coach judgment: a single active pool length longer than this (30 min) is corrupt watch data. (Not 10 min:
+# the real pool fixture has a 19-minute length, a wall rest the watch folded into one length.)
+MAX_PLAUSIBLE_LENGTH_S = 1800.0
+# Coach judgment: a per-length stroke count at or above this is a FIT invalid sentinel (e.g. 65529),
+# not a real count.
+MAX_PLAUSIBLE_STROKES = 1000
+# Coach judgment: a pause or length offset beyond elapsed time by more than this factor is corrupt, and
+# so is computed moving time beyond elapsed by more than this factor.
+ELAPSED_SLACK = 1.05
 # Coach judgment: warn that rest may be unrecorded when one rep is >= 80% of elapsed time, or is
 # >= 20 min and >= half of it (a long unbroken block with only a couple of recorded rests).
 NOTE_SHARE_STRICT = 0.8
@@ -61,6 +73,8 @@ _POOLS: tuple[tuple[float, PoolUnit], ...] = (
     (25.0, "m"),
     (50 * M_PER_YD, "yd"),
     (50.0, "m"),
+    (100 / 3, "m"),  # 33 1/3 m pools
+    (100 / 3 * M_PER_YD, "yd"),  # 33 1/3 yd pools (30.48 m)
 )
 
 _STROKE_SHORT = {
@@ -314,3 +328,33 @@ def segment_swim(
         run.append(rep)
     sets.append(_make_set(run))
     return sets, _note(reps, span)
+
+
+def measured_pool_length(distance_m: float, n_active_lengths: int) -> float | None:
+    """Metres per active length, for a pool `infer_pool` cannot classify (the unit label stays "m")."""
+    if n_active_lengths <= 0 or distance_m <= 0:
+        return None
+    return round(distance_m / n_active_lengths, 2)
+
+
+def pace_is_too_slow(pace_s_per_100m: float | None) -> bool:
+    return pace_s_per_100m is not None and pace_s_per_100m > MAX_PLAUSIBLE_PACE_S_PER_100M
+
+
+def corrupt_length_reason(
+    lengths: Sequence[WorkoutLength], pauses: Sequence[WorkoutPause], *, elapsed_s: float, moving_s: float
+) -> str | None:
+    """Why the watch's length/pause data cannot be trusted (stuck timers, FIT invalid sentinels,
+    offsets beyond the swim), or None when it looks sane."""
+    limit = elapsed_s * ELAPSED_SLACK
+    if any(l.duration_s > MAX_PLAUSIBLE_LENGTH_S for l in lengths):
+        return "a pool length lasts longer than 30 minutes"
+    if any(l.strokes is not None and l.strokes >= MAX_PLAUSIBLE_STROKES for l in lengths):
+        return "a length has an impossible stroke count"
+    if any(l.start_offset_s is not None and l.start_offset_s > limit for l in lengths):
+        return "a length starts after the swim ended"
+    if any(p.start_offset_s > limit or p.duration_s > limit for p in pauses):
+        return "a pause is longer than the swim"
+    if moving_s > limit:
+        return "moving time exceeds elapsed time"
+    return None

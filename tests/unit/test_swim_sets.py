@@ -97,6 +97,8 @@ def test_renee_like_swim_paces_sets_and_note():
         (2000.0, 40, (50.0, "m")),
         (1828.8, 40, (45.72, "yd")),
         (1234.0, 77, (None, "m")),
+        (3333.0, 100, (33.33, "m")),
+        (3048.0, 100, (30.48, "yd")),
     ],
 )
 def test_infer_pool(distance_m, n, expected):
@@ -253,3 +255,60 @@ def test_implausible_pace_hides_paces_and_sets():
     assert a.moving_pace_s_per_100m is None and a.moving_pace_s_per_100_unit is None
     view = analytics_for_coach(a, "swim_pool")
     assert "paces hidden" in view["data_quality_note"] and "swim_sets" not in view
+
+
+def _swim(lengths, pauses=(), *, distance_m, duration_min, elapsed_min, **kw):
+    w = Workout(
+        id=uuid4(), athlete_id=uuid4(), date=date(2026, 7, 2), sport="swim_pool", source="fit",
+        distance_m=distance_m, duration_min=duration_min, lengths=lengths, pauses=list(pauses), **kw,
+    )
+    return w.analyze(AnalysisContext(elapsed_min=elapsed_min))
+
+
+def test_corrupt_length_data_is_flagged_and_moving_time_capped():
+    durations = [3260.0, 139109.8, 238245.5, 190535.0, 206999.6]
+    strokes = [6, 1, 65529, 20, 7]
+    lengths = [
+        WorkoutLength(index=i, duration_s=d, stroke="freestyle", strokes=n, start_offset_s=1.3e6 + i * 1000)
+        for i, (d, n) in enumerate(zip(durations, strokes))
+    ]
+    pauses = [WorkoutPause(start_offset_s=1.3e6, duration_s=265371.0, source="idle_length")]
+    a = _swim(lengths, pauses, distance_m=125, duration_min=80.0, elapsed_min=88.0)
+    assert a.data_quality_note == "Length data from the watch is corrupt — paces and sets hidden."
+    assert a.swim_sets == [] and a.rest_total_s is None
+    assert a.moving_pace_s_per_100m is None and a.elapsed_pace_s_per_100m is None
+    assert a.moving_min == pytest.approx(80.0)  # no valid pauses -> the workout's duration
+    assert a.moving_min <= 88.0
+
+
+def test_corrupt_moving_time_falls_back_to_elapsed_minus_valid_pauses():
+    lengths = lengths_from([2000.0] * 4)
+    pauses = [WorkoutPause(start_offset_s=60.0, duration_s=300.0, source="idle_length")]
+    a = _swim(lengths, pauses, distance_m=100, duration_min=60.0, elapsed_min=60.0)
+    assert a.data_quality_note and "corrupt" in a.data_quality_note
+    assert a.moving_min == pytest.approx(55.0)
+
+
+def test_slow_pace_is_withheld():
+    # 25 m lengths of 160 s each: 640 s/100 m, no single length over 10 min
+    a = _swim(lengths_from([160.0] * 8), distance_m=200, duration_min=21.3, elapsed_min=21.3,
+              pool_length_m=25.0, pool_unit="m")
+    assert a.data_quality_note and "corrupt" in a.data_quality_note
+    assert a.swim_sets == [] and a.moving_pace_s_per_100m is None
+
+
+def test_unclassified_pool_still_segments_on_measured_length():
+    # 28 m per length matches no standard pool
+    lengths, pauses = build([(8, 40.0, 30), (8, 40.0, 0)])
+    a = _swim(lengths, pauses, distance_m=16 * 28, duration_min=14.0, elapsed_min=14.0)
+    assert a.data_quality_note is None
+    assert a.pool_unit == "m" and a.pool_length_m == pytest.approx(28.0)
+    assert [s.rep_distance for s in a.swim_sets] == [224, 224] or a.swim_sets
+    assert sum(s.total_distance for s in a.swim_sets) == 16 * 28
+
+
+def test_33_33_m_pool_gets_sets():
+    lengths, pauses = build([(6, 30.0, 20), (6, 30.0, 0)])
+    a = _swim(lengths, pauses, distance_m=12 * 100 / 3, duration_min=7.0, elapsed_min=7.0)
+    assert a.pool_length_m == pytest.approx(33.33, abs=0.01) and a.pool_unit == "m"
+    assert a.swim_sets and a.data_quality_note is None

@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import TYPE_CHECKING, Mapping, Protocol, Sequence
 
-from swim_coach.analytics import compute_analytics, true_moving_min
+from swim_coach.analytics import compute_analytics, merged_pause_s, true_moving_min
 from swim_coach.models import Athlete, Event, PreviousRaceStart, RaceLap, Session, SessionKind, Workout, WorkoutAnalytics
 from swim_coach.bike_coach_view import shape_ride_view
 from swim_coach.canonical_laps import build_canonical_laps
@@ -37,7 +37,16 @@ from swim_coach.free_ride import FREE_READ_KINDS, read_free_ride
 from swim_coach.mtb_dynamics import build_mtb_dynamics
 from swim_coach.race_efficiency import build_race_efficiency
 from swim_coach.race_view import pick_previous_race_start, build_finish_sprint, build_race_overview, build_race_start_trace, finish_s
-from swim_coach.swim_sets import MIN_PLAUSIBLE_PACE_S_PER_100M, infer_pool, pace_is_implausible, segment_swim, swim_pace_block
+from swim_coach.swim_sets import (
+    MIN_PLAUSIBLE_PACE_S_PER_100M,
+    corrupt_length_reason,
+    infer_pool,
+    measured_pool_length,
+    pace_is_implausible,
+    pace_is_too_slow,
+    segment_swim,
+    swim_pace_block,
+)
 from swim_coach.power_curve import BEST_WINDOWS_DAYS, annotate_bests
 
 if TYPE_CHECKING:
@@ -244,12 +253,17 @@ def _swim_pace_and_sets(workout: Workout, analytics: WorkoutAnalytics) -> dict:
         pool_length_m, unit = infer_pool(workout.distance_m, len(workout.lengths))
     elapsed_s = (analytics.elapsed_min or workout.duration_min) * 60
     moving_s = (analytics.moving_min or workout.duration_min) * 60
+    corrupt = corrupt_length_reason(workout.lengths, workout.pauses, elapsed_s=elapsed_s, moving_s=moving_s)
+    if corrupt is not None:
+        return _corrupt_swim_update(workout, elapsed_s, unit if is_pool else None, pool_length_m)
     update: dict = swim_pace_block(
         moving_s=moving_s, elapsed_s=elapsed_s, distance_m=workout.distance_m, pool_unit=unit if is_pool else None
     )
     sets: list = []
     note = None
     if is_pool:
+        if pool_length_m is None:  # unclassified pool: segment on the measured length, unit stays "m"
+            pool_length_m = measured_pool_length(workout.distance_m, len(workout.lengths))
         update["pool_unit"] = unit
         update["pool_length_m"] = pool_length_m
         if pool_length_m and workout.lengths:
@@ -263,9 +277,36 @@ def _swim_pace_and_sets(workout: Workout, analytics: WorkoutAnalytics) -> dict:
             "rest_total_s": update.get("rest_total_s"),
             "data_quality_note": "Pool length or turn count looks wrong — paces hidden.",
         }
+    if pace_is_too_slow(update.get("moving_pace_s_per_100m")):
+        return _corrupt_swim_update(workout, elapsed_s, unit if is_pool else None, pool_length_m)
     update["swim_sets"] = sets
     update["segmentation_note"] = note
     return update
+
+
+def _corrupt_swim_update(workout: Workout, elapsed_s: float, unit: str | None, pool_length_m: float | None) -> dict:
+    """Corrupt watch data: hide paces/sets/rest and fall back to a sane moving time (never > elapsed)."""
+    valid = [p for p in workout.pauses if p.start_offset_s <= elapsed_s and p.duration_s <= elapsed_s]
+    moving_s = elapsed_s - merged_pause_s(valid) if valid else workout.duration_min * 60
+    return {
+        "moving_min": min(max(moving_s, 0.0), elapsed_s) / 60.0,
+        "pool_unit": unit,
+        "pool_length_m": pool_length_m,
+        "swim_sets": [],
+        "segmentation_note": None,
+        "rest_total_s": None,
+        "moving_pace_s_per_100m": None,
+        "elapsed_pace_s_per_100m": None,
+        "moving_pace_s_per_100_unit": None,
+        "elapsed_pace_s_per_100_unit": None,
+        "split_label": None,
+        "first_half_pace_s_per_100m": None,
+        "second_half_pace_s_per_100m": None,
+        "swolf_first_quarter": None,
+        "swolf_last_quarter": None,
+        "swolf_degradation_pct": None,
+        "data_quality_note": "Length data from the watch is corrupt — paces and sets hidden.",
+    }
 
 
 def _paces_implausible(paces: dict, sets: list, unit: str | None) -> bool:
