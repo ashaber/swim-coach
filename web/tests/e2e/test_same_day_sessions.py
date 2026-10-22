@@ -54,22 +54,49 @@ def _cors_route(status, content_type, body):
     return handler
 
 
-def _questions_route(sent):
+def _thread_route(threads):
+    """GET /api/sessions/<id>/thread over a dict {session_id: [messages]}."""
     def handler(route):
         if route.request.method == 'OPTIONS':
             route.fulfill(status=204, headers=CORS_HEADERS)
             return
-        body = json.loads(route.request.post_data or '{}')
-        sent.append(body)
-        created = {
-            'id': 'f-new', 'type': 'question', 'source': 'athlete', 'body': body.get('body'),
-            'status': 'open', 'created_at': '2099-01-01T12:00:00Z', 'workout_id': None,
-            'session_id': body.get('session_id'), 'session_date': body.get('session_date'),
-            'session_sport': body.get('session_sport'), 'needs_human_review': False,
-            'ai_provisional_answer': 'Spin easy for twenty minutes.', 'coach_reply': None,
-        }
-        route.fulfill(status=200, content_type='application/json', body=json.dumps(created), headers=CORS_HEADERS)
+        sid = route.request.url.split('/api/sessions/')[1].split('/')[0]
+        route.fulfill(
+            status=200, content_type='application/json', headers=CORS_HEADERS,
+            body=json.dumps({'session_id': sid, 'ai_muted': False, 'messages': threads.get(sid, [])}),
+        )
     return handler
+
+
+def _chat_route(sent, threads):
+    """POST /api/chat: streams a reply and persists the exchange into `threads`, as the backend does,
+    so the post-send thread refetch still shows it."""
+    def handler(route):
+        if route.request.method == 'OPTIONS':
+            route.fulfill(status=204, headers=CORS_HEADERS)
+            return
+        payload = json.loads(route.request.post_data or '{}')
+        sent.append(payload)
+        sid = payload.get('session_id')
+        threads.setdefault(sid, []).extend([
+            _message(sid, payload.get('message'), 'athlete'),
+            _message(sid, 'Spin easy for twenty minutes.', 'ai_coach'),
+        ])
+        body = ('data: {"type":"text","text":"Spin easy for twenty minutes."}\n\n'
+                'data: {"type":"done","stop_reason":"end_turn"}\n\n')
+        route.fulfill(status=200, content_type='text/event-stream', body=body, headers=CORS_HEADERS)
+    return handler
+
+
+def _message(sid, body, role='athlete'):
+    return {'id': f'm-{sid}-{role}', 'athlete_id': 'a', 'session_id': sid, 'sender_role': role, 'body': body,
+            'tool_trace': None, 'created_at': '2099-01-01T12:00:00Z'}
+
+
+def _open_thread(page):
+    page.wait_for_selector('.thread-btn')
+    page.click('[data-a="thread-sheet:open"]')
+    page.wait_for_selector('#session-thread-input')
 
 
 @pytest.fixture(params=BROWSERS)
@@ -123,44 +150,43 @@ def test_each_ride_opens_its_own_detail(page):
     page.route('**/api/feedback*', _cors_route(200, 'application/json', '[]'))
     _open_plan(page)
     page.click('[data-a="session:open"][data-id="s-warm"]')
-    page.wait_for_selector('#ask-coach')
+    page.wait_for_selector('.thread-btn')
     assert 'Warm-up spin before the start' in page.content()
     page.click('[data-a="session:back"]')
     page.wait_for_selector('[data-a="session:open"][data-id="s-race"]')
     page.click('[data-a="session:open"][data-id="s-race"]')
-    page.wait_for_selector('#ask-coach')
+    page.wait_for_selector('.thread-btn')
     assert 'Criterium race' in page.content()
 
 
 @pytest.mark.parametrize('session_id', ['s-warm', 's-race'])
-def test_ask_coach_posts_the_right_session_id(page, session_id):
-    sent = []
-    page.route('**/api/feedback/questions*', _questions_route(sent))
+def test_session_chat_posts_the_right_session_id(page, session_id):
+    sent, threads = [], {}
+    page.route('**/api/sessions/*/thread*', _thread_route(threads))
+    page.route('**/api/chat', _chat_route(sent, threads))
     page.route('**/api/feedback*', _cors_route(200, 'application/json', '[]'))
     _open_plan(page)
     page.click(f'[data-a="session:open"][data-id="{session_id}"]')
-    page.wait_for_selector('#ask-coach')
-    page.fill('[data-form="askCoach"][data-field="body"]', 'How should I ride this?')
-    page.click('[data-a="ask-coach:submit"]')
+    _open_thread(page)
+    page.fill('#session-thread-input', 'How should I ride this?')
+    page.click('[data-a="session-thread:send"]')
     page.wait_for_selector('text=Spin easy for twenty minutes.')
     assert len(sent) == 1
     assert sent[0]['session_id'] == session_id
-    assert sent[0]['session_date'] == RACE_DAY and sent[0]['session_sport'] == 'bike'
+    assert sent[0]['history'] == []
 
 
 def test_a_question_asked_about_the_race_does_not_show_on_the_warmup(page):
-    entries = json.dumps([{
-        'id': 'f1', 'type': 'question', 'source': 'athlete', 'body': 'Gearing for the crit?',
-        'status': 'answered', 'created_at': '2099-01-01T12:00:00Z', 'ai_provisional_answer': 'Go big.',
-        'coach_reply': None, 'needs_human_review': False,
-        'session_id': 's-race', 'session_date': RACE_DAY, 'session_sport': 'bike',
-    }])
-    page.route('**/api/feedback*', _cors_route(200, 'application/json', entries))
+    page.route('**/api/sessions/*/thread*', _thread_route({'s-race': [_message('s-race', 'Gearing for the crit?')]}))
+    page.route('**/api/feedback*', _cors_route(200, 'application/json', '[]'))
     _open_plan(page)
     page.click('[data-a="session:open"][data-id="s-warm"]')
-    page.wait_for_selector('#ask-coach')
+    _open_thread(page)
     assert 'Gearing for the crit?' not in page.content()
+    page.click('.thread-close')
+    page.wait_for_selector('.thread-sheet-root', state='detached')
     page.click('[data-a="session:back"]')
     page.click('[data-a="session:open"][data-id="s-race"]')
-    page.wait_for_selector('#ask-coach')
+    page.wait_for_function("() => document.querySelector('.thread-btn-count')?.textContent === '1'")
+    _open_thread(page)
     assert 'Gearing for the crit?' in page.content()

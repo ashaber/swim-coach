@@ -3527,7 +3527,8 @@ function renderSessionThread({ session, thread, online }) {
     banner: (!online ? '<div class="chat-banner">Offline -- showing saved messages. Sending needs a connection.</div>' : '')
       + (thread.error ? `<div class="hist-error">${esc(thread.error)}</div>` : ''),
     messagesHtml: hasAnything ? `<div class="chat-messages" id="${listId}">${rows}${pendingRow}${streamRow}</div>` : '',
-    emptyHtml: thread.status === 'loading' ? '<p class="sub thread-note">Loading&hellip;</p>' : '<p class="sub thread-note">No messages yet.</p>',
+    emptyHtml: thread.status === 'loading' ? '<p class="sub thread-note">Loading&hellip;</p>'
+      : (thread.status === 'error' ? "<p class=\"sub thread-note\">Couldn't load this chat. Check your connection and reopen it.</p>" : '<p class="sub thread-note">No messages yet.</p>'),
     composer: `
       <div class="chat-composer">
         <textarea id="session-thread-input" class="chat-input" data-form="session-thread" data-field="draft" placeholder="Ask about this session…" rows="2" ${blocked ? 'disabled' : ''}>${esc(thread.draft || '')}</textarea>

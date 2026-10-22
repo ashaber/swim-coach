@@ -271,3 +271,37 @@ def test_workout_sheet_closes_with_device_back_and_stays_on_the_workout(page):
     page.go_back()
     page.wait_for_selector('.thread-sheet-root', state='detached')
     assert page.locator('[data-a="history:back"]').count() == 1
+
+
+def test_a_failed_thread_load_shows_a_message_not_an_uncaught_error(page):
+    def failing(route):
+        if route.request.method == 'OPTIONS':
+            route.fulfill(status=204, headers=CORS_HEADERS)
+            return
+        route.fulfill(status=500, content_type='application/json', body='{"error": "boom"}', headers=CORS_HEADERS)
+
+    page.route(f'**/api/sessions/{PLANNED_SESSION["id"]}/thread*', failing)
+    page.wait_for_selector('[data-a="tab:plan"]')
+    page.click('[data-a="tab:plan"]')
+    page.click(f'[data-a="session:open"][data-id="{PLANNED_SESSION["id"]}"]')
+    page.wait_for_selector('.thread-btn')
+    _open_sheet(page)
+    page.wait_for_selector("text=Couldn't load this chat")
+    assert page.locator('#session-thread-input').count() == 1
+
+
+def test_content_can_scroll_clear_of_the_pinned_button(page):
+    page.wait_for_selector('[data-a="tab:dashboard"]')
+    page.click('[data-a="tab:dashboard"]')
+    page.wait_for_selector('.hist-row')
+    page.click('.hist-row')
+    page.wait_for_selector('.thread-btn')
+    page.evaluate("() => { const s = document.createElement('div'); s.style.height = '2000px'; document.querySelector('.thread-btn-spacer').before(s); }")
+    page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+    page.wait_for_timeout(100)
+    gap = page.evaluate("""() => {
+      const sp = document.querySelector('.thread-btn-spacer').getBoundingClientRect();
+      const btn = document.querySelector('.thread-btn').getBoundingClientRect();
+      return btn.top - sp.top;  // the spacer's top edge must sit above the button: content ends before it
+    }""")
+    assert gap >= 0

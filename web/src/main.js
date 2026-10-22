@@ -3441,7 +3441,13 @@ async function refreshSessionThread() {
   const ctx = conversationRequestContext();
   const id = state.sessionThread.sessionId;
   if (!athlete || !ctx || !id) return;
-  const result = await fetchSessionThread({ ...ctx, athlete, sessionId: id });
+  let result;
+  try {
+    result = await fetchSessionThread({ ...ctx, athlete, sessionId: id });
+  } catch (err) {
+    log.error('session_thread.refresh_threw', { error: err.message });
+    result = { ok: false, error: "Couldn't load this chat." };
+  }
   if (handleUnauthorized(result)) return;
   if (state.sessionThread.sessionId !== id) return; // another session was opened meanwhile
   if (!result.ok) {

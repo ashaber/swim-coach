@@ -142,6 +142,8 @@ def test_probe_shows_readout_and_keeps_vertical_scroll(race):
     page, _, _ = race
     wrap = page.locator('.rv-probe').first
     assert wrap.evaluate('e => getComputedStyle(e).touchAction') == 'pan-y'
+    # Scroll the chart clear of the pinned "Chat with coach" button first, as a reader would.
+    wrap.evaluate('e => e.scrollIntoView({ block: "center" })')
     box = wrap.bounding_box()
     page.mouse.move(box['x'] + box['width'] * 0.2, box['y'] + 20)
     text = page.locator('#rv-start-read').inner_text()
