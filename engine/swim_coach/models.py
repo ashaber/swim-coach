@@ -2296,8 +2296,11 @@ class SwimRep(BaseModel):
     distance: int
     swim_time_s: float
     pace_s_per_100: float
-    stroke: str
+    # None when no stroke is clearly dominant (the watch's stroke tags are unreliable).
+    stroke: str | None = None
     rest_after_s: float | None = None
+    # "recorded" (idle length / lap press) or "detected" (an inflated length that absorbed wall rest).
+    rest_source: Literal["recorded", "detected"] | None = None
 
 
 class SwimSet(BaseModel):
@@ -2305,10 +2308,11 @@ class SwimSet(BaseModel):
 
     count: int
     rep_distance: int
-    stroke: str
+    stroke: str | None = None
     send_off_s: int | None = None
     avg_pace_s_per_100: float
     avg_rest_s: float | None = None
+    rest_source: Literal["recorded", "detected"] | None = None
     total_distance: int
     description: str
     reps: list[SwimRep] = Field(default_factory=list)
@@ -2342,6 +2346,8 @@ class WorkoutAnalytics(BaseModel):
     rest_total_s: float | None = None
     swim_sets: list[SwimSet] = Field(default_factory=list)
     segmentation_note: str | None = None
+    # Set when the swim's lengths look wrong (e.g. an impossible pace): paces and sets are then withheld.
+    data_quality_note: str | None = None
     # Interval-analyzer block (deterministic, no LLM) -- populated only for
     # `sport == "bike"` rides with a usable power/HR series; `None` for
     # every swim/kayak/strength workout. See `WorkoutIntervals` and

@@ -37,7 +37,7 @@ from swim_coach.free_ride import FREE_READ_KINDS, read_free_ride
 from swim_coach.mtb_dynamics import build_mtb_dynamics
 from swim_coach.race_efficiency import build_race_efficiency
 from swim_coach.race_view import pick_previous_race_start, build_finish_sprint, build_race_overview, build_race_start_trace, finish_s
-from swim_coach.swim_sets import infer_pool, segment_swim, swim_pace_block
+from swim_coach.swim_sets import MIN_PLAUSIBLE_PACE_S_PER_100M, infer_pool, pace_is_implausible, segment_swim, swim_pace_block
 from swim_coach.power_curve import BEST_WINDOWS_DAYS, annotate_bests
 
 if TYPE_CHECKING:
@@ -95,6 +95,7 @@ SWIM_FIELDS: frozenset[str] = frozenset(
         "rest_total_s",
         "swim_sets",
         "segmentation_note",
+        "data_quality_note",
     }
 )
 BIKE_FIELDS: frozenset[str] = frozenset(
@@ -246,17 +247,33 @@ def _swim_pace_and_sets(workout: Workout, analytics: WorkoutAnalytics) -> dict:
     update: dict = swim_pace_block(
         moving_s=moving_s, elapsed_s=elapsed_s, distance_m=workout.distance_m, pool_unit=unit if is_pool else None
     )
-    if not is_pool:
-        return update
-    update["pool_unit"] = unit
-    update["pool_length_m"] = pool_length_m
-    if pool_length_m and workout.lengths:
-        sets, note = segment_swim(
-            workout.lengths, workout.pauses, pool_length_m=pool_length_m, pool_unit=unit, elapsed_s=elapsed_s
-        )
-        update["swim_sets"] = sets
-        update["segmentation_note"] = note
+    sets: list = []
+    note = None
+    if is_pool:
+        update["pool_unit"] = unit
+        update["pool_length_m"] = pool_length_m
+        if pool_length_m and workout.lengths:
+            sets, note = segment_swim(
+                workout.lengths, workout.pauses, pool_length_m=pool_length_m, pool_unit=unit, elapsed_s=elapsed_s
+            )
+    if _paces_implausible(update, sets, unit):
+        return {
+            "pool_unit": update.get("pool_unit"),
+            "pool_length_m": update.get("pool_length_m"),
+            "rest_total_s": update.get("rest_total_s"),
+            "data_quality_note": "Pool length or turn count looks wrong — paces hidden.",
+        }
+    update["swim_sets"] = sets
+    update["segmentation_note"] = note
     return update
+
+
+def _paces_implausible(paces: dict, sets: list, unit: str | None) -> bool:
+    """A pace faster than MIN_PLAUSIBLE_PACE_S_PER_100M overall or in any rep."""
+    overall = paces.get("moving_pace_s_per_100m")
+    if overall is not None and overall < MIN_PLAUSIBLE_PACE_S_PER_100M:
+        return True
+    return bool(unit) and any(pace_is_implausible(r.pace_s_per_100, unit) for s in sets for r in s.reps)
 
 
 class BikeAnalyzer(_CoachViewMixin):

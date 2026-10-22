@@ -40,7 +40,7 @@ def _fixture(name: str):
 # Swim pace/set fields added after the goldens were pinned (None/empty on a ride).
 _SWIM_ADDED = {
     "pool_unit", "pool_length_m", "moving_pace_s_per_100m", "elapsed_pace_s_per_100m",
-    "moving_pace_s_per_100_unit", "elapsed_pace_s_per_100_unit", "rest_total_s", "swim_sets", "segmentation_note",
+    "moving_pace_s_per_100_unit", "elapsed_pace_s_per_100_unit", "rest_total_s", "swim_sets", "segmentation_note", "data_quality_note",
 }
 
 

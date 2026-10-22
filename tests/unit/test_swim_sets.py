@@ -166,3 +166,90 @@ def test_moving_min_unchanged_without_elapsed():
         pauses=[WorkoutPause(start_offset_s=60, duration_s=120, source="timer")],
     )
     assert w.analyze(AnalysisContext()).moving_min == pytest.approx(30.0)
+
+
+# --- detected wall rest, implausible-data guard, stroke labels ---------------------------
+
+# Real length durations (seconds, numbers only) of a 25-yd-pool swim where wall rest was not
+# recorded: it is folded into the next length (normal stroke count, inflated time).
+UNRECORDED_REST_DURATIONS = [
+    24, 26, 26, 26, 28, 34, 29, 30, 27, 30, 24, 24, 15, 28, 26, 25, 20, 19, 29, 20, 24, 25, 33, 21, 36, 25,
+    37, 24, 25, 23, 24, 24, 42, 22, 24, 24, 36, 23, 24, 23, 17, 19, 22, 24, 21, 41, 30, 26, 13, 16, 31, 28,
+    28, 25, 38, 23, 24, 25, 33, 24, 22, 25, 36, 24, 23, 23, 34, 25, 23, 24, 36, 28, 31, 28, 32, 26, 34, 29,
+    45, 23, 23, 25, 32, 28, 23, 23, 35, 23, 22, 25, 32, 20, 25, 24, 25, 44, 34,
+]
+
+
+def lengths_from(durations, *, stroke="freestyle", strokes=12):
+    return [
+        WorkoutLength(index=i, duration_s=float(d), stroke=stroke, strokes=strokes)
+        for i, d in enumerate(durations)
+    ]
+
+
+def test_unrecorded_wall_rest_is_detected_and_splits_reps():
+    sets, note = segment_swim(
+        lengths_from(UNRECORDED_REST_DURATIONS), [], pool_length_m=POOL_YD_M, pool_unit="yd", elapsed_s=None
+    )
+    hundreds = [s for s in sets if s.rep_distance == 100 and s.count >= 4]
+    assert hundreds, [s.description for s in sets]
+    s = max(hundreds, key=lambda x: x.count)
+    assert s.send_off_s == 105
+    assert 5 <= s.avg_rest_s <= 15
+    assert s.rest_source == "detected"
+    assert "(rest ~0:10, detected)" in s.description
+
+
+def test_steady_continuous_swim_has_no_detected_rest():
+    # free median ~27.8 s, max 32.9 s: ordinary variation, not rest
+    durations = [27.8, 28.5, 29.7, 27.0, 32.9, 27.5, 28.1, 26.9, 27.8, 29.0] * 8
+    sets, note = segment_swim(
+        lengths_from(durations), [], pool_length_m=POOL_YD_M, pool_unit="yd", elapsed_s=sum(durations)
+    )
+    assert len(sets) == 1 and sets[0].count == 1
+    assert note is not None
+
+
+def test_slow_lengths_with_many_strokes_are_not_rest():
+    lengths = lengths_from([25.0] * 40)
+    lengths[10] = WorkoutLength(index=10, duration_s=40.0, stroke="freestyle", strokes=24)
+    sets, _ = segment_swim(lengths, [], pool_length_m=POOL_YD_M, pool_unit="yd", elapsed_s=None)
+    assert len(sets) == 1 and sets[0].count == 1
+
+
+def test_stroke_does_not_split_sets_and_unclear_stroke_is_omitted():
+    lengths, pauses = build([(4, 22.0, 20)] * 4)
+    for i, length in enumerate(lengths):
+        length.stroke = "freestyle" if (i // 4) % 2 == 0 else "backstroke"
+    for i in range(0, 16, 4):  # each rep half free, half back -> no clear stroke
+        lengths[i + 2].stroke = "backstroke" if lengths[i].stroke == "freestyle" else "freestyle"
+        lengths[i + 3].stroke = lengths[i + 2].stroke
+    sets, _ = segment_swim(lengths, pauses, pool_length_m=POOL_YD_M, pool_unit="yd", elapsed_s=None)
+    assert len(sets) == 1 and sets[0].count == 4
+    assert sets[0].stroke is None
+    assert "mixed" not in sets[0].description and "free" not in sets[0].description
+
+
+def test_dominant_stroke_labelled_and_device_im_kept():
+    lengths, pauses = build([(10, 25.0, 0)])
+    lengths[0].stroke = "backstroke"  # 90% free -> still free
+    sets, _ = segment_swim(lengths, pauses, pool_length_m=POOL_YD_M, pool_unit="yd", elapsed_s=None)
+    assert sets[0].stroke == "free"
+    im = lengths_from([25.0] * 8, stroke="im")
+    sets, _ = segment_swim(im, [], pool_length_m=POOL_YD_M, pool_unit="yd", elapsed_s=None)
+    assert sets[0].stroke == "IM" and "IM" in sets[0].description
+
+
+def test_implausible_pace_hides_paces_and_sets():
+    # watch thinks the pool is 50 m but lengths take 23 s: 0:46/100m is impossible
+    lengths = lengths_from([23.0] * 40, stroke="backstroke")
+    w = Workout(
+        id=uuid4(), athlete_id=uuid4(), date=date(2026, 7, 2), sport="swim_pool", source="fit",
+        distance_m=2000, duration_min=16.0, pool_length_m=50.0, pool_unit="m", lengths=lengths,
+    )
+    a = w.analyze(AnalysisContext(elapsed_min=16.0))
+    assert a.data_quality_note and "paces hidden" in a.data_quality_note
+    assert a.swim_sets == []
+    assert a.moving_pace_s_per_100m is None and a.moving_pace_s_per_100_unit is None
+    view = analytics_for_coach(a, "swim_pool")
+    assert "paces hidden" in view["data_quality_note"] and "swim_sets" not in view

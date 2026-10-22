@@ -61,3 +61,21 @@ def test_old_swim_without_new_fields_renders_as_before(page):  # noqa: F811
     page.wait_for_selector('[data-a="history:back"]')
     assert '2:00 /100m' in page.locator('.detail-stats').inner_text()
     assert page.locator('#swim-sets').count() == 0
+
+
+SUSPECT_SWIM = {
+    **{k: v for k, v in POOL_SWIM.items() if k != 'analytics'},
+    'id': 'w-suspect', 'avg_pace_s_per_100m': 70,
+    'analytics': {
+        'elapsed_min': 40, 'moving_min': 38, 'pool_unit': 'm',
+        'data_quality_note': 'Pool length or turn count looks wrong — paces hidden.',
+    },
+}
+
+
+def test_suspect_swim_hides_paces_and_shows_note(page):  # noqa: F811
+    _open_log_tab_with_workouts(page, [SUSPECT_SWIM])
+    page.click('.hist-row')
+    page.wait_for_selector('[data-a="history:back"]')
+    assert 'paces hidden' in page.locator('#swim-sets').inner_text()
+    assert '/100' not in page.locator('.detail-stats').inner_text()

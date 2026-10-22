@@ -794,8 +794,8 @@ export function buildSwimSets(analytics) {
     sets: sets.map((s) => ({
       description: s.description,
       reps: (s.reps || []).map((r) => {
-        const rest = r.rest_after_s ? ` · rest ${mmss(r.rest_after_s)}` : '';
-        return `${r.distance} ${r.stroke} in ${mmss(r.swim_time_s)} (${mmss(r.pace_s_per_100)}/100)${rest}`;
+        const rest = r.rest_after_s ? ` · rest ${mmss(r.rest_after_s)}${r.rest_source === 'detected' ? ' (detected)' : ''}` : '';
+        return `${r.distance}${r.stroke ? ` ${r.stroke}` : ''} in ${mmss(r.swim_time_s)} (${mmss(r.pace_s_per_100)}/100)${rest}`;
       }),
     })),
   };

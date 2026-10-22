@@ -45,3 +45,16 @@ describe('buildSwimSets', () => {
     expect(buildSwimSets(undefined)).toBeNull();
   });
 });
+
+describe('stroke-less reps and detected rest', () => {
+  it('omits the stroke word and marks detected rest', () => {
+    const v = buildSwimSets({
+      pool_unit: 'yd',
+      swim_sets: [{
+        description: '4×100 on 1:45 @ 1:36/100 (rest ~0:10, detected)',
+        reps: [{ distance: 100, stroke: null, swim_time_s: 96, pace_s_per_100: 96, rest_after_s: 9, rest_source: 'detected' }],
+      }],
+    });
+    expect(v.sets[0].reps).toEqual(['100 in 1:36 (1:36/100) · rest 0:09 (detected)']);
+  });
+});

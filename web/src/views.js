@@ -2757,6 +2757,8 @@ function renderDetailStats(workout) {
   const usesPace = sportUsesPace(workout.sport);
   const pace = formatPace(workout.avg_pace_s_per_100m);
   const swimPace = usesPace ? buildSwimPace(workout.analytics) : null;
+  // The engine withheld paces (impossible pool length / turn count): don't fall back to the stored average.
+  const suspectPace = usesPace && !!workout.analytics?.data_quality_note;
   const avgPower = formatPower(workout.analytics?.avg_power_w);
   const np = formatPower(workout.analytics?.normalized_power_w);
   const hasRpe = workout.rpe !== null && workout.rpe !== undefined;
@@ -2765,7 +2767,9 @@ function renderDetailStats(workout) {
   const stats = [
     renderDetailStat('Distance', formatWorkoutDistance(workout.distance_m)),
     renderDetailStat('Duration', formatDuration(workout.duration_min)),
-    swimPace
+    suspectPace
+      ? ''
+      : swimPace
       ? renderDetailStat('Pace · moving', swimPace.moving, 'pace')
         + renderDetailStat('Pace · elapsed', swimPace.elapsed, 'pace')
         + renderDetailStat('Rest', swimPace.rest)
@@ -2843,6 +2847,13 @@ function renderDetailAnalytics(analytics) {
  * for a workout stored before the engine produced sets. */
 function renderSwimSetsSection(analytics) {
   const view = buildSwimSets(analytics);
+  if (!view && analytics?.data_quality_note) {
+    return `
+    <section class="detail-section" id="swim-sets">
+      <h4>Pace and sets</h4>
+      <p class="hist-meta swim-sets-note">${esc(analytics.data_quality_note)}</p>
+    </section>`;
+  }
   if (!view) return '';
   const rows = view.sets.map((set) => `
       <details class="swim-set">
