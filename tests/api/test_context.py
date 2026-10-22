@@ -1995,3 +1995,61 @@ def test_stale_hint_needs_age_over_threshold_and_no_restriction(app_env) -> None
     store.save_health_status("renee", _health_status(
         athlete.id, restriction="light_only", reported_at=datetime.now(timezone.utc) - timedelta(days=90)))
     assert "may be stale" not in _health_section(app_env)
+
+
+# --- 42-ultra-mtb-endurance.md routing -------------------------------------
+# Bike-scoped like the other cycling files. Keywords are deliberately
+# multi-word / bike-qualified: a bare "ultra" or "24 hour" would also match
+# swim-ultra and everyday phrasing, so a swimmer's "ultra swim" question must
+# never reach this file.
+_ULTRA_MTB_FILE = "42-ultra-mtb-endurance.md"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "How should I pace a solo 24 hour race?",
+        "Training for a 24-hour race in April",
+        "What FTP gain should I expect for a 12-hour race build?",
+        "My first 6 hour race is in March",
+        "Tips for ultra MTB pacing?",
+        "How do I train durability for long rides?",
+        "Any advice on night riding at a 24h race?",
+        "Planning an ultra-cycling event",
+    ],
+)
+def test_route_library_files_bike_athlete_reaches_ultra_mtb_file(message: str) -> None:
+    assert _ULTRA_MTB_FILE in route_library_files(message, athlete_sports=["bike"])
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "How should I pace a solo 24 hour race?",
+        "Tips for ultra MTB pacing?",
+    ],
+)
+def test_route_library_files_swim_only_athlete_excludes_ultra_mtb_file(message: str) -> None:
+    assert _ULTRA_MTB_FILE not in route_library_files(message, athlete_sports=["swim_ow"])
+    assert _ULTRA_MTB_FILE not in route_library_files(message, athlete_sports=None)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "How should I fuel an ultra swim?",
+        "What pace for my ultra-distance open water swim?",
+        "I slept 24 hours after the swim, is that normal?",
+    ],
+)
+def test_route_library_files_ultra_swim_question_does_not_reach_ultra_mtb_file(
+    message: str,
+) -> None:
+    # Even for an athlete who has bike in scope.
+    assert _ULTRA_MTB_FILE not in route_library_files(message, athlete_sports=["bike", "swim_ow"])
+
+
+def test_ultra_mtb_file_is_bike_sport_scoped() -> None:
+    import app.context as context_module
+
+    assert context_module._LIBRARY_FILE_SPORT_SCOPE[_ULTRA_MTB_FILE] == frozenset({"bike"})

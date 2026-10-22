@@ -1105,6 +1105,47 @@ _ALTITUDE_KEYWORD_ROUTES: dict[str, set[str]] = {
 _KEYWORD_ROUTES.update(_ALTITUDE_KEYWORD_ROUTES)
 _LIBRARY_FILES_IN_PRIORITY_ORDER.append("30-altitude-power-adjustment.md")
 
+# --- 42-ultra-mtb-endurance.md: 6-24 h ultra MTB routing --------------------
+# Mirrors INDEX.md's "6-24 h ultra MTB..." routing row. Keywords are
+# deliberately bike-qualified or multi-word: a bare "ultra", "24 hour",
+# "overnight" or "pacing" would also match swim-ultra questions (08/05/06's
+# territory) and everyday phrasing. The file is bike-scoped below, so a
+# swim-only athlete never receives it even when a keyword matches.
+_ULTRA_MTB_KEYWORD_ROUTES: dict[str, set[str]] = {
+    keyword: {"42-ultra-mtb-endurance.md"}
+    for keyword in (
+        "24-hour race",
+        "24 hour race",
+        "24-hour mtb",
+        "24 hour mtb",
+        "24h",
+        "24hr",
+        "solo 24",
+        "12-hour race",
+        "12 hour race",
+        "12h race",
+        "6-hour race",
+        "6 hour race",
+        "6h race",
+        "ultra mtb",
+        "ultra-mtb",
+        "ultra mountain",
+        "ultra cycling",
+        "ultra-cycling",
+        "ultracycling",
+        "ultra bike",
+        "endurance mtb",
+        "mtb endurance",
+        "durability",
+        "overnight ride",
+        "overnight race",
+        "night riding",
+        "night lap",
+    )
+}
+_KEYWORD_ROUTES.update(_ULTRA_MTB_KEYWORD_ROUTES)
+_LIBRARY_FILES_IN_PRIORITY_ORDER.append("42-ultra-mtb-endurance.md")
+
 # --- sport-scope filtering (Athlete.sports <-> library file sport scope) ---
 # IDEA 008's hard requirement, made structural (adversarial critique
 # objection 3: INDEX.md's own prose note alone had no code/test/model-field
@@ -1141,6 +1182,7 @@ _LIBRARY_FILE_SPORT_SCOPE: dict[str, frozenset[str]] = {
     "39-cycling-start-analysis.md": frozenset({"bike"}),
     "40-cycling-start-technique-and-drills.md": frozenset({"bike"}),
     "41-free-ride-analysis.md": frozenset({"bike"}),
+    "42-ultra-mtb-endurance.md": frozenset({"bike"}),
 }
 
 
