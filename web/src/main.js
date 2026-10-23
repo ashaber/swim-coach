@@ -62,6 +62,7 @@ import { performSignOut } from './session.js';
 import {
   createPwaUpdateState, markNeedRefresh, markOfflineReady,
   dismissNeedRefresh, dismissOfflineReady, triggerUpdate,
+  startCheck, finishCheck, shouldCheckOnResume, checkForUpdate,
 } from './pwaUpdate.js';
 import {
   loadLastSeen, saveLastSeen, countUnread, loadThreadLastSeen, saveThreadLastSeen, countUnreadThread,
@@ -548,6 +549,10 @@ const state = {
 // function it returns, which handleReloadForUpdate calls (via
 // pwaUpdate.js's triggerUpdate) to activate a waiting service worker.
 let updateSW = null;
+// The ServiceWorkerRegistration, captured via registerSW's onRegisteredSW --
+// what "Check for update" and the resume check call .update() on.
+let swRegistration = null;
+let lastUpdateCheckAt = 0;
 
 function athleteSlug() {
   return state.identity?.athlete || null;
@@ -735,6 +740,10 @@ function renderTabContent() {
         grants: state.grants.entries,
         grantsForm: state.grants.createForm,
         grantsSubmit: state.grants.createSubmit,
+        updateCheck: {
+          check: state.pwaUpdate.check, online: state.online,
+          registered: !!swRegistration, buildId: __BUILD_ID__,
+        },
       });
     case 'plan':
     default:
@@ -1170,6 +1179,42 @@ async function handleOnboardSubmit() {
 function handleReloadForUpdate() {
   log.info('pwa.update_reload', {});
   triggerUpdate(updateSW);
+}
+
+// Manual (Settings button) or automatic (resume / back online) update check.
+// Manual shows progress in the Settings panel; automatic stays silent unless a
+// new worker is found, in which case onNeedRefresh shows the usual banner.
+async function runUpdateCheck({ manual }) {
+  lastUpdateCheckAt = Date.now();
+  if (manual) { state.pwaUpdate = startCheck(state.pwaUpdate); render(); }
+  const started = performance.now();
+  const outcome = await checkForUpdate(swRegistration);
+  log.info('pwa.update_check', {
+    trigger: manual ? 'manual' : 'auto', outcome, duration_ms: Math.round(performance.now() - started),
+  });
+  if (manual) {
+    state.pwaUpdate = finishCheck(state.pwaUpdate, outcome);
+    render();
+    if (outcome === 'update') triggerUpdate(updateSW);
+  }
+}
+
+function handleCheckForUpdate() {
+  if (!state.online || state.pwaUpdate.check === 'checking') return;
+  runUpdateCheck({ manual: true });
+}
+
+function handleReloadAnyway() {
+  log.info('pwa.reload_anyway', {});
+  location.reload();
+}
+
+function maybeCheckOnResume() {
+  if (document.visibilityState === 'hidden') return;
+  const ok = shouldCheckOnResume({
+    now: Date.now(), lastCheckAt: lastUpdateCheckAt, online: navigator.onLine, hasRegistration: !!swRegistration,
+  });
+  if (ok) runUpdateCheck({ manual: false });
 }
 
 function handleDismissNeedRefresh() {
@@ -4608,6 +4653,8 @@ async function onAppClick(e) {
     // returns, rather than being fired-and-forgotten mid-click.
     case 'identity:signout': await handleSignOut(); break;
     case 'pwa:reload': handleReloadForUpdate(); break;
+    case 'pwa:check': handleCheckForUpdate(); break;
+    case 'pwa:reload-anyway': handleReloadAnyway(); break;
     case 'pwa:dismiss-update': handleDismissNeedRefresh(); break;
     case 'pwa:dismiss-offline-ready': handleDismissOfflineReady(); break;
     default: break;
@@ -5143,8 +5190,9 @@ const TABS_SENSITIVE_TO_ONLINE_STATE = ['coach', 'dashboard', 'resources', 'plan
 function updateOnlineState() {
   state.online = navigator.onLine;
   updateOfflineBanner();
-  if (TABS_SENSITIVE_TO_ONLINE_STATE.includes(state.tab) || state.tab === 'roster') render();
+  if (TABS_SENSITIVE_TO_ONLINE_STATE.includes(state.tab) || state.tab === 'roster' || state.tab === 'settings') render();
   if (state.online) {
+    maybeCheckOnResume();
     conversationPollTick();
     flushRaceDayQueue();
   }
@@ -5210,6 +5258,7 @@ loadMyCoach();
 setInterval(conversationPollTick, CONVERSATION_POLL_INTERVAL_MS);
 document.addEventListener('visibilitychange', conversationPollTick);
 document.addEventListener('visibilitychange', refreshOnResume);
+document.addEventListener('visibilitychange', maybeCheckOnResume);
 window.addEventListener('focus', refreshOnResume);
 // loadPlan() above self-gates on isConfigured and is otherwise unconditional
 // at boot; loadHistory() has no such caller-independent self-gate -- until
@@ -5241,6 +5290,10 @@ if (state.tab === 'resources' && state.identity?.isLibraryAdmin
 // and handleReloadForUpdate/handleDismissNeedRefresh/
 // handleDismissOfflineReady above for the click handlers.
 updateSW = registerSW({
+  onRegisteredSW(_swUrl, registration) {
+    swRegistration = registration ?? null;
+    if (state.tab === 'settings') render();
+  },
   onNeedRefresh() {
     log.info('pwa.need_refresh', {});
     state.pwaUpdate = markNeedRefresh(state.pwaUpdate);

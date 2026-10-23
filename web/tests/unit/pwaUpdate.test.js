@@ -3,6 +3,7 @@ import {
   createPwaUpdateState, markNeedRefresh, markOfflineReady,
   dismissNeedRefresh, dismissOfflineReady,
   shouldShowReloadBanner, shouldShowOfflineReadyNote, triggerUpdate,
+  startCheck, finishCheck, shouldCheckOnResume, checkForUpdate, UPDATE_CHECK_INTERVAL_MS,
 } from '../../src/pwaUpdate.js';
 
 describe('pwaUpdate state', () => {
@@ -59,5 +60,77 @@ describe('triggerUpdate', () => {
   it('is a no-op when no updateSW callback is available (registerSW never ran)', () => {
     expect(() => triggerUpdate(undefined)).not.toThrow();
     expect(() => triggerUpdate(null)).not.toThrow();
+  });
+});
+
+describe('update check state', () => {
+  it('walks idle -> checking -> latest', () => {
+    let s = createPwaUpdateState();
+    expect(s.check).toBe('idle');
+    s = startCheck(s);
+    expect(s.check).toBe('checking');
+    s = finishCheck(s, 'latest');
+    expect(s.check).toBe('latest');
+  });
+
+  it('maps outcomes: update -> updating, error -> error', () => {
+    expect(finishCheck(startCheck(createPwaUpdateState()), 'update').check).toBe('updating');
+    expect(finishCheck(startCheck(createPwaUpdateState()), 'error').check).toBe('error');
+  });
+
+  it('a fresh needRefresh clears a stale "latest" result', () => {
+    const s = markNeedRefresh(finishCheck(createPwaUpdateState(), 'latest'));
+    expect(s.check).toBe('idle');
+  });
+});
+
+describe('shouldCheckOnResume', () => {
+  const base = { now: 1_000_000_000, lastCheckAt: 0, online: true, hasRegistration: true };
+  it('checks when never checked', () => {
+    expect(shouldCheckOnResume(base)).toBe(true);
+  });
+  it('throttles within the interval', () => {
+    expect(shouldCheckOnResume({ ...base, lastCheckAt: base.now - UPDATE_CHECK_INTERVAL_MS + 1 })).toBe(false);
+  });
+  it('checks once the interval has elapsed', () => {
+    expect(shouldCheckOnResume({ ...base, lastCheckAt: base.now - UPDATE_CHECK_INTERVAL_MS })).toBe(true);
+  });
+  it('never checks offline or without a registration', () => {
+    expect(shouldCheckOnResume({ ...base, online: false })).toBe(false);
+    expect(shouldCheckOnResume({ ...base, hasRegistration: false })).toBe(false);
+  });
+});
+
+describe('checkForUpdate', () => {
+  it('returns unsupported without a registration', async () => {
+    expect(await checkForUpdate(null)).toBe('unsupported');
+  });
+  it('returns latest when nothing is waiting or installing', async () => {
+    const reg = { update: vi.fn().mockResolvedValue(undefined), waiting: null, installing: null };
+    expect(await checkForUpdate(reg)).toBe('latest');
+    expect(reg.update).toHaveBeenCalled();
+  });
+  it('returns update when a worker is waiting', async () => {
+    const reg = { update: vi.fn().mockResolvedValue(undefined), waiting: {}, installing: null };
+    expect(await checkForUpdate(reg)).toBe('update');
+  });
+  it('waits for an installing worker to finish installing', async () => {
+    const listeners = {};
+    const installing = {
+      state: 'installing',
+      addEventListener: (_t, fn) => { listeners.fn = fn; },
+      removeEventListener: () => {},
+    };
+    const reg = { update: vi.fn().mockResolvedValue(undefined), waiting: null, installing };
+    const p = checkForUpdate(reg, { installTimeoutMs: 1000 });
+    await Promise.resolve(); await Promise.resolve();
+    installing.state = 'installed';
+    reg.waiting = installing;
+    listeners.fn();
+    expect(await p).toBe('update');
+  });
+  it('returns error when update() rejects', async () => {
+    const reg = { update: vi.fn().mockRejectedValue(new Error('net')), waiting: null, installing: null };
+    expect(await checkForUpdate(reg)).toBe('error');
   });
 });
