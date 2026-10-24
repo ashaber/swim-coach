@@ -1,7 +1,8 @@
 # Plan-authoring guide: how the coach uses `author_macro_plan` / `author_week_plan` / `check_plan`
 
 **`Coach judgment:`** practitioner method, not a research citation — a
-compact port of Tim's `ai-coach` `plan-macrocycle` / `build-block` /
+compact port of Tim Curry's AI Endurance Coach (`ai-coach`, adapted with
+permission; see README Acknowledgments) `plan-macrocycle` / `build-block` /
 `weekly-review` skills and `red-team` subagent, adapted to this app's own
 tools (`author_macro_plan`, `author_week_plan`, `check_plan`,
 `save_race_debrief`) and its deterministic red team
