@@ -106,6 +106,7 @@ class PlanCheckReport:
                     "evidence": f.evidence,
                     "consequence": f.consequence,
                     "fix": f.fix,
+                    "category": f.category,
                 }
                 for f in self.findings
             ],
@@ -310,12 +311,16 @@ POLARIZED_MAX_HARD_SESSION_FRACTION = 1.0 / 3.0
 _HARD_ZONES = frozenset({"Z4", "Z5"})
 
 
-def _is_hard_session(session: Session) -> bool:
+def _is_hard_session(session: Session, race_dates: frozenset[date] = frozenset()) -> bool:
     """A session counts as "hard" for the polarization check if it's
     planned at Z4/Z5 -- the same zone-based hard/easy split
     `plan.evaluate_week_realism`'s own hard-bike check already uses
     (library/24, Seiler polarized distribution), generalized here to any
     sport rather than bike-only."""
+    if session.kind in ("warmup", "opener"):
+        return False  # priming, not a hard training session (library/38)
+    if session.kind == "race" or (session.kind is None and session.sport == "bike" and session.date in race_dates):
+        return False  # a race is an additive slot, not a polarization-counted training session
     return session.intensity.get("zone") in _HARD_ZONES
 
 
@@ -578,8 +583,22 @@ def check_macro(
 
 
 def _rank_and_cap(findings: list[PlanCheckFinding]) -> list[PlanCheckFinding]:
-    ranked = sorted(findings, key=lambda f: _SEVERITY_ORDER[f.severity])
-    return ranked[:MAX_FINDINGS]
+    """Severity first, judgment before authoring within a severity. Every `confirm-*` safety-rail
+    finding is always kept (the confirm gate reads this list, so a capped-out one would let the
+    confirm through without the athlete's words); the cap fills the other slots."""
+    ranked = sorted(
+        findings, key=lambda f: (_SEVERITY_ORDER[f.severity], f.category == "authoring")
+    )
+    n_confirm = sum(1 for f in ranked if f.id.startswith("confirm-"))
+    room = max(MAX_FINDINGS - n_confirm, 0)
+    kept: list[PlanCheckFinding] = []
+    for f in ranked:
+        if f.id.startswith("confirm-"):
+            kept.append(f)
+        elif room > 0:
+            kept.append(f)
+            room -= 1
+    return kept
 
 
 def _verdict_from_findings(findings: list[PlanCheckFinding]) -> Verdict:
@@ -1227,14 +1246,23 @@ def check_week(
     athlete: Athlete,
     *,
     recent_weeks: list[WeekPlan],
+    events: list[Event] | None = None,
 ) -> PlanCheckReport:
     """Red-team one coach-authored WEEK of real `Session`s against its
     macro row and recent history. Never raises. `+8%` volume / `+15%`
     long-swim flags are `requires_athlete_confirmation` advisories (id
     prefix `confirm-`), never clamps -- CLAUDE.md's safety rail already
     requires explicit athlete confirmation past these thresholds; this
-    function surfaces that requirement, it does not enforce it."""
+    function surfaces that requirement, it does not enforce it.
+
+    `events`: the athlete's events. A bike session on an event's date counts as a race (even
+    with `kind` unset) for the hard-day / back-to-back / polarization logic, so grouped race
+    days (double header) never trip the back-to-back flag; an untagged one also draws a
+    low-severity `authoring` finding asking for `kind`. Each finding carries a `category`:
+    `authoring` = mechanical step-tree defects the coach can fix itself; everything else, and
+    every `confirm-*` safety rail, is `judgment`."""
     findings: list[PlanCheckFinding] = []
+    race_dates = frozenset(e.event_date for e in events or [])
 
     if macro_week is not None:
         projected_total = sum(session_target_load_au(s, athlete) for s in week.sessions)
@@ -1263,7 +1291,9 @@ def check_week(
             if last_bike:
                 prev_bike_volume = sum(s.duration_min for s in last_bike)
         for i, warning in enumerate(
-            evaluate_week_realism(week.sessions, prev_week_bike_volume_min=prev_bike_volume)
+            evaluate_week_realism(
+                week.sessions, prev_week_bike_volume_min=prev_bike_volume, race_dates=race_dates
+            )
         ):
             findings.append(
                 PlanCheckFinding(
@@ -1276,7 +1306,7 @@ def check_week(
             )
 
     if week.sessions:
-        hard_count = sum(1 for s in week.sessions if _is_hard_session(s))
+        hard_count = sum(1 for s in week.sessions if _is_hard_session(s, race_dates))
         fraction = hard_count / len(week.sessions)
         if fraction > POLARIZED_MAX_HARD_SESSION_FRACTION:
             findings.append(
@@ -1293,11 +1323,14 @@ def check_week(
             )
 
     findings.extend(_check_week_volume_confirmation(week, recent_weeks))
-    findings.extend(_check_prose_only_pushable(week))
-    findings.extend(_check_bike_swim_basis(week))
+    authoring: list[PlanCheckFinding] = []
+    authoring.extend(_check_prose_only_pushable(week))
+    authoring.extend(_check_bike_swim_basis(week))
+    authoring.extend(_check_untagged_race_days(week, race_dates))
     for session in week.sessions:
-        findings.extend(_check_warmup_and_primer(session, athlete))
-        findings.extend(_check_race_warmup(session, athlete, week))
+        authoring.extend(_check_warmup_and_primer(session, athlete))
+        authoring.extend(_check_race_warmup(session, athlete, week))
+    findings.extend(f.model_copy(update={"category": "authoring"}) for f in authoring)
 
     findings = _rank_and_cap(findings)
     return PlanCheckReport(verdict=_verdict_from_findings(findings), findings=findings)
@@ -1346,6 +1379,22 @@ def swim_basis_steps(structured: WorkoutStructure) -> list[WorkoutStep]:
     return [
         s for s in _leaf_steps(structured.items)
         if s.target is not None and s.target.basis in SWIM_PACE_BASES
+    ]
+
+
+def _check_untagged_race_days(week: WeekPlan, race_dates: frozenset[date]) -> list[PlanCheckFinding]:
+    """A bike session on an event date with no `kind` -- the coach should tag it so downstream
+    race logic (race view, warm-up checks, ramp rail) treats it as the race it is."""
+    return [
+        PlanCheckFinding(
+            id=f"race-day-untagged-{s.date.isoformat()}",
+            severity="low",
+            evidence=f"The {s.date.isoformat()} bike session ({s.id}) is on a race date but has no `kind` set.",
+            consequence="Untagged, it is treated as a training ride by the race view and the volume/warm-up logic.",
+            fix="Set `kind: race` on the race itself (`warmup` for the race-day warm-up, `opener` for the day-before primer).",
+        )
+        for s in week.sessions
+        if s.sport == "bike" and s.kind is None and s.date in race_dates
     ]
 
 
@@ -1485,6 +1534,8 @@ def _walk_leaves(structure: WorkoutStructure, ftp_watts: float | None) -> list[_
 def _check_warmup_and_primer(session: Session, athlete: Athlete) -> list[PlanCheckFinding]:
     if session.sport != "bike" or session.structured is None:
         return []
+    if session.kind in ("opener", "warmup"):
+        return []  # an opener IS a primer; race warm-ups have `_check_race_warmup`
     leaves = _walk_leaves(session.structured, athlete.ftp_watts)
     hard = [
         i for i, leaf in enumerate(leaves)

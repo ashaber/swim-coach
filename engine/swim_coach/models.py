@@ -1166,6 +1166,11 @@ class PlanCheckFinding(BaseModel):
     evidence: str
     consequence: str
     fix: str
+    # "authoring": a mechanical session-structure defect the coach can fix itself on its own
+    # step tree (week checks only). "judgment": a call the athlete should weigh in on, incl. every
+    # `confirm-*` safety rail. Default keeps existing/persisted records valid; not mirrored on
+    # `MacroRedTeamRecord` (macro findings are always judgment).
+    category: Literal["authoring", "judgment"] = "judgment"
 
 
 class MacroRedTeamRecord(BaseModel):
