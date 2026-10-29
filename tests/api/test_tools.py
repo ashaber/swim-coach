@@ -7699,6 +7699,27 @@ def test_author_week_plan_draft_then_confirm_persists(athletes_dir) -> None:
     assert saved.adaptation_rationale is None  # the check report JSON must never leak into the real plan
 
 
+def test_author_week_plan_draft_passes_athlete_events_to_week_check(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    bike = {
+        "date": "2026-07-11", "sport": "bike", "duration_min": 45, "purpose": "race",
+        "intensity": {"zone": "Z5"},
+    }
+    before = handlers["author_week_plan"]({"iso_week": "2026-W28", "sessions": [bike]})
+    assert "error" not in before, before
+    assert not [f for f in before["report"]["findings"] if f["id"].startswith("race-day-untagged")]
+
+    renee = store.load_athlete("renee")
+    store.save_events("renee", store.load_events("renee") + [Event(
+        id=uuid.uuid4(), athlete_id=renee.id, name="Race", event_date=date(2026, 7, 11), priority="A",
+        primary_sport="bike", target_metric="duration_min", target_value=45.0,
+    )])
+    after = handlers["author_week_plan"]({"iso_week": "2026-W28", "sessions": [bike]})
+    untagged = [f for f in after["report"]["findings"] if f["id"].startswith("race-day-untagged")]
+    assert len(untagged) == 1 and untagged[0]["category"] == "authoring"
+
+
 def test_author_week_plan_missing_sessions_is_an_error(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)

@@ -7509,6 +7509,16 @@ def _week_sessions_json(week) -> list[dict[str, Any]]:
     ]
 
 
+def _events_for_check(store: StoreInterface, slug: str) -> list[Event]:
+    """The athlete's events for `check_week`'s race-day awareness. Advisory input only: a read
+    failure degrades to no events (the check then behaves as before) rather than blocking a draft."""
+    try:
+        return store.load_events(slug)
+    except Exception:  # noqa: BLE001
+        log.warn("events unavailable for week check", where="backend/app/tools.py", exc_info=True)
+        return []
+
+
 def _dropped_sessions(existing_week, week) -> list[dict[str, Any]]:
     """Which of `existing_week`'s already-persisted sessions have no
     counterpart (same date+sport) anywhere in the freshly-generated `week`
@@ -10001,7 +10011,9 @@ def _handle_author_week_plan(
         prev_week = None
     recent_weeks = [prev_week] if prev_week is not None else []
 
-    report = check_week(candidate, macro_week, athlete, recent_weeks=recent_weeks)
+    report = check_week(
+        candidate, macro_week, athlete, recent_weeks=recent_weeks, events=_events_for_check(store, slug)
+    )
 
     dropped = _dropped_sessions(current, candidate)
     warnings = list(candidate.planning_warnings)
@@ -10239,7 +10251,9 @@ def _handle_check_plan(input_data: dict[str, Any], *, store: StoreInterface, slu
                 log.warn("swallowed exception, using a default", where='backend/app/tools.py', exc_info=True)
                 prev_week = None
             recent_weeks = [prev_week] if prev_week is not None else []
-            week_report = check_week(week, macro_week, athlete, recent_weeks=recent_weeks)
+            week_report = check_week(
+                week, macro_week, athlete, recent_weeks=recent_weeks, events=_events_for_check(store, slug)
+            )
             response["week"] = {"iso_week": iso_week, **week_report.to_dict()}
     return response
 

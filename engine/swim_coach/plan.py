@@ -3688,6 +3688,11 @@ _PRERACE_PRIMER_PURPOSE_PREFIX = "PRE-RACE PRIMER — "
 # identified by `kind == "opener"`).
 
 
+# A race-day warm-up and the pre-race opener are priming, never a hard training day
+# (library/38-race-week-sharpener-and-openers.md).
+_NON_TRAINING_KINDS = frozenset({"warmup", "opener"})
+
+
 def _session_is_race(s: Session) -> bool:
     """A generated race-day session (`_bike_race_session` sets `kind="race"`). Races are an
     ADDITIVE slot that doesn't count against the hard-bike-day ceiling."""
@@ -4391,7 +4396,10 @@ def _bike_race_session(
 
 
 def evaluate_week_realism(
-    sessions: list[Session], *, prev_week_bike_volume_min: float | None = None
+    sessions: list[Session],
+    *,
+    prev_week_bike_volume_min: float | None = None,
+    race_dates: frozenset[date] | set[date] | None = None,
 ) -> list[str]:
     """Realism guardrail for a bike-primary week's proposed session mix
     (Build A defect 1, engine/week-generator-realism). Returns human-
@@ -4409,12 +4417,22 @@ def evaluate_week_realism(
       - total planned ride minutes more than
         `BIKE_WEEKLY_VOLUME_RAMP_CAP_FRACTION` above `prev_week_bike_volume_min`
         (CLAUDE.md's +8%/week rail), when the prior week's volume is supplied.
+
+    `race_dates`: dates of the athlete's race events. A bike session on one of them counts as a
+    race even when `kind` is unset (an untagged race day must not trip the hard-day or
+    back-to-back flags); warm-up/opener sessions keep their own kind.
     """
     warnings_out: list[str] = []
+    race_dates = race_dates or frozenset()
+    sessions = [
+        s.model_copy(update={"kind": "race"})
+        if s.sport == "bike" and s.kind is None and s.date in race_dates else s
+        for s in sessions
+    ]
     bike = [s for s in sessions if s.sport == "bike"]
     # Days, not sessions: two rides on one day (a double) are one bike day.
     non_race_bike_days = {s.date for s in bike if not _session_is_race(s) and s.kind != "warmup"}
-    hard = [s for s in bike if _session_is_hard_bike(s)]
+    hard = [s for s in bike if _session_is_hard_bike(s) and s.kind not in _NON_TRAINING_KINDS]
     hard_day_count = len({s.date for s in hard})
 
     if hard_day_count > BIKE_MAX_HARD_DAYS_PER_WEEK:
