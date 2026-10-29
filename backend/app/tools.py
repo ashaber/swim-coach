@@ -2385,8 +2385,11 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "false first: this validates the sessions and runs "
             "`swim_coach.plan_check.check_week` against this iso_week's own "
             "MacroWeek row (from the athlete's authored macro plan) and "
-            "recent history -- ADVISORY findings, never clamped. Show the "
-            "athlete the week and every finding, then call again with "
+            "recent history -- ADVISORY findings, never clamped, each with a "
+            "`category`. Fix `authoring` findings (mechanical step-tree flaws) "
+            "yourself and re-call the draft ONCE in the same turn (drafts never "
+            "persist), then show the athlete the week and the remaining "
+            "`judgment` findings, then call again with "
             "`confirm: true` and this draft_id once they agree -- never "
             "pass confirm=true on the first call for a given request. "
             "**Safety rail (CLAUDE.md, the one hard stop this build keeps):** "
@@ -10052,7 +10055,8 @@ def _handle_author_week_plan(
         needs_confirmation = [f["id"] for f in report.to_dict()["findings"] if f["id"].startswith("confirm-")]
         response["draft_id"] = draft_id
         response["next"] = (
-            "Nothing is written yet. Show the athlete this week and every finding. "
+            "Nothing is written yet. If any finding has category `authoring`, fix it yourself and re-draft once "
+            "now; otherwise show the athlete this week and every `judgment` finding. "
             + (
                 f"{needs_confirmation} require the athlete's OWN WORDS explicitly confirming them "
                 "(CLAUDE.md's safety rail) -- pass each as `athlete_confirmations` on the confirm call, "

@@ -2089,3 +2089,20 @@ def test_route_library_files_ski_keywords_do_not_collide_with_skill_words() -> N
     ):
         files = route_library_files(message, athlete_sports=["bike"])
         assert "43-skate-ski-cross-training.md" not in files, message
+
+
+def test_persona_week_plan_self_fixes_authoring_findings_but_not_macro_or_confirm() -> None:
+    from app.context import PERSONA_AND_RULES
+
+    text = PERSONA_AND_RULES
+    week = text[text.index("`author_week_plan` when a specific ISO week"):]
+    week = week[: week.index("**Safety rail")]
+    assert "`category`" in week and "`authoring`" in week and "`judgment`" in week
+    assert "SAME turn" in week
+    assert "Save it?" in week
+    assert "Fix it, or keep as-is?" in week
+    assert "once" in week  # exactly one silent self-fix redraft
+    # the macro flow keeps its show-every-finding rule
+    assert "always show every finding" in text
+    safety = text[text.index("**Safety rail -- the one hard stop"):]
+    assert "never paraphrase her" in safety[:900]
