@@ -583,8 +583,22 @@ def check_macro(
 
 
 def _rank_and_cap(findings: list[PlanCheckFinding]) -> list[PlanCheckFinding]:
-    ranked = sorted(findings, key=lambda f: _SEVERITY_ORDER[f.severity])
-    return ranked[:MAX_FINDINGS]
+    """Severity first, judgment before authoring within a severity. Every `confirm-*` safety-rail
+    finding is always kept (the confirm gate reads this list, so a capped-out one would let the
+    confirm through without the athlete's words); the cap fills the other slots."""
+    ranked = sorted(
+        findings, key=lambda f: (_SEVERITY_ORDER[f.severity], f.category == "authoring")
+    )
+    n_confirm = sum(1 for f in ranked if f.id.startswith("confirm-"))
+    room = max(MAX_FINDINGS - n_confirm, 0)
+    kept: list[PlanCheckFinding] = []
+    for f in ranked:
+        if f.id.startswith("confirm-"):
+            kept.append(f)
+        elif room > 0:
+            kept.append(f)
+            room -= 1
+    return kept
 
 
 def _verdict_from_findings(findings: list[PlanCheckFinding]) -> Verdict:
