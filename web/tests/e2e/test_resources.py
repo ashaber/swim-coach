@@ -569,3 +569,44 @@ def test_resources_sorts_recently_added_first_and_persists_the_choice(admin_page
     assert _file_order(admin_page) == expected_recent
     overflow = admin_page.evaluate('document.documentElement.scrollWidth > document.documentElement.clientWidth')
     assert not overflow
+
+
+# --- Readable contrast on the dark page ground ---------------------------------
+# Each text element must clear WCAG AA (4.5:1) against whatever it actually sits
+# on: the nearest ancestor with a non-transparent background.
+_CONTRAST_JS = """sel => {
+  const el = document.querySelector(sel);
+  const rgb = s => (s.match(/[\\d.]+/g) || []).map(Number);
+  const lum = ([r, g, b]) => {
+    const f = c => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+    return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+  };
+  let bg = null;
+  for (let n = el; n; n = n.parentElement) {
+    const c = rgb(getComputedStyle(n).backgroundColor);
+    if (c.length >= 3 && (c.length < 4 || c[3] > 0)) { bg = c; break; }
+  }
+  const fg = rgb(getComputedStyle(el).color);
+  const [a, b] = [lum(fg), lum(bg)].sort((x, y) => y - x);
+  return (a + 0.05) / (b + 0.05);
+}"""
+
+
+def _contrast(page, selector):
+    return page.evaluate(_CONTRAST_JS, selector)
+
+
+def test_library_list_labels_are_readable_on_the_ground(admin_page):
+    admin_page.click('[data-a="tab:resources"]')
+    admin_page.wait_for_selector('.library-card')
+    assert _contrast(admin_page, '.library-file-group-heading') >= 4.5
+    assert _contrast(admin_page, '.library-sort-label') >= 4.5
+
+
+def test_opened_library_file_is_readable(admin_page):
+    admin_page.click('[data-a="tab:resources"]')
+    admin_page.wait_for_selector('.library-card')
+    admin_page.locator('[data-a="library:open-file"]').first.click()
+    admin_page.wait_for_selector('#library-file-content')
+    assert _contrast(admin_page, '#library-file-content') >= 4.5
+    assert _contrast(admin_page, '#library-file-content h2') >= 4.5
