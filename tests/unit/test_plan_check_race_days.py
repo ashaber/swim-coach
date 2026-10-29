@@ -134,3 +134,32 @@ def test_realism_hard_day_count_excludes_opener_and_warmup():
     sessions = [_bike(days[0], zone="Z4"), _bike(days[1], zone="Z4", kind="opener"),
                 _bike(days[2], zone="Z4", kind="warmup"), _bike(days[3], zone="Z4", kind="opener")]
     assert not any("hard bike days" in w for w in evaluate_week_realism(sessions))
+
+
+def _f(fid: str, sev: str = "medium", cat: str = "judgment") -> PlanCheckFinding:
+    return PlanCheckFinding(id=fid, severity=sev, evidence="e", consequence="c", fix="f", category=cat)
+
+
+def test_rank_and_cap_never_drops_confirm_findings():
+    from swim_coach.plan_check import MAX_FINDINGS, _rank_and_cap
+
+    findings = [_f(f"m{i}") for i in range(7)] + [_f("confirm-weekly-volume-ramp", "low")]
+    out = _rank_and_cap(findings)
+    assert "confirm-weekly-volume-ramp" in [f.id for f in out]
+    assert len(out) == MAX_FINDINGS
+    assert [f.id for f in out][:5] == ["m0", "m1", "m2", "m3", "m4"]
+
+
+def test_rank_and_cap_keeps_all_confirm_findings_beyond_cap():
+    from swim_coach.plan_check import MAX_FINDINGS, _rank_and_cap
+
+    confirms = [_f(f"confirm-{i}", "low") for i in range(MAX_FINDINGS + 1)]
+    out = _rank_and_cap([_f("m0")] + confirms)
+    assert {f.id for f in out} == {c.id for c in confirms}
+
+
+def test_rank_and_cap_judgment_before_authoring_within_severity():
+    from swim_coach.plan_check import _rank_and_cap
+
+    out = _rank_and_cap([_f("a1", cat="authoring"), _f("j1"), _f("h1", "high", "authoring"), _f("j2")])
+    assert [f.id for f in out] == ["h1", "j1", "j2", "a1"]
