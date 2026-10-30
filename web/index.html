@@ -16,7 +16,12 @@
     /* Bioluminescent Dusk design tokens (see design_handoff_channel_dragon/
        README.md's "Design Tokens" section). The app is light-only (cream
        theme, approved from a Claude Design mock); these tokens ARE :root,
-       there is no theme toggle. Palette is WCAG-checked: text tokens are
+       there is no theme toggle. COLOUR RULE: every new colour is a token in
+       this :root block -- never a raw hex/rgb()/named colour in a rule or in
+       src/*.js. Ink tokens (--ink*) go on cards (--paper*), --on-ground* goes
+       on text drawn straight on the deep page, --on-band* on the header
+       bands. tests/unit/theme_tokens.test.js (no raw colours) and
+       tests/e2e/test_rendered_contrast.py (rendered WCAG contrast) enforce it. Palette is WCAG-checked: text tokens are
        >=4.9:1 on every surface, sport colours >=3:1 on white. */
     :root {
       --ground:#1f4a59; --paper:#fbf8f0; --paper-2:#f6f1e6; --inset:#f3eee2; --control-border:#c2b8a0;
@@ -64,6 +69,10 @@
       --note-bg:#f3eee2; --note-border:#e6decb; --note-label:#137590;
       --tab-active: #137590; --tab-inactive: #4d6670;
       --shadow:0 1px 2px rgba(11,42,54,.06),0 6px 18px rgba(11,42,54,.07);
+      /* Text/graphic colours that sit ON a coloured fill, and overlay tokens. */
+      --on-signal:#ffffff; --on-ink:#ffffff; --on-amber:#0f3138; --map-outline:#a3b0b5;
+      --shadow-bar:0 -2px 12px rgba(11,42,54,.08); --shadow-pop:0 6px 18px rgba(0,0,0,.3);
+      --shadow-sheet:0 -8px 24px rgba(0,0,0,.35); --scrim:rgba(6,20,26,.55);
       --radius: 14px; --radius-pill: 999px; --radius-lg: 16px; --radius-sm: 12px; --radius-xs: 10px;
     }
 
@@ -177,7 +186,7 @@
     .rd-box { flex: none; width: 28px; height: 28px; border-radius: 8px; border: 2px solid var(--ink-faint); display: inline-flex; align-items: center; justify-content: center; font-weight: 800; }
     .rd-item.checked { opacity: .8; }
     .rd-item.checked .rd-text { text-decoration: line-through; }
-    .rd-item.checked .rd-box { background: var(--c-signal); border-color: var(--c-signal); color: #fff; }
+    .rd-item.checked .rd-box { background: var(--c-signal); border-color: var(--c-signal); color: var(--on-signal); }
     .rd-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
     .rd-origin { font-size: 11px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .05em; }
     .rd-completed .rd-item { opacity: .8; }
@@ -233,7 +242,7 @@
     .sess .meta .pill { color: var(--ink-soft); }
     .sess .desc { font-size: 12.5px; color: var(--ink-soft); margin-top: 4px; }
     .sess.big .title { font-size: 15px; color: var(--c-signal); font-weight: 800; }
-    .tag { display:inline-block; font-family: var(--display); font-size:10px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; padding:2px 7px; border-radius:var(--radius-pill); margin-left:8px; vertical-align:middle; color:#fff; background:var(--c-signal); }
+    .tag { display:inline-block; font-family: var(--display); font-size:10px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; padding:2px 7px; border-radius:var(--radius-pill); margin-left:8px; vertical-align:middle; color:var(--on-signal); background:var(--c-signal); }
 
     /* macro */
     .macro { background: var(--paper); border: 1px solid var(--card-border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 22px 22px 16px; }
@@ -387,7 +396,7 @@
       text-transform: uppercase; letter-spacing: .06em; font-weight: 800; margin: 0 0 8px; }
     .health-status-active .hs-restriction { display: inline-block; font-family: var(--display);
       font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase;
-      color: #fff; background: var(--c-signal); padding: 3px 9px; border-radius: var(--radius-pill);
+      color: var(--on-signal); background: var(--c-signal); padding: 3px 9px; border-radius: var(--radius-pill);
       margin-bottom: 8px; }
     .health-status-active p { margin: 6px 0; color: var(--ink); }
     .health-status-active .hs-meta { font-size: 12px; color: var(--ink-soft); }
@@ -410,7 +419,7 @@
       text-align: center; padding: 8px 14px; }
     .update-banner-subtle { background: var(--paper-2); color: var(--ink-soft); font-weight: 600; }
     .update-banner-actions { display: flex; align-items: center; gap: 10px; }
-    .update-banner .btn { padding: 5px 12px; font-size: 12.5px; background: var(--on-accent); border-color: var(--on-accent); color: #fff; }
+    .update-banner .btn { padding: 5px 12px; font-size: 12.5px; background: var(--on-accent); border-color: var(--on-accent); color: var(--on-ink); }
     .update-banner-dismiss { background: none; border: none; color: inherit; font-size: 17px; line-height: 1;
       cursor: pointer; padding: 2px 4px; opacity: .75; }
     .update-banner-dismiss:hover { opacity: 1; }
@@ -425,7 +434,7 @@
     /* tab bar -- persistent bottom nav across all seven tabs */
     body { padding-bottom: 64px; }
     .tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: flex;
-      background: var(--paper); border-top: 1px solid var(--line); box-shadow: 0 -2px 12px rgba(11,42,54,.08);
+      background: var(--paper); border-top: 1px solid var(--line); box-shadow: var(--shadow-bar);
       padding-bottom: env(safe-area-inset-bottom, 0); }
     .tab-btn { position: relative; flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px;
       background: none; border: none; padding: 8px 4px 7px; color: var(--tab-inactive); font-family: var(--sans);
@@ -613,13 +622,13 @@
       max-width: 1008px; margin: 0 auto; z-index: 15; min-height: 52px; border-radius: 14px; border: 0;
       background: var(--accent); color: var(--on-accent); font: 700 15px var(--sans, Inter, system-ui, sans-serif);
       display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer;
-      box-shadow: 0 6px 18px rgba(0,0,0,.3); }
+      box-shadow: var(--shadow-pop); }
     .thread-btn-count { background: var(--ink); color: var(--paper); border-radius: 999px; padding: 1px 8px; font-size: 12px; }
     .thread-sheet-root { position: fixed; left: 0; right: 0; top: var(--vv-top, 0px); height: var(--vv-h, 100dvh); z-index: 40; }
-    .thread-backdrop { position: absolute; inset: 0; background: rgba(6,20,26,.55); }
+    .thread-backdrop { position: absolute; inset: 0; background: var(--scrim); }
     .thread-sheet { position: absolute; left: 0; right: 0; top: 36px; bottom: 0; max-width: 1040px; margin: 0 auto;
       background: var(--ground); color: var(--ink); border-radius: 20px 20px 0 0; display: flex; flex-direction: column;
-      box-shadow: 0 -8px 24px rgba(0,0,0,.35); overflow: hidden; }
+      box-shadow: var(--shadow-sheet); overflow: hidden; }
     .thread-handle { flex: none; display: flex; justify-content: center; padding-top: 8px; }
     .thread-handle span { width: 40px; height: 4px; border-radius: 2px; background: var(--band-border); }
     .thread-sheet .chat-panel-head { margin: 8px 12px 0; border: 0; border-radius: 14px; padding: 8px 8px 8px 14px;
@@ -855,7 +864,7 @@
     .rv-best { color: var(--accent-ink); }
     .rv-smooth { color: var(--accent-ink); font-weight: 700; }
     .rv-pill { font-size: 12px; font-weight: 600; color: var(--ink); background: var(--paper-2); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; }
-    .rv-pill-warn { background: var(--amber); border-color: var(--amber); color: #0f3138; }
+    .rv-pill-warn { background: var(--amber); border-color: var(--amber); color: var(--on-amber); }
     .rv-splitbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; background: var(--paper-2); border-radius: 10px; font-size: 12px; line-height: 1.4; color: var(--ink-soft); }
     .rv-splitbar .rv-chip { flex: none; white-space: nowrap; }
     .rv-secrow { display: grid; grid-template-columns: 34px 82px minmax(0, 1fr) 76px; align-items: center; gap: 8px; min-height: 44px; padding: 0 2px; background: transparent; border-bottom: 1px solid var(--line-soft); font-size: 13px; }
@@ -871,7 +880,7 @@
     .rv-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; }
     .rv-drill .rv-card, .rv-drill .rv-chips, .rv-drill .rv-legend, .rv-drill > .rd-body > .rv-sub { margin-top: 10px; }
     .rv-drillmap { background: var(--paper-2); }
-    .rv-drillmap .rv-outline { stroke: #A3B0B5; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+    .rv-drillmap .rv-outline { stroke: var(--map-outline); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
     .rv-drillmap .rv-heat path { stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
     .rv-entry { fill: var(--ink); stroke: var(--paper); stroke-width: 2; }
     .rv-notelabel { font-size: 13px; font-weight: 600; color: var(--accent-ink); }
@@ -987,7 +996,7 @@
        same signal color used for pain/attention-worthy states elsewhere
        (.load-error, .chat-banner) rather than a new design system. */
     .badge-count { display: inline-flex; align-items: center; justify-content: center; min-width: 16px;
-      height: 16px; padding: 0 4px; border-radius: var(--radius-pill); background: var(--c-signal); color: #fff;
+      height: 16px; padding: 0 4px; border-radius: var(--radius-pill); background: var(--c-signal); color: var(--on-signal);
       font-size: 10px; font-weight: 800; line-height: 16px; }
     .tab-btn .badge-count { position: absolute; top: 4px; right: 12px; }
 
