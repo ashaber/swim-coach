@@ -8126,3 +8126,19 @@ def test_record_health_status_ignores_resolved_entries_for_the_guard(athletes_di
         {"description": "shoulder again", "restriction": "none", "source": "self_reported", "body_region": "shoulder"}
     )
     assert result["logged"] is True
+
+
+def test_author_week_plan_draft_findings_carry_category(athletes_dir) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    prose_bike = {
+        "date": "2026-07-11", "sport": "bike", "duration_min": 60, "purpose": "tempo",
+        "intensity": {"zone": "Z3"}, "structure": "3x10 min tempo",
+    }
+    draft = handlers["author_week_plan"]({"iso_week": "2026-W28", "sessions": [prose_bike]})
+    assert "error" not in draft, draft
+    findings = draft["report"]["findings"]
+    assert findings and all(f["category"] in ("authoring", "judgment") for f in findings)
+    by_id = {f["id"]: f["category"] for f in findings}
+    assert by_id["no-structured-workout"] == "authoring"
+    assert all(c == "judgment" for i, c in by_id.items() if i.startswith("confirm-"))

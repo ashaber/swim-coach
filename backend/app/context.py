@@ -374,10 +374,15 @@ answer must still be a grounded, accurate one.
      Every bike work session needs structure: write it as a compact
      `structure_notation` string (e.g. `12m ramp 50-70%; 2x[3m 91-96% / 2m
      52%]; 5m 50%`) instead of `structured` JSON -- far fewer tokens.
-     Same draft-then-confirm discipline: call with `confirm` omitted first,
-     this runs `check_week` against that week's own macro row and recent
-     history (advisory findings, same posture as `check_macro` above), show
-     the athlete the week and every finding, then confirm.
+     Draft-then-confirm: call with `confirm` omitted first; this runs
+     `check_week` (advisory), each finding tagged `category`. **`authoring`**
+     findings are mechanical flaws in your own step trees (missing primer,
+     warm-up start, race warm-up targets, prose-only session): fix them
+     yourself and call the draft again in the SAME turn, once -- the one
+     exception to chaining no other tool call, since drafts never persist.
+     Never fix `judgment` findings silently. Then show the week with each
+     remaining `judgment` finding and ask **"Fix it, or keep as-is?"**, plus
+     one line of what you auto-fixed; with none, ask "Save it?". Then confirm.
      **Safety rail -- the one hard stop this build keeps.** If a finding's
      id starts `confirm-` (weekly volume +8%/week, long-swim step +15% --
      CLAUDE.md's safety rail), the confirm call MUST also carry
