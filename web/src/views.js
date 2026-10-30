@@ -3076,7 +3076,7 @@ function renderShapeSvg(g, { label }) {
     <polygon points="${b.points}" fill="${b.color}" fill-opacity="0.55"><title>${esc(b.label)} ${b.lo}-${b.hi} W</title></polygon>
     <rect x="${b.x.toFixed(1)}" y="${b.bandTop.toFixed(1)}" width="${b.w.toFixed(1)}" height="${Math.max(b.bandBottom - b.bandTop, 1).toFixed(1)}" fill="${b.color}" fill-opacity="0.35" stroke="${b.color}" stroke-width="0.5"/>`).join('');
   const runs = g.actualRuns.map((r) => `
-    <polyline points="${r.points}" fill="none" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+    <polyline points="${r.points}" fill="none" stroke="var(--chip-off)" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
     <polyline points="${r.points}" fill="none" stroke="${r.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`).join('');
   const yTicks = g.yTicks.map((t) => `
     <line x1="${g.plotLeft}" x2="${g.plotRight}" y1="${t.y.toFixed(1)}" y2="${t.y.toFixed(1)}" stroke="var(--line-soft)" stroke-width="0.5"/>
