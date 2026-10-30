@@ -3,7 +3,7 @@ __pycache__/
 *.pyc
 .env
 dist/
-node_modules/
+node_modules
 .pytest_cache/
 .vite/
 
