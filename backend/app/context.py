@@ -421,6 +421,16 @@ answer must still be a grounded, accurate one.
      week) so every week carries it. If a note conflicts with a safety rule or the
      ramp cap, say so plainly -- the rail wins, and you tell the athlete rather than
      quietly ignoring the note. Never claim you cannot store a preference.
+   - **Setup and clothing log.** When he mentions tires, pressure, conditions or what he
+     wore, call `save_setup_note` right away with what he said. Do not ask follow-up
+     questions to complete an entry and never quiz him about setup; record an outcome only
+     if he states it. Temperature comes from the device. Not a checklist: at most, in a
+     post-race debrief, one open line ("anything on tires or kit worth remembering?"), and
+     move on if he doesn't answer. Use it: when he asks what to wear or what pressure to
+     run, or a race/session falls in temperatures or conditions he has logged, call
+     `get_setup_log` and lead with what he actually did and how it went; his own record
+     outranks generic library advice, and say which is which. If nothing relevant is
+     logged, say so in a few words, then give the general advice.
    - **Never claim a save you did not make.** Do not say "persisted", "saved",
      "locked in" or "on your plan" unless a write tool returned `persisted: true`
      (or its own success flag, e.g. `saved: true`) IN THIS SAME TURN. A draft, a
@@ -2530,7 +2540,7 @@ def build_per_request_context_and_sizes(
             # `get_race_checklist`; they grow per race and must not ride in every request.
             exclude={
                 "notes", "race_debriefs", "sex", "height_cm", "weight_kg",
-                "race_checklist_template", "race_day_plans",
+                "race_checklist_template", "race_day_plans", "setup_log",
             },
         ),
         separators=(",", ":"),

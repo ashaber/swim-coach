@@ -265,6 +265,7 @@ from swim_coach.models import (
     HealthStatus,
     RaceDebrief,
     Session,
+    SetupLogEntry,
     ThresholdRecord,
     WeekPlan,
     Workout,
@@ -303,7 +304,8 @@ from swim_coach.session_lookup import (
     resolve_in_store,
 )
 from swim_coach.store import StoreInterface
-from swim_coach.temperature import device_temp_view
+from swim_coach.temperature import device_temp_view, f_to_c
+from app.setup_log import MAX_ENTRIES as _SETUP_MAX, TEMP_WINDOW_C, device_temp_for, entry_view as _setup_entry_view, matches_temp
 from swim_coach.taper_search import (
     MIN_TAPER_RUNWAY_DAYS,
     TaperCandidate,
@@ -1247,6 +1249,51 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 "replaces": {"type": "string", "description": "The id of an outdated note this supersedes."},
             },
             "required": ["text"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "save_setup_note",
+        "description": (
+            "Record what he rode or wore and how it went (tires, pressure, conditions, clothing at a "
+            "temperature) the moment he mentions it, in his words; no confirmation, then say 'Noted: ...'. "
+            "Pass temp_f/temp_c only if he states one; otherwise the device temperature of that day's "
+            "outdoor ride is filled in. Never ask for missing fields. outcome only if he says it."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": ["clothing", "tires", "bike_setup"]},
+                "text": {"type": "string", "description": "His own words."},
+                "date": {"type": "string", "description": "YYYY-MM-DD; default today."},
+                "sport": {"type": "string"},
+                "workout_id": {"type": "string"},
+                "pressure_front_psi": {"type": "number"},
+                "pressure_rear_psi": {"type": "number"},
+                "conditions": {"type": "string", "description": "e.g. dry hardpack, mud."},
+                "outcome": {"type": "string", "enum": ["worked", "too_cold", "too_hot", "didnt_work", "unknown"]},
+                "temp_f": {"type": "number"},
+                "temp_c": {"type": "number"},
+            },
+            "required": ["kind", "text"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "get_setup_log",
+        "description": (
+            "His own record of tires, pressure and clothing and how each went, newest first (max 10), "
+            "temps in C and F. Filter by kind and by temp_f/temp_c (matches within +/-5C). Call when he "
+            "asks what to wear or run, or a race/session falls in logged conditions."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": ["clothing", "tires", "bike_setup"]},
+                "temp_f": {"type": "number"},
+                "temp_c": {"type": "number"},
+            },
+            "required": [],
             "additionalProperties": False,
         },
     },
@@ -4172,6 +4219,72 @@ def _handle_save_athlete_note(input_data: dict[str, Any], *, store: StoreInterfa
     log.info("athlete note saved", athlete=slug, note_id=str(note.id), category=category, active_notes=active)
     return {"saved": True, "id": str(note.id), "text": note.text, "category": category,
             "active_notes": active, "warnings": warnings}
+
+
+def _handle_save_setup_note(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    """Save a setup/clothing note. Temperature: stated (athlete) else device from that day's outdoor
+    workout, else null -- never an error and never a question."""
+    text = input_data.get("text")
+    kind = input_data.get("kind")
+    if not isinstance(text, str) or not text.strip():
+        return {"error": "text is required: his own words"}
+    if kind not in ("clothing", "tires", "bike_setup"):
+        return {"error": "kind must be clothing, tires or bike_setup"}
+    outcome = input_data.get("outcome") or "unknown"
+    if outcome not in ("worked", "too_cold", "too_hot", "didnt_work", "unknown"):
+        return {"error": "outcome must be worked, too_cold, too_hot, didnt_work or unknown"}
+    try:
+        athlete = store.load_athlete(slug)
+        workouts = store.list_workouts(slug)
+    except Exception as exc:  # noqa: BLE001
+        log.error("storage read failed", what="athlete profile", exc_info=True)
+        return storage_error("athlete profile", exc)
+    try:
+        day = date.fromisoformat(input_data["date"]) if input_data.get("date") else athlete_today(athlete)
+        wid = uuid.UUID(str(input_data["workout_id"])) if input_data.get("workout_id") else None
+    except ValueError:
+        return {"error": "date must be YYYY-MM-DD and workout_id a valid id"}
+    sport = input_data.get("sport") or None
+    stated_c = input_data.get("temp_c")
+    if stated_c is None and input_data.get("temp_f") is not None:
+        stated_c = f_to_c(float(input_data["temp_f"]))
+    low = high = None
+    source = None
+    d_low, d_high, link = device_temp_for(workouts, day=day, sport=sport, workout_id=wid)
+    if stated_c is not None:
+        low = high = float(stated_c)
+        source = "athlete"
+    elif d_low is not None:
+        low, high, source = d_low, d_high, "device"
+    entry = SetupLogEntry(
+        id=uuid.uuid4(), date=day, kind=kind, text=text.strip()[:_NOTE_MAX_CHARS], sport=sport, workout_id=wid or link,
+        pressure_front_psi=input_data.get("pressure_front_psi"), pressure_rear_psi=input_data.get("pressure_rear_psi"),
+        conditions=input_data.get("conditions") or None, outcome=outcome,
+        temp_c_low=low, temp_c_high=high, temp_source=source,
+    )
+    athlete.setup_log.append(entry)
+    store.save_athlete(athlete)
+    log.info("setup note saved", athlete=slug, entry_id=str(entry.id), kind=kind, temp_source=source)
+    return {"saved": True, "id": str(entry.id), **{k: v for k, v in _setup_entry_view(entry).items() if k != "text"}}
+
+
+def _handle_get_setup_log(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        log.error("storage read failed", what="athlete profile", exc_info=True)
+        return storage_error("athlete profile", exc)
+    entries = list(athlete.setup_log)
+    if input_data.get("kind"):
+        entries = [e for e in entries if e.kind == input_data["kind"]]
+    target = input_data.get("temp_c")
+    if target is None and input_data.get("temp_f") is not None:
+        target = f_to_c(float(input_data["temp_f"]))
+    if target is not None:
+        entries = [e for e in entries if matches_temp(e, float(target))]
+    entries.sort(key=lambda e: e.date, reverse=True)
+    return {"entries": [_setup_entry_view(e) for e in entries[:_SETUP_MAX]], "total_matching": len(entries),
+            "window_c": TEMP_WINDOW_C if target is not None else None}
 
 
 def _handle_retire_athlete_note(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
@@ -10361,6 +10474,8 @@ def build_tool_handlers(
         "save_athlete_note": lambda input_data: _handle_save_athlete_note(
             input_data, store=store, slug=slug
         ),
+        "save_setup_note": lambda input_data: _handle_save_setup_note(input_data, store=store, slug=slug),
+        "get_setup_log": lambda input_data: _handle_get_setup_log(input_data, store=store, slug=slug),
         "retire_athlete_note": lambda input_data: _handle_retire_athlete_note(
             input_data, store=store, slug=slug
         ),
