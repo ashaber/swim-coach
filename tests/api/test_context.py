@@ -2177,6 +2177,22 @@ def test_route_library_files_bike_gear_keywords_do_not_false_positive(message: s
         assert name not in files, (message, name)
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Tires for tomorrow?",
+        "PSI for mud?",
+        "How many psi",
+        "What about my tires?",
+        "Tires, or tyres?",
+        "Is 28psi ok? (tires)",
+        "tyres.",
+    ],
+)
+def test_route_library_files_word_boundary_keywords_at_edges(message: str) -> None:
+    assert _TIRE_FILE in route_library_files(message, athlete_sports=["bike"])
+
+
 def test_bike_gear_files_are_bike_sport_scoped() -> None:
     import app.context as context_module
 

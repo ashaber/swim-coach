@@ -1175,7 +1175,10 @@ _LIBRARY_FILES_IN_PRIORITY_ORDER.append("43-skate-ski-cross-training.md")
 # below. Keywords are whole phrases: a bare "pressure" (race or blood
 # pressure), "layers", "wear" (tire wear), "spoke" ("spoke to my coach"),
 # "dress" ("address") or "psi" ("collapsing") would match unrelated text, so
-# those appear only inside longer phrases or with a leading space.
+# those appear only inside longer phrases. Short whole words ("psi", "tires",
+# "tyres") match through `_BIKE_GEAR_WORD_ROUTES` with letter-boundary
+# lookarounds instead, so they route at message start, end or before
+# punctuation ("Tires?", "28psi") but not inside "collapsing" or "retires".
 _TIRE_PRESSURE_FILE = "44-tire-pressure.md"
 _BIKE_SETUP_FILE = "45-bike-race-setup.md"
 _CLOTHING_FILE = "46-cycling-clothing-temperature.md"
@@ -1185,14 +1188,11 @@ _BIKE_GEAR_KEYWORD_ROUTES: dict[str, set[str]] = {
         for keyword in (
             "tire pressure",
             "tyre pressure",
-            " psi",
             "tubeless",
             "sealant",
             "burp",
             "rim strike",
             "hookless",
-            " tires",
-            " tyres",
         )
     },
     **{
@@ -1246,6 +1246,10 @@ _BIKE_GEAR_KEYWORD_ROUTES: dict[str, set[str]] = {
     },
 }
 _KEYWORD_ROUTES.update(_BIKE_GEAR_KEYWORD_ROUTES)
+_BIKE_GEAR_WORD_ROUTES: dict[re.Pattern[str], set[str]] = {
+    re.compile(rf"(?<![a-z]){word}(?![a-z])"): {_TIRE_PRESSURE_FILE}
+    for word in ("psi", "tires", "tyres")
+}
 _LIBRARY_FILES_IN_PRIORITY_ORDER.extend([_TIRE_PRESSURE_FILE, _BIKE_SETUP_FILE, _CLOTHING_FILE])
 
 # --- sport-scope filtering (Athlete.sports <-> library file sport scope) ---
@@ -1372,6 +1376,9 @@ def route_library_files(
     matched: set[str] = set()
     for keyword, files in _KEYWORD_ROUTES.items():
         if keyword in lower:
+            matched |= files
+    for pattern, files in _BIKE_GEAR_WORD_ROUTES.items():
+        if pattern.search(lower):
             matched |= files
     if not matched:
         matched = set(DEFAULT_ROUTE_FILES)
