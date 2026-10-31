@@ -2238,6 +2238,39 @@ citations; no scientific claim attaches to these links):
 
 ---
 
+## Tires, bike setup, clothing (grounds `44`, `45`, `46`)
+
+- **✓ Steyn W.J., Warnich J. (2014)** — MTB tyre rolling resistance by diameter and surface — *S Afr J Res Sport PE Recreat* 36(2). `44`.
+- **✓ Bertucci W.M., Rogier S., Reiser R.F. (2013)** — Aerodynamic and rolling resistances in MTB field conditions — *J Sports Sci* 31(14). `44`.
+- **✓ Maier T., Müller B., Allemann R., Steiner T., Wehrlin J.P. (2019)** — Rim width, rolling resistance and off-road XC speed — *J Sports Sci* 37(7). `44`.
+- **⚠ Barber J. (2016)** — How does MTB tire pressure affect power and speed — Singletracks; one-rider paved test. `44`.
+- **⚠ Bierman J. (2014)** — Tubeless vs latex vs butyl tube rolling resistance — Bicycle Rolling Resistance; drum test. `44`, `45`.
+- **⚠ Slowman (2023)** — Tire Pressure Calculator Wars — Slowtwitch; source of Silca figures. `44`.
+- **⚠ SRAM/Zipp; Schwalbe; Canyon (Lambert-Smith, 2025)** — pressure calculator, hookless FAQ, gravel table; manufacturers. `44`.
+- **⚠ Heine J. (2015)** — Tire Pressure: Data and Details — Rene Herse Cycles; seller. `44`.
+- **⚠ Evans J. (2021)** — How to choose the best cyclocross tyres (and set pressure) — BikeRadar. `44`.
+- **⚠ Barrett W. (2018)** — Group Test: 6 Tyre Pressure Gauges — Singletrack World. `44`.
+- **⚠ Barber J. (2022)** — How to properly bed in MTB disc brakes — Singletracks. `45`.
+- **⚠ SRAM; Park Tool** — brake pads, pad install, squeal case study, caliper alignment, wheel truing; manufacturer and tool-maker pages. `45`.
+- **⚠ Kopecky G. (2019)** — Tubeless Sealant Tips and Strategy — Slowtwitch. `45`.
+- **⚠ Kühnen R. (2025)** — Chain wax test, 16 chain waxes — TOUR magazine. `45`.
+- **⚠ Patricio S. (2009)** — Preparing for a 24 Hour MTB Race, Part I — Singletracks. `45`.
+- **⚠ Cyclocross Magazine (2015)** — Two tricks for a faster bike or wheel exchange in the cyclocross pit. `45`.
+- **✓ Bini R.R., Bini A.F. (2018)** — Potential factors associated with knee pain in cyclists: a systematic review — *Open Access J Sports Med* 9. `45`.
+- **✓ Galloway S.D., Maughan R.J. (1997)** — Ambient temperature and capacity for prolonged cycle exercise — *Med Sci Sports Exerc* 29(9). `46`.
+- **✓ Valenzuela P.L. et al. (2022)** — Ambient temperature and field-based cycling performance in professional cyclists — *Int J Sports Physiol Perform*. `46`.
+- **✓ Sawka M.N., Cheuvront S.N., Kenefick R.W. (2015)** — Hypohydration and human performance: environment and mechanisms — *Sports Med*. `46`.
+- **✓ Racinais S. et al. (2015)** — Consensus recommendations on training and competing in the heat — *Br J Sports Med* 49(18). `46`.
+- **✓ Wallace P.J. et al. (2024)** — Endurance capacity impairment in cold air, skin cooling to mild hypothermia — *J Appl Physiol* 136(1); abstract only. `46`.
+- **✓ Castellani J.W., Young A.J. (2016)** — Human physiological responses to cold exposure — *Auton Neurosci* 196. `46`.
+- **✓ Daanen H.A.M. (2003)** — Finger cold-induced vasodilation: a review — *Eur J Appl Physiol* 89(5). `46`.
+- **✓ Defraeye T., Blocken B., Koninckx E., Hespel P., Carmeliet J. (2011)** — CFD of drag and convective heat transfer by cyclist body segment — *J Biomech* 44(9). `46`.
+- **✓ Pyzocha N. (2020)** — Accidental hypothermia: Wilderness Medical Society guidelines — *Am Fam Physician*; summary, original not opened. `46`.
+- **✓ Riera F. et al. (2021)** — Impact of a cold environment on professional cyclists: a pilot study — *Life* 11(12). `46`.
+- **⚠ US National Weather Service; Garmin Edge manuals** — wind chill formula; temperature-reading note. `46`.
+- **⚠ Walsh A. (2026)** — What to Wear Cycling at Every Temperature — Roadman Cycling; practitioner. `46`.
+- **⚠ Boynton J. (2014)** — Racing Cyclocross in the Cold, Part 2 — TrainingPeaks; **Mayhew C. (2018)** — Cyclocross Magazine. `46`.
+
 ## Corrections log
 
 Provenance of the fixes applied while curating this list:

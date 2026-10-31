@@ -2106,3 +2106,95 @@ def test_persona_week_plan_self_fixes_authoring_findings_but_not_macro_or_confir
     assert "always show every finding" in text
     safety = text[text.index("**Safety rail -- the one hard stop"):]
     assert "never paraphrase her" in safety[:900]
+
+
+# --- 44/45/46 tire pressure, bike race setup, cycling clothing routing ------
+# All bike-scoped. Bare "pressure", "layers", "wear", "spoke" and "dress" must
+# not route (race/blood pressure, tire wear, "spoke to", "address").
+_TIRE_FILE = "44-tire-pressure.md"
+_SETUP_FILE = "45-bike-race-setup.md"
+_CLOTHING_FILE_NAME = "46-cycling-clothing-temperature.md"
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("What tire pressure for a muddy CX race?", _TIRE_FILE),
+        ("What tyre pressure should I run on gravel?", _TIRE_FILE),
+        ("Is 30 psi too low?", _TIRE_FILE),
+        ("My tubeless setup keeps burping", _TIRE_FILE),
+        ("How often should I top up sealant?", _TIRE_FILE),
+        ("I got a rim strike on that root", _TIRE_FILE),
+        ("Should I change my tires for the mud?", _TIRE_FILE),
+        ("How do I bed in new brake pads?", _SETUP_FILE),
+        ("There is rotor rub after a wheel swap", _SETUP_FILE),
+        ("Do I need spoke tension checked?", _SETUP_FILE),
+        ("Is wax better than chain lube?", _SETUP_FILE),
+        ("What torque wrench setting for carbon bars?", _SETUP_FILE),
+        ("How should I set up my pit bike?", _SETUP_FILE),
+        ("Pre-race bike check list please", _SETUP_FILE),
+        ("What to wear at 40 degrees?", _CLOTHING_FILE_NAME),
+        ("How should I dress for a cold start?", _CLOTHING_FILE_NAME),
+        ("Do I need a base layer?", _CLOTHING_FILE_NAME),
+        ("Are knee warmers enough?", _CLOTHING_FILE_NAME),
+        ("Do I need shoe covers or booties?", _CLOTHING_FILE_NAME),
+        ("Which gloves and jacket for racing in the rain?", _CLOTHING_FILE_NAME),
+    ],
+)
+def test_route_library_files_bike_gear_keywords_reach_file(message: str, expected: str) -> None:
+    assert expected in route_library_files(message, athlete_sports=["bike"])
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["What tire pressure should I run?", "How do I bed in brake pads?", "What to wear today?"],
+)
+def test_route_library_files_bike_gear_files_excluded_for_swim_only(message: str) -> None:
+    for sports in (["swim_ow"], None):
+        files = route_library_files(message, athlete_sports=sports)
+        for name in (_TIRE_FILE, _SETUP_FILE, _CLOTHING_FILE_NAME):
+            assert name not in files, (message, sports)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "I feel a lot of pressure before the race",
+        "Is my blood pressure a concern with training?",
+        "Under pressure in the last lap",
+        "I have layers of fatigue",
+        "My tire wear is high",
+        "I spoke to my coach about the plan",
+        "Please address the new plan",
+        "The collapsing pace at the end bothered me",
+        "He retires from racing next year",
+        "I will wear my watch on the long swim",
+    ],
+)
+def test_route_library_files_bike_gear_keywords_do_not_false_positive(message: str) -> None:
+    files = route_library_files(message, athlete_sports=["bike"])
+    for name in (_TIRE_FILE, _SETUP_FILE, _CLOTHING_FILE_NAME):
+        assert name not in files, (message, name)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Tires for tomorrow?",
+        "PSI for mud?",
+        "How many psi",
+        "What about my tires?",
+        "Tires, or tyres?",
+        "Is 28psi ok? (tires)",
+        "tyres.",
+    ],
+)
+def test_route_library_files_word_boundary_keywords_at_edges(message: str) -> None:
+    assert _TIRE_FILE in route_library_files(message, athlete_sports=["bike"])
+
+
+def test_bike_gear_files_are_bike_sport_scoped() -> None:
+    import app.context as context_module
+
+    for name in (_TIRE_FILE, _SETUP_FILE, _CLOTHING_FILE_NAME):
+        assert context_module._LIBRARY_FILE_SPORT_SCOPE[name] == frozenset({"bike"})

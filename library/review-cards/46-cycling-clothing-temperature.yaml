@@ -1,0 +1,38 @@
+schema_version: 1
+file: 46-cycling-clothing-temperature.md
+added: '2026-10-30'
+cards:
+- section: 1-what-peer-reviewed-work-supports-unreviewed
+  heading: 1. What peer-reviewed work supports (UNREVIEWED)
+  summary: Performance falls in both cold and heat; cold with inadequate clothing hurts endurance, and heat needs acclimatisation.
+    No study tests cycling clothing choices; wind-chill figures are computed, not cycling data.
+  recommendation: State that clothing evidence is thin and treat computed wind chill as a guide for exposed skin only.
+  content_hash: e2fb33cf7b6a540da827183c6ee5a489b24ed8891d4d819a4c68a4cd79f87f8e
+- section: 2-feel-cool-at-the-start-unreviewed
+  heading: 2. "Feel cool at the start" (UNREVIEWED)
+  summary: '''Feel cool at the start'' is practitioner-only; no study tests it, and excess chilling also harms performance.'
+  recommendation: Use it only for hard efforts up to about an hour, never before long descents or overnight starts.
+  content_hash: 524fd6b5af4b29dce23b3d2c10d39230c01821678efd16b641a3943ed633a2f9
+- section: 3-cx-warm-up-kit-versus-race-kit
+  heading: '3. CX: warm-up kit versus race kit'
+  summary: 'CX advice is practitioner-level: warm up warm, strip near the start, finish in dry kit, consider bare legs in
+    wet.'
+  recommendation: Suggest warm-up layers removed at the line and a dry change after, labelled as practitioner advice.
+  content_hash: 4da6b4e7ab806c96491a5b652cfc08a6cdf96e165a581f8cbb0596ff68f5c32b
+- section: 4-published-chart-practitioner-not-validated
+  heading: 4. Published chart (practitioner, not validated)
+  summary: The Roadman chart gives kit by temperature in F and C. It is a practitioner first guess, not validated, and ignores
+    wind, wet, intensity and tolerance.
+  recommendation: Offer the chart as a starting point only and name its limits.
+  content_hash: 5e2ad8be76556e12f748facba8b9b7557d4004dc84563531e63930f7cdeba271
+- section: 5-extremities-and-personal-log
+  heading: 5. Extremities and personal log
+  summary: Hands, feet, ears and head cool first. Individual variation is large, so the athlete's own record of what worked
+    beats any chart.
+  recommendation: Ask the athlete to log kit and felt temperature and rely on that record over any chart.
+  content_hash: 2a7d0bac88ba9bd3ebf8169182d8df5db9201e7366906628a8bb904296d6c8cb
+- section: 6-device-temperature
+  heading: 6. Device temperature
+  summary: Head units read high in sun, in hand or while charging; wrist watches read high is coach judgment only.
+  recommendation: Discount sunny device readings and cross-check against a shaded reference.
+  content_hash: 22903f60f1f01bd96dbc05dab4516405776e4fd0151c91006e2fc25db0e26e55

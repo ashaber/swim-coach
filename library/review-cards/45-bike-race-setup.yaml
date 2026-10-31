@@ -1,0 +1,56 @@
+schema_version: 1
+file: 45-bike-race-setup.md
+added: '2026-10-30'
+cards:
+- section: 1-disc-brake-bed-in-unreviewed
+  heading: 1. Disc brake bed-in (UNREVIEWED)
+  summary: Brake makers disagree on bed-in details; all guidance is manufacturer or practitioner. Do bed-in days before a
+    race.
+  recommendation: Follow the brake maker's own sequence and bed in well before race day.
+  content_hash: f6a0d2419977dbc8892ae82bbd7fdca7943b94969e331af8e60726e25f8b4565
+- section: 2-pads-contamination-rub-unreviewed
+  heading: 2. Pads, contamination, rub (UNREVIEWED)
+  summary: Pad advice favours sintered or metallic for mud but rests on commercial sources. Oil contamination ruins pads;
+    rub has a few common causes.
+  recommendation: Fit fresh pads for mud, keep lube away from rotors, and check wheel seating first on rub.
+  content_hash: 4b345bb5af6ced3dc81db712ea0cb7a27a35cdc7171fb7cca0095d661ff68ff4
+- section: 3-wheels-and-spokes-unreviewed
+  heading: 3. Wheels and spokes (UNREVIEWED)
+  summary: Spoke tension evenness is best checked with a meter; truing guideline is 0.5 mm lateral, 1 mm radial. No verified
+    tension targets.
+  recommendation: Get tension checked before the season or a big event and do not true wheels the night before.
+  content_hash: 354470d31f93b9ac2c9d3e872885f33ddb0e92d80b85450df34500c1b52a322e
+- section: 4-tubeless-sealant-unreviewed
+  heading: 4. Tubeless sealant (UNREVIEWED)
+  summary: 'Sealant guidance is practitioner-level: check at least every six months and after dry spells. A new tubeless tire
+    may take days to seal.'
+  recommendation: Check and top up sealant one to two weeks out and carry plugs and a tube.
+  content_hash: fd8bb2eeea1bb59425c7398dc38d382079e85fb0e254a323bfc6bbe62eec49bb
+- section: 5-drivetrain-lube-unreviewed
+  heading: 5. Drivetrain lube (UNREVIEWED)
+  summary: A magazine lab test found a good wax saves about 5.5 W at 370 W, dry only; no mud data, and less corrosion protection.
+  recommendation: Do not promise watts from wax; choose wet-weather lube for mud and re-lube after washing.
+  content_hash: c86122a8a07f4bd9190b181320f637cf778a428e65de812f285b2f6137706346
+- section: 6-torque-unreviewed
+  heading: 6. Torque (UNREVIEWED)
+  summary: Use the torque printed on the part, a torque wrench on carbon, and recheck key bolts before big events. Only caliper
+    bolts have a sourced figure.
+  recommendation: Torque to printed values and recheck critical bolts before key events.
+  content_hash: b13c040890f989e96684ca5422160352373fed1b9693ae8e2a989c3556c26b00
+- section: 7-cx-pit-and-kit-specifics-unreviewed
+  heading: 7. CX pit and kit specifics (UNREVIEWED)
+  summary: Pit-bike and wheel-swap advice is almost entirely coach judgment beyond one magazine note; match both bikes and
+    practise the swap.
+  recommendation: Label pit-bike setup as judgment and have the athlete rehearse swaps.
+  content_hash: 88f6e1d4c72283f4a1b4950d1f56aa2c6d508f7f26dea05dbcabb41301d9ae44
+- section: 8-pre-race-checklist-and-long-events-coach-judgment-partly-from-a-singletracks-24-h-guide
+  heading: 8. Pre-race checklist and long events (`Coach judgment:`, partly from a Singletracks 24 h guide)
+  summary: 'Checklist: pads, sealant, chain, wheels, bolts two weeks out; only pressure the night before; change nothing else.
+    Long events add spares, lights and re-lube plans.'
+  recommendation: Use the checklist and refuse late changes to contact points, tires, pads or gearing.
+  content_hash: a1d1bb2141ac76382b7893a39a0220cb9674c5543407942aedc30182dab65f48
+- section: 9-contact-points-and-fit-out-of-scope
+  heading: 9. Contact points and fit (out of scope)
+  summary: A full bike fit is out of scope; knee-pain evidence is limited and retrospective.
+  recommendation: Refer fit questions to a qualified fitter and treat new pain as stop-and-assess.
+  content_hash: 0a725684e12bb134695a9484d5825042ca392479880e0a6e7252f9acb20da42f
