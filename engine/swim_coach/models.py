@@ -2559,6 +2559,12 @@ class Workout(BaseModel):
     # these keys) keeps validating unchanged -- no schema_version bump.
     avg_hr: int | None = None
     max_hr: int | None = None
+    # Device temperature in degC (FIT session avg/min/max_temperature, else record values). Indoor
+    # sessions store room temperature too -- `temperature.is_indoor_detail` marks them so weather
+    # lookups skip them. Additive/optional, no schema_version bump.
+    avg_temp_c: float | None = None
+    min_temp_c: float | None = None
+    max_temp_c: float | None = None
     laps: list[WorkoutLap] = Field(default_factory=list)
     lengths: list[WorkoutLength] = Field(default_factory=list)
     pauses: list[WorkoutPause] = Field(default_factory=list)

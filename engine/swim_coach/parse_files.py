@@ -76,6 +76,9 @@ class WorkoutDraft(BaseModel):
     # filled in only once the CLI has actually written the sidecar file.
     avg_hr: int | None = None
     max_hr: int | None = None
+    avg_temp_c: float | None = None
+    min_temp_c: float | None = None
+    max_temp_c: float | None = None
     laps: list[WorkoutLap] = Field(default_factory=list)
     lengths: list[WorkoutLength] = Field(default_factory=list)
     pauses: list[WorkoutPause] = Field(default_factory=list)
@@ -125,6 +128,9 @@ class WorkoutDraft(BaseModel):
             notes=self.notes,
             avg_hr=self.avg_hr,
             max_hr=self.max_hr,
+            avg_temp_c=self.avg_temp_c,
+            min_temp_c=self.min_temp_c,
+            max_temp_c=self.max_temp_c,
             laps=self.laps,
             lengths=self.lengths,
             pauses=self.pauses,
@@ -1124,6 +1130,20 @@ def _pool_geometry(sport: Sport, length: object, unit: object) -> tuple[float | 
     return float(length), "yd" if statute else "m"
 
 
+def _resolve_temps(session_temps: dict[str, object | None], record_temps: list[float]) -> dict[str, float | None]:
+    """avg/min/max degC from the FIT session message, each falling back to the record values."""
+    fallback = {
+        "avg": sum(record_temps) / len(record_temps) if record_temps else None,
+        "min": min(record_temps) if record_temps else None,
+        "max": max(record_temps) if record_temps else None,
+    }
+    out: dict[str, float | None] = {}
+    for k in ("avg", "min", "max"):
+        v = session_temps.get(k)
+        out[f"{k}_temp_c"] = float(v) if isinstance(v, (int, float)) else fallback[k]
+    return out
+
+
 def parse_fit(path: str | Path) -> WorkoutDraft:
     """Parse a Garmin .fit file's session + lap + length + record + event
     data into a WorkoutDraft.
@@ -1153,6 +1173,8 @@ def parse_fit(path: str | Path) -> WorkoutDraft:
     session_start_time: object | None = None
     session_avg_hr: int | None = None
     session_max_hr: int | None = None
+    session_temps: dict[str, object | None] = {}
+    record_temps: list[float] = []
     session_dynamics: dict = {}
     session_pool_length: object | None = None
     session_pool_unit: object | None = None
@@ -1179,6 +1201,9 @@ def parse_fit(path: str | Path) -> WorkoutDraft:
                 session_start_time = _fit_value(frame, "start_time")
                 session_avg_hr = _fit_value(frame, "avg_heart_rate")
                 session_max_hr = _fit_value(frame, "max_heart_rate")
+                session_temps = {
+                    k: _fit_value(frame, f"{k}_temperature") for k in ("avg", "min", "max")
+                }
                 session_pool_length = _fit_value(frame, "pool_length")
                 session_pool_unit = _fit_value(frame, "pool_length_unit")
                 session_dynamics = {
@@ -1235,6 +1260,9 @@ def parse_fit(path: str | Path) -> WorkoutDraft:
                     }
                 )
             elif frame.name == "record":
+                rec_temp = _fit_value(frame, "temperature")
+                if isinstance(rec_temp, (int, float)):
+                    record_temps.append(float(rec_temp))
                 records_raw.append(
                     {
                         "timestamp": _fit_value(frame, "timestamp"),
@@ -1356,6 +1384,7 @@ def parse_fit(path: str | Path) -> WorkoutDraft:
         warnings=warnings,
         avg_hr=session_avg_hr,
         max_hr=session_max_hr,
+        **_resolve_temps(session_temps, record_temps),
         laps=laps,
         lengths=lengths,
         pauses=pauses,

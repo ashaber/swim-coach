@@ -303,6 +303,7 @@ from swim_coach.session_lookup import (
     resolve_in_store,
 )
 from swim_coach.store import StoreInterface
+from swim_coach.temperature import device_temp_view
 from swim_coach.taper_search import (
     MIN_TAPER_RUNWAY_DAYS,
     TaperCandidate,
@@ -4464,6 +4465,7 @@ def _summarize_workout(w: Workout, *, athlete: Athlete, hr_max: float | None, we
         "notes": w.notes,
         "avg_hr": w.avg_hr,
         "max_hr": w.max_hr,
+        "temperature": device_temp_view(w.avg_temp_c, w.min_temp_c, w.max_temp_c, w.sport_detail),
         "analytics": analytics_for_coach(w.analytics, sport=w.sport, section_notes=w.section_notes),
         "lap_count": len(w.laps),
         "length_count": len(w.lengths),
