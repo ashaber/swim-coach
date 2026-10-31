@@ -1170,6 +1170,84 @@ _SKATE_SKI_KEYWORD_ROUTES: dict[str, set[str]] = {
 _KEYWORD_ROUTES.update(_SKATE_SKI_KEYWORD_ROUTES)
 _LIBRARY_FILES_IN_PRIORITY_ORDER.append("43-skate-ski-cross-training.md")
 
+# --- 44/45/46: tire pressure, bike race setup, cycling clothing routing -----
+# Mirrors INDEX.md's three bike routing rows. All three files are bike-scoped
+# below. Keywords are whole phrases: a bare "pressure" (race or blood
+# pressure), "layers", "wear" (tire wear), "spoke" ("spoke to my coach"),
+# "dress" ("address") or "psi" ("collapsing") would match unrelated text, so
+# those appear only inside longer phrases or with a leading space.
+_TIRE_PRESSURE_FILE = "44-tire-pressure.md"
+_BIKE_SETUP_FILE = "45-bike-race-setup.md"
+_CLOTHING_FILE = "46-cycling-clothing-temperature.md"
+_BIKE_GEAR_KEYWORD_ROUTES: dict[str, set[str]] = {
+    **{
+        keyword: {_TIRE_PRESSURE_FILE}
+        for keyword in (
+            "tire pressure",
+            "tyre pressure",
+            " psi",
+            "tubeless",
+            "sealant",
+            "burp",
+            "rim strike",
+            "hookless",
+            " tires",
+            " tyres",
+        )
+    },
+    **{
+        keyword: {_BIKE_SETUP_FILE}
+        for keyword in (
+            "brake pad",
+            "rotor",
+            "bedding pads",
+            "bed-in",
+            "truing",
+            "true my wheel",
+            "true the wheel",
+            "spoke tension",
+            "spokes",
+            "chain lube",
+            "lube my chain",
+            "lube the chain",
+            "chain wax",
+            "waxed chain",
+            "wax my chain",
+            "torque wrench",
+            "torque spec",
+            "bolt torque",
+            "pit bike",
+            "pre-race bike",
+            "bike check",
+        )
+    },
+    **{
+        keyword: {_CLOTHING_FILE}
+        for keyword in (
+            "what to wear",
+            "what should i wear",
+            "what do i wear",
+            "how to dress",
+            "how should i dress",
+            "how do i dress",
+            "clothing",
+            "base layer",
+            "baselayer",
+            "gloves",
+            "jacket",
+            "gilet",
+            "knee warmer",
+            "arm warmer",
+            "leg warmer",
+            "shoe cover",
+            "bootie",
+            "overshoes",
+        )
+    },
+}
+_KEYWORD_ROUTES.update(_BIKE_GEAR_KEYWORD_ROUTES)
+_LIBRARY_FILES_IN_PRIORITY_ORDER.extend([_TIRE_PRESSURE_FILE, _BIKE_SETUP_FILE, _CLOTHING_FILE])
+
 # --- sport-scope filtering (Athlete.sports <-> library file sport scope) ---
 # IDEA 008's hard requirement, made structural (adversarial critique
 # objection 3: INDEX.md's own prose note alone had no code/test/model-field
@@ -1207,6 +1285,9 @@ _LIBRARY_FILE_SPORT_SCOPE: dict[str, frozenset[str]] = {
     "40-cycling-start-technique-and-drills.md": frozenset({"bike"}),
     "41-free-ride-analysis.md": frozenset({"bike"}),
     "42-ultra-mtb-endurance.md": frozenset({"bike"}),
+    "44-tire-pressure.md": frozenset({"bike"}),
+    "45-bike-race-setup.md": frozenset({"bike"}),
+    "46-cycling-clothing-temperature.md": frozenset({"bike"}),
 }
 
 
