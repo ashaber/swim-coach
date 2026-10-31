@@ -60,6 +60,17 @@ def test_indoor_session_temperature_is_ignored(athletes_dir) -> None:
     assert e.temp_c_low is None and e.temp_source is None
 
 
+def test_non_ride_session_with_a_temperature_is_ignored(athletes_dir) -> None:
+    store, h = _h(athletes_dir)
+    aid = store.load_athlete("renee").id
+    store.save_workout("renee", Workout(  # real row shape: Yoga, trainer null, 30C
+        id=uuid.uuid4(), athlete_id=aid, date=DAY, sport="recovery", source="fit", distance_m=0, duration_min=30.0,
+        sport_detail="training/yoga", min_temp_c=30.0, max_temp_c=30.0, avg_temp_c=30.0))
+    h["save_setup_note"]({"kind": "clothing", "text": "jersey", "date": DAY.isoformat()})
+    e = store.load_athlete("renee").setup_log[0]
+    assert e.temp_c_low is None and e.temp_source is None
+
+
 def test_nothing_available_saves_null_temperature_without_error(athletes_dir) -> None:
     store, h = _h(athletes_dir)
     res = h["save_setup_note"]({"kind": "tires", "text": "ran 24 psi front, grippy", "pressure_front_psi": 24,
