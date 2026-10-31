@@ -147,6 +147,9 @@ def _reanalyze_workout(
             notes=existing.notes,  # never knowable from the file -- preserved
             avg_hr=draft.avg_hr,
             max_hr=draft.max_hr,
+            avg_temp_c=draft.avg_temp_c,
+            min_temp_c=draft.min_temp_c,
+            max_temp_c=draft.max_temp_c,
             laps=draft.laps,
             lengths=draft.lengths,
             pauses=draft.pauses,

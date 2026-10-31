@@ -84,6 +84,33 @@ class AthleteNote(BaseModel):
     active: bool = True
 
 
+SetupKind = Literal["clothing", "tires", "bike_setup"]
+SetupOutcome = Literal["worked", "too_cold", "too_hot", "didnt_work", "unknown"]
+
+
+class SetupLogEntry(BaseModel):
+    """What the athlete rode/wore and how it went: tires, pressure, conditions, clothing at a
+    temperature. `text` is his own words; everything else is optional and only recorded when he
+    said it or the device knew it (never asked for). Temperatures are degC; `temp_source` says
+    whether they came from the device (workout min/max, outdoor sessions only) or the athlete.
+    Never deleted -- `Athlete.setup_log` only grows, and is read on demand (`get_setup_log`),
+    never serialized into the per-request context."""
+
+    id: UUID
+    date: date
+    kind: SetupKind
+    text: str
+    sport: str | None = None
+    workout_id: UUID | None = None
+    pressure_front_psi: float | None = None
+    pressure_rear_psi: float | None = None
+    conditions: str | None = None
+    outcome: SetupOutcome = "unknown"
+    temp_c_low: float | None = None
+    temp_c_high: float | None = None
+    temp_source: Literal["device", "athlete"] | None = None
+
+
 class RaceDebrief(BaseModel):
     """A structured record of a post-race (or post-key-session) interview -- what the coach and
     athlete learned, kept as durable history the way `AthleteNote` keeps preferences (never
@@ -276,6 +303,8 @@ class Athlete(BaseModel):
     # Post-race/key-session interview history (see RaceDebrief). Same "stored on the athlete,
     # never deleted, no migration" shape as `notes` -- additive/optional.
     race_debriefs: list[RaceDebrief] = Field(default_factory=list)
+    # Durable tires/clothing/setup outcomes; read on demand via `get_setup_log`, excluded from context.
+    setup_log: list[SetupLogEntry] = Field(default_factory=list)
     # Per-sport weekly training-day PATTERN -- the bike/strength/skills
     # counterpart to `pool_schedule` above (which only ever covered pool
     # days). Maps a session-kind key ("bike", "strength", "skills" -- free
@@ -2559,6 +2588,12 @@ class Workout(BaseModel):
     # these keys) keeps validating unchanged -- no schema_version bump.
     avg_hr: int | None = None
     max_hr: int | None = None
+    # Device temperature in degC (FIT session avg/min/max_temperature, else record values). Indoor
+    # sessions store room temperature too -- `temperature.is_indoor_detail` marks them so weather
+    # lookups skip them. Additive/optional, no schema_version bump.
+    avg_temp_c: float | None = None
+    min_temp_c: float | None = None
+    max_temp_c: float | None = None
     laps: list[WorkoutLap] = Field(default_factory=list)
     lengths: list[WorkoutLength] = Field(default_factory=list)
     pauses: list[WorkoutPause] = Field(default_factory=list)
