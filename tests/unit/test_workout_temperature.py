@@ -10,7 +10,7 @@ import pytest
 
 from swim_coach.models import Workout
 from swim_coach.parse_files import parse_fit
-from swim_coach.temperature import c_to_f, f_to_c, is_indoor_detail
+from swim_coach.temperature import c_to_f, f_to_c, is_indoor_detail, is_outdoor_ride
 
 FIT_DIR = Path(__file__).parent / "fixtures" / "fit"
 
@@ -72,3 +72,24 @@ def test_device_temp_view_both_units_and_indoor_flag() -> None:
     v = device_temp_view(21, 10, 31, "cycling/mountain")
     assert v == {"avg_c": 21.0, "avg_f": 69.8, "min_c": 10.0, "min_f": 50.0, "max_c": 31.0, "max_f": 87.8}
     assert device_temp_view(21, 20, 22, "cycling/indoor_cycling")["indoor"] is True
+
+
+@pytest.mark.parametrize(
+    ("sport", "detail", "outdoor"),
+    [
+        ("cross_train", "cycling/mountain", True),
+        ("bike", "cycling/road", True),
+        ("bike", "cycling/gravel_cycling", True),
+        ("cross_train", "cycling", True),
+        ("bike", None, True),
+        ("cross_train", "cycling/indoor_cycling", False),
+        ("cross_train", "cycling/virtual_activity", False),
+        ("recovery", "training/yoga", False),  # real row: Yoga, trainer null, 30C
+        ("strength", "training/strength_training", False),  # real row: WeightTraining, 28.7C
+        ("cross_train", "kayaking", False),
+        ("swim_ow", None, False),
+        ("cross_train", None, False),
+    ],
+)
+def test_is_outdoor_ride_counts_only_outdoor_bike_sessions(sport: str, detail: str | None, outdoor: bool) -> None:
+    assert is_outdoor_ride(sport, detail) is outdoor

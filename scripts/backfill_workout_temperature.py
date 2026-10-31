@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Backfill device temperature (avg/min/max degC) onto already-synced workouts.
 
-Re-downloads each intervals.icu-synced workout's ORIGINAL .fit (`IntervalsClient.download_fit`,
-never the lossy re-encode), parses it with `parse_fit`, and sets ONLY `avg_temp_c`/`min_temp_c`/
+Reads the device temperatures (`average_temp`/`min_temp`/`max_temp`, degC) from one intervals.icu
+activity-list call per athlete (`IntervalsClient.list_activities`; no FIT downloads) and sets ONLY `avg_temp_c`/`min_temp_c`/
 `max_temp_c` on the existing row. Nothing else is touched, nothing is deleted. Rows that already
 carry a temperature, and rows with no `intervals:` external_id (manual/coach-text logs have no
-file to re-download), are skipped.
+activity row to match), are skipped.
 
 DRY-RUN BY DEFAULT: without `--apply` it reports what would change and writes nothing.
 
@@ -23,8 +23,7 @@ import argparse
 import json
 import os
 import sys
-import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -33,7 +32,6 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from swim_coach.models import Workout  # noqa: E402
-from swim_coach.parse_files import PARSERS_BY_EXTENSION  # noqa: E402
 from swim_coach.store import FileStore, StoreInterface  # noqa: E402
 
 from app.sync import IntervalsClient, SyncConfigError, load_sync_config  # noqa: E402
@@ -49,35 +47,54 @@ def _needs_temperature(w: Workout) -> bool:
     )
 
 
-def _temps_from_fit(client: IntervalsClient, activity_id: str) -> dict[str, float | None]:
-    with tempfile.TemporaryDirectory(prefix="swimcoach-temp-") as tmp:
-        path = Path(tmp) / f"{activity_id}.fit"
-        path.write_bytes(client.download_fit(activity_id))
-        draft = PARSERS_BY_EXTENSION[".fit"](path)
-    return {"avg_temp_c": draft.avg_temp_c, "min_temp_c": draft.min_temp_c, "max_temp_c": draft.max_temp_c}
+_TEMP_KEYS = {"avg_temp_c": "average_temp", "min_temp_c": "min_temp", "max_temp_c": "max_temp"}
+
+
+def _temps_from_activity(row: dict) -> dict[str, float | None]:
+    """Device temperatures (degC) from an intervals.icu activity-list row. Only the three device
+    fields are read; the paid-tier weather/feels-like/wind fields are deliberately ignored."""
+    out: dict[str, float | None] = {}
+    for field, key in _TEMP_KEYS.items():
+        v = row.get(key)
+        out[field] = float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    return out
 
 
 def backfill(store: StoreInterface, slug: str, client: IntervalsClient, *, apply: bool) -> dict[str, int]:
-    """One athlete. Returns tallies; a single bad workout is logged and counted, never fatal."""
-    tally = {"considered": 0, "updated": 0, "no_temperature_in_file": 0, "failed": 0}
-    for w in store.list_workouts(slug):
-        if not _needs_temperature(w):
+    """One athlete, one activity-list call covering all their candidate dates. A workout matches its
+    row by `external_id` ("intervals:<activity id>"). Returns tallies; one bad row never aborts."""
+    tally = {"considered": 0, "updated": 0, "no_temperature_in_file": 0, "not_found": 0, "failed": 0}
+    todo = [w for w in store.list_workouts(slug) if _needs_temperature(w)]
+    if not todo:
+        return tally
+    tally["considered"] = len(todo)
+    oldest = min(w.date for w in todo) - timedelta(days=1)  # a workout's date can differ by a day from UTC
+    newest = max(w.date for w in todo) + timedelta(days=1)
+    try:
+        rows = {str(r["id"]): r for r in client.list_activities(oldest=oldest, newest=newest) if "id" in r}
+    except Exception as exc:  # noqa: BLE001 - nothing to match against; report and stop this athlete
+        _log("error", "activity list failed", athlete=slug, error=str(exc))
+        tally["failed"] = len(todo)
+        return tally
+    for w in todo:
+        row = rows.get(w.external_id.removeprefix("intervals:"))
+        if row is None:
+            tally["not_found"] += 1
             continue
-        tally["considered"] += 1
-        activity_id = w.external_id.removeprefix("intervals:")
+        temps = _temps_from_activity(row)
+        if all(v is None for v in temps.values()):
+            tally["no_temperature_in_file"] += 1
+            continue
         try:
-            temps = _temps_from_fit(client, activity_id)
-            if all(v is None for v in temps.values()):
-                tally["no_temperature_in_file"] += 1
-                continue
             if apply:
                 store.save_workout(slug, w.model_copy(update=temps))
-            tally["updated"] += 1
-            _log("info", "backfill:written" if apply else "backfill:dry-run",
-                 athlete=slug, workout_id=str(w.id), date=str(w.date), **temps)
         except Exception as exc:  # noqa: BLE001 - one bad workout must not abort the run
             _log("error", "backfill failed", athlete=slug, workout_id=str(w.id), error=str(exc))
             tally["failed"] += 1
+            continue
+        tally["updated"] += 1
+        _log("info", "backfill:written" if apply else "backfill:dry-run",
+             athlete=slug, workout_id=str(w.id), date=str(w.date), **temps)
     return tally
 
 

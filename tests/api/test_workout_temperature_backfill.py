@@ -14,7 +14,6 @@ from swim_coach.store import FileStore
 from app.tools import build_tool_handlers
 
 REPO = Path(__file__).resolve().parents[2]
-FIT = REPO / "tests" / "unit" / "fixtures" / "fit" / "real_mtb_race.fit"
 
 _SPEC = importlib.util.spec_from_file_location("backfill_workout_temperature", REPO / "scripts" / "backfill_workout_temperature.py")
 script = importlib.util.module_from_spec(_SPEC)
@@ -22,12 +21,22 @@ _SPEC.loader.exec_module(script)
 
 
 class FakeClient:
-    def __init__(self) -> None:
-        self.downloads: list[str] = []
+    """Stands in for IntervalsClient: only list_activities exists, so a FIT download would raise."""
 
-    def download_fit(self, activity_id: str) -> bytes:
-        self.downloads.append(activity_id)
-        return FIT.read_bytes()
+    def __init__(self, rows: list[dict]) -> None:
+        self.rows = rows
+        self.calls: list[tuple[date, date]] = []
+
+    def list_activities(self, *, oldest: date, newest: date) -> list[dict]:
+        self.calls.append((oldest, newest))
+        return self.rows
+
+
+ROWS = [
+    {"id": "i1", "average_temp": 21, "min_temp": 10, "max_temp": 31, "trainer": None},
+    {"id": "i3", "average_temp": None, "min_temp": None, "max_temp": None},
+    {"id": "i2", "average_temp": 9, "min_temp": 8, "max_temp": 10},
+]
 
 
 def _w(athlete_id: uuid.UUID, external_id: str | None, **kw) -> Workout:
@@ -42,23 +51,24 @@ def seeded(athletes_dir: Path):
     store = FileStore(base_dir=athletes_dir)
     aid = store.load_athlete("renee").id
     synced, manual, done = _w(aid, "intervals:i1"), _w(aid, None), _w(aid, "intervals:i2", avg_temp_c=5.0)
-    for w in (synced, manual, done):
+    no_temp = _w(aid, "intervals:i3")
+    for w in (synced, manual, done, no_temp):
         store.save_workout("renee", w)
     return store, synced, manual, done
 
 
 def test_dry_run_writes_nothing(seeded) -> None:
     store, synced, _, _ = seeded
-    client = FakeClient()
+    client = FakeClient(ROWS)
     tally = script.backfill(store, "renee", client, apply=False)
-    assert tally["updated"] == 1 and client.downloads == ["i1"]
+    assert tally["updated"] == 1 and tally["no_temperature_in_file"] == 1 and len(client.calls) == 1
     saved = {w.id: w for w in store.list_workouts("renee")}
     assert saved[synced.id].avg_temp_c is None
 
 
 def test_apply_sets_only_temperature_and_skips_others(seeded) -> None:
     store, synced, manual, done = seeded
-    script.backfill(store, "renee", FakeClient(), apply=True)
+    script.backfill(store, "renee", FakeClient(ROWS), apply=True)
     saved = {w.id: w for w in store.list_workouts("renee")}
     got = saved[synced.id]
     assert (got.avg_temp_c, got.min_temp_c, got.max_temp_c) == (21, 10, 31)

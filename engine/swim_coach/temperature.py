@@ -41,3 +41,15 @@ def device_temp_view(
     if is_indoor_detail(sport_detail):
         out["indoor"] = True
     return out
+
+
+def is_outdoor_ride(sport: str, sport_detail: str | None) -> bool:
+    """True only for an outdoor bike session -- the one place a device temperature is weather.
+    A null/unknown indoor flag is not evidence of outdoors (intervals.icu reports trainer=None for
+    a 30C yoga session and trainer=True for a 28.7C body-worn strength session), so this requires
+    a positive bike signal (Sport "bike", or a FIT "cycling/..." detail) and no indoor sub_sport."""
+    if is_indoor_detail(sport_detail):
+        return False
+    if sport == "bike":
+        return True
+    return bool(sport_detail) and sport_detail.split("/", 1)[0].strip().lower() == "cycling"
