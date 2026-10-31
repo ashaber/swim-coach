@@ -1,0 +1,38 @@
+schema_version: 1
+file: 44-tire-pressure.md
+added: '2026-10-30'
+cards:
+- section: 1-what-research-does-and-does-not-show-unreviewed
+  heading: 1. What research does and does not show (UNREVIEWED)
+  summary: Few small cycling studies exist; surface and rider mass matter more than pressure, and low pressure trades away
+    momentum. The pressure-floor and tubeless watt figures are single-rider or single-test.
+  recommendation: Treat every pressure number as a first guess and say the evidence is thin.
+  content_hash: 433ae65e7ff615ffbf575ad23e6643396d201bde04a67f793672a9788a6e09af
+- section: 2-calculators-disagree-unreviewed
+  heading: 2. Calculators disagree (UNREVIEWED)
+  summary: Calculators disagree by 9-10 psi for one rider, and Silca's inputs are known only secondhand. Output is a hypothesis.
+  recommendation: Offer calculator values as hypotheses and defer to the athlete's own logged pressures.
+  content_hash: a8ebc5b4b897ad24036de75d94f793e9a70305597ac146305ff455cc7464d68c
+- section: 3-starting-ranges-label-the-source-every-time
+  heading: 3. Starting ranges (label the source every time)
+  summary: CX 30-35 psi and mud 15-20 psi rest on one BikeRadar article; gravel figures are a manufacturer table. No verified
+    MTB range.
+  recommendation: Quote ranges with their single source named, and tell heavier riders to go higher.
+  content_hash: 3b6321f8c30ff1719cdc38f533e5b01922a2410b53745e018238f0a45a1d511f
+- section: 4-hookless-and-rim-limits
+  heading: 4. Hookless and rim limits
+  summary: Hookless rims have manufacturer maximums by tire width; they are ceilings, not targets.
+  recommendation: Never exceed the lower of the rim and tire printed maximum; widen the tire if capped.
+  content_hash: 127d100f39c8e7f03ce9fa817a2c3a250209fbe4dec081c6b3bca7aebadeaea3
+- section: 5-practical-factors-coach-judgment-unless-sourced
+  heading: 5. Practical factors (`Coach judgment:` unless sourced)
+  summary: Weight, surface and tubeless burping limit pressure; one gauge matters more than gauge accuracy. Roughly 1 psi
+    per 10 F is computed from the gas law, not a cycling study.
+  recommendation: Use one gauge, log pressures in its numbers, and recheck after warm-up in cold.
+  content_hash: 7874dec54f18aaa15ea8cb8a63ac571dabc980d16bcd760f900a720e40d4d559
+- section: 6-pre-ride-tuning-protocol-coach-judgment-consistent-with-bikeradar
+  heading: 6. Pre-ride tuning protocol (`Coach judgment:`, consistent with BikeRadar)
+  summary: Start from a table or the athlete's log, ride 2-3 laps, change 1-2 psi per step, settle at the lowest pressure
+    with no strikes or burps.
+  recommendation: Walk the athlete through the stepwise lap-based tuning and have them record what worked.
+  content_hash: c00337c4ecd18903cb3d37bc312c2f8f868a063dd5cd7f9702298f41a5f82990
