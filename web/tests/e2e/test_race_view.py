@@ -27,6 +27,9 @@ WORKOUT['analytics']['prior_race_curve'] = {
     'points': [{'duration_s': p['duration_s'], 'watts': round(p['watts'] * 0.9), 'n': 4}
                for p in WORKOUT['analytics']['power_curve'][:12]],
 }
+# The engine's race-window curve (warm-up excluded): shorter than the whole-file curve and a little lower
+WORKOUT['analytics']['race_power_curve'] = [
+    {**p, 'watts': round(p['watts'] * 0.95)} for p in WORKOUT['analytics']['power_curve'] if p['duration_s'] <= 600]
 PLAN = {'slug': 'renee', 'name': 'Renee', 'athlete': {'name': 'Renee'}, 'events': [], 'macro': {'blocks': []}, 'weeks': []}
 VIEWPORTS = [
     pytest.param({'width': 390, 'height': 844}, id='390x844'),
@@ -139,6 +142,8 @@ def test_power_curve_fold_compares_with_prior_races_and_drops_the_90_day_line(ra
     legend = curve.locator('.shape-legend').inner_text()
     assert 'This race' in legend and '42-day best' in legend and 'Avg of 4 prior CX races' in legend
     assert '90-day' not in curve.inner_text()
+    windowed = WORKOUT['analytics']['race_power_curve']
+    assert curve.locator('tbody tr').count() <= len(windowed)  # no duration longer than the race window
     curve.locator('details.curve-prior-dates > summary').click()
     assert '2026-10-17' in curve.locator('details.curve-prior-dates').inner_text()
     assert _no_horizontal_scroll(page)

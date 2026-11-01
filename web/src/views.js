@@ -34,7 +34,7 @@ import {
   LIBRARY_SORTS, DEFAULT_LIBRARY_SORT, sortLibraryFiles, fileAddedDate, isNewFile, formatAddedLabel,
 } from './librarySort.js';
 import { expandStructure, actualPoints, sessionForWorkout, shapeChartGeometry } from './shape.js';
-import { buildCourseSectors, buildRaceEfficiency, buildFreeRide, powerCurveView, buildMtbDynamics, buildRawAnalysis, buildPacingEffort, buildMasterLaps, showsMainLapsTable, effectiveKind, kindLabel, raceStartInfo, KIND_OPTIONS, buildSwimPace, buildSwimSets } from './analysis.js';
+import { buildCourseSectors, buildRaceEfficiency, buildFreeRide, powerCurveView, raceCurveOf, buildMtbDynamics, buildRawAnalysis, buildPacingEffort, buildMasterLaps, showsMainLapsTable, effectiveKind, kindLabel, raceStartInfo, KIND_OPTIONS, buildSwimPace, buildSwimSets } from './analysis.js';
 import { visibleThreadMessages, COACH_ONLY, COACH_ONLY_LABEL } from './threadVisibility.js';
 import { sportHasPlannedDistance, sportCanPushToGarmin, sportUsesPace } from './sports.js';
 import {
@@ -3377,7 +3377,7 @@ function renderRaceEfficiencySection(workout) {
  * race against the 42-day best and the average of prior same-discipline races instead (engine-computed). */
 function renderPowerCurveSection(workout, { raceView = false } = {}) {
   const analytics = workout?.analytics;
-  const curve = powerCurveView(analytics?.power_curve, raceView ? (analytics?.prior_race_curve ?? null) : undefined);
+  const curve = powerCurveView(raceView ? raceCurveOf(analytics) : analytics?.power_curve, raceView ? (analytics?.prior_race_curve ?? null) : undefined);
   if (!curve) return '';
   return `
     <section class="detail-section power-curve">
