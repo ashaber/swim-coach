@@ -2429,6 +2429,10 @@ class WorkoutAnalytics(BaseModel):
     # Mean-maximal power curve (`swim_coach.power_curve`) for any ride with a power
     # channel; `None` otherwise and on rows that predate it. Additive/optional.
     power_curve: list[PowerCurvePoint] | None = None
+    # The same curve over only the race window (race start to finish, the window `race_overview` uses), so a
+    # warm-up in the same file cannot enter "this race". Races with a detected/set start only; `power_curve`
+    # stays whole-file (lifetime / 42- and 90-day bests). Additive/optional.
+    race_power_curve: list[PowerCurvePoint] | None = None
     # Free-ride read (`swim_coach.free_ride`): bike rides with no prescription to score. Additive/optional.
     free_ride: FreeRideRead | None = None
     # Garmin MTB dynamics (grit / flow / jumps) with per-lap splits, and lap-over-lap course sectors.

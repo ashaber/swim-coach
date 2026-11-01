@@ -368,6 +368,7 @@ def shape_ride_view(out: dict, analytics: WorkoutAnalytics, section_notes: dict 
         dynamics["course_sectors"] = course_sectors_coach_view(out.pop("course_sectors"), section_notes)
     out.pop("mtb_dynamics", None)
     out.pop("course_sectors", None)
+    out.pop("race_power_curve", None)  # the race view's chart series, like prior_race_curve
     out.pop("prior_race_curve", None)  # a chart series for the PWA's race view; not worth the coach's tokens
     race_lines = race_view_lines(out.pop("race_overview", None), out.pop("race_start", None), out.pop("finish_sprint", None))
     efficiency = race_efficiency_coach_view(out.pop("race_efficiency")) if out.get("race_efficiency") else None
