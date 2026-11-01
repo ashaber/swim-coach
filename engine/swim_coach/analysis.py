@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import TYPE_CHECKING, Mapping, Protocol, Sequence
 
 from swim_coach.analytics import compute_analytics, merged_pause_s, true_moving_min
@@ -36,6 +36,7 @@ from swim_coach.course_sectors import build_course_sectors
 from swim_coach.free_ride import FREE_READ_KINDS, read_free_ride
 from swim_coach.mtb_dynamics import build_mtb_dynamics
 from swim_coach.race_efficiency import build_race_efficiency
+from swim_coach.race_curve_compare import prior_race_curve
 from swim_coach.race_view import pick_previous_race_start, build_finish_sprint, build_race_overview, build_race_start_trace, finish_s
 from swim_coach.swim_sets import (
     MIN_PLAUSIBLE_PACE_S_PER_100M,
@@ -81,6 +82,11 @@ class AnalysisContext:
     section_splits: Mapping[str, int] = field(default_factory=dict)
     # The athlete's previous race start of the same kind of race, for the side-by-side (`race_view`).
     previous_race_start: PreviousRaceStart | None = None
+    # Races only: the athlete's workouts of the last year (the prior-race average's candidates), the macro
+    # plan's first/last date, and the earliest logged workout date.
+    prior_races: Sequence[Workout] = field(default_factory=tuple)
+    plan_range: tuple[date, date] | None = None
+    history_start: date | None = None
 
 
 # Sport-agnostic fields every analyzer's coach view keeps.
@@ -349,6 +355,9 @@ class BikeAnalyzer(_CoachViewMixin):
             "race_efficiency": build_race_efficiency(laps, ctx.series) if course else None,
         }
         analytics = analytics.model_copy(update={k: v for k, v in found.items() if v is not None})
+        if ctx.kind == "race" and analytics.power_curve:
+            curve = prior_race_curve(workout, ctx.prior_races, ctx.plan_range, ctx.history_start)
+            analytics = analytics.model_copy(update={"prior_race_curve": curve})
         analytics = self._with_race_view(analytics, laps, ctx)
         return self._with_race_laps(analytics, laps, ctx)
 
@@ -519,16 +528,30 @@ def _neighbor_sessions(
 PREVIOUS_RACE_LOOKBACK_DAYS = 400  # Coach judgment: a race start is compared with the last race of the same kind within a season or so
 
 
-def _previous_race_start(store: "StoreInterface", slug: str, workout: Workout, kind: SessionKind) -> PreviousRaceStart | None:
-    """The previous same-kind race's start trace, for the side-by-side (races only; best-effort like every lookup)."""
+def _race_history(store: "StoreInterface", slug: str, workout: Workout, kind: SessionKind) -> list[Workout]:
+    """The athlete's workouts of the last ~year, for a race's comparisons (one lookup, shared by the
+    previous-race start and the prior-race average; best-effort like every lookup)."""
+    if kind != "race":
+        return []
+    try:
+        return store.list_workouts(slug, since=workout.date - timedelta(days=PREVIOUS_RACE_LOOKBACK_DAYS))
+    except Exception as exc:  # noqa: BLE001 - a race reads fine without comparisons
+        _warn("race history", slug, exc)
+        return []
+
+
+def _plan_range(store: "StoreInterface", slug: str, kind: SessionKind) -> tuple[date, date] | None:
+    """First and last date of the macro plan's blocks (races only)."""
     if kind != "race":
         return None
     try:
-        since = workout.date - timedelta(days=PREVIOUS_RACE_LOOKBACK_DAYS)
-        return pick_previous_race_start(store.list_workouts(slug, since=since), workout)
-    except Exception as exc:  # noqa: BLE001 - the start reads fine without a comparison
-        _warn("previous race start", slug, exc)
+        macro = store.load_macro(slug)
+    except Exception as exc:  # noqa: BLE001 - no plan reads as "no races on this plan"
+        _warn("macro plan", slug, exc)
         return None
+    if macro is None or not macro.blocks:
+        return None
+    return min(b.start_date for b in macro.blocks), max(b.end_date for b in macro.blocks)
 
 
 def build_analysis_context(
@@ -564,6 +587,12 @@ def build_analysis_context(
             _warn("prior_workouts", slug, exc)
     workout.kind = derive_workout_kind(workout, session, events)
     kind = workout.effective_kind or workout.kind
+    history = _race_history(store, slug, workout, kind)
+    try:
+        previous_race_start = pick_previous_race_start(history, workout) if history else None
+    except Exception as exc:  # noqa: BLE001 - the start reads fine without a comparison
+        _warn("previous race start", slug, exc)
+        previous_race_start = None
     return AnalysisContext(
         athlete=athlete,
         session=session,
@@ -574,6 +603,9 @@ def build_analysis_context(
         prior_workouts=prior,
         race_start_s=workout.race_start_s,
         section_splits=dict(workout.section_splits),
-        previous_race_start=_previous_race_start(store, slug, workout, kind),
+        previous_race_start=previous_race_start,
+        prior_races=tuple(history),
+        plan_range=_plan_range(store, slug, kind),
+        history_start=min((w.date for w in history), default=None),
         neighbors=_neighbor_sessions(store, slug, workout, session) if analyzer_for(workout.sport).needs_neighbors(kind) else (),
     )

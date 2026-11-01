@@ -2295,6 +2295,31 @@ class PreviousRaceStart(BaseModel):
     top_speed_kmh: float | None = None
 
 
+class PriorRaceCurvePoint(BaseModel):
+    """One duration of the prior-race average power curve; `n` races contributed."""
+
+    duration_s: int
+    watts: int
+    n: int
+
+
+class PriorRaceCurve(BaseModel):
+    """Mean power at each duration across the athlete's earlier same-discipline races
+    (`swim_coach.race_curve_compare`), for the race view's power curve. `basis` says where the races
+    came from: `plan` (on the current macro plan), `prior_year` (none on the plan) or `none`.
+    `points` is empty with `basis == "none"`, and `note` says why."""
+
+    basis: Literal["plan", "prior_year", "none"]
+    discipline: str | None = None
+    count: int = 0
+    single: bool = False
+    label: str
+    dates: list[date] = Field(default_factory=list)
+    points: list[PriorRaceCurvePoint] = Field(default_factory=list)
+    left_out: list[str] = Field(default_factory=list)
+    note: str | None = None
+
+
 class RaceStartTrace(BaseModel):
     """The first 40 s from the gun at 1 Hz (`swim_coach.race_view`); index i = seconds since the start."""
 
@@ -2416,6 +2441,8 @@ class WorkoutAnalytics(BaseModel):
     race_overview: RaceOverview | None = None
     race_start: RaceStartTrace | None = None
     finish_sprint: FinishSprint | None = None
+    # Average power curve of the athlete's earlier same-discipline races (race rides only). Additive/optional.
+    prior_race_curve: PriorRaceCurve | None = None
     # The one canonical lap set (device laps merged / trimmed to the race start / gap-filled by the
     # lap mark) that mtb_dynamics, course_sectors, race_efficiency, pacing and the race lap table all
     # read; the raw device laps stay on `Workout.laps`. Additive/optional.
