@@ -20,6 +20,13 @@ CORS_HEADERS = {
 FIXTURE = json.loads((Path(__file__).resolve().parents[1] / 'fixtures' / 'race_view_sunday.json').read_text())
 WORKOUT = FIXTURE['workout']
 SECTIONS = FIXTURE['sections']
+# The engine's prior-race average (swim_coach.race_curve_compare), as the API serves it
+WORKOUT['analytics']['prior_race_curve'] = {
+    'basis': 'plan', 'discipline': 'CX', 'count': 4, 'single': False, 'label': 'Avg of 4 prior CX races',
+    'dates': ['2026-10-03', '2026-10-10', '2026-10-17', '2026-10-18'], 'left_out': [], 'note': None,
+    'points': [{'duration_s': p['duration_s'], 'watts': round(p['watts'] * 0.9), 'n': 4}
+               for p in WORKOUT['analytics']['power_curve'][:12]],
+}
 PLAN = {'slug': 'renee', 'name': 'Renee', 'athlete': {'name': 'Renee'}, 'events': [], 'macro': {'blocks': []}, 'weeks': []}
 VIEWPORTS = [
     pytest.param({'width': 390, 'height': 844}, id='390x844'),
@@ -120,6 +127,21 @@ def test_cards_render_in_order_without_horizontal_scroll(race):
     assert 'Finish sprint' not in page.content()
     assert _no_horizontal_scroll(page)
     _shot(page, 'race-view')
+
+
+def test_power_curve_fold_compares_with_prior_races_and_drops_the_90_day_line(race):
+    page, _, _ = race
+    page.locator('details.rv-fold > summary', has_text='Power curve').click()
+    curve = page.locator('section.power-curve')
+    curve.wait_for()
+    assert curve.locator('svg.power-curve-chart polyline').count() == 3  # this race, 42-day best, prior average
+    assert curve.locator('polyline.curve-prior').get_attribute('stroke-dasharray')  # not colour alone
+    legend = curve.locator('.shape-legend').inner_text()
+    assert 'This race' in legend and '42-day best' in legend and 'Avg of 4 prior CX races' in legend
+    assert '90-day' not in curve.inner_text()
+    curve.locator('details.curve-prior-dates > summary').click()
+    assert '2026-10-17' in curve.locator('details.curve-prior-dates').inner_text()
+    assert _no_horizontal_scroll(page)
 
 
 def test_more_numbers_toggle(race):

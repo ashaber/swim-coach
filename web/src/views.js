@@ -3201,22 +3201,41 @@ function renderKindRow(workout, editable, kindEdit) {
     </div>`;
 }
 
-function renderPowerCurveSvg(g) {
+function renderPowerCurveSvg(g, priorLabel = '') {
   const yTicks = g.yTicks.map((t) => `
     <line x1="${g.plotLeft}" x2="${g.plotRight}" y1="${t.y.toFixed(1)}" y2="${t.y.toFixed(1)}" stroke="var(--line-soft)" stroke-width="0.5"/>
     <text x="${g.plotLeft - 4}" y="${(t.y + 3).toFixed(1)}" text-anchor="end" class="shape-tick">${esc(t.label)}</text>`).join('');
   const xTicks = g.xTicks.map((t) => `
     <text x="${t.x.toFixed(1)}" y="${g.height - 8}" text-anchor="middle" class="shape-tick">${esc(t.label)}</text>`).join('');
   return `
-      <svg class="shape-chart power-curve-chart" viewBox="0 0 ${g.width} ${g.height}" role="img" aria-label="Power curve: best average watts for each duration, this ride against the 90-day best" preserveAspectRatio="xMidYMid meet">
+      <svg class="shape-chart power-curve-chart" viewBox="0 0 ${g.width} ${g.height}" role="img" aria-label="Power curve: best average watts for each duration, ${g.race ? 'this race against the 42-day best and the average of prior races' : 'this ride against the 90-day best'}" preserveAspectRatio="xMidYMid meet">
         ${yTicks}${xTicks}
-        ${g.hasBest90 ? `<polyline points="${g.best90}" fill="none" stroke="var(--ink-soft)" stroke-width="1.5" stroke-dasharray="4 3"/>` : ''}
-        <polyline points="${g.ride}" fill="none" stroke="var(--accent-ink)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+        ${g.hasBest ? `<polyline class="curve-best" points="${g.best}" fill="none" stroke="var(--ink-soft)" stroke-width="1.5" stroke-dasharray="${g.race ? '1 4' : '4 3'}" stroke-linecap="${g.race ? 'round' : 'butt'}"/>` : ''}
+        ${g.hasPrior ? `<polyline class="curve-prior" points="${g.prior}" fill="none" stroke="var(--c-form)" stroke-width="2" stroke-dasharray="7 3"/>` : ''}
+        ${g.priorDot ? `<circle class="curve-prior" cx="${g.priorDot.x.toFixed(1)}" cy="${g.priorDot.y.toFixed(1)}" r="3.5" fill="var(--c-form)"/>` : ''}
+        <polyline class="curve-ride" points="${g.ride}" fill="none" stroke="var(--accent-ink)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
       </svg>
       <div class="shape-legend">
-        <span class="shape-legend-item"><i class="shape-swatch" style="background:var(--accent-ink)"></i>This ride</span>
-        ${g.hasBest90 ? '<span class="shape-legend-item"><i class="shape-swatch" style="background:var(--ink-soft)"></i>90-day best</span>' : ''}
+        ${curveKey('var(--accent-ink)', '', g.race ? 'This race' : 'This ride')}
+        ${g.hasBest ? curveKey('var(--ink-soft)', g.race ? '1 4' : '4 3', g.bestLabel) : ''}
+        ${g.hasPrior || g.priorDot ? curveKey('var(--c-form)', '7 3', priorLabel) : ''}
       </div>`;
+}
+
+/** A legend key drawn as a short line in the series' dash pattern, so the series do not rely on colour alone. */
+function curveKey(colour, dash, label) {
+  return `<span class="shape-legend-item"><svg class="curve-key" width="26" height="8" aria-hidden="true"><line x1="2" y1="4" x2="24" y2="4" stroke="${colour}" stroke-width="2" stroke-linecap="round"${dash ? ` stroke-dasharray="${dash}"` : ''}/></svg>${esc(label)}</span>`;
+}
+
+/** Who is in the prior-race average (a tap-to-open date list), the races left out, and the note
+ * when there is no average. */
+function renderPriorRaceInfo(prior) {
+  if (!prior) return '';
+  const dates = prior.dates.length
+    ? `<details class="curve-prior-dates"><summary>Races in the average (${prior.dates.length})</summary><p class="sub">${prior.dates.map(esc).join(', ')}</p></details>`
+    : '';
+  const left = prior.leftOut.length ? `<p class="sub">Left out: ${prior.leftOut.map(esc).join('; ')}.</p>` : '';
+  return `${prior.note ? `<p class="sub curve-prior-note">${esc(prior.note)}</p>` : ''}${dates}${left}`;
 }
 
 /** "Free ride" section: where the pedalling time went (stacked zone bar), the notable efforts,
@@ -3350,15 +3369,18 @@ function renderRaceEfficiencySection(workout) {
     </section>`;
 }
 
-/** Mean-maximal power curve: this ride against the 90-day best. Main analysis view. */
-function renderPowerCurveSection(workout) {
-  const curve = powerCurveView(workout?.analytics?.power_curve);
+/** Mean-maximal power curve: this ride against the 90-day best. In the race view (`raceView`) it is this
+ * race against the 42-day best and the average of prior same-discipline races instead (engine-computed). */
+function renderPowerCurveSection(workout, { raceView = false } = {}) {
+  const analytics = workout?.analytics;
+  const curve = powerCurveView(analytics?.power_curve, raceView ? (analytics?.prior_race_curve ?? null) : undefined);
   if (!curve) return '';
   return `
     <section class="detail-section power-curve">
       <h4>Power curve</h4>
       ${curve.note ? `<p class="sub">${esc(curve.note)}</p>` : ''}
-      ${curve.geometry ? renderPowerCurveSvg(curve.geometry) : ''}
+      ${curve.geometry ? renderPowerCurveSvg(curve.geometry, curve.prior?.label) : ''}
+      ${curve.prior ? renderPriorRaceInfo(curve.prior) : ''}
       ${renderRawTable(curve.columns, curve.rows)}
     </section>`;
 }
@@ -3646,10 +3668,10 @@ function renderConversationThread({
 /** The race view's folded extras: power curve, race-start adjust, ride details, then the raw analysis
  * (its own toggle, wired by main.js; hidden where that panel is not wired). */
 function renderRaceFolds(workout, pacing, { raceStartEdit, editable, rawAnalysisOpen }) {
-  const fold = (title, body) => (body ? `<details class="rv-fold"><summary>${title}</summary>${body}</details>` : '');
+  const fold = (title, body) => (body ? `<details class="rv-fold"><summary>${title}</summary><div class="rv-fold-body">${body}</div></details>` : '');
   const startControl = renderRaceStartControl(workout, pacing, raceStartEdit, editable);
   return `
-    ${fold('Power curve', renderPowerCurveSection(workout))}
+    ${fold('Power curve', renderPowerCurveSection(workout, { raceView: true }))}
     ${fold('Race start', startControl)}
     ${fold('Ride details', renderDetailStats(workout))}
     ${rawAnalysisOpen === null ? '' : renderRawAnalysisSection(workout, pacing, rawAnalysisOpen)}`;
