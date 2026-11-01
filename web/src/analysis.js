@@ -297,6 +297,7 @@ function durationLabel(d) {
 }
 
 export const POWER_CURVE_COLUMNS = ['Duration', 'This ride', '42-day best', '90-day best', ''];
+export const RACE_CURVE_COLUMNS = ['Duration', 'This race', '42-day best', 'Prior-race avg', ''];
 
 function curveFlag(p) {
   if (p.is_best_90d === true) return 'new 90-day best';
@@ -305,10 +306,15 @@ function curveFlag(p) {
 }
 
 /** SVG-ready geometry for the mean-max curve: log10(duration) on x, watts on y.
- * Two lines: this ride and the prior 90-day best (only where one exists). */
-export function powerCurveGeometry(curve, { width = 320, height = 170 } = {}) {
+ * Ordinary view: this ride and the prior 90-day best (only where one exists). Race view (`prior` is the
+ * engine's `prior_race_curve`, or null for a race analysed before it existed): this race, the 42-day best
+ * and the prior-race average; the 90-day line is not drawn there. */
+export function powerCurveGeometry(curve, { width = 320, height = 170, prior } = {}) {
   const pts = (curve || []).filter((p) => num(p.duration_s) && num(p.watts) && p.duration_s > 0);
   if (pts.length < 2) return null;
+  const race = prior !== undefined;
+  const priorPts = (prior?.points || []).filter((p) => num(p.duration_s) && num(p.watts) && p.duration_s > 0);
+  const bestKey = race ? 'best_42d_w' : 'best_90d_w';
   const left = 38;
   const right = width - 8;
   const top = 8;
@@ -316,33 +322,61 @@ export function powerCurveGeometry(curve, { width = 320, height = 170 } = {}) {
   const xs = pts.map((p) => Math.log10(p.duration_s));
   const x0 = xs[0];
   const x1 = xs[xs.length - 1];
-  const maxW = Math.max(...pts.map((p) => Math.max(p.watts, p.best_90d_w || 0)));
+  const maxW = Math.max(...pts.map((p) => Math.max(p.watts, p[bestKey] || 0)), ...priorPts.map((p) => p.watts));
   const yMax = Math.ceil(maxW / 100) * 100 || 100;
   const X = (d) => left + ((Math.log10(d) - x0) / (x1 - x0 || 1)) * (right - left);
   const Y = (w) => bottom - (w / yMax) * (bottom - top);
   const line = (rows, key) => rows.filter((p) => num(p[key])).map((p) => `${X(p.duration_s).toFixed(1)},${Y(p[key]).toFixed(1)}`).join(' ');
   const yTicks = [0, 0.5, 1].map((f) => ({ y: Y(yMax * f), label: `${Math.round(yMax * f)}` }));
   const xTicks = pts.filter((p) => CURVE_TABLE_S.includes(p.duration_s)).map((p) => ({ x: X(p.duration_s), label: durationLabel(p.duration_s) }));
+  const priorLine = priorPts.length >= 2 ? line(priorPts, 'watts') : '';
   return {
     width, height, plotLeft: left, plotRight: right, yTicks, xTicks,
     ride: line(pts, 'watts'),
-    best90: line(pts, 'best_90d_w'),
-    hasBest90: pts.some((p) => num(p.best_90d_w)),
+    race,
+    best: line(pts, bestKey),
+    hasBest: pts.some((p) => num(p[bestKey])),
+    bestLabel: race ? '42-day best' : '90-day best',
+    prior: priorLine,
+    hasPrior: priorLine !== '',
+    // one point cannot make a line: it is drawn as a marker
+    priorDot: priorPts.length === 1 ? { x: X(priorPts[0].duration_s), y: Y(priorPts[0].watts) } : null,
   };
 }
 
-export function powerCurveView(curve) {
+/** The prior-race legend label, note and date list from the engine's `prior_race_curve` (null = the race
+ * was analysed before the comparison existed). */
+function priorRaceView(prior) {
+  const hasLine = (prior?.points || []).length > 0;
+  const missing = 'Not compared yet: re-analyse this race to add the prior-race average.';
+  return {
+    label: prior?.label || 'Prior-race average',
+    hasLine,
+    note: hasLine ? null : (prior ? prior.note || 'No earlier races of this kind to compare with.' : missing),
+    dates: (prior?.dates || []).map((d) => String(d).slice(0, 10)),
+    single: prior?.single === true,
+    leftOut: prior?.left_out || [],
+  };
+}
+
+/** The power-curve panel model. `prior` undefined = the ordinary view; given (the engine's
+ * `prior_race_curve`, or null) = the race view. */
+export function powerCurveView(curve, prior) {
   if (!Array.isArray(curve) || curve.length === 0) return null;
+  const race = prior !== undefined;
   const byDur = new Map(curve.map((p) => [p.duration_s, p]));
+  const priorByDur = new Map((prior?.points || []).map((p) => [p.duration_s, p]));
   const rows = CURVE_TABLE_S.filter((d) => byDur.has(d)).map((d) => {
     const p = byDur.get(d);
+    if (race) return [durationLabel(d), watts(p.watts), watts(p.best_42d_w), watts(priorByDur.get(d)?.watts), p.is_best_42d === true ? 'new 42-day best' : ''];
     return [durationLabel(d), watts(p.watts), watts(p.best_42d_w), watts(p.best_90d_w), curveFlag(p)];
   });
   const anyCompared = curve.some((p) => p.is_best_42d !== null && p.is_best_42d !== undefined);
   return {
-    columns: POWER_CURVE_COLUMNS,
+    columns: race ? RACE_CURVE_COLUMNS : POWER_CURVE_COLUMNS,
     rows,
-    geometry: powerCurveGeometry(curve),
+    geometry: powerCurveGeometry(curve, race ? { prior } : {}),
+    prior: race ? priorRaceView(prior) : null,
     note: anyCompared ? null : 'No earlier rides have a stored curve yet, so no best is flagged.',
   };
 }

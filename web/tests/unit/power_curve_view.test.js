@@ -23,8 +23,62 @@ describe('power curve and race starts', () => {
     expect(xs[xs.length - 1]).toBe(g.plotRight);
     // 5s -> 60s spans log10(12), 60s -> 300s spans log10(5)
     expect((xs[2] - xs[1]) / (xs[3] - xs[2])).toBeCloseTo(Math.log10(12) / Math.log10(5), 1);
-    expect(g.hasBest90).toBe(true);
-    expect(g.best90.split(' ')).toHaveLength(2);
+    expect(g.hasBest).toBe(true);
+    expect(g.bestLabel).toBe('90-day best');
+    expect(g.best.split(' ')).toHaveLength(2);
+    expect(g.race).toBe(false);
+    expect(g.hasPrior).toBe(false);
+  });
+
+  describe('race view', () => {
+    const prior = {
+      basis: 'plan', count: 4, single: false, label: 'Avg of 4 prior CX races', discipline: 'CX',
+      dates: ['2026-10-17', '2026-10-18'], left_out: [],
+      points: [{ duration_s: 1, watts: 1000, n: 4 }, { duration_s: 5, watts: 900, n: 4 }, { duration_s: 60, watts: 340, n: 3 }],
+    };
+
+    it('swaps the 90-day line for the 42-day best and adds the prior-race average', () => {
+      const m = powerCurveView(curve, prior);
+      expect(m.columns).toEqual(['Duration', 'This race', '42-day best', 'Prior-race avg', '']);
+      expect(m.rows[0]).toEqual(['1s', '1100 W', '1000 W', '1000 W', 'new 42-day best']);
+      expect(m.rows[2]).toEqual(['1min', '353 W', '—', '340 W', '']);
+      expect(m.rows[3]).toEqual(['5min', '290 W', '—', '—', '']);
+      expect(m.rows.flat().join(' ')).not.toMatch(/90-day/);
+      expect(m.columns.join(' ')).not.toMatch(/90-day/);
+      const g = m.geometry;
+      expect(g.race).toBe(true);
+      expect(g.bestLabel).toBe('42-day best');
+      expect(g.best.split(' ')).toHaveLength(2); // 1s and 5s have a 42-day best
+      expect(g.hasPrior).toBe(true);
+      expect(g.prior.split(' ')).toHaveLength(3); // stops where the engine stopped
+      expect(m.prior.label).toBe('Avg of 4 prior CX races');
+      expect(m.prior.dates).toEqual(['2026-10-17', '2026-10-18']);
+    });
+
+    it('draws no prior line and shows the engine note when there is none', () => {
+      const none = { basis: 'none', count: 0, label: 'Prior-race average', points: [], dates: [], note: 'No earlier CX races on this plan or in the prior year to compare with.' };
+      const m = powerCurveView(curve, none);
+      expect(m.geometry.hasPrior).toBe(false);
+      expect(m.geometry.prior).toBe('');
+      expect(m.prior.hasLine).toBe(false);
+      expect(m.prior.note).toMatch(/No earlier CX races/);
+    });
+
+    it('draws a single prior race as a marker, not a line', () => {
+      const one = { basis: 'plan', count: 1, single: true, label: 'Prior CX race (2026-10-03)', dates: ['2026-10-03'], points: [{ duration_s: 5, watts: 900, n: 1 }] };
+      const m = powerCurveView(curve, one);
+      expect(m.geometry.hasPrior).toBe(false);
+      expect(m.geometry.priorDot).not.toBeNull();
+      expect(m.prior.hasLine).toBe(true);
+      expect(m.prior.single).toBe(true);
+    });
+
+    it('treats a race analysed before the field existed as no comparison', () => {
+      const m = powerCurveView(curve, null);
+      expect(m.geometry.race).toBe(true);
+      expect(m.prior.hasLine).toBe(false);
+      expect(m.prior.note).toMatch(/re-analyse|No earlier/i);
+    });
   });
 
   it('says so when no earlier ride has a curve, and has no panel for a ride without one', () => {

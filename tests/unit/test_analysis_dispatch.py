@@ -49,7 +49,7 @@ def _without_dynamics(analytics) -> dict:
     pinned) and the race lap table (now cut from the canonical laps, see test_canonical_laps); these
     fixtures carry no grit/flow, so the dynamics must be absent."""
     assert analytics.mtb_dynamics is None
-    return _golden_shape(analytics.model_dump(mode="json", exclude={"mtb_dynamics", "course_sectors", "race_efficiency", "laps", "race_overview", "race_start", "finish_sprint", *_SWIM_ADDED}))
+    return _golden_shape(analytics.model_dump(mode="json", exclude={"mtb_dynamics", "course_sectors", "race_efficiency", "laps", "race_overview", "race_start", "finish_sprint", "prior_race_curve", *_SWIM_ADDED}))
 
 
 def _golden_shape(dump: dict) -> dict:
