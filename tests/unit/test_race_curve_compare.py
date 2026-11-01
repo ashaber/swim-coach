@@ -158,6 +158,7 @@ def test_context_and_analyzer_attach_the_average_to_a_race_only(tmp_path) -> Non
     mtb = _race(date(2026, 10, 12), detail=MTB)
     cur = _race(date(2026, 10, 17))
     for w in (a, b, mtb, cur):
+        w.kind_override = "race"  # the context re-derives `kind`; the override is what keeps a race a race
         store.save_workout("a", w)
     series = {"t_s": [float(i) for i in range(120)], "power_w": [300.0] * 120}
     ctx = build_analysis_context(store, "a", cur, series=series)
