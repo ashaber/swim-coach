@@ -2,37 +2,39 @@ schema_version: 1
 file: 44-tire-pressure.md
 added: '2026-10-30'
 cards:
-- section: 1-what-research-does-and-does-not-show-unreviewed
-  heading: 1. What research does and does not show (UNREVIEWED)
-  summary: Few small cycling studies exist; surface and rider mass matter more than pressure, and low pressure trades away
-    momentum. The pressure-floor and tubeless watt figures are single-rider or single-test.
-  recommendation: Treat every pressure number as a first guess and say the evidence is thin.
-  content_hash: 433ae65e7ff615ffbf575ad23e6643396d201bde04a67f793672a9788a6e09af
-- section: 2-calculators-disagree-unreviewed
-  heading: 2. Calculators disagree (UNREVIEWED)
-  summary: Calculators disagree by 9-10 psi for one rider, and Silca's inputs are known only secondhand. Output is a hypothesis.
-  recommendation: Offer calculator values as hypotheses and defer to the athlete's own logged pressures.
-  content_hash: a8ebc5b4b897ad24036de75d94f793e9a70305597ac146305ff455cc7464d68c
-- section: 3-starting-ranges-label-the-source-every-time
-  heading: 3. Starting ranges (label the source every time)
-  summary: CX 30-35 psi and mud 15-20 psi rest on one BikeRadar article; gravel figures are a manufacturer table. No verified
-    MTB range.
-  recommendation: Quote ranges with their single source named, and tell heavier riders to go higher.
-  content_hash: 3b6321f8c30ff1719cdc38f533e5b01922a2410b53745e018238f0a45a1d511f
-- section: 4-hookless-and-rim-limits
-  heading: 4. Hookless and rim limits
-  summary: Hookless rims have manufacturer maximums by tire width; they are ceilings, not targets.
-  recommendation: Never exceed the lower of the rim and tire printed maximum; widen the tire if capped.
-  content_hash: 127d100f39c8e7f03ce9fa817a2c3a250209fbe4dec081c6b3bca7aebadeaea3
-- section: 5-practical-factors-coach-judgment-unless-sourced
-  heading: 5. Practical factors (`Coach judgment:` unless sourced)
-  summary: Weight, surface and tubeless burping limit pressure; one gauge matters more than gauge accuracy. Roughly 1 psi
-    per 10 F is computed from the gas law, not a cycling study.
-  recommendation: Use one gauge, log pressures in its numbers, and recheck after warm-up in cold.
-  content_hash: 7874dec54f18aaa15ea8cb8a63ac571dabc980d16bcd760f900a720e40d4d559
-- section: 6-pre-ride-tuning-protocol-coach-judgment-consistent-with-bikeradar
-  heading: 6. Pre-ride tuning protocol (`Coach judgment:`, consistent with BikeRadar)
-  summary: Start from a table or the athlete's log, ride 2-3 laps, change 1-2 psi per step, settle at the lowest pressure
-    with no strikes or burps.
-  recommendation: Walk the athlete through the stepwise lap-based tuning and have them record what worked.
-  content_hash: c00337c4ecd18903cb3d37bc312c2f8f868a063dd5cd7f9702298f41a5f82990
+- section: 1-breakpoint-impedance-and-why-drums-mislead-unreviewed
+  heading: 1. Breakpoint, impedance and why drums mislead (UNREVIEWED)
+  summary: Higher pressure stops being faster above a breakpoint on real surfaces; smooth drums cannot show it, so drum rankings
+    overstate high pressure.
+  recommendation: Explain breakpoint and that drum data show casing efficiency, not the best real-surface pressure.
+  content_hash: 3761fc8d2e51480d6f428184a50f09aa09858300295051928ed0b8328365ac11
+- section: 2-virtual-elevation-chung-method-what-it-is-and-its-limits-unreviewed
+  heading: '2. Virtual elevation (Chung method): what it is and its limits (UNREVIEWED)'
+  summary: Virtual elevation is a field method for finding pressure effects; Silca endorses it and Heine disputes it. A few
+    watts is noise.
+  recommendation: Describe both sides and treat small differences as noise.
+  content_hash: 6a816c5eae052ba056266e059bb5ee004cccc95ef6478af38ee4deed3629e279
+- section: 3-test-results-that-exist-unreviewed
+  heading: 3. Test results that exist (UNREVIEWED)
+  summary: Soft-gravel, gravel, roll-down and rim-width results exist, all test conditions. None is at CX widths; too low
+    (15 psi) lost too.
+  recommendation: Never quote a test pressure as advice; state its surface, width and source.
+  content_hash: b6dd7f88c4118c301f744115f678aca80c4628443aed6401daceee9178b1ed8c
+- section: 4-road-cx-and-mtb-what-is-and-is-not-sourced-unreviewed
+  heading: '4. Road, CX and MTB: what is and is not sourced (UNREVIEWED)'
+  summary: Road has only calculator outputs, CX 30-35 psi is withdrawn, tubular statements are untested, and no MTB pressure
+    is sourced.
+  recommendation: Give no default CX, road or MTB pressure; point to the athlete's own log and the protocol.
+  content_hash: dd5f5f4e431eec01d0c778c57a34c78b790a09b9d4643c3b1bd0765a4b108637
+- section: 5-limits-and-practical-factors-coach-judgment-unless-sourced
+  heading: 5. Limits and practical factors (`Coach judgment:` unless sourced)
+  summary: Hookless maxima are ceilings; floors are rim strikes, burps and squirm. Gauges differ; air temperature shifts pressure
+    by arithmetic.
+  recommendation: Obey the lower printed maximum, use one gauge and recheck pressure at venue temperature.
+  content_hash: fcdfc0c1a0361ccdd2032c072e03443e14480ad62e32f1314bfaeb11cc4cd66b
+- section: 6-field-protocol-find-your-own-best-pressure-unreviewed
+  heading: '6. Field protocol: find your own best pressure (UNREVIEWED)'
+  summary: A Chung-style loop protocol finds the athlete's own lowest pressure without strikes, burps or squirm; low-medium
+    confidence.
+  recommendation: Offer the protocol and have the athlete log pressures and results.
+  content_hash: d451e0ac64a6bdcd1f083e4cc383d44f4584694751c27c27b66077893a7c48f9

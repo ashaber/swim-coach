@@ -2240,15 +2240,17 @@ citations; no scientific claim attaches to these links):
 
 ## Tires, bike setup, clothing (grounds `44`, `45`, `46`)
 
-- **✓ Steyn W.J., Warnich J. (2014)** — MTB tyre rolling resistance by diameter and surface — *S Afr J Res Sport PE Recreat* 36(2). `44`.
-- **✓ Bertucci W.M., Rogier S., Reiser R.F. (2013)** — Aerodynamic and rolling resistances in MTB field conditions — *J Sports Sci* 31(14). `44`.
 - **✓ Maier T., Müller B., Allemann R., Steiner T., Wehrlin J.P. (2019)** — Rim width, rolling resistance and off-road XC speed — *J Sports Sci* 37(7). `44`.
-- **⚠ Barber J. (2016)** — How does MTB tire pressure affect power and speed — Singletracks; one-rider paved test. `44`.
-- **⚠ Bierman J. (2014)** — Tubeless vs latex vs butyl tube rolling resistance — Bicycle Rolling Resistance; drum test. `44`, `45`.
+- **⚠ Bierman J. (2014)** — Tubeless vs latex vs butyl tube rolling resistance — Bicycle Rolling Resistance; drum test. `45`.
 - **⚠ Slowman (2023)** — Tire Pressure Calculator Wars — Slowtwitch; source of Silca figures. `44`.
-- **⚠ SRAM/Zipp; Schwalbe; Canyon (Lambert-Smith, 2025)** — pressure calculator, hookless FAQ, gravel table; manufacturers. `44`.
-- **⚠ Heine J. (2015)** — Tire Pressure: Data and Details — Rene Herse Cycles; seller. `44`.
+- **⚠ SRAM/Zipp; Schwalbe** — pressure calculator, hookless FAQ; manufacturers. `44`.
+- **⚠ Heine J. (2015-2026)** — tire pressure, virtual elevation — Rene Herse; seller. `44`.
 - **⚠ Evans J. (2021)** — How to choose the best cyclocross tyres (and set pressure) — BikeRadar. `44`.
+- **⚠ Cahill L. (2023)** — Wide gravel tyres — BikeRadar; Lauf advertorial. `44`.
+- **⚠ Zinn L. (2018, 2022)** — optimal gravel tire pressure; rolling-resistance testing FAQ — Velo. `44`.
+- **⚠ Verhoff T. (2025)** — Tire Pressure Testing for Unbound Gravel — Silca; seller. `44`.
+- **⚠ Silca (undated)** — calculator and aero guides; seller. `44`.
+- **⚠ Jordan R. (2009)**; **Campbell J. (2024)** — Chung method blogs. `44`.
 - **⚠ Barrett W. (2018)** — Group Test: 6 Tyre Pressure Gauges — Singletrack World. `44`.
 - **⚠ Barber J. (2022)** — How to properly bed in MTB disc brakes — Singletracks. `45`.
 - **⚠ SRAM; Park Tool** — brake pads, pad install, squeal case study, caliper alignment, wheel truing; manufacturer and tool-maker pages. `45`.
