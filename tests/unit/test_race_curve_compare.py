@@ -143,6 +143,14 @@ def test_no_plan_range_goes_straight_to_prior_year() -> None:
     assert r.basis == "prior_year" and r.count == 2
 
 
+def test_the_coach_view_leaves_the_chart_series_out() -> None:
+    from swim_coach.analysis import analytics_for_coach
+
+    cur = _race(date(2026, 10, 17))
+    analytics = cur.analytics.model_copy(update={"prior_race_curve": prior_race_curve(cur, [_race(date(2026, 10, 3)), cur], PLAN)})
+    assert "prior_race_curve" not in (analytics_for_coach(analytics, "bike") or {})
+
+
 def test_context_and_analyzer_attach_the_average_to_a_race_only(tmp_path) -> None:
     from swim_coach.analysis import analyze_workout, build_analysis_context
     from swim_coach.models import Athlete, MacroBlock, MacroPlan

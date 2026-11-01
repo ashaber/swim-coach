@@ -114,7 +114,7 @@ SWIM_FIELDS: frozenset[str] = frozenset(
     }
 )
 BIKE_FIELDS: frozenset[str] = frozenset(
-    {"intervals", "avg_power_w", "normalized_power_w", "power_curve", "free_ride", "mtb_dynamics", "course_sectors", "race_efficiency", "laps", "race_overview", "race_start", "finish_sprint"}
+    {"intervals", "avg_power_w", "normalized_power_w", "power_curve", "free_ride", "mtb_dynamics", "course_sectors", "race_efficiency", "laps", "race_overview", "race_start", "finish_sprint", "prior_race_curve"}
 )
 
 
