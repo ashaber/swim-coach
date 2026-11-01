@@ -61,9 +61,13 @@ def test_sets_section_sits_on_a_paper_card(page):  # noqa: F811
     _open_log_tab_with_workouts(page, [POOL_SWIM])
     page.click('.hist-row')
     page.wait_for_selector('#swim-sets')
-    card = page.eval_on_selector('#swim-sets', 'e => getComputedStyle(e).backgroundColor')
-    analytics = page.eval_on_selector(
-        '.detail-section:has(.detail-analytics-list)', 'e => getComputedStyle(e).backgroundColor'
+    page.wait_for_selector('.detail-section:has(.detail-analytics-list)')
+    # Read both in one evaluate: the detail view re-renders just after it appears, and
+    # eval_on_selector finds then reads in two steps, so a swap in between reads a detached
+    # node, whose computed style is ''.
+    card, analytics = page.evaluate(
+        """() => ['#swim-sets', '.detail-section:has(.detail-analytics-list)']
+            .map((s) => getComputedStyle(document.querySelector(s)).backgroundColor)"""
     )
     assert card == analytics
     assert card not in ('rgba(0, 0, 0, 0)', 'transparent')
