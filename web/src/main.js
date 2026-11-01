@@ -44,6 +44,7 @@ import {
 import { shouldLoadPacing, parseRaceStartInput } from './analysis.js';
 import { createSectorOverlay, openSectorOverlay, switchOverlaySector, closeSectorOverlay } from './sectorOverlay.js';
 import { attachMapGestures } from './mapGestures.js';
+import { classifySwipe, swipeTargetTab } from './raceOverlayNav.js';
 import { attachChartProbes } from './chartProbe.js';
 import { hasRaceView, nextSplits } from './raceView.js';
 import {
@@ -820,6 +821,56 @@ function renderAppDom() {
   document.body.classList.toggle('rd-locked', raceOverlayOpen);
   const nextBody = document.getElementById('race-overlay-body');
   if (nextBody && overlayScroll) nextBody.scrollTop = overlayScroll;
+  syncRaceTimelineScroll();
+}
+
+// Timeline "follow": the row before the current event is pinned just under the sticky tabs when the
+// timeline opens, and re-pinned as events pass -- until the athlete scrolls by hand (touchmove,
+// wheel, scroll keys, or dragging the scrollbar; never the `scroll` event, which programmatic
+// scrolls fire too). Leaving the tab, closing the overlay or entering edit mode resets it.
+let timelineFollow = true;
+let timelineLockedFor = null;
+
+function resetTimelineFollow() {
+  timelineFollow = true;
+  timelineLockedFor = null;
+}
+
+function pinRowUnderTabs(body, row) {
+  const tabs = document.getElementById('race-overlay-tabs');
+  const tabsBottom = () => (tabs ? tabs.getBoundingClientRect().bottom : body.getBoundingClientRect().top);
+  // Twice: the first scroll makes the sticky tabs stick, which changes where they end.
+  for (let pass = 0; pass < 2; pass += 1) {
+    const delta = row.getBoundingClientRect().top - tabsBottom();
+    if (Math.abs(delta) < 1) return;
+    body.scrollTop += delta;
+  }
+}
+
+function syncRaceTimelineScroll() {
+  const rd = state.raceDay;
+  const body = document.getElementById('race-overlay-body');
+  if (!body || !rd.open || rd.tab !== 'timeline' || rd.editTimeline) {
+    resetTimelineFollow();
+    return;
+  }
+  const row = body.querySelector('.rd-tl-row[data-anchor]');
+  if (!row || !timelineFollow || row.dataset.tl === timelineLockedFor) return;
+  const focused = document.activeElement;
+  if (focused && body.contains(focused) && /^(INPUT|TEXTAREA|SELECT)$/.test(focused.tagName)) return;
+  timelineLockedFor = row.dataset.tl;
+  pinRowUnderTabs(body, row);
+}
+
+const SCROLL_KEYS = ['PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'Home', 'End', ' '];
+
+function onRaceBodyUserScrollIntent(e) {
+  if (e.target.closest?.('#race-overlay-body')) timelineFollow = false;
+}
+
+function onRaceBodyPointerDown(e) {
+  // A mouse press on the scroller itself (not a child) is the scrollbar being dragged.
+  if (e.pointerType === 'mouse' && e.target.id === 'race-overlay-body') timelineFollow = false;
 }
 
 function renderAppDomInner() {
@@ -5066,6 +5117,7 @@ async function handleRaceDayTimelineReset() {
 }
 
 function handleRaceDayTab(tab) {
+  resetTimelineFollow();
   state.raceDay = { ...state.raceDay, tab: tab === 'timeline' ? 'timeline' : 'list' };
   persistRaceDayOverlay();
   render();
@@ -5130,6 +5182,44 @@ async function flushRaceDayQueue() {
       state.raceDay.pending = raceDayPendingCount();
       render();
     }
+  }
+}
+
+// Horizontal swipe on the overlay body switches Checklist <-> Timeline through the same handler as
+// tapping the tab. Passive listeners only: vertical scrolling is never blocked. Edit mode, form
+// controls and the edit rows are excluded so editing gestures keep working.
+let raceSwipe = null;
+let raceSwipeHandledAt = 0;
+const SWIPE_IGNORE = 'input, textarea, select, label, [contenteditable], .rd-tl-edit, .rd-add';
+
+function onRaceSwipeStart(e) {
+  raceSwipe = null;
+  const rd = state.raceDay;
+  if (!rd.open || rd.editTimeline || e.touches.length !== 1) return;
+  if (!e.target.closest?.('#race-overlay-body') || e.target.closest(SWIPE_IGNORE)) return;
+  const t = e.touches[0];
+  raceSwipe = { startX: t.clientX, startY: t.clientY };
+}
+
+function onRaceSwipeEnd(e) {
+  const start = raceSwipe;
+  raceSwipe = null;
+  if (!start || !e.changedTouches.length) return;
+  const t = e.changedTouches[0];
+  const dir = classifySwipe({ ...start, endX: t.clientX, endY: t.clientY, width: window.innerWidth });
+  const tab = swipeTargetTab(state.raceDay.tab === 'timeline' ? 'timeline' : 'list', dir);
+  if (!tab) return;
+  raceDaySwipeStart = null;
+  raceSwipeHandledAt = Date.now();
+  log.info('raceday.swipe', { direction: dir, tab });
+  handleRaceDayTab(tab);
+}
+
+// A swipe must never also tick a checklist item: swallow a click that lands right after one.
+function onRaceSwipeClick(e) {
+  if (Date.now() - raceSwipeHandledAt < 400 && !e.target.closest?.('.rd-tab')) {
+    e.stopPropagation();
+    e.preventDefault();
   }
 }
 
@@ -5230,6 +5320,14 @@ appEl.addEventListener('input', onAppInput);
 appEl.addEventListener('keydown', onAppKeydown);
 attachChartProbes(appEl);
 attachMapGestures(appEl, { commit: (view) => { state.mapView = view; }, reset: resetCourseMap });
+appEl.addEventListener('touchstart', onRaceSwipeStart, { passive: true });
+appEl.addEventListener('touchend', onRaceSwipeEnd, { passive: true });
+appEl.addEventListener('touchcancel', () => { raceSwipe = null; }, { passive: true });
+appEl.addEventListener('click', onRaceSwipeClick, true);
+appEl.addEventListener('touchmove', onRaceBodyUserScrollIntent, { passive: true });
+appEl.addEventListener('wheel', onRaceBodyUserScrollIntent, { passive: true });
+appEl.addEventListener('pointerdown', onRaceBodyPointerDown, { passive: true });
+appEl.addEventListener('keydown', (e) => { if (SCROLL_KEYS.includes(e.key)) onRaceBodyUserScrollIntent(e); });
 appEl.addEventListener('touchstart', onRaceDayTouchStart, { passive: true });
 appEl.addEventListener('touchend', onRaceDayTouchEnd, { passive: true });
 appEl.addEventListener('touchstart', onSectorOverlayTouchStart, { passive: true });

@@ -168,7 +168,7 @@
     .rd-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .rd-title .mono { color: var(--ink-faint); font-size: 12px; }
     .rd-status { padding: 6px 12px; font-size: 12px; background: var(--note-bg); color: var(--note-label); }
-    .rd-body { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 12px; padding-bottom: 40px; }
+    .rd-body { flex: 1; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; padding: 12px; padding-bottom: 40px; }
     .rd-controls { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
     .rd-start { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--on-ground-soft); }
     .rd-start input { font: inherit; font-size: 16px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); }
@@ -176,6 +176,9 @@
     .rd-tag, .rd-tab { min-height: 40px; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--paper); color: var(--ink-soft); font: inherit; font-size: 14px; cursor: pointer; }
     .rd-tag.on, .rd-tab.on { background: var(--c-signal-wash); border-color: var(--c-signal); color: var(--ink); }
     .rd-tabs { display: flex; gap: 8px; }
+    /* Tabs stay pinned at the top of the scroller (start time and tags scroll away), so the timeline gets the screen. */
+    .rd-tabs-wrap { position: sticky; top: 0; z-index: 3; margin: 0 -12px 8px; padding: 6px 12px; background: var(--ground); }
+    .rd-tl-spacer { height: 100vh; height: 100dvh; }
     .rd-section { margin-bottom: 16px; }
     .rd-section h3 { font-family: var(--display); font-size: 13px; text-transform: uppercase; letter-spacing: .06em; margin: 0 0 6px; display: flex; justify-content: space-between; }
     .rd-count { color: var(--ink-faint); }

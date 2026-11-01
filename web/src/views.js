@@ -18,6 +18,7 @@ import {
   raceWeekCategoryIcon, groupRaceWeekItems, raceWeekSummary, checklistView, planProgress, allTags,
   timelineClock, timelinePosition, formatClockTime, MAX_ITEM_TEXT,
 } from './raceDay.js';
+import { timelineAnchorId } from './raceOverlayNav.js';
 import { TOOL_LABELS } from './chat.js';
 import { esc } from './html.js';
 import { buildDrill, buildRaceView } from './raceView.js';
@@ -1892,17 +1893,18 @@ function renderRaceDayTimelineBody(plan, now, editing = false) {
   if (editing) return `${hint}${toggle}<ol class="rd-timeline rd-timeline-edit">${renderTimelineEditRows(plan)}</ol>`;
   const clock = timelineClock(plan);
   const pos = timelinePosition(clock, plan.date, now);
+  const anchorId = timelineAnchorId(clock, pos.currentId);
   const rows = clock.map((e) => {
     const cls = ['rd-tl-row', e.is_start ? 'start' : '', e.id === pos.currentId ? 'current' : '', e.id === pos.nextId ? 'next' : ''].filter(Boolean).join(' ');
     const when = e.time ? formatClockTime(e.time)
       : (e.after ? `+${e.after_min || 0} min after` : `${e.offset_min > 0 ? '+' : ''}${e.offset_min} min`);
     return `
-        <li class="${cls}" data-tl="${esc(e.id)}">
+        <li class="${cls}" data-tl="${esc(e.id)}"${e.id === anchorId ? ' data-anchor="1"' : ''}>
           <span class="rd-tl-time mono">${esc(when)}</span>
           <span class="rd-tl-label">${esc(e.label)}${e.day === 'eve' ? ' <span class="rd-tl-eve">evening before</span>' : ''}${e.id === pos.currentId ? ' <span class="rd-tl-now">now</span>' : ''}${e.id === pos.nextId ? ' <span class="rd-tl-now">next</span>' : ''}</span>
         </li>`;
   }).join('');
-  return `${hint}${toggle}<ol class="rd-timeline">${rows}</ol>`;
+  return `${hint}${toggle}<ol class="rd-timeline">${rows}</ol><div class="rd-tl-spacer" aria-hidden="true"></div>`;
 }
 
 export function renderRaceDayOverlay(rd, online = true, now = new Date()) {
@@ -1922,6 +1924,8 @@ export function renderRaceDayOverlay(rd, online = true, now = new Date()) {
         <div class="rd-tags-row" role="group" aria-label="Weather and conditions">
           ${allTags(plan).map((t) => `<button type="button" class="rd-tag${(plan.active_tags || []).includes(t) ? ' on' : ''}" data-a="raceday:tag" data-tag="${esc(t)}" aria-pressed="${(plan.active_tags || []).includes(t) ? 'true' : 'false'}">${esc(t)}</button>`).join('')}
         </div>
+      </div>
+      <div class="rd-tabs-wrap" id="race-overlay-tabs">
         <div class="rd-tabs" role="tablist">
           <button type="button" role="tab" class="rd-tab${tab === 'list' ? ' on' : ''}" data-a="raceday:tab" data-tab="list" aria-selected="${tab === 'list'}">Checklist ${progress.done}/${progress.total}</button>
           <button type="button" role="tab" class="rd-tab${tab === 'timeline' ? ' on' : ''}" data-a="raceday:tab" data-tab="timeline" aria-selected="${tab === 'timeline'}">Timeline</button>
